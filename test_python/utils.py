@@ -11,6 +11,9 @@ class UtilityClass:
     def get_value(self):
         return self.value
 
+def another_function():
+    """Another function."""
+    return "Another function"
+
 # Export specific items
 __all__ = ["helper_function", "UtilityClass"]
-
