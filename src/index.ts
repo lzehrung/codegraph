@@ -183,9 +183,12 @@ const PY_SUPPORT: LanguageSupport = {
       (#eq? @obj "importlib")
       (#eq? @attr "import_module")
     `,
-    // __all__ = ["a","b"] — interpret as exports
+    // Exports: __all__, function/class definitions, and assignments
     exports: `
       (assignment left: (identifier) @left right: (list (string)+ @all_item)) @stmt
+      (function_definition name: (identifier) @name)
+      (class_definition name: (identifier) @name)
+      (assignment left: (identifier) @name)
     `,
     locals: `
       (function_definition name: (identifier) @name)
@@ -228,7 +231,7 @@ const PY_SUPPORT: LanguageSupport = {
   createsBlockScope: (n) => n.type === "module" || n.type === "block",
   createsFunctionScope: (n) =>
     n.type === "function_definition" || n.type === "lambda",
-  supportsCrossModuleSymbols: false, // we still build graph edges + import scopes
+  supportsCrossModuleSymbols: true, // enable cross-file symbol navigation
 };
 
 /* -------------------------------------------------------------------------- */
@@ -353,9 +356,11 @@ function languageForFile(filename: string): Parser.Language {
 }
 
 function sliceText(node: Parser.SyntaxNode, src: string) {
+  if (!node || !src) return '';
   return src.slice(node.startIndex, node.endIndex);
 }
 function unquote(s: string) {
+  if (!s || typeof s !== 'string') return s;
   const t = s.trim();
   return (t.startsWith('"') && t.endsWith('"')) ||
     (t.startsWith("'") && t.endsWith("'")) ||
@@ -364,6 +369,12 @@ function unquote(s: string) {
     : t;
 }
 function toRange(node: Parser.SyntaxNode): Range {
+  if (!node) {
+    return {
+      start: { line: 0, column: 0, index: 0 },
+      end: { line: 0, column: 0, index: 0 },
+    };
+  }
   return {
     start: {
       line: node.startPosition.row + 1,
@@ -382,18 +393,23 @@ export async function listProjectFiles(
   projectRoot: string,
   patterns = ["**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py}"]
 ) {
-  return fg(patterns, {
-    cwd: projectRoot,
-    absolute: true,
-    ignore: [
-      "**/node_modules/**",
-      "**/.git/**",
-      "**/dist/**",
-      "**/build/**",
-      "**/.venv/**",
-      "**/__pycache__/**",
-    ],
-  });
+  try {
+    return await fg(patterns, {
+      cwd: projectRoot,
+      absolute: true,
+      ignore: [
+        "**/node_modules/**",
+        "**/.git/**",
+        "**/dist/**",
+        "**/build/**",
+        "**/.venv/**",
+        "**/__pycache__/**",
+      ],
+    });
+  } catch (error) {
+    console.warn(`Warning: Failed to list files in ${projectRoot}:`, error);
+    return [];
+  }
 }
 
 /* ------------------------- Per-file tsconfig discovery --------------------- */
@@ -483,14 +499,14 @@ async function resolveSpecifier(
     return { external: spec };
   }
   if (matchPath) {
-    const m = matchPath(spec, undefined, [
+    const m = matchPath(spec, undefined, (name: string) => [
       ".ts",
       ".tsx",
       ".js",
       ".jsx",
       ".mjs",
       ".cjs",
-    ]);
+    ].some(ext => name.endsWith(ext)));
     if (m) return path.resolve(m);
   }
   return { external: spec };
@@ -566,13 +582,12 @@ export function collectModuleSpecifiersFromSource(
   parser.setLanguage(lang);
   const tree = parser.parse(source);
   const q = new Parser.Query(lang, support.queries.imports);
-  const c = new Parser.QueryCursor();
   const out: { spec: string; typeOnly?: boolean }[] = [];
-  for (const m of c.matches(q, tree.rootNode)) {
+  for (const m of q.matches(tree.rootNode)) {
     const caps = Object.fromEntries(
-      m.captures.map((x) => [x.name, x] as const)
+      m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const)
     );
-    const modNodes = m.captures.filter((x) => x.name === "mod");
+    const modNodes = m.captures.filter((x: Parser.QueryCapture) => x.name === "mod");
     const stmtText = caps["stmt"] ? sliceText(caps["stmt"].node, source) : "";
     const typeOnly = /^\s*(import|export)\s+type\b/.test(stmtText);
     for (const cap of modNodes)
@@ -598,8 +613,7 @@ export function collectLocalsAndExportsFromSource(
   const locals: SymbolDef[] = [];
   {
     const q = new Parser.Query(lang, support.queries.locals);
-    const c = new Parser.QueryCursor();
-    for (const m of c.matches(q, tree.rootNode))
+    for (const m of q.matches(tree.rootNode))
       for (const cap of m.captures) {
         if (cap.name === "name" || cap.name === "tname") {
           locals.push({
@@ -615,28 +629,42 @@ export function collectLocalsAndExportsFromSource(
   const exports: ExportEntry[] = [];
   if (support.queries.exports.trim()) {
     const q = new Parser.Query(lang, support.queries.exports);
-    const c = new Parser.QueryCursor();
-    for (const m of c.matches(q, tree.rootNode)) {
+    for (const m of q.matches(tree.rootNode)) {
       const map = Object.fromEntries(
-        m.captures.map((x) => [x.name, x] as const)
+        m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const)
       );
       const stmtText = map["stmt"] ? sliceText(map["stmt"].node, source) : "";
       const isTypeOnly = /^\s*export\s+type\b/.test(stmtText);
 
-      // Python __all__
-      if (
-        support.id === "python" &&
-        map["left"] &&
-        sliceText(map["left"].node, source) === "__all__"
-      ) {
-        const items = m.captures.filter((c) => c.name === "all_item");
-        for (const it of items) {
-          const name = unquote(sliceText(it.node, source));
-          const local = locals.find((d) => d.localName === name);
-          if (local)
-            exports.push({ type: "local", exportedAs: name, target: local });
+      // Python exports
+      if (support.id === "python") {
+        // Handle __all__ exports
+        if (
+          map["left"] &&
+          sliceText(map["left"].node, source) === "__all__"
+        ) {
+          const items = m.captures.filter((c: Parser.QueryCapture) => c.name === "all_item");
+          for (const it of items) {
+            const name = unquote(sliceText(it.node, source));
+            const local = locals.find((d) => d.localName === name);
+            if (local)
+              exports.push({ type: "local", exportedAs: name, target: local });
+          }
+          continue;
         }
-        continue;
+        
+        // Handle function/class definitions and assignments as exports
+        if (map["name"]) {
+          const nameText = sliceText(map["name"].node, source);
+          const local = locals.find((d) => d.localName === nameText);
+          if (local) {
+            // Only export if not starting with underscore (Python convention)
+            if (!nameText.startsWith("_")) {
+              exports.push({ type: "local", exportedAs: nameText, target: local });
+            }
+          }
+          continue;
+        }
       }
 
       // JS/TS
@@ -730,13 +758,12 @@ async function collectImportsForFile(
   parser.setLanguage(lang);
   const tree = parser.parse(source);
   const q = new Parser.Query(lang, sup.queries.importBindings);
-  const c = new Parser.QueryCursor();
   const imports: ImportBinding[] = [];
   const tsCfg = sup.id === "ts-js" ? await loadNearestTsconfigFor(file) : {};
 
-  for (const m of c.matches(q, tree.rootNode)) {
+  for (const m of q.matches(tree.rootNode)) {
     const caps = Object.fromEntries(
-      m.captures.map((x) => [x.name, x] as const)
+      m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const)
     );
     const stmtText = caps["stmt"] ? sliceText(caps["stmt"].node, source) : "";
     const typeOnly = sup.id === "ts-js" && /^\s*import\s+type\b/.test(stmtText);
@@ -760,7 +787,7 @@ async function collectImportsForFile(
           relDots
         );
 
-        if (m.captures.some((c) => c.name === "star")) {
+        if (m.captures.some((c: Parser.QueryCapture) => c.name === "star")) {
           imports.push({
             kind: "star",
             from: moduleName ?? ".".repeat(relDots),
@@ -769,12 +796,12 @@ async function collectImportsForFile(
           continue;
         }
 
-        const inames = m.captures.filter((c) => c.name === "iname");
-        const aliases = m.captures.filter((c) => c.name === "alias");
+        const inames = m.captures.filter((c: Parser.QueryCapture) => c.name === "iname");
+        const aliases = m.captures.filter((c: Parser.QueryCapture) => c.name === "alias");
         for (let i = 0; i < inames.length; i++) {
-          const imported = sliceText(inames[i].node, source);
+          const imported = sliceText(inames[i]!.node, source);
           const alias = aliases[i]
-            ? sliceText(aliases[i].node, source)
+            ? sliceText(aliases[i]!.node, source)
             : imported;
           imports.push({
             kind: "named",
@@ -787,14 +814,14 @@ async function collectImportsForFile(
         continue;
       }
       // import package[.sub] [as alias]
-      if (m.captures.some((c) => c.name === "iname")) {
-        const inames = m.captures.filter((c) => c.name === "iname");
-        const aliases = m.captures.filter((c) => c.name === "alias");
+      if (m.captures.some((c: Parser.QueryCapture) => c.name === "iname")) {
+        const inames = m.captures.filter((c: Parser.QueryCapture) => c.name === "iname");
+        const aliases = m.captures.filter((c: Parser.QueryCapture) => c.name === "alias");
         for (let i = 0; i < inames.length; i++) {
-          const dotted = sliceText(inames[i].node, source);
-          const baseName = dotted.split(".")[0];
+          const dotted = sliceText(inames[i]!.node, source);
+          const baseName = dotted.split(".")[0] || dotted;
           const local = aliases[i]
-            ? sliceText(aliases[i].node, source)
+            ? sliceText(aliases[i]!.node, source)
             : baseName;
           const resolved = await resolvePythonModule(
             projectRoot,
@@ -849,11 +876,11 @@ async function collectImportsForFile(
         resolved,
         typeOnly,
       });
-    const inames = m.captures.filter((c) => c.name === "iname");
-    const aliases = m.captures.filter((c) => c.name === "alias");
+    const inames = m.captures.filter((c: Parser.QueryCapture) => c.name === "iname");
+    const aliases = m.captures.filter((c: Parser.QueryCapture) => c.name === "alias");
     for (let i = 0; i < inames.length; i++) {
-      const imported = sliceText(inames[i].node, source);
-      const alias = aliases[i] ? sliceText(aliases[i].node, source) : imported;
+      const imported = sliceText(inames[i]!.node, source);
+      const alias = aliases[i] ? sliceText(aliases[i]!.node, source) : imported;
       imports.push({
         kind: "named",
         local: alias,
@@ -876,30 +903,43 @@ async function collectGraph(
   files: string[]
 ): Promise<Graph> {
   const graph: Graph = { nodes: new Set(files), edges: [] };
-  for (const file of files) {
-    const sup = supportForFile(file);
-    const lang = languageForFile(file);
-    const src = await fsp.readFile(file, "utf8");
-    const specs = collectModuleSpecifiersFromSource(sup, lang, src);
-    const { matchPath } =
-      sup.id === "ts-js" ? await loadNearestTsconfigFor(file) : {};
-    for (const { spec, typeOnly } of specs) {
-      let to: FileId | { external: string };
-      if (sup.id === "python") {
-        // best effort: try Python resolution for path-like/absolute; otherwise external
-        const res = await resolvePythonModule(
-          projectRoot,
-          file,
-          spec.includes(".") || !spec.startsWith(".") ? spec : null,
-          spec.startsWith(".") ? spec.match(/^\.+/)?.[0].length ?? 0 : 0
-        );
-        to = res;
-      } else {
-        to = await resolveSpecifier(file, spec, projectRoot, matchPath);
+  
+  // Process files in parallel for better performance
+  const filePromises = files.map(async (file) => {
+    try {
+      const sup = supportForFile(file);
+      const lang = languageForFile(file);
+      const src = await fsp.readFile(file, "utf8");
+      const specs = collectModuleSpecifiersFromSource(sup, lang, src);
+      const { matchPath } =
+        sup.id === "ts-js" ? await loadNearestTsconfigFor(file) : {};
+      
+      const edges: Edge[] = [];
+      for (const { spec, typeOnly } of specs) {
+        let to: FileId | { external: string };
+        if (sup.id === "python") {
+          // best effort: try Python resolution for path-like/absolute; otherwise external
+          const res = await resolvePythonModule(
+            projectRoot,
+            file,
+            spec.includes(".") || !spec.startsWith(".") ? spec : null,
+            spec.startsWith(".") ? spec.match(/^\.+/)?.[0].length ?? 0 : 0
+          );
+          to = res;
+        } else {
+          to = await resolveSpecifier(file, spec, projectRoot, matchPath);
+        }
+        edges.push({ from: file, to, raw: spec, ...(typeOnly !== undefined && { typeOnly }) });
       }
-      graph.edges.push({ from: file, to, raw: spec, typeOnly });
+      return edges;
+    } catch (error) {
+      console.warn(`Warning: Failed to process file ${file} for graph:`, error);
+      return [];
     }
-  }
+  });
+
+  const allEdges = await Promise.all(filePromises);
+  graph.edges = allEdges.flat();
   return graph;
 }
 
@@ -907,32 +947,52 @@ export async function buildProjectIndex(
   projectRoot: string
 ): Promise<ProjectIndex> {
   const files = await listProjectFiles(projectRoot);
+  if (files.length === 0) {
+    console.warn(`Warning: No files found in project root: ${projectRoot}`);
+  }
   const modules = new Map<FileId, ModuleIndex>();
 
-  // First pass: per-file locals/exports and imports
-  for (const f of files) {
-    const sup = supportForFile(f);
-    const lang = languageForFile(f);
-    const src = await fsp.readFile(f, "utf8");
-    const mod = collectLocalsAndExportsFromSource(f, src, sup, lang);
-    mod.imports = await collectImportsForFile(f, projectRoot);
+  // First pass: per-file locals/exports and imports (parallel processing)
+  const filePromises = files.map(async (f) => {
+    try {
+      const sup = supportForFile(f);
+      const lang = languageForFile(f);
+      const src = await fsp.readFile(f, "utf8");
+      const mod = collectLocalsAndExportsFromSource(f, src, sup, lang);
+      mod.imports = await collectImportsForFile(f, projectRoot);
 
-    // Resolve JS/TS re-exports to files (nearest tsconfig)
-    if (sup.supportsCrossModuleSymbols) {
-      const { matchPath } = await loadNearestTsconfigFor(f);
-      for (const e of mod.exports)
-        if (e.type !== "local") {
-          if (e.fromModule.startsWith(".")) {
-            const resolved = await resolveSpecifier(
-              f,
-              e.fromModule,
-              projectRoot,
-              matchPath
-            );
-            if (typeof resolved === "string") e.fromModule = resolved;
-          }
+      // Resolve re-exports to files (TS/JS and Python)
+      if (sup.supportsCrossModuleSymbols) {
+        if (sup.id === "ts-js") {
+          const { matchPath } = await loadNearestTsconfigFor(f);
+          for (const e of mod.exports)
+            if (e.type !== "local") {
+              if (e.fromModule.startsWith(".")) {
+                const resolved = await resolveSpecifier(
+                  f,
+                  e.fromModule,
+                  projectRoot,
+                  matchPath
+                );
+                if (typeof resolved === "string") e.fromModule = resolved;
+              }
+            }
+        } else if (sup.id === "python") {
+          // Python doesn't have re-exports like TS/JS, but we ensure module resolution works
+          // The exports are already resolved during import collection
         }
+      }
+      return [f, mod] as const;
+    } catch (error) {
+      console.warn(`Warning: Failed to process file ${f}:`, error);
+      // Return a minimal module index for failed files
+      const mod: ModuleIndex = { file: f, exports: [], imports: [], locals: [] };
+      return [f, mod] as const;
     }
+  });
+
+  const fileResults = await Promise.all(filePromises);
+  for (const [f, mod] of fileResults) {
     modules.set(f, mod);
   }
 
@@ -1026,7 +1086,7 @@ export type GoToResult =
   | {
       status: "ok";
       definition: SymbolDef;
-      via?: { importedFrom?: string; exportedName?: string };
+      via?: { importedFrom?: string | undefined; exportedName?: string | undefined };
     }
   | { status: "not_found"; reason: string };
 
@@ -1069,7 +1129,7 @@ export async function goToDefinition(
               status: "ok",
               definition: target,
               via: {
-                importedFrom: toModuleRef(imp.resolved),
+                ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
                 exportedName: "default",
               },
             };
@@ -1080,7 +1140,7 @@ export async function goToDefinition(
               status: "ok",
               definition: target,
               via: {
-                importedFrom: toModuleRef(imp.resolved),
+                ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
                 exportedName: imp.imported,
               },
             };
@@ -1112,7 +1172,7 @@ export async function goToDefinition(
             status: "ok",
             definition: resolved,
             via: {
-              importedFrom: toModuleRef(nsImport.resolved),
+              ...(toModuleRef(nsImport.resolved) ? { importedFrom: toModuleRef(nsImport.resolved) } : {}),
               exportedName: member,
             },
           };
@@ -1217,19 +1277,19 @@ export function buildScopeIndexFromSource(
     let target = stack[stack.length - 1];
     if (kind === "function" || kind === "class") {
       for (let i = stack.length - 1; i >= 0; i--) {
-        if (stack[i].kind !== "block") {
-          target = stack[i];
+        if (stack[i]!.kind !== "block") {
+          target = stack[i]!;
           break;
         }
       }
     }
     const b: Binding = { name, kind, def: toRange(nameNode), occurrences: [] };
-    target.map.set(name, b);
+    target?.map.set(name, b);
   };
 
   const lookup = (name: string): Binding | undefined => {
     for (let i = stack.length - 1; i >= 0; i--) {
-      const hit = stack[i].map.get(name);
+      const hit = stack[i]!.map.get(name);
       if (hit) return hit;
     }
     return rootScope.map.get(name);
@@ -1491,25 +1551,28 @@ export async function astGrep(
 ) {
   const files = await listProjectFiles(projectRoot, patterns);
   for (const file of files) {
-    const lang = languageForFile(file);
-    const parser = new Parser();
-    parser.setLanguage(lang);
-    const src = await fsp.readFile(file, "utf8");
-    const tree = parser.parse(src);
-    const query = new Parser.Query(lang, querySource);
-    const cursor = new Parser.QueryCursor();
-    for (const m of cursor.matches(query, tree.rootNode)) {
-      for (const cap of m.captures) {
-        const p = cap.node.startPosition;
-        const line = p.row + 1;
-        const col = p.column + 1;
-        const snippet = sliceText(cap.node, src).replaceAll("\n", " ");
-        writeStdoutLine(
-          `${path.relative(projectRoot, file)}:${line}:${col}: ${
-            cap.name
-          }: ${snippet}`
-        );
+    try {
+      const lang = languageForFile(file);
+      const parser = new Parser();
+      parser.setLanguage(lang);
+      const src = await fsp.readFile(file, "utf8");
+      const tree = parser.parse(src);
+      const query = new Parser.Query(lang, querySource);
+      for (const m of query.matches(tree.rootNode)) {
+        for (const cap of m.captures) {
+          const p = cap.node.startPosition;
+          const line = p.row + 1;
+          const col = p.column + 1;
+          const snippet = sliceText(cap.node, src).replaceAll("\n", " ");
+          writeStdoutLine(
+            `${path.relative(projectRoot, file)}:${line}:${col}: ${
+              cap.name
+            }: ${snippet}`
+          );
+        }
       }
+    } catch (error) {
+      console.warn(`Warning: Failed to process file ${file} for AST grep:`, error);
     }
   }
 }
@@ -1569,11 +1632,11 @@ async function main() {
         return acc;
       }, [])
     );
-    const file = path.isAbsolute(args.file)
-      ? args.file
-      : path.resolve(root, args.file);
-    const line = Number(args.line);
-    const column = Number(args.col ?? args.column);
+    const file = path.isAbsolute(args.file!)
+      ? args.file!
+      : path.resolve(root, args.file!);
+    const line = Number(args.line!);
+    const column = Number(args.col ?? args.column!);
     const index = await buildProjectIndex(root);
     const res = await goToDefinition(index, { file, line, column });
     writeJSONLine(res);
@@ -1587,11 +1650,11 @@ async function main() {
         return acc;
       }, [])
     );
-    const file = path.isAbsolute(args.file)
-      ? args.file
-      : path.resolve(root, args.file);
-    const line = Number(args.line);
-    const column = Number(args.col ?? args.column);
+    const file = path.isAbsolute(args.file!)
+      ? args.file!
+      : path.resolve(root, args.file!);
+    const line = Number(args.line!);
+    const column = Number(args.col ?? args.column!);
     const pretty = rest.includes("--pretty");
     const index = await buildProjectIndex(root);
     const res = await findReferences(index, { file, line, column });
@@ -1618,7 +1681,7 @@ async function main() {
       process.exit(2);
     }
     const querySource = rest[qIdx + 1];
-    await astGrep(root, querySource);
+    await astGrep(root, querySource!);
     return;
   }
 

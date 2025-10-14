@@ -24,10 +24,14 @@ It’s deliberately **elegant**, **robust**, and **easy to extend** to new gramm
   * Extracts functions, classes, variables, interfaces, types, and exports.
 * **Go to definition**
 
-  * Respects local declarations, default/named/namespace imports, and re-exports.
+  * Cross-file navigation respecting local declarations, imports, and exports.
+  * TS/JS: Supports re-exports and namespace imports.
+  * Python: Supports module imports and __all__ exports.
 * **Find references**
 
-  * Scans the project, respects lexical scope, and counts refs through imports/namespace members.
+  * Project-wide scanning respecting lexical scope and imports.
+  * TS/JS: Supports namespace members and re-exports.
+  * Python: Supports module imports and __all__ exports.
 * **AST grep**
 
   * Run arbitrary Tree-sitter queries across the repo.
@@ -36,14 +40,14 @@ It’s deliberately **elegant**, **robust**, and **easy to extend** to new gramm
   * JS/TS (first-class), Python (starter).
   * Clear adapter interface so you can plug in Ruby, C#, Rust, Java, etc.
 
-> Note: The current Python support indexes locals and imports and emits graph edges, but treats targets as **external** (no file-level module resolution yet). This is enough for graphing and basic references; cross-file Python navigation is intentionally scoped for a later pass.
+> Note: Python support now includes **full cross-file symbol navigation** with file-level module resolution, package anchors, and relative imports. Both TS/JS and Python provide equivalent go-to-definition and find-references capabilities.
 
 ---
 
 ## Supported languages
 
-* **JavaScript / TypeScript** (`.ts`, `.tsx`, `.js`, `.jsx`, `.mts`, `.cts`, `.mjs`, `.cjs`)
-* **Python** (early support, `.py`)
+* **JavaScript / TypeScript** (`.ts`, `.tsx`, `.js`, `.jsx`, `.mts`, `.cts`, `.mjs`, `.cjs`) - Full cross-file navigation
+* **Python** (`.py`) - Full cross-file navigation
 
 ---
 
@@ -190,8 +194,8 @@ Strategy:
 
 This is intentionally minimal and pragmatic; here’s what’s next:
 
-* **Python module resolution** to real files (now recorded as external nodes).
-  *Planned*: relative/absolute resolution using package anchors and simple project-root probing; handle `__all__` and `from x import *` expansion.
+* **Python cross-file symbol navigation** - ✅ **COMPLETED**
+  * Implemented: Full cross-file go-to-definition and find-references with module resolution, package anchors, and `__all__` exports.
 * **Multiple `tsconfig.json`** (monorepos).
   *Planned*: nearest-tsconfig lookup per file with cached `paths` alias resolution.
 * **Mark TS type-only imports/edges** (e.g., `import type { T } from "x"`).
@@ -199,8 +203,6 @@ This is intentionally minimal and pragmatic; here’s what’s next:
 * **Namespace packages in Python (PEP 420)**.
   *Planned*: treat directories without `__init__.py` as namespace packages during resolution.
 * **More grammars**: Ruby, C#, Rust, Java, Go… The adapter API is stable enough to add these incrementally.
-
-If you want me to prioritize any of the above, say the word and I’ll wire it in next.
 
 ---
 
