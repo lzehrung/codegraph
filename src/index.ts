@@ -24,10 +24,26 @@ import tsGrammars from "tree-sitter-typescript";
 import JavaScript from "tree-sitter-javascript";
 import PythonLang from "tree-sitter-python";
 import { createMatchPath } from "tsconfig-paths";
+import yaml from "js-yaml";
 
 /* -------------------------------------------------------------------------- */
 /* Language adapter interface                                                 */
 /* -------------------------------------------------------------------------- */
+
+// Workspace support types and caches (monorepo detection and resolution)
+type WorkspacePackageInfo = {
+  name: string;
+  path: string;
+  main?: string;
+  exports?: unknown;
+};
+
+type WorkspaceConfig = {
+  packages: Map<string, WorkspacePackageInfo>; // package name -> info
+  rootDir: string;
+};
+
+const workspaceCache = new Map<string, WorkspaceConfig>();
 
 export type IdentifierNodeType = string;
 
@@ -406,6 +422,156 @@ async function findNearestTsconfig(
   return null;
 }
 
+/* ----------------------------- Workspace discovery ------------------------- */
+async function fileExists(p: string): Promise<boolean> {
+  try {
+    await fsp.access(p, fs.constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function findWorkspaceRoot(startDir: string): Promise<string | null> {
+  let dir = startDir;
+  while (true) {
+    const pkgJson = path.join(dir, "package.json");
+    const pnpmYaml = path.join(dir, "pnpm-workspace.yaml");
+    const lernaJson = path.join(dir, "lerna.json");
+    if (await fileExists(pkgJson)) {
+      try {
+        const raw = await fsp.readFile(pkgJson, "utf8");
+        const json = JSON.parse(raw);
+        if (json.workspaces) return dir;
+      } catch {}
+    }
+    if (await fileExists(pnpmYaml)) return dir;
+    if (await fileExists(lernaJson)) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+async function loadJSON<T = any>(p: string): Promise<T | null> {
+  try {
+    const raw = await fsp.readFile(p, "utf8");
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function loadWorkspaceConfig(projectRoot: string): Promise<WorkspaceConfig | undefined> {
+  const root = (await findWorkspaceRoot(projectRoot)) ?? projectRoot;
+  if (workspaceCache.has(root)) return workspaceCache.get(root)!;
+
+  const packages = new Map<string, WorkspacePackageInfo>();
+
+  // npm/yarn workspaces from root package.json
+  const rootPkgPath = path.join(root, "package.json");
+  const rootPkg = await loadJSON<any>(rootPkgPath);
+  let workspaceGlobs: string[] = [];
+  if (rootPkg?.workspaces) {
+    if (Array.isArray(rootPkg.workspaces)) workspaceGlobs = rootPkg.workspaces;
+    else if (Array.isArray(rootPkg.workspaces?.packages)) workspaceGlobs = rootPkg.workspaces.packages;
+  }
+
+  // pnpm-workspace.yaml
+  const pnpmYamlPath = path.join(root, "pnpm-workspace.yaml");
+  if (await fileExists(pnpmYamlPath)) {
+    try {
+      const raw = await fsp.readFile(pnpmYamlPath, "utf8");
+      const y = yaml.load(raw) as any;
+      if (Array.isArray(y?.packages)) {
+        workspaceGlobs.push(...y.packages);
+      }
+    } catch {}
+  }
+
+  // lerna.json
+  const lernaPath = path.join(root, "lerna.json");
+  const lerna = await loadJSON<any>(lernaPath);
+  if (lerna?.packages && Array.isArray(lerna.packages)) {
+    workspaceGlobs.push(...lerna.packages);
+  }
+
+  // De-duplicate globs
+  workspaceGlobs = Array.from(new Set(workspaceGlobs));
+
+  if (workspaceGlobs.length > 0) {
+    // Find all package.json files under workspace globs
+    const patterns = workspaceGlobs.map((g) => path.posix.join(g.replace(/\\/g, '/'), "package.json"));
+    const found = await fg(patterns, { cwd: root, absolute: true, dot: true, ignore: ["**/node_modules/**"] });
+    for (const pkgPath of found) {
+      const info = await loadJSON<any>(pkgPath);
+      const name: string | undefined = info?.name;
+      if (!name) continue;
+      const dir = path.dirname(pkgPath);
+      packages.set(name, {
+        name,
+        path: dir,
+        main: typeof info.main === 'string' ? info.main : undefined,
+        exports: info.exports,
+      });
+    }
+  }
+
+  const cfg: WorkspaceConfig = { packages, rootDir: root };
+  workspaceCache.set(root, cfg);
+  return cfg;
+}
+
+function resolvePackageSubpath(spec: string): { name: string; subpath?: string } {
+  // spec can be '@scope/name/foo/bar' or 'name/foo'
+  if (spec.startsWith('@')) {
+    const parts = spec.split('/');
+    const name = parts.slice(0, 2).join('/');
+    const sub = parts.slice(2).join('/');
+    return { name, subpath: sub || undefined };
+  }
+  const parts = spec.split('/');
+  const name = parts[0]!;
+  const sub = parts.slice(1).join('/');
+  return { name, subpath: sub || undefined };
+}
+
+async function resolveWorkspacePackage(
+  spec: string,
+  ws: WorkspaceConfig | undefined
+): Promise<string | null> {
+  if (!ws) return null;
+  const { name, subpath } = resolvePackageSubpath(spec);
+  const pkg = ws.packages.get(name);
+  if (!pkg) return null;
+  const baseDir = pkg.path;
+
+  // If subpath provided, try resolving inside package
+  const exts = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"];
+  if (subpath) {
+    const raw = path.join(baseDir, subpath);
+    const candidates: string[] = [raw];
+    for (const e of exts) candidates.push(raw + e);
+    for (const e of exts) candidates.push(path.join(raw, "index" + e));
+    for (const c of candidates) {
+      if (await fileExists(c)) return path.resolve(c);
+    }
+    return null;
+  }
+
+  // No subpath: use package.json exports/main or index files
+  const mainField = pkg.main ? path.resolve(baseDir, pkg.main) : null;
+  if (mainField && await fileExists(mainField)) return mainField;
+
+  const idxCandidates = exts.flatMap((e) => [
+    path.join(baseDir, "index" + e),
+  ]);
+  for (const c of idxCandidates) {
+    if (await fileExists(c)) return path.resolve(c);
+  }
+  return baseDir; // fallback to dir (some packages import directory)
+}
 async function loadNearestTsconfigFor(
   file: string
 ): Promise<{ matchPath?: MatchPathFn }> {
@@ -452,7 +618,8 @@ async function resolveSpecifier(
   fromFile: string,
   spec: string,
   projectRoot: string,
-  matchPath?: MatchPathFn
+  matchPath?: MatchPathFn,
+  workspaceConfig?: WorkspaceConfig
 ): Promise<FileId | { external: string }> {
   if (spec.startsWith(".") || spec.startsWith("/")) {
     const base = spec.startsWith("/")
@@ -480,6 +647,11 @@ async function resolveSpecifier(
       ".cjs",
     ].some(ext => name.endsWith(ext)));
     if (m) return path.resolve(m);
+  }
+  // Workspace packages
+  if (!spec.startsWith('.') && !spec.startsWith('/')) {
+    const resolvedWs = await resolveWorkspacePackage(spec, workspaceConfig);
+    if (resolvedWs) return resolvedWs;
   }
   return { external: spec };
 }
@@ -828,11 +1000,13 @@ async function collectImportsForFile(
 
     // TS/JS
     if (caps["def"] && caps["req"]) {
+      const workspaceConfig = await loadWorkspaceConfig(projectRoot);
       const resolved = await resolveSpecifier(
         file,
         from!,
         projectRoot,
-        tsCfg.matchPath
+        tsCfg.matchPath,
+        workspaceConfig
       );
       imports.push({
         kind: "default",
@@ -844,11 +1018,13 @@ async function collectImportsForFile(
       continue;
     }
     if (!from) continue;
+    const workspaceConfig = await loadWorkspaceConfig(projectRoot);
     const resolved = await resolveSpecifier(
       file,
       from,
       projectRoot,
-      tsCfg.matchPath
+      tsCfg.matchPath,
+      workspaceConfig
     );
     if (caps["def"])
       imports.push({
@@ -893,6 +1069,7 @@ export async function collectGraph(
   files: string[]
 ): Promise<Graph> {
   const graph: Graph = { nodes: new Set(files), edges: [] };
+  const workspaceConfig = await loadWorkspaceConfig(projectRoot);
   
   // Process files in parallel for better performance
   const filePromises = files.map(async (file) => {
@@ -917,7 +1094,7 @@ export async function collectGraph(
           );
           to = res;
         } else {
-          to = await resolveSpecifier(file, spec, projectRoot, matchPath);
+          to = await resolveSpecifier(file, spec, projectRoot, matchPath, workspaceConfig);
         }
         edges.push({ from: file, to, raw: spec, ...(typeOnly !== undefined && { typeOnly }) });
       }
@@ -936,6 +1113,7 @@ export async function collectGraph(
 export async function buildProjectIndex(
   projectRoot: string
 ): Promise<ProjectIndex> {
+  const workspaceConfig = await loadWorkspaceConfig(projectRoot);
   const files = await listProjectFiles(projectRoot);
   if (files.length === 0) {
     console.warn(`Warning: No files found in project root: ${projectRoot}`);
@@ -962,7 +1140,8 @@ export async function buildProjectIndex(
                   f,
                   e.fromModule,
                   projectRoot,
-                  matchPath
+                  matchPath,
+                  workspaceConfig
                 );
                 if (typeof resolved === "string") e.fromModule = resolved;
               }
