@@ -1,0 +1,10 @@
+{
+  "name": "javascript-test-project",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Test project for JavaScript dependency graph functionality",
+  "main": "main.js",
+  "scripts": {
+    "start": "node main.js"
+  }
+}
