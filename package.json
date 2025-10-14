@@ -4,7 +4,9 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "test:run": "vitest run",
     "install": "npm install --legacy-peer-deps"
   },
   "keywords": [],
@@ -13,8 +15,10 @@
   "description": "",
   "devDependencies": {
     "@types/node": "^24.7.2",
+    "@vitest/ui": "^3.2.4",
     "tsx": "^4.20.6",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
   },
   "dependencies": {
     "fast-glob": "^3.3.3",

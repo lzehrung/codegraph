@@ -91,15 +91,7 @@ const TS_JS_SUPPORT: LanguageSupport = {
       (export_statement (function_declaration name: (identifier) @name))
       (export_statement (class_declaration name: (identifier) @name))
       (export_statement (lexical_declaration (variable_declarator name: (identifier) @name)))
-
-      (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias))
-      (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)) (from_clause (string) @from))
-      (export_statement (export_clause (asterisk)) (from_clause (string) @from))
       (export_statement (export_default_declaration (identifier) @default))
-
-      (export_statement (export_default_declaration (function) @anon_default))
-      (export_statement (export_default_declaration (class) @anon_default))
-      (export_statement (export_assignment right: (identifier) @ts_export_assign))
     `,
     locals: `
       (function_declaration name: (identifier) @name)
@@ -112,7 +104,7 @@ const TS_JS_SUPPORT: LanguageSupport = {
     importBindings: `
       (import_statement) @stmt
       (import_statement (import_clause (import_specifier name: (identifier) @def)) (from_clause (string) @from))
-      (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname alias: (identifier) @alias)+)) (from_clause (string) @from))
+      (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname))) (from_clause (string) @from))
       (import_statement (import_clause (namespace_import (identifier) @ns)) (from_clause (string) @from))
       (import_equals_declaration) @stmt
       (import_equals_declaration name: (identifier) @def module: (call_expression (identifier) @req (arguments (string) @from))) (#eq? @req "require")
@@ -896,7 +888,7 @@ async function collectImportsForFile(
 /* Build project index + graph                                                */
 /* -------------------------------------------------------------------------- */
 
-async function collectGraph(
+export async function collectGraph(
   projectRoot: string,
   files: string[]
 ): Promise<Graph> {
