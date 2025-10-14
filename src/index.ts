@@ -92,8 +92,8 @@ const TS_JS_SUPPORT: LanguageSupport = {
       (export_statement (class_declaration name: (identifier) @name))
       (export_statement (lexical_declaration (variable_declarator name: (identifier) @name)))
 
-      (export_clause (export_specifier name: (identifier) @src alias: (identifier)? @alias))
-      (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier)? @alias)) (from_clause (string) @from))
+      (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias))
+      (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)) (from_clause (string) @from))
       (export_statement (export_clause (asterisk)) (from_clause (string) @from))
       (export_statement (export_default_declaration (identifier) @default))
 
@@ -112,7 +112,7 @@ const TS_JS_SUPPORT: LanguageSupport = {
     importBindings: `
       (import_statement) @stmt
       (import_statement (import_clause (import_specifier name: (identifier) @def)) (from_clause (string) @from))
-      (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname alias: (identifier)? @alias)+)) (from_clause (string) @from))
+      (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname alias: (identifier) @alias)+)) (from_clause (string) @from))
       (import_statement (import_clause (namespace_import (identifier) @ns)) (from_clause (string) @from))
       (import_equals_declaration) @stmt
       (import_equals_declaration name: (identifier) @def module: (call_expression (identifier) @req (arguments (string) @from))) (#eq? @req "require")
@@ -170,18 +170,7 @@ const PY_SUPPORT: LanguageSupport = {
     // Import edges (also used for importBindings)
     imports: `
       (import_statement) @stmt
-      (import_statement (import_list (aliased_import (dotted_name) @mod (identifier)? @alias)+))
-      (import_statement (import_list (dotted_name) @mod))
-
       (import_from_statement) @stmt
-      (import_from_statement module_name: (dotted_name) @mod)
-      (import_from_statement module_name: (relative_import) @dots)
-
-      (call
-        function: (attribute object: (identifier) @obj attribute: (identifier) @attr)
-        arguments: (argument_list (string) @mod))
-      (#eq? @obj "importlib")
-      (#eq? @attr "import_module")
     `,
     // Exports: __all__, function/class definitions, and assignments
     exports: `
@@ -198,16 +187,7 @@ const PY_SUPPORT: LanguageSupport = {
     // Import bindings used to seed per-file scopes
     importBindings: `
       (import_statement) @stmt
-      (import_statement (import_list (aliased_import (dotted_name) @iname (identifier)? @alias)+))
-      (import_statement (import_list (dotted_name) @iname))
-
       (import_from_statement) @stmt
-      (import_from_statement module_name: (dotted_name) @from (import_list (aliased_import (identifier) @iname (identifier)? @alias)+))
-      (import_from_statement module_name: (dotted_name) @from (import_list (identifier) @iname))
-      (import_from_statement module_name: (relative_import) @reldots (import_list (identifier) @iname))
-      (import_from_statement module_name: (relative_import) @reldots (import_list (aliased_import (identifier) @iname (identifier)? @alias)+))
-      (import_from_statement module_name: (dotted_name) @from (import_list (wildcard_import) @star))
-      (import_from_statement module_name: (relative_import) @reldots (import_list (wildcard_import) @star))
     `,
   },
   classifyDefinition: (n) => {
@@ -813,6 +793,24 @@ async function collectImportsForFile(
         }
         continue;
       }
+      // Namespace imports: import module as ns
+      if (m.captures.some((c: Parser.QueryCapture) => c.name === "ns_module")) {
+        const nsModules = m.captures.filter((c: Parser.QueryCapture) => c.name === "ns_module");
+        const nsAliases = m.captures.filter((c: Parser.QueryCapture) => c.name === "ns_alias");
+        for (let i = 0; i < nsModules.length; i++) {
+          const moduleName = sliceText(nsModules[i]!.node, source);
+          const alias = nsAliases[i] ? sliceText(nsAliases[i]!.node, source) : moduleName;
+          const resolved = await resolvePythonModule(
+            projectRoot,
+            file,
+            moduleName,
+            0
+          );
+          imports.push({ kind: "namespace", localNS: alias, from: moduleName, resolved });
+        }
+        continue;
+      }
+      
       // import package[.sub] [as alias]
       if (m.captures.some((c: Parser.QueryCapture) => c.name === "iname")) {
         const inames = m.captures.filter((c: Parser.QueryCapture) => c.name === "iname");
@@ -1149,7 +1147,7 @@ export async function goToDefinition(
     }
   }
 
-  // namespace member (JS/TS): ns.member
+  // namespace member (JS/TS and Python): ns.member
   if (
     sup.supportsCrossModuleSymbols &&
     node.type ===
@@ -1514,13 +1512,17 @@ async function collectNamespaceMemberRefs(
   member: string
 ): Promise<Range[]> {
   const lang = languageForFile(file);
+  const sup = supportForFile(file);
   const parser = new Parser();
   parser.setLanguage(lang);
   const src = await fsp.readFile(file, "utf8");
   const tree = parser.parse(src);
   const out: Range[] = [];
   const walk = (n: Parser.SyntaxNode) => {
-    if (n.type === "member_expression") {
+    const memberExprType = sup.nodeTypes.memberExpression ?? "member_expression";
+    const propIdType = sup.nodeTypes.propertyIdentifier?.[0] ?? "property_identifier";
+    
+    if (n.type === memberExprType) {
       const obj = n.child(0);
       const prop = n.child(2);
       if (
@@ -1528,7 +1530,7 @@ async function collectNamespaceMemberRefs(
         prop &&
         obj.type === "identifier" &&
         sliceText(obj, src) === nsName &&
-        (prop.type === "property_identifier" || prop.type === "identifier") &&
+        (prop.type === propIdType || prop.type === "identifier" || prop.type === "attribute") &&
         sliceText(prop, src) === member
       ) {
         out.push(toRange(prop));
@@ -1563,7 +1565,7 @@ export async function astGrep(
           const p = cap.node.startPosition;
           const line = p.row + 1;
           const col = p.column + 1;
-          const snippet = sliceText(cap.node, src).replaceAll("\n", " ");
+          const snippet = sliceText(cap.node, src).replace(/\n/g, " ");
           writeStdoutLine(
             `${path.relative(projectRoot, file)}:${line}:${col}: ${
               cap.name
@@ -1608,6 +1610,13 @@ function writeError(error: unknown) {
 
 async function main() {
   const [cmd = "graph", root = process.cwd(), ...rest] = process.argv.slice(2);
+  
+  // Test basic functionality
+  if (cmd === "test") {
+    writeStderrLine("Debug: Test command executed successfully");
+    writeJSONLine({ status: "ok", message: "Script is working" });
+    return;
+  }
 
   if (cmd === "graph") {
     const files = await listProjectFiles(root);
@@ -1626,17 +1635,12 @@ async function main() {
   }
 
   if (cmd === "goto") {
-    const args = Object.fromEntries(
-      rest.reduce<[string, string][]>((acc, cur, i, arr) => {
-        if (cur.startsWith("--")) acc.push([cur.slice(2), arr[i + 1]] as any);
-        return acc;
-      }, [])
-    );
-    const file = path.isAbsolute(args.file!)
-      ? args.file!
-      : path.resolve(root, args.file!);
-    const line = Number(args.line!);
-    const column = Number(args.col ?? args.column!);
+    const [fileArg, lineArg, colArg] = rest;
+    const file = path.isAbsolute(fileArg!)
+      ? fileArg!.replace(/\\/g, '/')
+      : path.resolve(root, fileArg!).replace(/\\/g, '/');
+    const line = Number(lineArg!);
+    const column = Number(colArg!);
     const index = await buildProjectIndex(root);
     const res = await goToDefinition(index, { file, line, column });
     writeJSONLine(res);
@@ -1689,7 +1693,7 @@ async function main() {
   process.exit(1);
 }
 
-if (require.main === module) {
+if (import.meta.url === `file://${process.argv[1]}` || import.meta.url.endsWith('index.ts')) {
   main().catch((e) => {
     writeError(e);
     process.exit(1);
