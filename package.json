@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "vitest",
+    "test:ci": "vitest run",
     "test:ui": "vitest --ui",
     "test:run": "vitest run",
     "install": "npm install --legacy-peer-deps"
