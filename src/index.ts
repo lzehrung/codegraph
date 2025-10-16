@@ -392,9 +392,12 @@ export type ImportBinding =
       typeOnly?: boolean;
     };
 
+export type EdgeTo =
+  | { type: "file"; path: FileId }
+  | { type: "external"; name: string };
 export type Edge = {
   from: FileId;
-  to: FileId | { external: string };
+  to: EdgeTo;
   raw: string;
   typeOnly?: boolean;
 };
@@ -1515,7 +1518,7 @@ export async function collectGraph(
 
       const edges: Edge[] = [];
       for (const { spec, typeOnly } of specs) {
-        let to: FileId | { external: string };
+        let to: EdgeTo;
         if (sup.id === "python") {
           // best effort: try Python resolution for path-like/absolute; otherwise external
           const res = await resolvePythonModule(
@@ -1524,15 +1527,16 @@ export async function collectGraph(
             spec.includes(".") || !spec.startsWith(".") ? spec : null,
             spec.startsWith(".") ? spec.match(/^\.+/)?.[0].length ?? 0 : 0
           );
-          to = res;
+          to = typeof res === "string" ? { type: "file", path: res } : { type: "external", name: res.external };
         } else {
-          to = await resolveSpecifier(
+          const res = await resolveSpecifier(
             file,
             spec,
             projectRoot,
             matchPath,
             workspaceConfig
           );
+          to = typeof res === "string" ? { type: "file", path: res } : { type: "external", name: res.external };
         }
         edges.push({
           from: file,

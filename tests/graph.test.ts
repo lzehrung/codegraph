@@ -3,8 +3,8 @@ import path from 'node:path';
 import { collectGraph } from '../src/index.js';
 import { getSamplePath, expectEdgeCount } from './test-utils.js';
 
-const toStr = (to: string | { external: string }) =>
-  typeof to === 'string' ? to : to.external;
+type EdgeTo = { type: 'file'; path: string } | { type: 'external'; name: string };
+const toStr = (to: EdgeTo) => (to.type === 'file' ? to.path : to.name);
 
 describe('Dependency Graph', () => {
   describe('TypeScript Project', () => {
@@ -44,9 +44,7 @@ describe('Dependency Graph', () => {
       const graph = await collectGraph(samplePath, files);
       
       // Check for circular dependencies
-      const circularEdges = graph.edges.filter(edge => 
-        edge.from === edge.to
-      );
+      const circularEdges = graph.edges.filter(edge => edge.from === toStr(edge.to));
       expect(circularEdges).toHaveLength(0);
     });
   });
