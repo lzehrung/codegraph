@@ -12,4 +12,8 @@ export class AClass {
 
 export const A_CONST = "A";
 
+export default function aDefault(): string {
+  return "default-a";
+}
+
 
