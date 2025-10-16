@@ -1,4 +1,4 @@
-import { aHelper, AClass, A_CONST } from '@acme/pkg-a';
+import defA, { aHelper, AClass, A_CONST } from '@acme/pkg-a';
 import * as a from '@acme/pkg-a';
 
 export function bUseA() {
@@ -16,5 +16,8 @@ const nsObj = new a.AClass(5);
 // CommonJS require destructuring (for parsing/graph tests)
 const { aHelper: requireAlias } = require('@acme/pkg-a');
 const reqVal = requireAlias();
+
+// Default import usage
+const defVal = defA();
 
 

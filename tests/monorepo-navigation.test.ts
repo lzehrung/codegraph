@@ -29,6 +29,19 @@ describe('Monorepo cross-package navigation', () => {
       expect(hasPkgbRef).toBe(true);
     }
   });
+
+  it('goToDefinition for default import from pkg-b to pkg-a default', async () => {
+    const index = await buildProjectIndex(root);
+    // defA() is declared near bottom; put cursor inside defA identifier in a call
+    // The added default usage is on last lines; aim for the "defA" in "const defVal = defA();"
+    const line = 21; // "const defVal = defA();"
+    const column = 18; // inside defA identifier
+    const res = await goToDefinition(index, { file: pkgb.replace(/\\/g, '/'), line, column });
+    expect(res.status).toBe('ok');
+    if (res.status === 'ok') {
+      expect(res.definition.file.replace(/\\/g, '/')).toBe(pkga.replace(/\\/g, '/'));
+    }
+  });
 });
 
 
