@@ -20,4 +20,9 @@ const reqVal = requireAlias();
 // Default import usage
 const defVal = defA();
 
+// Re-exports from pkg-a
+export { aHelper as bHelper } from '@acme/pkg-a';
+export { AClass as ExportedAClass } from '@acme/pkg-a';
+export * from '@acme/pkg-a';
+
 
