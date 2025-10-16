@@ -16,4 +16,7 @@ export default function aDefault(): string {
   return "default-a";
 }
 
+// Internal alias import (via @utils/*)
+// export { extraUtil as A_EXTRA } from '@utils/extra';
+
 

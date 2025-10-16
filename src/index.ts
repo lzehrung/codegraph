@@ -739,14 +739,7 @@ async function loadNearestTsconfigFor(
     const paths = json.compilerOptions?.paths as
       | Record<string, string[]>
       | undefined;
-    const matchPath = createMatchPath(baseUrl, paths ?? {}, [
-      ".ts",
-      ".tsx",
-      ".js",
-      ".jsx",
-      ".mjs",
-      ".cjs",
-    ]);
+    const matchPath = createMatchPath(baseUrl, paths ?? {});
     const val = { matchPath };
     tsconfigCache.set(dir, val);
     return val;
@@ -782,18 +775,40 @@ async function resolveSpecifier(
     }
     return { external: spec };
   }
-  if (matchPath) {
-    const m = matchPath(spec, undefined, (name: string) =>
-      [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"].some((ext) =>
-        name.endsWith(ext)
-      )
-    );
-    if (m) return path.resolve(m);
-  }
   // Workspace packages
   if (!spec.startsWith(".") && !spec.startsWith("/")) {
     const resolvedWs = await resolveWorkspacePackage(spec, workspaceConfig);
     if (resolvedWs) return resolvedWs;
+  }
+  if (matchPath) {
+    const m = matchPath(
+      spec,
+      undefined,
+      (candidate: string) => {
+        try {
+          fs.accessSync(candidate, fs.constants.R_OK);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]
+    );
+    if (m) {
+      const cand = path.resolve(m);
+      const hasExt = !!path.extname(cand);
+      if (hasExt) return cand;
+      const exts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+      for (const e of exts) {
+        const pth = cand + e;
+        try { fs.accessSync(pth, fs.constants.R_OK); return pth; } catch {}
+      }
+      for (const e of exts) {
+        const pth = path.join(cand, "index" + e);
+        try { fs.accessSync(pth, fs.constants.R_OK); return pth; } catch {}
+      }
+      return cand;
+    }
   }
   return { external: spec };
 }
