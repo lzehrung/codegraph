@@ -287,14 +287,8 @@ Strategy:
 
 ---
 
-## Current limitations & roadmap
+## Roadmap
 
-This is intentionally minimal and pragmatic; here's what's next:
-
-* **Type-only imports/edges** (e.g., `import type { T } from "x"`)
-  * *Planned*: tag edges and optionally filter in graph views
-* **Namespace packages in Python (PEP 420)**
-  * *Planned*: treat directories without `__init__.py` as namespace packages during resolution
 * **More grammars**: Ruby, C#, Rust, Java, Go…
   * The adapter API is stable enough to add these incrementally
 

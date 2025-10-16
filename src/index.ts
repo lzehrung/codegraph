@@ -261,7 +261,7 @@ const PY_SUPPORT: LanguageSupport = {
   language: () => PythonLang as unknown as Parser.Language,
   nodeTypes: {
     identifier: ["identifier"],
-    propertyIdentifier: ["attribute"],
+    propertyIdentifier: ["identifier"],
     memberExpression: "attribute",
   },
   queries: {
@@ -835,6 +835,15 @@ async function findPythonPackageAnchor(startDir: string): Promise<string> {
   return topWithInit;
 }
 
+async function isDirectory(p: string): Promise<boolean> {
+  try {
+    const st = await fsp.stat(p);
+    return st.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 async function resolvePythonModule(
   projectRoot: string,
   fromFile: string,
@@ -855,11 +864,14 @@ async function resolvePythonModule(
   if (relPath) {
     candidates.push(path.join(baseDir, relPath + ".py"));
     candidates.push(path.join(baseDir, relPath, "__init__.py"));
+    // PEP 420: implicit namespace package directory
+    candidates.push(path.join(baseDir, relPath));
   } else {
     candidates.push(path.join(baseDir, "__init__.py"));
   }
   for (const c of candidates) {
     try {
+      if (await isDirectory(c)) return path.resolve(c);
       await fsp.access(c, fs.constants.R_OK);
       return path.resolve(c);
     } catch {}
@@ -867,8 +879,9 @@ async function resolvePythonModule(
 
   if (moduleName) {
     const abs = path.join(projectRoot, ...moduleName.split("."));
-    for (const c of [abs + ".py", path.join(abs, "__init__.py")]) {
+    for (const c of [abs + ".py", path.join(abs, "__init__.py"), abs]) {
       try {
+        if (await isDirectory(c)) return path.resolve(c);
         await fsp.access(c, fs.constants.R_OK);
         return path.resolve(c);
       } catch {}
@@ -1244,17 +1257,35 @@ async function collectImportsForFile(
         mod,
         relDots
       );
-      imports.push({
-        kind: "named",
-        local,
-        imported,
-        from: moduleSpec,
-        resolved,
-      });
+      // If base resolves to a directory/package, attempt submodule resolution for `imported`
+      let nsResolved: string | undefined;
+      if (typeof resolved === "string") {
+        let baseDir = resolved;
+        try {
+          const st = fs.statSync(baseDir);
+          if (!st.isDirectory() && baseDir.toLowerCase().endsWith("__init__.py")) baseDir = path.dirname(baseDir);
+        } catch {}
+        const sub = [
+          path.join(baseDir, `${imported}.py`),
+          path.join(baseDir, imported, "__init__.py"),
+          path.join(baseDir, imported),
+        ];
+        for (const c of sub) {
+          try {
+            if (fs.existsSync(c)) { nsResolved = fs.statSync(c).isDirectory() ? c : c; break; }
+          } catch {}
+        }
+      }
+      if (nsResolved) {
+        imports.push({ kind: "namespace", localNS: local, from: moduleSpec, resolved: nsResolved });
+      } else {
+        imports.push({ kind: "named", local, imported, from: moduleSpec, resolved });
+      }
     };
     const pushDefault = async (dotted: string, local: string) => {
       const resolved = await resolvePythonModule(projectRoot, file, dotted, 0);
-      imports.push({ kind: "default", local, from: dotted, resolved });
+      // Treat module imports as namespace bindings so `ns.member` works
+      imports.push({ kind: "namespace", localNS: local, from: dotted, resolved });
     };
 
     const reFromLine = /\bfrom\s+([^\s]+)\s+import\s+([^\n#]+)/g;
@@ -1768,8 +1799,12 @@ export async function goToDefinition(
      (node.type === (sup.nodeTypes.memberExpression ?? "member_expression")))
   ) {
     const memberNode = node.type === (sup.nodeTypes.memberExpression ?? "member_expression") ? node : node.parent!;
-    const obj = memberNode.child(0);
-    const prop = memberNode.child(2);
+    let obj = memberNode.child(0);
+    let prop = memberNode.child(2);
+    if (sup.id === "python") {
+      obj = memberNode.childForFieldName("object") ?? obj;
+      prop = memberNode.childForFieldName("attribute") ?? prop;
+    }
     if (obj && prop && obj.type === "identifier") {
       const nsName = sliceText(obj, source);
       const member = sliceText(prop, source);
@@ -1923,7 +1958,40 @@ function resolveImported(
     typeof imp.resolved === "string" ? imp.resolved : undefined;
   if (!targetFile) return null;
   const hit = resolveExport(index, targetFile, exportedName);
-  return hit?.def ?? null;
+  if (hit?.def) return hit.def;
+  // Python: named import may refer to a submodule; if exports didn't match, fall back to module top
+  const sup = supportForFile(targetFile);
+  if (sup.id === "python") {
+    const base = fs.existsSync(targetFile) && fs.statSync(targetFile).isDirectory()
+      ? targetFile
+      : path.dirname(targetFile);
+    const subCandidates = [
+      path.join(base, `${exportedName}.py`),
+      path.join(base, exportedName, "__init__.py"),
+      path.join(base, exportedName),
+    ];
+    for (const c of subCandidates) {
+      try {
+        if (fs.existsSync(c)) {
+          const isDir = fs.statSync(c).isDirectory();
+          const filePath = isDir ? c : c;
+          return {
+            file: filePath.replace(/\\/g, "/"),
+            localName: exportedName,
+            kind: SymbolKind.Variable,
+            range: { start: { line: 1, column: 1, index: 0 }, end: { line: 1, column: 1, index: 0 } },
+          };
+        }
+      } catch {}
+    }
+    return {
+      file: targetFile.replace(/\\/g, "/"),
+      localName: exportedName,
+      kind: SymbolKind.Variable,
+      range: { start: { line: 1, column: 1, index: 0 }, end: { line: 1, column: 1, index: 0 } },
+    };
+  }
+  return null;
 }
 
 /* -------------------------------------------------------------------------- */
