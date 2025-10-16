@@ -16,38 +16,37 @@ It’s deliberately **elegant**, **robust**, and **easy to extend** to new gramm
 ## Features
 
 * **Dependency graph**
-
-  * JS/TS: `import`, `export ... from`, `export * from`, `require()`, `import()`.
-  * Unresolved targets are represented as **external** nodes.
+  * JS/TS: `import`, `export ... from`, `export * from`, `require()`, `import()`, CommonJS destructuring
+  * Python: `import`, `from ... import`, relative imports with package resolution
+  * Unresolved targets are represented as **external** nodes
 * **Symbol index**
-
-  * Extracts functions, classes, variables, interfaces, types, and exports.
+  * Extracts functions, classes, variables, interfaces, types, and exports
+  * Cross-language scope indexing with proper import binding resolution
 * **Go to definition**
-
-  * Cross-file navigation respecting local declarations, imports, and exports.
-  * TS/JS: Supports re-exports and namespace imports.
-  * Python: Supports module imports and __all__ exports.
+  * Cross-file navigation for all supported languages
+  * TS/JS: Re-exports, namespace imports, CommonJS destructuring
+  * Python: Module imports, `__all__` exports, relative imports
 * **Find references**
-
-  * Project-wide scanning respecting lexical scope and imports.
-  * TS/JS: Supports namespace members and re-exports.
-  * Python: Supports module imports and __all__ exports.
+  * Project-wide scanning with lexical scope awareness
+  * TS/JS: Namespace members, re-exports, CommonJS patterns
+  * Python: Module imports, `__all__` exports, relative imports
 * **AST grep**
+  * Run arbitrary Tree-sitter queries across the repo
+* **Monorepo support**
+  * Workspace detection (npm/yarn/pnpm/lerna)
+  * Per-file TypeScript config resolution
+  * Package-relative import resolution
 
-  * Run arbitrary Tree-sitter queries across the repo.
-* **Extensible language adapters (80/20)**
-
-  * JS/TS (first-class), Python (starter).
-  * Clear adapter interface so you can plug in Ruby, C#, Rust, Java, etc.
-
-> Note: Python support now includes **full cross-file symbol navigation** with file-level module resolution, package anchors, and relative imports. Both TS/JS and Python provide equivalent go-to-definition and find-references capabilities.
+> **Cross-language parity**: All supported languages (TS/JS/Python) provide equivalent go-to-definition and find-references capabilities with full cross-file symbol navigation.
 
 ---
 
 ## Supported languages
 
-* **JavaScript / TypeScript** (`.ts`, `.tsx`, `.js`, `.jsx`, `.mts`, `.cts`, `.mjs`, `.cjs`) - Full cross-file navigation
-* **Python** (`.py`) - Full cross-file navigation
+* **JavaScript / TypeScript** (`.ts`, `.tsx`, `.js`, `.jsx`, `.mts`, `.cts`, `.mjs`, `.cjs`)
+* **Python** (`.py`)
+
+Both languages support full cross-file navigation with equivalent capabilities.
 
 ---
 
@@ -73,25 +72,23 @@ npm i tree-sitter tree-sitter-typescript tree-sitter-javascript tree-sitter-pyth
 
 ## Usage
 
-Place `dep-graph-and-symbols.ts` at your **repo root** and run with `tsx`:
-
 ```bash
 # Build a dependency graph (prints nodes + edges)
-npx tsx dep-graph-and-symbols.ts graph
+npx tsx src/index.ts graph
 
 # Build the full project index (graph + per-file symbol indexes)
-npx tsx dep-graph-and-symbols.ts index
+npx tsx src/index.ts index
 
 # Go to definition of symbol at file:line:column
-npx tsx dep-graph-and-symbols.ts goto --file src/foo.ts --line 42 --col 17
+npx tsx src/index.ts goto <file> <line> <column>
 
 # Find references of symbol at a location
-npx tsx dep-graph-and-symbols.ts refs --file src/foo.ts --line 42 --col 17
+npx tsx src/index.ts refs --file <file> --line <line> --col <column>
 # Pretty-print only the file:line:col
-npx tsx dep-graph-and-symbols.ts refs --file src/foo.ts --line 42 --col 17 --pretty
+npx tsx src/index.ts refs --file <file> --line <line> --col <column> --pretty
 
 # Run a Tree-sitter query across the repo
-npx tsx dep-graph-and-symbols.ts grep --query '(function_declaration name: (identifier) @name)'
+npx tsx src/index.ts grep --query '(function_declaration name: (identifier) @name)'
 ```
 
 ### Output formats
@@ -192,17 +189,21 @@ Strategy:
 
 ## Current limitations & roadmap
 
-This is intentionally minimal and pragmatic; here’s what’s next:
+This is intentionally minimal and pragmatic; here's what's next:
 
-* **Python cross-file symbol navigation** - ✅ **COMPLETED**
-  * Implemented: Full cross-file go-to-definition and find-references with module resolution, package anchors, and `__all__` exports.
-* **Multiple `tsconfig.json`** (monorepos).
-  *Planned*: nearest-tsconfig lookup per file with cached `paths` alias resolution.
-* **Mark TS type-only imports/edges** (e.g., `import type { T } from "x"`).
-  *Planned*: tag edges and optionally filter in graph views.
-* **Namespace packages in Python (PEP 420)**.
-  *Planned*: treat directories without `__init__.py` as namespace packages during resolution.
-* **More grammars**: Ruby, C#, Rust, Java, Go… The adapter API is stable enough to add these incrementally.
+* **Type-only imports/edges** (e.g., `import type { T } from "x"`)
+  * *Planned*: tag edges and optionally filter in graph views
+* **Namespace packages in Python (PEP 420)**
+  * *Planned*: treat directories without `__init__.py` as namespace packages during resolution
+* **More grammars**: Ruby, C#, Rust, Java, Go…
+  * The adapter API is stable enough to add these incrementally
+
+### Recently completed
+
+* ✅ **Python cross-file symbol navigation** - Full go-to-definition and find-references with module resolution, package anchors, and `__all__` exports
+* ✅ **CommonJS destructuring support** - `const { helperFunction: alias } = require('./module')`
+* ✅ **Monorepo workspace detection** - npm/yarn/pnpm/lerna workspace support with per-file TypeScript config resolution
+* ✅ **Cross-language parity** - Equivalent capabilities across TS/JS and Python
 
 ---
 
@@ -214,7 +215,13 @@ Yes. It walks the tree, ignores `node_modules`, virtualenv caches, builds a **si
 **Q: Does it follow re-exports for definition jumps?**
 Yes, for JS/TS. `resolveExport` recursively follows `export * from` and `export { name } from`.
 
-**Q: How “accurate” is find-references?**
-It uses a **lexical scope index** (module → function → block) and recorded bindings. It’s resilient for common patterns and avoids many false positives, but avoids heavy type-checking: perfect for an agent loop foundation.
+**Q: How "accurate" is find-references?**
+It uses a **lexical scope index** (module → function → block) and recorded bindings. It's resilient for common patterns and avoids many false positives, but avoids heavy type-checking: perfect for an agent loop foundation.
+
+**Q: Does it support CommonJS destructuring?**
+Yes. Both `const { helperFunction } = require('./module')` and `const { helperFunction: alias } = require('./module')` are fully supported.
+
+**Q: Does it work with monorepos?**
+Yes. It detects npm/yarn/pnpm/lerna workspaces and resolves package-relative imports correctly.
 
 ---

@@ -308,7 +308,11 @@ const PY_SUPPORT: LanguageSupport = {
 /* Registry                                                                   */
 /* -------------------------------------------------------------------------- */
 
-const LANGUAGE_SUPPORTS: LanguageSupport[] = [TS_SUPPORT, JS_SUPPORT, PY_SUPPORT];
+const LANGUAGE_SUPPORTS: LanguageSupport[] = [
+  TS_SUPPORT,
+  JS_SUPPORT,
+  PY_SUPPORT,
+];
 
 /* -------------------------------------------------------------------------- */
 /* Core types                                                                  */
@@ -386,7 +390,7 @@ export type Edge = {
   raw: string;
   typeOnly?: boolean;
 };
- // eslint-disable-next-line no-unused-vars, @typescript-eslint/no-unused-vars -- Graph type is exported for external consumers without local references
+// eslint-disable-next-line no-unused-vars, @typescript-eslint/no-unused-vars -- Graph type is exported for external consumers without local references
 export type Graph = { nodes: Set<FileId>; edges: Edge[] };
 
 export type ModuleIndex = {
@@ -417,20 +421,18 @@ export type Reference = {
 
 function supportForFile(filename: string): LanguageSupport {
   const ext = path.extname(filename).toLowerCase();
-  return (
-    LANGUAGE_SUPPORTS.find((s) => s.matchExts.includes(ext)) ?? TS_SUPPORT
-  );
+  return LANGUAGE_SUPPORTS.find((s) => s.matchExts.includes(ext)) ?? TS_SUPPORT;
 }
 function languageForFile(filename: string): Parser.Language {
   return supportForFile(filename).language(filename);
 }
 
 function sliceText(node: Parser.SyntaxNode, src: string) {
-  if (!node || !src) return '';
+  if (!node || !src) return "";
   return src.slice(node.startIndex, node.endIndex);
 }
 function unquote(s: string) {
-  if (!s || typeof s !== 'string') return s;
+  if (!s || typeof s !== "string") return s;
   const t = s.trim();
   return (t.startsWith('"') && t.endsWith('"')) ||
     (t.startsWith("'") && t.endsWith("'")) ||
@@ -545,7 +547,9 @@ async function loadJSON<T = any>(p: string): Promise<T | null> {
   }
 }
 
-async function loadWorkspaceConfig(projectRoot: string): Promise<WorkspaceConfig | undefined> {
+async function loadWorkspaceConfig(
+  projectRoot: string
+): Promise<WorkspaceConfig | undefined> {
   const root = (await findWorkspaceRoot(projectRoot)) ?? projectRoot;
   if (workspaceCache.has(root)) return workspaceCache.get(root)!;
 
@@ -557,7 +561,8 @@ async function loadWorkspaceConfig(projectRoot: string): Promise<WorkspaceConfig
   let workspaceGlobs: string[] = [];
   if (rootPkg?.workspaces) {
     if (Array.isArray(rootPkg.workspaces)) workspaceGlobs = rootPkg.workspaces;
-    else if (Array.isArray(rootPkg.workspaces?.packages)) workspaceGlobs = rootPkg.workspaces.packages;
+    else if (Array.isArray(rootPkg.workspaces?.packages))
+      workspaceGlobs = rootPkg.workspaces.packages;
   }
 
   // pnpm-workspace.yaml (parse minimally to avoid adding dependency here)
@@ -594,8 +599,15 @@ async function loadWorkspaceConfig(projectRoot: string): Promise<WorkspaceConfig
 
   if (workspaceGlobs.length > 0) {
     // Find all package.json files under workspace globs
-    const patterns = workspaceGlobs.map((g) => path.posix.join(g.replace(/\\/g, '/'), "package.json"));
-    const found = await fg(patterns, { cwd: root, absolute: true, dot: true, ignore: ["**/node_modules/**"] });
+    const patterns = workspaceGlobs.map((g) =>
+      path.posix.join(g.replace(/\\/g, "/"), "package.json")
+    );
+    const found = await fg(patterns, {
+      cwd: root,
+      absolute: true,
+      dot: true,
+      ignore: ["**/node_modules/**"],
+    });
     for (const pkgPath of found) {
       const info = await loadJSON<any>(pkgPath);
       const name: string | undefined = info?.name;
@@ -604,7 +616,7 @@ async function loadWorkspaceConfig(projectRoot: string): Promise<WorkspaceConfig
       packages.set(name, {
         name,
         path: dir,
-        main: typeof info.main === 'string' ? info.main : undefined,
+        main: typeof info.main === "string" ? info.main : undefined,
         exports: info.exports,
       });
     }
@@ -615,17 +627,20 @@ async function loadWorkspaceConfig(projectRoot: string): Promise<WorkspaceConfig
   return cfg;
 }
 
-function resolvePackageSubpath(spec: string): { name: string; subpath?: string | undefined } {
+function resolvePackageSubpath(spec: string): {
+  name: string;
+  subpath?: string | undefined;
+} {
   // spec can be '@scope/name/foo/bar' or 'name/foo'
-  if (spec.startsWith('@')) {
-    const parts = spec.split('/');
-    const name = parts.slice(0, 2).join('/');
-    const sub = parts.slice(2).join('/');
+  if (spec.startsWith("@")) {
+    const parts = spec.split("/");
+    const name = parts.slice(0, 2).join("/");
+    const sub = parts.slice(2).join("/");
     return { name, subpath: sub || undefined };
   }
-  const parts = spec.split('/');
+  const parts = spec.split("/");
   const name = parts[0]!;
-  const sub = parts.slice(1).join('/');
+  const sub = parts.slice(1).join("/");
   return { name, subpath: sub || undefined };
 }
 
@@ -654,11 +669,9 @@ async function resolveWorkspacePackage(
 
   // No subpath: use package.json exports/main or index files
   const mainField = pkg.main ? path.resolve(baseDir, pkg.main) : null;
-  if (mainField && await fileExists(mainField)) return mainField;
+  if (mainField && (await fileExists(mainField))) return mainField;
 
-  const idxCandidates = exts.flatMap((e) => [
-    path.join(baseDir, "index" + e),
-  ]);
+  const idxCandidates = exts.flatMap((e) => [path.join(baseDir, "index" + e)]);
   for (const c of idxCandidates) {
     if (await fileExists(c)) return path.resolve(c);
   }
@@ -730,18 +743,15 @@ async function resolveSpecifier(
     return { external: spec };
   }
   if (matchPath) {
-    const m = matchPath(spec, undefined, (name: string) => [
-      ".ts",
-      ".tsx",
-      ".js",
-      ".jsx",
-      ".mjs",
-      ".cjs",
-    ].some(ext => name.endsWith(ext)));
+    const m = matchPath(spec, undefined, (name: string) =>
+      [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"].some((ext) =>
+        name.endsWith(ext)
+      )
+    );
     if (m) return path.resolve(m);
   }
   // Workspace packages
-  if (!spec.startsWith('.') && !spec.startsWith('/')) {
+  if (!spec.startsWith(".") && !spec.startsWith("/")) {
     const resolvedWs = await resolveWorkspacePackage(spec, workspaceConfig);
     if (resolvedWs) return resolvedWs;
   }
@@ -815,24 +825,24 @@ export function collectModuleSpecifiersFromSource(
   source: string
 ): { spec: string; typeOnly?: boolean }[] {
   const out: { spec: string; typeOnly?: boolean }[] = [];
-  
-        // Python: use regex fallback for import detection
-        if (support.id === "python") {
-          // Match: import module
-          const reImport = /^import\s+([A-Za-z_][\w\.]*)/gm;
-          for (const m of source.matchAll(reImport)) {
-            out.push({ spec: m[1]! });
-          }
-          
-          // Match: from module import ... (including relative imports)
-          const reFrom = /^from\s+([A-Za-z_][\w\.]*|\.+[A-Za-z_][\w\.]*)\s+import/gm;
-          for (const m of source.matchAll(reFrom)) {
-            out.push({ spec: m[1]! });
-          }
-          
-          return out;
-        }
-  
+
+  // Python: use regex fallback for import detection
+  if (support.id === "python") {
+    // Match: import module
+    const reImport = /^import\s+([A-Za-z_][\w\.]*)/gm;
+    for (const m of source.matchAll(reImport)) {
+      out.push({ spec: m[1]! });
+    }
+
+    // Match: from module import ... (including relative imports)
+    const reFrom = /^from\s+([A-Za-z_][\w\.]*|\.+[A-Za-z_][\w\.]*)\s+import/gm;
+    for (const m of source.matchAll(reFrom)) {
+      out.push({ spec: m[1]! });
+    }
+
+    return out;
+  }
+
   try {
     const parser = new Parser();
     parser.setLanguage(lang);
@@ -842,7 +852,9 @@ export function collectModuleSpecifiersFromSource(
       const caps = Object.fromEntries(
         m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const)
       );
-      const modNodes = m.captures.filter((x: Parser.QueryCapture) => x.name === "mod");
+      const modNodes = m.captures.filter(
+        (x: Parser.QueryCapture) => x.name === "mod"
+      );
       const stmtText = caps["stmt"] ? sliceText(caps["stmt"].node, source) : "";
       const typeOnly = /^\s*(import|export)\s+type\b/.test(stmtText);
       for (const cap of modNodes)
@@ -850,7 +862,10 @@ export function collectModuleSpecifiersFromSource(
     }
     return out;
   } catch (error) {
-    console.warn(`Warning: Query error in collectModuleSpecifiersFromSource for ${support.id}:`, error);
+    console.warn(
+      `Warning: Query error in collectModuleSpecifiersFromSource for ${support.id}:`,
+      error
+    );
     return out;
   }
 }
@@ -890,11 +905,20 @@ export function collectLocalsAndExportsFromSource(
             }
           }
       } catch (error) {
-        console.warn(`Warning: Query error in locals for ${support.id}:`, error);
+        console.warn(
+          `Warning: Query error in locals for ${support.id}:`,
+          error
+        );
       }
     } else {
       // JS/TS: build locals via AST walk (Tree-sitter only, no regex)
-      const scopeIdx = buildScopeIndexFromSource(file, source, support, lang, imports);
+      const scopeIdx = buildScopeIndexFromSource(
+        file,
+        source,
+        support,
+        lang,
+        imports
+      );
       for (const b of scopeIdx.all) {
         if (!b.def) continue;
         let kind: SymbolKind = SymbolKind.Variable;
@@ -911,150 +935,173 @@ export function collectLocalsAndExportsFromSource(
     try {
       const q = new Parser.Query(lang, support.queries.exports);
       for (const m of q.matches(tree.rootNode)) {
-      const map = Object.fromEntries(
-        m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const)
-      );
-      const stmtText = map["stmt"] ? sliceText(map["stmt"].node, source) : "";
-      const isTypeOnly = /^\s*export\s+type\b/.test(stmtText);
+        const map = Object.fromEntries(
+          m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const)
+        );
+        const stmtText = map["stmt"] ? sliceText(map["stmt"].node, source) : "";
+        const isTypeOnly = /^\s*export\s+type\b/.test(stmtText);
 
-      // Python exports
-      if (support.id === "python") {
-        // Handle __all__ exports
-        if (
-          map["left"] &&
-          sliceText(map["left"].node, source) === "__all__"
-        ) {
-          const items = m.captures.filter((c: Parser.QueryCapture) => c.name === "all_item");
-          for (const it of items) {
-            const name = unquote(sliceText(it.node, source));
-            const local = locals.find((d) => d.localName === name);
-            if (local)
-              exports.push({ type: "local", exportedAs: name, target: local });
+        // Python exports
+        if (support.id === "python") {
+          // Handle __all__ exports
+          if (
+            map["left"] &&
+            sliceText(map["left"].node, source) === "__all__"
+          ) {
+            const items = m.captures.filter(
+              (c: Parser.QueryCapture) => c.name === "all_item"
+            );
+            for (const it of items) {
+              const name = unquote(sliceText(it.node, source));
+              const local = locals.find((d) => d.localName === name);
+              if (local)
+                exports.push({
+                  type: "local",
+                  exportedAs: name,
+                  target: local,
+                });
+            }
+            continue;
+          }
+
+          // Handle function/class definitions and assignments as exports
+          if (map["name"]) {
+            const nameText = sliceText(map["name"].node, source);
+            const local = locals.find((d) => d.localName === nameText);
+            if (local) {
+              // Only export if not starting with underscore (Python convention)
+              if (!nameText.startsWith("_")) {
+                exports.push({
+                  type: "local",
+                  exportedAs: nameText,
+                  target: local,
+                });
+              }
+            }
+            continue;
+          }
+        }
+
+        // JS/TS
+        if (map["from"]) {
+          const from = unquote(sliceText(map["from"].node, source));
+          if (map["src"]) {
+            const srcName = sliceText(map["src"].node, source);
+            const alias = map["alias"]
+              ? sliceText(map["alias"].node, source)
+              : srcName;
+            exports.push({
+              type: "reexport",
+              exportedAs: alias,
+              fromModule: from,
+              sourceSpecifier: from,
+              typeOnly: isTypeOnly,
+            });
+          } else {
+            exports.push({
+              type: "exportStar",
+              fromModule: from,
+              sourceSpecifier: from,
+              typeOnly: isTypeOnly,
+            });
           }
           continue;
         }
-        
-        // Handle function/class definitions and assignments as exports
+        // CommonJS captures
+        if (map["cjs_shorthand"]) {
+          const nameText = sliceText(map["cjs_shorthand"].node, source);
+          const local = locals.find((d) => d.localName === nameText);
+          if (local)
+            exports.push({
+              type: "local",
+              exportedAs: nameText,
+              target: local,
+            });
+          continue;
+        }
+        if (map["cjs_export_name"] && map["cjs_local"]) {
+          const exportedAs = sliceText(map["cjs_export_name"].node, source);
+          const localName = sliceText(map["cjs_local"].node, source);
+          const local = locals.find((d) => d.localName === localName);
+          if (local) exports.push({ type: "local", exportedAs, target: local });
+          continue;
+        }
+        if (map["default"]) {
+          const nameText = sliceText(map["default"].node, source);
+          const local = locals.find((d) => d.localName === nameText);
+          if (local)
+            exports.push({
+              type: "local",
+              exportedAs: "default",
+              target: { ...local, kind: SymbolKind.Default },
+            });
+          continue;
+        }
+        if (map["anon_default"]) {
+          const sym: SymbolDef = {
+            file,
+            localName: "__default_export__",
+            kind: SymbolKind.Default,
+            range: toRange(map["anon_default"].node),
+          };
+          locals.push(sym);
+          exports.push({ type: "local", exportedAs: "default", target: sym });
+          continue;
+        }
+        if (map["ts_export_assign"]) {
+          const ident = sliceText(map["ts_export_assign"].node, source);
+          const local = locals.find((d) => d.localName === ident);
+          if (local)
+            exports.push({
+              type: "local",
+              exportedAs: "default",
+              target: { ...local, kind: SymbolKind.Default },
+            });
+          continue;
+        }
         if (map["name"]) {
           const nameText = sliceText(map["name"].node, source);
           const local = locals.find((d) => d.localName === nameText);
-          if (local) {
-            // Only export if not starting with underscore (Python convention)
-            if (!nameText.startsWith("_")) {
-              exports.push({ type: "local", exportedAs: nameText, target: local });
-            }
-          }
+          if (local)
+            exports.push({
+              type: "local",
+              exportedAs: nameText,
+              target: local,
+            });
           continue;
         }
-      }
-
-      // JS/TS
-      if (map["from"]) {
-        const from = unquote(sliceText(map["from"].node, source));
         if (map["src"]) {
           const srcName = sliceText(map["src"].node, source);
           const alias = map["alias"]
             ? sliceText(map["alias"].node, source)
             : srcName;
-          exports.push({
-            type: "reexport",
-            exportedAs: alias,
-            fromModule: from,
-            sourceSpecifier: from,
-            typeOnly: isTypeOnly,
-          });
-        } else {
-          exports.push({
-            type: "exportStar",
-            fromModule: from,
-            sourceSpecifier: from,
-            typeOnly: isTypeOnly,
-          });
+          const local = locals.find((d) => d.localName === srcName);
+          if (local)
+            exports.push({ type: "local", exportedAs: alias, target: local });
         }
-        continue;
-      }
-      // CommonJS captures
-      if (map["cjs_shorthand"]) {
-        const nameText = sliceText(map["cjs_shorthand"].node, source);
-        const local = locals.find((d) => d.localName === nameText);
-        if (local)
-          exports.push({ type: "local", exportedAs: nameText, target: local });
-        continue;
-      }
-      if (map["cjs_export_name"] && map["cjs_local"]) {
-        const exportedAs = sliceText(map["cjs_export_name"].node, source);
-        const localName = sliceText(map["cjs_local"].node, source);
-        const local = locals.find((d) => d.localName === localName);
-        if (local)
-          exports.push({ type: "local", exportedAs, target: local });
-        continue;
-      }
-      if (map["default"]) {
-        const nameText = sliceText(map["default"].node, source);
-        const local = locals.find((d) => d.localName === nameText);
-        if (local)
-          exports.push({
-            type: "local",
-            exportedAs: "default",
-            target: { ...local, kind: SymbolKind.Default },
-          });
-        continue;
-      }
-      if (map["anon_default"]) {
-        const sym: SymbolDef = {
-          file,
-          localName: "__default_export__",
-          kind: SymbolKind.Default,
-          range: toRange(map["anon_default"].node),
-        };
-        locals.push(sym);
-        exports.push({ type: "local", exportedAs: "default", target: sym });
-        continue;
-      }
-      if (map["ts_export_assign"]) {
-        const ident = sliceText(map["ts_export_assign"].node, source);
-        const local = locals.find((d) => d.localName === ident);
-        if (local)
-          exports.push({
-            type: "local",
-            exportedAs: "default",
-            target: { ...local, kind: SymbolKind.Default },
-          });
-        continue;
-      }
-      if (map["name"]) {
-        const nameText = sliceText(map["name"].node, source);
-        const local = locals.find((d) => d.localName === nameText);
-        if (local)
-          exports.push({ type: "local", exportedAs: nameText, target: local });
-        continue;
-      }
-      if (map["src"]) {
-        const srcName = sliceText(map["src"].node, source);
-        const alias = map["alias"]
-          ? sliceText(map["alias"].node, source)
-          : srcName;
-        const local = locals.find((d) => d.localName === srcName);
-        if (local)
-          exports.push({ type: "local", exportedAs: alias, target: local });
-      }
       }
     } catch {
       // Fallback: regex-based exports extraction for JS/TS
       if (support.id === "ts" || support.id === "js") {
-        const reNamed = /\bexport\s+(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g;
+        const reNamed =
+          /\bexport\s+(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g;
         const reDefault = /\bexport\s+default\s+([A-Za-z_$][\w$]*)/g;
         let m: RegExpExecArray | null;
         while ((m = reNamed.exec(source))) {
           const name = m[1]!;
           const local = locals.find((d) => d.localName === name);
-          if (local) exports.push({ type: "local", exportedAs: name, target: local });
+          if (local)
+            exports.push({ type: "local", exportedAs: name, target: local });
         }
         while ((m = reDefault.exec(source))) {
           const name = m[1]!;
           const local = locals.find((d) => d.localName === name);
           if (local)
-            exports.push({ type: "local", exportedAs: "default", target: { ...local, kind: SymbolKind.Default } });
+            exports.push({
+              type: "local",
+              exportedAs: "default",
+              target: { ...local, kind: SymbolKind.Default },
+            });
         }
       }
     }
@@ -1077,16 +1124,36 @@ async function collectImportsForFile(
     const pushStar = async (moduleSpec: string) => {
       const m = moduleSpec.match(/^(\.+)(.*)$/);
       const relDots = m ? m[1]!.length : 0;
-      const mod = m ? (m[2] || null) : moduleSpec;
-      const resolved = await resolvePythonModule(projectRoot, file, mod, relDots);
+      const mod = m ? m[2] || null : moduleSpec;
+      const resolved = await resolvePythonModule(
+        projectRoot,
+        file,
+        mod,
+        relDots
+      );
       imports.push({ kind: "star", from: moduleSpec, resolved });
     };
-    const pushNamed = async (moduleSpec: string, imported: string, local: string) => {
+    const pushNamed = async (
+      moduleSpec: string,
+      imported: string,
+      local: string
+    ) => {
       const m = moduleSpec.match(/^(\.+)(.*)$/);
       const relDots = m ? m[1]!.length : 0;
-      const mod = m ? (m[2] || null) : moduleSpec;
-      const resolved = await resolvePythonModule(projectRoot, file, mod, relDots);
-      imports.push({ kind: "named", local, imported, from: moduleSpec, resolved });
+      const mod = m ? m[2] || null : moduleSpec;
+      const resolved = await resolvePythonModule(
+        projectRoot,
+        file,
+        mod,
+        relDots
+      );
+      imports.push({
+        kind: "named",
+        local,
+        imported,
+        from: moduleSpec,
+        resolved,
+      });
     };
     const pushDefault = async (dotted: string, local: string) => {
       const resolved = await resolvePythonModule(projectRoot, file, dotted, 0);
@@ -1098,8 +1165,13 @@ async function collectImportsForFile(
       const mod = m[1]!.trim();
       const items = m[2]!.split(",").map((s) => s.trim());
       for (const it of items) {
-        if (it === "*") { await pushStar(mod); continue; }
-        const am = it.match(/^([A-Za-z_][\w_]*)(?:\s+as\s+([A-Za-z_][\w_]*))?$/);
+        if (it === "*") {
+          await pushStar(mod);
+          continue;
+        }
+        const am = it.match(
+          /^([A-Za-z_][\w_]*)(?:\s+as\s+([A-Za-z_][\w_]*))?$/
+        );
         if (am) {
           const imported = am[1]!;
           const local = am[2] ?? imported;
@@ -1107,7 +1179,8 @@ async function collectImportsForFile(
         }
       }
     }
-    const reImp = /^(?:\s*)import\s+([A-Za-z_][\w\.]*)\s*(?:as\s+([A-Za-z_][\w_]*))?/gm;
+    const reImp =
+      /^(?:\s*)import\s+([A-Za-z_][\w\.]*)\s*(?:as\s+([A-Za-z_][\w_]*))?/gm;
     for (const m of source.matchAll(reImp)) {
       const dotted = m[1]!;
       const local = (m[2] ?? dotted.split(".")[0]) as string;
@@ -1124,7 +1197,13 @@ async function collectImportsForFile(
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
 
   const resolveFrom = async (from: string) =>
-    await resolveSpecifier(file, from, projectRoot, tsCfg.matchPath, workspaceConfig);
+    await resolveSpecifier(
+      file,
+      from,
+      projectRoot,
+      tsCfg.matchPath,
+      workspaceConfig
+    );
 
   const runFallback = async () => {
     const typeOnlyImport = /\bimport\s+type\b/;
@@ -1136,38 +1215,75 @@ async function collectImportsForFile(
       const typeOnly = typeOnlyImport.test(m[0]!);
       const resolved = await resolveFrom(mod);
       const ns = clause.match(/^\*\s+as\s+([A-Za-z_$][\w$]*)$/);
-      if (ns) { imports.push({ kind: "namespace", localNS: ns[1]!, from: mod, resolved, typeOnly }); continue; }
+      if (ns) {
+        imports.push({
+          kind: "namespace",
+          localNS: ns[1]!,
+          from: mod,
+          resolved,
+          typeOnly,
+        });
+        continue;
+      }
       const parts = clause.split(",");
       if (parts.length) {
         const first = parts[0]!.trim();
         if (first && !first.startsWith("{"))
-          imports.push({ kind: "default", local: first, from: mod, resolved, typeOnly });
-        const namedBlock = parts.slice(1).join(",").trim() || (first.startsWith("{") ? first : "");
-        const names = namedBlock.replace(/[{}]/g, "").split(",").map((s) => s.trim()).filter(Boolean);
+          imports.push({
+            kind: "default",
+            local: first,
+            from: mod,
+            resolved,
+            typeOnly,
+          });
+        const namedBlock =
+          parts.slice(1).join(",").trim() ||
+          (first.startsWith("{") ? first : "");
+        const names = namedBlock
+          .replace(/[{}]/g, "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
         for (const spec of names) {
-          const nm = spec.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+          const nm = spec.match(
+            /^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/
+          );
           if (!nm) continue;
           const imported = nm[1]!;
           const local = nm[2] ?? imported;
-          imports.push({ kind: "named", local, imported, from: mod, resolved, typeOnly });
+          imports.push({
+            kind: "named",
+            local,
+            imported,
+            from: mod,
+            resolved,
+            typeOnly,
+          });
         }
       }
     }
     // require patterns
-    const reReqDefault = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
+    const reReqDefault =
+      /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
     for (const m of source.matchAll(reReqDefault)) {
       const local = m[1]!;
       const mod = (m.groups as any).m as string;
       const resolved = await resolveFrom(mod);
       imports.push({ kind: "default", local, from: mod, resolved });
     }
-    const reReqNamed = /\b(?:const|let|var)\s*\{([^}]+)\}\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
+    const reReqNamed =
+      /\b(?:const|let|var)\s*\{([^}]+)\}\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
     for (const m of source.matchAll(reReqNamed)) {
-      const specs = m[1]!.split(",").map((s) => s.trim()).filter(Boolean);
+      const specs = m[1]!
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
       const mod = (m.groups as any).m as string;
       const resolved = await resolveFrom(mod);
       for (const spec of specs) {
-        const nm = spec.match(/^([A-Za-z_$][\w$]*)(?::\s*([A-Za-z_$][\w$]*))?$/);
+        const nm = spec.match(
+          /^([A-Za-z_$][\w$]*)(?::\s*([A-Za-z_$][\w$]*))?$/
+        );
         if (!nm) continue;
         const imported = nm[1]!;
         const local = nm[2] ?? imported;
@@ -1189,7 +1305,9 @@ async function collectImportsForFile(
         : undefined;
 
       // Handle destructuring assignment with require (process even if from is undefined)
-      const patterns = m.captures.filter((c: Parser.QueryCapture) => c.name === "pattern");
+      const patterns = m.captures.filter(
+        (c: Parser.QueryCapture) => c.name === "pattern"
+      );
       for (const pattern of patterns) {
         const patternNode = pattern.node;
         if (patternNode.type === "object_pattern") {
@@ -1210,7 +1328,12 @@ async function collectImportsForFile(
               // { helperFunction: requireHelper } = require('./helpers.js')
               const key = child.childForFieldName("key");
               const value = child.childForFieldName("value");
-              if (key && value && key.type === "property_identifier" && value.type === "identifier") {
+              if (
+                key &&
+                value &&
+                key.type === "property_identifier" &&
+                value.type === "identifier"
+              ) {
                 const imported = sliceText(key, source);
                 const local = sliceText(value, source);
                 imports.push({
@@ -1248,11 +1371,17 @@ async function collectImportsForFile(
           typeOnly,
         });
       }
-      const inames = m.captures.filter((c: Parser.QueryCapture) => c.name === "iname");
-      const aliases = m.captures.filter((c: Parser.QueryCapture) => c.name === "alias");
+      const inames = m.captures.filter(
+        (c: Parser.QueryCapture) => c.name === "iname"
+      );
+      const aliases = m.captures.filter(
+        (c: Parser.QueryCapture) => c.name === "alias"
+      );
       for (let i = 0; i < inames.length; i++) {
         const imported = sliceText(inames[i]!.node, source);
-        const alias = aliases[i] ? sliceText(aliases[i]!.node, source) : imported;
+        const alias = aliases[i]
+          ? sliceText(aliases[i]!.node, source)
+          : imported;
         imports.push({
           kind: "named",
           local: alias,
@@ -1279,7 +1408,7 @@ export async function collectGraph(
 ): Promise<Graph> {
   const graph: Graph = { nodes: new Set(files), edges: [] };
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
-  
+
   // Process files in parallel for better performance
   const filePromises = files.map(async (file) => {
     try {
@@ -1289,7 +1418,7 @@ export async function collectGraph(
       const specs = collectModuleSpecifiersFromSource(sup, lang, src);
       const { matchPath } =
         sup.id === "ts" ? await loadNearestTsconfigFor(file) : {};
-      
+
       const edges: Edge[] = [];
       for (const { spec, typeOnly } of specs) {
         let to: FileId | { external: string };
@@ -1303,9 +1432,20 @@ export async function collectGraph(
           );
           to = res;
         } else {
-          to = await resolveSpecifier(file, spec, projectRoot, matchPath, workspaceConfig);
+          to = await resolveSpecifier(
+            file,
+            spec,
+            projectRoot,
+            matchPath,
+            workspaceConfig
+          );
         }
-        edges.push({ from: file, to, raw: spec, ...(typeOnly !== undefined && { typeOnly }) });
+        edges.push({
+          from: file,
+          to,
+          raw: spec,
+          ...(typeOnly !== undefined && { typeOnly }),
+        });
       }
       return edges;
     } catch (error) {
@@ -1365,14 +1505,19 @@ export async function buildProjectIndex(
     } catch (error) {
       console.warn(`Warning: Failed to process file ${f}:`, error);
       // Return a minimal module index for failed files
-      const mod: ModuleIndex = { file: f, exports: [], imports: [], locals: [] };
+      const mod: ModuleIndex = {
+        file: f,
+        exports: [],
+        imports: [],
+        locals: [],
+      };
       return [f, mod] as const;
     }
   });
 
   const fileResults = await Promise.all(filePromises);
   for (const [f, mod] of fileResults) {
-    modules.set(f.replace(/\\/g, '/'), mod);
+    modules.set(f.replace(/\\/g, "/"), mod);
   }
 
   // Expand Python `from x import *` using __all__ or public locals
@@ -1419,7 +1564,7 @@ export function resolveExport(
   file: FileId,
   exportedName: string
 ): ResolvedExport | null {
-  const normalizedFile = file.replace(/\\/g, '/');
+  const normalizedFile = file.replace(/\\/g, "/");
   const mod = index.byFile.get(normalizedFile);
   if (!mod) return null;
   const key = cacheKey(normalizedFile, exportedName);
@@ -1466,7 +1611,10 @@ export type GoToResult =
   | {
       status: "ok";
       definition: SymbolDef;
-      via?: { importedFrom?: string | undefined; exportedName?: string | undefined };
+      via?: {
+        importedFrom?: string | undefined;
+        exportedName?: string | undefined;
+      };
     }
   | { status: "not_found"; reason: string };
 
@@ -1486,8 +1634,11 @@ export async function goToDefinition(
   const tree = parser.parse(source);
 
   const pos = { row: Math.max(0, line - 1), column: Math.max(0, column - 1) };
-  let node: Parser.SyntaxNode | null = tree.rootNode.descendantForPosition(pos, pos);
-  
+  let node: Parser.SyntaxNode | null = tree.rootNode.descendantForPosition(
+    pos,
+    pos
+  );
+
   // If we found a variable_declarator, try to find the identifier within it
   if (node && node.type === "variable_declarator") {
     const value = node.childForFieldName("value");
@@ -1501,7 +1652,7 @@ export async function goToDefinition(
       }
     }
   }
-  
+
   while (node && (node.type === "," || node.type === ".")) node = node.parent;
   if (!node) return { status: "not_found", reason: "No node at position" };
 
@@ -1510,7 +1661,9 @@ export async function goToDefinition(
 
   // If the caret is on whitespace/keywords, walk up to find the nearest declaration's name
   if (!name) {
-    const findDeclNameNode = (n: Parser.SyntaxNode | null): Parser.SyntaxNode | null => {
+    const findDeclNameNode = (
+      n: Parser.SyntaxNode | null
+    ): Parser.SyntaxNode | null => {
       let cur: Parser.SyntaxNode | null = n;
       while (cur) {
         if (
@@ -1526,9 +1679,11 @@ export async function goToDefinition(
           let named = cur.childForFieldName("name");
           if (!named && cur.type === "assignment") {
             const left = cur.child(0);
-            if (left && sup.nodeTypes.identifier.includes(left.type)) named = left;
+            if (left && sup.nodeTypes.identifier.includes(left.type))
+              named = left;
           }
-          if (named && sup.nodeTypes.identifier.includes(named.type)) return named;
+          if (named && sup.nodeTypes.identifier.includes(named.type))
+            return named;
         }
         cur = cur.parent;
       }
@@ -1554,7 +1709,9 @@ export async function goToDefinition(
               status: "ok",
               definition: target,
               via: {
-                ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
+                ...(toModuleRef(imp.resolved)
+                  ? { importedFrom: toModuleRef(imp.resolved) }
+                  : {}),
                 exportedName: "default",
               },
             };
@@ -1565,24 +1722,33 @@ export async function goToDefinition(
               status: "ok",
               definition: target,
               via: {
-                ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
+                ...(toModuleRef(imp.resolved)
+                  ? { importedFrom: toModuleRef(imp.resolved) }
+                  : {}),
                 exportedName: imp.imported,
               },
             };
         } else if (imp.kind === "namespace" && imp.localNS === name) {
           // For namespace imports, we need to find the actual module definition
-          const targetFile = typeof imp.resolved === "string" ? imp.resolved.replace(/\\/g, '/') : undefined;
+          const targetFile =
+            typeof imp.resolved === "string"
+              ? imp.resolved.replace(/\\/g, "/")
+              : undefined;
           if (targetFile) {
             const targetMod = index.byFile.get(targetFile);
             if (targetMod) {
               // Return the first export as the namespace definition
-              const firstExport = targetMod.exports.find(e => e.type === "local");
+              const firstExport = targetMod.exports.find(
+                (e) => e.type === "local"
+              );
               if (firstExport) {
                 return {
                   status: "ok",
                   definition: firstExport.target,
                   via: {
-                    ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
+                    ...(toModuleRef(imp.resolved)
+                      ? { importedFrom: toModuleRef(imp.resolved) }
+                      : {}),
                     exportedName: firstExport.exportedAs,
                   },
                 };
@@ -1597,7 +1763,8 @@ export async function goToDefinition(
   // namespace member (JS/TS and Python): ns.member
   if (
     sup.supportsCrossModuleSymbols &&
-    node.type === (sup.nodeTypes.propertyIdentifier?.[0] ?? "property_identifier") &&
+    node.type ===
+      (sup.nodeTypes.propertyIdentifier?.[0] ?? "property_identifier") &&
     node.parent &&
     node.parent.type === (sup.nodeTypes.memberExpression ?? "member_expression")
   ) {
@@ -1616,7 +1783,9 @@ export async function goToDefinition(
             status: "ok",
             definition: resolved,
             via: {
-              ...(toModuleRef(nsImport.resolved) ? { importedFrom: toModuleRef(nsImport.resolved) } : {}),
+              ...(toModuleRef(nsImport.resolved)
+                ? { importedFrom: toModuleRef(nsImport.resolved) }
+                : {}),
               exportedName: member,
             },
           };
@@ -1847,9 +2016,13 @@ function sameDef(a: SymbolDef, b: SymbolDef) {
   );
 }
 
-function rangeContains(range: Range, pos: { row: number; column: number }): boolean {
+function rangeContains(
+  range: Range,
+  pos: { row: number; column: number }
+): boolean {
   if (pos.row < range.start.line || pos.row > range.end.line) return false;
-  if (pos.row === range.start.line && pos.column < range.start.column) return false;
+  if (pos.row === range.start.line && pos.column < range.start.column)
+    return false;
   if (pos.row === range.end.line && pos.column > range.end.column) return false;
   return true;
 }
@@ -1942,6 +2115,11 @@ export async function findReferences(
             });
         } else {
           // For named and default imports, check if the import matches the exported name
+          if (imp.kind === "star") {
+            // Star imports are handled separately, skip them here
+            continue;
+          }
+
           const exported =
             imp.kind === "named"
               ? imp.imported
@@ -1994,21 +2172,25 @@ async function collectNamespaceMemberRefs(
   const src = await fsp.readFile(file, "utf8");
   const tree = parser.parse(src);
   const out: Range[] = [];
-  
+
   const walk = (n: Parser.SyntaxNode) => {
-    const memberExprType = sup.nodeTypes.memberExpression ?? "member_expression";
-    const propIdType = sup.nodeTypes.propertyIdentifier?.[0] ?? "property_identifier";
-    
+    const memberExprType =
+      sup.nodeTypes.memberExpression ?? "member_expression";
+    const propIdType =
+      sup.nodeTypes.propertyIdentifier?.[0] ?? "property_identifier";
+
     if (n.type === memberExprType) {
       const obj = n.child(0);
       const prop = n.child(2);
-      
+
       if (
         obj &&
         prop &&
         obj.type === "identifier" &&
         sliceText(obj, src) === nsName &&
-        (prop.type === propIdType || prop.type === "identifier" || prop.type === "attribute") &&
+        (prop.type === propIdType ||
+          prop.type === "identifier" ||
+          prop.type === "attribute") &&
         sliceText(prop, src) === member
       ) {
         out.push(toRange(prop));
@@ -2052,7 +2234,10 @@ export async function astGrep(
         }
       }
     } catch (error) {
-      console.warn(`Warning: Failed to process file ${file} for AST grep:`, error);
+      console.warn(
+        `Warning: Failed to process file ${file} for AST grep:`,
+        error
+      );
     }
   }
 }
@@ -2088,7 +2273,7 @@ function writeError(error: unknown) {
 
 async function main() {
   const [cmd = "graph", root = process.cwd(), ...rest] = process.argv.slice(2);
-  
+
   // Test basic functionality
   if (cmd === "test") {
     writeStderrLine("Debug: Test command executed successfully");
@@ -2115,8 +2300,8 @@ async function main() {
   if (cmd === "goto") {
     const [fileArg, lineArg, colArg] = rest;
     const file = path.isAbsolute(fileArg!)
-      ? fileArg!.replace(/\\/g, '/')
-      : path.resolve(root, fileArg!).replace(/\\/g, '/');
+      ? fileArg!.replace(/\\/g, "/")
+      : path.resolve(root, fileArg!).replace(/\\/g, "/");
     const line = Number(lineArg!);
     const column = Number(colArg!);
     const index = await buildProjectIndex(root);
@@ -2133,8 +2318,8 @@ async function main() {
       }, [])
     );
     const file = path.isAbsolute(args.file!)
-      ? args.file!.replace(/\\/g, '/')
-      : path.resolve(root, args.file!).replace(/\\/g, '/');
+      ? args.file!.replace(/\\/g, "/")
+      : path.resolve(root, args.file!).replace(/\\/g, "/");
     const line = Number(args.line!);
     const column = Number(args.col ?? args.column!);
     const pretty = rest.includes("--pretty");
@@ -2171,7 +2356,10 @@ async function main() {
   process.exit(1);
 }
 
-if (import.meta.url === `file://${process.argv[1]}` || import.meta.url.endsWith('index.ts')) {
+if (
+  import.meta.url === `file://${process.argv[1]}` ||
+  import.meta.url.endsWith("index.ts")
+) {
   main().catch((e) => {
     writeError(e);
     process.exit(1);
