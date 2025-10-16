@@ -116,6 +116,112 @@ npx tsx src/index.ts grep --query '(function_declaration name: (identifier) @nam
 
   - Use `--mermaid` for a Mermaid flowchart, or `--dot` for Graphviz DOT.
   - In DOT output, type-only edges are dotted; external nodes are dashed ellipses.
+
+### Programmatic usage (from code)
+
+Minimal TypeScript/ESM examples. Import from `./src/index.js` and call directly.
+
+Build full project index and go to definition:
+
+```ts
+import { buildProjectIndex, goToDefinition } from './src/index.js';
+
+const root = process.cwd();
+const index = await buildProjectIndex(root);
+
+const file = `${root}/tests/samples/monorepo/packages/pkg-b/src/index.js`.replace(/\\/g, '/');
+const res = await goToDefinition(index, { file, line: 21, column: 18 });
+if (res.status === 'ok') {
+  console.log('Def:', res.definition.file, res.definition.localName, res.definition.range);
+}
+```
+
+Find references:
+
+```ts
+import { findReferences } from './src/index.js';
+
+const refs = await findReferences(index, { file, line: 21, column: 18 });
+if (refs.status === 'ok') {
+  console.log('Refs:', refs.references.map(r => `${r.file}:${r.range.start.line}:${r.range.start.column}`));
+}
+```
+
+Get dependency graph in-memory and iterate edges:
+
+```ts
+import { listProjectFiles, collectGraph } from './src/index.js';
+
+const files = await listProjectFiles(root);
+const graph = await collectGraph(root, files);
+
+type EdgeTo = { type: 'file'; path: string } | { type: 'external'; name: string };
+const toRef = (t: EdgeTo) => (t.type === 'file' ? t.path : t.name);
+
+for (const e of graph.edges) {
+  console.log(`${e.from} -> ${toRef(e.to)}  (${e.raw})`);
+}
+```
+
+Produce a Mermaid diagram string (for UI or chat rendering):
+
+```ts
+import type { Graph } from './src/index.js';
+
+function graphToMermaid(graph: Graph): string {
+  const toRef = (t: { type: 'file'; path: string } | { type: 'external'; name: string }) =>
+    t.type === 'file' ? t.path : t.name;
+
+  const ids = new Map<string, string>();
+  let i = 0;
+  const id = (label: string) => ids.get(label) ?? (ids.set(label, `n${i++}`), ids.get(label)!);
+
+  const lines = ['flowchart LR'];
+  for (const n of graph.nodes) lines.push(`${id(n)}["${n.replace(/\\/g, '/')}\"]`);
+  const declared = new Set<string>([...graph.nodes].map(n => id(n)));
+  for (const e of graph.edges) {
+    const tgt = toRef(e.to);
+    const tgtId = id(tgt);
+    if (!declared.has(tgtId)) {
+      declared.add(tgtId);
+      lines.push(e.to.type === 'external' ? `${tgtId}(["${tgt}"])` : `${tgtId}["${tgt}"]`);
+    }
+    lines.push(`${id(e.from)} --> ${tgtId}`);
+  }
+  return lines.join('\n');
+}
+
+// usage:
+// const mermaid = graphToMermaid(graph);
+// console.log(mermaid);
+```
+
+Simple wrappers as “LLM tools” (no HTTP/MCP), returning JSONable payloads:
+
+```ts
+import { listProjectFiles, collectGraph, buildProjectIndex, goToDefinition, findReferences } from './src/index.js';
+
+export async function tool_graphJSON(root: string) {
+  const files = await listProjectFiles(root);
+  const g = await collectGraph(root, files);
+  return { nodes: [...g.nodes], edges: g.edges };
+}
+
+export async function tool_goto(root: string, file: string, line: number, column: number) {
+  const index = await buildProjectIndex(root);
+  return await goToDefinition(index, { file: file.replace(/\\/g, '/'), line, column });
+}
+
+export async function tool_refs(root: string, file: string, line: number, column: number) {
+  const index = await buildProjectIndex(root);
+  return await findReferences(index, { file: file.replace(/\\/g, '/'), line, column });
+}
+```
+
+Notes:
+
+- Paths in outputs are absolute; normalize with `replace(/\\/g, '/')` on Windows.
+- Line and column are 1-based.
 * `index` prints a small summary:
 
   ```json
