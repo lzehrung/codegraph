@@ -660,8 +660,42 @@ async function resolveWorkspacePackage(
   if (!pkg) return null;
   const baseDir = pkg.path;
 
-  // If subpath provided, try resolving inside package
   const exts = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"];
+  const tryResolveRelative = async (rel: string): Promise<string | null> => {
+    const raw = path.resolve(baseDir, rel);
+    const candidates: string[] = [raw];
+    for (const e of exts) candidates.push(raw + e);
+    for (const e of exts) candidates.push(path.join(raw, "index" + e));
+    for (const c of candidates) if (await fileExists(c)) return path.resolve(c);
+    return null;
+  };
+  const pickExportTarget = (target: any): string | null => {
+    if (!target) return null;
+    if (typeof target === "string") return target as string;
+    if (typeof target === "object") {
+      const cand = (target as any).import ?? (target as any).default ?? (target as any).require ?? (target as any).module;
+      if (typeof cand === "string") return cand;
+    }
+    return null;
+  };
+  // Exports field resolution (root and subpaths)
+  if (pkg.exports) {
+    const key = subpath ? `./${subpath}` : ".";
+    if (typeof pkg.exports === "string" && key === ".") {
+      const hit = await tryResolveRelative(pkg.exports as string);
+      if (hit) return hit;
+    } else if (typeof pkg.exports === "object") {
+      const map = pkg.exports as any;
+      const target = map[key] ?? (key === "." ? map["."] : undefined);
+      const rel = pickExportTarget(target);
+      if (rel) {
+        const hit = await tryResolveRelative(rel);
+        if (hit) return hit;
+      }
+    }
+  }
+
+  // If subpath provided, try resolving inside package
   if (subpath) {
     const raw = path.join(baseDir, subpath);
     const candidates: string[] = [raw];
