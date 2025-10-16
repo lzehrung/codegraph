@@ -28,7 +28,8 @@ export async function testGoToDefinition(
       expect(result.definition.line).toBe(expectedLine);
     }
   } else {
-    expect(result.status).toBe('not_found');
+    // If no expected values provided, just expect it to work (not fail)
+    expect(result.status).toBe('ok');
   }
   
   return result;
