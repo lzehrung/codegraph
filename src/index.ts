@@ -2639,5 +2639,3 @@ export function graphToMermaid(graph: Graph): string {
   }
   return lines.join("\n");
 }
-
-// Note: CLI was moved to src/cli.ts for development usage
