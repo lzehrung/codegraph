@@ -369,7 +369,7 @@ export type ImportBinding =
       from: string;
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
-      viaRequire?: boolean;
+      mechanism?: "es" | "cjs" | "python";
     }
   | {
       kind: "named";
@@ -378,7 +378,7 @@ export type ImportBinding =
       from: string;
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
-      viaRequire?: boolean;
+      mechanism?: "es" | "cjs" | "python";
     }
   | {
       kind: "namespace";
@@ -386,14 +386,14 @@ export type ImportBinding =
       from: string;
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
-      viaRequire?: boolean;
+      mechanism?: "es" | "cjs" | "python";
     }
   | {
       kind: "star";
       from: string;
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
-      viaRequire?: boolean;
+      mechanism?: "es" | "cjs" | "python";
     };
 
 export type EdgeTo =
@@ -682,7 +682,11 @@ async function resolveWorkspacePackage(
     if (!target) return null;
     if (typeof target === "string") return target as string;
     if (typeof target === "object") {
-      const cand = (target as any).import ?? (target as any).default ?? (target as any).require ?? (target as any).module;
+      const cand =
+        (target as any).import ??
+        (target as any).default ??
+        (target as any).require ??
+        (target as any).module;
       if (typeof cand === "string") return cand;
     }
     return null;
@@ -810,11 +814,17 @@ async function resolveSpecifier(
       const exts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
       for (const e of exts) {
         const pth = cand + e;
-        try { fs.accessSync(pth, fs.constants.R_OK); return pth; } catch {}
+        try {
+          fs.accessSync(pth, fs.constants.R_OK);
+          return pth;
+        } catch {}
       }
       for (const e of exts) {
         const pth = path.join(cand, "index" + e);
-        try { fs.accessSync(pth, fs.constants.R_OK); return pth; } catch {}
+        try {
+          fs.accessSync(pth, fs.constants.R_OK);
+          return pth;
+        } catch {}
       }
       return cand;
     }
@@ -1143,15 +1153,24 @@ export function collectLocalsAndExportsFromSource(
           const nameText = sliceText(nameNode, source);
           const local = locals.find((d) => d.localName === nameText);
           if (local) {
-            exports.push({ type: "local", exportedAs: nameText, target: local });
+            exports.push({
+              type: "local",
+              exportedAs: nameText,
+              target: local,
+            });
             // Try to detect `export default function Name` by inspecting the nearest export_statement
             let cur: Parser.SyntaxNode | null = nameNode;
             let exportStmt: Parser.SyntaxNode | null = null;
             while (cur) {
-              if (cur.type === "export_statement") { exportStmt = cur; break; }
+              if (cur.type === "export_statement") {
+                exportStmt = cur;
+                break;
+              }
               cur = cur.parent;
             }
-            const exportText = exportStmt ? sliceText(exportStmt, source) : stmtText;
+            const exportText = exportStmt
+              ? sliceText(exportStmt, source)
+              : stmtText;
             if (/^\s*export\s+default\b/.test(exportText)) {
               exports.push({
                 type: "local",
@@ -1173,13 +1192,25 @@ export function collectLocalsAndExportsFromSource(
         }
       }
       // If no explicit default export captured, add best-effort TS default function/class export
-      if ((support.id === "ts" || support.id === "js") && !exports.some(e => e.type === "local" && e.exportedAs === "default")) {
-        const mDefFn = source.match(/\bexport\s+default\s+function\s+([A-Za-z_$][\w$]*)/);
-        const mDefCls = source.match(/\bexport\s+default\s+class\s+([A-Za-z_$][\w$]*)/);
+      if (
+        (support.id === "ts" || support.id === "js") &&
+        !exports.some((e) => e.type === "local" && e.exportedAs === "default")
+      ) {
+        const mDefFn = source.match(
+          /\bexport\s+default\s+function\s+([A-Za-z_$][\w$]*)/
+        );
+        const mDefCls = source.match(
+          /\bexport\s+default\s+class\s+([A-Za-z_$][\w$]*)/
+        );
         const name = mDefFn?.[1] ?? mDefCls?.[1];
         if (name) {
-          const local = locals.find(d => d.localName === name);
-          if (local) exports.push({ type: "local", exportedAs: "default", target: { ...local, kind: SymbolKind.Default } });
+          const local = locals.find((d) => d.localName === name);
+          if (local)
+            exports.push({
+              type: "local",
+              exportedAs: "default",
+              target: { ...local, kind: SymbolKind.Default },
+            });
         }
       }
     } catch {
@@ -1210,14 +1241,26 @@ export function collectLocalsAndExportsFromSource(
   }
 
   // Ensure default export is captured for TS/JS even if query missed it
-  if ((support.id === "ts" || support.id === "js") && !exports.some(e => e.type === "local" && e.exportedAs === "default")) {
-    const defFn = source.match(/\bexport\s+default\s+function\s+([A-Za-z_$][\w$]*)/);
-    const defCls = source.match(/\bexport\s+default\s+class\s+([A-Za-z_$][\w$]*)/);
+  if (
+    (support.id === "ts" || support.id === "js") &&
+    !exports.some((e) => e.type === "local" && e.exportedAs === "default")
+  ) {
+    const defFn = source.match(
+      /\bexport\s+default\s+function\s+([A-Za-z_$][\w$]*)/
+    );
+    const defCls = source.match(
+      /\bexport\s+default\s+class\s+([A-Za-z_$][\w$]*)/
+    );
     const defIdent = source.match(/\bexport\s+default\s+([A-Za-z_$][\w$]*)\b/);
     const name = defFn?.[1] ?? defCls?.[1] ?? defIdent?.[1];
     if (name) {
-      const local = locals.find(d => d.localName === name);
-      if (local) exports.push({ type: "local", exportedAs: "default", target: { ...local, kind: SymbolKind.Default } });
+      const local = locals.find((d) => d.localName === name);
+      if (local)
+        exports.push({
+          type: "local",
+          exportedAs: "default",
+          target: { ...local, kind: SymbolKind.Default },
+        });
     }
   }
 
@@ -1245,7 +1288,12 @@ async function collectImportsForFile(
         mod,
         relDots
       );
-      imports.push({ kind: "star", from: moduleSpec, resolved });
+      imports.push({
+        kind: "star",
+        from: moduleSpec,
+        resolved,
+        mechanism: "python",
+      });
     };
     const pushNamed = async (
       moduleSpec: string,
@@ -1267,7 +1315,11 @@ async function collectImportsForFile(
         let baseDir = resolved;
         try {
           const st = fs.statSync(baseDir);
-          if (!st.isDirectory() && baseDir.toLowerCase().endsWith("__init__.py")) baseDir = path.dirname(baseDir);
+          if (
+            !st.isDirectory() &&
+            baseDir.toLowerCase().endsWith("__init__.py")
+          )
+            baseDir = path.dirname(baseDir);
         } catch {}
         const sub = [
           path.join(baseDir, `${imported}.py`),
@@ -1276,20 +1328,42 @@ async function collectImportsForFile(
         ];
         for (const c of sub) {
           try {
-            if (fs.existsSync(c)) { nsResolved = fs.statSync(c).isDirectory() ? c : c; break; }
+            if (fs.existsSync(c)) {
+              nsResolved = fs.statSync(c).isDirectory() ? c : c;
+              break;
+            }
           } catch {}
         }
       }
       if (nsResolved) {
-        imports.push({ kind: "namespace", localNS: local, from: moduleSpec, resolved: nsResolved });
+        imports.push({
+          kind: "namespace",
+          localNS: local,
+          from: moduleSpec,
+          resolved: nsResolved,
+          mechanism: "python",
+        });
       } else {
-        imports.push({ kind: "named", local, imported, from: moduleSpec, resolved });
+        imports.push({
+          kind: "named",
+          local,
+          imported,
+          from: moduleSpec,
+          resolved,
+          mechanism: "python",
+        });
       }
     };
     const pushDefault = async (dotted: string, local: string) => {
       const resolved = await resolvePythonModule(projectRoot, file, dotted, 0);
       // Treat module imports as namespace bindings so `ns.member` works
-      imports.push({ kind: "namespace", localNS: local, from: dotted, resolved });
+      imports.push({
+        kind: "namespace",
+        localNS: local,
+        from: dotted,
+        resolved,
+        mechanism: "python",
+      });
     };
 
     const reFromLine = /\bfrom\s+([^\s]+)\s+import\s+([^\n#]+)/g;
@@ -1401,7 +1475,13 @@ async function collectImportsForFile(
       const local = m[1]!;
       const mod = (m.groups as any).m as string;
       const resolved = await resolveFrom(mod);
-      imports.push({ kind: "default", local, from: mod, resolved, viaRequire: true });
+      imports.push({
+        kind: "default",
+        local,
+        from: mod,
+        resolved,
+        mechanism: "cjs",
+      });
     }
     const reReqNamed =
       /\b(?:const|let|var)\s*\{([^}]+)\}\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
@@ -1419,7 +1499,14 @@ async function collectImportsForFile(
         if (!nm) continue;
         const imported = nm[1]!;
         const local = nm[2] ?? imported;
-        imports.push({ kind: "named", local, imported, from: mod, resolved, viaRequire: true });
+        imports.push({
+          kind: "named",
+          local,
+          imported,
+          from: mod,
+          resolved,
+          mechanism: "cjs",
+        });
       }
     }
   };
@@ -1562,7 +1649,10 @@ export async function collectGraph(
             spec.includes(".") || !spec.startsWith(".") ? spec : null,
             spec.startsWith(".") ? spec.match(/^\.+/)?.[0].length ?? 0 : 0
           );
-          to = typeof res === "string" ? { type: "file", path: res } : { type: "external", name: res.external };
+          to =
+            typeof res === "string"
+              ? { type: "file", path: res }
+              : { type: "external", name: res.external };
         } else {
           const res = await resolveSpecifier(
             file,
@@ -1571,7 +1661,10 @@ export async function collectGraph(
             matchPath,
             workspaceConfig
           );
-          to = typeof res === "string" ? { type: "file", path: res } : { type: "external", name: res.external };
+          to =
+            typeof res === "string"
+              ? { type: "file", path: res }
+              : { type: "external", name: res.external };
         }
         edges.push({
           from: file,
@@ -1630,7 +1723,10 @@ export async function buildProjectIndex(
               } else {
                 // Try workspace/package resolution for bare specifiers
                 const ws = await loadWorkspaceConfig(projectRoot);
-                const pkgResolved = await resolveWorkspacePackage(e.fromModule, ws);
+                const pkgResolved = await resolveWorkspacePackage(
+                  e.fromModule,
+                  ws
+                );
                 if (pkgResolved) e.fromModule = pkgResolved;
               }
             }
@@ -1797,12 +1893,17 @@ export async function goToDefinition(
   // If inside a member expression (e.g., ns.member), handle namespace resolution first
   if (
     sup.supportsCrossModuleSymbols &&
-    ((node.type === (sup.nodeTypes.propertyIdentifier?.[0] ?? "property_identifier") &&
+    ((node.type ===
+      (sup.nodeTypes.propertyIdentifier?.[0] ?? "property_identifier") &&
       node.parent &&
-      node.parent.type === (sup.nodeTypes.memberExpression ?? "member_expression")) ||
-     (node.type === (sup.nodeTypes.memberExpression ?? "member_expression")))
+      node.parent.type ===
+        (sup.nodeTypes.memberExpression ?? "member_expression")) ||
+      node.type === (sup.nodeTypes.memberExpression ?? "member_expression"))
   ) {
-    const memberNode = node.type === (sup.nodeTypes.memberExpression ?? "member_expression") ? node : node.parent!;
+    const memberNode =
+      node.type === (sup.nodeTypes.memberExpression ?? "member_expression")
+        ? node
+        : node.parent!;
     let obj = memberNode.child(0);
     let prop = memberNode.child(2);
     if (sup.id === "python") {
@@ -1812,7 +1913,9 @@ export async function goToDefinition(
     if (obj && prop && obj.type === "identifier") {
       const nsName = sliceText(obj, source);
       const member = sliceText(prop, source);
-      const nsImport = mod.imports.find((i) => i.kind === "namespace" && i.localNS === nsName);
+      const nsImport = mod.imports.find(
+        (i) => i.kind === "namespace" && i.localNS === nsName
+      );
       if (nsImport) {
         const resolved = resolveImported(index, nsImport, member);
         if (resolved)
@@ -1820,7 +1923,9 @@ export async function goToDefinition(
             status: "ok",
             definition: resolved,
             via: {
-              ...(toModuleRef(nsImport.resolved) ? { importedFrom: toModuleRef(nsImport.resolved) } : {}),
+              ...(toModuleRef(nsImport.resolved)
+                ? { importedFrom: toModuleRef(nsImport.resolved) }
+                : {}),
               exportedName: member,
             },
           };
@@ -1876,7 +1981,11 @@ export async function goToDefinition(
       // Try resolving as an exported name from this module (re-exports/local exports)
       const hit = resolveExport(index, file, name);
       if (hit) {
-        return { status: "ok", definition: hit.def, via: { exportedName: name } };
+        return {
+          status: "ok",
+          definition: hit.def,
+          via: { exportedName: name },
+        };
       }
 
       for (const imp of mod.imports) {
@@ -1966,9 +2075,10 @@ function resolveImported(
   // Python: named import may refer to a submodule; if exports didn't match, fall back to module top
   const sup = supportForFile(targetFile);
   if (sup.id === "python") {
-    const base = fs.existsSync(targetFile) && fs.statSync(targetFile).isDirectory()
-      ? targetFile
-      : path.dirname(targetFile);
+    const base =
+      fs.existsSync(targetFile) && fs.statSync(targetFile).isDirectory()
+        ? targetFile
+        : path.dirname(targetFile);
     const subCandidates = [
       path.join(base, `${exportedName}.py`),
       path.join(base, exportedName, "__init__.py"),
@@ -1983,7 +2093,10 @@ function resolveImported(
             file: filePath.replace(/\\/g, "/"),
             localName: exportedName,
             kind: SymbolKind.Variable,
-            range: { start: { line: 1, column: 1, index: 0 }, end: { line: 1, column: 1, index: 0 } },
+            range: {
+              start: { line: 1, column: 1, index: 0 },
+              end: { line: 1, column: 1, index: 0 },
+            },
           };
         }
       } catch {}
@@ -1992,7 +2105,10 @@ function resolveImported(
       file: targetFile.replace(/\\/g, "/"),
       localName: exportedName,
       kind: SymbolKind.Variable,
-      range: { start: { line: 1, column: 1, index: 0 }, end: { line: 1, column: 1, index: 0 } },
+      range: {
+        start: { line: 1, column: 1, index: 0 },
+        end: { line: 1, column: 1, index: 0 },
+      },
     };
   }
   return null;
@@ -2443,7 +2559,10 @@ function edgeTargetToString(t: EdgeTo): string {
   return t.type === "file" ? t.path : t.name;
 }
 
-function buildNodeIdMap(graph: Graph): { idOf: Map<string, string>; labels: Map<string, string> } {
+function buildNodeIdMap(graph: Graph): {
+  idOf: Map<string, string>;
+  labels: Map<string, string>;
+} {
   const idOf = new Map<string, string>();
   const labels = new Map<string, string>();
   let i = 0;
@@ -2467,7 +2586,7 @@ export function graphToDOT(graph: Graph): string {
   const lines: string[] = [];
   lines.push("digraph G {");
   lines.push("  rankdir=LR;");
-  lines.push("  node [shape=box, fontsize=10, fontname=\"Arial\"];\n");
+  lines.push('  node [shape=box, fontsize=10, fontname="Arial"];\n');
 
   const declared = new Set<string>();
   const declare = (label: string, attrs: string) => {
@@ -2489,7 +2608,11 @@ export function graphToDOT(graph: Graph): string {
     const toId = idOf.get(edgeTargetToString(e.to))!;
     const attrs: string[] = [];
     if (e.typeOnly) attrs.push("style=dotted");
-    lines.push(`  ${fromId} -> ${toId}${attrs.length ? " [" + attrs.join(",") + "]" : ""};`);
+    lines.push(
+      `  ${fromId} -> ${toId}${
+        attrs.length ? " [" + attrs.join(",") + "]" : ""
+      };`
+    );
   }
   lines.push("}");
   return lines.join("\n");
@@ -2507,7 +2630,8 @@ export function graphToMermaid(graph: Graph): string {
     lines.push(isExternal ? `${id}([\"${safe}\"])` : `${id}[\"${safe}\"]`);
   };
   for (const f of graph.nodes) declare(f, false);
-  for (const e of graph.edges) declare(edgeTargetToString(e.to), e.to.type === "external");
+  for (const e of graph.edges)
+    declare(edgeTargetToString(e.to), e.to.type === "external");
   for (const e of graph.edges) {
     const fromId = idOf.get(e.from)!;
     const toId = idOf.get(edgeTargetToString(e.to))!;
