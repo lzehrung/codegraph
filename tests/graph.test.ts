@@ -3,6 +3,9 @@ import path from 'node:path';
 import { collectGraph } from '../src/index.js';
 import { getSamplePath, expectEdgeCount } from './test-utils.js';
 
+const toStr = (to: string | { external: string }) =>
+  typeof to === 'string' ? to : to.external;
+
 describe('Dependency Graph', () => {
   describe('TypeScript Project', () => {
     it('should build dependency graph with correct edges', async () => {
@@ -20,12 +23,12 @@ describe('Dependency Graph', () => {
       
       // Should have edges from main.ts to utils.ts and helpers.ts
       const mainToUtils = graph.edges.find(edge => 
-        edge.from.includes('main.ts') && edge.to.includes('utils.ts')
+        edge.from.includes('main.ts') && toStr(edge.to).includes('utils.ts')
       );
       expect(mainToUtils).toBeDefined();
       
       const utilsToHelpers = graph.edges.find(edge => 
-        edge.from.includes('utils.ts') && edge.to.includes('helpers.ts')
+        edge.from.includes('utils.ts') && toStr(edge.to).includes('helpers.ts')
       );
       expect(utilsToHelpers).toBeDefined();
     });
@@ -65,12 +68,12 @@ describe('Dependency Graph', () => {
       
       // Should have edges from main.py to utils.py and helpers.py
       const mainToUtils = graph.edges.find(edge => 
-        edge.from.includes('main.py') && edge.to.includes('utils.py')
+        edge.from.includes('main.py') && toStr(edge.to).includes('utils.py')
       );
       expect(mainToUtils).toBeDefined();
       
       const utilsToHelpers = graph.edges.find(edge => 
-        edge.from.includes('utils.py') && edge.to.includes('helpers.py')
+        edge.from.includes('utils.py') && toStr(edge.to).includes('helpers.py')
       );
       expect(utilsToHelpers).toBeDefined();
     });
@@ -88,7 +91,7 @@ describe('Dependency Graph', () => {
       
       // Should have edges involving __init__.py
       const initEdges = graph.edges.filter(edge => 
-        edge.from.includes('__init__.py') || edge.to.includes('__init__.py')
+        edge.from.includes('__init__.py') || toStr(edge.to).includes('__init__.py')
       );
       expect(initEdges.length).toBeGreaterThan(0);
     });
@@ -112,12 +115,12 @@ describe('Dependency Graph', () => {
       
       // Should have edges from main.js to utils.js and helpers.js
       const mainToUtils = graph.edges.find(edge => 
-        edge.from.includes('main.js') && edge.to.includes('utils.js')
+        edge.from.includes('main.js') && toStr(edge.to).includes('utils.js')
       );
       expect(mainToUtils).toBeDefined();
       
       const utilsToHelpers = graph.edges.find(edge => 
-        edge.from.includes('utils.js') && edge.to.includes('helpers.js')
+        edge.from.includes('utils.js') && toStr(edge.to).includes('helpers.js')
       );
       expect(utilsToHelpers).toBeDefined();
     });
@@ -136,8 +139,8 @@ describe('Dependency Graph', () => {
       
       // Should have edges involving CommonJS modules
       const commonJSEdges = graph.edges.filter(edge => 
-        edge.from.includes('legacy.js') || edge.to.includes('legacy.js') ||
-        edge.from.includes('mixed.js') || edge.to.includes('mixed.js')
+        edge.from.includes('legacy.js') || toStr(edge.to).includes('legacy.js') ||
+        edge.from.includes('mixed.js') || toStr(edge.to).includes('mixed.js')
       );
       expect(commonJSEdges.length).toBeGreaterThan(0);
     });
@@ -161,8 +164,8 @@ describe('Dependency Graph', () => {
       expect(mixedEdges.length).toBeGreaterThan(0);
       
       // Should connect to both ES6 helpers.js and CommonJS legacy.js
-      const hasES6Connection = mixedEdges.some(edge => edge.to.includes('helpers.js'));
-      const hasCommonJSConnection = mixedEdges.some(edge => edge.to.includes('legacy.js'));
+      const hasES6Connection = mixedEdges.some(edge => toStr(edge.to).includes('helpers.js'));
+      const hasCommonJSConnection = mixedEdges.some(edge => toStr(edge.to).includes('legacy.js'));
       
       expect(hasES6Connection || hasCommonJSConnection).toBe(true);
     });
