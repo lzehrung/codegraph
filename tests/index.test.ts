@@ -127,9 +127,7 @@ describe('Project Indexing', () => {
       const hasES6Import = mainModule!.imports.some(imp => 
         imp.kind === 'default' || imp.kind === 'named' || imp.kind === 'namespace'
       );
-      const hasCommonJSRequire = mainModule!.imports.some(imp => 
-        imp.kind === 'require'
-      );
+      const hasCommonJSRequire = mainModule!.imports.some(imp => imp.viaRequire === true);
       
       expect(hasES6Import || hasCommonJSRequire).toBe(true);
     });
