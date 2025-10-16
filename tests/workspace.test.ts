@@ -29,6 +29,19 @@ describe('Monorepo workspace support', () => {
     const hasEdgeByRaw = graph.edges.some(e => e.raw === '@acme/pkg-a' && e.from.replace(/\\/g, '/').includes('packages/pkg-b/src/index.js'));
     expect(hasEdgeByRaw).toBe(true);
   });
+
+  it('resolves exports-based default import across packages', async () => {
+    const root = path.join(process.cwd(), 'tests', 'samples', 'monorepo');
+    const { buildProjectIndex, goToDefinition } = await import('../src/index.js');
+    const index = await buildProjectIndex(root);
+    const pkga = path.join(root, 'packages', 'pkg-a', 'src', 'index.ts');
+    const pkgb = path.join(root, 'packages', 'pkg-b', 'src', 'index.js');
+    const res = await goToDefinition(index, { file: pkgb.replace(/\\/g, '/'), line: 21, column: 18 });
+    expect(res.status).toBe('ok');
+    if (res.status === 'ok') {
+      expect(res.definition.file.replace(/\\/g, '/')).toBe(pkga.replace(/\\/g, '/'));
+    }
+  });
 });
 
 

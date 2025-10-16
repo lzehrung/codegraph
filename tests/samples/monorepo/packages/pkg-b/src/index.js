@@ -25,4 +25,7 @@ export { aHelper as bHelper } from '@acme/pkg-a';
 export { AClass as ExportedAClass } from '@acme/pkg-a';
 export * from '@acme/pkg-a';
 
+// Subpath import consumer (will be exercised when exports provide subpath)
+// import { aHelper as subHelper } from '@acme/pkg-a/sub';
+
 
