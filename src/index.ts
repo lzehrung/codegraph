@@ -3,15 +3,17 @@
  * dep-graph-and-symbols.ts
  *
  * Foundation for a multi-language repository navigator powered by Tree-sitter.
- * - Repo-wide module dependency graph (JS/TS marks type-only edges; Python resolves files incl. relative).
+ * - Repo-wide module dependency graph (JS/TS mark type-only edges; Python resolves packages and relative modules, incl. __init__.py).
  * - Symbol index (locals + exports).
  * - Re-exports (incl. `export * from ...`) and TS `export =`.
- * - Go to definition (cross-file for TS/JS; intra-file for Python).
+ * - Go to definition (cross-file for TS/JS/Python).
  * - Find references (project-wide).
  * - AST grep utility.
  *
- * Robust for monorepos:
- * - Per-file tsconfig discovery (nearest up the tree) for TS path alias resolution.
+ * Monorepo-aware:
+ * - Workspace discovery: `package.json` workspaces (preferred), `pnpm-workspace.yaml`, `lerna.json`.
+ * - Workspace package resolution: `exports` (root/subpaths; import/require/default/module), `main`, and index fallbacks.
+ * - Per-file tsconfig discovery (nearest) and path alias resolution via `tsconfig-paths`.
  * - Python `__all__` interpretation and `from pkg import *` expansion.
  */
 
@@ -840,7 +842,7 @@ async function resolvePythonModule(
   const anchor = await findPythonPackageAnchor(fromDir);
 
   let baseDir = anchor;
-  // In Python, a single leading dot refers to the current package; only '..' goes up
+  // Python relative imports: one leading dot keeps current package, additional dots climb parents
   const climb = Math.max(0, relativeDots - 1);
   for (let i = 0; i < climb; i++) baseDir = path.dirname(baseDir);
 
