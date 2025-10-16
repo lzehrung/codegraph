@@ -2379,6 +2379,87 @@ function writeError(error: unknown) {
   writeStderrLine(String(error));
 }
 
+/* -------------------------------------------------------------------------- */
+/* Graph visualization helpers                                                */
+/* -------------------------------------------------------------------------- */
+
+function edgeTargetToString(t: EdgeTo): string {
+  return t.type === "file" ? t.path : t.name;
+}
+
+function buildNodeIdMap(graph: Graph): { idOf: Map<string, string>; labels: Map<string, string> } {
+  const idOf = new Map<string, string>();
+  const labels = new Map<string, string>();
+  let i = 0;
+  const ensure = (label: string) => {
+    if (!idOf.has(label)) {
+      const id = `n${i++}`;
+      idOf.set(label, id);
+      labels.set(id, label);
+    }
+  };
+  for (const f of graph.nodes) ensure(f);
+  for (const e of graph.edges) {
+    ensure(e.from);
+    ensure(edgeTargetToString(e.to));
+  }
+  return { idOf, labels };
+}
+
+function printGraphAsDOT(graph: Graph) {
+  const { idOf } = buildNodeIdMap(graph);
+  writeStdoutLine("digraph G {");
+  writeStdoutLine("  rankdir=LR;");
+  writeStdoutLine("  node [shape=box, fontsize=10, fontname=\"Arial\"];\n");
+
+  // Declare nodes with optional styling for external targets
+  const declared = new Set<string>();
+  const declare = (label: string, attrs: string) => {
+    const id = idOf.get(label)!;
+    if (declared.has(id)) return;
+    declared.add(id);
+    const safeLabel = label.replace(/\\/g, "/");
+    writeStdoutLine(`  ${id} [label=\"${safeLabel}\"${attrs ? ", " + attrs : ""}];`);
+  };
+
+  for (const f of graph.nodes) declare(f, "");
+  for (const e of graph.edges) {
+    const toStr = edgeTargetToString(e.to);
+    if (e.to.type === "external") declare(toStr, "shape=ellipse, style=dashed");
+    else declare(toStr, "");
+  }
+
+  for (const e of graph.edges) {
+    const fromId = idOf.get(e.from)!;
+    const toId = idOf.get(edgeTargetToString(e.to))!;
+    const attrs: string[] = [];
+    if (e.typeOnly) attrs.push("style=dotted");
+    writeStdoutLine(`  ${fromId} -> ${toId}${attrs.length ? " [" + attrs.join(",") + "]" : ""};`);
+  }
+  writeStdoutLine("}");
+}
+
+function printGraphAsMermaid(graph: Graph) {
+  const { idOf } = buildNodeIdMap(graph);
+  writeStdoutLine("flowchart LR");
+  const declared = new Set<string>();
+  const declare = (label: string, isExternal: boolean) => {
+    const id = idOf.get(label)!;
+    if (declared.has(id)) return;
+    declared.add(id);
+    const safe = label.replace(/\\\\/g, "/");
+    // Box for files, rounded for external
+    writeStdoutLine(isExternal ? `${id}([\"${safe}\"])` : `${id}[\"${safe}\"]`);
+  };
+  for (const f of graph.nodes) declare(f, false);
+  for (const e of graph.edges) declare(edgeTargetToString(e.to), e.to.type === "external");
+  for (const e of graph.edges) {
+    const fromId = idOf.get(e.from)!;
+    const toId = idOf.get(edgeTargetToString(e.to))!;
+    writeStdoutLine(`${fromId} --> ${toId}`);
+  }
+}
+
 async function main() {
   const [cmd = "graph", root = process.cwd(), ...rest] = process.argv.slice(2);
 
@@ -2392,7 +2473,10 @@ async function main() {
   if (cmd === "graph") {
     const files = await listProjectFiles(root);
     const graph = await collectGraph(root, files);
-    writeJSONLine({ nodes: [...graph.nodes], edges: graph.edges });
+    const format = rest.includes("--mermaid") ? "mermaid" : rest.includes("--dot") ? "dot" : "json";
+    if (format === "mermaid") printGraphAsMermaid(graph);
+    else if (format === "dot") printGraphAsDOT(graph);
+    else writeJSONLine({ nodes: [...graph.nodes], edges: graph.edges });
     return;
   }
 
