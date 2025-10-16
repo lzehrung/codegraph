@@ -10,12 +10,12 @@ describe('Go to Definition', () => {
       const mainFile = path.join(samplePath, 'main.ts').replace(/\\/g, '/');
       const utilsFile = path.join(samplePath, 'utils.ts').replace(/\\/g, '/');
       
-      // Test go-to-definition on helperFunction() call on line 8
-      const result = await testGoToDefinition(index, mainFile, 8, 18);
+      // Test go-to-definition on helperFunction() call on line 7
+      const result = await testGoToDefinition(index, mainFile, 7, 25);
       
       if (result.status === 'ok') {
         expect(result.definition.file).toBe(utilsFile);
-        expect(result.definition.line).toBe(1); // helperFunction definition
+        expect(result.definition.range.start.line).toBe(1); // helperFunction definition
       }
     });
 
@@ -25,12 +25,12 @@ describe('Go to Definition', () => {
       const mainFile = path.join(samplePath, 'main.ts').replace(/\\/g, '/');
       const utilsFile = path.join(samplePath, 'utils.ts').replace(/\\/g, '/');
       
-      // Test go-to-definition on UtilityClass() call on line 10
-      const result = await testGoToDefinition(index, mainFile, 10, 18);
+      // Test go-to-definition on UtilityClass() call on line 12
+      const result = await testGoToDefinition(index, mainFile, 12, 18);
       
       if (result.status === 'ok') {
         expect(result.definition.file).toBe(utilsFile);
-        expect(result.definition.line).toBe(5); // UtilityClass definition
+        expect(result.definition.range.start.line).toBe(5); // UtilityClass definition
       }
     });
 
@@ -40,12 +40,12 @@ describe('Go to Definition', () => {
       const mainFile = path.join(samplePath, 'main.ts').replace(/\\/g, '/');
       const utilsFile = path.join(samplePath, 'utils.ts').replace(/\\/g, '/');
       
-      // Test go-to-definition on utils.helperFunction() call on line 12
-      const result = await testGoToDefinition(index, mainFile, 12, 25);
+      // Test go-to-definition on utils.helperFunction() call on line 7
+      const result = await testGoToDefinition(index, mainFile, 7, 25);
       
       if (result.status === 'ok') {
         expect(result.definition.file).toBe(utilsFile);
-        expect(result.definition.line).toBe(1); // helperFunction definition
+        expect(result.definition.range.start.line).toBe(1); // helperFunction definition
       }
     });
 
@@ -55,12 +55,12 @@ describe('Go to Definition', () => {
       const mainFile = path.join(samplePath, 'main.ts').replace(/\\/g, '/');
       const utilsFile = path.join(samplePath, 'utils.ts').replace(/\\/g, '/');
       
-      // Test go-to-definition on helperAlias() call on line 15
-      const result = await testGoToDefinition(index, mainFile, 15, 18);
+      // Test go-to-definition on helperAlias() call on line 16
+      const result = await testGoToDefinition(index, mainFile, 16, 20);
       
       if (result.status === 'ok') {
         expect(result.definition.file).toBe(utilsFile);
-        expect(result.definition.line).toBe(1); // helperFunction definition
+        expect(result.definition.range.start.line).toBe(1); // helperFunction definition
       }
     });
   });
@@ -77,7 +77,7 @@ describe('Go to Definition', () => {
       
       if (result.status === 'ok') {
         expect(result.definition.file).toBe(utilsFile);
-        expect(result.definition.line).toBe(1); // helper_function definition
+        expect(result.definition.range.start.line).toBe(1); // helper_function definition
       }
     });
 
@@ -92,7 +92,7 @@ describe('Go to Definition', () => {
       
       if (result.status === 'ok') {
         expect(result.definition.file).toBe(utilsFile);
-        expect(result.definition.line).toBe(4); // UtilityClass definition
+        expect(result.definition.range.start.line).toBe(5); // UtilityClass definition
       }
     });
 
@@ -107,7 +107,7 @@ describe('Go to Definition', () => {
       
       if (result.status === 'ok') {
         expect(result.definition.file).toBe(utilsFile);
-        expect(result.definition.line).toBe(1); // helper_function definition
+        expect(result.definition.range.start.line).toBe(1); // helper_function definition
       }
     });
 
@@ -122,7 +122,7 @@ describe('Go to Definition', () => {
       
       if (result.status === 'ok') {
         expect(result.definition.file).toBe(utilsFile);
-        expect(result.definition.line).toBe(1); // helper_function definition
+        expect(result.definition.range.start.line).toBe(1); // helper_function definition
       }
     });
   });
@@ -134,12 +134,12 @@ describe('Go to Definition', () => {
       const mainFile = path.join(samplePath, 'main.js').replace(/\\/g, '/');
       const utilsFile = path.join(samplePath, 'utils.js').replace(/\\/g, '/');
       
-      // Test go-to-definition on helperFunction() call on line 8
-      const result = await testGoToDefinition(index, mainFile, 8, 18);
+      // Test go-to-definition on helperFunction() call on line 7
+      const result = await testGoToDefinition(index, mainFile, 7, 25);
       
       if (result.status === 'ok') {
         expect(result.definition.file).toBe(utilsFile);
-        expect(result.definition.line).toBe(1); // helperFunction definition
+        expect(result.definition.range.start.line).toBe(1); // helperFunction definition
       }
     });
 
@@ -149,12 +149,12 @@ describe('Go to Definition', () => {
       const mainFile = path.join(samplePath, 'main.js').replace(/\\/g, '/');
       const utilsFile = path.join(samplePath, 'utils.js').replace(/\\/g, '/');
       
-      // Test go-to-definition on UtilityClass() call on line 10
-      const result = await testGoToDefinition(index, mainFile, 10, 18);
+      // Test go-to-definition on UtilityClass() call on line 12
+      const result = await testGoToDefinition(index, mainFile, 12, 18);
       
       if (result.status === 'ok') {
         expect(result.definition.file).toBe(utilsFile);
-        expect(result.definition.line).toBe(4); // UtilityClass definition
+        expect(result.definition.range.start.line).toBe(5); // UtilityClass definition
       }
     });
 
@@ -164,12 +164,12 @@ describe('Go to Definition', () => {
       const mainFile = path.join(samplePath, 'main.js').replace(/\\/g, '/');
       const utilsFile = path.join(samplePath, 'utils.js').replace(/\\/g, '/');
       
-      // Test go-to-definition on utils.helperFunction() call on line 12
-      const result = await testGoToDefinition(index, mainFile, 12, 25);
+      // Test go-to-definition on utils.helperFunction() call on line 7
+      const result = await testGoToDefinition(index, mainFile, 7, 25);
       
       if (result.status === 'ok') {
         expect(result.definition.file).toBe(utilsFile);
-        expect(result.definition.line).toBe(1); // helperFunction definition
+        expect(result.definition.range.start.line).toBe(1); // helperFunction definition
       }
     });
 
@@ -179,12 +179,12 @@ describe('Go to Definition', () => {
       const mainFile = path.join(samplePath, 'main.js').replace(/\\/g, '/');
       const utilsFile = path.join(samplePath, 'utils.js').replace(/\\/g, '/');
       
-      // Test go-to-definition on helperAlias() call on line 15
-      const result = await testGoToDefinition(index, mainFile, 15, 18);
+      // Test go-to-definition on helperAlias() call on line 16
+      const result = await testGoToDefinition(index, mainFile, 16, 20);
       
       if (result.status === 'ok') {
         expect(result.definition.file).toBe(utilsFile);
-        expect(result.definition.line).toBe(1); // helperFunction definition
+        expect(result.definition.range.start.line).toBe(1); // helperFunction definition
       }
     });
 
@@ -194,12 +194,12 @@ describe('Go to Definition', () => {
       const mainFile = path.join(samplePath, 'main.js').replace(/\\/g, '/');
       const helpersFile = path.join(samplePath, 'helpers.js').replace(/\\/g, '/');
       
-      // Test go-to-definition on requireHelper() call on line 25
-      const result = await testGoToDefinition(index, mainFile, 25, 18);
+      // Test go-to-definition on requireHelper() call on line 33
+      const result = await testGoToDefinition(index, mainFile, 33, 18);
       
       if (result.status === 'ok') {
         expect(result.definition.file).toBe(helpersFile);
-        expect(result.definition.line).toBe(1); // helperFunction definition
+        expect(result.definition.range.start.line).toBe(1); // helperFunction definition
       }
     });
   });

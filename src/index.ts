@@ -209,7 +209,8 @@ const JS_SUPPORT: LanguageSupport = {
       (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname alias: (identifier) @alias))) (string) @from)
       (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname))) (string) @from)
       (import_statement (import_clause (namespace_import (identifier) @ns)) (string) @from)
-      (lexical_declaration (variable_declarator name:(identifier) @def value: (call_expression function:(identifier) @req arguments: (arguments (string) @from)))) (#eq? @req "require")
+      (lexical_declaration (variable_declarator name:(identifier) @def value: (call_expression (identifier) @req arguments: (arguments (string) @from)))) (#eq? @req "require")
+      (lexical_declaration (variable_declarator (object_pattern) @pattern value: (call_expression (identifier) @req arguments: (arguments (string) @from)))) (#eq? @req "require")
     `,
   },
   classifyDefinition: (n) => {
@@ -259,6 +260,7 @@ const PY_SUPPORT: LanguageSupport = {
     // Import edges (also used for importBindings)
     imports: `
       (import_statement) @stmt
+      (import_from_statement) @stmt
     `,
     // Exports: __all__, function/class definitions, and assignments
     exports: `
@@ -813,6 +815,24 @@ export function collectModuleSpecifiersFromSource(
   source: string
 ): { spec: string; typeOnly?: boolean }[] {
   const out: { spec: string; typeOnly?: boolean }[] = [];
+  
+        // Python: use regex fallback for import detection
+        if (support.id === "python") {
+          // Match: import module
+          const reImport = /^import\s+([A-Za-z_][\w\.]*)/gm;
+          for (const m of source.matchAll(reImport)) {
+            out.push({ spec: m[1]! });
+          }
+          
+          // Match: from module import ... (including relative imports)
+          const reFrom = /^from\s+([A-Za-z_][\w\.]*|\.+[A-Za-z_][\w\.]*)\s+import/gm;
+          for (const m of source.matchAll(reFrom)) {
+            out.push({ spec: m[1]! });
+          }
+          
+          return out;
+        }
+  
   try {
     const parser = new Parser();
     parser.setLanguage(lang);
@@ -843,7 +863,8 @@ export function collectLocalsAndExportsFromSource(
   file: string,
   source: string,
   support: LanguageSupport,
-  lang: Parser.Language
+  lang: Parser.Language,
+  imports: ImportBinding[] = []
 ): ModuleIndex {
   let tree: Parser.Tree | null = null;
   try {
@@ -873,7 +894,7 @@ export function collectLocalsAndExportsFromSource(
       }
     } else {
       // JS/TS: build locals via AST walk (Tree-sitter only, no regex)
-      const scopeIdx = buildScopeIndexFromSource(file, source, support, lang, []);
+      const scopeIdx = buildScopeIndexFromSource(file, source, support, lang, imports);
       for (const b of scopeIdx.all) {
         if (!b.def) continue;
         let kind: SymbolKind = SymbolKind.Variable;
@@ -1167,6 +1188,45 @@ async function collectImportsForFile(
         ? unquote(sliceText(caps["from"].node, source))
         : undefined;
 
+      // Handle destructuring assignment with require (process even if from is undefined)
+      const patterns = m.captures.filter((c: Parser.QueryCapture) => c.name === "pattern");
+      for (const pattern of patterns) {
+        const patternNode = pattern.node;
+        if (patternNode.type === "object_pattern") {
+          // Extract property names and aliases from destructuring pattern
+          for (const child of patternNode.namedChildren) {
+            if (child.type === "shorthand_property_identifier") {
+              // { helperFunction } = require('./helpers.js')
+              const name = sliceText(child, source);
+              imports.push({
+                kind: "named",
+                local: name,
+                imported: name,
+                from: from || "",
+                resolved: from ? await resolveFrom(from) : { external: "" },
+                typeOnly,
+              });
+            } else if (child.type === "pair_pattern") {
+              // { helperFunction: requireHelper } = require('./helpers.js')
+              const key = child.childForFieldName("key");
+              const value = child.childForFieldName("value");
+              if (key && value && key.type === "property_identifier" && value.type === "identifier") {
+                const imported = sliceText(key, source);
+                const local = sliceText(value, source);
+                imports.push({
+                  kind: "named",
+                  local,
+                  imported,
+                  from: from || "",
+                  resolved: from ? await resolveFrom(from) : { external: "" },
+                  typeOnly,
+                });
+              }
+            }
+          }
+        }
+      }
+
       if (!from) continue;
       const resolved = await resolveFrom(from);
       if (caps["def"]) {
@@ -1275,8 +1335,9 @@ export async function buildProjectIndex(
       const sup = supportForFile(f);
       const lang = languageForFile(f);
       const src = await fsp.readFile(f, "utf8");
-      const mod = collectLocalsAndExportsFromSource(f, src, sup, lang);
-      mod.imports = await collectImportsForFile(f, projectRoot);
+      const imports = await collectImportsForFile(f, projectRoot);
+      const mod = collectLocalsAndExportsFromSource(f, src, sup, lang, imports);
+      mod.imports = imports;
 
       // Resolve re-exports to files (TS/JS and Python)
       if (sup.supportsCrossModuleSymbols) {
@@ -1426,6 +1487,21 @@ export async function goToDefinition(
 
   const pos = { row: Math.max(0, line - 1), column: Math.max(0, column - 1) };
   let node: Parser.SyntaxNode | null = tree.rootNode.descendantForPosition(pos, pos);
+  
+  // If we found a variable_declarator, try to find the identifier within it
+  if (node && node.type === "variable_declarator") {
+    const value = node.childForFieldName("value");
+    if (value && value.type === "call_expression") {
+      // Try different field names for the function being called
+      let callee = value.childForFieldName("function");
+      if (!callee) callee = value.childForFieldName("callee");
+      if (!callee) callee = value.child(0); // First child is often the function
+      if (callee && sup.nodeTypes.identifier.includes(callee.type)) {
+        node = callee;
+      }
+    }
+  }
+  
   while (node && (node.type === "," || node.type === ".")) node = node.parent;
   if (!node) return { status: "not_found", reason: "No node at position" };
 
@@ -1465,7 +1541,59 @@ export async function goToDefinition(
   if (name) {
     // Check locals first
     const local = mod.locals.find((d) => d.localName === name);
-    if (local) return { status: "ok", definition: local };
+    if (local) {
+      // If it's an import binding, resolve it to the actual definition
+      if (local.kind === "importDefault" || local.kind === "importNamed" || local.kind === "namespace") {
+        if (local.import) {
+          if (local.kind === "importDefault") {
+            const target = resolveImported(index, local.import, "default");
+            if (target) {
+              return {
+                status: "ok",
+                definition: target,
+                via: {
+                  ...(toModuleRef(local.import.resolved) ? { importedFrom: toModuleRef(local.import.resolved) } : {}),
+                  exportedName: "default",
+                },
+              };
+            }
+          } else if (local.kind === "importNamed") {
+            const target = resolveImported(index, local.import, local.import.imported);
+            if (target) {
+              return {
+                status: "ok",
+                definition: target,
+                via: {
+                  ...(toModuleRef(local.import.resolved) ? { importedFrom: toModuleRef(local.import.resolved) } : {}),
+                  exportedName: local.import.imported,
+                },
+              };
+            }
+          } else if (local.kind === "namespace") {
+            // For namespace imports, we need to find the actual module definition
+            const targetFile = typeof local.import.resolved === "string" ? local.import.resolved.replace(/\\/g, '/') : undefined;
+            if (targetFile) {
+              const targetMod = index.byFile.get(targetFile);
+              if (targetMod) {
+                // Return the first export as the namespace definition
+                const firstExport = targetMod.exports.find(e => e.type === "local");
+                if (firstExport) {
+                  return {
+                    status: "ok",
+                    definition: firstExport.target,
+                    via: {
+                      ...(toModuleRef(local.import.resolved) ? { importedFrom: toModuleRef(local.import.resolved) } : {}),
+                      exportedName: firstExport.exportedAs,
+                    },
+                  };
+                }
+              }
+            }
+          }
+        }
+      }
+      return { status: "ok", definition: local };
+    }
 
     if (sup.supportsCrossModuleSymbols) {
       for (const imp of mod.imports) {
@@ -1491,6 +1619,26 @@ export async function goToDefinition(
                 exportedName: imp.imported,
               },
             };
+        } else if (imp.kind === "namespace" && imp.localNS === name) {
+          // For namespace imports, we need to find the actual module definition
+          const targetFile = typeof imp.resolved === "string" ? imp.resolved.replace(/\\/g, '/') : undefined;
+          if (targetFile) {
+            const targetMod = index.byFile.get(targetFile);
+            if (targetMod) {
+              // Return the first export as the namespace definition
+              const firstExport = targetMod.exports.find(e => e.type === "local");
+              if (firstExport) {
+                return {
+                  status: "ok",
+                  definition: firstExport.target,
+                  via: {
+                    ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
+                    exportedName: firstExport.exportedAs,
+                  },
+                };
+              }
+            }
+          }
         }
       }
     }
