@@ -1542,56 +1542,6 @@ export async function goToDefinition(
     // Check locals first
     const local = mod.locals.find((d) => d.localName === name);
     if (local) {
-      // If it's an import binding, resolve it to the actual definition
-      if (local.kind === "importDefault" || local.kind === "importNamed" || local.kind === "namespace") {
-        if (local.import) {
-          if (local.kind === "importDefault") {
-            const target = resolveImported(index, local.import, "default");
-            if (target) {
-              return {
-                status: "ok",
-                definition: target,
-                via: {
-                  ...(toModuleRef(local.import.resolved) ? { importedFrom: toModuleRef(local.import.resolved) } : {}),
-                  exportedName: "default",
-                },
-              };
-            }
-          } else if (local.kind === "importNamed") {
-            const target = resolveImported(index, local.import, local.import.imported);
-            if (target) {
-              return {
-                status: "ok",
-                definition: target,
-                via: {
-                  ...(toModuleRef(local.import.resolved) ? { importedFrom: toModuleRef(local.import.resolved) } : {}),
-                  exportedName: local.import.imported,
-                },
-              };
-            }
-          } else if (local.kind === "namespace") {
-            // For namespace imports, we need to find the actual module definition
-            const targetFile = typeof local.import.resolved === "string" ? local.import.resolved.replace(/\\/g, '/') : undefined;
-            if (targetFile) {
-              const targetMod = index.byFile.get(targetFile);
-              if (targetMod) {
-                // Return the first export as the namespace definition
-                const firstExport = targetMod.exports.find(e => e.type === "local");
-                if (firstExport) {
-                  return {
-                    status: "ok",
-                    definition: firstExport.target,
-                    via: {
-                      ...(toModuleRef(local.import.resolved) ? { importedFrom: toModuleRef(local.import.resolved) } : {}),
-                      exportedName: firstExport.exportedAs,
-                    },
-                  };
-                }
-              }
-            }
-          }
-        }
-      }
       return { status: "ok", definition: local };
     }
 
