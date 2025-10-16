@@ -369,6 +369,7 @@ export type ImportBinding =
       from: string;
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
+      viaRequire?: boolean;
     }
   | {
       kind: "named";
@@ -377,6 +378,7 @@ export type ImportBinding =
       from: string;
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
+      viaRequire?: boolean;
     }
   | {
       kind: "namespace";
@@ -384,12 +386,14 @@ export type ImportBinding =
       from: string;
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
+      viaRequire?: boolean;
     }
   | {
       kind: "star";
       from: string;
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
+      viaRequire?: boolean;
     };
 
 export type EdgeTo =
@@ -1397,7 +1401,7 @@ async function collectImportsForFile(
       const local = m[1]!;
       const mod = (m.groups as any).m as string;
       const resolved = await resolveFrom(mod);
-      imports.push({ kind: "default", local, from: mod, resolved });
+      imports.push({ kind: "default", local, from: mod, resolved, viaRequire: true });
     }
     const reReqNamed =
       /\b(?:const|let|var)\s*\{([^}]+)\}\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
@@ -1415,7 +1419,7 @@ async function collectImportsForFile(
         if (!nm) continue;
         const imported = nm[1]!;
         const local = nm[2] ?? imported;
-        imports.push({ kind: "named", local, imported, from: mod, resolved });
+        imports.push({ kind: "named", local, imported, from: mod, resolved, viaRequire: true });
       }
     }
   };
