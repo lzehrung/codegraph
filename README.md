@@ -1,6 +1,6 @@
 # Dep Graph & Symbols
 
-A tiny, senior-engineer–grade foundation for a **developer agent loop** that can **understand a repo**, **navigate code**, and **answer questions** fast.
+A tiny tool to **understand a repo**, **navigate code**, and **answer questions** fast.
 
 It builds:
 
@@ -74,30 +74,30 @@ npm i tree-sitter tree-sitter-typescript tree-sitter-javascript tree-sitter-pyth
 
 ```bash
 # Build a dependency graph (prints nodes + edges)
-npx tsx src/index.ts graph
+npx tsx src/cli.ts graph
 
 # Build a dependency graph in Mermaid format
-npx tsx src/index.ts graph --mermaid > graph.mmd
+npx tsx src/cli.ts graph --mermaid > graph.mmd
 # Preview the Mermaid file in your editor or any Mermaid viewer
 
 # Build a dependency graph in Graphviz DOT format
-npx tsx src/index.ts graph --dot > graph.dot
+npx tsx src/cli.ts graph --dot > graph.dot
 # Render to SVG (requires Graphviz)
 dot -Tsvg graph.dot -o graph.svg
 
 # Build the full project index (graph + per-file symbol indexes)
-npx tsx src/index.ts index
+npx tsx src/cli.ts index
 
 # Go to definition of symbol at file:line:column
-npx tsx src/index.ts goto <file> <line> <column>
+npx tsx src/cli.ts goto <file> <line> <column>
 
 # Find references of symbol at a location
-npx tsx src/index.ts refs --file <file> --line <line> --col <column>
+npx tsx src/cli.ts refs --file <file> --line <line> --col <column>
 # Pretty-print only the file:line:col
 npx tsx src/index.ts refs --file <file> --line <line> --col <column> --pretty
 
 # Run a Tree-sitter query across the repo
-npx tsx src/index.ts grep --query '(function_declaration name: (identifier) @name)'
+npx tsx src/cli.ts grep --query '(function_declaration name: (identifier) @name)'
 ```
 
 ### Output formats
@@ -166,34 +166,10 @@ for (const e of graph.edges) {
 Produce a Mermaid diagram string (for UI or chat rendering):
 
 ```ts
-import type { Graph } from './src/index.js';
+import { graphToMermaid } from './src/index.js';
 
-function graphToMermaid(graph: Graph): string {
-  const toRef = (t: { type: 'file'; path: string } | { type: 'external'; name: string }) =>
-    t.type === 'file' ? t.path : t.name;
-
-  const ids = new Map<string, string>();
-  let i = 0;
-  const id = (label: string) => ids.get(label) ?? (ids.set(label, `n${i++}`), ids.get(label)!);
-
-  const lines = ['flowchart LR'];
-  for (const n of graph.nodes) lines.push(`${id(n)}["${n.replace(/\\/g, '/')}\"]`);
-  const declared = new Set<string>([...graph.nodes].map(n => id(n)));
-  for (const e of graph.edges) {
-    const tgt = toRef(e.to);
-    const tgtId = id(tgt);
-    if (!declared.has(tgtId)) {
-      declared.add(tgtId);
-      lines.push(e.to.type === 'external' ? `${tgtId}(["${tgt}"])` : `${tgtId}["${tgt}"]`);
-    }
-    lines.push(`${id(e.from)} --> ${tgtId}`);
-  }
-  return lines.join('\n');
-}
-
-// usage:
-// const mermaid = graphToMermaid(graph);
-// console.log(mermaid);
+const mermaid = graphToMermaid(graph);
+console.log(mermaid);
 ```
 
 Simple wrappers as “LLM tools” (no HTTP/MCP), returning JSONable payloads:
