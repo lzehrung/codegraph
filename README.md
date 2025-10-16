@@ -76,6 +76,15 @@ npm i tree-sitter tree-sitter-typescript tree-sitter-javascript tree-sitter-pyth
 # Build a dependency graph (prints nodes + edges)
 npx tsx src/index.ts graph
 
+# Build a dependency graph in Mermaid format
+npx tsx src/index.ts graph --mermaid > graph.mmd
+# Preview the Mermaid file in your editor or any Mermaid viewer
+
+# Build a dependency graph in Graphviz DOT format
+npx tsx src/index.ts graph --dot > graph.dot
+# Render to SVG (requires Graphviz)
+dot -Tsvg graph.dot -o graph.svg
+
 # Build the full project index (graph + per-file symbol indexes)
 npx tsx src/index.ts index
 
@@ -93,11 +102,20 @@ npx tsx src/index.ts grep --query '(function_declaration name: (identifier) @nam
 
 ### Output formats
 
-* `graph` prints:
+* `graph` prints JSON by default:
 
   ```json
-  { "nodes": ["/abs/path/a.ts", "..."], "edges": [{ "from": "/abs/path/a.ts", "to": { "external": "react" }, "raw": "react" }, ...] }
+  {
+    "nodes": ["/abs/path/a.ts", "..."],
+    "edges": [
+      { "from": "/abs/path/a.ts", "to": { "type": "external", "name": "react" }, "raw": "react" },
+      { "from": "/abs/path/a.ts", "to": { "type": "file", "path": "/abs/path/b.ts" }, "raw": "./b" }
+    ]
+  }
   ```
+
+  - Use `--mermaid` for a Mermaid flowchart, or `--dot` for Graphviz DOT.
+  - In DOT output, type-only edges are dotted; external nodes are dashed ellipses.
 * `index` prints a small summary:
 
   ```json
