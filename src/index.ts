@@ -98,12 +98,16 @@ const TS_SUPPORT: LanguageSupport = {
     `,
     exports: `
       (export_statement) @stmt
-      (export_statement (function_declaration name: (identifier) @name))
-      (export_statement (class_declaration name: (identifier) @name))
-      (export_statement (lexical_declaration (variable_declarator name: (identifier) @name)))
+      (export_statement (function_declaration name: (identifier) @name)) @stmt
+      (export_statement (class_declaration name: (identifier) @name)) @stmt
+      (export_statement (lexical_declaration (variable_declarator name: (identifier) @name))) @stmt
+      (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)) (string) @from)
+      (export_statement (export_clause (export_specifier name: (identifier) @src)) (string) @from)
       (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)))
       (export_statement (export_clause (export_specifier name: (identifier) @src)))
       (export_statement (string) @from)
+      (export_statement (function_declaration name: (identifier) @default)) @stmt (#match? @stmt "default")
+      (export_statement (class_declaration name: (identifier) @default)) @stmt (#match? @stmt "default")
       (export_assignment (identifier) @ts_export_assign)
     `,
     locals: `
@@ -177,6 +181,8 @@ const JS_SUPPORT: LanguageSupport = {
       (export_statement (function_declaration name: (identifier) @name))
       (export_statement (class_declaration name: (identifier) @name))
       (export_statement (lexical_declaration (variable_declarator (identifier) @name)))
+      (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)) (string) @from)
+      (export_statement (export_clause (export_specifier name: (identifier) @src)) (string) @from)
       (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)))
       (export_statement (export_clause (export_specifier name: (identifier) @src)))
       (export_statement (string) @from)
@@ -994,7 +1000,7 @@ export function collectLocalsAndExportsFromSource(
               type: "reexport",
               exportedAs: alias,
               fromModule: from,
-              sourceSpecifier: from,
+              sourceSpecifier: srcName,
               typeOnly: isTypeOnly,
             });
           } else {
@@ -1060,14 +1066,27 @@ export function collectLocalsAndExportsFromSource(
           continue;
         }
         if (map["name"]) {
-          const nameText = sliceText(map["name"].node, source);
+          const nameNode = map["name"].node;
+          const nameText = sliceText(nameNode, source);
           const local = locals.find((d) => d.localName === nameText);
-          if (local)
-            exports.push({
-              type: "local",
-              exportedAs: nameText,
-              target: local,
-            });
+          if (local) {
+            exports.push({ type: "local", exportedAs: nameText, target: local });
+            // Try to detect `export default function Name` by inspecting the nearest export_statement
+            let cur: Parser.SyntaxNode | null = nameNode;
+            let exportStmt: Parser.SyntaxNode | null = null;
+            while (cur) {
+              if (cur.type === "export_statement") { exportStmt = cur; break; }
+              cur = cur.parent;
+            }
+            const exportText = exportStmt ? sliceText(exportStmt, source) : stmtText;
+            if (/^\s*export\s+default\b/.test(exportText)) {
+              exports.push({
+                type: "local",
+                exportedAs: "default",
+                target: { ...local, kind: SymbolKind.Default },
+              });
+            }
+          }
           continue;
         }
         if (map["src"]) {
@@ -1078,6 +1097,16 @@ export function collectLocalsAndExportsFromSource(
           const local = locals.find((d) => d.localName === srcName);
           if (local)
             exports.push({ type: "local", exportedAs: alias, target: local });
+        }
+      }
+      // If no explicit default export captured, add best-effort TS default function/class export
+      if ((support.id === "ts" || support.id === "js") && !exports.some(e => e.type === "local" && e.exportedAs === "default")) {
+        const mDefFn = source.match(/\bexport\s+default\s+function\s+([A-Za-z_$][\w$]*)/);
+        const mDefCls = source.match(/\bexport\s+default\s+class\s+([A-Za-z_$][\w$]*)/);
+        const name = mDefFn?.[1] ?? mDefCls?.[1];
+        if (name) {
+          const local = locals.find(d => d.localName === name);
+          if (local) exports.push({ type: "local", exportedAs: "default", target: { ...local, kind: SymbolKind.Default } });
         }
       }
     } catch {
@@ -1104,6 +1133,18 @@ export function collectLocalsAndExportsFromSource(
             });
         }
       }
+    }
+  }
+
+  // Ensure default export is captured for TS/JS even if query missed it
+  if ((support.id === "ts" || support.id === "js") && !exports.some(e => e.type === "local" && e.exportedAs === "default")) {
+    const defFn = source.match(/\bexport\s+default\s+function\s+([A-Za-z_$][\w$]*)/);
+    const defCls = source.match(/\bexport\s+default\s+class\s+([A-Za-z_$][\w$]*)/);
+    const defIdent = source.match(/\bexport\s+default\s+([A-Za-z_$][\w$]*)\b/);
+    const name = defFn?.[1] ?? defCls?.[1] ?? defIdent?.[1];
+    if (name) {
+      const local = locals.find(d => d.localName === name);
+      if (local) exports.push({ type: "local", exportedAs: "default", target: { ...local, kind: SymbolKind.Default } });
     }
   }
 
@@ -1481,7 +1522,7 @@ export async function buildProjectIndex(
 
       // Resolve re-exports to files (TS/JS and Python)
       if (sup.supportsCrossModuleSymbols) {
-        if (sup.id === "ts") {
+        if (sup.id === "ts" || sup.id === "js") {
           const { matchPath } = await loadNearestTsconfigFor(f);
           for (const e of mod.exports)
             if (e.type !== "local") {
@@ -1494,6 +1535,11 @@ export async function buildProjectIndex(
                   workspaceConfig
                 );
                 if (typeof resolved === "string") e.fromModule = resolved;
+              } else {
+                // Try workspace/package resolution for bare specifiers
+                const ws = await loadWorkspaceConfig(projectRoot);
+                const pkgResolved = await resolveWorkspacePackage(e.fromModule, ws);
+                if (pkgResolved) e.fromModule = pkgResolved;
               }
             }
         } else if (sup.id === "python") {
@@ -1583,8 +1629,8 @@ export function resolveExport(
       typeof e.fromModule === "string"
     ) {
       const down =
-        resolveExport(index, e.fromModule, exportedName) ||
-        resolveExport(index, e.fromModule, e.exportedAs);
+        resolveExport(index, e.fromModule, e.sourceSpecifier || exportedName) ||
+        resolveExport(index, e.fromModule, exportedName);
       if (down) {
         index.exportCache.set(key, down);
         return down;
@@ -1656,6 +1702,36 @@ export async function goToDefinition(
   while (node && (node.type === "," || node.type === ".")) node = node.parent;
   if (!node) return { status: "not_found", reason: "No node at position" };
 
+  // If inside a member expression (e.g., ns.member), handle namespace resolution first
+  if (
+    sup.supportsCrossModuleSymbols &&
+    ((node.type === (sup.nodeTypes.propertyIdentifier?.[0] ?? "property_identifier") &&
+      node.parent &&
+      node.parent.type === (sup.nodeTypes.memberExpression ?? "member_expression")) ||
+     (node.type === (sup.nodeTypes.memberExpression ?? "member_expression")))
+  ) {
+    const memberNode = node.type === (sup.nodeTypes.memberExpression ?? "member_expression") ? node : node.parent!;
+    const obj = memberNode.child(0);
+    const prop = memberNode.child(2);
+    if (obj && prop && obj.type === "identifier") {
+      const nsName = sliceText(obj, source);
+      const member = sliceText(prop, source);
+      const nsImport = mod.imports.find((i) => i.kind === "namespace" && i.localNS === nsName);
+      if (nsImport) {
+        const resolved = resolveImported(index, nsImport, member);
+        if (resolved)
+          return {
+            status: "ok",
+            definition: resolved,
+            via: {
+              ...(toModuleRef(nsImport.resolved) ? { importedFrom: toModuleRef(nsImport.resolved) } : {}),
+              exportedName: member,
+            },
+          };
+      }
+    }
+  }
+
   const isId = sup.nodeTypes.identifier.includes(node.type);
   let name: string | null = isId ? sliceText(node, source) : null;
 
@@ -1701,6 +1777,12 @@ export async function goToDefinition(
     }
 
     if (sup.supportsCrossModuleSymbols) {
+      // Try resolving as an exported name from this module (re-exports/local exports)
+      const hit = resolveExport(index, file, name);
+      if (hit) {
+        return { status: "ok", definition: hit.def, via: { exportedName: name } };
+      }
+
       for (const imp of mod.imports) {
         if (imp.kind === "default" && imp.local === name) {
           const target = resolveImported(index, imp, "default");
@@ -1760,38 +1842,7 @@ export async function goToDefinition(
     }
   }
 
-  // namespace member (JS/TS and Python): ns.member
-  if (
-    sup.supportsCrossModuleSymbols &&
-    node.type ===
-      (sup.nodeTypes.propertyIdentifier?.[0] ?? "property_identifier") &&
-    node.parent &&
-    node.parent.type === (sup.nodeTypes.memberExpression ?? "member_expression")
-  ) {
-    const obj = node.parent.child(0);
-    const prop = node;
-    if (obj && prop && obj.type === "identifier") {
-      const nsName = sliceText(obj, source);
-      const member = sliceText(prop, source);
-      const nsImport = mod.imports.find(
-        (i) => i.kind === "namespace" && i.localNS === nsName
-      );
-      if (nsImport) {
-        const resolved = resolveImported(index, nsImport, member);
-        if (resolved)
-          return {
-            status: "ok",
-            definition: resolved,
-            via: {
-              ...(toModuleRef(nsImport.resolved)
-                ? { importedFrom: toModuleRef(nsImport.resolved) }
-                : {}),
-              exportedName: member,
-            },
-          };
-      }
-    }
-  }
+  // namespace member handled earlier
 
   return {
     status: "not_found",
@@ -2293,6 +2344,26 @@ async function main() {
     writeJSONLine({
       files: [...index.byFile.keys()].length,
       edges: index.graph.edges.length,
+    });
+    return;
+  }
+
+  if (cmd === "dumpmod") {
+    const [fileArg] = rest;
+    const file = path.isAbsolute(fileArg!)
+      ? fileArg!.replace(/\\/g, "/")
+      : path.resolve(root, fileArg!).replace(/\\/g, "/");
+    const index = await buildProjectIndex(root);
+    const mod = index.byFile.get(file);
+    if (!mod) {
+      writeJSONLine({ status: "not_found", reason: "Module not indexed", file });
+      return;
+    }
+    writeJSONLine({
+      file,
+      locals: mod.locals.map(l => ({ name: l.localName, kind: l.kind, start: l.range.start })),
+      exports: mod.exports.map(e => e.type === "local" ? ({ type: e.type, exportedAs: e.exportedAs, def: { name: e.target.localName, kind: e.target.kind, start: e.target.range.start } }) : e),
+      imports: mod.imports,
     });
     return;
   }
