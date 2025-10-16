@@ -840,7 +840,9 @@ async function resolvePythonModule(
   const anchor = await findPythonPackageAnchor(fromDir);
 
   let baseDir = anchor;
-  for (let i = 0; i < relativeDots; i++) baseDir = path.dirname(baseDir);
+  // In Python, a single leading dot refers to the current package; only '..' goes up
+  const climb = Math.max(0, relativeDots - 1);
+  for (let i = 0; i < climb; i++) baseDir = path.dirname(baseDir);
 
   const parts = (moduleName ? moduleName.split(".") : []).filter(Boolean);
   const relPath = parts.length ? path.join(...parts) : "";
