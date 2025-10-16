@@ -25,7 +25,7 @@ export async function testGoToDefinition(
     expect(result.status).toBe('ok');
     if (result.status === 'ok') {
       expect(result.definition.file).toBe(expectedFile);
-      expect(result.definition.line).toBe(expectedLine);
+      expect(result.definition.range.start.line).toBe(expectedLine);
     }
   } else {
     // If no expected values provided, just expect it to work (not fail)
