@@ -30,6 +30,19 @@ describe('Monorepo workspace support', () => {
     expect(hasEdgeByRaw).toBe(true);
   });
 
+  it('treats unknown packages as external while resolving workspace packages', async () => {
+    const root = path.join(process.cwd(), 'tests', 'samples', 'monorepo');
+    const files = [
+      path.join(root, 'packages', 'pkg-a', 'src', 'index.ts'),
+      path.join(root, 'packages', 'pkg-b', 'src', 'index.js'),
+    ];
+    const graph = await collectGraph(root, files);
+    const hasPkgA = graph.edges.some(e => e.raw === '@acme/pkg-a' && typeof e.to === 'string');
+    const hasExternal = graph.edges.some(e => e.raw === 'not-a-package' && typeof e.to === 'object' && (e.to as any).external === 'not-a-package');
+    expect(hasPkgA).toBe(true);
+    expect(hasExternal).toBe(true);
+  });
+
   it('resolves exports-based default import across packages', async () => {
     const root = path.join(process.cwd(), 'tests', 'samples', 'monorepo');
     const { buildProjectIndex, goToDefinition } = await import('../src/index.js');
