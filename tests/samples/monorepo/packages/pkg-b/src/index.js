@@ -28,4 +28,7 @@ export * from '@acme/pkg-a';
 // Subpath import consumer (will be exercised when exports provide subpath)
 // import { aHelper as subHelper } from '@acme/pkg-a/sub';
 
+// Unknown external package import (should remain external)
+import x from 'not-a-package';
+
 
