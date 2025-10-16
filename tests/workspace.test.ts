@@ -37,8 +37,8 @@ describe('Monorepo workspace support', () => {
       path.join(root, 'packages', 'pkg-b', 'src', 'index.js'),
     ];
     const graph = await collectGraph(root, files);
-    const hasPkgA = graph.edges.some(e => e.raw === '@acme/pkg-a' && typeof e.to === 'string');
-    const hasExternal = graph.edges.some(e => e.raw === 'not-a-package' && typeof e.to === 'object' && (e.to as any).external === 'not-a-package');
+    const hasPkgA = graph.edges.some(e => e.raw === '@acme/pkg-a' && e.to.type === 'file');
+    const hasExternal = graph.edges.some(e => e.raw === 'not-a-package' && e.to.type === 'external' && e.to.name === 'not-a-package');
     expect(hasPkgA).toBe(true);
     expect(hasExternal).toBe(true);
   });
