@@ -11,6 +11,8 @@ It builds:
 
 It’s deliberately **elegant**, **robust**, and **easy to extend** to new grammars.
 
+Sample graph: [sample-graph.md](./sample-graph.md)
+
 ---
 
 ## Features
@@ -116,6 +118,10 @@ npx codegraph graph --mermaid > graph.mmd
 npx codegraph graph ./src --mermaid --symbols > graph.symbols.mmd
 # Symbols only (no file nodes/edges)
 npx codegraph graph ./src --mermaid --symbols-only > graph.symbols.only.mmd
+# Detailed symbol usage graph (adds symbol -> symbol "uses" edges)
+npx codegraph graph ./src --mermaid --symbols-detailed > graph.symbols.detailed.mmd
+# Detailed + files hybrid
+npx codegraph graph ./src --mermaid --symbols --symbols-detailed > graph.symbols.hybrid.detailed.mmd
 # Preview the Mermaid file in your editor or any Mermaid viewer
 
 # Build a dependency graph in Graphviz DOT format
@@ -180,6 +186,11 @@ npx tsx src/cli.ts goto <file> <line> <column>
     - File-to-symbol containment edges
     - Symbol-to-symbol edges (import alias -> exported definition), labeled by the exported name
   - Use `--symbols-only` to omit file nodes/edges and render only symbols.
+
+  When using `--symbols-detailed`:
+
+  - Adds symbol -> symbol edges labeled `uses` when a symbol’s body references another symbol (via local references, named/default imports, and namespace members).
+  - Can be combined with `--symbols` to include both usage edges and import edges alongside file nodes.
 
 ### Programmatic usage (from code)
 

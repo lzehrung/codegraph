@@ -11,6 +11,7 @@ import {
   graphToDOT,
   astGrep,
   buildSymbolGraph,
+  buildSymbolGraphDetailed,
   graphToMermaidSymbols,
   graphToDOTSymbols,
   graphToMermaidSymbolsWithFiles,
@@ -55,7 +56,8 @@ async function main() {
 
   if (cmd === "graph") {
     const files = await resolveFilesFromRoots();
-    const wantSymbols = flags.includes("--symbols") || flags.includes("--symbols-only");
+    const wantSymbols = flags.includes("--symbols") || flags.includes("--symbols-only") || flags.includes("--symbols-detailed");
+    const detailedSymbols = flags.includes("--symbols-detailed");
     const format = flags.includes("--mermaid")
       ? "mermaid"
       : flags.includes("--dot")
@@ -63,7 +65,7 @@ async function main() {
       : "json";
     if (wantSymbols) {
       const index = await buildProjectIndexFromFiles(root, files);
-      const sgraph = await buildSymbolGraph(index);
+      const sgraph = detailedSymbols ? await buildSymbolGraphDetailed(index) : await buildSymbolGraph(index);
       if (flags.includes("--symbols-only")) {
         if (format === "mermaid") writeStdoutLine(graphToMermaidSymbols(sgraph, root));
         else if (format === "dot") writeStdoutLine(graphToDOTSymbols(sgraph, root));
