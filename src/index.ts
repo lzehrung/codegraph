@@ -1511,6 +1511,7 @@ async function collectImportsForFile(
     }
   };
 
+  let ranFallback = false;
   try {
     const q = new Parser.Query(lang, sup.queries.importBindings);
     for (const m of q.matches(tree.rootNode)) {
@@ -1613,6 +1614,29 @@ async function collectImportsForFile(
     }
   } catch {
     await runFallback();
+    ranFallback = true;
+  }
+  // Supplement with regex fallback to catch any cases the query missed
+  if (!ranFallback) {
+    const before = imports.length;
+    await runFallback();
+    if (imports.length > before) {
+      // dedupe overlapping entries
+      const seen = new Set<string>();
+      const out: ImportBinding[] = [];
+      for (const imp of imports) {
+        let key = imp.kind;
+        if (imp.kind === "named") key += `|${imp.local}|${imp.from}`;
+        else if (imp.kind === "default") key += `|${imp.local}|${imp.from}`;
+        else if (imp.kind === "namespace") key += `|${imp.localNS}|${imp.from}`;
+        else if (imp.kind === "star") key += `|${imp.from}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          out.push(imp);
+        }
+      }
+      imports.splice(0, imports.length, ...out);
+    }
   }
   return imports;
 }
@@ -1739,6 +1763,109 @@ export async function buildProjectIndex(
     } catch (error) {
       console.warn(`Warning: Failed to process file ${f}:`, error);
       // Return a minimal module index for failed files
+      const mod: ModuleIndex = {
+        file: f,
+        exports: [],
+        imports: [],
+        locals: [],
+      };
+      return [f, mod] as const;
+    }
+  });
+
+  const fileResults = await Promise.all(filePromises);
+  for (const [f, mod] of fileResults) {
+    modules.set(f.replace(/\\/g, "/"), mod);
+  }
+
+  // Expand Python `from x import *` using __all__ or public locals
+  for (const [file, m] of modules) {
+    for (const imp of [...m.imports]) {
+      if (imp.kind === "star" && typeof imp.resolved === "string") {
+        const target = modules.get(imp.resolved);
+        if (target) {
+          let exported: string[] = [];
+          const viaAll = target.exports.filter((e) => e.type === "local");
+          if (viaAll.length) exported = viaAll.map((e: any) => e.exportedAs);
+          else
+            exported = target.locals
+              .map((l) => l.localName)
+              .filter((n) => !n.startsWith("_"));
+          for (const name of exported) {
+            m.imports.push({
+              kind: "named",
+              local: name,
+              imported: name,
+              from: imp.from,
+              resolved: imp.resolved,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  const graph = await collectGraph(projectRoot, files);
+  return { graph, modules, byFile: modules, exportCache: new Map() };
+}
+
+export async function buildProjectIndexFromFiles(
+  projectRoot: string,
+  inputFiles: string[]
+): Promise<ProjectIndex> {
+  const files = Array.from(
+    new Set(
+      (inputFiles || [])
+        .filter(Boolean)
+        .map((f) => path.resolve(f))
+    )
+  );
+  if (files.length === 0) {
+    console.warn(`Warning: No files provided for indexing in ${projectRoot}`);
+  }
+  const modules = new Map<FileId, ModuleIndex>();
+
+  // First pass: per-file locals/exports and imports (parallel processing)
+  const filePromises = files.map(async (f) => {
+    try {
+      const sup = supportForFile(f);
+      const lang = languageForFile(f);
+      const src = await fsp.readFile(f, "utf8");
+      const imports = await collectImportsForFile(f, projectRoot);
+      const mod = collectLocalsAndExportsFromSource(f, src, sup, lang, imports);
+      mod.imports = imports;
+
+      // Resolve re-exports to files (TS/JS and Python)
+      if (sup.supportsCrossModuleSymbols) {
+        if (sup.id === "ts" || sup.id === "js") {
+          const { matchPath } = await loadNearestTsconfigFor(f);
+          for (const e of mod.exports)
+            if (e.type !== "local") {
+              if (e.fromModule.startsWith(".")) {
+                const resolved = await resolveSpecifier(
+                  f,
+                  e.fromModule,
+                  projectRoot,
+                  matchPath,
+                  await loadWorkspaceConfig(projectRoot)
+                );
+                if (typeof resolved === "string") e.fromModule = resolved;
+              } else {
+                const ws = await loadWorkspaceConfig(projectRoot);
+                const pkgResolved = await resolveWorkspacePackage(
+                  e.fromModule,
+                  ws
+                );
+                if (pkgResolved) e.fromModule = pkgResolved;
+              }
+            }
+        } else if (sup.id === "python") {
+          // Python doesn't have re-exports like TS/JS
+        }
+      }
+      return [f, mod] as const;
+    } catch (error) {
+      console.warn(`Warning: Failed to process file ${f}:`, error);
       const mod: ModuleIndex = {
         file: f,
         exports: [],
@@ -2637,5 +2764,156 @@ export function graphToMermaid(graph: Graph): string {
     const toId = idOf.get(edgeTargetToString(e.to))!;
     lines.push(`${fromId} --> ${toId}`);
   }
+  return lines.join("\n");
+}
+
+/* -------------------------------------------------------------------------- */
+/* Symbol-level graph                                                          */
+/* -------------------------------------------------------------------------- */
+
+export type SymbolNodeKind = SymbolKind | "import" | "namespaceImport" | "export";
+export type SymbolNode = {
+  id: string;
+  file: FileId;
+  name: string;
+  kind: SymbolNodeKind;
+};
+export type SymbolEdge = { from: string; to: string; label?: string };
+export type SymbolGraph = { nodes: Map<string, SymbolNode>; edges: SymbolEdge[] };
+
+function defNodeId(def: SymbolDef): string {
+  return `${def.file}::${def.localName}::${def.range.start.index}`;
+}
+
+function nodeForDef(def: SymbolDef): SymbolNode {
+  return { id: defNodeId(def), file: def.file, name: def.localName, kind: def.kind };
+}
+
+export async function buildSymbolGraph(index: ProjectIndex): Promise<SymbolGraph> {
+  const nodes = new Map<string, SymbolNode>();
+  const edges: SymbolEdge[] = [];
+
+  // Add definition nodes for all locals
+  for (const [, mod] of index.byFile) {
+    for (const def of mod.locals) {
+      const n = nodeForDef(def);
+      if (!nodes.has(n.id)) nodes.set(n.id, n);
+    }
+  }
+
+  // Build alias nodes directly from imports and connect edges
+  for (const [file, mod] of index.byFile) {
+    for (const imp of mod.imports) {
+      if (imp.kind === "named") {
+        const aliasId = `${file}::${imp.local}::import`;
+        if (!nodes.has(aliasId))
+          nodes.set(aliasId, { id: aliasId, file, name: imp.local, kind: "import" });
+        const def = resolveImported(index, imp, imp.imported);
+        if (def) {
+          const toId = defNodeId(def);
+          if (!nodes.has(toId)) nodes.set(toId, nodeForDef(def));
+          edges.push({ from: aliasId, to: toId, label: imp.imported });
+        }
+      } else if (imp.kind === "default") {
+        const aliasId = `${file}::${imp.local}::import`;
+        if (!nodes.has(aliasId))
+          nodes.set(aliasId, { id: aliasId, file, name: imp.local, kind: "import" });
+        const def = resolveImported(index, imp, "default");
+        if (def) {
+          const toId = defNodeId(def);
+          if (!nodes.has(toId)) nodes.set(toId, nodeForDef(def));
+          edges.push({ from: aliasId, to: toId, label: "default" });
+        }
+      } else if (imp.kind === "namespace") {
+        const aliasId = `${file}::${imp.localNS}::import`;
+        if (!nodes.has(aliasId))
+          nodes.set(aliasId, { id: aliasId, file, name: imp.localNS, kind: "namespaceImport" });
+        const targetFile = typeof imp.resolved === "string" ? imp.resolved.replace(/\\/g, "/") : undefined;
+        if (!targetFile) continue;
+        const targetMod = index.byFile.get(targetFile);
+        if (!targetMod) continue;
+        const exportedLocals = targetMod.exports.filter((e) => e.type === "local") as any[];
+        for (const e of exportedLocals) {
+          const memberName = e.exportedAs as string;
+          const def = e.target as SymbolDef;
+          const hits = await collectNamespaceMemberRefs(file, imp.localNS, memberName);
+          if (hits.length > 0) {
+            const toId = defNodeId(def);
+            if (!nodes.has(toId)) nodes.set(toId, nodeForDef(def));
+            edges.push({ from: aliasId, to: toId, label: memberName });
+          }
+        }
+      }
+    }
+  }
+
+  return { nodes, edges };
+}
+
+export function graphToMermaidSymbols(sg: SymbolGraph, projectRoot?: string): string {
+  const idOf = new Map<string, string>();
+  const labels = new Map<string, string>();
+  let i = 0;
+  const toDisp = (node: SymbolNode) => {
+    const rel = projectRoot ? path.relative(projectRoot, node.file).replace(/\\/g, "/") : node.file;
+    const base = path.basename(rel);
+    if (node.kind === "import") return `${base}:${node.name} (import)`;
+    if (node.kind === "namespaceImport") return `${base}:${node.name} (ns)`;
+    return `${base}:${node.name}`;
+  };
+  for (const [id, n] of sg.nodes) {
+    const nid = `n${i++}`;
+    idOf.set(id, nid);
+    labels.set(nid, toDisp(n));
+  }
+  const declared = new Set<string>();
+  const lines: string[] = ["flowchart LR"]; 
+  for (const [id, label] of labels) {
+    if (declared.has(id)) continue;
+    declared.add(id);
+    const safe = label.replace(/\\/g, "/");
+    lines.push(`${id}[\"${safe}\"]`);
+  }
+  for (const e of sg.edges) {
+    const fromId = idOf.get(e.from)!;
+    const toId = idOf.get(e.to)!;
+    if (e.label) lines.push(`${fromId} -- \"${e.label}\" --> ${toId}`);
+    else lines.push(`${fromId} --> ${toId}`);
+  }
+  return lines.join("\n");
+}
+
+export function graphToDOTSymbols(sg: SymbolGraph, projectRoot?: string): string {
+  const idOf = new Map<string, string>();
+  const labels = new Map<string, string>();
+  let i = 0;
+  const toDisp = (node: SymbolNode) => {
+    const rel = projectRoot ? path.relative(projectRoot, node.file).replace(/\\/g, "/") : node.file;
+    const base = path.basename(rel);
+    if (node.kind === "import") return `${base}:${node.name} (import)`;
+    if (node.kind === "namespaceImport") return `${base}:${node.name} (ns)`;
+    return `${base}:${node.name}`;
+  };
+  for (const [id, n] of sg.nodes) {
+    const nid = `n${i++}`;
+    idOf.set(id, nid);
+    labels.set(nid, toDisp(n));
+  }
+  const lines: string[] = [];
+  lines.push("digraph G {");
+  lines.push("  rankdir=LR;");
+  lines.push('  node [shape=box, fontsize=10, fontname="Arial"];\n');
+  for (const [id, label] of labels) {
+    const safeLabel = label.replace(/\\/g, "/");
+    lines.push(`  ${id} [label=\"${safeLabel}\"];`);
+  }
+  for (const e of sg.edges) {
+    const fromId = idOf.get(e.from)!;
+    const toId = idOf.get(e.to)!;
+    const attrs: string[] = [];
+    if (e.label) attrs.push(`label=\"${e.label}\"`);
+    lines.push(`  ${fromId} -> ${toId}${attrs.length ? " [" + attrs.join(",") + "]" : ""};`);
+  }
+  lines.push("}");
   return lines.join("\n");
 }

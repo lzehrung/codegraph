@@ -4,11 +4,15 @@ import {
   listProjectFiles,
   collectGraph,
   buildProjectIndex,
+  buildProjectIndexFromFiles,
   goToDefinition,
   findReferences,
   graphToMermaid,
   graphToDOT,
   astGrep,
+  buildSymbolGraph,
+  graphToMermaidSymbols,
+  graphToDOTSymbols,
 } from "./index.js";
 
 function toJSON(obj: any) {
@@ -39,15 +43,31 @@ async function main() {
   const flags = args.filter(a => a.startsWith("--"));
   const nonFlags = args.filter(a => !a.startsWith("--"));
   const root = nonFlags[1] ?? process.cwd();
+  const roots = cmd === "graph" || cmd === "index" ? nonFlags.slice(1) : [];
+
+  const resolveFilesFromRoots = async (): Promise<string[]> => {
+    if (roots.length === 0) return await listProjectFiles(root);
+    const all: string[][] = await Promise.all(roots.map(async (r) => await listProjectFiles(r)));
+    return Array.from(new Set(all.flat()));
+  };
 
   if (cmd === "graph") {
-    const files = await listProjectFiles(root);
-    const graph = await collectGraph(root, files);
+    const files = await resolveFilesFromRoots();
+    const wantSymbols = flags.includes("--symbols");
     const format = flags.includes("--mermaid")
       ? "mermaid"
       : flags.includes("--dot")
       ? "dot"
       : "json";
+    if (wantSymbols) {
+      const index = await buildProjectIndexFromFiles(root, files);
+      const sgraph = await buildSymbolGraph(index);
+      if (format === "mermaid") writeStdoutLine(graphToMermaidSymbols(sgraph, root));
+      else if (format === "dot") writeStdoutLine(graphToDOTSymbols(sgraph, root));
+      else writeJSONLine({ nodes: [...sgraph.nodes.values()], edges: sgraph.edges });
+      return;
+    }
+    const graph = await collectGraph(root, files);
     if (format === "mermaid") writeStdoutLine(graphToMermaid(graph));
     else if (format === "dot") writeStdoutLine(graphToDOT(graph));
     else writeJSONLine({ nodes: [...graph.nodes], edges: graph.edges });
@@ -55,11 +75,23 @@ async function main() {
   }
 
   if (cmd === "index") {
-    const index = await buildProjectIndex(root);
-    writeJSONLine({
-      files: [...index.byFile.keys()].length,
-      edges: index.graph.edges.length,
-    });
+    const files = await resolveFilesFromRoots();
+    const index = await buildProjectIndexFromFiles(root, files);
+    const full = flags.includes("--json") || flags.includes("--full");
+    if (full) {
+      const modules = [...index.byFile.values()].map((m) => ({
+        file: m.file,
+        locals: m.locals.map((l) => ({ name: l.localName, kind: l.kind, start: l.range.start })),
+        exports: m.exports,
+        imports: m.imports,
+      }));
+      writeJSONLine({ files: modules.length, edges: index.graph.edges.length, modules });
+    } else {
+      writeJSONLine({
+        files: [...index.byFile.keys()].length,
+        edges: index.graph.edges.length,
+      });
+    }
     return;
   }
 
