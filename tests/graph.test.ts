@@ -186,6 +186,8 @@ describe('Dependency Graph', () => {
       expect(mermaid).toMatch(/utils\.ts/);
       // Should include a labeled symbol edge for helperFunction
       expect(mermaid).toMatch(/-- \"helperFunction\" -->/);
+      // No undefined targets in edges
+      expect(mermaid).not.toMatch(/-->\s+undefined/);
     });
   });
 });

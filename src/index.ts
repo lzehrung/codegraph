@@ -2919,22 +2919,30 @@ export function graphToDOTSymbols(sg: SymbolGraph, projectRoot?: string): string
 }
 
 export function graphToMermaidSymbolsWithFiles(sg: SymbolGraph, fg: Graph, projectRoot?: string): string {
-  // Separate ID spaces for files and symbols
+  // Separate ID spaces for files/external and symbols
   const fileIdOf = new Map<string, string>();
-  const fileLabels = new Map<string, string>();
+  const fileNodeMeta = new Map<string, { label: string; external: boolean }>();
   let fi = 0;
   const fileLabel = (file: string) => (projectRoot ? path.relative(projectRoot, file).replace(/\\/g, "/") : file);
   const ensureFile = (file: string) => {
     if (!fileIdOf.has(file)) {
       const id = `f${fi++}`;
       fileIdOf.set(file, id);
-      fileLabels.set(id, fileLabel(file));
+      fileNodeMeta.set(id, { label: fileLabel(file), external: false });
+    }
+  };
+  const ensureExternal = (name: string) => {
+    if (!fileIdOf.has(name)) {
+      const id = `f${fi++}`;
+      fileIdOf.set(name, id);
+      fileNodeMeta.set(id, { label: name, external: true });
     }
   };
   for (const f of fg.nodes) ensureFile(f);
   for (const e of fg.edges) {
     ensureFile(e.from);
     if (e.to.type === "file") ensureFile(e.to.path);
+    else ensureExternal(e.to.name);
   }
 
   const symIdOf = new Map<string, string>();
@@ -2955,12 +2963,12 @@ export function graphToMermaidSymbolsWithFiles(sg: SymbolGraph, fg: Graph, proje
   const declared = new Set<string>();
   const lines: string[] = ["flowchart LR"]; 
 
-  // Declare file nodes
-  for (const [id, label] of fileLabels) {
+  // Declare file and external nodes
+  for (const [id, meta] of fileNodeMeta) {
     if (declared.has(id)) continue;
     declared.add(id);
-    const safe = label.replace(/\\/g, "/");
-    lines.push(`${id}[\"${safe}\"]`);
+    const safe = meta.label.replace(/\\/g, "/");
+    lines.push(meta.external ? `${id}([\"${safe}\"])` : `${id}[\"${safe}\"]`);
   }
   // Declare symbol nodes
   for (const [id, label] of symLabels) {
@@ -2973,7 +2981,8 @@ export function graphToMermaidSymbolsWithFiles(sg: SymbolGraph, fg: Graph, proje
   // File dependency edges
   for (const e of fg.edges) {
     const fromId = fileIdOf.get(e.from)!;
-    const toId = fileIdOf.get(edgeTargetToString(e.to))!;
+    const targetKey = e.to.type === "file" ? e.to.path : e.to.name;
+    const toId = fileIdOf.get(targetKey)!;
     lines.push(`${fromId} --> ${toId}`);
   }
 
@@ -2997,20 +3006,28 @@ export function graphToMermaidSymbolsWithFiles(sg: SymbolGraph, fg: Graph, proje
 
 export function graphToDOTSymbolsWithFiles(sg: SymbolGraph, fg: Graph, projectRoot?: string): string {
   const fileIdOf = new Map<string, string>();
-  const fileLabels = new Map<string, string>();
+  const fileNodeMeta = new Map<string, { label: string; external: boolean }>();
   let fi = 0;
   const fileLabel = (file: string) => (projectRoot ? path.relative(projectRoot, file).replace(/\\/g, "/") : file);
   const ensureFile = (file: string) => {
     if (!fileIdOf.has(file)) {
       const id = `f${fi++}`;
       fileIdOf.set(file, id);
-      fileLabels.set(id, fileLabel(file));
+      fileNodeMeta.set(id, { label: fileLabel(file), external: false });
+    }
+  };
+  const ensureExternal = (name: string) => {
+    if (!fileIdOf.has(name)) {
+      const id = `f${fi++}`;
+      fileIdOf.set(name, id);
+      fileNodeMeta.set(id, { label: name, external: true });
     }
   };
   for (const f of fg.nodes) ensureFile(f);
   for (const e of fg.edges) {
     ensureFile(e.from);
     if (e.to.type === "file") ensureFile(e.to.path);
+    else ensureExternal(e.to.name);
   }
 
   const symIdOf = new Map<string, string>();
@@ -3032,9 +3049,9 @@ export function graphToDOTSymbolsWithFiles(sg: SymbolGraph, fg: Graph, projectRo
   lines.push("digraph G {");
   lines.push("  rankdir=LR;");
   lines.push('  node [shape=box, fontsize=10, fontname="Arial"];\n');
-  for (const [id, label] of fileLabels) {
-    const safe = label.replace(/\\/g, "/");
-    lines.push(`  ${id} [label=\"${safe}\"];`);
+  for (const [id, meta] of fileNodeMeta) {
+    const safe = meta.label.replace(/\\/g, "/");
+    lines.push(`  ${id} [label=\"${safe}\", ${meta.external ? 'shape=ellipse, style=dashed' : 'shape=box'}];`);
   }
   for (const [id, label] of symLabels) {
     const safe = label.replace(/\\/g, "/");
@@ -3042,7 +3059,8 @@ export function graphToDOTSymbolsWithFiles(sg: SymbolGraph, fg: Graph, projectRo
   }
   for (const e of fg.edges) {
     const fromId = fileIdOf.get(e.from)!;
-    const toId = fileIdOf.get(edgeTargetToString(e.to))!;
+    const targetKey = e.to.type === "file" ? e.to.path : e.to.name;
+    const toId = fileIdOf.get(targetKey)!;
     lines.push(`  ${fromId} -> ${toId};`);
   }
   for (const [sidKey, sid] of symIdOf) {
