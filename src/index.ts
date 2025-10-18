@@ -2917,3 +2917,146 @@ export function graphToDOTSymbols(sg: SymbolGraph, projectRoot?: string): string
   lines.push("}");
   return lines.join("\n");
 }
+
+export function graphToMermaidSymbolsWithFiles(sg: SymbolGraph, fg: Graph, projectRoot?: string): string {
+  // Separate ID spaces for files and symbols
+  const fileIdOf = new Map<string, string>();
+  const fileLabels = new Map<string, string>();
+  let fi = 0;
+  const fileLabel = (file: string) => (projectRoot ? path.relative(projectRoot, file).replace(/\\/g, "/") : file);
+  const ensureFile = (file: string) => {
+    if (!fileIdOf.has(file)) {
+      const id = `f${fi++}`;
+      fileIdOf.set(file, id);
+      fileLabels.set(id, fileLabel(file));
+    }
+  };
+  for (const f of fg.nodes) ensureFile(f);
+  for (const e of fg.edges) {
+    ensureFile(e.from);
+    if (e.to.type === "file") ensureFile(e.to.path);
+  }
+
+  const symIdOf = new Map<string, string>();
+  const symLabels = new Map<string, string>();
+  let si = 0;
+  const symDisp = (node: SymbolNode) => {
+    const base = path.basename(node.file);
+    if (node.kind === "import") return `${base}:${node.name} (import)`;
+    if (node.kind === "namespaceImport") return `${base}:${node.name} (ns)`;
+    return `${base}:${node.name}`;
+  };
+  for (const [id, n] of sg.nodes) {
+    const sid = `s${si++}`;
+    symIdOf.set(id, sid);
+    symLabels.set(sid, symDisp(n));
+  }
+
+  const declared = new Set<string>();
+  const lines: string[] = ["flowchart LR"]; 
+
+  // Declare file nodes
+  for (const [id, label] of fileLabels) {
+    if (declared.has(id)) continue;
+    declared.add(id);
+    const safe = label.replace(/\\/g, "/");
+    lines.push(`${id}[\"${safe}\"]`);
+  }
+  // Declare symbol nodes
+  for (const [id, label] of symLabels) {
+    if (declared.has(id)) continue;
+    declared.add(id);
+    const safe = label.replace(/\\/g, "/");
+    lines.push(`${id}[\"${safe}\"]`);
+  }
+
+  // File dependency edges
+  for (const e of fg.edges) {
+    const fromId = fileIdOf.get(e.from)!;
+    const toId = fileIdOf.get(edgeTargetToString(e.to))!;
+    lines.push(`${fromId} --> ${toId}`);
+  }
+
+  // Connect files to their symbols (containment)
+  for (const [sidKey, sid] of symIdOf) {
+    const node = sg.nodes.get(sidKey)!;
+    const fid = fileIdOf.get(node.file);
+    if (fid) lines.push(`${fid} --> ${sid}`);
+  }
+
+  // Symbol edges (import alias -> definition)
+  for (const e of sg.edges) {
+    const fromId = symIdOf.get(e.from)!;
+    const toId = symIdOf.get(e.to)!;
+    if (e.label) lines.push(`${fromId} -- \"${e.label}\" --> ${toId}`);
+    else lines.push(`${fromId} --> ${toId}`);
+  }
+
+  return lines.join("\n");
+}
+
+export function graphToDOTSymbolsWithFiles(sg: SymbolGraph, fg: Graph, projectRoot?: string): string {
+  const fileIdOf = new Map<string, string>();
+  const fileLabels = new Map<string, string>();
+  let fi = 0;
+  const fileLabel = (file: string) => (projectRoot ? path.relative(projectRoot, file).replace(/\\/g, "/") : file);
+  const ensureFile = (file: string) => {
+    if (!fileIdOf.has(file)) {
+      const id = `f${fi++}`;
+      fileIdOf.set(file, id);
+      fileLabels.set(id, fileLabel(file));
+    }
+  };
+  for (const f of fg.nodes) ensureFile(f);
+  for (const e of fg.edges) {
+    ensureFile(e.from);
+    if (e.to.type === "file") ensureFile(e.to.path);
+  }
+
+  const symIdOf = new Map<string, string>();
+  const symLabels = new Map<string, string>();
+  let si = 0;
+  const symDisp = (node: SymbolNode) => {
+    const base = path.basename(node.file);
+    if (node.kind === "import") return `${base}:${node.name} (import)`;
+    if (node.kind === "namespaceImport") return `${base}:${node.name} (ns)`;
+    return `${base}:${node.name}`;
+  };
+  for (const [id, n] of sg.nodes) {
+    const sid = `s${si++}`;
+    symIdOf.set(id, sid);
+    symLabels.set(sid, symDisp(n));
+  }
+
+  const lines: string[] = [];
+  lines.push("digraph G {");
+  lines.push("  rankdir=LR;");
+  lines.push('  node [shape=box, fontsize=10, fontname="Arial"];\n');
+  for (const [id, label] of fileLabels) {
+    const safe = label.replace(/\\/g, "/");
+    lines.push(`  ${id} [label=\"${safe}\"];`);
+  }
+  for (const [id, label] of symLabels) {
+    const safe = label.replace(/\\/g, "/");
+    lines.push(`  ${id} [label=\"${safe}\"];`);
+  }
+  for (const e of fg.edges) {
+    const fromId = fileIdOf.get(e.from)!;
+    const toId = fileIdOf.get(edgeTargetToString(e.to))!;
+    lines.push(`  ${fromId} -> ${toId};`);
+  }
+  for (const [sidKey, sid] of symIdOf) {
+    const node = sg.nodes.get(sidKey)!;
+    const fid = fileIdOf.get(node.file);
+    if (fid) lines.push(`  ${fid} -> ${sid};`);
+  }
+  for (const e of sg.edges) {
+    const fromId = symIdOf.get(e.from)!;
+    const toId = symIdOf.get(e.to)!;
+    const attrs: string[] = [];
+    if (e.label) attrs.push(`label=\"${e.label}\"`);
+    lines.push(`  ${fromId} -> ${toId}${attrs.length ? " [" + attrs.join(",") + "]" : ""};`);
+  }
+  lines.push("}");
+  return lines.join("\n");
+}

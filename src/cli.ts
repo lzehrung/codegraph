@@ -13,6 +13,8 @@ import {
   buildSymbolGraph,
   graphToMermaidSymbols,
   graphToDOTSymbols,
+  graphToMermaidSymbolsWithFiles,
+  graphToDOTSymbolsWithFiles,
 } from "./index.js";
 
 function toJSON(obj: any) {
@@ -53,7 +55,7 @@ async function main() {
 
   if (cmd === "graph") {
     const files = await resolveFilesFromRoots();
-    const wantSymbols = flags.includes("--symbols");
+    const wantSymbols = flags.includes("--symbols") || flags.includes("--symbols-only");
     const format = flags.includes("--mermaid")
       ? "mermaid"
       : flags.includes("--dot")
@@ -62,9 +64,16 @@ async function main() {
     if (wantSymbols) {
       const index = await buildProjectIndexFromFiles(root, files);
       const sgraph = await buildSymbolGraph(index);
-      if (format === "mermaid") writeStdoutLine(graphToMermaidSymbols(sgraph, root));
-      else if (format === "dot") writeStdoutLine(graphToDOTSymbols(sgraph, root));
-      else writeJSONLine({ nodes: [...sgraph.nodes.values()], edges: sgraph.edges });
+      if (flags.includes("--symbols-only")) {
+        if (format === "mermaid") writeStdoutLine(graphToMermaidSymbols(sgraph, root));
+        else if (format === "dot") writeStdoutLine(graphToDOTSymbols(sgraph, root));
+        else writeJSONLine({ nodes: [...sgraph.nodes.values()], edges: sgraph.edges });
+        return;
+      }
+      const fgraph = await collectGraph(root, files);
+      if (format === "mermaid") writeStdoutLine(graphToMermaidSymbolsWithFiles(sgraph, fgraph, root));
+      else if (format === "dot") writeStdoutLine(graphToDOTSymbolsWithFiles(sgraph, fgraph, root));
+      else writeJSONLine({ files: [...fgraph.nodes], fileEdges: fgraph.edges, symbols: [...sgraph.nodes.values()], symbolEdges: sgraph.edges });
       return;
     }
     const graph = await collectGraph(root, files);
