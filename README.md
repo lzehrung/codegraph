@@ -101,34 +101,37 @@ npm run build
 
 ### CLI Commands
 
-After installing the package, use the `dep-graph` CLI:
+After installing the package, use the `codegraph` CLI:
 
 ```bash
-# Build a dependency graph (prints nodes + edges)
-npx dep-graph graph
+# Build a dependency graph (prints nodes + edges as JSON)
+npx codegraph graph
 
 # Build a dependency graph in Mermaid format
-npx dep-graph graph --mermaid > graph.mmd
+npx codegraph graph --mermaid > graph.mmd
 # Preview the Mermaid file in your editor or any Mermaid viewer
 
 # Build a dependency graph in Graphviz DOT format
-npx dep-graph graph --dot > graph.dot
+npx codegraph graph --dot > graph.dot
 # Render to SVG (requires Graphviz)
 dot -Tsvg graph.dot -o graph.svg
 
+# Specify a different root directory (optional, defaults to current directory)
+npx codegraph graph /path/to/project --mermaid > graph.mmd
+
 # Build the full project index (graph + per-file symbol indexes)
-npx dep-graph index
+npx codegraph index
 
 # Go to definition of symbol at file:line:column
-npx dep-graph goto <file> <line> <column>
+npx codegraph goto <file> <line> <column>
 
 # Find references of symbol at a location
-npx dep-graph refs --file <file> --line <line> --col <column>
+npx codegraph refs --file <file> --line <line> --col <column>
 # Pretty-print only the file:line:col
-npx dep-graph refs --file <file> --line <line> --col <column> --pretty
+npx codegraph refs --file <file> --line <line> --col <column> --pretty
 
 # Run a Tree-sitter query across the repo
-npx dep-graph grep --query '(function_declaration name: (identifier) @name)'
+npx codegraph grep --query '(function_declaration name: (identifier) @name)'
 ```
 
 ### For Local Development
@@ -164,7 +167,7 @@ Minimal TypeScript/ESM examples. Import from the package and call directly.
 Build full project index and go to definition:
 
 ```ts
-import { buildProjectIndex, goToDefinition } from 'dep-graph';
+import { buildProjectIndex, goToDefinition } from 'codegraph';
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
@@ -179,7 +182,7 @@ if (res.status === 'ok') {
 Find references:
 
 ```ts
-import { findReferences } from 'dep-graph';
+import { findReferences } from 'codegraph';
 
 const refs = await findReferences(index, { file, line: 21, column: 18 });
 if (refs.status === 'ok') {
@@ -190,7 +193,7 @@ if (refs.status === 'ok') {
 Get dependency graph in-memory and iterate edges:
 
 ```ts
-import { listProjectFiles, collectGraph } from 'dep-graph';
+import { listProjectFiles, collectGraph } from 'codegraph';
 
 const files = await listProjectFiles(root);
 const graph = await collectGraph(root, files);
@@ -206,7 +209,7 @@ for (const e of graph.edges) {
 Produce a Mermaid diagram string (for UI or chat rendering):
 
 ```ts
-import { graphToMermaid } from 'dep-graph';
+import { graphToMermaid } from 'codegraph';
 
 const mermaid = graphToMermaid(graph);
 console.log(mermaid);
@@ -215,7 +218,7 @@ console.log(mermaid);
 Simple wrappers as "LLM tools" (no HTTP/MCP), returning JSONable payloads:
 
 ```ts
-import { listProjectFiles, collectGraph, buildProjectIndex, goToDefinition, findReferences } from 'dep-graph';
+import { listProjectFiles, collectGraph, buildProjectIndex, goToDefinition, findReferences } from 'codegraph';
 
 export async function tool_graphJSON(root: string) {
   const files = await listProjectFiles(root);
@@ -357,5 +360,26 @@ Yes. Both `const { helperFunction } = require('./module')` and `const { helperFu
 
 **Q: Does it work with monorepos?**
 Yes. It detects npm/yarn/pnpm/lerna workspaces and resolves package-relative imports correctly.
+
+---
+
+## Contributing & Releases
+
+This package uses GitHub-based releases (no npm publish required). To create a new release:
+
+```bash
+# Make your changes, commit them, then:
+npm run release:patch  # Bug fixes (1.0.0 → 1.0.1)
+npm run release:minor  # New features (1.0.0 → 1.1.0)
+npm run release:major  # Breaking changes (1.0.0 → 2.0.0)
+```
+
+Uses npm's built-in `version` command (zero dependencies):
+- Runs tests and builds the package (`preversion` hook)
+- Bumps the version in package.json
+- Creates a git commit and tag
+- Pushes everything to GitHub (`postversion` hook)
+
+See [PUBLISHING.md](./PUBLISHING.md) for detailed instructions.
 
 ---

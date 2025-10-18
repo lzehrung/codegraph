@@ -102,16 +102,17 @@ Then run `npm install`.
 
 ```powershell
 # After installing in a project
-npx dep-graph graph
-npx dep-graph index
-npx dep-graph goto src/index.ts 10 5
-npx dep-graph refs --file src/index.ts --line 10 --col 5
+npx codegraph graph
+npx codegraph graph --mermaid > graph.mmd
+npx codegraph index
+npx codegraph goto src/index.ts 10 5
+npx codegraph refs --file src/index.ts --line 10 --col 5
 ```
 
 ### Programmatic Usage
 
 ```typescript
-import { buildProjectIndex, goToDefinition, findReferences } from "dep-graph";
+import { buildProjectIndex, goToDefinition, findReferences } from "codegraph";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
@@ -140,18 +141,92 @@ const refs = await findReferences(index, {
 
 ## Updating the Package
 
-To release a new version:
+### Automated Release (Recommended)
 
-1. Make your changes
-2. Build and test locally: `npm run build`
-3. Commit: `git commit -am "your changes"`
-4. Tag: `git tag v1.0.1`
-5. Push: `git push origin main && git push origin v1.0.1`
-
-Users can then update to the new version:
+Use npm's built-in `version` command to automatically bump version, run tests, build, commit, tag, and push:
 
 ```powershell
-npm install github:your-username/dep-graph#v1.0.1
+# Patch release (1.0.0 → 1.0.1) - bug fixes
+npm run release:patch
+
+# Minor release (1.0.0 → 1.1.0) - new features, backward compatible
+npm run release:minor
+
+# Major release (1.0.0 → 2.0.0) - breaking changes
+npm run release:major
+```
+
+**What it does (zero dependencies, uses npm built-ins):**
+
+1. **`preversion`** hook runs first:
+   - ✓ Runs tests (`npm test`)
+   - ✓ Builds the package (`npm run build`)
+   - ✓ Fails if tests or build fail
+
+2. **`npm version`** command:
+   - ✓ Bumps version in package.json
+   - ✓ Creates a git commit: `"v1.0.1"` or custom message
+   - ✓ Creates a git tag (e.g., `v1.0.1`)
+
+3. **`postversion`** hook runs after:
+   - ✓ Pushes commits to GitHub
+   - ✓ Pushes tags to GitHub
+
+**Example workflow:**
+
+```powershell
+# 1. Make your changes
+# Edit files, add features, fix bugs...
+
+# 2. Commit your changes
+git add .
+git commit -m "feat: add new feature"
+
+# 3. Run release (one command does everything!)
+npm run release:minor
+
+# Output:
+# > codegraph@1.0.0 preversion
+# > npm test && npm run build
+#
+# ✓ tests/... (X tests passed)
+# > codegraph@1.0.0 build
+# > tsc -p tsconfig.json
+#
+# v1.1.0
+#
+# > codegraph@1.1.0 postversion
+# > git push && git push --tags
+#
+# To github.com:lzehrung/codegraph.git
+#    abc1234..def5678  main -> main
+#  * [new tag]         v1.1.0 -> v1.1.0
+```
+
+**Benefits:**
+- ✅ Zero additional dependencies
+- ✅ Uses npm's native `version` command
+- ✅ Works everywhere npm works
+- ✅ Standard npm workflow
+- ✅ Fails fast if tests or build break
+
+### Manual Release
+
+If you prefer manual control:
+
+1. Make your changes
+2. Build and test locally: `npm run build && npm test`
+3. Update version in `package.json`
+4. Commit: `git commit -am "chore: bump version to 1.0.1"`
+5. Tag: `git tag v1.0.1`
+6. Push: `git push origin main && git push origin v1.0.1`
+
+### Installing a Specific Version
+
+Users can then install the new version:
+
+```powershell
+npm install github:lzehrung/codegraph#v1.0.1
 ```
 
 ## Alternative: Commit dist/

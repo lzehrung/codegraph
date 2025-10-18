@@ -32,14 +32,20 @@ function writeError(error: unknown) {
 }
 
 async function main() {
-  const [cmd = "graph", root = process.cwd(), ...rest] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const cmd = args[0] ?? "graph";
+  
+  // Extract flags and root directory
+  const flags = args.filter(a => a.startsWith("--"));
+  const nonFlags = args.filter(a => !a.startsWith("--"));
+  const root = nonFlags[1] ?? process.cwd();
 
   if (cmd === "graph") {
     const files = await listProjectFiles(root);
     const graph = await collectGraph(root, files);
-    const format = rest.includes("--mermaid")
+    const format = flags.includes("--mermaid")
       ? "mermaid"
-      : rest.includes("--dot")
+      : flags.includes("--dot")
       ? "dot"
       : "json";
     if (format === "mermaid") writeStdoutLine(graphToMermaid(graph));
@@ -58,7 +64,7 @@ async function main() {
   }
 
   if (cmd === "dumpmod") {
-    const [fileArg] = rest;
+    const [fileArg] = nonFlags.slice(1);
     const file = path.isAbsolute(fileArg!)
       ? fileArg!.replace(/\\/g, "/")
       : path.resolve(root, fileArg!).replace(/\\/g, "/");
@@ -98,7 +104,7 @@ async function main() {
   }
 
   if (cmd === "goto") {
-    const [fileArg, lineArg, colArg] = rest;
+    const [fileArg, lineArg, colArg] = nonFlags.slice(1);
     const file = path.isAbsolute(fileArg!)
       ? fileArg!.replace(/\\/g, "/")
       : path.resolve(root, fileArg!).replace(/\\/g, "/");
@@ -111,18 +117,18 @@ async function main() {
   }
 
   if (cmd === "refs") {
-    const args = Object.fromEntries(
-      rest.reduce<[string, string][]>((acc, cur, i, arr) => {
+    const refArgs = Object.fromEntries(
+      args.slice(1).reduce<[string, string][]>((acc, cur, i, arr) => {
         if (cur.startsWith("--")) acc.push([cur.slice(2), arr[i + 1]] as any);
         return acc;
       }, [])
     );
-    const file = path.isAbsolute(args.file!)
-      ? args.file!.replace(/\\/g, "/")
-      : path.resolve(root, args.file!).replace(/\\/g, "/");
-    const line = Number(args.line!);
-    const column = Number(args.col ?? args.column!);
-    const pretty = rest.includes("--pretty");
+    const file = path.isAbsolute(refArgs.file!)
+      ? refArgs.file!.replace(/\\/g, "/")
+      : path.resolve(root, refArgs.file!).replace(/\\/g, "/");
+    const line = Number(refArgs.line!);
+    const column = Number(refArgs.col ?? refArgs.column!);
+    const pretty = flags.includes("--pretty");
     const index = await buildProjectIndex(root);
     const res = await findReferences(index, { file, line, column });
     if (!pretty) {
@@ -142,12 +148,12 @@ async function main() {
   }
 
   if (cmd === "grep") {
-    const qIdx = rest.indexOf("--query");
-    if (qIdx === -1 || !rest[qIdx + 1]) {
-      writeStderrLine("Usage: grep <root> --query '<treesitter query>'");
+    const qIdx = args.indexOf("--query");
+    if (qIdx === -1 || !args[qIdx + 1]) {
+      writeStderrLine("Usage: grep [root] --query '<treesitter query>'");
       process.exit(2);
     }
-    const querySource = rest[qIdx + 1];
+    const querySource = args[qIdx + 1];
     const hits = await astGrep(root, querySource!);
     writeJSONLine(hits);
     return;
@@ -159,7 +165,8 @@ async function main() {
 
 if (
   import.meta.url === `file://${process.argv[1]}` ||
-  import.meta.url.endsWith("cli.ts")
+  import.meta.url.endsWith("cli.ts") ||
+  import.meta.url.endsWith("cli.js")
 ) {
   main().catch((e) => {
     writeError(e);
