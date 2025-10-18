@@ -499,6 +499,23 @@ export async function listProjectFiles(
   }
 }
 
+/* ----------------------------- Source sanitizers --------------------------- */
+function stripJsLikeComments(src: string): string {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+function stripPythonCommentsAndStrings(src: string): string {
+  let out = src;
+  // Triple-quoted strings
+  out = out.replace(/([rRuU]?[fF]?)("""|''')[\s\S]*?\2/g, "");
+  // Regular strings
+  out = out.replace(/([rRuU]?[fF]?)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g, "");
+  // Line comments
+  out = out.replace(/#.*$/gm, "");
+  return out;
+}
+
 /* ------------------------- Per-file tsconfig discovery --------------------- */
 
 type MatchPathFn = ReturnType<typeof createMatchPath>;
@@ -917,15 +934,16 @@ export function collectModuleSpecifiersFromSource(
 
   // Python: use regex fallback for import detection
   if (support.id === "python") {
+    const src = stripPythonCommentsAndStrings(source);
     // Match: import module
-    const reImport = /^import\s+([A-Za-z_][\w\.]*)/gm;
-    for (const m of source.matchAll(reImport)) {
+    const reImport = /^\s*import\s+([A-Za-z_][\w\.]*)/gm;
+    for (const m of src.matchAll(reImport)) {
       out.push({ spec: m[1]! });
     }
 
     // Match: from module import ... (including relative imports)
-    const reFrom = /^from\s+([A-Za-z_][\w\.]*|\.+[A-Za-z_][\w\.]*)\s+import/gm;
-    for (const m of source.matchAll(reFrom)) {
+    const reFrom = /^\s*from\s+([A-Za-z_][\w\.]*|\.+[A-Za-z_][\w\.]*)\s+import/gm;
+    for (const m of src.matchAll(reFrom)) {
       out.push({ spec: m[1]! });
     }
 
@@ -1278,6 +1296,7 @@ async function collectImportsForFile(
 
   // Python: use robust regex fallback to avoid query fragility
   if (sup.id === "python") {
+    const pySrc = stripPythonCommentsAndStrings(source);
     const pushStar = async (moduleSpec: string) => {
       const m = moduleSpec.match(/^(\.+)(.*)$/);
       const relDots = m ? m[1]!.length : 0;
@@ -1366,8 +1385,8 @@ async function collectImportsForFile(
       });
     };
 
-    const reFromLine = /\bfrom\s+([^\s]+)\s+import\s+([^\n#]+)/g;
-    for (const m of source.matchAll(reFromLine)) {
+    const reFromLine = /^\s*from\s+([^\s]+)\s+import\s+([^\n#]+)/gm;
+    for (const m of pySrc.matchAll(reFromLine)) {
       const mod = m[1]!.trim();
       const items = m[2]!.split(",").map((s) => s.trim());
       for (const it of items) {
@@ -1387,7 +1406,7 @@ async function collectImportsForFile(
     }
     const reImp =
       /^(?:\s*)import\s+([A-Za-z_][\w\.]*)\s*(?:as\s+([A-Za-z_][\w_]*))?/gm;
-    for (const m of source.matchAll(reImp)) {
+    for (const m of pySrc.matchAll(reImp)) {
       const dotted = m[1]!;
       const local = (m[2] ?? dotted.split(".")[0]) as string;
       await pushDefault(dotted, local);
@@ -1411,11 +1430,17 @@ async function collectImportsForFile(
       workspaceConfig
     );
 
+  const stripJsComments = (src: string) =>
+    src
+      .replace(/\/\*[\s\S]*?\*\//g, "") // block comments
+      .replace(/(^|[^:])\/\/.*$/gm, "$1"); // line comments, avoid http://
+
   const runFallback = async () => {
+    const src = sup.id === "ts" || sup.id === "js" ? stripJsComments(source) : source;
     const typeOnlyImport = /\bimport\s+type\b/;
     // import ... from 'mod'
-    const reFrom = /\bimport\s+([^;]*?)\s+from\s+(["'])(?<m>[^"']+)\2/g;
-    for (const m of source.matchAll(reFrom)) {
+    const reFrom = /^\s*import\s+([^\n;]*?)\s+from\s+(["'])(?<m>[^"']+)\2/gm;
+    for (const m of src.matchAll(reFrom)) {
       const clause = m[1]!.trim();
       const mod = (m.groups as any).m as string;
       const typeOnly = typeOnlyImport.test(m[0]!);
@@ -1471,7 +1496,7 @@ async function collectImportsForFile(
     // require patterns
     const reReqDefault =
       /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
-    for (const m of source.matchAll(reReqDefault)) {
+    for (const m of src.matchAll(reReqDefault)) {
       const local = m[1]!;
       const mod = (m.groups as any).m as string;
       const resolved = await resolveFrom(mod);
@@ -1485,7 +1510,7 @@ async function collectImportsForFile(
     }
     const reReqNamed =
       /\b(?:const|let|var)\s*\{([^}]+)\}\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
-    for (const m of source.matchAll(reReqNamed)) {
+    for (const m of src.matchAll(reReqNamed)) {
       const specs = m[1]!
         .split(",")
         .map((s) => s.trim())
