@@ -23,7 +23,7 @@
     "test:ci": "vitest run",
     "test:ui": "vitest --ui",
     "test:run": "vitest run",
-    "preversion": "npm test && npm run build",
+    "preversion": "npm test:ci && npm run build",
     "postversion": "git push && git push --tags",
     "release:patch": "npm version patch",
     "release:minor": "npm version minor",
