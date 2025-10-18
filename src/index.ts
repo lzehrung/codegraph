@@ -2803,7 +2803,7 @@ export type SymbolNode = {
   name: string;
   kind: SymbolNodeKind;
 };
-export type SymbolEdge = { from: string; to: string; label?: string };
+export type SymbolEdge = { from: string; to: string; label?: string | undefined };
 export type SymbolGraph = { nodes: Map<string, SymbolNode>; edges: SymbolEdge[] };
 
 function defNodeId(def: SymbolDef): string {
@@ -3102,4 +3102,133 @@ export function graphToDOTSymbolsWithFiles(sg: SymbolGraph, fg: Graph, projectRo
   }
   lines.push("}");
   return lines.join("\n");
+}
+
+/* -------------------------------------------------------------------------- */
+/* Detailed symbol graph (intra-symbol usage edges)                            */
+/* -------------------------------------------------------------------------- */
+
+function rangeEncloses(outer: Range, inner: Range): boolean {
+  const sIn =
+    inner.start.index >= outer.start.index && inner.start.index <= outer.end.index;
+  const eIn = inner.end.index >= outer.start.index && inner.end.index <= outer.end.index;
+  return sIn && eIn;
+}
+
+async function findDefBodyRange(
+  file: string,
+  source: string,
+  support: LanguageSupport,
+  lang: Parser.Language,
+  def: SymbolDef
+): Promise<Range | null> {
+  try {
+    const parser = new Parser();
+    parser.setLanguage(lang);
+    const tree = parser.parse(source);
+    const targetStart = def.range.start.index;
+    const isTSJS = support.id === 'ts' || support.id === 'js';
+    const isPy = support.id === 'python';
+
+    let body: Range | null = null;
+    const visit = (n: Parser.SyntaxNode) => {
+      if (isTSJS && (n.type === 'function_declaration' || n.type === 'class_declaration')) {
+        const name = n.childForFieldName('name');
+        if (name && name.startIndex === targetStart) body = toRange(n);
+      }
+      if (isPy && (n.type === 'function_definition' || n.type === 'class_definition')) {
+        const name = n.childForFieldName('name');
+        if (name && name.startIndex === targetStart) body = toRange(n);
+      }
+      if (body) return;
+      for (const ch of n.namedChildren) visit(ch);
+    };
+    visit(tree.rootNode);
+    return body;
+  } catch {
+    return null;
+  }
+}
+
+export async function buildSymbolGraphDetailed(index: ProjectIndex): Promise<SymbolGraph> {
+  const base = await buildSymbolGraph(index);
+  const nodes = base.nodes;
+  const edges = base.edges.slice();
+  const added = new Set<string>();
+  const addEdge = (from: string, to: string, label?: string) => {
+    const key = `${from}->${to}::${label ?? ''}`;
+    if (added.has(key)) return;
+    added.add(key);
+    edges.push({ from, to, label });
+  };
+
+  for (const [file, mod] of index.byFile) {
+    const sup = supportForFile(file);
+    const lang = languageForFile(file);
+    let source = '';
+    try { source = await fsp.readFile(file, 'utf8'); } catch {}
+    const scope = buildScopeIndexFromSource(file, source, sup, lang, mod.imports);
+
+    for (const def of mod.locals) {
+      const fromId = defNodeId(def);
+      if (!nodes.has(fromId)) nodes.set(fromId, nodeForDef(def));
+      const body = await findDefBodyRange(file, source, sup, lang, def);
+      if (!body) continue;
+
+      // 1) References to import aliases
+      for (const [name, binds] of scope.bindings) {
+        for (const b of binds) {
+          if (!b.occurrences || b.occurrences.length === 0) continue;
+          const occInBody = b.occurrences.some((r) => rangeEncloses(body, r));
+          if (!occInBody) continue;
+          if (b.import) {
+            const imp = b.import;
+            if (imp.kind === 'named' || imp.kind === 'default') {
+              const exported = imp.kind === 'default' ? 'default' : imp.imported;
+              const target = resolveImported(index, imp, exported);
+              if (target) {
+                const toId = defNodeId(target);
+                if (!nodes.has(toId)) nodes.set(toId, nodeForDef(target));
+                addEdge(fromId, toId, 'uses');
+              }
+            } else if (imp.kind === 'namespace') {
+              const targetFile = typeof imp.resolved === 'string' ? imp.resolved.replace(/\\/g, '/') : undefined;
+              if (!targetFile) continue;
+              const targetMod = index.byFile.get(targetFile);
+              if (!targetMod) continue;
+              const exportedLocals = targetMod.exports.filter((e) => e.type === 'local') as any[];
+              for (const e of exportedLocals) {
+                const memberName = e.exportedAs as string;
+                const defT = e.target as SymbolDef;
+                const memberRefs = await collectNamespaceMemberRefs(file, imp.localNS, memberName);
+                const usedInBody = memberRefs.some((r) => rangeEncloses(body, r));
+                if (usedInBody) {
+                  const toId = defNodeId(defT);
+                  if (!nodes.has(toId)) nodes.set(toId, nodeForDef(defT));
+                  addEdge(fromId, toId, 'uses');
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // 2) References to local symbols within the same file
+      for (const [name, binds] of scope.bindings) {
+        for (const b of binds) {
+          if (!b.def || name === def.localName) continue;
+          const occInBody = b.occurrences?.some((r) => rangeEncloses(body, r));
+          if (!occInBody) continue;
+          const target = mod.locals.find((l) => l.localName === name);
+          if (target) {
+            const toId = defNodeId(target);
+            if (!nodes.has(toId)) nodes.set(toId, nodeForDef(target));
+            addEdge(fromId, toId, 'uses');
+          }
+        }
+      }
+    }
+  }
+
+  return { nodes, edges };
 }
