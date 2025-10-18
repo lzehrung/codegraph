@@ -1,19 +1,40 @@
 {
-  "name": "dep-graph",
+  "name": "codegraph",
   "version": "1.0.0",
   "type": "module",
-  "main": "index.js",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "codegraph": "./dist/cli.js"
+  },
+  "files": ["dist"],
   "scripts": {
+    "clean": "if exist dist rmdir /s /q dist",
+    "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
     "test": "vitest",
     "test:ci": "vitest run",
     "test:ui": "vitest --ui",
-    "test:run": "vitest run",
-    "install": "npm install --legacy-peer-deps"
+    "test:run": "vitest run"
   },
-  "keywords": [],
-  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lzehrung/codegraph.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["dependency graph", "symbol index", "go to definition", "find references", "AST grep", "monorepo", "npm", "yarn", "pnpm", "lerna", "python"],
+  "author": "Luke Zehrung",
   "license": "ISC",
-  "description": "",
+  "description": "A tiny tool to understand a repo, navigate code, and answer questions fast. Builds dependency graphs and symbol indexes for JS/TS/Python monorepos.",
   "devDependencies": {
     "@types/node": "^24.7.2",
     "@vitest/ui": "^3.2.4",

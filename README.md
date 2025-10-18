@@ -50,54 +50,94 @@ Both languages support full cross-file navigation with equivalent capabilities.
 
 ---
 
+## Installation
+
+### Option 1: Install from GitHub (Recommended)
+
+Install directly from the GitHub repository:
+
+```bash
+# Install the latest from main branch
+npm install github:lzehrung/codegraph
+
+# Or pin to a specific version tag
+npm install github:lzehrung/codegraph#v1.0.0
+
+# Or pin to a specific commit
+npm install github:lzehrung/codegraph#abc1234
+```
+
+Add to your `package.json`:
+
+```json
+{
+  "dependencies": {
+    "codegraph": "github:lzehrung/codegraph#v1.0.0"
+  }
+}
+```
+
+### Option 2: Local Development
+
+Clone the repository and install dependencies:
+
+```bash
+git clone https://github.com/lzehrung/codegraph.git
+cd codegraph
+npm install
+npm run build
+```
+
+---
+
 ## Requirements
 
 * **Node.js 18+**
-* **tree-sitter** and grammars:
-
-  * `tree-sitter`
-  * `tree-sitter-typescript`
-  * `tree-sitter-javascript`
-  * `tree-sitter-python`
-* TypeScript is recommended for editing, but the script can be run via `tsx` or ts-node.
-
-Install (example):
-
-```bash
-npm i -D tsx typescript
-npm i tree-sitter tree-sitter-typescript tree-sitter-javascript tree-sitter-python fast-glob tsconfig-paths
-```
+* Dependencies are automatically installed when you install the package
 
 ---
 
 ## Usage
 
+### CLI Commands
+
+After installing the package, use the `dep-graph` CLI:
+
 ```bash
 # Build a dependency graph (prints nodes + edges)
-npx tsx src/cli.ts graph
+npx dep-graph graph
 
 # Build a dependency graph in Mermaid format
-npx tsx src/cli.ts graph --mermaid > graph.mmd
+npx dep-graph graph --mermaid > graph.mmd
 # Preview the Mermaid file in your editor or any Mermaid viewer
 
 # Build a dependency graph in Graphviz DOT format
-npx tsx src/cli.ts graph --dot > graph.dot
+npx dep-graph graph --dot > graph.dot
 # Render to SVG (requires Graphviz)
 dot -Tsvg graph.dot -o graph.svg
 
 # Build the full project index (graph + per-file symbol indexes)
-npx tsx src/cli.ts index
+npx dep-graph index
 
 # Go to definition of symbol at file:line:column
-npx tsx src/cli.ts goto <file> <line> <column>
+npx dep-graph goto <file> <line> <column>
 
 # Find references of symbol at a location
-npx tsx src/cli.ts refs --file <file> --line <line> --col <column>
+npx dep-graph refs --file <file> --line <line> --col <column>
 # Pretty-print only the file:line:col
-npx tsx src/index.ts refs --file <file> --line <line> --col <column> --pretty
+npx dep-graph refs --file <file> --line <line> --col <column> --pretty
 
 # Run a Tree-sitter query across the repo
-npx tsx src/cli.ts grep --query '(function_declaration name: (identifier) @name)'
+npx dep-graph grep --query '(function_declaration name: (identifier) @name)'
+```
+
+### For Local Development
+
+If you're working on the package itself, use `tsx` to run directly:
+
+```bash
+npx tsx src/cli.ts graph
+npx tsx src/cli.ts goto <file> <line> <column>
 ```
 
 ### Output formats
@@ -119,12 +159,12 @@ npx tsx src/cli.ts grep --query '(function_declaration name: (identifier) @name)
 
 ### Programmatic usage (from code)
 
-Minimal TypeScript/ESM examples. Import from `./src/index.js` and call directly.
+Minimal TypeScript/ESM examples. Import from the package and call directly.
 
 Build full project index and go to definition:
 
 ```ts
-import { buildProjectIndex, goToDefinition } from './src/index.js';
+import { buildProjectIndex, goToDefinition } from 'dep-graph';
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
@@ -139,7 +179,7 @@ if (res.status === 'ok') {
 Find references:
 
 ```ts
-import { findReferences } from './src/index.js';
+import { findReferences } from 'dep-graph';
 
 const refs = await findReferences(index, { file, line: 21, column: 18 });
 if (refs.status === 'ok') {
@@ -150,7 +190,7 @@ if (refs.status === 'ok') {
 Get dependency graph in-memory and iterate edges:
 
 ```ts
-import { listProjectFiles, collectGraph } from './src/index.js';
+import { listProjectFiles, collectGraph } from 'dep-graph';
 
 const files = await listProjectFiles(root);
 const graph = await collectGraph(root, files);
@@ -166,16 +206,16 @@ for (const e of graph.edges) {
 Produce a Mermaid diagram string (for UI or chat rendering):
 
 ```ts
-import { graphToMermaid } from './src/index.js';
+import { graphToMermaid } from 'dep-graph';
 
 const mermaid = graphToMermaid(graph);
 console.log(mermaid);
 ```
 
-Simple wrappers as “LLM tools” (no HTTP/MCP), returning JSONable payloads:
+Simple wrappers as "LLM tools" (no HTTP/MCP), returning JSONable payloads:
 
 ```ts
-import { listProjectFiles, collectGraph, buildProjectIndex, goToDefinition, findReferences } from './src/index.js';
+import { listProjectFiles, collectGraph, buildProjectIndex, goToDefinition, findReferences } from 'dep-graph';
 
 export async function tool_graphJSON(root: string) {
   const files = await listProjectFiles(root);
