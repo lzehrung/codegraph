@@ -107,8 +107,13 @@ After installing the package, use the `codegraph` CLI:
 # Build a dependency graph (prints nodes + edges as JSON)
 npx codegraph graph
 
+# Build a dependency graph from multiple roots
+npx codegraph graph ./src ./packages/app ./packages/lib --mermaid > graph.mmd
+
 # Build a dependency graph in Mermaid format
 npx codegraph graph --mermaid > graph.mmd
+# Include symbol-level nodes/edges (imports/exports)
+npx codegraph graph ./src --mermaid --symbols > graph.symbols.mmd
 # Preview the Mermaid file in your editor or any Mermaid viewer
 
 # Build a dependency graph in Graphviz DOT format
@@ -121,6 +126,11 @@ npx codegraph graph /path/to/project --mermaid > graph.mmd
 
 # Build the full project index (graph + per-file symbol indexes)
 npx codegraph index
+# Print full JSON index including locals/imports/exports
+npx codegraph index --json
+
+# Build the project index from multiple roots
+npx codegraph index ./src ./packages/app ./packages/lib
 
 # Go to definition of symbol at file:line:column
 npx codegraph goto <file> <line> <column>
@@ -194,6 +204,21 @@ Get dependency graph in-memory and iterate edges:
 
 ```ts
 import { listProjectFiles, collectGraph } from 'codegraph';
+Build project index from explicit file list (multi-root):
+
+```ts
+import { listProjectFiles, buildProjectIndexFromFiles } from 'codegraph';
+
+const tsRoot = `${root}/tests/samples/typescript`;
+const jsRoot = `${root}/tests/samples/javascript`;
+const files = [
+  ...(await listProjectFiles(tsRoot)),
+  ...(await listProjectFiles(jsRoot)),
+];
+
+const index = await buildProjectIndexFromFiles(root, Array.from(new Set(files)));
+console.log({ files: index.byFile.size, edges: index.graph.edges.length });
+```
 
 const files = await listProjectFiles(root);
 const graph = await collectGraph(root, files);
