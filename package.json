@@ -1,6 +1,6 @@
 {
   "name": "codegraph",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -14,7 +14,9 @@
   "bin": {
     "codegraph": "./dist/cli.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "clean": "if exist dist rmdir /s /q dist",
     "build": "tsc -p tsconfig.json",
@@ -36,7 +38,19 @@
   "engines": {
     "node": ">=18"
   },
-  "keywords": ["dependency graph", "symbol index", "go to definition", "find references", "AST grep", "monorepo", "npm", "yarn", "pnpm", "lerna", "python"],
+  "keywords": [
+    "dependency graph",
+    "symbol index",
+    "go to definition",
+    "find references",
+    "AST grep",
+    "monorepo",
+    "npm",
+    "yarn",
+    "pnpm",
+    "lerna",
+    "python"
+  ],
   "author": "Luke Zehrung",
   "license": "ISC",
   "description": "A tiny tool to understand a repo, navigate code, and answer questions fast. Builds dependency graphs and symbol indexes for JS/TS/Python monorepos.",
