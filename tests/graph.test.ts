@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { collectGraph } from '../src/index.js';
+import { collectGraph, buildProjectIndexFromFiles, buildSymbolGraph, graphToMermaidSymbolsWithFiles } from '../src/index.js';
 import { getSamplePath, expectEdgeCount } from './test-utils.js';
 
 type EdgeTo = { type: 'file'; path: string } | { type: 'external'; name: string };
@@ -166,6 +166,26 @@ describe('Dependency Graph', () => {
       const hasCommonJSConnection = mixedEdges.some(edge => toStr(edge.to).includes('legacy.js'));
       
       expect(hasES6Connection || hasCommonJSConnection).toBe(true);
+    });
+  });
+
+  describe('Hybrid symbol+file Mermaid rendering', () => {
+    it('includes file nodes and symbol edges together', async () => {
+      const samplePath = getSamplePath('typescript');
+      const files = [
+        path.join(samplePath, 'main.ts').replace(/\\/g, '/'),
+        path.join(samplePath, 'utils.ts').replace(/\\/g, '/'),
+      ];
+      const graph = await collectGraph(samplePath, files);
+      const index = await buildProjectIndexFromFiles(samplePath, files);
+      const sgraph = await buildSymbolGraph(index);
+      const mermaid = graphToMermaidSymbolsWithFiles(sgraph, graph, samplePath);
+      expect(mermaid).toContain('flowchart LR');
+      // Should mention both main.ts and utils.ts as file nodes
+      expect(mermaid).toMatch(/main\.ts/);
+      expect(mermaid).toMatch(/utils\.ts/);
+      // Should include a labeled symbol edge for helperFunction
+      expect(mermaid).toMatch(/-- \"helperFunction\" -->/);
     });
   });
 });

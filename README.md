@@ -112,8 +112,10 @@ npx codegraph graph ./src ./packages/app ./packages/lib --mermaid > graph.mmd
 
 # Build a dependency graph in Mermaid format
 npx codegraph graph --mermaid > graph.mmd
-# Include symbol-level nodes/edges (imports/exports)
+# Include symbol-level nodes/edges (imports/exports) combined with file graph
 npx codegraph graph ./src --mermaid --symbols > graph.symbols.mmd
+# Symbols only (no file nodes/edges)
+npx codegraph graph ./src --mermaid --symbols-only > graph.symbols.only.mmd
 # Preview the Mermaid file in your editor or any Mermaid viewer
 
 # Build a dependency graph in Graphviz DOT format
@@ -169,6 +171,15 @@ npx tsx src/cli.ts goto <file> <line> <column>
 
   - Use `--mermaid` for a Mermaid flowchart, or `--dot` for Graphviz DOT.
   - In DOT output, type-only edges are dotted; external nodes are dashed ellipses.
+
+  When using `--symbols`:
+
+  - Mermaid/DOT output includes:
+    - File nodes and file-to-file edges (dependency graph)
+    - Symbol nodes (definitions and import aliases)
+    - File-to-symbol containment edges
+    - Symbol-to-symbol edges (import alias -> exported definition), labeled by the exported name
+  - Use `--symbols-only` to omit file nodes/edges and render only symbols.
 
 ### Programmatic usage (from code)
 
