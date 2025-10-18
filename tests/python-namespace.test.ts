@@ -55,6 +55,20 @@ describe('Python namespace packages (PEP 420)', () => {
       expect(files.some(f => f.endsWith('/app/main.py'))).toBe(true);
     }
   });
+
+  it('ignores commented python imports/specifiers in graph/specifier collection', async () => {
+    const appDir = path.join(root, 'app');
+    await fsp.mkdir(appDir, { recursive: true });
+    const commented = '# from pkg_ns.submod import missing\n# import pkg_ns.submod.missing as m\n"""\nfrom pkg_ns.submod import also_missing\n"""\n';
+    await fsp.writeFile(path.join(appDir, 'commented.py'), commented, 'utf8');
+    const files = [
+      path.join(root, 'pkg_ns', 'submod', 'util.py').replace(/\\/g, '/'),
+      path.join(appDir, 'commented.py').replace(/\\/g, '/'),
+    ];
+    const graph = await collectGraph(root, files);
+    const edgesFromCommented = graph.edges.filter(e => e.from.replace(/\\/g, '/').endsWith('/app/commented.py'));
+    expect(edgesFromCommented.length).toBe(0);
+  });
 });
 
 
