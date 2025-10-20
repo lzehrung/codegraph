@@ -350,6 +350,13 @@ export async function resolveSpecifier(
       : path.resolve(path.dirname(fromFile), spec);
     const candidates: string[] = [base];
     const exts = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"];
+    // If spec already has .js/.mjs/.cjs, also try the corresponding .ts/.mts/.cts
+    const baseExt = path.extname(base);
+    if (baseExt === ".js" || baseExt === ".mjs" || baseExt === ".cjs") {
+      const baseWithoutExt = base.slice(0, -baseExt.length);
+      const tsExt = baseExt === ".mjs" ? ".mts" : baseExt === ".cjs" ? ".cts" : ".ts";
+      candidates.unshift(baseWithoutExt + tsExt);
+    }
     for (const e of exts) candidates.push(base + e);
     for (const e of exts) candidates.push(path.join(base, "index" + e));
     for (const c of candidates) {
