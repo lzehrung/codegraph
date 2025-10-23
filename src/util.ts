@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import { createMatchPath } from "tsconfig-paths";
+import Parser from "tree-sitter";
 
 export type Pos = { line: number; column: number; index: number };
 export type Range = { start: Pos; end: Pos };
@@ -129,10 +130,15 @@ export async function loadNearestTsconfigFor(
 }
 
 export async function fileExists(p: string): Promise<boolean> {
+  // Simple in-memory cache to avoid repeated fs lookups
+  const cached = fileExistsCache.get(p);
+  if (cached !== undefined) return cached;
   try {
     await fsp.access(p, fs.constants.R_OK);
+    fileExistsCache.set(p, true);
     return true;
   } catch {
+    fileExistsCache.set(p, false);
     return false;
   }
 }
@@ -344,6 +350,9 @@ export async function resolveSpecifier(
   matchPath?: MatchPathFn,
   workspaceConfig?: WorkspaceConfig
 ): Promise<FileId | { external: string }> {
+  const cacheKey = `${fromFile}::${spec}`;
+  const cached = resolveSpecifierCache.get(cacheKey);
+  if (cached) return cached;
   if (spec.startsWith(".") || spec.startsWith("/")) {
     const base = spec.startsWith("/")
       ? path.join(projectRoot, spec)
@@ -362,14 +371,21 @@ export async function resolveSpecifier(
     for (const c of candidates) {
       try {
         await fsp.access(c, fs.constants.R_OK);
-        return path.resolve(c);
+        const res = path.resolve(c);
+        resolveSpecifierCache.set(cacheKey, res);
+        return res;
       } catch {}
     }
-    return { external: spec };
+    const ext = { external: spec } as const;
+    resolveSpecifierCache.set(cacheKey, ext as any);
+    return ext;
   }
   if (!spec.startsWith(".") && !spec.startsWith("/")) {
     const resolvedWs = await resolveWorkspacePackage(spec, workspaceConfig);
-    if (resolvedWs) return resolvedWs;
+    if (resolvedWs) {
+      resolveSpecifierCache.set(cacheKey, resolvedWs);
+      return resolvedWs;
+    }
   }
   if (matchPath) {
     const m = matchPath(
@@ -388,12 +404,13 @@ export async function resolveSpecifier(
     if (m) {
       const cand = path.resolve(m);
       const hasExt = !!path.extname(cand);
-      if (hasExt) return cand;
+      if (hasExt) { resolveSpecifierCache.set(cacheKey, cand); return cand; }
       const exts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
       for (const e of exts) {
         const pth = cand + e;
         try {
           fs.accessSync(pth, fs.constants.R_OK);
+          resolveSpecifierCache.set(cacheKey, pth);
           return pth;
         } catch {}
       }
@@ -401,13 +418,17 @@ export async function resolveSpecifier(
         const pth = path.join(cand, "index" + e);
         try {
           fs.accessSync(pth, fs.constants.R_OK);
+          resolveSpecifierCache.set(cacheKey, pth);
           return pth;
         } catch {}
       }
+      resolveSpecifierCache.set(cacheKey, cand);
       return cand;
     }
   }
-  return { external: spec };
+  const ext = { external: spec } as const;
+  resolveSpecifierCache.set(cacheKey, ext as any);
+  return ext;
 }
 
 async function findPythonPackageAnchor(startDir: string): Promise<string> {
@@ -440,6 +461,9 @@ export async function resolvePythonModule(
   moduleName: string | null,
   relativeDots: number
 ): Promise<FileId | { external: string }> {
+  const cacheKey = `${fromFile}::${".".repeat(relativeDots)}${moduleName ?? ""}`;
+  const cached = resolvePythonModuleCache.get(cacheKey);
+  if (cached) return cached;
   const fromDir = path.dirname(fromFile);
   const anchor = await findPythonPackageAnchor(fromDir);
 
@@ -459,9 +483,9 @@ export async function resolvePythonModule(
   }
   for (const c of candidates) {
     try {
-      if (await isDirectory(c)) return path.resolve(c);
+      if (await isDirectory(c)) { const res = path.resolve(c); resolvePythonModuleCache.set(cacheKey, res); return res; }
       await fsp.access(c, fs.constants.R_OK);
-      return path.resolve(c);
+      { const res = path.resolve(c); resolvePythonModuleCache.set(cacheKey, res); return res; }
     } catch {}
   }
 
@@ -469,13 +493,39 @@ export async function resolvePythonModule(
     const abs = path.join(projectRoot, ...moduleName.split("."));
     for (const c of [abs + ".py", path.join(abs, "__init__.py"), abs]) {
       try {
-        if (await isDirectory(c)) return path.resolve(c);
+        if (await isDirectory(c)) { const res = path.resolve(c); resolvePythonModuleCache.set(cacheKey, res); return res; }
         await fsp.access(c, fs.constants.R_OK);
-        return path.resolve(c);
+        { const res = path.resolve(c); resolvePythonModuleCache.set(cacheKey, res); return res; }
       } catch {}
     }
   }
-  return { external: ".".repeat(relativeDots) + (moduleName ?? "") };
+  const ext = { external: ".".repeat(relativeDots) + (moduleName ?? "") } as const;
+  resolvePythonModuleCache.set(cacheKey, ext as any);
+  return ext;
+}
+
+// ----------------- Caches -----------------
+const fileExistsCache = new Map<string, boolean>();
+const resolveSpecifierCache = new Map<string, FileId | { external: string }>();
+const resolvePythonModuleCache = new Map<string, FileId | { external: string }>();
+
+// ----------------- Parser pool (simple) -----------------
+type LangKey = "ts" | "tsx" | "js" | "py";
+const parserPools = new Map<LangKey, Parser[]>();
+
+export function acquireParser(lang: Parser.Language, key: LangKey): Parser {
+  const pool = parserPools.get(key) ?? [];
+  const p = pool.pop();
+  if (p) { parserPools.set(key, pool); return p; }
+  const parser = new Parser();
+  parser.setLanguage(lang);
+  return parser;
+}
+
+export function releaseParser(parser: Parser, key: LangKey) {
+  const pool = parserPools.get(key) ?? [];
+  pool.push(parser);
+  parserPools.set(key, pool);
 }
 
 

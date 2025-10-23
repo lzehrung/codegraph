@@ -14,6 +14,7 @@ import {
   resolveSpecifier,
   resolvePythonModule,
 } from "./util.js";
+import { stripJsLikeComments } from "./util.js";
 
 export type FileId = string;
 
@@ -31,7 +32,8 @@ export type Graph = { nodes: Set<FileId>; edges: Edge[] };
 export function collectModuleSpecifiersFromSource(
   support: LanguageSupport,
   lang: Parser.Language,
-  source: string
+  source: string,
+  opts?: { tree?: Parser.Tree; fast?: boolean }
 ): { spec: string; typeOnly?: boolean }[] {
   const out: { spec: string; typeOnly?: boolean }[] = [];
 
@@ -50,10 +52,32 @@ export function collectModuleSpecifiersFromSource(
     return out;
   }
 
+  // Fast path for JS/TS: regex-based extraction after comment stripping
+  if ((support.id === "ts" || support.id === "js") && opts?.fast) {
+    try {
+      const src = stripJsLikeComments(source);
+      const push = (spec: string, typeOnly?: boolean) => { if (spec) out.push({ spec, ...(typeOnly ? { typeOnly: true } : {}) }); };
+      const reImportFrom = /^\s*import\s+[^\n;]*?\s+from\s+(["'])([^"']+)\1/gm;
+      for (const m of src.matchAll(reImportFrom)) push(m[2]!, /\bimport\s+type\b/.test(m[0]!));
+      const reImportSide = /^\s*import\s+(["'])([^"']+)\1/gm;
+      for (const m of src.matchAll(reImportSide)) push(m[2]!, /\bimport\s+type\b/.test(m[0]!));
+      const reExportFrom = /\bexport\s+[^\n;]*?\s+from\s+(["'])([^"']+)\1/gm;
+      for (const m of src.matchAll(reExportFrom)) push(m[2]!, /\bexport\s+type\b/.test(m[0]!));
+      // CommonJS destructuring: const { a } = require('x'); also capture
+      const reRequire = /\brequire\(\s*(["'])([^"']+)\1\s*\)/g;
+      for (const m of src.matchAll(reRequire)) push(m[2]!);
+      const reReqDestr = /\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\(\s*(["'])([^"']+)\1\s*\)/g;
+      for (const m of src.matchAll(reReqDestr)) push(m[2]!);
+      const reDynImport = /\bimport\(\s*(["'])([^"']+)\1\s*\)/g;
+      for (const m of src.matchAll(reDynImport)) push(m[2]!);
+    } catch {}
+    return out;
+  }
+
   try {
     const parser = new Parser();
     parser.setLanguage(lang);
-    const tree = parser.parse(source);
+    const tree = opts?.tree ?? parser.parse(source);
     const q = new Parser.Query(lang, support.queries.imports);
     for (const m of q.matches(tree.rootNode)) {
       const caps = Object.fromEntries(
@@ -76,17 +100,20 @@ export function collectModuleSpecifiersFromSource(
 
 export async function collectGraph(
   projectRoot: string,
-  files: string[]
+  files: string[],
+  opts?: { parsed?: Map<string, { source: string; tree: Parser.Tree; sup: LanguageSupport; lang: Parser.Language }>; fast?: boolean }
 ): Promise<Graph> {
   const graph: Graph = { nodes: new Set(files), edges: [] };
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
 
   const filePromises = files.map(async (file) => {
     try {
-      const sup = supportForFile(file);
-      const lang = languageForFile(file);
-      const src = await fsp.readFile(file, "utf8");
-      const specs = collectModuleSpecifiersFromSource(sup, lang, src);
+      const parsed = opts?.parsed?.get(file);
+      const sup = parsed?.sup ?? supportForFile(file);
+      const lang = parsed?.lang ?? languageForFile(file);
+      const src = parsed?.source ?? (await fsp.readFile(file, "utf8"));
+      const fast = !!opts?.fast;
+      const specs = collectModuleSpecifiersFromSource(sup, lang, src, parsed?.tree ? { tree: parsed.tree, fast } : { fast });
       const { matchPath } = sup.id === "ts" ? await loadNearestTsconfigFor(file) : {} as any;
 
       const edges: Edge[] = [];
@@ -348,12 +375,34 @@ export async function buildSymbolGraph(index: any): Promise<SymbolGraph> {
   return { nodes, edges };
 }
 
-export async function buildSymbolGraphDetailed(index: any): Promise<SymbolGraph> {
+export async function buildSymbolGraphDetailed(index: any, opts?: { scope?: "all" | "imported"; maxEdges?: number; membersOnly?: boolean }): Promise<SymbolGraph> {
   const base = await buildSymbolGraph(index);
   const nodes = new Map(base.nodes);
   const edges = base.edges.slice();
 
   const added = new Set<string>();
+  const maxEdges = typeof opts?.maxEdges === "number" && opts.maxEdges > 0 ? opts.maxEdges : Number.POSITIVE_INFINITY;
+  const membersOnly = !!opts?.membersOnly;
+  const scopeMode = (opts?.scope ?? "all") as "all" | "imported";
+
+  const normalizePath = (p: string) => p.replace(/\\/g, "/");
+  const importedByOthers = new Set<string>();
+  if (scopeMode === "imported") {
+    for (const [f, m] of index.byFile) {
+      for (const imp of m.imports) {
+        const target = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : undefined;
+        if (target) importedByOthers.add(target);
+      }
+    }
+  }
+
+  let edgeCount = edges.length;
+  const maybePushEdge = (fromId: string, toId: string, label?: string) => {
+    if (edgeCount >= maxEdges) return false;
+    edges.push(label ? { from: fromId, to: toId, label } : { from: fromId, to: toId });
+    edgeCount++;
+    return true;
+  };
 
   const isIdentifierType = (sup: any, t: string) =>
     Array.isArray(sup.nodeTypes?.identifier) && sup.nodeTypes.identifier.includes(t);
@@ -389,6 +438,11 @@ export async function buildSymbolGraphDetailed(index: any): Promise<SymbolGraph>
   };
 
   for (const [file, mod] of index.byFile) {
+    if (scopeMode === "imported") {
+      const hasFuncOrClass = (mod.locals as any[]).some((l) => l.kind === "function" || l.kind === "class");
+      const isImportedOrImports = importedByOthers.has(normalizePath(file)) || (mod.imports as any[]).length > 0;
+      if (!(hasFuncOrClass && isImportedOrImports)) continue;
+    }
     try {
       const sup = supportForFile(file);
       const lang = languageForFile(file);
@@ -555,12 +609,12 @@ export async function buildSymbolGraphDetailed(index: any): Promise<SymbolGraph>
           if (!targetDef) break;
           file = targetDef.file;
         }
-        if (targetDef && fromId) {
+          if (targetDef && fromId) {
           const toId = defNodeId(targetDef);
           if (!nodes.has(toId)) nodes.set(toId, nodeForDef(targetDef));
           const key = `${fromId}->${toId}`;
-          if (!added.has(key)) { added.add(key); edges.push({ from: fromId, to: toId, label: "uses" }); }
-          return true;
+            if (!added.has(key)) { added.add(key); if (!maybePushEdge(fromId, toId, "uses")) return true; }
+            return true;
         }
         return !!targetDef;
       };
@@ -583,14 +637,14 @@ export async function buildSymbolGraphDetailed(index: any): Promise<SymbolGraph>
                     for (const d of (prev as any).namedChildren ?? []) {
                       if (d.type === "decorator") {
                         const expr = (d as any).childForFieldName?.("name") ?? (d as any).child(1);
-                        if (expr) tryResolveChain(expr, fromId);
+                if (expr) tryResolveChain(expr, fromId);
                       } else if (d.type === "attribute") {
-                        tryResolveChain(d, fromId);
+                tryResolveChain(d, fromId);
                       }
                     }
                   } else if (prev.type === "decorator") {
                     const expr = (prev as any).childForFieldName?.("name") ?? (prev as any).child(1);
-                    if (expr) tryResolveChain(expr, fromId);
+            if (expr) tryResolveChain(expr, fromId);
                   }
                   prev = (prev as any).previousSibling;
                 }
@@ -606,7 +660,7 @@ export async function buildSymbolGraphDetailed(index: any): Promise<SymbolGraph>
         const fromId = defNodeId(fn.def);
         if (!nodes.has(fromId)) nodes.set(fromId, nodeForDef(fn.def));
         const seenAliases = new Set<string>();
-        scanForAliasUse(fn.node, (name: string, atNode: any) => {
+        if (!membersOnly) scanForAliasUse(fn.node, (name: string, atNode: any) => {
           if (seenAliases.has(name)) return;
           let target: any = aliasToTargetDef.get(name);
           if (!target) {
@@ -636,7 +690,7 @@ export async function buildSymbolGraphDetailed(index: any): Promise<SymbolGraph>
           const key = `${fromId}->${toId}`;
           if (added.has(key)) return;
           added.add(key);
-          edges.push({ from: fromId, to: toId, label: "uses" });
+          if (!maybePushEdge(fromId, toId, "uses")) return;
         });
 
         // Walk for member expressions of namespace imports: alias.member
@@ -703,7 +757,7 @@ export async function buildSymbolGraphDetailed(index: any): Promise<SymbolGraph>
               const key = `${fromId}->${toId}`;
               if (!added.has(key)) {
                 added.add(key);
-                edges.push({ from: fromId, to: toId, label: "uses" });
+                if (!maybePushEdge(fromId, toId, "uses")) return;
               }
             }
           };
