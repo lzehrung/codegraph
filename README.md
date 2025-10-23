@@ -114,6 +114,9 @@ npx codegraph graph ./src ./packages/app ./packages/lib --mermaid > graph.mmd
 
 # Build a dependency graph in Mermaid format
 npx codegraph graph --mermaid > graph.mmd
+# Fast graph-only mode (JS/TS specifiers via regex, skips parsing for specifiers)
+npx codegraph graph --mermaid --fast-graph > graph.fast.mmd
+
 # Include symbol-level nodes/edges (imports/exports) combined with file graph
 npx codegraph graph ./src --mermaid --symbols > graph.symbols.mmd
 # Symbols only (no file nodes/edges)
@@ -122,7 +125,11 @@ npx codegraph graph ./src --mermaid --symbols-only > graph.symbols.only.mmd
 npx codegraph graph ./src --mermaid --symbols-detailed > graph.symbols.detailed.mmd
 # Detailed + files hybrid
 npx codegraph graph ./src --mermaid --symbols --symbols-detailed > graph.symbols.hybrid.detailed.mmd
-# Preview the Mermaid file in your editor or any Mermaid viewer
+# Pruned detailed graph for very large repos
+npx codegraph graph ./src --mermaid --symbols-detailed \
+  --symbols-detailed-scope imported \
+  --symbols-detailed-max-edges 5000 \
+  --symbols-detailed-members-only > graph.symbols.pruned.mmd
 
 # Build a dependency graph in Graphviz DOT format
 npx codegraph graph --dot > graph.dot
@@ -136,6 +143,8 @@ npx codegraph graph /path/to/project --mermaid > graph.mmd
 npx codegraph index
 # Print full JSON index including locals/imports/exports
 npx codegraph index --json
+# Use concurrency and incremental cache
+npx codegraph index --threads 8 --cache disk
 
 # Build the project index from multiple roots
 npx codegraph index ./src ./packages/app ./packages/lib
@@ -158,6 +167,7 @@ If you're working on the package itself, use `tsx` to run directly:
 
 ```bash
 npx tsx src/cli.ts graph
+npx tsx src/cli.ts graph --fast-graph
 npx tsx src/cli.ts goto <file> <line> <column>
 ```
 
@@ -177,6 +187,7 @@ npx tsx src/cli.ts goto <file> <line> <column>
 
   - Use `--mermaid` for a Mermaid flowchart, or `--dot` for Graphviz DOT.
   - In DOT output, type-only edges are dotted; external nodes are dashed ellipses.
+  - Use `--fast-graph` for faster JS/TS specifier extraction.
 
   When using `--symbols`:
 
@@ -191,8 +202,45 @@ npx tsx src/cli.ts goto <file> <line> <column>
 
   - Adds symbol -> symbol edges labeled `uses` when a symbol’s body references another symbol (via local references, named/default imports, and namespace members).
   - Can be combined with `--symbols` to include both usage edges and import edges alongside file nodes.
+  - Pruning options for large repos:
+    - `--symbols-detailed-scope {all|imported}`
+    - `--symbols-detailed-max-edges N`
+    - `--symbols-detailed-members-only`
 
-### Programmatic usage (from code)
+---
+
+## Performance
+
+- Quick start (large monorepos):
+  - Graph only: `codegraph graph --fast-graph --threads 8 --mermaid > graph.mmd`
+  - Full index: `codegraph index --threads 8 --cache disk`
+  - Detailed symbols (pruned): `codegraph graph ./src --symbols-detailed --symbols-detailed-scope imported --symbols-detailed-members-only --symbols-detailed-max-edges 5000 --mermaid > graph.symbols.pruned.mmd`
+
+- Fast graph:
+  - Regex-based specifier extraction for JS/TS only. Accurate for common patterns (`import`, `export ... from`, `require()`, `import()`), ignores commented imports.
+  - If output looks off, re-run without `--fast-graph`.
+
+- Caching:
+  - Modes: `off` (default), `memory` (per-process), `disk` (persist across runs, stored under `.codegraph-cache/index-v1`).
+  - `--cache-strict` uses a content hash; without it, cache key uses mtime+size.
+  - Clear disk cache: delete `.codegraph-cache/index-v1`.
+
+- Threads:
+  - Use `--threads` to increase concurrency; typical sweet spot is CPU cores or cores*2.
+  - Very high values may become I/O bound; 8–32 is a good range on SSDs.
+
+- Monorepo resolution:
+  - Workspace detection precedence: `package.json` workspaces > `pnpm-workspace.yaml` > `lerna.json`.
+  - Package subpaths are resolved via `exports` / `main` heuristics and TS path mapping per package.
+
+- Troubleshooting:
+  - Missing edges in JS/TS graph: disable `--fast-graph`.
+  - Stale results: use `--cache-strict` or clear `.codegraph-cache`.
+  - Windows path separators: outputs normalize to `/` where relevant.
+
+---
+
+## Programmatic usage (from code)
 
 Minimal TypeScript/ESM examples. Import from the package and call directly.
 
@@ -283,28 +331,6 @@ export async function tool_refs(root: string, file: string, line: number, column
   return await findReferences(index, { file: file.replace(/\\/g, '/'), line, column });
 }
 ```
-
-Notes:
-
-- Paths in outputs are absolute; normalize with `replace(/\\/g, '/')` on Windows.
-- Line and column are 1-based.
-* `index` prints a small summary:
-
-  ```json
-  { "files": 128, "edges": 367 }
-  ```
-* `goto` prints either:
-
-  ```json
-  { "status": "ok", "definition": { "file": "...", "localName": "Foo", "kind": "class", "range": { "start": {...}, "end": {...} } } }
-  ```
-
-  or:
-
-  ```json
-  { "status": "not_found", "reason": "..." }
-  ```
-* `refs` prints either the JSON response (default) or a list of `file:line:column` with `--pretty`.
 
 ---
 

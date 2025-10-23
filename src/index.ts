@@ -26,6 +26,7 @@ export {
   type ProjectIndex,
   type ResolvedExport,
   type Reference,
+  parseFile,
   collectLocalsAndExportsFromSource,
   collectImportsForFile,
   buildProjectIndex,
