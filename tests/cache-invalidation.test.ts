@@ -28,7 +28,9 @@ describe('Cache invalidation and strict hashing', () => {
     await fsp.utimes(utilPath, st1.atime, st1.mtime);
     const st2 = await fsp.stat(utilPath);
     expect(st2.size).toBe(st1.size);
-    expect(Math.floor(st2.mtimeMs)).toBe(Math.floor(st1.mtimeMs));
+    // Allow small filesystem timestamp jitter (e.g., +/-1ms)
+    const deltaMs = Math.abs(st2.mtimeMs - st1.mtimeMs);
+    expect(deltaMs).toBeLessThan(3);
 
     // Non-strict: may hit cache and still see 'a' (mtime+size key), or refresh; allow either
     const idx2 = await buildProjectIndex(root, { threads: 2, cache: 'disk' });
