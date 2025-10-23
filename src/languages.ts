@@ -300,4 +300,25 @@ export function languageForFile(filename: string): Parser.Language {
   return supportForFile(filename).language(filename);
 }
 
+// ---------------- Compiled query cache (per language grammar) ----------------
+type CompiledQueries = { imports: Parser.Query; exports: Parser.Query; locals: Parser.Query; importBindings: Parser.Query };
+const queryCache = new WeakMap<Parser.Language, Map<string, CompiledQueries>>();
+
+export function getCompiledQueries(lang: Parser.Language, support: LanguageSupport): CompiledQueries {
+  let bySupport = queryCache.get(lang);
+  if (!bySupport) { bySupport = new Map<string, CompiledQueries>(); queryCache.set(lang, bySupport); }
+  const key = support.id;
+  let cq = bySupport.get(key);
+  if (!cq) {
+    cq = {
+      imports: new Parser.Query(lang, support.queries.imports),
+      exports: new Parser.Query(lang, support.queries.exports),
+      locals: new Parser.Query(lang, support.queries.locals),
+      importBindings: new Parser.Query(lang, support.queries.importBindings),
+    };
+    bySupport.set(key, cq);
+  }
+  return cq;
+}
+
 

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import Parser from "tree-sitter";
+import crypto from "node:crypto";
 import {
   supportForFile,
   languageForFile,
@@ -105,21 +106,109 @@ export type ProjectIndex = {
 };
 export type ResolvedExport = { kind: "resolved"; def: SymbolDef };
 
+export type BuildOptions = {
+  threads?: number;
+  cache?: "off" | "memory" | "disk";
+  cacheDir?: string;
+  cacheStrict?: boolean;
+};
+
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let idx = 0;
+  let running = 0;
+  return new Promise((resolve, reject) => {
+    const next = () => {
+      if (idx >= items.length && running === 0) { resolve(out); return; }
+      while (running < limit && idx < items.length) {
+        const cur = idx++;
+        running++;
+        fn(items[cur]!).then((res) => { out[cur] = res; running--; next(); }).catch(reject);
+      }
+    };
+    next();
+  });
+}
+
+// ---------------- Incremental cache (memory/disk) ----------------
+type ModuleCacheEntry = { sig: string; mod: ModuleIndex };
+const memoryCache = new Map<string, ModuleCacheEntry>();
+
+async function fileSignature(file: string, strict?: boolean): Promise<string> {
+  try {
+    const st = await fsp.stat(file);
+    if (!strict) return `${st.mtimeMs}:${st.size}`;
+    const buf = await fsp.readFile(file);
+    const h = crypto.createHash("sha1");
+    h.update(buf);
+    return `${st.mtimeMs}:${st.size}:${h.digest("hex")}`;
+  } catch {
+    return "0:0";
+  }
+}
+
+function cacheFilePath(projectRoot: string, file: string, opts?: BuildOptions): string {
+  const root = opts?.cacheDir || path.join(projectRoot, ".codegraph-cache", "index-v1");
+  const hash = crypto.createHash("sha1").update(file.replace(/\\/g, "/")).digest("hex");
+  return path.join(root, `${hash}.json`);
+}
+
+async function tryLoadFromCache(projectRoot: string, file: string, sig: string, opts?: BuildOptions): Promise<ModuleIndex | null> {
+  const mode = opts?.cache ?? "off";
+  if (mode === "memory") {
+    const ent = memoryCache.get(file);
+    if (ent && ent.sig === sig) return ent.mod;
+    return null;
+  }
+  if (mode === "disk") {
+    try {
+      const cf = cacheFilePath(projectRoot, file, opts);
+      const raw = await fsp.readFile(cf, "utf8");
+      const parsed = JSON.parse(raw) as ModuleCacheEntry;
+      if (parsed.sig === sig && parsed.mod && parsed.mod.file) return parsed.mod as ModuleIndex;
+    } catch {}
+  }
+  return null;
+}
+
+async function writeToCache(projectRoot: string, file: string, sig: string, mod: ModuleIndex, opts?: BuildOptions) {
+  const mode = opts?.cache ?? "off";
+  if (mode === "memory") {
+    memoryCache.set(file, { sig, mod });
+  } else if (mode === "disk") {
+    try {
+      const cf = cacheFilePath(projectRoot, file, opts);
+      await fsp.mkdir(path.dirname(cf), { recursive: true });
+      await fsp.writeFile(cf, JSON.stringify({ sig, mod }), "utf8");
+    } catch {}
+  }
+}
+
 export function collectLocalsAndExportsFromSource(
   file: string,
   source: string,
-  support: any,
+  support: { id: string; queries: any; classifyDefinition: (n: Parser.SyntaxNode) => string; nodeTypes: any; createsFunctionScope: (n: Parser.SyntaxNode) => boolean; createsBlockScope: (n: Parser.SyntaxNode) => boolean; isDeclarationName: (n: Parser.SyntaxNode) => boolean },
   lang: Parser.Language,
-  imports: ImportBinding[] = []
+  imports: ImportBinding[] = [],
+  opts?: { tree?: Parser.Tree }
 ): ModuleIndex {
-  let tree: Parser.Tree | null = null;
-  try {
-    const parser = new Parser();
-    parser.setLanguage(lang);
-    tree = parser.parse(source);
-  } catch {}
+  let tree: Parser.Tree | null = opts?.tree ?? null;
+  if (!tree) {
+    try {
+      const parser = new Parser();
+      parser.setLanguage(lang);
+      tree = parser.parse(source);
+    } catch {}
+  }
 
   const locals: SymbolDef[] = [];
+  const toKind = (s: string): SymbolKind => {
+    if (s === "function") return SymbolKind.Function;
+    if (s === "class") return SymbolKind.Class;
+    if (s === "interface") return SymbolKind.Interface;
+    if (s === "type") return SymbolKind.TypeAlias;
+    return SymbolKind.Variable;
+  };
   if (tree) {
     if (support.id === "python") {
       try {
@@ -130,7 +219,7 @@ export function collectLocalsAndExportsFromSource(
               locals.push({
                 file,
                 localName: sliceText(cap.node, source),
-                kind: (support.classifyDefinition(cap.node) as any) as SymbolKind,
+                kind: toKind(support.classifyDefinition(cap.node)),
                 range: toRange(cap.node),
               });
             }
@@ -147,7 +236,8 @@ export function collectLocalsAndExportsFromSource(
         source,
         support,
         lang,
-        imports
+        imports,
+        tree ? { tree } : undefined
       );
       for (const b of scopeIdx.all) {
         if (!b.def) continue;
@@ -299,14 +389,14 @@ export function collectLocalsAndExportsFromSource(
     let m: RegExpExecArray | null;
     while ((m = reDecl.exec(source))) {
       const name = m[1]!;
-      if (!exports.some((e: any) => e.type === "local" && (e as any).exportedAs === name)) {
+      if (!exports.some((e) => e.type === "local" && e.exportedAs === name)) {
         const local = locals.find((d) => d.localName === name);
         if (local) exports.push({ type: "local", exportedAs: name, target: local });
       }
     }
     while ((m = reDefault.exec(source))) {
       const name = m[1]!;
-      if (!exports.some((e: any) => e.type === "local" && (e as any).exportedAs === "default")) {
+      if (!exports.some((e) => e.type === "local" && e.exportedAs === "default")) {
         const local = locals.find((d) => d.localName === name);
         if (local) exports.push({ type: "local", exportedAs: "default", target: { ...local, kind: SymbolKind.Default } });
       }
@@ -319,7 +409,7 @@ export function collectLocalsAndExportsFromSource(
         if (!mm) continue;
         const srcName = mm[1]!;
         const alias = (mm[2] ?? srcName) as string;
-        if (!exports.some((e: any) => e.type === "reexport" && (e as any).exportedAs === alias && (e as any).fromModule === from)) {
+        if (!exports.some((e) => e.type === "reexport" && e.exportedAs === alias && e.fromModule === from)) {
           exports.push({ type: "reexport", exportedAs: alias, fromModule: from, sourceSpecifier: srcName });
         }
       }
@@ -327,13 +417,13 @@ export function collectLocalsAndExportsFromSource(
     while ((m = reReexportNs.exec(source))) {
       const alias = m[1]!;
       const from = m[3]!;
-      if (!exports.some((e: any) => e.type === "reexport" && (e as any).exportedAs === alias && (e as any).fromModule === from)) {
+      if (!exports.some((e) => e.type === "reexport" && e.exportedAs === alias && e.fromModule === from)) {
         exports.push({ type: "reexport", exportedAs: alias, fromModule: from, sourceSpecifier: "" as any });
       }
     }
     while ((m = reStar.exec(source))) {
       const from = m[2]!;
-      if (!exports.some((e: any) => e.type === "exportStar" && (e as any).fromModule === from)) {
+      if (!exports.some((e) => e.type === "exportStar" && e.fromModule === from)) {
         exports.push({ type: "exportStar", fromModule: from, sourceSpecifier: from });
       }
     }
@@ -348,7 +438,7 @@ export function collectLocalsAndExportsFromSource(
         locals.push(sym);
       }
       const local = locals.find((d) => d.localName === exportedAs)!;
-      if (!exports.some((e: any) => e.type === "local" && (e as any).exportedAs === exportedAs)) {
+      if (!exports.some((e) => e.type === "local" && e.exportedAs === exportedAs)) {
         exports.push({ type: "local", exportedAs, target: local });
       }
     }
@@ -367,7 +457,7 @@ export function collectLocalsAndExportsFromSource(
           locals.push(sym);
         }
         const local = locals.find((d) => d.localName === exportedAs)!;
-        if (!exports.some((e: any) => e.type === "local" && (e as any).exportedAs === exportedAs)) {
+        if (!exports.some((e) => e.type === "local" && e.exportedAs === exportedAs)) {
           exports.push({ type: "local", exportedAs, target: local });
         }
       }
@@ -390,11 +480,12 @@ export function collectLocalsAndExportsFromSource(
 
 export async function collectImportsForFile(
   file: string,
-  projectRoot: string
+  projectRoot: string,
+  opts?: { source?: string; tree?: Parser.Tree }
 ): Promise<ImportBinding[]> {
   const sup = supportForFile(file);
   const lang = languageForFile(file);
-  const source = await fsp.readFile(file, "utf8");
+  const source = opts?.source ?? (await fsp.readFile(file, "utf8"));
   const imports: ImportBinding[] = [];
 
   if (sup.id === "python") {
@@ -461,12 +552,14 @@ export async function collectImportsForFile(
 
   const parser = new Parser();
   parser.setLanguage(lang);
-  const tree = parser.parse(source);
-  const tsCfg = sup.id === "ts" ? await loadNearestTsconfigFor(file) : {} as any;
+  const tree = opts?.tree ?? parser.parse(source);
+  const tsCfg = sup.id === "ts" ? await loadNearestTsconfigFor(file) : undefined;
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
 
-  const resolveFrom = async (from: string) =>
-    await resolveSpecifier(file, from, projectRoot, tsCfg.matchPath, workspaceConfig);
+  const resolveFrom = async (from: string) => {
+    const r = await resolveSpecifier(file, from, projectRoot, tsCfg?.matchPath, workspaceConfig);
+    return typeof r === 'string' ? r.replace(/\\/g, '/') : r;
+  };
 
   const runFallback = async () => {
     const src = sup.id === "ts" || sup.id === "js" ? stripJsLikeComments(source) : source;
@@ -474,7 +567,7 @@ export async function collectImportsForFile(
     const reFrom = /^\s*import\s+([^\n;]*?)\s+from\s+(["'])(?<m>[^"']+)\2/gm;
     for (const m of src.matchAll(reFrom)) {
       const clause = m[1]!.trim();
-      const mod = (m.groups as any).m as string;
+      const mod = m.groups?.m as string;
       const typeOnly = typeOnlyImport.test(m[0]!);
       const resolved = await resolveFrom(mod);
       const ns = clause.match(/^\*\s+as\s+([A-Za-z_$][\w$]*)$/);
@@ -500,14 +593,14 @@ export async function collectImportsForFile(
     const reReqDefault = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
     for (const m of src.matchAll(reReqDefault)) {
       const local = m[1]!;
-      const mod = (m.groups as any).m as string;
+      const mod = m.groups?.m as string;
       const resolved = await resolveFrom(mod);
       imports.push({ kind: "default", local, from: mod, resolved, mechanism: "cjs" });
     }
     const reReqNamed = /\b(?:const|let|var)\s*\{([^}]+)\}\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
     for (const m of src.matchAll(reReqNamed)) {
       const specs = m[1]!.split(",").map((s) => s.trim()).filter(Boolean);
-      const mod = (m.groups as any).m as string;
+      const mod = m.groups?.m as string;
       const resolved = await resolveFrom(mod);
       for (const spec of specs) {
         const nm = spec.match(/^([A-Za-z_$][\w$]*)(?::\s*([A-Za-z_$][\w$]*))?$/);
@@ -526,23 +619,25 @@ export async function collectImportsForFile(
       const caps = Object.fromEntries(m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const));
       const stmtText = caps["stmt"] ? sliceText(caps["stmt"].node, source) : "";
       const typeOnly = sup.id === "ts" && /^\s*import\s+type\b/.test(stmtText);
-      const from = caps["from"] ? unquote(sliceText(caps["from"].node, source)) : undefined as any;
+      const from: string | undefined = caps["from"] ? unquote(sliceText(caps["from"].node, source)) : undefined;
 
       const patterns = m.captures.filter((c: Parser.QueryCapture) => c.name === "pattern");
       for (const pattern of patterns) {
         const patternNode = pattern.node;
-        if (patternNode.type === "object_pattern") {
-          for (const child of (patternNode as any).namedChildren) {
+        if (patternNode.type === "object_pattern" && from) {
+          for (const child of patternNode.namedChildren) {
             if (child.type === "shorthand_property_identifier") {
               const name = sliceText(child, source);
-              imports.push({ kind: "named", local: name, imported: name, from: from || "", resolved: from ? await resolveFrom(from) : { external: "" }, typeOnly });
+              const resolved = await resolveFrom(from);
+              imports.push({ kind: "named", local: name, imported: name, from, resolved, typeOnly });
             } else if (child.type === "pair_pattern") {
               const key = child.childForFieldName("key");
               const value = child.childForFieldName("value");
               if (key && value && key.type === "property_identifier" && value.type === "identifier") {
                 const imported = sliceText(key, source);
                 const local = sliceText(value, source);
-                imports.push({ kind: "named", local, imported, from: from || "", resolved: from ? await resolveFrom(from) : { external: "" }, typeOnly });
+                const resolved = await resolveFrom(from);
+                imports.push({ kind: "named", local, imported, from, resolved, typeOnly });
               }
             }
           }
@@ -570,28 +665,26 @@ export async function collectImportsForFile(
     await runFallback();
     ranFallback = true;
   }
-  if (!ranFallback) {
-    const before = imports.length;
+  // Only run fallback when query path produced no results
+  if (!ranFallback && imports.length === 0) {
     await runFallback();
-    if (imports.length > before) {
-      const seen = new Set<string>();
-      const out: ImportBinding[] = [];
-      for (const imp of imports) {
-        let key = imp.kind;
-        if (imp.kind === "named") key += `|${(imp as any).local}|${(imp as any).from}`;
-        else if (imp.kind === "default") key += `|${(imp as any).local}|${(imp as any).from}`;
-        else if (imp.kind === "namespace") key += `|${(imp as any).localNS}|${(imp as any).from}`;
-        else if (imp.kind === "star") key += `|${(imp as any).from}`;
-        if (!seen.has(key)) { seen.add(key); out.push(imp); }
-      }
-      imports.splice(0, imports.length, ...out);
-    }
   }
   return imports;
 }
 
+export async function parseFile(file: string): Promise<{ source: string; tree: Parser.Tree; sup: ReturnType<typeof supportForFile>; lang: Parser.Language }> {
+  const sup = supportForFile(file);
+  const lang = languageForFile(file);
+  const source = await fsp.readFile(file, "utf8");
+  const parser = new Parser();
+  parser.setLanguage(lang);
+  const tree = parser.parse(source);
+  return { source, tree, sup, lang };
+}
+
 export async function buildProjectIndex(
-  projectRoot: string
+  projectRoot: string,
+  opts?: BuildOptions
 ): Promise<ProjectIndex> {
   const files = await listProjectFiles(projectRoot);
   if (files.length === 0) {
@@ -599,31 +692,39 @@ export async function buildProjectIndex(
   }
   const modules = new Map<FileId, ModuleIndex>();
 
-  const filePromises = files.map(async (f) => {
+  const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
+  const parsedMap = new Map<string, { source: string; tree: Parser.Tree; sup: ReturnType<typeof supportForFile>; lang: Parser.Language }>();
+  const fileResults = await mapLimit(files, conc, async (f) => {
     try {
-      const sup = supportForFile(f);
-      const lang = languageForFile(f);
-      const src = await fsp.readFile(f, "utf8");
-      const imports = await collectImportsForFile(f, projectRoot);
-      const mod = collectLocalsAndExportsFromSource(f, src, sup, lang, imports);
+      const sig = await fileSignature(f, opts?.cacheStrict);
+      const cached = await tryLoadFromCache(projectRoot, f, sig, opts);
+      if (cached) {
+        return [f, cached] as const;
+      }
+      const parsed = await parseFile(f);
+      parsedMap.set(f, parsed);
+      const { source: src, sup, lang, tree } = parsed;
+      const imports = await collectImportsForFile(f, projectRoot, { source: src, tree });
+      const mod = collectLocalsAndExportsFromSource(f, src, sup, lang, imports, { tree });
       mod.imports = imports;
 
       if (sup.supportsCrossModuleSymbols) {
         if (sup.id === "ts" || sup.id === "js") {
           const { matchPath } = await loadNearestTsconfigFor(f);
-          for (const e of mod.exports) if ((e as any).type !== "local") {
-            const ee: any = e;
-            if (ee.fromModule.startsWith(".")) {
-              const resolved = await resolveSpecifier(f, ee.fromModule, projectRoot, matchPath, await loadWorkspaceConfig(projectRoot));
-              if (typeof resolved === "string") ee.fromModule = resolved;
+          for (const e of mod.exports) if (e.type !== "local") {
+            if (e.fromModule.startsWith(".")) {
+              const resolved = await resolveSpecifier(f, e.fromModule, projectRoot, matchPath, await loadWorkspaceConfig(projectRoot));
+              if (typeof resolved === "string") e.fromModule = resolved;
             } else {
               const ws = await loadWorkspaceConfig(projectRoot);
-              const pkgResolved = await (await import("./util.js")).resolveWorkspacePackage(ee.fromModule, ws);
-              if (pkgResolved) ee.fromModule = pkgResolved;
+              const { resolveWorkspacePackage } = await import("./util.js");
+              const pkgResolved = await resolveWorkspacePackage(e.fromModule, ws);
+              if (pkgResolved) e.fromModule = pkgResolved;
             }
           }
         }
       }
+      await writeToCache(projectRoot, f, sig, mod, opts);
       return [f, mod] as const;
     } catch (error) {
       console.warn(`Warning: Failed to process file ${f}:`, error);
@@ -631,8 +732,6 @@ export async function buildProjectIndex(
       return [f, mod] as const;
     }
   });
-
-  const fileResults = await Promise.all(filePromises);
   for (const [f, mod] of fileResults) {
     modules.set(f.replace(/\\/g, "/"), mod);
   }
@@ -643,24 +742,23 @@ export async function buildProjectIndex(
         const target = modules.get(imp.resolved);
         if (target) {
           let exported: string[] = [];
-          const viaAll = target.exports.filter((e) => (e as any).type === "local");
-          if (viaAll.length) exported = (viaAll as any).map((e: any) => e.exportedAs);
+          const viaAll = target.exports.filter((e) => e.type === "local");
+          if (viaAll.length) exported = viaAll.map((e) => e.exportedAs);
           else exported = target.locals.map((l) => l.localName).filter((n) => !n.startsWith("_"));
-          for (const name of exported) {
-            m.imports.push({ kind: "named", local: name, imported: name, from: (imp as any).from, resolved: imp.resolved });
-          }
+          for (const name of exported) m.imports.push({ kind: "named", local: name, imported: name, from: imp.from, resolved: imp.resolved });
         }
       }
     }
   }
 
-  const graph = await collectGraph(projectRoot, files);
+  const graph = await collectGraph(projectRoot, files, { parsed: parsedMap as any });
   return { graph, modules, byFile: modules, exportCache: new Map() };
 }
 
 export async function buildProjectIndexFromFiles(
   projectRoot: string,
-  inputFiles: string[]
+  inputFiles: string[],
+  opts?: BuildOptions
 ): Promise<ProjectIndex> {
   const files = Array.from(new Set((inputFiles || []).filter(Boolean).map((f) => path.resolve(f))));
   if (files.length === 0) {
@@ -668,31 +766,39 @@ export async function buildProjectIndexFromFiles(
   }
   const modules = new Map<FileId, ModuleIndex>();
 
-  const filePromises = files.map(async (f) => {
+  const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
+  const parsedMap = new Map<string, { source: string; tree: Parser.Tree; sup: ReturnType<typeof supportForFile>; lang: Parser.Language }>();
+  const fileResults = await mapLimit(files, conc, async (f) => {
     try {
-      const sup = supportForFile(f);
-      const lang = languageForFile(f);
-      const src = await fsp.readFile(f, "utf8");
-      const imports = await collectImportsForFile(f, projectRoot);
-      const mod = collectLocalsAndExportsFromSource(f, src, sup, lang, imports);
+      const sig = await fileSignature(f, opts?.cacheStrict);
+      const cached = await tryLoadFromCache(projectRoot, f, sig, opts);
+      if (cached) {
+        return [f, cached] as const;
+      }
+      const parsed = await parseFile(f);
+      parsedMap.set(f, parsed);
+      const { source: src, sup, lang, tree } = parsed;
+      const imports = await collectImportsForFile(f, projectRoot, { source: src, tree });
+      const mod = collectLocalsAndExportsFromSource(f, src, sup, lang, imports, { tree });
       mod.imports = imports;
 
       if (sup.supportsCrossModuleSymbols) {
         if (sup.id === "ts" || sup.id === "js") {
           const { matchPath } = await loadNearestTsconfigFor(f);
-          for (const e of mod.exports) if ((e as any).type !== "local") {
-            const ee: any = e;
-            if (ee.fromModule.startsWith(".")) {
-              const resolved = await resolveSpecifier(f, ee.fromModule, projectRoot, matchPath, await loadWorkspaceConfig(projectRoot));
-              if (typeof resolved === "string") ee.fromModule = resolved;
+          for (const e of mod.exports) if (e.type !== "local") {
+            if (e.fromModule.startsWith(".")) {
+              const resolved = await resolveSpecifier(f, e.fromModule, projectRoot, matchPath, await loadWorkspaceConfig(projectRoot));
+              if (typeof resolved === "string") e.fromModule = resolved;
             } else {
               const ws = await loadWorkspaceConfig(projectRoot);
-              const pkgResolved = await (await import("./util.js")).resolveWorkspacePackage(ee.fromModule, ws);
-              if (pkgResolved) ee.fromModule = pkgResolved;
+              const { resolveWorkspacePackage } = await import("./util.js");
+              const pkgResolved = await resolveWorkspacePackage(e.fromModule, ws);
+              if (pkgResolved) e.fromModule = pkgResolved;
             }
           }
         }
       }
+      await writeToCache(projectRoot, f, sig, mod, opts);
       return [f, mod] as const;
     } catch (error) {
       console.warn(`Warning: Failed to process file ${f}:`, error);
@@ -700,8 +806,6 @@ export async function buildProjectIndexFromFiles(
       return [f, mod] as const;
     }
   });
-
-  const fileResults = await Promise.all(filePromises);
   for (const [f, mod] of fileResults) {
     modules.set(f.replace(/\\/g, "/"), mod);
   }
@@ -712,18 +816,16 @@ export async function buildProjectIndexFromFiles(
         const target = modules.get(imp.resolved);
         if (target) {
           let exported: string[] = [];
-          const viaAll = target.exports.filter((e) => (e as any).type === "local");
-          if (viaAll.length) exported = (viaAll as any).map((e: any) => e.exportedAs);
+          const viaAll = target.exports.filter((e) => e.type === "local");
+          if (viaAll.length) exported = viaAll.map((e) => e.exportedAs);
           else exported = target.locals.map((l) => l.localName).filter((n) => !n.startsWith("_"));
-          for (const name of exported) {
-            m.imports.push({ kind: "named", local: name, imported: name, from: (imp as any).from, resolved: imp.resolved });
-          }
+          for (const name of exported) m.imports.push({ kind: "named", local: name, imported: name, from: imp.from, resolved: imp.resolved });
         }
       }
     }
   }
 
-  const graph = await collectGraph(projectRoot, files);
+  const graph = await collectGraph(projectRoot, files, { parsed: parsedMap as any });
   return { graph, modules, byFile: modules, exportCache: new Map() };
 }
 
@@ -742,17 +844,17 @@ export function resolveExport(
   const key = cacheKey(normalizedFile, exportedName);
   if (index.exportCache.has(key)) return index.exportCache.get(key)!;
 
-  for (const e of mod.exports) if ((e as any).type === "local" && (e as any).exportedAs === exportedName) {
-    const res: ResolvedExport = { kind: "resolved", def: (e as any).target };
+  for (const e of mod.exports) if (e.type === "local" && e.exportedAs === exportedName) {
+    const res: ResolvedExport = { kind: "resolved", def: e.target };
     index.exportCache.set(key, res);
     return res;
   }
-  for (const e of mod.exports) if ((e as any).type === "reexport" && (e as any).exportedAs === exportedName && typeof (e as any).fromModule === "string") {
-    const down = resolveExport(index, (e as any).fromModule, (e as any).sourceSpecifier || exportedName) || resolveExport(index, (e as any).fromModule, exportedName);
+  for (const e of mod.exports) if (e.type === "reexport" && e.exportedAs === exportedName && typeof e.fromModule === "string") {
+    const down = resolveExport(index, e.fromModule, e.sourceSpecifier || exportedName) || resolveExport(index, e.fromModule, exportedName);
     if (down) { index.exportCache.set(key, down); return down; }
   }
-  for (const e of mod.exports) if ((e as any).type === "exportStar" && typeof (e as any).fromModule === "string") {
-    const down = resolveExport(index, (e as any).fromModule, exportedName);
+  for (const e of mod.exports) if (e.type === "exportStar" && typeof e.fromModule === "string") {
+    const down = resolveExport(index, e.fromModule, exportedName);
     if (down) { index.exportCache.set(key, down); return down; }
   }
   index.exportCache.set(key, null);
@@ -780,15 +882,15 @@ export async function goToDefinition(
   const tree = parser.parse(source);
 
   const pos = { row: Math.max(0, line - 1), column: Math.max(0, column - 1) } as any;
-  let node: Parser.SyntaxNode | null = (tree as any).rootNode.descendantForPosition(pos, pos);
+  let node: Parser.SyntaxNode | null = tree.rootNode.descendantForPosition(pos, pos);
 
   if (node && node.type === "variable_declarator") {
-    const value = (node as any).childForFieldName("value");
+    const value = node.childForFieldName("value");
     if (value && value.type === "call_expression") {
-      let callee = (value as any).childForFieldName("function");
-      if (!callee) callee = (value as any).childForFieldName("callee");
-      if (!callee) callee = (value as any).child(0);
-      if (callee && (sup.nodeTypes.identifier as any).includes(callee.type)) {
+      let callee = value.childForFieldName("function");
+      if (!callee) callee = value.childForFieldName("callee");
+      if (!callee) callee = value.child(0);
+      if (callee && sup.nodeTypes.identifier.includes(callee.type)) {
         node = callee;
       }
     }
@@ -806,22 +908,22 @@ export async function goToDefinition(
     let obj = memberNode.child(0);
     let prop = memberNode.child(2);
     if (sup.id === "python") {
-      obj = (memberNode as any).childForFieldName("object") ?? obj;
-      prop = (memberNode as any).childForFieldName("attribute") ?? prop;
+      obj = memberNode.childForFieldName("object") ?? obj;
+      prop = memberNode.childForFieldName("attribute") ?? prop;
     }
     if (obj && prop && obj.type === "identifier") {
-      const nsName = sliceText(obj as any, source);
-      const member = sliceText(prop as any, source);
-      const nsImport = mod.imports.find((i) => (i as any).kind === "namespace" && (i as any).localNS === nsName);
+      const nsName = sliceText(obj, source);
+      const member = sliceText(prop, source);
+      const nsImport = mod.imports.find((i) => i.kind === "namespace" && i.localNS === nsName);
       if (nsImport) {
-        const resolved = resolveImported(index, nsImport as any, member);
-        if (resolved) return { status: "ok", definition: resolved, via: { ...(toModuleRef((nsImport as any).resolved) ? { importedFrom: toModuleRef((nsImport as any).resolved) } : {}), exportedName: member } };
+        const resolved = resolveImported(index, nsImport, member);
+        if (resolved) return { status: "ok", definition: resolved, via: { ...(toModuleRef(nsImport.resolved) ? { importedFrom: toModuleRef(nsImport.resolved) } : {}), exportedName: member } };
       }
     }
   }
 
-  const isId = (sup.nodeTypes.identifier as any).includes((node as any).type);
-  let name: string | null = isId ? sliceText(node as any, source) : null;
+  const isId = sup.nodeTypes.identifier.includes(node.type);
+  let name: string | null = isId ? sliceText(node, source) : null;
 
   if (!name) {
     const findDeclNameNode = (n: Parser.SyntaxNode | null): Parser.SyntaxNode | null => {
@@ -837,19 +939,19 @@ export async function goToDefinition(
           cur.type === "class_definition" ||
           cur.type === "assignment"
         ) {
-          let named = (cur as any).childForFieldName("name");
+          let named = cur.childForFieldName("name");
           if (!named && cur.type === "assignment") {
             const left = cur.child(0);
-            if (left && (sup.nodeTypes.identifier as any).includes(left.type)) named = left;
+            if (left && sup.nodeTypes.identifier.includes(left.type)) named = left;
           }
-          if (named && (sup.nodeTypes.identifier as any).includes(named.type)) return named;
+          if (named && sup.nodeTypes.identifier.includes(named.type)) return named;
         }
         cur = cur.parent;
       }
       return null;
     };
     const declNameNode = findDeclNameNode(node);
-    if (declNameNode) name = sliceText(declNameNode as any, source);
+    if (declNameNode) name = sliceText(declNameNode, source);
   }
 
   if (name) {
@@ -865,20 +967,20 @@ export async function goToDefinition(
       }
 
       for (const imp of mod.imports) {
-        if ((imp as any).kind === "default" && (imp as any).local === name) {
-          const target = resolveImported(index, imp as any, "default");
-          if (target) return { status: "ok", definition: target, via: { ...(toModuleRef((imp as any).resolved) ? { importedFrom: toModuleRef((imp as any).resolved) } : {}), exportedName: "default" } };
-        } else if ((imp as any).kind === "named" && (imp as any).local === name) {
-          const target = resolveImported(index, imp as any, (imp as any).imported);
-          if (target) return { status: "ok", definition: target, via: { ...(toModuleRef((imp as any).resolved) ? { importedFrom: toModuleRef((imp as any).resolved) } : {}), exportedName: (imp as any).imported } };
-        } else if ((imp as any).kind === "namespace" && (imp as any).localNS === name) {
-          const targetFile = typeof (imp as any).resolved === "string" ? (imp as any).resolved.replace(/\\/g, "/") : undefined;
+        if (imp.kind === "default" && imp.local === name) {
+          const target = resolveImported(index, imp, "default");
+          if (target) return { status: "ok", definition: target, via: { ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}), exportedName: "default" } };
+        } else if (imp.kind === "named" && imp.local === name) {
+          const target = resolveImported(index, imp, imp.imported);
+          if (target) return { status: "ok", definition: target, via: { ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}), exportedName: imp.imported } };
+        } else if (imp.kind === "namespace" && imp.localNS === name) {
+          const targetFile = typeof imp.resolved === "string" ? imp.resolved.replace(/\\/g, "/") : undefined;
           if (targetFile) {
             const targetMod = index.byFile.get(targetFile);
             if (targetMod) {
-              const firstExport = targetMod.exports.find((e: any) => e.type === "local");
+              const firstExport = targetMod.exports.find((e) => e.type === "local");
               if (firstExport) {
-                return { status: "ok", definition: (firstExport as any).target, via: { ...(toModuleRef((imp as any).resolved) ? { importedFrom: toModuleRef((imp as any).resolved) } : {}), exportedName: (firstExport as any).exportedAs } };
+                return { status: "ok", definition: firstExport.target, via: { ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}), exportedName: firstExport.exportedAs } };
               }
             }
           }
@@ -891,19 +993,20 @@ export async function goToDefinition(
 }
 
 function toModuleRef(resolved?: FileId | { external: string }) {
-  return !resolved ? undefined : typeof resolved === "string" ? resolved : (resolved as any).external;
+  if (!resolved) return undefined;
+  return typeof resolved === "string" ? resolved : resolved.external;
 }
 export function resolveImported(
   index: ProjectIndex,
   imp: ImportBinding,
   exportedName: string
 ): SymbolDef | null {
-  const targetFile = typeof imp.resolved === "string" ? (imp.resolved as string) : undefined;
+  const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
   if (!targetFile) return null;
   const hit = resolveExport(index, targetFile, exportedName);
   if (hit?.def) return hit.def;
   const sup = supportForFile(targetFile);
-  if ((sup as any).id === "python") {
+  if (sup.id === "python") {
     const base = fs.existsSync(targetFile) && fs.statSync(targetFile).isDirectory() ? targetFile : path.dirname(targetFile);
     const subCandidates = [path.join(base, `${exportedName}.py`), path.join(base, exportedName, "__init__.py"), path.join(base, exportedName)];
     for (const c of subCandidates) {
@@ -920,7 +1023,7 @@ export function resolveImported(
         }
       } catch {}
     }
-    return { file: (targetFile as any).replace(/\\/g, "/"), localName: exportedName, kind: SymbolKind.Variable, range: { start: { line: 1, column: 1, index: 0 }, end: { line: 1, column: 1, index: 0 } } } as any;
+    return { file: targetFile.replace(/\\/g, "/"), localName: exportedName, kind: SymbolKind.Variable, range: { start: { line: 1, column: 1, index: 0 }, end: { line: 1, column: 1, index: 0 } } };
   }
   return null;
 }
@@ -932,28 +1035,29 @@ export type ScopeIndex = { bindings: Map<string, Binding[]>; all: Binding[] };
 export function buildScopeIndexFromSource(
   file: string,
   source: string,
-  support: any,
+  support: { nodeTypes: any; isDeclarationName: (n: Parser.SyntaxNode) => boolean; createsFunctionScope: (n: Parser.SyntaxNode) => boolean; createsBlockScope: (n: Parser.SyntaxNode) => boolean },
   lang: Parser.Language,
-  imports: ImportBinding[] = []
+  imports: ImportBinding[] = [],
+  opts?: { tree?: Parser.Tree }
 ): ScopeIndex {
   type Scope = { kind: "module" | "function" | "block"; map: Map<string, Binding> };
   const rootScope: Scope = { kind: "module", map: new Map() };
   const stack: Scope[] = [rootScope];
 
   for (const imp of imports) {
-    if ((imp as any).kind === "default") rootScope.map.set((imp as any).local, { name: (imp as any).local, kind: "importDefault", occurrences: [], import: imp });
-    if ((imp as any).kind === "named") rootScope.map.set((imp as any).local, { name: (imp as any).local, kind: "importNamed", occurrences: [], import: imp });
-    if ((imp as any).kind === "namespace") rootScope.map.set((imp as any).localNS, { name: (imp as any).localNS, kind: "namespace", occurrences: [], import: imp });
+    if (imp.kind === "default") rootScope.map.set(imp.local, { name: imp.local, kind: "importDefault", occurrences: [], import: imp });
+    if (imp.kind === "named") rootScope.map.set(imp.local, { name: imp.local, kind: "importNamed", occurrences: [], import: imp });
+    if (imp.kind === "namespace") rootScope.map.set(imp.localNS, { name: imp.localNS, kind: "namespace", occurrences: [], import: imp });
   }
 
   const parser = new Parser();
   parser.setLanguage(lang);
-  const tree = parser.parse(source);
+  const tree = opts?.tree ?? parser.parse(source);
 
-  const idSet = new Set([...(support.nodeTypes.identifier as string[]), ...(((support.nodeTypes.shorthandPropertyIdentifier ?? []) as string[]))]);
+  const idSet = new Set([...(support.nodeTypes.identifier as string[]), ...((support.nodeTypes.shorthandPropertyIdentifier ?? []) as string[])]);
 
   const addDecl = (nameNode: Parser.SyntaxNode, kind: BindingKind) => {
-    const name = sliceText(nameNode as any, source);
+    const name = sliceText(nameNode, source);
     let target = stack[stack.length - 1];
     if (kind === "function" || kind === "class") {
       target = rootScope;
@@ -1008,20 +1112,20 @@ export function buildScopeIndexFromSource(
       if (name) addDecl(name, "type");
     }
 
-    if (idSet.has(node.type) && !((support as any).isDeclarationName(node))) {
-      const name = sliceText(node as any, source);
+    if (idSet.has(node.type) && !support.isDeclarationName(node)) {
+      const name = sliceText(node, source);
       const b = lookup(name);
       if (b) {
-        b.occurrences.push(toRange(node as any));
+        b.occurrences.push(toRange(node));
       }
     }
 
-    for (const ch of (node as any).namedChildren) walk(ch);
+    for (const ch of node.namedChildren) walk(ch);
 
     if (support.createsFunctionScope(node) || (support.createsBlockScope(node) && node.type !== "program" && node.type !== "module")) stack.pop();
   };
 
-  walk((tree as any).rootNode);
+  walk(tree.rootNode);
 
   const bindings = new Map<string, Binding[]>();
   const all: Binding[] = [];
