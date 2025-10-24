@@ -81,7 +81,9 @@ export function stripPythonCommentsAndStrings(src: string): string {
 type MatchPathFn = ReturnType<typeof createMatchPath>;
 const tsconfigCache = new Map<string, { matchPath?: MatchPathFn }>();
 
-async function findNearestTsconfig(startFromFile: string): Promise<string | null> {
+async function findNearestTsconfig(
+  startFromFile: string
+): Promise<string | null> {
   let dir = path.dirname(startFromFile);
   while (true) {
     const cand = path.join(dir, "tsconfig.json");
@@ -299,7 +301,11 @@ export async function resolveWorkspacePackage(
     if (!target) return null;
     if (typeof target === "string") return target as string;
     if (typeof target === "object") {
-      const cand = (target as any).import ?? (target as any).default ?? (target as any).require ?? (target as any).module;
+      const cand =
+        (target as any).import ??
+        (target as any).default ??
+        (target as any).require ??
+        (target as any).module;
       if (typeof cand === "string") return cand;
     }
     return null;
@@ -363,7 +369,8 @@ export async function resolveSpecifier(
     const baseExt = path.extname(base);
     if (baseExt === ".js" || baseExt === ".mjs" || baseExt === ".cjs") {
       const baseWithoutExt = base.slice(0, -baseExt.length);
-      const tsExt = baseExt === ".mjs" ? ".mts" : baseExt === ".cjs" ? ".cts" : ".ts";
+      const tsExt =
+        baseExt === ".mjs" ? ".mts" : baseExt === ".cjs" ? ".cts" : ".ts";
       candidates.unshift(baseWithoutExt + tsExt);
     }
     for (const e of exts) candidates.push(base + e);
@@ -404,7 +411,10 @@ export async function resolveSpecifier(
     if (m) {
       const cand = path.resolve(m);
       const hasExt = !!path.extname(cand);
-      if (hasExt) { resolveSpecifierCache.set(cacheKey, cand); return cand; }
+      if (hasExt) {
+        resolveSpecifierCache.set(cacheKey, cand);
+        return cand;
+      }
       const exts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
       for (const e of exts) {
         const pth = cand + e;
@@ -461,7 +471,9 @@ export async function resolvePythonModule(
   moduleName: string | null,
   relativeDots: number
 ): Promise<FileId | { external: string }> {
-  const cacheKey = `${fromFile}::${".".repeat(relativeDots)}${moduleName ?? ""}`;
+  const cacheKey = `${fromFile}::${".".repeat(relativeDots)}${
+    moduleName ?? ""
+  }`;
   const cached = resolvePythonModuleCache.get(cacheKey);
   if (cached) return cached;
   const fromDir = path.dirname(fromFile);
@@ -483,9 +495,17 @@ export async function resolvePythonModule(
   }
   for (const c of candidates) {
     try {
-      if (await isDirectory(c)) { const res = path.resolve(c); resolvePythonModuleCache.set(cacheKey, res); return res; }
+      if (await isDirectory(c)) {
+        const res = path.resolve(c);
+        resolvePythonModuleCache.set(cacheKey, res);
+        return res;
+      }
       await fsp.access(c, fs.constants.R_OK);
-      { const res = path.resolve(c); resolvePythonModuleCache.set(cacheKey, res); return res; }
+      {
+        const res = path.resolve(c);
+        resolvePythonModuleCache.set(cacheKey, res);
+        return res;
+      }
     } catch {}
   }
 
@@ -493,13 +513,23 @@ export async function resolvePythonModule(
     const abs = path.join(projectRoot, ...moduleName.split("."));
     for (const c of [abs + ".py", path.join(abs, "__init__.py"), abs]) {
       try {
-        if (await isDirectory(c)) { const res = path.resolve(c); resolvePythonModuleCache.set(cacheKey, res); return res; }
+        if (await isDirectory(c)) {
+          const res = path.resolve(c);
+          resolvePythonModuleCache.set(cacheKey, res);
+          return res;
+        }
         await fsp.access(c, fs.constants.R_OK);
-        { const res = path.resolve(c); resolvePythonModuleCache.set(cacheKey, res); return res; }
+        {
+          const res = path.resolve(c);
+          resolvePythonModuleCache.set(cacheKey, res);
+          return res;
+        }
       } catch {}
     }
   }
-  const ext = { external: ".".repeat(relativeDots) + (moduleName ?? "") } as const;
+  const ext = {
+    external: ".".repeat(relativeDots) + (moduleName ?? ""),
+  } as const;
   resolvePythonModuleCache.set(cacheKey, ext as any);
   return ext;
 }
@@ -507,7 +537,10 @@ export async function resolvePythonModule(
 // ----------------- Caches -----------------
 const fileExistsCache = new Map<string, boolean>();
 const resolveSpecifierCache = new Map<string, FileId | { external: string }>();
-const resolvePythonModuleCache = new Map<string, FileId | { external: string }>();
+const resolvePythonModuleCache = new Map<
+  string,
+  FileId | { external: string }
+>();
 
 // ----------------- Parser pool (simple) -----------------
 type LangKey = "ts" | "tsx" | "js" | "py";
@@ -516,7 +549,10 @@ const parserPools = new Map<LangKey, Parser[]>();
 export function acquireParser(lang: Parser.Language, key: LangKey): Parser {
   const pool = parserPools.get(key) ?? [];
   const p = pool.pop();
-  if (p) { parserPools.set(key, pool); return p; }
+  if (p) {
+    parserPools.set(key, pool);
+    return p;
+  }
   const parser = new Parser();
   parser.setLanguage(lang);
   return parser;
@@ -527,5 +563,3 @@ export function releaseParser(parser: Parser, key: LangKey) {
   pool.push(parser);
   parserPools.set(key, pool);
 }
-
-

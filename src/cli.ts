@@ -41,26 +41,32 @@ function writeError(error: unknown) {
 async function main() {
   const args = process.argv.slice(2);
   const cmd = args[0] ?? "graph";
-  
+
   // Extract flags and root directory
-  const flags = args.filter(a => a.startsWith("--"));
-  const nonFlags = args.filter(a => !a.startsWith("--"));
+  const flags = args.filter((a) => a.startsWith("--"));
+  const nonFlags = args.filter((a) => !a.startsWith("--"));
   const root = nonFlags[1] ?? process.cwd();
   const roots = cmd === "graph" || cmd === "index" ? nonFlags.slice(1) : [];
 
   const resolveFilesFromRoots = async (): Promise<string[]> => {
     if (roots.length === 0) return await listProjectFiles(root);
-    const all: string[][] = await Promise.all(roots.map(async (r) => await listProjectFiles(r)));
+    const all: string[][] = await Promise.all(
+      roots.map(async (r) => await listProjectFiles(r))
+    );
     return Array.from(new Set(all.flat()));
   };
 
   if (cmd === "graph") {
     const files = await resolveFilesFromRoots();
-    const wantSymbols = flags.includes("--symbols") || flags.includes("--symbols-only") || flags.includes("--symbols-detailed");
+    const wantSymbols =
+      flags.includes("--symbols") ||
+      flags.includes("--symbols-only") ||
+      flags.includes("--symbols-detailed");
     const detailedSymbols = flags.includes("--symbols-detailed");
-    const threadsFlagIdx = args.findIndex(a => a === "--threads");
-    const threads = threadsFlagIdx !== -1 ? Number(args[threadsFlagIdx + 1]) : 0;
-    const cacheIdx = args.findIndex(a => a === "--cache");
+    const threadsFlagIdx = args.findIndex((a) => a === "--threads");
+    const threads =
+      threadsFlagIdx !== -1 ? Number(args[threadsFlagIdx + 1]) : 0;
+    const cacheIdx = args.findIndex((a) => a === "--cache");
     const cache = cacheIdx !== -1 ? (args[cacheIdx + 1] as any) : undefined;
     const cacheStrict = flags.includes("--cache-strict");
     const format = flags.includes("--mermaid")
@@ -70,29 +76,57 @@ async function main() {
       : "json";
     const fast = flags.includes("--fast-graph");
     if (wantSymbols) {
-      const index = await buildProjectIndexFromFiles(root, files, { threads, cache, cacheStrict });
+      const index = await buildProjectIndexFromFiles(root, files, {
+        threads,
+        cache,
+        cacheStrict,
+      });
       let sgraph;
       if (detailedSymbols) {
-        const scopeIdx = args.findIndex(a => a === "--symbols-detailed-scope");
+        const scopeIdx = args.findIndex(
+          (a) => a === "--symbols-detailed-scope"
+        );
         const scope = scopeIdx !== -1 ? (args[scopeIdx + 1] as any) : undefined;
-        const maxEdgesIdx = args.findIndex(a => a === "--symbols-detailed-max-edges");
-        const maxEdges = maxEdgesIdx !== -1 ? Number(args[maxEdgesIdx + 1]) : undefined;
+        const maxEdgesIdx = args.findIndex(
+          (a) => a === "--symbols-detailed-max-edges"
+        );
+        const maxEdges =
+          maxEdgesIdx !== -1 ? Number(args[maxEdgesIdx + 1]) : undefined;
         const membersOnly = flags.includes("--symbols-detailed-members-only");
-        sgraph = await buildSymbolGraphDetailed(index, { scope: scope as any, maxEdges: typeof maxEdges === 'number' ? maxEdges : undefined as any, membersOnly });
+        sgraph = await buildSymbolGraphDetailed(index, {
+          scope: scope as any,
+          maxEdges:
+            typeof maxEdges === "number" ? maxEdges : (undefined as any),
+          membersOnly,
+        });
       } else {
         sgraph = await buildSymbolGraph(index);
       }
       if (flags.includes("--symbols-only")) {
-        if (format === "mermaid") writeStdoutLine(graphToMermaidSymbols(sgraph, root));
-        else if (format === "dot") writeStdoutLine(graphToDOTSymbols(sgraph, root));
-        else writeJSONLine({ nodes: [...sgraph.nodes.values()], edges: sgraph.edges });
+        if (format === "mermaid")
+          writeStdoutLine(graphToMermaidSymbols(sgraph, root));
+        else if (format === "dot")
+          writeStdoutLine(graphToDOTSymbols(sgraph, root));
+        else
+          writeJSONLine({
+            nodes: [...sgraph.nodes.values()],
+            edges: sgraph.edges,
+          });
         return;
       }
       // Reuse the graph already built during indexing to avoid an extra pass
       const fgraph = index.graph;
-      if (format === "mermaid") writeStdoutLine(graphToMermaidSymbolsWithFiles(sgraph, fgraph, root));
-      else if (format === "dot") writeStdoutLine(graphToDOTSymbolsWithFiles(sgraph, fgraph, root));
-      else writeJSONLine({ files: [...fgraph.nodes], fileEdges: fgraph.edges, symbols: [...sgraph.nodes.values()], symbolEdges: sgraph.edges });
+      if (format === "mermaid")
+        writeStdoutLine(graphToMermaidSymbolsWithFiles(sgraph, fgraph, root));
+      else if (format === "dot")
+        writeStdoutLine(graphToDOTSymbolsWithFiles(sgraph, fgraph, root));
+      else
+        writeJSONLine({
+          files: [...fgraph.nodes],
+          fileEdges: fgraph.edges,
+          symbols: [...sgraph.nodes.values()],
+          symbolEdges: sgraph.edges,
+        });
       return;
     }
     const graph = await collectGraph(root, files, { fast });
@@ -104,21 +138,34 @@ async function main() {
 
   if (cmd === "index") {
     const files = await resolveFilesFromRoots();
-    const threadsFlagIdx = args.findIndex(a => a === "--threads");
-    const threads = threadsFlagIdx !== -1 ? Number(args[threadsFlagIdx + 1]) : 0;
-    const cacheIdx = args.findIndex(a => a === "--cache");
+    const threadsFlagIdx = args.findIndex((a) => a === "--threads");
+    const threads =
+      threadsFlagIdx !== -1 ? Number(args[threadsFlagIdx + 1]) : 0;
+    const cacheIdx = args.findIndex((a) => a === "--cache");
     const cache = cacheIdx !== -1 ? (args[cacheIdx + 1] as any) : undefined;
     const cacheStrict = flags.includes("--cache-strict");
-    const index = await buildProjectIndexFromFiles(root, files, { threads, cache, cacheStrict });
+    const index = await buildProjectIndexFromFiles(root, files, {
+      threads,
+      cache,
+      cacheStrict,
+    });
     const full = flags.includes("--json") || flags.includes("--full");
     if (full) {
       const modules = [...index.byFile.values()].map((m) => ({
         file: m.file,
-        locals: m.locals.map((l) => ({ name: l.localName, kind: l.kind, start: l.range.start })),
+        locals: m.locals.map((l) => ({
+          name: l.localName,
+          kind: l.kind,
+          start: l.range.start,
+        })),
         exports: m.exports,
         imports: m.imports,
       }));
-      writeJSONLine({ files: modules.length, edges: index.graph.edges.length, modules });
+      writeJSONLine({
+        files: modules.length,
+        edges: index.graph.edges.length,
+        modules,
+      });
     } else {
       writeJSONLine({
         files: [...index.byFile.keys()].length,
