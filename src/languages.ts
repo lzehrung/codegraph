@@ -290,7 +290,11 @@ export const PY_SUPPORT: LanguageSupport = {
   supportsCrossModuleSymbols: true,
 };
 
-export const LANGUAGE_SUPPORTS: LanguageSupport[] = [TS_SUPPORT, JS_SUPPORT, PY_SUPPORT];
+export const LANGUAGE_SUPPORTS: LanguageSupport[] = [
+  TS_SUPPORT,
+  JS_SUPPORT,
+  PY_SUPPORT,
+];
 
 export function supportForFile(filename: string): LanguageSupport {
   const ext = path.extname(filename).toLowerCase();
@@ -301,12 +305,23 @@ export function languageForFile(filename: string): Parser.Language {
 }
 
 // ---------------- Compiled query cache (per language grammar) ----------------
-type CompiledQueries = { imports: Parser.Query; exports: Parser.Query; locals: Parser.Query; importBindings: Parser.Query };
+type CompiledQueries = {
+  imports: Parser.Query;
+  exports: Parser.Query;
+  locals: Parser.Query;
+  importBindings: Parser.Query;
+};
 const queryCache = new WeakMap<Parser.Language, Map<string, CompiledQueries>>();
 
-export function getCompiledQueries(lang: Parser.Language, support: LanguageSupport): CompiledQueries {
+export function getCompiledQueries(
+  lang: Parser.Language,
+  support: LanguageSupport
+): CompiledQueries {
   let bySupport = queryCache.get(lang);
-  if (!bySupport) { bySupport = new Map<string, CompiledQueries>(); queryCache.set(lang, bySupport); }
+  if (!bySupport) {
+    bySupport = new Map<string, CompiledQueries>();
+    queryCache.set(lang, bySupport);
+  }
   const key = support.id;
   let cq = bySupport.get(key);
   if (!cq) {
@@ -320,5 +335,3 @@ export function getCompiledQueries(lang: Parser.Language, support: LanguageSuppo
   }
   return cq;
 }
-
-

@@ -37,5 +37,3 @@ export {
   buildScopeIndexFromSource,
   resolveImported,
 } from "./indexer.js";
-
-
