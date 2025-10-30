@@ -1,0 +1,1259 @@
+{
+  "files": [
+    "E:\\git repos\\dev-agent\\dep-graph\\src\\cli.ts",
+    "E:\\git repos\\dev-agent\\dep-graph\\src\\global.d.ts",
+    "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+    "E:\\git repos\\dev-agent\\dep-graph\\src\\index.ts",
+    "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+    "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts",
+    "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts"
+  ],
+  "fileEdges": [
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\cli.ts",
+      "to": {
+        "type": "external",
+        "name": "node:path"
+      },
+      "raw": "node:path",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\cli.ts",
+      "to": {
+        "type": "file",
+        "path": "E:\\git repos\\dev-agent\\dep-graph\\src\\index.ts"
+      },
+      "raw": "./index.js",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "to": {
+        "type": "external",
+        "name": "node:path"
+      },
+      "raw": "node:path",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "to": {
+        "type": "external",
+        "name": "tree-sitter"
+      },
+      "raw": "tree-sitter",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "to": {
+        "type": "external",
+        "name": "node:fs"
+      },
+      "raw": "node:fs",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "to": {
+        "type": "external",
+        "name": "node:fs/promises"
+      },
+      "raw": "node:fs/promises",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "to": {
+        "type": "file",
+        "path": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts"
+      },
+      "raw": "./languages.js",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "to": {
+        "type": "file",
+        "path": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts"
+      },
+      "raw": "./languages.js",
+      "typeOnly": true
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "to": {
+        "type": "file",
+        "path": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts"
+      },
+      "raw": "./util.js",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "to": {
+        "type": "file",
+        "path": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts"
+      },
+      "raw": "./util.js",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\index.ts",
+      "to": {
+        "type": "file",
+        "path": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts"
+      },
+      "raw": "./languages.js",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\index.ts",
+      "to": {
+        "type": "file",
+        "path": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts"
+      },
+      "raw": "./util.js",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\index.ts",
+      "to": {
+        "type": "file",
+        "path": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts"
+      },
+      "raw": "./graphs.js",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\index.ts",
+      "to": {
+        "type": "file",
+        "path": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts"
+      },
+      "raw": "./indexer.js",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "to": {
+        "type": "external",
+        "name": "node:fs"
+      },
+      "raw": "node:fs",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "to": {
+        "type": "external",
+        "name": "node:fs/promises"
+      },
+      "raw": "node:fs/promises",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "to": {
+        "type": "external",
+        "name": "node:path"
+      },
+      "raw": "node:path",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "to": {
+        "type": "external",
+        "name": "tree-sitter"
+      },
+      "raw": "tree-sitter",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "to": {
+        "type": "external",
+        "name": "node:crypto"
+      },
+      "raw": "node:crypto",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "to": {
+        "type": "file",
+        "path": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts"
+      },
+      "raw": "./languages.js",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "to": {
+        "type": "file",
+        "path": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts"
+      },
+      "raw": "./util.js",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "to": {
+        "type": "file",
+        "path": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts"
+      },
+      "raw": "./graphs.js",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts",
+      "to": {
+        "type": "external",
+        "name": "node:path"
+      },
+      "raw": "node:path",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts",
+      "to": {
+        "type": "external",
+        "name": "tree-sitter"
+      },
+      "raw": "tree-sitter",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts",
+      "to": {
+        "type": "external",
+        "name": "tree-sitter-typescript"
+      },
+      "raw": "tree-sitter-typescript",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts",
+      "to": {
+        "type": "external",
+        "name": "tree-sitter-javascript"
+      },
+      "raw": "tree-sitter-javascript",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts",
+      "to": {
+        "type": "external",
+        "name": "tree-sitter-python"
+      },
+      "raw": "tree-sitter-python",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "to": {
+        "type": "external",
+        "name": "node:fs"
+      },
+      "raw": "node:fs",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "to": {
+        "type": "external",
+        "name": "node:fs/promises"
+      },
+      "raw": "node:fs/promises",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "to": {
+        "type": "external",
+        "name": "node:path"
+      },
+      "raw": "node:path",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "to": {
+        "type": "external",
+        "name": "fast-glob"
+      },
+      "raw": "fast-glob",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "to": {
+        "type": "external",
+        "name": "tsconfig-paths"
+      },
+      "raw": "tsconfig-paths",
+      "typeOnly": false
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "to": {
+        "type": "external",
+        "name": "tree-sitter"
+      },
+      "raw": "tree-sitter",
+      "typeOnly": false
+    }
+  ],
+  "symbols": [
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\cli.ts::toJSON::414",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\cli.ts",
+      "name": "toJSON",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\cli.ts::writeStdoutLine::483",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\cli.ts",
+      "name": "writeStdoutLine",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\cli.ts::writeJSONLine::569",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\cli.ts",
+      "name": "writeJSONLine",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\cli.ts::writeStderrLine::646",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\cli.ts",
+      "name": "writeStderrLine",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\cli.ts::writeError::732",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\cli.ts",
+      "name": "writeError",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\cli.ts::compactGraphWithSymbols::973",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\cli.ts",
+      "name": "compactGraphWithSymbols",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\cli.ts::compactSymbolsOnly::2239",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\cli.ts",
+      "name": "compactSymbolsOnly",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\cli.ts::main::3152",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\cli.ts",
+      "name": "main",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::FileId::503",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "FileId",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::EdgeTo::535",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "EdgeTo",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::Edge::634",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "Edge",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::Graph::731",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "Graph",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::collectModuleSpecifiersFromSource::797",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "collectModuleSpecifiersFromSource",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::collectGraph::4158",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "collectGraph",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::edgeTargetToString::6564",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "edgeTargetToString",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::buildNodeIdMap::6666",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "buildNodeIdMap",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::graphToDOT::7227",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "graphToDOT",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::graphToMermaid::8453",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "graphToMermaid",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::AstGrepHit::9268",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "AstGrepHit",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::astGrep::9405",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "astGrep",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::SymbolNodeKind::10633",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "SymbolNodeKind",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::SymbolNode::10790",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "SymbolNode",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::SymbolEdge::10896",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "SymbolEdge",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::SymbolGraph::10968",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "SymbolGraph",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::defNodeId::11059",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "defNodeId",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::nodeForDef::11273",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "nodeForDef",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::buildSymbolGraph::11563",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "buildSymbolGraph",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::buildSymbolGraphDetailed::15298",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "buildSymbolGraphDetailed",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::graphToMermaidSymbols::36609",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "graphToMermaidSymbols",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::graphToDOTSymbols::37873",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "graphToDOTSymbols",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::graphToMermaidSymbolsWithFiles::39287",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "graphToMermaidSymbolsWithFiles",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::graphToDOTSymbolsWithFiles::42047",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts",
+      "name": "graphToDOTSymbolsWithFiles",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::Pos::696",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "Pos",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::Range::763",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "Range",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::FileId::809",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "FileId",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::SymbolDef::839",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "SymbolDef",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::ExportEntry::942",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "ExportEntry",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::ImportBinding::1297",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "ImportBinding",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::ModuleIndex::2101",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "ModuleIndex",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::ProjectIndex::2226",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "ProjectIndex",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::ResolvedExport::2398",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "ResolvedExport",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::BuildOptions::2466",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "BuildOptions",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::mapLimit::2605",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "mapLimit",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::ModuleCacheEntry::3314",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "ModuleCacheEntry",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::memoryCache::3374",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "memoryCache",
+      "kind": "variable"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::fileSignature::3441",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "fileSignature",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::cacheFilePath::3809",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "cacheFilePath",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::tryLoadFromCache::4154",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "tryLoadFromCache",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::writeToCache::4810",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "writeToCache",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::collectLocalsAndExportsFromSource::5297",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "collectLocalsAndExportsFromSource",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::collectImportsForFile::20557",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "collectImportsForFile",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::parseFile::31161",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "parseFile",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::buildProjectIndex::31595",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "buildProjectIndex",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::buildProjectIndexFromFiles::35307",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "buildProjectIndexFromFiles",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::cacheKey::39097",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "cacheKey",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::resolveExport::39184",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "resolveExport",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::GoToRequest::40507",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "GoToRequest",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::GoToResult::40581",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "GoToResult",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::goToDefinition::40832",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "goToDefinition",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::toModuleRef::47133",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "toModuleRef",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::resolveImported::47312",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "resolveImported",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::BindingKind::48810",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "BindingKind",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::Binding::48953",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "Binding",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::ScopeIndex::49082",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "ScopeIndex",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::buildScopeIndexFromSource::49166",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "buildScopeIndexFromSource",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::Reference::53860",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "Reference",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::sameDef::54001",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "sameDef",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::rangeContains::54175",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "rangeContains",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::findReferences::54544",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "findReferences",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::__buildSymbolGraphDetailedCompat::58744",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "__buildSymbolGraphDetailedCompat",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::collectNamespaceMemberRefs::59053",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "collectNamespaceMemberRefs",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::helper::18510",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts",
+      "name": "helper",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::IdentifierNodeType::226",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts",
+      "name": "IdentifierNodeType",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::LanguageSupport::270",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts",
+      "name": "LanguageSupport",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::LangTS::990",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts",
+      "name": "LangTS",
+      "kind": "variable"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::LangTSX::1057",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts",
+      "name": "LangTSX",
+      "kind": "variable"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::LangJS::1118",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts",
+      "name": "LangJS",
+      "kind": "variable"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::TS_SUPPORT::1185",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts",
+      "name": "TS_SUPPORT",
+      "kind": "variable"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::JS_SUPPORT::4817",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts",
+      "name": "JS_SUPPORT",
+      "kind": "variable"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::PY_SUPPORT::11441",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts",
+      "name": "PY_SUPPORT",
+      "kind": "variable"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::LANGUAGE_SUPPORTS::13026",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts",
+      "name": "LANGUAGE_SUPPORTS",
+      "kind": "variable"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::supportForFile::13135",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts",
+      "name": "supportForFile",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::languageForFile::13342",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts",
+      "name": "languageForFile",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::CompiledQueries::13543",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts",
+      "name": "CompiledQueries",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::queryCache::13684",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts",
+      "name": "queryCache",
+      "kind": "variable"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::getCompiledQueries::13778",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts",
+      "name": "getCompiledQueries",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::Pos::224",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "Pos",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::Range::292",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "Range",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::sliceText::345",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "sliceText",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::unquote::487",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "unquote",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::toRange::797",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "toRange",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::listProjectFiles::1280",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "listProjectFiles",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::stripJsLikeComments::1820",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "stripJsLikeComments",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::stripPythonCommentsAndStrings::1978",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "stripPythonCommentsAndStrings",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::MatchPathFn::2257",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "MatchPathFn",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::tsconfigCache::2314",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "tsconfigCache",
+      "kind": "variable"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::findNearestTsconfig::2396",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "findNearestTsconfig",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::loadNearestTsconfigFor::2818",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "loadNearestTsconfigFor",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::fileExists::3717",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "fileExists",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::findWorkspaceRoot::4104",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "findWorkspaceRoot",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::loadJSON::4827",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "loadJSON",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::WorkspacePackageInfo::5022",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "WorkspacePackageInfo",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::WorkspaceConfig::5138",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "WorkspaceConfig",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::workspaceCache::5237",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "workspaceCache",
+      "kind": "variable"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::loadWorkspaceConfig::5315",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "loadWorkspaceConfig",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::resolvePackageSubpath::7741",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "resolvePackageSubpath",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::resolveWorkspacePackage::8223",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "resolveWorkspacePackage",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::FileId::10685",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "FileId",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::resolveSpecifier::10727",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "resolveSpecifier",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::findPythonPackageAnchor::13801",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "findPythonPackageAnchor",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::isDirectory::14201",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "isDirectory",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::resolvePythonModule::14383",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "resolvePythonModule",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::fileExistsCache::16602",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "fileExistsCache",
+      "kind": "variable"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::resolveSpecifierCache::16655",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "resolveSpecifierCache",
+      "kind": "variable"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::resolvePythonModuleCache::16736",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "resolvePythonModuleCache",
+      "kind": "variable"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::LangKey::16891",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "LangKey",
+      "kind": "type"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::parserPools::16936",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "parserPools",
+      "kind": "variable"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::acquireParser::16999",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "acquireParser",
+      "kind": "function"
+    },
+    {
+      "id": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::releaseParser::17295",
+      "file": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts",
+      "name": "releaseParser",
+      "kind": "function"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/cli.ts::path::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/cli.ts",
+      "name": "path",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/graphs.ts::path::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/graphs.ts",
+      "name": "path",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/graphs.ts::Parser::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/graphs.ts",
+      "name": "Parser",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/graphs.ts::fs::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/graphs.ts",
+      "name": "fs",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/graphs.ts::fsp::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/graphs.ts",
+      "name": "fsp",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/graphs.ts::languageForFile::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/graphs.ts",
+      "name": "languageForFile",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/graphs.ts::type { LanguageSupport }::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/graphs.ts",
+      "name": "type { LanguageSupport }",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/graphs.ts::stripJsLikeComments::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/graphs.ts",
+      "name": "stripJsLikeComments",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/indexer.ts::fs::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/indexer.ts",
+      "name": "fs",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/indexer.ts::fsp::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/indexer.ts",
+      "name": "fsp",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/indexer.ts::path::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/indexer.ts",
+      "name": "path",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/indexer.ts::Parser::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/indexer.ts",
+      "name": "Parser",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/indexer.ts::crypto::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/indexer.ts",
+      "name": "crypto",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/indexer.ts::languageForFile::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/indexer.ts",
+      "name": "languageForFile",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/indexer.ts::collectGraph::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/indexer.ts",
+      "name": "collectGraph",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/languages.ts::path::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/languages.ts",
+      "name": "path",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/languages.ts::Parser::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/languages.ts",
+      "name": "Parser",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/languages.ts::tsGrammars::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/languages.ts",
+      "name": "tsGrammars",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/languages.ts::JavaScript::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/languages.ts",
+      "name": "JavaScript",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/languages.ts::PythonLang::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/languages.ts",
+      "name": "PythonLang",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/util.ts::fs::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/util.ts",
+      "name": "fs",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/util.ts::fsp::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/util.ts",
+      "name": "fsp",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/util.ts::path::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/util.ts",
+      "name": "path",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/util.ts::fg::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/util.ts",
+      "name": "fg",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/util.ts::createMatchPath::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/util.ts",
+      "name": "createMatchPath",
+      "kind": "import"
+    },
+    {
+      "id": "E:/git repos/dev-agent/dep-graph/src/util.ts::Parser::import",
+      "file": "E:/git repos/dev-agent/dep-graph/src/util.ts",
+      "name": "Parser",
+      "kind": "import"
+    }
+  ],
+  "symbolEdges": [
+    {
+      "from": "E:/git repos/dev-agent/dep-graph/src/graphs.ts::languageForFile::import",
+      "to": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::languageForFile::13342",
+      "label": "languageForFile"
+    },
+    {
+      "from": "E:/git repos/dev-agent/dep-graph/src/graphs.ts::type { LanguageSupport }::import",
+      "to": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::TS_SUPPORT::1185",
+      "label": "default"
+    },
+    {
+      "from": "E:/git repos/dev-agent/dep-graph/src/graphs.ts::stripJsLikeComments::import",
+      "to": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::stripJsLikeComments::1820",
+      "label": "stripJsLikeComments"
+    },
+    {
+      "from": "E:/git repos/dev-agent/dep-graph/src/indexer.ts::languageForFile::import",
+      "to": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::languageForFile::13342",
+      "label": "languageForFile"
+    },
+    {
+      "from": "E:/git repos/dev-agent/dep-graph/src/indexer.ts::collectGraph::import",
+      "to": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::collectGraph::4158",
+      "label": "collectGraph"
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::collectModuleSpecifiersFromSource::797",
+      "to": "E:\\git repos\\dev-agent\\dep-graph\\src\\util.ts::stripJsLikeComments::1820",
+      "label": "uses"
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::collectGraph::4158",
+      "to": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::languageForFile::13342",
+      "label": "uses"
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::astGrep::9405",
+      "to": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::languageForFile::13342",
+      "label": "uses"
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::buildSymbolGraphDetailed::15298",
+      "to": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::languageForFile::13342",
+      "label": "uses"
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::collectImportsForFile::20557",
+      "to": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::languageForFile::13342",
+      "label": "uses"
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::parseFile::31161",
+      "to": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::languageForFile::13342",
+      "label": "uses"
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::buildProjectIndex::31595",
+      "to": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::collectGraph::4158",
+      "label": "uses"
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::buildProjectIndexFromFiles::35307",
+      "to": "E:\\git repos\\dev-agent\\dep-graph\\src\\graphs.ts::collectGraph::4158",
+      "label": "uses"
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::goToDefinition::40832",
+      "to": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::languageForFile::13342",
+      "label": "uses"
+    },
+    {
+      "from": "E:\\git repos\\dev-agent\\dep-graph\\src\\indexer.ts::findReferences::54544",
+      "to": "E:\\git repos\\dev-agent\\dep-graph\\src\\languages.ts::languageForFile::13342",
+      "label": "uses"
+    }
+  ]
+}

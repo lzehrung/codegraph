@@ -207,6 +207,23 @@ npx tsx src/cli.ts goto <file> <line> <column>
     - `--symbols-detailed-max-edges N`
     - `--symbols-detailed-members-only`
 
+- Compact JSON output:
+  - Use `--compact-json` to replace repeated file and symbol IDs with numeric indices.
+  - Example:
+    ```bash
+    npx codegraph graph ./src --symbols-detailed --compact-json > graph.json
+    ```
+  - Shape (simplified):
+    ```json
+    {
+      "files": ["/abs/path/a.ts", "..."],
+      "fileEdges": [{ "from": 0, "to": { "type": "file", "path": 1 }, "raw": "./b" }],
+      "symbols": [{ "id": 0, "file": 0, "name": "foo", "kind": "function" }],
+      "symbolEdges": [{ "from": 0, "to": 1, "label": "uses" }],
+      "symbolIdIndex": ["/abs/path/a.ts::foo::123", "..."]
+    }
+    ```
+
 ---
 
 ## Performance

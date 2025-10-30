@@ -38,6 +38,89 @@ function writeError(error: unknown) {
   writeStderrLine(String(error));
 }
 
+// Compact JSON helpers to reduce repeated strings in graph output
+function compactGraphWithSymbols(
+  fgraph: { nodes: Set<string>; edges: Array<any> },
+  sgraph: { nodes: Map<string, any>; edges: Array<any> }
+) {
+  const files = [...fgraph.nodes];
+  const fileIndex = new Map<string, number>();
+  for (let i = 0; i < files.length; i++) fileIndex.set(files[i]!, i);
+
+  const fileEdges = fgraph.edges.map((e: any) => ({
+    from: fileIndex.get(e.from)!,
+    to:
+      e.to?.type === "file"
+        ? { type: "file", path: fileIndex.get(e.to.path)! }
+        : e.to,
+    raw: e.raw,
+    ...(e.typeOnly !== undefined ? { typeOnly: e.typeOnly } : {}),
+  }));
+
+  const symbolIds = [...sgraph.nodes.keys()];
+  const symbolIndex = new Map<string, number>();
+  for (let i = 0; i < symbolIds.length; i++) symbolIndex.set(symbolIds[i]!, i);
+
+  const symbols = symbolIds.map((id) => {
+    const n = sgraph.nodes.get(id)!;
+    return {
+      id: symbolIndex.get(id)!,
+      file: fileIndex.get(n.file)!,
+      name: n.name,
+      kind: n.kind,
+    } as any;
+  });
+
+  const symbolEdges = sgraph.edges.map((e: any) => ({
+    from: symbolIndex.get(e.from)!,
+    to: symbolIndex.get(e.to)!,
+    ...(e.label ? { label: e.label } : {}),
+  }));
+
+  return {
+    files,
+    fileEdges,
+    symbols,
+    symbolEdges,
+    symbolIdIndex: symbolIds,
+  };
+}
+
+function compactSymbolsOnly(
+  allFiles: string[],
+  sgraph: { nodes: Map<string, any>; edges: Array<any> }
+) {
+  const fileIndex = new Map<string, number>();
+  for (let i = 0; i < allFiles.length; i++) fileIndex.set(allFiles[i]!, i);
+
+  const symbolIds = [...sgraph.nodes.keys()];
+  const symbolIndex = new Map<string, number>();
+  for (let i = 0; i < symbolIds.length; i++) symbolIndex.set(symbolIds[i]!, i);
+
+  const symbols = symbolIds.map((id) => {
+    const n = sgraph.nodes.get(id)!;
+    return {
+      id: symbolIndex.get(id)!,
+      file: fileIndex.get(n.file)!,
+      name: n.name,
+      kind: n.kind,
+    } as any;
+  });
+
+  const symbolEdges = sgraph.edges.map((e: any) => ({
+    from: symbolIndex.get(e.from)!,
+    to: symbolIndex.get(e.to)!,
+    ...(e.label ? { label: e.label } : {}),
+  }));
+
+  return {
+    files: allFiles,
+    symbols,
+    symbolEdges,
+    symbolIdIndex: symbolIds,
+  };
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const cmd = args[0] ?? "graph";
@@ -107,11 +190,18 @@ async function main() {
           writeStdoutLine(graphToMermaidSymbols(sgraph, root));
         else if (format === "dot")
           writeStdoutLine(graphToDOTSymbols(sgraph, root));
-        else
-          writeJSONLine({
-            nodes: [...sgraph.nodes.values()],
-            edges: sgraph.edges,
-          });
+        else {
+          const compact = flags.includes("--compact-json");
+          if (compact) {
+            const allFiles = [...index.graph.nodes];
+            writeJSONLine(compactSymbolsOnly(allFiles, sgraph));
+          } else {
+            writeJSONLine({
+              nodes: [...sgraph.nodes.values()],
+              edges: sgraph.edges,
+            });
+          }
+        }
         return;
       }
       // Reuse the graph already built during indexing to avoid an extra pass
@@ -120,13 +210,19 @@ async function main() {
         writeStdoutLine(graphToMermaidSymbolsWithFiles(sgraph, fgraph, root));
       else if (format === "dot")
         writeStdoutLine(graphToDOTSymbolsWithFiles(sgraph, fgraph, root));
-      else
-        writeJSONLine({
-          files: [...fgraph.nodes],
-          fileEdges: fgraph.edges,
-          symbols: [...sgraph.nodes.values()],
-          symbolEdges: sgraph.edges,
-        });
+      else {
+        const compact = flags.includes("--compact-json");
+        if (compact) {
+          writeJSONLine(compactGraphWithSymbols(fgraph, sgraph));
+        } else {
+          writeJSONLine({
+            files: [...fgraph.nodes],
+            fileEdges: fgraph.edges,
+            symbols: [...sgraph.nodes.values()],
+            symbolEdges: sgraph.edges,
+          });
+        }
+      }
       return;
     }
     const graph = await collectGraph(root, files, { fast });
