@@ -78,6 +78,52 @@ export function stripPythonCommentsAndStrings(src: string): string {
   return out;
 }
 
+export function normalizePath(p: string): string {
+  return typeof p === "string" ? p.replace(/\\/g, "/") : (p as any);
+}
+
+export type ModuleSpecifier = { spec: string; typeOnly?: boolean };
+
+export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
+  const out: ModuleSpecifier[] = [];
+  try {
+    const src = stripJsLikeComments(source);
+    const push = (spec: string, typeOnly?: boolean) => {
+      if (spec) out.push({ spec, ...(typeOnly ? { typeOnly: true } : {}) });
+    };
+    const reImportFrom = /^\s*import\s+[^\n;]*?\s+from\s+(["'])([^"']+)\1/gm;
+    for (const m of src.matchAll(reImportFrom))
+      push(m[2]!, /\bimport\s+type\b/.test(m[0]!));
+    const reImportSide = /^\s*import\s+(["'])([^"']+)\1/gm;
+    for (const m of src.matchAll(reImportSide))
+      push(m[2]!, /\bimport\s+type\b/.test(m[0]!));
+    const reExportFrom = /\bexport\s+[^\n;]*?\s+from\s+(["'])([^"']+)\1/gm;
+    for (const m of src.matchAll(reExportFrom))
+      push(m[2]!, /\bexport\s+type\b/.test(m[0]!));
+    const reRequire = /(?<!["'`])\brequire\(\s*(["'])([^"']+)\1\s*\)/g;
+    for (const m of src.matchAll(reRequire)) push(m[2]!);
+    const reReqDestr =
+      /\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\(\s*(["'])([^"']+)\1\s*\)/g;
+    for (const m of src.matchAll(reReqDestr)) push(m[2]!);
+    const reDynImport = /(?<!["'`])\bimport\(\s*(["'])([^"']+)\1\s*\)/g;
+    for (const m of src.matchAll(reDynImport)) push(m[2]!);
+  } catch {}
+  return out;
+}
+
+export function extractPythonSpecifiers(source: string): string[] {
+  const out: string[] = [];
+  try {
+    const cleaned = stripPythonCommentsAndStrings(source);
+    const reImport = /^\s*import\s+([A-Za-z_][\w\.]*)/gm;
+    for (const m of cleaned.matchAll(reImport)) out.push(m[1]!);
+    const reFrom =
+      /^\s*from\s+([A-Za-z_][\w\.]|\.+[A-Za-z_][\w\.]*)\s+import/gm;
+    for (const m of cleaned.matchAll(reFrom)) out.push(m[1]!);
+  } catch {}
+  return out;
+}
+
 type MatchPathFn = ReturnType<typeof createMatchPath>;
 const tsconfigCache = new Map<string, { matchPath?: MatchPathFn }>();
 
@@ -354,7 +400,8 @@ export async function resolveSpecifier(
   spec: string,
   projectRoot: string,
   matchPath?: MatchPathFn,
-  workspaceConfig?: WorkspaceConfig
+  workspaceConfig?: WorkspaceConfig,
+  opts?: { resolveNodeModules?: boolean }
 ): Promise<FileId | { external: string }> {
   const cacheKey = `${fromFile}::${spec}`;
   const cached = resolveSpecifierCache.get(cacheKey);
@@ -392,6 +439,13 @@ export async function resolveSpecifier(
     if (resolvedWs) {
       resolveSpecifierCache.set(cacheKey, resolvedWs);
       return resolvedWs;
+    }
+    if (opts?.resolveNodeModules) {
+      const nm = await resolveFromNodeModules(spec, fromFile, projectRoot);
+      if (nm) {
+        resolveSpecifierCache.set(cacheKey, nm);
+        return nm;
+      }
     }
   }
   if (matchPath) {
@@ -439,6 +493,78 @@ export async function resolveSpecifier(
   const ext = { external: spec } as const;
   resolveSpecifierCache.set(cacheKey, ext as any);
   return ext;
+}
+
+async function resolveFromNodeModules(
+  spec: string,
+  fromFile: string,
+  projectRoot: string
+): Promise<string | null> {
+  try {
+    // Walk up from the file directory to project root looking for node_modules
+    let dir = path.dirname(fromFile);
+    const parts = spec.split("/");
+    const packageName = spec.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0]!;
+    const subpath = spec.startsWith("@") ? parts.slice(2).join("/") : parts.slice(1).join("/");
+    while (true) {
+      const nmDir = path.join(dir, "node_modules", packageName);
+      if (await fileExists(nmDir)) {
+        const pkgPath = path.join(nmDir, "package.json");
+        const pkg = await loadJSON<any>(pkgPath);
+        const baseDir = nmDir;
+        const exts = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"];
+        const tryResolveRelative = async (rel: string): Promise<string | null> => {
+          const raw = path.resolve(baseDir, rel);
+          const candidates: string[] = [raw];
+          for (const e of exts) candidates.push(raw + e);
+          for (const e of exts) candidates.push(path.join(raw, "index" + e));
+          for (const c of candidates) if (await fileExists(c)) return path.resolve(c);
+          return null;
+        };
+        // Exports map handling (simplified)
+        const pickExportTarget = (target: any): string | null => {
+          if (!target) return null;
+          if (typeof target === "string") return target as string;
+          if (typeof target === "object") {
+            const cand = (target as any).import ?? (target as any).default ?? (target as any).require ?? (target as any).module;
+            if (typeof cand === "string") return cand;
+          }
+          return null;
+        };
+        if (pkg?.exports) {
+          const key = subpath ? `./${subpath}` : ".";
+          if (typeof pkg.exports === "string" && key === ".") {
+            const hit = await tryResolveRelative(pkg.exports as string);
+            if (hit) return hit;
+          } else if (typeof pkg.exports === "object") {
+            const map = pkg.exports as any;
+            const target = map[key] ?? (key === "." ? map["."] : undefined);
+            const rel = pickExportTarget(target);
+            if (rel) {
+              const hit = await tryResolveRelative(rel);
+              if (hit) return hit;
+            }
+          }
+        }
+        if (subpath) {
+          const raw = path.join(baseDir, subpath);
+          const candidates: string[] = [raw];
+          for (const e of exts) candidates.push(raw + e);
+          for (const e of exts) candidates.push(path.join(raw, "index" + e));
+          for (const c of candidates) if (await fileExists(c)) return path.resolve(c);
+        }
+        const mainField = typeof pkg?.main === "string" ? path.resolve(baseDir, pkg.main) : null;
+        if (mainField && (await fileExists(mainField))) return mainField;
+        const idxCandidates = exts.map((e) => path.join(baseDir, "index" + e));
+        for (const c of idxCandidates) if (await fileExists(c)) return path.resolve(c);
+        return baseDir;
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir || parent.length < projectRoot.length) break;
+      dir = parent;
+    }
+  } catch {}
+  return null;
 }
 
 async function findPythonPackageAnchor(startDir: string): Promise<string> {

@@ -158,6 +158,7 @@ async function main() {
       ? "dot"
       : "json";
     const fast = flags.includes("--fast-graph");
+    const resolveNodeModules = flags.includes("--resolve-node-modules");
     if (wantSymbols) {
       const index = await buildProjectIndexFromFiles(root, files, {
         threads,
@@ -225,7 +226,7 @@ async function main() {
       }
       return;
     }
-    const graph = await collectGraph(root, files, { fast, threads });
+    const graph = await collectGraph(root, files, { fast, threads, resolveNodeModules });
     if (format === "mermaid") writeStdoutLine(graphToMermaid(graph));
     else if (format === "dot") writeStdoutLine(graphToDOT(graph));
     else writeJSONLine({ nodes: [...graph.nodes], edges: graph.edges });

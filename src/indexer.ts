@@ -19,6 +19,7 @@ import {
   releaseParser,
 } from "./util.js";
 import { type Graph, collectGraph } from "./graphs.js";
+import type { Pos, Range, FileId } from "./types.js";
 
 export enum SymbolKind {
   Function = "function",
@@ -29,9 +30,7 @@ export enum SymbolKind {
   Default = "default",
 }
 
-export type Pos = { line: number; column: number; index: number };
-export type Range = { start: Pos; end: Pos };
-export type FileId = string;
+// Shared Pos, Range, FileId types imported from ./types
 
 export type SymbolDef = {
   file: FileId;
@@ -102,6 +101,15 @@ export type ProjectIndex = {
   modules: Map<FileId, ModuleIndex>;
   byFile: Map<FileId, ModuleIndex>;
   exportCache: Map<string, ResolvedExport | null>;
+  parsed?: Map<
+    string,
+    {
+      source: string;
+      tree: Parser.Tree;
+      sup: ReturnType<typeof supportForFile>;
+      lang: Parser.Language;
+    }
+  >;
 };
 export type ResolvedExport = { kind: "resolved"; def: SymbolDef };
 
@@ -467,6 +475,26 @@ export function collectLocalsAndExportsFromSource(
                   exportedAs: name,
                   target: local,
                 });
+            }
+            if (items.length === 0) {
+              // Fallback: handle tuples/multiline/concatenations by scanning a small window after assignment
+              const assignIdx = map["stmt"]
+                ? (map["stmt"].node as any).startIndex
+                : source.indexOf("__all__");
+              if (assignIdx >= 0) {
+                const window = source.slice(assignIdx, assignIdx + 800);
+                const strRe = /["']([^"']+)["']/g;
+                for (let sm; (sm = strRe.exec(window)); ) {
+                  const name = sm[1]!;
+                  const local = locals.find((d) => d.localName === name);
+                  if (local && !exports.some((e) => (e as any).exportedAs === name))
+                    exports.push({
+                      type: "local",
+                      exportedAs: name,
+                      target: local,
+                    });
+                }
+              }
             }
             continue;
           }
@@ -1317,7 +1345,13 @@ export async function buildProjectIndex(
   const graph = await collectGraph(projectRoot, files, {
     parsed: parsedMap as any,
   });
-  return { graph, modules, byFile: modules, exportCache: new Map() };
+  return {
+    graph,
+    modules,
+    byFile: modules,
+    exportCache: new Map(),
+    parsed: parsedMap as any,
+  };
 }
 
 export async function buildProjectIndexFromFiles(
@@ -1438,7 +1472,13 @@ export async function buildProjectIndexFromFiles(
   const graph = await collectGraph(projectRoot, files, {
     parsed: parsedMap as any,
   });
-  return { graph, modules, byFile: modules, exportCache: new Map() };
+  return {
+    graph,
+    modules,
+    byFile: modules,
+    exportCache: new Map(),
+    parsed: parsedMap as any,
+  };
 }
 
 function cacheKey(file: FileId, name: string) {
@@ -1517,11 +1557,20 @@ export async function goToDefinition(
 
   const lang = languageForFile(file);
   const sup = supportForFile(file);
+  const parsedEntry = index.parsed?.get(file);
   const key = (sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts") as any;
-  const parser = acquireParser(lang, key);
-  parser.setLanguage(lang);
-  const source = await fsp.readFile(file, "utf8");
-  const tree = parser.parse(source);
+  let parser: Parser | null = null;
+  let tree: Parser.Tree;
+  let source: string;
+  if (parsedEntry) {
+    source = parsedEntry.source;
+    tree = parsedEntry.tree;
+  } else {
+    parser = acquireParser(lang, key);
+    parser.setLanguage(lang);
+    source = await fsp.readFile(file, "utf8");
+    tree = parser.parse(source);
+  }
 
   const pos = {
     row: Math.max(0, line - 1),
@@ -1628,14 +1677,14 @@ export async function goToDefinition(
   if (name) {
     const local = mod.locals.find((d) => d.localName === name);
     if (local) {
-      releaseParser(parser, key);
+      if (parser) releaseParser(parser, key);
       return { status: "ok", definition: local };
     }
 
     if (supportForFile(file).supportsCrossModuleSymbols) {
       const hit = resolveExport(index, file, name);
       if (hit) {
-        releaseParser(parser, key);
+        if (parser) releaseParser(parser, key);
         return {
           status: "ok",
           definition: hit.def,
@@ -1648,7 +1697,7 @@ export async function goToDefinition(
           const target = resolveImported(index, imp, "default");
           if (target)
             {
-              releaseParser(parser, key);
+              if (parser) releaseParser(parser, key);
             return {
               status: "ok",
               definition: target,
@@ -1664,7 +1713,7 @@ export async function goToDefinition(
           const target = resolveImported(index, imp, imp.imported);
           if (target)
             {
-              releaseParser(parser, key);
+              if (parser) releaseParser(parser, key);
             return {
               status: "ok",
               definition: target,
@@ -1688,7 +1737,7 @@ export async function goToDefinition(
                 (e) => e.type === "local"
               );
               if (firstExport) {
-                releaseParser(parser, key);
+                if (parser) releaseParser(parser, key);
                 return {
                   status: "ok",
                   definition: firstExport.target,
@@ -1707,7 +1756,7 @@ export async function goToDefinition(
     }
   }
 
-  releaseParser(parser, key);
+  if (parser) releaseParser(parser, key);
   return {
     status: "not_found",
     reason: "No matching local or imported definition",
@@ -1997,13 +2046,15 @@ export async function findReferences(
   const definitionFile = def.file;
   const sup = supportForFile(definitionFile);
   const lang = languageForFile(definitionFile);
-  const src = await fsp.readFile(definitionFile, "utf8");
+  const parsedDef = index.parsed?.get(definitionFile);
+  const src = parsedDef?.source ?? (await fsp.readFile(definitionFile, "utf8"));
   const scope = buildScopeIndexFromSource(
     definitionFile,
     src,
     sup as any,
     lang,
-    index.byFile.get(definitionFile)?.imports as any
+    index.byFile.get(definitionFile)?.imports as any,
+    parsedDef ? { tree: parsedDef.tree } : undefined
   );
 
   const refs: Reference[] = [];
@@ -2031,13 +2082,15 @@ export async function findReferences(
     let sc: any = null;
     const ensure = async () => {
       if (!sc) {
-        const s = await fsp.readFile(f, "utf8");
+        const parsedF = index.parsed?.get(f);
+        const s = parsedF?.source ?? (await fsp.readFile(f, "utf8"));
         sc = buildScopeIndexFromSource(
           f,
           s,
           supportForFile(f) as any,
           languageForFile(f),
-          m.imports as any
+          m.imports as any,
+          parsedF ? { tree: parsedF.tree } : undefined
         );
       }
       return sc;
