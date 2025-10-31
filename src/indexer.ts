@@ -110,6 +110,150 @@ export type BuildOptions = {
   cacheStrict?: boolean;
 };
 
+// ---------------- Symbol handles (agent-friendly) ----------------
+export type SymbolHandle = string;
+
+export function symbolId(def: SymbolDef): SymbolHandle {
+  const idx = (def as any)?.range?.start?.index ?? 0;
+  return `${def.file}::${def.localName}::${idx}`;
+}
+
+export function defFromSymbolId(
+  index: ProjectIndex,
+  id: SymbolHandle
+): SymbolDef | null {
+  if (!id) return null;
+  const parts = id.split("::");
+  if (parts.length < 3) return null;
+  const rawFile = parts[0]!;
+  const localName = parts[1]!;
+  const startStr = parts[2]!;
+  const file = rawFile.replace(/\\/g, "/");
+  const startIndex = Number(startStr);
+  const mod = index.byFile.get(file);
+  if (!mod) return null;
+  const exact = mod.locals.find(
+    (d) => d.localName === localName && ((d as any).range?.start?.index ?? 0) === startIndex
+  );
+  if (exact) return exact;
+  const byName = mod.locals.find((d) => d.localName === localName);
+  return byName ?? null;
+}
+
+export function resolveSymbolId(
+  index: ProjectIndex,
+  id: SymbolHandle
+): SymbolDef | null {
+  if (!id) return null;
+  const parts = id.split("::");
+  if (parts.length === 3 && parts[2] === "import") {
+    const rawFile = parts[0]!;
+    const alias = parts[1]!;
+    const file = rawFile.replace(/\\/g, "/");
+    const mod = index.byFile.get(file);
+    if (!mod) return null;
+
+    // Prefer named, then default, then namespace
+    const named = mod.imports.find((i) => (i as any).kind === "named" && (i as any).local === alias) as any;
+    if (named) {
+      const def = resolveImported(index, named, named.imported);
+      if (def) return def;
+      const target = typeof named.resolved === "string" ? named.resolved : undefined;
+      if (target) {
+        const hit = resolveExport(index, target, named.imported);
+        if (hit?.def) return hit.def;
+      }
+    }
+
+    const deflt = mod.imports.find((i) => (i as any).kind === "default" && (i as any).local === alias) as any;
+    if (deflt) {
+      const def = resolveImported(index, deflt, "default");
+      if (def) return def;
+      const target = typeof deflt.resolved === "string" ? deflt.resolved : undefined;
+      if (target) {
+        const hit = resolveExport(index, target, "default");
+        if (hit?.def) return hit.def;
+        const tmod = index.byFile.get(target);
+        const first = tmod?.exports.find((e: any) => e.type === "local") as any;
+        if (first) return first.target as SymbolDef;
+      }
+    }
+
+    const ns = mod.imports.find((i) => (i as any).kind === "namespace" && (i as any).localNS === alias) as any;
+    if (ns) {
+      const target = typeof ns.resolved === "string" ? ns.resolved : undefined;
+      if (target) {
+        const tmod = index.byFile.get(target);
+        const first = tmod?.exports.find((e: any) => e.type === "local") as any;
+        if (first) return first.target as SymbolDef;
+        const firstLocal = tmod?.locals?.[0];
+        if (firstLocal) return firstLocal;
+      }
+    }
+
+    return null;
+  }
+
+  // Otherwise treat as direct definition handle
+  return defFromSymbolId(index, id);
+}
+
+export async function goToDefinitionById(
+  index: ProjectIndex,
+  id: SymbolHandle
+): Promise<GoToResult> {
+  const def = resolveSymbolId(index, id);
+  if (def) return { status: "ok", definition: def };
+  return { status: "not_found", reason: "No matching definition for handle" };
+}
+
+export async function findReferencesById(
+  index: ProjectIndex,
+  id: SymbolHandle
+) {
+  const def = resolveSymbolId(index, id);
+  if (!def)
+    return { status: "not_found", reason: "No matching definition for handle" } as const;
+  return await findReferences(index, { def });
+}
+
+export type SymbolListItem = {
+  id: SymbolHandle;
+  file: FileId;
+  name: string;
+  kind: SymbolKind | "import" | "namespaceImport";
+};
+
+export function listSymbols(
+  index: ProjectIndex,
+  opts?: { file?: FileId; includeImports?: boolean }
+): SymbolListItem[] {
+  const out: SymbolListItem[] = [];
+  const files = opts?.file
+    ? [opts.file.replace(/\\/g, "/")] 
+    : Array.from(index.byFile.keys());
+
+  for (const f of files) {
+    const mod = index.byFile.get(f);
+    if (!mod) continue;
+    for (const def of mod.locals) {
+      out.push({ id: symbolId(def), file: f, name: def.localName, kind: def.kind });
+    }
+    if (opts?.includeImports) {
+      for (const imp of mod.imports) {
+        if ((imp as any).kind === "named")
+          out.push({ id: `${f}::${(imp as any).local}::import`, file: f, name: (imp as any).local, kind: "import" });
+        else if ((imp as any).kind === "default")
+          out.push({ id: `${f}::${(imp as any).local}::import`, file: f, name: (imp as any).local, kind: "import" });
+        else if ((imp as any).kind === "namespace")
+          out.push({ id: `${f}::${(imp as any).localNS}::import`, file: f, name: (imp as any).localNS, kind: "namespaceImport" });
+      }
+    }
+  }
+
+  return out;
+}
+
 async function mapLimit<T, R>(
   items: T[],
   limit: number,

@@ -349,6 +349,41 @@ export async function tool_refs(root: string, file: string, line: number, column
 }
 ```
 
+### Agent-friendly symbol handles (no line/column)
+
+Use stable handles instead of cursor positions. A handle is either:
+- `${file}::${localName}::${startIndex}` for a definition, or
+- `${file}::${alias}::import` for an import alias (named/default/namespace).
+
+```ts
+import {
+  buildProjectIndex,
+  listSymbols,
+  goToDefinitionById,
+  findReferencesById,
+  symbolId,
+} from 'codegraph';
+
+const root = process.cwd();
+const index = await buildProjectIndex(root);
+
+// Enumerate symbols in a file, including import aliases
+const file = `${root}/tests/samples/monorepo/packages/pkg-b/src/index.js`.replace(/\\/g, '/');
+const items = listSymbols(index, { file, includeImports: true });
+
+// Pick a handle (e.g., for alias "aHelper" or a local def)
+const handle = items.find(i => i.name === 'aHelper')?.id!;
+
+// Go to definition from the handle
+const defRes = await goToDefinitionById(index, handle);
+
+// Find references from the handle
+const refsRes = await findReferencesById(index, handle);
+
+// If you already have a SymbolDef, create a handle directly
+// const id = symbolId(def);
+```
+
 ---
 
 ## How it works (high level)
