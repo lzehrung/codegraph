@@ -4,6 +4,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { supportForFile, languageForFile } from "./languages.js";
 import type { LanguageSupport } from "./languages.js";
+import type { FileId, EdgeTo, Edge, Graph } from "./types.js";
 import {
   listProjectFiles,
   sliceText,
@@ -17,19 +18,9 @@ import {
 import { stripJsLikeComments, acquireParser, releaseParser } from "./util.js";
 // Intentionally compile only the imports query locally to avoid compiling
 // unrelated queries (which may differ per grammar) and causing warnings.
+import { extractJsTsSpecifiers, extractPythonSpecifiers, normalizePath } from "./util.js";
 
-export type FileId = string;
-
-export type EdgeTo =
-  | { type: "file"; path: FileId }
-  | { type: "external"; name: string };
-export type Edge = {
-  from: FileId;
-  to: EdgeTo;
-  raw: string;
-  typeOnly?: boolean;
-};
-export type Graph = { nodes: Set<FileId>; edges: Edge[] };
+// Shared types imported from ./types
 
 export function collectModuleSpecifiersFromSource(
   support: LanguageSupport,
@@ -40,46 +31,59 @@ export function collectModuleSpecifiersFromSource(
   const out: { spec: string; typeOnly?: boolean }[] = [];
 
   if (support.id === "python") {
-    // Note: python specifier collection is done via util-strip then regex in indexer; keep minimal here
     try {
-      const cleaned = source
-        .replace(/([rRuU]?[fF]?)("""|''')[\s\S]*?\2/g, "")
-        .replace(/([rRuU]?[fF]?)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g, "")
-        .replace(/#.*$/gm, "");
-      const reImport = /^\s*import\s+([A-Za-z_][\w\.]*)/gm;
-      for (const m of cleaned.matchAll(reImport)) out.push({ spec: m[1]! });
-      const reFrom =
-        /^\s*from\s+([A-Za-z_][\w\.]*|\.+[A-Za-z_][\w\.]*)\s+import/gm;
-      for (const m of cleaned.matchAll(reFrom)) out.push({ spec: m[1]! });
+      const key = "py" as any;
+      const parser = acquireParser(lang, key);
+      try {
+        parser.setLanguage(lang);
+        const tree = opts?.tree ?? parser.parse(source);
+        const q = new Parser.Query(lang, support.queries.imports);
+        for (const m of q.matches(tree.rootNode)) {
+          const caps = Object.fromEntries(
+            m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const)
+          );
+          const stmtNode = caps["stmt"]?.node ?? m.captures[0]?.node;
+          if (!stmtNode) continue;
+          const stmtText = sliceText(stmtNode, source);
+          // Handle: import a, b as c
+          const mImport = /^\s*import\s+([^\n#]+)/.exec(stmtText);
+          if (mImport) {
+            const list = mImport[1]!
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean);
+            for (const spec of list) {
+              const mm = spec.match(/^([A-Za-z_][\w\.]*)(?:\s+as\s+[A-Za-z_][\w_]*)?$/);
+              if (mm) out.push({ spec: mm[1]! });
+            }
+            continue;
+          }
+          // Handle: from ..pkg.sub import x, y
+          const mFrom = /^\s*from\s+(\.*)([A-Za-z_][\w\.]*)?\s+import\b/.exec(
+            stmtText
+          );
+          if (mFrom) {
+            const dots = mFrom[1] ?? "";
+            const name = mFrom[2] ?? "";
+            const mod = `${dots}${name}`;
+            if (mod) out.push({ spec: mod });
+            continue;
+          }
+        }
+      } finally {
+        releaseParser(parser, key);
+      }
+      if (out.length > 0) return out;
     } catch {}
+    // Fallback to regex-based extractor
+    for (const s of extractPythonSpecifiers(source)) out.push({ spec: s });
     return out;
   }
 
   // Fast path for JS/TS: regex-based extraction after comment stripping
   if ((support.id === "ts" || support.id === "js") && opts?.fast) {
     try {
-      const src = stripJsLikeComments(source);
-      const push = (spec: string, typeOnly?: boolean) => {
-        if (spec) out.push({ spec, ...(typeOnly ? { typeOnly: true } : {}) });
-      };
-      const reImportFrom = /^\s*import\s+[^\n;]*?\s+from\s+(["'])([^"']+)\1/gm;
-      for (const m of src.matchAll(reImportFrom))
-        push(m[2]!, /\bimport\s+type\b/.test(m[0]!));
-      const reImportSide = /^\s*import\s+(["'])([^"']+)\1/gm;
-      for (const m of src.matchAll(reImportSide))
-        push(m[2]!, /\bimport\s+type\b/.test(m[0]!));
-      const reExportFrom = /\bexport\s+[^\n;]*?\s+from\s+(["'])([^"']+)\1/gm;
-      for (const m of src.matchAll(reExportFrom))
-        push(m[2]!, /\bexport\s+type\b/.test(m[0]!));
-      // CommonJS destructuring: const { a } = require('x'); also capture
-      // Avoid matching inside string literals via a simple negative lookbehind
-      const reRequire = /(?<!["'`])\brequire\(\s*(["'])([^"']+)\1\s*\)/g;
-      for (const m of src.matchAll(reRequire)) push(m[2]!);
-      const reReqDestr =
-        /\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\(\s*(["'])([^"']+)\1\s*\)/g;
-      for (const m of src.matchAll(reReqDestr)) push(m[2]!);
-      const reDynImport = /(?<!["'`])\bimport\(\s*(["'])([^"']+)\1\s*\)/g;
-      for (const m of src.matchAll(reDynImport)) push(m[2]!);
+      for (const s of extractJsTsSpecifiers(source)) out.push(s);
     } catch {}
     return out;
   }
@@ -118,26 +122,7 @@ export function collectModuleSpecifiersFromSource(
   // Regex fallback if the query path produced no results
   if (support.id === "ts" || support.id === "js") {
     try {
-      const src = stripJsLikeComments(source);
-      const push = (spec: string, typeOnly?: boolean) => {
-        if (spec) out.push({ spec, ...(typeOnly ? { typeOnly: true } : {}) });
-      };
-      const reImportFrom = /^\s*import\s+[^\n;]*?\s+from\s+(["'])([^"']+)\1/gm;
-      for (const m of src.matchAll(reImportFrom))
-        push(m[2]!, /\bimport\s+type\b/.test(m[0]!));
-      const reImportSide = /^\s*import\s+(["'])([^"']+)\1/gm;
-      for (const m of src.matchAll(reImportSide))
-        push(m[2]!, /\bimport\s+type\b/.test(m[0]!));
-      const reExportFrom = /\bexport\s+[^\n;]*?\s+from\s+(["'])([^"']+)\1/gm;
-      for (const m of src.matchAll(reExportFrom))
-        push(m[2]!, /\bexport\s+type\b/.test(m[0]!));
-      const reRequire = /(?<!["'`])\brequire\(\s*(["'])([^"']+)\1\s*\)/g;
-      for (const m of src.matchAll(reRequire)) push(m[2]!);
-      const reReqDestr =
-        /\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\(\s*(["'])([^"']+)\1\s*\)/g;
-      for (const m of src.matchAll(reReqDestr)) push(m[2]!);
-      const reDynImport = /(?<!["'`])\bimport\(\s*(["'])([^"']+)\1\s*\)/g;
-      for (const m of src.matchAll(reDynImport)) push(m[2]!);
+      for (const s of extractJsTsSpecifiers(source)) out.push(s);
     } catch {}
   }
   return out;
@@ -158,9 +143,10 @@ export async function collectGraph(
     >;
     fast?: boolean;
     threads?: number;
+    resolveNodeModules?: boolean;
   }
 ): Promise<Graph> {
-  const graph: Graph = { nodes: new Set(files), edges: [] };
+  const graph: Graph = { nodes: new Set(files.map((f) => f.replace(/\\/g, "/"))), edges: [] };
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
 
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 32, 128));
@@ -211,15 +197,17 @@ export async function collectGraph(
       for (const { spec, typeOnly } of specs) {
         let to: EdgeTo;
         if (sup.id === "python") {
+          const relDotsMatch = spec.startsWith(".") ? spec.match(/^\.+/) : null;
+          const relDots = relDotsMatch ? relDotsMatch[0].length : 0;
           const res = await resolvePythonModule(
             projectRoot,
             file,
             spec.includes(".") || !spec.startsWith(".") ? spec : null,
-            spec.startsWith(".") ? spec.match(/^\.+/)?.[0].length ?? 0 : 0
+            relDots
           );
           to =
             typeof res === "string"
-              ? { type: "file", path: res }
+              ? { type: "file", path: res.replace(/\\/g, "/") }
               : { type: "external", name: res.external };
         } else {
           const res = await resolveSpecifier(
@@ -227,15 +215,16 @@ export async function collectGraph(
             spec,
             projectRoot,
             matchPath,
-            workspaceConfig
+            workspaceConfig,
+            { resolveNodeModules: !!opts?.resolveNodeModules }
           );
           to =
             typeof res === "string"
-              ? { type: "file", path: res }
+              ? { type: "file", path: res.replace(/\\/g, "/") }
               : { type: "external", name: res.external };
         }
         edges.push({
-          from: file,
+          from: file.replace(/\\/g, "/"),
           to,
           raw: spec,
           ...(typeOnly !== undefined && { typeOnly }),
