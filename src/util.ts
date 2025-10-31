@@ -403,7 +403,7 @@ export async function resolveSpecifier(
   workspaceConfig?: WorkspaceConfig,
   opts?: { resolveNodeModules?: boolean }
 ): Promise<FileId | { external: string }> {
-  const cacheKey = `${fromFile}::${spec}`;
+  const cacheKey = `${fromFile}::${spec}::nm=${opts?.resolveNodeModules ? 1 : 0}`;
   const cached = resolveSpecifierCache.get(cacheKey);
   if (cached) return cached;
   if (spec.startsWith(".") || spec.startsWith("/")) {
