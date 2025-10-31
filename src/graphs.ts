@@ -14,7 +14,9 @@ import {
   resolveSpecifier,
   resolvePythonModule,
 } from "./util.js";
-import { stripJsLikeComments } from "./util.js";
+import { stripJsLikeComments, acquireParser, releaseParser } from "./util.js";
+// Intentionally compile only the imports query locally to avoid compiling
+// unrelated queries (which may differ per grammar) and causing warnings.
 
 export type FileId = string;
 
@@ -70,23 +72,26 @@ export function collectModuleSpecifiersFromSource(
       for (const m of src.matchAll(reExportFrom))
         push(m[2]!, /\bexport\s+type\b/.test(m[0]!));
       // CommonJS destructuring: const { a } = require('x'); also capture
-      const reRequire = /\brequire\(\s*(["'])([^"']+)\1\s*\)/g;
+      // Avoid matching inside string literals via a simple negative lookbehind
+      const reRequire = /(?<!["'`])\brequire\(\s*(["'])([^"']+)\1\s*\)/g;
       for (const m of src.matchAll(reRequire)) push(m[2]!);
       const reReqDestr =
         /\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\(\s*(["'])([^"']+)\1\s*\)/g;
       for (const m of src.matchAll(reReqDestr)) push(m[2]!);
-      const reDynImport = /\bimport\(\s*(["'])([^"']+)\1\s*\)/g;
+      const reDynImport = /(?<!["'`])\bimport\(\s*(["'])([^"']+)\1\s*\)/g;
       for (const m of src.matchAll(reDynImport)) push(m[2]!);
     } catch {}
     return out;
   }
 
   try {
-    const parser = new Parser();
-    parser.setLanguage(lang);
-    const tree = opts?.tree ?? parser.parse(source);
-    const q = new Parser.Query(lang, support.queries.imports);
-    for (const m of q.matches(tree.rootNode)) {
+    const key = (support.id === "python" ? "py" : support.id === "js" ? "js" : "ts") as any;
+    const parser = acquireParser(lang, key);
+    try {
+      parser.setLanguage(lang);
+      const tree = opts?.tree ?? parser.parse(source);
+      const q = new Parser.Query(lang, support.queries.imports);
+      for (const m of q.matches(tree.rootNode)) {
       const caps = Object.fromEntries(
         m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const)
       );
@@ -97,15 +102,45 @@ export function collectModuleSpecifiersFromSource(
       const typeOnly = /^\s*(import|export)\s+type\b/.test(stmtText);
       for (const cap of modNodes)
         out.push({ spec: unquote(sliceText(cap.node, source)), typeOnly });
+      }
+      if (out.length > 0) return out;
+    } finally {
+      releaseParser(parser, key);
     }
-    return out;
   } catch (error) {
     console.warn(
       `Warning: Query error in collectModuleSpecifiersFromSource for ${support.id}:`,
       error
     );
-    return out;
+    // fall through to regex fallback
   }
+
+  // Regex fallback if the query path produced no results
+  if (support.id === "ts" || support.id === "js") {
+    try {
+      const src = stripJsLikeComments(source);
+      const push = (spec: string, typeOnly?: boolean) => {
+        if (spec) out.push({ spec, ...(typeOnly ? { typeOnly: true } : {}) });
+      };
+      const reImportFrom = /^\s*import\s+[^\n;]*?\s+from\s+(["'])([^"']+)\1/gm;
+      for (const m of src.matchAll(reImportFrom))
+        push(m[2]!, /\bimport\s+type\b/.test(m[0]!));
+      const reImportSide = /^\s*import\s+(["'])([^"']+)\1/gm;
+      for (const m of src.matchAll(reImportSide))
+        push(m[2]!, /\bimport\s+type\b/.test(m[0]!));
+      const reExportFrom = /\bexport\s+[^\n;]*?\s+from\s+(["'])([^"']+)\1/gm;
+      for (const m of src.matchAll(reExportFrom))
+        push(m[2]!, /\bexport\s+type\b/.test(m[0]!));
+      const reRequire = /(?<!["'`])\brequire\(\s*(["'])([^"']+)\1\s*\)/g;
+      for (const m of src.matchAll(reRequire)) push(m[2]!);
+      const reReqDestr =
+        /\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\(\s*(["'])([^"']+)\1\s*\)/g;
+      for (const m of src.matchAll(reReqDestr)) push(m[2]!);
+      const reDynImport = /(?<!["'`])\bimport\(\s*(["'])([^"']+)\1\s*\)/g;
+      for (const m of src.matchAll(reDynImport)) push(m[2]!);
+    } catch {}
+  }
+  return out;
 }
 
 export async function collectGraph(
@@ -122,12 +157,41 @@ export async function collectGraph(
       }
     >;
     fast?: boolean;
+    threads?: number;
   }
 ): Promise<Graph> {
   const graph: Graph = { nodes: new Set(files), edges: [] };
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
 
-  const filePromises = files.map(async (file) => {
+  const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 32, 128));
+
+  async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+    const out: R[] = new Array(items.length);
+    let idx = 0;
+    let running = 0;
+    return new Promise((resolve, reject) => {
+      const next = () => {
+        if (idx >= items.length && running === 0) {
+          resolve(out);
+          return;
+        }
+        while (running < limit && idx < items.length) {
+          const cur = idx++;
+          running++;
+          fn(items[cur]!)
+            .then((res) => {
+              out[cur] = res;
+              running--;
+              next();
+            })
+            .catch(reject);
+        }
+      };
+      next();
+    });
+  }
+
+  const filePromises = await mapLimit(files, conc, async (file) => {
     try {
       const parsed = opts?.parsed?.get(file);
       const sup = parsed?.sup ?? supportForFile(file);
@@ -184,7 +248,7 @@ export async function collectGraph(
     }
   });
 
-  const allEdges = await Promise.all(filePromises);
+  const allEdges = filePromises;
   graph.edges = allEdges.flat();
   return graph;
 }
@@ -269,7 +333,7 @@ export function graphToMermaid(graph: Graph): string {
   for (const e of graph.edges) {
     const fromId = idOf.get(e.from)!;
     const toId = idOf.get(edgeTargetToString(e.to))!;
-    lines.push(`${fromId} --> ${toId}`);
+    lines.push(e.typeOnly ? `${fromId} -.-> ${toId}` : `${fromId} --> ${toId}`);
   }
   return lines.join("\n");
 }
@@ -291,7 +355,9 @@ export async function astGrep(
   for (const file of files) {
     try {
       const lang = languageForFile(file);
-      const parser = new Parser();
+      const sup = supportForFile(file);
+      const key = (sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts") as any;
+      const parser = acquireParser(lang, key);
       parser.setLanguage(lang);
       const src = await fsp.readFile(file, "utf8");
       const tree = parser.parse(src);
@@ -308,6 +374,7 @@ export async function astGrep(
           });
         }
       }
+      releaseParser(parser, key);
     } catch (error) {
       console.warn(
         `Warning: Failed to process file ${file} for AST grep:`,

@@ -225,7 +225,7 @@ async function main() {
       }
       return;
     }
-    const graph = await collectGraph(root, files, { fast });
+    const graph = await collectGraph(root, files, { fast, threads });
     if (format === "mermaid") writeStdoutLine(graphToMermaid(graph));
     else if (format === "dot") writeStdoutLine(graphToDOT(graph));
     else writeJSONLine({ nodes: [...graph.nodes], edges: graph.edges });
