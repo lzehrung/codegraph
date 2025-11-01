@@ -403,7 +403,8 @@ function defNodeId(def: {
   range?: { start: { index: number } };
 }) {
   const idx = def.range?.start?.index ?? 0;
-  return `${def.file}::${def.localName}::${idx}`;
+  const f = typeof def.file === 'string' ? def.file.replace(/\\/g, '/') : def.file;
+  return `${f}::${def.localName}::${idx}`;
 }
 
 function nodeForDef(def: {

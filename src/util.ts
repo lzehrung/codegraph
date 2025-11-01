@@ -560,7 +560,7 @@ async function resolveFromNodeModules(
         return baseDir;
       }
       const parent = path.dirname(dir);
-      if (parent === dir || parent.length < projectRoot.length) break;
+      if (parent === dir) break;
       dir = parent;
     }
   } catch {}
