@@ -1,6 +1,6 @@
 {
   "name": "codegraph",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -31,7 +31,7 @@
     "release:minor": "npm version minor",
     "release:major": "npm version major",
     "graph:default": "npx codegraph graph ./src",
-    "graph:json": "npx codegraph graph ./src --json --symbols-detailed > graph.json",    
+    "graph:json": "npx codegraph graph ./src --json --symbols-detailed > graph.json",
     "graph:mermaid": "npx codegraph graph ./src --mermaid --symbols-detailed > graph.mermaid.mmd",
     "graph:dot": "npx codegraph graph ./src --dot --symbols-detailed > graph.dot"
   },
