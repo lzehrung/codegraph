@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import path from "node:path";
+import fs from "node:fs";
+import fsp from "node:fs/promises";
 import {
   listProjectFiles,
   collectGraph,
@@ -21,6 +23,7 @@ import {
 function toJSON(obj: any) {
   return JSON.stringify(obj, null, 2);
 }
+let stderrFilePath: string | undefined;
 function writeStdoutLine(message: string) {
   process.stdout.write(`${message}\n`);
 }
@@ -29,6 +32,13 @@ function writeJSONLine(value: unknown) {
 }
 function writeStderrLine(message: string) {
   process.stderr.write(`${message}\n`);
+  try {
+    if (stderrFilePath) fs.appendFileSync(stderrFilePath, `${message}\n`, {
+      encoding: "utf8",
+    });
+  } catch {
+    // Swallow file logging errors to avoid masking primary error output
+  }
 }
 function writeError(error: unknown) {
   if (error instanceof Error) {
@@ -141,11 +151,25 @@ async function main() {
 
   if (cmd === "graph") {
     const files = await resolveFilesFromRoots();
-    const wantSymbols =
+    const hasExplicitSymbolFlag =
       flags.includes("--symbols") ||
       flags.includes("--symbols-only") ||
       flags.includes("--symbols-detailed");
-    const detailedSymbols = flags.includes("--symbols-detailed");
+    const hasExplicitFormatFlag =
+      flags.includes("--mermaid") || flags.includes("--dot") || flags.includes("--json");
+    const outputIdx = args.findIndex((a) => a === "--output" || a === "-o");
+    const outputArg = outputIdx !== -1 ? args[outputIdx + 1] : undefined;
+    const stderrIdx = args.findIndex((a) => a === "--stderr-file");
+    const stderrArg = stderrIdx !== -1 ? args[stderrIdx + 1] : undefined;
+    const stdoutMode = flags.includes("--stdout");
+    const defaultGraphMode = !hasExplicitSymbolFlag && !hasExplicitFormatFlag;
+
+    const wantSymbols = defaultGraphMode
+      ? true
+      : hasExplicitSymbolFlag;
+    const detailedSymbols = defaultGraphMode
+      ? true
+      : flags.includes("--symbols-detailed");
     const threadsFlagIdx = args.findIndex((a) => a === "--threads");
     const threads =
       threadsFlagIdx !== -1 ? Number(args[threadsFlagIdx + 1]) : 0;
@@ -159,6 +183,29 @@ async function main() {
       : "json";
     const fast = flags.includes("--fast-graph");
     const resolveNodeModules = flags.includes("--resolve-node-modules");
+    const compact = defaultGraphMode ? true : flags.includes("--compact-json");
+    const outputFile = outputArg
+      ? (path.isAbsolute(outputArg)
+          ? outputArg.replace(/\\/g, "/")
+          : path.resolve(process.cwd(), outputArg).replace(/\\/g, "/"))
+      : defaultGraphMode && !stdoutMode
+      ? path.resolve(process.cwd(), "codegraph.json").replace(/\\/g, "/")
+      : undefined;
+    stderrFilePath = stderrArg
+      ? (path.isAbsolute(stderrArg)
+          ? stderrArg.replace(/\\/g, "/")
+          : path.resolve(process.cwd(), stderrArg).replace(/\\/g, "/"))
+      : defaultGraphMode
+      ? path.resolve(process.cwd(), "codegraph.err").replace(/\\/g, "/")
+      : undefined;
+
+    const writeOut = async (text: string) => {
+      if (outputFile) {
+        await fsp.writeFile(outputFile, `${text}\n`, "utf8");
+      } else {
+        writeStdoutLine(text);
+      }
+    };
     if (wantSymbols) {
       const index = await buildProjectIndexFromFiles(root, files, {
         threads,
@@ -187,49 +234,48 @@ async function main() {
         sgraph = await buildSymbolGraph(index);
       }
       if (flags.includes("--symbols-only")) {
-        if (format === "mermaid")
-          writeStdoutLine(graphToMermaidSymbols(sgraph, root));
-        else if (format === "dot")
-          writeStdoutLine(graphToDOTSymbols(sgraph, root));
-        else {
-          const compact = flags.includes("--compact-json");
+        if (format === "mermaid") {
+          await writeOut(graphToMermaidSymbols(sgraph, root));
+        } else if (format === "dot") {
+          await writeOut(graphToDOTSymbols(sgraph, root));
+        } else {
           if (compact) {
             const allFiles = [...index.graph.nodes];
-            writeJSONLine(compactSymbolsOnly(allFiles, sgraph));
+            await writeOut(toJSON(compactSymbolsOnly(allFiles, sgraph)));
           } else {
-            writeJSONLine({
-              nodes: [...sgraph.nodes.values()],
-              edges: sgraph.edges,
-            });
+            await writeOut(
+              toJSON({ nodes: [...sgraph.nodes.values()], edges: sgraph.edges })
+            );
           }
         }
         return;
       }
       // Reuse the graph already built during indexing to avoid an extra pass
       const fgraph = index.graph;
-      if (format === "mermaid")
-        writeStdoutLine(graphToMermaidSymbolsWithFiles(sgraph, fgraph, root));
-      else if (format === "dot")
-        writeStdoutLine(graphToDOTSymbolsWithFiles(sgraph, fgraph, root));
-      else {
-        const compact = flags.includes("--compact-json");
+      if (format === "mermaid") {
+        await writeOut(graphToMermaidSymbolsWithFiles(sgraph, fgraph, root));
+      } else if (format === "dot") {
+        await writeOut(graphToDOTSymbolsWithFiles(sgraph, fgraph, root));
+      } else {
         if (compact) {
-          writeJSONLine(compactGraphWithSymbols(fgraph, sgraph));
+          await writeOut(toJSON(compactGraphWithSymbols(fgraph, sgraph)));
         } else {
-          writeJSONLine({
-            files: [...fgraph.nodes],
-            fileEdges: fgraph.edges,
-            symbols: [...sgraph.nodes.values()],
-            symbolEdges: sgraph.edges,
-          });
+          await writeOut(
+            toJSON({
+              files: [...fgraph.nodes],
+              fileEdges: fgraph.edges,
+              symbols: [...sgraph.nodes.values()],
+              symbolEdges: sgraph.edges,
+            })
+          );
         }
       }
       return;
     }
     const graph = await collectGraph(root, files, { fast, threads, resolveNodeModules });
-    if (format === "mermaid") writeStdoutLine(graphToMermaid(graph));
-    else if (format === "dot") writeStdoutLine(graphToDOT(graph));
-    else writeJSONLine({ nodes: [...graph.nodes], edges: graph.edges });
+    if (format === "mermaid") await writeOut(graphToMermaid(graph));
+    else if (format === "dot") await writeOut(graphToDOT(graph));
+    else await writeOut(toJSON({ nodes: [...graph.nodes], edges: graph.edges }));
     return;
   }
 

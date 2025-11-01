@@ -18,8 +18,8 @@ import {
   acquireParser,
   releaseParser,
 } from "./util.js";
-import { type Graph, collectGraph } from "./graphs.js";
-import type { Pos, Range, FileId } from "./types.js";
+import { collectGraph } from "./graphs.js";
+import type { Pos, Range, FileId, Graph } from "./types.js";
 
 export enum SymbolKind {
   Function = "function",

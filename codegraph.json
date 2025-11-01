@@ -1,0 +1,1720 @@
+{
+  "files": [
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts",
+    "E:/git repos/dev-agent/dep-graph/src/global.d.ts",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts",
+    "E:/git repos/dev-agent/dep-graph/src/index.ts",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts",
+    "E:/git repos/dev-agent/dep-graph/src/languages.ts",
+    "E:/git repos/dev-agent/dep-graph/src/types.ts",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts"
+  ],
+  "fileEdges": [
+    {
+      "from": 0,
+      "to": {
+        "type": "external",
+        "name": "node:path"
+      },
+      "raw": "node:path",
+      "typeOnly": false
+    },
+    {
+      "from": 0,
+      "to": {
+        "type": "external",
+        "name": "node:fs"
+      },
+      "raw": "node:fs",
+      "typeOnly": false
+    },
+    {
+      "from": 0,
+      "to": {
+        "type": "external",
+        "name": "node:fs/promises"
+      },
+      "raw": "node:fs/promises",
+      "typeOnly": false
+    },
+    {
+      "from": 0,
+      "to": {
+        "type": "file",
+        "path": 3
+      },
+      "raw": "./index.js",
+      "typeOnly": false
+    },
+    {
+      "from": 2,
+      "to": {
+        "type": "external",
+        "name": "node:path"
+      },
+      "raw": "node:path",
+      "typeOnly": false
+    },
+    {
+      "from": 2,
+      "to": {
+        "type": "external",
+        "name": "tree-sitter"
+      },
+      "raw": "tree-sitter",
+      "typeOnly": false
+    },
+    {
+      "from": 2,
+      "to": {
+        "type": "external",
+        "name": "node:fs"
+      },
+      "raw": "node:fs",
+      "typeOnly": false
+    },
+    {
+      "from": 2,
+      "to": {
+        "type": "external",
+        "name": "node:fs/promises"
+      },
+      "raw": "node:fs/promises",
+      "typeOnly": false
+    },
+    {
+      "from": 2,
+      "to": {
+        "type": "file",
+        "path": 5
+      },
+      "raw": "./languages.js",
+      "typeOnly": false
+    },
+    {
+      "from": 2,
+      "to": {
+        "type": "file",
+        "path": 5
+      },
+      "raw": "./languages.js",
+      "typeOnly": true
+    },
+    {
+      "from": 2,
+      "to": {
+        "type": "file",
+        "path": 6
+      },
+      "raw": "./types.js",
+      "typeOnly": true
+    },
+    {
+      "from": 2,
+      "to": {
+        "type": "file",
+        "path": 7
+      },
+      "raw": "./util.js",
+      "typeOnly": false
+    },
+    {
+      "from": 2,
+      "to": {
+        "type": "file",
+        "path": 7
+      },
+      "raw": "./util.js",
+      "typeOnly": false
+    },
+    {
+      "from": 2,
+      "to": {
+        "type": "file",
+        "path": 7
+      },
+      "raw": "./util.js",
+      "typeOnly": false
+    },
+    {
+      "from": 3,
+      "to": {
+        "type": "file",
+        "path": 5
+      },
+      "raw": "./languages.js",
+      "typeOnly": false
+    },
+    {
+      "from": 3,
+      "to": {
+        "type": "file",
+        "path": 7
+      },
+      "raw": "./util.js",
+      "typeOnly": false
+    },
+    {
+      "from": 3,
+      "to": {
+        "type": "file",
+        "path": 2
+      },
+      "raw": "./graphs.js",
+      "typeOnly": false
+    },
+    {
+      "from": 3,
+      "to": {
+        "type": "file",
+        "path": 6
+      },
+      "raw": "./types.js",
+      "typeOnly": true
+    },
+    {
+      "from": 3,
+      "to": {
+        "type": "file",
+        "path": 4
+      },
+      "raw": "./indexer.js",
+      "typeOnly": false
+    },
+    {
+      "from": 4,
+      "to": {
+        "type": "external",
+        "name": "node:fs"
+      },
+      "raw": "node:fs",
+      "typeOnly": false
+    },
+    {
+      "from": 4,
+      "to": {
+        "type": "external",
+        "name": "node:fs/promises"
+      },
+      "raw": "node:fs/promises",
+      "typeOnly": false
+    },
+    {
+      "from": 4,
+      "to": {
+        "type": "external",
+        "name": "node:path"
+      },
+      "raw": "node:path",
+      "typeOnly": false
+    },
+    {
+      "from": 4,
+      "to": {
+        "type": "external",
+        "name": "tree-sitter"
+      },
+      "raw": "tree-sitter",
+      "typeOnly": false
+    },
+    {
+      "from": 4,
+      "to": {
+        "type": "external",
+        "name": "node:crypto"
+      },
+      "raw": "node:crypto",
+      "typeOnly": false
+    },
+    {
+      "from": 4,
+      "to": {
+        "type": "file",
+        "path": 5
+      },
+      "raw": "./languages.js",
+      "typeOnly": false
+    },
+    {
+      "from": 4,
+      "to": {
+        "type": "file",
+        "path": 7
+      },
+      "raw": "./util.js",
+      "typeOnly": false
+    },
+    {
+      "from": 4,
+      "to": {
+        "type": "file",
+        "path": 2
+      },
+      "raw": "./graphs.js",
+      "typeOnly": false
+    },
+    {
+      "from": 4,
+      "to": {
+        "type": "file",
+        "path": 6
+      },
+      "raw": "./types.js",
+      "typeOnly": true
+    },
+    {
+      "from": 5,
+      "to": {
+        "type": "external",
+        "name": "node:path"
+      },
+      "raw": "node:path",
+      "typeOnly": false
+    },
+    {
+      "from": 5,
+      "to": {
+        "type": "external",
+        "name": "tree-sitter"
+      },
+      "raw": "tree-sitter",
+      "typeOnly": false
+    },
+    {
+      "from": 5,
+      "to": {
+        "type": "external",
+        "name": "tree-sitter-typescript"
+      },
+      "raw": "tree-sitter-typescript",
+      "typeOnly": false
+    },
+    {
+      "from": 5,
+      "to": {
+        "type": "external",
+        "name": "tree-sitter-javascript"
+      },
+      "raw": "tree-sitter-javascript",
+      "typeOnly": false
+    },
+    {
+      "from": 5,
+      "to": {
+        "type": "external",
+        "name": "tree-sitter-python"
+      },
+      "raw": "tree-sitter-python",
+      "typeOnly": false
+    },
+    {
+      "from": 7,
+      "to": {
+        "type": "external",
+        "name": "node:fs"
+      },
+      "raw": "node:fs",
+      "typeOnly": false
+    },
+    {
+      "from": 7,
+      "to": {
+        "type": "external",
+        "name": "node:fs/promises"
+      },
+      "raw": "node:fs/promises",
+      "typeOnly": false
+    },
+    {
+      "from": 7,
+      "to": {
+        "type": "external",
+        "name": "node:path"
+      },
+      "raw": "node:path",
+      "typeOnly": false
+    },
+    {
+      "from": 7,
+      "to": {
+        "type": "external",
+        "name": "fast-glob"
+      },
+      "raw": "fast-glob",
+      "typeOnly": false
+    },
+    {
+      "from": 7,
+      "to": {
+        "type": "external",
+        "name": "tsconfig-paths"
+      },
+      "raw": "tsconfig-paths",
+      "typeOnly": false
+    },
+    {
+      "from": 7,
+      "to": {
+        "type": "external",
+        "name": "tree-sitter"
+      },
+      "raw": "tree-sitter",
+      "typeOnly": false
+    }
+  ],
+  "symbols": [
+    {
+      "id": 0,
+      "name": "toJSON",
+      "kind": "function"
+    },
+    {
+      "id": 1,
+      "name": "stderrFilePath",
+      "kind": "variable"
+    },
+    {
+      "id": 2,
+      "name": "writeStdoutLine",
+      "kind": "function"
+    },
+    {
+      "id": 3,
+      "name": "writeJSONLine",
+      "kind": "function"
+    },
+    {
+      "id": 4,
+      "name": "writeStderrLine",
+      "kind": "function"
+    },
+    {
+      "id": 5,
+      "name": "writeError",
+      "kind": "function"
+    },
+    {
+      "id": 6,
+      "name": "compactGraphWithSymbols",
+      "kind": "function"
+    },
+    {
+      "id": 7,
+      "name": "compactSymbolsOnly",
+      "kind": "function"
+    },
+    {
+      "id": 8,
+      "name": "main",
+      "kind": "function"
+    },
+    {
+      "id": 9,
+      "name": "collectModuleSpecifiersFromSource",
+      "kind": "function"
+    },
+    {
+      "id": 10,
+      "name": "collectGraph",
+      "kind": "function"
+    },
+    {
+      "id": 11,
+      "name": "mapLimit",
+      "kind": "function"
+    },
+    {
+      "id": 12,
+      "name": "edgeTargetToString",
+      "kind": "function"
+    },
+    {
+      "id": 13,
+      "name": "buildNodeIdMap",
+      "kind": "function"
+    },
+    {
+      "id": 14,
+      "name": "graphToDOT",
+      "kind": "function"
+    },
+    {
+      "id": 15,
+      "name": "graphToMermaid",
+      "kind": "function"
+    },
+    {
+      "id": 16,
+      "name": "AstGrepHit",
+      "kind": "type"
+    },
+    {
+      "id": 17,
+      "name": "astGrep",
+      "kind": "function"
+    },
+    {
+      "id": 18,
+      "name": "SymbolNodeKind",
+      "kind": "type"
+    },
+    {
+      "id": 19,
+      "name": "SymbolNode",
+      "kind": "type"
+    },
+    {
+      "id": 20,
+      "name": "SymbolEdge",
+      "kind": "type"
+    },
+    {
+      "id": 21,
+      "name": "SymbolGraph",
+      "kind": "type"
+    },
+    {
+      "id": 22,
+      "name": "defNodeId",
+      "kind": "function"
+    },
+    {
+      "id": 23,
+      "name": "nodeForDef",
+      "kind": "function"
+    },
+    {
+      "id": 24,
+      "name": "buildSymbolGraph",
+      "kind": "function"
+    },
+    {
+      "id": 25,
+      "name": "buildSymbolGraphDetailed",
+      "kind": "function"
+    },
+    {
+      "id": 26,
+      "name": "graphToMermaidSymbols",
+      "kind": "function"
+    },
+    {
+      "id": 27,
+      "name": "graphToDOTSymbols",
+      "kind": "function"
+    },
+    {
+      "id": 28,
+      "name": "graphToMermaidSymbolsWithFiles",
+      "kind": "function"
+    },
+    {
+      "id": 29,
+      "name": "graphToDOTSymbolsWithFiles",
+      "kind": "function"
+    },
+    {
+      "id": 30,
+      "name": "SymbolDef",
+      "kind": "type"
+    },
+    {
+      "id": 31,
+      "name": "ExportEntry",
+      "kind": "type"
+    },
+    {
+      "id": 32,
+      "name": "ImportBinding",
+      "kind": "type"
+    },
+    {
+      "id": 33,
+      "name": "ModuleIndex",
+      "kind": "type"
+    },
+    {
+      "id": 34,
+      "name": "ProjectIndex",
+      "kind": "type"
+    },
+    {
+      "id": 35,
+      "name": "ResolvedExport",
+      "kind": "type"
+    },
+    {
+      "id": 36,
+      "name": "BuildOptions",
+      "kind": "type"
+    },
+    {
+      "id": 37,
+      "name": "SymbolHandle",
+      "kind": "type"
+    },
+    {
+      "id": 38,
+      "name": "symbolId",
+      "kind": "function"
+    },
+    {
+      "id": 39,
+      "name": "defFromSymbolId",
+      "kind": "function"
+    },
+    {
+      "id": 40,
+      "name": "resolveSymbolId",
+      "kind": "function"
+    },
+    {
+      "id": 41,
+      "name": "goToDefinitionById",
+      "kind": "function"
+    },
+    {
+      "id": 42,
+      "name": "findReferencesById",
+      "kind": "function"
+    },
+    {
+      "id": 43,
+      "name": "SymbolListItem",
+      "kind": "type"
+    },
+    {
+      "id": 44,
+      "name": "listSymbols",
+      "kind": "function"
+    },
+    {
+      "id": 45,
+      "name": "mapLimit",
+      "kind": "function"
+    },
+    {
+      "id": 46,
+      "name": "ModuleCacheEntry",
+      "kind": "type"
+    },
+    {
+      "id": 47,
+      "name": "memoryCache",
+      "kind": "variable"
+    },
+    {
+      "id": 48,
+      "name": "fileSignature",
+      "kind": "function"
+    },
+    {
+      "id": 49,
+      "name": "cacheFilePath",
+      "kind": "function"
+    },
+    {
+      "id": 50,
+      "name": "tryLoadFromCache",
+      "kind": "function"
+    },
+    {
+      "id": 51,
+      "name": "writeToCache",
+      "kind": "function"
+    },
+    {
+      "id": 52,
+      "name": "collectLocalsAndExportsFromSource",
+      "kind": "function"
+    },
+    {
+      "id": 53,
+      "name": "collectImportsForFile",
+      "kind": "function"
+    },
+    {
+      "id": 54,
+      "name": "parseFile",
+      "kind": "function"
+    },
+    {
+      "id": 55,
+      "name": "buildProjectIndex",
+      "kind": "function"
+    },
+    {
+      "id": 56,
+      "name": "buildProjectIndexFromFiles",
+      "kind": "function"
+    },
+    {
+      "id": 57,
+      "name": "cacheKey",
+      "kind": "function"
+    },
+    {
+      "id": 58,
+      "name": "resolveExport",
+      "kind": "function"
+    },
+    {
+      "id": 59,
+      "name": "_resolve",
+      "kind": "function"
+    },
+    {
+      "id": 60,
+      "name": "GoToRequest",
+      "kind": "type"
+    },
+    {
+      "id": 61,
+      "name": "GoToResult",
+      "kind": "type"
+    },
+    {
+      "id": 62,
+      "name": "goToDefinition",
+      "kind": "function"
+    },
+    {
+      "id": 63,
+      "name": "toModuleRef",
+      "kind": "function"
+    },
+    {
+      "id": 64,
+      "name": "resolveImported",
+      "kind": "function"
+    },
+    {
+      "id": 65,
+      "name": "BindingKind",
+      "kind": "type"
+    },
+    {
+      "id": 66,
+      "name": "Binding",
+      "kind": "type"
+    },
+    {
+      "id": 67,
+      "name": "ScopeIndex",
+      "kind": "type"
+    },
+    {
+      "id": 68,
+      "name": "buildScopeIndexFromSource",
+      "kind": "function"
+    },
+    {
+      "id": 69,
+      "name": "Reference",
+      "kind": "type"
+    },
+    {
+      "id": 70,
+      "name": "sameDef",
+      "kind": "function"
+    },
+    {
+      "id": 71,
+      "name": "rangeContains",
+      "kind": "function"
+    },
+    {
+      "id": 72,
+      "name": "findReferences",
+      "kind": "function"
+    },
+    {
+      "id": 73,
+      "name": "__buildSymbolGraphDetailedCompat",
+      "kind": "function"
+    },
+    {
+      "id": 74,
+      "name": "collectNamespaceMemberRefs",
+      "kind": "function"
+    },
+    {
+      "id": 75,
+      "name": "helper",
+      "kind": "function"
+    },
+    {
+      "id": 76,
+      "name": "IdentifierNodeType",
+      "kind": "type"
+    },
+    {
+      "id": 77,
+      "name": "LanguageSupport",
+      "kind": "type"
+    },
+    {
+      "id": 78,
+      "name": "LangTS",
+      "kind": "variable"
+    },
+    {
+      "id": 79,
+      "name": "LangTSX",
+      "kind": "variable"
+    },
+    {
+      "id": 80,
+      "name": "LangJS",
+      "kind": "variable"
+    },
+    {
+      "id": 81,
+      "name": "TS_SUPPORT",
+      "kind": "variable"
+    },
+    {
+      "id": 82,
+      "name": "JS_SUPPORT",
+      "kind": "variable"
+    },
+    {
+      "id": 83,
+      "name": "PY_SUPPORT",
+      "kind": "variable"
+    },
+    {
+      "id": 84,
+      "name": "LANGUAGE_SUPPORTS",
+      "kind": "variable"
+    },
+    {
+      "id": 85,
+      "name": "supportForFile",
+      "kind": "function"
+    },
+    {
+      "id": 86,
+      "name": "languageForFile",
+      "kind": "function"
+    },
+    {
+      "id": 87,
+      "name": "CompiledQueries",
+      "kind": "type"
+    },
+    {
+      "id": 88,
+      "name": "queryCache",
+      "kind": "variable"
+    },
+    {
+      "id": 89,
+      "name": "getCompiledQueries",
+      "kind": "function"
+    },
+    {
+      "id": 90,
+      "name": "Pos",
+      "kind": "type"
+    },
+    {
+      "id": 91,
+      "name": "Range",
+      "kind": "type"
+    },
+    {
+      "id": 92,
+      "name": "FileId",
+      "kind": "type"
+    },
+    {
+      "id": 93,
+      "name": "EdgeTo",
+      "kind": "type"
+    },
+    {
+      "id": 94,
+      "name": "Edge",
+      "kind": "type"
+    },
+    {
+      "id": 95,
+      "name": "Graph",
+      "kind": "type"
+    },
+    {
+      "id": 96,
+      "name": "Pos",
+      "kind": "type"
+    },
+    {
+      "id": 97,
+      "name": "Range",
+      "kind": "type"
+    },
+    {
+      "id": 98,
+      "name": "sliceText",
+      "kind": "function"
+    },
+    {
+      "id": 99,
+      "name": "unquote",
+      "kind": "function"
+    },
+    {
+      "id": 100,
+      "name": "toRange",
+      "kind": "function"
+    },
+    {
+      "id": 101,
+      "name": "listProjectFiles",
+      "kind": "function"
+    },
+    {
+      "id": 102,
+      "name": "stripJsLikeComments",
+      "kind": "function"
+    },
+    {
+      "id": 103,
+      "name": "stripPythonCommentsAndStrings",
+      "kind": "function"
+    },
+    {
+      "id": 104,
+      "name": "normalizePath",
+      "kind": "function"
+    },
+    {
+      "id": 105,
+      "name": "ModuleSpecifier",
+      "kind": "type"
+    },
+    {
+      "id": 106,
+      "name": "extractJsTsSpecifiers",
+      "kind": "function"
+    },
+    {
+      "id": 107,
+      "name": "extractPythonSpecifiers",
+      "kind": "function"
+    },
+    {
+      "id": 108,
+      "name": "MatchPathFn",
+      "kind": "type"
+    },
+    {
+      "id": 109,
+      "name": "tsconfigCache",
+      "kind": "variable"
+    },
+    {
+      "id": 110,
+      "name": "findNearestTsconfig",
+      "kind": "function"
+    },
+    {
+      "id": 111,
+      "name": "loadNearestTsconfigFor",
+      "kind": "function"
+    },
+    {
+      "id": 112,
+      "name": "fileExists",
+      "kind": "function"
+    },
+    {
+      "id": 113,
+      "name": "findWorkspaceRoot",
+      "kind": "function"
+    },
+    {
+      "id": 114,
+      "name": "loadJSON",
+      "kind": "function"
+    },
+    {
+      "id": 115,
+      "name": "WorkspacePackageInfo",
+      "kind": "type"
+    },
+    {
+      "id": 116,
+      "name": "WorkspaceConfig",
+      "kind": "type"
+    },
+    {
+      "id": 117,
+      "name": "workspaceCache",
+      "kind": "variable"
+    },
+    {
+      "id": 118,
+      "name": "loadWorkspaceConfig",
+      "kind": "function"
+    },
+    {
+      "id": 119,
+      "name": "resolvePackageSubpath",
+      "kind": "function"
+    },
+    {
+      "id": 120,
+      "name": "resolveWorkspacePackage",
+      "kind": "function"
+    },
+    {
+      "id": 121,
+      "name": "FileId",
+      "kind": "type"
+    },
+    {
+      "id": 122,
+      "name": "resolveSpecifier",
+      "kind": "function"
+    },
+    {
+      "id": 123,
+      "name": "resolveFromNodeModules",
+      "kind": "function"
+    },
+    {
+      "id": 124,
+      "name": "findPythonPackageAnchor",
+      "kind": "function"
+    },
+    {
+      "id": 125,
+      "name": "isDirectory",
+      "kind": "function"
+    },
+    {
+      "id": 126,
+      "name": "resolvePythonModule",
+      "kind": "function"
+    },
+    {
+      "id": 127,
+      "name": "fileExistsCache",
+      "kind": "variable"
+    },
+    {
+      "id": 128,
+      "name": "resolveSpecifierCache",
+      "kind": "variable"
+    },
+    {
+      "id": 129,
+      "name": "resolvePythonModuleCache",
+      "kind": "variable"
+    },
+    {
+      "id": 130,
+      "name": "LangKey",
+      "kind": "type"
+    },
+    {
+      "id": 131,
+      "name": "parserPools",
+      "kind": "variable"
+    },
+    {
+      "id": 132,
+      "name": "acquireParser",
+      "kind": "function"
+    },
+    {
+      "id": 133,
+      "name": "releaseParser",
+      "kind": "function"
+    },
+    {
+      "id": 134,
+      "file": 0,
+      "name": "path",
+      "kind": "import"
+    },
+    {
+      "id": 135,
+      "file": 0,
+      "name": "fs",
+      "kind": "import"
+    },
+    {
+      "id": 136,
+      "file": 0,
+      "name": "fsp",
+      "kind": "import"
+    },
+    {
+      "id": 137,
+      "file": 2,
+      "name": "path",
+      "kind": "import"
+    },
+    {
+      "id": 138,
+      "file": 2,
+      "name": "Parser",
+      "kind": "import"
+    },
+    {
+      "id": 139,
+      "file": 2,
+      "name": "fs",
+      "kind": "import"
+    },
+    {
+      "id": 140,
+      "file": 2,
+      "name": "fsp",
+      "kind": "import"
+    },
+    {
+      "id": 141,
+      "file": 2,
+      "name": "languageForFile",
+      "kind": "import"
+    },
+    {
+      "id": 142,
+      "file": 2,
+      "name": "type { LanguageSupport }",
+      "kind": "import"
+    },
+    {
+      "id": 143,
+      "file": 2,
+      "name": "type { FileId",
+      "kind": "import"
+    },
+    {
+      "id": 144,
+      "file": 2,
+      "name": "EdgeTo",
+      "kind": "import"
+    },
+    {
+      "id": 145,
+      "file": 2,
+      "name": "Edge",
+      "kind": "import"
+    },
+    {
+      "id": 146,
+      "file": 2,
+      "name": "Graph",
+      "kind": "import"
+    },
+    {
+      "id": 147,
+      "file": 2,
+      "name": "acquireParser",
+      "kind": "import"
+    },
+    {
+      "id": 148,
+      "file": 2,
+      "name": "releaseParser",
+      "kind": "import"
+    },
+    {
+      "id": 149,
+      "file": 2,
+      "name": "extractPythonSpecifiers",
+      "kind": "import"
+    },
+    {
+      "id": 150,
+      "file": 2,
+      "name": "normalizePath",
+      "kind": "import"
+    },
+    {
+      "id": 151,
+      "file": 4,
+      "name": "fs",
+      "kind": "import"
+    },
+    {
+      "id": 152,
+      "file": 4,
+      "name": "fsp",
+      "kind": "import"
+    },
+    {
+      "id": 153,
+      "file": 4,
+      "name": "path",
+      "kind": "import"
+    },
+    {
+      "id": 154,
+      "file": 4,
+      "name": "Parser",
+      "kind": "import"
+    },
+    {
+      "id": 155,
+      "file": 4,
+      "name": "crypto",
+      "kind": "import"
+    },
+    {
+      "id": 156,
+      "file": 4,
+      "name": "languageForFile",
+      "kind": "import"
+    },
+    {
+      "id": 157,
+      "file": 4,
+      "name": "getCompiledQueries",
+      "kind": "import"
+    },
+    {
+      "id": 158,
+      "file": 4,
+      "name": "collectGraph",
+      "kind": "import"
+    },
+    {
+      "id": 159,
+      "file": 4,
+      "name": "type { Pos",
+      "kind": "import"
+    },
+    {
+      "id": 160,
+      "file": 4,
+      "name": "Range",
+      "kind": "import"
+    },
+    {
+      "id": 161,
+      "file": 4,
+      "name": "FileId",
+      "kind": "import"
+    },
+    {
+      "id": 162,
+      "file": 4,
+      "name": "Graph",
+      "kind": "import"
+    },
+    {
+      "id": 163,
+      "file": 5,
+      "name": "path",
+      "kind": "import"
+    },
+    {
+      "id": 164,
+      "file": 5,
+      "name": "Parser",
+      "kind": "import"
+    },
+    {
+      "id": 165,
+      "file": 5,
+      "name": "tsGrammars",
+      "kind": "import"
+    },
+    {
+      "id": 166,
+      "file": 5,
+      "name": "JavaScript",
+      "kind": "import"
+    },
+    {
+      "id": 167,
+      "file": 5,
+      "name": "PythonLang",
+      "kind": "import"
+    },
+    {
+      "id": 168,
+      "file": 7,
+      "name": "fs",
+      "kind": "import"
+    },
+    {
+      "id": 169,
+      "file": 7,
+      "name": "fsp",
+      "kind": "import"
+    },
+    {
+      "id": 170,
+      "file": 7,
+      "name": "path",
+      "kind": "import"
+    },
+    {
+      "id": 171,
+      "file": 7,
+      "name": "fg",
+      "kind": "import"
+    },
+    {
+      "id": 172,
+      "file": 7,
+      "name": "createMatchPath",
+      "kind": "import"
+    },
+    {
+      "id": 173,
+      "file": 7,
+      "name": "Parser",
+      "kind": "import"
+    }
+  ],
+  "symbolEdges": [
+    {
+      "from": 141,
+      "to": 86,
+      "label": "languageForFile"
+    },
+    {
+      "from": 142,
+      "to": 81,
+      "label": "default"
+    },
+    {
+      "from": 144,
+      "to": 93,
+      "label": "EdgeTo"
+    },
+    {
+      "from": 145,
+      "to": 94,
+      "label": "Edge"
+    },
+    {
+      "from": 146,
+      "to": 95,
+      "label": "Graph"
+    },
+    {
+      "from": 147,
+      "to": 132,
+      "label": "acquireParser"
+    },
+    {
+      "from": 148,
+      "to": 133,
+      "label": "releaseParser"
+    },
+    {
+      "from": 149,
+      "to": 107,
+      "label": "extractPythonSpecifiers"
+    },
+    {
+      "from": 150,
+      "to": 104,
+      "label": "normalizePath"
+    },
+    {
+      "from": 156,
+      "to": 86,
+      "label": "languageForFile"
+    },
+    {
+      "from": 157,
+      "to": 89,
+      "label": "getCompiledQueries"
+    },
+    {
+      "from": 158,
+      "to": 10,
+      "label": "collectGraph"
+    },
+    {
+      "from": 160,
+      "to": 91,
+      "label": "Range"
+    },
+    {
+      "from": 161,
+      "to": 92,
+      "label": "FileId"
+    },
+    {
+      "from": 162,
+      "to": 95,
+      "label": "Graph"
+    },
+    {
+      "from": 9,
+      "to": 132,
+      "label": "uses"
+    },
+    {
+      "from": 9,
+      "to": 133,
+      "label": "uses"
+    },
+    {
+      "from": 9,
+      "to": 107,
+      "label": "uses"
+    },
+    {
+      "from": 10,
+      "to": 95,
+      "label": "uses"
+    },
+    {
+      "from": 10,
+      "to": 86,
+      "label": "uses"
+    },
+    {
+      "from": 10,
+      "to": 94,
+      "label": "uses"
+    },
+    {
+      "from": 10,
+      "to": 93,
+      "label": "uses"
+    },
+    {
+      "from": 12,
+      "to": 93,
+      "label": "uses"
+    },
+    {
+      "from": 13,
+      "to": 95,
+      "label": "uses"
+    },
+    {
+      "from": 14,
+      "to": 95,
+      "label": "uses"
+    },
+    {
+      "from": 15,
+      "to": 95,
+      "label": "uses"
+    },
+    {
+      "from": 17,
+      "to": 86,
+      "label": "uses"
+    },
+    {
+      "from": 17,
+      "to": 132,
+      "label": "uses"
+    },
+    {
+      "from": 17,
+      "to": 133,
+      "label": "uses"
+    },
+    {
+      "from": 24,
+      "to": 104,
+      "label": "uses"
+    },
+    {
+      "from": 25,
+      "to": 104,
+      "label": "uses"
+    },
+    {
+      "from": 25,
+      "to": 86,
+      "label": "uses"
+    },
+    {
+      "from": 28,
+      "to": 95,
+      "label": "uses"
+    },
+    {
+      "from": 29,
+      "to": 95,
+      "label": "uses"
+    },
+    {
+      "from": 44,
+      "to": 92,
+      "label": "uses"
+    },
+    {
+      "from": 52,
+      "to": 89,
+      "label": "uses"
+    },
+    {
+      "from": 53,
+      "to": 86,
+      "label": "uses"
+    },
+    {
+      "from": 53,
+      "to": 89,
+      "label": "uses"
+    },
+    {
+      "from": 54,
+      "to": 86,
+      "label": "uses"
+    },
+    {
+      "from": 55,
+      "to": 92,
+      "label": "uses"
+    },
+    {
+      "from": 55,
+      "to": 10,
+      "label": "uses"
+    },
+    {
+      "from": 56,
+      "to": 92,
+      "label": "uses"
+    },
+    {
+      "from": 56,
+      "to": 10,
+      "label": "uses"
+    },
+    {
+      "from": 57,
+      "to": 92,
+      "label": "uses"
+    },
+    {
+      "from": 58,
+      "to": 92,
+      "label": "uses"
+    },
+    {
+      "from": 59,
+      "to": 92,
+      "label": "uses"
+    },
+    {
+      "from": 62,
+      "to": 86,
+      "label": "uses"
+    },
+    {
+      "from": 63,
+      "to": 92,
+      "label": "uses"
+    },
+    {
+      "from": 71,
+      "to": 91,
+      "label": "uses"
+    },
+    {
+      "from": 72,
+      "to": 92,
+      "label": "uses"
+    },
+    {
+      "from": 72,
+      "to": 86,
+      "label": "uses"
+    },
+    {
+      "from": 74,
+      "to": 91,
+      "label": "uses"
+    },
+    {
+      "from": 74,
+      "to": 86,
+      "label": "uses"
+    }
+  ],
+  "symbolIdIndex": [
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::toJSON::476",
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::stderrFilePath::540",
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::writeStdoutLine::585",
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::writeJSONLine::671",
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::writeStderrLine::748",
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::writeError::1039",
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::compactGraphWithSymbols::1280",
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::compactSymbolsOnly::2546",
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::main::3459",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::collectModuleSpecifiersFromSource::885",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::collectGraph::4652",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::mapLimit::5266",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::edgeTargetToString::8169",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::buildNodeIdMap::8271",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::graphToDOT::8832",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::graphToMermaid::10058",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::AstGrepHit::10913",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::astGrep::11050",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::SymbolNodeKind::12454",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::SymbolNode::12611",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::SymbolEdge::12717",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::SymbolGraph::12789",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::defNodeId::12880",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::nodeForDef::13172",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::buildSymbolGraph::13462",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::buildSymbolGraphDetailed::17197",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::graphToMermaidSymbols::38508",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::graphToDOTSymbols::39772",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::graphToMermaidSymbolsWithFiles::41186",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::graphToDOTSymbolsWithFiles::43946",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::SymbolDef::857",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::ExportEntry::960",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::ImportBinding::1315",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::ModuleIndex::2119",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::ProjectIndex::2244",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::ResolvedExport::2583",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::BuildOptions::2651",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::SymbolHandle::2856",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::symbolId::2896",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::defFromSymbolId::3060",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::resolveSymbolId::3740",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::goToDefinitionById::5857",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::findReferencesById::6143",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::SymbolListItem::6415",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::listSymbols::6557",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::mapLimit::7659",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::ModuleCacheEntry::8368",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::memoryCache::8428",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::fileSignature::8495",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::cacheFilePath::8863",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::tryLoadFromCache::9208",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::writeToCache::9864",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::collectLocalsAndExportsFromSource::10351",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::collectImportsForFile::26739",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::parseFile::37444",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::buildProjectIndex::38037",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::buildProjectIndexFromFiles::41798",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::cacheKey::45637",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::resolveExport::45724",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::_resolve::45876",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::GoToRequest::47330",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::GoToResult::47404",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::goToDefinition::47655",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::toModuleRef::54625",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::resolveImported::54804",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::BindingKind::56302",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::Binding::56445",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::ScopeIndex::56574",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::buildScopeIndexFromSource::56658",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::Reference::61531",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::sameDef::61672",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::rangeContains::61846",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::findReferences::62215",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::__buildSymbolGraphDetailedCompat::66670",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::collectNamespaceMemberRefs::66979",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::helper::24692",
+    "E:/git repos/dev-agent/dep-graph/src/languages.ts::IdentifierNodeType::226",
+    "E:/git repos/dev-agent/dep-graph/src/languages.ts::LanguageSupport::270",
+    "E:/git repos/dev-agent/dep-graph/src/languages.ts::LangTS::990",
+    "E:/git repos/dev-agent/dep-graph/src/languages.ts::LangTSX::1057",
+    "E:/git repos/dev-agent/dep-graph/src/languages.ts::LangJS::1118",
+    "E:/git repos/dev-agent/dep-graph/src/languages.ts::TS_SUPPORT::1185",
+    "E:/git repos/dev-agent/dep-graph/src/languages.ts::JS_SUPPORT::4817",
+    "E:/git repos/dev-agent/dep-graph/src/languages.ts::PY_SUPPORT::11441",
+    "E:/git repos/dev-agent/dep-graph/src/languages.ts::LANGUAGE_SUPPORTS::13026",
+    "E:/git repos/dev-agent/dep-graph/src/languages.ts::supportForFile::13135",
+    "E:/git repos/dev-agent/dep-graph/src/languages.ts::languageForFile::13342",
+    "E:/git repos/dev-agent/dep-graph/src/languages.ts::CompiledQueries::13543",
+    "E:/git repos/dev-agent/dep-graph/src/languages.ts::queryCache::13684",
+    "E:/git repos/dev-agent/dep-graph/src/languages.ts::getCompiledQueries::13778",
+    "E:/git repos/dev-agent/dep-graph/src/types.ts::Pos::12",
+    "E:/git repos/dev-agent/dep-graph/src/types.ts::Range::80",
+    "E:/git repos/dev-agent/dep-graph/src/types.ts::FileId::127",
+    "E:/git repos/dev-agent/dep-graph/src/types.ts::EdgeTo::159",
+    "E:/git repos/dev-agent/dep-graph/src/types.ts::Edge::260",
+    "E:/git repos/dev-agent/dep-graph/src/types.ts::Graph::359",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::Pos::224",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::Range::292",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::sliceText::345",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::unquote::487",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::toRange::797",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::listProjectFiles::1280",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::stripJsLikeComments::1820",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::stripPythonCommentsAndStrings::1978",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::normalizePath::2268",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::ModuleSpecifier::2391",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::extractJsTsSpecifiers::2466",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::extractPythonSpecifiers::3770",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::MatchPathFn::4239",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::tsconfigCache::4296",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::findNearestTsconfig::4378",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::loadNearestTsconfigFor::4800",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::fileExists::5699",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::findWorkspaceRoot::6086",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::loadJSON::6809",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::WorkspacePackageInfo::7004",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::WorkspaceConfig::7120",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::workspaceCache::7219",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::loadWorkspaceConfig::7297",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolvePackageSubpath::9723",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolveWorkspacePackage::10205",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::FileId::12667",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolveSpecifier::12709",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolveFromNodeModules::16084",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::findPythonPackageAnchor::19382",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::isDirectory::19782",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolvePythonModule::19964",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::fileExistsCache::22183",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolveSpecifierCache::22236",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolvePythonModuleCache::22317",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::LangKey::22472",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::parserPools::22517",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::acquireParser::22580",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::releaseParser::22876",
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::path::import",
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::fs::import",
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::fsp::import",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::path::import",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::Parser::import",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::fs::import",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::fsp::import",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::languageForFile::import",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::type { LanguageSupport }::import",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::type { FileId::import",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::EdgeTo::import",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::Edge::import",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::Graph::import",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::acquireParser::import",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::releaseParser::import",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::extractPythonSpecifiers::import",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::normalizePath::import",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::fs::import",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::fsp::import",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::path::import",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::Parser::import",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::crypto::import",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::languageForFile::import",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::getCompiledQueries::import",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::collectGraph::import",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::type { Pos::import",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::Range::import",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::FileId::import",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::Graph::import",
+    "E:/git repos/dev-agent/dep-graph/src/languages.ts::path::import",
+    "E:/git repos/dev-agent/dep-graph/src/languages.ts::Parser::import",
+    "E:/git repos/dev-agent/dep-graph/src/languages.ts::tsGrammars::import",
+    "E:/git repos/dev-agent/dep-graph/src/languages.ts::JavaScript::import",
+    "E:/git repos/dev-agent/dep-graph/src/languages.ts::PythonLang::import",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::fs::import",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::fsp::import",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::path::import",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::fg::import",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::createMatchPath::import",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::Parser::import"
+  ]
+}

@@ -30,8 +30,8 @@
     "release:patch": "npm version patch",
     "release:minor": "npm version minor",
     "release:major": "npm version major",
-    "graph:json": "npx codegraph graph ./src --json --symbols-detailed > graph.json",
-    "graph:json-compact": "npx codegraph graph ./src --json --symbols-detailed --compact-json > graph.compact.json",
+    "graph:default": "npx codegraph graph ./src",
+    "graph:json": "npx codegraph graph ./src --json --symbols-detailed > graph.json",    
     "graph:mermaid": "npx codegraph graph ./src --mermaid --symbols-detailed > graph.mermaid.mmd",
     "graph:dot": "npx codegraph graph ./src --dot --symbols-detailed > graph.dot"
   },
