@@ -18,6 +18,7 @@ import {
   graphToDOTSymbols,
   graphToMermaidSymbolsWithFiles,
   graphToDOTSymbolsWithFiles,
+  analyzeImpactFromDiff,
 } from "./index.js";
 
 function toJSON(obj: any) {
@@ -410,7 +411,85 @@ async function main() {
     }
     const querySource = args[qIdx + 1];
     const hits = await astGrep(root, querySource!);
-    writeJSONLine(hits);
+  writeJSONLine(hits);
+  return;
+  }
+
+  if (cmd === "impact") {
+    const providerIdx = args.indexOf("--provider");
+    const provider = providerIdx !== -1 ? args[providerIdx + 1] : "git";
+
+    let options: any = { provider };
+
+    if (provider === "git") {
+      const baseIdx = args.indexOf("--base");
+      const headIdx = args.indexOf("--head");
+      if (baseIdx !== -1 && args[baseIdx + 1]) options.base = args[baseIdx + 1];
+      if (headIdx !== -1 && args[headIdx + 1]) options.head = args[headIdx + 1];
+    } else if (provider === "github") {
+      const prIdx = args.indexOf("--pr");
+      const repoIdx = args.indexOf("--repo");
+      if (prIdx !== -1 && args[prIdx + 1]) options.pr = Number(args[prIdx + 1]);
+      if (repoIdx !== -1 && args[repoIdx + 1]) options.repo = args[repoIdx + 1];
+    } else if (provider === "raw") {
+      // For raw provider, diff text would come from stdin or file
+      // For now, assume stdin
+      const diffText = await new Promise<string>((resolve) => {
+        let data = "";
+        process.stdin.on("data", chunk => data += chunk);
+        process.stdin.on("end", () => resolve(data));
+      });
+      options.diffText = diffText;
+    }
+
+    // Parse other options
+    const threadsIdx = args.indexOf("--threads");
+    if (threadsIdx !== -1 && args[threadsIdx + 1]) options.threads = Number(args[threadsIdx + 1]);
+
+    const cacheIdx = args.indexOf("--cache");
+    if (cacheIdx !== -1 && args[cacheIdx + 1]) options.cache = args[cacheIdx + 1];
+
+    const maxRefsIdx = args.indexOf("--max-refs");
+    if (maxRefsIdx !== -1 && args[maxRefsIdx + 1]) options.maxRefs = Number(args[maxRefsIdx + 1]);
+
+    const depthIdx = args.indexOf("--depth");
+    if (depthIdx !== -1 && args[depthIdx + 1]) options.depth = Number(args[depthIdx + 1]);
+
+    const includeTests = flags.includes("--include-tests");
+    const membersOnly = flags.includes("--members-only");
+
+    options.includeTests = includeTests;
+    options.membersOnly = membersOnly;
+
+    const pretty = flags.includes("--pretty");
+    const mermaid = flags.includes("--mermaid");
+
+    try {
+      const report = await analyzeImpactFromDiff(root, await buildProjectIndex(root), options);
+
+      if (mermaid) {
+        // TODO: Implement mermaid output for impact reports
+        writeStdoutLine("Mermaid output for impact reports not yet implemented");
+      } else if (pretty) {
+        writeStdoutLine(`Impact Analysis Report`);
+        writeStdoutLine(`======================`);
+        writeStdoutLine(`Changed files: ${report.changedFiles.length}`);
+        writeStdoutLine(`Changed symbols: ${report.changedSymbols.length}`);
+        writeStdoutLine(`Impacted items: ${report.impacted.length}`);
+        writeStdoutLine(``);
+        for (const item of report.impacted.slice(0, 10)) {
+          writeStdoutLine(`${item.file}: ${item.symbols.join(", ")} (severity: ${(item.severity * 100).toFixed(1)}%)`);
+        }
+        if (report.impacted.length > 10) {
+          writeStdoutLine(`... and ${report.impacted.length - 10} more`);
+        }
+      } else {
+        writeJSONLine(report);
+      }
+    } catch (error) {
+      writeStderrLine(`Impact analysis failed: ${error}`);
+      process.exit(1);
+    }
     return;
   }
 

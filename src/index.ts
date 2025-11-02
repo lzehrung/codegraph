@@ -43,3 +43,16 @@ export {
   type SymbolListItem,
   listSymbols,
 } from "./indexer.js";
+export {
+  analyzeImpactFromDiff,
+  type Diff,
+  type FileChange,
+  type Hunk,
+  type ChangedSymbol,
+  type ImpactItem,
+  type ImpactReason,
+  type ImpactReport,
+  type ImpactOptions,
+  type DiffProviderOptions,
+} from "./impact/index.js";
+export { tool_impactJSON, tool_impactFromDiffText } from "./agent-tools.js";

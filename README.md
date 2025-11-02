@@ -34,6 +34,10 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * Python: Module imports, `__all__` exports, relative imports
 * **AST grep**
   * Run arbitrary Tree-sitter queries across the repo
+* **PR impact analysis**
+  * Map git diffs to changed symbols and affected code
+  * Analyze direct and transitive dependencies with severity scoring
+  * Git/GitHub integration with configurable depth and scope
 * **Monorepo support**
   * Workspace detection (npm/yarn/pnpm/lerna)
   * Per-file TypeScript config resolution
@@ -159,6 +163,17 @@ npx codegraph refs --file <file> --line <line> --col <column> --pretty
 
 # Run a Tree-sitter query across the repo
 npx codegraph grep --query '(function_declaration name: (identifier) @name)'
+
+# Analyze PR impact: map diffs to symbols and find affected code
+npx codegraph impact --base <commit-sha> --head <commit-sha>
+# Analyze GitHub PR impact
+npx codegraph impact --provider github --repo owner/name --pr 123
+# Analyze raw diff text (from stdin)
+cat diff.txt | npx codegraph impact --provider raw
+# Pretty-printed summary with severity scores
+npx codegraph impact --base main --head feature --pretty
+# Limit analysis depth and reference count
+npx codegraph impact --base main --head feature --depth 2 --max-refs 1000
 ```
 
 ### For Local Development
@@ -382,6 +397,45 @@ const refsRes = await findReferencesById(index, handle);
 
 // If you already have a SymbolDef, create a handle directly
 // const id = symbolId(def);
+```
+
+Analyze PR impact from git diff:
+
+```ts
+import { buildProjectIndex, analyzeImpactFromDiff } from 'codegraph';
+
+const root = process.cwd();
+const index = await buildProjectIndex(root);
+
+// Analyze impact from git commits
+const report = await analyzeImpactFromDiff(root, index, {
+  provider: 'git',
+  base: 'main',
+  head: 'feature-branch'
+});
+
+console.log(`Changed symbols: ${report.changedSymbols.length}`);
+console.log(`Impacted files: ${report.impacted.length}`);
+for (const item of report.impacted.slice(0, 5)) {
+  console.log(`${item.file}: ${item.symbols.join(', ')} (${(item.severity * 100).toFixed(1)}% severity)`);
+}
+```
+
+Agent-friendly tool wrapper (returns JSON-serializable results):
+
+```ts
+import { tool_impactJSON, tool_impactFromDiffText } from 'codegraph';
+
+// Direct API call
+const result = await tool_impactJSON(root, {
+  provider: 'raw',
+  diffText: `diff --git a/utils.ts b/utils.ts\n...`
+});
+
+if (result.status === 'ok') {
+  // Use result.report for analysis
+  console.log(result.report);
+}
 ```
 
 ---
