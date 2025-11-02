@@ -50,6 +50,15 @@ export type ImpactItem = {
   severity: number; // 0-1 score
   depth?: number; // transitive depth from changed files
   typeOnly?: boolean; // true if only type-level impact
+  explain?: {
+    exported?: boolean; // if any changed symbol is exported
+    fanIn?: number; // number of files that depend on this one
+    sameFile?: boolean; // if the impact is in the same file as the change
+    typeOnly?: boolean; // if impact is type-only
+    reason?: ImpactReason; // primary reason for impact
+    depth?: number; // transitive depth
+    refsCount?: number; // number of references found
+  };
 };
 
 // Main impact report

@@ -16,14 +16,18 @@ export function locateChangedSymbols(
   const changedSymbols: ChangedSymbol[] = [];
 
   // Collect all changed line ranges from hunks
+  // Robust new-file line tracking; works with unified=0 (no context)
   const changedLines = new Set<number>();
   for (const hunk of hunks) {
+    let newLine = hunk.startLine;
     for (const line of hunk.lines) {
-      if (line.startsWith("+")) {
-        // Added line - extract the line number from the hunk
-        const lineNum = hunk.startLine + (hunk.lines.indexOf(line) - hunk.lines.findIndex(l => l.startsWith("@@") || l.startsWith(" ")));
-        changedLines.add(lineNum);
+      if (line.startsWith(" ")) {
+        newLine++;
+      } else if (line.startsWith("+")) {
+        changedLines.add(newLine);
+        newLine++;
       }
+      // '-' lines aren't included in hunk.lines with unified=0; no newLine++
     }
   }
 
@@ -33,23 +37,21 @@ export function locateChangedSymbols(
   // Classify and collect changed symbols
   for (const node of changedNodes) {
     const classification = classifyChangedNode(node, source, sup);
-    if (classification) {
-      const symbolHandle = findSymbolHandleForNode(index, file, node, classification);
-      if (symbolHandle) {
-        const symbolDef = index.byFile.get(file)?.locals.find(
-          l => `${file}::${l.localName}::${l.range.start.index}` === symbolHandle
-        );
-        if (symbolDef) {
-          changedSymbols.push({
-            id: symbolHandle,
-            file,
-            name: symbolDef.localName,
-            kind: symbolDef.kind,
-            exported: isExported(index, file, symbolDef),
-            range: symbolDef.range,
-            typeOnly: classification.typeOnly
-          });
-        }
+    const symbolHandle = findSymbolHandleForNode(index, file, node, sup, classification);
+    if (symbolHandle) {
+      const symbolDef = index.byFile.get(file)?.locals.find(
+        l => `${file}::${l.localName}::${l.range.start.index}` === symbolHandle
+      );
+      if (symbolDef) {
+        changedSymbols.push({
+          id: symbolHandle,
+          file,
+          name: symbolDef.localName,
+          kind: symbolDef.kind,
+          exported: isExported(index, file, symbolDef),
+          range: symbolDef.range,
+          typeOnly: classification?.typeOnly
+        });
       }
     }
   }
@@ -127,28 +129,46 @@ function isTypeOnlyDeclaration(node: any, source: string): boolean {
   return false;
 }
 
+function findDeclarationNameInAncestors(node: any, sup: any): any | null {
+  let cur = node;
+  while (cur) {
+    for (const ch of cur.namedChildren || []) {
+      if (sup.isDeclarationName?.(ch)) return ch;
+    }
+    cur = cur.parent;
+  }
+  return null;
+}
+
 function findSymbolHandleForNode(
   index: ProjectIndex,
   file: FileId,
   node: any,
+  sup: any,
   classification: NodeClassification
 ): SymbolHandle | null {
-  if (classification?.type === "definition") {
-    // Find the local symbol that matches this node
-    const mod = index.byFile.get(file);
-    if (mod) {
-      const local = mod.locals.find(l =>
-        l.range.start.line === (node.startPosition?.row + 1) &&
-        l.range.start.column === (node.startPosition?.column + 1)
-      );
-      if (local) {
-        return `${file}::${local.localName}::${local.range.start.index}`;
-      }
-    }
+  const mod = index.byFile.get(file);
+  if (!mod) return null;
+
+  // Exact declaration name node
+  if (classification?.type === "definition" && sup.isDeclarationName?.(node)) {
+    const local = mod.locals.find(l =>
+      l.range.start.line === (node.startPosition?.row + 1) &&
+      l.range.start.column === (node.startPosition?.column + 1)
+    );
+    return local ? `${file}::${local.localName}::${local.range.start.index}` : null;
   }
 
-  // For other types, we might need different handling
-  // For now, return null - they can be handled in later analysis
+  // For body/callsite/import/export edits, climb to nearest declaration name
+  const nameNode = findDeclarationNameInAncestors(node, sup);
+  if (nameNode) {
+    const local = mod.locals.find(l =>
+      l.range.start.line === (nameNode.startPosition?.row + 1) &&
+      l.range.start.column === (nameNode.startPosition?.column + 1)
+    );
+    return local ? `${file}::${local.localName}::${local.range.start.index}` : null;
+  }
+
   return null;
 }
 

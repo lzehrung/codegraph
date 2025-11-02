@@ -14,10 +14,15 @@ export async function analyzeImpactFromDiff(
   const diff = await getDiff(options);
 
   // Map all changed files to changed symbols
-  const changedSymbols: any[] = [];
+  let changedSymbols: any[] = [];
   for (const fileChange of diff.files) {
     const symbols = locateChangedSymbols(index, fileChange.path, fileChange.hunks);
     changedSymbols.push(...symbols);
+  }
+
+  // Honor scope option: only consider exported symbols if scope=imported
+  if (options.scope === "imported") {
+    changedSymbols = changedSymbols.filter(s => s.exported);
   }
 
   // Analyze impact

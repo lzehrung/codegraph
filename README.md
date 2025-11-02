@@ -174,6 +174,10 @@ cat diff.txt | npx codegraph impact --provider raw
 npx codegraph impact --base main --head feature --pretty
 # Limit analysis depth and reference count
 npx codegraph impact --base main --head feature --depth 2 --max-refs 1000
+# Focus on exported symbol changes only (ignore internal changes)
+npx codegraph impact --base main --head feature --scope imported
+# Skip transitive file dependencies (symbol references only)
+npx codegraph impact --base main --head feature --members-only
 ```
 
 ### For Local Development

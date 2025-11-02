@@ -458,6 +458,9 @@ async function main() {
     const includeTests = flags.includes("--include-tests");
     const membersOnly = flags.includes("--members-only");
 
+    const scopeIdx = args.indexOf("--scope");
+    if (scopeIdx !== -1 && args[scopeIdx + 1]) options.scope = args[scopeIdx + 1];
+
     options.includeTests = includeTests;
     options.membersOnly = membersOnly;
 

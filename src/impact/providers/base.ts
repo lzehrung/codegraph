@@ -40,8 +40,18 @@ class GitDiffProvider implements DiffProvider {
 
 class GitHubDiffProvider implements DiffProvider {
   async getDiff(opts: Extract<DiffProviderOptions, { provider: "github" }>): Promise<Diff> {
-    // TODO: Implement GitHub API call
-    throw new Error("GitHub provider not yet implemented");
+    const [owner, repo] = opts.repo.split("/");
+    const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${opts.pr}`;
+    const res = await fetch(url, {
+      headers: {
+        Accept: "application/vnd.github.v3.diff",
+        ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}),
+        "User-Agent": "codegraph-impact",
+      },
+    });
+    if (!res.ok) throw new Error(`GitHub PR diff failed: ${res.status} ${res.statusText}`);
+    const diffText = await res.text();
+    return parseUnifiedDiff(diffText);
   }
 }
 
