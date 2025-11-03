@@ -442,6 +442,174 @@ if (result.status === 'ok') {
 }
 ```
 
+### Backend-Focused Agent Recipes
+
+For backend development teams, here are common patterns for LLM agents reviewing PRs:
+
+#### 1. **API Route Impact Assessment**
+```ts
+import { analyzeImpactFromDiff, collectImpactContext, listCandidateTestFiles } from 'codegraph';
+
+const root = process.cwd();
+const index = await buildProjectIndex(root);
+
+// Get impact report with enhanced context
+const impact = await analyzeImpactFromDiff(root, index, {
+  provider: 'git',
+  base: 'main',
+  head: 'feature-branch',
+  depth: 2,  // Include transitive dependencies
+  compact: true  // Use compact format for efficiency
+});
+
+// Focus on API routes and controllers
+const apiRoutes = impact.impacted.filter(item =>
+  item.file.includes('routes') ||
+  item.file.includes('controllers') ||
+  item.file.includes('api')
+);
+
+// Check for breaking changes
+const breakingChanges = impact.changedSymbols.filter(symbol =>
+  symbol.exported && symbol.explain?.hints?.includes('signatureChanged')
+);
+
+console.log(`API routes impacted: ${apiRoutes.length}`);
+console.log(`Breaking changes: ${breakingChanges.length}`);
+```
+
+#### 2. **Database Schema Impact Analysis**
+```ts
+// Analyze schema/model changes
+const schemaChanges = impact.changedSymbols.filter(symbol =>
+  symbol.file.includes('models') ||
+  symbol.file.includes('schema') ||
+  symbol.file.includes('migrations')
+);
+
+// Get broader context for schema changes
+if (schemaChanges.length > 0) {
+  const context = await collectImpactContext(
+    index,
+    impact.impacted.map(i => i.file),
+    impact.changedSymbols.map(s => s.id),
+    3  // 3-hop context for data layer changes
+  );
+
+  // Find services that might need migration logic
+  const affectedServices = context.symbolNeighbors.filter(n =>
+    n.file.includes('services') || n.file.includes('repositories')
+  );
+
+  console.log(`Services needing migration review: ${affectedServices.length}`);
+}
+```
+
+#### 3. **Test Coverage Validation**
+```ts
+// Find candidate tests that might need updates
+const candidateTests = listCandidateTestFiles(
+  index,
+  impact.changedFiles.map(f => f.file),
+  impact.changedSymbols.map(s => s.id),
+  {
+    testPatterns: ['test', 'spec', '__tests__', '.test.'],  // Custom patterns
+    maxCandidates: 20
+  }
+);
+
+// Prioritize high-confidence test candidates
+const highPriorityTests = candidateTests.filter(t => t.confidence === 'high');
+const mediumPriorityTests = candidateTests.filter(t => t.confidence === 'medium');
+
+console.log(`High-priority tests to review: ${highPriorityTests.length}`);
+console.log(`Medium-priority tests to check: ${mediumPriorityTests.length}`);
+```
+
+#### 4. **Security-Focused Review**
+```ts
+import { astGrep } from 'codegraph';
+
+// Scan changed files for security patterns
+const securityPatterns = [
+  'exec\\(|eval\\(|spawn\\(',  // Command execution
+  'password|secret|key.*=',   // Credential storage
+  'sql.*\\+|\\$\\{.*\\}',      // SQL injection risks
+  'innerHTML|outerHTML',      // XSS risks
+];
+
+const securityFindings: Array<{file: string, pattern: string, line: number}> = [];
+
+for (const changedFile of impact.changedFiles) {
+  for (const pattern of securityPatterns) {
+    try {
+      const matches = await astGrep(root, pattern, changedFile.file);
+      for (const match of matches) {
+        securityFindings.push({
+          file: changedFile.file,
+          pattern,
+          line: match.range.start.line
+        });
+      }
+    } catch (e) {
+      // Pattern might not be valid Tree-sitter query, skip
+    }
+  }
+}
+
+if (securityFindings.length > 0) {
+  console.log(`⚠️ Security findings: ${securityFindings.length}`);
+  // Flag for human security review
+}
+```
+
+#### 5. **Configuration and Environment Impact**
+```ts
+// Check for configuration changes
+const configChanges = impact.impacted.filter(item =>
+  item.file.includes('config') ||
+  item.file.includes('env') ||
+  item.file.includes('settings')
+);
+
+// Validate environment variable usage
+const envUsage = impact.changedSymbols.filter(symbol =>
+  symbol.name.toLowerCase().includes('env') ||
+  symbol.name.toLowerCase().includes('config')
+);
+
+if (configChanges.length > 0 || envUsage.length > 0) {
+  console.log(`⚠️ Configuration changes detected - validate deployment impact`);
+}
+```
+
+#### 6. **Performance Regression Detection**
+```ts
+// Look for algorithm changes in performance-critical code
+const performanceCritical = impact.changedSymbols.filter(symbol =>
+  symbol.file.includes('utils') ||
+  symbol.file.includes('algorithms') ||
+  symbol.kind === 'function' && symbol.explain?.hints?.includes('signatureChanged')
+);
+
+// Check for new database queries
+const queryPatterns = [
+  'SELECT|INSERT|UPDATE|DELETE',  // SQL queries
+  'find\\(|findOne\\(|aggregate\\(', // MongoDB queries
+  'query\\(|execute\\('              // General query patterns
+];
+
+for (const pattern of queryPatterns) {
+  const queryMatches = await astGrep(root, pattern, '*');
+  if (queryMatches.length > 0) {
+    console.log(`Database queries modified - review performance impact`);
+    break;
+  }
+}
+```
+
+These recipes combine the library's core capabilities (dependency graphs, symbol navigation, AST queries) with domain-specific logic to provide comprehensive PR review assistance for backend systems.
+
 ---
 
 ## How it works (high level)

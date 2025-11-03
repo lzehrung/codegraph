@@ -1,5 +1,5 @@
 import type { ProjectIndex } from "../indexer.js";
-import type { Diff, ImpactReport, ImpactOptions } from "./types.js";
+import type { ImpactReport, CompactImpactReport, ImpactOptions } from "./types.js";
 import { getDiff } from "./providers/base.js";
 import { locateChangedSymbols } from "./map.js";
 import { analyzeImpact } from "./analyzer.js";
@@ -9,7 +9,7 @@ export async function analyzeImpactFromDiff(
   projectRoot: string,
   index: ProjectIndex,
   options: ImpactOptions
-): Promise<ImpactReport> {
+): Promise<ImpactReport | CompactImpactReport> {
   // Get the diff
   const diff = await getDiff(options);
 
@@ -26,8 +26,12 @@ export async function analyzeImpactFromDiff(
   }
 
   // Analyze impact
-  const impactedItems = await analyzeImpact(index, changedSymbols, options);
+  const impactedItems = await analyzeImpact(index, changedSymbols, diff.files, options);
 
   // Build report
-  return buildImpactReport(index, diff.files, changedSymbols, impactedItems);
+  return await buildImpactReport(index, diff.files, changedSymbols, impactedItems, options);
 }
+
+// Re-export functions for testing and advanced usage
+export { seedTransitiveFromFiles, calculateSeverity } from "./analyzer.js";
+export { collectImpactContext, listCandidateTestFiles, type ImpactContext, type CandidateTestFile } from "./context.js";

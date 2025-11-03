@@ -45,6 +45,8 @@ export {
 } from "./indexer.js";
 export {
   analyzeImpactFromDiff,
+  collectImpactContext,
+  listCandidateTestFiles,
   type Diff,
   type FileChange,
   type Hunk,
@@ -52,7 +54,10 @@ export {
   type ImpactItem,
   type ImpactReason,
   type ImpactReport,
+  type CompactImpactReport,
   type ImpactOptions,
   type DiffProviderOptions,
+  type ImpactContext,
+  type CandidateTestFile,
 } from "./impact/index.js";
 export { tool_impactJSON, tool_impactFromDiffText } from "./agent-tools.js";

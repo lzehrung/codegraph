@@ -58,6 +58,7 @@ export type ImpactItem = {
     reason?: ImpactReason; // primary reason for impact
     depth?: number; // transitive depth
     refsCount?: number; // number of references found
+    hints?: string[]; // lightweight hints like "signatureChanged", "exportChanged"
   };
 };
 
@@ -75,6 +76,46 @@ export type ImpactReport = {
   };
 };
 
+// Compact impact report with indexed arrays
+export type CompactImpactReport = {
+  files: FileId[]; // file index -> file path
+  changedFiles: Array<{
+    file: number; // index into files array
+    hunks: Array<{ start: number; end: number }>; // line ranges
+  }>;
+  changedSymbols: Array<{
+    id: string; // symbol ID
+    file: number; // index into files array
+    name: string;
+    kind: ChangedSymbol["kind"];
+    exported: boolean;
+    range: { start: { line: number; column: number }; end: { line: number; column: number } };
+    typeOnly?: boolean;
+  }>;
+  impacted: Array<{
+    file: number; // index into files array
+    symbols: string[]; // symbol names
+    reasons: ImpactReason[];
+    severity: number;
+    depth?: number;
+    typeOnly?: boolean;
+    explain?: {
+      exported?: boolean;
+      fanIn?: number;
+      sameFile?: boolean;
+      typeOnly?: boolean;
+      reason?: ImpactReason;
+      depth?: number;
+      refsCount?: number;
+      hints?: string[];
+    };
+  }>;
+  graph: {
+    fileEdges: Array<{ from: number; to: number; typeOnly?: boolean }>; // indices into files array
+    symbolEdges: Array<{ from: number; to: number; label: string }>; // indices into changedSymbols
+  };
+};
+
 // Analysis options
 export type ImpactOptions = DiffProviderOptions & {
   scope?: "all" | "imported";
@@ -82,4 +123,6 @@ export type ImpactOptions = DiffProviderOptions & {
   depth?: number;
   includeTests?: boolean;
   membersOnly?: boolean;
+  /** Return compact report with indexed arrays instead of repeated strings */
+  compact?: boolean;
 };

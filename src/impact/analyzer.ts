@@ -1,11 +1,12 @@
 import type { FileId } from "../types.js";
 import type { ProjectIndex, SymbolDef } from "../indexer.js";
-import type { ChangedSymbol, ImpactItem, ImpactReason, ImpactOptions } from "./types.js";
+import type { ChangedSymbol, ImpactItem, ImpactReason, ImpactOptions, FileChange } from "./types.js";
 import { findReferences } from "../indexer.js";
 
 export async function analyzeImpact(
   index: ProjectIndex,
   changedSymbols: ChangedSymbol[],
+  changedFiles: FileChange[],
   options: Partial<ImpactOptions> = {}
 ): Promise<ImpactItem[]> {
   const {
@@ -87,12 +88,63 @@ export async function analyzeImpact(
     await Promise.all(tasks.slice(i, i + concurrency).map(fn => fn()));
   }
 
+  // Seed transitive impact from changed files (especially for deleted/renamed files with no symbols)
+  if (!options.membersOnly && changedSymbols.length === 0) {
+    await seedTransitiveFromFiles(index, impacted, changedFiles, options);
+  }
+
   // Transitive impact via graph traversal (skip if membersOnly)
   if (!options.membersOnly) {
     await analyzeTransitiveImpact(index, impacted, depth, options);
   }
 
   return Array.from(impacted.values()).sort((a, b) => b.severity - a.severity);
+}
+
+export async function seedTransitiveFromFiles(
+  index: ProjectIndex,
+  impacted: Map<FileId, ImpactItem>,
+  changedFiles: FileChange[],
+  options: Partial<ImpactOptions>
+): Promise<void> {
+  const { includeTests = false } = options;
+
+  for (const fileChange of changedFiles) {
+    // Skip if this file already has impact items
+    if (impacted.has(fileChange.path)) continue;
+
+    // For deleted/renamed files, seed transitive impact from files that depended on them
+    if (fileChange.kind === "deleted" || fileChange.kind === "renamed") {
+      const dependents = index.graph.edges.filter(e =>
+        e.to.type === "file" && e.to.path === fileChange.path
+      ).map(e => e.from);
+
+      for (const dependent of dependents) {
+        if (!includeTests && isTestFile(dependent)) continue;
+        if (impacted.has(dependent)) continue;
+
+        const hints = ["fileDeleted"];
+        if (fileChange.kind === "renamed") {
+          hints.push("fileRenamed");
+        }
+
+        const impactItem: ImpactItem = {
+          file: dependent,
+          symbols: [],
+          reasons: ["transitive"],
+          severity: 0.6, // Moderate severity for file-level changes
+          depth: 1,
+          explain: {
+            reason: "transitive",
+            depth: 1,
+            hints
+          }
+        };
+
+        impacted.set(dependent, impactItem);
+      }
+    }
+  }
 }
 
 async function analyzeTransitiveImpact(
@@ -171,7 +223,7 @@ async function analyzeTransitiveImpact(
   }
 }
 
-function calculateSeverity(
+export function calculateSeverity(
   changedSymbol: ChangedSymbol,
   ref: any,
   reasons: ImpactReason[],
@@ -180,6 +232,7 @@ function calculateSeverity(
 ): { severity: number; explain: any } {
   let score = 1.0;
   const explain: any = {};
+  const hints: string[] = [];
 
   // Primary reason
   if (reasons.includes("directRef")) {
@@ -220,6 +273,30 @@ function calculateSeverity(
   if (changedSymbol.typeOnly) {
     score *= 0.7;
     explain.typeOnly = true;
+  }
+
+  // Generate hints based on changed symbol characteristics
+  if (changedSymbol.exported) {
+    hints.push("exportChanged");
+  }
+
+  // Check if this might be a signature change (function/class with parameters)
+  const mod = index.byFile.get(changedSymbol.file);
+  if (mod) {
+    const symbolDef = mod.locals.find(l =>
+      l.localName === changedSymbol.name &&
+      l.range.start.index === changedSymbol.range.start.index
+    );
+    if (symbolDef) {
+      // Simple heuristic: functions with parameters might be signature changes
+      if (symbolDef.kind === "function" && symbolDef.range.end.line - symbolDef.range.start.line > 1) {
+        hints.push("signatureChanged");
+      }
+    }
+  }
+
+  if (hints.length > 0) {
+    explain.hints = hints;
   }
 
   // Depth decay
