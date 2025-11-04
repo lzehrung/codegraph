@@ -13,7 +13,10 @@ export async function analyzeImpact(
     maxRefs = 1000,
     depth = 3,
     includeTests = false,
-    membersOnly = false
+    membersOnly = false,
+    refContext,
+    refContextLines,
+    refBlockMaxLines
   } = options;
 
   const impacted = new Map<FileId, ImpactItem>();
@@ -33,7 +36,11 @@ export async function analyzeImpact(
         localName: changedSymbol.name,
         kind: changedSymbol.kind,
         range: changedSymbol.range
-      } as SymbolDef });
+      } as SymbolDef }, refContext ? {
+        context: refContext,
+        ...(refContextLines !== undefined && { lines: refContextLines }),
+        ...(refBlockMaxLines !== undefined && { blockMaxLines: refBlockMaxLines })
+      } : undefined);
 
       if (refs.status === "ok") {
         for (const ref of refs.references.slice(0, maxRefs)) {
@@ -60,12 +67,18 @@ export async function analyzeImpact(
           symbols.push(changedSymbol.name);
         }
 
+        const refs = existing?.refs || [];
+        if (refContext && ref.context !== undefined) {
+          refs.push({ range: ref.range, context: ref.context });
+        }
+
         const impactItem: ImpactItem = {
           file: ref.file,
           symbols,
           reasons,
           severity: Math.max(existing?.severity || 0, severityResult.severity),
           depth: 0,
+          ...(refContext && refs.length > 0 && { refs }),
           explain: {
             ...existing?.explain,
             ...severityResult.explain,

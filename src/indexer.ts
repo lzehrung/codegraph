@@ -21,6 +21,9 @@ import {
 import { collectGraph } from "./graphs.js";
 import type { Pos, Range, FileId, Graph } from "./types.js";
 
+// Default number of lines to include around references for line context
+const DEFAULT_REF_CONTEXT_LINES = 5;
+
 export enum SymbolKind {
   Function = "function",
   Class = "class",
@@ -2027,9 +2030,67 @@ function rangeContains(
   return true;
 }
 
+function extractLineContext(source: string, line: number, lines: number): string {
+  const allLines = source.split(/\r?\n/);
+  const startLine = Math.max(0, line - 1 - lines); // 1-based to 0-based, then subtract context
+  const endLine = Math.min(allLines.length, line - 1 + lines + 1); // +1 to include the line itself
+  return allLines.slice(startLine, endLine).join("\n");
+}
+
+function extractEnclosingBlock(source: string, tree: Parser.Tree, range: Range, maxLines: number, sup: any): string {
+  // Find the node at the reference position
+  const node = tree.rootNode.descendantForIndex(range.start.index, range.end.index);
+  if (!node) return extractLineContext(source, range.start.line, DEFAULT_REF_CONTEXT_LINES); // fallback to line context
+
+  // Climb to find an enclosing block (function, class, etc.)
+  let current = node;
+  const isBlockType = (type: string) => {
+    // TypeScript/JavaScript block types
+    if (sup.id === "ts" || sup.id === "js") {
+      return [
+        "function_declaration",
+        "method_definition",
+        "class_declaration",
+        "arrow_function",
+        "function_expression",
+        "statement_block",
+        "class_body"
+      ].includes(type);
+    }
+    // Python block types
+    if (sup.id === "python") {
+      return [
+        "function_definition",
+        "class_definition",
+        "suite"
+      ].includes(type);
+    }
+    return false;
+  };
+
+  while (current && !isBlockType(current.type)) {
+    const parent = current.parent;
+    if (!parent) break;
+    current = parent;
+  }
+
+  if (!current) return extractLineContext(source, range.start.line, DEFAULT_REF_CONTEXT_LINES); // fallback to line context
+
+  const blockText = sliceText(current, source);
+  const blockLines = blockText.split(/\r?\n/);
+
+  // If block is too long, truncate it
+  if (blockLines.length > maxLines) {
+    return blockLines.slice(0, maxLines).join("\n") + "\n...";
+  }
+
+  return blockText;
+}
+
 export async function findReferences(
   index: ProjectIndex,
-  req: { file: FileId; line: number; column: number } | { def: SymbolDef }
+  req: { file: FileId; line: number; column: number } | { def: SymbolDef },
+  opts?: { context?: "line" | "block"; lines?: number; blockMaxLines?: number }
 ): Promise<
   | { status: "ok"; definition: SymbolDef; references: Reference[] }
   | { status: "not_found"; reason: string }
@@ -2155,6 +2216,45 @@ export async function findReferences(
       ? a.range.start.index - b.range.start.index
       : a.file.localeCompare(b.file)
   );
+
+  // Populate context snippets if requested
+  if (opts?.context) {
+    const perFileCache = new Map<string, { source: string; tree: Parser.Tree; sup: any }>();
+
+    for (const ref of uniqueRefs) {
+      let cached = perFileCache.get(ref.file);
+      if (!cached) {
+        const sup = supportForFile(ref.file);
+        const lang = languageForFile(ref.file);
+        const parsedEntry = index.parsed?.get(ref.file);
+
+        let source: string;
+        let tree: Parser.Tree;
+
+        if (parsedEntry) {
+          source = parsedEntry.source;
+          tree = parsedEntry.tree;
+        } else {
+          source = await fsp.readFile(ref.file, "utf8");
+          const parser = new Parser();
+          parser.setLanguage(lang);
+          tree = parser.parse(source);
+        }
+
+        cached = { source, tree, sup };
+        perFileCache.set(ref.file, cached);
+      }
+
+      if (opts.context === "line") {
+        const lines = opts.lines ?? DEFAULT_REF_CONTEXT_LINES;
+        ref.context = extractLineContext(cached.source, ref.range.start.line, lines);
+      } else if (opts.context === "block") {
+        const maxLines = opts.blockMaxLines ?? 60;
+        ref.context = extractEnclosingBlock(cached.source, cached.tree, ref.range, maxLines, cached.sup);
+      }
+    }
+  }
+
   return { status: "ok", definition: def, references: uniqueRefs };
 }
 
