@@ -50,6 +50,7 @@ export type ImpactItem = {
   severity: number; // 0-1 score
   depth?: number; // transitive depth from changed files
   typeOnly?: boolean; // true if only type-level impact
+  refs?: Array<{ range: Range; context?: string }>; // references with optional context snippets
   explain?: {
     exported?: boolean; // if any changed symbol is exported
     fanIn?: number; // number of files that depend on this one
@@ -125,4 +126,10 @@ export type ImpactOptions = DiffProviderOptions & {
   membersOnly?: boolean;
   /** Return compact report with indexed arrays instead of repeated strings */
   compact?: boolean;
+  /** Include context snippets for references */
+  refContext?: "line" | "block";
+  /** Number of lines around reference for line context (default: 5) */
+  refContextLines?: number;
+  /** Maximum lines for enclosing block context (default: 60) */
+  refBlockMaxLines?: number;
 };

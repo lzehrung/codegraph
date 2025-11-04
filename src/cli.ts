@@ -461,6 +461,15 @@ async function main() {
     const scopeIdx = args.indexOf("--scope");
     if (scopeIdx !== -1 && args[scopeIdx + 1]) options.scope = args[scopeIdx + 1];
 
+    const refContextIdx = args.indexOf("--ref-context");
+    if (refContextIdx !== -1 && args[refContextIdx + 1]) options.refContext = args[refContextIdx + 1] as "line" | "block";
+
+    const refContextLinesIdx = args.indexOf("--ref-context-lines");
+    if (refContextLinesIdx !== -1 && args[refContextLinesIdx + 1]) options.refContextLines = Number(args[refContextLinesIdx + 1]);
+
+    const refBlockMaxLinesIdx = args.indexOf("--ref-block-max-lines");
+    if (refBlockMaxLinesIdx !== -1 && args[refBlockMaxLinesIdx + 1]) options.refBlockMaxLines = Number(args[refBlockMaxLinesIdx + 1]);
+
     options.includeTests = includeTests;
     options.membersOnly = membersOnly;
 
@@ -482,6 +491,24 @@ async function main() {
         writeStdoutLine(``);
         for (const item of report.impacted.slice(0, 10)) {
           writeStdoutLine(`${item.file}: ${item.symbols.join(", ")} (severity: ${(item.severity * 100).toFixed(1)}%)`);
+          // Show first 1-2 reference contexts if available (only for regular reports, not compact)
+          if ('refs' in item && item.refs && item.refs.length > 0) {
+            const contextsToShow = item.refs.slice(0, 2);
+            for (const ref of contextsToShow) {
+              writeStdoutLine(`  Reference at ${ref.range.start.line}:${ref.range.start.column}:`);
+              // Indent and limit context lines for readability
+              const contextLines = ref.context!.split('\n').slice(0, 5);
+              for (const line of contextLines) {
+                writeStdoutLine(`    ${line}`);
+              }
+              if (ref.context!.split('\n').length > 5) {
+                writeStdoutLine(`    ...`);
+              }
+            }
+            if (item.refs.length > 2) {
+              writeStdoutLine(`  ... and ${item.refs.length - 2} more references`);
+            }
+          }
         }
         if (report.impacted.length > 10) {
           writeStdoutLine(`... and ${report.impacted.length - 10} more`);
