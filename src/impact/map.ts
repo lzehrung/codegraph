@@ -50,7 +50,7 @@ export function locateChangedSymbols(
           kind: symbolDef.kind,
           exported: isExported(index, file, symbolDef),
           range: symbolDef.range,
-          typeOnly: classification?.typeOnly
+          typeOnly: !!classification?.typeOnly
         });
       }
     }

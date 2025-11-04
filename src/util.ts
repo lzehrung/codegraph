@@ -12,7 +12,7 @@ export function sliceText(node: any, src: string) {
   if (!node || !src) return "";
   return src.slice(node.startIndex, node.endIndex);
 }
-export function unquote(s: string) {
+export function unquote(s: string): string {
   if (!s || typeof s !== "string") return s as any;
   const t = s.trim();
   return (t.startsWith('"') && t.endsWith('"')) ||
@@ -45,9 +45,9 @@ export function toRange(node: any): Range {
 export async function listProjectFiles(
   projectRoot: string,
   patterns = ["**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py}"]
-) {
+): Promise<string[]> {
   try {
-    return await fg(patterns, {
+    const files = await fg(patterns, {
       cwd: projectRoot,
       absolute: true,
       ignore: [
@@ -59,9 +59,10 @@ export async function listProjectFiles(
         "**/__pycache__/**",
       ],
     });
+    return files.map(normalizePath);
   } catch (error) {
     console.warn(`Warning: Failed to list files in ${projectRoot}:`, error);
-    return [] as string[];
+    return [];
   }
 }
 
@@ -70,6 +71,7 @@ export function stripJsLikeComments(src: string): string {
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
+
 export function stripPythonCommentsAndStrings(src: string): string {
   let out = src;
   out = out.replace(/([rRuU]?[fF]?)("""|''')[\s\S]*?\2/g, "");

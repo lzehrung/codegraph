@@ -9,7 +9,7 @@ export function parseUnifiedDiff(diffText: string): Diff {
     const line = lines[i];
 
     // Look for file header: diff --git a/path b/path
-    if (line.startsWith("diff --git")) {
+    if (line?.startsWith("diff --git")) {
       const fileChange = parseFileChange(lines, i);
       if (fileChange) {
         files.push(fileChange);
@@ -90,7 +90,7 @@ function parseFileChange(lines: string[], startIndex: number): (FileChange & { _
     const line = lines[i];
 
     // Look for hunk header: @@ -oldStart,oldCount +newStart,newCount @@
-    if (line.startsWith("@@")) {
+    if (line?.startsWith("@@")) {
       const hunk = parseHunk(lines, i);
       if (hunk) {
         hunks.push(hunk.hunk);
@@ -98,7 +98,7 @@ function parseFileChange(lines: string[], startIndex: number): (FileChange & { _
       } else {
         i++;
       }
-    } else if (line.startsWith("diff --git")) {
+    } else if (line?.startsWith("diff --git")) {
       // Next file starts
       break;
     } else {
@@ -109,7 +109,7 @@ function parseFileChange(lines: string[], startIndex: number): (FileChange & { _
   return {
     path: actualPath,
     kind,
-    oldPath: kind === "renamed" ? actualOldPath : undefined,
+    oldPath: kind === "renamed" ? actualOldPath : "",
     hunks,
     _nextIndex: i
   };
@@ -131,12 +131,12 @@ function parseHunk(lines: string[], startIndex: number): ({ hunk: Hunk; _nextInd
   while (i < lines.length) {
     const line = lines[i];
 
-    if (line.startsWith("@@") || line.startsWith("diff --git")) {
+    if (line?.startsWith("@@") || line?.startsWith("diff --git")) {
       break;
     }
 
     // Only collect added/modified lines (+ and space lines in new file context)
-    if (line.startsWith("+") || line.startsWith(" ")) {
+    if (line?.startsWith("+") || line?.startsWith(" ")) {
       hunkLines.push(line);
     }
 

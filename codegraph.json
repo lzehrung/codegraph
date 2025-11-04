@@ -1,5 +1,6 @@
 {
   "files": [
+    "E:/git repos/dev-agent/dep-graph/src/agent-tools.ts",
     "E:/git repos/dev-agent/dep-graph/src/cli.ts",
     "E:/git repos/dev-agent/dep-graph/src/global.d.ts",
     "E:/git repos/dev-agent/dep-graph/src/graphs.ts",
@@ -7,11 +8,28 @@
     "E:/git repos/dev-agent/dep-graph/src/indexer.ts",
     "E:/git repos/dev-agent/dep-graph/src/languages.ts",
     "E:/git repos/dev-agent/dep-graph/src/types.ts",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts"
+    "E:/git repos/dev-agent/dep-graph/src/util.ts",
+    "E:/git repos/dev-agent/dep-graph/src/impact/analyzer.ts",
+    "E:/git repos/dev-agent/dep-graph/src/impact/context.ts",
+    "E:/git repos/dev-agent/dep-graph/src/impact/index.ts",
+    "E:/git repos/dev-agent/dep-graph/src/impact/map.ts",
+    "E:/git repos/dev-agent/dep-graph/src/impact/parse.ts",
+    "E:/git repos/dev-agent/dep-graph/src/impact/report.ts",
+    "E:/git repos/dev-agent/dep-graph/src/impact/types.ts",
+    "E:/git repos/dev-agent/dep-graph/src/impact/providers/base.ts"
   ],
   "fileEdges": [
     {
       "from": 0,
+      "to": {
+        "type": "file",
+        "path": 4
+      },
+      "raw": "./index.js",
+      "typeOnly": false
+    },
+    {
+      "from": 1,
       "to": {
         "type": "external",
         "name": "node:path"
@@ -20,7 +38,7 @@
       "typeOnly": false
     },
     {
-      "from": 0,
+      "from": 1,
       "to": {
         "type": "external",
         "name": "node:fs"
@@ -29,7 +47,7 @@
       "typeOnly": false
     },
     {
-      "from": 0,
+      "from": 1,
       "to": {
         "type": "external",
         "name": "node:fs/promises"
@@ -38,16 +56,16 @@
       "typeOnly": false
     },
     {
-      "from": 0,
+      "from": 1,
       "to": {
         "type": "file",
-        "path": 3
+        "path": 4
       },
       "raw": "./index.js",
       "typeOnly": false
     },
     {
-      "from": 2,
+      "from": 3,
       "to": {
         "type": "external",
         "name": "node:path"
@@ -56,7 +74,7 @@
       "typeOnly": false
     },
     {
-      "from": 2,
+      "from": 3,
       "to": {
         "type": "external",
         "name": "tree-sitter"
@@ -65,7 +83,7 @@
       "typeOnly": false
     },
     {
-      "from": 2,
+      "from": 3,
       "to": {
         "type": "external",
         "name": "node:fs"
@@ -74,7 +92,7 @@
       "typeOnly": false
     },
     {
-      "from": 2,
+      "from": 3,
       "to": {
         "type": "external",
         "name": "node:fs/promises"
@@ -83,84 +101,12 @@
       "typeOnly": false
     },
     {
-      "from": 2,
-      "to": {
-        "type": "file",
-        "path": 5
-      },
-      "raw": "./languages.js",
-      "typeOnly": false
-    },
-    {
-      "from": 2,
-      "to": {
-        "type": "file",
-        "path": 5
-      },
-      "raw": "./languages.js",
-      "typeOnly": true
-    },
-    {
-      "from": 2,
+      "from": 3,
       "to": {
         "type": "file",
         "path": 6
       },
-      "raw": "./types.js",
-      "typeOnly": true
-    },
-    {
-      "from": 2,
-      "to": {
-        "type": "file",
-        "path": 7
-      },
-      "raw": "./util.js",
-      "typeOnly": false
-    },
-    {
-      "from": 2,
-      "to": {
-        "type": "file",
-        "path": 7
-      },
-      "raw": "./util.js",
-      "typeOnly": false
-    },
-    {
-      "from": 2,
-      "to": {
-        "type": "file",
-        "path": 7
-      },
-      "raw": "./util.js",
-      "typeOnly": false
-    },
-    {
-      "from": 3,
-      "to": {
-        "type": "file",
-        "path": 5
-      },
       "raw": "./languages.js",
-      "typeOnly": false
-    },
-    {
-      "from": 3,
-      "to": {
-        "type": "file",
-        "path": 7
-      },
-      "raw": "./util.js",
-      "typeOnly": false
-    },
-    {
-      "from": 3,
-      "to": {
-        "type": "file",
-        "path": 2
-      },
-      "raw": "./graphs.js",
       "typeOnly": false
     },
     {
@@ -169,8 +115,44 @@
         "type": "file",
         "path": 6
       },
+      "raw": "./languages.js",
+      "typeOnly": true
+    },
+    {
+      "from": 3,
+      "to": {
+        "type": "file",
+        "path": 7
+      },
       "raw": "./types.js",
       "typeOnly": true
+    },
+    {
+      "from": 3,
+      "to": {
+        "type": "file",
+        "path": 8
+      },
+      "raw": "./util.js",
+      "typeOnly": false
+    },
+    {
+      "from": 3,
+      "to": {
+        "type": "file",
+        "path": 8
+      },
+      "raw": "./util.js",
+      "typeOnly": false
+    },
+    {
+      "from": 3,
+      "to": {
+        "type": "file",
+        "path": 8
+      },
+      "raw": "./util.js",
+      "typeOnly": false
     },
     {
       "from": 3,
@@ -178,11 +160,74 @@
         "type": "file",
         "path": 4
       },
+      "raw": "./index.js",
+      "typeOnly": true
+    },
+    {
+      "from": 4,
+      "to": {
+        "type": "file",
+        "path": 6
+      },
+      "raw": "./languages.js",
+      "typeOnly": false
+    },
+    {
+      "from": 4,
+      "to": {
+        "type": "file",
+        "path": 8
+      },
+      "raw": "./util.js",
+      "typeOnly": false
+    },
+    {
+      "from": 4,
+      "to": {
+        "type": "file",
+        "path": 3
+      },
+      "raw": "./graphs.js",
+      "typeOnly": false
+    },
+    {
+      "from": 4,
+      "to": {
+        "type": "file",
+        "path": 7
+      },
+      "raw": "./types.js",
+      "typeOnly": true
+    },
+    {
+      "from": 4,
+      "to": {
+        "type": "file",
+        "path": 5
+      },
       "raw": "./indexer.js",
       "typeOnly": false
     },
     {
       "from": 4,
+      "to": {
+        "type": "file",
+        "path": 11
+      },
+      "raw": "./impact/index.js",
+      "typeOnly": false
+    },
+    {
+      "from": 4,
+      "to": {
+        "type": "file",
+        "path": 0
+      },
+      "raw": "./agent-tools.js",
+      "typeOnly": false
+    },
+    {
+      "from": 5,
       "to": {
         "type": "external",
         "name": "node:fs"
@@ -191,7 +236,7 @@
       "typeOnly": false
     },
     {
-      "from": 4,
+      "from": 5,
       "to": {
         "type": "external",
         "name": "node:fs/promises"
@@ -200,7 +245,7 @@
       "typeOnly": false
     },
     {
-      "from": 4,
+      "from": 5,
       "to": {
         "type": "external",
         "name": "node:path"
@@ -209,7 +254,7 @@
       "typeOnly": false
     },
     {
-      "from": 4,
+      "from": 5,
       "to": {
         "type": "external",
         "name": "tree-sitter"
@@ -218,7 +263,7 @@
       "typeOnly": false
     },
     {
-      "from": 4,
+      "from": 5,
       "to": {
         "type": "external",
         "name": "node:crypto"
@@ -227,43 +272,43 @@
       "typeOnly": false
     },
     {
-      "from": 4,
+      "from": 5,
       "to": {
         "type": "file",
-        "path": 5
+        "path": 6
       },
       "raw": "./languages.js",
       "typeOnly": false
     },
     {
-      "from": 4,
+      "from": 5,
       "to": {
         "type": "file",
-        "path": 7
+        "path": 8
       },
       "raw": "./util.js",
       "typeOnly": false
     },
     {
-      "from": 4,
+      "from": 5,
       "to": {
         "type": "file",
-        "path": 2
+        "path": 3
       },
       "raw": "./graphs.js",
       "typeOnly": false
     },
     {
-      "from": 4,
+      "from": 5,
       "to": {
         "type": "file",
-        "path": 6
+        "path": 7
       },
       "raw": "./types.js",
       "typeOnly": true
     },
     {
-      "from": 5,
+      "from": 6,
       "to": {
         "type": "external",
         "name": "node:path"
@@ -272,7 +317,7 @@
       "typeOnly": false
     },
     {
-      "from": 5,
+      "from": 6,
       "to": {
         "type": "external",
         "name": "tree-sitter"
@@ -281,7 +326,7 @@
       "typeOnly": false
     },
     {
-      "from": 5,
+      "from": 6,
       "to": {
         "type": "external",
         "name": "tree-sitter-typescript"
@@ -290,7 +335,7 @@
       "typeOnly": false
     },
     {
-      "from": 5,
+      "from": 6,
       "to": {
         "type": "external",
         "name": "tree-sitter-javascript"
@@ -299,7 +344,7 @@
       "typeOnly": false
     },
     {
-      "from": 5,
+      "from": 6,
       "to": {
         "type": "external",
         "name": "tree-sitter-python"
@@ -308,7 +353,7 @@
       "typeOnly": false
     },
     {
-      "from": 7,
+      "from": 8,
       "to": {
         "type": "external",
         "name": "node:fs"
@@ -317,7 +362,7 @@
       "typeOnly": false
     },
     {
-      "from": 7,
+      "from": 8,
       "to": {
         "type": "external",
         "name": "node:fs/promises"
@@ -326,7 +371,7 @@
       "typeOnly": false
     },
     {
-      "from": 7,
+      "from": 8,
       "to": {
         "type": "external",
         "name": "node:path"
@@ -335,7 +380,7 @@
       "typeOnly": false
     },
     {
-      "from": 7,
+      "from": 8,
       "to": {
         "type": "external",
         "name": "fast-glob"
@@ -344,7 +389,7 @@
       "typeOnly": false
     },
     {
-      "from": 7,
+      "from": 8,
       "to": {
         "type": "external",
         "name": "tsconfig-paths"
@@ -353,1045 +398,2186 @@
       "typeOnly": false
     },
     {
-      "from": 7,
+      "from": 8,
       "to": {
         "type": "external",
         "name": "tree-sitter"
       },
       "raw": "tree-sitter",
       "typeOnly": false
+    },
+    {
+      "from": 9,
+      "to": {
+        "type": "file",
+        "path": 7
+      },
+      "raw": "../types.js",
+      "typeOnly": true
+    },
+    {
+      "from": 9,
+      "to": {
+        "type": "file",
+        "path": 5
+      },
+      "raw": "../indexer.js",
+      "typeOnly": true
+    },
+    {
+      "from": 9,
+      "to": {
+        "type": "file",
+        "path": 15
+      },
+      "raw": "./types.js",
+      "typeOnly": true
+    },
+    {
+      "from": 9,
+      "to": {
+        "type": "file",
+        "path": 5
+      },
+      "raw": "../indexer.js",
+      "typeOnly": false
+    },
+    {
+      "from": 10,
+      "to": {
+        "type": "file",
+        "path": 7
+      },
+      "raw": "../types.js",
+      "typeOnly": true
+    },
+    {
+      "from": 10,
+      "to": {
+        "type": "file",
+        "path": 5
+      },
+      "raw": "../indexer.js",
+      "typeOnly": true
+    },
+    {
+      "from": 10,
+      "to": {
+        "type": "file",
+        "path": 3
+      },
+      "raw": "../graphs.js",
+      "typeOnly": false
+    },
+    {
+      "from": 11,
+      "to": {
+        "type": "file",
+        "path": 5
+      },
+      "raw": "../indexer.js",
+      "typeOnly": true
+    },
+    {
+      "from": 11,
+      "to": {
+        "type": "file",
+        "path": 15
+      },
+      "raw": "./types.js",
+      "typeOnly": true
+    },
+    {
+      "from": 11,
+      "to": {
+        "type": "file",
+        "path": 16
+      },
+      "raw": "./providers/base.js",
+      "typeOnly": false
+    },
+    {
+      "from": 11,
+      "to": {
+        "type": "file",
+        "path": 12
+      },
+      "raw": "./map.js",
+      "typeOnly": false
+    },
+    {
+      "from": 11,
+      "to": {
+        "type": "file",
+        "path": 9
+      },
+      "raw": "./analyzer.js",
+      "typeOnly": false
+    },
+    {
+      "from": 11,
+      "to": {
+        "type": "file",
+        "path": 14
+      },
+      "raw": "./report.js",
+      "typeOnly": false
+    },
+    {
+      "from": 11,
+      "to": {
+        "type": "file",
+        "path": 15
+      },
+      "raw": "./types.js",
+      "typeOnly": false
+    },
+    {
+      "from": 11,
+      "to": {
+        "type": "file",
+        "path": 9
+      },
+      "raw": "./analyzer.js",
+      "typeOnly": false
+    },
+    {
+      "from": 11,
+      "to": {
+        "type": "file",
+        "path": 10
+      },
+      "raw": "./context.js",
+      "typeOnly": false
+    },
+    {
+      "from": 12,
+      "to": {
+        "type": "file",
+        "path": 7
+      },
+      "raw": "../types.js",
+      "typeOnly": true
+    },
+    {
+      "from": 12,
+      "to": {
+        "type": "file",
+        "path": 5
+      },
+      "raw": "../indexer.js",
+      "typeOnly": true
+    },
+    {
+      "from": 12,
+      "to": {
+        "type": "file",
+        "path": 15
+      },
+      "raw": "./types.js",
+      "typeOnly": true
+    },
+    {
+      "from": 12,
+      "to": {
+        "type": "file",
+        "path": 6
+      },
+      "raw": "../languages.js",
+      "typeOnly": false
+    },
+    {
+      "from": 13,
+      "to": {
+        "type": "file",
+        "path": 15
+      },
+      "raw": "./types.js",
+      "typeOnly": true
+    },
+    {
+      "from": 14,
+      "to": {
+        "type": "file",
+        "path": 7
+      },
+      "raw": "../types.js",
+      "typeOnly": true
+    },
+    {
+      "from": 14,
+      "to": {
+        "type": "file",
+        "path": 5
+      },
+      "raw": "../indexer.js",
+      "typeOnly": true
+    },
+    {
+      "from": 14,
+      "to": {
+        "type": "file",
+        "path": 15
+      },
+      "raw": "./types.js",
+      "typeOnly": true
+    },
+    {
+      "from": 14,
+      "to": {
+        "type": "file",
+        "path": 3
+      },
+      "raw": "../graphs.js",
+      "typeOnly": false
+    },
+    {
+      "from": 15,
+      "to": {
+        "type": "file",
+        "path": 7
+      },
+      "raw": "../types.js",
+      "typeOnly": true
+    },
+    {
+      "from": 15,
+      "to": {
+        "type": "file",
+        "path": 5
+      },
+      "raw": "../indexer.js",
+      "typeOnly": true
+    },
+    {
+      "from": 16,
+      "to": {
+        "type": "file",
+        "path": 15
+      },
+      "raw": "../types.js",
+      "typeOnly": true
+    },
+    {
+      "from": 16,
+      "to": {
+        "type": "file",
+        "path": 13
+      },
+      "raw": "../parse.js",
+      "typeOnly": false
     }
   ],
   "symbols": [
     {
       "id": 0,
-      "name": "toJSON",
+      "file": 0,
+      "name": "tool_impactJSON",
       "kind": "function"
     },
     {
       "id": 1,
-      "name": "stderrFilePath",
-      "kind": "variable"
+      "file": 0,
+      "name": "tool_impactFromDiffText",
+      "kind": "function"
     },
     {
       "id": 2,
-      "name": "writeStdoutLine",
+      "file": 1,
+      "name": "toJSON",
       "kind": "function"
     },
     {
       "id": 3,
-      "name": "writeJSONLine",
-      "kind": "function"
+      "file": 1,
+      "name": "stderrFilePath",
+      "kind": "variable"
     },
     {
       "id": 4,
-      "name": "writeStderrLine",
+      "file": 1,
+      "name": "writeStdoutLine",
       "kind": "function"
     },
     {
       "id": 5,
-      "name": "writeError",
+      "file": 1,
+      "name": "writeJSONLine",
       "kind": "function"
     },
     {
       "id": 6,
-      "name": "compactGraphWithSymbols",
+      "file": 1,
+      "name": "writeStderrLine",
       "kind": "function"
     },
     {
       "id": 7,
-      "name": "compactSymbolsOnly",
+      "file": 1,
+      "name": "writeError",
       "kind": "function"
     },
     {
       "id": 8,
-      "name": "main",
+      "file": 1,
+      "name": "compactGraphWithSymbols",
       "kind": "function"
     },
     {
       "id": 9,
-      "name": "collectModuleSpecifiersFromSource",
+      "file": 1,
+      "name": "compactSymbolsOnly",
       "kind": "function"
     },
     {
       "id": 10,
-      "name": "collectGraph",
+      "file": 1,
+      "name": "main",
       "kind": "function"
     },
     {
       "id": 11,
-      "name": "mapLimit",
+      "file": 3,
+      "name": "collectModuleSpecifiersFromSource",
       "kind": "function"
     },
     {
       "id": 12,
-      "name": "edgeTargetToString",
+      "file": 3,
+      "name": "collectGraph",
       "kind": "function"
     },
     {
       "id": 13,
-      "name": "buildNodeIdMap",
-      "kind": "function"
-    },
-    {
-      "id": 14,
-      "name": "graphToDOT",
-      "kind": "function"
-    },
-    {
-      "id": 15,
-      "name": "graphToMermaid",
-      "kind": "function"
-    },
-    {
-      "id": 16,
-      "name": "AstGrepHit",
-      "kind": "type"
-    },
-    {
-      "id": 17,
-      "name": "astGrep",
-      "kind": "function"
-    },
-    {
-      "id": 18,
-      "name": "SymbolNodeKind",
-      "kind": "type"
-    },
-    {
-      "id": 19,
-      "name": "SymbolNode",
-      "kind": "type"
-    },
-    {
-      "id": 20,
-      "name": "SymbolEdge",
-      "kind": "type"
-    },
-    {
-      "id": 21,
-      "name": "SymbolGraph",
-      "kind": "type"
-    },
-    {
-      "id": 22,
-      "name": "defNodeId",
-      "kind": "function"
-    },
-    {
-      "id": 23,
-      "name": "nodeForDef",
-      "kind": "function"
-    },
-    {
-      "id": 24,
-      "name": "buildSymbolGraph",
-      "kind": "function"
-    },
-    {
-      "id": 25,
-      "name": "buildSymbolGraphDetailed",
-      "kind": "function"
-    },
-    {
-      "id": 26,
-      "name": "graphToMermaidSymbols",
-      "kind": "function"
-    },
-    {
-      "id": 27,
-      "name": "graphToDOTSymbols",
-      "kind": "function"
-    },
-    {
-      "id": 28,
-      "name": "graphToMermaidSymbolsWithFiles",
-      "kind": "function"
-    },
-    {
-      "id": 29,
-      "name": "graphToDOTSymbolsWithFiles",
-      "kind": "function"
-    },
-    {
-      "id": 30,
-      "name": "SymbolDef",
-      "kind": "type"
-    },
-    {
-      "id": 31,
-      "name": "ExportEntry",
-      "kind": "type"
-    },
-    {
-      "id": 32,
-      "name": "ImportBinding",
-      "kind": "type"
-    },
-    {
-      "id": 33,
-      "name": "ModuleIndex",
-      "kind": "type"
-    },
-    {
-      "id": 34,
-      "name": "ProjectIndex",
-      "kind": "type"
-    },
-    {
-      "id": 35,
-      "name": "ResolvedExport",
-      "kind": "type"
-    },
-    {
-      "id": 36,
-      "name": "BuildOptions",
-      "kind": "type"
-    },
-    {
-      "id": 37,
-      "name": "SymbolHandle",
-      "kind": "type"
-    },
-    {
-      "id": 38,
-      "name": "symbolId",
-      "kind": "function"
-    },
-    {
-      "id": 39,
-      "name": "defFromSymbolId",
-      "kind": "function"
-    },
-    {
-      "id": 40,
-      "name": "resolveSymbolId",
-      "kind": "function"
-    },
-    {
-      "id": 41,
-      "name": "goToDefinitionById",
-      "kind": "function"
-    },
-    {
-      "id": 42,
-      "name": "findReferencesById",
-      "kind": "function"
-    },
-    {
-      "id": 43,
-      "name": "SymbolListItem",
-      "kind": "type"
-    },
-    {
-      "id": 44,
-      "name": "listSymbols",
-      "kind": "function"
-    },
-    {
-      "id": 45,
+      "file": 3,
       "name": "mapLimit",
       "kind": "function"
     },
     {
+      "id": 14,
+      "file": 3,
+      "name": "edgeTargetToString",
+      "kind": "function"
+    },
+    {
+      "id": 15,
+      "file": 3,
+      "name": "buildNodeIdMap",
+      "kind": "function"
+    },
+    {
+      "id": 16,
+      "file": 3,
+      "name": "graphToDOT",
+      "kind": "function"
+    },
+    {
+      "id": 17,
+      "file": 3,
+      "name": "graphToMermaid",
+      "kind": "function"
+    },
+    {
+      "id": 18,
+      "file": 3,
+      "name": "AstGrepHit",
+      "kind": "type"
+    },
+    {
+      "id": 19,
+      "file": 3,
+      "name": "astGrep",
+      "kind": "function"
+    },
+    {
+      "id": 20,
+      "file": 3,
+      "name": "SymbolNodeKind",
+      "kind": "type"
+    },
+    {
+      "id": 21,
+      "file": 3,
+      "name": "SymbolNode",
+      "kind": "type"
+    },
+    {
+      "id": 22,
+      "file": 3,
+      "name": "SymbolEdge",
+      "kind": "type"
+    },
+    {
+      "id": 23,
+      "file": 3,
+      "name": "SymbolGraph",
+      "kind": "type"
+    },
+    {
+      "id": 24,
+      "file": 3,
+      "name": "defNodeId",
+      "kind": "function"
+    },
+    {
+      "id": 25,
+      "file": 3,
+      "name": "nodeForDef",
+      "kind": "function"
+    },
+    {
+      "id": 26,
+      "file": 3,
+      "name": "buildSymbolGraph",
+      "kind": "function"
+    },
+    {
+      "id": 27,
+      "file": 3,
+      "name": "buildSymbolGraphDetailed",
+      "kind": "function"
+    },
+    {
+      "id": 28,
+      "file": 3,
+      "name": "graphToMermaidSymbols",
+      "kind": "function"
+    },
+    {
+      "id": 29,
+      "file": 3,
+      "name": "graphToDOTSymbols",
+      "kind": "function"
+    },
+    {
+      "id": 30,
+      "file": 3,
+      "name": "graphToMermaidSymbolsWithFiles",
+      "kind": "function"
+    },
+    {
+      "id": 31,
+      "file": 3,
+      "name": "graphToDOTSymbolsWithFiles",
+      "kind": "function"
+    },
+    {
+      "id": 32,
+      "file": 5,
+      "name": "SymbolDef",
+      "kind": "type"
+    },
+    {
+      "id": 33,
+      "file": 5,
+      "name": "ExportEntry",
+      "kind": "type"
+    },
+    {
+      "id": 34,
+      "file": 5,
+      "name": "ImportBinding",
+      "kind": "type"
+    },
+    {
+      "id": 35,
+      "file": 5,
+      "name": "ModuleIndex",
+      "kind": "type"
+    },
+    {
+      "id": 36,
+      "file": 5,
+      "name": "ProjectIndex",
+      "kind": "type"
+    },
+    {
+      "id": 37,
+      "file": 5,
+      "name": "ResolvedExport",
+      "kind": "type"
+    },
+    {
+      "id": 38,
+      "file": 5,
+      "name": "BuildOptions",
+      "kind": "type"
+    },
+    {
+      "id": 39,
+      "file": 5,
+      "name": "SymbolHandle",
+      "kind": "type"
+    },
+    {
+      "id": 40,
+      "file": 5,
+      "name": "symbolId",
+      "kind": "function"
+    },
+    {
+      "id": 41,
+      "file": 5,
+      "name": "defFromSymbolId",
+      "kind": "function"
+    },
+    {
+      "id": 42,
+      "file": 5,
+      "name": "resolveSymbolId",
+      "kind": "function"
+    },
+    {
+      "id": 43,
+      "file": 5,
+      "name": "goToDefinitionById",
+      "kind": "function"
+    },
+    {
+      "id": 44,
+      "file": 5,
+      "name": "findReferencesById",
+      "kind": "function"
+    },
+    {
+      "id": 45,
+      "file": 5,
+      "name": "SymbolListItem",
+      "kind": "type"
+    },
+    {
       "id": 46,
+      "file": 5,
+      "name": "listSymbols",
+      "kind": "function"
+    },
+    {
+      "id": 47,
+      "file": 5,
+      "name": "mapLimit",
+      "kind": "function"
+    },
+    {
+      "id": 48,
+      "file": 5,
       "name": "ModuleCacheEntry",
       "kind": "type"
     },
     {
-      "id": 47,
+      "id": 49,
+      "file": 5,
       "name": "memoryCache",
       "kind": "variable"
     },
     {
-      "id": 48,
+      "id": 50,
+      "file": 5,
       "name": "fileSignature",
       "kind": "function"
     },
     {
-      "id": 49,
+      "id": 51,
+      "file": 5,
       "name": "cacheFilePath",
       "kind": "function"
     },
     {
-      "id": 50,
+      "id": 52,
+      "file": 5,
       "name": "tryLoadFromCache",
       "kind": "function"
     },
     {
-      "id": 51,
+      "id": 53,
+      "file": 5,
       "name": "writeToCache",
       "kind": "function"
     },
     {
-      "id": 52,
+      "id": 54,
+      "file": 5,
       "name": "collectLocalsAndExportsFromSource",
       "kind": "function"
     },
     {
-      "id": 53,
+      "id": 55,
+      "file": 5,
       "name": "collectImportsForFile",
       "kind": "function"
     },
     {
-      "id": 54,
+      "id": 56,
+      "file": 5,
       "name": "parseFile",
       "kind": "function"
     },
     {
-      "id": 55,
+      "id": 57,
+      "file": 5,
       "name": "buildProjectIndex",
       "kind": "function"
     },
     {
-      "id": 56,
+      "id": 58,
+      "file": 5,
       "name": "buildProjectIndexFromFiles",
       "kind": "function"
     },
     {
-      "id": 57,
+      "id": 59,
+      "file": 5,
       "name": "cacheKey",
       "kind": "function"
     },
     {
-      "id": 58,
+      "id": 60,
+      "file": 5,
       "name": "resolveExport",
       "kind": "function"
     },
     {
-      "id": 59,
+      "id": 61,
+      "file": 5,
       "name": "_resolve",
       "kind": "function"
     },
     {
-      "id": 60,
+      "id": 62,
+      "file": 5,
       "name": "GoToRequest",
       "kind": "type"
     },
     {
-      "id": 61,
+      "id": 63,
+      "file": 5,
       "name": "GoToResult",
       "kind": "type"
     },
     {
-      "id": 62,
+      "id": 64,
+      "file": 5,
       "name": "goToDefinition",
       "kind": "function"
     },
     {
-      "id": 63,
+      "id": 65,
+      "file": 5,
       "name": "toModuleRef",
       "kind": "function"
     },
     {
-      "id": 64,
+      "id": 66,
+      "file": 5,
       "name": "resolveImported",
       "kind": "function"
     },
     {
-      "id": 65,
+      "id": 67,
+      "file": 5,
       "name": "BindingKind",
       "kind": "type"
     },
     {
-      "id": 66,
+      "id": 68,
+      "file": 5,
       "name": "Binding",
       "kind": "type"
     },
     {
-      "id": 67,
+      "id": 69,
+      "file": 5,
       "name": "ScopeIndex",
       "kind": "type"
     },
     {
-      "id": 68,
+      "id": 70,
+      "file": 5,
       "name": "buildScopeIndexFromSource",
       "kind": "function"
     },
     {
-      "id": 69,
+      "id": 71,
+      "file": 5,
       "name": "Reference",
       "kind": "type"
     },
     {
-      "id": 70,
+      "id": 72,
+      "file": 5,
       "name": "sameDef",
       "kind": "function"
     },
     {
-      "id": 71,
+      "id": 73,
+      "file": 5,
       "name": "rangeContains",
       "kind": "function"
     },
     {
-      "id": 72,
+      "id": 74,
+      "file": 5,
       "name": "findReferences",
       "kind": "function"
     },
     {
-      "id": 73,
+      "id": 75,
+      "file": 5,
       "name": "__buildSymbolGraphDetailedCompat",
       "kind": "function"
     },
     {
-      "id": 74,
+      "id": 76,
+      "file": 5,
       "name": "collectNamespaceMemberRefs",
       "kind": "function"
     },
     {
-      "id": 75,
+      "id": 77,
+      "file": 5,
       "name": "helper",
       "kind": "function"
     },
     {
-      "id": 76,
+      "id": 78,
+      "file": 6,
       "name": "IdentifierNodeType",
       "kind": "type"
     },
     {
-      "id": 77,
+      "id": 79,
+      "file": 6,
       "name": "LanguageSupport",
       "kind": "type"
     },
     {
-      "id": 78,
+      "id": 80,
+      "file": 6,
       "name": "LangTS",
       "kind": "variable"
     },
     {
-      "id": 79,
+      "id": 81,
+      "file": 6,
       "name": "LangTSX",
       "kind": "variable"
     },
     {
-      "id": 80,
+      "id": 82,
+      "file": 6,
       "name": "LangJS",
       "kind": "variable"
     },
     {
-      "id": 81,
+      "id": 83,
+      "file": 6,
       "name": "TS_SUPPORT",
       "kind": "variable"
     },
     {
-      "id": 82,
+      "id": 84,
+      "file": 6,
       "name": "JS_SUPPORT",
       "kind": "variable"
     },
     {
-      "id": 83,
+      "id": 85,
+      "file": 6,
       "name": "PY_SUPPORT",
       "kind": "variable"
     },
     {
-      "id": 84,
+      "id": 86,
+      "file": 6,
       "name": "LANGUAGE_SUPPORTS",
       "kind": "variable"
     },
     {
-      "id": 85,
+      "id": 87,
+      "file": 6,
       "name": "supportForFile",
       "kind": "function"
     },
     {
-      "id": 86,
+      "id": 88,
+      "file": 6,
       "name": "languageForFile",
       "kind": "function"
     },
     {
-      "id": 87,
+      "id": 89,
+      "file": 6,
       "name": "CompiledQueries",
       "kind": "type"
     },
     {
-      "id": 88,
+      "id": 90,
+      "file": 6,
       "name": "queryCache",
       "kind": "variable"
     },
     {
-      "id": 89,
+      "id": 91,
+      "file": 6,
       "name": "getCompiledQueries",
       "kind": "function"
     },
     {
-      "id": 90,
-      "name": "Pos",
-      "kind": "type"
-    },
-    {
-      "id": 91,
-      "name": "Range",
-      "kind": "type"
-    },
-    {
       "id": 92,
-      "name": "FileId",
+      "file": 7,
+      "name": "Pos",
       "kind": "type"
     },
     {
       "id": 93,
-      "name": "EdgeTo",
+      "file": 7,
+      "name": "Range",
       "kind": "type"
     },
     {
       "id": 94,
-      "name": "Edge",
+      "file": 7,
+      "name": "FileId",
       "kind": "type"
     },
     {
       "id": 95,
-      "name": "Graph",
+      "file": 7,
+      "name": "EdgeTo",
       "kind": "type"
     },
     {
       "id": 96,
-      "name": "Pos",
+      "file": 7,
+      "name": "Edge",
       "kind": "type"
     },
     {
       "id": 97,
-      "name": "Range",
+      "file": 7,
+      "name": "Graph",
       "kind": "type"
     },
     {
       "id": 98,
+      "file": 8,
+      "name": "Pos",
+      "kind": "type"
+    },
+    {
+      "id": 99,
+      "file": 8,
+      "name": "Range",
+      "kind": "type"
+    },
+    {
+      "id": 100,
+      "file": 8,
       "name": "sliceText",
       "kind": "function"
     },
     {
-      "id": 99,
+      "id": 101,
+      "file": 8,
       "name": "unquote",
       "kind": "function"
     },
     {
-      "id": 100,
+      "id": 102,
+      "file": 8,
       "name": "toRange",
       "kind": "function"
     },
     {
-      "id": 101,
+      "id": 103,
+      "file": 8,
       "name": "listProjectFiles",
       "kind": "function"
     },
     {
-      "id": 102,
+      "id": 104,
+      "file": 8,
       "name": "stripJsLikeComments",
       "kind": "function"
     },
     {
-      "id": 103,
+      "id": 105,
+      "file": 8,
       "name": "stripPythonCommentsAndStrings",
       "kind": "function"
     },
     {
-      "id": 104,
-      "name": "normalizePath",
-      "kind": "function"
-    },
-    {
-      "id": 105,
-      "name": "ModuleSpecifier",
-      "kind": "type"
-    },
-    {
       "id": 106,
-      "name": "extractJsTsSpecifiers",
+      "file": 8,
+      "name": "normalizePath",
       "kind": "function"
     },
     {
       "id": 107,
+      "file": 8,
+      "name": "ModuleSpecifier",
+      "kind": "type"
+    },
+    {
+      "id": 108,
+      "file": 8,
+      "name": "extractJsTsSpecifiers",
+      "kind": "function"
+    },
+    {
+      "id": 109,
+      "file": 8,
       "name": "extractPythonSpecifiers",
       "kind": "function"
     },
     {
-      "id": 108,
+      "id": 110,
+      "file": 8,
       "name": "MatchPathFn",
       "kind": "type"
     },
     {
-      "id": 109,
+      "id": 111,
+      "file": 8,
       "name": "tsconfigCache",
       "kind": "variable"
     },
     {
-      "id": 110,
+      "id": 112,
+      "file": 8,
       "name": "findNearestTsconfig",
       "kind": "function"
     },
     {
-      "id": 111,
+      "id": 113,
+      "file": 8,
       "name": "loadNearestTsconfigFor",
       "kind": "function"
     },
     {
-      "id": 112,
+      "id": 114,
+      "file": 8,
       "name": "fileExists",
       "kind": "function"
     },
     {
-      "id": 113,
+      "id": 115,
+      "file": 8,
       "name": "findWorkspaceRoot",
       "kind": "function"
     },
     {
-      "id": 114,
+      "id": 116,
+      "file": 8,
       "name": "loadJSON",
       "kind": "function"
     },
     {
-      "id": 115,
+      "id": 117,
+      "file": 8,
       "name": "WorkspacePackageInfo",
       "kind": "type"
     },
     {
-      "id": 116,
+      "id": 118,
+      "file": 8,
       "name": "WorkspaceConfig",
       "kind": "type"
     },
     {
-      "id": 117,
+      "id": 119,
+      "file": 8,
       "name": "workspaceCache",
       "kind": "variable"
     },
     {
-      "id": 118,
+      "id": 120,
+      "file": 8,
       "name": "loadWorkspaceConfig",
       "kind": "function"
     },
     {
-      "id": 119,
+      "id": 121,
+      "file": 8,
       "name": "resolvePackageSubpath",
       "kind": "function"
     },
     {
-      "id": 120,
+      "id": 122,
+      "file": 8,
       "name": "resolveWorkspacePackage",
       "kind": "function"
     },
     {
-      "id": 121,
+      "id": 123,
+      "file": 8,
       "name": "FileId",
       "kind": "type"
     },
     {
-      "id": 122,
+      "id": 124,
+      "file": 8,
       "name": "resolveSpecifier",
       "kind": "function"
     },
     {
-      "id": 123,
+      "id": 125,
+      "file": 8,
       "name": "resolveFromNodeModules",
       "kind": "function"
     },
     {
-      "id": 124,
+      "id": 126,
+      "file": 8,
       "name": "findPythonPackageAnchor",
       "kind": "function"
     },
     {
-      "id": 125,
+      "id": 127,
+      "file": 8,
       "name": "isDirectory",
       "kind": "function"
     },
     {
-      "id": 126,
+      "id": 128,
+      "file": 8,
       "name": "resolvePythonModule",
       "kind": "function"
     },
     {
-      "id": 127,
+      "id": 129,
+      "file": 8,
       "name": "fileExistsCache",
       "kind": "variable"
     },
     {
-      "id": 128,
+      "id": 130,
+      "file": 8,
       "name": "resolveSpecifierCache",
       "kind": "variable"
     },
     {
-      "id": 129,
+      "id": 131,
+      "file": 8,
       "name": "resolvePythonModuleCache",
       "kind": "variable"
     },
     {
-      "id": 130,
+      "id": 132,
+      "file": 8,
       "name": "LangKey",
       "kind": "type"
     },
     {
-      "id": 131,
+      "id": 133,
+      "file": 8,
       "name": "parserPools",
       "kind": "variable"
     },
     {
-      "id": 132,
+      "id": 134,
+      "file": 8,
       "name": "acquireParser",
       "kind": "function"
     },
     {
-      "id": 133,
+      "id": 135,
+      "file": 8,
       "name": "releaseParser",
       "kind": "function"
     },
     {
-      "id": 134,
+      "id": 136,
+      "file": 9,
+      "name": "analyzeImpact",
+      "kind": "function"
+    },
+    {
+      "id": 137,
+      "file": 9,
+      "name": "seedTransitiveFromFiles",
+      "kind": "function"
+    },
+    {
+      "id": 138,
+      "file": 9,
+      "name": "analyzeTransitiveImpact",
+      "kind": "function"
+    },
+    {
+      "id": 139,
+      "file": 9,
+      "name": "calculateSeverity",
+      "kind": "function"
+    },
+    {
+      "id": 140,
+      "file": 9,
+      "name": "calculateTransitiveSeverity",
+      "kind": "function"
+    },
+    {
+      "id": 141,
+      "file": 9,
+      "name": "isTestFile",
+      "kind": "function"
+    },
+    {
+      "id": 142,
+      "file": 10,
+      "name": "CandidateTestFile",
+      "kind": "type"
+    },
+    {
+      "id": 143,
+      "file": 10,
+      "name": "ImpactContext",
+      "kind": "type"
+    },
+    {
+      "id": 144,
+      "file": 10,
+      "name": "collectImpactContext",
+      "kind": "function"
+    },
+    {
+      "id": 145,
+      "file": 10,
+      "name": "collectFileSubgraph",
+      "kind": "function"
+    },
+    {
+      "id": 146,
+      "file": 10,
+      "name": "collectSymbolNeighbors",
+      "kind": "function"
+    },
+    {
+      "id": 147,
+      "file": 10,
+      "name": "listCandidateTestFiles",
+      "kind": "function"
+    },
+    {
+      "id": 148,
+      "file": 10,
+      "name": "isTestFile",
+      "kind": "function"
+    },
+    {
+      "id": 149,
+      "file": 11,
+      "name": "analyzeImpactFromDiff",
+      "kind": "function"
+    },
+    {
+      "id": 150,
+      "file": 12,
+      "name": "locateChangedSymbols",
+      "kind": "function"
+    },
+    {
+      "id": 151,
+      "file": 12,
+      "name": "findNodesInLines",
+      "kind": "function"
+    },
+    {
+      "id": 152,
+      "file": 12,
+      "name": "walk",
+      "kind": "function"
+    },
+    {
+      "id": 153,
+      "file": 12,
+      "name": "NodeClassification",
+      "kind": "type"
+    },
+    {
+      "id": 154,
+      "file": 12,
+      "name": "classifyChangedNode",
+      "kind": "function"
+    },
+    {
+      "id": 155,
+      "file": 12,
+      "name": "isTypeOnlyDeclaration",
+      "kind": "function"
+    },
+    {
+      "id": 156,
+      "file": 12,
+      "name": "findDeclarationNameInAncestors",
+      "kind": "function"
+    },
+    {
+      "id": 157,
+      "file": 12,
+      "name": "findSymbolHandleForNode",
+      "kind": "function"
+    },
+    {
+      "id": 158,
+      "file": 12,
+      "name": "isExported",
+      "kind": "function"
+    },
+    {
+      "id": 159,
+      "file": 13,
+      "name": "parseUnifiedDiff",
+      "kind": "function"
+    },
+    {
+      "id": 160,
+      "file": 13,
+      "name": "parseFileChange",
+      "kind": "function"
+    },
+    {
+      "id": 161,
+      "file": 13,
+      "name": "parseHunk",
+      "kind": "function"
+    },
+    {
+      "id": 162,
+      "file": 14,
+      "name": "buildImpactReport",
+      "kind": "function"
+    },
+    {
+      "id": 163,
+      "file": 14,
+      "name": "buildCompactReport",
+      "kind": "function"
+    },
+    {
+      "id": 164,
+      "file": 15,
+      "name": "Hunk",
+      "kind": "type"
+    },
+    {
+      "id": 165,
+      "file": 15,
+      "name": "FileChange",
+      "kind": "type"
+    },
+    {
+      "id": 166,
+      "file": 15,
+      "name": "Diff",
+      "kind": "type"
+    },
+    {
+      "id": 167,
+      "file": 15,
+      "name": "DiffProviderOptions",
+      "kind": "type"
+    },
+    {
+      "id": 168,
+      "file": 15,
+      "name": "ChangedSymbol",
+      "kind": "type"
+    },
+    {
+      "id": 169,
+      "file": 15,
+      "name": "ImpactReason",
+      "kind": "type"
+    },
+    {
+      "id": 170,
+      "file": 15,
+      "name": "ImpactItem",
+      "kind": "type"
+    },
+    {
+      "id": 171,
+      "file": 15,
+      "name": "ImpactReport",
+      "kind": "type"
+    },
+    {
+      "id": 172,
+      "file": 15,
+      "name": "CompactImpactReport",
+      "kind": "type"
+    },
+    {
+      "id": 173,
+      "file": 15,
+      "name": "ImpactOptions",
+      "kind": "type"
+    },
+    {
+      "id": 174,
+      "file": 16,
+      "name": "DiffProvider",
+      "kind": "type"
+    },
+    {
+      "id": 175,
+      "file": 16,
+      "name": "getDiff",
+      "kind": "function"
+    },
+    {
+      "id": 176,
+      "file": 16,
+      "name": "createProvider",
+      "kind": "function"
+    },
+    {
+      "id": 177,
+      "file": 16,
+      "name": "GitDiffProvider",
+      "kind": "class"
+    },
+    {
+      "id": 178,
+      "file": 16,
+      "name": "GitHubDiffProvider",
+      "kind": "class"
+    },
+    {
+      "id": 179,
+      "file": 16,
+      "name": "RawDiffProvider",
+      "kind": "class"
+    },
+    {
+      "id": 180,
       "file": 0,
+      "name": "analyzeImpactFromDiff",
+      "kind": "import"
+    },
+    {
+      "id": 181,
+      "file": 1,
       "name": "path",
       "kind": "import"
     },
     {
-      "id": 135,
-      "file": 0,
+      "id": 182,
+      "file": 1,
       "name": "fs",
       "kind": "import"
     },
     {
-      "id": 136,
-      "file": 0,
+      "id": 183,
+      "file": 1,
       "name": "fsp",
       "kind": "import"
     },
     {
-      "id": 137,
-      "file": 2,
+      "id": 184,
+      "file": 3,
       "name": "path",
       "kind": "import"
     },
     {
-      "id": 138,
-      "file": 2,
+      "id": 185,
+      "file": 3,
       "name": "Parser",
       "kind": "import"
     },
     {
-      "id": 139,
-      "file": 2,
+      "id": 186,
+      "file": 3,
       "name": "fs",
       "kind": "import"
     },
     {
-      "id": 140,
-      "file": 2,
+      "id": 187,
+      "file": 3,
       "name": "fsp",
       "kind": "import"
     },
     {
-      "id": 141,
-      "file": 2,
+      "id": 188,
+      "file": 3,
       "name": "languageForFile",
       "kind": "import"
     },
     {
-      "id": 142,
-      "file": 2,
+      "id": 189,
+      "file": 3,
       "name": "type { LanguageSupport }",
       "kind": "import"
     },
     {
-      "id": 143,
-      "file": 2,
+      "id": 190,
+      "file": 3,
       "name": "type { FileId",
       "kind": "import"
     },
     {
-      "id": 144,
-      "file": 2,
+      "id": 191,
+      "file": 3,
       "name": "EdgeTo",
       "kind": "import"
     },
     {
-      "id": 145,
-      "file": 2,
+      "id": 192,
+      "file": 3,
       "name": "Edge",
       "kind": "import"
     },
     {
-      "id": 146,
-      "file": 2,
+      "id": 193,
+      "file": 3,
       "name": "Graph",
       "kind": "import"
     },
     {
-      "id": 147,
-      "file": 2,
+      "id": 194,
+      "file": 3,
       "name": "acquireParser",
       "kind": "import"
     },
     {
-      "id": 148,
-      "file": 2,
+      "id": 195,
+      "file": 3,
       "name": "releaseParser",
       "kind": "import"
     },
     {
-      "id": 149,
-      "file": 2,
+      "id": 196,
+      "file": 3,
       "name": "extractPythonSpecifiers",
       "kind": "import"
     },
     {
-      "id": 150,
-      "file": 2,
+      "id": 197,
+      "file": 3,
       "name": "normalizePath",
       "kind": "import"
     },
     {
-      "id": 151,
-      "file": 4,
+      "id": 198,
+      "file": 3,
+      "name": "type { ImportBinding",
+      "kind": "import"
+    },
+    {
+      "id": 199,
+      "file": 3,
+      "name": "ProjectIndex",
+      "kind": "import"
+    },
+    {
+      "id": 200,
+      "file": 3,
+      "name": "SymbolDef",
+      "kind": "import"
+    },
+    {
+      "id": 201,
+      "file": 5,
       "name": "fs",
       "kind": "import"
     },
     {
-      "id": 152,
-      "file": 4,
+      "id": 202,
+      "file": 5,
       "name": "fsp",
       "kind": "import"
     },
     {
-      "id": 153,
-      "file": 4,
+      "id": 203,
+      "file": 5,
       "name": "path",
       "kind": "import"
     },
     {
-      "id": 154,
-      "file": 4,
+      "id": 204,
+      "file": 5,
       "name": "Parser",
       "kind": "import"
     },
     {
-      "id": 155,
-      "file": 4,
+      "id": 205,
+      "file": 5,
       "name": "crypto",
       "kind": "import"
     },
     {
-      "id": 156,
-      "file": 4,
+      "id": 206,
+      "file": 5,
       "name": "languageForFile",
       "kind": "import"
     },
     {
-      "id": 157,
-      "file": 4,
+      "id": 207,
+      "file": 5,
       "name": "getCompiledQueries",
       "kind": "import"
     },
     {
-      "id": 158,
-      "file": 4,
+      "id": 208,
+      "file": 5,
       "name": "collectGraph",
       "kind": "import"
     },
     {
-      "id": 159,
-      "file": 4,
+      "id": 209,
+      "file": 5,
       "name": "type { Pos",
       "kind": "import"
     },
     {
-      "id": 160,
-      "file": 4,
+      "id": 210,
+      "file": 5,
       "name": "Range",
       "kind": "import"
     },
     {
-      "id": 161,
-      "file": 4,
+      "id": 211,
+      "file": 5,
       "name": "FileId",
       "kind": "import"
     },
     {
-      "id": 162,
-      "file": 4,
+      "id": 212,
+      "file": 5,
       "name": "Graph",
       "kind": "import"
     },
     {
-      "id": 163,
-      "file": 5,
+      "id": 213,
+      "file": 6,
       "name": "path",
       "kind": "import"
     },
     {
-      "id": 164,
-      "file": 5,
+      "id": 214,
+      "file": 6,
       "name": "Parser",
       "kind": "import"
     },
     {
-      "id": 165,
-      "file": 5,
+      "id": 215,
+      "file": 6,
       "name": "tsGrammars",
       "kind": "import"
     },
     {
-      "id": 166,
-      "file": 5,
+      "id": 216,
+      "file": 6,
       "name": "JavaScript",
       "kind": "import"
     },
     {
-      "id": 167,
-      "file": 5,
+      "id": 217,
+      "file": 6,
       "name": "PythonLang",
       "kind": "import"
     },
     {
-      "id": 168,
-      "file": 7,
+      "id": 218,
+      "file": 8,
       "name": "fs",
       "kind": "import"
     },
     {
-      "id": 169,
-      "file": 7,
+      "id": 219,
+      "file": 8,
       "name": "fsp",
       "kind": "import"
     },
     {
-      "id": 170,
-      "file": 7,
+      "id": 220,
+      "file": 8,
       "name": "path",
       "kind": "import"
     },
     {
-      "id": 171,
-      "file": 7,
+      "id": 221,
+      "file": 8,
       "name": "fg",
       "kind": "import"
     },
     {
-      "id": 172,
-      "file": 7,
+      "id": 222,
+      "file": 8,
       "name": "createMatchPath",
       "kind": "import"
     },
     {
-      "id": 173,
-      "file": 7,
+      "id": 223,
+      "file": 8,
       "name": "Parser",
+      "kind": "import"
+    },
+    {
+      "id": 224,
+      "file": 9,
+      "name": "type { FileId }",
+      "kind": "import"
+    },
+    {
+      "id": 225,
+      "file": 9,
+      "name": "type { ProjectIndex",
+      "kind": "import"
+    },
+    {
+      "id": 226,
+      "file": 9,
+      "name": "SymbolDef",
+      "kind": "import"
+    },
+    {
+      "id": 227,
+      "file": 9,
+      "name": "type { ChangedSymbol",
+      "kind": "import"
+    },
+    {
+      "id": 228,
+      "file": 9,
+      "name": "ImpactItem",
+      "kind": "import"
+    },
+    {
+      "id": 229,
+      "file": 9,
+      "name": "ImpactReason",
+      "kind": "import"
+    },
+    {
+      "id": 230,
+      "file": 9,
+      "name": "ImpactOptions",
+      "kind": "import"
+    },
+    {
+      "id": 231,
+      "file": 9,
+      "name": "FileChange",
+      "kind": "import"
+    },
+    {
+      "id": 232,
+      "file": 9,
+      "name": "findReferences",
+      "kind": "import"
+    },
+    {
+      "id": 233,
+      "file": 10,
+      "name": "type { FileId }",
+      "kind": "import"
+    },
+    {
+      "id": 234,
+      "file": 10,
+      "name": "type { ProjectIndex }",
+      "kind": "import"
+    },
+    {
+      "id": 235,
+      "file": 10,
+      "name": "buildSymbolGraphDetailed",
+      "kind": "import"
+    },
+    {
+      "id": 236,
+      "file": 11,
+      "name": "type { ProjectIndex }",
+      "kind": "import"
+    },
+    {
+      "id": 237,
+      "file": 11,
+      "name": "type { ImpactReport",
+      "kind": "import"
+    },
+    {
+      "id": 238,
+      "file": 11,
+      "name": "CompactImpactReport",
+      "kind": "import"
+    },
+    {
+      "id": 239,
+      "file": 11,
+      "name": "ImpactOptions",
+      "kind": "import"
+    },
+    {
+      "id": 240,
+      "file": 11,
+      "name": "getDiff",
+      "kind": "import"
+    },
+    {
+      "id": 241,
+      "file": 11,
+      "name": "locateChangedSymbols",
+      "kind": "import"
+    },
+    {
+      "id": 242,
+      "file": 11,
+      "name": "analyzeImpact",
+      "kind": "import"
+    },
+    {
+      "id": 243,
+      "file": 11,
+      "name": "buildImpactReport",
+      "kind": "import"
+    },
+    {
+      "id": 244,
+      "file": 12,
+      "name": "type { FileId",
+      "kind": "import"
+    },
+    {
+      "id": 245,
+      "file": 12,
+      "name": "Range",
+      "kind": "import"
+    },
+    {
+      "id": 246,
+      "file": 12,
+      "name": "type { ProjectIndex",
+      "kind": "import"
+    },
+    {
+      "id": 247,
+      "file": 12,
+      "name": "SymbolHandle",
+      "kind": "import"
+    },
+    {
+      "id": 248,
+      "file": 12,
+      "name": "type { FileChange",
+      "kind": "import"
+    },
+    {
+      "id": 249,
+      "file": 12,
+      "name": "ChangedSymbol",
+      "kind": "import"
+    },
+    {
+      "id": 250,
+      "file": 12,
+      "name": "languageForFile",
+      "kind": "import"
+    },
+    {
+      "id": 251,
+      "file": 13,
+      "name": "type { Diff",
+      "kind": "import"
+    },
+    {
+      "id": 252,
+      "file": 13,
+      "name": "FileChange",
+      "kind": "import"
+    },
+    {
+      "id": 253,
+      "file": 13,
+      "name": "Hunk",
+      "kind": "import"
+    },
+    {
+      "id": 254,
+      "file": 14,
+      "name": "type { FileId }",
+      "kind": "import"
+    },
+    {
+      "id": 255,
+      "file": 14,
+      "name": "type { ProjectIndex }",
+      "kind": "import"
+    },
+    {
+      "id": 256,
+      "file": 14,
+      "name": "type { FileChange",
+      "kind": "import"
+    },
+    {
+      "id": 257,
+      "file": 14,
+      "name": "ChangedSymbol",
+      "kind": "import"
+    },
+    {
+      "id": 258,
+      "file": 14,
+      "name": "ImpactItem",
+      "kind": "import"
+    },
+    {
+      "id": 259,
+      "file": 14,
+      "name": "ImpactReport",
+      "kind": "import"
+    },
+    {
+      "id": 260,
+      "file": 14,
+      "name": "CompactImpactReport",
+      "kind": "import"
+    },
+    {
+      "id": 261,
+      "file": 14,
+      "name": "ImpactOptions",
+      "kind": "import"
+    },
+    {
+      "id": 262,
+      "file": 14,
+      "name": "buildSymbolGraphDetailed",
+      "kind": "import"
+    },
+    {
+      "id": 263,
+      "file": 15,
+      "name": "type { FileId",
+      "kind": "import"
+    },
+    {
+      "id": 264,
+      "file": 15,
+      "name": "Range",
+      "kind": "import"
+    },
+    {
+      "id": 265,
+      "file": 15,
+      "name": "type { SymbolHandle",
+      "kind": "import"
+    },
+    {
+      "id": 266,
+      "file": 15,
+      "name": "SymbolDef",
+      "kind": "import"
+    },
+    {
+      "id": 267,
+      "file": 16,
+      "name": "type { Diff",
+      "kind": "import"
+    },
+    {
+      "id": 268,
+      "file": 16,
+      "name": "DiffProviderOptions",
+      "kind": "import"
+    },
+    {
+      "id": 269,
+      "file": 16,
+      "name": "parseUnifiedDiff",
       "kind": "import"
     }
   ],
   "symbolEdges": [
     {
-      "from": 141,
-      "to": 86,
+      "from": 188,
+      "to": 88,
       "label": "languageForFile"
     },
     {
-      "from": 142,
-      "to": 81,
+      "from": 189,
+      "to": 83,
       "label": "default"
     },
     {
-      "from": 144,
-      "to": 93,
+      "from": 191,
+      "to": 95,
       "label": "EdgeTo"
     },
     {
-      "from": 145,
-      "to": 94,
+      "from": 192,
+      "to": 96,
       "label": "Edge"
     },
     {
-      "from": 146,
-      "to": 95,
+      "from": 193,
+      "to": 97,
       "label": "Graph"
     },
     {
-      "from": 147,
-      "to": 132,
+      "from": 194,
+      "to": 134,
       "label": "acquireParser"
     },
     {
-      "from": 148,
-      "to": 133,
+      "from": 195,
+      "to": 135,
       "label": "releaseParser"
     },
     {
-      "from": 149,
-      "to": 107,
+      "from": 196,
+      "to": 109,
       "label": "extractPythonSpecifiers"
     },
     {
-      "from": 150,
-      "to": 104,
+      "from": 197,
+      "to": 106,
       "label": "normalizePath"
     },
     {
-      "from": 156,
-      "to": 86,
+      "from": 206,
+      "to": 88,
       "label": "languageForFile"
     },
     {
-      "from": 157,
-      "to": 89,
+      "from": 207,
+      "to": 91,
       "label": "getCompiledQueries"
     },
     {
-      "from": 158,
-      "to": 10,
+      "from": 208,
+      "to": 12,
       "label": "collectGraph"
     },
     {
-      "from": 160,
-      "to": 91,
+      "from": 210,
+      "to": 93,
       "label": "Range"
     },
     {
-      "from": 161,
-      "to": 92,
+      "from": 211,
+      "to": 94,
       "label": "FileId"
     },
     {
-      "from": 162,
-      "to": 95,
+      "from": 212,
+      "to": 97,
       "label": "Graph"
     },
     {
-      "from": 9,
-      "to": 132,
-      "label": "uses"
+      "from": 225,
+      "to": 40,
+      "label": "default"
     },
     {
-      "from": 9,
-      "to": 133,
-      "label": "uses"
+      "from": 226,
+      "to": 32,
+      "label": "SymbolDef"
     },
     {
-      "from": 9,
-      "to": 107,
-      "label": "uses"
+      "from": 228,
+      "to": 170,
+      "label": "ImpactItem"
     },
     {
-      "from": 10,
-      "to": 95,
-      "label": "uses"
+      "from": 229,
+      "to": 169,
+      "label": "ImpactReason"
     },
     {
-      "from": 10,
-      "to": 86,
-      "label": "uses"
+      "from": 230,
+      "to": 173,
+      "label": "ImpactOptions"
     },
     {
-      "from": 10,
-      "to": 94,
-      "label": "uses"
+      "from": 231,
+      "to": 165,
+      "label": "FileChange"
     },
     {
-      "from": 10,
+      "from": 232,
+      "to": 74,
+      "label": "findReferences"
+    },
+    {
+      "from": 234,
+      "to": 40,
+      "label": "default"
+    },
+    {
+      "from": 235,
+      "to": 27,
+      "label": "buildSymbolGraphDetailed"
+    },
+    {
+      "from": 236,
+      "to": 40,
+      "label": "default"
+    },
+    {
+      "from": 238,
+      "to": 172,
+      "label": "CompactImpactReport"
+    },
+    {
+      "from": 239,
+      "to": 173,
+      "label": "ImpactOptions"
+    },
+    {
+      "from": 240,
+      "to": 175,
+      "label": "getDiff"
+    },
+    {
+      "from": 241,
+      "to": 150,
+      "label": "locateChangedSymbols"
+    },
+    {
+      "from": 242,
+      "to": 136,
+      "label": "analyzeImpact"
+    },
+    {
+      "from": 243,
+      "to": 162,
+      "label": "buildImpactReport"
+    },
+    {
+      "from": 245,
       "to": 93,
+      "label": "Range"
+    },
+    {
+      "from": 246,
+      "to": 40,
+      "label": "default"
+    },
+    {
+      "from": 247,
+      "to": 39,
+      "label": "SymbolHandle"
+    },
+    {
+      "from": 249,
+      "to": 168,
+      "label": "ChangedSymbol"
+    },
+    {
+      "from": 250,
+      "to": 88,
+      "label": "languageForFile"
+    },
+    {
+      "from": 252,
+      "to": 165,
+      "label": "FileChange"
+    },
+    {
+      "from": 253,
+      "to": 164,
+      "label": "Hunk"
+    },
+    {
+      "from": 255,
+      "to": 40,
+      "label": "default"
+    },
+    {
+      "from": 257,
+      "to": 168,
+      "label": "ChangedSymbol"
+    },
+    {
+      "from": 258,
+      "to": 170,
+      "label": "ImpactItem"
+    },
+    {
+      "from": 259,
+      "to": 171,
+      "label": "ImpactReport"
+    },
+    {
+      "from": 260,
+      "to": 172,
+      "label": "CompactImpactReport"
+    },
+    {
+      "from": 261,
+      "to": 173,
+      "label": "ImpactOptions"
+    },
+    {
+      "from": 262,
+      "to": 27,
+      "label": "buildSymbolGraphDetailed"
+    },
+    {
+      "from": 264,
+      "to": 93,
+      "label": "Range"
+    },
+    {
+      "from": 265,
+      "to": 40,
+      "label": "default"
+    },
+    {
+      "from": 266,
+      "to": 32,
+      "label": "SymbolDef"
+    },
+    {
+      "from": 268,
+      "to": 167,
+      "label": "DiffProviderOptions"
+    },
+    {
+      "from": 269,
+      "to": 159,
+      "label": "parseUnifiedDiff"
+    },
+    {
+      "from": 0,
+      "to": 149,
+      "label": "uses"
+    },
+    {
+      "from": 11,
+      "to": 134,
+      "label": "uses"
+    },
+    {
+      "from": 11,
+      "to": 135,
+      "label": "uses"
+    },
+    {
+      "from": 11,
+      "to": 109,
       "label": "uses"
     },
     {
       "from": 12,
-      "to": 93,
+      "to": 97,
       "label": "uses"
     },
     {
-      "from": 13,
+      "from": 12,
+      "to": 88,
+      "label": "uses"
+    },
+    {
+      "from": 12,
+      "to": 96,
+      "label": "uses"
+    },
+    {
+      "from": 12,
       "to": 95,
       "label": "uses"
     },
@@ -1402,176 +2588,368 @@
     },
     {
       "from": 15,
-      "to": 95,
+      "to": 97,
+      "label": "uses"
+    },
+    {
+      "from": 16,
+      "to": 97,
       "label": "uses"
     },
     {
       "from": 17,
-      "to": 86,
+      "to": 97,
       "label": "uses"
     },
     {
-      "from": 17,
-      "to": 132,
+      "from": 19,
+      "to": 88,
       "label": "uses"
     },
     {
-      "from": 17,
-      "to": 133,
+      "from": 19,
+      "to": 134,
       "label": "uses"
     },
     {
-      "from": 24,
-      "to": 104,
+      "from": 19,
+      "to": 135,
       "label": "uses"
     },
     {
-      "from": 25,
-      "to": 104,
+      "from": 26,
+      "to": 106,
       "label": "uses"
     },
     {
-      "from": 25,
-      "to": 86,
+      "from": 27,
+      "to": 106,
       "label": "uses"
     },
     {
-      "from": 28,
-      "to": 95,
+      "from": 27,
+      "to": 88,
       "label": "uses"
     },
     {
-      "from": 29,
-      "to": 95,
+      "from": 30,
+      "to": 97,
       "label": "uses"
     },
     {
-      "from": 44,
-      "to": 92,
+      "from": 31,
+      "to": 97,
       "label": "uses"
     },
     {
-      "from": 52,
-      "to": 89,
-      "label": "uses"
-    },
-    {
-      "from": 53,
-      "to": 86,
-      "label": "uses"
-    },
-    {
-      "from": 53,
-      "to": 89,
+      "from": 46,
+      "to": 94,
       "label": "uses"
     },
     {
       "from": 54,
-      "to": 86,
+      "to": 91,
       "label": "uses"
     },
     {
       "from": 55,
-      "to": 92,
+      "to": 88,
       "label": "uses"
     },
     {
       "from": 55,
-      "to": 10,
+      "to": 91,
       "label": "uses"
     },
     {
       "from": 56,
-      "to": 92,
-      "label": "uses"
-    },
-    {
-      "from": 56,
-      "to": 10,
+      "to": 88,
       "label": "uses"
     },
     {
       "from": 57,
-      "to": 92,
+      "to": 94,
+      "label": "uses"
+    },
+    {
+      "from": 57,
+      "to": 12,
       "label": "uses"
     },
     {
       "from": 58,
-      "to": 92,
+      "to": 94,
+      "label": "uses"
+    },
+    {
+      "from": 58,
+      "to": 12,
       "label": "uses"
     },
     {
       "from": 59,
-      "to": 92,
+      "to": 94,
       "label": "uses"
     },
     {
-      "from": 62,
-      "to": 86,
+      "from": 60,
+      "to": 94,
       "label": "uses"
     },
     {
-      "from": 63,
-      "to": 92,
+      "from": 61,
+      "to": 94,
       "label": "uses"
     },
     {
-      "from": 71,
-      "to": 91,
+      "from": 64,
+      "to": 88,
       "label": "uses"
     },
     {
-      "from": 72,
-      "to": 92,
+      "from": 65,
+      "to": 94,
       "label": "uses"
     },
     {
-      "from": 72,
-      "to": 86,
-      "label": "uses"
-    },
-    {
-      "from": 74,
-      "to": 91,
+      "from": 73,
+      "to": 93,
       "label": "uses"
     },
     {
       "from": 74,
-      "to": 86,
+      "to": 94,
+      "label": "uses"
+    },
+    {
+      "from": 74,
+      "to": 88,
+      "label": "uses"
+    },
+    {
+      "from": 76,
+      "to": 93,
+      "label": "uses"
+    },
+    {
+      "from": 76,
+      "to": 88,
+      "label": "uses"
+    },
+    {
+      "from": 136,
+      "to": 165,
+      "label": "uses"
+    },
+    {
+      "from": 136,
+      "to": 173,
+      "label": "uses"
+    },
+    {
+      "from": 136,
+      "to": 170,
+      "label": "uses"
+    },
+    {
+      "from": 136,
+      "to": 74,
+      "label": "uses"
+    },
+    {
+      "from": 136,
+      "to": 32,
+      "label": "uses"
+    },
+    {
+      "from": 136,
+      "to": 169,
+      "label": "uses"
+    },
+    {
+      "from": 137,
+      "to": 170,
+      "label": "uses"
+    },
+    {
+      "from": 137,
+      "to": 165,
+      "label": "uses"
+    },
+    {
+      "from": 137,
+      "to": 173,
+      "label": "uses"
+    },
+    {
+      "from": 138,
+      "to": 170,
+      "label": "uses"
+    },
+    {
+      "from": 138,
+      "to": 173,
+      "label": "uses"
+    },
+    {
+      "from": 138,
+      "to": 169,
+      "label": "uses"
+    },
+    {
+      "from": 139,
+      "to": 169,
+      "label": "uses"
+    },
+    {
+      "from": 146,
+      "to": 27,
+      "label": "uses"
+    },
+    {
+      "from": 149,
+      "to": 173,
+      "label": "uses"
+    },
+    {
+      "from": 149,
+      "to": 172,
+      "label": "uses"
+    },
+    {
+      "from": 149,
+      "to": 175,
+      "label": "uses"
+    },
+    {
+      "from": 149,
+      "to": 150,
+      "label": "uses"
+    },
+    {
+      "from": 149,
+      "to": 136,
+      "label": "uses"
+    },
+    {
+      "from": 149,
+      "to": 162,
+      "label": "uses"
+    },
+    {
+      "from": 150,
+      "to": 168,
+      "label": "uses"
+    },
+    {
+      "from": 157,
+      "to": 39,
+      "label": "uses"
+    },
+    {
+      "from": 159,
+      "to": 165,
+      "label": "uses"
+    },
+    {
+      "from": 160,
+      "to": 165,
+      "label": "uses"
+    },
+    {
+      "from": 160,
+      "to": 164,
+      "label": "uses"
+    },
+    {
+      "from": 161,
+      "to": 164,
+      "label": "uses"
+    },
+    {
+      "from": 162,
+      "to": 168,
+      "label": "uses"
+    },
+    {
+      "from": 162,
+      "to": 170,
+      "label": "uses"
+    },
+    {
+      "from": 162,
+      "to": 173,
+      "label": "uses"
+    },
+    {
+      "from": 162,
+      "to": 171,
+      "label": "uses"
+    },
+    {
+      "from": 162,
+      "to": 172,
+      "label": "uses"
+    },
+    {
+      "from": 162,
+      "to": 27,
+      "label": "uses"
+    },
+    {
+      "from": 163,
+      "to": 168,
+      "label": "uses"
+    },
+    {
+      "from": 163,
+      "to": 170,
+      "label": "uses"
+    },
+    {
+      "from": 163,
+      "to": 172,
+      "label": "uses"
+    },
+    {
+      "from": 175,
+      "to": 167,
       "label": "uses"
     }
   ],
   "symbolIdIndex": [
-    "E:/git repos/dev-agent/dep-graph/src/cli.ts::toJSON::476",
-    "E:/git repos/dev-agent/dep-graph/src/cli.ts::stderrFilePath::540",
-    "E:/git repos/dev-agent/dep-graph/src/cli.ts::writeStdoutLine::585",
-    "E:/git repos/dev-agent/dep-graph/src/cli.ts::writeJSONLine::671",
-    "E:/git repos/dev-agent/dep-graph/src/cli.ts::writeStderrLine::748",
-    "E:/git repos/dev-agent/dep-graph/src/cli.ts::writeError::1039",
-    "E:/git repos/dev-agent/dep-graph/src/cli.ts::compactGraphWithSymbols::1280",
-    "E:/git repos/dev-agent/dep-graph/src/cli.ts::compactSymbolsOnly::2546",
-    "E:/git repos/dev-agent/dep-graph/src/cli.ts::main::3459",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::collectModuleSpecifiersFromSource::885",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::collectGraph::4652",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::mapLimit::5266",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::edgeTargetToString::8169",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::buildNodeIdMap::8271",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::graphToDOT::8832",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::graphToMermaid::10058",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::AstGrepHit::10913",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::astGrep::11050",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::SymbolNodeKind::12454",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::SymbolNode::12611",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::SymbolEdge::12717",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::SymbolGraph::12789",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::defNodeId::12880",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::nodeForDef::13172",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::buildSymbolGraph::13462",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::buildSymbolGraphDetailed::17197",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::graphToMermaidSymbols::38508",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::graphToDOTSymbols::39772",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::graphToMermaidSymbolsWithFiles::41186",
-    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::graphToDOTSymbolsWithFiles::43946",
+    "E:/git repos/dev-agent/dep-graph/src/agent-tools.ts::tool_impactJSON::247",
+    "E:/git repos/dev-agent/dep-graph/src/agent-tools.ts::tool_impactFromDiffText::1020",
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::toJSON::501",
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::stderrFilePath::565",
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::writeStdoutLine::610",
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::writeJSONLine::696",
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::writeStderrLine::773",
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::writeError::1064",
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::compactGraphWithSymbols::1305",
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::compactSymbolsOnly::2571",
+    "E:/git repos/dev-agent/dep-graph/src/cli.ts::main::3484",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::collectModuleSpecifiersFromSource::960",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::collectGraph::4713",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::mapLimit::5327",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::edgeTargetToString::8223",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::buildNodeIdMap::8325",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::graphToDOT::8886",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::graphToMermaid::10112",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::AstGrepHit::10967",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::astGrep::11104",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::SymbolNodeKind::12501",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::SymbolNode::12658",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::SymbolEdge::12764",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::SymbolGraph::12836",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::defNodeId::12927",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::nodeForDef::13219",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::buildSymbolGraph::13525",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::buildSymbolGraphDetailed::17216",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::graphToMermaidSymbols::38323",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::graphToDOTSymbols::39587",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::graphToMermaidSymbolsWithFiles::41001",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::graphToDOTSymbolsWithFiles::43761",
     "E:/git repos/dev-agent/dep-graph/src/indexer.ts::SymbolDef::857",
     "E:/git repos/dev-agent/dep-graph/src/indexer.ts::ExportEntry::960",
     "E:/git repos/dev-agent/dep-graph/src/indexer.ts::ImportBinding::1315",
@@ -1599,24 +2977,24 @@
     "E:/git repos/dev-agent/dep-graph/src/indexer.ts::parseFile::37444",
     "E:/git repos/dev-agent/dep-graph/src/indexer.ts::buildProjectIndex::38037",
     "E:/git repos/dev-agent/dep-graph/src/indexer.ts::buildProjectIndexFromFiles::41798",
-    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::cacheKey::45637",
-    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::resolveExport::45724",
-    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::_resolve::45876",
-    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::GoToRequest::47330",
-    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::GoToResult::47404",
-    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::goToDefinition::47655",
-    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::toModuleRef::54625",
-    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::resolveImported::54804",
-    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::BindingKind::56302",
-    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::Binding::56445",
-    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::ScopeIndex::56574",
-    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::buildScopeIndexFromSource::56658",
-    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::Reference::61531",
-    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::sameDef::61672",
-    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::rangeContains::61846",
-    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::findReferences::62215",
-    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::__buildSymbolGraphDetailedCompat::66670",
-    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::collectNamespaceMemberRefs::66979",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::cacheKey::45657",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::resolveExport::45744",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::_resolve::45896",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::GoToRequest::47350",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::GoToResult::47424",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::goToDefinition::47675",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::toModuleRef::54645",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::resolveImported::54824",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::BindingKind::56322",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::Binding::56465",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::ScopeIndex::56594",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::buildScopeIndexFromSource::56678",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::Reference::61551",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::sameDef::61692",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::rangeContains::61866",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::findReferences::62235",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::__buildSymbolGraphDetailedCompat::66690",
+    "E:/git repos/dev-agent/dep-graph/src/indexer.ts::collectNamespaceMemberRefs::66999",
     "E:/git repos/dev-agent/dep-graph/src/indexer.ts::helper::24692",
     "E:/git repos/dev-agent/dep-graph/src/languages.ts::IdentifierNodeType::226",
     "E:/git repos/dev-agent/dep-graph/src/languages.ts::LanguageSupport::270",
@@ -1638,44 +3016,89 @@
     "E:/git repos/dev-agent/dep-graph/src/types.ts::EdgeTo::159",
     "E:/git repos/dev-agent/dep-graph/src/types.ts::Edge::260",
     "E:/git repos/dev-agent/dep-graph/src/types.ts::Graph::359",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::Pos::224",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::Range::292",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::sliceText::345",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::unquote::487",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::toRange::797",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::listProjectFiles::1280",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::stripJsLikeComments::1820",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::stripPythonCommentsAndStrings::1978",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::normalizePath::2268",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::ModuleSpecifier::2391",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::extractJsTsSpecifiers::2466",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::extractPythonSpecifiers::3770",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::MatchPathFn::4239",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::tsconfigCache::4296",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::findNearestTsconfig::4378",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::loadNearestTsconfigFor::4800",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::fileExists::5699",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::findWorkspaceRoot::6086",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::loadJSON::6809",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::WorkspacePackageInfo::7004",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::WorkspaceConfig::7120",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::workspaceCache::7219",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::loadWorkspaceConfig::7297",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolvePackageSubpath::9723",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolveWorkspacePackage::10205",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::FileId::12667",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolveSpecifier::12709",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolveFromNodeModules::16084",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::findPythonPackageAnchor::19382",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::isDirectory::19782",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolvePythonModule::19964",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::fileExistsCache::22183",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolveSpecifierCache::22236",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolvePythonModuleCache::22317",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::LangKey::22472",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::parserPools::22517",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::acquireParser::22580",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::releaseParser::22876",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::Pos::217",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::Range::284",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::sliceText::335",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::unquote::473",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::toRange::782",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::listProjectFiles::1244",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::stripJsLikeComments::1812",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::stripPythonCommentsAndStrings::1966",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::normalizePath::2248",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::ModuleSpecifier::2359",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::extractJsTsSpecifiers::2432",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::extractPythonSpecifiers::3709",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::MatchPathFn::4165",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::tsconfigCache::4221",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::findNearestTsconfig::4301",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::loadNearestTsconfigFor::4706",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::fileExists::5572",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::findWorkspaceRoot::5945",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::loadJSON::6646",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::WorkspacePackageInfo::6832",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::WorkspaceConfig::6942",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::workspaceCache::7037",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::loadWorkspaceConfig::7113",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolvePackageSubpath::9465",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolveWorkspacePackage::9931",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::FileId::12324",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolveSpecifier::12364",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolveFromNodeModules::15639",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::findPythonPackageAnchor::18865",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::isDirectory::19250",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolvePythonModule::19423",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::fileExistsCache::21572",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolveSpecifierCache::21624",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::resolvePythonModuleCache::21704",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::LangKey::21853",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::parserPools::21897",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::acquireParser::21958",
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::releaseParser::22242",
+    "E:/git repos/dev-agent/dep-graph/src/impact/analyzer.ts::analyzeImpact::283",
+    "E:/git repos/dev-agent/dep-graph/src/impact/analyzer.ts::seedTransitiveFromFiles::3425",
+    "E:/git repos/dev-agent/dep-graph/src/impact/analyzer.ts::analyzeTransitiveImpact::4836",
+    "E:/git repos/dev-agent/dep-graph/src/impact/analyzer.ts::calculateSeverity::7283",
+    "E:/git repos/dev-agent/dep-graph/src/impact/analyzer.ts::calculateTransitiveSeverity::9661",
+    "E:/git repos/dev-agent/dep-graph/src/impact/analyzer.ts::isTestFile::9946",
+    "E:/git repos/dev-agent/dep-graph/src/impact/context.ts::CandidateTestFile::173",
+    "E:/git repos/dev-agent/dep-graph/src/impact/context.ts::ImpactContext::337",
+    "E:/git repos/dev-agent/dep-graph/src/impact/context.ts::collectImpactContext::1033",
+    "E:/git repos/dev-agent/dep-graph/src/impact/context.ts::collectFileSubgraph::1640",
+    "E:/git repos/dev-agent/dep-graph/src/impact/context.ts::collectSymbolNeighbors::3835",
+    "E:/git repos/dev-agent/dep-graph/src/impact/context.ts::listCandidateTestFiles::6715",
+    "E:/git repos/dev-agent/dep-graph/src/impact/context.ts::isTestFile::9453",
+    "E:/git repos/dev-agent/dep-graph/src/impact/index.ts::analyzeImpactFromDiff::388",
+    "E:/git repos/dev-agent/dep-graph/src/impact/map.ts::locateChangedSymbols::265",
+    "E:/git repos/dev-agent/dep-graph/src/impact/map.ts::findNodesInLines::2035",
+    "E:/git repos/dev-agent/dep-graph/src/impact/map.ts::walk::2141",
+    "E:/git repos/dev-agent/dep-graph/src/impact/map.ts::NodeClassification::2638",
+    "E:/git repos/dev-agent/dep-graph/src/impact/map.ts::classifyChangedNode::2765",
+    "E:/git repos/dev-agent/dep-graph/src/impact/map.ts::isTypeOnlyDeclaration::3679",
+    "E:/git repos/dev-agent/dep-graph/src/impact/map.ts::findDeclarationNameInAncestors::4165",
+    "E:/git repos/dev-agent/dep-graph/src/impact/map.ts::findSymbolHandleForNode::4433",
+    "E:/git repos/dev-agent/dep-graph/src/impact/map.ts::isExported::5510",
+    "E:/git repos/dev-agent/dep-graph/src/impact/parse.ts::parseUnifiedDiff::77",
+    "E:/git repos/dev-agent/dep-graph/src/impact/parse.ts::parseFileChange::633",
+    "E:/git repos/dev-agent/dep-graph/src/impact/parse.ts::parseHunk::3098",
+    "E:/git repos/dev-agent/dep-graph/src/impact/report.ts::buildImpactReport::302",
+    "E:/git repos/dev-agent/dep-graph/src/impact/report.ts::buildCompactReport::2804",
+    "E:/git repos/dev-agent/dep-graph/src/impact/types.ts::Hunk::151",
+    "E:/git repos/dev-agent/dep-graph/src/impact/types.ts::FileChange::296",
+    "E:/git repos/dev-agent/dep-graph/src/impact/types.ts::Diff::456",
+    "E:/git repos/dev-agent/dep-graph/src/impact/types.ts::DiffProviderOptions::529",
+    "E:/git repos/dev-agent/dep-graph/src/impact/types.ts::ChangedSymbol::767",
+    "E:/git repos/dev-agent/dep-graph/src/impact/types.ts::ImpactReason::969",
+    "E:/git repos/dev-agent/dep-graph/src/impact/types.ts::ImpactItem::1292",
+    "E:/git repos/dev-agent/dep-graph/src/impact/types.ts::ImpactReport::2115",
+    "E:/git repos/dev-agent/dep-graph/src/impact/types.ts::CompactImpactReport::2569",
+    "E:/git repos/dev-agent/dep-graph/src/impact/types.ts::ImpactOptions::3796",
+    "E:/git repos/dev-agent/dep-graph/src/impact/providers/base.ts::DiffProvider::131",
+    "E:/git repos/dev-agent/dep-graph/src/impact/providers/base.ts::getDiff::228",
+    "E:/git repos/dev-agent/dep-graph/src/impact/providers/base.ts::createProvider::386",
+    "E:/git repos/dev-agent/dep-graph/src/impact/providers/base.ts::GitDiffProvider::796",
+    "E:/git repos/dev-agent/dep-graph/src/impact/providers/base.ts::GitHubDiffProvider::1327",
+    "E:/git repos/dev-agent/dep-graph/src/impact/providers/base.ts::RawDiffProvider::2030",
+    "E:/git repos/dev-agent/dep-graph/src/agent-tools.ts::analyzeImpactFromDiff::import",
     "E:/git repos/dev-agent/dep-graph/src/cli.ts::path::import",
     "E:/git repos/dev-agent/dep-graph/src/cli.ts::fs::import",
     "E:/git repos/dev-agent/dep-graph/src/cli.ts::fsp::import",
@@ -1693,6 +3116,9 @@
     "E:/git repos/dev-agent/dep-graph/src/graphs.ts::releaseParser::import",
     "E:/git repos/dev-agent/dep-graph/src/graphs.ts::extractPythonSpecifiers::import",
     "E:/git repos/dev-agent/dep-graph/src/graphs.ts::normalizePath::import",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::type { ImportBinding::import",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::ProjectIndex::import",
+    "E:/git repos/dev-agent/dep-graph/src/graphs.ts::SymbolDef::import",
     "E:/git repos/dev-agent/dep-graph/src/indexer.ts::fs::import",
     "E:/git repos/dev-agent/dep-graph/src/indexer.ts::fsp::import",
     "E:/git repos/dev-agent/dep-graph/src/indexer.ts::path::import",
@@ -1715,6 +3141,52 @@
     "E:/git repos/dev-agent/dep-graph/src/util.ts::path::import",
     "E:/git repos/dev-agent/dep-graph/src/util.ts::fg::import",
     "E:/git repos/dev-agent/dep-graph/src/util.ts::createMatchPath::import",
-    "E:/git repos/dev-agent/dep-graph/src/util.ts::Parser::import"
+    "E:/git repos/dev-agent/dep-graph/src/util.ts::Parser::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/analyzer.ts::type { FileId }::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/analyzer.ts::type { ProjectIndex::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/analyzer.ts::SymbolDef::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/analyzer.ts::type { ChangedSymbol::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/analyzer.ts::ImpactItem::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/analyzer.ts::ImpactReason::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/analyzer.ts::ImpactOptions::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/analyzer.ts::FileChange::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/analyzer.ts::findReferences::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/context.ts::type { FileId }::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/context.ts::type { ProjectIndex }::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/context.ts::buildSymbolGraphDetailed::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/index.ts::type { ProjectIndex }::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/index.ts::type { ImpactReport::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/index.ts::CompactImpactReport::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/index.ts::ImpactOptions::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/index.ts::getDiff::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/index.ts::locateChangedSymbols::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/index.ts::analyzeImpact::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/index.ts::buildImpactReport::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/map.ts::type { FileId::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/map.ts::Range::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/map.ts::type { ProjectIndex::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/map.ts::SymbolHandle::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/map.ts::type { FileChange::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/map.ts::ChangedSymbol::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/map.ts::languageForFile::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/parse.ts::type { Diff::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/parse.ts::FileChange::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/parse.ts::Hunk::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/report.ts::type { FileId }::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/report.ts::type { ProjectIndex }::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/report.ts::type { FileChange::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/report.ts::ChangedSymbol::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/report.ts::ImpactItem::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/report.ts::ImpactReport::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/report.ts::CompactImpactReport::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/report.ts::ImpactOptions::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/report.ts::buildSymbolGraphDetailed::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/types.ts::type { FileId::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/types.ts::Range::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/types.ts::type { SymbolHandle::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/types.ts::SymbolDef::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/providers/base.ts::type { Diff::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/providers/base.ts::DiffProviderOptions::import",
+    "E:/git repos/dev-agent/dep-graph/src/impact/providers/base.ts::parseUnifiedDiff::import"
   ]
 }

@@ -5,6 +5,8 @@ import { locateChangedSymbols } from "./map.js";
 import { analyzeImpact } from "./analyzer.js";
 import { buildImpactReport } from "./report.js";
 
+export * from "./types.js";
+
 export async function analyzeImpactFromDiff(
   projectRoot: string,
   index: ProjectIndex,

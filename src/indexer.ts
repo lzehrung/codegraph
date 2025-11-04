@@ -1360,7 +1360,7 @@ export async function buildProjectIndexFromFiles(
   opts?: BuildOptions
 ): Promise<ProjectIndex> {
   const files = Array.from(
-    new Set((inputFiles || []).filter(Boolean).map((f) => path.resolve(f)))
+    new Set((inputFiles || []).filter(Boolean).map((f) => path.resolve(f).replace(/\\/g, "/")))
   );
   if (files.length === 0) {
     console.warn(`Warning: No files provided for indexing in ${projectRoot}`);

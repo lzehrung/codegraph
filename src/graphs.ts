@@ -19,6 +19,7 @@ import { stripJsLikeComments, acquireParser, releaseParser } from "./util.js";
 // Intentionally compile only the imports query locally to avoid compiling
 // unrelated queries (which may differ per grammar) and causing warnings.
 import { extractJsTsSpecifiers, extractPythonSpecifiers, normalizePath } from "./util.js";
+import type { ImportBinding, ProjectIndex, SymbolDef } from "./index.js";
 
 // Shared types imported from ./types
 
@@ -32,7 +33,7 @@ export function collectModuleSpecifiersFromSource(
 
   if (support.id === "python") {
     try {
-      const key = "py" as any;
+      const key = "py";
       const parser = acquireParser(lang, key);
       try {
         parser.setLanguage(lang);
@@ -89,7 +90,7 @@ export function collectModuleSpecifiersFromSource(
   }
 
   try {
-    const key = (support.id === "python" ? "py" : support.id === "js" ? "js" : "ts") as any;
+    const key = (support.id === "python" ? "py" : support.id === "js" ? "js" : "ts");
     const parser = acquireParser(lang, key);
     try {
       parser.setLanguage(lang);
@@ -191,7 +192,7 @@ export async function collectGraph(
         parsed?.tree ? { tree: parsed.tree, fast } : { fast }
       );
       const { matchPath } =
-        sup.id === "ts" ? await loadNearestTsconfigFor(file) : ({} as any);
+        sup.id === "ts" ? await loadNearestTsconfigFor(file) : ({});
 
       const edges: Edge[] = [];
       for (const { spec, typeOnly } of specs) {
@@ -345,7 +346,7 @@ export async function astGrep(
     try {
       const lang = languageForFile(file);
       const sup = supportForFile(file);
-      const key = (sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts") as any;
+      const key = (sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts");
       const parser = acquireParser(lang, key);
       parser.setLanguage(lang);
       const src = await fsp.readFile(file, "utf8");
@@ -411,17 +412,17 @@ function nodeForDef(def: {
   file: string;
   localName: string;
   kind: string;
-  range?: any;
+  range?: { start: { index: number } };
 }): SymbolNode {
   return {
     id: defNodeId(def),
     file: def.file,
     name: def.localName,
-    kind: (def.kind as any) ?? ("variable" as SymbolNodeKind),
+    kind: (def.kind as SymbolNodeKind) ?? "variable",
   };
 }
 
-export async function buildSymbolGraph(index: any): Promise<SymbolGraph> {
+export async function buildSymbolGraph(index: ProjectIndex): Promise<SymbolGraph> {
   const nodes = new Map<string, SymbolNode>();
   const edges: SymbolEdge[] = [];
 
@@ -456,22 +457,22 @@ export async function buildSymbolGraph(index: any): Promise<SymbolGraph> {
           });
         if (targetMod) {
           let exp = targetMod.exports.find(
-            (e: any) => e.type === "local" && e.exportedAs === imp.imported
+            (e) => e.type === "local" && e.exportedAs === imp.imported
           );
           if (!exp) {
             // fallback: match local by name
             const loc = targetMod.locals.find(
-              (l: any) => l.localName === imp.imported
+              (l) => l.localName === imp.imported
             );
             if (loc)
               exp = {
                 type: "local",
                 exportedAs: imp.imported,
                 target: loc,
-              } as any;
+              };
           }
-          if (exp && (exp as any).type === "local") {
-            const def = (exp as any).target;
+          if (exp && exp.type === "local") {
+            const def = exp.target;
             const toId = defNodeId(def);
             if (!nodes.has(toId)) nodes.set(toId, nodeForDef(def));
             edges.push({ from: aliasId, to: toId, label: imp.imported });
@@ -489,12 +490,12 @@ export async function buildSymbolGraph(index: any): Promise<SymbolGraph> {
         if (targetMod) {
           // try explicit default export; else fall back to a single export
           let exp = targetMod.exports.find(
-            (e: any) => e.type === "local" && e.exportedAs === "default"
+            (e) => e.type === "local" && e.exportedAs === "default"
           );
           if (!exp)
-            exp = targetMod.exports.find((e: any) => e.type === "local");
-          if (exp) {
-            const def = (exp as any).target;
+            exp = targetMod.exports.find((e) => e.type === "local");
+          if (exp && exp.type === "local") {
+            const def = exp.target;
             const toId = defNodeId(def);
             if (!nodes.has(toId)) nodes.set(toId, nodeForDef(def));
             edges.push({ from: aliasId, to: toId, label: "default" });
@@ -511,16 +512,16 @@ export async function buildSymbolGraph(index: any): Promise<SymbolGraph> {
           });
         if (targetMod) {
           const exportedLocals = targetMod.exports.filter(
-            (e: any) => e.type === "local"
+            (e) => e.type === "local"
           );
           for (const e of exportedLocals) {
-            const def = (e as any).target;
+            const def = e.target;
             const toId = defNodeId(def);
             if (!nodes.has(toId)) nodes.set(toId, nodeForDef(def));
             edges.push({
               from: aliasId,
               to: toId,
-              label: (e as any).exportedAs,
+              label: e.exportedAs,
             });
           }
         }
@@ -532,7 +533,7 @@ export async function buildSymbolGraph(index: any): Promise<SymbolGraph> {
 }
 
 export async function buildSymbolGraphDetailed(
-  index: any,
+  index: ProjectIndex,
   opts?: {
     scope?: "all" | "imported";
     maxEdges?: number;
@@ -575,7 +576,7 @@ export async function buildSymbolGraphDetailed(
     return true;
   };
 
-  const isIdentifierType = (sup: any, t: string) =>
+  const isIdentifierType = (sup: LanguageSupport, t: string) =>
     Array.isArray(sup.nodeTypes?.identifier) &&
     sup.nodeTypes.identifier.includes(t);
 
@@ -583,11 +584,11 @@ export async function buildSymbolGraphDetailed(
   const resolveExportFrom = (
     file: string,
     exportedName: string,
-    cache: Map<string, any> = new Map()
-  ): any | null => {
+    cache: Map<string, SymbolDef | null> = new Map()
+  ): SymbolDef | null => {
     const normalizedFile = file.replace(/\\/g, "/");
     const key = `${normalizedFile}::${exportedName}`;
-    if (cache.has(key)) return cache.get(key);
+    if (cache.has(key)) return cache.get(key) ?? null;
     const mod = index.byFile.get(normalizedFile);
     if (!mod) {
       cache.set(key, null);
@@ -596,26 +597,26 @@ export async function buildSymbolGraphDetailed(
     // Direct local export
     for (const e of mod.exports)
       if (
-        (e as any).type === "local" &&
-        (e as any).exportedAs === exportedName
+        e.type === "local" &&
+        e.exportedAs === exportedName
       ) {
-        const res = (e as any).target;
+        const res = e.target;
         cache.set(key, res);
         return res;
       }
     // Named re-export: export { x as y } from '...'
     for (const e of mod.exports)
       if (
-        (e as any).type === "reexport" &&
-        (e as any).exportedAs === exportedName &&
-        typeof (e as any).fromModule === "string"
+        e.type === "reexport" &&
+        e.exportedAs === exportedName &&
+        typeof e.fromModule === "string"
       ) {
         const down =
           resolveExportFrom(
-            (e as any).fromModule,
-            (e as any).sourceSpecifier || exportedName,
+            e.fromModule,
+            e.sourceSpecifier || exportedName,
             cache
-          ) || resolveExportFrom((e as any).fromModule, exportedName, cache);
+          ) || resolveExportFrom(e.fromModule, exportedName, cache);
         if (down) {
           cache.set(key, down);
           return down;
@@ -624,11 +625,11 @@ export async function buildSymbolGraphDetailed(
     // export * from '...'
     for (const e of mod.exports)
       if (
-        (e as any).type === "exportStar" &&
-        typeof (e as any).fromModule === "string"
+        e.type === "exportStar" &&
+        typeof e .fromModule === "string"
       ) {
         const down = resolveExportFrom(
-          (e as any).fromModule,
+          e.fromModule,
           exportedName,
           cache
         );
@@ -638,7 +639,7 @@ export async function buildSymbolGraphDetailed(
         }
       }
     // Fallback: treat local with same name as exported (Python or missing export metadata)
-    const local = (mod.locals as any[]).find(
+    const local = (mod.locals).find(
       (l) => l.localName === exportedName
     );
     if (local) {
@@ -651,12 +652,12 @@ export async function buildSymbolGraphDetailed(
 
   for (const [file, mod] of index.byFile) {
     if (scopeMode === "imported") {
-      const hasFuncOrClass = (mod.locals as any[]).some(
+      const hasFuncOrClass = (mod.locals).some(
         (l) => l.kind === "function" || l.kind === "class"
       );
       const isImportedOrImports =
         importedByOthers.has(normalizePath(file)) ||
-        (mod.imports as any[]).length > 0;
+        (mod.imports).length > 0;
       if (!(hasFuncOrClass && isImportedOrImports)) continue;
     }
     try {
@@ -668,10 +669,10 @@ export async function buildSymbolGraphDetailed(
       const tree = parser.parse(src);
 
       // Build mapping from imported local alias -> target def (best-effort)
-      const aliasToTargetDef = new Map<string, any>();
+      const aliasToTargetDef = new Map<string, SymbolDef>();
       // And for namespace imports: alias -> target module file path (string)
       const aliasToTargetModule = new Map<string, string>();
-      const targetModOf = (imp: any) => {
+      const targetModOf = (imp: ImportBinding) => {
         const targetFile =
           typeof imp.resolved === "string"
             ? imp.resolved.replace(/\\/g, "/")
@@ -689,12 +690,12 @@ export async function buildSymbolGraphDetailed(
         if (imp.kind === "named") {
           const def =
             resolveExportFrom(targetFile, imp.imported) ||
-            tmod.locals.find((l: any) => l.localName === imp.imported);
+            tmod.locals.find((l) => l.localName === imp.imported);
           if (def) aliasToTargetDef.set(imp.local, def);
         } else if (imp.kind === "default") {
           const def =
             resolveExportFrom(targetFile, "default") ||
-            (tmod.exports.find((e: any) => e.type === "local")?.target as any);
+            (tmod.exports.find((e) => e.type === "local")?.target);
           if (def) aliasToTargetDef.set(imp.local, def);
           // Also treat default imports as potential namespace holders for member usage (u.helper())
           aliasToTargetModule.set(imp.local, targetFile);
@@ -704,109 +705,105 @@ export async function buildSymbolGraphDetailed(
       }
 
       // Collect function-like declarations (JS/TS: function_declaration, arrow/function expressions bound to vars; Python: function_definition)
-      const functionNodes: Array<{ name: string; node: any; def: any }> = [];
+      const functionNodes: Array<{ name: string; node: Parser.SyntaxNode; def: SymbolDef }> = [];
       // Collect simple constant string bindings for resolving computed member keys, e.g., const k = "x"; obj[k]
       const constStringOf = new Map<string, string>();
-      const collectConsts = (n: any) => {
+      const collectConsts = (n: Parser.SyntaxNode) => {
         if (n.type === "variable_declarator") {
-          const nameNode = (n as any).childForFieldName("name");
-          const valueNode = (n as any).childForFieldName("value");
-          if (
-            nameNode &&
-            valueNode &&
-            String((valueNode as any).type) === "string"
-          ) {
+          const nameNode = n.childForFieldName("name");
+          const valueNode = n.childForFieldName("value");
+          if (nameNode && valueNode && valueNode.type === "string") {
             const name = sliceText(nameNode, src);
-            const val = unquote(sliceText(valueNode, src)) as any as string;
+            const val = unquote(sliceText(valueNode, src));
             constStringOf.set(name, val);
           }
         }
-        for (const ch of (n as any).namedChildren ?? []) collectConsts(ch);
+        for (const ch of n.namedChildren) collectConsts(ch);
       };
-      collectConsts((tree as any).rootNode);
+      collectConsts(tree.rootNode);
 
       // Node type helpers (must be initialized before any walkers that reference them)
       const memberExpressionType =
-        (sup.nodeTypes as any).memberExpression ?? "member_expression";
-      const propertyIdentifierTypes: string[] = (sup.nodeTypes as any)
+        sup.nodeTypes.memberExpression ?? "member_expression";
+      const propertyIdentifierTypes: string[] = sup.nodeTypes
         .propertyIdentifier ?? ["property_identifier"];
       const optionalMemberTypes = new Set<string>([
         memberExpressionType,
         "optional_member_expression",
         "subscript_expression",
         "optional_chain",
-        (sup as any).id === "python" ? "attribute" : "",
+        sup.id === "python" ? "attribute" : "",
       ]);
-      const walkCollect = (n: any) => {
+      const walkCollect = (n: Parser.SyntaxNode) => {
         if (
           n.type === "function_declaration" ||
           n.type === "function_definition"
         ) {
-          const nameNode = (n as any).childForFieldName("name");
+          const nameNode = n.childForFieldName("name");
           const name = nameNode ? sliceText(nameNode, src) : undefined;
           if (name) {
-            const def = mod.locals.find((d: any) => d.localName === name);
+            const def = mod.locals.find((d) => d.localName === name);
             if (def) functionNodes.push({ name, node: n, def });
           }
         } else if (n.type === "variable_declarator") {
-          const nameNode = (n as any).childForFieldName("name");
-          const valueNode = (n as any).childForFieldName("value");
+          const nameNode = n.childForFieldName("name");
+          const valueNode = n.childForFieldName("value");
           if (nameNode && valueNode) {
-            const vt = String((valueNode as any).type || "");
+            const vt = String(valueNode.type || "");
             if (/arrow_function|function/.test(vt)) {
               const name = sliceText(nameNode, src);
-              const def = mod.locals.find((d: any) => d.localName === name);
+              const def = mod.locals.find((d) => d.localName === name);
               if (def) functionNodes.push({ name, node: valueNode, def });
             }
           }
         } else if (n.type === "assignment_expression") {
-          const left = (n as any).childForFieldName("left");
-          const right = (n as any).childForFieldName("right");
+          const left = n.childForFieldName("left");
+          const right = n.childForFieldName("right");
           if (left && right) {
-            const vt = String((right as any).type || "");
+            const vt = String(right.type || "");
             if (/arrow_function|function/.test(vt)) {
               let name: string | null = null;
-              if ((left as any).type === memberExpressionType) {
-                const prop = (left as any).child(2);
+              if (left.type === memberExpressionType) {
+                const prop = left.child(2);
                 if (prop && propertyIdentifierTypes.includes(prop.type))
                   name = sliceText(prop, src);
-              } else if ((left as any).type === "identifier") {
+              } else if (left.type === "identifier") {
                 name = sliceText(left, src);
               }
               if (name) {
-                const def = mod.locals.find((d: any) => d.localName === name);
+                const def = mod.locals.find((d) => d.localName === name);
                 if (def) functionNodes.push({ name, node: right, def });
               }
             }
           }
         }
-        for (const ch of (n as any).namedChildren ?? []) walkCollect(ch);
+        for (const ch of n.namedChildren) walkCollect(ch);
       };
-      walkCollect((tree as any).rootNode);
+      walkCollect(tree.rootNode);
 
       // For each function, look for identifier occurrences of imported aliases in its subtree
       const scanForAliasUse = (
-        node: any,
-        cb: (name: string, atNode: any) => void
+        node: Parser.SyntaxNode,
+        cb: (name: string, atNode: Parser.SyntaxNode) => void
       ) => {
         if (isIdentifierType(sup, node.type)) {
           const name = sliceText(node, src);
           cb(name, node);
         }
-        for (const ch of (node as any).namedChildren ?? [])
+        for (const ch of node.namedChildren)
           scanForAliasUse(ch, cb);
       };
 
-      const tryResolveChain = (node: any, fromId?: string) => {
+      const tryResolveChain = (node: Parser.SyntaxNode, fromId?: string) => {
         const names: string[] = [];
-        let cur: any = node;
-        let base: any = null;
-        const pushProp = (p: any) => {
+        let cur: Parser.SyntaxNode | null = node;
+        let base: Parser.SyntaxNode | null = null;
+        const pushProp = (p: Parser.SyntaxNode | null) => {
           if (!p) return;
           if (propertyIdentifierTypes.includes(p.type))
             names.push(sliceText(p, src));
           else if (p.type === "string")
-            names.push(unquote(sliceText(p, src)) as any);
+            names.push(unquote(sliceText(p, src)));
           else if (p.type === "identifier") {
             const keyName = sliceText(p, src);
             const v = constStringOf.get(keyName);
@@ -826,9 +823,9 @@ export async function buildSymbolGraphDetailed(
           ) {
             base = cur.child(0) ?? base;
             const prop =
-              (cur as any).childForFieldName?.("property") ??
+              cur.childForFieldName?.("property") ??
               cur.child(2) ??
-              (cur as any).childForFieldName?.("attribute");
+              cur.childForFieldName?.("attribute");
             pushProp(prop);
             cur = base;
           } else if (cur.type === "optional_chain") {
@@ -842,18 +839,18 @@ export async function buildSymbolGraphDetailed(
         const targetFile = aliasToTargetModule.get(alias);
         if (!targetFile || names.length === 0) return false;
         let file: string | null = targetFile;
-        let targetDef: any | null = null;
+        let targetDef: SymbolDef | null = null;
         for (const seg of names.reverse()) {
           if (!file) break;
           // Check if seg is a namespace re-export (export * as seg from '...')
           const m = index.byFile.get(file.replace(/\\/g, "/"));
           const nsReexport = m?.exports.find(
-            (e: any) =>
+            (e) =>
               e.type === "reexport" &&
               e.exportedAs === seg &&
               e.sourceSpecifier === ""
-          ) as any;
-          if (nsReexport && typeof nsReexport.fromModule === "string") {
+          );
+          if (nsReexport && nsReexport.type === "reexport" && typeof nsReexport.fromModule === "string") {
             file = nsReexport.fromModule.replace(/\\/g, "/");
             continue;
           }
@@ -875,25 +872,25 @@ export async function buildSymbolGraphDetailed(
       };
 
       // Collect Python decorators on functions and add uses edges
-      if ((sup as any).id === "python") {
-        const addDecoratorUses = (n: any) => {
+      if (sup.id === "python") {
+        const addDecoratorUses = (n: Parser.SyntaxNode) => {
           if (n.type === "function_definition") {
-            const nameNode = (n as any).childForFieldName("name");
+            const nameNode = n.childForFieldName("name");
             if (nameNode) {
               const name = sliceText(nameNode, src);
-              const def = mod.locals.find((d: any) => d.localName === name);
+              const def = mod.locals.find((d) => d.localName === name);
               if (def) {
                 const fromId = defNodeId(def);
                 if (!nodes.has(fromId)) nodes.set(fromId, nodeForDef(def));
                 // Python decorators appear before the function; walk preceding siblings to find attributes
-                let prev = (n as any).previousSibling;
+                let prev = n.previousSibling;
                 while (prev) {
                   if (prev.type === "decorated_definition") {
-                    for (const d of (prev as any).namedChildren ?? []) {
+                    for (const d of prev.namedChildren) {
                       if (d.type === "decorator") {
                         const expr =
-                          (d as any).childForFieldName?.("name") ??
-                          (d as any).child(1);
+                          d.childForFieldName?.("name") ??
+                          d.child(1);
                         if (expr) tryResolveChain(expr, fromId);
                       } else if (d.type === "attribute") {
                         tryResolveChain(d, fromId);
@@ -901,18 +898,18 @@ export async function buildSymbolGraphDetailed(
                     }
                   } else if (prev.type === "decorator") {
                     const expr =
-                      (prev as any).childForFieldName?.("name") ??
-                      (prev as any).child(1);
+                      prev.childForFieldName?.("name") ??
+                      prev.child(1);
                     if (expr) tryResolveChain(expr, fromId);
                   }
-                  prev = (prev as any).previousSibling;
+                  prev = prev.previousSibling;
                 }
               }
             }
           }
-          for (const ch of (n as any).namedChildren ?? []) addDecoratorUses(ch);
+          for (const ch of n.namedChildren) addDecoratorUses(ch);
         };
-        addDecoratorUses((tree as any).rootNode);
+        addDecoratorUses(tree.rootNode);
       }
 
       for (const fn of functionNodes) {
@@ -920,22 +917,22 @@ export async function buildSymbolGraphDetailed(
         if (!nodes.has(fromId)) nodes.set(fromId, nodeForDef(fn.def));
         const seenAliases = new Set<string>();
         if (!membersOnly)
-          scanForAliasUse(fn.node, (name: string, atNode: any) => {
+          scanForAliasUse(fn.node, (name: string, atNode: Parser.SyntaxNode) => {
             if (seenAliases.has(name)) return;
-            let target: any = aliasToTargetDef.get(name);
+            let target: SymbolDef | null = aliasToTargetDef.get(name) ?? null;
             if (!target) {
               const modFile = aliasToTargetModule.get(name);
               if (modFile) {
                 // If used as a member (u.helper), prefer that member name
                 let exportedName: string | null = null;
-                const p = (atNode as any).parent;
+                const p = atNode.parent;
                 if (
                   p &&
                   (p.type === memberExpressionType ||
                     p.type === "optional_member_expression")
                 ) {
                   const prop =
-                    (p as any).childForFieldName?.("property") ?? p.child(2);
+                    p.childForFieldName?.("property") ?? p.child(2);
                   if (prop && propertyIdentifierTypes.includes(prop.type))
                     exportedName = sliceText(prop, src);
                 }
@@ -944,8 +941,8 @@ export async function buildSymbolGraphDetailed(
                   if (!target) {
                     const m = index.byFile.get(modFile);
                     target = (m?.locals ?? []).find(
-                      (l: any) => l.localName === exportedName
-                    );
+                      (l: SymbolDef) => l.localName === exportedName
+                    ) ?? null;
                   }
                 }
                 // Do not fall back to default or arbitrary first local to avoid spurious edges
@@ -962,17 +959,17 @@ export async function buildSymbolGraphDetailed(
           });
 
         // Walk for member expressions of namespace imports: alias.member
-        const walkForMembers = (n: any) => {
-          const tryResolveChainLocal = (node: any) => {
+        const walkForMembers = (n: Parser.SyntaxNode) => {
+          const tryResolveChainLocal = (node: Parser.SyntaxNode) => {
             const names: string[] = [];
-            let cur: any = node;
-            let base: any = null;
-            const pushProp = (p: any) => {
+            let cur: Parser.SyntaxNode | null = node;
+            let base: Parser.SyntaxNode | null = null;
+            const pushProp = (p: Parser.SyntaxNode | null) => {
               if (!p) return;
               if (propertyIdentifierTypes.includes(p.type))
                 names.push(sliceText(p, src));
               else if (p.type === "string")
-                names.push(unquote(sliceText(p, src)) as any);
+                names.push(unquote(sliceText(p, src)));
               else if (p.type === "identifier") {
                 const keyName = sliceText(p, src);
                 const v = constStringOf.get(keyName);
@@ -992,9 +989,9 @@ export async function buildSymbolGraphDetailed(
               ) {
                 base = cur.child(0) ?? base;
                 const prop =
-                  (cur as any).childForFieldName?.("property") ??
+                  cur.childForFieldName?.("property") ??
                   cur.child(2) ??
-                  (cur as any).childForFieldName?.("attribute");
+                  cur.childForFieldName?.("attribute");
                 pushProp(prop);
                 cur = base;
               } else if (cur.type === "optional_chain") {
@@ -1008,18 +1005,18 @@ export async function buildSymbolGraphDetailed(
             const targetFile = aliasToTargetModule.get(alias);
             if (!targetFile || names.length === 0) return;
             let file: string | null = targetFile;
-            let targetDef: any | null = null;
+            let targetDef: SymbolDef | null = null;
             for (const seg of names.reverse()) {
               if (!file) break;
               // Check if seg is a namespace re-export (export * as seg from '...')
               const m = index.byFile.get(file.replace(/\\/g, "/"));
               const nsReexport = m?.exports.find(
-                (e: any) =>
+                (e) =>
                   e.type === "reexport" &&
                   e.exportedAs === seg &&
                   e.sourceSpecifier === ""
-              ) as any;
-              if (nsReexport && typeof nsReexport.fromModule === "string") {
+              );
+              if (nsReexport && nsReexport.type === "reexport" && typeof nsReexport.fromModule === "string") {
                 file = nsReexport.fromModule.replace(/\\/g, "/");
                 continue;
               }
@@ -1030,11 +1027,11 @@ export async function buildSymbolGraphDetailed(
             if (!targetDef) {
               const fileKey =
                 typeof file === "string" ? file.replace(/\\/g, "/") : file;
-              const m = index.byFile.get(fileKey);
+              const m = index.byFile.get(fileKey ?? "");
               const last = names[0];
               if (m)
                 targetDef =
-                  (m.locals as any[]).find((l) => l.localName === last) ?? null;
+                  (m.locals as SymbolDef[]).find((l) => l.localName === last) ?? null;
             }
             if (targetDef) {
               const toId = defNodeId(targetDef);
@@ -1048,7 +1045,7 @@ export async function buildSymbolGraphDetailed(
           };
 
           if (optionalMemberTypes.has(n.type)) tryResolveChainLocal(n);
-          for (const ch of (n as any).namedChildren ?? []) walkForMembers(ch);
+          for (const ch of n.namedChildren ?? []) walkForMembers(ch);
         };
         walkForMembers(fn.node);
       }
