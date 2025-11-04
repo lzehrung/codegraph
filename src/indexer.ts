@@ -3,7 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import Parser from "tree-sitter";
 import crypto from "node:crypto";
-import { supportForFile, languageForFile } from "./languages.js";
+import { supportForFile, languageForFile, getCompiledQueries } from "./languages.js";
 import {
   listProjectFiles,
   sliceText,
@@ -15,8 +15,11 @@ import {
   loadWorkspaceConfig,
   resolveSpecifier,
   resolvePythonModule,
+  acquireParser,
+  releaseParser,
 } from "./util.js";
-import { type Graph, collectGraph } from "./graphs.js";
+import { collectGraph } from "./graphs.js";
+import type { Pos, Range, FileId, Graph } from "./types.js";
 
 export enum SymbolKind {
   Function = "function",
@@ -27,9 +30,7 @@ export enum SymbolKind {
   Default = "default",
 }
 
-export type Pos = { line: number; column: number; index: number };
-export type Range = { start: Pos; end: Pos };
-export type FileId = string;
+// Shared Pos, Range, FileId types imported from ./types
 
 export type SymbolDef = {
   file: FileId;
@@ -100,6 +101,15 @@ export type ProjectIndex = {
   modules: Map<FileId, ModuleIndex>;
   byFile: Map<FileId, ModuleIndex>;
   exportCache: Map<string, ResolvedExport | null>;
+  parsed?: Map<
+    string,
+    {
+      source: string;
+      tree: Parser.Tree;
+      sup: ReturnType<typeof supportForFile>;
+      lang: Parser.Language;
+    }
+  >;
 };
 export type ResolvedExport = { kind: "resolved"; def: SymbolDef };
 
@@ -109,6 +119,150 @@ export type BuildOptions = {
   cacheDir?: string;
   cacheStrict?: boolean;
 };
+
+// ---------------- Symbol handles (agent-friendly) ----------------
+export type SymbolHandle = string;
+
+export function symbolId(def: SymbolDef): SymbolHandle {
+  const idx = (def as any)?.range?.start?.index ?? 0;
+  return `${def.file}::${def.localName}::${idx}`;
+}
+
+export function defFromSymbolId(
+  index: ProjectIndex,
+  id: SymbolHandle
+): SymbolDef | null {
+  if (!id) return null;
+  const parts = id.split("::");
+  if (parts.length < 3) return null;
+  const rawFile = parts[0]!;
+  const localName = parts[1]!;
+  const startStr = parts[2]!;
+  const file = rawFile.replace(/\\/g, "/");
+  const startIndex = Number(startStr);
+  const mod = index.byFile.get(file);
+  if (!mod) return null;
+  const exact = mod.locals.find(
+    (d) => d.localName === localName && ((d as any).range?.start?.index ?? 0) === startIndex
+  );
+  if (exact) return exact;
+  const byName = mod.locals.find((d) => d.localName === localName);
+  return byName ?? null;
+}
+
+export function resolveSymbolId(
+  index: ProjectIndex,
+  id: SymbolHandle
+): SymbolDef | null {
+  if (!id) return null;
+  const parts = id.split("::");
+  if (parts.length === 3 && parts[2] === "import") {
+    const rawFile = parts[0]!;
+    const alias = parts[1]!;
+    const file = rawFile.replace(/\\/g, "/");
+    const mod = index.byFile.get(file);
+    if (!mod) return null;
+
+    // Prefer named, then default, then namespace
+    const named = mod.imports.find((i) => (i as any).kind === "named" && (i as any).local === alias) as any;
+    if (named) {
+      const def = resolveImported(index, named, named.imported);
+      if (def) return def;
+      const target = typeof named.resolved === "string" ? named.resolved : undefined;
+      if (target) {
+        const hit = resolveExport(index, target, named.imported);
+        if (hit?.def) return hit.def;
+      }
+    }
+
+    const deflt = mod.imports.find((i) => (i as any).kind === "default" && (i as any).local === alias) as any;
+    if (deflt) {
+      const def = resolveImported(index, deflt, "default");
+      if (def) return def;
+      const target = typeof deflt.resolved === "string" ? deflt.resolved : undefined;
+      if (target) {
+        const hit = resolveExport(index, target, "default");
+        if (hit?.def) return hit.def;
+        const tmod = index.byFile.get(target);
+        const first = tmod?.exports.find((e: any) => e.type === "local") as any;
+        if (first) return first.target as SymbolDef;
+      }
+    }
+
+    const ns = mod.imports.find((i) => (i as any).kind === "namespace" && (i as any).localNS === alias) as any;
+    if (ns) {
+      const target = typeof ns.resolved === "string" ? ns.resolved : undefined;
+      if (target) {
+        const tmod = index.byFile.get(target);
+        const first = tmod?.exports.find((e: any) => e.type === "local") as any;
+        if (first) return first.target as SymbolDef;
+        const firstLocal = tmod?.locals?.[0];
+        if (firstLocal) return firstLocal;
+      }
+    }
+
+    return null;
+  }
+
+  // Otherwise treat as direct definition handle
+  return defFromSymbolId(index, id);
+}
+
+export async function goToDefinitionById(
+  index: ProjectIndex,
+  id: SymbolHandle
+): Promise<GoToResult> {
+  const def = resolveSymbolId(index, id);
+  if (def) return { status: "ok", definition: def };
+  return { status: "not_found", reason: "No matching definition for handle" };
+}
+
+export async function findReferencesById(
+  index: ProjectIndex,
+  id: SymbolHandle
+) {
+  const def = resolveSymbolId(index, id);
+  if (!def)
+    return { status: "not_found", reason: "No matching definition for handle" } as const;
+  return await findReferences(index, { def });
+}
+
+export type SymbolListItem = {
+  id: SymbolHandle;
+  file: FileId;
+  name: string;
+  kind: SymbolKind | "import" | "namespaceImport";
+};
+
+export function listSymbols(
+  index: ProjectIndex,
+  opts?: { file?: FileId; includeImports?: boolean }
+): SymbolListItem[] {
+  const out: SymbolListItem[] = [];
+  const files = opts?.file
+    ? [opts.file.replace(/\\/g, "/")] 
+    : Array.from(index.byFile.keys());
+
+  for (const f of files) {
+    const mod = index.byFile.get(f);
+    if (!mod) continue;
+    for (const def of mod.locals) {
+      out.push({ id: symbolId(def), file: f, name: def.localName, kind: def.kind });
+    }
+    if (opts?.includeImports) {
+      for (const imp of mod.imports) {
+        if ((imp as any).kind === "named")
+          out.push({ id: `${f}::${(imp as any).local}::import`, file: f, name: (imp as any).local, kind: "import" });
+        else if ((imp as any).kind === "default")
+          out.push({ id: `${f}::${(imp as any).local}::import`, file: f, name: (imp as any).local, kind: "import" });
+        else if ((imp as any).kind === "namespace")
+          out.push({ id: `${f}::${(imp as any).localNS}::import`, file: f, name: (imp as any).localNS, kind: "namespaceImport" });
+      }
+    }
+  }
+
+  return out;
+}
 
 async function mapLimit<T, R>(
   items: T[],
@@ -233,9 +387,14 @@ export function collectLocalsAndExportsFromSource(
   let tree: Parser.Tree | null = opts?.tree ?? null;
   if (!tree) {
     try {
-      const parser = new Parser();
-      parser.setLanguage(lang);
-      tree = parser.parse(source);
+      const key = (support.id === "python" ? "py" : support.id === "js" ? "js" : "ts") as any;
+      const parser = acquireParser(lang, key);
+      try {
+        parser.setLanguage(lang);
+        tree = parser.parse(source);
+      } finally {
+        releaseParser(parser, key);
+      }
     } catch {}
   }
 
@@ -250,7 +409,7 @@ export function collectLocalsAndExportsFromSource(
   if (tree) {
     if (support.id === "python") {
       try {
-        const q = new Parser.Query(lang, support.queries.locals);
+        const { locals: q } = getCompiledQueries(lang, support as any);
         for (const m of q.matches(tree.rootNode))
           for (const cap of m.captures) {
             if (cap.name === "name" || cap.name === "tname") {
@@ -291,7 +450,7 @@ export function collectLocalsAndExportsFromSource(
   const exports: ExportEntry[] = [];
   if (support.queries.exports.trim() && tree) {
     try {
-      const q = new Parser.Query(lang, support.queries.exports);
+      const { exports: q } = getCompiledQueries(lang, support as any);
       for (const m of q.matches(tree.rootNode)) {
         const map = Object.fromEntries(
           m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const)
@@ -316,6 +475,26 @@ export function collectLocalsAndExportsFromSource(
                   exportedAs: name,
                   target: local,
                 });
+            }
+            if (items.length === 0) {
+              // Fallback: handle tuples/multiline/concatenations by scanning a small window after assignment
+              const assignIdx = map["stmt"]
+                ? (map["stmt"].node as any).startIndex
+                : source.indexOf("__all__");
+              if (assignIdx >= 0) {
+                const window = source.slice(assignIdx, assignIdx + 800);
+                const strRe = /["']([^"']+)["']/g;
+                for (let sm; (sm = strRe.exec(window)); ) {
+                  const name = sm[1]!;
+                  const local = locals.find((d) => d.localName === name);
+                  if (local && !exports.some((e) => (e as any).exportedAs === name))
+                    exports.push({
+                      type: "local",
+                      exportedAs: name,
+                      target: local,
+                    });
+                }
+              }
             }
             continue;
           }
@@ -800,7 +979,8 @@ export async function collectImportsForFile(
     return imports;
   }
 
-  const parser = new Parser();
+  const key = (sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts") as any;
+  const parser = acquireParser(lang, key);
   parser.setLanguage(lang);
   const tree = opts?.tree ?? parser.parse(source);
   const tsCfg =
@@ -920,7 +1100,7 @@ export async function collectImportsForFile(
 
   let ranFallback = false;
   try {
-    const q = new Parser.Query(lang, sup.queries.importBindings);
+    const { importBindings: q } = getCompiledQueries(lang, sup as any);
     for (const m of q.matches(tree.rootNode)) {
       const caps = Object.fromEntries(
         m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const)
@@ -1039,10 +1219,15 @@ export async function parseFile(
   const sup = supportForFile(file);
   const lang = languageForFile(file);
   const source = await fsp.readFile(file, "utf8");
-  const parser = new Parser();
-  parser.setLanguage(lang);
-  const tree = parser.parse(source);
-  return { source, tree, sup, lang };
+  const key = (sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts") as any;
+  const parser = acquireParser(lang, key);
+  try {
+    parser.setLanguage(lang);
+    const tree = parser.parse(source);
+    return { source, tree, sup, lang };
+  } finally {
+    releaseParser(parser, key);
+  }
 }
 
 export async function buildProjectIndex(
@@ -1160,7 +1345,13 @@ export async function buildProjectIndex(
   const graph = await collectGraph(projectRoot, files, {
     parsed: parsedMap as any,
   });
-  return { graph, modules, byFile: modules, exportCache: new Map() };
+  return {
+    graph,
+    modules,
+    byFile: modules,
+    exportCache: new Map(),
+    parsed: parsedMap as any,
+  };
 }
 
 export async function buildProjectIndexFromFiles(
@@ -1169,7 +1360,7 @@ export async function buildProjectIndexFromFiles(
   opts?: BuildOptions
 ): Promise<ProjectIndex> {
   const files = Array.from(
-    new Set((inputFiles || []).filter(Boolean).map((f) => path.resolve(f)))
+    new Set((inputFiles || []).filter(Boolean).map((f) => path.resolve(f).replace(/\\/g, "/")))
   );
   if (files.length === 0) {
     console.warn(`Warning: No files provided for indexing in ${projectRoot}`);
@@ -1281,7 +1472,13 @@ export async function buildProjectIndexFromFiles(
   const graph = await collectGraph(projectRoot, files, {
     parsed: parsedMap as any,
   });
-  return { graph, modules, byFile: modules, exportCache: new Map() };
+  return {
+    graph,
+    modules,
+    byFile: modules,
+    exportCache: new Map(),
+    parsed: parsedMap as any,
+  };
 }
 
 function cacheKey(file: FileId, name: string) {
@@ -1293,42 +1490,49 @@ export function resolveExport(
   file: FileId,
   exportedName: string
 ): ResolvedExport | null {
-  const normalizedFile = file.replace(/\\/g, "/");
-  const mod = index.byFile.get(normalizedFile);
-  if (!mod) return null;
-  const key = cacheKey(normalizedFile, exportedName);
-  if (index.exportCache.has(key)) return index.exportCache.get(key)!;
+  const visited = new Set<string>();
+  function _resolve(fileInner: FileId, name: string): ResolvedExport | null {
+    const normalizedFile = fileInner.replace(/\\/g, "/");
+    const mod = index.byFile.get(normalizedFile);
+    if (!mod) return null;
+    const key = cacheKey(normalizedFile, name);
+    if (index.exportCache.has(key)) return index.exportCache.get(key)!;
 
-  for (const e of mod.exports)
-    if (e.type === "local" && e.exportedAs === exportedName) {
-      const res: ResolvedExport = { kind: "resolved", def: e.target };
-      index.exportCache.set(key, res);
-      return res;
-    }
-  for (const e of mod.exports)
-    if (
-      e.type === "reexport" &&
-      e.exportedAs === exportedName &&
-      typeof e.fromModule === "string"
-    ) {
-      const down =
-        resolveExport(index, e.fromModule, e.sourceSpecifier || exportedName) ||
-        resolveExport(index, e.fromModule, exportedName);
-      if (down) {
-        index.exportCache.set(key, down);
-        return down;
+    // Detect and break cycles
+    const cycleKey = `${normalizedFile}::${name}`;
+    if (visited.has(cycleKey)) return null;
+    visited.add(cycleKey);
+
+    for (const e of mod.exports)
+      if (e.type === "local" && e.exportedAs === name) {
+        const res: ResolvedExport = { kind: "resolved", def: e.target };
+        index.exportCache.set(key, res);
+        return res;
       }
-    }
-  for (const e of mod.exports)
-    if (e.type === "exportStar" && typeof e.fromModule === "string") {
-      const down = resolveExport(index, e.fromModule, exportedName);
-      if (down) {
-        index.exportCache.set(key, down);
-        return down;
+    for (const e of mod.exports)
+      if (
+        e.type === "reexport" &&
+        e.exportedAs === name &&
+        typeof e.fromModule === "string"
+      ) {
+        const down = _resolve(e.fromModule, e.sourceSpecifier || name) || _resolve(e.fromModule, name);
+        if (down) {
+          index.exportCache.set(key, down);
+          return down;
+        }
       }
-    }
-  index.exportCache.set(key, null);
-  return null;
+    for (const e of mod.exports)
+      if (e.type === "exportStar" && typeof e.fromModule === "string") {
+        const down = _resolve(e.fromModule, name);
+        if (down) {
+          index.exportCache.set(key, down);
+          return down;
+        }
+      }
+    index.exportCache.set(key, null);
+    return null;
+  }
+  return _resolve(file, exportedName);
 }
 
 export type GoToRequest = { file: FileId; line: number; column: number };
@@ -1353,10 +1557,20 @@ export async function goToDefinition(
 
   const lang = languageForFile(file);
   const sup = supportForFile(file);
-  const parser = new Parser();
-  parser.setLanguage(lang);
-  const source = await fsp.readFile(file, "utf8");
-  const tree = parser.parse(source);
+  const parsedEntry = index.parsed?.get(file);
+  const key = (sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts") as any;
+  let parser: Parser | null = null;
+  let tree: Parser.Tree;
+  let source: string;
+  if (parsedEntry) {
+    source = parsedEntry.source;
+    tree = parsedEntry.tree;
+  } else {
+    parser = acquireParser(lang, key);
+    parser.setLanguage(lang);
+    source = await fsp.readFile(file, "utf8");
+    tree = parser.parse(source);
+  }
 
   const pos = {
     row: Math.max(0, line - 1),
@@ -1463,12 +1677,14 @@ export async function goToDefinition(
   if (name) {
     const local = mod.locals.find((d) => d.localName === name);
     if (local) {
+      if (parser) releaseParser(parser, key);
       return { status: "ok", definition: local };
     }
 
     if (supportForFile(file).supportsCrossModuleSymbols) {
       const hit = resolveExport(index, file, name);
       if (hit) {
+        if (parser) releaseParser(parser, key);
         return {
           status: "ok",
           definition: hit.def,
@@ -1480,6 +1696,8 @@ export async function goToDefinition(
         if (imp.kind === "default" && imp.local === name) {
           const target = resolveImported(index, imp, "default");
           if (target)
+            {
+              if (parser) releaseParser(parser, key);
             return {
               status: "ok",
               definition: target,
@@ -1490,9 +1708,12 @@ export async function goToDefinition(
                 exportedName: "default",
               },
             };
+            }
         } else if (imp.kind === "named" && imp.local === name) {
           const target = resolveImported(index, imp, imp.imported);
           if (target)
+            {
+              if (parser) releaseParser(parser, key);
             return {
               status: "ok",
               definition: target,
@@ -1503,6 +1724,7 @@ export async function goToDefinition(
                 exportedName: imp.imported,
               },
             };
+            }
         } else if (imp.kind === "namespace" && imp.localNS === name) {
           const targetFile =
             typeof imp.resolved === "string"
@@ -1515,6 +1737,7 @@ export async function goToDefinition(
                 (e) => e.type === "local"
               );
               if (firstExport) {
+                if (parser) releaseParser(parser, key);
                 return {
                   status: "ok",
                   definition: firstExport.target,
@@ -1533,6 +1756,7 @@ export async function goToDefinition(
     }
   }
 
+  if (parser) releaseParser(parser, key);
   return {
     status: "not_found",
     reason: "No matching local or imported definition",
@@ -1656,9 +1880,10 @@ export function buildScopeIndexFromSource(
       });
   }
 
-  const parser = new Parser();
-  parser.setLanguage(lang);
-  const tree = opts?.tree ?? parser.parse(source);
+  const key2 = (support.nodeTypes && (support as any).id === "python" ? "py" : (support as any).id === "js" ? "js" : "ts") as any;
+  const parser2 = acquireParser(lang, key2);
+  parser2.setLanguage(lang);
+  const tree = opts?.tree ?? parser2.parse(source);
 
   const idSet = new Set([
     ...(support.nodeTypes.identifier as string[]),
@@ -1760,6 +1985,7 @@ export function buildScopeIndexFromSource(
   };
 
   walk(tree.rootNode);
+  releaseParser(parser2, key2);
 
   const bindings = new Map<string, Binding[]>();
   const all: Binding[] = [];
@@ -1820,13 +2046,15 @@ export async function findReferences(
   const definitionFile = def.file;
   const sup = supportForFile(definitionFile);
   const lang = languageForFile(definitionFile);
-  const src = await fsp.readFile(definitionFile, "utf8");
+  const parsedDef = index.parsed?.get(definitionFile);
+  const src = parsedDef?.source ?? (await fsp.readFile(definitionFile, "utf8"));
   const scope = buildScopeIndexFromSource(
     definitionFile,
     src,
     sup as any,
     lang,
-    index.byFile.get(definitionFile)?.imports as any
+    index.byFile.get(definitionFile)?.imports as any,
+    parsedDef ? { tree: parsedDef.tree } : undefined
   );
 
   const refs: Reference[] = [];
@@ -1854,13 +2082,15 @@ export async function findReferences(
     let sc: any = null;
     const ensure = async () => {
       if (!sc) {
-        const s = await fsp.readFile(f, "utf8");
+        const parsedF = index.parsed?.get(f);
+        const s = parsedF?.source ?? (await fsp.readFile(f, "utf8"));
         sc = buildScopeIndexFromSource(
           f,
           s,
           supportForFile(f) as any,
           languageForFile(f),
-          m.imports as any
+          m.imports as any,
+          parsedF ? { tree: parsedF.tree } : undefined
         );
       }
       return sc;
@@ -1942,17 +2172,34 @@ export async function collectNamespaceMemberRefs(
   ns: string,
   member: string
 ): Promise<Range[]> {
-  const src = await fsp.readFile(file, "utf8");
-  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`\\b${esc(ns)}\\s*\\.\\s*${esc(member)}\\b`, "g");
-  const posAt = (i: number): Pos => {
-    const pre = src.slice(0, i);
-    const line = pre.split("\n").length;
-    const col = i - pre.lastIndexOf("\n");
-    return { line, column: col, index: i };
-  };
-  const ranges: Range[] = [];
-  for (let m; (m = re.exec(src)); )
-    ranges.push({ start: posAt(m.index), end: posAt(m.index + m[0].length) });
-  return ranges;
+  const sup = supportForFile(file);
+  const lang = languageForFile(file);
+  const key = (sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts") as any;
+  const parser = acquireParser(lang, key);
+  try {
+    parser.setLanguage(lang);
+    const src = await fsp.readFile(file, "utf8");
+    const tree = parser.parse(src);
+    const ranges: Range[] = [];
+    const isMember = sup.nodeTypes.memberExpression ?? (sup.id === "python" ? "attribute" : "member_expression");
+    const isPropId = (t: string) => (sup.nodeTypes.propertyIdentifier || ["property_identifier"]).includes(t) || t === "identifier";
+    const walk = (node: Parser.SyntaxNode) => {
+      if (node.type === isMember) {
+        let obj = node.childForFieldName("object") ?? node.child(0);
+        let prop = node.childForFieldName("property") ?? node.childForFieldName("attribute") ?? node.child(2);
+        if (obj && prop && obj.type === "identifier" && isPropId(prop.type)) {
+          const oname = sliceText(obj, src);
+          const pname = sliceText(prop, src);
+          if (oname === ns && pname === member) {
+            ranges.push(toRange(node as any));
+          }
+        }
+      }
+      for (const ch of node.namedChildren) walk(ch);
+    };
+    walk(tree.rootNode);
+    return ranges;
+  } finally {
+    releaseParser(parser, key);
+  }
 }

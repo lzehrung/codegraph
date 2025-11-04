@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import path from "node:path";
+import fs from "node:fs";
+import fsp from "node:fs/promises";
 import {
   listProjectFiles,
   collectGraph,
@@ -16,11 +18,13 @@ import {
   graphToDOTSymbols,
   graphToMermaidSymbolsWithFiles,
   graphToDOTSymbolsWithFiles,
+  analyzeImpactFromDiff,
 } from "./index.js";
 
 function toJSON(obj: any) {
   return JSON.stringify(obj, null, 2);
 }
+let stderrFilePath: string | undefined;
 function writeStdoutLine(message: string) {
   process.stdout.write(`${message}\n`);
 }
@@ -29,6 +33,13 @@ function writeJSONLine(value: unknown) {
 }
 function writeStderrLine(message: string) {
   process.stderr.write(`${message}\n`);
+  try {
+    if (stderrFilePath) fs.appendFileSync(stderrFilePath, `${message}\n`, {
+      encoding: "utf8",
+    });
+  } catch {
+    // Swallow file logging errors to avoid masking primary error output
+  }
 }
 function writeError(error: unknown) {
   if (error instanceof Error) {
@@ -36,6 +47,89 @@ function writeError(error: unknown) {
     return;
   }
   writeStderrLine(String(error));
+}
+
+// Compact JSON helpers to reduce repeated strings in graph output
+function compactGraphWithSymbols(
+  fgraph: { nodes: Set<string>; edges: Array<any> },
+  sgraph: { nodes: Map<string, any>; edges: Array<any> }
+) {
+  const files = [...fgraph.nodes];
+  const fileIndex = new Map<string, number>();
+  for (let i = 0; i < files.length; i++) fileIndex.set(files[i]!, i);
+
+  const fileEdges = fgraph.edges.map((e: any) => ({
+    from: fileIndex.get(e.from)!,
+    to:
+      e.to?.type === "file"
+        ? { type: "file", path: fileIndex.get(e.to.path)! }
+        : e.to,
+    raw: e.raw,
+    ...(e.typeOnly !== undefined ? { typeOnly: e.typeOnly } : {}),
+  }));
+
+  const symbolIds = [...sgraph.nodes.keys()];
+  const symbolIndex = new Map<string, number>();
+  for (let i = 0; i < symbolIds.length; i++) symbolIndex.set(symbolIds[i]!, i);
+
+  const symbols = symbolIds.map((id) => {
+    const n = sgraph.nodes.get(id)!;
+    return {
+      id: symbolIndex.get(id)!,
+      file: fileIndex.get(n.file)!,
+      name: n.name,
+      kind: n.kind,
+    } as any;
+  });
+
+  const symbolEdges = sgraph.edges.map((e: any) => ({
+    from: symbolIndex.get(e.from)!,
+    to: symbolIndex.get(e.to)!,
+    ...(e.label ? { label: e.label } : {}),
+  }));
+
+  return {
+    files,
+    fileEdges,
+    symbols,
+    symbolEdges,
+    symbolIdIndex: symbolIds,
+  };
+}
+
+function compactSymbolsOnly(
+  allFiles: string[],
+  sgraph: { nodes: Map<string, any>; edges: Array<any> }
+) {
+  const fileIndex = new Map<string, number>();
+  for (let i = 0; i < allFiles.length; i++) fileIndex.set(allFiles[i]!, i);
+
+  const symbolIds = [...sgraph.nodes.keys()];
+  const symbolIndex = new Map<string, number>();
+  for (let i = 0; i < symbolIds.length; i++) symbolIndex.set(symbolIds[i]!, i);
+
+  const symbols = symbolIds.map((id) => {
+    const n = sgraph.nodes.get(id)!;
+    return {
+      id: symbolIndex.get(id)!,
+      file: fileIndex.get(n.file)!,
+      name: n.name,
+      kind: n.kind,
+    } as any;
+  });
+
+  const symbolEdges = sgraph.edges.map((e: any) => ({
+    from: symbolIndex.get(e.from)!,
+    to: symbolIndex.get(e.to)!,
+    ...(e.label ? { label: e.label } : {}),
+  }));
+
+  return {
+    files: allFiles,
+    symbols,
+    symbolEdges,
+    symbolIdIndex: symbolIds,
+  };
 }
 
 async function main() {
@@ -58,11 +152,25 @@ async function main() {
 
   if (cmd === "graph") {
     const files = await resolveFilesFromRoots();
-    const wantSymbols =
+    const hasExplicitSymbolFlag =
       flags.includes("--symbols") ||
       flags.includes("--symbols-only") ||
       flags.includes("--symbols-detailed");
-    const detailedSymbols = flags.includes("--symbols-detailed");
+    const hasExplicitFormatFlag =
+      flags.includes("--mermaid") || flags.includes("--dot") || flags.includes("--json");
+    const outputIdx = args.findIndex((a) => a === "--output" || a === "-o");
+    const outputArg = outputIdx !== -1 ? args[outputIdx + 1] : undefined;
+    const stderrIdx = args.findIndex((a) => a === "--stderr-file");
+    const stderrArg = stderrIdx !== -1 ? args[stderrIdx + 1] : undefined;
+    const stdoutMode = flags.includes("--stdout");
+    const defaultGraphMode = !hasExplicitSymbolFlag && !hasExplicitFormatFlag;
+
+    const wantSymbols = defaultGraphMode
+      ? true
+      : hasExplicitSymbolFlag;
+    const detailedSymbols = defaultGraphMode
+      ? true
+      : flags.includes("--symbols-detailed");
     const threadsFlagIdx = args.findIndex((a) => a === "--threads");
     const threads =
       threadsFlagIdx !== -1 ? Number(args[threadsFlagIdx + 1]) : 0;
@@ -75,6 +183,30 @@ async function main() {
       ? "dot"
       : "json";
     const fast = flags.includes("--fast-graph");
+    const resolveNodeModules = flags.includes("--resolve-node-modules");
+    const compact = defaultGraphMode ? true : flags.includes("--compact-json");
+    const outputFile = outputArg
+      ? (path.isAbsolute(outputArg)
+          ? outputArg.replace(/\\/g, "/")
+          : path.resolve(process.cwd(), outputArg).replace(/\\/g, "/"))
+      : defaultGraphMode && !stdoutMode
+      ? path.resolve(process.cwd(), "codegraph.json").replace(/\\/g, "/")
+      : undefined;
+    stderrFilePath = stderrArg
+      ? (path.isAbsolute(stderrArg)
+          ? stderrArg.replace(/\\/g, "/")
+          : path.resolve(process.cwd(), stderrArg).replace(/\\/g, "/"))
+      : defaultGraphMode
+      ? path.resolve(process.cwd(), "codegraph.err").replace(/\\/g, "/")
+      : undefined;
+
+    const writeOut = async (text: string) => {
+      if (outputFile) {
+        await fsp.writeFile(outputFile, `${text}\n`, "utf8");
+      } else {
+        writeStdoutLine(text);
+      }
+    };
     if (wantSymbols) {
       const index = await buildProjectIndexFromFiles(root, files, {
         threads,
@@ -103,36 +235,48 @@ async function main() {
         sgraph = await buildSymbolGraph(index);
       }
       if (flags.includes("--symbols-only")) {
-        if (format === "mermaid")
-          writeStdoutLine(graphToMermaidSymbols(sgraph, root));
-        else if (format === "dot")
-          writeStdoutLine(graphToDOTSymbols(sgraph, root));
-        else
-          writeJSONLine({
-            nodes: [...sgraph.nodes.values()],
-            edges: sgraph.edges,
-          });
+        if (format === "mermaid") {
+          await writeOut(graphToMermaidSymbols(sgraph, root));
+        } else if (format === "dot") {
+          await writeOut(graphToDOTSymbols(sgraph, root));
+        } else {
+          if (compact) {
+            const allFiles = [...index.graph.nodes];
+            await writeOut(toJSON(compactSymbolsOnly(allFiles, sgraph)));
+          } else {
+            await writeOut(
+              toJSON({ nodes: [...sgraph.nodes.values()], edges: sgraph.edges })
+            );
+          }
+        }
         return;
       }
       // Reuse the graph already built during indexing to avoid an extra pass
       const fgraph = index.graph;
-      if (format === "mermaid")
-        writeStdoutLine(graphToMermaidSymbolsWithFiles(sgraph, fgraph, root));
-      else if (format === "dot")
-        writeStdoutLine(graphToDOTSymbolsWithFiles(sgraph, fgraph, root));
-      else
-        writeJSONLine({
-          files: [...fgraph.nodes],
-          fileEdges: fgraph.edges,
-          symbols: [...sgraph.nodes.values()],
-          symbolEdges: sgraph.edges,
-        });
+      if (format === "mermaid") {
+        await writeOut(graphToMermaidSymbolsWithFiles(sgraph, fgraph, root));
+      } else if (format === "dot") {
+        await writeOut(graphToDOTSymbolsWithFiles(sgraph, fgraph, root));
+      } else {
+        if (compact) {
+          await writeOut(toJSON(compactGraphWithSymbols(fgraph, sgraph)));
+        } else {
+          await writeOut(
+            toJSON({
+              files: [...fgraph.nodes],
+              fileEdges: fgraph.edges,
+              symbols: [...sgraph.nodes.values()],
+              symbolEdges: sgraph.edges,
+            })
+          );
+        }
+      }
       return;
     }
-    const graph = await collectGraph(root, files, { fast });
-    if (format === "mermaid") writeStdoutLine(graphToMermaid(graph));
-    else if (format === "dot") writeStdoutLine(graphToDOT(graph));
-    else writeJSONLine({ nodes: [...graph.nodes], edges: graph.edges });
+    const graph = await collectGraph(root, files, { fast, threads, resolveNodeModules });
+    if (format === "mermaid") await writeOut(graphToMermaid(graph));
+    else if (format === "dot") await writeOut(graphToDOT(graph));
+    else await writeOut(toJSON({ nodes: [...graph.nodes], edges: graph.edges }));
     return;
   }
 
@@ -267,7 +411,88 @@ async function main() {
     }
     const querySource = args[qIdx + 1];
     const hits = await astGrep(root, querySource!);
-    writeJSONLine(hits);
+  writeJSONLine(hits);
+  return;
+  }
+
+  if (cmd === "impact") {
+    const providerIdx = args.indexOf("--provider");
+    const provider = providerIdx !== -1 ? args[providerIdx + 1] : "git";
+
+    let options: any = { provider };
+
+    if (provider === "git") {
+      const baseIdx = args.indexOf("--base");
+      const headIdx = args.indexOf("--head");
+      if (baseIdx !== -1 && args[baseIdx + 1]) options.base = args[baseIdx + 1];
+      if (headIdx !== -1 && args[headIdx + 1]) options.head = args[headIdx + 1];
+    } else if (provider === "github") {
+      const prIdx = args.indexOf("--pr");
+      const repoIdx = args.indexOf("--repo");
+      if (prIdx !== -1 && args[prIdx + 1]) options.pr = Number(args[prIdx + 1]);
+      if (repoIdx !== -1 && args[repoIdx + 1]) options.repo = args[repoIdx + 1];
+    } else if (provider === "raw") {
+      // For raw provider, diff text would come from stdin or file
+      // For now, assume stdin
+      const diffText = await new Promise<string>((resolve) => {
+        let data = "";
+        process.stdin.on("data", chunk => data += chunk);
+        process.stdin.on("end", () => resolve(data));
+      });
+      options.diffText = diffText;
+    }
+
+    // Parse other options
+    const threadsIdx = args.indexOf("--threads");
+    if (threadsIdx !== -1 && args[threadsIdx + 1]) options.threads = Number(args[threadsIdx + 1]);
+
+    const cacheIdx = args.indexOf("--cache");
+    if (cacheIdx !== -1 && args[cacheIdx + 1]) options.cache = args[cacheIdx + 1];
+
+    const maxRefsIdx = args.indexOf("--max-refs");
+    if (maxRefsIdx !== -1 && args[maxRefsIdx + 1]) options.maxRefs = Number(args[maxRefsIdx + 1]);
+
+    const depthIdx = args.indexOf("--depth");
+    if (depthIdx !== -1 && args[depthIdx + 1]) options.depth = Number(args[depthIdx + 1]);
+
+    const includeTests = flags.includes("--include-tests");
+    const membersOnly = flags.includes("--members-only");
+
+    const scopeIdx = args.indexOf("--scope");
+    if (scopeIdx !== -1 && args[scopeIdx + 1]) options.scope = args[scopeIdx + 1];
+
+    options.includeTests = includeTests;
+    options.membersOnly = membersOnly;
+
+    const pretty = flags.includes("--pretty");
+    const mermaid = flags.includes("--mermaid");
+
+    try {
+      const report = await analyzeImpactFromDiff(root, await buildProjectIndex(root), options);
+
+      if (mermaid) {
+        // TODO: Implement mermaid output for impact reports
+        writeStdoutLine("Mermaid output for impact reports not yet implemented");
+      } else if (pretty) {
+        writeStdoutLine(`Impact Analysis Report`);
+        writeStdoutLine(`======================`);
+        writeStdoutLine(`Changed files: ${report.changedFiles.length}`);
+        writeStdoutLine(`Changed symbols: ${report.changedSymbols.length}`);
+        writeStdoutLine(`Impacted items: ${report.impacted.length}`);
+        writeStdoutLine(``);
+        for (const item of report.impacted.slice(0, 10)) {
+          writeStdoutLine(`${item.file}: ${item.symbols.join(", ")} (severity: ${(item.severity * 100).toFixed(1)}%)`);
+        }
+        if (report.impacted.length > 10) {
+          writeStdoutLine(`... and ${report.impacted.length - 10} more`);
+        }
+      } else {
+        writeJSONLine(report);
+      }
+    } catch (error) {
+      writeStderrLine(`Impact analysis failed: ${error}`);
+      process.exit(1);
+    }
     return;
   }
 

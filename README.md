@@ -34,6 +34,10 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * Python: Module imports, `__all__` exports, relative imports
 * **AST grep**
   * Run arbitrary Tree-sitter queries across the repo
+* **PR impact analysis**
+  * Map git diffs to changed symbols and affected code
+  * Analyze direct and transitive dependencies with severity scoring
+  * Git/GitHub integration with configurable depth and scope
 * **Monorepo support**
   * Workspace detection (npm/yarn/pnpm/lerna)
   * Per-file TypeScript config resolution
@@ -159,6 +163,21 @@ npx codegraph refs --file <file> --line <line> --col <column> --pretty
 
 # Run a Tree-sitter query across the repo
 npx codegraph grep --query '(function_declaration name: (identifier) @name)'
+
+# Analyze PR impact: map diffs to symbols and find affected code
+npx codegraph impact --base <commit-sha> --head <commit-sha>
+# Analyze GitHub PR impact
+npx codegraph impact --provider github --repo owner/name --pr 123
+# Analyze raw diff text (from stdin)
+cat diff.txt | npx codegraph impact --provider raw
+# Pretty-printed summary with severity scores
+npx codegraph impact --base main --head feature --pretty
+# Limit analysis depth and reference count
+npx codegraph impact --base main --head feature --depth 2 --max-refs 1000
+# Focus on exported symbol changes only (ignore internal changes)
+npx codegraph impact --base main --head feature --scope imported
+# Skip transitive file dependencies (symbol references only)
+npx codegraph impact --base main --head feature --members-only
 ```
 
 ### For Local Development
@@ -206,6 +225,23 @@ npx tsx src/cli.ts goto <file> <line> <column>
     - `--symbols-detailed-scope {all|imported}`
     - `--symbols-detailed-max-edges N`
     - `--symbols-detailed-members-only`
+
+- Compact JSON output:
+  - Use `--compact-json` to replace repeated file and symbol IDs with numeric indices.
+  - Example:
+    ```bash
+    npx codegraph graph ./src --symbols-detailed --compact-json > graph.json
+    ```
+  - Shape (simplified):
+    ```json
+    {
+      "files": ["/abs/path/a.ts", "..."],
+      "fileEdges": [{ "from": 0, "to": { "type": "file", "path": 1 }, "raw": "./b" }],
+      "symbols": [{ "id": 0, "file": 0, "name": "foo", "kind": "function" }],
+      "symbolEdges": [{ "from": 0, "to": 1, "label": "uses" }],
+      "symbolIdIndex": ["/abs/path/a.ts::foo::123", "..."]
+    }
+    ```
 
 ---
 
@@ -331,6 +367,248 @@ export async function tool_refs(root: string, file: string, line: number, column
   return await findReferences(index, { file: file.replace(/\\/g, '/'), line, column });
 }
 ```
+
+### Agent-friendly symbol handles (no line/column)
+
+Use stable handles instead of cursor positions. A handle is either:
+- `${file}::${localName}::${startIndex}` for a definition, or
+- `${file}::${alias}::import` for an import alias (named/default/namespace).
+
+```ts
+import {
+  buildProjectIndex,
+  listSymbols,
+  goToDefinitionById,
+  findReferencesById,
+  symbolId,
+} from 'codegraph';
+
+const root = process.cwd();
+const index = await buildProjectIndex(root);
+
+// Enumerate symbols in a file, including import aliases
+const file = `${root}/tests/samples/monorepo/packages/pkg-b/src/index.js`.replace(/\\/g, '/');
+const items = listSymbols(index, { file, includeImports: true });
+
+// Pick a handle (e.g., for alias "aHelper" or a local def)
+const handle = items.find(i => i.name === 'aHelper')?.id!;
+
+// Go to definition from the handle
+const defRes = await goToDefinitionById(index, handle);
+
+// Find references from the handle
+const refsRes = await findReferencesById(index, handle);
+
+// If you already have a SymbolDef, create a handle directly
+// const id = symbolId(def);
+```
+
+Analyze PR impact from git diff:
+
+```ts
+import { buildProjectIndex, analyzeImpactFromDiff } from 'codegraph';
+
+const root = process.cwd();
+const index = await buildProjectIndex(root);
+
+// Analyze impact from git commits
+const report = await analyzeImpactFromDiff(root, index, {
+  provider: 'git',
+  base: 'main',
+  head: 'feature-branch'
+});
+
+console.log(`Changed symbols: ${report.changedSymbols.length}`);
+console.log(`Impacted files: ${report.impacted.length}`);
+for (const item of report.impacted.slice(0, 5)) {
+  console.log(`${item.file}: ${item.symbols.join(', ')} (${(item.severity * 100).toFixed(1)}% severity)`);
+}
+```
+
+Agent-friendly tool wrapper (returns JSON-serializable results):
+
+```ts
+import { tool_impactJSON, tool_impactFromDiffText } from 'codegraph';
+
+// Direct API call
+const result = await tool_impactJSON(root, {
+  provider: 'raw',
+  diffText: `diff --git a/utils.ts b/utils.ts\n...`
+});
+
+if (result.status === 'ok') {
+  // Use result.report for analysis
+  console.log(result.report);
+}
+```
+
+### Backend-Focused Agent Recipes
+
+For backend development teams, here are common patterns for LLM agents reviewing PRs:
+
+#### 1. **API Route Impact Assessment**
+```ts
+import { analyzeImpactFromDiff, collectImpactContext, listCandidateTestFiles } from 'codegraph';
+
+const root = process.cwd();
+const index = await buildProjectIndex(root);
+
+// Get impact report with enhanced context
+const impact = await analyzeImpactFromDiff(root, index, {
+  provider: 'git',
+  base: 'main',
+  head: 'feature-branch',
+  depth: 2,  // Include transitive dependencies
+  compact: true  // Use compact format for efficiency
+});
+
+// Focus on API routes and controllers
+const apiRoutes = impact.impacted.filter(item =>
+  item.file.includes('routes') ||
+  item.file.includes('controllers') ||
+  item.file.includes('api')
+);
+
+// Check for breaking changes
+const breakingChanges = impact.changedSymbols.filter(symbol =>
+  symbol.exported && symbol.explain?.hints?.includes('signatureChanged')
+);
+
+console.log(`API routes impacted: ${apiRoutes.length}`);
+console.log(`Breaking changes: ${breakingChanges.length}`);
+```
+
+#### 2. **Database Schema Impact Analysis**
+```ts
+// Analyze schema/model changes
+const schemaChanges = impact.changedSymbols.filter(symbol =>
+  symbol.file.includes('models') ||
+  symbol.file.includes('schema') ||
+  symbol.file.includes('migrations')
+);
+
+// Get broader context for schema changes
+if (schemaChanges.length > 0) {
+  const context = await collectImpactContext(
+    index,
+    impact.impacted.map(i => i.file),
+    impact.changedSymbols.map(s => s.id),
+    3  // 3-hop context for data layer changes
+  );
+
+  // Find services that might need migration logic
+  const affectedServices = context.symbolNeighbors.filter(n =>
+    n.file.includes('services') || n.file.includes('repositories')
+  );
+
+  console.log(`Services needing migration review: ${affectedServices.length}`);
+}
+```
+
+#### 3. **Test Coverage Validation**
+```ts
+// Find candidate tests that might need updates
+const candidateTests = listCandidateTestFiles(
+  index,
+  impact.changedFiles.map(f => f.file),
+  impact.changedSymbols.map(s => s.id),
+  {
+    testPatterns: ['test', 'spec', '__tests__', '.test.'],  // Custom patterns
+    maxCandidates: 20
+  }
+);
+
+// Prioritize high-confidence test candidates
+const highPriorityTests = candidateTests.filter(t => t.confidence === 'high');
+const mediumPriorityTests = candidateTests.filter(t => t.confidence === 'medium');
+
+console.log(`High-priority tests to review: ${highPriorityTests.length}`);
+console.log(`Medium-priority tests to check: ${mediumPriorityTests.length}`);
+```
+
+#### 4. **Security-Focused Review**
+```ts
+import { astGrep } from 'codegraph';
+
+// Scan changed files for security patterns
+const securityPatterns = [
+  'exec\\(|eval\\(|spawn\\(',  // Command execution
+  'password|secret|key.*=',   // Credential storage
+  'sql.*\\+|\\$\\{.*\\}',      // SQL injection risks
+  'innerHTML|outerHTML',      // XSS risks
+];
+
+const securityFindings: Array<{file: string, pattern: string, line: number}> = [];
+
+for (const changedFile of impact.changedFiles) {
+  for (const pattern of securityPatterns) {
+    try {
+      const matches = await astGrep(root, pattern, changedFile.file);
+      for (const match of matches) {
+        securityFindings.push({
+          file: changedFile.file,
+          pattern,
+          line: match.range.start.line
+        });
+      }
+    } catch (e) {
+      // Pattern might not be valid Tree-sitter query, skip
+    }
+  }
+}
+
+if (securityFindings.length > 0) {
+  console.log(`⚠️ Security findings: ${securityFindings.length}`);
+  // Flag for human security review
+}
+```
+
+#### 5. **Configuration and Environment Impact**
+```ts
+// Check for configuration changes
+const configChanges = impact.impacted.filter(item =>
+  item.file.includes('config') ||
+  item.file.includes('env') ||
+  item.file.includes('settings')
+);
+
+// Validate environment variable usage
+const envUsage = impact.changedSymbols.filter(symbol =>
+  symbol.name.toLowerCase().includes('env') ||
+  symbol.name.toLowerCase().includes('config')
+);
+
+if (configChanges.length > 0 || envUsage.length > 0) {
+  console.log(`⚠️ Configuration changes detected - validate deployment impact`);
+}
+```
+
+#### 6. **Performance Regression Detection**
+```ts
+// Look for algorithm changes in performance-critical code
+const performanceCritical = impact.changedSymbols.filter(symbol =>
+  symbol.file.includes('utils') ||
+  symbol.file.includes('algorithms') ||
+  symbol.kind === 'function' && symbol.explain?.hints?.includes('signatureChanged')
+);
+
+// Check for new database queries
+const queryPatterns = [
+  'SELECT|INSERT|UPDATE|DELETE',  // SQL queries
+  'find\\(|findOne\\(|aggregate\\(', // MongoDB queries
+  'query\\(|execute\\('              // General query patterns
+];
+
+for (const pattern of queryPatterns) {
+  const queryMatches = await astGrep(root, pattern, '*');
+  if (queryMatches.length > 0) {
+    console.log(`Database queries modified - review performance impact`);
+    break;
+  }
+}
+```
+
+These recipes combine the library's core capabilities (dependency graphs, symbol navigation, AST queries) with domain-specific logic to provide comprehensive PR review assistance for backend systems.
 
 ---
 
