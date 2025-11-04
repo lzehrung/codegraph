@@ -178,6 +178,10 @@ npx codegraph impact --base main --head feature --depth 2 --max-refs 1000
 npx codegraph impact --base main --head feature --scope imported
 # Skip transitive file dependencies (symbol references only)
 npx codegraph impact --base main --head feature --members-only
+# Include line context snippets for references (±5 lines by default)
+npx codegraph impact --base main --head feature --ref-context line
+# Include block context snippets for references (enclosing function/class, max 60 lines)
+npx codegraph impact --base main --head feature --ref-context block --ref-block-max-lines 30
 ```
 
 ### For Local Development
@@ -422,7 +426,36 @@ console.log(`Changed symbols: ${report.changedSymbols.length}`);
 console.log(`Impacted files: ${report.impacted.length}`);
 for (const item of report.impacted.slice(0, 5)) {
   console.log(`${item.file}: ${item.symbols.join(', ')} (${(item.severity * 100).toFixed(1)}% severity)`);
+  // Access reference contexts if requested
+  if (item.refs) {
+    for (const ref of item.refs.slice(0, 2)) {
+      console.log(`  Reference at ${ref.range.start.line}:${ref.range.start.column}:`);
+      console.log(`    ${ref.context}`);
+    }
+  }
 }
+```
+
+Analyze PR impact with reference contexts:
+
+```ts
+// Include line context snippets for references
+const reportWithLineContext = await analyzeImpactFromDiff(root, index, {
+  provider: 'git',
+  base: 'main',
+  head: 'feature-branch',
+  refContext: 'line',  // Include ±5 lines around each reference
+  refContextLines: 3    // Override default of 5 lines
+});
+
+// Include block context snippets for references
+const reportWithBlockContext = await analyzeImpactFromDiff(root, index, {
+  provider: 'git',
+  base: 'main',
+  head: 'feature-branch',
+  refContext: 'block',      // Include enclosing function/class
+  refBlockMaxLines: 30      // Limit to 30 lines (default: 60)
+});
 ```
 
 Agent-friendly tool wrapper (returns JSON-serializable results):
