@@ -79,7 +79,7 @@ export function stripPythonCommentsAndStrings(src: string): string {
 }
 
 export function normalizePath(p: string): string {
-  return typeof p === "string" ? p.replace(/\\/g, "/") : (p as any);
+  return typeof p === "string" ? p.replace(/\\/g, "/") : "";
 }
 
 export type ModuleSpecifier = { spec: string; typeOnly?: boolean };
