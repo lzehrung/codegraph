@@ -14,12 +14,11 @@ export {
   resolvePackageSubpath,
 } from "./util.js";
 export * from "./graphs.js";
+export type { Pos, Range, FileId, EdgeTo, Edge, Graph } from "./types.js";
 export {
   SymbolKind,
-  type Pos,
-  type Range,
-  type FileId,
   type SymbolDef,
+  type SymbolHandle,
   type ExportEntry,
   type ImportBinding,
   type ModuleIndex,
@@ -36,4 +35,29 @@ export {
   findReferences,
   buildScopeIndexFromSource,
   resolveImported,
+  symbolId,
+  defFromSymbolId,
+  resolveSymbolId,
+  goToDefinitionById,
+  findReferencesById,
+  type SymbolListItem,
+  listSymbols,
 } from "./indexer.js";
+export {
+  analyzeImpactFromDiff,
+  collectImpactContext,
+  listCandidateTestFiles,
+  type Diff,
+  type FileChange,
+  type Hunk,
+  type ChangedSymbol,
+  type ImpactItem,
+  type ImpactReason,
+  type ImpactReport,
+  type CompactImpactReport,
+  type ImpactOptions,
+  type DiffProviderOptions,
+  type ImpactContext,
+  type CandidateTestFile,
+} from "./impact/index.js";
+export { tool_impactJSON, tool_impactFromDiffText } from "./agent-tools.js";
