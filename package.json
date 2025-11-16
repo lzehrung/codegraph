@@ -1,5 +1,5 @@
 {
-  "name": "codegraph",
+  "name": "@lzehrung/codegraph",
   "version": "1.6.1",
   "type": "module",
   "main": "./dist/index.js",
