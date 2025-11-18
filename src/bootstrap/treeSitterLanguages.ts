@@ -21,6 +21,7 @@ function readQuery(relPath: string): string {
 
 const jsQuery = readQuery("javascript-blocks.scm");
 const tsQuery = readQuery("typescript-blocks.scm");
+const tsxQuery = readQuery("tsx-blocks.scm");
 const pyQuery = readQuery("python-blocks.scm");
 
 const LangJS = JavaScript as unknown as Language;
@@ -31,7 +32,7 @@ const LangTSX = tsLanguages.tsx as unknown as Language;
 export const LANG_CONFIGS: Record<string, LanguageConfig> = {
   javascript: makeLanguageConfig("javascript", LangJS, jsQuery),
   typescript: makeLanguageConfig("typescript", LangTS, tsQuery),
-  tsx: makeLanguageConfig("tsx", LangTSX, tsQuery),
+  tsx: makeLanguageConfig("tsx", LangTSX, tsxQuery),
   python: makeLanguageConfig("python", LangPY, pyQuery),
 };
 
