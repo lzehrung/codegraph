@@ -230,6 +230,7 @@ export async function collectGraph(
           raw: spec,
           ...(typeOnly !== undefined && { typeOnly }),
         });
+        if (to.type === "file") graph.nodes.add(to.path);
       }
       return edges;
     } catch (error) {

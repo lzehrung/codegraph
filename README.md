@@ -19,6 +19,7 @@ Sample graph: [sample-graph.md](./sample-graph.md)
 
 * **Dependency graph**
   * JS/TS: `import`, `export ... from`, `export * from`, `require()`, `import()`, CommonJS destructuring
+  * JSON modules referenced from JS/TS (including `assert { type: "json" }`) are treated as default-only dependencies
   * Python: `import`, `from ... import`, relative imports with package resolution
   * Unresolved targets are represented as **external** nodes
 * **Symbol index**
@@ -42,6 +43,11 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * Workspace detection (npm/yarn/pnpm/lerna)
   * Per-file TypeScript config resolution
   * Package-relative import resolution
+* **Semantic chunking**
+  * Tree-sitter-based code splitting for JS/TS/Python into embedding-ready chunks
+  * Text file chunking for JSON/YAML/config files
+  * Configurable token budgets (150-400 tokens per chunk)
+  * Semantic awareness: classes, functions, methods, interfaces, namespaces, imports
 
 > **Cross-language parity**: All supported languages (TS/JS/Python) provide equivalent go-to-definition and find-references capabilities with full cross-file symbol navigation.
 
@@ -53,6 +59,96 @@ Sample graph: [sample-graph.md](./sample-graph.md)
 * **Python** (`.py`)
 
 Both languages support full cross-file navigation with equivalent capabilities.
+
+---
+
+## Semantic Chunking
+
+The library provides semantic code chunking utilities for preparing codebases for LLM processing and vector embeddings. It uses Tree-sitter to split code into meaningful units while respecting token budgets.
+
+### Supported Languages & Formats
+
+* **Code files**: JavaScript, TypeScript, TSX, Python
+* **Text files**: JSON, YAML, configuration files, documentation
+
+### APIs
+
+```ts
+import { chunkFile, chunkTextFile, LANG_CONFIGS } from 'codegraph';
+
+// Chunk a code file semantically
+const source = `function hello(name) { return "Hello " + name; }`;
+const chunks = chunkFile({
+  language: LANG_CONFIGS.javascript,
+  source,
+  filePath: "utils.js",
+  minTokens: 150,  // Merge small chunks
+  maxTokens: 400,  // Split large chunks
+});
+
+// Chunk text files by token budget
+const jsonText = `{"config": {"port": 3000, "host": "localhost"}}`;
+const textChunks = chunkTextFile({
+  source: jsonText,
+  languageId: "json",
+  minTokens: 100,
+  maxTokens: 200,
+});
+```
+
+### Chunk Format
+
+Each chunk includes:
+
+```ts
+interface Chunk {
+  id: string;           // Unique identifier
+  languageId: string;   // "javascript", "typescript", "python", etc.
+  filePath?: string;    // Optional source file path
+  type: string;         // "function", "class", "method", "import", "misc", etc.
+  name?: string;        // Symbol name if applicable
+  startLine: number;     // 1-based start line
+  endLine: number;       // 1-based end line
+  text: string;         // The chunk content
+  tokenCount: number;   // Token count estimate
+}
+```
+
+### Configuration Options
+
+* **`minTokens`**: Minimum tokens per chunk (default: 150). Smaller chunks are merged.
+* **`maxTokens`**: Maximum tokens per chunk (default: 400). Larger chunks are split.
+* **`tokenizer`**: Custom token counting function (default: whitespace-based).
+
+### Example Output
+
+```json
+[
+  {
+    "id": "javascript:utils.js:0",
+    "languageId": "javascript",
+    "filePath": "utils.js",
+    "type": "function",
+    "name": "hello",
+    "startLine": 1,
+    "endLine": 1,
+    "text": "function hello(name) { return \"Hello \" + name; }",
+    "tokenCount": 8
+  }
+]
+```
+
+### Testing & Reference
+
+See the test suites for comprehensive examples:
+- `tests/chunkFile.smoke.test.ts` and `tests/chunkFile.behavior.test.ts`: Basic chunking behavior and edge cases
+- `tests/samples/chunking/integration-example.test.ts`: Agent-focused integration examples showing how to filter chunks by type, prepare them for embeddings, and implement decision-making logic
+
+The integration examples demonstrate:
+- Semantic chunking of code files with type-based filtering
+- Text file chunking for configuration processing
+- Intelligent splitting of large code blocks
+- Agent-friendly metadata for prioritizing and processing chunks
 
 ---
 
@@ -152,6 +248,13 @@ npx codegraph index --threads 8 --cache disk
 
 # Build the project index from multiple roots
 npx codegraph index ./src ./packages/app ./packages/lib
+
+# Chunk a file for LLM processing (semantic for code, token-based for text)
+npx codegraph chunk src/utils.js
+# Output chunks as JSON array with metadata
+npx codegraph chunk package.json --text --max-tokens 200
+# Override language detection and token limits
+npx codegraph chunk config.yaml --language yaml --min-tokens 100 --max-tokens 300
 
 # Go to definition of symbol at file:line:column
 npx codegraph goto <file> <line> <column>

@@ -61,3 +61,13 @@ export {
   type CandidateTestFile,
 } from "./impact/index.js";
 export { tool_impactJSON, tool_impactFromDiffText } from "./agent-tools.js";
+export {
+  chunkFile,
+  type Chunk,
+  type ChunkFileOptions,
+} from "./chunking/chunkFile.js";
+export {
+  chunkTextFile,
+  type TextChunkOptions,
+} from "./chunking/chunkTextFile.js";
+export { LANG_CONFIGS, type LanguageConfig } from "./bootstrap/treeSitterLanguages.js";
