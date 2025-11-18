@@ -1,0 +1,8 @@
+{
+  "project": {
+    "name": "json-fixture",
+    "version": "1.0.0",
+    "flags": ["chunking", "json"]
+  },
+  "threshold": 42
+}

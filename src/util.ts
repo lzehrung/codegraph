@@ -336,7 +336,7 @@ export async function resolveWorkspacePackage(
   if (!pkg) return null;
   const baseDir = pkg.path;
 
-  const exts = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"];
+  const exts = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs", ".json"];
   const tryResolveRelative = async (rel: string): Promise<string | null> => {
     const raw = path.resolve(baseDir, rel);
     const candidates: string[] = [raw];
@@ -413,7 +413,7 @@ export async function resolveSpecifier(
       ? path.join(projectRoot, spec)
       : path.resolve(path.dirname(fromFile), spec);
     const candidates: string[] = [base];
-    const exts = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"];
+    const exts = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs", ".json"];
     // If spec already has .js/.mjs/.cjs, also try the corresponding .ts/.mts/.cts
     const baseExt = path.extname(base);
     if (baseExt === ".js" || baseExt === ".mjs" || baseExt === ".cjs") {
@@ -462,7 +462,7 @@ export async function resolveSpecifier(
           return false;
         }
       },
-      [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]
+      [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json"]
     );
     if (m) {
       const cand = path.resolve(m);
@@ -471,7 +471,7 @@ export async function resolveSpecifier(
         resolveSpecifierCache.set(cacheKey, cand);
         return cand;
       }
-      const exts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+      const exts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json"];
       for (const e of exts) {
         const pth = cand + e;
         try {
@@ -514,7 +514,7 @@ async function resolveFromNodeModules(
         const pkgPath = path.join(nmDir, "package.json");
         const pkg = await loadJSON<any>(pkgPath);
         const baseDir = nmDir;
-        const exts = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"];
+        const exts = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs", ".json"];
         const tryResolveRelative = async (rel: string): Promise<string | null> => {
           const raw = path.resolve(baseDir, rel);
           const candidates: string[] = [raw];

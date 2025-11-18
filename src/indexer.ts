@@ -211,6 +211,45 @@ export function resolveSymbolId(
   return defFromSymbolId(index, id);
 }
 
+function isJsonFile(filePath: string): boolean {
+  return filePath.toLowerCase().endsWith(".json");
+}
+
+function collectJsonDependencies(
+  imports: ImportBinding[],
+  bucket: Set<string>
+) {
+  for (const imp of imports) {
+    const resolved =
+      typeof imp.resolved === "string" ? imp.resolved.replace(/\\/g, "/") : null;
+    if (resolved && isJsonFile(resolved)) bucket.add(resolved);
+  }
+}
+
+function ensureJsonModule(
+  modules: Map<FileId, ModuleIndex>,
+  filePath: string
+) {
+  const resolved = path.resolve(filePath);
+  const normalized = resolved.replace(/\\/g, "/");
+  if (modules.has(normalized)) return;
+  if (!fs.existsSync(resolved)) return;
+  const pos = { line: 1, column: 1, index: 0 };
+  const sym: SymbolDef = {
+    file: normalized,
+    localName: "default",
+    kind: SymbolKind.Default,
+    range: { start: pos, end: pos },
+  };
+  const mod: ModuleIndex = {
+    file: normalized,
+    exports: [{ type: "local", exportedAs: "default", target: sym }],
+    imports: [],
+    locals: [sym],
+  };
+  modules.set(normalized, mod);
+}
+
 export async function goToDefinitionById(
   index: ProjectIndex,
   id: SymbolHandle
@@ -1253,6 +1292,7 @@ export async function buildProjectIndex(
       lang: Parser.Language;
     }
   >();
+  const jsonDependencies = new Set<string>();
   const fileResults = await mapLimit(files, conc, async (f) => {
     try {
       const sig = await fileSignature(f, opts?.cacheStrict);
@@ -1267,6 +1307,7 @@ export async function buildProjectIndex(
         source: src,
         tree,
       });
+      collectJsonDependencies(imports, jsonDependencies);
       const mod = collectLocalsAndExportsFromSource(
         f,
         src,
@@ -1318,6 +1359,10 @@ export async function buildProjectIndex(
   });
   for (const [f, mod] of fileResults) {
     modules.set(f.replace(/\\/g, "/"), mod);
+  }
+
+  for (const jsonPath of jsonDependencies) {
+    ensureJsonModule(modules, jsonPath);
   }
 
   for (const [file, m] of modules) {
@@ -1380,6 +1425,7 @@ export async function buildProjectIndexFromFiles(
       lang: Parser.Language;
     }
   >();
+  const jsonDependencies = new Set<string>();
   const fileResults = await mapLimit(files, conc, async (f) => {
     try {
       const sig = await fileSignature(f, opts?.cacheStrict);
@@ -1394,6 +1440,7 @@ export async function buildProjectIndexFromFiles(
         source: src,
         tree,
       });
+      collectJsonDependencies(imports, jsonDependencies);
       const mod = collectLocalsAndExportsFromSource(
         f,
         src,
@@ -1445,6 +1492,10 @@ export async function buildProjectIndexFromFiles(
   });
   for (const [f, mod] of fileResults) {
     modules.set(f.replace(/\\/g, "/"), mod);
+  }
+
+  for (const jsonPath of jsonDependencies) {
+    ensureJsonModule(modules, jsonPath);
   }
 
   for (const [file, m] of modules) {
