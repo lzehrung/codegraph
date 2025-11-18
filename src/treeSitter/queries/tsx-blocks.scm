@@ -1,13 +1,13 @@
-;; ================================
-;; JavaScript semantic chunk blocks
-;; ================================
+;; ==================================
+;; TSX semantic chunk blocks
+;; ==================================
 
 ;; ----- Comments -----
 (comment) @chunk.comment
 
 ;; ----- Classes -----
 (class_declaration
-  name: (identifier) @chunk.name) @chunk.block.class
+  name: (type_identifier) @chunk.name) @chunk.block.class
 
 ;; ----- Standalone function declarations -----
 (function_declaration
@@ -106,6 +106,30 @@
 ;; Capture JSX elements (components)
 (jsx_element) @chunk.block.jsx
 (jsx_self_closing_element) @chunk.block.jsx
+
+;; ----- Interfaces -----
+(interface_declaration
+  name: (type_identifier) @chunk.name) @chunk.block.interface
+
+;; ----- Enums -----
+(enum_declaration
+  name: [
+    (identifier)
+    (type_identifier)
+  ] @chunk.name) @chunk.block.enum
+
+;; ----- Type aliases -----
+(type_alias_declaration
+  name: (type_identifier) @chunk.name) @chunk.block.type_alias
+
+;; ----- Namespaces / modules -----
+(internal_module
+  name: (identifier) @chunk.name
+  body: (statement_block) @chunk.block.namespace)
+
+(module
+  name: (identifier) @chunk.name
+  body: (statement_block) @chunk.block.namespace)
 
 ;; ================================
 ;; Top-level imports & module vars
