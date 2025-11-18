@@ -10,6 +10,8 @@ import type { Language } from "tree-sitter";
 
 import { makeLanguageConfig, type LanguageConfig } from "../chunking/languageConfig.js";
 
+export type { LanguageConfig };
+
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function readQuery(relPath: string): string {

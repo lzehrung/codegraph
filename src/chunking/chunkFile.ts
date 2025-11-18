@@ -2,15 +2,27 @@ import type { QueryMatch, SyntaxNode } from "tree-sitter";
 
 import type { LanguageConfig } from "./languageConfig.js";
 
+/**
+ * Represents a semantic chunk of code or text, ready for LLM processing or vector embeddings.
+ */
 export interface Chunk {
+  /** Unique identifier for the chunk */
   id: string;
+  /** Language identifier (e.g., "javascript", "typescript", "python") */
   languageId: string;
+  /** Optional source file path */
   filePath?: string;
+  /** Chunk type (e.g., "function", "class", "method", "import", "misc") */
   type: string;
+  /** Symbol name if applicable (e.g., function name, class name) */
   name?: string;
-  startLine: number; // 1-based
-  endLine: number; // 1-based
+  /** 1-based start line number */
+  startLine: number;
+  /** 1-based end line number */
+  endLine: number;
+  /** The chunk content text */
   text: string;
+  /** Estimated token count */
   tokenCount: number;
 }
 
@@ -23,12 +35,21 @@ interface BlockCandidate {
   endLine: number;
 }
 
+/**
+ * Options for semantic code chunking.
+ */
 export interface ChunkFileOptions {
+  /** Language configuration for parsing */
   language: LanguageConfig;
+  /** Source code to chunk */
   source: string;
+  /** Optional source file path for chunk IDs */
   filePath?: string;
+  /** Minimum tokens per chunk (default: 150). Smaller chunks are merged. */
   minTokens?: number;
+  /** Maximum tokens per chunk (default: 400). Larger chunks are split. */
   maxTokens?: number;
+  /** Custom token counting function (default: whitespace-based) */
   tokenizer?: (text: string) => number;
 }
 
@@ -37,6 +58,13 @@ function defaultTokenizer(text: string): number {
   return text.trim().split(/\s+/).length;
 }
 
+/**
+ * Splits code into semantic chunks using Tree-sitter queries.
+ * Chunks respect token budgets and preserve semantic boundaries like functions, classes, and methods.
+ *
+ * @param opts Chunking options
+ * @returns Array of semantic chunks
+ */
 export function chunkFile(opts: ChunkFileOptions): Chunk[] {
   const {
     language,

@@ -19,6 +19,9 @@ import {
   graphToMermaidSymbolsWithFiles,
   graphToDOTSymbolsWithFiles,
   analyzeImpactFromDiff,
+  chunkFile,
+  chunkTextFile,
+  LANG_CONFIGS,
 } from "./index.js";
 
 function toJSON(obj: any) {
@@ -518,6 +521,83 @@ async function main() {
       }
     } catch (error) {
       writeStderrLine(`Impact analysis failed: ${error}`);
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (cmd === "chunk") {
+    const filePath = nonFlags[1];
+    if (!filePath) {
+      writeStderrLine("Usage: chunk <file-path> [options]");
+      writeStderrLine("Options:");
+      writeStderrLine("  --min-tokens N    Minimum tokens per chunk (default: 150)");
+      writeStderrLine("  --max-tokens N    Maximum tokens per chunk (default: 400)");
+      writeStderrLine("  --language LANG   Language override (javascript, typescript, tsx, python, json, yaml, text)");
+      writeStderrLine("  --text            Force text chunking mode");
+      process.exit(2);
+    }
+
+    try {
+      const source = await fsp.readFile(filePath, "utf8");
+      const ext = path.extname(filePath).toLowerCase();
+
+      // Detect language from extension if not specified
+      let languageId = args.find((a, i) => a === "--language" && args[i + 1]) ? args[args.findIndex(a => a === "--language") + 1] : undefined;
+      if (!languageId) {
+        const extMap: Record<string, string> = {
+          ".js": "javascript",
+          ".jsx": "javascript",
+          ".mjs": "javascript",
+          ".cjs": "javascript",
+          ".ts": "typescript",
+          ".mts": "typescript",
+          ".cts": "typescript",
+          ".tsx": "tsx",
+          ".py": "python",
+          ".json": "json",
+          ".yaml": "yaml",
+          ".yml": "yaml",
+        };
+        languageId = extMap[ext] || "text";
+      }
+
+      const forceText = flags.includes("--text");
+      const minTokensIdx = args.findIndex(a => a === "--min-tokens");
+      const maxTokensIdx = args.findIndex(a => a === "--max-tokens");
+      const minTokens = minTokensIdx !== -1 ? Number(args[minTokensIdx + 1]) : 150;
+      const maxTokens = maxTokensIdx !== -1 ? Number(args[maxTokensIdx + 1]) : 400;
+
+      let chunks;
+
+      if (forceText || !["javascript", "typescript", "tsx", "python"].includes(languageId)) {
+        // Use text chunking for non-code files or when forced
+        chunks = chunkTextFile({
+          source,
+          filePath,
+          languageId,
+          minTokens,
+          maxTokens,
+        });
+      } else {
+        // Use semantic chunking for code files
+        const langConfig = LANG_CONFIGS[languageId as keyof typeof LANG_CONFIGS];
+        if (!langConfig) {
+          writeStderrLine(`Unsupported language: ${languageId}`);
+          process.exit(1);
+        }
+        chunks = chunkFile({
+          language: langConfig,
+          source,
+          filePath,
+          minTokens,
+          maxTokens,
+        });
+      }
+
+      writeJSONLine(chunks);
+    } catch (error) {
+      writeStderrLine(`Chunking failed: ${error}`);
       process.exit(1);
     }
     return;

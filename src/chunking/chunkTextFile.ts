@@ -1,11 +1,20 @@
 import type { Chunk } from "./chunkFile.js";
 
+/**
+ * Options for text file chunking (JSON, YAML, config files, etc.).
+ */
 export interface TextChunkOptions {
+  /** Text content to chunk */
   source: string;
+  /** Optional source file path for chunk IDs */
   filePath?: string;
-  languageId?: string; // e.g. "json", "yaml", "text"
+  /** Language identifier (e.g., "json", "yaml", "text") */
+  languageId?: string;
+  /** Minimum tokens per chunk (default: 150). Smaller chunks are merged. */
   minTokens?: number;
+  /** Maximum tokens per chunk (default: 400). Larger chunks are split. */
   maxTokens?: number;
+  /** Custom token counting function (default: whitespace-based) */
   tokenizer?: (text: string) => number;
 }
 
@@ -14,6 +23,13 @@ function defaultTokenizer(text: string): number {
   return text.trim().split(/\s+/).length;
 }
 
+/**
+ * Splits text files into chunks respecting token budgets.
+ * Useful for JSON, YAML, configuration files, and other non-code text content.
+ *
+ * @param opts Text chunking options
+ * @returns Array of text chunks
+ */
 export function chunkTextFile(opts: TextChunkOptions): Chunk[] {
   const {
     source,
