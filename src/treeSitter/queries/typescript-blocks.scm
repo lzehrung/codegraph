@@ -67,7 +67,18 @@
 (else_clause
   (statement_block) @chunk.block.inner)
 
+(switch_statement
+  body: (switch_body) @chunk.block.inner)
+
+;; Capture individual cases so we can split large switches intelligently
+(switch_case) @chunk.block.inner
+(switch_default) @chunk.block.inner
+
 (for_statement
+  body: (statement_block) @chunk.block.inner)
+
+;; for_in_statement covers both for..in and for..of
+(for_in_statement
   body: (statement_block) @chunk.block.inner)
 
 (while_statement
@@ -84,6 +95,15 @@
 
 (finally_clause
   body: (statement_block) @chunk.block.inner)
+
+;; ==========================================
+;; Data Structures & JSX
+;; ==========================================
+
+;; Capture large objects (configs, props) as coherent blocks
+(object) @chunk.block.data
+
+;; JSX omitted for standard TypeScript grammar (use tsx-blocks.scm for TSX)
 
 ;; ----- Interfaces -----
 (interface_declaration
@@ -125,4 +145,3 @@
       (variable_declarator
         name: (identifier) @chunk.name) @chunk.block.module_var)
   ])
-
