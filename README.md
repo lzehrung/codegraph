@@ -19,6 +19,7 @@ Sample graph: [sample-graph.md](./sample-graph.md)
 
 * **Dependency graph**
   * JS/TS: `import`, `export ... from`, `export * from`, `require()`, `import()`, CommonJS destructuring
+  * JSON modules referenced from JS/TS (including `assert { type: "json" }`) are treated as default-only dependencies
   * Python: `import`, `from ... import`, relative imports with package resolution
   * Unresolved targets are represented as **external** nodes
 * **Symbol index**
