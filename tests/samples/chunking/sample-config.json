@@ -1,0 +1,36 @@
+{
+  "application": {
+    "name": "CodeGraph Chunking Demo",
+    "version": "1.0.0",
+    "environment": "development"
+  },
+  "database": {
+    "host": "localhost",
+    "port": 5432,
+    "name": "codegraph_db",
+    "credentials": {
+      "username": "admin",
+      "password": "secret123"
+    },
+    "connectionPool": {
+      "min": 2,
+      "max": 10,
+      "idleTimeoutMillis": 30000
+    }
+  },
+  "features": {
+    "chunking": true,
+    "embeddings": false,
+    "vectorSearch": false
+  },
+  "logging": {
+    "level": "info",
+    "format": "json",
+    "outputs": ["console", "file"],
+    "file": {
+      "path": "/var/log/codegraph.log",
+      "maxSize": "10m",
+      "maxFiles": 5
+    }
+  }
+}
