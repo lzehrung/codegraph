@@ -43,6 +43,46 @@ function big(value) {
     expect(functionChunks.every((c) => c.tokenCount <= maxTokens)).toBe(true);
   });
 
+  it("emits stable line ranges for functions and nested else blocks", () => {
+    const source = `
+function processUsers(users) {
+  const normalized = users.map((user) => ({
+    ...user,
+    active: Boolean(user.active),
+  }));
+
+  if (!normalized.length) {
+    return [];
+  } else {
+    const staged = [...normalized];
+    staged.sort((a, b) => a.id.localeCompare(b.id));
+    return staged;
+  }
+}
+
+const finalize = () => {
+  return processUsers([]);
+};
+`.trimStart();
+
+    const chunks = chunkFile({
+      language: LANG_CONFIGS.javascript,
+      source,
+      filePath: "ranges.js",
+      minTokens: 1,
+      maxTokens: 8,
+      tokenizer: tokenize,
+    });
+
+    const processUsersChunks = chunks.filter((c) => c.type === "function" && c.name === "processUsers");
+    expect(processUsersChunks.length).toBeGreaterThan(1);
+    expect(processUsersChunks[0]?.startLine).toBe(1);
+    expect(processUsersChunks[processUsersChunks.length - 1]?.endLine).toBe(14);
+
+    const elseSegment = processUsersChunks.find((c) => c.startLine === 9 && c.endLine === 13);
+    expect(elseSegment).toBeDefined();
+  });
+
   it("detects JavaScript functions assigned to variables and properties", () => {
     const source = `
 const alpha = () => {
@@ -130,6 +170,31 @@ module Legacy {
     expect(chunks.some((c) => c.type === "namespace" && c.name === "Tools")).toBe(true);
     expect(chunks.some((c) => c.type === "namespace" && c.name === "Legacy")).toBe(true);
     expect(chunks.some((c) => c.type === "function" && c.name === "build")).toBe(true);
+  });
+
+  it("captures TypeScript enums regardless of identifier node type", () => {
+    const source = `
+export enum Foo {
+  One,
+  Two,
+}
+
+declare enum FooBar {
+  Single,
+}
+`.trimStart();
+
+    const chunks = chunkFile({
+      language: LANG_CONFIGS.typescript,
+      source,
+      filePath: "enum.ts",
+      minTokens: 1,
+      maxTokens: 200,
+      tokenizer: tokenize,
+    });
+
+    const enumNames = chunks.filter((c) => c.type === "enum").map((c) => c.name);
+    expect(enumNames).toEqual(expect.arrayContaining(["Foo", "FooBar"]));
   });
 
   it("splits Python functions that contain elif/else blocks", () => {

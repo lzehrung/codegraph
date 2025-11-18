@@ -142,6 +142,8 @@ interface Chunk {
 
 See the test suites for comprehensive examples:
 - `tests/chunkFile.smoke.test.ts` and `tests/chunkFile.behavior.test.ts`: Basic chunking behavior and edge cases
+- `docs/chunking-test-plan.md`: Living checklist for enum/docstring/CLI regression guards
+- `tests/chunk-cli.test.ts`: CLI `chunk` command smoke tests for language overrides and token limits
 - `tests/samples/chunking/integration-example.test.ts`: Agent-focused integration examples showing how to filter chunks by type, prepare them for embeddings, and implement decision-making logic
 
 The integration examples demonstrate:

@@ -25,6 +25,7 @@
     "test:ci": "vitest run",
     "test:ui": "vitest --ui",
     "test:run": "vitest run",
+    "test:watch": "vitest --watch",
     "preversion": "npm run test:ci && npm run build",
     "postversion": "git push && git push --tags",
     "release:patch": "npm version patch",
