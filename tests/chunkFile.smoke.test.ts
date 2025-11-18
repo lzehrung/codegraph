@@ -163,6 +163,7 @@ def top_level(y):
 
     const docstringChunks = chunks.filter((c) => c.type === "docstring");
     expect(docstringChunks.length).toBe(1);
+    expect(docstringChunks[0]?.text).toBe('"""Module docstring explaining the purpose of this file."""');
   });
 });
 

@@ -91,7 +91,10 @@
 
 ;; ----- Enums -----
 (enum_declaration
-  name: (identifier) @chunk.name) @chunk.block.enum
+  name: [
+    (identifier)
+    (type_identifier)
+  ] @chunk.name) @chunk.block.enum
 
 ;; ----- Type aliases -----
 (type_alias_declaration
