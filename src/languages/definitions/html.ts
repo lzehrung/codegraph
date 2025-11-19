@@ -1,0 +1,39 @@
+import type { Language } from "tree-sitter";
+import HTML from "tree-sitter-html";
+import type { LanguageDefinition } from "../types.js";
+
+const LangHTML = HTML as unknown as Language;
+
+export const HTML_DEF: LanguageDefinition = {
+  id: "html",
+  extensions: [".html", ".htm"],
+  grammar: () => LangHTML,
+  structure: {
+    blocks: [
+      { 
+        type: "element", 
+        nameQuery: `(start_tag (attribute (attribute_name) @attr (#eq? @attr "id") (quoted_attribute_value (attribute_value) @chunk.name)))`, 
+        captureId: "element" 
+      },
+      { type: "script_element", captureId: "script" },
+      { type: "style_element", captureId: "style" }
+    ],
+    splitPoints: ["element"],
+    comments: ["comment"]
+  },
+  graph: {
+    imports: `
+      (script_element (start_tag (attribute (attribute_name) @attr (#eq? @attr "src") (quoted_attribute_value (attribute_value) @mod)))) @stmt
+      (element (start_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "href") (quoted_attribute_value (attribute_value) @mod)))) @stmt (#eq? @tag "link")
+    `,
+    exports: "",
+    locals: `
+      (attribute (attribute_name) @attr (#eq? @attr "id") (quoted_attribute_value (attribute_value) @name))
+    `,
+    importBindings: ""
+  },
+  nodeTypes: {
+    identifier: ["attribute_value", "tag_name"],
+  }
+};
+

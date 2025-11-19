@@ -1,0 +1,24 @@
+/* Main styles */
+@import "reset.css";
+
+.container {
+    width: 100%;
+    margin: 0 auto;
+}
+
+#header {
+    background: #333;
+    color: white;
+}
+
+@media (max-width: 600px) {
+    .container {
+        width: 100%;
+    }
+}
+
+@keyframes slide {
+    from { left: 0; }
+    to { left: 100px; }
+}
+

@@ -141,7 +141,8 @@ interface Chunk {
 ### Testing & Reference
 
 See the test suites for comprehensive examples:
-- `tests/chunkFile.smoke.test.ts` and `tests/chunkFile.behavior.test.ts`: Basic chunking behavior and edge cases
+- `tests/languages/*.test.ts`: Data-driven tests for each supported language
+- `tests/chunkFile.behavior.test.ts`: Detailed behavior and edge case tests
 - `docs/chunking-test-plan.md`: Living checklist for enum/docstring/CLI regression guards
 - `tests/chunk-cli.test.ts`: CLI `chunk` command smoke tests for language overrides and token limits
 - `tests/samples/chunking/integration-example.test.ts`: Agent-focused integration examples showing how to filter chunks by type, prepare them for embeddings, and implement decision-making logic
@@ -786,16 +787,22 @@ These recipes combine the library's core capabilities (dependency graphs, symbol
 
 ## Extending to other languages
 
-Add a new `LanguageSupport` entry:
+We use a **unified language definition** system that powers both the dependency graph and semantic chunking.
 
-* Provide the grammar (e.g., `tree-sitter-ruby`) and file extensions.
-* Fill **queries**:
+To add a new language (e.g., Go):
 
-  * `imports`: enough to discover module specifiers for edges.
-  * `locals`: function/class/var definitions for symbol index.
-  * `exports`: whatever the language uses (if any).
-  * `importBindings`: captures to seed the module scope (default/named/namespace-like).
-* Implement `classifyDefinition`, `isDeclarationName`, and simple scope rules.
+1.  **Create a definition file**:
+    *   Add `src/languages/definitions/go.ts`.
+    *   Implement the `LanguageDefinition` interface (grammar, extensions, structure, graph queries).
+    *   This single definition auto-generates the Tree-sitter queries for chunking.
+
+2.  **Register the language**:
+    *   Add it to `src/languages.ts` (for the graph).
+    *   Add it to `src/bootstrap/treeSitterLanguages.ts` (for chunking).
+
+3.  **Add tests**:
+    *   Add a sample file: `tests/languages/samples/go.sample.go`.
+    *   Add a test definition: `tests/languages/go.test.ts`.
 
 You can keep it **80/20** first; the core system degrades gracefully (unresolvable edges become `external`).
 

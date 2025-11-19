@@ -4,6 +4,17 @@ import type { LanguageDefinition } from "./languages/types.js";
 import { TYPESCRIPT_DEF, TSX_DEF } from "./languages/definitions/typescript.js";
 import { JAVASCRIPT_DEF } from "./languages/definitions/javascript.js";
 import { PYTHON_DEF } from "./languages/definitions/python.js";
+import { HTML_DEF } from "./languages/definitions/html.js";
+import { CSS_DEF } from "./languages/definitions/css.js";
+import { SCSS_DEF } from "./languages/definitions/scss.js";
+import { LESS_DEF } from "./languages/definitions/less.js";
+import { VUE_DEF } from "./languages/definitions/vue.js";
+import { SVELTE_DEF } from "./languages/definitions/svelte.js";
+import { RUBY_DEF } from "./languages/definitions/ruby.js";
+import { GO_DEF } from "./languages/definitions/go.js";
+import { JAVA_DEF } from "./languages/definitions/java.js";
+import { CSHARP_DEF } from "./languages/definitions/csharp.js";
+import { RUST_DEF } from "./languages/definitions/rust.js";
 
 export type IdentifierNodeType = string;
 
@@ -49,12 +60,34 @@ export const TS_SUPPORT = adaptDefinition(TYPESCRIPT_DEF);
 export const TSX_SUPPORT = adaptDefinition(TSX_DEF);
 export const JS_SUPPORT = adaptDefinition(JAVASCRIPT_DEF);
 export const PY_SUPPORT = adaptDefinition(PYTHON_DEF);
+export const HTML_SUPPORT = adaptDefinition(HTML_DEF);
+export const CSS_SUPPORT = adaptDefinition(CSS_DEF);
+export const SCSS_SUPPORT = adaptDefinition(SCSS_DEF);
+export const LESS_SUPPORT = adaptDefinition(LESS_DEF);
+// export const VUE_SUPPORT = adaptDefinition(VUE_DEF);
+// export const SVELTE_SUPPORT = adaptDefinition(SVELTE_DEF);
+export const RUBY_SUPPORT = adaptDefinition(RUBY_DEF);
+export const GO_SUPPORT = adaptDefinition(GO_DEF);
+export const JAVA_SUPPORT = adaptDefinition(JAVA_DEF);
+export const CSHARP_SUPPORT = adaptDefinition(CSHARP_DEF);
+export const RUST_SUPPORT = adaptDefinition(RUST_DEF);
 
 export const LANGUAGE_SUPPORTS: LanguageSupport[] = [
   TS_SUPPORT,
   TSX_SUPPORT,
   JS_SUPPORT,
   PY_SUPPORT,
+  HTML_SUPPORT,
+  CSS_SUPPORT,
+  SCSS_SUPPORT,
+  LESS_SUPPORT,
+  // VUE_SUPPORT,
+  // SVELTE_SUPPORT,
+  RUBY_SUPPORT,
+  GO_SUPPORT,
+  JAVA_SUPPORT,
+  CSHARP_SUPPORT,
+  RUST_SUPPORT,
 ];
 
 export function supportForFile(filename: string): LanguageSupport {
