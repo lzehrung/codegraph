@@ -42,11 +42,24 @@ export function makeLanguageConfig(
 ): LanguageConfig {
   const parser = new Parser();
   const lang = def.grammar(filename);
-  parser.setLanguage(lang);
+  try {
+    parser.setLanguage(lang);
+  } catch (e) {
+    console.error(`Error setting language for ${def.id}:`, e);
+    console.log("Language object:", lang);
+    throw e;
+  }
   
   const queryText = generateChunkingQuery(def);
   // console.log(`Generated query for ${def.id}:`, queryText);
-  const query = new Query(lang, queryText);
+  let query: Query;
+  try {
+    query = new Query(lang, queryText);
+  } catch (e) {
+    console.error(`Error compiling query for language ${def.id}:`);
+    console.error(queryText);
+    throw e;
+  }
 
   return {
     id: def.id,
