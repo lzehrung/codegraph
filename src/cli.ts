@@ -21,6 +21,7 @@ import {
   analyzeImpactFromDiff,
   chunkFile,
   chunkTextFile,
+  chunkSFCFile,
   LANG_CONFIGS,
 } from "./index.js";
 
@@ -533,7 +534,7 @@ async function main() {
       writeStderrLine("Options:");
       writeStderrLine("  --min-tokens N    Minimum tokens per chunk (default: 150)");
       writeStderrLine("  --max-tokens N    Maximum tokens per chunk (default: 400)");
-      writeStderrLine("  --language LANG   Language override (javascript, typescript, tsx, python, json, yaml, text)");
+      writeStderrLine("  --language LANG   Language override (javascript, typescript, tsx, python, vue, svelte, json, yaml, text)");
       writeStderrLine("  --text            Force text chunking mode");
       process.exit(2);
     }
@@ -558,6 +559,8 @@ async function main() {
           ".json": "json",
           ".yaml": "yaml",
           ".yml": "yaml",
+          ".vue": "vue",
+          ".svelte": "svelte",
         };
         languageId = extMap[ext] || "text";
       }
@@ -570,12 +573,21 @@ async function main() {
 
       let chunks;
 
-      if (forceText || !["javascript", "typescript", "tsx", "python"].includes(languageId)) {
+      const isSFC = languageId === "vue" || languageId === "svelte";
+      if (forceText || (!isSFC && !["javascript", "typescript", "tsx", "python"].includes(languageId))) {
         // Use text chunking for non-code files or when forced
         chunks = chunkTextFile({
           source,
           filePath,
           languageId,
+          minTokens,
+          maxTokens,
+        });
+      } else if (isSFC) {
+        chunks = chunkSFCFile({
+          source,
+          filePath,
+          framework: languageId as "vue" | "svelte",
           minTokens,
           maxTokens,
         });

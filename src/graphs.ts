@@ -2,7 +2,8 @@ import path from "node:path";
 import Parser from "tree-sitter";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import { supportForFile, languageForFile } from "./languages.js";
+import { supportForFile } from "./languages.js";
+import { prepareParserInput } from "./languages/filePrep.js";
 import type { LanguageSupport } from "./languages.js";
 import type { FileId, EdgeTo, Edge, Graph } from "./types.js";
 import {
@@ -181,9 +182,15 @@ export async function collectGraph(
   const filePromises = await mapLimit(files, conc, async (file) => {
     try {
       const parsed = opts?.parsed?.get(file);
-      const sup = parsed?.sup ?? supportForFile(file);
-      const lang = parsed?.lang ?? languageForFile(file);
-      const src = parsed?.source ?? (await fsp.readFile(file, "utf8"));
+      let sup = parsed?.sup;
+      let lang = parsed?.lang;
+      let src = parsed?.source;
+      if (!sup || !lang || src === undefined) {
+        const prep = await prepareParserInput(file);
+        sup = prep.sup;
+        lang = prep.lang;
+        src = prep.source;
+      }
       const fast = !!opts?.fast;
       const specs = collectModuleSpecifiersFromSource(
         sup,
@@ -339,18 +346,19 @@ export type AstGrepHit = {
 export async function astGrep(
   projectRoot: string,
   querySource: string,
-  patterns = ["**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py}"]
+  patterns = ["**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte}"]
 ): Promise<AstGrepHit[]> {
   const hits: AstGrepHit[] = [];
   const files = await listProjectFiles(projectRoot, patterns);
   for (const file of files) {
     try {
-      const lang = languageForFile(file);
-      const sup = supportForFile(file);
+      const prep = await prepareParserInput(file);
+      const lang = prep.lang;
+      const sup = prep.sup;
       const key = (sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts");
       const parser = acquireParser(lang, key);
       parser.setLanguage(lang);
-      const src = await fsp.readFile(file, "utf8");
+      const src = prep.source;
       const tree = parser.parse(src);
       const query = new Parser.Query(lang, querySource);
       for (const m of query.matches(tree.rootNode)) {
@@ -662,12 +670,23 @@ export async function buildSymbolGraphDetailed(
       if (!(hasFuncOrClass && isImportedOrImports)) continue;
     }
     try {
-      const sup = supportForFile(file);
-      const lang = languageForFile(file);
-      const parser = new Parser();
-      parser.setLanguage(lang);
-      const src = await fsp.readFile(file, "utf8");
-      const tree = parser.parse(src);
+      const parsedEntry = index.parsed?.get(file);
+      let sup = parsedEntry?.sup;
+      let lang = parsedEntry?.lang;
+      let src = parsedEntry?.source;
+      let tree = parsedEntry?.tree;
+      if (!sup || !lang || src === undefined || !tree) {
+        const prep = await prepareParserInput(file);
+        sup = prep.sup;
+        lang = prep.lang;
+        src = prep.source;
+        const parser = new Parser();
+        parser.setLanguage(lang);
+        tree = parser.parse(src);
+      }
+      if (!sup || !lang || src === undefined || !tree) {
+        throw new Error(`Failed to parse ${file}`);
+      }
 
       // Build mapping from imported local alias -> target def (best-effort)
       const aliasToTargetDef = new Map<string, SymbolDef>();

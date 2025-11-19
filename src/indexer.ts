@@ -3,7 +3,8 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import Parser from "tree-sitter";
 import crypto from "node:crypto";
-import { supportForFile, languageForFile, getCompiledQueries } from "./languages.js";
+import { supportForFile, getCompiledQueries } from "./languages.js";
+import { prepareParserInput } from "./languages/filePrep.js";
 import {
   listProjectFiles,
   sliceText,
@@ -892,15 +893,35 @@ export function collectLocalsAndExportsFromSource(
 export async function collectImportsForFile(
   file: string,
   projectRoot: string,
-  opts?: { source?: string; tree?: Parser.Tree }
+  opts?: {
+    source?: string;
+    tree?: Parser.Tree;
+    sup?: ReturnType<typeof supportForFile>;
+    lang?: Parser.Language;
+  }
 ): Promise<ImportBinding[]> {
-  const sup = supportForFile(file);
-  const lang = languageForFile(file);
-  const source = opts?.source ?? (await fsp.readFile(file, "utf8"));
+  let source = opts?.source;
+  let sup = opts?.sup;
+  let lang = opts?.lang;
+
+  if (!source || !sup || !lang) {
+    const prep = await prepareParserInput(
+      file,
+      source !== undefined ? { source } : undefined
+    );
+    source = prep.source;
+    sup = prep.sup;
+    lang = prep.lang;
+  }
+
+  const resolvedSource = source!;
+  const resolvedSup = sup!;
+  const resolvedLang = lang!;
+
   const imports: ImportBinding[] = [];
 
-  if (sup.id === "python") {
-    const pySrc = stripPythonCommentsAndStrings(source);
+  if (resolvedSup.id === "python") {
+    const pySrc = stripPythonCommentsAndStrings(resolvedSource);
     const pushStar = async (moduleSpec: string) => {
       const m = moduleSpec.match(/^(\.+)(.*)$/);
       const relDots = m ? m[1]!.length : 0;
@@ -1021,28 +1042,31 @@ export async function collectImportsForFile(
     return imports;
   }
 
-  const key = (sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts") as any;
-  const parser = acquireParser(lang, key);
-  parser.setLanguage(lang);
-  const tree = opts?.tree ?? parser.parse(source);
-  const tsCfg =
-    sup.id === "ts" ? await loadNearestTsconfigFor(file) : undefined;
-  const workspaceConfig = await loadWorkspaceConfig(projectRoot);
+  const key = (resolvedSup.id === "python" ? "py" : resolvedSup.id === "js" ? "js" : "ts") as any;
+  const parser = acquireParser(resolvedLang, key);
+  try {
+    parser.setLanguage(resolvedLang);
+    const tree = opts?.tree ?? parser.parse(resolvedSource);
+    const tsCfg =
+      resolvedSup.id === "ts" ? await loadNearestTsconfigFor(file) : undefined;
+    const workspaceConfig = await loadWorkspaceConfig(projectRoot);
 
-  const resolveFrom = async (from: string) => {
-    const r = await resolveSpecifier(
-      file,
-      from,
-      projectRoot,
-      tsCfg?.matchPath,
-      workspaceConfig
-    );
-    return typeof r === "string" ? r.replace(/\\/g, "/") : r;
-  };
+    const resolveFrom = async (from: string) => {
+      const r = await resolveSpecifier(
+        file,
+        from,
+        projectRoot,
+        tsCfg?.matchPath,
+        workspaceConfig
+      );
+      return typeof r === "string" ? r.replace(/\\/g, "/") : r;
+    };
 
-  const runFallback = async () => {
-    const src =
-      sup.id === "ts" || sup.id === "js" ? stripJsLikeComments(source) : source;
+    const runFallback = async () => {
+      const src =
+        resolvedSup.id === "ts" || resolvedSup.id === "js"
+          ? stripJsLikeComments(resolvedSource)
+          : resolvedSource;
     const typeOnlyImport = /\bimport\s+type\b/;
     const reFrom = /^\s*import\s+([^\n;]*?)\s+from\s+(["'])(?<m>[^"']+)\2/gm;
     for (const m of src.matchAll(reFrom)) {
@@ -1140,10 +1164,10 @@ export async function collectImportsForFile(
     }
   };
 
-  let ranFallback = false;
-  try {
-    const { importBindings: q } = getCompiledQueries(lang, sup as any);
-    for (const m of q.matches(tree.rootNode)) {
+    let ranFallback = false;
+    try {
+      const { importBindings: q } = getCompiledQueries(resolvedLang, resolvedSup as any);
+      for (const m of q.matches(tree.rootNode)) {
       const caps = Object.fromEntries(
         m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const)
       );
@@ -1238,16 +1262,19 @@ export async function collectImportsForFile(
           typeOnly,
         });
       }
+      }
+    } catch {
+      await runFallback();
+      ranFallback = true;
     }
-  } catch {
-    await runFallback();
-    ranFallback = true;
+    // Only run fallback when query path produced no results
+    if (!ranFallback && imports.length === 0) {
+      await runFallback();
+    }
+    return imports;
+  } finally {
+    releaseParser(parser, key);
   }
-  // Only run fallback when query path produced no results
-  if (!ranFallback && imports.length === 0) {
-    await runFallback();
-  }
-  return imports;
 }
 
 export async function parseFile(
@@ -1258,15 +1285,43 @@ export async function parseFile(
   sup: ReturnType<typeof supportForFile>;
   lang: Parser.Language;
 }> {
-  const sup = supportForFile(file);
-  const lang = languageForFile(file);
-  const source = await fsp.readFile(file, "utf8");
+  const prep = await prepareParserInput(file);
+  const sup = prep.sup;
+  const lang = prep.lang;
+  const source = prep.source;
   const key = (sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts") as any;
   const parser = acquireParser(lang, key);
   try {
     parser.setLanguage(lang);
     const tree = parser.parse(source);
     return { source, tree, sup, lang };
+  } finally {
+    releaseParser(parser, key);
+  }
+}
+
+async function ensureParsedContext(
+  file: string,
+  parsedEntry?: {
+    source: string;
+    tree: Parser.Tree;
+    sup: ReturnType<typeof supportForFile>;
+    lang: Parser.Language;
+  }
+): Promise<{
+  source: string;
+  tree: Parser.Tree;
+  sup: ReturnType<typeof supportForFile>;
+  lang: Parser.Language;
+}> {
+  if (parsedEntry) return parsedEntry;
+  const prep = await prepareParserInput(file);
+  const key = (prep.sup.id === "python" ? "py" : prep.sup.id === "js" ? "js" : "ts") as any;
+  const parser = acquireParser(prep.lang, key);
+  try {
+    parser.setLanguage(prep.lang);
+    const tree = parser.parse(prep.source);
+    return { source: prep.source, tree, sup: prep.sup, lang: prep.lang };
   } finally {
     releaseParser(parser, key);
   }
@@ -1306,6 +1361,8 @@ export async function buildProjectIndex(
       const imports = await collectImportsForFile(f, projectRoot, {
         source: src,
         tree,
+        sup,
+        lang,
       });
       collectJsonDependencies(imports, jsonDependencies);
       const mod = collectLocalsAndExportsFromSource(
@@ -1439,6 +1496,8 @@ export async function buildProjectIndexFromFiles(
       const imports = await collectImportsForFile(f, projectRoot, {
         source: src,
         tree,
+        sup,
+        lang,
       });
       collectJsonDependencies(imports, jsonDependencies);
       const mod = collectLocalsAndExportsFromSource(
@@ -1609,22 +1668,12 @@ export async function goToDefinition(
   const mod = index.byFile.get(file);
   if (!mod) return { status: "not_found", reason: "File not indexed" };
 
-  const lang = languageForFile(file);
-  const sup = supportForFile(file);
   const parsedEntry = index.parsed?.get(file);
-  const key = (sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts") as any;
-  let parser: Parser | null = null;
-  let tree: Parser.Tree;
-  let source: string;
-  if (parsedEntry) {
-    source = parsedEntry.source;
-    tree = parsedEntry.tree;
-  } else {
-    parser = acquireParser(lang, key);
-    parser.setLanguage(lang);
-    source = await fsp.readFile(file, "utf8");
-    tree = parser.parse(source);
-  }
+  const context = await ensureParsedContext(file, parsedEntry);
+  const sup = context.sup;
+  const lang = context.lang;
+  const source = context.source;
+  const tree = context.tree;
 
   const pos = {
     row: Math.max(0, line - 1),
@@ -1731,14 +1780,12 @@ export async function goToDefinition(
   if (name) {
     const local = mod.locals.find((d) => d.localName === name);
     if (local) {
-      if (parser) releaseParser(parser, key);
       return { status: "ok", definition: local };
     }
 
-    if (supportForFile(file).supportsCrossModuleSymbols) {
+    if (sup.supportsCrossModuleSymbols) {
       const hit = resolveExport(index, file, name);
       if (hit) {
-        if (parser) releaseParser(parser, key);
         return {
           status: "ok",
           definition: hit.def,
@@ -1749,9 +1796,7 @@ export async function goToDefinition(
       for (const imp of mod.imports) {
         if (imp.kind === "default" && imp.local === name) {
           const target = resolveImported(index, imp, "default");
-          if (target)
-            {
-              if (parser) releaseParser(parser, key);
+          if (target) {
             return {
               status: "ok",
               definition: target,
@@ -1762,12 +1807,10 @@ export async function goToDefinition(
                 exportedName: "default",
               },
             };
-            }
+          }
         } else if (imp.kind === "named" && imp.local === name) {
           const target = resolveImported(index, imp, imp.imported);
-          if (target)
-            {
-              if (parser) releaseParser(parser, key);
+          if (target) {
             return {
               status: "ok",
               definition: target,
@@ -1778,7 +1821,7 @@ export async function goToDefinition(
                 exportedName: imp.imported,
               },
             };
-            }
+          }
         } else if (imp.kind === "namespace" && imp.localNS === name) {
           const targetFile =
             typeof imp.resolved === "string"
@@ -1791,7 +1834,6 @@ export async function goToDefinition(
                 (e) => e.type === "local"
               );
               if (firstExport) {
-                if (parser) releaseParser(parser, key);
                 return {
                   status: "ok",
                   definition: firstExport.target,
@@ -1810,7 +1852,6 @@ export async function goToDefinition(
     }
   }
 
-  if (parser) releaseParser(parser, key);
   return {
     status: "not_found",
     reason: "No matching local or imported definition",
@@ -2156,17 +2197,18 @@ export async function findReferences(
     return { status: "not_found", reason: "Could not resolve definition" };
 
   const definitionFile = def.file;
-  const sup = supportForFile(definitionFile);
-  const lang = languageForFile(definitionFile);
   const parsedDef = index.parsed?.get(definitionFile);
-  const src = parsedDef?.source ?? (await fsp.readFile(definitionFile, "utf8"));
+  const parsedContext = await ensureParsedContext(definitionFile, parsedDef);
+  const sup = parsedContext.sup;
+  const lang = parsedContext.lang;
+  const src = parsedContext.source;
   const scope = buildScopeIndexFromSource(
     definitionFile,
     src,
     sup as any,
     lang,
     index.byFile.get(definitionFile)?.imports as any,
-    parsedDef ? { tree: parsedDef.tree } : undefined
+    { tree: parsedContext.tree }
   );
 
   const refs: Reference[] = [];
@@ -2195,14 +2237,14 @@ export async function findReferences(
     const ensure = async () => {
       if (!sc) {
         const parsedF = index.parsed?.get(f);
-        const s = parsedF?.source ?? (await fsp.readFile(f, "utf8"));
+        const parsed = await ensureParsedContext(f, parsedF);
         sc = buildScopeIndexFromSource(
           f,
-          s,
-          supportForFile(f) as any,
-          languageForFile(f),
+          parsed.source,
+          parsed.sup as any,
+          parsed.lang,
           m.imports as any,
-          parsedF ? { tree: parsedF.tree } : undefined
+          { tree: parsed.tree }
         );
       }
       return sc;
@@ -2275,24 +2317,9 @@ export async function findReferences(
     for (const ref of uniqueRefs) {
       let cached = perFileCache.get(ref.file);
       if (!cached) {
-        const sup = supportForFile(ref.file);
-        const lang = languageForFile(ref.file);
         const parsedEntry = index.parsed?.get(ref.file);
-
-        let source: string;
-        let tree: Parser.Tree;
-
-        if (parsedEntry) {
-          source = parsedEntry.source;
-          tree = parsedEntry.tree;
-        } else {
-          source = await fsp.readFile(ref.file, "utf8");
-          const parser = new Parser();
-          parser.setLanguage(lang);
-          tree = parser.parse(source);
-        }
-
-        cached = { source, tree, sup };
+        const parsed = await ensureParsedContext(ref.file, parsedEntry);
+        cached = { source: parsed.source, tree: parsed.tree, sup: parsed.sup };
         perFileCache.set(ref.file, cached);
       }
 
@@ -2323,34 +2350,34 @@ export async function collectNamespaceMemberRefs(
   ns: string,
   member: string
 ): Promise<Range[]> {
-  const sup = supportForFile(file);
-  const lang = languageForFile(file);
-  const key = (sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts") as any;
-  const parser = acquireParser(lang, key);
-  try {
-    parser.setLanguage(lang);
-    const src = await fsp.readFile(file, "utf8");
-    const tree = parser.parse(src);
-    const ranges: Range[] = [];
-    const isMember = sup.nodeTypes.memberExpression ?? (sup.id === "python" ? "attribute" : "member_expression");
-    const isPropId = (t: string) => (sup.nodeTypes.propertyIdentifier || ["property_identifier"]).includes(t) || t === "identifier";
-    const walk = (node: Parser.SyntaxNode) => {
-      if (node.type === isMember) {
-        let obj = node.childForFieldName("object") ?? node.child(0);
-        let prop = node.childForFieldName("property") ?? node.childForFieldName("attribute") ?? node.child(2);
-        if (obj && prop && obj.type === "identifier" && isPropId(prop.type)) {
-          const oname = sliceText(obj, src);
-          const pname = sliceText(prop, src);
-          if (oname === ns && pname === member) {
-            ranges.push(toRange(node as any));
-          }
+  const parsed = await ensureParsedContext(file, undefined);
+  const sup = parsed.sup;
+  const src = parsed.source;
+  const tree = parsed.tree;
+  const ranges: Range[] = [];
+  const isMember =
+    sup.nodeTypes.memberExpression ??
+    (sup.id === "python" ? "attribute" : "member_expression");
+  const isPropId = (t: string) =>
+    (sup.nodeTypes.propertyIdentifier || ["property_identifier"]).includes(t) ||
+    t === "identifier";
+  const walk = (node: Parser.SyntaxNode) => {
+    if (node.type === isMember) {
+      const obj = node.childForFieldName("object") ?? node.child(0);
+      const prop =
+        node.childForFieldName("property") ??
+        node.childForFieldName("attribute") ??
+        node.child(2);
+      if (obj && prop && obj.type === "identifier" && isPropId(prop.type)) {
+        const oname = sliceText(obj, src);
+        const pname = sliceText(prop, src);
+        if (oname === ns && pname === member) {
+          ranges.push(toRange(node as any));
         }
       }
-      for (const ch of node.namedChildren) walk(ch);
-    };
-    walk(tree.rootNode);
-    return ranges;
-  } finally {
-    releaseParser(parser, key);
-  }
+    }
+    for (const ch of node.namedChildren) walk(ch);
+  };
+  walk(tree.rootNode);
+  return ranges;
 }
