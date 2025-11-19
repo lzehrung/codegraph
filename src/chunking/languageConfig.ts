@@ -1,4 +1,6 @@
-import Parser, { Query, type Language } from "tree-sitter";
+import Parser, { Query } from "tree-sitter";
+import type { LanguageDefinition } from "../languages/types.js";
+import { generateChunkingQuery } from "../languages/queryGenerator.js";
 
 /** Supported programming languages for semantic chunking */
 export type SupportedLanguage = "javascript" | "typescript" | "tsx" | "python";
@@ -9,7 +11,7 @@ export type SupportedLanguage = "javascript" | "typescript" | "tsx" | "python";
  */
 export interface LanguageConfig {
   /** Language identifier */
-  id: SupportedLanguage;
+  id: string;
   /** Tree-sitter parser instance */
   parser: Parser;
   /** Compiled Tree-sitter query for chunk extraction */
@@ -30,22 +32,24 @@ export interface LanguageConfig {
 /**
  * Creates a language configuration for semantic chunking.
  *
- * @param id Language identifier
- * @param tsLanguage Tree-sitter language grammar
- * @param queryText Tree-sitter query string for chunk extraction
+ * @param def Language definition
+ * @param filename Optional filename to select the correct grammar variant (e.g. .tsx)
  * @returns Language configuration object
  */
 export function makeLanguageConfig(
-  id: SupportedLanguage,
-  tsLanguage: Language,
-  queryText: string,
+  def: LanguageDefinition,
+  filename?: string
 ): LanguageConfig {
   const parser = new Parser();
-  parser.setLanguage(tsLanguage);
-  const query = new Query(tsLanguage, queryText);
+  const lang = def.grammar(filename);
+  parser.setLanguage(lang);
+  
+  const queryText = generateChunkingQuery(def);
+  // console.log(`Generated query for ${def.id}:`, queryText);
+  const query = new Query(lang, queryText);
 
   return {
-    id,
+    id: def.id,
     parser,
     query,
     captures: {
@@ -56,4 +60,3 @@ export function makeLanguageConfig(
     },
   };
 }
-
