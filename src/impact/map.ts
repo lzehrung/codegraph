@@ -1,7 +1,6 @@
 import type { FileId, Range } from "../types.js";
 import type { ProjectIndex, SymbolHandle } from "../indexer.js";
 import type { FileChange, ChangedSymbol } from "./types.js";
-import { supportForFile, languageForFile } from "../languages.js";
 
 export function locateChangedSymbols(
   index: ProjectIndex,
@@ -12,7 +11,7 @@ export function locateChangedSymbols(
   if (!parsedEntry) return [];
 
   const { source, tree } = parsedEntry;
-  const sup = supportForFile(file);
+  const sup = parsedEntry.sup;
   const changedSymbols: ChangedSymbol[] = [];
 
   // Collect all changed line ranges from hunks

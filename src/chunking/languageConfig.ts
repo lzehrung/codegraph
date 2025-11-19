@@ -49,7 +49,7 @@ export function makeLanguageConfig(
     console.log("Language object:", lang);
     throw e;
   }
-  
+
   const queryText = generateChunkingQuery(def);
   // console.log(`Generated query for ${def.id}:`, queryText);
   let query: Query;

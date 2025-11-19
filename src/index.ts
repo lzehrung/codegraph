@@ -70,4 +70,5 @@ export {
   chunkTextFile,
   type TextChunkOptions,
 } from "./chunking/chunkTextFile.js";
+export { chunkSFCFile, type ChunkSFCOptions } from "./chunking/chunkSFC.js";
 export { LANG_CONFIGS, type LanguageConfig } from "./bootstrap/treeSitterLanguages.js";

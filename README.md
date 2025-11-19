@@ -70,6 +70,7 @@ The library provides semantic code chunking utilities for preparing codebases fo
 
 * **Code files**: JavaScript, TypeScript, TSX, Python
 * **Text files**: JSON, YAML, configuration files, documentation
+* **Single File Components**: Vue (`.vue`) and Svelte (`.svelte`) files are split into their `<template>`, `<script>`, and `<style>` regions, then chunked with the appropriate HTML/JS/TS/CSS grammars. Each block falls back to token-based chunking if semantic parsing fails, so hybrid files always produce chunks.
 
 ### APIs
 
