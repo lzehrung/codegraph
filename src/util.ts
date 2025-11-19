@@ -44,7 +44,7 @@ export function toRange(node: any): Range {
 
 export async function listProjectFiles(
   projectRoot: string,
-  patterns = ["**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py}"]
+  patterns = ["**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte}"]
 ): Promise<string[]> {
   try {
     const files = await fg(patterns, {

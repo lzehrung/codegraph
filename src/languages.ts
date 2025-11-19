@@ -98,6 +98,10 @@ export function languageForFile(filename: string): Parser.Language {
   return supportForFile(filename).language(filename);
 }
 
+export function supportById(id: string): LanguageSupport | undefined {
+  return LANGUAGE_SUPPORTS.find((s) => s.id === id);
+}
+
 // ---------------- Compiled query cache (per language grammar) ----------------
 type CompiledQueries = {
   imports: Parser.Query;
