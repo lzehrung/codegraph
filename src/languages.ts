@@ -64,8 +64,8 @@ export const HTML_SUPPORT = adaptDefinition(HTML_DEF);
 export const CSS_SUPPORT = adaptDefinition(CSS_DEF);
 export const SCSS_SUPPORT = adaptDefinition(SCSS_DEF);
 export const LESS_SUPPORT = adaptDefinition(LESS_DEF);
-// export const VUE_SUPPORT = adaptDefinition(VUE_DEF);
-// export const SVELTE_SUPPORT = adaptDefinition(SVELTE_DEF);
+export const VUE_SUPPORT = adaptDefinition(VUE_DEF);
+export const SVELTE_SUPPORT = adaptDefinition(SVELTE_DEF);
 export const RUBY_SUPPORT = adaptDefinition(RUBY_DEF);
 export const GO_SUPPORT = adaptDefinition(GO_DEF);
 export const JAVA_SUPPORT = adaptDefinition(JAVA_DEF);
@@ -81,8 +81,8 @@ export const LANGUAGE_SUPPORTS: LanguageSupport[] = [
   CSS_SUPPORT,
   SCSS_SUPPORT,
   LESS_SUPPORT,
-  // VUE_SUPPORT,
-  // SVELTE_SUPPORT,
+  VUE_SUPPORT,
+  SVELTE_SUPPORT,
   RUBY_SUPPORT,
   GO_SUPPORT,
   JAVA_SUPPORT,
