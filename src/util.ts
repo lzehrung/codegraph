@@ -4,6 +4,10 @@ import path from "node:path";
 import fg from "fast-glob";
 import { createMatchPath } from "tsconfig-paths";
 import Parser from "tree-sitter";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 export type Pos = { line: number; column: number; index: number };
 export type Range = { start: Pos; end: Pos };
@@ -567,6 +571,55 @@ async function resolveFromNodeModules(
     }
   } catch {}
   return null;
+}
+
+export async function getGitHead(projectRoot: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
+      cwd: projectRoot,
+      env: process.env,
+    });
+    const hash = stdout?.toString().trim();
+    return hash || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function listChangedFiles(
+  projectRoot: string,
+  opts: { changedSince?: string; base?: string; head?: string }
+): Promise<string[]> {
+  try {
+    const args = ["diff", "--name-only"];
+    if (opts.base) {
+      const head = opts.head ?? "HEAD";
+      args.push(`${opts.base}..${head}`);
+    } else if (opts.changedSince) {
+      args.push(opts.changedSince);
+    } else {
+      return [];
+    }
+    args.push("--");
+    const { stdout } = await execFileAsync("git", args, {
+      cwd: projectRoot,
+      env: process.env,
+    });
+    const relFiles = stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const out: string[] = [];
+    for (const rel of relFiles) {
+      const abs = path.resolve(projectRoot, rel);
+      if (await fileExists(abs)) {
+        out.push(abs.replace(/\\/g, "/"));
+      }
+    }
+    return Array.from(new Set(out));
+  } catch {
+    return [];
+  }
 }
 
 async function findPythonPackageAnchor(startDir: string): Promise<string> {

@@ -18,8 +18,14 @@ import {
   resolvePythonModule,
   acquireParser,
   releaseParser,
+  getGitHead,
+  listChangedFiles,
 } from "./util.js";
-import { collectGraph } from "./graphs.js";
+import {
+  collectGraph,
+  type GraphCacheEntry,
+  type GraphBuildOptions,
+} from "./graphs.js";
 import type { Pos, Range, FileId, Graph } from "./types.js";
 
 // Default number of lines to include around references for line context
@@ -49,12 +55,14 @@ export type ExportEntry =
       type: "reexport";
       exportedAs: string;
       fromModule: string;
+      moduleSpecifier?: string;
       sourceSpecifier: string;
       typeOnly?: boolean;
     }
   | {
       type: "exportStar";
       fromModule: string;
+      moduleSpecifier?: string;
       sourceSpecifier: string;
       typeOnly?: boolean;
     };
@@ -122,6 +130,14 @@ export type BuildOptions = {
   cache?: "off" | "memory" | "disk";
   cacheDir?: string;
   cacheStrict?: boolean;
+  graph?: GraphBuildOptions;
+};
+
+export type IncrementalBuildOptions = BuildOptions & {
+  files?: string[];
+  changedSince?: string;
+  gitBase?: string;
+  gitHead?: string;
 };
 
 // ---------------- Symbol handles (agent-friendly) ----------------
@@ -341,6 +357,23 @@ async function mapLimit<T, R>(
 type ModuleCacheEntry = { sig: string; mod: ModuleIndex };
 const memoryCache = new Map<string, ModuleCacheEntry>();
 
+const MANIFEST_VERSION = 1;
+
+type ManifestFileEntry = GraphCacheEntry;
+
+type IndexManifest = {
+  version: number;
+  projectRoot: string;
+  updatedAt: number;
+  lastCommit?: string;
+  graphOptions?: GraphBuildOptions;
+  files: Record<string, ManifestFileEntry>;
+};
+
+function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
+  return opts?.cacheDir || path.join(projectRoot, ".codegraph-cache", "index-v1");
+}
+
 async function fileSignature(file: string, strict?: boolean): Promise<string> {
   try {
     const st = await fsp.stat(file);
@@ -359,8 +392,7 @@ function cacheFilePath(
   file: string,
   opts?: BuildOptions
 ): string {
-  const root =
-    opts?.cacheDir || path.join(projectRoot, ".codegraph-cache", "index-v1");
+  const root = cacheRoot(projectRoot, opts);
   const hash = crypto
     .createHash("sha1")
     .update(file.replace(/\\/g, "/"))
@@ -409,6 +441,57 @@ async function writeToCache(
       await fsp.writeFile(cf, JSON.stringify({ sig, mod }), "utf8");
     } catch {}
   }
+}
+
+function manifestFilePath(projectRoot: string, opts?: BuildOptions): string {
+  return path.join(cacheRoot(projectRoot, opts), "manifest.json");
+}
+
+async function loadManifest(
+  projectRoot: string,
+  opts?: BuildOptions
+): Promise<IndexManifest | null> {
+  try {
+    const mf = manifestFilePath(projectRoot, opts);
+    const raw = await fsp.readFile(mf, "utf8");
+    const parsed = JSON.parse(raw) as IndexManifest;
+    if (parsed.version !== MANIFEST_VERSION) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function writeManifest(
+  projectRoot: string,
+  opts: BuildOptions | undefined,
+  manifest: IndexManifest
+) {
+  try {
+    const mf = manifestFilePath(projectRoot, opts);
+    await fsp.mkdir(path.dirname(mf), { recursive: true });
+    await fsp.writeFile(mf, JSON.stringify(manifest, null, 2), "utf8");
+  } catch (error) {
+    console.warn("Warning: Failed to write manifest:", error);
+  }
+}
+
+function graphOptionsEqual(
+  a?: GraphBuildOptions,
+  b?: GraphBuildOptions
+): boolean {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return !!a.fast === !!b.fast && !!a.resolveNodeModules === !!b.resolveNodeModules;
+}
+
+function normalizeGraphOptions(
+  opts?: GraphBuildOptions
+): GraphBuildOptions {
+  return {
+    fast: !!opts?.fast,
+    resolveNodeModules: !!opts?.resolveNodeModules,
+  };
 }
 
 export function collectLocalsAndExportsFromSource(
@@ -568,6 +651,7 @@ export function collectLocalsAndExportsFromSource(
               type: "reexport",
               exportedAs: alias,
               fromModule: from,
+              moduleSpecifier: from,
               sourceSpecifier: srcName,
               typeOnly: isTypeOnly,
             });
@@ -575,6 +659,7 @@ export function collectLocalsAndExportsFromSource(
             exports.push({
               type: "exportStar",
               fromModule: from,
+              moduleSpecifier: from,
               sourceSpecifier: from,
               typeOnly: isTypeOnly,
             });
@@ -1336,6 +1421,16 @@ export async function buildProjectIndex(
     console.warn(`Warning: No files found in project root: ${projectRoot}`);
   }
   const modules = new Map<FileId, ModuleIndex>();
+  const fileSignatures = new Map<string, string>();
+  const graphOptions = normalizeGraphOptions(opts?.graph);
+  const manifest = await loadManifest(projectRoot, opts);
+  const cachedGraphEntries =
+    manifest && graphOptionsEqual(manifest.graphOptions, graphOptions)
+      ? new Map<string, ManifestFileEntry>(
+          Object.entries(manifest.files ?? {})
+        )
+      : undefined;
+  const manifestEntries = new Map<string, ManifestFileEntry>();
 
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
   const parsedMap = new Map<
@@ -1351,6 +1446,8 @@ export async function buildProjectIndex(
   const fileResults = await mapLimit(files, conc, async (f) => {
     try {
       const sig = await fileSignature(f, opts?.cacheStrict);
+      const normalizedFile = f.replace(/\\/g, "/");
+      fileSignatures.set(normalizedFile, sig);
       const cached = await tryLoadFromCache(projectRoot, f, sig, opts);
       if (cached) {
         return [f, cached] as const;
@@ -1449,7 +1546,31 @@ export async function buildProjectIndex(
 
   const graph = await collectGraph(projectRoot, files, {
     parsed: parsedMap as any,
+    fast: !!graphOptions.fast,
+    resolveNodeModules: graphOptions.resolveNodeModules,
+    fileSignatures,
+    cachedFileEdges: cachedGraphEntries,
+    onFileEdges: (file, entry) => {
+      if (!entry?.sig) return;
+      manifestEntries.set(file, {
+        sig: entry.sig,
+        edges: entry.edges,
+      });
+    },
   });
+
+  if (manifestEntries.size > 0) {
+    const lastCommit = await getGitHead(projectRoot);
+    const manifestData: IndexManifest = {
+      version: MANIFEST_VERSION,
+      projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
+      updatedAt: Date.now(),
+      ...(lastCommit ? { lastCommit } : {}),
+      graphOptions,
+      files: Object.fromEntries(manifestEntries),
+    };
+    await writeManifest(projectRoot, opts, manifestData);
+  }
   return {
     graph,
     modules,
@@ -1585,6 +1706,231 @@ export async function buildProjectIndexFromFiles(
   const graph = await collectGraph(projectRoot, files, {
     parsed: parsedMap as any,
   });
+  return {
+    graph,
+    modules,
+    byFile: modules,
+    exportCache: new Map(),
+    parsed: parsedMap as any,
+  };
+}
+
+export async function buildProjectIndexIncremental(
+  projectRoot: string,
+  opts?: IncrementalBuildOptions
+): Promise<ProjectIndex> {
+  const manifest = await loadManifest(projectRoot, opts);
+  const graphOptions = normalizeGraphOptions(opts?.graph);
+  if (!manifest || !graphOptionsEqual(manifest.graphOptions, graphOptions)) {
+    return await buildProjectIndex(projectRoot, opts);
+  }
+
+  const normalizeFilePath = (file: string): string =>
+    (path.isAbsolute(file) ? file : path.resolve(projectRoot, file)).replace(/\\/g, "/");
+
+  const trackedEntries = manifest.files ?? {};
+  const trackedFiles = new Set(
+    Object.keys(trackedEntries).filter((file) => fs.existsSync(file))
+  );
+
+  const explicitFiles = (opts?.files ?? []).map(normalizeFilePath);
+  const gitFiles =
+    opts?.gitBase || opts?.changedSince
+      ? await listChangedFiles(projectRoot, {
+          base: opts.gitBase,
+          head: opts.gitHead,
+          changedSince: opts.gitBase ? undefined : opts.changedSince,
+        })
+      : [];
+
+  const allFiles = new Set<string>([
+    ...trackedFiles,
+    ...explicitFiles.filter((f) => fs.existsSync(f)),
+    ...gitFiles.filter((f) => fs.existsSync(f)),
+  ]);
+
+  if (allFiles.size === 0) {
+    return {
+      graph: { nodes: new Set(), edges: [] },
+      modules: new Map(),
+      byFile: new Map(),
+      exportCache: new Map(),
+      parsed: new Map(),
+    };
+  }
+
+  const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
+  const fileSignatures = new Map<string, string>();
+  const changedFiles = new Set<string>();
+  const modules = new Map<FileId, ModuleIndex>();
+  const parsedMap = new Map<
+    string,
+    {
+      source: string;
+      tree: Parser.Tree;
+      sup: ReturnType<typeof supportForFile>;
+      lang: Parser.Language;
+    }
+  >();
+  const jsonDependencies = new Set<string>();
+
+  const markAsChanged = (file: string) => {
+    if (fs.existsSync(file)) changedFiles.add(file);
+  };
+  explicitFiles.forEach(markAsChanged);
+  gitFiles.forEach(markAsChanged);
+
+  for (const file of allFiles) {
+    const sig = await fileSignature(file, opts?.cacheStrict);
+    fileSignatures.set(file, sig);
+    const entry = trackedEntries[file];
+    if (!entry || entry.sig !== sig) changedFiles.add(file);
+  }
+
+  for (const file of allFiles) {
+    if (changedFiles.has(file)) continue;
+    const sig = fileSignatures.get(file)!;
+    const cached = await tryLoadFromCache(projectRoot, file, sig, opts);
+    if (cached) {
+      modules.set(file, cached);
+      collectJsonDependencies(cached.imports, jsonDependencies);
+    } else {
+      changedFiles.add(file);
+    }
+  }
+
+  const changedList = Array.from(changedFiles);
+  if (changedList.length > 0) {
+    const fileResults = await mapLimit(changedList, conc, async (f) => {
+      try {
+        const parsed = await parseFile(f);
+        parsedMap.set(f, parsed);
+        const { source: src, sup, lang, tree } = parsed;
+        const imports = await collectImportsForFile(f, projectRoot, {
+          source: src,
+          tree,
+          sup,
+          lang,
+        });
+        collectJsonDependencies(imports, jsonDependencies);
+        const mod = collectLocalsAndExportsFromSource(
+          f,
+          src,
+          sup,
+          lang,
+          imports,
+          { tree }
+        );
+        mod.imports = imports;
+
+        if (sup.supportsCrossModuleSymbols) {
+          if (sup.id === "ts" || sup.id === "js") {
+            const { matchPath } = await loadNearestTsconfigFor(f);
+            for (const e of mod.exports)
+              if (e.type !== "local") {
+                if (e.fromModule.startsWith(".")) {
+                  const resolved = await resolveSpecifier(
+                    f,
+                    e.fromModule,
+                    projectRoot,
+                    matchPath,
+                    await loadWorkspaceConfig(projectRoot)
+                  );
+                  if (typeof resolved === "string") e.fromModule = resolved;
+                } else {
+                  const ws = await loadWorkspaceConfig(projectRoot);
+                  const { resolveWorkspacePackage } = await import("./util.js");
+                  const pkgResolved = await resolveWorkspacePackage(
+                    e.fromModule,
+                    ws
+                  );
+                  if (pkgResolved) e.fromModule = pkgResolved;
+                }
+              }
+          }
+        }
+        const sig = fileSignatures.get(f)!;
+        await writeToCache(projectRoot, f, sig, mod, opts);
+        return [f, mod] as const;
+      } catch (error) {
+        console.warn(`Warning: Failed to process file ${f}:`, error);
+        const mod: ModuleIndex = {
+          file: f,
+          exports: [],
+          imports: [],
+          locals: [],
+        };
+        return [f, mod] as const;
+      }
+    });
+    for (const [f, mod] of fileResults) {
+      modules.set(f.replace(/\\/g, "/"), mod);
+    }
+  }
+
+  for (const jsonPath of jsonDependencies) {
+    ensureJsonModule(modules, jsonPath);
+  }
+
+  for (const [file, m] of modules) {
+    for (const imp of [...m.imports]) {
+      if (imp.kind === "star" && typeof imp.resolved === "string") {
+        const target = modules.get(imp.resolved);
+        if (target) {
+          let exported: string[] = [];
+          const viaAll = target.exports.filter((e) => e.type === "local");
+          if (viaAll.length) exported = viaAll.map((e) => e.exportedAs);
+          else
+            exported = target.locals
+              .map((l) => l.localName)
+              .filter((n) => !n.startsWith("_"));
+          for (const name of exported)
+            m.imports.push({
+              kind: "named",
+              local: name,
+              imported: name,
+              from: imp.from,
+              resolved: imp.resolved,
+            });
+        }
+      }
+    }
+  }
+
+  const cachedGraphEntries = new Map<string, ManifestFileEntry>(
+    Object.entries(manifest.files ?? {})
+  );
+  const manifestEntries = new Map<string, ManifestFileEntry>();
+
+  const filesList = Array.from(allFiles);
+  const graph = await collectGraph(projectRoot, filesList, {
+    parsed: parsedMap as any,
+    fast: !!graphOptions.fast,
+    resolveNodeModules: graphOptions.resolveNodeModules,
+    fileSignatures,
+    cachedFileEdges: cachedGraphEntries,
+    onFileEdges: (file, entry) => {
+      if (!entry?.sig) return;
+      manifestEntries.set(file, {
+        sig: entry.sig,
+        edges: entry.edges,
+      });
+    },
+  });
+
+  if (manifestEntries.size > 0) {
+    const lastCommit = await getGitHead(projectRoot);
+    const manifestData: IndexManifest = {
+      version: MANIFEST_VERSION,
+      projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
+      updatedAt: Date.now(),
+      ...(lastCommit ? { lastCommit } : {}),
+      graphOptions,
+      files: Object.fromEntries(manifestEntries),
+    };
+    await writeManifest(projectRoot, opts, manifestData);
+  }
+
   return {
     graph,
     modules,

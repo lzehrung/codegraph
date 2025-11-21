@@ -4,9 +4,11 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import {
   listProjectFiles,
+  listChangedFiles,
   collectGraph,
   buildProjectIndex,
   buildProjectIndexFromFiles,
+  buildReviewReport,
   goToDefinition,
   findReferences,
   graphToMermaid,
@@ -24,6 +26,24 @@ import {
   chunkSFCFile,
   LANG_CONFIGS,
 } from "./index.js";
+
+const SUPPORTED_FILE_EXTS = new Set([
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".mts",
+  ".cts",
+  ".mjs",
+  ".cjs",
+  ".py",
+  ".vue",
+  ".svelte",
+]);
+
+function filterSupportedFiles(files: string[]): string[] {
+  return files.filter((file) => SUPPORTED_FILE_EXTS.has(path.extname(file).toLowerCase()));
+}
 
 function toJSON(obj: any) {
   return JSON.stringify(obj, null, 2);
@@ -145,17 +165,64 @@ async function main() {
   const nonFlags = args.filter((a) => !a.startsWith("--"));
   const root = nonFlags[1] ?? process.cwd();
   const roots = cmd === "graph" || cmd === "index" ? nonFlags.slice(1) : [];
+  const changedSinceIdx = args.indexOf("--changed-since");
+  const changedSince =
+    changedSinceIdx !== -1 && args[changedSinceIdx + 1]
+      ? args[changedSinceIdx + 1]
+      : undefined;
+  const gitBaseIdx = args.indexOf("--git-base");
+  const gitBase =
+    gitBaseIdx !== -1 && args[gitBaseIdx + 1] ? args[gitBaseIdx + 1] : undefined;
+  const gitHeadIdx = args.indexOf("--git-head");
+  const gitHead =
+    gitHeadIdx !== -1 && args[gitHeadIdx + 1] ? args[gitHeadIdx + 1] : undefined;
+  const projectRootAbs = path.isAbsolute(root)
+    ? root
+    : path.resolve(process.cwd(), root);
 
   const resolveFilesFromRoots = async (): Promise<string[]> => {
-    if (roots.length === 0) return await listProjectFiles(root);
+    if (roots.length === 0) return await listProjectFiles(projectRootAbs);
+    const normalizedRoots = roots.map((r) =>
+      path.isAbsolute(r)
+        ? r.replace(/\\/g, "/")
+        : path.resolve(process.cwd(), r).replace(/\\/g, "/")
+    );
     const all: string[][] = await Promise.all(
-      roots.map(async (r) => await listProjectFiles(r))
+      normalizedRoots.map(async (r) => await listProjectFiles(r))
     );
     return Array.from(new Set(all.flat()));
   };
 
+  const resolveChangedFiles = async (): Promise<string[] | null> => {
+    if (gitBase) {
+      const files = await listChangedFiles(projectRootAbs, {
+        base: gitBase,
+        head: gitHead,
+      });
+      return filterSupportedFiles(files);
+    }
+    if (changedSince) {
+      const files = await listChangedFiles(projectRootAbs, {
+        changedSince,
+      });
+      return filterSupportedFiles(files);
+    }
+    return null;
+  };
+
+  const resolveFiles = async (): Promise<string[]> => {
+    const gitFiles = await resolveChangedFiles();
+    if (gitFiles) {
+      if (gitFiles.length === 0) {
+        writeStderrLine("No supported changed files detected via git diff.");
+      }
+      return gitFiles;
+    }
+    return await resolveFilesFromRoots();
+  };
+
   if (cmd === "graph") {
-    const files = await resolveFilesFromRoots();
+    const files = await resolveFiles();
     const hasExplicitSymbolFlag =
       flags.includes("--symbols") ||
       flags.includes("--symbols-only") ||
@@ -285,7 +352,7 @@ async function main() {
   }
 
   if (cmd === "index") {
-    const files = await resolveFilesFromRoots();
+    const files = await resolveFiles();
     const threadsFlagIdx = args.findIndex((a) => a === "--threads");
     const threads =
       threadsFlagIdx !== -1 ? Number(args[threadsFlagIdx + 1]) : 0;
@@ -524,6 +591,36 @@ async function main() {
       writeStderrLine(`Impact analysis failed: ${error}`);
       process.exit(1);
     }
+    return;
+  }
+
+  if (cmd === "review") {
+    const baseIdx = args.indexOf("--base");
+    const headIdx = args.indexOf("--head");
+    const sinceIdx = args.indexOf("--changed-since");
+    const threadsIdx = args.indexOf("--threads");
+    const cacheIdx = args.indexOf("--cache");
+    const maxTestsIdx = args.indexOf("--max-tests");
+    const base = baseIdx !== -1 ? args[baseIdx + 1] : undefined;
+    const head = headIdx !== -1 ? args[headIdx + 1] : undefined;
+    const changedSince = sinceIdx !== -1 ? args[sinceIdx + 1] : undefined;
+    const threads =
+      threadsIdx !== -1 ? Number(args[threadsIdx + 1]) : undefined;
+    const cache = cacheIdx !== -1 ? (args[cacheIdx + 1] as any) : undefined;
+    const maxTests =
+      maxTestsIdx !== -1 ? Number(args[maxTestsIdx + 1]) : undefined;
+    const fastGraph = flags.includes("--fast-graph");
+
+    const report = await buildReviewReport(projectRootAbs, {
+      gitBase: base,
+      gitHead: head,
+      changedSince,
+      threads,
+      cache,
+      graph: fastGraph ? { fast: true } : undefined,
+      maxCandidates: maxTests,
+    });
+    writeJSONLine(report);
     return;
   }
 

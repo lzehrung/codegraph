@@ -24,6 +24,16 @@ import type { ImportBinding, ProjectIndex, SymbolDef } from "./index.js";
 
 // Shared types imported from ./types
 
+export type GraphBuildOptions = {
+  fast?: boolean;
+  resolveNodeModules?: boolean;
+};
+
+export type GraphCacheEntry = {
+  sig: string;
+  edges: Edge[];
+};
+
 export function collectModuleSpecifiersFromSource(
   support: LanguageSupport,
   lang: Parser.Language,
@@ -146,12 +156,50 @@ export async function collectGraph(
     fast?: boolean;
     threads?: number;
     resolveNodeModules?: boolean;
+    fileSignatures?: Map<string, string>;
+    cachedFileEdges?: Map<string, GraphCacheEntry>;
+    onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
+    baseGraph?: Graph;
+    replaceFiles?: Set<string>;
   }
 ): Promise<Graph> {
-  const graph: Graph = { nodes: new Set(files.map((f) => f.replace(/\\/g, "/"))), edges: [] };
+  const normalizedFiles = files.map((f) => f.replace(/\\/g, "/"));
+  const replaceSet =
+    opts?.replaceFiles ??
+    new Set<string>(normalizedFiles);
+  const baseGraph = opts?.baseGraph;
+  const graph: Graph = baseGraph
+    ? {
+        nodes: new Set(baseGraph.nodes),
+        edges: baseGraph.edges.filter((edge) => !replaceSet.has(edge.from)),
+      }
+    : { nodes: new Set(normalizedFiles), edges: [] };
+  for (const file of normalizedFiles) graph.nodes.add(file);
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
 
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 32, 128));
+
+  const cloneEdge = (edge: Edge): Edge => ({
+    ...edge,
+    to:
+      edge.to.type === "file"
+        ? { type: "file", path: edge.to.path }
+        : { type: "external", name: edge.to.name },
+  });
+
+  const addEdgeTargetsToGraph = (edges: Edge[]) => {
+    for (const edge of edges) {
+      if (edge.to.type === "file") graph.nodes.add(edge.to.path);
+    }
+  };
+
+  const emitCacheEntry = (file: string, sig: string | undefined, edges: Edge[]) => {
+    if (!sig || !opts?.onFileEdges) return;
+    opts.onFileEdges(file, {
+      sig,
+      edges: edges.map(cloneEdge),
+    });
+  };
 
   async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
     const out: R[] = new Array(items.length);
@@ -181,6 +229,16 @@ export async function collectGraph(
 
   const filePromises = await mapLimit(files, conc, async (file) => {
     try {
+      const normalizedFile = file.replace(/\\/g, "/");
+      const sig = opts?.fileSignatures?.get(normalizedFile);
+      const cached = sig ? opts?.cachedFileEdges?.get(normalizedFile) : undefined;
+      if (sig && cached && cached.sig === sig) {
+        const cloned = cached.edges.map(cloneEdge);
+        addEdgeTargetsToGraph(cloned);
+        emitCacheEntry(normalizedFile, sig, cloned);
+        return cloned;
+      }
+
       const parsed = opts?.parsed?.get(file);
       let sup = parsed?.sup;
       let lang = parsed?.lang;
@@ -232,13 +290,14 @@ export async function collectGraph(
               : { type: "external", name: res.external };
         }
         edges.push({
-          from: file.replace(/\\/g, "/"),
+          from: normalizedFile,
           to,
           raw: spec,
           ...(typeOnly !== undefined && { typeOnly }),
         });
         if (to.type === "file") graph.nodes.add(to.path);
       }
+      emitCacheEntry(normalizedFile, sig, edges);
       return edges;
     } catch (error) {
       console.warn(`Warning: Failed to process file ${file} for graph:`, error);
