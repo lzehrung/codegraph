@@ -12,6 +12,8 @@ export {
   resolvePythonModule,
   resolveWorkspacePackage,
   resolvePackageSubpath,
+  getGitHead,
+  listChangedFiles,
 } from "./util.js";
 export * from "./graphs.js";
 export type { Pos, Range, FileId, EdgeTo, Edge, Graph } from "./types.js";
@@ -30,6 +32,7 @@ export {
   collectImportsForFile,
   buildProjectIndex,
   buildProjectIndexFromFiles,
+  buildProjectIndexIncremental,
   resolveExport,
   goToDefinition,
   findReferences,
@@ -72,3 +75,4 @@ export {
 } from "./chunking/chunkTextFile.js";
 export { chunkSFCFile, type ChunkSFCOptions } from "./chunking/chunkSFC.js";
 export { LANG_CONFIGS, type LanguageConfig } from "./bootstrap/treeSitterLanguages.js";
+export { buildReviewReport, type ReviewReport } from "./review.js";

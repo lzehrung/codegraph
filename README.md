@@ -57,8 +57,9 @@ Sample graph: [sample-graph.md](./sample-graph.md)
 
 * **JavaScript / TypeScript** (`.ts`, `.tsx`, `.js`, `.jsx`, `.mts`, `.cts`, `.mjs`, `.cjs`)
 * **Python** (`.py`)
+* **Vue / Svelte SFCs** (`.vue`, `.svelte`) — script blocks are parsed with the JS/TS pipeline, so dependency graphs and go-to-definition work across components.
 
-Both languages support full cross-file navigation with equivalent capabilities.
+JS/TS, Python, and the script sections of Vue/Svelte files support full cross-file navigation with equivalent capabilities.
 
 ---
 
@@ -289,7 +290,45 @@ npx codegraph impact --base main --head feature --members-only
 npx codegraph impact --base main --head feature --ref-context line
 # Include block context snippets for references (enclosing function/class, max 60 lines)
 npx codegraph impact --base main --head feature --ref-context block --ref-block-max-lines 30
+
+# Generate a PR review bundle (incremental graph + symbol summary)
+npx codegraph review --base origin/main --head HEAD > review.json
 ```
+
+Use `--changed-since <ref>` or `--git-base <ref> [--git-head <ref>]` with `graph` and `index`
+to limit processing to the files reported by `git diff`. The CLI pipes that list into
+`buildProjectIndexFromFiles`, so unchanged files are skipped entirely when you’re
+reviewing a PR.
+
+### PR review workflow
+
+`codegraph review` reuses the incremental manifest and produces a JSON bundle optimized for LLM-driven reviews:
+
+```jsonc
+{
+  "status": "ok",
+  "summary": {
+    "filesChanged": 3,
+    "symbolsChanged": 12,
+    "candidateTests": 5
+  },
+  "changedFiles": [
+    {
+      "file": "src/foo.ts",
+      "status": "updated",
+      "symbols": [{ "name": "doThing", "kind": "function", "exported": true }]
+    }
+  ],
+  "graphDelta": [
+    { "from": "src/foo.ts", "to": { "type": "file", "path": "src/bar.ts" }, "raw": "./bar" }
+  ],
+  "candidateTests": [
+    { "file": "tests/foo.test.ts", "confidence": "high", "reason": "importsChanged" }
+  ]
+}
+```
+
+Feed this JSON directly to an agent (or your own scripts) to highlight symbol-level changes, updated dependency edges, and likely regression tests.
 
 ### For Local Development
 
@@ -370,6 +409,8 @@ npx tsx src/cli.ts goto <file> <line> <column>
 - Caching:
   - Modes: `off` (default), `memory` (per-process), `disk` (persist across runs, stored under `.codegraph-cache/index-v1`).
   - `--cache-strict` uses a content hash; without it, cache key uses mtime+size.
+  - `.codegraph-cache/index-v1/manifest.json` now stores the last indexed commit, graph options, and per-file signatures plus resolved edges. When you re-run `codegraph index` with the same options, unchanged files reuse the manifest entries and skip dependency extraction entirely.
+  - Remove the manifest (or rerun with different graph flags) to force a full graph rebuild.
   - Clear disk cache: delete `.codegraph-cache/index-v1`.
 
 - Threads:
@@ -405,6 +446,20 @@ if (res.status === 'ok') {
   console.log('Def:', res.definition.file, res.definition.localName, res.definition.range);
 }
 ```
+
+### Incremental indexing
+
+```ts
+import { buildProjectIndexIncremental } from 'codegraph';
+
+const root = process.cwd();
+const incremental = await buildProjectIndexIncremental(root, {
+  gitBase: 'origin/main',
+  gitHead: 'HEAD',
+});
+```
+
+`buildProjectIndexIncremental` loads the cached manifest, reuses unchanged modules/edges, and only reparses the files reported as changed (via Git flags or an explicit `files` list). The manifest is rewritten after each run so repeated PR reviews stay incremental.
 
 Find references:
 
