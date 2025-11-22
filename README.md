@@ -882,20 +882,6 @@ Strategy:
 
 ---
 
-## Roadmap
-
-* **More grammars**: Ruby, C#, Rust, Java, Go…
-  * The adapter API is stable enough to add these incrementally
-
-### Recently completed
-
-* ✅ **Python cross-file symbol navigation** - Full go-to-definition and find-references with module resolution, package anchors, and `__all__` exports
-* ✅ **CommonJS destructuring support** - `const { helperFunction: alias } = require('./module')`
-* ✅ **Monorepo workspace detection** - npm/yarn/pnpm/lerna workspace support with per-file TypeScript config resolution
-* ✅ **Cross-language parity** - Equivalent capabilities across TS/JS and Python
-
----
-
 ## FAQ
 
 **Q: Can I drop this into a mixed repo (multiple Node/Python projects)?**
