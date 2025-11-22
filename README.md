@@ -1,6 +1,6 @@
 # Dep Graph & Symbols
 
-A tiny tool to **understand a repo**, **navigate code**, and **answer questions** fast.
+A tiny tool to **understand a repo**, **navigate code**, and **answer questions** fast. It supports JavaScript/TypeScript, Python, Go, Java, C#, Ruby, Rust, and the script blocks inside Vue/Svelte files.
 
 It builds:
 
@@ -9,7 +9,7 @@ It builds:
 * **go to definition** and **find references**,
 * plus a minimal **AST grep** (Tree-sitter query runner).
 
-It’s deliberately **elegant**, **robust**, and **easy to extend** to new grammars.
+It stays small on purpose and is built to be easy to extend to new grammars.
 
 Sample graph: [sample-graph.md](./sample-graph.md)
 
@@ -21,18 +21,21 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * JS/TS: `import`, `export ... from`, `export * from`, `require()`, `import()`, CommonJS destructuring
   * JSON modules referenced from JS/TS (including `assert { type: "json" }`) are treated as default-only dependencies
   * Python: `import`, `from ... import`, relative imports with package resolution
+  * Go/Java/C#/Ruby/Rust: Tree-sitter queries capture module imports/usings and resolve them to files or packages
   * Unresolved targets are represented as **external** nodes
 * **Symbol index**
   * Extracts functions, classes, variables, interfaces, types, and exports
-  * Cross-language scope indexing with proper import binding resolution
+  * Works across JS/TS, Python, Go, Java, C#, Ruby, Rust, and Vue/Svelte script blocks with consistent scope handling
 * **Go to definition**
   * Cross-file navigation for all supported languages
   * TS/JS: Re-exports, namespace imports, CommonJS destructuring
   * Python: Module imports, `__all__` exports, relative imports
+  * Go/Java/C#/Ruby/Rust: Package members and namespace lookups flow through the same resolver
 * **Find references**
   * Project-wide scanning with lexical scope awareness
   * TS/JS: Namespace members, re-exports, CommonJS patterns
   * Python: Module imports, `__all__` exports, relative imports
+  * Go/Java/C#/Ruby/Rust: Collects import bindings and usages within packages
 * **AST grep**
   * Run arbitrary Tree-sitter queries across the repo
 * **PR impact analysis**
@@ -48,10 +51,7 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * Text file chunking for JSON/YAML/config files
   * Configurable token budgets (150-400 tokens per chunk)
   * Semantic awareness: classes, functions, methods, interfaces, namespaces, imports
-
-* **Robust multi-language testing** now covers Go/Java/C#/Ruby dependency graphs alongside JS/TS/Python.
-
-> **Cross-language parity**: All supported languages (JS/TS/Python/Go/Java/C#/Ruby) provide equivalent go-to-definition and find-references capabilities with full cross-file symbol navigation.
+* **Cross-language parity**: All supported languages share the same go-to-definition and find-references pipeline, so navigation works the same way everywhere.
 
 ---
 
@@ -59,13 +59,14 @@ Sample graph: [sample-graph.md](./sample-graph.md)
 
 * **JavaScript / TypeScript** (`.ts`, `.tsx`, `.js`, `.jsx`, `.mts`, `.cts`, `.mjs`, `.cjs`)
 * **Python** (`.py`)
-* **Go** (`.go`) — expanded test coverage for dependency graphs, go-to-definition, find references
-* **Java** (`.java`) — expanded test coverage for dependency graphs, go-to-definition, find references
-* **C#** (`.cs`) — expanded test coverage for dependency graphs, go-to-definition, find references
-* **Ruby** (`.rb`) — expanded test coverage for dependency graphs, go-to-definition, find references
+* **Go** (`.go`)
+* **Java** (`.java`)
+* **C#** (`.cs`)
+* **Ruby** (`.rb`)
+* **Rust** (`.rs`)
 * **Vue / Svelte SFCs** (`.vue`, `.svelte`) — script blocks are parsed with the JS/TS pipeline, so dependency graphs and go-to-definition work across components.
 
-JS/TS, Python, Go, Java, C#, Ruby, and the script sections of Vue/Svelte files support full cross-file navigation with equivalent capabilities.
+Each listed language (including Vue/Svelte script sections) has the same dependency-graph, go-to-definition, and find-references support.
 
 ---
 
