@@ -190,4 +190,106 @@ describe('Dependency Graph', () => {
       expect(mermaid).not.toMatch(/-->\s+undefined/);
     });
   });
+  describe.skip('Go Project', () => {
+    it('should build dependency graph with correct edges', async () => {
+      const samplePath = getSamplePath('go');
+      const files = [
+        path.join(samplePath, 'main.go').replace(/\\/g, '/'),
+        path.join(samplePath, 'utils.go').replace(/\\/g, '/'),
+        path.join(samplePath, 'helpers.go').replace(/\\/g, '/'),
+      ];
+      
+      const graph = await collectGraph(samplePath, files);
+      
+      expect(graph.nodes).toHaveLength(3);
+      expect(graph.edges.length).toBeGreaterThan(0);
+      
+      // Should have edges from main.go to utils.go and utils.go to helpers.go
+      const mainToUtils = graph.edges.find(edge => 
+        edge.from.includes('main.go') && toStr(edge.to).includes('utils.go')
+      );
+      expect(mainToUtils).toBeDefined();
+      
+      const utilsToHelpers = graph.edges.find(edge => 
+        edge.from.includes('utils.go') && toStr(edge.to).includes('helpers.go')
+      );
+      expect(utilsToHelpers).toBeDefined();
+    });
+  });
+
+  describe.skip('Java Project', () => {
+    it('should build dependency graph with correct edges', async () => {
+      const samplePath = getSamplePath('java');
+      const files = [
+        path.join(samplePath, 'main.java').replace(/\\/g, '/'),
+        path.join(samplePath, 'utils.java').replace(/\\/g, '/'),
+        path.join(samplePath, 'helpers.java').replace(/\\/g, '/'),
+      ];
+      
+      const graph = await collectGraph(samplePath, files);
+      
+      expect(graph.nodes).toHaveLength(3);
+      expect(graph.edges.length).toBeGreaterThan(0);
+      
+      const mainToUtils = graph.edges.find(edge =>
+        edge.from.includes('main.java') && toStr(edge.to).includes('utils.java')
+      );
+      expect(mainToUtils).toBeDefined();
+      
+      const mainToHelpers = graph.edges.find(edge =>
+        edge.from.includes('main.java') && toStr(edge.to).includes('helpers.java')
+      );
+      expect(mainToHelpers).toBeDefined();
+    });
+  });
+  describe.skip('C# Project', () => {
+    it('should build dependency graph with correct edges', async () => {
+      const samplePath = getSamplePath('csharp');
+      const files = [
+        path.join(samplePath, 'main.cs').replace(/\\/g, '/'),
+        path.join(samplePath, 'utils.cs').replace(/\\/g, '/'),
+        path.join(samplePath, 'helpers.cs').replace(/\\/g, '/'),
+      ];
+      
+      const graph = await collectGraph(samplePath, files);
+      
+      expect(graph.nodes).toHaveLength(3);
+      expect(graph.edges.length).toBeGreaterThan(0);
+      
+      const mainToUtils = graph.edges.find(edge => 
+        edge.from.includes('main.cs') && toStr(edge.to).includes('utils.cs')
+      );
+      expect(mainToUtils).toBeDefined();
+      
+      const mainToHelpers = graph.edges.find(edge => 
+        edge.from.includes('main.cs') && toStr(edge.to).includes('helpers.cs')
+      );
+      expect(mainToHelpers).toBeDefined();
+    });
+  });
+  describe.skip('Ruby Project', () => {
+    it('should build dependency graph with correct edges', async () => {
+      const samplePath = getSamplePath('ruby');
+      const files = [
+        path.join(samplePath, 'main.rb').replace(/\\/g, '/'),
+        path.join(samplePath, 'utils.rb').replace(/\\/g, '/'),
+        path.join(samplePath, 'helpers.rb').replace(/\\/g, '/'),
+      ];
+      
+      const graph = await collectGraph(samplePath, files);
+      
+      expect(graph.nodes).toHaveLength(3);
+      expect(graph.edges.length).toBeGreaterThan(0);
+      
+      const mainToUtils = graph.edges.find(edge => 
+        edge.from.includes('main.rb') && toStr(edge.to).includes('utils.rb')
+      );
+      expect(mainToUtils).toBeDefined();
+      
+      const mainToHelpers = graph.edges.find(edge => 
+        edge.from.includes('main.rb') && toStr(edge.to).includes('helpers.rb')
+      );
+      expect(mainToHelpers).toBeDefined();
+    });
+  });
 });
