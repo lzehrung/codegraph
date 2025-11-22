@@ -20,6 +20,7 @@ export const RUST_DEF: LanguageDefinition = {
   },
   graph: {
     imports: `
+      (mod_item name: (identifier) @mod)
       (use_declaration argument: (scoped_identifier) @mod) @stmt
       (use_declaration argument: (identifier) @mod) @stmt
     `,

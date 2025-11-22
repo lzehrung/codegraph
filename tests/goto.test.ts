@@ -280,3 +280,20 @@ describe('Go to Definition', () => {
       await testGoToDefinition(index, mainFile, 6, 13, utilsFile, 4);
     });
   });
+
+  describe.skip('Rust // TODO: fix goto/references not_found', () => {
+    it('should find definition of helper_function', async () => {
+      const index = await createTestIndex('rust');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'rust');
+      const mainFile = path.join(samplePath, 'main.rs').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'utils.rs').replace(/\\/g, '/');
+      await testGoToDefinition(index, mainFile, 6, 5, utilsFile, 1);
+    });
+    it('should find definition of helper_from_helpers', async () => {
+      const index = await createTestIndex('rust');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'rust');
+      const mainFile = path.join(samplePath, 'main.rs').replace(/\\/g, '/');
+      const helpersFile = path.join(samplePath, 'helpers.rs').replace(/\\/g, '/');
+      await testGoToDefinition(index, mainFile, 7, 5, helpersFile, 1);
+    });
+  });
