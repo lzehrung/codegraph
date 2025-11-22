@@ -20,7 +20,7 @@ export const RUBY_DEF: LanguageDefinition = {
   },
   graph: {
     imports: `
-      (call method: (identifier) @method arguments: (argument_list (string (string_content) @mod))) (#match? @method "^(require|require_relative)$") @stmt
+      (call method: (identifier) @method arguments: (argument_list (string (string_content) @mod))) (#match? @method "require|require_relative") @stmt
     `,
     exports: `
       (class name: (constant) @name)

@@ -19,7 +19,7 @@ export const GO_DEF: LanguageDefinition = {
   },
   graph: {
     imports: `
-      (import_spec path: (interpreted_string_literal) @mod) @stmt
+      (import_decl (import_spec path: (interpreted_string_literal) @mod)) @stmt
     `,
     exports: `
       (function_declaration name: (identifier) @name)

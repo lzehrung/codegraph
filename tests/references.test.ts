@@ -222,4 +222,54 @@ describe('Find References', () => {
       }
     });
   });
+
+  describe.skip('C#', () => {
+    it('should find all references to static method', async () => {
+      const index = await createTestIndex('csharp');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'csharp');
+      const utilsFile = path.join(samplePath, 'utils.cs').replace(/\\/g, '/');
+      // helperFunction definition line 3 col ~24
+      await testFindReferences(index, utilsFile, 3, 24, 3);
+    });
+
+    it('should find all references to nested class', async () => {
+      const index = await createTestIndex('csharp');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'csharp');
+      const utilsFile = path.join(samplePath, 'utils.cs').replace(/\\/g, '/');
+      // UtilityClass definition line 4 col ~20
+      await testFindReferences(index, utilsFile, 4, 20, 2);
+    });
+
+    it('should find references to namespace member', async () => {
+      const index = await createTestIndex('csharp');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'csharp');
+      const utilsFile = path.join(samplePath, 'utils.cs').replace(/\\/g, '/');
+      // UtilsClass definition line 2 col ~20
+      await testFindReferences(index, utilsFile, 2, 20, 3);
+    });
+
+    it('should find references to aliased member', async () => {
+      const index = await createTestIndex('csharp');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'csharp');
+      const utilsFile = path.join(samplePath, 'utils.cs').replace(/\\/g, '/');
+      // Since alias UUtils = Utils.UtilsClass, refs to UtilsClass should include alias usage
+      await testFindReferences(index, utilsFile, 2, 20, 3);
+    });
+  });
+  describe.skip('Ruby', () => {
+    it('should find all references to module function', async () => {
+      const index = await createTestIndex('ruby');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'ruby');
+      const utilsFile = path.join(samplePath, 'utils.rb').replace(/\\/g, '/');
+      // helper_function definition line 2 col 12
+      await testFindReferences(index, utilsFile, 2, 12, 2);
+    });
+    it('should find all references to class', async () => {
+      const index = await createTestIndex('ruby');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'ruby');
+      const utilsFile = path.join(samplePath, 'utils.rb').replace(/\\/g, '/');
+      // UtilityClass definition line 4 col 10
+      await testFindReferences(index, utilsFile, 4, 10, 2);
+    });
+  });
 });

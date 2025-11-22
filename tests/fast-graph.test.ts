@@ -48,6 +48,25 @@ describe('Fast graph specifier extraction (--fast-graph)', () => {
     const bSet = new Set(g2.edges.map(e => `${e.from}|${toKey(e.to)}|${e.raw}`));
     expect(bSet).toEqual(aSet);
   });
+  it('matches regular graph edges for Python samples', async () => {
+    const root = getSamplePath('python');
+    const files = [
+      path.join(root, 'main.py').replace(/\\/g, '/'),
+      path.join(root, 'utils.py').replace(/\\/g, '/'),
+      path.join(root, 'helpers.py').replace(/\\/g, '/'),
+      path.join(root, '__init__.py').replace(/\\/g, '/'),
+    ];
+    const g1 = await collectGraph(root, files);
+    const g2 = await (await import('../src/graphs.js')).collectGraph(root, files, { fast: true });
+
+    const toKey = (to: unknown) => {
+      const t = to as { type: 'file'; path: string } | { type: 'external'; name: string };
+      return t.type === 'file' ? t.path : t.name;
+    };
+    const aSet = new Set(g1.edges.map(e => `${e.from}|${toKey(e.to)}|${e.raw}`));
+    const bSet = new Set(g2.edges.map(e => `${e.from}|${toKey(e.to)}|${e.raw}`));
+    expect(bSet).toEqual(aSet);
+  });
 });
 
 
