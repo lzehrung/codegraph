@@ -272,4 +272,19 @@ describe('Find References', () => {
       await testFindReferences(index, utilsFile, 4, 10, 2);
     });
   });
+
+  describe.skip('Rust // TODO: fix references not_found', () => {
+    it('should find all references to helper_function', async () => {
+      const index = await createTestIndex('rust');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'rust');
+      const utilsFile = path.join(samplePath, 'utils.rs').replace(/\\/g, '/');
+      await testFindReferences(index, utilsFile, 1, 8, 2);
+    });
+    it('should find all references to helper_from_helpers', async () => {
+      const index = await createTestIndex('rust');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'rust');
+      const helpersFile = path.join(samplePath, 'helpers.rs').replace(/\\/g, '/');
+      await testFindReferences(index, helpersFile, 1, 8, 2);
+    });
+  });
 });

@@ -1,0 +1,1 @@
+pub fn helper_from_helpers() {}
