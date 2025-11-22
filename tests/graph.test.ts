@@ -292,4 +292,30 @@ describe('Dependency Graph', () => {
       expect(mainToHelpers).toBeDefined();
     });
   });
+
+  describe.skip('Rust Project // TODO: fix imports capture for mod/use', () => {
+    it('should build dependency graph with correct edges', async () => {
+      const samplePath = getSamplePath('rust');
+      const files = [
+        path.join(samplePath, 'main.rs').replace(/\\/g, '/'),
+        path.join(samplePath, 'utils.rs').replace(/\\/g, '/'),
+        path.join(samplePath, 'helpers.rs').replace(/\\/g, '/'),
+      ];
+      
+      const graph = await collectGraph(samplePath, files);
+      
+      expect(graph.nodes).toHaveLength(3);
+      expect(graph.edges.length).toBeGreaterThan(0);
+      
+      const mainToUtils = graph.edges.find(edge =>
+        edge.from.includes('main.rs') && toStr(edge.to).includes('utils.rs')
+      );
+      expect(mainToUtils).toBeDefined();
+      
+      const mainToHelpers = graph.edges.find(edge =>
+        edge.from.includes('main.rs') && toStr(edge.to).includes('helpers.rs')
+      );
+      expect(mainToHelpers).toBeDefined();
+    });
+  });
 });

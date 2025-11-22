@@ -2,11 +2,11 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import path from 'node:path';
 import { buildProjectIndex, goToDefinition, findReferences, collectGraph, ProjectIndex } from '../src/index.js';
 
-export function getSamplePath(language: 'typescript' | 'python' | 'javascript' | 'go' | 'java' | 'csharp' | 'ruby'): string {
+export function getSamplePath(language: 'typescript' | 'python' | 'javascript' | 'go' | 'java' | 'csharp' | 'ruby' | 'rust'): string {
   return path.resolve(process.cwd(), 'tests', 'samples', language);
 }
 
-export async function createTestIndex(language: 'typescript' | 'python' | 'javascript' | 'go' | 'java' | 'csharp' | 'ruby'): Promise<ProjectIndex> {
+export async function createTestIndex(language: 'typescript' | 'python' | 'javascript' | 'go' | 'java' | 'csharp' | 'ruby' | 'rust'): Promise<ProjectIndex> {
   const samplePath = getSamplePath(language);
   return await buildProjectIndex(samplePath);
 }
