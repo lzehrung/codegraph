@@ -49,7 +49,9 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * Configurable token budgets (150-400 tokens per chunk)
   * Semantic awareness: classes, functions, methods, interfaces, namespaces, imports
 
-> **Cross-language parity**: All supported languages (TS/JS/Python) provide equivalent go-to-definition and find-references capabilities with full cross-file symbol navigation.
+* **Robust multi-language testing** now covers Go/Java/C#/Ruby dependency graphs alongside JS/TS/Python.
+
+> **Cross-language parity**: All supported languages (JS/TS/Python/Go/Java/C#/Ruby) provide equivalent go-to-definition and find-references capabilities with full cross-file symbol navigation.
 
 ---
 
@@ -57,9 +59,13 @@ Sample graph: [sample-graph.md](./sample-graph.md)
 
 * **JavaScript / TypeScript** (`.ts`, `.tsx`, `.js`, `.jsx`, `.mts`, `.cts`, `.mjs`, `.cjs`)
 * **Python** (`.py`)
+* **Go** (`.go`) — expanded test coverage for dependency graphs, go-to-definition, find references
+* **Java** (`.java`) — expanded test coverage for dependency graphs, go-to-definition, find references
+* **C#** (`.cs`) — expanded test coverage for dependency graphs, go-to-definition, find references
+* **Ruby** (`.rb`) — expanded test coverage for dependency graphs, go-to-definition, find references
 * **Vue / Svelte SFCs** (`.vue`, `.svelte`) — script blocks are parsed with the JS/TS pipeline, so dependency graphs and go-to-definition work across components.
 
-JS/TS, Python, and the script sections of Vue/Svelte files support full cross-file navigation with equivalent capabilities.
+JS/TS, Python, Go, Java, C#, Ruby, and the script sections of Vue/Svelte files support full cross-file navigation with equivalent capabilities.
 
 ---
 
