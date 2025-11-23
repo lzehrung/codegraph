@@ -7,7 +7,7 @@ export interface TextChunkOptions {
   /** Text content to chunk */
   source: string;
   /** Optional source file path for chunk IDs */
-  filePath?: string;
+  filePath?: string | undefined;
   /** Language identifier (e.g., "json", "yaml", "text") */
   languageId?: string;
   /** Minimum tokens per chunk (default: 150). Smaller chunks are merged. */
@@ -15,7 +15,7 @@ export interface TextChunkOptions {
   /** Maximum tokens per chunk (default: 400). Larger chunks are split. */
   maxTokens?: number;
   /** Custom token counting function (default: whitespace-based) */
-  tokenizer?: (text: string) => number;
+  tokenizer?: ((text: string) => number) | undefined;
 }
 
 function defaultTokenizer(text: string): number {

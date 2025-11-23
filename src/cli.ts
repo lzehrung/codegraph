@@ -26,24 +26,15 @@ import {
   chunkSFCFile,
   LANG_CONFIGS,
 } from "./index.js";
-
-const SUPPORTED_FILE_EXTS = new Set([
-  ".ts",
-  ".tsx",
-  ".js",
-  ".jsx",
-  ".mts",
-  ".cts",
-  ".mjs",
-  ".cjs",
-  ".py",
-  ".vue",
-  ".svelte",
-]);
-
-function filterSupportedFiles(files: string[]): string[] {
-  return files.filter((file) => SUPPORTED_FILE_EXTS.has(path.extname(file).toLowerCase()));
-}
+import type {
+  Graph,
+  SymbolGraph,
+  SymbolNodeKind,
+  ImpactReport,
+  CompactImpactReport,
+  ChangedSymbol,
+  ImpactItem,
+} from "./index.js";
 
 function toJSON(obj: any) {
   return JSON.stringify(obj, null, 2);
@@ -156,6 +147,126 @@ function compactSymbolsOnly(
   };
 }
 
+const SYMBOL_NODE_KINDS: SymbolNodeKind[] = [
+  "function",
+  "class",
+  "variable",
+  "interface",
+  "type",
+  "default",
+  "import",
+  "namespaceImport",
+];
+
+function symbolNodeKindFromString(kind?: string): SymbolNodeKind {
+  return kind && SYMBOL_NODE_KINDS.includes(kind as SymbolNodeKind)
+    ? (kind as SymbolNodeKind)
+    : "variable";
+}
+
+function ensureImpactReport(
+  report: ImpactReport | CompactImpactReport
+): ImpactReport {
+  if (!("files" in report)) return report;
+  const files = report.files;
+  const resolveFilePath = (index: number): string => {
+    const file = files[index];
+    if (!file) {
+      throw new Error(`Missing file path for index ${index} in compact impact report`);
+    }
+    return file;
+  };
+  const changedFiles = report.changedFiles.map((cf) => ({
+    file: resolveFilePath(cf.file),
+    hunks: cf.hunks,
+  }));
+  const changedSymbols = report.changedSymbols.map((cs) => {
+    const symbol: ChangedSymbol = {
+      id: cs.id,
+      file: resolveFilePath(cs.file),
+      name: cs.name,
+      kind: cs.kind,
+      exported: cs.exported,
+      range: cs.range,
+      ...(cs.typeOnly !== undefined ? { typeOnly: cs.typeOnly } : {}),
+    };
+    return symbol;
+  });
+  const impacted: ImpactItem[] = report.impacted.map((item) => {
+    const impact: ImpactItem = {
+      file: resolveFilePath(item.file),
+      symbols: item.symbols,
+      reasons: item.reasons,
+      severity: item.severity,
+    };
+    if (item.depth !== undefined) impact.depth = item.depth;
+    if (item.typeOnly !== undefined) impact.typeOnly = item.typeOnly;
+    if (item.explain !== undefined) impact.explain = item.explain;
+    const maybeRefs = (item as any).refs;
+    if (maybeRefs !== undefined) impact.refs = maybeRefs;
+    return impact;
+  });
+  const fileEdges = report.graph.fileEdges.map((edge) => ({
+    from: resolveFilePath(edge.from),
+    to: resolveFilePath(edge.to),
+    ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
+  }));
+  const symbolEdges = report.graph.symbolEdges.map((edge) => ({
+    from: edge.from,
+    to: edge.to,
+    label: edge.label,
+  }));
+  return {
+    changedFiles,
+    changedSymbols,
+    impacted,
+    graph: {
+      fileEdges,
+      symbolEdges,
+    },
+  };
+}
+
+function formatImpactMermaid(report: ImpactReport, root: string): string {
+  const fileGraph: Graph = { nodes: new Set<string>(), edges: [] };
+  const ensureFileNode = (file: string) => fileGraph.nodes.add(file);
+  for (const cf of report.changedFiles) ensureFileNode(cf.file);
+  for (const item of report.impacted) ensureFileNode(item.file);
+  for (const symbol of report.changedSymbols) ensureFileNode(symbol.file);
+  for (const edge of report.graph.fileEdges) {
+    ensureFileNode(edge.from);
+    ensureFileNode(edge.to);
+    fileGraph.edges.push({
+      from: edge.from,
+      to: { type: "file", path: edge.to },
+      raw: "",
+      ...(edge.typeOnly ? { typeOnly: edge.typeOnly } : {}),
+    });
+  }
+
+  const symbolGraph: SymbolGraph = { nodes: new Map(), edges: [] };
+  for (const sym of report.changedSymbols) {
+    symbolGraph.nodes.set(sym.id, {
+      id: sym.id,
+      file: sym.file,
+      name: sym.name,
+      kind: symbolNodeKindFromString(sym.kind),
+    });
+  }
+  for (const edge of report.graph.symbolEdges) {
+    const fromSym = report.changedSymbols[edge.from];
+    const toSym = report.changedSymbols[edge.to];
+    if (!fromSym || !toSym) continue;
+    symbolGraph.edges.push({
+      from: fromSym.id,
+      to: toSym.id,
+      ...(edge.label ? { label: edge.label } : {}),
+    });
+  }
+
+  return graphToMermaidSymbolsWithFiles(symbolGraph, fileGraph, root);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const cmd = args[0] ?? "graph";
@@ -195,17 +306,14 @@ async function main() {
 
   const resolveChangedFiles = async (): Promise<string[] | null> => {
     if (gitBase) {
-      const files = await listChangedFiles(projectRootAbs, {
-        base: gitBase,
-        head: gitHead,
-      });
-      return filterSupportedFiles(files);
+      const diffOpts: { base: string; head?: string } = { base: gitBase };
+      if (gitHead) diffOpts.head = gitHead;
+      return await listChangedFiles(projectRootAbs, diffOpts);
     }
     if (changedSince) {
-      const files = await listChangedFiles(projectRootAbs, {
+      return await listChangedFiles(projectRootAbs, {
         changedSince,
       });
-      return filterSupportedFiles(files);
     }
     return null;
   };
@@ -213,10 +321,27 @@ async function main() {
   const resolveFiles = async (): Promise<string[]> => {
     const gitFiles = await resolveChangedFiles();
     if (gitFiles) {
-      if (gitFiles.length === 0) {
-        writeStderrLine("No supported changed files detected via git diff.");
+      const existence = gitFiles.map((file) => ({
+        file,
+        exists: fs.existsSync(file),
+      }));
+      const existingFiles = existence
+        .filter((entry) => entry.exists)
+        .map((entry) => entry.file);
+      const deletedFiles = existence
+        .filter((entry) => !entry.exists)
+        .map((entry) => entry.file);
+      if (deletedFiles.length > 0) {
+        writeStderrLine(
+          `Skipping ${deletedFiles.length} deleted file(s) from git diff: ${deletedFiles
+            .map((file) => path.relative(projectRootAbs, file) || file)
+            .join(", ")}`
+        );
       }
-      return gitFiles;
+      if (existingFiles.length === 0) {
+        writeStderrLine("No changed files detected via git diff.");
+      }
+      return existingFiles;
     }
     return await resolveFilesFromRoots();
   };
@@ -236,12 +361,8 @@ async function main() {
     const stdoutMode = flags.includes("--stdout");
     const defaultGraphMode = !hasExplicitSymbolFlag && !hasExplicitFormatFlag;
 
-    const wantSymbols = defaultGraphMode
-      ? true
-      : hasExplicitSymbolFlag;
-    const detailedSymbols = defaultGraphMode
-      ? true
-      : flags.includes("--symbols-detailed");
+    const wantSymbols = hasExplicitSymbolFlag;
+    const detailedSymbols = flags.includes("--symbols-detailed");
     const threadsFlagIdx = args.findIndex((a) => a === "--threads");
     const threads =
       threadsFlagIdx !== -1 ? Number(args[threadsFlagIdx + 1]) : 0;
@@ -283,6 +404,10 @@ async function main() {
         threads,
         cache,
         cacheStrict,
+        graph: {
+          fast,
+          resolveNodeModules,
+        },
       });
       let sgraph;
       if (detailedSymbols) {
@@ -515,16 +640,29 @@ async function main() {
 
     // Parse other options
     const threadsIdx = args.indexOf("--threads");
-    if (threadsIdx !== -1 && args[threadsIdx + 1]) options.threads = Number(args[threadsIdx + 1]);
+    const threads =
+      threadsIdx !== -1 && args[threadsIdx + 1]
+        ? Number(args[threadsIdx + 1])
+        : 0;
+    if (threadsIdx !== -1 && args[threadsIdx + 1]) options.threads = threads;
 
     const cacheIdx = args.indexOf("--cache");
-    if (cacheIdx !== -1 && args[cacheIdx + 1]) options.cache = args[cacheIdx + 1];
+    const cache =
+      cacheIdx !== -1 && args[cacheIdx + 1]
+        ? (args[cacheIdx + 1] as any)
+        : undefined;
+    if (cacheIdx !== -1 && args[cacheIdx + 1]) options.cache = cache;
+
+    const cacheStrict = flags.includes("--cache-strict");
+    if (cacheStrict) options.cacheStrict = true;
 
     const maxRefsIdx = args.indexOf("--max-refs");
-    if (maxRefsIdx !== -1 && args[maxRefsIdx + 1]) options.maxRefs = Number(args[maxRefsIdx + 1]);
+    if (maxRefsIdx !== -1 && args[maxRefsIdx + 1])
+      options.maxRefs = Number(args[maxRefsIdx + 1]);
 
     const depthIdx = args.indexOf("--depth");
-    if (depthIdx !== -1 && args[depthIdx + 1]) options.depth = Number(args[depthIdx + 1]);
+    if (depthIdx !== -1 && args[depthIdx + 1])
+      options.depth = Number(args[depthIdx + 1]);
 
     const includeTests = flags.includes("--include-tests");
     const membersOnly = flags.includes("--members-only");
@@ -544,30 +682,43 @@ async function main() {
     options.includeTests = includeTests;
     options.membersOnly = membersOnly;
 
+    const fastGraph = flags.includes("--fast-graph");
+    const resolveNodeModules = flags.includes("--resolve-node-modules");
+
     const pretty = flags.includes("--pretty");
     const mermaid = flags.includes("--mermaid");
 
     try {
-      const report = await analyzeImpactFromDiff(root, await buildProjectIndex(root), options);
+      const indexOpts: any = {
+        threads,
+        cache,
+        cacheStrict,
+      };
+      if (fastGraph || resolveNodeModules) {
+        indexOpts.graph = {
+          fast: fastGraph,
+          resolveNodeModules,
+        };
+      }
+      const index = await buildProjectIndex(root, indexOpts);
+      const report = await analyzeImpactFromDiff(root, index, options);
+      const impactReport = ensureImpactReport(report);
 
       if (mermaid) {
-        // TODO: Implement mermaid output for impact reports
-        writeStdoutLine("Mermaid output for impact reports not yet implemented");
+        writeStdoutLine(formatImpactMermaid(impactReport, root));
       } else if (pretty) {
         writeStdoutLine(`Impact Analysis Report`);
         writeStdoutLine(`======================`);
-        writeStdoutLine(`Changed files: ${report.changedFiles.length}`);
-        writeStdoutLine(`Changed symbols: ${report.changedSymbols.length}`);
-        writeStdoutLine(`Impacted items: ${report.impacted.length}`);
+        writeStdoutLine(`Changed files: ${impactReport.changedFiles.length}`);
+        writeStdoutLine(`Changed symbols: ${impactReport.changedSymbols.length}`);
+        writeStdoutLine(`Impacted items: ${impactReport.impacted.length}`);
         writeStdoutLine(``);
-        for (const item of report.impacted.slice(0, 10)) {
+        for (const item of impactReport.impacted.slice(0, 10)) {
           writeStdoutLine(`${item.file}: ${item.symbols.join(", ")} (severity: ${(item.severity * 100).toFixed(1)}%)`);
-          // Show first 1-2 reference contexts if available (only for regular reports, not compact)
           if ('refs' in item && item.refs && item.refs.length > 0) {
             const contextsToShow = item.refs.slice(0, 2);
             for (const ref of contextsToShow) {
               writeStdoutLine(`  Reference at ${ref.range.start.line}:${ref.range.start.column}:`);
-              // Indent and limit context lines for readability
               const contextLines = ref.context!.split('\n').slice(0, 5);
               for (const line of contextLines) {
                 writeStdoutLine(`    ${line}`);
@@ -581,8 +732,8 @@ async function main() {
             }
           }
         }
-        if (report.impacted.length > 10) {
-          writeStdoutLine(`... and ${report.impacted.length - 10} more`);
+        if (impactReport.impacted.length > 10) {
+          writeStdoutLine(`... and ${impactReport.impacted.length - 10} more`);
         }
       } else {
         writeJSONLine(report);
@@ -611,15 +762,15 @@ async function main() {
       maxTestsIdx !== -1 ? Number(args[maxTestsIdx + 1]) : undefined;
     const fastGraph = flags.includes("--fast-graph");
 
-    const report = await buildReviewReport(projectRootAbs, {
-      gitBase: base,
-      gitHead: head,
-      changedSince,
-      threads,
-      cache,
-      graph: fastGraph ? { fast: true } : undefined,
-      maxCandidates: maxTests,
-    });
+    const reviewOpts: Parameters<typeof buildReviewReport>[1] = {};
+    if (base !== undefined) reviewOpts.gitBase = base;
+    if (head !== undefined) reviewOpts.gitHead = head;
+    if (changedSince !== undefined) reviewOpts.changedSince = changedSince;
+    if (threads !== undefined) reviewOpts.threads = threads;
+    if (cache !== undefined) reviewOpts.cache = cache;
+    if (fastGraph) reviewOpts.graph = { fast: true };
+    if (maxTests !== undefined) reviewOpts.maxCandidates = maxTests;
+    const report = await buildReviewReport(projectRootAbs, reviewOpts);
     writeJSONLine(report);
     return;
   }

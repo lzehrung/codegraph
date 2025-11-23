@@ -1515,27 +1515,46 @@ async function ensureParsedContext(
   }
 }
 
-export async function buildProjectIndex(
+type ManifestMode = "off" | "read-only" | "read-write";
+
+type BuildIndexHelperOptions = {
+  manifestMode?: ManifestMode;
+  warnNoFilesMessage?: string;
+};
+
+async function buildIndexFromFileListShared(
   projectRoot: string,
-  opts?: BuildOptions
+  rawFiles: string[],
+  opts?: BuildOptions,
+  helperOpts?: BuildIndexHelperOptions
 ): Promise<ProjectIndex> {
-  const files = await listProjectFiles(projectRoot);
-  if (files.length === 0) {
-    console.warn(`Warning: No files found in project root: ${projectRoot}`);
-  }
-  const modules = new Map<FileId, ModuleIndex>();
-  const fileSignatures = new Map<string, string>();
+  const manifestMode: ManifestMode = helperOpts?.manifestMode ?? "off";
+  const useManifest = manifestMode !== "off";
+  const shouldWriteManifest = manifestMode === "read-write";
   const graphOptions = normalizeGraphOptions(opts?.graph);
-  const manifest = await loadManifest(projectRoot, opts);
+  const normalizedFiles = Array.from(
+    new Set(
+      (rawFiles ?? [])
+        .filter(Boolean)
+        .map((file) => path.resolve(file))
+        .map((resolved) => resolved.replace(/\\/g, "/"))
+    )
+  );
+  if (normalizedFiles.length === 0 && helperOpts?.warnNoFilesMessage) {
+    console.warn(helperOpts.warnNoFilesMessage);
+  }
+  const manifest = useManifest ? await loadManifest(projectRoot, opts) : null;
   const cachedGraphEntries =
     manifest && graphOptionsEqual(manifest.graphOptions, graphOptions)
       ? new Map<string, ManifestFileEntry>(
           Object.entries(manifest.files ?? {})
         )
       : undefined;
-  const manifestEntries = new Map<string, ManifestFileEntry>();
-
-  const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
+  const manifestEntries = shouldWriteManifest
+    ? new Map<string, ManifestFileEntry>()
+    : undefined;
+  const modules = new Map<FileId, ModuleIndex>();
+  const fileSignatures = new Map<string, string>();
   const parsedMap = new Map<
     string,
     {
@@ -1546,11 +1565,11 @@ export async function buildProjectIndex(
     }
   >();
   const jsonDependencies = new Set<string>();
-  const fileResults = await mapLimit(files, conc, async (f) => {
+  const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
+  const fileResults = await mapLimit(normalizedFiles, conc, async (f) => {
     try {
       const sig = await fileSignature(f, opts?.cacheStrict);
-      const normalizedFile = f.replace(/\\/g, "/");
-      fileSignatures.set(normalizedFile, sig);
+      fileSignatures.set(f, sig);
       const cached = await tryLoadFromCache(projectRoot, f, sig, opts);
       if (cached) {
         return [f, cached] as const;
@@ -1614,73 +1633,76 @@ export async function buildProjectIndex(
       return [f, mod] as const;
     }
   });
-  for (const [f, mod] of fileResults) {
-    modules.set(f.replace(/\\/g, "/"), mod);
+  for (const [file, mod] of fileResults) {
+    modules.set(file, mod);
   }
 
   for (const jsonPath of jsonDependencies) {
     ensureJsonModule(modules, jsonPath);
   }
 
-  for (const [file, m] of modules) {
-    for (const imp of [...m.imports]) {
+  for (const [file, mod] of modules) {
+    for (const imp of [...mod.imports]) {
       if (imp.kind === "star" && typeof imp.resolved === "string") {
         const target = modules.get(imp.resolved);
-        if (target) {
-          const targetSup =
-            typeof imp.resolved === "string"
-              ? supportForFile(imp.resolved)
-              : null;
-          const exported =
-            target.exports.filter((e) => e.type === "local").length > 0
-              ? target.exports
-                  .filter((e) => e.type === "local")
-                  .map((e: any) => e.target as SymbolDef)
-              : target.locals.filter((l) => !l.localName.startsWith("_"));
-          const seen = new Set<string>();
-          for (const sym of exported) {
-            if (!sym.localName || seen.has(sym.localName)) continue;
-            seen.add(sym.localName);
-            const treatAsNamespace =
-              targetSup?.id === "ruby" && sym.kind === SymbolKind.Class;
-            if (treatAsNamespace) {
-              m.imports.push({
-                kind: "namespace",
-                localNS: sym.localName,
-                from: imp.from,
-                resolved: imp.resolved,
-              });
-            } else {
-              m.imports.push({
-                kind: "named",
-                local: sym.localName,
-                imported: sym.localName,
-                from: imp.from,
-                resolved: imp.resolved,
-              });
-            }
+        if (!target) continue;
+        const targetSup =
+          typeof imp.resolved === "string"
+            ? supportForFile(imp.resolved)
+            : null;
+        const exported =
+          target.exports.filter((e) => e.type === "local").length > 0
+            ? target.exports
+                .filter((e) => e.type === "local")
+                .map((e: any) => e.target as SymbolDef)
+            : target.locals.filter((l) => !l.localName.startsWith("_"));
+        const seen = new Set<string>();
+        for (const sym of exported) {
+          if (!sym.localName || seen.has(sym.localName)) continue;
+          seen.add(sym.localName);
+          const treatAsNamespace =
+            targetSup?.id === "ruby" && sym.kind === SymbolKind.Class;
+          if (treatAsNamespace) {
+            mod.imports.push({
+              kind: "namespace",
+              localNS: sym.localName,
+              from: imp.from,
+              resolved: imp.resolved,
+            });
+          } else {
+            mod.imports.push({
+              kind: "named",
+              local: sym.localName,
+              imported: sym.localName,
+              from: imp.from,
+              resolved: imp.resolved,
+            });
           }
         }
       }
     }
   }
 
-  const graph = await collectGraph(projectRoot, files, {
+  const graph = await collectGraph(projectRoot, normalizedFiles, {
     parsed: parsedMap as any,
     fast: !!graphOptions.fast,
     resolveNodeModules: !!graphOptions.resolveNodeModules,
     fileSignatures,
     ...(cachedGraphEntries ? { cachedFileEdges: cachedGraphEntries } : {}),
-    onFileEdges: (file, entry) => {
-      if (!entry?.sig) return;
-      manifestEntries.set(file, {
-        sig: entry.sig,
-        edges: entry.edges,
-      });
-    },
+    ...(manifestEntries
+      ? {
+          onFileEdges: (file, entry) => {
+            if (!entry?.sig) return;
+            manifestEntries.set(file, {
+              sig: entry.sig,
+              edges: entry.edges,
+            });
+          },
+        }
+      : {}),
   });
 
-  if (manifestEntries.size > 0) {
+  if (manifestEntries && manifestEntries.size > 0) {
     const lastCommit = await getGitHead(projectRoot);
     const manifestData: IndexManifest = {
       version: MANIFEST_VERSION,
@@ -1692,6 +1714,7 @@ export async function buildProjectIndex(
     };
     await writeManifest(projectRoot, opts, manifestData);
   }
+
   return {
     graph,
     modules,
@@ -1701,139 +1724,26 @@ export async function buildProjectIndex(
   };
 }
 
+export async function buildProjectIndex(
+  projectRoot: string,
+  opts?: BuildOptions
+): Promise<ProjectIndex> {
+  const files = await listProjectFiles(projectRoot);
+  return buildIndexFromFileListShared(projectRoot, files, opts, {
+    manifestMode: "read-write",
+    warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,
+  });
+}
+
 export async function buildProjectIndexFromFiles(
   projectRoot: string,
   inputFiles: string[],
   opts?: BuildOptions
 ): Promise<ProjectIndex> {
-  const files = Array.from(
-    new Set((inputFiles || []).filter(Boolean).map((f) => path.resolve(f).replace(/\\/g, "/")))
-  );
-  if (files.length === 0) {
-    console.warn(`Warning: No files provided for indexing in ${projectRoot}`);
-  }
-  const modules = new Map<FileId, ModuleIndex>();
-
-  const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
-  const parsedMap = new Map<
-    string,
-    {
-      source: string;
-      tree: Parser.Tree;
-      sup: ReturnType<typeof supportForFile>;
-      lang: Parser.Language;
-    }
-  >();
-  const jsonDependencies = new Set<string>();
-  const fileResults = await mapLimit(files, conc, async (f) => {
-    try {
-      const sig = await fileSignature(f, opts?.cacheStrict);
-      const cached = await tryLoadFromCache(projectRoot, f, sig, opts);
-      if (cached) {
-        return [f, cached] as const;
-      }
-      const parsed = await parseFile(f);
-      parsedMap.set(f, parsed);
-      const { source: src, sup, lang, tree } = parsed;
-      const imports = await collectImportsForFile(f, projectRoot, {
-        source: src,
-        tree,
-        sup,
-        lang,
-      });
-      collectJsonDependencies(imports, jsonDependencies);
-      const mod = collectLocalsAndExportsFromSource(
-        f,
-        src,
-        sup,
-        lang,
-        imports,
-        { tree }
-      );
-      mod.imports = imports;
-
-      if (sup.supportsCrossModuleSymbols) {
-        if (sup.id === "ts" || sup.id === "js") {
-          const { matchPath } = await loadNearestTsconfigFor(f);
-          for (const e of mod.exports)
-            if (e.type !== "local") {
-              if (e.fromModule.startsWith(".")) {
-                const resolved = await resolveSpecifier(
-                  f,
-                  e.fromModule,
-                  projectRoot,
-                  matchPath,
-                  await loadWorkspaceConfig(projectRoot)
-                );
-                if (typeof resolved === "string") e.fromModule = resolved;
-              } else {
-                const ws = await loadWorkspaceConfig(projectRoot);
-                const { resolveWorkspacePackage } = await import("./util.js");
-                const pkgResolved = await resolveWorkspacePackage(
-                  e.fromModule,
-                  ws
-                );
-                if (pkgResolved) e.fromModule = pkgResolved;
-              }
-            }
-        }
-      }
-      await writeToCache(projectRoot, f, sig, mod, opts);
-      return [f, mod] as const;
-    } catch (error) {
-      console.warn(`Warning: Failed to process file ${f}:`, error);
-      const mod: ModuleIndex = {
-        file: f,
-        exports: [],
-        imports: [],
-        locals: [],
-      };
-      return [f, mod] as const;
-    }
+  return buildIndexFromFileListShared(projectRoot, inputFiles, opts, {
+    manifestMode: "read-only",
+    warnNoFilesMessage: `Warning: No files provided for indexing in ${projectRoot}`,
   });
-  for (const [f, mod] of fileResults) {
-    modules.set(f.replace(/\\/g, "/"), mod);
-  }
-
-  for (const jsonPath of jsonDependencies) {
-    ensureJsonModule(modules, jsonPath);
-  }
-
-  for (const [file, m] of modules) {
-    for (const imp of [...m.imports]) {
-      if (imp.kind === "star" && typeof imp.resolved === "string") {
-        const target = modules.get(imp.resolved);
-        if (target) {
-          let exported: string[] = [];
-          const viaAll = target.exports.filter((e) => e.type === "local");
-          if (viaAll.length) exported = viaAll.map((e) => e.exportedAs);
-          else
-            exported = target.locals
-              .map((l) => l.localName)
-              .filter((n) => !n.startsWith("_"));
-          for (const name of exported)
-            m.imports.push({
-              kind: "named",
-              local: name,
-              imported: name,
-              from: imp.from,
-              resolved: imp.resolved,
-            });
-        }
-      }
-    }
-  }
-
-  const graph = await collectGraph(projectRoot, files, {
-    parsed: parsedMap as any,
-  });
-  return {
-    graph,
-    modules,
-    byFile: modules,
-    exportCache: new Map(),
-    parsed: parsedMap as any,
-  };
 }
 
 export async function buildProjectIndexIncremental(
@@ -2340,12 +2250,17 @@ export async function goToDefinition(
               const cStart = container.startIndex;
               const cEnd = container.endIndex;
 
-              const memberDef = tMod.locals.find(
-                (l) =>
+              const memberDef = tMod.locals.find((l) => {
+                const startIndex = l.range.start.index;
+                const endIndex = l.range.end.index;
+                return (
                   l.localName === member &&
-                  l.range.start.index >= cStart &&
-                  l.range.end.index <= cEnd
-              );
+                  startIndex !== undefined &&
+                  endIndex !== undefined &&
+                  startIndex >= cStart &&
+                  endIndex <= cEnd
+                );
+              });
 
               if (memberDef) {
                 return {
@@ -2769,10 +2684,12 @@ export type Reference = {
 };
 
 function sameDef(a: SymbolDef, b: SymbolDef) {
+  const aIndex = a.range.start.index ?? 0;
+  const bIndex = b.range.start.index ?? 0;
   return (
     a.file === b.file &&
     a.localName === b.localName &&
-    a.range.start.index === b.range.start.index
+    aIndex === bIndex
   );
 }
 
@@ -2796,7 +2713,10 @@ function extractLineContext(source: string, line: number, lines: number): string
 
 function extractEnclosingBlock(source: string, tree: Parser.Tree, range: Range, maxLines: number, sup: any): string {
   // Find the node at the reference position
-  const node = tree.rootNode.descendantForIndex(range.start.index, range.end.index);
+  const node = tree.rootNode.descendantForIndex(
+    range.start.index ?? 0,
+    range.end.index ?? range.start.index ?? 0
+  );
   if (!node) return extractLineContext(source, range.start.line, DEFAULT_REF_CONTEXT_LINES); // fallback to line context
 
   // Climb to find an enclosing block (function, class, etc.)
@@ -2975,11 +2895,14 @@ export async function findReferences(
     }
   }
 
-  uniqueRefs.sort((a, b) =>
-    a.file === b.file
-      ? a.range.start.index - b.range.start.index
-      : a.file.localeCompare(b.file)
-  );
+  uniqueRefs.sort((a, b) => {
+    if (a.file === b.file) {
+      const aIndex = a.range.start.index ?? 0;
+      const bIndex = b.range.start.index ?? 0;
+      return aIndex - bIndex;
+    }
+    return a.file.localeCompare(b.file);
+  });
 
   // Populate context snippets if requested
   if (opts?.context) {

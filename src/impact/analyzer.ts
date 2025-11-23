@@ -296,10 +296,11 @@ export function calculateSeverity(
   // Check if this might be a signature change (function/class with parameters)
   const mod = index.byFile.get(changedSymbol.file);
   if (mod) {
-    const symbolDef = mod.locals.find(l =>
-      l.localName === changedSymbol.name &&
-      l.range.start.index === changedSymbol.range.start.index
-    );
+    const changedIndex = changedSymbol.range.start.index ?? 0;
+    const symbolDef = mod.locals.find(l => {
+      const localIndex = l.range.start.index ?? 0;
+      return l.localName === changedSymbol.name && localIndex === changedIndex;
+    });
     if (symbolDef) {
       // Simple heuristic: functions with parameters might be signature changes
       if (symbolDef.kind === "function" && symbolDef.range.end.line - symbolDef.range.start.line > 1) {

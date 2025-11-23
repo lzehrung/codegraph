@@ -16,11 +16,11 @@ import {
 
 export interface ChunkSFCOptions {
   source: string;
-  filePath?: string;
+  filePath?: string | undefined;
   framework: SFCFramework;
   minTokens?: number;
   maxTokens?: number;
-  tokenizer?: (text: string) => number;
+  tokenizer?: ((text: string) => number) | undefined;
 }
 
 export function chunkSFCFile(opts: ChunkSFCOptions): Chunk[] {
@@ -79,10 +79,10 @@ export function chunkSFCFile(opts: ChunkSFCOptions): Chunk[] {
 function chunkBlock(opts: {
   block: SFCBlock;
   framework: SFCFramework;
-  filePath?: string;
+  filePath?: string | undefined;
   minTokens: number;
   maxTokens: number;
-  tokenizer?: (text: string) => number;
+  tokenizer?: ((text: string) => number) | undefined;
 }): Chunk[] {
   const { block, framework, filePath, minTokens, maxTokens, tokenizer } = opts;
 
@@ -143,10 +143,10 @@ function chunkTextBlock(
   block: SFCBlock,
   opts: {
     framework: SFCFramework;
-    filePath?: string;
+    filePath?: string | undefined;
     minTokens: number;
     maxTokens: number;
-    tokenizer?: (text: string) => number;
+    tokenizer?: ((text: string) => number) | undefined;
   }
 ): Chunk[] {
   const { framework, filePath, minTokens, maxTokens, tokenizer } = opts;
