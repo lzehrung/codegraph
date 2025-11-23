@@ -223,11 +223,11 @@ describe('Find References', () => {
     });
   });
 
-  describe.skip('C#', () => {
+  describe('C#', () => {
     it('should find all references to static method', async () => {
       const index = await createTestIndex('csharp');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'csharp');
-      const utilsFile = path.join(samplePath, 'utils.cs').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'Utils.cs').replace(/\\/g, '/');
       // helperFunction definition line 3 col ~24
       await testFindReferences(index, utilsFile, 3, 24, 3);
     });
@@ -235,7 +235,7 @@ describe('Find References', () => {
     it('should find all references to nested class', async () => {
       const index = await createTestIndex('csharp');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'csharp');
-      const utilsFile = path.join(samplePath, 'utils.cs').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'Utils.cs').replace(/\\/g, '/');
       // UtilityClass definition line 4 col ~20
       await testFindReferences(index, utilsFile, 4, 20, 2);
     });
@@ -243,7 +243,7 @@ describe('Find References', () => {
     it('should find references to namespace member', async () => {
       const index = await createTestIndex('csharp');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'csharp');
-      const utilsFile = path.join(samplePath, 'utils.cs').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'Utils.cs').replace(/\\/g, '/');
       // UtilsClass definition line 2 col ~20
       await testFindReferences(index, utilsFile, 2, 20, 3);
     });
@@ -251,12 +251,12 @@ describe('Find References', () => {
     it('should find references to aliased member', async () => {
       const index = await createTestIndex('csharp');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'csharp');
-      const utilsFile = path.join(samplePath, 'utils.cs').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'Utils.cs').replace(/\\/g, '/');
       // Since alias UUtils = Utils.UtilsClass, refs to UtilsClass should include alias usage
       await testFindReferences(index, utilsFile, 2, 20, 3);
     });
   });
-  describe.skip('Ruby', () => {
+  describe('Ruby', () => {
     it('should find all references to module function', async () => {
       const index = await createTestIndex('ruby');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'ruby');
@@ -273,17 +273,19 @@ describe('Find References', () => {
     });
   });
 
-  describe.skip('Rust // TODO: fix references not_found', () => {
+  describe('Rust', () => {
     it('should find all references to helper_function', async () => {
       const index = await createTestIndex('rust');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'rust');
       const utilsFile = path.join(samplePath, 'utils.rs').replace(/\\/g, '/');
+      // helper_function definition line 1 col 8
       await testFindReferences(index, utilsFile, 1, 8, 2);
     });
     it('should find all references to helper_from_helpers', async () => {
       const index = await createTestIndex('rust');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'rust');
       const helpersFile = path.join(samplePath, 'helpers.rs').replace(/\\/g, '/');
+      // helper_from_helpers definition line 1 col 8
       await testFindReferences(index, helpersFile, 1, 8, 2);
     });
   });

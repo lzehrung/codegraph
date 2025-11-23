@@ -20,8 +20,7 @@ export const CSHARP_DEF: LanguageDefinition = {
   },
   graph: {
     imports: `
-      (using_directive (qualified_name) @mod) @stmt
-      (using_directive (identifier) @mod) @stmt
+      (using_directive . (_) @mod) @stmt
     `,
     exports: `
       (class_declaration name: (identifier) @name)
@@ -35,10 +34,28 @@ export const CSHARP_DEF: LanguageDefinition = {
       (method_declaration name: (identifier) @name)
       (variable_declarator (identifier) @name)
     `,
-    importBindings: ""
+    importBindings: `
+      (using_directive name: (identifier) @alias . (_) @from) @stmt
+      (using_directive . (_) @from) @stmt
+    `
   },
   nodeTypes: {
     identifier: ["identifier"],
+    memberExpression: "member_access_expression",
+  },
+  supportsCrossModuleSymbols: true,
+  createsFunctionScope: (node) =>
+    node.type === "method_declaration" || node.type === "constructor_declaration",
+  createsBlockScope: (node) => node.type === "block",
+  isDeclarationName: (node) => {
+    const p = node.parent;
+    if (!p) return false;
+    if (p.type === "class_declaration" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "interface_declaration" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "method_declaration" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "variable_declarator" && p.child(0)?.id === node.id) return true;
+    if (p.type === "parameter" && p.childForFieldName("name")?.id === node.id) return true;
+    return false;
   }
 };
 
