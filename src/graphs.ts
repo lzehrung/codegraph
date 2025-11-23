@@ -275,6 +275,26 @@ export async function collectGraph(
             typeof res === "string"
               ? { type: "file", path: res.replace(/\\/g, "/") }
               : { type: "external", name: res.external };
+        } else if (["java", "csharp", "ruby", "rust", "go"].includes(sup.id)) {
+          const { resolvePathLikeModule } = await import("./util.js");
+          const res = await resolvePathLikeModule(projectRoot, spec);
+          if (res) {
+            to = { type: "file", path: res.replace(/\\/g, "/") };
+          } else {
+            // Fallback to resolveSpecifier for relative paths like ./foo
+            const res2 = await resolveSpecifier(
+              file,
+              spec,
+              projectRoot,
+              matchPath,
+              workspaceConfig,
+              { resolveNodeModules: !!opts?.resolveNodeModules }
+            );
+            to =
+              typeof res2 === "string"
+                ? { type: "file", path: res2.replace(/\\/g, "/") }
+                : { type: "external", name: res2.external };
+          }
         } else {
           const res = await resolveSpecifier(
             file,

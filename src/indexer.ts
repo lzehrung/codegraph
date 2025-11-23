@@ -1307,12 +1307,13 @@ export async function collectImportsForFile(
       }
 
       if (!from) continue;
-      const resolved = await resolveFrom(from);
+      const fromValue = from!;
+      const resolved = await resolveFrom(fromValue);
       if (caps["def"]) {
         imports.push({
           kind: "default",
           local: sliceText(caps["def"].node, source),
-          from,
+          from: fromValue,
           resolved,
           typeOnly,
         });
@@ -1322,7 +1323,7 @@ export async function collectImportsForFile(
         imports.push({
           kind: "namespace",
           localNS: nsName,
-          from,
+          from: fromValue,
           resolved,
           typeOnly,
         });
@@ -1342,10 +1343,112 @@ export async function collectImportsForFile(
           kind: "named",
           local: alias,
           imported,
-          from,
+          from: fromValue,
           resolved,
           typeOnly,
         });
+      }
+
+      // Heuristics for languages where we captured @from but no explicit bindings
+      if (
+        fromValue &&
+        !caps["def"] &&
+        !caps["ns"] &&
+        inames.length === 0 &&
+        patterns.length === 0
+      ) {
+        if (resolvedSup.id === "java") {
+          // import java.util.List; -> local "List"
+          const parts = fromValue.split(".");
+          const last = parts[parts.length - 1];
+          if (last && /^[A-Z]/.test(last)) {
+            imports.push({
+              kind: "named",
+              local: last,
+              imported: last,
+              from: fromValue,
+              resolved,
+              typeOnly,
+            });
+          }
+        } else if (resolvedSup.id === "csharp") {
+          const aliasNode = caps["alias"];
+          if (aliasNode) {
+            const alias = sliceText(aliasNode.node, source);
+            // For "using Alias = Type.Path;", try to grab the last part as the imported name
+            let imported = alias;
+            const fromParts = fromValue.split(".");
+            if (fromParts.length > 0) {
+              const candidate = fromParts[fromParts.length - 1];
+              if (candidate) imported = candidate;
+            }
+
+            imports.push({
+              kind: "named",
+              local: alias,
+              imported,
+              from: fromValue,
+              resolved,
+              typeOnly,
+            });
+          } else {
+            // implicit namespace import - treated as star to bring members into scope
+            imports.push({ kind: "star", from: fromValue, resolved, typeOnly });
+          }
+        } else if (resolvedSup.id === "ruby") {
+          // require 'foo' -> star import to bring constants into scope
+          imports.push({ kind: "star", from: fromValue, resolved });
+        } else if (resolvedSup.id === "go") {
+          // import "fmt" -> local "fmt"
+          // import "github.com/pkg/foo" -> local "foo"
+          const aliasNode = caps["alias"];
+          if (aliasNode) {
+            const alias = sliceText(aliasNode.node, source);
+            imports.push({
+              kind: "namespace",
+              localNS: alias,
+              from: fromValue,
+              resolved,
+            });
+          } else {
+            const parts = fromValue.replace(/"/g, "").split("/");
+            const last = parts[parts.length - 1];
+            if (!last) continue;
+            imports.push({
+              kind: "namespace",
+              localNS: last,
+              from: fromValue,
+              resolved,
+            });
+          }
+        } else if (resolvedSup.id === "rust") {
+          // mod utils; -> namespace (from="utils")
+          // use foo::bar; -> named (from="foo::bar")
+          if (stmtText.startsWith("mod ")) {
+            // treat 'mod name;' as namespace import pointing to name.rs / name/mod.rs
+            imports.push({
+              kind: "namespace",
+              localNS: fromValue,
+              from: fromValue,
+              resolved,
+            });
+          } else {
+            const parts = fromValue.split("::");
+            const last = parts[parts.length - 1];
+            if (!last) continue;
+            if (last === "*") {
+              imports.push({ kind: "star", from: fromValue, resolved });
+            } else {
+              imports.push({
+                kind: "named",
+                local: last,
+                imported: last,
+                from: fromValue,
+                resolved,
+              });
+            }
+          }
+        }
       }
       }
     } catch {
@@ -1524,21 +1627,39 @@ export async function buildProjectIndex(
       if (imp.kind === "star" && typeof imp.resolved === "string") {
         const target = modules.get(imp.resolved);
         if (target) {
-          let exported: string[] = [];
-          const viaAll = target.exports.filter((e) => e.type === "local");
-          if (viaAll.length) exported = viaAll.map((e) => e.exportedAs);
-          else
-            exported = target.locals
-              .map((l) => l.localName)
-              .filter((n) => !n.startsWith("_"));
-          for (const name of exported)
-            m.imports.push({
-              kind: "named",
-              local: name,
-              imported: name,
-              from: imp.from,
-              resolved: imp.resolved,
-            });
+          const targetSup =
+            typeof imp.resolved === "string"
+              ? supportForFile(imp.resolved)
+              : null;
+          const exported =
+            target.exports.filter((e) => e.type === "local").length > 0
+              ? target.exports
+                  .filter((e) => e.type === "local")
+                  .map((e: any) => e.target as SymbolDef)
+              : target.locals.filter((l) => !l.localName.startsWith("_"));
+          const seen = new Set<string>();
+          for (const sym of exported) {
+            if (!sym.localName || seen.has(sym.localName)) continue;
+            seen.add(sym.localName);
+            const treatAsNamespace =
+              targetSup?.id === "ruby" && sym.kind === SymbolKind.Class;
+            if (treatAsNamespace) {
+              m.imports.push({
+                kind: "namespace",
+                localNS: sym.localName,
+                from: imp.from,
+                resolved: imp.resolved,
+              });
+            } else {
+              m.imports.push({
+                kind: "named",
+                local: sym.localName,
+                imported: sym.localName,
+                from: imp.from,
+                resolved: imp.resolved,
+              });
+            }
+          }
         }
       }
     }
@@ -1547,9 +1668,9 @@ export async function buildProjectIndex(
   const graph = await collectGraph(projectRoot, files, {
     parsed: parsedMap as any,
     fast: !!graphOptions.fast,
-    resolveNodeModules: graphOptions.resolveNodeModules,
+    resolveNodeModules: !!graphOptions.resolveNodeModules,
     fileSignatures,
-    cachedFileEdges: cachedGraphEntries,
+    ...(cachedGraphEntries ? { cachedFileEdges: cachedGraphEntries } : {}),
     onFileEdges: (file, entry) => {
       if (!entry?.sig) return;
       manifestEntries.set(file, {
@@ -1734,14 +1855,15 @@ export async function buildProjectIndexIncremental(
   );
 
   const explicitFiles = (opts?.files ?? []).map(normalizeFilePath);
-  const gitFiles =
-    opts?.gitBase || opts?.changedSince
-      ? await listChangedFiles(projectRoot, {
-          base: opts.gitBase,
-          head: opts.gitHead,
-          changedSince: opts.gitBase ? undefined : opts.changedSince,
-        })
-      : [];
+  const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
+  const gitOpts: { base?: string; head?: string; changedSince?: string } = {};
+  if (opts?.gitBase) gitOpts.base = opts.gitBase;
+  if (opts?.gitHead) gitOpts.head = opts.gitHead;
+  if (!opts?.gitBase && opts?.changedSince) gitOpts.changedSince = opts.changedSince;
+
+  const gitFiles = needsGitScan
+    ? await listChangedFiles(projectRoot, gitOpts)
+    : [];
 
   const allFiles = new Set<string>([
     ...trackedFiles,
@@ -1906,7 +2028,7 @@ export async function buildProjectIndexIncremental(
   const graph = await collectGraph(projectRoot, filesList, {
     parsed: parsedMap as any,
     fast: !!graphOptions.fast,
-    resolveNodeModules: graphOptions.resolveNodeModules,
+    resolveNodeModules: !!graphOptions.resolveNodeModules,
     fileSignatures,
     cachedFileEdges: cachedGraphEntries,
     onFileEdges: (file, entry) => {
@@ -2045,44 +2167,196 @@ export async function goToDefinition(
   while (node && (node.type === "," || node.type === ".")) node = node.parent;
   if (!node) return { status: "not_found", reason: "No node at position" };
 
-  if (
-    sup.supportsCrossModuleSymbols &&
-    ((node.type ===
-      (sup.nodeTypes.propertyIdentifier?.[0] ?? "property_identifier") &&
-      node.parent &&
-      node.parent.type ===
-        (sup.nodeTypes.memberExpression ?? "member_expression")) ||
-      node.type === (sup.nodeTypes.memberExpression ?? "member_expression"))
-  ) {
-    const memberNode =
-      node.type === (sup.nodeTypes.memberExpression ?? "member_expression")
-        ? node
-        : node.parent!;
-    let obj = memberNode.child(0);
-    let prop = memberNode.child(2);
+  // Check if node is part of a member access chain (property, method call, scope resolution)
+  const isMemberAccess =
+    node.parent &&
+    (node.parent.type ===
+      (sup.nodeTypes.memberExpression ?? "member_expression") ||
+      node.parent.type === "member_access_expression" || // C#
+      node.parent.type === "qualified_name" || // C#
+      node.parent.type === "field_access" || // Java
+      node.parent.type === "method_invocation" || // Java
+      node.parent.type === "scoped_identifier" || // Java/Rust
+      node.parent.type === "scoped_type_identifier" || // Java
+      node.parent.type === "call" || // Ruby
+      node.parent.type === "scope_resolution" || // Ruby
+      node.parent.type === "field_expression" || // Rust
+      node.parent.type === "attribute"); // Python
+
+  if (sup.supportsCrossModuleSymbols && isMemberAccess) {
+    const memberNode = node.parent!;
+    let obj: Parser.SyntaxNode | null = null;
+    let prop: Parser.SyntaxNode | null = null;
+
     if (sup.id === "python") {
-      obj = memberNode.childForFieldName("object") ?? obj;
-      prop = memberNode.childForFieldName("attribute") ?? prop;
-    }
-    if (obj && prop && obj.type === "identifier") {
+      obj = memberNode.childForFieldName("object") ?? memberNode.child(0);
+      prop = memberNode.childForFieldName("attribute") ?? memberNode.child(2);
+      } else if (sup.id === "csharp") {
+      if (memberNode.type === "qualified_name") {
+        obj = memberNode.child(0);
+        prop = memberNode.child(2);
+      } else {
+        obj = memberNode.child(0);
+        prop = memberNode.child(2);
+      }
+      // Unwrap nested structure if needed (A.B.C)
+      let current = obj;
+      while (
+        current &&
+        (current.type === "qualified_name" ||
+          current.type === "member_access_expression")
+      ) {
+        current = current.child(0);
+      }
+      } else if (sup.id === "java") {
+        if (memberNode.type === "method_invocation") {
+          obj = memberNode.childForFieldName("object") ?? memberNode.child(0);
+          prop = memberNode.childForFieldName("name") ?? memberNode.child(2);
+          // method_invocation: object . name (args)
+          // tree-sitter-java: method_invocation (object)? . (type_arguments)? name (arguments)
+        } else if (
+          memberNode.type === "scoped_identifier" ||
+          memberNode.type === "scoped_type_identifier"
+        ) {
+          obj = memberNode.childForFieldName("scope") ?? memberNode.child(0);
+          prop = memberNode.childForFieldName("name") ?? memberNode.child(2);
+        } else {
+          obj = memberNode.child(0);
+          prop = memberNode.child(2);
+        }
+      } else if (sup.id === "ruby") {
+      if (memberNode.type === "scope_resolution") {
+        obj = memberNode.childForFieldName("scope") ?? memberNode.child(0);
+        prop = memberNode.childForFieldName("name") ?? memberNode.child(2);
+      } else {
+        // call: receiver . method
+        obj = memberNode.childForFieldName("receiver") ?? memberNode.child(0);
+        prop = memberNode.childForFieldName("method") ?? memberNode.child(2);
+      }
+      } else if (sup.id === "rust") {
+      if (memberNode.type === "scoped_identifier") {
+        obj = memberNode.childForFieldName("path") ?? memberNode.child(0);
+        prop = memberNode.childForFieldName("name") ?? memberNode.child(2);
+      } else {
+        obj = memberNode.child(0);
+        prop = memberNode.child(2);
+      }
+      } else {
+        // Default (JS/TS)
+        obj = memberNode.child(0);
+        prop = memberNode.child(2);
+      }
+
+    if (
+      obj &&
+      prop &&
+      node.id === prop.id &&
+      (obj.type === "identifier" ||
+        obj.type === "type_identifier" ||
+        obj.type === "constant" ||
+        obj.type === "qualified_name" ||
+        obj.type === "scoped_identifier" ||
+        obj.type === "scoped_type_identifier" ||
+        obj.type === "generic_name" ||
+        obj.type === "alias_qualified_name")
+    ) {
       const nsName = sliceText(obj, source);
       const member = sliceText(prop, source);
-      const nsImport = mod.imports.find(
-        (i) => i.kind === "namespace" && i.localNS === nsName
+
+      let objDef: SymbolDef | null = null;
+
+      // Check imports first (to handle aliases correctly)
+      const imp = mod.imports.find(
+        (i) =>
+          (i.kind === "named" && i.local === nsName) ||
+          (i.kind === "default" && i.local === nsName) ||
+          (i.kind === "namespace" && i.localNS === nsName)
       );
-      if (nsImport) {
-        const resolved = resolveImported(index, nsImport, member);
-        if (resolved)
-          return {
-            status: "ok",
-            definition: resolved,
-            via: {
-              ...(toModuleRef(nsImport.resolved)
-                ? { importedFrom: toModuleRef(nsImport.resolved) }
-                : {}),
-              exportedName: member,
-            },
-          };
+      if (imp) {
+        if (imp.kind === "namespace") {
+          // Namespace import - check export from target
+          const targetFile =
+            typeof imp.resolved === "string"
+              ? imp.resolved.replace(/\\/g, "/")
+              : undefined;
+          if (targetFile) {
+            const hit = resolveExport(index, targetFile, member);
+            if (hit)
+              return {
+                status: "ok",
+                definition: hit.def,
+                via: { exportedName: member },
+              };
+            // Also check locals of target (e.g. Rust module members that aren't strictly "exports")
+            const tMod = index.byFile.get(targetFile);
+            if (tMod) {
+              const loc = tMod.locals.find((l) => l.localName === member);
+              if (loc)
+                return {
+                  status: "ok",
+                  definition: loc,
+                  via: { exportedName: member },
+                };
+            }
+          }
+        } else if (imp.kind === "named") {
+          objDef = resolveImported(index, imp, imp.imported);
+        } else if (imp.kind === "default") {
+          objDef = resolveImported(index, imp, "default");
+        }
+      } else {
+        objDef = mod.locals.find((l) => l.localName === nsName) ?? null;
+      }
+
+      if (!objDef && !imp) {
+        for (const starImp of mod.imports.filter((i) => i.kind === "star")) {
+          const target = resolveImported(index, starImp, nsName);
+          if (target) {
+            objDef = target;
+            break;
+          }
+        }
+      }
+
+      // If we resolved obj to a definition, look for member inside it
+      if (
+        objDef &&
+        (sup.id === "csharp" ||
+          sup.id === "java" ||
+          sup.id === "ruby" ||
+          sup.id === "rust")
+      ) {
+        const tCtx = await ensureParsedContext(objDef.file);
+        if (tCtx) {
+          const { tree: tTree } = tCtx;
+          const start = objDef.range.start;
+          const p = { row: start.line - 1, column: start.column - 1 };
+          const nameNode = tTree.rootNode.descendantForPosition(p, p);
+          const container = nameNode.parent;
+
+          if (container) {
+            const tMod = index.byFile.get(objDef.file);
+            if (tMod) {
+              const cStart = container.startIndex;
+              const cEnd = container.endIndex;
+
+              const memberDef = tMod.locals.find(
+                (l) =>
+                  l.localName === member &&
+                  l.range.start.index >= cStart &&
+                  l.range.end.index <= cEnd
+              );
+
+              if (memberDef) {
+                return {
+                  status: "ok",
+                  definition: memberDef,
+                  via: { exportedName: member },
+                };
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -2128,7 +2402,6 @@ export async function goToDefinition(
     if (local) {
       return { status: "ok", definition: local };
     }
-
     if (sup.supportsCrossModuleSymbols) {
       const hit = resolveExport(index, file, name);
       if (hit) {
@@ -2165,6 +2438,21 @@ export async function goToDefinition(
                   ? { importedFrom: toModuleRef(imp.resolved) }
                   : {}),
                 exportedName: imp.imported,
+              },
+            };
+          }
+        } else if (imp.kind === "star") {
+          // If name is exported from the star-imported module
+          const target = resolveImported(index, imp, name);
+          if (target) {
+            return {
+              status: "ok",
+              definition: target,
+              via: {
+                ...(toModuleRef(imp.resolved)
+                  ? { importedFrom: toModuleRef(imp.resolved) }
+                  : {}),
+                exportedName: name,
               },
             };
           }
@@ -2364,7 +2652,12 @@ export function buildScopeIndexFromSource(
 
     if (
       node.type === "function_declaration" ||
-      node.type === "function_definition"
+      node.type === "function_definition" ||
+      node.type === "method_declaration" ||
+      node.type === "method" ||
+      node.type === "singleton_method" ||
+      node.type === "function_item" ||
+      node.type === "func_literal"
     ) {
       const name = (node as any).childForFieldName("name");
       if (name) {
@@ -2380,21 +2673,47 @@ export function buildScopeIndexFromSource(
         }
       }
     }
-    if (node.type === "class_declaration" || node.type === "class_definition") {
+    if (
+      node.type === "class_declaration" || 
+      node.type === "class_definition" ||
+      node.type === "class" ||
+      node.type === "module" ||
+      node.type === "struct_item" ||
+      node.type === "mod_item"
+    ) {
       const name = (node as any).childForFieldName("name");
       if (name) addDecl(name, "class");
     }
     if (
       node.type === "variable_declaration" ||
       node.type === "lexical_declaration" ||
-      node.type === "assignment"
+      node.type === "assignment" ||
+      node.type === "field_declaration" ||
+      node.type === "local_variable_declaration" || // C#
+      node.type === "var_declaration" || // Go
+      node.type === "const_declaration" || // Go
+      node.type === "short_var_declaration" || // Go
+      node.type === "let_declaration" || // Rust
+      node.type === "const_item" || // Rust
+      node.type === "static_item" // Rust
     ) {
       for (const ch of (node as any).namedChildren) {
-        if (ch.type === "variable_declarator") {
+        if (ch.type === "variable_declarator" || ch.type === "var_spec" || ch.type === "const_spec") {
           const nm = (ch as any).childForFieldName("name");
           if (nm) addDecl(nm, "local");
-        } else if (ch.type === "identifier" && node.type === "assignment") {
+        } else if (
+            (ch.type === "identifier" || ch.type === "field_identifier") && 
+            (node.type === "assignment" || node.type === "short_var_declaration")
+        ) {
           addDecl(ch as any, "local");
+        } else if (
+            node.type === "let_declaration" || 
+            node.type === "const_item" || 
+            node.type === "static_item"
+        ) {
+             // Rust: let pattern = value;
+             const pat = node.childForFieldName("pattern") || node.childForFieldName("name");
+             if (pat && pat.type === "identifier") addDecl(pat, "local");
         }
       }
     }
@@ -2605,7 +2924,10 @@ export async function findReferences(
       for (const name of exportedNames) {
         if ((imp as any).kind === "namespace") {
           const hit = resolveExport(index, targetFile, name);
-          if (!hit || !sameDef(hit.def, def)) continue;
+          const matchesDef = hit
+            ? sameDef(hit.def, def)
+            : targetFile === definitionFile;
+          if (!matchesDef) continue;
           const scopeIdx = await ensure();
           const nsName = (imp as any).localNS;
           const member = name;
@@ -2625,7 +2947,10 @@ export async function findReferences(
               ? "default"
               : name;
           const hit = resolveExport(index, targetFile, exported);
-          if (!hit || !sameDef(hit.def, def)) continue;
+          const matchesDef = hit
+            ? sameDef(hit.def, def)
+            : targetFile === definitionFile;
+          if (!matchesDef) continue;
           const scopeIdx = await ensure();
           const localName =
             (imp as any).kind === "default"
@@ -2701,20 +3026,46 @@ export async function collectNamespaceMemberRefs(
   const src = parsed.source;
   const tree = parsed.tree;
   const ranges: Range[] = [];
+  const isRuby = sup.id === "ruby";
   const isMember =
     sup.nodeTypes.memberExpression ??
-    (sup.id === "python" ? "attribute" : "member_expression");
+    (sup.id === "python"
+      ? "attribute"
+      : sup.id === "ruby"
+      ? "call"
+      : "member_expression");
   const isPropId = (t: string) =>
     (sup.nodeTypes.propertyIdentifier || ["property_identifier"]).includes(t) ||
-    t === "identifier";
+    t === "identifier" ||
+    t === "constant";
+  const isObjId = (t: string) =>
+    t === "identifier" ||
+    t === "type_identifier" ||
+    t === "constant" ||
+    t === "namespace_identifier";
   const walk = (node: Parser.SyntaxNode) => {
-    if (node.type === isMember) {
-      const obj = node.childForFieldName("object") ?? node.child(0);
-      const prop =
-        node.childForFieldName("property") ??
-        node.childForFieldName("attribute") ??
-        node.child(2);
-      if (obj && prop && obj.type === "identifier" && isPropId(prop.type)) {
+    if (
+      node.type === isMember ||
+      (isRuby && (node.type === "call" || node.type === "scope_resolution"))
+    ) {
+      let obj: Parser.SyntaxNode | null = null;
+      let prop: Parser.SyntaxNode | null = null;
+      if (isRuby) {
+        if (node.type === "scope_resolution") {
+          obj = node.childForFieldName("scope") ?? node.child(0);
+          prop = node.childForFieldName("name") ?? node.child(2);
+        } else {
+          obj = node.childForFieldName("receiver") ?? node.child(0);
+          prop = node.childForFieldName("method") ?? node.child(2);
+        }
+      } else {
+        obj = node.childForFieldName("object") ?? node.child(0);
+        prop =
+          node.childForFieldName("property") ??
+          node.childForFieldName("attribute") ??
+          node.child(2);
+      }
+      if (obj && prop && isObjId(obj.type) && isPropId(prop.type)) {
         const oname = sliceText(obj, src);
         const pname = sliceText(prop, src);
         if (oname === ns && pname === member) {

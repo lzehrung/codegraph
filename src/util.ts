@@ -48,7 +48,7 @@ export function toRange(node: any): Range {
 
 export async function listProjectFiles(
   projectRoot: string,
-  patterns = ["**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte}"]
+  patterns = ["**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs}"]
 ): Promise<string[]> {
   try {
     const files = await fg(patterns, {
@@ -340,7 +340,24 @@ export async function resolveWorkspacePackage(
   if (!pkg) return null;
   const baseDir = pkg.path;
 
-  const exts = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs", ".json"];
+  const exts = [
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mts",
+    ".cts",
+    ".mjs",
+    ".cjs",
+    ".json",
+    ".vue",
+    ".svelte",
+    ".go",
+    ".java",
+    ".cs",
+    ".rb",
+    ".rs",
+  ];
   const tryResolveRelative = async (rel: string): Promise<string | null> => {
     const raw = path.resolve(baseDir, rel);
     const candidates: string[] = [raw];
@@ -401,6 +418,53 @@ export async function resolveWorkspacePackage(
 
 export type FileId = string;
 
+export async function resolvePathLikeModule(
+  projectRoot: string,
+  spec: string
+): Promise<string | null> {
+  const parts = spec.split(/[\/\\.:]+/).filter(Boolean);
+  // Try extensions from the file
+  const exts = [
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mts",
+    ".cts",
+    ".mjs",
+    ".cjs",
+    ".json",
+    ".vue",
+    ".svelte",
+    ".go",
+    ".java",
+    ".cs",
+    ".rb",
+    ".rs",
+  ];
+
+  // Try matching progressively shorter prefixes (e.g. a.b.c -> a/b/c, a/b, a)
+  for (let i = parts.length; i > 0; i--) {
+    const sub = parts.slice(0, i);
+    const p = path.join(projectRoot, ...sub);
+    // console.log("Checking path-like:", p, "Parts:", sub, "Exts:", exts);
+    console.log("Checking path-like:", p);
+
+    for (const e of exts) {
+      if (await fileExists(p + e)) return path.resolve(p + e);
+    }
+    for (const e of exts) {
+      if (await fileExists(path.join(p, "index" + e)))
+        return path.resolve(path.join(p, "index" + e));
+    }
+    if (await fileExists(p)) {
+       const st = await fsp.stat(p);
+       if (!st.isDirectory()) return path.resolve(p);
+    }
+  }
+  return null;
+}
+
 export async function resolveSpecifier(
   fromFile: string,
   spec: string,
@@ -417,7 +481,24 @@ export async function resolveSpecifier(
       ? path.join(projectRoot, spec)
       : path.resolve(path.dirname(fromFile), spec);
     const candidates: string[] = [base];
-    const exts = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs", ".json"];
+    const exts = [
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mts",
+    ".cts",
+    ".mjs",
+    ".cjs",
+    ".json",
+    ".vue",
+    ".svelte",
+    ".go",
+    ".java",
+    ".cs",
+    ".rb",
+    ".rs",
+  ];
     // If spec already has .js/.mjs/.cjs, also try the corresponding .ts/.mts/.cts
     const baseExt = path.extname(base);
     if (baseExt === ".js" || baseExt === ".mjs" || baseExt === ".cjs") {
@@ -445,6 +526,12 @@ export async function resolveSpecifier(
     if (resolvedWs) {
       resolveSpecifierCache.set(cacheKey, resolvedWs);
       return resolvedWs;
+    }
+    // Try path-like fallback for Java/Go/C#/Rust which often look like packages but map to source
+    const pathLike = await resolvePathLikeModule(projectRoot, spec);
+    if (pathLike) {
+      resolveSpecifierCache.set(cacheKey, pathLike);
+      return pathLike;
     }
     if (opts?.resolveNodeModules) {
       const nm = await resolveFromNodeModules(spec, fromFile, projectRoot);
@@ -518,7 +605,24 @@ async function resolveFromNodeModules(
         const pkgPath = path.join(nmDir, "package.json");
         const pkg = await loadJSON<any>(pkgPath);
         const baseDir = nmDir;
-        const exts = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs", ".json"];
+        const exts = [
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mts",
+    ".cts",
+    ".mjs",
+    ".cjs",
+    ".json",
+    ".vue",
+    ".svelte",
+    ".go",
+    ".java",
+    ".cs",
+    ".rb",
+    ".rs",
+  ];
         const tryResolveRelative = async (rel: string): Promise<string | null> => {
           const raw = path.resolve(baseDir, rel);
           const candidates: string[] = [raw];
