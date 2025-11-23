@@ -1,6 +1,11 @@
 import type { FileId, Range } from "../types.js";
-import type { ProjectIndex, SymbolHandle } from "../indexer.js";
+import type { ProjectIndex, SymbolDef, SymbolHandle } from "../indexer.js";
 import type { FileChange, ChangedSymbol } from "./types.js";
+
+function symbolHandleFromLocal(file: FileId, local: SymbolDef): string {
+  const index = local.range.start.index ?? 0;
+  return `${file}::${local.localName}::${index}`;
+}
 
 export function locateChangedSymbols(
   index: ProjectIndex,
@@ -38,8 +43,8 @@ export function locateChangedSymbols(
     const classification = classifyChangedNode(node, source, sup);
     const symbolHandle = findSymbolHandleForNode(index, file, node, sup, classification);
     if (symbolHandle) {
-      const symbolDef = index.byFile.get(file)?.locals.find(
-        l => `${file}::${l.localName}::${l.range.start.index}` === symbolHandle
+      const symbolDef = index.byFile.get(file)?.locals.find((l) =>
+        symbolHandleFromLocal(file, l) === symbolHandle
       );
       if (symbolDef) {
         changedSymbols.push({
@@ -155,7 +160,7 @@ function findSymbolHandleForNode(
       l.range.start.line === (node.startPosition?.row + 1) &&
       l.range.start.column === (node.startPosition?.column + 1)
     );
-    return local ? `${file}::${local.localName}::${local.range.start.index}` : null;
+    return local ? symbolHandleFromLocal(file, local) : null;
   }
 
   // For body/callsite/import/export edits, climb to nearest declaration name
@@ -165,7 +170,7 @@ function findSymbolHandleForNode(
       l.range.start.line === (nameNode.startPosition?.row + 1) &&
       l.range.start.column === (nameNode.startPosition?.column + 1)
     );
-    return local ? `${file}::${local.localName}::${local.range.start.index}` : null;
+    return local ? symbolHandleFromLocal(file, local) : null;
   }
 
   return null;
@@ -175,9 +180,10 @@ function isExported(index: ProjectIndex, file: FileId, symbolDef: any): boolean 
   const mod = index.byFile.get(file);
   if (!mod) return false;
 
+  const symbolIndex = symbolDef.range.start.index ?? 0;
   return mod.exports.some(e =>
     e.type === "local" &&
     e.target.localName === symbolDef.localName &&
-    e.target.range.start.index === symbolDef.range.start.index
+    (e.target.range.start.index ?? 0) === symbolIndex
   );
 }

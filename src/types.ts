@@ -1,4 +1,4 @@
-export type Pos = { line: number; column: number; index: number };
+export type Pos = { line: number; column: number; index?: number };
 export type Range = { start: Pos; end: Pos };
 export type FileId = string;
 

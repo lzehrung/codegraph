@@ -489,7 +489,7 @@ export type SymbolGraph = {
 function defNodeId(def: {
   file: string;
   localName: string;
-  range?: { start: { index: number } };
+  range?: { start: { index?: number } };
 }) {
   const idx = def.range?.start?.index ?? 0;
   const f = typeof def.file === 'string' ? def.file.replace(/\\/g, '/') : def.file;
@@ -500,7 +500,7 @@ function nodeForDef(def: {
   file: string;
   localName: string;
   kind: string;
-  range?: { start: { index: number } };
+  range?: { start: { index?: number } };
 }): SymbolNode {
   return {
     id: defNodeId(def),
