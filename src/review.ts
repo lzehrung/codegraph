@@ -3,10 +3,11 @@ import type { Edge } from "./types.js";
 import {
   buildProjectIndexIncremental,
   type IncrementalBuildOptions,
+  type ProjectIndex,
   symbolId,
 } from "./indexer.js";
 import { listCandidateTestFiles, type CandidateTestFile } from "./impact/context.js";
-import { normalizePath, listChangedFiles } from "./util.js";
+import { normalizePath, listChangedFiles, fileExists } from "./util.js";
 
 type ReviewFileSummary = {
   file: string;
@@ -63,34 +64,65 @@ export async function buildReviewReport(
   }
 
   if (opts.gitBase || opts.changedSince) {
-    const gitList = await listChangedFiles(projectRoot, {
+    const gitDiffOpts: {
+      base?: string | undefined;
+      head?: string | undefined;
+      changedSince?: string | undefined;
+    } = {
       base: opts.gitBase,
       head: opts.gitHead,
-      changedSince: opts.gitBase ? undefined : opts.changedSince,
-    });
+    };
+    if (!opts.gitBase && opts.changedSince) {
+      gitDiffOpts.changedSince = opts.changedSince;
+    }
+    const gitList = await listChangedFiles(projectRoot, gitDiffOpts);
     for (const file of gitList) changedFiles.add(file);
   }
 
   if (changedFiles.size === 0) {
-    return {
+    const report: ReviewReport = {
       status: "no_changes",
-      base: opts.gitBase,
-      head: opts.gitHead,
       summary: { filesChanged: 0, symbolsChanged: 0, candidateTests: 0 },
       changedFiles: [],
       graphDelta: [],
       candidateTests: [],
     };
+    if (opts.gitBase !== undefined) report.base = opts.gitBase;
+    if (opts.gitHead !== undefined) report.head = opts.gitHead;
+    return report;
   }
 
-  const index = await buildProjectIndexIncremental(projectRoot, {
-    ...opts,
-    files: Array.from(changedFiles),
-  });
+  const changedFileList = Array.from(changedFiles);
+  const existenceChecks = await Promise.all(
+    changedFileList.map(async (file) => ({
+      file,
+      exists: await fileExists(file),
+    }))
+  );
+  const filesToIndex = existenceChecks
+    .filter((entry) => entry.exists)
+    .map((entry) => entry.file);
+
+  let index: ProjectIndex;
+  if (filesToIndex.length === 0) {
+    index = {
+      graph: { nodes: new Set(), edges: [] },
+      modules: new Map(),
+      byFile: new Map(),
+      exportCache: new Map(),
+      parsed: new Map(),
+    };
+  } else {
+    const indexOpts: IncrementalBuildOptions = {
+      ...(opts ?? {}),
+      files: filesToIndex,
+    };
+    index = await buildProjectIndexIncremental(projectRoot, indexOpts);
+  }
 
   const summaries: ReviewFileSummary[] = [];
   const changedSymbolIds: string[] = [];
-  for (const file of changedFiles) {
+  for (const file of changedFileList) {
     const mod = index.byFile.get(file);
     if (!mod) {
       summaries.push({
@@ -131,7 +163,7 @@ export async function buildReviewReport(
 
   const candidateTests = listCandidateTestFiles(
     index,
-    Array.from(changedFiles),
+    changedFileList,
     changedSymbolIds,
     { maxCandidates: opts.maxCandidates ?? 50 }
   ).map((candidate) => ({
@@ -139,10 +171,8 @@ export async function buildReviewReport(
     file: relativePath(projectRoot, candidate.file),
   }));
 
-  return {
+  const report: ReviewReport = {
     status: "ok",
-    base: opts.gitBase,
-    head: opts.gitHead ?? "HEAD",
     summary: {
       filesChanged: summaries.length,
       symbolsChanged: changedSymbolIds.length,
@@ -152,5 +182,8 @@ export async function buildReviewReport(
     graphDelta,
     candidateTests,
   };
+  if (opts.gitBase !== undefined) report.base = opts.gitBase;
+  report.head = opts.gitHead ?? "HEAD";
+  return report;
 }
 

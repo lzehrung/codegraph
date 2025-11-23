@@ -218,7 +218,7 @@ npm run build
 After installing the package, use the `codegraph` CLI:
 
 ```bash
-# Build a dependency graph (prints nodes + edges as JSON)
+# File dependency graph only (default; no symbols)
 npx codegraph graph
 
 # Build a dependency graph from multiple roots
@@ -229,7 +229,7 @@ npx codegraph graph --mermaid > graph.mmd
 # Fast graph-only mode (JS/TS specifiers via regex, skips parsing for specifiers)
 npx codegraph graph --mermaid --fast-graph > graph.fast.mmd
 
-# Include symbol-level nodes/edges (imports/exports) combined with file graph
+# File + symbols graph (imports/exports)
 npx codegraph graph ./src --mermaid --symbols > graph.symbols.mmd
 # Symbols only (no file nodes/edges)
 npx codegraph graph ./src --mermaid --symbols-only > graph.symbols.only.mmd
@@ -349,7 +349,7 @@ npx tsx src/cli.ts goto <file> <line> <column>
 
 ### Output formats
 
-* `graph` prints JSON by default:
+* Plain `graph` outputs **file dependency graph only**:
 
   ```json
   {

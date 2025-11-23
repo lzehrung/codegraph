@@ -11,7 +11,7 @@ export interface Chunk {
   /** Language identifier (e.g., "javascript", "typescript", "python") */
   languageId: string;
   /** Optional source file path */
-  filePath?: string;
+  filePath?: string | undefined;
   /** Chunk type (e.g., "function", "class", "method", "import", "misc") */
   type: string;
   /** Symbol name if applicable (e.g., function name, class name) */
@@ -44,13 +44,13 @@ export interface ChunkFileOptions {
   /** Source code to chunk */
   source: string;
   /** Optional source file path for chunk IDs */
-  filePath?: string;
+  filePath?: string | undefined;
   /** Minimum tokens per chunk (default: 150). Smaller chunks are merged. */
   minTokens?: number;
   /** Maximum tokens per chunk (default: 400). Larger chunks are split. */
   maxTokens?: number;
   /** Custom token counting function (default: whitespace-based) */
-  tokenizer?: (text: string) => number;
+  tokenizer?: ((text: string) => number) | undefined;
 }
 
 function defaultTokenizer(text: string): number {

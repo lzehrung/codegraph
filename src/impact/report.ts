@@ -23,9 +23,20 @@ export async function buildImpactReport(
   const fileEdges: Array<{ from: FileId; to: FileId; typeOnly?: boolean }> = [];
   const symbolEdges: Array<{ from: number; to: number; label: string }> = [];
 
+  const relevantFiles = new Set<FileId>();
+  for (const fileChange of diffFiles) relevantFiles.add(fileChange.path);
+  for (const symbol of changedSymbols) relevantFiles.add(symbol.file);
+  for (const item of impactedItems) relevantFiles.add(item.file);
+
   // Add file-to-file edges from the dependency graph
   for (const edge of index.graph.edges) {
     if (edge.to.type === "file") {
+      if (
+        !relevantFiles.has(edge.from) ||
+        !relevantFiles.has(edge.to.path)
+      ) {
+        continue;
+      }
       const fileEdge: { from: FileId; to: FileId; typeOnly?: boolean } = {
         from: edge.from,
         to: edge.to.path

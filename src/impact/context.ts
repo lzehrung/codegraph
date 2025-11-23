@@ -1,6 +1,7 @@
 import type { FileId } from "../types.js";
 import type { ProjectIndex } from "../indexer.js";
 import { buildSymbolGraphDetailed } from "../graphs.js";
+import type { SymbolEdge } from "../graphs.js";
 
 export interface CandidateTestFile {
   file: FileId;
@@ -142,14 +143,12 @@ async function collectSymbolNeighbors(
 
   if (changedSymbolIds.length === 0) return neighbors;
 
-  // Build detailed symbol graph
   const symbolGraph = await buildSymbolGraphDetailed(index, {
     scope: "all",
     maxEdges: 50000, // Larger limit for context collection
     membersOnly: false
   });
 
-  // Create lookup maps
   const symbolIdToInfo = new Map<string, { file: FileId; name: string; kind: string }>();
   for (const [symbolId, node] of symbolGraph.nodes) {
     symbolIdToInfo.set(symbolId, {
@@ -159,56 +158,63 @@ async function collectSymbolNeighbors(
     });
   }
 
-  // Collect direct neighbors first
-  const visitedSymbols = new Set<string>();
-  const changedSet = new Set(changedSymbolIds);
+  const adjacencyFrom = new Map<string, SymbolEdge[]>();
+  const adjacencyTo = new Map<string, SymbolEdge[]>();
+  for (const edge of symbolGraph.edges) {
+    const fromList = adjacencyFrom.get(edge.from);
+    if (fromList) {
+      fromList.push(edge);
+    } else {
+      adjacencyFrom.set(edge.from, [edge]);
+    }
 
-  // Add changed symbols to visited
-  for (const symbolId of changedSymbolIds) {
-    visitedSymbols.add(symbolId);
+    const toList = adjacencyTo.get(edge.to);
+    if (toList) {
+      toList.push(edge);
+    } else {
+      adjacencyTo.set(edge.to, [edge]);
+    }
   }
 
-  // BFS through symbol graph to find neighbors
+  const visitedSymbols = new Set<string>(changedSymbolIds);
   let currentLevel = changedSymbolIds.slice();
   for (let depth = 0; depth < hops && currentLevel.length > 0; depth++) {
     const nextLevel: string[] = [];
 
     for (const symbolId of currentLevel) {
-      // Find edges where this symbol is the source (uses other symbols)
-      for (const edge of symbolGraph.edges) {
-        if (edge.from === symbolId && !visitedSymbols.has(edge.to)) {
-          visitedSymbols.add(edge.to);
-          nextLevel.push(edge.to);
+      const outgoing = adjacencyFrom.get(symbolId) || [];
+      for (const edge of outgoing) {
+        if (visitedSymbols.has(edge.to)) continue;
+        visitedSymbols.add(edge.to);
+        nextLevel.push(edge.to);
 
-          const info = symbolIdToInfo.get(edge.to);
-          if (info) {
-            neighbors.push({
-              symbolId: edge.to,
-              file: info.file,
-              name: info.name,
-              kind: info.kind,
-              relationship: "uses"
-            });
-          }
+        const info = symbolIdToInfo.get(edge.to);
+        if (info) {
+          neighbors.push({
+            symbolId: edge.to,
+            file: info.file,
+            name: info.name,
+            kind: info.kind,
+            relationship: "uses"
+          });
         }
       }
 
-      // Find edges where this symbol is the target (used by other symbols)
-      for (const edge of symbolGraph.edges) {
-        if (edge.to === symbolId && !visitedSymbols.has(edge.from)) {
-          visitedSymbols.add(edge.from);
-          nextLevel.push(edge.from);
+      const incoming = adjacencyTo.get(symbolId) || [];
+      for (const edge of incoming) {
+        if (visitedSymbols.has(edge.from)) continue;
+        visitedSymbols.add(edge.from);
+        nextLevel.push(edge.from);
 
-          const info = symbolIdToInfo.get(edge.from);
-          if (info) {
-            neighbors.push({
-              symbolId: edge.from,
-              file: info.file,
-              name: info.name,
-              kind: info.kind,
-              relationship: "usedBy"
-            });
-          }
+        const info = symbolIdToInfo.get(edge.from);
+        if (info) {
+          neighbors.push({
+            symbolId: edge.from,
+            file: info.file,
+            name: info.name,
+            kind: info.kind,
+            relationship: "usedBy"
+          });
         }
       }
     }

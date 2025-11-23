@@ -447,8 +447,6 @@ export async function resolvePathLikeModule(
   for (let i = parts.length; i > 0; i--) {
     const sub = parts.slice(0, i);
     const p = path.join(projectRoot, ...sub);
-    // console.log("Checking path-like:", p, "Parts:", sub, "Exts:", exts);
-    console.log("Checking path-like:", p);
 
     for (const e of exts) {
       if (await fileExists(p + e)) return path.resolve(p + e);
@@ -692,10 +690,14 @@ export async function getGitHead(projectRoot: string): Promise<string | null> {
 
 export async function listChangedFiles(
   projectRoot: string,
-  opts: { changedSince?: string; base?: string; head?: string }
+  opts: {
+    changedSince?: string | undefined;
+    base?: string | undefined;
+    head?: string | undefined;
+  }
 ): Promise<string[]> {
   try {
-    const args = ["diff", "--name-only"];
+    const args = ["diff", "--name-only", "--diff-filter=ACDMRTUXB"];
     if (opts.base) {
       const head = opts.head ?? "HEAD";
       args.push(`${opts.base}..${head}`);
@@ -715,10 +717,8 @@ export async function listChangedFiles(
       .filter(Boolean);
     const out: string[] = [];
     for (const rel of relFiles) {
-      const abs = path.resolve(projectRoot, rel);
-      if (await fileExists(abs)) {
-        out.push(abs.replace(/\\/g, "/"));
-      }
+      const abs = normalizePath(path.resolve(projectRoot, rel));
+      if (abs) out.push(abs);
     }
     return Array.from(new Set(out));
   } catch {
