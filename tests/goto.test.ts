@@ -203,12 +203,12 @@ describe('Go to Definition', () => {
       }
     });
   });
-  describe.skip('Java', () => {
+  describe('Java', () => {
     it('should find definition of imported static method', async () => {
       const index = await createTestIndex('java');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'java');
       const mainFile = path.join(samplePath, 'main.java').replace(/\\/g, '/');
-      const utilsFile = path.join(samplePath, 'utils.java').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'utils', 'Utils.java').replace(/\\/g, '/');
       // Test go-to-definition on Utils.helperFunction() call line 8 col 11
       await testGoToDefinition(index, mainFile, 8, 11, utilsFile, 4);
     });
@@ -217,52 +217,51 @@ describe('Go to Definition', () => {
       const index = await createTestIndex('java');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'java');
       const mainFile = path.join(samplePath, 'main.java').replace(/\\/g, '/');
-      const utilsFile = path.join(samplePath, 'utils.java').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'utils', 'Utils.java').replace(/\\/g, '/');
       // Test go-to-definition on new Utils.UtilityClass() UtilityClass line 9 col 15
       await testGoToDefinition(index, mainFile, 9, 15, utilsFile, 5);
     });
   });
 
-  describe.skip('C#', () => {
+  describe('C#', () => {
     it('should find definition of static method', async () => {
       const index = await createTestIndex('csharp');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'csharp');
-      const mainFile = path.join(samplePath, 'main.cs').replace(/\\/g, '/');
-      const utilsFile = path.join(samplePath, 'utils.cs').replace(/\\/g, '/');
-      // UtilsClass.HelperFunction() on 'H' line 6 col 16
-      await testGoToDefinition(index, mainFile, 6, 16, utilsFile, 3);
+      const mainFile = path.join(samplePath, 'Main.cs').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'Utils.cs').replace(/\\/g, '/');
+      // UtilsClass.HelperFunction() on 'H' line 7 col 16
+      await testGoToDefinition(index, mainFile, 7, 16, utilsFile, 3);
     });
 
     it('should find definition of nested class', async () => {
       const index = await createTestIndex('csharp');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'csharp');
-      const mainFile = path.join(samplePath, 'main.cs').replace(/\\/g, '/');
-      const utilsFile = path.join(samplePath, 'utils.cs').replace(/\\/g, '/');
-      // new UtilsClass.UtilityClass() on 'U' UtilityClass line 7 col 20
-      await testGoToDefinition(index, mainFile, 7, 20, utilsFile, 4);
+      const mainFile = path.join(samplePath, 'Main.cs').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'Utils.cs').replace(/\\/g, '/');
+      // new UtilsClass.UtilityClass() on 'U' UtilityClass line 8 col 20
+      await testGoToDefinition(index, mainFile, 8, 20, utilsFile, 4);
     });
 
     it('should find definition of namespace member', async () => {
       const index = await createTestIndex('csharp');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'csharp');
-      const mainFile = path.join(samplePath, 'main.cs').replace(/\\/g, '/');
-      const utilsFile = path.join(samplePath, 'utils.cs').replace(/\\/g, '/');
-      // UtilsClass.HelperFunction() on 'U' UtilsClass line 6 col 5
-      await testGoToDefinition(index, mainFile, 6, 5, utilsFile, 2);
+      const mainFile = path.join(samplePath, 'Main.cs').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'Utils.cs').replace(/\\/g, '/');
+      // UtilsClass.HelperFunction() on 'U' UtilsClass line 7 col 5
+      await testGoToDefinition(index, mainFile, 7, 5, utilsFile, 2);
     });
 
     it('should find definition of alias', async () => {
       const index = await createTestIndex('csharp');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'csharp');
-      const mainFile = path.join(samplePath, 'main.cs').replace(/\\/g, '/');
-      const utilsFile = path.join(samplePath, 'utils.cs').replace(/\\/g, '/');
-      // UUtils.HelperFunction() on 'U' UUtils line 9 col 5
-      await testGoToDefinition(index, mainFile, 9, 5, utilsFile, 2);
-    });
+      const mainFile = path.join(samplePath, 'Main.cs').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'Utils.cs').replace(/\\/g, '/');
+      // UUtils.HelperFunction() on 'U' UUtils line 10 col 5
+      await testGoToDefinition(index, mainFile, 10, 5, utilsFile, 2);
   });
   });
 
-  describe.skip('Ruby', () => {
+  describe('Ruby', () => {
     it('should find definition of module function', async () => {
       const index = await createTestIndex('ruby');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'ruby');
@@ -281,19 +280,22 @@ describe('Go to Definition', () => {
     });
   });
 
-  describe.skip('Rust // TODO: fix goto/references not_found', () => {
+  describe('Rust', () => {
     it('should find definition of helper_function', async () => {
       const index = await createTestIndex('rust');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'rust');
       const mainFile = path.join(samplePath, 'main.rs').replace(/\\/g, '/');
       const utilsFile = path.join(samplePath, 'utils.rs').replace(/\\/g, '/');
-      await testGoToDefinition(index, mainFile, 6, 5, utilsFile, 1);
+      // helper_function() on line 8 col 5
+      await testGoToDefinition(index, mainFile, 8, 5, utilsFile, 1);
     });
     it('should find definition of helper_from_helpers', async () => {
       const index = await createTestIndex('rust');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'rust');
       const mainFile = path.join(samplePath, 'main.rs').replace(/\\/g, '/');
       const helpersFile = path.join(samplePath, 'helpers.rs').replace(/\\/g, '/');
-      await testGoToDefinition(index, mainFile, 7, 5, helpersFile, 1);
+      // helper_from_helpers() on line 9 col 5
+      await testGoToDefinition(index, mainFile, 9, 5, helpersFile, 1);
+    });
     });
   });

@@ -20,7 +20,7 @@ export const JAVA_DEF: LanguageDefinition = {
   },
   graph: {
     imports: `
-      (import_declaration (scoped_identifier) @mod) @stmt
+      (import_declaration . (_) @mod) @stmt
     `,
     exports: `
       (class_declaration name: (identifier) @name)
@@ -34,10 +34,27 @@ export const JAVA_DEF: LanguageDefinition = {
       (method_declaration name: (identifier) @name)
       (variable_declarator name: (identifier) @name)
     `,
-    importBindings: ""
+    importBindings: `
+      (import_declaration . (_) @from) @stmt
+    `
   },
   nodeTypes: {
-    identifier: ["identifier"],
+    identifier: ["identifier", "type_identifier"],
+    memberExpression: "field_access",
+  },
+  supportsCrossModuleSymbols: true,
+  createsFunctionScope: (node) =>
+    node.type === "method_declaration" || node.type === "constructor_declaration",
+  createsBlockScope: (node) => node.type === "block",
+  isDeclarationName: (node) => {
+    const p = node.parent;
+    if (!p) return false;
+    if (p.type === "class_declaration" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "interface_declaration" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "method_declaration" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "variable_declarator" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "formal_parameter" && p.childForFieldName("name")?.id === node.id) return true;
+    return false;
   }
 };
 

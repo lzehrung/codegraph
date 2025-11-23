@@ -21,8 +21,7 @@ export const RUST_DEF: LanguageDefinition = {
   graph: {
     imports: `
       (mod_item name: (identifier) @mod)
-      (use_declaration argument: (scoped_identifier) @mod) @stmt
-      (use_declaration argument: (identifier) @mod) @stmt
+      (use_declaration argument: (_) @mod) @stmt
     `,
     exports: `
       (function_item name: (identifier) @name)
@@ -36,10 +35,29 @@ export const RUST_DEF: LanguageDefinition = {
       (struct_item name: (type_identifier) @name)
       (let_declaration pattern: (identifier) @name)
     `,
-    importBindings: ""
+    importBindings: `
+      (mod_item name: (identifier) @from) @stmt
+      (use_declaration argument: (_) @from) @stmt
+    `
   },
   nodeTypes: {
     identifier: ["identifier", "type_identifier"],
+    memberExpression: "field_expression",
+  },
+  supportsCrossModuleSymbols: true,
+  createsFunctionScope: (node) => node.type === "function_item",
+  createsBlockScope: (node) => node.type === "block",
+  isDeclarationName: (node) => {
+    const p = node.parent;
+    if (!p) return false;
+    if (p.type === "function_item" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "struct_item" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "enum_item" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "const_item" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "static_item" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "let_declaration" && p.childForFieldName("pattern")?.id === node.id) return true;
+    if (p.type === "parameter" && p.childForFieldName("pattern")?.id === node.id) return true;
+    return false;
   }
 };
 

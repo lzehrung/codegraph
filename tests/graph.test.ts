@@ -190,7 +190,7 @@ describe('Dependency Graph', () => {
       expect(mermaid).not.toMatch(/-->\s+undefined/);
     });
   });
-  describe.skip('Go Project', () => {
+  describe('Go Project', () => {
     it('should build dependency graph with correct edges', async () => {
       const samplePath = getSamplePath('go');
       const files = [
@@ -217,13 +217,13 @@ describe('Dependency Graph', () => {
     });
   });
 
-  describe.skip('Java Project', () => {
+  describe('Java Project', () => {
     it('should build dependency graph with correct edges', async () => {
       const samplePath = getSamplePath('java');
       const files = [
         path.join(samplePath, 'main.java').replace(/\\/g, '/'),
-        path.join(samplePath, 'utils.java').replace(/\\/g, '/'),
-        path.join(samplePath, 'helpers.java').replace(/\\/g, '/'),
+        path.join(samplePath, 'utils', 'Utils.java').replace(/\\/g, '/'),
+        path.join(samplePath, 'helpers', 'Helpers.java').replace(/\\/g, '/'),
       ];
       
       const graph = await collectGraph(samplePath, files);
@@ -232,23 +232,23 @@ describe('Dependency Graph', () => {
       expect(graph.edges.length).toBeGreaterThan(0);
       
       const mainToUtils = graph.edges.find(edge =>
-        edge.from.includes('main.java') && toStr(edge.to).includes('utils.java')
+        edge.from.includes('main.java') && toStr(edge.to).includes('utils/Utils.java')
       );
       expect(mainToUtils).toBeDefined();
       
       const mainToHelpers = graph.edges.find(edge =>
-        edge.from.includes('main.java') && toStr(edge.to).includes('helpers.java')
+        edge.from.includes('main.java') && toStr(edge.to).includes('helpers/Helpers.java')
       );
       expect(mainToHelpers).toBeDefined();
     });
   });
-  describe.skip('C# Project', () => {
+  describe('C# Project', () => {
     it('should build dependency graph with correct edges', async () => {
       const samplePath = getSamplePath('csharp');
       const files = [
-        path.join(samplePath, 'main.cs').replace(/\\/g, '/'),
-        path.join(samplePath, 'utils.cs').replace(/\\/g, '/'),
-        path.join(samplePath, 'helpers.cs').replace(/\\/g, '/'),
+        path.join(samplePath, 'Main.cs').replace(/\\/g, '/'),
+        path.join(samplePath, 'Utils.cs').replace(/\\/g, '/'),
+        path.join(samplePath, 'Helpers.cs').replace(/\\/g, '/'),
       ];
       
       const graph = await collectGraph(samplePath, files);
@@ -257,17 +257,17 @@ describe('Dependency Graph', () => {
       expect(graph.edges.length).toBeGreaterThan(0);
       
       const mainToUtils = graph.edges.find(edge => 
-        edge.from.includes('main.cs') && toStr(edge.to).includes('utils.cs')
+        edge.from.includes('Main.cs') && toStr(edge.to).includes('Utils.cs')
       );
       expect(mainToUtils).toBeDefined();
       
       const mainToHelpers = graph.edges.find(edge => 
-        edge.from.includes('main.cs') && toStr(edge.to).includes('helpers.cs')
+        edge.from.includes('Main.cs') && toStr(edge.to).includes('Helpers.cs')
       );
       expect(mainToHelpers).toBeDefined();
     });
   });
-  describe.skip('Ruby Project', () => {
+  describe('Ruby Project', () => {
     it('should build dependency graph with correct edges', async () => {
       const samplePath = getSamplePath('ruby');
       const files = [
@@ -293,7 +293,7 @@ describe('Dependency Graph', () => {
     });
   });
 
-  describe.skip('Rust Project // TODO: fix imports capture for mod/use', () => {
+  describe('Rust Project', () => {
     it('should build dependency graph with correct edges', async () => {
       const samplePath = getSamplePath('rust');
       const files = [
