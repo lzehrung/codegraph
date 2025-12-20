@@ -10,16 +10,16 @@ export const HTML_DEF: LanguageDefinition = {
   grammar: () => LangHTML,
   structure: {
     blocks: [
-      { 
-        type: "element", 
-        nameQuery: `(start_tag (attribute (attribute_name) @attr (#eq? @attr "id") (quoted_attribute_value (attribute_value) @chunk.name)))`, 
-        captureId: "element" 
+      {
+        type: "element",
+        nameQuery: `(start_tag (attribute (attribute_name) @attr (#eq? @attr "id") (quoted_attribute_value (attribute_value) @chunk.name)))`,
+        captureId: "element",
       },
       { type: "script_element", captureId: "script" },
-      { type: "style_element", captureId: "style" }
+      { type: "style_element", captureId: "style" },
     ],
     splitPoints: ["element"],
-    comments: ["comment"]
+    comments: ["comment"],
   },
   graph: {
     imports: `
@@ -30,10 +30,9 @@ export const HTML_DEF: LanguageDefinition = {
     locals: `
       (attribute (attribute_name) @attr (#eq? @attr "id") (quoted_attribute_value (attribute_value) @name))
     `,
-    importBindings: ""
+    importBindings: "",
   },
   nodeTypes: {
     identifier: ["attribute_value", "tag_name"],
-  }
+  },
 };
-

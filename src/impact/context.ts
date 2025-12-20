@@ -35,10 +35,14 @@ export async function collectImpactContext(
   index: ProjectIndex,
   impactedFiles: FileId[],
   changedSymbolIds: string[],
-  hops: number = 2
+  hops: number = 2,
 ): Promise<ImpactContext> {
   const fileSubgraph = await collectFileSubgraph(index, impactedFiles, hops);
-  const symbolNeighbors = await collectSymbolNeighbors(index, changedSymbolIds, hops);
+  const symbolNeighbors = await collectSymbolNeighbors(
+    index,
+    changedSymbolIds,
+    hops,
+  );
 
   // Collect files that contain symbol neighbors
   const neighborFiles = new Set<FileId>();
@@ -49,14 +53,14 @@ export async function collectImpactContext(
   return {
     fileSubgraph,
     symbolNeighbors,
-    neighborFiles
+    neighborFiles,
   };
 }
 
 async function collectFileSubgraph(
   index: ProjectIndex,
   impactedFiles: FileId[],
-  hops: number
+  hops: number,
 ): Promise<{
   nodes: Set<FileId>;
   edges: Array<{ from: FileId; to: FileId; typeOnly?: boolean }>;
@@ -125,14 +129,16 @@ async function collectFileSubgraph(
 async function collectSymbolNeighbors(
   index: ProjectIndex,
   changedSymbolIds: string[],
-  hops: number
-): Promise<Array<{
-  symbolId: string;
-  file: FileId;
-  name: string;
-  kind: string;
-  relationship: "uses" | "usedBy";
-}>> {
+  hops: number,
+): Promise<
+  Array<{
+    symbolId: string;
+    file: FileId;
+    name: string;
+    kind: string;
+    relationship: "uses" | "usedBy";
+  }>
+> {
   const neighbors: Array<{
     symbolId: string;
     file: FileId;
@@ -146,15 +152,18 @@ async function collectSymbolNeighbors(
   const symbolGraph = await buildSymbolGraphDetailed(index, {
     scope: "all",
     maxEdges: 50000, // Larger limit for context collection
-    membersOnly: false
+    membersOnly: false,
   });
 
-  const symbolIdToInfo = new Map<string, { file: FileId; name: string; kind: string }>();
+  const symbolIdToInfo = new Map<
+    string,
+    { file: FileId; name: string; kind: string }
+  >();
   for (const [symbolId, node] of symbolGraph.nodes) {
     symbolIdToInfo.set(symbolId, {
       file: node.file,
       name: node.name,
-      kind: node.kind
+      kind: node.kind,
     });
   }
 
@@ -195,7 +204,7 @@ async function collectSymbolNeighbors(
             file: info.file,
             name: info.name,
             kind: info.kind,
-            relationship: "uses"
+            relationship: "uses",
           });
         }
       }
@@ -213,7 +222,7 @@ async function collectSymbolNeighbors(
             file: info.file,
             name: info.name,
             kind: info.kind,
-            relationship: "usedBy"
+            relationship: "usedBy",
           });
         }
       }
@@ -238,7 +247,7 @@ export function listCandidateTestFiles(
     testPatterns?: string[];
     /** Maximum number of candidates to return */
     maxCandidates?: number;
-  } = {}
+  } = {},
 ): CandidateTestFile[] {
   const { testPatterns = [], maxCandidates = 100 } = options;
   const candidates = new Map<FileId, CandidateTestFile>();
@@ -250,10 +259,13 @@ export function listCandidateTestFiles(
     /spec/i,
     /__tests__/,
     /\.test\./,
-    /\.spec\./
+    /\.spec\./,
   ];
 
-  const allPatterns = [...defaultPatterns, ...testPatterns.map(p => new RegExp(p))];
+  const allPatterns = [
+    ...defaultPatterns,
+    ...testPatterns.map((p) => new RegExp(p)),
+  ];
 
   // Build reverse dependency map: file -> files that depend on it
   const reverseDeps = new Map<FileId, FileId[]>();
@@ -280,7 +292,7 @@ export function listCandidateTestFiles(
         candidates.set(dependent, {
           file: dependent,
           confidence: "high",
-          reason: "importsChanged"
+          reason: "importsChanged",
         });
       }
     }
@@ -294,7 +306,7 @@ export function listCandidateTestFiles(
         candidates.set(dependent, {
           file: dependent,
           confidence: "medium",
-          reason: "dependsOnChanged"
+          reason: "dependsOnChanged",
         });
       }
     }
@@ -308,7 +320,7 @@ export function listCandidateTestFiles(
         candidates.set(file, {
           file,
           confidence: "low",
-          reason: "pattern"
+          reason: "pattern",
         });
       }
     }
@@ -319,5 +331,5 @@ export function listCandidateTestFiles(
 
 function isTestFile(file: FileId, patterns: RegExp[]): boolean {
   const lowerFile = file.toLowerCase();
-  return patterns.some(pattern => pattern.test(lowerFile));
+  return patterns.some((pattern) => pattern.test(lowerFile));
 }

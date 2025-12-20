@@ -1,4 +1,4 @@
-import type { FileId, Range } from "../types.js";
+import type { FileId } from "../types.js";
 import type { ProjectIndex, SymbolDef, SymbolHandle } from "../indexer.js";
 import type { FileChange, ChangedSymbol } from "./types.js";
 
@@ -10,7 +10,7 @@ function symbolHandleFromLocal(file: FileId, local: SymbolDef): string {
 export function locateChangedSymbols(
   index: ProjectIndex,
   file: FileId,
-  hunks: FileChange["hunks"]
+  hunks: FileChange["hunks"],
 ): ChangedSymbol[] {
   const parsedEntry = index.parsed?.get(file);
   if (!parsedEntry) return [];
@@ -41,11 +41,17 @@ export function locateChangedSymbols(
   // Classify and collect changed symbols
   for (const node of changedNodes) {
     const classification = classifyChangedNode(node, source, sup);
-    const symbolHandle = findSymbolHandleForNode(index, file, node, sup, classification);
+    const symbolHandle = findSymbolHandleForNode(
+      index,
+      file,
+      node,
+      sup,
+      classification,
+    );
     if (symbolHandle) {
-      const symbolDef = index.byFile.get(file)?.locals.find((l) =>
-        symbolHandleFromLocal(file, l) === symbolHandle
-      );
+      const symbolDef = index.byFile
+        .get(file)
+        ?.locals.find((l) => symbolHandleFromLocal(file, l) === symbolHandle);
       if (symbolDef) {
         changedSymbols.push({
           id: symbolHandle,
@@ -54,7 +60,7 @@ export function locateChangedSymbols(
           kind: symbolDef.kind,
           exported: isExported(index, file, symbolDef),
           range: symbolDef.range,
-          typeOnly: !!classification?.typeOnly
+          typeOnly: !!classification?.typeOnly,
         });
       }
     }
@@ -93,24 +99,47 @@ type NodeClassification = {
   typeOnly?: boolean;
 } | null;
 
-function classifyChangedNode(node: any, source: string, sup: any): NodeClassification {
+function classifyChangedNode(
+  node: any,
+  source: string,
+  sup: any,
+): NodeClassification {
   // Check for definition nodes
   if (sup.isDeclarationName?.(node)) {
-    return { type: "definition", typeOnly: isTypeOnlyDeclaration(node, source) };
+    return {
+      type: "definition",
+      typeOnly: isTypeOnlyDeclaration(node, source),
+    };
   }
 
   // Check for import statements
-  if (node.type === "import_statement" || node.type === "import_equals_declaration") {
-    return { type: "import", typeOnly: /^\s*import\s+type\b/.test(source.slice(node.startIndex, node.endIndex)) };
+  if (
+    node.type === "import_statement" ||
+    node.type === "import_equals_declaration"
+  ) {
+    return {
+      type: "import",
+      typeOnly: /^\s*import\s+type\b/.test(
+        source.slice(node.startIndex, node.endIndex),
+      ),
+    };
   }
 
   // Check for export statements
   if (node.type?.startsWith("export_")) {
-    return { type: "export", typeOnly: /^\s*export\s+type\b/.test(source.slice(node.startIndex, node.endIndex)) };
+    return {
+      type: "export",
+      typeOnly: /^\s*export\s+type\b/.test(
+        source.slice(node.startIndex, node.endIndex),
+      ),
+    };
   }
 
   // Check for callsites (identifiers that are not declarations)
-  if (sup.nodeTypes.identifier.includes(node.type) && !sup.isDeclarationName?.(node)) {
+  if (
+    sup.nodeTypes.identifier.includes(node.type) &&
+    !sup.isDeclarationName?.(node)
+  ) {
     return { type: "callsite" };
   }
 
@@ -149,16 +178,17 @@ function findSymbolHandleForNode(
   file: FileId,
   node: any,
   sup: any,
-  classification: NodeClassification
+  classification: NodeClassification,
 ): SymbolHandle | null {
   const mod = index.byFile.get(file);
   if (!mod) return null;
 
   // Exact declaration name node
   if (classification?.type === "definition" && sup.isDeclarationName?.(node)) {
-    const local = mod.locals.find(l =>
-      l.range.start.line === (node.startPosition?.row + 1) &&
-      l.range.start.column === (node.startPosition?.column + 1)
+    const local = mod.locals.find(
+      (l) =>
+        l.range.start.line === node.startPosition?.row + 1 &&
+        l.range.start.column === node.startPosition?.column + 1,
     );
     return local ? symbolHandleFromLocal(file, local) : null;
   }
@@ -166,9 +196,10 @@ function findSymbolHandleForNode(
   // For body/callsite/import/export edits, climb to nearest declaration name
   const nameNode = findDeclarationNameInAncestors(node, sup);
   if (nameNode) {
-    const local = mod.locals.find(l =>
-      l.range.start.line === (nameNode.startPosition?.row + 1) &&
-      l.range.start.column === (nameNode.startPosition?.column + 1)
+    const local = mod.locals.find(
+      (l) =>
+        l.range.start.line === nameNode.startPosition?.row + 1 &&
+        l.range.start.column === nameNode.startPosition?.column + 1,
     );
     return local ? symbolHandleFromLocal(file, local) : null;
   }
@@ -176,14 +207,19 @@ function findSymbolHandleForNode(
   return null;
 }
 
-function isExported(index: ProjectIndex, file: FileId, symbolDef: any): boolean {
+function isExported(
+  index: ProjectIndex,
+  file: FileId,
+  symbolDef: any,
+): boolean {
   const mod = index.byFile.get(file);
   if (!mod) return false;
 
   const symbolIndex = symbolDef.range.start.index ?? 0;
-  return mod.exports.some(e =>
-    e.type === "local" &&
-    e.target.localName === symbolDef.localName &&
-    (e.target.range.start.index ?? 0) === symbolIndex
+  return mod.exports.some(
+    (e) =>
+      e.type === "local" &&
+      e.target.localName === symbolDef.localName &&
+      (e.target.range.start.index ?? 0) === symbolIndex,
   );
 }

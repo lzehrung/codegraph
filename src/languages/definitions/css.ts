@@ -12,10 +12,10 @@ export const CSS_DEF: LanguageDefinition = {
     blocks: [
       { type: "rule_set", captureId: "rule" },
       { type: "media_statement", captureId: "media" },
-      { type: "keyframes_statement", captureId: "keyframes" }
+      { type: "keyframes_statement", captureId: "keyframes" },
     ],
     splitPoints: ["rule_set"],
-    comments: ["comment", "js_comment"]
+    comments: ["comment", "js_comment"],
   },
   graph: {
     imports: `
@@ -26,10 +26,9 @@ export const CSS_DEF: LanguageDefinition = {
       (class_selector (class_name) @name)
       (id_selector (id_name) @name)
     `,
-    importBindings: ""
+    importBindings: "",
   },
   nodeTypes: {
     identifier: ["class_name", "id_name"],
-  }
+  },
 };
-

@@ -4,7 +4,7 @@ export interface LanguageDefinition {
   id: string;
   extensions: string[];
   grammar: (filename?: string) => Language;
-  
+
   /**
    * Configuration for semantic chunking.
    * Defines how to split code into meaningful blocks.
@@ -36,7 +36,7 @@ export interface LanguageDefinition {
    * Helper to classify a definition node (function vs class vs var).
    */
   classifyDefinition?: (node: SyntaxNode) => string;
-  
+
   /**
    * Helper to check if a node is a declaration name.
    */
@@ -56,7 +56,7 @@ export interface LanguageDefinition {
    * Whether the language supports cross-module symbol resolution.
    */
   supportsCrossModuleSymbols?: boolean;
-  
+
   /**
    * Specific node types used for symbol resolution
    */

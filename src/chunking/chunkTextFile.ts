@@ -83,4 +83,3 @@ export function chunkTextFile(opts: TextChunkOptions): Chunk[] {
 
   return chunks;
 }
-

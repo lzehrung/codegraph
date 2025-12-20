@@ -49,9 +49,10 @@ function writeJSONLine(value: unknown) {
 function writeStderrLine(message: string) {
   process.stderr.write(`${message}\n`);
   try {
-    if (stderrFilePath) fs.appendFileSync(stderrFilePath, `${message}\n`, {
-      encoding: "utf8",
-    });
+    if (stderrFilePath)
+      fs.appendFileSync(stderrFilePath, `${message}\n`, {
+        encoding: "utf8",
+      });
   } catch {
     // Swallow file logging errors to avoid masking primary error output
   }
@@ -67,7 +68,7 @@ function writeError(error: unknown) {
 // Compact JSON helpers to reduce repeated strings in graph output
 function compactGraphWithSymbols(
   fgraph: { nodes: Set<string>; edges: Array<any> },
-  sgraph: { nodes: Map<string, any>; edges: Array<any> }
+  sgraph: { nodes: Map<string, any>; edges: Array<any> },
 ) {
   const files = [...fgraph.nodes];
   const fileIndex = new Map<string, number>();
@@ -114,7 +115,7 @@ function compactGraphWithSymbols(
 
 function compactSymbolsOnly(
   allFiles: string[],
-  sgraph: { nodes: Map<string, any>; edges: Array<any> }
+  sgraph: { nodes: Map<string, any>; edges: Array<any> },
 ) {
   const fileIndex = new Map<string, number>();
   for (let i = 0; i < allFiles.length; i++) fileIndex.set(allFiles[i]!, i);
@@ -165,14 +166,16 @@ function symbolNodeKindFromString(kind?: string): SymbolNodeKind {
 }
 
 function ensureImpactReport(
-  report: ImpactReport | CompactImpactReport
+  report: ImpactReport | CompactImpactReport,
 ): ImpactReport {
   if (!("files" in report)) return report;
   const files = report.files;
   const resolveFilePath = (index: number): string => {
     const file = files[index];
     if (!file) {
-      throw new Error(`Missing file path for index ${index} in compact impact report`);
+      throw new Error(
+        `Missing file path for index ${index} in compact impact report`,
+      );
     }
     return file;
   };
@@ -283,10 +286,14 @@ async function main() {
       : undefined;
   const gitBaseIdx = args.indexOf("--git-base");
   const gitBase =
-    gitBaseIdx !== -1 && args[gitBaseIdx + 1] ? args[gitBaseIdx + 1] : undefined;
+    gitBaseIdx !== -1 && args[gitBaseIdx + 1]
+      ? args[gitBaseIdx + 1]
+      : undefined;
   const gitHeadIdx = args.indexOf("--git-head");
   const gitHead =
-    gitHeadIdx !== -1 && args[gitHeadIdx + 1] ? args[gitHeadIdx + 1] : undefined;
+    gitHeadIdx !== -1 && args[gitHeadIdx + 1]
+      ? args[gitHeadIdx + 1]
+      : undefined;
   const projectRootAbs = path.isAbsolute(root)
     ? root
     : path.resolve(process.cwd(), root);
@@ -296,10 +303,10 @@ async function main() {
     const normalizedRoots = roots.map((r) =>
       path.isAbsolute(r)
         ? r.replace(/\\/g, "/")
-        : path.resolve(process.cwd(), r).replace(/\\/g, "/")
+        : path.resolve(process.cwd(), r).replace(/\\/g, "/"),
     );
     const all: string[][] = await Promise.all(
-      normalizedRoots.map(async (r) => await listProjectFiles(r))
+      normalizedRoots.map(async (r) => await listProjectFiles(r)),
     );
     return Array.from(new Set(all.flat()));
   };
@@ -335,7 +342,7 @@ async function main() {
         writeStderrLine(
           `Skipping ${deletedFiles.length} deleted file(s) from git diff: ${deletedFiles
             .map((file) => path.relative(projectRootAbs, file) || file)
-            .join(", ")}`
+            .join(", ")}`,
         );
       }
       if (existingFiles.length === 0) {
@@ -353,7 +360,9 @@ async function main() {
       flags.includes("--symbols-only") ||
       flags.includes("--symbols-detailed");
     const hasExplicitFormatFlag =
-      flags.includes("--mermaid") || flags.includes("--dot") || flags.includes("--json");
+      flags.includes("--mermaid") ||
+      flags.includes("--dot") ||
+      flags.includes("--json");
     const outputIdx = args.findIndex((a) => a === "--output" || a === "-o");
     const outputArg = outputIdx !== -1 ? args[outputIdx + 1] : undefined;
     const stderrIdx = args.findIndex((a) => a === "--stderr-file");
@@ -372,25 +381,25 @@ async function main() {
     const format = flags.includes("--mermaid")
       ? "mermaid"
       : flags.includes("--dot")
-      ? "dot"
-      : "json";
+        ? "dot"
+        : "json";
     const fast = flags.includes("--fast-graph");
     const resolveNodeModules = flags.includes("--resolve-node-modules");
     const compact = defaultGraphMode ? true : flags.includes("--compact-json");
     const outputFile = outputArg
-      ? (path.isAbsolute(outputArg)
-          ? outputArg.replace(/\\/g, "/")
-          : path.resolve(process.cwd(), outputArg).replace(/\\/g, "/"))
+      ? path.isAbsolute(outputArg)
+        ? outputArg.replace(/\\/g, "/")
+        : path.resolve(process.cwd(), outputArg).replace(/\\/g, "/")
       : defaultGraphMode && !stdoutMode
-      ? path.resolve(process.cwd(), "codegraph.json").replace(/\\/g, "/")
-      : undefined;
+        ? path.resolve(process.cwd(), "codegraph.json").replace(/\\/g, "/")
+        : undefined;
     stderrFilePath = stderrArg
-      ? (path.isAbsolute(stderrArg)
-          ? stderrArg.replace(/\\/g, "/")
-          : path.resolve(process.cwd(), stderrArg).replace(/\\/g, "/"))
+      ? path.isAbsolute(stderrArg)
+        ? stderrArg.replace(/\\/g, "/")
+        : path.resolve(process.cwd(), stderrArg).replace(/\\/g, "/")
       : defaultGraphMode
-      ? path.resolve(process.cwd(), "codegraph.err").replace(/\\/g, "/")
-      : undefined;
+        ? path.resolve(process.cwd(), "codegraph.err").replace(/\\/g, "/")
+        : undefined;
 
     const writeOut = async (text: string) => {
       if (outputFile) {
@@ -412,11 +421,11 @@ async function main() {
       let sgraph;
       if (detailedSymbols) {
         const scopeIdx = args.findIndex(
-          (a) => a === "--symbols-detailed-scope"
+          (a) => a === "--symbols-detailed-scope",
         );
         const scope = scopeIdx !== -1 ? (args[scopeIdx + 1] as any) : undefined;
         const maxEdgesIdx = args.findIndex(
-          (a) => a === "--symbols-detailed-max-edges"
+          (a) => a === "--symbols-detailed-max-edges",
         );
         const maxEdges =
           maxEdgesIdx !== -1 ? Number(args[maxEdgesIdx + 1]) : undefined;
@@ -441,7 +450,10 @@ async function main() {
             await writeOut(toJSON(compactSymbolsOnly(allFiles, sgraph)));
           } else {
             await writeOut(
-              toJSON({ nodes: [...sgraph.nodes.values()], edges: sgraph.edges })
+              toJSON({
+                nodes: [...sgraph.nodes.values()],
+                edges: sgraph.edges,
+              }),
             );
           }
         }
@@ -463,16 +475,21 @@ async function main() {
               fileEdges: fgraph.edges,
               symbols: [...sgraph.nodes.values()],
               symbolEdges: sgraph.edges,
-            })
+            }),
           );
         }
       }
       return;
     }
-    const graph = await collectGraph(root, files, { fast, threads, resolveNodeModules });
+    const graph = await collectGraph(root, files, {
+      fast,
+      threads,
+      resolveNodeModules,
+    });
     if (format === "mermaid") await writeOut(graphToMermaid(graph));
     else if (format === "dot") await writeOut(graphToDOT(graph));
-    else await writeOut(toJSON({ nodes: [...graph.nodes], edges: graph.edges }));
+    else
+      await writeOut(toJSON({ nodes: [...graph.nodes], edges: graph.edges }));
     return;
   }
 
@@ -548,7 +565,7 @@ async function main() {
                 start: e.target.range.start,
               },
             }
-          : e
+          : e,
       ),
       imports: mod.imports,
     });
@@ -573,7 +590,7 @@ async function main() {
       args.slice(1).reduce<[string, string][]>((acc, cur, i, arr) => {
         if (cur.startsWith("--")) acc.push([cur.slice(2), arr[i + 1]] as any);
         return acc;
-      }, [])
+      }, []),
     );
     const file = path.isAbsolute(refArgs.file!)
       ? refArgs.file!.replace(/\\/g, "/")
@@ -607,8 +624,8 @@ async function main() {
     }
     const querySource = args[qIdx + 1];
     const hits = await astGrep(root, querySource!);
-  writeJSONLine(hits);
-  return;
+    writeJSONLine(hits);
+    return;
   }
 
   if (cmd === "impact") {
@@ -632,7 +649,7 @@ async function main() {
       // For now, assume stdin
       const diffText = await new Promise<string>((resolve) => {
         let data = "";
-        process.stdin.on("data", chunk => data += chunk);
+        process.stdin.on("data", (chunk) => (data += chunk));
         process.stdin.on("end", () => resolve(data));
       });
       options.diffText = diffText;
@@ -668,16 +685,20 @@ async function main() {
     const membersOnly = flags.includes("--members-only");
 
     const scopeIdx = args.indexOf("--scope");
-    if (scopeIdx !== -1 && args[scopeIdx + 1]) options.scope = args[scopeIdx + 1];
+    if (scopeIdx !== -1 && args[scopeIdx + 1])
+      options.scope = args[scopeIdx + 1];
 
     const refContextIdx = args.indexOf("--ref-context");
-    if (refContextIdx !== -1 && args[refContextIdx + 1]) options.refContext = args[refContextIdx + 1] as "line" | "block";
+    if (refContextIdx !== -1 && args[refContextIdx + 1])
+      options.refContext = args[refContextIdx + 1] as "line" | "block";
 
     const refContextLinesIdx = args.indexOf("--ref-context-lines");
-    if (refContextLinesIdx !== -1 && args[refContextLinesIdx + 1]) options.refContextLines = Number(args[refContextLinesIdx + 1]);
+    if (refContextLinesIdx !== -1 && args[refContextLinesIdx + 1])
+      options.refContextLines = Number(args[refContextLinesIdx + 1]);
 
     const refBlockMaxLinesIdx = args.indexOf("--ref-block-max-lines");
-    if (refBlockMaxLinesIdx !== -1 && args[refBlockMaxLinesIdx + 1]) options.refBlockMaxLines = Number(args[refBlockMaxLinesIdx + 1]);
+    if (refBlockMaxLinesIdx !== -1 && args[refBlockMaxLinesIdx + 1])
+      options.refBlockMaxLines = Number(args[refBlockMaxLinesIdx + 1]);
 
     options.includeTests = includeTests;
     options.membersOnly = membersOnly;
@@ -710,25 +731,33 @@ async function main() {
         writeStdoutLine(`Impact Analysis Report`);
         writeStdoutLine(`======================`);
         writeStdoutLine(`Changed files: ${impactReport.changedFiles.length}`);
-        writeStdoutLine(`Changed symbols: ${impactReport.changedSymbols.length}`);
+        writeStdoutLine(
+          `Changed symbols: ${impactReport.changedSymbols.length}`,
+        );
         writeStdoutLine(`Impacted items: ${impactReport.impacted.length}`);
         writeStdoutLine(``);
         for (const item of impactReport.impacted.slice(0, 10)) {
-          writeStdoutLine(`${item.file}: ${item.symbols.join(", ")} (severity: ${(item.severity * 100).toFixed(1)}%)`);
-          if ('refs' in item && item.refs && item.refs.length > 0) {
+          writeStdoutLine(
+            `${item.file}: ${item.symbols.join(", ")} (severity: ${(item.severity * 100).toFixed(1)}%)`,
+          );
+          if ("refs" in item && item.refs && item.refs.length > 0) {
             const contextsToShow = item.refs.slice(0, 2);
             for (const ref of contextsToShow) {
-              writeStdoutLine(`  Reference at ${ref.range.start.line}:${ref.range.start.column}:`);
-              const contextLines = ref.context!.split('\n').slice(0, 5);
+              writeStdoutLine(
+                `  Reference at ${ref.range.start.line}:${ref.range.start.column}:`,
+              );
+              const contextLines = ref.context!.split("\n").slice(0, 5);
               for (const line of contextLines) {
                 writeStdoutLine(`    ${line}`);
               }
-              if (ref.context!.split('\n').length > 5) {
+              if (ref.context!.split("\n").length > 5) {
                 writeStdoutLine(`    ...`);
               }
             }
             if (item.refs.length > 2) {
-              writeStdoutLine(`  ... and ${item.refs.length - 2} more references`);
+              writeStdoutLine(
+                `  ... and ${item.refs.length - 2} more references`,
+              );
             }
           }
         }
@@ -780,9 +809,15 @@ async function main() {
     if (!filePath) {
       writeStderrLine("Usage: chunk <file-path> [options]");
       writeStderrLine("Options:");
-      writeStderrLine("  --min-tokens N    Minimum tokens per chunk (default: 150)");
-      writeStderrLine("  --max-tokens N    Maximum tokens per chunk (default: 400)");
-      writeStderrLine("  --language LANG   Language override (javascript, typescript, tsx, python, vue, svelte, json, yaml, text)");
+      writeStderrLine(
+        "  --min-tokens N    Minimum tokens per chunk (default: 150)",
+      );
+      writeStderrLine(
+        "  --max-tokens N    Maximum tokens per chunk (default: 400)",
+      );
+      writeStderrLine(
+        "  --language LANG   Language override (javascript, typescript, tsx, python, vue, svelte, json, yaml, text)",
+      );
       writeStderrLine("  --text            Force text chunking mode");
       process.exit(2);
     }
@@ -792,7 +827,9 @@ async function main() {
       const ext = path.extname(filePath).toLowerCase();
 
       // Detect language from extension if not specified
-      let languageId = args.find((a, i) => a === "--language" && args[i + 1]) ? args[args.findIndex(a => a === "--language") + 1] : undefined;
+      let languageId = args.find((a, i) => a === "--language" && args[i + 1])
+        ? args[args.findIndex((a) => a === "--language") + 1]
+        : undefined;
       if (!languageId) {
         const extMap: Record<string, string> = {
           ".js": "javascript",
@@ -814,15 +851,21 @@ async function main() {
       }
 
       const forceText = flags.includes("--text");
-      const minTokensIdx = args.findIndex(a => a === "--min-tokens");
-      const maxTokensIdx = args.findIndex(a => a === "--max-tokens");
-      const minTokens = minTokensIdx !== -1 ? Number(args[minTokensIdx + 1]) : 150;
-      const maxTokens = maxTokensIdx !== -1 ? Number(args[maxTokensIdx + 1]) : 400;
+      const minTokensIdx = args.findIndex((a) => a === "--min-tokens");
+      const maxTokensIdx = args.findIndex((a) => a === "--max-tokens");
+      const minTokens =
+        minTokensIdx !== -1 ? Number(args[minTokensIdx + 1]) : 150;
+      const maxTokens =
+        maxTokensIdx !== -1 ? Number(args[maxTokensIdx + 1]) : 400;
 
       let chunks;
 
       const isSFC = languageId === "vue" || languageId === "svelte";
-      if (forceText || (!isSFC && !["javascript", "typescript", "tsx", "python"].includes(languageId))) {
+      if (
+        forceText ||
+        (!isSFC &&
+          !["javascript", "typescript", "tsx", "python"].includes(languageId))
+      ) {
         // Use text chunking for non-code files or when forced
         chunks = chunkTextFile({
           source,
@@ -841,7 +884,8 @@ async function main() {
         });
       } else {
         // Use semantic chunking for code files
-        const langConfig = LANG_CONFIGS[languageId as keyof typeof LANG_CONFIGS];
+        const langConfig =
+          LANG_CONFIGS[languageId as keyof typeof LANG_CONFIGS];
         if (!langConfig) {
           writeStderrLine(`Unsupported language: ${languageId}`);
           process.exit(1);

@@ -10,30 +10,51 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
   grammar: () => LangJS,
   structure: {
     blocks: [
-      { type: "class_declaration", nameQuery: "name: (identifier) @chunk.name", captureId: "class" },
-      { type: "function_declaration", nameQuery: "name: (identifier) @chunk.name", captureId: "function" },
-      { type: "method_definition", nameQuery: "name: (_) @chunk.name body: (statement_block) @chunk.block.method", captureId: "method" },
-      
-      // Variable assignments (functions/arrows)
-      { 
-        type: "lexical_declaration", 
-        nameQuery: `(variable_declarator name: (identifier) @chunk.name value: [ (function_expression body: (statement_block) @chunk.block.function) (arrow_function body: (statement_block) @chunk.block.function) ])`,
-        captureId: "function"
+      {
+        type: "class_declaration",
+        nameQuery: "name: (identifier) @chunk.name",
+        captureId: "class",
       },
-      { 
-        type: "variable_declaration", 
+      {
+        type: "function_declaration",
+        nameQuery: "name: (identifier) @chunk.name",
+        captureId: "function",
+      },
+      {
+        type: "method_definition",
+        nameQuery:
+          "name: (_) @chunk.name body: (statement_block) @chunk.block.method",
+        captureId: "method",
+      },
+
+      // Variable assignments (functions/arrows)
+      {
+        type: "lexical_declaration",
         nameQuery: `(variable_declarator name: (identifier) @chunk.name value: [ (function_expression body: (statement_block) @chunk.block.function) (arrow_function body: (statement_block) @chunk.block.function) ])`,
-        captureId: "function"
+        captureId: "function",
+      },
+      {
+        type: "variable_declaration",
+        nameQuery: `(variable_declarator name: (identifier) @chunk.name value: [ (function_expression body: (statement_block) @chunk.block.function) (arrow_function body: (statement_block) @chunk.block.function) ])`,
+        captureId: "function",
       },
       {
         type: "assignment_expression",
         nameQuery: `left: (_) @chunk.name right: [ (function_expression body: (statement_block) @chunk.block.function) (arrow_function body: (statement_block) @chunk.block.function) ]`,
-        captureId: "function"
+        captureId: "function",
       },
-      
+
       // Remaining functions
-      { type: "arrow_function", nameQuery: "body: (statement_block) @chunk.block.function", captureId: "function" },
-      { type: "function_expression", nameQuery: "body: (statement_block) @chunk.block.function", captureId: "function" },
+      {
+        type: "arrow_function",
+        nameQuery: "body: (statement_block) @chunk.block.function",
+        captureId: "function",
+      },
+      {
+        type: "function_expression",
+        nameQuery: "body: (statement_block) @chunk.block.function",
+        captureId: "function",
+      },
 
       // Data & JSX
       // { type: "object", captureId: "data" },
@@ -42,18 +63,18 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
 
       // Top level vars
       { type: "import_statement", captureId: "imports" },
-      { 
-        type: "lexical_declaration", 
+      {
+        type: "lexical_declaration",
         nameQuery: `(variable_declarator name: (identifier) @chunk.name)`,
         captureId: "module_var",
-        parentType: "program"
+        parentType: "program",
       },
-      { 
-        type: "variable_declaration", 
+      {
+        type: "variable_declaration",
         nameQuery: `(variable_declarator name: (identifier) @chunk.name)`,
         captureId: "module_var",
-        parentType: "program"
-      }
+        parentType: "program",
+      },
     ],
     splitPoints: [
       "if_statement",
@@ -67,9 +88,9 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
       "do_statement",
       "try_statement",
       "catch_clause",
-      "finally_clause"
+      "finally_clause",
     ],
-    comments: ["comment"]
+    comments: ["comment"],
   },
   graph: {
     imports: `
@@ -149,7 +170,7 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
       (import_statement (import_clause (namespace_import (identifier) @ns)) (string) @from)
       (lexical_declaration (variable_declarator name:(identifier) @def value: (call_expression (identifier) @req arguments: (arguments (string) @from)))) (#eq? @req "require")
       (lexical_declaration (variable_declarator (object_pattern) @pattern value: (call_expression (identifier) @req arguments: (arguments (string) @from)))) (#eq? @req "require")
-    `
+    `,
   },
   nodeTypes: {
     identifier: ["identifier"],
