@@ -21,7 +21,7 @@
     "clean": "if exist dist rmdir /s /q dist",
     "build": "tsc -p tsconfig.json",
     "format": "prettier --write ./src",
-    "lint:fix": "eslint ./src --fix",
+    "lint": "eslint ./src",
     "prepare": "npm run build",
     "test": "vitest",
     "test:ci": "vitest run",
@@ -34,7 +34,7 @@
     "release:minor": "npm version minor",
     "release:major": "npm version major",
     "graph:default": "npx codegraph graph ./src",
-    "graph:json": "npx codegraph graph ./src --json --symbols-detailed > graph.json",
+    "graph:json": "npx codegraph graph ./src --json --symbols-detailed --compact-json > codegraph.json",
     "graph:mermaid": "npx codegraph graph ./src --mermaid --symbols-detailed > graph.mermaid.mmd",
     "graph:dot": "npx codegraph graph ./src --dot --symbols-detailed > graph.dot"
   },
