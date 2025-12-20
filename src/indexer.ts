@@ -16,6 +16,7 @@ import {
   loadWorkspaceConfig,
   resolveSpecifier,
   resolvePythonModule,
+  resolveWorkspacePackage,
   acquireParser,
   releaseParser,
   getGitHead,
@@ -1618,6 +1619,7 @@ async function buildIndexFromFileListShared(
   >();
   const jsonDependencies = new Set<string>();
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
+  const workspaceConfig = await loadWorkspaceConfig(projectRoot);
   const fileResults = await mapLimit(normalizedFiles, conc, async (f) => {
     try {
       const sig = await fileSignature(f, opts?.cacheStrict);
@@ -1657,15 +1659,13 @@ async function buildIndexFromFileListShared(
                   e.fromModule,
                   projectRoot,
                   matchPath,
-                  await loadWorkspaceConfig(projectRoot),
+                  workspaceConfig,
                 );
                 if (typeof resolved === "string") e.fromModule = resolved;
               } else {
-                const ws = await loadWorkspaceConfig(projectRoot);
-                const { resolveWorkspacePackage } = await import("./util.js");
                 const pkgResolved = await resolveWorkspacePackage(
                   e.fromModule,
-                  ws,
+                  workspaceConfig,
                 );
                 if (pkgResolved) e.fromModule = pkgResolved;
               }
@@ -1848,6 +1848,7 @@ export async function buildProjectIndexIncremental(
   }
 
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
+  const workspaceConfig = await loadWorkspaceConfig(projectRoot);
   const fileSignatures = new Map<string, string>();
   const changedFiles = new Set<string>();
   const modules = new Map<FileId, ModuleIndex>();
@@ -1922,15 +1923,13 @@ export async function buildProjectIndexIncremental(
                     e.fromModule,
                     projectRoot,
                     matchPath,
-                    await loadWorkspaceConfig(projectRoot),
+                    workspaceConfig,
                   );
                   if (typeof resolved === "string") e.fromModule = resolved;
                 } else {
-                  const ws = await loadWorkspaceConfig(projectRoot);
-                  const { resolveWorkspacePackage } = await import("./util.js");
                   const pkgResolved = await resolveWorkspacePackage(
                     e.fromModule,
-                    ws,
+                    workspaceConfig,
                   );
                   if (pkgResolved) e.fromModule = pkgResolved;
                 }
