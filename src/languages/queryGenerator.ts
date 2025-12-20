@@ -23,17 +23,17 @@ export function generateChunkingQuery(def: LanguageDefinition): string {
       if (block.nameQuery) {
         query += ` ${block.nameQuery}`;
       }
-      
+
       if (block.isBlock !== false) {
         query += `) @chunk.block.${block.captureId || block.type}`;
       } else {
         query += `)`;
       }
-      
+
       if (block.parentType) {
         query = `(${block.parentType} ${query})`;
       }
-      
+
       parts.push(query);
     }
     parts.push("");

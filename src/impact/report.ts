@@ -1,6 +1,13 @@
 import type { FileId } from "../types.js";
 import type { ProjectIndex } from "../indexer.js";
-import type { FileChange, ChangedSymbol, ImpactItem, ImpactReport, CompactImpactReport, ImpactOptions } from "./types.js";
+import type {
+  FileChange,
+  ChangedSymbol,
+  ImpactItem,
+  ImpactReport,
+  CompactImpactReport,
+  ImpactOptions,
+} from "./types.js";
 import { buildSymbolGraphDetailed } from "../graphs.js";
 
 export async function buildImpactReport(
@@ -8,15 +15,15 @@ export async function buildImpactReport(
   diffFiles: FileChange[],
   changedSymbols: ChangedSymbol[],
   impactedItems: ImpactItem[],
-  options: Partial<ImpactOptions> = {}
+  options: Partial<ImpactOptions> = {},
 ): Promise<ImpactReport | CompactImpactReport> {
   // Build changedFiles summary
-  const changedFiles = diffFiles.map(fileChange => ({
+  const changedFiles = diffFiles.map((fileChange) => ({
     file: fileChange.path,
-    hunks: fileChange.hunks.map(hunk => ({
+    hunks: fileChange.hunks.map((hunk) => ({
       start: hunk.startLine,
-      end: hunk.startLine + hunk.lines.length - 1
-    }))
+      end: hunk.startLine + hunk.lines.length - 1,
+    })),
   }));
 
   // Build graph data
@@ -31,15 +38,12 @@ export async function buildImpactReport(
   // Add file-to-file edges from the dependency graph
   for (const edge of index.graph.edges) {
     if (edge.to.type === "file") {
-      if (
-        !relevantFiles.has(edge.from) ||
-        !relevantFiles.has(edge.to.path)
-      ) {
+      if (!relevantFiles.has(edge.from) || !relevantFiles.has(edge.to.path)) {
         continue;
       }
       const fileEdge: { from: FileId; to: FileId; typeOnly?: boolean } = {
         from: edge.from,
-        to: edge.to.path
+        to: edge.to.path,
       };
       if (edge.typeOnly !== undefined) {
         fileEdge.typeOnly = edge.typeOnly;
@@ -53,7 +57,7 @@ export async function buildImpactReport(
     const detailedGraph = await buildSymbolGraphDetailed(index, {
       scope: "all",
       maxEdges: 10000, // Reasonable limit for impact analysis
-      membersOnly: false
+      membersOnly: false,
     });
 
     // Create a map from symbol ID to index in changedSymbols array
@@ -67,11 +71,15 @@ export async function buildImpactReport(
       const fromIndex = symbolIdToIndex.get(edge.from);
       const toIndex = symbolIdToIndex.get(edge.to);
 
-      if (fromIndex !== undefined && toIndex !== undefined && fromIndex !== toIndex) {
+      if (
+        fromIndex !== undefined &&
+        toIndex !== undefined &&
+        fromIndex !== toIndex
+      ) {
         symbolEdges.push({
           from: fromIndex,
           to: toIndex,
-          label: edge.label || "uses"
+          label: edge.label || "uses",
         });
       }
     }
@@ -85,7 +93,7 @@ export async function buildImpactReport(
       changedSymbols,
       impactedItems,
       fileEdges,
-      symbolEdges
+      symbolEdges,
     );
   }
 
@@ -95,18 +103,25 @@ export async function buildImpactReport(
     impacted: impactedItems,
     graph: {
       fileEdges,
-      symbolEdges
-    }
+      symbolEdges,
+    },
   };
 }
 
 function buildCompactReport(
   index: ProjectIndex,
-  changedFiles: Array<{ file: FileId; hunks: Array<{ start: number; end: number }> }>,
+  changedFiles: Array<{
+    file: FileId;
+    hunks: Array<{ start: number; end: number }>;
+  }>,
   changedSymbols: ChangedSymbol[],
   impactedItems: ImpactItem[],
-  fileEdges: Array<{ from: FileId; to: FileId; typeOnly?: boolean | undefined }>,
-  symbolEdges: Array<{ from: number; to: number; label: string }>
+  fileEdges: Array<{
+    from: FileId;
+    to: FileId;
+    typeOnly?: boolean | undefined;
+  }>,
+  symbolEdges: Array<{ from: number; to: number; label: string }>,
 ): CompactImpactReport {
   // Collect all unique file paths
   const allFiles = new Set<FileId>();
@@ -139,12 +154,12 @@ function buildCompactReport(
   }
 
   // Convert to compact format
-  const compactChangedFiles = changedFiles.map(cf => ({
+  const compactChangedFiles = changedFiles.map((cf) => ({
     file: fileIndex.get(cf.file)!,
-    hunks: cf.hunks
+    hunks: cf.hunks,
   }));
 
-  const compactChangedSymbols = changedSymbols.map(cs => {
+  const compactChangedSymbols = changedSymbols.map((cs) => {
     const symbol: {
       id: string;
       file: number;
@@ -159,7 +174,7 @@ function buildCompactReport(
       name: cs.name,
       kind: cs.kind,
       exported: cs.exported,
-      range: cs.range
+      range: cs.range,
     };
 
     if (cs.typeOnly !== undefined) {
@@ -169,7 +184,7 @@ function buildCompactReport(
     return symbol;
   });
 
-  const compactImpacted = impactedItems.map(ii => {
+  const compactImpacted = impactedItems.map((ii) => {
     const item: {
       file: number;
       symbols: string[];
@@ -182,7 +197,7 @@ function buildCompactReport(
       file: fileIndex.get(ii.file)!,
       symbols: ii.symbols,
       reasons: ii.reasons,
-      severity: ii.severity
+      severity: ii.severity,
     };
 
     if (ii.depth !== undefined) {
@@ -198,10 +213,10 @@ function buildCompactReport(
     return item;
   });
 
-  const compactFileEdges = fileEdges.map(fe => {
+  const compactFileEdges = fileEdges.map((fe) => {
     const edge: { from: number; to: number; typeOnly?: boolean } = {
       from: fileIndex.get(fe.from)!,
-      to: fileIndex.get(fe.to)!
+      to: fileIndex.get(fe.to)!,
     };
     if (fe.typeOnly !== undefined) {
       edge.typeOnly = fe.typeOnly;
@@ -216,7 +231,7 @@ function buildCompactReport(
     impacted: compactImpacted,
     graph: {
       fileEdges: compactFileEdges,
-      symbolEdges
-    }
+      symbolEdges,
+    },
   };
 }

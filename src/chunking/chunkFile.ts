@@ -112,9 +112,13 @@ export function chunkFile(opts: ChunkFileOptions): Chunk[] {
         innerNode = node;
       }
 
-      if (name.startsWith(language.captures.blockPrefix) && name !== language.captures.innerBlock) {
+      if (
+        name.startsWith(language.captures.blockPrefix) &&
+        name !== language.captures.innerBlock
+      ) {
         blockNode = node;
-        blockKind = name.slice(language.captures.blockPrefix.length) || node.type;
+        blockKind =
+          name.slice(language.captures.blockPrefix.length) || node.type;
       }
     }
 
@@ -150,12 +154,15 @@ export function chunkFile(opts: ChunkFileOptions): Chunk[] {
   }
 
   mainBlocks.sort((a, b) => a.startByte - b.startByte || a.endByte - b.endByte);
-  innerBlocks.sort((a, b) => a.startByte - b.startByte || a.endByte - b.endByte);
+  innerBlocks.sort(
+    (a, b) => a.startByte - b.startByte || a.endByte - b.endByte,
+  );
   comments.sort((a, b) => a.startByte - b.startByte || a.endByte - b.endByte);
 
   const preliminaryChunks: Chunk[] = [];
   let chunkIdCounter = 0;
-  const makeChunkId = () => `${language.id}:${filePath ?? "unknown"}:${chunkIdCounter++}`;
+  const makeChunkId = () =>
+    `${language.id}:${filePath ?? "unknown"}:${chunkIdCounter++}`;
 
   for (const block of mainBlocks) {
     const text = source.slice(block.startByte, block.endByte);
@@ -222,9 +229,16 @@ export function chunkFile(opts: ChunkFileOptions): Chunk[] {
     });
   }
 
-  preliminaryChunks.sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);
+  preliminaryChunks.sort(
+    (a, b) => a.startLine - b.startLine || a.endLine - b.endLine,
+  );
 
-  const mergedChunks = mergeSmallChunks(preliminaryChunks, minTokens, maxTokens, tokenizer);
+  const mergedChunks = mergeSmallChunks(
+    preliminaryChunks,
+    minTokens,
+    maxTokens,
+    tokenizer,
+  );
 
   const finalChunks = fillGapsWithMiscChunks(
     mergedChunks,
@@ -325,7 +339,16 @@ function splitLargeBlockUsingInnerBlocks(
   }
 
   if (segments.length === 0) {
-    splitLargeBlockSimple(block, source, tokenizer, maxTokens, makeChunkId, out, languageId, filePath);
+    splitLargeBlockSimple(
+      block,
+      source,
+      tokenizer,
+      maxTokens,
+      makeChunkId,
+      out,
+      languageId,
+      filePath,
+    );
     return;
   }
 
@@ -374,7 +397,10 @@ function splitLargeBlockUsingInnerBlocks(
   pushChunk();
 }
 
-function locateLineAndColFromByte(source: string, byteOffset: number): [number, number] {
+function locateLineAndColFromByte(
+  source: string,
+  byteOffset: number,
+): [number, number] {
   let line = 0;
   let col = 0;
   for (let i = 0; i < source.length && i < byteOffset; i++) {
@@ -417,7 +443,10 @@ function mergeSmallChunks(
         endLine: next.endLine,
         text: combinedText,
         tokenCount: combinedTokens,
-        type: current.type === next.type ? current.type : `${current.type}+${next.type}`,
+        type:
+          current.type === next.type
+            ? current.type
+            : `${current.type}+${next.type}`,
         ...(resolvedName !== undefined ? { name: resolvedName } : {}),
       };
       i++;
@@ -494,4 +523,3 @@ function fillGapsWithMiscChunks(
   const final = mergeSmallChunks(result, minTokens, maxTokens, tokenizer);
   return final;
 }
-

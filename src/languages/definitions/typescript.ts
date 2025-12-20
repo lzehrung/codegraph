@@ -8,55 +8,98 @@ const LangTSX = (tsGrammars as any).tsx as Language;
 
 const BASE_STRUCTURE = {
   blocks: [
-    { type: "class_declaration", nameQuery: "name: (type_identifier) @chunk.name", captureId: "class" },
-    { type: "function_declaration", nameQuery: "name: (identifier) @chunk.name", captureId: "function" },
-    { type: "method_definition", nameQuery: "name: (_) @chunk.name body: (statement_block) @chunk.block.method", captureId: "method" },
-    
-    // Variable assignments (functions/arrows)
-    { 
-      type: "lexical_declaration", 
-      nameQuery: `(variable_declarator name: (identifier) @chunk.name value: [ (function_expression body: (statement_block) @chunk.block.function) (arrow_function body: (statement_block) @chunk.block.function) ])`,
-      captureId: "function"
+    {
+      type: "class_declaration",
+      nameQuery: "name: (type_identifier) @chunk.name",
+      captureId: "class",
     },
-    { 
-      type: "variable_declaration", 
+    {
+      type: "function_declaration",
+      nameQuery: "name: (identifier) @chunk.name",
+      captureId: "function",
+    },
+    {
+      type: "method_definition",
+      nameQuery:
+        "name: (_) @chunk.name body: (statement_block) @chunk.block.method",
+      captureId: "method",
+    },
+
+    // Variable assignments (functions/arrows)
+    {
+      type: "lexical_declaration",
       nameQuery: `(variable_declarator name: (identifier) @chunk.name value: [ (function_expression body: (statement_block) @chunk.block.function) (arrow_function body: (statement_block) @chunk.block.function) ])`,
-      captureId: "function"
+      captureId: "function",
+    },
+    {
+      type: "variable_declaration",
+      nameQuery: `(variable_declarator name: (identifier) @chunk.name value: [ (function_expression body: (statement_block) @chunk.block.function) (arrow_function body: (statement_block) @chunk.block.function) ])`,
+      captureId: "function",
     },
     {
       type: "assignment_expression",
       nameQuery: `left: (_) @chunk.name right: [ (function_expression body: (statement_block) @chunk.block.function) (arrow_function body: (statement_block) @chunk.block.function) ]`,
-      captureId: "function"
+      captureId: "function",
     },
-    
+
     // Remaining functions
-    { type: "arrow_function", nameQuery: "body: (statement_block) @chunk.block.function", captureId: "function" },
-    { type: "function_expression", nameQuery: "body: (statement_block) @chunk.block.function", captureId: "function" },
+    {
+      type: "arrow_function",
+      nameQuery: "body: (statement_block) @chunk.block.function",
+      captureId: "function",
+    },
+    {
+      type: "function_expression",
+      nameQuery: "body: (statement_block) @chunk.block.function",
+      captureId: "function",
+    },
 
     // TS Specifics
-    { type: "interface_declaration", nameQuery: "name: (type_identifier) @chunk.name", captureId: "interface" },
-    { type: "enum_declaration", nameQuery: "name: [ (identifier) (type_identifier) ] @chunk.name", captureId: "enum" },
-    { type: "type_alias_declaration", nameQuery: "name: (type_identifier) @chunk.name", captureId: "type_alias" },
-    { type: "internal_module", nameQuery: "name: (identifier) @chunk.name body: (statement_block) @chunk.block.namespace", captureId: "namespace" },
-    { type: "module", nameQuery: "name: (identifier) @chunk.name body: (statement_block) @chunk.block.namespace", captureId: "namespace" },
+    {
+      type: "interface_declaration",
+      nameQuery: "name: (type_identifier) @chunk.name",
+      captureId: "interface",
+    },
+    {
+      type: "enum_declaration",
+      nameQuery: "name: [ (identifier) (type_identifier) ] @chunk.name",
+      captureId: "enum",
+    },
+    {
+      type: "type_alias_declaration",
+      nameQuery: "name: (type_identifier) @chunk.name",
+      captureId: "type_alias",
+    },
+    {
+      type: "internal_module",
+      nameQuery:
+        "name: (identifier) @chunk.name body: (statement_block) @chunk.block.namespace",
+      captureId: "namespace",
+    },
+    {
+      type: "module",
+      nameQuery:
+        "name: (identifier) @chunk.name body: (statement_block) @chunk.block.namespace",
+      captureId: "namespace",
+    },
 
     // Data
     { type: "object", captureId: "data" },
 
     // Top level vars
     { type: "import_statement", captureId: "imports", parentType: "program" },
-    { 
-      type: "lexical_declaration", 
+    {
+      type: "lexical_declaration",
       nameQuery: `(variable_declarator name: (identifier) @chunk.name)`,
       captureId: "module_var",
-      parentType: "program"
+      parentType: "program",
     },
-    { 
-      type: "variable_declaration", 
+    {
+      type: "variable_declaration",
       nameQuery: `(variable_declarator name: (identifier) @chunk.name)`,
       captureId: "module_var",
-      parentType: "program"
-    }
+      parentType: "program",
+    },
   ],
   splitPoints: [
     "if_statement",
@@ -70,9 +113,9 @@ const BASE_STRUCTURE = {
     "do_statement",
     "try_statement",
     "catch_clause",
-    "finally_clause"
+    "finally_clause",
   ],
-  comments: ["comment"]
+  comments: ["comment"],
 };
 
 const BASE_GRAPH = {
@@ -107,7 +150,7 @@ const BASE_GRAPH = {
     (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname))) (string) @from)
     (import_statement (import_clause (namespace_import (identifier) @ns)) (string) @from)
     (import_equals_declaration name: (identifier) @def module: (call_expression (identifier) @req (arguments (string) @from))) (#eq? @req "require")
-  `
+  `,
 };
 
 const BASE_HELPERS = {
@@ -158,7 +201,7 @@ export const TYPESCRIPT_DEF: LanguageDefinition = {
   grammar: () => LangTS,
   structure: BASE_STRUCTURE,
   graph: BASE_GRAPH,
-  ...BASE_HELPERS
+  ...BASE_HELPERS,
 };
 
 export const TSX_DEF: LanguageDefinition = {
@@ -171,8 +214,8 @@ export const TSX_DEF: LanguageDefinition = {
       ...BASE_STRUCTURE.blocks,
       { type: "jsx_element", captureId: "jsx" },
       { type: "jsx_self_closing_element", captureId: "jsx" },
-    ]
+    ],
   },
   graph: BASE_GRAPH,
-  ...BASE_HELPERS
+  ...BASE_HELPERS,
 };

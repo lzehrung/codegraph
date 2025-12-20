@@ -25,7 +25,9 @@ function createProvider(providerType: string): DiffProvider {
 
 // Forward declarations - will be implemented in separate files
 class GitDiffProvider implements DiffProvider {
-  async getDiff(opts: Extract<DiffProviderOptions, { provider: "git" }>): Promise<Diff> {
+  async getDiff(
+    opts: Extract<DiffProviderOptions, { provider: "git" }>,
+  ): Promise<Diff> {
     const { execSync } = await import("child_process");
     const cwd = opts.cwd || process.cwd();
     const cmd = `git diff --no-ext-diff --unified=0 ${opts.base}..${opts.head}`;
@@ -39,7 +41,9 @@ class GitDiffProvider implements DiffProvider {
 }
 
 class GitHubDiffProvider implements DiffProvider {
-  async getDiff(opts: Extract<DiffProviderOptions, { provider: "github" }>): Promise<Diff> {
+  async getDiff(
+    opts: Extract<DiffProviderOptions, { provider: "github" }>,
+  ): Promise<Diff> {
     const [owner, repo] = opts.repo.split("/");
     const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${opts.pr}`;
     const res = await fetch(url, {
@@ -49,15 +53,17 @@ class GitHubDiffProvider implements DiffProvider {
         "User-Agent": "codegraph-impact",
       },
     });
-    if (!res.ok) throw new Error(`GitHub PR diff failed: ${res.status} ${res.statusText}`);
+    if (!res.ok)
+      throw new Error(`GitHub PR diff failed: ${res.status} ${res.statusText}`);
     const diffText = await res.text();
     return parseUnifiedDiff(diffText);
   }
 }
 
 class RawDiffProvider implements DiffProvider {
-  async getDiff(opts: Extract<DiffProviderOptions, { provider: "raw" }>): Promise<Diff> {
+  async getDiff(
+    opts: Extract<DiffProviderOptions, { provider: "raw" }>,
+  ): Promise<Diff> {
     return parseUnifiedDiff(opts.diffText);
   }
 }
-

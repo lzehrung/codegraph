@@ -25,7 +25,10 @@ export function parseUnifiedDiff(diffText: string): Diff {
   return { files };
 }
 
-function parseFileChange(lines: string[], startIndex: number): (FileChange & { _nextIndex: number }) | null {
+function parseFileChange(
+  lines: string[],
+  startIndex: number,
+): (FileChange & { _nextIndex: number }) | null {
   let i = startIndex;
 
   // Skip the diff --git line
@@ -111,11 +114,14 @@ function parseFileChange(lines: string[], startIndex: number): (FileChange & { _
     kind,
     oldPath: kind === "renamed" ? actualOldPath : "",
     hunks,
-    _nextIndex: i
+    _nextIndex: i,
   };
 }
 
-function parseHunk(lines: string[], startIndex: number): ({ hunk: Hunk; _nextIndex: number }) | null {
+function parseHunk(
+  lines: string[],
+  startIndex: number,
+): { hunk: Hunk; _nextIndex: number } | null {
   const headerLine = lines[startIndex];
   if (!headerLine?.startsWith("@@")) return null;
 
@@ -146,8 +152,8 @@ function parseHunk(lines: string[], startIndex: number): ({ hunk: Hunk; _nextInd
   return {
     hunk: {
       startLine: newStart,
-      lines: hunkLines
+      lines: hunkLines,
     },
-    _nextIndex: i
+    _nextIndex: i,
   };
 }

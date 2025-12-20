@@ -12,10 +12,10 @@ export const VUE_DEF: LanguageDefinition = {
     blocks: [
       { type: "template_element", captureId: "template" },
       { type: "script_element", captureId: "script" },
-      { type: "style_element", captureId: "style" }
+      { type: "style_element", captureId: "style" },
     ],
     splitPoints: ["template_element", "script_element", "style_element"],
-    comments: ["comment"]
+    comments: ["comment"],
   },
   graph: {
     imports: `
@@ -23,10 +23,9 @@ export const VUE_DEF: LanguageDefinition = {
     `,
     exports: "",
     locals: "",
-    importBindings: ""
+    importBindings: "",
   },
   nodeTypes: {
     identifier: ["attribute_value"],
-  }
+  },
 };
-

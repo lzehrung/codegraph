@@ -38,7 +38,7 @@ export interface LanguageConfig {
  */
 export function makeLanguageConfig(
   def: LanguageDefinition,
-  filename?: string
+  filename?: string,
 ): LanguageConfig {
   const parser = new Parser();
   const lang = def.grammar(filename);
