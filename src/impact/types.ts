@@ -37,11 +37,11 @@ export type ChangedSymbol = {
 
 // Impact findings
 export type ImpactReason =
-  | "directRef"     // direct reference to changed symbol
+  | "directRef" // direct reference to changed symbol
   | "namespaceMember" // usage via namespace import (ns.symbol)
-  | "importAlias"   // usage via import alias
-  | "transitive"    // indirect impact through file dependencies
-  | "exportChain";  // impact through re-export chains
+  | "importAlias" // usage via import alias
+  | "transitive" // indirect impact through file dependencies
+  | "exportChain"; // impact through re-export chains
 
 export type ImpactItem = {
   file: FileId;
@@ -90,7 +90,10 @@ export type CompactImpactReport = {
     name: string;
     kind: ChangedSymbol["kind"];
     exported: boolean;
-    range: { start: { line: number; column: number }; end: { line: number; column: number } };
+    range: {
+      start: { line: number; column: number };
+      end: { line: number; column: number };
+    };
     typeOnly?: boolean;
   }>;
   impacted: Array<{

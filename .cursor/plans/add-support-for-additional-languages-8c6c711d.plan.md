@@ -1,4 +1,9 @@
-<!-- 8c6c711d-abbd-4c2c-8beb-4f68853c69b5 2df16189-8293-4504-8583-eab91b94c97b -->
+---
+name: Add Support for Additional Languages
+overview: ""
+todos: []
+---
+
 # Add Support for Additional Languages
 
 We will add support for the requested languages in the specified priority order. This involves installing the Tree-sitter grammars, creating language definitions, registering them, and adding tests.

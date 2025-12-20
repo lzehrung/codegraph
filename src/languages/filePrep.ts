@@ -9,7 +9,11 @@ import {
   supportById,
   type LanguageSupport,
 } from "../languages.js";
-import { prepareSFCScriptSource, detectSFCFramework, type SFCFramework } from "./sfc.js";
+import {
+  prepareSFCScriptSource,
+  detectSFCFramework,
+  type SFCFramework,
+} from "./sfc.js";
 
 interface ParserInput {
   source: string;
@@ -23,7 +27,10 @@ const SCRIPT_SUPPORT_MAP: Record<string, LanguageSupport> = {
   tsx: TSX_SUPPORT,
 };
 
-export async function prepareParserInput(file: string, opts?: { source?: string }): Promise<ParserInput> {
+export async function prepareParserInput(
+  file: string,
+  opts?: { source?: string },
+): Promise<ParserInput> {
   const rawSource = opts?.source ?? (await fsp.readFile(file, "utf8"));
   const framework = detectSFCFramework(file);
   if (framework) {
@@ -41,9 +48,12 @@ export async function prepareParserInput(file: string, opts?: { source?: string 
 async function prepareSFCParserInput(
   file: string,
   source: string,
-  framework: SFCFramework
+  framework: SFCFramework,
 ): Promise<ParserInput> {
-  const { maskedSource, scriptLangId } = prepareSFCScriptSource(source, framework);
+  const { maskedSource, scriptLangId } = prepareSFCScriptSource(
+    source,
+    framework,
+  );
   const sup =
     SCRIPT_SUPPORT_MAP[scriptLangId] ?? supportById(scriptLangId) ?? JS_SUPPORT;
   return {
@@ -52,5 +62,3 @@ async function prepareSFCParserInput(
     lang: sup.language(file),
   };
 }
-
-

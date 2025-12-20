@@ -113,7 +113,7 @@ const queryCache = new WeakMap<Parser.Language, Map<string, CompiledQueries>>();
 
 export function getCompiledQueries(
   lang: Parser.Language,
-  support: LanguageSupport
+  support: LanguageSupport,
 ): CompiledQueries {
   let bySupport = queryCache.get(lang);
   if (!bySupport) {

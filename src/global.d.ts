@@ -1,5 +1,8 @@
 declare module "fast-glob" {
-  export default function glob(patterns: string[], options?: GlobOptions): Promise<string[]>;
+  export default function glob(
+    patterns: string[],
+    options?: GlobOptions,
+  ): Promise<string[]>;
 }
 
 declare module "tree-sitter-html";

@@ -1,4 +1,75 @@
-<!-- fb907d59-edec-478a-8d8a-0aa87835de22 1504f481-e083-46ba-b6da-101dc0a8b660 -->
+---
+name: Strengthen Codegraph Core
+overview: ""
+todos:
+  - id: 15086cf3-e581-4e50-8264-9b39a98d8a09
+    content: Adopt parser pool in graphs, indexer, grep
+    status: pending
+  - id: 246812fe-f5c9-478b-ae4f-685730e99eba
+    content: Use getCompiledQueries everywhere querying is done
+    status: pending
+  - id: 7f6fba71-f9d9-49b3-a16b-8f7281cc0fbd
+    content: "Harden fast-graph: skip strings or add lightweight lexer"
+    status: pending
+  - id: c3420935-c98d-4a3c-9557-60eeb653a90d
+    content: Create shared JS/TS/Python specifier extraction utils
+    status: pending
+  - id: 76a07b9b-c9c1-4dba-8d7a-b199b8fcf074
+    content: Add visited-set guard to resolveExport and tests
+    status: pending
+  - id: aaa63a1d-674c-4b0d-8388-c39b0d7f9513
+    content: Make namespace member refs AST-based, not regex
+    status: pending
+  - id: c134c8e9-0fc1-4f27-a6ab-e35e1fc28727
+    content: Switch Python specifier collection to parser captures
+    status: pending
+  - id: 88bc136d-98db-4902-aece-21b701ad72fc
+    content: Enhance __all__ extraction for tuples/multiline/concat
+    status: pending
+  - id: a881e63b-f22e-4c36-a4cd-863ab8356ef4
+    content: Add concurrency control to collectGraph and CLI flag
+    status: pending
+  - id: bf82d6f1-0d06-47bd-b9fd-ecf381d507af
+    content: Reuse parsed trees in goto/refs via ProjectIndex
+    status: pending
+  - id: 7c48e29a-2aa3-4f2e-9432-6c7ad58b38e7
+    content: Add optional node_modules resolution flag
+    status: pending
+  - id: 777b78e7-110a-4c1a-85a6-3ebbd5fd86a2
+    content: Style type-only edges in Mermaid (flagged)
+    status: pending
+  - id: 05d4db45-18e8-4c99-a027-b5081fc37b6d
+    content: Add normalizePath util and apply consistently
+    status: pending
+  - id: 6095119c-d7b6-476c-97a1-a4dbe51fc201
+    content: Create types.ts for shared types
+    status: pending
+  - id: 2a0f1a32-0533-4887-8ee5-b41a4363e0bd
+    content: "Tests: fast-graph ignore strings/template literals"
+    status: pending
+  - id: 6916b464-e958-4a86-be5f-7f478f727b13
+    content: "Tests: circular re-exports resolution and no recursion blowup"
+    status: pending
+  - id: 8f346d56-3a50-45c2-9ebf-ddb46e8c461a
+    content: "Tests: ns.member only in code, across newlines"
+    status: pending
+  - id: e68a1375-06e9-4abb-990b-532fd607a038
+    content: "Tests: Python parenthesized/multiline/relative imports"
+    status: pending
+  - id: 18954a0a-d700-4d92-9b96-7903605af919
+    content: "Tests: Python __all__ variants"
+    status: pending
+  - id: bd721061-1cd3-4054-939a-b5d55aafbeaf
+    content: "Tests: TS paths/baseUrl and workspace exports maps"
+    status: pending
+  - id: a544ae17-174b-4e53-9674-08d08efc3044
+    content: "Tests: type-only edge styling in Mermaid and DOT"
+    status: pending
+  - id: 753655e2-d702-4eb6-9364-0ebeb351a0f5
+    content: "Tests: graph --threads concurrency behavior"
+    status: pending
+---
+
 # Strengthen Codegraph Core
 
 ### Parsing and Query Reuse
@@ -120,28 +191,3 @@ Code references:
 - TS path mapping (`baseUrl`, `paths`) and workspace `exports` maps.
 - Mermaid/DOT: type-only styling applied and serialized correctly.
 - Graph concurrency flag: behavior with different `--threads`.
-
-### To-dos
-
-- [ ] Adopt parser pool in graphs, indexer, grep
-- [ ] Use getCompiledQueries everywhere querying is done
-- [ ] Harden fast-graph: skip strings or add lightweight lexer
-- [ ] Create shared JS/TS/Python specifier extraction utils
-- [ ] Add visited-set guard to resolveExport and tests
-- [ ] Make namespace member refs AST-based, not regex
-- [ ] Switch Python specifier collection to parser captures
-- [ ] Enhance __all__ extraction for tuples/multiline/concat
-- [ ] Add concurrency control to collectGraph and CLI flag
-- [ ] Reuse parsed trees in goto/refs via ProjectIndex
-- [ ] Add optional node_modules resolution flag
-- [ ] Style type-only edges in Mermaid (flagged)
-- [ ] Add normalizePath util and apply consistently
-- [ ] Create types.ts for shared types
-- [ ] Tests: fast-graph ignore strings/template literals
-- [ ] Tests: circular re-exports resolution and no recursion blowup
-- [ ] Tests: ns.member only in code, across newlines
-- [ ] Tests: Python parenthesized/multiline/relative imports
-- [ ] Tests: Python __all__ variants
-- [ ] Tests: TS paths/baseUrl and workspace exports maps
-- [ ] Tests: type-only edge styling in Mermaid and DOT
-- [ ] Tests: graph --threads concurrency behavior

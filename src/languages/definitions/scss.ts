@@ -14,10 +14,10 @@ export const SCSS_DEF: LanguageDefinition = {
       { type: "mixin_statement", captureId: "mixin" },
       { type: "function_statement", captureId: "function" },
       { type: "media_statement", captureId: "media" },
-      { type: "keyframes_statement", captureId: "keyframes" }
+      { type: "keyframes_statement", captureId: "keyframes" },
     ],
     splitPoints: ["rule_set", "mixin_statement", "function_statement"],
-    comments: ["comment", "js_comment"]
+    comments: ["comment", "js_comment"],
   },
   graph: {
     imports: `
@@ -37,10 +37,9 @@ export const SCSS_DEF: LanguageDefinition = {
       (class_selector (class_name) @name)
       (id_selector (id_name) @name)
     `,
-    importBindings: ""
+    importBindings: "",
   },
   nodeTypes: {
     identifier: ["name", "variable", "class_name", "id_name"],
-  }
+  },
 };
-

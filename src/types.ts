@@ -14,5 +14,3 @@ export type Edge = {
 };
 
 export type Graph = { nodes: Set<FileId>; edges: Edge[] };
-
-

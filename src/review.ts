@@ -6,7 +6,10 @@ import {
   type ProjectIndex,
   symbolId,
 } from "./indexer.js";
-import { listCandidateTestFiles, type CandidateTestFile } from "./impact/context.js";
+import {
+  listCandidateTestFiles,
+  type CandidateTestFile,
+} from "./impact/context.js";
 import { normalizePath, listChangedFiles, fileExists } from "./util.js";
 
 type ReviewFileSummary = {
@@ -44,18 +47,18 @@ function relativePath(root: string, file: string): string {
 
 function isExported(mod: { exports: any[] }, handle: string): boolean {
   return mod.exports.some(
-    (e: any) =>
-      e.type === "local" &&
-      symbolId(e.target) === handle
+    (e: any) => e.type === "local" && symbolId(e.target) === handle,
   );
 }
 
 export async function buildReviewReport(
   projectRoot: string,
-  opts: ReviewOptions = {}
+  opts: ReviewOptions = {},
 ): Promise<ReviewReport> {
   const normalizeFile = (file: string) =>
-    normalizePath(path.isAbsolute(file) ? file : path.resolve(projectRoot, file));
+    normalizePath(
+      path.isAbsolute(file) ? file : path.resolve(projectRoot, file),
+    );
 
   const changedFiles = new Set<string>();
   for (const file of opts.files ?? []) {
@@ -97,7 +100,7 @@ export async function buildReviewReport(
     changedFileList.map(async (file) => ({
       file,
       exists: await fileExists(file),
-    }))
+    })),
   );
   const filesToIndex = existenceChecks
     .filter((entry) => entry.exists)
@@ -165,7 +168,7 @@ export async function buildReviewReport(
     index,
     changedFileList,
     changedSymbolIds,
-    { maxCandidates: opts.maxCandidates ?? 50 }
+    { maxCandidates: opts.maxCandidates ?? 50 },
   ).map((candidate) => ({
     ...candidate,
     file: relativePath(projectRoot, candidate.file),
@@ -186,4 +189,3 @@ export async function buildReviewReport(
   report.head = opts.gitHead ?? "HEAD";
   return report;
 }
-

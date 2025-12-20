@@ -12,10 +12,10 @@ export const SVELTE_DEF: LanguageDefinition = {
     blocks: [
       { type: "script_element", captureId: "script" },
       { type: "style_element", captureId: "style" },
-      { type: "element", captureId: "element" }
+      { type: "element", captureId: "element" },
     ],
     splitPoints: ["script_element", "style_element"],
-    comments: ["comment"]
+    comments: ["comment"],
   },
   graph: {
     imports: `
@@ -23,10 +23,9 @@ export const SVELTE_DEF: LanguageDefinition = {
     `,
     exports: "",
     locals: "",
-    importBindings: ""
+    importBindings: "",
   },
   nodeTypes: {
     identifier: ["attribute_value"],
-  }
+  },
 };
-

@@ -1,4 +1,10 @@
-import { buildProjectIndex, analyzeImpactFromDiff, type ImpactOptions } from "./index.js";
+import {
+  buildProjectIndex,
+  analyzeImpactFromDiff,
+  type ImpactOptions,
+  type ImpactReport,
+  type CompactImpactReport,
+} from "./index.js";
 
 /**
  * Agent-friendly tool wrapper for PR impact analysis.
@@ -6,10 +12,10 @@ import { buildProjectIndex, analyzeImpactFromDiff, type ImpactOptions } from "./
  */
 export async function tool_impactJSON(
   root: string,
-  options: ImpactOptions
+  options: ImpactOptions,
 ): Promise<{
   status: "ok" | "error";
-  report?: any;
+  report?: ImpactReport | CompactImpactReport;
   error?: string;
 }> {
   try {
@@ -22,12 +28,12 @@ export async function tool_impactJSON(
 
     return {
       status: "ok",
-      report
+      report,
     };
   } catch (error) {
     return {
       status: "error",
-      error: error instanceof Error ? error.message : String(error)
+      error: error instanceof Error ? error.message : String(error),
     };
   }
 }
@@ -39,15 +45,15 @@ export async function tool_impactJSON(
 export async function tool_impactFromDiffText(
   root: string,
   diffText: string,
-  options: Omit<ImpactOptions, "provider" | "diffText"> = {}
+  options: Omit<ImpactOptions, "provider" | "diffText"> = {},
 ): Promise<{
   status: "ok" | "error";
-  report?: any;
+  report?: ImpactReport | CompactImpactReport;
   error?: string;
 }> {
   return tool_impactJSON(root, {
     provider: "raw",
     diffText,
-    ...options
+    ...options,
   });
 }

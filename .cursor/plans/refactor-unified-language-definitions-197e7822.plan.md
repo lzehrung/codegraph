@@ -1,4 +1,9 @@
-<!-- 197e7822-b44c-4de9-b41b-1ff91822e82d 7df213ee-31d4-4e25-84f1-f22aa9f537b3 -->
+---
+name: "Refactor: Unified Language Definitions"
+overview: ""
+todos: []
+---
+
 # Refactor: Unified Language Definitions
 
 This plan unifies the configuration for dependency graphing and semantic chunking into a single `LanguageDefinition` structure. This will allow us to auto-generate Tree-sitter queries, reducing maintenance burden and making it easier to add new languages.

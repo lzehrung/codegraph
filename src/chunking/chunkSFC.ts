@@ -2,7 +2,6 @@ import type { Chunk } from "./chunkFile.js";
 import { chunkFile } from "./chunkFile.js";
 import { chunkTextFile } from "./chunkTextFile.js";
 import type { TextChunkOptions } from "./chunkTextFile.js";
-import type { LanguageConfig } from "../bootstrap/treeSitterLanguages.js";
 import { LANG_CONFIGS } from "../bootstrap/treeSitterLanguages.js";
 import {
   parseSFC,
@@ -33,9 +32,10 @@ export function chunkSFCFile(opts: ChunkSFCOptions): Chunk[] {
     tokenizer,
   } = opts;
   const baseBlocks = parseSFC(source);
-  const blocks = framework === "svelte"
-    ? [...baseBlocks, ...buildSvelteTemplateBlocks(source, baseBlocks)]
-    : baseBlocks;
+  const blocks =
+    framework === "svelte"
+      ? [...baseBlocks, ...buildSvelteTemplateBlocks(source, baseBlocks)]
+      : baseBlocks;
 
   if (blocks.length === 0) {
     return chunkTextFile({
@@ -73,7 +73,9 @@ export function chunkSFCFile(opts: ChunkSFCOptions): Chunk[] {
     }
   }
 
-  return chunks.sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);
+  return chunks.sort(
+    (a, b) => a.startLine - b.startLine || a.endLine - b.endLine,
+  );
 }
 
 function chunkBlock(opts: {
@@ -106,7 +108,7 @@ function chunkBlock(opts: {
       } catch (error) {
         console.warn(
           `Warning: Semantic chunking failed for ${framework} ${block.type} block:`,
-          error
+          error,
         );
       }
     }
@@ -121,7 +123,10 @@ function chunkBlock(opts: {
   });
 }
 
-function selectLanguageKey(block: SFCBlock, framework: SFCFramework): string | null {
+function selectLanguageKey(
+  block: SFCBlock,
+  framework: SFCFramework,
+): string | null {
   if (block.type === "script") {
     const langId = scriptLanguageIdForBlock(block);
     if (langId === "ts") return "typescript";
@@ -147,7 +152,7 @@ function chunkTextBlock(
     minTokens: number;
     maxTokens: number;
     tokenizer?: ((text: string) => number) | undefined;
-  }
+  },
 ): Chunk[] {
   const { framework, filePath, minTokens, maxTokens, tokenizer } = opts;
   const languageId = `${framework}-${block.type}`;
@@ -161,4 +166,3 @@ function chunkTextBlock(
   } as TextChunkOptions);
   return textChunks;
 }
-

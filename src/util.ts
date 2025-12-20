@@ -48,7 +48,9 @@ export function toRange(node: any): Range {
 
 export async function listProjectFiles(
   projectRoot: string,
-  patterns = ["**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs}"]
+  patterns = [
+    "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs}",
+  ],
 ): Promise<string[]> {
   try {
     const files = await fg(patterns, {
@@ -134,7 +136,7 @@ type MatchPathFn = ReturnType<typeof createMatchPath>;
 const tsconfigCache = new Map<string, { matchPath?: MatchPathFn }>();
 
 async function findNearestTsconfig(
-  startFromFile: string
+  startFromFile: string,
 ): Promise<string | null> {
   let dir = path.dirname(startFromFile);
   while (true) {
@@ -151,7 +153,7 @@ async function findNearestTsconfig(
 }
 
 export async function loadNearestTsconfigFor(
-  file: string
+  file: string,
 ): Promise<{ matchPath?: MatchPathFn }> {
   const dir = path.dirname(file);
   if (tsconfigCache.has(dir)) return tsconfigCache.get(dir)!;
@@ -167,7 +169,7 @@ export async function loadNearestTsconfigFor(
     const json = JSON.parse(raw);
     const baseUrl = path.resolve(
       path.dirname(cfgPath),
-      json.compilerOptions?.baseUrl ?? "."
+      json.compilerOptions?.baseUrl ?? ".",
     );
     const paths = json.compilerOptions?.paths as
       | Record<string, string[]>
@@ -241,7 +243,7 @@ export type WorkspaceConfig = {
 const workspaceCache = new Map<string, WorkspaceConfig>();
 
 export async function loadWorkspaceConfig(
-  projectRoot: string
+  projectRoot: string,
 ): Promise<WorkspaceConfig | undefined> {
   const root = (await findWorkspaceRoot(projectRoot)) ?? projectRoot;
   if (workspaceCache.has(root)) return workspaceCache.get(root)!;
@@ -287,7 +289,7 @@ export async function loadWorkspaceConfig(
 
   if (workspaceGlobs.length > 0) {
     const patterns = workspaceGlobs.map((g) =>
-      path.posix.join(g.replace(/\\/g, "/"), "package.json")
+      path.posix.join(g.replace(/\\/g, "/"), "package.json"),
     );
     const found = await fg(patterns, {
       cwd: root,
@@ -332,7 +334,7 @@ export function resolvePackageSubpath(spec: string): {
 
 export async function resolveWorkspacePackage(
   spec: string,
-  ws: WorkspaceConfig | undefined
+  ws: WorkspaceConfig | undefined,
 ): Promise<string | null> {
   if (!ws) return null;
   const { name, subpath } = resolvePackageSubpath(spec);
@@ -420,7 +422,7 @@ export type FileId = string;
 
 export async function resolvePathLikeModule(
   projectRoot: string,
-  spec: string
+  spec: string,
 ): Promise<string | null> {
   const parts = spec.split(/[\/\\.:]+/).filter(Boolean);
   // Try extensions from the file
@@ -456,8 +458,8 @@ export async function resolvePathLikeModule(
         return path.resolve(path.join(p, "index" + e));
     }
     if (await fileExists(p)) {
-       const st = await fsp.stat(p);
-       if (!st.isDirectory()) return path.resolve(p);
+      const st = await fsp.stat(p);
+      if (!st.isDirectory()) return path.resolve(p);
     }
   }
   return null;
@@ -469,7 +471,7 @@ export async function resolveSpecifier(
   projectRoot: string,
   matchPath?: MatchPathFn,
   workspaceConfig?: WorkspaceConfig,
-  opts?: { resolveNodeModules?: boolean }
+  opts?: { resolveNodeModules?: boolean },
 ): Promise<FileId | { external: string }> {
   const cacheKey = `${fromFile}::${spec}::nm=${opts?.resolveNodeModules ? 1 : 0}`;
   const cached = resolveSpecifierCache.get(cacheKey);
@@ -480,23 +482,23 @@ export async function resolveSpecifier(
       : path.resolve(path.dirname(fromFile), spec);
     const candidates: string[] = [base];
     const exts = [
-    ".ts",
-    ".tsx",
-    ".js",
-    ".jsx",
-    ".mts",
-    ".cts",
-    ".mjs",
-    ".cjs",
-    ".json",
-    ".vue",
-    ".svelte",
-    ".go",
-    ".java",
-    ".cs",
-    ".rb",
-    ".rs",
-  ];
+      ".ts",
+      ".tsx",
+      ".js",
+      ".jsx",
+      ".mts",
+      ".cts",
+      ".mjs",
+      ".cjs",
+      ".json",
+      ".vue",
+      ".svelte",
+      ".go",
+      ".java",
+      ".cs",
+      ".rb",
+      ".rs",
+    ];
     // If spec already has .js/.mjs/.cjs, also try the corresponding .ts/.mts/.cts
     const baseExt = path.extname(base);
     if (baseExt === ".js" || baseExt === ".mjs" || baseExt === ".cjs") {
@@ -551,7 +553,7 @@ export async function resolveSpecifier(
           return false;
         }
       },
-      [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json"]
+      [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json"],
     );
     if (m) {
       const cand = path.resolve(m);
@@ -589,14 +591,18 @@ export async function resolveSpecifier(
 async function resolveFromNodeModules(
   spec: string,
   fromFile: string,
-  projectRoot: string
+  projectRoot: string,
 ): Promise<string | null> {
   try {
     // Walk up from the file directory to project root looking for node_modules
     let dir = path.dirname(fromFile);
     const parts = spec.split("/");
-    const packageName = spec.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0]!;
-    const subpath = spec.startsWith("@") ? parts.slice(2).join("/") : parts.slice(1).join("/");
+    const packageName = spec.startsWith("@")
+      ? parts.slice(0, 2).join("/")
+      : parts[0]!;
+    const subpath = spec.startsWith("@")
+      ? parts.slice(2).join("/")
+      : parts.slice(1).join("/");
     while (true) {
       const nmDir = path.join(dir, "node_modules", packageName);
       if (await fileExists(nmDir)) {
@@ -604,29 +610,32 @@ async function resolveFromNodeModules(
         const pkg = await loadJSON<any>(pkgPath);
         const baseDir = nmDir;
         const exts = [
-    ".ts",
-    ".tsx",
-    ".js",
-    ".jsx",
-    ".mts",
-    ".cts",
-    ".mjs",
-    ".cjs",
-    ".json",
-    ".vue",
-    ".svelte",
-    ".go",
-    ".java",
-    ".cs",
-    ".rb",
-    ".rs",
-  ];
-        const tryResolveRelative = async (rel: string): Promise<string | null> => {
+          ".ts",
+          ".tsx",
+          ".js",
+          ".jsx",
+          ".mts",
+          ".cts",
+          ".mjs",
+          ".cjs",
+          ".json",
+          ".vue",
+          ".svelte",
+          ".go",
+          ".java",
+          ".cs",
+          ".rb",
+          ".rs",
+        ];
+        const tryResolveRelative = async (
+          rel: string,
+        ): Promise<string | null> => {
           const raw = path.resolve(baseDir, rel);
           const candidates: string[] = [raw];
           for (const e of exts) candidates.push(raw + e);
           for (const e of exts) candidates.push(path.join(raw, "index" + e));
-          for (const c of candidates) if (await fileExists(c)) return path.resolve(c);
+          for (const c of candidates)
+            if (await fileExists(c)) return path.resolve(c);
           return null;
         };
         // Exports map handling (simplified)
@@ -634,7 +643,11 @@ async function resolveFromNodeModules(
           if (!target) return null;
           if (typeof target === "string") return target as string;
           if (typeof target === "object") {
-            const cand = (target as any).import ?? (target as any).default ?? (target as any).require ?? (target as any).module;
+            const cand =
+              (target as any).import ??
+              (target as any).default ??
+              (target as any).require ??
+              (target as any).module;
             if (typeof cand === "string") return cand;
           }
           return null;
@@ -659,12 +672,17 @@ async function resolveFromNodeModules(
           const candidates: string[] = [raw];
           for (const e of exts) candidates.push(raw + e);
           for (const e of exts) candidates.push(path.join(raw, "index" + e));
-          for (const c of candidates) if (await fileExists(c)) return path.resolve(c);
+          for (const c of candidates)
+            if (await fileExists(c)) return path.resolve(c);
         }
-        const mainField = typeof pkg?.main === "string" ? path.resolve(baseDir, pkg.main) : null;
+        const mainField =
+          typeof pkg?.main === "string"
+            ? path.resolve(baseDir, pkg.main)
+            : null;
         if (mainField && (await fileExists(mainField))) return mainField;
         const idxCandidates = exts.map((e) => path.join(baseDir, "index" + e));
-        for (const c of idxCandidates) if (await fileExists(c)) return path.resolve(c);
+        for (const c of idxCandidates)
+          if (await fileExists(c)) return path.resolve(c);
         return baseDir;
       }
       const parent = path.dirname(dir);
@@ -694,7 +712,7 @@ export async function listChangedFiles(
     changedSince?: string | undefined;
     base?: string | undefined;
     head?: string | undefined;
-  }
+  },
 ): Promise<string[]> {
   try {
     const args = ["diff", "--name-only", "--diff-filter=ACDMRTUXB"];
@@ -754,7 +772,7 @@ export async function resolvePythonModule(
   projectRoot: string,
   fromFile: string,
   moduleName: string | null,
-  relativeDots: number
+  relativeDots: number,
 ): Promise<FileId | { external: string }> {
   const cacheKey = `${fromFile}::${".".repeat(relativeDots)}${
     moduleName ?? ""

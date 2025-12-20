@@ -1,7 +1,13 @@
-import { makeLanguageConfig, type LanguageConfig } from "../chunking/languageConfig.js";
+import {
+  makeLanguageConfig,
+  type LanguageConfig,
+} from "../chunking/languageConfig.js";
 import { JAVASCRIPT_DEF } from "../languages/definitions/javascript.js";
 import { PYTHON_DEF } from "../languages/definitions/python.js";
-import { TYPESCRIPT_DEF, TSX_DEF } from "../languages/definitions/typescript.js";
+import {
+  TYPESCRIPT_DEF,
+  TSX_DEF,
+} from "../languages/definitions/typescript.js";
 import { HTML_DEF } from "../languages/definitions/html.js";
 import { CSS_DEF } from "../languages/definitions/css.js";
 import { SCSS_DEF } from "../languages/definitions/scss.js";

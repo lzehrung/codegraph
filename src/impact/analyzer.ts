@@ -1,13 +1,19 @@
 import type { FileId } from "../types.js";
 import type { ProjectIndex, SymbolDef } from "../indexer.js";
-import type { ChangedSymbol, ImpactItem, ImpactReason, ImpactOptions, FileChange } from "./types.js";
+import type {
+  ChangedSymbol,
+  ImpactItem,
+  ImpactReason,
+  ImpactOptions,
+  FileChange,
+} from "./types.js";
 import { findReferences } from "../indexer.js";
 
 export async function analyzeImpact(
   index: ProjectIndex,
   changedSymbols: ChangedSymbol[],
   changedFiles: FileChange[],
-  options: Partial<ImpactOptions> = {}
+  options: Partial<ImpactOptions> = {},
 ): Promise<ImpactItem[]> {
   const {
     maxRefs = 1000,
@@ -16,7 +22,7 @@ export async function analyzeImpact(
     membersOnly = false,
     refContext,
     refContextLines,
-    refBlockMaxLines
+    refBlockMaxLines,
   } = options;
 
   const impacted = new Map<FileId, ImpactItem>();
@@ -31,16 +37,26 @@ export async function analyzeImpact(
     processedSymbols.add(changedSymbol.id);
 
     tasks.push(async () => {
-      const refs = await findReferences(index, { def: {
-        file: changedSymbol.file,
-        localName: changedSymbol.name,
-        kind: changedSymbol.kind,
-        range: changedSymbol.range
-      } as SymbolDef }, refContext ? {
-        context: refContext,
-        ...(refContextLines !== undefined && { lines: refContextLines }),
-        ...(refBlockMaxLines !== undefined && { blockMaxLines: refBlockMaxLines })
-      } : undefined);
+      const refs = await findReferences(
+        index,
+        {
+          def: {
+            file: changedSymbol.file,
+            localName: changedSymbol.name,
+            kind: changedSymbol.kind,
+            range: changedSymbol.range,
+          } as SymbolDef,
+        },
+        refContext
+          ? {
+              context: refContext,
+              ...(refContextLines !== undefined && { lines: refContextLines }),
+              ...(refBlockMaxLines !== undefined && {
+                blockMaxLines: refBlockMaxLines,
+              }),
+            }
+          : undefined,
+      );
 
       if (refs.status === "ok") {
         for (const ref of refs.references.slice(0, maxRefs)) {
@@ -61,36 +77,45 @@ export async function analyzeImpact(
             reasons.push(reason);
           }
 
-        const severityResult = calculateSeverity(changedSymbol, ref, reasons, 0, index);
-        const symbols = existing?.symbols || [];
-        if (!symbols.includes(changedSymbol.name)) {
-          symbols.push(changedSymbol.name);
-        }
-
-        const refs = existing?.refs || [];
-        if (refContext && ref.context !== undefined) {
-          refs.push({ range: ref.range, context: ref.context });
-        }
-
-        const impactItem: ImpactItem = {
-          file: ref.file,
-          symbols,
-          reasons,
-          severity: Math.max(existing?.severity || 0, severityResult.severity),
-          depth: 0,
-          ...(refContext && refs.length > 0 && { refs }),
-          explain: {
-            ...existing?.explain,
-            ...severityResult.explain,
-            refsCount: (existing?.explain?.refsCount || 0) + 1
+          const severityResult = calculateSeverity(
+            changedSymbol,
+            ref,
+            reasons,
+            0,
+            index,
+          );
+          const symbols = existing?.symbols || [];
+          if (!symbols.includes(changedSymbol.name)) {
+            symbols.push(changedSymbol.name);
           }
-        };
 
-        if (changedSymbol.typeOnly !== undefined) {
-          impactItem.typeOnly = changedSymbol.typeOnly;
-        }
+          const refs = existing?.refs || [];
+          if (refContext && ref.context !== undefined) {
+            refs.push({ range: ref.range, context: ref.context });
+          }
 
-        impacted.set(ref.file, impactItem);
+          const impactItem: ImpactItem = {
+            file: ref.file,
+            symbols,
+            reasons,
+            severity: Math.max(
+              existing?.severity || 0,
+              severityResult.severity,
+            ),
+            depth: 0,
+            ...(refContext && refs.length > 0 && { refs }),
+            explain: {
+              ...existing?.explain,
+              ...severityResult.explain,
+              refsCount: (existing?.explain?.refsCount || 0) + 1,
+            },
+          };
+
+          if (changedSymbol.typeOnly !== undefined) {
+            impactItem.typeOnly = changedSymbol.typeOnly;
+          }
+
+          impacted.set(ref.file, impactItem);
         }
       }
     });
@@ -98,7 +123,7 @@ export async function analyzeImpact(
 
   // Execute in batches with concurrency control
   for (let i = 0; i < tasks.length; i += concurrency) {
-    await Promise.all(tasks.slice(i, i + concurrency).map(fn => fn()));
+    await Promise.all(tasks.slice(i, i + concurrency).map((fn) => fn()));
   }
 
   // Seed transitive impact from changed files (especially for deleted/renamed files with no symbols)
@@ -118,7 +143,7 @@ export async function seedTransitiveFromFiles(
   index: ProjectIndex,
   impacted: Map<FileId, ImpactItem>,
   changedFiles: FileChange[],
-  options: Partial<ImpactOptions>
+  options: Partial<ImpactOptions>,
 ): Promise<void> {
   const { includeTests = false } = options;
 
@@ -128,9 +153,9 @@ export async function seedTransitiveFromFiles(
 
     // For deleted/renamed files, seed transitive impact from files that depended on them
     if (fileChange.kind === "deleted" || fileChange.kind === "renamed") {
-      const dependents = index.graph.edges.filter(e =>
-        e.to.type === "file" && e.to.path === fileChange.path
-      ).map(e => e.from);
+      const dependents = index.graph.edges
+        .filter((e) => e.to.type === "file" && e.to.path === fileChange.path)
+        .map((e) => e.from);
 
       for (const dependent of dependents) {
         if (!includeTests && isTestFile(dependent)) continue;
@@ -150,8 +175,8 @@ export async function seedTransitiveFromFiles(
           explain: {
             reason: "transitive",
             depth: 1,
-            hints
-          }
+            hints,
+          },
         };
 
         impacted.set(dependent, impactItem);
@@ -164,7 +189,7 @@ async function analyzeTransitiveImpact(
   index: ProjectIndex,
   impacted: Map<FileId, ImpactItem>,
   maxDepth: number,
-  options: Partial<ImpactOptions>
+  options: Partial<ImpactOptions>,
 ): Promise<void> {
   // Precompute reverse dependency index for efficient traversal
   const reverseDeps = new Map<FileId, any[]>();
@@ -177,7 +202,8 @@ async function analyzeTransitiveImpact(
   }
 
   const visited = new Set<FileId>();
-  const queue: Array<{ file: FileId; depth: number; reason: ImpactReason }> = [];
+  const queue: Array<{ file: FileId; depth: number; reason: ImpactReason }> =
+    [];
 
   // Initialize queue with directly impacted files
   for (const [file, item] of impacted) {
@@ -193,45 +219,53 @@ async function analyzeTransitiveImpact(
     const edgesIn = reverseDeps.get(file) || [];
     for (const edge of edgesIn) {
       const dependentFile = edge.from;
-      if (visited.has(dependentFile) || (!options.includeTests && isTestFile(dependentFile))) continue;
+      if (
+        visited.has(dependentFile) ||
+        (!options.includeTests && isTestFile(dependentFile))
+      )
+        continue;
 
       visited.add(dependentFile);
 
-        const existing = impacted.get(dependentFile);
-        const reasons = existing?.reasons || [];
-        if (!reasons.includes(reason)) {
-          reasons.push(reason);
-        }
+      const existing = impacted.get(dependentFile);
+      const reasons = existing?.reasons || [];
+      if (!reasons.includes(reason)) {
+        reasons.push(reason);
+      }
 
-        const severity = calculateTransitiveSeverity(edge, depth + 1);
+      const severity = calculateTransitiveSeverity(edge, depth + 1);
 
-        // Calculate fan-in for transitive items too
-        const fanIn = reverseDeps.get(dependentFile)?.length || 0;
+      // Calculate fan-in for transitive items too
+      const fanIn = reverseDeps.get(dependentFile)?.length || 0;
 
-        const transitiveItem: ImpactItem = {
-          file: dependentFile,
-          symbols: existing?.symbols || [],
-          reasons,
-          severity: Math.max(existing?.severity || 0, severity),
+      const transitiveItem: ImpactItem = {
+        file: dependentFile,
+        symbols: existing?.symbols || [],
+        reasons,
+        severity: Math.max(existing?.severity || 0, severity),
+        depth: depth + 1,
+        explain: {
+          ...existing?.explain,
+          reason,
           depth: depth + 1,
-          explain: {
-            ...existing?.explain,
-            reason,
-            depth: depth + 1,
-            ...(fanIn > 0 && { fanIn })
-          }
-        };
+          ...(fanIn > 0 && { fanIn }),
+        },
+      };
 
-        if (edge.typeOnly !== undefined) {
-          transitiveItem.typeOnly = edge.typeOnly;
-          if (transitiveItem.explain) {
-            transitiveItem.explain.typeOnly = edge.typeOnly;
-          }
+      if (edge.typeOnly !== undefined) {
+        transitiveItem.typeOnly = edge.typeOnly;
+        if (transitiveItem.explain) {
+          transitiveItem.explain.typeOnly = edge.typeOnly;
         }
+      }
 
-        impacted.set(dependentFile, transitiveItem);
+      impacted.set(dependentFile, transitiveItem);
 
-      queue.push({ file: dependentFile, depth: depth + 1, reason: "exportChain" });
+      queue.push({
+        file: dependentFile,
+        depth: depth + 1,
+        reason: "exportChain",
+      });
     }
   }
 }
@@ -241,7 +275,7 @@ export function calculateSeverity(
   ref: any,
   reasons: ImpactReason[],
   depth: number,
-  index: ProjectIndex
+  index: ProjectIndex,
 ): { severity: number; explain: any } {
   let score = 1.0;
   const explain: any = {};
@@ -269,7 +303,9 @@ export function calculateSeverity(
   }
 
   // Calculate fan-in (how many files depend on the impacted file)
-  const fanIn = [...index.graph.edges].filter(e => e.to.type === "file" && e.to.path === ref.file).length;
+  const fanIn = [...index.graph.edges].filter(
+    (e) => e.to.type === "file" && e.to.path === ref.file,
+  ).length;
   if (fanIn > 0) {
     const fanInFactor = 1 + Math.min(Math.log10(fanIn + 1), 1); // Cap at doubling
     score *= fanInFactor;
@@ -297,13 +333,16 @@ export function calculateSeverity(
   const mod = index.byFile.get(changedSymbol.file);
   if (mod) {
     const changedIndex = changedSymbol.range.start.index ?? 0;
-    const symbolDef = mod.locals.find(l => {
+    const symbolDef = mod.locals.find((l) => {
       const localIndex = l.range.start.index ?? 0;
       return l.localName === changedSymbol.name && localIndex === changedIndex;
     });
     if (symbolDef) {
       // Simple heuristic: functions with parameters might be signature changes
-      if (symbolDef.kind === "function" && symbolDef.range.end.line - symbolDef.range.start.line > 1) {
+      if (
+        symbolDef.kind === "function" &&
+        symbolDef.range.end.line - symbolDef.range.start.line > 1
+      ) {
         hints.push("signatureChanged");
       }
     }
@@ -319,7 +358,7 @@ export function calculateSeverity(
 
   return {
     severity: Math.min(1.0, Math.max(0.0, score)),
-    explain
+    explain,
   };
 }
 
@@ -339,9 +378,11 @@ function calculateTransitiveSeverity(edge: any, depth: number): number {
 
 function isTestFile(file: FileId): boolean {
   const lower = file.toLowerCase();
-  return lower.includes("test") ||
-         lower.includes("spec") ||
-         lower.includes("__tests__") ||
-         lower.includes(".test.") ||
-         lower.includes(".spec.");
+  return (
+    lower.includes("test") ||
+    lower.includes("spec") ||
+    lower.includes("__tests__") ||
+    lower.includes(".test.") ||
+    lower.includes(".spec.")
+  );
 }
