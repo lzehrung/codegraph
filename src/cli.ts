@@ -14,6 +14,7 @@ import {
   graphToMermaid,
   graphToDOT,
   astGrep,
+  textGrep,
   buildSymbolGraph,
   buildSymbolGraphDetailed,
   graphToMermaidSymbols,
@@ -65,12 +66,116 @@ function writeError(error: unknown) {
   writeStderrLine(String(error));
 }
 
+type ParsedCliArgs = {
+  positionals: string[];
+  flags: Set<string>;
+  options: Map<string, string[]>;
+};
+
+const CLI_VALUE_OPTIONS = new Set<string>([
+  "--root",
+  "--output",
+  "--stderr-file",
+  "--threads",
+  "--cache",
+  "--changed-since",
+  "--git-base",
+  "--git-head",
+  "--symbols-detailed-scope",
+  "--symbols-detailed-max-edges",
+  "--file",
+  "--line",
+  "--col",
+  "--column",
+  "--query",
+  "--pattern",
+  "--regex",
+  "--glob",
+  "--provider",
+  "--base",
+  "--head",
+  "--pr",
+  "--repo",
+  "--max-refs",
+  "--depth",
+  "--scope",
+  "--ref-context",
+  "--ref-context-lines",
+  "--ref-block-max-lines",
+  "--max-tests",
+  "--language",
+  "--min-tokens",
+  "--max-tokens",
+  "--max-hits",
+]);
+
+function parseCliArgs(tokens: string[]): ParsedCliArgs {
+  const positionals: string[] = [];
+  const flags = new Set<string>();
+  const options = new Map<string, string[]>();
+
+  const pushOpt = (key: string, value: string) => {
+    const existing = options.get(key);
+    if (existing) existing.push(value);
+    else options.set(key, [value]);
+  };
+
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]!;
+    if (t === "--") {
+      positionals.push(...tokens.slice(i + 1));
+      break;
+    }
+
+    if (t.startsWith("--")) {
+      const eq = t.indexOf("=");
+      if (eq !== -1) {
+        const key = t.slice(0, eq);
+        const value = t.slice(eq + 1);
+        pushOpt(key, value);
+        continue;
+      }
+      const key = t;
+      if (CLI_VALUE_OPTIONS.has(key)) {
+        const next = tokens[i + 1];
+        if (next === undefined)
+          throw new Error(`Missing value for ${key} option`);
+        pushOpt(key, next);
+        i++;
+      } else {
+        flags.add(key);
+      }
+      continue;
+    }
+
+    if (t.startsWith("-") && t.length > 1) {
+      // Support a minimal set of short options. Everything else is treated as a boolean flag.
+      if (t === "-o") {
+        const next = tokens[i + 1];
+        if (!next || next.startsWith("-"))
+          throw new Error("Missing value for -o/--output");
+        pushOpt("--output", next);
+        i++;
+        continue;
+      }
+      flags.add(t);
+      continue;
+    }
+
+    positionals.push(t);
+  }
+
+  return { positionals, flags, options };
+}
+
 // Compact JSON helpers to reduce repeated strings in graph output
 function compactGraphWithSymbols(
   fgraph: { nodes: Set<string>; edges: Array<any> },
   sgraph: { nodes: Map<string, any>; edges: Array<any> },
+  stable = false,
 ) {
   const files = [...fgraph.nodes];
+  if (stable) files.sort();
   const fileIndex = new Map<string, number>();
   for (let i = 0; i < files.length; i++) fileIndex.set(files[i]!, i);
 
@@ -83,8 +188,24 @@ function compactGraphWithSymbols(
     raw: e.raw,
     ...(e.typeOnly !== undefined ? { typeOnly: e.typeOnly } : {}),
   }));
+  if (stable) {
+    const toKey = (to: any) =>
+      to?.type === "file" ? `file:${to.path}` : `ext:${to?.name ?? ""}`;
+    fileEdges.sort((a: any, b: any) => {
+      const byFrom = a.from - b.from;
+      if (byFrom) return byFrom;
+      const ak = toKey(a.to);
+      const bk = toKey(b.to);
+      if (ak !== bk) return ak < bk ? -1 : 1;
+      const ar = String(a.raw ?? "");
+      const br = String(b.raw ?? "");
+      if (ar !== br) return ar < br ? -1 : 1;
+      return Number(!!a.typeOnly) - Number(!!b.typeOnly);
+    });
+  }
 
   const symbolIds = [...sgraph.nodes.keys()];
+  if (stable) symbolIds.sort();
   const symbolIndex = new Map<string, number>();
   for (let i = 0; i < symbolIds.length; i++) symbolIndex.set(symbolIds[i]!, i);
 
@@ -103,6 +224,18 @@ function compactGraphWithSymbols(
     to: symbolIndex.get(e.to)!,
     ...(e.label ? { label: e.label } : {}),
   }));
+  if (stable) {
+    symbolEdges.sort((a: any, b: any) => {
+      const byFrom = a.from - b.from;
+      if (byFrom) return byFrom;
+      const byTo = a.to - b.to;
+      if (byTo) return byTo;
+      const al = String(a.label ?? "");
+      const bl = String(b.label ?? "");
+      if (al !== bl) return al < bl ? -1 : 1;
+      return 0;
+    });
+  }
 
   return {
     files,
@@ -116,11 +249,15 @@ function compactGraphWithSymbols(
 function compactSymbolsOnly(
   allFiles: string[],
   sgraph: { nodes: Map<string, any>; edges: Array<any> },
+  stable = false,
 ) {
+  const files = [...allFiles];
+  if (stable) files.sort();
   const fileIndex = new Map<string, number>();
-  for (let i = 0; i < allFiles.length; i++) fileIndex.set(allFiles[i]!, i);
+  for (let i = 0; i < files.length; i++) fileIndex.set(files[i]!, i);
 
   const symbolIds = [...sgraph.nodes.keys()];
+  if (stable) symbolIds.sort();
   const symbolIndex = new Map<string, number>();
   for (let i = 0; i < symbolIds.length; i++) symbolIndex.set(symbolIds[i]!, i);
 
@@ -139,13 +276,66 @@ function compactSymbolsOnly(
     to: symbolIndex.get(e.to)!,
     ...(e.label ? { label: e.label } : {}),
   }));
+  if (stable) {
+    symbolEdges.sort((a: any, b: any) => {
+      const byFrom = a.from - b.from;
+      if (byFrom) return byFrom;
+      const byTo = a.to - b.to;
+      if (byTo) return byTo;
+      const al = String(a.label ?? "");
+      const bl = String(b.label ?? "");
+      if (al !== bl) return al < bl ? -1 : 1;
+      return 0;
+    });
+  }
 
   return {
-    files: allFiles,
+    files,
     symbols,
     symbolEdges,
     symbolIdIndex: symbolIds,
   };
+}
+
+function stabilizeGraph(graph: Graph): Graph {
+  const nodes = [...graph.nodes].slice().sort();
+  const edges = [...graph.edges].slice().sort((a, b) => {
+    const af = String(a.from);
+    const bf = String(b.from);
+    if (af !== bf) return af < bf ? -1 : 1;
+    const at =
+      a.to.type === "file" ? `file:${a.to.path}` : `ext:${a.to.name ?? ""}`;
+    const bt =
+      b.to.type === "file" ? `file:${b.to.path}` : `ext:${b.to.name ?? ""}`;
+    if (at !== bt) return at < bt ? -1 : 1;
+    const ar = String(a.raw ?? "");
+    const br = String(b.raw ?? "");
+    if (ar !== br) return ar < br ? -1 : 1;
+    return Number(!!a.typeOnly) - Number(!!b.typeOnly);
+  });
+  return { nodes: new Set(nodes), edges };
+}
+
+function stabilizeSymbolGraph(graph: SymbolGraph): SymbolGraph {
+  const nodeEntries = [...graph.nodes.entries()].slice().sort((a, b) => {
+    const ak = a[0];
+    const bk = b[0];
+    if (ak !== bk) return ak < bk ? -1 : 1;
+    return 0;
+  });
+  const edges = [...graph.edges].slice().sort((a, b) => {
+    const af = String(a.from);
+    const bf = String(b.from);
+    if (af !== bf) return af < bf ? -1 : 1;
+    const at = String(a.to);
+    const bt = String(b.to);
+    if (at !== bt) return at < bt ? -1 : 1;
+    const al = String((a as any).label ?? "");
+    const bl = String((b as any).label ?? "");
+    if (al !== bl) return al < bl ? -1 : 1;
+    return 0;
+  });
+  return { nodes: new Map(nodeEntries), edges };
 }
 
 const SYMBOL_NODE_KINDS: SymbolNodeKind[] = [
@@ -271,40 +461,62 @@ function formatImpactMermaid(report: ImpactReport, root: string): string {
 }
 
 async function main() {
-  const args = process.argv.slice(2);
-  const cmd = args[0] ?? "graph";
+  const rawArgs = process.argv.slice(2);
+  const cmd =
+    rawArgs[0] && !rawArgs[0].startsWith("-") ? rawArgs[0] : "graph";
+  const argTokens =
+    rawArgs[0] && !rawArgs[0].startsWith("-") ? rawArgs.slice(1) : rawArgs;
 
-  // Extract flags and root directory
-  const flags = args.filter((a) => a.startsWith("--"));
-  const nonFlags = args.filter((a) => !a.startsWith("--"));
-  const root = nonFlags[1] ?? process.cwd();
-  const roots = cmd === "graph" || cmd === "index" ? nonFlags.slice(1) : [];
-  const changedSinceIdx = args.indexOf("--changed-since");
-  const changedSince =
-    changedSinceIdx !== -1 && args[changedSinceIdx + 1]
-      ? args[changedSinceIdx + 1]
-      : undefined;
-  const gitBaseIdx = args.indexOf("--git-base");
-  const gitBase =
-    gitBaseIdx !== -1 && args[gitBaseIdx + 1]
-      ? args[gitBaseIdx + 1]
-      : undefined;
-  const gitHeadIdx = args.indexOf("--git-head");
-  const gitHead =
-    gitHeadIdx !== -1 && args[gitHeadIdx + 1]
-      ? args[gitHeadIdx + 1]
-      : undefined;
-  const projectRootAbs = path.isAbsolute(root)
-    ? root
-    : path.resolve(process.cwd(), root);
+  const parsed = parseCliArgs(argTokens);
+  const hasFlag = (name: string) => parsed.flags.has(name);
+  const getOpt = (name: string) => {
+    const v = parsed.options.get(name);
+    return v && v.length > 0 ? v[v.length - 1] : undefined;
+  };
+
+  const changedSince = getOpt("--changed-since");
+  const gitBase = getOpt("--git-base");
+  const gitHead = getOpt("--git-head");
+
+  const rootOpt = getOpt("--root");
+  const resolveAbs = (p: string) =>
+    path.isAbsolute(p) ? p : path.resolve(process.cwd(), p);
+
+  const defaultProjectRoot =
+    (cmd === "graph" || cmd === "index" || cmd === "grep") &&
+    !rootOpt &&
+    parsed.positionals.length === 1 &&
+    fs.existsSync(resolveAbs(parsed.positionals[0]!)) &&
+    fs.statSync(resolveAbs(parsed.positionals[0]!)).isDirectory()
+      ? resolveAbs(parsed.positionals[0]!)
+      : process.cwd();
+
+  const projectRootFs = rootOpt ? resolveAbs(rootOpt) : defaultProjectRoot;
+  const projectRootAbs = projectRootFs.replace(/\\/g, "/");
+
+  const includeRoots =
+    cmd === "graph" || cmd === "index"
+      ? rootOpt
+        ? // If the user explicitly sets --root, treat all remaining positionals as include roots.
+          parsed.positionals
+        : // Otherwise, a single positional arg is treated as the project root (back-compat).
+          parsed.positionals.length > 1
+          ? parsed.positionals
+          : []
+      : [];
+  const includeRootsAbs = includeRoots
+    .map((r) => (path.isAbsolute(r) ? r : path.resolve(projectRootFs, r)))
+    .map((r) => r.replace(/\\/g, "/"));
+
+  const isUnderIncludeRoots = (filePath: string): boolean => {
+    if (includeRootsAbs.length === 0) return true;
+    const f = filePath.replace(/\\/g, "/");
+    return includeRootsAbs.some((root) => f === root || f.startsWith(`${root}/`));
+  };
 
   const resolveFilesFromRoots = async (): Promise<string[]> => {
-    if (roots.length === 0) return await listProjectFiles(projectRootAbs);
-    const normalizedRoots = roots.map((r) =>
-      path.isAbsolute(r)
-        ? r.replace(/\\/g, "/")
-        : path.resolve(process.cwd(), r).replace(/\\/g, "/"),
-    );
+    if (includeRootsAbs.length === 0) return await listProjectFiles(projectRootFs);
+    const normalizedRoots = includeRootsAbs;
     const all: string[][] = await Promise.all(
       normalizedRoots.map(async (r) => await listProjectFiles(r)),
     );
@@ -315,12 +527,14 @@ async function main() {
     if (gitBase) {
       const diffOpts: { base: string; head?: string } = { base: gitBase };
       if (gitHead) diffOpts.head = gitHead;
-      return await listChangedFiles(projectRootAbs, diffOpts);
+      return (await listChangedFiles(projectRootFs, diffOpts)).filter(
+        isUnderIncludeRoots,
+      );
     }
     if (changedSince) {
-      return await listChangedFiles(projectRootAbs, {
+      return (await listChangedFiles(projectRootFs, {
         changedSince,
-      });
+      })).filter(isUnderIncludeRoots);
     }
     return null;
   };
@@ -341,7 +555,7 @@ async function main() {
       if (deletedFiles.length > 0) {
         writeStderrLine(
           `Skipping ${deletedFiles.length} deleted file(s) from git diff: ${deletedFiles
-            .map((file) => path.relative(projectRootAbs, file) || file)
+            .map((file) => path.relative(projectRootFs, file) || file)
             .join(", ")}`,
         );
       }
@@ -356,36 +570,30 @@ async function main() {
   if (cmd === "graph") {
     const files = await resolveFiles();
     const hasExplicitSymbolFlag =
-      flags.includes("--symbols") ||
-      flags.includes("--symbols-only") ||
-      flags.includes("--symbols-detailed");
+      hasFlag("--symbols") ||
+      hasFlag("--symbols-only") ||
+      hasFlag("--symbols-detailed");
     const hasExplicitFormatFlag =
-      flags.includes("--mermaid") ||
-      flags.includes("--dot") ||
-      flags.includes("--json");
-    const outputIdx = args.findIndex((a) => a === "--output" || a === "-o");
-    const outputArg = outputIdx !== -1 ? args[outputIdx + 1] : undefined;
-    const stderrIdx = args.findIndex((a) => a === "--stderr-file");
-    const stderrArg = stderrIdx !== -1 ? args[stderrIdx + 1] : undefined;
-    const stdoutMode = flags.includes("--stdout");
+      hasFlag("--mermaid") || hasFlag("--dot") || hasFlag("--json");
+    const outputArg = getOpt("--output");
+    const stderrArg = getOpt("--stderr-file");
+    const stdoutMode = hasFlag("--stdout");
     const defaultGraphMode = !hasExplicitSymbolFlag && !hasExplicitFormatFlag;
 
     const wantSymbols = hasExplicitSymbolFlag;
-    const detailedSymbols = flags.includes("--symbols-detailed");
-    const threadsFlagIdx = args.findIndex((a) => a === "--threads");
-    const threads =
-      threadsFlagIdx !== -1 ? Number(args[threadsFlagIdx + 1]) : 0;
-    const cacheIdx = args.findIndex((a) => a === "--cache");
-    const cache = cacheIdx !== -1 ? (args[cacheIdx + 1] as any) : undefined;
-    const cacheStrict = flags.includes("--cache-strict");
-    const format = flags.includes("--mermaid")
+    const detailedSymbols = hasFlag("--symbols-detailed");
+    const threads = Number(getOpt("--threads") ?? 0);
+    const cache = getOpt("--cache") as any;
+    const cacheStrict = hasFlag("--cache-strict");
+    const stable = hasFlag("--stable");
+    const format = hasFlag("--mermaid")
       ? "mermaid"
-      : flags.includes("--dot")
+      : hasFlag("--dot")
         ? "dot"
         : "json";
-    const fast = flags.includes("--fast-graph");
-    const resolveNodeModules = flags.includes("--resolve-node-modules");
-    const compact = defaultGraphMode ? true : flags.includes("--compact-json");
+    const fast = hasFlag("--fast-graph");
+    const resolveNodeModules = hasFlag("--resolve-node-modules");
+    const compact = defaultGraphMode ? true : hasFlag("--compact-json");
     const outputFile = outputArg
       ? path.isAbsolute(outputArg)
         ? outputArg.replace(/\\/g, "/")
@@ -409,7 +617,7 @@ async function main() {
       }
     };
     if (wantSymbols) {
-      const index = await buildProjectIndexFromFiles(root, files, {
+      const index = await buildProjectIndexFromFiles(projectRootFs, files, {
         threads,
         cache,
         cacheStrict,
@@ -420,16 +628,11 @@ async function main() {
       });
       let sgraph;
       if (detailedSymbols) {
-        const scopeIdx = args.findIndex(
-          (a) => a === "--symbols-detailed-scope",
-        );
-        const scope = scopeIdx !== -1 ? (args[scopeIdx + 1] as any) : undefined;
-        const maxEdgesIdx = args.findIndex(
-          (a) => a === "--symbols-detailed-max-edges",
-        );
+        const scope = getOpt("--symbols-detailed-scope") as any;
+        const maxEdgesRaw = getOpt("--symbols-detailed-max-edges");
         const maxEdges =
-          maxEdgesIdx !== -1 ? Number(args[maxEdgesIdx + 1]) : undefined;
-        const membersOnly = flags.includes("--symbols-detailed-members-only");
+          maxEdgesRaw !== undefined ? Number(maxEdgesRaw) : undefined;
+        const membersOnly = hasFlag("--symbols-detailed-members-only");
         sgraph = await buildSymbolGraphDetailed(index, {
           scope: scope as any,
           maxEdges:
@@ -439,20 +642,21 @@ async function main() {
       } else {
         sgraph = await buildSymbolGraph(index);
       }
-      if (flags.includes("--symbols-only")) {
+      const sgraphOut = stable ? stabilizeSymbolGraph(sgraph) : sgraph;
+      if (hasFlag("--symbols-only")) {
         if (format === "mermaid") {
-          await writeOut(graphToMermaidSymbols(sgraph, root));
+          await writeOut(graphToMermaidSymbols(sgraphOut, projectRootFs));
         } else if (format === "dot") {
-          await writeOut(graphToDOTSymbols(sgraph, root));
+          await writeOut(graphToDOTSymbols(sgraphOut, projectRootFs));
         } else {
           if (compact) {
             const allFiles = [...index.graph.nodes];
-            await writeOut(toJSON(compactSymbolsOnly(allFiles, sgraph)));
+            await writeOut(toJSON(compactSymbolsOnly(allFiles, sgraphOut, stable)));
           } else {
             await writeOut(
               toJSON({
-                nodes: [...sgraph.nodes.values()],
-                edges: sgraph.edges,
+                nodes: [...sgraphOut.nodes.values()],
+                edges: sgraphOut.edges,
               }),
             );
           }
@@ -461,52 +665,67 @@ async function main() {
       }
       // Reuse the graph already built during indexing to avoid an extra pass
       const fgraph = index.graph;
+      const fgraphOut = stable ? stabilizeGraph(fgraph) : fgraph;
       if (format === "mermaid") {
-        await writeOut(graphToMermaidSymbolsWithFiles(sgraph, fgraph, root));
+        await writeOut(
+          graphToMermaidSymbolsWithFiles(sgraphOut, fgraphOut, projectRootFs),
+        );
       } else if (format === "dot") {
-        await writeOut(graphToDOTSymbolsWithFiles(sgraph, fgraph, root));
+        await writeOut(
+          graphToDOTSymbolsWithFiles(sgraphOut, fgraphOut, projectRootFs),
+        );
       } else {
         if (compact) {
-          await writeOut(toJSON(compactGraphWithSymbols(fgraph, sgraph)));
+          await writeOut(
+            toJSON(compactGraphWithSymbols(fgraphOut, sgraphOut, stable)),
+          );
         } else {
           await writeOut(
             toJSON({
-              files: [...fgraph.nodes],
-              fileEdges: fgraph.edges,
-              symbols: [...sgraph.nodes.values()],
-              symbolEdges: sgraph.edges,
+              files: [...fgraphOut.nodes],
+              fileEdges: fgraphOut.edges,
+              symbols: [...sgraphOut.nodes.values()],
+              symbolEdges: sgraphOut.edges,
             }),
           );
         }
       }
       return;
     }
-    const graph = await collectGraph(root, files, {
+    const graph = await collectGraph(projectRootFs, files, {
       fast,
       threads,
       resolveNodeModules,
     });
-    if (format === "mermaid") await writeOut(graphToMermaid(graph));
-    else if (format === "dot") await writeOut(graphToDOT(graph));
+    const graphOut = stable ? stabilizeGraph(graph) : graph;
+    if (format === "mermaid") await writeOut(graphToMermaid(graphOut));
+    else if (format === "dot") await writeOut(graphToDOT(graphOut));
     else
-      await writeOut(toJSON({ nodes: [...graph.nodes], edges: graph.edges }));
+      await writeOut(
+        toJSON({ nodes: [...graphOut.nodes], edges: graphOut.edges }),
+      );
     return;
   }
 
   if (cmd === "index") {
     const files = await resolveFiles();
-    const threadsFlagIdx = args.findIndex((a) => a === "--threads");
-    const threads =
-      threadsFlagIdx !== -1 ? Number(args[threadsFlagIdx + 1]) : 0;
-    const cacheIdx = args.findIndex((a) => a === "--cache");
-    const cache = cacheIdx !== -1 ? (args[cacheIdx + 1] as any) : undefined;
-    const cacheStrict = flags.includes("--cache-strict");
-    const index = await buildProjectIndexFromFiles(root, files, {
-      threads,
-      cache,
-      cacheStrict,
-    });
-    const full = flags.includes("--json") || flags.includes("--full");
+    const threads = Number(getOpt("--threads") ?? 0);
+    const cache = getOpt("--cache") as any;
+    const cacheStrict = hasFlag("--cache-strict");
+    const full = hasFlag("--json") || hasFlag("--full");
+    const shouldWriteManifest =
+      includeRootsAbs.length === 0 && !gitBase && !changedSince;
+    const index = shouldWriteManifest
+      ? await buildProjectIndex(projectRootFs, {
+          threads,
+          cache,
+          cacheStrict,
+        })
+      : await buildProjectIndexFromFiles(projectRootFs, files, {
+          threads,
+          cache,
+          cacheStrict,
+        });
     if (full) {
       const modules = [...index.byFile.values()].map((m) => ({
         file: m.file,
@@ -533,11 +752,15 @@ async function main() {
   }
 
   if (cmd === "dumpmod") {
-    const [fileArg] = nonFlags.slice(1);
-    const file = path.isAbsolute(fileArg!)
-      ? fileArg!.replace(/\\/g, "/")
-      : path.resolve(root, fileArg!).replace(/\\/g, "/");
-    const index = await buildProjectIndex(root);
+    const [fileArg] = parsed.positionals;
+    if (!fileArg) {
+      writeStderrLine("Usage: dumpmod <file>");
+      process.exit(2);
+    }
+    const file = path.isAbsolute(fileArg)
+      ? fileArg.replace(/\\/g, "/")
+      : path.resolve(projectRootFs, fileArg).replace(/\\/g, "/");
+    const index = await buildProjectIndex(projectRootFs);
     const mod = index.byFile.get(file);
     if (!mod) {
       writeJSONLine({
@@ -573,32 +796,37 @@ async function main() {
   }
 
   if (cmd === "goto") {
-    const [fileArg, lineArg, colArg] = nonFlags.slice(1);
-    const file = path.isAbsolute(fileArg!)
-      ? fileArg!.replace(/\\/g, "/")
-      : path.resolve(root, fileArg!).replace(/\\/g, "/");
-    const line = Number(lineArg!);
-    const column = Number(colArg!);
-    const index = await buildProjectIndex(root);
+    const [fileArg, lineArg, colArg] = parsed.positionals;
+    if (!fileArg || !lineArg || !colArg) {
+      writeStderrLine("Usage: goto <file> <line> <column>");
+      process.exit(2);
+    }
+    const file = path.isAbsolute(fileArg)
+      ? fileArg.replace(/\\/g, "/")
+      : path.resolve(projectRootFs, fileArg).replace(/\\/g, "/");
+    const line = Number(lineArg);
+    const column = Number(colArg);
+    const index = await buildProjectIndex(projectRootFs);
     const res = await goToDefinition(index, { file, line, column });
     writeJSONLine(res);
     return;
   }
 
   if (cmd === "refs") {
-    const refArgs = Object.fromEntries(
-      args.slice(1).reduce<[string, string][]>((acc, cur, i, arr) => {
-        if (cur.startsWith("--")) acc.push([cur.slice(2), arr[i + 1]] as any);
-        return acc;
-      }, []),
-    );
-    const file = path.isAbsolute(refArgs.file!)
-      ? refArgs.file!.replace(/\\/g, "/")
-      : path.resolve(root, refArgs.file!).replace(/\\/g, "/");
-    const line = Number(refArgs.line!);
-    const column = Number(refArgs.col ?? refArgs.column!);
-    const pretty = flags.includes("--pretty");
-    const index = await buildProjectIndex(root);
+    const fileArg = getOpt("--file");
+    const lineArg = getOpt("--line");
+    const colArg = getOpt("--col") ?? getOpt("--column");
+    if (!fileArg || !lineArg || !colArg) {
+      writeStderrLine("Usage: refs --file <file> --line <line> --col <column>");
+      process.exit(2);
+    }
+    const file = path.isAbsolute(fileArg)
+      ? fileArg.replace(/\\/g, "/")
+      : path.resolve(projectRootFs, fileArg).replace(/\\/g, "/");
+    const line = Number(lineArg);
+    const column = Number(colArg);
+    const pretty = hasFlag("--pretty");
+    const index = await buildProjectIndex(projectRootFs);
     const res = await findReferences(index, { file, line, column });
     if (!pretty) {
       writeJSONLine(res);
@@ -606,7 +834,7 @@ async function main() {
     }
     if (res.status === "ok") {
       for (const r of res.references) {
-        const rel = path.relative(root, r.file);
+        const rel = path.relative(projectRootFs, r.file);
         const { line, column } = r.range.start;
         writeStdoutLine(`${rel}:${line}:${column}`);
       }
@@ -617,33 +845,52 @@ async function main() {
   }
 
   if (cmd === "grep") {
-    const qIdx = args.indexOf("--query");
-    if (qIdx === -1 || !args[qIdx + 1]) {
-      writeStderrLine("Usage: grep [root] --query '<treesitter query>'");
+    const querySource = getOpt("--query");
+    const patternSource = getOpt("--pattern") ?? getOpt("--regex");
+    const globs = parsed.options.get("--glob") ?? [];
+    const patterns = globs.length > 0 ? globs : undefined;
+
+    if ((querySource ? 1 : 0) + (patternSource ? 1 : 0) !== 1) {
+      writeStderrLine(
+        "Usage: grep [--root <dir>] (--query '<treesitter query>' | --pattern '<regex>') [--glob '<glob>'] [--ignore-case] [--max-hits N]",
+      );
       process.exit(2);
     }
-    const querySource = args[qIdx + 1];
-    const hits = await astGrep(root, querySource!);
+
+    if (querySource) {
+      const hits = await astGrep(projectRootFs, querySource, patterns);
+      writeJSONLine(hits);
+      return;
+    }
+
+    const ignoreCase = hasFlag("--ignore-case") || hasFlag("-i");
+    const maxHitsRaw = getOpt("--max-hits");
+    const maxHits = maxHitsRaw !== undefined ? Number(maxHitsRaw) : undefined;
+    const hits = await textGrep(
+      projectRootFs,
+      patternSource!,
+      patterns,
+      maxHits !== undefined ? { ignoreCase, maxHits } : { ignoreCase },
+    );
     writeJSONLine(hits);
     return;
   }
 
   if (cmd === "impact") {
-    const providerIdx = args.indexOf("--provider");
-    const provider = providerIdx !== -1 ? args[providerIdx + 1] : "git";
+    const provider = (getOpt("--provider") ?? "git") as string;
 
     let options: any = { provider };
 
     if (provider === "git") {
-      const baseIdx = args.indexOf("--base");
-      const headIdx = args.indexOf("--head");
-      if (baseIdx !== -1 && args[baseIdx + 1]) options.base = args[baseIdx + 1];
-      if (headIdx !== -1 && args[headIdx + 1]) options.head = args[headIdx + 1];
+      const base = getOpt("--base");
+      const head = getOpt("--head");
+      if (base) options.base = base;
+      if (head) options.head = head;
     } else if (provider === "github") {
-      const prIdx = args.indexOf("--pr");
-      const repoIdx = args.indexOf("--repo");
-      if (prIdx !== -1 && args[prIdx + 1]) options.pr = Number(args[prIdx + 1]);
-      if (repoIdx !== -1 && args[repoIdx + 1]) options.repo = args[repoIdx + 1];
+      const pr = getOpt("--pr");
+      const repo = getOpt("--repo");
+      if (pr) options.pr = Number(pr);
+      if (repo) options.repo = repo;
     } else if (provider === "raw") {
       // For raw provider, diff text would come from stdin or file
       // For now, assume stdin
@@ -656,58 +903,45 @@ async function main() {
     }
 
     // Parse other options
-    const threadsIdx = args.indexOf("--threads");
-    const threads =
-      threadsIdx !== -1 && args[threadsIdx + 1]
-        ? Number(args[threadsIdx + 1])
-        : 0;
-    if (threadsIdx !== -1 && args[threadsIdx + 1]) options.threads = threads;
+    const threadsRaw = getOpt("--threads");
+    const threads = threadsRaw ? Number(threadsRaw) : 0;
+    if (threadsRaw) options.threads = threads;
 
-    const cacheIdx = args.indexOf("--cache");
-    const cache =
-      cacheIdx !== -1 && args[cacheIdx + 1]
-        ? (args[cacheIdx + 1] as any)
-        : undefined;
-    if (cacheIdx !== -1 && args[cacheIdx + 1]) options.cache = cache;
+    const cache = getOpt("--cache") as any;
+    if (cache !== undefined) options.cache = cache;
 
-    const cacheStrict = flags.includes("--cache-strict");
+    const cacheStrict = hasFlag("--cache-strict");
     if (cacheStrict) options.cacheStrict = true;
 
-    const maxRefsIdx = args.indexOf("--max-refs");
-    if (maxRefsIdx !== -1 && args[maxRefsIdx + 1])
-      options.maxRefs = Number(args[maxRefsIdx + 1]);
+    const maxRefs = getOpt("--max-refs");
+    if (maxRefs) options.maxRefs = Number(maxRefs);
 
-    const depthIdx = args.indexOf("--depth");
-    if (depthIdx !== -1 && args[depthIdx + 1])
-      options.depth = Number(args[depthIdx + 1]);
+    const depth = getOpt("--depth");
+    if (depth) options.depth = Number(depth);
 
-    const includeTests = flags.includes("--include-tests");
-    const membersOnly = flags.includes("--members-only");
+    const includeTests = hasFlag("--include-tests");
+    const membersOnly = hasFlag("--members-only");
 
-    const scopeIdx = args.indexOf("--scope");
-    if (scopeIdx !== -1 && args[scopeIdx + 1])
-      options.scope = args[scopeIdx + 1];
+    const scope = getOpt("--scope");
+    if (scope) options.scope = scope;
 
-    const refContextIdx = args.indexOf("--ref-context");
-    if (refContextIdx !== -1 && args[refContextIdx + 1])
-      options.refContext = args[refContextIdx + 1] as "line" | "block";
+    const refContext = getOpt("--ref-context");
+    if (refContext) options.refContext = refContext as "line" | "block";
 
-    const refContextLinesIdx = args.indexOf("--ref-context-lines");
-    if (refContextLinesIdx !== -1 && args[refContextLinesIdx + 1])
-      options.refContextLines = Number(args[refContextLinesIdx + 1]);
+    const refContextLines = getOpt("--ref-context-lines");
+    if (refContextLines) options.refContextLines = Number(refContextLines);
 
-    const refBlockMaxLinesIdx = args.indexOf("--ref-block-max-lines");
-    if (refBlockMaxLinesIdx !== -1 && args[refBlockMaxLinesIdx + 1])
-      options.refBlockMaxLines = Number(args[refBlockMaxLinesIdx + 1]);
+    const refBlockMaxLines = getOpt("--ref-block-max-lines");
+    if (refBlockMaxLines) options.refBlockMaxLines = Number(refBlockMaxLines);
 
     options.includeTests = includeTests;
     options.membersOnly = membersOnly;
 
-    const fastGraph = flags.includes("--fast-graph");
-    const resolveNodeModules = flags.includes("--resolve-node-modules");
+    const fastGraph = hasFlag("--fast-graph");
+    const resolveNodeModules = hasFlag("--resolve-node-modules");
 
-    const pretty = flags.includes("--pretty");
-    const mermaid = flags.includes("--mermaid");
+    const pretty = hasFlag("--pretty");
+    const mermaid = hasFlag("--mermaid");
 
     try {
       const indexOpts: any = {
@@ -721,12 +955,12 @@ async function main() {
           resolveNodeModules,
         };
       }
-      const index = await buildProjectIndex(root, indexOpts);
-      const report = await analyzeImpactFromDiff(root, index, options);
+      const index = await buildProjectIndex(projectRootFs, indexOpts);
+      const report = await analyzeImpactFromDiff(projectRootFs, index, options);
       const impactReport = ensureImpactReport(report);
 
       if (mermaid) {
-        writeStdoutLine(formatImpactMermaid(impactReport, root));
+        writeStdoutLine(formatImpactMermaid(impactReport, projectRootFs));
       } else if (pretty) {
         writeStdoutLine(`Impact Analysis Report`);
         writeStdoutLine(`======================`);
@@ -775,21 +1009,16 @@ async function main() {
   }
 
   if (cmd === "review") {
-    const baseIdx = args.indexOf("--base");
-    const headIdx = args.indexOf("--head");
-    const sinceIdx = args.indexOf("--changed-since");
-    const threadsIdx = args.indexOf("--threads");
-    const cacheIdx = args.indexOf("--cache");
-    const maxTestsIdx = args.indexOf("--max-tests");
-    const base = baseIdx !== -1 ? args[baseIdx + 1] : undefined;
-    const head = headIdx !== -1 ? args[headIdx + 1] : undefined;
-    const changedSince = sinceIdx !== -1 ? args[sinceIdx + 1] : undefined;
-    const threads =
-      threadsIdx !== -1 ? Number(args[threadsIdx + 1]) : undefined;
-    const cache = cacheIdx !== -1 ? (args[cacheIdx + 1] as any) : undefined;
+    const base = getOpt("--base");
+    const head = getOpt("--head");
+    const changedSince = getOpt("--changed-since");
+    const threadsRaw = getOpt("--threads");
+    const threads = threadsRaw !== undefined ? Number(threadsRaw) : undefined;
+    const cache = getOpt("--cache") as any;
+    const maxTestsRaw = getOpt("--max-tests");
     const maxTests =
-      maxTestsIdx !== -1 ? Number(args[maxTestsIdx + 1]) : undefined;
-    const fastGraph = flags.includes("--fast-graph");
+      maxTestsRaw !== undefined ? Number(maxTestsRaw) : undefined;
+    const fastGraph = hasFlag("--fast-graph");
 
     const reviewOpts: Parameters<typeof buildReviewReport>[1] = {};
     if (base !== undefined) reviewOpts.gitBase = base;
@@ -799,13 +1028,13 @@ async function main() {
     if (cache !== undefined) reviewOpts.cache = cache;
     if (fastGraph) reviewOpts.graph = { fast: true };
     if (maxTests !== undefined) reviewOpts.maxCandidates = maxTests;
-    const report = await buildReviewReport(projectRootAbs, reviewOpts);
+    const report = await buildReviewReport(projectRootFs, reviewOpts);
     writeJSONLine(report);
     return;
   }
 
   if (cmd === "chunk") {
-    const filePath = nonFlags[1];
+    const filePath = parsed.positionals[0];
     if (!filePath) {
       writeStderrLine("Usage: chunk <file-path> [options]");
       writeStderrLine("Options:");
@@ -827,9 +1056,7 @@ async function main() {
       const ext = path.extname(filePath).toLowerCase();
 
       // Detect language from extension if not specified
-      let languageId = args.find((a, i) => a === "--language" && args[i + 1])
-        ? args[args.findIndex((a) => a === "--language") + 1]
-        : undefined;
+      let languageId = getOpt("--language");
       if (!languageId) {
         const extMap: Record<string, string> = {
           ".js": "javascript",
@@ -850,13 +1077,11 @@ async function main() {
         languageId = extMap[ext] || "text";
       }
 
-      const forceText = flags.includes("--text");
-      const minTokensIdx = args.findIndex((a) => a === "--min-tokens");
-      const maxTokensIdx = args.findIndex((a) => a === "--max-tokens");
-      const minTokens =
-        minTokensIdx !== -1 ? Number(args[minTokensIdx + 1]) : 150;
-      const maxTokens =
-        maxTokensIdx !== -1 ? Number(args[maxTokensIdx + 1]) : 400;
+      const forceText = hasFlag("--text");
+      const minTokensRaw = getOpt("--min-tokens");
+      const maxTokensRaw = getOpt("--max-tokens");
+      const minTokens = minTokensRaw !== undefined ? Number(minTokensRaw) : 150;
+      const maxTokens = maxTokensRaw !== undefined ? Number(maxTokensRaw) : 400;
 
       let chunks;
 

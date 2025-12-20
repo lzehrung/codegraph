@@ -6,11 +6,9 @@ import { createMatchPath } from "tsconfig-paths";
 import Parser from "tree-sitter";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import type { Range } from "./types.js";
 
 const execFileAsync = promisify(execFile);
-
-export type Pos = { line: number; column: number; index: number };
-export type Range = { start: Pos; end: Pos };
 
 export function sliceText(node: any, src: string) {
   if (!node || !src) return "";

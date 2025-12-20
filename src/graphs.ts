@@ -1,4 +1,5 @@
 import path from "node:path";
+import fsp from "node:fs/promises";
 import Parser from "tree-sitter";
 import { prepareParserInput } from "./languages/filePrep.js";
 import type { LanguageSupport } from "./languages.js";
@@ -17,8 +18,6 @@ import { acquireParser, releaseParser } from "./util.js";
 // unrelated queries (which may differ per grammar) and causing warnings.
 import { extractJsTsSpecifiers, extractPythonSpecifiers } from "./util.js";
 import type { ImportBinding, ProjectIndex, SymbolDef } from "./index.js";
-
-// Shared types imported from ./types
 
 export type GraphBuildOptions = {
   fast?: boolean;
@@ -431,6 +430,14 @@ export type AstGrepHit = {
   snippet: string;
 };
 
+export type TextGrepHit = {
+  file: string;
+  line: number;
+  column: number;
+  match: string;
+  snippet: string;
+};
+
 export async function astGrep(
   projectRoot: string,
   querySource: string,
@@ -453,7 +460,7 @@ export async function astGrep(
         for (const cap of m.captures) {
           const p = cap.node.startPosition;
           hits.push({
-            file: path.relative(projectRoot, file),
+            file: path.relative(projectRoot, file).replace(/\\/g, "/"),
             capture: cap.name,
             line: p.row + 1,
             column: p.column + 1,
@@ -467,6 +474,60 @@ export async function astGrep(
         `Warning: Failed to process file ${file} for AST grep:`,
         error,
       );
+    }
+  }
+  return hits;
+}
+
+export async function textGrep(
+  projectRoot: string,
+  patternSource: string,
+  patterns = ["**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte}"],
+  opts?: {
+    ignoreCase?: boolean;
+    maxHits?: number;
+  },
+): Promise<TextGrepHit[]> {
+  const maxHits = Math.max(1, Math.min(opts?.maxHits ?? 5000, 200_000));
+  const flags = `g${opts?.ignoreCase ? "i" : ""}`;
+
+  let re: RegExp;
+  try {
+    re = new RegExp(patternSource, flags);
+  } catch (e) {
+    throw new Error(
+      `Invalid regex for textGrep: ${patternSource} (${(e as any)?.message ?? String(e)})`,
+    );
+  }
+
+  const hits: TextGrepHit[] = [];
+  const files = await listProjectFiles(projectRoot, patterns);
+  for (const file of files) {
+    if (hits.length >= maxHits) break;
+    let src: string;
+    try {
+      src = await fsp.readFile(file, "utf8");
+    } catch {
+      continue;
+    }
+    const rel = path.relative(projectRoot, file).replace(/\\/g, "/");
+    const lines = src.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      if (hits.length >= maxHits) break;
+      const lineText = lines[i]!;
+      re.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(lineText)) !== null) {
+        hits.push({
+          file: rel,
+          line: i + 1,
+          column: (m.index ?? 0) + 1,
+          match: m[0] ?? "",
+          snippet: lineText.trim().slice(0, 240),
+        });
+        if (hits.length >= maxHits) break;
+        if (m.index === re.lastIndex) re.lastIndex++;
+      }
     }
   }
   return hits;

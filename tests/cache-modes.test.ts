@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import crypto from 'node:crypto';
 import { buildProjectIndex } from '../src/index.js';
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -9,38 +11,62 @@ async function mkTmpDir(prefix: string): Promise<string> {
 }
 
 describe('Incremental cache modes', () => {
+  const normalize = (p: string) => p.replace(/\\/g, '/');
+  const cacheFilePathFor = (projectRoot: string, fileAbs: string): string => {
+    const hash = crypto
+      .createHash('sha1')
+      .update(normalize(fileAbs))
+      .digest('hex');
+    return path.join(projectRoot, '.codegraph-cache', 'index-v1', `${hash}.json`);
+  };
+
   it('memory cache avoids recomputation on second run', async () => {
     const root = await mkTmpDir('dg-cache-mem-');
     const util = `export function a(){return 1}`;
-    await fsp.writeFile(path.join(root, 'util.ts'), util, 'utf8');
+    const utilPath = path.join(root, 'util.ts');
+    await fsp.writeFile(utilPath, util, 'utf8');
 
-    const t0 = Date.now();
     const first = await buildProjectIndex(root, { threads: 4, cache: 'memory' });
-    const t1 = Date.now();
     const second = await buildProjectIndex(root, { threads: 4, cache: 'memory' });
-    const t2 = Date.now();
 
     expect(first.byFile.size).toBeGreaterThan(0);
     expect(second.byFile.size).toBe(first.byFile.size);
-    // Second run should be faster or equal (very noisy, so just assert not much slower)
-    expect(t2 - t1).toBeLessThanOrEqual(t1 - t0 + 50);
+
+    const fileId = normalize(path.resolve(utilPath));
+    const firstMod = first.byFile.get(fileId);
+    const secondMod = second.byFile.get(fileId);
+    expect(firstMod).toBeDefined();
+    expect(secondMod).toBeDefined();
+    // Memory cache should reuse the same ModuleIndex object instance.
+    expect(secondMod).toBe(firstMod);
+
+    // Memory cache should not create per-file module cache files on disk.
+    const cacheFile = cacheFilePathFor(root, fileId);
+    expect(fs.existsSync(cacheFile)).toBe(false);
   });
 
   it('disk cache persists across runs in the same directory', async () => {
     const root = await mkTmpDir('dg-cache-disk-');
     const util = `export function a(){return 1}`;
-    await fsp.writeFile(path.join(root, 'util.ts'), util, 'utf8');
+    const utilPath = path.join(root, 'util.ts');
+    await fsp.writeFile(utilPath, util, 'utf8');
 
-    const t0 = Date.now();
     const first = await buildProjectIndex(root, { threads: 2, cache: 'disk' });
-    const t1 = Date.now();
-    // Build again; should hit disk cache
-    const second = await buildProjectIndex(root, { threads: 2, cache: 'disk' });
-    const t2 = Date.now();
-
+    const fileId = normalize(path.resolve(utilPath));
+    const cacheFile = cacheFilePathFor(root, fileId);
     expect(first.byFile.size).toBeGreaterThan(0);
+    expect(fs.existsSync(cacheFile)).toBe(true);
+
+    const raw = await fsp.readFile(cacheFile, 'utf8');
+    const parsed = JSON.parse(raw) as { sig: string; mod: { file: string } };
+    expect(typeof parsed.sig).toBe('string');
+    expect(typeof parsed.mod?.file).toBe('string');
+
+    // Build again; should hit disk cache file
+    const second = await buildProjectIndex(root, { threads: 2, cache: 'disk' });
     expect(second.byFile.size).toBe(first.byFile.size);
-    expect(t2 - t1).toBeLessThanOrEqual(t1 - t0 + 50);
+    expect(fs.existsSync(cacheFile)).toBe(true);
+    expect(second.byFile.get(fileId)?.file).toBe(fileId);
   });
 });
 

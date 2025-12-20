@@ -2,7 +2,13 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
-const tsxCommand = process.platform === "win32" ? "npx.cmd" : "npx";
+const tsxCliPath = path.resolve(
+  process.cwd(),
+  "node_modules",
+  "tsx",
+  "dist",
+  "cli.mjs",
+);
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples", "typescript");
 const impactDiff = `diff --git a/utils.ts b/utils.ts
 index 1234567..abcdef0 100644
@@ -24,10 +30,9 @@ index 1234567..abcdef0 100644
 
 function runImpactCli(args: string[]) {
   return new Promise<string>((resolve, reject) => {
-    const child = spawn(tsxCommand, ["tsx", "src/cli.ts", ...args], {
+    const child = spawn(process.execPath, [tsxCliPath, "src/cli.ts", ...args], {
       cwd: process.cwd(),
       stdio: ["pipe", "pipe", "pipe"],
-      shell: true,
     });
     let stdout = "";
     let stderr = "";

@@ -230,15 +230,15 @@ npx codegraph graph --mermaid > graph.mmd
 npx codegraph graph --mermaid --fast-graph > graph.fast.mmd
 
 # File + symbols graph (imports/exports)
-npx codegraph graph ./src --mermaid --symbols > graph.symbols.mmd
+npx codegraph graph --root . ./src --mermaid --symbols > graph.symbols.mmd
 # Symbols only (no file nodes/edges)
-npx codegraph graph ./src --mermaid --symbols-only > graph.symbols.only.mmd
+npx codegraph graph --root . ./src --mermaid --symbols-only > graph.symbols.only.mmd
 # Detailed symbol usage graph (adds symbol -> symbol "uses" edges)
-npx codegraph graph ./src --mermaid --symbols-detailed > graph.symbols.detailed.mmd
+npx codegraph graph --root . ./src --mermaid --symbols-detailed > graph.symbols.detailed.mmd
 # Detailed + files hybrid
-npx codegraph graph ./src --mermaid --symbols --symbols-detailed > graph.symbols.hybrid.detailed.mmd
+npx codegraph graph --root . ./src --mermaid --symbols --symbols-detailed > graph.symbols.hybrid.detailed.mmd
 # Pruned detailed graph for very large repos
-npx codegraph graph ./src --mermaid --symbols-detailed \
+npx codegraph graph --root . ./src --mermaid --symbols-detailed \
   --symbols-detailed-scope imported \
   --symbols-detailed-max-edges 5000 \
   --symbols-detailed-members-only > graph.symbols.pruned.mmd
@@ -278,6 +278,8 @@ npx codegraph refs --file <file> --line <line> --col <column> --pretty
 
 # Run a Tree-sitter query across the repo
 npx codegraph grep --query '(function_declaration name: (identifier) @name)'
+# Run a plain text regex grep across the repo
+npx codegraph grep --pattern 'eval\\(' --ignore-case
 
 # Analyze PR impact: map diffs to symbols and find affected code
 npx codegraph impact --base <commit-sha> --head <commit-sha>
@@ -387,7 +389,7 @@ npx tsx src/cli.ts goto <file> <line> <column>
   - Use `--compact-json` to replace repeated file and symbol IDs with numeric indices.
   - Example:
     ```bash
-    npx codegraph graph ./src --symbols-detailed --compact-json > graph.json
+    npx codegraph graph --root . ./src --symbols-detailed --compact-json > graph.json
     ```
   - Shape (simplified):
     ```json
@@ -407,7 +409,7 @@ npx tsx src/cli.ts goto <file> <line> <column>
 - Quick start (large monorepos):
   - Graph only: `codegraph graph --fast-graph --threads 8 --mermaid > graph.mmd`
   - Full index: `codegraph index --threads 8 --cache disk`
-  - Detailed symbols (pruned): `codegraph graph ./src --symbols-detailed --symbols-detailed-scope imported --symbols-detailed-members-only --symbols-detailed-max-edges 5000 --mermaid > graph.symbols.pruned.mmd`
+  - Detailed symbols (pruned): `codegraph graph --root . ./src --symbols-detailed --symbols-detailed-scope imported --symbols-detailed-members-only --symbols-detailed-max-edges 5000 --mermaid > graph.symbols.pruned.mmd`
 
 - Fast graph:
   - Regex-based specifier extraction for JS/TS only. Accurate for common patterns (`import`, `export ... from`, `require()`, `import()`), ignores commented imports.
@@ -730,7 +732,7 @@ console.log(`Medium-priority tests to check: ${mediumPriorityTests.length}`);
 
 #### 4. **Security-Focused Review**
 ```ts
-import { astGrep } from 'codegraph';
+import { textGrep } from 'codegraph';
 
 // Scan changed files for security patterns
 const securityPatterns = [
@@ -745,16 +747,16 @@ const securityFindings: Array<{file: string, pattern: string, line: number}> = [
 for (const changedFile of impact.changedFiles) {
   for (const pattern of securityPatterns) {
     try {
-      const matches = await astGrep(root, pattern, changedFile.file);
+      const matches = await textGrep(root, pattern, [changedFile.file], { maxHits: 200 });
       for (const match of matches) {
         securityFindings.push({
-          file: changedFile.file,
+          file: match.file,
           pattern,
-          line: match.range.start.line
+          line: match.line
         });
       }
     } catch (e) {
-      // Pattern might not be valid Tree-sitter query, skip
+      // Pattern might not be a valid regex, skip
     }
   }
 }
@@ -802,8 +804,8 @@ const queryPatterns = [
 ];
 
 for (const pattern of queryPatterns) {
-  const queryMatches = await astGrep(root, pattern, '*');
-  if (queryMatches.length > 0) {
+  const matches = await textGrep(root, pattern, undefined, { maxHits: 1, ignoreCase: true });
+  if (matches.length > 0) {
     console.log(`Database queries modified - review performance impact`);
     break;
   }
