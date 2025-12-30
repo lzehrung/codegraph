@@ -2,7 +2,7 @@ import path from "node:path";
 import fsp from "node:fs/promises";
 import Parser from "tree-sitter";
 import { prepareParserInput } from "./languages/filePrep.js";
-import type { LanguageSupport } from "./languages.js";
+import { type LanguageSupport, getCompiledQueries } from "./languages.js";
 import type { FileId, EdgeTo, Edge, Graph } from "./types.js";
 import {
   listProjectFiles,
@@ -17,7 +17,12 @@ import { acquireParser, releaseParser } from "./util.js";
 // Intentionally compile only the imports query locally to avoid compiling
 // unrelated queries (which may differ per grammar) and causing warnings.
 import { extractJsTsSpecifiers, extractPythonSpecifiers } from "./util.js";
-import type { ImportBinding, ProjectIndex, SymbolDef } from "./index.js";
+import {
+  type ImportBinding,
+  type ProjectIndex,
+  type SymbolDef,
+  SymbolKind,
+} from "./index.js";
 
 export type GraphBuildOptions = {
   fast?: boolean;
@@ -44,7 +49,7 @@ export function collectModuleSpecifiersFromSource(
       try {
         parser.setLanguage(lang);
         const tree = opts?.tree ?? parser.parse(source);
-        const q = new Parser.Query(lang, support.queries.imports);
+        const { imports: q } = getCompiledQueries(lang, support);
         for (const m of q.matches(tree.rootNode)) {
           const caps = Object.fromEntries(
             m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const),
@@ -533,6 +538,214 @@ export async function textGrep(
   return hits;
 }
 
+// --------------------------- Dependency query helpers ---------------------------
+
+export type DependencyNode = { file: FileId; depth: number };
+
+export function getDependencies(
+  graph: Graph,
+  startFile: FileId,
+  opts: { depth?: number } = {},
+): DependencyNode[] {
+  const maxDepth = opts.depth ?? Number.POSITIVE_INFINITY;
+  const out: DependencyNode[] = [];
+  const visited = new Set<string>();
+  const queue: Array<{ f: string; d: number }> = [{ f: startFile, d: 0 }];
+  visited.add(startFile);
+
+  let qi = 0;
+  while (qi < queue.length) {
+    const { f, d } = queue[qi++]!;
+    if (d > 0) out.push({ file: f, depth: d });
+    if (d >= maxDepth) continue;
+
+    for (const edge of graph.edges) {
+      if (edge.from === f && edge.to.type === "file") {
+        if (!visited.has(edge.to.path)) {
+          visited.add(edge.to.path);
+          queue.push({ f: edge.to.path, d: d + 1 });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+export function getReverseDependencies(
+  graph: Graph,
+  targetFile: FileId,
+  opts: { depth?: number } = {},
+): DependencyNode[] {
+  const maxDepth = opts.depth ?? Number.POSITIVE_INFINITY;
+  const out: DependencyNode[] = [];
+  const visited = new Set<string>();
+  const queue: Array<{ f: string; d: number }> = [{ f: targetFile, d: 0 }];
+  visited.add(targetFile);
+
+  let qi = 0;
+  while (qi < queue.length) {
+    const { f, d } = queue[qi++]!;
+    if (d > 0) out.push({ file: f, depth: d });
+    if (d >= maxDepth) continue;
+
+    for (const edge of graph.edges) {
+      if (edge.to.type === "file" && edge.to.path === f) {
+        if (!visited.has(edge.from)) {
+          visited.add(edge.from);
+          queue.push({ f: edge.from, d: d + 1 });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+export function getShortestPath(
+  graph: Graph,
+  from: FileId,
+  to: FileId,
+): FileId[] | null {
+  const visited = new Map<string, string | null>();
+  const queue: string[] = [from];
+  visited.set(from, null);
+
+  let qi = 0;
+  while (qi < queue.length) {
+    const curr = queue[qi++]!;
+    if (curr === to) {
+      const path: string[] = [];
+      let p: string | null = curr;
+      while (p !== null) {
+        path.push(p);
+        p = visited.get(p)!;
+      }
+      return path.reverse();
+    }
+
+    for (const edge of graph.edges) {
+      if (edge.from === curr && edge.to.type === "file") {
+        if (!visited.has(edge.to.path)) {
+          visited.set(edge.to.path, curr);
+          queue.push(edge.to.path);
+        }
+      }
+    }
+  }
+  return null;
+}
+
+export function findCycles(graph: Graph): FileId[][] {
+  const nodes = Array.from(graph.nodes);
+  const indexMap = new Map<string, number>();
+  nodes.forEach((n, i) => indexMap.set(n, i));
+
+  const adj = nodes.map(() => [] as number[]);
+  for (const e of graph.edges) {
+    if (e.to.type === "file") {
+      const u = indexMap.get(e.from);
+      const v = indexMap.get(e.to.path);
+      if (u !== undefined && v !== undefined) adj[u]!.push(v);
+    }
+  }
+
+  const n = nodes.length;
+  const indices = new Array(n).fill(-1);
+  const lowlink = new Array(n).fill(-1);
+  const onStack = new Array(n).fill(false);
+  const stack: number[] = [];
+  let index = 0;
+  const sccs: number[][] = [];
+
+  function strongconnect(v: number) {
+    indices[v] = index;
+    lowlink[v] = index;
+    index++;
+    stack.push(v);
+    onStack[v] = true;
+
+    for (const w of adj[v]!) {
+      if (indices[w] === -1) {
+        strongconnect(w);
+        lowlink[v] = Math.min(lowlink[v], lowlink[w]);
+      } else if (onStack[w]) {
+        lowlink[v] = Math.min(lowlink[v], indices[w]);
+      }
+    }
+
+    if (lowlink[v] === indices[v]) {
+      const scc: number[] = [];
+      let w: number;
+      do {
+        w = stack.pop()!;
+        onStack[w] = false;
+        scc.push(w);
+      } while (w !== v);
+      if (scc.length > 1 || adj[v]!.includes(v)) {
+        sccs.push(scc);
+      }
+    }
+  }
+
+  for (let i = 0; i < n; i++) {
+    if (indices[i] === -1) strongconnect(i);
+  }
+
+  return sccs.map((scc) => scc.map((idx) => nodes[idx]!));
+}
+
+export function getUnresolvedImports(graph: Graph): Array<{
+  name: string;
+  importers: Array<{ file: FileId; raw: string }>;
+}> {
+  const unresolved = new Map<string, Array<{ file: FileId; raw: string }>>();
+  for (const edge of graph.edges) {
+    if (edge.to.type === "external") {
+      const name = edge.to.name;
+      const list = unresolved.get(name) || [];
+      list.push({ file: edge.from, raw: edge.raw });
+      unresolved.set(name, list);
+    }
+  }
+  return Array.from(unresolved.entries())
+    .map(([name, importers]) => ({ name, importers }))
+    .sort((a, b) => b.importers.length - a.importers.length);
+}
+
+export function getHotspots(graph: Graph): Array<{
+  file: FileId;
+  fanIn: number;
+  fanOut: number;
+  score: number;
+}> {
+  const fanIn = new Map<string, number>();
+  const fanOut = new Map<string, number>();
+
+  for (const node of graph.nodes) {
+    fanIn.set(node, 0);
+    fanOut.set(node, 0);
+  }
+
+  for (const edge of graph.edges) {
+    fanOut.set(edge.from, (fanOut.get(edge.from) || 0) + 1);
+    if (edge.to.type === "file") {
+      fanIn.set(edge.to.path, (fanIn.get(edge.to.path) || 0) + 1);
+    }
+  }
+
+  return Array.from(graph.nodes)
+    .map((file) => {
+      const fi = fanIn.get(file) || 0;
+      const fo = fanOut.get(file) || 0;
+      return {
+        file,
+        fanIn: fi,
+        fanOut: fo,
+        score: fi * 2 + fo, // Heuristic: fan-in is more important
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+}
+
 // --------------------------- Symbol graph utilities ---------------------------
 
 export type SymbolNodeKind =
@@ -758,6 +971,24 @@ export async function buildSymbolGraphDetailed(
     for (const e of mod.exports)
       if (e.type === "local" && e.exportedAs === exportedName) {
         const res = e.target;
+        cache.set(key, res);
+        return res;
+      }
+    // Namespace re-export
+    for (const e of mod.exports)
+      if (e.type === "namespaceReexport" && e.exportedAs === exportedName) {
+        // This is tricky: we return a placeholder def for the module itself?
+        // Or we should let the caller handle it.
+        // For now, let's return a dummy def pointing to the module start.
+        const res: SymbolDef = {
+          file: e.fromModule.replace(/\\/g, "/"),
+          localName: exportedName,
+          kind: SymbolKind.Variable,
+          range: {
+            start: { line: 1, column: 1, index: 0 },
+            end: { line: 1, column: 1, index: 0 },
+          },
+        };
         cache.set(key, res);
         return res;
       }
@@ -1006,13 +1237,14 @@ export async function buildSymbolGraphDetailed(
           const m = index.byFile.get(file.replace(/\\/g, "/"));
           const nsReexport = m?.exports.find(
             (e) =>
-              e.type === "reexport" &&
-              e.exportedAs === seg &&
-              e.sourceSpecifier === "",
+              (e.type === "namespaceReexport" ||
+                (e.type === "reexport" && e.sourceSpecifier === "")) &&
+              e.exportedAs === seg,
           );
           if (
             nsReexport &&
-            nsReexport.type === "reexport" &&
+            (nsReexport.type === "reexport" ||
+              nsReexport.type === "namespaceReexport") &&
             typeof nsReexport.fromModule === "string"
           ) {
             file = nsReexport.fromModule.replace(/\\/g, "/");

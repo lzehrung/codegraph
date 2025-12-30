@@ -113,6 +113,7 @@ export async function buildReviewReport(
       modules: new Map(),
       byFile: new Map(),
       exportCache: new Map(),
+      scopeCache: new Map(),
       parsed: new Map(),
     };
   } else {

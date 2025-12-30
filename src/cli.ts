@@ -22,6 +22,13 @@ import {
   graphToMermaidSymbolsWithFiles,
   graphToDOTSymbolsWithFiles,
   analyzeImpactFromDiff,
+  getDependencies,
+  getReverseDependencies,
+  getShortestPath,
+  findCycles,
+  getUnresolvedImports,
+  getHotspots,
+  getApiSurface,
   chunkFile,
   chunkTextFile,
   chunkSFCFile,
@@ -1030,6 +1037,174 @@ async function main() {
     if (maxTests !== undefined) reviewOpts.maxCandidates = maxTests;
     const report = await buildReviewReport(projectRootFs, reviewOpts);
     writeJSONLine(report);
+    return;
+  }
+
+  if (cmd === "deps" || cmd === "rdeps") {
+    const [fileArg] = parsed.positionals;
+    if (!fileArg) {
+      writeStderrLine(`Usage: ${cmd} <file> [--depth N] [--json]`);
+      process.exit(2);
+    }
+    const file = path.isAbsolute(fileArg)
+      ? fileArg.replace(/\\/g, "/")
+      : path.resolve(projectRootFs, fileArg).replace(/\\/g, "/");
+    const depthRaw = getOpt("--depth");
+    const depth = depthRaw !== undefined ? Number(depthRaw) : undefined;
+    const json = hasFlag("--json");
+
+    const graph = await collectGraph(
+      projectRootFs,
+      await listProjectFiles(projectRootFs),
+    );
+    const results =
+      cmd === "deps"
+        ? getDependencies(graph, file, depth !== undefined ? { depth } : {})
+        : getReverseDependencies(graph, file, depth !== undefined ? { depth } : {});
+
+    if (json) {
+      writeJSONLine(results);
+    } else {
+      writeStdoutLine(
+        `${cmd === "deps" ? "Dependencies" : "Reverse dependencies"} for ${fileArg}:`,
+      );
+      for (const res of results) {
+        const rel = path.relative(projectRootFs, res.file);
+        writeStdoutLine(`${"  ".repeat(res.depth)} ${rel} (depth ${res.depth})`);
+      }
+    }
+    return;
+  }
+
+  if (cmd === "path") {
+    const [fromArg, toArg] = parsed.positionals;
+    if (!fromArg || !toArg) {
+      writeStderrLine("Usage: path <from-file> <to-file> [--json]");
+      process.exit(2);
+    }
+    const from = path.isAbsolute(fromArg)
+      ? fromArg.replace(/\\/g, "/")
+      : path.resolve(projectRootFs, fromArg).replace(/\\/g, "/");
+    const to = path.isAbsolute(toArg)
+      ? toArg.replace(/\\/g, "/")
+      : path.resolve(projectRootFs, toArg).replace(/\\/g, "/");
+    const json = hasFlag("--json");
+
+    const graph = await collectGraph(
+      projectRootFs,
+      await listProjectFiles(projectRootFs),
+    );
+    const pathResult = getShortestPath(graph, from, to);
+
+    if (json) {
+      writeJSONLine(pathResult);
+    } else if (pathResult) {
+      writeStdoutLine(`Path from ${fromArg} to ${toArg}:`);
+      writeStdoutLine(
+        pathResult.map((p) => path.relative(projectRootFs, p)).join(" -> "),
+      );
+    } else {
+      writeStdoutLine(`No path found from ${fromArg} to ${toArg}`);
+    }
+    return;
+  }
+
+  if (cmd === "cycles") {
+    const json = hasFlag("--json");
+    const graph = await collectGraph(
+      projectRootFs,
+      await listProjectFiles(projectRootFs),
+    );
+    const cycles = findCycles(graph);
+
+    if (json) {
+      writeJSONLine(cycles);
+    } else {
+      if (cycles.length === 0) {
+        writeStdoutLine("No dependency cycles found.");
+      } else {
+        writeStdoutLine(`Found ${cycles.length} dependency cycles:`);
+        for (let i = 0; i < cycles.length; i++) {
+          const cycle = cycles[i]!;
+          writeStdoutLine(`Cycle ${i + 1}:`);
+          writeStdoutLine(
+            `  ${cycle.map((p) => path.relative(projectRootFs, p)).join(" -> ")} -> ...`,
+          );
+        }
+      }
+    }
+    return;
+  }
+
+  if (cmd === "unresolved") {
+    const json = hasFlag("--json");
+    const graph = await collectGraph(
+      projectRootFs,
+      await listProjectFiles(projectRootFs),
+    );
+    const unresolved = getUnresolvedImports(graph);
+
+    if (json) {
+      writeJSONLine(unresolved);
+    } else {
+      if (unresolved.length === 0) {
+        writeStdoutLine("No unresolved external imports found.");
+      } else {
+        writeStdoutLine(`Found ${unresolved.length} unresolved external imports:`);
+        for (const item of unresolved) {
+          writeStdoutLine(
+            `- ${item.name} (imported by ${item.importers.length} files)`,
+          );
+          if (hasFlag("--verbose")) {
+            for (const imp of item.importers) {
+              writeStdoutLine(
+                `    ${path.relative(projectRootFs, imp.file)} (as "${imp.raw}")`,
+              );
+            }
+          }
+        }
+      }
+    }
+    return;
+  }
+
+  if (cmd === "hotspots") {
+    const json = hasFlag("--json");
+    const graph = await collectGraph(
+      projectRootFs,
+      await listProjectFiles(projectRootFs),
+    );
+    const hotspots = getHotspots(graph);
+
+    if (json) {
+      writeJSONLine(hotspots);
+    } else {
+      writeStdoutLine("Top hotspots (files with high fan-in/out):");
+      for (const item of hotspots.slice(0, 20)) {
+        writeStdoutLine(
+          `- ${path.relative(projectRootFs, item.file)} (fan-in: ${item.fanIn}, fan-out: ${item.fanOut}, score: ${item.score.toFixed(1)})`,
+        );
+      }
+    }
+    return;
+  }
+
+  if (cmd === "apisurface") {
+    const json = hasFlag("--json");
+    const index = await buildProjectIndex(projectRootFs);
+    const apiSurface = getApiSurface(index);
+
+    if (json) {
+      writeJSONLine(apiSurface);
+    } else {
+      writeStdoutLine(`API Surface for ${projectRootAbs}:`);
+      for (const item of apiSurface) {
+        writeStdoutLine(`  ${path.relative(projectRootFs, item.file)}:`);
+        for (const exp of item.exports) {
+          writeStdoutLine(`    - ${exp.exportedAs} (${exp.kind})`);
+        }
+      }
+    }
     return;
   }
 
