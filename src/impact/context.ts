@@ -96,8 +96,9 @@ async function collectFileSubgraph(
   }
 
   // BFS to collect N-hop subgraph
-  while (queue.length > 0) {
-    const { file, depth } = queue.shift()!;
+  let qi = 0;
+  while (qi < queue.length) {
+    const { file, depth } = queue[qi++]!;
     if (depth >= hops) continue;
 
     // Add forward dependencies (files this file depends on)

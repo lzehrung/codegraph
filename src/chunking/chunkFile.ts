@@ -79,6 +79,11 @@ export function chunkFile(opts: ChunkFileOptions): Chunk[] {
   const root = tree.rootNode;
   const matches: QueryMatch[] = language.query.matches(root);
 
+  const newlineOffsets: number[] = [];
+  for (let i = 0; i < source.length; i++) {
+    if (source[i] === "\n") newlineOffsets.push(i);
+  }
+
   const mainBlocks: BlockCandidate[] = [];
   const innerBlocks: BlockCandidate[] = [];
   const comments: BlockCandidate[] = [];
@@ -208,6 +213,7 @@ export function chunkFile(opts: ChunkFileOptions): Chunk[] {
         makeChunkId,
         preliminaryChunks,
         language.id,
+        newlineOffsets,
         filePath,
       );
     }
@@ -315,6 +321,7 @@ function splitLargeBlockUsingInnerBlocks(
   makeChunkId: () => string,
   out: Chunk[],
   languageId: string,
+  newlineOffsets: number[],
   filePath?: string,
 ): void {
   const boundaries = new Set<number>();
@@ -360,8 +367,11 @@ function splitLargeBlockUsingInnerBlocks(
   const pushChunk = () => {
     const chunkText = source.slice(currentStart, currentEnd);
     const tokenCount = tokenizer(chunkText);
-    const [startRowZero] = locateLineAndColFromByte(source, currentStart);
-    const [endRowZero] = locateLineAndColFromByte(source, currentEnd);
+    const [startRowZero] = locateLineAndColFromByte(
+      newlineOffsets,
+      currentStart,
+    );
+    const [endRowZero] = locateLineAndColFromByte(newlineOffsets, currentEnd);
 
     out.push({
       id: makeChunkId(),
@@ -398,20 +408,19 @@ function splitLargeBlockUsingInnerBlocks(
 }
 
 function locateLineAndColFromByte(
-  source: string,
+  newlineOffsets: number[],
   byteOffset: number,
 ): [number, number] {
-  let line = 0;
-  let col = 0;
-  for (let i = 0; i < source.length && i < byteOffset; i++) {
-    const ch = source[i]!;
-    if (ch === "\n") {
-      line++;
-      col = 0;
-    } else {
-      col++;
-    }
+  let low = 0;
+  let high = newlineOffsets.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (newlineOffsets[mid]! < byteOffset) low = mid + 1;
+    else high = mid;
   }
+  const line = low;
+  const prevNewline = low > 0 ? newlineOffsets[low - 1]! : -1;
+  const col = byteOffset - prevNewline - 1;
   return [line, col];
 }
 

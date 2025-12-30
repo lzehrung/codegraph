@@ -15,7 +15,28 @@ export {
   getGitHead,
   listChangedFiles,
 } from "./util.js";
-export * from "./graphs.js";
+export {
+  collectGraph,
+  graphToDOT,
+  graphToMermaid,
+  astGrep,
+  textGrep,
+  buildSymbolGraph,
+  buildSymbolGraphDetailed,
+  graphToMermaidSymbols,
+  graphToDOTSymbols,
+  graphToMermaidSymbolsWithFiles,
+  graphToDOTSymbolsWithFiles,
+  getDependencies,
+  getReverseDependencies,
+  getShortestPath,
+  findCycles,
+  getUnresolvedImports,
+  getHotspots,
+  type DependencyNode,
+  type SymbolGraph,
+  type SymbolNodeKind,
+} from "./graphs.js";
 export type { Pos, Range, FileId, EdgeTo, Edge, Graph } from "./types.js";
 export {
   SymbolKind,
@@ -45,6 +66,8 @@ export {
   findReferencesById,
   type SymbolListItem,
   listSymbols,
+  getApiSurface,
+  type ApiSurface,
 } from "./indexer.js";
 export {
   analyzeImpactFromDiff,
