@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { ProjectIndex } from "../indexer.js";
 import type {
   ImpactReport,
@@ -22,11 +23,10 @@ export async function analyzeImpactFromDiff(
   // Map all changed files to changed symbols
   let changedSymbols: any[] = [];
   for (const fileChange of diff.files) {
-    const symbols = locateChangedSymbols(
-      index,
-      fileChange.path,
-      fileChange.hunks,
-    );
+    const absPath = path.isAbsolute(fileChange.path)
+      ? fileChange.path.replace(/\\/g, "/")
+      : path.resolve(projectRoot, fileChange.path).replace(/\\/g, "/");
+    const symbols = locateChangedSymbols(index, absPath, fileChange.hunks);
     changedSymbols.push(...symbols);
   }
 

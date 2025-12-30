@@ -28,6 +28,15 @@ export async function analyzeImpact(
   const impacted = new Map<FileId, ImpactItem>();
   const processedSymbols = new Set<string>();
 
+  // Precompute fan-in once per impact run
+  const fanInByFile = new Map<FileId, number>();
+  for (const edge of index.graph.edges) {
+    if (edge.to.type === "file") {
+      const count = fanInByFile.get(edge.to.path) || 0;
+      fanInByFile.set(edge.to.path, count + 1);
+    }
+  }
+
   // Direct impact analysis with parallelization
   const concurrency = 8;
   const tasks = [];
@@ -83,6 +92,7 @@ export async function analyzeImpact(
             reasons,
             0,
             index,
+            fanInByFile,
           );
           const symbols = existing?.symbols || [];
           if (!symbols.includes(changedSymbol.name)) {
@@ -211,8 +221,9 @@ async function analyzeTransitiveImpact(
     queue.push({ file, depth: 0, reason: "transitive" });
   }
 
-  while (queue.length > 0) {
-    const { file, depth, reason } = queue.shift()!;
+  let qi = 0;
+  while (qi < queue.length) {
+    const { file, depth, reason } = queue[qi++]!;
     if (depth >= maxDepth) continue;
 
     // Find files that depend on this file using reverse index
@@ -276,6 +287,7 @@ export function calculateSeverity(
   reasons: ImpactReason[],
   depth: number,
   index: ProjectIndex,
+  fanInByFile?: Map<FileId, number>,
 ): { severity: number; explain: any } {
   let score = 1.0;
   const explain: any = {};
@@ -303,9 +315,11 @@ export function calculateSeverity(
   }
 
   // Calculate fan-in (how many files depend on the impacted file)
-  const fanIn = [...index.graph.edges].filter(
-    (e) => e.to.type === "file" && e.to.path === ref.file,
-  ).length;
+  const fanIn = fanInByFile
+    ? fanInByFile.get(ref.file) || 0
+    : [...index.graph.edges].filter(
+        (e) => e.to.type === "file" && e.to.path === ref.file,
+      ).length;
   if (fanIn > 0) {
     const fanInFactor = 1 + Math.min(Math.log10(fanIn + 1), 1); // Cap at doubling
     score *= fanInFactor;
@@ -338,12 +352,33 @@ export function calculateSeverity(
       return l.localName === changedSymbol.name && localIndex === changedIndex;
     });
     if (symbolDef) {
-      // Simple heuristic: functions with parameters might be signature changes
-      if (
-        symbolDef.kind === "function" &&
-        symbolDef.range.end.line - symbolDef.range.start.line > 1
-      ) {
-        hints.push("signatureChanged");
+      const parsed = index.parsed?.get(changedSymbol.file);
+      if (parsed) {
+        const { tree, sup } = parsed;
+        const pos = {
+          row: symbolDef.range.start.line - 1,
+          column: symbolDef.range.start.column - 1,
+        };
+        const node = tree.rootNode.descendantForPosition(pos, pos);
+        let declNode: any = node;
+        while (declNode && !["function_declaration", "function_definition", "method_definition", "method_declaration", "class_declaration", "class_definition"].includes(declNode.type)) {
+          declNode = declNode.parent;
+        }
+        
+        if (declNode) {
+          const params = declNode.childForFieldName("parameters") || declNode.childForFieldName("params");
+          if (params && params.namedChildCount > 0) {
+            hints.push("signatureChanged");
+          }
+        }
+      } else {
+        // Fallback to simple line-span heuristic if AST is not available
+        if (
+          symbolDef.kind === "function" &&
+          symbolDef.range.end.line - symbolDef.range.start.line > 1
+        ) {
+          hints.push("signatureChanged");
+        }
       }
     }
   }

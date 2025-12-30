@@ -38,6 +38,15 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * Go/Java/C#/Ruby/Rust: Collects import bindings and usages within packages
 * **AST grep**
   * Run arbitrary Tree-sitter queries across the repo
+* **Dependency Analysis**
+  * `deps <file>`: List all dependencies of a file
+  * `rdeps <file>`: List all files that depend on a file
+  * `path <from> <to>`: Find the shortest dependency path between two files
+  * `cycles`: Detect circular dependencies
+* **Diagnostics & Reports**
+  * `unresolved`: List external/unresolved imports and their importers
+  * `hotspots`: Identify files with high complexity (fan-in/fan-out)
+  * `apisurface`: Summarize public API (exported symbols) across the repo
 * **PR impact analysis**
   * Map git diffs to changed symbols and affected code
   * Analyze direct and transitive dependencies with severity scoring
@@ -280,6 +289,17 @@ npx codegraph refs --file <file> --line <line> --col <column> --pretty
 npx codegraph grep --query '(function_declaration name: (identifier) @name)'
 # Run a plain text regex grep across the repo
 npx codegraph grep --pattern 'eval\\(' --ignore-case
+
+# Dependency analysis
+npx codegraph deps src/main.ts
+npx codegraph rdeps src/utils.ts
+npx codegraph path src/main.ts src/utils.ts
+npx codegraph cycles
+
+# Diagnostics and reports
+npx codegraph unresolved
+npx codegraph hotspots
+npx codegraph apisurface
 
 # Analyze PR impact: map diffs to symbols and find affected code
 npx codegraph impact --base <commit-sha> --head <commit-sha>
