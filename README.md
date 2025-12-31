@@ -1,4 +1,4 @@
-# Dep Graph & Symbols
+# codegraph
 
 A tiny tool to **understand a repo**, **navigate code**, and **answer questions** fast. It supports JavaScript/TypeScript, Python, Go, Java, C#, Ruby, Rust, and the script blocks inside Vue/Svelte files.
 
