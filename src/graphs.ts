@@ -762,6 +762,9 @@ export type SymbolNode = {
   file: FileId;
   name: string;
   kind: SymbolNodeKind;
+  docstring?: string;
+  lineSpan?: number;
+  complexity?: number;
 };
 export type SymbolEdge = { from: string; to: string; label?: string };
 export type SymbolGraph = {
@@ -785,12 +788,20 @@ function nodeForDef(def: {
   localName: string;
   kind: string;
   range?: { start: { index?: number } };
+  docstring?: string;
+  lineSpan?: number;
+  complexity?: number;
 }): SymbolNode {
   return {
     id: defNodeId(def),
     file: def.file,
     name: def.localName,
     kind: (def.kind as SymbolNodeKind) ?? "variable",
+    ...(def.docstring ? { docstring: def.docstring } : {}),
+    ...(def.lineSpan ? { lineSpan: def.lineSpan } : {}),
+    ...(typeof def.complexity === "number"
+      ? { complexity: def.complexity }
+      : {}),
   };
 }
 
@@ -948,6 +959,12 @@ export async function buildSymbolGraphDetailed(
     edgeCount++;
     return true;
   };
+  const recordEdge = (fromId: string, toId: string, label?: string) => {
+    const key = `${fromId}->${toId}::${label ?? ""}`;
+    if (added.has(key)) return true;
+    added.add(key);
+    return maybePushEdge(fromId, toId, label);
+  };
 
   const isIdentifierType = (sup: LanguageSupport, t: string) =>
     Array.isArray(sup.nodeTypes?.identifier) &&
@@ -1099,6 +1116,11 @@ export async function buildSymbolGraphDetailed(
         node: Parser.SyntaxNode;
         def: SymbolDef;
       }> = [];
+      const classNodes: Array<{
+        name: string;
+        node: Parser.SyntaxNode;
+        def: SymbolDef;
+      }> = [];
       // Collect simple constant string bindings for resolving computed member keys, e.g., const k = "x"; obj[k]
       const constStringOf = new Map<string, string>();
       const collectConsts = (n: Parser.SyntaxNode) => {
@@ -1130,13 +1152,31 @@ export async function buildSymbolGraphDetailed(
       const walkCollect = (n: Parser.SyntaxNode) => {
         if (
           n.type === "function_declaration" ||
-          n.type === "function_definition"
+          n.type === "function_definition" ||
+          n.type === "method_declaration" ||
+          n.type === "constructor_declaration" ||
+          n.type === "function_item" ||
+          n.type === "method" ||
+          n.type === "singleton_method"
+        ) {
+          const nameNode =
+            n.childForFieldName("name") ??
+            n.childForFieldName("type");
+          const name = nameNode ? sliceText(nameNode, src) : undefined;
+          if (name) {
+            const def = mod.locals.find((d) => d.localName === name);
+            if (def) functionNodes.push({ name, node: n, def });
+          }
+        } else if (
+          n.type === "class_declaration" ||
+          n.type === "class_definition" ||
+          n.type === "class"
         ) {
           const nameNode = n.childForFieldName("name");
           const name = nameNode ? sliceText(nameNode, src) : undefined;
           if (name) {
             const def = mod.locals.find((d) => d.localName === name);
-            if (def) functionNodes.push({ name, node: n, def });
+            if (def) classNodes.push({ name, node: n, def });
           }
         } else if (n.type === "variable_declarator") {
           const nameNode = n.childForFieldName("name");
@@ -1186,7 +1226,74 @@ export async function buildSymbolGraphDetailed(
         for (const ch of node.namedChildren) scanForAliasUse(ch, cb);
       };
 
-      const tryResolveChain = (node: Parser.SyntaxNode, fromId?: string) => {
+      const resolveIdentifier = (name: string): SymbolDef | null => {
+        const fromAlias = aliasToTargetDef.get(name);
+        if (fromAlias) return fromAlias;
+        return mod.locals.find((d) => d.localName === name) ?? null;
+      };
+
+      const tryResolveNode = (
+        node: Parser.SyntaxNode,
+        fromId: string,
+        label: string,
+      ) => {
+        if (isIdentifierType(sup, node.type) || node.type === "type_identifier") {
+          const name = sliceText(node, src);
+          const target = resolveIdentifier(name);
+          if (target) {
+            const toId = defNodeId(target);
+            if (!nodes.has(toId)) nodes.set(toId, nodeForDef(target));
+            recordEdge(fromId, toId, label);
+            return;
+          }
+        }
+        if (optionalMemberTypes.has(node.type)) {
+          tryResolveChain(node, fromId, label);
+        }
+      };
+
+      const callNodeTypes = new Set<string>([
+        "call_expression",
+        "call",
+        "method_invocation",
+        "invocation_expression",
+      ]);
+      const newNodeTypes = new Set<string>([
+        "new_expression",
+        "object_creation_expression",
+        "struct_expression",
+        "composite_literal",
+      ]);
+
+      const getCallTarget = (n: Parser.SyntaxNode): Parser.SyntaxNode | null => {
+        const explicitTarget =
+          n.childForFieldName("function") ??
+          n.childForFieldName("callee") ??
+          n.childForFieldName("name") ??
+          n.childForFieldName("method") ??
+          n.childForFieldName("member") ??
+          n.childForFieldName("expression");
+        if (explicitTarget) return explicitTarget;
+        const nonArgumentChildren = n.namedChildren.filter(
+          (ch) => ch.type !== "argument_list",
+        );
+        return nonArgumentChildren.length === 1
+          ? nonArgumentChildren[0] ?? null
+          : null;
+      };
+
+      const getNewTarget = (n: Parser.SyntaxNode) =>
+        n.childForFieldName("constructor") ??
+        n.childForFieldName("type") ??
+        n.childForFieldName("name") ??
+        n.namedChildren.find((ch) => ch.type === "type_identifier") ??
+        n.child(0);
+
+      const tryResolveChain = (
+        node: Parser.SyntaxNode,
+        fromId?: string,
+        label = "uses",
+      ) => {
         const names: string[] = [];
         let cur: Parser.SyntaxNode | null = node;
         let base: Parser.SyntaxNode | null = null;
@@ -1257,11 +1364,7 @@ export async function buildSymbolGraphDetailed(
         if (targetDef && fromId) {
           const toId = defNodeId(targetDef);
           if (!nodes.has(toId)) nodes.set(toId, nodeForDef(targetDef));
-          const key = `${fromId}->${toId}`;
-          if (!added.has(key)) {
-            added.add(key);
-            if (!maybePushEdge(fromId, toId, "uses")) return true;
-          }
+          if (!recordEdge(fromId, toId, label)) return true;
           return true;
         }
         return !!targetDef;
@@ -1270,7 +1373,27 @@ export async function buildSymbolGraphDetailed(
       // Collect Python decorators on functions and add uses edges
       if (sup.id === "python") {
         const addDecoratorUses = (n: Parser.SyntaxNode) => {
-          if (n.type === "function_definition") {
+          if (n.type === "decorated_definition") {
+            const fn = n.namedChildren.find(
+              (child) => child.type === "function_definition",
+            );
+            if (fn) addDecoratorUses(fn);
+            for (const d of n.namedChildren) {
+              if (d.type !== "decorator") continue;
+              const nameNode = fn?.childForFieldName("name");
+              if (!nameNode) continue;
+              const name = sliceText(nameNode, src);
+              const def = mod.locals.find((l) => l.localName === name);
+              if (!def) continue;
+              const fromId = defNodeId(def);
+              if (!nodes.has(fromId)) nodes.set(fromId, nodeForDef(def));
+              const expr =
+                d.childForFieldName?.("name") ??
+                d.namedChildren?.[0] ??
+                d.child(1);
+              if (expr) tryResolveNode(expr, fromId, "decorates");
+            }
+          } else if (n.type === "function_definition") {
             const nameNode = n.childForFieldName("name");
             if (nameNode) {
               const name = sliceText(nameNode, src);
@@ -1285,16 +1408,20 @@ export async function buildSymbolGraphDetailed(
                     for (const d of prev.namedChildren) {
                       if (d.type === "decorator") {
                         const expr =
-                          d.childForFieldName?.("name") ?? d.child(1);
-                        if (expr) tryResolveChain(expr, fromId);
+                          d.childForFieldName?.("name") ??
+                          d.namedChildren?.[0] ??
+                          d.child(1);
+                        if (expr) tryResolveNode(expr, fromId, "decorates");
                       } else if (d.type === "attribute") {
-                        tryResolveChain(d, fromId);
+                        tryResolveNode(d, fromId, "decorates");
                       }
                     }
                   } else if (prev.type === "decorator") {
                     const expr =
-                      prev.childForFieldName?.("name") ?? prev.child(1);
-                    if (expr) tryResolveChain(expr, fromId);
+                      prev.childForFieldName?.("name") ??
+                      prev.namedChildren?.[0] ??
+                      prev.child(1);
+                    if (expr) tryResolveNode(expr, fromId, "decorates");
                   }
                   prev = prev.previousSibling;
                 }
@@ -1349,10 +1476,7 @@ export async function buildSymbolGraphDetailed(
               seenAliases.add(name);
               const toId = defNodeId(target);
               if (!nodes.has(toId)) nodes.set(toId, nodeForDef(target));
-              const key = `${fromId}->${toId}`;
-              if (added.has(key)) return;
-              added.add(key);
-              if (!maybePushEdge(fromId, toId, "uses")) return;
+              if (!recordEdge(fromId, toId, "uses")) return;
             },
           );
 
@@ -1439,11 +1563,7 @@ export async function buildSymbolGraphDetailed(
             if (targetDef) {
               const toId = defNodeId(targetDef);
               if (!nodes.has(toId)) nodes.set(toId, nodeForDef(targetDef));
-              const key = `${fromId}->${toId}`;
-              if (!added.has(key)) {
-                added.add(key);
-                if (!maybePushEdge(fromId, toId, "uses")) return;
-              }
+              if (!recordEdge(fromId, toId, "uses")) return;
             }
           };
 
@@ -1451,6 +1571,171 @@ export async function buildSymbolGraphDetailed(
           for (const ch of n.namedChildren ?? []) walkForMembers(ch);
         };
         walkForMembers(fn.node);
+
+        const walkForCalls = (n: Parser.SyntaxNode) => {
+          if (callNodeTypes.has(n.type)) {
+            if (sup.id === "go") {
+              const callTarget = getCallTarget(n);
+              const calleeName =
+                callTarget && isIdentifierType(sup, callTarget.type)
+                  ? sliceText(callTarget, src)
+                  : null;
+              if (calleeName === "new" || calleeName === "make") {
+                const argList =
+                  n.childForFieldName("arguments") ??
+                  n.childForFieldName("argument_list");
+                const typeNode =
+                  argList?.namedChildren?.find(
+                    (child) => child.type === "type_identifier",
+                  ) ?? null;
+                if (typeNode) {
+                  tryResolveNode(typeNode, fromId, "instantiates");
+                }
+                return;
+              }
+            }
+            if (sup.id === "ruby" && n.type === "call") {
+              const methodNode = n.childForFieldName("method");
+              const receiverNode = n.childForFieldName("receiver");
+              const methodName = methodNode ? sliceText(methodNode, src) : null;
+              if (methodName === "new" && receiverNode) {
+                tryResolveNode(receiverNode, fromId, "instantiates");
+                return;
+              }
+              if (methodNode) {
+                tryResolveNode(methodNode, fromId, "calls");
+                return;
+              }
+            }
+            const callee = getCallTarget(n);
+            if (callee) tryResolveNode(callee, fromId, "calls");
+          }
+          if (newNodeTypes.has(n.type)) {
+            const target = getNewTarget(n);
+            if (target) tryResolveNode(target, fromId, "instantiates");
+          }
+          for (const ch of n.namedChildren ?? []) walkForCalls(ch);
+        };
+        walkForCalls(fn.node);
+      }
+
+      const collectIdentifiers = (n: Parser.SyntaxNode, out: string[]) => {
+        if (isIdentifierType(sup, n.type) || n.type === "type_identifier") {
+          out.push(sliceText(n, src));
+        }
+        for (const ch of n.namedChildren ?? []) collectIdentifiers(ch, out);
+      };
+
+      const findFirstNodeByType = (
+        node: Parser.SyntaxNode,
+        type: string,
+      ): Parser.SyntaxNode | null => {
+        for (const ch of node.namedChildren ?? []) {
+          if (ch.type === type) return ch;
+          const found = findFirstNodeByType(ch, type);
+          if (found) return found;
+        }
+        return null;
+      };
+
+      const collectNodesByType = (
+        node: Parser.SyntaxNode,
+        type: string,
+        out: Parser.SyntaxNode[],
+      ) => {
+        for (const ch of node.namedChildren ?? []) {
+          if (ch.type === type) out.push(ch);
+          collectNodesByType(ch, type, out);
+        }
+      };
+
+      for (const cls of classNodes) {
+        const fromId = defNodeId(cls.def);
+        if (!nodes.has(fromId)) nodes.set(fromId, nodeForDef(cls.def));
+        if (sup.id === "java") {
+          const superClass = findFirstNodeByType(cls.node, "superclass");
+          const superNode =
+            superClass?.childForFieldName("name") ??
+            superClass?.namedChildren?.[0] ??
+            null;
+          if (superNode) tryResolveNode(superNode, fromId, "extends");
+
+          const interfaces = findFirstNodeByType(cls.node, "super_interfaces");
+          if (interfaces) {
+            const names: string[] = [];
+            collectIdentifiers(interfaces, names);
+            for (const name of names) {
+              const target = resolveIdentifier(name);
+              if (!target) continue;
+              const toId = defNodeId(target);
+              if (!nodes.has(toId)) nodes.set(toId, nodeForDef(target));
+              recordEdge(fromId, toId, "implements");
+            }
+          }
+          continue;
+        }
+
+        if (sup.id === "csharp") {
+          const baseList = findFirstNodeByType(cls.node, "base_list");
+          if (baseList) {
+            const names: string[] = [];
+            collectIdentifiers(baseList, names);
+            names.forEach((name, idx) => {
+              const target = resolveIdentifier(name);
+              if (!target) return;
+              const toId = defNodeId(target);
+              if (!nodes.has(toId)) nodes.set(toId, nodeForDef(target));
+              recordEdge(fromId, toId, idx === 0 ? "extends" : "implements");
+            });
+          }
+          continue;
+        }
+
+        const superClause = findFirstNodeByType(cls.node, "extends_clause");
+        const superNode =
+          superClause?.namedChildren?.[0] ?? superClause?.child(1);
+        if (superNode) tryResolveNode(superNode, fromId, "extends");
+
+        const implementsClauses: Parser.SyntaxNode[] = [];
+        collectNodesByType(cls.node, "implements_clause", implementsClauses);
+        for (const clause of implementsClauses) {
+          const names: string[] = [];
+          collectIdentifiers(clause, names);
+          for (const name of names) {
+            const target = resolveIdentifier(name);
+            if (!target) continue;
+            const toId = defNodeId(target);
+            if (!nodes.has(toId)) nodes.set(toId, nodeForDef(target));
+            recordEdge(fromId, toId, "implements");
+          }
+        }
+      }
+
+      if (sup.id === "rust") {
+        const walkImpls = (node: Parser.SyntaxNode) => {
+          if (node.type === "impl_item") {
+            const typeIdentifiers =
+              node.namedChildren?.filter((child) => child.type === "type_identifier") ??
+              [];
+            if (typeIdentifiers.length >= 2) {
+              const traitName = sliceText(typeIdentifiers[0], src);
+              const typeName = sliceText(typeIdentifiers[1], src);
+              const typeDef = resolveIdentifier(typeName);
+              const traitDef = resolveIdentifier(traitName);
+              if (typeDef && traitDef) {
+                const fromId = defNodeId(typeDef);
+                const toId = defNodeId(traitDef);
+                if (!nodes.has(fromId))
+                  nodes.set(fromId, nodeForDef(typeDef));
+                if (!nodes.has(toId))
+                  nodes.set(toId, nodeForDef(traitDef));
+                recordEdge(fromId, toId, "implements");
+              }
+            }
+          }
+          for (const ch of node.namedChildren ?? []) walkImpls(ch);
+        };
+        walkImpls(tree.rootNode);
       }
     } catch (error) {
       console.warn(

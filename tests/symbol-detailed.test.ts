@@ -164,7 +164,7 @@ export function uses(): number { return utilFn() }
     expect(edge).toBeDefined();
   });
 
-  it('Python: decorator use produces uses edge', async () => {
+  it('Python: decorator use produces decorates edge', async () => {
     const root = await mkTmpDir('dg-py-deco-');
     const util = `def deco(f):\n    def wrap(*a, **k):\n        return f(*a, **k)\n    return wrap\n`;
     const main = `from . import util\n\n@util.deco\ndef fn():\n    return 1\n`;
@@ -181,7 +181,7 @@ export function uses(): number { return utilFn() }
     expect(decoDef).toBeDefined();
     expect(fnDef).toBeDefined();
 
-    const edge = sg.edges.find(e => e.from === (fnDef as any).id && e.to === (decoDef as any).id && e.label === 'uses');
+    const edge = sg.edges.find(e => e.from === (fnDef as any).id && e.to === (decoDef as any).id && e.label === 'decorates');
     expect(edge).toBeDefined();
   });
 
@@ -227,5 +227,4 @@ export function uses(): number { return utilFn() }
     expect(edge).toBeDefined();
   });
 });
-
 

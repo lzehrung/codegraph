@@ -48,6 +48,7 @@ export const RUST_DEF: LanguageDefinition = {
     exports: `
       (function_item name: (identifier) @name)
       (struct_item name: (type_identifier) @name)
+      (trait_item name: (type_identifier) @name)
       (enum_item name: (type_identifier) @name)
       (const_item name: (identifier) @name)
       (static_item name: (identifier) @name)
@@ -55,6 +56,7 @@ export const RUST_DEF: LanguageDefinition = {
     locals: `
       (function_item name: (identifier) @name)
       (struct_item name: (type_identifier) @name)
+      (trait_item name: (type_identifier) @name)
       (let_declaration pattern: (identifier) @name)
     `,
     importBindings: `
@@ -78,6 +80,8 @@ export const RUST_DEF: LanguageDefinition = {
     )
       return true;
     if (p.type === "struct_item" && p.childForFieldName("name")?.id === node.id)
+      return true;
+    if (p.type === "trait_item" && p.childForFieldName("name")?.id === node.id)
       return true;
     if (p.type === "enum_item" && p.childForFieldName("name")?.id === node.id)
       return true;
