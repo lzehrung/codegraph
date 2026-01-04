@@ -25,6 +25,7 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * Unresolved targets are represented as **external** nodes
 * **Symbol index**
   * Extracts functions, classes, variables, interfaces, types, and exports
+  * Captures docstrings (leading comments), line spans, and a lightweight complexity heuristic for symbols
   * Works across JS/TS, Python, Go, Java, C#, Ruby, Rust, and Vue/Svelte script blocks with consistent scope handling
 * **Go to definition**
   * Cross-file navigation for all supported languages
@@ -38,6 +39,10 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * Go/Java/C#/Ruby/Rust: Collects import bindings and usages within packages
 * **AST grep**
   * Run arbitrary Tree-sitter queries across the repo
+* **Agent query helpers**
+  * Parse simple text queries and retrieve matching symbols or neighbor subgraphs
+  * Export graphs as triples for downstream knowledge-graph storage
+  * Detailed symbol graphs include semantic edges like `calls`, `instantiates`, `extends`, `implements`, and `decorates`
 * **Dependency Analysis**
   * `deps <file>`: List all dependencies of a file
   * `rdeps <file>`: List all files that depend on a file

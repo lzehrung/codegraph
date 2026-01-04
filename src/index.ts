@@ -37,6 +37,15 @@ export {
   type SymbolGraph,
   type SymbolNodeKind,
 } from "./graphs.js";
+export {
+  parseSymbolQuery,
+  querySymbols,
+  querySymbolNeighbors,
+  type SymbolQuery,
+  type NeighborQuery,
+  type NeighborResult,
+} from "./query.js";
+export { graphToTriples, type Triple, type TripleNode } from "./triples.js";
 export type { Pos, Range, FileId, EdgeTo, Edge, Graph } from "./types.js";
 export {
   SymbolKind,

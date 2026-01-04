@@ -48,6 +48,9 @@ export type SymbolDef = {
   localName: string;
   kind: SymbolKind;
   range: Range;
+  docstring?: string;
+  lineSpan?: number;
+  complexity?: number;
 };
 
 export type ExportEntry =
@@ -605,6 +608,120 @@ export function collectLocalsAndExportsFromSource(
   imports: ImportBinding[] = [],
   opts?: { tree?: Parser.Tree },
 ): ModuleIndex {
+  const normalizeDocstringLine = (line: string) =>
+    line.replace(/^\s*(\/\/\/?|#)\s?/, "").replace(/^\s*\*\s?/, "");
+
+  const extractLeadingDocstring = (
+    startLine: number,
+    languageId: string,
+  ): string | undefined => {
+    if (!startLine) return undefined;
+    const lines = source.split(/\r?\n/);
+    let idx = startLine - 2;
+    while (idx >= 0 && lines[idx]?.trim() === "") idx -= 1;
+    if (idx < 0) return undefined;
+    const line = lines[idx]?.trim() ?? "";
+    if (languageId === "python") {
+      if (line.startsWith("#")) {
+        const out: string[] = [];
+        let cur = idx;
+        while (cur >= 0 && lines[cur]?.trim().startsWith("#")) {
+          out.push(normalizeDocstringLine(lines[cur] ?? ""));
+          cur -= 1;
+        }
+        const text = out.reverse().join("\n").trim();
+        return text ? text : undefined;
+      }
+      return undefined;
+    }
+
+    if (line.startsWith("//")) {
+      const out: string[] = [];
+      let cur = idx;
+      while (cur >= 0 && lines[cur]?.trim().startsWith("//")) {
+        out.push(normalizeDocstringLine(lines[cur] ?? ""));
+        cur -= 1;
+      }
+      const text = out.reverse().join("\n").trim();
+      return text ? text : undefined;
+    }
+
+    if (line.endsWith("*/")) {
+      const out: string[] = [];
+      let cur = idx;
+      while (cur >= 0) {
+        const currentLine = lines[cur] ?? "";
+        out.push(currentLine);
+        if (currentLine.includes("/*")) break;
+        cur -= 1;
+      }
+      const text = out
+        .reverse()
+        .join("\n")
+        .replace(/^\s*\/\*\*?/, "")
+        .replace(/\*\/\s*$/, "")
+        .split("\n")
+        .map((lineText) => normalizeDocstringLine(lineText))
+        .join("\n")
+        .trim();
+      return text ? text : undefined;
+    }
+
+    return undefined;
+  };
+
+  const countMatches = (text: string, re: RegExp): number => {
+    const matches = text.match(re);
+    return matches ? matches.length : 0;
+  };
+
+  const estimateComplexity = (
+    range: Range,
+    languageId: string,
+  ): number | undefined => {
+    const startIdx = range.start.index;
+    const endIdx = range.end.index;
+    if (startIdx === undefined || endIdx === undefined || endIdx <= startIdx)
+      return undefined;
+    const snippet = source.slice(startIdx, endIdx);
+    if (!snippet.trim()) return undefined;
+    const keywordPatterns = [
+      /\bif\b/g,
+      /\bfor\b/g,
+      /\bwhile\b/g,
+      /\bcase\b/g,
+      /\bcatch\b/g,
+      /\belse\s+if\b/g,
+    ];
+    if (languageId === "python") {
+      keywordPatterns.push(/\belif\b/g, /\bexcept\b/g);
+    }
+    const operatorPatterns = [/&&/g, /\|\|/g, /\?\s*[^:]/g];
+    let count = 0;
+    for (const re of keywordPatterns) count += countMatches(snippet, re);
+    for (const re of operatorPatterns) count += countMatches(snippet, re);
+    return 1 + count;
+  };
+
+  const buildSymbolDef = (
+    localName: string,
+    kind: SymbolKind,
+    range: Range,
+  ): SymbolDef => {
+    const lineSpan = Math.max(1, range.end.line - range.start.line + 1);
+    const docstring = extractLeadingDocstring(range.start.line, support.id);
+    const complexity = estimateComplexity(range, support.id);
+    return {
+      file,
+      localName,
+      kind,
+      range,
+      docstring,
+      lineSpan,
+      complexity,
+    };
+  };
+
   let tree: Parser.Tree | null = opts?.tree ?? null;
   if (!tree) {
     try {
@@ -636,12 +753,15 @@ export function collectLocalsAndExportsFromSource(
         for (const m of q.matches(tree.rootNode))
           for (const cap of m.captures) {
             if (cap.name === "name" || cap.name === "tname") {
-              locals.push({
-                file,
-                localName: sliceText(cap.node, source),
-                kind: toKind(support.classifyDefinition(cap.node)),
-                range: toRange(cap.node),
-              });
+              const range = toRange(cap.node);
+              const localName = sliceText(cap.node, source);
+              locals.push(
+                buildSymbolDef(
+                  localName,
+                  toKind(support.classifyDefinition(cap.node)),
+                  range,
+                ),
+              );
             }
           }
       } catch (error) {
@@ -665,7 +785,7 @@ export function collectLocalsAndExportsFromSource(
         if (b.kind === "function") kind = SymbolKind.Function;
         else if (b.kind === "class") kind = SymbolKind.Class;
         else if (b.kind === "type") kind = SymbolKind.TypeAlias;
-        locals.push({ file, localName: b.name, kind, range: b.def });
+        locals.push(buildSymbolDef(b.name, kind, b.def));
       }
     }
   }
@@ -788,12 +908,11 @@ export function collectLocalsAndExportsFromSource(
         if (map["cjs_export_name"] && map["cjs_fn"]) {
           const exportedAs = sliceText(map["cjs_export_name"].node, source);
           const defRange = toRange(map["cjs_fn"].node);
-          const sym: SymbolDef = {
-            file,
-            localName: exportedAs,
-            kind: SymbolKind.Function,
-            range: defRange,
-          };
+          const sym = buildSymbolDef(
+            exportedAs,
+            SymbolKind.Function,
+            defRange,
+          );
           locals.push(sym);
           exports.push({ type: "local", exportedAs, target: sym });
           continue;
@@ -810,12 +929,11 @@ export function collectLocalsAndExportsFromSource(
           continue;
         }
         if (map["anon_default"]) {
-          const sym: SymbolDef = {
-            file,
-            localName: "__default_export__",
-            kind: SymbolKind.Default,
-            range: toRange(map["anon_default"].node),
-          };
+          const sym = buildSymbolDef(
+            "__default_export__",
+            SymbolKind.Default,
+            toRange(map["anon_default"].node),
+          );
           locals.push(sym);
           exports.push({ type: "local", exportedAs: "default", target: sym });
           continue;
@@ -2867,7 +2985,9 @@ export function buildScopeIndexFromSource(
     }
     if (
       node.type === "interface_declaration" ||
-      node.type === "type_alias_declaration"
+      node.type === "type_alias_declaration" ||
+      node.type === "type_spec" ||
+      node.type === "trait_item"
     ) {
       const name = (node as any).childForFieldName("name");
       if (name) addDecl(name, "type");
