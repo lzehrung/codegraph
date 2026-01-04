@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
-import initSqlJs from "sql.js";
 import type { Graph } from "./types.js";
 import type { SymbolGraph, SymbolNode } from "./graphs.js";
+import { parseGraphQuery } from "./query.js";
 
 export type SqliteGraphOptions = {
   fileGraph: Graph;
@@ -18,9 +18,22 @@ export type SqliteGraphUpdateOptions = {
   changedFiles: string[];
 };
 
+export type GraphQueryResult =
+  | { kind: "mostCalledMethods"; results: Array<{ name: string; file: string; count: number }> }
+  | { kind: "dependencyChain"; results: string[] }
+  | { kind: "controllersMostEndpoints"; results: Array<{ name: string; file: string; count: number }> }
+  | { kind: "classesImplementing"; results: Array<{ name: string; file: string }> }
+  | { kind: "affectedFunctionsForModule"; results: Array<{ name: string; file: string }> }
+  | { kind: "highestComplexityClasses"; results: Array<{ name: string; file: string; complexity: number }> };
+
 const resolveSqlWasmPath = () => {
   const require = createRequire(import.meta.url);
   return require.resolve("sql.js/dist/sql-wasm.wasm");
+};
+
+const loadSqlJs = () => {
+  const require = createRequire(import.meta.url);
+  return require("sql.js") as typeof import("sql.js");
 };
 
 type SqlJsDatabase = {
@@ -87,6 +100,80 @@ const ensureSchema = (db: SqlJsDatabase) => {
     CREATE INDEX IF NOT EXISTS idx_symbol_edges_to ON symbol_edges(to_id);
     CREATE INDEX IF NOT EXISTS idx_symbol_edges_label ON symbol_edges(label);
   `);
+};
+
+const execRows = (
+  db: SqlJsDatabase,
+  sql: string,
+): Array<Array<string | number | null>> => {
+  const result = db.exec(sql);
+  if (result.length === 0) return [];
+  return result[0]?.values ?? [];
+};
+
+const escapeSqlString = (value: string) => value.replace(/'/g, "''");
+
+const loadFileEdges = (db: SqlJsDatabase) =>
+  execRows(
+    db,
+    "SELECT from_path, to_path, to_type FROM file_edges;",
+  ).map((row) => ({
+    from: String(row[0]),
+    to: String(row[1]),
+    type: String(row[2]),
+  }));
+
+const bfsDependencies = (edges: Array<{ from: string; to: string }>, start: string) => {
+  const adj = new Map<string, string[]>();
+  for (const edge of edges) {
+    const list = adj.get(edge.from) ?? [];
+    list.push(edge.to);
+    adj.set(edge.from, list);
+  }
+  const visited = new Set<string>();
+  const queue: string[] = [start];
+  visited.add(start);
+  const result: string[] = [];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) continue;
+    const neighbors = adj.get(current) ?? [];
+    for (const next of neighbors) {
+      if (visited.has(next)) continue;
+      visited.add(next);
+      result.push(next);
+      queue.push(next);
+    }
+  }
+  return result;
+};
+
+const bfsReverseDependencies = (
+  edges: Array<{ from: string; to: string }>,
+  start: string,
+) => {
+  const adj = new Map<string, string[]>();
+  for (const edge of edges) {
+    const list = adj.get(edge.to) ?? [];
+    list.push(edge.from);
+    adj.set(edge.to, list);
+  }
+  const visited = new Set<string>();
+  const queue: string[] = [start];
+  visited.add(start);
+  const result: string[] = [];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) continue;
+    const neighbors = adj.get(current) ?? [];
+    for (const next of neighbors) {
+      if (visited.has(next)) continue;
+      visited.add(next);
+      result.push(next);
+      queue.push(next);
+    }
+  }
+  return result;
 };
 
 const collectSymbolIdsForFiles = (
@@ -210,6 +297,7 @@ const deleteFileEdgesForFiles = (db: SqlJsDatabase, files: string[]) => {
 };
 
 const readOrCreateDb = async (outputPath: string) => {
+  const { default: initSqlJs } = loadSqlJs();
   const SQL = await initSqlJs({
     locateFile: () => resolveSqlWasmPath(),
   });
@@ -305,4 +393,164 @@ export async function updateGraphSqlite(
   }
   await fs.writeFile(options.outputPath, data);
   db.close();
+}
+
+export async function queryGraphSqlite(
+  outputPath: string,
+  queryText: string,
+): Promise<GraphQueryResult> {
+  const parsed = parseGraphQuery(queryText);
+  if (!parsed) {
+    throw new Error("Unsupported query text.");
+  }
+  const { db } = await readOrCreateDb(outputPath);
+  ensureSchema(db);
+
+  switch (parsed.kind) {
+    case "mostCalledMethods": {
+      const rows = execRows(
+        db,
+        `
+          SELECT s.name, s.file, COUNT(*) as cnt
+          FROM symbol_edges e
+          JOIN symbols s ON s.id = e.to_id
+          WHERE e.label = 'calls' AND s.kind = 'function'
+          GROUP BY s.id
+          ORDER BY cnt DESC
+          LIMIT ${parsed.limit};
+        `,
+      );
+      db.close();
+      return {
+        kind: parsed.kind,
+        results: rows.map((row) => ({
+          name: String(row[0]),
+          file: String(row[1]),
+          count: Number(row[2]),
+        })),
+      };
+    }
+    case "dependencyChain": {
+      const className = escapeSqlString(parsed.className);
+      const rows = execRows(
+        db,
+        `SELECT file FROM symbols WHERE name = '${className}' AND kind = 'class' LIMIT 1;`,
+      );
+      const startFile = rows[0]?.[0] ? String(rows[0][0]) : "";
+      if (!startFile) {
+        db.close();
+        return { kind: parsed.kind, results: [] };
+      }
+      const edges = loadFileEdges(db)
+        .filter((edge) => edge.type === "file")
+        .map((edge) => ({ from: edge.from, to: edge.to }));
+      const chain = bfsDependencies(edges, startFile);
+      db.close();
+      return { kind: parsed.kind, results: chain };
+    }
+    case "controllersMostEndpoints": {
+      const rows = execRows(
+        db,
+        `
+          SELECT c.name, c.file, COUNT(f.id) as cnt
+          FROM symbols c
+          LEFT JOIN symbols f
+            ON f.file = c.file
+            AND f.kind = 'function'
+            AND (
+              lower(f.name) LIKE 'get%' OR
+              lower(f.name) LIKE 'post%' OR
+              lower(f.name) LIKE 'put%' OR
+              lower(f.name) LIKE 'delete%' OR
+              lower(f.name) LIKE 'patch%'
+            )
+          WHERE c.kind = 'class' AND c.name LIKE '%Controller'
+          GROUP BY c.id
+          ORDER BY cnt DESC
+          LIMIT ${parsed.limit};
+        `,
+      );
+      db.close();
+      return {
+        kind: parsed.kind,
+        results: rows.map((row) => ({
+          name: String(row[0]),
+          file: String(row[1]),
+          count: Number(row[2]),
+        })),
+      };
+    }
+    case "classesImplementing": {
+      const iface = escapeSqlString(parsed.interfaceName);
+      const rows = execRows(
+        db,
+        `
+          SELECT DISTINCT s.name, s.file
+          FROM symbol_edges e
+          JOIN symbols s ON s.id = e.from_id
+          JOIN symbols t ON t.id = e.to_id
+          WHERE e.label = 'implements' AND t.name = '${iface}';
+        `,
+      );
+      db.close();
+      return {
+        kind: parsed.kind,
+        results: rows.map((row) => ({
+          name: String(row[0]),
+          file: String(row[1]),
+        })),
+      };
+    }
+    case "affectedFunctionsForModule": {
+      const modulePath = escapeSqlString(parsed.modulePath);
+      const edges = loadFileEdges(db)
+        .filter((edge) => edge.type === "file")
+        .map((edge) => ({ from: edge.from, to: edge.to }));
+      const reverseDeps = bfsReverseDependencies(edges, modulePath);
+      const impactedFiles = [parsed.modulePath, ...reverseDeps];
+      if (impactedFiles.length === 0) {
+        db.close();
+        return { kind: parsed.kind, results: [] };
+      }
+      const escaped = impactedFiles.map((file) => `'${escapeSqlString(file)}'`);
+      const rows = execRows(
+        db,
+        `
+          SELECT name, file
+          FROM symbols
+          WHERE kind = 'function'
+            AND file IN (${escaped.join(", ")});
+        `,
+      );
+      db.close();
+      return {
+        kind: parsed.kind,
+        results: rows.map((row) => ({
+          name: String(row[0]),
+          file: String(row[1]),
+        })),
+      };
+    }
+    case "highestComplexityClasses": {
+      const rows = execRows(
+        db,
+        `
+          SELECT name, file, COALESCE(complexity, 0) as score
+          FROM symbols
+          WHERE kind = 'class'
+          ORDER BY score DESC
+          LIMIT ${parsed.limit};
+        `,
+      );
+      db.close();
+      return {
+        kind: parsed.kind,
+        results: rows.map((row) => ({
+          name: String(row[0]),
+          file: String(row[1]),
+          complexity: Number(row[2]),
+        })),
+      };
+    }
+  }
 }

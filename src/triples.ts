@@ -35,9 +35,11 @@ const symbolNodeToTripleNode = (node: SymbolNode): TripleNode => ({
   name: node.name,
   kind: node.kind,
   file: node.file,
-  docstring: node.docstring,
-  lineSpan: node.lineSpan,
-  complexity: node.complexity,
+  ...(node.docstring ? { docstring: node.docstring } : {}),
+  ...(node.lineSpan ? { lineSpan: node.lineSpan } : {}),
+  ...(typeof node.complexity === "number"
+    ? { complexity: node.complexity }
+    : {}),
 });
 
 const fileNode = (path: string): TripleNode => ({

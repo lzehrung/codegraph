@@ -711,15 +711,16 @@ export function collectLocalsAndExportsFromSource(
     const lineSpan = Math.max(1, range.end.line - range.start.line + 1);
     const docstring = extractLeadingDocstring(range.start.line, support.id);
     const complexity = estimateComplexity(range, support.id);
-    return {
+    const base: SymbolDef = {
       file,
       localName,
       kind,
       range,
-      docstring,
-      lineSpan,
-      complexity,
     };
+    if (docstring) base.docstring = docstring;
+    if (lineSpan) base.lineSpan = lineSpan;
+    if (typeof complexity === "number") base.complexity = complexity;
+    return base;
   };
 
   let tree: Parser.Tree | null = opts?.tree ?? null;

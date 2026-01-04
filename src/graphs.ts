@@ -797,9 +797,11 @@ function nodeForDef(def: {
     file: def.file,
     name: def.localName,
     kind: (def.kind as SymbolNodeKind) ?? "variable",
-    docstring: def.docstring,
-    lineSpan: def.lineSpan,
-    complexity: def.complexity,
+    ...(def.docstring ? { docstring: def.docstring } : {}),
+    ...(def.lineSpan ? { lineSpan: def.lineSpan } : {}),
+    ...(typeof def.complexity === "number"
+      ? { complexity: def.complexity }
+      : {}),
   };
 }
 
@@ -1714,14 +1716,18 @@ export async function buildSymbolGraphDetailed(
             if (ids.length >= 2) {
               const traitName = ids[0];
               const typeName = ids[1];
-              const typeDef = resolveIdentifier(typeName);
-              const traitDef = resolveIdentifier(traitName);
-              if (typeDef && traitDef) {
-                const fromId = defNodeId(typeDef);
-                const toId = defNodeId(traitDef);
-                if (!nodes.has(fromId)) nodes.set(fromId, nodeForDef(typeDef));
-                if (!nodes.has(toId)) nodes.set(toId, nodeForDef(traitDef));
-                recordEdge(fromId, toId, "implements");
+              if (traitName && typeName) {
+                const typeDef = resolveIdentifier(typeName);
+                const traitDef = resolveIdentifier(traitName);
+                if (typeDef && traitDef) {
+                  const fromId = defNodeId(typeDef);
+                  const toId = defNodeId(traitDef);
+                  if (!nodes.has(fromId))
+                    nodes.set(fromId, nodeForDef(typeDef));
+                  if (!nodes.has(toId))
+                    nodes.set(toId, nodeForDef(traitDef));
+                  recordEdge(fromId, toId, "implements");
+                }
               }
             }
           }

@@ -99,8 +99,10 @@ export { tool_impactJSON, tool_impactFromDiffText } from "./agent-tools.js";
 export {
   writeGraphSqlite,
   updateGraphSqlite,
+  queryGraphSqlite,
   type SqliteGraphOptions,
   type SqliteGraphUpdateOptions,
+  type GraphQueryResult,
 } from "./sqlite.js";
 export {
   chunkFile,

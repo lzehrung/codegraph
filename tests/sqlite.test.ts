@@ -3,12 +3,12 @@ import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import { createRequire } from "node:module";
-import initSqlJs from "sql.js";
 import {
   buildProjectIndex,
   buildSymbolGraphDetailed,
   writeGraphSqlite,
   updateGraphSqlite,
+  queryGraphSqlite,
 } from "../src/index.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -19,6 +19,11 @@ async function mkTmpDir(prefix: string): Promise<string> {
 const resolveSqlWasmPath = () => {
   const require = createRequire(import.meta.url);
   return require.resolve("sql.js/dist/sql-wasm.wasm");
+};
+
+const loadSqlJs = () => {
+  const require = createRequire(import.meta.url);
+  return require("sql.js") as typeof import("sql.js");
 };
 
 type SqlExecRow = Array<string | number | null>;
@@ -50,6 +55,7 @@ export function run() { helper(); new Widget(); }
       outputPath: dbPath,
     });
 
+    const initSqlJs = loadSqlJs();
     const SQL = await initSqlJs({ locateFile: () => resolveSqlWasmPath() });
     const data = await fsp.readFile(dbPath);
     const db = new SQL.Database(new Uint8Array(data)) as SqlJsDatabase;
@@ -117,6 +123,7 @@ export function run() { return new NewWidget(); }
       changedFiles: [changedPath],
     });
 
+    const initSqlJs = loadSqlJs();
     const SQL = await initSqlJs({ locateFile: () => resolveSqlWasmPath() });
     const data = await fsp.readFile(dbPath);
     const db = new SQL.Database(new Uint8Array(data)) as SqlJsDatabase;
@@ -136,5 +143,79 @@ export function run() { return new NewWidget(); }
     expect(oldSymbols).toEqual([]);
     expect(newSymbols).toEqual(["NewWidget"]);
     expect(helperSymbols).toEqual(["helper"]);
+  });
+
+  it("supports deterministic graph queries", async () => {
+    const root = await mkTmpDir("dg-sqlite-query-");
+    const auth = `
+import { UserRepository } from "./repo";
+
+export class AuthService {}
+export class UserController {}
+export function getUser() {}
+export function postUser() {}
+export function runAuth() { helper(); }
+export function helper() {}
+export class RepoImpl implements UserRepository {}
+`;
+    const repo = `
+export interface UserRepository {}
+`;
+    await fsp.writeFile(path.join(root, "auth.ts"), auth, "utf8");
+    await fsp.writeFile(path.join(root, "repo.ts"), repo, "utf8");
+
+    const index = await buildProjectIndex(root);
+    const sgraph = await buildSymbolGraphDetailed(index);
+    const dbPath = path.join(root, "graph.sqlite");
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+    });
+
+    const called = await queryGraphSqlite(
+      dbPath,
+      "What are the most called methods in the codebase?",
+    );
+    expect(called.kind).toBe("mostCalledMethods");
+    expect(called.results.length).toBeGreaterThan(0);
+
+    const chain = await queryGraphSqlite(
+      dbPath,
+      "Show me the dependency chain for the AuthService class",
+    );
+    expect(chain.kind).toBe("dependencyChain");
+    expect(chain.results.some((entry) => entry.endsWith("/repo.ts"))).toBe(true);
+
+    const controllers = await queryGraphSqlite(
+      dbPath,
+      "Which controllers have the most endpoints?",
+    );
+    expect(controllers.kind).toBe("controllersMostEndpoints");
+    expect(
+      controllers.results.some((row) => row.name === "UserController"),
+    ).toBe(true);
+
+    const impls = await queryGraphSqlite(
+      dbPath,
+      "Find all classes that implement the UserRepository interface",
+    );
+    expect(impls.kind).toBe("classesImplementing");
+    expect(impls.results.some((row) => row.name === "RepoImpl")).toBe(true);
+
+    const modulePath = path.join(root, "auth.ts").replace(/\\/g, "/");
+    const affected = await queryGraphSqlite(
+      dbPath,
+      `What functions would be affected if I change this module ${modulePath}`,
+    );
+    expect(affected.kind).toBe("affectedFunctionsForModule");
+    expect(affected.results.some((row) => row.name === "runAuth")).toBe(true);
+
+    const complexity = await queryGraphSqlite(
+      dbPath,
+      "Which classes have the highest complexity in the codebase?",
+    );
+    expect(complexity.kind).toBe("highestComplexityClasses");
+    expect(complexity.results.length).toBeGreaterThan(0);
   });
 });
