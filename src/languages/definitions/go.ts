@@ -65,6 +65,7 @@ export const GO_DEF: LanguageDefinition = {
       "type_identifier",
       "package_identifier",
     ],
+    memberExpression: "selector_expression",
   },
   supportsCrossModuleSymbols: true,
   createsFunctionScope: (node) =>
