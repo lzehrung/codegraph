@@ -37,6 +37,15 @@ export {
   type SymbolGraph,
   type SymbolNodeKind,
 } from "./graphs.js";
+export {
+  parseSymbolQuery,
+  querySymbols,
+  querySymbolNeighbors,
+  type SymbolQuery,
+  type NeighborQuery,
+  type NeighborResult,
+} from "./query.js";
+export { graphToTriples, type Triple, type TripleNode } from "./triples.js";
 export type { Pos, Range, FileId, EdgeTo, Edge, Graph } from "./types.js";
 export {
   SymbolKind,
@@ -87,6 +96,14 @@ export {
   type CandidateTestFile,
 } from "./impact/index.js";
 export { tool_impactJSON, tool_impactFromDiffText } from "./agent-tools.js";
+export {
+  writeGraphSqlite,
+  updateGraphSqlite,
+  queryGraphSqlite,
+  type SqliteGraphOptions,
+  type SqliteGraphUpdateOptions,
+  type GraphQueryResult,
+} from "./sqlite.js";
 export {
   chunkFile,
   type Chunk,
