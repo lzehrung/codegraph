@@ -96,7 +96,12 @@ export {
   type CandidateTestFile,
 } from "./impact/index.js";
 export { tool_impactJSON, tool_impactFromDiffText } from "./agent-tools.js";
-export { writeGraphSqlite, type SqliteGraphOptions } from "./sqlite.js";
+export {
+  writeGraphSqlite,
+  updateGraphSqlite,
+  type SqliteGraphOptions,
+  type SqliteGraphUpdateOptions,
+} from "./sqlite.js";
 export {
   chunkFile,
   type Chunk,

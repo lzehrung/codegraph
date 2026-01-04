@@ -45,6 +45,7 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * Detailed symbol graphs include semantic edges like `calls`, `instantiates`, `extends`, `implements`, and `decorates`
 * **SQLite graph output**
   * Export file and symbol graphs into a queryable SQLite database with indexed tables
+  * Supports incremental updates by re-writing only changed files and symbol edges
 * **Dependency Analysis**
   * `deps <file>`: List all dependencies of a file
   * `rdeps <file>`: List all files that depend on a file

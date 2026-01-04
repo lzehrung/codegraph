@@ -8,6 +8,7 @@ import {
   buildProjectIndex,
   buildSymbolGraphDetailed,
   writeGraphSqlite,
+  updateGraphSqlite,
 } from "../src/index.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -78,5 +79,62 @@ export function run() { helper(); new Widget(); }
       "SELECT label FROM symbol_edges WHERE label = 'calls';",
     );
     expect(calls.length).toBeGreaterThan(0);
+  });
+
+  it("updates changed files incrementally", async () => {
+    const root = await mkTmpDir("dg-sqlite-update-");
+    const base = `
+export class OldWidget {}
+export function run() { return new OldWidget(); }
+`;
+    const util = `
+export function helper() { return 1; }
+`;
+    await fsp.writeFile(path.join(root, "main.ts"), base, "utf8");
+    await fsp.writeFile(path.join(root, "util.ts"), util, "utf8");
+
+    const index = await buildProjectIndex(root);
+    const sgraph = await buildSymbolGraphDetailed(index);
+    const dbPath = path.join(root, "graph.sqlite");
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+    });
+
+    const updated = `
+export class NewWidget {}
+export function run() { return new NewWidget(); }
+`;
+    await fsp.writeFile(path.join(root, "main.ts"), updated, "utf8");
+    const nextIndex = await buildProjectIndex(root);
+    const nextSgraph = await buildSymbolGraphDetailed(nextIndex);
+    const changedPath = path.join(root, "main.ts").replace(/\\/g, "/");
+    await updateGraphSqlite({
+      fileGraph: nextIndex.graph,
+      symbolGraph: nextSgraph,
+      outputPath: dbPath,
+      changedFiles: [changedPath],
+    });
+
+    const SQL = await initSqlJs({ locateFile: () => resolveSqlWasmPath() });
+    const data = await fsp.readFile(dbPath);
+    const db = new SQL.Database(new Uint8Array(data)) as SqlJsDatabase;
+
+    const oldSymbols = dbQuery(
+      db,
+      "SELECT name FROM symbols WHERE name = 'OldWidget';",
+    );
+    const newSymbols = dbQuery(
+      db,
+      "SELECT name FROM symbols WHERE name = 'NewWidget';",
+    );
+    const helperSymbols = dbQuery(
+      db,
+      "SELECT name FROM symbols WHERE name = 'helper';",
+    );
+    expect(oldSymbols).toEqual([]);
+    expect(newSymbols).toEqual(["NewWidget"]);
+    expect(helperSymbols).toEqual(["helper"]);
   });
 });
