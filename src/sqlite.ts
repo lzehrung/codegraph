@@ -40,6 +40,9 @@ type SqlJsDatabase = {
   run: (sql: string, params?: Array<string | number | null>) => void;
   exec: (sql: string) => Array<{ values: Array<Array<string | number | null>> }>;
   prepare: (sql: string) => {
+    bind: (params?: Array<string | number | null>) => void;
+    step: () => boolean;
+    get: () => Array<string | number | null>;
     run: (params: Array<string | number | null>) => void;
     free: () => void;
   };
@@ -111,7 +114,20 @@ const execRows = (
   return result[0]?.values ?? [];
 };
 
-const escapeSqlString = (value: string) => value.replace(/'/g, "''");
+const execRowsParams = (
+  db: SqlJsDatabase,
+  sql: string,
+  params: Array<string | number | null>,
+): Array<Array<string | number | null>> => {
+  const stmt = db.prepare(sql);
+  stmt.bind(params);
+  const rows: Array<Array<string | number | null>> = [];
+  while (stmt.step()) {
+    rows.push(stmt.get());
+  }
+  stmt.free();
+  return rows;
+};
 
 const loadFileEdges = (db: SqlJsDatabase) =>
   execRows(
@@ -272,11 +288,9 @@ const readSymbolIdsForFiles = (
   files: string[],
 ): string[] => {
   if (files.length === 0) return [];
-  const escaped = files.map((file) => `'${file.replace(/'/g, "''")}'`);
-  const sql = `SELECT id FROM symbols WHERE file IN (${escaped.join(", ")});`;
-  const result = db.exec(sql);
-  if (result.length === 0) return [];
-  const values = result[0]?.values ?? [];
+  const placeholders = files.map(() => "?").join(", ");
+  const sql = `SELECT id FROM symbols WHERE file IN (${placeholders});`;
+  const values = execRowsParams(db, sql, files);
   return values
     .map((row) => (row[0] ? String(row[0]) : null))
     .filter((id): id is string => !!id);
@@ -408,17 +422,18 @@ export async function queryGraphSqlite(
 
   switch (parsed.kind) {
     case "mostCalledMethods": {
-      const rows = execRows(
+      const rows = execRowsParams(
         db,
         `
           SELECT s.name, s.file, COUNT(*) as cnt
           FROM symbol_edges e
           JOIN symbols s ON s.id = e.to_id
-          WHERE e.label = 'calls' AND s.kind = 'function'
+          WHERE e.label = ? AND s.kind = ?
           GROUP BY s.id
           ORDER BY cnt DESC
-          LIMIT ${parsed.limit};
+          LIMIT ?;
         `,
+        ["calls", "function", parsed.limit],
       );
       db.close();
       return {
@@ -431,10 +446,10 @@ export async function queryGraphSqlite(
       };
     }
     case "dependencyChain": {
-      const className = escapeSqlString(parsed.className);
-      const rows = execRows(
+      const rows = execRowsParams(
         db,
-        `SELECT file FROM symbols WHERE name = '${className}' AND kind = 'class' LIMIT 1;`,
+        `SELECT file FROM symbols WHERE name = ? AND kind = ? LIMIT 1;`,
+        [parsed.className, "class"],
       );
       const startFile = rows[0]?.[0] ? String(rows[0][0]) : "";
       if (!startFile) {
@@ -449,26 +464,37 @@ export async function queryGraphSqlite(
       return { kind: parsed.kind, results: chain };
     }
     case "controllersMostEndpoints": {
-      const rows = execRows(
+      const rows = execRowsParams(
         db,
         `
           SELECT c.name, c.file, COUNT(f.id) as cnt
           FROM symbols c
           LEFT JOIN symbols f
             ON f.file = c.file
-            AND f.kind = 'function'
+            AND f.kind = ?
             AND (
-              lower(f.name) LIKE 'get%' OR
-              lower(f.name) LIKE 'post%' OR
-              lower(f.name) LIKE 'put%' OR
-              lower(f.name) LIKE 'delete%' OR
-              lower(f.name) LIKE 'patch%'
+              lower(f.name) LIKE ? OR
+              lower(f.name) LIKE ? OR
+              lower(f.name) LIKE ? OR
+              lower(f.name) LIKE ? OR
+              lower(f.name) LIKE ?
             )
-          WHERE c.kind = 'class' AND c.name LIKE '%Controller'
+          WHERE c.kind = ? AND c.name LIKE ?
           GROUP BY c.id
           ORDER BY cnt DESC
-          LIMIT ${parsed.limit};
+          LIMIT ?;
         `,
+        [
+          "function",
+          "get%",
+          "post%",
+          "put%",
+          "delete%",
+          "patch%",
+          "class",
+          "%Controller",
+          parsed.limit,
+        ],
       );
       db.close();
       return {
@@ -481,16 +507,16 @@ export async function queryGraphSqlite(
       };
     }
     case "classesImplementing": {
-      const iface = escapeSqlString(parsed.interfaceName);
-      const rows = execRows(
+      const rows = execRowsParams(
         db,
         `
           SELECT DISTINCT s.name, s.file
           FROM symbol_edges e
           JOIN symbols s ON s.id = e.from_id
           JOIN symbols t ON t.id = e.to_id
-          WHERE e.label = 'implements' AND t.name = '${iface}';
+          WHERE e.label = ? AND t.name = ?;
         `,
+        ["implements", parsed.interfaceName],
       );
       db.close();
       return {
@@ -502,25 +528,25 @@ export async function queryGraphSqlite(
       };
     }
     case "affectedFunctionsForModule": {
-      const modulePath = escapeSqlString(parsed.modulePath);
       const edges = loadFileEdges(db)
         .filter((edge) => edge.type === "file")
         .map((edge) => ({ from: edge.from, to: edge.to }));
-      const reverseDeps = bfsReverseDependencies(edges, modulePath);
+      const reverseDeps = bfsReverseDependencies(edges, parsed.modulePath);
       const impactedFiles = [parsed.modulePath, ...reverseDeps];
       if (impactedFiles.length === 0) {
         db.close();
         return { kind: parsed.kind, results: [] };
       }
-      const escaped = impactedFiles.map((file) => `'${escapeSqlString(file)}'`);
-      const rows = execRows(
+      const placeholders = impactedFiles.map(() => "?").join(", ");
+      const rows = execRowsParams(
         db,
         `
           SELECT name, file
           FROM symbols
-          WHERE kind = 'function'
-            AND file IN (${escaped.join(", ")});
+          WHERE kind = ?
+            AND file IN (${placeholders});
         `,
+        ["function", ...impactedFiles],
       );
       db.close();
       return {
@@ -532,15 +558,16 @@ export async function queryGraphSqlite(
       };
     }
     case "highestComplexityClasses": {
-      const rows = execRows(
+      const rows = execRowsParams(
         db,
         `
           SELECT name, file, COALESCE(complexity, 0) as score
           FROM symbols
-          WHERE kind = 'class'
+          WHERE kind = ?
           ORDER BY score DESC
-          LIMIT ${parsed.limit};
+          LIMIT ?;
         `,
+        ["class", parsed.limit],
       );
       db.close();
       return {

@@ -4,6 +4,9 @@ declare module "sql.js" {
   };
 
   export interface SqlJsStatement {
+    bind(params?: Array<string | number | null>): void;
+    step(): boolean;
+    get(): Array<string | number | null>;
     run(params?: Array<string | number | null>): void;
     free(): void;
   }
