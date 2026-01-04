@@ -609,7 +609,7 @@ export function collectLocalsAndExportsFromSource(
   opts?: { tree?: Parser.Tree },
 ): ModuleIndex {
   const normalizeDocstringLine = (line: string) =>
-    line.replace(/^\s*(\/\/\/?|#)\s?/, "").replace(/^\s*\*\s?/, "");
+    line.replace(/^\s*(?:\/\/\/?\s?|#\s?)/, "").replace(/^\s*\*\s?/, "");
 
   const sourceLines = source.split(/\r?\n/);
 
@@ -709,7 +709,14 @@ export function collectLocalsAndExportsFromSource(
     kind: SymbolKind,
     range: Range,
   ): SymbolDef => {
-    const lineSpan = Math.max(1, range.end.line - range.start.line + 1);
+    let lineSpan: number | undefined;
+    if (
+      typeof range.start.line === "number" &&
+      typeof range.end.line === "number" &&
+      range.end.line >= range.start.line
+    ) {
+      lineSpan = Math.max(1, range.end.line - range.start.line + 1);
+    }
     const docstring = extractLeadingDocstring(range.start.line, support.id);
     const shouldEstimateComplexity =
       kind === SymbolKind.Function || kind === SymbolKind.Class;

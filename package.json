@@ -68,6 +68,7 @@
   "license": "ISC",
   "description": "A tiny tool to understand a repo, navigate code, and answer questions fast. Builds dependency graphs and symbol indexes for JS/TS/Python monorepos.",
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.7.2",
     "@vitest/ui": "^3.2.4",
     "prettier": "^3.7.4",

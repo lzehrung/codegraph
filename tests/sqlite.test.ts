@@ -187,9 +187,13 @@ export interface UserRepository {}
       "Which controllers have the most endpoints?",
     );
     expect(controllers.kind).toBe("controllersMostEndpoints");
-    expect(
-      controllers.results.some((row) => row.name === "UserController"),
-    ).toBe(true);
+    const userController = controllers.results.find(
+      (row) => row.name === "UserController",
+    );
+    expect(userController).toBeDefined();
+    if (userController) {
+      expect(userController.count).toBeGreaterThanOrEqual(2);
+    }
 
     const impls = await queryGraphSqlite(
       dbPath,

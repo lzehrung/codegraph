@@ -1161,8 +1161,7 @@ export async function buildSymbolGraphDetailed(
         ) {
           const nameNode =
             n.childForFieldName("name") ??
-            n.childForFieldName("type") ??
-            n.child(0);
+            n.childForFieldName("type");
           const name = nameNode ? sliceText(nameNode, src) : undefined;
           if (name) {
             const def = mod.locals.find((d) => d.localName === name);
