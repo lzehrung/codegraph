@@ -201,8 +201,9 @@ export function querySymbolNeighbors(
   visited.add(query.symbolId);
 
   const edgeSet = new Set<string>();
-  while (frontier.length > 0) {
-    const current = frontier.shift();
+  let frontierIndex = 0;
+  while (frontierIndex < frontier.length) {
+    const current = frontier[frontierIndex++];
     if (!current || current.depth >= maxDepth) continue;
     const expandOut = direction === "out" || direction === "both";
     const expandIn = direction === "in" || direction === "both";

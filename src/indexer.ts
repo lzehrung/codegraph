@@ -611,22 +611,23 @@ export function collectLocalsAndExportsFromSource(
   const normalizeDocstringLine = (line: string) =>
     line.replace(/^\s*(\/\/\/?|#)\s?/, "").replace(/^\s*\*\s?/, "");
 
+  const sourceLines = source.split(/\r?\n/);
+
   const extractLeadingDocstring = (
     startLine: number,
     languageId: string,
   ): string | undefined => {
     if (!startLine) return undefined;
-    const lines = source.split(/\r?\n/);
     let idx = startLine - 2;
-    while (idx >= 0 && lines[idx]?.trim() === "") idx -= 1;
+    while (idx >= 0 && sourceLines[idx]?.trim() === "") idx -= 1;
     if (idx < 0) return undefined;
-    const line = lines[idx]?.trim() ?? "";
+    const line = sourceLines[idx]?.trim() ?? "";
     if (languageId === "python") {
       if (line.startsWith("#")) {
         const out: string[] = [];
         let cur = idx;
-        while (cur >= 0 && lines[cur]?.trim().startsWith("#")) {
-          out.push(normalizeDocstringLine(lines[cur] ?? ""));
+        while (cur >= 0 && sourceLines[cur]?.trim().startsWith("#")) {
+          out.push(normalizeDocstringLine(sourceLines[cur] ?? ""));
           cur -= 1;
         }
         const text = out.reverse().join("\n").trim();
@@ -638,8 +639,8 @@ export function collectLocalsAndExportsFromSource(
     if (line.startsWith("//")) {
       const out: string[] = [];
       let cur = idx;
-      while (cur >= 0 && lines[cur]?.trim().startsWith("//")) {
-        out.push(normalizeDocstringLine(lines[cur] ?? ""));
+      while (cur >= 0 && sourceLines[cur]?.trim().startsWith("//")) {
+        out.push(normalizeDocstringLine(sourceLines[cur] ?? ""));
         cur -= 1;
       }
       const text = out.reverse().join("\n").trim();
@@ -650,7 +651,7 @@ export function collectLocalsAndExportsFromSource(
       const out: string[] = [];
       let cur = idx;
       while (cur >= 0) {
-        const currentLine = lines[cur] ?? "";
+        const currentLine = sourceLines[cur] ?? "";
         out.push(currentLine);
         if (currentLine.includes("/*")) break;
         cur -= 1;
@@ -710,7 +711,11 @@ export function collectLocalsAndExportsFromSource(
   ): SymbolDef => {
     const lineSpan = Math.max(1, range.end.line - range.start.line + 1);
     const docstring = extractLeadingDocstring(range.start.line, support.id);
-    const complexity = estimateComplexity(range, support.id);
+    const shouldEstimateComplexity =
+      kind === SymbolKind.Function || kind === SymbolKind.Class;
+    const complexity = shouldEstimateComplexity
+      ? estimateComplexity(range, support.id)
+      : undefined;
     const base: SymbolDef = {
       file,
       localName,
