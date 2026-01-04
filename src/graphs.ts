@@ -1267,16 +1267,20 @@ export async function buildSymbolGraphDetailed(
       ]);
 
       const getCallTarget = (n: Parser.SyntaxNode): Parser.SyntaxNode | null => {
-        return (
+        const explicitTarget =
           n.childForFieldName("function") ??
           n.childForFieldName("callee") ??
           n.childForFieldName("name") ??
           n.childForFieldName("method") ??
           n.childForFieldName("member") ??
-          n.childForFieldName("expression") ??
-          n.namedChildren.find((ch) => ch.type !== "argument_list") ??
-          null
+          n.childForFieldName("expression");
+        if (explicitTarget) return explicitTarget;
+        const nonArgumentChildren = n.namedChildren.filter(
+          (ch) => ch.type !== "argument_list",
         );
+        return nonArgumentChildren.length === 1
+          ? nonArgumentChildren[0] ?? null
+          : null;
       };
 
       const getNewTarget = (n: Parser.SyntaxNode) =>
@@ -1711,23 +1715,22 @@ export async function buildSymbolGraphDetailed(
       if (sup.id === "rust") {
         const walkImpls = (node: Parser.SyntaxNode) => {
           if (node.type === "impl_item") {
-            const ids: string[] = [];
-            collectIdentifiers(node, ids);
-            if (ids.length >= 2) {
-              const traitName = ids[0];
-              const typeName = ids[1];
-              if (traitName && typeName) {
-                const typeDef = resolveIdentifier(typeName);
-                const traitDef = resolveIdentifier(traitName);
-                if (typeDef && traitDef) {
-                  const fromId = defNodeId(typeDef);
-                  const toId = defNodeId(traitDef);
-                  if (!nodes.has(fromId))
-                    nodes.set(fromId, nodeForDef(typeDef));
-                  if (!nodes.has(toId))
-                    nodes.set(toId, nodeForDef(traitDef));
-                  recordEdge(fromId, toId, "implements");
-                }
+            const typeIdentifiers =
+              node.namedChildren?.filter((child) => child.type === "type_identifier") ??
+              [];
+            if (typeIdentifiers.length >= 2) {
+              const traitName = sliceText(typeIdentifiers[0], src);
+              const typeName = sliceText(typeIdentifiers[1], src);
+              const typeDef = resolveIdentifier(typeName);
+              const traitDef = resolveIdentifier(traitName);
+              if (typeDef && traitDef) {
+                const fromId = defNodeId(typeDef);
+                const toId = defNodeId(traitDef);
+                if (!nodes.has(fromId))
+                  nodes.set(fromId, nodeForDef(typeDef));
+                if (!nodes.has(toId))
+                  nodes.set(toId, nodeForDef(traitDef));
+                recordEdge(fromId, toId, "implements");
               }
             }
           }
