@@ -76,8 +76,8 @@
     "vitest": "^3.2.4"
   },
   "dependencies": {
+    "better-sqlite3": "^12.5.0",
     "fast-glob": "^3.3.3",
-    "sql.js": "^1.13.0",
     "tree-sitter": "^0.25.0",
     "tree-sitter-c-sharp": "^0.23.1",
     "tree-sitter-css": "^0.23.1",

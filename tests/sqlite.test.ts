@@ -16,24 +16,16 @@ async function mkTmpDir(prefix: string): Promise<string> {
   return dir;
 }
 
-const resolveSqlWasmPath = () => {
+const loadBetterSqlite3 = () => {
   const require = createRequire(import.meta.url);
-  return require.resolve("sql.js/dist/sql-wasm.wasm");
+  return require("better-sqlite3") as typeof import("better-sqlite3");
 };
 
-const loadSqlJs = () => {
-  const require = createRequire(import.meta.url);
-  return require("sql.js") as typeof import("sql.js");
-};
+type BetterSqliteDatabase = import("better-sqlite3").Database;
 
-type SqlExecRow = Array<string | number | null>;
-type SqlExecResult = { values: SqlExecRow[] };
-type SqlJsDatabase = { exec: (sql: string) => SqlExecResult[] };
-
-const dbQuery = (db: SqlJsDatabase, sql: string): string[] => {
-  const result = db.exec(sql);
-  if (result.length === 0) return [];
-  return result[0]?.values?.map((row) => String(row[0])) ?? [];
+const dbQuery = (db: BetterSqliteDatabase, sql: string): string[] => {
+  const rows = db.prepare(sql).raw().all();
+  return rows.map((row) => String(row[0]));
 };
 
 describe("SQLite graph export", () => {
@@ -55,10 +47,8 @@ export function run() { helper(); new Widget(); }
       outputPath: dbPath,
     });
 
-    const initSqlJs = loadSqlJs();
-    const SQL = await initSqlJs({ locateFile: () => resolveSqlWasmPath() });
-    const data = await fsp.readFile(dbPath);
-    const db = new SQL.Database(new Uint8Array(data)) as SqlJsDatabase;
+    const BetterSqlite3 = loadBetterSqlite3();
+    const db = new BetterSqlite3(dbPath);
 
     const tables = dbQuery(db, "SELECT name FROM sqlite_master WHERE type='table';");
     expect(tables).toContain("files");
@@ -90,6 +80,7 @@ export function run() { helper(); new Widget(); }
       "SELECT label FROM symbol_edges WHERE label = 'calls';",
     );
     expect(calls.length).toBeGreaterThan(0);
+    db.close();
   });
 
   it("updates changed files incrementally", async () => {
@@ -128,10 +119,8 @@ export function run() { return new NewWidget(); }
       changedFiles: [changedPath],
     });
 
-    const initSqlJs = loadSqlJs();
-    const SQL = await initSqlJs({ locateFile: () => resolveSqlWasmPath() });
-    const data = await fsp.readFile(dbPath);
-    const db = new SQL.Database(new Uint8Array(data)) as SqlJsDatabase;
+    const BetterSqlite3 = loadBetterSqlite3();
+    const db = new BetterSqlite3(dbPath);
 
     const oldSymbols = dbQuery(
       db,
@@ -148,6 +137,7 @@ export function run() { return new NewWidget(); }
     expect(oldSymbols).toEqual([]);
     expect(newSymbols).toEqual(["NewWidget"]);
     expect(helperSymbols).toEqual(["helper"]);
+    db.close();
   });
 
   it("supports deterministic graph queries", async () => {
