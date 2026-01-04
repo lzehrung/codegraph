@@ -71,7 +71,12 @@ export function run() { helper(); new Widget(); }
       "SELECT name FROM sqlite_master WHERE type='index';",
     );
     expect(indexes).toContain("idx_symbols_name");
+    expect(indexes).toContain("idx_symbols_name_kind");
+    expect(indexes).toContain("idx_symbols_file_kind");
+    expect(indexes).toContain("idx_symbols_kind_complexity");
     expect(indexes).toContain("idx_symbol_edges_from");
+    expect(indexes).toContain("idx_symbol_edges_label_to");
+    expect(indexes).toContain("idx_symbol_edges_label_from");
     expect(indexes).toContain("idx_file_edges_from");
 
     const symbols = dbQuery(

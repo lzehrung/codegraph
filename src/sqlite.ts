@@ -96,12 +96,17 @@ const ensureSchema = (db: SqlJsDatabase) => {
     CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file);
     CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
     CREATE INDEX IF NOT EXISTS idx_symbols_kind ON symbols(kind);
+    CREATE INDEX IF NOT EXISTS idx_symbols_name_kind ON symbols(name, kind);
+    CREATE INDEX IF NOT EXISTS idx_symbols_file_kind ON symbols(file, kind);
+    CREATE INDEX IF NOT EXISTS idx_symbols_kind_complexity ON symbols(kind, complexity DESC);
     CREATE INDEX IF NOT EXISTS idx_file_edges_from ON file_edges(from_path);
     CREATE INDEX IF NOT EXISTS idx_file_edges_to ON file_edges(to_path);
     CREATE INDEX IF NOT EXISTS idx_file_edges_type ON file_edges(to_type);
     CREATE INDEX IF NOT EXISTS idx_symbol_edges_from ON symbol_edges(from_id);
     CREATE INDEX IF NOT EXISTS idx_symbol_edges_to ON symbol_edges(to_id);
     CREATE INDEX IF NOT EXISTS idx_symbol_edges_label ON symbol_edges(label);
+    CREATE INDEX IF NOT EXISTS idx_symbol_edges_label_to ON symbol_edges(label, to_id);
+    CREATE INDEX IF NOT EXISTS idx_symbol_edges_label_from ON symbol_edges(label, from_id);
   `);
 };
 
