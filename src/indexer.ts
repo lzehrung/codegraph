@@ -717,7 +717,10 @@ export function collectLocalsAndExportsFromSource(
     ) {
       lineSpan = Math.max(1, range.end.line - range.start.line + 1);
     }
-    const docstring = extractLeadingDocstring(range.start.line, support.id);
+    let docstring: string | undefined;
+    if (typeof range.start.line === "number") {
+      docstring = extractLeadingDocstring(range.start.line, support.id);
+    }
     const shouldEstimateComplexity =
       kind === SymbolKind.Function || kind === SymbolKind.Class;
     const complexity = shouldEstimateComplexity
