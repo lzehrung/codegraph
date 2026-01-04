@@ -94,16 +94,32 @@ const ensureSchema = (db: BetterSqliteDatabase) => {
 const execRows = (
   db: BetterSqliteDatabase,
   sql: string,
-): Array<Array<string | number | null>> => {
-  return db.prepare(sql).raw().all();
+): Array<Array<unknown>> => {
+  const rows = db.prepare(sql).raw().all();
+  const normalized: Array<Array<unknown>> = [];
+  for (const row of rows) {
+    if (!Array.isArray(row)) {
+      throw new Error("Expected sqlite raw() results to be row arrays.");
+    }
+    normalized.push(row);
+  }
+  return normalized;
 };
 
 const execRowsParams = (
   db: BetterSqliteDatabase,
   sql: string,
   params: Array<string | number | null>,
-): Array<Array<string | number | null>> => {
-  return db.prepare(sql).raw().all(params);
+): Array<Array<unknown>> => {
+  const rows = db.prepare(sql).raw().all(params);
+  const normalized: Array<Array<unknown>> = [];
+  for (const row of rows) {
+    if (!Array.isArray(row)) {
+      throw new Error("Expected sqlite raw() results to be row arrays.");
+    }
+    normalized.push(row);
+  }
+  return normalized;
 };
 
 const loadFileEdges = (db: BetterSqliteDatabase) =>
