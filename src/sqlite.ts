@@ -125,10 +125,12 @@ const bfsDependencies = (edges: Array<{ from: string; to: string }>, start: stri
   }
   const visited = new Set<string>();
   const queue: string[] = [start];
+  let head = 0;
   visited.add(start);
   const result: string[] = [];
-  while (queue.length > 0) {
-    const current = queue.shift();
+  while (head < queue.length) {
+    const current = queue[head];
+    head += 1;
     if (!current) continue;
     const neighbors = adj.get(current) ?? [];
     for (const next of neighbors) {
@@ -153,10 +155,12 @@ const bfsReverseDependencies = (
   }
   const visited = new Set<string>();
   const queue: string[] = [start];
+  let head = 0;
   visited.add(start);
   const result: string[] = [];
-  while (queue.length > 0) {
-    const current = queue.shift();
+  while (head < queue.length) {
+    const current = queue[head];
+    head += 1;
     if (!current) continue;
     const neighbors = adj.get(current) ?? [];
     for (const next of neighbors) {
