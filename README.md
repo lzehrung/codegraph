@@ -43,6 +43,8 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * Parse simple text queries and retrieve matching symbols or neighbor subgraphs
   * Export graphs as triples for downstream knowledge-graph storage
   * Detailed symbol graphs include semantic edges like `calls`, `instantiates`, `extends`, `implements`, and `decorates`
+* **SQLite graph output**
+  * Export file and symbol graphs into a queryable SQLite database with indexed tables
 * **Dependency Analysis**
   * `deps <file>`: List all dependencies of a file
   * `rdeps <file>`: List all files that depend on a file

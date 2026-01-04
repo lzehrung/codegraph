@@ -29,6 +29,7 @@ import {
   getUnresolvedImports,
   getHotspots,
   getApiSurface,
+  writeGraphSqlite,
   chunkFile,
   chunkTextFile,
   chunkSFCFile,
@@ -90,6 +91,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--git-head",
   "--symbols-detailed-scope",
   "--symbols-detailed-max-edges",
+  "--sqlite",
   "--file",
   "--line",
   "--col",
@@ -583,6 +585,7 @@ async function main() {
     const hasExplicitFormatFlag =
       hasFlag("--mermaid") || hasFlag("--dot") || hasFlag("--json");
     const outputArg = getOpt("--output");
+    const sqliteArg = getOpt("--sqlite");
     const stderrArg = getOpt("--stderr-file");
     const stdoutMode = hasFlag("--stdout");
     const defaultGraphMode = !hasExplicitSymbolFlag && !hasExplicitFormatFlag;
@@ -608,6 +611,11 @@ async function main() {
       : defaultGraphMode && !stdoutMode
         ? path.resolve(process.cwd(), "codegraph.json").replace(/\\/g, "/")
         : undefined;
+    const sqliteFile = sqliteArg
+      ? path.isAbsolute(sqliteArg)
+        ? sqliteArg.replace(/\\/g, "/")
+        : path.resolve(process.cwd(), sqliteArg).replace(/\\/g, "/")
+      : undefined;
     stderrFilePath = stderrArg
       ? path.isAbsolute(stderrArg)
         ? stderrArg.replace(/\\/g, "/")
@@ -623,6 +631,35 @@ async function main() {
         writeStdoutLine(text);
       }
     };
+    if (sqliteFile) {
+      const index = await buildProjectIndexFromFiles(projectRootFs, files, {
+        threads,
+        cache,
+        cacheStrict,
+        graph: {
+          fast,
+          resolveNodeModules,
+        },
+      });
+      const detailedSymbols = hasFlag("--symbols-detailed");
+      const scope = getOpt("--symbols-detailed-scope") as any;
+      const maxEdgesRaw = getOpt("--symbols-detailed-max-edges");
+      const maxEdges = maxEdgesRaw !== undefined ? Number(maxEdgesRaw) : undefined;
+      const membersOnly = hasFlag("--symbols-detailed-members-only");
+      const sgraph = detailedSymbols
+        ? await buildSymbolGraphDetailed(index, {
+            scope: scope as any,
+            maxEdges: typeof maxEdges === "number" ? maxEdges : (undefined as any),
+            membersOnly,
+          })
+        : await buildSymbolGraph(index);
+      await writeGraphSqlite({
+        fileGraph: index.graph,
+        symbolGraph: sgraph,
+        outputPath: sqliteFile,
+      });
+      return;
+    }
     if (wantSymbols) {
       const index = await buildProjectIndexFromFiles(projectRootFs, files, {
         threads,
