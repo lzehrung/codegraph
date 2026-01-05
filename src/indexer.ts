@@ -2259,26 +2259,49 @@ export async function buildProjectIndexIncremental(
   }
 
   const cachedGraphEntries = new Map<string, ManifestFileEntry>(
-    Object.entries(manifest.files ?? {}),
+    Object.entries(manifest.files ?? {}).filter(([file]) => fs.existsSync(file)),
   );
-  const manifestEntries = new Map<string, ManifestFileEntry>();
+  const manifestEntries = new Map<string, ManifestFileEntry>(cachedGraphEntries);
 
-  const filesList = Array.from(allFiles);
-  const graph = await collectGraph(projectRoot, filesList, {
-    parsed: parsedMap as any,
-    fast: !!graphOptions.fast,
-    resolveNodeModules: !!graphOptions.resolveNodeModules,
-    fileSignatures,
-    cachedFileEdges: cachedGraphEntries,
-    onFileEdges: (file, entry) => {
-      if (!entry?.sig) return;
-      manifestEntries.set(file, {
-        sig: entry.sig,
-        ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
-        edges: entry.edges,
-      });
-    },
-  });
+  const baseGraph: Graph | undefined =
+    cachedGraphEntries.size > 0
+      ? {
+          nodes: new Set<string>(),
+          edges: [],
+        }
+      : undefined;
+
+  if (baseGraph) {
+    for (const [file, entry] of cachedGraphEntries) {
+      baseGraph.nodes.add(file);
+      for (const edge of entry.edges) {
+        baseGraph.edges.push(edge);
+        if (edge.to.type === "file") baseGraph.nodes.add(edge.to.path);
+      }
+    }
+  }
+
+  const filesList = Array.from(changedFiles);
+  const graph =
+    filesList.length === 0 && baseGraph
+      ? { nodes: new Set(baseGraph.nodes), edges: [...baseGraph.edges] }
+      : await collectGraph(projectRoot, filesList, {
+          parsed: parsedMap as any,
+          fast: !!graphOptions.fast,
+          resolveNodeModules: !!graphOptions.resolveNodeModules,
+          fileSignatures,
+          cachedFileEdges: cachedGraphEntries,
+          baseGraph,
+          replaceFiles: new Set<string>(changedFiles),
+          onFileEdges: (file, entry) => {
+            if (!entry?.sig) return;
+            manifestEntries.set(file, {
+              sig: entry.sig,
+              ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
+              edges: entry.edges,
+            });
+          },
+        });
 
   if (manifestEntries.size > 0) {
     const lastCommit = await getGitHead(projectRoot);
