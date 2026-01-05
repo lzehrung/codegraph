@@ -186,4 +186,32 @@ describe('Cache invalidation and strict hashing', () => {
     expect(graph.edges.length).toBe(1);
     expect(graph.edges[0]?.from).toBe(normalize(trackedPath));
   });
+
+  it('refreshes incremental manifest when HEAD diverges and picks up new commit files', async () => {
+    const root = await mkTmpDir('dg-manifest-head-');
+    runGit(root, ['init']);
+    runGit(root, ['config', 'user.email', 'cache@test.local']);
+    runGit(root, ['config', 'user.name', 'Cache Test']);
+
+    const firstPath = path.join(root, 'first.ts');
+    await fsp.writeFile(firstPath, `export const first = 1;\n`, 'utf8');
+    runGit(root, ['add', 'first.ts']);
+    runGit(root, ['commit', '-m', 'first']);
+
+    await buildProjectIndex(root, { threads: 2, cache: 'disk' });
+
+    const nextPath = path.join(root, 'next.ts');
+    await fsp.writeFile(nextPath, `export const next = 2;\n`, 'utf8');
+    runGit(root, ['add', 'next.ts']);
+    runGit(root, ['commit', '-m', 'next']);
+
+    const incremental = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: 'disk',
+    });
+
+    const nextModule = incremental.byFile.get(normalize(nextPath));
+    expect(nextModule).toBeDefined();
+    expect(nextModule?.locals.some((l) => l.localName === 'next')).toBe(true);
+  });
 });
