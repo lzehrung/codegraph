@@ -51,6 +51,7 @@ function isExported(mod: { exports: any[] }, handle: string): boolean {
   );
 }
 
+// Review entry point: programmatic review report builder.
 export async function buildReviewReport(
   projectRoot: string,
   opts: ReviewOptions = {},
@@ -96,6 +97,10 @@ export async function buildReviewReport(
   }
 
   const changedFileList = Array.from(changedFiles);
+  const fastGraphRequested = opts.graph?.fast === true;
+  const graphOptions = opts.graph
+    ? { ...opts.graph, fast: fastGraphRequested }
+    : { fast: false };
   const existenceChecks = await Promise.all(
     changedFileList.map(async (file) => ({
       file,
@@ -120,6 +125,7 @@ export async function buildReviewReport(
     const indexOpts: IncrementalBuildOptions = {
       ...(opts ?? {}),
       files: filesToIndex,
+      graph: graphOptions,
     };
     index = await buildProjectIndexIncremental(projectRoot, indexOpts);
   }
