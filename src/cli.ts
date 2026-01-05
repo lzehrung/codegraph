@@ -492,7 +492,10 @@ async function main() {
     path.isAbsolute(p) ? p : path.resolve(process.cwd(), p);
 
   const defaultProjectRoot =
-    (cmd === "graph" || cmd === "index" || cmd === "grep") &&
+    (cmd === "graph" ||
+      cmd === "index" ||
+      cmd === "grep" ||
+      cmd === "impact") &&
     !rootOpt &&
     parsed.positionals.length === 1 &&
     fs.existsSync(resolveAbs(parsed.positionals[0]!)) &&
