@@ -20,7 +20,8 @@ import {
   acquireParser,
   releaseParser,
   getGitHead,
-  getGitBlobHash,
+  isGitRepo,
+  getGitBlobHashes,
   listChangedFiles,
 } from "./util.js";
 import {
@@ -497,11 +498,10 @@ async function fileStatSignature(
 
 async function fileSignature(
   file: string,
-  projectRoot: string,
   strict?: boolean,
+  gitSig?: string,
 ): Promise<FileSignature> {
   const sig = await fileStatSignature(file, strict);
-  const gitSig = await getGitBlobHash(projectRoot, file);
   const cacheSig = gitSig ?? sig;
   return gitSig ? { sig, gitSig, cacheSig } : { sig, cacheSig };
 }
@@ -1800,6 +1800,7 @@ async function buildIndexFromFileListShared(
   const manifestMode: ManifestMode = helperOpts?.manifestMode ?? "off";
   const useManifest = manifestMode !== "off";
   const shouldWriteManifest = manifestMode === "read-write";
+  const cacheMode = opts?.cache ?? "off";
   const graphOptions = normalizeGraphOptions(opts?.graph);
   const normalizedFiles = Array.from(
     new Set(
@@ -1822,6 +1823,14 @@ async function buildIndexFromFileListShared(
     : undefined;
   const modules = new Map<FileId, ModuleIndex>();
   const fileSignatures = new Map<string, FileSignature>();
+  const gitAvailable = await isGitRepo(projectRoot);
+  const useGitSignatures =
+    gitAvailable && (cacheMode !== "off" || opts?.cacheStrict);
+  const gitSigMap = useGitSignatures
+    ? await getGitBlobHashes(projectRoot, normalizedFiles, {
+        gitAvailable,
+      })
+    : new Map<string, string>();
   const parsedMap = new Map<
     string,
     {
@@ -1836,7 +1845,11 @@ async function buildIndexFromFileListShared(
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
   const fileResults = await mapLimit(normalizedFiles, conc, async (f) => {
     try {
-      const sigInfo = await fileSignature(f, projectRoot, opts?.cacheStrict);
+      const sigInfo = await fileSignature(
+        f,
+        opts?.cacheStrict,
+        gitSigMap.get(f),
+      );
       fileSignatures.set(f, sigInfo);
       const cached = await tryLoadFromCache(
         projectRoot,
@@ -2072,6 +2085,13 @@ export async function buildProjectIndexIncremental(
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
   const fileSignatures = new Map<string, FileSignature>();
+  const gitAvailable = await isGitRepo(projectRoot);
+  const useGitSignatures = gitAvailable;
+  const gitSigMap = useGitSignatures
+    ? await getGitBlobHashes(projectRoot, Array.from(allFiles), {
+        gitAvailable,
+      })
+    : new Map<string, string>();
   const changedFiles = new Set<string>();
   const modules = new Map<FileId, ModuleIndex>();
   const parsedMap = new Map<
@@ -2092,7 +2112,11 @@ export async function buildProjectIndexIncremental(
   gitFiles.forEach(markAsChanged);
 
   for (const file of allFiles) {
-    const sigInfo = await fileSignature(file, projectRoot, opts?.cacheStrict);
+    const sigInfo = await fileSignature(
+      file,
+      opts?.cacheStrict,
+      gitSigMap.get(file),
+    );
     fileSignatures.set(file, sigInfo);
     const entry = trackedEntries[file];
     const hasMatchingGitSig =
