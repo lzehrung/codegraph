@@ -367,6 +367,8 @@ reviewing a PR.
 
 Feed this JSON directly to an agent (or your own scripts) to highlight symbol-level changes, updated dependency edges, and likely regression tests.
 
+For review accuracy, keep full parsing enabled (the default). Only use `--fast-graph` when you are willing to trade off completeness for speed; it can miss edges that full parsing captures.
+
 ### For Local Development
 
 If you're working on the package itself, use `tsx` to run directly:

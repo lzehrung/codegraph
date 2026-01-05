@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { collectGraph } from '../src/index.js';
+import os from 'node:os';
+import fsp from 'node:fs/promises';
+import { collectGraph, type Edge } from '../src/index.js';
 import { getSamplePath } from './test-utils.js';
 
 function normEdge(e: any) {
@@ -67,6 +69,32 @@ describe('Fast graph specifier extraction (--fast-graph)', () => {
     const bSet = new Set(g2.edges.map(e => `${e.from}|${toKey(e.to)}|${e.raw}`));
     expect(bSet).toEqual(aSet);
   });
-});
 
+  it('can miss multiline import edges that full parsing captures', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-fast-graph-'));
+    const entryPath = path.join(root, 'entry.ts').replace(/\\/g, '/');
+    const depPath = path.join(root, 'dep.ts').replace(/\\/g, '/');
+    await fsp.writeFile(
+      entryPath,
+      `import {\n  value\n} from './dep';\n\nconsole.log(value);\n`,
+      'utf8'
+    );
+    await fsp.writeFile(depPath, `export const value = 42;\n`, 'utf8');
+
+    const files = [entryPath, depPath];
+    const fullGraph = await collectGraph(root, files);
+    const fastGraph = await collectGraph(root, files, { fast: true });
+
+    const hasEdge = (edges: Edge[], from: string, to: string) =>
+      edges.some(
+        (edge) =>
+          edge.from === from &&
+          edge.to.type === 'file' &&
+          edge.to.path === to
+      );
+
+    expect(hasEdge(fullGraph.edges, entryPath, depPath)).toBe(true);
+    expect(hasEdge(fastGraph.edges, entryPath, depPath)).toBe(false);
+  });
+});
 
