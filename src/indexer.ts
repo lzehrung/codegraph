@@ -2042,6 +2042,21 @@ export async function buildProjectIndexIncremental(
     return await buildProjectIndex(projectRoot, opts);
   }
 
+  const gitAvailable = await isGitRepo(projectRoot);
+  const currentHead = gitAvailable ? await getGitHead(projectRoot) : null;
+  const hasExplicitGitRange = !!opts?.gitBase || !!opts?.gitHead;
+  const manifestCommitMismatch =
+    !hasExplicitGitRange &&
+    !!manifest.lastCommit &&
+    !!currentHead &&
+    manifest.lastCommit !== currentHead;
+  const manifestDiffFiles = manifestCommitMismatch
+    ? await listChangedFiles(projectRoot, {
+        base: manifest.lastCommit,
+        head: currentHead,
+      })
+    : [];
+
   const normalizeFilePath = (file: string): string =>
     (path.isAbsolute(file) ? file : path.resolve(projectRoot, file)).replace(
       /\\/g,
@@ -2068,6 +2083,7 @@ export async function buildProjectIndexIncremental(
   const allFiles = new Set<string>([
     ...trackedFiles,
     ...explicitFiles.filter((f) => fs.existsSync(f)),
+    ...manifestDiffFiles.filter((f) => fs.existsSync(f)),
     ...gitFiles.filter((f) => fs.existsSync(f)),
   ]);
 
@@ -2085,7 +2101,6 @@ export async function buildProjectIndexIncremental(
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
   const fileSignatures = new Map<string, FileSignature>();
-  const gitAvailable = await isGitRepo(projectRoot);
   const useGitSignatures = gitAvailable;
   const gitSigMap = useGitSignatures
     ? await getGitBlobHashes(projectRoot, Array.from(allFiles), {
@@ -2109,6 +2124,7 @@ export async function buildProjectIndexIncremental(
     if (fs.existsSync(file)) changedFiles.add(file);
   };
   explicitFiles.forEach(markAsChanged);
+  manifestDiffFiles.forEach(markAsChanged);
   gitFiles.forEach(markAsChanged);
 
   for (const file of allFiles) {
