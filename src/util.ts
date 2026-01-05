@@ -704,6 +704,30 @@ export async function getGitHead(projectRoot: string): Promise<string | null> {
   }
 }
 
+export async function getGitBlobHash(
+  projectRoot: string,
+  file: string,
+): Promise<string | null> {
+  try {
+    const relPath = normalizePath(path.relative(projectRoot, file));
+    if (!relPath || relPath.startsWith("..") || path.isAbsolute(relPath)) {
+      return null;
+    }
+    await execFileAsync("git", ["ls-files", "--error-unmatch", relPath], {
+      cwd: projectRoot,
+      env: process.env,
+    });
+    const { stdout } = await execFileAsync("git", ["hash-object", relPath], {
+      cwd: projectRoot,
+      env: process.env,
+    });
+    const hash = stdout?.toString().trim();
+    return hash || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function listChangedFiles(
   projectRoot: string,
   opts: {
