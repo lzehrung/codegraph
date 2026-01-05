@@ -446,8 +446,8 @@ npx tsx src/cli.ts goto <file> <line> <column>
 - Caching:
   - Modes: `off` (default), `memory` (per-process), `disk` (persist across runs, stored under `.codegraph-cache/index-v1`).
   - `--cache-strict` uses a content hash; without it, cache key uses mtime+size.
-  - `.codegraph-cache/index-v1/manifest.json` now stores the last indexed commit, graph options, and per-file signatures plus resolved edges. When you re-run `codegraph index` with the same options, unchanged files reuse the manifest entries and skip dependency extraction entirely.
-  - Incremental runs compare the manifest `lastCommit` to `HEAD` and refresh files changed since the last indexed commit when no explicit Git range is provided.
+  - `.codegraph-cache/index-v1/manifest.json` stores the last indexed commit, graph options, and per-file signatures plus resolved edges. When you re-run `codegraph index` with the same options, unchanged files reuse the manifest entries and skip dependency extraction entirely.
+  - Incremental runs treat the manifest as a cached base graph: unchanged files keep their edges, while changed files are re-parsed and their edges replaced. When no explicit Git range is provided, the manifest `lastCommit` is compared to `HEAD` to decide which files to refresh.
   - Remove the manifest (or rerun with different graph flags) to force a full graph rebuild.
   - Clear disk cache: delete `.codegraph-cache/index-v1`.
 
