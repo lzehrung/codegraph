@@ -31,6 +31,7 @@ export type GraphBuildOptions = {
 
 export type GraphCacheEntry = {
   sig: string;
+  gitSig?: string;
   edges: Edge[];
 };
 
@@ -161,7 +162,7 @@ export async function collectGraph(
     fast?: boolean;
     threads?: number;
     resolveNodeModules?: boolean;
-    fileSignatures?: Map<string, string>;
+    fileSignatures?: Map<string, { sig: string; gitSig?: string; cacheSig?: string }>;
     cachedFileEdges?: Map<string, GraphCacheEntry>;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
     baseGraph?: Graph;
@@ -199,11 +200,13 @@ export async function collectGraph(
   const emitCacheEntry = (
     file: string,
     sig: string | undefined,
+    gitSig: string | undefined,
     edges: Edge[],
   ) => {
     if (!sig || !opts?.onFileEdges) return;
     opts.onFileEdges(file, {
       sig,
+      ...(gitSig ? { gitSig } : {}),
       edges: edges.map(cloneEdge),
     });
   };
@@ -241,14 +244,18 @@ export async function collectGraph(
   const filePromises = await mapLimit(files, conc, async (file) => {
     try {
       const normalizedFile = file.replace(/\\/g, "/");
-      const sig = opts?.fileSignatures?.get(normalizedFile);
-      const cached = sig
-        ? opts?.cachedFileEdges?.get(normalizedFile)
-        : undefined;
-      if (sig && cached && cached.sig === sig) {
+      const sigEntry = opts?.fileSignatures?.get(normalizedFile);
+      const sig = sigEntry?.sig;
+      const gitSig = sigEntry?.gitSig;
+      const cached =
+        sig || gitSig ? opts?.cachedFileEdges?.get(normalizedFile) : undefined;
+      const matchesGitSig =
+        !!gitSig && !!cached?.gitSig && cached.gitSig === gitSig;
+      const matchesSig = !!sig && !!cached && cached.sig === sig;
+      if (cached && (matchesGitSig || matchesSig)) {
         const cloned = cached.edges.map(cloneEdge);
         addEdgeTargetsToGraph(cloned);
-        emitCacheEntry(normalizedFile, sig, cloned);
+        emitCacheEntry(normalizedFile, sig, gitSig, cloned);
         return cloned;
       }
 
@@ -330,7 +337,7 @@ export async function collectGraph(
         });
         if (to.type === "file") graph.nodes.add(to.path);
       }
-      emitCacheEntry(normalizedFile, sig, edges);
+      emitCacheEntry(normalizedFile, sig, gitSig, edges);
       return edges;
     } catch (error) {
       console.warn(`Warning: Failed to process file ${file} for graph:`, error);

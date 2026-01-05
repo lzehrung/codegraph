@@ -4,7 +4,7 @@ import path from "node:path";
 import fg from "fast-glob";
 import { createMatchPath } from "tsconfig-paths";
 import Parser from "tree-sitter";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import type { Range } from "./types.js";
 
@@ -701,6 +701,132 @@ export async function getGitHead(projectRoot: string): Promise<string | null> {
     return hash || null;
   } catch {
     return null;
+  }
+}
+
+export async function isGitRepo(projectRoot: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["rev-parse", "--is-inside-work-tree"],
+      {
+        cwd: projectRoot,
+        env: process.env,
+      },
+    );
+    return stdout?.toString().trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
+export async function getGitBlobHash(
+  projectRoot: string,
+  file: string,
+  opts?: { gitAvailable?: boolean },
+): Promise<string | null> {
+  try {
+    if (opts?.gitAvailable === false) return null;
+    const relPath = normalizePath(path.relative(projectRoot, file));
+    if (!relPath || relPath.startsWith("..") || path.isAbsolute(relPath)) {
+      return null;
+    }
+    await execFileAsync("git", ["ls-files", "--error-unmatch", relPath], {
+      cwd: projectRoot,
+      env: process.env,
+    });
+    const { stdout } = await execFileAsync("git", ["hash-object", relPath], {
+      cwd: projectRoot,
+      env: process.env,
+    });
+    const hash = stdout?.toString().trim();
+    return hash || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getGitBlobHashes(
+  projectRoot: string,
+  files: string[],
+  opts?: { gitAvailable?: boolean },
+): Promise<Map<string, string>> {
+  if (opts?.gitAvailable === false) return new Map();
+  const relFiles = Array.from(
+    new Set(
+      files
+        .map((file) => normalizePath(path.relative(projectRoot, file)))
+        .filter(
+          (rel) =>
+            rel &&
+            !rel.startsWith("..") &&
+            !path.isAbsolute(rel) &&
+            rel !== ".",
+        ),
+    ),
+  );
+  if (relFiles.length === 0) return new Map();
+  try {
+    const { stdout: trackedStdout } = await execFileAsync(
+      "git",
+      ["ls-files", "-z", "--", ...relFiles],
+      {
+        cwd: projectRoot,
+        env: process.env,
+      },
+    );
+    const trackedRel = trackedStdout
+      .toString()
+      .split("\0")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (trackedRel.length === 0) return new Map();
+    const hashes = await new Promise<string[]>((resolve, reject) => {
+      const child = spawn("git", ["hash-object", "--stdin-paths"], {
+        cwd: projectRoot,
+        env: process.env,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk.toString();
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+      child.on("error", reject);
+      child.on("close", (code) => {
+        if (code !== 0) {
+          reject(
+            new Error(
+              `git hash-object failed (${code}): ${stderr || "unknown error"}`,
+            ),
+          );
+          return;
+        }
+        resolve(
+          stdout
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean),
+        );
+      });
+      child.stdin.write(trackedRel.join("\n"));
+      child.stdin.end();
+    });
+    if (hashes.length !== trackedRel.length) return new Map();
+    const out = new Map<string, string>();
+    for (let i = 0; i < trackedRel.length; i += 1) {
+      const rel = trackedRel[i]!;
+      const hash = hashes[i];
+      if (!hash) continue;
+      const abs = normalizePath(path.resolve(projectRoot, rel));
+      out.set(abs, hash);
+    }
+    return out;
+  } catch {
+    return new Map();
   }
 }
 

@@ -20,6 +20,8 @@ import {
   acquireParser,
   releaseParser,
   getGitHead,
+  isGitRepo,
+  getGitBlobHashes,
   listChangedFiles,
 } from "./util.js";
 import {
@@ -472,7 +474,16 @@ function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
   );
 }
 
-async function fileSignature(file: string, strict?: boolean): Promise<string> {
+type FileSignature = {
+  sig: string;
+  gitSig?: string;
+  cacheSig: string;
+};
+
+async function fileStatSignature(
+  file: string,
+  strict?: boolean,
+): Promise<string> {
   try {
     const st = await fsp.stat(file);
     if (!strict) return `${st.mtimeMs}:${st.size}`;
@@ -483,6 +494,16 @@ async function fileSignature(file: string, strict?: boolean): Promise<string> {
   } catch {
     return "0:0";
   }
+}
+
+async function fileSignature(
+  file: string,
+  strict?: boolean,
+  gitSig?: string,
+): Promise<FileSignature> {
+  const sig = await fileStatSignature(file, strict);
+  const cacheSig = gitSig ?? sig;
+  return gitSig ? { sig, gitSig, cacheSig } : { sig, cacheSig };
 }
 
 function cacheFilePath(
@@ -1779,6 +1800,7 @@ async function buildIndexFromFileListShared(
   const manifestMode: ManifestMode = helperOpts?.manifestMode ?? "off";
   const useManifest = manifestMode !== "off";
   const shouldWriteManifest = manifestMode === "read-write";
+  const cacheMode = opts?.cache ?? "off";
   const graphOptions = normalizeGraphOptions(opts?.graph);
   const normalizedFiles = Array.from(
     new Set(
@@ -1800,7 +1822,15 @@ async function buildIndexFromFileListShared(
     ? new Map<string, ManifestFileEntry>()
     : undefined;
   const modules = new Map<FileId, ModuleIndex>();
-  const fileSignatures = new Map<string, string>();
+  const fileSignatures = new Map<string, FileSignature>();
+  const gitAvailable = await isGitRepo(projectRoot);
+  const useGitSignatures =
+    gitAvailable && (cacheMode !== "off" || opts?.cacheStrict);
+  const gitSigMap = useGitSignatures
+    ? await getGitBlobHashes(projectRoot, normalizedFiles, {
+        gitAvailable,
+      })
+    : new Map<string, string>();
   const parsedMap = new Map<
     string,
     {
@@ -1815,9 +1845,18 @@ async function buildIndexFromFileListShared(
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
   const fileResults = await mapLimit(normalizedFiles, conc, async (f) => {
     try {
-      const sig = await fileSignature(f, opts?.cacheStrict);
-      fileSignatures.set(f, sig);
-      const cached = await tryLoadFromCache(projectRoot, f, sig, opts);
+      const sigInfo = await fileSignature(
+        f,
+        opts?.cacheStrict,
+        gitSigMap.get(f),
+      );
+      fileSignatures.set(f, sigInfo);
+      const cached = await tryLoadFromCache(
+        projectRoot,
+        f,
+        sigInfo.cacheSig,
+        opts,
+      );
       if (cached) {
         return [f, cached] as const;
       }
@@ -1865,7 +1904,7 @@ async function buildIndexFromFileListShared(
             }
         }
       }
-      await writeToCache(projectRoot, f, sig, mod, opts);
+      await writeToCache(projectRoot, f, sigInfo.cacheSig, mod, opts);
       return [f, mod] as const;
     } catch (error) {
       console.warn(`Warning: Failed to process file ${f}:`, error);
@@ -1940,6 +1979,7 @@ async function buildIndexFromFileListShared(
             if (!entry?.sig) return;
             manifestEntries.set(file, {
               sig: entry.sig,
+              ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
               edges: entry.edges,
             });
           },
@@ -2044,7 +2084,14 @@ export async function buildProjectIndexIncremental(
 
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
-  const fileSignatures = new Map<string, string>();
+  const fileSignatures = new Map<string, FileSignature>();
+  const gitAvailable = await isGitRepo(projectRoot);
+  const useGitSignatures = gitAvailable;
+  const gitSigMap = useGitSignatures
+    ? await getGitBlobHashes(projectRoot, Array.from(allFiles), {
+        gitAvailable,
+      })
+    : new Map<string, string>();
   const changedFiles = new Set<string>();
   const modules = new Map<FileId, ModuleIndex>();
   const parsedMap = new Map<
@@ -2065,16 +2112,32 @@ export async function buildProjectIndexIncremental(
   gitFiles.forEach(markAsChanged);
 
   for (const file of allFiles) {
-    const sig = await fileSignature(file, opts?.cacheStrict);
-    fileSignatures.set(file, sig);
+    const sigInfo = await fileSignature(
+      file,
+      opts?.cacheStrict,
+      gitSigMap.get(file),
+    );
+    fileSignatures.set(file, sigInfo);
     const entry = trackedEntries[file];
-    if (!entry || entry.sig !== sig) changedFiles.add(file);
+    const hasMatchingGitSig =
+      !!entry?.gitSig &&
+      !!sigInfo.gitSig &&
+      entry.gitSig === sigInfo.gitSig;
+    const hasMatchingSig = entry?.sig === sigInfo.sig;
+    if (!entry || !(hasMatchingGitSig || hasMatchingSig)) {
+      changedFiles.add(file);
+    }
   }
 
   for (const file of allFiles) {
     if (changedFiles.has(file)) continue;
-    const sig = fileSignatures.get(file)!;
-    const cached = await tryLoadFromCache(projectRoot, file, sig, opts);
+    const sigInfo = fileSignatures.get(file)!;
+    const cached = await tryLoadFromCache(
+      projectRoot,
+      file,
+      sigInfo.cacheSig,
+      opts,
+    );
     if (cached) {
       modules.set(file, cached);
       collectJsonDependencies(cached.imports, jsonDependencies);
@@ -2131,8 +2194,8 @@ export async function buildProjectIndexIncremental(
               }
           }
         }
-        const sig = fileSignatures.get(f)!;
-        await writeToCache(projectRoot, f, sig, mod, opts);
+        const sigInfo = fileSignatures.get(f)!;
+        await writeToCache(projectRoot, f, sigInfo.cacheSig, mod, opts);
         return [f, mod] as const;
       } catch (error) {
         console.warn(`Warning: Failed to process file ${f}:`, error);
@@ -2195,6 +2258,7 @@ export async function buildProjectIndexIncremental(
       if (!entry?.sig) return;
       manifestEntries.set(file, {
         sig: entry.sig,
+        ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
         edges: entry.edges,
       });
     },
