@@ -1,13 +1,17 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fsp from 'node:fs/promises';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import {
   buildProjectIndex,
   buildProjectIndexIncremental,
 } from '../src/index.js';
+import { collectGraph } from '../src/graphs.js';
+import { getGitBlobHash } from '../src/util.js';
+import * as filePrep from '../src/languages/filePrep.js';
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -27,6 +31,19 @@ async function readManifest(root: string) {
   const mf = path.join(root, '.codegraph-cache', 'index-v1', 'manifest.json');
   const raw = await fsp.readFile(mf, 'utf8');
   return JSON.parse(raw);
+}
+
+function runGit(root: string, args: string[]): string {
+  const result = spawnSync('git', args, {
+    cwd: root,
+    env: process.env,
+    encoding: 'utf8',
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(' ')} failed (${result.status}): ${result.stderr}`);
+  }
+  return result.stdout.trim();
 }
 
 describe('Cache invalidation and strict hashing', () => {
@@ -108,5 +125,65 @@ describe('Cache invalidation and strict hashing', () => {
     });
     const manifest = await readManifest(root);
     expect(manifest.graphOptions.fast).toBe(true);
+  });
+
+  it('stores git signatures for tracked files and reuses cached edges by git hash', async () => {
+    const root = await mkTmpDir('dg-git-sig-');
+    runGit(root, ['init']);
+    runGit(root, ['config', 'user.email', 'cache@test.local']);
+    runGit(root, ['config', 'user.name', 'Cache Test']);
+
+    const trackedPath = path.join(root, 'tracked.ts');
+    const depPath = path.join(root, 'dep.ts');
+    const untrackedPath = path.join(root, 'untracked.ts');
+    await fsp.writeFile(trackedPath, `import './dep';\n`, 'utf8');
+    await fsp.writeFile(depPath, `export const dep = 1;\n`, 'utf8');
+    await fsp.writeFile(untrackedPath, `export const scratch = 2;\n`, 'utf8');
+
+    runGit(root, ['add', 'tracked.ts', 'dep.ts']);
+    runGit(root, ['commit', '-m', 'init']);
+
+    await buildProjectIndex(root, { threads: 2, cache: 'disk' });
+    const manifest = await readManifest(root);
+    const trackedEntry = manifest.files[normalize(trackedPath)];
+    const untrackedEntry = manifest.files[normalize(untrackedPath)];
+    expect(typeof trackedEntry.gitSig).toBe('string');
+    expect(untrackedEntry.gitSig).toBeUndefined();
+
+    const gitSig = await getGitBlobHash(root, trackedPath);
+    expect(typeof gitSig).toBe('string');
+
+    const cachedEdges = [
+      {
+        from: normalize(trackedPath),
+        to: { type: 'file', path: normalize(depPath) },
+        raw: './dep',
+      },
+    ];
+
+    const fileSignatures = new Map<string, { sig: string; gitSig?: string }>([
+      [normalize(trackedPath), { sig: 'mtime:changed', gitSig: gitSig ?? undefined }],
+    ]);
+    const cachedFileEdges = new Map<string, { sig: string; gitSig?: string; edges: typeof cachedEdges }>([
+      [
+        normalize(trackedPath),
+        {
+          sig: 'old-sig',
+          gitSig: gitSig ?? undefined,
+          edges: cachedEdges,
+        },
+      ],
+    ]);
+
+    const prepSpy = vi.spyOn(filePrep, 'prepareParserInput');
+    const graph = await collectGraph(root, [trackedPath], {
+      fileSignatures,
+      cachedFileEdges,
+    });
+
+    expect(prepSpy).not.toHaveBeenCalled();
+    prepSpy.mockRestore();
+    expect(graph.edges.length).toBe(1);
+    expect(graph.edges[0]?.from).toBe(normalize(trackedPath));
   });
 });
