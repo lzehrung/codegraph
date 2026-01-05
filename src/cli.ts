@@ -1055,6 +1055,7 @@ async function main() {
     return;
   }
 
+  // Review entry point: CLI workflow for review reports.
   if (cmd === "review") {
     const base = getOpt("--base");
     const head = getOpt("--head");
