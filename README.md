@@ -463,6 +463,9 @@ npx tsx src/cli.ts goto <file> <line> <column>
 
 - Troubleshooting:
   - Missing edges in JS/TS graph: disable `--fast-graph`.
+  - Dynamic JS/TS specifiers (e.g. `require(path.join(__dirname, ...))`) or bare imports from custom roots:
+    use `--dynamic-import-heuristics` and/or `--resolution-hint <dir>`. These heuristics can
+    introduce false positives or resolve to unexpected files, so enable them only when needed.
   - Stale results: use `--cache-strict` or clear `.codegraph-cache`.
   - Windows path separators: outputs normalize to `/` where relevant.
 
