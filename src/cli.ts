@@ -116,6 +116,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--min-tokens",
   "--max-tokens",
   "--max-hits",
+  "--resolution-hint",
 ]);
 
 function parseCliArgs(tokens: string[]): ParsedCliArgs {
@@ -482,6 +483,25 @@ async function main() {
     const v = parsed.options.get(name);
     return v && v.length > 0 ? v[v.length - 1] : undefined;
   };
+  const graphFlags = {
+    fast: hasFlag("--fast-graph"),
+    resolveNodeModules: hasFlag("--resolve-node-modules"),
+    dynamicImportHeuristics: hasFlag("--dynamic-import-heuristics"),
+    resolutionHints: parsed.options.get("--resolution-hint") ?? [],
+  };
+  const hasGraphOverrides =
+    graphFlags.fast ||
+    graphFlags.resolveNodeModules ||
+    graphFlags.dynamicImportHeuristics ||
+    graphFlags.resolutionHints.length > 0;
+  const buildGraphOptions = () => ({
+    fast: graphFlags.fast,
+    resolveNodeModules: graphFlags.resolveNodeModules,
+    dynamicImportHeuristics: graphFlags.dynamicImportHeuristics,
+    ...(graphFlags.resolutionHints.length > 0
+      ? { resolutionHints: graphFlags.resolutionHints }
+      : {}),
+  });
 
   const changedSince = getOpt("--changed-since");
   const gitBase = getOpt("--git-base");
@@ -604,8 +624,10 @@ async function main() {
       : hasFlag("--dot")
         ? "dot"
         : "json";
-    const fast = hasFlag("--fast-graph");
-    const resolveNodeModules = hasFlag("--resolve-node-modules");
+    const fast = graphFlags.fast;
+    const resolveNodeModules = graphFlags.resolveNodeModules;
+    const dynamicImportHeuristics = graphFlags.dynamicImportHeuristics;
+    const resolutionHints = graphFlags.resolutionHints;
     const compact = defaultGraphMode ? true : hasFlag("--compact-json");
     const outputFile = outputArg
       ? path.isAbsolute(outputArg)
@@ -642,6 +664,10 @@ async function main() {
         graph: {
           fast,
           resolveNodeModules,
+          dynamicImportHeuristics,
+          ...(resolutionHints.length > 0
+            ? { resolutionHints }
+            : {}),
         },
       });
       const detailedSymbols = hasFlag("--symbols-detailed");
@@ -671,6 +697,10 @@ async function main() {
         graph: {
           fast,
           resolveNodeModules,
+          dynamicImportHeuristics,
+          ...(resolutionHints.length > 0
+            ? { resolutionHints }
+            : {}),
         },
       });
       let sgraph;
@@ -743,6 +773,8 @@ async function main() {
       fast,
       threads,
       resolveNodeModules,
+      dynamicImportHeuristics,
+      ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
     });
     const graphOut = stable ? stabilizeGraph(graph) : graph;
     if (format === "mermaid") await writeOut(graphToMermaid(graphOut));
@@ -762,17 +794,16 @@ async function main() {
     const full = hasFlag("--json") || hasFlag("--full");
     const shouldWriteManifest =
       includeRootsAbs.length === 0 && !gitBase && !changedSince;
+    const graphOptions = hasGraphOverrides ? buildGraphOptions() : undefined;
+    const baseIndexOptions = {
+      threads,
+      cache,
+      cacheStrict,
+      ...(graphOptions ? { graph: graphOptions } : {}),
+    };
     const index = shouldWriteManifest
-      ? await buildProjectIndex(projectRootFs, {
-          threads,
-          cache,
-          cacheStrict,
-        })
-      : await buildProjectIndexFromFiles(projectRootFs, files, {
-          threads,
-          cache,
-          cacheStrict,
-        });
+      ? await buildProjectIndex(projectRootFs, baseIndexOptions)
+      : await buildProjectIndexFromFiles(projectRootFs, files, baseIndexOptions);
     if (full) {
       const modules = [...index.byFile.values()].map((m) => ({
         file: m.file,
@@ -984,8 +1015,10 @@ async function main() {
     options.includeTests = includeTests;
     options.membersOnly = membersOnly;
 
-    const fastGraph = hasFlag("--fast-graph");
-    const resolveNodeModules = hasFlag("--resolve-node-modules");
+    const fastGraph = graphFlags.fast;
+    const resolveNodeModules = graphFlags.resolveNodeModules;
+    const dynamicImportHeuristics = graphFlags.dynamicImportHeuristics;
+    const resolutionHints = graphFlags.resolutionHints;
 
     const pretty = hasFlag("--pretty");
     const mermaid = hasFlag("--mermaid");
@@ -996,10 +1029,14 @@ async function main() {
         cache,
         cacheStrict,
       };
-      if (fastGraph || resolveNodeModules) {
+      if (hasGraphOverrides) {
         indexOpts.graph = {
           fast: fastGraph,
           resolveNodeModules,
+          dynamicImportHeuristics,
+          ...(resolutionHints.length > 0
+            ? { resolutionHints }
+            : {}),
         };
       }
       const index = await buildProjectIndex(projectRootFs, indexOpts);
@@ -1066,15 +1103,13 @@ async function main() {
     const maxTestsRaw = getOpt("--max-tests");
     const maxTests =
       maxTestsRaw !== undefined ? Number(maxTestsRaw) : undefined;
-    const fastGraph = hasFlag("--fast-graph");
-
     const reviewOpts: Parameters<typeof buildReviewReport>[1] = {};
     if (base !== undefined) reviewOpts.gitBase = base;
     if (head !== undefined) reviewOpts.gitHead = head;
     if (changedSince !== undefined) reviewOpts.changedSince = changedSince;
     if (threads !== undefined) reviewOpts.threads = threads;
     if (cache !== undefined) reviewOpts.cache = cache;
-    if (fastGraph) reviewOpts.graph = { fast: true };
+    if (hasGraphOverrides) reviewOpts.graph = buildGraphOptions();
     if (maxTests !== undefined) reviewOpts.maxCandidates = maxTests;
     const report = await buildReviewReport(projectRootFs, reviewOpts);
     writeJSONLine(report);
@@ -1097,6 +1132,7 @@ async function main() {
     const graph = await collectGraph(
       projectRootFs,
       await listProjectFiles(projectRootFs),
+      hasGraphOverrides ? buildGraphOptions() : undefined,
     );
     const results =
       cmd === "deps"
@@ -1134,6 +1170,7 @@ async function main() {
     const graph = await collectGraph(
       projectRootFs,
       await listProjectFiles(projectRootFs),
+      hasGraphOverrides ? buildGraphOptions() : undefined,
     );
     const pathResult = getShortestPath(graph, from, to);
 
@@ -1155,6 +1192,7 @@ async function main() {
     const graph = await collectGraph(
       projectRootFs,
       await listProjectFiles(projectRootFs),
+      hasGraphOverrides ? buildGraphOptions() : undefined,
     );
     const cycles = findCycles(graph);
 
@@ -1182,6 +1220,7 @@ async function main() {
     const graph = await collectGraph(
       projectRootFs,
       await listProjectFiles(projectRootFs),
+      hasGraphOverrides ? buildGraphOptions() : undefined,
     );
     const unresolved = getUnresolvedImports(graph);
 
@@ -1214,6 +1253,7 @@ async function main() {
     const graph = await collectGraph(
       projectRootFs,
       await listProjectFiles(projectRootFs),
+      hasGraphOverrides ? buildGraphOptions() : undefined,
     );
     const hotspots = getHotspots(graph);
 
