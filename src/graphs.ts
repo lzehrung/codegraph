@@ -169,8 +169,12 @@ export async function collectGraph(
     replaceFiles?: Set<string>;
   },
 ): Promise<Graph> {
-  const normalizedFiles = files.map((f) => f.replace(/\\/g, "/"));
-  const replaceSet = opts?.replaceFiles ?? new Set<string>(normalizedFiles);
+  const normalizePath = (file: string) => file.replace(/\\/g, "/");
+  const normalizedFiles = files.map(normalizePath);
+  const hasExplicitReplace = !!opts?.replaceFiles;
+  const replaceSet = hasExplicitReplace
+    ? new Set(Array.from(opts.replaceFiles ?? [], (file) => normalizePath(file)))
+    : new Set<string>(normalizedFiles);
   const baseGraph = opts?.baseGraph;
   const graph: Graph = baseGraph
     ? {
@@ -196,6 +200,10 @@ export async function collectGraph(
       if (edge.to.type === "file") graph.nodes.add(edge.to.path);
     }
   };
+
+  if (graph.edges.length > 0) {
+    addEdgeTargetsToGraph(graph.edges);
+  }
 
   const emitCacheEntry = (
     file: string,
@@ -247,8 +255,11 @@ export async function collectGraph(
       const sigEntry = opts?.fileSignatures?.get(normalizedFile);
       const sig = sigEntry?.sig;
       const gitSig = sigEntry?.gitSig;
+      const shouldReplace = hasExplicitReplace && replaceSet.has(normalizedFile);
       const cached =
-        sig || gitSig ? opts?.cachedFileEdges?.get(normalizedFile) : undefined;
+        !shouldReplace && (sig || gitSig)
+          ? opts?.cachedFileEdges?.get(normalizedFile)
+          : undefined;
       const matchesGitSig =
         !!gitSig && !!cached?.gitSig && cached.gitSig === gitSig;
       const matchesSig = !!sig && !!cached && cached.sig === sig;
@@ -346,7 +357,8 @@ export async function collectGraph(
   });
 
   const allEdges = filePromises;
-  graph.edges = allEdges.flat();
+  const newEdges = allEdges.flat();
+  graph.edges = [...graph.edges, ...newEdges];
   return graph;
 }
 
