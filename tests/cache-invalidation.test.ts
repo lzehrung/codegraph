@@ -252,6 +252,108 @@ describe('Cache invalidation and strict hashing', () => {
     expect(bEdges).toEqual(bEntryAfter.edges);
   });
 
+  it('reuses cached graph edges when no files change', async () => {
+    const root = await mkTmpDir('dg-incremental-nochange-');
+    const aPath = path.join(root, 'a.ts');
+    const bPath = path.join(root, 'b.ts');
+
+    await fsp.writeFile(aPath, `import './b';\n`, 'utf8');
+    await fsp.writeFile(bPath, `export const b = 1;\n`, 'utf8');
+
+    await buildProjectIndex(root, { threads: 2, cache: 'disk' });
+    const manifestBefore = await readManifest(root);
+    const aEntryBefore = manifestBefore.files[normalize(aPath)];
+
+    const prepSpy = vi.spyOn(filePrep, 'prepareParserInput');
+    const incremental = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: 'disk',
+    });
+    expect(prepSpy).not.toHaveBeenCalled();
+    prepSpy.mockRestore();
+
+    const aEdges = incremental.graph.edges.filter(
+      (edge) => edge.from === normalize(aPath),
+    );
+    expect(aEdges).toEqual(aEntryBefore.edges);
+  });
+
+  it('drops manifest edges for deleted files during incremental builds', async () => {
+    const root = await mkTmpDir('dg-incremental-delete-');
+    const aPath = path.join(root, 'a.ts');
+    const bPath = path.join(root, 'b.ts');
+
+    await fsp.writeFile(aPath, `import './b';\n`, 'utf8');
+    await fsp.writeFile(bPath, `export const b = 1;\n`, 'utf8');
+
+    await buildProjectIndex(root, { threads: 2, cache: 'disk' });
+    await fsp.unlink(aPath);
+
+    const incremental = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: 'disk',
+    });
+    const manifestAfter = await readManifest(root);
+
+    expect(manifestAfter.files[normalize(aPath)]).toBeUndefined();
+    const aEdges = incremental.graph.edges.filter(
+      (edge) => edge.from === normalize(aPath),
+    );
+    expect(aEdges).toEqual([]);
+  });
+
+  it('updates only explicit files in incremental builds', async () => {
+    const root = await mkTmpDir('dg-incremental-explicit-');
+    const aPath = path.join(root, 'a.ts');
+    const bPath = path.join(root, 'b.ts');
+    const cPath = path.join(root, 'c.ts');
+    const dPath = path.join(root, 'd.ts');
+
+    await fsp.writeFile(aPath, `import './b';\n`, 'utf8');
+    await fsp.writeFile(bPath, `export const b = 1;\n`, 'utf8');
+    await fsp.writeFile(cPath, `import './d';\n`, 'utf8');
+    await fsp.writeFile(dPath, `export const d = 1;\n`, 'utf8');
+
+    await buildProjectIndex(root, { threads: 2, cache: 'disk' });
+    const manifestBefore = await readManifest(root);
+    const cEntryBefore = manifestBefore.files[normalize(cPath)];
+
+    await fsp.writeFile(aPath, `import './d';\n`, 'utf8');
+
+    const incremental = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: 'disk',
+      files: [aPath],
+    });
+    const manifestAfter = await readManifest(root);
+
+    expect(manifestAfter.files[normalize(cPath)].edges).toEqual(
+      cEntryBefore.edges,
+    );
+    const cEdges = incremental.graph.edges.filter(
+      (edge) => edge.from === normalize(cPath),
+    );
+    expect(cEdges).toEqual(cEntryBefore.edges);
+  });
+
+  it('rebuilds when graph options change', async () => {
+    const root = await mkTmpDir('dg-incremental-graph-opts-');
+    const aPath = path.join(root, 'a.ts');
+
+    await fsp.writeFile(aPath, `import './b';\n`, 'utf8');
+    await buildProjectIndex(root, { threads: 2, cache: 'disk' });
+
+    const prepSpy = vi.spyOn(filePrep, 'prepareParserInput');
+    await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: 'disk',
+      graph: { fast: true },
+    });
+
+    expect(prepSpy).toHaveBeenCalled();
+    prepSpy.mockRestore();
+  });
+
   it('refreshes incremental manifest when HEAD diverges and picks up new commit files', async () => {
     const root = await mkTmpDir('dg-manifest-head-');
     runGit(root, ['init']);
