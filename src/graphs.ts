@@ -12,11 +12,16 @@ import {
   loadWorkspaceConfig,
   resolveSpecifier,
   resolvePythonModule,
+  normalizeResolutionHints,
 } from "./util.js";
 import { acquireParser, releaseParser } from "./util.js";
 // Intentionally compile only the imports query locally to avoid compiling
 // unrelated queries (which may differ per grammar) and causing warnings.
-import { extractJsTsSpecifiers, extractPythonSpecifiers } from "./util.js";
+import {
+  extractJsTsSpecifiers,
+  extractPythonSpecifiers,
+  extractJsTsDynamicSpecifiers,
+} from "./util.js";
 import {
   type ImportBinding,
   type ProjectIndex,
@@ -27,6 +32,8 @@ import {
 export type GraphBuildOptions = {
   fast?: boolean;
   resolveNodeModules?: boolean;
+  dynamicImportHeuristics?: boolean;
+  resolutionHints?: string[];
 };
 
 export type GraphCacheEntry = {
@@ -162,6 +169,8 @@ export async function collectGraph(
     fast?: boolean;
     threads?: number;
     resolveNodeModules?: boolean;
+    dynamicImportHeuristics?: boolean;
+    resolutionHints?: string[];
     fileSignatures?: Map<string, { sig: string; gitSig?: string; cacheSig?: string }>;
     cachedFileEdges?: Map<string, GraphCacheEntry>;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
@@ -184,6 +193,7 @@ export async function collectGraph(
     : { nodes: new Set(normalizedFiles), edges: [] };
   for (const file of normalizedFiles) graph.nodes.add(file);
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
+  const resolutionHints = normalizeResolutionHints(opts?.resolutionHints);
 
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 32, 128));
 
@@ -287,6 +297,24 @@ export async function collectGraph(
         src,
         parsed?.tree ? { tree: parsed.tree, fast } : { fast },
       );
+      if (
+        (sup.id === "ts" || sup.id === "js") &&
+        opts?.dynamicImportHeuristics
+      ) {
+        const dynamicSpecs = extractJsTsDynamicSpecifiers(
+          src,
+          normalizedFile,
+          projectRoot,
+        );
+        if (dynamicSpecs.length > 0) {
+          const existing = new Set(specs.map((entry) => entry.spec));
+          for (const entry of dynamicSpecs) {
+            if (existing.has(entry.spec)) continue;
+            existing.add(entry.spec);
+            specs.push(entry);
+          }
+        }
+      }
       const { matchPath } =
         sup.id === "ts" ? await loadNearestTsconfigFor(file) : {};
 
@@ -319,7 +347,10 @@ export async function collectGraph(
               projectRoot,
               matchPath,
               workspaceConfig,
-              { resolveNodeModules: !!opts?.resolveNodeModules },
+              {
+                resolveNodeModules: !!opts?.resolveNodeModules,
+                resolutionHints,
+              },
             );
             to =
               typeof res2 === "string"
@@ -333,7 +364,10 @@ export async function collectGraph(
             projectRoot,
             matchPath,
             workspaceConfig,
-            { resolveNodeModules: !!opts?.resolveNodeModules },
+            {
+              resolveNodeModules: !!opts?.resolveNodeModules,
+              resolutionHints,
+            },
           );
           to =
             typeof res === "string"

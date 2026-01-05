@@ -17,6 +17,7 @@ import {
   resolveSpecifier,
   resolvePythonModule,
   resolveWorkspacePackage,
+  normalizeResolutionHints,
   acquireParser,
   releaseParser,
   getGitHead,
@@ -601,15 +602,28 @@ function graphOptionsEqual(
 ): boolean {
   if (!a && !b) return true;
   if (!a || !b) return false;
-  return (
-    !!a.fast === !!b.fast && !!a.resolveNodeModules === !!b.resolveNodeModules
-  );
+  const normA = normalizeGraphOptions(a);
+  const normB = normalizeGraphOptions(b);
+  if (!!normA.fast !== !!normB.fast) return false;
+  if (!!normA.resolveNodeModules !== !!normB.resolveNodeModules) return false;
+  if (!!normA.dynamicImportHeuristics !== !!normB.dynamicImportHeuristics)
+    return false;
+  const hintsA = normA.resolutionHints ?? [];
+  const hintsB = normB.resolutionHints ?? [];
+  if (hintsA.length !== hintsB.length) return false;
+  for (let i = 0; i < hintsA.length; i++) {
+    if (hintsA[i] !== hintsB[i]) return false;
+  }
+  return true;
 }
 
 function normalizeGraphOptions(opts?: GraphBuildOptions): GraphBuildOptions {
+  const resolutionHints = normalizeResolutionHints(opts?.resolutionHints);
   return {
     fast: !!opts?.fast,
     resolveNodeModules: !!opts?.resolveNodeModules,
+    dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
+    ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
   };
 }
 
@@ -1237,6 +1251,7 @@ export async function collectImportsForFile(
     tree?: Parser.Tree;
     sup?: ReturnType<typeof supportForFile>;
     lang?: Parser.Language;
+    graphOptions?: GraphBuildOptions;
   },
 ): Promise<ImportBinding[]> {
   let source = opts?.source;
@@ -1399,6 +1414,10 @@ export async function collectImportsForFile(
         projectRoot,
         tsCfg?.matchPath,
         workspaceConfig,
+        {
+          resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
+          resolutionHints: opts?.graphOptions?.resolutionHints,
+        },
       );
       return typeof r === "string" ? r.replace(/\\/g, "/") : r;
     };
@@ -1868,6 +1887,7 @@ async function buildIndexFromFileListShared(
         tree,
         sup,
         lang,
+        graphOptions,
       });
       collectJsonDependencies(imports, jsonDependencies);
       const mod = collectLocalsAndExportsFromSource(
@@ -1892,6 +1912,10 @@ async function buildIndexFromFileListShared(
                   projectRoot,
                   matchPath,
                   workspaceConfig,
+                  {
+                    resolveNodeModules: !!graphOptions.resolveNodeModules,
+                    resolutionHints: graphOptions.resolutionHints,
+                  },
                 );
                 if (typeof resolved === "string") e.fromModule = resolved;
               } else {
@@ -1971,6 +1995,8 @@ async function buildIndexFromFileListShared(
     parsed: parsedMap as any,
     fast: !!graphOptions.fast,
     resolveNodeModules: !!graphOptions.resolveNodeModules,
+    dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
+    resolutionHints: graphOptions.resolutionHints,
     fileSignatures,
     ...(cachedGraphEntries ? { cachedFileEdges: cachedGraphEntries } : {}),
     ...(manifestEntries
@@ -2174,6 +2200,7 @@ export async function buildProjectIndexIncremental(
           tree,
           sup,
           lang,
+          graphOptions,
         });
         collectJsonDependencies(imports, jsonDependencies);
         const mod = collectLocalsAndExportsFromSource(
@@ -2198,6 +2225,10 @@ export async function buildProjectIndexIncremental(
                     projectRoot,
                     matchPath,
                     workspaceConfig,
+                    {
+                      resolveNodeModules: !!graphOptions.resolveNodeModules,
+                      resolutionHints: graphOptions.resolutionHints,
+                    },
                   );
                   if (typeof resolved === "string") e.fromModule = resolved;
                 } else {
@@ -2289,6 +2320,8 @@ export async function buildProjectIndexIncremental(
           parsed: parsedMap as any,
           fast: !!graphOptions.fast,
           resolveNodeModules: !!graphOptions.resolveNodeModules,
+          dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
+          resolutionHints: graphOptions.resolutionHints,
           fileSignatures,
           cachedFileEdges: cachedGraphEntries,
           baseGraph,
