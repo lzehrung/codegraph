@@ -52,10 +52,63 @@ export type ReviewReport = {
 };
 
 export type ReviewOptions = IncrementalBuildOptions & {
+  reviewDepth?: ReviewDepth;
   maxCandidates?: number;
   includeSymbolDetails?: boolean;
   maxCallsites?: number;
 };
+
+export type ReviewDepth = "minimal" | "standard" | "deep";
+
+type ReviewPreset = {
+  includeSymbolDetails: boolean;
+  maxCallsites: number;
+  maxCandidates: number;
+  graph: { fast: boolean };
+};
+
+const REVIEW_PRESETS: Record<ReviewDepth, ReviewPreset> = {
+  minimal: {
+    includeSymbolDetails: false,
+    maxCallsites: 0,
+    maxCandidates: 10,
+    graph: { fast: true },
+  },
+  standard: {
+    includeSymbolDetails: true,
+    maxCallsites: 2,
+    maxCandidates: 25,
+    graph: { fast: false },
+  },
+  deep: {
+    includeSymbolDetails: true,
+    maxCallsites: 10,
+    maxCandidates: 50,
+    graph: { fast: false },
+  },
+};
+
+function mergeGraphOptions(
+  base: IncrementalBuildOptions["graph"] | undefined,
+  override: IncrementalBuildOptions["graph"] | undefined,
+): IncrementalBuildOptions["graph"] | undefined {
+  if (!base) return override;
+  if (!override) return base;
+  return { ...base, ...override };
+}
+
+function applyReviewPresetOptions(opts: ReviewOptions): ReviewOptions {
+  if (!opts.reviewDepth) return opts;
+  const preset = REVIEW_PRESETS[opts.reviewDepth];
+  return {
+    ...opts,
+    includeSymbolDetails:
+      opts.includeSymbolDetails ?? preset.includeSymbolDetails,
+    maxCallsites: opts.maxCallsites ?? preset.maxCallsites,
+    maxCandidates: opts.maxCandidates ?? preset.maxCandidates,
+    graph: mergeGraphOptions(preset.graph, opts.graph),
+  };
+}
 
 function relativePath(root: string, file: string): string {
   return normalizePath(path.relative(root, file));
@@ -112,28 +165,29 @@ export async function buildReviewReport(
   projectRoot: string,
   opts: ReviewOptions = {},
 ): Promise<ReviewReport> {
+  const appliedOptions = applyReviewPresetOptions(opts);
   const normalizeFile = (file: string) =>
     normalizePath(
       path.isAbsolute(file) ? file : path.resolve(projectRoot, file),
     );
 
   const changedFiles = new Set<string>();
-  for (const file of opts.files ?? []) {
+  for (const file of appliedOptions.files ?? []) {
     const normalized = normalizeFile(file);
     changedFiles.add(normalized);
   }
 
-  if (opts.gitBase || opts.changedSince) {
+  if (appliedOptions.gitBase || appliedOptions.changedSince) {
     const gitDiffOpts: {
       base?: string | undefined;
       head?: string | undefined;
       changedSince?: string | undefined;
     } = {
-      base: opts.gitBase,
-      head: opts.gitHead,
+      base: appliedOptions.gitBase,
+      head: appliedOptions.gitHead,
     };
-    if (!opts.gitBase && opts.changedSince) {
-      gitDiffOpts.changedSince = opts.changedSince;
+    if (!appliedOptions.gitBase && appliedOptions.changedSince) {
+      gitDiffOpts.changedSince = appliedOptions.changedSince;
     }
     const gitList = await listChangedFiles(projectRoot, gitDiffOpts);
     for (const file of gitList) changedFiles.add(file);
@@ -147,20 +201,23 @@ export async function buildReviewReport(
       graphDelta: [],
       candidateTests: [],
     };
-    if (opts.gitBase !== undefined) report.base = opts.gitBase;
-    if (opts.gitHead !== undefined) report.head = opts.gitHead;
+    if (appliedOptions.gitBase !== undefined)
+      report.base = appliedOptions.gitBase;
+    if (appliedOptions.gitHead !== undefined)
+      report.head = appliedOptions.gitHead;
     return report;
   }
 
   const changedFileList = Array.from(changedFiles);
-  const fastGraphRequested = opts.graph?.fast ?? false;
-  const graphOptions = opts.graph
-    ? { ...opts.graph, fast: fastGraphRequested }
+  const fastGraphRequested = appliedOptions.graph?.fast ?? false;
+  const graphOptions = appliedOptions.graph
+    ? { ...appliedOptions.graph, fast: fastGraphRequested }
     : { fast: false };
-  const includeSymbolDetails = opts.includeSymbolDetails ?? false;
+  const includeSymbolDetails = appliedOptions.includeSymbolDetails ?? false;
   const maxCallsites =
-    typeof opts.maxCallsites === "number" && opts.maxCallsites >= 0
-      ? opts.maxCallsites
+    typeof appliedOptions.maxCallsites === "number" &&
+    appliedOptions.maxCallsites >= 0
+      ? appliedOptions.maxCallsites
       : 5;
   const sourceCache = new Map<string, string>();
   const loadSource = async (file: string): Promise<string> => {
@@ -193,7 +250,7 @@ export async function buildReviewReport(
     };
   } else {
     const indexOpts: IncrementalBuildOptions = {
-      ...(opts ?? {}),
+      ...(appliedOptions ?? {}),
       files: filesToIndex,
       graph: graphOptions,
     };
@@ -322,7 +379,7 @@ export async function buildReviewReport(
     index,
     changedFileList,
     changedSymbolIds,
-    { maxCandidates: opts.maxCandidates ?? 50 },
+    { maxCandidates: appliedOptions.maxCandidates ?? 50 },
   ).map((candidate) => ({
     ...candidate,
     file: relativePath(projectRoot, candidate.file),
@@ -339,7 +396,8 @@ export async function buildReviewReport(
     graphDelta,
     candidateTests,
   };
-  if (opts.gitBase !== undefined) report.base = opts.gitBase;
-  report.head = opts.gitHead ?? "HEAD";
+  if (appliedOptions.gitBase !== undefined)
+    report.base = appliedOptions.gitBase;
+  report.head = appliedOptions.gitHead ?? "HEAD";
   return report;
 }

@@ -332,6 +332,8 @@ npx codegraph impact --base main --head feature --ref-context block --ref-block-
 npx codegraph review --base origin/main --head HEAD > review.json
 # Include definition snippets + callsites (top-N) for changed symbols
 npx codegraph review --base origin/main --head HEAD --include-symbol-details --max-callsites 5 > review.json
+# Use review presets for common depth/quality tradeoffs
+npx codegraph review --base origin/main --head HEAD --review-depth standard > review.json
 ```
 
 Use `--changed-since <ref>` or `--git-base <ref> [--git-head <ref>]` with `graph` and `index`
@@ -380,6 +382,14 @@ reviewing a PR.
 Feed this JSON directly to an agent (or your own scripts) to highlight symbol-level changes, updated dependency edges, and likely regression tests.
 
 Use `--include-symbol-details` to attach definition snippets and callsite ranges for changed symbols. Tune `--max-callsites` to keep the payload bounded.
+
+`--review-depth minimal|standard|deep` applies preset bundles:
+
+- `minimal`: fast graph, no symbol snippets, `maxCallsites=0`, `maxCandidates=10`
+- `standard`: symbol snippets + up to 2 callsites, `maxCandidates=25`
+- `deep`: symbol snippets + up to 10 callsites, `maxCandidates=50`
+
+Explicit flags like `--include-symbol-details`, `--max-callsites`, `--max-tests`, or `--fast-graph` override the preset defaults.
 
 For review accuracy, keep full parsing enabled (the default). Only use `--fast-graph` when you are willing to trade off completeness for speed; it can miss edges that full parsing captures.
 
