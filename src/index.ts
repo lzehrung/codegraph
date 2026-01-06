@@ -100,9 +100,11 @@ export {
   writeGraphSqlite,
   updateGraphSqlite,
   queryGraphSqlite,
+  queryGraphSqliteRaw,
   type SqliteGraphOptions,
   type SqliteGraphUpdateOptions,
   type GraphQueryResult,
+  type RawSqlResult,
 } from "./sqlite.js";
 export {
   chunkFile,

@@ -30,6 +30,7 @@ import {
   getHotspots,
   getApiSurface,
   writeGraphSqlite,
+  queryGraphSqliteRaw,
   chunkFile,
   chunkTextFile,
   chunkSFCFile,
@@ -93,6 +94,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--symbols-detailed-scope",
   "--symbols-detailed-max-edges",
   "--sqlite",
+  "--db",
   "--file",
   "--line",
   "--col",
@@ -607,6 +609,23 @@ async function main() {
     }
     return await resolveFilesFromRoots();
   };
+
+  if (cmd === "sql") {
+    const dbOpt = getOpt("--db") ?? getOpt("--sqlite");
+    const queryText = getOpt("--query");
+    if (!dbOpt || !queryText) {
+      writeStderrLine(
+        "Usage: sql --db <sqlite path> --query \"SELECT ...\"",
+      );
+      process.exit(1);
+    }
+    const dbPath = path.isAbsolute(dbOpt)
+      ? dbOpt.replace(/\\/g, "/")
+      : path.resolve(process.cwd(), dbOpt).replace(/\\/g, "/");
+    const result = await queryGraphSqliteRaw(dbPath, queryText);
+    writeJSONLine(result);
+    return;
+  }
 
   if (cmd === "graph") {
     const files = await resolveFiles();

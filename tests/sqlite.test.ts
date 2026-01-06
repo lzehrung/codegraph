@@ -9,6 +9,7 @@ import {
   writeGraphSqlite,
   updateGraphSqlite,
   queryGraphSqlite,
+  queryGraphSqliteRaw,
 } from "../src/index.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -216,5 +217,32 @@ export interface UserRepository {}
     );
     expect(complexity.kind).toBe("highestComplexityClasses");
     expect(complexity.results.length).toBeGreaterThan(0);
+  });
+
+  it("executes raw SQL queries with column metadata", async () => {
+    const root = await mkTmpDir("dg-sqlite-raw-");
+    const main = `
+export class Widget {}
+export class Gadget {}
+export function helper() { return 1; }
+`;
+    await fsp.writeFile(path.join(root, "main.ts"), main, "utf8");
+
+    const index = await buildProjectIndex(root);
+    const sgraph = await buildSymbolGraphDetailed(index);
+    const dbPath = path.join(root, "graph.sqlite");
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+    });
+
+    const result = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT name, kind FROM symbols WHERE kind = 'class' ORDER BY name;",
+    );
+    expect(result.columns).toEqual(["name", "kind"]);
+    const names = result.rows.map((row) => String(row[0]));
+    expect(names).toEqual(["Gadget", "Widget"]);
   });
 });
