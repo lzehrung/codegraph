@@ -334,12 +334,49 @@ npx codegraph review --base origin/main --head HEAD > review.json
 npx codegraph review --base origin/main --head HEAD --include-symbol-details --max-callsites 5 > review.json
 # Use review presets for common depth/quality tradeoffs
 npx codegraph review --base origin/main --head HEAD --review-depth standard > review.json
+
+# Export graphs to SQLite (queryable by agents/tools)
+npx codegraph graph --sqlite ./codegraph.sqlite
+# Run raw SQL against the SQLite DB and return JSON
+npx codegraph sql --db ./codegraph.sqlite --query "SELECT name, file FROM symbols WHERE kind = 'function' LIMIT 5;"
 ```
 
 Use `--changed-since <ref>` or `--git-base <ref> [--git-head <ref>]` with `graph` and `index`
 to limit processing to the files reported by `git diff`. The CLI pipes that list into
 `buildProjectIndexFromFiles`, so unchanged files are skipped entirely when you’re
 reviewing a PR.
+
+### SQLite schema & raw SQL access
+
+The SQLite export is a **first-class query interface** for agent workflows. The schema is:
+
+**Tables**
+- `files(path TEXT PRIMARY KEY, is_external INTEGER)`
+- `symbols(id TEXT PRIMARY KEY, file TEXT, name TEXT, kind TEXT, docstring TEXT, line_span INTEGER, complexity INTEGER)`
+- `file_edges(from_path TEXT, to_path TEXT, to_type TEXT, raw TEXT, type_only INTEGER)`
+- `symbol_edges(from_id TEXT, to_id TEXT, label TEXT)`
+
+**Indexes (most relevant)**
+- `idx_symbols_name`, `idx_symbols_kind`, `idx_symbols_name_kind`, `idx_symbols_file_kind`, `idx_symbols_kind_complexity`
+- `idx_file_edges_from`, `idx_file_edges_to`, `idx_file_edges_type`
+- `idx_symbol_edges_from`, `idx_symbol_edges_to`, `idx_symbol_edges_label`, `idx_symbol_edges_label_to`, `idx_symbol_edges_label_from`
+
+**Example SQL**
+```sql
+-- Most-called functions
+SELECT s.name, s.file, COUNT(*) AS calls
+FROM symbol_edges e
+JOIN symbols s ON s.id = e.to_id
+WHERE e.label = 'calls' AND s.kind = 'function'
+GROUP BY s.id
+ORDER BY calls DESC
+LIMIT 20;
+
+-- Files that depend on a module
+SELECT from_path
+FROM file_edges
+WHERE to_path = 'src/auth.ts' AND to_type = 'file';
+```
 
 ### PR review workflow
 
@@ -527,6 +564,51 @@ const incremental = await buildProjectIndexIncremental(root, {
 ```
 
 `buildProjectIndexIncremental` loads the cached manifest, reuses unchanged modules/edges, and only reparses the files reported as changed (via Git flags or an explicit `files` list). The manifest is rewritten after each run so repeated PR reviews stay incremental.
+
+### Agent query helpers (symbol graph)
+
+Symbol query syntax is a compact `key:value` format with optional free-text:
+
+```
+kind:function name:handler file:src/api
+docstring:"rate limit" auth
+```
+
+Supported keys:
+- `kind` or `kinds` (comma-separated)
+- `name`
+- `file`
+- `doc` or `docstring`
+
+Programmatic helpers:
+
+```ts
+import { querySymbols, querySymbolNeighbors } from 'codegraph';
+
+const hits = querySymbols(symbolGraph, {
+  kinds: ["function"],
+  nameIncludes: "handler",
+  fileIncludes: "src/api",
+});
+
+const neighbors = querySymbolNeighbors(symbolGraph, {
+  symbolId: hits[0]?.id ?? "",
+  direction: "both",
+  maxDepth: 2,
+  edgeLabels: ["calls", "instantiates"],
+});
+```
+
+### Raw SQL from code (advanced)
+
+```ts
+import { queryGraphSqliteRaw } from 'codegraph';
+
+const result = await queryGraphSqliteRaw('./codegraph.sqlite', `
+  SELECT name, file FROM symbols WHERE kind = 'class' LIMIT 10;
+`);
+console.log(result.columns, result.rows);
+```
 
 Find references:
 

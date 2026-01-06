@@ -26,6 +26,11 @@ export type GraphQueryResult =
   | { kind: "affectedFunctionsForModule"; results: Array<{ name: string; file: string }> }
   | { kind: "highestComplexityClasses"; results: Array<{ name: string; file: string; complexity: number }> };
 
+export type RawSqlResult = {
+  columns: string[];
+  rows: Array<Array<unknown>>;
+};
+
 const loadBetterSqlite3 = () => {
   const require = createRequire(import.meta.url);
   return require("better-sqlite3") as typeof import("better-sqlite3");
@@ -560,4 +565,18 @@ export async function queryGraphSqlite(
       };
     }
   }
+}
+
+export async function queryGraphSqliteRaw(
+  outputPath: string,
+  sql: string,
+  params: Array<string | number | null> = [],
+): Promise<RawSqlResult> {
+  const { db } = await readOrCreateDb(outputPath);
+  ensureSchema(db);
+  const stmt = db.prepare(sql);
+  const columns = stmt.columns().map((col) => col.name);
+  const rows = stmt.raw().all(params) as Array<Array<unknown>>;
+  db.close();
+  return { columns, rows };
 }
