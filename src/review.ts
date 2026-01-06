@@ -200,6 +200,30 @@ export async function buildReviewReport(
     index = await buildProjectIndexIncremental(projectRoot, indexOpts);
   }
 
+  const filesWithModules = changedFileList.map((file) => ({
+    file,
+    mod: index.byFile.get(file),
+  }));
+  const defsToResolve = filesWithModules.flatMap(({ mod }) =>
+    mod ? mod.locals : [],
+  );
+  const referenceResults =
+    includeSymbolDetails && maxCallsites > 0
+      ? await Promise.all(
+          defsToResolve.map(async (def) => {
+            const refs = await findReferences(index, { def });
+            return { def, refs };
+          }),
+        )
+      : [];
+  const referencesByHandle = new Map<
+    string,
+    { def: SymbolDef; refs: Awaited<ReturnType<typeof findReferences>> }
+  >();
+  for (const entry of referenceResults) {
+    referencesByHandle.set(symbolId(entry.def), entry);
+  }
+
   const buildSymbolSummary = async (
     local: SymbolDef,
     moduleIndex: ModuleIndex,
@@ -219,8 +243,9 @@ export async function buildReviewReport(
 
     let callsites: ReviewSymbolCallsite[] | undefined;
     if (maxCallsites > 0) {
-      const refs = await findReferences(index, { def: local });
-      if (refs.status === "ok") {
+      const entry = referencesByHandle.get(handle);
+      const refs = entry?.refs;
+      if (refs?.status === "ok") {
         const candidates = refs.references.filter(
           (ref) =>
             !(ref.file === local.file && sameRange(ref.range, local.range)),
@@ -241,8 +266,7 @@ export async function buildReviewReport(
   };
 
   const summariesWithHandles = await Promise.all(
-    changedFileList.map(async (file) => {
-      const mod = index.byFile.get(file);
+    filesWithModules.map(async ({ file, mod }) => {
       if (!mod) {
         return {
           summary: {
