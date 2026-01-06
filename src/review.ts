@@ -524,7 +524,9 @@ export async function buildReviewReport(
     changedSymbolIds,
     {
       maxCandidates: appliedOptions.maxCandidates ?? 50,
-      testPatterns: appliedOptions.testPatterns,
+      ...(appliedOptions.testPatterns
+        ? { testPatterns: appliedOptions.testPatterns }
+        : {}),
     },
   ).map((candidate) => ({
     ...candidate,
