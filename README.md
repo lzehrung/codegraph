@@ -330,6 +330,8 @@ npx codegraph impact --base main --head feature --ref-context block --ref-block-
 
 # Generate a PR review bundle (incremental graph + symbol summary)
 npx codegraph review --base origin/main --head HEAD > review.json
+# Include definition snippets + callsites (top-N) for changed symbols
+npx codegraph review --base origin/main --head HEAD --include-symbol-details --max-callsites 5 > review.json
 ```
 
 Use `--changed-since <ref>` or `--git-base <ref> [--git-head <ref>]` with `graph` and `index`
@@ -353,7 +355,17 @@ reviewing a PR.
     {
       "file": "src/foo.ts",
       "status": "updated",
-      "symbols": [{ "name": "doThing", "kind": "function", "exported": true }]
+      "symbols": [
+        {
+          "name": "doThing",
+          "kind": "function",
+          "exported": true,
+          "definitionSnippet": "export function doThing() {\\n  ...\\n}",
+          "callsites": [
+            { "file": "src/bar.ts", "range": { "start": { "line": 10, "column": 3 }, "end": { "line": 10, "column": 10 } } }
+          ]
+        }
+      ]
     }
   ],
   "graphDelta": [
@@ -366,6 +378,8 @@ reviewing a PR.
 ```
 
 Feed this JSON directly to an agent (or your own scripts) to highlight symbol-level changes, updated dependency edges, and likely regression tests.
+
+Use `--include-symbol-details` to attach definition snippets and callsite ranges for changed symbols. Tune `--max-callsites` to keep the payload bounded.
 
 For review accuracy, keep full parsing enabled (the default). Only use `--fast-graph` when you are willing to trade off completeness for speed; it can miss edges that full parsing captures.
 
