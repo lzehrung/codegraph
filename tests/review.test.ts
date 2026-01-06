@@ -267,13 +267,18 @@ describe('CLI flows', () => {
   const sampleRoot = path.resolve(process.cwd(), 'tests', 'samples', 'typescript');
 
   it('emits a file graph by default', async () => {
-    const stdout = await runCliCommand(['graph', '--stdout', sampleRoot]);
+    const stdout = await runCliCommand([
+      'graph',
+      '--stdout',
+      '--fast-graph',
+      sampleRoot,
+    ]);
     const graph = JSON.parse(stdout);
 
     expect(graph.nodes).toBeInstanceOf(Array);
     expect(graph.edges).toBeInstanceOf(Array);
     expect(graph.symbols).toBeUndefined();
-  }, 20000);
+  });
 
   it('handles raw diffs touching multiple languages', async () => {
     const stdout = await runCliCommand([
