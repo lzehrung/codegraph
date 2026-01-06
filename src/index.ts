@@ -118,4 +118,8 @@ export {
   LANG_CONFIGS,
   type LanguageConfig,
 } from "./bootstrap/treeSitterLanguages.js";
-export { buildReviewReport, type ReviewReport } from "./review.js";
+export {
+  buildReviewReport,
+  type ReviewDepth,
+  type ReviewReport,
+} from "./review.js";
