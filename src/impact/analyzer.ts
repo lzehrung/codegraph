@@ -20,10 +20,13 @@ export async function analyzeImpact(
     depth = 3,
     includeTests = false,
     membersOnly = false,
+    testPatterns,
     refContext,
     refContextLines,
     refBlockMaxLines,
   } = options;
+
+  const patternMatchers = buildTestPatterns(testPatterns);
 
   const impacted = new Map<FileId, ImpactItem>();
   const processedSymbols = new Set<string>();
@@ -69,7 +72,7 @@ export async function analyzeImpact(
 
       if (refs.status === "ok") {
         for (const ref of refs.references.slice(0, maxRefs)) {
-          if (!includeTests && isTestFile(ref.file)) continue;
+          if (!includeTests && isTestFile(ref.file, patternMatchers)) continue;
 
           const existing = impacted.get(ref.file);
           const reasons: ImpactReason[] = existing?.reasons || [];
@@ -155,7 +158,8 @@ export async function seedTransitiveFromFiles(
   changedFiles: FileChange[],
   options: Partial<ImpactOptions>,
 ): Promise<void> {
-  const { includeTests = false } = options;
+  const { includeTests = false, testPatterns } = options;
+  const patternMatchers = buildTestPatterns(testPatterns);
 
   for (const fileChange of changedFiles) {
     // Skip if this file already has impact items
@@ -168,7 +172,7 @@ export async function seedTransitiveFromFiles(
         .map((e) => e.from);
 
       for (const dependent of dependents) {
-        if (!includeTests && isTestFile(dependent)) continue;
+        if (!includeTests && isTestFile(dependent, patternMatchers)) continue;
         if (impacted.has(dependent)) continue;
 
         const hints = ["fileDeleted"];
@@ -201,6 +205,7 @@ async function analyzeTransitiveImpact(
   maxDepth: number,
   options: Partial<ImpactOptions>,
 ): Promise<void> {
+  const patternMatchers = buildTestPatterns(options.testPatterns);
   // Precompute reverse dependency index for efficient traversal
   const reverseDeps = new Map<FileId, any[]>();
   for (const e of index.graph.edges) {
@@ -232,7 +237,7 @@ async function analyzeTransitiveImpact(
       const dependentFile = edge.from;
       if (
         visited.has(dependentFile) ||
-        (!options.includeTests && isTestFile(dependentFile))
+        (!options.includeTests && isTestFile(dependentFile, patternMatchers))
       )
         continue;
 
@@ -411,13 +416,19 @@ function calculateTransitiveSeverity(edge: any, depth: number): number {
   return score;
 }
 
-function isTestFile(file: FileId): boolean {
+function buildTestPatterns(patterns?: string[]): RegExp[] {
+  const defaults = [
+    /test/i,
+    /spec/i,
+    /__tests__/,
+    /\.test\./,
+    /\.spec\./,
+  ];
+  const custom = (patterns ?? []).map((pattern) => new RegExp(pattern));
+  return [...defaults, ...custom];
+}
+
+function isTestFile(file: FileId, patterns: RegExp[]): boolean {
   const lower = file.toLowerCase();
-  return (
-    lower.includes("test") ||
-    lower.includes("spec") ||
-    lower.includes("__tests__") ||
-    lower.includes(".test.") ||
-    lower.includes(".spec.")
-  );
+  return patterns.some((pattern) => pattern.test(lower));
 }
