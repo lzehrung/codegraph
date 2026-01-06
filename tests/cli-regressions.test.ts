@@ -88,6 +88,31 @@ describe('CLI regressions', () => {
     expect(isSorted(graph.nodes.map(normalize))).toBe(true);
   });
 
+  it('sql runs raw queries against the SQLite graph export', async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-cli-sql-'));
+    await fsp.writeFile(
+      path.join(tmpDir, 'main.ts'),
+      'export function helper() { return 1; }\n',
+      'utf8',
+    );
+    const dbPath = path.join(tmpDir, 'graph.sqlite');
+    await runCliCommand(['graph', '--root', tmpDir, '--sqlite', dbPath]);
+    const stdout = await runCliCommand([
+      'sql',
+      '--db',
+      dbPath,
+      '--query',
+      "SELECT name FROM symbols WHERE kind = 'function';",
+    ]);
+    const result = JSON.parse(stdout) as {
+      columns: string[];
+      rows: Array<Array<unknown>>;
+    };
+    expect(result.columns).toEqual(['name']);
+    const names = result.rows.map((row) => String(row[0]));
+    expect(names).toContain('helper');
+  });
+
   it('grep supports plain-text regex mode via --pattern (and --glob)', async () => {
     const stdout = await runCliCommand([
       'grep',
@@ -137,4 +162,3 @@ describe('textGrep API', () => {
     expect(hits.every((h) => h.line >= 1 && h.column >= 1)).toBe(true);
   });
 });
-

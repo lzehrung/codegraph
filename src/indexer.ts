@@ -1408,6 +1408,7 @@ export async function collectImportsForFile(
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
 
     const resolveFrom = async (from: string) => {
+      const resolutionHints = opts?.graphOptions?.resolutionHints;
       const r = await resolveSpecifier(
         file,
         from,
@@ -1416,7 +1417,7 @@ export async function collectImportsForFile(
         workspaceConfig,
         {
           resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
-          resolutionHints: opts?.graphOptions?.resolutionHints,
+          ...(resolutionHints ? { resolutionHints } : {}),
         },
       );
       return typeof r === "string" ? r.replace(/\\/g, "/") : r;
@@ -1914,7 +1915,9 @@ async function buildIndexFromFileListShared(
                   workspaceConfig,
                   {
                     resolveNodeModules: !!graphOptions.resolveNodeModules,
-                    resolutionHints: graphOptions.resolutionHints,
+                    ...(graphOptions.resolutionHints
+                      ? { resolutionHints: graphOptions.resolutionHints }
+                      : {}),
                   },
                 );
                 if (typeof resolved === "string") e.fromModule = resolved;
@@ -1996,7 +1999,9 @@ async function buildIndexFromFileListShared(
     fast: !!graphOptions.fast,
     resolveNodeModules: !!graphOptions.resolveNodeModules,
     dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
-    resolutionHints: graphOptions.resolutionHints,
+    ...(graphOptions.resolutionHints
+      ? { resolutionHints: graphOptions.resolutionHints }
+      : {}),
     fileSignatures,
     ...(cachedGraphEntries ? { cachedFileEdges: cachedGraphEntries } : {}),
     ...(manifestEntries
@@ -2227,7 +2232,9 @@ export async function buildProjectIndexIncremental(
                     workspaceConfig,
                     {
                       resolveNodeModules: !!graphOptions.resolveNodeModules,
-                      resolutionHints: graphOptions.resolutionHints,
+                      ...(graphOptions.resolutionHints
+                        ? { resolutionHints: graphOptions.resolutionHints }
+                        : {}),
                     },
                   );
                   if (typeof resolved === "string") e.fromModule = resolved;
@@ -2321,10 +2328,12 @@ export async function buildProjectIndexIncremental(
           fast: !!graphOptions.fast,
           resolveNodeModules: !!graphOptions.resolveNodeModules,
           dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
-          resolutionHints: graphOptions.resolutionHints,
+          ...(graphOptions.resolutionHints
+            ? { resolutionHints: graphOptions.resolutionHints }
+            : {}),
           fileSignatures,
           cachedFileEdges: cachedGraphEntries,
-          baseGraph,
+          ...(baseGraph ? { baseGraph } : {}),
           replaceFiles: new Set<string>(changedFiles),
           onFileEdges: (file, entry) => {
             if (!entry?.sig) return;
