@@ -69,6 +69,7 @@ export type ReviewOptions = IncrementalBuildOptions & {
   diffContextLines?: number;
   diffText?: string;
   testPatterns?: string[];
+  referenceConcurrency?: number;
 };
 
 export type ReviewDepth = "minimal" | "standard" | "deep";
@@ -221,6 +222,30 @@ function sameRange(left: Range, right: Range): boolean {
   );
 }
 
+async function runWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  let nextIndex = 0;
+  const safeLimit = Math.max(1, limit);
+  const runners = Array.from(
+    { length: Math.min(safeLimit, items.length) },
+    async () => {
+      while (true) {
+        const current = nextIndex;
+        nextIndex += 1;
+        if (current >= items.length) break;
+        const item = items[current]!;
+        results[current] = await worker(item);
+      }
+    },
+  );
+  await Promise.all(runners);
+  return results;
+}
+
 // Review entry point: programmatic review report builder.
 export async function buildReviewReport(
   projectRoot: string,
@@ -285,6 +310,11 @@ export async function buildReviewReport(
     appliedOptions.maxCallsites >= 0
       ? appliedOptions.maxCallsites
       : 5;
+  const referenceConcurrency =
+    typeof appliedOptions.referenceConcurrency === "number" &&
+    appliedOptions.referenceConcurrency > 0
+      ? appliedOptions.referenceConcurrency
+      : 8;
   const sourceCache = new Map<string, string>();
   const loadSource = async (file: string): Promise<string> => {
     const cached = sourceCache.get(file);
@@ -399,11 +429,13 @@ export async function buildReviewReport(
   const defsToResolve = fileEntries.flatMap((entry) => entry.locals);
   const referenceResults =
     includeSymbolDetails && maxCallsites > 0
-      ? await Promise.all(
-          defsToResolve.map(async (def) => {
+      ? await runWithConcurrency(
+          defsToResolve,
+          referenceConcurrency,
+          async (def) => {
             const refs = await findReferences(index, { def });
             return { def, refs };
-          }),
+          },
         )
       : [];
   const referencesByHandle = new Map<

@@ -387,6 +387,70 @@ describe('Review report', () => {
     }
   });
 
+  it('respects reference concurrency limits', async () => {
+    const root = await mkTmpDir('dg-review-concurrency-');
+    const srcDir = path.join(root, 'src');
+    await fsp.mkdir(srcDir, { recursive: true });
+    const alphaFile = path.join(srcDir, 'alpha.ts');
+    const betaFile = path.join(srcDir, 'beta.ts');
+    await fsp.writeFile(alphaFile, `export function alpha() { return 'a'; }\n`, 'utf8');
+    await fsp.writeFile(betaFile, `export function beta() { return 'b'; }\n`, 'utf8');
+
+    await buildProjectIndex(root);
+
+    type RefResult = Awaited<ReturnType<typeof indexer.findReferences>>;
+    const deferreds: Array<{ resolve: (value: RefResult) => void }> = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+
+    const findSpy = vi
+      .spyOn(indexer, 'findReferences')
+      .mockImplementation(() => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        let resolveFn: (value: RefResult) => void = () => {};
+        const promise = new Promise<RefResult>((resolve) => {
+          resolveFn = resolve;
+        });
+        deferreds.push({
+          resolve: (value: RefResult) => {
+            inFlight -= 1;
+            resolveFn(value);
+          },
+        });
+        return promise;
+      });
+
+    try {
+      const reportPromise = buildReviewReport(root, {
+        files: [alphaFile, betaFile],
+        includeSymbolDetails: true,
+        maxCallsites: 1,
+        referenceConcurrency: 1,
+      });
+
+      const waitFor = async (predicate: () => boolean) => {
+        for (let i = 0; i < 50; i += 1) {
+          if (predicate()) return;
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        throw new Error('Timed out waiting for findReferences calls');
+      };
+
+      await waitFor(() => deferreds.length === 1);
+      deferreds[0]?.resolve({ status: 'not_found', reason: 'missing def' });
+
+      await waitFor(() => deferreds.length === 2);
+      deferreds[1]?.resolve({ status: 'not_found', reason: 'missing def' });
+
+      const report = await reportPromise;
+      expect(report.status).toBe('ok');
+      expect(maxInFlight).toBe(1);
+    } finally {
+      findSpy.mockRestore();
+    }
+  });
+
   it('applies review depth presets to symbol details and graph options', async () => {
     const root = await mkTmpDir('dg-review-presets-');
     const srcDir = path.join(root, 'src');
