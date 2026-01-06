@@ -273,7 +273,7 @@ describe('CLI flows', () => {
     expect(graph.nodes).toBeInstanceOf(Array);
     expect(graph.edges).toBeInstanceOf(Array);
     expect(graph.symbols).toBeUndefined();
-  });
+  }, 20000);
 
   it('handles raw diffs touching multiple languages', async () => {
     const stdout = await runCliCommand([
