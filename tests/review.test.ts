@@ -184,6 +184,57 @@ describe('Review report', () => {
     ).toBe(true);
   });
 
+  it('limits symbols to diff hunks and includes diff snippets when provided', async () => {
+    const root = await mkTmpDir('dg-review-diff-');
+    const srcDir = path.join(root, 'src');
+    await fsp.mkdir(srcDir, { recursive: true });
+    const featureFile = path.join(srcDir, 'feature.ts');
+    await fsp.writeFile(
+      featureFile,
+      [
+        `export function alpha() {`,
+        `  return 2;`,
+        `}`,
+        ``,
+        `export function beta() {`,
+        `  return 5;`,
+        `}`,
+        ``,
+      ].join('\n'),
+      'utf8',
+    );
+
+    await buildProjectIndex(root);
+
+    const diffText = [
+      'diff --git a/src/feature.ts b/src/feature.ts',
+      'index 1234567..abcdef0 100644',
+      '--- a/src/feature.ts',
+      '+++ b/src/feature.ts',
+      '@@ -1,3 +1,3 @@',
+      ' export function alpha() {',
+      '-  return 1;',
+      '+  return 2;',
+      ' }',
+      '',
+    ].join('\n');
+
+    const report = await buildReviewReport(root, {
+      files: [featureFile],
+      diffText,
+      includeSymbolDetails: true,
+    });
+
+    const summary = report.changedFiles.find((entry) => entry.file === 'src/feature.ts');
+    expect(summary).toBeDefined();
+    const symbols = summary?.symbols ?? [];
+    expect(symbols.some((symbol) => symbol.name === 'alpha')).toBe(true);
+    expect(symbols.some((symbol) => symbol.name === 'beta')).toBe(false);
+
+    const alpha = symbols.find((symbol) => symbol.name === 'alpha');
+    expect(alpha?.diffSnippets?.some((snippet) => snippet.includes('return 2;'))).toBe(true);
+  });
+
   it('identifies git-tracked changed files without explicit listings', async () => {
     const root = await mkTmpDir('dg-review-git-');
     runGit(root, ['init']);
@@ -331,6 +382,70 @@ describe('Review report', () => {
       const report = await reportPromise;
       expect(report.status).toBe('ok');
       expect(report.changedFiles.length).toBe(2);
+    } finally {
+      findSpy.mockRestore();
+    }
+  });
+
+  it('respects reference concurrency limits', async () => {
+    const root = await mkTmpDir('dg-review-concurrency-');
+    const srcDir = path.join(root, 'src');
+    await fsp.mkdir(srcDir, { recursive: true });
+    const alphaFile = path.join(srcDir, 'alpha.ts');
+    const betaFile = path.join(srcDir, 'beta.ts');
+    await fsp.writeFile(alphaFile, `export function alpha() { return 'a'; }\n`, 'utf8');
+    await fsp.writeFile(betaFile, `export function beta() { return 'b'; }\n`, 'utf8');
+
+    await buildProjectIndex(root);
+
+    type RefResult = Awaited<ReturnType<typeof indexer.findReferences>>;
+    const deferreds: Array<{ resolve: (value: RefResult) => void }> = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+
+    const findSpy = vi
+      .spyOn(indexer, 'findReferences')
+      .mockImplementation(() => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        let resolveFn: (value: RefResult) => void = () => {};
+        const promise = new Promise<RefResult>((resolve) => {
+          resolveFn = resolve;
+        });
+        deferreds.push({
+          resolve: (value: RefResult) => {
+            inFlight -= 1;
+            resolveFn(value);
+          },
+        });
+        return promise;
+      });
+
+    try {
+      const reportPromise = buildReviewReport(root, {
+        files: [alphaFile, betaFile],
+        includeSymbolDetails: true,
+        maxCallsites: 1,
+        referenceConcurrency: 1,
+      });
+
+      const waitFor = async (predicate: () => boolean) => {
+        for (let i = 0; i < 50; i += 1) {
+          if (predicate()) return;
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        throw new Error('Timed out waiting for findReferences calls');
+      };
+
+      await waitFor(() => deferreds.length === 1);
+      deferreds[0]?.resolve({ status: 'not_found', reason: 'missing def' });
+
+      await waitFor(() => deferreds.length === 2);
+      deferreds[1]?.resolve({ status: 'not_found', reason: 'missing def' });
+
+      const report = await reportPromise;
+      expect(report.status).toBe('ok');
+      expect(maxInFlight).toBe(1);
     } finally {
       findSpy.mockRestore();
     }

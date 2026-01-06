@@ -11,11 +11,19 @@ import {
   type SymbolDef,
   symbolId,
 } from "./indexer.js";
+import { locateChangedSymbols, mapChangedLinesToSymbols } from "./impact/map.js";
+import { parseUnifiedDiff } from "./impact/parse.js";
+import type { Hunk } from "./impact/types.js";
 import {
   listCandidateTestFiles,
   type CandidateTestFile,
 } from "./impact/context.js";
-import { normalizePath, listChangedFiles, fileExists } from "./util.js";
+import {
+  normalizePath,
+  listChangedFiles,
+  fileExists,
+  getUnifiedDiff,
+} from "./util.js";
 
 type ReviewFileSummary = {
   file: string;
@@ -34,6 +42,7 @@ type ReviewSymbolSummary = {
   handle: string;
   exported: boolean;
   definitionSnippet?: string;
+  diffSnippets?: string[];
   callsites?: ReviewSymbolCallsite[];
 };
 
@@ -56,6 +65,11 @@ export type ReviewOptions = IncrementalBuildOptions & {
   maxCandidates?: number;
   includeSymbolDetails?: boolean;
   maxCallsites?: number;
+  includeDiffContext?: boolean;
+  diffContextLines?: number;
+  diffText?: string;
+  testPatterns?: string[];
+  referenceConcurrency?: number;
 };
 
 export type ReviewDepth = "minimal" | "standard" | "deep";
@@ -143,6 +157,53 @@ function rangeSnippet(source: string, range: Range): string {
   return "";
 }
 
+function collectDiffSnippets(
+  source: string,
+  range: Range,
+  changedLines: Set<number>,
+  contextLines: number,
+): string[] {
+  const startLine = range.start.line ?? 0;
+  const endLine = range.end.line ?? startLine;
+  if (startLine <= 0) return [];
+  const safeEnd = endLine >= startLine ? endLine : startLine;
+
+  const lines = source.split(/\r?\n/);
+  const filtered = Array.from(changedLines)
+    .filter((line) => line >= startLine && line <= safeEnd)
+    .sort((a, b) => a - b);
+  const matching =
+    filtered.length > 0
+      ? filtered
+      : Array.from(changedLines).sort((a, b) => a - b);
+  if (matching.length === 0) return [];
+
+  const snippets: string[] = [];
+  let groupStart = matching[0]!;
+  let groupEnd = matching[0]!;
+
+  const pushGroup = (start: number, end: number) => {
+    const snippetStart = Math.max(1, start - contextLines);
+    const snippetEnd = Math.min(lines.length, end + contextLines);
+    const snippet = lines.slice(snippetStart - 1, snippetEnd).join("\n");
+    if (snippet) snippets.push(snippet);
+  };
+
+  for (let i = 1; i < matching.length; i += 1) {
+    const line = matching[i]!;
+    if (line <= groupEnd + 1) {
+      groupEnd = line;
+    } else {
+      pushGroup(groupStart, groupEnd);
+      groupStart = line;
+      groupEnd = line;
+    }
+  }
+  pushGroup(groupStart, groupEnd);
+
+  return snippets;
+}
+
 function sameRange(left: Range, right: Range): boolean {
   const leftStart = left.start.index;
   const rightStart = right.start.index;
@@ -159,6 +220,30 @@ function sameRange(left: Range, right: Range): boolean {
     left.start.line === right.start.line &&
     left.start.column === right.start.column
   );
+}
+
+async function runWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  let nextIndex = 0;
+  const safeLimit = Math.max(1, limit);
+  const runners = Array.from(
+    { length: Math.min(safeLimit, items.length) },
+    async () => {
+      while (true) {
+        const current = nextIndex;
+        nextIndex += 1;
+        if (current >= items.length) break;
+        const item = items[current]!;
+        results[current] = await worker(item);
+      }
+    },
+  );
+  await Promise.all(runners);
+  return results;
 }
 
 // Review entry point: programmatic review report builder.
@@ -215,11 +300,21 @@ export async function buildReviewReport(
     ? { ...appliedOptions.graph, fast: fastGraphRequested }
     : { fast: false };
   const includeSymbolDetails = appliedOptions.includeSymbolDetails ?? false;
+  const diffContextLines =
+    typeof appliedOptions.diffContextLines === "number" &&
+    appliedOptions.diffContextLines >= 0
+      ? appliedOptions.diffContextLines
+      : 2;
   const maxCallsites =
     typeof appliedOptions.maxCallsites === "number" &&
     appliedOptions.maxCallsites >= 0
       ? appliedOptions.maxCallsites
       : 5;
+  const referenceConcurrency =
+    typeof appliedOptions.referenceConcurrency === "number" &&
+    appliedOptions.referenceConcurrency > 0
+      ? appliedOptions.referenceConcurrency
+      : 8;
   const sourceCache = new Map<string, string>();
   const loadSource = async (file: string): Promise<string> => {
     const cached = sourceCache.get(file);
@@ -238,6 +333,27 @@ export async function buildReviewReport(
   const filesToIndex = existenceChecks
     .filter((entry) => entry.exists)
     .map((entry) => entry.file);
+
+  const diffText =
+    appliedOptions.diffText ??
+    ((appliedOptions.gitBase || appliedOptions.changedSince) &&
+    changedFileList.length > 0
+      ? await getUnifiedDiff(projectRoot, {
+          base: appliedOptions.gitBase,
+          head: appliedOptions.gitHead,
+          changedSince: appliedOptions.changedSince,
+        })
+      : "");
+  const diff = diffText ? parseUnifiedDiff(diffText) : null;
+  const diffHunksByFile = new Map<string, Hunk[]>();
+  if (diff) {
+    for (const fileChange of diff.files) {
+      const absPath = normalizePath(
+        path.resolve(projectRoot, fileChange.path),
+      );
+      diffHunksByFile.set(absPath, fileChange.hunks);
+    }
+  }
 
   let index: ProjectIndex;
   if (filesToIndex.length === 0) {
@@ -261,17 +377,65 @@ export async function buildReviewReport(
   const filesWithModules = changedFileList.map((file) => ({
     file,
     mod: index.byFile.get(file),
+    hunks: diffHunksByFile.get(file),
   }));
-  const defsToResolve = filesWithModules.flatMap(({ mod }) =>
-    mod ? mod.locals : [],
-  );
+  const includeDiffContext =
+    appliedOptions.includeDiffContext ??
+    (includeSymbolDetails && diffHunksByFile.size > 0);
+
+  const fileEntries = filesWithModules.map(({ file, mod, hunks }) => {
+    if (!mod) {
+      return {
+        file,
+        mod,
+        hunks,
+        locals: [] as SymbolDef[],
+        handles: [] as string[],
+        diffLinesByHandle: new Map<string, Set<number>>(),
+      };
+    }
+    if (!hunks) {
+      return {
+        file,
+        mod,
+        hunks,
+        locals: mod.locals,
+        handles: mod.locals.map((local) => symbolId(local)),
+        diffLinesByHandle: new Map<string, Set<number>>(),
+      };
+    }
+    const changedSymbols = locateChangedSymbols(index, file, hunks);
+    const uniqueSymbols = new Map<string, SymbolDef>();
+    for (const symbol of changedSymbols) {
+      uniqueSymbols.set(symbol.id, {
+        file: symbol.file,
+        localName: symbol.name,
+        kind: symbol.kind,
+        range: symbol.range,
+      });
+    }
+    const locals = Array.from(uniqueSymbols.values());
+    const handles = Array.from(uniqueSymbols.keys());
+    return {
+      file,
+      mod,
+      hunks,
+      locals,
+      handles,
+      diffLinesByHandle: mapChangedLinesToSymbols(index, file, hunks),
+    };
+  });
+
+  const defsToResolve = fileEntries.flatMap((entry) => entry.locals);
   const referenceResults =
     includeSymbolDetails && maxCallsites > 0
-      ? await Promise.all(
-          defsToResolve.map(async (def) => {
+      ? await runWithConcurrency(
+          defsToResolve,
+          referenceConcurrency,
+          async (def) => {
             const refs = await findReferences(index, { def });
             return { def, refs };
-          }),
+          },
         )
       : [];
   const referencesByHandle = new Map<
@@ -285,6 +449,7 @@ export async function buildReviewReport(
   const buildSymbolSummary = async (
     local: SymbolDef,
     moduleIndex: ModuleIndex,
+    diffLinesByHandle: Map<string, Set<number>>,
   ): Promise<ReviewSymbolSummary> => {
     const handle = symbolId(local);
     const base: ReviewSymbolSummary = {
@@ -298,6 +463,11 @@ export async function buildReviewReport(
     const source = await loadSource(local.file);
     const snippet = rangeSnippet(source, local.range);
     const definitionSnippet = snippet ? { definitionSnippet: snippet } : {};
+    const diffLines = diffLinesByHandle.get(handle) ?? new Set<number>();
+    const diffSnippets =
+      includeDiffContext && diffLines.size > 0
+        ? collectDiffSnippets(source, local.range, diffLines, diffContextLines)
+        : [];
 
     let callsites: ReviewSymbolCallsite[] | undefined;
     if (maxCallsites > 0) {
@@ -319,12 +489,14 @@ export async function buildReviewReport(
     return {
       ...base,
       ...definitionSnippet,
+      ...(diffSnippets.length > 0 ? { diffSnippets } : {}),
       ...(callsites ? { callsites } : {}),
     };
   };
 
   const summariesWithHandles = await Promise.all(
-    filesWithModules.map(async ({ file, mod }) => {
+    fileEntries.map(
+      async ({ file, mod, locals, handles, diffLinesByHandle }) => {
       if (!mod) {
         return {
           summary: {
@@ -335,12 +507,13 @@ export async function buildReviewReport(
           handles: [] as string[],
         };
       }
-      const handles = mod.locals.map((local) => symbolId(local));
       const symbols: ReviewSymbolSummary[] = includeSymbolDetails
         ? await Promise.all(
-            mod.locals.map((local) => buildSymbolSummary(local, mod)),
+            locals.map((local) =>
+              buildSymbolSummary(local, mod, diffLinesByHandle),
+            ),
           )
-        : mod.locals.map((local) => {
+        : locals.map((local) => {
             const handle = symbolId(local);
             return {
               name: local.localName,
@@ -357,7 +530,8 @@ export async function buildReviewReport(
         } satisfies ReviewFileSummary,
         handles,
       };
-    }),
+    },
+    ),
   );
   const summaries = summariesWithHandles.map((entry) => entry.summary);
   const changedSymbolIds = summariesWithHandles.flatMap(
@@ -380,7 +554,12 @@ export async function buildReviewReport(
     index,
     changedFileList,
     changedSymbolIds,
-    { maxCandidates: appliedOptions.maxCandidates ?? 50 },
+    {
+      maxCandidates: appliedOptions.maxCandidates ?? 50,
+      ...(appliedOptions.testPatterns
+        ? { testPatterns: appliedOptions.testPatterns }
+        : {}),
+    },
   ).map((candidate) => ({
     ...candidate,
     file: relativePath(projectRoot, candidate.file),

@@ -128,6 +128,8 @@ export type ImpactOptions = DiffProviderOptions & {
   depth?: number;
   includeTests?: boolean;
   membersOnly?: boolean;
+  /** Custom regex patterns used to detect test files */
+  testPatterns?: string[];
   /** Return compact report with indexed arrays instead of repeated strings */
   compact?: boolean;
   /** Include context snippets for references */
