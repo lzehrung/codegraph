@@ -100,13 +100,14 @@ function mergeGraphOptions(
 function applyReviewPresetOptions(opts: ReviewOptions): ReviewOptions {
   if (!opts.reviewDepth) return opts;
   const preset = REVIEW_PRESETS[opts.reviewDepth];
+  const mergedGraph = mergeGraphOptions(preset.graph, opts.graph);
   return {
     ...opts,
     includeSymbolDetails:
       opts.includeSymbolDetails ?? preset.includeSymbolDetails,
     maxCallsites: opts.maxCallsites ?? preset.maxCallsites,
     maxCandidates: opts.maxCandidates ?? preset.maxCandidates,
-    graph: mergeGraphOptions(preset.graph, opts.graph),
+    ...(mergedGraph ? { graph: mergedGraph } : {}),
   };
 }
 
@@ -335,7 +336,7 @@ export async function buildReviewReport(
         };
       }
       const handles = mod.locals.map((local) => symbolId(local));
-      const symbols = includeSymbolDetails
+      const symbols: ReviewSymbolSummary[] = includeSymbolDetails
         ? await Promise.all(
             mod.locals.map((local) => buildSymbolSummary(local, mod)),
           )
@@ -353,7 +354,7 @@ export async function buildReviewReport(
           file: relativePath(projectRoot, file),
           status: "updated",
           symbols,
-        },
+        } satisfies ReviewFileSummary,
         handles,
       };
     }),
