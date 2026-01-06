@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { createTestIndex, getSamplePath } from './test-utils.js';
+import { createTestIndex } from './test-utils.js';
+import type { ChangedSymbol, Hunk } from '../src/impact/types.js';
 
 function norm(p: string) { return p.replace(/\\/g, '/'); }
 
@@ -17,11 +18,17 @@ describe('Impact: changed-lines → symbol mapping', () => {
     // Pick a function-like local and simulate a body change (+ line inside the range)
     const target = mod.locals.find(l => l.kind === 'function') || mod.locals[0]!;
     const bodyLine = Math.max(target.range.start.line + 1, target.range.start.line);
-    const hunks = [{ startLine: bodyLine, lines: ['+// changed'] }];
+    const hunks: Hunk[] = [
+      {
+        oldStart: bodyLine,
+        newStart: bodyLine,
+        lines: ['+// changed'],
+      },
+    ];
 
     const { locateChangedSymbols } = await import('../src/impact/map.js');
-    const changed = locateChangedSymbols(index, file, hunks as any);
-    expect(changed.some((s: any) => s.name === target.localName)).toBe(true);
+    const changed = locateChangedSymbols(index, file, hunks);
+    expect(changed.some((s: ChangedSymbol) => s.name === target.localName)).toBe(true);
   });
 
   it('handles multi-hunk edits correctly (no off-by-one)', async () => {
@@ -37,17 +44,37 @@ describe('Impact: changed-lines → symbol mapping', () => {
       return;
     }
 
-    const hunks = targets.map(t => ({
-      startLine: t.range.start.line,
-      lines: ['+// changed']
+    const hunks: Hunk[] = targets.map((t) => ({
+      oldStart: t.range.start.line,
+      newStart: t.range.start.line,
+      lines: ['+// changed'],
     }));
 
     const { locateChangedSymbols } = await import('../src/impact/map.js');
-    const changed = locateChangedSymbols(index, file, hunks as any);
+    const changed = locateChangedSymbols(index, file, hunks);
     for (const t of targets) {
-      expect(changed.some((s: any) => s.name === t.localName)).toBe(true);
+      expect(changed.some((s: ChangedSymbol) => s.name === t.localName)).toBe(true);
     }
   });
+
+  it('maps deletions to the nearest declaration (deletion-only hunks)', async () => {
+    const index = await createTestIndex('typescript');
+    const file = Array.from(index.byFile.keys()).find(f => f.endsWith('/utils.ts'))!;
+    expect(file).toBeTruthy();
+
+    const mod = index.byFile.get(file)!;
+    const target = mod.locals.find(l => l.kind === 'function') || mod.locals[0]!;
+    const deleteLine = Math.max(target.range.start.line + 1, target.range.start.line);
+    const hunks: Hunk[] = [
+      {
+        oldStart: deleteLine,
+        newStart: deleteLine,
+        lines: ['-// removed'],
+      },
+    ];
+
+    const { locateChangedSymbols } = await import('../src/impact/map.js');
+    const changed = locateChangedSymbols(index, file, hunks);
+    expect(changed.some((s: ChangedSymbol) => s.name === target.localName)).toBe(true);
+  });
 });
-
-

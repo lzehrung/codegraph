@@ -184,6 +184,57 @@ describe('Review report', () => {
     ).toBe(true);
   });
 
+  it('limits symbols to diff hunks and includes diff snippets when provided', async () => {
+    const root = await mkTmpDir('dg-review-diff-');
+    const srcDir = path.join(root, 'src');
+    await fsp.mkdir(srcDir, { recursive: true });
+    const featureFile = path.join(srcDir, 'feature.ts');
+    await fsp.writeFile(
+      featureFile,
+      [
+        `export function alpha() {`,
+        `  return 2;`,
+        `}`,
+        ``,
+        `export function beta() {`,
+        `  return 5;`,
+        `}`,
+        ``,
+      ].join('\n'),
+      'utf8',
+    );
+
+    await buildProjectIndex(root);
+
+    const diffText = [
+      'diff --git a/src/feature.ts b/src/feature.ts',
+      'index 1234567..abcdef0 100644',
+      '--- a/src/feature.ts',
+      '+++ b/src/feature.ts',
+      '@@ -1,3 +1,3 @@',
+      ' export function alpha() {',
+      '-  return 1;',
+      '+  return 2;',
+      ' }',
+      '',
+    ].join('\n');
+
+    const report = await buildReviewReport(root, {
+      files: [featureFile],
+      diffText,
+      includeSymbolDetails: true,
+    });
+
+    const summary = report.changedFiles.find((entry) => entry.file === 'src/feature.ts');
+    expect(summary).toBeDefined();
+    const symbols = summary?.symbols ?? [];
+    expect(symbols.some((symbol) => symbol.name === 'alpha')).toBe(true);
+    expect(symbols.some((symbol) => symbol.name === 'beta')).toBe(false);
+
+    const alpha = symbols.find((symbol) => symbol.name === 'alpha');
+    expect(alpha?.diffSnippets?.some((snippet) => snippet.includes('return 2;'))).toBe(true);
+  });
+
   it('identifies git-tracked changed files without explicit listings', async () => {
     const root = await mkTmpDir('dg-review-git-');
     runGit(root, ['init']);

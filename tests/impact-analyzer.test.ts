@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import { analyzeImpact, seedTransitiveFromFiles, calculateSeverity } from "../src/impact/analyzer.js";
 import { SymbolKind } from "../src/indexer.js";
+import type { ProjectIndex } from "../src/indexer.js";
+import type { Edge } from "../src/types.js";
 import { createTestIndex } from "./test-utils.js";
 
 describe("Impact Analyzer Edge Cases", () => {
@@ -74,6 +76,51 @@ describe("Impact Analyzer Edge Cases", () => {
       // Both should work without throwing
       expect(impactedWithTests.size).toBeGreaterThanOrEqual(0);
       expect(impactedWithoutTests.size).toBeGreaterThanOrEqual(0);
+    });
+
+    it("supports custom test patterns", async () => {
+      const featureFile = path.resolve("src/feature.ts");
+      const testFile = path.resolve("checks/feature.case.ts");
+      const edges: Edge[] = [
+        {
+          from: testFile,
+          to: { type: "file", path: featureFile },
+          raw: "./feature",
+        },
+      ];
+      const index: ProjectIndex = {
+        graph: { nodes: new Set([featureFile, testFile]), edges },
+        modules: new Map(),
+        byFile: new Map(),
+        exportCache: new Map(),
+        scopeCache: new Map(),
+      };
+
+      const impactedWithoutPattern = new Map();
+      await seedTransitiveFromFiles(
+        index,
+        impactedWithoutPattern,
+        [{ path: featureFile, kind: "deleted", hunks: [] }],
+        { includeTests: false },
+      );
+      expect(
+        Array.from(impactedWithoutPattern.values()).some((item) =>
+          item.file.endsWith("feature.case.ts"),
+        ),
+      ).toBe(true);
+
+      const impactedWithPattern = new Map();
+      await seedTransitiveFromFiles(
+        index,
+        impactedWithPattern,
+        [{ path: featureFile, kind: "deleted", hunks: [] }],
+        { includeTests: false, testPatterns: ["case\\.ts$"] },
+      );
+      expect(
+        Array.from(impactedWithPattern.values()).some((item) =>
+          item.file.endsWith("feature.case.ts"),
+        ),
+      ).toBe(false);
     });
   });
 

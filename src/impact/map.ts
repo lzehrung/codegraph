@@ -19,19 +19,24 @@ export function locateChangedSymbols(
   const sup = parsedEntry.sup;
   const changedSymbols: ChangedSymbol[] = [];
 
-  // Collect all changed line ranges from hunks
-  // Robust new-file line tracking; works with unified=0 (no context)
+  // Collect changed line numbers in the new file view.
+  // Track deletions by mapping them to the current new-line position.
   const changedLines = new Set<number>();
   for (const hunk of hunks) {
-    let newLine = hunk.startLine;
+    let oldLine = hunk.oldStart;
+    let newLine = hunk.newStart;
     for (const line of hunk.lines) {
       if (line.startsWith(" ")) {
+        oldLine++;
         newLine++;
       } else if (line.startsWith("+")) {
         changedLines.add(newLine);
         newLine++;
+      } else if (line.startsWith("-")) {
+        const mappedLine = newLine > 0 ? newLine : oldLine;
+        changedLines.add(mappedLine);
+        oldLine++;
       }
-      // '-' lines aren't included in hunk.lines with unified=0; no newLine++
     }
   }
 
@@ -67,6 +72,63 @@ export function locateChangedSymbols(
   }
 
   return changedSymbols;
+}
+
+export function mapChangedLinesToSymbols(
+  index: ProjectIndex,
+  file: FileId,
+  hunks: FileChange["hunks"],
+): Map<SymbolHandle, Set<number>> {
+  const parsedEntry = index.parsed?.get(file);
+  if (!parsedEntry) return new Map();
+
+  const { source, tree } = parsedEntry;
+  const sup = parsedEntry.sup;
+  const changedLines = new Set<number>();
+  for (const hunk of hunks) {
+    let oldLine = hunk.oldStart;
+    let newLine = hunk.newStart;
+    for (const line of hunk.lines) {
+      if (line.startsWith(" ")) {
+        oldLine++;
+        newLine++;
+      } else if (line.startsWith("+")) {
+        changedLines.add(newLine);
+        newLine++;
+      } else if (line.startsWith("-")) {
+        const mappedLine = newLine > 0 ? newLine : oldLine;
+        changedLines.add(mappedLine);
+        oldLine++;
+      }
+    }
+  }
+
+  const nodes = findNodesInLines(tree, changedLines);
+  const linesByHandle = new Map<SymbolHandle, Set<number>>();
+  for (const node of nodes) {
+    const startLine = node.startPosition?.row + 1;
+    const endLine = node.endPosition?.row + 1;
+    if (!startLine || !endLine) continue;
+    const matchingLines: number[] = [];
+    for (let line = startLine; line <= endLine; line++) {
+      if (changedLines.has(line)) matchingLines.push(line);
+    }
+    if (matchingLines.length === 0) continue;
+    const classification = classifyChangedNode(node, source, sup);
+    const symbolHandle = findSymbolHandleForNode(
+      index,
+      file,
+      node,
+      sup,
+      classification,
+    );
+    if (!symbolHandle) continue;
+    const existing = linesByHandle.get(symbolHandle) ?? new Set<number>();
+    for (const line of matchingLines) existing.add(line);
+    linesByHandle.set(symbolHandle, existing);
+  }
+
+  return linesByHandle;
 }
 
 function findNodesInLines(tree: any, changedLines: Set<number>): any[] {
