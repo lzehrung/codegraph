@@ -1100,6 +1100,10 @@ async function main() {
     const threadsRaw = getOpt("--threads");
     const threads = threadsRaw !== undefined ? Number(threadsRaw) : undefined;
     const cache = getOpt("--cache") as any;
+    const includeSymbolDetails = hasFlag("--include-symbol-details");
+    const maxCallsitesRaw = getOpt("--max-callsites");
+    const maxCallsites =
+      maxCallsitesRaw !== undefined ? Number(maxCallsitesRaw) : undefined;
     const maxTestsRaw = getOpt("--max-tests");
     const maxTests =
       maxTestsRaw !== undefined ? Number(maxTestsRaw) : undefined;
@@ -1110,6 +1114,10 @@ async function main() {
     if (threads !== undefined) reviewOpts.threads = threads;
     if (cache !== undefined) reviewOpts.cache = cache;
     if (hasGraphOverrides) reviewOpts.graph = buildGraphOptions();
+    if (includeSymbolDetails) {
+      reviewOpts.includeSymbolDetails = includeSymbolDetails;
+    }
+    if (maxCallsites !== undefined) reviewOpts.maxCallsites = maxCallsites;
     if (maxTests !== undefined) reviewOpts.maxCandidates = maxTests;
     const report = await buildReviewReport(projectRootFs, reviewOpts);
     writeJSONLine(report);
