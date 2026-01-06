@@ -43,6 +43,7 @@ import type {
   CompactImpactReport,
   ChangedSymbol,
   ImpactItem,
+  ReviewDepth,
 } from "./index.js";
 
 function toJSON(obj: any) {
@@ -117,6 +118,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--max-tokens",
   "--max-hits",
   "--resolution-hint",
+  "--review-depth",
 ]);
 
 function parseCliArgs(tokens: string[]): ParsedCliArgs {
@@ -468,6 +470,13 @@ function formatImpactMermaid(report: ImpactReport, root: string): string {
   }
 
   return graphToMermaidSymbolsWithFiles(symbolGraph, fileGraph, root);
+}
+
+function parseReviewDepth(value: string): ReviewDepth | null {
+  if (value === "minimal" || value === "standard" || value === "deep") {
+    return value;
+  }
+  return null;
 }
 
 async function main() {
@@ -1097,6 +1106,15 @@ async function main() {
     const base = getOpt("--base");
     const head = getOpt("--head");
     const changedSince = getOpt("--changed-since");
+    const reviewDepthRaw = getOpt("--review-depth");
+    const reviewDepth =
+      reviewDepthRaw !== undefined ? parseReviewDepth(reviewDepthRaw) : null;
+    if (reviewDepthRaw !== undefined && !reviewDepth) {
+      writeStderrLine(
+        `Invalid --review-depth value "${reviewDepthRaw}". Expected minimal|standard|deep.`,
+      );
+      process.exit(2);
+    }
     const threadsRaw = getOpt("--threads");
     const threads = threadsRaw !== undefined ? Number(threadsRaw) : undefined;
     const cache = getOpt("--cache") as any;
@@ -1108,6 +1126,7 @@ async function main() {
     const maxTests =
       maxTestsRaw !== undefined ? Number(maxTestsRaw) : undefined;
     const reviewOpts: Parameters<typeof buildReviewReport>[1] = {};
+    if (reviewDepth) reviewOpts.reviewDepth = reviewDepth;
     if (base !== undefined) reviewOpts.gitBase = base;
     if (head !== undefined) reviewOpts.gitHead = head;
     if (changedSince !== undefined) reviewOpts.changedSince = changedSince;

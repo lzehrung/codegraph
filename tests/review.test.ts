@@ -335,6 +335,84 @@ describe('Review report', () => {
       findSpy.mockRestore();
     }
   });
+
+  it('applies review depth presets to symbol details and graph options', async () => {
+    const root = await mkTmpDir('dg-review-presets-');
+    const srcDir = path.join(root, 'src');
+    await fsp.mkdir(srcDir, { recursive: true });
+    const featureFile = path.join(srcDir, 'feature.ts');
+    await fsp.writeFile(
+      featureFile,
+      [
+        `export function greet(name: string) {`,
+        `  return \`hello \${name}\`;`,
+        `}`,
+        ``,
+      ].join('\n'),
+      'utf8',
+    );
+    const consumers = ['alpha', 'beta', 'gamma'].map((name) => ({
+      name,
+      file: path.join(srcDir, `${name}.ts`),
+    }));
+    for (const consumer of consumers) {
+      await fsp.writeFile(
+        consumer.file,
+        [
+          `import { greet } from './feature';`,
+          ``,
+          `export function run${consumer.name}() {`,
+          `  return greet('${consumer.name}');`,
+          `}`,
+          ``,
+        ].join('\n'),
+        'utf8',
+      );
+    }
+
+    await buildProjectIndex(root);
+
+    const buildSpy = vi.spyOn(indexer, 'buildProjectIndexIncremental');
+    try {
+      const minimal = await buildReviewReport(root, {
+        files: [featureFile],
+        reviewDepth: 'minimal',
+      });
+      const standard = await buildReviewReport(root, {
+        files: [featureFile],
+        reviewDepth: 'standard',
+      });
+      const deep = await buildReviewReport(root, {
+        files: [featureFile],
+        reviewDepth: 'deep',
+      });
+
+      const findGreet = (report: Awaited<typeof minimal>) =>
+        report.changedFiles
+          .find((entry) => entry.file === 'src/feature.ts')
+          ?.symbols.find((symbol) => symbol.name === 'greet');
+
+      const minimalGreet = findGreet(minimal);
+      expect(minimalGreet).toBeDefined();
+      expect(minimalGreet?.definitionSnippet).toBeUndefined();
+      expect(minimalGreet?.callsites).toBeUndefined();
+
+      const standardGreet = findGreet(standard);
+      expect(standardGreet?.definitionSnippet).toContain('function greet');
+      expect(standardGreet?.callsites?.length).toBeGreaterThan(0);
+      expect(standardGreet?.callsites?.length).toBeLessThanOrEqual(2);
+
+      const deepGreet = findGreet(deep);
+      expect(deepGreet?.callsites?.length).toBe(3);
+
+      const fastFlags = buildSpy.mock.calls.map((call) => call[1]?.graph?.fast);
+      expect(fastFlags[0]).toBe(true);
+      expect(fastFlags[1]).toBe(false);
+      expect(fastFlags[2]).toBe(false);
+    } finally {
+      buildSpy.mockRestore();
+    }
+  });
 });
 
 describe('CLI flows', () => {
