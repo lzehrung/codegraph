@@ -1,9 +1,14 @@
 import path from "node:path";
-import type { Edge } from "./types.js";
+import fsp from "node:fs/promises";
+import type { Edge, Range } from "./types.js";
 import {
   buildProjectIndexIncremental,
+  type ExportEntry,
+  findReferences,
   type IncrementalBuildOptions,
+  type ModuleIndex,
   type ProjectIndex,
+  type SymbolDef,
   symbolId,
 } from "./indexer.js";
 import {
@@ -15,12 +20,21 @@ import { normalizePath, listChangedFiles, fileExists } from "./util.js";
 type ReviewFileSummary = {
   file: string;
   status: "updated" | "deleted";
-  symbols: Array<{
-    name: string;
-    kind: string;
-    handle: string;
-    exported: boolean;
-  }>;
+  symbols: ReviewSymbolSummary[];
+};
+
+type ReviewSymbolCallsite = {
+  file: string;
+  range: Range;
+};
+
+type ReviewSymbolSummary = {
+  name: string;
+  kind: string;
+  handle: string;
+  exported: boolean;
+  definitionSnippet?: string;
+  callsites?: ReviewSymbolCallsite[];
 };
 
 export type ReviewReport = {
@@ -39,15 +53,57 @@ export type ReviewReport = {
 
 export type ReviewOptions = IncrementalBuildOptions & {
   maxCandidates?: number;
+  includeSymbolDetails?: boolean;
+  maxCallsites?: number;
 };
 
 function relativePath(root: string, file: string): string {
   return normalizePath(path.relative(root, file));
 }
 
-function isExported(mod: { exports: any[] }, handle: string): boolean {
+function isExported(mod: { exports: ExportEntry[] }, handle: string): boolean {
   return mod.exports.some(
-    (e: any) => e.type === "local" && symbolId(e.target) === handle,
+    (e) => e.type === "local" && symbolId(e.target) === handle,
+  );
+}
+
+function rangeSnippet(source: string, range: Range): string {
+  const startLine = range.start.line;
+  const endLine = range.end.line;
+  if (typeof startLine === "number") {
+    const lines = source.split(/\r?\n/);
+    const safeStart = Math.max(1, startLine);
+    const safeEnd =
+      typeof endLine === "number" ? Math.max(safeStart, endLine) : safeStart;
+    return lines.slice(safeStart - 1, safeEnd).join("\n");
+  }
+  const startIndex = range.start.index;
+  const endIndex = range.end.index;
+  if (
+    typeof startIndex === "number" &&
+    typeof endIndex === "number" &&
+    endIndex >= startIndex
+  ) {
+    return source.slice(startIndex, endIndex);
+  }
+  return "";
+}
+
+function sameRange(left: Range, right: Range): boolean {
+  const leftStart = left.start.index;
+  const rightStart = right.start.index;
+  const leftEnd = left.end.index;
+  const rightEnd = right.end.index;
+  if (typeof leftStart === "number" && typeof rightStart === "number") {
+    if (leftStart !== rightStart) return false;
+    if (typeof leftEnd === "number" && typeof rightEnd === "number") {
+      return leftEnd === rightEnd;
+    }
+    return true;
+  }
+  return (
+    left.start.line === right.start.line &&
+    left.start.column === right.start.column
   );
 }
 
@@ -97,10 +153,24 @@ export async function buildReviewReport(
   }
 
   const changedFileList = Array.from(changedFiles);
-  const fastGraphRequested = opts.graph?.fast === true;
+  const fastGraphRequested = opts.graph?.fast ?? false;
   const graphOptions = opts.graph
     ? { ...opts.graph, fast: fastGraphRequested }
     : { fast: false };
+  const includeSymbolDetails = opts.includeSymbolDetails ?? false;
+  const maxCallsites =
+    typeof opts.maxCallsites === "number" && opts.maxCallsites >= 0
+      ? opts.maxCallsites
+      : 5;
+  const sourceCache = new Map<string, string>();
+  const loadSource = async (file: string): Promise<string> => {
+    const cached = sourceCache.get(file);
+    if (cached !== undefined) return cached;
+    const parsed = index.parsed?.get(file);
+    const source = parsed?.source ?? (await fsp.readFile(file, "utf8"));
+    sourceCache.set(file, source);
+    return source;
+  };
   const existenceChecks = await Promise.all(
     changedFileList.map(async (file) => ({
       file,
@@ -142,16 +212,61 @@ export async function buildReviewReport(
       });
       continue;
     }
-    const symbols = mod.locals.map((local) => {
+    const buildSymbolSummary = async (
+      local: SymbolDef,
+      moduleIndex: ModuleIndex,
+    ): Promise<ReviewSymbolSummary> => {
       const handle = symbolId(local);
       changedSymbolIds.push(handle);
-      return {
+      const base: ReviewSymbolSummary = {
         name: local.localName,
         kind: local.kind,
         handle,
-        exported: isExported(mod, handle),
+        exported: isExported(moduleIndex, handle),
       };
-    });
+      if (!includeSymbolDetails) return base;
+
+      const source = await loadSource(local.file);
+      const snippet = rangeSnippet(source, local.range);
+      const definitionSnippet = snippet ? { definitionSnippet: snippet } : {};
+
+      let callsites: ReviewSymbolCallsite[] | undefined;
+      if (maxCallsites > 0) {
+        const refs = await findReferences(index, { def: local });
+        if (refs.status === "ok") {
+          const candidates = refs.references.filter(
+            (ref) =>
+              !(ref.file === local.file && sameRange(ref.range, local.range)),
+          );
+          const limited = candidates.slice(0, maxCallsites).map((ref) => ({
+            file: relativePath(projectRoot, ref.file),
+            range: ref.range,
+          }));
+          if (limited.length > 0) callsites = limited;
+        }
+      }
+
+      return {
+        ...base,
+        ...definitionSnippet,
+        ...(callsites ? { callsites } : {}),
+      };
+    };
+
+    const symbols = includeSymbolDetails
+      ? await Promise.all(
+          mod.locals.map((local) => buildSymbolSummary(local, mod)),
+        )
+      : mod.locals.map((local) => {
+          const handle = symbolId(local);
+          changedSymbolIds.push(handle);
+          return {
+            name: local.localName,
+            kind: local.kind,
+            handle,
+            exported: isExported(mod, handle),
+          };
+        });
     summaries.push({
       file: relativePath(projectRoot, file),
       status: "updated",

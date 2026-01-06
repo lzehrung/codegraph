@@ -116,6 +116,73 @@ describe('Review report', () => {
     expect(report.changedFiles[0]?.symbols.some((s) => s.name === 'a')).toBe(true);
   });
 
+  it('includes definition snippets and callsites when enabled', async () => {
+    const root = await mkTmpDir('dg-review-details-');
+    const srcDir = path.join(root, 'src');
+    await fsp.mkdir(srcDir, { recursive: true });
+    const featureFile = path.join(srcDir, 'feature.ts');
+    const consumerFile = path.join(srcDir, 'consumer.ts');
+    await fsp.writeFile(
+      featureFile,
+      [
+        `export function greet(name: string) {`,
+        `  return \`hi \${name}\`;`,
+        `}`,
+        ``,
+      ].join('\n'),
+      'utf8',
+    );
+    await fsp.writeFile(
+      consumerFile,
+      [
+        `import { greet } from './feature';`,
+        ``,
+        `export function run() {`,
+        `  greet('world');`,
+        `}`,
+        ``,
+      ].join('\n'),
+      'utf8',
+    );
+
+    await buildProjectIndex(root);
+    await fsp.writeFile(
+      featureFile,
+      [
+        `export function greet(name: string) {`,
+        `  return \`hello \${name}\`;`,
+        `}`,
+        ``,
+      ].join('\n'),
+      'utf8',
+    );
+
+    const report = await buildReviewReport(root, {
+      files: [featureFile],
+      includeSymbolDetails: true,
+      maxCallsites: 2,
+    });
+    const featureSummary = report.changedFiles.find(
+      (entry) => entry.file === 'src/feature.ts',
+    );
+    expect(featureSummary).toBeDefined();
+    const greetSummary = featureSummary?.symbols.find(
+      (symbol) => symbol.name === 'greet',
+    );
+    expect(greetSummary).toBeDefined();
+    expect(greetSummary?.definitionSnippet).toContain('function greet');
+    const callsites = greetSummary?.callsites ?? [];
+    expect(callsites.length).toBeGreaterThan(0);
+    expect(callsites.length).toBeLessThanOrEqual(2);
+    expect(
+      callsites.some(
+        (site) =>
+          site.file === 'src/consumer.ts' &&
+          (site.range.start.line === 1 || site.range.start.line === 4),
+      ),
+    ).toBe(true);
+  });
+
   it('identifies git-tracked changed files without explicit listings', async () => {
     const root = await mkTmpDir('dg-review-git-');
     runGit(root, ['init']);
