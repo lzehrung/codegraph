@@ -200,79 +200,87 @@ export async function buildReviewReport(
     index = await buildProjectIndexIncremental(projectRoot, indexOpts);
   }
 
-  const summaries: ReviewFileSummary[] = [];
-  const changedSymbolIds: string[] = [];
-  for (const file of changedFileList) {
-    const mod = index.byFile.get(file);
-    if (!mod) {
-      summaries.push({
-        file: relativePath(projectRoot, file),
-        status: "deleted",
-        symbols: [],
-      });
-      continue;
-    }
-    const buildSymbolSummary = async (
-      local: SymbolDef,
-      moduleIndex: ModuleIndex,
-    ): Promise<ReviewSymbolSummary> => {
-      const handle = symbolId(local);
-      changedSymbolIds.push(handle);
-      const base: ReviewSymbolSummary = {
-        name: local.localName,
-        kind: local.kind,
-        handle,
-        exported: isExported(moduleIndex, handle),
-      };
-      if (!includeSymbolDetails) return base;
-
-      const source = await loadSource(local.file);
-      const snippet = rangeSnippet(source, local.range);
-      const definitionSnippet = snippet ? { definitionSnippet: snippet } : {};
-
-      let callsites: ReviewSymbolCallsite[] | undefined;
-      if (maxCallsites > 0) {
-        const refs = await findReferences(index, { def: local });
-        if (refs.status === "ok") {
-          const candidates = refs.references.filter(
-            (ref) =>
-              !(ref.file === local.file && sameRange(ref.range, local.range)),
-          );
-          const limited = candidates.slice(0, maxCallsites).map((ref) => ({
-            file: relativePath(projectRoot, ref.file),
-            range: ref.range,
-          }));
-          if (limited.length > 0) callsites = limited;
-        }
-      }
-
-      return {
-        ...base,
-        ...definitionSnippet,
-        ...(callsites ? { callsites } : {}),
-      };
+  const buildSymbolSummary = async (
+    local: SymbolDef,
+    moduleIndex: ModuleIndex,
+  ): Promise<ReviewSymbolSummary> => {
+    const handle = symbolId(local);
+    const base: ReviewSymbolSummary = {
+      name: local.localName,
+      kind: local.kind,
+      handle,
+      exported: isExported(moduleIndex, handle),
     };
+    if (!includeSymbolDetails) return base;
 
-    const symbols = includeSymbolDetails
-      ? await Promise.all(
-          mod.locals.map((local) => buildSymbolSummary(local, mod)),
-        )
-      : mod.locals.map((local) => {
-          const handle = symbolId(local);
-          changedSymbolIds.push(handle);
-          return {
-            name: local.localName,
-            kind: local.kind,
-            handle,
-            exported: isExported(mod, handle),
-          };
-        });
-    summaries.push({
-      file: relativePath(projectRoot, file),
-      status: "updated",
-      symbols,
-    });
-  }
+    const source = await loadSource(local.file);
+    const snippet = rangeSnippet(source, local.range);
+    const definitionSnippet = snippet ? { definitionSnippet: snippet } : {};
+
+    let callsites: ReviewSymbolCallsite[] | undefined;
+    if (maxCallsites > 0) {
+      const refs = await findReferences(index, { def: local });
+      if (refs.status === "ok") {
+        const candidates = refs.references.filter(
+          (ref) =>
+            !(ref.file === local.file && sameRange(ref.range, local.range)),
+        );
+        const limited = candidates.slice(0, maxCallsites).map((ref) => ({
+          file: relativePath(projectRoot, ref.file),
+          range: ref.range,
+        }));
+        if (limited.length > 0) callsites = limited;
+      }
+    }
+
+    return {
+      ...base,
+      ...definitionSnippet,
+      ...(callsites ? { callsites } : {}),
+    };
+  };
+
+  const summariesWithHandles = await Promise.all(
+    changedFileList.map(async (file) => {
+      const mod = index.byFile.get(file);
+      if (!mod) {
+        return {
+          summary: {
+            file: relativePath(projectRoot, file),
+            status: "deleted",
+            symbols: [],
+          } satisfies ReviewFileSummary,
+          handles: [] as string[],
+        };
+      }
+      const handles = mod.locals.map((local) => symbolId(local));
+      const symbols = includeSymbolDetails
+        ? await Promise.all(
+            mod.locals.map((local) => buildSymbolSummary(local, mod)),
+          )
+        : mod.locals.map((local) => {
+            const handle = symbolId(local);
+            return {
+              name: local.localName,
+              kind: local.kind,
+              handle,
+              exported: isExported(mod, handle),
+            };
+          });
+      return {
+        summary: {
+          file: relativePath(projectRoot, file),
+          status: "updated",
+          symbols,
+        },
+        handles,
+      };
+    }),
+  );
+  const summaries = summariesWithHandles.map((entry) => entry.summary);
+  const changedSymbolIds = summariesWithHandles.flatMap(
+    (entry) => entry.handles,
+  );
 
   const graphDelta: Edge[] = index.graph.edges
     .filter((edge) => changedFiles.has(edge.from))

@@ -9,6 +9,7 @@ import {
   buildProjectIndexFromFiles,
   buildReviewReport,
 } from '../src/index.js';
+import * as indexer from '../src/indexer.js';
 
 const tsxCommand = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
@@ -260,6 +261,79 @@ describe('Review report', () => {
     expect(report.summary.candidateTests).toBeGreaterThan(0);
     expect(report.candidateTests.some((candidate) => candidate.file === 'tests/feature.test.ts')).toBe(true);
     expect(report.candidateTests.some((candidate) => candidate.confidence === 'high')).toBe(true);
+  });
+
+  it('processes symbol details across files in parallel', async () => {
+    const root = await mkTmpDir('dg-review-parallel-');
+    const srcDir = path.join(root, 'src');
+    await fsp.mkdir(srcDir, { recursive: true });
+    const alphaFile = path.join(srcDir, 'alpha.ts');
+    const betaFile = path.join(srcDir, 'beta.ts');
+    await fsp.writeFile(alphaFile, `export function alpha() { return 'a'; }\n`, 'utf8');
+    await fsp.writeFile(betaFile, `export function beta() { return 'b'; }\n`, 'utf8');
+
+    await buildProjectIndex(root);
+
+    type RefResult = Awaited<ReturnType<typeof indexer.findReferences>>;
+    const deferreds: Array<{
+      promise: Promise<RefResult>;
+      resolve: (value: RefResult) => void;
+      def: indexer.SymbolDef | null;
+    }> = [];
+
+    const createDeferred = (def: indexer.SymbolDef | null) => {
+      let resolve: (value: RefResult) => void = () => {};
+      const promise = new Promise<RefResult>((res) => {
+        resolve = res;
+      });
+      const entry = { promise, resolve, def };
+      deferreds.push(entry);
+      return entry;
+    };
+
+    const findSpy = vi
+      .spyOn(indexer, 'findReferences')
+      .mockImplementation((idx, req) => {
+        const def = 'def' in req ? req.def : null;
+        const entry = createDeferred(def ?? null);
+        return entry.promise;
+      });
+
+    try {
+      const reportPromise = buildReviewReport(root, {
+        files: [alphaFile, betaFile],
+        includeSymbolDetails: true,
+        maxCallsites: 1,
+      });
+
+      const waitFor = async (predicate: () => boolean) => {
+        for (let i = 0; i < 50; i += 1) {
+          if (predicate()) return;
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        throw new Error('Timed out waiting for parallel calls');
+      };
+
+      await waitFor(() => deferreds.length === 2);
+
+      for (const entry of deferreds) {
+        if (!entry.def) {
+          entry.resolve({ status: 'not_found', reason: 'missing def' });
+          continue;
+        }
+        entry.resolve({
+          status: 'ok',
+          definition: entry.def,
+          references: [],
+        });
+      }
+
+      const report = await reportPromise;
+      expect(report.status).toBe('ok');
+      expect(report.changedFiles.length).toBe(2);
+    } finally {
+      findSpy.mockRestore();
+    }
   });
 });
 
