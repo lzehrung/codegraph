@@ -1080,6 +1080,40 @@ export async function listChangedFiles(
   }
 }
 
+export async function getUnifiedDiff(
+  projectRoot: string,
+  opts: {
+    changedSince?: string | undefined;
+    base?: string | undefined;
+    head?: string | undefined;
+  },
+): Promise<string> {
+  try {
+    const args = [
+      "diff",
+      "--unified=0",
+      "--no-color",
+      "--diff-filter=ACDMRTUXB",
+    ];
+    if (opts.base) {
+      const head = opts.head ?? "HEAD";
+      args.push(`${opts.base}..${head}`);
+    } else if (opts.changedSince) {
+      args.push(opts.changedSince);
+    } else {
+      return "";
+    }
+    args.push("--");
+    const { stdout } = await execFileAsync("git", args, {
+      cwd: projectRoot,
+      env: process.env,
+    });
+    return stdout;
+  } catch {
+    return "";
+  }
+}
+
 async function findPythonPackageAnchor(startDir: string): Promise<string> {
   let dir = startDir;
   let topWithInit = startDir;

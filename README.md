@@ -400,6 +400,9 @@ WHERE to_path = 'src/auth.ts' AND to_type = 'file';
           "kind": "function",
           "exported": true,
           "definitionSnippet": "export function doThing() {\\n  ...\\n}",
+          "diffSnippets": [
+            "export function doThing() {\\n  return updatedValue;\\n}"
+          ],
           "callsites": [
             { "file": "src/bar.ts", "range": { "start": { "line": 10, "column": 3 }, "end": { "line": 10, "column": 10 } } }
           ]
@@ -418,7 +421,7 @@ WHERE to_path = 'src/auth.ts' AND to_type = 'file';
 
 Feed this JSON directly to an agent (or your own scripts) to highlight symbol-level changes, updated dependency edges, and likely regression tests.
 
-Use `--include-symbol-details` to attach definition snippets and callsite ranges for changed symbols. Tune `--max-callsites` to keep the payload bounded.
+Use `--include-symbol-details` to attach definition snippets and callsite ranges for changed symbols. When diff data is available (from Git or `diffText`), review reports focus on symbols touched by diff hunks and include `diffSnippets` with the changed line context. Tune `--max-callsites` to keep the payload bounded.
 
 `--review-depth minimal|standard|deep` applies preset bundles:
 
