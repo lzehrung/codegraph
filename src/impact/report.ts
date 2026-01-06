@@ -17,13 +17,23 @@ export async function buildImpactReport(
   impactedItems: ImpactItem[],
   options: Partial<ImpactOptions> = {},
 ): Promise<ImpactReport | CompactImpactReport> {
+  const newFileRangeForHunk = (hunk: FileChange["hunks"][number]) => {
+    let newLine = hunk.newStart;
+    let lastNewLine = newLine - 1;
+    for (const line of hunk.lines) {
+      if (line.startsWith(" ") || line.startsWith("+")) {
+        lastNewLine = newLine;
+        newLine++;
+      }
+    }
+    const end = Math.max(hunk.newStart, lastNewLine);
+    return { start: hunk.newStart, end };
+  };
+
   // Build changedFiles summary
   const changedFiles = diffFiles.map((fileChange) => ({
     file: fileChange.path,
-    hunks: fileChange.hunks.map((hunk) => ({
-      start: hunk.startLine,
-      end: hunk.startLine + hunk.lines.length - 1,
-    })),
+    hunks: fileChange.hunks.map((hunk) => newFileRangeForHunk(hunk)),
   }));
 
   // Build graph data

@@ -3,8 +3,9 @@ import type { SymbolHandle, SymbolDef } from "../indexer.js";
 
 // Diff parsing types
 export type Hunk = {
-  startLine: number; // 1-based line number in original file
-  lines: string[]; // actual diff lines (+/- content)
+  oldStart: number; // 1-based line number in old file
+  newStart: number; // 1-based line number in new file
+  lines: string[]; // raw diff lines ("+", "-", " " prefixes)
 };
 
 export type FileChange = {
@@ -67,7 +68,7 @@ export type ImpactItem = {
 export type ImpactReport = {
   changedFiles: Array<{
     file: FileId;
-    hunks: Array<{ start: number; end: number }>; // line ranges
+    hunks: Array<{ start: number; end: number }>; // new-file line ranges
   }>;
   changedSymbols: ChangedSymbol[];
   impacted: ImpactItem[];

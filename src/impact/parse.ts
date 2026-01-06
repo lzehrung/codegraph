@@ -126,10 +126,13 @@ function parseHunk(
   if (!headerLine?.startsWith("@@")) return null;
 
   // Parse hunk header: @@ -oldStart,oldCount +newStart,newCount @@
-  const match = headerLine.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+  const match = headerLine.match(
+    /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/,
+  );
   if (!match) return null;
 
-  const newStart = parseInt(match[1]!);
+  const oldStart = parseInt(match[1]!);
+  const newStart = parseInt(match[2]!);
   const hunkLines: string[] = [];
   let i = startIndex + 1;
 
@@ -141,9 +144,11 @@ function parseHunk(
       break;
     }
 
-    // Only collect added/modified lines (+ and space lines in new file context)
-    if (line?.startsWith("+") || line?.startsWith(" ")) {
-      hunkLines.push(line);
+    if (line && !line.startsWith("\\")) {
+      const prefix = line[0];
+      if (prefix === "+" || prefix === "-" || prefix === " ") {
+        hunkLines.push(line);
+      }
     }
 
     i++;
@@ -151,7 +156,8 @@ function parseHunk(
 
   return {
     hunk: {
-      startLine: newStart,
+      oldStart,
+      newStart,
       lines: hunkLines,
     },
     _nextIndex: i,
