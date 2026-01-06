@@ -19,19 +19,24 @@ export function locateChangedSymbols(
   const sup = parsedEntry.sup;
   const changedSymbols: ChangedSymbol[] = [];
 
-  // Collect all changed line ranges from hunks
-  // Robust new-file line tracking; works with unified=0 (no context)
+  // Collect changed line numbers in the new file view.
+  // Track deletions by mapping them to the current new-line position.
   const changedLines = new Set<number>();
   for (const hunk of hunks) {
-    let newLine = hunk.startLine;
+    let oldLine = hunk.oldStart;
+    let newLine = hunk.newStart;
     for (const line of hunk.lines) {
       if (line.startsWith(" ")) {
+        oldLine++;
         newLine++;
       } else if (line.startsWith("+")) {
         changedLines.add(newLine);
         newLine++;
+      } else if (line.startsWith("-")) {
+        const mappedLine = newLine > 0 ? newLine : oldLine;
+        changedLines.add(mappedLine);
+        oldLine++;
       }
-      // '-' lines aren't included in hunk.lines with unified=0; no newLine++
     }
   }
 

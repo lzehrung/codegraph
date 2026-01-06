@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import { parseUnifiedDiff } from "../src/impact/parse.js";
 import { analyzeImpactFromDiff, listCandidateTestFiles } from "../src/impact/index.js";
-import { CompactImpactReport } from "../src/impact/types.js";
+import { CompactImpactReport, type ImpactItem } from "../src/impact/types.js";
+import type { Range } from "../src/types.js";
 import { createTestIndex } from "./test-utils.js";
 
 describe("Impact Analysis", () => {
@@ -27,7 +28,8 @@ index 1234567..abcdef0 100644
       expect(diff.files[0].path).toBe("utils.ts");
       expect(diff.files[0].kind).toBe("modified");
       expect(diff.files[0].hunks).toHaveLength(1);
-      expect(diff.files[0].hunks[0].startLine).toBe(1);
+      expect(diff.files[0].hunks[0].oldStart).toBe(1);
+      expect(diff.files[0].hunks[0].newStart).toBe(1);
       expect(diff.files[0].hunks[0].lines).toContain("+export function newHelper() {");
     });
 
@@ -48,7 +50,7 @@ index 0000000..1234567
       expect(diff.files).toHaveLength(1);
       expect(diff.files[0].path).toBe("newfile.ts");
       expect(diff.files[0].kind).toBe("added");
-      expect(diff.files[0].hunks[0].startLine).toBe(1);
+      expect(diff.files[0].hunks[0].newStart).toBe(1);
     });
 
     it("should parse diff with file deletions", () => {
@@ -91,6 +93,25 @@ index 1234567..abcdef0 100644
       expect(diff.files[0].path).toBe("newname.ts");
       expect(diff.files[0].kind).toBe("renamed");
       expect(diff.files[0].oldPath).toBe("oldname.ts");
+    });
+
+    it("should keep deletion lines in hunks", () => {
+      const diffText = `diff --git a/utils.ts b/utils.ts
+index 1234567..abcdef0 100644
+--- a/utils.ts
++++ b/utils.ts
+@@ -1,3 +1,2 @@
+ export function helper() {
+-  return 42;
++  return 43;
+ }
+`;
+
+      const diff = parseUnifiedDiff(diffText);
+      const hunk = diff.files[0]?.hunks[0];
+
+      expect(hunk?.lines).toContain("-  return 42;");
+      expect(hunk?.lines).toContain("+  return 43;");
     });
   });
 
@@ -280,7 +301,7 @@ index 1234567..abcdef0 100644
         name: string;
         kind: string;
         exported: boolean;
-        range: any;
+        range: Range;
         typeOnly: boolean;
       } | null = null;
 
@@ -345,7 +366,7 @@ index 1234567..abcdef0 100644
         name: string;
         kind: string;
         exported: boolean;
-        range: any;
+        range: Range;
         typeOnly: boolean;
       } | null = null;
 
@@ -389,7 +410,7 @@ index 1234567..abcdef0 100644
         );
 
         // Find impact items that might have signatureChanged hints
-        const itemsWithHints = report.impacted.filter((item: any) =>
+        const itemsWithHints = report.impacted.filter((item: ImpactItem) =>
           item.explain?.hints?.includes("signatureChanged")
         );
 
