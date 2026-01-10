@@ -452,6 +452,7 @@ function parsePnpmWorkspacePackages(rawYaml: string): string[] {
   const lines = src.split(/\r?\n/);
   const out: string[] = [];
 
+  // Strip YAML-style inline comments, but keep `#` characters that appear inside quoted strings.
   const stripInlineComment = (line: string): string => {
     let quote: "'" | '"' | null = null;
     for (let i = 0; i < line.length; i++) {
