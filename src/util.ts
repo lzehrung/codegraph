@@ -426,6 +426,118 @@ export type WorkspaceConfig = {
 };
 const workspaceCache = new Map<string, WorkspaceConfig>();
 
+type WorkspaceGlobSet = { include: string[]; ignore: string[] };
+
+function addWorkspaceGlob(globs: WorkspaceGlobSet, raw: unknown) {
+  if (typeof raw !== "string") return;
+  const trimmed = raw.trim();
+  if (!trimmed) return;
+  if (trimmed.startsWith("!")) {
+    const neg = trimmed.slice(1).trim();
+    if (neg) globs.ignore.push(neg);
+    return;
+  }
+  globs.include.push(trimmed);
+}
+
+function toPackageJsonGlob(rawGlob: string): string {
+  const normalized = rawGlob.replace(/\\/g, "/").trim();
+  if (!normalized) return "";
+  if (normalized.endsWith("package.json")) return normalized;
+  return path.posix.join(normalized, "package.json");
+}
+
+function parsePnpmWorkspacePackages(rawYaml: string): string[] {
+  const src = rawYaml.replace(/^\uFEFF/, "");
+  const lines = src.split(/\r?\n/);
+  const out: string[] = [];
+
+  // Strip YAML-style inline comments, but keep `#` characters that appear inside quoted strings.
+  const stripInlineComment = (line: string): string => {
+    let quote: "'" | '"' | null = null;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (quote) {
+        if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === "'" || ch === '"') {
+        quote = ch;
+        continue;
+      }
+      if (ch === "#") return line.slice(0, i);
+    }
+    return line;
+  };
+
+  // Remove surrounding single or double quotes from a YAML string value,
+  // preserving values that are not enclosed in matching quotes.
+  const unquoteMaybe = (value: string): string => {
+    const t = value.trim();
+    if (
+      (t.startsWith("'") && t.endsWith("'")) ||
+      (t.startsWith('"') && t.endsWith('"'))
+    ) {
+      return t.slice(1, -1);
+    }
+    return t;
+  };
+
+  // Support flow style, including multi-line:
+  // packages: ['a/*', '!b/*']
+  // packages: [
+  //   'a/*',
+  //   '!b/*'
+  // ]
+  {
+    const cleanedSrc = lines
+      .map((line) => stripInlineComment(line))
+      .join("\n");
+    const m = cleanedSrc.match(
+      /^packages\s*:\s*\[([\s\S]*?)\]\s*$/m,
+    );
+    if (m) {
+      const inner = m[1] ?? "";
+      const parts = inner
+        .split(",")
+        .map((p) => unquoteMaybe(p))
+        .map((p) => p.trim())
+        .filter(Boolean);
+      out.push(...parts);
+      return out;
+    }
+  }
+
+  // Block style:
+  // packages:
+  //   - 'a/*'
+  //   - '!b/*'
+  let inPackages = false;
+  let packagesIndent: number | null = null;
+  for (const rawLine of lines) {
+    const commentStripped = stripInlineComment(rawLine);
+    const line = commentStripped.replace(/\t/g, "  ");
+    if (!inPackages) {
+      const m = line.match(/^(\s*)packages\s*:\s*$/);
+      if (m) {
+        inPackages = true;
+        packagesIndent = (m[1] ?? "").length;
+      }
+      continue;
+    }
+
+    if (!line.trim()) continue;
+    const indent = line.match(/^\s*/)?.[0]?.length ?? 0;
+    if (packagesIndent !== null && indent < packagesIndent) break;
+    const itemMatch = line.trim().match(/^[-]\s*(.+)\s*$/);
+    if (!itemMatch) continue;
+    const value = unquoteMaybe(itemMatch[1] ?? "").trim();
+    if (value) out.push(value);
+  }
+
+  return out;
+}
+
 export async function loadWorkspaceConfig(
   projectRoot: string,
 ): Promise<WorkspaceConfig | undefined> {
@@ -436,50 +548,42 @@ export async function loadWorkspaceConfig(
 
   const rootPkgPath = path.join(root, "package.json");
   const rootPkg = await loadJSON<any>(rootPkgPath);
-  let workspaceGlobs: string[] = [];
+  const workspaceGlobs: WorkspaceGlobSet = { include: [], ignore: [] };
   if (rootPkg?.workspaces) {
-    if (Array.isArray(rootPkg.workspaces)) workspaceGlobs = rootPkg.workspaces;
-    else if (Array.isArray(rootPkg.workspaces?.packages))
-      workspaceGlobs = rootPkg.workspaces.packages;
+    if (Array.isArray(rootPkg.workspaces)) {
+      for (const g of rootPkg.workspaces) addWorkspaceGlob(workspaceGlobs, g);
+    } else if (Array.isArray(rootPkg.workspaces?.packages)) {
+      for (const g of rootPkg.workspaces.packages)
+        addWorkspaceGlob(workspaceGlobs, g);
+    }
   }
 
   const pnpmYamlPath = path.join(root, "pnpm-workspace.yaml");
   if (await fileExists(pnpmYamlPath)) {
     try {
       const raw = await fsp.readFile(pnpmYamlPath, "utf8");
-      const lines = raw.split(/\r?\n/);
-      let inPackages = false;
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith("packages:")) {
-          inPackages = true;
-          continue;
-        }
-        if (!inPackages) continue;
-        if (/^\w/.test(trimmed)) break;
-        const m = trimmed.match(/^[-]\s*['"]?([^'"\s]+)['"]?/);
-        if (m && m[1]) workspaceGlobs.push(m[1]);
-      }
+      const parsedGlobs = parsePnpmWorkspacePackages(raw);
+      for (const g of parsedGlobs) addWorkspaceGlob(workspaceGlobs, g);
     } catch {}
   }
 
   const lernaPath = path.join(root, "lerna.json");
   const lerna = await loadJSON<any>(lernaPath);
   if (lerna?.packages && Array.isArray(lerna.packages)) {
-    workspaceGlobs.push(...lerna.packages);
+    for (const g of lerna.packages) addWorkspaceGlob(workspaceGlobs, g);
   }
 
-  workspaceGlobs = Array.from(new Set(workspaceGlobs));
+  const include = Array.from(new Set(workspaceGlobs.include));
+  const ignore = Array.from(new Set(workspaceGlobs.ignore));
 
-  if (workspaceGlobs.length > 0) {
-    const patterns = workspaceGlobs.map((g) =>
-      path.posix.join(g.replace(/\\/g, "/"), "package.json"),
-    );
+  if (include.length > 0) {
+    const patterns = include.map(toPackageJsonGlob).filter(Boolean);
+    const ignorePatterns = ignore.map(toPackageJsonGlob).filter(Boolean);
     const found = await fg(patterns, {
       cwd: root,
       absolute: true,
       dot: true,
-      ignore: ["**/node_modules/**"],
+      ignore: ["**/node_modules/**", ...ignorePatterns],
     });
     for (const pkgPath of found) {
       const info = await loadJSON<any>(pkgPath);
@@ -717,26 +821,7 @@ export async function resolveSpecifier(
     resolveSpecifierCache.set(cacheKey, ext as any);
     return ext;
   }
-  if (!spec.startsWith(".") && !spec.startsWith("/")) {
-    const resolvedWs = await resolveWorkspacePackage(spec, workspaceConfig);
-    if (resolvedWs) {
-      resolveSpecifierCache.set(cacheKey, resolvedWs);
-      return resolvedWs;
-    }
-    // Try path-like fallback for Java/Go/C#/Rust which often look like packages but map to source
-    const pathLike = await resolvePathLikeModule(projectRoot, spec);
-    if (pathLike) {
-      resolveSpecifierCache.set(cacheKey, pathLike);
-      return pathLike;
-    }
-    if (opts?.resolveNodeModules) {
-      const nm = await resolveFromNodeModules(spec, fromFile, projectRoot);
-      if (nm) {
-        resolveSpecifierCache.set(cacheKey, nm);
-        return nm;
-      }
-    }
-  }
+  // Bare specifier: prefer TS path mappings (tsconfig `paths`) before workspace/node_modules.
   if (matchPath) {
     const m = matchPath(
       spec,
@@ -777,6 +862,27 @@ export async function resolveSpecifier(
       }
       resolveSpecifierCache.set(cacheKey, cand);
       return cand;
+    }
+  }
+
+  if (!spec.startsWith(".") && !spec.startsWith("/")) {
+    const resolvedWs = await resolveWorkspacePackage(spec, workspaceConfig);
+    if (resolvedWs) {
+      resolveSpecifierCache.set(cacheKey, resolvedWs);
+      return resolvedWs;
+    }
+    // Try path-like fallback for Java/Go/C#/Rust which often look like packages but map to source
+    const pathLike = await resolvePathLikeModule(projectRoot, spec);
+    if (pathLike) {
+      resolveSpecifierCache.set(cacheKey, pathLike);
+      return pathLike;
+    }
+    if (opts?.resolveNodeModules) {
+      const nm = await resolveFromNodeModules(spec, fromFile, projectRoot);
+      if (nm) {
+        resolveSpecifierCache.set(cacheKey, nm);
+        return nm;
+      }
     }
   }
   if (resolutionHints.length > 0) {
