@@ -480,19 +480,29 @@ function parsePnpmWorkspacePackages(rawYaml: string): string[] {
     return t;
   };
 
-  // Support flow style: packages: ['a/*', '!b/*']
-  for (const line of lines) {
-    const cleaned = stripInlineComment(line).trim();
-    const m = cleaned.match(/^packages\s*:\s*\[(.*)\]\s*$/);
-    if (!m) continue;
-    const inner = m[1] ?? "";
-    const parts = inner
-      .split(",")
-      .map((p) => unquoteMaybe(p))
-      .map((p) => p.trim())
-      .filter(Boolean);
-    out.push(...parts);
-    return out;
+  // Support flow style, including multi-line:
+  // packages: ['a/*', '!b/*']
+  // packages: [
+  //   'a/*',
+  //   '!b/*'
+  // ]
+  {
+    const cleanedSrc = lines
+      .map((line) => stripInlineComment(line))
+      .join("\n");
+    const m = cleanedSrc.match(
+      /^packages\s*:\s*\[([\s\S]*?)\]\s*$/m,
+    );
+    if (m) {
+      const inner = m[1] ?? "";
+      const parts = inner
+        .split(",")
+        .map((p) => unquoteMaybe(p))
+        .map((p) => p.trim())
+        .filter(Boolean);
+      out.push(...parts);
+      return out;
+    }
   }
 
   // Block style:
