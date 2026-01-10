@@ -523,7 +523,12 @@ npx tsx src/cli.ts goto <file> <line> <column>
 
 - Monorepo resolution:
   - Workspace detection precedence: `package.json` workspaces > `pnpm-workspace.yaml` > `lerna.json`.
-  - Package subpaths are resolved via `exports` / `main` heuristics and TS path mapping per package.
+  - `pnpm-workspace.yaml` supports `packages:` include globs and `!` exclude globs.
+  - Resolution precedence for bare specifiers:
+    - TypeScript `paths`/`baseUrl` (nearest `tsconfig.json`)
+    - Workspace packages (npm/yarn/pnpm/lerna)
+    - `node_modules` (only when `--resolve-node-modules` is enabled)
+  - Package subpaths are resolved via `exports` / `main` heuristics.
 
 - Troubleshooting:
   - Missing edges in JS/TS graph: disable `--fast-graph`.
