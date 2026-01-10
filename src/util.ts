@@ -525,7 +525,7 @@ function parsePnpmWorkspacePackages(rawYaml: string): string[] {
 
     if (!line.trim()) continue;
     const indent = line.match(/^\s*/)?.[0]?.length ?? 0;
-    if (packagesIndent !== null && indent <= packagesIndent) break;
+    if (packagesIndent !== null && indent < packagesIndent) break;
     const itemMatch = line.trim().match(/^[-]\s*(.+)\s*$/);
     if (!itemMatch) continue;
     const value = unquoteMaybe(itemMatch[1] ?? "").trim();
