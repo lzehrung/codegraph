@@ -470,6 +470,8 @@ function parsePnpmWorkspacePackages(rawYaml: string): string[] {
     return line;
   };
 
+  // Remove surrounding single or double quotes from a YAML string value,
+  // preserving values that are not enclosed in matching quotes.
   const unquoteMaybe = (value: string): string => {
     const t = value.trim();
     if (
