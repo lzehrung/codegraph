@@ -58,6 +58,8 @@ Sample graph: [sample-graph.md](./sample-graph.md)
 * **PR impact analysis**
   * Map git diffs to changed symbols and affected code
   * Analyze direct and transitive dependencies with severity scoring
+  * **Large diff support**: Handles 50k+ line PRs via asynchronous streaming (no 1MB buffer limit)
+  * **Circuit breaker**: Detects extremely large diffs and provides a warning if analysis might be partial
   * Git/GitHub integration with configurable depth and scope
 * **Monorepo support**
   * Workspace detection (npm/yarn/pnpm/lerna)
@@ -740,6 +742,10 @@ const report = await analyzeImpactFromDiff(root, index, {
   base: 'main',
   head: 'feature-branch'
 });
+
+if (report.warning) {
+  console.warn(`⚠️ Impact Warning: ${report.warning}`);
+}
 
 console.log(`Changed symbols: ${report.changedSymbols.length}`);
 console.log(`Impacted files: ${report.impacted.length}`);

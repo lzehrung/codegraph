@@ -15,7 +15,7 @@ export async function buildImpactReport(
   diffFiles: FileChange[],
   changedSymbols: ChangedSymbol[],
   impactedItems: ImpactItem[],
-  options: Partial<ImpactOptions> = {},
+  options: Partial<ImpactOptions> & { warning?: string | undefined } = {},
 ): Promise<ImpactReport | CompactImpactReport> {
   const newFileRangeForHunk = (hunk: FileChange["hunks"][number]) => {
     let newLine = hunk.newStart;
@@ -97,7 +97,7 @@ export async function buildImpactReport(
 
   // Check if compact format is requested
   if (options.compact) {
-    return buildCompactReport(
+    const report = buildCompactReport(
       index,
       changedFiles,
       changedSymbols,
@@ -105,9 +105,11 @@ export async function buildImpactReport(
       fileEdges,
       symbolEdges,
     );
+    if (options.warning) report.warning = options.warning;
+    return report;
   }
 
-  return {
+  const report: ImpactReport = {
     changedFiles,
     changedSymbols,
     impacted: impactedItems,
@@ -116,6 +118,8 @@ export async function buildImpactReport(
       symbolEdges,
     },
   };
+  if (options.warning) report.warning = options.warning;
+  return report;
 }
 
 function buildCompactReport(

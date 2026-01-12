@@ -1,165 +1,159 @@
+import readline from "node:readline";
+import { Readable } from "node:stream";
 import type { Diff, FileChange, Hunk } from "./types.js";
 
 export function parseUnifiedDiff(diffText: string): Diff {
   const files: FileChange[] = [];
   const lines = diffText.split(/\r?\n/);
 
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
+  let currentFile: any = null;
+  let currentHunk: Hunk | null = null;
 
-    // Look for file header: diff --git a/path b/path
-    if (line?.startsWith("diff --git")) {
-      const fileChange = parseFileChange(lines, i);
-      if (fileChange) {
-        files.push(fileChange);
-        i = fileChange._nextIndex;
-      } else {
-        i++;
+  for (const line of lines) {
+    if (line.startsWith("diff --git")) {
+      if (currentFile) {
+        if (currentHunk) currentFile.hunks.push(currentHunk);
+        finalizeFile(currentFile);
+        files.push(currentFile);
       }
-    } else {
-      i++;
+      currentFile = initiateFile(line);
+      currentHunk = null;
+    } else if (currentFile) {
+      if (line.startsWith("@@")) {
+        if (currentHunk) {
+          currentFile.hunks.push(currentHunk);
+        }
+        currentHunk = initiateHunk(line);
+      } else if (currentHunk) {
+        if (!line.startsWith("\\")) {
+          const prefix = line[0];
+          if (prefix === "+" || prefix === "-" || prefix === " ") {
+            currentHunk.lines.push(line);
+          }
+        }
+      } else {
+        // Parsing header
+        if (line.startsWith("new file mode")) {
+          currentFile._hasNewFileMode = true;
+        } else if (line.startsWith("deleted file mode")) {
+          currentFile._hasDeletedFileMode = true;
+        } else if (line.startsWith("--- ")) {
+          currentFile._fromPath = line.slice(4);
+        } else if (line.startsWith("+++ ")) {
+          currentFile._toPath = line.slice(4);
+        }
+      }
     }
+  }
+
+  if (currentFile) {
+    if (currentHunk) currentFile.hunks.push(currentHunk);
+    finalizeFile(currentFile);
+    files.push(currentFile);
   }
 
   return { files };
 }
 
-function parseFileChange(
-  lines: string[],
-  startIndex: number,
-): (FileChange & { _nextIndex: number }) | null {
-  let i = startIndex;
+export async function parseUnifiedDiffStreaming(
+  stream: Readable,
+): Promise<Diff> {
+  const rl = readline.createInterface({
+    input: stream,
+    terminal: false,
+  });
 
-  // Skip the diff --git line
-  if (!lines[i]?.startsWith("diff --git")) return null;
-  i++;
+  const files: FileChange[] = [];
+  let currentFile: any = null;
+  let currentHunk: Hunk | null = null;
 
-  // Parse file paths from diff --git a/path b/path
-  const diffLine = lines[startIndex]!;
-  const match = diffLine.match(/^diff --git a\/(.+) b\/(.+)$/);
-  if (!match) return null;
-
-  const oldPath = match[1]!;
-  const newPath = match[2]!;
-
-  // Determine change kind and actual paths by examining the diff markers
-  let kind: FileChange["kind"] = "modified";
-  let actualPath = newPath;
-  let actualOldPath = oldPath;
-
-  // Look for file mode indicators and ---/+++ lines
-  let hasNewFileMode = false;
-  let hasDeletedFileMode = false;
-  let fromPath = "";
-  let toPath = "";
-
-  // Skip to find the relevant lines
-  let checkIndex = i;
-  while (checkIndex < lines.length && !lines[checkIndex]?.startsWith("@@")) {
-    const line = lines[checkIndex];
-    if (line?.startsWith("new file mode")) {
-      hasNewFileMode = true;
-    } else if (line?.startsWith("deleted file mode")) {
-      hasDeletedFileMode = true;
-    } else if (line?.startsWith("--- ")) {
-      fromPath = line.slice(4);
-    } else if (line?.startsWith("+++ ")) {
-      toPath = line.slice(4);
-    }
-    checkIndex++;
-  }
-
-  // Determine kind based on mode markers and paths
-  if (hasNewFileMode || fromPath === "/dev/null") {
-    kind = "added";
-    actualPath = newPath;
-  } else if (hasDeletedFileMode || toPath === "/dev/null") {
-    kind = "deleted";
-    actualPath = oldPath;
-  } else if (oldPath !== newPath) {
-    kind = "renamed";
-    actualPath = newPath;
-    actualOldPath = oldPath;
-  }
-
-  // Skip the header lines we examined
-  i = checkIndex;
-
-  const hunks: Hunk[] = [];
-
-  // Parse hunks
-  while (i < lines.length) {
-    const line = lines[i];
-
-    // Look for hunk header: @@ -oldStart,oldCount +newStart,newCount @@
-    if (line?.startsWith("@@")) {
-      const hunk = parseHunk(lines, i);
-      if (hunk) {
-        hunks.push(hunk.hunk);
-        i = hunk._nextIndex;
+  for await (const line of rl) {
+    if (line.startsWith("diff --git")) {
+      if (currentFile) {
+        if (currentHunk) currentFile.hunks.push(currentHunk);
+        finalizeFile(currentFile);
+        files.push(currentFile);
+      }
+      currentFile = initiateFile(line);
+      currentHunk = null;
+    } else if (currentFile) {
+      if (line.startsWith("@@")) {
+        if (currentHunk) {
+          currentFile.hunks.push(currentHunk);
+        }
+        currentHunk = initiateHunk(line);
+      } else if (currentHunk) {
+        if (!line.startsWith("\\")) {
+          const prefix = line[0];
+          if (prefix === "+" || prefix === "-" || prefix === " ") {
+            currentHunk.lines.push(line);
+          }
+        }
       } else {
-        i++;
+        // Parsing header
+        if (line.startsWith("new file mode")) {
+          currentFile._hasNewFileMode = true;
+        } else if (line.startsWith("deleted file mode")) {
+          currentFile._hasDeletedFileMode = true;
+        } else if (line.startsWith("--- ")) {
+          currentFile._fromPath = line.slice(4);
+        } else if (line.startsWith("+++ ")) {
+          currentFile._toPath = line.slice(4);
+        }
       }
-    } else if (line?.startsWith("diff --git")) {
-      // Next file starts
-      break;
-    } else {
-      i++;
     }
   }
 
-  return {
-    path: actualPath,
-    kind,
-    oldPath: kind === "renamed" ? actualOldPath : "",
-    hunks,
-    _nextIndex: i,
-  };
+  if (currentFile) {
+    if (currentHunk) currentFile.hunks.push(currentHunk);
+    finalizeFile(currentFile);
+    files.push(currentFile);
+  }
+
+  return { files };
 }
 
-function parseHunk(
-  lines: string[],
-  startIndex: number,
-): { hunk: Hunk; _nextIndex: number } | null {
-  const headerLine = lines[startIndex];
-  if (!headerLine?.startsWith("@@")) return null;
-
-  // Parse hunk header: @@ -oldStart,oldCount +newStart,newCount @@
-  const match = headerLine.match(
-    /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/,
-  );
+function initiateFile(line: string) {
+  const match = line.match(/^diff --git a\/(.+) b\/(.+)$/);
   if (!match) return null;
-
-  const oldStart = parseInt(match[1]!);
-  const newStart = parseInt(match[2]!);
-  const hunkLines: string[] = [];
-  let i = startIndex + 1;
-
-  // Collect lines until next hunk or file
-  while (i < lines.length) {
-    const line = lines[i];
-
-    if (line?.startsWith("@@") || line?.startsWith("diff --git")) {
-      break;
-    }
-
-    if (line && !line.startsWith("\\")) {
-      const prefix = line[0];
-      if (prefix === "+" || prefix === "-" || prefix === " ") {
-        hunkLines.push(line);
-      }
-    }
-
-    i++;
-  }
-
   return {
-    hunk: {
-      oldStart,
-      newStart,
-      lines: hunkLines,
-    },
-    _nextIndex: i,
+    path: match[2]!,
+    kind: "modified" as const,
+    oldPath: "",
+    hunks: [],
+    _oldPathFromHeader: match[1]!,
+    _newPathFromHeader: match[2]!,
   };
 }
+
+function initiateHunk(line: string) {
+  const match = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+  if (!match) return null;
+  return {
+    oldStart: parseInt(match[1]!),
+    newStart: parseInt(match[2]!),
+    lines: [],
+  };
+}
+
+function finalizeFile(file: any) {
+  if (file._hasNewFileMode || file._fromPath === "/dev/null") {
+    file.kind = "added";
+    file.path = file._newPathFromHeader;
+  } else if (file._hasDeletedFileMode || file._toPath === "/dev/null") {
+    file.kind = "deleted";
+    file.path = file._oldPathFromHeader;
+  } else if (file._oldPathFromHeader !== file._newPathFromHeader) {
+    file.kind = "renamed";
+    file.path = file._newPathFromHeader;
+    file.oldPath = file._oldPathFromHeader;
+  }
+  // Cleanup internal properties
+  delete file._hasNewFileMode;
+  delete file._hasDeletedFileMode;
+  delete file._fromPath;
+  delete file._toPath;
+  delete file._oldPathFromHeader;
+  delete file._newPathFromHeader;
+}
+
