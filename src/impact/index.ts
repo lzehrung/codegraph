@@ -49,7 +49,7 @@ export async function analyzeImpactFromDiff(
     diff.files,
     changedSymbols,
     impactedItems,
-    options,
+    { ...options, warning: diff.warning },
   );
 }
 
