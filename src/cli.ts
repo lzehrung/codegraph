@@ -423,7 +423,7 @@ function ensureImpactReport(
     to: edge.to,
     label: edge.label,
   }));
-  return {
+  const result: ImpactReport = {
     changedFiles,
     changedSymbols,
     impacted,
@@ -432,6 +432,8 @@ function ensureImpactReport(
       symbolEdges,
     },
   };
+  if (report.warning) result.warning = report.warning;
+  return result;
 }
 
 function formatImpactMermaid(report: ImpactReport, root: string): string {
@@ -1076,6 +1078,10 @@ async function main() {
       } else if (pretty) {
         writeStdoutLine(`Impact Analysis Report`);
         writeStdoutLine(`======================`);
+        if (impactReport.warning) {
+          writeStdoutLine(`⚠️  WARNING: ${impactReport.warning}`);
+          writeStdoutLine(``);
+        }
         writeStdoutLine(`Changed files: ${impactReport.changedFiles.length}`);
         writeStdoutLine(
           `Changed symbols: ${impactReport.changedSymbols.length}`,

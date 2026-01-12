@@ -17,6 +17,7 @@ export type FileChange = {
 
 export type Diff = {
   files: FileChange[];
+  warning?: string | undefined;
 };
 
 // Provider options
@@ -76,6 +77,7 @@ export type ImpactReport = {
     fileEdges: Array<{ from: FileId; to: FileId; typeOnly?: boolean }>;
     symbolEdges: Array<{ from: number; to: number; label: string }>; // indices into changedSymbols
   };
+  warning?: string | undefined;
 };
 
 // Compact impact report with indexed arrays
@@ -119,6 +121,7 @@ export type CompactImpactReport = {
     fileEdges: Array<{ from: number; to: number; typeOnly?: boolean }>; // indices into files array
     symbolEdges: Array<{ from: number; to: number; label: string }>; // indices into changedSymbols
   };
+  warning?: string | undefined;
 };
 
 // Analysis options

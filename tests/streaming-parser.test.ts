@@ -1,0 +1,79 @@
+import { describe, it, expect } from "vitest";
+import { Readable } from "node:stream";
+import { parseUnifiedDiffStreaming, parseUnifiedDiff } from "../src/impact/parse.js";
+
+describe("Streaming Diff Parser", () => {
+  const sampleDiff = `diff --git a/added.ts b/added.ts
+new file mode 100644
+--- /dev/null
++++ b/added.ts
+@@ -0,0 +1,1 @@
++new
+diff --git a/deleted.ts b/deleted.ts
+deleted file mode 100644
+--- a/deleted.ts
++++ /dev/null
+@@ -1,1 +0,0 @@
+-old
+diff --git a/modified.ts b/modified.ts
+--- a/modified.ts
++++ b/modified.ts
+@@ -1,1 +1,1 @@
+-old
++new
+diff --git a/renamed_old.ts b/renamed_new.ts
+rename from renamed_old.ts
+rename to renamed_new.ts
+--- a/renamed_old.ts
++++ b/renamed_new.ts
+@@ -1,1 +1,1 @@
+-old
++new
+`;
+
+  it("should parse streaming diff identically to synchronous parser", async () => {
+    const syncResult = parseUnifiedDiff(sampleDiff);
+    const stream = Readable.from([sampleDiff]);
+    const streamResult = await parseUnifiedDiffStreaming(stream);
+
+    expect(streamResult).toEqual(syncResult);
+    
+    expect(streamResult.files).toHaveLength(4);
+    
+    const added = streamResult.files.find(f => f.path === "added.ts");
+    expect(added?.kind).toBe("added");
+    
+    const deleted = streamResult.files.find(f => f.path === "deleted.ts");
+    expect(deleted?.kind).toBe("deleted");
+    
+    const modified = streamResult.files.find(f => f.path === "modified.ts");
+    expect(modified?.kind).toBe("modified");
+    
+    const renamed = streamResult.files.find(f => f.path === "renamed_new.ts");
+    expect(renamed?.kind).toBe("renamed");
+    expect(renamed?.oldPath).toBe("renamed_old.ts");
+  });
+
+  it("should handle large chunks correctly", async () => {
+    const stream = Readable.from([sampleDiff]);
+    const result = await parseUnifiedDiffStreaming(stream);
+    expect(result.files).toHaveLength(4);
+  });
+
+  it("should handle multi-line chunks correctly", async () => {
+    const chunks = sampleDiff.split("\n").map(l => l + "\n");
+    const stream = Readable.from(chunks);
+    const result = await parseUnifiedDiffStreaming(stream);
+    expect(result.files).toHaveLength(4);
+  });
+
+  it("should propagate stream errors", async () => {
+    const stream = new Readable({
+      read() {
+        this.emit("error", new Error("stream error"));
+      }
+    });
+    
+    await expect(parseUnifiedDiffStreaming(stream)).rejects.toThrow("stream error");
+  });
+});
