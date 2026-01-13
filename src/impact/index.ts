@@ -1,4 +1,5 @@
 import path from "node:path";
+import pm from "picomatch";
 import type { ProjectIndex } from "../indexer.js";
 import type {
   ImpactReport,
@@ -20,9 +21,18 @@ export async function analyzeImpactFromDiff(
   // Get the diff
   const diff = await getDiff(options);
 
+  const { ignoreGlobs = [] } = options;
+  const isIgnored = ignoreGlobs.length > 0 ? pm(ignoreGlobs) : () => false;
+
+  // Filter out ignored files from diff
+  const filteredFiles =
+    ignoreGlobs.length > 0
+      ? diff.files.filter((f) => !isIgnored(f.path))
+      : diff.files;
+
   // Map all changed files to changed symbols
   let changedSymbols: any[] = [];
-  for (const fileChange of diff.files) {
+  for (const fileChange of filteredFiles) {
     const absPath = path.isAbsolute(fileChange.path)
       ? fileChange.path.replace(/\\/g, "/")
       : path.resolve(projectRoot, fileChange.path).replace(/\\/g, "/");
@@ -39,14 +49,14 @@ export async function analyzeImpactFromDiff(
   const impactedItems = await analyzeImpact(
     index,
     changedSymbols,
-    diff.files,
+    filteredFiles,
     options,
   );
 
   // Build report
   return await buildImpactReport(
     index,
-    diff.files,
+    filteredFiles,
     changedSymbols,
     impactedItems,
     { ...options, warning: diff.warning },

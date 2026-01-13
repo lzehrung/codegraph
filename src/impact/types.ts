@@ -135,6 +135,8 @@ export type ImpactOptions = DiffProviderOptions & {
   testPatterns?: string[];
   /** Return compact report with indexed arrays instead of repeated strings */
   compact?: boolean;
+  /** File patterns to ignore in impact analysis */
+  ignoreGlobs?: string[];
   /** Include context snippets for references */
   refContext?: "line" | "block";
   /** Number of lines around reference for line context (default: 5) */

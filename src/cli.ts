@@ -121,6 +121,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--max-hits",
   "--resolution-hint",
   "--review-depth",
+  "--ignore-glob",
 ]);
 
 function parseCliArgs(tokens: string[]): ParsedCliArgs {
@@ -1041,6 +1042,9 @@ async function main() {
 
     const refBlockMaxLines = getOpt("--ref-block-max-lines");
     if (refBlockMaxLines) options.refBlockMaxLines = Number(refBlockMaxLines);
+
+    const ignoreGlobs = parsed.options.get("--ignore-glob");
+    if (ignoreGlobs) options.ignoreGlobs = ignoreGlobs;
 
     options.includeTests = includeTests;
     options.membersOnly = membersOnly;
