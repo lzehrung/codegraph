@@ -323,6 +323,8 @@ npx codegraph impact --base main --head feature --pretty
 npx codegraph impact --base main --head feature --depth 2 --max-refs 1000
 # Focus on exported symbol changes only (ignore internal changes)
 npx codegraph impact --base main --head feature --scope imported
+# Ignore large/costly files in impact analysis
+npx codegraph impact --base main --head feature --ignore-glob "**/package-lock.json" "**/dist/**"
 # Skip transitive file dependencies (symbol references only)
 npx codegraph impact --base main --head feature --members-only
 # Include line context snippets for references (±5 lines by default)
@@ -740,7 +742,8 @@ const index = await buildProjectIndex(root);
 const report = await analyzeImpactFromDiff(root, index, {
   provider: 'git',
   base: 'main',
-  head: 'feature-branch'
+  head: 'feature-branch',
+  ignoreGlobs: ['**/package-lock.json']
 });
 
 if (report.warning) {
