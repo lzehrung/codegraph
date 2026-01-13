@@ -535,5 +535,45 @@ index 1234567..abcdef0 100644
         expect(typeof edge.to).toBe("string");
       }
     });
+
+    it("should respect ignoreGlobs and exclude files from analysis", async () => {
+      const index = await createTestIndex("typescript");
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
+
+      // Create a diff that modifies two files
+      const diffText = `diff --git a/main.ts b/main.ts
+index 1234567..abcdef0 100644
+--- a/main.ts
++++ b/main.ts
+@@ -30,1 +30,2 @@
+ export function main(): void {
++  console.log("world");
+diff --git a/utils.ts b/utils.ts
+index 1234567..abcdef0 100644
+--- a/utils.ts
++++ b/utils.ts
+@@ -1,1 +1,2 @@
+-export function helperFunction(): number {
++export function helperFunction(): number {
++  console.log("changed");
+`;
+
+      const report = await analyzeImpactFromDiff(samplePath, index, {
+        provider: "raw",
+        diffText,
+        ignoreGlobs: ["**/utils.ts"]
+      });
+
+      // utils.ts should be excluded from changedFiles and changedSymbols
+      expect(report.changedFiles.map(f => f.file)).toContain("main.ts");
+      expect(report.changedFiles.map(f => f.file)).not.toContain("utils.ts");
+
+      const changedSymbolsFiles = report.changedSymbols.map(s => s.file);
+      const mainTsAbs = path.join(samplePath, "main.ts").replace(/\\/g, "/");
+      const utilsTsAbs = path.join(samplePath, "utils.ts").replace(/\\/g, "/");
+
+      expect(changedSymbolsFiles).toContain(mainTsAbs);
+      expect(changedSymbolsFiles).not.toContain(utilsTsAbs);
+    });
   });
 });
