@@ -1,5 +1,6 @@
 import type { FileId } from "../types.js";
 import type { ProjectIndex, SymbolDef } from "../indexer.js";
+import pm from "picomatch";
 import type {
   ChangedSymbol,
   ImpactItem,
@@ -21,12 +22,14 @@ export async function analyzeImpact(
     includeTests = false,
     membersOnly = false,
     testPatterns,
+    ignoreGlobs = [],
     refContext,
     refContextLines,
     refBlockMaxLines,
   } = options;
 
   const patternMatchers = buildTestPatterns(testPatterns);
+  const isIgnored = ignoreGlobs.length > 0 ? pm(ignoreGlobs) : () => false;
 
   const impacted = new Map<FileId, ImpactItem>();
   const processedSymbols = new Set<string>();
@@ -40,11 +43,16 @@ export async function analyzeImpact(
     }
   }
 
+  // Filter out changed symbols in ignored files
+  const filteredChangedSymbols = changedSymbols.filter(
+    (s) => !isIgnored(s.file),
+  );
+
   // Direct impact analysis with parallelization
   const concurrency = 8;
   const tasks = [];
 
-  for (const changedSymbol of changedSymbols) {
+  for (const changedSymbol of filteredChangedSymbols) {
     if (processedSymbols.has(changedSymbol.id)) continue;
     processedSymbols.add(changedSymbol.id);
 
@@ -73,6 +81,7 @@ export async function analyzeImpact(
       if (refs.status === "ok") {
         for (const ref of refs.references.slice(0, maxRefs)) {
           if (!includeTests && isTestFile(ref.file, patternMatchers)) continue;
+          if (isIgnored(ref.file)) continue;
 
           const existing = impacted.get(ref.file);
           const reasons: ImpactReason[] = existing?.reasons || [];
@@ -158,12 +167,13 @@ export async function seedTransitiveFromFiles(
   changedFiles: FileChange[],
   options: Partial<ImpactOptions>,
 ): Promise<void> {
-  const { includeTests = false, testPatterns } = options;
+  const { includeTests = false, testPatterns, ignoreGlobs = [] } = options;
   const patternMatchers = buildTestPatterns(testPatterns);
+  const isIgnored = ignoreGlobs.length > 0 ? pm(ignoreGlobs) : () => false;
 
   for (const fileChange of changedFiles) {
-    // Skip if this file already has impact items
-    if (impacted.has(fileChange.path)) continue;
+    // Skip if this file already has impact items or is ignored
+    if (impacted.has(fileChange.path) || isIgnored(fileChange.path)) continue;
 
     // For deleted/renamed files, seed transitive impact from files that depended on them
     if (fileChange.kind === "deleted" || fileChange.kind === "renamed") {
@@ -173,7 +183,7 @@ export async function seedTransitiveFromFiles(
 
       for (const dependent of dependents) {
         if (!includeTests && isTestFile(dependent, patternMatchers)) continue;
-        if (impacted.has(dependent)) continue;
+        if (impacted.has(dependent) || isIgnored(dependent)) continue;
 
         const hints = ["fileDeleted"];
         if (fileChange.kind === "renamed") {
@@ -205,7 +215,10 @@ async function analyzeTransitiveImpact(
   maxDepth: number,
   options: Partial<ImpactOptions>,
 ): Promise<void> {
-  const patternMatchers = buildTestPatterns(options.testPatterns);
+  const { testPatterns, ignoreGlobs = [] } = options;
+  const patternMatchers = buildTestPatterns(testPatterns);
+  const isIgnored = ignoreGlobs.length > 0 ? pm(ignoreGlobs) : () => false;
+
   // Precompute reverse dependency index for efficient traversal
   const reverseDeps = new Map<FileId, any[]>();
   for (const e of index.graph.edges) {
@@ -222,6 +235,7 @@ async function analyzeTransitiveImpact(
 
   // Initialize queue with directly impacted files
   for (const [file, item] of impacted) {
+    if (isIgnored(file)) continue;
     visited.add(file);
     queue.push({ file, depth: 0, reason: "transitive" });
   }
@@ -237,7 +251,8 @@ async function analyzeTransitiveImpact(
       const dependentFile = edge.from;
       if (
         visited.has(dependentFile) ||
-        (!options.includeTests && isTestFile(dependentFile, patternMatchers))
+        (!options.includeTests && isTestFile(dependentFile, patternMatchers)) ||
+        isIgnored(dependentFile)
       )
         continue;
 
