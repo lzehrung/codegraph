@@ -62,6 +62,7 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * **Large diff support**: Handles 50k+ line PRs via asynchronous streaming (no 1MB buffer limit)
   * **Circuit breaker**: Detects extremely large diffs and provides a warning if analysis might be partial
   * Git/GitHub integration with configurable depth and scope
+  * Missing import/export/declaration suggestions include a high/medium/low confidence score for quick triage
 * **Monorepo support**
   * Workspace detection (npm/yarn/pnpm/lerna)
   * Per-file TypeScript config resolution
