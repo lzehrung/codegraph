@@ -67,6 +67,12 @@ export type ExportSummaryEntry = {
   symbols: string[];
 };
 
+export type ReexportChainEntry = {
+  symbol: string;
+  file: FileId;
+  paths: FileId[][];
+};
+
 export type ImpactSurfaceAreaFile = {
   file: FileId;
   fanIn: number;
@@ -149,6 +155,9 @@ export type ImpactReport = {
   impacted: ImpactItem[];
   suggestions?: ImpactSuggestion[];
   exportSummary?: ExportSummaryEntry[];
+  reexportChains?: {
+    chains: ReexportChainEntry[];
+  };
   topImpacts?: ImpactTopItem[];
   surfaceArea: ImpactSurfaceArea;
   clusters: ImpactCluster[];
@@ -209,6 +218,13 @@ export type CompactImpactReport = {
     file: number;
     symbols: string[];
   }>;
+  reexportChains?: {
+    chains: Array<{
+      symbol: string;
+      file: number;
+      paths: number[][];
+    }>;
+  };
   topImpacts?: Array<{
     file: number;
     symbols: string[];

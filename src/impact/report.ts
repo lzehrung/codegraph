@@ -10,6 +10,7 @@ import type {
   ImpactOptions,
   ImpactSuggestion,
   ExportSummaryEntry,
+  ReexportChainEntry,
   ImpactTopItem,
   ImpactSurfaceArea,
   CompactImpactSurfaceArea,
@@ -29,6 +30,7 @@ export async function buildImpactReport(
   options: Partial<ImpactOptions> & { warning?: string | undefined } = {},
 ): Promise<ImpactReport | CompactImpactReport> {
   const exportSummary = buildExportSummary(changedSymbols);
+  const reexportChains = buildReexportChains(index, changedSymbols);
   const topImpacts = buildTopImpacts(impactedItems);
   const surfaceArea = buildSurfaceArea(
     projectRoot,
@@ -125,6 +127,7 @@ export async function buildImpactReport(
       impactedItems,
       suggestions,
       exportSummary,
+      reexportChains,
       topImpacts,
       surfaceArea,
       clusters,
@@ -141,6 +144,7 @@ export async function buildImpactReport(
     impacted: impactedItems,
     ...(suggestions.length > 0 ? { suggestions } : {}),
     ...(exportSummary.length > 0 ? { exportSummary } : {}),
+    ...(reexportChains ? { reexportChains } : {}),
     ...(topImpacts.length > 0 ? { topImpacts } : {}),
     surfaceArea,
     clusters,
@@ -163,6 +167,7 @@ function buildCompactReport(
   impactedItems: ImpactItem[],
   suggestions: ImpactSuggestion[],
   exportSummary: ExportSummaryEntry[],
+  reexportChains: { chains: ReexportChainEntry[] } | undefined,
   topImpacts: ImpactTopItem[],
   surfaceArea: ImpactSurfaceArea,
   clusters: ImpactCluster[],
@@ -212,6 +217,17 @@ function buildCompactReport(
   for (const suggestion of suggestions) {
     allFiles.add(suggestion.file);
     if (suggestion.relatedFile) allFiles.add(suggestion.relatedFile);
+  }
+
+  if (reexportChains) {
+    for (const chain of reexportChains.chains) {
+      allFiles.add(chain.file);
+      for (const pathChain of chain.paths) {
+        for (const file of pathChain) {
+          allFiles.add(file);
+        }
+      }
+    }
   }
 
   const filesArray = Array.from(allFiles);
@@ -303,6 +319,18 @@ function buildCompactReport(
         }))
       : undefined;
 
+  const compactReexportChains = reexportChains
+    ? {
+        chains: reexportChains.chains.map((entry) => ({
+          symbol: entry.symbol,
+          file: fileIndex.get(entry.file)!,
+          paths: entry.paths.map((pathChain) =>
+            pathChain.map((file) => fileIndex.get(file)!),
+          ),
+        })),
+      }
+    : undefined;
+
   const compactTopImpacts =
     topImpacts.length > 0
       ? topImpacts.map((item) => ({
@@ -353,6 +381,7 @@ function buildCompactReport(
     impacted: compactImpacted,
     ...(compactSuggestions ? { suggestions: compactSuggestions } : {}),
     ...(compactExportSummary ? { exportSummary: compactExportSummary } : {}),
+    ...(compactReexportChains ? { reexportChains: compactReexportChains } : {}),
     ...(compactTopImpacts ? { topImpacts: compactTopImpacts } : {}),
     surfaceArea: compactSurfaceArea,
     clusters: compactClusters,
@@ -361,6 +390,94 @@ function buildCompactReport(
       symbolEdges,
     },
   };
+}
+
+type ReexportEdge = {
+  exporter: FileId;
+  type: "reexport" | "exportStar" | "namespaceReexport";
+  sourceSpecifier?: string;
+};
+
+const REEXPORT_CHAIN_MAX_DEPTH = 3;
+
+function buildReexportChains(
+  index: ProjectIndex,
+  changedSymbols: ChangedSymbol[],
+  maxDepth = REEXPORT_CHAIN_MAX_DEPTH,
+): { chains: ReexportChainEntry[] } | undefined {
+  const exportedSymbols = changedSymbols.filter((symbol) => symbol.exported);
+  if (exportedSymbols.length === 0) return undefined;
+
+  const reexportsBySource = new Map<FileId, ReexportEdge[]>();
+  for (const [file, mod] of index.byFile) {
+    for (const entry of mod.exports) {
+      if (
+        entry.type !== "reexport" &&
+        entry.type !== "exportStar" &&
+        entry.type !== "namespaceReexport"
+      ) {
+        continue;
+      }
+      const sourceFile = entry.fromModule.replace(/\\/g, "/");
+      const edges = reexportsBySource.get(sourceFile) ?? [];
+      const edge: ReexportEdge = {
+        exporter: file,
+        type: entry.type,
+      };
+      if (entry.type === "reexport") {
+        edge.sourceSpecifier = entry.sourceSpecifier;
+      }
+      edges.push(edge);
+      reexportsBySource.set(sourceFile, edges);
+    }
+  }
+
+  const chains: ReexportChainEntry[] = [];
+  for (const symbol of exportedSymbols) {
+    const paths: FileId[][] = [];
+    const seenPaths = new Set<string>();
+    const stack: Array<{ file: FileId; path: FileId[]; depth: number }> = [
+      { file: symbol.file, path: [symbol.file], depth: 0 },
+    ];
+
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (!current) continue;
+      const edges = reexportsBySource.get(current.file) ?? [];
+      for (const edge of edges) {
+        if (
+          edge.type === "reexport" &&
+          edge.sourceSpecifier !== symbol.name
+        ) {
+          continue;
+        }
+        if (current.path.includes(edge.exporter)) {
+          continue;
+        }
+        const nextPath = [...current.path, edge.exporter];
+        const key = nextPath.join("::");
+        if (!seenPaths.has(key)) {
+          paths.push(nextPath);
+          seenPaths.add(key);
+        }
+        if (current.depth + 1 < maxDepth) {
+          stack.push({
+            file: edge.exporter,
+            path: nextPath,
+            depth: current.depth + 1,
+          });
+        }
+      }
+    }
+
+    chains.push({
+      symbol: symbol.name,
+      file: symbol.file,
+      paths,
+    });
+  }
+
+  return { chains };
 }
 
 const TOP_IMPACTS_LIMIT = 10;
