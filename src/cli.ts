@@ -416,14 +416,13 @@ function ensureImpactReport(
   });
   const suggestions = report.suggestions?.map((suggestion) => ({
     file: resolveFilePath(suggestion.file),
-    range: suggestion.range,
     kind: suggestion.kind,
-    symbol: suggestion.symbol,
-    relatedFile:
-      suggestion.relatedFile !== undefined
-        ? resolveFilePath(suggestion.relatedFile)
-        : undefined,
-    details: suggestion.details,
+    ...(suggestion.range ? { range: suggestion.range } : {}),
+    ...(suggestion.symbol ? { symbol: suggestion.symbol } : {}),
+    ...(suggestion.relatedFile !== undefined
+      ? { relatedFile: resolveFilePath(suggestion.relatedFile) }
+      : {}),
+    ...(suggestion.details ? { details: suggestion.details } : {}),
   }));
   const exportSummary = report.exportSummary?.map((entry) => ({
     file: resolveFilePath(entry.file),
@@ -434,9 +433,9 @@ function ensureImpactReport(
     symbols: item.symbols,
     reasons: item.reasons,
     severity: item.severity,
-    depth: item.depth,
-    typeOnly: item.typeOnly,
-    explain: item.explain,
+    ...(item.depth !== undefined ? { depth: item.depth } : {}),
+    ...(item.typeOnly !== undefined ? { typeOnly: item.typeOnly } : {}),
+    ...(item.explain ? { explain: item.explain } : {}),
   }));
   const fileEdges = report.graph.fileEdges.map((edge) => ({
     from: resolveFilePath(edge.from),

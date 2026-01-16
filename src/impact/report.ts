@@ -252,14 +252,13 @@ function buildCompactReport(
     suggestions.length > 0
       ? suggestions.map((suggestion) => ({
           file: fileIndex.get(suggestion.file)!,
-          range: suggestion.range,
           kind: suggestion.kind,
-          symbol: suggestion.symbol,
-          relatedFile:
-            suggestion.relatedFile !== undefined
-              ? fileIndex.get(suggestion.relatedFile)!
-              : undefined,
-          details: suggestion.details,
+          ...(suggestion.range ? { range: suggestion.range } : {}),
+          ...(suggestion.symbol ? { symbol: suggestion.symbol } : {}),
+          ...(suggestion.relatedFile !== undefined
+            ? { relatedFile: fileIndex.get(suggestion.relatedFile)! }
+            : {}),
+          ...(suggestion.details ? { details: suggestion.details } : {}),
         }))
       : undefined;
 
@@ -278,9 +277,9 @@ function buildCompactReport(
           symbols: item.symbols,
           reasons: item.reasons,
           severity: item.severity,
-          depth: item.depth,
-          typeOnly: item.typeOnly,
-          explain: item.explain,
+          ...(item.depth !== undefined ? { depth: item.depth } : {}),
+          ...(item.typeOnly !== undefined ? { typeOnly: item.typeOnly } : {}),
+          ...(item.explain ? { explain: item.explain } : {}),
         }))
       : undefined;
 
@@ -334,8 +333,8 @@ function buildTopImpacts(impactedItems: ImpactItem[]): ImpactTopItem[] {
     symbols: item.symbols,
     reasons: item.reasons,
     severity: item.severity,
-    depth: item.depth,
-    typeOnly: item.typeOnly,
-    explain: item.explain,
+    ...(item.depth !== undefined ? { depth: item.depth } : {}),
+    ...(item.typeOnly !== undefined ? { typeOnly: item.typeOnly } : {}),
+    ...(item.explain ? { explain: item.explain } : {}),
   }));
 }

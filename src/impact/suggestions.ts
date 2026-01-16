@@ -227,7 +227,11 @@ function selectBestCandidateFile(
     if (directImports.has(candidate)) return candidate;
   }
   const sorted = candidates.slice().sort();
-  return sorted[0];
+  const fallback = sorted[0];
+  if (!fallback) {
+    throw new Error("selectBestCandidateFile could not resolve a fallback");
+  }
+  return fallback;
 }
 
 function collectReferenceCandidates(
