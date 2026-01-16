@@ -1,4 +1,5 @@
 import type { FileId } from "../types.js";
+import path from "node:path";
 import type { ProjectIndex } from "../indexer.js";
 import type {
   FileChange,
@@ -10,10 +11,14 @@ import type {
   ImpactSuggestion,
   ExportSummaryEntry,
   ImpactTopItem,
+  ImpactSurfaceArea,
+  CompactImpactSurfaceArea,
 } from "./types.js";
 import { buildSymbolGraphDetailed } from "../graphs.js";
+import { normalizePath } from "../util.js";
 
 export async function buildImpactReport(
+  projectRoot: string,
   index: ProjectIndex,
   diffFiles: FileChange[],
   changedSymbols: ChangedSymbol[],
@@ -23,6 +28,12 @@ export async function buildImpactReport(
 ): Promise<ImpactReport | CompactImpactReport> {
   const exportSummary = buildExportSummary(changedSymbols);
   const topImpacts = buildTopImpacts(impactedItems);
+  const surfaceArea = buildSurfaceArea(
+    projectRoot,
+    index,
+    diffFiles,
+    impactedItems,
+  );
   const newFileRangeForHunk = (hunk: FileChange["hunks"][number]) => {
     let newLine = hunk.newStart;
     let lastNewLine = newLine - 1;
@@ -111,6 +122,7 @@ export async function buildImpactReport(
       suggestions,
       exportSummary,
       topImpacts,
+      surfaceArea,
       fileEdges,
       symbolEdges,
     );
@@ -125,6 +137,7 @@ export async function buildImpactReport(
     ...(suggestions.length > 0 ? { suggestions } : {}),
     ...(exportSummary.length > 0 ? { exportSummary } : {}),
     ...(topImpacts.length > 0 ? { topImpacts } : {}),
+    surfaceArea,
     graph: {
       fileEdges,
       symbolEdges,
@@ -145,6 +158,7 @@ function buildCompactReport(
   suggestions: ImpactSuggestion[],
   exportSummary: ExportSummaryEntry[],
   topImpacts: ImpactTopItem[],
+  surfaceArea: ImpactSurfaceArea,
   fileEdges: Array<{
     from: FileId;
     to: FileId;
@@ -174,6 +188,17 @@ function buildCompactReport(
   for (const fe of fileEdges) {
     allFiles.add(fe.from);
     allFiles.add(fe.to);
+  }
+
+  // Add files from surface area
+  for (const item of surfaceArea.files) {
+    allFiles.add(item.file);
+  }
+  for (const file of surfaceArea.topFanIn) {
+    allFiles.add(file);
+  }
+  for (const file of surfaceArea.topFanOut) {
+    allFiles.add(file);
   }
 
   // Add files from suggestions
@@ -283,6 +308,18 @@ function buildCompactReport(
         }))
       : undefined;
 
+  const compactSurfaceArea: CompactImpactSurfaceArea = {
+    files: surfaceArea.files.map((item) => ({
+      file: fileIndex.get(item.file)!,
+      fanIn: item.fanIn,
+      fanOut: item.fanOut,
+      changed: item.changed,
+      impacted: item.impacted,
+    })),
+    topFanIn: surfaceArea.topFanIn.map((file) => fileIndex.get(file)!),
+    topFanOut: surfaceArea.topFanOut.map((file) => fileIndex.get(file)!),
+  };
+
   const compactFileEdges = fileEdges.map((fe) => {
     const edge: { from: number; to: number; typeOnly?: boolean } = {
       from: fileIndex.get(fe.from)!,
@@ -302,6 +339,7 @@ function buildCompactReport(
     ...(compactSuggestions ? { suggestions: compactSuggestions } : {}),
     ...(compactExportSummary ? { exportSummary: compactExportSummary } : {}),
     ...(compactTopImpacts ? { topImpacts: compactTopImpacts } : {}),
+    surfaceArea: compactSurfaceArea,
     graph: {
       fileEdges: compactFileEdges,
       symbolEdges,
@@ -337,4 +375,73 @@ function buildTopImpacts(impactedItems: ImpactItem[]): ImpactTopItem[] {
     ...(item.typeOnly !== undefined ? { typeOnly: item.typeOnly } : {}),
     ...(item.explain ? { explain: item.explain } : {}),
   }));
+}
+
+const SURFACE_AREA_LIMIT = 10;
+
+function buildSurfaceArea(
+  projectRoot: string,
+  index: ProjectIndex,
+  diffFiles: FileChange[],
+  impactedItems: ImpactItem[],
+): ImpactSurfaceArea {
+  const fanIn = new Map<FileId, number>();
+  const fanOut = new Map<FileId, number>();
+
+  for (const node of index.graph.nodes) {
+    const normalizedNode = normalizePath(node);
+    fanIn.set(normalizedNode, 0);
+    fanOut.set(normalizedNode, 0);
+  }
+
+  for (const edge of index.graph.edges) {
+    const from = normalizePath(edge.from);
+    fanOut.set(from, (fanOut.get(from) || 0) + 1);
+    if (edge.to.type === "file") {
+      const to = normalizePath(edge.to.path);
+      fanIn.set(to, (fanIn.get(to) || 0) + 1);
+    }
+  }
+
+  const changedFiles = new Set(
+    diffFiles.map((fileChange) =>
+      normalizePath(
+        path.isAbsolute(fileChange.path)
+          ? fileChange.path
+          : path.resolve(projectRoot, fileChange.path),
+      ),
+    ),
+  );
+  const impactedFiles = new Set(
+    impactedItems.map((item) => normalizePath(item.file)),
+  );
+
+  const files = Array.from(index.graph.nodes).map((file) => {
+    const normalizedFile = normalizePath(file);
+    return {
+      file: normalizedFile,
+      fanIn: fanIn.get(normalizedFile) || 0,
+      fanOut: fanOut.get(normalizedFile) || 0,
+      changed: changedFiles.has(normalizedFile),
+      impacted: impactedFiles.has(normalizedFile),
+    };
+  });
+
+  const topFanIn = [...files]
+    .sort((a, b) => {
+      if (b.fanIn !== a.fanIn) return b.fanIn - a.fanIn;
+      return a.file.localeCompare(b.file);
+    })
+    .slice(0, SURFACE_AREA_LIMIT)
+    .map((item) => item.file);
+
+  const topFanOut = [...files]
+    .sort((a, b) => {
+      if (b.fanOut !== a.fanOut) return b.fanOut - a.fanOut;
+      return a.file.localeCompare(b.file);
+    })
+    .slice(0, SURFACE_AREA_LIMIT)
+    .map((item) => item.file);
+
+  return { files, topFanIn, topFanOut };
 }
