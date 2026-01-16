@@ -26,7 +26,24 @@ type ExportLookup = {
   filesByExportName: Map<string, Set<FileId>>;
 };
 
-const COMMON_SYMBOLS = new Set<string>(["default", "index", "utils"]);
+// Symbol names that are so generic they should be treated with lower confidence.
+const COMMON_SYMBOLS = new Set<string>([
+  "default",
+  "index",
+  "utils",
+  "util",
+  "config",
+  "configs",
+  "constants",
+  "consts",
+  "helper",
+  "helpers",
+  "common",
+  "shared",
+  "data",
+  "handler",
+  "handlers",
+]);
 
 export async function collectImpactSuggestions(
   index: ProjectIndex,
@@ -213,7 +230,7 @@ function determineSuggestionConfidence({
 }
 
 function isCommonSymbolName(symbol: string): boolean {
-  return COMMON_SYMBOLS.has(symbol.toLowerCase());
+  return COMMON_SYMBOLS.has(symbol);
 }
 
 function collectMissingExportSuggestions(
