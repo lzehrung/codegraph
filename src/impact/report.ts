@@ -13,6 +13,8 @@ import type {
   ImpactTopItem,
   ImpactSurfaceArea,
   CompactImpactSurfaceArea,
+  ImpactCluster,
+  CompactImpactCluster,
 } from "./types.js";
 import { buildSymbolGraphDetailed } from "../graphs.js";
 import { normalizePath } from "../util.js";
@@ -112,6 +114,8 @@ export async function buildImpactReport(
     }
   }
 
+  const clusters = buildClusters(changedFiles, impactedItems, fileEdges);
+
   // Check if compact format is requested
   if (options.compact) {
     const report = buildCompactReport(
@@ -123,6 +127,7 @@ export async function buildImpactReport(
       exportSummary,
       topImpacts,
       surfaceArea,
+      clusters,
       fileEdges,
       symbolEdges,
     );
@@ -138,6 +143,7 @@ export async function buildImpactReport(
     ...(exportSummary.length > 0 ? { exportSummary } : {}),
     ...(topImpacts.length > 0 ? { topImpacts } : {}),
     surfaceArea,
+    clusters,
     graph: {
       fileEdges,
       symbolEdges,
@@ -159,6 +165,7 @@ function buildCompactReport(
   exportSummary: ExportSummaryEntry[],
   topImpacts: ImpactTopItem[],
   surfaceArea: ImpactSurfaceArea,
+  clusters: ImpactCluster[],
   fileEdges: Array<{
     from: FileId;
     to: FileId;
@@ -320,6 +327,13 @@ function buildCompactReport(
     topFanOut: surfaceArea.topFanOut.map((file) => fileIndex.get(file)!),
   };
 
+  const compactClusters: CompactImpactCluster[] = clusters.map((cluster) => ({
+    id: cluster.id,
+    files: cluster.files.map((file) => fileIndex.get(file)!),
+    changedFiles: cluster.changedFiles.map((file) => fileIndex.get(file)!),
+    totalSeverity: cluster.totalSeverity,
+  }));
+
   const compactFileEdges = fileEdges.map((fe) => {
     const edge: { from: number; to: number; typeOnly?: boolean } = {
       from: fileIndex.get(fe.from)!,
@@ -340,6 +354,7 @@ function buildCompactReport(
     ...(compactExportSummary ? { exportSummary: compactExportSummary } : {}),
     ...(compactTopImpacts ? { topImpacts: compactTopImpacts } : {}),
     surfaceArea: compactSurfaceArea,
+    clusters: compactClusters,
     graph: {
       fileEdges: compactFileEdges,
       symbolEdges,
@@ -378,6 +393,106 @@ function buildTopImpacts(impactedItems: ImpactItem[]): ImpactTopItem[] {
 }
 
 const SURFACE_AREA_LIMIT = 10;
+
+function buildClusters(
+  changedFiles: Array<{ file: FileId }>,
+  impactedItems: ImpactItem[],
+  fileEdges: Array<{ from: FileId; to: FileId }>,
+): ImpactCluster[] {
+  const changedFilesSet = new Set(changedFiles.map((file) => file.file));
+  const impactedFilesSet = new Set(impactedItems.map((item) => item.file));
+  const candidateFiles = new Set<FileId>([
+    ...changedFilesSet,
+    ...impactedFilesSet,
+  ]);
+
+  if (candidateFiles.size === 0) {
+    return [];
+  }
+
+  const adjacency = new Map<FileId, Set<FileId>>();
+  for (const file of candidateFiles) {
+    adjacency.set(file, new Set());
+  }
+
+  for (const edge of fileEdges) {
+    if (!candidateFiles.has(edge.from) || !candidateFiles.has(edge.to)) {
+      continue;
+    }
+    adjacency.get(edge.from)!.add(edge.to);
+    adjacency.get(edge.to)!.add(edge.from);
+  }
+
+  const severityByFile = new Map<FileId, number>();
+  for (const item of impactedItems) {
+    const current = severityByFile.get(item.file) ?? 0;
+    severityByFile.set(item.file, current + item.severity);
+  }
+
+  const orderedFiles = Array.from(candidateFiles).sort((a, b) =>
+    a.localeCompare(b),
+  );
+  const visited = new Set<FileId>();
+  const clusters: ImpactCluster[] = [];
+
+  for (const file of orderedFiles) {
+    if (visited.has(file)) {
+      continue;
+    }
+
+    const queue: FileId[] = [file];
+    let queueIndex = 0;
+    visited.add(file);
+    const componentFiles: FileId[] = [];
+
+    while (queueIndex < queue.length) {
+      const current = queue[queueIndex++];
+      componentFiles.push(current);
+      const neighbors = adjacency.get(current);
+      if (!neighbors) continue;
+      for (const neighbor of neighbors) {
+        if (visited.has(neighbor)) continue;
+        visited.add(neighbor);
+        queue.push(neighbor);
+      }
+    }
+
+    componentFiles.sort((a, b) => a.localeCompare(b));
+    const componentChanged = componentFiles.filter((componentFile) =>
+      changedFilesSet.has(componentFile),
+    );
+
+    let totalSeverity = 0;
+    for (const componentFile of componentFiles) {
+      totalSeverity += severityByFile.get(componentFile) ?? 0;
+    }
+
+    clusters.push({
+      id: 0,
+      files: componentFiles,
+      changedFiles: componentChanged,
+      totalSeverity,
+    });
+  }
+
+  clusters.sort((a, b) => {
+    if (a.totalSeverity !== b.totalSeverity) {
+      return b.totalSeverity - a.totalSeverity;
+    }
+    const aKey = a.files[0] ?? "";
+    const bKey = b.files[0] ?? "";
+    if (aKey !== bKey) {
+      return aKey.localeCompare(bKey);
+    }
+    return a.files.length - b.files.length;
+  });
+
+  for (let i = 0; i < clusters.length; i++) {
+    clusters[i]!.id = i + 1;
+  }
+
+  return clusters;
+}
 
 function buildSurfaceArea(
   projectRoot: string,

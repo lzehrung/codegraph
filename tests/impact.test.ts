@@ -584,6 +584,8 @@ index 1234567..abcdef0 100644
       expect(report).toHaveProperty("graph");
       expect(report.graph).toHaveProperty("fileEdges");
       expect(report.graph).toHaveProperty("symbolEdges");
+      expect(report).toHaveProperty("clusters");
+      expect(Array.isArray(report.clusters)).toBe(true);
 
       // Verify that changedFiles use indices into files array
       for (const cf of report.changedFiles) {
@@ -624,6 +626,16 @@ index 1234567..abcdef0 100644
       for (const fileIndex of report.surfaceArea.topFanOut) {
         expect(fileIndex).toBeGreaterThanOrEqual(0);
         expect(fileIndex).toBeLessThan(report.files.length);
+      }
+      for (const cluster of report.clusters) {
+        for (const fileIndex of cluster.files) {
+          expect(fileIndex).toBeGreaterThanOrEqual(0);
+          expect(fileIndex).toBeLessThan(report.files.length);
+        }
+        for (const fileIndex of cluster.changedFiles) {
+          expect(fileIndex).toBeGreaterThanOrEqual(0);
+          expect(fileIndex).toBeLessThan(report.files.length);
+        }
       }
     });
 
@@ -669,6 +681,15 @@ index 1234567..abcdef0 100644
       for (const edge of report.graph.fileEdges) {
         expect(typeof edge.from).toBe("string");
         expect(typeof edge.to).toBe("string");
+      }
+      expect(report).toHaveProperty("clusters");
+      for (const cluster of report.clusters) {
+        for (const file of cluster.files) {
+          expect(typeof file).toBe("string");
+        }
+        for (const file of cluster.changedFiles) {
+          expect(typeof file).toBe("string");
+        }
       }
     });
 
