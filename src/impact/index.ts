@@ -10,6 +10,7 @@ import { getDiff } from "./providers/base.js";
 import { locateChangedSymbols } from "./map.js";
 import { analyzeImpact } from "./analyzer.js";
 import { buildImpactReport } from "./report.js";
+import { collectImpactSuggestions } from "./suggestions.js";
 
 export * from "./types.js";
 
@@ -53,12 +54,17 @@ export async function analyzeImpactFromDiff(
     options,
   );
 
+  const suggestions = options.verifyReferences
+    ? await collectImpactSuggestions(index, projectRoot, filteredFiles, options)
+    : [];
+
   // Build report
   return await buildImpactReport(
     index,
     filteredFiles,
     changedSymbols,
     impactedItems,
+    suggestions,
     { ...options, warning: diff.warning },
   );
 }

@@ -331,6 +331,12 @@ npx codegraph impact --base main --head feature --members-only
 npx codegraph impact --base main --head feature --ref-context line
 # Include block context snippets for references (enclosing function/class, max 60 lines)
 npx codegraph impact --base main --head feature --ref-context block --ref-block-max-lines 30
+# Verify missing imports/exports/declarations in changed lines
+npx codegraph impact --base main --head feature --verify-refs
+# Programmatic API equivalent
+await analyzeImpactFromDiff(root, index, { provider: "git", base: "main", head: "feature", verifyReferences: true });
+
+Impact JSON responses can include `exportSummary` (exported changed symbols by file) and `topImpacts` (top 10 impacted items with reasons) when applicable.
 
 # Generate a PR review bundle (incremental graph + symbol summary)
 npx codegraph review --base origin/main --head HEAD > review.json
