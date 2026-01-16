@@ -215,6 +215,9 @@ function selectBestCandidateFile(
   sourceFile: FileId,
   candidates: FileId[],
 ): FileId {
+  if (candidates.length === 0) {
+    throw new Error("selectBestCandidateFile called with no candidates");
+  }
   const directImports = new Set<FileId>();
   for (const edge of index.graph.edges) {
     if (edge.from !== sourceFile) continue;
@@ -223,7 +226,8 @@ function selectBestCandidateFile(
   for (const candidate of candidates) {
     if (directImports.has(candidate)) return candidate;
   }
-  return candidates.slice().sort()[0]!;
+  const sorted = candidates.slice().sort();
+  return sorted[0];
 }
 
 function collectReferenceCandidates(

@@ -240,17 +240,28 @@ function buildCompactReport(
 
   const compactSuggestions =
     suggestions.length > 0
-      ? suggestions.map((suggestion) => ({
-          file: fileIndex.get(suggestion.file)!,
-          range: suggestion.range,
-          kind: suggestion.kind,
-          symbol: suggestion.symbol,
-          relatedFile:
+      ? suggestions.map((suggestion) => {
+          const relatedFileIndex =
             suggestion.relatedFile !== undefined
               ? fileIndex.get(suggestion.relatedFile)
-              : undefined,
-          details: suggestion.details,
-        }))
+              : undefined;
+          if (
+            suggestion.relatedFile !== undefined &&
+            relatedFileIndex === undefined
+          ) {
+            throw new Error(
+              `Missing file index for suggestion related file ${suggestion.relatedFile}`,
+            );
+          }
+          return {
+            file: fileIndex.get(suggestion.file)!,
+            range: suggestion.range,
+            kind: suggestion.kind,
+            symbol: suggestion.symbol,
+            relatedFile: relatedFileIndex,
+            details: suggestion.details,
+          };
+        })
       : undefined;
 
   const compactFileEdges = fileEdges.map((fe) => {
