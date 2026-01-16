@@ -436,6 +436,7 @@ function ensureImpactReport(
       ? { relatedFile: resolveFilePath(suggestion.relatedFile) }
       : {}),
     ...(suggestion.details ? { details: suggestion.details } : {}),
+    confidence: suggestion.confidence,
   }));
   const exportSummary = report.exportSummary?.map((entry) => ({
     file: resolveFilePath(entry.file),
