@@ -3,10 +3,19 @@
 ## Goal
 Summarize test files directly coupled to changed symbols and highlight likely test impacts.
 
-## Potential approach
-- Reuse `collectImpactContext` / `listCandidateTestFiles` to list test files and reasons.
-- Provide top candidate tests with reasons and file paths.
+## Output schema
+Add `report.testCandidates`:
+- `tests: Array<{ file: string; reason: "importsChanged" | "dependsOnChanged" | "pattern" }>`
 
-## Open questions
-- Should tests be filtered by changed files only or include transitive impacts?
-- How to display confidence or ranking?
+## Step-by-step
+1. Use `collectImpactContext` or `listCandidateTestFiles` to gather candidate tests.
+2. Normalize file paths to match `report.changedFiles` format.
+3. Sort tests by reason priority: `importsChanged` > `dependsOnChanged` > `pattern`.
+4. Limit to top 20 to keep output small.
+
+## Acceptance criteria
+- If a test imports a changed symbol, it must appear with reason `importsChanged`.
+- Output is empty when no tests match.
+
+## Implementation notes
+- Keep behavior consistent with existing `impact` test detection logic.
