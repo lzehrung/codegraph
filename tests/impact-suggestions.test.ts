@@ -4,16 +4,31 @@ import { analyzeImpactFromDiff } from "../src/impact/index.js";
 import type { ImpactReport } from "../src/impact/types.js";
 import { buildProjectIndex } from "../src/index.js";
 
+const samplePath = path.resolve(
+  process.cwd(),
+  "tests",
+  "samples",
+  "impact-suggestions",
+);
+
+async function buildSampleReport(
+  diffText: string,
+  options?: { maxSuggestions?: number },
+): Promise<ImpactReport> {
+  const index = await buildProjectIndex(samplePath);
+  const report = (await analyzeImpactFromDiff(samplePath, index, {
+    provider: "raw",
+    diffText,
+    verifyReferences: true,
+    ...(options?.maxSuggestions !== undefined
+      ? { maxSuggestions: options.maxSuggestions }
+      : {}),
+  })) as ImpactReport;
+  return report;
+}
+
 describe("Impact Suggestions", () => {
   it("detects missing imports, exports, and declarations in changed lines", async () => {
-    const samplePath = path.resolve(
-      process.cwd(),
-      "tests",
-      "samples",
-      "impact-suggestions",
-    );
-    const index = await buildProjectIndex(samplePath);
-
     const diffText = `diff --git a/main.ts b/main.ts
 index 1111111..2222222 100644
 --- a/main.ts
@@ -27,11 +42,7 @@ index 1111111..2222222 100644
 +const missingDeclarationResult = undeclaredFunction();
 `;
 
-    const report = (await analyzeImpactFromDiff(samplePath, index, {
-      provider: "raw",
-      diffText,
-      verifyReferences: true,
-    })) as ImpactReport;
+    const report = await buildSampleReport(diffText);
 
     const suggestions = report.suggestions ?? [];
     expect(suggestions.length).toBeGreaterThan(0);
@@ -61,43 +72,23 @@ index 1111111..2222222 100644
   });
 
   it("returns no suggestions when changed lines are valid", async () => {
-    const samplePath = path.resolve(
-      process.cwd(),
-      "tests",
-      "samples",
-      "impact-suggestions",
-    );
-    const index = await buildProjectIndex(samplePath);
-
     const diffText = `diff --git a/helpers.ts b/helpers.ts
 index 1111111..2222222 100644
 --- a/helpers.ts
 +++ b/helpers.ts
 @@ -1,3 +1,4 @@
  export function helperFunction(): string {
-   return "helper";
+  return "helper";
  }
 +// harmless change
 `;
 
-    const report = (await analyzeImpactFromDiff(samplePath, index, {
-      provider: "raw",
-      diffText,
-      verifyReferences: true,
-    })) as ImpactReport;
+    const report = await buildSampleReport(diffText);
 
     expect(report.suggestions ?? []).toHaveLength(0);
   });
 
   it("respects maxSuggestions limits", async () => {
-    const samplePath = path.resolve(
-      process.cwd(),
-      "tests",
-      "samples",
-      "impact-suggestions",
-    );
-    const index = await buildProjectIndex(samplePath);
-
     const diffText = `diff --git a/main.ts b/main.ts
 index 1111111..2222222 100644
 --- a/main.ts
@@ -111,12 +102,7 @@ index 1111111..2222222 100644
 +const missingDeclarationResult = undeclaredFunction();
 `;
 
-    const report = (await analyzeImpactFromDiff(samplePath, index, {
-      provider: "raw",
-      diffText,
-      verifyReferences: true,
-      maxSuggestions: 1,
-    })) as ImpactReport;
+    const report = await buildSampleReport(diffText, { maxSuggestions: 1 });
 
     expect(report.suggestions ?? []).toHaveLength(1);
   });

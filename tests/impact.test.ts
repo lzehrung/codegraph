@@ -147,7 +147,12 @@ index 1234567..abcdef0 100644
 
     it("should include export summaries and top impacts", async () => {
       const index = await createTestIndex("typescript");
-      const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
+      const samplePath = path.resolve(
+        process.cwd(),
+        "tests",
+        "samples",
+        "typescript",
+      );
 
       const diffText = `diff --git a/utils.ts b/utils.ts
 index 1234567..abcdef0 100644
@@ -169,19 +174,27 @@ index 1234567..abcdef0 100644
       const exportedChanged = report.changedSymbols.filter(
         (symbol) => symbol.exported,
       );
-      const exportedFiles = [...new Set(exportedChanged.map((symbol) => symbol.file))].sort();
+      const exportedFiles = [
+        ...new Set(exportedChanged.map((symbol) => symbol.file)),
+      ].sort();
       const summaryFiles = exportSummary.map((entry) => entry.file).sort();
+
+      // exportSummary should list every file that contains exported changed symbols.
       expect(summaryFiles).toEqual(exportedFiles);
+
       if (exportedChanged.length > 0) {
         const sample = exportedChanged[0]!;
         const exportEntry = exportSummary.find((entry) => entry.file === sample.file);
+        // exportSummary should include the exported symbol name for the file.
         expect(exportEntry?.symbols).toContain(sample.name);
       }
 
       const topImpacts = report.topImpacts ?? [];
+      // topImpacts is capped at 10 and should never exceed the impacted list.
       expect(topImpacts.length).toBeLessThanOrEqual(10);
       expect(topImpacts.length).toBeLessThanOrEqual(report.impacted.length);
       if (report.impacted.length > 0) {
+        // When there is impact data, topImpacts should include at least one item.
         expect(topImpacts.length).toBeGreaterThan(0);
       }
     });
