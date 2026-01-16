@@ -437,6 +437,23 @@ function ensureImpactReport(
     ...(item.typeOnly !== undefined ? { typeOnly: item.typeOnly } : {}),
     ...(item.explain ? { explain: item.explain } : {}),
   }));
+  const surfaceArea = {
+    files: report.surfaceArea.files.map((item) => ({
+      file: resolveFilePath(item.file),
+      fanIn: item.fanIn,
+      fanOut: item.fanOut,
+      changed: item.changed,
+      impacted: item.impacted,
+    })),
+    topFanIn: report.surfaceArea.topFanIn.map((file) => resolveFilePath(file)),
+    topFanOut: report.surfaceArea.topFanOut.map((file) => resolveFilePath(file)),
+  };
+  const clusters = report.clusters.map((cluster) => ({
+    id: cluster.id,
+    files: cluster.files.map((file) => resolveFilePath(file)),
+    changedFiles: cluster.changedFiles.map((file) => resolveFilePath(file)),
+    totalSeverity: cluster.totalSeverity,
+  }));
   const fileEdges = report.graph.fileEdges.map((edge) => ({
     from: resolveFilePath(edge.from),
     to: resolveFilePath(edge.to),
@@ -454,6 +471,8 @@ function ensureImpactReport(
     ...(suggestions ? { suggestions } : {}),
     ...(exportSummary ? { exportSummary } : {}),
     ...(topImpacts ? { topImpacts } : {}),
+    surfaceArea,
+    clusters,
     graph: {
       fileEdges,
       symbolEdges,
