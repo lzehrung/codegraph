@@ -414,6 +414,29 @@ function ensureImpactReport(
     if (maybeRefs !== undefined) impact.refs = maybeRefs;
     return impact;
   });
+  const suggestions = report.suggestions?.map((suggestion) => ({
+    file: resolveFilePath(suggestion.file),
+    kind: suggestion.kind,
+    ...(suggestion.range ? { range: suggestion.range } : {}),
+    ...(suggestion.symbol ? { symbol: suggestion.symbol } : {}),
+    ...(suggestion.relatedFile !== undefined
+      ? { relatedFile: resolveFilePath(suggestion.relatedFile) }
+      : {}),
+    ...(suggestion.details ? { details: suggestion.details } : {}),
+  }));
+  const exportSummary = report.exportSummary?.map((entry) => ({
+    file: resolveFilePath(entry.file),
+    symbols: entry.symbols,
+  }));
+  const topImpacts = report.topImpacts?.map((item) => ({
+    file: resolveFilePath(item.file),
+    symbols: item.symbols,
+    reasons: item.reasons,
+    severity: item.severity,
+    ...(item.depth !== undefined ? { depth: item.depth } : {}),
+    ...(item.typeOnly !== undefined ? { typeOnly: item.typeOnly } : {}),
+    ...(item.explain ? { explain: item.explain } : {}),
+  }));
   const fileEdges = report.graph.fileEdges.map((edge) => ({
     from: resolveFilePath(edge.from),
     to: resolveFilePath(edge.to),
@@ -428,6 +451,9 @@ function ensureImpactReport(
     changedFiles,
     changedSymbols,
     impacted,
+    ...(suggestions ? { suggestions } : {}),
+    ...(exportSummary ? { exportSummary } : {}),
+    ...(topImpacts ? { topImpacts } : {}),
     graph: {
       fileEdges,
       symbolEdges,
@@ -1045,6 +1071,9 @@ async function main() {
 
     const ignoreGlobs = parsed.options.get("--ignore-glob");
     if (ignoreGlobs) options.ignoreGlobs = ignoreGlobs;
+
+    const verifyRefs = hasFlag("--verify-refs");
+    if (verifyRefs) options.verifyReferences = true;
 
     options.includeTests = includeTests;
     options.membersOnly = membersOnly;
