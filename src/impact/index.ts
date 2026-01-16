@@ -60,6 +60,7 @@ export async function analyzeImpactFromDiff(
 
   // Build report
   return await buildImpactReport(
+    projectRoot,
     index,
     filteredFiles,
     changedSymbols,

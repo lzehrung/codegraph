@@ -199,6 +199,67 @@ index 1234567..abcdef0 100644
       }
     });
 
+    it("should include surface area summaries", async () => {
+      const index = await createTestIndex("typescript");
+      const samplePath = path.resolve(
+        process.cwd(),
+        "tests",
+        "samples",
+        "typescript",
+      );
+
+      const diffText = `diff --git a/utils.ts b/utils.ts
+index 1234567..abcdef0 100644
+--- a/utils.ts
++++ b/utils.ts
+@@ -1,3 +1,4 @@
+ export function helperFunction(): string {
+   return "Hello from utils";
+ }
++export function surfaceAreaHelper(): string {
++  return "surface";
++}
+`;
+
+      const report = await analyzeImpactFromDiff(samplePath, index, {
+        provider: "raw",
+        diffText,
+      });
+
+      expect(report.surfaceArea.files).toHaveLength(index.graph.nodes.size);
+      expect(report.surfaceArea.topFanIn.length).toBeLessThanOrEqual(10);
+      expect(report.surfaceArea.topFanOut.length).toBeLessThanOrEqual(10);
+
+      const changedFilePath = path
+        .join(samplePath, "utils.ts")
+        .replace(/\\/g, "/");
+      const changedEntry = report.surfaceArea.files.find(
+        (item) => item.file === changedFilePath,
+      );
+      if (changedEntry) {
+        expect(changedEntry.changed).toBe(true);
+      }
+
+      if (report.impacted.length > 0) {
+        const impactedFile = report.impacted[0]?.file;
+        const impactedEntry = report.surfaceArea.files.find(
+          (item) => item.file === impactedFile,
+        );
+        expect(impactedEntry?.impacted).toBe(true);
+      }
+
+      for (const file of report.surfaceArea.topFanIn) {
+        expect(
+          report.surfaceArea.files.some((entry) => entry.file === file),
+        ).toBe(true);
+      }
+      for (const file of report.surfaceArea.topFanOut) {
+        expect(
+          report.surfaceArea.files.some((entry) => entry.file === file),
+        ).toBe(true);
+      }
+    });
+
     it("should handle empty diffs", async () => {
       const index = await createTestIndex("typescript");
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
@@ -213,6 +274,10 @@ index 1234567..abcdef0 100644
       expect(report.changedFiles).toHaveLength(0);
       expect(report.changedSymbols).toHaveLength(0);
       expect(report.impacted).toHaveLength(0);
+      expect(report.surfaceArea.files).toHaveLength(index.graph.nodes.size);
+      expect(report.surfaceArea.topFanIn.length).toBeLessThanOrEqual(10);
+      expect(report.surfaceArea.topFanOut.length).toBeLessThanOrEqual(10);
+      expect(report.surfaceArea.files.every((item) => !item.changed)).toBe(true);
     });
 
     it("should seed transitive impact from deleted/renamed files with depth > 0", async () => {
@@ -542,6 +607,23 @@ index 1234567..abcdef0 100644
         expect(edge.from).toBeLessThan(report.files.length);
         expect(edge.to).toBeGreaterThanOrEqual(0);
         expect(edge.to).toBeLessThan(report.files.length);
+      }
+
+      expect(report).toHaveProperty("surfaceArea");
+      expect(report.surfaceArea.files.length).toBeGreaterThan(0);
+      expect(report.surfaceArea.topFanIn.length).toBeLessThanOrEqual(10);
+      expect(report.surfaceArea.topFanOut.length).toBeLessThanOrEqual(10);
+      for (const item of report.surfaceArea.files) {
+        expect(item.file).toBeGreaterThanOrEqual(0);
+        expect(item.file).toBeLessThan(report.files.length);
+      }
+      for (const fileIndex of report.surfaceArea.topFanIn) {
+        expect(fileIndex).toBeGreaterThanOrEqual(0);
+        expect(fileIndex).toBeLessThan(report.files.length);
+      }
+      for (const fileIndex of report.surfaceArea.topFanOut) {
+        expect(fileIndex).toBeGreaterThanOrEqual(0);
+        expect(fileIndex).toBeLessThan(report.files.length);
       }
     });
 

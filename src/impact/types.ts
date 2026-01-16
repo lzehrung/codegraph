@@ -64,6 +64,34 @@ export type ExportSummaryEntry = {
   symbols: string[];
 };
 
+export type ImpactSurfaceAreaFile = {
+  file: FileId;
+  fanIn: number;
+  fanOut: number;
+  changed: boolean;
+  impacted: boolean;
+};
+
+export type ImpactSurfaceArea = {
+  files: ImpactSurfaceAreaFile[];
+  topFanIn: FileId[];
+  topFanOut: FileId[];
+};
+
+export type CompactImpactSurfaceAreaFile = {
+  file: number;
+  fanIn: number;
+  fanOut: number;
+  changed: boolean;
+  impacted: boolean;
+};
+
+export type CompactImpactSurfaceArea = {
+  files: CompactImpactSurfaceAreaFile[];
+  topFanIn: number[];
+  topFanOut: number[];
+};
+
 export type ImpactTopItem = {
   file: FileId;
   symbols: string[];
@@ -105,6 +133,7 @@ export type ImpactReport = {
   suggestions?: ImpactSuggestion[];
   exportSummary?: ExportSummaryEntry[];
   topImpacts?: ImpactTopItem[];
+  surfaceArea: ImpactSurfaceArea;
   graph: {
     fileEdges: Array<{ from: FileId; to: FileId; typeOnly?: boolean }>;
     symbolEdges: Array<{ from: number; to: number; label: string }>; // indices into changedSymbols
@@ -170,6 +199,7 @@ export type CompactImpactReport = {
     typeOnly?: boolean;
     explain?: ImpactItem["explain"];
   }>;
+  surfaceArea: CompactImpactSurfaceArea;
   graph: {
     fileEdges: Array<{ from: number; to: number; typeOnly?: boolean }>; // indices into files array
     symbolEdges: Array<{ from: number; to: number; label: string }>; // indices into changedSymbols
