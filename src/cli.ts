@@ -414,6 +414,17 @@ function ensureImpactReport(
     if (maybeRefs !== undefined) impact.refs = maybeRefs;
     return impact;
   });
+  const suggestions = report.suggestions?.map((suggestion) => ({
+    file: resolveFilePath(suggestion.file),
+    range: suggestion.range,
+    kind: suggestion.kind,
+    symbol: suggestion.symbol,
+    relatedFile:
+      suggestion.relatedFile !== undefined
+        ? resolveFilePath(suggestion.relatedFile)
+        : undefined,
+    details: suggestion.details,
+  }));
   const fileEdges = report.graph.fileEdges.map((edge) => ({
     from: resolveFilePath(edge.from),
     to: resolveFilePath(edge.to),
@@ -428,6 +439,7 @@ function ensureImpactReport(
     changedFiles,
     changedSymbols,
     impacted,
+    ...(suggestions ? { suggestions } : {}),
     graph: {
       fileEdges,
       symbolEdges,
@@ -1045,6 +1057,9 @@ async function main() {
 
     const ignoreGlobs = parsed.options.get("--ignore-glob");
     if (ignoreGlobs) options.ignoreGlobs = ignoreGlobs;
+
+    const verifyRefs = hasFlag("--verify-refs");
+    if (verifyRefs) options.verifyReferences = true;
 
     options.includeTests = includeTests;
     options.membersOnly = membersOnly;

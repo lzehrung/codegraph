@@ -45,6 +45,20 @@ export type ImpactReason =
   | "transitive" // indirect impact through file dependencies
   | "exportChain"; // impact through re-export chains
 
+export type ImpactSuggestionKind =
+  | "missingImport"
+  | "missingExport"
+  | "missingDeclaration";
+
+export type ImpactSuggestion = {
+  file: FileId;
+  range?: Range;
+  kind: ImpactSuggestionKind;
+  symbol?: string;
+  relatedFile?: FileId;
+  details?: string;
+};
+
 export type ImpactItem = {
   file: FileId;
   symbols: string[]; // symbol names impacted in this file
@@ -73,6 +87,7 @@ export type ImpactReport = {
   }>;
   changedSymbols: ChangedSymbol[];
   impacted: ImpactItem[];
+  suggestions?: ImpactSuggestion[];
   graph: {
     fileEdges: Array<{ from: FileId; to: FileId; typeOnly?: boolean }>;
     symbolEdges: Array<{ from: number; to: number; label: string }>; // indices into changedSymbols
@@ -117,6 +132,14 @@ export type CompactImpactReport = {
       hints?: string[];
     };
   }>;
+  suggestions?: Array<{
+    file: number;
+    range?: Range;
+    kind: ImpactSuggestionKind;
+    symbol?: string;
+    relatedFile?: number;
+    details?: string;
+  }>;
   graph: {
     fileEdges: Array<{ from: number; to: number; typeOnly?: boolean }>; // indices into files array
     symbolEdges: Array<{ from: number; to: number; label: string }>; // indices into changedSymbols
@@ -143,4 +166,8 @@ export type ImpactOptions = DiffProviderOptions & {
   refContextLines?: number;
   /** Maximum lines for enclosing block context (default: 60) */
   refBlockMaxLines?: number;
+  /** Validate references inside changed lines to surface missing imports/exports/declarations */
+  verifyReferences?: boolean;
+  /** Cap the number of suggestions returned when verifyReferences is enabled */
+  maxSuggestions?: number;
 };

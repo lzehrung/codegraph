@@ -7,6 +7,7 @@ import type {
   ImpactReport,
   CompactImpactReport,
   ImpactOptions,
+  ImpactSuggestion,
 } from "./types.js";
 import { buildSymbolGraphDetailed } from "../graphs.js";
 
@@ -15,6 +16,7 @@ export async function buildImpactReport(
   diffFiles: FileChange[],
   changedSymbols: ChangedSymbol[],
   impactedItems: ImpactItem[],
+  suggestions: ImpactSuggestion[],
   options: Partial<ImpactOptions> & { warning?: string | undefined } = {},
 ): Promise<ImpactReport | CompactImpactReport> {
   const newFileRangeForHunk = (hunk: FileChange["hunks"][number]) => {
@@ -102,6 +104,7 @@ export async function buildImpactReport(
       changedFiles,
       changedSymbols,
       impactedItems,
+      suggestions,
       fileEdges,
       symbolEdges,
     );
@@ -113,6 +116,7 @@ export async function buildImpactReport(
     changedFiles,
     changedSymbols,
     impacted: impactedItems,
+    ...(suggestions.length > 0 ? { suggestions } : {}),
     graph: {
       fileEdges,
       symbolEdges,
@@ -130,6 +134,7 @@ function buildCompactReport(
   }>,
   changedSymbols: ChangedSymbol[],
   impactedItems: ImpactItem[],
+  suggestions: ImpactSuggestion[],
   fileEdges: Array<{
     from: FileId;
     to: FileId;
@@ -159,6 +164,12 @@ function buildCompactReport(
   for (const fe of fileEdges) {
     allFiles.add(fe.from);
     allFiles.add(fe.to);
+  }
+
+  // Add files from suggestions
+  for (const suggestion of suggestions) {
+    allFiles.add(suggestion.file);
+    if (suggestion.relatedFile) allFiles.add(suggestion.relatedFile);
   }
 
   const filesArray = Array.from(allFiles);
@@ -227,6 +238,21 @@ function buildCompactReport(
     return item;
   });
 
+  const compactSuggestions =
+    suggestions.length > 0
+      ? suggestions.map((suggestion) => ({
+          file: fileIndex.get(suggestion.file)!,
+          range: suggestion.range,
+          kind: suggestion.kind,
+          symbol: suggestion.symbol,
+          relatedFile:
+            suggestion.relatedFile !== undefined
+              ? fileIndex.get(suggestion.relatedFile)
+              : undefined,
+          details: suggestion.details,
+        }))
+      : undefined;
+
   const compactFileEdges = fileEdges.map((fe) => {
     const edge: { from: number; to: number; typeOnly?: boolean } = {
       from: fileIndex.get(fe.from)!,
@@ -243,6 +269,7 @@ function buildCompactReport(
     changedFiles: compactChangedFiles,
     changedSymbols: compactChangedSymbols,
     impacted: compactImpacted,
+    ...(compactSuggestions ? { suggestions: compactSuggestions } : {}),
     graph: {
       fileEdges: compactFileEdges,
       symbolEdges,
