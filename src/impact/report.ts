@@ -440,12 +440,13 @@ function buildClusters(
       continue;
     }
 
-    const queue = [file];
+    const queue: FileId[] = [file];
+    let queueIndex = 0;
     visited.add(file);
     const componentFiles: FileId[] = [];
 
-    while (queue.length > 0) {
-      const current = queue.shift();
+    while (queueIndex < queue.length) {
+      const current = queue[queueIndex++];
       if (!current) continue;
       componentFiles.push(current);
       const neighbors = adjacency.get(current);
