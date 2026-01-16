@@ -447,6 +447,7 @@ function buildClusters(
 
     while (queueIndex < queue.length) {
       const current = queue[queueIndex++];
+      if (!current) continue;
       componentFiles.push(current);
       const neighbors = adjacency.get(current);
       if (!neighbors) continue;
