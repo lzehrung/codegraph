@@ -384,6 +384,19 @@ function ensureImpactReport(
     }
     return file;
   };
+  const resolveSurfaceArea = (
+    surfaceArea: CompactImpactReport["surfaceArea"],
+  ) => ({
+    files: surfaceArea.files.map((item) => ({
+      file: resolveFilePath(item.file),
+      fanIn: item.fanIn,
+      fanOut: item.fanOut,
+      changed: item.changed,
+      impacted: item.impacted,
+    })),
+    topFanIn: surfaceArea.topFanIn.map((file) => resolveFilePath(file)),
+    topFanOut: surfaceArea.topFanOut.map((file) => resolveFilePath(file)),
+  });
   const changedFiles = report.changedFiles.map((cf) => ({
     file: resolveFilePath(cf.file),
     hunks: cf.hunks,
@@ -437,6 +450,12 @@ function ensureImpactReport(
     ...(item.typeOnly !== undefined ? { typeOnly: item.typeOnly } : {}),
     ...(item.explain ? { explain: item.explain } : {}),
   }));
+  const clusters = report.clusters.map((cluster) => ({
+    id: cluster.id,
+    files: cluster.files.map((file) => resolveFilePath(file)),
+    changedFiles: cluster.changedFiles.map((file) => resolveFilePath(file)),
+    totalSeverity: cluster.totalSeverity,
+  }));
   const fileEdges = report.graph.fileEdges.map((edge) => ({
     from: resolveFilePath(edge.from),
     to: resolveFilePath(edge.to),
@@ -454,6 +473,8 @@ function ensureImpactReport(
     ...(suggestions ? { suggestions } : {}),
     ...(exportSummary ? { exportSummary } : {}),
     ...(topImpacts ? { topImpacts } : {}),
+    surfaceArea: resolveSurfaceArea(report.surfaceArea),
+    clusters,
     graph: {
       fileEdges,
       symbolEdges,

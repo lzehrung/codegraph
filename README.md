@@ -337,7 +337,7 @@ npx codegraph impact --base main --head feature --verify-refs
 # Programmatic API equivalent
 await analyzeImpactFromDiff(root, index, { provider: "git", base: "main", head: "feature", verifyReferences: true });
 
-Impact JSON responses can include `exportSummary` (exported changed symbols by file), `topImpacts` (top 10 impacted items with reasons), and `surfaceArea` (fan-in/fan-out summary with top 10 lists) when applicable.
+Impact JSON responses can include `exportSummary` (exported changed symbols by file), `topImpacts` (top 10 impacted items with reasons), `surfaceArea` (fan-in/fan-out summary with top 10 lists), and `clusters` (connected change/impact groups with aggregated severity) when applicable.
 
 # Generate a PR review bundle (incremental graph + symbol summary)
 npx codegraph review --base origin/main --head HEAD > review.json

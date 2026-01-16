@@ -78,6 +78,13 @@ export type ImpactSurfaceArea = {
   topFanOut: FileId[];
 };
 
+export type ImpactCluster = {
+  id: number;
+  files: FileId[];
+  changedFiles: FileId[];
+  totalSeverity: number;
+};
+
 export type CompactImpactSurfaceAreaFile = {
   file: number;
   fanIn: number;
@@ -90,6 +97,13 @@ export type CompactImpactSurfaceArea = {
   files: CompactImpactSurfaceAreaFile[];
   topFanIn: number[];
   topFanOut: number[];
+};
+
+export type CompactImpactCluster = {
+  id: number;
+  files: number[];
+  changedFiles: number[];
+  totalSeverity: number;
 };
 
 export type ImpactTopItem = {
@@ -134,6 +148,7 @@ export type ImpactReport = {
   exportSummary?: ExportSummaryEntry[];
   topImpacts?: ImpactTopItem[];
   surfaceArea: ImpactSurfaceArea;
+  clusters: ImpactCluster[];
   graph: {
     fileEdges: Array<{ from: FileId; to: FileId; typeOnly?: boolean }>;
     symbolEdges: Array<{ from: number; to: number; label: string }>; // indices into changedSymbols
@@ -200,6 +215,7 @@ export type CompactImpactReport = {
     explain?: ImpactItem["explain"];
   }>;
   surfaceArea: CompactImpactSurfaceArea;
+  clusters: CompactImpactCluster[];
   graph: {
     fileEdges: Array<{ from: number; to: number; typeOnly?: boolean }>; // indices into files array
     symbolEdges: Array<{ from: number; to: number; label: string }>; // indices into changedSymbols
