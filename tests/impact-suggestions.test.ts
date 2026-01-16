@@ -59,4 +59,65 @@ index 1111111..2222222 100644
     );
     expect(missingDeclaration).toBeDefined();
   });
+
+  it("returns no suggestions when changed lines are valid", async () => {
+    const samplePath = path.resolve(
+      process.cwd(),
+      "tests",
+      "samples",
+      "impact-suggestions",
+    );
+    const index = await buildProjectIndex(samplePath);
+
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,4 @@
+ export function helperFunction(): string {
+   return "helper";
+ }
++// harmless change
+`;
+
+    const report = (await analyzeImpactFromDiff(samplePath, index, {
+      provider: "raw",
+      diffText,
+      verifyReferences: true,
+    })) as ImpactReport;
+
+    expect(report.suggestions ?? []).toHaveLength(0);
+  });
+
+  it("respects maxSuggestions limits", async () => {
+    const samplePath = path.resolve(
+      process.cwd(),
+      "tests",
+      "samples",
+      "impact-suggestions",
+    );
+    const index = await buildProjectIndex(samplePath);
+
+    const diffText = `diff --git a/main.ts b/main.ts
+index 1111111..2222222 100644
+--- a/main.ts
++++ b/main.ts
+@@ -1,5 +1,7 @@
+ import { helperFunction } from "./helpers";
++import { missingExport } from "./helpers";
+ 
+ const result = helperFunction();
++const missingImportResult = anotherHelper();
++const missingDeclarationResult = undeclaredFunction();
+`;
+
+    const report = (await analyzeImpactFromDiff(samplePath, index, {
+      provider: "raw",
+      diffText,
+      verifyReferences: true,
+      maxSuggestions: 1,
+    })) as ImpactReport;
+
+    expect(report.suggestions ?? []).toHaveLength(1);
+  });
 });

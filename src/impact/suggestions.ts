@@ -308,7 +308,7 @@ function collectChangedLines(hunks: FileChange["hunks"]): Set<number> {
         changedLines.add(newLine);
         newLine++;
       } else if (line.startsWith("-")) {
-        const mappedLine = newLine > 0 ? newLine : oldLine;
+        const mappedLine = newLine;
         changedLines.add(mappedLine);
         oldLine++;
       }
