@@ -442,6 +442,17 @@ function ensureImpactReport(
     file: resolveFilePath(entry.file),
     symbols: entry.symbols,
   }));
+  const reexportChains = report.reexportChains
+    ? {
+        chains: report.reexportChains.chains.map((entry) => ({
+          symbol: entry.symbol,
+          file: resolveFilePath(entry.file),
+          paths: entry.paths.map((pathChain) =>
+            pathChain.map((file) => resolveFilePath(file)),
+          ),
+        })),
+      }
+    : undefined;
   const topImpacts = report.topImpacts?.map((item) => ({
     file: resolveFilePath(item.file),
     symbols: item.symbols,
@@ -473,6 +484,7 @@ function ensureImpactReport(
     impacted,
     ...(suggestions ? { suggestions } : {}),
     ...(exportSummary ? { exportSummary } : {}),
+    ...(reexportChains ? { reexportChains } : {}),
     ...(topImpacts ? { topImpacts } : {}),
     surfaceArea: resolveSurfaceArea(report.surfaceArea),
     clusters,

@@ -1,10 +1,13 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
+import fs from "node:fs";
+import fsp from "node:fs/promises";
 import { parseUnifiedDiff } from "../src/impact/parse.js";
 import { analyzeImpactFromDiff, listCandidateTestFiles } from "../src/impact/index.js";
 import { CompactImpactReport, type ImpactItem } from "../src/impact/types.js";
 import type { Range } from "../src/types.js";
 import { createTestIndex } from "./test-utils.js";
+import { buildProjectIndexFromFiles } from "../src/index.js";
 
 describe("Impact Analysis", () => {
   describe("Diff Parsing", () => {
@@ -196,6 +199,192 @@ index 1234567..abcdef0 100644
       if (report.impacted.length > 0) {
         // When there is impact data, topImpacts should include at least one item.
         expect(topImpacts.length).toBeGreaterThan(0);
+      }
+    });
+
+    it("should include reexport chains for exported changed symbols", async () => {
+      const index = await createTestIndex("typescript");
+      const samplePath = path.resolve(
+        process.cwd(),
+        "tests",
+        "samples",
+        "typescript",
+      );
+
+      const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1234567..abcdef0 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,2 +1,2 @@
+ export function helperFunction(): string {
+-  return "Helper function from helpers module";
++  return "Helper function from helpers module!";
+ }
+@@ -5,2 +5,2 @@
+ export function anotherHelper(): number {
+-  return 123;
++  return 456;
+ }
+`;
+
+      const report = await analyzeImpactFromDiff(samplePath, index, {
+        provider: "raw",
+        diffText,
+      });
+
+      const helperFile = path
+        .join(samplePath, "helpers.ts")
+        .replace(/\\/g, "/");
+      const utilsFile = path.join(samplePath, "utils.ts").replace(/\\/g, "/");
+      const chains = report.reexportChains?.chains ?? [];
+
+      const helperChain = chains.find(
+        (entry) => entry.symbol === "helperFunction" && entry.file === helperFile,
+      );
+      expect(helperChain).toBeDefined();
+      expect(
+        helperChain?.paths.some(
+          (pathChain) =>
+            pathChain.join("::") === [helperFile, utilsFile].join("::"),
+        ),
+      ).toBe(true);
+
+      const anotherChain = chains.find(
+        (entry) => entry.symbol === "anotherHelper" && entry.file === helperFile,
+      );
+      expect(anotherChain).toBeDefined();
+      // anotherHelper is not re-exported from utils.ts in the fixtures.
+      expect(anotherChain?.paths.length).toBe(0);
+    });
+
+    it("should compact reexport chains using file indices", async () => {
+      const index = await createTestIndex("typescript");
+      const samplePath = path.resolve(
+        process.cwd(),
+        "tests",
+        "samples",
+        "typescript",
+      );
+
+      const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1234567..abcdef0 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,2 +1,2 @@
+ export function helperFunction(): string {
+-  return "Helper function from helpers module";
++  return "Helper function from helpers module!";
+ }
+`;
+
+      const report = await analyzeImpactFromDiff(samplePath, index, {
+        provider: "raw",
+        diffText,
+        compact: true,
+      });
+
+      if (!("files" in report)) {
+        throw new Error("Expected compact impact report");
+      }
+
+      const helperFile = path
+        .join(samplePath, "helpers.ts")
+        .replace(/\\/g, "/");
+      const utilsFile = path.join(samplePath, "utils.ts").replace(/\\/g, "/");
+
+      const chains = report.reexportChains?.chains ?? [];
+      const helperChain = chains.find(
+        (entry) =>
+          entry.symbol === "helperFunction" &&
+          report.files[entry.file] === helperFile,
+      );
+      expect(helperChain).toBeDefined();
+      const resolvedPaths = helperChain?.paths.map((pathChain) =>
+        pathChain.map((fileIndex) => report.files[fileIndex]),
+      );
+      expect(
+        resolvedPaths?.some(
+          (pathChain) =>
+            pathChain.join("::") === [helperFile, utilsFile].join("::"),
+        ),
+      ).toBe(true);
+    });
+
+    it("should include multiple reexport paths and respect depth limits", async () => {
+      const root = path.resolve("temp-impact-reexport-chain-test");
+      if (!fs.existsSync(root)) fs.mkdirSync(root);
+
+      const libFile = path.join(root, "lib.ts").replace(/\\/g, "/");
+      const aFile = path.join(root, "a.ts").replace(/\\/g, "/");
+      const bFile = path.join(root, "b.ts").replace(/\\/g, "/");
+      const indexFile = path.join(root, "index.ts").replace(/\\/g, "/");
+      const cFile = path.join(root, "c.ts").replace(/\\/g, "/");
+      const dFile = path.join(root, "d.ts").replace(/\\/g, "/");
+      const eFile = path.join(root, "e.ts").replace(/\\/g, "/");
+
+      await fsp.writeFile(libFile, `export const foo = 1;`);
+      await fsp.writeFile(aFile, `export { foo } from "./lib";`);
+      await fsp.writeFile(bFile, `export { foo } from "./lib";`);
+      await fsp.writeFile(
+        indexFile,
+        `export * from "./a";\nexport * from "./b";`,
+      );
+      await fsp.writeFile(cFile, `export * from "./index";`);
+      await fsp.writeFile(dFile, `export * from "./c";`);
+      await fsp.writeFile(eFile, `export * from "./d";`);
+
+      try {
+        const index = await buildProjectIndexFromFiles(root, [
+          libFile,
+          aFile,
+          bFile,
+          indexFile,
+          cFile,
+          dFile,
+          eFile,
+        ]);
+
+        const diffText = `diff --git a/lib.ts b/lib.ts
+index 1234567..abcdef0 100644
+--- a/lib.ts
++++ b/lib.ts
+@@ -1,1 +1,1 @@
+-export const foo = 1;
++export const foo = 2;
+`;
+
+        const report = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+        });
+
+        const chain = report.reexportChains?.chains.find(
+          (entry) => entry.symbol === "foo" && entry.file === libFile,
+        );
+        expect(chain).toBeDefined();
+
+        const paths = chain?.paths.map((pathChain) => pathChain.join("::")) ?? [];
+        const rawPaths = chain?.paths ?? [];
+        const expected = [
+          [libFile, aFile],
+          [libFile, bFile],
+          [libFile, aFile, indexFile],
+          [libFile, bFile, indexFile],
+          [libFile, aFile, indexFile, cFile],
+          [libFile, bFile, indexFile, cFile],
+        ].map((pathChain) => pathChain.join("::"));
+
+        for (const expectedPath of expected) {
+          expect(paths).toContain(expectedPath);
+        }
+        expect(rawPaths.some((pathChain) => pathChain.includes(dFile))).toBe(
+          false,
+        );
+        expect(rawPaths.some((pathChain) => pathChain.includes(eFile))).toBe(
+          false,
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
       }
     });
 
