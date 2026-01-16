@@ -33,12 +33,13 @@ describe("Impact Suggestions", () => {
 index 1111111..2222222 100644
 --- a/main.ts
 +++ b/main.ts
-@@ -1,5 +1,7 @@
+@@ -1,5 +1,8 @@
  import { helperFunction } from "./helpers";
 +import { missingExport } from "./helpers";
  
  const result = helperFunction();
 +const missingImportResult = anotherHelper();
++const sharedUtilResult = sharedUtil();
 +const missingDeclarationResult = undeclaredFunction();
 `;
 
@@ -54,6 +55,7 @@ index 1111111..2222222 100644
         suggestion.relatedFile === "helpers.ts",
     );
     expect(missingImport).toBeDefined();
+    expect(missingImport?.confidence).toBe("high");
 
     const missingExport = suggestions.find(
       (suggestion) =>
@@ -62,6 +64,15 @@ index 1111111..2222222 100644
         suggestion.relatedFile === "helpers.ts",
     );
     expect(missingExport).toBeDefined();
+    expect(missingExport?.confidence).toBe("medium");
+
+    const sharedUtilImport = suggestions.find(
+      (suggestion) =>
+        suggestion.kind === "missingImport" &&
+        suggestion.symbol === "sharedUtil",
+    );
+    expect(sharedUtilImport).toBeDefined();
+    expect(sharedUtilImport?.confidence).toBe("low");
 
     const missingDeclaration = suggestions.find(
       (suggestion) =>
@@ -69,6 +80,7 @@ index 1111111..2222222 100644
         suggestion.symbol === "undeclaredFunction",
     );
     expect(missingDeclaration).toBeDefined();
+    expect(missingDeclaration?.confidence).toBe("medium");
   });
 
   it("returns no suggestions when changed lines are valid", async () => {
@@ -93,12 +105,13 @@ index 1111111..2222222 100644
 index 1111111..2222222 100644
 --- a/main.ts
 +++ b/main.ts
-@@ -1,5 +1,7 @@
+@@ -1,5 +1,8 @@
  import { helperFunction } from "./helpers";
 +import { missingExport } from "./helpers";
  
  const result = helperFunction();
 +const missingImportResult = anotherHelper();
++const sharedUtilResult = sharedUtil();
 +const missingDeclarationResult = undeclaredFunction();
 `;
 

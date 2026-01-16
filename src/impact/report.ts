@@ -291,6 +291,7 @@ function buildCompactReport(
             ? { relatedFile: fileIndex.get(suggestion.relatedFile)! }
             : {}),
           ...(suggestion.details ? { details: suggestion.details } : {}),
+          confidence: suggestion.confidence,
         }))
       : undefined;
 

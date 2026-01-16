@@ -9,7 +9,12 @@ import type {
 } from "../indexer.js";
 import { goToDefinition } from "../indexer.js";
 import type { LanguageSupport } from "../languages.js";
-import type { FileChange, ImpactOptions, ImpactSuggestion } from "./types.js";
+import type {
+  FileChange,
+  ImpactOptions,
+  ImpactSuggestion,
+  ImpactSuggestionConfidence,
+} from "./types.js";
 
 type ReferenceCandidate = {
   name: string;
@@ -20,6 +25,25 @@ type ExportLookup = {
   exportNamesByFile: Map<FileId, Set<string>>;
   filesByExportName: Map<string, Set<FileId>>;
 };
+
+// Symbol names that are so generic they should be treated with lower confidence.
+const COMMON_SYMBOLS = new Set<string>([
+  "default",
+  "index",
+  "utils",
+  "util",
+  "config",
+  "configs",
+  "constants",
+  "consts",
+  "helper",
+  "helpers",
+  "common",
+  "shared",
+  "data",
+  "handler",
+  "handlers",
+]);
 
 export async function collectImpactSuggestions(
   index: ProjectIndex,
@@ -39,11 +63,13 @@ export async function collectImpactSuggestions(
     const reportFile = toProjectRelative(projectRoot, absoluteFile);
     const mod = index.byFile.get(absoluteFile);
     const importedLocals = collectImportedLocals(mod);
+    const importedFiles = collectImportedFiles(mod);
     const missingExportSuggestions = collectMissingExportSuggestions(
       mod,
       exportLookup,
       reportFile,
       projectRoot,
+      importedFiles,
     );
 
     for (const suggestion of missingExportSuggestions) {
@@ -88,6 +114,11 @@ export async function collectImpactSuggestions(
           absoluteFile,
           filteredCandidates,
         );
+        const confidence = determineSuggestionConfidence({
+          symbol: candidate.name,
+          exportCandidateCount: filteredCandidates.length,
+          importedCandidate: importedFiles.has(relatedFile),
+        });
         pushUniqueSuggestion(output, seen, {
           file: reportFile,
           range: candidate.range,
@@ -95,16 +126,23 @@ export async function collectImpactSuggestions(
           symbol: candidate.name,
           relatedFile: toProjectRelative(projectRoot, relatedFile),
           details: `No import found for ${candidate.name}.`,
+          confidence,
         });
         continue;
       }
 
+      const confidence = determineSuggestionConfidence({
+        symbol: candidate.name,
+        exportCandidateCount: 0,
+        importedCandidate: false,
+      });
       pushUniqueSuggestion(output, seen, {
         file: reportFile,
         range: candidate.range,
         kind: "missingDeclaration",
         symbol: candidate.name,
         details: `No declaration found for ${candidate.name}.`,
+        confidence,
       });
     }
   }
@@ -165,11 +203,42 @@ function getImportLocal(binding: ImportBinding): string | null {
   return null;
 }
 
+function collectImportedFiles(mod?: ModuleIndex): Set<FileId> {
+  const files = new Set<FileId>();
+  if (!mod) return files;
+  for (const binding of mod.imports) {
+    if (binding.resolved && typeof binding.resolved === "string") {
+      files.add(binding.resolved);
+    }
+  }
+  return files;
+}
+
+function determineSuggestionConfidence({
+  symbol,
+  exportCandidateCount,
+  importedCandidate,
+}: {
+  symbol?: string;
+  exportCandidateCount: number;
+  importedCandidate: boolean;
+}): ImpactSuggestionConfidence {
+  if (symbol && isCommonSymbolName(symbol)) return "low";
+  if (exportCandidateCount >= 3) return "low";
+  if (exportCandidateCount === 1 && importedCandidate) return "high";
+  return "medium";
+}
+
+function isCommonSymbolName(symbol: string): boolean {
+  return COMMON_SYMBOLS.has(symbol);
+}
+
 function collectMissingExportSuggestions(
   mod: ModuleIndex | undefined,
   lookup: ExportLookup,
   reportFile: FileId,
   projectRoot: string,
+  importedFiles: Set<FileId>,
 ): ImpactSuggestion[] {
   if (!mod) return [];
   const suggestions: ImpactSuggestion[] = [];
@@ -183,12 +252,24 @@ function collectMissingExportSuggestions(
 
     if (binding.kind === "named") {
       if (!exportedNames.has(binding.imported)) {
+        const exportCandidates =
+          lookup.filesByExportName.get(binding.imported) ?? new Set<FileId>();
+        const candidateList = [...exportCandidates];
+        const singleCandidate =
+          candidateList.length === 1 ? candidateList[0] : undefined;
+        const confidence = determineSuggestionConfidence({
+          symbol: binding.imported,
+          exportCandidateCount: candidateList.length,
+          importedCandidate:
+            singleCandidate !== undefined && importedFiles.has(singleCandidate),
+        });
         suggestions.push({
           file: reportFile,
           kind: "missingExport",
           symbol: binding.imported,
           relatedFile: toProjectRelative(projectRoot, binding.resolved),
           details: `Export ${binding.imported} not found in ${binding.resolved}.`,
+          confidence,
         });
       }
       continue;
@@ -196,12 +277,24 @@ function collectMissingExportSuggestions(
 
     if (binding.kind === "default") {
       if (!exportedNames.has("default")) {
+        const exportCandidates =
+          lookup.filesByExportName.get("default") ?? new Set<FileId>();
+        const candidateList = [...exportCandidates];
+        const singleCandidate =
+          candidateList.length === 1 ? candidateList[0] : undefined;
+        const confidence = determineSuggestionConfidence({
+          symbol: "default",
+          exportCandidateCount: candidateList.length,
+          importedCandidate:
+            singleCandidate !== undefined && importedFiles.has(singleCandidate),
+        });
         suggestions.push({
           file: reportFile,
           kind: "missingExport",
           symbol: "default",
           relatedFile: toProjectRelative(projectRoot, binding.resolved),
           details: `Default export not found in ${binding.resolved}.`,
+          confidence,
         });
       }
     }
