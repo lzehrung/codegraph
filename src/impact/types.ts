@@ -50,6 +50,8 @@ export type ImpactSuggestionKind =
   | "missingExport"
   | "missingDeclaration";
 
+export type ImpactSuggestionConfidence = "high" | "medium" | "low";
+
 export type ImpactSuggestion = {
   file: FileId;
   range?: Range;
@@ -57,6 +59,7 @@ export type ImpactSuggestion = {
   symbol?: string;
   relatedFile?: FileId;
   details?: string;
+  confidence: ImpactSuggestionConfidence;
 };
 
 export type ExportSummaryEntry = {
@@ -200,6 +203,7 @@ export type CompactImpactReport = {
     symbol?: string;
     relatedFile?: number;
     details?: string;
+    confidence: ImpactSuggestionConfidence;
   }>;
   exportSummary?: Array<{
     file: number;
