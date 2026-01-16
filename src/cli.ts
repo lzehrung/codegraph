@@ -425,6 +425,19 @@ function ensureImpactReport(
         : undefined,
     details: suggestion.details,
   }));
+  const exportSummary = report.exportSummary?.map((entry) => ({
+    file: resolveFilePath(entry.file),
+    symbols: entry.symbols,
+  }));
+  const topImpacts = report.topImpacts?.map((item) => ({
+    file: resolveFilePath(item.file),
+    symbols: item.symbols,
+    reasons: item.reasons,
+    severity: item.severity,
+    depth: item.depth,
+    typeOnly: item.typeOnly,
+    explain: item.explain,
+  }));
   const fileEdges = report.graph.fileEdges.map((edge) => ({
     from: resolveFilePath(edge.from),
     to: resolveFilePath(edge.to),
@@ -440,6 +453,8 @@ function ensureImpactReport(
     changedSymbols,
     impacted,
     ...(suggestions ? { suggestions } : {}),
+    ...(exportSummary ? { exportSummary } : {}),
+    ...(topImpacts ? { topImpacts } : {}),
     graph: {
       fileEdges,
       symbolEdges,

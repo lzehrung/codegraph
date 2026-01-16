@@ -8,6 +8,8 @@ import type {
   CompactImpactReport,
   ImpactOptions,
   ImpactSuggestion,
+  ExportSummaryEntry,
+  ImpactTopItem,
 } from "./types.js";
 import { buildSymbolGraphDetailed } from "../graphs.js";
 
@@ -19,6 +21,8 @@ export async function buildImpactReport(
   suggestions: ImpactSuggestion[],
   options: Partial<ImpactOptions> & { warning?: string | undefined } = {},
 ): Promise<ImpactReport | CompactImpactReport> {
+  const exportSummary = buildExportSummary(changedSymbols);
+  const topImpacts = buildTopImpacts(impactedItems);
   const newFileRangeForHunk = (hunk: FileChange["hunks"][number]) => {
     let newLine = hunk.newStart;
     let lastNewLine = newLine - 1;
@@ -105,6 +109,8 @@ export async function buildImpactReport(
       changedSymbols,
       impactedItems,
       suggestions,
+      exportSummary,
+      topImpacts,
       fileEdges,
       symbolEdges,
     );
@@ -117,6 +123,8 @@ export async function buildImpactReport(
     changedSymbols,
     impacted: impactedItems,
     ...(suggestions.length > 0 ? { suggestions } : {}),
+    ...(exportSummary.length > 0 ? { exportSummary } : {}),
+    ...(topImpacts.length > 0 ? { topImpacts } : {}),
     graph: {
       fileEdges,
       symbolEdges,
@@ -135,6 +143,8 @@ function buildCompactReport(
   changedSymbols: ChangedSymbol[],
   impactedItems: ImpactItem[],
   suggestions: ImpactSuggestion[],
+  exportSummary: ExportSummaryEntry[],
+  topImpacts: ImpactTopItem[],
   fileEdges: Array<{
     from: FileId;
     to: FileId;
@@ -253,6 +263,27 @@ function buildCompactReport(
         }))
       : undefined;
 
+  const compactExportSummary =
+    exportSummary.length > 0
+      ? exportSummary.map((entry) => ({
+          file: fileIndex.get(entry.file)!,
+          symbols: entry.symbols,
+        }))
+      : undefined;
+
+  const compactTopImpacts =
+    topImpacts.length > 0
+      ? topImpacts.map((item) => ({
+          file: fileIndex.get(item.file)!,
+          symbols: item.symbols,
+          reasons: item.reasons,
+          severity: item.severity,
+          depth: item.depth,
+          typeOnly: item.typeOnly,
+          explain: item.explain,
+        }))
+      : undefined;
+
   const compactFileEdges = fileEdges.map((fe) => {
     const edge: { from: number; to: number; typeOnly?: boolean } = {
       from: fileIndex.get(fe.from)!,
@@ -270,9 +301,41 @@ function buildCompactReport(
     changedSymbols: compactChangedSymbols,
     impacted: compactImpacted,
     ...(compactSuggestions ? { suggestions: compactSuggestions } : {}),
+    ...(compactExportSummary ? { exportSummary: compactExportSummary } : {}),
+    ...(compactTopImpacts ? { topImpacts: compactTopImpacts } : {}),
     graph: {
       fileEdges: compactFileEdges,
       symbolEdges,
     },
   };
+}
+
+const TOP_IMPACTS_LIMIT = 10;
+
+function buildExportSummary(
+  changedSymbols: ChangedSymbol[],
+): ExportSummaryEntry[] {
+  const byFile = new Map<FileId, Set<string>>();
+  for (const symbol of changedSymbols) {
+    if (!symbol.exported) continue;
+    const existing = byFile.get(symbol.file) ?? new Set<string>();
+    existing.add(symbol.name);
+    byFile.set(symbol.file, existing);
+  }
+  return [...byFile.entries()].map(([file, symbols]) => ({
+    file,
+    symbols: [...symbols].sort(),
+  }));
+}
+
+function buildTopImpacts(impactedItems: ImpactItem[]): ImpactTopItem[] {
+  return impactedItems.slice(0, TOP_IMPACTS_LIMIT).map((item) => ({
+    file: item.file,
+    symbols: item.symbols,
+    reasons: item.reasons,
+    severity: item.severity,
+    depth: item.depth,
+    typeOnly: item.typeOnly,
+    explain: item.explain,
+  }));
 }
