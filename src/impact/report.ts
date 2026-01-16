@@ -418,7 +418,14 @@ function buildReexportChains(
       ) {
         continue;
       }
-      const sourceFile = normalizePath(entry.fromModule);
+      let resolvedSourcePath = entry.fromModule;
+      if (!path.isAbsolute(entry.fromModule) && entry.fromModule.startsWith(".")) {
+        resolvedSourcePath = path.resolve(
+          path.dirname(file),
+          entry.fromModule,
+        );
+      }
+      const sourceFile = normalizePath(resolvedSourcePath);
       const edges = reexportsBySource.get(sourceFile) ?? [];
       const edge: ReexportEdge = {
         exporter: file,
@@ -454,6 +461,8 @@ function buildReexportChains(
       const current = stack.pop()!;
       const edges = reexportsBySource.get(current.file) ?? [];
       for (const edge of edges) {
+        // Only filter named re-exports by symbol name. Export-star and namespace
+        // re-exports include all symbols from the source module.
         if (
           edge.type === "reexport" &&
           edge.sourceSpecifier !== symbol.name
