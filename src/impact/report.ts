@@ -418,7 +418,7 @@ function buildReexportChains(
       ) {
         continue;
       }
-      const sourceFile = entry.fromModule.replace(/\\/g, "/");
+      const sourceFile = normalizePath(entry.fromModule);
       const edges = reexportsBySource.get(sourceFile) ?? [];
       const edge: ReexportEdge = {
         exporter: file,
@@ -436,13 +436,22 @@ function buildReexportChains(
   for (const symbol of exportedSymbols) {
     const paths: FileId[][] = [];
     const seenPaths = new Set<string>();
-    const stack: Array<{ file: FileId; path: FileId[]; depth: number }> = [
-      { file: symbol.file, path: [symbol.file], depth: 0 },
+    const stack: Array<{
+      file: FileId;
+      path: FileId[];
+      pathSet: Set<FileId>;
+      depth: number;
+    }> = [
+      {
+        file: symbol.file,
+        path: [symbol.file],
+        pathSet: new Set([symbol.file]),
+        depth: 0,
+      },
     ];
 
     while (stack.length > 0) {
-      const current = stack.pop();
-      if (!current) continue;
+      const current = stack.pop()!;
       const edges = reexportsBySource.get(current.file) ?? [];
       for (const edge of edges) {
         if (
@@ -451,10 +460,12 @@ function buildReexportChains(
         ) {
           continue;
         }
-        if (current.path.includes(edge.exporter)) {
+        if (current.pathSet.has(edge.exporter)) {
           continue;
         }
         const nextPath = [...current.path, edge.exporter];
+        const nextPathSet = new Set(current.pathSet);
+        nextPathSet.add(edge.exporter);
         const key = nextPath.join("::");
         if (!seenPaths.has(key)) {
           paths.push(nextPath);
@@ -464,6 +475,7 @@ function buildReexportChains(
           stack.push({
             file: edge.exporter,
             path: nextPath,
+            pathSet: nextPathSet,
             depth: current.depth + 1,
           });
         }

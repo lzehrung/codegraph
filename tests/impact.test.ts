@@ -250,6 +250,7 @@ index 1234567..abcdef0 100644
         (entry) => entry.symbol === "anotherHelper" && entry.file === helperFile,
       );
       expect(anotherChain).toBeDefined();
+      // anotherHelper is not re-exported from utils.ts in the fixtures.
       expect(anotherChain?.paths.length).toBe(0);
     });
 
