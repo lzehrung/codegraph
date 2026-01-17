@@ -158,6 +158,10 @@ const ensureSchema = (db: BetterSqliteDatabase) => {
       name: "idx_symbol_edges_label_from",
       sql: "CREATE INDEX idx_symbol_edges_label_from ON symbol_edges(label, from_id);",
     },
+    {
+      name: "idx_symbol_edges_label_from_to",
+      sql: "CREATE INDEX idx_symbol_edges_label_from_to ON symbol_edges(label, from_id, to_id);",
+    },
   ];
 
   const indexRows = db
@@ -292,10 +296,10 @@ const bfsReverseDependencies = (
 const collectSymbolIdsForFiles = (
   symbolGraph: SymbolGraph,
   changedSet: Set<string>,
-): string[] => {
-  const ids: string[] = [];
+): Set<string> => {
+  const ids = new Set<string>();
   for (const [id, node] of symbolGraph.nodes.entries()) {
-    if (changedSet.has(node.file)) ids.push(id);
+    if (changedSet.has(node.file)) ids.add(id);
   }
   return ids;
 };
@@ -329,6 +333,24 @@ const insertFiles = (
   for (const file of files) {
     stmt.run([file.path, file.isExternal ? 1 : 0]);
   }
+};
+
+const dedupeFileEntries = (
+  entries: Array<{ path: string; isExternal: boolean }>,
+): Array<{ path: string; isExternal: boolean }> => {
+  const unique = new Map<string, boolean>();
+  for (const entry of entries) {
+    const existing = unique.get(entry.path);
+    if (existing === undefined) {
+      unique.set(entry.path, entry.isExternal);
+    } else if (entry.isExternal) {
+      unique.set(entry.path, true);
+    }
+  }
+  return [...unique.entries()].map(([path, isExternal]) => ({
+    path,
+    isExternal,
+  }));
 };
 
 const insertSymbols = (db: BetterSqliteDatabase, nodes: SymbolNode[]) => {
@@ -437,7 +459,7 @@ export async function writeGraphSqlite(
         fileEntries.push({ path: edge.to.path, isExternal: false });
       }
     }
-    insertFiles(db, fileEntries);
+    insertFiles(db, dedupeFileEntries(fileEntries));
     insertFileEdges(db, options.fileGraph.edges);
     insertSymbols(db, [...options.symbolGraph.nodes.values()]);
     insertSymbolEdges(db, options.symbolGraph.edges);
@@ -472,13 +494,13 @@ export async function updateGraphSqlite(
         fileEntries.push({ path: edge.to.path, isExternal: false });
       }
     }
-    insertFiles(db, fileEntries);
+    insertFiles(db, dedupeFileEntries(fileEntries));
 
     const changedSymbolIds = collectSymbolIdsForFiles(
       options.symbolGraph,
       changedSet,
     );
-    const changedSymbolNodes = changedSymbolIds
+    const changedSymbolNodes = [...changedSymbolIds]
       .map((id) => options.symbolGraph.nodes.get(id))
       .filter((node): node is SymbolNode => !!node);
     insertSymbols(db, changedSymbolNodes);

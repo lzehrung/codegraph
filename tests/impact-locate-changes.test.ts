@@ -28,7 +28,9 @@ describe('Impact: changed-lines → symbol mapping', () => {
 
     const { locateChangedSymbols } = await import('../src/impact/map.js');
     const changed = locateChangedSymbols(index, file, hunks);
-    expect(changed.some((s: ChangedSymbol) => s.name === target.localName)).toBe(true);
+    expect(
+      changed.some((s: ChangedSymbol) => s.name === target.localName),
+    ).toBe(true);
   });
 
   it('handles multi-hunk edits correctly (no off-by-one)', async () => {
@@ -53,7 +55,9 @@ describe('Impact: changed-lines → symbol mapping', () => {
     const { locateChangedSymbols } = await import('../src/impact/map.js');
     const changed = locateChangedSymbols(index, file, hunks);
     for (const t of targets) {
-      expect(changed.some((s: ChangedSymbol) => s.name === t.localName)).toBe(true);
+      expect(
+        changed.some((s: ChangedSymbol) => s.name === t.localName),
+      ).toBe(true);
     }
   });
 
@@ -75,6 +79,8 @@ describe('Impact: changed-lines → symbol mapping', () => {
 
     const { locateChangedSymbols } = await import('../src/impact/map.js');
     const changed = locateChangedSymbols(index, file, hunks);
-    expect(changed.some((s: ChangedSymbol) => s.name === target.localName)).toBe(true);
+    expect(
+      changed.some((s: ChangedSymbol) => s.name === target.localName),
+    ).toBe(true);
   });
 });
