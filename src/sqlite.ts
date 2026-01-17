@@ -81,13 +81,18 @@ const ensureSchema = (db: BetterSqliteDatabase) => {
     CREATE INDEX IF NOT EXISTS idx_files_external ON files(is_external);
     CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file);
     CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
+    CREATE INDEX IF NOT EXISTS idx_symbols_lower_name ON symbols(lower(name));
     CREATE INDEX IF NOT EXISTS idx_symbols_kind ON symbols(kind);
     CREATE INDEX IF NOT EXISTS idx_symbols_name_kind ON symbols(name, kind);
     CREATE INDEX IF NOT EXISTS idx_symbols_file_kind ON symbols(file, kind);
+    CREATE INDEX IF NOT EXISTS idx_symbols_kind_file ON symbols(kind, file);
+    CREATE INDEX IF NOT EXISTS idx_symbols_kind_id ON symbols(kind, id);
     CREATE INDEX IF NOT EXISTS idx_symbols_kind_complexity ON symbols(kind, complexity DESC);
     CREATE INDEX IF NOT EXISTS idx_file_edges_from ON file_edges(from_path);
     CREATE INDEX IF NOT EXISTS idx_file_edges_to ON file_edges(to_path);
     CREATE INDEX IF NOT EXISTS idx_file_edges_type ON file_edges(to_type);
+    CREATE INDEX IF NOT EXISTS idx_file_edges_from_file ON file_edges(from_path, to_path) WHERE to_type = 'file';
+    CREATE INDEX IF NOT EXISTS idx_file_edges_to_file ON file_edges(to_path, from_path) WHERE to_type = 'file';
     CREATE INDEX IF NOT EXISTS idx_symbol_edges_from ON symbol_edges(from_id);
     CREATE INDEX IF NOT EXISTS idx_symbol_edges_to ON symbol_edges(to_id);
     CREATE INDEX IF NOT EXISTS idx_symbol_edges_label ON symbol_edges(label);
@@ -127,15 +132,20 @@ const execRowsParams = (
   return normalized;
 };
 
-const loadFileEdges = (db: BetterSqliteDatabase) =>
-  execRows(
-    db,
-    "SELECT from_path, to_path, to_type FROM file_edges;",
-  ).map((row) => ({
+const loadFileEdges = (
+  db: BetterSqliteDatabase,
+  toType?: string,
+) => {
+  const sql = toType
+    ? "SELECT from_path, to_path, to_type FROM file_edges WHERE to_type = ?;"
+    : "SELECT from_path, to_path, to_type FROM file_edges;";
+  const rows = toType ? execRowsParams(db, sql, [toType]) : execRows(db, sql);
+  return rows.map((row) => ({
     from: String(row[0]),
     to: String(row[1]),
     type: String(row[2]),
   }));
+};
 
 const bfsDependencies = (edges: Array<{ from: string; to: string }>, start: string) => {
   const adj = new Map<string, string[]>();
@@ -330,21 +340,25 @@ export async function writeGraphSqlite(
   const { db } = await readOrCreateDb(options.outputPath);
   ensureSchema(db);
 
-  const fileEntries: Array<{ path: string; isExternal: boolean }> = [];
-  for (const file of options.fileGraph.nodes) {
-    fileEntries.push({ path: file, isExternal: false });
-  }
-  for (const edge of options.fileGraph.edges) {
-    if (edge.to.type === "external") {
-      fileEntries.push({ path: edge.to.name, isExternal: true });
-    } else {
-      fileEntries.push({ path: edge.to.path, isExternal: false });
+  const runInsert = db.transaction(() => {
+    const fileEntries: Array<{ path: string; isExternal: boolean }> = [];
+    for (const file of options.fileGraph.nodes) {
+      fileEntries.push({ path: file, isExternal: false });
     }
-  }
-  insertFiles(db, fileEntries);
-  insertFileEdges(db, options.fileGraph.edges);
-  insertSymbols(db, [...options.symbolGraph.nodes.values()]);
-  insertSymbolEdges(db, options.symbolGraph.edges);
+    for (const edge of options.fileGraph.edges) {
+      if (edge.to.type === "external") {
+        fileEntries.push({ path: edge.to.name, isExternal: true });
+      } else {
+        fileEntries.push({ path: edge.to.path, isExternal: false });
+      }
+    }
+    insertFiles(db, fileEntries);
+    insertFileEdges(db, options.fileGraph.edges);
+    insertSymbols(db, [...options.symbolGraph.nodes.values()]);
+    insertSymbolEdges(db, options.symbolGraph.edges);
+  });
+  runInsert();
+  db.exec("ANALYZE;");
   db.close();
 }
 
@@ -354,43 +368,47 @@ export async function updateGraphSqlite(
   const { db } = await readOrCreateDb(options.outputPath);
   ensureSchema(db);
 
-  const changedSet = new Set(options.changedFiles);
-  const changedFiles = [...changedSet];
-  const removedSymbolIds = readSymbolIdsForFiles(db, changedFiles);
-  deleteBySymbolIds(db, removedSymbolIds);
-  deleteFileEdgesForFiles(db, changedFiles);
+  const runUpdate = db.transaction(() => {
+    const changedSet = new Set(options.changedFiles);
+    const changedFiles = [...changedSet];
+    const removedSymbolIds = readSymbolIdsForFiles(db, changedFiles);
+    deleteBySymbolIds(db, removedSymbolIds);
+    deleteFileEdgesForFiles(db, changedFiles);
 
-  const fileEntries: Array<{ path: string; isExternal: boolean }> = [];
-  for (const file of changedFiles) {
-    fileEntries.push({ path: file, isExternal: false });
-  }
-  for (const edge of options.fileGraph.edges) {
-    if (!changedSet.has(edge.from)) continue;
-    if (edge.to.type === "external") {
-      fileEntries.push({ path: edge.to.name, isExternal: true });
-    } else {
-      fileEntries.push({ path: edge.to.path, isExternal: false });
+    const fileEntries: Array<{ path: string; isExternal: boolean }> = [];
+    for (const file of changedFiles) {
+      fileEntries.push({ path: file, isExternal: false });
     }
-  }
-  insertFiles(db, fileEntries);
+    for (const edge of options.fileGraph.edges) {
+      if (!changedSet.has(edge.from)) continue;
+      if (edge.to.type === "external") {
+        fileEntries.push({ path: edge.to.name, isExternal: true });
+      } else {
+        fileEntries.push({ path: edge.to.path, isExternal: false });
+      }
+    }
+    insertFiles(db, fileEntries);
 
-  const changedSymbolIds = collectSymbolIdsForFiles(
-    options.symbolGraph,
-    changedSet,
-  );
-  const changedSymbolNodes = changedSymbolIds
-    .map((id) => options.symbolGraph.nodes.get(id))
-    .filter((node): node is SymbolNode => !!node);
-  insertSymbols(db, changedSymbolNodes);
+    const changedSymbolIds = collectSymbolIdsForFiles(
+      options.symbolGraph,
+      changedSet,
+    );
+    const changedSymbolNodes = changedSymbolIds
+      .map((id) => options.symbolGraph.nodes.get(id))
+      .filter((node): node is SymbolNode => !!node);
+    insertSymbols(db, changedSymbolNodes);
 
-  const fileEdges = fileGraphEdgesForFiles(options.fileGraph, changedSet);
-  insertFileEdges(db, fileEdges);
+    const fileEdges = fileGraphEdgesForFiles(options.fileGraph, changedSet);
+    insertFileEdges(db, fileEdges);
 
-  const symbolEdges = symbolGraphEdgesForFiles(
-    options.symbolGraph,
-    changedSet,
-  );
-  insertSymbolEdges(db, symbolEdges);
+    const symbolEdges = symbolGraphEdgesForFiles(
+      options.symbolGraph,
+      changedSet,
+    );
+    insertSymbolEdges(db, symbolEdges);
+  });
+  runUpdate();
+  db.exec("ANALYZE;");
   db.close();
 }
 
@@ -441,9 +459,10 @@ export async function queryGraphSqlite(
         db.close();
         return { kind: parsed.kind, results: [] };
       }
-      const edges = loadFileEdges(db)
-        .filter((edge) => edge.type === "file")
-        .map((edge) => ({ from: edge.from, to: edge.to }));
+      const edges = loadFileEdges(db, "file").map((edge) => ({
+        from: edge.from,
+        to: edge.to,
+      }));
       const chain = bfsDependencies(edges, startFile);
       db.close();
       return { kind: parsed.kind, results: chain };
@@ -513,9 +532,10 @@ export async function queryGraphSqlite(
       };
     }
     case "affectedFunctionsForModule": {
-      const edges = loadFileEdges(db)
-        .filter((edge) => edge.type === "file")
-        .map((edge) => ({ from: edge.from, to: edge.to }));
+      const edges = loadFileEdges(db, "file").map((edge) => ({
+        from: edge.from,
+        to: edge.to,
+      }));
       const reverseDeps = bfsReverseDependencies(edges, parsed.modulePath);
       const impactedFiles = [parsed.modulePath, ...reverseDeps];
       if (impactedFiles.length === 0) {
