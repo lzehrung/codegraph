@@ -68,6 +68,7 @@ export function run() { helper(); new Widget(); }
     expect(indexes).toContain("idx_symbol_edges_from");
     expect(indexes).toContain("idx_symbol_edges_label_to");
     expect(indexes).toContain("idx_symbol_edges_label_from");
+    expect(indexes).toContain("idx_symbol_edges_label_from_to");
     expect(indexes).toContain("idx_file_edges_from");
 
     const symbols = dbQuery(

@@ -5,6 +5,7 @@ import type {
   ImpactReport,
   CompactImpactReport,
   ImpactOptions,
+  ChangedSymbol,
 } from "./types.js";
 import { getDiff } from "./providers/base.js";
 import { locateChangedSymbols } from "./map.js";
@@ -32,7 +33,7 @@ export async function analyzeImpactFromDiff(
       : diff.files;
 
   // Map all changed files to changed symbols
-  let changedSymbols: any[] = [];
+  let changedSymbols: ChangedSymbol[] = [];
   for (const fileChange of filteredFiles) {
     const absPath = path.isAbsolute(fileChange.path)
       ? fileChange.path.replace(/\\/g, "/")

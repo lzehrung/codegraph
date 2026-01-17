@@ -371,7 +371,7 @@ The SQLite export is a **first-class query interface** for agent workflows. The 
 **Indexes (most relevant)**
 - `idx_symbols_name`, `idx_symbols_kind`, `idx_symbols_name_kind`, `idx_symbols_file_kind`, `idx_symbols_kind_complexity`
 - `idx_file_edges_from`, `idx_file_edges_to`, `idx_file_edges_type`
-- `idx_symbol_edges_from`, `idx_symbol_edges_to`, `idx_symbol_edges_label`, `idx_symbol_edges_label_to`, `idx_symbol_edges_label_from`
+- `idx_symbol_edges_from`, `idx_symbol_edges_to`, `idx_symbol_edges_label`, `idx_symbol_edges_label_to`, `idx_symbol_edges_label_from`, `idx_symbol_edges_label_from_to`
 
 **Example SQL**
 ```sql
