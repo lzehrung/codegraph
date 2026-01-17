@@ -655,6 +655,18 @@ console.log(manifests);
 
 ```ts
 import { listProjectFiles, collectGraph } from 'codegraph';
+
+const files = await listProjectFiles(root);
+const graph = await collectGraph(root, files);
+
+type EdgeTo = { type: 'file'; path: string } | { type: 'external'; name: string };
+const toRef = (t: EdgeTo) => (t.type === 'file' ? t.path : t.name);
+
+for (const e of graph.edges) {
+  console.log(`${e.from} -> ${toRef(e.to)}  (${e.raw})`);
+}
+```
+
 Build project index from explicit file list (multi-root):
 
 ```ts
@@ -669,17 +681,6 @@ const files = [
 
 const index = await buildProjectIndexFromFiles(root, Array.from(new Set(files)));
 console.log({ files: index.byFile.size, edges: index.graph.edges.length });
-```
-
-const files = await listProjectFiles(root);
-const graph = await collectGraph(root, files);
-
-type EdgeTo = { type: 'file'; path: string } | { type: 'external'; name: string };
-const toRef = (t: EdgeTo) => (t.type === 'file' ? t.path : t.name);
-
-for (const e of graph.edges) {
-  console.log(`${e.from} -> ${toRef(e.to)}  (${e.raw})`);
-}
 ```
 
 Produce a Mermaid diagram string (for UI or chat rendering):
