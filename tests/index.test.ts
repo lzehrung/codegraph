@@ -11,7 +11,7 @@ describe("Project Indexing", () => {
     it("should index all TypeScript files", async () => {
       const index = await createTestIndex("typescript");
 
-      expectModuleCount(index, 3);
+      expectModuleCount(index, 4);
 
       const samplePath = path.resolve(
         process.cwd(),
@@ -30,6 +30,10 @@ describe("Project Indexing", () => {
       expectFileInIndex(
         index,
         path.join(samplePath, "helpers.ts").replace(/\\/g, "/")
+      );
+      expectFileInIndex(
+        index,
+        path.join(samplePath, "tsconfig.json").replace(/\\/g, "/")
       );
     });
 
@@ -136,7 +140,7 @@ describe("Project Indexing", () => {
     it("should index all JavaScript files", async () => {
       const index = await createTestIndex("javascript");
 
-      expectModuleCount(index, 5);
+      expectModuleCount(index, 6);
 
       const samplePath = path.resolve(
         process.cwd(),
@@ -163,6 +167,10 @@ describe("Project Indexing", () => {
       expectFileInIndex(
         index,
         path.join(samplePath, "mixed.js").replace(/\\/g, "/")
+      );
+      expectFileInIndex(
+        index,
+        path.join(samplePath, "package.json").replace(/\\/g, "/")
       );
     });
 
