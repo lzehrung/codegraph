@@ -50,6 +50,8 @@ export const DEFAULT_PROJECT_MANIFESTS = [
   "pnpm-lock.yaml",
   "yarn.lock",
   "bun.lockb",
+  "tsconfig.json",
+  "jsconfig.json",
   "requirements.txt",
   "requirements.in",
   "pyproject.toml",
