@@ -12,8 +12,16 @@ export function locateChangedSymbols(
   file: FileId,
   hunks: FileChange["hunks"],
 ): ChangedSymbol[] {
+  return locateChangedSymbolsWithLines(index, file, hunks).changedSymbols;
+}
+
+export function locateChangedSymbolsWithLines(
+  index: ProjectIndex,
+  file: FileId,
+  hunks: FileChange["hunks"],
+): { changedSymbols: ChangedSymbol[]; changedLines: Set<number> } {
   const parsedEntry = index.parsed?.get(file);
-  if (!parsedEntry) return [];
+  if (!parsedEntry) return { changedSymbols: [], changedLines: new Set() };
 
   const { source, tree } = parsedEntry;
   const sup = parsedEntry.sup;
@@ -21,24 +29,7 @@ export function locateChangedSymbols(
 
   // Collect changed line numbers in the new file view.
   // Track deletions by mapping them to the current new-line position.
-  const changedLines = new Set<number>();
-  for (const hunk of hunks) {
-    let oldLine = hunk.oldStart;
-    let newLine = hunk.newStart;
-    for (const line of hunk.lines) {
-      if (line.startsWith(" ")) {
-        oldLine++;
-        newLine++;
-      } else if (line.startsWith("+")) {
-        changedLines.add(newLine);
-        newLine++;
-      } else if (line.startsWith("-")) {
-        const mappedLine = newLine > 0 ? newLine : oldLine;
-        changedLines.add(mappedLine);
-        oldLine++;
-      }
-    }
-  }
+  const changedLines = collectChangedLines(hunks);
 
   // Find AST nodes that overlap with changed lines
   const changedNodes = findNodesInLines(tree, changedLines);
@@ -71,37 +62,22 @@ export function locateChangedSymbols(
     }
   }
 
-  return changedSymbols;
+  return { changedSymbols, changedLines };
 }
 
 export function mapChangedLinesToSymbols(
   index: ProjectIndex,
   file: FileId,
   hunks: FileChange["hunks"],
+  changedLinesOverride?: Set<number>,
 ): Map<SymbolHandle, Set<number>> {
   const parsedEntry = index.parsed?.get(file);
   if (!parsedEntry) return new Map();
 
   const { source, tree } = parsedEntry;
   const sup = parsedEntry.sup;
-  const changedLines = new Set<number>();
-  for (const hunk of hunks) {
-    let oldLine = hunk.oldStart;
-    let newLine = hunk.newStart;
-    for (const line of hunk.lines) {
-      if (line.startsWith(" ")) {
-        oldLine++;
-        newLine++;
-      } else if (line.startsWith("+")) {
-        changedLines.add(newLine);
-        newLine++;
-      } else if (line.startsWith("-")) {
-        const mappedLine = newLine > 0 ? newLine : oldLine;
-        changedLines.add(mappedLine);
-        oldLine++;
-      }
-    }
-  }
+  const changedLines =
+    changedLinesOverride ?? collectChangedLines(hunks);
 
   const nodes = findNodesInLines(tree, changedLines);
   const linesByHandle = new Map<SymbolHandle, Set<number>>();
@@ -154,6 +130,28 @@ function findNodesInLines(tree: any, changedLines: Set<number>): any[] {
 
   walk(tree.rootNode);
   return nodes;
+}
+
+function collectChangedLines(hunks: FileChange["hunks"]): Set<number> {
+  const changedLines = new Set<number>();
+  for (const hunk of hunks) {
+    let oldLine = hunk.oldStart;
+    let newLine = hunk.newStart;
+    for (const line of hunk.lines) {
+      if (line.startsWith(" ")) {
+        oldLine++;
+        newLine++;
+      } else if (line.startsWith("+")) {
+        changedLines.add(newLine);
+        newLine++;
+      } else if (line.startsWith("-")) {
+        const mappedLine = newLine > 0 ? newLine : oldLine;
+        changedLines.add(mappedLine);
+        oldLine++;
+      }
+    }
+  }
+  return changedLines;
 }
 
 type NodeClassification = {
