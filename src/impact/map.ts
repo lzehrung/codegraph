@@ -132,7 +132,9 @@ function findNodesInLines(tree: any, changedLines: Set<number>): any[] {
   return nodes;
 }
 
-function collectChangedLines(hunks: FileChange["hunks"]): Set<number> {
+export function collectChangedLines(
+  hunks: FileChange["hunks"],
+): Set<number> {
   const changedLines = new Set<number>();
   for (const hunk of hunks) {
     let oldLine = hunk.oldStart;
