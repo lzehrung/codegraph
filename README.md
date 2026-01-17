@@ -646,6 +646,14 @@ Get dependency graph in-memory and iterate edges:
 `listProjectFiles` defaults to source files plus common project manifests and lockfiles across supported languages (for example `package.json`, `requirements.txt`, `pyproject.toml`, and `Cargo.toml`). Pass custom glob patterns if you need different coverage.
 
 ```ts
+import { listProjectFiles } from 'codegraph';
+
+const files = await listProjectFiles(root);
+const manifests = files.filter((file) => /(?:package\.json|pyproject\.toml|Cargo\.toml)$/.test(file));
+console.log(manifests);
+```
+
+```ts
 import { listProjectFiles, collectGraph } from 'codegraph';
 Build project index from explicit file list (multi-root):
 
