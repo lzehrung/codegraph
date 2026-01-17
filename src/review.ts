@@ -11,7 +11,10 @@ import {
   type SymbolDef,
   symbolId,
 } from "./indexer.js";
-import { locateChangedSymbols, mapChangedLinesToSymbols } from "./impact/map.js";
+import {
+  locateChangedSymbolsWithLines,
+  mapChangedLinesToSymbols,
+} from "./impact/map.js";
 import { parseUnifiedDiff } from "./impact/parse.js";
 import type { Hunk } from "./impact/types.js";
 import {
@@ -168,19 +171,19 @@ function collectDiffSnippets(
   if (startLine <= 0) return [];
   const safeEnd = endLine >= startLine ? endLine : startLine;
 
+  const sortedChangedLines = [...changedLines].sort((a, b) => a - b);
+  if (sortedChangedLines.length === 0) return [];
+
   const lines = source.split(/\r?\n/);
-  const filtered = Array.from(changedLines)
-    .filter((line) => line >= startLine && line <= safeEnd)
-    .sort((a, b) => a - b);
-  const matching =
-    filtered.length > 0
-      ? filtered
-      : Array.from(changedLines).sort((a, b) => a - b);
-  if (matching.length === 0) return [];
+  const matching: number[] = [];
+  for (const line of sortedChangedLines) {
+    if (line >= startLine && line <= safeEnd) matching.push(line);
+  }
+  const matchingLines = matching.length > 0 ? matching : sortedChangedLines;
 
   const snippets: string[] = [];
-  let groupStart = matching[0]!;
-  let groupEnd = matching[0]!;
+  let groupStart = matchingLines[0]!;
+  let groupEnd = matchingLines[0]!;
 
   const pushGroup = (start: number, end: number) => {
     const snippetStart = Math.max(1, start - contextLines);
@@ -189,8 +192,8 @@ function collectDiffSnippets(
     if (snippet) snippets.push(snippet);
   };
 
-  for (let i = 1; i < matching.length; i += 1) {
-    const line = matching[i]!;
+  for (let i = 1; i < matchingLines.length; i += 1) {
+    const line = matchingLines[i]!;
     if (line <= groupEnd + 1) {
       groupEnd = line;
     } else {
@@ -404,7 +407,11 @@ export async function buildReviewReport(
         diffLinesByHandle: new Map<string, Set<number>>(),
       };
     }
-    const changedSymbols = locateChangedSymbols(index, file, hunks);
+    const { changedSymbols, changedLines } = locateChangedSymbolsWithLines(
+      index,
+      file,
+      hunks,
+    );
     const uniqueSymbols = new Map<string, SymbolDef>();
     for (const symbol of changedSymbols) {
       uniqueSymbols.set(symbol.id, {
@@ -422,7 +429,12 @@ export async function buildReviewReport(
       hunks,
       locals,
       handles,
-      diffLinesByHandle: mapChangedLinesToSymbols(index, file, hunks),
+      diffLinesByHandle: mapChangedLinesToSymbols(
+        index,
+        file,
+        hunks,
+        changedLines,
+      ),
     };
   });
 
