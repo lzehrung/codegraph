@@ -44,11 +44,46 @@ export function toRange(node: any): Range {
   };
 }
 
+export const DEFAULT_PROJECT_MANIFESTS = [
+  "package.json",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "bun.lockb",
+  "requirements.txt",
+  "requirements.in",
+  "pyproject.toml",
+  "Pipfile",
+  "Pipfile.lock",
+  "poetry.lock",
+  "setup.py",
+  "setup.cfg",
+  "Cargo.toml",
+  "Cargo.lock",
+  "go.mod",
+  "go.sum",
+  "Gemfile",
+  "Gemfile.lock",
+  "pom.xml",
+  "build.gradle",
+  "build.gradle.kts",
+  "settings.gradle",
+  "settings.gradle.kts",
+  "gradle.properties",
+  "*.csproj",
+  "*.sln",
+  "composer.json",
+  "composer.lock",
+];
+
+export const DEFAULT_PROJECT_PATTERNS = [
+  "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs}",
+  ...DEFAULT_PROJECT_MANIFESTS.map((name) => `**/${name}`),
+];
+
 export async function listProjectFiles(
   projectRoot: string,
-  patterns = [
-    "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs}",
-  ],
+  patterns = DEFAULT_PROJECT_PATTERNS,
 ): Promise<string[]> {
   try {
     const files = await fg(patterns, {

@@ -643,8 +643,30 @@ if (refs.status === 'ok') {
 
 Get dependency graph in-memory and iterate edges:
 
+`listProjectFiles` defaults to source files plus common project manifests and lockfiles across supported languages (for example `package.json`, `requirements.txt`, `pyproject.toml`, and `Cargo.toml`). Pass custom glob patterns if you need different coverage.
+
+```ts
+import { listProjectFiles } from 'codegraph';
+
+const files = await listProjectFiles(root);
+const manifests = files.filter((file) => /(?:package\.json|pyproject\.toml|Cargo\.toml)$/.test(file));
+console.log(manifests);
+```
+
 ```ts
 import { listProjectFiles, collectGraph } from 'codegraph';
+
+const files = await listProjectFiles(root);
+const graph = await collectGraph(root, files);
+
+type EdgeTo = { type: 'file'; path: string } | { type: 'external'; name: string };
+const toRef = (t: EdgeTo) => (t.type === 'file' ? t.path : t.name);
+
+for (const e of graph.edges) {
+  console.log(`${e.from} -> ${toRef(e.to)}  (${e.raw})`);
+}
+```
+
 Build project index from explicit file list (multi-root):
 
 ```ts
@@ -659,17 +681,6 @@ const files = [
 
 const index = await buildProjectIndexFromFiles(root, Array.from(new Set(files)));
 console.log({ files: index.byFile.size, edges: index.graph.edges.length });
-```
-
-const files = await listProjectFiles(root);
-const graph = await collectGraph(root, files);
-
-type EdgeTo = { type: 'file'; path: string } | { type: 'external'; name: string };
-const toRef = (t: EdgeTo) => (t.type === 'file' ? t.path : t.name);
-
-for (const e of graph.edges) {
-  console.log(`${e.from} -> ${toRef(e.to)}  (${e.raw})`);
-}
 ```
 
 Produce a Mermaid diagram string (for UI or chat rendering):
