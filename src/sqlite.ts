@@ -218,14 +218,17 @@ const loadFileEdges = (
   db: BetterSqliteDatabase,
   toType?: string,
 ) => {
-  const sql = toType
-    ? "SELECT from_path, to_path, to_type FROM file_edges WHERE to_type = ?;"
+  const hasFilter = toType !== undefined;
+  const sql = hasFilter
+    ? "SELECT from_path, to_path FROM file_edges WHERE to_type = ?;"
     : "SELECT from_path, to_path, to_type FROM file_edges;";
-  const rows = toType ? execRowsParams(db, sql, [toType]) : execRows(db, sql);
+  const rows = hasFilter
+    ? execRowsParams(db, sql, [toType as string])
+    : execRows(db, sql);
   return rows.map((row) => ({
     from: String(row[0]),
     to: String(row[1]),
-    type: String(row[2]),
+    type: hasFilter ? String(toType) : String(row[2]),
   }));
 };
 
