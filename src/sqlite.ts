@@ -161,7 +161,7 @@ const ensureSchema = (db: BetterSqliteDatabase) => {
   ];
 
   const indexRows = db
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'index';")
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%';")
     .raw()
     .all() as Array<Array<unknown>>;
   const existingIndexes = new Set<string>();
