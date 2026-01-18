@@ -14,6 +14,7 @@ import { buildImpactReport } from "./report.js";
 import { collectImpactSuggestions } from "./suggestions.js";
 
 export * from "./types.js";
+export { analyzeImpactStreaming, type ImpactStreamChunk } from "./streaming.js";
 
 export async function analyzeImpactFromDiff(
   projectRoot: string,

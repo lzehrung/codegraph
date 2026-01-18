@@ -523,7 +523,8 @@ npx tsx src/cli.ts goto <file> <line> <column>
 
 - Caching:
   - Modes: `off` (default), `memory` (per-process), `disk` (persist across runs, stored under `.codegraph-cache/index-v1`).
-  - `--cache-strict` uses a content hash; without it, cache key uses mtime+size.
+  - **Content-hash caching** (default): Cache keys use content SHA1 for reliability. Set `cacheStrict: false` to use mtime+size only (faster but less reliable with git operations).
+  - **Bloom filters** (default): Automatically built during indexing for 2-3x faster reference scanning. Disable with `useBloomFilters: false` if needed.
   - `.codegraph-cache/index-v1/manifest.json` stores the last indexed commit, graph options, and per-file signatures plus resolved edges. When you re-run `codegraph index` with the same options, unchanged files reuse the manifest entries and skip dependency extraction entirely.
   - Incremental runs treat the manifest as a cached base graph: unchanged files keep their edges, while changed files are re-parsed and their edges replaced. When no explicit Git range is provided, the manifest `lastCommit` is compared to `HEAD` to decide which files to refresh.
   - Remove the manifest (or rerun with different graph flags) to force a full graph rebuild.
@@ -555,6 +556,134 @@ npx tsx src/cli.ts goto <file> <line> <column>
 ## Programmatic usage (from code)
 
 Minimal TypeScript/ESM examples. Import from the package and call directly.
+
+### Session Management (Recommended for Agents)
+
+For agents performing code reviews or making multiple queries, use sessions to maintain warm caches:
+
+```ts
+import { createCodeReviewSession } from 'codegraph';
+
+// Create a session for a PR review
+const session = await createCodeReviewSession({
+  root: '/path/to/repo',
+  buildOptions: {
+    cache: 'disk',
+    useBloomFilters: true, // Default: faster reference scanning
+  },
+  timeout: 30 * 60 * 1000, // 30 minutes
+});
+
+// All operations share the same warm index
+const impact = await session.analyzeImpact({
+  provider: 'git',
+  base: 'main',
+  head: 'feature-branch',
+});
+
+const refs = await session.findReferences({
+  file: '/path/to/file.ts',
+  line: 10,
+  column: 5,
+});
+
+const def = await session.goToDefinition({
+  file: '/path/to/file.ts',
+  line: 15,
+  column: 8,
+});
+
+// Refresh the index after external changes
+await session.refresh();
+
+// Get session statistics
+const stats = session.getStats();
+console.log(`Files: ${stats.fileCount}, Symbols: ${stats.symbolCount}`);
+
+// Clean up when done
+session.dispose();
+```
+
+**Managing multiple sessions:**
+
+```ts
+import { SessionManager } from 'codegraph';
+
+const manager = new SessionManager();
+
+// Create sessions for different PRs or repos
+const pr1Session = await manager.getOrCreateSession('pr-123', {
+  root: '/path/to/repo',
+});
+
+const pr2Session = await manager.getOrCreateSession('pr-456', {
+  root: '/path/to/repo',
+});
+
+// Sessions are automatically reused if already initialized
+const sameSession = await manager.getOrCreateSession('pr-123', {
+  root: '/path/to/repo',
+});
+// pr1Session === sameSession
+
+// Clean up expired sessions
+manager.cleanupExpired();
+
+// Get statistics for all sessions
+const allStats = manager.getAllStats();
+```
+
+### Streaming API (Better Agent UX)
+
+Stream impact analysis results as they're discovered, allowing agents to start reasoning immediately:
+
+```ts
+import { buildProjectIndex, analyzeImpactStreaming } from 'codegraph';
+
+const root = process.cwd();
+const index = await buildProjectIndex(root);
+
+// Stream results
+for await (const chunk of analyzeImpactStreaming(root, index, {
+  provider: 'git',
+  base: 'main',
+  head: 'feature-branch',
+})) {
+  if (chunk.type === 'progress') {
+    console.log(`${chunk.message}: ${chunk.current}/${chunk.total}`);
+  } else if (chunk.type === 'changedSymbol') {
+    console.log(`Changed: ${chunk.symbol.name} in ${chunk.symbol.file}`);
+    // Start reasoning about this symbol immediately
+  } else if (chunk.type === 'impactItem') {
+    console.log(`Impacted: ${chunk.item.file} (severity: ${chunk.item.severity})`);
+    // Process impact as it arrives
+  } else if (chunk.type === 'complete') {
+    console.log(`Analysis complete: ${chunk.summary.totalImpacted} files impacted`);
+  } else if (chunk.type === 'error') {
+    console.error(`Error: ${chunk.error}`);
+  }
+}
+```
+
+**Using streaming with sessions:**
+
+```ts
+const session = await createCodeReviewSession({ root: '/path/to/repo' });
+
+for await (const chunk of session.analyzeImpactStream({
+  provider: 'git',
+  base: 'main',
+  head: 'feature-branch',
+})) {
+  // Process chunks as they arrive
+  if (chunk.type === 'impactItem') {
+    // Agent can start analyzing this file immediately
+    await analyzeImpactedFile(chunk.item);
+  }
+}
+```
+
+### Basic Index Building
 
 Build full project index and go to definition:
 

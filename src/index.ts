@@ -80,6 +80,7 @@ export {
 } from "./indexer.js";
 export {
   analyzeImpactFromDiff,
+  analyzeImpactStreaming,
   collectImpactContext,
   listCandidateTestFiles,
   type Diff,
@@ -94,7 +95,15 @@ export {
   type DiffProviderOptions,
   type ImpactContext,
   type CandidateTestFile,
+  type ImpactStreamChunk,
 } from "./impact/index.js";
+export {
+  CodeReviewSession,
+  SessionManager,
+  createCodeReviewSession,
+  type SessionOptions,
+  type SessionStatus,
+} from "./session.js";
 export { tool_impactJSON, tool_impactFromDiffText } from "./agent-tools.js";
 export {
   writeGraphSqlite,

@@ -137,16 +137,27 @@ export type ProjectIndex = {
       lang: Parser.Language;
     }
   >;
+  bloomFilters?: import("./util/bloomFilter.js").BloomFilterCache;
 };
 export type ResolvedExport =
   | { kind: "resolved"; def: SymbolDef }
   | { kind: "namespace"; file: FileId };
 
+/**
+ * Options for building the project index
+ */
 export type BuildOptions = {
+  /** Number of threads for parallel processing (default: 8) */
   threads?: number;
+  /** Cache mode: "off" (default), "memory", or "disk" */
   cache?: "off" | "memory" | "disk";
+  /** Custom cache directory (default: .codegraph-cache/index-v1) */
   cacheDir?: string;
+  /** Use content-hash for cache validation (default: true). Set to false to use mtime+size only */
   cacheStrict?: boolean;
+  /** Build bloom filters for faster reference scanning (default: true) */
+  useBloomFilters?: boolean;
+  /** Graph building options */
   graph?: GraphBuildOptions;
 };
 
@@ -487,7 +498,10 @@ async function fileStatSignature(
 ): Promise<string> {
   try {
     const st = await fsp.stat(file);
-    if (!strict) return `${st.mtimeMs}:${st.size}`;
+    // Default to strict mode (content-hash) for reliability
+    // This is more reliable than mtime, especially with git operations
+    const useStrict = strict !== false; // True unless explicitly set to false
+    if (!useStrict) return `${st.mtimeMs}:${st.size}`;
     const buf = await fsp.readFile(file);
     const h = crypto.createHash("sha1");
     h.update(buf);
@@ -1862,6 +1876,10 @@ async function buildIndexFromFileListShared(
   >();
   const jsonDependencies = new Set<string>();
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
+  const useBloomFilters = opts?.useBloomFilters ?? true; // Default to true for performance
+  const bloomFilterCache = useBloomFilters
+    ? new (await import("./util/bloomFilter.js")).BloomFilterCache()
+    : undefined;
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
   const fileResults = await mapLimit(normalizedFiles, conc, async (f) => {
     try {
@@ -1883,6 +1901,15 @@ async function buildIndexFromFileListShared(
       const parsed = await parseFile(f);
       parsedMap.set(f, parsed);
       const { source: src, sup, lang, tree } = parsed;
+
+      // Build bloom filter for this file if enabled
+      if (bloomFilterCache) {
+        const { buildBloomFilterFromSource } = await import(
+          "./util/bloomFilter.js"
+        );
+        const filter = buildBloomFilterFromSource(src, sup.id);
+        bloomFilterCache.set(f, filter);
+      }
       const imports = await collectImportsForFile(f, projectRoot, {
         source: src,
         tree,
@@ -2038,6 +2065,7 @@ async function buildIndexFromFileListShared(
     exportCache: new Map(),
     scopeCache: new Map(),
     parsed: parsedMap as any,
+    ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
   };
 }
 
@@ -2150,6 +2178,10 @@ export async function buildProjectIndexIncremental(
     }
   >();
   const jsonDependencies = new Set<string>();
+  const useBloomFilters = opts?.useBloomFilters ?? true; // Default to true for performance
+  const bloomFilterCache = useBloomFilters
+    ? new (await import("./util/bloomFilter.js")).BloomFilterCache()
+    : undefined;
 
   const markAsChanged = (file: string) => {
     if (fs.existsSync(file)) changedFiles.add(file);
@@ -2200,6 +2232,16 @@ export async function buildProjectIndexIncremental(
         const parsed = await parseFile(f);
         parsedMap.set(f, parsed);
         const { source: src, sup, lang, tree } = parsed;
+
+        // Build bloom filter for this file if enabled
+        if (bloomFilterCache) {
+          const { buildBloomFilterFromSource } = await import(
+            "./util/bloomFilter.js"
+          );
+          const filter = buildBloomFilterFromSource(src, sup.id);
+          bloomFilterCache.set(f, filter);
+        }
+
         const imports = await collectImportsForFile(f, projectRoot, {
           source: src,
           tree,
@@ -2365,6 +2407,7 @@ export async function buildProjectIndexIncremental(
     exportCache: new Map(),
     scopeCache: new Map(),
     parsed: parsedMap as any,
+    ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
   };
 }
 
@@ -3456,8 +3499,24 @@ export async function findReferences(
         exportedNames.push((e as any).exportedAs);
   if (!exportedNames.length) exportedNames.push(def.localName);
 
-  for (const [f, m] of index.byFile) {
-    if (f === definitionFile) continue;
+  // Use bloom filters to pre-filter files that might contain references
+  let candidateFiles = Array.from(index.byFile.keys()).filter(
+    (f) => f !== definitionFile,
+  );
+  if (index.bloomFilters && exportedNames.length > 0) {
+    // Filter by the most likely name (usually the first export name)
+    const primaryName = exportedNames[0];
+    if (primaryName) {
+      candidateFiles = index.bloomFilters.filterFiles(
+        primaryName,
+        candidateFiles,
+      );
+    }
+  }
+
+  for (const f of candidateFiles) {
+    const m = index.byFile.get(f);
+    if (!m) continue;
 
     let sc: any = null;
     const ensure = async () => {
