@@ -7,18 +7,22 @@ import type { ProjectIndex, BuildOptions } from "./indexer.js";
 import { buildProjectIndex, buildProjectIndexIncremental, findReferences, goToDefinition } from "./indexer.js";
 import { analyzeImpactFromDiff, type ImpactOptions, type ImpactReport, type CompactImpactReport } from "./impact/index.js";
 import { analyzeImpactStreaming, type ImpactStreamChunk } from "./impact/streaming.js";
+import { getSessionPreset, mergePreset, type PresetName } from "./presets.js";
 
 export type SessionOptions = {
   /** Project root directory */
   root: string;
 
-  /** Build options for the index */
+  /** Preset configuration (auto-configures buildOptions, timeout, incremental) */
+  preset?: PresetName;
+
+  /** Build options for the index (merged with preset if both provided) */
   buildOptions?: BuildOptions;
 
-  /** Session timeout in milliseconds (default: 30 minutes) */
+  /** Session timeout in milliseconds (default: 30 minutes or preset value) */
   timeout?: number;
 
-  /** Whether to use incremental indexing (default: true) */
+  /** Whether to use incremental indexing (default: true or preset value) */
   incremental?: boolean;
 };
 
@@ -40,9 +44,20 @@ export class CodeReviewSession {
 
   constructor(options: SessionOptions) {
     this.root = options.root;
-    this.buildOptions = options.buildOptions;
-    this.timeout = options.timeout ?? 30 * 60 * 1000; // 30 minutes default
-    this.incremental = options.incremental ?? true;
+
+    // Apply preset if specified
+    if (options.preset) {
+      const presetOpts = getSessionPreset(options.preset, options.root);
+      this.buildOptions = options.buildOptions
+        ? mergePreset(presetOpts.buildOptions ?? {}, options.buildOptions)
+        : presetOpts.buildOptions;
+      this.timeout = options.timeout ?? presetOpts.timeout ?? 30 * 60 * 1000;
+      this.incremental = options.incremental ?? presetOpts.incremental ?? true;
+    } else {
+      this.buildOptions = options.buildOptions;
+      this.timeout = options.timeout ?? 30 * 60 * 1000; // 30 minutes default
+      this.incremental = options.incremental ?? true;
+    }
   }
 
   /**

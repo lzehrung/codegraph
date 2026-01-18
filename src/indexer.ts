@@ -157,6 +157,10 @@ export type BuildOptions = {
   cacheStrict?: boolean;
   /** Build bloom filters for faster reference scanning (default: true) */
   useBloomFilters?: boolean;
+  /** Use lazy symbol loading to reduce memory usage (default: false) */
+  lazySymbols?: boolean;
+  /** Preset configuration (overrides individual options if set) */
+  preset?: "code-review" | "ci-fast" | "development" | "production";
   /** Graph building options */
   graph?: GraphBuildOptions;
 };

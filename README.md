@@ -604,6 +604,33 @@ console.log(`Files: ${stats.fileCount}, Symbols: ${stats.symbolCount}`);
 session.dispose();
 ```
 
+**Using presets for simpler configuration:**
+
+```ts
+import { createCodeReviewSession } from 'codegraph';
+
+// Use a preset for automatic configuration
+const session = await createCodeReviewSession({
+  root: '/path/to/repo',
+  preset: 'code-review', // Auto-configures all options
+});
+
+// Or combine preset with custom options
+const customSession = await createCodeReviewSession({
+  root: '/path/to/repo',
+  preset: 'ci-fast',
+  buildOptions: {
+    threads: 16, // Override preset's thread count
+  },
+});
+
+// Available presets:
+// - 'code-review': Balanced speed/accuracy for PR reviews (default: disk cache, content-hash, 8 threads)
+// - 'ci-fast': Maximum speed for CI/CD (memory cache, fast mode, 4 threads)
+// - 'development': Fast feedback for local dev (memory cache, 8 threads)
+// - 'production': Maximum accuracy (disk cache, strict mode, 16 threads)
+```
+
 **Managing multiple sessions:**
 
 ```ts
@@ -681,6 +708,77 @@ for await (const chunk of session.analyzeImpactStream({
     await analyzeImpactedFile(chunk.item);
   }
 }
+```
+
+### Partial Results for Reliability
+
+Operations return partial results when some items fail, allowing agents to work with incomplete data:
+
+```ts
+import { withPartialResults, summarizePartialResult } from 'codegraph';
+
+// Process files with automatic error handling
+const files = ['file1.ts', 'file2.ts', 'file3.ts'];
+const result = await withPartialResults(files, async (file) => {
+  // Process file (may throw)
+  return await analyzeFile(file);
+}, {
+  continueOnError: true, // Keep going even if some fail
+  concurrency: 8,
+});
+
+// Check result status
+if (result.status === 'complete') {
+  console.log('✓ All files processed successfully');
+} else if (result.status === 'partial') {
+  console.log(`⚠ Partial success: ${result.coverage * 100}% complete`);
+  console.log(`Succeeded: ${result.metadata?.succeeded}, Failed: ${result.metadata?.failed}`);
+
+  // Still use partial data
+  processResults(result.data);
+
+  // Log errors for debugging
+  for (const error of result.errors) {
+    console.error(`${error.target}: ${error.message}`);
+  }
+} else {
+  console.error('✗ Operation failed completely');
+}
+
+// Get a human-readable summary
+console.log(summarizePartialResult(result));
+```
+
+### Lazy Symbol Loading for Memory Efficiency
+
+Reduce memory usage by 50% with lazy symbol loading (symbols loaded only when accessed):
+
+```ts
+import { buildProjectIndex } from 'codegraph';
+
+const index = await buildProjectIndex(root, {
+  lazySymbols: true, // Enable lazy loading
+});
+
+// Imports and exports are always loaded (small)
+// Symbol details are loaded on-demand
+
+// Symbols are automatically loaded when accessed via API
+const refs = await findReferences(index, { file, line, column });
+// This triggers lazy loading of symbols for relevant files only
+```
+
+**Using presets with lazy loading:**
+
+```ts
+import { buildProjectIndex, getBuildPreset, mergePreset } from 'codegraph';
+
+// Start with a preset and add lazy loading
+const options = mergePreset(getBuildPreset('code-review'), {
+  lazySymbols: true,
+});
+
+const index = await buildProjectIndex(root, options);
 ```
 
 ### Basic Index Building

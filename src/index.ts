@@ -104,6 +104,43 @@ export {
   type SessionOptions,
   type SessionStatus,
 } from "./session.js";
+export {
+  getBuildPreset,
+  getImpactPreset,
+  getSessionPreset,
+  mergePreset,
+  BUILD_PRESETS,
+  IMPACT_PRESETS,
+  SESSION_PRESETS,
+  type PresetName,
+} from "./presets.js";
+export {
+  type PartialResult,
+  type PartialError,
+  success,
+  partial,
+  failed,
+  withPartialResults,
+  combinePartialResults,
+  mapPartialResult,
+  filterErrorsBySeverity,
+  summarizePartialResult,
+} from "./util/partialResults.js";
+export {
+  LazyArray,
+  LazyProjectIndex,
+  createSymbolLoader,
+  type LazyModuleIndex,
+  type LazyLoadOptions,
+} from "./util/lazySymbols.js";
+export {
+  computeSymbolHash,
+  symbolIdentifier,
+  detectSymbolChanges,
+  computeFileSymbolHashes,
+  type SymbolHash,
+  type SymbolManifestEntry,
+} from "./util/symbolHash.js";
 export { tool_impactJSON, tool_impactFromDiffText } from "./agent-tools.js";
 export {
   writeGraphSqlite,
