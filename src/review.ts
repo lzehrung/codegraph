@@ -754,15 +754,22 @@ export async function buildReviewReport(
 
   const graphDelta: Edge[] = index.graph.edges
     .filter((edge) => changedFiles.has(edge.from))
-    .map((edge) => ({
-      from: relativePath(projectRoot, edge.from),
-      to:
+    .map((edge) => {
+      const from = relativePath(projectRoot, edge.from);
+      const to =
         edge.to.type === "file"
-          ? { type: "file", path: relativePath(projectRoot, edge.to.path) }
-          : edge.to,
-      raw: edge.raw,
-      ...(edge.typeOnly ? { typeOnly: edge.typeOnly } : {}),
-    }))
+          ? {
+              type: "file" as const,
+              path: relativePath(projectRoot, edge.to.path),
+            }
+          : edge.to;
+      return {
+        from,
+        to,
+        raw: edge.raw,
+        ...(edge.typeOnly ? { typeOnly: edge.typeOnly } : {}),
+      };
+    })
     .sort(compareEdges);
 
   const candidateStart = performance.now();
