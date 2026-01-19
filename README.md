@@ -406,6 +406,20 @@ WHERE to_path = 'src/auth.ts' AND to_type = 'file';
     "symbolsChanged": 12,
     "candidateTests": 5
   },
+  "riskSummary": {
+    "level": "medium",
+    "score": 60,
+    "signals": ["exported-symbols-changed"]
+  },
+  "reviewTasks": [
+    {
+      "id": "review-summary",
+      "title": "Review changed symbols",
+      "description": "Scan the changed symbols and confirm behavioral changes align with intent.",
+      "priority": "medium",
+      "reason": "baseline-review"
+    }
+  ],
   "changedFiles": [
     {
       "file": "src/foo.ts",
@@ -438,6 +452,8 @@ WHERE to_path = 'src/auth.ts' AND to_type = 'file';
 Feed this JSON directly to an agent (or your own scripts) to highlight symbol-level changes, updated dependency edges, and likely regression tests.
 
 `schemaVersion` identifies the review JSON schema for CI validation and compatibility checks.
+
+`riskSummary` and `reviewTasks` provide agent-ready guidance on review focus areas and likely risk hotspots.
 
 Use `--include-symbol-details` to attach definition snippets and callsite ranges for changed symbols. When diff data is available (from Git or `diffText`), review reports focus on symbols touched by diff hunks and include `diffSnippets` with the changed line context. Tune `--max-callsites` to keep the payload bounded.
 

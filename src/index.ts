@@ -175,6 +175,10 @@ export {
   buildReviewReport,
   type ReviewDepth,
   type ReviewReport,
+  type ReviewRiskLevel,
+  type ReviewRiskSummary,
+  type ReviewTask,
+  type ReviewTaskPriority,
   type ReviewBuildReport,
   type ReviewTimingReport,
 } from "./review.js";

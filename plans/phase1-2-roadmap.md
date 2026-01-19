@@ -9,3 +9,7 @@
 - [x] **Cache validation**: add a `--cache-verify` mode that detects manifest mismatches and reports recovery actions.
 - [x] **Strict incremental mode**: add `--incremental-strict` (or similar) to force full parsing for changed files while keeping incremental file selection.
 - [x] **Manifest compatibility metadata**: warn when manifest options differ from current run settings.
+
+## Phase 3 — Agent workflow enhancements
+- [x] **Review task templates**: include structured review tasks in review output.
+- [x] **Risk classification**: add a structured risk summary for review bundles.

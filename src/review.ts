@@ -61,6 +61,8 @@ export type ReviewReport = {
     symbolsChanged: number;
     candidateTests: number;
   };
+  riskSummary: ReviewRiskSummary;
+  reviewTasks: ReviewTask[];
   changedFiles: ReviewFileSummary[];
   graphDelta: Edge[];
   candidateTests: CandidateTestFile[];
@@ -80,6 +82,24 @@ export type ReviewOptions = IncrementalBuildOptions & {
 };
 
 export type ReviewDepth = "minimal" | "standard" | "deep";
+
+export type ReviewRiskLevel = "low" | "medium" | "high";
+
+export type ReviewRiskSummary = {
+  level: ReviewRiskLevel;
+  score: number;
+  signals: string[];
+};
+
+export type ReviewTaskPriority = "low" | "medium" | "high";
+
+export type ReviewTask = {
+  id: string;
+  title: string;
+  description: string;
+  priority: ReviewTaskPriority;
+  reason: string;
+};
 
 export type ReviewTimingReport = {
   totalMs?: number;
@@ -178,6 +198,91 @@ function sortSymbols(symbols: SymbolDef[]): SymbolDef[] {
   return symbols
     .slice()
     .sort((left, right) => symbolId(left).localeCompare(symbolId(right)));
+}
+
+function computeRiskSummary(input: {
+  filesChanged: number;
+  symbolsChanged: number;
+  exportedChanged: number;
+}): ReviewRiskSummary {
+  const signals: string[] = [];
+  let score = 0;
+  if (input.exportedChanged > 0) {
+    score += 60;
+    signals.push("exported-symbols-changed");
+  } else {
+    score += 20;
+  }
+  if (input.symbolsChanged >= 20) {
+    score += 20;
+    signals.push("many-symbols-changed");
+  }
+  if (input.filesChanged >= 10) {
+    score += 20;
+    signals.push("many-files-changed");
+  }
+  const normalizedScore = Math.min(100, score);
+  let level: ReviewRiskLevel = "low";
+  if (normalizedScore >= 70) level = "high";
+  else if (normalizedScore >= 40) level = "medium";
+  return {
+    level,
+    score: normalizedScore,
+    signals,
+  };
+}
+
+function buildReviewTasks(input: {
+  filesChanged: number;
+  symbolsChanged: number;
+  exportedChanged: number;
+  candidateTests: number;
+}): ReviewTask[] {
+  const tasks: ReviewTask[] = [
+    {
+      id: "review-summary",
+      title: "Review changed symbols",
+      description:
+        "Scan the changed symbols and confirm behavioral changes align with intent.",
+      priority: "medium",
+      reason: "baseline-review",
+    },
+  ];
+
+  if (input.exportedChanged > 0) {
+    tasks.push({
+      id: "api-compat",
+      title: "Verify API compatibility",
+      description:
+        "Check exported symbols for breaking changes, migration notes, and versioning implications.",
+      priority: "high",
+      reason: "exported-symbols-changed",
+    });
+  }
+
+  if (input.candidateTests === 0) {
+    tasks.push({
+      id: "tests-missing",
+      title: "Validate test coverage",
+      description:
+        "No candidate tests were detected. Confirm existing coverage or add targeted tests.",
+      priority: "medium",
+      reason: "no-candidate-tests",
+    });
+  }
+
+  if (input.filesChanged >= 10 || input.symbolsChanged >= 20) {
+    tasks.push({
+      id: "high-change-volume",
+      title: "Assess change scope",
+      description:
+        "Large change set detected. Double-check impacted files and coordination needs.",
+      priority: "high",
+      reason: "large-change-set",
+    });
+  }
+
+  return tasks;
 }
 
 function isExported(mod: { exports: ExportEntry[] }, handle: string): boolean {
@@ -340,10 +445,22 @@ export async function buildReviewReport(
   }
 
   if (changedFiles.size === 0) {
+    const riskSummary = computeRiskSummary({
+      filesChanged: 0,
+      symbolsChanged: 0,
+      exportedChanged: 0,
+    });
     const report: ReviewReport = {
       schemaVersion: REVIEW_SCHEMA_VERSION,
       status: "no_changes",
       summary: { filesChanged: 0, symbolsChanged: 0, candidateTests: 0 },
+      riskSummary,
+      reviewTasks: buildReviewTasks({
+        filesChanged: 0,
+        symbolsChanged: 0,
+        exportedChanged: 0,
+        candidateTests: 0,
+      }),
       changedFiles: [],
       graphDelta: [],
       candidateTests: [],
@@ -630,6 +747,10 @@ export async function buildReviewReport(
   const changedSymbolIds = summariesWithHandles.flatMap(
     (entry) => entry.handles,
   );
+  const exportedChangedCount = summaries.reduce((count, summary) => {
+    const exportedInFile = summary.symbols.filter((symbol) => symbol.exported);
+    return count + exportedInFile.length;
+  }, 0);
 
   const graphDelta: Edge[] = index.graph.edges
     .filter((edge) => changedFiles.has(edge.from))
@@ -679,6 +800,17 @@ export async function buildReviewReport(
       symbolsChanged: changedSymbolIds.length,
       candidateTests: candidateTests.length,
     },
+    riskSummary: computeRiskSummary({
+      filesChanged: summaries.length,
+      symbolsChanged: changedSymbolIds.length,
+      exportedChanged: exportedChangedCount,
+    }),
+    reviewTasks: buildReviewTasks({
+      filesChanged: summaries.length,
+      symbolsChanged: changedSymbolIds.length,
+      exportedChanged: exportedChangedCount,
+      candidateTests: candidateTests.length,
+    }),
     changedFiles: summaries,
     graphDelta,
     candidateTests,
