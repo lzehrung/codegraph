@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import fg from "fast-glob";
 import Parser from "tree-sitter";
 import crypto from "node:crypto";
 import { supportForFile, getCompiledQueries } from "./languages.js";
 import { prepareParserInput } from "./languages/filePrep.js";
 import {
   listProjectFiles,
+  DEFAULT_PROJECT_MANIFESTS,
   sliceText,
   toRange,
   unquote,
@@ -478,9 +480,34 @@ type IndexManifest = {
   projectRoot: string;
   updatedAt: number;
   lastCommit?: string;
+  configHash?: string;
   graphOptions?: GraphBuildOptions;
   files: Record<string, ManifestFileEntry>;
 };
+
+async function computeConfigHash(projectRoot: string): Promise<string> {
+  try {
+    const configFiles = await fg(DEFAULT_PROJECT_MANIFESTS, {
+      cwd: projectRoot,
+      absolute: true,
+      dot: true,
+      ignore: ["**/node_modules/**"],
+    });
+    configFiles.sort();
+    const hash = crypto.createHash("sha1");
+    for (const file of configFiles) {
+      try {
+        const content = await fsp.readFile(file);
+        const rel = path.relative(projectRoot, file).replace(/\\/g, "/");
+        hash.update(rel);
+        hash.update(content);
+      } catch {}
+    }
+    return hash.digest("hex");
+  } catch {
+    return "";
+  }
+}
 
 function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
   return (
@@ -2068,11 +2095,13 @@ async function buildIndexFromFileListShared(
 
   if (manifestEntries && manifestEntries.size > 0) {
     const lastCommit = await getGitHead(projectRoot);
+    const configHash = await computeConfigHash(projectRoot);
     const manifestData: IndexManifest = {
       version: MANIFEST_VERSION,
       projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
       updatedAt: Date.now(),
       ...(lastCommit ? { lastCommit } : {}),
+      ...(configHash ? { configHash } : {}),
       graphOptions,
       files: Object.fromEntries(manifestEntries),
     };
@@ -2118,7 +2147,22 @@ export async function buildProjectIndexIncremental(
 ): Promise<ProjectIndex> {
   const manifest = await loadManifest(projectRoot, opts);
   const graphOptions = normalizeGraphOptions(opts?.graph);
-  if (!manifest || !graphOptionsEqual(manifest.graphOptions, graphOptions)) {
+
+  // Check config hash
+  const currentConfigHash = await computeConfigHash(projectRoot);
+  const configChanged =
+    !!currentConfigHash &&
+    !!manifest?.configHash &&
+    currentConfigHash !== manifest.configHash;
+
+  if (
+    !manifest ||
+    !graphOptionsEqual(manifest.graphOptions, graphOptions) ||
+    configChanged
+  ) {
+    if (configChanged) {
+      console.warn("Configuration changed, rebuilding index...");
+    }
     return await buildProjectIndex(projectRoot, opts);
   }
 
@@ -2414,11 +2458,13 @@ export async function buildProjectIndexIncremental(
 
   if (manifestEntries.size > 0) {
     const lastCommit = await getGitHead(projectRoot);
+    const configHash = await computeConfigHash(projectRoot);
     const manifestData: IndexManifest = {
       version: MANIFEST_VERSION,
       projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
       updatedAt: Date.now(),
       ...(lastCommit ? { lastCommit } : {}),
+      ...(configHash ? { configHash } : {}),
       graphOptions,
       files: Object.fromEntries(manifestEntries),
     };
