@@ -85,6 +85,23 @@ describe("CodeReviewSession", () => {
     expect(session.isReady()).toBe(false);
   });
 
+  test("should re-initialize after expiration", async () => {
+    const session = new CodeReviewSession({
+      root: sampleRoot,
+      buildOptions: { cache: "memory", useBloomFilters: true },
+      timeout: 100,
+    });
+
+    await session.init();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    expect(session.getStatus()).toBe("expired");
+
+    await session.init();
+
+    expect(session.getStatus()).toBe("ready");
+  });
+
   test("should dispose of session", async () => {
     const session = await createCodeReviewSession({
       root: sampleRoot,

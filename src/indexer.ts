@@ -157,8 +157,6 @@ export type BuildOptions = {
   cacheStrict?: boolean;
   /** Build bloom filters for faster reference scanning (default: true) */
   useBloomFilters?: boolean;
-  /** Use lazy symbol loading to reduce memory usage (default: false) */
-  lazySymbols?: boolean;
   /** Preset configuration (overrides individual options if set) */
   preset?: "code-review" | "ci-fast" | "development" | "production";
   /** Graph building options */
@@ -523,6 +521,21 @@ async function fileSignature(
   const sig = await fileStatSignature(file, strict);
   const cacheSig = gitSig ?? sig;
   return gitSig ? { sig, gitSig, cacheSig } : { sig, cacheSig };
+}
+
+async function buildBloomFilterForFile(
+  file: string,
+): Promise<import("./util/bloomFilter.js").BloomFilter | null> {
+  try {
+    const source = await fsp.readFile(file, "utf8");
+    const sup = supportForFile(file);
+    const { buildBloomFilterFromSource } = await import(
+      "./util/bloomFilter.js"
+    );
+    return buildBloomFilterFromSource(source, sup.id);
+  } catch {
+    return null;
+  }
 }
 
 function cacheFilePath(
@@ -1900,6 +1913,10 @@ async function buildIndexFromFileListShared(
         opts,
       );
       if (cached) {
+        if (bloomFilterCache) {
+          const filter = await buildBloomFilterForFile(f);
+          if (filter) bloomFilterCache.set(f, filter);
+        }
         return [f, cached] as const;
       }
       const parsed = await parseFile(f);
@@ -2224,6 +2241,10 @@ export async function buildProjectIndexIncremental(
     if (cached) {
       modules.set(file, cached);
       collectJsonDependencies(cached.imports, jsonDependencies);
+      if (bloomFilterCache) {
+        const filter = await buildBloomFilterForFile(file);
+        if (filter) bloomFilterCache.set(file, filter);
+      }
     } else {
       changedFiles.add(file);
     }
@@ -3503,19 +3524,50 @@ export async function findReferences(
         exportedNames.push((e as any).exportedAs);
   if (!exportedNames.length) exportedNames.push(def.localName);
 
+  const exportedNameSet = new Set(exportedNames);
+  const getCandidateReferenceNames = (module: ModuleIndex): string[] => {
+    const names = new Set<string>();
+    let hasDirectImport = false;
+
+    for (const imp of module.imports) {
+      const resolved = typeof imp.resolved === "string" ? imp.resolved : undefined;
+      if (!resolved || resolved !== definitionFile) continue;
+      hasDirectImport = true;
+
+      if (imp.kind === "named") {
+        if (exportedNameSet.has(imp.imported)) {
+          names.add(imp.local);
+        }
+      } else if (imp.kind === "default") {
+        if (exportedNameSet.has("default")) {
+          names.add(imp.local);
+        }
+      } else if (imp.kind === "namespace") {
+        for (const name of exportedNameSet) {
+          names.add(name);
+        }
+      }
+    }
+
+    if (!hasDirectImport) return [];
+    return Array.from(names);
+  };
+
   // Use bloom filters to pre-filter files that might contain references
   let candidateFiles = Array.from(index.byFile.keys()).filter(
     (f) => f !== definitionFile,
   );
   if (index.bloomFilters && exportedNames.length > 0) {
-    // Filter by the most likely name (usually the first export name)
-    const primaryName = exportedNames[0];
-    if (primaryName) {
-      candidateFiles = index.bloomFilters.filterFiles(
-        primaryName,
-        candidateFiles,
-      );
-    }
+    candidateFiles = candidateFiles.filter((file) => {
+      const mod = index.byFile.get(file);
+      if (!mod) return true;
+      const filter = index.bloomFilters?.get(file);
+      if (!filter) return true;
+
+      const names = getCandidateReferenceNames(mod);
+      if (names.length === 0) return true;
+      return names.some((name) => filter.mightContain(name));
+    });
   }
 
   for (const f of candidateFiles) {

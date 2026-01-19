@@ -749,38 +749,6 @@ if (result.status === 'complete') {
 console.log(summarizePartialResult(result));
 ```
 
-### Lazy Symbol Loading for Memory Efficiency
-
-Reduce memory usage by 50% with lazy symbol loading (symbols loaded only when accessed):
-
-```ts
-import { buildProjectIndex } from 'codegraph';
-
-const index = await buildProjectIndex(root, {
-  lazySymbols: true, // Enable lazy loading
-});
-
-// Imports and exports are always loaded (small)
-// Symbol details are loaded on-demand
-
-// Symbols are automatically loaded when accessed via API
-const refs = await findReferences(index, { file, line, column });
-// This triggers lazy loading of symbols for relevant files only
-```
-
-**Using presets with lazy loading:**
-
-```ts
-import { buildProjectIndex, getBuildPreset, mergePreset } from 'codegraph';
-
-// Start with a preset and add lazy loading
-const options = mergePreset(getBuildPreset('code-review'), {
-  lazySymbols: true,
-});
-
-const index = await buildProjectIndex(root, options);
-```
-
 ### Basic Index Building
 
 Build full project index and go to definition:

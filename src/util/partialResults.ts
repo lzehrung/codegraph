@@ -55,7 +55,7 @@ export type PartialError = {
   retryable: boolean;
 
   /** Additional context */
-  context?: Record<string, any>;
+  context?: Record<string, unknown>;
 };
 
 /**
@@ -258,11 +258,10 @@ export function combinePartialResults<T>(
     allErrors.push(...result.errors);
     allData.push(result.data);
 
-    if (result.metadata) {
-      totalAttempted += result.metadata.attempted;
-      totalSucceeded += result.metadata.succeeded;
-      totalFailed += result.metadata.failed;
-    }
+    const counts = getResultCounts(result);
+    totalAttempted += counts.attempted;
+    totalSucceeded += counts.succeeded;
+    totalFailed += counts.failed;
   }
 
   const combined = combine(allData);
@@ -298,7 +297,7 @@ export function mapPartialResult<T, U>(
  * Filter errors by severity
  */
 export function filterErrorsBySeverity(
-  result: PartialResult<any>,
+  result: PartialResult<unknown>,
   severity: "error" | "warning",
 ): PartialError[] {
   return result.errors.filter((e) => e.severity === severity);
@@ -308,7 +307,7 @@ export function filterErrorsBySeverity(
  * Get a summary of a partial result
  */
 export function summarizePartialResult(
-  result: PartialResult<any>,
+  result: PartialResult<unknown>,
 ): string {
   const { status, coverage, errors, metadata } = result;
 
@@ -327,4 +326,24 @@ export function summarizePartialResult(
   const succeeded = metadata?.succeeded ?? 0;
   const failed = metadata?.failed ?? 0;
   return `⚠ Partial (${pct}% complete: ${succeeded} succeeded, ${failed} failed)`;
+}
+
+function getResultCounts<T>(
+  result: PartialResult<T>,
+): { attempted: number; succeeded: number; failed: number } {
+  if (result.metadata) {
+    return {
+      attempted: result.metadata.attempted,
+      succeeded: result.metadata.succeeded,
+      failed: result.metadata.failed,
+    };
+  }
+
+  const attempted = 1;
+  const coverage = Math.max(0, Math.min(1, result.coverage));
+  const succeeded =
+    result.status === "complete" ? 1 : result.status === "failed" ? 0 : coverage;
+  const failed = attempted - succeeded;
+
+  return { attempted, succeeded, failed };
 }

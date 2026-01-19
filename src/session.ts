@@ -83,6 +83,8 @@ export class CodeReviewSession {
       } catch (error) {
         this.status = "error";
         throw error;
+      } finally {
+        this.initPromise = null;
       }
     })();
 

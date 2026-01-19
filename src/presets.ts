@@ -203,34 +203,39 @@ export function getSessionPreset(
 /**
  * Merge preset with custom options
  */
-export function mergePreset<T extends Record<string, any>>(
+export function mergePreset<T extends Record<string, unknown>>(
   preset: T,
   custom?: Partial<T>,
 ): T {
   if (!custom) return preset;
 
-  const merged = { ...preset };
+  const merged: Record<string, unknown> = { ...preset };
+  const presetRecord = preset as Record<string, unknown>;
 
-  for (const key in custom) {
-    const customValue = custom[key];
-    const presetValue = preset[key];
+  for (const key of Object.keys(custom)) {
+    const customValue = custom[key as keyof T];
+    const presetValue = presetRecord[key];
 
     if (customValue === undefined) continue;
 
     // Deep merge for nested objects
     if (
-      typeof customValue === "object" &&
-      customValue !== null &&
-      !Array.isArray(customValue) &&
-      typeof presetValue === "object" &&
-      presetValue !== null &&
-      !Array.isArray(presetValue)
+      isPlainObject(customValue) &&
+      isPlainObject(presetValue)
     ) {
-      merged[key] = { ...presetValue, ...customValue } as any;
+      merged[key] = { ...presetValue, ...customValue };
     } else {
-      merged[key] = customValue as any;
+      merged[key] = customValue;
     }
   }
 
-  return merged;
+  return merged as T;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+  );
 }

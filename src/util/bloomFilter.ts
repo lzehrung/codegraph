@@ -30,6 +30,7 @@ export class BloomFilter {
     for (const hash of this.getHashes(item)) {
       const byteIndex = Math.floor(hash / 8);
       const bitIndex = hash % 8;
+      if (byteIndex < 0 || byteIndex >= this.bits.length) return;
       const currentByte = this.bits[byteIndex];
       if (currentByte !== undefined) {
         this.bits[byteIndex] = currentByte | (1 << bitIndex);
@@ -45,6 +46,7 @@ export class BloomFilter {
     for (const hash of this.getHashes(item)) {
       const byteIndex = Math.floor(hash / 8);
       const bitIndex = hash % 8;
+      if (byteIndex < 0 || byteIndex >= this.bits.length) return false;
       const currentByte = this.bits[byteIndex];
       if (currentByte === undefined || (currentByte & (1 << bitIndex)) === 0) {
         return false;
