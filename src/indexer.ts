@@ -501,7 +501,12 @@ async function computeConfigHash(projectRoot: string): Promise<string> {
         const rel = path.relative(projectRoot, file).replace(/\\/g, "/");
         hash.update(rel);
         hash.update(content);
-      } catch {}
+      } catch (err) {
+        console.debug(
+          `computeConfigHash: failed to read config file "${file}":`,
+          err,
+        );
+      }
     }
     return hash.digest("hex");
   } catch {
