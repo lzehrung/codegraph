@@ -497,7 +497,7 @@ async function computeConfigHash(projectRoot: string): Promise<string> {
     const hash = crypto.createHash("sha1");
     for (const file of configFiles) {
       try {
-        const content = await fsp.readFile(file);
+        const content = await fsp.readFile(file, "utf8");
         const rel = path.relative(projectRoot, file).replace(/\\/g, "/");
         hash.update(rel);
         hash.update(content);
