@@ -396,6 +396,7 @@ WHERE to_path = 'src/auth.ts' AND to_type = 'file';
 
 ```jsonc
 {
+  "schemaVersion": 1,
   "status": "ok",
   "summary": {
     "filesChanged": 3,
@@ -432,6 +433,8 @@ WHERE to_path = 'src/auth.ts' AND to_type = 'file';
 ```
 
 Feed this JSON directly to an agent (or your own scripts) to highlight symbol-level changes, updated dependency edges, and likely regression tests.
+
+`schemaVersion` identifies the review JSON schema for CI validation and compatibility checks.
 
 Use `--include-symbol-details` to attach definition snippets and callsite ranges for changed symbols. When diff data is available (from Git or `diffText`), review reports focus on symbols touched by diff hunks and include `diffSnippets` with the changed line context. Tune `--max-callsites` to keep the payload bounded.
 

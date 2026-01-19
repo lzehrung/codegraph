@@ -112,6 +112,7 @@ describe('Review report', () => {
       files: [filePath],
     });
 
+    expect(report.schemaVersion).toBe(1);
     expect(report.status).toBe('ok');
     expect(report.changedFiles.length).toBe(1);
     expect(report.changedFiles[0]?.symbols.some((s) => s.name === 'a')).toBe(true);

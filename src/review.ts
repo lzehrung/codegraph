@@ -50,6 +50,7 @@ type ReviewSymbolSummary = {
 };
 
 export type ReviewReport = {
+  schemaVersion: number;
   status: "ok" | "no_changes";
   base?: string;
   head?: string;
@@ -105,6 +106,8 @@ const REVIEW_PRESETS: Record<ReviewDepth, ReviewPreset> = {
   },
 };
 
+const REVIEW_SCHEMA_VERSION = 1;
+
 function mergeGraphOptions(
   base: IncrementalBuildOptions["graph"] | undefined,
   override: IncrementalBuildOptions["graph"] | undefined,
@@ -130,6 +133,34 @@ function applyReviewPresetOptions(opts: ReviewOptions): ReviewOptions {
 
 function relativePath(root: string, file: string): string {
   return normalizePath(path.relative(root, file));
+}
+
+function comparePaths(left: string, right: string): number {
+  return left.localeCompare(right);
+}
+
+function compareEdges(left: Edge, right: Edge): number {
+  const fromCompare = comparePaths(left.from, right.from);
+  if (fromCompare !== 0) return fromCompare;
+  if (left.to.type !== right.to.type) {
+    return left.to.type === "file" ? -1 : 1;
+  }
+  const leftTarget = left.to.type === "file" ? left.to.path : left.to.name;
+  const rightTarget =
+    right.to.type === "file" ? right.to.path : right.to.name;
+  const toCompare = comparePaths(leftTarget, rightTarget);
+  if (toCompare !== 0) return toCompare;
+  const rawCompare = left.raw.localeCompare(right.raw);
+  if (rawCompare !== 0) return rawCompare;
+  const leftTypeOnly = left.typeOnly ? 1 : 0;
+  const rightTypeOnly = right.typeOnly ? 1 : 0;
+  return leftTypeOnly - rightTypeOnly;
+}
+
+function sortSymbols(symbols: SymbolDef[]): SymbolDef[] {
+  return symbols
+    .slice()
+    .sort((left, right) => symbolId(left).localeCompare(symbolId(right)));
 }
 
 function isExported(mod: { exports: ExportEntry[] }, handle: string): boolean {
@@ -284,6 +315,7 @@ export async function buildReviewReport(
 
   if (changedFiles.size === 0) {
     const report: ReviewReport = {
+      schemaVersion: REVIEW_SCHEMA_VERSION,
       status: "no_changes",
       summary: { filesChanged: 0, symbolsChanged: 0, candidateTests: 0 },
       changedFiles: [],
@@ -297,7 +329,7 @@ export async function buildReviewReport(
     return report;
   }
 
-  const changedFileList = Array.from(changedFiles);
+  const changedFileList = Array.from(changedFiles).sort(comparePaths);
   const fastGraphRequested = appliedOptions.graph?.fast ?? false;
   const graphOptions = appliedOptions.graph
     ? { ...appliedOptions.graph, fast: fastGraphRequested }
@@ -398,12 +430,13 @@ export async function buildReviewReport(
       };
     }
     if (!hunks) {
+      const locals = sortSymbols(mod.locals);
       return {
         file,
         mod,
         hunks,
-        locals: mod.locals,
-        handles: mod.locals.map((local) => symbolId(local)),
+        locals,
+        handles: locals.map((local) => symbolId(local)),
         diffLinesByHandle: new Map<string, Set<number>>(),
       };
     }
@@ -421,8 +454,8 @@ export async function buildReviewReport(
         range: symbol.range,
       });
     }
-    const locals = Array.from(uniqueSymbols.values());
-    const handles = Array.from(uniqueSymbols.keys());
+    const locals = sortSymbols(Array.from(uniqueSymbols.values()));
+    const handles = locals.map((local) => symbolId(local));
     return {
       file,
       mod,
@@ -560,7 +593,8 @@ export async function buildReviewReport(
           : edge.to,
       raw: edge.raw,
       ...(edge.typeOnly ? { typeOnly: edge.typeOnly } : {}),
-    }));
+    }))
+    .sort(compareEdges);
 
   const candidateTests = listCandidateTestFiles(
     index,
@@ -575,9 +609,16 @@ export async function buildReviewReport(
   ).map((candidate) => ({
     ...candidate,
     file: relativePath(projectRoot, candidate.file),
-  }));
+  })).sort((left, right) => {
+    const fileCompare = comparePaths(left.file, right.file);
+    if (fileCompare !== 0) return fileCompare;
+    const confidenceCompare = left.confidence.localeCompare(right.confidence);
+    if (confidenceCompare !== 0) return confidenceCompare;
+    return left.reason.localeCompare(right.reason);
+  });
 
   const report: ReviewReport = {
+    schemaVersion: REVIEW_SCHEMA_VERSION,
     status: "ok",
     summary: {
       filesChanged: summaries.length,
