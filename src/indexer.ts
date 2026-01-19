@@ -137,16 +137,29 @@ export type ProjectIndex = {
       lang: Parser.Language;
     }
   >;
+  bloomFilters?: import("./util/bloomFilter.js").BloomFilterCache;
 };
 export type ResolvedExport =
   | { kind: "resolved"; def: SymbolDef }
   | { kind: "namespace"; file: FileId };
 
+/**
+ * Options for building the project index
+ */
 export type BuildOptions = {
+  /** Number of threads for parallel processing (default: 8) */
   threads?: number;
+  /** Cache mode: "off" (default), "memory", or "disk" */
   cache?: "off" | "memory" | "disk";
+  /** Custom cache directory (default: .codegraph-cache/index-v1) */
   cacheDir?: string;
+  /** Use content-hash for cache validation (default: true). Set to false to use mtime+size only */
   cacheStrict?: boolean;
+  /** Build bloom filters for faster reference scanning (default: true) */
+  useBloomFilters?: boolean;
+  /** Preset configuration (overrides individual options if set) */
+  preset?: "code-review" | "ci-fast" | "development" | "production";
+  /** Graph building options */
   graph?: GraphBuildOptions;
 };
 
@@ -487,7 +500,10 @@ async function fileStatSignature(
 ): Promise<string> {
   try {
     const st = await fsp.stat(file);
-    if (!strict) return `${st.mtimeMs}:${st.size}`;
+    // Default to strict mode (content-hash) for reliability
+    // This is more reliable than mtime, especially with git operations
+    const useStrict = strict !== false; // True unless explicitly set to false
+    if (!useStrict) return `${st.mtimeMs}:${st.size}`;
     const buf = await fsp.readFile(file);
     const h = crypto.createHash("sha1");
     h.update(buf);
@@ -505,6 +521,21 @@ async function fileSignature(
   const sig = await fileStatSignature(file, strict);
   const cacheSig = gitSig ?? sig;
   return gitSig ? { sig, gitSig, cacheSig } : { sig, cacheSig };
+}
+
+async function buildBloomFilterForFile(
+  file: string,
+): Promise<import("./util/bloomFilter.js").BloomFilter | null> {
+  try {
+    const source = await fsp.readFile(file, "utf8");
+    const sup = supportForFile(file);
+    const { buildBloomFilterFromSource } = await import(
+      "./util/bloomFilter.js"
+    );
+    return buildBloomFilterFromSource(source, sup.id);
+  } catch {
+    return null;
+  }
 }
 
 function cacheFilePath(
@@ -1862,6 +1893,10 @@ async function buildIndexFromFileListShared(
   >();
   const jsonDependencies = new Set<string>();
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
+  const useBloomFilters = opts?.useBloomFilters ?? true; // Default to true for performance
+  const bloomFilterCache = useBloomFilters
+    ? new (await import("./util/bloomFilter.js")).BloomFilterCache()
+    : undefined;
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
   const fileResults = await mapLimit(normalizedFiles, conc, async (f) => {
     try {
@@ -1878,11 +1913,24 @@ async function buildIndexFromFileListShared(
         opts,
       );
       if (cached) {
+        if (bloomFilterCache) {
+          const filter = await buildBloomFilterForFile(f);
+          if (filter) bloomFilterCache.set(f, filter);
+        }
         return [f, cached] as const;
       }
       const parsed = await parseFile(f);
       parsedMap.set(f, parsed);
       const { source: src, sup, lang, tree } = parsed;
+
+      // Build bloom filter for this file if enabled
+      if (bloomFilterCache) {
+        const { buildBloomFilterFromSource } = await import(
+          "./util/bloomFilter.js"
+        );
+        const filter = buildBloomFilterFromSource(src, sup.id);
+        bloomFilterCache.set(f, filter);
+      }
       const imports = await collectImportsForFile(f, projectRoot, {
         source: src,
         tree,
@@ -2038,6 +2086,7 @@ async function buildIndexFromFileListShared(
     exportCache: new Map(),
     scopeCache: new Map(),
     parsed: parsedMap as any,
+    ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
   };
 }
 
@@ -2150,6 +2199,10 @@ export async function buildProjectIndexIncremental(
     }
   >();
   const jsonDependencies = new Set<string>();
+  const useBloomFilters = opts?.useBloomFilters ?? true; // Default to true for performance
+  const bloomFilterCache = useBloomFilters
+    ? new (await import("./util/bloomFilter.js")).BloomFilterCache()
+    : undefined;
 
   const markAsChanged = (file: string) => {
     if (fs.existsSync(file)) changedFiles.add(file);
@@ -2188,6 +2241,10 @@ export async function buildProjectIndexIncremental(
     if (cached) {
       modules.set(file, cached);
       collectJsonDependencies(cached.imports, jsonDependencies);
+      if (bloomFilterCache) {
+        const filter = await buildBloomFilterForFile(file);
+        if (filter) bloomFilterCache.set(file, filter);
+      }
     } else {
       changedFiles.add(file);
     }
@@ -2200,6 +2257,16 @@ export async function buildProjectIndexIncremental(
         const parsed = await parseFile(f);
         parsedMap.set(f, parsed);
         const { source: src, sup, lang, tree } = parsed;
+
+        // Build bloom filter for this file if enabled
+        if (bloomFilterCache) {
+          const { buildBloomFilterFromSource } = await import(
+            "./util/bloomFilter.js"
+          );
+          const filter = buildBloomFilterFromSource(src, sup.id);
+          bloomFilterCache.set(f, filter);
+        }
+
         const imports = await collectImportsForFile(f, projectRoot, {
           source: src,
           tree,
@@ -2365,6 +2432,7 @@ export async function buildProjectIndexIncremental(
     exportCache: new Map(),
     scopeCache: new Map(),
     parsed: parsedMap as any,
+    ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
   };
 }
 
@@ -3456,8 +3524,55 @@ export async function findReferences(
         exportedNames.push((e as any).exportedAs);
   if (!exportedNames.length) exportedNames.push(def.localName);
 
-  for (const [f, m] of index.byFile) {
-    if (f === definitionFile) continue;
+  const exportedNameSet = new Set(exportedNames);
+  const getCandidateReferenceNames = (module: ModuleIndex): string[] => {
+    const names = new Set<string>();
+    let hasDirectImport = false;
+
+    for (const imp of module.imports) {
+      const resolved = typeof imp.resolved === "string" ? imp.resolved : undefined;
+      if (!resolved || resolved !== definitionFile) continue;
+      hasDirectImport = true;
+
+      if (imp.kind === "named") {
+        if (exportedNameSet.has(imp.imported)) {
+          names.add(imp.local);
+        }
+      } else if (imp.kind === "default") {
+        if (exportedNameSet.has("default")) {
+          names.add(imp.local);
+        }
+      } else if (imp.kind === "namespace") {
+        for (const name of exportedNameSet) {
+          names.add(name);
+        }
+      }
+    }
+
+    if (!hasDirectImport) return [];
+    return Array.from(names);
+  };
+
+  // Use bloom filters to pre-filter files that might contain references
+  let candidateFiles = Array.from(index.byFile.keys()).filter(
+    (f) => f !== definitionFile,
+  );
+  if (index.bloomFilters && exportedNames.length > 0) {
+    candidateFiles = candidateFiles.filter((file) => {
+      const mod = index.byFile.get(file);
+      if (!mod) return true;
+      const filter = index.bloomFilters?.get(file);
+      if (!filter) return true;
+
+      const names = getCandidateReferenceNames(mod);
+      if (names.length === 0) return true;
+      return names.some((name) => filter.mightContain(name));
+    });
+  }
+
+  for (const f of candidateFiles) {
+    const m = index.byFile.get(f);
+    if (!m) continue;
 
     let sc: any = null;
     const ensure = async () => {
