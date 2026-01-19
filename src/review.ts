@@ -386,7 +386,7 @@ export async function buildReviewReport(
     appliedOptions.includeDiffContext ??
     (includeSymbolDetails && diffHunksByFile.size > 0);
 
-  const fileEntries = filesWithModules.map(({ file, mod, hunks }) => {
+  const fileEntries = await Promise.all(filesWithModules.map(async ({ file, mod, hunks }) => {
     if (!mod) {
       return {
         file,
@@ -407,7 +407,7 @@ export async function buildReviewReport(
         diffLinesByHandle: new Map<string, Set<number>>(),
       };
     }
-    const { changedSymbols, changedLines } = locateChangedSymbolsWithLines(
+    const { changedSymbols, changedLines } = await locateChangedSymbolsWithLines(
       index,
       file,
       hunks,
@@ -429,14 +429,14 @@ export async function buildReviewReport(
       hunks,
       locals,
       handles,
-      diffLinesByHandle: mapChangedLinesToSymbols(
+      diffLinesByHandle: await mapChangedLinesToSymbols(
         index,
         file,
         hunks,
         changedLines,
       ),
     };
-  });
+  }));
 
   const defsToResolve = fileEntries.flatMap((entry) => entry.locals);
   const referenceResults =

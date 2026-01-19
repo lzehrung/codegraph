@@ -1,5 +1,6 @@
 import type { FileId } from "../types.js";
 import type { ProjectIndex, SymbolDef, SymbolHandle } from "../indexer.js";
+import { ensureParsedContext } from "../indexer.js";
 import type { FileChange, ChangedSymbol } from "./types.js";
 
 function symbolHandleFromLocal(file: FileId, local: SymbolDef): string {
@@ -7,20 +8,25 @@ function symbolHandleFromLocal(file: FileId, local: SymbolDef): string {
   return `${file}::${local.localName}::${index}`;
 }
 
-export function locateChangedSymbols(
+export async function locateChangedSymbols(
   index: ProjectIndex,
   file: FileId,
   hunks: FileChange["hunks"],
-): ChangedSymbol[] {
-  return locateChangedSymbolsWithLines(index, file, hunks).changedSymbols;
+): Promise<ChangedSymbol[]> {
+  return (await locateChangedSymbolsWithLines(index, file, hunks)).changedSymbols;
 }
 
-export function locateChangedSymbolsWithLines(
+export async function locateChangedSymbolsWithLines(
   index: ProjectIndex,
   file: FileId,
   hunks: FileChange["hunks"],
-): { changedSymbols: ChangedSymbol[]; changedLines: Set<number> } {
-  const parsedEntry = index.parsed?.get(file);
+): Promise<{ changedSymbols: ChangedSymbol[]; changedLines: Set<number> }> {
+  let parsedEntry;
+  try {
+    parsedEntry = await ensureParsedContext(file, index.parsed?.get(file));
+  } catch {
+    return { changedSymbols: [], changedLines: new Set() };
+  }
   if (!parsedEntry) return { changedSymbols: [], changedLines: new Set() };
 
   const { source, tree } = parsedEntry;
@@ -65,13 +71,18 @@ export function locateChangedSymbolsWithLines(
   return { changedSymbols, changedLines };
 }
 
-export function mapChangedLinesToSymbols(
+export async function mapChangedLinesToSymbols(
   index: ProjectIndex,
   file: FileId,
   hunks: FileChange["hunks"],
   changedLinesOverride?: Set<number>,
-): Map<SymbolHandle, Set<number>> {
-  const parsedEntry = index.parsed?.get(file);
+): Promise<Map<SymbolHandle, Set<number>>> {
+  let parsedEntry;
+  try {
+    parsedEntry = await ensureParsedContext(file, index.parsed?.get(file));
+  } catch {
+    return new Map();
+  }
   if (!parsedEntry) return new Map();
 
   const { source, tree } = parsedEntry;

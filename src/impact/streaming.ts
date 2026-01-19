@@ -59,7 +59,7 @@ export async function* analyzeImpactStreaming(
       const absPath = path.isAbsolute(fileChange.path)
         ? fileChange.path.replace(/\\/g, "/")
         : path.resolve(projectRoot, fileChange.path).replace(/\\/g, "/");
-      const symbols = locateChangedSymbols(index, absPath, fileChange.hunks);
+      const symbols = await locateChangedSymbols(index, absPath, fileChange.hunks);
 
       for (const symbol of symbols) {
         yield { type: "changedSymbol", symbol };

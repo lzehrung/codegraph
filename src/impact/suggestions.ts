@@ -7,7 +7,7 @@ import type {
   ModuleIndex,
   ProjectIndex,
 } from "../indexer.js";
-import { goToDefinition } from "../indexer.js";
+import { goToDefinition, ensureParsedContext } from "../indexer.js";
 import type { LanguageSupport } from "../languages.js";
 import type {
   FileChange,
@@ -77,7 +77,10 @@ export async function collectImpactSuggestions(
       pushUniqueSuggestion(output, seen, suggestion);
     }
 
-    const parsedEntry = index.parsed?.get(absoluteFile);
+    const parsedEntry = await ensureParsedContext(
+      absoluteFile,
+      index.parsed?.get(absoluteFile),
+    );
     if (!parsedEntry) continue;
 
     const changedLines = collectChangedLines(fileChange.hunks);

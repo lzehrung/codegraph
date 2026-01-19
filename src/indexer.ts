@@ -29,6 +29,7 @@ import {
 } from "./util.js";
 import {
   collectGraph,
+  collectEdgesForFile,
   type GraphCacheEntry,
   type GraphBuildOptions,
 } from "./graphs.js";
@@ -1838,7 +1839,7 @@ export async function parseFile(file: string): Promise<{
   }
 }
 
-async function ensureParsedContext(
+export async function ensureParsedContext(
   file: string,
   parsedEntry?: {
     source: string;
@@ -1914,15 +1915,9 @@ async function buildIndexFromFileListShared(
         gitAvailable,
       })
     : new Map<string, string>();
-  const parsedMap = new Map<
-    string,
-    {
-      source: string;
-      tree: Parser.Tree;
-      sup: ReturnType<typeof supportForFile>;
-      lang: Parser.Language;
-    }
-  >();
+  // We no longer populate parsedMap for all files to save memory on large repos.
+  // Consumers (goToDefinition/findReferences) will re-parse on demand if needed.
+  const parsedMap = undefined;
   const jsonDependencies = new Set<string>();
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
   const useBloomFilters = opts?.useBloomFilters ?? true; // Default to true for performance
@@ -1930,6 +1925,28 @@ async function buildIndexFromFileListShared(
     ? new (await import("./util/bloomFilter.js")).BloomFilterCache()
     : undefined;
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
+
+  const graph: Graph = { nodes: new Set(normalizedFiles), edges: [] };
+  const onFileEdges = manifestEntries ? (file: string, entry: GraphCacheEntry) => {
+    if (!entry?.sig) return;
+    manifestEntries.set(file, {
+      sig: entry.sig,
+      ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
+      edges: entry.edges,
+    });
+  } : undefined;
+
+  // Initialize cached edges from manifest if available
+  if (cachedGraphEntries) {
+    for (const [file, entry] of cachedGraphEntries) {
+      // Add edges from cache initially; they might be replaced if file changed
+      // But collectEdgesForFile handles cache check, so we don't need to populate graph here
+      // UNLESS we want to support incremental graph building where we skip processing unchanged files completely.
+      // But mapLimit below iterates ALL files.
+      // We will let collectEdgesForFile handle the caching logic per file.
+    }
+  }
+
   const fileResults = await mapLimit(normalizedFiles, conc, async (f) => {
     try {
       const sigInfo = await fileSignature(
@@ -1938,81 +1955,122 @@ async function buildIndexFromFileListShared(
         gitSigMap.get(f),
       );
       fileSignatures.set(f, sigInfo);
-      const cached = await tryLoadFromCache(
+
+      let mod: ModuleIndex | null = await tryLoadFromCache(
         projectRoot,
         f,
         sigInfo.cacheSig,
         opts,
       );
-      if (cached) {
+
+      // Check if edges are cached (via collectEdgesForFile logic essentially)
+      // We manually check here to decide if we need to parse
+      const cachedEdgesEntry = cachedGraphEntries?.get(f);
+      const edgesCached = !!cachedEdgesEntry && (
+        (cachedEdgesEntry.gitSig && cachedEdgesEntry.gitSig === sigInfo.gitSig) ||
+        (cachedEdgesEntry.sig === sigInfo.sig)
+      );
+
+      let edges: import("./types.js").Edge[] = [];
+
+      if (mod && edgesCached) {
+        // Both cached, no need to parse
+        edges = await collectEdgesForFile(f, projectRoot, workspaceConfig, {
+          fast: !!graphOptions.fast,
+          resolveNodeModules: !!graphOptions.resolveNodeModules,
+          dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
+          ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
+          fileSignature: sigInfo,
+        ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
+        ...(onFileEdges ? { onFileEdges } : {}),
+        });
         if (bloomFilterCache) {
           const filter = await buildBloomFilterForFile(f);
           if (filter) bloomFilterCache.set(f, filter);
         }
-        return [f, cached] as const;
-      }
-      const parsed = await parseFile(f);
-      parsedMap.set(f, parsed);
-      const { source: src, sup, lang, tree } = parsed;
+      } else {
+        // At least one is missing, so we must parse
+        const parsed = await parseFile(f);
+        const { source: src, sup, lang, tree } = parsed;
 
-      // Build bloom filter for this file if enabled
-      if (bloomFilterCache) {
-        const { buildBloomFilterFromSource } = await import(
-          "./util/bloomFilter.js"
-        );
-        const filter = buildBloomFilterFromSource(src, sup.id);
-        bloomFilterCache.set(f, filter);
-      }
-      const imports = await collectImportsForFile(f, projectRoot, {
-        source: src,
-        tree,
-        sup,
-        lang,
-        graphOptions,
-      });
-      collectJsonDependencies(imports, jsonDependencies);
-      const mod = collectLocalsAndExportsFromSource(
-        f,
-        src,
-        sup,
-        lang,
-        imports,
-        { tree },
-      );
-      mod.imports = imports;
-
-      if (sup.supportsCrossModuleSymbols) {
-        if (sup.id === "ts" || sup.id === "js") {
-          const { matchPath } = await loadNearestTsconfigFor(f);
-          for (const e of mod.exports)
-            if (e.type === "reexport" || e.type === "exportStar" || e.type === "namespaceReexport") {
-              if (e.fromModule.startsWith(".")) {
-                const resolved = await resolveSpecifier(
-                  f,
-                  e.fromModule,
-                  projectRoot,
-                  matchPath,
-                  workspaceConfig,
-                  {
-                    resolveNodeModules: !!graphOptions.resolveNodeModules,
-                    ...(graphOptions.resolutionHints
-                      ? { resolutionHints: graphOptions.resolutionHints }
-                      : {}),
-                  },
-                );
-                if (typeof resolved === "string") e.fromModule = resolved;
-              } else {
-                const pkgResolved = await resolveWorkspacePackage(
-                  e.fromModule,
-                  workspaceConfig,
-                );
-                if (pkgResolved) e.fromModule = pkgResolved;
-              }
-            }
+        if (bloomFilterCache) {
+          const { buildBloomFilterFromSource } = await import(
+            "./util/bloomFilter.js"
+          );
+          const filter = buildBloomFilterFromSource(src, sup.id);
+          bloomFilterCache.set(f, filter);
         }
+
+        // 1. Recompute ModuleIndex if needed
+        if (!mod) {
+          const imports = await collectImportsForFile(f, projectRoot, {
+            source: src,
+            tree,
+            sup,
+            lang,
+            graphOptions,
+          });
+          collectJsonDependencies(imports, jsonDependencies);
+          mod = collectLocalsAndExportsFromSource(
+            f,
+            src,
+            sup,
+            lang,
+            imports,
+            { tree },
+          );
+          mod.imports = imports;
+
+          if (sup.supportsCrossModuleSymbols) {
+            if (sup.id === "ts" || sup.id === "js") {
+              const { matchPath } = await loadNearestTsconfigFor(f);
+              for (const e of mod.exports)
+                if (e.type === "reexport" || e.type === "exportStar" || e.type === "namespaceReexport") {
+                  if (e.fromModule.startsWith(".")) {
+                    const resolved = await resolveSpecifier(
+                      f,
+                      e.fromModule,
+                      projectRoot,
+                      matchPath,
+                      workspaceConfig,
+                      {
+                        resolveNodeModules: !!graphOptions.resolveNodeModules,
+                        ...(graphOptions.resolutionHints
+                          ? { resolutionHints: graphOptions.resolutionHints }
+                          : {}),
+                      },
+                    );
+                    if (typeof resolved === "string") e.fromModule = resolved;
+                  } else {
+                    const pkgResolved = await resolveWorkspacePackage(
+                      e.fromModule,
+                      workspaceConfig,
+                    );
+                    if (pkgResolved) e.fromModule = pkgResolved;
+                  }
+                }
+            }
+          }
+          await writeToCache(projectRoot, f, sigInfo.cacheSig, mod, opts);
+        } else {
+          // If mod was cached but edges weren't, we still need to collect json deps from mod
+          collectJsonDependencies(mod.imports, jsonDependencies);
+        }
+
+        // 2. Recompute Edges (using the parsed tree)
+        edges = await collectEdgesForFile(f, projectRoot, workspaceConfig, {
+          parsed: parsed,
+          fast: !!graphOptions.fast,
+          resolveNodeModules: !!graphOptions.resolveNodeModules,
+          dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
+          ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
+          fileSignature: sigInfo,
+          ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
+          ...(onFileEdges ? { onFileEdges } : {}),
+        });
       }
-      await writeToCache(projectRoot, f, sigInfo.cacheSig, mod, opts);
-      return [f, mod] as const;
+
+      return [f, mod!, edges] as const;
     } catch (error) {
       console.warn(`Warning: Failed to process file ${f}:`, error);
       const mod: ModuleIndex = {
@@ -2021,11 +2079,16 @@ async function buildIndexFromFileListShared(
         imports: [],
         locals: [],
       };
-      return [f, mod] as const;
+      return [f, mod, [] as any] as const;
     }
   });
-  for (const [file, mod] of fileResults) {
+
+  for (const [file, mod, edges] of fileResults) {
     modules.set(file, mod);
+    for (const e of edges) {
+      graph.edges.push(e);
+      if (e.to.type === "file") graph.nodes.add(e.to.path);
+    }
   }
 
   for (const jsonPath of jsonDependencies) {
@@ -2073,30 +2136,6 @@ async function buildIndexFromFileListShared(
       }
     }
   }
-
-  const graph = await collectGraph(projectRoot, normalizedFiles, {
-    parsed: parsedMap as any,
-    fast: !!graphOptions.fast,
-    resolveNodeModules: !!graphOptions.resolveNodeModules,
-    dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
-    ...(graphOptions.resolutionHints
-      ? { resolutionHints: graphOptions.resolutionHints }
-      : {}),
-    fileSignatures,
-    ...(cachedGraphEntries ? { cachedFileEdges: cachedGraphEntries } : {}),
-    ...(manifestEntries
-      ? {
-          onFileEdges: (file, entry) => {
-            if (!entry?.sig) return;
-            manifestEntries.set(file, {
-              sig: entry.sig,
-              ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
-              edges: entry.edges,
-            });
-          },
-        }
-      : {}),
-  });
 
   if (manifestEntries && manifestEntries.size > 0) {
     const lastCommit = await getGitHead(projectRoot);
