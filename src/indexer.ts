@@ -2157,8 +2157,8 @@ export async function buildProjectIndexIncremental(
   const currentConfigHash = await computeConfigHash(projectRoot);
   const configChanged =
     !!currentConfigHash &&
-    !!manifest?.configHash &&
-    currentConfigHash !== manifest.configHash;
+    (!manifest?.configHash ||
+      currentConfigHash !== manifest.configHash);
 
   if (
     !manifest ||
