@@ -198,11 +198,14 @@ export async function* analyzeImpactStreaming(
     }
 
     // Execute in batches with concurrency control and yield results as they arrive
+    const yieldedImpactFiles = new Set<string>();
     for (let i = 0; i < tasks.length; i += concurrency) {
       await Promise.all(tasks.slice(i, i + concurrency).map((fn) => fn()));
 
-      // Yield all new impact items after each batch
+      // Yield only impact items that have not been yielded in previous batches
       for (const [file, item] of impactedMap.entries()) {
+        if (yieldedImpactFiles.has(file)) continue;
+        yieldedImpactFiles.add(file);
         yield { type: "impactItem", item };
       }
     }
