@@ -349,6 +349,8 @@ npx codegraph review --base origin/main --head HEAD > review.json
 npx codegraph review --base origin/main --head HEAD --include-symbol-details --max-callsites 5 > review.json
 # Use review presets for common depth/quality tradeoffs
 npx codegraph review --base origin/main --head HEAD --review-depth standard > review.json
+# Export graph deltas between revisions (requires manifest cache)
+npx codegraph graph-delta --git-base origin/main --git-head HEAD > graph-delta.json
 
 # Export graphs to SQLite (queryable by agents/tools)
 npx codegraph graph --sqlite ./codegraph.sqlite
@@ -454,6 +456,8 @@ Feed this JSON directly to an agent (or your own scripts) to highlight symbol-le
 `schemaVersion` identifies the review JSON schema for CI validation and compatibility checks.
 
 `riskSummary` and `reviewTasks` provide agent-ready guidance on review focus areas and likely risk hotspots.
+
+Graph delta exports (`graph-delta`) report file-level edge additions/removals for changed files and are intended for lightweight CI artifacts.
 
 Use `--include-symbol-details` to attach definition snippets and callsite ranges for changed symbols. When diff data is available (from Git or `diffText`), review reports focus on symbols touched by diff hunks and include `diffSnippets` with the changed line context. Tune `--max-callsites` to keep the payload bounded.
 

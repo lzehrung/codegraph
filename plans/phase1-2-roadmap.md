@@ -13,3 +13,6 @@
 ## Phase 3 — Agent workflow enhancements
 - [x] **Review task templates**: include structured review tasks in review output.
 - [x] **Risk classification**: add a structured risk summary for review bundles.
+
+## Phase 4 — Scaling & ecosystem
+- [x] **Graph delta export**: emit added/removed file edges for changed files.

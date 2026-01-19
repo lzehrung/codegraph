@@ -10,6 +10,7 @@ import {
   buildProjectIndex,
   buildProjectIndexFromFiles,
   buildReviewReport,
+  buildGraphDelta,
   goToDefinition,
   findReferences,
   graphToMermaid,
@@ -621,6 +622,7 @@ async function main() {
 
   const defaultProjectRoot =
     (cmd === "graph" ||
+      cmd === "graph-delta" ||
       cmd === "index" ||
       cmd === "grep" ||
       cmd === "impact") &&
@@ -721,6 +723,40 @@ async function main() {
       : path.resolve(process.cwd(), dbOpt).replace(/\\/g, "/");
     const result = await queryGraphSqliteRaw(dbPath, queryText);
     writeJSONLine(result);
+    return;
+  }
+
+  if (cmd === "graph-delta") {
+    const files = await resolveFiles();
+    const threads = Number(getOpt("--threads") ?? 0);
+    const cache = getOpt("--cache") as any;
+    const cacheStrict = hasFlag("--cache-strict");
+    const cacheVerify = hasFlag("--cache-verify");
+    const incrementalStrict = hasFlag("--incremental-strict");
+    const outputArg = getOpt("--output");
+    const graphOptions = hasGraphOverrides ? buildGraphOptions() : undefined;
+    const delta = await buildGraphDelta(projectRootFs, {
+      threads,
+      cache,
+      cacheStrict,
+      cacheVerify,
+      incrementalStrict,
+      files,
+      ...(gitBase ? { gitBase } : {}),
+      ...(gitHead ? { gitHead } : {}),
+      ...(changedSince ? { changedSince } : {}),
+      ...(graphOptions ? { graph: graphOptions } : {}),
+    });
+    const outputFile = outputArg
+      ? path.isAbsolute(outputArg)
+        ? outputArg.replace(/\\/g, "/")
+        : path.resolve(process.cwd(), outputArg).replace(/\\/g, "/")
+      : undefined;
+    if (outputFile) {
+      await fsp.writeFile(outputFile, `${toJSON(delta)}\n`, "utf8");
+    } else {
+      writeJSONLine(delta);
+    }
     return;
   }
 

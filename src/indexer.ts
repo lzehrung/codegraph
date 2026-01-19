@@ -19,6 +19,7 @@ import {
   resolvePythonModule,
   resolveWorkspacePackage,
   normalizeResolutionHints,
+  normalizePath,
   acquireParser,
   releaseParser,
   getGitHead,
@@ -31,7 +32,7 @@ import {
   type GraphCacheEntry,
   type GraphBuildOptions,
 } from "./graphs.js";
-import type { Range, FileId, Graph } from "./types.js";
+import type { Edge, Range, FileId, Graph } from "./types.js";
 
 // Default number of lines to include around references for line context
 const DEFAULT_REF_CONTEXT_LINES = 5;
@@ -212,6 +213,12 @@ export type BuildReport = {
   cache?: CacheReport;
   files?: BuildFileReport;
   manifest?: ManifestReport;
+};
+
+export type GraphDeltaReport = {
+  changedFiles: string[];
+  added: Edge[];
+  removed: Edge[];
 };
 
 // ---------------- Symbol handles (agent-friendly) ----------------
@@ -830,6 +837,44 @@ function normalizeGraphOptions(opts?: GraphBuildOptions): GraphBuildOptions {
     resolveNodeModules: !!opts?.resolveNodeModules,
     dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
     ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
+  };
+}
+
+function edgeKey(edge: Edge): string {
+  const toKey =
+    edge.to.type === "file" ? `file:${edge.to.path}` : `external:${edge.to.name}`;
+  const typeOnly = edge.typeOnly ? "1" : "0";
+  return `${edge.from}|${toKey}|${edge.raw}|${typeOnly}`;
+}
+
+function compareEdges(left: Edge, right: Edge): number {
+  const fromCompare = left.from.localeCompare(right.from);
+  if (fromCompare !== 0) return fromCompare;
+  if (left.to.type !== right.to.type) {
+    return left.to.type === "file" ? -1 : 1;
+  }
+  const leftTo =
+    left.to.type === "file" ? left.to.path : left.to.name;
+  const rightTo =
+    right.to.type === "file" ? right.to.path : right.to.name;
+  const toCompare = leftTo.localeCompare(rightTo);
+  if (toCompare !== 0) return toCompare;
+  const rawCompare = left.raw.localeCompare(right.raw);
+  if (rawCompare !== 0) return rawCompare;
+  const leftTypeOnly = left.typeOnly ? 1 : 0;
+  const rightTypeOnly = right.typeOnly ? 1 : 0;
+  return leftTypeOnly - rightTypeOnly;
+}
+
+function toRelativeEdge(projectRoot: string, edge: Edge): Edge {
+  return {
+    from: normalizePath(path.relative(projectRoot, edge.from)),
+    to:
+      edge.to.type === "file"
+        ? { type: "file", path: normalizePath(path.relative(projectRoot, edge.to.path)) }
+        : edge.to,
+    raw: edge.raw,
+    ...(edge.typeOnly ? { typeOnly: edge.typeOnly } : {}),
   };
 }
 
@@ -2709,6 +2754,136 @@ export async function buildProjectIndexIncremental(
     scopeCache: new Map(),
     parsed: parsedMap as any,
     ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
+  };
+}
+
+export async function buildGraphDelta(
+  projectRoot: string,
+  opts?: IncrementalBuildOptions,
+): Promise<GraphDeltaReport> {
+  const normalizeFilePath = (file: string): string =>
+    normalizePath(
+      path.isAbsolute(file) ? file : path.resolve(projectRoot, file),
+    );
+  const manifest = await loadManifest(projectRoot, opts);
+  const graphOptions = normalizeGraphOptions(opts?.graph);
+  const strictIncremental = opts?.incrementalStrict ?? false;
+  if (strictIncremental && graphOptions.fast) {
+    graphOptions.fast = false;
+  }
+
+  const explicitFiles = (opts?.files ?? [])
+    .map(normalizeFilePath)
+    .filter((file) => fs.existsSync(file));
+  const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
+  const gitOpts: { base?: string; head?: string; changedSince?: string } = {};
+  if (opts?.gitBase) gitOpts.base = opts.gitBase;
+  if (opts?.gitHead) gitOpts.head = opts.gitHead;
+  if (!opts?.gitBase && opts?.changedSince)
+    gitOpts.changedSince = opts.changedSince;
+  const gitFiles = needsGitScan
+    ? await listChangedFiles(projectRoot, gitOpts)
+    : [];
+
+  const trackedEntries = manifest?.files ?? {};
+  const trackedFiles = new Set(
+    Object.keys(trackedEntries).filter((file) => fs.existsSync(file)),
+  );
+
+  const gitAvailable = await isGitRepo(projectRoot);
+  const currentHead = gitAvailable ? await getGitHead(projectRoot) : null;
+  const hasExplicitGitRange = !!opts?.gitBase || !!opts?.gitHead;
+  const manifestCommitMismatch =
+    !hasExplicitGitRange &&
+    !!manifest?.lastCommit &&
+    !!currentHead &&
+    manifest.lastCommit !== currentHead;
+  const manifestDiffFiles = manifestCommitMismatch
+    ? await listChangedFiles(projectRoot, {
+        base: manifest?.lastCommit,
+        head: currentHead,
+      })
+    : [];
+
+  const allFiles = new Set<string>([
+    ...trackedFiles,
+    ...explicitFiles,
+    ...manifestDiffFiles.filter((file) => fs.existsSync(file)),
+    ...gitFiles.filter((file) => fs.existsSync(file)),
+  ]);
+
+  if (allFiles.size === 0) {
+    return { changedFiles: [], added: [], removed: [] };
+  }
+
+  const changedFiles = new Set<string>();
+  explicitFiles.forEach((file) => changedFiles.add(file));
+  manifestDiffFiles.forEach((file) => changedFiles.add(file));
+  gitFiles.forEach((file) => changedFiles.add(file));
+
+  if (manifest && graphOptionsEqual(manifest.graphOptions, graphOptions)) {
+    const gitSigMap = gitAvailable
+      ? await getGitBlobHashes(projectRoot, Array.from(allFiles), {
+          gitAvailable,
+        })
+      : new Map<string, string>();
+    for (const file of allFiles) {
+      const sigInfo = await fileSignature(
+        file,
+        opts?.cacheStrict,
+        gitSigMap.get(file),
+      );
+      const entry = trackedEntries[file];
+      const hasMatchingGitSig =
+        !!entry?.gitSig &&
+        !!sigInfo.gitSig &&
+        entry.gitSig === sigInfo.gitSig;
+      const hasMatchingSig = entry?.sig === sigInfo.sig;
+      if (!entry || !(hasMatchingGitSig || hasMatchingSig)) {
+        changedFiles.add(file);
+      }
+    }
+  }
+
+  const changedList = Array.from(changedFiles);
+  const beforeEdges = new Map<string, Edge>();
+  if (manifest) {
+    for (const file of changedList) {
+      const entry = trackedEntries[file];
+      if (!entry?.edges) continue;
+      for (const edge of entry.edges) {
+        beforeEdges.set(edgeKey(edge), edge);
+      }
+    }
+  }
+
+  const index = await buildProjectIndexIncremental(projectRoot, opts);
+  const afterEdges = new Map<string, Edge>();
+  for (const edge of index.graph.edges) {
+    if (changedFiles.has(edge.from)) {
+      afterEdges.set(edgeKey(edge), edge);
+    }
+  }
+
+  const added: Edge[] = [];
+  const removed: Edge[] = [];
+  for (const [key, edge] of afterEdges) {
+    if (!beforeEdges.has(key)) added.push(edge);
+  }
+  for (const [key, edge] of beforeEdges) {
+    if (!afterEdges.has(key)) removed.push(edge);
+  }
+
+  const changedFilesRelative = changedList.map((file) =>
+    normalizePath(path.relative(projectRoot, file)),
+  );
+  const addedRelative = added.map((edge) => toRelativeEdge(projectRoot, edge));
+  const removedRelative = removed.map((edge) => toRelativeEdge(projectRoot, edge));
+
+  return {
+    changedFiles: changedFilesRelative.sort(),
+    added: addedRelative.sort(compareEdges),
+    removed: removedRelative.sort(compareEdges),
   };
 }
 
