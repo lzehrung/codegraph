@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import Parser from "tree-sitter";
 import crypto from "node:crypto";
+import { performance } from "node:perf_hooks";
 import { supportForFile, getCompiledQueries } from "./languages.js";
 import { prepareParserInput } from "./languages/filePrep.js";
 import {
@@ -161,6 +162,12 @@ export type BuildOptions = {
   preset?: "code-review" | "ci-fast" | "development" | "production";
   /** Graph building options */
   graph?: GraphBuildOptions;
+  /** Verify manifest consistency before reuse (incremental builds only) */
+  cacheVerify?: boolean;
+  /** Force full parsing for changed files during incremental builds */
+  incrementalStrict?: boolean;
+  /** Optional build report data for observability */
+  report?: BuildReport;
 };
 
 export type IncrementalBuildOptions = BuildOptions & {
@@ -168,6 +175,43 @@ export type IncrementalBuildOptions = BuildOptions & {
   changedSince?: string;
   gitBase?: string;
   gitHead?: string;
+};
+
+export type CacheReport = {
+  mode: "off" | "memory" | "disk";
+  hits: number;
+  misses: number;
+};
+
+export type BuildTimingReport = {
+  totalMs?: number;
+  manifestMs?: number;
+  parseMs?: number;
+  graphMs?: number;
+  writeManifestMs?: number;
+};
+
+export type BuildFileReport = {
+  total: number;
+  changed?: number;
+  cached?: number;
+  parsed?: number;
+};
+
+export type ManifestReport = {
+  used: boolean;
+  reused: boolean;
+  reason?: string;
+  mismatches?: number;
+  missing?: number;
+  optionsMismatch?: string[];
+};
+
+export type BuildReport = {
+  timings: BuildTimingReport;
+  cache?: CacheReport;
+  files?: BuildFileReport;
+  manifest?: ManifestReport;
 };
 
 // ---------------- Symbol handles (agent-friendly) ----------------
@@ -473,12 +517,21 @@ const MANIFEST_VERSION = 1;
 
 type ManifestFileEntry = GraphCacheEntry;
 
+type ManifestBuildOptions = {
+  cache?: BuildOptions["cache"];
+  cacheStrict?: boolean;
+  useBloomFilters?: boolean;
+  preset?: BuildOptions["preset"];
+  incrementalStrict?: boolean;
+};
+
 type IndexManifest = {
   version: number;
   projectRoot: string;
   updatedAt: number;
   lastCommit?: string;
   graphOptions?: GraphBuildOptions;
+  buildOptions?: ManifestBuildOptions;
   files: Record<string, ManifestFileEntry>;
 };
 
@@ -493,6 +546,40 @@ type FileSignature = {
   gitSig?: string;
   cacheSig: string;
 };
+
+function initCacheReport(
+  report: BuildReport | undefined,
+  mode: BuildOptions["cache"] | undefined,
+): CacheReport | undefined {
+  if (!report) return undefined;
+  if (!report.cache) {
+    report.cache = { mode: mode ?? "off", hits: 0, misses: 0 };
+  }
+  return report.cache;
+}
+
+function initFileReport(report: BuildReport | undefined): BuildFileReport | undefined {
+  if (!report) return undefined;
+  if (!report.files) {
+    report.files = { total: 0, cached: 0, parsed: 0 };
+  }
+  return report.files;
+}
+
+function initManifestReport(
+  report: BuildReport | undefined,
+  used: boolean,
+  reused: boolean,
+): ManifestReport | undefined {
+  if (!report) return undefined;
+  if (!report.manifest) {
+    report.manifest = { used, reused };
+  } else {
+    report.manifest.used = used;
+    report.manifest.reused = reused;
+  }
+  return report.manifest;
+}
 
 async function fileStatSignature(
   file: string,
@@ -556,11 +643,18 @@ async function tryLoadFromCache(
   file: string,
   sig: string,
   opts?: BuildOptions,
+  report?: BuildReport,
 ): Promise<ModuleIndex | null> {
   const mode = opts?.cache ?? "off";
+  const cacheReport = initCacheReport(report, mode);
+  const cacheEnabled = mode !== "off";
   if (mode === "memory") {
     const ent = memoryCache.get(file);
-    if (ent && ent.sig === sig) return ent.mod;
+    if (ent && ent.sig === sig) {
+      if (cacheEnabled && cacheReport) cacheReport.hits += 1;
+      return ent.mod;
+    }
+    if (cacheEnabled && cacheReport) cacheReport.misses += 1;
     return null;
   }
   if (mode === "disk") {
@@ -568,9 +662,12 @@ async function tryLoadFromCache(
       const cf = cacheFilePath(projectRoot, file, opts);
       const raw = await fsp.readFile(cf, "utf8");
       const parsed = JSON.parse(raw) as ModuleCacheEntry;
-      if (parsed.sig === sig && parsed.mod && parsed.mod.file)
+      if (parsed.sig === sig && parsed.mod && parsed.mod.file) {
+        if (cacheEnabled && cacheReport) cacheReport.hits += 1;
         return parsed.mod as ModuleIndex;
+      }
     } catch {}
+    if (cacheEnabled && cacheReport) cacheReport.misses += 1;
   }
   return null;
 }
@@ -627,6 +724,36 @@ async function writeManifest(
   }
 }
 
+async function verifyManifestEntries(
+  projectRoot: string,
+  manifest: IndexManifest,
+  opts: BuildOptions | undefined,
+  gitAvailable: boolean,
+): Promise<{ mismatches: number; missing: number }> {
+  const entries = manifest.files ?? {};
+  const files = Object.keys(entries);
+  const existingFiles = files.filter((file) => fs.existsSync(file));
+  const missing = files.length - existingFiles.length;
+  const gitSigMap = gitAvailable
+    ? await getGitBlobHashes(projectRoot, existingFiles, { gitAvailable })
+    : new Map<string, string>();
+  let mismatches = 0;
+  for (const file of existingFiles) {
+    const entry = entries[file];
+    if (!entry) continue;
+    const sigInfo = await fileSignature(
+      file,
+      opts?.cacheStrict,
+      gitSigMap.get(file),
+    );
+    const matchesGitSig =
+      !!entry.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
+    const matchesSig = entry.sig === sigInfo.sig;
+    if (!matchesGitSig && !matchesSig) mismatches += 1;
+  }
+  return { mismatches, missing };
+}
+
 function graphOptionsEqual(
   a?: GraphBuildOptions,
   b?: GraphBuildOptions,
@@ -646,6 +773,54 @@ function graphOptionsEqual(
     if (hintsA[i] !== hintsB[i]) return false;
   }
   return true;
+}
+
+function normalizeManifestBuildOptions(
+  opts?: ManifestBuildOptions,
+): ManifestBuildOptions {
+  return {
+    cache: opts?.cache ?? "off",
+    cacheStrict: opts?.cacheStrict ?? true,
+    useBloomFilters: opts?.useBloomFilters ?? true,
+    preset: opts?.preset,
+    incrementalStrict: opts?.incrementalStrict ?? false,
+  };
+}
+
+function normalizeBuildOptions(opts?: BuildOptions): ManifestBuildOptions {
+  return {
+    cache: opts?.cache ?? "off",
+    cacheStrict: opts?.cacheStrict ?? true,
+    useBloomFilters: opts?.useBloomFilters ?? true,
+    preset: opts?.preset,
+    incrementalStrict: opts?.incrementalStrict ?? false,
+  };
+}
+
+function summarizeBuildOptions(opts?: BuildOptions): ManifestBuildOptions {
+  return normalizeBuildOptions(opts);
+}
+
+function diffBuildOptions(
+  manifestOpts: ManifestBuildOptions | undefined,
+  currentOpts: BuildOptions | undefined,
+): string[] {
+  if (!manifestOpts) return [];
+  const normalizedManifest = normalizeManifestBuildOptions(manifestOpts);
+  const normalizedCurrent = normalizeBuildOptions(currentOpts);
+  const diffs: string[] = [];
+  if (normalizedManifest.cache !== normalizedCurrent.cache) diffs.push("cache");
+  if (normalizedManifest.cacheStrict !== normalizedCurrent.cacheStrict)
+    diffs.push("cacheStrict");
+  if (normalizedManifest.useBloomFilters !== normalizedCurrent.useBloomFilters)
+    diffs.push("useBloomFilters");
+  if (normalizedManifest.preset !== normalizedCurrent.preset) diffs.push("preset");
+  if (
+    normalizedManifest.incrementalStrict !==
+    normalizedCurrent.incrementalStrict
+  )
+    diffs.push("incrementalStrict");
+  return diffs;
 }
 
 function normalizeGraphOptions(opts?: GraphBuildOptions): GraphBuildOptions {
@@ -1848,11 +2023,15 @@ async function buildIndexFromFileListShared(
   opts?: BuildOptions,
   helperOpts?: BuildIndexHelperOptions,
 ): Promise<ProjectIndex> {
+  const report = opts?.report;
+  const timings = report?.timings;
+  const totalStart = performance.now();
   const manifestMode: ManifestMode = helperOpts?.manifestMode ?? "off";
   const useManifest = manifestMode !== "off";
   const shouldWriteManifest = manifestMode === "read-write";
   const cacheMode = opts?.cache ?? "off";
   const graphOptions = normalizeGraphOptions(opts?.graph);
+  initManifestReport(report, useManifest, false);
   const normalizedFiles = Array.from(
     new Set(
       (rawFiles ?? [])
@@ -1864,11 +2043,22 @@ async function buildIndexFromFileListShared(
   if (normalizedFiles.length === 0 && helperOpts?.warnNoFilesMessage) {
     console.warn(helperOpts.warnNoFilesMessage);
   }
+  const fileReport = initFileReport(report);
+  if (fileReport) {
+    fileReport.total = normalizedFiles.length;
+  }
+  const manifestStart = performance.now();
   const manifest = useManifest ? await loadManifest(projectRoot, opts) : null;
+  if (timings && useManifest) {
+    timings.manifestMs = Math.round(performance.now() - manifestStart);
+  }
   const cachedGraphEntries =
     manifest && graphOptionsEqual(manifest.graphOptions, graphOptions)
       ? new Map<string, ManifestFileEntry>(Object.entries(manifest.files ?? {}))
       : undefined;
+  if (report?.manifest) {
+    report.manifest.reused = !!cachedGraphEntries;
+  }
   const manifestEntries = shouldWriteManifest
     ? new Map<string, ManifestFileEntry>()
     : undefined;
@@ -1898,6 +2088,7 @@ async function buildIndexFromFileListShared(
     ? new (await import("./util/bloomFilter.js")).BloomFilterCache()
     : undefined;
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
+  const parseStart = performance.now();
   const fileResults = await mapLimit(normalizedFiles, conc, async (f) => {
     try {
       const sigInfo = await fileSignature(
@@ -1911,14 +2102,17 @@ async function buildIndexFromFileListShared(
         f,
         sigInfo.cacheSig,
         opts,
+        report,
       );
       if (cached) {
+        if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
         if (bloomFilterCache) {
           const filter = await buildBloomFilterForFile(f);
           if (filter) bloomFilterCache.set(f, filter);
         }
         return [f, cached] as const;
       }
+      if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
       const parsed = await parseFile(f);
       parsedMap.set(f, parsed);
       const { source: src, sup, lang, tree } = parsed;
@@ -1992,6 +2186,7 @@ async function buildIndexFromFileListShared(
       return [f, mod] as const;
     }
   });
+  if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
   for (const [file, mod] of fileResults) {
     modules.set(file, mod);
   }
@@ -2042,6 +2237,7 @@ async function buildIndexFromFileListShared(
     }
   }
 
+  const graphStart = performance.now();
   const graph = await collectGraph(projectRoot, normalizedFiles, {
     parsed: parsedMap as any,
     fast: !!graphOptions.fast,
@@ -2065,8 +2261,10 @@ async function buildIndexFromFileListShared(
         }
       : {}),
   });
+  if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
 
   if (manifestEntries && manifestEntries.size > 0) {
+    const writeManifestStart = performance.now();
     const lastCommit = await getGitHead(projectRoot);
     const manifestData: IndexManifest = {
       version: MANIFEST_VERSION,
@@ -2074,11 +2272,17 @@ async function buildIndexFromFileListShared(
       updatedAt: Date.now(),
       ...(lastCommit ? { lastCommit } : {}),
       graphOptions,
+      buildOptions: summarizeBuildOptions(opts),
       files: Object.fromEntries(manifestEntries),
     };
     await writeManifest(projectRoot, opts, manifestData);
+    if (timings)
+      timings.writeManifestMs = Math.round(
+        performance.now() - writeManifestStart,
+      );
   }
 
+  if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
   return {
     graph,
     modules,
@@ -2116,9 +2320,35 @@ export async function buildProjectIndexIncremental(
   projectRoot: string,
   opts?: IncrementalBuildOptions,
 ): Promise<ProjectIndex> {
+  const report = opts?.report;
+  const timings = report?.timings;
+  const totalStart = performance.now();
+  const manifestStart = performance.now();
   const manifest = await loadManifest(projectRoot, opts);
+  if (timings) timings.manifestMs = Math.round(performance.now() - manifestStart);
   const graphOptions = normalizeGraphOptions(opts?.graph);
+  const strictIncremental = opts?.incrementalStrict ?? false;
+  if (strictIncremental && graphOptions.fast) {
+    graphOptions.fast = false;
+  }
+  const manifestUsed = !!manifest;
+  const manifestReport = initManifestReport(report, manifestUsed, false);
+  if (manifestReport && !manifestUsed) {
+    manifestReport.reason = "missing";
+  }
+  const optionDiffs = diffBuildOptions(manifest?.buildOptions, opts);
+  if (optionDiffs.length > 0) {
+    console.warn(
+      `Warning: Manifest options differ from current build options: ${optionDiffs.join(
+        ", ",
+      )}`,
+    );
+    if (manifestReport) manifestReport.optionsMismatch = optionDiffs;
+  }
   if (!manifest || !graphOptionsEqual(manifest.graphOptions, graphOptions)) {
+    if (manifestReport && manifest) {
+      manifestReport.reason = "graphOptionsMismatch";
+    }
     return await buildProjectIndex(projectRoot, opts);
   }
 
@@ -2136,6 +2366,25 @@ export async function buildProjectIndexIncremental(
         head: currentHead,
       })
     : [];
+  if (manifestReport) manifestReport.reused = true;
+  if (opts?.cacheVerify) {
+    const { mismatches, missing } = await verifyManifestEntries(
+      projectRoot,
+      manifest,
+      opts,
+      gitAvailable,
+    );
+    if (manifestReport) {
+      manifestReport.mismatches = mismatches;
+      manifestReport.missing = missing;
+    }
+    if (mismatches > 0) {
+      console.warn(
+        `Warning: Manifest verification failed for ${mismatches} file(s). Rebuilding full index.`,
+      );
+      return await buildProjectIndex(projectRoot, opts);
+    }
+  }
 
   const normalizeFilePath = (file: string): string =>
     (path.isAbsolute(file) ? file : path.resolve(projectRoot, file)).replace(
@@ -2147,6 +2396,10 @@ export async function buildProjectIndexIncremental(
   const trackedFiles = new Set(
     Object.keys(trackedEntries).filter((file) => fs.existsSync(file)),
   );
+  const fileReport = initFileReport(report);
+  if (fileReport) {
+    fileReport.total = trackedFiles.size;
+  }
 
   const explicitFiles = (opts?.files ?? []).map(normalizeFilePath);
   const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
@@ -2166,6 +2419,9 @@ export async function buildProjectIndexIncremental(
     ...manifestDiffFiles.filter((f) => fs.existsSync(f)),
     ...gitFiles.filter((f) => fs.existsSync(f)),
   ]);
+  if (fileReport) {
+    fileReport.total = allFiles.size;
+  }
 
   if (allFiles.size === 0) {
     return {
@@ -2210,6 +2466,9 @@ export async function buildProjectIndexIncremental(
   explicitFiles.forEach(markAsChanged);
   manifestDiffFiles.forEach(markAsChanged);
   gitFiles.forEach(markAsChanged);
+  if (fileReport) {
+    fileReport.changed = changedFiles.size;
+  }
 
   for (const file of allFiles) {
     const sigInfo = await fileSignature(
@@ -2237,8 +2496,10 @@ export async function buildProjectIndexIncremental(
       file,
       sigInfo.cacheSig,
       opts,
+      report,
     );
     if (cached) {
+      if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
       modules.set(file, cached);
       collectJsonDependencies(cached.imports, jsonDependencies);
       if (bloomFilterCache) {
@@ -2251,9 +2512,14 @@ export async function buildProjectIndexIncremental(
   }
 
   const changedList = Array.from(changedFiles);
+  if (fileReport) {
+    fileReport.changed = changedList.length;
+  }
   if (changedList.length > 0) {
+    const parseStart = performance.now();
     const fileResults = await mapLimit(changedList, conc, async (f) => {
       try {
+        if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
         const parsed = await parseFile(f);
         parsedMap.set(f, parsed);
         const { source: src, sup, lang, tree } = parsed;
@@ -2332,6 +2598,7 @@ export async function buildProjectIndexIncremental(
     for (const [f, mod] of fileResults) {
       modules.set(f.replace(/\\/g, "/"), mod);
     }
+    if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
   }
 
   for (const jsonPath of jsonDependencies) {
@@ -2387,6 +2654,7 @@ export async function buildProjectIndexIncremental(
   }
 
   const filesList = Array.from(changedFiles);
+  const graphStart = performance.now();
   const graph =
     filesList.length === 0 && baseGraph
       ? { nodes: new Set(baseGraph.nodes), edges: [...baseGraph.edges] }
@@ -2411,8 +2679,10 @@ export async function buildProjectIndexIncremental(
             });
           },
         });
+  if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
 
   if (manifestEntries.size > 0) {
+    const writeManifestStart = performance.now();
     const lastCommit = await getGitHead(projectRoot);
     const manifestData: IndexManifest = {
       version: MANIFEST_VERSION,
@@ -2420,11 +2690,17 @@ export async function buildProjectIndexIncremental(
       updatedAt: Date.now(),
       ...(lastCommit ? { lastCommit } : {}),
       graphOptions,
+      buildOptions: summarizeBuildOptions(opts),
       files: Object.fromEntries(manifestEntries),
     };
     await writeManifest(projectRoot, opts, manifestData);
+    if (timings)
+      timings.writeManifestMs = Math.round(
+        performance.now() - writeManifestStart,
+      );
   }
 
+  if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
   return {
     graph,
     modules,

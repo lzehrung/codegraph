@@ -56,6 +56,11 @@ export {
   type ModuleIndex,
   type ProjectIndex,
   type ResolvedExport,
+  type BuildReport,
+  type CacheReport,
+  type BuildTimingReport,
+  type BuildFileReport,
+  type ManifestReport,
   type Reference,
   parseFile,
   collectLocalsAndExportsFromSource,
@@ -170,4 +175,6 @@ export {
   buildReviewReport,
   type ReviewDepth,
   type ReviewReport,
+  type ReviewBuildReport,
+  type ReviewTimingReport,
 } from "./review.js";

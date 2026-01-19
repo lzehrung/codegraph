@@ -2,6 +2,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import { performance } from "node:perf_hooks";
 import {
   listProjectFiles,
   listChangedFiles,
@@ -37,6 +38,8 @@ import {
   LANG_CONFIGS,
 } from "./index.js";
 import type {
+  BuildReport,
+  ReviewBuildReport,
   Graph,
   SymbolGraph,
   SymbolNodeKind,
@@ -75,6 +78,19 @@ function writeError(error: unknown) {
   }
   writeStderrLine(String(error));
 }
+
+type CommandTimingReport = {
+  totalMs?: number;
+  resolveFilesMs?: number;
+  commandMs?: number;
+};
+
+type CommandReport = {
+  command: string;
+  timings: CommandTimingReport;
+  index?: BuildReport;
+  review?: ReviewBuildReport;
+};
 
 type ParsedCliArgs = {
   positionals: string[];
@@ -122,6 +138,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--resolution-hint",
   "--review-depth",
   "--ignore-glob",
+  "--report-file",
 ]);
 
 function parseCliArgs(tokens: string[]): ParsedCliArgs {
@@ -181,6 +198,21 @@ function parseCliArgs(tokens: string[]): ParsedCliArgs {
   }
 
   return { positionals, flags, options };
+}
+
+async function writeCommandReport(
+  report: CommandReport,
+  reportFile: string | undefined,
+) {
+  const payload = JSON.stringify(report, null, 2);
+  if (reportFile) {
+    const resolved = path.isAbsolute(reportFile)
+      ? reportFile.replace(/\\/g, "/")
+      : path.resolve(process.cwd(), reportFile).replace(/\\/g, "/");
+    await fsp.writeFile(resolved, `${payload}\n`, "utf8");
+  } else {
+    writeStderrLine(payload);
+  }
 }
 
 // Compact JSON helpers to reduce repeated strings in graph output
@@ -557,6 +589,8 @@ async function main() {
     const v = parsed.options.get(name);
     return v && v.length > 0 ? v[v.length - 1] : undefined;
   };
+  const reportFile = getOpt("--report-file");
+  const reportEnabled = hasFlag("--report") || reportFile !== undefined;
   const graphFlags = {
     fast: hasFlag("--fast-graph"),
     resolveNodeModules: hasFlag("--resolve-node-modules"),
@@ -691,7 +725,17 @@ async function main() {
   }
 
   if (cmd === "graph") {
+    const commandReport: CommandReport | undefined = reportEnabled
+      ? { command: "graph", timings: {} }
+      : undefined;
+    const commandStart = performance.now();
+    const resolveStart = performance.now();
     const files = await resolveFiles();
+    if (commandReport) {
+      commandReport.timings.resolveFilesMs = Math.round(
+        performance.now() - resolveStart,
+      );
+    }
     const hasExplicitSymbolFlag =
       hasFlag("--symbols") ||
       hasFlag("--symbols-only") ||
@@ -740,6 +784,15 @@ async function main() {
         ? path.resolve(process.cwd(), "codegraph.err").replace(/\\/g, "/")
         : undefined;
 
+    const finalizeReport = async () => {
+      if (!commandReport) return;
+      commandReport.timings.commandMs = Math.round(
+        performance.now() - commandStart,
+      );
+      commandReport.timings.totalMs = commandReport.timings.commandMs;
+      await writeCommandReport(commandReport, reportFile);
+    };
+
     const writeOut = async (text: string) => {
       if (outputFile) {
         await fsp.writeFile(outputFile, `${text}\n`, "utf8");
@@ -747,6 +800,12 @@ async function main() {
         writeStdoutLine(text);
       }
     };
+    const indexReport: BuildReport | undefined = commandReport
+      ? { timings: {} }
+      : undefined;
+    if (commandReport && indexReport) {
+      commandReport.index = indexReport;
+    }
     if (sqliteFile) {
       const index = await buildProjectIndexFromFiles(projectRootFs, files, {
         threads,
@@ -760,6 +819,7 @@ async function main() {
             ? { resolutionHints }
             : {}),
         },
+        ...(indexReport ? { report: indexReport } : {}),
       });
       const detailedSymbols = hasFlag("--symbols-detailed");
       const scope = getOpt("--symbols-detailed-scope") as any;
@@ -778,6 +838,7 @@ async function main() {
         symbolGraph: sgraph,
         outputPath: sqliteFile,
       });
+      await finalizeReport();
       return;
     }
     if (wantSymbols) {
@@ -793,6 +854,7 @@ async function main() {
             ? { resolutionHints }
             : {}),
         },
+        ...(indexReport ? { report: indexReport } : {}),
       });
       let sgraph;
       if (detailedSymbols) {
@@ -819,7 +881,9 @@ async function main() {
         } else {
           if (compact) {
             const allFiles = [...index.graph.nodes];
-            await writeOut(toJSON(compactSymbolsOnly(allFiles, sgraphOut, stable)));
+            await writeOut(
+              toJSON(compactSymbolsOnly(allFiles, sgraphOut, stable)),
+            );
           } else {
             await writeOut(
               toJSON({
@@ -829,6 +893,7 @@ async function main() {
             );
           }
         }
+        await finalizeReport();
         return;
       }
       // Reuse the graph already built during indexing to avoid an extra pass
@@ -858,6 +923,7 @@ async function main() {
           );
         }
       }
+      await finalizeReport();
       return;
     }
     const graph = await collectGraph(projectRootFs, files, {
@@ -874,23 +940,43 @@ async function main() {
       await writeOut(
         toJSON({ nodes: [...graphOut.nodes], edges: graphOut.edges }),
       );
+    await finalizeReport();
     return;
   }
 
   if (cmd === "index") {
+    const commandReport: CommandReport | undefined = reportEnabled
+      ? { command: "index", timings: {} }
+      : undefined;
+    const commandStart = performance.now();
+    const resolveStart = performance.now();
     const files = await resolveFiles();
+    if (commandReport) {
+      commandReport.timings.resolveFilesMs = Math.round(
+        performance.now() - resolveStart,
+      );
+    }
     const threads = Number(getOpt("--threads") ?? 0);
     const cache = getOpt("--cache") as any;
     const cacheStrict = hasFlag("--cache-strict");
     const full = hasFlag("--json") || hasFlag("--full");
+    const cacheVerify = hasFlag("--cache-verify");
     const shouldWriteManifest =
       includeRootsAbs.length === 0 && !gitBase && !changedSince;
     const graphOptions = hasGraphOverrides ? buildGraphOptions() : undefined;
+    const indexReport: BuildReport | undefined = commandReport
+      ? { timings: {} }
+      : undefined;
+    if (commandReport && indexReport) {
+      commandReport.index = indexReport;
+    }
     const baseIndexOptions = {
       threads,
       cache,
       cacheStrict,
+      cacheVerify,
       ...(graphOptions ? { graph: graphOptions } : {}),
+      ...(indexReport ? { report: indexReport } : {}),
     };
     const index = shouldWriteManifest
       ? await buildProjectIndex(projectRootFs, baseIndexOptions)
@@ -916,6 +1002,13 @@ async function main() {
         files: [...index.byFile.keys()].length,
         edges: index.graph.edges.length,
       });
+    }
+    if (commandReport) {
+      commandReport.timings.commandMs = Math.round(
+        performance.now() - commandStart,
+      );
+      commandReport.timings.totalMs = commandReport.timings.commandMs;
+      await writeCommandReport(commandReport, reportFile);
     }
     return;
   }
@@ -1195,6 +1288,10 @@ async function main() {
 
   // Review entry point: CLI workflow for review reports.
   if (cmd === "review") {
+    const commandReport: CommandReport | undefined = reportEnabled
+      ? { command: "review", timings: {} }
+      : undefined;
+    const commandStart = performance.now();
     const base = getOpt("--base");
     const head = getOpt("--head");
     const changedSince = getOpt("--changed-since");
@@ -1210,6 +1307,9 @@ async function main() {
     const threadsRaw = getOpt("--threads");
     const threads = threadsRaw !== undefined ? Number(threadsRaw) : undefined;
     const cache = getOpt("--cache") as any;
+    const cacheStrict = hasFlag("--cache-strict");
+    const cacheVerify = hasFlag("--cache-verify");
+    const incrementalStrict = hasFlag("--incremental-strict");
     const includeSymbolDetails = hasFlag("--include-symbol-details");
     const maxCallsitesRaw = getOpt("--max-callsites");
     const maxCallsites =
@@ -1224,14 +1324,29 @@ async function main() {
     if (changedSince !== undefined) reviewOpts.changedSince = changedSince;
     if (threads !== undefined) reviewOpts.threads = threads;
     if (cache !== undefined) reviewOpts.cache = cache;
+    if (cacheStrict) reviewOpts.cacheStrict = true;
+    if (cacheVerify) reviewOpts.cacheVerify = true;
+    if (incrementalStrict) reviewOpts.incrementalStrict = true;
     if (hasGraphOverrides) reviewOpts.graph = buildGraphOptions();
     if (includeSymbolDetails) {
       reviewOpts.includeSymbolDetails = includeSymbolDetails;
     }
     if (maxCallsites !== undefined) reviewOpts.maxCallsites = maxCallsites;
     if (maxTests !== undefined) reviewOpts.maxCandidates = maxTests;
+    if (commandReport) {
+      const reviewReport: ReviewBuildReport = { timings: {} };
+      commandReport.review = reviewReport;
+      reviewOpts.report = reviewReport;
+    }
     const report = await buildReviewReport(projectRootFs, reviewOpts);
     writeJSONLine(report);
+    if (commandReport) {
+      commandReport.timings.commandMs = Math.round(
+        performance.now() - commandStart,
+      );
+      commandReport.timings.totalMs = commandReport.timings.commandMs;
+      await writeCommandReport(commandReport, reportFile);
+    }
     return;
   }
 

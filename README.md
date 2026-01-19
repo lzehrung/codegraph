@@ -312,6 +312,9 @@ npx codegraph cycles
 npx codegraph unresolved
 npx codegraph hotspots
 npx codegraph apisurface
+# Emit a JSON timing/cache report to stderr (or a file)
+npx codegraph index --report
+npx codegraph review --report --report-file review.report.json
 
 # Analyze PR impact: map diffs to symbols and find affected code
 npx codegraph impact --base <commit-sha> --head <commit-sha>
@@ -447,6 +450,8 @@ Use `--include-symbol-details` to attach definition snippets and callsite ranges
 Explicit flags like `--include-symbol-details`, `--max-callsites`, `--max-tests`, or `--fast-graph` override the preset defaults.
 
 For review accuracy, keep full parsing enabled (the default). Only use `--fast-graph` when you are willing to trade off completeness for speed; it can miss edges that full parsing captures.
+
+Use `--incremental-strict` to disable fast graph extraction for changed files while still using incremental file selection. Use `--cache-verify` to validate the manifest before reuse and fall back to a full rebuild if mismatches are detected.
 
 ### For Local Development
 

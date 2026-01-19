@@ -1,8 +1,10 @@
 import path from "node:path";
 import fsp from "node:fs/promises";
+import { performance } from "node:perf_hooks";
 import type { Edge, Range } from "./types.js";
 import {
   buildProjectIndexIncremental,
+  type BuildReport,
   type ExportEntry,
   findReferences,
   type IncrementalBuildOptions,
@@ -74,9 +76,24 @@ export type ReviewOptions = IncrementalBuildOptions & {
   diffText?: string;
   testPatterns?: string[];
   referenceConcurrency?: number;
+  report?: ReviewBuildReport;
 };
 
 export type ReviewDepth = "minimal" | "standard" | "deep";
+
+export type ReviewTimingReport = {
+  totalMs?: number;
+  changesMs?: number;
+  diffMs?: number;
+  indexMs?: number;
+  referencesMs?: number;
+  candidatesMs?: number;
+};
+
+export type ReviewBuildReport = {
+  timings: ReviewTimingReport;
+  indexReport?: BuildReport;
+};
 
 type ReviewPreset = {
   includeSymbolDetails: boolean;
@@ -286,12 +303,16 @@ export async function buildReviewReport(
   opts: ReviewOptions = {},
 ): Promise<ReviewReport> {
   const appliedOptions = applyReviewPresetOptions(opts);
+  const reviewReport = appliedOptions.report;
+  const reviewTimings = reviewReport?.timings;
+  const totalStart = performance.now();
   const normalizeFile = (file: string) =>
     normalizePath(
       path.isAbsolute(file) ? file : path.resolve(projectRoot, file),
     );
 
   const changedFiles = new Set<string>();
+  const changesStart = performance.now();
   for (const file of appliedOptions.files ?? []) {
     const normalized = normalizeFile(file);
     changedFiles.add(normalized);
@@ -312,6 +333,11 @@ export async function buildReviewReport(
     const gitList = await listChangedFiles(projectRoot, gitDiffOpts);
     for (const file of gitList) changedFiles.add(file);
   }
+  if (reviewTimings) {
+    reviewTimings.changesMs = Math.round(
+      performance.now() - changesStart,
+    );
+  }
 
   if (changedFiles.size === 0) {
     const report: ReviewReport = {
@@ -326,6 +352,8 @@ export async function buildReviewReport(
       report.base = appliedOptions.gitBase;
     if (appliedOptions.gitHead !== undefined)
       report.head = appliedOptions.gitHead;
+    if (reviewTimings)
+      reviewTimings.totalMs = Math.round(performance.now() - totalStart);
     return report;
   }
 
@@ -369,6 +397,7 @@ export async function buildReviewReport(
     .filter((entry) => entry.exists)
     .map((entry) => entry.file);
 
+  const diffStart = performance.now();
   const diffText =
     appliedOptions.diffText ??
     ((appliedOptions.gitBase || appliedOptions.changedSince) &&
@@ -380,6 +409,9 @@ export async function buildReviewReport(
         })
       : "");
   const diff = diffText ? parseUnifiedDiff(diffText) : null;
+  if (reviewTimings) {
+    reviewTimings.diffMs = Math.round(performance.now() - diffStart);
+  }
   const diffHunksByFile = new Map<string, Hunk[]>();
   if (diff) {
     for (const fileChange of diff.files) {
@@ -401,12 +433,22 @@ export async function buildReviewReport(
       parsed: new Map(),
     };
   } else {
+    const indexStart = performance.now();
+    const indexReport =
+      reviewReport?.indexReport ?? (reviewReport ? { timings: {} } : undefined);
+    if (reviewReport && !reviewReport.indexReport && indexReport) {
+      reviewReport.indexReport = indexReport;
+    }
     const indexOpts: IncrementalBuildOptions = {
       ...(appliedOptions ?? {}),
       files: filesToIndex,
       graph: graphOptions,
+      ...(indexReport ? { report: indexReport } : {}),
     };
     index = await buildProjectIndexIncremental(projectRoot, indexOpts);
+    if (reviewTimings) {
+      reviewTimings.indexMs = Math.round(performance.now() - indexStart);
+    }
   }
 
   const filesWithModules = changedFileList.map((file) => ({
@@ -472,6 +514,7 @@ export async function buildReviewReport(
   });
 
   const defsToResolve = fileEntries.flatMap((entry) => entry.locals);
+  const referencesStart = performance.now();
   const referenceResults =
     includeSymbolDetails && maxCallsites > 0
       ? await runWithConcurrency(
@@ -483,6 +526,11 @@ export async function buildReviewReport(
           },
         )
       : [];
+  if (reviewTimings) {
+    reviewTimings.referencesMs = Math.round(
+      performance.now() - referencesStart,
+    );
+  }
   const referencesByHandle = new Map<
     string,
     { def: SymbolDef; refs: Awaited<ReturnType<typeof findReferences>> }
@@ -596,6 +644,7 @@ export async function buildReviewReport(
     }))
     .sort(compareEdges);
 
+  const candidateStart = performance.now();
   const candidateTests = listCandidateTestFiles(
     index,
     changedFileList,
@@ -616,6 +665,11 @@ export async function buildReviewReport(
     if (confidenceCompare !== 0) return confidenceCompare;
     return left.reason.localeCompare(right.reason);
   });
+  if (reviewTimings) {
+    reviewTimings.candidatesMs = Math.round(
+      performance.now() - candidateStart,
+    );
+  }
 
   const report: ReviewReport = {
     schemaVersion: REVIEW_SCHEMA_VERSION,
@@ -632,5 +686,7 @@ export async function buildReviewReport(
   if (appliedOptions.gitBase !== undefined)
     report.base = appliedOptions.gitBase;
   report.head = appliedOptions.gitHead ?? "HEAD";
+  if (reviewTimings)
+    reviewTimings.totalMs = Math.round(performance.now() - totalStart);
   return report;
 }
