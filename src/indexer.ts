@@ -2378,9 +2378,9 @@ export async function buildProjectIndexIncremental(
       manifestReport.mismatches = mismatches;
       manifestReport.missing = missing;
     }
-    if (mismatches > 0) {
+    if (mismatches > 0 || missing > 0) {
       console.warn(
-        `Warning: Manifest verification failed for ${mismatches} file(s). Rebuilding full index.`,
+        `Warning: Manifest verification failed (mismatches: ${mismatches}, missing: ${missing}). Rebuilding full index.`,
       );
       return await buildProjectIndex(projectRoot, opts);
     }
