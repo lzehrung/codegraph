@@ -153,6 +153,168 @@ export function collectModuleSpecifiersFromSource(
   return out;
 }
 
+const cloneEdge = (edge: Edge): Edge => ({
+  ...edge,
+  to:
+    edge.to.type === "file"
+      ? { type: "file", path: edge.to.path }
+      : { type: "external", name: edge.to.name },
+});
+
+export async function collectEdgesForFile(
+  file: string,
+  projectRoot: string,
+  workspaceConfig: any,
+  opts: {
+    parsed?: {
+      source: string;
+      tree: Parser.Tree;
+      sup: LanguageSupport;
+      lang: Parser.Language;
+    };
+    fast?: boolean;
+    resolveNodeModules?: boolean;
+    dynamicImportHeuristics?: boolean;
+    resolutionHints?: string[];
+    fileSignature?: { sig: string; gitSig?: string; cacheSig?: string };
+    cachedFileEdges?: GraphCacheEntry;
+    onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
+  },
+): Promise<Edge[]> {
+  const normalizedFile = file.replace(/\\/g, "/");
+  const sigEntry = opts.fileSignature;
+  const sig = sigEntry?.sig;
+  const gitSig = sigEntry?.gitSig;
+
+  const emitCacheEntry = (edges: Edge[]) => {
+    if (!sig || !opts.onFileEdges) return;
+    opts.onFileEdges(normalizedFile, {
+      sig,
+      ...(gitSig ? { gitSig } : {}),
+      edges: edges.map(cloneEdge),
+    });
+  };
+
+  const cached =
+    sig || gitSig ? opts.cachedFileEdges : undefined;
+  const matchesGitSig =
+    !!gitSig && !!cached?.gitSig && cached.gitSig === gitSig;
+  const matchesSig = !!sig && !!cached && cached.sig === sig;
+
+  if (cached && (matchesGitSig || matchesSig)) {
+    const cloned = cached.edges.map(cloneEdge);
+    emitCacheEntry(cloned);
+    return cloned;
+  }
+
+  const parsed = opts.parsed;
+  let sup = parsed?.sup;
+  let lang = parsed?.lang;
+  let src = parsed?.source;
+  if (!sup || !lang || src === undefined) {
+    const prep = await prepareParserInput(file);
+    sup = prep.sup;
+    lang = prep.lang;
+    src = prep.source;
+  }
+
+  const fast = !!opts.fast;
+  const specs = collectModuleSpecifiersFromSource(
+    sup,
+    lang,
+    src,
+    parsed?.tree ? { tree: parsed.tree, fast } : { fast },
+  );
+
+  if (
+    (sup.id === "ts" || sup.id === "js") &&
+    opts.dynamicImportHeuristics
+  ) {
+    const dynamicSpecs = extractJsTsDynamicSpecifiers(
+      src,
+      normalizedFile,
+      projectRoot,
+    );
+    if (dynamicSpecs.length > 0) {
+      const existing = new Set(specs.map((entry) => entry.spec));
+      for (const entry of dynamicSpecs) {
+        if (existing.has(entry.spec)) continue;
+        existing.add(entry.spec);
+        specs.push(entry);
+      }
+    }
+  }
+
+  const { matchPath } =
+    sup.id === "ts" ? await loadNearestTsconfigFor(file) : { matchPath: undefined };
+
+  const edges: Edge[] = [];
+  for (const { spec, typeOnly } of specs) {
+    let to: EdgeTo;
+    if (sup.id === "python") {
+      const relDotsMatch = spec.startsWith(".") ? spec.match(/^\.+/) : null;
+      const relDots = relDotsMatch ? relDotsMatch[0].length : 0;
+      const res = await resolvePythonModule(
+        projectRoot,
+        file,
+        spec.includes(".") || !spec.startsWith(".") ? spec : null,
+        relDots,
+      );
+      to =
+        typeof res === "string"
+          ? { type: "file", path: res.replace(/\\/g, "/") }
+          : { type: "external", name: res.external };
+    } else if (["java", "csharp", "ruby", "rust", "go"].includes(sup.id)) {
+      const { resolvePathLikeModule } = await import("./util.js");
+      const res = await resolvePathLikeModule(projectRoot, spec);
+      if (res) {
+        to = { type: "file", path: res.replace(/\\/g, "/") };
+      } else {
+        // Fallback to resolveSpecifier for relative paths like ./foo
+        const res2 = await resolveSpecifier(
+          file,
+          spec,
+          projectRoot,
+          matchPath,
+          workspaceConfig,
+          {
+            resolveNodeModules: !!opts.resolveNodeModules,
+            ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+          },
+        );
+        to =
+          typeof res2 === "string"
+            ? { type: "file", path: res2.replace(/\\/g, "/") }
+            : { type: "external", name: res2.external };
+      }
+    } else {
+      const res = await resolveSpecifier(
+        file,
+        spec,
+        projectRoot,
+        matchPath,
+        workspaceConfig,
+        {
+          resolveNodeModules: !!opts.resolveNodeModules,
+          ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+        },
+      );
+      to =
+        typeof res === "string"
+          ? { type: "file", path: res.replace(/\\/g, "/") }
+          : { type: "external", name: res.external };
+    }
+    edges.push({
+      from: normalizedFile,
+      to,
+      raw: spec,
+      ...(typeOnly !== undefined && { typeOnly }),
+    });
+  }
+  emitCacheEntry(edges);
+  return edges;
+}
+
 export async function collectGraph(
   projectRoot: string,
   files: string[],
@@ -197,14 +359,6 @@ export async function collectGraph(
 
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 32, 128));
 
-  const cloneEdge = (edge: Edge): Edge => ({
-    ...edge,
-    to:
-      edge.to.type === "file"
-        ? { type: "file", path: edge.to.path }
-        : { type: "external", name: edge.to.name },
-  });
-
   const addEdgeTargetsToGraph = (edges: Edge[]) => {
     for (const edge of edges) {
       if (edge.to.type === "file") graph.nodes.add(edge.to.path);
@@ -214,20 +368,6 @@ export async function collectGraph(
   if (graph.edges.length > 0) {
     addEdgeTargetsToGraph(graph.edges);
   }
-
-  const emitCacheEntry = (
-    file: string,
-    sig: string | undefined,
-    gitSig: string | undefined,
-    edges: Edge[],
-  ) => {
-    if (!sig || !opts?.onFileEdges) return;
-    opts.onFileEdges(file, {
-      sig,
-      ...(gitSig ? { gitSig } : {}),
-      edges: edges.map(cloneEdge),
-    });
-  };
 
   async function mapLimit<T, R>(
     items: T[],
@@ -263,126 +403,25 @@ export async function collectGraph(
     try {
       const normalizedFile = file.replace(/\\/g, "/");
       const sigEntry = opts?.fileSignatures?.get(normalizedFile);
-      const sig = sigEntry?.sig;
-      const gitSig = sigEntry?.gitSig;
       const shouldReplace = hasExplicitReplace && replaceSet.has(normalizedFile);
-      const cached =
-        !shouldReplace && (sig || gitSig)
-          ? opts?.cachedFileEdges?.get(normalizedFile)
-          : undefined;
-      const matchesGitSig =
-        !!gitSig && !!cached?.gitSig && cached.gitSig === gitSig;
-      const matchesSig = !!sig && !!cached && cached.sig === sig;
-      if (cached && (matchesGitSig || matchesSig)) {
-        const cloned = cached.edges.map(cloneEdge);
-        addEdgeTargetsToGraph(cloned);
-        emitCacheEntry(normalizedFile, sig, gitSig, cloned);
-        return cloned;
-      }
-
-      const parsed = opts?.parsed?.get(file);
-      let sup = parsed?.sup;
-      let lang = parsed?.lang;
-      let src = parsed?.source;
-      if (!sup || !lang || src === undefined) {
-        const prep = await prepareParserInput(file);
-        sup = prep.sup;
-        lang = prep.lang;
-        src = prep.source;
-      }
-      const fast = !!opts?.fast;
-      const specs = collectModuleSpecifiersFromSource(
-        sup,
-        lang,
-        src,
-        parsed?.tree ? { tree: parsed.tree, fast } : { fast },
+      const cachedFileEdges = !shouldReplace ? opts?.cachedFileEdges?.get(normalizedFile) : undefined;
+      const parsedEntry = opts?.parsed?.get(file);
+      const edges = await collectEdgesForFile(
+        file,
+        projectRoot,
+        workspaceConfig,
+        {
+          ...(parsedEntry ? { parsed: parsedEntry } : {}),
+          fast: !!opts?.fast,
+          resolveNodeModules: !!opts?.resolveNodeModules,
+          dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
+          ...(opts?.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+          ...(sigEntry ? { fileSignature: sigEntry } : {}),
+          ...(cachedFileEdges ? { cachedFileEdges } : {}),
+          ...(opts?.onFileEdges ? { onFileEdges: opts.onFileEdges } : {}),
+        },
       );
-      if (
-        (sup.id === "ts" || sup.id === "js") &&
-        opts?.dynamicImportHeuristics
-      ) {
-        const dynamicSpecs = extractJsTsDynamicSpecifiers(
-          src,
-          normalizedFile,
-          projectRoot,
-        );
-        if (dynamicSpecs.length > 0) {
-          const existing = new Set(specs.map((entry) => entry.spec));
-          for (const entry of dynamicSpecs) {
-            if (existing.has(entry.spec)) continue;
-            existing.add(entry.spec);
-            specs.push(entry);
-          }
-        }
-      }
-      const { matchPath } =
-        sup.id === "ts" ? await loadNearestTsconfigFor(file) : {};
-
-      const edges: Edge[] = [];
-      for (const { spec, typeOnly } of specs) {
-        let to: EdgeTo;
-        if (sup.id === "python") {
-          const relDotsMatch = spec.startsWith(".") ? spec.match(/^\.+/) : null;
-          const relDots = relDotsMatch ? relDotsMatch[0].length : 0;
-          const res = await resolvePythonModule(
-            projectRoot,
-            file,
-            spec.includes(".") || !spec.startsWith(".") ? spec : null,
-            relDots,
-          );
-          to =
-            typeof res === "string"
-              ? { type: "file", path: res.replace(/\\/g, "/") }
-              : { type: "external", name: res.external };
-        } else if (["java", "csharp", "ruby", "rust", "go"].includes(sup.id)) {
-          const { resolvePathLikeModule } = await import("./util.js");
-          const res = await resolvePathLikeModule(projectRoot, spec);
-          if (res) {
-            to = { type: "file", path: res.replace(/\\/g, "/") };
-          } else {
-            // Fallback to resolveSpecifier for relative paths like ./foo
-            const res2 = await resolveSpecifier(
-              file,
-              spec,
-              projectRoot,
-              matchPath,
-              workspaceConfig,
-              {
-                resolveNodeModules: !!opts?.resolveNodeModules,
-                resolutionHints,
-              },
-            );
-            to =
-              typeof res2 === "string"
-                ? { type: "file", path: res2.replace(/\\/g, "/") }
-                : { type: "external", name: res2.external };
-          }
-        } else {
-          const res = await resolveSpecifier(
-            file,
-            spec,
-            projectRoot,
-            matchPath,
-            workspaceConfig,
-            {
-              resolveNodeModules: !!opts?.resolveNodeModules,
-              resolutionHints,
-            },
-          );
-          to =
-            typeof res === "string"
-              ? { type: "file", path: res.replace(/\\/g, "/") }
-              : { type: "external", name: res.external };
-        }
-        edges.push({
-          from: normalizedFile,
-          to,
-          raw: spec,
-          ...(typeOnly !== undefined && { typeOnly }),
-        });
-        if (to.type === "file") graph.nodes.add(to.path);
-      }
-      emitCacheEntry(normalizedFile, sig, gitSig, edges);
+      addEdgeTargetsToGraph(edges);
       return edges;
     } catch (error) {
       console.warn(`Warning: Failed to process file ${file} for graph:`, error);

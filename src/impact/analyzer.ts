@@ -8,7 +8,7 @@ import type {
   ImpactOptions,
   FileChange,
 } from "./types.js";
-import { findReferences } from "../indexer.js";
+import { findReferences, ensureParsedContext } from "../indexer.js";
 
 export async function analyzeImpact(
   index: ProjectIndex,
@@ -98,7 +98,7 @@ export async function analyzeImpact(
             reasons.push(reason);
           }
 
-          const severityResult = calculateSeverity(
+          const severityResult = await calculateSeverity(
             changedSymbol,
             ref,
             reasons,
@@ -301,14 +301,14 @@ async function analyzeTransitiveImpact(
   }
 }
 
-export function calculateSeverity(
+export async function calculateSeverity(
   changedSymbol: ChangedSymbol,
   ref: any,
   reasons: ImpactReason[],
   depth: number,
   index: ProjectIndex,
   fanInByFile?: Map<FileId, number>,
-): { severity: number; explain: any } {
+): Promise<{ severity: number; explain: any }> {
   let score = 1.0;
   const explain: any = {};
   const hints: string[] = [];
@@ -372,7 +372,7 @@ export function calculateSeverity(
       return l.localName === changedSymbol.name && localIndex === changedIndex;
     });
     if (symbolDef) {
-      const parsed = index.parsed?.get(changedSymbol.file);
+      const parsed = await ensureParsedContext(changedSymbol.file, index.parsed?.get(changedSymbol.file));
       if (parsed) {
         const { tree, sup } = parsed;
         const pos = {

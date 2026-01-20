@@ -125,7 +125,7 @@ describe("Impact Analyzer Edge Cases", () => {
   });
 
   describe("calculateSeverity", () => {
-    it("should calculate severity with hints for exported symbols", () => {
+    it("should calculate severity with hints for exported symbols", async () => {
       const mockIndex = {
         graph: { edges: [] },
         byFile: new Map()
@@ -146,14 +146,14 @@ describe("Impact Analyzer Edge Cases", () => {
         range: { start: { line: 5, column: 10 } }
       };
 
-      const result = calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndex);
+      const result = await calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndex);
 
       expect(result.severity).toBeGreaterThan(0);
       expect(result.explain.hints).toContain("exportChanged");
       expect(result.explain.exported).toBe(true);
     });
 
-    it("should apply depth decay correctly", () => {
+    it("should apply depth decay correctly", async () => {
       const mockIndex = {
         graph: { edges: [] },
         byFile: new Map()
@@ -174,16 +174,16 @@ describe("Impact Analyzer Edge Cases", () => {
         range: { start: { line: 5, column: 10 } }
       };
 
-      const depth0 = calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndex);
-      const depth1 = calculateSeverity(changedSymbol, ref, ["transitive"], 1, mockIndex);
-      const depth2 = calculateSeverity(changedSymbol, ref, ["transitive"], 2, mockIndex);
+      const depth0 = await calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndex);
+      const depth1 = await calculateSeverity(changedSymbol, ref, ["transitive"], 1, mockIndex);
+      const depth2 = await calculateSeverity(changedSymbol, ref, ["transitive"], 2, mockIndex);
 
       // Higher depth should result in lower severity (decay)
       expect(depth0.severity).toBeGreaterThan(depth1.severity);
       expect(depth1.severity).toBeGreaterThan(depth2.severity);
     });
 
-    it("should boost severity for same-file references", () => {
+    it("should boost severity for same-file references", async () => {
       const mockIndex = {
         graph: { edges: [] },
         byFile: new Map()
@@ -209,8 +209,8 @@ describe("Impact Analyzer Edge Cases", () => {
         range: { start: { line: 5, column: 10 } }
       };
 
-      const sameFileResult = calculateSeverity(changedSymbol, sameFileRef, ["directRef"], 0, mockIndex);
-      const differentFileResult = calculateSeverity(changedSymbol, differentFileRef, ["directRef"], 0, mockIndex);
+      const sameFileResult = await calculateSeverity(changedSymbol, sameFileRef, ["directRef"], 0, mockIndex);
+      const differentFileResult = await calculateSeverity(changedSymbol, differentFileRef, ["directRef"], 0, mockIndex);
 
       expect(sameFileResult.explain.sameFile).toBe(true);
       expect(differentFileResult.explain.sameFile).toBeUndefined();
@@ -220,7 +220,7 @@ describe("Impact Analyzer Edge Cases", () => {
       expect(differentFileResult.severity).toBe(1.0);
     });
 
-    it("should penalize type-only changes", () => {
+    it("should penalize type-only changes", async () => {
       const mockIndex = {
         graph: { edges: [] },
         byFile: new Map()
@@ -251,15 +251,15 @@ describe("Impact Analyzer Edge Cases", () => {
         range: { start: { line: 5, column: 10 } }
       };
 
-      const typeOnlyResult = calculateSeverity(typeOnlySymbol, ref, ["directRef"], 0, mockIndex);
-      const runtimeResult = calculateSeverity(runtimeSymbol, ref, ["directRef"], 0, mockIndex);
+      const typeOnlyResult = await calculateSeverity(typeOnlySymbol, ref, ["directRef"], 0, mockIndex);
+      const runtimeResult = await calculateSeverity(runtimeSymbol, ref, ["directRef"], 0, mockIndex);
 
       expect(typeOnlyResult.explain.typeOnly).toBe(true);
       // Type-only changes should have lower severity
       expect(runtimeResult.severity).toBeGreaterThan(typeOnlyResult.severity);
     });
 
-    it("should consider fan-in when calculating severity", () => {
+    it("should consider fan-in when calculating severity", async () => {
       const mockIndexWithDeps = {
         graph: {
           edges: [
@@ -291,8 +291,8 @@ describe("Impact Analyzer Edge Cases", () => {
         range: { start: { line: 5, column: 10 } }
       };
 
-      const highFanInResult = calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndexWithDeps);
-      const lowFanInResult = calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndexNoDeps);
+      const highFanInResult = await calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndexWithDeps);
+      const lowFanInResult = await calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndexNoDeps);
 
       expect(highFanInResult.explain.fanIn).toBe(3);
       expect(lowFanInResult.explain.fanIn).toBeUndefined();
