@@ -1915,9 +1915,6 @@ async function buildIndexFromFileListShared(
         gitAvailable,
       })
     : new Map<string, string>();
-  // We no longer populate parsedMap for all files to save memory on large repos.
-  // Consumers (goToDefinition/findReferences) will re-parse on demand if needed.
-  const parsedMap = undefined;
   const jsonDependencies = new Set<string>();
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
   const useBloomFilters = opts?.useBloomFilters ?? true; // Default to true for performance
@@ -2147,7 +2144,7 @@ async function buildIndexFromFileListShared(
     byFile: modules,
     exportCache: new Map(),
     scopeCache: new Map(),
-    parsed: parsedMap as any,
+    parsed: new Map(),
     ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
   };
 }
