@@ -1936,17 +1936,6 @@ async function buildIndexFromFileListShared(
     });
   } : undefined;
 
-  // Initialize cached edges from manifest if available
-  if (cachedGraphEntries) {
-    for (const [file, entry] of cachedGraphEntries) {
-      // Add edges from cache initially; they might be replaced if file changed
-      // But collectEdgesForFile handles cache check, so we don't need to populate graph here
-      // UNLESS we want to support incremental graph building where we skip processing unchanged files completely.
-      // But mapLimit below iterates ALL files.
-      // We will let collectEdgesForFile handle the caching logic per file.
-    }
-  }
-
   const fileResults = await mapLimit(normalizedFiles, conc, async (f) => {
     try {
       const sigInfo = await fileSignature(
