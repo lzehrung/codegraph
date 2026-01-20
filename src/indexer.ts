@@ -2059,7 +2059,16 @@ async function buildIndexFromFileListShared(
         });
       }
 
-      return [f, mod!, edges] as const;
+      if (!mod) {
+        mod = {
+          file: f,
+          exports: [],
+          imports: [],
+          locals: [],
+        };
+      }
+
+      return [f, mod, edges] as const;
     } catch (error) {
       console.warn(`Warning: Failed to process file ${f}:`, error);
       const mod: ModuleIndex = {
