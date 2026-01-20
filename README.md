@@ -312,6 +312,9 @@ npx codegraph cycles
 npx codegraph unresolved
 npx codegraph hotspots
 npx codegraph apisurface
+# Emit a JSON timing/cache report to stderr (or a file)
+npx codegraph index --report
+npx codegraph review --report --report-file review.report.json
 
 # Analyze PR impact: map diffs to symbols and find affected code
 npx codegraph impact --base <commit-sha> --head <commit-sha>
@@ -346,6 +349,8 @@ npx codegraph review --base origin/main --head HEAD > review.json
 npx codegraph review --base origin/main --head HEAD --include-symbol-details --max-callsites 5 > review.json
 # Use review presets for common depth/quality tradeoffs
 npx codegraph review --base origin/main --head HEAD --review-depth standard > review.json
+# Export graph deltas between revisions (requires manifest cache)
+npx codegraph graph-delta --git-base origin/main --git-head HEAD > graph-delta.json
 
 # Export graphs to SQLite (queryable by agents/tools)
 npx codegraph graph --sqlite ./codegraph.sqlite
@@ -396,12 +401,27 @@ WHERE to_path = 'src/auth.ts' AND to_type = 'file';
 
 ```jsonc
 {
+  "schemaVersion": 1,
   "status": "ok",
   "summary": {
     "filesChanged": 3,
     "symbolsChanged": 12,
     "candidateTests": 5
   },
+  "riskSummary": {
+    "level": "medium",
+    "score": 60,
+    "signals": ["exported-symbols-changed"]
+  },
+  "reviewTasks": [
+    {
+      "id": "review-summary",
+      "title": "Review changed symbols",
+      "description": "Scan the changed symbols and confirm behavioral changes align with intent.",
+      "priority": "medium",
+      "reason": "baseline-review"
+    }
+  ],
   "changedFiles": [
     {
       "file": "src/foo.ts",
@@ -433,6 +453,12 @@ WHERE to_path = 'src/auth.ts' AND to_type = 'file';
 
 Feed this JSON directly to an agent (or your own scripts) to highlight symbol-level changes, updated dependency edges, and likely regression tests.
 
+`schemaVersion` identifies the review JSON schema for CI validation and compatibility checks.
+
+`riskSummary` and `reviewTasks` provide agent-ready guidance on review focus areas and likely risk hotspots.
+
+Graph delta exports (`graph-delta`) report file-level edge additions/removals for changed files and are intended for lightweight CI artifacts.
+
 Use `--include-symbol-details` to attach definition snippets and callsite ranges for changed symbols. When diff data is available (from Git or `diffText`), review reports focus on symbols touched by diff hunks and include `diffSnippets` with the changed line context. Tune `--max-callsites` to keep the payload bounded.
 
 `--review-depth minimal|standard|deep` applies preset bundles:
@@ -444,6 +470,8 @@ Use `--include-symbol-details` to attach definition snippets and callsite ranges
 Explicit flags like `--include-symbol-details`, `--max-callsites`, `--max-tests`, or `--fast-graph` override the preset defaults.
 
 For review accuracy, keep full parsing enabled (the default). Only use `--fast-graph` when you are willing to trade off completeness for speed; it can miss edges that full parsing captures.
+
+Use `--incremental-strict` to disable fast graph extraction for changed files while still using incremental file selection. Use `--cache-verify` to validate the manifest before reuse and fall back to a full rebuild if mismatches are detected.
 
 ### For Local Development
 

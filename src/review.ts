@@ -1,8 +1,10 @@
 import path from "node:path";
 import fsp from "node:fs/promises";
+import { performance } from "node:perf_hooks";
 import type { Edge, Range } from "./types.js";
 import {
   buildProjectIndexIncremental,
+  type BuildReport,
   type ExportEntry,
   findReferences,
   type IncrementalBuildOptions,
@@ -50,6 +52,7 @@ type ReviewSymbolSummary = {
 };
 
 export type ReviewReport = {
+  schemaVersion: number;
   status: "ok" | "no_changes";
   base?: string;
   head?: string;
@@ -58,6 +61,8 @@ export type ReviewReport = {
     symbolsChanged: number;
     candidateTests: number;
   };
+  riskSummary: ReviewRiskSummary;
+  reviewTasks: ReviewTask[];
   changedFiles: ReviewFileSummary[];
   graphDelta: Edge[];
   candidateTests: CandidateTestFile[];
@@ -73,9 +78,42 @@ export type ReviewOptions = IncrementalBuildOptions & {
   diffText?: string;
   testPatterns?: string[];
   referenceConcurrency?: number;
+  report?: ReviewBuildReport;
 };
 
 export type ReviewDepth = "minimal" | "standard" | "deep";
+
+export type ReviewRiskLevel = "low" | "medium" | "high";
+
+export type ReviewRiskSummary = {
+  level: ReviewRiskLevel;
+  score: number;
+  signals: string[];
+};
+
+export type ReviewTaskPriority = "low" | "medium" | "high";
+
+export type ReviewTask = {
+  id: string;
+  title: string;
+  description: string;
+  priority: ReviewTaskPriority;
+  reason: string;
+};
+
+export type ReviewTimingReport = {
+  totalMs?: number;
+  changesMs?: number;
+  diffMs?: number;
+  indexMs?: number;
+  referencesMs?: number;
+  candidatesMs?: number;
+};
+
+export type ReviewBuildReport = {
+  timings: ReviewTimingReport;
+  indexReport?: BuildReport;
+};
 
 type ReviewPreset = {
   includeSymbolDetails: boolean;
@@ -105,6 +143,8 @@ const REVIEW_PRESETS: Record<ReviewDepth, ReviewPreset> = {
   },
 };
 
+const REVIEW_SCHEMA_VERSION = 1;
+
 function mergeGraphOptions(
   base: IncrementalBuildOptions["graph"] | undefined,
   override: IncrementalBuildOptions["graph"] | undefined,
@@ -130,6 +170,119 @@ function applyReviewPresetOptions(opts: ReviewOptions): ReviewOptions {
 
 function relativePath(root: string, file: string): string {
   return normalizePath(path.relative(root, file));
+}
+
+function comparePaths(left: string, right: string): number {
+  return left.localeCompare(right);
+}
+
+function compareEdges(left: Edge, right: Edge): number {
+  const fromCompare = comparePaths(left.from, right.from);
+  if (fromCompare !== 0) return fromCompare;
+  if (left.to.type !== right.to.type) {
+    return left.to.type === "file" ? -1 : 1;
+  }
+  const leftTarget = left.to.type === "file" ? left.to.path : left.to.name;
+  const rightTarget =
+    right.to.type === "file" ? right.to.path : right.to.name;
+  const toCompare = comparePaths(leftTarget, rightTarget);
+  if (toCompare !== 0) return toCompare;
+  const rawCompare = left.raw.localeCompare(right.raw);
+  if (rawCompare !== 0) return rawCompare;
+  const leftTypeOnly = left.typeOnly ? 1 : 0;
+  const rightTypeOnly = right.typeOnly ? 1 : 0;
+  return leftTypeOnly - rightTypeOnly;
+}
+
+function sortSymbols(symbols: SymbolDef[]): SymbolDef[] {
+  return symbols
+    .slice()
+    .sort((left, right) => symbolId(left).localeCompare(symbolId(right)));
+}
+
+function computeRiskSummary(input: {
+  filesChanged: number;
+  symbolsChanged: number;
+  exportedChanged: number;
+}): ReviewRiskSummary {
+  const signals: string[] = [];
+  let score = 0;
+  if (input.exportedChanged > 0) {
+    score += 60;
+    signals.push("exported-symbols-changed");
+  } else {
+    score += 20;
+  }
+  if (input.symbolsChanged >= 20) {
+    score += 20;
+    signals.push("many-symbols-changed");
+  }
+  if (input.filesChanged >= 10) {
+    score += 20;
+    signals.push("many-files-changed");
+  }
+  const normalizedScore = Math.min(100, score);
+  let level: ReviewRiskLevel = "low";
+  if (normalizedScore >= 70) level = "high";
+  else if (normalizedScore >= 40) level = "medium";
+  return {
+    level,
+    score: normalizedScore,
+    signals,
+  };
+}
+
+function buildReviewTasks(input: {
+  filesChanged: number;
+  symbolsChanged: number;
+  exportedChanged: number;
+  candidateTests: number;
+}): ReviewTask[] {
+  const tasks: ReviewTask[] = [
+    {
+      id: "review-summary",
+      title: "Review changed symbols",
+      description:
+        "Scan the changed symbols and confirm behavioral changes align with intent.",
+      priority: "medium",
+      reason: "baseline-review",
+    },
+  ];
+
+  if (input.exportedChanged > 0) {
+    tasks.push({
+      id: "api-compat",
+      title: "Verify API compatibility",
+      description:
+        "Check exported symbols for breaking changes, migration notes, and versioning implications.",
+      priority: "high",
+      reason: "exported-symbols-changed",
+    });
+  }
+
+  if (input.candidateTests === 0) {
+    tasks.push({
+      id: "tests-missing",
+      title: "Validate test coverage",
+      description:
+        "No candidate tests were detected. Confirm existing coverage or add targeted tests.",
+      priority: "medium",
+      reason: "no-candidate-tests",
+    });
+  }
+
+  if (input.filesChanged >= 10 || input.symbolsChanged >= 20) {
+    tasks.push({
+      id: "high-change-volume",
+      title: "Assess change scope",
+      description:
+        "Large change set detected. Double-check impacted files and coordination needs.",
+      priority: "high",
+      reason: "large-change-set",
+    });
+  }
+
+  return tasks;
 }
 
 function isExported(mod: { exports: ExportEntry[] }, handle: string): boolean {
@@ -255,12 +408,16 @@ export async function buildReviewReport(
   opts: ReviewOptions = {},
 ): Promise<ReviewReport> {
   const appliedOptions = applyReviewPresetOptions(opts);
+  const reviewReport = appliedOptions.report;
+  const reviewTimings = reviewReport?.timings;
+  const totalStart = performance.now();
   const normalizeFile = (file: string) =>
     normalizePath(
       path.isAbsolute(file) ? file : path.resolve(projectRoot, file),
     );
 
   const changedFiles = new Set<string>();
+  const changesStart = performance.now();
   for (const file of appliedOptions.files ?? []) {
     const normalized = normalizeFile(file);
     changedFiles.add(normalized);
@@ -281,11 +438,29 @@ export async function buildReviewReport(
     const gitList = await listChangedFiles(projectRoot, gitDiffOpts);
     for (const file of gitList) changedFiles.add(file);
   }
+  if (reviewTimings) {
+    reviewTimings.changesMs = Math.round(
+      performance.now() - changesStart,
+    );
+  }
 
   if (changedFiles.size === 0) {
+    const riskSummary = computeRiskSummary({
+      filesChanged: 0,
+      symbolsChanged: 0,
+      exportedChanged: 0,
+    });
     const report: ReviewReport = {
+      schemaVersion: REVIEW_SCHEMA_VERSION,
       status: "no_changes",
       summary: { filesChanged: 0, symbolsChanged: 0, candidateTests: 0 },
+      riskSummary,
+      reviewTasks: buildReviewTasks({
+        filesChanged: 0,
+        symbolsChanged: 0,
+        exportedChanged: 0,
+        candidateTests: 0,
+      }),
       changedFiles: [],
       graphDelta: [],
       candidateTests: [],
@@ -294,10 +469,12 @@ export async function buildReviewReport(
       report.base = appliedOptions.gitBase;
     if (appliedOptions.gitHead !== undefined)
       report.head = appliedOptions.gitHead;
+    if (reviewTimings)
+      reviewTimings.totalMs = Math.round(performance.now() - totalStart);
     return report;
   }
 
-  const changedFileList = Array.from(changedFiles);
+  const changedFileList = Array.from(changedFiles).sort(comparePaths);
   const fastGraphRequested = appliedOptions.graph?.fast ?? false;
   const graphOptions = appliedOptions.graph
     ? { ...appliedOptions.graph, fast: fastGraphRequested }
@@ -337,6 +514,7 @@ export async function buildReviewReport(
     .filter((entry) => entry.exists)
     .map((entry) => entry.file);
 
+  const diffStart = performance.now();
   const diffText =
     appliedOptions.diffText ??
     ((appliedOptions.gitBase || appliedOptions.changedSince) &&
@@ -348,6 +526,9 @@ export async function buildReviewReport(
         })
       : "");
   const diff = diffText ? parseUnifiedDiff(diffText) : null;
+  if (reviewTimings) {
+    reviewTimings.diffMs = Math.round(performance.now() - diffStart);
+  }
   const diffHunksByFile = new Map<string, Hunk[]>();
   if (diff) {
     for (const fileChange of diff.files) {
@@ -369,12 +550,22 @@ export async function buildReviewReport(
       parsed: new Map(),
     };
   } else {
+    const indexStart = performance.now();
+    const indexReport =
+      reviewReport?.indexReport ?? (reviewReport ? { timings: {} } : undefined);
+    if (reviewReport && !reviewReport.indexReport && indexReport) {
+      reviewReport.indexReport = indexReport;
+    }
     const indexOpts: IncrementalBuildOptions = {
       ...(appliedOptions ?? {}),
       files: filesToIndex,
       graph: graphOptions,
+      ...(indexReport ? { report: indexReport } : {}),
     };
     index = await buildProjectIndexIncremental(projectRoot, indexOpts);
+    if (reviewTimings) {
+      reviewTimings.indexMs = Math.round(performance.now() - indexStart);
+    }
   }
 
   const filesWithModules = changedFileList.map((file) => ({
@@ -398,12 +589,13 @@ export async function buildReviewReport(
       };
     }
     if (!hunks) {
+      const locals = sortSymbols(mod.locals);
       return {
         file,
         mod,
         hunks,
-        locals: mod.locals,
-        handles: mod.locals.map((local) => symbolId(local)),
+        locals,
+        handles: locals.map((local) => symbolId(local)),
         diffLinesByHandle: new Map<string, Set<number>>(),
       };
     }
@@ -421,8 +613,8 @@ export async function buildReviewReport(
         range: symbol.range,
       });
     }
-    const locals = Array.from(uniqueSymbols.values());
-    const handles = Array.from(uniqueSymbols.keys());
+    const locals = sortSymbols(Array.from(uniqueSymbols.values()));
+    const handles = locals.map((local) => symbolId(local));
     return {
       file,
       mod,
@@ -439,6 +631,7 @@ export async function buildReviewReport(
   }));
 
   const defsToResolve = fileEntries.flatMap((entry) => entry.locals);
+  const referencesStart = performance.now();
   const referenceResults =
     includeSymbolDetails && maxCallsites > 0
       ? await runWithConcurrency(
@@ -450,6 +643,11 @@ export async function buildReviewReport(
           },
         )
       : [];
+  if (reviewTimings) {
+    reviewTimings.referencesMs = Math.round(
+      performance.now() - referencesStart,
+    );
+  }
   const referencesByHandle = new Map<
     string,
     { def: SymbolDef; refs: Awaited<ReturnType<typeof findReferences>> }
@@ -549,19 +747,32 @@ export async function buildReviewReport(
   const changedSymbolIds = summariesWithHandles.flatMap(
     (entry) => entry.handles,
   );
+  const exportedChangedCount = summaries.reduce((count, summary) => {
+    const exportedInFile = summary.symbols.filter((symbol) => symbol.exported);
+    return count + exportedInFile.length;
+  }, 0);
 
   const graphDelta: Edge[] = index.graph.edges
     .filter((edge) => changedFiles.has(edge.from))
-    .map((edge) => ({
-      from: relativePath(projectRoot, edge.from),
-      to:
+    .map((edge) => {
+      const from = relativePath(projectRoot, edge.from);
+      const to =
         edge.to.type === "file"
-          ? { type: "file", path: relativePath(projectRoot, edge.to.path) }
-          : edge.to,
-      raw: edge.raw,
-      ...(edge.typeOnly ? { typeOnly: edge.typeOnly } : {}),
-    }));
+          ? {
+              type: "file" as const,
+              path: relativePath(projectRoot, edge.to.path),
+            }
+          : edge.to;
+      return {
+        from,
+        to,
+        raw: edge.raw,
+        ...(edge.typeOnly ? { typeOnly: edge.typeOnly } : {}),
+      };
+    })
+    .sort(compareEdges);
 
+  const candidateStart = performance.now();
   const candidateTests = listCandidateTestFiles(
     index,
     changedFileList,
@@ -575,15 +786,38 @@ export async function buildReviewReport(
   ).map((candidate) => ({
     ...candidate,
     file: relativePath(projectRoot, candidate.file),
-  }));
+  })).sort((left, right) => {
+    const fileCompare = comparePaths(left.file, right.file);
+    if (fileCompare !== 0) return fileCompare;
+    const confidenceCompare = left.confidence.localeCompare(right.confidence);
+    if (confidenceCompare !== 0) return confidenceCompare;
+    return left.reason.localeCompare(right.reason);
+  });
+  if (reviewTimings) {
+    reviewTimings.candidatesMs = Math.round(
+      performance.now() - candidateStart,
+    );
+  }
 
   const report: ReviewReport = {
+    schemaVersion: REVIEW_SCHEMA_VERSION,
     status: "ok",
     summary: {
       filesChanged: summaries.length,
       symbolsChanged: changedSymbolIds.length,
       candidateTests: candidateTests.length,
     },
+    riskSummary: computeRiskSummary({
+      filesChanged: summaries.length,
+      symbolsChanged: changedSymbolIds.length,
+      exportedChanged: exportedChangedCount,
+    }),
+    reviewTasks: buildReviewTasks({
+      filesChanged: summaries.length,
+      symbolsChanged: changedSymbolIds.length,
+      exportedChanged: exportedChangedCount,
+      candidateTests: candidateTests.length,
+    }),
     changedFiles: summaries,
     graphDelta,
     candidateTests,
@@ -591,5 +825,7 @@ export async function buildReviewReport(
   if (appliedOptions.gitBase !== undefined)
     report.base = appliedOptions.gitBase;
   report.head = appliedOptions.gitHead ?? "HEAD";
+  if (reviewTimings)
+    reviewTimings.totalMs = Math.round(performance.now() - totalStart);
   return report;
 }
