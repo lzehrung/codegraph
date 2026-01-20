@@ -112,7 +112,10 @@ describe('Review report', () => {
       files: [filePath],
     });
 
+    expect(report.schemaVersion).toBe(1);
     expect(report.status).toBe('ok');
+    expect(report.riskSummary.level).toBeDefined();
+    expect(report.reviewTasks.length).toBeGreaterThan(0);
     expect(report.changedFiles.length).toBe(1);
     expect(report.changedFiles[0]?.symbols.some((s) => s.name === 'a')).toBe(true);
   });

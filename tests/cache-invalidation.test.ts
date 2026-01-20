@@ -9,6 +9,7 @@ import {
   buildProjectIndex,
   buildProjectIndexIncremental,
 } from '../src/index.js';
+import * as indexer from '../src/indexer.js';
 import { collectGraph } from '../src/graphs.js';
 import { getGitBlobHash } from '../src/util.js';
 import * as filePrep from '../src/languages/filePrep.js';
@@ -185,6 +186,51 @@ describe('Cache invalidation and strict hashing', () => {
     prepSpy.mockRestore();
     expect(graph.edges.length).toBe(1);
     expect(graph.edges[0]?.from).toBe(normalize(trackedPath));
+  });
+
+  it('rebuilds when cache verification detects manifest mismatches', async () => {
+    const root = await mkTmpDir('dg-cache-verify-');
+    const filePath = path.join(root, 'verify.ts');
+    await fsp.writeFile(filePath, `export const a = 1;\n`, 'utf8');
+
+    await buildProjectIndex(root, { threads: 2, cache: 'disk' });
+    const manifestPath = path.join(
+      root,
+      '.codegraph-cache',
+      'index-v1',
+      'manifest.json',
+    );
+    const manifest = await readManifest(root);
+    manifest.files[normalize(filePath)].sig = 'bad-signature';
+    await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fullBuildSpy = vi.spyOn(indexer, 'buildProjectIndex');
+    await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: 'disk',
+      cacheVerify: true,
+    });
+    expect(fullBuildSpy).toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+    fullBuildSpy.mockRestore();
+  });
+
+  it('forces full parsing when incremental strict mode is enabled', async () => {
+    const root = await mkTmpDir('dg-incremental-strict-');
+    const filePath = path.join(root, 'strict.ts');
+    await fsp.writeFile(filePath, `export const a = 1;\n`, 'utf8');
+
+    await buildProjectIndex(root, { threads: 2, cache: 'disk' });
+    await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: 'disk',
+      graph: { fast: true },
+      incrementalStrict: true,
+    });
+    const manifest = await readManifest(root);
+    expect(manifest.graphOptions.fast).toBe(false);
   });
 
   it('keeps unchanged graph edges and refreshes changed ones during incremental builds', async () => {
