@@ -27,7 +27,7 @@ describe('Impact: changed-lines → symbol mapping', () => {
     ];
 
     const { locateChangedSymbols } = await import('../src/impact/map.js');
-    const changed = locateChangedSymbols(index, file, hunks);
+    const changed = await locateChangedSymbols(index, file, hunks);
     expect(
       changed.some((s: ChangedSymbol) => s.name === target.localName),
     ).toBe(true);
@@ -53,7 +53,7 @@ describe('Impact: changed-lines → symbol mapping', () => {
     }));
 
     const { locateChangedSymbols } = await import('../src/impact/map.js');
-    const changed = locateChangedSymbols(index, file, hunks);
+    const changed = await locateChangedSymbols(index, file, hunks);
     for (const t of targets) {
       expect(
         changed.some((s: ChangedSymbol) => s.name === t.localName),
@@ -78,7 +78,7 @@ describe('Impact: changed-lines → symbol mapping', () => {
     ];
 
     const { locateChangedSymbols } = await import('../src/impact/map.js');
-    const changed = locateChangedSymbols(index, file, hunks);
+    const changed = await locateChangedSymbols(index, file, hunks);
     expect(
       changed.some((s: ChangedSymbol) => s.name === target.localName),
     ).toBe(true);
