@@ -54,6 +54,9 @@ export type GraphCacheEntry = {
   edges: Edge[];
 };
 
+const FALLBACK_WARNING_LIMIT = 20;
+let fallbackWarningCount = 0;
+
 export function collectModuleSpecifiersFromSource(
   support: LanguageSupport,
   lang: Parser.Language,
@@ -81,14 +84,16 @@ export function collectModuleSpecifiersFromSource(
       reason,
     };
     opts?.onFallbackImportExtraction?.(event);
+    if (fallbackWarningCount >= FALLBACK_WARNING_LIMIT) return;
+    fallbackWarningCount += 1;
     if (opts?.file) {
       console.warn("Warning: Regex fallback import extraction", event);
-    } else {
-      console.warn("Warning: Regex fallback import extraction", {
-        language: support.id,
-        reason,
-      });
+      return;
     }
+    console.warn("Warning: Regex fallback import extraction", {
+      language: support.id,
+      reason,
+    });
   };
 
   if (support.id === "python") {
