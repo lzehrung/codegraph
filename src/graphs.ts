@@ -31,9 +31,21 @@ import {
 
 export type GraphBuildOptions = {
   fast?: boolean;
+  fastRegexDisabledLanguages?: string[];
   resolveNodeModules?: boolean;
   dynamicImportHeuristics?: boolean;
   resolutionHints?: string[];
+};
+
+export type FallbackImportExtractionReason =
+  | "fast"
+  | "query-error"
+  | "query-empty";
+
+export type FallbackImportExtractionEvent = {
+  file?: string;
+  language: string;
+  reason: FallbackImportExtractionReason;
 };
 
 export type GraphCacheEntry = {
@@ -46,11 +58,33 @@ export function collectModuleSpecifiersFromSource(
   support: LanguageSupport,
   lang: Parser.Language,
   source: string,
-  opts?: { tree?: Parser.Tree; fast?: boolean },
+  opts?: {
+    tree?: Parser.Tree;
+    fast?: boolean;
+    file?: string;
+    fastRegexDisabledLanguages?: string[];
+    onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
+  },
 ): { spec: string; typeOnly?: boolean }[] {
   const out: { spec: string; typeOnly?: boolean }[] = [];
+  const fastRegexDisabled = opts?.fastRegexDisabledLanguages?.includes(
+    support.id,
+  );
+  const shouldAttemptFallback =
+    support.id === "python"
+      ? /\b(import|from)\b/.test(source)
+      : /\b(import|export|require)\b/.test(source);
+  const reportFallback = (reason: FallbackImportExtractionReason) => {
+    const event: FallbackImportExtractionEvent = {
+      file: opts?.file,
+      language: support.id,
+      reason,
+    };
+    opts?.onFallbackImportExtraction?.(event);
+  };
 
   if (support.id === "python") {
+    let queryFailed = false;
     try {
       const key = "py";
       const parser = acquireParser(lang, key);
@@ -96,20 +130,31 @@ export function collectModuleSpecifiersFromSource(
         releaseParser(parser, key);
       }
       if (out.length > 0) return out;
-    } catch {}
+    } catch {
+      queryFailed = true;
+    }
     // Fallback to regex-based extractor
-    for (const s of extractPythonSpecifiers(source)) out.push({ spec: s });
+    if ((queryFailed || out.length === 0) && shouldAttemptFallback) {
+      reportFallback(queryFailed ? "query-error" : "query-empty");
+      for (const s of extractPythonSpecifiers(source)) out.push({ spec: s });
+    }
     return out;
   }
 
   // Fast path for JS/TS: regex-based extraction after comment stripping
-  if ((support.id === "ts" || support.id === "js") && opts?.fast) {
+  if (
+    (support.id === "ts" || support.id === "js") &&
+    opts?.fast &&
+    !fastRegexDisabled
+  ) {
     try {
+      reportFallback("fast");
       for (const s of extractJsTsSpecifiers(source)) out.push(s);
     } catch {}
     return out;
   }
 
+  let queryFailed = false;
   try {
     const key =
       support.id === "python" ? "py" : support.id === "js" ? "js" : "ts";
@@ -137,6 +182,7 @@ export function collectModuleSpecifiersFromSource(
       releaseParser(parser, key);
     }
   } catch (error) {
+    queryFailed = true;
     console.warn(
       `Warning: Query error in collectModuleSpecifiersFromSource for ${support.id}:`,
       error,
@@ -146,9 +192,12 @@ export function collectModuleSpecifiersFromSource(
 
   // Regex fallback if the query path produced no results
   if (support.id === "ts" || support.id === "js") {
-    try {
-      for (const s of extractJsTsSpecifiers(source)) out.push(s);
-    } catch {}
+    if ((queryFailed || out.length === 0) && shouldAttemptFallback) {
+      reportFallback(queryFailed ? "query-error" : "query-empty");
+      try {
+        for (const s of extractJsTsSpecifiers(source)) out.push(s);
+      } catch {}
+    }
   }
   return out;
 }
@@ -173,12 +222,14 @@ export async function collectEdgesForFile(
       lang: Parser.Language;
     };
     fast?: boolean;
+    fastRegexDisabledLanguages?: string[];
     resolveNodeModules?: boolean;
     dynamicImportHeuristics?: boolean;
     resolutionHints?: string[];
     fileSignature?: { sig: string; gitSig?: string; cacheSig?: string };
     cachedFileEdges?: GraphCacheEntry;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
+    onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
   },
 ): Promise<Edge[]> {
   const normalizedFile = file.replace(/\\/g, "/");
@@ -223,7 +274,13 @@ export async function collectEdgesForFile(
     sup,
     lang,
     src,
-    parsed?.tree ? { tree: parsed.tree, fast } : { fast },
+    {
+      ...(parsed?.tree ? { tree: parsed.tree } : {}),
+      fast,
+      file: normalizedFile,
+      fastRegexDisabledLanguages: opts.fastRegexDisabledLanguages,
+      onFallbackImportExtraction: opts.onFallbackImportExtraction,
+    },
   );
 
   if (
@@ -329,6 +386,7 @@ export async function collectGraph(
       }
     >;
     fast?: boolean;
+    fastRegexDisabledLanguages?: string[];
     threads?: number;
     resolveNodeModules?: boolean;
     dynamicImportHeuristics?: boolean;
@@ -336,6 +394,7 @@ export async function collectGraph(
     fileSignatures?: Map<string, { sig: string; gitSig?: string; cacheSig?: string }>;
     cachedFileEdges?: Map<string, GraphCacheEntry>;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
+    onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
     baseGraph?: Graph;
     replaceFiles?: Set<string>;
   },
@@ -413,12 +472,16 @@ export async function collectGraph(
         {
           ...(parsedEntry ? { parsed: parsedEntry } : {}),
           fast: !!opts?.fast,
+          fastRegexDisabledLanguages: opts?.fastRegexDisabledLanguages,
           resolveNodeModules: !!opts?.resolveNodeModules,
           dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
           ...(opts?.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
           ...(sigEntry ? { fileSignature: sigEntry } : {}),
           ...(cachedFileEdges ? { cachedFileEdges } : {}),
           ...(opts?.onFileEdges ? { onFileEdges: opts.onFileEdges } : {}),
+          ...(opts?.onFallbackImportExtraction
+            ? { onFallbackImportExtraction: opts.onFallbackImportExtraction }
+            : {}),
         },
       );
       addEdgeTargetsToGraph(edges);
