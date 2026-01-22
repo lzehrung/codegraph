@@ -34,6 +34,8 @@ import {
   collectEdgesForFile,
   type GraphCacheEntry,
   type GraphBuildOptions,
+  type FallbackImportExtractionEvent,
+  type FallbackImportExtractionReason,
 } from "./graphs.js";
 import type { Edge, Range, FileId, Graph } from "./types.js";
 
@@ -202,6 +204,22 @@ export type BuildFileReport = {
   parsed?: number;
 };
 
+export type FallbackImportExtractionReport = {
+  total: number;
+  byLanguage: Record<string, number>;
+  files: Record<
+    string,
+    {
+      language: string;
+      reason: FallbackImportExtractionReason;
+    }
+  >;
+};
+
+export type GraphReport = {
+  fallbackImportExtraction: FallbackImportExtractionReport;
+};
+
 export type ManifestReport = {
   used: boolean;
   reused: boolean;
@@ -215,6 +233,7 @@ export type BuildReport = {
   timings: BuildTimingReport;
   cache?: CacheReport;
   files?: BuildFileReport;
+  graph?: GraphReport;
   manifest?: ManifestReport;
 };
 
@@ -606,6 +625,53 @@ function initFileReport(report: BuildReport | undefined): BuildFileReport | unde
   return report.files;
 }
 
+function initFallbackImportExtractionReport(
+  report: BuildReport | undefined,
+): FallbackImportExtractionReport | undefined {
+  if (!report) return undefined;
+  if (!report.graph) {
+    report.graph = {
+      fallbackImportExtraction: {
+        total: 0,
+        byLanguage: {},
+        files: {},
+      },
+    };
+  } else if (!report.graph.fallbackImportExtraction) {
+    report.graph.fallbackImportExtraction = {
+      total: 0,
+      byLanguage: {},
+      files: {},
+    };
+  }
+  return report.graph.fallbackImportExtraction;
+}
+
+function createFallbackImportExtractionHandler(
+  report: BuildReport | undefined,
+): ((event: FallbackImportExtractionEvent) => void) | undefined {
+  const fallbackReport = initFallbackImportExtractionReport(report);
+  const warningLimit = 20;
+  let warningCount = 0;
+  return (event: FallbackImportExtractionEvent) => {
+    const filePath = event.file ? event.file.replace(/\\/g, "/") : "unknown";
+    if (fallbackReport) {
+      if (!fallbackReport.files[filePath]) {
+        fallbackReport.total += 1;
+        fallbackReport.byLanguage[event.language] =
+          (fallbackReport.byLanguage[event.language] ?? 0) + 1;
+      }
+      fallbackReport.files[filePath] = {
+        language: event.language,
+        reason: event.reason,
+      };
+    }
+    if (warningCount >= warningLimit) return;
+    warningCount += 1;
+    console.warn("Warning: Regex fallback import extraction", event);
+  };
+}
+
 function initManifestReport(
   report: BuildReport | undefined,
   used: boolean,
@@ -814,6 +880,12 @@ function graphOptionsEqual(
   if (!!normA.resolveNodeModules !== !!normB.resolveNodeModules) return false;
   if (!!normA.dynamicImportHeuristics !== !!normB.dynamicImportHeuristics)
     return false;
+  const disabledA = normA.fastRegexDisabledLanguages ?? [];
+  const disabledB = normB.fastRegexDisabledLanguages ?? [];
+  if (disabledA.length !== disabledB.length) return false;
+  for (let i = 0; i < disabledA.length; i++) {
+    if (disabledA[i] !== disabledB[i]) return false;
+  }
   const hintsA = normA.resolutionHints ?? [];
   const hintsB = normB.resolutionHints ?? [];
   if (hintsA.length !== hintsB.length) return false;
@@ -849,6 +921,20 @@ function summarizeBuildOptions(opts?: BuildOptions): ManifestBuildOptions {
   return normalizeBuildOptions(opts);
 }
 
+function normalizeLanguageList(list?: string[]): string[] {
+  // Normalize language IDs for stable comparisons (trim, lowercase, dedupe, sort).
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of list ?? []) {
+    const normalized = entry.trim().toLowerCase();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  out.sort();
+  return out;
+}
+
 function diffBuildOptions(
   manifestOpts: ManifestBuildOptions | undefined,
   currentOpts: BuildOptions | undefined,
@@ -873,8 +959,14 @@ function diffBuildOptions(
 
 function normalizeGraphOptions(opts?: GraphBuildOptions): GraphBuildOptions {
   const resolutionHints = normalizeResolutionHints(opts?.resolutionHints);
+  const fastRegexDisabledLanguages = normalizeLanguageList(
+    opts?.fastRegexDisabledLanguages,
+  );
   return {
     fast: !!opts?.fast,
+    ...(fastRegexDisabledLanguages.length > 0
+      ? { fastRegexDisabledLanguages }
+      : {}),
     resolveNodeModules: !!opts?.resolveNodeModules,
     dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
     ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
@@ -1819,10 +1911,27 @@ export async function collectImportsForFile(
 
     let ranFallback = false;
     try {
-      const { importBindings: q } = getCompiledQueries(
-        resolvedLang,
-        resolvedSup as any,
-      );
+      let q: Parser.Query;
+      try {
+        ({ importBindings: q } = getCompiledQueries(
+          resolvedLang,
+          resolvedSup as any,
+        ));
+      } catch {
+        // getCompiledQueries may fail if other queries in the language
+        // definition are incompatible with the current tree-sitter version.
+        // Fall back to compiling only the import bindings query.
+        try {
+          q = new Parser.Query(
+            resolvedLang,
+            resolvedSup.queries.importBindings,
+          );
+        } catch {
+          await runFallback();
+          ranFallback = true;
+          return imports;
+        }
+      }
       for (const m of q.matches(tree.rootNode)) {
         const caps = Object.fromEntries(
           m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const),
@@ -2130,6 +2239,8 @@ async function buildIndexFromFileListShared(
     console.warn(helperOpts.warnNoFilesMessage);
   }
   const fileReport = initFileReport(report);
+  const onFallbackImportExtraction =
+    createFallbackImportExtractionHandler(report);
   if (fileReport) {
     fileReport.total = normalizedFiles.length;
   }
@@ -2220,6 +2331,7 @@ async function buildIndexFromFileListShared(
         // Both cached, no need to parse
         edges = await collectEdgesForFile(f, projectRoot, workspaceConfig, {
           fast: !!graphOptions.fast,
+          fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages,
           resolveNodeModules: !!graphOptions.resolveNodeModules,
           dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
           ...(graphOptions.resolutionHints
@@ -2228,6 +2340,9 @@ async function buildIndexFromFileListShared(
           fileSignature: sigInfo,
           ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
           ...(onFileEdges ? { onFileEdges } : {}),
+          ...(onFallbackImportExtraction
+            ? { onFallbackImportExtraction }
+            : {}),
         });
         if (bloomFilterCache) {
           const filter = await buildBloomFilterForFile(f);
@@ -2309,12 +2424,16 @@ async function buildIndexFromFileListShared(
         edges = await collectEdgesForFile(f, projectRoot, workspaceConfig, {
           parsed: parsed,
           fast: !!graphOptions.fast,
+          fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages,
           resolveNodeModules: !!graphOptions.resolveNodeModules,
           dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
           ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
           fileSignature: sigInfo,
           ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
           ...(onFileEdges ? { onFileEdges } : {}),
+          ...(onFallbackImportExtraction
+            ? { onFallbackImportExtraction }
+            : {}),
         });
 
       if (!mod) {
@@ -2458,6 +2577,8 @@ export async function buildProjectIndexIncremental(
   const report = opts?.report;
   const timings = report?.timings;
   const totalStart = performance.now();
+  const onFallbackImportExtraction =
+    createFallbackImportExtractionHandler(report);
   const manifestStart = performance.now();
   const manifest = await loadManifest(projectRoot, opts);
   if (timings) timings.manifestMs = Math.round(performance.now() - manifestStart);
@@ -2811,6 +2932,7 @@ export async function buildProjectIndexIncremental(
       : await collectGraph(projectRoot, filesList, {
           parsed: parsedMap as any,
           fast: !!graphOptions.fast,
+          fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages,
           resolveNodeModules: !!graphOptions.resolveNodeModules,
           dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
           ...(graphOptions.resolutionHints
@@ -2818,6 +2940,9 @@ export async function buildProjectIndexIncremental(
             : {}),
           fileSignatures,
           cachedFileEdges: cachedGraphEntries,
+          ...(onFallbackImportExtraction
+            ? { onFallbackImportExtraction }
+            : {}),
           ...(baseGraph ? { baseGraph } : {}),
           replaceFiles: new Set<string>(changedFiles),
           onFileEdges: (file, entry) => {
