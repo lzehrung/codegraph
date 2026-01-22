@@ -1,5 +1,9 @@
+using System.Text;
+
 namespace Helpers {
   public static class HelpersClass {
-    public static void HelperFromHelpers() {}
+    public static string HelperFromHelpers() {
+      return new StringBuilder().ToString();
+    }
   }
 }

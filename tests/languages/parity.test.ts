@@ -1,0 +1,539 @@
+import { runLanguageTests } from "./runner.js";
+import type { LanguageTestDefinition } from "./types.js";
+
+const definitions: LanguageTestDefinition[] = [
+  {
+    id: "typescript",
+    parity: {
+      sampleDir: "typescript",
+      dependencyGraph: [
+        { from: "main.ts", to: { type: "file", path: "utils.ts" } },
+        { from: "utils.ts", to: { type: "file", path: "helpers.ts" } },
+        { from: "helpers.ts", to: { type: "external", name: "date-fns" } },
+      ],
+      symbols: [
+        {
+          file: "utils.ts",
+          includes: [
+            { name: "helperFunction" },
+            { name: "UtilityClass" },
+            { name: "UtilityType" },
+          ],
+        },
+      ],
+      goToDefinition: [
+        {
+          name: "go to definition resolves helperFunction",
+          file: "main.ts",
+          line: 7,
+          column: 25,
+          expectedDefinition: { file: "utils.ts", line: 1 },
+        },
+      ],
+      references: [
+        {
+          name: "find references for helperFunction",
+          file: "utils.ts",
+          line: 1,
+          column: 16,
+          minimumCount: 3,
+        },
+      ],
+    },
+  },
+  {
+    id: "tsx",
+    parity: {
+      sampleDir: "tsx",
+      dependencyGraph: [
+        { from: "App.tsx", to: { type: "file", path: "components/Button.tsx" } },
+        { from: "App.tsx", to: { type: "file", path: "utils.ts" } },
+        { from: "utils.ts", to: { type: "external", name: "lodash" } },
+      ],
+      symbols: [
+        {
+          file: "components/Button.tsx",
+          includes: [{ name: "Button" }, { name: "ButtonProps" }],
+        },
+      ],
+      goToDefinition: [
+        {
+          name: "go to definition resolves Button",
+          file: "App.tsx",
+          line: 6,
+          column: 20,
+          expectedDefinition: { file: "components/Button.tsx", line: 5 },
+        },
+      ],
+      references: [
+        {
+          name: "find references for formatLabel",
+          file: "utils.ts",
+          line: 3,
+          column: 17,
+          minimumCount: 2,
+        },
+      ],
+    },
+  },
+  {
+    id: "javascript",
+    parity: {
+      sampleDir: "javascript",
+      dependencyGraph: [
+        { from: "main.js", to: { type: "file", path: "utils.js" } },
+        { from: "main.js", to: { type: "file", path: "helpers.js" } },
+        { from: "helpers.js", to: { type: "external", name: "lodash" } },
+      ],
+      symbols: [
+        {
+          file: "utils.js",
+          includes: [{ name: "helperFunction" }, { name: "UtilityClass" }],
+        },
+      ],
+      goToDefinition: [
+        {
+          name: "go to definition resolves helperFunction",
+          file: "main.js",
+          line: 7,
+          column: 25,
+          expectedDefinition: { file: "utils.js", line: 1 },
+        },
+      ],
+      references: [
+        {
+          name: "find references for helperFunction",
+          file: "utils.js",
+          line: 1,
+          column: 16,
+          minimumCount: 3,
+        },
+      ],
+    },
+  },
+  {
+    id: "python",
+    parity: {
+      sampleDir: "python",
+      dependencyGraph: [
+        { from: "main.py", to: { type: "file", path: "utils.py" } },
+        { from: "main.py", to: { type: "file", path: "helpers.py" } },
+        { from: "helpers.py", to: { type: "external", name: "json" } },
+      ],
+      symbols: [
+        {
+          file: "utils.py",
+          includes: [{ name: "helper_function" }, { name: "UtilityClass" }],
+        },
+      ],
+      goToDefinition: [
+        {
+          name: "go to definition resolves helper_function",
+          file: "main.py",
+          line: 11,
+          column: 18,
+          expectedDefinition: { file: "utils.py", line: 1 },
+        },
+      ],
+      references: [
+        {
+          name: "find references for helper_function",
+          file: "utils.py",
+          line: 1,
+          column: 16,
+          minimumCount: 3,
+        },
+      ],
+    },
+  },
+  {
+    id: "go",
+    parity: {
+      sampleDir: "go",
+      dependencyGraph: [
+        { from: "main.go", to: { type: "file", path: "utils.go" } },
+        { from: "main.go", to: { type: "file", path: "helpers.go" } },
+        { from: "utils.go", to: { type: "file", path: "helpers.go" } },
+        { from: "helpers.go", to: { type: "external", name: "github.com/sirupsen/logrus" } },
+      ],
+      symbols: [
+        {
+          file: "utils.go",
+          includes: [{ name: "HelperFunction" }, { name: "UtilityClass" }],
+        },
+      ],
+      goToDefinition: [
+        {
+          name: "go to definition resolves HelperFunction",
+          file: "main.go",
+          line: 9,
+          column: 9,
+          expectedDefinition: { file: "utils.go", line: 5 },
+        },
+      ],
+      references: [
+        {
+          name: "find references for HelperFunction",
+          file: "utils.go",
+          line: 5,
+          column: 6,
+          minimumCount: 2,
+        },
+      ],
+    },
+  },
+  {
+    id: "java",
+    parity: {
+      sampleDir: "java",
+      dependencyGraph: [
+        { from: "main.java", to: { type: "file", path: "utils/Utils.java" } },
+        { from: "main.java", to: { type: "file", path: "helpers/Helpers.java" } },
+        { from: "helpers/Helpers.java", to: { type: "external", name: "java.util.List" } },
+      ],
+      symbols: [
+        {
+          file: "utils/Utils.java",
+          includes: [{ name: "Utils" }, { name: "helperFunction" }],
+        },
+      ],
+      goToDefinition: [
+        {
+          name: "go to definition resolves helperFunction",
+          file: "main.java",
+          line: 8,
+          column: 11,
+          expectedDefinition: { file: "utils/Utils.java", line: 4 },
+        },
+      ],
+      references: [
+        {
+          name: "find references for helperFunction",
+          file: "utils/Utils.java",
+          line: 4,
+          column: 22,
+          minimumCount: 2,
+        },
+      ],
+    },
+  },
+  {
+    id: "csharp",
+    parity: {
+      sampleDir: "csharp",
+      dependencyGraph: [
+        { from: "Main.cs", to: { type: "file", path: "Utils.cs" } },
+        { from: "Main.cs", to: { type: "file", path: "Helpers.cs" } },
+        { from: "Helpers.cs", to: { type: "external", name: "System.Text" } },
+      ],
+      symbols: [
+        {
+          file: "Utils.cs",
+          includes: [{ name: "UtilsClass" }, { name: "HelperFunction" }],
+        },
+      ],
+      goToDefinition: [
+        {
+          name: "go to definition resolves HelperFunction",
+          file: "Main.cs",
+          line: 7,
+          column: 16,
+          expectedDefinition: { file: "Utils.cs", line: 3 },
+        },
+      ],
+      references: [
+        {
+          name: "find references for HelperFunction",
+          file: "Utils.cs",
+          line: 3,
+          column: 24,
+          minimumCount: 3,
+        },
+      ],
+    },
+  },
+  {
+    id: "ruby",
+    parity: {
+      sampleDir: "ruby",
+      dependencyGraph: [
+        { from: "main.rb", to: { type: "file", path: "utils.rb" } },
+        { from: "main.rb", to: { type: "file", path: "helpers.rb" } },
+        { from: "helpers.rb", to: { type: "external", name: "json" } },
+      ],
+      symbols: [
+        {
+          file: "utils.rb",
+          includes: [{ name: "helper_function" }, { name: "UtilityClass" }],
+        },
+      ],
+      goToDefinition: [
+        {
+          name: "go to definition resolves helper_function",
+          file: "main.rb",
+          line: 4,
+          column: 7,
+          expectedDefinition: { file: "utils.rb", line: 2 },
+        },
+      ],
+      references: [
+        {
+          name: "find references for helper_function",
+          file: "utils.rb",
+          line: 2,
+          column: 12,
+          minimumCount: 2,
+        },
+      ],
+    },
+  },
+  {
+    id: "rust",
+    parity: {
+      sampleDir: "rust",
+      dependencyGraph: [
+        { from: "main.rs", to: { type: "file", path: "utils.rs" } },
+        { from: "main.rs", to: { type: "file", path: "helpers.rs" } },
+        { from: "helpers.rs", to: { type: "external", name: "serde::Serialize" } },
+      ],
+      symbols: [
+        {
+          file: "utils.rs",
+          includes: [{ name: "helper_function" }, { name: "UtilityStruct" }],
+        },
+      ],
+      goToDefinition: [
+        {
+          name: "go to definition resolves helper_function",
+          file: "main.rs",
+          line: 8,
+          column: 5,
+          expectedDefinition: { file: "utils.rs", line: 1 },
+        },
+      ],
+      references: [
+        {
+          name: "find references for helper_function",
+          file: "utils.rs",
+          line: 1,
+          column: 8,
+          minimumCount: 2,
+        },
+      ],
+    },
+  },
+  {
+    id: "html",
+    parity: {
+      sampleDir: "html",
+      dependencyGraph: [
+        { from: "index.html", to: { type: "file", path: "styles.css" } },
+        { from: "index.html", to: { type: "file", path: "app.js" } },
+        { from: "index.html", to: { type: "external", name: "./missing.js" } },
+      ],
+      symbols: [
+        {
+          file: "index.html",
+          includes: [{ name: "main" }],
+        },
+      ],
+      goToDefinition: [
+        {
+          name: "go to definition is not available",
+          file: "index.html",
+          line: 9,
+          column: 14,
+          expectedStatus: "not_found",
+        },
+      ],
+      references: [
+        {
+          name: "find references is not available",
+          file: "index.html",
+          line: 9,
+          column: 14,
+          expectedStatus: "not_found",
+        },
+      ],
+    },
+  },
+  {
+    id: "css",
+    parity: {
+      sampleDir: "css",
+      dependencyGraph: [
+        { from: "main.css", to: { type: "file", path: "base.css" } },
+        { from: "main.css", to: { type: "file", path: "theme.css" } },
+        { from: "main.css", to: { type: "external", name: "./missing.css" } },
+      ],
+      symbols: [
+        {
+          file: "base.css",
+          includes: [{ name: "button" }, { name: "app" }],
+        },
+      ],
+      goToDefinition: [
+        {
+          name: "go to definition is not available",
+          file: "base.css",
+          line: 1,
+          column: 2,
+          expectedStatus: "not_found",
+        },
+      ],
+      references: [
+        {
+          name: "find references is not available",
+          file: "base.css",
+          line: 1,
+          column: 2,
+          expectedStatus: "not_found",
+        },
+      ],
+    },
+  },
+  {
+    id: "scss",
+    parity: {
+      sampleDir: "scss",
+      dependencyGraph: [
+        { from: "main.scss", to: { type: "file", path: "_variables.scss" } },
+        { from: "main.scss", to: { type: "file", path: "_mixins.scss" } },
+        { from: "main.scss", to: { type: "external", name: "./missing" } },
+      ],
+      symbols: [
+        {
+          file: "_variables.scss",
+          includes: [{ name: "$primary-color" }, { name: "primary" }],
+        },
+      ],
+      goToDefinition: [
+        {
+          name: "go to definition is not available",
+          file: "_variables.scss",
+          line: 3,
+          column: 2,
+          expectedStatus: "not_found",
+        },
+      ],
+      references: [
+        {
+          name: "find references is not available",
+          file: "_variables.scss",
+          line: 3,
+          column: 2,
+          expectedStatus: "not_found",
+        },
+      ],
+    },
+  },
+  {
+    id: "less",
+    parity: {
+      sampleDir: "less",
+      dependencyGraph: [
+        { from: "main.less", to: { type: "file", path: "variables.less" } },
+        { from: "main.less", to: { type: "file", path: "theme.less" } },
+        { from: "main.less", to: { type: "external", name: "./missing.less" } },
+      ],
+      symbols: [
+        {
+          file: "variables.less",
+          includes: [{ name: "button" }],
+        },
+      ],
+      goToDefinition: [
+        {
+          name: "go to definition is not available",
+          file: "variables.less",
+          line: 3,
+          column: 2,
+          expectedStatus: "not_found",
+        },
+      ],
+      references: [
+        {
+          name: "find references is not available",
+          file: "variables.less",
+          line: 3,
+          column: 2,
+          expectedStatus: "not_found",
+        },
+      ],
+    },
+  },
+  {
+    id: "vue",
+    parity: {
+      sampleDir: "vue",
+      dependencyGraph: [
+        { from: "App.vue", to: { type: "file", path: "logic.ts" } },
+        { from: "Child.vue", to: { type: "external", name: "./missing.ts" } },
+      ],
+      symbols: [
+        {
+          file: "App.vue",
+          includes: [],
+          excludes: ["app"],
+        },
+      ],
+      goToDefinition: [
+        {
+          name: "go to definition is not available",
+          file: "App.vue",
+          line: 2,
+          column: 17,
+          expectedStatus: "not_found",
+        },
+      ],
+      references: [
+        {
+          name: "find references is not available",
+          file: "App.vue",
+          line: 2,
+          column: 17,
+          expectedStatus: "not_found",
+        },
+      ],
+    },
+  },
+  {
+    id: "svelte",
+    parity: {
+      sampleDir: "svelte",
+      dependencyGraph: [
+        { from: "App.svelte", to: { type: "file", path: "logic.ts" } },
+        { from: "Widget.svelte", to: { type: "external", name: "./missing.ts" } },
+      ],
+      symbols: [
+        {
+          file: "App.svelte",
+          includes: [],
+          excludes: ["app"],
+        },
+      ],
+      goToDefinition: [
+        {
+          name: "go to definition is not available",
+          file: "App.svelte",
+          line: 3,
+          column: 19,
+          expectedStatus: "not_found",
+        },
+      ],
+      references: [
+        {
+          name: "find references is not available",
+          file: "App.svelte",
+          line: 3,
+          column: 19,
+          expectedStatus: "not_found",
+        },
+      ],
+    },
+  },
+];
+
+for (const definition of definitions) {
+  runLanguageTests(definition);
+}
