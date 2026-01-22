@@ -651,18 +651,24 @@ function createFallbackImportExtractionHandler(
   report: BuildReport | undefined,
 ): ((event: FallbackImportExtractionEvent) => void) | undefined {
   const fallbackReport = initFallbackImportExtractionReport(report);
-  if (!fallbackReport) return undefined;
+  const warningLimit = 20;
+  let warningCount = 0;
   return (event: FallbackImportExtractionEvent) => {
     const filePath = event.file ? event.file.replace(/\\/g, "/") : "unknown";
-    if (!fallbackReport.files[filePath]) {
-      fallbackReport.total += 1;
-      fallbackReport.byLanguage[event.language] =
-        (fallbackReport.byLanguage[event.language] ?? 0) + 1;
+    if (fallbackReport) {
+      if (!fallbackReport.files[filePath]) {
+        fallbackReport.total += 1;
+        fallbackReport.byLanguage[event.language] =
+          (fallbackReport.byLanguage[event.language] ?? 0) + 1;
+      }
+      fallbackReport.files[filePath] = {
+        language: event.language,
+        reason: event.reason,
+      };
     }
-    fallbackReport.files[filePath] = {
-      language: event.language,
-      reason: event.reason,
-    };
+    if (warningCount >= warningLimit) return;
+    warningCount += 1;
+    console.warn("Warning: Regex fallback import extraction", event);
   };
 }
 
@@ -916,6 +922,7 @@ function summarizeBuildOptions(opts?: BuildOptions): ManifestBuildOptions {
 }
 
 function normalizeLanguageList(list?: string[]): string[] {
+  // Normalize language IDs for stable comparisons (trim, lowercase, dedupe, sort).
   const out: string[] = [];
   const seen = new Set<string>();
   for (const entry of list ?? []) {
@@ -1914,7 +1921,16 @@ export async function collectImportsForFile(
         // getCompiledQueries may fail if other queries in the language
         // definition are incompatible with the current tree-sitter version.
         // Fall back to compiling only the import bindings query.
-        q = new Parser.Query(resolvedLang, resolvedSup.queries.importBindings);
+        try {
+          q = new Parser.Query(
+            resolvedLang,
+            resolvedSup.queries.importBindings,
+          );
+        } catch {
+          await runFallback();
+          ranFallback = true;
+          return imports;
+        }
       }
       for (const m of q.matches(tree.rootNode)) {
         const caps = Object.fromEntries(

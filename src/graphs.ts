@@ -54,9 +54,6 @@ export type GraphCacheEntry = {
   edges: Edge[];
 };
 
-const FALLBACK_WARNING_LIMIT = 20;
-let fallbackWarningCount = 0;
-
 export function collectModuleSpecifiersFromSource(
   support: LanguageSupport,
   lang: Parser.Language,
@@ -84,9 +81,6 @@ export function collectModuleSpecifiersFromSource(
       reason,
     };
     opts?.onFallbackImportExtraction?.(event);
-    if (fallbackWarningCount >= FALLBACK_WARNING_LIMIT) return;
-    fallbackWarningCount += 1;
-    console.warn("Warning: Regex fallback import extraction", event);
   };
 
   if (support.id === "python") {
@@ -140,7 +134,7 @@ export function collectModuleSpecifiersFromSource(
       queryFailed = true;
     }
     // Fallback to regex-based extractor
-    if (queryFailed || shouldAttemptFallback) {
+    if ((queryFailed || out.length === 0) && shouldAttemptFallback) {
       reportFallback(queryFailed ? "query-error" : "query-empty");
       for (const s of extractPythonSpecifiers(source)) out.push({ spec: s });
     }
@@ -198,7 +192,7 @@ export function collectModuleSpecifiersFromSource(
 
   // Regex fallback if the query path produced no results
   if (support.id === "ts" || support.id === "js") {
-    if (queryFailed || shouldAttemptFallback) {
+    if ((queryFailed || out.length === 0) && shouldAttemptFallback) {
       reportFallback(queryFailed ? "query-error" : "query-empty");
       try {
         for (const s of extractJsTsSpecifiers(source)) out.push(s);
