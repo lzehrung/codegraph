@@ -48,7 +48,7 @@ function runGit(root: string, args: string[]): string {
 }
 
 describe('Cache invalidation and strict hashing', () => {
-  it('non-strict (mtime+size) can miss same-size content change when mtime restored; strict detects it', async () => {
+  it('disk cache invalidates when content hash changes even if mtime is restored', async () => {
     const root = await mkTmpDir('dg-cache-inv-');
     const utilPath = path.join(root, 'util.ts');
     const v1 = `export function a(){ return 1 }\n`;
@@ -72,14 +72,12 @@ describe('Cache invalidation and strict hashing', () => {
     const deltaMs = Math.abs(st2.mtimeMs - st1.mtimeMs);
     expect(deltaMs).toBeLessThan(3);
 
-    // Non-strict: may hit cache and still see 'a' (mtime+size key), or refresh; allow either
+    // Disk cache validation should pick up content changes even if mtime matches
     const idx2 = await buildProjectIndex(root, { threads: 2, cache: 'disk' });
     const mod2 = idx2.byFile.get(utilFile)!;
-    const nonStrictHasA = mod2.locals.some((l) => l.localName === 'a');
-    const nonStrictHasB = mod2.locals.some((l) => l.localName === 'b');
-    expect(nonStrictHasA || nonStrictHasB).toBe(true);
+    expect(mod2.locals.some((l) => l.localName === 'b')).toBe(true);
 
-    // Strict: should invalidate and pick up 'b'
+    // Strict: should also invalidate and pick up 'b'
     const idx3 = await buildProjectIndex(root, {
       threads: 2,
       cache: 'disk',

@@ -981,6 +981,7 @@ async function main() {
   }
 
   if (cmd === "index") {
+    const verbose = hasFlag("--verbose");
     const commandReport: CommandReport | undefined = reportEnabled
       ? { command: "index", timings: {} }
       : undefined;
@@ -1000,9 +1001,8 @@ async function main() {
     const shouldWriteManifest =
       includeRootsAbs.length === 0 && !gitBase && !changedSince;
     const graphOptions = hasGraphOverrides ? buildGraphOptions() : undefined;
-    const indexReport: BuildReport | undefined = commandReport
-      ? { timings: {} }
-      : undefined;
+    const indexReport: BuildReport | undefined =
+      reportEnabled || verbose ? { timings: {} } : undefined;
     if (commandReport && indexReport) {
       commandReport.index = indexReport;
     }
@@ -1038,6 +1038,20 @@ async function main() {
         files: [...index.byFile.keys()].length,
         edges: index.graph.edges.length,
       });
+    }
+    if (verbose && indexReport) {
+      const cache = indexReport.cache;
+      const fileStats = indexReport.files;
+      if (cache) {
+        writeStderrLine(
+          `Cache (${cache.mode}): ${cache.hits} hits, ${cache.misses} misses`,
+        );
+      }
+      if (fileStats) {
+        writeStderrLine(
+          `Files: ${fileStats.parsed ?? 0} parsed, ${fileStats.cached ?? 0} cached, ${fileStats.total} total`,
+        );
+      }
     }
     if (commandReport) {
       commandReport.timings.commandMs = Math.round(
