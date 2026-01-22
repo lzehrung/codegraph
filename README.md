@@ -315,6 +315,7 @@ npx codegraph apisurface
 # Emit a JSON timing/cache report to stderr (or a file)
 npx codegraph index --report
 npx codegraph review --report --report-file review.report.json
+# Reports include graph.fallbackImportExtraction when regex fallback import extraction is used.
 
 # Analyze PR impact: map diffs to symbols and find affected code
 npx codegraph impact --base <commit-sha> --head <commit-sha>
@@ -548,6 +549,7 @@ npx tsx src/cli.ts goto <file> <line> <column>
 - Fast graph:
   - Regex-based specifier extraction for JS/TS only. Accurate for common patterns (`import`, `export ... from`, `require()`, `import()`), ignores commented imports.
   - If output looks off, re-run without `--fast-graph`.
+  - Programmatic: set `graph.fastRegexDisabledLanguages` to opt specific languages out of regex fast paths.
 
 - Caching:
   - Modes: `off` (default), `memory` (per-process), `disk` (persist across runs, stored under `.codegraph-cache/index-v1`).

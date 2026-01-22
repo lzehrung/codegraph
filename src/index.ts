@@ -60,6 +60,8 @@ export {
   type CacheReport,
   type BuildTimingReport,
   type BuildFileReport,
+  type FallbackImportExtractionReport,
+  type GraphReport,
   type ManifestReport,
   type GraphDeltaReport,
   type Reference,

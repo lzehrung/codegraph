@@ -121,6 +121,7 @@ const BASE_STRUCTURE = {
 const BASE_GRAPH = {
   imports: `
     (import_statement (string) @mod) @stmt
+    (import_statement (import_require_clause (string) @mod)) @stmt
     (export_statement (string) @mod) @stmt
   `,
   exports: `
@@ -145,11 +146,11 @@ const BASE_GRAPH = {
   importBindings: `
     (import_statement) @stmt
     (import_statement (string) @from)
+    (import_statement (import_require_clause (identifier) @def (string) @from))
     (import_statement (import_clause (identifier) @def) (string) @from)
     (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname alias: (identifier) @alias))) (string) @from)
     (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname))) (string) @from)
     (import_statement (import_clause (namespace_import (identifier) @ns)) (string) @from)
-    (import_equals_declaration name: (identifier) @def module: (call_expression (identifier) @req (arguments (string) @from))) (#eq? @req "require")
   `,
 };
 
