@@ -58,7 +58,12 @@ describe('Incremental cache modes', () => {
     expect(fs.existsSync(cacheFile)).toBe(true);
 
     const raw = await fsp.readFile(cacheFile, 'utf8');
-    const parsed = JSON.parse(raw) as { sig: string; mod: { file: string } };
+    const parsed = JSON.parse(raw) as {
+      version: number;
+      sig: string;
+      mod: { file: string };
+    };
+    expect(parsed.version).toBe(1);
     expect(typeof parsed.sig).toBe('string');
     expect(typeof parsed.mod?.file).toBe('string');
 
@@ -69,5 +74,4 @@ describe('Incremental cache modes', () => {
     expect(second.byFile.get(fileId)?.file).toBe(fileId);
   });
 });
-
 

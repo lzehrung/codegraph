@@ -539,7 +539,12 @@ async function mapLimit<T, R>(
 }
 
 // ---------------- Incremental cache (memory/disk) ----------------
-type ModuleCacheEntry = { sig: string; mod: ModuleIndex };
+const PARSED_CACHE_VERSION = 1;
+type ModuleCacheEntry = {
+  version: number;
+  sig: string;
+  mod: ModuleIndex;
+};
 const memoryCache = new Map<string, ModuleCacheEntry>();
 
 const MANIFEST_VERSION = 1;
@@ -604,6 +609,7 @@ type FileSignature = {
   sig: string;
   gitSig?: string;
   cacheSig: string;
+  contentHash?: string;
 };
 
 function initCacheReport(
@@ -687,22 +693,39 @@ function initManifestReport(
   return report.manifest;
 }
 
+async function fileContentHash(file: string): Promise<string> {
+  const buf = await fsp.readFile(file);
+  const h = crypto.createHash("sha1");
+  h.update(buf);
+  return h.digest("hex");
+}
+
 async function fileStatSignature(
   file: string,
   strict?: boolean,
-): Promise<string> {
+  opts?: { includeContentHash?: boolean },
+): Promise<{ sig: string; contentHash?: string }> {
   try {
     const st = await fsp.stat(file);
     // Default to strict mode (content-hash) for reliability
     // This is more reliable than mtime, especially with git operations
     const useStrict = strict !== false; // True unless explicitly set to false
-    if (!useStrict) return `${st.mtimeMs}:${st.size}`;
-    const buf = await fsp.readFile(file);
-    const h = crypto.createHash("sha1");
-    h.update(buf);
-    return `${st.mtimeMs}:${st.size}:${h.digest("hex")}`;
+    const shouldHash = useStrict || opts?.includeContentHash === true;
+    const contentHash = shouldHash ? await fileContentHash(file) : undefined;
+    if (!useStrict) {
+      return contentHash
+        ? { sig: `${st.mtimeMs}:${st.size}`, contentHash }
+        : { sig: `${st.mtimeMs}:${st.size}` };
+    }
+    if (contentHash) {
+      return {
+        sig: `${st.mtimeMs}:${st.size}:${contentHash}`,
+        contentHash,
+      };
+    }
+    return { sig: `${st.mtimeMs}:${st.size}` };
   } catch {
-    return "0:0";
+    return { sig: "0:0" };
   }
 }
 
@@ -710,10 +733,32 @@ async function fileSignature(
   file: string,
   strict?: boolean,
   gitSig?: string,
+  opts?: { forceContentHash?: boolean },
 ): Promise<FileSignature> {
-  const sig = await fileStatSignature(file, strict);
-  const cacheSig = gitSig ?? sig;
-  return gitSig ? { sig, gitSig, cacheSig } : { sig, cacheSig };
+  const includeContentHash = opts?.forceContentHash === true;
+  const statOpts = includeContentHash ? { includeContentHash: true } : undefined;
+  const { sig, contentHash } = await fileStatSignature(file, strict, statOpts);
+  const cacheSig = gitSig ?? contentHash ?? sig;
+  if (gitSig) {
+    return {
+      sig,
+      gitSig,
+      cacheSig,
+      ...(contentHash ? { contentHash } : {}),
+    };
+  }
+  return { sig, cacheSig, ...(contentHash ? { contentHash } : {}) };
+}
+
+async function cacheSignatureForFile(
+  file: string,
+  sigInfo: FileSignature,
+): Promise<string> {
+  if (sigInfo.gitSig) return sigInfo.gitSig;
+  if (sigInfo.contentHash) return sigInfo.contentHash;
+  const contentHash = await fileContentHash(file);
+  sigInfo.contentHash = contentHash;
+  return contentHash;
 }
 
 async function buildBloomFilterForFile(
@@ -744,6 +789,36 @@ function cacheFilePath(
   return path.join(root, `${hash}.json`);
 }
 
+function isModuleIndex(value: unknown): value is ModuleIndex {
+  if (!value || typeof value !== "object") return false;
+  const mod = value as {
+    file?: unknown;
+    exports?: unknown;
+    imports?: unknown;
+    locals?: unknown;
+  };
+  return (
+    typeof mod.file === "string" &&
+    Array.isArray(mod.exports) &&
+    Array.isArray(mod.imports) &&
+    Array.isArray(mod.locals)
+  );
+}
+
+function isModuleCacheEntry(value: unknown): value is ModuleCacheEntry {
+  if (!value || typeof value !== "object") return false;
+  const entry = value as {
+    version?: unknown;
+    sig?: unknown;
+    mod?: unknown;
+  };
+  return (
+    entry.version === PARSED_CACHE_VERSION &&
+    typeof entry.sig === "string" &&
+    isModuleIndex(entry.mod)
+  );
+}
+
 async function tryLoadFromCache(
   projectRoot: string,
   file: string,
@@ -767,10 +842,10 @@ async function tryLoadFromCache(
     try {
       const cf = cacheFilePath(projectRoot, file, opts);
       const raw = await fsp.readFile(cf, "utf8");
-      const parsed = JSON.parse(raw) as ModuleCacheEntry;
-      if (parsed.sig === sig && parsed.mod && parsed.mod.file) {
+      const parsed = JSON.parse(raw) as unknown;
+      if (isModuleCacheEntry(parsed) && parsed.sig === sig) {
         if (cacheEnabled && cacheReport) cacheReport.hits += 1;
-        return parsed.mod as ModuleIndex;
+        return parsed.mod;
       }
     } catch {}
     if (cacheEnabled && cacheReport) cacheReport.misses += 1;
@@ -787,12 +862,16 @@ async function writeToCache(
 ) {
   const mode = opts?.cache ?? "off";
   if (mode === "memory") {
-    memoryCache.set(file, { sig, mod });
+    memoryCache.set(file, { version: PARSED_CACHE_VERSION, sig, mod });
   } else if (mode === "disk") {
     try {
       const cf = cacheFilePath(projectRoot, file, opts);
       await fsp.mkdir(path.dirname(cf), { recursive: true });
-      await fsp.writeFile(cf, JSON.stringify({ sig, mod }), "utf8");
+      await fsp.writeFile(
+        cf,
+        JSON.stringify({ version: PARSED_CACHE_VERSION, sig, mod }),
+        "utf8",
+      );
     } catch {}
   }
 }
@@ -2225,6 +2304,7 @@ async function buildIndexFromFileListShared(
   const useManifest = manifestMode !== "off";
   const shouldWriteManifest = manifestMode === "read-write";
   const cacheMode = opts?.cache ?? "off";
+  const cacheEnabled = cacheMode !== "off";
   const graphOptions = normalizeGraphOptions(opts?.graph);
   initManifestReport(report, useManifest, false);
   const normalizedFiles = Array.from(
@@ -2303,16 +2383,16 @@ async function buildIndexFromFileListShared(
         f,
         opts?.cacheStrict,
         gitSigMap.get(f),
+        { forceContentHash: cacheEnabled },
       );
       fileSignatures.set(f, sigInfo);
 
-      let mod: ModuleIndex | null = await tryLoadFromCache(
-        projectRoot,
-        f,
-        sigInfo.cacheSig,
-        opts,
-        report,
-      );
+      const cacheSig = cacheEnabled
+        ? await cacheSignatureForFile(f, sigInfo)
+        : sigInfo.cacheSig;
+      let mod: ModuleIndex | null = cacheEnabled
+        ? await tryLoadFromCache(projectRoot, f, cacheSig, opts, report)
+        : null;
       if (mod && fileReport) {
         fileReport.cached = (fileReport.cached ?? 0) + 1;
       }
@@ -2331,7 +2411,9 @@ async function buildIndexFromFileListShared(
         // Both cached, no need to parse
         edges = await collectEdgesForFile(f, projectRoot, workspaceConfig, {
           fast: !!graphOptions.fast,
-          fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages,
+          ...(graphOptions.fastRegexDisabledLanguages
+            ? { fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages }
+            : {}),
           resolveNodeModules: !!graphOptions.resolveNodeModules,
           dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
           ...(graphOptions.resolutionHints
@@ -2414,7 +2496,7 @@ async function buildIndexFromFileListShared(
                 }
             }
           }
-          await writeToCache(projectRoot, f, sigInfo.cacheSig, mod, opts);
+          await writeToCache(projectRoot, f, cacheSig, mod, opts);
         } else {
           // If mod was cached but edges weren't, we still need to collect json deps from mod
           collectJsonDependencies(mod.imports, jsonDependencies);
@@ -2424,7 +2506,9 @@ async function buildIndexFromFileListShared(
         edges = await collectEdgesForFile(f, projectRoot, workspaceConfig, {
           parsed: parsed,
           fast: !!graphOptions.fast,
-          fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages,
+          ...(graphOptions.fastRegexDisabledLanguages
+            ? { fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages }
+            : {}),
           resolveNodeModules: !!graphOptions.resolveNodeModules,
           dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
           ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
@@ -2577,6 +2661,8 @@ export async function buildProjectIndexIncremental(
   const report = opts?.report;
   const timings = report?.timings;
   const totalStart = performance.now();
+  const cacheMode = opts?.cache ?? "off";
+  const cacheEnabled = cacheMode !== "off";
   const onFallbackImportExtraction =
     createFallbackImportExtractionHandler(report);
   const manifestStart = performance.now();
@@ -2746,6 +2832,7 @@ export async function buildProjectIndexIncremental(
       file,
       opts?.cacheStrict,
       gitSigMap.get(file),
+      { forceContentHash: cacheEnabled },
     );
     fileSignatures.set(file, sigInfo);
     const entry = trackedEntries[file];
@@ -2762,13 +2849,12 @@ export async function buildProjectIndexIncremental(
   for (const file of allFiles) {
     if (changedFiles.has(file)) continue;
     const sigInfo = fileSignatures.get(file)!;
-    const cached = await tryLoadFromCache(
-      projectRoot,
-      file,
-      sigInfo.cacheSig,
-      opts,
-      report,
-    );
+    const cacheSig = cacheEnabled
+      ? await cacheSignatureForFile(file, sigInfo)
+      : sigInfo.cacheSig;
+    const cached = cacheEnabled
+      ? await tryLoadFromCache(projectRoot, file, cacheSig, opts, report)
+      : null;
     if (cached) {
       if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
       modules.set(file, cached);
@@ -2853,7 +2939,10 @@ export async function buildProjectIndexIncremental(
           }
         }
         const sigInfo = fileSignatures.get(f)!;
-        await writeToCache(projectRoot, f, sigInfo.cacheSig, mod, opts);
+        const cacheSig = cacheEnabled
+          ? await cacheSignatureForFile(f, sigInfo)
+          : sigInfo.cacheSig;
+        await writeToCache(projectRoot, f, cacheSig, mod, opts);
         return [f, mod] as const;
       } catch (error) {
         console.warn(`Warning: Failed to process file ${f}:`, error);
@@ -2932,7 +3021,9 @@ export async function buildProjectIndexIncremental(
       : await collectGraph(projectRoot, filesList, {
           parsed: parsedMap as any,
           fast: !!graphOptions.fast,
-          fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages,
+          ...(graphOptions.fastRegexDisabledLanguages
+            ? { fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages }
+            : {}),
           resolveNodeModules: !!graphOptions.resolveNodeModules,
           dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
           ...(graphOptions.resolutionHints
