@@ -1911,6 +1911,9 @@ export async function collectImportsForFile(
           resolvedSup as any,
         ));
       } catch {
+        // getCompiledQueries may fail if other queries in the language
+        // definition are incompatible with the current tree-sitter version.
+        // Fall back to compiling only the import bindings query.
         q = new Parser.Query(resolvedLang, resolvedSup.queries.importBindings);
       }
       for (const m of q.matches(tree.rootNode)) {

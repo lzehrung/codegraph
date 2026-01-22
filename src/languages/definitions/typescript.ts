@@ -121,6 +121,7 @@ const BASE_STRUCTURE = {
 const BASE_GRAPH = {
   imports: `
     (import_statement (string) @mod) @stmt
+    ;; import x = require("...") is represented via import_require_clause
     (import_statement (import_require_clause (string) @mod)) @stmt
     (export_statement (string) @mod) @stmt
   `,

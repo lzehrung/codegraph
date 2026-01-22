@@ -86,14 +86,7 @@ export function collectModuleSpecifiersFromSource(
     opts?.onFallbackImportExtraction?.(event);
     if (fallbackWarningCount >= FALLBACK_WARNING_LIMIT) return;
     fallbackWarningCount += 1;
-    if (opts?.file) {
-      console.warn("Warning: Regex fallback import extraction", event);
-      return;
-    }
-    console.warn("Warning: Regex fallback import extraction", {
-      language: support.id,
-      reason,
-    });
+    console.warn("Warning: Regex fallback import extraction", event);
   };
 
   if (support.id === "python") {
