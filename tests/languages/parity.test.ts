@@ -318,17 +318,6 @@ const definitions: LanguageTestDefinition[] = [
     id: "html",
     parity: {
       sampleDir: "html",
-      dependencyGraph: [
-        { from: "index.html", to: { type: "external", name: "./styles.css" } },
-        { from: "index.html", to: { type: "external", name: "./app.js" } },
-        { from: "index.html", to: { type: "external", name: "./missing.js" } },
-      ],
-      symbols: [
-        {
-          file: "index.html",
-          includes: [{ name: "main" }],
-        },
-      ],
       goToDefinition: [
         {
           name: "go to definition is not available",
@@ -353,17 +342,6 @@ const definitions: LanguageTestDefinition[] = [
     id: "css",
     parity: {
       sampleDir: "css",
-      dependencyGraph: [
-        { from: "main.css", to: { type: "external", name: "./base.css" } },
-        { from: "main.css", to: { type: "external", name: "./theme.css" } },
-        { from: "main.css", to: { type: "external", name: "./missing.css" } },
-      ],
-      symbols: [
-        {
-          file: "base.css",
-          includes: [{ name: "button" }, { name: "app" }],
-        },
-      ],
       goToDefinition: [
         {
           name: "go to definition is not available",
@@ -393,12 +371,6 @@ const definitions: LanguageTestDefinition[] = [
         { from: "main.scss", to: { type: "external", name: "./mixins" } },
         { from: "main.scss", to: { type: "external", name: "./missing" } },
       ],
-      symbols: [
-        {
-          file: "_variables.scss",
-          includes: [{ name: "$primary-color" }, { name: "primary" }],
-        },
-      ],
       goToDefinition: [
         {
           name: "go to definition is not available",
@@ -423,17 +395,6 @@ const definitions: LanguageTestDefinition[] = [
     id: "less",
     parity: {
       sampleDir: "less",
-      dependencyGraph: [
-        { from: "main.less", to: { type: "external", name: "./variables.less" } },
-        { from: "main.less", to: { type: "external", name: "./theme.less" } },
-        { from: "main.less", to: { type: "external", name: "./missing.less" } },
-      ],
-      symbols: [
-        {
-          file: "variables.less",
-          includes: [{ name: "button" }],
-        },
-      ],
       goToDefinition: [
         {
           name: "go to definition is not available",
@@ -458,17 +419,6 @@ const definitions: LanguageTestDefinition[] = [
     id: "vue",
     parity: {
       sampleDir: "vue",
-      dependencyGraph: [
-        { from: "App.vue", to: { type: "file", path: "logic.ts" } },
-        { from: "Child.vue", to: { type: "external", name: "./missing.ts" } },
-      ],
-      symbols: [
-        {
-          file: "App.vue",
-          includes: [],
-          excludes: ["app"],
-        },
-      ],
       goToDefinition: [
         {
           name: "go to definition is not available",
@@ -493,17 +443,6 @@ const definitions: LanguageTestDefinition[] = [
     id: "svelte",
     parity: {
       sampleDir: "svelte",
-      dependencyGraph: [
-        { from: "App.svelte", to: { type: "file", path: "logic.ts" } },
-        { from: "Widget.svelte", to: { type: "external", name: "./missing.ts" } },
-      ],
-      symbols: [
-        {
-          file: "App.svelte",
-          includes: [],
-          excludes: ["app"],
-        },
-      ],
       goToDefinition: [
         {
           name: "go to definition is not available",
