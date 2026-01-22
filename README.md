@@ -553,7 +553,8 @@ npx tsx src/cli.ts goto <file> <line> <column>
 
 - Caching:
   - Modes: `off` (default), `memory` (per-process), `disk` (persist across runs, stored under `.codegraph-cache/index-v1`).
-  - **Content-hash caching** (default): Cache keys use content SHA1 for reliability. Set `cacheStrict: false` to use mtime+size only (faster but less reliable with git operations).
+  - **Content-hash caching** (default): Parsed-module cache keys use content SHA1 for reliability. Set `cacheStrict: false` to use mtime+size for manifest signatures (faster but less reliable with git operations).
+  - Per-file parsed caches are versioned; version mismatches trigger a rebuild of that file’s cached outputs.
   - **Bloom filters** (default): Automatically built during indexing for 2-3x faster reference scanning. Disable with `useBloomFilters: false` if needed.
   - `.codegraph-cache/index-v1/manifest.json` stores the last indexed commit, graph options, and per-file signatures plus resolved edges. When you re-run `codegraph index` with the same options, unchanged files reuse the manifest entries and skip dependency extraction entirely.
   - Incremental runs treat the manifest as a cached base graph: unchanged files keep their edges, while changed files are re-parsed and their edges replaced. When no explicit Git range is provided, the manifest `lastCommit` is compared to `HEAD` to decide which files to refresh.

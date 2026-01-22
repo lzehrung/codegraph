@@ -50,3 +50,8 @@ Improve performance by reusing parsed trees and symbol data more effectively acr
 ## How we’ll measure success
 - Second build on unchanged repo has minimal parse time and high cache hit rate.
 - Cache reuse is transparent and reliable in tests.
+
+## Cache flow checklist (current decision points)
+- `buildIndexFromFileListShared`: reuse module cache when cache enabled and file signature matches; reuse graph edges when manifest entry signature matches; parse only when module cache or graph edges are missing/mismatched.
+- `buildProjectIndexIncremental`: mark changed files via manifest/gitscan/explicit list; load module cache for unchanged files; reparse only changed or cache-missed files; reuse manifest edges for unchanged files.
+- Manifest reuse is gated on graph options/config hash match; mismatches trigger full rebuild.
