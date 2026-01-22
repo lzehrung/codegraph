@@ -1,14 +1,60 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import path from 'node:path';
-import { buildProjectIndex, goToDefinition, findReferences, collectGraph, ProjectIndex } from '../src/index.js';
+import {
+  buildProjectIndex,
+  buildProjectIndexFromFiles,
+  goToDefinition,
+  findReferences,
+  collectGraph,
+  listSymbols,
+  ProjectIndex,
+  SymbolListItem,
+} from '../src/index.js';
 
-export function getSamplePath(language: 'typescript' | 'python' | 'javascript' | 'go' | 'java' | 'csharp' | 'ruby' | 'rust'): string {
+export type SampleLanguage =
+  | 'typescript'
+  | 'tsx'
+  | 'python'
+  | 'javascript'
+  | 'go'
+  | 'java'
+  | 'csharp'
+  | 'ruby'
+  | 'rust'
+  | 'html'
+  | 'css'
+  | 'scss'
+  | 'less'
+  | 'vue'
+  | 'svelte';
+
+export function getSamplePath(language: SampleLanguage): string {
   return path.resolve(process.cwd(), 'tests', 'samples', language);
 }
 
-export async function createTestIndex(language: 'typescript' | 'python' | 'javascript' | 'go' | 'java' | 'csharp' | 'ruby' | 'rust'): Promise<ProjectIndex> {
+export async function createTestIndex(language: SampleLanguage): Promise<ProjectIndex> {
   const samplePath = getSamplePath(language);
   return await buildProjectIndex(samplePath);
+}
+
+export async function createTestIndexFromPath(samplePath: string): Promise<ProjectIndex> {
+  return await buildProjectIndex(samplePath);
+}
+
+export async function createTestIndexFromFiles(
+  samplePath: string,
+  files: string[]
+): Promise<ProjectIndex> {
+  return await buildProjectIndexFromFiles(samplePath, files);
+}
+
+export function findSymbolsByName(
+  index: ProjectIndex,
+  name: string,
+  file?: string
+): SymbolListItem[] {
+  const opts = file ? { file } : undefined;
+  return listSymbols(index, opts).filter((symbol) => symbol.name === name);
 }
 
 export async function testGoToDefinition(

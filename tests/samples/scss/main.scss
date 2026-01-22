@@ -1,0 +1,8 @@
+@use "./variables";
+@use "./mixins";
+@use "./missing";
+
+.container {
+  color: variables.$primary-color;
+  @include mixins.center;
+}
