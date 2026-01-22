@@ -67,10 +67,9 @@ export function collectModuleSpecifiersFromSource(
   },
 ): { spec: string; typeOnly?: boolean }[] {
   const out: { spec: string; typeOnly?: boolean }[] = [];
-  const lowercasedFastRegexDisabled =
-    opts?.fastRegexDisabledLanguages?.map((langId) => langId.toLowerCase()) ??
-    [];
-  const fastRegexDisabled = lowercasedFastRegexDisabled.includes(support.id);
+  const fastRegexDisabled = opts?.fastRegexDisabledLanguages?.includes(
+    support.id,
+  );
   const shouldAttemptFallback =
     support.id === "python"
       ? /\b(import|from)\b/.test(source)

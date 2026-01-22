@@ -1904,10 +1904,15 @@ export async function collectImportsForFile(
 
     let ranFallback = false;
     try {
-      const { importBindings: q } = getCompiledQueries(
-        resolvedLang,
-        resolvedSup as any,
-      );
+      let q: Parser.Query;
+      try {
+        ({ importBindings: q } = getCompiledQueries(
+          resolvedLang,
+          resolvedSup as any,
+        ));
+      } catch {
+        q = new Parser.Query(resolvedLang, resolvedSup.queries.importBindings);
+      }
       for (const m of q.matches(tree.rootNode)) {
         const caps = Object.fromEntries(
           m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const),
