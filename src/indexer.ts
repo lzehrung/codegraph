@@ -710,9 +710,13 @@ async function fileStatSignature(
     // Default to strict mode (content-hash) for reliability
     // This is more reliable than mtime, especially with git operations
     const useStrict = strict !== false; // True unless explicitly set to false
-    const shouldHash = useStrict || opts?.includeContentHash;
+    const shouldHash = useStrict || opts?.includeContentHash === true;
     const contentHash = shouldHash ? await fileContentHash(file) : undefined;
-    if (!useStrict) return { sig: `${st.mtimeMs}:${st.size}`, contentHash };
+    if (!useStrict) {
+      return contentHash
+        ? { sig: `${st.mtimeMs}:${st.size}`, contentHash }
+        : { sig: `${st.mtimeMs}:${st.size}` };
+    }
     if (contentHash) {
       return {
         sig: `${st.mtimeMs}:${st.size}:${contentHash}`,
@@ -731,9 +735,9 @@ async function fileSignature(
   gitSig?: string,
   opts?: { forceContentHash?: boolean },
 ): Promise<FileSignature> {
-  const { sig, contentHash } = await fileStatSignature(file, strict, {
-    includeContentHash: opts?.forceContentHash,
-  });
+  const includeContentHash = opts?.forceContentHash === true;
+  const statOpts = includeContentHash ? { includeContentHash: true } : undefined;
+  const { sig, contentHash } = await fileStatSignature(file, strict, statOpts);
   const cacheSig = gitSig ?? contentHash ?? sig;
   if (gitSig) {
     return {
@@ -2407,7 +2411,9 @@ async function buildIndexFromFileListShared(
         // Both cached, no need to parse
         edges = await collectEdgesForFile(f, projectRoot, workspaceConfig, {
           fast: !!graphOptions.fast,
-          fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages,
+          ...(graphOptions.fastRegexDisabledLanguages
+            ? { fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages }
+            : {}),
           resolveNodeModules: !!graphOptions.resolveNodeModules,
           dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
           ...(graphOptions.resolutionHints
@@ -2500,7 +2506,9 @@ async function buildIndexFromFileListShared(
         edges = await collectEdgesForFile(f, projectRoot, workspaceConfig, {
           parsed: parsed,
           fast: !!graphOptions.fast,
-          fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages,
+          ...(graphOptions.fastRegexDisabledLanguages
+            ? { fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages }
+            : {}),
           resolveNodeModules: !!graphOptions.resolveNodeModules,
           dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
           ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
@@ -3013,7 +3021,9 @@ export async function buildProjectIndexIncremental(
       : await collectGraph(projectRoot, filesList, {
           parsed: parsedMap as any,
           fast: !!graphOptions.fast,
-          fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages,
+          ...(graphOptions.fastRegexDisabledLanguages
+            ? { fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages }
+            : {}),
           resolveNodeModules: !!graphOptions.resolveNodeModules,
           dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
           ...(graphOptions.resolutionHints

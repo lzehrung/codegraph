@@ -76,9 +76,9 @@ export function collectModuleSpecifiersFromSource(
       : /\b(import|export|require)\b/.test(source);
   const reportFallback = (reason: FallbackImportExtractionReason) => {
     const event: FallbackImportExtractionEvent = {
-      file: opts?.file,
       language: support.id,
       reason,
+      ...(opts?.file ? { file: opts.file } : {}),
     };
     opts?.onFallbackImportExtraction?.(event);
   };
@@ -278,8 +278,12 @@ export async function collectEdgesForFile(
       ...(parsed?.tree ? { tree: parsed.tree } : {}),
       fast,
       file: normalizedFile,
-      fastRegexDisabledLanguages: opts.fastRegexDisabledLanguages,
-      onFallbackImportExtraction: opts.onFallbackImportExtraction,
+      ...(opts.fastRegexDisabledLanguages
+        ? { fastRegexDisabledLanguages: opts.fastRegexDisabledLanguages }
+        : {}),
+      ...(opts.onFallbackImportExtraction
+        ? { onFallbackImportExtraction: opts.onFallbackImportExtraction }
+        : {}),
     },
   );
 
@@ -472,7 +476,9 @@ export async function collectGraph(
         {
           ...(parsedEntry ? { parsed: parsedEntry } : {}),
           fast: !!opts?.fast,
-          fastRegexDisabledLanguages: opts?.fastRegexDisabledLanguages,
+          ...(opts?.fastRegexDisabledLanguages
+            ? { fastRegexDisabledLanguages: opts.fastRegexDisabledLanguages }
+            : {}),
           resolveNodeModules: !!opts?.resolveNodeModules,
           dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
           ...(opts?.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
