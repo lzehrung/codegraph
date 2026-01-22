@@ -1,6 +1,15 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import path from 'node:path';
-import { buildProjectIndex, goToDefinition, findReferences, collectGraph, listSymbols, ProjectIndex, SymbolListItem } from '../src/index.js';
+import {
+  buildProjectIndex,
+  buildProjectIndexFromFiles,
+  goToDefinition,
+  findReferences,
+  collectGraph,
+  listSymbols,
+  ProjectIndex,
+  SymbolListItem,
+} from '../src/index.js';
 
 export type SampleLanguage =
   | 'typescript'
@@ -30,6 +39,13 @@ export async function createTestIndex(language: SampleLanguage): Promise<Project
 
 export async function createTestIndexFromPath(samplePath: string): Promise<ProjectIndex> {
   return await buildProjectIndex(samplePath);
+}
+
+export async function createTestIndexFromFiles(
+  samplePath: string,
+  files: string[]
+): Promise<ProjectIndex> {
+  return await buildProjectIndexFromFiles(samplePath, files);
 }
 
 export function findSymbolsByName(

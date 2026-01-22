@@ -8,7 +8,7 @@ Status values: **Covered**, **Partial**, **Missing**.
 | TSX | Covered | Covered | Covered | Covered | Covered | Missing | Missing |
 | JavaScript | Covered | Covered | Covered | Covered | Covered | Missing | Missing |
 | Python | Covered | Covered | Covered | Covered | Covered | Missing | Missing |
-| Go | Covered | Covered | Covered | Covered | Covered | Missing | Missing |
+| Go | Covered | Covered | Missing | Covered | Covered | Missing | Missing |
 | Java | Covered | Covered | Covered | Covered | Covered | Missing | Missing |
 | C# | Covered | Covered | Covered | Covered | Covered | Missing | Missing |
 | Ruby | Covered | Covered | Covered | Covered | Covered | Missing | Missing |

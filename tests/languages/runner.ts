@@ -9,10 +9,11 @@ import type {
   LanguageTestDefinition,
 } from "./types.js";
 import {
+  createTestIndexFromFiles,
   createTestIndexFromPath,
   findSymbolsByName,
 } from "../test-utils.js";
-import { findReferences, goToDefinition } from "../../src/index.js";
+import { collectGraph, findReferences, goToDefinition } from "../../src/index.js";
 import type { ProjectIndex } from "../../src/index.js";
 import type { Edge, Graph } from "../../src/types.js";
 
@@ -62,14 +63,49 @@ export function runLanguageTests(def: LanguageTestDefinition) {
         def.parity.sampleDir,
       );
       let index: ProjectIndex;
-
-      beforeAll(async () => {
-        index = await createTestIndexFromPath(samplePath);
-      });
+      let graph: Graph;
 
       const normalizePath = (p: string) => p.replace(/\\/g, "/");
       const resolveSamplePath = (p: string) =>
         normalizePath(path.join(samplePath, p));
+
+      const collectParityFiles = () => {
+        const files = new Set<string>();
+        const addFile = (filePath: string) => {
+          files.add(resolveSamplePath(filePath));
+        };
+        for (const expectation of def.parity?.dependencyGraph ?? []) {
+          addFile(expectation.from);
+          if (expectation.to.type === "file") {
+            addFile(expectation.to.path);
+          }
+        }
+        for (const expectation of def.parity?.symbols ?? []) {
+          addFile(expectation.file);
+        }
+        for (const expectation of def.parity?.goToDefinition ?? []) {
+          addFile(expectation.file);
+          if (expectation.expectedDefinition) {
+            addFile(expectation.expectedDefinition.file);
+          }
+        }
+        for (const expectation of def.parity?.references ?? []) {
+          addFile(expectation.file);
+        }
+        return Array.from(files);
+      };
+
+      beforeAll(async () => {
+        const parityFiles = collectParityFiles();
+        index =
+          parityFiles.length > 0
+            ? await createTestIndexFromFiles(samplePath, parityFiles)
+            : await createTestIndexFromPath(samplePath);
+        graph =
+          parityFiles.length > 0
+            ? await collectGraph(samplePath, parityFiles)
+            : index.graph;
+      });
 
       const matchEdge = (edge: Edge, expectation: DependencyGraphExpectation) => {
         const expectedFrom = resolveSamplePath(expectation.from);
@@ -85,7 +121,6 @@ export function runLanguageTests(def: LanguageTestDefinition) {
 
       if (def.parity.dependencyGraph) {
         it("builds the dependency graph", () => {
-          const graph: Graph = index.graph;
           for (const expectation of def.parity.dependencyGraph ?? []) {
             const found = graph.edges.some((edge) =>
               matchEdge(edge, expectation),

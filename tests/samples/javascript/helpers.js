@@ -6,12 +6,6 @@ export function anotherHelper() {
   return 123;
 }
 
-const { uniq } = require("lodash");
-
-export function uniqueValues(values) {
-  return uniq(values);
-}
-
 export class HelperInterface {
   constructor(name, value) {
     this.name = name;

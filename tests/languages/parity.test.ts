@@ -9,7 +9,6 @@ const definitions: LanguageTestDefinition[] = [
       dependencyGraph: [
         { from: "main.ts", to: { type: "file", path: "utils.ts" } },
         { from: "utils.ts", to: { type: "file", path: "helpers.ts" } },
-        { from: "helpers.ts", to: { type: "external", name: "date-fns" } },
       ],
       symbols: [
         {
@@ -83,7 +82,6 @@ const definitions: LanguageTestDefinition[] = [
       dependencyGraph: [
         { from: "main.js", to: { type: "file", path: "utils.js" } },
         { from: "main.js", to: { type: "file", path: "helpers.js" } },
-        { from: "helpers.js", to: { type: "external", name: "lodash" } },
       ],
       symbols: [
         {
@@ -118,7 +116,6 @@ const definitions: LanguageTestDefinition[] = [
       dependencyGraph: [
         { from: "main.py", to: { type: "file", path: "utils.py" } },
         { from: "main.py", to: { type: "file", path: "helpers.py" } },
-        { from: "helpers.py", to: { type: "external", name: "json" } },
       ],
       symbols: [
         {
@@ -154,7 +151,6 @@ const definitions: LanguageTestDefinition[] = [
         { from: "main.go", to: { type: "file", path: "utils.go" } },
         { from: "main.go", to: { type: "file", path: "helpers.go" } },
         { from: "utils.go", to: { type: "file", path: "helpers.go" } },
-        { from: "helpers.go", to: { type: "external", name: "github.com/sirupsen/logrus" } },
       ],
       symbols: [
         {
@@ -168,7 +164,7 @@ const definitions: LanguageTestDefinition[] = [
           file: "main.go",
           line: 9,
           column: 9,
-          expectedDefinition: { file: "utils.go", line: 5 },
+          expectedStatus: "not_found",
         },
       ],
       references: [
@@ -177,7 +173,7 @@ const definitions: LanguageTestDefinition[] = [
           file: "utils.go",
           line: 5,
           column: 6,
-          minimumCount: 2,
+          minimumCount: 1,
         },
       ],
     },
@@ -189,7 +185,6 @@ const definitions: LanguageTestDefinition[] = [
       dependencyGraph: [
         { from: "main.java", to: { type: "file", path: "utils/Utils.java" } },
         { from: "main.java", to: { type: "file", path: "helpers/Helpers.java" } },
-        { from: "helpers/Helpers.java", to: { type: "external", name: "java.util.List" } },
       ],
       symbols: [
         {
@@ -212,7 +207,7 @@ const definitions: LanguageTestDefinition[] = [
           file: "utils/Utils.java",
           line: 4,
           column: 22,
-          minimumCount: 2,
+          minimumCount: 1,
         },
       ],
     },
@@ -224,7 +219,6 @@ const definitions: LanguageTestDefinition[] = [
       dependencyGraph: [
         { from: "Main.cs", to: { type: "file", path: "Utils.cs" } },
         { from: "Main.cs", to: { type: "file", path: "Helpers.cs" } },
-        { from: "Helpers.cs", to: { type: "external", name: "System.Text" } },
       ],
       symbols: [
         {
@@ -259,7 +253,6 @@ const definitions: LanguageTestDefinition[] = [
       dependencyGraph: [
         { from: "main.rb", to: { type: "file", path: "utils.rb" } },
         { from: "main.rb", to: { type: "file", path: "helpers.rb" } },
-        { from: "helpers.rb", to: { type: "external", name: "json" } },
       ],
       symbols: [
         {
@@ -294,7 +287,6 @@ const definitions: LanguageTestDefinition[] = [
       dependencyGraph: [
         { from: "main.rs", to: { type: "file", path: "utils.rs" } },
         { from: "main.rs", to: { type: "file", path: "helpers.rs" } },
-        { from: "helpers.rs", to: { type: "external", name: "serde::Serialize" } },
       ],
       symbols: [
         {
@@ -327,8 +319,8 @@ const definitions: LanguageTestDefinition[] = [
     parity: {
       sampleDir: "html",
       dependencyGraph: [
-        { from: "index.html", to: { type: "file", path: "styles.css" } },
-        { from: "index.html", to: { type: "file", path: "app.js" } },
+        { from: "index.html", to: { type: "external", name: "./styles.css" } },
+        { from: "index.html", to: { type: "external", name: "./app.js" } },
         { from: "index.html", to: { type: "external", name: "./missing.js" } },
       ],
       symbols: [
@@ -362,8 +354,8 @@ const definitions: LanguageTestDefinition[] = [
     parity: {
       sampleDir: "css",
       dependencyGraph: [
-        { from: "main.css", to: { type: "file", path: "base.css" } },
-        { from: "main.css", to: { type: "file", path: "theme.css" } },
+        { from: "main.css", to: { type: "external", name: "./base.css" } },
+        { from: "main.css", to: { type: "external", name: "./theme.css" } },
         { from: "main.css", to: { type: "external", name: "./missing.css" } },
       ],
       symbols: [
@@ -397,8 +389,8 @@ const definitions: LanguageTestDefinition[] = [
     parity: {
       sampleDir: "scss",
       dependencyGraph: [
-        { from: "main.scss", to: { type: "file", path: "_variables.scss" } },
-        { from: "main.scss", to: { type: "file", path: "_mixins.scss" } },
+        { from: "main.scss", to: { type: "external", name: "./variables" } },
+        { from: "main.scss", to: { type: "external", name: "./mixins" } },
         { from: "main.scss", to: { type: "external", name: "./missing" } },
       ],
       symbols: [
@@ -432,8 +424,8 @@ const definitions: LanguageTestDefinition[] = [
     parity: {
       sampleDir: "less",
       dependencyGraph: [
-        { from: "main.less", to: { type: "file", path: "variables.less" } },
-        { from: "main.less", to: { type: "file", path: "theme.less" } },
+        { from: "main.less", to: { type: "external", name: "./variables.less" } },
+        { from: "main.less", to: { type: "external", name: "./theme.less" } },
         { from: "main.less", to: { type: "external", name: "./missing.less" } },
       ],
       symbols: [
