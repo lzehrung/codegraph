@@ -14,7 +14,19 @@ const definition: LanguageTestDefinition = {
       },
     },
   ],
+  parity: {
+    sampleDir: "less",
+    dependencyGraph: [
+      {
+        from: "main.less",
+        to: { type: "file", path: "variables.less" },
+      },
+      {
+        from: "main.less",
+        to: { type: "file", path: "theme.less" },
+      },
+    ],
+  },
 };
 
 runLanguageTests(definition);
-

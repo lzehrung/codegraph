@@ -15,7 +15,19 @@ const definition: LanguageTestDefinition = {
       },
     },
   ],
+  parity: {
+    sampleDir: "go",
+    dependencyGraph: [
+      {
+        from: "main.go",
+        to: { type: "file", path: "utils.go" },
+      },
+      {
+        from: "main.go",
+        to: { type: "file", path: "helpers.go" },
+      },
+    ],
+  },
 };
 
 runLanguageTests(definition);
-

@@ -16,7 +16,19 @@ const definition: LanguageTestDefinition = {
       },
     },
   ],
+  parity: {
+    sampleDir: "csharp",
+    dependencyGraph: [
+      {
+        from: "Main.cs",
+        to: { type: "file", path: "Utils.cs" },
+      },
+      {
+        from: "Main.cs",
+        to: { type: "file", path: "Helpers.cs" },
+      },
+    ],
+  },
 };
 
 runLanguageTests(definition);
-
