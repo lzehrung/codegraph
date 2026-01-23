@@ -1,6 +1,8 @@
+import type Parser from "tree-sitter";
 import type { FileId } from "../types.js";
 import type { ProjectIndex, SymbolDef, SymbolHandle } from "../indexer.js";
 import { ensureParsedContext } from "../indexer.js";
+import type { LanguageSupport } from "../languages.js";
 import type { FileChange, ChangedSymbol } from "./types.js";
 
 function symbolHandleFromLocal(file: FileId, local: SymbolDef): string {
@@ -49,6 +51,7 @@ export async function locateChangedSymbolsWithLines(
       node,
       sup,
       classification,
+      source,
     );
     if (symbolHandle) {
       const symbolDef = index.byFile
@@ -108,6 +111,7 @@ export async function mapChangedLinesToSymbols(
       node,
       sup,
       classification,
+      source,
     );
     if (!symbolHandle) continue;
     const existing = linesByHandle.get(symbolHandle) ?? new Set<number>();
@@ -118,10 +122,13 @@ export async function mapChangedLinesToSymbols(
   return linesByHandle;
 }
 
-function findNodesInLines(tree: any, changedLines: Set<number>): any[] {
-  const nodes: any[] = [];
+function findNodesInLines(
+  tree: Parser.Tree,
+  changedLines: Set<number>,
+): Parser.SyntaxNode[] {
+  const nodes: Parser.SyntaxNode[] = [];
 
-  function walk(node: any) {
+  function walk(node: Parser.SyntaxNode) {
     const startLine = node.startPosition?.row + 1;
     const endLine = node.endPosition?.row + 1;
 
@@ -173,10 +180,19 @@ type NodeClassification = {
 } | null;
 
 function classifyChangedNode(
-  node: any,
+  node: Parser.SyntaxNode,
   source: string,
-  sup: any,
+  sup: LanguageSupport,
 ): NodeClassification {
+  if (sup.id === "html" && isHtmlIdAttributeValue(node, source)) {
+    return { type: "definition" };
+  }
+  if (sup.id === "css" || sup.id === "less" || sup.id === "scss") {
+    if (isStyleDefinitionNode(node, sup)) {
+      return { type: "definition" };
+    }
+  }
+
   // Check for definition nodes
   if (sup.isDeclarationName?.(node)) {
     return {
@@ -219,9 +235,12 @@ function classifyChangedNode(
   return null;
 }
 
-function isTypeOnlyDeclaration(node: any, source: string): boolean {
+function isTypeOnlyDeclaration(
+  node: Parser.SyntaxNode,
+  source: string,
+): boolean {
   // Check if this is part of a type-only declaration
-  let current = node;
+  let current: Parser.SyntaxNode | null = node;
   while (current) {
     const text = source.slice(current.startIndex, current.endIndex);
     if (/\btype\b|\binterface\b|\btype\b.*=/.test(text)) {
@@ -235,8 +254,11 @@ function isTypeOnlyDeclaration(node: any, source: string): boolean {
   return false;
 }
 
-function findDeclarationNameInAncestors(node: any, sup: any): any | null {
-  let cur = node;
+function findDeclarationNameInAncestors(
+  node: Parser.SyntaxNode,
+  sup: LanguageSupport,
+): Parser.SyntaxNode | null {
+  let cur: Parser.SyntaxNode | null = node;
   while (cur) {
     for (const ch of cur.namedChildren || []) {
       if (sup.isDeclarationName?.(ch)) return ch;
@@ -249,15 +271,19 @@ function findDeclarationNameInAncestors(node: any, sup: any): any | null {
 function findSymbolHandleForNode(
   index: ProjectIndex,
   file: FileId,
-  node: any,
-  sup: any,
+  node: Parser.SyntaxNode,
+  sup: LanguageSupport,
   classification: NodeClassification,
+  source: string,
 ): SymbolHandle | null {
   const mod = index.byFile.get(file);
   if (!mod) return null;
 
   // Exact declaration name node
-  if (classification?.type === "definition" && sup.isDeclarationName?.(node)) {
+  if (
+    classification?.type === "definition" &&
+    isDefinitionNameNode(node, sup, source)
+  ) {
     const local = mod.locals.find(
       (l) =>
         l.range.start.line === node.startPosition?.row + 1 &&
@@ -283,7 +309,7 @@ function findSymbolHandleForNode(
 function isExported(
   index: ProjectIndex,
   file: FileId,
-  symbolDef: any,
+  symbolDef: SymbolDef,
 ): boolean {
   const mod = index.byFile.get(file);
   if (!mod) return false;
@@ -295,4 +321,72 @@ function isExported(
       e.target.localName === symbolDef.localName &&
       (e.target.range.start.index ?? 0) === symbolIndex,
   );
+}
+
+function isStyleDefinitionNode(
+  node: Parser.SyntaxNode,
+  sup: LanguageSupport,
+): boolean {
+  const parentType = node.parent?.type ?? "";
+  if (sup.id === "css" || sup.id === "less") {
+    if (node.type === "class_name" && parentType === "class_selector") {
+      return true;
+    }
+    if (node.type === "id_name" && parentType === "id_selector") {
+      return true;
+    }
+    return false;
+  }
+
+  if (sup.id === "scss") {
+    if (node.type === "class_name" && parentType === "class_selector") {
+      return true;
+    }
+    if (node.type === "id_name" && parentType === "id_selector") {
+      return true;
+    }
+    if (node.type === "variable" && parentType === "variable_declaration") {
+      return true;
+    }
+    if (node.type === "name" && parentType === "mixin_statement") {
+      return true;
+    }
+    if (node.type === "name" && parentType === "function_statement") {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isHtmlIdAttributeValue(
+  node: Parser.SyntaxNode,
+  source: string,
+): boolean {
+  if (node.type !== "attribute_value") return false;
+  const quoted = node.parent;
+  if (!quoted) return false;
+  const attribute = quoted.parent;
+  if (!attribute || attribute.type !== "attribute") return false;
+  const nameNode =
+    attribute.childForFieldName?.("name") ?? attribute.child(0);
+  if (!nameNode || nameNode.type !== "attribute_name") return false;
+  const nameText = source
+    .slice(nameNode.startIndex, nameNode.endIndex)
+    .trim()
+    .toLowerCase();
+  return nameText === "id";
+}
+
+function isDefinitionNameNode(
+  node: Parser.SyntaxNode,
+  sup: LanguageSupport,
+  source: string,
+): boolean {
+  if (sup.isDeclarationName?.(node)) return true;
+  if (sup.id === "html") return isHtmlIdAttributeValue(node, source);
+  if (sup.id === "css" || sup.id === "less" || sup.id === "scss") {
+    return isStyleDefinitionNode(node, sup);
+  }
+  return false;
 }

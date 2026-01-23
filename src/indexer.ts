@@ -18,6 +18,7 @@ import {
   loadNearestTsconfigFor,
   loadWorkspaceConfig,
   resolveSpecifier,
+  resolveImportSpecifier,
   resolvePythonModule,
   resolveWorkspacePackage,
   normalizeResolutionHints,
@@ -1872,18 +1873,21 @@ export async function collectImportsForFile(
 
     const resolveFrom = async (from: string) => {
       const resolutionHints = opts?.graphOptions?.resolutionHints;
-      const r = await resolveSpecifier(
+      const resolved = await resolveImportSpecifier(
+        projectRoot,
         file,
         from,
-        projectRoot,
-        tsCfg?.matchPath,
-        workspaceConfig,
+        resolvedSup.id,
         {
+          matchPath: tsCfg?.matchPath,
+          workspaceConfig,
           resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
           ...(resolutionHints ? { resolutionHints } : {}),
         },
       );
-      return typeof r === "string" ? r.replace(/\\/g, "/") : r;
+      return typeof resolved === "string"
+        ? resolved.replace(/\\/g, "/")
+        : resolved;
     };
 
     const runFallback = async () => {
@@ -3232,6 +3236,17 @@ export function resolveExport(
     if (visited.has(cycleKey)) return null;
     visited.add(cycleKey);
 
+    const goPackageExport = resolveGoPackageExport(
+      index,
+      normalizedFile,
+      name,
+    );
+    if (goPackageExport) {
+      const res: ResolvedExport = { kind: "resolved", def: goPackageExport };
+      index.exportCache.set(key, res);
+      return res;
+    }
+
     for (const e of mod.exports)
       if (e.type === "local" && e.exportedAs === name) {
         const res: ResolvedExport = { kind: "resolved", def: e.target };
@@ -3279,6 +3294,25 @@ export function resolveExport(
     return null;
   }
   return _resolve(file, exportedName);
+}
+
+function resolveGoPackageExport(
+  index: ProjectIndex,
+  file: FileId,
+  exportedName: string,
+): SymbolDef | null {
+  const sup = supportForFile(file);
+  if (sup.id !== "go") return null;
+  const baseDir = path.dirname(file);
+  for (const [filePath, mod] of index.byFile) {
+    if (path.dirname(filePath) !== baseDir) continue;
+    for (const e of mod.exports) {
+      if (e.type === "local" && e.exportedAs === exportedName) {
+        return e.target;
+      }
+    }
+  }
+  return null;
 }
 
 export type GoToRequest = { file: FileId; line: number; column: number };
