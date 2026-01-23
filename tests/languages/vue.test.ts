@@ -3,6 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import { chunkSFCFile } from "../../src/chunking/chunkSFC.js";
+import { runLanguageTests } from "./runner.js";
+import type { LanguageTestDefinition } from "./types.js";
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const samplePath = path.join(dirname, "samples", "vue.sample.vue");
@@ -23,4 +25,17 @@ describe("Vue SFC chunking", () => {
   });
 });
 
+const definition: LanguageTestDefinition = {
+  id: "vue",
+  parity: {
+    sampleDir: "vue",
+    dependencyGraph: [
+      {
+        from: "inline-script.vue",
+        to: { type: "file", path: "logic.ts" },
+      },
+    ],
+  },
+};
 
+runLanguageTests(definition);

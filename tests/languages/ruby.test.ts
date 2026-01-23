@@ -15,7 +15,19 @@ const definition: LanguageTestDefinition = {
       },
     },
   ],
+  parity: {
+    sampleDir: "ruby",
+    dependencyGraph: [
+      {
+        from: "main.rb",
+        to: { type: "file", path: "utils.rb" },
+      },
+      {
+        from: "main.rb",
+        to: { type: "file", path: "helpers.rb" },
+      },
+    ],
+  },
 };
 
 runLanguageTests(definition);
-

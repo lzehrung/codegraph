@@ -677,6 +677,10 @@ export async function resolveWorkspacePackage(
     ".mjs",
     ".cjs",
     ".json",
+    ".css",
+    ".scss",
+    ".less",
+    ".html",
     ".vue",
     ".svelte",
     ".go",
@@ -761,6 +765,10 @@ export async function resolvePathLikeModule(
     ".mjs",
     ".cjs",
     ".json",
+    ".css",
+    ".scss",
+    ".less",
+    ".html",
     ".vue",
     ".svelte",
     ".go",
@@ -790,13 +798,18 @@ export async function resolvePathLikeModule(
   return null;
 }
 
+export type ResolveSpecifierOptions = {
+  matchPath?: MatchPathFn;
+  workspaceConfig?: WorkspaceConfig;
+  resolveNodeModules?: boolean;
+  resolutionHints?: string[];
+};
+
 export async function resolveSpecifier(
   fromFile: string,
   spec: string,
   projectRoot: string,
-  matchPath?: MatchPathFn,
-  workspaceConfig?: WorkspaceConfig,
-  opts?: { resolveNodeModules?: boolean; resolutionHints?: string[] },
+  opts?: ResolveSpecifierOptions,
 ): Promise<FileId | { external: string }> {
   const resolutionHints = normalizeResolutionHints(opts?.resolutionHints);
   const hintKey = resolutionHints.join("|");
@@ -815,6 +828,10 @@ export async function resolveSpecifier(
     ".mjs",
     ".cjs",
     ".json",
+    ".css",
+    ".scss",
+    ".less",
+    ".html",
     ".vue",
     ".svelte",
     ".go",
@@ -859,6 +876,7 @@ export async function resolveSpecifier(
     return ext;
   }
   // Bare specifier: prefer TS path mappings (tsconfig `paths`) before workspace/node_modules.
+  const matchPath = opts?.matchPath;
   if (matchPath) {
     const m = matchPath(
       spec,
@@ -903,7 +921,7 @@ export async function resolveSpecifier(
   }
 
   if (!spec.startsWith(".") && !spec.startsWith("/")) {
-    const resolvedWs = await resolveWorkspacePackage(spec, workspaceConfig);
+    const resolvedWs = await resolveWorkspacePackage(spec, opts?.workspaceConfig);
     if (resolvedWs) {
       resolveSpecifierCache.set(cacheKey, resolvedWs);
       return resolvedWs;

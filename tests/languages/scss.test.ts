@@ -16,7 +16,19 @@ const definition: LanguageTestDefinition = {
       },
     },
   ],
+  parity: {
+    sampleDir: "scss",
+    dependencyGraph: [
+      {
+        from: "use-partials.scss",
+        to: { type: "file", path: "_variables.scss" },
+      },
+      {
+        from: "use-partials.scss",
+        to: { type: "file", path: "_mixins.scss" },
+      },
+    ],
+  },
 };
 
 runLanguageTests(definition);
-

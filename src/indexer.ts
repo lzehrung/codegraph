@@ -1872,17 +1872,13 @@ export async function collectImportsForFile(
 
     const resolveFrom = async (from: string) => {
       const resolutionHints = opts?.graphOptions?.resolutionHints;
-      const r = await resolveSpecifier(
-        file,
-        from,
-        projectRoot,
-        tsCfg?.matchPath,
-        workspaceConfig,
-        {
-          resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
-          ...(resolutionHints ? { resolutionHints } : {}),
-        },
-      );
+      const resolveOptions = {
+        resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
+        ...(resolutionHints ? { resolutionHints } : {}),
+        ...(tsCfg?.matchPath ? { matchPath: tsCfg.matchPath } : {}),
+        ...(workspaceConfig ? { workspaceConfig } : {}),
+      };
+      const r = await resolveSpecifier(file, from, projectRoot, resolveOptions);
       return typeof r === "string" ? r.replace(/\\/g, "/") : r;
     };
 
@@ -2472,18 +2468,19 @@ async function buildIndexFromFileListShared(
               for (const e of mod.exports)
                 if (e.type === "reexport" || e.type === "exportStar" || e.type === "namespaceReexport") {
                   if (e.fromModule.startsWith(".")) {
+                    const resolveOptions = {
+                      resolveNodeModules: !!graphOptions.resolveNodeModules,
+                      ...(graphOptions.resolutionHints
+                        ? { resolutionHints: graphOptions.resolutionHints }
+                        : {}),
+                      ...(matchPath ? { matchPath } : {}),
+                      ...(workspaceConfig ? { workspaceConfig } : {}),
+                    };
                     const resolved = await resolveSpecifier(
                       f,
                       e.fromModule,
                       projectRoot,
-                      matchPath,
-                      workspaceConfig,
-                      {
-                        resolveNodeModules: !!graphOptions.resolveNodeModules,
-                        ...(graphOptions.resolutionHints
-                          ? { resolutionHints: graphOptions.resolutionHints }
-                          : {}),
-                      },
+                      resolveOptions,
                     );
                     if (typeof resolved === "string") e.fromModule = resolved;
                   } else {
@@ -2914,18 +2911,19 @@ export async function buildProjectIndexIncremental(
             for (const e of mod.exports)
               if (e.type === "reexport" || e.type === "exportStar" || e.type === "namespaceReexport") {
                 if (e.fromModule.startsWith(".")) {
+                  const resolveOptions = {
+                    resolveNodeModules: !!graphOptions.resolveNodeModules,
+                    ...(graphOptions.resolutionHints
+                      ? { resolutionHints: graphOptions.resolutionHints }
+                      : {}),
+                    ...(matchPath ? { matchPath } : {}),
+                    ...(workspaceConfig ? { workspaceConfig } : {}),
+                  };
                   const resolved = await resolveSpecifier(
                     f,
                     e.fromModule,
                     projectRoot,
-                    matchPath,
-                    workspaceConfig,
-                    {
-                      resolveNodeModules: !!graphOptions.resolveNodeModules,
-                      ...(graphOptions.resolutionHints
-                        ? { resolutionHints: graphOptions.resolutionHints }
-                        : {}),
-                    },
+                    resolveOptions,
                   );
                   if (typeof resolved === "string") e.fromModule = resolved;
                 } else {
