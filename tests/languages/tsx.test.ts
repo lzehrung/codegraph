@@ -14,6 +14,19 @@ const definition: LanguageTestDefinition = {
       },
     },
   ],
+  parity: {
+    sampleDir: "tsx",
+    dependencyGraph: [
+      {
+        from: "App.tsx",
+        to: { type: "file", path: "components/Button.tsx" },
+      },
+      {
+        from: "App.tsx",
+        to: { type: "file", path: "utils.ts" },
+      },
+    ],
+  },
 };
 
 runLanguageTests(definition);

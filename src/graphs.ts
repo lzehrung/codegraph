@@ -11,6 +11,7 @@ import {
   loadNearestTsconfigFor,
   loadWorkspaceConfig,
   resolveSpecifier,
+  type ResolveSpecifierOptions,
   resolvePythonModule,
   normalizeResolutionHints,
 } from "./util.js";
@@ -308,6 +309,18 @@ export async function collectEdgesForFile(
 
   const { matchPath } =
     sup.id === "ts" ? await loadNearestTsconfigFor(file) : { matchPath: undefined };
+  const resolveOptions: ResolveSpecifierOptions = {
+    resolveNodeModules: !!opts.resolveNodeModules,
+  };
+  if (opts.resolutionHints) {
+    resolveOptions.resolutionHints = opts.resolutionHints;
+  }
+  if (matchPath) {
+    resolveOptions.matchPath = matchPath;
+  }
+  if (workspaceConfig) {
+    resolveOptions.workspaceConfig = workspaceConfig;
+  }
 
   const edges: Edge[] = [];
   for (const { spec, typeOnly } of specs) {
@@ -332,34 +345,14 @@ export async function collectEdgesForFile(
         to = { type: "file", path: res.replace(/\\/g, "/") };
       } else {
         // Fallback to resolveSpecifier for relative paths like ./foo
-        const res2 = await resolveSpecifier(
-          file,
-          spec,
-          projectRoot,
-          matchPath,
-          workspaceConfig,
-          {
-            resolveNodeModules: !!opts.resolveNodeModules,
-            ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
-          },
-        );
+        const res2 = await resolveSpecifier(file, spec, projectRoot, resolveOptions);
         to =
           typeof res2 === "string"
             ? { type: "file", path: res2.replace(/\\/g, "/") }
             : { type: "external", name: res2.external };
       }
     } else {
-      const res = await resolveSpecifier(
-        file,
-        spec,
-        projectRoot,
-        matchPath,
-        workspaceConfig,
-        {
-          resolveNodeModules: !!opts.resolveNodeModules,
-          ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
-        },
-      );
+      const res = await resolveSpecifier(file, spec, projectRoot, resolveOptions);
       to =
         typeof res === "string"
           ? { type: "file", path: res.replace(/\\/g, "/") }

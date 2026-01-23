@@ -18,6 +18,15 @@ const definition: LanguageTestDefinition = {
       },
     },
   ],
+  parity: {
+    sampleDir: "javascript",
+    dependencyGraph: [
+      {
+        from: "dynamic-import.js",
+        to: { type: "file", path: "helpers.js" },
+      },
+    ],
+  },
 };
 
 runLanguageTests(definition);

@@ -18,6 +18,7 @@ import {
   loadNearestTsconfigFor,
   loadWorkspaceConfig,
   resolveSpecifier,
+  type ResolveSpecifierOptions,
   resolvePythonModule,
   resolveWorkspacePackage,
   normalizeResolutionHints,
@@ -1872,17 +1873,19 @@ export async function collectImportsForFile(
 
     const resolveFrom = async (from: string) => {
       const resolutionHints = opts?.graphOptions?.resolutionHints;
-      const r = await resolveSpecifier(
-        file,
-        from,
-        projectRoot,
-        tsCfg?.matchPath,
-        workspaceConfig,
-        {
-          resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
-          ...(resolutionHints ? { resolutionHints } : {}),
-        },
-      );
+      const resolveOptions: ResolveSpecifierOptions = {
+        resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
+      };
+      if (resolutionHints) {
+        resolveOptions.resolutionHints = resolutionHints;
+      }
+      if (tsCfg?.matchPath) {
+        resolveOptions.matchPath = tsCfg.matchPath;
+      }
+      if (workspaceConfig) {
+        resolveOptions.workspaceConfig = workspaceConfig;
+      }
+      const r = await resolveSpecifier(file, from, projectRoot, resolveOptions);
       return typeof r === "string" ? r.replace(/\\/g, "/") : r;
     };
 
@@ -2472,18 +2475,23 @@ async function buildIndexFromFileListShared(
               for (const e of mod.exports)
                 if (e.type === "reexport" || e.type === "exportStar" || e.type === "namespaceReexport") {
                   if (e.fromModule.startsWith(".")) {
+                    const resolveOptions: ResolveSpecifierOptions = {
+                      resolveNodeModules: !!graphOptions.resolveNodeModules,
+                    };
+                    if (graphOptions.resolutionHints) {
+                      resolveOptions.resolutionHints = graphOptions.resolutionHints;
+                    }
+                    if (matchPath) {
+                      resolveOptions.matchPath = matchPath;
+                    }
+                    if (workspaceConfig) {
+                      resolveOptions.workspaceConfig = workspaceConfig;
+                    }
                     const resolved = await resolveSpecifier(
                       f,
                       e.fromModule,
                       projectRoot,
-                      matchPath,
-                      workspaceConfig,
-                      {
-                        resolveNodeModules: !!graphOptions.resolveNodeModules,
-                        ...(graphOptions.resolutionHints
-                          ? { resolutionHints: graphOptions.resolutionHints }
-                          : {}),
-                      },
+                      resolveOptions,
                     );
                     if (typeof resolved === "string") e.fromModule = resolved;
                   } else {
@@ -2914,18 +2922,23 @@ export async function buildProjectIndexIncremental(
             for (const e of mod.exports)
               if (e.type === "reexport" || e.type === "exportStar" || e.type === "namespaceReexport") {
                 if (e.fromModule.startsWith(".")) {
+                  const resolveOptions: ResolveSpecifierOptions = {
+                    resolveNodeModules: !!graphOptions.resolveNodeModules,
+                  };
+                  if (graphOptions.resolutionHints) {
+                    resolveOptions.resolutionHints = graphOptions.resolutionHints;
+                  }
+                  if (matchPath) {
+                    resolveOptions.matchPath = matchPath;
+                  }
+                  if (workspaceConfig) {
+                    resolveOptions.workspaceConfig = workspaceConfig;
+                  }
                   const resolved = await resolveSpecifier(
                     f,
                     e.fromModule,
                     projectRoot,
-                    matchPath,
-                    workspaceConfig,
-                    {
-                      resolveNodeModules: !!graphOptions.resolveNodeModules,
-                      ...(graphOptions.resolutionHints
-                        ? { resolutionHints: graphOptions.resolutionHints }
-                        : {}),
-                    },
+                    resolveOptions,
                   );
                   if (typeof resolved === "string") e.fromModule = resolved;
                 } else {
