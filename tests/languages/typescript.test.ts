@@ -18,6 +18,15 @@ const definition: LanguageTestDefinition = {
       },
     },
   ],
+  parity: {
+    sampleDir: "typescript",
+    dependencyGraph: [
+      {
+        from: "dynamic-import.ts",
+        to: { type: "file", path: "helpers.ts" },
+      },
+    ],
+  },
 };
 
 runLanguageTests(definition);

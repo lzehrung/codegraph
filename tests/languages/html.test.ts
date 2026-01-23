@@ -16,7 +16,19 @@ const definition: LanguageTestDefinition = {
       },
     },
   ],
+  parity: {
+    sampleDir: "html",
+    dependencyGraph: [
+      {
+        from: "index.html",
+        to: { type: "file", path: "styles.css" },
+      },
+      {
+        from: "index.html",
+        to: { type: "file", path: "app.js" },
+      },
+    ],
+  },
 };
 
 runLanguageTests(definition);
-
