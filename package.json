@@ -1,6 +1,6 @@
 {
   "name": "@lzehrung/codegraph",
-  "version": "1.8.8",
+  "version": "1.8.9",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
