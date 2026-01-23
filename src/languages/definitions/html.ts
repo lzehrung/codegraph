@@ -25,12 +25,17 @@ export const HTML_DEF: LanguageDefinition = {
     imports: `
       (script_element (start_tag (attribute (attribute_name) @attr (#eq? @attr "src") (quoted_attribute_value (attribute_value) @mod)))) @stmt
       (element (start_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "href") (quoted_attribute_value (attribute_value) @mod)))) @stmt (#eq? @tag "link")
+      (element (self_closing_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "href") (quoted_attribute_value (attribute_value) @mod)))) @stmt (#eq? @tag "link")
     `,
     exports: "",
     locals: `
       (attribute (attribute_name) @attr (#eq? @attr "id") (quoted_attribute_value (attribute_value) @name))
     `,
-    importBindings: "",
+    importBindings: `
+      (script_element (start_tag (attribute (attribute_name) @attr (#eq? @attr "src") (quoted_attribute_value (attribute_value) @from)))) @stmt
+      (element (start_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "href") (quoted_attribute_value (attribute_value) @from)))) @stmt (#eq? @tag "link")
+      (element (self_closing_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "href") (quoted_attribute_value (attribute_value) @from)))) @stmt (#eq? @tag "link")
+    `,
   },
   nodeTypes: {
     identifier: ["attribute_value", "tag_name"],
