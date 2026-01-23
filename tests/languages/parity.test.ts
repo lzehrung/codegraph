@@ -164,7 +164,7 @@ const definitions: LanguageTestDefinition[] = [
           file: "main.go",
           line: 9,
           column: 9,
-          expectedStatus: "not_found",
+          expectedDefinition: { file: "utils.go", line: 5 },
         },
       ],
       references: [
