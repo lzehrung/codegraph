@@ -328,7 +328,7 @@ export async function collectEdgesForFile(
           : { type: "external", name: res.external };
     } else if (sup.id === "go") {
       const res = await resolveImportSpecifier(projectRoot, file, spec, sup.id, {
-        matchPath,
+        ...(matchPath ? { matchPath } : {}),
         workspaceConfig,
         resolveNodeModules: !!opts.resolveNodeModules,
         ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
