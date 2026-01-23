@@ -1,0 +1,7 @@
+@use "./_variables" as vars;
+@use "./_mixins" as mixins;
+
+.container {
+  color: vars.$primary-color;
+  @include mixins.center;
+}
