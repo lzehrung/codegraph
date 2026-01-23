@@ -15,7 +15,19 @@ const definition: LanguageTestDefinition = {
       },
     },
   ],
+  parity: {
+    sampleDir: "java",
+    dependencyGraph: [
+      {
+        from: "static-imports.java",
+        to: { type: "file", path: "utils/Utils.java" },
+      },
+      {
+        from: "static-imports.java",
+        to: { type: "file", path: "helpers/Helpers.java" },
+      },
+    ],
+  },
 };
 
 runLanguageTests(definition);
-

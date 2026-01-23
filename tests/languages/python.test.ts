@@ -32,6 +32,19 @@ const definition: LanguageTestDefinition = {
       },
     },
   ],
+  parity: {
+    sampleDir: "python",
+    dependencyGraph: [
+      {
+        from: "relative-imports.py",
+        to: { type: "file", path: "utils.py" },
+      },
+      {
+        from: "relative-imports.py",
+        to: { type: "file", path: "helpers.py" },
+      },
+    ],
+  },
 };
 
 runLanguageTests(definition);
