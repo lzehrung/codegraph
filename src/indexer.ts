@@ -1879,8 +1879,8 @@ export async function collectImportsForFile(
         from,
         resolvedSup.id,
         {
-          matchPath: tsCfg?.matchPath,
-          workspaceConfig,
+          ...(tsCfg?.matchPath ? { matchPath: tsCfg.matchPath } : {}),
+          ...(workspaceConfig ? { workspaceConfig } : {}),
           resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
           ...(resolutionHints ? { resolutionHints } : {}),
         },
