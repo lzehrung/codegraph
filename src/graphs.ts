@@ -11,6 +11,7 @@ import {
   loadNearestTsconfigFor,
   loadWorkspaceConfig,
   resolveSpecifier,
+  resolveImportSpecifier,
   resolvePythonModule,
   normalizeResolutionHints,
 } from "./util.js";
@@ -325,7 +326,18 @@ export async function collectEdgesForFile(
         typeof res === "string"
           ? { type: "file", path: res.replace(/\\/g, "/") }
           : { type: "external", name: res.external };
-    } else if (["java", "csharp", "ruby", "rust", "go"].includes(sup.id)) {
+    } else if (sup.id === "go") {
+      const res = await resolveImportSpecifier(projectRoot, file, spec, sup.id, {
+        matchPath,
+        workspaceConfig,
+        resolveNodeModules: !!opts.resolveNodeModules,
+        ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+      });
+      to =
+        typeof res === "string"
+          ? { type: "file", path: res.replace(/\\/g, "/") }
+          : { type: "external", name: res.external };
+    } else if (["java", "csharp", "ruby", "rust"].includes(sup.id)) {
       const { resolvePathLikeModule } = await import("./util.js");
       const res = await resolvePathLikeModule(projectRoot, spec);
       if (res) {
@@ -607,7 +619,9 @@ export type TextGrepHit = {
 export async function astGrep(
   projectRoot: string,
   querySource: string,
-  patterns = ["**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte}"],
+  patterns = [
+    "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs,html,htm,css,scss,less}",
+  ],
 ): Promise<AstGrepHit[]> {
   const hits: AstGrepHit[] = [];
   const files = await listProjectFiles(projectRoot, patterns);
@@ -648,7 +662,9 @@ export async function astGrep(
 export async function textGrep(
   projectRoot: string,
   patternSource: string,
-  patterns = ["**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte}"],
+  patterns = [
+    "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs,html,htm,css,scss,less}",
+  ],
   opts?: {
     ignoreCase?: boolean;
     maxHits?: number;
