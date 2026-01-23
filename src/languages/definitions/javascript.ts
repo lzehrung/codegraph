@@ -96,6 +96,7 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
     imports: `
       (import_statement (string) @mod) @stmt
       (export_statement (string) @mod) @stmt
+      (call_expression function: (import) arguments: (arguments (string) @mod)) @stmt
       (call_expression function: (identifier) @fn arguments: (arguments (string) @mod)) (#eq? @fn "require")
     `,
     exports: `

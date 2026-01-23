@@ -37,7 +37,11 @@ export const SCSS_DEF: LanguageDefinition = {
       (class_selector (class_name) @name)
       (id_selector (id_name) @name)
     `,
-    importBindings: "",
+    importBindings: `
+      (import_statement (string_value) @from) @stmt
+      (use_statement (string_value) @from) @stmt
+      (forward_statement (string_value) @from) @stmt
+    `,
   },
   nodeTypes: {
     identifier: ["name", "variable", "class_name", "id_name"],

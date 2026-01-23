@@ -124,6 +124,7 @@ const BASE_GRAPH = {
     ;; import x = require("...") is represented via import_require_clause
     (import_statement (import_require_clause (string) @mod)) @stmt
     (export_statement (string) @mod) @stmt
+    (call_expression function: (import) arguments: (arguments (string) @mod)) @stmt
   `,
   exports: `
     (export_statement) @stmt

@@ -16,7 +16,19 @@ const definition: LanguageTestDefinition = {
       },
     },
   ],
+  parity: {
+    sampleDir: "rust",
+    dependencyGraph: [
+      {
+        from: "main.rs",
+        to: { type: "file", path: "utils.rs" },
+      },
+      {
+        from: "main.rs",
+        to: { type: "file", path: "helpers.rs" },
+      },
+    ],
+  },
 };
 
 runLanguageTests(definition);
-

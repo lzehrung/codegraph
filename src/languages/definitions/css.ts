@@ -26,7 +26,9 @@ export const CSS_DEF: LanguageDefinition = {
       (class_selector (class_name) @name)
       (id_selector (id_name) @name)
     `,
-    importBindings: "",
+    importBindings: `
+      (import_statement (string_value) @from) @stmt
+    `,
   },
   nodeTypes: {
     identifier: ["class_name", "id_name"],

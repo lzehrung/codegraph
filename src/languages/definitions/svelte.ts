@@ -23,7 +23,9 @@ export const SVELTE_DEF: LanguageDefinition = {
     `,
     exports: "",
     locals: "",
-    importBindings: "",
+    importBindings: `
+      (script_element (start_tag (attribute (attribute_name) @attr (#eq? @attr "src") (quoted_attribute_value (attribute_value) @from)))) @stmt
+    `,
   },
   nodeTypes: {
     identifier: ["attribute_value"],
