@@ -11,7 +11,7 @@ import {
   loadNearestTsconfigFor,
   loadWorkspaceConfig,
   resolveSpecifier,
-  resolveGoImportPath,
+  resolveImportSpecifier,
   resolvePythonModule,
   normalizeResolutionHints,
 } from "./util.js";
@@ -327,35 +327,16 @@ export async function collectEdgesForFile(
           ? { type: "file", path: res.replace(/\\/g, "/") }
           : { type: "external", name: res.external };
     } else if (sup.id === "go") {
-      const goResolved = await resolveGoImportPath(projectRoot, file, spec);
-      if (goResolved) {
-        to = { type: "file", path: goResolved.replace(/\\/g, "/") };
-      } else {
-        const { resolvePathLikeModule } = await import("./util.js");
-        const res = await resolvePathLikeModule(projectRoot, spec);
-        if (res) {
-          to = { type: "file", path: res.replace(/\\/g, "/") };
-        } else {
-          // Fallback to resolveSpecifier for relative paths like ./foo
-          const res2 = await resolveSpecifier(
-            file,
-            spec,
-            projectRoot,
-            matchPath,
-            workspaceConfig,
-            {
-              resolveNodeModules: !!opts.resolveNodeModules,
-              ...(opts.resolutionHints
-                ? { resolutionHints: opts.resolutionHints }
-                : {}),
-            },
-          );
-          to =
-            typeof res2 === "string"
-              ? { type: "file", path: res2.replace(/\\/g, "/") }
-              : { type: "external", name: res2.external };
-        }
-      }
+      const res = await resolveImportSpecifier(projectRoot, file, spec, sup.id, {
+        matchPath,
+        workspaceConfig,
+        resolveNodeModules: !!opts.resolveNodeModules,
+        ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+      });
+      to =
+        typeof res === "string"
+          ? { type: "file", path: res.replace(/\\/g, "/") }
+          : { type: "external", name: res.external };
     } else if (["java", "csharp", "ruby", "rust"].includes(sup.id)) {
       const { resolvePathLikeModule } = await import("./util.js");
       const res = await resolvePathLikeModule(projectRoot, spec);

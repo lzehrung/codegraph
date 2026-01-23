@@ -51,6 +51,7 @@ export async function locateChangedSymbolsWithLines(
       node,
       sup,
       classification,
+      source,
     );
     if (symbolHandle) {
       const symbolDef = index.byFile
@@ -110,6 +111,7 @@ export async function mapChangedLinesToSymbols(
       node,
       sup,
       classification,
+      source,
     );
     if (!symbolHandle) continue;
     const existing = linesByHandle.get(symbolHandle) ?? new Set<number>();
@@ -272,12 +274,16 @@ function findSymbolHandleForNode(
   node: Parser.SyntaxNode,
   sup: LanguageSupport,
   classification: NodeClassification,
+  source: string,
 ): SymbolHandle | null {
   const mod = index.byFile.get(file);
   if (!mod) return null;
 
   // Exact declaration name node
-  if (classification?.type === "definition") {
+  if (
+    classification?.type === "definition" &&
+    isDefinitionNameNode(node, sup, source)
+  ) {
     const local = mod.locals.find(
       (l) =>
         l.range.start.line === node.startPosition?.row + 1 &&
@@ -370,4 +376,17 @@ function isHtmlIdAttributeValue(
     .trim()
     .toLowerCase();
   return nameText === "id";
+}
+
+function isDefinitionNameNode(
+  node: Parser.SyntaxNode,
+  sup: LanguageSupport,
+  source: string,
+): boolean {
+  if (sup.isDeclarationName?.(node)) return true;
+  if (sup.id === "html") return isHtmlIdAttributeValue(node, source);
+  if (sup.id === "css" || sup.id === "less" || sup.id === "scss") {
+    return isStyleDefinitionNode(node, sup);
+  }
+  return false;
 }

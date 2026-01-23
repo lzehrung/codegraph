@@ -987,6 +987,36 @@ export async function resolveGoImportPath(
   return null;
 }
 
+export async function resolveImportSpecifier(
+  projectRoot: string,
+  fromFile: string,
+  spec: string,
+  languageId: string,
+  opts?: {
+    matchPath?: MatchPathFn;
+    workspaceConfig?: WorkspaceConfig;
+    resolveNodeModules?: boolean;
+    resolutionHints?: string[];
+  },
+): Promise<FileId | { external: string }> {
+  if (languageId === "go") {
+    const goResolved = await resolveGoImportPath(projectRoot, fromFile, spec);
+    if (goResolved) return goResolved;
+  }
+
+  return resolveSpecifier(
+    fromFile,
+    spec,
+    projectRoot,
+    opts?.matchPath,
+    opts?.workspaceConfig,
+    {
+      resolveNodeModules: !!opts?.resolveNodeModules,
+      ...(opts?.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+    },
+  );
+}
+
 export async function resolveSpecifier(
   fromFile: string,
   spec: string,

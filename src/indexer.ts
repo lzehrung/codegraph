@@ -18,7 +18,7 @@ import {
   loadNearestTsconfigFor,
   loadWorkspaceConfig,
   resolveSpecifier,
-  resolveGoImportPath,
+  resolveImportSpecifier,
   resolvePythonModule,
   resolveWorkspacePackage,
   normalizeResolutionHints,
@@ -1872,23 +1872,22 @@ export async function collectImportsForFile(
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
 
     const resolveFrom = async (from: string) => {
-      if (resolvedSup.id === "go") {
-        const goResolved = await resolveGoImportPath(projectRoot, file, from);
-        if (goResolved) return goResolved.replace(/\\/g, "/");
-      }
       const resolutionHints = opts?.graphOptions?.resolutionHints;
-      const r = await resolveSpecifier(
+      const resolved = await resolveImportSpecifier(
+        projectRoot,
         file,
         from,
-        projectRoot,
-        tsCfg?.matchPath,
-        workspaceConfig,
+        resolvedSup.id,
         {
+          matchPath: tsCfg?.matchPath,
+          workspaceConfig,
           resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
           ...(resolutionHints ? { resolutionHints } : {}),
         },
       );
-      return typeof r === "string" ? r.replace(/\\/g, "/") : r;
+      return typeof resolved === "string"
+        ? resolved.replace(/\\/g, "/")
+        : resolved;
     };
 
     const runFallback = async () => {
