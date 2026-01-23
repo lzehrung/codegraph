@@ -11,7 +11,7 @@ describe("Project Indexing", () => {
     it("should index all TypeScript files", async () => {
       const index = await createTestIndex("typescript");
 
-      expectModuleCount(index, 4);
+      expectModuleCount(index, 5);
 
       const samplePath = path.resolve(
         process.cwd(),
@@ -30,6 +30,10 @@ describe("Project Indexing", () => {
       expectFileInIndex(
         index,
         path.join(samplePath, "helpers.ts").replace(/\\/g, "/")
+      );
+      expectFileInIndex(
+        index,
+        path.join(samplePath, "dynamic-import.ts").replace(/\\/g, "/")
       );
       expectFileInIndex(
         index,
@@ -76,7 +80,7 @@ describe("Project Indexing", () => {
     it("should index all Python files", async () => {
       const index = await createTestIndex("python");
 
-      expectModuleCount(index, 4);
+      expectModuleCount(index, 5);
 
       const samplePath = path.resolve(
         process.cwd(),
@@ -95,6 +99,10 @@ describe("Project Indexing", () => {
       expectFileInIndex(
         index,
         path.join(samplePath, "helpers.py").replace(/\\/g, "/")
+      );
+      expectFileInIndex(
+        index,
+        path.join(samplePath, "relative-imports.py").replace(/\\/g, "/")
       );
       expectFileInIndex(
         index,
@@ -140,7 +148,7 @@ describe("Project Indexing", () => {
     it("should index all JavaScript files", async () => {
       const index = await createTestIndex("javascript");
 
-      expectModuleCount(index, 6);
+      expectModuleCount(index, 7);
 
       const samplePath = path.resolve(
         process.cwd(),
@@ -159,6 +167,10 @@ describe("Project Indexing", () => {
       expectFileInIndex(
         index,
         path.join(samplePath, "helpers.js").replace(/\\/g, "/")
+      );
+      expectFileInIndex(
+        index,
+        path.join(samplePath, "dynamic-import.js").replace(/\\/g, "/")
       );
       expectFileInIndex(
         index,
