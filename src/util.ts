@@ -59,6 +59,10 @@ export const DEFAULT_PROJECT_MANIFESTS = [
   "pnpm-lock.yaml",
   "yarn.lock",
   "bun.lockb",
+  "pnpm-workspace.yaml",
+  "lerna.json",
+  "nx.json",
+  "turbo.json",
   "tsconfig.json",
   "jsconfig.json",
   "requirements.txt",
@@ -71,20 +75,32 @@ export const DEFAULT_PROJECT_MANIFESTS = [
   "setup.cfg",
   "Cargo.toml",
   "Cargo.lock",
+  "rust-toolchain",
+  "rust-toolchain.toml",
   "go.mod",
   "go.sum",
+  "go.work",
   "Gemfile",
   "Gemfile.lock",
+  "*.gemspec",
   "pom.xml",
+  "mvnw",
   "build.gradle",
   "build.gradle.kts",
   "settings.gradle",
   "settings.gradle.kts",
   "gradle.properties",
+  "gradlew",
   "*.csproj",
+  "*.fsproj",
+  "*.vbproj",
   "*.sln",
+  "Directory.Build.props",
+  "Directory.Build.targets",
+  "global.json",
   "composer.json",
   "composer.lock",
+  "Package.swift",
 ];
 
 export const DEFAULT_PROJECT_PATTERNS = [
@@ -127,6 +143,7 @@ export type ProjectFileType =
   | "dotnet"
   | "ruby"
   | "php"
+  | "swift"
   | "ide";
 
 export type ProjectFileInfo = {
@@ -278,6 +295,16 @@ function parseGoModuleName(raw: string): string | null {
   return null;
 }
 
+function parseGemspecName(raw: string): string | null {
+  const match = raw.match(/\bname\s*=\s*["']([^"']+)["']/);
+  return trimToNull(match?.[1]);
+}
+
+function parseSwiftPackageName(raw: string): string | null {
+  const match = raw.match(/\bname\s*:\s*["']([^"']+)["']/);
+  return trimToNull(match?.[1]);
+}
+
 const PROJECT_FILE_DEFINITIONS: ProjectFileDefinition[] = [
   {
     type: "node",
@@ -292,6 +319,21 @@ const PROJECT_FILE_DEFINITIONS: ProjectFileDefinition[] = [
     role: "lockfile",
     kind: "file",
     patterns: ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb"],
+  },
+  {
+    type: "node",
+    role: "config",
+    kind: "file",
+    patterns: ["pnpm-workspace.yaml"],
+    nameFromPath: "dir",
+  },
+  {
+    type: "node",
+    role: "config",
+    kind: "file",
+    patterns: ["lerna.json", "nx.json", "turbo.json"],
+    parseName: parseJsonName,
+    nameFromPath: "dir",
   },
   {
     type: "typescript",
@@ -351,6 +393,13 @@ const PROJECT_FILE_DEFINITIONS: ProjectFileDefinition[] = [
     patterns: ["Cargo.lock"],
   },
   {
+    type: "rust",
+    role: "config",
+    kind: "file",
+    patterns: ["rust-toolchain", "rust-toolchain.toml"],
+    nameFromPath: "dir",
+  },
+  {
     type: "go",
     role: "manifest",
     kind: "file",
@@ -363,6 +412,13 @@ const PROJECT_FILE_DEFINITIONS: ProjectFileDefinition[] = [
     role: "lockfile",
     kind: "file",
     patterns: ["go.sum"],
+  },
+  {
+    type: "go",
+    role: "config",
+    kind: "file",
+    patterns: ["go.work"],
+    nameFromPath: "dir",
   },
   {
     type: "ruby",
@@ -378,11 +434,26 @@ const PROJECT_FILE_DEFINITIONS: ProjectFileDefinition[] = [
     patterns: ["Gemfile.lock"],
   },
   {
+    type: "ruby",
+    role: "manifest",
+    kind: "file",
+    patterns: ["*.gemspec"],
+    parseName: parseGemspecName,
+    nameFromPath: "file",
+  },
+  {
     type: "maven",
     role: "manifest",
     kind: "file",
     patterns: ["pom.xml"],
     parseName: parsePomName,
+    nameFromPath: "dir",
+  },
+  {
+    type: "maven",
+    role: "config",
+    kind: "file",
+    patterns: ["mvnw"],
     nameFromPath: "dir",
   },
   {
@@ -407,10 +478,17 @@ const PROJECT_FILE_DEFINITIONS: ProjectFileDefinition[] = [
     nameFromPath: "dir",
   },
   {
+    type: "gradle",
+    role: "config",
+    kind: "file",
+    patterns: ["gradlew"],
+    nameFromPath: "dir",
+  },
+  {
     type: "dotnet",
     role: "manifest",
     kind: "file",
-    patterns: ["*.csproj"],
+    patterns: ["*.csproj", "*.fsproj", "*.vbproj"],
     parseName: parseDotnetName,
     nameFromPath: "file",
   },
@@ -420,6 +498,13 @@ const PROJECT_FILE_DEFINITIONS: ProjectFileDefinition[] = [
     kind: "file",
     patterns: ["*.sln"],
     nameFromPath: "file",
+  },
+  {
+    type: "dotnet",
+    role: "config",
+    kind: "file",
+    patterns: ["Directory.Build.props", "Directory.Build.targets", "global.json"],
+    nameFromPath: "dir",
   },
   {
     type: "php",
@@ -434,6 +519,14 @@ const PROJECT_FILE_DEFINITIONS: ProjectFileDefinition[] = [
     role: "lockfile",
     kind: "file",
     patterns: ["composer.lock"],
+  },
+  {
+    type: "swift",
+    role: "manifest",
+    kind: "file",
+    patterns: ["Package.swift"],
+    parseName: parseSwiftPackageName,
+    nameFromPath: "dir",
   },
   {
     type: "ide",

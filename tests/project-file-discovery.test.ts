@@ -57,6 +57,8 @@ describe('project file discovery', () => {
     const gradleDir = path.join(tempDir, 'gradle');
     const dotnetDir = path.join(tempDir, 'dotnet');
     const ideDir = path.join(tempDir, 'ide');
+    const swiftDir = path.join(tempDir, 'swift');
+    const gemDir = path.join(tempDir, 'gem');
 
     const packageJson = path.join(nodeDir, 'package.json');
     const pyproject = path.join(pythonDir, 'pyproject.toml');
@@ -65,7 +67,11 @@ describe('project file discovery', () => {
     const pom = path.join(javaDir, 'pom.xml');
     const settingsGradle = path.join(gradleDir, 'settings.gradle');
     const csproj = path.join(dotnetDir, 'App.csproj');
+    const fsproj = path.join(dotnetDir, 'Library.fsproj');
+    const vbproj = path.join(dotnetDir, 'Widget.vbproj');
     const sln = path.join(dotnetDir, 'Solution.sln');
+    const swiftPackage = path.join(swiftDir, 'Package.swift');
+    const gemspec = path.join(gemDir, 'ruby-gem.gemspec');
     const ideaDir = path.join(ideDir, '.idea');
 
     await createFile(packageJson, JSON.stringify({ name: 'node-app' }, null, 2));
@@ -78,7 +84,23 @@ describe('project file discovery', () => {
       csproj,
       '<Project><PropertyGroup><AssemblyName>DotNetApp</AssemblyName></PropertyGroup></Project>',
     );
+    await createFile(
+      fsproj,
+      '<Project><PropertyGroup><AssemblyName>FSharpLib</AssemblyName></PropertyGroup></Project>',
+    );
+    await createFile(
+      vbproj,
+      '<Project><PropertyGroup><PackageId>VisualBasicLib</PackageId></PropertyGroup></Project>',
+    );
     await createFile(sln, 'Microsoft Visual Studio Solution File, Format Version 12.00\n');
+    await createFile(
+      swiftPackage,
+      'import PackageDescription\n\nlet package = Package(name: "swift-app")\n',
+    );
+    await createFile(
+      gemspec,
+      'Gem::Specification.new do |spec|\n  spec.name = "ruby-gem"\nend\n',
+    );
     await fs.mkdir(ideaDir, { recursive: true });
 
     const discovered = await discoverProjectFiles(tempDir);
@@ -100,8 +122,16 @@ describe('project file discovery', () => {
     expect(byPath.get(normalize(settingsGradle))?.type).toBe('gradle');
     expect(byPath.get(normalize(csproj))?.name).toBe('DotNetApp');
     expect(byPath.get(normalize(csproj))?.role).toBe('manifest');
+    expect(byPath.get(normalize(fsproj))?.name).toBe('FSharpLib');
+    expect(byPath.get(normalize(fsproj))?.type).toBe('dotnet');
+    expect(byPath.get(normalize(vbproj))?.name).toBe('VisualBasicLib');
+    expect(byPath.get(normalize(vbproj))?.type).toBe('dotnet');
     expect(byPath.get(normalize(sln))?.name).toBe('Solution');
     expect(byPath.get(normalize(sln))?.role).toBe('solution');
+    expect(byPath.get(normalize(swiftPackage))?.name).toBe('swift-app');
+    expect(byPath.get(normalize(swiftPackage))?.type).toBe('swift');
+    expect(byPath.get(normalize(gemspec))?.name).toBe('ruby-gem');
+    expect(byPath.get(normalize(gemspec))?.type).toBe('ruby');
     expect(byPath.get(normalize(ideaDir))?.projectRoot).toBe(normalize(ideDir));
     expect(byPath.get(normalize(ideaDir))?.kind).toBe('dir');
     expect(byPath.get(normalize(ideaDir))?.role).toBe('ide');
@@ -116,6 +146,11 @@ describe('project file discovery', () => {
     const gradleDir = path.join(tempDir, 'gradle');
     const dotnetDir = path.join(tempDir, 'dotnet');
     const composerDir = path.join(tempDir, 'composer');
+    const workspaceDir = path.join(tempDir, 'workspace');
+    const goWorkDir = path.join(tempDir, 'go-workspace');
+    const toolchainDir = path.join(tempDir, 'toolchain');
+    const wrapperDir = path.join(tempDir, 'wrappers');
+    const dotnetConfigDir = path.join(tempDir, 'dotnet-config');
     const ignoredDir = path.join(tempDir, 'node_modules', 'ignored');
 
     const badPackage = path.join(badJsonDir, 'package.json');
@@ -125,6 +160,18 @@ describe('project file discovery', () => {
     const gradle = path.join(gradleDir, 'build.gradle');
     const csproj = path.join(dotnetDir, 'Library.csproj');
     const composer = path.join(composerDir, 'composer.json');
+    const pnpmWorkspace = path.join(workspaceDir, 'pnpm-workspace.yaml');
+    const lerna = path.join(workspaceDir, 'lerna.json');
+    const nx = path.join(workspaceDir, 'nx.json');
+    const turbo = path.join(workspaceDir, 'turbo.json');
+    const goWork = path.join(goWorkDir, 'go.work');
+    const rustToolchain = path.join(toolchainDir, 'rust-toolchain');
+    const rustToolchainToml = path.join(toolchainDir, 'rust-toolchain.toml');
+    const mvnw = path.join(wrapperDir, 'mvnw');
+    const gradlew = path.join(wrapperDir, 'gradlew');
+    const dirBuildProps = path.join(dotnetConfigDir, 'Directory.Build.props');
+    const dirBuildTargets = path.join(dotnetConfigDir, 'Directory.Build.targets');
+    const globalJson = path.join(dotnetConfigDir, 'global.json');
     const ignoredPackage = path.join(ignoredDir, 'package.json');
 
     await createFile(badPackage, '{ invalid json');
@@ -137,6 +184,18 @@ describe('project file discovery', () => {
     await createFile(gradle, 'plugins { id "java" }\n');
     await createFile(csproj, '<Project></Project>');
     await createFile(composer, JSON.stringify({ name: 'vendor/app' }, null, 2));
+    await createFile(pnpmWorkspace, 'packages:\n  - "packages/*"\n');
+    await createFile(lerna, JSON.stringify({ name: 'lerna-space' }, null, 2));
+    await createFile(nx, JSON.stringify({ name: 'nx-space' }, null, 2));
+    await createFile(turbo, JSON.stringify({ name: 'turbo-space' }, null, 2));
+    await createFile(goWork, 'go 1.20\nuse ./module\n');
+    await createFile(rustToolchain, 'stable\n');
+    await createFile(rustToolchainToml, '[toolchain]\nchannel = "stable"\n');
+    await createFile(mvnw, '#!/bin/sh\n');
+    await createFile(gradlew, '#!/bin/sh\n');
+    await createFile(dirBuildProps, '<Project></Project>\n');
+    await createFile(dirBuildTargets, '<Project></Project>\n');
+    await createFile(globalJson, JSON.stringify({ sdk: { version: '8.0.100' } }, null, 2));
     await createFile(ignoredPackage, JSON.stringify({ name: 'ignored' }, null, 2));
 
     const discovered = await discoverProjectFiles(tempDir);
@@ -154,6 +213,36 @@ describe('project file discovery', () => {
     expect(byPath.get(normalize(gradle))?.name).toBe('gradle');
     expect(byPath.get(normalize(csproj))?.name).toBe('Library');
     expect(byPath.get(normalize(composer))?.name).toBe('vendor/app');
+    expect(byPath.get(normalize(pnpmWorkspace))?.type).toBe('node');
+    expect(byPath.get(normalize(pnpmWorkspace))?.role).toBe('config');
+    expect(byPath.get(normalize(pnpmWorkspace))?.name).toBe('workspace');
+    expect(byPath.get(normalize(lerna))?.name).toBe('lerna-space');
+    expect(byPath.get(normalize(lerna))?.type).toBe('node');
+    expect(byPath.get(normalize(nx))?.name).toBe('nx-space');
+    expect(byPath.get(normalize(nx))?.type).toBe('node');
+    expect(byPath.get(normalize(turbo))?.name).toBe('turbo-space');
+    expect(byPath.get(normalize(turbo))?.type).toBe('node');
+    expect(byPath.get(normalize(goWork))?.type).toBe('go');
+    expect(byPath.get(normalize(goWork))?.role).toBe('config');
+    expect(byPath.get(normalize(goWork))?.name).toBe('go-workspace');
+    expect(byPath.get(normalize(rustToolchain))?.type).toBe('rust');
+    expect(byPath.get(normalize(rustToolchain))?.role).toBe('config');
+    expect(byPath.get(normalize(rustToolchain))?.name).toBe('toolchain');
+    expect(byPath.get(normalize(rustToolchainToml))?.type).toBe('rust');
+    expect(byPath.get(normalize(rustToolchainToml))?.role).toBe('config');
+    expect(byPath.get(normalize(mvnw))?.type).toBe('maven');
+    expect(byPath.get(normalize(mvnw))?.role).toBe('config');
+    expect(byPath.get(normalize(mvnw))?.name).toBe('wrappers');
+    expect(byPath.get(normalize(gradlew))?.type).toBe('gradle');
+    expect(byPath.get(normalize(gradlew))?.role).toBe('config');
+    expect(byPath.get(normalize(gradlew))?.name).toBe('wrappers');
+    expect(byPath.get(normalize(dirBuildProps))?.type).toBe('dotnet');
+    expect(byPath.get(normalize(dirBuildProps))?.role).toBe('config');
+    expect(byPath.get(normalize(dirBuildProps))?.name).toBe('dotnet-config');
+    expect(byPath.get(normalize(dirBuildTargets))?.type).toBe('dotnet');
+    expect(byPath.get(normalize(dirBuildTargets))?.role).toBe('config');
+    expect(byPath.get(normalize(globalJson))?.type).toBe('dotnet');
+    expect(byPath.get(normalize(globalJson))?.role).toBe('config');
     expect(byPath.has(normalize(ignoredPackage))).toBe(false);
   });
 });

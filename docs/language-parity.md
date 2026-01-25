@@ -30,15 +30,29 @@ Status key: ✅ = Extracts name from metadata, ⌛ = Directory/filename fallback
 
 | Ecosystem | Detected project files | Name extraction |
 | --- | --- | --- |
-| Node.js | package.json, package-lock.json, pnpm-lock.yaml, yarn.lock, bun.lockb, tsconfig.json, jsconfig.json | ✅ package.json |
+| Node.js | package.json, package-lock.json, pnpm-lock.yaml, yarn.lock, bun.lockb, tsconfig.json, jsconfig.json, pnpm-workspace.yaml, lerna.json, nx.json, turbo.json | ✅ package.json |
 | Python | pyproject.toml, requirements.txt, requirements.in, Pipfile, Pipfile.lock, poetry.lock, setup.py, setup.cfg | ✅ pyproject.toml/setup.cfg/setup.py |
-| Go | go.mod, go.sum | ✅ go.mod |
-| Rust | Cargo.toml, Cargo.lock | ✅ Cargo.toml |
-| Java/Kotlin | pom.xml, build.gradle, build.gradle.kts, settings.gradle, settings.gradle.kts, gradle.properties | ✅ pom.xml/settings.gradle |
-| .NET | *.csproj, *.sln | ✅ *.csproj |
-| Ruby | Gemfile, Gemfile.lock | ⌛ directory fallback |
+| Go | go.mod, go.sum, go.work | ✅ go.mod |
+| Rust | Cargo.toml, Cargo.lock, rust-toolchain, rust-toolchain.toml | ✅ Cargo.toml |
+| Java/Kotlin | pom.xml, mvnw, build.gradle, build.gradle.kts, settings.gradle, settings.gradle.kts, gradle.properties, gradlew | ✅ pom.xml/settings.gradle |
+| .NET | *.csproj, *.fsproj, *.vbproj, *.sln, Directory.Build.props, Directory.Build.targets, global.json | ✅ *proj |
+| Ruby | Gemfile, Gemfile.lock, *.gemspec | ✅ *.gemspec, ⌛ Gemfile |
 | PHP | composer.json, composer.lock | ✅ composer.json |
+| Swift | Package.swift | ✅ Package.swift |
 | IDE | .idea | ⌛ directory fallback |
+
+### Project file list (discovery)
+
+- Node.js: package.json, package-lock.json, pnpm-lock.yaml, yarn.lock, bun.lockb, tsconfig.json, jsconfig.json, pnpm-workspace.yaml, lerna.json, nx.json, turbo.json
+- Python: pyproject.toml, requirements.txt, requirements.in, Pipfile, Pipfile.lock, poetry.lock, setup.py, setup.cfg
+- Go: go.mod, go.sum, go.work
+- Rust: Cargo.toml, Cargo.lock, rust-toolchain, rust-toolchain.toml
+- Java/Kotlin: pom.xml, mvnw, build.gradle, build.gradle.kts, settings.gradle, settings.gradle.kts, gradle.properties, gradlew
+- .NET: *.csproj, *.fsproj, *.vbproj, *.sln, Directory.Build.props, Directory.Build.targets, global.json
+- Ruby: Gemfile, Gemfile.lock, *.gemspec
+- PHP: composer.json, composer.lock
+- Swift: Package.swift
+- IDE: .idea
 
 ## Parity completion plan
 
