@@ -10,8 +10,10 @@ import { locateChangedSymbols } from "./map.js";
 import { analyzeImpact } from "./analyzer.js";
 import pm from "picomatch";
 import path from "node:path";
+import { discoverProjectFiles, type ProjectFileInfo } from "../util.js";
 
 export type ImpactStreamChunk =
+  | { type: "projectFiles"; files: ProjectFileInfo[] }
   | { type: "progress"; message: string; current: number; total: number }
   | { type: "changedSymbol"; symbol: ChangedSymbol }
   | { type: "impactItem"; item: ImpactItem }
@@ -28,6 +30,10 @@ export async function* analyzeImpactStreaming(
   options: ImpactOptions,
 ): AsyncGenerator<ImpactStreamChunk> {
   try {
+    const projectFiles =
+      index.projectFiles ?? (await discoverProjectFiles(projectRoot));
+    yield { type: "projectFiles", files: projectFiles };
+
     // Step 1: Get diff
     yield {
       type: "progress",
