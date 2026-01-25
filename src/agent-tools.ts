@@ -9,9 +9,33 @@ import {
   type ImpactOptions,
   type ImpactReport,
   type CompactImpactReport,
-  type SymbolListItem,
+  type ProjectIndex,
 } from "./index.js";
-import path from "path";
+import { type Edge } from "./types.js";
+import path from "node:path";
+
+const indexCache = new Map<string, ProjectIndex>();
+
+/**
+ * Gets or builds a project index for the given root.
+ */
+async function getOrBuildIndex(root: string): Promise<ProjectIndex> {
+  const normalizedRoot = path.resolve(root).replace(/\\/g, "/");
+  let index = indexCache.get(normalizedRoot);
+  if (!index) {
+    index = await buildProjectIndex(root, { logLevel: "error" });
+    indexCache.set(normalizedRoot, index);
+  }
+  return index;
+}
+
+/**
+ * Normalizes a file path relative to the root.
+ */
+function normalizeFilePath(root: string, file: string): string {
+  const absPath = path.isAbsolute(file) ? file : path.resolve(root, file);
+  return absPath.replace(/\\/g, "/");
+}
 
 /**
  * Agent-friendly tool wrapper for PR impact analysis.
@@ -26,9 +50,7 @@ export async function tool_impactJSON(
   error?: string;
 }> {
   try {
-    // Build the project index if not already available
-    // In a real agent scenario, you might want to cache this
-    const index = await buildProjectIndex(root, { logLevel: "error" });
+    const index = await getOrBuildIndex(root);
 
     // Analyze the impact
     const report = await analyzeImpactFromDiff(root, index, options);
@@ -74,10 +96,10 @@ export async function tool_getFileOverview(
   filePath: string,
 ): Promise<string> {
   try {
-    const index = await buildProjectIndex(root, { logLevel: "error" });
-    const absPath = path.resolve(root, filePath).replace(/\\/g, "/");
+    const index = await getOrBuildIndex(root);
+    const normalizedPath = normalizeFilePath(root, filePath);
     const symbols = listSymbols(index, {
-      file: absPath,
+      file: normalizedPath,
       includeImports: true,
     });
 
@@ -133,7 +155,7 @@ export async function tool_findSymbol(
   options: { maxResults?: number } = {},
 ): Promise<Array<{ name: string; kind: string; file: string; line: number }>> {
   try {
-    const index = await buildProjectIndex(root, { logLevel: "error" });
+    const index = await getOrBuildIndex(root);
     const allSymbols = listSymbols(index, { includeImports: false });
     const q = query.toLowerCase();
 
@@ -177,7 +199,7 @@ export async function tool_listProjectFiles(root: string): Promise<{ status: "ok
 /**
  * Gets the dependency graph for the project.
  */
-export async function tool_getGraph(root: string): Promise<{ status: "ok" | "error", graph?: { nodes: string[], edges: any[] }, error?: string }> {
+export async function tool_getGraph(root: string): Promise<{ status: "ok" | "error", graph?: { nodes: string[], edges: Edge[] }, error?: string }> {
   try {
     const files = await listProjectFiles(root);
     const g = await collectGraph(root, files);
@@ -190,14 +212,34 @@ export async function tool_getGraph(root: string): Promise<{ status: "ok" | "err
 /**
  * Go to definition for a symbol at a specific location.
  */
-export async function tool_goToDefinition(root: string, file: string, line: number, column: number) {
+export async function tool_goToDefinition(
+  root: string,
+  file: string,
+  line: number,
+  column: number
+): Promise<{
+  status: "ok" | "error" | "not_found";
+  definition?: {
+    file: string;
+    range: {
+      start: {
+        line: number;
+        column: number;
+      };
+    };
+  };
+  error?: string;
+  reason?: string;
+}> {
   try {
-    const index = await buildProjectIndex(root, { logLevel: "error" });
-    // Normalize file path
-    const absPath = path.isAbsolute(file) ? file : path.resolve(root, file);
-    const normalizedPath = absPath.replace(/\\/g, "/");
+    const index = await getOrBuildIndex(root);
+    const normalizedPath = normalizeFilePath(root, file);
 
-    const result = await goToDefinition(index, { file: normalizedPath, line, column });
+    const result = (await goToDefinition(index, {
+      file: normalizedPath,
+      line,
+      column,
+    })) as any;
     return result;
   } catch (error) {
     return { status: "error", error: String(error) };
@@ -207,14 +249,29 @@ export async function tool_goToDefinition(root: string, file: string, line: numb
 /**
  * Find references for a symbol at a specific location.
  */
-export async function tool_findReferences(root: string, file: string, line: number, column: number) {
+export async function tool_findReferences(
+  root: string,
+  file: string,
+  line: number,
+  column: number
+): Promise<{
+  status: "ok" | "error" | "not_found";
+  references?: Array<{
+    file: string;
+    range: { start: { line: number; column: number } };
+  }>;
+  error?: string;
+  reason?: string;
+}> {
   try {
-    const index = await buildProjectIndex(root, { logLevel: "error" });
-    // Normalize file path
-    const absPath = path.isAbsolute(file) ? file : path.resolve(root, file);
-    const normalizedPath = absPath.replace(/\\/g, "/");
+    const index = await getOrBuildIndex(root);
+    const normalizedPath = normalizeFilePath(root, file);
 
-    const result = await findReferences(index, { file: normalizedPath, line, column });
+    const result = (await findReferences(index, {
+      file: normalizedPath,
+      line,
+      column,
+    })) as any;
     return result;
   } catch (error) {
     return { status: "error", error: String(error) };
