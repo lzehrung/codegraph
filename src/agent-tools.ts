@@ -9,7 +9,6 @@ import {
   type ImpactOptions,
   type ImpactReport,
   type CompactImpactReport,
-  type SymbolListItem,
   type Edge,
   type ProjectIndex,
 } from "./index.js";
