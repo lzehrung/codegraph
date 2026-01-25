@@ -25,10 +25,15 @@ describe('project file discovery', () => {
     const manifestDir = path.join(tempDir, 'manifests');
     const sourceFile = path.join(tempDir, 'src', 'main.ts');
     const manifestFiles = DEFAULT_PROJECT_MANIFESTS.map(toManifestFilename);
+    const isCaseInsensitive = os.platform() === 'win32' || os.platform() === 'darwin';
+    
+    const uniqueManifestFiles = isCaseInsensitive 
+      ? Array.from(new Map(manifestFiles.map(m => [m.toLowerCase(), m])).values())
+      : manifestFiles;
 
     await createFile(sourceFile, 'export const value = 1;\n');
     await Promise.all(
-      manifestFiles.map(async (manifest) => {
+      uniqueManifestFiles.map(async (manifest) => {
         const filePath = path.join(manifestDir, manifest);
         await createFile(filePath, `# ${manifest}\n`);
         return filePath;
@@ -38,7 +43,7 @@ describe('project file discovery', () => {
     const discovered = await listProjectFiles(tempDir);
     const discoveredSet = new Set(discovered.map(normalize));
 
-    const expected = [sourceFile, ...manifestFiles.map((manifest) => path.join(manifestDir, manifest))].map(
+    const expected = [sourceFile, ...uniqueManifestFiles.map((manifest) => path.join(manifestDir, manifest))].map(
       normalize,
     );
 
