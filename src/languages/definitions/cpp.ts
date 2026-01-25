@@ -66,6 +66,20 @@ const containerTypes = new Set([
   "init_declarator",
 ]);
 
+const paramListTypes = new Set(["parameter_declaration", "parameter_list"]);
+
+const isInParameterList = (node: SyntaxNode): boolean =>
+  !!findAncestor(node, paramListTypes);
+
+const isInAncestorDeclarator = (
+  node: SyntaxNode,
+  ancestorTypes: Set<string>,
+): boolean => {
+  const ancestor = findAncestor(node, ancestorTypes);
+  if (!ancestor) return false;
+  return isInField(node, ancestor, "declarator");
+};
+
 const isFunctionDeclarator = (node: SyntaxNode): boolean => {
   let current: SyntaxNode | null = node.parent;
   while (current) {
@@ -228,33 +242,20 @@ export const CPP_DEF: LanguageDefinition = {
     )
       return true;
     if (
-      parent.type === "function_definition" &&
-      isInField(node, parent, "declarator")
+      isInAncestorDeclarator(node, new Set(["parameter_declaration"])) ||
+      isInAncestorDeclarator(node, new Set(["field_declaration"])) ||
+      isInAncestorDeclarator(node, new Set(["init_declarator"])) ||
+      isInAncestorDeclarator(node, new Set(["type_definition"]))
     )
       return true;
     if (
-      parent.type === "declaration" &&
-      isInField(node, parent, "declarator")
+      isInAncestorDeclarator(node, new Set(["function_definition"])) &&
+      !isInParameterList(node)
     )
       return true;
     if (
-      parent.type === "parameter_declaration" &&
-      isInField(node, parent, "declarator")
-    )
-      return true;
-    if (
-      parent.type === "field_declaration" &&
-      isInField(node, parent, "declarator")
-    )
-      return true;
-    if (
-      parent.type === "init_declarator" &&
-      isInField(node, parent, "declarator")
-    )
-      return true;
-    if (
-      parent.type === "type_definition" &&
-      isInField(node, parent, "declarator")
+      isInAncestorDeclarator(node, new Set(["declaration"])) &&
+      !isInParameterList(node)
     )
       return true;
     if (
