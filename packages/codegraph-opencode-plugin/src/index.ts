@@ -1,21 +1,7 @@
-# OpenCode Integration
-
-This guide describes how to add [codegraph](https://github.com/lzehrung/codegraph) capabilities to [OpenCode](https://opencode.ai) agents.
-
-## Quick Start
-
-To give your OpenCode agents semantic code intelligence, create a custom tool file in your project or global configuration.
-
-**File Location:**
-- Project-specific: `.opencode/tools/codegraph.ts`
-- Global: `~/.config/opencode/tools/codegraph.ts`
-
-**Content:**
-
-```typescript
 import { tool } from "@opencode-ai/plugin";
 
 // Try to import the library for direct usage
+// In workspace environment, this should resolve to the local package
 let codegraph: typeof import("@lzehrung/codegraph") | undefined;
 try {
   codegraph = await import("@lzehrung/codegraph");
@@ -45,6 +31,7 @@ async function runCodegraph(
   }
 
   // 2. Fallback to CLI
+  // We assume npx codegraph is available in the environment if the library isn't directly importable
   const cmd = ["npx", "codegraph", ...cliArgs];
   const proc = Bun.spawn(cmd, {
     cwd: process.cwd(),
@@ -71,7 +58,7 @@ export const graph = tool({
   args: {
     format: tool.schema.enum(["json", "mermaid"]).optional().describe("Output format (default: json)"),
   },
-  async execute(args) {
+  async execute(args: any) {
     return await runCodegraph(
       ["graph", ".", ...(args.format === "mermaid" ? ["--mermaid"] : ["--json", "--compact-json"])],
       async () => {
@@ -80,6 +67,7 @@ export const graph = tool({
            // The library export for mermaid graph generation isn't directly exposed as a simple tool wrapper yet
            // but we can use the raw graph object
            const g = await codegraph.tool_getGraph(process.cwd());
+           // @ts-ignore - types mismatch between raw graph and what graphToMermaid expects due to serialization
            return codegraph.graphToMermaid({ nodes: new Set(g.graph?.nodes), edges: g.graph?.edges || [] });
         }
         return codegraph.tool_getGraph(process.cwd());
@@ -95,7 +83,7 @@ export const definition = tool({
     line: tool.schema.number().describe("Line number (1-based)"),
     column: tool.schema.number().describe("Column number (1-based)"),
   },
-  async execute(args) {
+  async execute(args: any) {
     return await runCodegraph(
       ["goto", args.file, String(args.line), String(args.column)],
       async () => {
@@ -113,7 +101,7 @@ export const references = tool({
     line: tool.schema.number().describe("Line number (1-based)"),
     column: tool.schema.number().describe("Column number (1-based)"),
   },
-  async execute(args) {
+  async execute(args: any) {
     return await runCodegraph(
       ["refs", "--file", args.file, "--line", String(args.line), "--col", String(args.column)],
       async () => {
@@ -129,7 +117,7 @@ export const overview = tool({
   args: {
     file: tool.schema.string().describe("Source file path"),
   },
-  async execute(args) {
+  async execute(args: any) {
     return await runCodegraph(
       ["dumpmod", args.file],
       async () => {
@@ -146,7 +134,7 @@ export const impact = tool({
     base: tool.schema.string().describe("Base commit (e.g. main)"),
     head: tool.schema.string().describe("Head commit (e.g. HEAD)"),
   },
-  async execute(args) {
+  async execute(args: any) {
     return await runCodegraph(
       ["impact", "--base", args.base, "--head", args.head, "--compact"],
       async () => {
@@ -167,7 +155,7 @@ export const grep = tool({
     query: tool.schema.string().optional().describe("Tree-sitter query"),
     pattern: tool.schema.string().optional().describe("Regex pattern"),
   },
-  async execute(args) {
+  async execute(args: any) {
     if (args.query) {
       return await runCodegraph(["grep", "--query", args.query]);
     } else if (args.pattern) {
@@ -176,26 +164,3 @@ export const grep = tool({
     return "Please provide either a query or a pattern.";
   },
 });
-```
-
-## Benefits
-
-*   **Robust Navigation**: Works on code that doesn't compile or has missing dependencies.
-*   **Multi-language**: Unified interface for TS, JS, Python, Go, Java, C#, Ruby, Rust.
-*   **Fast**: Uses incremental caching and Tree-sitter for speed.
-
-## Tips for Agents
-
-Add this to your agent's system prompt to help it use the tools effectively:
-
-> You have access to `codegraph` tools.
-> *   Use `codegraph_graph` to understand the project structure and file dependencies.
-> *   Use `codegraph_definition` to find where functions/classes are defined.
-> *   Use `codegraph_references` to find usages before renaming or refactoring.
-> *   Use `codegraph_impact` to see what might break before you edit code.
-
-## Prerequisites
-
-*   Node.js 18+ installed in the environment.
-*   `npx` available in the path.
-*   (Optional) `@lzehrung/codegraph` installed in the project for faster execution (avoids npx download overhead).

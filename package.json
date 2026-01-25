@@ -48,6 +48,9 @@
   "engines": {
     "node": ">=18"
   },
+  "workspaces": [
+    "packages/*"
+  ],
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
   },
