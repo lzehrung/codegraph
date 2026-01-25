@@ -88,22 +88,26 @@ Sample graph: [sample-graph.md](./sample-graph.md)
 * **C#** (`.cs`)
 * **Ruby** (`.rb`)
 * **Rust** (`.rs`)
+* **Kotlin** (`.kt`)
+* **Swift** (`.swift`)
+* **C** (`.c`)
+* **C++** (`.cpp`)
 * **Vue / Svelte SFCs** (`.vue`, `.svelte`) — script blocks are parsed with the JS/TS pipeline, so dependency graphs and go-to-definition work across components.
 
 Each listed language (including Vue/Svelte script sections) has the same dependency-graph, go-to-definition, and find-references support.
 See the coverage matrix in [docs/language-parity.md](./docs/language-parity.md).
+
+**Project files**: project manifests like package.json, pyproject.toml, pom.xml, build.gradle, requirements.txt, .sln, .idea, etc. See [docs/language-parity.md](./docs/language-parity.md) for more details.
+
+**Text files**: JSON, YAML, configuration files, documentation
+
+**Single File Components**: Vue (`.vue`) and Svelte (`.svelte`) files are split into their `<template>`, `<script>`, and `<style>` regions, then chunked with the appropriate HTML/JS/TS/CSS grammars. Each block falls back to token-based chunking if semantic parsing fails, so hybrid files always produce chunks.
 
 ---
 
 ## Semantic Chunking
 
 The library provides semantic code chunking utilities for preparing codebases for LLM processing and vector embeddings. It uses Tree-sitter to split code into meaningful units while respecting token budgets.
-
-### Supported Languages & Formats
-
-* **Code files**: JavaScript, TypeScript, TSX, Python
-* **Text files**: JSON, YAML, configuration files, documentation
-* **Single File Components**: Vue (`.vue`) and Svelte (`.svelte`) files are split into their `<template>`, `<script>`, and `<style>` regions, then chunked with the appropriate HTML/JS/TS/CSS grammars. Each block falls back to token-based chunking if semantic parsing fails, so hybrid files always produce chunks.
 
 ### APIs
 

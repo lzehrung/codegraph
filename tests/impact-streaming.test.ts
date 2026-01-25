@@ -60,7 +60,8 @@ index 1234567..abcdef0 100644
 
     expect(streamedSet).toEqual(reportSet);
     expect(streamedChangedSymbols.length).toBe(report.changedSymbols.length);
-    expect(chunkTypes[0]).toBe("progress");
+    const firstNonMeta = chunkTypes.find((type) => type !== "projectFiles");
+    expect(firstNonMeta).toBe("progress");
     expect(errorChunks).toEqual([]);
     expect(chunkTypes[chunkTypes.length - 1]).toBe("complete");
   });

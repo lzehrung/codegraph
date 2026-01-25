@@ -526,6 +526,7 @@ function ensureImpactReport(
       symbolEdges,
     },
   };
+  if (report.projectFiles) result.projectFiles = report.projectFiles;
   if (report.warning) result.warning = report.warning;
   return result;
 }
