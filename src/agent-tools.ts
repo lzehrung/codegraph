@@ -10,6 +10,8 @@ import {
   type ImpactReport,
   type CompactImpactReport,
   type SymbolListItem,
+  type Edge,
+  type ProjectIndex,
 } from "./index.js";
 import path from "path";
 
@@ -130,10 +132,11 @@ export async function tool_getFileOverview(
 export async function tool_findSymbol(
   root: string,
   query: string,
-  options: { maxResults?: number } = {},
+  options: { maxResults?: number; index?: ProjectIndex } = {},
 ): Promise<Array<{ name: string; kind: string; file: string; line: number }>> {
   try {
-    const index = await buildProjectIndex(root, { logLevel: "error" });
+    const index =
+      options.index ?? (await buildProjectIndex(root, { logLevel: "error" }));
     const allSymbols = listSymbols(index, { includeImports: false });
     const q = query.toLowerCase();
 
@@ -177,7 +180,7 @@ export async function tool_listProjectFiles(root: string): Promise<{ status: "ok
 /**
  * Gets the dependency graph for the project.
  */
-export async function tool_getGraph(root: string): Promise<{ status: "ok" | "error", graph?: { nodes: string[], edges: any[] }, error?: string }> {
+export async function tool_getGraph(root: string): Promise<{ status: "ok" | "error", graph?: { nodes: string[], edges: Edge[] }, error?: string }> {
   try {
     const files = await listProjectFiles(root);
     const g = await collectGraph(root, files);
@@ -187,17 +190,43 @@ export async function tool_getGraph(root: string): Promise<{ status: "ok" | "err
   }
 }
 
+function normalizePathArg(root: string, file: string): string {
+  const absPath = path.isAbsolute(file) ? file : path.resolve(root, file);
+  return absPath.replace(/\\/g, "/");
+}
+
 /**
  * Go to definition for a symbol at a specific location.
  */
-export async function tool_goToDefinition(root: string, file: string, line: number, column: number) {
+export async function tool_goToDefinition(
+  root: string,
+  file: string,
+  line: number,
+  column: number,
+  index?: ProjectIndex,
+): Promise<{
+  status: "ok" | "error" | "not_found";
+  definition?: {
+    file: string;
+    range: {
+      start: {
+        line: number;
+        column: number;
+      };
+    };
+  };
+  error?: string;
+  reason?: string;
+}> {
   try {
-    const index = await buildProjectIndex(root, { logLevel: "error" });
-    // Normalize file path
-    const absPath = path.isAbsolute(file) ? file : path.resolve(root, file);
-    const normalizedPath = absPath.replace(/\\/g, "/");
+    const idx = index ?? (await buildProjectIndex(root, { logLevel: "error" }));
+    const normalizedPath = normalizePathArg(root, file);
 
-    const result = await goToDefinition(index, { file: normalizedPath, line, column });
+    const result = await goToDefinition(idx, {
+      file: normalizedPath,
+      line,
+      column,
+    });
     return result;
   } catch (error) {
     return { status: "error", error: String(error) };
@@ -207,14 +236,30 @@ export async function tool_goToDefinition(root: string, file: string, line: numb
 /**
  * Find references for a symbol at a specific location.
  */
-export async function tool_findReferences(root: string, file: string, line: number, column: number) {
+export async function tool_findReferences(
+  root: string,
+  file: string,
+  line: number,
+  column: number,
+  index?: ProjectIndex,
+): Promise<{
+  status: "ok" | "error" | "not_found";
+  references?: Array<{
+    file: string;
+    range: { start: { line: number; column: number } };
+  }>;
+  error?: string;
+  reason?: string;
+}> {
   try {
-    const index = await buildProjectIndex(root, { logLevel: "error" });
-    // Normalize file path
-    const absPath = path.isAbsolute(file) ? file : path.resolve(root, file);
-    const normalizedPath = absPath.replace(/\\/g, "/");
+    const idx = index ?? (await buildProjectIndex(root, { logLevel: "error" }));
+    const normalizedPath = normalizePathArg(root, file);
 
-    const result = await findReferences(index, { file: normalizedPath, line, column });
+    const result = await findReferences(idx, {
+      file: normalizedPath,
+      line,
+      column,
+    });
     return result;
   } catch (error) {
     return { status: "error", error: String(error) };
