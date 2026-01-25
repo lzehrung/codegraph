@@ -9,33 +9,11 @@ import {
   type ImpactOptions,
   type ImpactReport,
   type CompactImpactReport,
+  type SymbolListItem,
   type Edge,
   type ProjectIndex,
 } from "./index.js";
-import path from "node:path";
-
-const indexCache = new Map<string, ProjectIndex>();
-
-/**
- * Gets or builds a project index for the given root.
- */
-async function getOrBuildIndex(root: string): Promise<ProjectIndex> {
-  const normalizedRoot = path.resolve(root).replace(/\\/g, "/");
-  let index = indexCache.get(normalizedRoot);
-  if (!index) {
-    index = await buildProjectIndex(root, { logLevel: "error" });
-    indexCache.set(normalizedRoot, index);
-  }
-  return index;
-}
-
-/**
- * Normalizes a file path relative to the root.
- */
-function normalizeFilePath(root: string, file: string): string {
-  const absPath = path.isAbsolute(file) ? file : path.resolve(root, file);
-  return absPath.replace(/\\/g, "/");
-}
+import path from "path";
 
 /**
  * Agent-friendly tool wrapper for PR impact analysis.
@@ -50,7 +28,9 @@ export async function tool_impactJSON(
   error?: string;
 }> {
   try {
-    const index = await getOrBuildIndex(root);
+    // Build the project index if not already available
+    // In a real agent scenario, you might want to cache this
+    const index = await buildProjectIndex(root, { logLevel: "error" });
 
     // Analyze the impact
     const report = await analyzeImpactFromDiff(root, index, options);
@@ -96,10 +76,10 @@ export async function tool_getFileOverview(
   filePath: string,
 ): Promise<string> {
   try {
-    const index = await getOrBuildIndex(root);
-    const normalizedPath = normalizeFilePath(root, filePath);
+    const index = await buildProjectIndex(root, { logLevel: "error" });
+    const absPath = path.resolve(root, filePath).replace(/\\/g, "/");
     const symbols = listSymbols(index, {
-      file: normalizedPath,
+      file: absPath,
       includeImports: true,
     });
 
@@ -155,7 +135,8 @@ export async function tool_findSymbol(
   options: { maxResults?: number; index?: ProjectIndex } = {},
 ): Promise<Array<{ name: string; kind: string; file: string; line: number }>> {
   try {
-    const index = await getOrBuildIndex(root);
+    const index =
+      options.index ?? (await buildProjectIndex(root, { logLevel: "error" }));
     const allSymbols = listSymbols(index, { includeImports: false });
     const q = query.toLowerCase();
 
@@ -238,10 +219,10 @@ export async function tool_goToDefinition(
   reason?: string;
 }> {
   try {
-    const index = await getOrBuildIndex(root);
-    const normalizedPath = normalizeFilePath(root, file);
+    const idx = index ?? (await buildProjectIndex(root, { logLevel: "error" }));
+    const normalizedPath = normalizePathArg(root, file);
 
-    const result = await goToDefinition(index, {
+    const result = await goToDefinition(idx, {
       file: normalizedPath,
       line,
       column,
@@ -271,10 +252,10 @@ export async function tool_findReferences(
   reason?: string;
 }> {
   try {
-    const index = await getOrBuildIndex(root);
-    const normalizedPath = normalizeFilePath(root, file);
+    const idx = index ?? (await buildProjectIndex(root, { logLevel: "error" }));
+    const normalizedPath = normalizePathArg(root, file);
 
-    const result = await findReferences(index, {
+    const result = await findReferences(idx, {
       file: normalizedPath,
       line,
       column,

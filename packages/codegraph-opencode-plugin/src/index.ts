@@ -1,4 +1,5 @@
 import { tool } from "@opencode-ai/plugin";
+import { spawn } from "node:child_process";
 
 // Try to import the library for direct usage
 // In workspace environment, this should resolve to the local package
@@ -33,23 +34,62 @@ async function runCodegraph(
   // 2. Fallback to CLI
   // We assume npx codegraph is available in the environment if the library isn't directly importable
   const cmd = ["npx", "codegraph", ...cliArgs];
-  const proc = Bun.spawn(cmd, {
-    cwd: process.cwd(),
-    stderr: "pipe",
-    stdout: "pipe",
-  });
 
-  const text = await new Response(proc.stdout).text();
-  const err = await new Response(proc.stderr).text();
+  if (typeof Bun !== "undefined") {
+    // Use Bun spawn if available (preferred in OpenCode)
+    const proc = Bun.spawn(cmd, {
+      cwd: process.cwd(),
+      stderr: "pipe",
+      stdout: "pipe",
+    });
 
-  if (err && !text) {
-    throw new Error(`Codegraph error: ${err}`);
-  }
+    const text = await new Response(proc.stdout).text();
+    const err = await new Response(proc.stderr).text();
 
-  try {
-    return JSON.parse(text);
-  } catch (e) {
-    return text; // Return raw text if not JSON
+    if (err && !text) {
+      throw new Error(`Codegraph error: ${err}`);
+    }
+
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      return text; // Return raw text if not JSON
+    }
+  } else {
+    // Fallback to Node.js child_process
+    return new Promise((resolve, reject) => {
+      const proc = spawn("npx", ["codegraph", ...cliArgs], {
+        cwd: process.cwd(),
+        shell: true, // Needed for npx in some environments
+      });
+
+      let stdout = "";
+      let stderr = "";
+
+      proc.stdout.on("data", (data) => {
+        stdout += data.toString();
+      });
+
+      proc.stderr.on("data", (data) => {
+        stderr += data.toString();
+      });
+
+      proc.on("close", (code) => {
+        if (code !== 0 && stderr && !stdout) {
+          reject(new Error(`Codegraph error (exit code ${code}): ${stderr}`));
+          return;
+        }
+        try {
+          resolve(JSON.parse(stdout));
+        } catch (e) {
+          resolve(stdout); // Return raw text if not JSON
+        }
+      });
+
+      proc.on("error", (err) => {
+        reject(err);
+      });
+    });
   }
 }
 

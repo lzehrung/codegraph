@@ -16,7 +16,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "clean": "if exist dist rmdir /s /q dist",
+    "clean": "rimraf dist",
     "prepack": "npm run build"
   },
   "dependencies": {
@@ -26,6 +26,7 @@
     "@opencode-ai/plugin": "*"
   },
   "devDependencies": {
+    "rimraf": "^6.0.1",
     "typescript": "^5.9.3",
     "@types/node": "^24.7.2",
     "@types/bun": "^1.1.14"
