@@ -55,10 +55,13 @@ describe('project file discovery', () => {
     const goDir = path.join(tempDir, 'go');
     const javaDir = path.join(tempDir, 'java');
     const gradleDir = path.join(tempDir, 'gradle');
+    const kotlinDir = path.join(tempDir, 'kotlin');
     const dotnetDir = path.join(tempDir, 'dotnet');
     const ideDir = path.join(tempDir, 'ide');
     const swiftDir = path.join(tempDir, 'swift');
+    const swiftIdeDir = path.join(tempDir, 'swift-ide');
     const gemDir = path.join(tempDir, 'gem');
+    const nativeDir = path.join(tempDir, 'native');
 
     const packageJson = path.join(nodeDir, 'package.json');
     const pyproject = path.join(pythonDir, 'pyproject.toml');
@@ -66,12 +69,17 @@ describe('project file discovery', () => {
     const goMod = path.join(goDir, 'go.mod');
     const pom = path.join(javaDir, 'pom.xml');
     const settingsGradle = path.join(gradleDir, 'settings.gradle');
+    const settingsGradleKts = path.join(kotlinDir, 'settings.gradle.kts');
     const csproj = path.join(dotnetDir, 'App.csproj');
     const fsproj = path.join(dotnetDir, 'Library.fsproj');
     const vbproj = path.join(dotnetDir, 'Widget.vbproj');
     const sln = path.join(dotnetDir, 'Solution.sln');
     const swiftPackage = path.join(swiftDir, 'Package.swift');
+    const xcodeprojDir = path.join(swiftIdeDir, 'App.xcodeproj');
+    const xcworkspaceDir = path.join(swiftIdeDir, 'App.xcworkspace');
     const gemspec = path.join(gemDir, 'ruby-gem.gemspec');
+    const cmakeLists = path.join(nativeDir, 'CMakeLists.txt');
+    const vcpkg = path.join(nativeDir, 'vcpkg.json');
     const ideaDir = path.join(ideDir, '.idea');
 
     await createFile(packageJson, JSON.stringify({ name: 'node-app' }, null, 2));
@@ -80,6 +88,7 @@ describe('project file discovery', () => {
     await createFile(goMod, 'module example.com/go-app\n');
     await createFile(pom, '<project><artifactId>mvn-app</artifactId></project>');
     await createFile(settingsGradle, 'rootProject.name = "gradle-app"\n');
+    await createFile(settingsGradleKts, 'rootProject.name = "kotlin-app"\n');
     await createFile(
       csproj,
       '<Project><PropertyGroup><AssemblyName>DotNetApp</AssemblyName></PropertyGroup></Project>',
@@ -97,10 +106,14 @@ describe('project file discovery', () => {
       swiftPackage,
       'import PackageDescription\n\nlet package = Package(name: "swift-app")\n',
     );
+    await fs.mkdir(xcodeprojDir, { recursive: true });
+    await fs.mkdir(xcworkspaceDir, { recursive: true });
     await createFile(
       gemspec,
       'Gem::Specification.new do |spec|\n  spec.name = "ruby-gem"\nend\n',
     );
+    await createFile(cmakeLists, 'cmake_minimum_required(VERSION 3.20)\n');
+    await createFile(vcpkg, JSON.stringify({ name: 'native-app' }, null, 2));
     await fs.mkdir(ideaDir, { recursive: true });
 
     const discovered = await discoverProjectFiles(tempDir);
@@ -120,6 +133,8 @@ describe('project file discovery', () => {
     expect(byPath.get(normalize(pom))?.type).toBe('maven');
     expect(byPath.get(normalize(settingsGradle))?.name).toBe('gradle-app');
     expect(byPath.get(normalize(settingsGradle))?.type).toBe('gradle');
+    expect(byPath.get(normalize(settingsGradleKts))?.name).toBe('kotlin-app');
+    expect(byPath.get(normalize(settingsGradleKts))?.type).toBe('gradle');
     expect(byPath.get(normalize(csproj))?.name).toBe('DotNetApp');
     expect(byPath.get(normalize(csproj))?.role).toBe('manifest');
     expect(byPath.get(normalize(fsproj))?.name).toBe('FSharpLib');
@@ -130,8 +145,17 @@ describe('project file discovery', () => {
     expect(byPath.get(normalize(sln))?.role).toBe('solution');
     expect(byPath.get(normalize(swiftPackage))?.name).toBe('swift-app');
     expect(byPath.get(normalize(swiftPackage))?.type).toBe('swift');
+    expect(byPath.get(normalize(xcodeprojDir))?.kind).toBe('dir');
+    expect(byPath.get(normalize(xcodeprojDir))?.type).toBe('swift');
+    expect(byPath.get(normalize(xcodeprojDir))?.name).toBe('App');
+    expect(byPath.get(normalize(xcworkspaceDir))?.kind).toBe('dir');
+    expect(byPath.get(normalize(xcworkspaceDir))?.type).toBe('swift');
     expect(byPath.get(normalize(gemspec))?.name).toBe('ruby-gem');
     expect(byPath.get(normalize(gemspec))?.type).toBe('ruby');
+    expect(byPath.get(normalize(cmakeLists))?.type).toBe('native');
+    expect(byPath.get(normalize(cmakeLists))?.name).toBe('native');
+    expect(byPath.get(normalize(vcpkg))?.type).toBe('native');
+    expect(byPath.get(normalize(vcpkg))?.name).toBe('native-app');
     expect(byPath.get(normalize(ideaDir))?.projectRoot).toBe(normalize(ideDir));
     expect(byPath.get(normalize(ideaDir))?.kind).toBe('dir');
     expect(byPath.get(normalize(ideaDir))?.role).toBe('ide');
@@ -151,6 +175,8 @@ describe('project file discovery', () => {
     const toolchainDir = path.join(tempDir, 'toolchain');
     const wrapperDir = path.join(tempDir, 'wrappers');
     const dotnetConfigDir = path.join(tempDir, 'dotnet-config');
+    const nativeConfigDir = path.join(tempDir, 'native-config');
+    const swiftLockDir = path.join(tempDir, 'swift-lock');
     const ignoredDir = path.join(tempDir, 'node_modules', 'ignored');
 
     const badPackage = path.join(badJsonDir, 'package.json');
@@ -172,6 +198,10 @@ describe('project file discovery', () => {
     const dirBuildProps = path.join(dotnetConfigDir, 'Directory.Build.props');
     const dirBuildTargets = path.join(dotnetConfigDir, 'Directory.Build.targets');
     const globalJson = path.join(dotnetConfigDir, 'global.json');
+    const cmakePresets = path.join(nativeConfigDir, 'CMakePresets.json');
+    const mesonOptions = path.join(nativeConfigDir, 'meson_options.txt');
+    const conanfile = path.join(nativeConfigDir, 'conanfile.txt');
+    const packageResolved = path.join(swiftLockDir, 'Package.resolved');
     const ignoredPackage = path.join(ignoredDir, 'package.json');
 
     await createFile(badPackage, '{ invalid json');
@@ -196,6 +226,10 @@ describe('project file discovery', () => {
     await createFile(dirBuildProps, '<Project></Project>\n');
     await createFile(dirBuildTargets, '<Project></Project>\n');
     await createFile(globalJson, JSON.stringify({ sdk: { version: '8.0.100' } }, null, 2));
+    await createFile(cmakePresets, JSON.stringify({ version: 3 }, null, 2));
+    await createFile(mesonOptions, 'option("feature", type : "boolean", value : true)\n');
+    await createFile(conanfile, '[requires]\nfmt/10.1.1\n');
+    await createFile(packageResolved, JSON.stringify({ version: 2, pins: [] }, null, 2));
     await createFile(ignoredPackage, JSON.stringify({ name: 'ignored' }, null, 2));
 
     const discovered = await discoverProjectFiles(tempDir);
@@ -243,6 +277,15 @@ describe('project file discovery', () => {
     expect(byPath.get(normalize(dirBuildTargets))?.role).toBe('config');
     expect(byPath.get(normalize(globalJson))?.type).toBe('dotnet');
     expect(byPath.get(normalize(globalJson))?.role).toBe('config');
+    expect(byPath.get(normalize(cmakePresets))?.type).toBe('native');
+    expect(byPath.get(normalize(cmakePresets))?.role).toBe('config');
+    expect(byPath.get(normalize(cmakePresets))?.name).toBe('native-config');
+    expect(byPath.get(normalize(mesonOptions))?.type).toBe('native');
+    expect(byPath.get(normalize(mesonOptions))?.role).toBe('config');
+    expect(byPath.get(normalize(conanfile))?.type).toBe('native');
+    expect(byPath.get(normalize(conanfile))?.role).toBe('manifest');
+    expect(byPath.get(normalize(packageResolved))?.type).toBe('swift');
+    expect(byPath.get(normalize(packageResolved))?.role).toBe('lockfile');
     expect(byPath.has(normalize(ignoredPackage))).toBe(false);
   });
 });
