@@ -63,13 +63,29 @@ const paramListTypes = new Set(["parameter_declaration", "parameter_list"]);
 const isInParameterList = (node: SyntaxNode): boolean =>
   !!findAncestor(node, paramListTypes);
 
+const resolveDeclaratorRoot = (ancestor: SyntaxNode): SyntaxNode | null => {
+  let declaratorNode = ancestor.childForFieldName("declarator");
+  if (!declaratorNode) return null;
+  if (declaratorNode.type === "init_declarator") {
+    const inner = declaratorNode.childForFieldName("declarator");
+    if (inner) declaratorNode = inner;
+  }
+  if (declaratorNode.type === "function_declarator") {
+    const inner = declaratorNode.childForFieldName("declarator");
+    if (inner) declaratorNode = inner;
+  }
+  return declaratorNode;
+};
+
 const isInAncestorDeclarator = (
   node: SyntaxNode,
   ancestorTypes: Set<string>,
 ): boolean => {
   const ancestor = findAncestor(node, ancestorTypes);
   if (!ancestor) return false;
-  return isInField(node, ancestor, "declarator");
+  const declaratorNode = resolveDeclaratorRoot(ancestor);
+  if (!declaratorNode) return false;
+  return isWithin(node, declaratorNode);
 };
 
 const isFunctionDeclarator = (node: SyntaxNode): boolean => {
