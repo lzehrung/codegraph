@@ -688,6 +688,21 @@ export async function resolveWorkspacePackage(
     ".cs",
     ".rb",
     ".rs",
+    ".c",
+    ".h",
+    ".cc",
+    ".cpp",
+    ".cxx",
+    ".c++",
+    ".hpp",
+    ".hh",
+    ".hxx",
+    ".ipp",
+    ".tpp",
+    ".inl",
+    ".kt",
+    ".kts",
+    ".swift",
   ];
   const tryResolveRelative = async (rel: string): Promise<string | null> => {
     const raw = path.resolve(baseDir, rel);
@@ -776,6 +791,21 @@ export async function resolvePathLikeModule(
     ".cs",
     ".rb",
     ".rs",
+    ".c",
+    ".h",
+    ".cc",
+    ".cpp",
+    ".cxx",
+    ".c++",
+    ".hpp",
+    ".hh",
+    ".hxx",
+    ".ipp",
+    ".tpp",
+    ".inl",
+    ".kt",
+    ".kts",
+    ".swift",
   ];
 
   // Try matching progressively shorter prefixes (e.g. a.b.c -> a/b/c, a/b, a)

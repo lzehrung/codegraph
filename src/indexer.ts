@@ -2219,6 +2219,67 @@ export async function collectImportsForFile(
                 });
               }
             }
+          } else if (resolvedSup.id === "kotlin") {
+            const aliasNode = caps["alias"];
+            const wildcard = !!caps["wild"] || fromValue.endsWith(".*");
+            if (wildcard) {
+              imports.push({
+                kind: "star",
+                from: fromValue,
+                resolved,
+                typeOnly,
+              });
+            } else {
+              const parts = fromValue.split(".");
+              const imported = parts[parts.length - 1];
+              if (!imported) continue;
+              const local = aliasNode
+                ? sliceText(aliasNode.node, source)
+                : imported;
+              imports.push({
+                kind: "named",
+                local,
+                imported,
+                from: fromValue,
+                resolved,
+                typeOnly,
+              });
+            }
+          } else if (resolvedSup.id === "swift") {
+            const parts = fromValue.split(".");
+            const last = parts[parts.length - 1];
+            if (!last) continue;
+            if (parts.length === 1) {
+              imports.push({
+                kind: "namespace",
+                localNS: last,
+                from: fromValue,
+                resolved,
+                typeOnly,
+              });
+              imports.push({
+                kind: "star",
+                from: fromValue,
+                resolved,
+                typeOnly,
+              });
+            } else {
+              imports.push({
+                kind: "named",
+                local: last,
+                imported: last,
+                from: fromValue,
+                resolved,
+                typeOnly,
+              });
+            }
+          } else if (resolvedSup.id === "c" || resolvedSup.id === "cpp") {
+            imports.push({
+              kind: "star",
+              from: fromValue,
+              resolved,
+              typeOnly,
+            });
           }
         }
       }
@@ -3476,6 +3537,23 @@ export async function goToDefinition(
         obj = memberNode.child(0);
         prop = memberNode.child(2);
       }
+    } else if (sup.id === "kotlin" || sup.id === "swift") {
+      if (memberNode.type === "navigation_expression") {
+        obj = memberNode.namedChildren[0] ?? memberNode.child(0);
+        const suffix =
+          memberNode.namedChildren.find((c) => c.type === "navigation_suffix") ??
+          memberNode.child(1);
+        if (suffix) {
+          prop =
+            suffix.childForFieldName("suffix") ??
+            suffix.childForFieldName("name") ??
+            suffix.namedChildren[0] ??
+            suffix.child(0);
+        }
+      } else {
+        obj = memberNode.child(0);
+        prop = memberNode.child(2);
+      }
     } else {
       // Default (JS/TS)
       obj = memberNode.child(0);
@@ -3550,10 +3628,22 @@ export async function goToDefinition(
 
       if (optionalMemberTypes.has(expr.type)) {
         const subObj = expr.child(0);
-        const subProp =
+        let subProp =
           expr.childForFieldName?.("property") ??
           expr.child(2) ??
           expr.childForFieldName?.("attribute");
+        if (!subProp && expr.type === "navigation_expression") {
+          const suffix =
+            expr.namedChildren.find((c) => c.type === "navigation_suffix") ??
+            expr.child(1);
+          if (suffix) {
+            subProp =
+              suffix.childForFieldName?.("suffix") ??
+              suffix.childForFieldName?.("name") ??
+              suffix.namedChildren[0] ??
+              suffix.child(0);
+          }
+        }
         if (subObj && subProp) {
           const base = await resolveExpression(subObj);
           if (base?.kind === "namespace") {
@@ -3909,7 +3999,9 @@ export function buildScopeIndexFromSource(
   file: string,
   source: string,
   support: {
+    id: string;
     nodeTypes: any;
+    classifyDefinition: (n: Parser.SyntaxNode) => string;
     isDeclarationName: (n: Parser.SyntaxNode) => boolean;
     createsFunctionScope: (n: Parser.SyntaxNode) => boolean;
     createsBlockScope: (n: Parser.SyntaxNode) => boolean;
@@ -3919,9 +4011,9 @@ export function buildScopeIndexFromSource(
   opts?: { tree?: Parser.Tree },
 ): ScopeIndex {
   const key2 = (
-    support.nodeTypes && (support as any).id === "python"
+    support.nodeTypes && support.id === "python"
       ? "py"
-      : (support as any).id === "js"
+      : support.id === "js"
         ? "js"
         : "ts"
   ) as any;
@@ -3972,6 +4064,29 @@ export function buildScopeIndexFromSource(
     ...(support.nodeTypes.identifier as string[]),
     ...((support.nodeTypes.shorthandPropertyIdentifier ?? []) as string[]),
   ]);
+  const customDeclLanguages = new Set(["c", "cpp", "kotlin", "swift"]);
+  const paramParentTypes = new Set([
+    "parameter_declaration",
+    "parameter",
+    "class_parameter",
+    "lambda_parameters",
+  ]);
+
+  const toBindingKind = (kind: string): BindingKind => {
+    if (kind === "function") return "function";
+    if (kind === "class" || kind === "interface") return "class";
+    if (kind === "type") return "type";
+    return "local";
+  };
+
+  const isParamNode = (node: Parser.SyntaxNode): boolean => {
+    let current: Parser.SyntaxNode | null = node.parent;
+    while (current) {
+      if (paramParentTypes.has(current.type)) return true;
+      current = current.parent;
+    }
+    return false;
+  };
 
   const addDecl = (nameNode: Parser.SyntaxNode, kind: BindingKind) => {
     const name = sliceText(nameNode, source);
@@ -4115,6 +4230,17 @@ export function buildScopeIndexFromSource(
           if (pat && pat.type === "identifier") addDecl(pat, "local");
         }
       }
+    }
+
+    if (
+      customDeclLanguages.has(support.id) &&
+      idSet.has(node.type) &&
+      support.isDeclarationName(node)
+    ) {
+      const kind = isParamNode(node)
+        ? "param"
+        : toBindingKind(support.classifyDefinition(node));
+      addDecl(node, kind);
     }
 
     if (idSet.has(node.type) && !support.isDeclarationName(node)) {
