@@ -9,9 +9,9 @@ import {
   type ImpactOptions,
   type ImpactReport,
   type CompactImpactReport,
+  type Edge,
   type ProjectIndex,
 } from "./index.js";
-import { type Edge } from "./types.js";
 import path from "node:path";
 
 const indexCache = new Map<string, ProjectIndex>();
@@ -152,7 +152,7 @@ export async function tool_getFileOverview(
 export async function tool_findSymbol(
   root: string,
   query: string,
-  options: { maxResults?: number } = {},
+  options: { maxResults?: number; index?: ProjectIndex } = {},
 ): Promise<Array<{ name: string; kind: string; file: string; line: number }>> {
   try {
     const index = await getOrBuildIndex(root);
@@ -209,6 +209,11 @@ export async function tool_getGraph(root: string): Promise<{ status: "ok" | "err
   }
 }
 
+function normalizePathArg(root: string, file: string): string {
+  const absPath = path.isAbsolute(file) ? file : path.resolve(root, file);
+  return absPath.replace(/\\/g, "/");
+}
+
 /**
  * Go to definition for a symbol at a specific location.
  */
@@ -216,7 +221,8 @@ export async function tool_goToDefinition(
   root: string,
   file: string,
   line: number,
-  column: number
+  column: number,
+  index?: ProjectIndex,
 ): Promise<{
   status: "ok" | "error" | "not_found";
   definition?: {
@@ -235,11 +241,11 @@ export async function tool_goToDefinition(
     const index = await getOrBuildIndex(root);
     const normalizedPath = normalizeFilePath(root, file);
 
-    const result = (await goToDefinition(index, {
+    const result = await goToDefinition(index, {
       file: normalizedPath,
       line,
       column,
-    })) as any;
+    });
     return result;
   } catch (error) {
     return { status: "error", error: String(error) };
@@ -253,7 +259,8 @@ export async function tool_findReferences(
   root: string,
   file: string,
   line: number,
-  column: number
+  column: number,
+  index?: ProjectIndex,
 ): Promise<{
   status: "ok" | "error" | "not_found";
   references?: Array<{
@@ -267,11 +274,11 @@ export async function tool_findReferences(
     const index = await getOrBuildIndex(root);
     const normalizedPath = normalizeFilePath(root, file);
 
-    const result = (await findReferences(index, {
+    const result = await findReferences(index, {
       file: normalizedPath,
       line,
       column,
-    })) as any;
+    });
     return result;
   } catch (error) {
     return { status: "error", error: String(error) };
