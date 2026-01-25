@@ -101,6 +101,20 @@ export const DEFAULT_PROJECT_MANIFESTS = [
   "composer.json",
   "composer.lock",
   "Package.swift",
+  "Package.resolved",
+  "CMakeLists.txt",
+  "CMakePresets.json",
+  "CMakeUserPresets.json",
+  "Makefile",
+  "makefile",
+  "GNUmakefile",
+  "configure.ac",
+  "configure.in",
+  "meson.build",
+  "meson_options.txt",
+  "conanfile.txt",
+  "conanfile.py",
+  "vcpkg.json",
 ];
 
 export const DEFAULT_PROJECT_PATTERNS = [
@@ -144,6 +158,7 @@ export type ProjectFileType =
   | "ruby"
   | "php"
   | "swift"
+  | "native"
   | "ide";
 
 export type ProjectFileInfo = {
@@ -521,12 +536,57 @@ const PROJECT_FILE_DEFINITIONS: ProjectFileDefinition[] = [
     patterns: ["composer.lock"],
   },
   {
+    type: "native",
+    role: "manifest",
+    kind: "file",
+    patterns: [
+      "CMakeLists.txt",
+      "Makefile",
+      "makefile",
+      "GNUmakefile",
+      "configure.ac",
+      "configure.in",
+      "meson.build",
+      "conanfile.txt",
+      "conanfile.py",
+    ],
+    nameFromPath: "dir",
+  },
+  {
+    type: "native",
+    role: "config",
+    kind: "file",
+    patterns: ["CMakePresets.json", "CMakeUserPresets.json", "meson_options.txt"],
+    nameFromPath: "dir",
+  },
+  {
+    type: "native",
+    role: "manifest",
+    kind: "file",
+    patterns: ["vcpkg.json"],
+    parseName: parseJsonName,
+    nameFromPath: "dir",
+  },
+  {
     type: "swift",
     role: "manifest",
     kind: "file",
     patterns: ["Package.swift"],
     parseName: parseSwiftPackageName,
     nameFromPath: "dir",
+  },
+  {
+    type: "swift",
+    role: "lockfile",
+    kind: "file",
+    patterns: ["Package.resolved"],
+  },
+  {
+    type: "swift",
+    role: "config",
+    kind: "dir",
+    patterns: ["*.xcodeproj", "*.xcworkspace"],
+    nameFromPath: "file",
   },
   {
     type: "ide",

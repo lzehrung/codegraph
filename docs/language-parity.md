@@ -38,7 +38,8 @@ Status key: ✅ = Extracts name from metadata, ⌛ = Directory/filename fallback
 | .NET | *.csproj, *.fsproj, *.vbproj, *.sln, Directory.Build.props, Directory.Build.targets, global.json | ✅ *proj |
 | Ruby | Gemfile, Gemfile.lock, *.gemspec | ✅ *.gemspec, ⌛ Gemfile |
 | PHP | composer.json, composer.lock | ✅ composer.json |
-| Swift | Package.swift | ✅ Package.swift |
+| Swift | Package.swift, Package.resolved, *.xcodeproj, *.xcworkspace | ✅ Package.swift |
+| C/C++ | CMakeLists.txt, CMakePresets.json, CMakeUserPresets.json, Makefile, makefile, GNUmakefile, configure.ac, configure.in, meson.build, meson_options.txt, conanfile.txt, conanfile.py, vcpkg.json | ✅ vcpkg.json, ⌛ directory fallback |
 | IDE | .idea | ⌛ directory fallback |
 
 ### Project file list (discovery)
@@ -51,5 +52,6 @@ Status key: ✅ = Extracts name from metadata, ⌛ = Directory/filename fallback
 - .NET: *.csproj, *.fsproj, *.vbproj, *.sln, Directory.Build.props, Directory.Build.targets, global.json
 - Ruby: Gemfile, Gemfile.lock, *.gemspec
 - PHP: composer.json, composer.lock
-- Swift: Package.swift
+- Swift: Package.swift, Package.resolved, *.xcodeproj, *.xcworkspace
+- C/C++: CMakeLists.txt, CMakePresets.json, CMakeUserPresets.json, Makefile, makefile, GNUmakefile, configure.ac, configure.in, meson.build, meson_options.txt, conanfile.txt, conanfile.py, vcpkg.json
 - IDE: .idea
