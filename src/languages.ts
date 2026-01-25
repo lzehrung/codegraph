@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import Parser from "tree-sitter";
 import type { LanguageDefinition } from "./languages/types.js";
@@ -15,6 +16,10 @@ import { GO_DEF } from "./languages/definitions/go.js";
 import { JAVA_DEF } from "./languages/definitions/java.js";
 import { CSHARP_DEF } from "./languages/definitions/csharp.js";
 import { RUST_DEF } from "./languages/definitions/rust.js";
+import { C_DEF } from "./languages/definitions/c.js";
+import { CPP_DEF } from "./languages/definitions/cpp.js";
+import { KOTLIN_DEF } from "./languages/definitions/kotlin.js";
+import { SWIFT_DEF } from "./languages/definitions/swift.js";
 
 export type IdentifierNodeType = string;
 
@@ -71,6 +76,10 @@ export const GO_SUPPORT = adaptDefinition(GO_DEF);
 export const JAVA_SUPPORT = adaptDefinition(JAVA_DEF);
 export const CSHARP_SUPPORT = adaptDefinition(CSHARP_DEF);
 export const RUST_SUPPORT = adaptDefinition(RUST_DEF);
+export const C_SUPPORT = adaptDefinition(C_DEF);
+export const CPP_SUPPORT = adaptDefinition(CPP_DEF);
+export const KOTLIN_SUPPORT = adaptDefinition(KOTLIN_DEF);
+export const SWIFT_SUPPORT = adaptDefinition(SWIFT_DEF);
 
 export const LANGUAGE_SUPPORTS: LanguageSupport[] = [
   TS_SUPPORT,
@@ -88,10 +97,19 @@ export const LANGUAGE_SUPPORTS: LanguageSupport[] = [
   JAVA_SUPPORT,
   CSHARP_SUPPORT,
   RUST_SUPPORT,
+  C_SUPPORT,
+  CPP_SUPPORT,
+  KOTLIN_SUPPORT,
+  SWIFT_SUPPORT,
 ];
 
 export function supportForFile(filename: string): LanguageSupport {
   const ext = path.extname(filename).toLowerCase();
+  if (ext === ".h") {
+    const sample = readFileSample(filename);
+    if (sample && isLikelyCppHeader(sample)) return CPP_SUPPORT;
+    return C_SUPPORT;
+  }
   return LANGUAGE_SUPPORTS.find((s) => s.matchExts.includes(ext)) ?? TS_SUPPORT;
 }
 export function languageForFile(filename: string): Parser.Language {
@@ -100,6 +118,22 @@ export function languageForFile(filename: string): Parser.Language {
 
 export function supportById(id: string): LanguageSupport | undefined {
   return LANGUAGE_SUPPORTS.find((s) => s.id === id);
+}
+
+const CPP_HEADER_HINT =
+  /\b(class|namespace|template|typename|constexpr|operator|using\s+namespace)\b|::/;
+
+function readFileSample(filePath: string): string | null {
+  try {
+    const contents = fs.readFileSync(filePath, "utf8");
+    return contents.slice(0, 8000);
+  } catch {
+    return null;
+  }
+}
+
+function isLikelyCppHeader(sample: string): boolean {
+  return CPP_HEADER_HINT.test(sample);
 }
 
 // ---------------- Compiled query cache (per language grammar) ----------------

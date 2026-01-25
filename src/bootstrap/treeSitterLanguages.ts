@@ -17,6 +17,10 @@ import { GO_DEF } from "../languages/definitions/go.js";
 import { JAVA_DEF } from "../languages/definitions/java.js";
 import { CSHARP_DEF } from "../languages/definitions/csharp.js";
 import { RUST_DEF } from "../languages/definitions/rust.js";
+import { C_DEF } from "../languages/definitions/c.js";
+import { CPP_DEF } from "../languages/definitions/cpp.js";
+import { KOTLIN_DEF } from "../languages/definitions/kotlin.js";
+import { SWIFT_DEF } from "../languages/definitions/swift.js";
 
 export type { LanguageConfig };
 
@@ -34,4 +38,8 @@ export const LANG_CONFIGS: Record<string, LanguageConfig> = {
   java: makeLanguageConfig(JAVA_DEF),
   csharp: makeLanguageConfig(CSHARP_DEF),
   rust: makeLanguageConfig(RUST_DEF),
+  c: makeLanguageConfig(C_DEF),
+  cpp: makeLanguageConfig(CPP_DEF),
+  kotlin: makeLanguageConfig(KOTLIN_DEF),
+  swift: makeLanguageConfig(SWIFT_DEF),
 };
