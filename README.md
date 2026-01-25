@@ -91,6 +91,7 @@ Sample graph: [sample-graph.md](./sample-graph.md)
 * **Vue / Svelte SFCs** (`.vue`, `.svelte`) — script blocks are parsed with the JS/TS pipeline, so dependency graphs and go-to-definition work across components.
 
 Each listed language (including Vue/Svelte script sections) has the same dependency-graph, go-to-definition, and find-references support.
+See the coverage matrix in [docs/language-parity.md](./docs/language-parity.md).
 
 ---
 
