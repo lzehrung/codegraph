@@ -9,6 +9,7 @@ import { supportForFile, getCompiledQueries } from "./languages.js";
 import { prepareParserInput } from "./languages/filePrep.js";
 import {
   listProjectFiles,
+  discoverProjectFiles,
   DEFAULT_PROJECT_MANIFESTS,
   sliceText,
   toRange,
@@ -29,6 +30,7 @@ import {
   isGitRepo,
   getGitBlobHashes,
   listChangedFiles,
+  type ProjectFileInfo,
 } from "./util.js";
 import {
   collectGraph,
@@ -146,6 +148,7 @@ export type ProjectIndex = {
     }
   >;
   bloomFilters?: import("./util/bloomFilter.js").BloomFilterCache;
+  projectFiles?: ProjectFileInfo[];
 };
 export type ResolvedExport =
   | { kind: "resolved"; def: SymbolDef }
@@ -2686,6 +2689,7 @@ async function buildIndexFromFileListShared(
   }
 
   if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
+  const projectFiles = await discoverProjectFiles(projectRoot);
   return {
     graph,
     modules,
@@ -2694,6 +2698,7 @@ async function buildIndexFromFileListShared(
     scopeCache: new Map(),
     parsed: parsedMap as any,
     ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
+    projectFiles,
   };
 }
 
@@ -3134,6 +3139,7 @@ export async function buildProjectIndexIncremental(
   }
 
   if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
+  const projectFiles = await discoverProjectFiles(projectRoot);
   return {
     graph,
     modules,
@@ -3142,6 +3148,7 @@ export async function buildProjectIndexIncremental(
     scopeCache: new Map(),
     parsed: parsedMap as any,
     ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
+    projectFiles,
   };
 }
 
