@@ -352,14 +352,6 @@ await analyzeImpactFromDiff(root, index, { provider: "git", base: "main", head: 
 
 Impact JSON responses can include `exportSummary` (exported changed symbols by file), `reexportChains` (file-level re-export chains for exported changes), `topImpacts` (top 10 impacted items with reasons), `surfaceArea` (fan-in/fan-out summary with top 10 lists), and `clusters` (connected change/impact groups with aggregated severity) when applicable.
 
-# File Summarization (Agentic)
-# Get a markdown overview of a file (imports, exports, definitions)
-npx tsx -e "import { tool_getFileOverview } from 'codegraph'; tool_getFileOverview('.', 'src/utils.ts').then(console.log)"
-
-# Symbol Search (Agentic)
-# Find symbols by name (fuzzy search)
-npx tsx -e "import { tool_findSymbol } from 'codegraph'; tool_findSymbol('.', 'collectGraph').then(console.log)"
-
 # Generate a PR review bundle (incremental graph + symbol summary)
 npx codegraph review --base origin/main --head HEAD > review.json
 # Include definition snippets + callsites (top-N) for changed symbols
@@ -863,12 +855,17 @@ const neighbors = querySymbolNeighbors(symbolGraph, {
 
 ### High-level Agent Tools
 
-These tools are designed to be directly exposed to LLM agents for file exploration and symbol discovery.
+These functions are designed to be imported and used directly by agent codebases to explore the codebase and discover symbols.
 
 ```ts
-import { tool_getFileOverview, tool_findSymbol } from 'codegraph';
+import {
+  tool_getFileOverview,
+  tool_findSymbol,
+  tool_impactJSON
+} from 'codegraph';
 
-// Get a Markdown summary of a file (Imports, Definitions with signatures/docstrings)
+// 1. Get a Markdown summary of a file (Imports, Definitions with signatures/docstrings)
+// Useful for "reading" a file's structure before deciding to read the full content.
 const overview = await tool_getFileOverview(process.cwd(), 'src/utils.ts');
 console.log(overview);
 // Output:
@@ -879,11 +876,23 @@ console.log(overview);
 // ### function `readFile` (line 10)
 // > Reads a file safely...
 
-// Find symbols by name (fuzzy search)
+// 2. Find symbols by name (fuzzy search)
+// Useful for locating relevant code when the file path is unknown.
 const matches = await tool_findSymbol(process.cwd(), 'collectGraph');
 console.log(matches);
 // Output:
 // [{ name: 'collectGraph', kind: 'function', file: 'src/graphs.ts', line: 150 }, ...]
+
+// 3. Analyze PR impact programmatically
+// Returns a JSON report suitable for LLM consumption.
+const impact = await tool_impactJSON(process.cwd(), {
+  provider: 'git',
+  base: 'main',
+  head: 'feature-branch'
+});
+if (impact.status === 'ok') {
+  console.log('Impacted files:', impact.report.impacted.map(i => i.file));
+}
 ```
 
 ### Raw SQL from code (advanced)
