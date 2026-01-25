@@ -2,6 +2,10 @@ import {
   buildProjectIndex,
   analyzeImpactFromDiff,
   listSymbols,
+  listProjectFiles,
+  collectGraph,
+  goToDefinition,
+  findReferences,
   type ImpactOptions,
   type ImpactReport,
   type CompactImpactReport,
@@ -155,5 +159,64 @@ export async function tool_findSymbol(
   } catch (error) {
     console.error(error);
     return [];
+  }
+}
+
+/**
+ * Lists all files in the project that codegraph can analyze.
+ */
+export async function tool_listProjectFiles(root: string): Promise<{ status: "ok" | "error", files?: string[], error?: string }> {
+  try {
+    const files = await listProjectFiles(root);
+    return { status: "ok", files };
+  } catch (error) {
+    return { status: "error", error: String(error) };
+  }
+}
+
+/**
+ * Gets the dependency graph for the project.
+ */
+export async function tool_getGraph(root: string): Promise<{ status: "ok" | "error", graph?: { nodes: string[], edges: any[] }, error?: string }> {
+  try {
+    const files = await listProjectFiles(root);
+    const g = await collectGraph(root, files);
+    return { status: "ok", graph: { nodes: [...g.nodes], edges: g.edges } };
+  } catch (error) {
+    return { status: "error", error: String(error) };
+  }
+}
+
+/**
+ * Go to definition for a symbol at a specific location.
+ */
+export async function tool_goToDefinition(root: string, file: string, line: number, column: number) {
+  try {
+    const index = await buildProjectIndex(root, { logLevel: "error" });
+    // Normalize file path
+    const absPath = path.isAbsolute(file) ? file : path.resolve(root, file);
+    const normalizedPath = absPath.replace(/\\/g, "/");
+
+    const result = await goToDefinition(index, { file: normalizedPath, line, column });
+    return result;
+  } catch (error) {
+    return { status: "error", error: String(error) };
+  }
+}
+
+/**
+ * Find references for a symbol at a specific location.
+ */
+export async function tool_findReferences(root: string, file: string, line: number, column: number) {
+  try {
+    const index = await buildProjectIndex(root, { logLevel: "error" });
+    // Normalize file path
+    const absPath = path.isAbsolute(file) ? file : path.resolve(root, file);
+    const normalizedPath = absPath.replace(/\\/g, "/");
+
+    const result = await findReferences(index, { file: normalizedPath, line, column });
+    return result;
+  } catch (error) {
+    return { status: "error", error: String(error) };
   }
 }
