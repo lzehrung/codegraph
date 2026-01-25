@@ -87,13 +87,73 @@ describe('project file discovery', () => {
     );
 
     expect(byPath.get(normalize(packageJson))?.name).toBe('node-app');
+    expect(byPath.get(normalize(packageJson))?.type).toBe('node');
     expect(byPath.get(normalize(pyproject))?.name).toBe('py-app');
+    expect(byPath.get(normalize(pyproject))?.type).toBe('python');
     expect(byPath.get(normalize(cargo))?.name).toBe('rust-app');
+    expect(byPath.get(normalize(cargo))?.type).toBe('rust');
     expect(byPath.get(normalize(goMod))?.name).toBe('example.com/go-app');
+    expect(byPath.get(normalize(goMod))?.type).toBe('go');
     expect(byPath.get(normalize(pom))?.name).toBe('mvn-app');
+    expect(byPath.get(normalize(pom))?.type).toBe('maven');
     expect(byPath.get(normalize(settingsGradle))?.name).toBe('gradle-app');
+    expect(byPath.get(normalize(settingsGradle))?.type).toBe('gradle');
     expect(byPath.get(normalize(csproj))?.name).toBe('DotNetApp');
+    expect(byPath.get(normalize(csproj))?.role).toBe('manifest');
     expect(byPath.get(normalize(sln))?.name).toBe('Solution');
+    expect(byPath.get(normalize(sln))?.role).toBe('solution');
     expect(byPath.get(normalize(ideaDir))?.projectRoot).toBe(normalize(ideDir));
+    expect(byPath.get(normalize(ideaDir))?.kind).toBe('dir');
+    expect(byPath.get(normalize(ideaDir))?.role).toBe('ide');
+  });
+
+  it('handles fallback naming and ignores excluded directories', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codegraph-project-edge-'));
+    const badJsonDir = path.join(tempDir, 'bad-json');
+    const poetryDir = path.join(tempDir, 'poetry');
+    const cargoDir = path.join(tempDir, 'cargo');
+    const pomDir = path.join(tempDir, 'pom');
+    const gradleDir = path.join(tempDir, 'gradle');
+    const dotnetDir = path.join(tempDir, 'dotnet');
+    const composerDir = path.join(tempDir, 'composer');
+    const ignoredDir = path.join(tempDir, 'node_modules', 'ignored');
+
+    const badPackage = path.join(badJsonDir, 'package.json');
+    const pyproject = path.join(poetryDir, 'pyproject.toml');
+    const cargo = path.join(cargoDir, 'Cargo.toml');
+    const pom = path.join(pomDir, 'pom.xml');
+    const gradle = path.join(gradleDir, 'build.gradle');
+    const csproj = path.join(dotnetDir, 'Library.csproj');
+    const composer = path.join(composerDir, 'composer.json');
+    const ignoredPackage = path.join(ignoredDir, 'package.json');
+
+    await createFile(badPackage, '{ invalid json');
+    await createFile(pyproject, "[tool.poetry]\nname = 'poetry-app' # comment\n");
+    await createFile(cargo, '[package]\nname = "cargo-app" # comment\n');
+    await createFile(
+      pom,
+      '<project><parent><name>Parent</name></parent><name>PomApp</name></project>',
+    );
+    await createFile(gradle, 'plugins { id "java" }\n');
+    await createFile(csproj, '<Project></Project>');
+    await createFile(composer, JSON.stringify({ name: 'vendor/app' }, null, 2));
+    await createFile(ignoredPackage, JSON.stringify({ name: 'ignored' }, null, 2));
+
+    const discovered = await discoverProjectFiles(tempDir);
+    const byPath = new Map(
+      discovered.map((entry) => [normalize(entry.path), entry]),
+    );
+
+    const badEntry = byPath.get(normalize(badPackage));
+    expect(badEntry?.name).toBe('bad-json');
+    expect(badEntry?.type).toBe('node');
+    expect(badEntry?.role).toBe('manifest');
+    expect(byPath.get(normalize(pyproject))?.name).toBe('poetry-app');
+    expect(byPath.get(normalize(cargo))?.name).toBe('cargo-app');
+    expect(byPath.get(normalize(pom))?.name).toBe('PomApp');
+    expect(byPath.get(normalize(gradle))?.name).toBe('gradle');
+    expect(byPath.get(normalize(csproj))?.name).toBe('Library');
+    expect(byPath.get(normalize(composer))?.name).toBe('vendor/app');
+    expect(byPath.has(normalize(ignoredPackage))).toBe(false);
   });
 });

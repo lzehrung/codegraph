@@ -24,6 +24,22 @@ Status key: ✅ = Covered, ⌛ = Partial, ❌ = Missing.
 | Vue | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ |
 | Svelte | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ |
 
+## Project file discovery coverage
+
+Status key: ✅ = Extracts name from metadata, ⌛ = Directory/filename fallback, ❌ = Not detected.
+
+| Ecosystem | Detected project files | Name extraction |
+| --- | --- | --- |
+| Node.js | package.json, package-lock.json, pnpm-lock.yaml, yarn.lock, bun.lockb, tsconfig.json, jsconfig.json | ✅ package.json |
+| Python | pyproject.toml, requirements.txt, requirements.in, Pipfile, Pipfile.lock, poetry.lock, setup.py, setup.cfg | ✅ pyproject.toml/setup.cfg/setup.py |
+| Go | go.mod, go.sum | ✅ go.mod |
+| Rust | Cargo.toml, Cargo.lock | ✅ Cargo.toml |
+| Java/Kotlin | pom.xml, build.gradle, build.gradle.kts, settings.gradle, settings.gradle.kts, gradle.properties | ✅ pom.xml/settings.gradle |
+| .NET | *.csproj, *.sln | ✅ *.csproj |
+| Ruby | Gemfile, Gemfile.lock | ⌛ directory fallback |
+| PHP | composer.json, composer.lock | ✅ composer.json |
+| IDE | .idea | ⌛ directory fallback |
+
 ## Parity completion plan
 
 ### SFC integration rollout
