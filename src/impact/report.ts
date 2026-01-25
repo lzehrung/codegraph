@@ -18,7 +18,7 @@ import type {
   CompactImpactCluster,
 } from "./types.js";
 import { buildSymbolGraphDetailed } from "../graphs.js";
-import { normalizePath } from "../util.js";
+import { normalizePath, discoverProjectFiles } from "../util.js";
 
 export async function buildImpactReport(
   projectRoot: string,
@@ -38,6 +38,8 @@ export async function buildImpactReport(
     diffFiles,
     impactedItems,
   );
+  const projectFiles =
+    index.projectFiles ?? (await discoverProjectFiles(projectRoot));
   const newFileRangeForHunk = (hunk: FileChange["hunks"][number]) => {
     let newLine = hunk.newStart;
     let lastNewLine = newLine - 1;
@@ -133,12 +135,14 @@ export async function buildImpactReport(
       clusters,
       fileEdges,
       symbolEdges,
+      projectFiles,
     );
     if (options.warning) report.warning = options.warning;
     return report;
   }
 
   const report: ImpactReport = {
+    projectFiles,
     changedFiles,
     changedSymbols,
     impacted: impactedItems,
@@ -177,6 +181,7 @@ function buildCompactReport(
     typeOnly?: boolean | undefined;
   }>,
   symbolEdges: Array<{ from: number; to: number; label: string }>,
+  projectFiles: ProjectIndex["projectFiles"],
 ): CompactImpactReport {
   // Collect all unique file paths
   const allFiles = new Set<FileId>();
@@ -375,6 +380,7 @@ function buildCompactReport(
   });
 
   return {
+    ...(projectFiles ? { projectFiles } : {}),
     files: filesArray,
     changedFiles: compactChangedFiles,
     changedSymbols: compactChangedSymbols,

@@ -148,6 +148,51 @@ index 1234567..abcdef0 100644
       expect(Array.isArray(report.impacted)).toBe(true);
     });
 
+    it("should include project file metadata in impact reports", async () => {
+      const index = await createTestIndex("typescript");
+      const samplePath = path.resolve(
+        process.cwd(),
+        "tests",
+        "samples",
+        "typescript",
+      );
+
+      const diffText = `diff --git a/utils.ts b/utils.ts
+index 1234567..abcdef0 100644
+--- a/utils.ts
++++ b/utils.ts
+@@ -1,3 +1,4 @@
+ export function helperFunction() {
+   return 42;
+ }
++export function extraHelper() {
++  return 99;
++}
+`;
+
+      const report = await analyzeImpactFromDiff(samplePath, index, {
+        provider: "raw",
+        diffText,
+      });
+
+      const projectFiles = report.projectFiles ?? [];
+      expect(projectFiles.length).toBeGreaterThan(0);
+      const tsconfig = projectFiles.find((entry) =>
+        entry.path.endsWith("/tsconfig.json"),
+      );
+      expect(tsconfig?.type).toBe("typescript");
+
+      const compact = await analyzeImpactFromDiff(samplePath, index, {
+        provider: "raw",
+        diffText,
+        compact: true,
+      });
+      if ("files" in compact) {
+        const compactProjectFiles = compact.projectFiles ?? [];
+        expect(compactProjectFiles.length).toBeGreaterThan(0);
+      }
+    });
+
     it("should include export summaries and top impacts", async () => {
       const index = await createTestIndex("typescript");
       const samplePath = path.resolve(

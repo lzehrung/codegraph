@@ -1,5 +1,6 @@
 import type { FileId, Range } from "../types.js";
 import type { SymbolHandle, SymbolDef } from "../indexer.js";
+import type { ProjectFileInfo } from "../util.js";
 
 // Diff parsing types
 export type Hunk = {
@@ -147,6 +148,7 @@ export type ImpactItem = {
 
 // Main impact report
 export type ImpactReport = {
+  projectFiles?: ProjectFileInfo[];
   changedFiles: Array<{
     file: FileId;
     hunks: Array<{ start: number; end: number }>; // new-file line ranges
@@ -170,6 +172,7 @@ export type ImpactReport = {
 
 // Compact impact report with indexed arrays
 export type CompactImpactReport = {
+  projectFiles?: ProjectFileInfo[];
   files: FileId[]; // file index -> file path
   changedFiles: Array<{
     file: number; // index into files array

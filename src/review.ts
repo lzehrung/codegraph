@@ -28,6 +28,8 @@ import {
   listChangedFiles,
   fileExists,
   getUnifiedDiff,
+  discoverProjectFiles,
+  type ProjectFileInfo,
 } from "./util.js";
 
 type ReviewFileSummary = {
@@ -56,6 +58,7 @@ export type ReviewReport = {
   status: "ok" | "no_changes";
   base?: string;
   head?: string;
+  projectFiles?: ProjectFileInfo[];
   summary: {
     filesChanged: number;
     symbolsChanged: number;
@@ -450,9 +453,11 @@ export async function buildReviewReport(
       symbolsChanged: 0,
       exportedChanged: 0,
     });
+    const projectFiles = await discoverProjectFiles(projectRoot);
     const report: ReviewReport = {
       schemaVersion: REVIEW_SCHEMA_VERSION,
       status: "no_changes",
+      projectFiles,
       summary: { filesChanged: 0, symbolsChanged: 0, candidateTests: 0 },
       riskSummary,
       reviewTasks: buildReviewTasks({
@@ -799,9 +804,12 @@ export async function buildReviewReport(
     );
   }
 
+  const projectFiles =
+    index.projectFiles ?? (await discoverProjectFiles(projectRoot));
   const report: ReviewReport = {
     schemaVersion: REVIEW_SCHEMA_VERSION,
     status: "ok",
+    projectFiles,
     summary: {
       filesChanged: summaries.length,
       symbolsChanged: changedSymbolIds.length,
