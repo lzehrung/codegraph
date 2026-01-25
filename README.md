@@ -352,6 +352,14 @@ await analyzeImpactFromDiff(root, index, { provider: "git", base: "main", head: 
 
 Impact JSON responses can include `exportSummary` (exported changed symbols by file), `reexportChains` (file-level re-export chains for exported changes), `topImpacts` (top 10 impacted items with reasons), `surfaceArea` (fan-in/fan-out summary with top 10 lists), and `clusters` (connected change/impact groups with aggregated severity) when applicable.
 
+# File Summarization (Agentic)
+# Get a markdown overview of a file (imports, exports, definitions)
+npx tsx -e "import { tool_getFileOverview } from 'codegraph'; tool_getFileOverview('.', 'src/utils.ts').then(console.log)"
+
+# Symbol Search (Agentic)
+# Find symbols by name (fuzzy search)
+npx tsx -e "import { tool_findSymbol } from 'codegraph'; tool_findSymbol('.', 'collectGraph').then(console.log)"
+
 # Generate a PR review bundle (incremental graph + symbol summary)
 npx codegraph review --base origin/main --head HEAD > review.json
 # Include definition snippets + callsites (top-N) for changed symbols
@@ -853,6 +861,31 @@ const neighbors = querySymbolNeighbors(symbolGraph, {
 });
 ```
 
+### High-level Agent Tools
+
+These tools are designed to be directly exposed to LLM agents for file exploration and symbol discovery.
+
+```ts
+import { tool_getFileOverview, tool_findSymbol } from 'codegraph';
+
+// Get a Markdown summary of a file (Imports, Definitions with signatures/docstrings)
+const overview = await tool_getFileOverview(process.cwd(), 'src/utils.ts');
+console.log(overview);
+// Output:
+// # Overview of src/utils.ts
+// ## Imports
+// Imported symbols: fs, path
+// ## Definitions
+// ### function `readFile` (line 10)
+// > Reads a file safely...
+
+// Find symbols by name (fuzzy search)
+const matches = await tool_findSymbol(process.cwd(), 'collectGraph');
+console.log(matches);
+// Output:
+// [{ name: 'collectGraph', kind: 'function', file: 'src/graphs.ts', line: 150 }, ...]
+```
+
 ### Raw SQL from code (advanced)
 
 ```ts
@@ -979,6 +1012,7 @@ const index = await buildProjectIndex(root);
 // Enumerate symbols in a file, including import aliases
 const file = `${root}/tests/samples/monorepo/packages/pkg-b/src/index.js`.replace(/\\/g, '/');
 const items = listSymbols(index, { file, includeImports: true });
+// Items include: { id, file, name, kind, range, docstring }
 
 // Pick a handle (e.g., for alias "aHelper" or a local def)
 const handle = items.find(i => i.name === 'aHelper')?.id!;
