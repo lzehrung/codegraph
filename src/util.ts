@@ -44,6 +44,15 @@ export function toRange(node: any): Range {
   };
 }
 
+const DEFAULT_PROJECT_FILE_IGNORES = [
+  "**/node_modules/**",
+  "**/.git/**",
+  "**/dist/**",
+  "**/build/**",
+  "**/.venv/**",
+  "**/__pycache__/**",
+];
+
 export const DEFAULT_PROJECT_MANIFESTS = [
   "package.json",
   "package-lock.json",
@@ -91,18 +100,444 @@ export async function listProjectFiles(
     const files = await fg(patterns, {
       cwd: projectRoot,
       absolute: true,
-      ignore: [
-        "**/node_modules/**",
-        "**/.git/**",
-        "**/dist/**",
-        "**/build/**",
-        "**/.venv/**",
-        "**/__pycache__/**",
-      ],
+      ignore: DEFAULT_PROJECT_FILE_IGNORES,
     });
     return files.map(normalizePath);
   } catch (error) {
     console.warn(`Warning: Failed to list files in ${projectRoot}:`, error);
+    return [];
+  }
+}
+
+export type ProjectFileKind = "file" | "dir";
+export type ProjectFileRole =
+  | "manifest"
+  | "lockfile"
+  | "config"
+  | "solution"
+  | "ide";
+export type ProjectFileType =
+  | "node"
+  | "typescript"
+  | "python"
+  | "rust"
+  | "go"
+  | "maven"
+  | "gradle"
+  | "dotnet"
+  | "ruby"
+  | "php"
+  | "ide";
+
+export type ProjectFileInfo = {
+  path: string;
+  kind: ProjectFileKind;
+  type: ProjectFileType;
+  role: ProjectFileRole;
+  projectRoot: string;
+  name?: string;
+};
+
+type ProjectFileDefinition = {
+  type: ProjectFileType;
+  role: ProjectFileRole;
+  kind: ProjectFileKind;
+  patterns: string[];
+  parseName?: (contents: string, filePath: string) => string | null;
+  nameFromPath?: "file" | "dir";
+};
+
+function trimToNull(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseJsonName(raw: string): string | null {
+  try {
+    const data: unknown = JSON.parse(raw);
+    if (!isPlainRecord(data)) return null;
+    const name = data.name;
+    if (typeof name !== "string") return null;
+    return trimToNull(name);
+  } catch {
+    return null;
+  }
+}
+
+function stripTomlInlineComment(line: string): string {
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === "#") return line.slice(0, i);
+  }
+  return line;
+}
+
+function parseTomlName(raw: string, sections: string[]): string | null {
+  const lines = raw.split(/\r?\n/);
+  let currentSection = "";
+  for (const rawLine of lines) {
+    const line = stripTomlInlineComment(rawLine).trim();
+    if (!line) continue;
+    const sectionMatch = line.match(/^\[([^\]]+)\]\s*$/);
+    if (sectionMatch) {
+      currentSection = (sectionMatch[1] ?? "").trim();
+      continue;
+    }
+    if (!sections.includes(currentSection)) continue;
+    const nameMatch = line.match(/^name\s*=\s*("([^"]*)"|'([^']*)')/);
+    if (!nameMatch) continue;
+    return trimToNull(nameMatch[2] ?? nameMatch[3] ?? "");
+  }
+  return null;
+}
+
+function parseIniName(raw: string, section: string, key: string): string | null {
+  const lines = raw.split(/\r?\n/);
+  let currentSection = "";
+  const targetSection = section.toLowerCase();
+  const targetKey = key.toLowerCase();
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith(";")) continue;
+    const sectionMatch = trimmed.match(/^\[([^\]]+)\]\s*$/);
+    if (sectionMatch) {
+      currentSection = (sectionMatch[1] ?? "").trim().toLowerCase();
+      continue;
+    }
+    if (currentSection !== targetSection) continue;
+    const keyMatch = trimmed.match(/^([^=]+)=(.+)$/);
+    if (!keyMatch) continue;
+    const foundKey = (keyMatch[1] ?? "").trim().toLowerCase();
+    if (foundKey !== targetKey) continue;
+    const value = (keyMatch[2] ?? "").trim();
+    return trimToNull(value.replace(/^['"]|['"]$/g, ""));
+  }
+  return null;
+}
+
+function parseSetupPyName(raw: string): string | null {
+  const match = raw.match(/\bname\s*=\s*["']([^"']+)["']/);
+  return trimToNull(match?.[1]);
+}
+
+function parsePomName(raw: string): string | null {
+  const withoutParent = raw.replace(/<parent>[\s\S]*?<\/parent>/gi, "");
+  const nameMatch = withoutParent.match(/<name>\s*([^<]+)\s*<\/name>/i);
+  if (nameMatch) return trimToNull(nameMatch[1]);
+  const artifactMatch = withoutParent.match(
+    /<artifactId>\s*([^<]+)\s*<\/artifactId>/i,
+  );
+  if (artifactMatch) return trimToNull(artifactMatch[1]);
+  return null;
+}
+
+function parseGradleName(raw: string): string | null {
+  const match = raw.match(/\brootProject\.name\s*=\s*["']([^"']+)["']/);
+  return trimToNull(match?.[1]);
+}
+
+function parseGradlePropertiesName(raw: string): string | null {
+  const match = raw.match(
+    /^\s*rootProject\.name\s*=\s*["']([^"']+)["']/m,
+  );
+  return trimToNull(match?.[1]);
+}
+
+function parseDotnetName(raw: string): string | null {
+  const tags = ["AssemblyName", "PackageId", "RootNamespace"];
+  for (const tag of tags) {
+    const match = raw.match(
+      new RegExp(`<${tag}>\\s*([^<]+)\\s*</${tag}>`, "i"),
+    );
+    if (match) return trimToNull(match[1]);
+  }
+  return null;
+}
+
+function parseGoModuleName(raw: string): string | null {
+  const lines = raw.split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = stripInlineComment(rawLine);
+    if (!line) continue;
+    const match = line.match(/^module\s+(.+)$/);
+    if (match) return trimToNull(match[1]);
+  }
+  return null;
+}
+
+const PROJECT_FILE_DEFINITIONS: ProjectFileDefinition[] = [
+  {
+    type: "node",
+    role: "manifest",
+    kind: "file",
+    patterns: ["package.json"],
+    parseName: parseJsonName,
+    nameFromPath: "dir",
+  },
+  {
+    type: "node",
+    role: "lockfile",
+    kind: "file",
+    patterns: ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb"],
+  },
+  {
+    type: "typescript",
+    role: "config",
+    kind: "file",
+    patterns: ["tsconfig.json", "jsconfig.json"],
+  },
+  {
+    type: "python",
+    role: "manifest",
+    kind: "file",
+    patterns: ["pyproject.toml"],
+    parseName: (raw) => parseTomlName(raw, ["project", "tool.poetry"]),
+    nameFromPath: "dir",
+  },
+  {
+    type: "python",
+    role: "manifest",
+    kind: "file",
+    patterns: ["setup.cfg"],
+    parseName: (raw) => parseIniName(raw, "metadata", "name"),
+    nameFromPath: "dir",
+  },
+  {
+    type: "python",
+    role: "manifest",
+    kind: "file",
+    patterns: ["setup.py"],
+    parseName: parseSetupPyName,
+    nameFromPath: "dir",
+  },
+  {
+    type: "python",
+    role: "manifest",
+    kind: "file",
+    patterns: ["requirements.txt", "requirements.in", "Pipfile"],
+    nameFromPath: "dir",
+  },
+  {
+    type: "python",
+    role: "lockfile",
+    kind: "file",
+    patterns: ["Pipfile.lock", "poetry.lock"],
+  },
+  {
+    type: "rust",
+    role: "manifest",
+    kind: "file",
+    patterns: ["Cargo.toml"],
+    parseName: (raw) => parseTomlName(raw, ["package"]),
+    nameFromPath: "dir",
+  },
+  {
+    type: "rust",
+    role: "lockfile",
+    kind: "file",
+    patterns: ["Cargo.lock"],
+  },
+  {
+    type: "go",
+    role: "manifest",
+    kind: "file",
+    patterns: ["go.mod"],
+    parseName: parseGoModuleName,
+    nameFromPath: "dir",
+  },
+  {
+    type: "go",
+    role: "lockfile",
+    kind: "file",
+    patterns: ["go.sum"],
+  },
+  {
+    type: "ruby",
+    role: "manifest",
+    kind: "file",
+    patterns: ["Gemfile"],
+    nameFromPath: "dir",
+  },
+  {
+    type: "ruby",
+    role: "lockfile",
+    kind: "file",
+    patterns: ["Gemfile.lock"],
+  },
+  {
+    type: "maven",
+    role: "manifest",
+    kind: "file",
+    patterns: ["pom.xml"],
+    parseName: parsePomName,
+    nameFromPath: "dir",
+  },
+  {
+    type: "gradle",
+    role: "manifest",
+    kind: "file",
+    patterns: [
+      "build.gradle",
+      "build.gradle.kts",
+      "settings.gradle",
+      "settings.gradle.kts",
+    ],
+    parseName: parseGradleName,
+    nameFromPath: "dir",
+  },
+  {
+    type: "gradle",
+    role: "config",
+    kind: "file",
+    patterns: ["gradle.properties"],
+    parseName: parseGradlePropertiesName,
+    nameFromPath: "dir",
+  },
+  {
+    type: "dotnet",
+    role: "manifest",
+    kind: "file",
+    patterns: ["*.csproj"],
+    parseName: parseDotnetName,
+    nameFromPath: "file",
+  },
+  {
+    type: "dotnet",
+    role: "solution",
+    kind: "file",
+    patterns: ["*.sln"],
+    nameFromPath: "file",
+  },
+  {
+    type: "php",
+    role: "manifest",
+    kind: "file",
+    patterns: ["composer.json"],
+    parseName: parseJsonName,
+    nameFromPath: "dir",
+  },
+  {
+    type: "php",
+    role: "lockfile",
+    kind: "file",
+    patterns: ["composer.lock"],
+  },
+  {
+    type: "ide",
+    role: "ide",
+    kind: "dir",
+    patterns: [".idea"],
+    nameFromPath: "dir",
+  },
+];
+
+function toProjectGlob(pattern: string): string {
+  return pattern.startsWith("**/") ? pattern : `**/${pattern}`;
+}
+
+async function buildProjectFileInfo(
+  def: ProjectFileDefinition,
+  filePath: string,
+): Promise<ProjectFileInfo> {
+  const normalizedPath = normalizePath(filePath);
+  const projectRoot = normalizePath(path.dirname(filePath));
+  let name: string | null = null;
+  if (def.parseName && def.kind === "file") {
+    try {
+      const raw = await fsp.readFile(filePath, "utf8");
+      name = def.parseName(raw, filePath);
+    } catch {
+      name = null;
+    }
+  }
+  if (!name && def.nameFromPath) {
+    if (def.nameFromPath === "file") {
+      name = trimToNull(path.basename(filePath, path.extname(filePath)));
+    } else {
+      name = trimToNull(path.basename(projectRoot));
+    }
+  }
+  return {
+    path: normalizedPath,
+    kind: def.kind,
+    type: def.type,
+    role: def.role,
+    projectRoot,
+    ...(name ? { name } : {}),
+  };
+}
+
+export async function discoverProjectFiles(
+  projectRoot: string,
+): Promise<ProjectFileInfo[]> {
+  try {
+    const root = path.resolve(projectRoot);
+    const fileDefs = PROJECT_FILE_DEFINITIONS.filter(
+      (def) => def.kind === "file",
+    );
+    const dirDefs = PROJECT_FILE_DEFINITIONS.filter(
+      (def) => def.kind === "dir",
+    );
+    const fileMatches = await Promise.all(
+      fileDefs.map(async (def) => {
+        const patterns = def.patterns.map(toProjectGlob);
+        const matches = await fg(patterns, {
+          cwd: root,
+          absolute: true,
+          dot: true,
+          ignore: DEFAULT_PROJECT_FILE_IGNORES,
+        });
+        return { def, matches };
+      }),
+    );
+    const dirMatches = await Promise.all(
+      dirDefs.map(async (def) => {
+        const patterns = def.patterns.map(toProjectGlob);
+        const matches = await fg(patterns, {
+          cwd: root,
+          absolute: true,
+          dot: true,
+          onlyDirectories: true,
+          ignore: DEFAULT_PROJECT_FILE_IGNORES,
+        });
+        return { def, matches };
+      }),
+    );
+    const entries = await Promise.all(
+      [...fileMatches, ...dirMatches].flatMap(({ def, matches }) =>
+        matches.map(async (match) => await buildProjectFileInfo(def, match)),
+      ),
+    );
+    const byKey = new Map<string, ProjectFileInfo>();
+    for (const entry of entries) {
+      const key = `${entry.path}::${entry.type}::${entry.role}`;
+      const existing = byKey.get(key);
+      if (!existing || (!existing.name && entry.name)) {
+        byKey.set(key, entry);
+      }
+    }
+    return Array.from(byKey.values()).sort((a, b) => {
+      if (a.path === b.path) return a.type.localeCompare(b.type);
+      return a.path.localeCompare(b.path);
+    });
+  } catch (error) {
+    console.warn(
+      `Warning: Failed to discover project files in ${projectRoot}:`,
+      error,
+    );
     return [];
   }
 }

@@ -67,6 +67,9 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * Workspace detection (npm/yarn/pnpm/lerna)
   * Per-file TypeScript config resolution
   * Package-relative import resolution
+* **Project file discovery**
+  * Finds common manifests (package.json, pyproject.toml, pom.xml, build.gradle, .csproj, .sln, .idea)
+  * Extracts lightweight project names when metadata is available
 * **Semantic chunking**
   * Tree-sitter-based code splitting for JS/TS/Python into embedding-ready chunks
   * Text file chunking for JSON/YAML/config files
@@ -877,6 +880,16 @@ import { listProjectFiles } from 'codegraph';
 const files = await listProjectFiles(root);
 const manifests = files.filter((file) => /(?:package\.json|pyproject\.toml|Cargo\.toml)$/.test(file));
 console.log(manifests);
+```
+
+Discover project files with metadata (type, role, project root, optional name):
+
+```ts
+import { discoverProjectFiles } from 'codegraph';
+
+const projectFiles = await discoverProjectFiles(root);
+const named = projectFiles.filter((file) => file.name);
+console.log(named);
 ```
 
 ```ts

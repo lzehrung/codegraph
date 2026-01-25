@@ -4,6 +4,7 @@ export {
   unquote,
   toRange,
   listProjectFiles,
+  discoverProjectFiles,
   stripJsLikeComments,
   stripPythonCommentsAndStrings,
   loadNearestTsconfigFor,
@@ -14,6 +15,12 @@ export {
   resolvePackageSubpath,
   getGitHead,
   listChangedFiles,
+} from "./util.js";
+export type {
+  ProjectFileInfo,
+  ProjectFileKind,
+  ProjectFileRole,
+  ProjectFileType,
 } from "./util.js";
 export {
   collectGraph,
