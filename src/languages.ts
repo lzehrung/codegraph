@@ -120,13 +120,14 @@ export function supportById(id: string): LanguageSupport | undefined {
   return LANGUAGE_SUPPORTS.find((s) => s.id === id);
 }
 
+const HEADER_SAMPLE_SIZE = 8000;
 const CPP_HEADER_HINT =
   /\b(class|namespace|template|typename|constexpr|operator|using\s+namespace)\b|::/;
 
 function readFileSample(filePath: string): string | null {
   try {
     const contents = fs.readFileSync(filePath, "utf8");
-    return contents.slice(0, 8000);
+    return contents.slice(0, HEADER_SAMPLE_SIZE);
   } catch {
     return null;
   }
