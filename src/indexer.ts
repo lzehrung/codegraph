@@ -671,8 +671,7 @@ function createFallbackImportExtractionHandler(
   const warningLimit = 20;
   let warningCount = 0;
   const logLevel = opts?.logLevel ?? "warn";
-  const shouldLog =
-    logLevel !== "silent" && logLevel !== "error" && logLevel !== "off";
+  const shouldLog = logLevel !== "silent" && logLevel !== "error";
 
   return (event: FallbackImportExtractionEvent) => {
     const filePath = event.file ? event.file.replace(/\\/g, "/") : "unknown";
