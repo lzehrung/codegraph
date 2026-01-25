@@ -315,6 +315,145 @@ const definitions: LanguageTestDefinition[] = [
     },
   },
   {
+    id: "c",
+    parity: {
+      sampleDir: "c",
+      dependencyGraph: [
+        { from: "main.c", to: { type: "file", path: "utils.h" } },
+        { from: "main.c", to: { type: "file", path: "helpers.h" } },
+      ],
+      symbols: [
+        {
+          file: "utils.h",
+          includes: [{ name: "helper_function" }, { name: "Utility" }],
+        },
+      ],
+      goToDefinition: [
+        {
+          name: "go to definition resolves helper_function",
+          file: "main.c",
+          line: 5,
+          column: 15,
+          expectedDefinition: { file: "utils.h", line: 8 },
+        },
+      ],
+      references: [
+        {
+          name: "find references for helper_function",
+          file: "utils.h",
+          line: 8,
+          column: 5,
+          minimumCount: 1,
+        },
+      ],
+    },
+  },
+  {
+    id: "cpp",
+    parity: {
+      sampleDir: "cpp",
+      dependencyGraph: [
+        { from: "main.cpp", to: { type: "file", path: "utils.hpp" } },
+        { from: "main.cpp", to: { type: "file", path: "helpers.hpp" } },
+      ],
+      symbols: [
+        {
+          file: "utils.hpp",
+          includes: [{ name: "helperFunction" }, { name: "UtilityClass" }],
+        },
+      ],
+      goToDefinition: [
+        {
+          name: "go to definition resolves helperFunction",
+          file: "main.cpp",
+          line: 5,
+          column: 15,
+          expectedDefinition: { file: "utils.hpp", line: 7 },
+        },
+      ],
+      references: [
+        {
+          name: "find references for helperFunction",
+          file: "utils.hpp",
+          line: 7,
+          column: 5,
+          minimumCount: 1,
+        },
+      ],
+    },
+  },
+  {
+    id: "kotlin",
+    parity: {
+      sampleDir: "kotlin",
+      dependencyGraph: [
+        { from: "main.kt", to: { type: "file", path: "utils/helperFunction.kt" } },
+        {
+          from: "main.kt",
+          to: { type: "file", path: "helpers/helperFromHelpers.kt" },
+        },
+      ],
+      symbols: [
+        {
+          file: "utils/helperFunction.kt",
+          includes: [{ name: "helperFunction" }, { name: "UtilityClass" }],
+        },
+      ],
+      goToDefinition: [
+        {
+          name: "go to definition resolves helperFunction",
+          file: "main.kt",
+          line: 5,
+          column: 15,
+          expectedDefinition: { file: "utils/helperFunction.kt", line: 3 },
+        },
+      ],
+      references: [
+        {
+          name: "find references for helperFunction",
+          file: "utils/helperFunction.kt",
+          line: 3,
+          column: 5,
+          minimumCount: 1,
+        },
+      ],
+    },
+  },
+  {
+    id: "swift",
+    parity: {
+      sampleDir: "swift",
+      dependencyGraph: [
+        { from: "main.swift", to: { type: "file", path: "Utils.swift" } },
+        { from: "main.swift", to: { type: "file", path: "Helpers.swift" } },
+      ],
+      symbols: [
+        {
+          file: "Utils.swift",
+          includes: [{ name: "helperFunction" }, { name: "UtilityStruct" }],
+        },
+      ],
+      goToDefinition: [
+        {
+          name: "go to definition resolves helperFunction",
+          file: "main.swift",
+          line: 5,
+          column: 21,
+          expectedDefinition: { file: "Utils.swift", line: 1 },
+        },
+      ],
+      references: [
+        {
+          name: "find references for helperFunction",
+          file: "Utils.swift",
+          line: 1,
+          column: 13,
+          minimumCount: 1,
+        },
+      ],
+    },
+  },
+  {
     id: "html",
     parity: {
       sampleDir: "html",
