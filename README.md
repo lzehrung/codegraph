@@ -63,6 +63,11 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * **Circuit breaker**: Detects extremely large diffs and provides a warning if analysis might be partial
   * Git/GitHub integration with configurable depth and scope
   * Missing import/export/declaration suggestions include a high/medium/low confidence score for quick triage
+* **Why not use an LSP?**
+  * **Latency & "Cold Start"**: LSPs are designed for long-running editor sessions. They take minutes to initialize and type-check a large repo. `codegraph` parses and indexes in seconds, making it suitable for ephemeral agent environments.
+  * **Multi-Language Complexity**: An agent environment would need to manage separate heavy LSP processes for TS, Python, Go, Java, etc. `codegraph` is a single lightweight library that handles all of them uniformly.
+  * **"Global" vs. "Local" Context**: LSPs answer "what is under my cursor?". `codegraph` answers "what is the structure of this module?" or "what depends on this file?". It provides the high-level graph view that agents need to plan their exploration.
+  * **Robustness to Broken Code**: LSPs often fail or degrade when code doesn't compile or dependencies are missing. `codegraph` uses robust parsing (Tree-sitter) to extract structure even from broken or incomplete projects, which is critical when agents are tasked with fixing builds.
 * **Monorepo support**
   * Workspace detection (npm/yarn/pnpm/lerna)
   * Per-file TypeScript config resolution
