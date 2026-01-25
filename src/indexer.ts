@@ -178,6 +178,8 @@ export type BuildOptions = {
   incrementalStrict?: boolean;
   /** Optional build report data for observability */
   report?: BuildReport;
+  /** Log level for build warnings (default: "warn") */
+  logLevel?: "error" | "warn" | "info" | "debug" | "silent";
 };
 
 export type IncrementalBuildOptions = BuildOptions & {
@@ -410,6 +412,8 @@ export type SymbolListItem = {
   file: FileId;
   name: string;
   kind: SymbolKind | "import" | "namespaceImport";
+  range?: Range;
+  docstring?: string;
 };
 
 export function listSymbols(
@@ -430,6 +434,8 @@ export function listSymbols(
         file: f,
         name: def.localName,
         kind: def.kind,
+        range: def.range,
+        ...(def.docstring ? { docstring: def.docstring } : {}),
       });
     }
     if (opts?.includeImports) {
@@ -659,10 +665,15 @@ function initFallbackImportExtractionReport(
 
 function createFallbackImportExtractionHandler(
   report: BuildReport | undefined,
+  opts?: BuildOptions,
 ): ((event: FallbackImportExtractionEvent) => void) | undefined {
   const fallbackReport = initFallbackImportExtractionReport(report);
   const warningLimit = 20;
   let warningCount = 0;
+  const logLevel = opts?.logLevel ?? "warn";
+  const shouldLog =
+    logLevel !== "silent" && logLevel !== "error" && logLevel !== "off";
+
   return (event: FallbackImportExtractionEvent) => {
     const filePath = event.file ? event.file.replace(/\\/g, "/") : "unknown";
     if (fallbackReport) {
@@ -676,6 +687,7 @@ function createFallbackImportExtractionHandler(
         reason: event.reason,
       };
     }
+    if (!shouldLog) return;
     if (warningCount >= warningLimit) return;
     warningCount += 1;
     console.warn("Warning: Regex fallback import extraction", event);
@@ -2388,7 +2400,7 @@ async function buildIndexFromFileListShared(
   }
   const fileReport = initFileReport(report);
   const onFallbackImportExtraction =
-    createFallbackImportExtractionHandler(report);
+    createFallbackImportExtractionHandler(report, opts);
   if (fileReport) {
     fileReport.total = normalizedFiles.length;
   }
@@ -2734,7 +2746,7 @@ export async function buildProjectIndexIncremental(
   const cacheMode = opts?.cache ?? "off";
   const cacheEnabled = cacheMode !== "off";
   const onFallbackImportExtraction =
-    createFallbackImportExtractionHandler(report);
+    createFallbackImportExtractionHandler(report, opts);
   const manifestStart = performance.now();
   const manifest = await loadManifest(projectRoot, opts);
   if (timings) timings.manifestMs = Math.round(performance.now() - manifestStart);

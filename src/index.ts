@@ -157,7 +157,12 @@ export {
   type SymbolHash,
   type SymbolManifestEntry,
 } from "./util/symbolHash.js";
-export { tool_impactJSON, tool_impactFromDiffText } from "./agent-tools.js";
+export {
+  tool_impactJSON,
+  tool_impactFromDiffText,
+  tool_getFileOverview,
+  tool_findSymbol,
+} from "./agent-tools.js";
 export {
   writeGraphSqlite,
   updateGraphSqlite,
