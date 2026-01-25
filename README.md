@@ -853,6 +853,48 @@ const neighbors = querySymbolNeighbors(symbolGraph, {
 });
 ```
 
+### High-level Agent Tools
+
+These functions are designed to be imported and used directly by agent codebases to explore the codebase and discover symbols.
+
+```ts
+import {
+  tool_getFileOverview,
+  tool_findSymbol,
+  tool_impactJSON
+} from 'codegraph';
+
+// 1. Get a Markdown summary of a file (Imports, Definitions with signatures/docstrings)
+// Useful for "reading" a file's structure before deciding to read the full content.
+const overview = await tool_getFileOverview(process.cwd(), 'src/utils.ts');
+console.log(overview);
+// Output:
+// # Overview of src/utils.ts
+// ## Imports
+// Imported symbols: fs, path
+// ## Definitions
+// ### function `readFile` (line 10)
+// > Reads a file safely...
+
+// 2. Find symbols by name (fuzzy search)
+// Useful for locating relevant code when the file path is unknown.
+const matches = await tool_findSymbol(process.cwd(), 'collectGraph');
+console.log(matches);
+// Output:
+// [{ name: 'collectGraph', kind: 'function', file: 'src/graphs.ts', line: 150 }, ...]
+
+// 3. Analyze PR impact programmatically
+// Returns a JSON report suitable for LLM consumption.
+const impact = await tool_impactJSON(process.cwd(), {
+  provider: 'git',
+  base: 'main',
+  head: 'feature-branch'
+});
+if (impact.status === 'ok') {
+  console.log('Impacted files:', impact.report.impacted.map(i => i.file));
+}
+```
+
 ### Raw SQL from code (advanced)
 
 ```ts
@@ -979,6 +1021,7 @@ const index = await buildProjectIndex(root);
 // Enumerate symbols in a file, including import aliases
 const file = `${root}/tests/samples/monorepo/packages/pkg-b/src/index.js`.replace(/\\/g, '/');
 const items = listSymbols(index, { file, includeImports: true });
+// Items include: { id, file, name, kind, range, docstring }
 
 // Pick a handle (e.g., for alias "aHelper" or a local def)
 const handle = items.find(i => i.name === 'aHelper')?.id!;
