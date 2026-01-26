@@ -28,7 +28,7 @@ describe('Python namespace packages (PEP 420)', () => {
     ];
     const graph = await collectGraph(root, files);
     // Expect edges from app/main.py to util.py
-    const hasUtilEdge = graph.edges.some(e => e.from.replace(/\\/g, '/').endsWith('/app/main.py') && (e.to as any).type === 'file' && ((e.to as any).path as string).replace(/\\/g, '/').endsWith('/pkg_ns/submod/util.py'));
+    const hasUtilEdge = graph.edges.some(e => e.from.replace(/\\/g, '/').endsWith('/app/main.py') && (e.to).type === 'file' && ((e.to).path as string).replace(/\\/g, '/').endsWith('/pkg_ns/submod/util.py'));
     expect(hasUtilEdge).toBe(true);
   });
 

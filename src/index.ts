@@ -64,6 +64,7 @@ export {
   type ProjectIndex,
   type ResolvedExport,
   type BuildReport,
+  type BuildOptions,
   type CacheReport,
   type BuildTimingReport,
   type BuildFileReport,

@@ -5,7 +5,7 @@ import fg from "fast-glob";
 import Parser from "tree-sitter";
 import crypto from "node:crypto";
 import { performance } from "node:perf_hooks";
-import { supportForFile, getCompiledQueries } from "./languages.js";
+import { supportForFile, getCompiledQueries, type LanguageSupport } from "./languages.js";
 import { prepareParserInput } from "./languages/filePrep.js";
 import {
   listProjectFiles,
@@ -253,7 +253,7 @@ export type GraphDeltaReport = {
 export type SymbolHandle = string;
 
 export function symbolId(def: SymbolDef): SymbolHandle {
-  const idx = (def as any)?.range?.start?.index ?? 0;
+  const idx = def?.range?.start?.index ?? 0;
   return `${def.file}::${def.localName}::${idx}`;
 }
 
@@ -273,8 +273,7 @@ export function defFromSymbolId(
   if (!mod) return null;
   const exact = mod.locals.find(
     (d) =>
-      d.localName === localName &&
-      ((d as any).range?.start?.index ?? 0) === startIndex,
+      d.localName === localName && (d.range?.start?.index ?? 0) === startIndex,
   );
   if (exact) return exact;
   const byName = mod.locals.find((d) => d.localName === localName);
@@ -296,11 +295,12 @@ export function resolveSymbolId(
 
     // Prefer named, then default, then namespace
     const named = mod.imports.find(
-      (i) => (i as any).kind === "named" && (i as any).local === alias,
-    ) as any;
+      (i): i is ImportBinding & { kind: "named" } =>
+        i.kind === "named" && i.local === alias,
+    );
     if (named) {
       const res = resolveImported(index, named, named.imported);
-      if (res && !("namespace" in res)) return res as SymbolDef;
+      if (res && !("namespace" in res)) return res;
       const target =
         typeof named.resolved === "string" ? named.resolved : undefined;
       if (target) {
@@ -310,31 +310,36 @@ export function resolveSymbolId(
     }
 
     const deflt = mod.imports.find(
-      (i) => (i as any).kind === "default" && (i as any).local === alias,
-    ) as any;
+      (i): i is ImportBinding & { kind: "default" } =>
+        i.kind === "default" && i.local === alias,
+    );
     if (deflt) {
       const res = resolveImported(index, deflt, "default");
-      if (res && !("namespace" in res)) return res as SymbolDef;
+      if (res && !("namespace" in res)) return res;
       const target =
         typeof deflt.resolved === "string" ? deflt.resolved : undefined;
       if (target) {
         const hit = resolveExport(index, target, "default");
         if (hit?.kind === "resolved") return hit.def;
         const tmod = index.byFile.get(target);
-        const first = tmod?.exports.find((e: any) => e.type === "local") as any;
-        if (first) return first.target as SymbolDef;
+        const first = tmod?.exports.find(
+          (e): e is ExportEntry & { type: "local" } => e.type === "local",
+        );
+        if (first) return first.target;
       }
     }
 
     const ns = mod.imports.find(
-      (i) => (i as any).kind === "namespace" && (i as any).localNS === alias,
-    ) as any;
+      (i) => i.kind === "namespace" && i.localNS === alias,
+    );
     if (ns) {
       const target = typeof ns.resolved === "string" ? ns.resolved : undefined;
       if (target) {
         const tmod = index.byFile.get(target);
-        const first = tmod?.exports.find((e: any) => e.type === "local") as any;
-        if (first) return first.target as SymbolDef;
+        const first = tmod?.exports.find(
+          (e): e is ExportEntry & { type: "local" } => e.type === "local",
+        );
+        if (first) return first.target;
         const firstLocal = tmod?.locals?.[0];
         if (firstLocal) return firstLocal;
       }
@@ -440,25 +445,25 @@ export function listSymbols(
     }
     if (opts?.includeImports) {
       for (const imp of mod.imports) {
-        if ((imp as any).kind === "named")
+        if (imp.kind === "named")
           out.push({
-            id: `${f}::${(imp as any).local}::import`,
+            id: `${f}::${imp.local}::import`,
             file: f,
-            name: (imp as any).local,
+            name: imp.local,
             kind: "import",
           });
-        else if ((imp as any).kind === "default")
+        else if (imp.kind === "default")
           out.push({
-            id: `${f}::${(imp as any).local}::import`,
+            id: `${f}::${imp.local}::import`,
             file: f,
-            name: (imp as any).local,
+            name: imp.local,
             kind: "import",
           });
-        else if ((imp as any).kind === "namespace")
+        else if (imp.kind === "namespace")
           out.push({
-            id: `${f}::${(imp as any).localNS}::import`,
+            id: `${f}::${imp.localNS}::import`,
             file: f,
-            name: (imp as any).localNS,
+            name: imp.localNS,
             kind: "namespaceImport",
           });
       }
@@ -633,7 +638,9 @@ function initCacheReport(
   return report.cache;
 }
 
-function initFileReport(report: BuildReport | undefined): BuildFileReport | undefined {
+function initFileReport(
+  report: BuildReport | undefined,
+): BuildFileReport | undefined {
   if (!report) return undefined;
   if (!report.files) {
     report.files = { total: 0, cached: 0, parsed: 0 };
@@ -751,7 +758,9 @@ async function fileSignature(
   opts?: { forceContentHash?: boolean },
 ): Promise<FileSignature> {
   const includeContentHash = opts?.forceContentHash === true;
-  const statOpts = includeContentHash ? { includeContentHash: true } : undefined;
+  const statOpts = includeContentHash
+    ? { includeContentHash: true }
+    : undefined;
   const { sig, contentHash } = await fileStatSignature(file, strict, statOpts);
   const cacheSig = gitSig ?? contentHash ?? sig;
   if (gitSig) {
@@ -782,9 +791,8 @@ async function buildBloomFilterForFile(
   try {
     const source = await fsp.readFile(file, "utf8");
     const sup = supportForFile(file);
-    const { buildBloomFilterFromSource } = await import(
-      "./util/bloomFilter.js"
-    );
+    const { buildBloomFilterFromSource } =
+      await import("./util/bloomFilter.js");
     return buildBloomFilterFromSource(source, sup.id);
   } catch {
     return null;
@@ -1042,10 +1050,10 @@ function diffBuildOptions(
     diffs.push("cacheStrict");
   if (normalizedManifest.useBloomFilters !== normalizedCurrent.useBloomFilters)
     diffs.push("useBloomFilters");
-  if (normalizedManifest.preset !== normalizedCurrent.preset) diffs.push("preset");
+  if (normalizedManifest.preset !== normalizedCurrent.preset)
+    diffs.push("preset");
   if (
-    normalizedManifest.incrementalStrict !==
-    normalizedCurrent.incrementalStrict
+    normalizedManifest.incrementalStrict !== normalizedCurrent.incrementalStrict
   )
     diffs.push("incrementalStrict");
   return diffs;
@@ -1069,7 +1077,9 @@ function normalizeGraphOptions(opts?: GraphBuildOptions): GraphBuildOptions {
 
 function edgeKey(edge: Edge): string {
   const toKey =
-    edge.to.type === "file" ? `file:${edge.to.path}` : `external:${edge.to.name}`;
+    edge.to.type === "file"
+      ? `file:${edge.to.path}`
+      : `external:${edge.to.name}`;
   const typeOnly = edge.typeOnly ? "1" : "0";
   return `${edge.from}|${toKey}|${edge.raw}|${typeOnly}`;
 }
@@ -1080,10 +1090,8 @@ function compareEdges(left: Edge, right: Edge): number {
   if (left.to.type !== right.to.type) {
     return left.to.type === "file" ? -1 : 1;
   }
-  const leftTo =
-    left.to.type === "file" ? left.to.path : left.to.name;
-  const rightTo =
-    right.to.type === "file" ? right.to.path : right.to.name;
+  const leftTo = left.to.type === "file" ? left.to.path : left.to.name;
+  const rightTo = right.to.type === "file" ? right.to.path : right.to.name;
   const toCompare = leftTo.localeCompare(rightTo);
   if (toCompare !== 0) return toCompare;
   const rawCompare = left.raw.localeCompare(right.raw);
@@ -1098,7 +1106,10 @@ function toRelativeEdge(projectRoot: string, edge: Edge): Edge {
     from: normalizePath(path.relative(projectRoot, edge.from)),
     to:
       edge.to.type === "file"
-        ? { type: "file", path: normalizePath(path.relative(projectRoot, edge.to.path)) }
+        ? {
+            type: "file",
+            path: normalizePath(path.relative(projectRoot, edge.to.path)),
+          }
         : edge.to,
     raw: edge.raw,
     ...(edge.typeOnly ? { typeOnly: edge.typeOnly } : {}),
@@ -1108,15 +1119,7 @@ function toRelativeEdge(projectRoot: string, edge: Edge): Edge {
 export function collectLocalsAndExportsFromSource(
   file: string,
   source: string,
-  support: {
-    id: string;
-    queries: any;
-    classifyDefinition: (n: Parser.SyntaxNode) => string;
-    nodeTypes: any;
-    createsFunctionScope: (n: Parser.SyntaxNode) => boolean;
-    createsBlockScope: (n: Parser.SyntaxNode) => boolean;
-    isDeclarationName: (n: Parser.SyntaxNode) => boolean;
-  },
+  support: LanguageSupport,
   lang: Parser.Language,
   imports: ImportBinding[] = [],
   opts?: { tree?: Parser.Tree },
@@ -1254,9 +1257,8 @@ export function collectLocalsAndExportsFromSource(
   let tree: Parser.Tree | null = opts?.tree ?? null;
   if (!tree) {
     try {
-      const key = (
-        support.id === "python" ? "py" : support.id === "js" ? "js" : "ts"
-      ) as any;
+      const key =
+        support.id === "python" ? "py" : support.id === "js" ? "js" : "ts";
       const parser = acquireParser(lang, key);
       try {
         parser.setLanguage(lang);
@@ -1278,7 +1280,7 @@ export function collectLocalsAndExportsFromSource(
   if (tree) {
     if (support.id === "python") {
       try {
-        const { locals: q } = getCompiledQueries(lang, support as any);
+        const { locals: q } = getCompiledQueries(lang, support);
         for (const m of q.matches(tree.rootNode))
           for (const cap of m.captures) {
             if (cap.name === "name" || cap.name === "tname") {
@@ -1322,7 +1324,7 @@ export function collectLocalsAndExportsFromSource(
   const exports: ExportEntry[] = [];
   if (support.queries.exports.trim() && tree) {
     try {
-      const { exports: q } = getCompiledQueries(lang, support as any);
+      const { exports: q } = getCompiledQueries(lang, support);
       for (const m of q.matches(tree.rootNode)) {
         const map = Object.fromEntries(
           m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const),
@@ -1351,7 +1353,7 @@ export function collectLocalsAndExportsFromSource(
             if (items.length === 0) {
               // Fallback: handle tuples/multiline/concatenations by scanning a small window after assignment
               const assignIdx = map["stmt"]
-                ? (map["stmt"].node as any).startIndex
+                ? map["stmt"].node.startIndex
                 : source.indexOf("__all__");
               if (assignIdx >= 0) {
                 const window = source.slice(assignIdx, assignIdx + 800);
@@ -1361,7 +1363,11 @@ export function collectLocalsAndExportsFromSource(
                   const local = locals.find((d) => d.localName === name);
                   if (
                     local &&
-                    !exports.some((e) => (e as any).exportedAs === name)
+                    !exports.some(
+                      (e) =>
+                        e.type !== "exportStar" &&
+                        (e as { exportedAs: string }).exportedAs === name,
+                    )
                   )
                     exports.push({
                       type: "local",
@@ -1437,11 +1443,7 @@ export function collectLocalsAndExportsFromSource(
         if (map["cjs_export_name"] && map["cjs_fn"]) {
           const exportedAs = sliceText(map["cjs_export_name"].node, source);
           const defRange = toRange(map["cjs_fn"].node);
-          const sym = buildSymbolDef(
-            exportedAs,
-            SymbolKind.Function,
-            defRange,
-          );
+          const sym = buildSymbolDef(exportedAs, SymbolKind.Function, defRange);
           locals.push(sym);
           exports.push({ type: "local", exportedAs, target: sym });
           continue;
@@ -1589,7 +1591,7 @@ export function collectLocalsAndExportsFromSource(
         );
         if (!mm) continue;
         const srcName = mm[1]!;
-        const alias = (mm[2] ?? srcName) as string;
+        const alias = (mm[2] ?? srcName);
         if (
           !exports.some(
             (e) =>
@@ -1643,8 +1645,8 @@ export function collectLocalsAndExportsFromSource(
     while ((m = reCjsFn.exec(source))) {
       const exportedAs = m[1]!;
       if (!locals.find((d) => d.localName === exportedAs)) {
-        const idx = m.index + m[0]!.indexOf(exportedAs);
-        const pos = { line: 1, column: 1, index: idx } as any;
+        const idx = m.index + m[0].indexOf(exportedAs);
+        const pos = { line: 1, column: 1, index: idx };
         const sym: SymbolDef = {
           file,
           localName: exportedAs,
@@ -1673,8 +1675,8 @@ export function collectLocalsAndExportsFromSource(
         if (!locals.find((d) => d.localName === exportedAs)) {
           const idx =
             moduleExportsObjMatch.index +
-            moduleExportsObjMatch[0]!.indexOf(exportedAs);
-          const pos = { line: 1, column: 1, index: idx } as any;
+            moduleExportsObjMatch[0].indexOf(exportedAs);
+          const pos = { line: 1, column: 1, index: idx };
           const sym: SymbolDef = {
             file,
             localName: exportedAs,
@@ -1746,9 +1748,9 @@ export async function collectImportsForFile(
     lang = prep.lang;
   }
 
-  const resolvedSource = source!;
-  const resolvedSup = sup!;
-  const resolvedLang = lang!;
+  const resolvedSource = source;
+  const resolvedSup = sup;
+  const resolvedLang = lang;
 
   const imports: ImportBinding[] = [];
 
@@ -1761,7 +1763,7 @@ export async function collectImportsForFile(
       const resolved = await resolvePythonModule(
         projectRoot,
         file,
-        mod as any,
+        mod,
         relDots,
       );
       imports.push({
@@ -1782,7 +1784,7 @@ export async function collectImportsForFile(
       const resolved = await resolvePythonModule(
         projectRoot,
         file,
-        mod as any,
+        mod,
         relDots,
       );
       let nsResolved: string | undefined;
@@ -1830,12 +1832,7 @@ export async function collectImportsForFile(
       }
     };
     const pushDefault = async (dotted: string, local: string) => {
-      const resolved = await resolvePythonModule(
-        projectRoot,
-        file,
-        dotted as any,
-        0,
-      );
+      const resolved = await resolvePythonModule(projectRoot, file, dotted, 0);
       imports.push({
         kind: "namespace",
         localNS: local,
@@ -1859,7 +1856,7 @@ export async function collectImportsForFile(
         );
         if (am) {
           const imported = am[1]!;
-          const local = (am[2] ?? imported) as string;
+          const local = (am[2] ?? imported);
           await pushNamed(mod, imported, local);
         }
       }
@@ -1874,9 +1871,8 @@ export async function collectImportsForFile(
     return imports;
   }
 
-  const key = (
-    resolvedSup.id === "python" ? "py" : resolvedSup.id === "js" ? "js" : "ts"
-  ) as any;
+  const key =
+    resolvedSup.id === "python" ? "py" : resolvedSup.id === "js" ? "js" : "ts";
   const parser = acquireParser(resolvedLang, key);
   try {
     parser.setLanguage(resolvedLang);
@@ -1914,7 +1910,7 @@ export async function collectImportsForFile(
       for (const m of src.matchAll(reFrom)) {
         const clause = m[1]!.trim();
         const mod = m.groups?.m as string;
-        const typeOnly = typeOnlyImport.test(m[0]!);
+        const typeOnly = typeOnlyImport.test(m[0]);
         const resolved = await resolveFrom(mod);
         const ns = clause.match(/^\*\s+as\s+([A-Za-z_$][\w$]*)$/);
         if (ns) {
@@ -1952,7 +1948,7 @@ export async function collectImportsForFile(
             );
             if (!nm) continue;
             const imported = nm[1]!;
-            const local = (nm[2] ?? imported) as string;
+            const local = (nm[2] ?? imported);
             imports.push({
               kind: "named",
               local,
@@ -1993,7 +1989,7 @@ export async function collectImportsForFile(
           );
           if (!nm) continue;
           const imported = nm[1]!;
-          const local = (nm[2] ?? imported) as string;
+          const local = (nm[2] ?? imported);
           imports.push({
             kind: "named",
             local,
@@ -2010,10 +2006,7 @@ export async function collectImportsForFile(
     try {
       let q: Parser.Query;
       try {
-        ({ importBindings: q } = getCompiledQueries(
-          resolvedLang,
-          resolvedSup as any,
-        ));
+        ({ importBindings: q } = getCompiledQueries(resolvedLang, resolvedSup));
       } catch {
         // getCompiledQueries may fail if other queries in the language
         // definition are incompatible with the current tree-sitter version.
@@ -2087,7 +2080,7 @@ export async function collectImportsForFile(
         }
 
         if (!from) continue;
-        const fromValue = from!;
+        const fromValue = from;
         const resolved = await resolveFrom(fromValue);
         if (caps["def"]) {
           imports.push({
@@ -2321,9 +2314,7 @@ export async function parseFile(file: string): Promise<{
   const sup = prep.sup;
   const lang = prep.lang;
   const source = prep.source;
-  const key = (
-    sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts"
-  ) as any;
+  const key = sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts";
   const parser = acquireParser(lang, key);
   try {
     parser.setLanguage(lang);
@@ -2350,9 +2341,8 @@ export async function ensureParsedContext(
 }> {
   if (parsedEntry) return parsedEntry;
   const prep = await prepareParserInput(file);
-  const key = (
-    prep.sup.id === "python" ? "py" : prep.sup.id === "js" ? "js" : "ts"
-  ) as any;
+  const key =
+    prep.sup.id === "python" ? "py" : prep.sup.id === "js" ? "js" : "ts";
   const parser = acquireParser(prep.lang, key);
   try {
     parser.setLanguage(prep.lang);
@@ -2398,8 +2388,10 @@ async function buildIndexFromFileListShared(
     console.warn(helperOpts.warnNoFilesMessage);
   }
   const fileReport = initFileReport(report);
-  const onFallbackImportExtraction =
-    createFallbackImportExtractionHandler(report, opts);
+  const onFallbackImportExtraction = createFallbackImportExtractionHandler(
+    report,
+    opts,
+  );
   if (fileReport) {
     fileReport.total = normalizedFiles.length;
   }
@@ -2479,10 +2471,11 @@ async function buildIndexFromFileListShared(
       // Check if edges are cached (via collectEdgesForFile logic essentially)
       // We manually check here to decide if we need to parse
       const cachedEdgesEntry = cachedGraphEntries?.get(f);
-      const edgesCached = !!cachedEdgesEntry && (
-        (cachedEdgesEntry.gitSig && cachedEdgesEntry.gitSig === sigInfo.gitSig) ||
-        (cachedEdgesEntry.sig === sigInfo.sig)
-      );
+      const edgesCached =
+        !!cachedEdgesEntry &&
+        ((cachedEdgesEntry.gitSig &&
+          cachedEdgesEntry.gitSig === sigInfo.gitSig) ||
+          cachedEdgesEntry.sig === sigInfo.sig);
 
       let edges: import("./types.js").Edge[] = [];
 
@@ -2491,7 +2484,10 @@ async function buildIndexFromFileListShared(
         edges = await collectEdgesForFile(f, projectRoot, workspaceConfig, {
           fast: !!graphOptions.fast,
           ...(graphOptions.fastRegexDisabledLanguages
-            ? { fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages }
+            ? {
+                fastRegexDisabledLanguages:
+                  graphOptions.fastRegexDisabledLanguages,
+              }
             : {}),
           resolveNodeModules: !!graphOptions.resolveNodeModules,
           dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
@@ -2501,9 +2497,7 @@ async function buildIndexFromFileListShared(
           fileSignature: sigInfo,
           ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
           ...(onFileEdges ? { onFileEdges } : {}),
-          ...(onFallbackImportExtraction
-            ? { onFallbackImportExtraction }
-            : {}),
+          ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
         });
         if (bloomFilterCache) {
           const filter = await buildBloomFilterForFile(f);
@@ -2517,87 +2511,88 @@ async function buildIndexFromFileListShared(
       parsedMap.set(f, parsed);
       const { source: src, sup, lang, tree } = parsed;
 
-        if (bloomFilterCache) {
-          const { buildBloomFilterFromSource } = await import(
-            "./util/bloomFilter.js"
-          );
-          const filter = buildBloomFilterFromSource(src, sup.id);
-          bloomFilterCache.set(f, filter);
-        }
+      if (bloomFilterCache) {
+        const { buildBloomFilterFromSource } =
+          await import("./util/bloomFilter.js");
+        const filter = buildBloomFilterFromSource(src, sup.id);
+        bloomFilterCache.set(f, filter);
+      }
 
-        // 1. Recompute ModuleIndex if needed
-        if (!mod) {
-          const imports = await collectImportsForFile(f, projectRoot, {
-            source: src,
-            tree,
-            sup,
-            lang,
-            graphOptions,
-          });
-          collectJsonDependencies(imports, jsonDependencies);
-          mod = collectLocalsAndExportsFromSource(
-            f,
-            src,
-            sup,
-            lang,
-            imports,
-            { tree },
-          );
-          mod.imports = imports;
-
-          if (sup.supportsCrossModuleSymbols) {
-            if (sup.id === "ts" || sup.id === "js") {
-              const { matchPath } = await loadNearestTsconfigFor(f);
-              for (const e of mod.exports)
-                if (e.type === "reexport" || e.type === "exportStar" || e.type === "namespaceReexport") {
-                  if (e.fromModule.startsWith(".")) {
-                    const resolved = await resolveSpecifier(
-                      f,
-                      e.fromModule,
-                      projectRoot,
-                      matchPath,
-                      workspaceConfig,
-                      {
-                        resolveNodeModules: !!graphOptions.resolveNodeModules,
-                        ...(graphOptions.resolutionHints
-                          ? { resolutionHints: graphOptions.resolutionHints }
-                          : {}),
-                      },
-                    );
-                    if (typeof resolved === "string") e.fromModule = resolved;
-                  } else {
-                    const pkgResolved = await resolveWorkspacePackage(
-                      e.fromModule,
-                      workspaceConfig,
-                    );
-                    if (pkgResolved) e.fromModule = pkgResolved;
-                  }
-                }
-            }
-          }
-          await writeToCache(projectRoot, f, cacheSig, mod, opts);
-        } else {
-          // If mod was cached but edges weren't, we still need to collect json deps from mod
-          collectJsonDependencies(mod.imports, jsonDependencies);
-        }
-
-        // 2. Recompute Edges (using the parsed tree)
-        edges = await collectEdgesForFile(f, projectRoot, workspaceConfig, {
-          parsed: parsed,
-          fast: !!graphOptions.fast,
-          ...(graphOptions.fastRegexDisabledLanguages
-            ? { fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages }
-            : {}),
-          resolveNodeModules: !!graphOptions.resolveNodeModules,
-          dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
-          ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
-          fileSignature: sigInfo,
-          ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
-          ...(onFileEdges ? { onFileEdges } : {}),
-          ...(onFallbackImportExtraction
-            ? { onFallbackImportExtraction }
-            : {}),
+      // 1. Recompute ModuleIndex if needed
+      if (!mod) {
+        const imports = await collectImportsForFile(f, projectRoot, {
+          source: src,
+          tree,
+          sup,
+          lang,
+          graphOptions,
         });
+        collectJsonDependencies(imports, jsonDependencies);
+        mod = collectLocalsAndExportsFromSource(f, src, sup, lang, imports, {
+          tree,
+        });
+        mod.imports = imports;
+
+        if (sup.supportsCrossModuleSymbols) {
+          if (sup.id === "ts" || sup.id === "js") {
+            const { matchPath } = await loadNearestTsconfigFor(f);
+            for (const e of mod.exports)
+              if (
+                e.type === "reexport" ||
+                e.type === "exportStar" ||
+                e.type === "namespaceReexport"
+              ) {
+                if (e.fromModule.startsWith(".")) {
+                  const resolved = await resolveSpecifier(
+                    f,
+                    e.fromModule,
+                    projectRoot,
+                    matchPath,
+                    workspaceConfig,
+                    {
+                      resolveNodeModules: !!graphOptions.resolveNodeModules,
+                      ...(graphOptions.resolutionHints
+                        ? { resolutionHints: graphOptions.resolutionHints }
+                        : {}),
+                    },
+                  );
+                  if (typeof resolved === "string") e.fromModule = resolved;
+                } else {
+                  const pkgResolved = await resolveWorkspacePackage(
+                    e.fromModule,
+                    workspaceConfig,
+                  );
+                  if (pkgResolved) e.fromModule = pkgResolved;
+                }
+              }
+          }
+        }
+        await writeToCache(projectRoot, f, cacheSig, mod, opts);
+      } else {
+        // If mod was cached but edges weren't, we still need to collect json deps from mod
+        collectJsonDependencies(mod.imports, jsonDependencies);
+      }
+
+      // 2. Recompute Edges (using the parsed tree)
+      edges = await collectEdgesForFile(f, projectRoot, workspaceConfig, {
+        parsed: parsed,
+        fast: !!graphOptions.fast,
+        ...(graphOptions.fastRegexDisabledLanguages
+          ? {
+              fastRegexDisabledLanguages:
+                graphOptions.fastRegexDisabledLanguages,
+            }
+          : {}),
+        resolveNodeModules: !!graphOptions.resolveNodeModules,
+        dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
+        ...(graphOptions.resolutionHints
+          ? { resolutionHints: graphOptions.resolutionHints }
+          : {}),
+        fileSignature: sigInfo,
+        ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
+        ...(onFileEdges ? { onFileEdges } : {}),
+        ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
+      });
 
       if (!mod) {
         mod = {
@@ -2617,7 +2612,7 @@ async function buildIndexFromFileListShared(
         imports: [],
         locals: [],
       };
-      return [f, mod, [] as any] as const;
+      return [f, mod, []] as const;
     }
   });
   if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
@@ -2707,7 +2702,7 @@ async function buildIndexFromFileListShared(
     byFile: modules,
     exportCache: new Map(),
     scopeCache: new Map(),
-    parsed: parsedMap as any,
+    parsed: parsedMap,
     ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
     projectFiles,
   };
@@ -2744,11 +2739,14 @@ export async function buildProjectIndexIncremental(
   const totalStart = performance.now();
   const cacheMode = opts?.cache ?? "off";
   const cacheEnabled = cacheMode !== "off";
-  const onFallbackImportExtraction =
-    createFallbackImportExtractionHandler(report, opts);
+  const onFallbackImportExtraction = createFallbackImportExtractionHandler(
+    report,
+    opts,
+  );
   const manifestStart = performance.now();
   const manifest = await loadManifest(projectRoot, opts);
-  if (timings) timings.manifestMs = Math.round(performance.now() - manifestStart);
+  if (timings)
+    timings.manifestMs = Math.round(performance.now() - manifestStart);
   const graphOptions = normalizeGraphOptions(opts?.graph);
   const strictIncremental = opts?.incrementalStrict ?? false;
   if (strictIncremental && graphOptions.fast) {
@@ -2773,8 +2771,7 @@ export async function buildProjectIndexIncremental(
   const currentConfigHash = await computeConfigHash(projectRoot);
   const configChanged =
     !!currentConfigHash &&
-    (!manifest?.configHash ||
-      currentConfigHash !== manifest.configHash);
+    (!manifest?.configHash || currentConfigHash !== manifest.configHash);
 
   if (
     !manifest ||
@@ -2918,9 +2915,7 @@ export async function buildProjectIndexIncremental(
     fileSignatures.set(file, sigInfo);
     const entry = trackedEntries[file];
     const hasMatchingGitSig =
-      !!entry?.gitSig &&
-      !!sigInfo.gitSig &&
-      entry.gitSig === sigInfo.gitSig;
+      !!entry?.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
     const hasMatchingSig = entry?.sig === sigInfo.sig;
     if (!entry || !(hasMatchingGitSig || hasMatchingSig)) {
       changedFiles.add(file);
@@ -2964,9 +2959,8 @@ export async function buildProjectIndexIncremental(
 
         // Build bloom filter for this file if enabled
         if (bloomFilterCache) {
-          const { buildBloomFilterFromSource } = await import(
-            "./util/bloomFilter.js"
-          );
+          const { buildBloomFilterFromSource } =
+            await import("./util/bloomFilter.js");
           const filter = buildBloomFilterFromSource(src, sup.id);
           bloomFilterCache.set(f, filter);
         }
@@ -2993,7 +2987,11 @@ export async function buildProjectIndexIncremental(
           if (sup.id === "ts" || sup.id === "js") {
             const { matchPath } = await loadNearestTsconfigFor(f);
             for (const e of mod.exports)
-              if (e.type === "reexport" || e.type === "exportStar" || e.type === "namespaceReexport") {
+              if (
+                e.type === "reexport" ||
+                e.type === "exportStar" ||
+                e.type === "namespaceReexport"
+              ) {
                 if (e.fromModule.startsWith(".")) {
                   const resolved = await resolveSpecifier(
                     f,
@@ -3072,9 +3070,13 @@ export async function buildProjectIndexIncremental(
   }
 
   const cachedGraphEntries = new Map<string, ManifestFileEntry>(
-    Object.entries(manifest.files ?? {}).filter(([file]) => fs.existsSync(file)),
+    Object.entries(manifest.files ?? {}).filter(([file]) =>
+      fs.existsSync(file),
+    ),
   );
-  const manifestEntries = new Map<string, ManifestFileEntry>(cachedGraphEntries);
+  const manifestEntries = new Map<string, ManifestFileEntry>(
+    cachedGraphEntries,
+  );
 
   const baseGraph: Graph | undefined =
     cachedGraphEntries.size > 0
@@ -3100,10 +3102,13 @@ export async function buildProjectIndexIncremental(
     filesList.length === 0 && baseGraph
       ? { nodes: new Set(baseGraph.nodes), edges: [...baseGraph.edges] }
       : await collectGraph(projectRoot, filesList, {
-          parsed: parsedMap as any,
+          parsed: parsedMap,
           fast: !!graphOptions.fast,
           ...(graphOptions.fastRegexDisabledLanguages
-            ? { fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages }
+            ? {
+                fastRegexDisabledLanguages:
+                  graphOptions.fastRegexDisabledLanguages,
+              }
             : {}),
           resolveNodeModules: !!graphOptions.resolveNodeModules,
           dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
@@ -3112,9 +3117,7 @@ export async function buildProjectIndexIncremental(
             : {}),
           fileSignatures,
           cachedFileEdges: cachedGraphEntries,
-          ...(onFallbackImportExtraction
-            ? { onFallbackImportExtraction }
-            : {}),
+          ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
           ...(baseGraph ? { baseGraph } : {}),
           replaceFiles: new Set<string>(changedFiles),
           onFileEdges: (file, entry) => {
@@ -3157,7 +3160,7 @@ export async function buildProjectIndexIncremental(
     byFile: modules,
     exportCache: new Map(),
     scopeCache: new Map(),
-    parsed: parsedMap as any,
+    parsed: parsedMap,
     ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
     projectFiles,
   };
@@ -3241,9 +3244,7 @@ export async function buildGraphDelta(
       );
       const entry = trackedEntries[file];
       const hasMatchingGitSig =
-        !!entry?.gitSig &&
-        !!sigInfo.gitSig &&
-        entry.gitSig === sigInfo.gitSig;
+        !!entry?.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
       const hasMatchingSig = entry?.sig === sigInfo.sig;
       if (!entry || !(hasMatchingGitSig || hasMatchingSig)) {
         changedFiles.add(file);
@@ -3284,7 +3285,9 @@ export async function buildGraphDelta(
     normalizePath(path.relative(projectRoot, file)),
   );
   const addedRelative = added.map((edge) => toRelativeEdge(projectRoot, edge));
-  const removedRelative = removed.map((edge) => toRelativeEdge(projectRoot, edge));
+  const removedRelative = removed.map((edge) =>
+    toRelativeEdge(projectRoot, edge),
+  );
 
   return {
     changedFiles: changedFilesRelative.sort(),
@@ -3315,11 +3318,7 @@ export function resolveExport(
     if (visited.has(cycleKey)) return null;
     visited.add(cycleKey);
 
-    const goPackageExport = resolveGoPackageExport(
-      index,
-      normalizedFile,
-      name,
-    );
+    const goPackageExport = resolveGoPackageExport(index, normalizedFile, name);
     if (goPackageExport) {
       const res: ResolvedExport = { kind: "resolved", def: goPackageExport };
       index.exportCache.set(key, res);
@@ -3424,7 +3423,7 @@ export async function goToDefinition(
   const pos = {
     row: Math.max(0, line - 1),
     column: Math.max(0, column - 1),
-  } as any;
+  };
   let node: Parser.SyntaxNode | null = tree.rootNode.descendantForPosition(
     pos,
     pos,
@@ -3559,8 +3558,9 @@ export async function goToDefinition(
       if (memberNode.type === "navigation_expression") {
         obj = memberNode.namedChildren[0] ?? memberNode.child(0);
         const suffix =
-          memberNode.namedChildren.find((c) => c.type === "navigation_suffix") ??
-          memberNode.child(1);
+          memberNode.namedChildren.find(
+            (c) => c.type === "navigation_suffix",
+          ) ?? memberNode.child(1);
         if (suffix) {
           prop =
             suffix.childForFieldName("suffix") ??
@@ -3616,7 +3616,7 @@ export async function goToDefinition(
               file:
                 typeof imp.resolved === "string"
                   ? imp.resolved.replace(/\\/g, "/")
-                  : (imp.resolved as any)?.external || "",
+                  : imp.resolved?.external || "",
             };
           }
           const res = resolveImported(
@@ -3625,7 +3625,8 @@ export async function goToDefinition(
             imp.kind === "named" ? imp.imported : "default",
           );
           if (res) {
-            if ("namespace" in res) return { kind: "namespace", file: res.namespace };
+            if ("namespace" in res)
+              return { kind: "namespace", file: res.namespace };
             return { kind: "resolved", def: res };
           }
         }
@@ -3637,7 +3638,8 @@ export async function goToDefinition(
         for (const starImp of mod.imports.filter((i) => i.kind === "star")) {
           const res = resolveImported(index, starImp, exprName);
           if (res) {
-            if ("namespace" in res) return { kind: "namespace", file: res.namespace };
+            if ("namespace" in res)
+              return { kind: "namespace", file: res.namespace };
             return { kind: "resolved", def: res };
           }
         }
@@ -3762,9 +3764,9 @@ export async function goToDefinition(
       scopeIndex = buildScopeIndexFromSource(
         file,
         source,
-        sup as any,
+        sup,
         lang,
-        mod.imports as any,
+        mod.imports,
         { tree },
       );
       index.scopeCache.set(file, scopeIndex);
@@ -4016,25 +4018,17 @@ export type ScopeIndex = {
 export function buildScopeIndexFromSource(
   file: string,
   source: string,
-  support: {
-    id: string;
-    nodeTypes: any;
-    classifyDefinition: (n: Parser.SyntaxNode) => string;
-    isDeclarationName: (n: Parser.SyntaxNode) => boolean;
-    createsFunctionScope: (n: Parser.SyntaxNode) => boolean;
-    createsBlockScope: (n: Parser.SyntaxNode) => boolean;
-  },
+  support: LanguageSupport,
   lang: Parser.Language,
   imports: ImportBinding[] = [],
   opts?: { tree?: Parser.Tree },
 ): ScopeIndex {
-  const key2 = (
+  const key2 =
     support.nodeTypes && support.id === "python"
       ? "py"
       : support.id === "js"
         ? "js"
-        : "ts"
-  ) as any;
+        : "ts";
   const parser2 = acquireParser(lang, key2);
   parser2.setLanguage(lang);
   const tree = opts?.tree ?? parser2.parse(source);
@@ -4079,8 +4073,8 @@ export function buildScopeIndexFromSource(
   }
 
   const idSet = new Set([
-    ...(support.nodeTypes.identifier as string[]),
-    ...((support.nodeTypes.shorthandPropertyIdentifier ?? []) as string[]),
+    ...(support.nodeTypes.identifier),
+    ...((support.nodeTypes.shorthandPropertyIdentifier ?? [])),
   ]);
   const customDeclLanguages = new Set(["c", "cpp", "kotlin", "swift"]);
   const paramParentTypes = new Set([
@@ -4108,11 +4102,11 @@ export function buildScopeIndexFromSource(
 
   const addDecl = (nameNode: Parser.SyntaxNode, kind: BindingKind) => {
     const name = sliceText(nameNode, source);
-    let target = stack[stack.length - 1];
+    const target = stack[stack.length - 1];
     const b: Binding = {
       name,
       kind,
-      def: toRange(nameNode as any),
+      def: toRange(nameNode),
       occurrences: [],
     };
     target?.map.set(name, b);
@@ -4137,7 +4131,7 @@ export function buildScopeIndexFromSource(
       node.type === "function_item" ||
       node.type === "func_literal"
     ) {
-      const name = (node as any).childForFieldName("name");
+      const name = node.childForFieldName("name");
       if (name) {
         addDecl(name, "function");
       }
@@ -4150,7 +4144,7 @@ export function buildScopeIndexFromSource(
       node.type === "struct_item" ||
       node.type === "mod_item"
     ) {
-      const name = (node as any).childForFieldName("name");
+      const name = node.childForFieldName("name");
       if (name) addDecl(name, "class");
     }
     if (
@@ -4159,7 +4153,7 @@ export function buildScopeIndexFromSource(
       node.type === "type_spec" ||
       node.type === "trait_item"
     ) {
-      const name = (node as any).childForFieldName("name");
+      const name = node.childForFieldName("name");
       if (name) addDecl(name, "type");
     }
 
@@ -4186,13 +4180,13 @@ export function buildScopeIndexFromSource(
         node.type === "function_item" ||
         node.type === "func_literal"
       ) {
-        const params = (node as any).childForFieldName("parameters");
+        const params = node.childForFieldName("parameters");
         if (params) {
           const q: Parser.SyntaxNode[] = [params];
           while (q.length) {
             const n = q.pop()!;
-            if ((n as any).type === "identifier") addDecl(n, "param");
-            for (const ch of (n as any).namedChildren) q.push(ch);
+            if (n.type === "identifier") addDecl(n, "param");
+            for (const ch of n.namedChildren) q.push(ch);
           }
         }
       }
@@ -4224,19 +4218,19 @@ export function buildScopeIndexFromSource(
       node.type === "const_item" || // Rust
       node.type === "static_item" // Rust
     ) {
-      for (const ch of (node as any).namedChildren) {
+      for (const ch of node.namedChildren) {
         if (
           ch.type === "variable_declarator" ||
           ch.type === "var_spec" ||
           ch.type === "const_spec"
         ) {
-          const nm = (ch as any).childForFieldName("name");
+          const nm = ch.childForFieldName("name");
           if (nm) addDecl(nm, "local");
         } else if (
           (ch.type === "identifier" || ch.type === "field_identifier") &&
           (node.type === "assignment" || node.type === "short_var_declaration")
         ) {
-          addDecl(ch as any, "local");
+          addDecl(ch, "local");
         } else if (
           node.type === "let_declaration" ||
           node.type === "const_item" ||
@@ -4427,9 +4421,9 @@ export async function findReferences(
   | { status: "not_found"; reason: string }
 > {
   let def: SymbolDef | null = null;
-  if ("def" in req) def = req.def as any;
+  if ("def" in req) def = req.def;
   else {
-    const got = await goToDefinition(index, req as any);
+    const got = await goToDefinition(index, req);
     if (got.status === "ok") def = got.definition;
   }
   if (!def)
@@ -4446,22 +4440,26 @@ export async function findReferences(
     const s = buildScopeIndexFromSource(
       fileId,
       parsedCtx.source,
-      parsedCtx.sup as any,
+      parsedCtx.sup,
       parsedCtx.lang,
-      moduleIndex.imports as any,
+      moduleIndex.imports,
       { tree: parsedCtx.tree },
     );
     index.scopeCache.set(fileId, s);
     return s;
   };
 
-  const scope = getCachedScope(definitionFile, index.byFile.get(definitionFile), parsedContext);
+  const scope = getCachedScope(
+    definitionFile,
+    index.byFile.get(definitionFile),
+    parsedContext,
+  );
 
   const refs: Reference[] = [];
 
   const localBindings = scope.bindings.get(def.localName) ?? [];
   const localBinding = localBindings.find(
-    (b) => b.def && (b.def as any).start.index === def!.range.start.index,
+    (b) => b.def && b.def.start.index === def.range.start.index,
   );
   if (localBinding)
     for (const occ of localBinding.occurrences)
@@ -4472,8 +4470,8 @@ export async function findReferences(
   const mod = index.byFile.get(definitionFile);
   if (mod)
     for (const e of mod.exports)
-      if ((e as any).type === "local" && sameDef((e as any).target, def))
-        exportedNames.push((e as any).exportedAs);
+      if (e.type === "local" && sameDef(e.target, def))
+        exportedNames.push(e.exportedAs);
   if (!exportedNames.length) exportedNames.push(def.localName);
 
   const exportedNameSet = new Set(exportedNames);
@@ -4482,7 +4480,8 @@ export async function findReferences(
     let hasDirectImport = false;
 
     for (const imp of module.imports) {
-      const resolved = typeof imp.resolved === "string" ? imp.resolved : undefined;
+      const resolved =
+        typeof imp.resolved === "string" ? imp.resolved : undefined;
       if (!resolved || resolved !== definitionFile) continue;
       hasDirectImport = true;
 
@@ -4538,12 +4537,10 @@ export async function findReferences(
 
     for (const imp of m.imports) {
       const targetFile =
-        typeof (imp as any).resolved === "string"
-          ? (imp as any).resolved
-          : undefined;
+        typeof imp.resolved === "string" ? imp.resolved : undefined;
       if (!targetFile) continue;
       for (const name of exportedNames) {
-        if ((imp as any).kind === "namespace") {
+        if (imp.kind === "namespace") {
           const hit = resolveExport(index, targetFile, name);
           const matchesDef =
             hit?.kind === "resolved"
@@ -4551,21 +4548,21 @@ export async function findReferences(
               : targetFile === definitionFile;
           if (!matchesDef) continue;
           const scopeIdx = await ensure();
-          const nsName = (imp as any).localNS;
+          const nsName = imp.localNS;
           const member = name;
           const ranges = await collectNamespaceMemberRefs(f, nsName, member);
           for (const r of ranges)
             refs.push({
               file: f,
-              range: r as any,
-              via: { import: imp as any, namespaceMember: member },
+              range: r,
+              via: { import: imp, namespaceMember: member },
             });
         } else {
-          if ((imp as any).kind === "star") continue;
+          if (imp.kind === "star") continue;
           const exported =
-            (imp as any).kind === "named"
-              ? (imp as any).imported
-              : (imp as any).kind === "default"
+            imp.kind === "named"
+              ? imp.imported
+              : imp.kind === "default"
                 ? "default"
                 : name;
           const hit = resolveExport(index, targetFile, exported);
@@ -4575,14 +4572,14 @@ export async function findReferences(
               : targetFile === definitionFile;
           if (!matchesDef) continue;
           const scopeIdx = await ensure();
-          const localName = (imp as any).local;
-          const binds = (scopeIdx.bindings.get(localName) ?? []) as any[];
+          const localName = imp.local;
+          const binds = scopeIdx.bindings.get(localName) ?? [];
           for (const b of binds) {
             // Only include occurrences if this binding is actually the one from this import.
             // A binding from an import will have b.import set.
             if (b.import === imp) {
               for (const occ of b.occurrences)
-                refs.push({ file: f, range: occ, via: { import: imp as any } });
+                refs.push({ file: f, range: occ, via: { import: imp } });
             }
           }
         }
@@ -4710,7 +4707,7 @@ export async function collectNamespaceMemberRefs(
         const oname = sliceText(obj, src);
         const pname = sliceText(prop, src);
         if (oname === ns && pname === member) {
-          ranges.push(toRange(node as any));
+          ranges.push(toRange(node));
         }
       }
     }

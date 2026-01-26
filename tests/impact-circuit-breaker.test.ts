@@ -41,7 +41,7 @@ describe("Impact Circuit Breaker & Warning Propagation", () => {
     files: [],
     byFile: new Map(),
     graph: { nodes: [], edges: [] },
-  } as any;
+  };
 
   it("should trigger warning at exactly 50,001 lines", async () => {
     setupMocks(" 1 file changed, 25001 insertions(+), 25000 deletions(-)");

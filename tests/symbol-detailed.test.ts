@@ -28,7 +28,7 @@ describe('Detailed symbol graph (uses edges)', () => {
     expect(utilDef).toBeDefined();
     expect(usesDef).toBeDefined();
 
-    const edge = sg.edges.find(e => e.from === (usesDef as any).id && e.to === (utilDef as any).id && e.label === 'uses');
+    const edge = sg.edges.find(e => e.from === (usesDef).id && e.to === (utilDef).id && e.label === 'uses');
     expect(edge).toBeDefined();
   });
 
@@ -49,7 +49,7 @@ describe('Detailed symbol graph (uses edges)', () => {
     expect(helperDef).toBeDefined();
     expect(innerDef).toBeDefined();
 
-    const edge = sg.edges.find(e => e.from === (innerDef as any).id && e.to === (helperDef as any).id && e.label === 'uses');
+    const edge = sg.edges.find(e => e.from === (innerDef).id && e.to === (helperDef).id && e.label === 'uses');
     expect(edge).toBeDefined();
   });
 
@@ -75,7 +75,7 @@ export function uses(): number { return utilFn() }
     expect(targetDef).toBeDefined();
     expect(usesDef).toBeDefined();
 
-    const edge = sg.edges.find(e => e.from === (usesDef as any).id && e.to === (targetDef as any).id && e.label === 'uses');
+    const edge = sg.edges.find(e => e.from === (usesDef).id && e.to === (targetDef).id && e.label === 'uses');
     expect(edge).toBeDefined();
   });
 
@@ -96,7 +96,7 @@ export function uses(): number { return utilFn() }
     expect(helperDef).toBeDefined();
     expect(usesDef).toBeDefined();
 
-    const edge = sg.edges.find(e => e.from === (usesDef as any).id && e.to === (helperDef as any).id && e.label === 'uses');
+    const edge = sg.edges.find(e => e.from === (usesDef).id && e.to === (helperDef).id && e.label === 'uses');
     expect(edge).toBeDefined();
   });
 
@@ -116,7 +116,7 @@ export function uses(): number { return utilFn() }
     expect(helperDef).toBeDefined();
     expect(usesDef).toBeDefined();
 
-    const edge = sg.edges.find(e => e.from === (usesDef as any).id && e.to === (helperDef as any).id && e.label === 'uses');
+    const edge = sg.edges.find(e => e.from === (usesDef).id && e.to === (helperDef).id && e.label === 'uses');
     expect(edge).toBeDefined();
   });
 
@@ -138,8 +138,8 @@ export function uses(): number { return utilFn() }
     expect(bDef).toBeDefined();
     expect(usesDef).toBeDefined();
 
-    const aEdge = sg.edges.find(e => e.from === (usesDef as any).id && e.to === (aDef as any).id && e.label === 'uses');
-    const bEdge = sg.edges.find(e => e.from === (usesDef as any).id && e.to === (bDef as any).id && e.label === 'uses');
+    const aEdge = sg.edges.find(e => e.from === (usesDef).id && e.to === (aDef).id && e.label === 'uses');
+    const bEdge = sg.edges.find(e => e.from === (usesDef).id && e.to === (bDef).id && e.label === 'uses');
     expect(aEdge).toBeDefined();
     expect(bEdge).toBeDefined();
   });
@@ -160,7 +160,7 @@ export function uses(): number { return utilFn() }
     expect(helperDef).toBeDefined();
     expect(usesDef).toBeDefined();
 
-    const edge = sg.edges.find(e => e.from === (usesDef as any).id && e.to === (helperDef as any).id && e.label === 'uses');
+    const edge = sg.edges.find(e => e.from === (usesDef).id && e.to === (helperDef).id && e.label === 'uses');
     expect(edge).toBeDefined();
   });
 
@@ -181,7 +181,7 @@ export function uses(): number { return utilFn() }
     expect(decoDef).toBeDefined();
     expect(fnDef).toBeDefined();
 
-    const edge = sg.edges.find(e => e.from === (fnDef as any).id && e.to === (decoDef as any).id && e.label === 'decorates');
+    const edge = sg.edges.find(e => e.from === (fnDef).id && e.to === (decoDef).id && e.label === 'decorates');
     expect(edge).toBeDefined();
   });
 
@@ -201,7 +201,7 @@ export function uses(): number { return utilFn() }
     expect(helperDef).toBeDefined();
     expect(usesDef).toBeDefined();
 
-    const edge = sg.edges.find(e => e.from === (usesDef as any).id && e.to === (helperDef as any).id && e.label === 'uses');
+    const edge = sg.edges.find(e => e.from === (usesDef).id && e.to === (helperDef).id && e.label === 'uses');
     expect(edge).toBeDefined();
   });
 
@@ -223,7 +223,7 @@ export function uses(): number { return utilFn() }
     expect(helperDef).toBeDefined();
     expect(usesDef).toBeDefined();
 
-    const edge = sg.edges.find(e => e.from === (usesDef as any).id && e.to === (helperDef as any).id && e.label === 'uses');
+    const edge = sg.edges.find(e => e.from === (usesDef).id && e.to === (helperDef).id && e.label === 'uses');
     expect(edge).toBeDefined();
   });
 });

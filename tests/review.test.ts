@@ -557,7 +557,7 @@ describe('CLI flows', () => {
       '--provider',
       'raw',
     ], multiLanguageDiff);
-    const report = JSON.parse(stdout) as any;
+    const report = JSON.parse(stdout);
 
     expect(report.changedFiles.length).toBeGreaterThanOrEqual(2);
     expect(report.changedFiles.some((entry: any) => entry.file === 'rust/main.rs')).toBe(true);

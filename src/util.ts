@@ -15,13 +15,13 @@ export function sliceText(node: any, src: string) {
   return src.slice(node.startIndex, node.endIndex);
 }
 export function unquote(s: string): string {
-  if (!s || typeof s !== "string") return s as any;
+  if (!s || typeof s !== "string") return s;
   const t = s.trim();
   return (t.startsWith('"') && t.endsWith('"')) ||
     (t.startsWith("'") && t.endsWith("'")) ||
     (t.startsWith("`") && t.endsWith("`"))
-    ? (t.slice(1, -1) as any)
-    : (t as any);
+    ? t.slice(1, -1)
+    : t;
 }
 export function toRange(node: any): Range {
   if (!node) {
@@ -236,14 +236,19 @@ function parseTomlName(raw: string, sections: string[]): string | null {
   return null;
 }
 
-function parseIniName(raw: string, section: string, key: string): string | null {
+function parseIniName(
+  raw: string,
+  section: string,
+  key: string,
+): string | null {
   const lines = raw.split(/\r?\n/);
   let currentSection = "";
   const targetSection = section.toLowerCase();
   const targetKey = key.toLowerCase();
   for (const rawLine of lines) {
     const trimmed = rawLine.trim();
-    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith(";")) continue;
+    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith(";"))
+      continue;
     const sectionMatch = trimmed.match(/^\[([^\]]+)\]\s*$/);
     if (sectionMatch) {
       currentSection = (sectionMatch[1] ?? "").trim().toLowerCase();
@@ -282,9 +287,7 @@ function parseGradleName(raw: string): string | null {
 }
 
 function parseGradlePropertiesName(raw: string): string | null {
-  const match = raw.match(
-    /^\s*rootProject\.name\s*=\s*["']([^"']+)["']/m,
-  );
+  const match = raw.match(/^\s*rootProject\.name\s*=\s*["']([^"']+)["']/m);
   return trimToNull(match?.[1]);
 }
 
@@ -518,7 +521,11 @@ const PROJECT_FILE_DEFINITIONS: ProjectFileDefinition[] = [
     type: "dotnet",
     role: "config",
     kind: "file",
-    patterns: ["Directory.Build.props", "Directory.Build.targets", "global.json"],
+    patterns: [
+      "Directory.Build.props",
+      "Directory.Build.targets",
+      "global.json",
+    ],
     nameFromPath: "dir",
   },
   {
@@ -556,7 +563,11 @@ const PROJECT_FILE_DEFINITIONS: ProjectFileDefinition[] = [
     type: "native",
     role: "config",
     kind: "file",
-    patterns: ["CMakePresets.json", "CMakeUserPresets.json", "meson_options.txt"],
+    patterns: [
+      "CMakePresets.json",
+      "CMakeUserPresets.json",
+      "meson_options.txt",
+    ],
     nameFromPath: "dir",
   },
   {
@@ -736,13 +747,13 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
     };
     const reImportFrom = /^\s*import\s+[^\n;]*?\s+from\s+(["'])([^"']+)\1/gm;
     for (const m of src.matchAll(reImportFrom))
-      push(m[2]!, /\bimport\s+type\b/.test(m[0]!));
+      push(m[2]!, /\bimport\s+type\b/.test(m[0]));
     const reImportSide = /^\s*import\s+(["'])([^"']+)\1/gm;
     for (const m of src.matchAll(reImportSide))
-      push(m[2]!, /\bimport\s+type\b/.test(m[0]!));
+      push(m[2]!, /\bimport\s+type\b/.test(m[0]));
     const reExportFrom = /\bexport\s+[^\n;]*?\s+from\s+(["'])([^"']+)\1/gm;
     for (const m of src.matchAll(reExportFrom))
-      push(m[2]!, /\bexport\s+type\b/.test(m[0]!));
+      push(m[2]!, /\bexport\s+type\b/.test(m[0]));
     const reRequire = /(?<!["'`])\brequire\(\s*(["'])([^"']+)\1\s*\)/g;
     for (const m of src.matchAll(reRequire)) push(m[2]!);
     const reReqDestr =
@@ -988,7 +999,7 @@ export async function loadNearestTsconfigFor(
     tsconfigCache.set(dir, val);
     return val;
   } catch {
-    const val = {} as any;
+    const val = {};
     tsconfigCache.set(dir, val);
     return val;
   }
@@ -1115,12 +1126,8 @@ function parsePnpmWorkspacePackages(rawYaml: string): string[] {
   //   '!b/*'
   // ]
   {
-    const cleanedSrc = lines
-      .map((line) => stripInlineComment(line))
-      .join("\n");
-    const m = cleanedSrc.match(
-      /^packages\s*:\s*\[([\s\S]*?)\]\s*$/m,
-    );
+    const cleanedSrc = lines.map((line) => stripInlineComment(line)).join("\n");
+    const m = cleanedSrc.match(/^packages\s*:\s*\[([\s\S]*?)\]\s*$/m);
     if (m) {
       const inner = m[1] ?? "";
       const parts = inner
@@ -1302,13 +1309,10 @@ export async function resolveWorkspacePackage(
   };
   const pickExportTarget = (target: any): string | null => {
     if (!target) return null;
-    if (typeof target === "string") return target as string;
+    if (typeof target === "string") return target;
     if (typeof target === "object") {
       const cand =
-        (target as any).import ??
-        (target as any).default ??
-        (target as any).require ??
-        (target as any).module;
+        target.import ?? target.default ?? target.require ?? target.module;
       if (typeof cand === "string") return cand;
     }
     return null;
@@ -1316,10 +1320,10 @@ export async function resolveWorkspacePackage(
   if (pkg.exports) {
     const key = subpath ? `./${subpath}` : ".";
     if (typeof pkg.exports === "string" && key === ".") {
-      const hit = await tryResolveRelative(pkg.exports as string);
+      const hit = await tryResolveRelative(pkg.exports);
       if (hit) return hit;
     } else if (typeof pkg.exports === "object") {
-      const map = pkg.exports as any;
+      const map = pkg.exports as Record<string, any>;
       const target = map[key] ?? (key === "." ? map["."] : undefined);
       const rel = pickExportTarget(target);
       if (rel) {
@@ -1548,7 +1552,8 @@ async function resolveGoModuleImport(
 ): Promise<string | null> {
   const { modulePath, moduleRoot, replacements } = moduleInfo;
   if (spec === modulePath || spec.startsWith(`${modulePath}/`)) {
-    const subPath = spec === modulePath ? "" : spec.slice(modulePath.length + 1);
+    const subPath =
+      spec === modulePath ? "" : spec.slice(modulePath.length + 1);
     const targetDir = path.join(moduleRoot, subPath);
     const entry = await findGoPackageEntry(targetDir);
     if (entry) return entry;
@@ -1638,7 +1643,9 @@ export async function resolveImportSpecifier(
     opts?.workspaceConfig,
     {
       resolveNodeModules: !!opts?.resolveNodeModules,
-      ...(opts?.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+      ...(opts?.resolutionHints
+        ? { resolutionHints: opts.resolutionHints }
+        : {}),
     },
   );
 }
@@ -1712,7 +1719,7 @@ export async function resolveSpecifier(
       return hit;
     }
     const ext = { external: spec } as const;
-    resolveSpecifierCache.set(cacheKey, ext as any);
+    resolveSpecifierCache.set(cacheKey, ext);
     return ext;
   }
   // Bare specifier: prefer TS path mappings (tsconfig `paths`) before workspace/node_modules.
@@ -1794,7 +1801,7 @@ export async function resolveSpecifier(
     }
   }
   const ext = { external: spec } as const;
-  resolveSpecifierCache.set(cacheKey, ext as any);
+  resolveSpecifierCache.set(cacheKey, ext);
   return ext;
 }
 
@@ -1851,13 +1858,13 @@ async function resolveFromNodeModules(
         // Exports map handling (simplified)
         const pickExportTarget = (target: any): string | null => {
           if (!target) return null;
-          if (typeof target === "string") return target as string;
+          if (typeof target === "string") return target;
           if (typeof target === "object") {
             const cand =
-              (target as any).import ??
-              (target as any).default ??
-              (target as any).require ??
-              (target as any).module;
+              target.import ??
+              target.default ??
+              target.require ??
+              target.module;
             if (typeof cand === "string") return cand;
           }
           return null;
@@ -1868,7 +1875,7 @@ async function resolveFromNodeModules(
             const hit = await tryResolveRelative(pkg.exports as string);
             if (hit) return hit;
           } else if (typeof pkg.exports === "object") {
-            const map = pkg.exports as any;
+            const map = pkg.exports;
             const target = map[key] ?? (key === "." ? map["."] : undefined);
             const rel = pickExportTarget(target);
             if (rel) {
@@ -2203,7 +2210,7 @@ export async function resolvePythonModule(
   const ext = {
     external: ".".repeat(relativeDots) + (moduleName ?? ""),
   } as const;
-  resolvePythonModuleCache.set(cacheKey, ext as any);
+  resolvePythonModuleCache.set(cacheKey, ext);
   return ext;
 }
 

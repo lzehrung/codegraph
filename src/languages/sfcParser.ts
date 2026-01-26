@@ -62,7 +62,7 @@ export function parseSFC(source: string): SFCBlock[] {
         : lineForOffset(lineIndex, Math.max(contentStart, contentEnd - 1));
 
     blocks.push({
-      type: type as SFCBlock["type"],
+      type: type,
       attrs,
       content,
       startLine,

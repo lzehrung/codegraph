@@ -106,11 +106,17 @@ export const KOTLIN_DEF: LanguageDefinition = {
       return true;
     if (parent.type === "object_declaration" && node.type === "type_identifier")
       return true;
-    if (parent.type === "function_declaration" && node.type === "simple_identifier")
+    if (
+      parent.type === "function_declaration" &&
+      node.type === "simple_identifier"
+    )
       return true;
     if (parent.type === "type_alias" && node.type === "type_identifier")
       return true;
-    if (parent.type === "variable_declaration" && node.type === "simple_identifier")
+    if (
+      parent.type === "variable_declaration" &&
+      node.type === "simple_identifier"
+    )
       return true;
     if (parent.type === "parameter" && node.type === "simple_identifier")
       return true;

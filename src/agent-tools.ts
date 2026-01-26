@@ -100,15 +100,15 @@ export async function tool_getFileOverview(
       // Group by file (from ID: file::local::import) is hard because ID format for imports is specific
       // We'll just list them simply for now
       const uniqueImports = Array.from(new Set(imports.map((i) => i.name)));
-      lines.push(
-        `Imported symbols: ${uniqueImports.sort().join(", ")}`,
-      );
+      lines.push(`Imported symbols: ${uniqueImports.sort().join(", ")}`);
     }
 
     if (defs.length > 0) {
       lines.push("\n## Definitions");
       // Sort by line number
-      defs.sort((a, b) => (a.range?.start.line ?? 0) - (b.range?.start.line ?? 0));
+      defs.sort(
+        (a, b) => (a.range?.start.line ?? 0) - (b.range?.start.line ?? 0),
+      );
 
       for (const def of defs) {
         const lineInfo = def.range ? `(line ${def.range.start.line})` : "";
@@ -150,11 +150,11 @@ export async function tool_findSymbol(
 
     // Sort by exact match then name
     matches.sort((a, b) => {
-        const aExact = a.name.toLowerCase() === q;
-        const bExact = b.name.toLowerCase() === q;
-        if (aExact && !bExact) return -1;
-        if (!aExact && bExact) return 1;
-        return a.name.localeCompare(b.name);
+      const aExact = a.name.toLowerCase() === q;
+      const bExact = b.name.toLowerCase() === q;
+      if (aExact && !bExact) return -1;
+      if (!aExact && bExact) return 1;
+      return a.name.localeCompare(b.name);
     });
 
     return matches.slice(0, options.maxResults ?? 20);
@@ -167,7 +167,9 @@ export async function tool_findSymbol(
 /**
  * Lists all files in the project that codegraph can analyze.
  */
-export async function tool_listProjectFiles(root: string): Promise<{ status: "ok" | "error", files?: string[], error?: string }> {
+export async function tool_listProjectFiles(
+  root: string,
+): Promise<{ status: "ok" | "error"; files?: string[]; error?: string }> {
   try {
     const files = await listProjectFiles(root);
     return { status: "ok", files };
@@ -179,7 +181,13 @@ export async function tool_listProjectFiles(root: string): Promise<{ status: "ok
 /**
  * Gets the dependency graph for the project.
  */
-export async function tool_getGraph(root: string): Promise<{ status: "ok" | "error", graph?: { nodes: string[], edges: Edge[] }, error?: string }> {
+export async function tool_getGraph(
+  root: string,
+): Promise<{
+  status: "ok" | "error";
+  graph?: { nodes: string[]; edges: Edge[] };
+  error?: string;
+}> {
   try {
     const files = await listProjectFiles(root);
     const g = await collectGraph(root, files);

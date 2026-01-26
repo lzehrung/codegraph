@@ -129,7 +129,7 @@ describe("Impact Analyzer Edge Cases", () => {
       const mockIndex = {
         graph: { edges: [] },
         byFile: new Map()
-      } as any;
+      };
 
       const changedSymbol = {
         id: "test.ts::exportedFunc::100",
@@ -157,7 +157,7 @@ describe("Impact Analyzer Edge Cases", () => {
       const mockIndex = {
         graph: { edges: [] },
         byFile: new Map()
-      } as any;
+      };
 
       const changedSymbol = {
         id: "test.ts::func::100",
@@ -187,7 +187,7 @@ describe("Impact Analyzer Edge Cases", () => {
       const mockIndex = {
         graph: { edges: [] },
         byFile: new Map()
-      } as any;
+      };
 
       const changedSymbol = {
         id: "test.ts::func::100",
@@ -224,7 +224,7 @@ describe("Impact Analyzer Edge Cases", () => {
       const mockIndex = {
         graph: { edges: [] },
         byFile: new Map()
-      } as any;
+      };
 
       const typeOnlySymbol = {
         id: "test.ts::TypeAlias::100",
@@ -269,12 +269,12 @@ describe("Impact Analyzer Edge Cases", () => {
           ]
         },
         byFile: new Map()
-      } as any;
+      };
 
       const mockIndexNoDeps = {
         graph: { edges: [] },
         byFile: new Map()
-      } as any;
+      };
 
       const changedSymbol = {
         id: "test.ts::func::100",

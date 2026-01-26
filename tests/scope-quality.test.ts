@@ -168,7 +168,7 @@ def foo(x):
 `;
     const file = "test.py";
     const lang = languageForFile(file);
-    const scopeIndex = buildScopeIndexFromSource(file, source, PY_SUPPORT as any, lang);
+    const scopeIndex = buildScopeIndexFromSource(file, source, PY_SUPPORT, lang);
 
     const xBindings = scopeIndex.bindings.get("x");
     expect(xBindings).toBeDefined();

@@ -13,7 +13,7 @@ async function debugLanguage(lang: string, root: string) {
     
     console.log("  Imports:");
     mod.imports.forEach(i => {
-      console.log(`    - kind: ${i.kind}, local: ${(i as any).local || (i as any).localNS}, from: ${i.from}, resolved: ${i.resolved}`);
+      console.log(`    - kind: ${i.kind}, local: ${(i).local || (i).localNS}, from: ${i.from}, resolved: ${i.resolved}`);
     });
 
     console.log("  Exports:");

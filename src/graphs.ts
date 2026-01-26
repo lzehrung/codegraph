@@ -14,8 +14,7 @@ import {
   resolveImportSpecifier,
   resolvePythonModule,
   normalizeResolutionHints,
-} from "./util.js";
-import { acquireParser, releaseParser } from "./util.js";
+ acquireParser, releaseParser } from "./util.js";
 // Intentionally compile only the imports query locally to avoid compiling
 // unrelated queries (which may differ per grammar) and causing warnings.
 import {
@@ -247,8 +246,7 @@ export async function collectEdgesForFile(
     });
   };
 
-  const cached =
-    sig || gitSig ? opts.cachedFileEdges : undefined;
+  const cached = sig || gitSig ? opts.cachedFileEdges : undefined;
   const matchesGitSig =
     !!gitSig && !!cached?.gitSig && cached.gitSig === gitSig;
   const matchesSig = !!sig && !!cached && cached.sig === sig;
@@ -271,27 +269,19 @@ export async function collectEdgesForFile(
   }
 
   const fast = !!opts.fast;
-  const specs = collectModuleSpecifiersFromSource(
-    sup,
-    lang,
-    src,
-    {
-      ...(parsed?.tree ? { tree: parsed.tree } : {}),
-      fast,
-      file: normalizedFile,
-      ...(opts.fastRegexDisabledLanguages
-        ? { fastRegexDisabledLanguages: opts.fastRegexDisabledLanguages }
-        : {}),
-      ...(opts.onFallbackImportExtraction
-        ? { onFallbackImportExtraction: opts.onFallbackImportExtraction }
-        : {}),
-    },
-  );
+  const specs = collectModuleSpecifiersFromSource(sup, lang, src, {
+    ...(parsed?.tree ? { tree: parsed.tree } : {}),
+    fast,
+    file: normalizedFile,
+    ...(opts.fastRegexDisabledLanguages
+      ? { fastRegexDisabledLanguages: opts.fastRegexDisabledLanguages }
+      : {}),
+    ...(opts.onFallbackImportExtraction
+      ? { onFallbackImportExtraction: opts.onFallbackImportExtraction }
+      : {}),
+  });
 
-  if (
-    (sup.id === "ts" || sup.id === "js") &&
-    opts.dynamicImportHeuristics
-  ) {
+  if ((sup.id === "ts" || sup.id === "js") && opts.dynamicImportHeuristics) {
     const dynamicSpecs = extractJsTsDynamicSpecifiers(
       src,
       normalizedFile,
@@ -308,7 +298,9 @@ export async function collectEdgesForFile(
   }
 
   const { matchPath } =
-    sup.id === "ts" ? await loadNearestTsconfigFor(file) : { matchPath: undefined };
+    sup.id === "ts"
+      ? await loadNearestTsconfigFor(file)
+      : { matchPath: undefined };
 
   const edges: Edge[] = [];
   for (const { spec, typeOnly } of specs) {
@@ -327,12 +319,20 @@ export async function collectEdgesForFile(
           ? { type: "file", path: res.replace(/\\/g, "/") }
           : { type: "external", name: res.external };
     } else if (sup.id === "go") {
-      const res = await resolveImportSpecifier(projectRoot, file, spec, sup.id, {
-        ...(matchPath ? { matchPath } : {}),
-        workspaceConfig,
-        resolveNodeModules: !!opts.resolveNodeModules,
-        ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
-      });
+      const res = await resolveImportSpecifier(
+        projectRoot,
+        file,
+        spec,
+        sup.id,
+        {
+          ...(matchPath ? { matchPath } : {}),
+          workspaceConfig,
+          resolveNodeModules: !!opts.resolveNodeModules,
+          ...(opts.resolutionHints
+            ? { resolutionHints: opts.resolutionHints }
+            : {}),
+        },
+      );
       to =
         typeof res === "string"
           ? { type: "file", path: res.replace(/\\/g, "/") }
@@ -352,7 +352,9 @@ export async function collectEdgesForFile(
           workspaceConfig,
           {
             resolveNodeModules: !!opts.resolveNodeModules,
-            ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+            ...(opts.resolutionHints
+              ? { resolutionHints: opts.resolutionHints }
+              : {}),
           },
         );
         to =
@@ -369,7 +371,9 @@ export async function collectEdgesForFile(
         workspaceConfig,
         {
           resolveNodeModules: !!opts.resolveNodeModules,
-          ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+          ...(opts.resolutionHints
+            ? { resolutionHints: opts.resolutionHints }
+            : {}),
         },
       );
       to =
@@ -407,7 +411,10 @@ export async function collectGraph(
     resolveNodeModules?: boolean;
     dynamicImportHeuristics?: boolean;
     resolutionHints?: string[];
-    fileSignatures?: Map<string, { sig: string; gitSig?: string; cacheSig?: string }>;
+    fileSignatures?: Map<
+      string,
+      { sig: string; gitSig?: string; cacheSig?: string }
+    >;
     cachedFileEdges?: Map<string, GraphCacheEntry>;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
@@ -419,7 +426,9 @@ export async function collectGraph(
   const normalizedFiles = files.map(normalizePath);
   const hasExplicitReplace = !!opts?.replaceFiles;
   const replaceSet = hasExplicitReplace
-    ? new Set(Array.from(opts.replaceFiles ?? [], (file) => normalizePath(file)))
+    ? new Set(
+        Array.from(opts.replaceFiles ?? [], (file) => normalizePath(file)),
+      )
     : new Set<string>(normalizedFiles);
   const baseGraph = opts?.baseGraph;
   const graph: Graph = baseGraph
@@ -478,8 +487,11 @@ export async function collectGraph(
     try {
       const normalizedFile = file.replace(/\\/g, "/");
       const sigEntry = opts?.fileSignatures?.get(normalizedFile);
-      const shouldReplace = hasExplicitReplace && replaceSet.has(normalizedFile);
-      const cachedFileEdges = !shouldReplace ? opts?.cachedFileEdges?.get(normalizedFile) : undefined;
+      const shouldReplace =
+        hasExplicitReplace && replaceSet.has(normalizedFile);
+      const cachedFileEdges = !shouldReplace
+        ? opts?.cachedFileEdges?.get(normalizedFile)
+        : undefined;
       const parsedEntry = opts?.parsed?.get(file);
       const edges = await collectEdgesForFile(
         file,
@@ -493,7 +505,9 @@ export async function collectGraph(
             : {}),
           resolveNodeModules: !!opts?.resolveNodeModules,
           dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
-          ...(opts?.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+          ...(opts?.resolutionHints
+            ? { resolutionHints: opts.resolutionHints }
+            : {}),
           ...(sigEntry ? { fileSignature: sigEntry } : {}),
           ...(cachedFileEdges ? { cachedFileEdges } : {}),
           ...(opts?.onFileEdges ? { onFileEdges: opts.onFileEdges } : {}),
@@ -678,7 +692,7 @@ export async function textGrep(
     re = new RegExp(patternSource, flags);
   } catch (e) {
     throw new Error(
-      `Invalid regex for textGrep: ${patternSource} (${(e as any)?.message ?? String(e)})`,
+      `Invalid regex for textGrep: ${patternSource} (${(e as Error).message ?? String(e)})`,
     );
   }
 
@@ -1111,7 +1125,7 @@ export async function buildSymbolGraphDetailed(
       ? opts.maxEdges
       : Number.POSITIVE_INFINITY;
   const membersOnly = !!opts?.membersOnly;
-  const scopeMode = (opts?.scope ?? "all") as "all" | "imported";
+  const scopeMode = (opts?.scope ?? "all");
 
   const normalizePath = (p: string) => p.replace(/\\/g, "/");
   const importedByOthers = new Set<string>();
@@ -1337,8 +1351,7 @@ export async function buildSymbolGraphDetailed(
           n.type === "singleton_method"
         ) {
           const nameNode =
-            n.childForFieldName("name") ??
-            n.childForFieldName("type");
+            n.childForFieldName("name") ?? n.childForFieldName("type");
           const name = nameNode ? sliceText(nameNode, src) : undefined;
           if (name) {
             const def = mod.locals.find((d) => d.localName === name);
@@ -1414,7 +1427,10 @@ export async function buildSymbolGraphDetailed(
         fromId: string,
         label: string,
       ) => {
-        if (isIdentifierType(sup, node.type) || node.type === "type_identifier") {
+        if (
+          isIdentifierType(sup, node.type) ||
+          node.type === "type_identifier"
+        ) {
           const name = sliceText(node, src);
           const target = resolveIdentifier(name);
           if (target) {
@@ -1442,7 +1458,9 @@ export async function buildSymbolGraphDetailed(
         "composite_literal",
       ]);
 
-      const getCallTarget = (n: Parser.SyntaxNode): Parser.SyntaxNode | null => {
+      const getCallTarget = (
+        n: Parser.SyntaxNode,
+      ): Parser.SyntaxNode | null => {
         const explicitTarget =
           n.childForFieldName("function") ??
           n.childForFieldName("callee") ??
@@ -1455,7 +1473,7 @@ export async function buildSymbolGraphDetailed(
           (ch) => ch.type !== "argument_list",
         );
         return nonArgumentChildren.length === 1
-          ? nonArgumentChildren[0] ?? null
+          ? (nonArgumentChildren[0] ?? null)
           : null;
       };
 
@@ -1734,7 +1752,7 @@ export async function buildSymbolGraphDetailed(
               const last = names[0];
               if (m)
                 targetDef =
-                  (m.locals as SymbolDef[]).find((l) => l.localName === last) ??
+                  (m.locals).find((l) => l.localName === last) ??
                   null;
             }
             if (targetDef) {
@@ -1892,8 +1910,9 @@ export async function buildSymbolGraphDetailed(
         const walkImpls = (node: Parser.SyntaxNode) => {
           if (node.type === "impl_item") {
             const typeIdentifiers =
-              node.namedChildren?.filter((child) => child.type === "type_identifier") ??
-              [];
+              node.namedChildren?.filter(
+                (child) => child.type === "type_identifier",
+              ) ?? [];
             if (typeIdentifiers.length >= 2) {
               const traitName = sliceText(typeIdentifiers[0], src);
               const typeName = sliceText(typeIdentifiers[1], src);
@@ -1902,10 +1921,8 @@ export async function buildSymbolGraphDetailed(
               if (typeDef && traitDef) {
                 const fromId = defNodeId(typeDef);
                 const toId = defNodeId(traitDef);
-                if (!nodes.has(fromId))
-                  nodes.set(fromId, nodeForDef(typeDef));
-                if (!nodes.has(toId))
-                  nodes.set(toId, nodeForDef(traitDef));
+                if (!nodes.has(fromId)) nodes.set(fromId, nodeForDef(typeDef));
+                if (!nodes.has(toId)) nodes.set(toId, nodeForDef(traitDef));
                 recordEdge(fromId, toId, "implements");
               }
             }

@@ -15,10 +15,10 @@ describe('Symbol-level graph', () => {
       const utilsDef = nodes.find(n => n.file.endsWith('/tests/samples/typescript/utils.ts') && n.name === 'helperFunction');
       expect(utilsDef).toBeDefined();
 
-      const mainImport = nodes.find(n => n.file.endsWith('/tests/samples/typescript/main.ts') && (n.name === 'helperFunction' || n.name === 'helperAlias') && (n as any).kind === 'import');
+      const mainImport = nodes.find(n => n.file.endsWith('/tests/samples/typescript/main.ts') && (n.name === 'helperFunction' || n.name === 'helperAlias') && (n).kind === 'import');
       expect(mainImport).toBeDefined();
 
-      const hasEdge = sg.edges.some(e => e.from === (mainImport as any).id && e.to === (utilsDef as any).id && e.label === 'helperFunction');
+      const hasEdge = sg.edges.some(e => e.from === (mainImport).id && e.to === (utilsDef).id && e.label === 'helperFunction');
       expect(hasEdge).toBe(true);
     });
 
@@ -42,14 +42,14 @@ describe('Symbol-level graph', () => {
       const def = nodes.find(n => n.file.endsWith('/tests/samples/python/utils.py') && n.name === 'helper_function');
       expect(def).toBeDefined();
 
-      const namedImport = nodes.find(n => n.file.endsWith('/tests/samples/python/main.py') && n.name === 'helper_function' && (n as any).kind === 'import');
+      const namedImport = nodes.find(n => n.file.endsWith('/tests/samples/python/main.py') && n.name === 'helper_function' && (n).kind === 'import');
       expect(namedImport).toBeDefined();
-      const namedEdge = sg.edges.some(e => e.from === (namedImport as any).id && e.to === (def as any).id && e.label === 'helper_function');
+      const namedEdge = sg.edges.some(e => e.from === (namedImport).id && e.to === (def).id && e.label === 'helper_function');
       expect(namedEdge).toBe(true);
 
-      const nsImport = nodes.find(n => n.file.endsWith('/tests/samples/python/main.py') && n.name === 'utils' && (n as any).kind === 'namespaceImport');
+      const nsImport = nodes.find(n => n.file.endsWith('/tests/samples/python/main.py') && n.name === 'utils' && (n).kind === 'namespaceImport');
       expect(nsImport).toBeDefined();
-      const nsEdge = sg.edges.find(e => e.from === (nsImport as any).id && e.to === (def as any).id && e.label === 'helper_function');
+      const nsEdge = sg.edges.find(e => e.from === (nsImport).id && e.to === (def).id && e.label === 'helper_function');
       expect(nsEdge).toBeDefined();
     });
 

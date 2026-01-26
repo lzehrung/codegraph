@@ -142,7 +142,7 @@ export class LazyArray<T> implements Iterable<T> {
   preload(): void {
     if (this.data === null && this.loadPromise === null) {
       this.loadPromise = this.loader();
-      this.loadPromise.then(data => {
+      this.loadPromise.then((data) => {
         this.data = data;
         this.loadPromise = null;
       });

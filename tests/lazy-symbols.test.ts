@@ -214,7 +214,7 @@ describe("LazyProjectIndex", () => {
             start: { line: 1, column: 0, index: 0 },
             end: { line: 1, column: 3, index: 3 },
           },
-        } as any,
+        },
       ]),
     });
 
