@@ -26,8 +26,8 @@ describe('Impact: options and explain payloads', () => {
     const internal = mod.locals.find(l => !exportedNames.has(l.localName)) || mod.locals[0]!;
     const diffText = makeDiffForAbsPath(file, Math.max(internal.range.start.line + 1, internal.range.start.line));
 
-    const reportAll = await analyzeImpactFromDiff(getSamplePath('typescript'), index, { provider: 'raw', diffText, scope: 'all' } as any);
-    const reportImported = await analyzeImpactFromDiff(getSamplePath('typescript'), index, { provider: 'raw', diffText, scope: 'imported' } as any);
+    const reportAll = await analyzeImpactFromDiff(getSamplePath('typescript'), index, { provider: 'raw', diffText, scope: 'all' });
+    const reportImported = await analyzeImpactFromDiff(getSamplePath('typescript'), index, { provider: 'raw', diffText, scope: 'imported' });
 
     if (!exportedNames.has(internal.localName)) {
       expect(reportAll.changedSymbols.length).toBeGreaterThanOrEqual(1);
@@ -44,8 +44,8 @@ describe('Impact: options and explain payloads', () => {
     const target = mod.locals[0]!;
     const diffText = makeDiffForAbsPath(file, Math.max(target.range.start.line + 1, target.range.start.line));
 
-    const withTransitive = await analyzeImpactFromDiff(getSamplePath('typescript'), index, { provider: 'raw', diffText, membersOnly: false } as any);
-    const membersOnly = await analyzeImpactFromDiff(getSamplePath('typescript'), index, { provider: 'raw', diffText, membersOnly: true } as any);
+    const withTransitive = await analyzeImpactFromDiff(getSamplePath('typescript'), index, { provider: 'raw', diffText, membersOnly: false });
+    const membersOnly = await analyzeImpactFromDiff(getSamplePath('typescript'), index, { provider: 'raw', diffText, membersOnly: true });
 
     expect(membersOnly.impacted.every(i => (i.depth ?? 0) === 0)).toBe(true);
     const hasTransitive = withTransitive.impacted.some(i => (i.depth ?? 0) > 0);
@@ -59,7 +59,7 @@ describe('Impact: options and explain payloads', () => {
     const target = mod.locals[0]!;
     const diffText = makeDiffForAbsPath(file, Math.max(target.range.start.line + 1, target.range.start.line));
 
-    const report = await analyzeImpactFromDiff(getSamplePath('typescript'), index, { provider: 'raw', diffText } as any);
+    const report = await analyzeImpactFromDiff(getSamplePath('typescript'), index, { provider: 'raw', diffText });
     for (const item of report.impacted) {
       if (item.explain) {
         expect(Object.prototype.hasOwnProperty.call(item.explain, 'reason')).toBe(true);

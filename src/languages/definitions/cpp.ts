@@ -231,7 +231,8 @@ export const CPP_DEF: LanguageDefinition = {
       return "class";
     if (
       parent.type === "alias_declaration" ||
-      (parent.type === "type_definition" && isInField(node, parent, "declarator"))
+      (parent.type === "type_definition" &&
+        isInField(node, parent, "declarator"))
     )
       return "type";
     const container = findAncestor(node, containerTypes);
@@ -250,12 +251,12 @@ export const CPP_DEF: LanguageDefinition = {
       isInField(node, parent, "name")
     )
       return true;
-    if (parent.type === "namespace_definition" && isInField(node, parent, "name"))
-      return true;
     if (
-      parent.type === "alias_declaration" &&
+      parent.type === "namespace_definition" &&
       isInField(node, parent, "name")
     )
+      return true;
+    if (parent.type === "alias_declaration" && isInField(node, parent, "name"))
       return true;
     if (
       isInAncestorDeclarator(node, new Set(["parameter_declaration"])) ||

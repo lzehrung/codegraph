@@ -33,7 +33,7 @@ describe('Node modules resolution (opt-in) and path normalization', () => {
     const files = [a, b].map(f => f.replace(/\\/g, '/'));
     const g = await collectGraph(root, files);
     expect([...g.nodes].every(n => !/\\/.test(n))).toBe(true);
-    expect(g.edges.every(e => !/\\/.test(e.from) && (e.to.type === 'external' || !/\\/.test((e.to as any).path)))).toBe(true);
+    expect(g.edges.every(e => !/\\/.test(e.from) && (e.to.type === 'external' || !/\\/.test((e.to).path)))).toBe(true);
   });
 });
 

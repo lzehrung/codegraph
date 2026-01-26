@@ -127,7 +127,7 @@ describe("Import Resolution", () => {
     const mainModule = index.byFile.get(mainFile!);
     const helperImport = mainModule!.imports[0];
     expect(typeof helperImport!.resolved).toBe("object");
-    expect((helperImport!.resolved as any).external).toBe("./nonexistent.js");
+    expect((helperImport!.resolved).external).toBe("./nonexistent.js");
   });
 
   it("should handle detailed symbol graph with .js imports to .ts files", async () => {
@@ -156,7 +156,7 @@ describe("Import Resolution", () => {
     
     // There should be a "uses" edge from main to helper
     const usesEdge = symbolGraph.edges.find(
-      e => e.from === (mainFunc as any).id && e.to === (helperFunc as any).id && e.label === "uses"
+      e => e.from === (mainFunc).id && e.to === (helperFunc).id && e.label === "uses"
     );
     expect(usesEdge).toBeDefined();
   });

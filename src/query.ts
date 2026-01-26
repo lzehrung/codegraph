@@ -1,4 +1,9 @@
-import type { SymbolGraph, SymbolNode, SymbolEdge, SymbolNodeKind } from "./graphs.js";
+import type {
+  SymbolGraph,
+  SymbolNode,
+  SymbolEdge,
+  SymbolNodeKind,
+} from "./graphs.js";
 
 export type SymbolQuery = {
   text?: string;
@@ -17,14 +22,11 @@ export type GraphQuery =
   | { kind: "highestComplexityClasses"; limit: number };
 
 const tokenize = (input: string): string[] =>
-  input
-    .match(/[^\s"]+:"[^"]+"|"[^"]+"|\S+/g)
-    ?.map((token) => token.trim()) ?? [];
+  input.match(/[^\s"]+:"[^"]+"|"[^"]+"|\S+/g)?.map((token) => token.trim()) ??
+  [];
 
 const normalizeToken = (token: string): string =>
-  token.startsWith('"') && token.endsWith('"')
-    ? token.slice(1, -1)
-    : token;
+  token.startsWith('"') && token.endsWith('"') ? token.slice(1, -1) : token;
 
 export function parseSymbolQuery(input: string): SymbolQuery {
   const query: SymbolQuery = {};
@@ -91,7 +93,10 @@ export function parseGraphQuery(input: string): GraphQuery | null {
   if (lower.includes("dependency chain")) {
     const match = /dependency chain for (.+?) class/i.exec(text);
     if (!match) return null;
-    return { kind: "dependencyChain", className: normalizePhrase(match[1] ?? "") };
+    return {
+      kind: "dependencyChain",
+      className: normalizePhrase(match[1] ?? ""),
+    };
   }
   if (lower.includes("controllers have the most endpoints")) {
     return { kind: "controllersMostEndpoints", limit: parseLimit(text, 10) };
@@ -132,15 +137,9 @@ export function querySymbols(
   const textNeedle = query.text?.trim();
   return [...sg.nodes.values()].filter((node) => {
     if (query.kinds && !query.kinds.includes(node.kind)) return false;
-    if (
-      query.nameIncludes &&
-      !includesFolded(node.name, query.nameIncludes)
-    )
+    if (query.nameIncludes && !includesFolded(node.name, query.nameIncludes))
       return false;
-    if (
-      query.fileIncludes &&
-      !includesFolded(node.file, query.fileIncludes)
-    )
+    if (query.fileIncludes && !includesFolded(node.file, query.fileIncludes))
       return false;
     if (
       query.docstringIncludes &&

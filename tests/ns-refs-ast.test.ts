@@ -26,7 +26,7 @@ describe('Namespace member references (AST-based)', () => {
     );
     const index = await buildProjectIndex(root);
     const modFile = mod.replace(/\\/g, '/');
-    const hit = resolveExport(index as any, modFile, 'member');
+    const hit = resolveExport(index, modFile, 'member');
     expect(hit).not.toBeNull();
     if (!hit) return;
     const res = await findReferences(index, { def: hit.def });

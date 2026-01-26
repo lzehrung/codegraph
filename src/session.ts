@@ -4,9 +4,22 @@
  */
 
 import type { ProjectIndex, BuildOptions } from "./indexer.js";
-import { buildProjectIndex, buildProjectIndexIncremental, findReferences, goToDefinition } from "./indexer.js";
-import { analyzeImpactFromDiff, type ImpactOptions, type ImpactReport, type CompactImpactReport } from "./impact/index.js";
-import { analyzeImpactStreaming, type ImpactStreamChunk } from "./impact/streaming.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexIncremental,
+  findReferences,
+  goToDefinition,
+} from "./indexer.js";
+import {
+  analyzeImpactFromDiff,
+  type ImpactOptions,
+  type ImpactReport,
+  type CompactImpactReport,
+} from "./impact/index.js";
+import {
+  analyzeImpactStreaming,
+  type ImpactStreamChunk,
+} from "./impact/streaming.js";
 import { getSessionPreset, mergePreset, type PresetName } from "./presets.js";
 
 export type SessionOptions = {
@@ -73,7 +86,10 @@ export class CodeReviewSession {
         this.status = "initializing";
 
         if (this.incremental) {
-          this.index = await buildProjectIndexIncremental(this.root, this.buildOptions);
+          this.index = await buildProjectIndexIncremental(
+            this.root,
+            this.buildOptions,
+          );
         } else {
           this.index = await buildProjectIndex(this.root, this.buildOptions);
         }
@@ -118,7 +134,10 @@ export class CodeReviewSession {
    * Check if session has expired
    */
   private checkExpiration(): void {
-    if (this.status === "ready" && Date.now() - this.lastActivity > this.timeout) {
+    if (
+      this.status === "ready" &&
+      Date.now() - this.lastActivity > this.timeout
+    ) {
       this.status = "expired";
       this.index = null;
     }
@@ -141,10 +160,16 @@ export class CodeReviewSession {
    * Results are cached in the warm index
    */
   async analyzeImpact(
-    options: Omit<ImpactOptions, "provider"> & { provider?: ImpactOptions["provider"] },
+    options: Omit<ImpactOptions, "provider"> & {
+      provider?: ImpactOptions["provider"];
+    },
   ): Promise<ImpactReport | CompactImpactReport> {
     const index = this.getIndex();
-    return await analyzeImpactFromDiff(this.root, index, options as ImpactOptions);
+    return await analyzeImpactFromDiff(
+      this.root,
+      index,
+      options as ImpactOptions,
+    );
   }
 
   /**
@@ -152,7 +177,9 @@ export class CodeReviewSession {
    * Better for agents as they can start processing immediately
    */
   async *analyzeImpactStream(
-    options: Omit<ImpactOptions, "provider"> & { provider?: ImpactOptions["provider"] },
+    options: Omit<ImpactOptions, "provider"> & {
+      provider?: ImpactOptions["provider"];
+    },
   ): AsyncGenerator<ImpactStreamChunk> {
     const index = this.getIndex();
     yield* analyzeImpactStreaming(this.root, index, options as ImpactOptions);
@@ -181,7 +208,10 @@ export class CodeReviewSession {
     this.status = "initializing";
     try {
       if (this.incremental) {
-        this.index = await buildProjectIndexIncremental(this.root, this.buildOptions);
+        this.index = await buildProjectIndexIncremental(
+          this.root,
+          this.buildOptions,
+        );
       } else {
         this.index = await buildProjectIndex(this.root, this.buildOptions);
       }

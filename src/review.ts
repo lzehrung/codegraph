@@ -186,8 +186,7 @@ function compareEdges(left: Edge, right: Edge): number {
     return left.to.type === "file" ? -1 : 1;
   }
   const leftTarget = left.to.type === "file" ? left.to.path : left.to.name;
-  const rightTarget =
-    right.to.type === "file" ? right.to.path : right.to.name;
+  const rightTarget = right.to.type === "file" ? right.to.path : right.to.name;
   const toCompare = comparePaths(leftTarget, rightTarget);
   if (toCompare !== 0) return toCompare;
   const rawCompare = left.raw.localeCompare(right.raw);
@@ -442,9 +441,7 @@ export async function buildReviewReport(
     for (const file of gitList) changedFiles.add(file);
   }
   if (reviewTimings) {
-    reviewTimings.changesMs = Math.round(
-      performance.now() - changesStart,
-    );
+    reviewTimings.changesMs = Math.round(performance.now() - changesStart);
   }
 
   if (changedFiles.size === 0) {
@@ -537,9 +534,7 @@ export async function buildReviewReport(
   const diffHunksByFile = new Map<string, Hunk[]>();
   if (diff) {
     for (const fileChange of diff.files) {
-      const absPath = normalizePath(
-        path.resolve(projectRoot, fileChange.path),
-      );
+      const absPath = normalizePath(path.resolve(projectRoot, fileChange.path));
       diffHunksByFile.set(absPath, fileChange.hunks);
     }
   }
@@ -582,58 +577,57 @@ export async function buildReviewReport(
     appliedOptions.includeDiffContext ??
     (includeSymbolDetails && diffHunksByFile.size > 0);
 
-  const fileEntries = await Promise.all(filesWithModules.map(async ({ file, mod, hunks }) => {
-    if (!mod) {
-      return {
-        file,
-        mod,
-        hunks,
-        locals: [] as SymbolDef[],
-        handles: [] as string[],
-        diffLinesByHandle: new Map<string, Set<number>>(),
-      };
-    }
-    if (!hunks) {
-      const locals = sortSymbols(mod.locals);
+  const fileEntries = await Promise.all(
+    filesWithModules.map(async ({ file, mod, hunks }) => {
+      if (!mod) {
+        return {
+          file,
+          mod,
+          hunks,
+          locals: [] as SymbolDef[],
+          handles: [] as string[],
+          diffLinesByHandle: new Map<string, Set<number>>(),
+        };
+      }
+      if (!hunks) {
+        const locals = sortSymbols(mod.locals);
+        return {
+          file,
+          mod,
+          hunks,
+          locals,
+          handles: locals.map((local) => symbolId(local)),
+          diffLinesByHandle: new Map<string, Set<number>>(),
+        };
+      }
+      const { changedSymbols, changedLines } =
+        await locateChangedSymbolsWithLines(index, file, hunks);
+      const uniqueSymbols = new Map<string, SymbolDef>();
+      for (const symbol of changedSymbols) {
+        uniqueSymbols.set(symbol.id, {
+          file: symbol.file,
+          localName: symbol.name,
+          kind: symbol.kind,
+          range: symbol.range,
+        });
+      }
+      const locals = sortSymbols(Array.from(uniqueSymbols.values()));
+      const handles = locals.map((local) => symbolId(local));
       return {
         file,
         mod,
         hunks,
         locals,
-        handles: locals.map((local) => symbolId(local)),
-        diffLinesByHandle: new Map<string, Set<number>>(),
+        handles,
+        diffLinesByHandle: await mapChangedLinesToSymbols(
+          index,
+          file,
+          hunks,
+          changedLines,
+        ),
       };
-    }
-    const { changedSymbols, changedLines } = await locateChangedSymbolsWithLines(
-      index,
-      file,
-      hunks,
-    );
-    const uniqueSymbols = new Map<string, SymbolDef>();
-    for (const symbol of changedSymbols) {
-      uniqueSymbols.set(symbol.id, {
-        file: symbol.file,
-        localName: symbol.name,
-        kind: symbol.kind,
-        range: symbol.range,
-      });
-    }
-    const locals = sortSymbols(Array.from(uniqueSymbols.values()));
-    const handles = locals.map((local) => symbolId(local));
-    return {
-      file,
-      mod,
-      hunks,
-      locals,
-      handles,
-      diffLinesByHandle: await mapChangedLinesToSymbols(
-        index,
-        file,
-        hunks,
-        changedLines,
-      ),
-    };
-  }));
+    }),
+  );
 
   const defsToResolve = fileEntries.flatMap((entry) => entry.locals);
   const referencesStart = performance.now();
@@ -712,40 +706,40 @@ export async function buildReviewReport(
   const summariesWithHandles = await Promise.all(
     fileEntries.map(
       async ({ file, mod, locals, handles, diffLinesByHandle }) => {
-      if (!mod) {
+        if (!mod) {
+          return {
+            summary: {
+              file: relativePath(projectRoot, file),
+              status: "deleted",
+              symbols: [],
+            } satisfies ReviewFileSummary,
+            handles: [] as string[],
+          };
+        }
+        const symbols: ReviewSymbolSummary[] = includeSymbolDetails
+          ? await Promise.all(
+              locals.map((local) =>
+                buildSymbolSummary(local, mod, diffLinesByHandle),
+              ),
+            )
+          : locals.map((local) => {
+              const handle = symbolId(local);
+              return {
+                name: local.localName,
+                kind: local.kind,
+                handle,
+                exported: isExported(mod, handle),
+              };
+            });
         return {
           summary: {
             file: relativePath(projectRoot, file),
-            status: "deleted",
-            symbols: [],
+            status: "updated",
+            symbols,
           } satisfies ReviewFileSummary,
-          handles: [] as string[],
+          handles,
         };
-      }
-      const symbols: ReviewSymbolSummary[] = includeSymbolDetails
-        ? await Promise.all(
-            locals.map((local) =>
-              buildSymbolSummary(local, mod, diffLinesByHandle),
-            ),
-          )
-        : locals.map((local) => {
-            const handle = symbolId(local);
-            return {
-              name: local.localName,
-              kind: local.kind,
-              handle,
-              exported: isExported(mod, handle),
-            };
-          });
-      return {
-        summary: {
-          file: relativePath(projectRoot, file),
-          status: "updated",
-          symbols,
-        } satisfies ReviewFileSummary,
-        handles,
-      };
-    },
+      },
     ),
   );
   const summaries = summariesWithHandles.map((entry) => entry.summary);
@@ -788,20 +782,20 @@ export async function buildReviewReport(
         ? { testPatterns: appliedOptions.testPatterns }
         : {}),
     },
-  ).map((candidate) => ({
-    ...candidate,
-    file: relativePath(projectRoot, candidate.file),
-  })).sort((left, right) => {
-    const fileCompare = comparePaths(left.file, right.file);
-    if (fileCompare !== 0) return fileCompare;
-    const confidenceCompare = left.confidence.localeCompare(right.confidence);
-    if (confidenceCompare !== 0) return confidenceCompare;
-    return left.reason.localeCompare(right.reason);
-  });
+  )
+    .map((candidate) => ({
+      ...candidate,
+      file: relativePath(projectRoot, candidate.file),
+    }))
+    .sort((left, right) => {
+      const fileCompare = comparePaths(left.file, right.file);
+      if (fileCompare !== 0) return fileCompare;
+      const confidenceCompare = left.confidence.localeCompare(right.confidence);
+      if (confidenceCompare !== 0) return confidenceCompare;
+      return left.reason.localeCompare(right.reason);
+    });
   if (reviewTimings) {
-    reviewTimings.candidatesMs = Math.round(
-      performance.now() - candidateStart,
-    );
+    reviewTimings.candidatesMs = Math.round(performance.now() - candidateStart);
   }
 
   const projectFiles =

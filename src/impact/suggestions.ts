@@ -73,7 +73,8 @@ export async function collectImpactSuggestions(
     );
 
     for (const suggestion of missingExportSuggestions) {
-      if (maxSuggestions !== undefined && output.length >= maxSuggestions) break;
+      if (maxSuggestions !== undefined && output.length >= maxSuggestions)
+        break;
       pushUniqueSuggestion(output, seen, suggestion);
     }
 
@@ -92,7 +93,8 @@ export async function collectImpactSuggestions(
     );
 
     for (const candidate of candidates) {
-      if (maxSuggestions !== undefined && output.length >= maxSuggestions) break;
+      if (maxSuggestions !== undefined && output.length >= maxSuggestions)
+        break;
       if (importedLocals.has(candidate.name)) continue;
       if (mod && mod.locals.some((local) => local.localName === candidate.name))
         continue;
@@ -354,8 +356,9 @@ function collectReferenceCandidates(
     if (sup.nodeTypes.identifier.includes(node.type)) {
       if (!sup.isDeclarationName(node) && !isInImportOrExport(node)) {
         const isPropertyIdentifier = propertyIdentifiers.has(node.type);
-        const isShorthandPropertyIdentifier =
-          shorthandPropertyIdentifiers.has(node.type);
+        const isShorthandPropertyIdentifier = shorthandPropertyIdentifiers.has(
+          node.type,
+        );
         if (!isPropertyIdentifier && !isShorthandPropertyIdentifier) {
           candidates.push({
             name: source.slice(node.startIndex, node.endIndex),
