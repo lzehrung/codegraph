@@ -15,7 +15,8 @@ export async function locateChangedSymbols(
   file: FileId,
   hunks: FileChange["hunks"],
 ): Promise<ChangedSymbol[]> {
-  return (await locateChangedSymbolsWithLines(index, file, hunks)).changedSymbols;
+  return (await locateChangedSymbolsWithLines(index, file, hunks))
+    .changedSymbols;
 }
 
 export async function locateChangedSymbolsWithLines(
@@ -90,8 +91,7 @@ export async function mapChangedLinesToSymbols(
 
   const { source, tree } = parsedEntry;
   const sup = parsedEntry.sup;
-  const changedLines =
-    changedLinesOverride ?? collectChangedLines(hunks);
+  const changedLines = changedLinesOverride ?? collectChangedLines(hunks);
 
   const nodes = findNodesInLines(tree, changedLines);
   const linesByHandle = new Map<SymbolHandle, Set<number>>();
@@ -150,9 +150,7 @@ function findNodesInLines(
   return nodes;
 }
 
-export function collectChangedLines(
-  hunks: FileChange["hunks"],
-): Set<number> {
+export function collectChangedLines(hunks: FileChange["hunks"]): Set<number> {
   const changedLines = new Set<number>();
   for (const hunk of hunks) {
     let oldLine = hunk.oldStart;
@@ -368,8 +366,7 @@ function isHtmlIdAttributeValue(
   if (!quoted) return false;
   const attribute = quoted.parent;
   if (!attribute || attribute.type !== "attribute") return false;
-  const nameNode =
-    attribute.childForFieldName?.("name") ?? attribute.child(0);
+  const nameNode = attribute.childForFieldName?.("name") ?? attribute.child(0);
   if (!nameNode || nameNode.type !== "attribute_name") return false;
   const nameText = source
     .slice(nameNode.startIndex, nameNode.endIndex)

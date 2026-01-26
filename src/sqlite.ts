@@ -19,12 +19,27 @@ export type SqliteGraphUpdateOptions = {
 };
 
 export type GraphQueryResult =
-  | { kind: "mostCalledMethods"; results: Array<{ name: string; file: string; count: number }> }
+  | {
+      kind: "mostCalledMethods";
+      results: Array<{ name: string; file: string; count: number }>;
+    }
   | { kind: "dependencyChain"; results: string[] }
-  | { kind: "controllersMostEndpoints"; results: Array<{ name: string; file: string; count: number }> }
-  | { kind: "classesImplementing"; results: Array<{ name: string; file: string }> }
-  | { kind: "affectedFunctionsForModule"; results: Array<{ name: string; file: string }> }
-  | { kind: "highestComplexityClasses"; results: Array<{ name: string; file: string; complexity: number }> };
+  | {
+      kind: "controllersMostEndpoints";
+      results: Array<{ name: string; file: string; count: number }>;
+    }
+  | {
+      kind: "classesImplementing";
+      results: Array<{ name: string; file: string }>;
+    }
+  | {
+      kind: "affectedFunctionsForModule";
+      results: Array<{ name: string; file: string }>;
+    }
+  | {
+      kind: "highestComplexityClasses";
+      results: Array<{ name: string; file: string; complexity: number }>;
+    };
 
 export type RawSqlResult = {
   columns: string[];
@@ -165,7 +180,9 @@ const ensureSchema = (db: BetterSqliteDatabase) => {
   ];
 
   const indexRows = db
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%';")
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%';",
+    )
     .raw()
     .all() as Array<Array<unknown>>;
   const existingIndexes = new Set<string>();
@@ -218,16 +235,13 @@ const execRowsParams = (
   return normalized;
 };
 
-const loadFileEdges = (
-  db: BetterSqliteDatabase,
-  toType?: string,
-) => {
+const loadFileEdges = (db: BetterSqliteDatabase, toType?: string) => {
   const hasFilter = toType !== undefined;
   const sql = hasFilter
     ? "SELECT from_path, to_path FROM file_edges WHERE to_type = ?;"
     : "SELECT from_path, to_path, to_type FROM file_edges;";
   const rows = hasFilter
-    ? execRowsParams(db, sql, [toType as string])
+    ? execRowsParams(db, sql, [toType])
     : execRows(db, sql);
   return rows.map((row) => ({
     from: String(row[0]),
@@ -236,7 +250,10 @@ const loadFileEdges = (
   }));
 };
 
-const bfsDependencies = (edges: Array<{ from: string; to: string }>, start: string) => {
+const bfsDependencies = (
+  edges: Array<{ from: string; to: string }>,
+  start: string,
+) => {
   const adj = new Map<string, string[]>();
   for (const edge of edges) {
     const list = adj.get(edge.from) ?? [];
@@ -417,9 +434,9 @@ const deleteBySymbolIds = (db: BetterSqliteDatabase, ids: string[]) => {
   db.prepare(
     `DELETE FROM symbol_edges WHERE from_id IN (${placeholders});`,
   ).run(ids);
-  db.prepare(
-    `DELETE FROM symbol_edges WHERE to_id IN (${placeholders});`,
-  ).run(ids);
+  db.prepare(`DELETE FROM symbol_edges WHERE to_id IN (${placeholders});`).run(
+    ids,
+  );
   db.prepare(`DELETE FROM symbols WHERE id IN (${placeholders});`).run(ids);
 };
 

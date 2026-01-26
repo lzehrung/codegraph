@@ -11,17 +11,17 @@ index 0000000..1111111 100644
 @@ -1,0 +1,1 @@
 +// changed
 `;
-    const mock = vi.spyOn(global as any, 'fetch').mockResolvedValue({
+    const mock = vi.spyOn(global, 'fetch').mockResolvedValue({
       ok: true,
       text: async () => diff,
       status: 200,
       statusText: 'OK',
       headers: new Map(),
-    } as any);
+    });
 
-    const res = await getDiff({ provider: 'github', repo: 'owner/repo', pr: 123 } as any);
+    const res = await getDiff({ provider: 'github', repo: 'owner/repo', pr: 123 });
     expect(mock).toHaveBeenCalled();
-    const args = (mock.mock.calls[0]![1]!) as any;
+    const args = (mock.mock.calls[0]![1]!);
     expect(args.headers.Accept).toBe('application/vnd.github.v3.diff');
     expect(res.files.length).toBe(1);
     expect(res.files[0].path).toBe(abs);

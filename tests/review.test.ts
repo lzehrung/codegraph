@@ -551,13 +551,21 @@ describe('CLI flows', () => {
   });
 
   it('handles raw diffs touching multiple languages', async () => {
+    const root = await mkTmpDir('dg-multi-lang-');
+    const rustDir = path.join(root, 'rust');
+    const javaDir = path.join(root, 'java');
+    await fsp.mkdir(rustDir, { recursive: true });
+    await fsp.mkdir(javaDir, { recursive: true });
+    await fsp.writeFile(path.join(rustDir, 'main.rs'), 'fn main() {}', 'utf8');
+    await fsp.writeFile(path.join(javaDir, 'main.java'), 'public class Main {}', 'utf8');
+
     const stdout = await runCliCommand([
       'impact',
-      path.resolve(process.cwd(), 'tests', 'samples'),
+      root,
       '--provider',
       'raw',
     ], multiLanguageDiff);
-    const report = JSON.parse(stdout) as any;
+    const report = JSON.parse(stdout);
 
     expect(report.changedFiles.length).toBeGreaterThanOrEqual(2);
     expect(report.changedFiles.some((entry: any) => entry.file === 'rust/main.rs')).toBe(true);

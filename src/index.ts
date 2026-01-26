@@ -64,6 +64,7 @@ export {
   type ProjectIndex,
   type ResolvedExport,
   type BuildReport,
+  type BuildOptions,
   type CacheReport,
   type BuildTimingReport,
   type BuildFileReport,
@@ -162,6 +163,10 @@ export {
   tool_impactFromDiffText,
   tool_getFileOverview,
   tool_findSymbol,
+  tool_listProjectFiles,
+  tool_getGraph,
+  tool_goToDefinition,
+  tool_findReferences,
 } from "./agent-tools.js";
 export {
   writeGraphSqlite,

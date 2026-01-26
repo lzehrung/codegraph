@@ -156,4 +156,3 @@ function finalizeFile(file: any) {
   delete file._oldPathFromHeader;
   delete file._newPathFromHeader;
 }
-

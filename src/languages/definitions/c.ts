@@ -201,7 +201,10 @@ export const C_DEF: LanguageDefinition = {
       parent.type === "enum_specifier"
     )
       return "class";
-    if (parent.type === "type_definition" && isInField(node, parent, "declarator"))
+    if (
+      parent.type === "type_definition" &&
+      isInField(node, parent, "declarator")
+    )
       return "type";
     const container = findAncestor(node, containerTypes);
     if (container?.type === "function_definition") return "function";
@@ -240,7 +243,10 @@ export const C_DEF: LanguageDefinition = {
       return true;
     if (parent.type === "preproc_def" && isInField(node, parent, "name"))
       return true;
-    if (parent.type === "preproc_function_def" && isInField(node, parent, "name"))
+    if (
+      parent.type === "preproc_function_def" &&
+      isInField(node, parent, "name")
+    )
       return true;
     return false;
   },

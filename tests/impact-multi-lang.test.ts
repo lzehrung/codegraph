@@ -46,7 +46,7 @@ diff --git a/lib.py b/lib.py
         includeTests: true,
       });
 
-      const report = result as any;
+      const report = result;
       
       // Check TS impact
       const tsImpact = report.impacted.find((i: any) => i.file === tsConsumer);

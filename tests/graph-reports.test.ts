@@ -44,7 +44,7 @@ describe("graph reports", () => {
               {
                 type: "local" as const,
                 exportedAs: "foo",
-                target: { localName: "foo", kind: SymbolKind.Function, range: {} as any, file: `${root}/a.ts` },
+                target: { localName: "foo", kind: SymbolKind.Function, range: {}, file: `${root}/a.ts` },
               },
             ],
             imports: [],
@@ -52,7 +52,7 @@ describe("graph reports", () => {
           },
         ],
       ]),
-    } as any;
+    };
     const api = getApiSurface(mockIndex);
     expect(api.length).toBe(1);
     expect(api[0].file).toBe(`${root}/a.ts`);
@@ -82,7 +82,7 @@ describe("graph reports", () => {
           }
         ]
       ]),
-    } as any;
+    };
     const api = getApiSurface(mockIndex);
     const barrel = api.find(a => a.file === `${root}/barrel.ts`);
     expect(barrel).toBeDefined();

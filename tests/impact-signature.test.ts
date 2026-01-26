@@ -35,7 +35,7 @@ describe("impact signature hint", () => {
         includeTests: true,
       });
 
-      const report = result as any;
+      const report = result;
       expect(report.impacted.length).toBeGreaterThan(0);
       const impact = report.impacted.find((i: any) => i.file === consumer);
       expect(impact).toBeDefined();

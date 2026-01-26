@@ -61,7 +61,10 @@ export type PartialError = {
 /**
  * Create a successful partial result
  */
-export function success<T>(data: T, metadata?: PartialResult<T>["metadata"]): PartialResult<T> {
+export function success<T>(
+  data: T,
+  metadata?: PartialResult<T>["metadata"],
+): PartialResult<T> {
   const result: PartialResult<T> = {
     status: "complete",
     data,
@@ -306,9 +309,7 @@ export function filterErrorsBySeverity(
 /**
  * Get a summary of a partial result
  */
-export function summarizePartialResult(
-  result: PartialResult<unknown>,
-): string {
+export function summarizePartialResult(result: PartialResult<unknown>): string {
   const { status, coverage, errors, metadata } = result;
 
   if (status === "complete") {
@@ -328,9 +329,11 @@ export function summarizePartialResult(
   return `⚠ Partial (${pct}% complete: ${succeeded} succeeded, ${failed} failed)`;
 }
 
-function getResultCounts<T>(
-  result: PartialResult<T>,
-): { attempted: number; succeeded: number; failed: number } {
+function getResultCounts<T>(result: PartialResult<T>): {
+  attempted: number;
+  succeeded: number;
+  failed: number;
+} {
   if (result.metadata) {
     return {
       attempted: result.metadata.attempted,
@@ -342,7 +345,11 @@ function getResultCounts<T>(
   const attempted = 1;
   const coverage = Math.max(0, Math.min(1, result.coverage));
   const succeeded =
-    result.status === "complete" ? 1 : result.status === "failed" ? 0 : coverage;
+    result.status === "complete"
+      ? 1
+      : result.status === "failed"
+        ? 0
+        : coverage;
   const failed = attempted - succeeded;
 
   return { attempted, succeeded, failed };
