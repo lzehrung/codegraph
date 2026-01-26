@@ -1268,10 +1268,14 @@ async function main() {
     const mermaid = hasFlag("--mermaid");
 
     try {
-      const indexOpts: any = {
+      const cacheMode =
+        cache === "off" || cache === "memory" || cache === "disk"
+          ? cache
+          : undefined;
+      const indexOpts: BuildOptions = {
         threads,
-        cache,
-        cacheStrict,
+        ...(cacheMode !== undefined ? { cache: cacheMode } : {}),
+        ...(cacheStrict ? { cacheStrict: true } : {}),
       };
       if (hasGraphOverrides) {
         indexOpts.graph = {

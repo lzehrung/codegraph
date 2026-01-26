@@ -649,42 +649,46 @@ export async function discoverProjectFiles(
 ): Promise<ProjectFileInfo[]> {
   try {
     const root = path.resolve(projectRoot);
-    const fileDefs = PROJECT_FILE_DEFINITIONS.filter(
-      (def) => def.kind === "file",
+    const allPatterns = PROJECT_FILE_DEFINITIONS.flatMap((def) =>
+      def.patterns.map(toProjectGlob),
     );
-    const dirDefs = PROJECT_FILE_DEFINITIONS.filter(
-      (def) => def.kind === "dir",
-    );
-    const fileMatches = await Promise.all(
-      fileDefs.map(async (def) => {
-        const patterns = def.patterns.map(toProjectGlob);
-        const matches = await fg(patterns, {
-          cwd: root,
-          absolute: true,
-          dot: true,
-          ignore: DEFAULT_PROJECT_FILE_IGNORES,
+    const matches = await fg(allPatterns, {
+      cwd: root,
+      absolute: true,
+      dot: true,
+      ignore: DEFAULT_PROJECT_FILE_IGNORES,
+      markDirectories: true,
+      onlyFiles: false,
+    });
+
+    const entries: ProjectFileInfo[] = [];
+    const matchTasks = matches.map(async (match) => {
+      const isDir = match.endsWith("/");
+      const cleanMatch = isDir ? match.slice(0, -1) : match;
+      const fileName = path.basename(cleanMatch);
+
+      for (const def of PROJECT_FILE_DEFINITIONS) {
+        if (isDir && def.kind !== "dir") continue;
+        if (!isDir && def.kind !== "file") continue;
+
+        const matchesPattern = def.patterns.some((p) => {
+          if (p.includes("*") || p.includes("?")) {
+            const re = new RegExp(
+              "^" + p.replace(/\./g, "\\.").replace(/\*/g, ".*") + "$",
+            );
+            return re.test(fileName);
+          }
+          return p === fileName;
         });
-        return { def, matches };
-      }),
-    );
-    const dirMatches = await Promise.all(
-      dirDefs.map(async (def) => {
-        const patterns = def.patterns.map(toProjectGlob);
-        const matches = await fg(patterns, {
-          cwd: root,
-          absolute: true,
-          dot: true,
-          onlyDirectories: true,
-          ignore: DEFAULT_PROJECT_FILE_IGNORES,
-        });
-        return { def, matches };
-      }),
-    );
-    const entries = await Promise.all(
-      [...fileMatches, ...dirMatches].flatMap(({ def, matches }) =>
-        matches.map(async (match) => await buildProjectFileInfo(def, match)),
-      ),
-    );
+
+        if (matchesPattern) {
+          entries.push(await buildProjectFileInfo(def, cleanMatch));
+        }
+      }
+    });
+
+    await Promise.all(matchTasks);
+
     const byKey = new Map<string, ProjectFileInfo>();
     for (const entry of entries) {
       const key = `${entry.path}::${entry.type}::${entry.role}`;

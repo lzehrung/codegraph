@@ -1111,6 +1111,7 @@ export async function buildSymbolGraphDetailed(
   index: ProjectIndex,
   opts?: {
     scope?: "all" | "imported";
+    files?: Set<FileId>;
     maxEdges?: number;
     membersOnly?: boolean;
   },
@@ -1238,6 +1239,7 @@ export async function buildSymbolGraphDetailed(
   };
 
   for (const [file, mod] of index.byFile) {
+    if (opts?.files && !opts.files.has(file)) continue;
     if (scopeMode === "imported") {
       const hasFuncOrClass = mod.locals.some(
         (l) => l.kind === "function" || l.kind === "class",

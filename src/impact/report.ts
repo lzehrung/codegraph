@@ -89,6 +89,7 @@ export async function buildImpactReport(
   if (changedSymbols?.length > 0) {
     const detailedGraph = await buildSymbolGraphDetailed(index, {
       scope: "all",
+      files: relevantFiles,
       maxEdges: 10000, // Reasonable limit for impact analysis
       membersOnly: false,
     });

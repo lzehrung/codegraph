@@ -6,6 +6,7 @@ import Parser from "tree-sitter";
 import crypto from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { supportForFile, getCompiledQueries, type LanguageSupport } from "./languages.js";
+import { buildBloomFilterFromSource, BloomFilterCache } from "./util/bloomFilter.js";
 import { prepareParserInput } from "./languages/filePrep.js";
 import {
   listProjectFiles,
@@ -791,8 +792,6 @@ async function buildBloomFilterForFile(
   try {
     const source = await fsp.readFile(file, "utf8");
     const sup = supportForFile(file);
-    const { buildBloomFilterFromSource } =
-      await import("./util/bloomFilter.js");
     return buildBloomFilterFromSource(source, sup.id);
   } catch {
     return null;
@@ -2512,8 +2511,6 @@ async function buildIndexFromFileListShared(
       const { source: src, sup, lang, tree } = parsed;
 
       if (bloomFilterCache) {
-        const { buildBloomFilterFromSource } =
-          await import("./util/bloomFilter.js");
         const filter = buildBloomFilterFromSource(src, sup.id);
         bloomFilterCache.set(f, filter);
       }
@@ -4497,6 +4494,10 @@ export async function findReferences(
         for (const name of exportedNameSet) {
           names.add(name);
         }
+      } else if (imp.kind === "star") {
+        for (const name of exportedNameSet) {
+          names.add(name);
+        }
       }
     }
 
@@ -4515,9 +4516,13 @@ export async function findReferences(
       const filter = index.bloomFilters?.get(file);
       if (!filter) return true;
 
-      const names = getCandidateReferenceNames(mod);
-      if (names.length === 0) return true;
-      return names.some((name) => filter.mightContain(name));
+      const aliases = getCandidateReferenceNames(mod);
+      if (aliases.length === 0) {
+        // Fallback: if no direct imports found, it might still contain a reference
+        // via re-exports, globals, or same-package usage. Check the original names.
+        return exportedNames.some((name) => filter.mightContain(name));
+      }
+      return aliases.some((name) => filter.mightContain(name));
     });
   }
 
