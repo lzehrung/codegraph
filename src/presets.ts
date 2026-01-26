@@ -12,7 +12,11 @@ import type { BuildOptions } from "./indexer.js";
 import type { ImpactOptions } from "./impact/types.js";
 import type { SessionOptions } from "./session.js";
 
-export type PresetName = "code-review" | "ci-fast" | "development" | "production";
+export type PresetName =
+  | "code-review"
+  | "ci-fast"
+  | "development"
+  | "production";
 
 /**
  * Build option presets
@@ -61,7 +65,7 @@ export const BUILD_PRESETS: Record<PresetName, BuildOptions> = {
    * - Bloom filters enabled
    * - No strict caching (faster)
    */
-  "development": {
+  development: {
     cache: "memory",
     cacheStrict: false,
     useBloomFilters: true,
@@ -79,7 +83,7 @@ export const BUILD_PRESETS: Record<PresetName, BuildOptions> = {
    * - Full parsing (no fast mode)
    * - More threads for thoroughness
    */
-  "production": {
+  production: {
     cache: "disk",
     cacheStrict: true,
     useBloomFilters: true,
@@ -95,10 +99,7 @@ export const BUILD_PRESETS: Record<PresetName, BuildOptions> = {
 /**
  * Impact analysis presets
  */
-export const IMPACT_PRESETS: Record<
-  PresetName,
-  Partial<ImpactOptions>
-> = {
+export const IMPACT_PRESETS: Record<PresetName, Partial<ImpactOptions>> = {
   "code-review": {
     depth: 2,
     maxRefs: 1000,
@@ -118,7 +119,7 @@ export const IMPACT_PRESETS: Record<
     verifyReferences: false,
   },
 
-  "development": {
+  development: {
     depth: 2,
     maxRefs: 500,
     includeTests: true,
@@ -128,7 +129,7 @@ export const IMPACT_PRESETS: Record<
     verifyReferences: false,
   },
 
-  "production": {
+  production: {
     depth: 3,
     maxRefs: 2000,
     includeTests: true,
@@ -158,13 +159,13 @@ export const SESSION_PRESETS: Record<
     incremental: false, // Full rebuild for CI
   },
 
-  "development": {
+  development: {
     buildOptions: BUILD_PRESETS["development"],
     timeout: 60 * 60 * 1000, // 1 hour
     incremental: true,
   },
 
-  "production": {
+  production: {
     buildOptions: BUILD_PRESETS["production"],
     timeout: 2 * 60 * 60 * 1000, // 2 hours
     incremental: true,
@@ -181,9 +182,7 @@ export function getBuildPreset(preset: PresetName): BuildOptions {
 /**
  * Get impact options for a preset
  */
-export function getImpactPreset(
-  preset: PresetName,
-): Partial<ImpactOptions> {
+export function getImpactPreset(preset: PresetName): Partial<ImpactOptions> {
   return { ...IMPACT_PRESETS[preset] };
 }
 
@@ -219,10 +218,7 @@ export function mergePreset<T extends Record<string, unknown>>(
     if (customValue === undefined) continue;
 
     // Deep merge for nested objects
-    if (
-      isPlainObject(customValue) &&
-      isPlainObject(presetValue)
-    ) {
+    if (isPlainObject(customValue) && isPlainObject(presetValue)) {
       merged[key] = { ...presetValue, ...customValue };
     } else {
       merged[key] = customValue;
@@ -233,9 +229,5 @@ export function mergePreset<T extends Record<string, unknown>>(
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value)
-  );
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

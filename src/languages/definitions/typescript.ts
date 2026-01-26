@@ -3,8 +3,8 @@ import type { Language } from "tree-sitter";
 import tsGrammars from "tree-sitter-typescript";
 import type { LanguageDefinition } from "../types.js";
 
-const LangTS = (tsGrammars as any).typescript as Language;
-const LangTSX = (tsGrammars as any).tsx as Language;
+const LangTS = tsGrammars.typescript as Language;
+const LangTSX = tsGrammars.tsx as Language;
 
 const BASE_STRUCTURE = {
   blocks: [

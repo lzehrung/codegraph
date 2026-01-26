@@ -372,7 +372,10 @@ export async function calculateSeverity(
       return l.localName === changedSymbol.name && localIndex === changedIndex;
     });
     if (symbolDef) {
-      const parsed = await ensureParsedContext(changedSymbol.file, index.parsed?.get(changedSymbol.file));
+      const parsed = await ensureParsedContext(
+        changedSymbol.file,
+        index.parsed?.get(changedSymbol.file),
+      );
       if (parsed) {
         const { tree, sup } = parsed;
         const pos = {
@@ -381,12 +384,24 @@ export async function calculateSeverity(
         };
         const node = tree.rootNode.descendantForPosition(pos, pos);
         let declNode: any = node;
-        while (declNode && !["function_declaration", "function_definition", "method_definition", "method_declaration", "class_declaration", "class_definition"].includes(declNode.type)) {
+        while (
+          declNode &&
+          ![
+            "function_declaration",
+            "function_definition",
+            "method_definition",
+            "method_declaration",
+            "class_declaration",
+            "class_definition",
+          ].includes(declNode.type)
+        ) {
           declNode = declNode.parent;
         }
-        
+
         if (declNode) {
-          const params = declNode.childForFieldName("parameters") || declNode.childForFieldName("params");
+          const params =
+            declNode.childForFieldName("parameters") ||
+            declNode.childForFieldName("params");
           if (params && params.namedChildCount > 0) {
             hints.push("signatureChanged");
           }
@@ -432,13 +447,7 @@ function calculateTransitiveSeverity(edge: any, depth: number): number {
 }
 
 function buildTestPatterns(patterns?: string[]): RegExp[] {
-  const defaults = [
-    /test/i,
-    /spec/i,
-    /__tests__/,
-    /\.test\./,
-    /\.spec\./,
-  ];
+  const defaults = [/test/i, /spec/i, /__tests__/, /\.test\./, /\.spec\./];
   const custom = (patterns ?? []).map((pattern) => new RegExp(pattern));
   return [...defaults, ...custom];
 }

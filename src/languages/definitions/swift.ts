@@ -27,7 +27,8 @@ export const SWIFT_DEF: LanguageDefinition = {
       },
       {
         type: "property_declaration",
-        nameQuery: "name: (pattern bound_identifier: (simple_identifier) @chunk.name)",
+        nameQuery:
+          "name: (pattern bound_identifier: (simple_identifier) @chunk.name)",
         captureId: "property",
       },
       {

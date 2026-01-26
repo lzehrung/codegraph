@@ -2,10 +2,15 @@ import {
   buildProjectIndex,
   analyzeImpactFromDiff,
   listSymbols,
+  listProjectFiles,
+  collectGraph,
+  goToDefinition,
+  findReferences,
   type ImpactOptions,
   type ImpactReport,
   type CompactImpactReport,
-  type SymbolListItem,
+  type Edge,
+  type ProjectIndex,
 } from "./index.js";
 import path from "path";
 
@@ -95,15 +100,15 @@ export async function tool_getFileOverview(
       // Group by file (from ID: file::local::import) is hard because ID format for imports is specific
       // We'll just list them simply for now
       const uniqueImports = Array.from(new Set(imports.map((i) => i.name)));
-      lines.push(
-        `Imported symbols: ${uniqueImports.sort().join(", ")}`,
-      );
+      lines.push(`Imported symbols: ${uniqueImports.sort().join(", ")}`);
     }
 
     if (defs.length > 0) {
       lines.push("\n## Definitions");
       // Sort by line number
-      defs.sort((a, b) => (a.range?.start.line ?? 0) - (b.range?.start.line ?? 0));
+      defs.sort(
+        (a, b) => (a.range?.start.line ?? 0) - (b.range?.start.line ?? 0),
+      );
 
       for (const def of defs) {
         const lineInfo = def.range ? `(line ${def.range.start.line})` : "";
@@ -126,10 +131,11 @@ export async function tool_getFileOverview(
 export async function tool_findSymbol(
   root: string,
   query: string,
-  options: { maxResults?: number } = {},
+  options: { maxResults?: number; index?: ProjectIndex } = {},
 ): Promise<Array<{ name: string; kind: string; file: string; line: number }>> {
   try {
-    const index = await buildProjectIndex(root, { logLevel: "error" });
+    const index =
+      options.index ?? (await buildProjectIndex(root, { logLevel: "error" }));
     const allSymbols = listSymbols(index, { includeImports: false });
     const q = query.toLowerCase();
 
@@ -144,16 +150,125 @@ export async function tool_findSymbol(
 
     // Sort by exact match then name
     matches.sort((a, b) => {
-        const aExact = a.name.toLowerCase() === q;
-        const bExact = b.name.toLowerCase() === q;
-        if (aExact && !bExact) return -1;
-        if (!aExact && bExact) return 1;
-        return a.name.localeCompare(b.name);
+      const aExact = a.name.toLowerCase() === q;
+      const bExact = b.name.toLowerCase() === q;
+      if (aExact && !bExact) return -1;
+      if (!aExact && bExact) return 1;
+      return a.name.localeCompare(b.name);
     });
 
     return matches.slice(0, options.maxResults ?? 20);
   } catch (error) {
     console.error(error);
     return [];
+  }
+}
+
+/**
+ * Lists all files in the project that codegraph can analyze.
+ */
+export async function tool_listProjectFiles(
+  root: string,
+): Promise<{ status: "ok" | "error"; files?: string[]; error?: string }> {
+  try {
+    const files = await listProjectFiles(root);
+    return { status: "ok", files };
+  } catch (error) {
+    return { status: "error", error: String(error) };
+  }
+}
+
+/**
+ * Gets the dependency graph for the project.
+ */
+export async function tool_getGraph(
+  root: string,
+): Promise<{
+  status: "ok" | "error";
+  graph?: { nodes: string[]; edges: Edge[] };
+  error?: string;
+}> {
+  try {
+    const files = await listProjectFiles(root);
+    const g = await collectGraph(root, files);
+    return { status: "ok", graph: { nodes: [...g.nodes], edges: g.edges } };
+  } catch (error) {
+    return { status: "error", error: String(error) };
+  }
+}
+
+function normalizePathArg(root: string, file: string): string {
+  const absPath = path.isAbsolute(file) ? file : path.resolve(root, file);
+  return absPath.replace(/\\/g, "/");
+}
+
+/**
+ * Go to definition for a symbol at a specific location.
+ */
+export async function tool_goToDefinition(
+  root: string,
+  file: string,
+  line: number,
+  column: number,
+  index?: ProjectIndex,
+): Promise<{
+  status: "ok" | "error" | "not_found";
+  definition?: {
+    file: string;
+    range: {
+      start: {
+        line: number;
+        column: number;
+      };
+    };
+  };
+  error?: string;
+  reason?: string;
+}> {
+  try {
+    const idx = index ?? (await buildProjectIndex(root, { logLevel: "error" }));
+    const normalizedPath = normalizePathArg(root, file);
+
+    const result = await goToDefinition(idx, {
+      file: normalizedPath,
+      line,
+      column,
+    });
+    return result;
+  } catch (error) {
+    return { status: "error", error: String(error) };
+  }
+}
+
+/**
+ * Find references for a symbol at a specific location.
+ */
+export async function tool_findReferences(
+  root: string,
+  file: string,
+  line: number,
+  column: number,
+  index?: ProjectIndex,
+): Promise<{
+  status: "ok" | "error" | "not_found";
+  references?: Array<{
+    file: string;
+    range: { start: { line: number; column: number } };
+  }>;
+  error?: string;
+  reason?: string;
+}> {
+  try {
+    const idx = index ?? (await buildProjectIndex(root, { logLevel: "error" }));
+    const normalizedPath = normalizePathArg(root, file);
+
+    const result = await findReferences(idx, {
+      file: normalizedPath,
+      line,
+      column,
+    });
+    return result;
+  } catch (error) {
+    return { status: "error", error: String(error) };
   }
 }

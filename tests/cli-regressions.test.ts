@@ -73,7 +73,7 @@ describe('CLI regressions', () => {
     const outPath = path.join(tmpDir, 'graph.json');
     await runCliCommand(['graph', '--root', tsRoot, '-o', outPath]);
     const raw = await fsp.readFile(outPath, 'utf8');
-    const graph = JSON.parse(raw) as any;
+    const graph = JSON.parse(raw);
     expect(graph.nodes).toBeInstanceOf(Array);
     expect(graph.edges).toBeInstanceOf(Array);
   });

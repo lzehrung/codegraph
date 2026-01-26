@@ -89,6 +89,7 @@ export async function buildImpactReport(
   if (changedSymbols?.length > 0) {
     const detailedGraph = await buildSymbolGraphDetailed(index, {
       scope: "all",
+      files: relevantFiles,
       maxEdges: 10000, // Reasonable limit for impact analysis
       membersOnly: false,
     });
@@ -425,11 +426,11 @@ function buildReexportChains(
         continue;
       }
       let resolvedSourcePath = entry.fromModule;
-      if (!path.isAbsolute(entry.fromModule) && entry.fromModule.startsWith(".")) {
-        resolvedSourcePath = path.resolve(
-          path.dirname(file),
-          entry.fromModule,
-        );
+      if (
+        !path.isAbsolute(entry.fromModule) &&
+        entry.fromModule.startsWith(".")
+      ) {
+        resolvedSourcePath = path.resolve(path.dirname(file), entry.fromModule);
       }
       const sourceFile = normalizePath(resolvedSourcePath);
       const edges = reexportsBySource.get(sourceFile) ?? [];
@@ -469,10 +470,7 @@ function buildReexportChains(
       for (const edge of edges) {
         // Only filter named re-exports by symbol name. Export-star and namespace
         // re-exports include all symbols from the source module.
-        if (
-          edge.type === "reexport" &&
-          edge.sourceSpecifier !== symbol.name
-        ) {
+        if (edge.type === "reexport" && edge.sourceSpecifier !== symbol.name) {
           continue;
         }
         if (current.pathSet.has(edge.exporter)) {

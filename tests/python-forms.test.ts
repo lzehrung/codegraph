@@ -31,8 +31,8 @@ describe('Python import and __all__ forms', () => {
     ].join('\n\n'), 'utf8');
     const index = await buildProjectIndex(root);
     const mfile = mod.replace(/\\/g, '/');
-    const aHit = resolveExport(index as any, mfile, 'a');
-    const bHit = resolveExport(index as any, mfile, 'b');
+    const aHit = resolveExport(index, mfile, 'a');
+    const bHit = resolveExport(index, mfile, 'b');
     expect(aHit && bHit).not.toBeNull();
   });
 });

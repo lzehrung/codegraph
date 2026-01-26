@@ -20,7 +20,7 @@ describe('TypeScript paths/baseUrl resolution via tsconfig', () => {
           '@lib/*': ['lib/*']
         }
       }
-    } as any;
+    };
     await fsp.writeFile(path.join(root, 'tsconfig.json'), JSON.stringify(tsconfig, null, 2), 'utf8');
     const libDir = path.join(root, 'lib');
     await fsp.mkdir(libDir);

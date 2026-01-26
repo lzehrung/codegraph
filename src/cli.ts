@@ -40,6 +40,7 @@ import {
 } from "./index.js";
 import type {
   BuildReport,
+  BuildOptions,
   ReviewBuildReport,
   Graph,
   SymbolGraph,
@@ -264,7 +265,7 @@ function compactGraphWithSymbols(
       file: fileIndex.get(n.file)!,
       name: n.name,
       kind: n.kind,
-    } as any;
+    };
   });
 
   const symbolEdges = sgraph.edges.map((e: any) => ({
@@ -316,7 +317,7 @@ function compactSymbolsOnly(
       file: fileIndex.get(n.file)!,
       name: n.name,
       kind: n.kind,
-    } as any;
+    };
   });
 
   const symbolEdges = sgraph.edges.map((e: any) => ({
@@ -378,8 +379,8 @@ function stabilizeSymbolGraph(graph: SymbolGraph): SymbolGraph {
     const at = String(a.to);
     const bt = String(b.to);
     if (at !== bt) return at < bt ? -1 : 1;
-    const al = String((a as any).label ?? "");
-    const bl = String((b as any).label ?? "");
+    const al = String(a.label ?? "");
+    const bl = String(b.label ?? "");
     if (al !== bl) return al < bl ? -1 : 1;
     return 0;
   });
@@ -456,7 +457,7 @@ function ensureImpactReport(
     if (item.depth !== undefined) impact.depth = item.depth;
     if (item.typeOnly !== undefined) impact.typeOnly = item.typeOnly;
     if (item.explain !== undefined) impact.explain = item.explain;
-    const maybeRefs = (item as any).refs;
+    const maybeRefs = "refs" in item ? (item as { refs?: ImpactItem["refs"] }).refs : undefined;
     if (maybeRefs !== undefined) impact.refs = maybeRefs;
     return impact;
   });
@@ -580,8 +581,7 @@ function parseReviewDepth(value: string): ReviewDepth | null {
 
 async function main() {
   const rawArgs = process.argv.slice(2);
-  const cmd =
-    rawArgs[0] && !rawArgs[0].startsWith("-") ? rawArgs[0] : "graph";
+  const cmd = rawArgs[0] && !rawArgs[0].startsWith("-") ? rawArgs[0] : "graph";
   const argTokens =
     rawArgs[0] && !rawArgs[0].startsWith("-") ? rawArgs.slice(1) : rawArgs;
 
@@ -654,11 +654,14 @@ async function main() {
   const isUnderIncludeRoots = (filePath: string): boolean => {
     if (includeRootsAbs.length === 0) return true;
     const f = filePath.replace(/\\/g, "/");
-    return includeRootsAbs.some((root) => f === root || f.startsWith(`${root}/`));
+    return includeRootsAbs.some(
+      (root) => f === root || f.startsWith(`${root}/`),
+    );
   };
 
   const resolveFilesFromRoots = async (): Promise<string[]> => {
-    if (includeRootsAbs.length === 0) return await listProjectFiles(projectRootFs);
+    if (includeRootsAbs.length === 0)
+      return await listProjectFiles(projectRootFs);
     const normalizedRoots = includeRootsAbs;
     const all: string[][] = await Promise.all(
       normalizedRoots.map(async (r) => await listProjectFiles(r)),
@@ -675,9 +678,11 @@ async function main() {
       );
     }
     if (changedSince) {
-      return (await listChangedFiles(projectRootFs, {
-        changedSince,
-      })).filter(isUnderIncludeRoots);
+      return (
+        await listChangedFiles(projectRootFs, {
+          changedSince,
+        })
+      ).filter(isUnderIncludeRoots);
     }
     return null;
   };
@@ -714,9 +719,7 @@ async function main() {
     const dbOpt = getOpt("--db") ?? getOpt("--sqlite");
     const queryText = getOpt("--query");
     if (!dbOpt || !queryText) {
-      writeStderrLine(
-        "Usage: sql --db <sqlite path> --query \"SELECT ...\"",
-      );
+      writeStderrLine('Usage: sql --db <sqlite path> --query "SELECT ..."');
       process.exit(1);
     }
     const dbPath = path.isAbsolute(dbOpt)
@@ -730,7 +733,7 @@ async function main() {
   if (cmd === "graph-delta") {
     const files = await resolveFiles();
     const threads = Number(getOpt("--threads") ?? 0);
-    const cache = getOpt("--cache") as any;
+    const cache = getOpt("--cache") as "off" | "memory" | "disk" | undefined;
     const cacheStrict = hasFlag("--cache-strict");
     const cacheVerify = hasFlag("--cache-verify");
     const incrementalStrict = hasFlag("--incremental-strict");
@@ -738,7 +741,7 @@ async function main() {
     const graphOptions = hasGraphOverrides ? buildGraphOptions() : undefined;
     const delta = await buildGraphDelta(projectRootFs, {
       threads,
-      cache,
+      ...(cache !== undefined ? { cache } : {}),
       cacheStrict,
       cacheVerify,
       incrementalStrict,
@@ -788,7 +791,7 @@ async function main() {
     const wantSymbols = hasExplicitSymbolFlag;
     const detailedSymbols = hasFlag("--symbols-detailed");
     const threads = Number(getOpt("--threads") ?? 0);
-    const cache = getOpt("--cache") as any;
+    const cache = getOpt("--cache") as "off" | "memory" | "disk" | undefined;
     const cacheStrict = hasFlag("--cache-strict");
     const stable = hasFlag("--stable");
     const format = hasFlag("--mermaid")
@@ -846,27 +849,26 @@ async function main() {
     if (sqliteFile) {
       const index = await buildProjectIndexFromFiles(projectRootFs, files, {
         threads,
-        cache,
+        ...(cache !== undefined ? { cache } : {}),
         cacheStrict,
         graph: {
           fast,
           resolveNodeModules,
           dynamicImportHeuristics,
-          ...(resolutionHints.length > 0
-            ? { resolutionHints }
-            : {}),
+          ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
         },
         ...(indexReport ? { report: indexReport } : {}),
       });
       const detailedSymbols = hasFlag("--symbols-detailed");
-      const scope = getOpt("--symbols-detailed-scope") as any;
+      const scope = getOpt("--symbols-detailed-scope") as "all" | "imported" | undefined;
       const maxEdgesRaw = getOpt("--symbols-detailed-max-edges");
-      const maxEdges = maxEdgesRaw !== undefined ? Number(maxEdgesRaw) : undefined;
+      const maxEdges =
+        maxEdgesRaw !== undefined ? Number(maxEdgesRaw) : undefined;
       const membersOnly = hasFlag("--symbols-detailed-members-only");
       const sgraph = detailedSymbols
         ? await buildSymbolGraphDetailed(index, {
-            scope: scope as any,
-            maxEdges: typeof maxEdges === "number" ? maxEdges : (undefined as any),
+            ...(scope !== undefined ? { scope } : {}),
+            ...(typeof maxEdges === "number" ? { maxEdges } : {}),
             membersOnly,
           })
         : await buildSymbolGraph(index);
@@ -881,29 +883,26 @@ async function main() {
     if (wantSymbols) {
       const index = await buildProjectIndexFromFiles(projectRootFs, files, {
         threads,
-        cache,
+        ...(cache !== undefined ? { cache } : {}),
         cacheStrict,
         graph: {
           fast,
           resolveNodeModules,
           dynamicImportHeuristics,
-          ...(resolutionHints.length > 0
-            ? { resolutionHints }
-            : {}),
+          ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
         },
         ...(indexReport ? { report: indexReport } : {}),
       });
       let sgraph;
       if (detailedSymbols) {
-        const scope = getOpt("--symbols-detailed-scope") as any;
+        const scope = getOpt("--symbols-detailed-scope") as "all" | "imported" | undefined;
         const maxEdgesRaw = getOpt("--symbols-detailed-max-edges");
         const maxEdges =
           maxEdgesRaw !== undefined ? Number(maxEdgesRaw) : undefined;
         const membersOnly = hasFlag("--symbols-detailed-members-only");
         sgraph = await buildSymbolGraphDetailed(index, {
-          scope: scope as any,
-          maxEdges:
-            typeof maxEdges === "number" ? maxEdges : (undefined as any),
+          ...(scope !== undefined ? { scope } : {}),
+          ...(typeof maxEdges === "number" ? { maxEdges } : {}),
           membersOnly,
         });
       } else {
@@ -995,7 +994,7 @@ async function main() {
       );
     }
     const threads = Number(getOpt("--threads") ?? 0);
-    const cache = getOpt("--cache") as any;
+    const cache = getOpt("--cache") as "off" | "memory" | "disk" | undefined;
     const cacheStrict = hasFlag("--cache-strict");
     const full = hasFlag("--json") || hasFlag("--full");
     const cacheVerify = hasFlag("--cache-verify");
@@ -1007,9 +1006,9 @@ async function main() {
     if (commandReport && indexReport) {
       commandReport.index = indexReport;
     }
-    const baseIndexOptions = {
+    const baseIndexOptions: BuildOptions = {
       threads,
-      cache,
+      ...(cache !== undefined ? { cache } : {}),
       cacheStrict,
       cacheVerify,
       ...(graphOptions ? { graph: graphOptions } : {}),
@@ -1017,7 +1016,11 @@ async function main() {
     };
     const index = shouldWriteManifest
       ? await buildProjectIndex(projectRootFs, baseIndexOptions)
-      : await buildProjectIndexFromFiles(projectRootFs, files, baseIndexOptions);
+      : await buildProjectIndexFromFiles(
+          projectRootFs,
+          files,
+          baseIndexOptions,
+        );
     if (full) {
       const modules = [...index.byFile.values()].map((m) => ({
         file: m.file,
@@ -1190,9 +1193,9 @@ async function main() {
   }
 
   if (cmd === "impact") {
-    const provider = (getOpt("--provider") ?? "git") as string;
+    const provider = (getOpt("--provider") ?? "git");
 
-    let options: any = { provider };
+    const options: any = { provider };
 
     if (provider === "git") {
       const base = getOpt("--base");
@@ -1220,7 +1223,7 @@ async function main() {
     const threads = threadsRaw ? Number(threadsRaw) : 0;
     if (threadsRaw) options.threads = threads;
 
-    const cache = getOpt("--cache") as any;
+    const cache = getOpt("--cache");
     if (cache !== undefined) options.cache = cache;
 
     const cacheStrict = hasFlag("--cache-strict");
@@ -1265,19 +1268,21 @@ async function main() {
     const mermaid = hasFlag("--mermaid");
 
     try {
-      const indexOpts: any = {
+      const cacheMode =
+        cache === "off" || cache === "memory" || cache === "disk"
+          ? cache
+          : undefined;
+      const indexOpts: BuildOptions = {
         threads,
-        cache,
-        cacheStrict,
+        ...(cacheMode !== undefined ? { cache: cacheMode } : {}),
+        ...(cacheStrict ? { cacheStrict: true } : {}),
       };
       if (hasGraphOverrides) {
         indexOpts.graph = {
           fast: fastGraph,
           resolveNodeModules,
           dynamicImportHeuristics,
-          ...(resolutionHints.length > 0
-            ? { resolutionHints }
-            : {}),
+          ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
         };
       }
       const index = await buildProjectIndex(projectRootFs, indexOpts);
@@ -1357,7 +1362,7 @@ async function main() {
     }
     const threadsRaw = getOpt("--threads");
     const threads = threadsRaw !== undefined ? Number(threadsRaw) : undefined;
-    const cache = getOpt("--cache") as any;
+    const cache = getOpt("--cache");
     const cacheStrict = hasFlag("--cache-strict");
     const cacheVerify = hasFlag("--cache-verify");
     const incrementalStrict = hasFlag("--incremental-strict");
@@ -1374,7 +1379,9 @@ async function main() {
     if (head !== undefined) reviewOpts.gitHead = head;
     if (changedSince !== undefined) reviewOpts.changedSince = changedSince;
     if (threads !== undefined) reviewOpts.threads = threads;
-    if (cache !== undefined) reviewOpts.cache = cache;
+    if (cache === "off" || cache === "memory" || cache === "disk") {
+      reviewOpts.cache = cache;
+    }
     if (cacheStrict) reviewOpts.cacheStrict = true;
     if (cacheVerify) reviewOpts.cacheVerify = true;
     if (incrementalStrict) reviewOpts.incrementalStrict = true;
@@ -1422,7 +1429,11 @@ async function main() {
     const results =
       cmd === "deps"
         ? getDependencies(graph, file, depth !== undefined ? { depth } : {})
-        : getReverseDependencies(graph, file, depth !== undefined ? { depth } : {});
+        : getReverseDependencies(
+            graph,
+            file,
+            depth !== undefined ? { depth } : {},
+          );
 
     if (json) {
       writeJSONLine(results);
@@ -1432,7 +1443,9 @@ async function main() {
       );
       for (const res of results) {
         const rel = path.relative(projectRootFs, res.file);
-        writeStdoutLine(`${"  ".repeat(res.depth)} ${rel} (depth ${res.depth})`);
+        writeStdoutLine(
+          `${"  ".repeat(res.depth)} ${rel} (depth ${res.depth})`,
+        );
       }
     }
     return;
@@ -1515,7 +1528,9 @@ async function main() {
       if (unresolved.length === 0) {
         writeStdoutLine("No unresolved external imports found.");
       } else {
-        writeStdoutLine(`Found ${unresolved.length} unresolved external imports:`);
+        writeStdoutLine(
+          `Found ${unresolved.length} unresolved external imports:`,
+        );
         for (const item of unresolved) {
           writeStdoutLine(
             `- ${item.name} (imported by ${item.importers.length} files)`,
@@ -1651,7 +1666,7 @@ async function main() {
       } else {
         // Use semantic chunking for code files
         const langConfig =
-          LANG_CONFIGS[languageId as keyof typeof LANG_CONFIGS];
+          LANG_CONFIGS[languageId];
         if (!langConfig) {
           writeStderrLine(`Unsupported language: ${languageId}`);
           process.exit(1);

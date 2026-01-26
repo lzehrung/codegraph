@@ -63,7 +63,7 @@ describe("impact CLI output", () => {
       "--provider",
       "raw",
     ]);
-    const report = JSON.parse(stdout) as any;
+    const report = JSON.parse(stdout);
     expect(report.changedFiles).toHaveLength(1);
     expect(report.changedFiles[0]?.file).toBe("utils.ts");
   });

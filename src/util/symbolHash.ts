@@ -27,10 +27,7 @@ export type SymbolHash = {
  * Compute a stable hash for a symbol's definition
  * This hash changes only when the symbol's implementation changes
  */
-export function computeSymbolHash(
-  def: SymbolDef,
-  source: string,
-): SymbolHash {
+export function computeSymbolHash(def: SymbolDef, source: string): SymbolHash {
   const id = symbolIdentifier(def);
 
   // Extract the symbol's text from source
@@ -39,7 +36,8 @@ export function computeSymbolHash(
   const symbolText = source.slice(startIdx, endIdx);
 
   // Compute hash of the symbol's content
-  const hash = crypto.createHash("sha256")
+  const hash = crypto
+    .createHash("sha256")
     .update(symbolText)
     .digest("hex")
     .slice(0, 16); // Use first 16 chars for compactness
@@ -73,8 +71,8 @@ export function detectSymbolChanges(
   modified: SymbolHash[];
   unchanged: SymbolHash[];
 } {
-  const oldMap = new Map(oldHashes.map(h => [h.id, h]));
-  const newMap = new Map(newHashes.map(h => [h.id, h]));
+  const oldMap = new Map(oldHashes.map((h) => [h.id, h]));
+  const newMap = new Map(newHashes.map((h) => [h.id, h]));
 
   const added: SymbolHash[] = [];
   const removed: SymbolHash[] = [];
@@ -128,9 +126,9 @@ export function computeFileSymbolHashes(
   const hashes: SymbolHash[] = [];
   const exportedNames = new Set(
     exports
-      .filter(e => e.type === "local")
-      .map(e => e.target?.localName)
-      .filter(Boolean)
+      .filter((e) => e.type === "local")
+      .map((e) => e.target?.localName)
+      .filter(Boolean),
   );
 
   for (const symbol of symbols) {
