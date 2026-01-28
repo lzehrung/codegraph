@@ -27,6 +27,8 @@ This plugin exposes the following tools to the agent:
 *   **impact**: Analyze impact of changes (compare git revisions).
 *   **grep**: Search for symbols or patterns using Tree-sitter query or regex.
 
+All tools return JSON output that includes the execution source (`library` or `cli`), the root directory used, and the tool result payload. For graph calls with `format: "mermaid"`, the `result` is a Mermaid diagram string.
+
 ## Usage in System Prompt
 
 To help the agent use these tools effectively, add the following to your system prompt:
@@ -36,6 +38,13 @@ To help the agent use these tools effectively, add the following to your system 
 > *   Use `codegraph_definition` to find where functions/classes are defined.
 > *   Use `codegraph_references` to find usages before renaming or refactoring.
 > *   Use `codegraph_impact` to see what might break before you edit code.
+> *   Provide file paths relative to the repo root when possible for best results.
+> *   Parse the JSON output (fields: `status`, `source`, `result`) before acting.
+
+## Implementation Notes
+
+*   Tool paths are resolved relative to the OpenCode session `worktree` (preferred) or `directory`, following the custom tools documentation.
+*   When the library is unavailable, the plugin falls back to `npx codegraph` and preserves a consistent JSON response shape.
 
 ## Architecture
 

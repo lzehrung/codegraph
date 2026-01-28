@@ -1,5 +1,6 @@
-import { tool } from "@opencode-ai/plugin";
+import { tool, type ToolContext } from "@opencode-ai/plugin/tool";
 import { spawn } from "node:child_process";
+import path from "node:path";
 
 // Try to import the library for direct usage
 // In workspace environment, this should resolve to the local package
@@ -10,21 +11,68 @@ try {
   // Library not available, will fall back to CLI
 }
 
+type ToolResponse = {
+  status: "ok" | "error";
+  source: "library" | "cli";
+  root: string;
+  result?: unknown;
+  error?: string;
+  command?: string[];
+};
+
+const normalizeRoot = (context: ToolContext): string => {
+  if (context.worktree) {
+    return context.worktree;
+  }
+  return context.directory;
+};
+
+const normalizeFilePath = (root: string, filePath: string): string => {
+  if (path.isAbsolute(filePath)) {
+    return filePath;
+  }
+  return path.join(root, filePath);
+};
+
+const tryParseJson = (text: string): unknown => {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch (error) {
+    return text;
+  }
+};
+
+const stringifyResult = (value: unknown): string => {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value instanceof Uint8Array) {
+    return new TextDecoder().decode(value);
+  }
+  const json = JSON.stringify(value, null, 2);
+  return json ?? "";
+};
+
+const formatResponse = (response: ToolResponse): string =>
+  stringifyResult(response);
+
 // Helper to run codegraph via library or CLI
 async function runCodegraph(
+  context: ToolContext,
   cliArgs: string[],
-  libFn?: () => Promise<any>
-) {
+  libFn?: () => Promise<unknown>,
+): Promise<string> {
+  const root = normalizeRoot(context);
   // 1. Try library API if available
   if (codegraph && libFn) {
     try {
       const result = await libFn();
-      // Ensure we return the 'report' property if the tool wrapper returns { status, report }
-      // or the raw result if it matches the expected shape.
-      if (result && typeof result === 'object' && 'report' in result) {
-        return result.report;
-      }
-      return result;
+      return formatResponse({
+        status: "ok",
+        source: "library",
+        root,
+        result,
+      });
     } catch (e) {
       // If library call fails, fall back to CLI
       console.warn("Codegraph library call failed, falling back to CLI:", e);
@@ -38,7 +86,7 @@ async function runCodegraph(
   if (typeof Bun !== "undefined") {
     // Use Bun spawn if available (preferred in OpenCode)
     const proc = Bun.spawn(cmd, {
-      cwd: process.cwd(),
+      cwd: root,
       stderr: "pipe",
       stdout: "pipe",
     });
@@ -47,19 +95,27 @@ async function runCodegraph(
     const err = await new Response(proc.stderr).text();
 
     if (err && !text) {
-      throw new Error(`Codegraph error: ${err}`);
+      return formatResponse({
+        status: "error",
+        source: "cli",
+        root,
+        command: cmd,
+        error: err,
+      });
     }
 
-    try {
-      return JSON.parse(text);
-    } catch (e) {
-      return text; // Return raw text if not JSON
-    }
+    return formatResponse({
+      status: "ok",
+      source: "cli",
+      root,
+      command: cmd,
+      result: tryParseJson(text),
+    });
   } else {
     // Fallback to Node.js child_process
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       const proc = spawn("npx", ["codegraph", ...cliArgs], {
-        cwd: process.cwd(),
+        cwd: root,
         shell: true, // Needed for npx in some environments
       });
 
@@ -76,131 +132,216 @@ async function runCodegraph(
 
       proc.on("close", (code) => {
         if (code !== 0 && stderr && !stdout) {
-          reject(new Error(`Codegraph error (exit code ${code}): ${stderr}`));
+          resolve(
+            formatResponse({
+              status: "error",
+              source: "cli",
+              root,
+              command: cmd,
+              error: `Codegraph error (exit code ${code}): ${stderr}`,
+            }),
+          );
           return;
         }
-        try {
-          resolve(JSON.parse(stdout));
-        } catch (e) {
-          resolve(stdout); // Return raw text if not JSON
-        }
+        resolve(
+          formatResponse({
+            status: "ok",
+            source: "cli",
+            root,
+            command: cmd,
+            result: tryParseJson(stdout),
+          }),
+        );
       });
 
       proc.on("error", (err) => {
-        reject(err);
+        resolve(
+          formatResponse({
+            status: "error",
+            source: "cli",
+            root,
+            command: cmd,
+            error: String(err),
+          }),
+        );
       });
     });
   }
 }
 
 export const graph = tool({
-  description: "Get the dependency graph of the project",
+  description:
+    "Get the project dependency graph. Use this to understand module/file relationships before refactors. Returns JSON (status/source/root/result) or Mermaid text.",
   args: {
-    format: tool.schema.enum(["json", "mermaid"]).optional().describe("Output format (default: json)"),
+    format: tool.schema
+      .enum(["json", "mermaid"])
+      .optional()
+      .describe("Output format (default: json)"),
   },
-  async execute(args: any) {
-    return await runCodegraph(
-      ["graph", ".", ...(args.format === "mermaid" ? ["--mermaid"] : ["--json", "--compact-json"])],
+  async execute(args, context) {
+    const format = args.format ?? "json";
+    return runCodegraph(
+      context,
+      [
+        "graph",
+        ".",
+        ...(format === "mermaid"
+          ? ["--mermaid"]
+          : ["--json", "--compact-json"]),
+      ],
       async () => {
-        if (!codegraph) throw new Error("Library not loaded");
-        if (args.format === "mermaid") {
-           // The library export for mermaid graph generation isn't directly exposed as a simple tool wrapper yet
-           // but we can use the raw graph object
-           const g = await codegraph.tool_getGraph(process.cwd());
-           // @ts-ignore - types mismatch between raw graph and what graphToMermaid expects due to serialization
-           return codegraph.graphToMermaid({ nodes: new Set(g.graph?.nodes), edges: g.graph?.edges || [] });
+        if (!codegraph) {
+          throw new Error("Library not loaded");
         }
-        return codegraph.tool_getGraph(process.cwd());
-      }
+        const root = normalizeRoot(context);
+        if (format === "mermaid") {
+          const graphOutput = await codegraph.tool_getGraph(root);
+          const graph = graphOutput.graph;
+          if (!graph) {
+            return graphOutput;
+          }
+          return codegraph.graphToMermaid({
+            nodes: new Set(graph.nodes),
+            edges: graph.edges ?? [],
+          });
+        }
+        return codegraph.tool_getGraph(root);
+      },
     );
   },
 });
 
 export const definition = tool({
-  description: "Go to definition of a symbol",
+  description:
+    "Find the definition location for a symbol. Provide a file path (relative to worktree is best) plus 1-based line/column.",
   args: {
-    file: tool.schema.string().describe("Source file path"),
+    file: tool.schema
+      .string()
+      .describe("Source file path (relative to worktree preferred)"),
     line: tool.schema.number().describe("Line number (1-based)"),
     column: tool.schema.number().describe("Column number (1-based)"),
   },
-  async execute(args: any) {
-    return await runCodegraph(
-      ["goto", args.file, String(args.line), String(args.column)],
+  async execute(args, context) {
+    const root = normalizeRoot(context);
+    const filePath = normalizeFilePath(root, args.file);
+    return runCodegraph(
+      context,
+      ["goto", filePath, String(args.line), String(args.column)],
       async () => {
-        if (!codegraph) throw new Error("Library not loaded");
-        return codegraph.tool_goToDefinition(process.cwd(), args.file, args.line, args.column);
-      }
+        if (!codegraph) {
+          throw new Error("Library not loaded");
+        }
+        return codegraph.tool_goToDefinition(root, filePath, args.line, args.column);
+      },
     );
   },
 });
 
 export const references = tool({
-  description: "Find references to a symbol",
+  description:
+    "Find references to a symbol. Provide a file path (relative to worktree is best) plus 1-based line/column.",
   args: {
-    file: tool.schema.string().describe("Source file path"),
+    file: tool.schema
+      .string()
+      .describe("Source file path (relative to worktree preferred)"),
     line: tool.schema.number().describe("Line number (1-based)"),
     column: tool.schema.number().describe("Column number (1-based)"),
   },
-  async execute(args: any) {
-    return await runCodegraph(
-      ["refs", "--file", args.file, "--line", String(args.line), "--col", String(args.column)],
+  async execute(args, context) {
+    const root = normalizeRoot(context);
+    const filePath = normalizeFilePath(root, args.file);
+    return runCodegraph(
+      context,
+      [
+        "refs",
+        "--file",
+        filePath,
+        "--line",
+        String(args.line),
+        "--col",
+        String(args.column),
+      ],
       async () => {
-        if (!codegraph) throw new Error("Library not loaded");
-        return codegraph.tool_findReferences(process.cwd(), args.file, args.line, args.column);
-      }
+        if (!codegraph) {
+          throw new Error("Library not loaded");
+        }
+        return codegraph.tool_findReferences(root, filePath, args.line, args.column);
+      },
     );
   },
 });
 
 export const overview = tool({
-  description: "Get a high-level overview of a file (imports and definitions)",
+  description:
+    "Summarize a file's imports and definitions for fast onboarding. Provide a file path (relative to worktree is best).",
   args: {
-    file: tool.schema.string().describe("Source file path"),
+    file: tool.schema
+      .string()
+      .describe("Source file path (relative to worktree preferred)"),
   },
-  async execute(args: any) {
-    return await runCodegraph(
-      ["dumpmod", args.file],
+  async execute(args, context) {
+    const root = normalizeRoot(context);
+    const filePath = normalizeFilePath(root, args.file);
+    return runCodegraph(
+      context,
+      ["dumpmod", filePath],
       async () => {
-        if (!codegraph) throw new Error("Library not loaded");
-        return codegraph.tool_getFileOverview(process.cwd(), args.file);
-      }
+        if (!codegraph) {
+          throw new Error("Library not loaded");
+        }
+        return codegraph.tool_getFileOverview(root, filePath);
+      },
     );
   },
 });
 
 export const impact = tool({
-  description: "Analyze impact of changes (compare git revisions)",
+  description:
+    "Analyze impact between git revisions. Use before large edits to see affected symbols/files.",
   args: {
     base: tool.schema.string().describe("Base commit (e.g. main)"),
     head: tool.schema.string().describe("Head commit (e.g. HEAD)"),
   },
-  async execute(args: any) {
-    return await runCodegraph(
+  async execute(args, context) {
+    const root = normalizeRoot(context);
+    return runCodegraph(
+      context,
       ["impact", "--base", args.base, "--head", args.head, "--compact"],
       async () => {
-        if (!codegraph) throw new Error("Library not loaded");
-        return codegraph.tool_impactJSON(process.cwd(), {
-          provider: 'git',
+        if (!codegraph) {
+          throw new Error("Library not loaded");
+        }
+        return codegraph.tool_impactJSON(root, {
+          provider: "git",
           base: args.base,
-          head: args.head
+          head: args.head,
         });
-      }
+      },
     );
   },
 });
 
 export const grep = tool({
-  description: "Search for symbols or patterns using Tree-sitter query or regex",
+  description:
+    "Search for symbols or patterns. Provide either a Tree-sitter query or a regex pattern.",
   args: {
     query: tool.schema.string().optional().describe("Tree-sitter query"),
     pattern: tool.schema.string().optional().describe("Regex pattern"),
   },
-  async execute(args: any) {
-    if (args.query) {
-      return await runCodegraph(["grep", "--query", args.query]);
-    } else if (args.pattern) {
-      return await runCodegraph(["grep", "--pattern", args.pattern]);
+  async execute(args, context) {
+    const hasQuery = Boolean(args.query);
+    const hasPattern = Boolean(args.pattern);
+    if (hasQuery) {
+      return runCodegraph(context, ["grep", "--query", args.query!]);
     }
-    return "Please provide either a query or a pattern.";
+    if (hasPattern) {
+      return runCodegraph(context, ["grep", "--pattern", args.pattern!]);
+    }
+    return formatResponse({
+      status: "error",
+      source: "library",
+      root: normalizeRoot(context),
+      error: "Provide either query or pattern.",
+    });
   },
 });
