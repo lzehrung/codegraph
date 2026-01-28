@@ -51,11 +51,10 @@ const stringifyResult = (value: unknown): string => {
   if (typeof value === "string") {
     return value;
   }
-  if (value instanceof Uint8Array) {
-    return new TextDecoder().decode(value);
+  if (value === undefined) {
+    return "";
   }
-  const json = JSON.stringify(value, null, 2);
-  return json ?? "";
+  return JSON.stringify(value, null, 2);
 };
 
 const formatResponse = (response: ToolResponse): string =>
@@ -214,6 +213,8 @@ export const graph = tool({
           const graphOutput = await codegraph.tool_getGraph(root);
           const graph = graphOutput.graph;
           if (!graph) {
+            // If the library could not produce a structured graph, return the
+            // raw JSON output instead of attempting Mermaid rendering.
             return graphOutput;
           }
           return codegraph.graphToMermaid({
