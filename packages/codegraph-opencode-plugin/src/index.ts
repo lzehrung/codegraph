@@ -1,4 +1,5 @@
 import { tool, type ToolContext } from "@opencode-ai/plugin/tool";
+import type { ImpactStreamChunk } from "@lzehrung/codegraph";
 import { spawn } from "node:child_process";
 import path from "node:path";
 
@@ -18,6 +19,10 @@ type ToolResponse = {
   result?: unknown;
   error?: string;
   command?: string[];
+};
+
+type RunCodegraphOptions = {
+  normalizeResult?: (result: unknown) => unknown;
 };
 
 const normalizeRoot = (context: ToolContext): string => {
@@ -61,17 +66,20 @@ async function runCodegraph(
   context: ToolContext,
   cliArgs: string[],
   libFn?: () => Promise<unknown>,
+  options?: RunCodegraphOptions,
 ): Promise<string> {
   const root = normalizeRoot(context);
+  const normalizeResult = options?.normalizeResult;
   // 1. Try library API if available
   if (codegraph && libFn) {
     try {
       const result = await libFn();
+      const normalizedResult = normalizeResult ? normalizeResult(result) : result;
       return formatResponse({
         status: "ok",
         source: "library",
         root,
-        result,
+        result: normalizedResult,
       });
     } catch (e) {
       // If library call fails, fall back to CLI
@@ -104,12 +112,16 @@ async function runCodegraph(
       });
     }
 
+    const parsedResult = tryParseJson(text);
+    const normalizedResult = normalizeResult
+      ? normalizeResult(parsedResult)
+      : parsedResult;
     return formatResponse({
       status: "ok",
       source: "cli",
       root,
       command: cmd,
-      result: tryParseJson(text),
+      result: normalizedResult,
     });
   } else {
     // Fallback to Node.js child_process
@@ -143,13 +155,17 @@ async function runCodegraph(
           );
           return;
         }
+        const parsedResult = tryParseJson(stdout);
+        const normalizedResult = normalizeResult
+          ? normalizeResult(parsedResult)
+          : parsedResult;
         resolve(
           formatResponse({
             status: "ok",
             source: "cli",
             root,
             command: cmd,
-            result: tryParseJson(stdout),
+            result: normalizedResult,
           }),
         );
       });
@@ -304,6 +320,12 @@ export const impact = tool({
   },
   async execute(args, context) {
     const root = normalizeRoot(context);
+    const normalizeImpact = (result: unknown): unknown => {
+      if (result && typeof result === "object" && "report" in result) {
+        return result;
+      }
+      return { report: result };
+    };
     return runCodegraph(
       context,
       ["impact", "--base", args.base, "--head", args.head, "--compact"],
@@ -317,7 +339,59 @@ export const impact = tool({
           head: args.head,
         });
       },
+      { normalizeResult: normalizeImpact },
     );
+  },
+});
+
+export const impact_stream = tool({
+  description:
+    "Stream impact analysis progress and items via tool metadata; returns a summary once complete.",
+  args: {
+    base: tool.schema.string().describe("Base commit (e.g. main)"),
+    head: tool.schema.string().describe("Head commit (e.g. HEAD)"),
+  },
+  async execute(args, context) {
+    if (!codegraph) {
+      return formatResponse({
+        status: "error",
+        source: "library",
+        root: normalizeRoot(context),
+        error: "Library not loaded",
+      });
+    }
+
+    const root = normalizeRoot(context);
+    const index = await codegraph.buildProjectIndex(root, {
+      logLevel: "error",
+    });
+    const chunks: Array<{
+      type: ImpactStreamChunk["type"];
+      payload: ImpactStreamChunk;
+    }> = [];
+
+    for await (const chunk of codegraph.analyzeImpactStreaming(root, index, {
+      provider: "git",
+      base: args.base,
+      head: args.head,
+    })) {
+      chunks.push({ type: chunk.type, payload: chunk });
+      context.metadata({
+        title: "impact_stream",
+        metadata: { chunk },
+      });
+    }
+
+    const summaryChunk = chunks.find((item) => item.type === "complete");
+    return formatResponse({
+      status: "ok",
+      source: "library",
+      root,
+      result: {
+        summary: summaryChunk?.payload ?? null,
+        streamedChunks: chunks.length,
+      },
+    });
   },
 });
 

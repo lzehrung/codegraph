@@ -5,6 +5,7 @@ import {
   definition,
   graph,
   impact,
+  impact_stream,
   overview,
   references,
   grep,
@@ -28,6 +29,8 @@ const samplePath = path.resolve(
   "typescript",
 );
 
+const metadataEvents: Array<{ chunk: unknown }> = [];
+
 const context: ToolContext = {
   sessionID: "test-session",
   messageID: "test-message",
@@ -35,7 +38,11 @@ const context: ToolContext = {
   directory: samplePath,
   worktree: samplePath,
   abort: new AbortController().signal,
-  metadata: () => {},
+  metadata: (input) => {
+    if (input.metadata && "chunk" in input.metadata) {
+      metadataEvents.push({ chunk: input.metadata.chunk });
+    }
+  },
   ask: async () => {},
 };
 
@@ -106,10 +113,26 @@ describe("OpenCode plugin tools", () => {
     expect(parsed.status).toBe("ok");
 
     const impactResult = parsed.result as {
-      status?: string;
       report?: { summary?: { changedFiles?: number } };
     };
     expect(impactResult.report).toBeDefined();
+  });
+
+  it("impact_stream emits metadata chunks and returns a summary", async () => {
+    metadataEvents.length = 0;
+    const output = await impact_stream.execute(
+      { base: "HEAD~1", head: "HEAD" },
+      context,
+    );
+    const parsed = parseToolOutput(output);
+    expect(parsed.status).toBe("ok");
+    expect(metadataEvents.length).toBeGreaterThan(0);
+
+    const streamResult = parsed.result as {
+      summary?: { type?: string };
+      streamedChunks?: number;
+    };
+    expect(streamResult.streamedChunks).toBeGreaterThan(0);
   });
 
   it("grep returns an error when query and pattern are missing", async () => {
