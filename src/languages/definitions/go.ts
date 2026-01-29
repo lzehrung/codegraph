@@ -37,7 +37,7 @@ export const GO_DEF: LanguageDefinition = {
   },
   graph: {
     imports: `
-      (import_spec path: (interpreted_string_literal) @mod)
+      (import_spec path: (interpreted_string_literal) @mod) @stmt
     `,
     exports: `
       (function_declaration name: (identifier) @name)
@@ -54,8 +54,8 @@ export const GO_DEF: LanguageDefinition = {
       (short_var_declaration left: (expression_list (identifier) @name))
     `,
     importBindings: `
-      (import_spec name: (package_identifier) @alias path: (interpreted_string_literal) @from)
-      (import_spec path: (interpreted_string_literal) @from)
+      (import_spec name: (package_identifier) @alias path: (interpreted_string_literal) @from) @stmt
+      (import_spec path: (interpreted_string_literal) @from) @stmt
     `,
   },
   nodeTypes: {
