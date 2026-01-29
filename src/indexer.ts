@@ -2029,7 +2029,8 @@ export async function collectImportsForFile(
           ? sliceText(caps["stmt"].node, source)
           : "";
         const typeOnly =
-          sup.id === "ts" && /^\s*import\s+type\b/.test(stmtText);
+          (resolvedSup.id === "ts" || resolvedSup.id === "tsx") &&
+          /\bimport\s+type\b/.test(stmtText);
         const from: string | undefined = caps["from"]
           ? unquote(sliceText(caps["from"].node, source))
           : undefined;

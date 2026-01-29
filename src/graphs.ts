@@ -173,7 +173,9 @@ export function collectModuleSpecifiersFromSource(
         const stmtText = caps["stmt"]
           ? sliceText(caps["stmt"].node, source)
           : "";
-        const typeOnly = /^\s*(import|export)\s+type\b/.test(stmtText);
+        const typeOnly =
+          (support.id === "ts" || support.id === "tsx") &&
+          /\b(import|export)\s+type\b/.test(stmtText);
         for (const cap of modNodes)
           out.push({ spec: unquote(sliceText(cap.node, source)), typeOnly });
       }
