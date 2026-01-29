@@ -150,4 +150,46 @@ describe("Complex Monorepo Scenarios", () => {
     // This depends on how the tool handles globals. 
     // Usually it won't have an 'import' but should have a reference.
   });
+
+  it("handles Go grouped and aliased imports", async () => {
+    const goFile = path.join(root, "packages/go-lib/lib.go").replace(/\\/g, "/");
+    const index = await buildProjectIndex(root);
+    const fileIndex = index.byFile.get(goFile);
+    
+    expect(fileIndex).toBeDefined();
+    
+    // Check for "fmt"
+    const fmtImport = fileIndex?.imports.find(i => i.from === 'fmt');
+    expect(fmtImport).toBeDefined();
+    expect(fmtImport?.kind).toBe("namespace");
+    expect((fmtImport as any).localNS).toBe("fmt");
+
+    // Check for aliased "os"
+    const osImport = fileIndex?.imports.find(i => i.from === 'os');
+    expect(osImport).toBeDefined();
+    expect(osImport?.kind).toBe("namespace");
+    expect((osImport as any).localNS).toBe("oslib");
+  });
+
+  it("handles Rust mod items", async () => {
+    const rustFile = path.join(root, "packages/rust-lib/src/lib.rs").replace(/\\/g, "/");
+    const index = await buildProjectIndex(root);
+    const fileIndex = index.byFile.get(rustFile);
+    
+    expect(fileIndex).toBeDefined();
+    
+    // Check for 'mod utils;'
+    const modUtils = fileIndex?.imports.find(i => i.from === 'utils');
+    expect(modUtils).toBeDefined();
+    expect(modUtils?.kind).toBe("namespace");
+  });
+
+  it("handles Rust nested use blocks and re-exports", async () => {
+    const rustFile = path.join(root, "packages/rust-lib/src/lib.rs").replace(/\\/g, "/");
+    const index = await buildProjectIndex(root);
+    
+    // Check for 'use utils::helper;' (captured by re-export in our current query)
+    const helperExport = index.byFile.get(rustFile)?.exports.find(e => e.exportedAs === 'helper');
+    expect(helperExport).toBeDefined();
+  });
 });

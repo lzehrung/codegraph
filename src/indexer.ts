@@ -1329,7 +1329,7 @@ export function collectLocalsAndExportsFromSource(
           m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const),
         );
         const stmtText = map["stmt"] ? sliceText(map["stmt"].node, source) : "";
-        const isTypeOnly = /^\s*export\s+type\b/.test(stmtText);
+        const isTypeOnly = support.isTypeOnly(stmtText);
 
         if (support.id === "python") {
           if (
@@ -2030,9 +2030,7 @@ export async function collectImportsForFile(
         const stmtText = caps["stmt"]
           ? sliceText(caps["stmt"].node, source)
           : "";
-        const typeOnly =
-          (resolvedSup.id === "ts" || resolvedSup.id === "tsx") &&
-          /\bimport\s+type\b/.test(stmtText);
+        const typeOnly = resolvedSup.isTypeOnly(stmtText);
         const from: string | undefined = caps["from"]
           ? unquote(sliceText(caps["from"].node, source))
           : undefined;
