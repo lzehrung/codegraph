@@ -976,6 +976,50 @@ async function findNearestTsconfig(
   return null;
 }
 
+async function loadTsconfigConfig(
+  cfgPath: string,
+): Promise<{ baseUrl: string; paths: Record<string, string[]> }> {
+  const raw = await fsp.readFile(cfgPath, "utf8");
+  const json = JSON.parse(stripJsLikeComments(raw));
+  const cfgDir = path.dirname(cfgPath);
+
+  const baseUrl = path.isAbsolute(json.compilerOptions?.baseUrl ?? ".")
+    ? json.compilerOptions.baseUrl
+    : path.resolve(cfgDir, json.compilerOptions?.baseUrl ?? ".");
+  const paths = (json.compilerOptions?.paths || {}) as Record<string, string[]>;
+
+  if (json.extends) {
+    const extendsPath = path.resolve(cfgDir, json.extends);
+    if (await fileExists(extendsPath)) {
+      const parent = await loadTsconfigConfig(extendsPath);
+      const mergedPaths: Record<string, string[]> = { ...parent.paths };
+
+      // Adjust parent paths to be relative to child baseUrl
+      for (const [key, patterns] of Object.entries(parent.paths)) {
+        mergedPaths[key] = patterns.map((p) => {
+          const abs = path.resolve(parent.baseUrl, p);
+          const rel = path.relative(baseUrl, abs).replace(/\\/g, "/");
+          return rel;
+        });
+      }
+
+      // Child paths overwrite parent paths for the same key
+      // and ensure they are also normalized
+      for (const [key, patterns] of Object.entries(paths)) {
+        mergedPaths[key] = patterns.map((p) => p.replace(/\\/g, "/"));
+      }
+      return { baseUrl: baseUrl.replace(/\\/g, "/"), paths: mergedPaths };
+    }
+  }
+
+  const normalizedPaths: Record<string, string[]> = {};
+  for (const [key, patterns] of Object.entries(paths)) {
+    normalizedPaths[key] = patterns.map((p) => p.replace(/\\/g, "/"));
+  }
+
+  return { baseUrl: baseUrl.replace(/\\/g, "/"), paths: normalizedPaths };
+}
+
 export async function loadNearestTsconfigFor(
   file: string,
 ): Promise<{ matchPath?: MatchPathFn }> {
@@ -989,20 +1033,13 @@ export async function loadNearestTsconfigFor(
   }
 
   try {
-    const raw = await fsp.readFile(cfgPath, "utf8");
-    const json = JSON.parse(raw);
-    const baseUrl = path.resolve(
-      path.dirname(cfgPath),
-      json.compilerOptions?.baseUrl ?? ".",
-    );
-    const paths = json.compilerOptions?.paths as
-      | Record<string, string[]>
-      | undefined;
-    const matchPath = createMatchPath(baseUrl, paths ?? {});
+    const { baseUrl, paths } = await loadTsconfigConfig(cfgPath);
+    const matchPath = createMatchPath(baseUrl, paths);
     const val = { matchPath };
     tsconfigCache.set(dir, val);
     return val;
-  } catch {
+  } catch (error) {
+    console.warn(`Warning: Failed to load tsconfig at ${cfgPath}:`, error);
     const val = {};
     tsconfigCache.set(dir, val);
     return val;

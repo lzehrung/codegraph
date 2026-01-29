@@ -1,23 +1,14 @@
 {
-  // Visit https://aka.ms/tsconfig to read more about this file
   "compilerOptions": {
-    // File Layout
     "rootDir": "./src",
     "outDir": "./dist",
-
-    // Environment Settings
-    // See also https://aka.ms/tsconfig/module
     "module": "nodenext",
     "target": "esnext",
-    // For nodejs:
     "lib": ["esnext"],
     "types": ["node"],
-
-    // Other Outputs
     "sourceMap": true,
     "declaration": true,
     "declarationMap": true,
-
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "strict": true,
@@ -29,8 +20,8 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
-    "downlevelIteration": true,
+    "downlevelIteration": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "tests"],
+  "exclude": ["node_modules", "dist", "tests"]
 }
