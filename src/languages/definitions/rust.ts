@@ -42,26 +42,33 @@ export const RUST_DEF: LanguageDefinition = {
   },
   graph: {
     imports: `
-      (mod_item name: (identifier) @mod)
+      (mod_item name: (identifier) @mod) @stmt
       (use_declaration argument: (_) @mod) @stmt
     `,
     exports: `
+      (function_item name: (identifier) @name) @stmt
+      (struct_item name: (type_identifier) @name) @stmt
+      (trait_item name: (type_identifier) @name) @stmt
+      (enum_item name: (type_identifier) @name) @stmt
+      (const_item name: (identifier) @name) @stmt
+      (static_item name: (identifier) @name) @stmt
+      (use_declaration argument: (scoped_identifier path: (identifier) @from name: (identifier) @src)) @stmt
+      (use_declaration argument: (identifier) @src) @stmt
+    `,
+    locals: `
       (function_item name: (identifier) @name)
       (struct_item name: (type_identifier) @name)
       (trait_item name: (type_identifier) @name)
       (enum_item name: (type_identifier) @name)
       (const_item name: (identifier) @name)
       (static_item name: (identifier) @name)
-    `,
-    locals: `
-      (function_item name: (identifier) @name)
-      (struct_item name: (type_identifier) @name)
-      (trait_item name: (type_identifier) @name)
       (let_declaration pattern: (identifier) @name)
+      (parameter pattern: (identifier) @name)
     `,
     importBindings: `
       (mod_item name: (identifier) @from) @stmt
-      (use_declaration argument: (_) @from) @stmt
+      (use_declaration argument: (scoped_identifier path: (identifier) @from name: (identifier) @iname)) @stmt
+      (use_declaration argument: (identifier) @from) @stmt
     `,
   },
   nodeTypes: {

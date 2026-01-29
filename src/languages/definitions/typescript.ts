@@ -131,11 +131,11 @@ const BASE_GRAPH = {
     (export_statement (function_declaration name: (identifier) @name)) @stmt
     (export_statement (class_declaration name: (identifier) @name)) @stmt
     (export_statement (lexical_declaration (variable_declarator name: (identifier) @name))) @stmt
-    (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)) (string) @from)
-    (export_statement (export_clause (export_specifier name: (identifier) @src)) (string) @from)
-    (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)))
-    (export_statement (export_clause (export_specifier name: (identifier) @src)))
-    (export_statement (string) @from)
+    (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)) (string) @from) @stmt
+    (export_statement (export_clause (export_specifier name: (identifier) @src)) (string) @from) @stmt
+    (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias))) @stmt
+    (export_statement (export_clause (export_specifier name: (identifier) @src))) @stmt
+    (export_statement (string) @from) @stmt
     (export_statement (function_declaration name: (identifier) @default)) @stmt (#match? @stmt "default")
     (export_statement (class_declaration name: (identifier) @default)) @stmt (#match? @stmt "default")
     (export_assignment (identifier) @ts_export_assign)
@@ -205,6 +205,7 @@ export const TYPESCRIPT_DEF: LanguageDefinition = {
   structure: BASE_STRUCTURE,
   graph: BASE_GRAPH,
   ...BASE_HELPERS,
+  isTypeOnly: (stmtText: string) => /\b(import|export)\s+type\b/.test(stmtText),
 };
 
 export const TSX_DEF: LanguageDefinition = {
@@ -221,4 +222,5 @@ export const TSX_DEF: LanguageDefinition = {
   },
   graph: BASE_GRAPH,
   ...BASE_HELPERS,
+  isTypeOnly: (stmtText: string) => /\b(import|export)\s+type\b/.test(stmtText),
 };

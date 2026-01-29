@@ -58,6 +58,11 @@ export interface LanguageDefinition {
   supportsCrossModuleSymbols?: boolean;
 
   /**
+   * Helper to check if a statement represents a type-only dependency.
+   */
+  isTypeOnly?: (stmtText: string) => boolean;
+
+  /**
    * Specific node types used for symbol resolution
    */
   nodeTypes?: {

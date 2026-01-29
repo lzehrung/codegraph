@@ -44,6 +44,7 @@ export type LanguageSupport = {
   createsBlockScope: (node: Parser.SyntaxNode) => boolean;
   createsFunctionScope: (node: Parser.SyntaxNode) => boolean;
   supportsCrossModuleSymbols: boolean;
+  isTypeOnly: (stmtText: string) => boolean;
 };
 
 function adaptDefinition(def: LanguageDefinition): LanguageSupport {
@@ -58,6 +59,7 @@ function adaptDefinition(def: LanguageDefinition): LanguageSupport {
     createsBlockScope: def.createsBlockScope || (() => false),
     createsFunctionScope: def.createsFunctionScope || (() => false),
     supportsCrossModuleSymbols: def.supportsCrossModuleSymbols || false,
+    isTypeOnly: def.isTypeOnly || (() => false),
   };
 }
 

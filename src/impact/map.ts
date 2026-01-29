@@ -206,9 +206,7 @@ function classifyChangedNode(
   ) {
     return {
       type: "import",
-      typeOnly: /^\s*import\s+type\b/.test(
-        source.slice(node.startIndex, node.endIndex),
-      ),
+      typeOnly: sup.isTypeOnly(source.slice(node.startIndex, node.endIndex)),
     };
   }
 
@@ -216,9 +214,7 @@ function classifyChangedNode(
   if (node.type?.startsWith("export_")) {
     return {
       type: "export",
-      typeOnly: /^\s*export\s+type\b/.test(
-        source.slice(node.startIndex, node.endIndex),
-      ),
+      typeOnly: sup.isTypeOnly(source.slice(node.startIndex, node.endIndex)),
     };
   }
 
