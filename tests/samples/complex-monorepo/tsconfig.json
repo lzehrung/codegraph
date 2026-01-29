@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@complex/shared-types": ["packages/shared-types/src/index.ts"],
+      "@complex/shared-types/*": ["packages/shared-types/src/*"],
+      "@complex/core-logic": ["packages/core-logic/src/index.ts"],
+      "@complex/core-logic/*": ["packages/core-logic/src/*"]
+    }
+  }
+}

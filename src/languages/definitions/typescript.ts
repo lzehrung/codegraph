@@ -145,14 +145,14 @@ const BASE_GRAPH = {
     (class_declaration name: (identifier) @name)
     (variable_declarator name: (identifier) @name)
   `,
-  importBindings: `
+    importBindings: `
     (import_statement) @stmt
-    (import_statement (string) @from)
-    (import_statement (import_require_clause (identifier) @def (string) @from))
-    (import_statement (import_clause (identifier) @def) (string) @from)
-    (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname alias: (identifier) @alias))) (string) @from)
-    (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname))) (string) @from)
-    (import_statement (import_clause (namespace_import (identifier) @ns)) (string) @from)
+    (import_statement (string) @from) @stmt
+    (import_statement (import_require_clause (identifier) @def (string) @from)) @stmt
+    (import_statement (import_clause (identifier) @def) (string) @from) @stmt
+    (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname alias: (identifier) @alias))) (string) @from) @stmt
+    (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname))) (string) @from) @stmt
+    (import_statement (import_clause (namespace_import (identifier) @ns)) (string) @from) @stmt
   `,
 };
 
