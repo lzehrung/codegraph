@@ -164,11 +164,11 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
     `,
     importBindings: `
       (import_statement) @stmt
-      (import_statement (string) @from)
-      (import_statement (import_clause (identifier) @def) (string) @from)
-      (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname alias: (identifier) @alias))) (string) @from)
-      (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname))) (string) @from)
-      (import_statement (import_clause (namespace_import (identifier) @ns)) (string) @from)
+      (import_statement (string) @from) @stmt
+      (import_statement (import_clause (identifier) @def) (string) @from) @stmt
+      (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname alias: (identifier) @alias))) (string) @from) @stmt
+      (import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname))) (string) @from) @stmt
+      (import_statement (import_clause (namespace_import (identifier) @ns)) (string) @from) @stmt
       (lexical_declaration (variable_declarator name:(identifier) @def value: (call_expression (identifier) @req arguments: (arguments (string) @from)))) (#eq? @req "require")
       (lexical_declaration (variable_declarator (object_pattern) @pattern value: (call_expression (identifier) @req arguments: (arguments (string) @from)))) (#eq? @req "require")
     `,

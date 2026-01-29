@@ -1,0 +1,7 @@
+{
+  "name": "complex-monorepo",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ]
+}
