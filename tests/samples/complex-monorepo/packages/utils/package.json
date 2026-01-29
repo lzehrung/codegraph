@@ -1,0 +1,8 @@
+{
+  "name": "@complex/utils",
+  "version": "1.0.0",
+  "exports": {
+    "./runtime": "./src/runtime/index.ts",
+    "./types": "./src/types.ts"
+  }
+}

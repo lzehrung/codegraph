@@ -1877,7 +1877,9 @@ export async function collectImportsForFile(
     parser.setLanguage(resolvedLang);
     const tree = opts?.tree ?? parser.parse(resolvedSource);
     const tsCfg =
-      resolvedSup.id === "ts" ? await loadNearestTsconfigFor(file) : undefined;
+      (resolvedSup.id === "ts" || resolvedSup.id === "tsx")
+        ? await loadNearestTsconfigFor(file)
+        : undefined;
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
 
     const resolveFrom = async (from: string) => {

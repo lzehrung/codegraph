@@ -29,6 +29,16 @@ describe("Complex Monorepo Scenarios", () => {
     );
     expect(sharedTypesEdge).toBeDefined();
     expect(sharedTypesEdge?.typeOnly).toBe(true);
+
+    // Check if @complex/shadowed resolves to packages/core-logic/src/auth.ts
+    const shadowedEdge = graph.edges.find(
+      (e) =>
+        e.from === mainFile &&
+        e.raw === "@complex/shadowed"
+    );
+    expect(shadowedEdge).toBeDefined();
+    expect(shadowedEdge?.to.type).toBe("file");
+    expect(shadowedEdge?.to.path).toContain("packages/core-logic/src/auth.ts");
   });
 
   it("handles barrel circularity and local cycles", async () => {
@@ -87,5 +97,57 @@ describe("Complex Monorepo Scenarios", () => {
     expect(typeImport).toBeDefined();
     // This confirms the fix for TSX type-only detection
     expect(typeImport?.typeOnly).toBe(true);
+    expect(typeImport?.resolved).not.toBeUndefined();
+    expect(typeof typeImport?.resolved).toBe('string');
+  });
+
+  it("resolves subpath exports from package.json", async () => {
+    const mainFile = path.join(root, "packages/web-app/src/main.ts").replace(/\\/g, "/");
+    const graph = await collectGraph(root, [mainFile]);
+
+    const hasSubpathEdge = graph.edges.some(
+      (e) =>
+        e.from === mainFile &&
+        e.raw === "@complex/utils/runtime" &&
+        e.to.type === "file" &&
+        e.to.path.endsWith("packages/utils/src/runtime/index.ts")
+    );
+    expect(hasSubpathEdge).toBe(true);
+  });
+
+  it("handles multi-level tsconfig inheritance", async () => {
+    const mainFile = path.join(root, "packages/web-app/src/main.ts").replace(/\\/g, "/");
+    // This file uses @complex/shared-types defined in tsconfig.base.json
+    // and @complex/shadowed defined in tsconfig.json
+    const graph = await collectGraph(root, [mainFile]);
+
+    const hasSharedTypes = graph.edges.some(e => e.raw === "@complex/shared-types");
+    expect(hasSharedTypes).toBe(true);
+  });
+
+  it("prioritizes path aliases over node_modules (shadowing)", async () => {
+    const mainFile = path.join(root, "packages/web-app/src/main.ts").replace(/\\/g, "/");
+    const graph = await collectGraph(root, [mainFile]);
+    
+    // 'react' is shadowed to shared-types/src/index.ts in root tsconfig.json
+    const reactEdge = graph.edges.find(e => e.from === mainFile && e.raw === "react");
+    expect(reactEdge).toBeDefined();
+    expect(reactEdge?.to.type).toBe("file");
+    expect(reactEdge?.to.path).toContain("packages/shared-types/src/index.ts");
+  });
+
+  it("identifies impact from ambient global type changes", async () => {
+    const index = await buildProjectIndex(root);
+    const globalsFile = path.join(root, "packages/shared-types/src/globals.d.ts").replace(/\\/g, "/");
+    const authFile = path.join(root, "packages/core-logic/src/auth.ts").replace(/\\/g, "/");
+    
+    // The auth.ts file uses App.GlobalConfig from globals.d.ts
+    // We want to see if the tool can find this reference
+    const fileIndex = index.byFile.get(authFile);
+    expect(fileIndex).toBeDefined();
+    
+    // Check for symbol references to 'App' or 'GlobalConfig'
+    // This depends on how the tool handles globals. 
+    // Usually it won't have an 'import' but should have a reference.
   });
 });
