@@ -1,8 +1,8 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
+import { loadTreeSitterLanguage } from "./loadLanguage.js";
 
-const { default: Kotlin } = await import("tree-sitter-kotlin");
-const LangKotlin: Language = Kotlin;
+const LangKotlin = loadTreeSitterLanguage("tree-sitter-kotlin");
 
 export const KOTLIN_DEF: LanguageDefinition = {
   id: "kotlin",

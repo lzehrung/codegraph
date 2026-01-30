@@ -1,8 +1,8 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
+import { loadTreeSitterLanguage } from "./loadLanguage.js";
 
-const { default: Vue } = await import("tree-sitter-vue");
-const LangVue: Language = Vue;
+const LangVue = loadTreeSitterLanguage("tree-sitter-vue");
 
 export const VUE_DEF: LanguageDefinition = {
   id: "vue",
