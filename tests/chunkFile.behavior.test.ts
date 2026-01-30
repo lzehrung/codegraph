@@ -1,25 +1,12 @@
-import { describe, expect, it, beforeAll } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { getLanguageConfig } from "../src/bootstrap/treeSitterLanguages.js";
+import { LANG_CONFIGS } from "../src/bootstrap/treeSitterLanguages.js";
 import { chunkFile } from "../src/chunking/chunkFile.js";
 import { chunkTextFile } from "../src/chunking/chunkTextFile.js";
 
 const tokenize = (text: string) => (text.trim() ? text.trim().split(/\s+/).length : 0);
 
 describe("chunkFile detailed behavior", () => {
-  let jsLanguage: Awaited<ReturnType<typeof getLanguageConfig>>;
-  let tsLanguage: Awaited<ReturnType<typeof getLanguageConfig>>;
-  let pyLanguage: Awaited<ReturnType<typeof getLanguageConfig>>;
-
-  beforeAll(async () => {
-    jsLanguage = await getLanguageConfig("javascript");
-    tsLanguage = await getLanguageConfig("typescript");
-    pyLanguage = await getLanguageConfig("python");
-    if (!jsLanguage || !tsLanguage || !pyLanguage) {
-      throw new Error("Missing language config for chunking tests");
-    }
-  });
-
   it("splits large JavaScript blocks using inner control-flow hints", () => {
     const source = `
 function big(value) {
@@ -43,7 +30,7 @@ function big(value) {
 
     const maxTokens = 20;
     const chunks = chunkFile({
-      language: jsLanguage,
+      language: LANG_CONFIGS.javascript,
       source,
       filePath: "big.js",
       minTokens: 1,
@@ -79,7 +66,7 @@ const finalize = () => {
 `.trimStart();
 
     const chunks = chunkFile({
-      language: jsLanguage,
+      language: LANG_CONFIGS.javascript,
       source,
       filePath: "ranges.js",
       minTokens: 1,
@@ -116,7 +103,7 @@ gamma = () => {
 `.trimStart();
 
     const chunks = chunkFile({
-      language: jsLanguage,
+      language: LANG_CONFIGS.javascript,
       source,
       filePath: "assigned.js",
       minTokens: 1,
@@ -140,7 +127,7 @@ value + 2;
 `.trimStart();
 
     const chunks = chunkFile({
-      language: jsLanguage,
+      language: LANG_CONFIGS.javascript,
       source,
       filePath: "merge.js",
       minTokens: 6,
@@ -172,7 +159,7 @@ module Legacy {
 `.trimStart();
 
     const chunks = chunkFile({
-      language: tsLanguage,
+      language: LANG_CONFIGS.typescript,
       source,
       filePath: "ns.ts",
       minTokens: 1,
@@ -198,7 +185,7 @@ declare enum FooBar {
 `.trimStart();
 
     const chunks = chunkFile({
-      language: tsLanguage,
+      language: LANG_CONFIGS.typescript,
       source,
       filePath: "enum.ts",
       minTokens: 1,
@@ -227,7 +214,7 @@ def helper():
 
     const maxTokens = 12;
     const chunks = chunkFile({
-      language: pyLanguage,
+      language: LANG_CONFIGS.python,
       source,
       filePath: "logic.py",
       minTokens: 1,
@@ -263,7 +250,7 @@ function runSwitch(val) {
 
     // Small maxTokens to force splitting inside the switch
     const chunks = chunkFile({
-      language: jsLanguage,
+      language: LANG_CONFIGS.javascript,
       source,
       filePath: "switch.js",
       minTokens: 1,
@@ -294,7 +281,7 @@ const config = {
 `.trimStart();
 
     const chunks = chunkFile({
-      language: jsLanguage,
+      language: LANG_CONFIGS.javascript,
       source,
       filePath: "config.js",
       minTokens: 1,
@@ -334,7 +321,7 @@ function processItems(items) {
 `.trimStart();
 
     const chunks = chunkFile({
-      language: jsLanguage,
+      language: LANG_CONFIGS.javascript,
       source,
       filePath: "loops.js",
       minTokens: 1,
@@ -372,3 +359,4 @@ describe("chunkTextFile", () => {
     expect(combined).toContain("line 24");
   });
 });
+

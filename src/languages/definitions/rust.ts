@@ -1,20 +1,13 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
+import { loadTreeSitterLanguage } from "./loadLanguage.js";
 
-let cachedLanguage: Language | null = null;
-
-async function loadLanguage(): Promise<Language> {
-  if (!cachedLanguage) {
-    const mod = await import("tree-sitter-rust");
-    cachedLanguage = mod.default;
-  }
-  return cachedLanguage;
-}
+const LangRust = loadTreeSitterLanguage("tree-sitter-rust");
 
 export const RUST_DEF: LanguageDefinition = {
   id: "rust",
   extensions: [".rs"],
-  grammar: () => loadLanguage(),
+  grammar: () => LangRust,
   structure: {
     blocks: [
       {

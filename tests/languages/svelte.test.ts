@@ -11,8 +11,8 @@ const samplePath = path.join(dirname, "samples", "svelte.sample.svelte");
 const source = fs.readFileSync(samplePath, "utf8");
 
 describe("Svelte SFC chunking", () => {
-  it("produces script/style/template chunks", async () => {
-    const chunks = await chunkSFCFile({
+  it("produces script/style/template chunks", () => {
+    const chunks = chunkSFCFile({
       source,
       filePath: "svelte.sample.svelte",
       framework: "svelte",

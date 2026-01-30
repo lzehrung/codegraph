@@ -41,7 +41,7 @@ export async function prepareParserInput(
   return {
     source: rawSource,
     sup,
-    lang: await sup.language(file),
+    lang: sup.language(file),
   };
 }
 
@@ -59,6 +59,6 @@ async function prepareSFCParserInput(
   return {
     source: maskedSource,
     sup,
-    lang: await sup.language(file),
+    lang: sup.language(file),
   };
 }

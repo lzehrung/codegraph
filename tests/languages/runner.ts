@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect, beforeAll } from "vitest";
 import { chunkFile } from "../../src/chunking/chunkFile.js";
-import { getLanguageConfig } from "../../src/bootstrap/treeSitterLanguages.js";
+import { LANG_CONFIGS } from "../../src/bootstrap/treeSitterLanguages.js";
 import type {
   DependencyGraphExpectation,
   LanguageTestDefinition,
@@ -23,8 +23,8 @@ const tokenize = (text: string) => (text.trim() ? text.trim().split(/\s+/).lengt
 export function runLanguageTests(def: LanguageTestDefinition) {
   describe(`Language: ${def.id}`, () => {
     for (const sample of def.samples ?? []) {
-      it(sample.name, async () => {
-        const config = await getLanguageConfig(def.id);
+      it(sample.name, () => {
+        const config = LANG_CONFIGS[def.id];
         if (!config) {
           throw new Error(`Language config not found for ${def.id}`);
         }

@@ -5,108 +5,14 @@ declare module "fast-glob" {
   ): Promise<string[]>;
 }
 
-declare module "tree-sitter-html" {
-  import type { Language } from "tree-sitter";
-  const language: Language;
-  export default language;
-}
-
-declare module "tree-sitter-css" {
-  import type { Language } from "tree-sitter";
-  const language: Language;
-  export default language;
-}
-
-declare module "tree-sitter-scss" {
-  import type { Language } from "tree-sitter";
-  const language: Language;
-  export default language;
-}
-
-declare module "tree-sitter-vue" {
-  import type { Language } from "tree-sitter";
-  const language: Language;
-  export default language;
-}
-
-declare module "tree-sitter-svelte" {
-  import type { Language } from "tree-sitter";
-  const language: Language;
-  export default language;
-}
-
-declare module "tree-sitter-ruby" {
-  import type { Language } from "tree-sitter";
-  const language: Language;
-  export default language;
-}
-
-declare module "tree-sitter-go" {
-  import type { Language } from "tree-sitter";
-  const language: Language;
-  export default language;
-}
-
-declare module "tree-sitter-java" {
-  import type { Language } from "tree-sitter";
-  const language: Language;
-  export default language;
-}
-
-declare module "tree-sitter-c-sharp" {
-  import type { Language } from "tree-sitter";
-  const language: Language;
-  export default language;
-}
-
-declare module "tree-sitter-rust" {
-  import type { Language } from "tree-sitter";
-  const language: Language;
-  export default language;
-}
-
-declare module "tree-sitter-c" {
-  import type { Language } from "tree-sitter";
-  const language: Language;
-  export default language;
-}
-
-declare module "tree-sitter-cpp" {
-  import type { Language } from "tree-sitter";
-  const language: Language;
-  export default language;
-}
-
-declare module "tree-sitter-javascript" {
-  import type { Language } from "tree-sitter";
-  const language: Language;
-  export default language;
-}
-
-declare module "tree-sitter-python" {
-  import type { Language } from "tree-sitter";
-  const language: Language;
-  export default language;
-}
-
-declare module "tree-sitter-kotlin" {
-  import type { Language } from "tree-sitter";
-  const language: Language;
-  export default language;
-}
-
-declare module "tree-sitter-swift" {
-  import type { Language } from "tree-sitter";
-  const language: Language;
-  export default language;
-}
-
-declare module "tree-sitter-typescript" {
-  import type { Language } from "tree-sitter";
-  const languages: {
-    typescript: Language;
-    tsx: Language;
-  };
-  export default languages;
-}
+declare module "tree-sitter-html";
+declare module "tree-sitter-css";
+declare module "tree-sitter-scss";
+declare module "tree-sitter-vue";
+declare module "tree-sitter-svelte";
+declare module "tree-sitter-ruby";
+declare module "tree-sitter-go";
+declare module "tree-sitter-java";
+declare module "tree-sitter-c-sharp";
+declare module "tree-sitter-rust";
 declare module "picomatch";

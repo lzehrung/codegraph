@@ -1,20 +1,13 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
+import { loadTreeSitterLanguage } from "./loadLanguage.js";
 
-let cachedLanguage: Language | null = null;
-
-async function loadLanguage(): Promise<Language> {
-  if (!cachedLanguage) {
-    const mod = await import("tree-sitter-css");
-    cachedLanguage = mod.default;
-  }
-  return cachedLanguage;
-}
+const LangCSS = loadTreeSitterLanguage("tree-sitter-css");
 
 export const LESS_DEF: LanguageDefinition = {
   id: "less",
   extensions: [".less"],
-  grammar: () => loadLanguage(),
+  grammar: () => LangCSS,
   structure: {
     blocks: [
       { type: "rule_set", captureId: "rule" },

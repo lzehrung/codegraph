@@ -26,7 +26,7 @@ export type IdentifierNodeType = string;
 export type LanguageSupport = {
   id: string;
   matchExts: string[];
-  language: (filename: string) => Promise<Parser.Language>;
+  language: (filename: string) => Parser.Language;
   nodeTypes: {
     identifier: IdentifierNodeType[];
     propertyIdentifier?: IdentifierNodeType[];
@@ -114,9 +114,7 @@ export function supportForFile(filename: string): LanguageSupport {
   }
   return LANGUAGE_SUPPORTS.find((s) => s.matchExts.includes(ext)) ?? TS_SUPPORT;
 }
-export async function languageForFile(
-  filename: string,
-): Promise<Parser.Language> {
+export function languageForFile(filename: string): Parser.Language {
   return supportForFile(filename).language(filename);
 }
 

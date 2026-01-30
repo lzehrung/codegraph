@@ -1,20 +1,13 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
+import { loadTreeSitterLanguage } from "./loadLanguage.js";
 
-let cachedLanguage: Language | null = null;
-
-async function loadLanguage(): Promise<Language> {
-  if (!cachedLanguage) {
-    const mod = await import("tree-sitter-kotlin");
-    cachedLanguage = mod.default;
-  }
-  return cachedLanguage;
-}
+const LangKotlin = loadTreeSitterLanguage("tree-sitter-kotlin");
 
 export const KOTLIN_DEF: LanguageDefinition = {
   id: "kotlin",
   extensions: [".kt", ".kts"],
-  grammar: () => loadLanguage(),
+  grammar: () => LangKotlin,
   structure: {
     blocks: [
       {

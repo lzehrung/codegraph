@@ -1,20 +1,13 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
+import { loadTreeSitterLanguage } from "./loadLanguage.js";
 
-let cachedLanguage: Language | null = null;
-
-async function loadLanguage(): Promise<Language> {
-  if (!cachedLanguage) {
-    const mod = await import("tree-sitter-html");
-    cachedLanguage = mod.default;
-  }
-  return cachedLanguage;
-}
+const LangHTML = loadTreeSitterLanguage("tree-sitter-html");
 
 export const HTML_DEF: LanguageDefinition = {
   id: "html",
   extensions: [".html", ".htm"],
-  grammar: () => loadLanguage(),
+  grammar: () => LangHTML,
   structure: {
     blocks: [
       {

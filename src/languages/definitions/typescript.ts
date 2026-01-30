@@ -1,33 +1,9 @@
+import path from "node:path";
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
+import { loadTypeScriptGrammars } from "./loadLanguage.js";
 
-type TypeScriptGrammars = {
-  typescript: Language;
-  tsx: Language;
-};
-
-let cachedGrammars: TypeScriptGrammars | null = null;
-
-async function loadGrammars(): Promise<TypeScriptGrammars> {
-  if (!cachedGrammars) {
-    const mod = await import("tree-sitter-typescript");
-    cachedGrammars = {
-      typescript: mod.default.typescript,
-      tsx: mod.default.tsx,
-    };
-  }
-  return cachedGrammars;
-}
-
-async function loadTypeScriptLanguage(): Promise<Language> {
-  const grammars = await loadGrammars();
-  return grammars.typescript;
-}
-
-async function loadTsxLanguage(): Promise<Language> {
-  const grammars = await loadGrammars();
-  return grammars.tsx;
-}
+const { typescript: LangTS, tsx: LangTSX } = loadTypeScriptGrammars();
 
 const BASE_STRUCTURE = {
   blocks: [
@@ -224,7 +200,7 @@ const BASE_HELPERS = {
 export const TYPESCRIPT_DEF: LanguageDefinition = {
   id: "ts",
   extensions: [".ts", ".mts", ".cts"],
-  grammar: () => loadTypeScriptLanguage(),
+  grammar: () => LangTS,
   structure: BASE_STRUCTURE,
   graph: BASE_GRAPH,
   ...BASE_HELPERS,
@@ -234,7 +210,7 @@ export const TYPESCRIPT_DEF: LanguageDefinition = {
 export const TSX_DEF: LanguageDefinition = {
   id: "tsx",
   extensions: [".tsx"],
-  grammar: () => loadTsxLanguage(),
+  grammar: () => LangTSX,
   structure: {
     ...BASE_STRUCTURE,
     blocks: [

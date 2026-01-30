@@ -1,20 +1,13 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
+import { loadTreeSitterLanguage } from "./loadLanguage.js";
 
-let cachedLanguage: Language | null = null;
-
-async function loadLanguage(): Promise<Language> {
-  if (!cachedLanguage) {
-    const mod = await import("tree-sitter-ruby");
-    cachedLanguage = mod.default;
-  }
-  return cachedLanguage;
-}
+const LangRuby = loadTreeSitterLanguage("tree-sitter-ruby");
 
 export const RUBY_DEF: LanguageDefinition = {
   id: "ruby",
   extensions: [".rb"],
-  grammar: () => loadLanguage(),
+  grammar: () => LangRuby,
   structure: {
     blocks: [
       {

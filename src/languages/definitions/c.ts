@@ -1,15 +1,8 @@
 import type { Language, SyntaxNode } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
+import { loadTreeSitterLanguage } from "./loadLanguage.js";
 
-let cachedLanguage: Language | null = null;
-
-async function loadLanguage(): Promise<Language> {
-  if (!cachedLanguage) {
-    const mod = await import("tree-sitter-c");
-    cachedLanguage = mod.default;
-  }
-  return cachedLanguage;
-}
+const LangC = loadTreeSitterLanguage("tree-sitter-c");
 
 const FUNCTION_NAME_QUERY = `
   declarator: [
@@ -108,7 +101,7 @@ const isFunctionDeclarator = (node: SyntaxNode): boolean => {
 export const C_DEF: LanguageDefinition = {
   id: "c",
   extensions: [".c", ".h", ".i"],
-  grammar: () => loadLanguage(),
+  grammar: () => LangC,
   structure: {
     blocks: [
       {
