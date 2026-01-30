@@ -36,12 +36,12 @@ export interface LanguageConfig {
  * @param filename Optional filename to select the correct grammar variant (e.g. .tsx)
  * @returns Language configuration object
  */
-export function makeLanguageConfig(
+export async function makeLanguageConfig(
   def: LanguageDefinition,
   filename?: string,
-): LanguageConfig {
+): Promise<LanguageConfig> {
   const parser = new Parser();
-  const lang = def.grammar(filename);
+  const lang = await def.grammar(filename);
   try {
     parser.setLanguage(lang);
   } catch (e) {

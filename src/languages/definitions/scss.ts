@@ -1,13 +1,20 @@
 import type { Language } from "tree-sitter";
-import SCSS from "tree-sitter-scss";
 import type { LanguageDefinition } from "../types.js";
 
-const LangSCSS = SCSS as unknown as Language;
+let cachedLanguage: Language | null = null;
+
+async function loadLanguage(): Promise<Language> {
+  if (!cachedLanguage) {
+    const mod = await import("tree-sitter-scss");
+    cachedLanguage = mod.default;
+  }
+  return cachedLanguage;
+}
 
 export const SCSS_DEF: LanguageDefinition = {
   id: "scss",
   extensions: [".scss"],
-  grammar: () => LangSCSS,
+  grammar: () => loadLanguage(),
   structure: {
     blocks: [
       { type: "rule_set", captureId: "rule" },

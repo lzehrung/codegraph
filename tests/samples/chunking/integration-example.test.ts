@@ -1,10 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 
 import { chunkFile } from "../../../src/chunking/chunkFile.js";
 import { chunkTextFile } from "../../../src/chunking/chunkTextFile.js";
-import { LANG_CONFIGS } from "../../../src/bootstrap/treeSitterLanguages.js";
+import { getLanguageConfig } from "../../../src/bootstrap/treeSitterLanguages.js";
 
 /**
  * Integration example showing how LLM agents can use semantic chunking
@@ -12,6 +12,14 @@ import { LANG_CONFIGS } from "../../../src/bootstrap/treeSitterLanguages.js";
  */
 describe("chunking integration examples", () => {
   const sampleDir = path.join(__dirname);
+  let jsLanguage: Awaited<ReturnType<typeof getLanguageConfig>>;
+
+  beforeAll(async () => {
+    jsLanguage = await getLanguageConfig("javascript");
+    if (!jsLanguage) {
+      throw new Error("Missing JavaScript language config");
+    }
+  });
 
   it("chunks code semantically and filters by type", async () => {
     const codePath = path.join(sampleDir, "sample-code.js");
@@ -19,7 +27,7 @@ describe("chunking integration examples", () => {
 
     // Chunk the JavaScript file semantically
     const chunks = chunkFile({
-      language: LANG_CONFIGS.javascript,
+      language: jsLanguage,
       source,
       filePath: codePath,
       minTokens: 10, // Allow smaller chunks for demo
@@ -94,7 +102,7 @@ describe("chunking integration examples", () => {
 
     // Use restrictive token limits to force splitting
     const chunks = chunkFile({
-      language: LANG_CONFIGS.javascript,
+      language: jsLanguage,
       source,
       filePath: codePath,
       minTokens: 5, // Very small minimum
@@ -124,7 +132,7 @@ describe("chunking integration examples", () => {
     const source = fs.readFileSync(codePath, "utf8");
 
     const chunks = chunkFile({
-      language: LANG_CONFIGS.javascript,
+      language: jsLanguage,
       source,
       filePath: codePath,
       minTokens: 10, // Allow smaller chunks for better granularity

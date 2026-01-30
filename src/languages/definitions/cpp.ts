@@ -1,8 +1,15 @@
 import type { Language, SyntaxNode } from "tree-sitter";
-import Cpp from "tree-sitter-cpp";
 import type { LanguageDefinition } from "../types.js";
 
-const LangCpp = Cpp as Language;
+let cachedLanguage: Language | null = null;
+
+async function loadLanguage(): Promise<Language> {
+  if (!cachedLanguage) {
+    const mod = await import("tree-sitter-cpp");
+    cachedLanguage = mod.default;
+  }
+  return cachedLanguage;
+}
 
 const FUNCTION_NAME_QUERY = `
   declarator: [
@@ -120,7 +127,7 @@ export const CPP_DEF: LanguageDefinition = {
     ".tpp",
     ".inl",
   ],
-  grammar: () => LangCpp,
+  grammar: () => loadLanguage(),
   structure: {
     blocks: [
       {

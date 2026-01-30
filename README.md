@@ -117,12 +117,16 @@ The library provides semantic code chunking utilities for preparing codebases fo
 ### APIs
 
 ```ts
-import { chunkFile, chunkTextFile, LANG_CONFIGS } from 'codegraph';
+import { chunkFile, chunkTextFile, getLanguageConfig } from 'codegraph';
 
 // Chunk a code file semantically
 const source = `function hello(name) { return "Hello " + name; }`;
+const language = await getLanguageConfig("javascript");
+if (!language) {
+  throw new Error("Unsupported language");
+}
 const chunks = chunkFile({
-  language: LANG_CONFIGS.javascript,
+  language,
   source,
   filePath: "utils.js",
   minTokens: 150,  // Merge small chunks

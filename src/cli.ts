@@ -36,7 +36,7 @@ import {
   chunkFile,
   chunkTextFile,
   chunkSFCFile,
-  LANG_CONFIGS,
+  getLanguageConfig,
 } from "./index.js";
 import type {
   BuildReport,
@@ -1656,7 +1656,7 @@ async function main() {
           maxTokens,
         });
       } else if (isSFC) {
-        chunks = chunkSFCFile({
+        chunks = await chunkSFCFile({
           source,
           filePath,
           framework: languageId as "vue" | "svelte",
@@ -1665,8 +1665,7 @@ async function main() {
         });
       } else {
         // Use semantic chunking for code files
-        const langConfig =
-          LANG_CONFIGS[languageId];
+        const langConfig = await getLanguageConfig(languageId);
         if (!langConfig) {
           writeStderrLine(`Unsupported language: ${languageId}`);
           process.exit(1);

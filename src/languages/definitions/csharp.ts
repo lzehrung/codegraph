@@ -1,13 +1,20 @@
 import type { Language } from "tree-sitter";
-import CSharp from "tree-sitter-c-sharp";
 import type { LanguageDefinition } from "../types.js";
 
-const LangCSharp = CSharp as unknown as Language;
+let cachedLanguage: Language | null = null;
+
+async function loadLanguage(): Promise<Language> {
+  if (!cachedLanguage) {
+    const mod = await import("tree-sitter-c-sharp");
+    cachedLanguage = mod.default;
+  }
+  return cachedLanguage;
+}
 
 export const CSHARP_DEF: LanguageDefinition = {
   id: "csharp",
   extensions: [".cs"],
-  grammar: () => LangCSharp,
+  grammar: () => loadLanguage(),
   structure: {
     blocks: [
       {

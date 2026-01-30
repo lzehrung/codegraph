@@ -1,13 +1,20 @@
 import type { Language } from "tree-sitter";
-import Vue from "tree-sitter-vue";
 import type { LanguageDefinition } from "../types.js";
 
-const LangVue = Vue as unknown as Language;
+let cachedLanguage: Language | null = null;
+
+async function loadLanguage(): Promise<Language> {
+  if (!cachedLanguage) {
+    const mod = await import("tree-sitter-vue");
+    cachedLanguage = mod.default;
+  }
+  return cachedLanguage;
+}
 
 export const VUE_DEF: LanguageDefinition = {
   id: "vue",
   extensions: [".vue"],
-  grammar: () => LangVue,
+  grammar: () => loadLanguage(),
   structure: {
     blocks: [
       { type: "template_element", captureId: "template" },

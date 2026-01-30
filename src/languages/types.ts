@@ -3,7 +3,7 @@ import type { Language, SyntaxNode } from "tree-sitter";
 export interface LanguageDefinition {
   id: string;
   extensions: string[];
-  grammar: (filename?: string) => Language;
+  grammar: (filename?: string) => Promise<Language>;
 
   /**
    * Configuration for semantic chunking.

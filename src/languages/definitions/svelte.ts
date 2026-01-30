@@ -1,13 +1,20 @@
 import type { Language } from "tree-sitter";
-import Svelte from "tree-sitter-svelte";
 import type { LanguageDefinition } from "../types.js";
 
-const LangSvelte = Svelte as unknown as Language;
+let cachedLanguage: Language | null = null;
+
+async function loadLanguage(): Promise<Language> {
+  if (!cachedLanguage) {
+    const mod = await import("tree-sitter-svelte");
+    cachedLanguage = mod.default;
+  }
+  return cachedLanguage;
+}
 
 export const SVELTE_DEF: LanguageDefinition = {
   id: "svelte",
   extensions: [".svelte"],
-  grammar: () => LangSvelte,
+  grammar: () => loadLanguage(),
   structure: {
     blocks: [
       { type: "script_element", captureId: "script" },

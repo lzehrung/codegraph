@@ -9,8 +9,8 @@ const sample = (name: string) =>
   fs.readFileSync(path.join(dirname, "samples", name), "utf8");
 
 describe("chunkSFCFile", () => {
-  it("chunks Vue single-file components across template/script/style blocks", () => {
-    const chunks = chunkSFCFile({
+  it("chunks Vue single-file components across template/script/style blocks", async () => {
+    const chunks = await chunkSFCFile({
       source: sample("vue.sample.vue"),
       filePath: "Component.vue",
       framework: "vue",
@@ -22,8 +22,8 @@ describe("chunkSFCFile", () => {
     expect(chunks.some((c) => c.type.startsWith("style"))).toBe(true);
   });
 
-  it("chunks Svelte components with script and template segments", () => {
-    const chunks = chunkSFCFile({
+  it("chunks Svelte components with script and template segments", async () => {
+    const chunks = await chunkSFCFile({
       source: sample("svelte.sample.svelte"),
       filePath: "Component.svelte",
       framework: "svelte",
@@ -34,4 +34,3 @@ describe("chunkSFCFile", () => {
     expect(chunks.some((c) => c.type.startsWith("template"))).toBe(true);
   });
 });
-

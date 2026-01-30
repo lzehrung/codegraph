@@ -2,7 +2,7 @@ import type { Chunk } from "./chunkFile.js";
 import { chunkFile } from "./chunkFile.js";
 import { chunkTextFile } from "./chunkTextFile.js";
 import type { TextChunkOptions } from "./chunkTextFile.js";
-import { LANG_CONFIGS } from "../bootstrap/treeSitterLanguages.js";
+import { getLanguageConfig } from "../bootstrap/treeSitterLanguages.js";
 import {
   parseSFC,
   buildSvelteTemplateBlocks,
@@ -22,7 +22,7 @@ export interface ChunkSFCOptions {
   tokenizer?: ((text: string) => number) | undefined;
 }
 
-export function chunkSFCFile(opts: ChunkSFCOptions): Chunk[] {
+export async function chunkSFCFile(opts: ChunkSFCOptions): Promise<Chunk[]> {
   const {
     source,
     filePath,
@@ -55,7 +55,7 @@ export function chunkSFCFile(opts: ChunkSFCOptions): Chunk[] {
     `${framework}:${filePath ?? "unknown"}:${chunkCounter++}`;
 
   for (const block of sortedBlocks) {
-    const blockChunks = chunkBlock({
+    const blockChunks = await chunkBlock({
       block,
       framework,
       filePath,
@@ -78,14 +78,14 @@ export function chunkSFCFile(opts: ChunkSFCOptions): Chunk[] {
   );
 }
 
-function chunkBlock(opts: {
+async function chunkBlock(opts: {
   block: SFCBlock;
   framework: SFCFramework;
   filePath?: string | undefined;
   minTokens: number;
   maxTokens: number;
   tokenizer?: ((text: string) => number) | undefined;
-}): Chunk[] {
+}): Promise<Chunk[]> {
   const { block, framework, filePath, minTokens, maxTokens, tokenizer } = opts;
 
   if (!block.content.trim()) {
@@ -94,7 +94,7 @@ function chunkBlock(opts: {
 
   const languageKey = selectLanguageKey(block, framework);
   if (languageKey) {
-    const config = LANG_CONFIGS[languageKey];
+    const config = await getLanguageConfig(languageKey);
     if (config) {
       try {
         return chunkFile({

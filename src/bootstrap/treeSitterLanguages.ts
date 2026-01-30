@@ -24,22 +24,57 @@ import { SWIFT_DEF } from "../languages/definitions/swift.js";
 
 export type { LanguageConfig };
 
-export const LANG_CONFIGS: Record<string, LanguageConfig> = {
-  javascript: makeLanguageConfig(JAVASCRIPT_DEF),
-  typescript: makeLanguageConfig(TYPESCRIPT_DEF),
-  tsx: makeLanguageConfig(TSX_DEF),
-  python: makeLanguageConfig(PYTHON_DEF),
-  html: makeLanguageConfig(HTML_DEF),
-  css: makeLanguageConfig(CSS_DEF),
-  scss: makeLanguageConfig(SCSS_DEF),
-  less: makeLanguageConfig(LESS_DEF),
-  ruby: makeLanguageConfig(RUBY_DEF),
-  go: makeLanguageConfig(GO_DEF),
-  java: makeLanguageConfig(JAVA_DEF),
-  csharp: makeLanguageConfig(CSHARP_DEF),
-  rust: makeLanguageConfig(RUST_DEF),
-  c: makeLanguageConfig(C_DEF),
-  cpp: makeLanguageConfig(CPP_DEF),
-  kotlin: makeLanguageConfig(KOTLIN_DEF),
-  swift: makeLanguageConfig(SWIFT_DEF),
-};
+const CONFIG_DEFS = {
+  javascript: JAVASCRIPT_DEF,
+  typescript: TYPESCRIPT_DEF,
+  tsx: TSX_DEF,
+  python: PYTHON_DEF,
+  html: HTML_DEF,
+  css: CSS_DEF,
+  scss: SCSS_DEF,
+  less: LESS_DEF,
+  ruby: RUBY_DEF,
+  go: GO_DEF,
+  java: JAVA_DEF,
+  csharp: CSHARP_DEF,
+  rust: RUST_DEF,
+  c: C_DEF,
+  cpp: CPP_DEF,
+  kotlin: KOTLIN_DEF,
+  swift: SWIFT_DEF,
+} as const;
+
+type LanguageConfigId = keyof typeof CONFIG_DEFS;
+
+const configCache = new Map<LanguageConfigId, Promise<LanguageConfig>>();
+
+async function getLanguageConfigByKey(
+  key: LanguageConfigId,
+): Promise<LanguageConfig> {
+  let cached = configCache.get(key);
+  if (!cached) {
+    cached = makeLanguageConfig(CONFIG_DEFS[key]);
+    configCache.set(key, cached);
+  }
+  return cached;
+}
+
+export async function getLanguageConfig(
+  id: string,
+): Promise<LanguageConfig | undefined> {
+  const key = id as LanguageConfigId;
+  if (!(key in CONFIG_DEFS)) return undefined;
+  return getLanguageConfigByKey(key);
+}
+
+export async function getLanguageConfigs(): Promise<
+  Record<string, LanguageConfig>
+> {
+  const entries = await Promise.all(
+    (Object.keys(CONFIG_DEFS) as LanguageConfigId[]).map(async (key) => {
+      const config = await getLanguageConfigByKey(key);
+      return [key, config] as const;
+    }),
+  );
+  return Object.fromEntries(entries);
+}

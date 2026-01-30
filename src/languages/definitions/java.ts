@@ -1,13 +1,20 @@
 import type { Language } from "tree-sitter";
-import Java from "tree-sitter-java";
 import type { LanguageDefinition } from "../types.js";
 
-const LangJava = Java as unknown as Language;
+let cachedLanguage: Language | null = null;
+
+async function loadLanguage(): Promise<Language> {
+  if (!cachedLanguage) {
+    const mod = await import("tree-sitter-java");
+    cachedLanguage = mod.default;
+  }
+  return cachedLanguage;
+}
 
 export const JAVA_DEF: LanguageDefinition = {
   id: "java",
   extensions: [".java"],
-  grammar: () => LangJava,
+  grammar: () => loadLanguage(),
   structure: {
     blocks: [
       {

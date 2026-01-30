@@ -13,10 +13,10 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 describe("scope index quality", () => {
-  it("should not duplicate bindings in root scope", () => {
+  it("should not duplicate bindings in root scope", async () => {
     const source = `const x = 1;`;
     const file = "test.ts";
-    const lang = languageForFile(file);
+    const lang = await languageForFile(file);
     const scopeIndex = buildScopeIndexFromSource(file, source, TS_SUPPORT, lang);
 
     const xBindings = scopeIndex.bindings.get("x");
@@ -27,7 +27,7 @@ describe("scope index quality", () => {
     expect(xInAll.length).toBe(1);
   });
 
-  it("should handle nested function shadowing", () => {
+  it("should handle nested function shadowing", async () => {
     const source = `
       function outer() {
         const x = 1;
@@ -39,7 +39,7 @@ describe("scope index quality", () => {
       }
     `;
     const file = "test.ts";
-    const lang = languageForFile(file);
+    const lang = await languageForFile(file);
     const scopeIndex = buildScopeIndexFromSource(file, source, TS_SUPPORT, lang);
 
     const xBindings = scopeIndex.bindings.get("x");
@@ -145,7 +145,7 @@ describe("scope index quality", () => {
       }
     `;
     const file = "test.ts";
-    const lang = languageForFile(file);
+    const lang = await languageForFile(file);
     const scopeIndex = buildScopeIndexFromSource(file, source, TS_SUPPORT, lang);
 
     const outerBinding = scopeIndex.all.find(b => b.name === "outer");
@@ -167,7 +167,7 @@ def foo(x):
     return x
 `;
     const file = "test.py";
-    const lang = languageForFile(file);
+    const lang = await languageForFile(file);
     const scopeIndex = buildScopeIndexFromSource(file, source, PY_SUPPORT, lang);
 
     const xBindings = scopeIndex.bindings.get("x");

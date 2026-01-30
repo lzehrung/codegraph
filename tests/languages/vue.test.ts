@@ -11,8 +11,8 @@ const samplePath = path.join(dirname, "samples", "vue.sample.vue");
 const source = fs.readFileSync(samplePath, "utf8");
 
 describe("Vue SFC chunking", () => {
-  it("produces template/script/style chunks", () => {
-    const chunks = chunkSFCFile({
+  it("produces template/script/style chunks", async () => {
+    const chunks = await chunkSFCFile({
       source,
       filePath: "vue.sample.vue",
       framework: "vue",
