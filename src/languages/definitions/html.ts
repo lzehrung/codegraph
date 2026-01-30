@@ -1,8 +1,8 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
+import { loadTreeSitterLanguage } from "./loadLanguage.js";
 
-const { default: HTML } = await import("tree-sitter-html");
-const LangHTML: Language = HTML;
+const LangHTML = loadTreeSitterLanguage("tree-sitter-html");
 
 export const HTML_DEF: LanguageDefinition = {
   id: "html",
