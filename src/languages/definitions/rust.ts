@@ -1,8 +1,8 @@
 import type { Language } from "tree-sitter";
-import Rust from "tree-sitter-rust";
 import type { LanguageDefinition } from "../types.js";
 
-const LangRust = Rust as unknown as Language;
+const { default: Rust } = await import("tree-sitter-rust");
+const LangRust: Language = Rust;
 
 export const RUST_DEF: LanguageDefinition = {
   id: "rust",
