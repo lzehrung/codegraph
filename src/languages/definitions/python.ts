@@ -1,8 +1,8 @@
 import type { Language } from "tree-sitter";
-import PythonLang from "tree-sitter-python";
 import type { LanguageDefinition } from "../types.js";
 
-const LangPY = PythonLang as unknown as Language;
+const { default: PythonLang } = await import("tree-sitter-python");
+const LangPY: Language = PythonLang;
 
 export const PYTHON_DEF: LanguageDefinition = {
   id: "python",
