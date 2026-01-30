@@ -1,8 +1,8 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
+import { loadTreeSitterLanguage } from "./loadLanguage.js";
 
-const { default: CSharp } = await import("tree-sitter-c-sharp");
-const LangCSharp: Language = CSharp;
+const LangCSharp = loadTreeSitterLanguage("tree-sitter-c-sharp");
 
 export const CSHARP_DEF: LanguageDefinition = {
   id: "csharp",
