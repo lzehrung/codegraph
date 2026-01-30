@@ -1,8 +1,8 @@
 import type { Language } from "tree-sitter";
-import Swift from "tree-sitter-swift";
 import type { LanguageDefinition } from "../types.js";
 
-const LangSwift = Swift as Language;
+const { default: Swift } = await import("tree-sitter-swift");
+const LangSwift: Language = Swift;
 
 export const SWIFT_DEF: LanguageDefinition = {
   id: "swift",

@@ -1,8 +1,8 @@
 import type { Language } from "tree-sitter";
-import Ruby from "tree-sitter-ruby";
 import type { LanguageDefinition } from "../types.js";
 
-const LangRuby = Ruby as unknown as Language;
+const { default: Ruby } = await import("tree-sitter-ruby");
+const LangRuby: Language = Ruby;
 
 export const RUBY_DEF: LanguageDefinition = {
   id: "ruby",

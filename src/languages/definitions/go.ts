@@ -1,8 +1,8 @@
 import type { Language } from "tree-sitter";
-import Go from "tree-sitter-go";
 import type { LanguageDefinition } from "../types.js";
 
-const LangGo = Go as unknown as Language;
+const { default: Go } = await import("tree-sitter-go");
+const LangGo: Language = Go;
 
 export const GO_DEF: LanguageDefinition = {
   id: "go",
