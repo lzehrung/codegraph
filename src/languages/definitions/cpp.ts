@@ -1,8 +1,8 @@
 import type { Language, SyntaxNode } from "tree-sitter";
-import Cpp from "tree-sitter-cpp";
 import type { LanguageDefinition } from "../types.js";
 
-const LangCpp = Cpp as Language;
+const { default: Cpp } = await import("tree-sitter-cpp");
+const LangCpp: Language = Cpp;
 
 const FUNCTION_NAME_QUERY = `
   declarator: [

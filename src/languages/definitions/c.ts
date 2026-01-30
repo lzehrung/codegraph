@@ -1,8 +1,8 @@
 import type { Language, SyntaxNode } from "tree-sitter";
-import C from "tree-sitter-c";
 import type { LanguageDefinition } from "../types.js";
 
-const LangC = C as Language;
+const { default: C } = await import("tree-sitter-c");
+const LangC: Language = C;
 
 const FUNCTION_NAME_QUERY = `
   declarator: [
