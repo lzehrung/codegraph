@@ -1,10 +1,9 @@
 import path from "node:path";
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
+import { loadTypeScriptGrammars } from "./loadLanguage.js";
 
-const { default: tsGrammars } = await import("tree-sitter-typescript");
-const LangTS: Language = tsGrammars.typescript;
-const LangTSX: Language = tsGrammars.tsx;
+const { typescript: LangTS, tsx: LangTSX } = loadTypeScriptGrammars();
 
 const BASE_STRUCTURE = {
   blocks: [

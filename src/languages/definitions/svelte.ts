@@ -1,8 +1,8 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
+import { loadTreeSitterLanguage } from "./loadLanguage.js";
 
-const { default: Svelte } = await import("tree-sitter-svelte");
-const LangSvelte: Language = Svelte;
+const LangSvelte = loadTreeSitterLanguage("tree-sitter-svelte");
 
 export const SVELTE_DEF: LanguageDefinition = {
   id: "svelte",

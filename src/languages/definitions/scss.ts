@@ -1,8 +1,8 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
+import { loadTreeSitterLanguage } from "./loadLanguage.js";
 
-const { default: SCSS } = await import("tree-sitter-scss");
-const LangSCSS: Language = SCSS;
+const LangSCSS = loadTreeSitterLanguage("tree-sitter-scss");
 
 export const SCSS_DEF: LanguageDefinition = {
   id: "scss",
