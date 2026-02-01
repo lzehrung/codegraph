@@ -5,8 +5,15 @@ import fg from "fast-glob";
 import Parser from "tree-sitter";
 import crypto from "node:crypto";
 import { performance } from "node:perf_hooks";
-import { supportForFile, getCompiledQueries, type LanguageSupport } from "./languages.js";
-import { buildBloomFilterFromSource, BloomFilterCache } from "./util/bloomFilter.js";
+import {
+  supportForFile,
+  getCompiledQueries,
+  type LanguageSupport,
+} from "./languages.js";
+import {
+  buildBloomFilterFromSource,
+  BloomFilterCache,
+} from "./util/bloomFilter.js";
 import { prepareParserInput } from "./languages/filePrep.js";
 import {
   listProjectFiles,
@@ -1590,7 +1597,7 @@ export function collectLocalsAndExportsFromSource(
         );
         if (!mm) continue;
         const srcName = mm[1]!;
-        const alias = (mm[2] ?? srcName);
+        const alias = mm[2] ?? srcName;
         if (
           !exports.some(
             (e) =>
@@ -1855,7 +1862,7 @@ export async function collectImportsForFile(
         );
         if (am) {
           const imported = am[1]!;
-          const local = (am[2] ?? imported);
+          const local = am[2] ?? imported;
           await pushNamed(mod, imported, local);
         }
       }
@@ -1877,7 +1884,7 @@ export async function collectImportsForFile(
     parser.setLanguage(resolvedLang);
     const tree = opts?.tree ?? parser.parse(resolvedSource);
     const tsCfg =
-      (resolvedSup.id === "ts" || resolvedSup.id === "tsx")
+      resolvedSup.id === "ts" || resolvedSup.id === "tsx"
         ? await loadNearestTsconfigFor(file)
         : undefined;
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
@@ -1949,7 +1956,7 @@ export async function collectImportsForFile(
             );
             if (!nm) continue;
             const imported = nm[1]!;
-            const local = (nm[2] ?? imported);
+            const local = nm[2] ?? imported;
             imports.push({
               kind: "named",
               local,
@@ -1990,7 +1997,7 @@ export async function collectImportsForFile(
           );
           if (!nm) continue;
           const imported = nm[1]!;
-          const local = (nm[2] ?? imported);
+          const local = nm[2] ?? imported;
           imports.push({
             kind: "named",
             local,
@@ -4071,8 +4078,8 @@ export function buildScopeIndexFromSource(
   }
 
   const idSet = new Set([
-    ...(support.nodeTypes.identifier),
-    ...((support.nodeTypes.shorthandPropertyIdentifier ?? [])),
+    ...support.nodeTypes.identifier,
+    ...(support.nodeTypes.shorthandPropertyIdentifier ?? []),
   ]);
   const customDeclLanguages = new Set(["c", "cpp", "kotlin", "swift"]);
   const paramParentTypes = new Set([

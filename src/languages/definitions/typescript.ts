@@ -1,5 +1,4 @@
-import path from "node:path";
-import type { Language } from "tree-sitter";
+import type { SyntaxNode } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
 import { loadTypeScriptGrammars } from "./loadLanguage.js";
 
@@ -144,7 +143,7 @@ const BASE_GRAPH = {
     (class_declaration name: (identifier) @name)
     (variable_declarator name: (identifier) @name)
   `,
-    importBindings: `
+  importBindings: `
     (import_statement) @stmt
     (import_statement (string) @from) @stmt
     (import_statement (import_require_clause (identifier) @def (string) @from)) @stmt
@@ -162,7 +161,7 @@ const BASE_HELPERS = {
     shorthandPropertyIdentifier: ["shorthand_property_identifier"],
     memberExpression: "member_expression",
   },
-  classifyDefinition: (n: any) => {
+  classifyDefinition: (n: SyntaxNode) => {
     const t = n.parent?.type;
     if (t === "function_declaration") return "function";
     if (t === "class_declaration") return "class";
@@ -170,7 +169,7 @@ const BASE_HELPERS = {
     if (t === "type_alias_declaration") return "type";
     return "variable";
   },
-  isDeclarationName: (node: any) => {
+  isDeclarationName: (node: SyntaxNode) => {
     const p = node.parent?.type;
     return (
       !!p &&
@@ -187,8 +186,9 @@ const BASE_HELPERS = {
       ].includes(p)
     );
   },
-  createsBlockScope: (n: any) => n.type === "program" || n.type === "block",
-  createsFunctionScope: (n: any) =>
+  createsBlockScope: (n: SyntaxNode) =>
+    n.type === "program" || n.type === "block",
+  createsFunctionScope: (n: SyntaxNode) =>
     n.type === "function_declaration" ||
     n.type === "function" ||
     n.type === "function_expression" ||

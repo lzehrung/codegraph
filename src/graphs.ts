@@ -14,7 +14,9 @@ import {
   resolveImportSpecifier,
   resolvePythonModule,
   normalizeResolutionHints,
- acquireParser, releaseParser } from "./util.js";
+  acquireParser,
+  releaseParser,
+} from "./util.js";
 // Intentionally compile only the imports query locally to avoid compiling
 // unrelated queries (which may differ per grammar) and causing warnings.
 import {
@@ -1128,7 +1130,7 @@ export async function buildSymbolGraphDetailed(
       ? opts.maxEdges
       : Number.POSITIVE_INFINITY;
   const membersOnly = !!opts?.membersOnly;
-  const scopeMode = (opts?.scope ?? "all");
+  const scopeMode = opts?.scope ?? "all";
 
   const normalizePath = (p: string) => p.replace(/\\/g, "/");
   const importedByOthers = new Set<string>();
@@ -1755,9 +1757,7 @@ export async function buildSymbolGraphDetailed(
               const m = index.byFile.get(fileKey ?? "");
               const last = names[0];
               if (m)
-                targetDef =
-                  (m.locals).find((l) => l.localName === last) ??
-                  null;
+                targetDef = m.locals.find((l) => l.localName === last) ?? null;
             }
             if (targetDef) {
               const toId = defNodeId(targetDef);
