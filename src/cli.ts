@@ -457,7 +457,8 @@ function ensureImpactReport(
     if (item.depth !== undefined) impact.depth = item.depth;
     if (item.typeOnly !== undefined) impact.typeOnly = item.typeOnly;
     if (item.explain !== undefined) impact.explain = item.explain;
-    const maybeRefs = "refs" in item ? (item as { refs?: ImpactItem["refs"] }).refs : undefined;
+    const maybeRefs =
+      "refs" in item ? (item as { refs?: ImpactItem["refs"] }).refs : undefined;
     if (maybeRefs !== undefined) impact.refs = maybeRefs;
     return impact;
   });
@@ -860,7 +861,10 @@ async function main() {
         ...(indexReport ? { report: indexReport } : {}),
       });
       const detailedSymbols = hasFlag("--symbols-detailed");
-      const scope = getOpt("--symbols-detailed-scope") as "all" | "imported" | undefined;
+      const scope = getOpt("--symbols-detailed-scope") as
+        | "all"
+        | "imported"
+        | undefined;
       const maxEdgesRaw = getOpt("--symbols-detailed-max-edges");
       const maxEdges =
         maxEdgesRaw !== undefined ? Number(maxEdgesRaw) : undefined;
@@ -895,7 +899,10 @@ async function main() {
       });
       let sgraph;
       if (detailedSymbols) {
-        const scope = getOpt("--symbols-detailed-scope") as "all" | "imported" | undefined;
+        const scope = getOpt("--symbols-detailed-scope") as
+          | "all"
+          | "imported"
+          | undefined;
         const maxEdgesRaw = getOpt("--symbols-detailed-max-edges");
         const maxEdges =
           maxEdgesRaw !== undefined ? Number(maxEdgesRaw) : undefined;
@@ -1193,7 +1200,7 @@ async function main() {
   }
 
   if (cmd === "impact") {
-    const provider = (getOpt("--provider") ?? "git");
+    const provider = getOpt("--provider") ?? "git";
 
     const options: any = { provider };
 
@@ -1665,8 +1672,7 @@ async function main() {
         });
       } else {
         // Use semantic chunking for code files
-        const langConfig =
-          LANG_CONFIGS[languageId];
+        const langConfig = LANG_CONFIGS[languageId];
         if (!langConfig) {
           writeStderrLine(`Unsupported language: ${languageId}`);
           process.exit(1);
