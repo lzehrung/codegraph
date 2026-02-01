@@ -181,9 +181,7 @@ export async function tool_listProjectFiles(
 /**
  * Gets the dependency graph for the project.
  */
-export async function tool_getGraph(
-  root: string,
-): Promise<{
+export async function tool_getGraph(root: string): Promise<{
   status: "ok" | "error";
   graph?: { nodes: string[]; edges: Edge[] };
   error?: string;
