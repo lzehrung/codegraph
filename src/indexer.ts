@@ -154,7 +154,7 @@ export type ProjectIndex = {
       sup: ReturnType<typeof supportForFile>;
       lang: Parser.Language;
     }
-  >;
+  > | undefined;
   bloomFilters?: import("./util/bloomFilter.js").BloomFilterCache;
   projectFiles?: ProjectFileInfo[];
 };
@@ -188,6 +188,8 @@ export type BuildOptions = {
   report?: BuildReport;
   /** Log level for build warnings (default: "warn") */
   logLevel?: "error" | "warn" | "info" | "debug" | "silent";
+  /** Keep parsed trees in memory (default: false). Set to true for faster subsequent lookups at the cost of memory. */
+  keepParsed?: boolean;
 };
 
 export type IncrementalBuildOptions = BuildOptions & {
@@ -1328,6 +1330,9 @@ export function collectLocalsAndExportsFromSource(
   }
 
   const exports: ExportEntry[] = [];
+  const pythonAllExports = new Set<string>();
+  let hasPythonAll = false;
+
   if (support.queries.exports.trim() && tree) {
     try {
       const { exports: q } = getCompiledQueries(lang, support);
@@ -1343,20 +1348,28 @@ export function collectLocalsAndExportsFromSource(
             map["left"] &&
             sliceText(map["left"].node, source) === "__all__"
           ) {
-            const items = m.captures.filter(
-              (c: Parser.QueryCapture) => c.name === "all_item",
-            );
-            for (const it of items) {
-              const name = unquote(sliceText(it.node, source));
-              const local = locals.find((d) => d.localName === name);
-              if (local)
-                exports.push({
-                  type: "local",
-                  exportedAs: name,
-                  target: local,
-                });
+            hasPythonAll = true;
+            const listNode = map["all_list"]?.node;
+            const tupleNode = map["all_tuple"]?.node;
+            const collection = listNode ?? tupleNode;
+
+            if (collection) {
+              for (const child of collection.namedChildren) {
+                if (child.type === "string") {
+                  const name = unquote(sliceText(child, source));
+                  pythonAllExports.add(name);
+                  const local = locals.find((d) => d.localName === name);
+                  if (local)
+                    exports.push({
+                      type: "local",
+                      exportedAs: name,
+                      target: local,
+                    });
+                }
+              }
             }
-            if (items.length === 0) {
+
+            if (!collection) {
               // Fallback: handle tuples/multiline/concatenations by scanning a small window after assignment
               const assignIdx = map["stmt"]
                 ? map["stmt"].node.startIndex
@@ -1366,6 +1379,7 @@ export function collectLocalsAndExportsFromSource(
                 const strRe = /["']([^"']+)["']/g;
                 for (let sm; (sm = strRe.exec(window)); ) {
                   const name = sm[1]!;
+                  pythonAllExports.add(name);
                   const local = locals.find((d) => d.localName === name);
                   if (
                     local &&
@@ -1701,6 +1715,22 @@ export function collectLocalsAndExportsFromSource(
         }
       }
     }
+  }
+
+  if (support.id === "python" && hasPythonAll) {
+    const seen = new Set<string>();
+    const filtered = exports.filter((e) => {
+      if (e.type === "local") {
+        if (!pythonAllExports.has(e.exportedAs)) return false;
+        if (seen.has(e.exportedAs)) return false;
+        seen.add(e.exportedAs);
+        return true;
+      }
+      if (e.type === "reexport") return pythonAllExports.has(e.exportedAs);
+      return true;
+    });
+    exports.length = 0;
+    exports.push(...filtered);
   }
 
   if (
@@ -2701,13 +2731,19 @@ async function buildIndexFromFileListShared(
 
   if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
   const projectFiles = await discoverProjectFiles(projectRoot);
+
+  const keepParsed = opts?.keepParsed ?? false;
+  if (!keepParsed) {
+    parsedMap.clear();
+  }
+
   return {
     graph,
     modules,
     byFile: modules,
     exportCache: new Map(),
     scopeCache: new Map(),
-    parsed: parsedMap,
+    parsed: keepParsed ? parsedMap : undefined,
     ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
     projectFiles,
   };
@@ -3159,13 +3195,19 @@ export async function buildProjectIndexIncremental(
 
   if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
   const projectFiles = await discoverProjectFiles(projectRoot);
+
+  const keepParsed = opts?.keepParsed ?? false;
+  if (!keepParsed) {
+    parsedMap.clear();
+  }
+
   return {
     graph,
     modules,
     byFile: modules,
     exportCache: new Map(),
     scopeCache: new Map(),
-    parsed: parsedMap,
+    parsed: keepParsed ? parsedMap : undefined,
     ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
     projectFiles,
   };
