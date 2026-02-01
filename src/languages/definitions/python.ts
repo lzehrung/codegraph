@@ -56,7 +56,8 @@ export const PYTHON_DEF: LanguageDefinition = {
       (import_from_statement) @stmt
     `,
     exports: `
-      (assignment left: (identifier) @left right: (list (string)+ @all_item)) @stmt
+      (assignment left: (identifier) @left right: (list) @all_list) @stmt
+      (assignment left: (identifier) @left right: (tuple) @all_tuple) @stmt
       (function_definition name: (identifier) @name)
       (class_definition name: (identifier) @name)
       (assignment left: (identifier) @name)
