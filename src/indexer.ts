@@ -533,34 +533,51 @@ export function getApiSurface(index: ProjectIndex): ApiSurface {
   return out;
 }
 
+/**
+ * Map over items with bounded concurrency.
+ * Uses a semaphore internally to properly track outstanding operations,
+ * preventing EMFILE errors when tasks spawn nested async I/O.
+ */
 async function mapLimit<T, R>(
   items: T[],
   limit: number,
   fn: (item: T) => Promise<R>,
 ): Promise<R[]> {
-  const out: R[] = new Array(items.length);
-  let idx = 0;
-  let running = 0;
-  return new Promise((resolve, reject) => {
-    const next = () => {
-      if (idx >= items.length && running === 0) {
-        resolve(out);
-        return;
+  if (items.length === 0) return [];
+
+  // Use a simple semaphore-based approach for proper concurrency control
+  const semaphore = { permits: limit, queue: [] as Array<() => void> };
+
+  const acquire = (): Promise<void> => {
+    if (semaphore.permits > 0) {
+      semaphore.permits--;
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      semaphore.queue.push(resolve);
+    });
+  };
+
+  const release = (): void => {
+    const next = semaphore.queue.shift();
+    if (next) {
+      next();
+    } else {
+      semaphore.permits++;
+    }
+  };
+
+  const results = await Promise.all(
+    items.map(async (item) => {
+      await acquire();
+      try {
+        return await fn(item);
+      } finally {
+        release();
       }
-      while (running < limit && idx < items.length) {
-        const cur = idx++;
-        running++;
-        fn(items[cur]!)
-          .then((res) => {
-            out[cur] = res;
-            running--;
-            next();
-          })
-          .catch(reject);
-      }
-    };
-    next();
-  });
+    }),
+  );
+  return results;
 }
 
 // ---------------- Incremental cache (memory/disk) ----------------
@@ -1344,40 +1361,48 @@ export function collectLocalsAndExportsFromSource(
         const isTypeOnly = support.isTypeOnly(stmtText);
 
         if (support.id === "python") {
-          if (
-            map["left"] &&
-            sliceText(map["left"].node, source) === "__all__"
-          ) {
+          // Check for __all__ patterns: assignment, augmented assignment, extend(), append()
+          const leftText = map["left"] ? sliceText(map["left"].node, source) : "";
+          const methodText = map["method"] ? sliceText(map["method"].node, source) : "";
+          const isAllAssignment = leftText === "__all__";
+          const isAllMethod = leftText === "__all__" && (methodText === "extend" || methodText === "append");
+
+          if (isAllAssignment || isAllMethod) {
             hasPythonAll = true;
-            const listNode = map["all_list"]?.node;
-            const tupleNode = map["all_tuple"]?.node;
-            const collection = listNode ?? tupleNode;
-
-            if (collection) {
-              for (const child of collection.namedChildren) {
-                if (child.type === "string") {
-                  const name = unquote(sliceText(child, source));
-                  pythonAllExports.add(name);
-                  const local = locals.find((d) => d.localName === name);
-                  if (local)
-                    exports.push({
-                      type: "local",
-                      exportedAs: name,
-                      target: local,
-                    });
-                }
-              }
+            const items = m.captures.filter(
+              (c: Parser.QueryCapture) => c.name === "all_item",
+            );
+            for (const it of items) {
+              const name = unquote(sliceText(it.node, source));
+              pythonAllExports.add(name);
+              const local = locals.find((d) => d.localName === name);
+              if (
+                local &&
+                !exports.some(
+                  (e) =>
+                    e.type !== "exportStar" &&
+                    (e as { exportedAs: string }).exportedAs === name,
+                )
+              )
+                exports.push({
+                  type: "local",
+                  exportedAs: name,
+                  target: local,
+                });
             }
-
-            if (!collection) {
-              // Fallback: handle tuples/multiline/concatenations by scanning a small window after assignment
+            if (items.length === 0 && isAllAssignment) {
+              // Fallback: handle tuples/multiline/concatenations by scanning a larger window
               const assignIdx = map["stmt"]
                 ? map["stmt"].node.startIndex
                 : source.indexOf("__all__");
               if (assignIdx >= 0) {
-                const window = source.slice(assignIdx, assignIdx + 800);
+                // Use 2000 char window to handle multiline __all__ definitions
+                const window = source.slice(assignIdx, assignIdx + 2000);
+                // Stop at next unrelated statement (def, class, or unindented code)
+                const endMatch = window.match(/\n(?:def |class |[a-zA-Z_])/);
+                const effectiveWindow = endMatch ? window.slice(0, endMatch.index) : window;
                 const strRe = /["']([^"']+)["']/g;
-                for (let sm; (sm = strRe.exec(window)); ) {
+                for (let sm; (sm = strRe.exec(effectiveWindow)); ) {
                   const name = sm[1]!;
                   pythonAllExports.add(name);
                   const local = locals.find((d) => d.localName === name);

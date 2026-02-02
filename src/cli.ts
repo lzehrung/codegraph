@@ -52,7 +52,7 @@ import type {
   ReviewDepth,
 } from "./index.js";
 
-function toJSON(obj: any) {
+function toJSON(obj: unknown): string {
   return JSON.stringify(obj, null, 2);
 }
 let stderrFilePath: string | undefined;
@@ -218,9 +218,13 @@ async function writeCommandReport(
 }
 
 // Compact JSON helpers to reduce repeated strings in graph output
+type CompactEdgeTo = { type: "file"; path: number } | { type: "external"; name: string };
+type CompactFileEdge = { from: number; to: CompactEdgeTo; raw: string; typeOnly?: boolean };
+type CompactSymbolEdge = { from: number; to: number; label?: string };
+
 function compactGraphWithSymbols(
-  fgraph: { nodes: Set<string>; edges: Array<any> },
-  sgraph: { nodes: Map<string, any>; edges: Array<any> },
+  fgraph: Graph,
+  sgraph: SymbolGraph,
   stable = false,
 ) {
   const files = [...fgraph.nodes];
@@ -228,19 +232,19 @@ function compactGraphWithSymbols(
   const fileIndex = new Map<string, number>();
   for (let i = 0; i < files.length; i++) fileIndex.set(files[i]!, i);
 
-  const fileEdges = fgraph.edges.map((e: any) => ({
+  const fileEdges: CompactFileEdge[] = fgraph.edges.map((e) => ({
     from: fileIndex.get(e.from)!,
     to:
       e.to?.type === "file"
-        ? { type: "file", path: fileIndex.get(e.to.path)! }
-        : e.to,
+        ? { type: "file" as const, path: fileIndex.get(e.to.path)! }
+        : { type: "external" as const, name: e.to.name },
     raw: e.raw,
     ...(e.typeOnly !== undefined ? { typeOnly: e.typeOnly } : {}),
   }));
   if (stable) {
-    const toKey = (to: any) =>
+    const toKey = (to: CompactEdgeTo) =>
       to?.type === "file" ? `file:${to.path}` : `ext:${to?.name ?? ""}`;
-    fileEdges.sort((a: any, b: any) => {
+    fileEdges.sort((a, b) => {
       const byFrom = a.from - b.from;
       if (byFrom) return byFrom;
       const ak = toKey(a.to);
@@ -268,13 +272,13 @@ function compactGraphWithSymbols(
     };
   });
 
-  const symbolEdges = sgraph.edges.map((e: any) => ({
+  const symbolEdges: CompactSymbolEdge[] = sgraph.edges.map((e) => ({
     from: symbolIndex.get(e.from)!,
     to: symbolIndex.get(e.to)!,
     ...(e.label ? { label: e.label } : {}),
   }));
   if (stable) {
-    symbolEdges.sort((a: any, b: any) => {
+    symbolEdges.sort((a, b) => {
       const byFrom = a.from - b.from;
       if (byFrom) return byFrom;
       const byTo = a.to - b.to;
@@ -297,7 +301,7 @@ function compactGraphWithSymbols(
 
 function compactSymbolsOnly(
   allFiles: string[],
-  sgraph: { nodes: Map<string, any>; edges: Array<any> },
+  sgraph: SymbolGraph,
   stable = false,
 ) {
   const files = [...allFiles];
@@ -320,13 +324,13 @@ function compactSymbolsOnly(
     };
   });
 
-  const symbolEdges = sgraph.edges.map((e: any) => ({
+  const symbolEdges: CompactSymbolEdge[] = sgraph.edges.map((e) => ({
     from: symbolIndex.get(e.from)!,
     to: symbolIndex.get(e.to)!,
     ...(e.label ? { label: e.label } : {}),
   }));
   if (stable) {
-    symbolEdges.sort((a: any, b: any) => {
+    symbolEdges.sort((a, b) => {
       const byFrom = a.from - b.from;
       if (byFrom) return byFrom;
       const byTo = a.to - b.to;
@@ -592,6 +596,55 @@ async function main() {
     const v = parsed.options.get(name);
     return v && v.length > 0 ? v[v.length - 1] : undefined;
   };
+
+  // Handle help flag
+  if (hasFlag("--help") || hasFlag("-h")) {
+    writeStdoutLine(`codegraph - Code analysis and dependency graph tool
+
+Usage: codegraph <command> [options] [path]
+
+Commands:
+  graph         Build dependency graph (default)
+  impact        Analyze PR impact
+  review        Generate code review report
+  goto          Go to definition
+  refs          Find references
+  chunk         Chunk file for embeddings
+  deps          List dependencies
+  rdeps         List reverse dependencies
+  cycles        Detect dependency cycles
+  hotspots      Find high-complexity files
+
+Graph Options:
+  --fast-graph              Skip AST parsing, use regex for imports.
+                            5-10x faster but may miss dynamic imports,
+                            re-exports, and complex patterns. Best for
+                            quick overviews of large codebases.
+  --resolve-node-modules    Include node_modules in resolution
+  --dynamic-import-heuristics  Attempt to resolve dynamic imports
+  --resolution-hint <hint>  Custom resolution hint (e.g., tsconfig:path)
+
+Build Options:
+  --threads N               Number of worker threads (default: auto)
+  --cache <mode>            Cache mode: disk, memory, off
+  --cache-strict            Use content hashes instead of mtime
+
+Output Options:
+  --json                    Output as JSON (default)
+  --mermaid                 Output as Mermaid diagram
+  --dot                     Output as DOT graph
+  --sqlite <path>           Write to SQLite database
+  --output <path>           Write to file instead of stdout
+
+Examples:
+  codegraph graph ./src
+  codegraph graph --fast-graph --mermaid ./src
+  codegraph impact --provider git --base main --head HEAD
+  codegraph refs --file src/index.ts --line 42 --col 10
+`);
+    process.exit(0);
+  }
+
   const reportFile = getOpt("--report-file");
   const reportEnabled = hasFlag("--report") || reportFile !== undefined;
   const graphFlags = {

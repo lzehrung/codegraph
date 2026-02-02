@@ -7,10 +7,40 @@
 
 import crypto from "node:crypto";
 
+/**
+ * Calculate optimal bloom filter parameters for a target false positive rate.
+ * @param expectedItems - Expected number of items to be added
+ * @param falsePositiveRate - Target false positive rate (default: 0.01 = 1%)
+ * @returns Optimal size in bits and hash count
+ */
+export function calculateOptimalBloomParams(
+  expectedItems: number,
+  falsePositiveRate = 0.01,
+): { size: number; hashCount: number } {
+  // Ensure reasonable bounds
+  const n = Math.max(1, expectedItems);
+  const p = Math.max(0.0001, Math.min(0.5, falsePositiveRate));
+
+  // Optimal size: m = -n * ln(p) / (ln(2)^2)
+  const ln2 = Math.LN2;
+  const ln2Squared = ln2 * ln2;
+  const optimalSize = Math.ceil((-n * Math.log(p)) / ln2Squared);
+
+  // Optimal hash count: k = (m/n) * ln(2)
+  const optimalHashCount = Math.max(1, Math.round((optimalSize / n) * ln2));
+
+  // Clamp to reasonable bounds
+  const size = Math.max(1000, Math.min(1000000, optimalSize)); // 1KB to 125KB
+  const hashCount = Math.max(1, Math.min(10, optimalHashCount));
+
+  return { size, hashCount };
+}
+
 export class BloomFilter {
   private bits: Uint8Array;
   private size: number;
   private hashCount: number;
+  private itemCount: number = 0;
 
   /**
    * Create a bloom filter
@@ -24,9 +54,26 @@ export class BloomFilter {
   }
 
   /**
+   * Create an optimally-sized bloom filter for the expected number of items.
+   * @param expectedItems - Expected number of items to be added
+   * @param falsePositiveRate - Target false positive rate (default: 0.01 = 1%)
+   */
+  static createOptimal(
+    expectedItems: number,
+    falsePositiveRate = 0.01,
+  ): BloomFilter {
+    const { size, hashCount } = calculateOptimalBloomParams(
+      expectedItems,
+      falsePositiveRate,
+    );
+    return new BloomFilter(size, hashCount);
+  }
+
+  /**
    * Add an item to the bloom filter
    */
   add(item: string): void {
+    this.itemCount++;
     for (const hash of this.getHashes(item)) {
       const byteIndex = Math.floor(hash / 8);
       const bitIndex = hash % 8;
@@ -36,6 +83,20 @@ export class BloomFilter {
         this.bits[byteIndex] = currentByte | (1 << bitIndex);
       }
     }
+  }
+
+  /**
+   * Get the number of items added to the filter
+   */
+  getItemCount(): number {
+    return this.itemCount;
+  }
+
+  /**
+   * Get the current estimated false positive rate based on items added
+   */
+  getCurrentFalsePositiveRate(): number {
+    return this.getFalsePositiveRate(this.itemCount);
   }
 
   /**
@@ -109,26 +170,30 @@ export class BloomFilter {
 }
 
 /**
- * Build a bloom filter from source code
- * Extracts all identifiers and adds them to the filter
+ * Build a bloom filter from source code with auto-sizing.
+ * Extracts all identifiers and adds them to an optimally-sized filter.
+ * @param source - The source code to analyze
+ * @param languageId - The language identifier (unused, for future extension)
+ * @param falsePositiveRate - Target false positive rate (default: 0.01 = 1%)
  */
 export function buildBloomFilterFromSource(
   source: string,
   languageId: string,
+  falsePositiveRate = 0.01,
 ): BloomFilter {
-  const filter = new BloomFilter();
-
   // Extract all identifiers using a simple regex
   // This is a fast heuristic - doesn't need to be perfect
   const identifierPattern = /\b[a-zA-Z_$][a-zA-Z0-9_$]*\b/g;
   const matches = source.match(identifierPattern);
 
-  if (matches) {
-    // Use a Set to deduplicate before adding to filter
-    const unique = new Set(matches);
-    for (const identifier of unique) {
-      filter.add(identifier);
-    }
+  // Use a Set to deduplicate before sizing and adding
+  const unique = matches ? new Set(matches) : new Set<string>();
+
+  // Create optimally-sized filter based on unique identifier count
+  const filter = BloomFilter.createOptimal(unique.size || 100, falsePositiveRate);
+
+  for (const identifier of unique) {
+    filter.add(identifier);
   }
 
   return filter;

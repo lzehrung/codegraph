@@ -457,34 +457,49 @@ export async function collectGraph(
     addEdgeTargetsToGraph(graph.edges);
   }
 
+  /**
+   * Map over items with bounded concurrency using semaphore pattern.
+   * Properly tracks outstanding operations to prevent EMFILE errors.
+   */
   async function mapLimit<T, R>(
     items: T[],
     limit: number,
     fn: (item: T) => Promise<R>,
   ): Promise<R[]> {
-    const out: R[] = new Array(items.length);
-    let idx = 0;
-    let running = 0;
-    return new Promise((resolve, reject) => {
-      const next = () => {
-        if (idx >= items.length && running === 0) {
-          resolve(out);
-          return;
+    if (items.length === 0) return [];
+
+    const semaphore = { permits: limit, queue: [] as Array<() => void> };
+
+    const acquire = (): Promise<void> => {
+      if (semaphore.permits > 0) {
+        semaphore.permits--;
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve) => {
+        semaphore.queue.push(resolve);
+      });
+    };
+
+    const release = (): void => {
+      const next = semaphore.queue.shift();
+      if (next) {
+        next();
+      } else {
+        semaphore.permits++;
+      }
+    };
+
+    const results = await Promise.all(
+      items.map(async (item) => {
+        await acquire();
+        try {
+          return await fn(item);
+        } finally {
+          release();
         }
-        while (running < limit && idx < items.length) {
-          const cur = idx++;
-          running++;
-          fn(items[cur]!)
-            .then((res) => {
-              out[cur] = res;
-              running--;
-              next();
-            })
-            .catch(reject);
-        }
-      };
-      next();
-    });
+      }),
+    );
+    return results;
   }
 
   const filePromises = await mapLimit(files, conc, async (file) => {
@@ -952,6 +967,7 @@ export type SymbolNodeKind =
   | "default"
   | "import"
   | "namespaceImport";
+export type SymbolVisibility = "public" | "private" | "protected" | "internal";
 export type SymbolNode = {
   id: string;
   file: FileId;
@@ -960,6 +976,7 @@ export type SymbolNode = {
   docstring?: string;
   lineSpan?: number;
   complexity?: number;
+  visibility?: SymbolVisibility;
 };
 export type SymbolEdge = { from: string; to: string; label?: string };
 export type SymbolGraph = {

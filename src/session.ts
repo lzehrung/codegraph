@@ -42,10 +42,34 @@ export type SessionOptions = {
 export type SessionStatus = "initializing" | "ready" | "expired" | "error";
 
 /**
+ * Interface for CodeReviewSession for TypeScript consumers.
+ * Use this type when you need to type a session parameter without coupling to the class.
+ */
+export interface ICodeReviewSession {
+  init(): Promise<void>;
+  isReady(): boolean;
+  getStatus(): SessionStatus;
+  analyzeImpact(
+    options: Omit<ImpactOptions, "provider"> & { provider?: ImpactOptions["provider"] },
+  ): Promise<ImpactReport | CompactImpactReport>;
+  findReferences(params: { file: string; line: number; column: number }): Promise<unknown>;
+  goToDefinition(params: { file: string; line: number; column: number }): Promise<unknown>;
+  refresh(): Promise<void>;
+  dispose(): void;
+  getStats(): {
+    status: SessionStatus;
+    fileCount: number;
+    symbolCount: number;
+    lastActivity: Date;
+    timeUntilExpiration: number;
+  };
+}
+
+/**
  * A code review session that maintains warm caches
  * Use this to avoid rebuilding the index for multiple queries
  */
-export class CodeReviewSession {
+export class CodeReviewSession implements ICodeReviewSession {
   private index: ProjectIndex | null = null;
   private status: SessionStatus = "initializing";
   private lastActivity: number = Date.now();
@@ -352,6 +376,23 @@ export class SessionManager {
       stats[id] = session.getStats();
     }
     return stats;
+  }
+
+  /**
+   * Pre-warm sessions for faster initial queries.
+   * Useful for Lambda/serverless cold start optimization.
+   * @param sessions - Array of session configs to pre-warm
+   */
+  async warmup(
+    sessions: Array<{ id: string; options: SessionOptions }>,
+  ): Promise<void> {
+    await Promise.all(
+      sessions.map(async ({ id, options }) => {
+        const session = new CodeReviewSession(options);
+        this.sessions.set(id, session);
+        await session.init();
+      }),
+    );
   }
 }
 
