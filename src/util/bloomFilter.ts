@@ -73,7 +73,7 @@ export class BloomFilter {
    * Add an item to the bloom filter
    */
   add(item: string): void {
-    this.itemCount++;
+    // Set all bits first, only increment count if all operations succeed
     for (const hash of this.getHashes(item)) {
       const byteIndex = Math.floor(hash / 8);
       const bitIndex = hash % 8;
@@ -83,6 +83,8 @@ export class BloomFilter {
         this.bits[byteIndex] = currentByte | (1 << bitIndex);
       }
     }
+    // Only increment after successful addition
+    this.itemCount++;
   }
 
   /**

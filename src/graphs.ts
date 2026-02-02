@@ -967,6 +967,14 @@ export type SymbolNodeKind =
   | "default"
   | "import"
   | "namespaceImport";
+
+/**
+ * Access visibility of a symbol. Used to track language-specific visibility modifiers:
+ * - "public": Accessible from anywhere (default for exports, Python public names)
+ * - "private": Class/module private (TypeScript private, Python _underscore, Rust private)
+ * - "protected": Accessible to subclasses (TypeScript/Java protected)
+ * - "internal": Package/module internal (Rust pub(crate), C# internal)
+ */
 export type SymbolVisibility = "public" | "private" | "protected" | "internal";
 export type SymbolNode = {
   id: string;

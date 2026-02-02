@@ -535,8 +535,8 @@ export function getApiSurface(index: ProjectIndex): ApiSurface {
 
 /**
  * Map over items with bounded concurrency.
- * Uses a semaphore internally to properly track outstanding operations,
- * preventing EMFILE errors when tasks spawn nested async I/O.
+ * Uses a streaming approach to avoid creating all promises upfront,
+ * preventing memory issues with large arrays and EMFILE errors.
  */
 async function mapLimit<T, R>(
   items: T[],
@@ -545,39 +545,43 @@ async function mapLimit<T, R>(
 ): Promise<R[]> {
   if (items.length === 0) return [];
 
-  // Use a simple semaphore-based approach for proper concurrency control
-  const semaphore = { permits: limit, queue: [] as Array<() => void> };
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+  let activeCount = 0;
+  let resolveAll: (() => void) | null = null;
+  let rejectAll: ((err: unknown) => void) | null = null;
 
-  const acquire = (): Promise<void> => {
-    if (semaphore.permits > 0) {
-      semaphore.permits--;
-      return Promise.resolve();
+  const startNext = (): void => {
+    while (activeCount < limit && nextIndex < items.length) {
+      const index = nextIndex++;
+      const item = items[index]!;
+      activeCount++;
+
+      fn(item)
+        .then((result) => {
+          results[index] = result;
+          activeCount--;
+          if (nextIndex < items.length) {
+            startNext();
+          } else if (activeCount === 0 && resolveAll) {
+            resolveAll();
+          }
+        })
+        .catch((err) => {
+          if (rejectAll) rejectAll(err);
+        });
     }
-    return new Promise<void>((resolve) => {
-      semaphore.queue.push(resolve);
-    });
   };
 
-  const release = (): void => {
-    const next = semaphore.queue.shift();
-    if (next) {
-      next();
-    } else {
-      semaphore.permits++;
+  return new Promise<R[]>((resolve, reject) => {
+    resolveAll = () => resolve(results);
+    rejectAll = reject;
+    startNext();
+    // Handle empty case or immediate completion
+    if (items.length === 0 || (nextIndex >= items.length && activeCount === 0)) {
+      resolve(results);
     }
-  };
-
-  const results = await Promise.all(
-    items.map(async (item) => {
-      await acquire();
-      try {
-        return await fn(item);
-      } finally {
-        release();
-      }
-    }),
-  );
-  return results;
+  });
 }
 
 // ---------------- Incremental cache (memory/disk) ----------------

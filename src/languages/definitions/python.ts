@@ -55,6 +55,10 @@ export const PYTHON_DEF: LanguageDefinition = {
       (import_statement) @stmt
       (import_from_statement) @stmt
     `,
+    // NOTE: These __all__ queries only capture module-level assignments.
+    // Dynamic __all__ definitions inside functions, conditionals, or loops
+    // (e.g., `if PY3: __all__ = [...]`) are not detected by these patterns.
+    // This is a known limitation - such patterns are rare in practice.
     exports: `
       ;; __all__ = ["a", "b"] - simple list assignment
       (assignment left: (identifier) @left right: (list (string)+ @all_item)) @stmt

@@ -8,7 +8,10 @@ export class Semaphore {
   private waitQueue: Array<() => void> = [];
 
   constructor(permits: number) {
-    this.permits = permits;
+    if (!Number.isFinite(permits) || permits < 1) {
+      throw new Error(`Semaphore permits must be a positive number, got: ${permits}`);
+    }
+    this.permits = Math.floor(permits);
   }
 
   async acquire(): Promise<void> {

@@ -331,6 +331,19 @@ export async function calculateSeverity(
   fanInByFile?: Map<FileId, number>,
   weights: SeverityWeights = DEFAULT_SEVERITY_WEIGHTS,
 ): Promise<SeverityResult> {
+  // Validate weights - ensure all values are positive numbers
+  const validatedWeights = { ...DEFAULT_SEVERITY_WEIGHTS };
+  for (const [key, value] of Object.entries(weights)) {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      (validatedWeights as Record<string, number>)[key] = value;
+    }
+    // Invalid values silently fall back to defaults
+  }
+  // Ensure depthDecay is < 1 to actually decay
+  if (validatedWeights.depthDecay >= 1) {
+    validatedWeights.depthDecay = DEFAULT_SEVERITY_WEIGHTS.depthDecay;
+  }
+
   let score = 1.0;
   let confidence = 1.0; // Start with high confidence
   const explain: SeverityExplain = {};
@@ -338,26 +351,26 @@ export async function calculateSeverity(
 
   // Primary reason (use configurable weights)
   if (reasons.includes("directRef")) {
-    score *= weights.directRef;
+    score *= validatedWeights.directRef;
     explain.reason = "directRef";
     confidence = 1.0; // Direct reference = highest confidence
   } else if (reasons.includes("namespaceMember")) {
-    score *= weights.namespaceMember;
+    score *= validatedWeights.namespaceMember;
     explain.reason = "namespaceMember";
     confidence = 0.9; // Namespace access is fairly reliable
   } else if (reasons.includes("importAlias")) {
-    score *= weights.importAlias;
+    score *= validatedWeights.importAlias;
     explain.reason = "importAlias";
     confidence = 0.85; // Import alias tracking is reliable
   } else {
-    score *= weights.transitive;
+    score *= validatedWeights.transitive;
     explain.reason = "transitive";
     confidence = 0.6; // Transitive impact is less certain
   }
 
   // Exported symbols are more important (configurable)
   if (changedSymbol.exported) {
-    score *= weights.exported;
+    score *= validatedWeights.exported;
     explain.exported = true;
   }
 
@@ -375,13 +388,13 @@ export async function calculateSeverity(
 
   // Same-file references are more important (configurable)
   if (ref.file === changedSymbol.file) {
-    score *= weights.sameFile;
+    score *= validatedWeights.sameFile;
     explain.sameFile = true;
   }
 
   // Type-only changes are less severe (configurable)
   if (changedSymbol.typeOnly) {
-    score *= weights.typeOnly;
+    score *= validatedWeights.typeOnly;
     explain.typeOnly = true;
   }
 
@@ -450,7 +463,7 @@ export async function calculateSeverity(
   }
 
   // Depth decay (configurable)
-  score *= Math.pow(weights.depthDecay, depth);
+  score *= Math.pow(validatedWeights.depthDecay, depth);
   explain.depth = depth;
 
   // Reduce confidence for deeper transitive impacts
