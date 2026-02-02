@@ -1,5 +1,5 @@
-import type { FileId } from "../types.js";
-import type { ProjectIndex, SymbolDef } from "../indexer.js";
+import type { FileId, Edge } from "../types.js";
+import type { ProjectIndex, SymbolDef, Reference } from "../indexer.js";
 import pm from "picomatch";
 import type {
   ChangedSymbol,
@@ -7,8 +7,29 @@ import type {
   ImpactReason,
   ImpactOptions,
   FileChange,
+  SeverityWeights,
 } from "./types.js";
+import { DEFAULT_SEVERITY_WEIGHTS } from "./types.js";
 import { findReferences, ensureParsedContext } from "../indexer.js";
+import type Parser from "tree-sitter";
+
+/** Explain object for impact severity calculation */
+type SeverityExplain = {
+  reason?: ImpactReason;
+  exported?: boolean;
+  fanIn?: number;
+  sameFile?: boolean;
+  typeOnly?: boolean;
+  depth?: number;
+  hints?: string[];
+};
+
+/** Result of severity calculation with confidence */
+type SeverityResult = {
+  severity: number;
+  confidence: number;
+  explain: SeverityExplain;
+};
 
 export async function analyzeImpact(
   index: ProjectIndex,
@@ -220,7 +241,7 @@ async function analyzeTransitiveImpact(
   const isIgnored = ignoreGlobs.length > 0 ? pm(ignoreGlobs) : () => false;
 
   // Precompute reverse dependency index for efficient traversal
-  const reverseDeps = new Map<FileId, any[]>();
+  const reverseDeps = new Map<FileId, Edge[]>();
   for (const e of index.graph.edges) {
     if (e.to.type === "file") {
       const arr = reverseDeps.get(e.to.path) || [];
@@ -303,34 +324,53 @@ async function analyzeTransitiveImpact(
 
 export async function calculateSeverity(
   changedSymbol: ChangedSymbol,
-  ref: any,
+  ref: Reference,
   reasons: ImpactReason[],
   depth: number,
   index: ProjectIndex,
   fanInByFile?: Map<FileId, number>,
-): Promise<{ severity: number; explain: any }> {
-  let score = 1.0;
-  const explain: any = {};
-  const hints: string[] = [];
-
-  // Primary reason
-  if (reasons.includes("directRef")) {
-    score *= 1.0;
-    explain.reason = "directRef";
-  } else if (reasons.includes("namespaceMember")) {
-    score *= 0.8;
-    explain.reason = "namespaceMember";
-  } else if (reasons.includes("importAlias")) {
-    score *= 0.6;
-    explain.reason = "importAlias";
-  } else {
-    score *= 0.4; // transitive
-    explain.reason = "transitive";
+  weights: SeverityWeights = DEFAULT_SEVERITY_WEIGHTS,
+): Promise<SeverityResult> {
+  // Validate weights - ensure all values are positive numbers
+  const validatedWeights = { ...DEFAULT_SEVERITY_WEIGHTS };
+  for (const [key, value] of Object.entries(weights)) {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      (validatedWeights as Record<string, number>)[key] = value;
+    }
+    // Invalid values silently fall back to defaults
+  }
+  // Ensure depthDecay is < 1 to actually decay
+  if (validatedWeights.depthDecay >= 1) {
+    validatedWeights.depthDecay = DEFAULT_SEVERITY_WEIGHTS.depthDecay;
   }
 
-  // Exported symbols are more important
+  let score = 1.0;
+  let confidence = 1.0; // Start with high confidence
+  const explain: SeverityExplain = {};
+  const hints: string[] = [];
+
+  // Primary reason (use configurable weights)
+  if (reasons.includes("directRef")) {
+    score *= validatedWeights.directRef;
+    explain.reason = "directRef";
+    confidence = 1.0; // Direct reference = highest confidence
+  } else if (reasons.includes("namespaceMember")) {
+    score *= validatedWeights.namespaceMember;
+    explain.reason = "namespaceMember";
+    confidence = 0.9; // Namespace access is fairly reliable
+  } else if (reasons.includes("importAlias")) {
+    score *= validatedWeights.importAlias;
+    explain.reason = "importAlias";
+    confidence = 0.85; // Import alias tracking is reliable
+  } else {
+    score *= validatedWeights.transitive;
+    explain.reason = "transitive";
+    confidence = 0.6; // Transitive impact is less certain
+  }
+
+  // Exported symbols are more important (configurable)
   if (changedSymbol.exported) {
-    score *= 1.2;
+    score *= validatedWeights.exported;
     explain.exported = true;
   }
 
@@ -346,15 +386,15 @@ export async function calculateSeverity(
     explain.fanIn = fanIn;
   }
 
-  // Same-file references are more important
+  // Same-file references are more important (configurable)
   if (ref.file === changedSymbol.file) {
-    score *= 1.2;
+    score *= validatedWeights.sameFile;
     explain.sameFile = true;
   }
 
-  // Type-only changes are less severe
+  // Type-only changes are less severe (configurable)
   if (changedSymbol.typeOnly) {
-    score *= 0.7;
+    score *= validatedWeights.typeOnly;
     explain.typeOnly = true;
   }
 
@@ -383,7 +423,7 @@ export async function calculateSeverity(
           column: symbolDef.range.start.column - 1,
         };
         const node = tree.rootNode.descendantForPosition(pos, pos);
-        let declNode: any = node;
+        let declNode: Parser.SyntaxNode | null = node;
         while (
           declNode &&
           ![
@@ -422,17 +462,21 @@ export async function calculateSeverity(
     explain.hints = hints;
   }
 
-  // Depth decay
-  score *= Math.pow(0.8, depth);
+  // Depth decay (configurable)
+  score *= Math.pow(validatedWeights.depthDecay, depth);
   explain.depth = depth;
+
+  // Reduce confidence for deeper transitive impacts
+  confidence *= Math.pow(0.9, depth);
 
   return {
     severity: Math.min(1.0, Math.max(0.0, score)),
+    confidence: Math.min(1.0, Math.max(0.0, confidence)),
     explain,
   };
 }
 
-function calculateTransitiveSeverity(edge: any, depth: number): number {
+function calculateTransitiveSeverity(edge: Edge, depth: number): number {
   let score = 0.3; // Base transitive score
 
   // Type-only edges are less severe

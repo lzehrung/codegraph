@@ -10,7 +10,15 @@ import type { Range } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
-export function sliceText(node: any, src: string) {
+/** Node-like interface for AST nodes with position info */
+interface NodeLike {
+  startIndex: number;
+  endIndex: number;
+  startPosition: { row: number; column: number };
+  endPosition: { row: number; column: number };
+}
+
+export function sliceText(node: NodeLike | null | undefined, src: string): string {
   if (!node || !src) return "";
   return src.slice(node.startIndex, node.endIndex);
 }
@@ -23,7 +31,7 @@ export function unquote(s: string): string {
     ? t.slice(1, -1)
     : t;
 }
-export function toRange(node: any): Range {
+export function toRange(node: NodeLike | null | undefined): Range {
   if (!node) {
     return {
       start: { line: 0, column: 0, index: 0 },

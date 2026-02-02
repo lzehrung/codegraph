@@ -131,6 +131,7 @@ export type ImpactItem = {
   symbols: string[]; // symbol names impacted in this file
   reasons: ImpactReason[];
   severity: number; // 0-1 score
+  confidence?: number; // 0-1 confidence in the impact (1 = exact AST match, lower = heuristic)
   depth?: number; // transitive depth from changed files
   typeOnly?: boolean; // true if only type-level impact
   refs?: Array<{ range: Range; context?: string }>; // references with optional context snippets
@@ -246,6 +247,41 @@ export type CompactImpactReport = {
   warning?: string | undefined;
 };
 
+/**
+ * Configurable severity weights for impact scoring.
+ * All values are multipliers (1.0 = neutral, >1 = increase severity, <1 = decrease).
+ */
+export type SeverityWeights = {
+  /** Multiplier for exported symbols (default: 1.2) */
+  exported: number;
+  /** Multiplier for type-only changes (default: 0.7) */
+  typeOnly: number;
+  /** Multiplier for same-file references (default: 1.2) */
+  sameFile: number;
+  /** Decay factor per depth level (default: 0.8) */
+  depthDecay: number;
+  /** Multiplier for direct references (default: 1.0) */
+  directRef: number;
+  /** Multiplier for namespace member access (default: 0.8) */
+  namespaceMember: number;
+  /** Multiplier for import alias usage (default: 0.6) */
+  importAlias: number;
+  /** Multiplier for transitive impact (default: 0.4) */
+  transitive: number;
+};
+
+/** Default severity weights */
+export const DEFAULT_SEVERITY_WEIGHTS: SeverityWeights = {
+  exported: 1.2,
+  typeOnly: 0.7,
+  sameFile: 1.2,
+  depthDecay: 0.8,
+  directRef: 1.0,
+  namespaceMember: 0.8,
+  importAlias: 0.6,
+  transitive: 0.4,
+};
+
 // Analysis options
 export type ImpactOptions = DiffProviderOptions & {
   scope?: "all" | "imported";
@@ -269,4 +305,6 @@ export type ImpactOptions = DiffProviderOptions & {
   verifyReferences?: boolean;
   /** Cap the number of suggestions returned when verifyReferences is enabled */
   maxSuggestions?: number;
+  /** Custom severity weights for impact scoring */
+  severityWeights?: Partial<SeverityWeights>;
 };

@@ -533,33 +533,54 @@ export function getApiSurface(index: ProjectIndex): ApiSurface {
   return out;
 }
 
+/**
+ * Map over items with bounded concurrency.
+ * Uses a streaming approach to avoid creating all promises upfront,
+ * preventing memory issues with large arrays and EMFILE errors.
+ */
 async function mapLimit<T, R>(
   items: T[],
   limit: number,
   fn: (item: T) => Promise<R>,
 ): Promise<R[]> {
-  const out: R[] = new Array(items.length);
-  let idx = 0;
-  let running = 0;
-  return new Promise((resolve, reject) => {
-    const next = () => {
-      if (idx >= items.length && running === 0) {
-        resolve(out);
-        return;
-      }
-      while (running < limit && idx < items.length) {
-        const cur = idx++;
-        running++;
-        fn(items[cur]!)
-          .then((res) => {
-            out[cur] = res;
-            running--;
-            next();
-          })
-          .catch(reject);
-      }
-    };
-    next();
+  if (items.length === 0) return [];
+
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+  let activeCount = 0;
+  let resolveAll: (() => void) | null = null;
+  let rejectAll: ((err: unknown) => void) | null = null;
+
+  const startNext = (): void => {
+    while (activeCount < limit && nextIndex < items.length) {
+      const index = nextIndex++;
+      const item = items[index]!;
+      activeCount++;
+
+      fn(item)
+        .then((result) => {
+          results[index] = result;
+          activeCount--;
+          if (nextIndex < items.length) {
+            startNext();
+          } else if (activeCount === 0 && resolveAll) {
+            resolveAll();
+          }
+        })
+        .catch((err) => {
+          if (rejectAll) rejectAll(err);
+        });
+    }
+  };
+
+  return new Promise<R[]>((resolve, reject) => {
+    resolveAll = () => resolve(results);
+    rejectAll = reject;
+    startNext();
+    // Handle empty case or immediate completion
+    if (items.length === 0 || (nextIndex >= items.length && activeCount === 0)) {
+      resolve(results);
+    }
   });
 }
 
@@ -1344,40 +1365,47 @@ export function collectLocalsAndExportsFromSource(
         const isTypeOnly = support.isTypeOnly(stmtText);
 
         if (support.id === "python") {
-          if (
-            map["left"] &&
-            sliceText(map["left"].node, source) === "__all__"
-          ) {
+          // Check for __all__ patterns: assignment, augmented assignment, extend(), append()
+          const leftText = map["left"] ? sliceText(map["left"].node, source) : "";
+          const methodText = map["method"] ? sliceText(map["method"].node, source) : "";
+          const isAllAssignment = leftText === "__all__";
+          const isAllMethod = leftText === "__all__" && (methodText === "extend" || methodText === "append");
+
+          if (isAllAssignment || isAllMethod) {
             hasPythonAll = true;
-            const listNode = map["all_list"]?.node;
-            const tupleNode = map["all_tuple"]?.node;
-            const collection = listNode ?? tupleNode;
-
-            if (collection) {
-              for (const child of collection.namedChildren) {
-                if (child.type === "string") {
-                  const name = unquote(sliceText(child, source));
-                  pythonAllExports.add(name);
-                  const local = locals.find((d) => d.localName === name);
-                  if (local)
-                    exports.push({
-                      type: "local",
-                      exportedAs: name,
-                      target: local,
-                    });
-                }
-              }
+            const items = m.captures.filter(
+              (c: Parser.QueryCapture) => c.name === "all_item",
+            );
+            for (const it of items) {
+              const name = unquote(sliceText(it.node, source));
+              pythonAllExports.add(name);
+              const local = locals.find((d) => d.localName === name);
+              if (
+                local &&
+                !exports.some(
+                  (e) =>
+                    e.type !== "exportStar" &&
+                    (e as { exportedAs: string }).exportedAs === name,
+                )
+              )
+                exports.push({
+                  type: "local",
+                  exportedAs: name,
+                  target: local,
+                });
             }
-
-            if (!collection) {
-              // Fallback: handle tuples/multiline/concatenations by scanning a small window after assignment
-              const assignIdx = map["stmt"]
-                ? map["stmt"].node.startIndex
-                : source.indexOf("__all__");
-              if (assignIdx >= 0) {
-                const window = source.slice(assignIdx, assignIdx + 800);
+            // Fallback for tuples/multiline patterns that tree-sitter may not fully capture.
+            // Run if tree-sitter captured 0 items, OR if statement contains tuple (parentheses)
+            // which tree-sitter queries may only partially capture.
+            if (isAllAssignment && map["stmt"]) {
+              const stmtNode = map["stmt"].node;
+              const stmtText = source.slice(stmtNode.startIndex, stmtNode.endIndex);
+              // Check if this is a tuple assignment (contains parentheses after =)
+              const hasTuple = /=\s*\(/.test(stmtText);
+              // Only run fallback if no items captured OR it's a tuple pattern
+              if (items.length === 0 || hasTuple) {
                 const strRe = /["']([^"']+)["']/g;
-                for (let sm; (sm = strRe.exec(window)); ) {
+                for (let sm; (sm = strRe.exec(stmtText)); ) {
                   const name = sm[1]!;
                   pythonAllExports.add(name);
                   const local = locals.find((d) => d.localName === name);
