@@ -1394,22 +1394,19 @@ export function collectLocalsAndExportsFromSource(
                   target: local,
                 });
             }
-            // Always run fallback for __all__ to catch tuples and multiline patterns
-            // that tree-sitter queries may not fully capture
-            if (isAllAssignment) {
-              const assignIdx = map["stmt"]
-                ? map["stmt"].node.startIndex
-                : source.indexOf("__all__");
-              if (assignIdx >= 0) {
-                // Use 2000 char window to handle multiline __all__ definitions
-                const window = source.slice(assignIdx, assignIdx + 2000);
-                // Stop at next unrelated statement (def, class, or unindented code)
-                const endMatch = window.match(/\n(?:def |class |[a-zA-Z_])/);
-                const effectiveWindow = endMatch ? window.slice(0, endMatch.index) : window;
+            // Fallback for tuples/multiline patterns that tree-sitter may not fully capture.
+            // Run if tree-sitter captured 0 items, OR if statement contains tuple (parentheses)
+            // which tree-sitter queries may only partially capture.
+            if (isAllAssignment && map["stmt"]) {
+              const stmtNode = map["stmt"].node;
+              const stmtText = source.slice(stmtNode.startIndex, stmtNode.endIndex);
+              // Check if this is a tuple assignment (contains parentheses after =)
+              const hasTuple = /=\s*\(/.test(stmtText);
+              // Only run fallback if no items captured OR it's a tuple pattern
+              if (items.length === 0 || hasTuple) {
                 const strRe = /["']([^"']+)["']/g;
-                for (let sm; (sm = strRe.exec(effectiveWindow)); ) {
+                for (let sm; (sm = strRe.exec(stmtText)); ) {
                   const name = sm[1]!;
-                  // Deduplicate with pythonAllExports Set
                   pythonAllExports.add(name);
                   const local = locals.find((d) => d.localName === name);
                   if (
