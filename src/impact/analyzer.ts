@@ -1,5 +1,5 @@
 import type { FileId, Edge } from "../types.js";
-import type { ProjectIndex, SymbolDef, ReferenceResult } from "../indexer.js";
+import type { ProjectIndex, SymbolDef, Reference } from "../indexer.js";
 import pm from "picomatch";
 import type {
   ChangedSymbol,
@@ -324,7 +324,7 @@ async function analyzeTransitiveImpact(
 
 export async function calculateSeverity(
   changedSymbol: ChangedSymbol,
-  ref: ReferenceResult,
+  ref: Reference,
   reasons: ImpactReason[],
   depth: number,
   index: ProjectIndex,
