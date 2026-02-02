@@ -39,6 +39,10 @@ export type GraphQueryResult =
   | {
       kind: "highestComplexityClasses";
       results: Array<{ name: string; file: string; complexity: number }>;
+    }
+  | {
+      kind: "highestComplexityFunctions";
+      results: Array<{ name: string; file: string; complexity: number }>;
     };
 
 export type RawSqlResult = {
@@ -72,6 +76,7 @@ const ensureSchema = (db: BetterSqliteDatabase) => {
       docstring TEXT,
       line_span INTEGER,
       complexity INTEGER,
+      visibility TEXT,
       FOREIGN KEY(file) REFERENCES files(path)
     );
     CREATE TABLE IF NOT EXISTS file_edges (
@@ -372,7 +377,7 @@ const dedupeFileEntries = (
 
 const insertSymbols = (db: BetterSqliteDatabase, nodes: SymbolNode[]) => {
   const stmt = db.prepare(
-    "INSERT OR REPLACE INTO symbols (id, file, name, kind, docstring, line_span, complexity) VALUES (?, ?, ?, ?, ?, ?, ?);",
+    "INSERT OR REPLACE INTO symbols (id, file, name, kind, docstring, line_span, complexity, visibility) VALUES (?, ?, ?, ?, ?, ?, ?, ?);",
   );
   for (const node of nodes) {
     stmt.run([
@@ -383,6 +388,7 @@ const insertSymbols = (db: BetterSqliteDatabase, nodes: SymbolNode[]) => {
       node.docstring ?? null,
       node.lineSpan ?? null,
       node.complexity ?? null,
+      node.visibility ?? null,
     ]);
   }
 };
@@ -697,6 +703,28 @@ export async function queryGraphSqlite(
           LIMIT ?;
         `,
         ["class", parsed.limit],
+      );
+      db.close();
+      return {
+        kind: parsed.kind,
+        results: rows.map((row) => ({
+          name: String(row[0]),
+          file: String(row[1]),
+          complexity: Number(row[2]),
+        })),
+      };
+    }
+    case "highestComplexityFunctions": {
+      const rows = execRowsParams(
+        db,
+        `
+          SELECT name, file, COALESCE(complexity, 0) as score
+          FROM symbols
+          WHERE kind = ?
+          ORDER BY score DESC
+          LIMIT ?;
+        `,
+        ["function", parsed.limit],
       );
       db.close();
       return {

@@ -19,7 +19,8 @@ export type GraphQuery =
   | { kind: "controllersMostEndpoints"; limit: number }
   | { kind: "classesImplementing"; interfaceName: string }
   | { kind: "affectedFunctionsForModule"; modulePath: string }
-  | { kind: "highestComplexityClasses"; limit: number };
+  | { kind: "highestComplexityClasses"; limit: number }
+  | { kind: "highestComplexityFunctions"; limit: number };
 
 const tokenize = (input: string): string[] =>
   input.match(/[^\s"]+:"[^"]+"|"[^"]+"|\S+/g)?.map((token) => token.trim()) ??
@@ -118,6 +119,9 @@ export function parseGraphQuery(input: string): GraphQuery | null {
       kind: "affectedFunctionsForModule",
       modulePath: normalizePhrase(match[1] ?? ""),
     };
+  }
+  if (lower.includes("highest complexity") && lower.includes("function")) {
+    return { kind: "highestComplexityFunctions", limit: parseLimit(text, 10) };
   }
   if (lower.includes("highest complexity")) {
     return { kind: "highestComplexityClasses", limit: parseLimit(text, 10) };

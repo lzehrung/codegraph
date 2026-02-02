@@ -55,9 +55,24 @@ export const PYTHON_DEF: LanguageDefinition = {
       (import_statement) @stmt
       (import_from_statement) @stmt
     `,
+    // NOTE: These __all__ queries only capture module-level assignments.
+    // Dynamic __all__ definitions inside functions, conditionals, or loops
+    // (e.g., `if PY3: __all__ = [...]`) are not detected by these patterns.
+    // This is a known limitation - such patterns are rare in practice.
     exports: `
-      (assignment left: (identifier) @left right: (list) @all_list) @stmt
-      (assignment left: (identifier) @left right: (tuple) @all_tuple) @stmt
+      ;; __all__ = ["a", "b"] - simple list assignment
+      (assignment left: (identifier) @left right: (list (string)+ @all_item)) @stmt
+      ;; __all__ = ("a", "b") - tuple assignment
+      (assignment left: (identifier) @left right: (tuple (string)+ @all_item)) @stmt
+      ;; __all__ = ["a"] + ["b"] - concatenation (captures strings in both sides)
+      (assignment left: (identifier) @left right: (binary_operator (list (string)+ @all_item))) @stmt
+      (assignment left: (identifier) @left right: (binary_operator right: (list (string)+ @all_item))) @stmt
+      ;; __all__.extend(["a"]) - extend pattern
+      (expression_statement (call function: (attribute object: (identifier) @left attribute: (identifier) @method) arguments: (argument_list (list (string)+ @all_item)))) @stmt
+      ;; __all__.append("a") - append pattern
+      (expression_statement (call function: (attribute object: (identifier) @left attribute: (identifier) @method) arguments: (argument_list (string) @all_item))) @stmt
+      ;; __all__ += ["a"] - augmented assignment
+      (augmented_assignment left: (identifier) @left right: (list (string)+ @all_item)) @stmt
       (function_definition name: (identifier) @name)
       (class_definition name: (identifier) @name)
       (assignment left: (identifier) @name)
