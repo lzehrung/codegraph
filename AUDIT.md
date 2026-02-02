@@ -3,6 +3,7 @@
 **Audit Date**: 2026-02-01
 **Auditor**: Senior Software Architect & Performance Engineer
 **Version Audited**: 1.8.16
+**Last Updated**: 2026-02-02
 
 ---
 
@@ -10,11 +11,69 @@
 
 The codegraph library is a well-architected, high-performance code analysis tool with strong foundations. This audit identifies **28 actionable improvement opportunities** across 5 dimensions. The most critical findings relate to type safety violations, missing edge cases in language definitions, and gaps in test coverage for pathological inputs.
 
+**Progress: 12/28 items completed (43%)**
+
 **Priority Distribution:**
-- 🔴 Critical (P0): 3 issues
-- 🟠 High (P1): 8 issues
-- 🟡 Medium (P2): 12 issues
-- 🟢 Low (P3): 5 issues
+- 🔴 Critical (P0): 3 issues (2 ✅, 1 remaining)
+- 🟠 High (P1): 8 issues (2 ✅, 6 remaining)
+- 🟡 Medium (P2): 12 issues (5 ✅, 7 remaining)
+- 🟢 Low (P3): 5 issues (3 ✅, 2 remaining)
+
+---
+
+## Implementation Status
+
+### ✅ Completed Items
+
+| # | Priority | Item | Commit |
+|---|----------|------|--------|
+| 1 | P0 | Python `__all__` handling (tuples, extend, append, augmented assignment) | be1cd46 |
+| 2 | P0 | `mapLimit` bounded concurrency (streaming approach) | c4b026b |
+| 3 | P0 | Pathological test cases (deeply nested, circular re-exports) | e77a459 |
+| 4 | P1 | Bloom filter auto-sizing (`createOptimal()` method) | c4b026b |
+| 5 | P1 | SQLite `visibility` column | c4b026b |
+| 6 | P2 | Severity weight configuration (`SeverityWeights` type) | c4b026b |
+| 7 | P2 | Confidence field in impact items | c4b026b |
+| 8 | P2 | Document `--fast-graph` in CLI help | c4b026b |
+| 9 | P2 | `SessionManager.warmup()` method | c4b026b |
+| 10 | P3 | `highestComplexityFunctions` query | c4b026b |
+| 11 | P3 | Export `ICodeReviewSession` interface | c4b026b |
+| 12 | P3 | `SymbolVisibility` type documentation | c4b026b |
+
+**Additional fixes from PR review:**
+- Semaphore permits validation
+- BloomFilter itemCount increment ordering
+- calculateSeverity weights validation
+
+### ❌ Remaining Items
+
+#### 🔴 P0 Critical (1 remaining)
+
+- [ ] **Eliminate 43 `any` types** - `src/graphs.ts:220`, `src/cli.ts:55`, `src/indexer.ts:4020`, `src/impact/analyzer.ts:306,311,313`, `src/util.ts:13,26` - Replace with proper types (`Parser.SyntaxNode`, discriminated unions, generics). **Effort: High**
+
+#### 🟠 P1 High (6 remaining)
+
+- [ ] **TypeScript namespace merging** - `src/languages/definitions/typescript.ts` - Add post-processing to consolidate symbols with matching names and compatible kinds. **Effort: Medium**
+- [ ] **Go package-level scope resolution** - `src/languages/definitions/go.ts:41-47` - Track package declarations, handle dot-imports, group files by package. **Effort: Medium**
+- [ ] **Parsed AST cache eviction** - `src/indexer.ts:ProjectIndex.parsed` - Implement LRU eviction with configurable max entries. **Effort: Medium**
+- [ ] **`decorates` edge type** - `src/graphs.ts` - Add edge label for decorator applications (TypeScript `@Decorator`, Python `@decorator`). **Effort: Low**
+- [ ] **Vue/Svelte script setup tests** - `tests/languages/` - Add tests for `<script setup>`, Svelte `$:` reactive declarations. **Effort: Low**
+- [ ] **pnpm workspace exclude tests** - `tests/pnpm-workspace-excludes.test.ts` - Add tests for negated patterns, overlapping patterns. **Effort: Low**
+
+#### 🟡 P2 Medium (7 remaining)
+
+- [ ] **Dynamic import confidence scores** - `src/graphs.ts:1337+` - Add `{ resolved: "heuristic", confidence: number }` to dynamic imports. **Effort: Medium**
+- [ ] **Memoize re-export resolution** - `src/indexer.ts:resolveExport` - Use shared `WeakMap` keyed by `(file, exportName)` tuples. **Effort: Medium**
+- [ ] **Block vs function scope distinction** - `src/languages/filePrep.ts`, `src/indexer.ts` - Track scope type and handle `var` hoisting correctly. **Effort: High**
+- [ ] **SQLite for disk cache** - `src/indexer.ts:cacheFilePath` - Replace individual JSON files with SQLite database. **Effort: High**
+- [ ] **Improve CLI error messages** - `src/cli.ts` - Add recovery suggestions to common errors. **Effort: Low**
+- [ ] **Go workspace tests** - `tests/` - Add `tests/samples/go-workspace/` with `go.work` and multiple modules. **Effort: Low**
+- [ ] **Circuit breaker recovery tests** - `tests/impact-circuit-breaker.test.ts` - Test recovery after timeout, partial results. **Effort: Low**
+
+#### 🟢 P3 Low (2 remaining)
+
+- [ ] **Simplify language registration** - `src/languages/` - Use single registry pattern where definitions self-register. **Effort: Medium**
+- [ ] **Deduplicate symbol edges** - `src/graphs.ts:buildSymbolGraph` - Use `Set<string>` with edge keys during construction. **Effort: Low**
 
 ---
 
