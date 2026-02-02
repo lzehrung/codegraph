@@ -1394,8 +1394,9 @@ export function collectLocalsAndExportsFromSource(
                   target: local,
                 });
             }
-            if (items.length === 0 && isAllAssignment) {
-              // Fallback: handle tuples/multiline/concatenations by scanning a larger window
+            // Always run fallback for __all__ to catch tuples and multiline patterns
+            // that tree-sitter queries may not fully capture
+            if (isAllAssignment) {
               const assignIdx = map["stmt"]
                 ? map["stmt"].node.startIndex
                 : source.indexOf("__all__");
@@ -1408,6 +1409,7 @@ export function collectLocalsAndExportsFromSource(
                 const strRe = /["']([^"']+)["']/g;
                 for (let sm; (sm = strRe.exec(effectiveWindow)); ) {
                   const name = sm[1]!;
+                  // Deduplicate with pythonAllExports Set
                   pythonAllExports.add(name);
                   const local = locals.find((d) => d.localName === name);
                   if (

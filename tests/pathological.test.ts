@@ -5,6 +5,7 @@ import {
   collectGraph,
   findCycles,
   goToDefinition,
+  listProjectFiles,
 } from "../src/index.js";
 
 const SAMPLES_ROOT = path.resolve(__dirname, "samples/pathological");
@@ -38,7 +39,8 @@ describe("Pathological Test Cases", () => {
     });
 
     it("should build graph without stack overflow", async () => {
-      const graph = await collectGraph(projectRoot, {
+      const files = await listProjectFiles(projectRoot);
+      const graph = await collectGraph(projectRoot, files, {
         fast: false,
       });
 
@@ -51,7 +53,8 @@ describe("Pathological Test Cases", () => {
     const projectRoot = path.join(SAMPLES_ROOT, "circular-reexports");
 
     it("should detect circular dependencies", async () => {
-      const graph = await collectGraph(projectRoot, {
+      const files = await listProjectFiles(projectRoot);
+      const graph = await collectGraph(projectRoot, files, {
         fast: false,
       });
 
