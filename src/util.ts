@@ -2292,3 +2292,54 @@ export function releaseParser(parser: Parser, key: LangKey) {
   pool.push(parser);
   parserPools.set(key, pool);
 }
+
+/**
+ * Map over items with bounded concurrency.
+ * Uses a streaming approach to avoid creating all promises upfront,
+ * preventing memory issues with large arrays and EMFILE errors.
+ */
+export async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return [];
+
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+  let activeCount = 0;
+  let resolveAll: (() => void) | null = null;
+  let rejectAll: ((err: unknown) => void) | null = null;
+
+  const startNext = (): void => {
+    while (activeCount < limit && nextIndex < items.length) {
+      const index = nextIndex++;
+      const item = items[index]!;
+      activeCount++;
+
+      fn(item)
+        .then((result) => {
+          results[index] = result;
+          activeCount--;
+          if (nextIndex < items.length) {
+            startNext();
+          } else if (activeCount === 0 && resolveAll) {
+            resolveAll();
+          }
+        })
+        .catch((err) => {
+          if (rejectAll) rejectAll(err);
+        });
+    }
+  };
+
+  return new Promise<R[]>((resolve, reject) => {
+    resolveAll = () => resolve(results);
+    rejectAll = reject;
+    startNext();
+    // Handle empty case or immediate completion
+    if (items.length === 0 || (nextIndex >= items.length && activeCount === 0)) {
+      resolve(results);
+    }
+  });
+}

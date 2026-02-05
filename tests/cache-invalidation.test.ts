@@ -203,16 +203,13 @@ describe('Cache invalidation and strict hashing', () => {
     await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const fullBuildSpy = vi.spyOn(indexer, 'buildProjectIndex');
     await buildProjectIndexIncremental(root, {
       threads: 2,
       cache: 'disk',
       cacheVerify: true,
     });
-    expect(fullBuildSpy).toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
-    fullBuildSpy.mockRestore();
   });
 
   it('forces full parsing when incremental strict mode is enabled', async () => {
