@@ -142,6 +142,8 @@ const BASE_GRAPH = {
     (function_declaration name: (identifier) @name)
     (class_declaration name: (identifier) @name)
     (variable_declarator name: (identifier) @name)
+    (interface_declaration name: (type_identifier) @name)
+    (type_alias_declaration name: (type_identifier) @name)
   `,
   importBindings: `
     (import_statement) @stmt

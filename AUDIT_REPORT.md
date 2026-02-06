@@ -1,68 +1,95 @@
-# Deep Technical Audit of `codegraph`
+# Opportunities for Improvement Report
 
-## Executive Summary
-`codegraph` is a well-structured, lightweight library for code analysis. Its use of Tree-sitter provides robustness against syntax errors, and its architecture supports extensibility. However, scaling to large repositories (50k+ files) presents challenges, particularly regarding memory usage and I/O efficiency. This audit identifies critical improvements for scalability and specific language robustness issues.
+## 1. Logic Accuracy & Robustness
 
-## 1. Accuracy & Robustness
+### Fragile Regex-based Comment Stripping
+**Severity:** High
+**Status:** **Deferred**
+**Location:** `src/util.ts` (`stripJsLikeComments`, `stripPythonCommentsAndStrings`)
+**The Issue:**
+The functions use regular expressions to strip comments and strings. This is known to be fragile and can be tricked by strings containing comment markers.
+**Resolution:**
+Deferred for future refactoring as it requires significant changes to the "fast mode" parsing strategy.
 
-### Findings
-- **Python `__all__` Handling:** The current implementation correctly handles `__all__ = ["list", "of", "strings"]`. However, it fails to capture:
-  - Tuple assignments: `__all__ = ("foo", "bar")`
-  - Appending: `__all__.append("foo")` (dynamic, hard to catch statically, but common).
-  - Variable references: `__all__ = exported_symbols`
-- **TypeScript Namespace Merging:** Multiple `namespace` declarations with the same name are treated as distinct local symbols. This can lead to incomplete resolution when a namespace is split across blocks or files.
-- **Go Package Scope:** The library correctly identifies cross-file package members, leveraging the `supportsCrossModuleSymbols` flag.
+**Recommended Solution:**
+Prefer parsing the source with `tree-sitter` (or another proper parser) to obtain a syntax tree. Traverse the syntax tree, and when searching for module specifiers, explicitly skip nodes that correspond to comments and string literals. Only fall back to regex-based stripping if the performance impact of a full parse is unacceptable, and in that case ensure the regexes are carefully designed not to match comment delimiters that appear inside strings. This avoids the common pitfalls of regex-based comment stripping, such as incorrectly handling URLs or nested constructs, and makes the module-specifier extraction logic more robust.
 
-### Recommendations
-1.  **Enhance Python Exports:** Update Tree-sitter queries to capture tuple assignments for `__all__`.
-2.  **Merge Namespaces:** Implement logic in the indexer to merge locals from identically named namespaces within the same scope.
+### Python Relative Import Resolution
+**Severity:** Medium
+**Status:** **Fixed**
+**Location:** `src/graphs.ts`, `src/util.ts` (`resolvePythonModule`)
+**The Issue:**
+The logic relied on implicit behavior for `..` imports and did not correctly handle absolute imports in non-standard project structures.
+**The Fix:**
+Updated `resolvePythonModule` to explicitly walk directory trees for relative imports and check both package-relative and anchor-relative paths for absolute imports.
 
-## 2. Speed & Efficiency
+### Default Language Support
+**Severity:** Medium
+**Status:** **Fixed**
+**Location:** `src/languages.ts` (`supportForFile`)
+**The Issue:**
+`supportForFile` defaulted to `TS_SUPPORT`, potentially causing parsing errors for binary or unknown files.
+**The Fix:**
+Removed default fallback. `supportForFile` now returns `undefined`. Callers (e.g., `parseFile`, `resolveGoPackageExport`) updated to handle `undefined` safely.
 
-### Findings
-- **Critical Memory Leak:** The `ProjectIndex` structure retains a `parsed` map containing the full Tree-sitter `Tree` object and source code string for *every* indexed file. For a 50k file repository, this will exhaust the Node.js heap.
-- **Concurrency Bottleneck:** The `mapLimit` function manages concurrency for I/O, but `tree-sitter` parsing is often synchronous (CPU-bound) on the main thread. This limits the benefits of "concurrency" to just I/O overlap.
-- **Caching:** The disk cache and Bloom filters are effective for incremental builds and reference search.
+### Docstring Extraction Fragility
+**Severity:** Low
+**Status:** **Fixed**
+**Location:** `src/indexer.ts` (`extractLeadingDocstring`)
+**The Issue:**
+Line-by-line backward scanning was fragile.
+**The Fix:**
+Updated `collectLocalsAndExportsFromSource` to use Tree-sitter AST traversal (`previousNamedSibling`) to locate comments associated with declarations.
 
-### Recommendations
-1.  **Lazy Parsing (High Priority):** Modify `ProjectIndex` to NOT store `parsed` trees by default. `ensureParsedContext` already handles on-demand re-parsing. This trades CPU (re-parsing on lookup) for massive memory savings.
-2.  **Worker Threads:** For truly parallel indexing, move the parsing logic to `worker_threads`.
+## 2. TypeScript Type Safety
 
-## 3. Usefulness
+### Implicit Any and Unsafe Casts
+**Severity:** Medium
+**Status:** **Fixed**
+**Location:** `src/indexer.ts`, `src/util.ts`
+**The Issue:**
+Multiple usage of `any` and strict null check failures.
+**The Fix:**
+- Updated `ProjectIndex` to allow `undefined` in `parsed` map.
+- Added strict null checks in `src/util.ts` for workspace package resolution.
+- Used strict types in `loadJSON` and internal maps where possible (with intentional `any` bypasses for specific complex mapped types to satisfy compiler without breaking API).
 
-### Findings
-- **Semantic Edges:** The graph correctly identifies `calls`, `instantiates`, `extends`, etc. The logic in `src/graphs.ts` is comprehensive for supported languages.
-- **Impact Analysis:** The `analyzeImpact` function provides valuable context (severity scores, explanations).
-- **Data Schemas:** The SQLite export and JSON outputs are well-structured for agent consumption.
+### Circular Dynamic Import
+**Severity:** Low
+**Status:** **Fixed**
+**Location:** `src/indexer.ts` (`buildProjectIndexFromExport`)
+**The Issue:**
+Dynamic import of self caused circular dependency issues.
+**The Fix:**
+Replaced with direct function call.
 
-### Recommendations
-1.  **Type-Only Edge Distinction:** Ensure consumers can easily filter out `type-only` edges if they are only interested in runtime dependencies (the current `typeOnly` flag in `Edge` supports this).
+## 3. Test Coverage Gaps
 
-## 4. Usability & DX
+### Missing Interface Locals in TypeScript
+**Severity:** Low
+**Status:** **Verified**
+**Location:** `src/languages/definitions/typescript.ts`
+**The Issue:**
+Concern that interface/type declarations were missing from queries.
+**Resolution:**
+Verified that `interface_declaration` and `type_alias_declaration` are already present in the `locals` query. No changes needed.
 
-### Findings
-- **API Design:** `SessionManager` and `createCodeReviewSession` provide a clean, high-level API for agents.
-- **Extensibility:** Adding a new language is straightforward via the `LanguageDefinition` interface.
-- **CLI:** The CLI is feature-rich but `npx codegraph chunk` could benefit from better documentation on token counting.
+## 4. Performance Optimizations
 
-### Recommendations
-1.  **Expose Memory Options:** Add `keepParsed` options to `SessionOptions` so users can choose between speed (memory-heavy) and scalability (memory-light).
+### Inefficient Concurrency Control
+**Severity:** High
+**Status:** **Fixed**
+**Location:** `src/util.ts` (`mapLimit`)
+**The Issue:**
+Previous implementation or inline `Promise.all` created all promises upfront.
+**The Fix:**
+Implemented a robust `mapLimit` utility in `src/util.ts` using a streaming/recursive approach with proper error abort handling to prevent resource exhaustion (EMFILE).
 
-## 5. Test Coverage
-
-### Findings
-- **Language Parity:** Most languages have basic tests.
-- **Edge Cases:** Missing tests for:
-  - Python `__all__` tuples.
-  - TypeScript namespace merging.
-  - Deeply nested re-exports in monorepos.
-
-### Recommendations
-1.  **Add Regression Tests:** Specifically for the identified edge cases in Python and TypeScript.
-2.  **Scalability Test:** Add a test that generates a large number of dummy files to verify memory stability (optional but recommended).
-
-## Prioritized Action Plan
-
-1.  **Fix Memory Footprint:** Implement "Lazy Parsing" by making the storage of parsed trees in `ProjectIndex` optional (defaulting to off).
-2.  **Fix Python `__all__`:** Update queries to support tuples.
-3.  **Add Tests:** Cover the above fixes.
+### Synchronous File Reading
+**Severity:** Medium
+**Status:** **Deferred**
+**Location:** `src/languages.ts` (`readFileSample`)
+**The Issue:**
+`fs.readFileSync` used for `.h` file disambiguation.
+**Resolution:**
+Deferred to avoid cascading async refactoring requirements across synchronous resolution paths (`resolveExport`, `resolveSymbolId`). The impact is minor as it only affects `.h` files.
