@@ -48,6 +48,7 @@ import {
   type GraphBuildOptions,
   type FallbackImportExtractionEvent,
   type FallbackImportExtractionReason,
+  type SymbolGraph,
 } from "./graphs.js";
 import type { Edge, Range, FileId, Graph } from "./types.js";
 
@@ -2451,7 +2452,7 @@ async function buildIndexFromFileListShared(
     {
       source: string;
       tree: Parser.Tree;
-      sup: any;
+      sup: LanguageSupport;
       lang: Parser.Language;
     }
   >();
@@ -2684,8 +2685,11 @@ async function buildIndexFromFileListShared(
         const exported =
           target.exports.filter((e) => e.type === "local").length > 0
             ? target.exports
-                .filter((e) => e.type === "local")
-                .map((e: any) => e.target as SymbolDef)
+                .filter(
+                  (e): e is Extract<ExportEntry, { type: "local" }> =>
+                    e.type === "local",
+                )
+                .map((e) => e.target)
             : target.locals.filter((l) => !l.localName.startsWith("_"));
         const seen = new Set<string>();
         for (const sym of exported) {
@@ -2932,7 +2936,7 @@ export async function buildProjectIndexIncremental(
     {
       source: string;
       tree: Parser.Tree;
-      sup: any;
+      sup: LanguageSupport;
       lang: Parser.Language;
     }
   >();
@@ -4083,10 +4087,18 @@ export type Binding = {
   occurrences: Range[];
   import?: ImportBinding;
 };
+
+export type Scope = {
+  kind: "module" | "function" | "block";
+  map: Map<string, Binding>;
+  node: Parser.SyntaxNode;
+  parent: Scope | undefined;
+};
+
 export type ScopeIndex = {
   bindings: Map<string, Binding[]>;
   all: Binding[];
-  allScopes: any[];
+  allScopes: Scope[];
 };
 
 export function buildScopeIndexFromSource(
@@ -4107,12 +4119,6 @@ export function buildScopeIndexFromSource(
   parser2.setLanguage(lang);
   const tree = opts?.tree ?? parser2.parse(source);
 
-  type Scope = {
-    kind: "module" | "function" | "block";
-    map: Map<string, Binding>;
-    node: Parser.SyntaxNode;
-    parent: Scope | undefined;
-  };
   const rootScope: Scope = {
     kind: "module",
     map: new Map(),
@@ -4424,7 +4430,7 @@ function extractEnclosingBlock(
   tree: Parser.Tree,
   range: Range,
   maxLines: number,
-  sup: any,
+  sup: LanguageSupport,
 ): string {
   // Find the node at the reference position
   const node = tree.rootNode.descendantForIndex(
@@ -4509,7 +4515,16 @@ export async function findReferences(
   const sup = parsedContext.sup;
   const lang = parsedContext.lang;
   const src = parsedContext.source;
-  const getCachedScope = (fileId: string, moduleIndex: any, parsedCtx: any) => {
+  const getCachedScope = (
+    fileId: string,
+    moduleIndex: ModuleIndex,
+    parsedCtx: {
+      source: string;
+      sup: LanguageSupport;
+      lang: Parser.Language;
+      tree: Parser.Tree;
+    },
+  ) => {
     if (index.scopeCache.has(fileId)) return index.scopeCache.get(fileId)!;
     const s = buildScopeIndexFromSource(
       fileId,
@@ -4523,11 +4538,10 @@ export async function findReferences(
     return s;
   };
 
-  const scope = getCachedScope(
-    definitionFile,
-    index.byFile.get(definitionFile),
-    parsedContext,
-  );
+  const mod = index.byFile.get(definitionFile);
+  if (!mod) return { status: "not_found", reason: "Module not found" };
+
+  const scope = getCachedScope(definitionFile, mod, parsedContext);
 
   const refs: Reference[] = [];
 
@@ -4541,11 +4555,10 @@ export async function findReferences(
   refs.push({ file: definitionFile, range: def.range });
 
   const exportedNames: string[] = [];
-  const mod = index.byFile.get(definitionFile);
-  if (mod)
-    for (const e of mod.exports)
-      if (e.type === "local" && sameDef(e.target, def))
-        exportedNames.push(e.exportedAs);
+
+  for (const e of mod.exports)
+    if (e.type === "local" && sameDef(e.target, def))
+      exportedNames.push(e.exportedAs);
   if (!exportedNames.length) exportedNames.push(def.localName);
 
   const exportedNameSet = new Set(exportedNames);
@@ -4607,7 +4620,7 @@ export async function findReferences(
     const m = index.byFile.get(f);
     if (!m) continue;
 
-    let sc: any = null;
+    let sc: ScopeIndex | null = null;
     const ensure = async () => {
       if (!sc) {
         const parsedF = index.parsed?.get(f);
@@ -4692,7 +4705,7 @@ export async function findReferences(
   if (opts?.context) {
     const perFileCache = new Map<
       string,
-      { source: string; tree: Parser.Tree; sup: any }
+      { source: string; tree: Parser.Tree; sup: LanguageSupport }
     >();
 
     for (const ref of uniqueRefs) {
@@ -4729,8 +4742,8 @@ export async function findReferences(
 
 // Detailed symbol graph re-export compatibility
 export async function __buildSymbolGraphDetailedCompat(
-  index: any,
-): Promise<any> {
+  index: ProjectIndex,
+): Promise<SymbolGraph> {
   // Defer to original algorithm via barrel import after refactor; this placeholder will be overridden.
   const { buildSymbolGraphDetailed } = await import("./index.js");
   return await buildSymbolGraphDetailed(index);
