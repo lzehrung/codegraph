@@ -38,6 +38,7 @@ import {
   isGitRepo,
   getGitBlobHashes,
   listChangedFiles,
+  mapLimit,
   type ProjectFileInfo,
 } from "./util.js";
 import {
@@ -151,7 +152,7 @@ export type ProjectIndex = {
     {
       source: string;
       tree: Parser.Tree;
-      sup: ReturnType<typeof supportForFile>;
+      sup: LanguageSupport | undefined;
       lang: Parser.Language;
     }
   > | undefined;
@@ -533,56 +534,6 @@ export function getApiSurface(index: ProjectIndex): ApiSurface {
   return out;
 }
 
-/**
- * Map over items with bounded concurrency.
- * Uses a streaming approach to avoid creating all promises upfront,
- * preventing memory issues with large arrays and EMFILE errors.
- */
-async function mapLimit<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  if (items.length === 0) return [];
-
-  const results: R[] = new Array(items.length);
-  let nextIndex = 0;
-  let activeCount = 0;
-  let resolveAll: (() => void) | null = null;
-  let rejectAll: ((err: unknown) => void) | null = null;
-
-  const startNext = (): void => {
-    while (activeCount < limit && nextIndex < items.length) {
-      const index = nextIndex++;
-      const item = items[index]!;
-      activeCount++;
-
-      fn(item)
-        .then((result) => {
-          results[index] = result;
-          activeCount--;
-          if (nextIndex < items.length) {
-            startNext();
-          } else if (activeCount === 0 && resolveAll) {
-            resolveAll();
-          }
-        })
-        .catch((err) => {
-          if (rejectAll) rejectAll(err);
-        });
-    }
-  };
-
-  return new Promise<R[]>((resolve, reject) => {
-    resolveAll = () => resolve(results);
-    rejectAll = reject;
-    startNext();
-    // Handle empty case or immediate completion
-    if (items.length === 0 || (nextIndex >= items.length && activeCount === 0)) {
-      resolve(results);
-    }
-  });
-}
 
 // ---------------- Incremental cache (memory/disk) ----------------
 const PARSED_CACHE_VERSION = 1;
@@ -822,6 +773,7 @@ async function buildBloomFilterForFile(
   try {
     const source = await fsp.readFile(file, "utf8");
     const sup = supportForFile(file);
+    if (!sup) return null;
     return buildBloomFilterFromSource(source, sup.id);
   } catch {
     return null;
@@ -995,8 +947,7 @@ async function buildProjectIndexFromExport(
   projectRoot: string,
   opts?: BuildOptions,
 ): Promise<ProjectIndex> {
-  const mod = await import("./indexer.js");
-  return mod.buildProjectIndex(projectRoot, opts);
+  return buildProjectIndex(projectRoot, opts);
 }
 
 function graphOptionsEqual(
@@ -1159,61 +1110,50 @@ export function collectLocalsAndExportsFromSource(
   const sourceLines = source.split(/\r?\n/);
 
   const extractLeadingDocstring = (
-    startLine: number,
-    languageId: string,
+    node: Parser.SyntaxNode | null,
   ): string | undefined => {
-    if (!startLine) return undefined;
-    let idx = startLine - 2;
-    while (idx >= 0 && sourceLines[idx]?.trim() === "") idx -= 1;
-    if (idx < 0) return undefined;
-    const line = sourceLines[idx]?.trim() ?? "";
-    if (languageId === "python") {
-      if (line.startsWith("#")) {
-        const out: string[] = [];
-        let cur = idx;
-        while (cur >= 0 && sourceLines[cur]?.trim().startsWith("#")) {
-          out.push(normalizeDocstringLine(sourceLines[cur] ?? ""));
-          cur -= 1;
-        }
-        const text = out.reverse().join("\n").trim();
-        return text ? text : undefined;
-      }
-      return undefined;
+    if (!node) return undefined;
+    // If we're looking at an identifier, look at its parent (the declaration)
+    let target = node;
+    if (
+      target.type === "identifier" ||
+      target.type === "type_identifier" ||
+      target.type === "property_identifier"
+    ) {
+      if (target.parent) target = target.parent;
+    }
+    // Handle variable declarators - climb to declaration statement
+    if (target.type === "variable_declarator" && target.parent) {
+      target = target.parent;
+    }
+    // Handle export statements wrapping the declaration
+    if (target.parent && target.parent.type === "export_statement") {
+      target = target.parent;
     }
 
-    if (line.startsWith("//")) {
-      const out: string[] = [];
-      let cur = idx;
-      while (cur >= 0 && sourceLines[cur]?.trim().startsWith("//")) {
-        out.push(normalizeDocstringLine(sourceLines[cur] ?? ""));
-        cur -= 1;
-      }
-      const text = out.reverse().join("\n").trim();
-      return text ? text : undefined;
-    }
-
-    if (line.endsWith("*/")) {
-      const out: string[] = [];
-      let cur = idx;
-      while (cur >= 0) {
-        const currentLine = sourceLines[cur] ?? "";
-        out.push(currentLine);
-        if (currentLine.includes("/*")) break;
-        cur -= 1;
-      }
-      const text = out
-        .reverse()
-        .join("\n")
-        .replace(/^\s*\/\*\*?/, "")
-        .replace(/\*\/\s*$/, "")
+    const comments: string[] = [];
+    let prev = target.previousNamedSibling;
+    // Walk backwards through comments
+    while (
+      prev &&
+      (prev.type === "comment" ||
+        prev.type === "line_comment" ||
+        prev.type === "block_comment")
+    ) {
+      const text = sliceText(prev, source);
+      // Clean up comment syntax
+      const clean = text
+        .replace(/^\s*\/\*\*?/, "") // /** or /*
+        .replace(/\*\/\s*$/, "") // */
+        .replace(/^\s*\/\/\/?/, "") // // or ///
+        .replace(/^\s*#/, "") // #
         .split("\n")
-        .map((lineText) => normalizeDocstringLine(lineText))
-        .join("\n")
-        .trim();
-      return text ? text : undefined;
+        .map((l) => normalizeDocstringLine(l))
+        .join("\n");
+      comments.unshift(clean.trim());
+      prev = prev.previousNamedSibling;
     }
-
-    return undefined;
+    return comments.length > 0 ? comments.join("\n").trim() : undefined;
   };
 
   const countMatches = (text: string, re: RegExp): number => {
@@ -1253,6 +1193,7 @@ export function collectLocalsAndExportsFromSource(
     localName: string,
     kind: SymbolKind,
     range: Range,
+    node?: Parser.SyntaxNode,
   ): SymbolDef => {
     let lineSpan: number | undefined;
     if (
@@ -1263,8 +1204,8 @@ export function collectLocalsAndExportsFromSource(
       lineSpan = Math.max(1, range.end.line - range.start.line + 1);
     }
     let docstring: string | undefined;
-    if (typeof range.start.line === "number") {
-      docstring = extractLeadingDocstring(range.start.line, support.id);
+    if (node) {
+      docstring = extractLeadingDocstring(node);
     }
     const shouldEstimateComplexity =
       kind === SymbolKind.Function || kind === SymbolKind.Class;
@@ -1320,6 +1261,7 @@ export function collectLocalsAndExportsFromSource(
                   localName,
                   toKind(support.classifyDefinition(cap.node)),
                   range,
+                  cap.node,
                 ),
               );
             }
@@ -1345,7 +1287,11 @@ export function collectLocalsAndExportsFromSource(
         if (b.kind === "function") kind = SymbolKind.Function;
         else if (b.kind === "class") kind = SymbolKind.Class;
         else if (b.kind === "type") kind = SymbolKind.TypeAlias;
-        locals.push(buildSymbolDef(b.name, kind, b.def));
+        // Find the node in tree corresponding to b.def range if possible
+        const startIndex = b.def.start.index ?? 0;
+        const endIndex = b.def.end.index ?? 0;
+        const node = tree.rootNode.descendantForIndex(startIndex, endIndex);
+        locals.push(buildSymbolDef(b.name, kind, b.def, node));
       }
     }
   }
@@ -1491,7 +1437,7 @@ export function collectLocalsAndExportsFromSource(
         if (map["cjs_export_name"] && map["cjs_fn"]) {
           const exportedAs = sliceText(map["cjs_export_name"].node, source);
           const defRange = toRange(map["cjs_fn"].node);
-          const sym = buildSymbolDef(exportedAs, SymbolKind.Function, defRange);
+          const sym = buildSymbolDef(exportedAs, SymbolKind.Function, defRange, map["cjs_fn"].node);
           locals.push(sym);
           exports.push({ type: "local", exportedAs, target: sym });
           continue;
@@ -1512,6 +1458,7 @@ export function collectLocalsAndExportsFromSource(
             "__default_export__",
             SymbolKind.Default,
             toRange(map["anon_default"].node),
+            map["anon_default"].node,
           );
           locals.push(sym);
           exports.push({ type: "local", exportedAs: "default", target: sym });
@@ -1793,7 +1740,7 @@ export async function collectImportsForFile(
   opts?: {
     source?: string;
     tree?: Parser.Tree;
-    sup?: ReturnType<typeof supportForFile>;
+    sup?: LanguageSupport;
     lang?: Parser.Language;
     graphOptions?: GraphBuildOptions;
   },
@@ -2372,11 +2319,12 @@ export async function collectImportsForFile(
 export async function parseFile(file: string): Promise<{
   source: string;
   tree: Parser.Tree;
-  sup: ReturnType<typeof supportForFile>;
+  sup: LanguageSupport;
   lang: Parser.Language;
 }> {
   const prep = await prepareParserInput(file);
   const sup = prep.sup;
+  if (!sup) throw new Error(`Unsupported file extension: ${file}`);
   const lang = prep.lang;
   const source = prep.source;
   const key = sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts";
@@ -2395,16 +2343,23 @@ export async function ensureParsedContext(
   parsedEntry?: {
     source: string;
     tree: Parser.Tree;
-    sup: ReturnType<typeof supportForFile>;
+    sup: LanguageSupport | undefined;
     lang: Parser.Language;
   },
 ): Promise<{
   source: string;
   tree: Parser.Tree;
-  sup: ReturnType<typeof supportForFile>;
+  sup: LanguageSupport;
   lang: Parser.Language;
 }> {
-  if (parsedEntry) return parsedEntry;
+  if (parsedEntry?.sup) {
+    return {
+      source: parsedEntry.source,
+      tree: parsedEntry.tree,
+      sup: parsedEntry.sup,
+      lang: parsedEntry.lang,
+    };
+  }
   const prep = await prepareParserInput(file);
   const key =
     prep.sup.id === "python" ? "py" : prep.sup.id === "js" ? "js" : "ts";
@@ -2496,7 +2451,7 @@ async function buildIndexFromFileListShared(
     {
       source: string;
       tree: Parser.Tree;
-      sup: ReturnType<typeof supportForFile>;
+      sup: any;
       lang: Parser.Language;
     }
   >();
@@ -2572,8 +2527,31 @@ async function buildIndexFromFileListShared(
       }
 
       if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
+
+      // FIX: Check support before parsing to avoid throwing errors for non-code files
+      const supCheck = supportForFile(f);
+      if (!supCheck) {
+        const mod: ModuleIndex = {
+          file: f,
+          exports: [],
+          imports: [],
+          locals: [],
+        };
+        return [f, mod, []] as const;
+      }
+
       const parsed = await parseFile(f);
-      parsedMap.set(f, parsed);
+      // parsed.sup is guaranteed to be defined because parseFile throws otherwise,
+      // but the type signature of parseFile might still include undefined in `sup` field due to supportForFile signature.
+      // We explicitly cast to ensure compatibility with parsedMap which expects LanguageSupport.
+      if (parsed.sup) {
+        parsedMap.set(f, {
+          source: parsed.source,
+          tree: parsed.tree,
+          sup: parsed.sup,
+          lang: parsed.lang
+        });
+      }
       const { source: src, sup, lang, tree } = parsed;
 
       if (bloomFilterCache) {
@@ -2954,7 +2932,7 @@ export async function buildProjectIndexIncremental(
     {
       source: string;
       tree: Parser.Tree;
-      sup: ReturnType<typeof supportForFile>;
+      sup: any;
       lang: Parser.Language;
     }
   >();
@@ -3022,6 +3000,19 @@ export async function buildProjectIndexIncremental(
     const fileResults = await mapLimit(changedList, conc, async (f) => {
       try {
         if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
+
+        // FIX: Check support before parsing to avoid throwing errors for non-code files
+        const supCheck = supportForFile(f);
+        if (!supCheck) {
+          const mod: ModuleIndex = {
+            file: f,
+            exports: [],
+            imports: [],
+            locals: [],
+          };
+          return [f, mod] as const;
+        }
+
         const parsed = await parseFile(f);
         parsedMap.set(f, parsed);
         const { source: src, sup, lang, tree } = parsed;
@@ -3454,16 +3445,20 @@ function resolveGoPackageExport(
   file: FileId,
   exportedName: string,
 ): SymbolDef | null {
-  const sup = supportForFile(file);
-  if (sup.id !== "go") return null;
-  const baseDir = path.dirname(file);
-  for (const [filePath, mod] of index.byFile) {
-    if (path.dirname(filePath) !== baseDir) continue;
-    for (const e of mod.exports) {
-      if (e.type === "local" && e.exportedAs === exportedName) {
-        return e.target;
+  try {
+    const sup = supportForFile(file);
+    if (!sup || sup.id !== "go") return null;
+    const baseDir = path.dirname(file);
+    for (const [filePath, mod] of index.byFile) {
+      if (path.dirname(filePath) !== baseDir) continue;
+      for (const e of mod.exports) {
+        if (e.type === "local" && e.exportedAs === exportedName) {
+          return e.target;
+        }
       }
     }
+  } catch {
+    // supportForFile throws on unsupported files (e.g. .json)
   }
   return null;
 }
@@ -4027,43 +4022,47 @@ export function resolveImported(
   const hit = resolveExport(index, targetFile, exportedName);
   if (hit?.kind === "resolved") return hit.def;
   if (hit?.kind === "namespace") return { namespace: hit.file };
-  const sup = supportForFile(targetFile);
-  if (sup.id === "python") {
-    const base =
-      fs.existsSync(targetFile) && fs.statSync(targetFile).isDirectory()
-        ? targetFile
-        : path.dirname(targetFile);
-    const subCandidates = [
-      path.join(base, `${exportedName}.py`),
-      path.join(base, exportedName, "__init__.py"),
-      path.join(base, exportedName),
-    ];
-    for (const c of subCandidates) {
-      try {
-        if (fs.existsSync(c)) {
-          const isDir = fs.statSync(c).isDirectory();
-          const filePath = isDir ? c : c;
-          return {
-            file: filePath.replace(/\\/g, "/"),
-            localName: exportedName,
-            kind: SymbolKind.Variable,
-            range: {
-              start: { line: 1, column: 1, index: 0 },
-              end: { line: 1, column: 1, index: 0 },
-            },
-          };
-        }
-      } catch {}
+  try {
+    const sup = supportForFile(targetFile);
+    if (sup?.id === "python") {
+      const base =
+        fs.existsSync(targetFile) && fs.statSync(targetFile).isDirectory()
+          ? targetFile
+          : path.dirname(targetFile);
+      const subCandidates = [
+        path.join(base, `${exportedName}.py`),
+        path.join(base, exportedName, "__init__.py"),
+        path.join(base, exportedName),
+      ];
+      for (const c of subCandidates) {
+        try {
+          if (fs.existsSync(c)) {
+            const isDir = fs.statSync(c).isDirectory();
+            const filePath = isDir ? c : c;
+            return {
+              file: filePath.replace(/\\/g, "/"),
+              localName: exportedName,
+              kind: SymbolKind.Variable,
+              range: {
+                start: { line: 1, column: 1, index: 0 },
+                end: { line: 1, column: 1, index: 0 },
+              },
+            };
+          }
+        } catch {}
+      }
+      return {
+        file: targetFile.replace(/\\/g, "/"),
+        localName: exportedName,
+        kind: SymbolKind.Variable,
+        range: {
+          start: { line: 1, column: 1, index: 0 },
+          end: { line: 1, column: 1, index: 0 },
+        },
+      };
     }
-    return {
-      file: targetFile.replace(/\\/g, "/"),
-      localName: exportedName,
-      kind: SymbolKind.Variable,
-      range: {
-        start: { line: 1, column: 1, index: 0 },
-        end: { line: 1, column: 1, index: 0 },
-      },
-    };
+  } catch {
+    // Unsupported file extension - cannot resolve detailed import.
   }
   return null;
 }

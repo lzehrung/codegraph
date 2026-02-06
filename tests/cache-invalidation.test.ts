@@ -11,7 +11,8 @@ import {
 } from '../src/index.js';
 import * as indexer from '../src/indexer.js';
 import { collectGraph } from '../src/graphs.js';
-import { getGitBlobHash } from '../src/util.js';
+import { getGitBlobHash, listProjectFiles } from '../src/util.js';
+import * as util from '../src/util.js';
 import * as filePrep from '../src/languages/filePrep.js';
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -202,17 +203,24 @@ describe('Cache invalidation and strict hashing', () => {
     manifest.files[normalize(filePath)].sig = 'bad-signature';
     await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
 
+    // Create a ghost file that is not in the manifest.
+    // In a purely incremental build (without git), this file would be ignored.
+    // A full build will find it via filesystem scanning.
+    const ghostPath = path.join(root, 'ghost.ts');
+    await fsp.writeFile(ghostPath, `export const ghost = 1;\n`, 'utf8');
+
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const fullBuildSpy = vi.spyOn(indexer, 'buildProjectIndex');
-    await buildProjectIndexIncremental(root, {
+    const idx = await buildProjectIndexIncremental(root, {
       threads: 2,
       cache: 'disk',
       cacheVerify: true,
     });
-    expect(fullBuildSpy).toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalled();
+
+    // If full build triggered, ghost file should be indexed
+    expect(idx.byFile.has(normalize(ghostPath))).toBe(true);
+
     warnSpy.mockRestore();
-    fullBuildSpy.mockRestore();
   });
 
   it('forces full parsing when incremental strict mode is enabled', async () => {
