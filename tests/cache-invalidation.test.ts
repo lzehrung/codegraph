@@ -11,7 +11,8 @@ import {
 } from '../src/index.js';
 import * as indexer from '../src/indexer.js';
 import { collectGraph } from '../src/graphs.js';
-import { getGitBlobHash } from '../src/util.js';
+import { getGitBlobHash, listProjectFiles } from '../src/util.js';
+import * as util from '../src/util.js';
 import * as filePrep from '../src/languages/filePrep.js';
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -203,13 +204,16 @@ describe('Cache invalidation and strict hashing', () => {
     await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const listSpy = vi.spyOn(util, 'listProjectFiles');
     await buildProjectIndexIncremental(root, {
       threads: 2,
       cache: 'disk',
       cacheVerify: true,
     });
     expect(warnSpy).toHaveBeenCalled();
+    expect(listSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
+    listSpy.mockRestore();
   });
 
   it('forces full parsing when incremental strict mode is enabled', async () => {

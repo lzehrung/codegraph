@@ -2276,11 +2276,19 @@ export async function resolvePythonModule(
   // If absolute import, also try finding anchor in case project root isn't the package root
   if (relativeDots === 0 && moduleName) {
     const anchor = await findPythonPackageAnchor(fromDir);
-    const absPath = path.join(path.dirname(anchor), ...moduleName.split("."));
+    const parts = moduleName.split(".");
+    // Try relative to anchor parent (package structure)
+    const parentPath = path.join(path.dirname(anchor), ...parts);
+    // Try relative to anchor itself (script/root structure)
+    const anchorPath = path.join(anchor, ...parts);
+
     const anchorCandidates = [
-      absPath + ".py",
-      path.join(absPath, "__init__.py"),
-      absPath,
+      parentPath + ".py",
+      path.join(parentPath, "__init__.py"),
+      parentPath,
+      anchorPath + ".py",
+      path.join(anchorPath, "__init__.py"),
+      anchorPath,
     ];
     for (const c of anchorCandidates) {
       try {
@@ -2353,15 +2361,19 @@ export async function mapLimit<T, R>(
   let activeCount = 0;
   let resolveAll: (() => void) | null = null;
   let rejectAll: ((err: unknown) => void) | null = null;
+  let aborted = false;
 
   const startNext = (): void => {
+    if (aborted) return;
     while (activeCount < limit && nextIndex < items.length) {
+      if (aborted) return;
       const index = nextIndex++;
       const item = items[index]!;
       activeCount++;
 
       fn(item)
         .then((result) => {
+          if (aborted) return;
           results[index] = result;
           activeCount--;
           if (nextIndex < items.length) {
@@ -2371,6 +2383,8 @@ export async function mapLimit<T, R>(
           }
         })
         .catch((err) => {
+          if (aborted) return;
+          aborted = true;
           if (rejectAll) rejectAll(err);
         });
     }
@@ -2381,7 +2395,10 @@ export async function mapLimit<T, R>(
     rejectAll = reject;
     startNext();
     // Handle empty case or immediate completion
-    if (items.length === 0 || (nextIndex >= items.length && activeCount === 0)) {
+    if (
+      !aborted &&
+      (items.length === 0 || (nextIndex >= items.length && activeCount === 0))
+    ) {
       resolve(results);
     }
   });
