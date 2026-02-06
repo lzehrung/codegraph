@@ -1205,10 +1205,6 @@ export function collectLocalsAndExportsFromSource(
     let docstring: string | undefined;
     if (node) {
       docstring = extractLeadingDocstring(node);
-    } else if (typeof range.start.line === "number") {
-      // Fallback if node not available (e.g. from scope index without direct node ref, though unlikely in this flow)
-      // Actually we removed the old extractLeadingDocstring, so we can't fallback easily without node.
-      // But we always pass node now where it matters.
     }
     const shouldEstimateComplexity =
       kind === SymbolKind.Function || kind === SymbolKind.Class;
