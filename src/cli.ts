@@ -592,7 +592,7 @@ type ImpactOptionsBuilder = Partial<ImpactOptions> & {
   repo?: string;
   diffText?: string;
   threads?: number;
-  cache?: "off" | "memory" | "disk";
+  cache?: any;
   cacheStrict?: boolean;
 };
 
