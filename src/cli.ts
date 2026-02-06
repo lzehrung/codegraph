@@ -50,6 +50,7 @@ import type {
   ChangedSymbol,
   ImpactItem,
   ReviewDepth,
+  ImpactOptions,
 } from "./index.js";
 
 function toJSON(obj: unknown): string {
@@ -583,6 +584,17 @@ function parseReviewDepth(value: string): ReviewDepth | null {
   }
   return null;
 }
+
+type ImpactOptionsBuilder = Partial<ImpactOptions> & {
+  base?: string;
+  head?: string;
+  pr?: number;
+  repo?: string;
+  diffText?: string;
+  threads?: number;
+  cache?: string;
+  cacheStrict?: boolean;
+};
 
 async function main() {
   const rawArgs = process.argv.slice(2);
@@ -1255,7 +1267,7 @@ Examples:
   if (cmd === "impact") {
     const provider = getOpt("--provider") ?? "git";
 
-    const options: any = { provider };
+    const options: ImpactOptionsBuilder = { provider: provider as any };
 
     if (provider === "git") {
       const base = getOpt("--base");
@@ -1299,7 +1311,7 @@ Examples:
     const membersOnly = hasFlag("--members-only");
 
     const scope = getOpt("--scope");
-    if (scope) options.scope = scope;
+    if (scope === "all" || scope === "imported") options.scope = scope;
 
     const refContext = getOpt("--ref-context");
     if (refContext) options.refContext = refContext as "line" | "block";
@@ -1346,7 +1358,11 @@ Examples:
         };
       }
       const index = await buildProjectIndex(projectRootFs, indexOpts);
-      const report = await analyzeImpactFromDiff(projectRootFs, index, options);
+      const report = await analyzeImpactFromDiff(
+        projectRootFs,
+        index,
+        options as ImpactOptions,
+      );
       const impactReport = ensureImpactReport(report);
 
       if (mermaid) {

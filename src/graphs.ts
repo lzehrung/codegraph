@@ -10,6 +10,7 @@ import {
   unquote,
   loadNearestTsconfigFor,
   loadWorkspaceConfig,
+  type WorkspaceConfig,
   resolveSpecifier,
   resolveImportSpecifier,
   resolvePythonModule,
@@ -218,7 +219,7 @@ const cloneEdge = (edge: Edge): Edge => ({
 export async function collectEdgesForFile(
   file: string,
   projectRoot: string,
-  workspaceConfig: any,
+  workspaceConfig: WorkspaceConfig | undefined,
   opts: {
     parsed?: {
       source: string;
@@ -331,7 +332,7 @@ export async function collectEdgesForFile(
         sup.id,
         {
           ...(matchPath ? { matchPath } : {}),
-          workspaceConfig,
+          ...(workspaceConfig ? { workspaceConfig } : {}),
           resolveNodeModules: !!opts.resolveNodeModules,
           ...(opts.resolutionHints
             ? { resolutionHints: opts.resolutionHints }
