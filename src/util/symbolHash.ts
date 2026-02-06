@@ -7,7 +7,8 @@
  */
 
 import crypto from "node:crypto";
-import type { SymbolDef } from "../indexer.js";
+import type { ExportEntry, SymbolDef } from "../indexer.js";
+import type { Edge } from "../types.js";
 
 /**
  * Hash of a symbol's definition
@@ -110,7 +111,7 @@ export type SymbolManifestEntry = {
   /** Git signature if available */
   gitSig?: string;
   /** Dependency edges */
-  edges: any[];
+  edges: Edge[];
   /** Symbol hashes for symbol-level change detection */
   symbolHashes?: SymbolHash[];
 };
@@ -120,7 +121,7 @@ export type SymbolManifestEntry = {
  */
 export function computeFileSymbolHashes(
   symbols: SymbolDef[],
-  exports: any[],
+  exports: ExportEntry[],
   source: string,
 ): SymbolHash[] {
   const hashes: SymbolHash[] = [];

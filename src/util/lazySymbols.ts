@@ -6,7 +6,7 @@
  * repositories where only a subset of symbols are actually accessed.
  */
 
-import type { ModuleIndex, SymbolDef } from "../indexer.js";
+import type { ImportBinding, ModuleIndex, SymbolDef } from "../indexer.js";
 import type { FileId } from "../types.js";
 import { parseFile, collectLocalsAndExportsFromSource } from "../indexer.js";
 
@@ -301,7 +301,7 @@ export class LazyProjectIndex {
 export function createSymbolLoader(
   file: FileId,
   source: string,
-  imports: any[],
+  imports: ImportBinding[],
 ): () => Promise<SymbolDef[]> {
   return async () => {
     const parsed = await parseFile(file);

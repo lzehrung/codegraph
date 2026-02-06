@@ -1267,7 +1267,11 @@ Examples:
   if (cmd === "impact") {
     const provider = getOpt("--provider") ?? "git";
 
-    const options: ImpactOptionsBuilder = { provider: provider as any };
+    if (provider !== "git" && provider !== "github" && provider !== "raw") {
+      throw new Error(`Unsupported provider: ${provider}`);
+    }
+
+    const options: ImpactOptionsBuilder = { provider };
 
     if (provider === "git") {
       const base = getOpt("--base");

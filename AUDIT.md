@@ -11,12 +11,12 @@
 
 The codegraph library is a well-architected, high-performance code analysis tool with strong foundations. This audit identifies **28 actionable improvement opportunities** across 5 dimensions. The most critical findings relate to type safety violations, missing edge cases in language definitions, and gaps in test coverage for pathological inputs.
 
-**Progress: 13/28 items completed (46%)**
+**Progress: 17/28 items completed (61%)**
 
 **Priority Distribution:**
-- 🔴 Critical (P0): 3 issues (2 ✅, 1 remaining)
-- 🟠 High (P1): 8 issues (3 ✅, 5 remaining)
-- 🟡 Medium (P2): 12 issues (5 ✅, 7 remaining)
+- 🔴 Critical (P0): 3 issues (3 ✅, 0 remaining)
+- 🟠 High (P1): 8 issues (4 ✅, 4 remaining)
+- 🟡 Medium (P2): 12 issues (6 ✅, 6 remaining)
 - 🟢 Low (P3): 5 issues (3 ✅, 2 remaining)
 
 ---
@@ -40,6 +40,10 @@ The codegraph library is a well-architected, high-performance code analysis tool
 | 11 | P3 | Export `ICodeReviewSession` interface | c4b026b |
 | 12 | P3 | `SymbolVisibility` type documentation | c4b026b |
 | 13 | P1 | pnpm workspace exclude tests (negated + overlapping patterns) | 16d8fd7 |
+| 14 | P0 | Eliminate remaining production `any` type usage in core modules | a0d15dc |
+| 15 | P1 | Vue/Svelte script setup + reactive declaration test coverage | a0d15dc |
+| 16 | P2 | Circuit breaker recovery regression test | a0d15dc |
+| 17 | P2 | Strengthen diff parsing/report typing (remove `any`) | a0d15dc |
 
 **Additional fixes from PR review:**
 - Semaphore permits validation
@@ -48,19 +52,16 @@ The codegraph library is a well-architected, high-performance code analysis tool
 
 ### ❌ Remaining Items
 
-#### 🔴 P0 Critical (1 remaining)
+#### 🔴 P0 Critical (0 remaining)
 
-- [ ] **Eliminate 43 `any` types** - `src/graphs.ts:220`, `src/cli.ts:55`, `src/indexer.ts:4020`, `src/impact/analyzer.ts:306,311,313`, `src/util.ts:13,26` - Replace with proper types (`Parser.SyntaxNode`, discriminated unions, generics). **Effort: High**
-
-#### 🟠 P1 High (5 remaining)
+#### 🟠 P1 High (4 remaining)
 
 - [ ] **TypeScript namespace merging** - `src/languages/definitions/typescript.ts` - Add post-processing to consolidate symbols with matching names and compatible kinds. **Effort: Medium**
 - [ ] **Go package-level scope resolution** - `src/languages/definitions/go.ts:41-47` - Track package declarations, handle dot-imports, group files by package. **Effort: Medium**
 - [ ] **Parsed AST cache eviction** - `src/indexer.ts:ProjectIndex.parsed` - Implement LRU eviction with configurable max entries. **Effort: Medium**
 - [ ] **`decorates` edge type** - `src/graphs.ts` - Add edge label for decorator applications (TypeScript `@Decorator`, Python `@decorator`). **Effort: Low**
-- [ ] **Vue/Svelte script setup tests** - `tests/languages/` - Add tests for `<script setup>`, Svelte `$:` reactive declarations. **Effort: Low**
 
-#### 🟡 P2 Medium (7 remaining)
+#### 🟡 P2 Medium (6 remaining)
 
 - [ ] **Dynamic import confidence scores** - `src/graphs.ts:1337+` - Add `{ resolved: "heuristic", confidence: number }` to dynamic imports. **Effort: Medium**
 - [ ] **Memoize re-export resolution** - `src/indexer.ts:resolveExport` - Use shared `WeakMap` keyed by `(file, exportName)` tuples. **Effort: Medium**
@@ -68,7 +69,6 @@ The codegraph library is a well-architected, high-performance code analysis tool
 - [ ] **SQLite for disk cache** - `src/indexer.ts:cacheFilePath` - Replace individual JSON files with SQLite database. **Effort: High**
 - [ ] **Improve CLI error messages** - `src/cli.ts` - Add recovery suggestions to common errors. **Effort: Low**
 - [ ] **Go workspace tests** - `tests/` - Add `tests/samples/go-workspace/` with `go.work` and multiple modules. **Effort: Low**
-- [ ] **Circuit breaker recovery tests** - `tests/impact-circuit-breaker.test.ts` - Test recovery after timeout, partial results. **Effort: Low**
 
 #### 🟢 P3 Low (2 remaining)
 
@@ -580,7 +580,7 @@ Create a tracking issue and systematically replace:
 1. Fix Python `__all__` handling for dynamic patterns
 2. Bound `mapLimit` nested concurrency
 3. Add pathological test cases for all languages
-4. Eliminate `any` types (43 occurrences)
+4. ✅ Eliminate `any` types (43 occurrences)
 
 ### Short-term (P1)
 5. Add TypeScript namespace merging support
@@ -589,7 +589,7 @@ Create a tracking issue and systematically replace:
 8. Add parsed AST cache eviction
 9. Add `decorates` edge type
 10. Add `visibility` column to SQLite schema
-11. Add Vue/Svelte script setup tests
+11. ✅ Add Vue/Svelte script setup tests
 12. ✅ Add pnpm workspace exclude tests
 
 ### Medium-term (P2)
@@ -604,7 +604,7 @@ Create a tracking issue and systematically replace:
 21. Document `--fast-graph` tradeoffs
 22. Add `SessionManager.warmup()`
 23. Add Go workspace tests
-24. Test circuit breaker recovery
+24. ✅ Test circuit breaker recovery
 
 ### Low Priority (P3)
 25. Add `highestComplexityFunctions` query
