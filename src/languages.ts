@@ -112,7 +112,9 @@ export function supportForFile(filename: string): LanguageSupport {
     if (sample && isLikelyCppHeader(sample)) return CPP_SUPPORT;
     return C_SUPPORT;
   }
-  return LANGUAGE_SUPPORTS.find((s) => s.matchExts.includes(ext)) ?? TS_SUPPORT;
+  const sup = LANGUAGE_SUPPORTS.find((s) => s.matchExts.includes(ext));
+  if (sup) return sup;
+  throw new Error(`Unsupported file extension: ${filename}`);
 }
 export function languageForFile(filename: string): Parser.Language {
   return supportForFile(filename).language(filename);

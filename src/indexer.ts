@@ -1109,61 +1109,50 @@ export function collectLocalsAndExportsFromSource(
   const sourceLines = source.split(/\r?\n/);
 
   const extractLeadingDocstring = (
-    startLine: number,
-    languageId: string,
+    node: Parser.SyntaxNode | null,
   ): string | undefined => {
-    if (!startLine) return undefined;
-    let idx = startLine - 2;
-    while (idx >= 0 && sourceLines[idx]?.trim() === "") idx -= 1;
-    if (idx < 0) return undefined;
-    const line = sourceLines[idx]?.trim() ?? "";
-    if (languageId === "python") {
-      if (line.startsWith("#")) {
-        const out: string[] = [];
-        let cur = idx;
-        while (cur >= 0 && sourceLines[cur]?.trim().startsWith("#")) {
-          out.push(normalizeDocstringLine(sourceLines[cur] ?? ""));
-          cur -= 1;
-        }
-        const text = out.reverse().join("\n").trim();
-        return text ? text : undefined;
-      }
-      return undefined;
+    if (!node) return undefined;
+    // If we're looking at an identifier, look at its parent (the declaration)
+    let target = node;
+    if (
+      target.type === "identifier" ||
+      target.type === "type_identifier" ||
+      target.type === "property_identifier"
+    ) {
+      if (target.parent) target = target.parent;
+    }
+    // Handle variable declarators - climb to declaration statement
+    if (target.type === "variable_declarator" && target.parent) {
+      target = target.parent;
+    }
+    // Handle export statements wrapping the declaration
+    if (target.parent && target.parent.type === "export_statement") {
+        target = target.parent;
     }
 
-    if (line.startsWith("//")) {
-      const out: string[] = [];
-      let cur = idx;
-      while (cur >= 0 && sourceLines[cur]?.trim().startsWith("//")) {
-        out.push(normalizeDocstringLine(sourceLines[cur] ?? ""));
-        cur -= 1;
-      }
-      const text = out.reverse().join("\n").trim();
-      return text ? text : undefined;
-    }
-
-    if (line.endsWith("*/")) {
-      const out: string[] = [];
-      let cur = idx;
-      while (cur >= 0) {
-        const currentLine = sourceLines[cur] ?? "";
-        out.push(currentLine);
-        if (currentLine.includes("/*")) break;
-        cur -= 1;
-      }
-      const text = out
-        .reverse()
-        .join("\n")
-        .replace(/^\s*\/\*\*?/, "")
-        .replace(/\*\/\s*$/, "")
+    const comments: string[] = [];
+    let prev = target.previousNamedSibling;
+    // Walk backwards through comments
+    while (
+      prev &&
+      (prev.type === "comment" ||
+        prev.type === "line_comment" ||
+        prev.type === "block_comment")
+    ) {
+      const text = sliceText(prev, source);
+      // Clean up comment syntax
+      const clean = text
+        .replace(/^\s*\/\*\*?/, "") // /** or /*
+        .replace(/\*\/\s*$/, "") // */
+        .replace(/^\s*\/\/\/?/, "") // // or ///
+        .replace(/^\s*#/, "") // #
         .split("\n")
-        .map((lineText) => normalizeDocstringLine(lineText))
-        .join("\n")
-        .trim();
-      return text ? text : undefined;
+        .map((l) => normalizeDocstringLine(l))
+        .join("\n");
+      comments.unshift(clean.trim());
+      prev = prev.previousNamedSibling;
     }
-
-    return undefined;
+    return comments.length > 0 ? comments.join("\n").trim() : undefined;
   };
 
   const countMatches = (text: string, re: RegExp): number => {
@@ -1203,6 +1192,7 @@ export function collectLocalsAndExportsFromSource(
     localName: string,
     kind: SymbolKind,
     range: Range,
+    node?: Parser.SyntaxNode,
   ): SymbolDef => {
     let lineSpan: number | undefined;
     if (
@@ -1213,8 +1203,12 @@ export function collectLocalsAndExportsFromSource(
       lineSpan = Math.max(1, range.end.line - range.start.line + 1);
     }
     let docstring: string | undefined;
-    if (typeof range.start.line === "number") {
-      docstring = extractLeadingDocstring(range.start.line, support.id);
+    if (node) {
+      docstring = extractLeadingDocstring(node);
+    } else if (typeof range.start.line === "number") {
+      // Fallback if node not available (e.g. from scope index without direct node ref, though unlikely in this flow)
+      // Actually we removed the old extractLeadingDocstring, so we can't fallback easily without node.
+      // But we always pass node now where it matters.
     }
     const shouldEstimateComplexity =
       kind === SymbolKind.Function || kind === SymbolKind.Class;
@@ -1270,6 +1264,7 @@ export function collectLocalsAndExportsFromSource(
                   localName,
                   toKind(support.classifyDefinition(cap.node)),
                   range,
+                  cap.node,
                 ),
               );
             }
@@ -1295,7 +1290,9 @@ export function collectLocalsAndExportsFromSource(
         if (b.kind === "function") kind = SymbolKind.Function;
         else if (b.kind === "class") kind = SymbolKind.Class;
         else if (b.kind === "type") kind = SymbolKind.TypeAlias;
-        locals.push(buildSymbolDef(b.name, kind, b.def));
+        // Find the node in tree corresponding to b.def range if possible
+        const node = tree.rootNode.descendantForIndex(b.def.start.index, b.def.end.index);
+        locals.push(buildSymbolDef(b.name, kind, b.def, node));
       }
     }
   }
@@ -1441,7 +1438,7 @@ export function collectLocalsAndExportsFromSource(
         if (map["cjs_export_name"] && map["cjs_fn"]) {
           const exportedAs = sliceText(map["cjs_export_name"].node, source);
           const defRange = toRange(map["cjs_fn"].node);
-          const sym = buildSymbolDef(exportedAs, SymbolKind.Function, defRange);
+          const sym = buildSymbolDef(exportedAs, SymbolKind.Function, defRange, map["cjs_fn"].node);
           locals.push(sym);
           exports.push({ type: "local", exportedAs, target: sym });
           continue;
@@ -1462,6 +1459,7 @@ export function collectLocalsAndExportsFromSource(
             "__default_export__",
             SymbolKind.Default,
             toRange(map["anon_default"].node),
+            map["anon_default"].node,
           );
           locals.push(sym);
           exports.push({ type: "local", exportedAs: "default", target: sym });
@@ -3404,16 +3402,20 @@ function resolveGoPackageExport(
   file: FileId,
   exportedName: string,
 ): SymbolDef | null {
-  const sup = supportForFile(file);
-  if (sup.id !== "go") return null;
-  const baseDir = path.dirname(file);
-  for (const [filePath, mod] of index.byFile) {
-    if (path.dirname(filePath) !== baseDir) continue;
-    for (const e of mod.exports) {
-      if (e.type === "local" && e.exportedAs === exportedName) {
-        return e.target;
+  try {
+    const sup = supportForFile(file);
+    if (sup.id !== "go") return null;
+    const baseDir = path.dirname(file);
+    for (const [filePath, mod] of index.byFile) {
+      if (path.dirname(filePath) !== baseDir) continue;
+      for (const e of mod.exports) {
+        if (e.type === "local" && e.exportedAs === exportedName) {
+          return e.target;
+        }
       }
     }
+  } catch {
+    // supportForFile throws on unsupported files (e.g. .json)
   }
   return null;
 }
@@ -3977,43 +3979,47 @@ export function resolveImported(
   const hit = resolveExport(index, targetFile, exportedName);
   if (hit?.kind === "resolved") return hit.def;
   if (hit?.kind === "namespace") return { namespace: hit.file };
-  const sup = supportForFile(targetFile);
-  if (sup.id === "python") {
-    const base =
-      fs.existsSync(targetFile) && fs.statSync(targetFile).isDirectory()
-        ? targetFile
-        : path.dirname(targetFile);
-    const subCandidates = [
-      path.join(base, `${exportedName}.py`),
-      path.join(base, exportedName, "__init__.py"),
-      path.join(base, exportedName),
-    ];
-    for (const c of subCandidates) {
-      try {
-        if (fs.existsSync(c)) {
-          const isDir = fs.statSync(c).isDirectory();
-          const filePath = isDir ? c : c;
-          return {
-            file: filePath.replace(/\\/g, "/"),
-            localName: exportedName,
-            kind: SymbolKind.Variable,
-            range: {
-              start: { line: 1, column: 1, index: 0 },
-              end: { line: 1, column: 1, index: 0 },
-            },
-          };
-        }
-      } catch {}
+  try {
+    const sup = supportForFile(targetFile);
+    if (sup.id === "python") {
+      const base =
+        fs.existsSync(targetFile) && fs.statSync(targetFile).isDirectory()
+          ? targetFile
+          : path.dirname(targetFile);
+      const subCandidates = [
+        path.join(base, `${exportedName}.py`),
+        path.join(base, exportedName, "__init__.py"),
+        path.join(base, exportedName),
+      ];
+      for (const c of subCandidates) {
+        try {
+          if (fs.existsSync(c)) {
+            const isDir = fs.statSync(c).isDirectory();
+            const filePath = isDir ? c : c;
+            return {
+              file: filePath.replace(/\\/g, "/"),
+              localName: exportedName,
+              kind: SymbolKind.Variable,
+              range: {
+                start: { line: 1, column: 1, index: 0 },
+                end: { line: 1, column: 1, index: 0 },
+              },
+            };
+          }
+        } catch {}
+      }
+      return {
+        file: targetFile.replace(/\\/g, "/"),
+        localName: exportedName,
+        kind: SymbolKind.Variable,
+        range: {
+          start: { line: 1, column: 1, index: 0 },
+          end: { line: 1, column: 1, index: 0 },
+        },
+      };
     }
-    return {
-      file: targetFile.replace(/\\/g, "/"),
-      localName: exportedName,
-      kind: SymbolKind.Variable,
-      range: {
-        start: { line: 1, column: 1, index: 0 },
-        end: { line: 1, column: 1, index: 0 },
-      },
-    };
+  } catch {
+    // Unsupported file extension - cannot resolve detailed import.
   }
   return null;
 }
