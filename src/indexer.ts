@@ -152,7 +152,7 @@ export type ProjectIndex = {
     {
       source: string;
       tree: Parser.Tree;
-      sup: LanguageSupport;
+      sup: LanguageSupport | undefined;
       lang: Parser.Language;
     }
   > | undefined;
@@ -2328,6 +2328,7 @@ export async function parseFile(file: string): Promise<{
 }> {
   const prep = await prepareParserInput(file);
   const sup = prep.sup;
+  if (!sup) throw new Error(`Unsupported file extension: ${file}`);
   const lang = prep.lang;
   const source = prep.source;
   const key = sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts";
@@ -2346,7 +2347,7 @@ export async function ensureParsedContext(
   parsedEntry?: {
     source: string;
     tree: Parser.Tree;
-    sup: LanguageSupport;
+    sup: LanguageSupport | undefined;
     lang: Parser.Language;
   },
 ): Promise<{
@@ -2355,7 +2356,14 @@ export async function ensureParsedContext(
   sup: LanguageSupport;
   lang: Parser.Language;
 }> {
-  if (parsedEntry) return parsedEntry;
+  if (parsedEntry?.sup) {
+    return {
+      source: parsedEntry.source,
+      tree: parsedEntry.tree,
+      sup: parsedEntry.sup,
+      lang: parsedEntry.lang,
+    };
+  }
   const prep = await prepareParserInput(file);
   const key =
     prep.sup.id === "python" ? "py" : prep.sup.id === "js" ? "js" : "ts";
@@ -2447,7 +2455,7 @@ async function buildIndexFromFileListShared(
     {
       source: string;
       tree: Parser.Tree;
-      sup: LanguageSupport;
+      sup: any;
       lang: Parser.Language;
     }
   >();
@@ -2524,7 +2532,17 @@ async function buildIndexFromFileListShared(
 
       if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
       const parsed = await parseFile(f);
-      parsedMap.set(f, parsed);
+      // parsed.sup is guaranteed to be defined because parseFile throws otherwise,
+      // but the type signature of parseFile might still include undefined in `sup` field due to supportForFile signature.
+      // We explicitly cast to ensure compatibility with parsedMap which expects LanguageSupport.
+      if (parsed.sup) {
+        parsedMap.set(f, {
+          source: parsed.source,
+          tree: parsed.tree,
+          sup: parsed.sup,
+          lang: parsed.lang
+        });
+      }
       const { source: src, sup, lang, tree } = parsed;
 
       if (bloomFilterCache) {
@@ -2905,7 +2923,7 @@ export async function buildProjectIndexIncremental(
     {
       source: string;
       tree: Parser.Tree;
-      sup: LanguageSupport;
+      sup: any;
       lang: Parser.Language;
     }
   >();
