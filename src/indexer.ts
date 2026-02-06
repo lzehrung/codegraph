@@ -1291,7 +1291,9 @@ export function collectLocalsAndExportsFromSource(
         else if (b.kind === "class") kind = SymbolKind.Class;
         else if (b.kind === "type") kind = SymbolKind.TypeAlias;
         // Find the node in tree corresponding to b.def range if possible
-        const node = tree.rootNode.descendantForIndex(b.def.start.index, b.def.end.index);
+        const startIndex = b.def.start.index ?? 0;
+        const endIndex = b.def.end.index ?? 0;
+        const node = tree.rootNode.descendantForIndex(startIndex, endIndex);
         locals.push(buildSymbolDef(b.name, kind, b.def, node));
       }
     }

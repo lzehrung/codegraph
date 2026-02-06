@@ -1282,14 +1282,14 @@ export async function loadWorkspaceConfig(
     });
     for (const pkgPath of found) {
       const info = await loadJSON<MinimalPackageJson>(pkgPath);
-      const name: string | undefined = info?.name;
-      if (!name) continue;
+      if (!info || !info.name) continue;
+      const name = info.name;
       const dir = path.dirname(pkgPath);
       packages.set(name, {
         name,
         path: dir,
-        main: typeof info.main === "string" ? info.main : undefined,
-        exports: info.exports,
+        ...(typeof info.main === "string" ? { main: info.main } : {}),
+        ...(info.exports ? { exports: info.exports } : {}),
       });
     }
   }
