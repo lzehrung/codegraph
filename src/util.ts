@@ -1373,12 +1373,12 @@ export async function resolveWorkspacePackage(
     for (const c of candidates) if (await fileExists(c)) return path.resolve(c);
     return null;
   };
-  const pickExportTarget = (target: any): string | null => {
+  const pickExportTarget = (target: unknown): string | null => {
     if (!target) return null;
     if (typeof target === "string") return target;
-    if (typeof target === "object") {
-      const cand =
-        target.import ?? target.default ?? target.require ?? target.module;
+    if (typeof target === "object" && target !== null) {
+      const t = target as Record<string, unknown>;
+      const cand = t.import ?? t.default ?? t.require ?? t.module;
       if (typeof cand === "string") return cand;
     }
     return null;
@@ -1389,7 +1389,7 @@ export async function resolveWorkspacePackage(
       const hit = await tryResolveRelative(pkg.exports);
       if (hit) return hit;
     } else if (typeof pkg.exports === "object") {
-      const map = pkg.exports as Record<string, any>;
+      const map = pkg.exports as Record<string, unknown>;
       const target = map[key] ?? (key === "." ? map["."] : undefined);
       const rel = pickExportTarget(target);
       if (rel) {
@@ -1922,15 +1922,12 @@ async function resolveFromNodeModules(
           return null;
         };
         // Exports map handling (simplified)
-        const pickExportTarget = (target: any): string | null => {
+        const pickExportTarget = (target: unknown): string | null => {
           if (!target) return null;
           if (typeof target === "string") return target;
-          if (typeof target === "object") {
-            const cand =
-              target.import ??
-              target.default ??
-              target.require ??
-              target.module;
+          if (typeof target === "object" && target !== null) {
+            const t = target as Record<string, unknown>;
+            const cand = t.import ?? t.default ?? t.require ?? t.module;
             if (typeof cand === "string") return cand;
           }
           return null;
