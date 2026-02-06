@@ -11,6 +11,9 @@ The functions use regular expressions to strip comments and strings. This is kno
 **Resolution:**
 Deferred for future refactoring as it requires significant changes to the "fast mode" parsing strategy.
 
+**Recommended Solution:**
+Prefer parsing the source with `tree-sitter` (or another proper parser) to obtain a syntax tree. Traverse the syntax tree, and when searching for module specifiers, explicitly skip nodes that correspond to comments and string literals. Only fall back to regex-based stripping if the performance impact of a full parse is unacceptable, and in that case ensure the regexes are carefully designed not to match comment delimiters that appear inside strings. This avoids the common pitfalls of regex-based comment stripping, such as incorrectly handling URLs or nested constructs, and makes the module-specifier extraction logic more robust.
+
 ### Python Relative Import Resolution
 **Severity:** Medium
 **Status:** **Fixed**

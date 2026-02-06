@@ -2275,7 +2275,13 @@ export async function resolvePythonModule(
 
   // If absolute import, also try finding anchor in case project root isn't the package root
   if (relativeDots === 0 && moduleName) {
-    const anchor = await findPythonPackageAnchor(fromDir);
+    let anchor: string;
+    try {
+      anchor = await findPythonPackageAnchor(fromDir);
+    } catch {
+      anchor = projectRoot;
+    }
+
     const parts = moduleName.split(".");
     // Try relative to anchor parent (package structure)
     const parentPath = path.join(path.dirname(anchor), ...parts);

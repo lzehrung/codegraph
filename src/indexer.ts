@@ -1128,7 +1128,7 @@ export function collectLocalsAndExportsFromSource(
     }
     // Handle export statements wrapping the declaration
     if (target.parent && target.parent.type === "export_statement") {
-        target = target.parent;
+      target = target.parent;
     }
 
     const comments: string[] = [];
@@ -1206,10 +1206,6 @@ export function collectLocalsAndExportsFromSource(
     let docstring: string | undefined;
     if (node) {
       docstring = extractLeadingDocstring(node);
-    } else if (typeof range.start.line === "number") {
-      // Fallback if node not available (e.g. from scope index without direct node ref, though unlikely in this flow)
-      // Actually we removed the old extractLeadingDocstring, so we can't fallback easily without node.
-      // But we always pass node now where it matters.
     }
     const shouldEstimateComplexity =
       kind === SymbolKind.Function || kind === SymbolKind.Class;
@@ -2531,6 +2527,19 @@ async function buildIndexFromFileListShared(
       }
 
       if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
+
+      // FIX: Check support before parsing to avoid throwing errors for non-code files
+      const supCheck = supportForFile(f);
+      if (!supCheck) {
+        const mod: ModuleIndex = {
+          file: f,
+          exports: [],
+          imports: [],
+          locals: [],
+        };
+        return [f, mod, []] as const;
+      }
+
       const parsed = await parseFile(f);
       // parsed.sup is guaranteed to be defined because parseFile throws otherwise,
       // but the type signature of parseFile might still include undefined in `sup` field due to supportForFile signature.
@@ -2991,6 +3000,19 @@ export async function buildProjectIndexIncremental(
     const fileResults = await mapLimit(changedList, conc, async (f) => {
       try {
         if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
+
+        // FIX: Check support before parsing to avoid throwing errors for non-code files
+        const supCheck = supportForFile(f);
+        if (!supCheck) {
+          const mod: ModuleIndex = {
+            file: f,
+            exports: [],
+            imports: [],
+            locals: [],
+          };
+          return [f, mod] as const;
+        }
+
         const parsed = await parseFile(f);
         parsedMap.set(f, parsed);
         const { source: src, sup, lang, tree } = parsed;
