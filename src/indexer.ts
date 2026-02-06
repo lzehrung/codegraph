@@ -2905,7 +2905,7 @@ export async function buildProjectIndexIncremental(
     {
       source: string;
       tree: Parser.Tree;
-      sup: ReturnType<typeof supportForFile>;
+      sup: LanguageSupport;
       lang: Parser.Language;
     }
   >();
