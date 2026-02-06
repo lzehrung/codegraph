@@ -152,7 +152,7 @@ export type ProjectIndex = {
     {
       source: string;
       tree: Parser.Tree;
-      sup: ReturnType<typeof supportForFile>;
+      sup: LanguageSupport;
       lang: Parser.Language;
     }
   > | undefined;
@@ -773,6 +773,7 @@ async function buildBloomFilterForFile(
   try {
     const source = await fsp.readFile(file, "utf8");
     const sup = supportForFile(file);
+    if (!sup) return null;
     return buildBloomFilterFromSource(source, sup.id);
   } catch {
     return null;
@@ -1205,6 +1206,10 @@ export function collectLocalsAndExportsFromSource(
     let docstring: string | undefined;
     if (node) {
       docstring = extractLeadingDocstring(node);
+    } else if (typeof range.start.line === "number") {
+      // Fallback if node not available (e.g. from scope index without direct node ref, though unlikely in this flow)
+      // Actually we removed the old extractLeadingDocstring, so we can't fallback easily without node.
+      // But we always pass node now where it matters.
     }
     const shouldEstimateComplexity =
       kind === SymbolKind.Function || kind === SymbolKind.Class;
@@ -1739,7 +1744,7 @@ export async function collectImportsForFile(
   opts?: {
     source?: string;
     tree?: Parser.Tree;
-    sup?: ReturnType<typeof supportForFile>;
+    sup?: LanguageSupport;
     lang?: Parser.Language;
     graphOptions?: GraphBuildOptions;
   },
@@ -2318,7 +2323,7 @@ export async function collectImportsForFile(
 export async function parseFile(file: string): Promise<{
   source: string;
   tree: Parser.Tree;
-  sup: ReturnType<typeof supportForFile>;
+  sup: LanguageSupport;
   lang: Parser.Language;
 }> {
   const prep = await prepareParserInput(file);
@@ -2341,13 +2346,13 @@ export async function ensureParsedContext(
   parsedEntry?: {
     source: string;
     tree: Parser.Tree;
-    sup: ReturnType<typeof supportForFile>;
+    sup: LanguageSupport;
     lang: Parser.Language;
   },
 ): Promise<{
   source: string;
   tree: Parser.Tree;
-  sup: ReturnType<typeof supportForFile>;
+  sup: LanguageSupport;
   lang: Parser.Language;
 }> {
   if (parsedEntry) return parsedEntry;
@@ -2442,7 +2447,7 @@ async function buildIndexFromFileListShared(
     {
       source: string;
       tree: Parser.Tree;
-      sup: ReturnType<typeof supportForFile>;
+      sup: LanguageSupport;
       lang: Parser.Language;
     }
   >();
@@ -3402,7 +3407,7 @@ function resolveGoPackageExport(
 ): SymbolDef | null {
   try {
     const sup = supportForFile(file);
-    if (sup.id !== "go") return null;
+    if (!sup || sup.id !== "go") return null;
     const baseDir = path.dirname(file);
     for (const [filePath, mod] of index.byFile) {
       if (path.dirname(filePath) !== baseDir) continue;
@@ -3979,7 +3984,7 @@ export function resolveImported(
   if (hit?.kind === "namespace") return { namespace: hit.file };
   try {
     const sup = supportForFile(targetFile);
-    if (sup.id === "python") {
+    if (sup?.id === "python") {
       const base =
         fs.existsSync(targetFile) && fs.statSync(targetFile).isDirectory()
           ? targetFile

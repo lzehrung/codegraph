@@ -105,19 +105,19 @@ export const LANGUAGE_SUPPORTS: LanguageSupport[] = [
   SWIFT_SUPPORT,
 ];
 
-export function supportForFile(filename: string): LanguageSupport {
+export function supportForFile(filename: string): LanguageSupport | undefined {
   const ext = path.extname(filename).toLowerCase();
   if (ext === ".h") {
     const sample = readFileSample(filename);
     if (sample && isLikelyCppHeader(sample)) return CPP_SUPPORT;
     return C_SUPPORT;
   }
-  const sup = LANGUAGE_SUPPORTS.find((s) => s.matchExts.includes(ext));
-  if (sup) return sup;
-  throw new Error(`Unsupported file extension: ${filename}`);
+  return LANGUAGE_SUPPORTS.find((s) => s.matchExts.includes(ext));
 }
 export function languageForFile(filename: string): Parser.Language {
-  return supportForFile(filename).language(filename);
+  const sup = supportForFile(filename);
+  if (!sup) throw new Error(`Unsupported file extension: ${filename}`);
+  return sup.language(filename);
 }
 
 export function supportById(id: string): LanguageSupport | undefined {

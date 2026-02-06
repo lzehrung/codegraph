@@ -38,6 +38,7 @@ export async function prepareParserInput(
   }
 
   const sup = supportForFile(file);
+  if (!sup) throw new Error(`Unsupported file extension: ${file}`);
   return {
     source: rawSource,
     sup,

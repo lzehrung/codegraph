@@ -1246,7 +1246,8 @@ export async function loadWorkspaceConfig(
       for (const g of rootPkg.workspaces) addWorkspaceGlob(workspaceGlobs, g);
     } else if (
       typeof rootPkg.workspaces === "object" &&
-      Array.isArray(rootPkg.workspaces.packages)
+      rootPkg.workspaces !== null &&
+      Array.isArray((rootPkg.workspaces as { packages?: unknown }).packages)
     ) {
       for (const g of rootPkg.workspaces.packages)
         addWorkspaceGlob(workspaceGlobs, g);
