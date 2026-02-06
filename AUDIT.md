@@ -3,7 +3,7 @@
 **Audit Date**: 2026-02-01
 **Auditor**: Senior Software Architect & Performance Engineer
 **Version Audited**: 1.8.16
-**Last Updated**: 2026-02-02
+**Last Updated**: 2026-02-06
 
 ---
 
@@ -11,11 +11,11 @@
 
 The codegraph library is a well-architected, high-performance code analysis tool with strong foundations. This audit identifies **28 actionable improvement opportunities** across 5 dimensions. The most critical findings relate to type safety violations, missing edge cases in language definitions, and gaps in test coverage for pathological inputs.
 
-**Progress: 12/28 items completed (43%)**
+**Progress: 13/28 items completed (46%)**
 
 **Priority Distribution:**
 - 🔴 Critical (P0): 3 issues (2 ✅, 1 remaining)
-- 🟠 High (P1): 8 issues (2 ✅, 6 remaining)
+- 🟠 High (P1): 8 issues (3 ✅, 5 remaining)
 - 🟡 Medium (P2): 12 issues (5 ✅, 7 remaining)
 - 🟢 Low (P3): 5 issues (3 ✅, 2 remaining)
 
@@ -39,6 +39,7 @@ The codegraph library is a well-architected, high-performance code analysis tool
 | 10 | P3 | `highestComplexityFunctions` query | c4b026b |
 | 11 | P3 | Export `ICodeReviewSession` interface | c4b026b |
 | 12 | P3 | `SymbolVisibility` type documentation | c4b026b |
+| 13 | P1 | pnpm workspace exclude tests (negated + overlapping patterns) | 16d8fd7 |
 
 **Additional fixes from PR review:**
 - Semaphore permits validation
@@ -51,14 +52,13 @@ The codegraph library is a well-architected, high-performance code analysis tool
 
 - [ ] **Eliminate 43 `any` types** - `src/graphs.ts:220`, `src/cli.ts:55`, `src/indexer.ts:4020`, `src/impact/analyzer.ts:306,311,313`, `src/util.ts:13,26` - Replace with proper types (`Parser.SyntaxNode`, discriminated unions, generics). **Effort: High**
 
-#### 🟠 P1 High (6 remaining)
+#### 🟠 P1 High (5 remaining)
 
 - [ ] **TypeScript namespace merging** - `src/languages/definitions/typescript.ts` - Add post-processing to consolidate symbols with matching names and compatible kinds. **Effort: Medium**
 - [ ] **Go package-level scope resolution** - `src/languages/definitions/go.ts:41-47` - Track package declarations, handle dot-imports, group files by package. **Effort: Medium**
 - [ ] **Parsed AST cache eviction** - `src/indexer.ts:ProjectIndex.parsed` - Implement LRU eviction with configurable max entries. **Effort: Medium**
 - [ ] **`decorates` edge type** - `src/graphs.ts` - Add edge label for decorator applications (TypeScript `@Decorator`, Python `@decorator`). **Effort: Low**
 - [ ] **Vue/Svelte script setup tests** - `tests/languages/` - Add tests for `<script setup>`, Svelte `$:` reactive declarations. **Effort: Low**
-- [ ] **pnpm workspace exclude tests** - `tests/pnpm-workspace-excludes.test.ts` - Add tests for negated patterns, overlapping patterns. **Effort: Low**
 
 #### 🟡 P2 Medium (7 remaining)
 
@@ -590,7 +590,7 @@ Create a tracking issue and systematically replace:
 9. Add `decorates` edge type
 10. Add `visibility` column to SQLite schema
 11. Add Vue/Svelte script setup tests
-12. Add pnpm workspace exclude tests
+12. ✅ Add pnpm workspace exclude tests
 
 ### Medium-term (P2)
 13. Improve dynamic import heuristics
