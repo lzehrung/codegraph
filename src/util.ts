@@ -2215,9 +2215,9 @@ export async function resolvePythonModule(
   projectRoot: string,
   fromFile: string,
   moduleName: string | null,
-  relativeDots: number,
+  importDotCount: number,
 ): Promise<FileId | { external: string }> {
-  const cacheKey = `${fromFile}::${".".repeat(relativeDots)}${
+  const cacheKey = `${fromFile}::${".".repeat(importDotCount)}${
     moduleName ?? ""
   }`;
   const cached = resolvePythonModuleCache.get(cacheKey);
@@ -2225,12 +2225,12 @@ export async function resolvePythonModule(
   const fromDir = path.dirname(fromFile);
 
   // If it's a relative import (dots > 0), start from current file's dir and walk up.
-  // relativeDots = 1 means same dir (.), 2 means parent (..), etc.
+  // importDotCount = 1 means same dir (.), 2 means parent (..), etc.
   let startDir = fromDir;
-  if (relativeDots > 0) {
+  if (importDotCount > 0) {
     // 1 dot = current dir (0 steps up)
     // 2 dots = parent dir (1 step up)
-    const stepsUp = Math.max(0, relativeDots - 1);
+    const stepsUp = Math.max(0, importDotCount - 1);
     for (let i = 0; i < stepsUp; i++) {
       startDir = path.dirname(startDir);
     }
@@ -2251,7 +2251,7 @@ export async function resolvePythonModule(
     candidates.push(path.join(startDir, relPath + ".py"));
     candidates.push(path.join(startDir, relPath, "__init__.py"));
     candidates.push(path.join(startDir, relPath));
-  } else if (relativeDots > 0) {
+  } else if (importDotCount > 0) {
     // "from . import x" or "from .. import x" where moduleName is null
     // This resolves to the package defined by __init__.py in startDir
     candidates.push(path.join(startDir, "__init__.py"));
@@ -2274,7 +2274,7 @@ export async function resolvePythonModule(
   }
 
   // If absolute import, also try finding anchor in case project root isn't the package root
-  if (relativeDots === 0 && moduleName) {
+  if (importDotCount === 0 && moduleName) {
     let anchor: string;
     try {
       anchor = await findPythonPackageAnchor(fromDir);
@@ -2314,7 +2314,7 @@ export async function resolvePythonModule(
   }
 
   const ext = {
-    external: ".".repeat(relativeDots) + (moduleName ?? ""),
+    external: ".".repeat(importDotCount) + (moduleName ?? ""),
   } as const;
   resolvePythonModuleCache.set(cacheKey, ext);
   return ext;
@@ -2391,6 +2391,7 @@ export async function mapLimit<T, R>(
         .catch((err) => {
           if (aborted) return;
           aborted = true;
+          activeCount--;
           if (rejectAll) rejectAll(err);
         });
     }

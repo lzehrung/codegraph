@@ -203,17 +203,24 @@ describe('Cache invalidation and strict hashing', () => {
     manifest.files[normalize(filePath)].sig = 'bad-signature';
     await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
 
+    // Create a ghost file that is not in the manifest.
+    // In a purely incremental build (without git), this file would be ignored.
+    // A full build will find it via filesystem scanning.
+    const ghostPath = path.join(root, 'ghost.ts');
+    await fsp.writeFile(ghostPath, `export const ghost = 1;\n`, 'utf8');
+
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const listSpy = vi.spyOn(util, 'listProjectFiles');
-    await buildProjectIndexIncremental(root, {
+    const idx = await buildProjectIndexIncremental(root, {
       threads: 2,
       cache: 'disk',
       cacheVerify: true,
     });
     expect(warnSpy).toHaveBeenCalled();
-    expect(listSpy).toHaveBeenCalled();
+
+    // If full build triggered, ghost file should be indexed
+    expect(idx.byFile.has(normalize(ghostPath))).toBe(true);
+
     warnSpy.mockRestore();
-    listSpy.mockRestore();
   });
 
   it('forces full parsing when incremental strict mode is enabled', async () => {
