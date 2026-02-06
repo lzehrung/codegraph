@@ -16,6 +16,7 @@ import {
   normalizeResolutionHints,
   acquireParser,
   releaseParser,
+  mapLimit,
 } from "./util.js";
 // Intentionally compile only the imports query locally to avoid compiling
 // unrelated queries (which may differ per grammar) and causing warnings.
@@ -457,50 +458,6 @@ export async function collectGraph(
     addEdgeTargetsToGraph(graph.edges);
   }
 
-  /**
-   * Map over items with bounded concurrency using semaphore pattern.
-   * Properly tracks outstanding operations to prevent EMFILE errors.
-   */
-  async function mapLimit<T, R>(
-    items: T[],
-    limit: number,
-    fn: (item: T) => Promise<R>,
-  ): Promise<R[]> {
-    if (items.length === 0) return [];
-
-    const semaphore = { permits: limit, queue: [] as Array<() => void> };
-
-    const acquire = (): Promise<void> => {
-      if (semaphore.permits > 0) {
-        semaphore.permits--;
-        return Promise.resolve();
-      }
-      return new Promise<void>((resolve) => {
-        semaphore.queue.push(resolve);
-      });
-    };
-
-    const release = (): void => {
-      const next = semaphore.queue.shift();
-      if (next) {
-        next();
-      } else {
-        semaphore.permits++;
-      }
-    };
-
-    const results = await Promise.all(
-      items.map(async (item) => {
-        await acquire();
-        try {
-          return await fn(item);
-        } finally {
-          release();
-        }
-      }),
-    );
-    return results;
-  }
 
   const filePromises = await mapLimit(files, conc, async (file) => {
     try {

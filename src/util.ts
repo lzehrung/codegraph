@@ -1090,7 +1090,7 @@ async function findWorkspaceRoot(startDir: string): Promise<string | null> {
   return null;
 }
 
-export async function loadJSON<T = any>(p: string): Promise<T | null> {
+export async function loadJSON<T = unknown>(p: string): Promise<T | null> {
   try {
     const raw = await fsp.readFile(p, "utf8");
     return JSON.parse(raw) as T;
@@ -1219,6 +1219,17 @@ function parsePnpmWorkspacePackages(rawYaml: string): string[] {
   return out;
 }
 
+type MinimalPackageJson = {
+  name?: string;
+  main?: string;
+  exports?: unknown;
+  workspaces?: string[] | { packages?: string[] };
+};
+
+type MinimalLernaJson = {
+  packages?: string[];
+};
+
 export async function loadWorkspaceConfig(
   projectRoot: string,
 ): Promise<WorkspaceConfig | undefined> {
@@ -1228,14 +1239,20 @@ export async function loadWorkspaceConfig(
   const packages = new Map<string, WorkspacePackageInfo>();
 
   const rootPkgPath = path.join(root, "package.json");
-  const rootPkg = await loadJSON<any>(rootPkgPath);
+  const rootPkg = await loadJSON<MinimalPackageJson>(rootPkgPath);
   const workspaceGlobs: WorkspaceGlobSet = { include: [], ignore: [] };
   if (rootPkg?.workspaces) {
     if (Array.isArray(rootPkg.workspaces)) {
       for (const g of rootPkg.workspaces) addWorkspaceGlob(workspaceGlobs, g);
-    } else if (Array.isArray(rootPkg.workspaces?.packages)) {
-      for (const g of rootPkg.workspaces.packages)
-        addWorkspaceGlob(workspaceGlobs, g);
+    } else if (
+      typeof rootPkg.workspaces === "object" &&
+      rootPkg.workspaces !== null &&
+      "packages" in rootPkg.workspaces
+    ) {
+      const packages = (rootPkg.workspaces as { packages?: unknown }).packages;
+      if (Array.isArray(packages)) {
+        for (const g of packages) addWorkspaceGlob(workspaceGlobs, g);
+      }
     }
   }
 
@@ -1249,7 +1266,7 @@ export async function loadWorkspaceConfig(
   }
 
   const lernaPath = path.join(root, "lerna.json");
-  const lerna = await loadJSON<any>(lernaPath);
+  const lerna = await loadJSON<MinimalLernaJson>(lernaPath);
   if (lerna?.packages && Array.isArray(lerna.packages)) {
     for (const g of lerna.packages) addWorkspaceGlob(workspaceGlobs, g);
   }
@@ -1267,15 +1284,15 @@ export async function loadWorkspaceConfig(
       ignore: ["**/node_modules/**", ...ignorePatterns],
     });
     for (const pkgPath of found) {
-      const info = await loadJSON<any>(pkgPath);
-      const name: string | undefined = info?.name;
-      if (!name) continue;
+      const info = await loadJSON<MinimalPackageJson>(pkgPath);
+      if (!info || !info.name) continue;
+      const name = info.name;
       const dir = path.dirname(pkgPath);
       packages.set(name, {
         name,
         path: dir,
-        main: typeof info.main === "string" ? info.main : undefined,
-        exports: info.exports,
+        ...(typeof info.main === "string" ? { main: info.main } : {}),
+        ...(info.exports ? { exports: info.exports } : {}),
       });
     }
   }
@@ -1873,7 +1890,7 @@ async function resolveFromNodeModules(
       const nmDir = path.join(dir, "node_modules", packageName);
       if (await fileExists(nmDir)) {
         const pkgPath = path.join(nmDir, "package.json");
-        const pkg = await loadJSON<any>(pkgPath);
+        const pkg = await loadJSON<MinimalPackageJson>(pkgPath);
         const baseDir = nmDir;
         const exts = [
           ".ts",
@@ -1923,8 +1940,8 @@ async function resolveFromNodeModules(
           if (typeof pkg.exports === "string" && key === ".") {
             const hit = await tryResolveRelative(pkg.exports as string);
             if (hit) return hit;
-          } else if (typeof pkg.exports === "object") {
-            const map = pkg.exports;
+          } else if (typeof pkg.exports === "object" && pkg.exports !== null) {
+            const map = pkg.exports as Record<string, unknown>;
             const target = map[key] ?? (key === "." ? map["."] : undefined);
             const rel = pickExportTarget(target);
             if (rel) {
@@ -2198,30 +2215,48 @@ export async function resolvePythonModule(
   projectRoot: string,
   fromFile: string,
   moduleName: string | null,
-  relativeDots: number,
+  importDotCount: number,
 ): Promise<FileId | { external: string }> {
-  const cacheKey = `${fromFile}::${".".repeat(relativeDots)}${
+  const cacheKey = `${fromFile}::${".".repeat(importDotCount)}${
     moduleName ?? ""
   }`;
   const cached = resolvePythonModuleCache.get(cacheKey);
   if (cached) return cached;
   const fromDir = path.dirname(fromFile);
-  const anchor = await findPythonPackageAnchor(fromDir);
 
-  let baseDir = anchor;
-  const climb = Math.max(0, relativeDots - 1);
-  for (let i = 0; i < climb; i++) baseDir = path.dirname(baseDir);
+  // If it's a relative import (dots > 0), start from current file's dir and walk up.
+  // importDotCount = 1 means same dir (.), 2 means parent (..), etc.
+  let startDir = fromDir;
+  if (importDotCount > 0) {
+    // 1 dot = current dir (0 steps up)
+    // 2 dots = parent dir (1 step up)
+    const stepsUp = Math.max(0, importDotCount - 1);
+    for (let i = 0; i < stepsUp; i++) {
+      startDir = path.dirname(startDir);
+    }
+  } else {
+    // Absolute import: start from project root or find anchor?
+    // Python sys.path usually includes current script dir, but for "absolute" imports
+    // in a project structure, we usually mean relative to project root or nearest site-packages.
+    // Here we try relative to project root first.
+    startDir = projectRoot;
+  }
 
   const parts = (moduleName ? moduleName.split(".") : []).filter(Boolean);
   const relPath = parts.length ? path.join(...parts) : "";
+
+  // Candidates relative to the resolved start directory
   const candidates: string[] = [];
   if (relPath) {
-    candidates.push(path.join(baseDir, relPath + ".py"));
-    candidates.push(path.join(baseDir, relPath, "__init__.py"));
-    candidates.push(path.join(baseDir, relPath));
-  } else {
-    candidates.push(path.join(baseDir, "__init__.py"));
+    candidates.push(path.join(startDir, relPath + ".py"));
+    candidates.push(path.join(startDir, relPath, "__init__.py"));
+    candidates.push(path.join(startDir, relPath));
+  } else if (importDotCount > 0) {
+    // "from . import x" or "from .. import x" where moduleName is null
+    // This resolves to the package defined by __init__.py in startDir
+    candidates.push(path.join(startDir, "__init__.py"));
   }
+
   for (const c of candidates) {
     try {
       if (await isDirectory(c)) {
@@ -2238,9 +2273,30 @@ export async function resolvePythonModule(
     } catch {}
   }
 
-  if (moduleName) {
-    const abs = path.join(projectRoot, ...moduleName.split("."));
-    for (const c of [abs + ".py", path.join(abs, "__init__.py"), abs]) {
+  // If absolute import, also try finding anchor in case project root isn't the package root
+  if (importDotCount === 0 && moduleName) {
+    let anchor: string;
+    try {
+      anchor = await findPythonPackageAnchor(fromDir);
+    } catch {
+      anchor = projectRoot;
+    }
+
+    const parts = moduleName.split(".");
+    // Try relative to anchor parent (package structure)
+    const parentPath = path.join(path.dirname(anchor), ...parts);
+    // Try relative to anchor itself (script/root structure)
+    const anchorPath = path.join(anchor, ...parts);
+
+    const anchorCandidates = [
+      parentPath + ".py",
+      path.join(parentPath, "__init__.py"),
+      parentPath,
+      anchorPath + ".py",
+      path.join(anchorPath, "__init__.py"),
+      anchorPath,
+    ];
+    for (const c of anchorCandidates) {
       try {
         if (await isDirectory(c)) {
           const res = path.resolve(c);
@@ -2256,8 +2312,9 @@ export async function resolvePythonModule(
       } catch {}
     }
   }
+
   const ext = {
-    external: ".".repeat(relativeDots) + (moduleName ?? ""),
+    external: ".".repeat(importDotCount) + (moduleName ?? ""),
   } as const;
   resolvePythonModuleCache.set(cacheKey, ext);
   return ext;
@@ -2291,4 +2348,65 @@ export function releaseParser(parser: Parser, key: LangKey) {
   const pool = parserPools.get(key) ?? [];
   pool.push(parser);
   parserPools.set(key, pool);
+}
+
+/**
+ * Map over items with bounded concurrency.
+ * Uses a streaming approach to avoid creating all promises upfront,
+ * preventing memory issues with large arrays and EMFILE errors.
+ */
+export async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return [];
+
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+  let activeCount = 0;
+  let resolveAll: (() => void) | null = null;
+  let rejectAll: ((err: unknown) => void) | null = null;
+  let aborted = false;
+
+  const startNext = (): void => {
+    if (aborted) return;
+    while (activeCount < limit && nextIndex < items.length) {
+      if (aborted) return;
+      const index = nextIndex++;
+      const item = items[index]!;
+      activeCount++;
+
+      fn(item)
+        .then((result) => {
+          if (aborted) return;
+          results[index] = result;
+          activeCount--;
+          if (nextIndex < items.length) {
+            startNext();
+          } else if (activeCount === 0 && resolveAll) {
+            resolveAll();
+          }
+        })
+        .catch((err) => {
+          if (aborted) return;
+          aborted = true;
+          activeCount--;
+          if (rejectAll) rejectAll(err);
+        });
+    }
+  };
+
+  return new Promise<R[]>((resolve, reject) => {
+    resolveAll = () => resolve(results);
+    rejectAll = reject;
+    startNext();
+    // Handle empty case or immediate completion
+    if (
+      !aborted &&
+      (items.length === 0 || (nextIndex >= items.length && activeCount === 0))
+    ) {
+      resolve(results);
+    }
+  });
 }
