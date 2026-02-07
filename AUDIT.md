@@ -11,12 +11,12 @@
 
 The codegraph library is a well-architected, high-performance code analysis tool with strong foundations. This audit identifies **28 actionable improvement opportunities** across 5 dimensions. The most critical findings relate to type safety violations, missing edge cases in language definitions, and gaps in test coverage for pathological inputs.
 
-**Progress: 24/28 items completed (86%)**
+**Progress: 25/28 items completed (89%)**
 
 **Priority Distribution:**
 - 🔴 Critical (P0): 3 issues (3 ✅, 0 remaining)
 - 🟠 High (P1): 8 issues (8 ✅, 0 remaining)
-- 🟡 Medium (P2): 12 issues (10 ✅, 2 remaining)
+- 🟡 Medium (P2): 12 issues (11 ✅, 1 remaining)
 - 🟢 Low (P3): 5 issues (3 ✅, 2 remaining)
 
 ---
@@ -50,6 +50,7 @@ The codegraph library is a well-architected, high-performance code analysis tool
 | 21 | P2 | Improved CLI impact provider recovery/error guidance | d36ff8a |
 | 22 | P2 | Go workspace multi-module resolution tests (`go.work`) | d36ff8a |
 | 23 | P1 | `decorates` edge type for decorator usage | c4b026b |
+| 24 | P2 | SQLite-backed disk cache for module index cache | 072373b |
 
 **Additional fixes from PR review:**
 - Semaphore permits validation
@@ -63,10 +64,9 @@ The codegraph library is a well-architected, high-performance code analysis tool
 #### 🟠 P1 High (0 remaining)
 
 
-#### 🟡 P2 Medium (2 remaining)
+#### 🟡 P2 Medium (1 remaining)
 
 - [ ] **Dynamic import confidence scores** - `src/graphs.ts:1337+` - Add `{ resolved: "heuristic", confidence: number }` to dynamic imports. **Effort: Medium**
-- [ ] **SQLite for disk cache** - `src/indexer.ts:cacheFilePath` - Replace individual JSON files with SQLite database. **Effort: High**
 
 #### 🟢 P3 Low (2 remaining)
 
@@ -595,7 +595,7 @@ Create a tracking issue and systematically replace:
 14. ✅ Memoize re-export resolution
 15. Return cycle paths from `findCycles()`
 16. ✅ Distinguish block vs function scope
-17. Use SQLite for disk cache
+17. ✅ Use SQLite for disk cache
 18. Add severity weight configuration
 19. Add confidence to impact items
 20. ✅ Improve CLI error messages

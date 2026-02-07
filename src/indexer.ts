@@ -5,6 +5,7 @@ import fg from "fast-glob";
 import Parser from "tree-sitter";
 import crypto from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { createRequire } from "node:module";
 import {
   supportForFile,
   getCompiledQueries,
@@ -547,6 +548,45 @@ type ModuleCacheEntry = {
 };
 const memoryCache = new Map<string, ModuleCacheEntry>();
 
+type BetterSqliteDatabase = import("better-sqlite3").Database;
+
+const loadBetterSqlite3 = () => {
+  const require = createRequire(import.meta.url);
+  return require("better-sqlite3") as typeof import("better-sqlite3");
+};
+
+const diskCacheDatabases = new Map<string, BetterSqliteDatabase>();
+
+function diskCacheDatabasePath(projectRoot: string, opts?: BuildOptions): string {
+  return path.join(cacheRoot(projectRoot, opts), "index-cache.sqlite");
+}
+
+function getDiskCacheDatabase(
+  projectRoot: string,
+  opts?: BuildOptions,
+): BetterSqliteDatabase {
+  const dbPath = diskCacheDatabasePath(projectRoot, opts);
+  const existing = diskCacheDatabases.get(dbPath);
+  if (existing) return existing;
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  const BetterSqlite3 = loadBetterSqlite3();
+  const db = new BetterSqlite3(dbPath);
+  db.pragma("journal_mode = WAL");
+  db.pragma("synchronous = NORMAL");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS module_cache (
+      file TEXT PRIMARY KEY,
+      sig TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      payload TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_module_cache_sig ON module_cache(sig);
+  `);
+  diskCacheDatabases.set(dbPath, db);
+  return db;
+}
+
 const MANIFEST_VERSION = 1;
 
 type ManifestFileEntry = GraphCacheEntry;
@@ -783,19 +823,6 @@ async function buildBloomFilterForFile(
   }
 }
 
-function cacheFilePath(
-  projectRoot: string,
-  file: string,
-  opts?: BuildOptions,
-): string {
-  const root = cacheRoot(projectRoot, opts);
-  const hash = crypto
-    .createHash("sha1")
-    .update(file.replace(/\\/g, "/"))
-    .digest("hex");
-  return path.join(root, `${hash}.json`);
-}
-
 function isModuleIndex(value: unknown): value is ModuleIndex {
   if (!value || typeof value !== "object") return false;
   const mod = value as {
@@ -847,12 +874,20 @@ async function tryLoadFromCache(
   }
   if (mode === "disk") {
     try {
-      const cf = cacheFilePath(projectRoot, file, opts);
-      const raw = await fsp.readFile(cf, "utf8");
-      const parsed = JSON.parse(raw) as unknown;
-      if (isModuleCacheEntry(parsed) && parsed.sig === sig) {
-        if (cacheEnabled && cacheReport) cacheReport.hits += 1;
-        return parsed.mod;
+      const db = getDiskCacheDatabase(projectRoot, opts);
+      const row = db
+        .prepare(
+          "SELECT sig, version, payload FROM module_cache WHERE file = ?",
+        )
+        .get(file) as
+        | { sig: string; version: number; payload: string }
+        | undefined;
+      if (row && row.sig === sig && row.version === PARSED_CACHE_VERSION) {
+        const parsed = JSON.parse(row.payload) as unknown;
+        if (isModuleIndex(parsed)) {
+          if (cacheEnabled && cacheReport) cacheReport.hits += 1;
+          return parsed;
+        }
       }
     } catch {}
     if (cacheEnabled && cacheReport) cacheReport.misses += 1;
@@ -872,13 +907,16 @@ async function writeToCache(
     memoryCache.set(file, { version: PARSED_CACHE_VERSION, sig, mod });
   } else if (mode === "disk") {
     try {
-      const cf = cacheFilePath(projectRoot, file, opts);
-      await fsp.mkdir(path.dirname(cf), { recursive: true });
-      await fsp.writeFile(
-        cf,
-        JSON.stringify({ version: PARSED_CACHE_VERSION, sig, mod }),
-        "utf8",
-      );
+      const db = getDiskCacheDatabase(projectRoot, opts);
+      db.prepare(
+        `INSERT INTO module_cache (file, sig, version, payload, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(file) DO UPDATE SET
+           sig = excluded.sig,
+           version = excluded.version,
+           payload = excluded.payload,
+           updated_at = excluded.updated_at`,
+      ).run(file, sig, PARSED_CACHE_VERSION, JSON.stringify(mod), Date.now());
     } catch {}
   }
 }
