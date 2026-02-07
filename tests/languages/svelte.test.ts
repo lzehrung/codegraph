@@ -34,6 +34,10 @@ const definition: LanguageTestDefinition = {
         from: "inline-script.svelte",
         to: { type: "file", path: "logic.ts" },
       },
+      {
+        from: "reactive.svelte",
+        to: { type: "file", path: "logic.ts" },
+      },
     ],
   },
 };
