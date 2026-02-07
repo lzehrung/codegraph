@@ -5,6 +5,7 @@ import fg from "fast-glob";
 import Parser from "tree-sitter";
 import crypto from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { createRequire } from "node:module";
 import {
   supportForFile,
   getCompiledQueries,
@@ -188,6 +189,8 @@ export type BuildOptions = {
   incrementalStrict?: boolean;
   /** Optional build report data for observability */
   report?: BuildReport;
+  /** Max parsed AST entries retained in memory (LRU-style), default 1024 */
+  parsedCacheMaxEntries?: number;
   /** Log level for build warnings (default: "warn") */
   logLevel?: "error" | "warn" | "info" | "debug" | "silent";
   /** Keep parsed trees in memory (default: false). Set to true for faster subsequent lookups at the cost of memory. */
@@ -545,6 +548,62 @@ type ModuleCacheEntry = {
 };
 const memoryCache = new Map<string, ModuleCacheEntry>();
 
+type BetterSqliteDatabase = import("better-sqlite3").Database;
+
+const loadBetterSqlite3 = () => {
+  const require = createRequire(import.meta.url);
+  return require("better-sqlite3") as typeof import("better-sqlite3");
+};
+
+const diskCacheDatabases = new Map<string, BetterSqliteDatabase>();
+
+function diskCacheDatabasePath(projectRoot: string, opts?: BuildOptions): string {
+  return normalizePath(
+    path.join(cacheRoot(projectRoot, opts), "index-cache.sqlite"),
+  );
+}
+
+function getDiskCacheDatabase(
+  projectRoot: string,
+  opts?: BuildOptions,
+): BetterSqliteDatabase {
+  const dbPath = diskCacheDatabasePath(projectRoot, opts);
+  const existing = diskCacheDatabases.get(dbPath);
+  if (existing) return existing;
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  const BetterSqlite3 = loadBetterSqlite3();
+  const db = new BetterSqlite3(dbPath);
+  db.pragma("journal_mode = WAL");
+  db.pragma("synchronous = NORMAL");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS module_cache (
+      file TEXT PRIMARY KEY,
+      sig TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      payload TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_module_cache_sig ON module_cache(sig);
+  `);
+  diskCacheDatabases.set(dbPath, db);
+  return db;
+}
+
+function closeDiskCacheDatabase(projectRoot: string, opts?: BuildOptions): void {
+  const dbPath = diskCacheDatabasePath(projectRoot, opts);
+  const db = diskCacheDatabases.get(dbPath);
+  if (!db) return;
+  try {
+    db.pragma("wal_checkpoint(TRUNCATE)");
+  } catch {}
+  try {
+    db.close();
+    diskCacheDatabases.delete(dbPath);
+  } catch {
+    // If close fails, keep the handle in the map so a later attempt can retry.
+  }
+}
+
 const MANIFEST_VERSION = 1;
 
 type ManifestFileEntry = GraphCacheEntry;
@@ -781,19 +840,6 @@ async function buildBloomFilterForFile(
   }
 }
 
-function cacheFilePath(
-  projectRoot: string,
-  file: string,
-  opts?: BuildOptions,
-): string {
-  const root = cacheRoot(projectRoot, opts);
-  const hash = crypto
-    .createHash("sha1")
-    .update(file.replace(/\\/g, "/"))
-    .digest("hex");
-  return path.join(root, `${hash}.json`);
-}
-
 function isModuleIndex(value: unknown): value is ModuleIndex {
   if (!value || typeof value !== "object") return false;
   const mod = value as {
@@ -845,12 +891,20 @@ async function tryLoadFromCache(
   }
   if (mode === "disk") {
     try {
-      const cf = cacheFilePath(projectRoot, file, opts);
-      const raw = await fsp.readFile(cf, "utf8");
-      const parsed = JSON.parse(raw) as unknown;
-      if (isModuleCacheEntry(parsed) && parsed.sig === sig) {
-        if (cacheEnabled && cacheReport) cacheReport.hits += 1;
-        return parsed.mod;
+      const db = getDiskCacheDatabase(projectRoot, opts);
+      const row = db
+        .prepare(
+          "SELECT sig, version, payload FROM module_cache WHERE file = ?",
+        )
+        .get(file) as
+        | { sig: string; version: number; payload: string }
+        | undefined;
+      if (row && row.sig === sig && row.version === PARSED_CACHE_VERSION) {
+        const parsed = JSON.parse(row.payload) as unknown;
+        if (isModuleIndex(parsed)) {
+          if (cacheEnabled && cacheReport) cacheReport.hits += 1;
+          return parsed;
+        }
       }
     } catch {}
     if (cacheEnabled && cacheReport) cacheReport.misses += 1;
@@ -870,13 +924,16 @@ async function writeToCache(
     memoryCache.set(file, { version: PARSED_CACHE_VERSION, sig, mod });
   } else if (mode === "disk") {
     try {
-      const cf = cacheFilePath(projectRoot, file, opts);
-      await fsp.mkdir(path.dirname(cf), { recursive: true });
-      await fsp.writeFile(
-        cf,
-        JSON.stringify({ version: PARSED_CACHE_VERSION, sig, mod }),
-        "utf8",
-      );
+      const db = getDiskCacheDatabase(projectRoot, opts);
+      db.prepare(
+        `INSERT INTO module_cache (file, sig, version, payload, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(file) DO UPDATE SET
+           sig = excluded.sig,
+           version = excluded.version,
+           payload = excluded.payload,
+           updated_at = excluded.updated_at`,
+      ).run(file, sig, PARSED_CACHE_VERSION, JSON.stringify(mod), Date.now());
     } catch {}
   }
 }
@@ -1297,6 +1354,34 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
+  const mergeTypeScriptNamespaceDeclarations = (items: SymbolDef[]): SymbolDef[] => {
+    if (support.id !== "ts" && support.id !== "tsx") return items;
+    const byName = new Map<string, SymbolDef[]>();
+    for (const item of items) {
+      const group = byName.get(item.localName);
+      if (group) group.push(item);
+      else byName.set(item.localName, [item]);
+    }
+    const out: SymbolDef[] = [];
+    const rank = (k: SymbolKind): number => {
+      if (k === SymbolKind.Class) return 5;
+      if (k === SymbolKind.Interface) return 4;
+      if (k === SymbolKind.TypeAlias) return 3;
+      if (k === SymbolKind.Function) return 2;
+      return 1;
+    };
+    for (const group of byName.values()) {
+      if (group.length === 1) {
+        out.push(group[0]!);
+        continue;
+      }
+      const sorted = [...group].sort((a, b) => rank(b.kind) - rank(a.kind));
+      out.push(sorted[0]!);
+    }
+    return out;
+  };
+  const mergedLocals = mergeTypeScriptNamespaceDeclarations(locals);
+
   const exports: ExportEntry[] = [];
   const pythonAllExports = new Set<string>();
   let hasPythonAll = false;
@@ -1326,7 +1411,7 @@ export function collectLocalsAndExportsFromSource(
             for (const it of items) {
               const name = unquote(sliceText(it.node, source));
               pythonAllExports.add(name);
-              const local = locals.find((d) => d.localName === name);
+              const local = mergedLocals.find((d) => d.localName === name);
               if (
                 local &&
                 !exports.some(
@@ -1355,7 +1440,7 @@ export function collectLocalsAndExportsFromSource(
                 for (let sm; (sm = strRe.exec(stmtText)); ) {
                   const name = sm[1]!;
                   pythonAllExports.add(name);
-                  const local = locals.find((d) => d.localName === name);
+                  const local = mergedLocals.find((d) => d.localName === name);
                   if (
                     local &&
                     !exports.some(
@@ -2542,17 +2627,17 @@ async function buildIndexFromFileListShared(
       }
 
       const parsed = await parseFile(f);
-      // parsed.sup is guaranteed to be defined because parseFile throws otherwise,
-      // but the type signature of parseFile might still include undefined in `sup` field due to supportForFile signature.
-      // We explicitly cast to ensure compatibility with parsedMap which expects LanguageSupport.
-      if (parsed.sup) {
-        parsedMap.set(f, {
+      setParsedCacheEntry(
+        parsedMap,
+        f,
+        {
           source: parsed.source,
           tree: parsed.tree,
           sup: parsed.sup,
-          lang: parsed.lang
-        });
-      }
+          lang: parsed.lang,
+        },
+        Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
+      );
       const { source: src, sup, lang, tree } = parsed;
 
       if (bloomFilterCache) {
@@ -2743,8 +2828,15 @@ async function buildIndexFromFileListShared(
   const projectFiles = await discoverProjectFiles(projectRoot);
 
   const keepParsed = opts?.keepParsed ?? false;
+  const maxParsedEntries = Math.max(1, opts?.parsedCacheMaxEntries ?? 1024);
   if (!keepParsed) {
     parsedMap.clear();
+  } else {
+    while (parsedMap.size > maxParsedEntries) {
+      const oldest = parsedMap.keys().next().value as string | undefined;
+      if (!oldest) break;
+      parsedMap.delete(oldest);
+    }
   }
 
   return {
@@ -2763,11 +2855,15 @@ export async function buildProjectIndex(
   projectRoot: string,
   opts?: BuildOptions,
 ): Promise<ProjectIndex> {
-  const files = await listProjectFiles(projectRoot);
-  return buildIndexFromFileListShared(projectRoot, files, opts, {
-    manifestMode: "read-write",
-    warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,
-  });
+  try {
+    const files = await listProjectFiles(projectRoot);
+    return buildIndexFromFileListShared(projectRoot, files, opts, {
+      manifestMode: "read-write",
+      warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,
+    });
+  } finally {
+    if ((opts?.cache ?? "off") === "disk") closeDiskCacheDatabase(projectRoot, opts);
+  }
 }
 
 export async function buildProjectIndexFromFiles(
@@ -2775,10 +2871,14 @@ export async function buildProjectIndexFromFiles(
   inputFiles: string[],
   opts?: BuildOptions,
 ): Promise<ProjectIndex> {
-  return buildIndexFromFileListShared(projectRoot, inputFiles, opts, {
-    manifestMode: "read-only",
-    warnNoFilesMessage: `Warning: No files provided for indexing in ${projectRoot}`,
-  });
+  try {
+    return buildIndexFromFileListShared(projectRoot, inputFiles, opts, {
+      manifestMode: "read-only",
+      warnNoFilesMessage: `Warning: No files provided for indexing in ${projectRoot}`,
+    });
+  } finally {
+    if ((opts?.cache ?? "off") === "disk") closeDiskCacheDatabase(projectRoot, opts);
+  }
 }
 
 export async function buildProjectIndexIncremental(
@@ -2790,6 +2890,7 @@ export async function buildProjectIndexIncremental(
   const totalStart = performance.now();
   const cacheMode = opts?.cache ?? "off";
   const cacheEnabled = cacheMode !== "off";
+  try {
   const onFallbackImportExtraction = createFallbackImportExtractionHandler(
     report,
     opts,
@@ -3018,7 +3119,12 @@ export async function buildProjectIndexIncremental(
         }
 
         const parsed = await parseFile(f);
-        parsedMap.set(f, parsed);
+        setParsedCacheEntry(
+          parsedMap,
+          f,
+          parsed,
+          Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
+        );
         const { source: src, sup, lang, tree } = parsed;
 
         // Build bloom filter for this file if enabled
@@ -3220,8 +3326,15 @@ export async function buildProjectIndexIncremental(
   const projectFiles = await discoverProjectFiles(projectRoot);
 
   const keepParsed = opts?.keepParsed ?? false;
+  const maxParsedEntries = Math.max(1, opts?.parsedCacheMaxEntries ?? 1024);
   if (!keepParsed) {
     parsedMap.clear();
+  } else {
+    while (parsedMap.size > maxParsedEntries) {
+      const oldest = parsedMap.keys().next().value as string | undefined;
+      if (!oldest) break;
+      parsedMap.delete(oldest);
+    }
   }
 
   return {
@@ -3234,6 +3347,9 @@ export async function buildProjectIndexIncremental(
     ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
     projectFiles,
   };
+  } finally {
+    if (cacheMode === "disk") closeDiskCacheDatabase(projectRoot, opts);
+  }
 }
 
 export async function buildGraphDelta(
@@ -3370,6 +3486,24 @@ function cacheKey(file: FileId, name: string) {
   return `${file}::${name}`;
 }
 
+function setParsedCacheEntry(
+  parsedMap: Map<
+    string,
+    { source: string; tree: Parser.Tree; sup: LanguageSupport; lang: Parser.Language }
+  >,
+  file: string,
+  entry: { source: string; tree: Parser.Tree; sup: LanguageSupport; lang: Parser.Language },
+  maxEntries: number,
+): void {
+  if (parsedMap.has(file)) parsedMap.delete(file);
+  parsedMap.set(file, entry);
+  while (parsedMap.size > maxEntries) {
+    const oldest = parsedMap.keys().next().value as string | undefined;
+    if (!oldest) break;
+    parsedMap.delete(oldest);
+  }
+}
+
 export function resolveExport(
   index: ProjectIndex,
   file: FileId,
@@ -3444,6 +3578,23 @@ export function resolveExport(
   return _resolve(file, exportedName);
 }
 
+const goPackageNameCache = new Map<FileId, string | null>();
+
+function readGoPackageName(filePath: string): string | null {
+  const cached = goPackageNameCache.get(filePath);
+  if (cached !== undefined) return cached;
+  try {
+    const src = fs.readFileSync(filePath, "utf8");
+    const match = src.match(/^\s*package\s+([A-Za-z_][A-Za-z0-9_]*)/m);
+    const pkg = match?.[1] ?? null;
+    goPackageNameCache.set(filePath, pkg);
+    return pkg;
+  } catch {
+    goPackageNameCache.set(filePath, null);
+    return null;
+  }
+}
+
 function resolveGoPackageExport(
   index: ProjectIndex,
   file: FileId,
@@ -3453,8 +3604,10 @@ function resolveGoPackageExport(
     const sup = supportForFile(file);
     if (!sup || sup.id !== "go") return null;
     const baseDir = path.dirname(file);
+    const sourcePackage = readGoPackageName(file);
     for (const [filePath, mod] of index.byFile) {
       if (path.dirname(filePath) !== baseDir) continue;
+      if (sourcePackage && readGoPackageName(filePath) !== sourcePackage) continue;
       for (const e of mod.exports) {
         if (e.type === "local" && e.exportedAs === exportedName) {
           return e.target;
@@ -3664,14 +3817,13 @@ export async function goToDefinition(
       sup.id === "python" ? "attribute" : "",
     ]);
 
-    const isId = sup.nodeTypes.identifier.includes(node.type);
-
     const resolveExpression = async (
       expr: Parser.SyntaxNode,
     ): Promise<ResolvedExport | null> => {
       const exprName = sliceText(expr, source);
+      const exprIsId = sup.nodeTypes.identifier.includes(expr.type);
       if (
-        isId ||
+        exprIsId ||
         expr.type === "identifier" ||
         expr.type === "type_identifier" ||
         expr.type === "constant"

@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import fsp from 'node:fs/promises';
 import fs from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import {
   buildProjectIndex,
@@ -23,10 +23,27 @@ function normalize(p: string): string {
   return p.replace(/\\/g, '/');
 }
 
-function cacheFileFor(root: string, file: string): string {
-  const normalized = normalize(file);
-  const hash = createHash('sha1').update(normalized).digest('hex');
-  return path.join(root, '.codegraph-cache', 'index-v1', `${hash}.json`);
+function diskCacheDbPathFor(root: string): string {
+  return path.join(root, '.codegraph-cache', 'index-v1', 'index-cache.sqlite');
+}
+
+function loadBetterSqlite3() {
+  const require = createRequire(import.meta.url);
+  return require('better-sqlite3') as typeof import('better-sqlite3');
+}
+
+function readModuleCacheUpdatedAt(root: string, file: string): number | null {
+  const dbPath = diskCacheDbPathFor(root);
+  const BetterSqlite3 = loadBetterSqlite3();
+  const db = new BetterSqlite3(dbPath, { readonly: true });
+  try {
+    const row = db
+      .prepare('SELECT updated_at FROM module_cache WHERE file = ?')
+      .get(file) as { updated_at: number } | undefined;
+    return row?.updated_at ?? null;
+  } finally {
+    db.close();
+  }
 }
 
 async function readManifest(root: string) {
@@ -94,28 +111,33 @@ describe('Cache invalidation and strict hashing', () => {
     await fsp.writeFile(filePath, `export const a = 1;\n`, 'utf8');
 
     await buildProjectIndex(root, { threads: 2, cache: 'disk' });
-    const cacheFile = cacheFileFor(root, filePath);
-    expect(fs.existsSync(cacheFile)).toBe(true);
-
-    const before = await fsp.stat(cacheFile);
+    const fileId = normalize(path.resolve(filePath));
+    const dbPath = diskCacheDbPathFor(root);
+    expect(fs.existsSync(dbPath)).toBe(true);
+    const beforeUpdatedAt = readModuleCacheUpdatedAt(root, fileId);
+    if (beforeUpdatedAt === null) throw new Error('missing disk cache row');
     const idxNoChange = await buildProjectIndexIncremental(root, {
       threads: 2,
       cache: 'disk',
     });
-    const after = await fsp.stat(cacheFile);
-    expect(after.mtimeMs).toBe(before.mtimeMs);
-    const modA = idxNoChange.byFile.get(normalize(filePath))!;
+    const afterUpdatedAt = readModuleCacheUpdatedAt(root, fileId);
+    expect(afterUpdatedAt).toBe(beforeUpdatedAt);
+    const modA = idxNoChange.byFile.get(fileId)!;
     expect(modA.locals.some((l) => l.localName === 'a')).toBe(true);
 
     await fsp.writeFile(filePath, `export const b = 2;\n`, 'utf8');
-    const beforeChange = await fsp.stat(cacheFile);
+    const beforeChangeUpdatedAt = readModuleCacheUpdatedAt(root, fileId);
+    if (beforeChangeUpdatedAt === null)
+      throw new Error('missing disk cache row before change');
     const idxChanged = await buildProjectIndexIncremental(root, {
       threads: 2,
       cache: 'disk',
     });
-    const afterChange = await fsp.stat(cacheFile);
-    expect(afterChange.mtimeMs).toBeGreaterThan(beforeChange.mtimeMs);
-    const modB = idxChanged.byFile.get(normalize(filePath))!;
+    const afterChangeUpdatedAt = readModuleCacheUpdatedAt(root, fileId);
+    if (afterChangeUpdatedAt === null)
+      throw new Error('missing disk cache row after change');
+    expect(afterChangeUpdatedAt).toBeGreaterThan(beforeChangeUpdatedAt);
+    const modB = idxChanged.byFile.get(fileId)!;
     expect(modB.locals.some((l) => l.localName === 'b')).toBe(true);
 
     await buildProjectIndexIncremental(root, {

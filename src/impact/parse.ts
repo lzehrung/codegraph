@@ -2,11 +2,21 @@ import readline from "node:readline";
 import { Readable } from "node:stream";
 import type { Diff, FileChange, Hunk } from "./types.js";
 
+type ParsedFileChange = FileChange & {
+  _hasNewFileMode?: boolean;
+  _hasDeletedFileMode?: boolean;
+  _fromPath?: string;
+  _toPath?: string;
+  _oldPathFromHeader?: string;
+  _newPathFromHeader?: string;
+};
+
+
 export function parseUnifiedDiff(diffText: string): Diff {
   const files: FileChange[] = [];
   const lines = diffText.split(/\r?\n/);
 
-  let currentFile: any = null;
+  let currentFile: ParsedFileChange | null = null;
   let currentHunk: Hunk | null = null;
 
   for (const line of lines) {
@@ -64,7 +74,7 @@ export async function parseUnifiedDiffStreaming(
   });
 
   const files: FileChange[] = [];
-  let currentFile: any = null;
+  let currentFile: ParsedFileChange | null = null;
   let currentHunk: Hunk | null = null;
 
   for await (const line of rl) {
@@ -113,7 +123,7 @@ export async function parseUnifiedDiffStreaming(
   return { files };
 }
 
-function initiateFile(line: string) {
+function initiateFile(line: string): ParsedFileChange | null {
   const match = line.match(/^diff --git a\/(.+) b\/(.+)$/);
   if (!match) return null;
   return {
@@ -126,7 +136,7 @@ function initiateFile(line: string) {
   };
 }
 
-function initiateHunk(line: string) {
+function initiateHunk(line: string): Hunk | null {
   const match = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
   if (!match) return null;
   return {
@@ -136,16 +146,16 @@ function initiateHunk(line: string) {
   };
 }
 
-function finalizeFile(file: any) {
+function finalizeFile(file: ParsedFileChange): void {
   if (file._hasNewFileMode || file._fromPath === "/dev/null") {
     file.kind = "added";
-    file.path = file._newPathFromHeader;
+    file.path = file._newPathFromHeader ?? file.path;
   } else if (file._hasDeletedFileMode || file._toPath === "/dev/null") {
     file.kind = "deleted";
-    file.path = file._oldPathFromHeader;
-  } else if (file._oldPathFromHeader !== file._newPathFromHeader) {
+    file.path = file._oldPathFromHeader ?? file.path;
+  } else if (file._oldPathFromHeader && file._newPathFromHeader && file._oldPathFromHeader !== file._newPathFromHeader) {
     file.kind = "renamed";
-    file.path = file._newPathFromHeader;
+    file.path = file._newPathFromHeader ?? file.path;
     file.oldPath = file._oldPathFromHeader;
   }
   // Cleanup internal properties
