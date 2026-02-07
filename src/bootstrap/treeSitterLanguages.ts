@@ -2,44 +2,36 @@ import {
   makeLanguageConfig,
   type LanguageConfig,
 } from "../chunking/languageConfig.js";
-import { JAVASCRIPT_DEF } from "../languages/definitions/javascript.js";
-import { PYTHON_DEF } from "../languages/definitions/python.js";
-import {
-  TYPESCRIPT_DEF,
-  TSX_DEF,
-} from "../languages/definitions/typescript.js";
-import { HTML_DEF } from "../languages/definitions/html.js";
-import { CSS_DEF } from "../languages/definitions/css.js";
-import { SCSS_DEF } from "../languages/definitions/scss.js";
-import { LESS_DEF } from "../languages/definitions/less.js";
-import { RUBY_DEF } from "../languages/definitions/ruby.js";
-import { GO_DEF } from "../languages/definitions/go.js";
-import { JAVA_DEF } from "../languages/definitions/java.js";
-import { CSHARP_DEF } from "../languages/definitions/csharp.js";
-import { RUST_DEF } from "../languages/definitions/rust.js";
-import { C_DEF } from "../languages/definitions/c.js";
-import { CPP_DEF } from "../languages/definitions/cpp.js";
-import { KOTLIN_DEF } from "../languages/definitions/kotlin.js";
-import { SWIFT_DEF } from "../languages/definitions/swift.js";
+import { getLanguageById, getAllLanguages } from "../languages/registry.js";
+import "../languages/all.js";
 
 export type { LanguageConfig };
 
-export const LANG_CONFIGS: Record<string, LanguageConfig> = {
-  javascript: makeLanguageConfig(JAVASCRIPT_DEF),
-  typescript: makeLanguageConfig(TYPESCRIPT_DEF),
-  tsx: makeLanguageConfig(TSX_DEF),
-  python: makeLanguageConfig(PYTHON_DEF),
-  html: makeLanguageConfig(HTML_DEF),
-  css: makeLanguageConfig(CSS_DEF),
-  scss: makeLanguageConfig(SCSS_DEF),
-  less: makeLanguageConfig(LESS_DEF),
-  ruby: makeLanguageConfig(RUBY_DEF),
-  go: makeLanguageConfig(GO_DEF),
-  java: makeLanguageConfig(JAVA_DEF),
-  csharp: makeLanguageConfig(CSHARP_DEF),
-  rust: makeLanguageConfig(RUST_DEF),
-  c: makeLanguageConfig(C_DEF),
-  cpp: makeLanguageConfig(CPP_DEF),
-  kotlin: makeLanguageConfig(KOTLIN_DEF),
-  swift: makeLanguageConfig(SWIFT_DEF),
+const idToConfigKey: Record<string, string> = {
+  js: "javascript",
+  ts: "typescript",
+  tsx: "tsx",
+  python: "python",
+  html: "html",
+  css: "css",
+  scss: "scss",
+  less: "less",
+  ruby: "ruby",
+  go: "go",
+  java: "java",
+  csharp: "csharp",
+  rust: "rust",
+  c: "c",
+  cpp: "cpp",
+  kotlin: "kotlin",
+  swift: "swift",
 };
+
+export const LANG_CONFIGS: Record<string, LanguageConfig> = {};
+
+for (const lang of getAllLanguages()) {
+  const key = idToConfigKey[lang.id] || lang.id;
+  // Skip languages that are not used for direct semantic chunking
+  if (lang.id === "vue" || lang.id === "svelte") continue;
+  LANG_CONFIGS[key] = makeLanguageConfig(lang);
+}

@@ -1,13 +1,12 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
-
-const LangSCSS = loadTreeSitterLanguage("tree-sitter-scss");
+import { registerLanguage } from "../registry.js";
 
 export const SCSS_DEF: LanguageDefinition = {
   id: "scss",
   extensions: [".scss"],
-  grammar: () => LangSCSS,
+  grammar: () => loadTreeSitterLanguage("tree-sitter-scss"),
   structure: {
     blocks: [
       { type: "rule_set", captureId: "rule" },
@@ -47,3 +46,4 @@ export const SCSS_DEF: LanguageDefinition = {
     identifier: ["name", "variable", "class_name", "id_name"],
   },
 };
+registerLanguage(SCSS_DEF);

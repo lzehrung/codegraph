@@ -1,8 +1,7 @@
 import type { Language, SyntaxNode } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
-
-const LangC = loadTreeSitterLanguage("tree-sitter-c");
+import { registerLanguage } from "../registry.js";
 
 const FUNCTION_NAME_QUERY = `
   declarator: [
@@ -101,7 +100,7 @@ const isFunctionDeclarator = (node: SyntaxNode): boolean => {
 export const C_DEF: LanguageDefinition = {
   id: "c",
   extensions: [".c", ".h", ".i"],
-  grammar: () => LangC,
+  grammar: () => loadTreeSitterLanguage("tree-sitter-c"),
   structure: {
     blocks: [
       {
@@ -254,3 +253,4 @@ export const C_DEF: LanguageDefinition = {
   createsBlockScope: (node) => node.type === "compound_statement",
   supportsCrossModuleSymbols: true,
 };
+registerLanguage(C_DEF);

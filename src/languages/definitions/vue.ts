@@ -1,13 +1,12 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
-
-const LangVue = loadTreeSitterLanguage("tree-sitter-vue");
+import { registerLanguage } from "../registry.js";
 
 export const VUE_DEF: LanguageDefinition = {
   id: "vue",
   extensions: [".vue"],
-  grammar: () => LangVue,
+  grammar: () => loadTreeSitterLanguage("tree-sitter-vue"),
   structure: {
     blocks: [
       { type: "template_element", captureId: "template" },
@@ -31,3 +30,4 @@ export const VUE_DEF: LanguageDefinition = {
     identifier: ["attribute_value"],
   },
 };
+registerLanguage(VUE_DEF);

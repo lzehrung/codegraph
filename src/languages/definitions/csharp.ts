@@ -1,13 +1,12 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
-
-const LangCSharp = loadTreeSitterLanguage("tree-sitter-c-sharp");
+import { registerLanguage } from "../registry.js";
 
 export const CSHARP_DEF: LanguageDefinition = {
   id: "csharp",
   extensions: [".cs"],
-  grammar: () => LangCSharp,
+  grammar: () => loadTreeSitterLanguage("tree-sitter-c-sharp"),
   structure: {
     blocks: [
       {
@@ -96,3 +95,4 @@ export const CSHARP_DEF: LanguageDefinition = {
     return false;
   },
 };
+registerLanguage(CSHARP_DEF);
