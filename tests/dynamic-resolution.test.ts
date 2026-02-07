@@ -35,7 +35,9 @@ describe("Dynamic resolution heuristics", () => {
       (edge) =>
         edge.from.endsWith("/main.js") &&
         edge.to.type === "file" &&
-        edge.to.path.endsWith("/utils.js"),
+        edge.to.path.endsWith("/utils.js") &&
+        edge.resolved === "heuristic" &&
+        edge.confidence === 0.7,
     );
     expect(hasEdge).toBe(true);
   });

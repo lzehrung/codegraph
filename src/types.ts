@@ -11,6 +11,8 @@ export type Edge = {
   to: EdgeTo;
   raw: string;
   typeOnly?: boolean;
+  resolved?: "heuristic" | "precise";
+  confidence?: number;
 };
 
 export type Graph = { nodes: Set<FileId>; edges: Edge[] };

@@ -1,8 +1,7 @@
 import type { Language, SyntaxNode } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
-
-const LangCpp = loadTreeSitterLanguage("tree-sitter-cpp");
+import { registerLanguage } from "../registry.js";
 
 const FUNCTION_NAME_QUERY = `
   declarator: [
@@ -120,7 +119,7 @@ export const CPP_DEF: LanguageDefinition = {
     ".tpp",
     ".inl",
   ],
-  grammar: () => LangCpp,
+  grammar: () => loadTreeSitterLanguage("tree-sitter-cpp"),
   structure: {
     blocks: [
       {
@@ -290,3 +289,4 @@ export const CPP_DEF: LanguageDefinition = {
   createsBlockScope: (node) => node.type === "compound_statement",
   supportsCrossModuleSymbols: true,
 };
+registerLanguage(CPP_DEF);

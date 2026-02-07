@@ -1,12 +1,11 @@
 import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
-
-const LangRust = loadTreeSitterLanguage("tree-sitter-rust");
+import { registerLanguage } from "../registry.js";
 
 export const RUST_DEF: LanguageDefinition = {
   id: "rust",
   extensions: [".rs"],
-  grammar: () => LangRust,
+  grammar: () => loadTreeSitterLanguage("tree-sitter-rust"),
   structure: {
     blocks: [
       {
@@ -108,3 +107,4 @@ export const RUST_DEF: LanguageDefinition = {
     return false;
   },
 };
+registerLanguage(RUST_DEF);

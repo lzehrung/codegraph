@@ -1,13 +1,12 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
-
-const LangHTML = loadTreeSitterLanguage("tree-sitter-html");
+import { registerLanguage } from "../registry.js";
 
 export const HTML_DEF: LanguageDefinition = {
   id: "html",
   extensions: [".html", ".htm"],
-  grammar: () => LangHTML,
+  grammar: () => loadTreeSitterLanguage("tree-sitter-html"),
   structure: {
     blocks: [
       {
@@ -41,3 +40,4 @@ export const HTML_DEF: LanguageDefinition = {
     identifier: ["attribute_value", "tag_name"],
   },
 };
+registerLanguage(HTML_DEF);

@@ -1,13 +1,12 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
-
-const LangKotlin = loadTreeSitterLanguage("tree-sitter-kotlin");
+import { registerLanguage } from "../registry.js";
 
 export const KOTLIN_DEF: LanguageDefinition = {
   id: "kotlin",
   extensions: [".kt", ".kts"],
-  grammar: () => LangKotlin,
+  grammar: () => loadTreeSitterLanguage("tree-sitter-kotlin"),
   structure: {
     blocks: [
       {
@@ -140,3 +139,4 @@ export const KOTLIN_DEF: LanguageDefinition = {
     node.type === "finally_block",
   supportsCrossModuleSymbols: true,
 };
+registerLanguage(KOTLIN_DEF);

@@ -1,13 +1,12 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
-
-const LangCSS = loadTreeSitterLanguage("tree-sitter-css");
+import { registerLanguage } from "../registry.js";
 
 export const LESS_DEF: LanguageDefinition = {
   id: "less",
   extensions: [".less"],
-  grammar: () => LangCSS,
+  grammar: () => loadTreeSitterLanguage("tree-sitter-css"),
   structure: {
     blocks: [
       { type: "rule_set", captureId: "rule" },
@@ -34,3 +33,4 @@ export const LESS_DEF: LanguageDefinition = {
     identifier: ["class_name", "id_name"],
   },
 };
+registerLanguage(LESS_DEF);

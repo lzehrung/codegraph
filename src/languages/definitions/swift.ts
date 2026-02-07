@@ -1,13 +1,12 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
-
-const LangSwift = loadTreeSitterLanguage("tree-sitter-swift");
+import { registerLanguage } from "../registry.js";
 
 export const SWIFT_DEF: LanguageDefinition = {
   id: "swift",
   extensions: [".swift"],
-  grammar: () => LangSwift,
+  grammar: () => loadTreeSitterLanguage("tree-sitter-swift"),
   structure: {
     blocks: [
       {
@@ -167,3 +166,4 @@ export const SWIFT_DEF: LanguageDefinition = {
     node.type === "willset_didset_block",
   supportsCrossModuleSymbols: true,
 };
+registerLanguage(SWIFT_DEF);
