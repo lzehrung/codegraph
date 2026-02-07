@@ -1,8 +1,7 @@
 import type { SyntaxNode } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
 import { loadTypeScriptGrammars } from "./loadLanguage.js";
-
-const { typescript: LangTS, tsx: LangTSX } = loadTypeScriptGrammars();
+import { registerLanguage } from "../registry.js";
 
 const BASE_STRUCTURE = {
   blocks: [
@@ -202,17 +201,18 @@ const BASE_HELPERS = {
 export const TYPESCRIPT_DEF: LanguageDefinition = {
   id: "ts",
   extensions: [".ts", ".mts", ".cts"],
-  grammar: () => LangTS,
+  grammar: () => loadTypeScriptGrammars().typescript,
   structure: BASE_STRUCTURE,
   graph: BASE_GRAPH,
   ...BASE_HELPERS,
   isTypeOnly: (stmtText: string) => /\b(import|export)\s+type\b/.test(stmtText),
 };
+registerLanguage(TYPESCRIPT_DEF);
 
 export const TSX_DEF: LanguageDefinition = {
   id: "tsx",
   extensions: [".tsx"],
-  grammar: () => LangTSX,
+  grammar: () => loadTypeScriptGrammars().tsx,
   structure: {
     ...BASE_STRUCTURE,
     blocks: [
@@ -225,3 +225,4 @@ export const TSX_DEF: LanguageDefinition = {
   ...BASE_HELPERS,
   isTypeOnly: (stmtText: string) => /\b(import|export)\s+type\b/.test(stmtText),
 };
+registerLanguage(TSX_DEF);

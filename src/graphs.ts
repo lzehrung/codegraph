@@ -18,6 +18,7 @@ import {
   acquireParser,
   releaseParser,
   mapLimit,
+  type ModuleSpecifier,
 } from "./util.js";
 // Intentionally compile only the imports query locally to avoid compiling
 // unrelated queries (which may differ per grammar) and causing warnings.
@@ -69,8 +70,8 @@ export function collectModuleSpecifiersFromSource(
     fastRegexDisabledLanguages?: string[];
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
   },
-): { spec: string; typeOnly?: boolean }[] {
-  const out: { spec: string; typeOnly?: boolean }[] = [];
+): ModuleSpecifier[] {
+  const out: ModuleSpecifier[] = [];
   const fastRegexDisabled = opts?.fastRegexDisabledLanguages?.includes(
     support.id,
   );
@@ -309,7 +310,7 @@ export async function collectEdgesForFile(
       : { matchPath: undefined };
 
   const edges: Edge[] = [];
-  for (const { spec, typeOnly } of specs) {
+  for (const { spec, typeOnly, resolved, confidence } of specs) {
     let to: EdgeTo;
     if (sup.id === "python") {
       const relDotsMatch = spec.startsWith(".") ? spec.match(/^\.+/) : null;
@@ -392,6 +393,8 @@ export async function collectEdgesForFile(
       to,
       raw: spec,
       ...(typeOnly !== undefined && { typeOnly }),
+      ...(resolved !== undefined && { resolved }),
+      ...(confidence !== undefined && { confidence }),
     });
   }
   emitCacheEntry(edges);
@@ -988,6 +991,14 @@ export async function buildSymbolGraph(
 ): Promise<SymbolGraph> {
   const nodes = new Map<string, SymbolNode>();
   const edges: SymbolEdge[] = [];
+  const seenEdges = new Set<string>();
+
+  const addEdge = (from: string, to: string, label?: string) => {
+    const key = `${from}->${to}::${label ?? ""}`;
+    if (seenEdges.has(key)) return;
+    seenEdges.add(key);
+    edges.push(label ? { from, to, label } : { from, to });
+  };
 
   // Add definition nodes for all locals
   for (const [, mod] of index.byFile) {
@@ -1038,7 +1049,7 @@ export async function buildSymbolGraph(
             const def = exp.target;
             const toId = defNodeId(def);
             if (!nodes.has(toId)) nodes.set(toId, nodeForDef(def));
-            edges.push({ from: aliasId, to: toId, label: imp.imported });
+            addEdge(aliasId, toId, imp.imported);
           }
         }
       } else if (imp.kind === "default") {
@@ -1060,7 +1071,7 @@ export async function buildSymbolGraph(
             const def = exp.target;
             const toId = defNodeId(def);
             if (!nodes.has(toId)) nodes.set(toId, nodeForDef(def));
-            edges.push({ from: aliasId, to: toId, label: "default" });
+            addEdge(aliasId, toId, "default");
           }
         }
       } else if (imp.kind === "namespace") {
@@ -1080,11 +1091,7 @@ export async function buildSymbolGraph(
             const def = e.target;
             const toId = defNodeId(def);
             if (!nodes.has(toId)) nodes.set(toId, nodeForDef(def));
-            edges.push({
-              from: aliasId,
-              to: toId,
-              label: e.exportedAs,
-            });
+            addEdge(aliasId, toId, e.exportedAs);
           }
         }
       }

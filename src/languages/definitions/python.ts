@@ -1,13 +1,12 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
-
-const LangPY = loadTreeSitterLanguage("tree-sitter-python");
+import { registerLanguage } from "../registry.js";
 
 export const PYTHON_DEF: LanguageDefinition = {
   id: "python",
   extensions: [".py"],
-  grammar: () => LangPY,
+  grammar: () => loadTreeSitterLanguage("tree-sitter-python"),
   structure: {
     blocks: [
       {
@@ -115,3 +114,4 @@ export const PYTHON_DEF: LanguageDefinition = {
     n.type === "function_definition" || n.type === "lambda",
   supportsCrossModuleSymbols: true,
 };
+registerLanguage(PYTHON_DEF);

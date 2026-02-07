@@ -110,6 +110,8 @@ export type ImportBinding =
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
       mechanism?: "es" | "cjs" | "python";
+      resolvedType?: "heuristic" | "precise";
+      confidence?: number;
     }
   | {
       kind: "named";
@@ -119,6 +121,8 @@ export type ImportBinding =
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
       mechanism?: "es" | "cjs" | "python";
+      resolvedType?: "heuristic" | "precise";
+      confidence?: number;
     }
   | {
       kind: "namespace";
@@ -127,6 +131,8 @@ export type ImportBinding =
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
       mechanism?: "es" | "cjs" | "python";
+      resolvedType?: "heuristic" | "precise";
+      confidence?: number;
     }
   | {
       kind: "star";
@@ -134,6 +140,8 @@ export type ImportBinding =
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
       mechanism?: "es" | "cjs" | "python";
+      resolvedType?: "heuristic" | "precise";
+      confidence?: number;
     };
 
 export type ModuleIndex = {

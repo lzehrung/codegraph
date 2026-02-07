@@ -1,13 +1,12 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
-
-const LangJava = loadTreeSitterLanguage("tree-sitter-java");
+import { registerLanguage } from "../registry.js";
 
 export const JAVA_DEF: LanguageDefinition = {
   id: "java",
   extensions: [".java"],
-  grammar: () => LangJava,
+  grammar: () => loadTreeSitterLanguage("tree-sitter-java"),
   structure: {
     blocks: [
       {
@@ -100,3 +99,4 @@ export const JAVA_DEF: LanguageDefinition = {
     return false;
   },
 };
+registerLanguage(JAVA_DEF);

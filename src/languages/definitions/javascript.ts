@@ -1,13 +1,12 @@
 import type { Language } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
-
-const LangJS = loadTreeSitterLanguage("tree-sitter-javascript");
+import { registerLanguage } from "../registry.js";
 
 export const JAVASCRIPT_DEF: LanguageDefinition = {
   id: "js",
   extensions: [".js", ".jsx", ".mjs", ".cjs"],
-  grammar: () => LangJS,
+  grammar: () => loadTreeSitterLanguage("tree-sitter-javascript"),
   structure: {
     blocks: [
       {
@@ -208,3 +207,4 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
     n.type === "method_definition",
   supportsCrossModuleSymbols: true,
 };
+registerLanguage(JAVASCRIPT_DEF);

@@ -66,12 +66,12 @@ The codegraph library is a well-architected, high-performance code analysis tool
 
 #### 🟡 P2 Medium (1 remaining)
 
-- [ ] **Dynamic import confidence scores** - `src/graphs.ts:1337+` - Add `{ resolved: "heuristic", confidence: number }` to dynamic imports. **Effort: Medium**
+- [x] **Dynamic import confidence scores** - `src/graphs.ts:1337+` - Add `{ resolved: "heuristic", confidence: number }` to dynamic imports. **Effort: Medium**
 
 #### 🟢 P3 Low (2 remaining)
 
-- [ ] **Simplify language registration** - `src/languages/` - Use single registry pattern where definitions self-register. **Effort: Medium**
-- [ ] **Deduplicate symbol edges** - `src/graphs.ts:buildSymbolGraph` - Use `Set<string>` with edge keys during construction. **Effort: Low**
+- [x] **Simplify language registration** - `src/languages/` - Use single registry pattern where definitions self-register. **Effort: Medium**
+- [x] **Deduplicate symbol edges** - `src/graphs.ts:buildSymbolGraph` - Use `Set<string>` with edge keys during construction. **Effort: Low**
 
 ---
 

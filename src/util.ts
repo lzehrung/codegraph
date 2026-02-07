@@ -748,7 +748,12 @@ export function normalizeResolutionHints(hints?: string[]): string[] {
   return out;
 }
 
-export type ModuleSpecifier = { spec: string; typeOnly?: boolean };
+export type ModuleSpecifier = {
+  spec: string;
+  typeOnly?: boolean;
+  resolved?: "heuristic" | "precise";
+  confidence?: number;
+};
 
 export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
@@ -924,7 +929,7 @@ export function extractJsTsDynamicSpecifiers(
     const addSpec = (spec: string | null) => {
       if (!spec || seen.has(spec)) return;
       seen.add(spec);
-      out.push({ spec });
+      out.push({ spec, resolved: "heuristic", confidence: 0.7 });
     };
     const pathCallRe =
       /(?<!["'`])\b(?:require|import)\s*\(\s*(path\.(?:join|resolve)\s*\([^)]*\))\s*\)/g;

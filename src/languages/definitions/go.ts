@@ -1,12 +1,11 @@
 import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
-
-const LangGo = loadTreeSitterLanguage("tree-sitter-go");
+import { registerLanguage } from "../registry.js";
 
 export const GO_DEF: LanguageDefinition = {
   id: "go",
   extensions: [".go"],
-  grammar: () => LangGo,
+  grammar: () => loadTreeSitterLanguage("tree-sitter-go"),
   structure: {
     blocks: [
       {
@@ -96,3 +95,4 @@ export const GO_DEF: LanguageDefinition = {
     return false;
   },
 };
+registerLanguage(GO_DEF);
