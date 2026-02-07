@@ -39,7 +39,7 @@ export type LanguageSupport = {
     locals: string;
     importBindings: string;
   };
-  classifyDefinition: (nameNode: Parser.SyntaxNode) => any;
+  classifyDefinition: (nameNode: Parser.SyntaxNode) => string;
   isDeclarationName: (node: Parser.SyntaxNode) => boolean;
   createsBlockScope: (node: Parser.SyntaxNode) => boolean;
   createsFunctionScope: (node: Parser.SyntaxNode) => boolean;

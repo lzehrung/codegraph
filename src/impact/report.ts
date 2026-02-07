@@ -5,6 +5,7 @@ import type {
   FileChange,
   ChangedSymbol,
   ImpactItem,
+  ImpactReason,
   ImpactReport,
   CompactImpactReport,
   ImpactOptions,
@@ -253,9 +254,9 @@ function buildCompactReport(
       id: string;
       file: number;
       name: string;
-      kind: any;
+      kind: typeof cs.kind;
       exported: boolean;
-      range: any;
+      range: typeof cs.range;
       typeOnly?: boolean;
     } = {
       id: cs.id,
@@ -277,27 +278,20 @@ function buildCompactReport(
     const item: {
       file: number;
       symbols: string[];
-      reasons: any[];
+      reasons: ImpactReason[];
       severity: number;
       depth?: number;
       typeOnly?: boolean;
-      explain?: any;
+      explain?: NonNullable<ImpactItem["explain"]>;
     } = {
       file: fileIndex.get(ii.file)!,
       symbols: ii.symbols,
       reasons: ii.reasons,
       severity: ii.severity,
+      ...(ii.depth !== undefined ? { depth: ii.depth } : {}),
+      ...(ii.typeOnly !== undefined ? { typeOnly: ii.typeOnly } : {}),
+      ...(ii.explain !== undefined ? { explain: ii.explain } : {}),
     };
-
-    if (ii.depth !== undefined) {
-      item.depth = ii.depth;
-    }
-    if (ii.typeOnly !== undefined) {
-      item.typeOnly = ii.typeOnly;
-    }
-    if (ii.explain !== undefined) {
-      item.explain = ii.explain;
-    }
 
     return item;
   });

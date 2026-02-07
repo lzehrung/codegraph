@@ -8,6 +8,29 @@ async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
+function isRetryableRmError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  if (!("code" in err)) return false;
+  const code = err.code;
+  return code === "EBUSY" || code === "EPERM" || code === "ENOTEMPTY";
+}
+
+async function rmWithRetries(target: string): Promise<void> {
+  const delaysMs = [0, 10, 25, 50, 100, 250];
+  let lastErr: unknown;
+  for (const delay of delaysMs) {
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    try {
+      await fsp.rm(target, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (!isRetryableRmError(err)) throw err;
+    }
+  }
+  if (lastErr && !isRetryableRmError(lastErr)) throw lastErr;
+}
+
 describe("Bloom filter integration", () => {
   it("keeps references when symbols are imported with aliases", async () => {
     const root = await mkTmpDir("dg-bloom-alias-");
@@ -40,7 +63,7 @@ describe("Bloom filter integration", () => {
         expect(files).toContain(fileB.replace(/\\/g, "/"));
       }
     } finally {
-      await fsp.rm(root, { recursive: true, force: true });
+      await rmWithRetries(root);
     }
   });
 
@@ -72,7 +95,7 @@ describe("Bloom filter integration", () => {
         expect(index.bloomFilters.size()).toBeGreaterThan(0);
       }
     } finally {
-      await fsp.rm(root, { recursive: true, force: true });
+      await rmWithRetries(root);
     }
   });
 });

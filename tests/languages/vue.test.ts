@@ -34,6 +34,10 @@ const definition: LanguageTestDefinition = {
         from: "inline-script.vue",
         to: { type: "file", path: "logic.ts" },
       },
+      {
+        from: "script-setup.vue",
+        to: { type: "file", path: "logic.ts" },
+      },
     ],
   },
 };
