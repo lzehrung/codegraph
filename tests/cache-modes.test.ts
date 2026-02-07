@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
-import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
 import { buildProjectIndex } from '../src/index.js';
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -12,12 +12,33 @@ async function mkTmpDir(prefix: string): Promise<string> {
 
 describe('Incremental cache modes', () => {
   const normalize = (p: string) => p.replace(/\\/g, '/');
-  const cacheFilePathFor = (projectRoot: string, fileAbs: string): string => {
-    const hash = crypto
-      .createHash('sha1')
-      .update(normalize(fileAbs))
-      .digest('hex');
-    return path.join(projectRoot, '.codegraph-cache', 'index-v1', `${hash}.json`);
+  const diskCacheDbPathFor = (projectRoot: string): string =>
+    path.join(projectRoot, '.codegraph-cache', 'index-v1', 'index-cache.sqlite');
+
+  const loadBetterSqlite3 = () => {
+    const require = createRequire(import.meta.url);
+    return require('better-sqlite3') as typeof import('better-sqlite3');
+  };
+
+  const readDiskCacheRow = (
+    projectRoot: string,
+    file: string,
+  ): { sig: string; version: number; payload: string; updated_at: number } | null => {
+    const dbPath = diskCacheDbPathFor(projectRoot);
+    const BetterSqlite3 = loadBetterSqlite3();
+    const db = new BetterSqlite3(dbPath, { readonly: true });
+    try {
+      const row = db
+        .prepare(
+          'SELECT sig, version, payload, updated_at FROM module_cache WHERE file = ?',
+        )
+        .get(file) as
+        | { sig: string; version: number; payload: string; updated_at: number }
+        | undefined;
+      return row ?? null;
+    } finally {
+      db.close();
+    }
   };
 
   it('memory cache avoids recomputation on second run', async () => {
@@ -41,8 +62,8 @@ describe('Incremental cache modes', () => {
     expect(secondMod).toBe(firstMod);
 
     // Memory cache should not create per-file module cache files on disk.
-    const cacheFile = cacheFilePathFor(root, fileId);
-    expect(fs.existsSync(cacheFile)).toBe(false);
+    const dbPath = diskCacheDbPathFor(root);
+    expect(fs.existsSync(dbPath)).toBe(false);
   });
 
   it('disk cache persists across runs in the same directory', async () => {
@@ -53,24 +74,25 @@ describe('Incremental cache modes', () => {
 
     const first = await buildProjectIndex(root, { threads: 2, cache: 'disk' });
     const fileId = normalize(path.resolve(utilPath));
-    const cacheFile = cacheFilePathFor(root, fileId);
+    const dbPath = diskCacheDbPathFor(root);
     expect(first.byFile.size).toBeGreaterThan(0);
-    expect(fs.existsSync(cacheFile)).toBe(true);
+    expect(fs.existsSync(dbPath)).toBe(true);
 
-    const raw = await fsp.readFile(cacheFile, 'utf8');
-    const parsed = JSON.parse(raw) as {
-      version: number;
-      sig: string;
-      mod: { file: string };
-    };
-    expect(parsed.version).toBe(1);
-    expect(typeof parsed.sig).toBe('string');
-    expect(typeof parsed.mod?.file).toBe('string');
+    const row = readDiskCacheRow(root, fileId);
+    expect(row).not.toBeNull();
+    expect(row?.version).toBe(1);
+    expect(typeof row?.sig).toBe('string');
+    const payload = JSON.parse(row?.payload ?? 'null') as unknown;
+    expect(typeof payload).toBe('object');
+    expect(payload).not.toBeNull();
+    if (payload && typeof payload === 'object' && 'file' in payload) {
+      expect(typeof payload.file).toBe('string');
+    }
 
     // Build again; should hit disk cache file
     const second = await buildProjectIndex(root, { threads: 2, cache: 'disk' });
     expect(second.byFile.size).toBe(first.byFile.size);
-    expect(fs.existsSync(cacheFile)).toBe(true);
+    expect(fs.existsSync(dbPath)).toBe(true);
     expect(second.byFile.get(fileId)?.file).toBe(fileId);
   });
 });

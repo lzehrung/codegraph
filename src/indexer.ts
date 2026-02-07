@@ -558,7 +558,9 @@ const loadBetterSqlite3 = () => {
 const diskCacheDatabases = new Map<string, BetterSqliteDatabase>();
 
 function diskCacheDatabasePath(projectRoot: string, opts?: BuildOptions): string {
-  return path.join(cacheRoot(projectRoot, opts), "index-cache.sqlite");
+  return normalizePath(
+    path.join(cacheRoot(projectRoot, opts), "index-cache.sqlite"),
+  );
 }
 
 function getDiskCacheDatabase(
@@ -585,6 +587,21 @@ function getDiskCacheDatabase(
   `);
   diskCacheDatabases.set(dbPath, db);
   return db;
+}
+
+function closeDiskCacheDatabase(projectRoot: string, opts?: BuildOptions): void {
+  const dbPath = diskCacheDatabasePath(projectRoot, opts);
+  const db = diskCacheDatabases.get(dbPath);
+  if (!db) return;
+  try {
+    db.pragma("wal_checkpoint(TRUNCATE)");
+  } catch {}
+  try {
+    db.close();
+    diskCacheDatabases.delete(dbPath);
+  } catch {
+    // If close fails, keep the handle in the map so a later attempt can retry.
+  }
 }
 
 const MANIFEST_VERSION = 1;
@@ -2838,11 +2855,15 @@ export async function buildProjectIndex(
   projectRoot: string,
   opts?: BuildOptions,
 ): Promise<ProjectIndex> {
-  const files = await listProjectFiles(projectRoot);
-  return buildIndexFromFileListShared(projectRoot, files, opts, {
-    manifestMode: "read-write",
-    warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,
-  });
+  try {
+    const files = await listProjectFiles(projectRoot);
+    return buildIndexFromFileListShared(projectRoot, files, opts, {
+      manifestMode: "read-write",
+      warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,
+    });
+  } finally {
+    if ((opts?.cache ?? "off") === "disk") closeDiskCacheDatabase(projectRoot, opts);
+  }
 }
 
 export async function buildProjectIndexFromFiles(
@@ -2850,10 +2871,14 @@ export async function buildProjectIndexFromFiles(
   inputFiles: string[],
   opts?: BuildOptions,
 ): Promise<ProjectIndex> {
-  return buildIndexFromFileListShared(projectRoot, inputFiles, opts, {
-    manifestMode: "read-only",
-    warnNoFilesMessage: `Warning: No files provided for indexing in ${projectRoot}`,
-  });
+  try {
+    return buildIndexFromFileListShared(projectRoot, inputFiles, opts, {
+      manifestMode: "read-only",
+      warnNoFilesMessage: `Warning: No files provided for indexing in ${projectRoot}`,
+    });
+  } finally {
+    if ((opts?.cache ?? "off") === "disk") closeDiskCacheDatabase(projectRoot, opts);
+  }
 }
 
 export async function buildProjectIndexIncremental(
@@ -2865,6 +2890,7 @@ export async function buildProjectIndexIncremental(
   const totalStart = performance.now();
   const cacheMode = opts?.cache ?? "off";
   const cacheEnabled = cacheMode !== "off";
+  try {
   const onFallbackImportExtraction = createFallbackImportExtractionHandler(
     report,
     opts,
@@ -3321,6 +3347,9 @@ export async function buildProjectIndexIncremental(
     ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
     projectFiles,
   };
+  } finally {
+    if (cacheMode === "disk") closeDiskCacheDatabase(projectRoot, opts);
+  }
 }
 
 export async function buildGraphDelta(
@@ -3788,14 +3817,13 @@ export async function goToDefinition(
       sup.id === "python" ? "attribute" : "",
     ]);
 
-    const isId = sup.nodeTypes.identifier.includes(node.type);
-
     const resolveExpression = async (
       expr: Parser.SyntaxNode,
     ): Promise<ResolvedExport | null> => {
       const exprName = sliceText(expr, source);
+      const exprIsId = sup.nodeTypes.identifier.includes(expr.type);
       if (
-        isId ||
+        exprIsId ||
         expr.type === "identifier" ||
         expr.type === "type_identifier" ||
         expr.type === "constant"
