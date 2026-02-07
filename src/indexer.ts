@@ -188,6 +188,8 @@ export type BuildOptions = {
   incrementalStrict?: boolean;
   /** Optional build report data for observability */
   report?: BuildReport;
+  /** Max parsed AST entries retained in memory (LRU-style), default 1024 */
+  parsedCacheMaxEntries?: number;
   /** Log level for build warnings (default: "warn") */
   logLevel?: "error" | "warn" | "info" | "debug" | "silent";
   /** Keep parsed trees in memory (default: false). Set to true for faster subsequent lookups at the cost of memory. */
@@ -1297,6 +1299,34 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
+  const mergeTypeScriptNamespaceDeclarations = (items: SymbolDef[]): SymbolDef[] => {
+    if (support.id !== "ts" && support.id !== "tsx") return items;
+    const byName = new Map<string, SymbolDef[]>();
+    for (const item of items) {
+      const group = byName.get(item.localName);
+      if (group) group.push(item);
+      else byName.set(item.localName, [item]);
+    }
+    const out: SymbolDef[] = [];
+    const rank = (k: SymbolKind): number => {
+      if (k === SymbolKind.Class) return 5;
+      if (k === SymbolKind.Interface) return 4;
+      if (k === SymbolKind.TypeAlias) return 3;
+      if (k === SymbolKind.Function) return 2;
+      return 1;
+    };
+    for (const group of byName.values()) {
+      if (group.length === 1) {
+        out.push(group[0]!);
+        continue;
+      }
+      const sorted = [...group].sort((a, b) => rank(b.kind) - rank(a.kind));
+      out.push(sorted[0]!);
+    }
+    return out;
+  };
+  const mergedLocals = mergeTypeScriptNamespaceDeclarations(locals);
+
   const exports: ExportEntry[] = [];
   const pythonAllExports = new Set<string>();
   let hasPythonAll = false;
@@ -1326,7 +1356,7 @@ export function collectLocalsAndExportsFromSource(
             for (const it of items) {
               const name = unquote(sliceText(it.node, source));
               pythonAllExports.add(name);
-              const local = locals.find((d) => d.localName === name);
+              const local = mergedLocals.find((d) => d.localName === name);
               if (
                 local &&
                 !exports.some(
@@ -1355,7 +1385,7 @@ export function collectLocalsAndExportsFromSource(
                 for (let sm; (sm = strRe.exec(stmtText)); ) {
                   const name = sm[1]!;
                   pythonAllExports.add(name);
-                  const local = locals.find((d) => d.localName === name);
+                  const local = mergedLocals.find((d) => d.localName === name);
                   if (
                     local &&
                     !exports.some(
@@ -2542,17 +2572,17 @@ async function buildIndexFromFileListShared(
       }
 
       const parsed = await parseFile(f);
-      // parsed.sup is guaranteed to be defined because parseFile throws otherwise,
-      // but the type signature of parseFile might still include undefined in `sup` field due to supportForFile signature.
-      // We explicitly cast to ensure compatibility with parsedMap which expects LanguageSupport.
-      if (parsed.sup) {
-        parsedMap.set(f, {
+      setParsedCacheEntry(
+        parsedMap,
+        f,
+        {
           source: parsed.source,
           tree: parsed.tree,
           sup: parsed.sup,
-          lang: parsed.lang
-        });
-      }
+          lang: parsed.lang,
+        },
+        Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
+      );
       const { source: src, sup, lang, tree } = parsed;
 
       if (bloomFilterCache) {
@@ -2743,8 +2773,15 @@ async function buildIndexFromFileListShared(
   const projectFiles = await discoverProjectFiles(projectRoot);
 
   const keepParsed = opts?.keepParsed ?? false;
+  const maxParsedEntries = Math.max(1, opts?.parsedCacheMaxEntries ?? 1024);
   if (!keepParsed) {
     parsedMap.clear();
+  } else {
+    while (parsedMap.size > maxParsedEntries) {
+      const oldest = parsedMap.keys().next().value as string | undefined;
+      if (!oldest) break;
+      parsedMap.delete(oldest);
+    }
   }
 
   return {
@@ -3018,7 +3055,12 @@ export async function buildProjectIndexIncremental(
         }
 
         const parsed = await parseFile(f);
-        parsedMap.set(f, parsed);
+        setParsedCacheEntry(
+          parsedMap,
+          f,
+          parsed,
+          Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
+        );
         const { source: src, sup, lang, tree } = parsed;
 
         // Build bloom filter for this file if enabled
@@ -3220,8 +3262,15 @@ export async function buildProjectIndexIncremental(
   const projectFiles = await discoverProjectFiles(projectRoot);
 
   const keepParsed = opts?.keepParsed ?? false;
+  const maxParsedEntries = Math.max(1, opts?.parsedCacheMaxEntries ?? 1024);
   if (!keepParsed) {
     parsedMap.clear();
+  } else {
+    while (parsedMap.size > maxParsedEntries) {
+      const oldest = parsedMap.keys().next().value as string | undefined;
+      if (!oldest) break;
+      parsedMap.delete(oldest);
+    }
   }
 
   return {
@@ -3370,6 +3419,24 @@ function cacheKey(file: FileId, name: string) {
   return `${file}::${name}`;
 }
 
+function setParsedCacheEntry(
+  parsedMap: Map<
+    string,
+    { source: string; tree: Parser.Tree; sup: LanguageSupport; lang: Parser.Language }
+  >,
+  file: string,
+  entry: { source: string; tree: Parser.Tree; sup: LanguageSupport; lang: Parser.Language },
+  maxEntries: number,
+): void {
+  if (parsedMap.has(file)) parsedMap.delete(file);
+  parsedMap.set(file, entry);
+  while (parsedMap.size > maxEntries) {
+    const oldest = parsedMap.keys().next().value as string | undefined;
+    if (!oldest) break;
+    parsedMap.delete(oldest);
+  }
+}
+
 export function resolveExport(
   index: ProjectIndex,
   file: FileId,
@@ -3444,6 +3511,23 @@ export function resolveExport(
   return _resolve(file, exportedName);
 }
 
+const goPackageNameCache = new Map<FileId, string | null>();
+
+function readGoPackageName(filePath: string): string | null {
+  const cached = goPackageNameCache.get(filePath);
+  if (cached !== undefined) return cached;
+  try {
+    const src = fs.readFileSync(filePath, "utf8");
+    const match = src.match(/^\s*package\s+([A-Za-z_][A-Za-z0-9_]*)/m);
+    const pkg = match?.[1] ?? null;
+    goPackageNameCache.set(filePath, pkg);
+    return pkg;
+  } catch {
+    goPackageNameCache.set(filePath, null);
+    return null;
+  }
+}
+
 function resolveGoPackageExport(
   index: ProjectIndex,
   file: FileId,
@@ -3453,8 +3537,10 @@ function resolveGoPackageExport(
     const sup = supportForFile(file);
     if (!sup || sup.id !== "go") return null;
     const baseDir = path.dirname(file);
+    const sourcePackage = readGoPackageName(file);
     for (const [filePath, mod] of index.byFile) {
       if (path.dirname(filePath) !== baseDir) continue;
+      if (sourcePackage && readGoPackageName(filePath) !== sourcePackage) continue;
       for (const e of mod.exports) {
         if (e.type === "local" && e.exportedAs === exportedName) {
           return e.target;

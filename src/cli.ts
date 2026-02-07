@@ -1276,13 +1276,26 @@ Examples:
     if (provider === "git") {
       const base = getOpt("--base");
       const head = getOpt("--head");
-      if (base) options.base = base;
-      if (head) options.head = head;
+      if (!base || !head) {
+        throw new Error(
+          "Impact provider 'git' requires --base and --head. Example: codegraph impact --provider git --base main --head HEAD",
+        );
+      }
+      options.base = base;
+      options.head = head;
     } else if (provider === "github") {
       const pr = getOpt("--pr");
       const repo = getOpt("--repo");
-      if (pr) options.pr = Number(pr);
-      if (repo) options.repo = repo;
+      if (!pr || !repo) {
+        throw new Error(
+          "Impact provider 'github' requires --repo owner/name and --pr <number>. Example: codegraph impact --provider github --repo acme/app --pr 42",
+        );
+      }
+      options.pr = Number(pr);
+      if (!Number.isFinite(options.pr) || options.pr <= 0) {
+        throw new Error("Impact provider 'github' expects --pr as a positive integer.");
+      }
+      options.repo = repo;
     } else if (provider === "raw") {
       // For raw provider, diff text would come from stdin or file
       // For now, assume stdin

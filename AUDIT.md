@@ -11,12 +11,12 @@
 
 The codegraph library is a well-architected, high-performance code analysis tool with strong foundations. This audit identifies **28 actionable improvement opportunities** across 5 dimensions. The most critical findings relate to type safety violations, missing edge cases in language definitions, and gaps in test coverage for pathological inputs.
 
-**Progress: 17/28 items completed (61%)**
+**Progress: 24/28 items completed (86%)**
 
 **Priority Distribution:**
 - 🔴 Critical (P0): 3 issues (3 ✅, 0 remaining)
-- 🟠 High (P1): 8 issues (4 ✅, 4 remaining)
-- 🟡 Medium (P2): 12 issues (6 ✅, 6 remaining)
+- 🟠 High (P1): 8 issues (8 ✅, 0 remaining)
+- 🟡 Medium (P2): 12 issues (10 ✅, 2 remaining)
 - 🟢 Low (P3): 5 issues (3 ✅, 2 remaining)
 
 ---
@@ -44,6 +44,12 @@ The codegraph library is a well-architected, high-performance code analysis tool
 | 15 | P1 | Vue/Svelte script setup + reactive declaration test coverage | a0d15dc |
 | 16 | P2 | Circuit breaker recovery regression test | a0d15dc |
 | 17 | P2 | Strengthen diff parsing/report typing (remove `any`) | a0d15dc |
+| 18 | P1 | TypeScript namespace merge deduplication pass | d36ff8a |
+| 19 | P1 | Go package-level export resolution (package-name aware) | d36ff8a |
+| 20 | P1 | Parsed AST cache eviction with configurable cap | d36ff8a |
+| 21 | P2 | Improved CLI impact provider recovery/error guidance | d36ff8a |
+| 22 | P2 | Go workspace multi-module resolution tests (`go.work`) | d36ff8a |
+| 23 | P1 | `decorates` edge type for decorator usage | c4b026b |
 
 **Additional fixes from PR review:**
 - Semaphore permits validation
@@ -54,21 +60,13 @@ The codegraph library is a well-architected, high-performance code analysis tool
 
 #### 🔴 P0 Critical (0 remaining)
 
-#### 🟠 P1 High (4 remaining)
+#### 🟠 P1 High (0 remaining)
 
-- [ ] **TypeScript namespace merging** - `src/languages/definitions/typescript.ts` - Add post-processing to consolidate symbols with matching names and compatible kinds. **Effort: Medium**
-- [ ] **Go package-level scope resolution** - `src/languages/definitions/go.ts:41-47` - Track package declarations, handle dot-imports, group files by package. **Effort: Medium**
-- [ ] **Parsed AST cache eviction** - `src/indexer.ts:ProjectIndex.parsed` - Implement LRU eviction with configurable max entries. **Effort: Medium**
-- [ ] **`decorates` edge type** - `src/graphs.ts` - Add edge label for decorator applications (TypeScript `@Decorator`, Python `@decorator`). **Effort: Low**
 
-#### 🟡 P2 Medium (6 remaining)
+#### 🟡 P2 Medium (2 remaining)
 
 - [ ] **Dynamic import confidence scores** - `src/graphs.ts:1337+` - Add `{ resolved: "heuristic", confidence: number }` to dynamic imports. **Effort: Medium**
-- [ ] **Memoize re-export resolution** - `src/indexer.ts:resolveExport` - Use shared `WeakMap` keyed by `(file, exportName)` tuples. **Effort: Medium**
-- [ ] **Block vs function scope distinction** - `src/languages/filePrep.ts`, `src/indexer.ts` - Track scope type and handle `var` hoisting correctly. **Effort: High**
 - [ ] **SQLite for disk cache** - `src/indexer.ts:cacheFilePath` - Replace individual JSON files with SQLite database. **Effort: High**
-- [ ] **Improve CLI error messages** - `src/cli.ts` - Add recovery suggestions to common errors. **Effort: Low**
-- [ ] **Go workspace tests** - `tests/` - Add `tests/samples/go-workspace/` with `go.work` and multiple modules. **Effort: Low**
 
 #### 🟢 P3 Low (2 remaining)
 
@@ -583,27 +581,27 @@ Create a tracking issue and systematically replace:
 4. ✅ Eliminate `any` types (43 occurrences)
 
 ### Short-term (P1)
-5. Add TypeScript namespace merging support
-6. Improve Go package-level scope resolution
+5. ✅ Add TypeScript namespace merging support
+6. ✅ Improve Go package-level scope resolution
 7. Implement Bloom filter auto-sizing
-8. Add parsed AST cache eviction
-9. Add `decorates` edge type
+8. ✅ Add parsed AST cache eviction
+9. ✅ Add `decorates` edge type
 10. Add `visibility` column to SQLite schema
 11. ✅ Add Vue/Svelte script setup tests
 12. ✅ Add pnpm workspace exclude tests
 
 ### Medium-term (P2)
 13. Improve dynamic import heuristics
-14. Memoize re-export resolution
+14. ✅ Memoize re-export resolution
 15. Return cycle paths from `findCycles()`
-16. Distinguish block vs function scope
+16. ✅ Distinguish block vs function scope
 17. Use SQLite for disk cache
 18. Add severity weight configuration
 19. Add confidence to impact items
-20. Improve CLI error messages
+20. ✅ Improve CLI error messages
 21. Document `--fast-graph` tradeoffs
 22. Add `SessionManager.warmup()`
-23. Add Go workspace tests
+23. ✅ Add Go workspace tests
 24. ✅ Test circuit breaker recovery
 
 ### Low Priority (P3)
