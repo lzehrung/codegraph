@@ -25,7 +25,7 @@ const loadBetterSqlite3 = () => {
 type BetterSqliteDatabase = import("better-sqlite3").Database;
 
 const dbQuery = (db: BetterSqliteDatabase, sql: string): string[] => {
-  const rows = db.prepare(sql).raw().all();
+  const rows = db.prepare(sql).raw().all() as Array<Array<unknown>>;
   return rows.map((row) => String(row[0]));
 };
 
@@ -82,6 +82,74 @@ export function run() { helper(); new Widget(); }
       "SELECT label FROM symbol_edges WHERE label = 'calls';",
     );
     expect(calls.length).toBeGreaterThan(0);
+    db.close();
+  });
+
+  it("migrates older DBs missing symbols.visibility", async () => {
+    const root = await mkTmpDir("dg-sqlite-migrate-");
+    const main = `
+export class Widget {}
+export function helper() { return 1; }
+export function run() { helper(); new Widget(); }
+`;
+    await fsp.writeFile(path.join(root, "main.ts"), main, "utf8");
+
+    const dbPath = path.join(root, "graph.sqlite");
+    {
+      const BetterSqlite3 = loadBetterSqlite3();
+      const db = new BetterSqlite3(dbPath);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS files (
+          path TEXT PRIMARY KEY,
+          is_external INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS symbols (
+          id TEXT PRIMARY KEY,
+          file TEXT NOT NULL,
+          name TEXT NOT NULL,
+          kind TEXT,
+          docstring TEXT,
+          line_span INTEGER,
+          complexity INTEGER,
+          FOREIGN KEY(file) REFERENCES files(path)
+        );
+        CREATE TABLE IF NOT EXISTS file_edges (
+          from_path TEXT NOT NULL,
+          to_path TEXT NOT NULL,
+          to_type TEXT NOT NULL,
+          raw TEXT,
+          type_only INTEGER,
+          FOREIGN KEY(from_path) REFERENCES files(path),
+          FOREIGN KEY(to_path) REFERENCES files(path)
+        );
+        CREATE TABLE IF NOT EXISTS symbol_edges (
+          from_id TEXT NOT NULL,
+          to_id TEXT NOT NULL,
+          label TEXT,
+          FOREIGN KEY(from_id) REFERENCES symbols(id),
+          FOREIGN KEY(to_id) REFERENCES symbols(id)
+        );
+      `);
+      db.close();
+    }
+
+    const index = await buildProjectIndex(root);
+    const sgraph = await buildSymbolGraphDetailed(index);
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+    });
+
+    const BetterSqlite3 = loadBetterSqlite3();
+    const db = new BetterSqlite3(dbPath);
+    const columns = db
+      .prepare("PRAGMA table_info(symbols);")
+      .raw()
+      .all()
+      .map((row) => (Array.isArray(row) && row[1] ? String(row[1]) : ""))
+      .filter(Boolean);
+    expect(columns).toContain("visibility");
     db.close();
   });
 
@@ -182,19 +250,25 @@ export interface UserRepository {}
       "Show me the dependency chain for the AuthService class",
     );
     expect(chain.kind).toBe("dependencyChain");
-    expect(chain.results.some((entry) => entry.endsWith("/repo.ts"))).toBe(true);
+    if (chain.kind === "dependencyChain") {
+      expect(chain.results.some((entry) => entry.endsWith("/repo.ts"))).toBe(
+        true,
+      );
+    }
 
     const controllers = await queryGraphSqlite(
       dbPath,
       "Which controllers have the most endpoints?",
     );
     expect(controllers.kind).toBe("controllersMostEndpoints");
-    const userController = controllers.results.find(
-      (row) => row.name === "UserController",
-    );
-    expect(userController).toBeDefined();
-    if (userController) {
-      expect(userController.count).toBeGreaterThanOrEqual(2);
+    if (controllers.kind === "controllersMostEndpoints") {
+      const userController = controllers.results.find(
+        (row) => row.name === "UserController",
+      );
+      expect(userController).toBeDefined();
+      if (userController) {
+        expect(userController.count).toBeGreaterThanOrEqual(2);
+      }
     }
 
     const impls = await queryGraphSqlite(
@@ -202,7 +276,9 @@ export interface UserRepository {}
       "Find all classes that implement the UserRepository interface",
     );
     expect(impls.kind).toBe("classesImplementing");
-    expect(impls.results.some((row) => row.name === "RepoImpl")).toBe(true);
+    if (impls.kind === "classesImplementing") {
+      expect(impls.results.some((row) => row.name === "RepoImpl")).toBe(true);
+    }
 
     const modulePath = path.join(root, "auth.ts").replace(/\\/g, "/");
     const affected = await queryGraphSqlite(
@@ -210,7 +286,9 @@ export interface UserRepository {}
       `What functions would be affected if I change this module ${modulePath}`,
     );
     expect(affected.kind).toBe("affectedFunctionsForModule");
-    expect(affected.results.some((row) => row.name === "runAuth")).toBe(true);
+    if (affected.kind === "affectedFunctionsForModule") {
+      expect(affected.results.some((row) => row.name === "runAuth")).toBe(true);
+    }
 
     const complexity = await queryGraphSqlite(
       dbPath,
