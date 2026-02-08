@@ -1,6 +1,6 @@
 # codegraph
 
-A tiny tool to **understand a repo**, **navigate code**, and **answer questions** fast. It supports JavaScript/TypeScript, Python, Go, Java, C#, Ruby, Rust, and the script blocks inside Vue/Svelte files.
+A tiny tool to **understand a repo**, **navigate code**, and **answer questions** fast. It supports JavaScript/TypeScript, Python, Go, Java, C#, Ruby, Rust, Kotlin, Swift, C, C++, and the script blocks inside Vue/Svelte files. Built-in **code review** and **impact analysis** utilities map PR diffs to changed symbols and affected code, with streaming, ignore patterns, and optional reference verification.
 
 It builds:
 
