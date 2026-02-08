@@ -78,7 +78,7 @@ export function collectModuleSpecifiersFromSource(
   const shouldAttemptFallback =
     support.id === "python"
       ? /\b(import|from)\b/.test(source)
-      : /\b(import|export|require)\b/.test(source);
+      : /\b(import|require|from)\b/.test(source);
   const reportFallback = (reason: FallbackImportExtractionReason) => {
     const event: FallbackImportExtractionEvent = {
       language: support.id,
@@ -140,8 +140,11 @@ export function collectModuleSpecifiersFromSource(
     }
     // Fallback to regex-based extractor
     if ((queryFailed || out.length === 0) && shouldAttemptFallback) {
-      reportFallback(queryFailed ? "query-error" : "query-empty");
-      for (const s of extractPythonSpecifiers(source)) out.push({ spec: s });
+      const extracted = extractPythonSpecifiers(source);
+      if (extracted.length > 0) {
+        reportFallback(queryFailed ? "query-error" : "query-empty");
+        for (const s of extracted) out.push({ spec: s });
+      }
     }
     return out;
   }
@@ -200,9 +203,12 @@ export function collectModuleSpecifiersFromSource(
   // Regex fallback if the query path produced no results
   if (support.id === "ts" || support.id === "js") {
     if ((queryFailed || out.length === 0) && shouldAttemptFallback) {
-      reportFallback(queryFailed ? "query-error" : "query-empty");
       try {
-        for (const s of extractJsTsSpecifiers(source)) out.push(s);
+        const extracted = extractJsTsSpecifiers(source);
+        if (extracted.length > 0) {
+          reportFallback(queryFailed ? "query-error" : "query-empty");
+          out.push(...extracted);
+        }
       } catch {}
     }
   }
