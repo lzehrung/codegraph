@@ -316,48 +316,69 @@ export async function collectEdgesForFile(
       : { matchPath: undefined };
 
   const edges: Edge[] = [];
-  for (const { spec, typeOnly, resolved, confidence } of specs) {
-    let to: EdgeTo;
-    if (sup.id === "python") {
-      const relDotsMatch = spec.startsWith(".") ? spec.match(/^\.+/) : null;
-      const relDots = relDotsMatch ? relDotsMatch[0].length : 0;
-      const res = await resolvePythonModule(
-        projectRoot,
-        file,
-        spec.includes(".") || !spec.startsWith(".") ? spec : null,
-        relDots,
-      );
-      to =
-        typeof res === "string"
-          ? { type: "file", path: res.replace(/\\/g, "/") }
-          : { type: "external", name: res.external };
-    } else if (sup.id === "go") {
-      const res = await resolveImportSpecifier(
-        projectRoot,
-        file,
-        spec,
-        sup.id,
-        {
-          ...(matchPath ? { matchPath } : {}),
-          ...(workspaceConfig ? { workspaceConfig } : {}),
-          resolveNodeModules: !!opts.resolveNodeModules,
-          ...(opts.resolutionHints
-            ? { resolutionHints: opts.resolutionHints }
-            : {}),
-        },
-      );
-      to =
-        typeof res === "string"
-          ? { type: "file", path: res.replace(/\\/g, "/") }
-          : { type: "external", name: res.external };
-    } else if (["java", "csharp", "ruby", "rust"].includes(sup.id)) {
-      const { resolvePathLikeModule } = await import("./util.js");
-      const res = await resolvePathLikeModule(projectRoot, spec);
-      if (res) {
-        to = { type: "file", path: res.replace(/\\/g, "/") };
+  const edgeResolutionTasks = specs.map(
+    async ({ spec, typeOnly, resolved, confidence }) => {
+      let to: EdgeTo;
+      if (sup.id === "python") {
+        const relDotsMatch = spec.startsWith(".") ? spec.match(/^\.+/) : null;
+        const relDots = relDotsMatch ? relDotsMatch[0].length : 0;
+        const isDotsOnly = /^\.+$/.test(spec);
+        const res = await resolvePythonModule(
+          projectRoot,
+          file,
+          isDotsOnly ? null : spec,
+          relDots,
+        );
+        to =
+          typeof res === "string"
+            ? { type: "file", path: res.replace(/\\/g, "/") }
+            : { type: "external", name: res.external };
+      } else if (sup.id === "go") {
+        const res = await resolveImportSpecifier(
+          projectRoot,
+          file,
+          spec,
+          sup.id,
+          {
+            ...(matchPath ? { matchPath } : {}),
+            ...(workspaceConfig ? { workspaceConfig } : {}),
+            resolveNodeModules: !!opts.resolveNodeModules,
+            ...(opts.resolutionHints
+              ? { resolutionHints: opts.resolutionHints }
+              : {}),
+          },
+        );
+        to =
+          typeof res === "string"
+            ? { type: "file", path: res.replace(/\\/g, "/") }
+            : { type: "external", name: res.external };
+      } else if (["java", "csharp", "ruby", "rust"].includes(sup.id)) {
+        const { resolvePathLikeModule } = await import("./util.js");
+        const res = await resolvePathLikeModule(projectRoot, spec);
+        if (res) {
+          to = { type: "file", path: res.replace(/\\/g, "/") };
+        } else {
+          // Fallback to resolveSpecifier for relative paths like ./foo
+          const res2 = await resolveSpecifier(
+            file,
+            spec,
+            projectRoot,
+            matchPath,
+            workspaceConfig,
+            {
+              resolveNodeModules: !!opts.resolveNodeModules,
+              ...(opts.resolutionHints
+                ? { resolutionHints: opts.resolutionHints }
+                : {}),
+            },
+          );
+          to =
+            typeof res2 === "string"
+              ? { type: "file", path: res2.replace(/\\/g, "/") }
+              : { type: "external", name: res2.external };
+        }
       } else {
-        // Fallback to resolveSpecifier for relative paths like ./foo
-        const res2 = await resolveSpecifier(
+        const res = await resolveSpecifier(
           file,
           spec,
           projectRoot,
@@ -371,29 +392,23 @@ export async function collectEdgesForFile(
           },
         );
         to =
-          typeof res2 === "string"
-            ? { type: "file", path: res2.replace(/\\/g, "/") }
-            : { type: "external", name: res2.external };
+          typeof res === "string"
+            ? { type: "file", path: res.replace(/\\/g, "/") }
+            : { type: "external", name: res.external };
       }
-    } else {
-      const res = await resolveSpecifier(
-        file,
+      return {
+        to,
         spec,
-        projectRoot,
-        matchPath,
-        workspaceConfig,
-        {
-          resolveNodeModules: !!opts.resolveNodeModules,
-          ...(opts.resolutionHints
-            ? { resolutionHints: opts.resolutionHints }
-            : {}),
-        },
-      );
-      to =
-        typeof res === "string"
-          ? { type: "file", path: res.replace(/\\/g, "/") }
-          : { type: "external", name: res.external };
-    }
+        ...(typeOnly !== undefined && { typeOnly }),
+        ...(resolved !== undefined && { resolved }),
+        ...(confidence !== undefined && { confidence }),
+      };
+    },
+  );
+
+  for (const { to, spec, typeOnly, resolved, confidence } of await Promise.all(
+    edgeResolutionTasks,
+  )) {
     edges.push({
       from: normalizedFile,
       to,
@@ -467,7 +482,6 @@ export async function collectGraph(
   if (graph.edges.length > 0) {
     addEdgeTargetsToGraph(graph.edges);
   }
-
 
   const filePromises = await mapLimit(files, conc, async (file) => {
     try {
@@ -1171,9 +1185,9 @@ export async function buildSymbolGraphDetailed(
     const normalizedFile = file.replace(/\\/g, "/");
     const key = `${normalizedFile}::${exportedName}`;
     if (cache.has(key)) return cache.get(key) ?? null;
+    cache.set(key, null);
     const mod = index.byFile.get(normalizedFile);
     if (!mod) {
-      cache.set(key, null);
       return null;
     }
     // Direct local export

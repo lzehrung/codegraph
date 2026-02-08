@@ -18,7 +18,10 @@ interface NodeLike {
   endPosition: { row: number; column: number };
 }
 
-export function sliceText(node: NodeLike | null | undefined, src: string): string {
+export function sliceText(
+  node: NodeLike | null | undefined,
+  src: string,
+): string {
   if (!node || !src) return "";
   return src.slice(node.startIndex, node.endIndex);
 }
@@ -719,9 +722,77 @@ export async function discoverProjectFiles(
 }
 
 export function stripJsLikeComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+  let out = "";
+  let i = 0;
+  let inSingle = false;
+  let inDouble = false;
+  let inTemplate = false;
+  let escapeNext = false;
+
+  while (i < src.length) {
+    const ch = src[i]!;
+    const next = src[i + 1] ?? "";
+
+    if (inSingle || inDouble || inTemplate) {
+      out += ch;
+      if (escapeNext) {
+        escapeNext = false;
+      } else if (ch === "\\") {
+        escapeNext = true;
+      } else if (inSingle && ch === "'") {
+        inSingle = false;
+      } else if (inDouble && ch === '"') {
+        inDouble = false;
+      } else if (inTemplate && ch === "`") {
+        inTemplate = false;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (ch === "'") {
+      inSingle = true;
+      out += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      out += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === "`") {
+      inTemplate = true;
+      out += ch;
+      i += 1;
+      continue;
+    }
+
+    if (ch === "/" && next === "*") {
+      i += 2;
+      while (i < src.length) {
+        if (src[i] === "*" && src[i + 1] === "/") {
+          i += 2;
+          break;
+        }
+        if (src[i] === "\n") out += "\n";
+        i += 1;
+      }
+      continue;
+    }
+
+    if (ch === "/" && next === "/") {
+      i += 2;
+      while (i < src.length && src[i] !== "\n") i += 1;
+      continue;
+    }
+
+    out += ch;
+    i += 1;
+  }
+
+  return out;
 }
 
 export function stripPythonCommentsAndStrings(src: string): string {
@@ -963,7 +1034,7 @@ export function extractPythonSpecifiers(source: string): string[] {
     const reImport = /^\s*import\s+([A-Za-z_][\w\.]*)/gm;
     for (const m of cleaned.matchAll(reImport)) out.push(m[1]!);
     const reFrom =
-      /^\s*from\s+([A-Za-z_][\w\.]|\.+[A-Za-z_][\w\.]*)\s+import/gm;
+      /^\s*from\s+(\.+(?:[A-Za-z_][\w\.]*)?|[A-Za-z_][\w\.]*)\s+import/gm;
     for (const m of cleaned.matchAll(reFrom)) out.push(m[1]!);
   } catch {}
   return out;
@@ -1774,10 +1845,12 @@ export async function resolveSpecifier(
   const tryResolveCandidates = async (
     candidates: string[],
   ): Promise<string | null> => {
-    for (const c of candidates) {
-      if (await fileExists(c)) return path.resolve(c);
-    }
-    return null;
+    const existence = await Promise.all(
+      candidates.map((candidate) => fileExists(candidate)),
+    );
+    const firstHit = existence.indexOf(true);
+    if (firstHit < 0) return null;
+    return path.resolve(candidates[firstHit]!);
   };
   if (spec.startsWith(".") || spec.startsWith("/")) {
     const base = spec.startsWith("/")
@@ -2320,6 +2393,14 @@ export async function resolvePythonModule(
   } as const;
   resolvePythonModuleCache.set(cacheKey, ext);
   return ext;
+}
+
+export function clearResolutionCaches(): void {
+  fileExistsCache.clear();
+  resolveSpecifierCache.clear();
+  resolvePythonModuleCache.clear();
+  tsconfigCache.clear();
+  workspaceCache.clear();
 }
 
 // ----------------- Caches -----------------
