@@ -57,6 +57,25 @@ const loadBetterSqlite3 = () => {
 
 type BetterSqliteDatabase = import("better-sqlite3").Database;
 
+const hasColumn = (
+  db: BetterSqliteDatabase,
+  table: string,
+  column: string,
+): boolean => {
+  const rows = db.prepare(`PRAGMA table_info(${table});`).raw().all();
+  for (const row of rows) {
+    if (!Array.isArray(row)) continue;
+    const name = row[1] ? String(row[1]) : "";
+    if (name === column) return true;
+  }
+  return false;
+};
+
+const ensureSymbolsVisibilityColumn = (db: BetterSqliteDatabase) => {
+  if (hasColumn(db, "symbols", "visibility")) return;
+  db.exec("ALTER TABLE symbols ADD COLUMN visibility TEXT;");
+};
+
 const ensureSchema = (db: BetterSqliteDatabase) => {
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
@@ -96,6 +115,8 @@ const ensureSchema = (db: BetterSqliteDatabase) => {
       FOREIGN KEY(to_id) REFERENCES symbols(id)
     );
   `);
+
+  ensureSymbolsVisibilityColumn(db);
 
   const indexSpecs: Array<{ name: string; sql: string }> = [
     {
