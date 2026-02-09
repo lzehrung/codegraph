@@ -35,7 +35,7 @@ const definition: LanguageTestDefinition = {
       },
       {
         from: "index.html",
-        to: { type: "external", name: "./logo.svg" },
+        to: { type: "external", name: "logo.svg" },
       },
       {
         from: "index.html",
