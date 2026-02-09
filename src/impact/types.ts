@@ -49,7 +49,10 @@ export type ImpactReason =
 export type ImpactSuggestionKind =
   | "missingImport"
   | "missingExport"
-  | "missingDeclaration";
+  | "missingDeclaration"
+  | "configImpact"
+  | "breakingChange"
+  | "untestedChange";
 
 export type ImpactSuggestionConfidence = "high" | "medium" | "low";
 
@@ -305,6 +308,12 @@ export type ImpactOptions = DiffProviderOptions & {
   verifyReferences?: boolean;
   /** Cap the number of suggestions returned when verifyReferences is enabled */
   maxSuggestions?: number;
+  /** Add config-aware impact suggestions for changed config files */
+  configImpactRules?: boolean;
+  /** Add potential breaking-change suggestions for exported symbol edits */
+  detectBreakingChanges?: boolean;
+  /** Add untested-change suggestions when changed symbols have no test references */
+  testCoverageSuggestions?: boolean;
   /** Custom severity weights for impact scoring */
   severityWeights?: Partial<SeverityWeights>;
 };

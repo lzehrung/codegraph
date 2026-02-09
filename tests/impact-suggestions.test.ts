@@ -13,15 +13,25 @@ const samplePath = path.resolve(
 
 async function buildSampleReport(
   diffText: string,
-  options?: { maxSuggestions?: number },
+  options?: {
+    maxSuggestions?: number;
+    configImpactRules?: boolean;
+    detectBreakingChanges?: boolean;
+    testCoverageSuggestions?: boolean;
+  },
 ): Promise<ImpactReport> {
   const index = await buildProjectIndex(samplePath);
   const report = (await analyzeImpactFromDiff(samplePath, index, {
     provider: "raw",
     diffText,
-    verifyReferences: true,
+    verifyReferences: options?.verifyReferences ?? true,
     ...(options?.maxSuggestions !== undefined
       ? { maxSuggestions: options.maxSuggestions }
+      : {}),
+    ...(options?.configImpactRules ? { configImpactRules: true } : {}),
+    ...(options?.detectBreakingChanges ? { detectBreakingChanges: true } : {}),
+    ...(options?.testCoverageSuggestions
+      ? { testCoverageSuggestions: true }
       : {}),
   })) as ImpactReport;
   return report;
@@ -118,5 +128,76 @@ index 1111111..2222222 100644
     const report = await buildSampleReport(diffText, { maxSuggestions: 1 });
 
     expect(report.suggestions ?? []).toHaveLength(1);
+  });
+
+  it("adds config-impact suggestions for changed config files", async () => {
+    const diffText = `diff --git a/tsconfig.json b/tsconfig.json
+index 1111111..2222222 100644
+--- a/tsconfig.json
++++ b/tsconfig.json
+@@ -1,5 +1,5 @@
+ {
+-  "compilerOptions": { "strict": false }
++  "compilerOptions": { "strict": true }
+ }
+`;
+
+    const report = await buildSampleReport(diffText, {
+      verifyReferences: false,
+      configImpactRules: true,
+    });
+    const suggestions = report.suggestions ?? [];
+    const config = suggestions.find((entry) => entry.kind === "configImpact");
+    expect(config).toBeDefined();
+    expect(config?.confidence).toBe("high");
+  });
+
+  it("adds breaking-change suggestions when exported symbol overlaps removed lines", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,7 +1,7 @@
+ export function helperFunction(): string {
+-  return "helper";
++  return "helper-updated";
+ }
+ 
+ export function anotherHelper(): number {
+   return 42;
+ }
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+    });
+    const suggestions = report.suggestions ?? [];
+    const breaking = suggestions.find(
+      (entry) => entry.kind === "breakingChange",
+    );
+    expect(breaking).toBeDefined();
+  });
+
+  it("adds untested-change suggestions when changed symbols have no test references", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,3 @@
+ export function helperFunction(): string {
+-  return "helper";
++  return "helper-updated";
+ }
+`;
+
+    const report = await buildSampleReport(diffText, {
+      testCoverageSuggestions: true,
+    });
+    const suggestions = report.suggestions ?? [];
+    const untested = suggestions.find(
+      (entry) =>
+        entry.kind === "untestedChange" && entry.symbol === "helperFunction",
+    );
+    expect(untested).toBeDefined();
   });
 });

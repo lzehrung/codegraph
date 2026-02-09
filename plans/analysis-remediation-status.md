@@ -39,11 +39,18 @@ This tracks the items from `ANALYSIS.md` and their current disposition.
   - Remaining gap: broader HTML asset semantics beyond the currently covered tags.
 - **F2 — cycle detection/reporting:** ⚠️ Core file-graph cycle detection exists (`findCycles`), but richer reporting/severity surfacing remains.
 - **F3 — Vue/Svelte template dependency tracking:** ⏳ Not implemented.
-- **F4 — config-file impact semantics:** ⏳ Not implemented.
-- **F5 — breaking-change classification:** ⏳ Not implemented.
-- **F6 — test coverage gap analysis in impact output:** ⏳ Not implemented.
+- **F4 — config-file impact semantics:** ⚠️ Partially addressed.
+  - Added config-aware impact suggestion classification (`configImpact`) for changed config files.
+  - Remaining gap: key-level semantics mapping (e.g., precise scope for each config key).
+- **F5 — breaking-change classification:** ⚠️ Partially addressed.
+  - Added heuristic breaking-change suggestions when exported symbols overlap removed lines or when exports exist in files with removals.
+  - Remaining gap: structural before/after API signature diffing and typed compatibility checks.
+- **F6 — test coverage gap analysis in impact output:** ⚠️ Partially addressed.
+  - Added untested-change suggestions when changed symbols have no discovered references in test files.
+  - Remaining gap: coverage-aware ranking tied to actual executed tests/coverage data.
 - **F7 — cross-language monorepo dependency modeling:** ⏳ Not implemented.
-- **F8 — true incremental SQLite graph updates:** ⏳ Not implemented.
+- **F8 — true incremental SQLite graph updates:** ✅ Completed.
+  - `updateGraphSqlite` performs changed-file scoped deletes/inserts for file/symbol nodes and edges.
 
 ## Notes
 
