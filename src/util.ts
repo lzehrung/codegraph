@@ -1855,16 +1855,21 @@ export async function resolveSpecifier(
     return path.resolve(candidates[firstHit]!);
   };
   const hasSchemePrefix = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(spec);
-  if (hasSchemePrefix || spec.startsWith("//")) {
+  const isWindowsAbsolutePath = /^[A-Za-z]:[\/]/.test(spec);
+  if (!isWindowsAbsolutePath && (hasSchemePrefix || spec.startsWith("//"))) {
     const ext = { external: spec } as const;
     resolveSpecifierCache.set(cacheKey, ext);
     return ext;
   }
 
-  if (spec.startsWith(".") || spec.startsWith("/")) {
-    const base = spec.startsWith("/")
-      ? path.join(projectRoot, spec)
-      : path.resolve(path.dirname(fromFile), spec);
+  const isRelativeOrAbsolute =
+    spec.startsWith(".") || spec.startsWith("/") || isWindowsAbsolutePath;
+  if (isRelativeOrAbsolute) {
+    const base = isWindowsAbsolutePath
+      ? spec
+      : spec.startsWith("/")
+        ? path.join(projectRoot, spec)
+        : path.resolve(path.dirname(fromFile), spec);
     const candidates = buildCandidates(base);
     const hit = await tryResolveCandidates(candidates);
     if (hit) {
@@ -1925,11 +1930,14 @@ export async function resolveSpecifier(
       resolveSpecifierCache.set(cacheKey, resolvedWs);
       return resolvedWs;
     }
-    // Try path-like fallback for Java/Go/C#/Rust which often look like packages but map to source
-    const pathLike = await resolvePathLikeModule(projectRoot, spec);
-    if (pathLike) {
-      resolveSpecifierCache.set(cacheKey, pathLike);
-      return pathLike;
+    const shouldTryPathLikeFallback = spec.includes("/") || spec.includes(".");
+    if (shouldTryPathLikeFallback) {
+      // Try path-like fallback for Java/Go/C#/Rust which often look like packages but map to source
+      const pathLike = await resolvePathLikeModule(projectRoot, spec);
+      if (pathLike) {
+        resolveSpecifierCache.set(cacheKey, pathLike);
+        return pathLike;
+      }
     }
     if (opts?.resolveNodeModules) {
       const nm = await resolveFromNodeModules(spec, fromFile, projectRoot);
