@@ -187,7 +187,7 @@ export function collectModuleSpecifiersFromSource(
       const attrs = match[2] ?? "";
       const attrName = tag === "script" || tag === "img" ? "src" : "href";
       const attrRe = new RegExp(
-        `(?:^|\s)${attrName}\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s"'=<>\x60]+))`,
+        `(?:^|\\s)${attrName}\\s*=\\s*(?:"([^"]+)"|'([^']+)'|([^\\s"'=<>\\x60]+))`,
         "i",
       );
       const attrMatch = attrs.match(attrRe);
