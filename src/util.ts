@@ -1930,9 +1930,19 @@ export async function resolveSpecifier(
       resolveSpecifierCache.set(cacheKey, resolvedWs);
       return resolvedWs;
     }
-    const shouldTryPathLikeFallback = spec.includes("/") || spec.includes(".");
+    const fromExt = path.extname(fromFile).toLowerCase();
+    const prefersPathLikeFallback = [
+      ".go",
+      ".java",
+      ".cs",
+      ".rb",
+      ".rs",
+      ".swift",
+    ].includes(fromExt);
+    const shouldTryPathLikeFallback =
+      prefersPathLikeFallback || spec.includes("/") || spec.includes(".");
     if (shouldTryPathLikeFallback) {
-      // Try path-like fallback for Java/Go/C#/Rust which often look like packages but map to source
+      // Try path-like fallback for languages that often map package-like names to source paths.
       const pathLike = await resolvePathLikeModule(projectRoot, spec);
       if (pathLike) {
         resolveSpecifierCache.set(cacheKey, pathLike);
