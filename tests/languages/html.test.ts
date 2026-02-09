@@ -37,6 +37,10 @@ const definition: LanguageTestDefinition = {
         from: "index.html",
         to: { type: "external", name: "./logo.svg" },
       },
+      {
+        from: "index.html",
+        to: { type: "file", path: "inline-helper.js" },
+      },
     ],
   },
 };

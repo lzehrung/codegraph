@@ -149,6 +149,52 @@ export function collectModuleSpecifiersFromSource(
     return out;
   }
 
+  function appendUniqueSpecifiers(
+    target: ModuleSpecifier[],
+    incoming: ModuleSpecifier[],
+  ): void {
+    const seen = new Set(
+      target.map((entry) => `${entry.spec}::${entry.typeOnly ? 1 : 0}`),
+    );
+    for (const entry of incoming) {
+      const key = `${entry.spec}::${entry.typeOnly ? 1 : 0}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      target.push(entry);
+    }
+  }
+
+  function extractHtmlInlineScriptSpecifiers(
+    source: string,
+  ): ModuleSpecifier[] {
+    const out: ModuleSpecifier[] = [];
+    const inlineScriptRe = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+    for (const match of source.matchAll(inlineScriptRe)) {
+      const attrs = match[1] ?? "";
+      if (/\bsrc\s*=\s*["'][^"']+["']/i.test(attrs)) continue;
+      const body = match[2] ?? "";
+      if (!body.trim()) continue;
+      out.push(...extractJsTsSpecifiers(body));
+    }
+    return out;
+  }
+
+  function extractHtmlAttributeSpecifiers(source: string): ModuleSpecifier[] {
+    const out: ModuleSpecifier[] = [];
+    const tagRe = /<(script|link|a|img)\b([^>]*)>/gi;
+    for (const match of source.matchAll(tagRe)) {
+      const tag = (match[1] ?? "").toLowerCase();
+      const attrs = match[2] ?? "";
+      const attrName = tag === "script" || tag === "img" ? "src" : "href";
+      const attrRe = new RegExp(`\b${attrName}\s*=\s*["']([^"']+)["']`, "i");
+      const attrMatch = attrs.match(attrRe);
+      const spec = attrMatch?.[1]?.trim();
+      if (!spec) continue;
+      out.push({ spec });
+    }
+    return out;
+  }
+
   // Fast path for JS/TS: regex-based extraction after comment stripping
   if (
     (support.id === "ts" || support.id === "js") &&
@@ -187,6 +233,10 @@ export function collectModuleSpecifiersFromSource(
         for (const cap of modNodes)
           out.push({ spec: unquote(sliceText(cap.node, source)), typeOnly });
       }
+      if (support.id === "html") {
+        appendUniqueSpecifiers(out, extractHtmlAttributeSpecifiers(source));
+        appendUniqueSpecifiers(out, extractHtmlInlineScriptSpecifiers(source));
+      }
       if (out.length > 0) return out;
     } finally {
       releaseParser(parser, key);
@@ -210,6 +260,16 @@ export function collectModuleSpecifiersFromSource(
           out.push(...extracted);
         }
       } catch {}
+    }
+  }
+
+  if (support.id === "html" && (queryFailed || out.length === 0)) {
+    const attributeSpecs = extractHtmlAttributeSpecifiers(source);
+    const inlineSpecs = extractHtmlInlineScriptSpecifiers(source);
+    if (attributeSpecs.length > 0 || inlineSpecs.length > 0) {
+      reportFallback(queryFailed ? "query-error" : "query-empty");
+      appendUniqueSpecifiers(out, attributeSpecs);
+      appendUniqueSpecifiers(out, inlineSpecs);
     }
   }
   return out;
