@@ -31,6 +31,32 @@ type SeverityResult = {
   explain: SeverityExplain;
 };
 
+type DependencyStats = {
+  fanInByFile: Map<FileId, number>;
+  reverseDeps: Map<FileId, Edge[]>;
+};
+
+function buildDependencyStats(edges: Edge[]): DependencyStats {
+  const fanInByFile = new Map<FileId, number>();
+  const reverseDeps = new Map<FileId, Edge[]>();
+
+  for (const edge of edges) {
+    if (edge.to.type !== "file") continue;
+
+    const nextCount = (fanInByFile.get(edge.to.path) ?? 0) + 1;
+    fanInByFile.set(edge.to.path, nextCount);
+
+    const incoming = reverseDeps.get(edge.to.path);
+    if (incoming) {
+      incoming.push(edge);
+      continue;
+    }
+    reverseDeps.set(edge.to.path, [edge]);
+  }
+
+  return { fanInByFile, reverseDeps };
+}
+
 export async function analyzeImpact(
   index: ProjectIndex,
   changedSymbols: ChangedSymbol[],
@@ -55,14 +81,7 @@ export async function analyzeImpact(
   const impacted = new Map<FileId, ImpactItem>();
   const processedSymbols = new Set<string>();
 
-  // Precompute fan-in once per impact run
-  const fanInByFile = new Map<FileId, number>();
-  for (const edge of index.graph.edges) {
-    if (edge.to.type === "file") {
-      const count = fanInByFile.get(edge.to.path) || 0;
-      fanInByFile.set(edge.to.path, count + 1);
-    }
-  }
+  const { fanInByFile, reverseDeps } = buildDependencyStats(index.graph.edges);
 
   // Filter out changed symbols in ignored files
   const filteredChangedSymbols = changedSymbols.filter(
@@ -171,12 +190,18 @@ export async function analyzeImpact(
 
   // Seed transitive impact from changed files (especially for deleted/renamed files with no symbols)
   if (!options.membersOnly && changedSymbols.length === 0) {
-    await seedTransitiveFromFiles(index, impacted, changedFiles, options);
+    await seedTransitiveFromFiles(
+      index,
+      impacted,
+      changedFiles,
+      options,
+      reverseDeps,
+    );
   }
 
   // Transitive impact via graph traversal (skip if membersOnly)
   if (!options.membersOnly) {
-    await analyzeTransitiveImpact(index, impacted, depth, options);
+    await analyzeTransitiveImpact(impacted, depth, options, reverseDeps);
   }
 
   return Array.from(impacted.values()).sort((a, b) => b.severity - a.severity);
@@ -187,6 +212,7 @@ export async function seedTransitiveFromFiles(
   impacted: Map<FileId, ImpactItem>,
   changedFiles: FileChange[],
   options: Partial<ImpactOptions>,
+  reverseDeps?: Map<FileId, Edge[]>,
 ): Promise<void> {
   const { includeTests = false, testPatterns, ignoreGlobs = [] } = options;
   const patternMatchers = buildTestPatterns(testPatterns);
@@ -198,9 +224,14 @@ export async function seedTransitiveFromFiles(
 
     // For deleted/renamed files, seed transitive impact from files that depended on them
     if (fileChange.kind === "deleted" || fileChange.kind === "renamed") {
-      const dependents = index.graph.edges
-        .filter((e) => e.to.type === "file" && e.to.path === fileChange.path)
-        .map((e) => e.from);
+      const dependents = reverseDeps
+        ? (reverseDeps.get(fileChange.path)?.map((edge) => edge.from) ?? [])
+        : index.graph.edges
+            .filter(
+              (edge) =>
+                edge.to.type === "file" && edge.to.path === fileChange.path,
+            )
+            .map((edge) => edge.from);
 
       for (const dependent of dependents) {
         if (!includeTests && isTestFile(dependent, patternMatchers)) continue;
@@ -231,24 +262,14 @@ export async function seedTransitiveFromFiles(
 }
 
 async function analyzeTransitiveImpact(
-  index: ProjectIndex,
   impacted: Map<FileId, ImpactItem>,
   maxDepth: number,
   options: Partial<ImpactOptions>,
+  reverseDeps: Map<FileId, Edge[]>,
 ): Promise<void> {
   const { testPatterns, ignoreGlobs = [] } = options;
   const patternMatchers = buildTestPatterns(testPatterns);
   const isIgnored = ignoreGlobs.length > 0 ? pm(ignoreGlobs) : () => false;
-
-  // Precompute reverse dependency index for efficient traversal
-  const reverseDeps = new Map<FileId, Edge[]>();
-  for (const e of index.graph.edges) {
-    if (e.to.type === "file") {
-      const arr = reverseDeps.get(e.to.path) || [];
-      arr.push(e);
-      reverseDeps.set(e.to.path, arr);
-    }
-  }
 
   const visited = new Set<FileId>();
   const queue: Array<{ file: FileId; depth: number; reason: ImpactReason }> =

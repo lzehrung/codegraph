@@ -833,22 +833,24 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
     const push = (spec: string, typeOnly?: boolean) => {
       if (spec) out.push({ spec, ...(typeOnly ? { typeOnly: true } : {}) });
     };
-    const reImportFrom = /^\s*import\s+[^\n;]*?\s+from\s+(["'])([^"']+)\1/gm;
-    for (const m of src.matchAll(reImportFrom))
-      push(m[2]!, /\bimport\s+type\b/.test(m[0]));
-    const reImportSide = /^\s*import\s+(["'])([^"']+)\1/gm;
-    for (const m of src.matchAll(reImportSide))
-      push(m[2]!, /\bimport\s+type\b/.test(m[0]));
-    const reExportFrom = /\bexport\s+[^\n;]*?\s+from\s+(["'])([^"']+)\1/gm;
-    for (const m of src.matchAll(reExportFrom))
-      push(m[2]!, /\bexport\s+type\b/.test(m[0]));
-    const reRequire = /(?<!["'`])\brequire\(\s*(["'])([^"']+)\1\s*\)/g;
-    for (const m of src.matchAll(reRequire)) push(m[2]!);
-    const reReqDestr =
-      /\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\(\s*(["'])([^"']+)\1\s*\)/g;
-    for (const m of src.matchAll(reReqDestr)) push(m[2]!);
-    const reDynImport = /(?<!["'`])\bimport\(\s*(["'])([^"']+)\1\s*\)/g;
-    for (const m of src.matchAll(reDynImport)) push(m[2]!);
+
+    const combined =
+      /^\s*import\s+[^\n;]*?\s+from\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|\bexport\s+[^\n;]*?\s+from\s+["']([^"']+)["']|\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\brequire\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\bimport\(\s*["']([^"']+)["']\s*\)/gm;
+
+    for (const m of src.matchAll(combined)) {
+      const spec = m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? m[6];
+      if (!spec) continue;
+      const text = m[0] ?? "";
+      const typeOnly =
+        m[1] !== undefined
+          ? /\bimport\s+type\b/.test(text)
+          : m[2] !== undefined
+            ? /\bimport\s+type\b/.test(text)
+            : m[3] !== undefined
+              ? /\bexport\s+type\b/.test(text)
+              : false;
+      push(spec, typeOnly);
+    }
   } catch {}
   return out;
 }
@@ -1852,6 +1854,13 @@ export async function resolveSpecifier(
     if (firstHit < 0) return null;
     return path.resolve(candidates[firstHit]!);
   };
+  const hasSchemePrefix = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(spec);
+  if (hasSchemePrefix || spec.startsWith("//")) {
+    const ext = { external: spec } as const;
+    resolveSpecifierCache.set(cacheKey, ext);
+    return ext;
+  }
+
   if (spec.startsWith(".") || spec.startsWith("/")) {
     const base = spec.startsWith("/")
       ? path.join(projectRoot, spec)
