@@ -173,8 +173,9 @@ function buildImpactCycles(
   impactedItems: ImpactItem[],
 ): ImpactCycle[] {
   const graphNodes = Array.from(index.graph.nodes);
+  const graphNodeSet = new Set(graphNodes);
   const canonicalizeFile = (file: FileId): FileId => {
-    if (index.graph.nodes.has(file)) return file;
+    if (graphNodeSet.has(file)) return file;
     const normalizedSuffix = file.replace(/\\/g, "/");
     const match = graphNodes.find((node) => node.endsWith(`/${normalizedSuffix}`));
     return match ?? file;
