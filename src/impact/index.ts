@@ -15,6 +15,7 @@ import { locateChangedSymbols } from "./map.js";
 import { analyzeImpact } from "./analyzer.js";
 import { buildImpactReport } from "./report.js";
 import { collectImpactSuggestions } from "./suggestions.js";
+import { listCandidateTestFiles } from "./context.js";
 
 export * from "./types.js";
 export { analyzeImpactStreaming, type ImpactStreamChunk } from "./streaming.js";
@@ -57,6 +58,61 @@ function matchesConfigSemantics(filePath: string): boolean {
   return CONFIG_FILE_RE.test(filePath);
 }
 
+function collectAddedLines(change: FileChange): string[] {
+  const added: string[] = [];
+  for (const hunk of change.hunks) {
+    for (const line of hunk.lines) {
+      if (line.startsWith("+")) added.push(line.slice(1));
+    }
+  }
+  return added;
+}
+
+function classifyConfigImpact(
+  change: FileChange,
+): { details: string; confidence: "high" | "medium" } {
+  const lowerPath = change.path.toLowerCase();
+  const addedLines = collectAddedLines(change).join("\n").toLowerCase();
+  if (lowerPath.endsWith("package.json")) {
+    if (addedLines.includes('"scripts"')) {
+      return {
+        details:
+          "package.json scripts changed; CI/build workflows may be affected across packages.",
+        confidence: "medium",
+      };
+    }
+    if (
+      addedLines.includes('"dependencies"') ||
+      addedLines.includes('"devdependencies"')
+    ) {
+      return {
+        details:
+          "package.json dependency graph changed; dependency resolution can affect multiple workspaces.",
+        confidence: "high",
+      };
+    }
+  }
+  if (lowerPath.endsWith("tsconfig.json") || lowerPath.endsWith("jsconfig.json")) {
+    return {
+      details:
+        "TypeScript/JavaScript compiler config changed; type-checking and module resolution can shift project-wide.",
+      confidence: "high",
+    };
+  }
+  if (lowerPath.includes(".env")) {
+    return {
+      details:
+        "Environment configuration changed; runtime behavior may differ across services and deploy environments.",
+      confidence: "medium",
+    };
+  }
+  return {
+    details:
+      "Configuration change detected; impact can be broad and may require full-project validation.",
+    confidence: "high",
+  };
+}
+
 async function collectConfigAndBreakingSuggestions(
   index: ProjectIndex,
   projectRoot: string,
@@ -73,41 +129,41 @@ async function collectConfigAndBreakingSuggestions(
     if (!opts.configImpactRules || !matchesConfigSemantics(fileChange.path))
       continue;
 
+    const configSemantics = classifyConfigImpact(fileChange);
     suggestions.push({
       file: normalized,
       kind: "configImpact",
-      details:
-        "Configuration change detected; impact can be broad and may require full-project validation.",
-      confidence: "high",
-    });
-  }
-
-  for (const symbol of changedSymbols) {
-    if (!symbol.exported) continue;
-    const removedLines = removedLinesByFile.get(symbol.file);
-    if (!removedLines || removedLines.size === 0) continue;
-    const symbolStart = symbol.range.start.line;
-    const symbolEnd = symbol.range.end.line;
-    let overlapsRemoval = false;
-    for (const line of removedLines) {
-      if (line < symbolStart || line > symbolEnd) continue;
-      overlapsRemoval = true;
-      break;
-    }
-    if (!overlapsRemoval) continue;
-
-    suggestions.push({
-      file: symbol.file,
-      range: symbol.range,
-      kind: "breakingChange",
-      symbol: symbol.name,
-      details:
-        "Exported symbol overlaps removed lines; verify call sites for potential breaking changes.",
-      confidence: "medium",
+      details: configSemantics.details,
+      confidence: configSemantics.confidence,
     });
   }
 
   if (opts.detectBreakingChanges) {
+    for (const symbol of changedSymbols) {
+      if (!symbol.exported) continue;
+      const removedLines = removedLinesByFile.get(symbol.file);
+      if (!removedLines || removedLines.size === 0) continue;
+      const symbolStart = symbol.range.start.line;
+      const symbolEnd = symbol.range.end.line;
+      let overlapsRemoval = false;
+      for (const line of removedLines) {
+        if (line < symbolStart || line > symbolEnd) continue;
+        overlapsRemoval = true;
+        break;
+      }
+      if (!overlapsRemoval) continue;
+
+      suggestions.push({
+        file: symbol.file,
+        range: symbol.range,
+        kind: "breakingChange",
+        symbol: symbol.name,
+        details:
+          "Exported symbol overlaps removed lines; verify call sites for potential breaking changes.",
+        confidence: "medium",
+      });
+    }
+
     for (const fileChange of fileChanges) {
       const normalized = normalizeFilePath(projectRoot, fileChange.path);
       const removedLines = removedLinesByFile.get(normalized);
@@ -143,6 +199,13 @@ async function collectUntestedChangeSuggestions(
     }
   }
 
+  const candidateTests = listCandidateTestFiles(
+    index,
+    Array.from(new Set(changedSymbols.map((entry) => entry.file))),
+    changedSymbols.map((entry) => entry.id),
+    { maxCandidates: 3 },
+  );
+
   for (const symbol of changedSymbols) {
     const refs = await findReferences(index, {
       def: {
@@ -159,12 +222,21 @@ async function collectUntestedChangeSuggestions(
     );
     if (hasTestRef) continue;
 
+    const candidateNames = candidateTests
+      .filter((entry) => entry.file !== symbol.file)
+      .slice(0, 2)
+      .map((entry) => path.basename(entry.file));
+    const details =
+      candidateNames.length > 0
+        ? `Changed symbol has no discovered references in test files. Consider adding or updating tests such as: ${candidateNames.join(", ")}.`
+        : "Changed symbol has no discovered references in test files.";
+
     suggestions.push({
       file: symbol.file,
       range: symbol.range,
       kind: "untestedChange",
       symbol: symbol.name,
-      details: "Changed symbol has no discovered references in test files.",
+      details,
       confidence: "medium",
     });
   }

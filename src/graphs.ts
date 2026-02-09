@@ -59,6 +59,64 @@ export type GraphCacheEntry = {
   edges: Edge[];
 };
 
+type PackageJsonDependencies = {
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+};
+
+async function collectWorkspaceManifestEdges(
+  projectRoot: string,
+): Promise<Edge[]> {
+  const manifestPaths = await listProjectFiles(projectRoot, ["**/package.json"]);
+  if (manifestPaths.length === 0) return [];
+
+  const manifestsByName = new Map<string, string>();
+  const parsedByPath = new Map<string, PackageJsonDependencies>();
+
+  for (const manifestPath of manifestPaths) {
+    const normalizedPath = manifestPath.replace(/\\/g, "/");
+    try {
+      const raw = await fsp.readFile(normalizedPath, "utf8");
+      const parsed = JSON.parse(raw) as PackageJsonDependencies & { name?: string };
+      parsedByPath.set(normalizedPath, parsed);
+      if (typeof parsed.name === "string" && parsed.name.trim()) {
+        manifestsByName.set(parsed.name, normalizedPath);
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  const edges: Edge[] = [];
+  if (manifestsByName.size === 0) return edges;
+
+  for (const [fromManifest, parsed] of parsedByPath.entries()) {
+
+    const dependencySets = [
+      parsed.dependencies,
+      parsed.devDependencies,
+      parsed.peerDependencies,
+      parsed.optionalDependencies,
+    ];
+    for (const dependencySet of dependencySets) {
+      if (!dependencySet) continue;
+      for (const dependencyName of Object.keys(dependencySet)) {
+        const toManifest = manifestsByName.get(dependencyName);
+        if (!toManifest) continue;
+        edges.push({
+          from: fromManifest,
+          to: { type: "file", path: toManifest },
+          raw: dependencyName,
+        });
+      }
+    }
+  }
+
+  return edges;
+}
+
 export function collectModuleSpecifiersFromSource(
   support: LanguageSupport,
   lang: Parser.Language,
@@ -72,6 +130,8 @@ export function collectModuleSpecifiersFromSource(
   },
 ): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
+  const htmlLikeLanguage =
+    support.id === "html" || support.id === "vue" || support.id === "svelte";
   const fastRegexDisabled = opts?.fastRegexDisabledLanguages?.includes(
     support.id,
   );
@@ -236,7 +296,7 @@ export function collectModuleSpecifiersFromSource(
         for (const cap of modNodes)
           out.push({ spec: unquote(sliceText(cap.node, source)), typeOnly });
       }
-      if (support.id === "html") {
+      if (htmlLikeLanguage) {
         appendUniqueSpecifiers(out, extractHtmlAttributeSpecifiers(source));
         appendUniqueSpecifiers(out, extractHtmlInlineScriptSpecifiers(source));
       }
@@ -266,7 +326,7 @@ export function collectModuleSpecifiersFromSource(
     }
   }
 
-  if (support.id === "html" && (queryFailed || out.length === 0)) {
+  if (htmlLikeLanguage && (queryFailed || out.length === 0)) {
     const attributeSpecs = extractHtmlAttributeSpecifiers(source);
     const inlineSpecs = extractHtmlInlineScriptSpecifiers(source);
     if (attributeSpecs.length > 0 || inlineSpecs.length > 0) {
@@ -532,6 +592,7 @@ export async function collectGraph(
     : { nodes: new Set(normalizedFiles), edges: [] };
   for (const file of normalizedFiles) graph.nodes.add(file);
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
+  const workspaceManifestEdges = await collectWorkspaceManifestEdges(projectRoot);
   const resolutionHints = normalizeResolutionHints(opts?.resolutionHints);
 
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 32, 128));
@@ -542,8 +603,29 @@ export async function collectGraph(
     }
   };
 
+  const appendUniqueEdges = (edges: Edge[]) => {
+    if (edges.length === 0) return;
+    const seen = new Set(
+      graph.edges.map(
+        (edge) =>
+          `${edge.from}::${edge.to.type === "file" ? edge.to.path : edge.to.name}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`,
+      ),
+    );
+    for (const edge of edges) {
+      const key = `${edge.from}::${edge.to.type === "file" ? edge.to.path : edge.to.name}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      graph.edges.push(edge);
+    }
+  };
+
   if (graph.edges.length > 0) {
     addEdgeTargetsToGraph(graph.edges);
+  }
+
+  if (workspaceManifestEdges.length > 0) {
+    appendUniqueEdges(workspaceManifestEdges);
+    addEdgeTargetsToGraph(workspaceManifestEdges);
   }
 
   const filePromises = await mapLimit(files, conc, async (file) => {

@@ -152,6 +152,31 @@ index 1111111..2222222 100644
     expect(config?.confidence).toBe("high");
   });
 
+  it("adds semantic config-impact details for package dependency changes", async () => {
+    const diffText = `diff --git a/package.json b/package.json
+index 1111111..2222222 100644
+--- a/package.json
++++ b/package.json
+@@ -1,5 +1,9 @@
+ {
++  "dependencies": {
++    "left-pad": "1.3.0"
++  }
+ }
+`;
+
+    const report = await buildSampleReport(diffText, {
+      verifyReferences: false,
+      configImpactRules: true,
+    });
+
+    const config = (report.suggestions ?? []).find(
+      (entry) => entry.kind === "configImpact",
+    );
+    expect(config).toBeDefined();
+    expect(config?.details?.toLowerCase().includes("dependency")).toBe(true);
+  });
+
   it("adds breaking-change suggestions when exported symbol overlaps removed lines", async () => {
     const diffText = `diff --git a/helpers.ts b/helpers.ts
 index 1111111..2222222 100644
@@ -199,5 +224,8 @@ index 1111111..2222222 100644
         entry.kind === "untestedChange" && entry.symbol === "helperFunction",
     );
     expect(untested).toBeDefined();
+    expect(untested?.details?.includes("Consider adding or updating tests")).toBe(
+      true,
+    );
   });
 });

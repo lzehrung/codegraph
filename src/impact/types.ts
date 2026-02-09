@@ -119,6 +119,13 @@ export type CompactImpactCluster = {
   totalSeverity: number;
 };
 
+export type ImpactCycle = {
+  files: FileId[];
+  touchesChangedFile: boolean;
+  touchesImpactedFile: boolean;
+  severity: "medium" | "high";
+};
+
 export type ImpactTopItem = {
   file: FileId;
   symbols: string[];
@@ -167,6 +174,7 @@ export type ImpactReport = {
   topImpacts?: ImpactTopItem[];
   surfaceArea: ImpactSurfaceArea;
   clusters: ImpactCluster[];
+  cycles?: ImpactCycle[];
   graph: {
     fileEdges: Array<{ from: FileId; to: FileId; typeOnly?: boolean }>;
     symbolEdges: Array<{ from: number; to: number; label: string }>; // indices into changedSymbols
@@ -243,6 +251,12 @@ export type CompactImpactReport = {
   }>;
   surfaceArea: CompactImpactSurfaceArea;
   clusters: CompactImpactCluster[];
+  cycles?: Array<{
+    files: number[];
+    touchesChangedFile: boolean;
+    touchesImpactedFile: boolean;
+    severity: "medium" | "high";
+  }>;
   graph: {
     fileEdges: Array<{ from: number; to: number; typeOnly?: boolean }>; // indices into files array
     symbolEdges: Array<{ from: number; to: number; label: string }>; // indices into changedSymbols
