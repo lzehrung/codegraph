@@ -2,10 +2,8 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import {
-  buildProjectIndexFromFiles,
-  type BuildReport,
-} from "../src/index.js";
+import { buildProjectIndexFromFiles, type BuildReport } from "../src/index.js";
+import { stripJsLikeComments } from "../src/util.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -47,5 +45,23 @@ describe("Import extraction fallback reporting", () => {
     );
     expect(importBinding).toBeTruthy();
     expect(edge).toBeTruthy();
+  });
+
+  it("preserves // inside string literals while stripping comments", () => {
+    const source = [
+      'const cdn = "//cdn.example.com/lib.js";',
+      'const api = "https://api.example.com/v1";',
+      "const tpl = `${base}//path`;",
+      "// remove me",
+      "const keep = 1; /* also remove */",
+    ].join("\n");
+
+    const stripped = stripJsLikeComments(source);
+
+    expect(stripped).toContain('"//cdn.example.com/lib.js"');
+    expect(stripped).toContain('"https://api.example.com/v1"');
+    expect(stripped).toContain("`${base}//path`");
+    expect(stripped).not.toContain("// remove me");
+    expect(stripped).not.toContain("/* also remove */");
   });
 });
