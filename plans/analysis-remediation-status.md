@@ -33,7 +33,10 @@ This tracks the items from `ANALYSIS.md` and their current disposition.
 
 ## Feature gaps
 
-- **F1 — richer CSS/HTML dependency tracking:** ⚠️ Partially addressed in current codebase (existing CSS/SCSS import and HTML `script/link` queries) but advanced cases remain (inline script imports, broader HTML asset edges).
+- **F1 — richer CSS/HTML dependency tracking:** ⚠️ Partially addressed.
+  - Existing CSS/SCSS import tracking is in place.
+  - HTML graph tracking now includes `script[src]`, `link[href]`, `a[href]`, and `img[src]`.
+  - Remaining gap: inline `<script>` module import extraction and broader HTML asset semantics.
 - **F2 — cycle detection/reporting:** ⚠️ Core file-graph cycle detection exists (`findCycles`), but richer reporting/severity surfacing remains.
 - **F3 — Vue/Svelte template dependency tracking:** ⏳ Not implemented.
 - **F4 — config-file impact semantics:** ⏳ Not implemented.

@@ -10,7 +10,9 @@ const definition: LanguageTestDefinition = {
       sourceFile: "html.sample.html",
       expectedChunks: (chunks) => {
         expect(chunks.some((c) => c.type === "comment")).toBe(true);
-        expect(chunks.some((c) => c.type === "element" && c.name === "app")).toBe(true);
+        expect(
+          chunks.some((c) => c.type === "element" && c.name === "app"),
+        ).toBe(true);
         expect(chunks.some((c) => c.type === "script")).toBe(true);
         expect(chunks.some((c) => c.type === "style")).toBe(true);
       },
@@ -26,6 +28,14 @@ const definition: LanguageTestDefinition = {
       {
         from: "index.html",
         to: { type: "file", path: "app.js" },
+      },
+      {
+        from: "index.html",
+        to: { type: "file", path: "about.html" },
+      },
+      {
+        from: "index.html",
+        to: { type: "external", name: "./logo.svg" },
       },
     ],
   },
