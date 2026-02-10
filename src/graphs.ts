@@ -189,18 +189,57 @@ export function collectModuleSpecifiersFromSource(
 
   function extractHtmlAttributeSpecifiers(source: string): ModuleSpecifier[] {
     const out: ModuleSpecifier[] = [];
-    const tagRe = /<(script|link|a|img)\b([^>]*)>/gi;
+    const tagAttrNames: Record<string, string[]> = {
+      script: ["src"],
+      link: ["href"],
+      a: ["href"],
+      img: ["src", "srcset"],
+      source: ["src", "srcset"],
+      video: ["src"],
+      audio: ["src"],
+      iframe: ["src"],
+      track: ["src"],
+    };
+    const tagRe =
+      /<(script|link|a|img|source|video|audio|iframe|track)\b([^>]*)>/gi;
     for (const match of source.matchAll(tagRe)) {
       const tag = (match[1] ?? "").toLowerCase();
       const attrs = match[2] ?? "";
-      const attrName = tag === "script" || tag === "img" ? "src" : "href";
-      const attrRe = new RegExp(
-        `(?:^|\\s)${attrName}\\s*=\\s*(?:"([^"]+)"|'([^']+)'|([^\\s"'=<>\\x60]+))`,
-        "i",
-      );
-      const attrMatch = attrs.match(attrRe);
-      const spec = (attrMatch?.[1] ?? attrMatch?.[2] ?? attrMatch?.[3])?.trim();
+      const attrNames = tagAttrNames[tag] ?? [];
+
+      for (const attrName of attrNames) {
+        const attrRe = new RegExp(
+          `(?:^|\\s)${attrName}\\s*=\\s*(?:"([^"]+)"|'([^']+)'|([^\\s"'=<>\\x60]+))`,
+          "i",
+        );
+        const attrMatch = attrs.match(attrRe);
+        const raw = (
+          attrMatch?.[1] ??
+          attrMatch?.[2] ??
+          attrMatch?.[3]
+        )?.trim();
+        if (!raw) continue;
+        if (attrName === "srcset") {
+          const candidates = raw
+            .split(",")
+            .map((entry) => entry.trim().split(/\s+/)[0]?.trim())
+            .filter((entry): entry is string => !!entry);
+          for (const spec of candidates) out.push({ spec });
+          continue;
+        }
+        out.push({ spec: raw });
+      }
+    }
+    return out;
+  }
+
+  function extractCssUrlSpecifiers(source: string): ModuleSpecifier[] {
+    const out: ModuleSpecifier[] = [];
+    const re = /url\(\s*(?:"([^"]+)"|'([^']+)'|([^\)\s]+))\s*\)/gi;
+    for (const match of source.matchAll(re)) {
+      const spec = (match[1] ?? match[2] ?? match[3] ?? "").trim();
       if (!spec) continue;
+      if (spec.startsWith("#")) continue;
       out.push({ spec });
     }
     return out;
@@ -247,6 +286,13 @@ export function collectModuleSpecifiersFromSource(
       if (htmlLikeLanguage) {
         appendUniqueSpecifiers(out, extractHtmlAttributeSpecifiers(source));
         appendUniqueSpecifiers(out, extractHtmlInlineScriptSpecifiers(source));
+      }
+      if (
+        support.id === "css" ||
+        support.id === "scss" ||
+        support.id === "less"
+      ) {
+        appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source));
       }
       if (out.length > 0) return out;
     } finally {

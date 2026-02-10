@@ -21,14 +21,14 @@ Remaining feature work after the initial analysis and #54 remediation. Each item
 
 ### F6. Test coverage gap detection
 
-**Done:** `collectUntestedChangeSuggestions` checks each changed symbol's references against test files. Symbols with no test-file references produce `kind: "untestedChange"` suggestions with candidate test file names.
+**Done:** `collectUntestedChangeSuggestions` checks each changed symbol's references against test files, accepts optional LCOV files, and ranks confidence using covered vs uncovered changed lines. Suggestions now include candidate test files and a concrete test command hint.
 
 **Remaining:**
-- Coverage-aware ranking tied to actual executed test coverage data (lcov/istanbul)
-- Confidence calibration (currently all "medium" — could weight by symbol kind, export status, fan-in)
-- Integration with test runner output to suggest specific test commands to run
+- Coverage ingestion beyond LCOV (for example Istanbul JSON)
+- Confidence calibration using symbol kind, export status, and fan-in in addition to coverage
+- Optional direct integration with test runner output for repository-specific command templates
 
-**Approach:** Accept optional coverage data (lcov paths) and cross-reference with changed symbol ranges for precise covered/uncovered classification.
+**Approach:** Extend current LCOV-based range matching to additional coverage formats and richer repository-aware ranking signals.
 
 ---
 
@@ -51,15 +51,15 @@ Remaining feature work after the initial analysis and #54 remediation. Each item
 
 ### F5. Breaking change detection
 
-**Done:** Heuristic suggestions when exported symbols overlap removed lines or when modules with exports contain removals. Produces `kind: "breakingChange"` suggestions with "medium"/"low" confidence.
+**Done:** Heuristic suggestions still trigger on exported symbol removals, and additional signature-aware checks now detect exported function arity changes (high confidence) and rename/removal candidates from paired diff lines (medium confidence).
 
 **Remaining:**
-- Structural before/after API signature diffing (parameter count/types, return types)
-- Semantic compatibility checks (narrowing vs. widening changes)
-- Renamed/moved symbol detection (not just removed)
-- Per-language rules (e.g., Python `*args` changes, Go interface additions, TS union narrowing)
+- Type-level API diffing (parameter/return type compatibility)
+- Semantic compatibility checks (narrowing vs widening)
+- Cross-file move detection and alias-preserving rename handling
+- Per-language compatibility rules (Python, Go, TypeScript, etc)
 
-**Approach:** Capture symbol signatures (parameter list, return annotation) in `SymbolDef`, diff against the previous version from the base branch's index, classify changes as breaking/non-breaking per language rules.
+**Approach:** Evolve from diff-line signature heuristics to AST-level before/after signature models per language, then run compatibility rulesets.
 
 ---
 

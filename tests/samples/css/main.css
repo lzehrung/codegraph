@@ -5,3 +5,7 @@
 .container {
   display: flex;
 }
+
+.hero {
+  background-image: url("cdn-bg");
+}
