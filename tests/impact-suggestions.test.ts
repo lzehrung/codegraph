@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
+import fsp from "node:fs/promises";
 import { analyzeImpactFromDiff } from "../src/impact/index.js";
 import type { ImpactReport } from "../src/impact/types.js";
 import { buildProjectIndex } from "../src/index.js";
@@ -19,6 +20,7 @@ async function buildSampleReport(
     detectBreakingChanges?: boolean;
     testCoverageSuggestions?: boolean;
     verifyReferences?: boolean;
+    lcovPaths?: string[];
   },
 ): Promise<ImpactReport> {
   const index = await buildProjectIndex(samplePath);
@@ -34,6 +36,7 @@ async function buildSampleReport(
     ...(options?.testCoverageSuggestions
       ? { testCoverageSuggestions: true }
       : {}),
+    ...(options?.lcovPaths ? { lcovPaths: options.lcovPaths } : {}),
   })) as ImpactReport;
   return report;
 }
@@ -204,6 +207,68 @@ index 1111111..2222222 100644
     expect(breaking).toBeDefined();
   });
 
+  it("detects exported function signature arity changes as high-confidence breaking changes", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,7 +1,7 @@
+-export function helperFunction(): string {
++export function helperFunction(input: string): string {
+   return "helper";
+ }
+ 
+ export function anotherHelper(): number {
+   return 42;
+ }
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const breaking = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "breakingChange" &&
+        entry.symbol === "helperFunction" &&
+        entry.details?.includes("signature changed"),
+    );
+    expect(breaking).toBeDefined();
+    expect(breaking?.confidence).toBe("high");
+  });
+
+  it("detects exported symbol rename candidates as medium-confidence breaking changes", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,7 +1,7 @@
+-export function helperFunction(): string {
++export function helperRenamed(): string {
+   return "helper";
+ }
+ 
+ export function anotherHelper(): number {
+   return 42;
+ }
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const breaking = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "breakingChange" &&
+        entry.symbol === "helperFunction" &&
+        entry.details?.includes("removed or renamed"),
+    );
+    expect(breaking).toBeDefined();
+    expect(breaking?.confidence).toBe("medium");
+  });
+
   it("adds untested-change suggestions when changed symbols have no test references", async () => {
     const diffText = `diff --git a/helpers.ts b/helpers.ts
 index 1111111..2222222 100644
@@ -228,5 +293,41 @@ index 1111111..2222222 100644
     expect(untested?.details?.includes("Consider adding or updating tests")).toBe(
       true,
     );
+  });
+
+  it("uses LCOV coverage to upgrade untested suggestions and includes a test command hint", async () => {
+    const lcovPath = path.join(samplePath, "coverage.lcov");
+    const lcovText = `TN:\nSF:${path.join(samplePath, "helpers.ts").replace(/\\/g, "/")}\nDA:1,0\nDA:2,0\nend_of_record\n`;
+    await fsp.writeFile(lcovPath, lcovText, "utf8");
+    try {
+      const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,3 @@
+ export function helperFunction(): string {
+-  return "helper";
++  return "helper-updated";
+ }
+`;
+
+      const report = await buildSampleReport(diffText, {
+        testCoverageSuggestions: true,
+        lcovPaths: [lcovPath],
+      });
+
+      const untested = (report.suggestions ?? []).find(
+        (entry) =>
+          entry.kind === "untestedChange" && entry.symbol === "helperFunction",
+      );
+      expect(untested).toBeDefined();
+      expect(untested?.confidence).toBe("high");
+      expect(untested?.details?.includes("Coverage currently exercises 0/")).toBe(
+        true,
+      );
+      expect(untested?.details?.includes("Suggested command:")).toBe(true);
+    } finally {
+      await fsp.rm(lcovPath, { force: true });
+    }
   });
 });

@@ -328,6 +328,8 @@ export type ImpactOptions = DiffProviderOptions & {
   detectBreakingChanges?: boolean;
   /** Add untested-change suggestions when changed symbols have no test references */
   testCoverageSuggestions?: boolean;
+  /** Optional LCOV file paths used to rank untested-change suggestions by actual line coverage */
+  lcovPaths?: string[];
   /** Custom severity weights for impact scoring */
   severityWeights?: Partial<SeverityWeights>;
 };

@@ -5,3 +5,7 @@
   color: vars.$primary-color;
   @include mixins.center;
 }
+
+.banner {
+  background-image: url("cdn-texture");
+}

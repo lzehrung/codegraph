@@ -3,6 +3,7 @@ import {
   buildProjectIndex,
   analyzeImpactFromDiff,
 } from "../src/index.js";
+import type { ImpactReport } from "../src/impact/types.js";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -35,11 +36,11 @@ describe("impact signature hint", () => {
         includeTests: true,
       });
 
-      const report = result;
+      const report = result as ImpactReport;
       expect(report.impacted.length).toBeGreaterThan(0);
-      const impact = report.impacted.find((i: any) => i.file === consumer);
+      const impact = report.impacted.find((item) => item.file === consumer);
       expect(impact).toBeDefined();
-      expect(impact.explain.hints).toContain("signatureChanged");
+      expect(impact?.explain?.hints).toContain("signatureChanged");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
