@@ -119,8 +119,21 @@ export type CompactImpactCluster = {
   totalSeverity: number;
 };
 
+export type ImpactCycleEdge = {
+  from: FileId;
+  to: FileId;
+  raw: string;
+  typeOnly?: boolean;
+};
+
 export type ImpactCycle = {
   files: FileId[];
+  entryEdges: ImpactCycleEdge[];
+  fileCount: number;
+  internalEdgeCount: number;
+  fanInFromOutside: number;
+  priorityScore: number;
+  remediationHint: string;
   touchesChangedFile: boolean;
   touchesImpactedFile: boolean;
   severity: "medium" | "high";
@@ -253,6 +266,17 @@ export type CompactImpactReport = {
   clusters: CompactImpactCluster[];
   cycles?: Array<{
     files: number[];
+    entryEdges: Array<{
+      from: number;
+      to: number;
+      raw: string;
+      typeOnly?: boolean;
+    }>;
+    fileCount: number;
+    internalEdgeCount: number;
+    fanInFromOutside: number;
+    priorityScore: number;
+    remediationHint: string;
     touchesChangedFile: boolean;
     touchesImpactedFile: boolean;
     severity: "medium" | "high";

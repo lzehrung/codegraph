@@ -4,6 +4,7 @@ import {
   getReverseDependencies,
   getShortestPath,
   findCycles,
+  findDetailedCycles,
 } from "../src/index.js";
 
 describe("graph queries", () => {
@@ -69,4 +70,17 @@ describe("graph queries", () => {
     expect(cycles.length).toBe(1);
     expect(cycles[0]).toEqual([selfLoopFile]);
   });
+
+
+  it("should provide detailed cycle metadata with entry edges and priority", () => {
+    const details = findDetailedCycles(graph);
+    expect(details.length).toBe(1);
+    const cycle = details[0]!;
+    expect(cycle.fileCount).toBe(3);
+    expect(cycle.internalEdgeCount).toBe(3);
+    expect(cycle.entryEdges.length).toBe(3);
+    expect(cycle.priorityScore).toBeGreaterThan(0);
+    expect(cycle.remediationHint.length).toBeGreaterThan(0);
+  });
+
 });

@@ -45,12 +45,12 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * Detailed symbol graphs include semantic edges like `calls`, `instantiates`, `extends`, `implements`, and `decorates`
 * **SQLite graph output**
   * Export file and symbol graphs into a queryable SQLite database with indexed tables
-  * Supports incremental updates by re-writing only changed files and symbol edges
+  * Supports incremental updates by re-writing changed files, deleting removed files, and patching affected symbol/file edges
 * **Dependency Analysis**
   * `deps <file>`: List all dependencies of a file
   * `rdeps <file>`: List all files that depend on a file
   * `path <from> <to>`: Find the shortest dependency path between two files
-  * `cycles`: Detect circular dependencies
+  * `cycles`: Detect circular dependencies with SCC priority, entry edges, and remediation hints
 * **Diagnostics & Reports**
   * `unresolved`: List external/unresolved imports and their importers
   * `hotspots`: Identify files with high complexity (fan-in/fan-out)
@@ -368,8 +368,10 @@ npx codegraph review --base origin/main --head HEAD --review-depth standard > re
 # Export graph deltas between revisions (requires manifest cache)
 npx codegraph graph-delta --git-base origin/main --git-head HEAD > graph-delta.json
 
-# Export graphs to SQLite (queryable by agents/tools)
+# Export full graphs to SQLite (queryable by agents/tools)
 npx codegraph graph --sqlite ./codegraph.sqlite
+# Incrementally update SQLite for a Git range (changed + deleted files reconciled)
+npx codegraph graph --git-base origin/main --git-head HEAD --sqlite ./codegraph.sqlite
 # Run raw SQL against the SQLite DB and return JSON
 npx codegraph sql --db ./codegraph.sqlite --query "SELECT name, file FROM symbols WHERE kind = 'function' LIMIT 5;"
 ```
@@ -385,7 +387,7 @@ The SQLite export is a **first-class query interface** for agent workflows. The 
 
 **Tables**
 - `files(path TEXT PRIMARY KEY, is_external INTEGER)`
-- `symbols(id TEXT PRIMARY KEY, file TEXT, name TEXT, kind TEXT, docstring TEXT, line_span INTEGER, complexity INTEGER)`
+- `symbols(id TEXT PRIMARY KEY, file TEXT, name TEXT, kind TEXT, docstring TEXT, line_span INTEGER, complexity INTEGER, visibility TEXT)`
 - `file_edges(from_path TEXT, to_path TEXT, to_type TEXT, raw TEXT, type_only INTEGER)`
 - `symbol_edges(from_id TEXT, to_id TEXT, label TEXT)`
 

@@ -19,7 +19,10 @@ import type {
   CompactImpactCluster,
   ImpactCycle,
 } from "./types.js";
-import { buildSymbolGraphDetailed, findCycles } from "../graphs.js";
+import {
+  buildSymbolGraphDetailed,
+  findDetailedCycles,
+} from "../graphs.js";
 import { normalizePath, discoverProjectFiles } from "../util.js";
 
 export async function buildImpactReport(
@@ -191,12 +194,18 @@ function buildImpactCycles(
   );
   const impactedSet = new Set(impactedItems.map((entry) => entry.file));
   const out: ImpactCycle[] = [];
-  for (const cycleFiles of findCycles(index.graph)) {
-    const touchesChangedFile = cycleFiles.some((file) => changedSet.has(file));
-    const touchesImpactedFile = cycleFiles.some((file) => impactedSet.has(file));
+  for (const cycle of findDetailedCycles(index.graph)) {
+    const touchesChangedFile = cycle.files.some((file) => changedSet.has(file));
+    const touchesImpactedFile = cycle.files.some((file) => impactedSet.has(file));
     if (!touchesChangedFile && !touchesImpactedFile) continue;
     out.push({
-      files: cycleFiles,
+      files: cycle.files,
+      entryEdges: cycle.entryEdges,
+      fileCount: cycle.fileCount,
+      internalEdgeCount: cycle.internalEdgeCount,
+      fanInFromOutside: cycle.fanInFromOutside,
+      priorityScore: cycle.priorityScore,
+      remediationHint: cycle.remediationHint,
       touchesChangedFile,
       touchesImpactedFile,
       severity: touchesChangedFile ? "high" : "medium",
@@ -414,6 +423,17 @@ function buildCompactReport(
     cycles.length > 0
       ? cycles.map((cycle) => ({
           files: cycle.files.map((file) => fileIndex.get(file)!),
+          entryEdges: cycle.entryEdges.map((edge) => ({
+            from: fileIndex.get(edge.from)!,
+            to: fileIndex.get(edge.to)!,
+            raw: edge.raw,
+            ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
+          })),
+          fileCount: cycle.fileCount,
+          internalEdgeCount: cycle.internalEdgeCount,
+          fanInFromOutside: cycle.fanInFromOutside,
+          priorityScore: cycle.priorityScore,
+          remediationHint: cycle.remediationHint,
           touchesChangedFile: cycle.touchesChangedFile,
           touchesImpactedFile: cycle.touchesImpactedFile,
           severity: cycle.severity,

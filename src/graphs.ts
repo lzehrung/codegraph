@@ -943,6 +943,27 @@ export function getShortestPath(
 }
 
 export function findCycles(graph: Graph): FileId[][] {
+  return findDetailedCycles(graph).map((cycle) => cycle.files);
+}
+
+export type CycleEntryEdge = {
+  from: FileId;
+  to: FileId;
+  raw: string;
+  typeOnly?: boolean;
+};
+
+export type DetailedCycle = {
+  files: FileId[];
+  entryEdges: CycleEntryEdge[];
+  fileCount: number;
+  internalEdgeCount: number;
+  fanInFromOutside: number;
+  priorityScore: number;
+  remediationHint: string;
+};
+
+export function findDetailedCycles(graph: Graph): DetailedCycle[] {
   const nodes = Array.from(graph.nodes);
   const indexMap = new Map<string, number>();
   nodes.forEach((n, i) => indexMap.set(n, i));
@@ -998,7 +1019,52 @@ export function findCycles(graph: Graph): FileId[][] {
     if (indices[i] === -1) strongconnect(i);
   }
 
-  return sccs.map((scc) => scc.map((idx) => nodes[idx]!));
+  const cycleDetails: DetailedCycle[] = [];
+  for (const scc of sccs) {
+    const files = scc.map((idx) => nodes[idx]!);
+    const sccSet = new Set(files);
+    const entryEdges: CycleEntryEdge[] = [];
+    let internalEdgeCount = 0;
+    let fanInFromOutside = 0;
+
+    for (const edge of graph.edges) {
+      if (edge.to.type !== "file") continue;
+      const fromInScc = sccSet.has(edge.from);
+      const toInScc = sccSet.has(edge.to.path);
+      if (fromInScc && toInScc) {
+        internalEdgeCount += 1;
+        entryEdges.push({
+          from: edge.from,
+          to: edge.to.path,
+          raw: edge.raw,
+          ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
+        });
+      }
+      if (!fromInScc && toInScc) {
+        fanInFromOutside += 1;
+      }
+    }
+
+    const priorityScore =
+      files.length * 3 + fanInFromOutside * 2 + internalEdgeCount;
+    const remediationHint =
+      entryEdges.length > 0
+        ? `Break ${entryEdges[0]!.from} -> ${entryEdges[0]!.to} (import ${entryEdges[0]!.raw}) to reduce SCC coupling.`
+        : `Break one import edge in this ${files.length}-file SCC to remove the cycle.`;
+
+    cycleDetails.push({
+      files,
+      entryEdges,
+      fileCount: files.length,
+      internalEdgeCount,
+      fanInFromOutside,
+      priorityScore,
+      remediationHint,
+    });
+  }
+
+  cycleDetails.sort((a, b) => b.priorityScore - a.priorityScore);
+  return cycleDetails;
 }
 
 export function getUnresolvedImports(graph: Graph): Array<{

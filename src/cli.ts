@@ -28,10 +28,12 @@ import {
   getReverseDependencies,
   getShortestPath,
   findCycles,
+  findDetailedCycles,
   getUnresolvedImports,
   getHotspots,
   getApiSurface,
   writeGraphSqlite,
+  updateGraphSqlite,
   queryGraphSqliteRaw,
   chunkFile,
   chunkTextFile,
@@ -754,19 +756,30 @@ Examples:
     return null;
   };
 
-  const resolveFiles = async (): Promise<string[]> => {
+  const resolveChangedFilesWithDeletes = async (): Promise<
+    | { existingFiles: string[]; deletedFiles: string[] }
+    | null
+  > => {
     const gitFiles = await resolveChangedFiles();
-    if (gitFiles) {
-      const existence = gitFiles.map((file) => ({
-        file,
-        exists: fs.existsSync(file),
-      }));
-      const existingFiles = existence
+    if (!gitFiles) return null;
+    const existence = gitFiles.map((file: string) => ({
+      file,
+      exists: fs.existsSync(file),
+    }));
+    return {
+      existingFiles: existence
         .filter((entry) => entry.exists)
-        .map((entry) => entry.file);
-      const deletedFiles = existence
+        .map((entry) => entry.file),
+      deletedFiles: existence
         .filter((entry) => !entry.exists)
-        .map((entry) => entry.file);
+        .map((entry) => entry.file),
+    };
+  };
+
+  const resolveFiles = async (): Promise<string[]> => {
+    const changedSet = await resolveChangedFilesWithDeletes();
+    if (changedSet) {
+      const { existingFiles, deletedFiles } = changedSet;
       if (deletedFiles.length > 0) {
         writeStderrLine(
           `Skipping ${deletedFiles.length} deleted file(s) from git diff: ${deletedFiles
@@ -942,11 +955,23 @@ Examples:
             membersOnly,
           })
         : await buildSymbolGraph(index);
-      await writeGraphSqlite({
-        fileGraph: index.graph,
-        symbolGraph: sgraph,
-        outputPath: sqliteFile,
-      });
+      const changedSet = await resolveChangedFilesWithDeletes();
+      if (changedSet) {
+        await updateGraphSqlite({
+          fileGraph: index.graph,
+          symbolGraph: sgraph,
+          outputPath: sqliteFile,
+          changedFiles: changedSet.existingFiles,
+          deletedFiles: changedSet.deletedFiles,
+          fullGraphSync: true,
+        });
+      } else {
+        await writeGraphSqlite({
+          fileGraph: index.graph,
+          symbolGraph: sgraph,
+          outputPath: sqliteFile,
+        });
+      }
       await finalizeReport();
       return;
     }
@@ -1592,21 +1617,30 @@ Examples:
       await listProjectFiles(projectRootFs),
       hasGraphOverrides ? buildGraphOptions() : undefined,
     );
-    const cycles = findCycles(graph);
+    const cycleDetails = findDetailedCycles(graph);
 
     if (json) {
-      writeJSONLine(cycles);
+      writeJSONLine(cycleDetails);
     } else {
-      if (cycles.length === 0) {
+      if (cycleDetails.length === 0) {
         writeStdoutLine("No dependency cycles found.");
       } else {
-        writeStdoutLine(`Found ${cycles.length} dependency cycles:`);
-        for (let i = 0; i < cycles.length; i++) {
-          const cycle = cycles[i]!;
-          writeStdoutLine(`Cycle ${i + 1}:`);
+        writeStdoutLine(`Found ${cycleDetails.length} dependency cycles:`);
+        for (let i = 0; i < cycleDetails.length; i++) {
+          const cycle = cycleDetails[i]!;
+          writeStdoutLine(`Cycle ${i + 1} (priority=${cycle.priorityScore}):`);
           writeStdoutLine(
-            `  ${cycle.map((p) => path.relative(projectRootFs, p)).join(" -> ")} -> ...`,
+            `  ${cycle.files.map((p) => path.relative(projectRootFs, p)).join(" -> ")} -> ...`,
           );
+          if (cycle.entryEdges.length > 0) {
+            writeStdoutLine("  Entry edges:");
+            for (const edge of cycle.entryEdges) {
+              writeStdoutLine(
+                `    ${path.relative(projectRootFs, edge.from)} -> ${path.relative(projectRootFs, edge.to)} (import ${edge.raw})`,
+              );
+            }
+          }
+          writeStdoutLine(`  Hint: ${cycle.remediationHint}`);
         }
       }
     }

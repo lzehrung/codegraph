@@ -67,12 +67,11 @@ Remaining feature work after the initial analysis and #54 remediation. Each item
 
 ### F2. Cycle detection enhancements
 
-**Done:** `findCycles()` (Tarjan's SCC) already existed. #54 added cycle summaries to impact reports with severity (`high`/`medium`) and flags for changed/impacted-file involvement.
+**Done:** `findCycles()` (Tarjan's SCC) already existed. #54 added cycle summaries to impact reports with severity (`high`/`medium`) and flags for changed/impacted-file involvement. This is now extended with detailed cycle metadata: internal entry edges (`from` -> `to` + raw import), SCC prioritization (`priorityScore`, size, fan-in), and remediation hints that suggest a candidate edge to break.
 
 **Remaining:**
-- Entry edge details per cycle (which specific imports form the cycle)
-- SCC-level prioritization (rank cycles by size, fan-in, or involvement in changed code)
-- Automated remediation hints (suggest which edge to break based on dependency direction)
+- Improve remediation quality using symbol-level coupling (for example choose edge with weakest call density)
+- Add optional CLI sorting modes (by file count vs fan-in vs changed-file relevance)
 
 ---
 
@@ -90,9 +89,9 @@ Remaining feature work after the initial analysis and #54 remediation. Each item
 
 ### F8. Incremental SQLite graph updates
 
-**Done:** SQLite updates are changed-file scoped for nodes/edges.
+**Done:** SQLite updates are changed-file scoped for nodes/edges. Incremental updates now reconcile deleted files, remove stale symbol/file edges, and support CI-friendly incremental patching via `codegraph graph --git-base ... --sqlite ...` backed by `updateGraphSqlite({ fullGraphSync: true })`.
 
 **Remaining:**
 - Truly incremental parse+graph+persist pipeline without full in-memory graph materialization
 - Temporal graph tracking (store snapshots over time for evolution analysis)
-- Efficient diff-based patching for CI pipelines that maintain persistent databases
+- Snapshot metadata/version tables for historical querying and retention policies

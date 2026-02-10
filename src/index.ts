@@ -39,11 +39,14 @@ export {
   getReverseDependencies,
   getShortestPath,
   findCycles,
+  findDetailedCycles,
   getUnresolvedImports,
   getHotspots,
   type DependencyNode,
   type SymbolGraph,
   type SymbolNodeKind,
+  type DetailedCycle,
+  type CycleEntryEdge,
 } from "./graphs.js";
 export {
   parseSymbolQuery,

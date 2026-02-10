@@ -210,6 +210,75 @@ export function run() { return new NewWidget(); }
     db.close();
   });
 
+
+  it("removes deleted files and stale edges during incremental updates", async () => {
+    const root = await mkTmpDir("dg-sqlite-delete-");
+    await fsp.writeFile(
+      path.join(root, "main.ts"),
+      `import { helper } from "./util";
+export const run = () => helper();
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "util.ts"),
+      `export function helper() { return 1; }
+`,
+      "utf8",
+    );
+
+    const baseIndex = await buildProjectIndex(root);
+    const baseSgraph = await buildSymbolGraphDetailed(baseIndex);
+    const dbPath = path.join(root, "graph.sqlite");
+    await writeGraphSqlite({
+      fileGraph: baseIndex.graph,
+      symbolGraph: baseSgraph,
+      outputPath: dbPath,
+    });
+
+    await fsp.unlink(path.join(root, "util.ts"));
+    await fsp.writeFile(
+      path.join(root, "main.ts"),
+      `export const run = () => 1;
+`,
+      "utf8",
+    );
+
+    const nextIndex = await buildProjectIndex(root);
+    const nextSgraph = await buildSymbolGraphDetailed(nextIndex);
+    await updateGraphSqlite({
+      fileGraph: nextIndex.graph,
+      symbolGraph: nextSgraph,
+      outputPath: dbPath,
+      changedFiles: [path.join(root, "main.ts").replace(/\\/g, "/")],
+      deletedFiles: [path.join(root, "util.ts").replace(/\\/g, "/")],
+      fullGraphSync: true,
+    });
+
+    const BetterSqlite3 = loadBetterSqlite3();
+    const db = new BetterSqlite3(dbPath);
+    const utilFiles = dbQuery(
+      db,
+      `SELECT path FROM files WHERE path = '${path
+        .join(root, "util.ts")
+        .replace(/\\/g, "/")}';`,
+    );
+    const utilSymbols = dbQuery(
+      db,
+      "SELECT name FROM symbols WHERE name = 'helper';",
+    );
+    const staleEdges = dbQuery(
+      db,
+      `SELECT to_path FROM file_edges WHERE to_path = '${path
+        .join(root, "util.ts")
+        .replace(/\\/g, "/")}';`,
+    );
+
+    expect(utilFiles).toEqual([]);
+    expect(utilSymbols).toEqual([]);
+    expect(staleEdges).toEqual([]);
+    db.close();
+  });
   it("supports deterministic graph queries", async () => {
     const root = await mkTmpDir("dg-sqlite-query-");
     const auth = `
