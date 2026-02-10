@@ -1,9 +1,14 @@
-<script src="./logic.ts"></script>
+<script>
+  import Widget from "./Widget.svelte";
+</script>
 
-<main class="app">Hello</main>
+<main class="app">
+  <Widget />
+</main>
 
 <style>
 .app {
   color: #333;
 }
 </style>
+<script src="./missing.ts"></script>

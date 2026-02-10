@@ -23,8 +23,10 @@ export const HTML_DEF: LanguageDefinition = {
   graph: {
     imports: `
       (script_element (start_tag (attribute (attribute_name) @attr (#eq? @attr "src") (quoted_attribute_value (attribute_value) @mod)))) @stmt
-      (element (start_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "href") (quoted_attribute_value (attribute_value) @mod)))) @stmt (#eq? @tag "link")
-      (element (self_closing_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "href") (quoted_attribute_value (attribute_value) @mod)))) @stmt (#eq? @tag "link")
+      (element (start_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "href") (quoted_attribute_value (attribute_value) @mod)))) @stmt (#match? @tag "^(link|a)$")
+      (element (self_closing_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "href") (quoted_attribute_value (attribute_value) @mod)))) @stmt (#match? @tag "^(link|a)$")
+      (element (start_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "src") (quoted_attribute_value (attribute_value) @mod)))) @stmt (#eq? @tag "img")
+      (element (self_closing_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "src") (quoted_attribute_value (attribute_value) @mod)))) @stmt (#eq? @tag "img")
     `,
     exports: "",
     locals: `
@@ -32,8 +34,10 @@ export const HTML_DEF: LanguageDefinition = {
     `,
     importBindings: `
       (script_element (start_tag (attribute (attribute_name) @attr (#eq? @attr "src") (quoted_attribute_value (attribute_value) @from)))) @stmt
-      (element (start_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "href") (quoted_attribute_value (attribute_value) @from)))) @stmt (#eq? @tag "link")
-      (element (self_closing_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "href") (quoted_attribute_value (attribute_value) @from)))) @stmt (#eq? @tag "link")
+      (element (start_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "href") (quoted_attribute_value (attribute_value) @from)))) @stmt (#match? @tag "^(link|a)$")
+      (element (self_closing_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "href") (quoted_attribute_value (attribute_value) @from)))) @stmt (#match? @tag "^(link|a)$")
+      (element (start_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "src") (quoted_attribute_value (attribute_value) @from)))) @stmt (#eq? @tag "img")
+      (element (self_closing_tag (tag_name) @tag (attribute (attribute_name) @attr (#eq? @attr "src") (quoted_attribute_value (attribute_value) @from)))) @stmt (#eq? @tag "img")
     `,
   },
   nodeTypes: {
