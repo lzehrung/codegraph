@@ -558,6 +558,61 @@ const memoryCache = new Map<string, ModuleCacheEntry>();
 
 type BetterSqliteDatabase = import("better-sqlite3").Database;
 
+type PackageJsonDependencyInfo = {
+  name?: string;
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+};
+
+async function collectWorkspaceManifestDependencyEdges(
+  projectRoot: string,
+): Promise<Edge[]> {
+  const manifestPaths = await listProjectFiles(projectRoot, ["**/package.json"]);
+  if (manifestPaths.length === 0) return [];
+
+  const manifestByPackageName = new Map<string, string>();
+  const parsedByPath = new Map<string, PackageJsonDependencyInfo>();
+
+  for (const manifestPath of manifestPaths) {
+    try {
+      const raw = await fsp.readFile(manifestPath, "utf8");
+      const parsed = JSON.parse(raw) as PackageJsonDependencyInfo;
+      parsedByPath.set(manifestPath, parsed);
+      if (typeof parsed.name === "string" && parsed.name.trim()) {
+        manifestByPackageName.set(parsed.name, manifestPath);
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  const edges: Edge[] = [];
+  for (const [fromManifest, parsed] of parsedByPath.entries()) {
+    const dependencySets = [
+      parsed.dependencies,
+      parsed.devDependencies,
+      parsed.peerDependencies,
+      parsed.optionalDependencies,
+    ];
+    for (const dependencySet of dependencySets) {
+      if (!dependencySet) continue;
+      for (const dependencyName of Object.keys(dependencySet)) {
+        const toManifest = manifestByPackageName.get(dependencyName);
+        if (!toManifest) continue;
+        edges.push({
+          from: fromManifest,
+          to: { type: "file", path: toManifest },
+          raw: dependencyName,
+        });
+      }
+    }
+  }
+
+  return edges;
+}
+
 const loadBetterSqlite3 = () => {
   const require = createRequire(import.meta.url);
   return require("better-sqlite3") as typeof import("better-sqlite3");
@@ -2753,6 +2808,23 @@ async function buildIndexFromFileListShared(
   if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
 
   const graphStart = performance.now();
+  const appendUniqueGraphEdges = (edges: Edge[]) => {
+    if (edges.length === 0) return;
+    const seen = new Set(
+      graph.edges.map(
+        (edge) =>
+          `${edge.from}::${edge.to.type === "file" ? edge.to.path : edge.to.name}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`,
+      ),
+    );
+    for (const edge of edges) {
+      const key = `${edge.from}::${edge.to.type === "file" ? edge.to.path : edge.to.name}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      graph.edges.push(edge);
+      if (edge.to.type === "file") graph.nodes.add(edge.to.path);
+    }
+  };
+
   for (const [file, mod, edges] of fileResults) {
     modules.set(file, mod);
     for (const e of edges) {
@@ -2760,6 +2832,10 @@ async function buildIndexFromFileListShared(
       if (e.to.type === "file") graph.nodes.add(e.to.path);
     }
   }
+
+  appendUniqueGraphEdges(
+    await collectWorkspaceManifestDependencyEdges(projectRoot),
+  );
   if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
 
   for (const jsonPath of jsonDependencies) {

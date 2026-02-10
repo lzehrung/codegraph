@@ -1,6 +1,11 @@
 <template>
-  <div class="app">Hello</div>
+  <div class="app">
+    <Child />
+  </div>
 </template>
+<script setup>
+import Child from "./Child.vue";
+</script>
 <script src="./logic.ts"></script>
 <style scoped>
 .app {
