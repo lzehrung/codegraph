@@ -1,118 +1,98 @@
 # Codegraph Feature Roadmap
 
-Feature gaps identified during deep analysis, organized by priority and effort.
+Remaining feature work after the initial analysis and #54 remediation. Each item was partially addressed with heuristic/scaffolding implementations — this documents what exists and what remains.
 
 ---
 
 ## Tier 1: High Value / Moderate Effort
 
-### CSS/SCSS/Less `@import` dependency tracking
+### F4. Configuration file impact analysis
 
-**Current state:** CSS, SCSS, and Less files are supported for chunking only — no import queries are defined.
+**Done:** Semantic config-impact suggestions classify key config families (`package.json` scripts/deps, tsconfig/jsconfig, `.env`) with per-family detail messages and confidence levels. Integrated into impact reports via `ImpactSuggestion` with `kind: "configImpact"`.
 
-**Gap:**
-- CSS `@import "file.css"` and `@import url("...")`
-- SCSS `@use`, `@forward`, `@import`
-- Less `@import`
-- HTML `<link rel="stylesheet" href="...">` already handled, but inline `<style>` with `@import` is not
+**Remaining:**
+- Precise key-level blast-radius mapping (e.g., `tsconfig paths` change → list which files use affected path aliases)
+- Build tool configs (vite, webpack, rollup, esbuild) — matched by regex but lack semantic classification
+- Monorepo tool configs (turbo.json, nx.json) — detected but not analyzed for cross-package impact
 
-**Why it matters:** Web projects have significant dependencies through stylesheets. These are invisible to impact analysis — changing a shared CSS variable file shows zero impacted consumers.
-
-**Approach:** Tree-sitter-css and tree-sitter-scss can parse `@import`/`@use` rules. Add graph queries to the existing CSS/SCSS language definitions following the same pattern as JS/TS import queries.
+**Approach:** For tsconfig specifically, cross-reference `paths` keys against `resolveSpecifier` cache to identify which files would be affected. For build tools, parse the config AST to identify entry points and output targets.
 
 ---
 
-### Configuration file impact analysis
+### F6. Test coverage gap detection
 
-**Current state:** Config files (tsconfig.json, vite.config.ts, etc.) are not analyzed for impact.
+**Done:** `collectUntestedChangeSuggestions` checks each changed symbol's references against test files. Symbols with no test-file references produce `kind: "untestedChange"` suggestions with candidate test file names.
 
-**Gap:**
-- tsconfig.json `baseUrl`/`paths` changes affect import resolution project-wide
-- Build config changes (webpack, vite) affect bundle output
-- Linter configs affect rule enforcement
-- `.env` changes affect runtime behavior
+**Remaining:**
+- Coverage-aware ranking tied to actual executed test coverage data (lcov/istanbul)
+- Confidence calibration (currently all "medium" — could weight by symbol kind, export status, fan-in)
+- Integration with test runner output to suggest specific test commands to run
 
-**Why it matters:** A single config change can have project-wide impact, but impact analysis shows zero impacted symbols. This is a significant false-negative risk for code review.
-
-**Approach:** Define config-type-specific rules that map known config keys to impact scopes (e.g., `compilerOptions.strict` → all TS files, `paths` → all files with bare-specifier imports).
-
----
-
-### Test coverage gap detection
-
-**Current state:** `listCandidateTestFiles` uses filename patterns to find potentially related tests, but there's no analysis of whether changed code is actually exercised by tests.
-
-**Gap:**
-- Map changed symbols to test files that import/reference them
-- Flag changed symbols with zero test references as "untested changes"
-- Suggest which test files to run for a given diff
-
-**Why it matters:** The most dangerous changes are untested ones. Agents and reviewers need to know "This function was modified but no test file references it."
-
-**Approach:** Use existing `findReferences` to check if any file matching test patterns references each changed symbol. Integrate into impact report as an "untested changes" section.
+**Approach:** Accept optional coverage data (lcov paths) and cross-reference with changed symbol ranges for precise covered/uncovered classification.
 
 ---
 
 ## Tier 2: High Value / High Effort
 
-### Vue/Svelte template-level dependencies
+### F3. Vue/Svelte template-level dependencies
 
-**Current state:** SFC parsing extracts `<script>` blocks for analysis. Template blocks are used only for chunking.
+**Done:** HTML-like attribute/import fallback extraction for Vue/Svelte source, including template-local asset references and inline-script imports.
 
-**Gap:**
-- Component references in templates: `<MyComponent>` → import dependency
-- Prop bindings: `:prop="value"` → symbol reference
-- Event handlers: `@click="handler"` → function reference
-- `<script setup>` defineProps/defineEmits tracking
+**Remaining:**
+- Component references in templates: `<MyComponent>` → link to imported component definition
+- Directive bindings: `:prop="expr"`, `@event="handler"` → link to script-block symbols
+- `<script setup>` composition API: `defineProps`, `defineEmits`, `defineSlots` macro tracking
+- Slot usage tracking across parent/child component boundaries
+- Dynamic component resolution: `<component :is="name">`
 
-**Why it matters:** Template-level references are the primary interaction surface for Vue/Svelte components, but they're completely invisible to impact analysis.
-
-**Approach:** Parse template AST, extract identifiers, and link them to script-block symbols. Would need template-specific tree-sitter queries and a mapping layer between template and script scopes.
+**Approach:** Parse template AST to extract identifiers from bindings/directives, then resolve them against the script block's local symbol table. Would require template-specific tree-sitter queries or a regex-based template identifier extractor.
 
 ---
 
-### Breaking change detection
+### F5. Breaking change detection
 
-**Current state:** Impact analysis tracks which symbols changed and which files reference them, but doesn't classify what changed.
+**Done:** Heuristic suggestions when exported symbols overlap removed lines or when modules with exports contain removals. Produces `kind: "breakingChange"` suggestions with "medium"/"low" confidence.
 
-**Gap:**
-- Parameter addition/removal/reorder detection
-- Return type changes
-- Access modifier changes (public → private)
-- Removed exports
-- Interface member changes
+**Remaining:**
+- Structural before/after API signature diffing (parameter count/types, return types)
+- Semantic compatibility checks (narrowing vs. widening changes)
+- Renamed/moved symbol detection (not just removed)
+- Per-language rules (e.g., Python `*args` changes, Go interface additions, TS union narrowing)
 
-**Why it matters:** "Function `foo` changed" is far less useful than "Function `foo` had parameter `bar` removed, breaking 12 callers."
-
-**Approach:** Before/after AST comparison with per-language semantic understanding of what constitutes a breaking change. Would need a `SymbolSignature` type and diffing logic.
+**Approach:** Capture symbol signatures (parameter list, return annotation) in `SymbolDef`, diff against the previous version from the base branch's index, classify changes as breaking/non-breaking per language rules.
 
 ---
 
 ## Tier 3: Specialized / Exploratory
 
-### Cross-language dependency tracking in monorepos
+### F2. Cycle detection enhancements
 
-**Current state:** Monorepo workspace detection handles npm/yarn/pnpm/lerna. Cross-language boundaries are opaque.
+**Done:** `findCycles()` (Tarjan's SCC) already existed. #54 added cycle summaries to impact reports with severity (`high`/`medium`) and flags for changed/impacted-file involvement.
 
-**Gap:**
-- FFI boundaries (Rust ↔ Node via napi, Python ↔ C via ctypes)
-- Shared schema dependencies (protobuf, GraphQL, OpenAPI)
-- Build-system-level dependencies (Makefile targets, Bazel rules)
-
-**Why it matters:** Modern monorepos increasingly mix languages. A Rust crate change has no visible impact on its napi TypeScript consumer.
-
-**Approach:** Build-system config parsing (Cargo.toml napi references, pyproject.toml extension modules), shared schema file detection, and cross-language edge injection.
+**Remaining:**
+- Entry edge details per cycle (which specific imports form the cycle)
+- SCC-level prioritization (rank cycles by size, fan-in, or involvement in changed code)
+- Automated remediation hints (suggest which edge to break based on dependency direction)
 
 ---
 
-### Incremental SQLite export
+### F7. Cross-language monorepo dependency modeling
 
-**Current state:** `writeGraphSqlite` does a full export; `updateGraphSqlite` does a complete rebuild.
+**Done:** Workspace manifest dependency edges (`package.json` → dependent workspace `package.json`) so cross-package relationships are represented.
 
-**Gap:**
-- True incremental updates (only changed files)
-- Temporal graph tracking (evolution over time)
+**Remaining:**
+- Non-Node manifest support (pip/poetry `pyproject.toml`, Maven/Gradle, Cargo.toml, Go workspace)
+- FFI boundaries (napi-rs, ctypes, JNI)
+- Shared schema dependencies (protobuf, GraphQL, OpenAPI definitions)
+- Build-system-level dependency graphs (Bazel, Nx task dependencies)
 
-**Why it matters:** For CI systems maintaining a persistent database, full re-export is wasteful on large projects.
+---
 
-**Approach:** Track file-level content hashes in the database, DELETE/INSERT only rows for changed files.
+### F8. Incremental SQLite graph updates
+
+**Done:** SQLite updates are changed-file scoped for nodes/edges.
+
+**Remaining:**
+- Truly incremental parse+graph+persist pipeline without full in-memory graph materialization
+- Temporal graph tracking (store snapshots over time for evolution analysis)
+- Efficient diff-based patching for CI pipelines that maintain persistent databases

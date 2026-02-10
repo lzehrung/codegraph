@@ -1,64 +1,43 @@
 # ANALYSIS Remediation Status
 
-This tracks the items from `ANALYSIS.md` and their current disposition.
+Tracks the disposition of every item from the original `ANALYSIS.md`.
 
-## Correctness
+## Correctness — all resolved
 
-- **C1 — `resolveExportFrom` cycle safety:** ✅ Completed.
-  - Added sentinel caching before recursive re-export descent to avoid infinite recursion.
-- **C2 — JS-like comment stripping corrupting literals:** ✅ Completed.
-  - Replaced naive regex stripping with a string-aware scanner preserving literals/templates.
-- **C3 — Python dot-only relative import extraction:** ✅ Completed.
-  - Updated `extractPythonSpecifiers` regex to capture `from . import ...` / `from .. import ...`.
-- **C4 — Python dot-only resolution moduleName handling:** ✅ Completed.
-  - Dot-only specs are now passed as `moduleName = null` with explicit dot count.
-- **C5 — stale module-level file existence cache:** ✅ Completed.
-  - Added `clearResolutionCaches()` and exported it for explicit cache invalidation.
+| ID | Issue | Status |
+|----|-------|--------|
+| C1 | `resolveExportFrom` cycle safety | Fixed — sentinel cache before recursion (`graphs.ts:1259`) |
+| C2 | JS comment stripping corrupting string literals | Fixed — character-level scanner replacing naive regex (`util.ts:724-795`) |
+| C3 | Python dot-only relative import extraction | Fixed — regex updated (`util.ts:1039`) |
+| C4 | Python dot-only resolution moduleName handling | Fixed — `isDotsOnly` guard (`graphs.ts:396-400`) |
+| C5 | Stale module-level file existence cache | Fixed — `clearResolutionCaches()` export (`util.ts:2425-2431`) |
 
-## Performance
+## Performance — all resolved
 
-- **P1 — sequential candidate existence checks:** ✅ Completed.
-  - Candidate checks now run via `Promise.all`.
-- **P2 — sequential per-file specifier resolution:** ✅ Completed.
-  - Per-file specifier resolution in `collectEdgesForFile` now runs concurrently.
-- **P3 — additional strategy short-circuiting in `resolveSpecifier`:** ✅ Completed.
-  - Existing relative/absolute short-circuit retained.
-  - Added URL/scheme fast external short-circuit.
-  - Added Windows absolute-path handling to avoid false external classification.
-  - Reduced path-like fallback attempts for simple package names.
-- **P4 — multiple regex passes in JS/TS fallback extraction:** ✅ Completed.
-  - Consolidated to a single combined regex pass.
-- **P5 — fan-in and reverse-dep redundant passes in impact analysis:** ✅ Completed.
-  - Built both maps in one pass and reused them across phases.
+| ID | Issue | Status |
+|----|-------|--------|
+| P1 | Sequential candidate existence checks | Fixed — `Promise.all` parallelization (`util.ts:1850-1855`) |
+| P2 | Sequential per-file specifier resolution | Fixed — concurrent resolution via `specs.map(async ...)` (`graphs.ts:390`) |
+| P3 | `resolveSpecifier` lacks early short-circuit | **False positive** — early return already existed for relative/absolute paths. #54 added URL/scheme + Windows path guards. |
+| P4 | Multiple regex passes in JS/TS extraction | Fixed — single combined regex pass (`util.ts:835-856`) |
+| P5 | Redundant fan-in/reverse-dep computation | Fixed — single-pass `buildDependencyStats()` (`analyzer.ts:39-58`) |
 
 ## Feature gaps
 
-- **F1 — richer CSS/HTML dependency tracking:** ⚠️ Partially addressed.
-  - Existing CSS/SCSS import tracking is in place.
-  - HTML graph tracking now includes `script[src]`, inline `<script>` imports, `link[href]`, `a[href]`, and `img[src]`.
-  - Remaining gap: broader HTML asset semantics beyond the currently covered tags.
-- **F2 — cycle detection/reporting:** ⚠️ Partially addressed.
-  - Added cycle summaries (`cycles`) to impact reports with severity (`high`/`medium`) and flags for changed/impacted-file involvement.
-  - Remaining gap: deeper cycle explainability (entry edge details, SCC-level prioritization, automated remediation hints).
-- **F3 — Vue/Svelte template dependency tracking:** ⚠️ Partially addressed.
-  - Added HTML-like attribute/import fallback extraction for Vue/Svelte source in graph collection, including template-local asset references and inline-script imports.
-  - Remaining gap: full template-aware semantic extraction for framework directives and non-HTML idioms.
-- **F4 — config-file impact semantics:** ⚠️ Partially addressed.
-  - Added semantic config-impact detail classification for key config families (`package.json`, TS/JS config, `.env`) instead of one generic message.
-  - Remaining gap: precise key-level blast-radius mapping per tool ecosystem.
-- **F5 — breaking-change classification:** ⚠️ Partially addressed.
-  - Added heuristic breaking-change suggestions when exported symbols overlap removed lines or when exports exist in files with removals.
-  - Remaining gap: structural before/after API signature diffing and typed compatibility checks.
-- **F6 — test coverage gap analysis in impact output:** ⚠️ Partially addressed.
-  - Added untested-change suggestions when changed symbols have no discovered references in test files, with candidate-test hints.
-  - Remaining gap: coverage-aware ranking tied to actual executed tests/coverage data.
-- **F7 — cross-language monorepo dependency modeling:** ⚠️ Partially addressed.
-  - Added workspace manifest dependency edges (`package.json` -> dependent workspace `package.json`) so cross-package relationships are represented even when languages differ.
-  - Remaining gap: deeper semantics for non-Node manifests and language-specific package graphs (pip/poetry, Maven/Gradle, Cargo, etc.).
-- **F8 — true incremental SQLite graph updates:** ⚠️ Partially addressed.
-  - Current SQLite updates are changed-file scoped for nodes/edges but still depend on full in-memory graph builds before persistence.
-  - Remaining gap: truly incremental parse+graph+persist pipeline without full graph materialization.
+| ID | Feature | Status | Detail |
+|----|---------|--------|--------|
+| F1 | CSS/HTML dependency tracking | **False positive** — CSS `@import`, SCSS `@use`/`@forward`, Less `@import` already existed. | #54 added HTML `a[href]`, `img[src]`, inline-script extraction. |
+| F2 | Cycle detection/reporting | **False positive** — `findCycles()` (Tarjan's SCC) already existed. | #54 added cycle summaries in impact reports. |
+| F3 | Vue/Svelte template deps | Partially addressed | HTML-like fallback extraction added. Remaining: component refs, directives, `<script setup>`. See ROADMAP.md. |
+| F4 | Config file impact | Partially addressed | Semantic classification for package.json, tsconfig, .env. Remaining: key-level blast-radius. See ROADMAP.md. |
+| F5 | Breaking change detection | Partially addressed | Heuristic suggestions for exported symbol removals. Remaining: structural signature diffing. See ROADMAP.md. |
+| F6 | Test coverage gaps | Partially addressed | Untested-change suggestions via `findReferences`. Remaining: coverage-data integration. See ROADMAP.md. |
+| F7 | Cross-language monorepo deps | Partially addressed | Workspace manifest edges. Remaining: non-Node manifests, FFI, schemas. See ROADMAP.md. |
+| F8 | Incremental SQLite | Partially addressed | Changed-file scoped updates. Remaining: full incremental pipeline. See ROADMAP.md. |
 
-## Notes
+## Summary
 
-The correctness/performance issues in `ANALYSIS.md` are now fully addressed. Remaining entries are larger product features and should be planned as scoped roadmap work rather than bug-fix follow-ups.
+- **5/5 correctness bugs** were real and fixed
+- **3/5 performance items** were real and fixed; 1 was a false positive (P3), 1 was real but already partially addressed (P3 additions in #54 were improvements beyond the false claim)
+- **2/8 feature gaps** were false positives (F1, F2 — capabilities already existed)
+- **6/8 feature gaps** were partially addressed with heuristic implementations; deeper work tracked in ROADMAP.md
