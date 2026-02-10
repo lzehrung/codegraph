@@ -40,6 +40,7 @@ export {
   getShortestPath,
   findCycles,
   findDetailedCycles,
+  sortDetailedCycles,
   getUnresolvedImports,
   getHotspots,
   type DependencyNode,
@@ -47,6 +48,7 @@ export {
   type SymbolNodeKind,
   type DetailedCycle,
   type CycleEntryEdge,
+  type CycleSortMode,
 } from "./graphs.js";
 export {
   parseSymbolQuery,

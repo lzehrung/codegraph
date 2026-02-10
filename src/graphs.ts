@@ -963,7 +963,33 @@ export type DetailedCycle = {
   remediationHint: string;
 };
 
-export function findDetailedCycles(graph: Graph): DetailedCycle[] {
+export type CycleSortMode = "priority" | "size" | "fanin";
+
+export function sortDetailedCycles(
+  cycles: DetailedCycle[],
+  mode: CycleSortMode = "priority",
+): DetailedCycle[] {
+  const sorted = [...cycles];
+  sorted.sort((a, b) => {
+    if (mode === "size") {
+      if (b.fileCount !== a.fileCount) return b.fileCount - a.fileCount;
+      return b.priorityScore - a.priorityScore;
+    }
+    if (mode === "fanin") {
+      if (b.fanInFromOutside !== a.fanInFromOutside) {
+        return b.fanInFromOutside - a.fanInFromOutside;
+      }
+      return b.priorityScore - a.priorityScore;
+    }
+    return b.priorityScore - a.priorityScore;
+  });
+  return sorted;
+}
+
+export function findDetailedCycles(
+  graph: Graph,
+  options: { symbolCoupling?: Map<string, number> } = {},
+): DetailedCycle[] {
   const nodes = Array.from(graph.nodes);
   const indexMap = new Map<string, number>();
   nodes.forEach((n, i) => indexMap.set(n, i));
@@ -1047,9 +1073,22 @@ export function findDetailedCycles(graph: Graph): DetailedCycle[] {
 
     const priorityScore =
       files.length * 3 + fanInFromOutside * 2 + internalEdgeCount;
+    const couplingForEdge = (edge: CycleEntryEdge): number =>
+      options.symbolCoupling?.get(`${edge.from} -> ${edge.to}`) ?? 0;
+    const weakestEdge = entryEdges.reduce<CycleEntryEdge | null>((best, edge) => {
+      if (!best) return edge;
+      const bestCoupling = couplingForEdge(best);
+      const edgeCoupling = couplingForEdge(edge);
+      if (edgeCoupling !== bestCoupling) {
+        return edgeCoupling < bestCoupling ? edge : best;
+      }
+      if (!!edge.typeOnly && !best.typeOnly) return edge;
+      return best;
+    }, null);
+
     const remediationHint =
-      entryEdges.length > 0
-        ? `Break ${entryEdges[0]!.from} -> ${entryEdges[0]!.to} (import ${entryEdges[0]!.raw}) to reduce SCC coupling.`
+      weakestEdge
+        ? `Break ${weakestEdge.from} -> ${weakestEdge.to} (import ${weakestEdge.raw}) to reduce SCC coupling; estimated symbol coupling=${couplingForEdge(weakestEdge)}.`
         : `Break one import edge in this ${files.length}-file SCC to remove the cycle.`;
 
     cycleDetails.push({
@@ -1063,8 +1102,7 @@ export function findDetailedCycles(graph: Graph): DetailedCycle[] {
     });
   }
 
-  cycleDetails.sort((a, b) => b.priorityScore - a.priorityScore);
-  return cycleDetails;
+  return sortDetailedCycles(cycleDetails, "priority");
 }
 
 export function getUnresolvedImports(graph: Graph): Array<{

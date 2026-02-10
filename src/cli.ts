@@ -9,6 +9,7 @@ import {
   collectGraph,
   buildProjectIndex,
   buildProjectIndexFromFiles,
+  buildProjectIndexIncremental,
   buildReviewReport,
   buildGraphDelta,
   goToDefinition,
@@ -29,6 +30,7 @@ import {
   getShortestPath,
   findCycles,
   findDetailedCycles,
+  sortDetailedCycles,
   getUnresolvedImports,
   getHotspots,
   getApiSurface,
@@ -627,7 +629,7 @@ Commands:
   chunk         Chunk file for embeddings
   deps          List dependencies
   rdeps         List reverse dependencies
-  cycles        Detect dependency cycles
+  cycles        Detect dependency cycles (use --sort priority|size|fanin)
   hotspots      Find high-complexity files
 
 Graph Options:
@@ -927,18 +929,34 @@ Examples:
       commandReport.index = indexReport;
     }
     if (sqliteFile) {
-      const index = await buildProjectIndexFromFiles(projectRootFs, files, {
-        threads,
-        ...(cache !== undefined ? { cache } : {}),
-        cacheStrict,
-        graph: {
-          fast,
-          resolveNodeModules,
-          dynamicImportHeuristics,
-          ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
-        },
-        ...(indexReport ? { report: indexReport } : {}),
-      });
+      const changedSet = await resolveChangedFilesWithDeletes();
+      const graphOptions = {
+        fast,
+        resolveNodeModules,
+        dynamicImportHeuristics,
+        ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
+      };
+      const sqliteCacheMode = cache ?? (changedSet ? "disk" : undefined);
+      const index = changedSet
+        ? await buildProjectIndexIncremental(projectRootFs, {
+            threads,
+            ...(sqliteCacheMode !== undefined ? { cache: sqliteCacheMode } : {}),
+            cacheStrict,
+            files: changedSet.existingFiles,
+            ...(gitBase ? { gitBase } : {}),
+            ...(gitHead ? { gitHead } : {}),
+            ...(changedSince ? { changedSince } : {}),
+            graph: graphOptions,
+            ...(indexReport ? { report: indexReport } : {}),
+          })
+        : await buildProjectIndexFromFiles(projectRootFs, files, {
+            threads,
+            ...(sqliteCacheMode !== undefined ? { cache: sqliteCacheMode } : {}),
+            cacheStrict,
+            graph: graphOptions,
+            ...(indexReport ? { report: indexReport } : {}),
+          });
+
       const detailedSymbols = hasFlag("--symbols-detailed");
       const scope = getOpt("--symbols-detailed-scope") as
         | "all"
@@ -955,8 +973,9 @@ Examples:
             membersOnly,
           })
         : await buildSymbolGraph(index);
-      const changedSet = await resolveChangedFilesWithDeletes();
-      if (changedSet) {
+
+      const sqliteDbExists = fs.existsSync(sqliteFile);
+      if (changedSet && sqliteDbExists) {
         await updateGraphSqlite({
           fileGraph: index.graph,
           symbolGraph: sgraph,
@@ -1612,12 +1631,24 @@ Examples:
 
   if (cmd === "cycles") {
     const json = hasFlag("--json");
+    const sortModeRaw = getOpt("--sort") ?? "priority";
+    const sortMode =
+      sortModeRaw === "priority" ||
+      sortModeRaw === "size" ||
+      sortModeRaw === "fanin"
+        ? sortModeRaw
+        : null;
+    if (!sortMode) {
+      writeStderrLine("Invalid --sort value. Use one of: priority, size, fanin.");
+      process.exit(2);
+    }
+
     const graph = await collectGraph(
       projectRootFs,
       await listProjectFiles(projectRootFs),
       hasGraphOverrides ? buildGraphOptions() : undefined,
     );
-    const cycleDetails = findDetailedCycles(graph);
+    const cycleDetails = sortDetailedCycles(findDetailedCycles(graph), sortMode);
 
     if (json) {
       writeJSONLine(cycleDetails);
@@ -1625,7 +1656,9 @@ Examples:
       if (cycleDetails.length === 0) {
         writeStdoutLine("No dependency cycles found.");
       } else {
-        writeStdoutLine(`Found ${cycleDetails.length} dependency cycles:`);
+        writeStdoutLine(
+          `Found ${cycleDetails.length} dependency cycles (sorted by ${sortMode}):`,
+        );
         for (let i = 0; i < cycleDetails.length; i++) {
           const cycle = cycleDetails[i]!;
           writeStdoutLine(`Cycle ${i + 1} (priority=${cycle.priorityScore}):`);
