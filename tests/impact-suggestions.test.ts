@@ -238,6 +238,82 @@ index 1111111..2222222 100644
     expect(breaking?.confidence).toBe("high");
   });
 
+  it("detects exported default function arity changes", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,3 @@
+-export default function (input: string): string {
++export default function (input: string, extra: number): string {
+   return input;
+ }
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const breaking = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "breakingChange" &&
+        entry.symbol === "default" &&
+        entry.confidence === "high",
+    );
+    expect(breaking).toBeDefined();
+  });
+
+  it("detects exported arrow function signature changes for single-parameter form", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,3 @@
+-export const helperFunction = input => input;
++export const helperFunction = (input, extra) => input;
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const breaking = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "breakingChange" &&
+        entry.symbol === "helperFunction" &&
+        entry.confidence === "high",
+    );
+    expect(breaking).toBeDefined();
+  });
+
+  it("handles TS parameter commas in nested types without false arity changes", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,3 @@
+-export function helperFunction(input: { a: string, b: number }): string {
++export function helperFunction(input: { a: string, b: number, c?: boolean }): string {
+   return String(input.a);
+ }
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const signatureBreaking = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "breakingChange" &&
+        entry.symbol === "helperFunction" &&
+        entry.details?.includes("signature changed"),
+    );
+    expect(signatureBreaking).toBeUndefined();
+  });
+
   it("detects exported symbol rename candidates as medium-confidence breaking changes", async () => {
     const diffText = `diff --git a/helpers.ts b/helpers.ts
 index 1111111..2222222 100644
@@ -267,6 +343,62 @@ index 1111111..2222222 100644
     );
     expect(breaking).toBeDefined();
     expect(breaking?.confidence).toBe("medium");
+  });
+
+  it("does not include unrelated rename examples from other hunks", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,3 @@
+-export function helperFunction(): string {
++export function helperUpdated(): string {
+   return "helper";
+ }
+@@ -10,3 +10,3 @@
+-export function olderName(): string {
++export function totallyDifferentName(): string {
+   return "x";
+ }
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const renameForFirst = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "breakingChange" &&
+        entry.symbol === "helperFunction" &&
+        entry.details?.includes("totallyDifferentName"),
+    );
+    expect(renameForFirst).toBeUndefined();
+  });
+
+  it("deduplicates breaking-change suggestions and keeps highest confidence", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,3 @@
+-export function helperFunction(a: number): string {
++export function helperFunction(a: number, b: string): string {
+   return String(a);
+ }
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const helperBreakings = (report.suggestions ?? []).filter(
+      (entry) =>
+        entry.kind === "breakingChange" && entry.symbol === "helperFunction",
+    );
+    expect(helperBreakings).toHaveLength(1);
+    expect(helperBreakings[0]?.confidence).toBe("high");
   });
 
   it("adds untested-change suggestions when changed symbols have no test references", async () => {
@@ -326,6 +458,9 @@ index 1111111..2222222 100644
         true,
       );
       expect(untested?.details?.includes("Suggested command:")).toBe(true);
+      expect(untested?.details?.includes("npm run test -- helpers.test.ts.")).toBe(
+        false,
+      );
     } finally {
       await fsp.rm(lcovPath, { force: true });
     }

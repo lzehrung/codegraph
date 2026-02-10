@@ -122,7 +122,27 @@ async function collectConfigAndBreakingSuggestions(
   opts: { configImpactRules: boolean; detectBreakingChanges: boolean },
 ): Promise<ImpactSuggestion[]> {
   const suggestions: ImpactSuggestion[] = [];
+  const breakingByKey = new Map<string, ImpactSuggestion>();
   const removedLinesByFile = new Map<string, Set<number>>();
+  const confidenceScore: Record<"low" | "medium" | "high", number> = {
+    low: 1,
+    medium: 2,
+    high: 3,
+  };
+
+  const upsertBreakingSuggestion = (entry: ImpactSuggestion): void => {
+    const key = `${entry.kind}::${entry.file}::${entry.symbol ?? ""}`;
+    const existing = breakingByKey.get(key);
+    if (!existing) {
+      breakingByKey.set(key, entry);
+      return;
+    }
+    const existingScore = confidenceScore[existing.confidence];
+    const incomingScore = confidenceScore[entry.confidence];
+    if (incomingScore > existingScore) {
+      breakingByKey.set(key, entry);
+    }
+  };
 
   for (const fileChange of fileChanges) {
     const normalized = normalizeFilePath(projectRoot, fileChange.path);
@@ -144,7 +164,7 @@ async function collectConfigAndBreakingSuggestions(
       const normalized = normalizeFilePath(projectRoot, fileChange.path);
       const signatureChanges = detectExportSignatureChanges(fileChange);
       for (const change of signatureChanges) {
-        suggestions.push({
+        upsertBreakingSuggestion({
           file: normalized,
           kind: "breakingChange",
           symbol: change.name,
@@ -168,7 +188,7 @@ async function collectConfigAndBreakingSuggestions(
       }
       if (!overlapsRemoval) continue;
 
-      suggestions.push({
+      upsertBreakingSuggestion({
         file: symbol.file,
         range: symbol.range,
         kind: "breakingChange",
@@ -185,11 +205,11 @@ async function collectConfigAndBreakingSuggestions(
       if (!removedLines || removedLines.size === 0) continue;
       const mod = index.byFile.get(normalized);
       const hasExports = (mod?.exports.length ?? 0) > 0;
-      const alreadyHasForFile = suggestions.some(
-        (entry) => entry.kind === "breakingChange" && entry.file === normalized,
+      const alreadyHasForFile = Array.from(breakingByKey.values()).some(
+        (entry) => entry.file === normalized,
       );
       if (!hasExports || alreadyHasForFile) continue;
-      suggestions.push({
+      upsertBreakingSuggestion({
         file: normalized,
         kind: "breakingChange",
         details:
@@ -199,6 +219,7 @@ async function collectConfigAndBreakingSuggestions(
     }
   }
 
+  suggestions.push(...breakingByKey.values());
   return suggestions;
 }
 
@@ -263,8 +284,8 @@ async function collectUntestedChangeSuggestions(
 
     const details =
       candidateNames.length > 0
-        ? `Changed symbol has no discovered references in test files. ${coverageSummary} Consider adding or updating tests such as: ${candidateNames.join(", ")}. ${suggestedCommand}.`
-        : `Changed symbol has no discovered references in test files. ${coverageSummary} ${suggestedCommand}.`;
+        ? `Changed symbol has no discovered references in test files. ${coverageSummary} Consider adding or updating tests such as: ${candidateNames.join(", ")}. ${suggestedCommand}`
+        : `Changed symbol has no discovered references in test files. ${coverageSummary} ${suggestedCommand}`;
 
     const confidence = hasCoverageData
       ? hasCoveredLines
@@ -290,6 +311,11 @@ type ExportSignature = {
   paramCount: number;
 };
 
+type ExportSignatureWithLocation = ExportSignature & {
+  hunkIndex: number;
+  line: number;
+};
+
 type SignatureChange = {
   name: string;
   details: string;
@@ -299,13 +325,108 @@ type SignatureChange = {
 function countParams(raw: string): number {
   const trimmed = raw.trim();
   if (!trimmed) return 0;
-  return trimmed
-    .split(",")
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0).length;
+
+  let count = 0;
+  let sawNonWhitespaceSinceLastComma = false;
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let braceDepth = 0;
+  let angleDepth = 0;
+  let stringQuote: '"' | "'" | "`" | null = null;
+  let escaped = false;
+
+  for (let i = 0; i < trimmed.length; i += 1) {
+    const ch = trimmed[i];
+    if (!ch) continue;
+
+    if (stringQuote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === stringQuote) {
+        stringQuote = null;
+      }
+      continue;
+    }
+
+    if (ch === '"' || ch === "'" || ch === "`") {
+      stringQuote = ch;
+      escaped = false;
+      continue;
+    }
+
+    if (ch === "(") {
+      parenDepth += 1;
+      continue;
+    }
+    if (ch === ")") {
+      if (parenDepth > 0) parenDepth -= 1;
+      continue;
+    }
+    if (ch === "[") {
+      bracketDepth += 1;
+      continue;
+    }
+    if (ch === "]") {
+      if (bracketDepth > 0) bracketDepth -= 1;
+      continue;
+    }
+    if (ch === "{") {
+      braceDepth += 1;
+      continue;
+    }
+    if (ch === "}") {
+      if (braceDepth > 0) braceDepth -= 1;
+      continue;
+    }
+    if (ch === "<") {
+      angleDepth += 1;
+      continue;
+    }
+    if (ch === ">") {
+      if (angleDepth > 0) angleDepth -= 1;
+      continue;
+    }
+
+    const atTopLevel =
+      parenDepth === 0 &&
+      bracketDepth === 0 &&
+      braceDepth === 0 &&
+      angleDepth === 0;
+
+    if (ch === ",") {
+      if (atTopLevel && sawNonWhitespaceSinceLastComma) {
+        count += 1;
+        sawNonWhitespaceSinceLastComma = false;
+      }
+      continue;
+    }
+
+    if (atTopLevel && !/\s/.test(ch)) {
+      sawNonWhitespaceSinceLastComma = true;
+    }
+  }
+
+  if (sawNonWhitespaceSinceLastComma) count += 1;
+  return count;
 }
 
 function parseExportSignature(line: string): ExportSignature | null {
+  const defaultFunctionMatch = line.match(
+    /^\s*export\s+default\s+(?:async\s+)?function(?:\s+([A-Za-z_$][\w$]*))?\s*\(([^)]*)\)/,
+  );
+  if (defaultFunctionMatch) {
+    return {
+      name: defaultFunctionMatch[1] ?? "default",
+      paramCount: countParams(defaultFunctionMatch[2] ?? ""),
+    };
+  }
+
   const functionMatch = line.match(
     /^\s*export\s+(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)/,
   );
@@ -330,23 +451,57 @@ function parseExportSignature(line: string): ExportSignature | null {
     };
   }
 
+  const constArrowSingleParamMatch = line.match(
+    /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?([A-Za-z_$][\w$]*)\s*=>/,
+  );
+  if (constArrowSingleParamMatch) {
+    const name = constArrowSingleParamMatch[1];
+    if (!name) return null;
+    return {
+      name,
+      paramCount: 1,
+    };
+  }
+
   return null;
 }
 
 function detectExportSignatureChanges(change: FileChange): SignatureChange[] {
-  const removed: ExportSignature[] = [];
-  const added: ExportSignature[] = [];
+  const removed: ExportSignatureWithLocation[] = [];
+  const added: ExportSignatureWithLocation[] = [];
 
-  for (const hunk of change.hunks) {
+  for (let hunkIndex = 0; hunkIndex < change.hunks.length; hunkIndex += 1) {
+    const hunk = change.hunks[hunkIndex]!;
+    let oldLine = hunk.oldStart;
+    let newLine = hunk.newStart;
     for (const rawLine of hunk.lines) {
+      if (rawLine.startsWith(" ")) {
+        oldLine += 1;
+        newLine += 1;
+        continue;
+      }
       if (rawLine.startsWith("-")) {
         const parsed = parseExportSignature(rawLine.slice(1));
-        if (parsed) removed.push(parsed);
+        if (parsed) {
+          removed.push({
+            ...parsed,
+            line: oldLine,
+            hunkIndex,
+          });
+        }
+        oldLine += 1;
         continue;
       }
       if (rawLine.startsWith("+")) {
         const parsed = parseExportSignature(rawLine.slice(1));
-        if (parsed) added.push(parsed);
+        if (parsed) {
+          added.push({
+            ...parsed,
+            line: newLine,
+            hunkIndex,
+          });
+        }
+        newLine += 1;
       }
     }
   }
@@ -363,10 +518,17 @@ function detectExportSignatureChanges(change: FileChange): SignatureChange[] {
       continue;
     }
     if (!matched && added.length > 0) {
-      const candidate = added[0];
+      const candidate = added.find(
+        (entry) =>
+          entry.hunkIndex === removedSig.hunkIndex &&
+          Math.abs(entry.line - removedSig.line) <= 3,
+      );
+      const renameDetails = candidate
+        ? `Exported symbol ${removedSig.name} appears to be removed or renamed (for example ${candidate.name}). Verify backward compatibility for downstream imports.`
+        : `Exported symbol ${removedSig.name} appears to be removed or renamed. Verify backward compatibility for downstream imports.`;
       output.push({
         name: removedSig.name,
-        details: `Exported symbol ${removedSig.name} appears to be removed or renamed (for example ${candidate?.name ?? "another symbol"}). Verify backward compatibility for downstream imports.`,
+        details: renameDetails,
         confidence: "medium",
       });
     }
