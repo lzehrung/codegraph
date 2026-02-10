@@ -310,8 +310,10 @@ function parseExportSignature(line: string): ExportSignature | null {
     /^\s*export\s+(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)/,
   );
   if (functionMatch) {
+    const name = functionMatch[1];
+    if (!name) return null;
     return {
-      name: functionMatch[1]!,
+      name,
       paramCount: countParams(functionMatch[2] ?? ""),
     };
   }
@@ -320,8 +322,10 @@ function parseExportSignature(line: string): ExportSignature | null {
     /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*=>/,
   );
   if (constArrowMatch) {
+    const name = constArrowMatch[1];
+    if (!name) return null;
     return {
-      name: constArrowMatch[1]!,
+      name,
       paramCount: countParams(constArrowMatch[2] ?? ""),
     };
   }
@@ -359,10 +363,10 @@ function detectExportSignatureChanges(change: FileChange): SignatureChange[] {
       continue;
     }
     if (!matched && added.length > 0) {
-      const candidate = added[0]!;
+      const candidate = added[0];
       output.push({
         name: removedSig.name,
-        details: `Exported symbol ${removedSig.name} appears to be removed or renamed (for example ${candidate.name}). Verify backward compatibility for downstream imports.`,
+        details: `Exported symbol ${removedSig.name} appears to be removed or renamed (for example ${candidate?.name ?? "another symbol"}). Verify backward compatibility for downstream imports.`,
         confidence: "medium",
       });
     }

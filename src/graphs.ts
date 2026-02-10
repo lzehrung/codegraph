@@ -189,25 +189,23 @@ export function collectModuleSpecifiersFromSource(
 
   function extractHtmlAttributeSpecifiers(source: string): ModuleSpecifier[] {
     const out: ModuleSpecifier[] = [];
+    const tagAttrNames: Record<string, string[]> = {
+      script: ["src"],
+      link: ["href"],
+      a: ["href"],
+      img: ["src", "srcset"],
+      source: ["src", "srcset"],
+      video: ["src"],
+      audio: ["src"],
+      iframe: ["src"],
+      track: ["src"],
+    };
     const tagRe =
       /<(script|link|a|img|source|video|audio|iframe|track)\b([^>]*)>/gi;
     for (const match of source.matchAll(tagRe)) {
       const tag = (match[1] ?? "").toLowerCase();
       const attrs = match[2] ?? "";
-      const attrNames =
-        tag === "script"
-          ? ["src"]
-          : tag === "link" || tag === "a"
-            ? ["href"]
-            : tag === "img"
-              ? ["src", "srcset"]
-              : tag === "source"
-                ? ["src", "srcset"]
-                : tag === "video" || tag === "audio" || tag === "iframe"
-                  ? ["src"]
-                  : tag === "track"
-                    ? ["src"]
-                    : [];
+      const attrNames = tagAttrNames[tag] ?? [];
 
       for (const attrName of attrNames) {
         const attrRe = new RegExp(
