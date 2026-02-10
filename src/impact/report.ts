@@ -17,8 +17,9 @@ import type {
   CompactImpactSurfaceArea,
   ImpactCluster,
   CompactImpactCluster,
+  ImpactCycle,
 } from "./types.js";
-import { buildSymbolGraphDetailed } from "../graphs.js";
+import { buildSymbolGraphDetailed, findCycles } from "../graphs.js";
 import { normalizePath, discoverProjectFiles } from "../util.js";
 
 export async function buildImpactReport(
@@ -121,6 +122,7 @@ export async function buildImpactReport(
   }
 
   const clusters = buildClusters(changedFiles, impactedItems, fileEdges);
+  const cycles = buildImpactCycles(index, changedFiles, impactedItems);
 
   // Check if compact format is requested
   if (options.compact) {
@@ -135,6 +137,7 @@ export async function buildImpactReport(
       topImpacts,
       surfaceArea,
       clusters,
+      cycles,
       fileEdges,
       symbolEdges,
       projectFiles,
@@ -154,6 +157,7 @@ export async function buildImpactReport(
     ...(topImpacts.length > 0 ? { topImpacts } : {}),
     surfaceArea,
     clusters,
+    ...(cycles.length > 0 ? { cycles } : {}),
     graph: {
       fileEdges,
       symbolEdges,
@@ -161,6 +165,44 @@ export async function buildImpactReport(
   };
   if (options.warning) report.warning = options.warning;
   return report;
+}
+
+function buildImpactCycles(
+  index: ProjectIndex,
+  changedFiles: Array<{ file: FileId }>,
+  impactedItems: ImpactItem[],
+): ImpactCycle[] {
+  const graphNodes = Array.from(index.graph.nodes);
+  const graphNodeSet = new Set(graphNodes);
+  const canonicalizeFile = (file: FileId): FileId => {
+    if (graphNodeSet.has(file)) return file;
+    const normalizedPath = file.replace(/\\/g, "/");
+    const normalizedSuffix = normalizedPath.startsWith("/")
+      ? normalizedPath.slice(1)
+      : normalizedPath;
+    const match = graphNodes.find(
+      (node) => node === normalizedPath || node.endsWith(`/${normalizedSuffix}`),
+    );
+    return match ?? file;
+  };
+
+  const changedSet = new Set(
+    changedFiles.map((entry) => canonicalizeFile(entry.file)),
+  );
+  const impactedSet = new Set(impactedItems.map((entry) => entry.file));
+  const out: ImpactCycle[] = [];
+  for (const cycleFiles of findCycles(index.graph)) {
+    const touchesChangedFile = cycleFiles.some((file) => changedSet.has(file));
+    const touchesImpactedFile = cycleFiles.some((file) => impactedSet.has(file));
+    if (!touchesChangedFile && !touchesImpactedFile) continue;
+    out.push({
+      files: cycleFiles,
+      touchesChangedFile,
+      touchesImpactedFile,
+      severity: touchesChangedFile ? "high" : "medium",
+    });
+  }
+  return out;
 }
 
 function buildCompactReport(
@@ -177,6 +219,7 @@ function buildCompactReport(
   topImpacts: ImpactTopItem[],
   surfaceArea: ImpactSurfaceArea,
   clusters: ImpactCluster[],
+  cycles: ImpactCycle[],
   fileEdges: Array<{
     from: FileId;
     to: FileId;
@@ -218,6 +261,10 @@ function buildCompactReport(
   }
   for (const file of surfaceArea.topFanOut) {
     allFiles.add(file);
+  }
+
+  for (const cycle of cycles) {
+    for (const file of cycle.files) allFiles.add(file);
   }
 
   // Add files from suggestions
@@ -363,6 +410,16 @@ function buildCompactReport(
     totalSeverity: cluster.totalSeverity,
   }));
 
+  const compactCycles =
+    cycles.length > 0
+      ? cycles.map((cycle) => ({
+          files: cycle.files.map((file) => fileIndex.get(file)!),
+          touchesChangedFile: cycle.touchesChangedFile,
+          touchesImpactedFile: cycle.touchesImpactedFile,
+          severity: cycle.severity,
+        }))
+      : undefined;
+
   const compactFileEdges = fileEdges.map((fe) => {
     const edge: { from: number; to: number; typeOnly?: boolean } = {
       from: fileIndex.get(fe.from)!,
@@ -386,6 +443,7 @@ function buildCompactReport(
     ...(compactTopImpacts ? { topImpacts: compactTopImpacts } : {}),
     surfaceArea: compactSurfaceArea,
     clusters: compactClusters,
+    ...(compactCycles ? { cycles: compactCycles } : {}),
     graph: {
       fileEdges: compactFileEdges,
       symbolEdges,

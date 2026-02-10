@@ -38,6 +38,10 @@ const definition: LanguageTestDefinition = {
         from: "reactive.svelte",
         to: { type: "file", path: "logic.ts" },
       },
+      {
+        from: "App.svelte",
+        to: { type: "file", path: "Widget.svelte" },
+      },
     ],
   },
 };

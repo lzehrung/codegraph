@@ -59,6 +59,13 @@ export type GraphCacheEntry = {
   edges: Edge[];
 };
 
+const HTML_LIKE_LANGUAGE_IDS = new Set(["html", "vue", "svelte"]);
+
+function isHtmlLikeLanguage(languageId: string, filePath?: string): boolean {
+  if (HTML_LIKE_LANGUAGE_IDS.has(languageId)) return true;
+  return !!filePath && filePath.toLowerCase().endsWith(".astro");
+}
+
 export function collectModuleSpecifiersFromSource(
   support: LanguageSupport,
   lang: Parser.Language,
@@ -72,6 +79,7 @@ export function collectModuleSpecifiersFromSource(
   },
 ): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
+  const htmlLikeLanguage = isHtmlLikeLanguage(support.id, opts?.file);
   const fastRegexDisabled = opts?.fastRegexDisabledLanguages?.includes(
     support.id,
   );
@@ -149,6 +157,55 @@ export function collectModuleSpecifiersFromSource(
     return out;
   }
 
+  function appendUniqueSpecifiers(
+    target: ModuleSpecifier[],
+    incoming: ModuleSpecifier[],
+  ): void {
+    const seen = new Set(
+      target.map((entry) => `${entry.spec}::${entry.typeOnly ? 1 : 0}`),
+    );
+    for (const entry of incoming) {
+      const key = `${entry.spec}::${entry.typeOnly ? 1 : 0}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      target.push(entry);
+    }
+  }
+
+  function extractHtmlInlineScriptSpecifiers(
+    source: string,
+  ): ModuleSpecifier[] {
+    const out: ModuleSpecifier[] = [];
+    const inlineScriptRe = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+    for (const match of source.matchAll(inlineScriptRe)) {
+      const attrs = match[1] ?? "";
+      if (/\bsrc\s*=\s*["'][^"']+["']/i.test(attrs)) continue;
+      const body = match[2] ?? "";
+      if (!body.trim()) continue;
+      out.push(...extractJsTsSpecifiers(body));
+    }
+    return out;
+  }
+
+  function extractHtmlAttributeSpecifiers(source: string): ModuleSpecifier[] {
+    const out: ModuleSpecifier[] = [];
+    const tagRe = /<(script|link|a|img)\b([^>]*)>/gi;
+    for (const match of source.matchAll(tagRe)) {
+      const tag = (match[1] ?? "").toLowerCase();
+      const attrs = match[2] ?? "";
+      const attrName = tag === "script" || tag === "img" ? "src" : "href";
+      const attrRe = new RegExp(
+        `(?:^|\\s)${attrName}\\s*=\\s*(?:"([^"]+)"|'([^']+)'|([^\\s"'=<>\\x60]+))`,
+        "i",
+      );
+      const attrMatch = attrs.match(attrRe);
+      const spec = (attrMatch?.[1] ?? attrMatch?.[2] ?? attrMatch?.[3])?.trim();
+      if (!spec) continue;
+      out.push({ spec });
+    }
+    return out;
+  }
+
   // Fast path for JS/TS: regex-based extraction after comment stripping
   if (
     (support.id === "ts" || support.id === "js") &&
@@ -187,6 +244,10 @@ export function collectModuleSpecifiersFromSource(
         for (const cap of modNodes)
           out.push({ spec: unquote(sliceText(cap.node, source)), typeOnly });
       }
+      if (htmlLikeLanguage) {
+        appendUniqueSpecifiers(out, extractHtmlAttributeSpecifiers(source));
+        appendUniqueSpecifiers(out, extractHtmlInlineScriptSpecifiers(source));
+      }
       if (out.length > 0) return out;
     } finally {
       releaseParser(parser, key);
@@ -210,6 +271,16 @@ export function collectModuleSpecifiersFromSource(
           out.push(...extracted);
         }
       } catch {}
+    }
+  }
+
+  if (htmlLikeLanguage && (queryFailed || out.length === 0)) {
+    const attributeSpecs = extractHtmlAttributeSpecifiers(source);
+    const inlineSpecs = extractHtmlInlineScriptSpecifiers(source);
+    if (attributeSpecs.length > 0 || inlineSpecs.length > 0) {
+      reportFallback(queryFailed ? "query-error" : "query-empty");
+      appendUniqueSpecifiers(out, attributeSpecs);
+      appendUniqueSpecifiers(out, inlineSpecs);
     }
   }
   return out;
@@ -316,48 +387,69 @@ export async function collectEdgesForFile(
       : { matchPath: undefined };
 
   const edges: Edge[] = [];
-  for (const { spec, typeOnly, resolved, confidence } of specs) {
-    let to: EdgeTo;
-    if (sup.id === "python") {
-      const relDotsMatch = spec.startsWith(".") ? spec.match(/^\.+/) : null;
-      const relDots = relDotsMatch ? relDotsMatch[0].length : 0;
-      const res = await resolvePythonModule(
-        projectRoot,
-        file,
-        spec.includes(".") || !spec.startsWith(".") ? spec : null,
-        relDots,
-      );
-      to =
-        typeof res === "string"
-          ? { type: "file", path: res.replace(/\\/g, "/") }
-          : { type: "external", name: res.external };
-    } else if (sup.id === "go") {
-      const res = await resolveImportSpecifier(
-        projectRoot,
-        file,
-        spec,
-        sup.id,
-        {
-          ...(matchPath ? { matchPath } : {}),
-          ...(workspaceConfig ? { workspaceConfig } : {}),
-          resolveNodeModules: !!opts.resolveNodeModules,
-          ...(opts.resolutionHints
-            ? { resolutionHints: opts.resolutionHints }
-            : {}),
-        },
-      );
-      to =
-        typeof res === "string"
-          ? { type: "file", path: res.replace(/\\/g, "/") }
-          : { type: "external", name: res.external };
-    } else if (["java", "csharp", "ruby", "rust"].includes(sup.id)) {
-      const { resolvePathLikeModule } = await import("./util.js");
-      const res = await resolvePathLikeModule(projectRoot, spec);
-      if (res) {
-        to = { type: "file", path: res.replace(/\\/g, "/") };
+  const edgeResolutionTasks = specs.map(
+    async ({ spec, typeOnly, resolved, confidence }) => {
+      let to: EdgeTo;
+      if (sup.id === "python") {
+        const relDotsMatch = spec.startsWith(".") ? spec.match(/^\.+/) : null;
+        const relDots = relDotsMatch ? relDotsMatch[0].length : 0;
+        const isDotsOnly = /^\.+$/.test(spec);
+        const res = await resolvePythonModule(
+          projectRoot,
+          file,
+          isDotsOnly ? null : spec,
+          relDots,
+        );
+        to =
+          typeof res === "string"
+            ? { type: "file", path: res.replace(/\\/g, "/") }
+            : { type: "external", name: res.external };
+      } else if (sup.id === "go") {
+        const res = await resolveImportSpecifier(
+          projectRoot,
+          file,
+          spec,
+          sup.id,
+          {
+            ...(matchPath ? { matchPath } : {}),
+            ...(workspaceConfig ? { workspaceConfig } : {}),
+            resolveNodeModules: !!opts.resolveNodeModules,
+            ...(opts.resolutionHints
+              ? { resolutionHints: opts.resolutionHints }
+              : {}),
+          },
+        );
+        to =
+          typeof res === "string"
+            ? { type: "file", path: res.replace(/\\/g, "/") }
+            : { type: "external", name: res.external };
+      } else if (["java", "csharp", "ruby", "rust"].includes(sup.id)) {
+        const { resolvePathLikeModule } = await import("./util.js");
+        const res = await resolvePathLikeModule(projectRoot, spec);
+        if (res) {
+          to = { type: "file", path: res.replace(/\\/g, "/") };
+        } else {
+          // Fallback to resolveSpecifier for relative paths like ./foo
+          const res2 = await resolveSpecifier(
+            file,
+            spec,
+            projectRoot,
+            matchPath,
+            workspaceConfig,
+            {
+              resolveNodeModules: !!opts.resolveNodeModules,
+              ...(opts.resolutionHints
+                ? { resolutionHints: opts.resolutionHints }
+                : {}),
+            },
+          );
+          to =
+            typeof res2 === "string"
+              ? { type: "file", path: res2.replace(/\\/g, "/") }
+              : { type: "external", name: res2.external };
+        }
       } else {
-        // Fallback to resolveSpecifier for relative paths like ./foo
-        const res2 = await resolveSpecifier(
+        const res = await resolveSpecifier(
           file,
           spec,
           projectRoot,
@@ -371,29 +463,23 @@ export async function collectEdgesForFile(
           },
         );
         to =
-          typeof res2 === "string"
-            ? { type: "file", path: res2.replace(/\\/g, "/") }
-            : { type: "external", name: res2.external };
+          typeof res === "string"
+            ? { type: "file", path: res.replace(/\\/g, "/") }
+            : { type: "external", name: res.external };
       }
-    } else {
-      const res = await resolveSpecifier(
-        file,
+      return {
+        to,
         spec,
-        projectRoot,
-        matchPath,
-        workspaceConfig,
-        {
-          resolveNodeModules: !!opts.resolveNodeModules,
-          ...(opts.resolutionHints
-            ? { resolutionHints: opts.resolutionHints }
-            : {}),
-        },
-      );
-      to =
-        typeof res === "string"
-          ? { type: "file", path: res.replace(/\\/g, "/") }
-          : { type: "external", name: res.external };
-    }
+        ...(typeOnly !== undefined && { typeOnly }),
+        ...(resolved !== undefined && { resolved }),
+        ...(confidence !== undefined && { confidence }),
+      };
+    },
+  );
+
+  for (const { to, spec, typeOnly, resolved, confidence } of await Promise.all(
+    edgeResolutionTasks,
+  )) {
     edges.push({
       from: normalizedFile,
       to,
@@ -467,7 +553,6 @@ export async function collectGraph(
   if (graph.edges.length > 0) {
     addEdgeTargetsToGraph(graph.edges);
   }
-
 
   const filePromises = await mapLimit(files, conc, async (file) => {
     try {
@@ -1171,9 +1256,9 @@ export async function buildSymbolGraphDetailed(
     const normalizedFile = file.replace(/\\/g, "/");
     const key = `${normalizedFile}::${exportedName}`;
     if (cache.has(key)) return cache.get(key) ?? null;
+    cache.set(key, null);
     const mod = index.byFile.get(normalizedFile);
     if (!mod) {
-      cache.set(key, null);
       return null;
     }
     // Direct local export
