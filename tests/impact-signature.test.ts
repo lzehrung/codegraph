@@ -3,11 +3,21 @@ import {
   buildProjectIndex,
   analyzeImpactFromDiff,
 } from "../src/index.js";
+import type { CompactImpactReport, ImpactReport } from "../src/impact/types.js";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
 describe("impact signature hint", () => {
+  const expectImpactReport = (
+    report: ImpactReport | CompactImpactReport,
+  ): ImpactReport => {
+    if ("files" in report) {
+      throw new Error("Expected non-compact impact report");
+    }
+    return report;
+  };
+
   it("should identify signature changes using AST", async () => {
     const root = path.resolve("temp-impact-signature-test");
     if (!fs.existsSync(root)) fs.mkdirSync(root);
@@ -35,11 +45,11 @@ describe("impact signature hint", () => {
         includeTests: true,
       });
 
-      const report = result;
+      const report = expectImpactReport(result);
       expect(report.impacted.length).toBeGreaterThan(0);
-      const impact = report.impacted.find((i: any) => i.file === consumer);
+      const impact = report.impacted.find((item) => item.file === consumer);
       expect(impact).toBeDefined();
-      expect(impact.explain.hints).toContain("signatureChanged");
+      expect(impact?.explain?.hints).toContain("signatureChanged");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
