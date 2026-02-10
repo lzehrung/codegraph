@@ -18,7 +18,10 @@ interface NodeLike {
   endPosition: { row: number; column: number };
 }
 
-export function sliceText(node: NodeLike | null | undefined, src: string): string {
+export function sliceText(
+  node: NodeLike | null | undefined,
+  src: string,
+): string {
   if (!node || !src) return "";
   return src.slice(node.startIndex, node.endIndex);
 }
@@ -719,9 +722,77 @@ export async function discoverProjectFiles(
 }
 
 export function stripJsLikeComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+  let out = "";
+  let i = 0;
+  let inSingle = false;
+  let inDouble = false;
+  let inTemplate = false;
+  let escapeNext = false;
+
+  while (i < src.length) {
+    const ch = src[i]!;
+    const next = src[i + 1] ?? "";
+
+    if (inSingle || inDouble || inTemplate) {
+      out += ch;
+      if (escapeNext) {
+        escapeNext = false;
+      } else if (ch === "\\") {
+        escapeNext = true;
+      } else if (inSingle && ch === "'") {
+        inSingle = false;
+      } else if (inDouble && ch === '"') {
+        inDouble = false;
+      } else if (inTemplate && ch === "`") {
+        inTemplate = false;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (ch === "'") {
+      inSingle = true;
+      out += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      out += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === "`") {
+      inTemplate = true;
+      out += ch;
+      i += 1;
+      continue;
+    }
+
+    if (ch === "/" && next === "*") {
+      i += 2;
+      while (i < src.length) {
+        if (src[i] === "*" && src[i + 1] === "/") {
+          i += 2;
+          break;
+        }
+        if (src[i] === "\n") out += "\n";
+        i += 1;
+      }
+      continue;
+    }
+
+    if (ch === "/" && next === "/") {
+      i += 2;
+      while (i < src.length && src[i] !== "\n") i += 1;
+      continue;
+    }
+
+    out += ch;
+    i += 1;
+  }
+
+  return out;
 }
 
 export function stripPythonCommentsAndStrings(src: string): string {
@@ -762,22 +833,24 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
     const push = (spec: string, typeOnly?: boolean) => {
       if (spec) out.push({ spec, ...(typeOnly ? { typeOnly: true } : {}) });
     };
-    const reImportFrom = /^\s*import\s+[^\n;]*?\s+from\s+(["'])([^"']+)\1/gm;
-    for (const m of src.matchAll(reImportFrom))
-      push(m[2]!, /\bimport\s+type\b/.test(m[0]));
-    const reImportSide = /^\s*import\s+(["'])([^"']+)\1/gm;
-    for (const m of src.matchAll(reImportSide))
-      push(m[2]!, /\bimport\s+type\b/.test(m[0]));
-    const reExportFrom = /\bexport\s+[^\n;]*?\s+from\s+(["'])([^"']+)\1/gm;
-    for (const m of src.matchAll(reExportFrom))
-      push(m[2]!, /\bexport\s+type\b/.test(m[0]));
-    const reRequire = /(?<!["'`])\brequire\(\s*(["'])([^"']+)\1\s*\)/g;
-    for (const m of src.matchAll(reRequire)) push(m[2]!);
-    const reReqDestr =
-      /\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\(\s*(["'])([^"']+)\1\s*\)/g;
-    for (const m of src.matchAll(reReqDestr)) push(m[2]!);
-    const reDynImport = /(?<!["'`])\bimport\(\s*(["'])([^"']+)\1\s*\)/g;
-    for (const m of src.matchAll(reDynImport)) push(m[2]!);
+
+    const combined =
+      /^\s*import\s+[^\n;]*?\s+from\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|\bexport\s+[^\n;]*?\s+from\s+["']([^"']+)["']|\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\brequire\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\bimport\(\s*["']([^"']+)["']\s*\)/gm;
+
+    for (const m of src.matchAll(combined)) {
+      const spec = m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? m[6];
+      if (!spec) continue;
+      const text = m[0] ?? "";
+      const typeOnly =
+        m[1] !== undefined
+          ? /\bimport\s+type\b/.test(text)
+          : m[2] !== undefined
+            ? /\bimport\s+type\b/.test(text)
+            : m[3] !== undefined
+              ? /\bexport\s+type\b/.test(text)
+              : false;
+      push(spec, typeOnly);
+    }
   } catch {}
   return out;
 }
@@ -963,7 +1036,7 @@ export function extractPythonSpecifiers(source: string): string[] {
     const reImport = /^\s*import\s+([A-Za-z_][\w\.]*)/gm;
     for (const m of cleaned.matchAll(reImport)) out.push(m[1]!);
     const reFrom =
-      /^\s*from\s+([A-Za-z_][\w\.]|\.+[A-Za-z_][\w\.]*)\s+import/gm;
+      /^\s*from\s+(\.+(?:[A-Za-z_][\w\.]*)?|[A-Za-z_][\w\.]*)\s+import/gm;
     for (const m of cleaned.matchAll(reFrom)) out.push(m[1]!);
   } catch {}
   return out;
@@ -1774,15 +1847,29 @@ export async function resolveSpecifier(
   const tryResolveCandidates = async (
     candidates: string[],
   ): Promise<string | null> => {
-    for (const c of candidates) {
-      if (await fileExists(c)) return path.resolve(c);
-    }
-    return null;
+    const existence = await Promise.all(
+      candidates.map((candidate) => fileExists(candidate)),
+    );
+    const firstHit = existence.indexOf(true);
+    if (firstHit < 0) return null;
+    return path.resolve(candidates[firstHit]!);
   };
-  if (spec.startsWith(".") || spec.startsWith("/")) {
-    const base = spec.startsWith("/")
-      ? path.join(projectRoot, spec)
-      : path.resolve(path.dirname(fromFile), spec);
+  const hasSchemePrefix = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(spec);
+  const isWindowsAbsolutePath = /^[A-Za-z]:[\\/]/.test(spec);
+  if (!isWindowsAbsolutePath && (hasSchemePrefix || spec.startsWith("//"))) {
+    const ext = { external: spec } as const;
+    resolveSpecifierCache.set(cacheKey, ext);
+    return ext;
+  }
+
+  const isRelativeOrAbsolute =
+    spec.startsWith(".") || spec.startsWith("/") || isWindowsAbsolutePath;
+  if (isRelativeOrAbsolute) {
+    const base = isWindowsAbsolutePath
+      ? spec
+      : spec.startsWith("/")
+        ? path.join(projectRoot, spec)
+        : path.resolve(path.dirname(fromFile), spec);
     const candidates = buildCandidates(base);
     const hit = await tryResolveCandidates(candidates);
     if (hit) {
@@ -1843,11 +1930,24 @@ export async function resolveSpecifier(
       resolveSpecifierCache.set(cacheKey, resolvedWs);
       return resolvedWs;
     }
-    // Try path-like fallback for Java/Go/C#/Rust which often look like packages but map to source
-    const pathLike = await resolvePathLikeModule(projectRoot, spec);
-    if (pathLike) {
-      resolveSpecifierCache.set(cacheKey, pathLike);
-      return pathLike;
+    const fromExt = path.extname(fromFile).toLowerCase();
+    const prefersPathLikeFallback = [
+      ".go",
+      ".java",
+      ".cs",
+      ".rb",
+      ".rs",
+      ".swift",
+    ].includes(fromExt);
+    const shouldTryPathLikeFallback =
+      prefersPathLikeFallback || spec.includes("/") || spec.includes(".");
+    if (shouldTryPathLikeFallback) {
+      // Try path-like fallback for languages that often map package-like names to source paths.
+      const pathLike = await resolvePathLikeModule(projectRoot, spec);
+      if (pathLike) {
+        resolveSpecifierCache.set(cacheKey, pathLike);
+        return pathLike;
+      }
     }
     if (opts?.resolveNodeModules) {
       const nm = await resolveFromNodeModules(spec, fromFile, projectRoot);
@@ -2320,6 +2420,14 @@ export async function resolvePythonModule(
   } as const;
   resolvePythonModuleCache.set(cacheKey, ext);
   return ext;
+}
+
+export function clearResolutionCaches(): void {
+  fileExistsCache.clear();
+  resolveSpecifierCache.clear();
+  resolvePythonModuleCache.clear();
+  tsconfigCache.clear();
+  workspaceCache.clear();
 }
 
 // ----------------- Caches -----------------
