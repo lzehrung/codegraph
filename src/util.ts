@@ -1855,7 +1855,7 @@ export async function resolveSpecifier(
     return path.resolve(candidates[firstHit]!);
   };
   const hasSchemePrefix = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(spec);
-  const isWindowsAbsolutePath = /^[A-Za-z]:[\/]/.test(spec);
+  const isWindowsAbsolutePath = /^[A-Za-z]:[\\/]/.test(spec);
   if (!isWindowsAbsolutePath && (hasSchemePrefix || spec.startsWith("//"))) {
     const ext = { external: spec } as const;
     resolveSpecifierCache.set(cacheKey, ext);

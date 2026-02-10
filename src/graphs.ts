@@ -59,6 +59,13 @@ export type GraphCacheEntry = {
   edges: Edge[];
 };
 
+const HTML_LIKE_LANGUAGE_IDS = new Set(["html", "vue", "svelte"]);
+
+function isHtmlLikeLanguage(languageId: string, filePath?: string): boolean {
+  if (HTML_LIKE_LANGUAGE_IDS.has(languageId)) return true;
+  return !!filePath && filePath.toLowerCase().endsWith(".astro");
+}
+
 export function collectModuleSpecifiersFromSource(
   support: LanguageSupport,
   lang: Parser.Language,
@@ -72,8 +79,7 @@ export function collectModuleSpecifiersFromSource(
   },
 ): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
-  const htmlLikeLanguage =
-    support.id === "html" || support.id === "vue" || support.id === "svelte";
+  const htmlLikeLanguage = isHtmlLikeLanguage(support.id, opts?.file);
   const fastRegexDisabled = opts?.fastRegexDisabledLanguages?.includes(
     support.id,
   );
