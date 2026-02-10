@@ -331,9 +331,10 @@ function countParams(raw: string): number {
   let parenDepth = 0;
   let bracketDepth = 0;
   let braceDepth = 0;
-  let angleDepth = 0;
+  let typeAngleDepth = 0;
   let stringQuote: '"' | "'" | "`" | null = null;
   let escaped = false;
+  let inTypeAnnotation = false;
 
   for (let i = 0; i < trimmed.length; i += 1) {
     const ch = trimmed[i];
@@ -384,26 +385,38 @@ function countParams(raw: string): number {
       if (braceDepth > 0) braceDepth -= 1;
       continue;
     }
-    if (ch === "<") {
-      angleDepth += 1;
-      continue;
-    }
-    if (ch === ">") {
-      if (angleDepth > 0) angleDepth -= 1;
-      continue;
-    }
-
     const atTopLevel =
       parenDepth === 0 &&
       bracketDepth === 0 &&
       braceDepth === 0 &&
-      angleDepth === 0;
+      typeAngleDepth === 0;
+
+    if (ch === ":") {
+      if (atTopLevel) inTypeAnnotation = true;
+      continue;
+    }
+
+    if (ch === "=") {
+      if (atTopLevel) inTypeAnnotation = false;
+      continue;
+    }
+
+    if (ch === "<") {
+      if (inTypeAnnotation) typeAngleDepth += 1;
+      continue;
+    }
+
+    if (ch === ">") {
+      if (inTypeAnnotation && typeAngleDepth > 0) typeAngleDepth -= 1;
+      continue;
+    }
 
     if (ch === ",") {
       if (atTopLevel && sawNonWhitespaceSinceLastComma) {
         count += 1;
         sawNonWhitespaceSinceLastComma = false;
       }
+      inTypeAnnotation = false;
       continue;
     }
 
@@ -418,7 +431,7 @@ function countParams(raw: string): number {
 
 function parseExportSignature(line: string): ExportSignature | null {
   const defaultFunctionMatch = line.match(
-    /^\s*export\s+default\s+(?:async\s+)?function(?:\s+([A-Za-z_$][\w$]*))?\s*\(([^)]*)\)/,
+    /^\s*export\s+default\s+(?:async\s+)?function(?:\s+([A-Za-z_$][\w$]*))?(?:\s*<[^>]+>)?\s*\(([^)]*)\)/,
   );
   if (defaultFunctionMatch) {
     return {
@@ -428,7 +441,7 @@ function parseExportSignature(line: string): ExportSignature | null {
   }
 
   const functionMatch = line.match(
-    /^\s*export\s+(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)/,
+    /^\s*export\s+(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)(?:\s*<[^>]+>)?\s*\(([^)]*)\)/,
   );
   if (functionMatch) {
     const name = functionMatch[1];
@@ -440,7 +453,7 @@ function parseExportSignature(line: string): ExportSignature | null {
   }
 
   const constArrowMatch = line.match(
-    /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*=>/,
+    /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:<[^>]+>\s*)?\(([^)]*)\)\s*=>/,
   );
   if (constArrowMatch) {
     const name = constArrowMatch[1];
@@ -506,9 +519,21 @@ function detectExportSignatureChanges(change: FileChange): SignatureChange[] {
     }
   }
 
+  const addedByName = new Map<string, ExportSignatureWithLocation[]>();
+  const addedByHunk = new Map<number, ExportSignatureWithLocation[]>();
+  for (const entry of added) {
+    const byName = addedByName.get(entry.name);
+    if (byName) byName.push(entry);
+    else addedByName.set(entry.name, [entry]);
+
+    const byHunk = addedByHunk.get(entry.hunkIndex);
+    if (byHunk) byHunk.push(entry);
+    else addedByHunk.set(entry.hunkIndex, [entry]);
+  }
+
   const output: SignatureChange[] = [];
   for (const removedSig of removed) {
-    const matched = added.find((entry) => entry.name === removedSig.name);
+    const matched = addedByName.get(removedSig.name)?.[0];
     if (matched && matched.paramCount !== removedSig.paramCount) {
       output.push({
         name: removedSig.name,
@@ -518,9 +543,9 @@ function detectExportSignatureChanges(change: FileChange): SignatureChange[] {
       continue;
     }
     if (!matched && added.length > 0) {
-      const candidate = added.find(
+      const candidates = addedByHunk.get(removedSig.hunkIndex) ?? [];
+      const candidate = candidates.find(
         (entry) =>
-          entry.hunkIndex === removedSig.hunkIndex &&
           Math.abs(entry.line - removedSig.line) <= 3,
       );
       const renameDetails = candidate
