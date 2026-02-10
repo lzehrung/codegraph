@@ -176,8 +176,13 @@ function buildImpactCycles(
   const graphNodeSet = new Set(graphNodes);
   const canonicalizeFile = (file: FileId): FileId => {
     if (graphNodeSet.has(file)) return file;
-    const normalizedSuffix = file.replace(/\\/g, "/");
-    const match = graphNodes.find((node) => node.endsWith(`/${normalizedSuffix}`));
+    const normalizedPath = file.replace(/\\/g, "/");
+    const normalizedSuffix = normalizedPath.startsWith("/")
+      ? normalizedPath.slice(1)
+      : normalizedPath;
+    const match = graphNodes.find(
+      (node) => node === normalizedPath || node.endsWith(`/${normalizedSuffix}`),
+    );
     return match ?? file;
   };
 

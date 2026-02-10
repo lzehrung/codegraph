@@ -18,6 +18,7 @@ async function buildSampleReport(
     configImpactRules?: boolean;
     detectBreakingChanges?: boolean;
     testCoverageSuggestions?: boolean;
+    verifyReferences?: boolean;
   },
 ): Promise<ImpactReport> {
   const index = await buildProjectIndex(samplePath);
