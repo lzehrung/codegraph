@@ -142,6 +142,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--review-depth",
   "--ignore-glob",
   "--report-file",
+  "--lcov",
 ]);
 
 function parseCliArgs(tokens: string[]): ParsedCliArgs {
@@ -1344,6 +1345,12 @@ Examples:
 
     const verifyRefs = hasFlag("--verify-refs");
     if (verifyRefs) options.verifyReferences = true;
+
+    const lcovPaths = parsed.options.get("--lcov");
+    if (lcovPaths && lcovPaths.length > 0) {
+      options.lcovPaths = lcovPaths;
+      options.testCoverageSuggestions = true;
+    }
 
     options.includeTests = includeTests;
     options.membersOnly = membersOnly;

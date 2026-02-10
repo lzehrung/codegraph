@@ -41,6 +41,22 @@ const definition: LanguageTestDefinition = {
         from: "index.html",
         to: { type: "file", path: "inline-helper.js" },
       },
+      {
+        from: "index.html",
+        to: { type: "external", name: "cdn-logo@1x" },
+      },
+      {
+        from: "index.html",
+        to: { type: "external", name: "cdn-logo@2x" },
+      },
+      {
+        from: "index.html",
+        to: { type: "external", name: "cdn-intro" },
+      },
+      {
+        from: "index.html",
+        to: { type: "external", name: "https://example.com/embed" },
+      },
     ],
   },
 };

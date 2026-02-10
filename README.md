@@ -352,6 +352,8 @@ npx codegraph impact --base main --head feature --ref-context line
 npx codegraph impact --base main --head feature --ref-context block --ref-block-max-lines 30
 # Verify missing imports/exports/declarations in changed lines
 npx codegraph impact --base main --head feature --verify-refs
+# Add LCOV-aware untested-change suggestions and confidence calibration
+npx codegraph impact --base main --head feature --lcov coverage/lcov.info
 # Programmatic API equivalent
 await analyzeImpactFromDiff(root, index, { provider: "git", base: "main", head: "feature", verifyReferences: true });
 
