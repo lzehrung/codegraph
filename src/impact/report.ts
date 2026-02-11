@@ -211,6 +211,7 @@ function buildImpactCycles(
     out.push({
       files: cycle.files,
       entryEdges: cycle.entryEdges,
+      internalEdges: cycle.internalEdges,
       fileCount: cycle.fileCount,
       internalEdgeCount: cycle.internalEdgeCount,
       fanInFromOutside: cycle.fanInFromOutside,
@@ -434,6 +435,12 @@ function buildCompactReport(
       ? cycles.map((cycle) => ({
           files: cycle.files.map((file) => fileIndex.get(file)!),
           entryEdges: cycle.entryEdges.map((edge) => ({
+            from: fileIndex.get(edge.from)!,
+            to: fileIndex.get(edge.to)!,
+            raw: edge.raw,
+            ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
+          })),
+          internalEdges: cycle.internalEdges.map((edge) => ({
             from: fileIndex.get(edge.from)!,
             to: fileIndex.get(edge.to)!,
             raw: edge.raw,

@@ -1680,8 +1680,16 @@ Examples:
             `  ${cycle.files.map((p) => path.relative(projectRootFs, p)).join(" -> ")} -> ...`,
           );
           if (cycle.entryEdges.length > 0) {
-            writeStdoutLine("  Entry edges:");
+            writeStdoutLine("  Incoming edges:");
             for (const edge of cycle.entryEdges) {
+              writeStdoutLine(
+                `    ${path.relative(projectRootFs, edge.from)} -> ${path.relative(projectRootFs, edge.to)} (import ${edge.raw})`,
+              );
+            }
+          }
+          if (cycle.internalEdges.length > 0) {
+            writeStdoutLine("  Internal cycle edges:");
+            for (const edge of cycle.internalEdges) {
               writeStdoutLine(
                 `    ${path.relative(projectRootFs, edge.from)} -> ${path.relative(projectRootFs, edge.to)} (import ${edge.raw})`,
               );

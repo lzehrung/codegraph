@@ -79,7 +79,8 @@ describe("graph queries", () => {
     const cycle = details[0]!;
     expect(cycle.fileCount).toBe(3);
     expect(cycle.internalEdgeCount).toBe(3);
-    expect(cycle.entryEdges.length).toBe(3);
+    expect(cycle.internalEdges.length).toBe(3);
+    expect(cycle.entryEdges.length).toBe(1);
     expect(cycle.priorityScore).toBeGreaterThan(0);
     expect(cycle.remediationHint.length).toBeGreaterThan(0);
   });

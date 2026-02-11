@@ -946,7 +946,7 @@ export function findCycles(graph: Graph): FileId[][] {
   return findDetailedCycles(graph).map((cycle) => cycle.files);
 }
 
-export type CycleEntryEdge = {
+export type CycleInternalEdge = {
   from: FileId;
   to: FileId;
   raw: string;
@@ -955,7 +955,8 @@ export type CycleEntryEdge = {
 
 export type DetailedCycle = {
   files: FileId[];
-  entryEdges: CycleEntryEdge[];
+  entryEdges: CycleInternalEdge[];
+  internalEdges: CycleInternalEdge[];
   fileCount: number;
   internalEdgeCount: number;
   fanInFromOutside: number;
@@ -1049,7 +1050,8 @@ export function findDetailedCycles(
   for (const scc of sccs) {
     const files = scc.map((idx) => nodes[idx]!);
     const sccSet = new Set(files);
-    const entryEdges: CycleEntryEdge[] = [];
+    const internalEdges: CycleInternalEdge[] = [];
+    const entryEdges: CycleInternalEdge[] = [];
     let internalEdgeCount = 0;
     let fanInFromOutside = 0;
 
@@ -1059,7 +1061,7 @@ export function findDetailedCycles(
       const toInScc = sccSet.has(edge.to.path);
       if (fromInScc && toInScc) {
         internalEdgeCount += 1;
-        entryEdges.push({
+        internalEdges.push({
           from: edge.from,
           to: edge.to.path,
           raw: edge.raw,
@@ -1068,14 +1070,20 @@ export function findDetailedCycles(
       }
       if (!fromInScc && toInScc) {
         fanInFromOutside += 1;
+        entryEdges.push({
+          from: edge.from,
+          to: edge.to.path,
+          raw: edge.raw,
+          ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
+        });
       }
     }
 
     const priorityScore =
       files.length * 3 + fanInFromOutside * 2 + internalEdgeCount;
-    const couplingForEdge = (edge: CycleEntryEdge): number =>
+    const couplingForEdge = (edge: CycleInternalEdge): number =>
       options.symbolCoupling?.get(`${edge.from} -> ${edge.to}`) ?? 0;
-    const weakestEdge = entryEdges.reduce<CycleEntryEdge | null>((best, edge) => {
+    const weakestEdge = internalEdges.reduce<CycleInternalEdge | null>((best, edge) => {
       if (!best) return edge;
       const bestCoupling = couplingForEdge(best);
       const edgeCoupling = couplingForEdge(edge);
@@ -1094,6 +1102,7 @@ export function findDetailedCycles(
     cycleDetails.push({
       files,
       entryEdges,
+      internalEdges,
       fileCount: files.length,
       internalEdgeCount,
       fanInFromOutside,

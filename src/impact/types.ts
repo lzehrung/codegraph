@@ -129,6 +129,7 @@ export type ImpactCycleEdge = {
 export type ImpactCycle = {
   files: FileId[];
   entryEdges: ImpactCycleEdge[];
+  internalEdges: ImpactCycleEdge[];
   fileCount: number;
   internalEdgeCount: number;
   fanInFromOutside: number;
@@ -267,6 +268,12 @@ export type CompactImpactReport = {
   cycles?: Array<{
     files: number[];
     entryEdges: Array<{
+      from: number;
+      to: number;
+      raw: string;
+      typeOnly?: boolean;
+    }>;
+    internalEdges: Array<{
       from: number;
       to: number;
       raw: string;

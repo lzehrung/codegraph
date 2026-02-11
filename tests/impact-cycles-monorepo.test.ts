@@ -47,7 +47,7 @@ index 1111111..2222222 100644
     expect(cycle).toBeDefined();
     expect(cycle?.touchesChangedFile).toBe(true);
     expect(cycle?.severity).toBe("high");
-    expect(cycle?.entryEdges.length ?? 0).toBeGreaterThan(0);
+    expect(cycle?.internalEdges.length ?? 0).toBeGreaterThan(0);
     expect(cycle?.priorityScore ?? 0).toBeGreaterThan(0);
     expect(cycle?.remediationHint.length ?? 0).toBeGreaterThan(0);
   });

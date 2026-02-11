@@ -47,7 +47,7 @@ export {
   type SymbolGraph,
   type SymbolNodeKind,
   type DetailedCycle,
-  type CycleEntryEdge,
+  type CycleInternalEdge,
   type CycleSortMode,
 } from "./graphs.js";
 export {
