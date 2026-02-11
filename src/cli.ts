@@ -9,6 +9,7 @@ import {
   collectGraph,
   buildProjectIndex,
   buildProjectIndexFromFiles,
+  buildProjectIndexIncremental,
   buildReviewReport,
   buildGraphDelta,
   goToDefinition,
@@ -28,10 +29,13 @@ import {
   getReverseDependencies,
   getShortestPath,
   findCycles,
+  findDetailedCycles,
+  sortDetailedCycles,
   getUnresolvedImports,
   getHotspots,
   getApiSurface,
   writeGraphSqlite,
+  updateGraphSqlite,
   queryGraphSqliteRaw,
   chunkFile,
   chunkTextFile,
@@ -143,6 +147,8 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--ignore-glob",
   "--report-file",
   "--lcov",
+  "--coverage-report",
+  "--test-command-template",
 ]);
 
 function parseCliArgs(tokens: string[]): ParsedCliArgs {
@@ -625,7 +631,7 @@ Commands:
   chunk         Chunk file for embeddings
   deps          List dependencies
   rdeps         List reverse dependencies
-  cycles        Detect dependency cycles
+  cycles        Detect dependency cycles (use --sort priority|size|fanin)
   hotspots      Find high-complexity files
 
 Graph Options:
@@ -754,19 +760,30 @@ Examples:
     return null;
   };
 
-  const resolveFiles = async (): Promise<string[]> => {
+  const resolveChangedFilesWithDeletes = async (): Promise<
+    | { existingFiles: string[]; deletedFiles: string[] }
+    | null
+  > => {
     const gitFiles = await resolveChangedFiles();
-    if (gitFiles) {
-      const existence = gitFiles.map((file) => ({
-        file,
-        exists: fs.existsSync(file),
-      }));
-      const existingFiles = existence
+    if (!gitFiles) return null;
+    const existence = gitFiles.map((file: string) => ({
+      file,
+      exists: fs.existsSync(file),
+    }));
+    return {
+      existingFiles: existence
         .filter((entry) => entry.exists)
-        .map((entry) => entry.file);
-      const deletedFiles = existence
+        .map((entry) => entry.file),
+      deletedFiles: existence
         .filter((entry) => !entry.exists)
-        .map((entry) => entry.file);
+        .map((entry) => entry.file),
+    };
+  };
+
+  const resolveFiles = async (): Promise<string[]> => {
+    const changedSet = await resolveChangedFilesWithDeletes();
+    if (changedSet) {
+      const { existingFiles, deletedFiles } = changedSet;
       if (deletedFiles.length > 0) {
         writeStderrLine(
           `Skipping ${deletedFiles.length} deleted file(s) from git diff: ${deletedFiles
@@ -914,18 +931,34 @@ Examples:
       commandReport.index = indexReport;
     }
     if (sqliteFile) {
-      const index = await buildProjectIndexFromFiles(projectRootFs, files, {
-        threads,
-        ...(cache !== undefined ? { cache } : {}),
-        cacheStrict,
-        graph: {
-          fast,
-          resolveNodeModules,
-          dynamicImportHeuristics,
-          ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
-        },
-        ...(indexReport ? { report: indexReport } : {}),
-      });
+      const changedSet = await resolveChangedFilesWithDeletes();
+      const graphOptions = {
+        fast,
+        resolveNodeModules,
+        dynamicImportHeuristics,
+        ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
+      };
+      const sqliteCacheMode = cache ?? (changedSet ? "disk" : undefined);
+      const index = changedSet
+        ? await buildProjectIndexIncremental(projectRootFs, {
+            threads,
+            ...(sqliteCacheMode !== undefined ? { cache: sqliteCacheMode } : {}),
+            cacheStrict,
+            files: changedSet.existingFiles,
+            ...(gitBase ? { gitBase } : {}),
+            ...(gitHead ? { gitHead } : {}),
+            ...(changedSince ? { changedSince } : {}),
+            graph: graphOptions,
+            ...(indexReport ? { report: indexReport } : {}),
+          })
+        : await buildProjectIndexFromFiles(projectRootFs, files, {
+            threads,
+            ...(sqliteCacheMode !== undefined ? { cache: sqliteCacheMode } : {}),
+            cacheStrict,
+            graph: graphOptions,
+            ...(indexReport ? { report: indexReport } : {}),
+          });
+
       const detailedSymbols = hasFlag("--symbols-detailed");
       const scope = getOpt("--symbols-detailed-scope") as
         | "all"
@@ -942,11 +975,24 @@ Examples:
             membersOnly,
           })
         : await buildSymbolGraph(index);
-      await writeGraphSqlite({
-        fileGraph: index.graph,
-        symbolGraph: sgraph,
-        outputPath: sqliteFile,
-      });
+
+      const sqliteDbExists = fs.existsSync(sqliteFile);
+      if (changedSet && sqliteDbExists) {
+        await updateGraphSqlite({
+          fileGraph: index.graph,
+          symbolGraph: sgraph,
+          outputPath: sqliteFile,
+          changedFiles: changedSet.existingFiles,
+          deletedFiles: changedSet.deletedFiles,
+          fullGraphSync: true,
+        });
+      } else {
+        await writeGraphSqlite({
+          fileGraph: index.graph,
+          symbolGraph: sgraph,
+          outputPath: sqliteFile,
+        });
+      }
       await finalizeReport();
       return;
     }
@@ -1352,6 +1398,18 @@ Examples:
       options.testCoverageSuggestions = true;
     }
 
+    const coveragePaths = parsed.options.get("--coverage-report");
+    if (coveragePaths && coveragePaths.length > 0) {
+      options.coveragePaths = coveragePaths;
+      options.testCoverageSuggestions = true;
+    }
+
+    const testCommandTemplate = getOpt("--test-command-template");
+    if (testCommandTemplate) {
+      options.testCommandTemplate = testCommandTemplate;
+      options.testCoverageSuggestions = true;
+    }
+
     options.includeTests = includeTests;
     options.membersOnly = membersOnly;
 
@@ -1587,26 +1645,57 @@ Examples:
 
   if (cmd === "cycles") {
     const json = hasFlag("--json");
+    const sortModeRaw = getOpt("--sort") ?? "priority";
+    const sortMode =
+      sortModeRaw === "priority" ||
+      sortModeRaw === "size" ||
+      sortModeRaw === "fanin"
+        ? sortModeRaw
+        : null;
+    if (!sortMode) {
+      writeStderrLine("Invalid --sort value. Use one of: priority, size, fanin.");
+      process.exit(2);
+    }
+
     const graph = await collectGraph(
       projectRootFs,
       await listProjectFiles(projectRootFs),
       hasGraphOverrides ? buildGraphOptions() : undefined,
     );
-    const cycles = findCycles(graph);
+    const cycleDetails = sortDetailedCycles(findDetailedCycles(graph), sortMode);
 
     if (json) {
-      writeJSONLine(cycles);
+      writeJSONLine(cycleDetails);
     } else {
-      if (cycles.length === 0) {
+      if (cycleDetails.length === 0) {
         writeStdoutLine("No dependency cycles found.");
       } else {
-        writeStdoutLine(`Found ${cycles.length} dependency cycles:`);
-        for (let i = 0; i < cycles.length; i++) {
-          const cycle = cycles[i]!;
-          writeStdoutLine(`Cycle ${i + 1}:`);
+        writeStdoutLine(
+          `Found ${cycleDetails.length} dependency cycles (sorted by ${sortMode}):`,
+        );
+        for (let i = 0; i < cycleDetails.length; i++) {
+          const cycle = cycleDetails[i]!;
+          writeStdoutLine(`Cycle ${i + 1} (priority=${cycle.priorityScore}):`);
           writeStdoutLine(
-            `  ${cycle.map((p) => path.relative(projectRootFs, p)).join(" -> ")} -> ...`,
+            `  ${cycle.files.map((p) => path.relative(projectRootFs, p)).join(" -> ")} -> ...`,
           );
+          if (cycle.entryEdges.length > 0) {
+            writeStdoutLine("  Incoming edges:");
+            for (const edge of cycle.entryEdges) {
+              writeStdoutLine(
+                `    ${path.relative(projectRootFs, edge.from)} -> ${path.relative(projectRootFs, edge.to)} (import ${edge.raw})`,
+              );
+            }
+          }
+          if (cycle.internalEdges.length > 0) {
+            writeStdoutLine("  Internal cycle edges:");
+            for (const edge of cycle.internalEdges) {
+              writeStdoutLine(
+                `    ${path.relative(projectRootFs, edge.from)} -> ${path.relative(projectRootFs, edge.to)} (import ${edge.raw})`,
+              );
+            }
+          }
+          writeStdoutLine(`  Hint: ${cycle.remediationHint}`);
         }
       }
     }

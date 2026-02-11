@@ -19,7 +19,10 @@ import type {
   CompactImpactCluster,
   ImpactCycle,
 } from "./types.js";
-import { buildSymbolGraphDetailed, findCycles } from "../graphs.js";
+import {
+  buildSymbolGraphDetailed,
+  findDetailedCycles,
+} from "../graphs.js";
 import { normalizePath, discoverProjectFiles } from "../util.js";
 
 export async function buildImpactReport(
@@ -64,6 +67,7 @@ export async function buildImpactReport(
   // Build graph data
   const fileEdges: Array<{ from: FileId; to: FileId; typeOnly?: boolean }> = [];
   const symbolEdges: Array<{ from: number; to: number; label: string }> = [];
+  const symbolCoupling = new Map<string, number>();
 
   const relevantFiles = new Set<FileId>();
   for (const fileChange of diffFiles) relevantFiles.add(fileChange.path);
@@ -104,6 +108,14 @@ export async function buildImpactReport(
 
     // Add edges between changed symbols, pruned to only include changed symbols
     for (const edge of detailedGraph.edges) {
+      const fromNode = detailedGraph.nodes.get(edge.from);
+      const toNode = detailedGraph.nodes.get(edge.to);
+      if (fromNode && toNode && fromNode.file !== toNode.file) {
+        const couplingKey = `${fromNode.file} -> ${toNode.file}`;
+        const current = symbolCoupling.get(couplingKey) ?? 0;
+        symbolCoupling.set(couplingKey, current + 1);
+      }
+
       const fromIndex = symbolIdToIndex.get(edge.from);
       const toIndex = symbolIdToIndex.get(edge.to);
 
@@ -122,7 +134,7 @@ export async function buildImpactReport(
   }
 
   const clusters = buildClusters(changedFiles, impactedItems, fileEdges);
-  const cycles = buildImpactCycles(index, changedFiles, impactedItems);
+  const cycles = buildImpactCycles(index, changedFiles, impactedItems, symbolCoupling);
 
   // Check if compact format is requested
   if (options.compact) {
@@ -171,6 +183,7 @@ function buildImpactCycles(
   index: ProjectIndex,
   changedFiles: Array<{ file: FileId }>,
   impactedItems: ImpactItem[],
+  symbolCoupling: Map<string, number>,
 ): ImpactCycle[] {
   const graphNodes = Array.from(index.graph.nodes);
   const graphNodeSet = new Set(graphNodes);
@@ -191,12 +204,19 @@ function buildImpactCycles(
   );
   const impactedSet = new Set(impactedItems.map((entry) => entry.file));
   const out: ImpactCycle[] = [];
-  for (const cycleFiles of findCycles(index.graph)) {
-    const touchesChangedFile = cycleFiles.some((file) => changedSet.has(file));
-    const touchesImpactedFile = cycleFiles.some((file) => impactedSet.has(file));
+  for (const cycle of findDetailedCycles(index.graph, { symbolCoupling })) {
+    const touchesChangedFile = cycle.files.some((file) => changedSet.has(file));
+    const touchesImpactedFile = cycle.files.some((file) => impactedSet.has(file));
     if (!touchesChangedFile && !touchesImpactedFile) continue;
     out.push({
-      files: cycleFiles,
+      files: cycle.files,
+      entryEdges: cycle.entryEdges,
+      internalEdges: cycle.internalEdges,
+      fileCount: cycle.fileCount,
+      internalEdgeCount: cycle.internalEdgeCount,
+      fanInFromOutside: cycle.fanInFromOutside,
+      priorityScore: cycle.priorityScore,
+      remediationHint: cycle.remediationHint,
       touchesChangedFile,
       touchesImpactedFile,
       severity: touchesChangedFile ? "high" : "medium",
@@ -414,6 +434,23 @@ function buildCompactReport(
     cycles.length > 0
       ? cycles.map((cycle) => ({
           files: cycle.files.map((file) => fileIndex.get(file)!),
+          entryEdges: cycle.entryEdges.map((edge) => ({
+            from: fileIndex.get(edge.from)!,
+            to: fileIndex.get(edge.to)!,
+            raw: edge.raw,
+            ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
+          })),
+          internalEdges: cycle.internalEdges.map((edge) => ({
+            from: fileIndex.get(edge.from)!,
+            to: fileIndex.get(edge.to)!,
+            raw: edge.raw,
+            ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
+          })),
+          fileCount: cycle.fileCount,
+          internalEdgeCount: cycle.internalEdgeCount,
+          fanInFromOutside: cycle.fanInFromOutside,
+          priorityScore: cycle.priorityScore,
+          remediationHint: cycle.remediationHint,
           touchesChangedFile: cycle.touchesChangedFile,
           touchesImpactedFile: cycle.touchesImpactedFile,
           severity: cycle.severity,

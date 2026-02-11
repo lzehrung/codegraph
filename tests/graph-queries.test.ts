@@ -4,6 +4,8 @@ import {
   getReverseDependencies,
   getShortestPath,
   findCycles,
+  findDetailedCycles,
+  sortDetailedCycles,
 } from "../src/index.js";
 
 describe("graph queries", () => {
@@ -69,4 +71,53 @@ describe("graph queries", () => {
     expect(cycles.length).toBe(1);
     expect(cycles[0]).toEqual([selfLoopFile]);
   });
+
+
+  it("should provide detailed cycle metadata with entry edges and priority", () => {
+    const details = findDetailedCycles(graph);
+    expect(details.length).toBe(1);
+    const cycle = details[0]!;
+    expect(cycle.fileCount).toBe(3);
+    expect(cycle.internalEdgeCount).toBe(3);
+    expect(cycle.internalEdges.length).toBe(3);
+    expect(cycle.entryEdges.length).toBe(1);
+    expect(cycle.priorityScore).toBeGreaterThan(0);
+    expect(cycle.remediationHint.length).toBeGreaterThan(0);
+  });
+
+  it("should sort detailed cycles by size and fanin", () => {
+    const g = {
+      nodes: new Set([
+        `${root}/a.ts`,
+        `${root}/b.ts`,
+        `${root}/c.ts`,
+        `${root}/d.ts`,
+        `${root}/e.ts`,
+        `${root}/f.ts`,
+      ]),
+      edges: [
+        { from: `${root}/a.ts`, to: { type: "file" as const, path: `${root}/b.ts` }, raw: "./b" },
+        { from: `${root}/b.ts`, to: { type: "file" as const, path: `${root}/a.ts` }, raw: "./a" },
+        { from: `${root}/c.ts`, to: { type: "file" as const, path: `${root}/d.ts` }, raw: "./d" },
+        { from: `${root}/d.ts`, to: { type: "file" as const, path: `${root}/e.ts` }, raw: "./e" },
+        { from: `${root}/e.ts`, to: { type: "file" as const, path: `${root}/c.ts` }, raw: "./c" },
+        { from: `${root}/f.ts`, to: { type: "file" as const, path: `${root}/c.ts` }, raw: "./c" },
+      ],
+    };
+    const detailed = findDetailedCycles(g);
+    const bySize = sortDetailedCycles(detailed, "size");
+    const byFanin = sortDetailedCycles(detailed, "fanin");
+
+    expect(bySize[0]?.fileCount).toBeGreaterThanOrEqual(bySize[1]?.fileCount ?? 0);
+    expect(byFanin[0]?.fanInFromOutside).toBeGreaterThanOrEqual(
+      byFanin[1]?.fanInFromOutside ?? 0,
+    );
+  });
+
+  it("should use symbol coupling to choose remediation edge", () => {
+    const coupling = new Map<string, number>([[`${root}/a.ts -> ${root}/b.ts`, 4], [`${root}/b.ts -> ${root}/c.ts`, 1], [`${root}/c.ts -> ${root}/a.ts`, 5]]);
+    const details = findDetailedCycles(graph, { symbolCoupling: coupling });
+    expect(details[0]?.remediationHint.includes(`${root}/b.ts -> ${root}/c.ts`)).toBe(true);
+  });
+
 });
