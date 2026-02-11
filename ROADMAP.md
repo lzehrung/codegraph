@@ -11,11 +11,7 @@ Remaining feature work after the initial analysis and #54 remediation. Each item
 **Done:** Semantic config-impact suggestions classify key config families (`package.json` scripts/deps, tsconfig/jsconfig, `.env`) with per-family detail messages and confidence levels. Integrated into impact reports via `ImpactSuggestion` with `kind: "configImpact"`.
 
 **Remaining:**
-- Precise key-level blast-radius mapping (e.g., `tsconfig paths` change → list which files use affected path aliases)
-- Build tool configs (vite, webpack, rollup, esbuild) — matched by regex but lack semantic classification
-- Monorepo tool configs (turbo.json, nx.json) — detected but not analyzed for cross-package impact
-
-**Approach:** For tsconfig specifically, cross-reference `paths` keys against `resolveSpecifier` cache to identify which files would be affected. For build tools, parse the config AST to identify entry points and output targets.
+- None. F4 is complete for current scope.
 
 ---
 
@@ -24,11 +20,7 @@ Remaining feature work after the initial analysis and #54 remediation. Each item
 **Done:** `collectUntestedChangeSuggestions` checks each changed symbol's references against test files, accepts optional LCOV files, and ranks confidence using covered vs uncovered changed lines. Suggestions now include candidate test files and a concrete test command hint.
 
 **Remaining:**
-- Coverage ingestion beyond LCOV (for example Istanbul JSON)
-- Confidence calibration using symbol kind, export status, and fan-in in addition to coverage
-- Optional direct integration with test runner output for repository-specific command templates
-
-**Approach:** Extend current LCOV-based range matching to additional coverage formats and richer repository-aware ranking signals.
+- None. F6 is complete for current scope.
 
 ---
 
@@ -67,12 +59,10 @@ Remaining feature work after the initial analysis and #54 remediation. Each item
 
 ### F2. Cycle detection enhancements
 
-**Done:** `findCycles()` (Tarjan's SCC) already existed. #54 added cycle summaries to impact reports with severity (`high`/`medium`) and flags for changed/impacted-file involvement.
+**Done:** `findCycles()` (Tarjan's SCC) already existed. #54 added cycle summaries to impact reports with severity (`high`/`medium`) and flags for changed/impacted-file involvement. This is now extended with detailed cycle metadata: internal entry edges (`from` -> `to` + raw import), SCC prioritization (`priorityScore`, size, fan-in), and remediation hints that suggest a candidate edge to break.
 
 **Remaining:**
-- Entry edge details per cycle (which specific imports form the cycle)
-- SCC-level prioritization (rank cycles by size, fan-in, or involvement in changed code)
-- Automated remediation hints (suggest which edge to break based on dependency direction)
+- None. F2 is complete for current scope.
 
 ---
 
@@ -90,9 +80,7 @@ Remaining feature work after the initial analysis and #54 remediation. Each item
 
 ### F8. Incremental SQLite graph updates
 
-**Done:** SQLite updates are changed-file scoped for nodes/edges.
+**Done:** SQLite updates are changed-file scoped for nodes/edges. Incremental updates now reconcile deleted files, remove stale symbol/file edges, and support CI-friendly incremental patching via `codegraph graph --git-base ... --sqlite ...` backed by `updateGraphSqlite({ fullGraphSync: true })`.
 
 **Remaining:**
-- Truly incremental parse+graph+persist pipeline without full in-memory graph materialization
-- Temporal graph tracking (store snapshots over time for evolution analysis)
-- Efficient diff-based patching for CI pipelines that maintain persistent databases
+- None. F8 is complete for current scope.

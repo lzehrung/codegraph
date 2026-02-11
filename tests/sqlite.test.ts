@@ -56,6 +56,9 @@ export function run() { helper(); new Widget(); }
     expect(tables).toContain("symbols");
     expect(tables).toContain("file_edges");
     expect(tables).toContain("symbol_edges");
+    expect(tables).toContain("graph_snapshots");
+    expect(tables).toContain("graph_snapshot_files");
+    expect(tables).toContain("graph_metadata");
 
     const indexes = dbQuery(
       db,
@@ -70,6 +73,7 @@ export function run() { helper(); new Widget(); }
     expect(indexes).toContain("idx_symbol_edges_label_from");
     expect(indexes).toContain("idx_symbol_edges_label_from_to");
     expect(indexes).toContain("idx_file_edges_from");
+    expect(indexes).toContain("idx_graph_snapshots_created_at");
 
     const symbols = dbQuery(
       db,
@@ -150,6 +154,13 @@ export function run() { helper(); new Widget(); }
       .map((row) => (Array.isArray(row) && row[1] ? String(row[1]) : ""))
       .filter(Boolean);
     expect(columns).toContain("visibility");
+    const tables = dbQuery(db, "SELECT name FROM sqlite_master WHERE type='table';");
+    expect(tables).toContain("graph_snapshots");
+    const schemaVersion = dbQuery(
+      db,
+      "SELECT value FROM graph_metadata WHERE key = 'schema_version';",
+    );
+    expect(schemaVersion[0]).toBe("2");
     db.close();
   });
 
@@ -210,6 +221,131 @@ export function run() { return new NewWidget(); }
     db.close();
   });
 
+
+  it("removes deleted files and stale edges during incremental updates", async () => {
+    const root = await mkTmpDir("dg-sqlite-delete-");
+    await fsp.writeFile(
+      path.join(root, "main.ts"),
+      `import { helper } from "./util";
+export const run = () => helper();
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "util.ts"),
+      `export function helper() { return 1; }
+`,
+      "utf8",
+    );
+
+    const baseIndex = await buildProjectIndex(root);
+    const baseSgraph = await buildSymbolGraphDetailed(baseIndex);
+    const dbPath = path.join(root, "graph.sqlite");
+    await writeGraphSqlite({
+      fileGraph: baseIndex.graph,
+      symbolGraph: baseSgraph,
+      outputPath: dbPath,
+    });
+
+    await fsp.unlink(path.join(root, "util.ts"));
+    await fsp.writeFile(
+      path.join(root, "main.ts"),
+      `export const run = () => 1;
+`,
+      "utf8",
+    );
+
+    const nextIndex = await buildProjectIndex(root);
+    const nextSgraph = await buildSymbolGraphDetailed(nextIndex);
+    await updateGraphSqlite({
+      fileGraph: nextIndex.graph,
+      symbolGraph: nextSgraph,
+      outputPath: dbPath,
+      changedFiles: [path.join(root, "main.ts").replace(/\\/g, "/")],
+      deletedFiles: [path.join(root, "util.ts").replace(/\\/g, "/")],
+      fullGraphSync: true,
+    });
+
+    const BetterSqlite3 = loadBetterSqlite3();
+    const db = new BetterSqlite3(dbPath);
+    const utilFiles = dbQuery(
+      db,
+      `SELECT path FROM files WHERE path = '${path
+        .join(root, "util.ts")
+        .replace(/\\/g, "/")}';`,
+    );
+    const utilSymbols = dbQuery(
+      db,
+      "SELECT name FROM symbols WHERE name = 'helper';",
+    );
+    const staleEdges = dbQuery(
+      db,
+      `SELECT to_path FROM file_edges WHERE to_path = '${path
+        .join(root, "util.ts")
+        .replace(/\\/g, "/")}';`,
+    );
+
+    expect(utilFiles).toEqual([]);
+    expect(utilSymbols).toEqual([]);
+    expect(staleEdges).toEqual([]);
+    db.close();
+  });
+
+
+  it("records temporal snapshots for full and incremental updates", async () => {
+    const root = await mkTmpDir("dg-sqlite-snapshots-");
+    await fsp.writeFile(
+      path.join(root, "main.ts"),
+      `import { helper } from "./util";
+export const run = () => helper();
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "util.ts"),
+      `export function helper() { return 1; }
+`,
+      "utf8",
+    );
+
+    const dbPath = path.join(root, "graph.sqlite");
+    const baseIndex = await buildProjectIndex(root);
+    const baseSgraph = await buildSymbolGraphDetailed(baseIndex);
+    await writeGraphSqlite({
+      fileGraph: baseIndex.graph,
+      symbolGraph: baseSgraph,
+      outputPath: dbPath,
+    });
+
+    await fsp.unlink(path.join(root, "util.ts"));
+    await fsp.writeFile(path.join(root, "main.ts"), `export const run = () => 2;
+`, "utf8");
+    const nextIndex = await buildProjectIndex(root);
+    const nextSgraph = await buildSymbolGraphDetailed(nextIndex);
+    await updateGraphSqlite({
+      fileGraph: nextIndex.graph,
+      symbolGraph: nextSgraph,
+      outputPath: dbPath,
+      changedFiles: [path.join(root, "main.ts").replace(/\\/g, "/")],
+      deletedFiles: [path.join(root, "util.ts").replace(/\\/g, "/")],
+      fullGraphSync: true,
+    });
+
+    const BetterSqlite3 = loadBetterSqlite3();
+    const db = new BetterSqlite3(dbPath);
+    const snapshotModes = dbQuery(
+      db,
+      "SELECT mode FROM graph_snapshots ORDER BY id ASC;",
+    );
+    expect(snapshotModes).toEqual(["full", "incremental"]);
+    const snapshotFiles = dbQuery(
+      db,
+      "SELECT change_kind FROM graph_snapshot_files ORDER BY rowid ASC;",
+    );
+    expect(snapshotFiles).toContain("changed");
+    expect(snapshotFiles).toContain("deleted");
+    db.close();
+  });
   it("supports deterministic graph queries", async () => {
     const root = await mkTmpDir("dg-sqlite-query-");
     const auth = `
