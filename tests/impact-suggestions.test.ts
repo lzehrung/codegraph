@@ -749,4 +749,160 @@ index 1111111..2222222 100644
       true,
     );
   });
+
+  it("produces untested-change suggestions for Python symbols when tests do not reference the symbol", async () => {
+    const root = await mkTmpDir("dg-impact-python-untested-");
+    await fsp.writeFile(
+      path.join(root, "helpers.py"),
+      `def helper_function() -> str:
+    return "helper"
+`,
+      "utf8",
+    );
+
+    const diffText = `diff --git a/helpers.py b/helpers.py
+index 1111111..2222222 100644
+--- a/helpers.py
++++ b/helpers.py
+@@ -1,2 +1,2 @@
+ def helper_function() -> str:
+-    return "helper"
++    return "helper-updated"
+`;
+
+    const report = await buildReportForRoot(root, diffText, {
+      testCoverageSuggestions: true,
+      verifyReferences: false,
+    });
+
+    const untested = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "untestedChange" && entry.symbol === "helper_function",
+    );
+    expect(untested).toBeDefined();
+  });
+
+  it("does not emit untested-change suggestions for Python symbols covered by test references", async () => {
+    const root = await mkTmpDir("dg-impact-python-tested-");
+    await fsp.writeFile(
+      path.join(root, "helpers.py"),
+      `def helper_function() -> str:
+    return "helper"
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "helpers_test.py"),
+      `from helpers import helper_function
+
+
+def test_helper_function() -> None:
+    assert helper_function() == "helper"
+`,
+      "utf8",
+    );
+
+    const diffText = `diff --git a/helpers.py b/helpers.py
+index 1111111..2222222 100644
+--- a/helpers.py
++++ b/helpers.py
+@@ -1,2 +1,2 @@
+ def helper_function() -> str:
+-    return "helper"
++    return "helper-updated"
+`;
+
+    const report = await buildReportForRoot(root, diffText, {
+      testCoverageSuggestions: true,
+      verifyReferences: false,
+    });
+
+    const untested = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "untestedChange" && entry.symbol === "helper_function",
+    );
+    expect(untested).toBeUndefined();
+  });
+
+  it("supports command templates without {files} placeholder", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,3 @@
+ export function helperFunction(): string {
+-  return "helper";
++  return "helper-updated";
+ }
+`;
+    const report = await buildSampleReport(diffText, {
+      testCoverageSuggestions: true,
+      testCommandTemplate: "pytest -q",
+    });
+    const untested = (report.suggestions ?? []).find(
+      (entry) => entry.kind === "untestedChange" && entry.symbol === "helperFunction",
+    );
+    expect(untested?.details?.includes("Suggested command: pytest -q")).toBe(true);
+  });
+
+  it("merges LCOV and Istanbul coverage sources for the same file", async () => {
+    const lcovPath = path.join(samplePath, "mixed-coverage.lcov");
+    const jsonPath = path.join(samplePath, "mixed-coverage.json");
+    const helperPath = path.join(samplePath, "helpers.ts").replace(/\\/g, "/");
+    await fsp.writeFile(
+      lcovPath,
+      `TN:
+SF:${helperPath}
+DA:1,1
+DA:2,0
+end_of_record
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      jsonPath,
+      JSON.stringify({
+        [helperPath]: {
+          statementMap: {
+            "0": {
+              start: { line: 2, column: 0 },
+              end: { line: 2, column: 20 },
+            },
+          },
+          s: { "0": 1 },
+        },
+      }),
+      "utf8",
+    );
+
+    try {
+      const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,3 @@
+ export function helperFunction(): string {
+-  return "helper";
++  return "helper-updated";
+ }
+`;
+      const report = await buildSampleReport(diffText, {
+        testCoverageSuggestions: true,
+        lcovPaths: [lcovPath],
+        coveragePaths: [jsonPath],
+      });
+      const untested = (report.suggestions ?? []).find(
+        (entry) =>
+          entry.kind === "untestedChange" && entry.symbol === "helperFunction",
+      );
+      expect(untested?.details?.includes("Coverage currently exercises")).toBe(true);
+      expect(untested?.confidence === "low" || untested?.confidence === "medium").toBe(
+        true,
+      );
+    } finally {
+      await fsp.rm(lcovPath, { force: true });
+      await fsp.rm(jsonPath, { force: true });
+    }
+  });
+
 });

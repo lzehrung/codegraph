@@ -362,6 +362,31 @@ async function collectConfigAndBreakingSuggestions(
   return suggestions;
 }
 
+
+function isLikelyTestFile(filePath: string, extraPatterns?: string[]): boolean {
+  const defaultPatterns = [
+    /(^|\/)__tests__\//i,
+    /\.(?:test|spec)\./i,
+    /_test\.py$/i,
+    /_test\.go$/i,
+    /tests?\.py$/i,
+  ];
+  for (const pattern of defaultPatterns) {
+    if (pattern.test(filePath)) return true;
+  }
+  if (!extraPatterns || extraPatterns.length === 0) return false;
+  for (const raw of extraPatterns) {
+    if (!raw.trim()) continue;
+    try {
+      const re = new RegExp(raw, "i");
+      if (re.test(filePath)) return true;
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
 async function collectUntestedChangeSuggestions(
   index: ProjectIndex,
   changedSymbols: ChangedSymbol[],
@@ -370,12 +395,13 @@ async function collectUntestedChangeSuggestions(
     lcovPaths?: string[];
     coveragePaths?: string[];
     testCommandTemplate?: string;
+    testPatterns?: string[];
   },
 ): Promise<ImpactSuggestion[]> {
   const suggestions: ImpactSuggestion[] = [];
   const testFiles = new Set<string>();
   for (const file of index.byFile.keys()) {
-    if (/(^|\/)__tests__\//i.test(file) || /\.(?:test|spec)\./i.test(file)) {
+    if (isLikelyTestFile(file, options?.testPatterns)) {
       testFiles.add(file);
     }
   }
@@ -962,6 +988,7 @@ export async function analyzeImpactFromDiff(
         ...(options.testCommandTemplate
           ? { testCommandTemplate: options.testCommandTemplate }
           : {}),
+        ...(options.testPatterns ? { testPatterns: options.testPatterns } : {}),
       })
     : [];
 
