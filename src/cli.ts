@@ -147,6 +147,8 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--ignore-glob",
   "--report-file",
   "--lcov",
+  "--coverage-report",
+  "--test-command-template",
 ]);
 
 function parseCliArgs(tokens: string[]): ParsedCliArgs {
@@ -1393,6 +1395,18 @@ Examples:
     const lcovPaths = parsed.options.get("--lcov");
     if (lcovPaths && lcovPaths.length > 0) {
       options.lcovPaths = lcovPaths;
+      options.testCoverageSuggestions = true;
+    }
+
+    const coveragePaths = parsed.options.get("--coverage-report");
+    if (coveragePaths && coveragePaths.length > 0) {
+      options.coveragePaths = coveragePaths;
+      options.testCoverageSuggestions = true;
+    }
+
+    const testCommandTemplate = getOpt("--test-command-template");
+    if (testCommandTemplate) {
+      options.testCommandTemplate = testCommandTemplate;
       options.testCoverageSuggestions = true;
     }
 

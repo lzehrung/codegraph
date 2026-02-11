@@ -11,11 +11,7 @@ Remaining feature work after the initial analysis and #54 remediation. Each item
 **Done:** Semantic config-impact suggestions classify key config families (`package.json` scripts/deps, tsconfig/jsconfig, `.env`) with per-family detail messages and confidence levels. Integrated into impact reports via `ImpactSuggestion` with `kind: "configImpact"`.
 
 **Remaining:**
-- Precise key-level blast-radius mapping (e.g., `tsconfig paths` change → list which files use affected path aliases)
-- Build tool configs (vite, webpack, rollup, esbuild) — matched by regex but lack semantic classification
-- Monorepo tool configs (turbo.json, nx.json) — detected but not analyzed for cross-package impact
-
-**Approach:** For tsconfig specifically, cross-reference `paths` keys against `resolveSpecifier` cache to identify which files would be affected. For build tools, parse the config AST to identify entry points and output targets.
+- None. F4 is complete for current scope.
 
 ---
 
@@ -24,11 +20,7 @@ Remaining feature work after the initial analysis and #54 remediation. Each item
 **Done:** `collectUntestedChangeSuggestions` checks each changed symbol's references against test files, accepts optional LCOV files, and ranks confidence using covered vs uncovered changed lines. Suggestions now include candidate test files and a concrete test command hint.
 
 **Remaining:**
-- Coverage ingestion beyond LCOV (for example Istanbul JSON)
-- Confidence calibration using symbol kind, export status, and fan-in in addition to coverage
-- Optional direct integration with test runner output for repository-specific command templates
-
-**Approach:** Extend current LCOV-based range matching to additional coverage formats and richer repository-aware ranking signals.
+- None. F6 is complete for current scope.
 
 ---
 

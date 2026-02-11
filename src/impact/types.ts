@@ -354,6 +354,10 @@ export type ImpactOptions = DiffProviderOptions & {
   testCoverageSuggestions?: boolean;
   /** Optional LCOV file paths used to rank untested-change suggestions by actual line coverage */
   lcovPaths?: string[];
+  /** Optional additional coverage reports (LCOV or Istanbul JSON) */
+  coveragePaths?: string[];
+  /** Optional command template used in untested-change suggestions (use {files} placeholder) */
+  testCommandTemplate?: string;
   /** Custom severity weights for impact scoring */
   severityWeights?: Partial<SeverityWeights>;
 };

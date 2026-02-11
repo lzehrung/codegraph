@@ -352,8 +352,10 @@ npx codegraph impact --base main --head feature --ref-context line
 npx codegraph impact --base main --head feature --ref-context block --ref-block-max-lines 30
 # Verify missing imports/exports/declarations in changed lines
 npx codegraph impact --base main --head feature --verify-refs
-# Add LCOV-aware untested-change suggestions and confidence calibration
-npx codegraph impact --base main --head feature --lcov coverage/lcov.info
+# Add LCOV/Istanbul-aware untested-change suggestions and confidence calibration
+npx codegraph impact --base main --head feature --lcov coverage/lcov.info --coverage-report coverage/coverage-final.json
+# Use a repository-specific test command template for untested suggestions
+npx codegraph impact --base main --head feature --coverage-report coverage/coverage-final.json --test-command-template "pnpm vitest {files}"
 # Programmatic API equivalent
 await analyzeImpactFromDiff(root, index, { provider: "git", base: "main", head: "feature", verifyReferences: true });
 
