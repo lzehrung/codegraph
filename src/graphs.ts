@@ -120,15 +120,15 @@ export function collectModuleSpecifiersFromSource(
               .map((s) => s.trim())
               .filter(Boolean);
             for (const spec of list) {
-              const mm = spec.match(
-                /^([A-Za-z_][\w\.]*)(?:\s+as\s+[A-Za-z_][\w_]*)?$/,
-              );
+            const mm = spec.match(
+              /^([A-Za-z_][\w.]*)(?:\s+as\s+[A-Za-z_][\w_]*)?$/,
+            );
               if (mm) out.push({ spec: mm[1]! });
             }
             continue;
           }
           // Handle: from ..pkg.sub import x, y
-          const mFrom = /^\s*from\s+(\.*)([A-Za-z_][\w\.]*)?\s+import\b/.exec(
+          const mFrom = /^\s*from\s+(\.*)([A-Za-z_][\w.]*)?\s+import\b/.exec(
             stmtText,
           );
           if (mFrom) {
@@ -235,7 +235,7 @@ export function collectModuleSpecifiersFromSource(
 
   function extractCssUrlSpecifiers(source: string): ModuleSpecifier[] {
     const out: ModuleSpecifier[] = [];
-    const re = /url\(\s*(?:"([^"]+)"|'([^']+)'|([^\)\s]+))\s*\)/gi;
+    const re = /url\(\s*(?:"([^"]+)"|'([^']+)'|([^)\s]+))\s*\)/gi;
     for (const match of source.matchAll(re)) {
       const spec = (match[1] ?? match[2] ?? match[3] ?? "").trim();
       if (!spec) continue;
@@ -254,7 +254,9 @@ export function collectModuleSpecifiersFromSource(
     try {
       reportFallback("fast");
       for (const s of extractJsTsSpecifiers(source)) out.push(s);
-    } catch {}
+    } catch {
+      // ignore
+    }
     return out;
   }
 
@@ -316,7 +318,9 @@ export function collectModuleSpecifiersFromSource(
           reportFallback(queryFailed ? "query-error" : "query-empty");
           out.push(...extracted);
         }
-      } catch {}
+      } catch {
+        // ignore
+      }
     }
   }
 
@@ -622,9 +626,7 @@ export async function collectGraph(
             : {}),
           resolveNodeModules: !!opts?.resolveNodeModules,
           dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
-          ...(opts?.resolutionHints
-            ? { resolutionHints: opts.resolutionHints }
-            : {}),
+          resolutionHints,
           ...(sigEntry ? { fileSignature: sigEntry } : {}),
           ...(cachedFileEdges ? { cachedFileEdges } : {}),
           ...(opts?.onFileEdges ? { onFileEdges: opts.onFileEdges } : {}),
@@ -673,6 +675,14 @@ function buildNodeIdMap(graph: Graph): {
   return { idOf, labels };
 }
 
+function dotLabel(label: string): string {
+  return label.replace(/\\/g, "/").replace(/"/g, '\\"');
+}
+
+function mermaidLabel(label: string): string {
+  return label.replace(/\\/g, "/").replace(/"/g, "#quot;");
+}
+
 export function graphToDOT(graph: Graph): string {
   const { idOf } = buildNodeIdMap(graph);
   const lines: string[] = [];
@@ -685,8 +695,7 @@ export function graphToDOT(graph: Graph): string {
     const id = idOf.get(label)!;
     if (declared.has(id)) return;
     declared.add(id);
-    const safeLabel = label.replace(/\\/g, "/");
-    lines.push(`  ${id} [label=\"${safeLabel}\"${attrs ? ", " + attrs : ""}];`);
+    lines.push(`  ${id} [label="${dotLabel(label)}"${attrs ? ", " + attrs : ""}];`);
   };
 
   for (const f of graph.nodes) declare(f, "");
@@ -718,8 +727,11 @@ export function graphToMermaid(graph: Graph): string {
     const id = idOf.get(label)!;
     if (declared.has(id)) return;
     declared.add(id);
-    const safe = label.replace(/\\/g, "/");
-    lines.push(isExternal ? `${id}([\"${safe}\"])` : `${id}[\"${safe}\"]`);
+    lines.push(
+      isExternal
+        ? `${id}(["${mermaidLabel(label)}"])`
+        : `${id}["${mermaidLabel(label)}"]`,
+    );
   };
   for (const f of graph.nodes) declare(f, false);
   for (const e of graph.edges)
@@ -1005,8 +1017,8 @@ export function findDetailedCycles(
   }
 
   const n = nodes.length;
-  const indices = new Array(n).fill(-1);
-  const lowlink = new Array(n).fill(-1);
+  const indices: number[] = new Array<number>(n).fill(-1);
+  const lowlink: number[] = new Array<number>(n).fill(-1);
   const onStack = new Array(n).fill(false);
   const stack: number[] = [];
   let index = 0;
@@ -1022,9 +1034,9 @@ export function findDetailedCycles(
     for (const w of adj[v]!) {
       if (indices[w] === -1) {
         strongconnect(w);
-        lowlink[v] = Math.min(lowlink[v], lowlink[w]);
+        lowlink[v] = Math.min(lowlink[v], lowlink[w]!);
       } else if (onStack[w]) {
-        lowlink[v] = Math.min(lowlink[v], indices[w]);
+        lowlink[v] = Math.min(lowlink[v], indices[w]!);
       }
     }
 
@@ -1239,6 +1251,7 @@ function nodeForDef(def: {
 export async function buildSymbolGraph(
   index: ProjectIndex,
 ): Promise<SymbolGraph> {
+  await Promise.resolve();
   const nodes = new Map<string, SymbolNode>();
   const edges: SymbolEdge[] = [];
   const seenEdges = new Set<string>();
@@ -1375,7 +1388,7 @@ export async function buildSymbolGraphDetailed(
   const normalizePath = (p: string) => p.replace(/\\/g, "/");
   const importedByOthers = new Set<string>();
   if (scopeMode === "imported") {
-    for (const [f, m] of index.byFile) {
+    for (const [, m] of index.byFile) {
       for (const imp of m.imports) {
         const target =
           typeof imp.resolved === "string"
@@ -1486,7 +1499,7 @@ export async function buildSymbolGraphDetailed(
     if (opts?.files && !opts.files.has(file)) continue;
     if (scopeMode === "imported") {
       const hasFuncOrClass = mod.locals.some(
-        (l) => l.kind === "function" || l.kind === "class",
+        (l) => l.kind === SymbolKind.Function || l.kind === SymbolKind.Class,
       );
       const isImportedOrImports =
         importedByOthers.has(normalizePath(file)) || mod.imports.length > 0;
@@ -2213,13 +2226,13 @@ export function graphToMermaidSymbols(
   for (const [id, label] of labels) {
     if (declared.has(id)) continue;
     declared.add(id);
-    const safe = label.replace(/\\/g, "/");
-    lines.push(`${id}[\"${safe}\"]`);
+    lines.push(`${id}["${mermaidLabel(label)}"]`);
   }
   for (const e of sg.edges) {
     const fromId = idOf.get(e.from)!;
     const toId = idOf.get(e.to)!;
-    if (e.label) lines.push(`${fromId} -- \"${e.label}\" --> ${toId}`);
+    if (e.label)
+      lines.push(`${fromId} -- "${mermaidLabel(e.label)}" --> ${toId}`);
     else lines.push(`${fromId} --> ${toId}`);
   }
   return lines.join("\n");
@@ -2252,14 +2265,13 @@ export function graphToDOTSymbols(
   lines.push("  rankdir=LR;");
   lines.push('  node [shape=box, fontsize=10, fontname="Arial"];\n');
   for (const [id, label] of labels) {
-    const safeLabel = label.replace(/\\/g, "/");
-    lines.push(`  ${id} [label=\"${safeLabel}\"];`);
+    lines.push(`  ${id} [label="${dotLabel(label)}"];`);
   }
   for (const e of sg.edges) {
     const fromId = idOf.get(e.from)!;
     const toId = idOf.get(e.to)!;
     const attrs: string[] = [];
-    if (e.label) attrs.push(`label=\"${e.label}\"`);
+    if (e.label) attrs.push(`label="${dotLabel(e.label)}"`);
     lines.push(
       `  ${fromId} -> ${toId}${
         attrs.length ? " [" + attrs.join(",") + "]" : ""
@@ -2323,14 +2335,16 @@ export function graphToMermaidSymbolsWithFiles(
   for (const [id, meta] of fileNodeMeta) {
     if (declared.has(id)) continue;
     declared.add(id);
-    const safe = meta.label.replace(/\\/g, "/");
-    lines.push(meta.external ? `${id}([\"${safe}\"])` : `${id}[\"${safe}\"]`);
+    lines.push(
+      meta.external
+        ? `${id}(["${mermaidLabel(meta.label)}"])`
+        : `${id}["${mermaidLabel(meta.label)}"]`,
+    );
   }
   for (const [id, label] of symLabels) {
     if (declared.has(id)) continue;
     declared.add(id);
-    const safe = label.replace(/\\/g, "/");
-    lines.push(`${id}[\"${safe}\"]`);
+    lines.push(`${id}["${mermaidLabel(label)}"]`);
   }
 
   for (const e of fg.edges) {
@@ -2349,7 +2363,8 @@ export function graphToMermaidSymbolsWithFiles(
   for (const e of sg.edges) {
     const fromId = symIdOf.get(e.from)!;
     const toId = symIdOf.get(e.to)!;
-    if (e.label) lines.push(`${fromId} -- \"${e.label}\" --> ${toId}`);
+    if (e.label)
+      lines.push(`${fromId} -- "${mermaidLabel(e.label)}" --> ${toId}`);
     else lines.push(`${fromId} --> ${toId}`);
   }
 
@@ -2408,16 +2423,14 @@ export function graphToDOTSymbolsWithFiles(
   lines.push("  rankdir=LR;");
   lines.push('  node [shape=box, fontsize=10, fontname="Arial"];\n');
   for (const [id, meta] of fileNodeMeta) {
-    const safe = meta.label.replace(/\\/g, "/");
     lines.push(
-      `  ${id} [label=\"${safe}\", ${
+      `  ${id} [label="${dotLabel(meta.label)}", ${
         meta.external ? "shape=ellipse, style=dashed" : "shape=box"
       }];`,
     );
   }
   for (const [id, label] of symLabels) {
-    const safe = label.replace(/\\/g, "/");
-    lines.push(`  ${id} [label=\"${safe}\"];`);
+    lines.push(`  ${id} [label="${dotLabel(label)}"];`);
   }
   for (const e of fg.edges) {
     const fromId = fileIdOf.get(e.from)!;
@@ -2434,7 +2447,7 @@ export function graphToDOTSymbolsWithFiles(
     const fromId = symIdOf.get(e.from)!;
     const toId = symIdOf.get(e.to)!;
     const attrs: string[] = [];
-    if (e.label) attrs.push(`label=\"${e.label}\"`);
+    if (e.label) attrs.push(`label="${dotLabel(e.label)}"`);
     lines.push(
       `  ${fromId} -> ${toId}${
         attrs.length ? " [" + attrs.join(",") + "]" : ""
