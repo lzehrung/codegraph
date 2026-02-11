@@ -28,7 +28,6 @@ import {
   getDependencies,
   getReverseDependencies,
   getShortestPath,
-  findCycles,
   findDetailedCycles,
   sortDetailedCycles,
   getUnresolvedImports,
@@ -1348,7 +1347,7 @@ Examples:
       // For now, assume stdin
       const diffText = await new Promise<string>((resolve) => {
         let data = "";
-        process.stdin.on("data", (chunk) => (data += chunk));
+        process.stdin.on("data", (chunk) => (data += chunk.toString()));
         process.stdin.on("end", () => resolve(data));
       });
       options.diffText = diffText;
@@ -1494,7 +1493,7 @@ Examples:
         writeJSONLine(report);
       }
     } catch (error) {
-      writeStderrLine(`Impact analysis failed: ${error}`);
+      writeStderrLine(`Impact analysis failed: ${error instanceof Error ? error.message : String(error)}`);
       process.exit(1);
     }
     return;
@@ -1870,7 +1869,7 @@ Examples:
 
       writeJSONLine(chunks);
     } catch (error) {
-      writeStderrLine(`Chunking failed: ${error}`);
+      writeStderrLine(`Chunking failed: ${error instanceof Error ? error.message : String(error)}`);
       process.exit(1);
     }
     return;
