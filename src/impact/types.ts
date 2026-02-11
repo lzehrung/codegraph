@@ -119,8 +119,22 @@ export type CompactImpactCluster = {
   totalSeverity: number;
 };
 
+export type ImpactCycleEdge = {
+  from: FileId;
+  to: FileId;
+  raw: string;
+  typeOnly?: boolean;
+};
+
 export type ImpactCycle = {
   files: FileId[];
+  entryEdges: ImpactCycleEdge[];
+  internalEdges: ImpactCycleEdge[];
+  fileCount: number;
+  internalEdgeCount: number;
+  fanInFromOutside: number;
+  priorityScore: number;
+  remediationHint: string;
   touchesChangedFile: boolean;
   touchesImpactedFile: boolean;
   severity: "medium" | "high";
@@ -253,6 +267,23 @@ export type CompactImpactReport = {
   clusters: CompactImpactCluster[];
   cycles?: Array<{
     files: number[];
+    entryEdges: Array<{
+      from: number;
+      to: number;
+      raw: string;
+      typeOnly?: boolean;
+    }>;
+    internalEdges: Array<{
+      from: number;
+      to: number;
+      raw: string;
+      typeOnly?: boolean;
+    }>;
+    fileCount: number;
+    internalEdgeCount: number;
+    fanInFromOutside: number;
+    priorityScore: number;
+    remediationHint: string;
     touchesChangedFile: boolean;
     touchesImpactedFile: boolean;
     severity: "medium" | "high";
@@ -330,6 +361,10 @@ export type ImpactOptions = DiffProviderOptions & {
   testCoverageSuggestions?: boolean;
   /** Optional LCOV file paths used to rank untested-change suggestions by actual line coverage */
   lcovPaths?: string[];
+  /** Optional additional coverage reports (LCOV or Istanbul JSON) */
+  coveragePaths?: string[];
+  /** Optional command template used in untested-change suggestions (use {files} placeholder) */
+  testCommandTemplate?: string;
   /** Custom severity weights for impact scoring */
   severityWeights?: Partial<SeverityWeights>;
 };

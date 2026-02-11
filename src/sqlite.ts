@@ -16,6 +16,12 @@ export type SqliteGraphUpdateOptions = {
   symbolGraph: SymbolGraph;
   outputPath: string;
   changedFiles: string[];
+  deletedFiles?: string[];
+  /**
+   * When true, reconcile DB rows against the provided full graph for changed/deleted files.
+   * Use this with full project graphs for accurate incremental CI patching.
+   */
+  fullGraphSync?: boolean;
 };
 
 export type GraphQueryResult =
@@ -56,6 +62,8 @@ const loadBetterSqlite3 = () => {
 };
 
 type BetterSqliteDatabase = import("better-sqlite3").Database;
+
+const SQLITE_SCHEMA_VERSION = 2;
 
 const hasColumn = (
   db: BetterSqliteDatabase,
@@ -114,9 +122,33 @@ const ensureSchema = (db: BetterSqliteDatabase) => {
       FOREIGN KEY(from_id) REFERENCES symbols(id),
       FOREIGN KEY(to_id) REFERENCES symbols(id)
     );
+    CREATE TABLE IF NOT EXISTS graph_metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS graph_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at INTEGER NOT NULL,
+      mode TEXT NOT NULL,
+      changed_files INTEGER NOT NULL,
+      deleted_files INTEGER NOT NULL,
+      file_nodes INTEGER NOT NULL,
+      file_edges INTEGER NOT NULL,
+      symbol_nodes INTEGER NOT NULL,
+      symbol_edges INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS graph_snapshot_files (
+      snapshot_id INTEGER NOT NULL,
+      file_path TEXT NOT NULL,
+      change_kind TEXT NOT NULL,
+      FOREIGN KEY(snapshot_id) REFERENCES graph_snapshots(id)
+    );
   `);
 
   ensureSymbolsVisibilityColumn(db);
+  db.prepare(
+    "INSERT OR REPLACE INTO graph_metadata (key, value) VALUES (?, ?);",
+  ).run(["schema_version", String(SQLITE_SCHEMA_VERSION)]);
 
   const indexSpecs: Array<{ name: string; sql: string }> = [
     {
@@ -202,6 +234,18 @@ const ensureSchema = (db: BetterSqliteDatabase) => {
     {
       name: "idx_symbol_edges_label_from_to",
       sql: "CREATE INDEX idx_symbol_edges_label_from_to ON symbol_edges(label, from_id, to_id);",
+    },
+    {
+      name: "idx_graph_snapshots_created_at",
+      sql: "CREATE INDEX idx_graph_snapshots_created_at ON graph_snapshots(created_at DESC);",
+    },
+    {
+      name: "idx_graph_snapshot_files_snapshot",
+      sql: "CREATE INDEX idx_graph_snapshot_files_snapshot ON graph_snapshot_files(snapshot_id);",
+    },
+    {
+      name: "idx_graph_snapshot_files_path",
+      sql: "CREATE INDEX idx_graph_snapshot_files_path ON graph_snapshot_files(file_path);",
     },
   ];
 
@@ -366,6 +410,19 @@ const symbolGraphEdgesForFiles = (
 const fileGraphEdgesForFiles = (fileGraph: Graph, changedSet: Set<string>) =>
   fileGraph.edges.filter((edge) => changedSet.has(edge.from));
 
+const symbolGraphEdgesForSymbolIds = (
+  symbolGraph: SymbolGraph,
+  symbolIds: Set<string>,
+) => {
+  const edgeList = [];
+  for (const edge of symbolGraph.edges) {
+    if (symbolIds.has(edge.from) || symbolIds.has(edge.to)) {
+      edgeList.push(edge);
+    }
+  }
+  return edgeList;
+};
+
 const insertFiles = (
   db: BetterSqliteDatabase,
   files: Array<{ path: string; isExternal: boolean }>,
@@ -475,6 +532,67 @@ const deleteFileEdgesForFiles = (db: BetterSqliteDatabase, files: string[]) => {
   ).run(files);
 };
 
+const deleteFilesByPath = (db: BetterSqliteDatabase, files: string[]) => {
+  if (files.length === 0) return;
+  const placeholders = files.map(() => "?").join(", ");
+  db.prepare(`DELETE FROM files WHERE path IN (${placeholders});`).run(files);
+};
+
+
+const recordGraphSnapshot = (
+  db: BetterSqliteDatabase,
+  options: {
+    mode: "full" | "incremental";
+    changedFiles: string[];
+    deletedFiles: string[];
+    fileNodes: number;
+    fileEdges: number;
+    symbolNodes: number;
+    symbolEdges: number;
+  },
+) => {
+  const snapshotStmt = db.prepare(
+    `INSERT INTO graph_snapshots (
+      created_at,
+      mode,
+      changed_files,
+      deleted_files,
+      file_nodes,
+      file_edges,
+      symbol_nodes,
+      symbol_edges
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+  );
+  const result = snapshotStmt.run([
+    Date.now(),
+    options.mode,
+    options.changedFiles.length,
+    options.deletedFiles.length,
+    options.fileNodes,
+    options.fileEdges,
+    options.symbolNodes,
+    options.symbolEdges,
+  ]);
+  const snapshotId = Number(result.lastInsertRowid);
+  const fileRows = [
+    ...options.changedFiles.map((file) => ({
+      file,
+      kind: "changed" as const,
+    })),
+    ...options.deletedFiles.map((file) => ({
+      file,
+      kind: "deleted" as const,
+    })),
+  ];
+  if (fileRows.length === 0) return;
+  const fileStmt = db.prepare(
+    "INSERT INTO graph_snapshot_files (snapshot_id, file_path, change_kind) VALUES (?, ?, ?);",
+  );
+  for (const row of fileRows) {
+    fileStmt.run([snapshotId, row.file, row.kind]);
+  }
+};
+
 const readOrCreateDb = async (outputPath: string) => {
   const dir = path.dirname(outputPath);
   if (dir) {
@@ -507,6 +625,15 @@ export async function writeGraphSqlite(
     insertFileEdges(db, options.fileGraph.edges);
     insertSymbols(db, [...options.symbolGraph.nodes.values()]);
     insertSymbolEdges(db, options.symbolGraph.edges);
+    recordGraphSnapshot(db, {
+      mode: "full",
+      changedFiles: [],
+      deletedFiles: [],
+      fileNodes: options.fileGraph.nodes.size,
+      fileEdges: options.fileGraph.edges.length,
+      symbolNodes: options.symbolGraph.nodes.size,
+      symbolEdges: options.symbolGraph.edges.length,
+    });
   });
   runInsert();
   db.exec("ANALYZE;");
@@ -521,15 +648,20 @@ export async function updateGraphSqlite(
 
   const runUpdate = db.transaction(() => {
     const changedSet = new Set(options.changedFiles);
-    const changedFiles = [...changedSet];
-    const removedSymbolIds = readSymbolIdsForFiles(db, changedFiles);
+    const deletedSet = new Set(options.deletedFiles ?? []);
+    const touchedSet = new Set([...changedSet, ...deletedSet]);
+    const touchedFiles = [...touchedSet];
+
+    const removedSymbolIds = readSymbolIdsForFiles(db, touchedFiles);
     deleteBySymbolIds(db, removedSymbolIds);
-    deleteFileEdgesForFiles(db, changedFiles);
+    deleteFileEdgesForFiles(db, touchedFiles);
+    deleteFilesByPath(db, [...deletedSet]);
 
     const fileEntries: Array<{ path: string; isExternal: boolean }> = [];
-    for (const file of changedFiles) {
+    for (const file of changedSet) {
       fileEntries.push({ path: file, isExternal: false });
     }
+
     for (const edge of options.fileGraph.edges) {
       if (!changedSet.has(edge.from)) continue;
       if (edge.to.type === "external") {
@@ -538,7 +670,10 @@ export async function updateGraphSqlite(
         fileEntries.push({ path: edge.to.path, isExternal: false });
       }
     }
-    insertFiles(db, dedupeFileEntries(fileEntries));
+
+    if (fileEntries.length > 0) {
+      insertFiles(db, dedupeFileEntries(fileEntries));
+    }
 
     const changedSymbolIds = collectSymbolIdsForFiles(
       options.symbolGraph,
@@ -547,16 +682,31 @@ export async function updateGraphSqlite(
     const changedSymbolNodes = [...changedSymbolIds]
       .map((id) => options.symbolGraph.nodes.get(id))
       .filter((node): node is SymbolNode => !!node);
-    insertSymbols(db, changedSymbolNodes);
+    if (changedSymbolNodes.length > 0) {
+      insertSymbols(db, changedSymbolNodes);
+    }
 
     const fileEdges = fileGraphEdgesForFiles(options.fileGraph, changedSet);
-    insertFileEdges(db, fileEdges);
+    if (fileEdges.length > 0) {
+      insertFileEdges(db, fileEdges);
+    }
 
-    const symbolEdges = symbolGraphEdgesForFiles(
-      options.symbolGraph,
-      changedSet,
-    );
-    insertSymbolEdges(db, symbolEdges);
+    const symbolEdges = options.fullGraphSync
+      ? symbolGraphEdgesForSymbolIds(options.symbolGraph, changedSymbolIds)
+      : symbolGraphEdgesForFiles(options.symbolGraph, changedSet);
+    if (symbolEdges.length > 0) {
+      insertSymbolEdges(db, symbolEdges);
+    }
+
+    recordGraphSnapshot(db, {
+      mode: "incremental",
+      changedFiles: [...changedSet],
+      deletedFiles: [...deletedSet],
+      fileNodes: changedSet.size,
+      fileEdges: fileEdges.length,
+      symbolNodes: changedSymbolNodes.length,
+      symbolEdges: symbolEdges.length,
+    });
   });
   runUpdate();
   db.exec("ANALYZE;");

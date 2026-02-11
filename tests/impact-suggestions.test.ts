@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
+import os from "node:os";
 import fsp from "node:fs/promises";
 import { analyzeImpactFromDiff } from "../src/impact/index.js";
 import type { ImpactReport } from "../src/impact/types.js";
@@ -21,6 +22,8 @@ async function buildSampleReport(
     testCoverageSuggestions?: boolean;
     verifyReferences?: boolean;
     lcovPaths?: string[];
+    coveragePaths?: string[];
+    testCommandTemplate?: string;
   },
 ): Promise<ImpactReport> {
   const index = await buildProjectIndex(samplePath);
@@ -37,10 +40,55 @@ async function buildSampleReport(
       ? { testCoverageSuggestions: true }
       : {}),
     ...(options?.lcovPaths ? { lcovPaths: options.lcovPaths } : {}),
+    ...(options?.coveragePaths ? { coveragePaths: options.coveragePaths } : {}),
+    ...(options?.testCommandTemplate
+      ? { testCommandTemplate: options.testCommandTemplate }
+      : {}),
   })) as ImpactReport;
   return report;
 }
 
+
+
+async function buildReportForRoot(
+  root: string,
+  diffText: string,
+  options?: {
+    maxSuggestions?: number;
+    configImpactRules?: boolean;
+    detectBreakingChanges?: boolean;
+    testCoverageSuggestions?: boolean;
+    verifyReferences?: boolean;
+    lcovPaths?: string[];
+    coveragePaths?: string[];
+    testCommandTemplate?: string;
+  },
+): Promise<ImpactReport> {
+  const index = await buildProjectIndex(root);
+  const report = (await analyzeImpactFromDiff(root, index, {
+    provider: "raw",
+    diffText,
+    verifyReferences: options?.verifyReferences ?? true,
+    ...(options?.maxSuggestions !== undefined
+      ? { maxSuggestions: options.maxSuggestions }
+      : {}),
+    ...(options?.configImpactRules ? { configImpactRules: true } : {}),
+    ...(options?.detectBreakingChanges ? { detectBreakingChanges: true } : {}),
+    ...(options?.testCoverageSuggestions
+      ? { testCoverageSuggestions: true }
+      : {}),
+    ...(options?.lcovPaths ? { lcovPaths: options.lcovPaths } : {}),
+    ...(options?.coveragePaths ? { coveragePaths: options.coveragePaths } : {}),
+    ...(options?.testCommandTemplate
+      ? { testCommandTemplate: options.testCommandTemplate }
+      : {}),
+  })) as ImpactReport;
+  return report;
+}
+
+async function mkTmpDir(prefix: string): Promise<string> {
+  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
+}
 describe("Impact Suggestions", () => {
   it("detects missing imports, exports, and declarations in changed lines", async () => {
     const diffText = `diff --git a/main.ts b/main.ts
@@ -475,9 +523,7 @@ index 1111111..2222222 100644
         entry.kind === "untestedChange" && entry.symbol === "helperFunction",
     );
     expect(untested).toBeDefined();
-    expect(untested?.details?.includes("Consider adding or updating tests")).toBe(
-      true,
-    );
+    expect(untested?.details?.includes("Candidate tests:")).toBe(true);
   });
 
   it("uses LCOV coverage to upgrade untested suggestions and includes a test command hint", async () => {
@@ -518,4 +564,345 @@ index 1111111..2222222 100644
       await fsp.rm(lcovPath, { force: true });
     }
   });
+
+
+  it("adds tsconfig alias blast-radius details when path keys change", async () => {
+    const root = await mkTmpDir("dg-impact-tsconfig-");
+    await fsp.writeFile(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify(
+        {
+          compilerOptions: {
+            baseUrl: ".",
+            paths: {
+              "@shared/*": ["src/shared/*"],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fsp.mkdir(path.join(root, "src", "shared"), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "src", "shared", "util.ts"),
+      `export const util = 1;
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "src", "main.ts"),
+      `import { util } from "@shared/util";
+export const run = util;
+`,
+      "utf8",
+    );
+
+    const diffText = `diff --git a/tsconfig.json b/tsconfig.json
+index 1111111..2222222 100644
+--- a/tsconfig.json
++++ b/tsconfig.json
+@@ -1,7 +1,7 @@
+ {
+   "compilerOptions": {
+     "paths": {
+-      "@shared/*": ["src/shared/*"]
++      "@core/*": ["src/shared/*"]
+     }
+   }
+ }
+`;
+    const report = await buildReportForRoot(root, diffText, {
+      verifyReferences: false,
+      configImpactRules: true,
+    });
+    const config = (report.suggestions ?? []).find(
+      (entry) => entry.kind === "configImpact",
+    );
+    expect(config?.details?.includes("@shared/*")).toBe(true);
+    expect(config?.details?.includes("main.ts")).toBe(true);
+  });
+
+  it("adds semantic config-impact details for build and monorepo tool configs", async () => {
+    const viteDiff = `diff --git a/vite.config.ts b/vite.config.ts
+index 1111111..2222222 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -1,4 +1,7 @@
+ export default {
++  resolve: { alias: { "@app": "./src" } },
++  build: { rollupOptions: { input: "./src/main.ts", output: { dir: "dist2" } } },
++  plugins: [],
+ };
+`;
+    const viteReport = await buildSampleReport(viteDiff, {
+      verifyReferences: false,
+      configImpactRules: true,
+    });
+    const viteConfig = (viteReport.suggestions ?? []).find(
+      (entry) => entry.kind === "configImpact",
+    );
+    expect(viteConfig?.details?.toLowerCase().includes("entrypoint")).toBe(true);
+
+    const nxDiff = `diff --git a/nx.json b/nx.json
+index 1111111..2222222 100644
+--- a/nx.json
++++ b/nx.json
+@@ -1,3 +1,7 @@
+ {
++  "tasksRunnerOptions": {},
++  "targetDefaults": {
++    "build": { "dependsOn": ["^build"], "outputs": ["dist"] }
++  },
+ }
+`;
+    const nxReport = await buildSampleReport(nxDiff, {
+      verifyReferences: false,
+      configImpactRules: true,
+    });
+    const nxConfig = (nxReport.suggestions ?? []).find(
+      (entry) => entry.kind === "configImpact",
+    );
+    expect(nxConfig?.details?.toLowerCase().includes("monorepo")).toBe(true);
+  });
+
+  it("ingests Istanbul JSON coverage for untested-change suggestions", async () => {
+    const coveragePath = path.join(samplePath, "coverage-final.json");
+    const helperPath = path.join(samplePath, "helpers.ts").replace(/\\/g, "/");
+    const jsonCoverage = {
+      [helperPath]: {
+        statementMap: {
+          "0": { start: { line: 1, column: 0 }, end: { line: 2, column: 10 } },
+        },
+        s: {
+          "0": 0,
+        },
+      },
+    };
+    await fsp.writeFile(coveragePath, JSON.stringify(jsonCoverage), "utf8");
+    try {
+      const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,3 @@
+ export function helperFunction(): string {
+-  return "helper";
++  return "helper-updated";
+ }
+`;
+      const report = await buildSampleReport(diffText, {
+        testCoverageSuggestions: true,
+        coveragePaths: [coveragePath],
+      });
+      const untested = (report.suggestions ?? []).find(
+        (entry) => entry.kind === "untestedChange" && entry.symbol === "helperFunction",
+      );
+      expect(untested?.details?.includes("Coverage currently exercises 0/")).toBe(
+        true,
+      );
+    } finally {
+      await fsp.rm(coveragePath, { force: true });
+    }
+  });
+
+  it("calibrates confidence with fan-in and exported symbol signals and honors test command template", async () => {
+    const root = await mkTmpDir("dg-impact-confidence-");
+    await fsp.writeFile(
+      path.join(root, "helpers.ts"),
+      `export function helperFunction(): string {
+  return "helper";
+}
+`,
+      "utf8",
+    );
+    await fsp.writeFile(path.join(root, "a.ts"), `import { helperFunction } from "./helpers";
+export const a = helperFunction();
+`, "utf8");
+    await fsp.writeFile(path.join(root, "b.ts"), `import { helperFunction } from "./helpers";
+export const b = helperFunction();
+`, "utf8");
+    await fsp.writeFile(path.join(root, "c.ts"), `import { helperFunction } from "./helpers";
+export const c = helperFunction();
+`, "utf8");
+
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,3 @@
+ export function helperFunction(): string {
+-  return "helper";
++  return "helper-updated";
+ }
+`;
+    const report = await buildReportForRoot(root, diffText, {
+      testCoverageSuggestions: true,
+      testCommandTemplate: "pnpm vitest {files}",
+    });
+    const untested = (report.suggestions ?? []).find(
+      (entry) => entry.kind === "untestedChange" && entry.symbol === "helperFunction",
+    );
+    expect(untested?.confidence).toBe("high");
+    expect(untested?.details?.includes("Suggested command: pnpm vitest")).toBe(
+      true,
+    );
+  });
+
+  it("produces untested-change suggestions for Python symbols when tests do not reference the symbol", async () => {
+    const root = await mkTmpDir("dg-impact-python-untested-");
+    await fsp.writeFile(
+      path.join(root, "helpers.py"),
+      `def helper_function() -> str:
+    return "helper"
+`,
+      "utf8",
+    );
+
+    const diffText = `diff --git a/helpers.py b/helpers.py
+index 1111111..2222222 100644
+--- a/helpers.py
++++ b/helpers.py
+@@ -1,2 +1,2 @@
+ def helper_function() -> str:
+-    return "helper"
++    return "helper-updated"
+`;
+
+    const report = await buildReportForRoot(root, diffText, {
+      testCoverageSuggestions: true,
+      verifyReferences: false,
+    });
+
+    const untested = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "untestedChange" && entry.symbol === "helper_function",
+    );
+    expect(untested).toBeDefined();
+  });
+
+  it("does not emit untested-change suggestions for Python symbols covered by test references", async () => {
+    const root = await mkTmpDir("dg-impact-python-tested-");
+    await fsp.writeFile(
+      path.join(root, "helpers.py"),
+      `def helper_function() -> str:
+    return "helper"
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "helpers_test.py"),
+      `from helpers import helper_function
+
+
+def test_helper_function() -> None:
+    assert helper_function() == "helper"
+`,
+      "utf8",
+    );
+
+    const diffText = `diff --git a/helpers.py b/helpers.py
+index 1111111..2222222 100644
+--- a/helpers.py
++++ b/helpers.py
+@@ -1,2 +1,2 @@
+ def helper_function() -> str:
+-    return "helper"
++    return "helper-updated"
+`;
+
+    const report = await buildReportForRoot(root, diffText, {
+      testCoverageSuggestions: true,
+      verifyReferences: false,
+    });
+
+    const untested = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "untestedChange" && entry.symbol === "helper_function",
+    );
+    expect(untested).toBeUndefined();
+  });
+
+  it("supports command templates without {files} placeholder", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,3 @@
+ export function helperFunction(): string {
+-  return "helper";
++  return "helper-updated";
+ }
+`;
+    const report = await buildSampleReport(diffText, {
+      testCoverageSuggestions: true,
+      testCommandTemplate: "pytest -q",
+    });
+    const untested = (report.suggestions ?? []).find(
+      (entry) => entry.kind === "untestedChange" && entry.symbol === "helperFunction",
+    );
+    expect(untested?.details?.includes("Suggested command: pytest -q")).toBe(true);
+  });
+
+  it("merges LCOV and Istanbul coverage sources for the same file", async () => {
+    const lcovPath = path.join(samplePath, "mixed-coverage.lcov");
+    const jsonPath = path.join(samplePath, "mixed-coverage.json");
+    const helperPath = path.join(samplePath, "helpers.ts").replace(/\\/g, "/");
+    await fsp.writeFile(
+      lcovPath,
+      `TN:
+SF:${helperPath}
+DA:1,1
+DA:2,0
+end_of_record
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      jsonPath,
+      JSON.stringify({
+        [helperPath]: {
+          statementMap: {
+            "0": {
+              start: { line: 2, column: 0 },
+              end: { line: 2, column: 20 },
+            },
+          },
+          s: { "0": 1 },
+        },
+      }),
+      "utf8",
+    );
+
+    try {
+      const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,3 @@
+ export function helperFunction(): string {
+-  return "helper";
++  return "helper-updated";
+ }
+`;
+      const report = await buildSampleReport(diffText, {
+        testCoverageSuggestions: true,
+        lcovPaths: [lcovPath],
+        coveragePaths: [jsonPath],
+      });
+      const untested = (report.suggestions ?? []).find(
+        (entry) =>
+          entry.kind === "untestedChange" && entry.symbol === "helperFunction",
+      );
+      expect(untested?.details?.includes("Coverage currently exercises")).toBe(true);
+      expect(untested?.confidence === "low" || untested?.confidence === "medium").toBe(
+        true,
+      );
+    } finally {
+      await fsp.rm(lcovPath, { force: true });
+      await fsp.rm(jsonPath, { force: true });
+    }
+  });
+
 });

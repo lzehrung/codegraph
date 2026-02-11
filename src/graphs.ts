@@ -943,6 +943,54 @@ export function getShortestPath(
 }
 
 export function findCycles(graph: Graph): FileId[][] {
+  return findDetailedCycles(graph).map((cycle) => cycle.files);
+}
+
+export type CycleInternalEdge = {
+  from: FileId;
+  to: FileId;
+  raw: string;
+  typeOnly?: boolean;
+};
+
+export type DetailedCycle = {
+  files: FileId[];
+  entryEdges: CycleInternalEdge[];
+  internalEdges: CycleInternalEdge[];
+  fileCount: number;
+  internalEdgeCount: number;
+  fanInFromOutside: number;
+  priorityScore: number;
+  remediationHint: string;
+};
+
+export type CycleSortMode = "priority" | "size" | "fanin";
+
+export function sortDetailedCycles(
+  cycles: DetailedCycle[],
+  mode: CycleSortMode = "priority",
+): DetailedCycle[] {
+  const sorted = [...cycles];
+  sorted.sort((a, b) => {
+    if (mode === "size") {
+      if (b.fileCount !== a.fileCount) return b.fileCount - a.fileCount;
+      return b.priorityScore - a.priorityScore;
+    }
+    if (mode === "fanin") {
+      if (b.fanInFromOutside !== a.fanInFromOutside) {
+        return b.fanInFromOutside - a.fanInFromOutside;
+      }
+      return b.priorityScore - a.priorityScore;
+    }
+    return b.priorityScore - a.priorityScore;
+  });
+  return sorted;
+}
+
+export function findDetailedCycles(
+  graph: Graph,
+  options: { symbolCoupling?: Map<string, number> } = {},
+): DetailedCycle[] {
   const nodes = Array.from(graph.nodes);
   const indexMap = new Map<string, number>();
   nodes.forEach((n, i) => indexMap.set(n, i));
@@ -998,7 +1046,72 @@ export function findCycles(graph: Graph): FileId[][] {
     if (indices[i] === -1) strongconnect(i);
   }
 
-  return sccs.map((scc) => scc.map((idx) => nodes[idx]!));
+  const cycleDetails: DetailedCycle[] = [];
+  for (const scc of sccs) {
+    const files = scc.map((idx) => nodes[idx]!);
+    const sccSet = new Set(files);
+    const internalEdges: CycleInternalEdge[] = [];
+    const entryEdges: CycleInternalEdge[] = [];
+    let internalEdgeCount = 0;
+    let fanInFromOutside = 0;
+
+    for (const edge of graph.edges) {
+      if (edge.to.type !== "file") continue;
+      const fromInScc = sccSet.has(edge.from);
+      const toInScc = sccSet.has(edge.to.path);
+      if (fromInScc && toInScc) {
+        internalEdgeCount += 1;
+        internalEdges.push({
+          from: edge.from,
+          to: edge.to.path,
+          raw: edge.raw,
+          ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
+        });
+      }
+      if (!fromInScc && toInScc) {
+        fanInFromOutside += 1;
+        entryEdges.push({
+          from: edge.from,
+          to: edge.to.path,
+          raw: edge.raw,
+          ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
+        });
+      }
+    }
+
+    const priorityScore =
+      files.length * 3 + fanInFromOutside * 2 + internalEdgeCount;
+    const couplingForEdge = (edge: CycleInternalEdge): number =>
+      options.symbolCoupling?.get(`${edge.from} -> ${edge.to}`) ?? 0;
+    const weakestEdge = internalEdges.reduce<CycleInternalEdge | null>((best, edge) => {
+      if (!best) return edge;
+      const bestCoupling = couplingForEdge(best);
+      const edgeCoupling = couplingForEdge(edge);
+      if (edgeCoupling !== bestCoupling) {
+        return edgeCoupling < bestCoupling ? edge : best;
+      }
+      if (!!edge.typeOnly && !best.typeOnly) return edge;
+      return best;
+    }, null);
+
+    const remediationHint =
+      weakestEdge
+        ? `Break ${weakestEdge.from} -> ${weakestEdge.to} (import ${weakestEdge.raw}) to reduce SCC coupling; estimated symbol coupling=${couplingForEdge(weakestEdge)}.`
+        : `Break one import edge in this ${files.length}-file SCC to remove the cycle.`;
+
+    cycleDetails.push({
+      files,
+      entryEdges,
+      internalEdges,
+      fileCount: files.length,
+      internalEdgeCount,
+      fanInFromOutside,
+      priorityScore,
+      remediationHint,
+    });
+  }
+
+  return sortDetailedCycles(cycleDetails, "priority");
 }
 
 export function getUnresolvedImports(graph: Graph): Array<{

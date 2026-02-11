@@ -45,12 +45,12 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * Detailed symbol graphs include semantic edges like `calls`, `instantiates`, `extends`, `implements`, and `decorates`
 * **SQLite graph output**
   * Export file and symbol graphs into a queryable SQLite database with indexed tables
-  * Supports incremental updates by re-writing only changed files and symbol edges
+  * Supports incremental updates by re-writing changed files, deleting removed files, patching affected symbol/file edges, and recording temporal snapshots in SQLite
 * **Dependency Analysis**
   * `deps <file>`: List all dependencies of a file
   * `rdeps <file>`: List all files that depend on a file
   * `path <from> <to>`: Find the shortest dependency path between two files
-  * `cycles`: Detect circular dependencies
+  * `cycles`: Detect circular dependencies with SCC priority, entry edges, remediation hints, and sort modes (`--sort priority|size|fanin`)
 * **Diagnostics & Reports**
   * `unresolved`: List external/unresolved imports and their importers
   * `hotspots`: Identify files with high complexity (fan-in/fan-out)
@@ -352,8 +352,10 @@ npx codegraph impact --base main --head feature --ref-context line
 npx codegraph impact --base main --head feature --ref-context block --ref-block-max-lines 30
 # Verify missing imports/exports/declarations in changed lines
 npx codegraph impact --base main --head feature --verify-refs
-# Add LCOV-aware untested-change suggestions and confidence calibration
-npx codegraph impact --base main --head feature --lcov coverage/lcov.info
+# Add LCOV/Istanbul-aware untested-change suggestions and confidence calibration
+npx codegraph impact --base main --head feature --lcov coverage/lcov.info --coverage-report coverage/coverage-final.json
+# Use a repository-specific test command template for untested suggestions
+npx codegraph impact --base main --head feature --coverage-report coverage/coverage-final.json --test-command-template "pnpm vitest {files}"
 # Programmatic API equivalent
 await analyzeImpactFromDiff(root, index, { provider: "git", base: "main", head: "feature", verifyReferences: true });
 
@@ -368,8 +370,10 @@ npx codegraph review --base origin/main --head HEAD --review-depth standard > re
 # Export graph deltas between revisions (requires manifest cache)
 npx codegraph graph-delta --git-base origin/main --git-head HEAD > graph-delta.json
 
-# Export graphs to SQLite (queryable by agents/tools)
+# Export full graphs to SQLite (queryable by agents/tools)
 npx codegraph graph --sqlite ./codegraph.sqlite
+# Incrementally update SQLite for a Git range (changed + deleted files reconciled; snapshots recorded)
+npx codegraph graph --git-base origin/main --git-head HEAD --sqlite ./codegraph.sqlite
 # Run raw SQL against the SQLite DB and return JSON
 npx codegraph sql --db ./codegraph.sqlite --query "SELECT name, file FROM symbols WHERE kind = 'function' LIMIT 5;"
 ```
@@ -385,9 +389,12 @@ The SQLite export is a **first-class query interface** for agent workflows. The 
 
 **Tables**
 - `files(path TEXT PRIMARY KEY, is_external INTEGER)`
-- `symbols(id TEXT PRIMARY KEY, file TEXT, name TEXT, kind TEXT, docstring TEXT, line_span INTEGER, complexity INTEGER)`
+- `symbols(id TEXT PRIMARY KEY, file TEXT, name TEXT, kind TEXT, docstring TEXT, line_span INTEGER, complexity INTEGER, visibility TEXT)`
 - `file_edges(from_path TEXT, to_path TEXT, to_type TEXT, raw TEXT, type_only INTEGER)`
 - `symbol_edges(from_id TEXT, to_id TEXT, label TEXT)`
+- `graph_metadata(key TEXT PRIMARY KEY, value TEXT)`
+- `graph_snapshots(id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER, mode TEXT, changed_files INTEGER, deleted_files INTEGER, file_nodes INTEGER, file_edges INTEGER, symbol_nodes INTEGER, symbol_edges INTEGER)`
+- `graph_snapshot_files(snapshot_id INTEGER, file_path TEXT, change_kind TEXT)`
 
 **Indexes (most relevant)**
 - `idx_symbols_name`, `idx_symbols_kind`, `idx_symbols_name_kind`, `idx_symbols_file_kind`, `idx_symbols_kind_complexity`

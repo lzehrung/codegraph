@@ -69,11 +69,81 @@ function collectAddedLines(change: FileChange): string[] {
   return added;
 }
 
-function classifyConfigImpact(
+function collectRemovedAndAddedLines(change: FileChange): string[] {
+  const lines: string[] = [];
+  for (const hunk of change.hunks) {
+    for (const line of hunk.lines) {
+      if (line.startsWith("+") || line.startsWith("-")) {
+        lines.push(line.slice(1));
+      }
+    }
+  }
+  return lines;
+}
+
+function collectTsconfigPathAliases(change: FileChange): string[] {
+  const aliases = new Set<string>();
+  const keyRe = /"([^"\n]+)"\s*:\s*/;
+  for (const line of collectRemovedAndAddedLines(change)) {
+    const match = keyRe.exec(line);
+    const key = match?.[1]?.trim();
+    if (!key) continue;
+    if (key.startsWith("@") || key.includes("/*") || key.includes("/")) {
+      aliases.add(key);
+    }
+  }
+  return [...aliases];
+}
+
+function aliasMatchesImport(alias: string, rawSpecifier: string): boolean {
+  if (alias.endsWith("/*")) {
+    const prefix = alias.slice(0, -1);
+    return rawSpecifier.startsWith(prefix);
+  }
+  return rawSpecifier === alias;
+}
+
+function collectTsconfigBlastRadius(
+  index: ProjectIndex,
+  aliases: string[],
+): { aliases: string[]; importers: string[] } {
+  if (aliases.length === 0) {
+    return { aliases: [], importers: [] };
+  }
+  const aliasSet = new Set(aliases);
+  const importers = new Set<string>();
+  for (const edge of index.graph.edges) {
+    const raw = edge.raw?.trim();
+    if (!raw || edge.to.type !== "file") continue;
+    for (const alias of aliasSet) {
+      if (!aliasMatchesImport(alias, raw)) continue;
+      importers.add(edge.from);
+      break;
+    }
+  }
+  return {
+    aliases: [...aliasSet],
+    importers: [...importers],
+  };
+}
+
+function collectWorkspaceManifestPaths(index: ProjectIndex): string[] {
+  const out = new Set<string>();
+  for (const node of index.graph.nodes) {
+    if (!node.endsWith("/package.json")) continue;
+    out.add(node);
+  }
+  return [...out];
+}
+
+async function classifyConfigImpact(
+  index: ProjectIndex,
+  projectRoot: string,
   change: FileChange,
-): { details: string; confidence: "high" | "medium" } {
+): Promise<{ details: string; confidence: "high" | "medium" }> {
   const lowerPath = change.path.toLowerCase();
   const addedLines = collectAddedLines(change).join("\n").toLowerCase();
+
   if (lowerPath.endsWith("package.json")) {
     if (addedLines.includes('"scripts"')) {
       return {
@@ -93,13 +163,82 @@ function classifyConfigImpact(
       };
     }
   }
-  if (lowerPath.endsWith("tsconfig.json") || lowerPath.endsWith("jsconfig.json")) {
+
+  const isTsconfig =
+    lowerPath.endsWith("tsconfig.json") || lowerPath.endsWith("jsconfig.json");
+  if (isTsconfig) {
+    const aliases = collectTsconfigPathAliases(change);
+    const blastRadius = collectTsconfigBlastRadius(index, aliases);
+    if (blastRadius.aliases.length > 0) {
+      const relImporters = blastRadius.importers
+        .slice(0, 5)
+        .map((file) => path.relative(projectRoot, file).replace(/\\/g, "/"));
+      const importerSummary =
+        blastRadius.importers.length > 0
+          ? `Likely impacted importer files: ${relImporters.join(", ")}${
+              blastRadius.importers.length > relImporters.length ? ", ..." : ""
+            }.`
+          : "No existing imports currently match these aliases.";
+      return {
+        details:
+          `TypeScript/JavaScript path aliases changed (${blastRadius.aliases.join(", ")}). ${importerSummary}`,
+        confidence: "high",
+      };
+    }
     return {
       details:
         "TypeScript/JavaScript compiler config changed; type-checking and module resolution can shift project-wide.",
       confidence: "high",
     };
   }
+
+  const isBuildToolConfig =
+    lowerPath.includes("vite.config") ||
+    lowerPath.includes("webpack.config") ||
+    lowerPath.includes("rollup.config") ||
+    lowerPath.includes("esbuild.config");
+  if (isBuildToolConfig) {
+    const signalParts: string[] = [];
+    if (addedLines.includes("alias")) signalParts.push("module alias resolution");
+    if (addedLines.includes("input") || addedLines.includes("entry")) {
+      signalParts.push("entrypoint selection");
+    }
+    if (addedLines.includes("output") || addedLines.includes("outdir")) {
+      signalParts.push("bundle output targets");
+    }
+    if (addedLines.includes("plugin")) signalParts.push("plugin execution order");
+    if (addedLines.includes("define")) signalParts.push("compile-time constants");
+    const detailsSuffix =
+      signalParts.length > 0
+        ? ` Detected changes touch ${signalParts.join(", ")}.`
+        : "";
+    return {
+      details:
+        `Build tool configuration changed (${path.basename(change.path)}); bundling and runtime artifact behavior may change.${detailsSuffix}`,
+      confidence: "high",
+    };
+  }
+
+  if (lowerPath.endsWith("turbo.json") || lowerPath.endsWith("nx.json")) {
+    const workspaceManifests = collectWorkspaceManifestPaths(index);
+    const affectsTasks =
+      addedLines.includes("pipeline") ||
+      addedLines.includes("tasks") ||
+      addedLines.includes("dependsOn") ||
+      addedLines.includes("cache") ||
+      addedLines.includes("outputs");
+    const scopeSummary =
+      workspaceManifests.length > 0
+        ? `${workspaceManifests.length} workspace package manifest(s) discovered.`
+        : "Workspace package manifests were not discovered.";
+    return {
+      details: affectsTasks
+        ? `Monorepo task orchestration config changed (${path.basename(change.path)}); task dependency graph, caching, or outputs may shift across packages. ${scopeSummary}`
+        : `Monorepo config changed (${path.basename(change.path)}); cross-package task behavior may shift. ${scopeSummary}`,
+      confidence: "high",
+    };
+  }
+
   if (lowerPath.includes(".env")) {
     return {
       details:
@@ -150,7 +289,7 @@ async function collectConfigAndBreakingSuggestions(
     if (!opts.configImpactRules || !matchesConfigSemantics(fileChange.path))
       continue;
 
-    const configSemantics = classifyConfigImpact(fileChange);
+    const configSemantics = await classifyConfigImpact(index, projectRoot, fileChange);
     suggestions.push({
       file: normalized,
       kind: "configImpact",
@@ -223,18 +362,55 @@ async function collectConfigAndBreakingSuggestions(
   return suggestions;
 }
 
+
+function isLikelyTestFile(filePath: string, extraPatterns?: string[]): boolean {
+  const defaultPatterns = [
+    /(^|\/)__tests__\//i,
+    /\.(?:test|spec)\./i,
+    /_test\.py$/i,
+    /_test\.go$/i,
+    /tests?\.py$/i,
+  ];
+  for (const pattern of defaultPatterns) {
+    if (pattern.test(filePath)) return true;
+  }
+  if (!extraPatterns || extraPatterns.length === 0) return false;
+  for (const raw of extraPatterns) {
+    if (!raw.trim()) continue;
+    try {
+      const re = new RegExp(raw, "i");
+      if (re.test(filePath)) return true;
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
 async function collectUntestedChangeSuggestions(
   index: ProjectIndex,
   changedSymbols: ChangedSymbol[],
   projectRoot: string,
-  options?: { lcovPaths?: string[] },
+  options?: {
+    lcovPaths?: string[];
+    coveragePaths?: string[];
+    testCommandTemplate?: string;
+    testPatterns?: string[];
+  },
 ): Promise<ImpactSuggestion[]> {
   const suggestions: ImpactSuggestion[] = [];
   const testFiles = new Set<string>();
   for (const file of index.byFile.keys()) {
-    if (/(^|\/)__tests__\//i.test(file) || /\.(?:test|spec)\./i.test(file)) {
+    if (isLikelyTestFile(file, options?.testPatterns)) {
       testFiles.add(file);
     }
+  }
+
+  const fanInByFile = new Map<string, number>();
+  for (const edge of index.graph.edges) {
+    if (edge.to.type !== "file") continue;
+    const current = fanInByFile.get(edge.to.path) ?? 0;
+    fanInByFile.set(edge.to.path, current + 1);
   }
 
   const candidateTests = listCandidateTestFiles(
@@ -244,7 +420,60 @@ async function collectUntestedChangeSuggestions(
     { maxCandidates: 3 },
   );
 
-  const coverageByFile = await loadCoverageByFile(projectRoot, options?.lcovPaths);
+  const coverageOptions: { lcovPaths?: string[]; coveragePaths?: string[] } = {};
+  if (options?.lcovPaths) coverageOptions.lcovPaths = options.lcovPaths;
+  if (options?.coveragePaths) coverageOptions.coveragePaths = options.coveragePaths;
+  const coverageByFile = await loadCoverageByFile(projectRoot, coverageOptions);
+
+  const inferTestCommand = (candidateNames: string[]): string => {
+    const template = options?.testCommandTemplate?.trim();
+    if (template) {
+      if (template.includes("{files}")) {
+        const fileArg = candidateNames.length > 0 ? candidateNames.join(" ") : "";
+        return template.replace("{files}", fileArg).trim();
+      }
+      return template;
+    }
+    const hasPnpm = index.graph.nodes.has(
+      path.resolve(projectRoot, "pnpm-lock.yaml").replace(/\\/g, "/"),
+    );
+    const hasYarn = index.graph.nodes.has(
+      path.resolve(projectRoot, "yarn.lock").replace(/\\/g, "/"),
+    );
+    const hasPackage = index.graph.nodes.has(
+      path.resolve(projectRoot, "package.json").replace(/\\/g, "/"),
+    );
+    const runner = hasPnpm ? "pnpm" : hasYarn ? "yarn" : hasPackage ? "npm run" : "npm run";
+    if (candidateNames.length === 0) {
+      return runner === "npm run" ? "npm run test" : `${runner} test`;
+    }
+    const target = candidateNames[0]!;
+    if (runner === "pnpm") return `pnpm test ${target}`;
+    if (runner === "yarn") return `yarn test ${target}`;
+    return `npm run test -- ${target}`;
+  };
+
+  const confidenceFromSignals = (signals: {
+    hasCoverageData: boolean;
+    coveredLines: number;
+    totalLines: number;
+    exported: boolean;
+    fanIn: number;
+    kind: ChangedSymbol["kind"];
+  }): "low" | "medium" | "high" => {
+    let score = 2;
+    if (signals.hasCoverageData && signals.coveredLines === 0 && signals.totalLines > 0) {
+      score += 2;
+    }
+    if (!signals.hasCoverageData) score += 1;
+    if (signals.exported) score += 1;
+    if (signals.fanIn >= 3) score += 1;
+    if (signals.kind === "function") score += 1;
+    if (signals.coveredLines > 0) score -= 1;
+    if (score >= 5) return "high";
+    if (score <= 2) return "low";
+    return "medium";
+  };
 
   for (const symbol of changedSymbols) {
     const refs = await findReferences(index, {
@@ -266,32 +495,30 @@ async function collectUntestedChangeSuggestions(
     const coveredLines = countCoveredLinesForRange(coverage, symbol.range);
     const totalLines = countTotalLinesForRange(coverage, symbol.range);
     const hasCoverageData = totalLines > 0;
-    const hasCoveredLines = coveredLines > 0;
 
     const candidateNames = candidateTests
       .filter((entry) => entry.file !== symbol.file)
       .slice(0, 2)
       .map((entry) => path.basename(entry.file));
     const coverageSummary = hasCoverageData
-      ? hasCoveredLines
-        ? `Coverage currently exercises ${coveredLines}/${totalLines} changed line(s).`
-        : `Coverage currently exercises 0/${totalLines} changed line(s).`
-      : "No LCOV coverage data matched this symbol range.";
-    const suggestedCommand =
-      candidateNames.length > 0
-        ? `Suggested command: npm run test -- ${candidateNames[0]}`
-        : "Suggested command: npm run test";
+      ? `Coverage currently exercises ${coveredLines}/${totalLines} changed line(s).`
+      : "No LCOV or Istanbul coverage data matched this symbol range.";
+
+    const fanIn = fanInByFile.get(symbol.file) ?? 0;
+    const confidence = confidenceFromSignals({
+      hasCoverageData,
+      coveredLines,
+      totalLines,
+      exported: symbol.exported,
+      fanIn,
+      kind: symbol.kind,
+    });
+    const suggestedCommand = inferTestCommand(candidateNames);
 
     const details =
       candidateNames.length > 0
-        ? `Changed symbol has no discovered references in test files. ${coverageSummary} Consider adding or updating tests such as: ${candidateNames.join(", ")}. ${suggestedCommand}`
-        : `Changed symbol has no discovered references in test files. ${coverageSummary} ${suggestedCommand}`;
-
-    const confidence = hasCoverageData
-      ? hasCoveredLines
-        ? "medium"
-        : "high"
-      : "medium";
+        ? `Changed symbol has no discovered references in test files. ${coverageSummary} Candidate tests: ${candidateNames.join(", ")}. Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`
+        : `Changed symbol has no discovered references in test files. ${coverageSummary} Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`;
 
     suggestions.push({
       file: symbol.file,
@@ -569,52 +796,102 @@ type FileCoverage = {
 
 async function loadCoverageByFile(
   projectRoot: string,
-  lcovPaths?: string[],
+  options?: { lcovPaths?: string[]; coveragePaths?: string[] },
 ): Promise<Map<string, FileCoverage>> {
   const coverage = new Map<string, FileCoverage>();
-  if (!lcovPaths || lcovPaths.length === 0) return coverage;
+  const allPaths = [
+    ...(options?.lcovPaths ?? []),
+    ...(options?.coveragePaths ?? []),
+  ];
+  if (allPaths.length === 0) return coverage;
 
-  for (const lcovPath of lcovPaths) {
-    const abs = path.isAbsolute(lcovPath)
-      ? lcovPath
-      : path.resolve(projectRoot, lcovPath);
+  const ensureFileCoverage = (filePath: string): FileCoverage => {
+    const existing = coverage.get(filePath);
+    if (existing) return existing;
+    const next: FileCoverage = {
+      allLines: new Set<number>(),
+      coveredLines: new Set<number>(),
+    };
+    coverage.set(filePath, next);
+    return next;
+  };
+
+  const parseLcovText = (text: string) => {
+    let currentFile: string | null = null;
+    for (const rawLine of text.split(/\r?\n/)) {
+      if (rawLine.startsWith("SF:")) {
+        const filePath = rawLine.slice(3).trim();
+        currentFile = filePath ? normalizeFilePath(projectRoot, filePath) : null;
+        continue;
+      }
+      if (!currentFile || !rawLine.startsWith("DA:")) continue;
+      const parts = rawLine.slice(3).split(",");
+      const lineNo = Number(parts[0]);
+      const hits = Number(parts[1]);
+      if (!Number.isInteger(lineNo) || lineNo <= 0) continue;
+      const fileCoverage = ensureFileCoverage(currentFile);
+      fileCoverage.allLines.add(lineNo);
+      if (Number.isFinite(hits) && hits > 0) {
+        fileCoverage.coveredLines.add(lineNo);
+      }
+    }
+  };
+
+  const parseIstanbulJson = (text: string) => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return;
+    }
+    if (!parsed || typeof parsed !== "object") return;
+
+    const entries = Object.entries(parsed as Record<string, unknown>);
+    for (const [fileKey, value] of entries) {
+      if (!value || typeof value !== "object") continue;
+      const statementMap = (value as { statementMap?: unknown }).statementMap;
+      const statements = (value as { s?: unknown }).s;
+      if (!statementMap || !statements) continue;
+      if (typeof statementMap !== "object" || typeof statements !== "object") {
+        continue;
+      }
+      const normalizedFile = normalizeFilePath(projectRoot, fileKey);
+      const fileCoverage = ensureFileCoverage(normalizedFile);
+      const mapEntries = Object.entries(statementMap as Record<string, unknown>);
+      for (const [statementId, rangeValue] of mapEntries) {
+        if (!rangeValue || typeof rangeValue !== "object") continue;
+        const start = (rangeValue as { start?: { line?: number } }).start;
+        const end = (rangeValue as { end?: { line?: number } }).end;
+        const startLineRaw = start?.line;
+        const endLineRaw = end?.line;
+        if (!Number.isInteger(startLineRaw) || !Number.isInteger(endLineRaw)) {
+          continue;
+        }
+        const startLine = Number(startLineRaw);
+        const endLine = Number(endLineRaw);
+        const hitsRaw = (statements as Record<string, unknown>)[statementId];
+        const hits = typeof hitsRaw === "number" ? hitsRaw : 0;
+        for (let line = startLine; line <= endLine; line += 1) {
+          fileCoverage.allLines.add(line);
+          if (hits > 0) fileCoverage.coveredLines.add(line);
+        }
+      }
+    }
+  };
+
+  for (const coveragePath of allPaths) {
+    const abs = path.isAbsolute(coveragePath)
+      ? coveragePath
+      : path.resolve(projectRoot, coveragePath);
     let text = "";
     try {
       text = await fs.readFile(abs, "utf8");
     } catch {
       continue;
     }
-
-    let currentFile: string | null = null;
-    for (const rawLine of text.split(/\r?\n/)) {
-      if (rawLine.startsWith("SF:")) {
-        const filePath = rawLine.slice(3).trim();
-        if (!filePath) {
-          currentFile = null;
-          continue;
-        }
-        currentFile = normalizeFilePath(projectRoot, filePath);
-        if (!coverage.has(currentFile)) {
-          coverage.set(currentFile, {
-            allLines: new Set<number>(),
-            coveredLines: new Set<number>(),
-          });
-        }
-        continue;
-      }
-
-      if (!currentFile || !rawLine.startsWith("DA:")) continue;
-      const parts = rawLine.slice(3).split(",");
-      const lineNo = Number(parts[0]);
-      const hits = Number(parts[1]);
-      if (!Number.isInteger(lineNo) || lineNo <= 0) continue;
-      const fileCoverage = coverage.get(currentFile);
-      if (!fileCoverage) continue;
-      fileCoverage.allLines.add(lineNo);
-      if (Number.isFinite(hits) && hits > 0) {
-        fileCoverage.coveredLines.add(lineNo);
-      }
-    }
+    const isJson = abs.toLowerCase().endsWith(".json");
+    if (isJson) parseIstanbulJson(text);
+    else parseLcovText(text);
   }
 
   return coverage;
@@ -707,6 +984,11 @@ export async function analyzeImpactFromDiff(
   const coverageSuggestions = options.testCoverageSuggestions
     ? await collectUntestedChangeSuggestions(index, changedSymbols, projectRoot, {
         ...(options.lcovPaths ? { lcovPaths: options.lcovPaths } : {}),
+        ...(options.coveragePaths ? { coveragePaths: options.coveragePaths } : {}),
+        ...(options.testCommandTemplate
+          ? { testCommandTemplate: options.testCommandTemplate }
+          : {}),
+        ...(options.testPatterns ? { testPatterns: options.testPatterns } : {}),
       })
     : [];
 
