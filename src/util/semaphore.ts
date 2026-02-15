@@ -9,7 +9,9 @@ export class Semaphore {
 
   constructor(permits: number) {
     if (!Number.isFinite(permits) || permits < 1) {
-      throw new Error(`Semaphore permits must be a positive number, got: ${permits}`);
+      throw new Error(
+        `Semaphore permits must be a positive number, got: ${permits}`,
+      );
     }
     this.permits = Math.floor(permits);
   }

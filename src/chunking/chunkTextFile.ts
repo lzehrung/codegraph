@@ -35,7 +35,6 @@ export function chunkTextFile(opts: TextChunkOptions): Chunk[] {
     source,
     filePath,
     languageId = "text",
-    minTokens = 150,
     maxTokens = 400,
     tokenizer = defaultTokenizer,
   } = opts;

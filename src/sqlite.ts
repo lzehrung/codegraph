@@ -538,7 +538,6 @@ const deleteFilesByPath = (db: BetterSqliteDatabase, files: string[]) => {
   db.prepare(`DELETE FROM files WHERE path IN (${placeholders});`).run(files);
 };
 
-
 const recordGraphSnapshot = (
   db: BetterSqliteDatabase,
   options: {

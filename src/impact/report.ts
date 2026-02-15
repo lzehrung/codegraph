@@ -19,10 +19,7 @@ import type {
   CompactImpactCluster,
   ImpactCycle,
 } from "./types.js";
-import {
-  buildSymbolGraphDetailed,
-  findDetailedCycles,
-} from "../graphs.js";
+import { buildSymbolGraphDetailed, findDetailedCycles } from "../graphs.js";
 import { normalizePath, discoverProjectFiles } from "../util.js";
 
 export async function buildImpactReport(
@@ -134,7 +131,12 @@ export async function buildImpactReport(
   }
 
   const clusters = buildClusters(changedFiles, impactedItems, fileEdges);
-  const cycles = buildImpactCycles(index, changedFiles, impactedItems, symbolCoupling);
+  const cycles = buildImpactCycles(
+    index,
+    changedFiles,
+    impactedItems,
+    symbolCoupling,
+  );
 
   // Check if compact format is requested
   if (options.compact) {
@@ -194,7 +196,8 @@ function buildImpactCycles(
       ? normalizedPath.slice(1)
       : normalizedPath;
     const match = graphNodes.find(
-      (node) => node === normalizedPath || node.endsWith(`/${normalizedSuffix}`),
+      (node) =>
+        node === normalizedPath || node.endsWith(`/${normalizedSuffix}`),
     );
     return match ?? file;
   };
@@ -206,7 +209,9 @@ function buildImpactCycles(
   const out: ImpactCycle[] = [];
   for (const cycle of findDetailedCycles(index.graph, { symbolCoupling })) {
     const touchesChangedFile = cycle.files.some((file) => changedSet.has(file));
-    const touchesImpactedFile = cycle.files.some((file) => impactedSet.has(file));
+    const touchesImpactedFile = cycle.files.some((file) =>
+      impactedSet.has(file),
+    );
     if (!touchesChangedFile && !touchesImpactedFile) continue;
     out.push({
       files: cycle.files,

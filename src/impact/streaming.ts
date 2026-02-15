@@ -47,7 +47,10 @@ export async function* analyzeImpactStreaming(
 
     const diff = await getDiff(options);
     const { ignoreGlobs = [] } = options;
-    const isIgnored = ignoreGlobs.length > 0 ? pm(ignoreGlobs) : () => false;
+    const isIgnored: (p: string) => boolean =
+      ignoreGlobs.length > 0
+        ? (pm as (g: string[]) => (s: string) => boolean)(ignoreGlobs)
+        : () => false;
 
     // Filter out ignored files from diff
     const filteredFiles =

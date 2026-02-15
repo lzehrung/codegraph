@@ -2040,7 +2040,7 @@ async function resolveFromNodeModules(
         if (pkg?.exports) {
           const key = subpath ? `./${subpath}` : ".";
           if (typeof pkg.exports === "string" && key === ".") {
-            const hit = await tryResolveRelative(pkg.exports as string);
+            const hit = await tryResolveRelative(pkg.exports);
             if (hit) return hit;
           } else if (typeof pkg.exports === "object" && pkg.exports !== null) {
             const map = pkg.exports as Record<string, unknown>;

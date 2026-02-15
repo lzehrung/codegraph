@@ -11,7 +11,6 @@ type ParsedFileChange = FileChange & {
   _newPathFromHeader?: string;
 };
 
-
 export function parseUnifiedDiff(diffText: string): Diff {
   const files: FileChange[] = [];
   const lines = diffText.split(/\r?\n/);
@@ -153,7 +152,11 @@ function finalizeFile(file: ParsedFileChange): void {
   } else if (file._hasDeletedFileMode || file._toPath === "/dev/null") {
     file.kind = "deleted";
     file.path = file._oldPathFromHeader ?? file.path;
-  } else if (file._oldPathFromHeader && file._newPathFromHeader && file._oldPathFromHeader !== file._newPathFromHeader) {
+  } else if (
+    file._oldPathFromHeader &&
+    file._newPathFromHeader &&
+    file._oldPathFromHeader !== file._newPathFromHeader
+  ) {
     file.kind = "renamed";
     file.path = file._newPathFromHeader ?? file.path;
     file.oldPath = file._oldPathFromHeader;
