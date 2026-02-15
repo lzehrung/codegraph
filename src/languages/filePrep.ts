@@ -57,9 +57,9 @@ async function prepareSFCParserInput(
   );
   const sup =
     SCRIPT_SUPPORT_MAP[scriptLangId] ?? supportById(scriptLangId) ?? JS_SUPPORT;
-  return {
+  return Promise.resolve({
     source: maskedSource,
     sup,
     lang: sup.language(file),
-  };
+  });
 }

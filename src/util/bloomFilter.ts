@@ -192,7 +192,10 @@ export function buildBloomFilterFromSource(
   const unique = matches ? new Set(matches) : new Set<string>();
 
   // Create optimally-sized filter based on unique identifier count
-  const filter = BloomFilter.createOptimal(unique.size || 100, falsePositiveRate);
+  const filter = BloomFilter.createOptimal(
+    unique.size || 100,
+    falsePositiveRate,
+  );
 
   for (const identifier of unique) {
     filter.add(identifier);

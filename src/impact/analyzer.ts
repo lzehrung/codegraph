@@ -1,5 +1,5 @@
 import type { FileId, Edge } from "../types.js";
-import type { ProjectIndex, SymbolDef, Reference } from "../indexer.js";
+import { SymbolKind, type ProjectIndex, type SymbolDef, type Reference } from "../indexer.js";
 import pm from "picomatch";
 import type {
   ChangedSymbol,
@@ -67,7 +67,6 @@ export async function analyzeImpact(
     maxRefs = 1000,
     depth = 3,
     includeTests = false,
-    membersOnly = false,
     testPatterns,
     ignoreGlobs = [],
     refContext,
@@ -76,7 +75,10 @@ export async function analyzeImpact(
   } = options;
 
   const patternMatchers = buildTestPatterns(testPatterns);
-  const isIgnored = ignoreGlobs.length > 0 ? pm(ignoreGlobs) : () => false;
+  const isIgnored: (p: string) => boolean =
+    ignoreGlobs.length > 0
+      ? (pm as (g: string[]) => (s: string) => boolean)(ignoreGlobs)
+      : () => false;
 
   const impacted = new Map<FileId, ImpactItem>();
   const processedSymbols = new Set<string>();
@@ -190,7 +192,7 @@ export async function analyzeImpact(
 
   // Seed transitive impact from changed files (especially for deleted/renamed files with no symbols)
   if (!options.membersOnly && changedSymbols.length === 0) {
-    await seedTransitiveFromFiles(
+    seedTransitiveFromFiles(
       index,
       impacted,
       changedFiles,
@@ -201,22 +203,25 @@ export async function analyzeImpact(
 
   // Transitive impact via graph traversal (skip if membersOnly)
   if (!options.membersOnly) {
-    await analyzeTransitiveImpact(impacted, depth, options, reverseDeps);
+    analyzeTransitiveImpact(impacted, depth, options, reverseDeps);
   }
 
   return Array.from(impacted.values()).sort((a, b) => b.severity - a.severity);
 }
 
-export async function seedTransitiveFromFiles(
+export function seedTransitiveFromFiles(
   index: ProjectIndex,
   impacted: Map<FileId, ImpactItem>,
   changedFiles: FileChange[],
   options: Partial<ImpactOptions>,
   reverseDeps?: Map<FileId, Edge[]>,
-): Promise<void> {
+): void {
   const { includeTests = false, testPatterns, ignoreGlobs = [] } = options;
   const patternMatchers = buildTestPatterns(testPatterns);
-  const isIgnored = ignoreGlobs.length > 0 ? pm(ignoreGlobs) : () => false;
+  const isIgnored: (p: string) => boolean =
+    ignoreGlobs.length > 0
+      ? (pm as (g: string[]) => (s: string) => boolean)(ignoreGlobs)
+      : () => false;
 
   for (const fileChange of changedFiles) {
     // Skip if this file already has impact items or is ignored
@@ -261,22 +266,25 @@ export async function seedTransitiveFromFiles(
   }
 }
 
-async function analyzeTransitiveImpact(
+function analyzeTransitiveImpact(
   impacted: Map<FileId, ImpactItem>,
   maxDepth: number,
   options: Partial<ImpactOptions>,
   reverseDeps: Map<FileId, Edge[]>,
-): Promise<void> {
+): void {
   const { testPatterns, ignoreGlobs = [] } = options;
   const patternMatchers = buildTestPatterns(testPatterns);
-  const isIgnored = ignoreGlobs.length > 0 ? pm(ignoreGlobs) : () => false;
+  const isIgnored: (p: string) => boolean =
+    ignoreGlobs.length > 0
+      ? (pm as (g: string[]) => (s: string) => boolean)(ignoreGlobs)
+      : () => false;
 
   const visited = new Set<FileId>();
   const queue: Array<{ file: FileId; depth: number; reason: ImpactReason }> =
     [];
 
   // Initialize queue with directly impacted files
-  for (const [file, item] of impacted) {
+  for (const [file] of impacted) {
     if (isIgnored(file)) continue;
     visited.add(file);
     queue.push({ file, depth: 0, reason: "transitive" });
@@ -438,7 +446,7 @@ export async function calculateSeverity(
         index.parsed?.get(changedSymbol.file),
       );
       if (parsed) {
-        const { tree, sup } = parsed;
+        const { tree } = parsed;
         const pos = {
           row: symbolDef.range.start.line - 1,
           column: symbolDef.range.start.column - 1,
@@ -470,7 +478,7 @@ export async function calculateSeverity(
       } else {
         // Fallback to simple line-span heuristic if AST is not available
         if (
-          symbolDef.kind === "function" &&
+          symbolDef.kind === SymbolKind.Function &&
           symbolDef.range.end.line - symbolDef.range.start.line > 1
         ) {
           hints.push("signatureChanged");

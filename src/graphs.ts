@@ -120,9 +120,9 @@ export function collectModuleSpecifiersFromSource(
               .map((s) => s.trim())
               .filter(Boolean);
             for (const spec of list) {
-            const mm = spec.match(
-              /^([A-Za-z_][\w.]*)(?:\s+as\s+[A-Za-z_][\w_]*)?$/,
-            );
+              const mm = spec.match(
+                /^([A-Za-z_][\w.]*)(?:\s+as\s+[A-Za-z_][\w_]*)?$/,
+              );
               if (mm) out.push({ spec: mm[1]! });
             }
             continue;
@@ -695,7 +695,9 @@ export function graphToDOT(graph: Graph): string {
     const id = idOf.get(label)!;
     if (declared.has(id)) return;
     declared.add(id);
-    lines.push(`  ${id} [label="${dotLabel(label)}"${attrs ? ", " + attrs : ""}];`);
+    lines.push(
+      `  ${id} [label="${dotLabel(label)}"${attrs ? ", " + attrs : ""}];`,
+    );
   };
 
   for (const f of graph.nodes) declare(f, "");
@@ -1095,21 +1097,23 @@ export function findDetailedCycles(
       files.length * 3 + fanInFromOutside * 2 + internalEdgeCount;
     const couplingForEdge = (edge: CycleInternalEdge): number =>
       options.symbolCoupling?.get(`${edge.from} -> ${edge.to}`) ?? 0;
-    const weakestEdge = internalEdges.reduce<CycleInternalEdge | null>((best, edge) => {
-      if (!best) return edge;
-      const bestCoupling = couplingForEdge(best);
-      const edgeCoupling = couplingForEdge(edge);
-      if (edgeCoupling !== bestCoupling) {
-        return edgeCoupling < bestCoupling ? edge : best;
-      }
-      if (!!edge.typeOnly && !best.typeOnly) return edge;
-      return best;
-    }, null);
+    const weakestEdge = internalEdges.reduce<CycleInternalEdge | null>(
+      (best, edge) => {
+        if (!best) return edge;
+        const bestCoupling = couplingForEdge(best);
+        const edgeCoupling = couplingForEdge(edge);
+        if (edgeCoupling !== bestCoupling) {
+          return edgeCoupling < bestCoupling ? edge : best;
+        }
+        if (!!edge.typeOnly && !best.typeOnly) return edge;
+        return best;
+      },
+      null,
+    );
 
-    const remediationHint =
-      weakestEdge
-        ? `Break ${weakestEdge.from} -> ${weakestEdge.to} (import ${weakestEdge.raw}) to reduce SCC coupling; estimated symbol coupling=${couplingForEdge(weakestEdge)}.`
-        : `Break one import edge in this ${files.length}-file SCC to remove the cycle.`;
+    const remediationHint = weakestEdge
+      ? `Break ${weakestEdge.from} -> ${weakestEdge.to} (import ${weakestEdge.raw}) to reduce SCC coupling; estimated symbol coupling=${couplingForEdge(weakestEdge)}.`
+      : `Break one import edge in this ${files.length}-file SCC to remove the cycle.`;
 
     cycleDetails.push({
       files,
