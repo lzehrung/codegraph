@@ -48,8 +48,9 @@ class GitDiffProvider implements DiffProvider {
           ).toLocaleString()} lines). Impact analysis may be incomplete or slow.`;
         }
       }
-    } catch (e) {
+    } catch (error: unknown) {
       // Ignore stat failures, proceed to full diff
+      console.error(`Git stat failed: ${error instanceof Error ? error.message : String(error)}`);
     }
 
     const args = [
@@ -63,7 +64,7 @@ class GitDiffProvider implements DiffProvider {
       const child = spawn("git", args, { cwd });
       let stderr = "";
       child.stderr.on("data", (data) => {
-        stderr += data.toString();
+        stderr += String(data);
       });
 
       const diff = await parseUnifiedDiffStreaming(child.stdout);
@@ -78,8 +79,8 @@ class GitDiffProvider implements DiffProvider {
           }
         });
       });
-    } catch (error) {
-      throw new Error(`Git diff failed: ${error}`);
+    } catch (error: unknown) {
+      throw new Error(`Git diff failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }
@@ -108,6 +109,6 @@ class RawDiffProvider implements DiffProvider {
   async getDiff(
     opts: Extract<DiffProviderOptions, { provider: "raw" }>,
   ): Promise<Diff> {
-    return parseUnifiedDiff(opts.diffText);
+    return Promise.resolve(parseUnifiedDiff(opts.diffText));
   }
 }

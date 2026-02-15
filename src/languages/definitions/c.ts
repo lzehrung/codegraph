@@ -1,4 +1,4 @@
-import type { Language, SyntaxNode } from "tree-sitter";
+import type { SyntaxNode } from "tree-sitter";
 import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";

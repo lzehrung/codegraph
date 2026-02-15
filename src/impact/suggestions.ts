@@ -401,11 +401,9 @@ function isInImportOrExport(node: Parser.SyntaxNode): boolean {
 function collectChangedLines(hunks: FileChange["hunks"]): Set<number> {
   const changedLines = new Set<number>();
   for (const hunk of hunks) {
-    let oldLine = hunk.oldStart;
     let newLine = hunk.newStart;
     for (const line of hunk.lines) {
       if (line.startsWith(" ")) {
-        oldLine++;
         newLine++;
       } else if (line.startsWith("+")) {
         changedLines.add(newLine);
@@ -413,7 +411,6 @@ function collectChangedLines(hunks: FileChange["hunks"]): Set<number> {
       } else if (line.startsWith("-")) {
         const mappedLine = newLine;
         changedLines.add(mappedLine);
-        oldLine++;
       }
     }
   }

@@ -67,9 +67,8 @@ export const CPP_SUPPORT = adaptDefinition(getLanguageById("cpp")!);
 export const KOTLIN_SUPPORT = adaptDefinition(getLanguageById("kotlin")!);
 export const SWIFT_SUPPORT = adaptDefinition(getLanguageById("swift")!);
 
-export const LANGUAGE_SUPPORTS: LanguageSupport[] = getAllLanguages().map(
-  adaptDefinition,
-);
+export const LANGUAGE_SUPPORTS: LanguageSupport[] =
+  getAllLanguages().map(adaptDefinition);
 
 export function supportForFile(filename: string): LanguageSupport | undefined {
   const ext = path.extname(filename).toLowerCase();

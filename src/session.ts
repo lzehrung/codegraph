@@ -50,10 +50,20 @@ export interface ICodeReviewSession {
   isReady(): boolean;
   getStatus(): SessionStatus;
   analyzeImpact(
-    options: Omit<ImpactOptions, "provider"> & { provider?: ImpactOptions["provider"] },
+    options: Omit<ImpactOptions, "provider"> & {
+      provider?: ImpactOptions["provider"];
+    },
   ): Promise<ImpactReport | CompactImpactReport>;
-  findReferences(params: { file: string; line: number; column: number }): Promise<unknown>;
-  goToDefinition(params: { file: string; line: number; column: number }): Promise<unknown>;
+  findReferences(params: {
+    file: string;
+    line: number;
+    column: number;
+  }): Promise<unknown>;
+  goToDefinition(params: {
+    file: string;
+    line: number;
+    column: number;
+  }): Promise<unknown>;
   refresh(): Promise<void>;
   dispose(): void;
   getStats(): {

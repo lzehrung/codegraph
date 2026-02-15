@@ -13,7 +13,6 @@ import {
 } from "./languages.js";
 import {
   buildBloomFilterFromSource,
-  BloomFilterCache,
 } from "./util/bloomFilter.js";
 import { prepareParserInput } from "./languages/filePrep.js";
 import {
@@ -157,15 +156,17 @@ export type ProjectIndex = {
   byFile: Map<FileId, ModuleIndex>;
   exportCache: Map<string, ResolvedExport | null>;
   scopeCache: Map<string, ScopeIndex>;
-  parsed?: Map<
-    string,
-    {
-      source: string;
-      tree: Parser.Tree;
-      sup: LanguageSupport | undefined;
-      lang: Parser.Language;
-    }
-  > | undefined;
+  parsed?:
+    | Map<
+        string,
+        {
+          source: string;
+          tree: Parser.Tree;
+          sup: LanguageSupport | undefined;
+          lang: Parser.Language;
+        }
+      >
+    | undefined;
   bloomFilters?: import("./util/bloomFilter.js").BloomFilterCache;
   projectFiles?: ProjectFileInfo[];
 };
@@ -546,7 +547,6 @@ export function getApiSurface(index: ProjectIndex): ApiSurface {
   return out;
 }
 
-
 // ---------------- Incremental cache (memory/disk) ----------------
 const PARSED_CACHE_VERSION = 1;
 type ModuleCacheEntry = {
@@ -569,7 +569,9 @@ type PackageJsonDependencyInfo = {
 async function collectWorkspaceManifestDependencyEdges(
   projectRoot: string,
 ): Promise<Edge[]> {
-  const manifestPaths = await listProjectFiles(projectRoot, ["**/package.json"]);
+  const manifestPaths = await listProjectFiles(projectRoot, [
+    "**/package.json",
+  ]);
   if (manifestPaths.length === 0) return [];
 
   const manifestByPackageName = new Map<string, string>();
@@ -620,7 +622,10 @@ const loadBetterSqlite3 = () => {
 
 const diskCacheDatabases = new Map<string, BetterSqliteDatabase>();
 
-function diskCacheDatabasePath(projectRoot: string, opts?: BuildOptions): string {
+function diskCacheDatabasePath(
+  projectRoot: string,
+  opts?: BuildOptions,
+): string {
   return normalizePath(
     path.join(cacheRoot(projectRoot, opts), "index-cache.sqlite"),
   );
@@ -652,7 +657,10 @@ function getDiskCacheDatabase(
   return db;
 }
 
-function closeDiskCacheDatabase(projectRoot: string, opts?: BuildOptions): void {
+function closeDiskCacheDatabase(
+  projectRoot: string,
+  opts?: BuildOptions,
+): void {
   const dbPath = diskCacheDatabasePath(projectRoot, opts);
   const db = diskCacheDatabases.get(dbPath);
   if (!db) return;
@@ -919,27 +927,13 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
   );
 }
 
-function isModuleCacheEntry(value: unknown): value is ModuleCacheEntry {
-  if (!value || typeof value !== "object") return false;
-  const entry = value as {
-    version?: unknown;
-    sig?: unknown;
-    mod?: unknown;
-  };
-  return (
-    entry.version === PARSED_CACHE_VERSION &&
-    typeof entry.sig === "string" &&
-    isModuleIndex(entry.mod)
-  );
-}
-
-async function tryLoadFromCache(
+function tryLoadFromCache(
   projectRoot: string,
   file: string,
   sig: string,
   opts?: BuildOptions,
   report?: BuildReport,
-): Promise<ModuleIndex | null> {
+): ModuleIndex | null {
   const mode = opts?.cache ?? "off";
   const cacheReport = initCacheReport(report, mode);
   const cacheEnabled = mode !== "off";
@@ -975,13 +969,13 @@ async function tryLoadFromCache(
   return null;
 }
 
-async function writeToCache(
+function writeToCache(
   projectRoot: string,
   file: string,
   sig: string,
   mod: ModuleIndex,
   opts?: BuildOptions,
-) {
+): void {
   const mode = opts?.cache ?? "off";
   if (mode === "memory") {
     memoryCache.set(file, { version: PARSED_CACHE_VERSION, sig, mod });
@@ -997,7 +991,9 @@ async function writeToCache(
            payload = excluded.payload,
            updated_at = excluded.updated_at`,
       ).run(file, sig, PARSED_CACHE_VERSION, JSON.stringify(mod), Date.now());
-    } catch {}
+    } catch (error) {
+      console.warn("Warning: Failed to write to cache:", error);
+    }
   }
 }
 
@@ -1417,7 +1413,9 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
-  const mergeTypeScriptNamespaceDeclarations = (items: SymbolDef[]): SymbolDef[] => {
+  const mergeTypeScriptNamespaceDeclarations = (
+    items: SymbolDef[],
+  ): SymbolDef[] => {
     if (support.id !== "ts" && support.id !== "tsx") return items;
     const byName = new Map<string, SymbolDef[]>();
     for (const item of items) {
@@ -1461,10 +1459,16 @@ export function collectLocalsAndExportsFromSource(
 
         if (support.id === "python") {
           // Check for __all__ patterns: assignment, augmented assignment, extend(), append()
-          const leftText = map["left"] ? sliceText(map["left"].node, source) : "";
-          const methodText = map["method"] ? sliceText(map["method"].node, source) : "";
+          const leftText = map["left"]
+            ? sliceText(map["left"].node, source)
+            : "";
+          const methodText = map["method"]
+            ? sliceText(map["method"].node, source)
+            : "";
           const isAllAssignment = leftText === "__all__";
-          const isAllMethod = leftText === "__all__" && (methodText === "extend" || methodText === "append");
+          const isAllMethod =
+            leftText === "__all__" &&
+            (methodText === "extend" || methodText === "append");
 
           if (isAllAssignment || isAllMethod) {
             hasPythonAll = true;
@@ -1494,7 +1498,10 @@ export function collectLocalsAndExportsFromSource(
             // which tree-sitter queries may only partially capture.
             if (isAllAssignment && map["stmt"]) {
               const stmtNode = map["stmt"].node;
-              const stmtText = source.slice(stmtNode.startIndex, stmtNode.endIndex);
+              const stmtText = source.slice(
+                stmtNode.startIndex,
+                stmtNode.endIndex,
+              );
               // Check if this is a tuple assignment (contains parentheses after =)
               const hasTuple = /=\s*\(/.test(stmtText);
               // Only run fallback if no items captured OR it's a tuple pattern
@@ -1586,7 +1593,12 @@ export function collectLocalsAndExportsFromSource(
         if (map["cjs_export_name"] && map["cjs_fn"]) {
           const exportedAs = sliceText(map["cjs_export_name"].node, source);
           const defRange = toRange(map["cjs_fn"].node);
-          const sym = buildSymbolDef(exportedAs, SymbolKind.Function, defRange, map["cjs_fn"].node);
+          const sym = buildSymbolDef(
+            exportedAs,
+            SymbolKind.Function,
+            defRange,
+            map["cjs_fn"].node,
+          );
           locals.push(sym);
           exports.push({ type: "local", exportedAs, target: sym });
           continue;
@@ -2917,7 +2929,7 @@ async function buildIndexFromFileListShared(
     parsedMap.clear();
   } else {
     while (parsedMap.size > maxParsedEntries) {
-      const oldest = parsedMap.keys().next().value as string | undefined;
+      const oldest = parsedMap.keys().next().value;
       if (!oldest) break;
       parsedMap.delete(oldest);
     }
@@ -2946,7 +2958,8 @@ export async function buildProjectIndex(
       warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,
     });
   } finally {
-    if ((opts?.cache ?? "off") === "disk") closeDiskCacheDatabase(projectRoot, opts);
+    if ((opts?.cache ?? "off") === "disk")
+      closeDiskCacheDatabase(projectRoot, opts);
   }
 }
 
@@ -2961,7 +2974,8 @@ export async function buildProjectIndexFromFiles(
       warnNoFilesMessage: `Warning: No files provided for indexing in ${projectRoot}`,
     });
   } finally {
-    if ((opts?.cache ?? "off") === "disk") closeDiskCacheDatabase(projectRoot, opts);
+    if ((opts?.cache ?? "off") === "disk")
+      closeDiskCacheDatabase(projectRoot, opts);
   }
 }
 
@@ -2975,224 +2989,310 @@ export async function buildProjectIndexIncremental(
   const cacheMode = opts?.cache ?? "off";
   const cacheEnabled = cacheMode !== "off";
   try {
-  const onFallbackImportExtraction = createFallbackImportExtractionHandler(
-    report,
-    opts,
-  );
-  const manifestStart = performance.now();
-  const manifest = await loadManifest(projectRoot, opts);
-  if (timings)
-    timings.manifestMs = Math.round(performance.now() - manifestStart);
-  const graphOptions = normalizeGraphOptions(opts?.graph);
-  const strictIncremental = opts?.incrementalStrict ?? false;
-  if (strictIncremental && graphOptions.fast) {
-    graphOptions.fast = false;
-  }
-  const manifestUsed = !!manifest;
-  const manifestReport = initManifestReport(report, manifestUsed, false);
-  if (manifestReport && !manifestUsed) {
-    manifestReport.reason = "missing";
-  }
-  const optionDiffs = diffBuildOptions(manifest?.buildOptions, opts);
-  if (optionDiffs.length > 0) {
-    console.warn(
-      `Warning: Manifest options differ from current build options: ${optionDiffs.join(
-        ", ",
-      )}`,
-    );
-    if (manifestReport) manifestReport.optionsMismatch = optionDiffs;
-  }
-
-  // Check config hash
-  const currentConfigHash = await computeConfigHash(projectRoot);
-  const configChanged =
-    !!currentConfigHash &&
-    (!manifest?.configHash || currentConfigHash !== manifest.configHash);
-
-  if (
-    !manifest ||
-    !graphOptionsEqual(manifest.graphOptions, graphOptions) ||
-    configChanged
-  ) {
-    if (configChanged) {
-      console.warn("Configuration changed, rebuilding index...");
-    }
-    if (manifestReport && manifest) {
-      manifestReport.reason = "graphOptionsMismatch";
-    }
-    return await buildProjectIndexFromExport(projectRoot, opts);
-  }
-
-  const gitAvailable = await isGitRepo(projectRoot);
-  const currentHead = gitAvailable ? await getGitHead(projectRoot) : null;
-  const hasExplicitGitRange = !!opts?.gitBase || !!opts?.gitHead;
-  const manifestCommitMismatch =
-    !hasExplicitGitRange &&
-    !!manifest.lastCommit &&
-    !!currentHead &&
-    manifest.lastCommit !== currentHead;
-  const manifestDiffFiles = manifestCommitMismatch
-    ? await listChangedFiles(projectRoot, {
-        base: manifest.lastCommit,
-        head: currentHead,
-      })
-    : [];
-  if (manifestReport) manifestReport.reused = true;
-  if (opts?.cacheVerify) {
-    const { mismatches, missing } = await verifyManifestEntries(
-      projectRoot,
-      manifest,
+    const onFallbackImportExtraction = createFallbackImportExtractionHandler(
+      report,
       opts,
-      gitAvailable,
     );
-    if (manifestReport) {
-      manifestReport.mismatches = mismatches;
-      manifestReport.missing = missing;
+    const manifestStart = performance.now();
+    const manifest = await loadManifest(projectRoot, opts);
+    if (timings)
+      timings.manifestMs = Math.round(performance.now() - manifestStart);
+    const graphOptions = normalizeGraphOptions(opts?.graph);
+    const strictIncremental = opts?.incrementalStrict ?? false;
+    if (strictIncremental && graphOptions.fast) {
+      graphOptions.fast = false;
     }
-    if (mismatches > 0 || missing > 0) {
+    const manifestUsed = !!manifest;
+    const manifestReport = initManifestReport(report, manifestUsed, false);
+    if (manifestReport && !manifestUsed) {
+      manifestReport.reason = "missing";
+    }
+    const optionDiffs = diffBuildOptions(manifest?.buildOptions, opts);
+    if (optionDiffs.length > 0) {
       console.warn(
-        `Warning: Manifest verification failed (mismatches: ${mismatches}, missing: ${missing}). Rebuilding full index.`,
+        `Warning: Manifest options differ from current build options: ${optionDiffs.join(
+          ", ",
+        )}`,
       );
+      if (manifestReport) manifestReport.optionsMismatch = optionDiffs;
+    }
+
+    // Check config hash
+    const currentConfigHash = await computeConfigHash(projectRoot);
+    const configChanged =
+      !!currentConfigHash &&
+      (!manifest?.configHash || currentConfigHash !== manifest.configHash);
+
+    if (
+      !manifest ||
+      !graphOptionsEqual(manifest.graphOptions, graphOptions) ||
+      configChanged
+    ) {
+      if (configChanged) {
+        console.warn("Configuration changed, rebuilding index...");
+      }
+      if (manifestReport && manifest) {
+        manifestReport.reason = "graphOptionsMismatch";
+      }
       return await buildProjectIndexFromExport(projectRoot, opts);
     }
-  }
 
-  const normalizeFilePath = (file: string): string =>
-    (path.isAbsolute(file) ? file : path.resolve(projectRoot, file)).replace(
-      /\\/g,
-      "/",
-    );
-
-  const trackedEntries = manifest.files ?? {};
-  const trackedFiles = new Set(
-    Object.keys(trackedEntries).filter((file) => fs.existsSync(file)),
-  );
-  const fileReport = initFileReport(report);
-  if (fileReport) {
-    fileReport.total = trackedFiles.size;
-  }
-
-  const explicitFiles = (opts?.files ?? []).map(normalizeFilePath);
-  const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
-  const gitOpts: { base?: string; head?: string; changedSince?: string } = {};
-  if (opts?.gitBase) gitOpts.base = opts.gitBase;
-  if (opts?.gitHead) gitOpts.head = opts.gitHead;
-  if (!opts?.gitBase && opts?.changedSince)
-    gitOpts.changedSince = opts.changedSince;
-
-  const gitFiles = needsGitScan
-    ? await listChangedFiles(projectRoot, gitOpts)
-    : [];
-
-  const allFiles = new Set<string>([
-    ...trackedFiles,
-    ...explicitFiles.filter((f) => fs.existsSync(f)),
-    ...manifestDiffFiles.filter((f) => fs.existsSync(f)),
-    ...gitFiles.filter((f) => fs.existsSync(f)),
-  ]);
-  if (fileReport) {
-    fileReport.total = allFiles.size;
-  }
-
-  if (allFiles.size === 0) {
-    return {
-      graph: { nodes: new Set(), edges: [] },
-      modules: new Map(),
-      byFile: new Map(),
-      exportCache: new Map(),
-      scopeCache: new Map(),
-      parsed: new Map(),
-    };
-  }
-
-  const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
-  const workspaceConfig = await loadWorkspaceConfig(projectRoot);
-  const fileSignatures = new Map<string, FileSignature>();
-  const useGitSignatures = gitAvailable;
-  const gitSigMap = useGitSignatures
-    ? await getGitBlobHashes(projectRoot, Array.from(allFiles), {
+    const gitAvailable = await isGitRepo(projectRoot);
+    const currentHead = gitAvailable ? await getGitHead(projectRoot) : null;
+    const hasExplicitGitRange = !!opts?.gitBase || !!opts?.gitHead;
+    const manifestCommitMismatch =
+      !hasExplicitGitRange &&
+      !!manifest.lastCommit &&
+      !!currentHead &&
+      manifest.lastCommit !== currentHead;
+    const manifestDiffFiles = manifestCommitMismatch
+      ? await listChangedFiles(projectRoot, {
+          base: manifest.lastCommit,
+          head: currentHead,
+        })
+      : [];
+    if (manifestReport) manifestReport.reused = true;
+    if (opts?.cacheVerify) {
+      const { mismatches, missing } = await verifyManifestEntries(
+        projectRoot,
+        manifest,
+        opts,
         gitAvailable,
-      })
-    : new Map<string, string>();
-  const changedFiles = new Set<string>();
-  const modules = new Map<FileId, ModuleIndex>();
-  const parsedMap = new Map<
-    string,
-    {
-      source: string;
-      tree: Parser.Tree;
-      sup: LanguageSupport;
-      lang: Parser.Language;
-    }
-  >();
-  const jsonDependencies = new Set<string>();
-  const useBloomFilters = opts?.useBloomFilters ?? true; // Default to true for performance
-  const bloomFilterCache = useBloomFilters
-    ? new (await import("./util/bloomFilter.js")).BloomFilterCache()
-    : undefined;
-
-  const markAsChanged = (file: string) => {
-    if (fs.existsSync(file)) changedFiles.add(file);
-  };
-  explicitFiles.forEach(markAsChanged);
-  manifestDiffFiles.forEach(markAsChanged);
-  gitFiles.forEach(markAsChanged);
-  if (fileReport) {
-    fileReport.changed = changedFiles.size;
-  }
-
-  for (const file of allFiles) {
-    const sigInfo = await fileSignature(
-      file,
-      opts?.cacheStrict,
-      gitSigMap.get(file),
-      { forceContentHash: cacheEnabled },
-    );
-    fileSignatures.set(file, sigInfo);
-    const entry = trackedEntries[file];
-    const hasMatchingGitSig =
-      !!entry?.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
-    const hasMatchingSig = entry?.sig === sigInfo.sig;
-    if (!entry || !(hasMatchingGitSig || hasMatchingSig)) {
-      changedFiles.add(file);
-    }
-  }
-
-  for (const file of allFiles) {
-    if (changedFiles.has(file)) continue;
-    const sigInfo = fileSignatures.get(file)!;
-    const cacheSig = cacheEnabled
-      ? await cacheSignatureForFile(file, sigInfo)
-      : sigInfo.cacheSig;
-    const cached = cacheEnabled
-      ? await tryLoadFromCache(projectRoot, file, cacheSig, opts, report)
-      : null;
-    if (cached) {
-      if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
-      modules.set(file, cached);
-      collectJsonDependencies(cached.imports, jsonDependencies);
-      if (bloomFilterCache) {
-        const filter = await buildBloomFilterForFile(file);
-        if (filter) bloomFilterCache.set(file, filter);
+      );
+      if (manifestReport) {
+        manifestReport.mismatches = mismatches;
+        manifestReport.missing = missing;
       }
-    } else {
-      changedFiles.add(file);
+      if (mismatches > 0 || missing > 0) {
+        console.warn(
+          `Warning: Manifest verification failed (mismatches: ${mismatches}, missing: ${missing}). Rebuilding full index.`,
+        );
+        return await buildProjectIndexFromExport(projectRoot, opts);
+      }
     }
-  }
 
-  const changedList = Array.from(changedFiles);
-  if (fileReport) {
-    fileReport.changed = changedList.length;
-  }
-  if (changedList.length > 0) {
-    const parseStart = performance.now();
-    const fileResults = await mapLimit(changedList, conc, async (f) => {
-      try {
-        if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
+    const normalizeFilePath = (file: string): string =>
+      (path.isAbsolute(file) ? file : path.resolve(projectRoot, file)).replace(
+        /\\/g,
+        "/",
+      );
 
-        // FIX: Check support before parsing to avoid throwing errors for non-code files
-        const supCheck = supportForFile(f);
-        if (!supCheck) {
+    const trackedEntries = manifest.files ?? {};
+    const trackedFiles = new Set(
+      Object.keys(trackedEntries).filter((file) => fs.existsSync(file)),
+    );
+    const fileReport = initFileReport(report);
+    if (fileReport) {
+      fileReport.total = trackedFiles.size;
+    }
+
+    const explicitFiles = (opts?.files ?? []).map(normalizeFilePath);
+    const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
+    const gitOpts: { base?: string; head?: string; changedSince?: string } = {};
+    if (opts?.gitBase) gitOpts.base = opts.gitBase;
+    if (opts?.gitHead) gitOpts.head = opts.gitHead;
+    if (!opts?.gitBase && opts?.changedSince)
+      gitOpts.changedSince = opts.changedSince;
+
+    const gitFiles = needsGitScan
+      ? await listChangedFiles(projectRoot, gitOpts)
+      : [];
+
+    const allFiles = new Set<string>([
+      ...trackedFiles,
+      ...explicitFiles.filter((f) => fs.existsSync(f)),
+      ...manifestDiffFiles.filter((f) => fs.existsSync(f)),
+      ...gitFiles.filter((f) => fs.existsSync(f)),
+    ]);
+    if (fileReport) {
+      fileReport.total = allFiles.size;
+    }
+
+    if (allFiles.size === 0) {
+      return {
+        graph: { nodes: new Set(), edges: [] },
+        modules: new Map(),
+        byFile: new Map(),
+        exportCache: new Map(),
+        scopeCache: new Map(),
+        parsed: new Map(),
+      };
+    }
+
+    const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
+    const workspaceConfig = await loadWorkspaceConfig(projectRoot);
+    const fileSignatures = new Map<string, FileSignature>();
+    const useGitSignatures = gitAvailable;
+    const gitSigMap = useGitSignatures
+      ? await getGitBlobHashes(projectRoot, Array.from(allFiles), {
+          gitAvailable,
+        })
+      : new Map<string, string>();
+    const changedFiles = new Set<string>();
+    const modules = new Map<FileId, ModuleIndex>();
+    const parsedMap = new Map<
+      string,
+      {
+        source: string;
+        tree: Parser.Tree;
+        sup: LanguageSupport;
+        lang: Parser.Language;
+      }
+    >();
+    const jsonDependencies = new Set<string>();
+    const useBloomFilters = opts?.useBloomFilters ?? true; // Default to true for performance
+    const bloomFilterCache = useBloomFilters
+      ? new (await import("./util/bloomFilter.js")).BloomFilterCache()
+      : undefined;
+
+    const markAsChanged = (file: string) => {
+      if (fs.existsSync(file)) changedFiles.add(file);
+    };
+    explicitFiles.forEach(markAsChanged);
+    manifestDiffFiles.forEach(markAsChanged);
+    gitFiles.forEach(markAsChanged);
+    if (fileReport) {
+      fileReport.changed = changedFiles.size;
+    }
+
+    for (const file of allFiles) {
+      const sigInfo = await fileSignature(
+        file,
+        opts?.cacheStrict,
+        gitSigMap.get(file),
+        { forceContentHash: cacheEnabled },
+      );
+      fileSignatures.set(file, sigInfo);
+      const entry = trackedEntries[file];
+      const hasMatchingGitSig =
+        !!entry?.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
+      const hasMatchingSig = entry?.sig === sigInfo.sig;
+      if (!entry || !(hasMatchingGitSig || hasMatchingSig)) {
+        changedFiles.add(file);
+      }
+    }
+
+    for (const file of allFiles) {
+      if (changedFiles.has(file)) continue;
+      const sigInfo = fileSignatures.get(file)!;
+      const cacheSig = cacheEnabled
+        ? await cacheSignatureForFile(file, sigInfo)
+        : sigInfo.cacheSig;
+      const cached = cacheEnabled
+        ? await tryLoadFromCache(projectRoot, file, cacheSig, opts, report)
+        : null;
+      if (cached) {
+        if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
+        modules.set(file, cached);
+        collectJsonDependencies(cached.imports, jsonDependencies);
+        if (bloomFilterCache) {
+          const filter = await buildBloomFilterForFile(file);
+          if (filter) bloomFilterCache.set(file, filter);
+        }
+      } else {
+        changedFiles.add(file);
+      }
+    }
+
+    const changedList = Array.from(changedFiles);
+    if (fileReport) {
+      fileReport.changed = changedList.length;
+    }
+    if (changedList.length > 0) {
+      const parseStart = performance.now();
+      const fileResults = await mapLimit(changedList, conc, async (f) => {
+        try {
+          if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
+
+          // FIX: Check support before parsing to avoid throwing errors for non-code files
+          const supCheck = supportForFile(f);
+          if (!supCheck) {
+            const mod: ModuleIndex = {
+              file: f,
+              exports: [],
+              imports: [],
+              locals: [],
+            };
+            return [f, mod] as const;
+          }
+
+          const parsed = await parseFile(f);
+          setParsedCacheEntry(
+            parsedMap,
+            f,
+            parsed,
+            Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
+          );
+          const { source: src, sup, lang, tree } = parsed;
+
+          // Build bloom filter for this file if enabled
+          if (bloomFilterCache) {
+            const { buildBloomFilterFromSource } =
+              await import("./util/bloomFilter.js");
+            const filter = buildBloomFilterFromSource(src, sup.id);
+            bloomFilterCache.set(f, filter);
+          }
+
+          const imports = await collectImportsForFile(f, projectRoot, {
+            source: src,
+            tree,
+            sup,
+            lang,
+            graphOptions,
+          });
+          collectJsonDependencies(imports, jsonDependencies);
+          const mod = collectLocalsAndExportsFromSource(
+            f,
+            src,
+            sup,
+            lang,
+            imports,
+            { tree },
+          );
+          mod.imports = imports;
+
+          if (sup.supportsCrossModuleSymbols) {
+            if (sup.id === "ts" || sup.id === "js") {
+              const { matchPath } = await loadNearestTsconfigFor(f);
+              for (const e of mod.exports)
+                if (
+                  e.type === "reexport" ||
+                  e.type === "exportStar" ||
+                  e.type === "namespaceReexport"
+                ) {
+                  if (e.fromModule.startsWith(".")) {
+                    const resolved = await resolveSpecifier(
+                      f,
+                      e.fromModule,
+                      projectRoot,
+                      matchPath,
+                      workspaceConfig,
+                      {
+                        resolveNodeModules: !!graphOptions.resolveNodeModules,
+                        ...(graphOptions.resolutionHints
+                          ? { resolutionHints: graphOptions.resolutionHints }
+                          : {}),
+                      },
+                    );
+                    if (typeof resolved === "string") e.fromModule = resolved;
+                  } else {
+                    const pkgResolved = await resolveWorkspacePackage(
+                      e.fromModule,
+                      workspaceConfig,
+                    );
+                    if (pkgResolved) e.fromModule = pkgResolved;
+                  }
+                }
+            }
+          }
+          const sigInfo = fileSignatures.get(f)!;
+          const cacheSig = cacheEnabled
+            ? await cacheSignatureForFile(f, sigInfo)
+            : sigInfo.cacheSig;
+          await writeToCache(projectRoot, f, cacheSig, mod, opts);
+          return [f, mod] as const;
+        } catch (error) {
+          console.warn(`Warning: Failed to process file ${f}:`, error);
           const mod: ModuleIndex = {
             file: f,
             exports: [],
@@ -3201,236 +3301,152 @@ export async function buildProjectIndexIncremental(
           };
           return [f, mod] as const;
         }
+      });
+      for (const [f, mod] of fileResults) {
+        modules.set(f.replace(/\\/g, "/"), mod);
+      }
+      if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
+    }
 
-        const parsed = await parseFile(f);
-        setParsedCacheEntry(
-          parsedMap,
-          f,
-          parsed,
-          Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
-        );
-        const { source: src, sup, lang, tree } = parsed;
+    for (const jsonPath of jsonDependencies) {
+      ensureJsonModule(modules, jsonPath);
+    }
 
-        // Build bloom filter for this file if enabled
-        if (bloomFilterCache) {
-          const { buildBloomFilterFromSource } =
-            await import("./util/bloomFilter.js");
-          const filter = buildBloomFilterFromSource(src, sup.id);
-          bloomFilterCache.set(f, filter);
-        }
-
-        const imports = await collectImportsForFile(f, projectRoot, {
-          source: src,
-          tree,
-          sup,
-          lang,
-          graphOptions,
-        });
-        collectJsonDependencies(imports, jsonDependencies);
-        const mod = collectLocalsAndExportsFromSource(
-          f,
-          src,
-          sup,
-          lang,
-          imports,
-          { tree },
-        );
-        mod.imports = imports;
-
-        if (sup.supportsCrossModuleSymbols) {
-          if (sup.id === "ts" || sup.id === "js") {
-            const { matchPath } = await loadNearestTsconfigFor(f);
-            for (const e of mod.exports)
-              if (
-                e.type === "reexport" ||
-                e.type === "exportStar" ||
-                e.type === "namespaceReexport"
-              ) {
-                if (e.fromModule.startsWith(".")) {
-                  const resolved = await resolveSpecifier(
-                    f,
-                    e.fromModule,
-                    projectRoot,
-                    matchPath,
-                    workspaceConfig,
-                    {
-                      resolveNodeModules: !!graphOptions.resolveNodeModules,
-                      ...(graphOptions.resolutionHints
-                        ? { resolutionHints: graphOptions.resolutionHints }
-                        : {}),
-                    },
-                  );
-                  if (typeof resolved === "string") e.fromModule = resolved;
-                } else {
-                  const pkgResolved = await resolveWorkspacePackage(
-                    e.fromModule,
-                    workspaceConfig,
-                  );
-                  if (pkgResolved) e.fromModule = pkgResolved;
-                }
-              }
+    for (const [file, m] of modules) {
+      for (const imp of [...m.imports]) {
+        if (imp.kind === "star" && typeof imp.resolved === "string") {
+          const target = modules.get(imp.resolved);
+          if (target) {
+            let exported: string[] = [];
+            const viaAll = target.exports.filter((e) => e.type === "local");
+            if (viaAll.length) exported = viaAll.map((e) => e.exportedAs);
+            else
+              exported = target.locals
+                .map((l) => l.localName)
+                .filter((n) => !n.startsWith("_"));
+            for (const name of exported)
+              m.imports.push({
+                kind: "named",
+                local: name,
+                imported: name,
+                from: imp.from,
+                resolved: imp.resolved,
+              });
           }
         }
-        const sigInfo = fileSignatures.get(f)!;
-        const cacheSig = cacheEnabled
-          ? await cacheSignatureForFile(f, sigInfo)
-          : sigInfo.cacheSig;
-        await writeToCache(projectRoot, f, cacheSig, mod, opts);
-        return [f, mod] as const;
-      } catch (error) {
-        console.warn(`Warning: Failed to process file ${f}:`, error);
-        const mod: ModuleIndex = {
-          file: f,
-          exports: [],
-          imports: [],
-          locals: [],
-        };
-        return [f, mod] as const;
       }
-    });
-    for (const [f, mod] of fileResults) {
-      modules.set(f.replace(/\\/g, "/"), mod);
     }
-    if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
-  }
 
-  for (const jsonPath of jsonDependencies) {
-    ensureJsonModule(modules, jsonPath);
-  }
+    const cachedGraphEntries = new Map<string, ManifestFileEntry>(
+      Object.entries(manifest.files ?? {}).filter(([file]) =>
+        fs.existsSync(file),
+      ),
+    );
+    const manifestEntries = new Map<string, ManifestFileEntry>(
+      cachedGraphEntries,
+    );
 
-  for (const [file, m] of modules) {
-    for (const imp of [...m.imports]) {
-      if (imp.kind === "star" && typeof imp.resolved === "string") {
-        const target = modules.get(imp.resolved);
-        if (target) {
-          let exported: string[] = [];
-          const viaAll = target.exports.filter((e) => e.type === "local");
-          if (viaAll.length) exported = viaAll.map((e) => e.exportedAs);
-          else
-            exported = target.locals
-              .map((l) => l.localName)
-              .filter((n) => !n.startsWith("_"));
-          for (const name of exported)
-            m.imports.push({
-              kind: "named",
-              local: name,
-              imported: name,
-              from: imp.from,
-              resolved: imp.resolved,
-            });
+    const baseGraph: Graph | undefined =
+      cachedGraphEntries.size > 0
+        ? {
+            nodes: new Set<string>(),
+            edges: [],
+          }
+        : undefined;
+
+    if (baseGraph) {
+      for (const [file, entry] of cachedGraphEntries) {
+        baseGraph.nodes.add(file);
+        for (const edge of entry.edges) {
+          baseGraph.edges.push(edge);
+          if (edge.to.type === "file") baseGraph.nodes.add(edge.to.path);
         }
       }
     }
-  }
 
-  const cachedGraphEntries = new Map<string, ManifestFileEntry>(
-    Object.entries(manifest.files ?? {}).filter(([file]) =>
-      fs.existsSync(file),
-    ),
-  );
-  const manifestEntries = new Map<string, ManifestFileEntry>(
-    cachedGraphEntries,
-  );
+    const filesList = Array.from(changedFiles);
+    const graphStart = performance.now();
+    const graph =
+      filesList.length === 0 && baseGraph
+        ? { nodes: new Set(baseGraph.nodes), edges: [...baseGraph.edges] }
+        : await collectGraph(projectRoot, filesList, {
+            parsed: parsedMap,
+            fast: !!graphOptions.fast,
+            ...(graphOptions.fastRegexDisabledLanguages
+              ? {
+                  fastRegexDisabledLanguages:
+                    graphOptions.fastRegexDisabledLanguages,
+                }
+              : {}),
+            resolveNodeModules: !!graphOptions.resolveNodeModules,
+            dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
+            ...(graphOptions.resolutionHints
+              ? { resolutionHints: graphOptions.resolutionHints }
+              : {}),
+            fileSignatures,
+            cachedFileEdges: cachedGraphEntries,
+            ...(onFallbackImportExtraction
+              ? { onFallbackImportExtraction }
+              : {}),
+            ...(baseGraph ? { baseGraph } : {}),
+            replaceFiles: new Set<string>(changedFiles),
+            onFileEdges: (file, entry) => {
+              if (!entry?.sig) return;
+              manifestEntries.set(file, {
+                sig: entry.sig,
+                ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
+                edges: entry.edges,
+              });
+            },
+          });
+    if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
 
-  const baseGraph: Graph | undefined =
-    cachedGraphEntries.size > 0
-      ? {
-          nodes: new Set<string>(),
-          edges: [],
-        }
-      : undefined;
+    if (manifestEntries.size > 0) {
+      const writeManifestStart = performance.now();
+      const lastCommit = await getGitHead(projectRoot);
+      const configHash = await computeConfigHash(projectRoot);
+      const manifestData: IndexManifest = {
+        version: MANIFEST_VERSION,
+        projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
+        updatedAt: Date.now(),
+        ...(lastCommit ? { lastCommit } : {}),
+        ...(configHash ? { configHash } : {}),
+        graphOptions,
+        buildOptions: summarizeBuildOptions(opts),
+        files: Object.fromEntries(manifestEntries),
+      };
+      await writeManifest(projectRoot, opts, manifestData);
+      if (timings)
+        timings.writeManifestMs = Math.round(
+          performance.now() - writeManifestStart,
+        );
+    }
 
-  if (baseGraph) {
-    for (const [file, entry] of cachedGraphEntries) {
-      baseGraph.nodes.add(file);
-      for (const edge of entry.edges) {
-        baseGraph.edges.push(edge);
-        if (edge.to.type === "file") baseGraph.nodes.add(edge.to.path);
+    if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
+    const projectFiles = await discoverProjectFiles(projectRoot);
+
+    const keepParsed = opts?.keepParsed ?? false;
+    const maxParsedEntries = Math.max(1, opts?.parsedCacheMaxEntries ?? 1024);
+    if (!keepParsed) {
+      parsedMap.clear();
+    } else {
+      while (parsedMap.size > maxParsedEntries) {
+        const oldest = parsedMap.keys().next().value;
+        if (!oldest) break;
+        parsedMap.delete(oldest);
       }
     }
-  }
 
-  const filesList = Array.from(changedFiles);
-  const graphStart = performance.now();
-  const graph =
-    filesList.length === 0 && baseGraph
-      ? { nodes: new Set(baseGraph.nodes), edges: [...baseGraph.edges] }
-      : await collectGraph(projectRoot, filesList, {
-          parsed: parsedMap,
-          fast: !!graphOptions.fast,
-          ...(graphOptions.fastRegexDisabledLanguages
-            ? {
-                fastRegexDisabledLanguages:
-                  graphOptions.fastRegexDisabledLanguages,
-              }
-            : {}),
-          resolveNodeModules: !!graphOptions.resolveNodeModules,
-          dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
-          ...(graphOptions.resolutionHints
-            ? { resolutionHints: graphOptions.resolutionHints }
-            : {}),
-          fileSignatures,
-          cachedFileEdges: cachedGraphEntries,
-          ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
-          ...(baseGraph ? { baseGraph } : {}),
-          replaceFiles: new Set<string>(changedFiles),
-          onFileEdges: (file, entry) => {
-            if (!entry?.sig) return;
-            manifestEntries.set(file, {
-              sig: entry.sig,
-              ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
-              edges: entry.edges,
-            });
-          },
-        });
-  if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
-
-  if (manifestEntries.size > 0) {
-    const writeManifestStart = performance.now();
-    const lastCommit = await getGitHead(projectRoot);
-    const configHash = await computeConfigHash(projectRoot);
-    const manifestData: IndexManifest = {
-      version: MANIFEST_VERSION,
-      projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
-      updatedAt: Date.now(),
-      ...(lastCommit ? { lastCommit } : {}),
-      ...(configHash ? { configHash } : {}),
-      graphOptions,
-      buildOptions: summarizeBuildOptions(opts),
-      files: Object.fromEntries(manifestEntries),
+    return {
+      graph,
+      modules,
+      byFile: modules,
+      exportCache: new Map(),
+      scopeCache: new Map(),
+      parsed: keepParsed ? parsedMap : undefined,
+      ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
+      projectFiles,
     };
-    await writeManifest(projectRoot, opts, manifestData);
-    if (timings)
-      timings.writeManifestMs = Math.round(
-        performance.now() - writeManifestStart,
-      );
-  }
-
-  if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
-  const projectFiles = await discoverProjectFiles(projectRoot);
-
-  const keepParsed = opts?.keepParsed ?? false;
-  const maxParsedEntries = Math.max(1, opts?.parsedCacheMaxEntries ?? 1024);
-  if (!keepParsed) {
-    parsedMap.clear();
-  } else {
-    while (parsedMap.size > maxParsedEntries) {
-      const oldest = parsedMap.keys().next().value as string | undefined;
-      if (!oldest) break;
-      parsedMap.delete(oldest);
-    }
-  }
-
-  return {
-    graph,
-    modules,
-    byFile: modules,
-    exportCache: new Map(),
-    scopeCache: new Map(),
-    parsed: keepParsed ? parsedMap : undefined,
-    ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
-    projectFiles,
-  };
   } finally {
     if (cacheMode === "disk") closeDiskCacheDatabase(projectRoot, opts);
   }
@@ -3573,16 +3589,26 @@ function cacheKey(file: FileId, name: string) {
 function setParsedCacheEntry(
   parsedMap: Map<
     string,
-    { source: string; tree: Parser.Tree; sup: LanguageSupport; lang: Parser.Language }
+    {
+      source: string;
+      tree: Parser.Tree;
+      sup: LanguageSupport;
+      lang: Parser.Language;
+    }
   >,
   file: string,
-  entry: { source: string; tree: Parser.Tree; sup: LanguageSupport; lang: Parser.Language },
+  entry: {
+    source: string;
+    tree: Parser.Tree;
+    sup: LanguageSupport;
+    lang: Parser.Language;
+  },
   maxEntries: number,
 ): void {
   if (parsedMap.has(file)) parsedMap.delete(file);
   parsedMap.set(file, entry);
   while (parsedMap.size > maxEntries) {
-    const oldest = parsedMap.keys().next().value as string | undefined;
+    const oldest = parsedMap.keys().next().value;
     if (!oldest) break;
     parsedMap.delete(oldest);
   }
@@ -3691,7 +3717,8 @@ function resolveGoPackageExport(
     const sourcePackage = readGoPackageName(file);
     for (const [filePath, mod] of index.byFile) {
       if (path.dirname(filePath) !== baseDir) continue;
-      if (sourcePackage && readGoPackageName(filePath) !== sourcePackage) continue;
+      if (sourcePackage && readGoPackageName(filePath) !== sourcePackage)
+        continue;
       for (const e of mod.exports) {
         if (e.type === "local" && e.exportedAs === exportedName) {
           return e.target;

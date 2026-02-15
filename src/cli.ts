@@ -225,8 +225,15 @@ async function writeCommandReport(
 }
 
 // Compact JSON helpers to reduce repeated strings in graph output
-type CompactEdgeTo = { type: "file"; path: number } | { type: "external"; name: string };
-type CompactFileEdge = { from: number; to: CompactEdgeTo; raw: string; typeOnly?: boolean };
+type CompactEdgeTo =
+  | { type: "file"; path: number }
+  | { type: "external"; name: string };
+type CompactFileEdge = {
+  from: number;
+  to: CompactEdgeTo;
+  raw: string;
+  typeOnly?: boolean;
+};
 type CompactSymbolEdge = { from: number; to: number; label?: string };
 
 function compactGraphWithSymbols(
@@ -759,10 +766,10 @@ Examples:
     return null;
   };
 
-  const resolveChangedFilesWithDeletes = async (): Promise<
-    | { existingFiles: string[]; deletedFiles: string[] }
-    | null
-  > => {
+  const resolveChangedFilesWithDeletes = async (): Promise<{
+    existingFiles: string[];
+    deletedFiles: string[];
+  } | null> => {
     const gitFiles = await resolveChangedFiles();
     if (!gitFiles) return null;
     const existence = gitFiles.map((file: string) => ({
@@ -941,7 +948,9 @@ Examples:
       const index = changedSet
         ? await buildProjectIndexIncremental(projectRootFs, {
             threads,
-            ...(sqliteCacheMode !== undefined ? { cache: sqliteCacheMode } : {}),
+            ...(sqliteCacheMode !== undefined
+              ? { cache: sqliteCacheMode }
+              : {}),
             cacheStrict,
             files: changedSet.existingFiles,
             ...(gitBase ? { gitBase } : {}),
@@ -952,7 +961,9 @@ Examples:
           })
         : await buildProjectIndexFromFiles(projectRootFs, files, {
             threads,
-            ...(sqliteCacheMode !== undefined ? { cache: sqliteCacheMode } : {}),
+            ...(sqliteCacheMode !== undefined
+              ? { cache: sqliteCacheMode }
+              : {}),
             cacheStrict,
             graph: graphOptions,
             ...(indexReport ? { report: indexReport } : {}),
@@ -1339,7 +1350,9 @@ Examples:
       }
       options.pr = Number(pr);
       if (!Number.isFinite(options.pr) || options.pr <= 0) {
-        throw new Error("Impact provider 'github' expects --pr as a positive integer.");
+        throw new Error(
+          "Impact provider 'github' expects --pr as a positive integer.",
+        );
       }
       options.repo = repo;
     } else if (provider === "raw") {
@@ -1493,7 +1506,9 @@ Examples:
         writeJSONLine(report);
       }
     } catch (error) {
-      writeStderrLine(`Impact analysis failed: ${error instanceof Error ? error.message : String(error)}`);
+      writeStderrLine(
+        `Impact analysis failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
       process.exit(1);
     }
     return;
@@ -1652,7 +1667,9 @@ Examples:
         ? sortModeRaw
         : null;
     if (!sortMode) {
-      writeStderrLine("Invalid --sort value. Use one of: priority, size, fanin.");
+      writeStderrLine(
+        "Invalid --sort value. Use one of: priority, size, fanin.",
+      );
       process.exit(2);
     }
 
@@ -1661,7 +1678,10 @@ Examples:
       await listProjectFiles(projectRootFs),
       hasGraphOverrides ? buildGraphOptions() : undefined,
     );
-    const cycleDetails = sortDetailedCycles(findDetailedCycles(graph), sortMode);
+    const cycleDetails = sortDetailedCycles(
+      findDetailedCycles(graph),
+      sortMode,
+    );
 
     if (json) {
       writeJSONLine(cycleDetails);
@@ -1869,7 +1889,9 @@ Examples:
 
       writeJSONLine(chunks);
     } catch (error) {
-      writeStderrLine(`Chunking failed: ${error instanceof Error ? error.message : String(error)}`);
+      writeStderrLine(
+        `Chunking failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
       process.exit(1);
     }
     return;
