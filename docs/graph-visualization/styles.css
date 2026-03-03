@@ -1,0 +1,87 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #101820;
+  color: #f4f7fb;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  min-height: 100vh;
+}
+
+header,
+.controls {
+  padding: 1rem;
+}
+
+.controls {
+  border-right: 1px solid #223447;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+button,
+input[type="file"] {
+  border: 1px solid #355b78;
+  border-radius: 6px;
+  background: #172636;
+  color: inherit;
+  padding: 0.4rem 0.6rem;
+}
+
+button:hover {
+  background: #21405a;
+  cursor: pointer;
+}
+
+.inline-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+#status {
+  color: #91b9d8;
+  margin: 0;
+}
+
+.graph-panel {
+  padding: 1rem;
+}
+
+#graph-container {
+  width: 100%;
+  height: calc(100vh - 2rem);
+  border: 1px solid #223447;
+  border-radius: 8px;
+  background: #0d141b;
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .controls {
+    border-right: none;
+    border-bottom: 1px solid #223447;
+  }
+
+  #graph-container {
+    height: 70vh;
+  }
+}

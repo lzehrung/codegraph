@@ -559,6 +559,24 @@ npx tsx src/cli.ts goto <file> <line> <column>
     }
     ```
 
+### Sigma.js graph viewer (web)
+
+Use the Sigma-based viewer to interactively explore `graph --json` or `graph --compact-json` output:
+
+```bash
+# 1) Produce graph data
+npx codegraph graph --root . ./src --compact-json > codegraph.json
+
+# 2) Serve the repo root and open the viewer
+python3 -m http.server 4173
+# open http://localhost:4173/docs/graph-visualization/
+```
+
+Viewer features:
+- Renders file dependency graphs with Sigma.js.
+- Supports both default JSON and compact JSON graph payloads.
+- Optional symbol node rendering for compact JSON payloads.
+
 ---
 
 ## Performance

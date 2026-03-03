@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Codegraph Sigma Viewer</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header>
+        <h1>Codegraph Sigma Viewer</h1>
+        <p>Load codegraph JSON output and explore dependency relationships with Sigma.js.</p>
+      </header>
+
+      <section class="controls">
+        <label for="graph-file">Graph JSON file</label>
+        <input id="graph-file" type="file" accept="application/json" />
+
+        <div class="actions">
+          <button id="load-default" type="button">Load ./codegraph.json</button>
+          <button id="reset-camera" type="button">Reset camera</button>
+        </div>
+
+        <label class="inline-control" for="show-external">
+          <input id="show-external" type="checkbox" checked />
+          Show external package nodes
+        </label>
+
+        <label class="inline-control" for="include-symbols">
+          <input id="include-symbols" type="checkbox" />
+          Include symbols when available (can be large)
+        </label>
+
+        <p id="status" role="status">Load a graph to begin.</p>
+      </section>
+
+      <section class="graph-panel">
+        <div id="graph-container" aria-label="Dependency graph visualization"></div>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
