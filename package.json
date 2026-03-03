@@ -39,7 +39,8 @@
     "graph:default": "npx codegraph graph ./src",
     "graph:json": "npx codegraph graph ./src --json --symbols-detailed --compact-json > codegraph.json",
     "graph:mermaid": "npx codegraph graph ./src --mermaid --symbols-detailed > graph.mermaid.mmd",
-    "graph:dot": "npx codegraph graph ./src --dot --symbols-detailed > graph.dot"
+    "graph:dot": "npx codegraph graph ./src --dot --symbols-detailed > graph.dot",
+    "visualizer:start": "http-server . -p 4173 -c-1"
   },
   "repository": {
     "type": "git",

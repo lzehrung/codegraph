@@ -42,8 +42,23 @@ function addNodeIfMissing(graph, key, attributes) {
   }
 }
 
+function seedNodeCoordinates(graph) {
+  if (graph.order === 0) return;
+
+  const radius = Math.max(10, graph.order / 2);
+  let index = 0;
+  graph.forEachNode((node) => {
+    const angle = (index / graph.order) * Math.PI * 2;
+    graph.setNodeAttribute(node, "x", Math.cos(angle) * radius);
+    graph.setNodeAttribute(node, "y", Math.sin(angle) * radius);
+    index += 1;
+  });
+}
+
 function applyLayout(graph) {
   if (graph.order === 0) return;
+  seedNodeCoordinates(graph);
+
   forceAtlas2.assign(graph, {
     iterations: 200,
     settings: {

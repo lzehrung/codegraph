@@ -570,6 +570,9 @@ npx codegraph graph --root . ./src --compact-json > codegraph.json
 # 2) Serve the repo root and open the viewer
 python3 -m http.server 4173
 # open http://localhost:4173/docs/graph-visualization/
+
+# optional (requires `http-server` installed):
+npm run visualizer:start
 ```
 
 Viewer features:
