@@ -13,7 +13,11 @@ import { DEFAULT_SEVERITY_WEIGHTS } from "./types.js";
 import { findReferences } from "../indexer.js";
 import { Semaphore } from "../util/semaphore.js";
 
-/** Priority order for ImpactReason — higher number wins when merging explain.reason. */
+/**
+ * Priority order for ImpactReason — higher number wins when merging explain.reason.
+ * Typed as Record<ImpactReason, number> so TypeScript enforces exhaustiveness:
+ * adding a new ImpactReason value will cause a compile error here until it is listed.
+ */
 const REASON_PRIORITY: Readonly<Record<ImpactReason, number>> = {
   directRef: 4,
   namespaceMember: 3,
@@ -193,8 +197,8 @@ export async function analyzeImpact(
                 ? newReason
                 : newReason === undefined
                   ? existingReason
-                  : (REASON_PRIORITY[existingReason] ?? 0) >=
-                      (REASON_PRIORITY[newReason] ?? 0)
+                  : REASON_PRIORITY[existingReason] >=
+                      REASON_PRIORITY[newReason]
                     ? existingReason
                     : newReason;
 
@@ -230,9 +234,11 @@ export async function analyzeImpact(
 
   await Promise.all(tasks);
 
-  // Always seed transitive impact from changed files, even when symbol-level changes
-  // were also detected. This ensures deleted/renamed files propagate impact to their
-  // dependents regardless of whether any symbols were identified in the diff.
+  // Seed transitive impact from changed files.  This is NOT redundant with
+  // analyzeTransitiveImpact below: deleted/renamed files produce no changedSymbols
+  // (they no longer exist), so they would never enter `impacted` through the symbol
+  // loop above.  seedTransitiveFromFiles plants them directly so the transitive pass
+  // can propagate their impact to dependents.
   if (!options.membersOnly) {
     seedTransitiveFromFiles(
       index,

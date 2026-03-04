@@ -286,7 +286,10 @@ export function collectModuleSpecifiersFromSource(
         const typeOnly =
           (support.id === "ts" || support.id === "tsx") &&
           (/\b(import|export)\s+type\b/.test(stmtText) ||
-            // declare module "..." {} — ambient augmentation is purely type-level
+            // declare module "..." {} — only string-literal module names can appear
+            // here because the TSQ uses `name: (string)`, so identifier-named ambient
+            // forms (declare namespace Foo, declare class Bar, etc.) never reach this
+            // branch.  All string-literal ambient module declarations are type-only.
             /^\s*declare\s+module\s+["']/.test(stmtText));
         for (const cap of modNodes)
           out.push({ spec: unquote(sliceText(cap.node, source)), typeOnly });
