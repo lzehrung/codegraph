@@ -296,8 +296,16 @@ export function collectModuleSpecifiersFromSource(
       }
       if (htmlLikeLanguage) {
         const htmlSeen = makeSeenSet(out);
-        appendUniqueSpecifiers(out, extractHtmlAttributeSpecifiers(source), htmlSeen);
-        appendUniqueSpecifiers(out, extractHtmlInlineScriptSpecifiers(source), htmlSeen);
+        appendUniqueSpecifiers(
+          out,
+          extractHtmlAttributeSpecifiers(source),
+          htmlSeen,
+        );
+        appendUniqueSpecifiers(
+          out,
+          extractHtmlInlineScriptSpecifiers(source),
+          htmlSeen,
+        );
       }
       if (
         support.id === "css" ||

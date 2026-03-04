@@ -50,7 +50,9 @@ class GitDiffProvider implements DiffProvider {
       }
     } catch (error: unknown) {
       // Ignore stat failures, proceed to full diff
-      console.error(`Git stat failed: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(
+        `Git stat failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
 
     const args = [
@@ -80,7 +82,9 @@ class GitDiffProvider implements DiffProvider {
         });
       });
     } catch (error: unknown) {
-      throw new Error(`Git diff failed: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(
+        `Git diff failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 }

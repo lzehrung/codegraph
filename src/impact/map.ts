@@ -101,7 +101,11 @@ export async function locateChangedSymbolsWithLines(
         lines,
         // Computed once here so calculateSeverity doesn't re-parse the AST
         // once per reference (which could be hundreds of calls for hot symbols).
-        signatureChanged: computeSignatureChanged(tree, symbolDef, changedByteRanges),
+        signatureChanged: computeSignatureChanged(
+          tree,
+          symbolDef,
+          changedByteRanges,
+        ),
       });
     }
   }
@@ -434,7 +438,8 @@ function computeChangedByteRanges(
           while (
             sfx < oldText.length - pfx &&
             sfx < newText.length - pfx &&
-            oldText[oldText.length - 1 - sfx] === newText[newText.length - 1 - sfx]
+            oldText[oldText.length - 1 - sfx] ===
+              newText[newText.length - 1 - sfx]
           )
             sfx++;
           const start = lineStart + pfx;

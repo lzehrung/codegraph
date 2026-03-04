@@ -1,5 +1,5 @@
 import type { FileId, Edge } from "../types.js";
-import { SymbolKind, type ProjectIndex, type SymbolDef, type Reference } from "../indexer.js";
+import type { ProjectIndex, SymbolDef, Reference } from "../indexer.js";
 import pm from "picomatch";
 import type {
   ChangedSymbol,
@@ -128,7 +128,9 @@ export async function analyzeImpact(
           refContext
             ? {
                 context: refContext,
-                ...(refContextLines !== undefined && { lines: refContextLines }),
+                ...(refContextLines !== undefined && {
+                  lines: refContextLines,
+                }),
                 ...(refBlockMaxLines !== undefined && {
                   blockMaxLines: refBlockMaxLines,
                 }),
@@ -138,7 +140,8 @@ export async function analyzeImpact(
 
         if (refs.status === "ok") {
           for (const ref of refs.references.slice(0, maxRefs)) {
-            if (!includeTests && isTestFile(ref.file, patternMatchers)) continue;
+            if (!includeTests && isTestFile(ref.file, patternMatchers))
+              continue;
             if (isIgnored(ref.file)) continue;
 
             // Determine the reason for this reference (sync, before await)
@@ -149,7 +152,7 @@ export async function analyzeImpact(
               reason = "importAlias";
             }
 
-            const severityResult = await calculateSeverity(
+            const severityResult = calculateSeverity(
               changedSymbol,
               ref,
               [reason],
@@ -211,7 +214,8 @@ export async function analyzeImpact(
                 severityResult.severity,
               ),
               depth: 0,
-              ...(refContext && existingRefs.length > 0 && { refs: existingRefs }),
+              ...(refContext &&
+                existingRefs.length > 0 && { refs: existingRefs }),
               explain: {
                 ...existing?.explain,
                 ...severityResult.explain,
@@ -399,7 +403,7 @@ function analyzeTransitiveImpact(
   }
 }
 
-export async function calculateSeverity(
+export function calculateSeverity(
   changedSymbol: ChangedSymbol,
   ref: Reference,
   reasons: ImpactReason[],
@@ -407,7 +411,7 @@ export async function calculateSeverity(
   index: ProjectIndex,
   fanInByFile?: Map<FileId, number>,
   weights: SeverityWeights = DEFAULT_SEVERITY_WEIGHTS,
-): Promise<SeverityResult> {
+): SeverityResult {
   // Validate weights - ensure all values are positive numbers
   const validatedWeights = { ...DEFAULT_SEVERITY_WEIGHTS };
   for (const [key, value] of Object.entries(weights)) {
