@@ -11,13 +11,27 @@ const loadDefaultButton = document.getElementById("load-default");
 const resetCameraButton = document.getElementById("reset-camera");
 
 let sigma = null;
+let lastPayload = null;
 
 const FILE_NODE_COLOR = "#4da3ff";
 const EXTERNAL_NODE_COLOR = "#f59e0b";
 const SYMBOL_NODE_COLOR = "#6ee7b7";
+const DIM_COLOR = "#374151";
+const HIGHLIGHT_COLOR = "#93c5fd";
+
+const MAX_LABEL_LENGTH = 28;
 
 function setStatus(message) {
   statusEl.textContent = message;
+}
+
+function shortLabel(pathOrName) {
+  if (typeof pathOrName !== "string") return "";
+  const s = pathOrName.replace(/^ext:/, "");
+  const slash = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
+  const basename = slash >= 0 ? s.slice(slash + 1) : s;
+  if (basename.length <= MAX_LABEL_LENGTH) return basename;
+  return basename.slice(0, MAX_LABEL_LENGTH - 1) + "…";
 }
 
 function normalizeToKey(target) {
@@ -60,13 +74,15 @@ function applyLayout(graph) {
   seedNodeCoordinates(graph);
 
   forceAtlas2.assign(graph, {
-    iterations: 200,
+    iterations: 500,
     settings: {
-      gravity: 1,
-      scalingRatio: 10,
+      gravity: 0.8,
+      scalingRatio: 25,
       strongGravityMode: false,
       barnesHutOptimize: true,
-      slowDown: 1
+      slowDown: 1,
+      linLogMode: true,
+      outboundAttractionDistribution: true
     }
   });
 }
@@ -81,7 +97,13 @@ function buildGraph(payload, options) {
   if (Array.isArray(payload.nodes) && Array.isArray(payload.edges)) {
     for (const node of payload.nodes) {
       if (typeof node !== "string") continue;
-      addNodeIfMissing(graph, node, { label: node, size: 6, color: FILE_NODE_COLOR, kind: "file" });
+      addNodeIfMissing(graph, node, {
+        label: shortLabel(node),
+        fullLabel: node,
+        size: 6,
+        color: FILE_NODE_COLOR,
+        kind: "file"
+      });
     }
 
     for (const edge of payload.edges) {
@@ -92,14 +114,16 @@ function buildGraph(payload, options) {
       if (isExternalNode && !options.showExternal) continue;
 
       addNodeIfMissing(graph, edge.from, {
-        label: edge.from,
+        label: shortLabel(edge.from),
+        fullLabel: edge.from,
         size: 6,
         color: FILE_NODE_COLOR,
         kind: "file"
       });
 
       addNodeIfMissing(graph, target.key, {
-        label: target.key,
+        label: shortLabel(target.key),
+        fullLabel: target.key,
         size: isExternalNode ? 4 : 6,
         color: isExternalNode ? EXTERNAL_NODE_COLOR : FILE_NODE_COLOR,
         kind: target.type
@@ -115,7 +139,13 @@ function buildGraph(payload, options) {
   } else if (Array.isArray(payload.files) && Array.isArray(payload.fileEdges)) {
     payload.files.forEach((file, index) => {
       if (typeof file !== "string") return;
-      addNodeIfMissing(graph, `f:${index}`, { label: file, size: 6, color: FILE_NODE_COLOR, kind: "file" });
+      addNodeIfMissing(graph, `f:${index}`, {
+        label: shortLabel(file),
+        fullLabel: file,
+        size: 6,
+        color: FILE_NODE_COLOR,
+        kind: "file"
+      });
     });
 
     for (const fileEdge of payload.fileEdges) {
@@ -139,7 +169,8 @@ function buildGraph(payload, options) {
       if (to.type === "external" && typeof to.name === "string" && options.showExternal) {
         const externalKey = `ext:${to.name}`;
         addNodeIfMissing(graph, externalKey, {
-          label: to.name,
+          label: shortLabel(to.name),
+          fullLabel: to.name,
           size: 4,
           color: EXTERNAL_NODE_COLOR,
           kind: "external"
@@ -153,22 +184,24 @@ function buildGraph(payload, options) {
       }
     }
 
-    const canIncludeSymbols =
-      options.includeSymbols &&
-      Array.isArray(payload.symbols) &&
-      Array.isArray(payload.symbolEdges) &&
-      Array.isArray(payload.symbolIdIndex);
+    const hasSymbols = Array.isArray(payload.symbols) && Array.isArray(payload.symbolEdges);
+    const symbolIdIndex = Array.isArray(payload.symbolIdIndex) ? payload.symbolIdIndex : null;
 
-    if (canIncludeSymbols) {
+    if (options.includeSymbols && hasSymbols) {
       payload.symbols.forEach((symbol, index) => {
         if (!symbol || typeof symbol !== "object" || typeof symbol.file !== "number") return;
         const parentFileKey = `f:${symbol.file}`;
         if (!graph.hasNode(parentFileKey)) return;
         const symbolKey = `s:${index}`;
-        const symbolName = typeof symbol.name === "string" ? symbol.name : payload.symbolIdIndex[index] ?? symbolKey;
+        const rawName =
+          typeof symbol.name === "string"
+            ? symbol.name
+            : symbolIdIndex?.[index] ?? symbolKey;
+        const symbolLabel = shortLabel(rawName) || rawName.slice(0, MAX_LABEL_LENGTH) || symbolKey;
         addNodeIfMissing(graph, symbolKey, {
-          label: symbolName,
-          size: 2,
+          label: symbolLabel,
+          fullLabel: rawName,
+          size: 4,
           color: SYMBOL_NODE_COLOR,
           kind: "symbol"
         });
@@ -196,6 +229,13 @@ function buildGraph(payload, options) {
     throw new Error("Unsupported graph payload. Expected graph --json output or --compact-json output.");
   }
 
+  graph.forEachNode((node) => {
+    const degree = graph.degree(node);
+    const current = graph.getNodeAttribute(node, "size") ?? 6;
+    const size = Math.min(12, Math.max(current, 3 + Math.log2(degree + 1)));
+    graph.setNodeAttribute(node, "size", size);
+  });
+
   applyLayout(graph);
   return graph;
 }
@@ -207,21 +247,85 @@ function disposeSigma() {
 }
 
 function renderGraph(payload) {
+  lastPayload = payload;
   const graph = buildGraph(payload, {
     showExternal: showExternalInput.checked,
     includeSymbols: includeSymbolsInput.checked
   });
 
+  let selectedNode = null;
+  let neighborSet = null;
+
   disposeSigma();
   sigma = new Sigma(graph, graphContainer, {
     renderLabels: true,
-    labelDensity: 0.12,
-    labelRenderedSizeThreshold: 10,
-    defaultEdgeColor: "#4f6b80",
-    defaultNodeColor: FILE_NODE_COLOR
+    labelDensity: 0.6,
+    labelRenderedSizeThreshold: 14,
+    defaultEdgeColor: "#3d5a73",
+    defaultNodeColor: FILE_NODE_COLOR,
+    hideEdgesOnMove: true,
+    hideLabelsOnMove: true,
+    labelFont: "Inter, system-ui, sans-serif",
+    labelSize: 12,
+    labelColor: { color: "#e2e8f0" },
+    enableHovering: true,
+    nodeReducer: (node, data) => {
+      const result = { ...data };
+      if (!selectedNode) return result;
+      const isSelected = node === selectedNode;
+      const isNeighbor = neighborSet?.has(node);
+      if (isSelected) {
+        result.color = HIGHLIGHT_COLOR;
+        result.size = Math.min(14, (result.size ?? 6) * 1.4);
+        result.highlighted = true;
+      } else if (!isNeighbor) {
+        result.color = DIM_COLOR;
+        result.label = "";
+      }
+      return result;
+    },
+    edgeReducer: (edge, data) => {
+      const result = { ...data };
+      if (!selectedNode) return result;
+      const [source, target] = graph.extremities(edge);
+      const connected = source === selectedNode || target === selectedNode;
+      if (!connected) result.hidden = true;
+      else {
+        result.color = "#6b9dc4";
+      }
+      return result;
+    }
   });
 
+  sigma.on("clickNode", ({ node }) => {
+    selectedNode = selectedNode === node ? null : node;
+    neighborSet = selectedNode ? new Set(graph.neighbors(selectedNode)) : null;
+    sigma.refresh({ skipIndexation: true });
+    if (selectedNode) {
+      const label = graph.getNodeAttribute(selectedNode, "fullLabel") ?? graph.getNodeAttribute(selectedNode, "label");
+      setStatus(`Selected: ${label}`);
+    } else {
+      setStatus(`Rendered ${graph.order} nodes and ${graph.size} edges.`);
+    }
+  });
+
+  sigma.on("clickStage", () => {
+    selectedNode = null;
+    neighborSet = null;
+    sigma.refresh({ skipIndexation: true });
+    setStatus(`Rendered ${graph.order} nodes and ${graph.size} edges.`);
+  });
+
+  sigma.getCamera().animatedReset({ duration: 400 });
   setStatus(`Rendered ${graph.order} nodes and ${graph.size} edges.`);
+}
+
+function refreshGraph() {
+  if (lastPayload == null) {
+    setStatus("Load a graph first, then use Refresh to re-apply options.");
+    return;
+  }
+  renderGraph(lastPayload);
 }
 
 async function loadGraphFromText(text) {
@@ -245,11 +349,11 @@ fileInput.addEventListener("change", async (event) => {
 });
 
 showExternalInput.addEventListener("change", () => {
-  setStatus("Toggle changed. Reload the graph to apply filtering.");
+  setStatus("Toggle changed. Click Refresh to re-apply.");
 });
 
 includeSymbolsInput.addEventListener("change", () => {
-  setStatus("Toggle changed. Reload the graph to apply filtering.");
+  setStatus("Toggle changed. Click Refresh to re-apply.");
 });
 
 loadDefaultButton.addEventListener("click", async () => {
@@ -270,3 +374,57 @@ loadDefaultButton.addEventListener("click", async () => {
 resetCameraButton.addEventListener("click", () => {
   sigma?.getCamera().animatedReset();
 });
+
+const refreshButton = document.getElementById("refresh");
+if (refreshButton) {
+  refreshButton.addEventListener("click", () => refreshGraph());
+}
+
+(function setupDragReleaseFix() {
+  const container = graphContainer;
+  container.addEventListener(
+    "pointerdown",
+    (e) => {
+      const el = e.target instanceof Element ? e.target : container;
+      if (container.contains(el) && typeof el.setPointerCapture === "function") {
+        try {
+          el.setPointerCapture(e.pointerId);
+        } catch (_) {}
+      }
+      const onRelease = (upEv) => {
+        window.removeEventListener("pointerup", onRelease, true);
+        window.removeEventListener("mouseup", onRelease, true);
+        if (upEv.target && container.contains(upEv.target)) return;
+        const canvas = container.querySelector("canvas");
+        const target = canvas || container;
+        const pointerId = typeof upEv.pointerId === "number" ? upEv.pointerId : 1;
+        target.dispatchEvent(
+          new PointerEvent("pointerup", {
+            bubbles: true,
+            cancelable: true,
+            pointerId,
+            pointerType: upEv.pointerType ?? "mouse",
+            button: upEv.button,
+            buttons: 0,
+            clientX: upEv.clientX,
+            clientY: upEv.clientY,
+            relatedTarget: null
+          })
+        );
+        target.dispatchEvent(
+          new MouseEvent("mouseup", {
+            bubbles: true,
+            cancelable: true,
+            button: upEv.button,
+            buttons: 0,
+            clientX: upEv.clientX,
+            clientY: upEv.clientY
+          })
+        );
+      };
+      window.addEventListener("pointerup", onRelease, true);
+      window.addEventListener("mouseup", onRelease, true);
+    },
+    { capture: true }
+  );
+})();
