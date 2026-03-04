@@ -449,6 +449,19 @@ function computeChangedByteRanges(
           ranges.push({ start: lineStart, end: lineStart + newText.length });
         }
       }
+      // If more lines were deleted than added (including pure-deletion blocks where
+      // added.length === 0), emit a 1-byte sentinel at the deletion cursor in the
+      // new source.  Without this, removing a parameter line from a multiline
+      // signature would leave computeSignatureChanged with no byte range to overlap
+      // against the params node and incorrectly return false.
+      if (deleted.length > added.length) {
+        const lineIndex = Math.min(
+          Math.max(newLine - 1, 0),
+          lineStarts.length - 1,
+        );
+        const cursor = lineStarts[lineIndex] ?? source.length;
+        ranges.push({ start: cursor, end: cursor + 1 });
+      }
     }
   }
 
@@ -484,7 +497,11 @@ function computeSignatureChanged(
   const params =
     declNode.childForFieldName("parameters") ||
     declNode.childForFieldName("params");
-  if (!params || params.namedChildCount === 0) return false;
+  if (!params) return false;
+  // Note: namedChildCount === 0 is intentionally NOT checked here.
+  // A signature edit that removes ALL parameters (e.g. f(a) → f()) should
+  // still be detected: the params node exists and its byte range overlaps the
+  // changed content even though it ends up empty.
   const paramsStart = params.startIndex;
   const paramsEnd = params.endIndex;
   for (const r of changedByteRanges) {

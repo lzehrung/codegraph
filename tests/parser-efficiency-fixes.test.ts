@@ -12,6 +12,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -40,8 +41,9 @@ async function withTmpDir(
   name: string,
   fn: (dir: string) => Promise<void>,
 ): Promise<void> {
-  const dir = path.resolve(`temp-${name}-${Date.now()}`);
-  fs.mkdirSync(dir, { recursive: true });
+  // Use os.tmpdir() + mkdtemp for guaranteed uniqueness (safe under concurrent
+  // Vitest workers) and to keep temp artifacts out of the repo working tree.
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), `codegraph-${name}-`));
   try {
     await fn(dir);
   } finally {
