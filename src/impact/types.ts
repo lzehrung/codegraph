@@ -38,6 +38,8 @@ export type ChangedSymbol = {
   typeOnly?: boolean;
   /** Which specific lines (in the new file) changed within this symbol's range. */
   changedLines?: ReadonlySet<number>;
+  /** True when the parameter list of a function/method overlaps with changedLines. */
+  signatureChanged?: boolean;
 };
 
 // Impact findings

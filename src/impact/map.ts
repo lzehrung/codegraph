@@ -48,9 +48,14 @@ export async function locateChangedSymbolsWithLines(
     symbolDef: SymbolDef;
     typeOnly: boolean;
     lines: Set<number>;
+    signatureChanged: boolean;
   };
   const seenHandles = new Map<SymbolHandle, SymbolEntry>();
   const mod = index.byFile.get(file);
+
+  // Pre-build an O(1) position lookup so findDeclarationNameInAncestors does
+  // not do an O(locals) scan for every candidate declaration name node.
+  const trackedPositions = mod ? buildTrackedPositions(mod.locals) : undefined;
 
   for (const node of changedNodes) {
     const classification = classifyChangedNode(node, source, sup);
@@ -61,6 +66,7 @@ export async function locateChangedSymbolsWithLines(
       sup,
       classification,
       source,
+      trackedPositions,
     );
     if (!symbolHandle) continue;
 
@@ -71,8 +77,9 @@ export async function locateChangedSymbolsWithLines(
 
     const existing = seenHandles.get(symbolHandle);
     if (existing) {
-      // Accumulate additional typeOnly information and changed lines
-      if (classification?.typeOnly) existing.typeOnly = true;
+      // A symbol is typeOnly only when ALL contributing nodes are typeOnly.
+      // Any non-typeOnly contribution clears the flag.
+      if (!classification?.typeOnly) existing.typeOnly = false;
     } else {
       // Compute changed lines that fall within this symbol's declared range
       const lines = new Set<number>();
@@ -87,6 +94,9 @@ export async function locateChangedSymbolsWithLines(
         symbolDef,
         typeOnly: !!classification?.typeOnly,
         lines,
+        // Computed once here so calculateSeverity doesn't re-parse the AST
+        // once per reference (which could be hundreds of calls for hot symbols).
+        signatureChanged: computeSignatureChanged(tree, symbolDef, lines),
       });
     }
   }
@@ -102,6 +112,7 @@ export async function locateChangedSymbolsWithLines(
       range: entry.symbolDef.range,
       typeOnly: entry.typeOnly,
       changedLines: entry.lines,
+      signatureChanged: entry.signatureChanged,
     });
   }
 
@@ -126,6 +137,9 @@ export async function mapChangedLinesToSymbols(
   const sup = parsedEntry.sup;
   const changedLines = changedLinesOverride ?? collectChangedLines(hunks);
 
+  const mod = index.byFile.get(file);
+  const trackedPositions = mod ? buildTrackedPositions(mod.locals) : undefined;
+
   const nodes = findNodesInLines(tree, changedLines);
   const linesByHandle = new Map<SymbolHandle, Set<number>>();
   for (const node of nodes) {
@@ -145,6 +159,7 @@ export async function mapChangedLinesToSymbols(
       sup,
       classification,
       source,
+      trackedPositions,
     );
     if (!symbolHandle) continue;
     const existing = linesByHandle.get(symbolHandle) ?? new Set<number>();
@@ -291,26 +306,32 @@ function isTypeOnlyDeclaration(
   return false;
 }
 
+/** Build an O(1)-lookup set of tracked symbol positions ("line:col") from locals. */
+function buildTrackedPositions(locals: readonly SymbolDef[]): Set<string> {
+  const set = new Set<string>();
+  for (const l of locals) {
+    set.add(`${l.range.start.line}:${l.range.start.column}`);
+  }
+  return set;
+}
+
 function findDeclarationNameInAncestors(
   node: Parser.SyntaxNode,
   sup: LanguageSupport,
-  locals?: readonly SymbolDef[],
+  trackedPositions?: ReadonlySet<string>,
 ): Parser.SyntaxNode | null {
   let cur: Parser.SyntaxNode | null = node;
   while (cur) {
     for (const ch of cur.namedChildren || []) {
       if (sup.isDeclarationName?.(ch)) {
-        // If we have module locals, only stop at names that are actually tracked.
-        // This prevents the search from halting at declaration names for symbols
-        // not in the index (e.g., class method names when methods aren't tracked
-        // as separate locals) and allows climbing to a tracked ancestor instead.
-        if (locals) {
+        // If we have a tracked-position set, only stop at names that are
+        // actually in the index.  This prevents the search from halting at
+        // declaration names for symbols not tracked as separate locals (e.g.
+        // class method names) and allows climbing to a tracked ancestor instead.
+        if (trackedPositions) {
           const line = (ch.startPosition?.row ?? 0) + 1;
           const col = (ch.startPosition?.column ?? 0) + 1;
-          const isTracked = locals.some(
-            (l) => l.range.start.line === line && l.range.start.column === col,
-          );
-          if (!isTracked) continue;
+          if (!trackedPositions.has(`${line}:${col}`)) continue;
         }
         return ch;
       }
@@ -320,6 +341,48 @@ function findDeclarationNameInAncestors(
   return null;
 }
 
+const SIGNATURE_DECL_TYPES = new Set([
+  "function_declaration",
+  "function_definition",
+  "method_definition",
+  "method_declaration",
+  "class_declaration",
+  "class_definition",
+]);
+
+/**
+ * Returns true when the parameter list of the declaration that contains
+ * `symbolDef` overlaps with any of the provided changed lines.
+ * Computed once per symbol (not once per reference).
+ */
+function computeSignatureChanged(
+  tree: Parser.Tree,
+  symbolDef: SymbolDef,
+  lines: ReadonlySet<number>,
+): boolean {
+  if (lines.size === 0) return false;
+  const pos = {
+    row: symbolDef.range.start.line - 1,
+    column: symbolDef.range.start.column - 1,
+  };
+  const nameNode = tree.rootNode.descendantForPosition(pos, pos);
+  let declNode: Parser.SyntaxNode | null = nameNode;
+  while (declNode && !SIGNATURE_DECL_TYPES.has(declNode.type)) {
+    declNode = declNode.parent;
+  }
+  if (!declNode) return false;
+  const params =
+    declNode.childForFieldName("parameters") ||
+    declNode.childForFieldName("params");
+  if (!params || params.namedChildCount === 0) return false;
+  const paramsStart = params.startPosition.row + 1;
+  const paramsEnd = params.endPosition.row + 1;
+  for (let line = paramsStart; line <= paramsEnd; line++) {
+    if (lines.has(line)) return true;
+  }
+  return false;
+}
+
 function findSymbolHandleForNode(
   index: ProjectIndex,
   file: FileId,
@@ -327,6 +390,7 @@ function findSymbolHandleForNode(
   sup: LanguageSupport,
   classification: NodeClassification,
   source: string,
+  trackedPositions?: ReadonlySet<string>,
 ): SymbolHandle | null {
   const mod = index.byFile.get(file);
   if (!mod) return null;
@@ -345,9 +409,10 @@ function findSymbolHandleForNode(
   }
 
   // For body/callsite/import/export edits, climb to nearest declaration name.
-  // Pass mod.locals so the search skips untracked names (e.g., method names when
-  // methods are not in locals) and continues climbing to a tracked ancestor.
-  const nameNode = findDeclarationNameInAncestors(node, sup, mod.locals);
+  // Pass trackedPositions (pre-built from mod.locals) so the search skips
+  // untracked names (e.g., method names when methods are not in locals) and
+  // continues climbing to a tracked ancestor.
+  const nameNode = findDeclarationNameInAncestors(node, sup, trackedPositions);
   if (nameNode) {
     const local = mod.locals.find(
       (l) =>

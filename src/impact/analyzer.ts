@@ -10,9 +10,8 @@ import type {
   SeverityWeights,
 } from "./types.js";
 import { DEFAULT_SEVERITY_WEIGHTS } from "./types.js";
-import { findReferences, ensureParsedContext } from "../indexer.js";
+import { findReferences } from "../indexer.js";
 import { Semaphore } from "../util/semaphore.js";
-import type Parser from "tree-sitter";
 
 /** Explain object for impact severity calculation */
 type SeverityExplain = {
@@ -129,10 +128,7 @@ export async function analyzeImpact(
             if (!includeTests && isTestFile(ref.file, patternMatchers)) continue;
             if (isIgnored(ref.file)) continue;
 
-            const existing = impacted.get(ref.file);
-            const reasons: ImpactReason[] = existing?.reasons || [];
-
-            // Determine the reason for this reference
+            // Determine the reason for this reference (sync, before await)
             let reason: ImpactReason = "directRef";
             if (ref.via?.namespaceMember) {
               reason = "namespaceMember";
@@ -140,34 +136,50 @@ export async function analyzeImpact(
               reason = "importAlias";
             }
 
-            if (!reasons.includes(reason)) {
-              reasons.push(reason);
-            }
-
             const severityResult = await calculateSeverity(
               changedSymbol,
               ref,
-              reasons,
+              [reason],
               0,
               index,
               fanInByFile,
             );
-            const symbols = existing?.symbols || [];
+
+            // Re-read existing AFTER the await: concurrent semaphore tasks may
+            // have written to the same file entry while we were awaiting above.
+            const existing = impacted.get(ref.file);
+            const reasons: ImpactReason[] = existing?.reasons
+              ? [...existing.reasons]
+              : [];
+            if (!reasons.includes(reason)) {
+              reasons.push(reason);
+            }
+
+            const symbols = existing?.symbols ? [...existing.symbols] : [];
             if (!symbols.includes(changedSymbol.name)) {
               symbols.push(changedSymbol.name);
             }
 
-            const existingRefs = existing?.refs || [];
+            const existingRefs = existing?.refs ? [...existing.refs] : [];
             if (refContext && ref.context !== undefined) {
               existingRefs.push({ range: ref.range, context: ref.context });
             }
+
+            // Merge hints from existing explain with new hints so no
+            // accumulated hint is lost when multiple symbols impact the same file.
+            const existingHints = existing?.explain?.hints ?? [];
+            const newHints = severityResult.explain.hints ?? [];
+            const mergedHints =
+              existingHints.length === 0 && newHints.length === 0
+                ? undefined
+                : [...new Set([...existingHints, ...newHints])];
 
             const impactItem: ImpactItem = {
               file: ref.file,
               symbols,
               reasons,
               severity: Math.max(
-                existing?.severity || 0,
+                existing?.severity ?? 0,
                 severityResult.severity,
               ),
               depth: 0,
@@ -175,7 +187,8 @@ export async function analyzeImpact(
               explain: {
                 ...existing?.explain,
                 ...severityResult.explain,
-                refsCount: (existing?.explain?.refsCount || 0) + 1,
+                ...(mergedHints && { hints: mergedHints }),
+                refsCount: (existing?.explain?.refsCount ?? 0) + 1,
               },
             };
 
@@ -436,67 +449,10 @@ export async function calculateSeverity(
     hints.push("exportChanged");
   }
 
-  // Check if this is a signature change: the parameters node must overlap with the
-  // lines that actually changed. We require changedSymbol.changedLines to be present
-  // (populated by locateChangedSymbolsWithLines) so we only fire when the diff truly
-  // touched the parameter list, not merely the function body.
-  if (changedSymbol.changedLines && changedSymbol.changedLines.size > 0) {
-    const mod = index.byFile.get(changedSymbol.file);
-    if (mod) {
-      const changedIndex = changedSymbol.range.start.index ?? 0;
-      const symbolDef = mod.locals.find((l) => {
-        const localIndex = l.range.start.index ?? 0;
-        return l.localName === changedSymbol.name && localIndex === changedIndex;
-      });
-      if (symbolDef) {
-        const parsed = await ensureParsedContext(
-          changedSymbol.file,
-          index.parsed?.get(changedSymbol.file),
-        );
-        if (parsed) {
-          const { tree } = parsed;
-          const pos = {
-            row: symbolDef.range.start.line - 1,
-            column: symbolDef.range.start.column - 1,
-          };
-          const node = tree.rootNode.descendantForPosition(pos, pos);
-          let declNode: Parser.SyntaxNode | null = node;
-          while (
-            declNode &&
-            ![
-              "function_declaration",
-              "function_definition",
-              "method_definition",
-              "method_declaration",
-              "class_declaration",
-              "class_definition",
-            ].includes(declNode.type)
-          ) {
-            declNode = declNode.parent;
-          }
-
-          if (declNode) {
-            const params =
-              declNode.childForFieldName("parameters") ||
-              declNode.childForFieldName("params");
-            if (params && params.namedChildCount > 0) {
-              // Only emit signatureChanged when the parameters node itself
-              // overlaps with the lines that actually changed in the diff.
-              const paramsStart = params.startPosition.row + 1;
-              const paramsEnd = params.endPosition.row + 1;
-              let paramsChanged = false;
-              for (let line = paramsStart; line <= paramsEnd; line++) {
-                if (changedSymbol.changedLines.has(line)) {
-                  paramsChanged = true;
-                  break;
-                }
-              }
-              if (paramsChanged) hints.push("signatureChanged");
-            }
-          }
-        }
-      }
-    }
+  // signatureChanged is pre-computed once per symbol in locateChangedSymbolsWithLines
+  // (via computeSignatureChanged) so we don't re-parse the AST for every reference.
+  if (changedSymbol.signatureChanged) {
+    hints.push("signatureChanged");
   }
 
   if (hints.length > 0) {
