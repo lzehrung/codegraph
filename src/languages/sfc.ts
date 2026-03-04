@@ -118,7 +118,7 @@ export function buildSvelteTemplateBlocks(
 
 export function prepareSFCScriptSource(
   source: string,
-  framework: SFCFramework,
+  _framework: SFCFramework,
 ): {
   maskedSource: string;
   scriptLangId: "js" | "ts" | "tsx";

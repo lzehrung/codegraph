@@ -58,6 +58,19 @@ export type PartialError = {
   context?: Record<string, unknown>;
 };
 
+function messageFromReason(reason: unknown): string {
+  if (reason instanceof Error) return reason.message;
+  if (
+    typeof reason === "object" &&
+    reason !== null &&
+    "message" in reason &&
+    typeof (reason as { message: unknown }).message === "string"
+  ) {
+    return (reason as { message: string }).message;
+  }
+  return "Unknown error";
+}
+
 /**
  * Create a successful partial result
  */
@@ -217,7 +230,7 @@ export async function withPartialResults<T, I>(
         failed++;
         errors.push({
           target: `${itemName}[${i + batchResults.indexOf(settled)}]`,
-          message: settled.reason?.message ?? "Unknown error",
+          message: messageFromReason(settled.reason),
           severity: "error",
           retryable: false,
         });

@@ -2,7 +2,7 @@ import {
   makeLanguageConfig,
   type LanguageConfig,
 } from "../chunking/languageConfig.js";
-import { getLanguageById, getAllLanguages } from "../languages/registry.js";
+import { getAllLanguages } from "../languages/registry.js";
 import "../languages/all.js";
 
 export type { LanguageConfig };
