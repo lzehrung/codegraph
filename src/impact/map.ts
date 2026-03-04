@@ -397,13 +397,11 @@ function computeChangedByteRanges(
   const ranges: ByteRange[] = [];
 
   for (const hunk of hunks) {
-    let oldLine = hunk.oldStart;
     let newLine = hunk.newStart;
     let i = 0;
     while (i < hunk.lines.length) {
       const ln = hunk.lines[i]!;
       if (ln.startsWith(" ")) {
-        oldLine++;
         newLine++;
         i++;
         continue;
@@ -412,7 +410,6 @@ function computeChangedByteRanges(
       const deleted: string[] = [];
       while (i < hunk.lines.length && hunk.lines[i]!.startsWith("-")) {
         deleted.push(hunk.lines[i]!.slice(1));
-        oldLine++;
         i++;
       }
       const added: string[] = [];
@@ -463,8 +460,18 @@ function computeChangedByteRanges(
           deletionCursorLine >= lineStarts.length
             ? source.length
             : lineStarts[deletionCursorLine]!;
-        const end = Math.min(cursor + 1, source.length);
-        ranges.push({ start: cursor, end });
+        // Ensure the sentinel range is non-empty: computeSignatureChanged uses
+        // strict overlap (r.start < paramsEnd && r.end > paramsStart), so a
+        // zero-length range (start === end) would never overlap anything.
+        // At EOF, back up one byte when possible; skip if source is empty.
+        if (cursor >= source.length) {
+          if (source.length > 0) {
+            ranges.push({ start: source.length - 1, end: source.length });
+          }
+          // else: empty source — no sentinel needed
+        } else {
+          ranges.push({ start: cursor, end: cursor + 1 });
+        }
       }
     }
   }

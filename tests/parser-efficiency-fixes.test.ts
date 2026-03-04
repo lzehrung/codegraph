@@ -14,7 +14,6 @@
 import { describe, it, expect } from "vitest";
 import os from "node:os";
 import path from "node:path";
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import {
   buildProjectIndex,
@@ -224,7 +223,7 @@ describe("seedTransitiveFromFiles – always runs", () => {
     ];
 
     // Even with a non-empty changedSymbols we still want the deleted-file path seeded
-    await seedTransitiveFromFiles(index, impacted, changedFiles, {});
+    seedTransitiveFromFiles(index, impacted, changedFiles, {});
 
     // consumerFile should be in impacted because it depends on the deleted file
     expect(impacted.has(consumerFile)).toBe(true);
@@ -251,7 +250,7 @@ describe("seedTransitiveFromFiles – always runs", () => {
       [consumerFile, { file: consumerFile, severity: originalSeverity, symbols: [], reasons: ["directRef"], depth: 0 }],
     ]);
 
-    await seedTransitiveFromFiles(
+    seedTransitiveFromFiles(
       index,
       impacted,
       [{ path: libFile, kind: "deleted" as const, hunks: [] }],
