@@ -10,8 +10,21 @@ import type {
   SeverityWeights,
 } from "./types.js";
 import { DEFAULT_SEVERITY_WEIGHTS } from "./types.js";
-import { findReferences, ensureParsedContext } from "../indexer.js";
-import type Parser from "tree-sitter";
+import { findReferences } from "../indexer.js";
+import { Semaphore } from "../util/semaphore.js";
+
+/**
+ * Priority order for ImpactReason — higher number wins when merging explain.reason.
+ * Typed as Record<ImpactReason, number> so TypeScript enforces exhaustiveness:
+ * adding a new ImpactReason value will cause a compile error here until it is listed.
+ */
+const REASON_PRIORITY: Readonly<Record<ImpactReason, number>> = {
+  directRef: 4,
+  namespaceMember: 3,
+  importAlias: 2,
+  exportChain: 1,
+  transitive: 0,
+};
 
 /** Explain object for impact severity calculation */
 type SeverityExplain = {
@@ -90,108 +103,143 @@ export async function analyzeImpact(
     (s) => !isIgnored(s.file),
   );
 
-  // Direct impact analysis with parallelization
-  const concurrency = 8;
-  const tasks = [];
+  // Direct impact analysis with bounded concurrency.
+  // Use a Semaphore so that slow tasks release their slot immediately rather than
+  // holding up a whole batch (which the old slice-based loop would do).
+  const semaphore = new Semaphore(8);
+  const tasks: Array<Promise<void>> = [];
 
   for (const changedSymbol of filteredChangedSymbols) {
     if (processedSymbols.has(changedSymbol.id)) continue;
     processedSymbols.add(changedSymbol.id);
 
-    tasks.push(async () => {
-      const refs = await findReferences(
-        index,
-        {
-          def: {
-            file: changedSymbol.file,
-            localName: changedSymbol.name,
-            kind: changedSymbol.kind,
-            range: changedSymbol.range,
-          } as SymbolDef,
-        },
-        refContext
-          ? {
-              context: refContext,
-              ...(refContextLines !== undefined && { lines: refContextLines }),
-              ...(refBlockMaxLines !== undefined && {
-                blockMaxLines: refBlockMaxLines,
-              }),
+    tasks.push(
+      semaphore.withPermit(async () => {
+        const refs = await findReferences(
+          index,
+          {
+            def: {
+              file: changedSymbol.file,
+              localName: changedSymbol.name,
+              kind: changedSymbol.kind,
+              range: changedSymbol.range,
+            } as SymbolDef,
+          },
+          refContext
+            ? {
+                context: refContext,
+                ...(refContextLines !== undefined && { lines: refContextLines }),
+                ...(refBlockMaxLines !== undefined && {
+                  blockMaxLines: refBlockMaxLines,
+                }),
+              }
+            : undefined,
+        );
+
+        if (refs.status === "ok") {
+          for (const ref of refs.references.slice(0, maxRefs)) {
+            if (!includeTests && isTestFile(ref.file, patternMatchers)) continue;
+            if (isIgnored(ref.file)) continue;
+
+            // Determine the reason for this reference (sync, before await)
+            let reason: ImpactReason = "directRef";
+            if (ref.via?.namespaceMember) {
+              reason = "namespaceMember";
+            } else if (ref.via?.import) {
+              reason = "importAlias";
             }
-          : undefined,
-      );
 
-      if (refs.status === "ok") {
-        for (const ref of refs.references.slice(0, maxRefs)) {
-          if (!includeTests && isTestFile(ref.file, patternMatchers)) continue;
-          if (isIgnored(ref.file)) continue;
+            const severityResult = await calculateSeverity(
+              changedSymbol,
+              ref,
+              [reason],
+              0,
+              index,
+              fanInByFile,
+            );
 
-          const existing = impacted.get(ref.file);
-          const reasons: ImpactReason[] = existing?.reasons || [];
+            // Re-read existing AFTER the await: concurrent semaphore tasks may
+            // have written to the same file entry while we were awaiting above.
+            const existing = impacted.get(ref.file);
+            const reasons: ImpactReason[] = existing?.reasons
+              ? [...existing.reasons]
+              : [];
+            if (!reasons.includes(reason)) {
+              reasons.push(reason);
+            }
 
-          // Determine the reason for this reference
-          let reason: ImpactReason = "directRef";
-          if (ref.via?.namespaceMember) {
-            reason = "namespaceMember";
-          } else if (ref.via?.import) {
-            reason = "importAlias";
+            const symbols = existing?.symbols ? [...existing.symbols] : [];
+            if (!symbols.includes(changedSymbol.name)) {
+              symbols.push(changedSymbol.name);
+            }
+
+            const existingRefs = existing?.refs ? [...existing.refs] : [];
+            if (refContext && ref.context !== undefined) {
+              existingRefs.push({ range: ref.range, context: ref.context });
+            }
+
+            // Merge hints from existing explain with new hints so no
+            // accumulated hint is lost when multiple symbols impact the same file.
+            const existingHints = existing?.explain?.hints ?? [];
+            const newHints = severityResult.explain.hints ?? [];
+            const mergedHints =
+              existingHints.length === 0 && newHints.length === 0
+                ? undefined
+                : [...new Set([...existingHints, ...newHints])];
+
+            // Preserve the strongest explain.reason seen so far.  Spreading
+            // severityResult.explain unconditionally could downgrade a prior
+            // directRef reason to importAlias when a weaker ref is processed later.
+            const existingReason = existing?.explain?.reason;
+            const newReason = severityResult.explain.reason;
+            const bestReason =
+              existingReason === undefined
+                ? newReason
+                : newReason === undefined
+                  ? existingReason
+                  : REASON_PRIORITY[existingReason] >=
+                      REASON_PRIORITY[newReason]
+                    ? existingReason
+                    : newReason;
+
+            const impactItem: ImpactItem = {
+              file: ref.file,
+              symbols,
+              reasons,
+              severity: Math.max(
+                existing?.severity ?? 0,
+                severityResult.severity,
+              ),
+              depth: 0,
+              ...(refContext && existingRefs.length > 0 && { refs: existingRefs }),
+              explain: {
+                ...existing?.explain,
+                ...severityResult.explain,
+                ...(bestReason !== undefined && { reason: bestReason }),
+                ...(mergedHints && { hints: mergedHints }),
+                refsCount: (existing?.explain?.refsCount ?? 0) + 1,
+              },
+            };
+
+            if (changedSymbol.typeOnly !== undefined) {
+              impactItem.typeOnly = changedSymbol.typeOnly;
+            }
+
+            impacted.set(ref.file, impactItem);
           }
-
-          if (!reasons.includes(reason)) {
-            reasons.push(reason);
-          }
-
-          const severityResult = await calculateSeverity(
-            changedSymbol,
-            ref,
-            reasons,
-            0,
-            index,
-            fanInByFile,
-          );
-          const symbols = existing?.symbols || [];
-          if (!symbols.includes(changedSymbol.name)) {
-            symbols.push(changedSymbol.name);
-          }
-
-          const refs = existing?.refs || [];
-          if (refContext && ref.context !== undefined) {
-            refs.push({ range: ref.range, context: ref.context });
-          }
-
-          const impactItem: ImpactItem = {
-            file: ref.file,
-            symbols,
-            reasons,
-            severity: Math.max(
-              existing?.severity || 0,
-              severityResult.severity,
-            ),
-            depth: 0,
-            ...(refContext && refs.length > 0 && { refs }),
-            explain: {
-              ...existing?.explain,
-              ...severityResult.explain,
-              refsCount: (existing?.explain?.refsCount || 0) + 1,
-            },
-          };
-
-          if (changedSymbol.typeOnly !== undefined) {
-            impactItem.typeOnly = changedSymbol.typeOnly;
-          }
-
-          impacted.set(ref.file, impactItem);
         }
-      }
-    });
+      }),
+    );
   }
 
-  // Execute in batches with concurrency control
-  for (let i = 0; i < tasks.length; i += concurrency) {
-    await Promise.all(tasks.slice(i, i + concurrency).map((fn) => fn()));
-  }
+  await Promise.all(tasks);
 
-  // Seed transitive impact from changed files (especially for deleted/renamed files with no symbols)
-  if (!options.membersOnly && changedSymbols.length === 0) {
+  // Seed transitive impact from changed files.  This is NOT redundant with
+  // analyzeTransitiveImpact below: deleted/renamed files produce no changedSymbols
+  // (they no longer exist), so they would never enter `impacted` through the symbol
+  // loop above.  seedTransitiveFromFiles plants them directly so the transitive pass
+  // can propagate their impact to dependents.
+  if (!options.membersOnly) {
     seedTransitiveFromFiles(
       index,
       impacted,
@@ -432,59 +480,10 @@ export async function calculateSeverity(
     hints.push("exportChanged");
   }
 
-  // Check if this might be a signature change (function/class with parameters)
-  const mod = index.byFile.get(changedSymbol.file);
-  if (mod) {
-    const changedIndex = changedSymbol.range.start.index ?? 0;
-    const symbolDef = mod.locals.find((l) => {
-      const localIndex = l.range.start.index ?? 0;
-      return l.localName === changedSymbol.name && localIndex === changedIndex;
-    });
-    if (symbolDef) {
-      const parsed = await ensureParsedContext(
-        changedSymbol.file,
-        index.parsed?.get(changedSymbol.file),
-      );
-      if (parsed) {
-        const { tree } = parsed;
-        const pos = {
-          row: symbolDef.range.start.line - 1,
-          column: symbolDef.range.start.column - 1,
-        };
-        const node = tree.rootNode.descendantForPosition(pos, pos);
-        let declNode: Parser.SyntaxNode | null = node;
-        while (
-          declNode &&
-          ![
-            "function_declaration",
-            "function_definition",
-            "method_definition",
-            "method_declaration",
-            "class_declaration",
-            "class_definition",
-          ].includes(declNode.type)
-        ) {
-          declNode = declNode.parent;
-        }
-
-        if (declNode) {
-          const params =
-            declNode.childForFieldName("parameters") ||
-            declNode.childForFieldName("params");
-          if (params && params.namedChildCount > 0) {
-            hints.push("signatureChanged");
-          }
-        }
-      } else {
-        // Fallback to simple line-span heuristic if AST is not available
-        if (
-          symbolDef.kind === SymbolKind.Function &&
-          symbolDef.range.end.line - symbolDef.range.start.line > 1
-        ) {
-          hints.push("signatureChanged");
-        }
-      }
-    }
+  // signatureChanged is pre-computed once per symbol in locateChangedSymbolsWithLines
+  // (via computeSignatureChanged) so we don't re-parse the AST for every reference.
+  if (changedSymbol.signatureChanged) {
+    hints.push("signatureChanged");
   }
 
   if (hints.length > 0) {

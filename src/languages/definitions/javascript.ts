@@ -194,6 +194,9 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
         "import_specifier",
         "namespace_import",
         "import_clause",
+        // Method names in classes: needed so that editing a method name is
+        // classified as a definition change, not an unrecognised node.
+        "method_definition",
       ].includes(p)
     );
   },
