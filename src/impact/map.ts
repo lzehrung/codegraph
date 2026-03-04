@@ -34,7 +34,6 @@ export async function locateChangedSymbolsWithLines(
 
   const { source, tree } = parsedEntry;
   const sup = parsedEntry.sup;
-  const changedSymbols: ChangedSymbol[] = [];
 
   // Collect changed line numbers in the new file view.
   // Track deletions by mapping them to the current new-line position.
@@ -43,7 +42,16 @@ export async function locateChangedSymbolsWithLines(
   // Find AST nodes that overlap with changed lines
   const changedNodes = findNodesInLines(tree, changedLines);
 
-  // Classify and collect changed symbols
+  // Accumulate per-symbol info, deduplicating across multiple overlapping nodes.
+  // Key: SymbolHandle  →  { symbolDef, typeOnly, lines changed within symbol range }
+  type SymbolEntry = {
+    symbolDef: SymbolDef;
+    typeOnly: boolean;
+    lines: Set<number>;
+  };
+  const seenHandles = new Map<SymbolHandle, SymbolEntry>();
+  const mod = index.byFile.get(file);
+
   for (const node of changedNodes) {
     const classification = classifyChangedNode(node, source, sup);
     const symbolHandle = findSymbolHandleForNode(
@@ -54,22 +62,47 @@ export async function locateChangedSymbolsWithLines(
       classification,
       source,
     );
-    if (symbolHandle) {
-      const symbolDef = index.byFile
-        .get(file)
-        ?.locals.find((l) => symbolHandleFromLocal(file, l) === symbolHandle);
-      if (symbolDef) {
-        changedSymbols.push({
-          id: symbolHandle,
-          file,
-          name: symbolDef.localName,
-          kind: symbolDef.kind,
-          exported: isExported(index, file, symbolDef),
-          range: symbolDef.range,
-          typeOnly: !!classification?.typeOnly,
-        });
+    if (!symbolHandle) continue;
+
+    const symbolDef = mod?.locals.find(
+      (l) => symbolHandleFromLocal(file, l) === symbolHandle,
+    );
+    if (!symbolDef) continue;
+
+    const existing = seenHandles.get(symbolHandle);
+    if (existing) {
+      // Accumulate additional typeOnly information and changed lines
+      if (classification?.typeOnly) existing.typeOnly = true;
+    } else {
+      // Compute changed lines that fall within this symbol's declared range
+      const lines = new Set<number>();
+      for (
+        let l = symbolDef.range.start.line;
+        l <= symbolDef.range.end.line;
+        l++
+      ) {
+        if (changedLines.has(l)) lines.add(l);
       }
+      seenHandles.set(symbolHandle, {
+        symbolDef,
+        typeOnly: !!classification?.typeOnly,
+        lines,
+      });
     }
+  }
+
+  const changedSymbols: ChangedSymbol[] = [];
+  for (const [handle, entry] of seenHandles) {
+    changedSymbols.push({
+      id: handle,
+      file,
+      name: entry.symbolDef.localName,
+      kind: entry.symbolDef.kind,
+      exported: isExported(index, file, entry.symbolDef),
+      range: entry.symbolDef.range,
+      typeOnly: entry.typeOnly,
+      changedLines: entry.lines,
+    });
   }
 
   return { changedSymbols, changedLines };
@@ -126,11 +159,21 @@ function findNodesInLines(
   tree: Parser.Tree,
   changedLines: Set<number>,
 ): Parser.SyntaxNode[] {
+  if (changedLines.size === 0) return [];
+
+  // Build a sorted array for efficient range-overlap checks
+  const sortedLines = [...changedLines].sort((a, b) => a - b);
+  const minLine = sortedLines[0]!;
+  const maxLine = sortedLines[sortedLines.length - 1]!;
+
   const nodes: Parser.SyntaxNode[] = [];
 
   function walk(node: Parser.SyntaxNode) {
     const startLine = node.startPosition?.row + 1;
     const endLine = node.endPosition?.row + 1;
+
+    // Prune: if this node's range is entirely outside all changed lines, skip subtree
+    if (endLine < minLine || startLine > maxLine) return;
 
     // Check if this node overlaps with any changed lines
     for (let line = startLine; line <= endLine; line++) {
@@ -140,7 +183,7 @@ function findNodesInLines(
       }
     }
 
-    // Walk children
+    // Walk children (safe: already pruned obvious non-overlaps above)
     for (const child of node.namedChildren || []) {
       walk(child);
     }
@@ -251,11 +294,26 @@ function isTypeOnlyDeclaration(
 function findDeclarationNameInAncestors(
   node: Parser.SyntaxNode,
   sup: LanguageSupport,
+  locals?: readonly SymbolDef[],
 ): Parser.SyntaxNode | null {
   let cur: Parser.SyntaxNode | null = node;
   while (cur) {
     for (const ch of cur.namedChildren || []) {
-      if (sup.isDeclarationName?.(ch)) return ch;
+      if (sup.isDeclarationName?.(ch)) {
+        // If we have module locals, only stop at names that are actually tracked.
+        // This prevents the search from halting at declaration names for symbols
+        // not in the index (e.g., class method names when methods aren't tracked
+        // as separate locals) and allows climbing to a tracked ancestor instead.
+        if (locals) {
+          const line = (ch.startPosition?.row ?? 0) + 1;
+          const col = (ch.startPosition?.column ?? 0) + 1;
+          const isTracked = locals.some(
+            (l) => l.range.start.line === line && l.range.start.column === col,
+          );
+          if (!isTracked) continue;
+        }
+        return ch;
+      }
     }
     cur = cur.parent;
   }
@@ -286,8 +344,10 @@ function findSymbolHandleForNode(
     return local ? symbolHandleFromLocal(file, local) : null;
   }
 
-  // For body/callsite/import/export edits, climb to nearest declaration name
-  const nameNode = findDeclarationNameInAncestors(node, sup);
+  // For body/callsite/import/export edits, climb to nearest declaration name.
+  // Pass mod.locals so the search skips untracked names (e.g., method names when
+  // methods are not in locals) and continues climbing to a tracked ancestor.
+  const nameNode = findDeclarationNameInAncestors(node, sup, mod.locals);
   if (nameNode) {
     const local = mod.locals.find(
       (l) =>

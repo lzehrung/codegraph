@@ -36,6 +36,8 @@ export type ChangedSymbol = {
   exported: boolean;
   range: Range;
   typeOnly?: boolean;
+  /** Which specific lines (in the new file) changed within this symbol's range. */
+  changedLines?: ReadonlySet<number>;
 };
 
 // Impact findings

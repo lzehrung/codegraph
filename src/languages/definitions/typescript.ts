@@ -122,6 +122,12 @@ const BASE_GRAPH = {
     (import_statement (import_require_clause (string) @mod)) @stmt
     (export_statement (string) @mod) @stmt
     (call_expression function: (import) arguments: (arguments (string) @mod)) @stmt
+    ;; declare module "foo" {} — ambient module augmentations create a type-only
+    ;; dependency on the named module and must appear in the file graph so that
+    ;; changes to "foo" propagate to augmenting files (and vice-versa).
+    ;; The inner node type is "module" (not "module_declaration"); its string
+    ;; child uses field-name "name".
+    (ambient_declaration (module name: (string) @mod)) @stmt
   `,
   exports: `
     (export_statement) @stmt
@@ -184,6 +190,11 @@ const BASE_HELPERS = {
         "namespace_import",
         "import_clause",
         "import_equals_declaration",
+        // Method names in classes and abstract method signatures: needed so
+        // that editing a method name is classified as a definition change.
+        "method_definition",
+        "method_signature",
+        "abstract_method_signature",
       ].includes(p)
     );
   },

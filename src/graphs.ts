@@ -160,16 +160,20 @@ export function collectModuleSpecifiersFromSource(
   function appendUniqueSpecifiers(
     target: ModuleSpecifier[],
     incoming: ModuleSpecifier[],
+    seen: Set<string>,
   ): void {
-    const seen = new Set(
-      target.map((entry) => `${entry.spec}::${entry.typeOnly ? 1 : 0}`),
-    );
     for (const entry of incoming) {
       const key = `${entry.spec}::${entry.typeOnly ? 1 : 0}`;
       if (seen.has(key)) continue;
       seen.add(key);
       target.push(entry);
     }
+  }
+
+  function makeSeenSet(target: ModuleSpecifier[]): Set<string> {
+    return new Set(
+      target.map((entry) => `${entry.spec}::${entry.typeOnly ? 1 : 0}`),
+    );
   }
 
   function extractHtmlInlineScriptSpecifiers(
@@ -286,15 +290,17 @@ export function collectModuleSpecifiersFromSource(
           out.push({ spec: unquote(sliceText(cap.node, source)), typeOnly });
       }
       if (htmlLikeLanguage) {
-        appendUniqueSpecifiers(out, extractHtmlAttributeSpecifiers(source));
-        appendUniqueSpecifiers(out, extractHtmlInlineScriptSpecifiers(source));
+        const htmlSeen = makeSeenSet(out);
+        appendUniqueSpecifiers(out, extractHtmlAttributeSpecifiers(source), htmlSeen);
+        appendUniqueSpecifiers(out, extractHtmlInlineScriptSpecifiers(source), htmlSeen);
       }
       if (
         support.id === "css" ||
         support.id === "scss" ||
         support.id === "less"
       ) {
-        appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source));
+        const cssSeen = makeSeenSet(out);
+        appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
       }
       if (out.length > 0) return out;
     } finally {
@@ -329,8 +335,9 @@ export function collectModuleSpecifiersFromSource(
     const inlineSpecs = extractHtmlInlineScriptSpecifiers(source);
     if (attributeSpecs.length > 0 || inlineSpecs.length > 0) {
       reportFallback(queryFailed ? "query-error" : "query-empty");
-      appendUniqueSpecifiers(out, attributeSpecs);
-      appendUniqueSpecifiers(out, inlineSpecs);
+      const fallbackSeen = makeSeenSet(out);
+      appendUniqueSpecifiers(out, attributeSpecs, fallbackSeen);
+      appendUniqueSpecifiers(out, inlineSpecs, fallbackSeen);
     }
   }
   return out;
