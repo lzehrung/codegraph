@@ -20,7 +20,7 @@ import {
   buildProjectIndex,
   analyzeImpactFromDiff,
 } from "../src/index.js";
-import type { CompactImpactReport, ImpactReport } from "../src/impact/types.js";
+import type { CompactImpactReport, ImpactReport, ImpactItem } from "../src/impact/types.js";
 import { collectChangedLines } from "../src/impact/map.js";
 import { seedTransitiveFromFiles } from "../src/impact/analyzer.js";
 import type { ProjectIndex } from "../src/indexer.js";
@@ -60,9 +60,11 @@ describe("signatureChanged hint accuracy", () => {
     await withTmpDir("sig-changed-true", async (root) => {
       const file = path.join(root, "lib.ts");
       const consumer = path.join(root, "app.ts");
+      // Write the POST-diff (new) file so the index and parsed source match the
+      // new-file view that the diff hunks are interpreted against.
       await fsp.writeFile(
         file,
-        "export function add(a: number, b: number): number { return a + b; }\n",
+        "export function add(a: number, b: number, c?: number): number { return a + b; }\n",
       );
       await fsp.writeFile(
         consumer,
@@ -70,7 +72,7 @@ describe("signatureChanged hint accuracy", () => {
       );
       const index = await buildProjectIndex(root);
 
-      // Diff changes the signature line (param added)
+      // Diff: old signature → new signature (param added)
       const diffText = [
         "diff --git a/lib.ts b/lib.ts",
         "--- a/lib.ts",
@@ -100,12 +102,12 @@ describe("signatureChanged hint accuracy", () => {
     await withTmpDir("sig-changed-false", async (root) => {
       const file = path.join(root, "lib.ts");
       const consumer = path.join(root, "app.ts");
-      // Multi-line function so body and params are on different lines.
+      // Write the POST-diff (new) file: body changed, params unchanged.
       await fsp.writeFile(
         file,
         [
           "export function compute(x: number): number {",
-          "  return x * 2;",
+          "  return x * 3;",
           "}",
         ].join("\n") + "\n",
       );
@@ -115,7 +117,7 @@ describe("signatureChanged hint accuracy", () => {
       );
       const index = await buildProjectIndex(root);
 
-      // Diff changes only line 2 (the body), NOT the signature on line 1
+      // Diff: body changed on line 2, params on line 1 untouched
       const diffText = [
         "diff --git a/lib.ts b/lib.ts",
         "--- a/lib.ts",
@@ -151,9 +153,10 @@ describe("signatureChanged hint accuracy", () => {
     await withTmpDir("sig-changed-oneliner", async (root) => {
       const file = path.join(root, "lib.ts");
       const consumer = path.join(root, "app.ts");
+      // Write the POST-diff (new) file: body changed, params unchanged.
       await fsp.writeFile(
         file,
-        "export function add(a: number): number { return a + 1; }\n",
+        "export function add(a: number): number { return a + 2; }\n",
       );
       await fsp.writeFile(
         consumer,
@@ -161,7 +164,7 @@ describe("signatureChanged hint accuracy", () => {
       );
       const index = await buildProjectIndex(root);
 
-      // Diff changes only the body portion on the single line – params unchanged
+      // Diff: only the body portion changed on the single line, params unchanged
       const diffText = [
         "diff --git a/lib.ts b/lib.ts",
         "--- a/lib.ts",
@@ -215,7 +218,7 @@ describe("seedTransitiveFromFiles – always runs", () => {
       scopeCache: new Map(),
     };
 
-    const impacted = new Map<string, ReturnType<typeof Array.prototype.find>>();
+    const impacted = new Map<string, ImpactItem>();
     const changedFiles = [
       { path: deletedFile, kind: "deleted" as const, hunks: [] },
     ];
@@ -244,7 +247,7 @@ describe("seedTransitiveFromFiles – always runs", () => {
     };
 
     const originalSeverity = 0.9;
-    const impacted = new Map<string, { file: string; severity: number; symbols: string[]; reasons: string[]; depth: number }>([
+    const impacted = new Map<string, ImpactItem>([
       [consumerFile, { file: consumerFile, severity: originalSeverity, symbols: [], reasons: ["directRef"], depth: 0 }],
     ]);
 

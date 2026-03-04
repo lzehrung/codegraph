@@ -536,7 +536,13 @@ function findSymbolHandleForNode(
         l.range.start.line === node.startPosition?.row + 1 &&
         l.range.start.column === node.startPosition?.column + 1,
     );
-    return local ? symbolHandleFromLocal(file, local) : null;
+    if (local) {
+      return symbolHandleFromLocal(file, local);
+    }
+    // No matching local (e.g. method names after adding method_definition to
+    // isDeclarationName): fall through to the ancestor-climb path below so
+    // the edit can be attributed to the nearest tracked ancestor (e.g. the
+    // containing class) instead of being dropped entirely.
   }
 
   // For body/callsite/import/export edits, climb to nearest declaration name.
