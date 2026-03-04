@@ -136,11 +136,9 @@ describe("signatureChanged hint accuracy", () => {
       const impact = result.impacted.find(
         (item) => item.file === consumer.replace(/\\/g, "/"),
       );
-      // Impact should exist (the function changed) but signatureChanged should NOT
-      if (impact) {
-        expect(impact.explain?.hints ?? []).not.toContain("signatureChanged");
-      }
-      // If no impact (possible when ref-finding misses body-only changes), that's also fine
+      // Impact must exist (the function changed) but signatureChanged should NOT
+      expect(impact).toBeDefined();
+      expect(impact!.explain?.hints ?? []).not.toContain("signatureChanged");
     });
   });
 });
@@ -330,7 +328,7 @@ describe("method_definition in isDeclarationName", () => {
     });
   });
 
-  it("TS – a method-name edit is classified as a definition change", async () => {
+  it("TS – a method-body edit is attributed to the enclosing class", async () => {
     await withTmpDir("method-def-ts", async (root) => {
       await fsp.writeFile(
         path.join(root, "tsconfig.json"),
@@ -401,6 +399,8 @@ describe("TypeScript declare module augmentation", () => {
           e.to.name === "react",
       );
       expect(edges.length).toBeGreaterThan(0);
+      // Ambient module augmentations are purely type-level dependencies
+      expect(edges.every((edge) => edge.typeOnly === true)).toBe(true);
     });
   });
 });

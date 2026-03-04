@@ -285,7 +285,9 @@ export function collectModuleSpecifiersFromSource(
           : "";
         const typeOnly =
           (support.id === "ts" || support.id === "tsx") &&
-          /\b(import|export)\s+type\b/.test(stmtText);
+          (/\b(import|export)\s+type\b/.test(stmtText) ||
+            // declare module "..." {} — ambient augmentation is purely type-level
+            /^\s*declare\s+module\s+["']/.test(stmtText));
         for (const cap of modNodes)
           out.push({ spec: unquote(sliceText(cap.node, source)), typeOnly });
       }

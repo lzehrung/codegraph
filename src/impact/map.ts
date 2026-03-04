@@ -81,14 +81,14 @@ export async function locateChangedSymbolsWithLines(
       // Any non-typeOnly contribution clears the flag.
       if (!classification?.typeOnly) existing.typeOnly = false;
     } else {
-      // Compute changed lines that fall within this symbol's declared range
+      // Compute changed lines that fall within this symbol's declared range.
+      // Iterate over changedLines (typically small) rather than the symbol's
+      // full line span (could be hundreds of lines for large classes).
       const lines = new Set<number>();
-      for (
-        let l = symbolDef.range.start.line;
-        l <= symbolDef.range.end.line;
-        l++
-      ) {
-        if (changedLines.has(l)) lines.add(l);
+      for (const l of changedLines) {
+        if (l >= symbolDef.range.start.line && l <= symbolDef.range.end.line) {
+          lines.add(l);
+        }
       }
       seenHandles.set(symbolHandle, {
         symbolDef,
@@ -96,7 +96,9 @@ export async function locateChangedSymbolsWithLines(
         lines,
         // Computed once here so calculateSeverity doesn't re-parse the AST
         // once per reference (which could be hundreds of calls for hot symbols).
-        signatureChanged: computeSignatureChanged(tree, symbolDef, lines),
+        // Pass changedNodes (byte-range overlap) not lines (line-only) to avoid
+        // false positives in single-line function declarations.
+        signatureChanged: computeSignatureChanged(tree, symbolDef, changedNodes),
       });
     }
   }
@@ -170,13 +172,34 @@ export async function mapChangedLinesToSymbols(
   return linesByHandle;
 }
 
+/**
+ * Binary-search check: returns true if any element in the sorted array falls
+ * within [lo, hi] inclusive.  O(log n) vs the O(span) linear scan it replaces.
+ */
+function hasOverlapSorted(sorted: number[], lo: number, hi: number): boolean {
+  let left = 0;
+  let right = sorted.length - 1;
+  while (left <= right) {
+    const mid = (left + right) >>> 1;
+    const v = sorted[mid]!;
+    if (v < lo) {
+      left = mid + 1;
+    } else if (v > hi) {
+      right = mid - 1;
+    } else {
+      return true; // lo <= v <= hi
+    }
+  }
+  return false;
+}
+
 function findNodesInLines(
   tree: Parser.Tree,
   changedLines: Set<number>,
 ): Parser.SyntaxNode[] {
   if (changedLines.size === 0) return [];
 
-  // Build a sorted array for efficient range-overlap checks
+  // Build a sorted array once for O(log n) overlap checks during the walk.
   const sortedLines = [...changedLines].sort((a, b) => a - b);
   const minLine = sortedLines[0]!;
   const maxLine = sortedLines[sortedLines.length - 1]!;
@@ -187,18 +210,15 @@ function findNodesInLines(
     const startLine = node.startPosition?.row + 1;
     const endLine = node.endPosition?.row + 1;
 
-    // Prune: if this node's range is entirely outside all changed lines, skip subtree
+    // Prune: if this node's range is entirely outside all changed lines, skip subtree.
     if (endLine < minLine || startLine > maxLine) return;
 
-    // Check if this node overlaps with any changed lines
-    for (let line = startLine; line <= endLine; line++) {
-      if (changedLines.has(line)) {
-        nodes.push(node);
-        break;
-      }
+    // Binary-search check: O(log #changedLines) instead of O(node line span).
+    if (hasOverlapSorted(sortedLines, startLine, endLine)) {
+      nodes.push(node);
     }
 
-    // Walk children (safe: already pruned obvious non-overlaps above)
+    // Walk children (safe: already pruned obvious non-overlaps above).
     for (const child of node.namedChildren || []) {
       walk(child);
     }
@@ -352,15 +372,20 @@ const SIGNATURE_DECL_TYPES = new Set([
 
 /**
  * Returns true when the parameter list of the declaration that contains
- * `symbolDef` overlaps with any of the provided changed lines.
+ * `symbolDef` overlaps (at the byte level) with any of the changed AST nodes.
  * Computed once per symbol (not once per reference).
+ *
+ * Using byte ranges rather than line numbers avoids false positives in
+ * single-line declarations where the params and body share the same line: a
+ * body-only edit produces changed nodes whose byte extents don't overlap the
+ * params node, even when both are on line 1.
  */
 function computeSignatureChanged(
   tree: Parser.Tree,
   symbolDef: SymbolDef,
-  lines: ReadonlySet<number>,
+  changedNodes: readonly Parser.SyntaxNode[],
 ): boolean {
-  if (lines.size === 0) return false;
+  if (changedNodes.length === 0) return false;
   const pos = {
     row: symbolDef.range.start.line - 1,
     column: symbolDef.range.start.column - 1,
@@ -375,10 +400,13 @@ function computeSignatureChanged(
     declNode.childForFieldName("parameters") ||
     declNode.childForFieldName("params");
   if (!params || params.namedChildCount === 0) return false;
-  const paramsStart = params.startPosition.row + 1;
-  const paramsEnd = params.endPosition.row + 1;
-  for (let line = paramsStart; line <= paramsEnd; line++) {
-    if (lines.has(line)) return true;
+  const paramsStart = params.startIndex;
+  const paramsEnd = params.endIndex;
+  // A node must be FULLY CONTAINED within the params range (not just overlapping).
+  // Overlap-only check would fire for ancestor nodes like `function_declaration`
+  // that span both params and body, giving false positives on body-only edits.
+  for (const n of changedNodes) {
+    if (n.startIndex >= paramsStart && n.endIndex <= paramsEnd) return true;
   }
   return false;
 }
