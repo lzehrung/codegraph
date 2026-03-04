@@ -42,6 +42,11 @@ export async function locateChangedSymbolsWithLines(
   // Find AST nodes that overlap with changed lines
   const changedNodes = findNodesInLines(tree, changedLines);
 
+  // Precise byte ranges of changed content — used by computeSignatureChanged to
+  // avoid false positives on single-line declarations where params and body share
+  // the same line number.
+  const changedByteRanges = computeChangedByteRanges(source, hunks);
+
   // Accumulate per-symbol info, deduplicating across multiple overlapping nodes.
   // Key: SymbolHandle  →  { symbolDef, typeOnly, lines changed within symbol range }
   type SymbolEntry = {
@@ -96,9 +101,7 @@ export async function locateChangedSymbolsWithLines(
         lines,
         // Computed once here so calculateSeverity doesn't re-parse the AST
         // once per reference (which could be hundreds of calls for hot symbols).
-        // Pass changedNodes (byte-range overlap) not lines (line-only) to avoid
-        // false positives in single-line function declarations.
-        signatureChanged: computeSignatureChanged(tree, symbolDef, changedNodes),
+        signatureChanged: computeSignatureChanged(tree, symbolDef, changedByteRanges),
       });
     }
   }
@@ -113,7 +116,7 @@ export async function locateChangedSymbolsWithLines(
       exported: isExported(index, file, entry.symbolDef),
       range: entry.symbolDef.range,
       typeOnly: entry.typeOnly,
-      changedLines: entry.lines,
+      changedLines: [...entry.lines].sort((a, b) => a - b),
       signatureChanged: entry.signatureChanged,
     });
   }
@@ -370,22 +373,104 @@ const SIGNATURE_DECL_TYPES = new Set([
   "class_definition",
 ]);
 
+type ByteRange = { start: number; end: number };
+
 /**
- * Returns true when the parameter list of the declaration that contains
- * `symbolDef` overlaps (at the byte level) with any of the changed AST nodes.
+ * Compute precise byte ranges (in the new source) that actually changed, by
+ * pairing deleted and added diff lines and finding the minimal changed span
+ * within each pair via common-prefix/suffix trimming.
+ *
+ * This is more accurate than treating whole changed lines as modified: for a
+ * single-line function where only the body changes, the edit range starts after
+ * the closing `)` of the parameter list and therefore does not overlap params.
+ */
+function computeChangedByteRanges(
+  source: string,
+  hunks: FileChange["hunks"],
+): ByteRange[] {
+  // Build 0-indexed line-start byte offsets for the new source.
+  const lineStarts: number[] = [0];
+  for (let i = 0; i < source.length; i++) {
+    if (source[i] === "\n") lineStarts.push(i + 1);
+  }
+
+  const ranges: ByteRange[] = [];
+
+  for (const hunk of hunks) {
+    let oldLine = hunk.oldStart;
+    let newLine = hunk.newStart;
+    let i = 0;
+    while (i < hunk.lines.length) {
+      const ln = hunk.lines[i]!;
+      if (ln.startsWith(" ")) {
+        oldLine++;
+        newLine++;
+        i++;
+        continue;
+      }
+      // Collect a run of deleted lines, then a run of added lines.
+      const deleted: string[] = [];
+      while (i < hunk.lines.length && hunk.lines[i]!.startsWith("-")) {
+        deleted.push(hunk.lines[i]!.slice(1));
+        oldLine++;
+        i++;
+      }
+      const added: string[] = [];
+      const addedStart = newLine;
+      while (i < hunk.lines.length && hunk.lines[i]!.startsWith("+")) {
+        added.push(hunk.lines[i]!.slice(1));
+        newLine++;
+        i++;
+      }
+      for (let ai = 0; ai < added.length; ai++) {
+        const absLine = addedStart + ai; // 1-based
+        const lineStart = lineStarts[absLine - 1];
+        if (lineStart === undefined) continue;
+        const newText = added[ai]!;
+        if (ai < deleted.length) {
+          // Paired replacement: narrow to the minimal changed span.
+          const oldText = deleted[ai]!;
+          let pfx = 0;
+          const maxPfx = Math.min(oldText.length, newText.length);
+          while (pfx < maxPfx && oldText[pfx] === newText[pfx]) pfx++;
+          let sfx = 0;
+          while (
+            sfx < oldText.length - pfx &&
+            sfx < newText.length - pfx &&
+            oldText[oldText.length - 1 - sfx] === newText[newText.length - 1 - sfx]
+          )
+            sfx++;
+          const start = lineStart + pfx;
+          const end = lineStart + newText.length - sfx;
+          // Guard: ensure start < end (or at least a 1-byte sentinel).
+          ranges.push({ start, end: end > start ? end : start + 1 });
+        } else {
+          // Pure addition: whole line is new content.
+          ranges.push({ start: lineStart, end: lineStart + newText.length });
+        }
+      }
+    }
+  }
+
+  return ranges;
+}
+
+/**
+ * Returns true when the parameter list of the declaration containing
+ * `symbolDef` byte-range-overlaps with any of the precise changed byte ranges.
  * Computed once per symbol (not once per reference).
  *
- * Using byte ranges rather than line numbers avoids false positives in
- * single-line declarations where the params and body share the same line: a
- * body-only edit produces changed nodes whose byte extents don't overlap the
- * params node, even when both are on line 1.
+ * Using hunk-derived byte ranges (not line-level changed nodes) avoids false
+ * positives on single-line declarations: a body-only edit on
+ * `function f(a) { return a + 1; }` produces a changed byte range that starts
+ * after the `)` and therefore does not overlap the params node.
  */
 function computeSignatureChanged(
   tree: Parser.Tree,
   symbolDef: SymbolDef,
-  changedNodes: readonly Parser.SyntaxNode[],
+  changedByteRanges: ReadonlyArray<ByteRange>,
 ): boolean {
-  if (changedNodes.length === 0) return false;
+  if (changedByteRanges.length === 0) return false;
   const pos = {
     row: symbolDef.range.start.line - 1,
     column: symbolDef.range.start.column - 1,
@@ -402,11 +487,8 @@ function computeSignatureChanged(
   if (!params || params.namedChildCount === 0) return false;
   const paramsStart = params.startIndex;
   const paramsEnd = params.endIndex;
-  // A node must be FULLY CONTAINED within the params range (not just overlapping).
-  // Overlap-only check would fire for ancestor nodes like `function_declaration`
-  // that span both params and body, giving false positives on body-only edits.
-  for (const n of changedNodes) {
-    if (n.startIndex >= paramsStart && n.endIndex <= paramsEnd) return true;
+  for (const r of changedByteRanges) {
+    if (r.start < paramsEnd && r.end > paramsStart) return true;
   }
   return false;
 }

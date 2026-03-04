@@ -36,8 +36,8 @@ export type ChangedSymbol = {
   exported: boolean;
   range: Range;
   typeOnly?: boolean;
-  /** Which specific lines (in the new file) changed within this symbol's range. */
-  changedLines?: ReadonlySet<number>;
+  /** Which specific lines (in the new file) changed within this symbol's range (sorted, unique). */
+  changedLines?: readonly number[];
   /** True when the parameter list of a function/method overlaps with changedLines. */
   signatureChanged?: boolean;
 };

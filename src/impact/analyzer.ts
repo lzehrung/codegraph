@@ -13,6 +13,15 @@ import { DEFAULT_SEVERITY_WEIGHTS } from "./types.js";
 import { findReferences } from "../indexer.js";
 import { Semaphore } from "../util/semaphore.js";
 
+/** Priority order for ImpactReason — higher number wins when merging explain.reason. */
+const REASON_PRIORITY: Readonly<Record<ImpactReason, number>> = {
+  directRef: 4,
+  namespaceMember: 3,
+  importAlias: 2,
+  exportChain: 1,
+  transitive: 0,
+};
+
 /** Explain object for impact severity calculation */
 type SeverityExplain = {
   reason?: ImpactReason;
@@ -174,6 +183,21 @@ export async function analyzeImpact(
                 ? undefined
                 : [...new Set([...existingHints, ...newHints])];
 
+            // Preserve the strongest explain.reason seen so far.  Spreading
+            // severityResult.explain unconditionally could downgrade a prior
+            // directRef reason to importAlias when a weaker ref is processed later.
+            const existingReason = existing?.explain?.reason;
+            const newReason = severityResult.explain.reason;
+            const bestReason =
+              existingReason === undefined
+                ? newReason
+                : newReason === undefined
+                  ? existingReason
+                  : (REASON_PRIORITY[existingReason] ?? 0) >=
+                      (REASON_PRIORITY[newReason] ?? 0)
+                    ? existingReason
+                    : newReason;
+
             const impactItem: ImpactItem = {
               file: ref.file,
               symbols,
@@ -187,6 +211,7 @@ export async function analyzeImpact(
               explain: {
                 ...existing?.explain,
                 ...severityResult.explain,
+                ...(bestReason !== undefined && { reason: bestReason }),
                 ...(mergedHints && { hints: mergedHints }),
                 refsCount: (existing?.explain?.refsCount ?? 0) + 1,
               },
