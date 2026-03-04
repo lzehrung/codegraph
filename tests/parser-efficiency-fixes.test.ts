@@ -96,11 +96,11 @@ describe("signatureChanged hint accuracy", () => {
     });
   });
 
-  it("does NOT fire when only the function body changed (not params)", async () => {
+  it("does NOT fire when only the function body changed (not params) – multi-line", async () => {
     await withTmpDir("sig-changed-false", async (root) => {
       const file = path.join(root, "lib.ts");
       const consumer = path.join(root, "app.ts");
-      // Multi-line function so we can diff only the body
+      // Multi-line function so body and params are on different lines.
       await fsp.writeFile(
         file,
         [
@@ -139,6 +139,49 @@ describe("signatureChanged hint accuracy", () => {
         (item) => item.file === consumer.replace(/\\/g, "/"),
       );
       // Impact must exist (the function changed) but signatureChanged should NOT
+      expect(impact).toBeDefined();
+      expect(impact!.explain?.hints ?? []).not.toContain("signatureChanged");
+    });
+  });
+
+  it("does NOT fire when only the body of a single-line function changed (byte-range fix)", async () => {
+    // This is the main false-positive the byte-range approach fixes: for a
+    // one-liner, params and body share the same line so a line-only check
+    // always fires; byte-range narrowing correctly isolates the body edit.
+    await withTmpDir("sig-changed-oneliner", async (root) => {
+      const file = path.join(root, "lib.ts");
+      const consumer = path.join(root, "app.ts");
+      await fsp.writeFile(
+        file,
+        "export function add(a: number): number { return a + 1; }\n",
+      );
+      await fsp.writeFile(
+        consumer,
+        'import { add } from "./lib"; console.log(add(1));\n',
+      );
+      const index = await buildProjectIndex(root);
+
+      // Diff changes only the body portion on the single line – params unchanged
+      const diffText = [
+        "diff --git a/lib.ts b/lib.ts",
+        "--- a/lib.ts",
+        "+++ b/lib.ts",
+        "@@ -1 +1 @@",
+        "-export function add(a: number): number { return a + 1; }",
+        "+export function add(a: number): number { return a + 2; }",
+      ].join("\n");
+
+      const result = nonCompact(
+        await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+        }),
+      );
+
+      const impact = result.impacted.find(
+        (item) => item.file === consumer.replace(/\\/g, "/"),
+      );
       expect(impact).toBeDefined();
       expect(impact!.explain?.hints ?? []).not.toContain("signatureChanged");
     });
@@ -224,6 +267,15 @@ describe("seedTransitiveFromFiles – always runs", () => {
 describe("collectChangedLines", () => {
   it("returns an empty set for an empty hunks array", () => {
     const lines = collectChangedLines([]);
+    expect(lines.size).toBe(0);
+  });
+
+  it("returns an empty set for a hunk whose lines array is empty", () => {
+    // A hunk object with no line entries (zero changed lines) must not produce
+    // any output – exercises the early-return path inside the hunk loop.
+    const lines = collectChangedLines([
+      { oldStart: 1, newStart: 1, lines: [] },
+    ]);
     expect(lines.size).toBe(0);
   });
 

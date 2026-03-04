@@ -454,13 +454,17 @@ function computeChangedByteRanges(
       // new source.  Without this, removing a parameter line from a multiline
       // signature would leave computeSignatureChanged with no byte range to overlap
       // against the params node and incorrectly return false.
+      // When the deletion falls at EOF, newLine-1 can exceed lineStarts.length;
+      // clamp to source.length rather than the last line-start so the sentinel
+      // does not create spurious overlap with content near the last line.
       if (deleted.length > added.length) {
-        const lineIndex = Math.min(
-          Math.max(newLine - 1, 0),
-          lineStarts.length - 1,
-        );
-        const cursor = lineStarts[lineIndex] ?? source.length;
-        ranges.push({ start: cursor, end: cursor + 1 });
+        const deletionCursorLine = Math.max(newLine - 1, 0);
+        const cursor =
+          deletionCursorLine >= lineStarts.length
+            ? source.length
+            : lineStarts[deletionCursorLine]!;
+        const end = Math.min(cursor + 1, source.length);
+        ranges.push({ start: cursor, end });
       }
     }
   }
