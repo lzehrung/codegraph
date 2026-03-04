@@ -851,7 +851,9 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
               : false;
       push(spec, typeOnly);
     }
-  } catch {}
+  } catch {
+    /* regex/parse fallback: ignore */
+  }
   return out;
 }
 
@@ -1025,7 +1027,9 @@ export function extractJsTsDynamicSpecifiers(
       const targetPath = path.resolve(baseDir, ...parsed.segments);
       addSpec(buildRelativeSpecifier(fromFile, targetPath));
     }
-  } catch {}
+  } catch {
+    /* parse fallback: ignore */
+  }
   return out;
 }
 
@@ -1033,12 +1037,14 @@ export function extractPythonSpecifiers(source: string): string[] {
   const out: string[] = [];
   try {
     const cleaned = stripPythonCommentsAndStrings(source);
-    const reImport = /^\s*import\s+([A-Za-z_][\w\.]*)/gm;
+    const reImport = /^\s*import\s+([A-Za-z_][\w.]*)/gm;
     for (const m of cleaned.matchAll(reImport)) out.push(m[1]!);
     const reFrom =
-      /^\s*from\s+(\.+(?:[A-Za-z_][\w\.]*)?|[A-Za-z_][\w\.]*)\s+import/gm;
+      /^\s*from\s+(\.+(?:[A-Za-z_][\w.]*)?|[A-Za-z_][\w.]*)\s+import/gm;
     for (const m of cleaned.matchAll(reFrom)) out.push(m[1]!);
-  } catch {}
+  } catch {
+    /* parse fallback: ignore */
+  }
   return out;
 }
 
@@ -1054,7 +1060,9 @@ async function findNearestTsconfig(
     try {
       await fsp.access(cand, fs.constants.R_OK);
       return cand;
-    } catch {}
+    } catch {
+      /* file not found: continue up */
+    }
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
@@ -1062,17 +1070,28 @@ async function findNearestTsconfig(
   return null;
 }
 
+interface TsconfigCompilerOptions {
+  baseUrl?: string;
+  paths?: Record<string, string[]>;
+}
+
+interface TsconfigJson {
+  compilerOptions?: TsconfigCompilerOptions;
+  extends?: string;
+}
+
 async function loadTsconfigConfig(
   cfgPath: string,
 ): Promise<{ baseUrl: string; paths: Record<string, string[]> }> {
   const raw = await fsp.readFile(cfgPath, "utf8");
-  const json = JSON.parse(stripJsLikeComments(raw));
+  const json = JSON.parse(stripJsLikeComments(raw)) as TsconfigJson;
   const cfgDir = path.dirname(cfgPath);
-
-  const baseUrl = path.isAbsolute(json.compilerOptions?.baseUrl ?? ".")
-    ? json.compilerOptions.baseUrl
-    : path.resolve(cfgDir, json.compilerOptions?.baseUrl ?? ".");
-  const paths = (json.compilerOptions?.paths || {}) as Record<string, string[]>;
+  const co = json.compilerOptions;
+  const baseUrlRaw = co?.baseUrl ?? ".";
+  const baseUrl = path.isAbsolute(baseUrlRaw)
+    ? baseUrlRaw
+    : path.resolve(cfgDir, baseUrlRaw);
+  const paths: Record<string, string[]> = co?.paths ?? {};
 
   if (json.extends) {
     const extendsPath = path.resolve(cfgDir, json.extends);
@@ -1155,9 +1174,11 @@ async function findWorkspaceRoot(startDir: string): Promise<string | null> {
     if (await fileExists(pkgJson)) {
       try {
         const raw = await fsp.readFile(pkgJson, "utf8");
-        const json = JSON.parse(raw);
+        const json = JSON.parse(raw) as { workspaces?: unknown };
         if (json.workspaces) return dir;
-      } catch {}
+      } catch {
+        /* invalid JSON: ignore */
+      }
     }
     if (await fileExists(pnpmYaml)) return dir;
     if (await fileExists(lernaJson)) return dir;
@@ -1340,7 +1361,9 @@ export async function loadWorkspaceConfig(
       const raw = await fsp.readFile(pnpmYamlPath, "utf8");
       const parsedGlobs = parsePnpmWorkspacePackages(raw);
       for (const g of parsedGlobs) addWorkspaceGlob(workspaceGlobs, g);
-    } catch {}
+    } catch {
+      /* parse error: ignore */
+    }
   }
 
   const lernaPath = path.join(root, "lerna.json");
@@ -1504,7 +1527,7 @@ export async function resolvePathLikeModule(
   projectRoot: string,
   spec: string,
 ): Promise<string | null> {
-  const parts = spec.split(/[\/\\.:]+/).filter(Boolean);
+  const parts = spec.split(/[/.:]+/).filter(Boolean);
   // Try extensions from the file
   const exts = [
     ".ts",
@@ -1909,7 +1932,9 @@ export async function resolveSpecifier(
           fs.accessSync(pth, fs.constants.R_OK);
           resolveSpecifierCache.set(cacheKey, pth);
           return pth;
-        } catch {}
+        } catch {
+          /* file not found: try next */
+        }
       }
       for (const e of tsExts) {
         const pth = path.join(cand, "index" + e);
@@ -1917,7 +1942,9 @@ export async function resolveSpecifier(
           fs.accessSync(pth, fs.constants.R_OK);
           resolveSpecifierCache.set(cacheKey, pth);
           return pth;
-        } catch {}
+        } catch {
+          /* file not found: try next */
+        }
       }
       resolveSpecifierCache.set(cacheKey, cand);
       return cand;
@@ -1979,7 +2006,7 @@ export async function resolveSpecifier(
 async function resolveFromNodeModules(
   spec: string,
   fromFile: string,
-  projectRoot: string,
+  _projectRoot: string,
 ): Promise<string | null> {
   try {
     // Walk up from the file directory to project root looking for node_modules
@@ -2074,7 +2101,9 @@ async function resolveFromNodeModules(
       if (parent === dir) break;
       dir = parent;
     }
-  } catch {}
+  } catch {
+    /* fs/access: ignore */
+  }
   return null;
 }
 
@@ -2176,11 +2205,11 @@ export async function getGitBlobHashes(
       });
       let stdout = "";
       let stderr = "";
-      child.stdout.on("data", (chunk) => {
-        stdout += chunk.toString();
+      child.stdout.on("data", (chunk: Buffer | string) => {
+        stdout += typeof chunk === "string" ? chunk : chunk.toString();
       });
-      child.stderr.on("data", (chunk) => {
-        stderr += chunk.toString();
+      child.stderr.on("data", (chunk: Buffer | string) => {
+        stderr += typeof chunk === "string" ? chunk : chunk.toString();
       });
       child.on("error", reject);
       child.on("close", (code) => {
@@ -2296,7 +2325,9 @@ async function findPythonPackageAnchor(startDir: string): Promise<string> {
     try {
       await fsp.access(path.join(dir, "__init__.py"), fs.constants.R_OK);
       topWithInit = dir;
-    } catch {}
+    } catch {
+      /* no __init__.py: continue */
+    }
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
@@ -2372,7 +2403,9 @@ export async function resolvePythonModule(
         resolvePythonModuleCache.set(cacheKey, res);
         return res;
       }
-    } catch {}
+    } catch {
+      /* access failed: try next */
+    }
   }
 
   // If absolute import, also try finding anchor in case project root isn't the package root
@@ -2411,7 +2444,9 @@ export async function resolvePythonModule(
           resolvePythonModuleCache.set(cacheKey, res);
           return res;
         }
-      } catch {}
+      } catch {
+        /* access failed: try next */
+      }
     }
   }
 
@@ -2472,7 +2507,7 @@ export async function mapLimit<T, R>(
 ): Promise<R[]> {
   if (items.length === 0) return [];
 
-  const results: R[] = new Array(items.length);
+  const results = new Array<R>(items.length);
   let nextIndex = 0;
   let activeCount = 0;
   let resolveAll: (() => void) | null = null;

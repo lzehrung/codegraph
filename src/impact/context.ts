@@ -37,7 +37,7 @@ export async function collectImpactContext(
   changedSymbolIds: string[],
   hops: number = 2,
 ): Promise<ImpactContext> {
-  const fileSubgraph = await collectFileSubgraph(index, impactedFiles, hops);
+  const fileSubgraph = collectFileSubgraph(index, impactedFiles, hops);
   const symbolNeighbors = await collectSymbolNeighbors(
     index,
     changedSymbolIds,
@@ -57,14 +57,14 @@ export async function collectImpactContext(
   };
 }
 
-async function collectFileSubgraph(
+function collectFileSubgraph(
   index: ProjectIndex,
   impactedFiles: FileId[],
   hops: number,
-): Promise<{
+): {
   nodes: Set<FileId>;
   edges: Array<{ from: FileId; to: FileId; typeOnly?: boolean }>;
-}> {
+} {
   const nodes = new Set<FileId>();
   const edges: Array<{ from: FileId; to: FileId; typeOnly?: boolean }> = [];
   const visited = new Set<FileId>();
@@ -252,8 +252,6 @@ export function listCandidateTestFiles(
 ): CandidateTestFile[] {
   const { testPatterns = [], maxCandidates = 100 } = options;
   const candidates = new Map<FileId, CandidateTestFile>();
-  const changedFileSet = new Set(changedFiles);
-
   // Default test patterns (can be extended by caller)
   const defaultPatterns = [
     /test/i,

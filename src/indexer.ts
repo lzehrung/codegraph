@@ -11,9 +11,7 @@ import {
   getCompiledQueries,
   type LanguageSupport,
 } from "./languages.js";
-import {
-  buildBloomFilterFromSource,
-} from "./util/bloomFilter.js";
+import { buildBloomFilterFromSource } from "./util/bloomFilter.js";
 import { prepareParserInput } from "./languages/filePrep.js";
 import {
   listProjectFiles,
@@ -414,10 +412,10 @@ function ensureJsonModule(modules: Map<FileId, ModuleIndex>, filePath: string) {
   modules.set(normalized, mod);
 }
 
-export async function goToDefinitionById(
+export function goToDefinitionById(
   index: ProjectIndex,
   id: SymbolHandle,
-): Promise<GoToResult> {
+): GoToResult {
   const def = resolveSymbolId(index, id);
   if (def) return { status: "ok", definition: def };
   return { status: "not_found", reason: "No matching definition for handle" };
@@ -666,7 +664,9 @@ function closeDiskCacheDatabase(
   if (!db) return;
   try {
     db.pragma("wal_checkpoint(TRUNCATE)");
-  } catch {}
+  } catch {
+    /* checkpoint best-effort */
+  }
   try {
     db.close();
     diskCacheDatabases.delete(dbPath);
@@ -963,7 +963,9 @@ function tryLoadFromCache(
           return parsed;
         }
       }
-    } catch {}
+    } catch {
+      /* cache read failed */
+    }
     if (cacheEnabled && cacheReport) cacheReport.misses += 1;
   }
   return null;
@@ -1224,7 +1226,7 @@ export function collectLocalsAndExportsFromSource(
   const normalizeDocstringLine = (line: string) =>
     line.replace(/^\s*(?:\/\/\/?\s?|#\s?)/, "").replace(/^\s*\*\s?/, "");
 
-  const sourceLines = source.split(/\r?\n/);
+  const _sourceLines = source.split(/\r?\n/);
 
   const extractLeadingDocstring = (
     node: Parser.SyntaxNode | null,
@@ -1353,7 +1355,9 @@ export function collectLocalsAndExportsFromSource(
       } finally {
         releaseParser(parser, key);
       }
-    } catch {}
+    } catch {
+      /* parse fallback: ignore */
+    }
   }
 
   const locals: SymbolDef[] = [];
@@ -1969,7 +1973,9 @@ export async function collectImportsForFile(
             baseDir.toLowerCase().endsWith("__init__.py")
           )
             baseDir = path.dirname(baseDir);
-        } catch {}
+        } catch {
+          /* stat failed */
+        }
         const sub = [
           path.join(baseDir, `${imported}.py`),
           path.join(baseDir, imported, "__init__.py"),
@@ -1981,7 +1987,9 @@ export async function collectImportsForFile(
               nsResolved = fs.statSync(c).isDirectory() ? c : c;
               break;
             }
-          } catch {}
+          } catch {
+            /* existsSync/stat: ignore */
+          }
         }
       }
       if (nsResolved) {
@@ -2034,7 +2042,7 @@ export async function collectImportsForFile(
       }
     }
     const reImp =
-      /^(?:\s*)import\s+([A-Za-z_][\w\.]*)\s*(?:as\s+([A-Za-z_][\w_]*))?/gm;
+      /^(?:\s*)import\s+([A-Za-z_][\w.]*)\s*(?:as\s+([A-Za-z_][\w_]*))?/gm;
     for (const m of pySrc.matchAll(reImp)) {
       const dotted = m[1]!;
       const local = (m[2] ?? dotted.split(".")[0]) as string;
@@ -2643,7 +2651,7 @@ async function buildIndexFromFileListShared(
         ? await cacheSignatureForFile(f, sigInfo)
         : sigInfo.cacheSig;
       let mod: ModuleIndex | null = cacheEnabled
-        ? await tryLoadFromCache(projectRoot, f, cacheSig, opts, report)
+        ? tryLoadFromCache(projectRoot, f, cacheSig, opts, report)
         : null;
       if (mod && fileReport) {
         fileReport.cached = (fileReport.cached ?? 0) + 1;
@@ -2769,7 +2777,7 @@ async function buildIndexFromFileListShared(
               }
           }
         }
-        await writeToCache(projectRoot, f, cacheSig, mod, opts);
+        writeToCache(projectRoot, f, cacheSig, mod, opts);
       } else {
         // If mod was cached but edges weren't, we still need to collect json deps from mod
         collectJsonDependencies(mod.imports, jsonDependencies);
@@ -2854,7 +2862,7 @@ async function buildIndexFromFileListShared(
     ensureJsonModule(modules, jsonPath);
   }
 
-  for (const [file, mod] of modules) {
+  for (const [_file, mod] of modules) {
     for (const imp of [...mod.imports]) {
       if (imp.kind === "star" && typeof imp.resolved === "string") {
         const target = modules.get(imp.resolved);
@@ -3179,7 +3187,7 @@ export async function buildProjectIndexIncremental(
         ? await cacheSignatureForFile(file, sigInfo)
         : sigInfo.cacheSig;
       const cached = cacheEnabled
-        ? await tryLoadFromCache(projectRoot, file, cacheSig, opts, report)
+        ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report)
         : null;
       if (cached) {
         if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
@@ -3289,7 +3297,7 @@ export async function buildProjectIndexIncremental(
           const cacheSig = cacheEnabled
             ? await cacheSignatureForFile(f, sigInfo)
             : sigInfo.cacheSig;
-          await writeToCache(projectRoot, f, cacheSig, mod, opts);
+          writeToCache(projectRoot, f, cacheSig, mod, opts);
           return [f, mod] as const;
         } catch (error) {
           console.warn(`Warning: Failed to process file ${f}:`, error);
@@ -3312,7 +3320,7 @@ export async function buildProjectIndexIncremental(
       ensureJsonModule(modules, jsonPath);
     }
 
-    for (const [file, m] of modules) {
+    for (const [_file, m] of modules) {
       for (const imp of [...m.imports]) {
         if (imp.kind === "star" && typeof imp.resolved === "string") {
           const target = modules.get(imp.resolved);
@@ -3918,7 +3926,7 @@ export async function goToDefinition(
 
     const memberExpressionType =
       sup.nodeTypes.memberExpression ?? "member_expression";
-    const propertyIdentifierTypes: string[] = sup.nodeTypes
+    const _propertyIdentifierTypes: string[] = sup.nodeTypes
       .propertyIdentifier ?? ["property_identifier"];
     const optionalMemberTypes = new Set<string>([
       memberExpressionType,
@@ -4048,7 +4056,7 @@ export async function goToDefinition(
         sup.id === "ruby" ||
         sup.id === "rust")
     ) {
-      const nsName = sliceText(obj, source);
+      const _nsName = sliceText(obj, source);
       const member = sliceText(prop, source);
       let objDef: SymbolDef | null = null;
       const res = await resolveExpression(obj);
@@ -4316,7 +4324,9 @@ export function resolveImported(
               },
             };
           }
-        } catch {}
+        } catch {
+          /* resolve fallback */
+        }
       }
       return {
         file: targetFile.replace(/\\/g, "/"),
@@ -4666,7 +4676,7 @@ function sameDef(a: SymbolDef, b: SymbolDef) {
   return a.file === b.file && a.localName === b.localName && aIndex === bIndex;
 }
 
-function rangeContains(
+function _rangeContains(
   range: Range,
   pos: { row: number; column: number },
 ): boolean {
@@ -4775,9 +4785,9 @@ export async function findReferences(
   const definitionFile = def.file;
   const parsedDef = index.parsed?.get(definitionFile);
   const parsedContext = await ensureParsedContext(definitionFile, parsedDef);
-  const sup = parsedContext.sup;
-  const lang = parsedContext.lang;
-  const src = parsedContext.source;
+  const _sup = parsedContext.sup;
+  const _lang = parsedContext.lang;
+  const _src = parsedContext.source;
   const getCachedScope = (
     fileId: string,
     moduleIndex: ModuleIndex,
@@ -4905,7 +4915,7 @@ export async function findReferences(
               ? sameDef(hit.def, def)
               : targetFile === definitionFile;
           if (!matchesDef) continue;
-          const scopeIdx = await ensure();
+          const _scopeIdx = await ensure();
           const nsName = imp.localNS;
           const member = name;
           const ranges = await collectNamespaceMemberRefs(f, nsName, member);

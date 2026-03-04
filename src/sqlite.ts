@@ -65,6 +65,14 @@ type BetterSqliteDatabase = import("better-sqlite3").Database;
 
 const SQLITE_SCHEMA_VERSION = 2;
 
+const toSqliteText = (value: unknown): string => {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return "";
+};
+
 const hasColumn = (
   db: BetterSqliteDatabase,
   table: string,
@@ -258,7 +266,7 @@ const ensureSchema = (db: BetterSqliteDatabase) => {
   const existingIndexes = new Set<string>();
   for (const row of indexRows) {
     if (!Array.isArray(row)) continue;
-    const name = row[0] ? String(row[0]) : "";
+    const name = toSqliteText(row[0]);
     if (name) existingIndexes.add(name);
   }
 
@@ -508,7 +516,10 @@ const readSymbolIdsForFiles = (
   const sql = `SELECT id FROM symbols WHERE file IN (${placeholders});`;
   const values = execRowsParams(db, sql, files);
   return values
-    .map((row) => (row[0] ? String(row[0]) : null))
+    .map((row) => {
+      const id = toSqliteText(row[0]);
+      return id || null;
+    })
     .filter((id): id is string => !!id);
 };
 
@@ -754,7 +765,7 @@ export async function queryGraphSqlite(
         `SELECT file FROM symbols WHERE name = ? AND kind = ? LIMIT 1;`,
         [parsed.className, "class"],
       );
-      const startFile = rows[0]?.[0] ? String(rows[0][0]) : "";
+      const startFile = rows[0] ? toSqliteText(rows[0][0]) : "";
       if (!startFile) {
         db.close();
         return { kind: parsed.kind, results: [] };
