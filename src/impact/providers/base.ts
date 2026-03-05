@@ -1,4 +1,5 @@
 import type { Diff, DiffProviderOptions } from "../types.js";
+import { spawn } from "node:child_process";
 import { parseUnifiedDiff, parseUnifiedDiffStreaming } from "../parse.js";
 
 export interface DiffProvider {
@@ -29,24 +30,39 @@ async function runGitCommand(
   args: string[],
   rejectOnFailure: boolean,
 ): Promise<string> {
-  const { spawn } = await import("child_process");
   return await new Promise((resolve, reject) => {
     const child = spawn("git", args, { cwd });
     let stdout = "";
     let stderr = "";
+    let closeCode: number | null = null;
+    let stdoutEnded = false;
+
+    const maybeResolve = () => {
+      if (closeCode === null || !stdoutEnded) return;
+      if (closeCode !== 0 && rejectOnFailure) {
+        reject(
+          new Error(
+            `git ${args.join(" ")} failed with code ${closeCode}: ${stderr}`,
+          ),
+        );
+        return;
+      }
+      resolve(stdout.trim());
+    };
 
     child.stdout.on("data", (data) => {
       stdout += String(data);
+    });
+    child.stdout.on("end", () => {
+      stdoutEnded = true;
+      maybeResolve();
     });
     child.stderr.on("data", (data) => {
       stderr += String(data);
     });
     child.on("close", (code) => {
-      if (code !== 0 && rejectOnFailure) {
-        reject(new Error(`git ${args.join(" ")} failed with code ${code}: ${stderr}`));
-        return;
-      }
-      resolve(stdout.trim());
+      closeCode = code ?? 0;
+      maybeResolve();
     });
     child.on("error", reject);
   });
@@ -57,7 +73,6 @@ class GitDiffProvider implements DiffProvider {
   async getDiff(
     opts: Extract<DiffProviderOptions, { provider: "git" }>,
   ): Promise<Diff> {
-    const { spawn } = await import("child_process");
     const cwd = opts.cwd || process.cwd();
 
     // Circuit breaker: check diff size first

@@ -26,6 +26,6 @@ export function compileTestPatterns(
 }
 
 export function isTestFilePath(file: FileId, patterns: RegExp[]): boolean {
-  const normalized = file.replace(/\\/g, "/").toLowerCase();
+  const normalized = file.replace(/\\/g, "/");
   return patterns.some((pattern) => pattern.test(normalized));
 }

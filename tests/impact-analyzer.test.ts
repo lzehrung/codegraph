@@ -174,6 +174,40 @@ describe("Impact Analyzer Edge Cases", () => {
       expect(Array.from(impacted.values()).some((item) => item.file.endsWith("latest.ts"))).toBe(true);
     });
 
+
+    it("supports case-sensitive custom test patterns", async () => {
+      const featureFile = path.resolve("src/feature.ts");
+      const testFile = path.resolve("Checks/MyTests.ts");
+      const edges: Edge[] = [
+        {
+          from: testFile,
+          to: { type: "file", path: featureFile },
+          raw: "./feature",
+        },
+      ];
+      const index: ProjectIndex = {
+        graph: { nodes: new Set([featureFile, testFile]), edges },
+        modules: new Map(),
+        byFile: new Map(),
+        exportCache: new Map(),
+        scopeCache: new Map(),
+      };
+
+      const impacted = new Map();
+      await seedTransitiveFromFiles(
+        index,
+        impacted,
+        [{ path: featureFile, kind: "deleted", hunks: [] }],
+        { includeTests: false, testPatterns: ["MyTests\\.ts$"] },
+      );
+
+      expect(
+        Array.from(impacted.values()).some((item) =>
+          item.file.endsWith("MyTests.ts"),
+        ),
+      ).toBe(false);
+    });
+
     it("supports custom test patterns", async () => {
       const featureFile = path.resolve("src/feature.ts");
       const testFile = path.resolve("checks/feature.case.ts");

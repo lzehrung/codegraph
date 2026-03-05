@@ -167,7 +167,7 @@ function parseHeaderLine(currentFile: ParsedFileChange, line: string): void {
 }
 
 function initiateFile(line: string): ParsedFileChange | null {
-  const match = line.match(/^diff --git a\/(.+) b\/(.+)$/);
+  const match = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
   if (!match) return null;
   return {
     path: decodeGitPath(match[2]!),

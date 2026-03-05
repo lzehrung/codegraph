@@ -20,13 +20,16 @@ describe("Impact Circuit Breaker & Warning Propagation", () => {
     vi.clearAllMocks();
   });
 
-  const setupSpawnCall = (output: string) => ({
-    stdout: Readable.from([output]),
-    stderr: { on: vi.fn() },
-    on: vi.fn((event: string, cb: (code: number) => void) => {
-      if (event === "close") setTimeout(() => cb(0), 0);
-    }),
-  });
+  const setupSpawnCall = (output: string, code = 0) => {
+    const stdout = Readable.from([output]);
+    return {
+      stdout,
+      stderr: { on: vi.fn() },
+      on: vi.fn((event: string, cb: (code: number) => void) => {
+        if (event === "close") cb(code);
+      }),
+    };
+  };
 
   const setupMocks = (statOutput: string, diffContent = "") => {
     mockSpawn
@@ -91,13 +94,7 @@ describe("Impact Circuit Breaker & Warning Propagation", () => {
 
   it("should fallback gracefully if shortstat fails", async () => {
     mockSpawn
-      .mockReturnValueOnce({
-        stdout: Readable.from([]),
-        stderr: { on: vi.fn() },
-        on: vi.fn((event: string, cb: (code: number) => void) => {
-          if (event === "close") setTimeout(() => cb(1), 0);
-        }),
-      })
+      .mockReturnValueOnce(setupSpawnCall("", 1))
       .mockReturnValueOnce(
         setupSpawnCall(
           "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n",

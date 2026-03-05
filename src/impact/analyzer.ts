@@ -318,7 +318,7 @@ export function seedTransitiveFromFiles(
       }
     }
 
-    if (fileChange.kind === "deleted" || fileChange.kind === "renamed") {
+    else if (fileChange.kind === "deleted" || fileChange.kind === "renamed") {
       const dependents = reverseDeps
         ? (reverseDeps.get(fileChange.path)?.map((edge) => edge.from) ?? [])
         : index.graph.edges
