@@ -23,19 +23,51 @@ function createProvider(providerType: string): DiffProvider {
   }
 }
 
+
+async function runGitCommand(
+  cwd: string,
+  args: string[],
+  rejectOnFailure: boolean,
+): Promise<string> {
+  const { spawn } = await import("child_process");
+  return await new Promise((resolve, reject) => {
+    const child = spawn("git", args, { cwd });
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (data) => {
+      stdout += String(data);
+    });
+    child.stderr.on("data", (data) => {
+      stderr += String(data);
+    });
+    child.on("close", (code) => {
+      if (code !== 0 && rejectOnFailure) {
+        reject(new Error(`git ${args.join(" ")} failed with code ${code}: ${stderr}`));
+        return;
+      }
+      resolve(stdout.trim());
+    });
+    child.on("error", reject);
+  });
+}
+
 // Forward declarations - will be implemented in separate files
 class GitDiffProvider implements DiffProvider {
   async getDiff(
     opts: Extract<DiffProviderOptions, { provider: "git" }>,
   ): Promise<Diff> {
-    const { execSync, spawn } = await import("child_process");
+    const { spawn } = await import("child_process");
     const cwd = opts.cwd || process.cwd();
 
     // Circuit breaker: check diff size first
-    const statCmd = `git diff --shortstat ${opts.base}..${opts.head}`;
     let warning: string | undefined;
     try {
-      const statOutput = execSync(statCmd, { cwd, encoding: "utf8" }).trim();
+      const statOutput = await runGitCommand(
+        cwd,
+        ["diff", "--shortstat", `${opts.base}..${opts.head}`],
+        false,
+      );
       if (statOutput) {
         const insertionMatch = statOutput.match(/(\d+) insertion/);
         const deletionMatch = statOutput.match(/(\d+) deletion/);

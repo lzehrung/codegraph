@@ -16,6 +16,7 @@ import { analyzeImpact } from "./analyzer.js";
 import { buildImpactReport } from "./report.js";
 import { collectImpactSuggestions } from "./suggestions.js";
 import { listCandidateTestFiles } from "./context.js";
+import { mapLimit } from "../util.js";
 
 export * from "./types.js";
 export { analyzeImpactStreaming, type ImpactStreamChunk } from "./streaming.js";
@@ -961,15 +962,22 @@ export async function analyzeImpactFromDiff(
       : diff.files;
 
   // Map all changed files to changed symbols
+  const changedByFile = await mapLimit(
+    filteredFiles.map((fileChange, idx) => ({ fileChange, idx })),
+    8,
+    async ({ fileChange, idx }) => {
+      const absPath = normalizeFilePath(projectRoot, fileChange.path);
+      const symbols = await locateChangedSymbols(index, absPath, fileChange.hunks);
+      return { idx, path: absPath, symbols };
+    },
+  );
+
+  changedByFile.sort((a, b) => a.idx - b.idx);
   let changedSymbols: ChangedSymbol[] = [];
-  for (const fileChange of filteredFiles) {
-    const absPath = normalizeFilePath(projectRoot, fileChange.path);
-    const symbols = await locateChangedSymbols(
-      index,
-      absPath,
-      fileChange.hunks,
-    );
-    changedSymbols.push(...symbols);
+  const filesWithSymbols = new Set<string>();
+  for (const entry of changedByFile) {
+    if (entry.symbols.length > 0) filesWithSymbols.add(entry.path);
+    changedSymbols.push(...entry.symbols);
   }
 
   // Honor scope option: only consider exported symbols if scope=imported
@@ -977,13 +985,21 @@ export async function analyzeImpactFromDiff(
     changedSymbols = changedSymbols.filter((s) => s.exported);
   }
 
+  const normalizedChanges = filteredFiles.map((change) => ({
+    ...change,
+    path: normalizeFilePath(projectRoot, change.path),
+  }));
+  const fileLevelFallback = options.fileLevelFallback ?? true;
+  const fileLevelFallbackPaths = normalizedChanges
+    .filter((change) => change.kind === "modified" && !filesWithSymbols.has(change.path))
+    .map((change) => change.path);
+
   // Analyze impact
-  const impactedItems = await analyzeImpact(
-    index,
-    changedSymbols,
-    filteredFiles,
-    options,
-  );
+  const impactedItems = await analyzeImpact(index, changedSymbols, normalizedChanges, {
+    ...options,
+    fileLevelFallback,
+    fileLevelFallbackPaths,
+  });
 
   const suggestions = options.verifyReferences
     ? await collectImpactSuggestions(index, projectRoot, filteredFiles, options)

@@ -1,6 +1,7 @@
 import type { FileId, Edge } from "../types.js";
 import type { ProjectIndex, SymbolDef, Reference } from "../indexer.js";
 import pm from "picomatch";
+import { compileTestPatterns, isTestFilePath } from "./testPatterns.js";
 import type {
   ChangedSymbol,
   ImpactItem,
@@ -24,6 +25,7 @@ const REASON_PRIORITY: Readonly<Record<ImpactReason, number>> = {
   importAlias: 2,
   exportChain: 1,
   transitive: 0,
+  fileLevelChange: 0,
 };
 
 /** Explain object for impact severity calculation */
@@ -87,7 +89,7 @@ export async function analyzeImpact(
     refBlockMaxLines,
   } = options;
 
-  const patternMatchers = buildTestPatterns(testPatterns);
+  const patternMatchers = compileTestPatterns(testPatterns);
   const isIgnored: (p: string) => boolean =
     ignoreGlobs.length > 0
       ? (pm as (g: string[]) => (s: string) => boolean)(ignoreGlobs)
@@ -140,7 +142,7 @@ export async function analyzeImpact(
 
         if (refs.status === "ok") {
           for (const ref of refs.references.slice(0, maxRefs)) {
-            if (!includeTests && isTestFile(ref.file, patternMatchers))
+            if (!includeTests && isTestFilePath(ref.file, patternMatchers))
               continue;
             if (isIgnored(ref.file)) continue;
 
@@ -269,7 +271,8 @@ export function seedTransitiveFromFiles(
   reverseDeps?: Map<FileId, Edge[]>,
 ): void {
   const { includeTests = false, testPatterns, ignoreGlobs = [] } = options;
-  const patternMatchers = buildTestPatterns(testPatterns);
+  const patternMatchers = compileTestPatterns(testPatterns);
+  const fallbackPathSet = new Set(options.fileLevelFallbackPaths ?? []);
   const isIgnored: (p: string) => boolean =
     ignoreGlobs.length > 0
       ? (pm as (g: string[]) => (s: string) => boolean)(ignoreGlobs)
@@ -280,6 +283,41 @@ export function seedTransitiveFromFiles(
     if (impacted.has(fileChange.path) || isIgnored(fileChange.path)) continue;
 
     // For deleted/renamed files, seed transitive impact from files that depended on them
+
+    if (
+      fileChange.kind === "modified" &&
+      options.fileLevelFallback &&
+      fallbackPathSet.has(fileChange.path)
+    ) {
+      const dependents = reverseDeps
+        ? (reverseDeps.get(fileChange.path)?.map((edge) => edge.from) ?? [])
+        : index.graph.edges
+            .filter(
+              (edge) =>
+                edge.to.type === "file" && edge.to.path === fileChange.path,
+            )
+            .map((edge) => edge.from);
+
+      for (const dependent of dependents) {
+        if (!includeTests && isTestFilePath(dependent, patternMatchers)) continue;
+        if (impacted.has(dependent) || isIgnored(dependent)) continue;
+
+        impacted.set(dependent, {
+          file: dependent,
+          symbols: [],
+          reasons: ["fileLevelChange"],
+          severity: 0.45,
+          depth: 1,
+          explain: {
+            reason: "fileLevelChange",
+            depth: 1,
+            hints: ["changedFileNoSymbols"],
+          },
+          confidence: 0.5,
+        });
+      }
+    }
+
     if (fileChange.kind === "deleted" || fileChange.kind === "renamed") {
       const dependents = reverseDeps
         ? (reverseDeps.get(fileChange.path)?.map((edge) => edge.from) ?? [])
@@ -291,7 +329,7 @@ export function seedTransitiveFromFiles(
             .map((edge) => edge.from);
 
       for (const dependent of dependents) {
-        if (!includeTests && isTestFile(dependent, patternMatchers)) continue;
+        if (!includeTests && isTestFilePath(dependent, patternMatchers)) continue;
         if (impacted.has(dependent) || isIgnored(dependent)) continue;
 
         const hints = ["fileDeleted"];
@@ -325,7 +363,7 @@ function analyzeTransitiveImpact(
   reverseDeps: Map<FileId, Edge[]>,
 ): void {
   const { testPatterns, ignoreGlobs = [] } = options;
-  const patternMatchers = buildTestPatterns(testPatterns);
+  const patternMatchers = compileTestPatterns(testPatterns);
   const isIgnored: (p: string) => boolean =
     ignoreGlobs.length > 0
       ? (pm as (g: string[]) => (s: string) => boolean)(ignoreGlobs)
@@ -353,7 +391,7 @@ function analyzeTransitiveImpact(
       const dependentFile = edge.from;
       if (
         visited.has(dependentFile) ||
-        (!options.includeTests && isTestFile(dependentFile, patternMatchers)) ||
+        (!options.includeTests && isTestFilePath(dependentFile, patternMatchers)) ||
         isIgnored(dependentFile)
       )
         continue;
@@ -443,6 +481,10 @@ export function calculateSeverity(
     score *= validatedWeights.importAlias;
     explain.reason = "importAlias";
     confidence = 0.85; // Import alias tracking is reliable
+  } else if (reasons.includes("fileLevelChange")) {
+    score *= validatedWeights.transitive * 0.9;
+    explain.reason = "fileLevelChange";
+    confidence = 0.5;
   } else {
     score *= validatedWeights.transitive;
     explain.reason = "transitive";
@@ -522,13 +564,3 @@ function calculateTransitiveSeverity(edge: Edge, depth: number): number {
   return score;
 }
 
-function buildTestPatterns(patterns?: string[]): RegExp[] {
-  const defaults = [/test/i, /spec/i, /__tests__/, /\.test\./, /\.spec\./];
-  const custom = (patterns ?? []).map((pattern) => new RegExp(pattern));
-  return [...defaults, ...custom];
-}
-
-function isTestFile(file: FileId, patterns: RegExp[]): boolean {
-  const lower = file.toLowerCase();
-  return patterns.some((pattern) => pattern.test(lower));
-}

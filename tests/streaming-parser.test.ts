@@ -29,6 +29,14 @@ rename to renamed_new.ts
 @@ -1,1 +1,1 @@
 -old
 +new
+diff --git a/source.ts b/copied.ts
+copy from source.ts
+copy to copied.ts
+--- a/source.ts
++++ b/copied.ts
+@@ -1,1 +1,1 @@
+-old
++new
 `;
 
   it("should parse streaming diff identically to synchronous parser", async () => {
@@ -38,7 +46,7 @@ rename to renamed_new.ts
 
     expect(streamResult).toEqual(syncResult);
     
-    expect(streamResult.files).toHaveLength(4);
+    expect(streamResult.files).toHaveLength(5);
     
     const added = streamResult.files.find(f => f.path === "added.ts");
     expect(added?.kind).toBe("added");
@@ -52,19 +60,23 @@ rename to renamed_new.ts
     const renamed = streamResult.files.find(f => f.path === "renamed_new.ts");
     expect(renamed?.kind).toBe("renamed");
     expect(renamed?.oldPath).toBe("renamed_old.ts");
+
+    const copied = streamResult.files.find(f => f.path === "copied.ts");
+    expect(copied?.kind).toBe("added");
+    expect(copied?.oldPath).toBe("source.ts");
   });
 
   it("should handle large chunks correctly", async () => {
     const stream = Readable.from([sampleDiff]);
     const result = await parseUnifiedDiffStreaming(stream);
-    expect(result.files).toHaveLength(4);
+    expect(result.files).toHaveLength(5);
   });
 
   it("should handle multi-line chunks correctly", async () => {
     const chunks = sampleDiff.split("\n").map(l => l + "\n");
     const stream = Readable.from(chunks);
     const result = await parseUnifiedDiffStreaming(stream);
-    expect(result.files).toHaveLength(4);
+    expect(result.files).toHaveLength(5);
   });
 
   it("should propagate stream errors", async () => {

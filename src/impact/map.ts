@@ -213,22 +213,25 @@ function findNodesInLines(
 
   const nodes: Parser.SyntaxNode[] = [];
 
-  function walk(node: Parser.SyntaxNode) {
+  function walk(node: Parser.SyntaxNode): boolean {
     const startLine = node.startPosition?.row + 1;
     const endLine = node.endPosition?.row + 1;
 
     // Prune: if this node's range is entirely outside all changed lines, skip subtree.
-    if (endLine < minLine || startLine > maxLine) return;
+    if (endLine < minLine || startLine > maxLine) return false;
 
     // Binary-search check: O(log #changedLines) instead of O(node line span).
-    if (hasOverlapSorted(sortedLines, startLine, endLine)) {
-      nodes.push(node);
+    const overlaps = hasOverlapSorted(sortedLines, startLine, endLine);
+    if (!overlaps) return false;
+
+    let childMatched = false;
+    for (const child of node.namedChildren || []) {
+      childMatched = walk(child) || childMatched;
     }
 
-    // Walk children (safe: already pruned obvious non-overlaps above).
-    for (const child of node.namedChildren || []) {
-      walk(child);
-    }
+    // Keep the nearest overlapping nodes to reduce ancestor/descendant duplicates.
+    if (!childMatched) nodes.push(node);
+    return true;
   }
 
   walk(tree.rootNode);

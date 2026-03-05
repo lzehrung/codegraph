@@ -854,6 +854,8 @@ const incremental = await buildProjectIndexIncremental(root, {
 
 `buildProjectIndexIncremental` loads the cached manifest, reuses unchanged modules/edges, and only reparses the files reported as changed (via Git flags or an explicit `files` list). The manifest is rewritten after each run so repeated PR reviews stay incremental.
 
+`changedSince` follows `git diff <rev>` semantics (that revision compared to the current working tree and index), while `gitBase`/`gitHead` use an explicit commit range (`<base>..<head>`).
+
 ### Agent query helpers (symbol graph)
 
 Symbol query syntax is a compact `key:value` format with optional free-text:

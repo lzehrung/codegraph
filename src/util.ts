@@ -2246,6 +2246,11 @@ export async function getGitBlobHashes(
   }
 }
 
+/**
+ * List files changed in Git.
+ * - base/head: compares commits in the explicit range `${base}..${head ?? "HEAD"}`.
+ * - changedSince: runs `git diff <rev>` (that revision vs current working tree/index).
+ */
 export async function listChangedFiles(
   projectRoot: string,
   opts: {
@@ -2284,6 +2289,11 @@ export async function listChangedFiles(
   }
 }
 
+/**
+ * Get unified diff text from Git.
+ * - base/head: compares commits in the explicit range `${base}..${head ?? "HEAD"}`.
+ * - changedSince: runs `git diff <rev>` (that revision vs current working tree/index).
+ */
 export async function getUnifiedDiff(
   projectRoot: string,
   opts: {

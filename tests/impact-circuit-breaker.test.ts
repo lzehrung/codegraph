@@ -7,34 +7,31 @@ vi.mock("node:child_process", async () => {
   const actual = await vi.importActual("node:child_process");
   return {
     ...actual,
-    execSync: vi.fn(),
     spawn: vi.fn(),
   };
 });
 
 describe("Impact Circuit Breaker & Warning Propagation", () => {
-  let mockExecSync: Mock;
   let mockSpawn: Mock;
 
   beforeEach(async () => {
     const cp = await import("node:child_process");
-    mockExecSync = vi.mocked(cp.execSync);
     mockSpawn = vi.mocked(cp.spawn);
     vi.clearAllMocks();
   });
 
-  const setupMocks = (statOutput: string, diffContent = "") => {
-    mockExecSync.mockReturnValue(statOutput);
+  const setupSpawnCall = (output: string) => ({
+    stdout: Readable.from([output]),
+    stderr: { on: vi.fn() },
+    on: vi.fn((event: string, cb: (code: number) => void) => {
+      if (event === "close") setTimeout(() => cb(0), 0);
+    }),
+  });
 
-    const mockStdout = Readable.from([diffContent]);
-    const mockChild = {
-      stdout: mockStdout,
-      stderr: { on: vi.fn() },
-      on: vi.fn((event: string, cb: (code: number) => void) => {
-        if (event === "close") cb(0);
-      }),
-    };
-    mockSpawn.mockReturnValue(mockChild);
+  const setupMocks = (statOutput: string, diffContent = "") => {
+    mockSpawn
+      .mockReturnValueOnce(setupSpawnCall(statOutput))
+      .mockReturnValueOnce(setupSpawnCall(diffContent));
   };
 
   const index: ProjectIndex = {
@@ -93,21 +90,19 @@ describe("Impact Circuit Breaker & Warning Propagation", () => {
   });
 
   it("should fallback gracefully if shortstat fails", async () => {
-    mockExecSync.mockImplementation(() => {
-      throw new Error("git failed");
-    });
-
-    const mockStdout = Readable.from([
-      "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n",
-    ]);
-    const mockChild = {
-      stdout: mockStdout,
-      stderr: { on: vi.fn() },
-      on: vi.fn((event: string, cb: (code: number) => void) => {
-        if (event === "close") cb(0);
-      }),
-    };
-    mockSpawn.mockReturnValue(mockChild);
+    mockSpawn
+      .mockReturnValueOnce({
+        stdout: Readable.from([]),
+        stderr: { on: vi.fn() },
+        on: vi.fn((event: string, cb: (code: number) => void) => {
+          if (event === "close") setTimeout(() => cb(1), 0);
+        }),
+      })
+      .mockReturnValueOnce(
+        setupSpawnCall(
+          "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n",
+        ),
+      );
 
     const result = await analyzeImpactFromDiff(".", index, {
       provider: "git",

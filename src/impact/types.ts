@@ -48,7 +48,8 @@ export type ImpactReason =
   | "namespaceMember" // usage via namespace import (ns.symbol)
   | "importAlias" // usage via import alias
   | "transitive" // indirect impact through file dependencies
-  | "exportChain"; // impact through re-export chains
+  | "exportChain" // impact through re-export chains
+  | "fileLevelChange"; // fallback for changed files without symbol-level mapping
 
 export type ImpactSuggestionKind =
   | "missingImport"
@@ -371,4 +372,8 @@ export type ImpactOptions = DiffProviderOptions & {
   testCommandTemplate?: string;
   /** Custom severity weights for impact scoring */
   severityWeights?: Partial<SeverityWeights>;
+  /** When true, propagate impact from changed files that map to zero changed symbols */
+  fileLevelFallback?: boolean;
+  /** Internal use: absolute file paths that should trigger file-level fallback propagation */
+  fileLevelFallbackPaths?: string[];
 };

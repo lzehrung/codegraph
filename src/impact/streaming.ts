@@ -67,6 +67,7 @@ export async function* analyzeImpactStreaming(
     };
 
     let changedSymbols: ChangedSymbol[] = [];
+    const filesWithSymbols = new Set<string>();
     for (const fileChange of filteredFiles) {
       const absPath = path.isAbsolute(fileChange.path)
         ? fileChange.path.replace(/\\/g, "/")
@@ -77,6 +78,7 @@ export async function* analyzeImpactStreaming(
         fileChange.hunks,
       );
 
+      if (symbols.length > 0) filesWithSymbols.add(absPath);
       for (const symbol of symbols) {
         yield { type: "changedSymbol", symbol };
         changedSymbols.push(symbol);
@@ -96,12 +98,22 @@ export async function* analyzeImpactStreaming(
       total: 4,
     };
 
-    const impactedItems = await analyzeImpact(
-      index,
-      changedSymbols,
-      filteredFiles,
-      options,
-    );
+    const normalizedChanges = filteredFiles.map((change) => ({
+      ...change,
+      path: path.isAbsolute(change.path)
+        ? change.path.replace(/\\/g, "/")
+        : path.resolve(projectRoot, change.path).replace(/\\/g, "/"),
+    }));
+    const fileLevelFallback = options.fileLevelFallback ?? true;
+    const fileLevelFallbackPaths = normalizedChanges
+      .filter((change) => change.kind === "modified" && !filesWithSymbols.has(change.path))
+      .map((change) => change.path);
+
+    const impactedItems = await analyzeImpact(index, changedSymbols, normalizedChanges, {
+      ...options,
+      fileLevelFallback,
+      fileLevelFallbackPaths,
+    });
 
     for (const item of impactedItems) {
       yield { type: "impactItem", item };

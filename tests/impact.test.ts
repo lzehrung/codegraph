@@ -98,6 +98,44 @@ index 1234567..abcdef0 100644
       expect(diff.files[0].oldPath).toBe("oldname.ts");
     });
 
+
+    it("should parse diff with copies as added files", () => {
+      const diffText = `diff --git a/src/original.ts b/src/copied.ts
+similarity index 100%
+copy from src/original.ts
+copy to src/copied.ts
+--- a/src/original.ts
++++ b/src/copied.ts
+@@ -1,2 +1,2 @@
+ export const value = 42;
+`;
+
+      const diff = parseUnifiedDiff(diffText);
+      expect(diff.files).toHaveLength(1);
+      expect(diff.files[0].kind).toBe("added");
+      expect(diff.files[0].path).toBe("src/copied.ts");
+      expect(diff.files[0].oldPath).toBe("src/original.ts");
+    });
+
+    it("should parse quoted git paths", () => {
+      const diffText = `diff --git a/"src/old\\040name.ts" b/"src/new\\040name.ts"
+similarity index 100%
+rename from "src/old\\040name.ts"
+rename to "src/new\\040name.ts"
+--- a/"src/old\\040name.ts"
++++ b/"src/new\\040name.ts"
+@@ -1 +1 @@
+-export const oldValue = 1;
++export const newValue = 1;
+`;
+
+      const diff = parseUnifiedDiff(diffText);
+      expect(diff.files).toHaveLength(1);
+      expect(diff.files[0].kind).toBe("renamed");
+      expect(diff.files[0].oldPath).toBe("src/old name.ts");
+      expect(diff.files[0].path).toBe("src/new name.ts");
+    });
+
     it("should keep deletion lines in hunks", () => {
       const diffText = `diff --git a/utils.ts b/utils.ts
 index 1234567..abcdef0 100644
@@ -119,6 +157,55 @@ index 1234567..abcdef0 100644
   });
 
   describe("Impact Analysis", () => {
+
+    it("adds file-level fallback impact for modified files without symbols", async () => {
+      const root = await fsp.mkdtemp(path.join(process.cwd(), "tmp-impact-fallback-"));
+      try {
+        await fsp.writeFile(
+          path.join(root, "main.ts"),
+          `import "./setup";
+export const run = () => 1;
+`,
+          "utf8",
+        );
+        await fsp.writeFile(
+          path.join(root, "setup.ts"),
+          `console.log("boot");
+`,
+          "utf8",
+        );
+
+        const index = await buildProjectIndexFromFiles(root, [
+          path.join(root, "main.ts"),
+          path.join(root, "setup.ts"),
+        ]);
+
+        const diffText = `diff --git a/setup.ts b/setup.ts
+index 1234567..abcdef0 100644
+--- a/setup.ts
++++ b/setup.ts
+@@ -1 +1 @@
+-console.log("boot");
++console.log("boot-now");
+`;
+
+        const report = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+        });
+
+        expect(
+          report.impacted.some(
+            (item) =>
+              item.file.endsWith("main.ts") &&
+              item.reasons.includes("fileLevelChange"),
+          ),
+        ).toBe(true);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("should analyze impact from diff text", async () => {
       const index = await createTestIndex("typescript");
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
