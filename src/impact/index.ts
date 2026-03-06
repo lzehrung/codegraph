@@ -1043,11 +1043,14 @@ export async function analyzeImpactFromDiff(
     .filter((change) => change.kind !== "deleted" && !filesWithSymbols.has(change.path))
     .map((change) => change.path);
 
-  const fanInByFile = new Map<string, number>();
-  for (const edge of index.graph.edges) {
-    if (edge.to.type !== "file") continue;
-    const current = fanInByFile.get(edge.to.path) ?? 0;
-    fanInByFile.set(edge.to.path, current + 1);
+  let fanInByFile: Map<string, number> | undefined;
+  if (options.testCoverageSuggestions) {
+    fanInByFile = new Map<string, number>();
+    for (const edge of index.graph.edges) {
+      if (edge.to.type !== "file") continue;
+      const current = fanInByFile.get(edge.to.path) ?? 0;
+      fanInByFile.set(edge.to.path, current + 1);
+    }
   }
 
   // Analyze impact

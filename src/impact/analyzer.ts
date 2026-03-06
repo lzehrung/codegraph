@@ -143,7 +143,8 @@ export async function analyzeImpact(
 
         if (refs.status === "ok") {
           let keptRefs = 0;
-          for (const ref of refs.references) {
+          for (let refIndex = 0; refIndex < refs.references.length; refIndex += 1) {
+            const ref = refs.references[refIndex]!;
             if (diagnostics) diagnostics.refsScanned += 1;
             if (!includeTests && isTestFilePath(ref.file, patternMatchers)) {
               if (diagnostics) diagnostics.refsFilteredTests += 1;
@@ -154,9 +155,10 @@ export async function analyzeImpact(
               continue;
             }
             if (keptRefs >= maxRefs) {
-              if (diagnostics) diagnostics.refsDroppedByMaxRefs += 1;
-              if (!diagnostics) break;
-              continue;
+              if (diagnostics) {
+                diagnostics.refsDroppedByMaxRefs += refs.references.length - refIndex;
+              }
+              break;
             }
             keptRefs += 1;
 
