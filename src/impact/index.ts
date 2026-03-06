@@ -9,9 +9,10 @@ import type {
   ChangedSymbol,
   FileChange,
   ImpactSuggestion,
+  ImpactDiagnostics,
 } from "./types.js";
 import { getDiff } from "./providers/base.js";
-import { locateChangedSymbols } from "./map.js";
+import { locateChangedSymbolsWithLines } from "./map.js";
 import { analyzeImpact } from "./analyzer.js";
 import { buildImpactReport } from "./report.js";
 import { collectImpactSuggestions } from "./suggestions.js";
@@ -30,20 +31,24 @@ function collectRemovedLines(change: FileChange): Set<number> {
   for (const hunk of change.hunks) {
     let oldLine = hunk.oldStart;
     let newLine = hunk.newStart;
+    let deletionStreak = 0;
     for (const line of hunk.lines) {
       if (line.startsWith(" ")) {
         oldLine += 1;
         newLine += 1;
+        deletionStreak = 0;
         continue;
       }
       if (line.startsWith("-")) {
-        const mapped = newLine > 0 ? newLine : oldLine;
+        const mapped = newLine > 0 ? newLine + deletionStreak : oldLine;
         removed.add(mapped);
         oldLine += 1;
+        deletionStreak += 1;
         continue;
       }
       if (line.startsWith("+")) {
         newLine += 1;
+        deletionStreak = 0;
       }
     }
   }
@@ -62,6 +67,16 @@ function collectAddedLines(change: FileChange): string[] {
     }
   }
   return added;
+}
+
+function collectRemovedLinesText(change: FileChange): string[] {
+  const removed: string[] = [];
+  for (const hunk of change.hunks) {
+    for (const line of hunk.lines) {
+      if (line.startsWith("-")) removed.push(line.slice(1));
+    }
+  }
+  return removed;
 }
 
 function collectRemovedAndAddedLines(change: FileChange): string[] {
@@ -138,9 +153,13 @@ function classifyConfigImpact(
 ): { details: string; confidence: "high" | "medium" } {
   const lowerPath = change.path.toLowerCase();
   const addedLines = collectAddedLines(change).join("\n").toLowerCase();
+  const removedLines = collectRemovedLinesText(change)
+    .join("\n")
+    .toLowerCase();
+  const lineSignals = `${addedLines}\n${removedLines}`;
 
   if (lowerPath.endsWith("package.json")) {
-    if (addedLines.includes('"scripts"')) {
+    if (lineSignals.includes('"scripts"')) {
       return {
         details:
           "package.json scripts changed; CI/build workflows may be affected across packages.",
@@ -148,8 +167,8 @@ function classifyConfigImpact(
       };
     }
     if (
-      addedLines.includes('"dependencies"') ||
-      addedLines.includes('"devdependencies"')
+      lineSignals.includes('"dependencies"') ||
+      lineSignals.includes('"devdependencies"')
     ) {
       return {
         details:
@@ -193,17 +212,17 @@ function classifyConfigImpact(
     lowerPath.includes("esbuild.config");
   if (isBuildToolConfig) {
     const signalParts: string[] = [];
-    if (addedLines.includes("alias"))
+    if (lineSignals.includes("alias"))
       signalParts.push("module alias resolution");
-    if (addedLines.includes("input") || addedLines.includes("entry")) {
+    if (lineSignals.includes("input") || lineSignals.includes("entry")) {
       signalParts.push("entrypoint selection");
     }
-    if (addedLines.includes("output") || addedLines.includes("outdir")) {
+    if (lineSignals.includes("output") || lineSignals.includes("outdir")) {
       signalParts.push("bundle output targets");
     }
-    if (addedLines.includes("plugin"))
+    if (lineSignals.includes("plugin"))
       signalParts.push("plugin execution order");
-    if (addedLines.includes("define"))
+    if (lineSignals.includes("define"))
       signalParts.push("compile-time constants");
     const detailsSuffix =
       signalParts.length > 0
@@ -218,11 +237,11 @@ function classifyConfigImpact(
   if (lowerPath.endsWith("turbo.json") || lowerPath.endsWith("nx.json")) {
     const workspaceManifests = collectWorkspaceManifestPaths(index);
     const affectsTasks =
-      addedLines.includes("pipeline") ||
-      addedLines.includes("tasks") ||
-      addedLines.includes("dependsOn") ||
-      addedLines.includes("cache") ||
-      addedLines.includes("outputs");
+      lineSignals.includes("pipeline") ||
+      lineSignals.includes("tasks") ||
+      lineSignals.includes("dependson") ||
+      lineSignals.includes("cache") ||
+      lineSignals.includes("outputs");
     const scopeSummary =
       workspaceManifests.length > 0
         ? `${workspaceManifests.length} workspace package manifest(s) discovered.`
@@ -390,6 +409,7 @@ async function collectUntestedChangeSuggestions(
   index: ProjectIndex,
   changedSymbols: ChangedSymbol[],
   projectRoot: string,
+  fanInByFileInput?: Map<string, number>,
   options?: {
     lcovPaths?: string[];
     coveragePaths?: string[];
@@ -405,11 +425,13 @@ async function collectUntestedChangeSuggestions(
     }
   }
 
-  const fanInByFile = new Map<string, number>();
-  for (const edge of index.graph.edges) {
-    if (edge.to.type !== "file") continue;
-    const current = fanInByFile.get(edge.to.path) ?? 0;
-    fanInByFile.set(edge.to.path, current + 1);
+  const fanInByFile = fanInByFileInput ?? new Map<string, number>();
+  if (!fanInByFileInput) {
+    for (const edge of index.graph.edges) {
+      if (edge.to.type !== "file") continue;
+      const current = fanInByFile.get(edge.to.path) ?? 0;
+      fanInByFile.set(edge.to.path, current + 1);
+    }
   }
 
   const candidateTests = listCandidateTestFiles(
@@ -487,7 +509,7 @@ async function collectUntestedChangeSuggestions(
     return "medium";
   };
 
-  for (const symbol of changedSymbols) {
+  const suggestionEntries = await mapLimit(changedSymbols, 8, async (symbol) => {
     const refs = await findReferences(index, {
       def: {
         file: symbol.file,
@@ -496,12 +518,12 @@ async function collectUntestedChangeSuggestions(
         range: symbol.range,
       },
     });
-    if (refs.status !== "ok") continue;
+    if (refs.status !== "ok") return undefined;
 
     const hasTestRef = refs.references.some((entry) =>
       testFiles.has(entry.file),
     );
-    if (hasTestRef) continue;
+    if (hasTestRef) return undefined;
 
     const coverage = coverageByFile.get(symbol.file);
     const coveredLines = countCoveredLinesForRange(coverage, symbol.range);
@@ -532,14 +554,18 @@ async function collectUntestedChangeSuggestions(
         ? `Changed symbol has no discovered references in test files. ${coverageSummary} Candidate tests: ${candidateNames.join(", ")}. Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`
         : `Changed symbol has no discovered references in test files. ${coverageSummary} Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`;
 
-    suggestions.push({
+    return {
       file: symbol.file,
       range: symbol.range,
       kind: "untestedChange",
       symbol: symbol.name,
       details,
       confidence,
-    });
+    } satisfies ImpactSuggestion;
+  });
+
+  for (const suggestion of suggestionEntries) {
+    if (suggestion) suggestions.push(suggestion);
   }
 
   return suggestions;
@@ -955,6 +981,18 @@ export async function analyzeImpactFromDiff(
     ignoreGlobs.length > 0
       ? diff.files.filter((f) => !isIgnored(f.path))
       : diff.files;
+  const diagnostics: ImpactDiagnostics = {
+    changedFilesTotal: diff.files.length,
+    changedFilesIgnored: diff.files.length - filteredFiles.length,
+    changedFilesWithoutSymbols: 0,
+    symbolMappingParseFailures: 0,
+    refsScanned: 0,
+    refsFilteredTests: 0,
+    refsFilteredIgnored: 0,
+    refsDroppedByMaxRefs: 0,
+    fallbackSeededFiles: 0,
+    fallbackSeededDependents: 0,
+  };
 
   // Map all changed files to changed symbols
   const changedByFile = await mapLimit(
@@ -962,8 +1000,18 @@ export async function analyzeImpactFromDiff(
     8,
     async ({ fileChange, idx }) => {
       const absPath = normalizeImpactFilePath(projectRoot, fileChange.path);
-      const symbols = await locateChangedSymbols(index, absPath, fileChange.hunks);
-      return { idx, path: absPath, symbols };
+      const mapped = await locateChangedSymbolsWithLines(
+        index,
+        absPath,
+        fileChange.hunks,
+      );
+      return {
+        idx,
+        path: absPath,
+        kind: fileChange.kind,
+        symbols: mapped.changedSymbols,
+        parseFailed: mapped.parseFailed,
+      };
     },
   );
 
@@ -972,6 +1020,12 @@ export async function analyzeImpactFromDiff(
   const filesWithSymbols = new Set<string>();
   for (const entry of changedByFile) {
     if (entry.symbols.length > 0) filesWithSymbols.add(entry.path);
+    if (entry.symbols.length === 0) {
+      diagnostics.changedFilesWithoutSymbols += 1;
+      if (entry.parseFailed && entry.kind !== "deleted") {
+        diagnostics.symbolMappingParseFailures += 1;
+      }
+    }
     changedSymbols.push(...entry.symbols);
   }
 
@@ -983,17 +1037,31 @@ export async function analyzeImpactFromDiff(
   const normalizedChanges = filteredFiles.map((change) => ({
     ...change,
     path: normalizeImpactFilePath(projectRoot, change.path),
+    ...(change.oldPath
+      ? { oldPath: normalizeImpactFilePath(projectRoot, change.oldPath) }
+      : {}),
   }));
   const fileLevelFallback = options.fileLevelFallback ?? true;
   const fileLevelFallbackPaths = normalizedChanges
-    .filter((change) => change.kind === "modified" && !filesWithSymbols.has(change.path))
+    .filter((change) => change.kind !== "deleted" && !filesWithSymbols.has(change.path))
     .map((change) => change.path);
+
+  let fanInByFile: Map<string, number> | undefined;
+  if (options.testCoverageSuggestions) {
+    fanInByFile = new Map<string, number>();
+    for (const edge of index.graph.edges) {
+      if (edge.to.type !== "file") continue;
+      const current = fanInByFile.get(edge.to.path) ?? 0;
+      fanInByFile.set(edge.to.path, current + 1);
+    }
+  }
 
   // Analyze impact
   const impactedItems = await analyzeImpact(index, changedSymbols, normalizedChanges, {
     ...options,
     fileLevelFallback,
     fileLevelFallbackPaths,
+    diagnostics,
   });
 
   const suggestions = options.verifyReferences
@@ -1015,10 +1083,11 @@ export async function analyzeImpactFromDiff(
       : [];
 
   const coverageSuggestions = options.testCoverageSuggestions
-    ? await collectUntestedChangeSuggestions(
+      ? await collectUntestedChangeSuggestions(
         index,
         changedSymbols,
         projectRoot,
+        fanInByFile,
         {
           ...(options.lcovPaths ? { lcovPaths: options.lcovPaths } : {}),
           ...(options.coveragePaths
@@ -1049,6 +1118,7 @@ export async function analyzeImpactFromDiff(
     impactedItems,
     mergedSuggestions,
     { ...options, warning: diff.warning },
+    diagnostics,
   );
 }
 
