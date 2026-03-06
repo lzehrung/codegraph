@@ -156,7 +156,8 @@ export async function analyzeImpact(
             }
             if (keptRefs >= maxRefs) {
               if (diagnostics) {
-                diagnostics.refsDroppedByMaxRefs += refs.references.length - refIndex;
+                diagnostics.refsDroppedByMaxRefs += 1;
+                continue;
               }
               break;
             }
@@ -388,6 +389,7 @@ export function seedTransitiveFromFiles(
             depth: 1,
             hints,
           },
+          confidence: 0.5,
         };
 
         impacted.set(dependent, impactItem);

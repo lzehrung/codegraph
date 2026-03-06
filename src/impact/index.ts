@@ -1008,6 +1008,7 @@ export async function analyzeImpactFromDiff(
       return {
         idx,
         path: absPath,
+        kind: fileChange.kind,
         symbols: mapped.changedSymbols,
         parseFailed: mapped.parseFailed,
       };
@@ -1021,7 +1022,9 @@ export async function analyzeImpactFromDiff(
     if (entry.symbols.length > 0) filesWithSymbols.add(entry.path);
     if (entry.symbols.length === 0) {
       diagnostics.changedFilesWithoutSymbols += 1;
-      if (entry.parseFailed) diagnostics.symbolMappingParseFailures += 1;
+      if (entry.parseFailed && entry.kind !== "deleted") {
+        diagnostics.symbolMappingParseFailures += 1;
+      }
     }
     changedSymbols.push(...entry.symbols);
   }

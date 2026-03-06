@@ -81,6 +81,7 @@ describe("Impact Analyzer Edge Cases", () => {
       expect(
         impactedItems.some((item) => item.explain?.hints?.includes("fileRenamed")),
       ).toBe(true);
+      expect(impactedItems.every((item) => item.confidence === 0.5)).toBe(true);
     });
 
 
