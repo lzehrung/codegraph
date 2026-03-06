@@ -2,6 +2,7 @@ import type { FileId } from "../types.js";
 import type { ProjectIndex } from "../indexer.js";
 import { buildSymbolGraphDetailed } from "../graphs.js";
 import type { SymbolEdge } from "../graphs.js";
+import { compileTestPatterns, isTestFilePath } from "./testPatterns.js";
 
 export interface CandidateTestFile {
   file: FileId;
@@ -253,18 +254,7 @@ export function listCandidateTestFiles(
   const { testPatterns = [], maxCandidates = 100 } = options;
   const candidates = new Map<FileId, CandidateTestFile>();
   // Default test patterns (can be extended by caller)
-  const defaultPatterns = [
-    /test/i,
-    /spec/i,
-    /__tests__/,
-    /\.test\./,
-    /\.spec\./,
-  ];
-
-  const allPatterns = [
-    ...defaultPatterns,
-    ...testPatterns.map((p) => new RegExp(p)),
-  ];
+  const allPatterns = compileTestPatterns(testPatterns);
 
   // Build reverse dependency map: file -> files that depend on it
   const reverseDeps = new Map<FileId, FileId[]>();
@@ -287,7 +277,7 @@ export function listCandidateTestFiles(
   for (const file of symbolFiles) {
     const dependents = reverseDeps.get(file) || [];
     for (const dependent of dependents) {
-      if (isTestFile(dependent, allPatterns)) {
+      if (isTestFilePath(dependent, allPatterns)) {
         candidates.set(dependent, {
           file: dependent,
           confidence: "high",
@@ -301,7 +291,7 @@ export function listCandidateTestFiles(
   for (const changedFile of changedFiles) {
     const dependents = reverseDeps.get(changedFile) || [];
     for (const dependent of dependents) {
-      if (isTestFile(dependent, allPatterns) && !candidates.has(dependent)) {
+      if (isTestFilePath(dependent, allPatterns) && !candidates.has(dependent)) {
         candidates.set(dependent, {
           file: dependent,
           confidence: "medium",
@@ -315,7 +305,7 @@ export function listCandidateTestFiles(
   if (candidates.size < maxCandidates) {
     for (const [file] of index.byFile) {
       if (candidates.size >= maxCandidates) break;
-      if (!candidates.has(file) && isTestFile(file, allPatterns)) {
+      if (!candidates.has(file) && isTestFilePath(file, allPatterns)) {
         candidates.set(file, {
           file,
           confidence: "low",
@@ -328,7 +318,3 @@ export function listCandidateTestFiles(
   return Array.from(candidates.values()).slice(0, maxCandidates);
 }
 
-function isTestFile(file: FileId, patterns: RegExp[]): boolean {
-  const lowerFile = file.toLowerCase();
-  return patterns.some((pattern) => pattern.test(lowerFile));
-}
