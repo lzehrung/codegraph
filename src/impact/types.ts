@@ -374,6 +374,6 @@ export type ImpactOptions = DiffProviderOptions & {
   severityWeights?: Partial<SeverityWeights>;
   /** When true, propagate impact from changed files that map to zero changed symbols */
   fileLevelFallback?: boolean;
-  /** Internal use: absolute file paths that should trigger file-level fallback propagation */
+  /** @internal Internal use: absolute file paths that should trigger file-level fallback propagation */
   fileLevelFallbackPaths?: string[];
 };

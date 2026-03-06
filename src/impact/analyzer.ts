@@ -263,6 +263,20 @@ export async function analyzeImpact(
   return Array.from(impacted.values()).sort((a, b) => b.severity - a.severity);
 }
 
+
+function getDependentFiles(
+  index: ProjectIndex,
+  filePath: FileId,
+  reverseDeps?: Map<FileId, Edge[]>,
+): FileId[] {
+  if (reverseDeps) {
+    return reverseDeps.get(filePath)?.map((edge) => edge.from) ?? [];
+  }
+  return index.graph.edges
+    .filter((edge) => edge.to.type === "file" && edge.to.path === filePath)
+    .map((edge) => edge.from);
+}
+
 export function seedTransitiveFromFiles(
   index: ProjectIndex,
   impacted: Map<FileId, ImpactItem>,
@@ -289,14 +303,7 @@ export function seedTransitiveFromFiles(
       options.fileLevelFallback &&
       fallbackPathSet.has(fileChange.path)
     ) {
-      const dependents = reverseDeps
-        ? (reverseDeps.get(fileChange.path)?.map((edge) => edge.from) ?? [])
-        : index.graph.edges
-            .filter(
-              (edge) =>
-                edge.to.type === "file" && edge.to.path === fileChange.path,
-            )
-            .map((edge) => edge.from);
+      const dependents = getDependentFiles(index, fileChange.path, reverseDeps);
 
       for (const dependent of dependents) {
         if (!includeTests && isTestFilePath(dependent, patternMatchers)) continue;
@@ -319,14 +326,7 @@ export function seedTransitiveFromFiles(
     }
 
     else if (fileChange.kind === "deleted" || fileChange.kind === "renamed") {
-      const dependents = reverseDeps
-        ? (reverseDeps.get(fileChange.path)?.map((edge) => edge.from) ?? [])
-        : index.graph.edges
-            .filter(
-              (edge) =>
-                edge.to.type === "file" && edge.to.path === fileChange.path,
-            )
-            .map((edge) => edge.from);
+      const dependents = getDependentFiles(index, fileChange.path, reverseDeps);
 
       for (const dependent of dependents) {
         if (!includeTests && isTestFilePath(dependent, patternMatchers)) continue;
