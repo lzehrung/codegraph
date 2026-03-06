@@ -5,6 +5,10 @@ import type { Diff, FileChange, Hunk } from "./types.js";
 type ParsedFileChange = FileChange & {
   _hasNewFileMode?: boolean;
   _hasDeletedFileMode?: boolean;
+  _renameFrom?: string;
+  _renameTo?: string;
+  _copyFrom?: string;
+  _copyTo?: string;
   _fromPath?: string;
   _toPath?: string;
   _oldPathFromHeader?: string;
@@ -41,16 +45,7 @@ export function parseUnifiedDiff(diffText: string): Diff {
           }
         }
       } else {
-        // Parsing header
-        if (line.startsWith("new file mode")) {
-          currentFile._hasNewFileMode = true;
-        } else if (line.startsWith("deleted file mode")) {
-          currentFile._hasDeletedFileMode = true;
-        } else if (line.startsWith("--- ")) {
-          currentFile._fromPath = line.slice(4);
-        } else if (line.startsWith("+++ ")) {
-          currentFile._toPath = line.slice(4);
-        }
+        parseHeaderLine(currentFile, line);
       }
     }
   }
@@ -99,16 +94,7 @@ export async function parseUnifiedDiffStreaming(
           }
         }
       } else {
-        // Parsing header
-        if (line.startsWith("new file mode")) {
-          currentFile._hasNewFileMode = true;
-        } else if (line.startsWith("deleted file mode")) {
-          currentFile._hasDeletedFileMode = true;
-        } else if (line.startsWith("--- ")) {
-          currentFile._fromPath = line.slice(4);
-        } else if (line.startsWith("+++ ")) {
-          currentFile._toPath = line.slice(4);
-        }
+        parseHeaderLine(currentFile, line);
       }
     }
   }
@@ -122,16 +108,74 @@ export async function parseUnifiedDiffStreaming(
   return { files };
 }
 
+function decodeGitPath(rawPath: string): string {
+  const trimmed = rawPath.trim();
+  if (!trimmed.startsWith('"') || !trimmed.endsWith('"')) {
+    return trimmed;
+  }
+
+  const inner = trimmed.slice(1, -1);
+  const decoded = inner.replace(
+    /\\(\\|"|n|r|t|[0-7]{1,3})/g,
+    (match, token: string) => {
+      if (token === "\\") return "\\";
+      if (token === '"') return '"';
+      if (token === "n") return "\n";
+      if (token === "r") return "\r";
+      if (token === "t") return "\t";
+      if (/^[0-7]{1,3}$/.test(token)) {
+        return String.fromCharCode(parseInt(token, 8));
+      }
+      return match;
+    },
+  );
+  return decoded;
+}
+
+function parseHeaderLine(currentFile: ParsedFileChange, line: string): void {
+  if (line.startsWith("new file mode")) {
+    currentFile._hasNewFileMode = true;
+    return;
+  }
+  if (line.startsWith("deleted file mode")) {
+    currentFile._hasDeletedFileMode = true;
+    return;
+  }
+  if (line.startsWith("rename from ")) {
+    currentFile._renameFrom = decodeGitPath(line.slice("rename from ".length));
+    return;
+  }
+  if (line.startsWith("rename to ")) {
+    currentFile._renameTo = decodeGitPath(line.slice("rename to ".length));
+    return;
+  }
+  if (line.startsWith("copy from ")) {
+    currentFile._copyFrom = decodeGitPath(line.slice("copy from ".length));
+    return;
+  }
+  if (line.startsWith("copy to ")) {
+    currentFile._copyTo = decodeGitPath(line.slice("copy to ".length));
+    return;
+  }
+  if (line.startsWith("--- ")) {
+    currentFile._fromPath = decodeGitPath(line.slice(4));
+    return;
+  }
+  if (line.startsWith("+++ ")) {
+    currentFile._toPath = decodeGitPath(line.slice(4));
+  }
+}
+
 function initiateFile(line: string): ParsedFileChange | null {
-  const match = line.match(/^diff --git a\/(.+) b\/(.+)$/);
+  const match = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
   if (!match) return null;
   return {
-    path: match[2]!,
+    path: decodeGitPath(match[2]!),
     kind: "modified" as const,
     oldPath: "",
     hunks: [],
-    _oldPathFromHeader: match[1]!,
-    _newPathFromHeader: match[2]!,
+    _oldPathFromHeader: decodeGitPath(match[1]!),
+    _newPathFromHeader: decodeGitPath(match[2]!),
   };
 }
 
@@ -146,24 +190,33 @@ function initiateHunk(line: string): Hunk | null {
 }
 
 function finalizeFile(file: ParsedFileChange): void {
+  const renameFrom = file._renameFrom ?? file._oldPathFromHeader;
+  const renameTo = file._renameTo ?? file._newPathFromHeader;
+  const copyFrom = file._copyFrom;
+  const copyTo = file._copyTo ?? file._newPathFromHeader;
+
   if (file._hasNewFileMode || file._fromPath === "/dev/null") {
     file.kind = "added";
     file.path = file._newPathFromHeader ?? file.path;
   } else if (file._hasDeletedFileMode || file._toPath === "/dev/null") {
     file.kind = "deleted";
     file.path = file._oldPathFromHeader ?? file.path;
-  } else if (
-    file._oldPathFromHeader &&
-    file._newPathFromHeader &&
-    file._oldPathFromHeader !== file._newPathFromHeader
-  ) {
+  } else if (copyFrom && copyTo) {
+    file.kind = "added";
+    file.path = copyTo;
+    file.oldPath = copyFrom;
+  } else if (renameFrom && renameTo && renameFrom !== renameTo) {
     file.kind = "renamed";
-    file.path = file._newPathFromHeader ?? file.path;
-    file.oldPath = file._oldPathFromHeader;
+    file.path = renameTo;
+    file.oldPath = renameFrom;
   }
-  // Cleanup internal properties
+
   delete file._hasNewFileMode;
   delete file._hasDeletedFileMode;
+  delete file._renameFrom;
+  delete file._renameTo;
+  delete file._copyFrom;
+  delete file._copyTo;
   delete file._fromPath;
   delete file._toPath;
   delete file._oldPathFromHeader;

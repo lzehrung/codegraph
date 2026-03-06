@@ -55,6 +55,43 @@ describe("Impact Analyzer Edge Cases", () => {
       }
     });
 
+
+    it("supports file-level fallback for modified files without symbols", async () => {
+      const changedFile = path.resolve("src/setup.ts");
+      const dependentFile = path.resolve("src/main.ts");
+      const edges: Edge[] = [
+        {
+          from: dependentFile,
+          to: { type: "file", path: changedFile },
+          raw: "./setup",
+        },
+      ];
+      const index: ProjectIndex = {
+        graph: { nodes: new Set([changedFile, dependentFile]), edges },
+        modules: new Map(),
+        byFile: new Map(),
+        exportCache: new Map(),
+        scopeCache: new Map(),
+      };
+
+      const impacted = new Map();
+      await seedTransitiveFromFiles(
+        index,
+        impacted,
+        [{ path: changedFile, kind: "modified", hunks: [] }],
+        {
+          includeTests: false,
+          fileLevelFallback: true,
+          fileLevelFallbackPaths: [changedFile],
+        },
+      );
+
+      const fallbackItem = Array.from(impacted.values()).find(
+        (item) => item.file === dependentFile,
+      );
+      expect(fallbackItem?.reasons).toContain("fileLevelChange");
+    });
+
     it("should respect includeTests option", async () => {
       const index = await createTestIndex("typescript");
 
@@ -76,6 +113,99 @@ describe("Impact Analyzer Edge Cases", () => {
       // Both should work without throwing
       expect(impactedWithTests.size).toBeGreaterThanOrEqual(0);
       expect(impactedWithoutTests.size).toBeGreaterThanOrEqual(0);
+    });
+
+
+    it("ignores invalid custom test regex patterns", async () => {
+      const featureFile = path.resolve("src/feature.ts");
+      const dependentFile = path.resolve("src/latest.ts");
+      const edges: Edge[] = [
+        {
+          from: dependentFile,
+          to: { type: "file", path: featureFile },
+          raw: "./feature",
+        },
+      ];
+      const index: ProjectIndex = {
+        graph: { nodes: new Set([featureFile, dependentFile]), edges },
+        modules: new Map(),
+        byFile: new Map(),
+        exportCache: new Map(),
+        scopeCache: new Map(),
+      };
+
+      const impacted = new Map();
+      await seedTransitiveFromFiles(
+        index,
+        impacted,
+        [{ path: featureFile, kind: "deleted", hunks: [] }],
+        { includeTests: false, testPatterns: ["[invalid"] },
+      );
+
+      expect(Array.from(impacted.values()).some((item) => item.file.endsWith("latest.ts"))).toBe(true);
+    });
+
+    it("does not treat latest.ts as a test file by default", async () => {
+      const featureFile = path.resolve("src/feature.ts");
+      const dependentFile = path.resolve("src/latest.ts");
+      const edges: Edge[] = [
+        {
+          from: dependentFile,
+          to: { type: "file", path: featureFile },
+          raw: "./feature",
+        },
+      ];
+      const index: ProjectIndex = {
+        graph: { nodes: new Set([featureFile, dependentFile]), edges },
+        modules: new Map(),
+        byFile: new Map(),
+        exportCache: new Map(),
+        scopeCache: new Map(),
+      };
+
+      const impacted = new Map();
+      await seedTransitiveFromFiles(
+        index,
+        impacted,
+        [{ path: featureFile, kind: "deleted", hunks: [] }],
+        { includeTests: false },
+      );
+
+      expect(Array.from(impacted.values()).some((item) => item.file.endsWith("latest.ts"))).toBe(true);
+    });
+
+
+    it("supports case-sensitive custom test patterns", async () => {
+      const featureFile = path.resolve("src/feature.ts");
+      const testFile = path.resolve("Checks/MyTests.ts");
+      const edges: Edge[] = [
+        {
+          from: testFile,
+          to: { type: "file", path: featureFile },
+          raw: "./feature",
+        },
+      ];
+      const index: ProjectIndex = {
+        graph: { nodes: new Set([featureFile, testFile]), edges },
+        modules: new Map(),
+        byFile: new Map(),
+        exportCache: new Map(),
+        scopeCache: new Map(),
+      };
+
+      const impacted = new Map();
+      await seedTransitiveFromFiles(
+        index,
+        impacted,
+        [{ path: featureFile, kind: "deleted", hunks: [] }],
+        { includeTests: false, testPatterns: ["MyTests\\.ts$"] },
+      );
+
+      expect(
+        Array.from(impacted.values()).some((item) =>
+          item.file.endsWith("MyTests.ts"),
+        ),
+      ).toBe(false);
     });
 
     it("supports custom test patterns", async () => {

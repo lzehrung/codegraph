@@ -9,8 +9,8 @@ import { getDiff } from "./providers/base.js";
 import { locateChangedSymbols } from "./map.js";
 import { analyzeImpact } from "./analyzer.js";
 import pm from "picomatch";
-import path from "node:path";
 import { discoverProjectFiles, type ProjectFileInfo } from "../util.js";
+import { normalizeImpactFilePath } from "./path.js";
 
 export type ImpactStreamChunk =
   | { type: "projectFiles"; files: ProjectFileInfo[] }
@@ -67,16 +67,16 @@ export async function* analyzeImpactStreaming(
     };
 
     let changedSymbols: ChangedSymbol[] = [];
+    const filesWithSymbols = new Set<string>();
     for (const fileChange of filteredFiles) {
-      const absPath = path.isAbsolute(fileChange.path)
-        ? fileChange.path.replace(/\\/g, "/")
-        : path.resolve(projectRoot, fileChange.path).replace(/\\/g, "/");
+      const absPath = normalizeImpactFilePath(projectRoot, fileChange.path);
       const symbols = await locateChangedSymbols(
         index,
         absPath,
         fileChange.hunks,
       );
 
+      if (symbols.length > 0) filesWithSymbols.add(absPath);
       for (const symbol of symbols) {
         yield { type: "changedSymbol", symbol };
         changedSymbols.push(symbol);
@@ -96,12 +96,20 @@ export async function* analyzeImpactStreaming(
       total: 4,
     };
 
-    const impactedItems = await analyzeImpact(
-      index,
-      changedSymbols,
-      filteredFiles,
-      options,
-    );
+    const normalizedChanges = filteredFiles.map((change) => ({
+      ...change,
+      path: normalizeImpactFilePath(projectRoot, change.path),
+    }));
+    const fileLevelFallback = options.fileLevelFallback ?? true;
+    const fileLevelFallbackPaths = normalizedChanges
+      .filter((change) => change.kind === "modified" && !filesWithSymbols.has(change.path))
+      .map((change) => change.path);
+
+    const impactedItems = await analyzeImpact(index, changedSymbols, normalizedChanges, {
+      ...options,
+      fileLevelFallback,
+      fileLevelFallbackPaths,
+    });
 
     for (const item of impactedItems) {
       yield { type: "impactItem", item };
