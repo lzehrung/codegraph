@@ -82,6 +82,31 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
     expect(result.files).toHaveLength(6);
   });
 
+
+  it("should parse very large hunks consistently", async () => {
+    const oldLines = Array.from({ length: 2500 }, (_, idx) => `old_${idx}`);
+    const newLines = Array.from({ length: 2500 }, (_, idx) => `new_${idx}`);
+    const hunkLines: string[] = [];
+    for (let idx = 0; idx < oldLines.length; idx += 1) {
+      hunkLines.push(`-${oldLines[idx]}`);
+      hunkLines.push(`+${newLines[idx]}`);
+    }
+
+    const largeDiff = `diff --git a/large.ts b/large.ts
+--- a/large.ts
++++ b/large.ts
+@@ -1,2500 +1,2500 @@
+${hunkLines.join("\n")}
+`;
+
+    const syncResult = parseUnifiedDiff(largeDiff);
+    const streamResult = await parseUnifiedDiffStreaming(Readable.from([largeDiff]));
+
+    expect(streamResult).toEqual(syncResult);
+    const parsedHunk = streamResult.files[0]?.hunks[0];
+    expect(parsedHunk?.lines.length).toBe(5000);
+  });
+
   it("should handle multi-line chunks correctly", async () => {
     const chunks = sampleDiff.split("\n").map(l => l + "\n");
     const stream = Readable.from(chunks);
