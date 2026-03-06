@@ -156,8 +156,7 @@ export async function analyzeImpact(
             }
             if (keptRefs >= maxRefs) {
               if (diagnostics) {
-                diagnostics.refsDroppedByMaxRefs += 1;
-                continue;
+                diagnostics.refsDroppedByMaxRefs += refs.references.length - refIndex;
               }
               break;
             }
