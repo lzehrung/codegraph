@@ -156,6 +156,7 @@ export type ImpactTopItem = {
   symbols: string[];
   reasons: ImpactReason[];
   severity: number;
+  confidence?: number;
   depth?: number;
   typeOnly?: boolean;
   explain?: ImpactItem["explain"];
@@ -246,6 +247,7 @@ export type CompactImpactReport = {
     symbols: string[]; // symbol names
     reasons: ImpactReason[];
     severity: number;
+    confidence?: number;
     depth?: number;
     typeOnly?: boolean;
     explain?: {
@@ -284,6 +286,7 @@ export type CompactImpactReport = {
     symbols: string[];
     reasons: ImpactReason[];
     severity: number;
+    confidence?: number;
     depth?: number;
     typeOnly?: boolean;
     explain?: ImpactItem["explain"];

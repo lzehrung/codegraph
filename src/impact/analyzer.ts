@@ -155,6 +155,7 @@ export async function analyzeImpact(
             }
             if (keptRefs >= maxRefs) {
               if (diagnostics) diagnostics.refsDroppedByMaxRefs += 1;
+              if (!diagnostics) break;
               continue;
             }
             keptRefs += 1;
@@ -311,8 +312,7 @@ export function seedTransitiveFromFiles(
       : () => false;
 
   for (const fileChange of changedFiles) {
-    // Skip if this file already has impact items or is ignored
-    if (impacted.has(fileChange.path) || isIgnored(fileChange.path)) continue;
+    if (isIgnored(fileChange.path)) continue;
 
     // Seed impact for modified (file-level fallback), deleted, and renamed files based on dependents
 
@@ -325,6 +325,7 @@ export function seedTransitiveFromFiles(
         fileChange.hunks.length === 0);
 
     if (shouldSeedModifiedFallback) {
+      if (impacted.has(fileChange.path)) continue;
       const dependents = getDependentFiles(index, fileChange.path, reverseDeps);
       if (dependents.length > 0) {
         if (diagnostics) diagnostics.fallbackSeededFiles += 1;

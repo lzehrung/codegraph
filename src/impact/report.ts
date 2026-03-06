@@ -356,6 +356,7 @@ function buildCompactReport(
       symbols: string[];
       reasons: ImpactReason[];
       severity: number;
+      confidence?: number;
       depth?: number;
       typeOnly?: boolean;
       explain?: NonNullable<ImpactItem["explain"]>;
@@ -364,6 +365,7 @@ function buildCompactReport(
       symbols: ii.symbols,
       reasons: ii.reasons,
       severity: ii.severity,
+      ...(ii.confidence !== undefined ? { confidence: ii.confidence } : {}),
       ...(ii.depth !== undefined ? { depth: ii.depth } : {}),
       ...(ii.typeOnly !== undefined ? { typeOnly: ii.typeOnly } : {}),
       ...(ii.explain !== undefined ? { explain: ii.explain } : {}),
@@ -414,6 +416,7 @@ function buildCompactReport(
           symbols: item.symbols,
           reasons: item.reasons,
           severity: item.severity,
+          ...(item.confidence !== undefined ? { confidence: item.confidence } : {}),
           ...(item.depth !== undefined ? { depth: item.depth } : {}),
           ...(item.typeOnly !== undefined ? { typeOnly: item.typeOnly } : {}),
           ...(item.explain ? { explain: item.explain } : {}),
@@ -627,6 +630,7 @@ function buildTopImpacts(impactedItems: ImpactItem[]): ImpactTopItem[] {
     symbols: item.symbols,
     reasons: item.reasons,
     severity: item.severity,
+    ...(item.confidence !== undefined ? { confidence: item.confidence } : {}),
     ...(item.depth !== undefined ? { depth: item.depth } : {}),
     ...(item.typeOnly !== undefined ? { typeOnly: item.typeOnly } : {}),
     ...(item.explain ? { explain: item.explain } : {}),

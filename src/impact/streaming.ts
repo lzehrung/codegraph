@@ -100,6 +100,9 @@ export async function* analyzeImpactStreaming(
     const normalizedChanges = filteredFiles.map((change) => ({
       ...change,
       path: normalizeImpactFilePath(projectRoot, change.path),
+      ...(change.oldPath
+        ? { oldPath: normalizeImpactFilePath(projectRoot, change.oldPath) }
+        : {}),
     }));
     const fileLevelFallback = options.fileLevelFallback ?? true;
     const fileLevelFallbackPaths = normalizedChanges

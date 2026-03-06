@@ -206,6 +206,54 @@ index 1234567..abcdef0 100644
       }
     });
 
+    it("normalizes rename oldPath before fallback seeding", async () => {
+      const root = await fsp.mkdtemp(
+        path.join(process.cwd(), "tmp-impact-rename-normalize-"),
+      );
+      try {
+        await fsp.writeFile(
+          path.join(root, "consumer.ts"),
+          `import { setup } from "./setup";
+export const run = () => setup();
+`,
+          "utf8",
+        );
+        await fsp.writeFile(
+          path.join(root, "setup.ts"),
+          `export const setup = () => 1;
+`,
+          "utf8",
+        );
+
+        const index = await buildProjectIndexFromFiles(root, [
+          path.join(root, "consumer.ts"),
+          path.join(root, "setup.ts"),
+        ]);
+
+        const diffText = `diff --git a/setup.ts b/setup-renamed.ts
+similarity index 100%
+rename from setup.ts
+rename to setup-renamed.ts
+--- a/setup.ts
++++ b/setup-renamed.ts
+@@ -1 +1 @@
+-export const setup = () => 1;
++export const setup = () => 2;
+`;
+
+        const report = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+        });
+
+        expect(
+          report.impacted.some((item) => item.file.endsWith("consumer.ts")),
+        ).toBe(true);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("should analyze impact from diff text", async () => {
       const index = await createTestIndex("typescript");
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
@@ -920,6 +968,19 @@ index 1234567..abcdef0 100644
         expect(typeof item.file).toBe("number");
         expect(item.file).toBeGreaterThanOrEqual(0);
         expect(item.file).toBeLessThan(report.files.length);
+        if (item.confidence !== undefined) {
+          expect(item.confidence).toBeGreaterThanOrEqual(0);
+          expect(item.confidence).toBeLessThanOrEqual(1);
+        }
+      }
+
+      if (report.topImpacts) {
+        for (const item of report.topImpacts) {
+          if (item.confidence !== undefined) {
+            expect(item.confidence).toBeGreaterThanOrEqual(0);
+            expect(item.confidence).toBeLessThanOrEqual(1);
+          }
+        }
       }
 
       // Verify file edges use indices
