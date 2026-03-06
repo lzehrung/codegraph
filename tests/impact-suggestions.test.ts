@@ -229,6 +229,31 @@ index 1111111..2222222 100644
     expect(config?.details?.toLowerCase().includes("dependency")).toBe(true);
   });
 
+  it("adds semantic config-impact details for removed package dependencies", async () => {
+    const diffText = `diff --git a/package.json b/package.json
+index 1111111..2222222 100644
+--- a/package.json
++++ b/package.json
+@@ -1,7 +1,3 @@
+ {
+-  "dependencies": {
+-    "left-pad": "1.3.0"
+-  }
+ }
+`;
+
+    const report = await buildSampleReport(diffText, {
+      verifyReferences: false,
+      configImpactRules: true,
+    });
+
+    const config = (report.suggestions ?? []).find(
+      (entry) => entry.kind === "configImpact",
+    );
+    expect(config).toBeDefined();
+    expect(config?.details?.toLowerCase().includes("dependency")).toBe(true);
+  });
+
   it("adds breaking-change suggestions when exported symbol overlaps removed lines", async () => {
     const diffText = `diff --git a/helpers.ts b/helpers.ts
 index 1111111..2222222 100644

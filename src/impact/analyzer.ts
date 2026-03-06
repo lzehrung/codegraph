@@ -88,6 +88,7 @@ export async function analyzeImpact(
     refContextLines,
     refBlockMaxLines,
   } = options;
+  const diagnostics = options.diagnostics;
 
   const patternMatchers = compileTestPatterns(testPatterns);
   const isIgnored: (p: string) => boolean =
@@ -141,10 +142,22 @@ export async function analyzeImpact(
         );
 
         if (refs.status === "ok") {
-          for (const ref of refs.references.slice(0, maxRefs)) {
-            if (!includeTests && isTestFilePath(ref.file, patternMatchers))
+          let keptRefs = 0;
+          for (const ref of refs.references) {
+            if (diagnostics) diagnostics.refsScanned += 1;
+            if (!includeTests && isTestFilePath(ref.file, patternMatchers)) {
+              if (diagnostics) diagnostics.refsFilteredTests += 1;
               continue;
-            if (isIgnored(ref.file)) continue;
+            }
+            if (isIgnored(ref.file)) {
+              if (diagnostics) diagnostics.refsFilteredIgnored += 1;
+              continue;
+            }
+            if (keptRefs >= maxRefs) {
+              if (diagnostics) diagnostics.refsDroppedByMaxRefs += 1;
+              continue;
+            }
+            keptRefs += 1;
 
             // Determine the reason for this reference (sync, before await)
             let reason: ImpactReason = "directRef";
@@ -225,6 +238,10 @@ export async function analyzeImpact(
                 ...(mergedHints && { hints: mergedHints }),
                 refsCount: (existing?.explain?.refsCount ?? 0) + 1,
               },
+              confidence: Math.max(
+                existing?.confidence ?? 0,
+                severityResult.confidence,
+              ),
             };
 
             if (changedSymbol.typeOnly !== undefined) {
@@ -287,6 +304,7 @@ export function seedTransitiveFromFiles(
   const { includeTests = false, testPatterns, ignoreGlobs = [] } = options;
   const patternMatchers = compileTestPatterns(testPatterns);
   const fallbackPathSet = new Set(options.fileLevelFallbackPaths ?? []);
+  const diagnostics = options.diagnostics;
   const isIgnored: (p: string) => boolean =
     ignoreGlobs.length > 0
       ? (pm as (g: string[]) => (s: string) => boolean)(ignoreGlobs)
@@ -298,12 +316,19 @@ export function seedTransitiveFromFiles(
 
     // Seed impact for modified (file-level fallback), deleted, and renamed files based on dependents
 
-    if (
+    const shouldSeedModifiedFallback =
       fileChange.kind === "modified" &&
       options.fileLevelFallback &&
-      fallbackPathSet.has(fileChange.path)
-    ) {
+      (fallbackPathSet.has(fileChange.path) ||
+        fileChange.isBinary ||
+        fileChange.modeChanged ||
+        fileChange.hunks.length === 0);
+
+    if (shouldSeedModifiedFallback) {
       const dependents = getDependentFiles(index, fileChange.path, reverseDeps);
+      if (dependents.length > 0) {
+        if (diagnostics) diagnostics.fallbackSeededFiles += 1;
+      }
 
       for (const dependent of dependents) {
         if (!includeTests && isTestFilePath(dependent, patternMatchers)) continue;
@@ -322,11 +347,23 @@ export function seedTransitiveFromFiles(
           },
           confidence: 0.5,
         });
+        if (diagnostics) diagnostics.fallbackSeededDependents += 1;
       }
-    }
-
-    else if (fileChange.kind === "deleted" || fileChange.kind === "renamed") {
-      const dependents = getDependentFiles(index, fileChange.path, reverseDeps);
+    } else if (fileChange.kind === "deleted" || fileChange.kind === "renamed") {
+      const lookupPaths =
+        fileChange.kind === "renamed" && fileChange.oldPath
+          ? [fileChange.oldPath, fileChange.path]
+          : [fileChange.path];
+      const dependentSet = new Set<FileId>();
+      for (const lookupPath of lookupPaths) {
+        for (const dependent of getDependentFiles(index, lookupPath, reverseDeps)) {
+          dependentSet.add(dependent);
+        }
+      }
+      const dependents = [...dependentSet];
+      if (dependents.length > 0) {
+        if (diagnostics) diagnostics.fallbackSeededFiles += 1;
+      }
 
       for (const dependent of dependents) {
         if (!includeTests && isTestFilePath(dependent, patternMatchers)) continue;
@@ -351,6 +388,7 @@ export function seedTransitiveFromFiles(
         };
 
         impacted.set(dependent, impactItem);
+        if (diagnostics) diagnostics.fallbackSeededDependents += 1;
       }
     }
   }
@@ -405,6 +443,14 @@ function analyzeTransitiveImpact(
       }
 
       const severity = calculateTransitiveSeverity(edge, depth + 1);
+      const upstreamConfidence = impacted.get(file)?.confidence ?? 0.6;
+      const nextConfidence = Math.max(
+        0.2,
+        Math.min(
+          1,
+          upstreamConfidence * (edge.typeOnly ? 0.75 : 0.85) * Math.pow(0.95, depth),
+        ),
+      );
 
       // Calculate fan-in for transitive items too
       const fanIn = reverseDeps.get(dependentFile)?.length || 0;
@@ -421,6 +467,7 @@ function analyzeTransitiveImpact(
           depth: depth + 1,
           ...(fanIn > 0 && { fanIn }),
         },
+        confidence: Math.max(existing?.confidence ?? 0, nextConfidence),
       };
 
       if (edge.typeOnly !== undefined) {
@@ -563,4 +610,3 @@ function calculateTransitiveSeverity(edge: Edge, depth: number): number {
 
   return score;
 }
-

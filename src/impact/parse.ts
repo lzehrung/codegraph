@@ -13,6 +13,9 @@ type ParsedFileChange = FileChange & {
   _toPath?: string;
   _oldPathFromHeader?: string;
   _newPathFromHeader?: string;
+  _isBinary?: boolean;
+  _modeChanged?: boolean;
+  _similarityIndex?: number;
 };
 
 export function parseUnifiedDiff(diffText: string): Diff {
@@ -135,10 +138,27 @@ function decodeGitPath(rawPath: string): string {
 function parseHeaderLine(currentFile: ParsedFileChange, line: string): void {
   if (line.startsWith("new file mode")) {
     currentFile._hasNewFileMode = true;
+    currentFile._modeChanged = true;
     return;
   }
   if (line.startsWith("deleted file mode")) {
     currentFile._hasDeletedFileMode = true;
+    currentFile._modeChanged = true;
+    return;
+  }
+  if (line.startsWith("old mode ") || line.startsWith("new mode ")) {
+    currentFile._modeChanged = true;
+    return;
+  }
+  if (line.startsWith("Binary files ") || line.startsWith("GIT binary patch")) {
+    currentFile._isBinary = true;
+    return;
+  }
+  if (line.startsWith("similarity index ")) {
+    const match = line.match(/^similarity index\s+(\d+)%$/);
+    if (match?.[1]) {
+      currentFile._similarityIndex = parseInt(match[1], 10);
+    }
     return;
   }
   if (line.startsWith("rename from ")) {
@@ -211,6 +231,16 @@ function finalizeFile(file: ParsedFileChange): void {
     file.oldPath = renameFrom;
   }
 
+  if (file._isBinary) {
+    file.isBinary = true;
+  }
+  if (file._modeChanged) {
+    file.modeChanged = true;
+  }
+  if (file._similarityIndex !== undefined) {
+    file.similarityIndex = file._similarityIndex;
+  }
+
   delete file._hasNewFileMode;
   delete file._hasDeletedFileMode;
   delete file._renameFrom;
@@ -221,4 +251,7 @@ function finalizeFile(file: ParsedFileChange): void {
   delete file._toPath;
   delete file._oldPathFromHeader;
   delete file._newPathFromHeader;
+  delete file._isBinary;
+  delete file._modeChanged;
+  delete file._similarityIndex;
 }

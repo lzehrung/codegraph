@@ -13,6 +13,12 @@ export type FileChange = {
   path: FileId;
   kind: "added" | "modified" | "deleted" | "renamed";
   oldPath?: FileId; // for renames
+  /** True when git reports a binary patch for this file */
+  isBinary?: boolean;
+  /** True when the file mode changed (for example chmod) */
+  modeChanged?: boolean;
+  /** Similarity score for rename/copy detection, when provided by git */
+  similarityIndex?: number;
   hunks: Hunk[];
 };
 
@@ -176,6 +182,19 @@ export type ImpactItem = {
   };
 };
 
+export type ImpactDiagnostics = {
+  changedFilesTotal: number;
+  changedFilesIgnored: number;
+  changedFilesWithoutSymbols: number;
+  symbolMappingParseFailures: number;
+  refsScanned: number;
+  refsFilteredTests: number;
+  refsFilteredIgnored: number;
+  refsDroppedByMaxRefs: number;
+  fallbackSeededFiles: number;
+  fallbackSeededDependents: number;
+};
+
 // Main impact report
 export type ImpactReport = {
   projectFiles?: ProjectFileInfo[];
@@ -198,6 +217,7 @@ export type ImpactReport = {
     fileEdges: Array<{ from: FileId; to: FileId; typeOnly?: boolean }>;
     symbolEdges: Array<{ from: number; to: number; label: string }>; // indices into changedSymbols
   };
+  diagnostics?: ImpactDiagnostics;
   warning?: string | undefined;
 };
 
@@ -297,6 +317,7 @@ export type CompactImpactReport = {
     fileEdges: Array<{ from: number; to: number; typeOnly?: boolean }>; // indices into files array
     symbolEdges: Array<{ from: number; to: number; label: string }>; // indices into changedSymbols
   };
+  diagnostics?: ImpactDiagnostics;
   warning?: string | undefined;
 };
 
@@ -376,4 +397,6 @@ export type ImpactOptions = DiffProviderOptions & {
   fileLevelFallback?: boolean;
   /** @internal Internal use: absolute file paths that should trigger file-level fallback propagation */
   fileLevelFallbackPaths?: string[];
+  /** @internal Mutable diagnostics accumulator used across impact analysis stages */
+  diagnostics?: ImpactDiagnostics;
 };

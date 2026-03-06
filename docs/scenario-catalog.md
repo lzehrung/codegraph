@@ -2,6 +2,14 @@
 
 Minimal catalog of Tree-sitter scenarios with sample coverage.
 
+## Impact and diff pipeline
+
+| Scenario | Sample | Expected behavior | Source | Date added |
+| --- | --- | --- | --- | --- |
+| Rename/move impact seeding | `tests/impact-analyzer.test.ts` (`should seed transitive impact for renamed files`) | Transitive seeding considers both `oldPath` and `path` for renamed files so dependents on either side are included. | Internal regression test | 2026-03-06 |
+| Binary and mode-only git diff metadata | `tests/streaming-parser.test.ts` | Diff parser records `isBinary`, `modeChanged`, and `similarityIndex` metadata so fallback logic can run when hunks are empty. | Internal regression test | 2026-03-06 |
+| Impact diagnostics counters | `tests/impact-diagnostics.test.ts` | Impact report includes diagnostics counters (`refsScanned`, filtering counters, fallback counters, symbol mapping counters). | Internal regression test | 2026-03-06 |
+
 ## C#
 
 | Scenario | Sample | Expected behavior | Source | Date added |
