@@ -23,14 +23,19 @@ export async function locateChangedSymbolsWithLines(
   index: ProjectIndex,
   file: FileId,
   hunks: FileChange["hunks"],
-): Promise<{ changedSymbols: ChangedSymbol[]; changedLines: Set<number> }> {
+): Promise<{
+  changedSymbols: ChangedSymbol[];
+  changedLines: Set<number>;
+  parseFailed: boolean;
+}> {
   let parsedEntry;
   try {
     parsedEntry = await ensureParsedContext(file, index.parsed?.get(file));
   } catch {
-    return { changedSymbols: [], changedLines: new Set() };
+    return { changedSymbols: [], changedLines: new Set(), parseFailed: true };
   }
-  if (!parsedEntry) return { changedSymbols: [], changedLines: new Set() };
+  if (!parsedEntry)
+    return { changedSymbols: [], changedLines: new Set(), parseFailed: true };
 
   const { source, tree } = parsedEntry;
   const sup = parsedEntry.sup;
@@ -125,7 +130,7 @@ export async function locateChangedSymbolsWithLines(
     });
   }
 
-  return { changedSymbols, changedLines };
+  return { changedSymbols, changedLines, parseFailed: false };
 }
 
 export async function mapChangedLinesToSymbols(
@@ -240,17 +245,21 @@ export function collectChangedLines(hunks: FileChange["hunks"]): Set<number> {
   for (const hunk of hunks) {
     let oldLine = hunk.oldStart;
     let newLine = hunk.newStart;
+    let deletionStreak = 0;
     for (const line of hunk.lines) {
       if (line.startsWith(" ")) {
         oldLine++;
         newLine++;
+        deletionStreak = 0;
       } else if (line.startsWith("+")) {
         changedLines.add(newLine);
         newLine++;
+        deletionStreak = 0;
       } else if (line.startsWith("-")) {
-        const mappedLine = newLine > 0 ? newLine : oldLine;
+        const mappedLine = newLine > 0 ? newLine + deletionStreak : oldLine;
         changedLines.add(mappedLine);
         oldLine++;
+        deletionStreak += 1;
       }
     }
   }

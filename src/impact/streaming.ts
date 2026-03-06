@@ -6,7 +6,7 @@
 import type { ProjectIndex } from "../indexer.js";
 import type { ImpactOptions, ChangedSymbol, ImpactItem } from "./types.js";
 import { getDiff } from "./providers/base.js";
-import { locateChangedSymbols } from "./map.js";
+import { locateChangedSymbolsWithLines } from "./map.js";
 import { analyzeImpact } from "./analyzer.js";
 import pm from "picomatch";
 import { discoverProjectFiles, type ProjectFileInfo } from "../util.js";
@@ -70,11 +70,12 @@ export async function* analyzeImpactStreaming(
     const filesWithSymbols = new Set<string>();
     for (const fileChange of filteredFiles) {
       const absPath = normalizeImpactFilePath(projectRoot, fileChange.path);
-      const symbols = await locateChangedSymbols(
+      const mapped = await locateChangedSymbolsWithLines(
         index,
         absPath,
         fileChange.hunks,
       );
+      const symbols = mapped.changedSymbols;
 
       if (symbols.length > 0) filesWithSymbols.add(absPath);
       for (const symbol of symbols) {
@@ -99,10 +100,13 @@ export async function* analyzeImpactStreaming(
     const normalizedChanges = filteredFiles.map((change) => ({
       ...change,
       path: normalizeImpactFilePath(projectRoot, change.path),
+      ...(change.oldPath
+        ? { oldPath: normalizeImpactFilePath(projectRoot, change.oldPath) }
+        : {}),
     }));
     const fileLevelFallback = options.fileLevelFallback ?? true;
     const fileLevelFallbackPaths = normalizedChanges
-      .filter((change) => change.kind === "modified" && !filesWithSymbols.has(change.path))
+      .filter((change) => change.kind !== "deleted" && !filesWithSymbols.has(change.path))
       .map((change) => change.path);
 
     const impactedItems = await analyzeImpact(index, changedSymbols, normalizedChanges, {

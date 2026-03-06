@@ -30,14 +30,38 @@ describe("Impact Analyzer Edge Cases", () => {
     });
 
     it("should seed transitive impact for renamed files", async () => {
-      const index = await createTestIndex("typescript");
+      const oldPath = path.resolve("src/old-name.ts");
+      const newPath = path.resolve("src/renamed-file.ts");
+      const dependentOnOld = path.resolve("src/consumer-old.ts");
+      const dependentOnNew = path.resolve("src/consumer-new.ts");
+      const index: ProjectIndex = {
+        graph: {
+          nodes: new Set([oldPath, newPath, dependentOnOld, dependentOnNew]),
+          edges: [
+            {
+              from: dependentOnOld,
+              to: { type: "file", path: oldPath },
+              raw: "./old-name",
+            },
+            {
+              from: dependentOnNew,
+              to: { type: "file", path: newPath },
+              raw: "./renamed-file",
+            },
+          ],
+        },
+        modules: new Map(),
+        byFile: new Map(),
+        exportCache: new Map(),
+        scopeCache: new Map(),
+      };
 
       // Create mock file changes for renamed files
       const fileChanges = [
         {
-          path: "src/renamed-file.ts",
+          path: newPath,
           kind: "renamed" as const,
-          oldPath: "src/old-name.ts",
+          oldPath,
           hunks: []
         }
       ];
@@ -48,11 +72,16 @@ describe("Impact Analyzer Edge Cases", () => {
 
       // Should handle renamed files with fileRenamed hint
       const impactedItems = Array.from(impacted.values());
-      if (impactedItems.length > 0) {
-        expect(impactedItems.some(item =>
-          item.explain?.hints?.includes("fileRenamed")
-        )).toBe(true);
-      }
+      expect(impactedItems.some((item) => item.file === dependentOnOld)).toBe(
+        true,
+      );
+      expect(impactedItems.some((item) => item.file === dependentOnNew)).toBe(
+        true,
+      );
+      expect(
+        impactedItems.some((item) => item.explain?.hints?.includes("fileRenamed")),
+      ).toBe(true);
+      expect(impactedItems.every((item) => item.confidence === 0.5)).toBe(true);
     });
 
 

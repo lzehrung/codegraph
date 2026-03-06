@@ -92,4 +92,50 @@ index 1234567..abcdef0 100644
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("includes rename impacts that rely on oldPath normalization", async () => {
+    const root = await mkTmpDir("dg-stream-rename-");
+    await fsp.writeFile(
+      path.join(root, "consumer.ts"),
+      `import { setup } from "./setup";
+export const run = () => setup();
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "setup.ts"),
+      "export const setup = () => 1;\n",
+      "utf8",
+    );
+    const index = await buildProjectIndex(root);
+
+    try {
+      const diffText = `diff --git a/setup.ts b/setup-renamed.ts
+similarity index 100%
+rename from setup.ts
+rename to setup-renamed.ts
+--- a/setup.ts
++++ b/setup-renamed.ts
+@@ -1 +1 @@
+-export const setup = () => 1;
++export const setup = () => 2;
+`;
+
+      const impactedFiles: string[] = [];
+      for await (const chunk of analyzeImpactStreaming(root, index, {
+        provider: "raw",
+        diffText,
+      })) {
+        if (chunk.type === "impactItem") {
+          impactedFiles.push(chunk.item.file);
+        }
+      }
+
+      expect(impactedFiles.some((file) => file.endsWith("consumer.ts"))).toBe(
+        true,
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
