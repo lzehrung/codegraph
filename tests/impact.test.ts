@@ -154,9 +154,91 @@ index 1234567..abcdef0 100644
       expect(hunk?.lines).toContain("-  return 42;");
       expect(hunk?.lines).toContain("+  return 43;");
     });
+
+
+    it("should parse hunks with both added and removed lines", () => {
+      const diffText = `diff --git a/mixed.ts b/mixed.ts
+index 1111111..2222222 100644
+--- a/mixed.ts
++++ b/mixed.ts
+@@ -1,5 +1,6 @@
+ export function run() {
+-  const x = 1;
++  const x = 2;
+   const y = x + 1;
++  const z = y + 1;
+-  return y;
++  return z;
+ }
+`;
+
+      const diff = parseUnifiedDiff(diffText);
+      expect(diff.files).toHaveLength(1);
+      expect(diff.files[0]?.kind).toBe("modified");
+      const hunk = diff.files[0]?.hunks[0];
+      expect(hunk?.lines.some((line) => line.startsWith("+"))).toBe(true);
+      expect(hunk?.lines.some((line) => line.startsWith("-"))).toBe(true);
+    });
+
+    it("should parse mode-only changes without hunks", () => {
+      const diffText = `diff --git a/script.sh b/script.sh
+old mode 100644
+new mode 100755
+`;
+
+      const diff = parseUnifiedDiff(diffText);
+      expect(diff.files).toHaveLength(1);
+      expect(diff.files[0]?.kind).toBe("modified");
+      expect(diff.files[0]?.modeChanged).toBe(true);
+      expect(diff.files[0]?.hunks).toHaveLength(0);
+    });
   });
 
   describe("Impact Analysis", () => {
+
+    it("adds file-level fallback impact for mode-only changes", async () => {
+      const root = await fsp.mkdtemp(path.join(process.cwd(), "tmp-impact-mode-only-"));
+      try {
+        await fsp.writeFile(
+          path.join(root, "main.ts"),
+          `import "./setup";
+export const run = () => 1;
+`,
+          "utf8",
+        );
+        await fsp.writeFile(
+          path.join(root, "setup.ts"),
+          `console.log("boot");
+`,
+          "utf8",
+        );
+
+        const index = await buildProjectIndexFromFiles(root, [
+          path.join(root, "main.ts"),
+          path.join(root, "setup.ts"),
+        ]);
+
+        const diffText = `diff --git a/setup.ts b/setup.ts
+old mode 100644
+new mode 100755
+`;
+
+        const report = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+        });
+
+        expect(
+          report.impacted.some(
+            (item) =>
+              item.file.endsWith("main.ts") &&
+              item.reasons.includes("fileLevelChange"),
+          ),
+        ).toBe(true);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
 
     it("adds file-level fallback impact for modified files without symbols", async () => {
       const root = await fsp.mkdtemp(path.join(process.cwd(), "tmp-impact-fallback-"));
@@ -200,6 +282,54 @@ index 1234567..abcdef0 100644
               item.file.endsWith("main.ts") &&
               item.reasons.includes("fileLevelChange"),
           ),
+        ).toBe(true);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("normalizes rename oldPath before fallback seeding", async () => {
+      const root = await fsp.mkdtemp(
+        path.join(process.cwd(), "tmp-impact-rename-normalize-"),
+      );
+      try {
+        await fsp.writeFile(
+          path.join(root, "consumer.ts"),
+          `import { setup } from "./setup";
+export const run = () => setup();
+`,
+          "utf8",
+        );
+        await fsp.writeFile(
+          path.join(root, "setup.ts"),
+          `export const setup = () => 1;
+`,
+          "utf8",
+        );
+
+        const index = await buildProjectIndexFromFiles(root, [
+          path.join(root, "consumer.ts"),
+          path.join(root, "setup.ts"),
+        ]);
+
+        const diffText = `diff --git a/setup.ts b/setup-renamed.ts
+similarity index 100%
+rename from setup.ts
+rename to setup-renamed.ts
+--- a/setup.ts
++++ b/setup-renamed.ts
+@@ -1 +1 @@
+-export const setup = () => 1;
++export const setup = () => 2;
+`;
+
+        const report = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+        });
+
+        expect(
+          report.impacted.some((item) => item.file.endsWith("consumer.ts")),
         ).toBe(true);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
@@ -920,6 +1050,19 @@ index 1234567..abcdef0 100644
         expect(typeof item.file).toBe("number");
         expect(item.file).toBeGreaterThanOrEqual(0);
         expect(item.file).toBeLessThan(report.files.length);
+        if (item.confidence !== undefined) {
+          expect(item.confidence).toBeGreaterThanOrEqual(0);
+          expect(item.confidence).toBeLessThanOrEqual(1);
+        }
+      }
+
+      if (report.topImpacts) {
+        for (const item of report.topImpacts) {
+          if (item.confidence !== undefined) {
+            expect(item.confidence).toBeGreaterThanOrEqual(0);
+            expect(item.confidence).toBeLessThanOrEqual(1);
+          }
+        }
       }
 
       // Verify file edges use indices

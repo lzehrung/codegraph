@@ -4,8 +4,8 @@ const DEFAULT_TEST_PATTERNS: readonly RegExp[] = [
   /(^|\/)__tests__(\/|$)/i,
   /(^|\/)test(s)?(\/|$)/i,
   /(^|\/)spec(s)?(\/|$)/i,
-  /\.(test|spec)\.[^.\/]+$/i,
-  /(^|\/)[^/]*[-_.](test|spec)\.[^.\/]+$/i,
+  /\.(test|spec)\.[^./]+$/i,
+  /(^|\/)[^/]*[-_.](test|spec)\.[^./]+$/i,
 ];
 
 export function compileTestPatterns(
