@@ -16,18 +16,14 @@ import { analyzeImpact } from "./analyzer.js";
 import { buildImpactReport } from "./report.js";
 import { collectImpactSuggestions } from "./suggestions.js";
 import { listCandidateTestFiles } from "./context.js";
+import { mapLimit } from "../util.js";
+import { normalizeImpactFilePath } from "./path.js";
 
 export * from "./types.js";
 export { analyzeImpactStreaming, type ImpactStreamChunk } from "./streaming.js";
 
 const CONFIG_FILE_RE =
   /(^|\/)(?:tsconfig(?:\.[^./]+)?\.json|jsconfig\.json|vite\.config\.[cm]?[jt]s|webpack\.config\.[cm]?[jt]s|rollup\.config\.[cm]?[jt]s|esbuild\.config\.[cm]?[jt]s|babel\.config\.[cm]?[jt]s|\.eslintrc(?:\.[^./]+)?|prettier\.config\.[cm]?[jt]s|package\.json|pnpm-workspace\.ya?ml|lerna\.json|turbo\.json|nx\.json|\.env(?:\.[^/]*)?)$/i;
-
-function normalizeFilePath(projectRoot: string, filePath: string): string {
-  return path.isAbsolute(filePath)
-    ? filePath.replace(/\\/g, "/")
-    : path.resolve(projectRoot, filePath).replace(/\\/g, "/");
-}
 
 function collectRemovedLines(change: FileChange): Set<number> {
   const removed = new Set<number>();
@@ -284,7 +280,7 @@ function collectConfigAndBreakingSuggestions(
   };
 
   for (const fileChange of fileChanges) {
-    const normalized = normalizeFilePath(projectRoot, fileChange.path);
+    const normalized = normalizeImpactFilePath(projectRoot, fileChange.path);
     removedLinesByFile.set(normalized, collectRemovedLines(fileChange));
     if (!opts.configImpactRules || !matchesConfigSemantics(fileChange.path))
       continue;
@@ -304,7 +300,7 @@ function collectConfigAndBreakingSuggestions(
 
   if (opts.detectBreakingChanges) {
     for (const fileChange of fileChanges) {
-      const normalized = normalizeFilePath(projectRoot, fileChange.path);
+      const normalized = normalizeImpactFilePath(projectRoot, fileChange.path);
       const signatureChanges = detectExportSignatureChanges(fileChange);
       for (const change of signatureChanges) {
         upsertBreakingSuggestion({
@@ -343,7 +339,7 @@ function collectConfigAndBreakingSuggestions(
     }
 
     for (const fileChange of fileChanges) {
-      const normalized = normalizeFilePath(projectRoot, fileChange.path);
+      const normalized = normalizeImpactFilePath(projectRoot, fileChange.path);
       const removedLines = removedLinesByFile.get(normalized);
       if (!removedLines || removedLines.size === 0) continue;
       const mod = index.byFile.get(normalized);
@@ -837,7 +833,7 @@ async function loadCoverageByFile(
       if (rawLine.startsWith("SF:")) {
         const filePath = rawLine.slice(3).trim();
         currentFile = filePath
-          ? normalizeFilePath(projectRoot, filePath)
+          ? normalizeImpactFilePath(projectRoot, filePath)
           : null;
         continue;
       }
@@ -872,7 +868,7 @@ async function loadCoverageByFile(
       if (typeof statementMap !== "object" || typeof statements !== "object") {
         continue;
       }
-      const normalizedFile = normalizeFilePath(projectRoot, fileKey);
+      const normalizedFile = normalizeImpactFilePath(projectRoot, fileKey);
       const fileCoverage = ensureFileCoverage(normalizedFile);
       const mapEntries = Object.entries(
         statementMap as Record<string, unknown>,
@@ -961,15 +957,22 @@ export async function analyzeImpactFromDiff(
       : diff.files;
 
   // Map all changed files to changed symbols
+  const changedByFile = await mapLimit(
+    filteredFiles.map((fileChange, idx) => ({ fileChange, idx })),
+    8,
+    async ({ fileChange, idx }) => {
+      const absPath = normalizeImpactFilePath(projectRoot, fileChange.path);
+      const symbols = await locateChangedSymbols(index, absPath, fileChange.hunks);
+      return { idx, path: absPath, symbols };
+    },
+  );
+
+  changedByFile.sort((a, b) => a.idx - b.idx);
   let changedSymbols: ChangedSymbol[] = [];
-  for (const fileChange of filteredFiles) {
-    const absPath = normalizeFilePath(projectRoot, fileChange.path);
-    const symbols = await locateChangedSymbols(
-      index,
-      absPath,
-      fileChange.hunks,
-    );
-    changedSymbols.push(...symbols);
+  const filesWithSymbols = new Set<string>();
+  for (const entry of changedByFile) {
+    if (entry.symbols.length > 0) filesWithSymbols.add(entry.path);
+    changedSymbols.push(...entry.symbols);
   }
 
   // Honor scope option: only consider exported symbols if scope=imported
@@ -977,13 +980,21 @@ export async function analyzeImpactFromDiff(
     changedSymbols = changedSymbols.filter((s) => s.exported);
   }
 
+  const normalizedChanges = filteredFiles.map((change) => ({
+    ...change,
+    path: normalizeImpactFilePath(projectRoot, change.path),
+  }));
+  const fileLevelFallback = options.fileLevelFallback ?? true;
+  const fileLevelFallbackPaths = normalizedChanges
+    .filter((change) => change.kind === "modified" && !filesWithSymbols.has(change.path))
+    .map((change) => change.path);
+
   // Analyze impact
-  const impactedItems = await analyzeImpact(
-    index,
-    changedSymbols,
-    filteredFiles,
-    options,
-  );
+  const impactedItems = await analyzeImpact(index, changedSymbols, normalizedChanges, {
+    ...options,
+    fileLevelFallback,
+    fileLevelFallbackPaths,
+  });
 
   const suggestions = options.verifyReferences
     ? await collectImpactSuggestions(index, projectRoot, filteredFiles, options)

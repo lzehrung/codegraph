@@ -1,4 +1,5 @@
 import type { Diff, DiffProviderOptions } from "../types.js";
+import { spawn } from "node:child_process";
 import { parseUnifiedDiff, parseUnifiedDiffStreaming } from "../parse.js";
 
 export interface DiffProvider {
@@ -23,19 +24,65 @@ function createProvider(providerType: string): DiffProvider {
   }
 }
 
+
+async function runGitCommand(
+  cwd: string,
+  args: string[],
+  rejectOnFailure: boolean,
+): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    const child = spawn("git", args, { cwd });
+    let stdout = "";
+    let stderr = "";
+    let closeCode: number | null = null;
+    let stdoutEnded = false;
+
+    const maybeResolve = () => {
+      if (closeCode === null || !stdoutEnded) return;
+      if (closeCode !== 0 && rejectOnFailure) {
+        reject(
+          new Error(
+            `git ${args.join(" ")} failed with code ${closeCode}: ${stderr}`,
+          ),
+        );
+        return;
+      }
+      resolve(stdout.trim());
+    };
+
+    child.stdout.on("data", (data) => {
+      stdout += String(data);
+    });
+    child.stdout.on("end", () => {
+      stdoutEnded = true;
+      maybeResolve();
+    });
+    child.stderr.on("data", (data) => {
+      stderr += String(data);
+    });
+    child.on("close", (code) => {
+      closeCode = code ?? 0;
+      maybeResolve();
+    });
+    child.on("error", reject);
+  });
+}
+
 // Forward declarations - will be implemented in separate files
 class GitDiffProvider implements DiffProvider {
   async getDiff(
     opts: Extract<DiffProviderOptions, { provider: "git" }>,
   ): Promise<Diff> {
-    const { execSync, spawn } = await import("child_process");
     const cwd = opts.cwd || process.cwd();
 
     // Circuit breaker: check diff size first
-    const statCmd = `git diff --shortstat ${opts.base}..${opts.head}`;
     let warning: string | undefined;
     try {
-      const statOutput = execSync(statCmd, { cwd, encoding: "utf8" }).trim();
+      const statOutput = await runGitCommand(
+        cwd,
+        ["diff", "--shortstat", `${opts.base}..${opts.head}`],
+        false,
+      );
       if (statOutput) {
         const insertionMatch = statOutput.match(/(\d+) insertion/);
         const deletionMatch = statOutput.match(/(\d+) deletion/);
