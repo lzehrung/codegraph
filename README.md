@@ -13,6 +13,22 @@ It stays small on purpose and is built to be easy to extend to new grammars.
 
 Sample graph: [sample-graph.md](./sample-graph.md)
 
+## Table of contents
+
+* [Features](#features)
+* [Supported languages](#supported-languages)
+* [Semantic Chunking](#semantic-chunking)
+* [Installation](#installation)
+* [Requirements](#requirements)
+* [Usage](#usage)
+* [Performance](#performance)
+* [Programmatic usage (from code)](#programmatic-usage-from-code)
+* [How it works (high level)](#how-it-works-high-level)
+* [Extending to other languages](#extending-to-other-languages)
+* [Unit testing](#unit-testing)
+* [FAQ](#faq)
+* [Contributing & Releases](#contributing--releases)
+
 ---
 
 ## Features
