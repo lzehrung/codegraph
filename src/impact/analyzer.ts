@@ -282,7 +282,7 @@ export function seedTransitiveFromFiles(
     // Skip if this file already has impact items or is ignored
     if (impacted.has(fileChange.path) || isIgnored(fileChange.path)) continue;
 
-    // For deleted/renamed files, seed transitive impact from files that depended on them
+    // Seed impact for modified (file-level fallback), deleted, and renamed files based on dependents
 
     if (
       fileChange.kind === "modified" &&
