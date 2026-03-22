@@ -1,4 +1,10 @@
-node_modules
+node_modules/
 *.env
-dist
-.codegraph-cache
+dist/
+.codegraph-cache/
+target/
+release/
+packages/codegraph-native/*.node
+packages/codegraph-native/Cargo.lock
+packages/codegraph-native/npm/
+packages/codegraph-native/artifacts/

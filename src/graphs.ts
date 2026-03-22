@@ -28,6 +28,11 @@ import {
   extractJsTsDynamicSpecifiers,
 } from "./util.js";
 import {
+  runNativeLanguageQueries,
+  type NativeQueryResults,
+} from "./native/treeSitterNative.js";
+import { capturesByName } from "./native/queryResults.js";
+import {
   type ImportBinding,
   type ProjectIndex,
   type SymbolDef,
@@ -72,6 +77,7 @@ export function collectModuleSpecifiersFromSource(
   source: string,
   opts?: {
     tree?: Parser.Tree;
+    nativeQueries?: NativeQueryResults | null;
     fast?: boolean;
     file?: string;
     fastRegexDisabledLanguages?: string[];
@@ -265,6 +271,51 @@ export function collectModuleSpecifiersFromSource(
   }
 
   let queryFailed = false;
+  if (opts?.nativeQueries) {
+    try {
+      for (const match of opts.nativeQueries.imports) {
+        const caps = capturesByName(match);
+        const stmtText = caps["stmt"]?.text ?? "";
+        const typeOnly =
+          (support.id === "ts" || support.id === "tsx") &&
+          (/\b(import|export)\s+type\b/.test(stmtText) ||
+            /^\s*declare\s+module\s+["']/.test(stmtText));
+        for (const capture of match.captures) {
+          if (capture.name !== "mod") continue;
+          out.push({ spec: unquote(capture.text), typeOnly });
+        }
+      }
+      if (htmlLikeLanguage) {
+        const htmlSeen = makeSeenSet(out);
+        appendUniqueSpecifiers(
+          out,
+          extractHtmlAttributeSpecifiers(source),
+          htmlSeen,
+        );
+        appendUniqueSpecifiers(
+          out,
+          extractHtmlInlineScriptSpecifiers(source),
+          htmlSeen,
+        );
+      }
+      if (
+        support.id === "css" ||
+        support.id === "scss" ||
+        support.id === "less"
+      ) {
+        const cssSeen = makeSeenSet(out);
+        appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
+      }
+      if (out.length > 0) return out;
+    } catch (error) {
+      queryFailed = true;
+      console.warn(
+        `Warning: Native query error in collectModuleSpecifiersFromSource for ${support.id}:`,
+        error,
+      );
+      out.length = 0;
+    }
+  }
   try {
     const key =
       support.id === "python" ? "py" : support.id === "js" ? "js" : "ts";
@@ -374,6 +425,7 @@ export async function collectEdgesForFile(
       tree: Parser.Tree;
       sup: LanguageSupport;
       lang: Parser.Language;
+      nativeQueries?: NativeQueryResults | null;
     };
     fast?: boolean;
     fastRegexDisabledLanguages?: string[];
@@ -415,16 +467,19 @@ export async function collectEdgesForFile(
   let sup = parsed?.sup;
   let lang = parsed?.lang;
   let src = parsed?.source;
+  let nativeQueries = parsed?.nativeQueries ?? null;
   if (!sup || !lang || src === undefined) {
     const prep = await prepareParserInput(file);
     sup = prep.sup;
     lang = prep.lang;
     src = prep.source;
+    nativeQueries = runNativeLanguageQueries(src, sup);
   }
 
   const fast = !!opts.fast;
   const specs = collectModuleSpecifiersFromSource(sup, lang, src, {
     ...(parsed?.tree ? { tree: parsed.tree } : {}),
+    ...(nativeQueries ? { nativeQueries } : {}),
     fast,
     file: normalizedFile,
     ...(opts.fastRegexDisabledLanguages
