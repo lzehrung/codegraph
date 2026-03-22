@@ -21,7 +21,7 @@ npm run publish:minor
 npm run publish:major
 ```
 
-`release:*` bumps both package versions, refreshes the lockfile, runs tests/builds, stages the current platform's native package, syncs the native meta package, commits, tags, and pushes.
+`release:*` bumps both package versions, refreshes the lockfile, runs tests/builds, commits, tags, and pushes.
 
 `publish:*` does the same work and also publishes:
 - staged native target packages

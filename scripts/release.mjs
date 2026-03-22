@@ -82,6 +82,13 @@ function updateVersions(nextVersion) {
   writeJson(nativePackagePath, nativePackage);
 }
 
+function restoreNativePackage(version) {
+  const nativePackage = readJson(nativePackagePath);
+  nativePackage.version = version;
+  delete nativePackage.optionalDependencies;
+  writeJson(nativePackagePath, nativePackage);
+}
+
 function commitAndTag(version) {
   run("git", [
     "add",
@@ -111,14 +118,18 @@ run("npm", ["install"]);
 run("npm", ["run", "test:ci"]);
 run("npm", ["run", "build"]);
 run("npm", ["run", "build:native"]);
-run("npm", ["run", "native:create-npm-dirs"]);
-run("npm", ["run", "native:stage-local"]);
-run("npm", ["run", "native:sync-meta"]);
 
 if (shouldPublish) {
-  run("npm", ["run", "publish:native:targets"]);
-  run("npm", ["run", "publish:native:meta"]);
-  run("npm", ["publish"]);
+  run("npm", ["run", "native:create-npm-dirs"]);
+  run("npm", ["run", "native:stage-local"]);
+  run("npm", ["run", "native:sync-meta"]);
+  try {
+    run("npm", ["run", "publish:native:targets"]);
+    run("npm", ["run", "publish:native:meta"]);
+    run("npm", ["publish"]);
+  } finally {
+    restoreNativePackage(nextVersion);
+  }
 }
 
 commitAndTag(nextVersion);

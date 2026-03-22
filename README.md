@@ -1439,12 +1439,12 @@ Yes. It detects npm/yarn/pnpm/lerna workspaces and resolves package-relative imp
 The old release ergonomics are back. Use the root scripts to cut synchronized releases for both the JS package and the optional native package:
 
 ```bash
-# Version, test, build, stage the local native target, commit, tag, and push
+# Version, test, build, commit, tag, and push
 npm run release:patch
 npm run release:minor
 npm run release:major
 
-# Same flow, plus publish staged native target packages, the native meta package, and the root package
+# Same flow, plus stage/publish the local native target, publish the native meta package, and publish the root package
 npm run publish:patch
 npm run publish:minor
 npm run publish:major
@@ -1453,8 +1453,8 @@ npm run publish:major
 The release scripts:
 - Keep `@lzehrung/codegraph` and `@lzehrung/codegraph-native` on the same version
 - Run tests plus JS/native builds before tagging
-- Stage the current platform's native package automatically for local releases
-- Sync the native meta package to only the staged binary packages
+- Keep staged native metadata as publish-time state instead of committed source state
+- Stage the current platform's native package automatically for local publish flows
 - Create the git commit and tag, then push both
 
 For multi-platform releases, stage additional native target artifacts before publish. See [PUBLISHING.md](./PUBLISHING.md) for the detailed release flow.

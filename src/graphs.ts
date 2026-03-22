@@ -422,7 +422,7 @@ export async function collectEdgesForFile(
   opts: {
     parsed?: {
       source: string;
-      tree: Parser.Tree;
+      tree?: Parser.Tree;
       sup: LanguageSupport;
       lang: Parser.Language;
       nativeQueries?: NativeQueryResults | null;

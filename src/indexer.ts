@@ -191,6 +191,26 @@ type ParsedFileContext = {
   nativeQueries?: NativeQueryResults | null;
 };
 
+type PreparedFileContext = {
+  source: string;
+  sup: LanguageSupport;
+  lang: Parser.Language;
+  nativeQueries: NativeQueryResults | null;
+};
+
+function parsePreparedFileContext(context: PreparedFileContext): ParsedFileContext {
+  const { source, sup, lang, nativeQueries } = context;
+  const key = sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts";
+  const parser = acquireParser(lang, key);
+  try {
+    parser.setLanguage(lang);
+    const tree = parser.parse(source);
+    return { source, tree, sup, lang, nativeQueries };
+  } finally {
+    releaseParser(parser, key);
+  }
+}
+
 /**
  * Options for building the project index
  */
@@ -2354,34 +2374,30 @@ export async function collectImportsForFile(
 
   const key =
     resolvedSup.id === "python" ? "py" : resolvedSup.id === "js" ? "js" : "ts";
-  const parser = acquireParser(resolvedLang, key);
-  try {
-    parser.setLanguage(resolvedLang);
-    const tree = opts?.tree ?? parser.parse(resolvedSource);
-    const tsCfg =
-      resolvedSup.id === "ts" || resolvedSup.id === "tsx"
-        ? await loadNearestTsconfigFor(file)
-        : undefined;
-    const workspaceConfig = await loadWorkspaceConfig(projectRoot);
+  const tsCfg =
+    resolvedSup.id === "ts" || resolvedSup.id === "tsx"
+      ? await loadNearestTsconfigFor(file)
+      : undefined;
+  const workspaceConfig = await loadWorkspaceConfig(projectRoot);
 
-    const resolveFrom = async (from: string) => {
-      const resolutionHints = opts?.graphOptions?.resolutionHints;
-      const resolved = await resolveImportSpecifier(
-        projectRoot,
-        file,
-        from,
-        resolvedSup.id,
-        {
-          ...(tsCfg?.matchPath ? { matchPath: tsCfg.matchPath } : {}),
-          ...(workspaceConfig ? { workspaceConfig } : {}),
-          resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
-          ...(resolutionHints ? { resolutionHints } : {}),
-        },
-      );
-      return typeof resolved === "string"
-        ? resolved.replace(/\\/g, "/")
-        : resolved;
-    };
+  const resolveFrom = async (from: string) => {
+    const resolutionHints = opts?.graphOptions?.resolutionHints;
+    const resolved = await resolveImportSpecifier(
+      projectRoot,
+      file,
+      from,
+      resolvedSup.id,
+      {
+        ...(tsCfg?.matchPath ? { matchPath: tsCfg.matchPath } : {}),
+        ...(workspaceConfig ? { workspaceConfig } : {}),
+        resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
+        ...(resolutionHints ? { resolutionHints } : {}),
+      },
+    );
+    return typeof resolved === "string"
+      ? resolved.replace(/\\/g, "/")
+      : resolved;
+  };
 
     const runFallback = async () => {
       const src =
@@ -2485,9 +2501,9 @@ export async function collectImportsForFile(
       }
     };
 
-    if (resolvedNativeQueries) {
-      try {
-        for (const match of resolvedNativeQueries.importBindings) {
+  if (resolvedNativeQueries) {
+    try {
+      for (const match of resolvedNativeQueries.importBindings) {
           const caps = capturesByName(match);
           const stmtText = caps["stmt"]?.text ?? "";
           const typeOnly = resolvedSup.isTypeOnly(stmtText);
@@ -2670,13 +2686,17 @@ export async function collectImportsForFile(
               imports.push({ kind: "star", from, resolved, typeOnly });
             }
           }
-        }
-        if (imports.length > 0) return imports;
-      } catch {
-        imports.length = 0;
       }
+      if (imports.length > 0) return imports;
+    } catch {
+      imports.length = 0;
     }
+  }
 
+  const parser = acquireParser(resolvedLang, key);
+  try {
+    parser.setLanguage(resolvedLang);
+    const tree = opts?.tree ?? parser.parse(resolvedSource);
     let ranFallback = false;
     try {
       let q: Parser.Query;
@@ -2979,21 +2999,17 @@ export async function collectImportsForFile(
 }
 
 export async function parseFile(file: string): Promise<ParsedFileContext> {
+  return parsePreparedFileContext(await prepareFileForIndexing(file));
+}
+
+async function prepareFileForIndexing(file: string): Promise<PreparedFileContext> {
   const prep = await prepareParserInput(file);
-  const sup = prep.sup;
-  if (!sup) throw new Error(`Unsupported file extension: ${file}`);
-  const lang = prep.lang;
-  const source = prep.source;
-  const nativeQueries = runNativeLanguageQueries(source, sup);
-  const key = sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts";
-  const parser = acquireParser(lang, key);
-  try {
-    parser.setLanguage(lang);
-    const tree = parser.parse(source);
-    return { source, tree, sup, lang, nativeQueries };
-  } finally {
-    releaseParser(parser, key);
-  }
+  return {
+    source: prep.source,
+    sup: prep.sup,
+    lang: prep.lang,
+    nativeQueries: runNativeLanguageQueries(prep.source, prep.sup),
+  };
 }
 
 export async function ensureParsedContext(
@@ -3015,24 +3031,7 @@ export async function ensureParsedContext(
       nativeQueries: parsedEntry.nativeQueries ?? null,
     };
   }
-  const prep = await prepareParserInput(file);
-  const nativeQueries = runNativeLanguageQueries(prep.source, prep.sup);
-  const key =
-    prep.sup.id === "python" ? "py" : prep.sup.id === "js" ? "js" : "ts";
-  const parser = acquireParser(prep.lang, key);
-  try {
-    parser.setLanguage(prep.lang);
-    const tree = parser.parse(prep.source);
-    return {
-      source: prep.source,
-      tree,
-      sup: prep.sup,
-      lang: prep.lang,
-      nativeQueries,
-    };
-  } finally {
-    releaseParser(parser, key);
-  }
+  return parsePreparedFileContext(await prepareFileForIndexing(file));
 }
 
 type ManifestMode = "off" | "read-only" | "read-write";
@@ -3196,20 +3195,26 @@ async function buildIndexFromFileListShared(
         return [f, mod, []] as const;
       }
 
-      const parsed = await parseFile(f);
-      setParsedCacheEntry(
-        parsedMap,
-        f,
-        {
-          source: parsed.source,
-          tree: parsed.tree,
-          sup: parsed.sup,
-          lang: parsed.lang,
-          nativeQueries: parsed.nativeQueries ?? null,
-        },
-        Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
-      );
-      const { source: src, sup, lang, tree, nativeQueries } = parsed;
+      const prepared = await prepareFileForIndexing(f);
+      const { source: src, sup, lang, nativeQueries } = prepared;
+      let tree: Parser.Tree | undefined;
+
+      if (!nativeQueries) {
+        const parsed = parsePreparedFileContext(prepared);
+        tree = parsed.tree;
+        setParsedCacheEntry(
+          parsedMap,
+          f,
+          {
+            source: parsed.source,
+            tree: parsed.tree,
+            sup: parsed.sup,
+            lang: parsed.lang,
+            nativeQueries: parsed.nativeQueries ?? null,
+          },
+          Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
+        );
+      }
 
       if (bloomFilterCache) {
         const filter = buildBloomFilterFromSource(src, sup.id);
@@ -3220,7 +3225,7 @@ async function buildIndexFromFileListShared(
       if (!mod) {
         const imports = await collectImportsForFile(f, projectRoot, {
           source: src,
-          tree,
+          ...(tree ? { tree } : {}),
           sup,
           lang,
           ...(nativeQueries !== undefined ? { nativeQueries } : {}),
@@ -3228,7 +3233,7 @@ async function buildIndexFromFileListShared(
         });
         collectJsonDependencies(imports, jsonDependencies);
         mod = collectLocalsAndExportsFromSource(f, src, sup, lang, imports, {
-          tree,
+          ...(tree ? { tree } : {}),
           ...(nativeQueries !== undefined ? { nativeQueries } : {}),
         });
         mod.imports = imports;
@@ -3275,7 +3280,13 @@ async function buildIndexFromFileListShared(
 
       // 2. Recompute Edges (using the parsed tree)
       edges = await collectEdgesForFile(f, projectRoot, workspaceConfig, {
-        parsed: parsed,
+        parsed: {
+          source: src,
+          ...(tree ? { tree } : {}),
+          sup,
+          lang,
+          ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+        },
         fast: !!graphOptions.fast,
         ...(graphOptions.fastRegexDisabledLanguages
           ? {
@@ -3717,14 +3728,20 @@ export async function buildProjectIndexIncremental(
             return [f, mod] as const;
           }
 
-          const parsed = await parseFile(f);
-          setParsedCacheEntry(
-            parsedMap,
-            f,
-            parsed,
-            Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
-          );
-          const { source: src, sup, lang, tree, nativeQueries } = parsed;
+          const prepared = await prepareFileForIndexing(f);
+          const { source: src, sup, lang, nativeQueries } = prepared;
+          let tree: Parser.Tree | undefined;
+
+          if (!nativeQueries) {
+            const parsed = parsePreparedFileContext(prepared);
+            tree = parsed.tree;
+            setParsedCacheEntry(
+              parsedMap,
+              f,
+              parsed,
+              Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
+            );
+          }
 
           // Build bloom filter for this file if enabled
           if (bloomFilterCache) {
@@ -3736,7 +3753,7 @@ export async function buildProjectIndexIncremental(
 
           const imports = await collectImportsForFile(f, projectRoot, {
             source: src,
-            tree,
+            ...(tree ? { tree } : {}),
             sup,
             lang,
             ...(nativeQueries !== undefined ? { nativeQueries } : {}),
@@ -3750,7 +3767,7 @@ export async function buildProjectIndexIncremental(
             lang,
             imports,
             {
-              tree,
+              ...(tree ? { tree } : {}),
               ...(nativeQueries !== undefined ? { nativeQueries } : {}),
             },
           );
