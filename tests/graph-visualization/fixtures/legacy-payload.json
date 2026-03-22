@@ -1,0 +1,12 @@
+{
+  "nodes": [
+    "src/a.ts",
+    "src/b.ts",
+    "src/c.ts"
+  ],
+  "edges": [
+    { "from": "src/a.ts", "to": { "type": "file", "path": "src/b.ts" }, "raw": "./b" },
+    { "from": "src/b.ts", "to": { "type": "file", "path": "src/c.ts" }, "raw": "./c" },
+    { "from": "src/a.ts", "to": { "type": "external", "name": "lodash" }, "raw": "lodash" }
+  ]
+}

@@ -653,6 +653,7 @@ Build Options:
   --threads N               Number of worker threads (default: auto)
   --cache <mode>            Cache mode: disk, memory, off
   --cache-strict            Use content hashes instead of mtime
+  --progress                Show progress tracking during indexing
 
 Output Options:
   --json                    Output as JSON (default)
@@ -672,6 +673,25 @@ Examples:
 
   const reportFile = getOpt("--report-file");
   const reportEnabled = hasFlag("--report") || reportFile !== undefined;
+  const showProgress = hasFlag("--progress");
+  let lastProgressUpdate = 0;
+  const progressHandler = showProgress ? (p: import("./types.js").ProgressUpdate) => {
+    const now = Date.now();
+    const isComplete = p.current === p.total;
+    const shouldUpdate = isComplete || (now - lastProgressUpdate > 100);
+    
+    if (shouldUpdate) {
+      if (process.stderr.isTTY) {
+        process.stderr.write(`\r[Progress] ${p.current}/${p.total} files processed...`);
+        if (isComplete) {
+          process.stderr.write("\n");
+        }
+      } else if (p.current === 1 || isComplete || p.current % 100 === 0) {
+        console.error(`[Progress] ${p.current}/${p.total} files processed.`);
+      }
+      lastProgressUpdate = now;
+    }
+  } : undefined;
   const graphFlags = {
     fast: hasFlag("--fast-graph"),
     resolveNodeModules: hasFlag("--resolve-node-modules"),
@@ -947,6 +967,7 @@ Examples:
       const sqliteCacheMode = cache ?? (changedSet ? "disk" : undefined);
       const index = changedSet
         ? await buildProjectIndexIncremental(projectRootFs, {
+            onProgress: progressHandler,
             threads,
             ...(sqliteCacheMode !== undefined
               ? { cache: sqliteCacheMode }
@@ -960,6 +981,7 @@ Examples:
             ...(indexReport ? { report: indexReport } : {}),
           })
         : await buildProjectIndexFromFiles(projectRootFs, files, {
+            onProgress: progressHandler,
             threads,
             ...(sqliteCacheMode !== undefined
               ? { cache: sqliteCacheMode }
@@ -1008,6 +1030,7 @@ Examples:
     }
     if (wantSymbols) {
       const index = await buildProjectIndexFromFiles(projectRootFs, files, {
+        onProgress: progressHandler,
         threads,
         ...(cache !== undefined ? { cache } : {}),
         cacheStrict,
@@ -1136,6 +1159,7 @@ Examples:
       commandReport.index = indexReport;
     }
     const baseIndexOptions: BuildOptions = {
+      onProgress: progressHandler,
       threads,
       ...(cache !== undefined ? { cache } : {}),
       cacheStrict,
@@ -1205,7 +1229,7 @@ Examples:
     const file = path.isAbsolute(fileArg)
       ? fileArg.replace(/\\/g, "/")
       : path.resolve(projectRootFs, fileArg).replace(/\\/g, "/");
-    const index = await buildProjectIndex(projectRootFs);
+    const index = await buildProjectIndex(projectRootFs, { onProgress: progressHandler });
     const mod = index.byFile.get(file);
     if (!mod) {
       writeJSONLine({
@@ -1251,7 +1275,7 @@ Examples:
       : path.resolve(projectRootFs, fileArg).replace(/\\/g, "/");
     const line = Number(lineArg);
     const column = Number(colArg);
-    const index = await buildProjectIndex(projectRootFs);
+    const index = await buildProjectIndex(projectRootFs, { onProgress: progressHandler });
     const res = await goToDefinition(index, { file, line, column });
     writeJSONLine(res);
     return;
@@ -1271,7 +1295,7 @@ Examples:
     const line = Number(lineArg);
     const column = Number(colArg);
     const pretty = hasFlag("--pretty");
-    const index = await buildProjectIndex(projectRootFs);
+    const index = await buildProjectIndex(projectRootFs, { onProgress: progressHandler });
     const res = await findReferences(index, { file, line, column });
     if (!pretty) {
       writeJSONLine(res);
@@ -1451,7 +1475,7 @@ Examples:
           ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
         };
       }
-      const index = await buildProjectIndex(projectRootFs, indexOpts);
+      const index = await buildProjectIndex(projectRootFs, { ...indexOpts, onProgress: progressHandler });
       const report = await analyzeImpactFromDiff(
         projectRootFs,
         index,
@@ -1780,7 +1804,7 @@ Examples:
 
   if (cmd === "apisurface") {
     const json = hasFlag("--json");
-    const index = await buildProjectIndex(projectRootFs);
+    const index = await buildProjectIndex(projectRootFs, { onProgress: progressHandler });
     const apiSurface = getApiSurface(index);
 
     if (json) {

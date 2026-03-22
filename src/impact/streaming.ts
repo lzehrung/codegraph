@@ -14,7 +14,7 @@ import { normalizeImpactFilePath } from "./path.js";
 
 export type ImpactStreamChunk =
   | { type: "projectFiles"; files: ProjectFileInfo[] }
-  | { type: "progress"; message: string; current: number; total: number }
+  | import("../types.js").ProgressUpdate
   | { type: "changedSymbol"; symbol: ChangedSymbol }
   | { type: "impactItem"; item: ImpactItem }
   | {
