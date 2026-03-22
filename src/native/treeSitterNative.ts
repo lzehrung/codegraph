@@ -102,6 +102,11 @@ export function getNativeTreeSitterLoadError(): unknown {
   return state.loaded ? undefined : state.error;
 }
 
+export function getNativeTreeSitterSupportedLanguageIds(): string[] {
+  const state = loadBinding();
+  return state.loaded ? Array.from(state.supportedLanguageIds).sort() : [];
+}
+
 export function runNativeLanguageQueries(
   source: string,
   support: LanguageSupport,

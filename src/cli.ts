@@ -85,6 +85,32 @@ function writeError(error: unknown) {
   writeStderrLine(String(error));
 }
 
+function formatNativeBackendStatus(report: BuildReport | undefined): string | undefined {
+  const native = report?.backend?.native;
+  if (!native) return undefined;
+  if (native.filesUsed > 0) {
+    return `Backend: native tree-sitter used for ${native.filesUsed} file(s)`;
+  }
+  const fallbackTotal = native.filesFellBack;
+  if (native.available) {
+    if (fallbackTotal > 0) {
+      return `Backend: JS tree-sitter fallback for ${fallbackTotal} file(s)`;
+    }
+    return "Backend: native tree-sitter available";
+  }
+  const reason = native.loadError ? ` (${native.loadError})` : "";
+  return `Backend: JS tree-sitter fallback; native addon unavailable${reason}`;
+}
+
+function maybeWriteNativeBackendStatus(
+  report: BuildReport | undefined,
+  showProgress: boolean,
+): void {
+  if (!showProgress) return;
+  const message = formatNativeBackendStatus(report);
+  if (message) writeStderrLine(message);
+}
+
 type CommandTimingReport = {
   totalMs?: number;
   resolveFilesMs?: number;
@@ -950,9 +976,8 @@ Examples:
         writeStdoutLine(text);
       }
     };
-    const indexReport: BuildReport | undefined = commandReport
-      ? { timings: {} }
-      : undefined;
+    const indexReport: BuildReport | undefined =
+      reportEnabled || showProgress ? { timings: {} } : undefined;
     if (commandReport && indexReport) {
       commandReport.index = indexReport;
     }
@@ -990,6 +1015,7 @@ Examples:
             graph: graphOptions,
             ...(indexReport ? { report: indexReport } : {}),
           });
+      maybeWriteNativeBackendStatus(indexReport, showProgress);
 
       const detailedSymbols = hasFlag("--symbols-detailed");
       const scope = getOpt("--symbols-detailed-scope") as
@@ -1042,6 +1068,7 @@ Examples:
         },
         ...(indexReport ? { report: indexReport } : {}),
       });
+      maybeWriteNativeBackendStatus(indexReport, showProgress);
       let sgraph;
       if (detailedSymbols) {
         const scope = getOpt("--symbols-detailed-scope") as
@@ -1174,6 +1201,7 @@ Examples:
           files,
           baseIndexOptions,
         );
+    maybeWriteNativeBackendStatus(indexReport, showProgress);
     if (full) {
       const modules = [...index.byFile.values()].map((m) => ({
         file: m.file,

@@ -50,6 +50,9 @@ import {
 } from "./graphs.js";
 import type { Edge, Range, FileId, Graph } from "./types.js";
 import {
+  getNativeTreeSitterLoadError,
+  getNativeTreeSitterSupportedLanguageIds,
+  isNativeTreeSitterAvailable,
   runNativeLanguageQueries,
   type NativeCapture,
   type NativeQueryResults,
@@ -196,6 +199,7 @@ type PreparedFileContext = {
   sup: LanguageSupport;
   lang: Parser.Language;
   nativeQueries: NativeQueryResults | null;
+  nativeFallbackReason?: NativeBackendFallbackReason;
 };
 
 function parsePreparedFileContext(context: PreparedFileContext): ParsedFileContext {
@@ -298,12 +302,32 @@ export type ManifestReport = {
   optionsMismatch?: string[];
 };
 
+export type NativeBackendFallbackReason =
+  | "unavailable"
+  | "unsupportedLanguage"
+  | "queryFailure";
+
+export type NativeBackendReport = {
+  available: boolean;
+  enabled: boolean;
+  supportedLanguageIds: string[];
+  filesUsed: number;
+  filesFellBack: number;
+  fallbackReasons: Record<NativeBackendFallbackReason, number>;
+  loadError?: string;
+};
+
+export type BackendReport = {
+  native: NativeBackendReport;
+};
+
 export type BuildReport = {
   timings: BuildTimingReport;
   cache?: CacheReport;
   files?: BuildFileReport;
   graph?: GraphReport;
   manifest?: ManifestReport;
+  backend?: BackendReport;
 };
 
 export type GraphDeltaReport = {
@@ -867,6 +891,53 @@ function initManifestReport(
     report.manifest.reused = reused;
   }
   return report.manifest;
+}
+
+function stringifyNativeLoadError(error: unknown): string | undefined {
+  if (!error) return undefined;
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function initBackendReport(report: BuildReport | undefined): BackendReport | undefined {
+  if (!report) return undefined;
+  if (!report.backend) {
+    const loadError = stringifyNativeLoadError(getNativeTreeSitterLoadError());
+    report.backend = {
+      native: {
+        available: isNativeTreeSitterAvailable(),
+        enabled: false,
+        supportedLanguageIds: getNativeTreeSitterSupportedLanguageIds(),
+        filesUsed: 0,
+        filesFellBack: 0,
+        fallbackReasons: {
+          unavailable: 0,
+          unsupportedLanguage: 0,
+          queryFailure: 0,
+        },
+      },
+    };
+    if (loadError) {
+      report.backend.native.loadError = loadError;
+    }
+  }
+  return report.backend;
+}
+
+function recordNativeBackendOutcome(
+  report: BuildReport | undefined,
+  outcome: { usedNative: boolean; fallbackReason?: NativeBackendFallbackReason },
+): void {
+  const backend = initBackendReport(report);
+  if (!backend) return;
+  if (outcome.usedNative) {
+    backend.native.enabled = true;
+    backend.native.filesUsed += 1;
+    return;
+  }
+  if (!outcome.fallbackReason) return;
+  backend.native.filesFellBack += 1;
+  backend.native.fallbackReasons[outcome.fallbackReason] += 1;
 }
 
 async function fileContentHash(file: string): Promise<string> {
@@ -3004,11 +3075,24 @@ export async function parseFile(file: string): Promise<ParsedFileContext> {
 
 async function prepareFileForIndexing(file: string): Promise<PreparedFileContext> {
   const prep = await prepareParserInput(file);
+  const nativeAvailable = isNativeTreeSitterAvailable();
+  const nativeSupportedLanguageIds = new Set(getNativeTreeSitterSupportedLanguageIds());
+  const nativeQueries = runNativeLanguageQueries(prep.source, prep.sup);
+  let nativeFallbackReason: NativeBackendFallbackReason | undefined;
+
+  if (!nativeQueries) {
+    if (!nativeAvailable) nativeFallbackReason = "unavailable";
+    else if (!nativeSupportedLanguageIds.has(prep.sup.id))
+      nativeFallbackReason = "unsupportedLanguage";
+    else nativeFallbackReason = "queryFailure";
+  }
+
   return {
     source: prep.source,
     sup: prep.sup,
     lang: prep.lang,
-    nativeQueries: runNativeLanguageQueries(prep.source, prep.sup),
+    nativeQueries,
+    ...(nativeFallbackReason ? { nativeFallbackReason } : {}),
   };
 }
 
@@ -3057,6 +3141,7 @@ async function buildIndexFromFileListShared(
   const cacheEnabled = cacheMode !== "off";
   const graphOptions = normalizeGraphOptions(opts?.graph);
   initManifestReport(report, useManifest, false);
+  initBackendReport(report);
   const normalizedFiles = Array.from(
     new Set(
       (rawFiles ?? [])
@@ -3196,6 +3281,12 @@ async function buildIndexFromFileListShared(
       }
 
       const prepared = await prepareFileForIndexing(f);
+      recordNativeBackendOutcome(report, {
+        usedNative: !!prepared.nativeQueries,
+        ...(prepared.nativeFallbackReason
+          ? { fallbackReason: prepared.nativeFallbackReason }
+          : {}),
+      });
       const { source: src, sup, lang, nativeQueries } = prepared;
       let tree: Parser.Tree | undefined;
 
@@ -3502,6 +3593,7 @@ export async function buildProjectIndexIncremental(
   opts?: IncrementalBuildOptions,
 ): Promise<ProjectIndex> {
   const report = opts?.report;
+  initBackendReport(report);
   const timings = report?.timings;
   const totalStart = performance.now();
   const cacheMode = opts?.cache ?? "off";
@@ -3729,6 +3821,12 @@ export async function buildProjectIndexIncremental(
           }
 
           const prepared = await prepareFileForIndexing(f);
+          recordNativeBackendOutcome(report, {
+            usedNative: !!prepared.nativeQueries,
+            ...(prepared.nativeFallbackReason
+              ? { fallbackReason: prepared.nativeFallbackReason }
+              : {}),
+          });
           const { source: src, sup, lang, nativeQueries } = prepared;
           let tree: Parser.Tree | undefined;
 
