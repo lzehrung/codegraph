@@ -14,6 +14,13 @@ import {
 import { buildBloomFilterFromSource } from "./util/bloomFilter.js";
 import { prepareParserInput } from "./languages/filePrep.js";
 import {
+  analyzeJsTsModuleWithOxc,
+  supportsOxcLanguage,
+  type OxcExportEntry,
+  type OxcImportBinding,
+  type OxcSymbolDef,
+} from "./languages/oxcAdapter.js";
+import {
   listProjectFiles,
   discoverProjectFiles,
   DEFAULT_PROJECT_MANIFESTS,
@@ -49,6 +56,7 @@ import {
   type SymbolGraph,
 } from "./graphs.js";
 import type { Edge, Range, FileId, Graph } from "./types.js";
+import { processFileInWorker, workerPoolAvailable } from "./workerPool.js";
 
 // Default number of lines to include around references for line context
 const DEFAULT_REF_CONTEXT_LINES = 5;
@@ -1202,6 +1210,96 @@ function compareEdges(left: Edge, right: Edge): number {
   return leftTypeOnly - rightTypeOnly;
 }
 
+function cloneEdgeForManifest(edge: Edge): Edge {
+  return {
+    from: edge.from,
+    to:
+      edge.to.type === "file"
+        ? { type: "file", path: edge.to.path }
+        : { type: "external", name: edge.to.name },
+    raw: edge.raw,
+    ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
+    ...(edge.resolved !== undefined ? { resolved: edge.resolved } : {}),
+    ...(edge.confidence !== undefined ? { confidence: edge.confidence } : {}),
+  };
+}
+
+function mergeGraphWithEntries(
+  baseGraph: Graph | undefined,
+  filesToReplace: string[],
+  entries: Map<string, ManifestFileEntry>,
+  allKnownFiles: string[],
+): Graph {
+  const replaceSet = new Set(filesToReplace);
+  const graph: Graph = baseGraph
+    ? {
+        nodes: new Set(baseGraph.nodes),
+        edges: baseGraph.edges.filter((edge) => !replaceSet.has(edge.from)),
+      }
+    : { nodes: new Set(allKnownFiles), edges: [] };
+  for (const file of allKnownFiles) {
+    graph.nodes.add(file);
+  }
+  for (const file of filesToReplace) {
+    graph.nodes.add(file);
+    const entry = entries.get(file);
+    if (!entry) continue;
+    for (const edge of entry.edges) {
+      graph.edges.push(cloneEdgeForManifest(edge));
+      if (edge.to.type === "file") {
+        graph.nodes.add(edge.to.path);
+      }
+    }
+  }
+  return graph;
+}
+
+async function resolveCrossModuleExports(
+  projectRoot: string,
+  file: string,
+  support: LanguageSupport,
+  mod: ModuleIndex,
+  workspaceConfig: Awaited<ReturnType<typeof loadWorkspaceConfig>>,
+  graphOptions: GraphBuildOptions,
+): Promise<void> {
+  if (!support.supportsCrossModuleSymbols || !supportsOxcLanguage(support.id)) {
+    return;
+  }
+
+  const { matchPath } = await loadNearestTsconfigFor(file);
+  for (const entry of mod.exports) {
+    if (
+      entry.type !== "reexport" &&
+      entry.type !== "exportStar" &&
+      entry.type !== "namespaceReexport"
+    ) {
+      continue;
+    }
+    if (entry.fromModule.startsWith(".")) {
+      const resolved = await resolveSpecifier(
+        file,
+        entry.fromModule,
+        projectRoot,
+        matchPath,
+        workspaceConfig,
+        {
+          resolveNodeModules: !!graphOptions.resolveNodeModules,
+          ...(graphOptions.resolutionHints
+            ? { resolutionHints: graphOptions.resolutionHints }
+            : {}),
+        },
+      );
+      if (typeof resolved === "string") entry.fromModule = resolved;
+      continue;
+    }
+    const pkgResolved = await resolveWorkspacePackage(
+      entry.fromModule,
+      workspaceConfig,
+    );
+    if (pkgResolved) entry.fromModule = pkgResolved;
+  }
+}
+
 function toRelativeEdge(projectRoot: string, edge: Edge): Edge {
   return {
     from: normalizePath(path.relative(projectRoot, edge.from)),
@@ -1213,7 +1311,7 @@ function toRelativeEdge(projectRoot: string, edge: Edge): Edge {
           }
         : edge.to,
     raw: edge.raw,
-    ...(edge.typeOnly ? { typeOnly: edge.typeOnly } : {}),
+    ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
   };
 }
 
@@ -1225,6 +1323,48 @@ export function collectLocalsAndExportsFromSource(
   imports: ImportBinding[] = [],
   opts?: { tree?: Parser.Tree },
 ): ModuleIndex {
+  const toSymbolKind = (kind: OxcSymbolDef["kind"]): SymbolKind => {
+    if (kind === "function") return SymbolKind.Function;
+    if (kind === "class") return SymbolKind.Class;
+    if (kind === "interface") return SymbolKind.Interface;
+    if (kind === "type") return SymbolKind.TypeAlias;
+    if (kind === "default") return SymbolKind.Default;
+    return SymbolKind.Variable;
+  };
+
+  const mapOxcSymbol = (symbol: OxcSymbolDef): SymbolDef => ({
+    file: symbol.file,
+    localName: symbol.localName,
+    kind: toSymbolKind(symbol.kind),
+    range: symbol.range,
+    ...(symbol.docstring ? { docstring: symbol.docstring } : {}),
+    ...(symbol.lineSpan ? { lineSpan: symbol.lineSpan } : {}),
+    ...(symbol.complexity !== undefined ? { complexity: symbol.complexity } : {}),
+  });
+
+  const mapOxcExport = (entry: OxcExportEntry): ExportEntry => {
+    if (entry.type === "local") {
+      return {
+        type: "local",
+        exportedAs: entry.exportedAs,
+        target: mapOxcSymbol(entry.target),
+      };
+    }
+    return entry;
+  };
+
+  if (supportsOxcLanguage(support.id)) {
+    const analyzed = analyzeJsTsModuleWithOxc(file, source, support.id);
+    if (analyzed) {
+      return {
+        file,
+        imports: [],
+        locals: analyzed.locals.map(mapOxcSymbol),
+        exports: analyzed.exports.map(mapOxcExport),
+      };
+    }
+  }
+
   const normalizeDocstringLine = (line: string) =>
     line.replace(/^\s*(?:\/\/\/?\s?|#\s?)/, "").replace(/^\s*\*\s?/, "");
 
@@ -1932,6 +2072,72 @@ export async function collectImportsForFile(
 
   const imports: ImportBinding[] = [];
 
+  if (supportsOxcLanguage(resolvedSup.id)) {
+    const analyzed = analyzeJsTsModuleWithOxc(file, resolvedSource, resolvedSup.id);
+    if (analyzed) {
+      const tsCfg =
+        resolvedSup.id === "ts" || resolvedSup.id === "tsx"
+          ? await loadNearestTsconfigFor(file)
+          : undefined;
+      const workspaceConfig = await loadWorkspaceConfig(projectRoot);
+      const resolveFrom = async (from: string) => {
+        const resolutionHints = opts?.graphOptions?.resolutionHints;
+        const resolved = await resolveImportSpecifier(
+          projectRoot,
+          file,
+          from,
+          resolvedSup.id,
+          {
+            ...(tsCfg?.matchPath ? { matchPath: tsCfg.matchPath } : {}),
+            ...(workspaceConfig ? { workspaceConfig } : {}),
+            resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
+            ...(resolutionHints ? { resolutionHints } : {}),
+          },
+        );
+        return typeof resolved === "string"
+          ? resolved.replace(/\\/g, "/")
+          : resolved;
+      };
+
+      const mappedImports = await Promise.all(
+        analyzed.imports.map(async (entry): Promise<ImportBinding> => {
+          const resolved = await resolveFrom(entry.from);
+          if (entry.kind === "default") {
+            return {
+              kind: "default",
+              local: entry.local,
+              from: entry.from,
+              resolved,
+              ...(entry.typeOnly ? { typeOnly: true } : {}),
+              ...(entry.mechanism ? { mechanism: entry.mechanism } : {}),
+            };
+          }
+          if (entry.kind === "named") {
+            return {
+              kind: "named",
+              local: entry.local,
+              imported: entry.imported,
+              from: entry.from,
+              resolved,
+              ...(entry.typeOnly ? { typeOnly: true } : {}),
+              ...(entry.mechanism ? { mechanism: entry.mechanism } : {}),
+            };
+          }
+          return {
+            kind: "namespace",
+            localNS: entry.localNS,
+            from: entry.from,
+            resolved,
+            ...(entry.typeOnly ? { typeOnly: true } : {}),
+            ...(entry.mechanism ? { mechanism: entry.mechanism } : {}),
+          };
+        }),
+      );
+      imports.push(...mappedImports);
+      return imports;
+    }
+  }
+
   if (resolvedSup.id === "python") {
     const pySrc = stripPythonCommentsAndStrings(resolvedSource);
     const pushStar = async (moduleSpec: string) => {
@@ -2617,6 +2823,8 @@ async function buildIndexFromFileListShared(
   const bloomFilterCache = useBloomFilters
     ? new (await import("./util/bloomFilter.js")).BloomFilterCache()
     : undefined;
+  const retainParsedTrees = opts?.keepParsed ?? false;
+  const useWorkerPool = conc > 1 && !retainParsedTrees && workerPoolAvailable();
   const parsedMap = new Map<
     string,
     {
@@ -2641,6 +2849,7 @@ async function buildIndexFromFileListShared(
     : undefined;
   let processedFiles = 0;
   const totalFiles = normalizedFiles.length;
+  const workerGraphEntries = new Map<string, ManifestFileEntry>();
   const fileResults = await mapLimit(normalizedFiles, conc, async (f) => {
     try {
       const sigInfo = await fileSignature(
@@ -2713,19 +2922,85 @@ async function buildIndexFromFileListShared(
         return [f, mod, []] as const;
       }
 
-      const parsed = await parseFile(f);
-      setParsedCacheEntry(
-        parsedMap,
-        f,
-        {
-          source: parsed.source,
-          tree: parsed.tree,
-          sup: parsed.sup,
-          lang: parsed.lang,
-        },
-        Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
-      );
-      const { source: src, sup, lang, tree } = parsed;
+      if (useWorkerPool) {
+        const workerResult = await processFileInWorker(
+          {
+            file: f,
+            projectRoot,
+            ...(workspaceConfig ? { workspaceConfig } : {}),
+            graphOptions,
+            buildModule: true,
+            buildGraph: true,
+          },
+          conc,
+        );
+        mod = workerResult.mod;
+        edges = workerResult.edges;
+        collectJsonDependencies(mod.imports, jsonDependencies);
+        await resolveCrossModuleExports(
+          projectRoot,
+          f,
+          supCheck,
+          mod,
+          workspaceConfig,
+          graphOptions,
+        );
+        if (bloomFilterCache) {
+          const filter = await buildBloomFilterForFile(f);
+          if (filter) bloomFilterCache.set(f, filter);
+        }
+        const sigInfo = fileSignatures.get(f)!;
+        const cacheSig = cacheEnabled
+          ? await cacheSignatureForFile(f, sigInfo)
+          : sigInfo.cacheSig;
+        writeToCache(projectRoot, f, cacheSig, mod, opts);
+        workerGraphEntries.set(f, {
+          sig: sigInfo.sig,
+          ...(sigInfo.gitSig ? { gitSig: sigInfo.gitSig } : {}),
+          edges: edges.map(cloneEdgeForManifest),
+        });
+        if (onFileEdges) {
+          onFileEdges(f, workerGraphEntries.get(f)!);
+        }
+        if (!mod) {
+          mod = {
+            file: f,
+            exports: [],
+            imports: [],
+            locals: [],
+          };
+        }
+        return [f, mod, edges] as const;
+      }
+
+      let src: string;
+      let sup: LanguageSupport;
+      let lang: Parser.Language;
+      let tree: Parser.Tree | undefined;
+
+      if (supportsOxcLanguage(supCheck.id) && !retainParsedTrees) {
+        const prepared = await prepareParserInput(f);
+        src = prepared.source;
+        sup = prepared.sup;
+        lang = prepared.lang;
+      } else {
+        const parsed = await parseFile(f);
+        setParsedCacheEntry(
+          parsedMap,
+          f,
+          {
+            source: parsed.source,
+            tree: parsed.tree,
+            sup: parsed.sup,
+            lang: parsed.lang,
+          },
+          Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
+        );
+        src = parsed.source;
+        sup = parsed.sup;
+        lang = parsed.lang;
+        tree = parsed.tree;
+      }
 
       if (bloomFilterCache) {
         const filter = buildBloomFilterFromSource(src, sup.id);
@@ -2736,51 +3011,30 @@ async function buildIndexFromFileListShared(
       if (!mod) {
         const imports = await collectImportsForFile(f, projectRoot, {
           source: src,
-          tree,
+          ...(tree ? { tree } : {}),
           sup,
           lang,
           graphOptions,
         });
         collectJsonDependencies(imports, jsonDependencies);
-        mod = collectLocalsAndExportsFromSource(f, src, sup, lang, imports, {
-          tree,
-        });
+        mod = collectLocalsAndExportsFromSource(
+          f,
+          src,
+          sup,
+          lang,
+          imports,
+          tree ? { tree } : undefined,
+        );
         mod.imports = imports;
 
-        if (sup.supportsCrossModuleSymbols) {
-          if (sup.id === "ts" || sup.id === "js") {
-            const { matchPath } = await loadNearestTsconfigFor(f);
-            for (const e of mod.exports)
-              if (
-                e.type === "reexport" ||
-                e.type === "exportStar" ||
-                e.type === "namespaceReexport"
-              ) {
-                if (e.fromModule.startsWith(".")) {
-                  const resolved = await resolveSpecifier(
-                    f,
-                    e.fromModule,
-                    projectRoot,
-                    matchPath,
-                    workspaceConfig,
-                    {
-                      resolveNodeModules: !!graphOptions.resolveNodeModules,
-                      ...(graphOptions.resolutionHints
-                        ? { resolutionHints: graphOptions.resolutionHints }
-                        : {}),
-                    },
-                  );
-                  if (typeof resolved === "string") e.fromModule = resolved;
-                } else {
-                  const pkgResolved = await resolveWorkspacePackage(
-                    e.fromModule,
-                    workspaceConfig,
-                  );
-                  if (pkgResolved) e.fromModule = pkgResolved;
-                }
-              }
-          }
-        }
+        await resolveCrossModuleExports(
+          projectRoot,
+          f,
+          sup,
+          mod,
+          workspaceConfig,
+          graphOptions,
+        );
         writeToCache(projectRoot, f, cacheSig, mod, opts);
       } else {
         // If mod was cached but edges weren't, we still need to collect json deps from mod
@@ -2789,7 +3043,9 @@ async function buildIndexFromFileListShared(
 
       // 2. Recompute Edges (using the parsed tree)
       edges = await collectEdgesForFile(f, projectRoot, workspaceConfig, {
-        parsed: parsed,
+        ...(tree
+          ? { parsed: { source: src, tree, sup, lang } }
+          : { prepared: { source: src, sup, lang } }),
         fast: !!graphOptions.fast,
         ...(graphOptions.fastRegexDisabledLanguages
           ? {
@@ -3151,6 +3407,7 @@ export async function buildProjectIndexIncremental(
       : new Map<string, string>();
     const changedFiles = new Set<string>();
     const modules = new Map<FileId, ModuleIndex>();
+    const changedWorkerGraphEntries = new Map<string, ManifestFileEntry>();
     const parsedMap = new Map<
       string,
       {
@@ -3165,6 +3422,8 @@ export async function buildProjectIndexIncremental(
     const bloomFilterCache = useBloomFilters
       ? new (await import("./util/bloomFilter.js")).BloomFilterCache()
       : undefined;
+    const retainParsedTrees = opts?.keepParsed ?? false;
+    const useWorkerPool = conc > 1 && !retainParsedTrees && workerPoolAvailable();
 
     const markAsChanged = (file: string) => {
       if (fs.existsSync(file)) changedFiles.add(file);
@@ -3239,14 +3498,64 @@ export async function buildProjectIndexIncremental(
             return [f, mod] as const;
           }
 
-          const parsed = await parseFile(f);
-          setParsedCacheEntry(
-            parsedMap,
-            f,
-            parsed,
-            Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
-          );
-          const { source: src, sup, lang, tree } = parsed;
+          if (useWorkerPool) {
+            const workerResult = await processFileInWorker(
+              {
+                file: f,
+                projectRoot,
+                ...(workspaceConfig ? { workspaceConfig } : {}),
+                graphOptions,
+                buildModule: true,
+                buildGraph: true,
+              },
+              conc,
+            );
+            const mod = workerResult.mod;
+            collectJsonDependencies(mod.imports, jsonDependencies);
+            await resolveCrossModuleExports(
+              projectRoot,
+              f,
+              supCheck,
+              mod,
+              workspaceConfig,
+              graphOptions,
+            );
+            const sigInfo = fileSignatures.get(f)!;
+            const cacheSig = cacheEnabled
+              ? await cacheSignatureForFile(f, sigInfo)
+              : sigInfo.cacheSig;
+            writeToCache(projectRoot, f, cacheSig, mod, opts);
+            changedWorkerGraphEntries.set(f, {
+              sig: sigInfo.sig,
+              ...(sigInfo.gitSig ? { gitSig: sigInfo.gitSig } : {}),
+              edges: workerResult.edges.map(cloneEdgeForManifest),
+            });
+            return [f, mod] as const;
+          }
+
+          let src: string;
+          let sup: LanguageSupport;
+          let lang: Parser.Language;
+          let tree: Parser.Tree | undefined;
+
+          if (supportsOxcLanguage(supCheck.id) && !retainParsedTrees) {
+            const prepared = await prepareParserInput(f);
+            src = prepared.source;
+            sup = prepared.sup;
+            lang = prepared.lang;
+          } else {
+            const parsed = await parseFile(f);
+            setParsedCacheEntry(
+              parsedMap,
+              f,
+              parsed,
+              Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
+            );
+            src = parsed.source;
+            sup = parsed.sup;
+            lang = parsed.lang;
+            tree = parsed.tree;
+          }
 
           // Build bloom filter for this file if enabled
           if (bloomFilterCache) {
@@ -3258,7 +3567,7 @@ export async function buildProjectIndexIncremental(
 
           const imports = await collectImportsForFile(f, projectRoot, {
             source: src,
-            tree,
+            ...(tree ? { tree } : {}),
             sup,
             lang,
             graphOptions,
@@ -3270,44 +3579,18 @@ export async function buildProjectIndexIncremental(
             sup,
             lang,
             imports,
-            { tree },
+            tree ? { tree } : undefined,
           );
           mod.imports = imports;
 
-          if (sup.supportsCrossModuleSymbols) {
-            if (sup.id === "ts" || sup.id === "js") {
-              const { matchPath } = await loadNearestTsconfigFor(f);
-              for (const e of mod.exports)
-                if (
-                  e.type === "reexport" ||
-                  e.type === "exportStar" ||
-                  e.type === "namespaceReexport"
-                ) {
-                  if (e.fromModule.startsWith(".")) {
-                    const resolved = await resolveSpecifier(
-                      f,
-                      e.fromModule,
-                      projectRoot,
-                      matchPath,
-                      workspaceConfig,
-                      {
-                        resolveNodeModules: !!graphOptions.resolveNodeModules,
-                        ...(graphOptions.resolutionHints
-                          ? { resolutionHints: graphOptions.resolutionHints }
-                          : {}),
-                      },
-                    );
-                    if (typeof resolved === "string") e.fromModule = resolved;
-                  } else {
-                    const pkgResolved = await resolveWorkspacePackage(
-                      e.fromModule,
-                      workspaceConfig,
-                    );
-                    if (pkgResolved) e.fromModule = pkgResolved;
-                  }
-                }
-            }
-          }
+          await resolveCrossModuleExports(
+            projectRoot,
+            f,
+            sup,
+            mod,
+            workspaceConfig,
+            graphOptions,
+          );
           const sigInfo = fileSignatures.get(f)!;
           const cacheSig = cacheEnabled
             ? await cacheSignatureForFile(f, sigInfo)
@@ -3401,6 +3684,13 @@ export async function buildProjectIndexIncremental(
     const graph =
       filesList.length === 0 && baseGraph
         ? { nodes: new Set(baseGraph.nodes), edges: [...baseGraph.edges] }
+        : useWorkerPool && changedWorkerGraphEntries.size === filesList.length
+          ? mergeGraphWithEntries(
+              baseGraph,
+              filesList,
+              changedWorkerGraphEntries,
+              Array.from(allFiles),
+            )
         : await collectGraph(projectRoot, filesList, {
             parsed: parsedMap,
             fast: !!graphOptions.fast,
@@ -3431,6 +3721,11 @@ export async function buildProjectIndexIncremental(
               });
             },
           });
+    if (useWorkerPool) {
+      for (const [file, entry] of changedWorkerGraphEntries) {
+        manifestEntries.set(file, entry);
+      }
+    }
     if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
 
     if (manifestEntries.size > 0) {

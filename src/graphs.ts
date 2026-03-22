@@ -2,6 +2,10 @@ import path from "node:path";
 import fsp from "node:fs/promises";
 import Parser from "tree-sitter";
 import { prepareParserInput } from "./languages/filePrep.js";
+import {
+  analyzeJsTsModuleWithOxc,
+  supportsOxcLanguage,
+} from "./languages/oxcAdapter.js";
 import { type LanguageSupport, getCompiledQueries } from "./languages.js";
 import type { FileId, EdgeTo, Edge, Graph } from "./types.js";
 import {
@@ -27,6 +31,7 @@ import {
   extractPythonSpecifiers,
   extractJsTsDynamicSpecifiers,
 } from "./util.js";
+import { processFileInWorker, workerPoolAvailable } from "./workerPool.js";
 import {
   type ImportBinding,
   type ProjectIndex,
@@ -95,6 +100,16 @@ export function collectModuleSpecifiersFromSource(
     };
     opts?.onFallbackImportExtraction?.(event);
   };
+
+  if (supportsOxcLanguage(support.id) && !opts?.fast) {
+    const analyzed = analyzeJsTsModuleWithOxc(opts?.file ?? support.id, source, support.id);
+    if (analyzed) {
+      return analyzed.specifiers.map((entry) => ({
+        spec: entry.spec,
+        ...(entry.typeOnly !== undefined ? { typeOnly: entry.typeOnly } : {}),
+      }));
+    }
+  }
 
   if (support.id === "python") {
     let queryFailed = false;
@@ -250,11 +265,7 @@ export function collectModuleSpecifiersFromSource(
   }
 
   // Fast path for JS/TS: regex-based extraction after comment stripping
-  if (
-    (support.id === "ts" || support.id === "js") &&
-    opts?.fast &&
-    !fastRegexDisabled
-  ) {
+  if (supportsOxcLanguage(support.id) && opts?.fast && !fastRegexDisabled) {
     try {
       reportFallback("fast");
       for (const s of extractJsTsSpecifiers(source)) out.push(s);
@@ -329,7 +340,7 @@ export function collectModuleSpecifiersFromSource(
   }
 
   // Regex fallback if the query path produced no results
-  if (support.id === "ts" || support.id === "js") {
+  if (supportsOxcLanguage(support.id)) {
     if ((queryFailed || out.length === 0) && shouldAttemptFallback) {
       try {
         const extracted = extractJsTsSpecifiers(source);
@@ -362,6 +373,7 @@ const cloneEdge = (edge: Edge): Edge => ({
     edge.to.type === "file"
       ? { type: "file", path: edge.to.path }
       : { type: "external", name: edge.to.name },
+  ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
 });
 
 export async function collectEdgesForFile(
@@ -372,6 +384,11 @@ export async function collectEdgesForFile(
     parsed?: {
       source: string;
       tree: Parser.Tree;
+      sup: LanguageSupport;
+      lang: Parser.Language;
+    };
+    prepared?: {
+      source: string;
       sup: LanguageSupport;
       lang: Parser.Language;
     };
@@ -412,9 +429,10 @@ export async function collectEdgesForFile(
   }
 
   const parsed = opts.parsed;
-  let sup = parsed?.sup;
-  let lang = parsed?.lang;
-  let src = parsed?.source;
+  const prepared = opts.prepared;
+  let sup = parsed?.sup ?? prepared?.sup;
+  let lang = parsed?.lang ?? prepared?.lang;
+  let src = parsed?.source ?? prepared?.source;
   if (!sup || !lang || src === undefined) {
     const prep = await prepareParserInput(file);
     sup = prep.sup;
@@ -435,7 +453,7 @@ export async function collectEdgesForFile(
       : {}),
   });
 
-  if ((sup.id === "ts" || sup.id === "js") && opts.dynamicImportHeuristics) {
+  if (supportsOxcLanguage(sup.id) && opts.dynamicImportHeuristics) {
     const dynamicSpecs = extractJsTsDynamicSpecifiers(
       src,
       normalizedFile,
@@ -613,6 +631,13 @@ export async function collectGraph(
   const resolutionHints = normalizeResolutionHints(opts?.resolutionHints);
 
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 32, 128));
+  const useWorkerPool =
+    conc > 1 &&
+    !opts?.parsed &&
+    !opts?.cachedFileEdges &&
+    !opts?.onFileEdges &&
+    !opts?.fileSignatures &&
+    workerPoolAvailable();
 
   const addEdgeTargetsToGraph = (edges: Edge[]) => {
     for (const edge of edges) {
@@ -634,27 +659,49 @@ export async function collectGraph(
         ? opts?.cachedFileEdges?.get(normalizedFile)
         : undefined;
       const parsedEntry = opts?.parsed?.get(file);
-      const edges = await collectEdgesForFile(
-        file,
-        projectRoot,
-        workspaceConfig,
-        {
-          ...(parsedEntry ? { parsed: parsedEntry } : {}),
-          fast: !!opts?.fast,
-          ...(opts?.fastRegexDisabledLanguages
-            ? { fastRegexDisabledLanguages: opts.fastRegexDisabledLanguages }
-            : {}),
-          resolveNodeModules: !!opts?.resolveNodeModules,
-          dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
-          resolutionHints,
-          ...(sigEntry ? { fileSignature: sigEntry } : {}),
-          ...(cachedFileEdges ? { cachedFileEdges } : {}),
-          ...(opts?.onFileEdges ? { onFileEdges: opts.onFileEdges } : {}),
-          ...(opts?.onFallbackImportExtraction
-            ? { onFallbackImportExtraction: opts.onFallbackImportExtraction }
-            : {}),
-        },
-      );
+      const edges = useWorkerPool
+        ? (
+            await processFileInWorker(
+              {
+                file,
+                projectRoot,
+                ...(workspaceConfig ? { workspaceConfig } : {}),
+                graphOptions: {
+                  fast: !!opts?.fast,
+                  ...(opts?.fastRegexDisabledLanguages
+                    ? { fastRegexDisabledLanguages: opts.fastRegexDisabledLanguages }
+                    : {}),
+                  resolveNodeModules: !!opts?.resolveNodeModules,
+                  dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
+                  ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
+                },
+                buildModule: false,
+                buildGraph: true,
+              },
+              conc,
+            )
+          ).edges
+        : await collectEdgesForFile(
+            file,
+            projectRoot,
+            workspaceConfig,
+            {
+              ...(parsedEntry ? { parsed: parsedEntry } : {}),
+              fast: !!opts?.fast,
+              ...(opts?.fastRegexDisabledLanguages
+                ? { fastRegexDisabledLanguages: opts.fastRegexDisabledLanguages }
+                : {}),
+              resolveNodeModules: !!opts?.resolveNodeModules,
+              dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
+              resolutionHints,
+              ...(sigEntry ? { fileSignature: sigEntry } : {}),
+              ...(cachedFileEdges ? { cachedFileEdges } : {}),
+              ...(opts?.onFileEdges ? { onFileEdges: opts.onFileEdges } : {}),
+              ...(opts?.onFallbackImportExtraction
+                ? { onFallbackImportExtraction: opts.onFallbackImportExtraction }
+                : {}),
+            },
+          );
       addEdgeTargetsToGraph(edges);
       return edges;
     } catch (error) {

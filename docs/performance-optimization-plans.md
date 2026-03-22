@@ -4,6 +4,12 @@ This document contains detailed, actionable implementation plans for four archit
 
 These plans are written to be self-contained and comprehensive, suitable for a junior engineer or an LLM agent to execute step-by-step.
 
+Current implementation status:
+- JS/TS/TSX indexing now uses the native `oxc-parser` fast path for imports, exports, locals, CommonJS bindings, and graph specifier extraction.
+- `buildProjectIndex` and incremental indexing use a Piscina worker pool from built JavaScript output, while cache and manifest writes stay on the main thread.
+- Remaining Tree-sitter-heavy paths keep query-first extraction and still power navigation, references, chunking, and non-JS/TS languages.
+- A custom Tree-sitter N-API addon is no longer the primary acceleration path; the native Oxc parser delivers the same category of native-speed win for the highest-traffic JS/TS workloads with less maintenance overhead.
+
 ---
 
 ## Plan 1: Native Rust N-API Addon (`napi-rs`) for Tree-sitter

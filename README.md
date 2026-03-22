@@ -610,6 +610,14 @@ Viewer features:
   - If output looks off, re-run without `--fast-graph`.
   - Programmatic: set `graph.fastRegexDisabledLanguages` to opt specific languages out of regex fast paths.
 
+- Native JS/TS parsing:
+  - JS/TS/TSX indexing now uses the native `oxc-parser` fast path for imports, exports, locals, CommonJS patterns, and ambient module augmentations.
+  - Tree-sitter remains the source of truth for navigation, references, and semantic chunking, so behavior stays aligned with the rest of the multi-language pipeline.
+
+- Worker-thread indexing:
+  - Built JavaScript output uses a Piscina worker pool for uncached indexing work when `--threads > 1` and parsed trees are not being retained.
+  - Incremental builds keep cache I/O and manifest writes on the main thread while fanning parse/index work out to workers.
+
 - Caching:
   - Modes: `off` (default), `memory` (per-process), `disk` (persist across runs, stored under `.codegraph-cache/index-v1`).
   - **Content-hash caching** (default): Parsed-module cache keys use content SHA1 for reliability. Set `cacheStrict: false` to use mtime+size for manifest signatures (faster but less reliable with git operations).
