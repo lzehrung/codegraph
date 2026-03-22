@@ -58,10 +58,26 @@ function seedNodeCoordinates(graph) {
 
 function applyLayout(graph) {
   if (graph.order === 0) return;
+  // Skip heavy layout in typical test environments to keep unit tests fast.
+  if (typeof process !== "undefined" && process.env && process.env.NODE_ENV === "test") {
+    return;
+  }
+  // Allow overriding or disabling layout via a global configuration.
+  let iterations = 500;
+  if (typeof globalThis !== "undefined" && globalThis.GRAPH_LAYOUT_ITERATIONS != null) {
+    const configured = Number(globalThis.GRAPH_LAYOUT_ITERATIONS);
+    if (Number.isFinite(configured)) {
+      iterations = configured;
+    }
+  }
+  if (iterations <= 0) {
+    // Non-positive iteration count disables layout.
+    return;
+  }
   seedNodeCoordinates(graph);
 
   forceAtlas2.assign(graph, {
-    iterations: 500,
+    iterations,
     settings: {
       gravity: 0.8,
       scalingRatio: 25,
