@@ -177,7 +177,7 @@ export type ResolvedExport =
  */
 export type BuildOptions = {
   /** Callback for progress tracking during parsing/indexing */
-  onProgress?: ((progress: { type: "progress"; message: string; current: number; total: number }) => void) | undefined;
+  onProgress?: ((progress: import("./types.js").ProgressUpdate) => void) | undefined;
   /** Number of threads for parallel processing (default: 8) */
   threads?: number;
   /** Cache mode: "off" (default), "memory", or "disk" */

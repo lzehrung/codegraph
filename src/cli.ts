@@ -653,6 +653,7 @@ Build Options:
   --threads N               Number of worker threads (default: auto)
   --cache <mode>            Cache mode: disk, memory, off
   --cache-strict            Use content hashes instead of mtime
+  --progress                Show progress tracking during indexing
 
 Output Options:
   --json                    Output as JSON (default)
@@ -673,14 +674,22 @@ Examples:
   const reportFile = getOpt("--report-file");
   const reportEnabled = hasFlag("--report") || reportFile !== undefined;
   const showProgress = hasFlag("--progress");
-  const progressHandler = showProgress ? (p: { type: "progress"; message: string; current: number; total: number }) => {
-    if (process.stderr.isTTY) {
-      process.stderr.write(`\r[Progress] ${p.current}/${p.total} files processed...`);
-      if (p.current === p.total) {
-        process.stderr.write("\n");
+  let lastProgressUpdate = 0;
+  const progressHandler = showProgress ? (p: import("./types.js").ProgressUpdate) => {
+    const now = Date.now();
+    const isComplete = p.current === p.total;
+    const shouldUpdate = isComplete || (now - lastProgressUpdate > 100);
+    
+    if (shouldUpdate) {
+      if (process.stderr.isTTY) {
+        process.stderr.write(`\r[Progress] ${p.current}/${p.total} files processed...`);
+        if (isComplete) {
+          process.stderr.write("\n");
+        }
+      } else if (p.current === 1 || isComplete || p.current % 100 === 0) {
+        console.error(`[Progress] ${p.current}/${p.total} files processed.`);
       }
-    } else if (p.current === 1 || p.current === p.total || p.current % 100 === 0) {
-      console.error(`[Progress] ${p.current}/${p.total} files processed.`);
+      lastProgressUpdate = now;
     }
   } : undefined;
   const graphFlags = {

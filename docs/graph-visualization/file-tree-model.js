@@ -33,6 +33,27 @@ export function buildFileTree(payload) {
   const root = { name: "", type: "directory", children: [], expanded: true, parent: null };
   const itemsByKey = new Map();
 
+  const symbolsByFile = new Map();
+  if (isCompact && Array.isArray(payload.symbols)) {
+    payload.symbols.forEach((s, idx) => {
+      if (!s) return;
+      let list = symbolsByFile.get(s.file);
+      if (!list) {
+        list = [];
+        symbolsByFile.set(s.file, list);
+      }
+      list.push({
+        name: s.name || payload.symbolIdIndex?.[idx] || `symbol_${idx}`,
+        type: "symbol",
+        kind: s.kind || "variable",
+        symbolIndex: idx,
+        graphKey: `s:${idx}`,
+        fullId: payload.symbolIdIndex?.[idx] || s.name,
+        parent: null,
+      });
+    });
+  }
+
   for (let i = 0; i < files.length; i++) {
     const filePath = files[i];
     if (typeof filePath !== "string") continue;
@@ -59,21 +80,7 @@ export function buildFileTree(payload) {
     const fileName = parts[parts.length - 1] || filePath;
     const graphKey = isCompact ? `f:${i}` : filePath;
 
-    const symbols = [];
-    if (isCompact && Array.isArray(payload.symbols)) {
-      payload.symbols.forEach((s, idx) => {
-        if (!s || s.file !== i) return;
-        symbols.push({
-          name: s.name || payload.symbolIdIndex?.[idx] || `symbol_${idx}`,
-          type: "symbol",
-          kind: s.kind || "variable",
-          symbolIndex: idx,
-          graphKey: `s:${idx}`,
-          fullId: payload.symbolIdIndex?.[idx] || s.name,
-          parent: null,
-        });
-      });
-    }
+    const symbols = symbolsByFile.get(i) || [];
 
     const fileNode = {
       name: fileName,
