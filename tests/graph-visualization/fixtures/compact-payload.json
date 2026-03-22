@@ -1,0 +1,44 @@
+{
+  "files": [
+    "src/index.ts",
+    "src/utils/helper.ts",
+    "src/utils/format.ts",
+    "src/components/button.ts",
+    "src/components/input.ts"
+  ],
+  "fileEdges": [
+    { "from": 0, "to": { "type": "file", "path": 1 }, "raw": "./utils/helper", "typeOnly": false },
+    { "from": 0, "to": { "type": "file", "path": 2 }, "raw": "./utils/format", "typeOnly": false },
+    { "from": 0, "to": { "type": "external", "name": "react" }, "raw": "react", "typeOnly": false },
+    { "from": 3, "to": { "type": "file", "path": 1 }, "raw": "../utils/helper", "typeOnly": false },
+    { "from": 3, "to": { "type": "external", "name": "react" }, "raw": "react", "typeOnly": false },
+    { "from": 4, "to": { "type": "file", "path": 2 }, "raw": "../utils/format", "typeOnly": false }
+  ],
+  "symbols": [
+    { "id": 0, "file": 0, "name": "main", "kind": "function" },
+    { "id": 1, "file": 0, "name": "App", "kind": "class" },
+    { "id": 2, "file": 1, "name": "capitalize", "kind": "function" },
+    { "id": 3, "file": 1, "name": "clamp", "kind": "function" },
+    { "id": 4, "file": 2, "name": "formatDate", "kind": "function" },
+    { "id": 5, "file": 2, "name": "DATE_FORMAT", "kind": "variable" },
+    { "id": 6, "file": 3, "name": "Button", "kind": "class" },
+    { "id": 7, "file": 4, "name": "Input", "kind": "class" }
+  ],
+  "symbolEdges": [
+    { "from": 0, "to": 2, "label": "calls" },
+    { "from": 0, "to": 4, "label": "calls" },
+    { "from": 1, "to": 6, "label": "uses" },
+    { "from": 6, "to": 3, "label": "calls" },
+    { "from": 4, "to": 5, "label": "uses" }
+  ],
+  "symbolIdIndex": [
+    "src/index.ts::main::10",
+    "src/index.ts::App::200",
+    "src/utils/helper.ts::capitalize::5",
+    "src/utils/helper.ts::clamp::50",
+    "src/utils/format.ts::formatDate::10",
+    "src/utils/format.ts::DATE_FORMAT::100",
+    "src/components/button.ts::Button::5",
+    "src/components/input.ts::Input::5"
+  ]
+}
