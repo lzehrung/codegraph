@@ -21,6 +21,10 @@ export default tseslint.config(
     },
   },
   {
+    files: ['**/*.js'],
+    ...tseslint.configs.disableTypeChecked,
+  },
+  {
     files: ['**/*.ts', '**/*.js'],
     rules: {
       '@typescript-eslint/no-explicit-any': 'error',

@@ -176,6 +176,8 @@ export type ResolvedExport =
  * Options for building the project index
  */
 export type BuildOptions = {
+  /** Callback for progress tracking during parsing/indexing */
+  onProgress?: ((progress: { type: "progress"; message: string; current: number; total: number }) => void) | undefined;
   /** Number of threads for parallel processing (default: 8) */
   threads?: number;
   /** Cache mode: "off" (default), "memory", or "disk" */
@@ -2637,6 +2639,8 @@ async function buildIndexFromFileListShared(
         });
       }
     : undefined;
+  let processedFiles = 0;
+  const totalFiles = normalizedFiles.length;
   const fileResults = await mapLimit(normalizedFiles, conc, async (f) => {
     try {
       const sigInfo = await fileSignature(
@@ -2816,13 +2820,22 @@ async function buildIndexFromFileListShared(
       return [f, mod, edges] as const;
     } catch (error) {
       console.warn(`Warning: Failed to process file ${f}:`, error);
-      const mod: ModuleIndex = {
+      const modError: ModuleIndex = {
         file: f,
         exports: [],
         imports: [],
         locals: [],
       };
-      return [f, mod, []] as const;
+      return [f, modError, []] as const;
+    } finally {
+      if (opts?.onProgress) {
+        opts.onProgress({
+          type: "progress",
+          message: `Indexed ${f}`,
+          current: ++processedFiles,
+          total: totalFiles,
+        });
+      }
     }
   });
   if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
@@ -3208,6 +3221,8 @@ export async function buildProjectIndexIncremental(
     }
     if (changedList.length > 0) {
       const parseStart = performance.now();
+      let processedFiles = 0;
+      const totalFiles = changedList.length;
       const fileResults = await mapLimit(changedList, conc, async (f) => {
         try {
           if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
@@ -3301,13 +3316,22 @@ export async function buildProjectIndexIncremental(
           return [f, mod] as const;
         } catch (error) {
           console.warn(`Warning: Failed to process file ${f}:`, error);
-          const mod: ModuleIndex = {
+          const modError: ModuleIndex = {
             file: f,
             exports: [],
             imports: [],
             locals: [],
           };
-          return [f, mod] as const;
+          return [f, modError] as const;
+        } finally {
+          if (opts?.onProgress) {
+            opts.onProgress({
+              type: "progress",
+              message: `Indexed ${f}`,
+              current: ++processedFiles,
+              total: totalFiles,
+            });
+          }
         }
       });
       for (const [f, mod] of fileResults) {
