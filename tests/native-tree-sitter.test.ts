@@ -207,4 +207,45 @@ nativeDescribe("native tree-sitter integration", () => {
 
     expect(nativeSpecifiers).toEqual(jsSpecifiers);
   });
+
+  it("matches TypeScript export extraction for export assignment and classes", async () => {
+    const projectRoot = await makeTempProject();
+    const file = path.join(projectRoot, "module.ts");
+    await fs.writeFile(
+      file,
+      [
+        "class InternalClass {}",
+        "export class ExportedClass {}",
+        "const assigned = InternalClass;",
+        "export = assigned;",
+      ].join("\n"),
+    );
+
+    const parsed = await parseFile(file);
+    expect(parsed.nativeQueries).not.toBeNull();
+
+    const nativeIndex = collectLocalsAndExportsFromSource(
+      file,
+      parsed.source,
+      parsed.sup,
+      parsed.lang,
+      [],
+      {
+        tree: parsed.tree,
+        nativeQueries: parsed.nativeQueries,
+      },
+    );
+    const jsIndex = collectLocalsAndExportsFromSource(
+      file,
+      parsed.source,
+      parsed.sup,
+      parsed.lang,
+      [],
+      {
+        tree: parsed.tree,
+      },
+    );
+
+    expect(simplifyModuleIndex(nativeIndex)).toEqual(simplifyModuleIndex(jsIndex));
+  });
 });

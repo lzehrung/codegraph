@@ -29,6 +29,12 @@ export type NativeQueryResults = {
   importBindings: NativeMatch[];
 };
 
+export type NativeQueryExecution = {
+  results: NativeQueryResults | null;
+  fallbackReason?: "unavailable" | "unsupportedLanguage" | "queryFailure";
+  error?: string;
+};
+
 type NativeBinding = {
   runLanguageQueries: (
     source: string,
@@ -54,6 +60,13 @@ const JS_OBJECT_METHOD_EXPORT_PATTERN = `
         right: (object (pair key: (property_identifier) @cjs_export_name value: (function_declaration) @cjs_fn))))
         (#eq? @mod "module") (#eq? @prop "exports")
 `;
+
+const TS_EXPORT_ASSIGNMENT_PATTERN =
+  "    (export_assignment (identifier) @ts_export_assign)\n";
+const TS_DEFAULT_EXPORT_PATTERNS = [
+  '    (export_statement (function_declaration name: (identifier) @default)) @stmt (#match? @stmt "default")\n',
+  '    (export_statement (class_declaration name: (identifier) @default)) @stmt (#match? @stmt "default")\n',
+] as const;
 
 let bindingState:
   | { loaded: true; binding: NativeBinding; supportedLanguageIds: Set<string> }
@@ -87,10 +100,22 @@ function loadBinding():
 }
 
 function normalizeQueryForNative(languageId: string, queryText: string): string {
-  if (languageId !== "js") return queryText;
-  return queryText
-    .replace(/\(function\)/g, "(function_expression)")
-    .replace(JS_OBJECT_METHOD_EXPORT_PATTERN, "\n");
+  if (languageId === "js") {
+    return queryText
+      .replace(/\(function\)/g, "(function_expression)")
+      .replace(JS_OBJECT_METHOD_EXPORT_PATTERN, "\n");
+  }
+  if (languageId === "ts" || languageId === "tsx") {
+    let normalized = queryText.replace(TS_EXPORT_ASSIGNMENT_PATTERN, "");
+    for (const pattern of TS_DEFAULT_EXPORT_PATTERNS) {
+      normalized = normalized.replace(pattern, "");
+    }
+    return normalized.replace(
+      /\(class_declaration name: \(identifier\) @/g,
+      "(class_declaration name: (type_identifier) @",
+    );
+  }
+  return queryText;
 }
 
 export function isNativeTreeSitterAvailable(): boolean {
@@ -111,19 +136,45 @@ export function runNativeLanguageQueries(
   source: string,
   support: LanguageSupport,
 ): NativeQueryResults | null {
+  return getNativeQueryExecution(source, support).results;
+}
+
+export function getNativeQueryExecution(
+  source: string,
+  support: LanguageSupport,
+): NativeQueryExecution {
   const state = loadBinding();
-  if (!state.loaded) return null;
-  if (!state.supportedLanguageIds.has(support.id)) return null;
+  if (!state.loaded) {
+    const loadError = getNativeTreeSitterLoadError();
+    return {
+      results: null,
+      fallbackReason: "unavailable",
+      ...(loadError
+        ? {
+            error: loadError instanceof Error ? loadError.message : String(loadError),
+          }
+        : {}),
+    };
+  }
+  if (!state.supportedLanguageIds.has(support.id)) {
+    return { results: null, fallbackReason: "unsupportedLanguage" };
+  }
   try {
-    return state.binding.runLanguageQueries(
-      source,
-      support.id,
-      normalizeQueryForNative(support.id, support.queries.imports),
-      normalizeQueryForNative(support.id, support.queries.exports),
-      normalizeQueryForNative(support.id, support.queries.locals),
-      normalizeQueryForNative(support.id, support.queries.importBindings),
-    );
-  } catch {
-    return null;
+    return {
+      results: state.binding.runLanguageQueries(
+        source,
+        support.id,
+        normalizeQueryForNative(support.id, support.queries.imports),
+        normalizeQueryForNative(support.id, support.queries.exports),
+        normalizeQueryForNative(support.id, support.queries.locals),
+        normalizeQueryForNative(support.id, support.queries.importBindings),
+      ),
+    };
+  } catch (error) {
+    return {
+      results: null,
+      fallbackReason: "queryFailure",
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
