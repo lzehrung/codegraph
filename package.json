@@ -15,7 +15,8 @@
     "codegraph": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "codegraph.skill"
   ],
   "scripts": {
     "clean": "if exist dist rmdir /s /q dist",
