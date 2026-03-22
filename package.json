@@ -15,7 +15,8 @@
     "codegraph": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "codegraph.skill"
   ],
   "scripts": {
     "clean": "if exist dist rmdir /s /q dist",
@@ -37,9 +38,9 @@
     "publish:minor": "npm run build && npm version minor && npm publish && git push && git push --tags",
     "publish:major": "npm run build && npm version major && npm publish && git push && git push --tags",
     "graph:default": "npx codegraph graph ./src",
-    "graph:json": "npx codegraph graph ./src --json --symbols-detailed --compact-json > codegraph.json",
-    "graph:mermaid": "npx codegraph graph ./src --mermaid --symbols-detailed > graph.mermaid.mmd",
-    "graph:dot": "npx codegraph graph ./src --dot --symbols-detailed > graph.dot",
+    "graph:json": "npx codegraph graph ./src --json --symbols-detailed --progress --compact-json > codegraph.json",
+    "graph:mermaid": "npx codegraph graph ./src --mermaid --progress --symbols-detailed > graph.mermaid.mmd",
+    "graph:dot": "npx codegraph graph ./src --dot --progress --symbols-detailed > graph.dot",
     "visualizer:start": "http-server ./docs/graph-visualization -p 4173 -c-1"
   },
   "repository": {
@@ -74,6 +75,7 @@
   "devDependencies": {
     "@eslint/js": "^9.39.2",
     "@types/better-sqlite3": "^7.6.13",
+    "@types/jsdom": "^28.0.1",
     "@types/node": "^24.7.2",
     "@types/picomatch": "^4.0.2",
     "@typescript-eslint/eslint-plugin": "^8.53.1",
@@ -82,7 +84,10 @@
     "eslint": "^9.39.2",
     "eslint-import-resolver-typescript": "^4.4.4",
     "eslint-plugin-import": "^2.32.0",
+    "graphology": "^0.26.0",
+    "graphology-layout-forceatlas2": "^0.10.1",
     "http-server": "^14.1.1",
+    "jsdom": "^29.0.1",
     "prettier": "^3.7.4",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",

@@ -15,4 +15,11 @@ export type Edge = {
   confidence?: number;
 };
 
+export type ProgressUpdate = {
+  type: "progress";
+  message: string;
+  current: number;
+  total: number;
+};
+
 export type Graph = { nodes: Set<FileId>; edges: Edge[] };

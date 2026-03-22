@@ -8,33 +8,52 @@
   </head>
   <body>
     <main class="app-shell">
-      <header>
-        <h1>Codegraph Sigma Viewer</h1>
-        <p>Load codegraph JSON output and explore dependency relationships with Sigma.js.</p>
-      </header>
+      <aside class="sidebar">
+        <header>
+          <h1>Codegraph Sigma Viewer</h1>
+          <p>Load codegraph JSON output and explore dependency relationships with Sigma.js.</p>
+        </header>
 
-      <section class="controls">
-        <label for="graph-file">Graph JSON file</label>
-        <input id="graph-file" type="file" accept="application/json" />
+        <section class="controls">
+          <label for="graph-file">Graph JSON file</label>
+          <input id="graph-file" type="file" accept="application/json" />
 
-        <div class="actions">
-          <button id="load-default" type="button">Load ./codegraph.json</button>
-          <button id="refresh" type="button">Refresh</button>
-          <button id="reset-camera" type="button">Reset camera</button>
-        </div>
+          <div class="actions">
+            <button id="load-default" type="button">Load ./codegraph.json</button>
+            <button id="refresh" type="button">Refresh</button>
+            <button id="reset-camera" type="button">Reset camera</button>
+          </div>
 
-        <label class="inline-control" for="show-external">
-          <input id="show-external" type="checkbox" />
-          Show external package nodes
-        </label>
+          <label class="inline-control" for="show-external">
+            <input id="show-external" type="checkbox" />
+            Show external package nodes
+          </label>
 
-        <label class="inline-control" for="include-symbols">
-          <input id="include-symbols" type="checkbox" />
-          Include symbols when available (can be large)
-        </label>
+          <label class="inline-control" for="include-symbols">
+            <input id="include-symbols" type="checkbox" />
+            Include symbols when available (can be large)
+          </label>
 
-        <p id="status" role="status">Load a graph to begin.</p>
-      </section>
+          <p id="status" role="status">Load a graph to begin.</p>
+        </section>
+
+        <section class="tree-panel">
+          <div class="tree-toolbar">
+            <input id="tree-search" type="search" placeholder="Filter files and symbols..." autocomplete="off" />
+          </div>
+          <div id="file-tree" class="file-tree">
+            <p class="empty-state">Load a graph to see the file tree.</p>
+          </div>
+        </section>
+
+        <section id="detail-panel" class="detail-panel hidden">
+          <div class="detail-header">
+            <span id="detail-title"></span>
+            <button id="detail-close" type="button" title="Close panel">&times;</button>
+          </div>
+          <div id="detail-content"></div>
+        </section>
+      </aside>
 
       <section class="graph-panel">
         <div id="graph-container" aria-label="Dependency graph visualization"></div>
