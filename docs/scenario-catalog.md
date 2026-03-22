@@ -10,6 +10,35 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Binary and mode-only git diff metadata | `tests/streaming-parser.test.ts` | Diff parser records `isBinary`, `modeChanged`, and `similarityIndex` metadata so fallback logic can run when hunks are empty. | Internal regression test | 2026-03-06 |
 | Impact diagnostics counters | `tests/impact-diagnostics.test.ts` | Impact report includes diagnostics counters (`refsScanned`, filtering counters, fallback counters, symbol mapping counters). | Internal regression test | 2026-03-06 |
 
+## Native Tree-sitter parity
+
+| Scenario | Sample | Expected behavior | Source | Date added |
+| --- | --- | --- | --- | --- |
+| JavaScript import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same import bindings for ES modules and CommonJS requires. | Internal regression test | 2026-03-22 |
+| TypeScript export-assignment parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same local/default export results for `export class` and `export = value`. | Internal regression test | 2026-03-22 |
+| Python `__all__` parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same locals and exports for `__all__`-driven modules. | Internal regression test | 2026-03-22 |
+| HTML import-specifier parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same HTML `src` and `href` module specifiers. | Internal regression test | 2026-03-22 |
+| Go import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same Go file imports for package-relative fixtures. | Internal regression test | 2026-03-22 |
+| Java import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same Java imports for package and static-import fixtures. | Internal regression test | 2026-03-22 |
+| C# import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same `using`-based imports. | Internal regression test | 2026-03-22 |
+| Rust import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same `mod` and `use` imports. | Internal regression test | 2026-03-22 |
+| Ruby import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same `require_relative` imports. | Internal regression test | 2026-03-22 |
+| TSX symbol parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same exported component symbols and local type symbols. | Internal regression test | 2026-03-22 |
+| CSS-family specifier parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same module specifiers for CSS, Less, and SCSS imports. | Internal regression test | 2026-03-22 |
+| SFC specifier parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same module specifiers for Vue and Svelte inline scripts. | Internal regression test | 2026-03-22 |
+
+## C
+
+| Scenario | Sample | Expected behavior | Source | Date added |
+| --- | --- | --- | --- | --- |
+| Header includes | `tests/samples/c/main.c` | Dependency graph includes edges to `utils.h` and `helpers.h` for `#include` directives. | Internal parity fixture | 2026-03-22 |
+
+## C++
+
+| Scenario | Sample | Expected behavior | Source | Date added |
+| --- | --- | --- | --- | --- |
+| Header includes | `tests/samples/cpp/main.cpp` | Dependency graph includes edges to `utils.hpp` and `helpers.hpp` for `#include` directives. | Internal parity fixture | 2026-03-22 |
+
 ## C#
 
 | Scenario | Sample | Expected behavior | Source | Date added |
@@ -45,6 +74,13 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Scenario | Sample | Expected behavior | Source | Date added |
 | --- | --- | --- | --- | --- |
 | Dynamic import specifier | `tests/samples/javascript/dynamic-import.js` | Dependency graph includes edge to `helpers.js` when `import()` is used. | https://github.com/tree-sitter/tree-sitter-javascript | 2026-01-22 |
+| CommonJS import bindings | `tests/native-tree-sitter.test.ts` | Import binding extraction matches between native and JS Tree-sitter for `require()` and destructured CommonJS imports. | Internal regression test | 2026-03-22 |
+
+## Kotlin
+
+| Scenario | Sample | Expected behavior | Source | Date added |
+| --- | --- | --- | --- | --- |
+| Package imports | `tests/samples/kotlin/main.kt` | Dependency graph includes edges to `utils/helperFunction.kt` and `helpers/helperFromHelpers.kt`. | Internal parity fixture | 2026-03-22 |
 
 ## LESS
 
@@ -57,6 +93,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Scenario | Sample | Expected behavior | Source | Date added |
 | --- | --- | --- | --- | --- |
 | Relative `from` imports | `tests/samples/python/relative-imports.py` | Dependency graph includes edges to `utils.py` and `helpers.py` for relative `from` imports. | https://github.com/tree-sitter/tree-sitter-python | 2026-01-22 |
+| `__all__` export filtering | `tests/languages/python-all.test.ts` | Export extraction respects `__all__` tuple/list assignments and avoids false positives from nearby strings. | Internal regression test | 2026-03-22 |
 
 ## Ruby
 
@@ -87,6 +124,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Scenario | Sample | Expected behavior | Source | Date added |
 | --- | --- | --- | --- | --- |
 | Dynamic import specifier | `tests/samples/typescript/dynamic-import.ts` | Dependency graph includes edge to `helpers.ts` when `import()` is used. | https://github.com/tree-sitter/tree-sitter-typescript | 2026-01-22 |
+| `export =` parity | `tests/native-tree-sitter.test.ts` | Export extraction matches between native and JS Tree-sitter for `export = value` and named class exports. | Internal regression test | 2026-03-22 |
 
 ## TSX
 
@@ -99,3 +137,9 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Scenario | Sample | Expected behavior | Source | Date added |
 | --- | --- | --- | --- | --- |
 | Inline script imports | `tests/samples/vue/inline-script.vue` | Dependency graph includes edge to `logic.ts` for inline script imports. | https://github.com/tree-sitter/tree-sitter-vue | 2026-01-22 |
+
+## Swift
+
+| Scenario | Sample | Expected behavior | Source | Date added |
+| --- | --- | --- | --- | --- |
+| Module imports | `tests/samples/swift/main.swift` | Dependency graph includes edges to `Utils.swift` and `Helpers.swift` for imported symbols used in the fixture. | Internal parity fixture | 2026-03-22 |

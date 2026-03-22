@@ -12,6 +12,7 @@ import { collectModuleSpecifiersFromSource } from "../src/graphs.js";
 import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
+const sampleRoot = path.resolve(process.cwd(), "tests", "samples");
 const tempDirs: string[] = [];
 
 afterAll(async () => {
@@ -80,6 +81,94 @@ function simplifyModuleIndex(
       };
     }),
   };
+}
+
+function sampleFile(...parts: string[]): string {
+  return path.join(sampleRoot, ...parts);
+}
+
+async function expectNativeImportParity(
+  projectDir: string,
+  relativeFile: string,
+): Promise<void> {
+  const projectRoot = sampleFile(projectDir);
+  const file = path.join(projectRoot, relativeFile);
+  const parsed = await parseFile(file);
+  expect(parsed.nativeQueries).not.toBeNull();
+
+  const nativeImports = await collectImportsForFile(file, projectRoot, {
+    source: parsed.source,
+    tree: parsed.tree,
+    sup: parsed.sup,
+    lang: parsed.lang,
+    nativeQueries: parsed.nativeQueries,
+  });
+  const jsImports = await collectImportsForFile(file, projectRoot, {
+    source: parsed.source,
+    tree: parsed.tree,
+    sup: parsed.sup,
+    lang: parsed.lang,
+  });
+
+  expect(simplifyImports(nativeImports)).toEqual(simplifyImports(jsImports));
+}
+
+async function expectNativeModuleIndexParity(relativeFile: string): Promise<void> {
+  const file = sampleFile(relativeFile);
+  const parsed = await parseFile(file);
+  expect(parsed.nativeQueries).not.toBeNull();
+
+  const nativeIndex = collectLocalsAndExportsFromSource(
+    file,
+    parsed.source,
+    parsed.sup,
+    parsed.lang,
+    [],
+    {
+      tree: parsed.tree,
+      nativeQueries: parsed.nativeQueries,
+    },
+  );
+  const jsIndex = collectLocalsAndExportsFromSource(
+    file,
+    parsed.source,
+    parsed.sup,
+    parsed.lang,
+    [],
+    {
+      tree: parsed.tree,
+    },
+  );
+
+  expect(simplifyModuleIndex(nativeIndex)).toEqual(simplifyModuleIndex(jsIndex));
+}
+
+async function expectNativeModuleSpecifierParity(relativeFile: string): Promise<void> {
+  const file = sampleFile(relativeFile);
+  const parsed = await parseFile(file);
+  expect(parsed.nativeQueries).not.toBeNull();
+
+  const nativeSpecifiers = collectModuleSpecifiersFromSource(
+    parsed.sup,
+    parsed.lang,
+    parsed.source,
+    {
+      tree: parsed.tree,
+      nativeQueries: parsed.nativeQueries,
+      file,
+    },
+  );
+  const jsSpecifiers = collectModuleSpecifiersFromSource(
+    parsed.sup,
+    parsed.lang,
+    parsed.source,
+    {
+      tree: parsed.tree,
+      file,
+    },
+  );
+
+  expect(nativeSpecifiers).toEqual(jsSpecifiers);
 }
 
 nativeDescribe("native tree-sitter integration", () => {
@@ -247,5 +336,49 @@ nativeDescribe("native tree-sitter integration", () => {
     );
 
     expect(simplifyModuleIndex(nativeIndex)).toEqual(simplifyModuleIndex(jsIndex));
+  });
+
+  it("matches import extraction for representative compiled languages", async () => {
+    const cases = [
+      ["go", "main.go"],
+      ["java", "main.java"],
+      ["csharp", "Main.cs"],
+      ["rust", "main.rs"],
+      ["ruby", "main.rb"],
+      ["tsx", "App.tsx"],
+    ] as const;
+
+    for (const [projectDir, relativeFile] of cases) {
+      await expectNativeImportParity(projectDir, relativeFile);
+    }
+  });
+
+  it("matches symbol extraction for representative compiled languages", async () => {
+    const cases = [
+      "go/utils.go",
+      "java/utils/Utils.java",
+      "csharp/Utils.cs",
+      "rust/utils.rs",
+      "tsx/components/Button.tsx",
+      "ruby/utils.rb",
+    ] as const;
+
+    for (const relativeFile of cases) {
+      await expectNativeModuleIndexParity(relativeFile);
+    }
+  });
+
+  it("matches module specifier extraction for stylesheet and component languages", async () => {
+    const cases = [
+      "css/main.css",
+      "less/main.less",
+      "scss/use-partials.scss",
+      "vue/inline-script.vue",
+      "svelte/inline-script.svelte",
+    ] as const;
+
+    for (const relativeFile of cases) {
+      await expectNativeModuleSpecifierParity(relativeFile);
+    }
   });
 });

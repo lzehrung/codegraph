@@ -67,6 +67,13 @@ const TS_DEFAULT_EXPORT_PATTERNS = [
   '    (export_statement (function_declaration name: (identifier) @default)) @stmt (#match? @stmt "default")\n',
   '    (export_statement (class_declaration name: (identifier) @default)) @stmt (#match? @stmt "default")\n',
 ] as const;
+const SCSS_SYMBOL_QUERY_PATTERNS = [
+  "(mixin_statement (name) @name)",
+  "(function_statement (name) @name)",
+  "(variable_declaration (variable) @name)",
+  "(class_selector (class_name) @name)",
+  "(id_selector (id_name) @name)",
+] as const;
 
 let bindingState:
   | { loaded: true; binding: NativeBinding; supportedLanguageIds: Set<string> }
@@ -114,6 +121,12 @@ function normalizeQueryForNative(languageId: string, queryText: string): string 
       /\(class_declaration name: \(identifier\) @/g,
       "(class_declaration name: (type_identifier) @",
     );
+  }
+  if (languageId === "scss") {
+    if (SCSS_SYMBOL_QUERY_PATTERNS.some((pattern) => queryText.includes(pattern))) {
+      return "";
+    }
+    return queryText;
   }
   return queryText;
 }

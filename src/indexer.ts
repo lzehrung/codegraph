@@ -1738,7 +1738,7 @@ export function collectLocalsAndExportsFromSource(
               sourceSpecifier: srcName,
               typeOnly: isTypeOnly,
             });
-          } else {
+          } else if (/^\s*export\s*\*/.test(stmtText)) {
             exports.push({
               type: "exportStar",
               fromModule: from,
@@ -1997,7 +1997,7 @@ export function collectLocalsAndExportsFromSource(
               sourceSpecifier: srcName,
               typeOnly: isTypeOnly,
             });
-          } else {
+          } else if (/^\s*export\s*\*/.test(stmtText)) {
             exports.push({
               type: "exportStar",
               fromModule: from,
