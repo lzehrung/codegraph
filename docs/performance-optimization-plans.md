@@ -1,51 +1,59 @@
 # Codegraph Performance Optimization Plans
 
-This document tracks the major architectural options for improving Codegraph performance. The current implementation direction is to keep one shared Tree-sitter model across languages and move hot parse/query execution into Rust, rather than introducing a separate parser stack for a subset of languages.
+This document tracks the major architectural options for improving Codegraph performance.
+
+Current status:
+
+- Implemented: one shared native Rust Tree-sitter runtime via `napi-rs`
+- Implemented: shared cross-language query model preserved across languages
+- Implemented: automatic JS fallback when the native addon is unavailable or a native query path fails
+- Implemented: native package publishing flow and runtime loading
+- Implemented: native backend usage reporting plus native parity tests across the supported source-language set
+- Not implemented yet: `Piscina` worker-pool parallelization
+- Not implemented yet: any alternate non-Tree-sitter parser backend
+
+The chosen direction is to keep one shared Tree-sitter model across languages and move hot parse/query execution into Rust, rather than introducing a separate parser stack for a subset of languages.
 
 The execution plan for the remaining native-runtime hardening, coverage, diagnostics, benchmarks, and isolated `Piscina` evaluation work lives in [native-runtime-improvements-plan.md](./native-runtime-improvements-plan.md).
 
 ---
 
 ## Plan 1: Native Rust N-API Addon (`napi-rs`) for Tree-sitter
+Status: Implemented
+
 **Objective:** Move Tree-sitter parsing and query execution out of Node.js and into a native Rust addon while preserving the existing cross-language query definitions. This reduces FFI overhead without introducing parser divergence between languages.
 
-### Implementation Steps:
-1. **Initialize `napi-rs` workspace:**
-   - Add a private workspace package such as `packages/codegraph-native`.
-   - Expose a small JS loader plus generated typings for the built `.node` artifact.
+### Implemented
+1. Added the `packages/codegraph-native` workspace package.
+2. Added the Rust `napi-rs`, Tree-sitter, and grammar-crate dependencies needed for the native runtime.
+3. Implemented the native `run_language_queries(...)` entrypoint and plain capture/result objects in Rust.
+4. Wired the addon into `src/native/treeSitterNative.ts`.
+5. Threaded native query results through the main extraction and indexing paths while preserving the existing TypeScript-side contracts.
+6. Added automatic JS fallback for unavailable or incompatible native execution.
+7. Added native package publishing support and automatic runtime loading from the published package.
+8. Added backend usage reporting and native parity tests for the supported source-language set.
 
-2. **Add Rust dependencies:**
-   - In `packages/codegraph-native/Cargo.toml`, add:
-     - `napi`, `napi-derive`, and `napi-build`
-     - `tree-sitter`
-     - grammar crates for each supported language
-     - `streaming-iterator` for efficient query iteration
+### Remaining work
+- harden native query compatibility and diagnostics
+- improve by-language reporting
+- expand scenario coverage further
+- benchmark the native path more rigorously
 
-3. **Define the N-API interface:**
-   - In `packages/codegraph-native/src/lib.rs`, define N-API objects for plain query captures and grouped query results using `#[napi(object)]`.
-   - Expose one native entrypoint that parses once and runs the current query set:
-     ```rust
-     #[napi]
-     pub fn run_language_queries(...) -> NativeQueryResults { ... }
-     ```
-
-4. **Implement Tree-sitter logic in Rust:**
-   - Instantiate a `tree_sitter::Parser` and set the language from `language_id`.
-   - Parse the source once, compile the provided query strings, and execute them with `tree_sitter::QueryCursor`.
-   - Return plain capture data to TypeScript so the JS side does not touch Tree-sitter nodes for the hot query paths.
-   - Keep TypeScript responsible for higher-level resolution heuristics and fallback behavior so all languages stay on one shared extraction contract.
-
-5. **Integrate with Node.js extraction paths:**
-   - Import the native addon through a loader in `src/native/treeSitterNative.ts`.
-   - Run native query execution once per parsed file, then thread those capture results through `collectModuleSpecifiersFromSource`, `collectImportsForFile`, and `collectLocalsAndExportsFromSource`.
-   - Keep an automatic JS fallback whenever the addon is missing or a query is incompatible with the Rust grammar binding.
+See [native-runtime-improvements-plan.md](./native-runtime-improvements-plan.md) for the remaining work.
 
 ---
 
 ## Plan 2: Maximize Tree-sitter Queries (Zero-FFI Filtering)
+Status: Partially implemented, but not tracked as a separate completed project
+
 **Objective:** For code that remains in Node.js, prefer Tree-sitter queries over manual tree walking to minimize node-property FFI crossings.
 
-### Implementation Steps:
+### Notes
+- Some extraction paths already prefer query-driven capture collection.
+- This is still an ongoing cleanup area rather than a distinct finished milestone.
+- Any additional work here should be driven by profiling and by removal of redundant JS-side AST traversal after native extraction is fully stabilized.
+
+### Remaining implementation steps
 1. Audit existing traversal for `.children`, `.parent`, `.nextSibling`, `.walk()`, and similar recursive scanning.
 2. Replace manual discovery logic with explicit queries wherever the language grammar allows it.
 3. Batch node-property reads so helper functions operate on plain JS objects instead of raw Tree-sitter nodes.
@@ -53,9 +61,16 @@ The execution plan for the remaining native-runtime hardening, coverage, diagnos
 ---
 
 ## Plan 3: True Multi-Threading via `worker_threads` (Piscina)
+Status: Not implemented
+
 **Objective:** Fan out CPU-bound parsing and indexing tasks across multiple physical cores using Node.js `worker_threads` to achieve true parallelism.
 
-### Implementation Steps:
+### Notes
+- This remains intentionally deferred.
+- The worker-pool work is isolated so it does not interfere with correctness, diagnostics, or native parity work.
+- It should only begin after benchmarking proves there is a real gain around native per-file extraction.
+
+### Remaining implementation steps
 1. Add `piscina` only if benchmarking shows real gains around native per-file extraction work.
 2. Keep SQLite access and cache writes on the main thread.
 3. Dispatch only serializable per-file work to workers and aggregate `ModuleIndex` plus edge results on the main thread.
@@ -63,9 +78,16 @@ The execution plan for the remaining native-runtime hardening, coverage, diagnos
 ---
 
 ## Plan 4: Alternate Parser Backends for Specific Languages
+Status: Explicitly not adopted
+
 **Objective:** Evaluate language-specific parser swaps only if they preserve cross-language maintainability constraints and clearly outperform the shared Tree-sitter model.
 
-### Implementation Steps:
+### Notes
+- This repo intentionally did not adopt a JS/TS-only alternate parser path.
+- The active design keeps one Tree-sitter-based parsing model across languages for maintenance consistency.
+- Treat this plan as a rejected default, not an active workstream.
+
+### Guardrails if reconsidered in the future
 1. Treat parser divergence as a last resort, not the default optimization path.
 2. Keep the existing Tree-sitter query contracts as the source of truth unless there is an explicit decision to fork semantics.
 3. Require benchmarking plus maintenance justification before adopting a language-specific backend.
