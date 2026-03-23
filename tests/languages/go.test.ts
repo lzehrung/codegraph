@@ -35,6 +35,23 @@ const definition: LanguageTestDefinition = {
         to: { type: "file", path: "helpers.go" },
       },
     ],
+    symbols: [
+      {
+        file: "contracts.go",
+        includes: [
+          { name: "Runner" },
+          { name: "Service" },
+          { name: "BuildService" },
+        ],
+      },
+      {
+        file: "utils.go",
+        includes: [
+          { name: "ReExportedHelper" },
+          { name: "ConstantValue" },
+        ],
+      },
+    ],
   },
 };
 

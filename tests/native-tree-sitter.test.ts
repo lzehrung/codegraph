@@ -341,15 +341,20 @@ nativeDescribe("native tree-sitter integration", () => {
   it("matches import extraction for representative compiled languages", async () => {
     const cases = [
       ["go", "main.go"],
+      ["go", "aliased-imports.go"],
       ["java", "main.java"],
+      ["java", "static-imports.java"],
       ["csharp", "Main.cs"],
       ["rust", "main.rs"],
+      ["rust", "aliased-use.rs"],
       ["kotlin", "main.kt"],
       ["swift", "main.swift"],
       ["c", "main.c"],
       ["cpp", "main.cpp"],
       ["ruby", "main.rb"],
       ["tsx", "App.tsx"],
+      ["python", "relative-imports.py"],
+      ["javascript", "mixed.js"],
     ] as const;
 
     for (const [projectDir, relativeFile] of cases) {
@@ -360,13 +365,21 @@ nativeDescribe("native tree-sitter integration", () => {
   it("matches symbol extraction for representative compiled languages", async () => {
     const cases = [
       "go/utils.go",
+      "go/contracts.go",
       "java/utils/Utils.java",
+      "java/NestedTypes.java",
       "csharp/Utils.cs",
+      "csharp/AdvancedTypes.cs",
       "rust/utils.rs",
+      "rust/models.rs",
       "kotlin/utils/helperFunction.kt",
+      "kotlin/Models.kt",
       "swift/Utils.swift",
+      "swift/Protocols.swift",
       "c/utils.h",
+      "c/advanced.h",
       "cpp/utils.hpp",
+      "cpp/advanced.hpp",
       "tsx/components/Button.tsx",
       "ruby/utils.rb",
     ] as const;
@@ -382,7 +395,11 @@ nativeDescribe("native tree-sitter integration", () => {
       "less/main.less",
       "scss/use-partials.scss",
       "vue/inline-script.vue",
+      "vue/script-setup.vue",
+      "vue/App.vue",
       "svelte/inline-script.svelte",
+      "svelte/reactive.svelte",
+      "svelte/App.svelte",
     ] as const;
 
     for (const relativeFile of cases) {

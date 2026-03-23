@@ -22,6 +22,17 @@ const definition: LanguageTestDefinition = {
       { from: "main.c", to: { type: "file", path: "utils.h" } },
       { from: "main.c", to: { type: "file", path: "helpers.h" } },
     ],
+    symbols: [
+      {
+        file: "advanced.h",
+        includes: [
+          { name: "DEFAULT_COUNT" },
+          { name: "AdvancedOptions" },
+          { name: "Mode" },
+          { name: "run_advanced" },
+        ],
+      },
+    ],
   },
 };
 

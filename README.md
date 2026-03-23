@@ -117,6 +117,7 @@ Sample graph: [sample-graph.md](./sample-graph.md)
 
 Each listed language (including Vue/Svelte script sections) has the same dependency-graph, go-to-definition, and find-references support.
 When the optional native addon is available, all listed source languages use the same native Tree-sitter runtime and query model; unsupported capabilities still fall back through the shared JS path where needed.
+The regression suite covers deeper syntax variants too, including aliased and static imports, nested types, traits and protocols, typedefs and aliases, and Vue/Svelte script variants.
 See the coverage matrix in [docs/language-parity.md](./docs/language-parity.md).
 
 **Project files**: project manifests like package.json, pyproject.toml, pom.xml, build.gradle, requirements.txt, .sln, .idea, etc. See [docs/language-parity.md](./docs/language-parity.md) for more details.

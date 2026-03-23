@@ -29,6 +29,7 @@ Status key:
 
 Notes:
 - The native addon uses the same Tree-sitter query model as the JS path for all listed source languages.
+- Native parity coverage includes both baseline fixtures and deeper syntax variants such as aliased and static imports, nested types, traits and protocols, typedefs and aliases, and SFC script variants.
 - `SCSS` uses the native addon for import/specifier extraction. Native SCSS symbol queries are intentionally skipped because symbol extraction is not a supported SCSS capability yet.
 - `HTML`, `CSS`, `Less`, `Vue`, and `Svelte` are graph/chunking-focused today. Their unsupported navigation and symbol features are covered by explicit `not_found` parity tests.
 

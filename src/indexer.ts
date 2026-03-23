@@ -2880,7 +2880,10 @@ export async function collectImportsForFile(
           const patternNode = pattern.node;
           if (patternNode.type === "object_pattern" && from) {
             for (const child of patternNode.namedChildren) {
-              if (child.type === "shorthand_property_identifier") {
+              if (
+                child.type === "shorthand_property_identifier" ||
+                child.type === "shorthand_property_identifier_pattern"
+              ) {
                 const name = sliceText(child, source);
                 const resolved = await resolveFrom(from);
                 imports.push({

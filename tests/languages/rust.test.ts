@@ -36,6 +36,12 @@ const definition: LanguageTestDefinition = {
         to: { type: "file", path: "helpers.rs" },
       },
     ],
+    symbols: [
+      {
+        file: "models.rs",
+        includes: [{ name: "Runner" }, { name: "Engine" }, { name: "run" }],
+      },
+    ],
   },
 };
 

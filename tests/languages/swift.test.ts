@@ -22,6 +22,18 @@ const definition: LanguageTestDefinition = {
       { from: "main.swift", to: { type: "file", path: "Utils.swift" } },
       { from: "main.swift", to: { type: "file", path: "Helpers.swift" } },
     ],
+    symbols: [
+      {
+        file: "Protocols.swift",
+        includes: [
+          { name: "Worker" },
+          { name: "name" },
+          { name: "act" },
+          { name: "WorkerName" },
+          { name: "WorkerImpl" },
+        ],
+      },
+    ],
   },
 };
 
