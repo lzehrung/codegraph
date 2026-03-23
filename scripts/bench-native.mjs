@@ -27,6 +27,7 @@ function parseArgs(argv) {
     runs: DEFAULT_RUNS,
     fixtures: [...DEFAULT_FIXTURES],
     json: false,
+    maxSlowdown: 0,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -38,6 +39,15 @@ function parseArgs(argv) {
     }
     if (arg === "--json") {
       options.json = true;
+      continue;
+    }
+    if (arg.startsWith("--max-slowdown=")) {
+      options.maxSlowdown = Number(arg.slice("--max-slowdown=".length));
+      continue;
+    }
+    if (arg === "--max-slowdown") {
+      options.maxSlowdown = Number(argv[index + 1] ?? options.maxSlowdown);
+      index += 1;
       continue;
     }
     if (arg.startsWith("--fixture=")) {
@@ -87,6 +97,9 @@ function parseArgs(argv) {
 
   if (!Number.isFinite(options.runs) || options.runs < 1) {
     throw new Error(`Invalid --runs value: ${String(options.runs)}`);
+  }
+  if (!Number.isFinite(options.maxSlowdown) || options.maxSlowdown < 0) {
+    throw new Error(`Invalid --max-slowdown value: ${String(options.maxSlowdown)}`);
   }
 
   return options;
@@ -210,6 +223,28 @@ async function runParentBenchmark(options) {
       fixtureResult[mode] = summarizeRuns(runs);
     }
     results.push(fixtureResult);
+  }
+
+  if (options.maxSlowdown > 0) {
+    for (const result of results) {
+      const nativeSummary = result.native;
+      const jsSummary = result.js;
+      if (!nativeSummary || !jsSummary) continue;
+      if (nativeSummary.filesIndexed !== jsSummary.filesIndexed) {
+        throw new Error(
+          `Benchmark mismatch for ${result.fixture}: native indexed ${nativeSummary.filesIndexed} files but JS indexed ${jsSummary.filesIndexed}`,
+        );
+      }
+      if (jsSummary.averageElapsedMs <= 0) {
+        continue;
+      }
+      const slowdown = nativeSummary.averageElapsedMs / jsSummary.averageElapsedMs;
+      if (slowdown > options.maxSlowdown) {
+        throw new Error(
+          `Benchmark slowdown for ${result.fixture}: native ${nativeSummary.averageElapsedMs.toFixed(2)}ms vs JS ${jsSummary.averageElapsedMs.toFixed(2)}ms exceeds max slowdown ${options.maxSlowdown}x`,
+        );
+      }
+    }
   }
 
   if (options.json) {

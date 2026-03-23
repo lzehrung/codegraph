@@ -497,6 +497,13 @@ The code is working, but some bookkeeping and native runtime logic can still be 
 - benchmark harness
 - stability tests around fallback behavior
 
+### Current status
+
+- Implemented: `scripts/bench-native.mjs`
+- Implemented: `bench:native` and `bench:native:smoke`
+- Implemented: coarse CI smoke benchmarking with a generous native slowdown guard
+- In progress: extracting backend-native bookkeeping into `src/native/nativeBackendReport.ts`
+
 ### Implementation steps
 
 1. Extract backend report bookkeeping.

@@ -50,14 +50,14 @@ import {
 } from "./graphs.js";
 import type { Edge, Range, FileId, Graph } from "./types.js";
 import {
-  getNativeTreeSitterSupportedLanguageIds,
   getNativeQueryExecution,
-  getNativeQueryMetadataForSupport,
-  getNativeTreeSitterLoadError,
-  isNativeTreeSitterAvailable,
   type NativeCapture,
   type NativeQueryResults,
 } from "./native/treeSitterNative.js";
+import {
+  initNativeBackendReport,
+  recordNativeBackendOutcome,
+} from "./native/nativeBackendReport.js";
 import {
   capturesByName,
   capturesNamed,
@@ -909,114 +909,6 @@ function initManifestReport(
     report.manifest.reused = reused;
   }
   return report.manifest;
-}
-
-function stringifyNativeLoadError(error: unknown): string | undefined {
-  if (!error) return undefined;
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
-
-function initBackendReport(report: BuildReport | undefined): BackendReport | undefined {
-  if (!report) return undefined;
-  if (!report.backend) {
-    const loadError = stringifyNativeLoadError(getNativeTreeSitterLoadError());
-    report.backend = {
-      native: {
-        available: isNativeTreeSitterAvailable(),
-        enabled: false,
-        supportedLanguageIds: getNativeTreeSitterSupportedLanguageIds(),
-        filesUsed: 0,
-        filesFellBack: 0,
-        fallbackReasons: {
-          unavailable: 0,
-          unsupportedLanguage: 0,
-          queryFailure: 0,
-        },
-        byLanguage: {},
-        errors: [],
-      },
-    };
-    if (loadError) {
-      report.backend.native.loadError = loadError;
-    }
-  }
-  return report.backend;
-}
-
-function getOrCreateNativeLanguageReport(
-  backend: BackendReport,
-  support: LanguageSupport,
-): NativeBackendLanguageReport {
-  const existing = backend.native.byLanguage[support.id];
-  if (existing) {
-    return existing;
-  }
-  const metadata = getNativeQueryMetadataForSupport(support);
-  const created: NativeBackendLanguageReport = {
-    filesSeen: 0,
-    filesUsed: 0,
-    filesFellBack: 0,
-    fallbackReasons: {
-      unavailable: 0,
-      unsupportedLanguage: 0,
-      queryFailure: 0,
-    },
-    ...(metadata.normalizedQueryKinds.length > 0
-      ? { normalizedQueryKinds: [...metadata.normalizedQueryKinds] }
-      : {}),
-    ...(metadata.skippedQueryKinds.length > 0
-      ? { skippedQueryKinds: [...metadata.skippedQueryKinds] }
-      : {}),
-  };
-  backend.native.byLanguage[support.id] = created;
-  return created;
-}
-
-function recordNativeBackendOutcome(
-  report: BuildReport | undefined,
-  outcome: {
-    usedNative: boolean;
-    support?: LanguageSupport;
-    file?: string;
-    languageId?: string;
-    fallbackReason?: NativeBackendFallbackReason;
-    error?: string;
-  },
-): void {
-  const backend = initBackendReport(report);
-  if (!backend) return;
-  if (outcome.support) {
-    const languageReport = getOrCreateNativeLanguageReport(backend, outcome.support);
-    languageReport.filesSeen += 1;
-    if (outcome.usedNative) {
-      languageReport.filesUsed += 1;
-    } else if (outcome.fallbackReason) {
-      languageReport.filesFellBack += 1;
-      languageReport.fallbackReasons[outcome.fallbackReason] += 1;
-    }
-  }
-  if (outcome.usedNative) {
-    backend.native.enabled = true;
-    backend.native.filesUsed += 1;
-    return;
-  }
-  if (!outcome.fallbackReason) return;
-  backend.native.filesFellBack += 1;
-  backend.native.fallbackReasons[outcome.fallbackReason] += 1;
-  if (
-    outcome.error &&
-    outcome.file &&
-    outcome.languageId &&
-    backend.native.errors.length < 20
-  ) {
-    backend.native.errors.push({
-      file: outcome.file,
-      languageId: outcome.languageId,
-      reason: outcome.fallbackReason,
-      message: outcome.error,
-    });
-  }
 }
 
 async function fileContentHash(file: string): Promise<string> {
@@ -3262,7 +3154,7 @@ async function buildIndexFromFileListShared(
   const cacheEnabled = cacheMode !== "off";
   const graphOptions = normalizeGraphOptions(opts?.graph);
   initManifestReport(report, useManifest, false);
-  initBackendReport(report);
+  initNativeBackendReport(report);
   const normalizedFiles = Array.from(
     new Set(
       (rawFiles ?? [])
@@ -3718,7 +3610,7 @@ export async function buildProjectIndexIncremental(
   opts?: IncrementalBuildOptions,
 ): Promise<ProjectIndex> {
   const report = opts?.report;
-  initBackendReport(report);
+  initNativeBackendReport(report);
   const timings = report?.timings;
   const totalStart = performance.now();
   const cacheMode = opts?.cache ?? "off";
