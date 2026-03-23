@@ -479,17 +479,24 @@ export async function collectEdgesForFile(
     sup = prep.sup;
     lang = prep.lang;
     src = prep.source;
-    const nativeExecution = getNativeQueryExecution(src, sup);
-    nativeQueries = nativeExecution.results;
-    recordNativeBackendOutcome(opts.report, {
-      file: normalizedFile,
-      support: sup,
-      usedNative: !!nativeExecution.results,
-      ...(nativeExecution.fallbackReason
-        ? { fallbackReason: nativeExecution.fallbackReason }
-        : {}),
-      ...(nativeExecution.error ? { error: nativeExecution.error } : {}),
-    });
+    const fastRegexDisabled = opts.fastRegexDisabledLanguages?.includes(sup.id);
+    const shouldSkipNativeForFastGraph =
+      !!opts.fast &&
+      (sup.id === "ts" || sup.id === "js") &&
+      !fastRegexDisabled;
+    if (!shouldSkipNativeForFastGraph) {
+      const nativeExecution = getNativeQueryExecution(src, sup);
+      nativeQueries = nativeExecution.results;
+      recordNativeBackendOutcome(opts.report, {
+        file: normalizedFile,
+        support: sup,
+        usedNative: !!nativeExecution.results,
+        ...(nativeExecution.fallbackReason
+          ? { fallbackReason: nativeExecution.fallbackReason }
+          : {}),
+        ...(nativeExecution.error ? { error: nativeExecution.error } : {}),
+      });
+    }
   }
 
   const fast = !!opts.fast;

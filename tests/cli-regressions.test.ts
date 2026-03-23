@@ -8,6 +8,14 @@ import { textGrep } from '../src/index.js';
 const tsxCliPath = path.resolve(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs');
 
 async function runCliCommand(args: string[], input?: string): Promise<string> {
+  const result = await runCliCommandDetailed(args, input);
+  return result.stdout;
+}
+
+async function runCliCommandDetailed(
+  args: string[],
+  input?: string,
+): Promise<{ stdout: string; stderr: string }> {
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [tsxCliPath, 'src/cli.ts', ...args], {
       cwd: process.cwd(),
@@ -31,7 +39,7 @@ async function runCliCommand(args: string[], input?: string): Promise<string> {
         reject(new Error(`codegraph CLI failed (${code}). stderr:\n${stderr}`));
         return;
       }
-      resolve(stdout);
+      resolve({ stdout, stderr });
     });
   });
 }
@@ -86,6 +94,38 @@ describe('CLI regressions', () => {
 
     const graph = JSON.parse(out1) as { nodes: string[] };
     expect(isSorted(graph.nodes.map(normalize))).toBe(true);
+  });
+
+  it('graph --report writes native backend counters to the report file', async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-cli-report-'));
+    const reportPath = path.join(tmpDir, 'graph-report.json');
+    const result = await runCliCommandDetailed([
+      'graph',
+      '--stdout',
+      '--report',
+      '--report-file',
+      reportPath,
+      tsRoot,
+    ]);
+
+    const graph = JSON.parse(result.stdout) as { nodes: string[]; edges: unknown[] };
+    expect(graph.nodes.length).toBeGreaterThan(0);
+
+    const rawReport = await fsp.readFile(reportPath, 'utf8');
+    const report = JSON.parse(rawReport) as {
+      command: string;
+      index?: {
+        backend?: {
+          native?: {
+            byLanguage: Record<string, { filesSeen: number }>;
+          };
+        };
+      };
+    };
+
+    expect(report.command).toBe('graph');
+    expect(report.index?.backend?.native?.byLanguage.ts?.filesSeen).toBeGreaterThan(0);
+    expect(result.stderr).not.toContain('Backend:');
   });
 
   it('sql runs raw queries against the SQLite graph export', async () => {

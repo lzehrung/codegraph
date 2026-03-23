@@ -233,6 +233,7 @@ function summarizeRuns(runs) {
     fastestElapsedMs,
     slowestElapsedMs,
     filesIndexed: sample.filesIndexed,
+    graphNodeCount: sample.graphNodeCount,
     filesPerSecond:
       averageElapsedMs > 0 ? (sample.filesIndexed / averageElapsedMs) * 1000 : 0,
     measurementKind: sample.measurementKind,
@@ -243,7 +244,7 @@ function summarizeRuns(runs) {
 
 function formatSummary(results) {
   const lines = [
-    "Fixture      Workload Temp  Mode    Measure Avg ms  Fastest  Slowest  Files  Files/s  Native used/fallback",
+    "Fixture      Workload Temp  Mode    Measure Avg ms  Fastest  Slowest  Files  Nodes   Files/s  Native used/fallback",
   ];
   for (const result of results) {
     for (const workload of Object.keys(result.workloads)) {
@@ -270,6 +271,7 @@ function formatSummary(results) {
               String(Math.round(summary.fastestElapsedMs)).padStart(8),
               String(Math.round(summary.slowestElapsedMs)).padStart(8),
               String(summary.filesIndexed).padStart(6),
+              String(summary.graphNodeCount ?? summary.filesIndexed).padStart(6),
               String(summary.filesPerSecond.toFixed(1)).padStart(8),
               backendSummary.padStart(20),
             ].join(" "),
@@ -394,10 +396,12 @@ async function runSingleBenchmarkChild(options) {
   }
   const start = performance.now();
   let filesIndexed = 0;
+  let graphNodeCount = 0;
   if (workload === "graph") {
     const files = await listProjectFiles(fixtureRoot);
     const graph = await collectGraph(fixtureRoot, files, { report });
-    filesIndexed = graph.nodes.size;
+    filesIndexed = files.length;
+    graphNodeCount = graph.nodes.size;
   } else {
     if (temperature === "warm") {
       const warmupReport = { timings: {} };
@@ -414,6 +418,7 @@ async function runSingleBenchmarkChild(options) {
       report,
     });
     filesIndexed = index.byFile.size;
+    graphNodeCount = index.graph.nodes.size;
   }
   const elapsedMs = performance.now() - start;
   const payload = {
@@ -423,6 +428,7 @@ async function runSingleBenchmarkChild(options) {
     mode: options.mode,
     elapsedMs,
     filesIndexed,
+    graphNodeCount,
     measurementKind: workload === "full" && temperature === "warm" ? "cached" : "direct",
     backend: report.backend?.native ?? null,
     warmupBackend,

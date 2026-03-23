@@ -348,10 +348,11 @@ npm run bench:native
 # `bench:native` now includes both cold and warm full-index runs plus graph-only runs by default.
 # Warm full-index runs measure cache-reuse behavior, so their measured backend counters can be zero even when the warmup pass used native parsing.
 # Use `--fixtures repo` when you want to benchmark the codegraph repo itself instead of the smaller sample fixture sets.
+# Benchmark output reports processed file count and resulting graph node count separately for graph workloads.
 # Smoke-check the cold full indexing path with a coarse slowdown guard
 npm run bench:native:smoke
 # Reports include graph.fallbackImportExtraction when regex fallback import extraction is used.
-# Index build reports also include backend.native with byLanguage counters so you can see where native Tree-sitter was used, where it fell back, and which query kinds were normalized or skipped.
+# Graph, index, and review reports include backend.native with byLanguage counters so you can see where native Tree-sitter was used, where it fell back, and which query kinds were normalized or skipped.
 
 # Analyze PR impact: map diffs to symbols and find affected code
 npx codegraph impact --base <commit-sha> --head <commit-sha>

@@ -91,6 +91,7 @@ export function recordNativeBackendOutcome(
 ): void {
   const backend = initNativeBackendReport(report);
   if (!backend) return;
+  const resolvedLanguageId = outcome.languageId ?? outcome.support?.id;
   if (outcome.support) {
     const languageReport = getOrCreateNativeLanguageReport(backend, outcome.support);
     languageReport.filesSeen += 1;
@@ -112,12 +113,12 @@ export function recordNativeBackendOutcome(
   if (
     outcome.error &&
     outcome.file &&
-    outcome.languageId &&
+    resolvedLanguageId &&
     backend.native.errors.length < 20
   ) {
     backend.native.errors.push({
       file: outcome.file,
-      languageId: outcome.languageId,
+      languageId: resolvedLanguageId,
       reason: outcome.fallbackReason,
       message: outcome.error,
     });
