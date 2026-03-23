@@ -128,6 +128,19 @@ function normalizeQueryForNative(languageId: string, queryText: string): string 
     }
     return queryText;
   }
+  if (languageId === "kotlin") {
+    let normalized = queryText
+      .replace(/\bimport_header\b/g, "import")
+      .replace(/\bsimple_identifier\b/g, "identifier")
+      .replace(/\btype_identifier\b/g, "identifier");
+    if (
+      normalized.includes("import_alias") ||
+      normalized.includes("wildcard_import")
+    ) {
+      normalized = "";
+    }
+    return normalized;
+  }
   return queryText;
 }
 

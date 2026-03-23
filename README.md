@@ -116,6 +116,7 @@ Sample graph: [sample-graph.md](./sample-graph.md)
 * **Vue / Svelte SFCs** (`.vue`, `.svelte`) — script blocks are parsed with the JS/TS pipeline, so dependency graphs and go-to-definition work across components.
 
 Each listed language (including Vue/Svelte script sections) has the same dependency-graph, go-to-definition, and find-references support.
+When the optional native addon is available, all listed source languages use the same native Tree-sitter runtime and query model; unsupported capabilities still fall back through the shared JS path where needed.
 See the coverage matrix in [docs/language-parity.md](./docs/language-parity.md).
 
 **Project files**: project manifests like package.json, pyproject.toml, pom.xml, build.gradle, requirements.txt, .sln, .idea, etc. See [docs/language-parity.md](./docs/language-parity.md) for more details.

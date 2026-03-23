@@ -27,6 +27,14 @@ const definition: LanguageTestDefinition = {
         from: "main.rs",
         to: { type: "file", path: "helpers.rs" },
       },
+      {
+        from: "aliased-use.rs",
+        to: { type: "file", path: "utils.rs" },
+      },
+      {
+        from: "aliased-use.rs",
+        to: { type: "file", path: "helpers.rs" },
+      },
     ],
   },
 };

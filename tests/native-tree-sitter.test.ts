@@ -344,6 +344,10 @@ nativeDescribe("native tree-sitter integration", () => {
       ["java", "main.java"],
       ["csharp", "Main.cs"],
       ["rust", "main.rs"],
+      ["kotlin", "main.kt"],
+      ["swift", "main.swift"],
+      ["c", "main.c"],
+      ["cpp", "main.cpp"],
       ["ruby", "main.rb"],
       ["tsx", "App.tsx"],
     ] as const;
@@ -359,6 +363,10 @@ nativeDescribe("native tree-sitter integration", () => {
       "java/utils/Utils.java",
       "csharp/Utils.cs",
       "rust/utils.rs",
+      "kotlin/utils/helperFunction.kt",
+      "swift/Utils.swift",
+      "c/utils.h",
+      "cpp/utils.hpp",
       "tsx/components/Button.tsx",
       "ruby/utils.rb",
     ] as const;
