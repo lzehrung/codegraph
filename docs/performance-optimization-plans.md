@@ -8,13 +8,21 @@ Current status:
 - Implemented: shared cross-language query model preserved across languages
 - Implemented: automatic JS fallback when the native addon is unavailable or a native query path fails
 - Implemented: native package publishing flow and runtime loading
-- Implemented: native backend usage reporting plus native parity tests across the supported source-language set
+- Implemented: native backend usage reporting for graph, index, and review flows plus native parity tests across the supported source-language set
+- Implemented: benchmark harness with cold/warm full-index runs, graph-only runs, runtime-environment metadata, a repo-scale local fixture option, and a coarse cold-only CI smoke benchmark for native-vs-JS regression detection
+- Implemented: explicit per-file native fallback contract tests for full and incremental indexing
+- Implemented: query-driven local-symbol extraction for the native-safe compiled-language subset (`java`, `csharp`, `rust`, `kotlin`, `swift`, `cpp`, plus `python`) with conservative fallback to scope-walk extraction where needed for correctness
+- Implemented: parser reuse cleanups so import/specifier extraction and scope-index building no longer acquire parsers when callers already supply parsed trees
 - Not implemented yet: `Piscina` worker-pool parallelization
 - Not implemented yet: any alternate non-Tree-sitter parser backend
+
+At this point, the major architecture work is complete. The remaining non-`Piscina` optimization work is targeted hot-path cleanup and better benchmark evidence, not another large backend rewrite.
 
 The chosen direction is to keep one shared Tree-sitter model across languages and move hot parse/query execution into Rust, rather than introducing a separate parser stack for a subset of languages.
 
 The execution plan for the remaining native-runtime hardening, coverage, diagnostics, benchmarks, and isolated `Piscina` evaluation work lives in [native-runtime-improvements-plan.md](./native-runtime-improvements-plan.md).
+
+The follow-on execution plan for equalizing language-support depth, adding end-to-end native semantic parity, and expanding Rust-side language smoke coverage lives in [language-support-hardening-plan.md](./language-support-hardening-plan.md).
 
 ---
 
@@ -34,10 +42,10 @@ Status: Implemented
 8. Added backend usage reporting and native parity tests for the supported source-language set.
 
 ### Remaining work
-- harden native query compatibility and diagnostics
-- improve by-language reporting
-- expand scenario coverage further
-- benchmark the native path more rigorously
+- continue replacing avoidable JS-side tree walks with query-driven extraction where semantics stay identical
+- remove redundant parsing or repeated hot-path work after native extraction
+- benchmark the native path more rigorously on representative larger roots
+- keep tightening diagnostics, coverage, and maintainability so future optimizations stay safe
 
 See [native-runtime-improvements-plan.md](./native-runtime-improvements-plan.md) for the remaining work.
 
@@ -57,6 +65,7 @@ Status: Partially implemented, but not tracked as a separate completed project
 1. Audit existing traversal for `.children`, `.parent`, `.nextSibling`, `.walk()`, and similar recursive scanning.
 2. Replace manual discovery logic with explicit queries wherever the language grammar allows it.
 3. Batch node-property reads so helper functions operate on plain JS objects instead of raw Tree-sitter nodes.
+4. Remove duplicated parse or extraction work from indexing and graph hot paths once query-driven replacements are in place.
 
 ---
 

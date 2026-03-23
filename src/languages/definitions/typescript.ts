@@ -3,6 +3,25 @@ import type { LanguageDefinition } from "../types.js";
 import { loadTypeScriptGrammars } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
+function normalizeTypeScriptNativeQuery(_kind: string, query: string): string {
+  let normalized = query.replace(
+    /^\s*\(export_assignment \(identifier\) @ts_export_assign\)\s*$/gm,
+    "",
+  );
+  normalized = normalized.replace(
+    /^\s*\(export_statement \(function_declaration name: \(identifier\) @default\)\) @stmt \(#match\? @stmt "default"\)\s*$/gm,
+    "",
+  );
+  normalized = normalized.replace(
+    /^\s*\(export_statement \(class_declaration name: \(identifier\) @default\)\) @stmt \(#match\? @stmt "default"\)\s*$/gm,
+    "",
+  );
+  return normalized.replace(
+    /\(class_declaration name: \(identifier\) @/g,
+    "(class_declaration name: (type_identifier) @",
+  );
+}
+
 const BASE_STRUCTURE = {
   blocks: [
     {
@@ -217,6 +236,10 @@ export const TYPESCRIPT_DEF: LanguageDefinition = {
   graph: BASE_GRAPH,
   ...BASE_HELPERS,
   isTypeOnly: (stmtText: string) => /\b(import|export)\s+type\b/.test(stmtText),
+  native: {
+    normalizeQuery: normalizeTypeScriptNativeQuery,
+    notes: ["removes unsupported export-assignment and default-export native query fragments"],
+  },
 };
 registerLanguage(TYPESCRIPT_DEF);
 
@@ -235,5 +258,9 @@ export const TSX_DEF: LanguageDefinition = {
   graph: BASE_GRAPH,
   ...BASE_HELPERS,
   isTypeOnly: (stmtText: string) => /\b(import|export)\s+type\b/.test(stmtText),
+  native: {
+    normalizeQuery: normalizeTypeScriptNativeQuery,
+    notes: ["removes unsupported export-assignment and default-export native query fragments"],
+  },
 };
 registerLanguage(TSX_DEF);

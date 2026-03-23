@@ -30,5 +30,10 @@ arborium-c-sharp = "2.16.0"
 arborium-scss = "2.16.0"
 arborium-vue = "2.16.0"
 
+[dev-dependencies]
+napi = { version = "3.4.0", default-features = false, features = ["napi8", "noop"] }
+napi-derive = { version = "3.3.0", features = ["noop"] }
+
 [build-dependencies]
 napi-build = "2.1.5"
+

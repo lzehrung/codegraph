@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fsp from 'node:fs/promises';
 import { collectGraph, type Edge } from '../src/index.js';
+import * as nativeRuntime from '../src/native/treeSitterNative.js';
 import { getSamplePath } from './test-utils.js';
 
 function normEdge(e: any) {
@@ -11,6 +12,10 @@ function normEdge(e: any) {
 }
 
 describe('Fast graph specifier extraction (--fast-graph)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('matches regular graph edges for TypeScript samples', async () => {
     const root = getSamplePath('typescript');
     const files = [
@@ -96,5 +101,18 @@ describe('Fast graph specifier extraction (--fast-graph)', () => {
     expect(hasEdge(fullGraph.edges, entryPath, depPath)).toBe(true);
     expect(hasEdge(fastGraph.edges, entryPath, depPath)).toBe(false);
   });
-});
 
+  it('does not invoke native query execution for JS/TS fast-graph extraction', async () => {
+    const root = getSamplePath('typescript');
+    const files = [
+      path.join(root, 'main.ts').replace(/\\/g, '/'),
+      path.join(root, 'utils.ts').replace(/\\/g, '/'),
+      path.join(root, 'helpers.ts').replace(/\\/g, '/'),
+    ];
+    const nativeSpy = vi.spyOn(nativeRuntime, 'getNativeQueryExecution');
+
+    await collectGraph(root, files, { fast: true });
+
+    expect(nativeSpy).not.toHaveBeenCalled();
+  });
+});

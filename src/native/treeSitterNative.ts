@@ -2,6 +2,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import type { LanguageSupport } from "../languages.js";
+import type { NativeQueryKind } from "../languages/types.js";
+
+export const NATIVE_QUERY_KINDS: NativeQueryKind[] = [
+  "imports",
+  "exports",
+  "locals",
+  "importBindings",
+];
 
 export type NativePoint = {
   row: number;
@@ -53,37 +61,33 @@ const localNativePackageRoot = path.resolve(
   "../../packages/codegraph-native",
 );
 
-const JS_OBJECT_METHOD_EXPORT_PATTERN = `
-      ;; CJS: module.exports = { helper () {} }
-      (expression_statement (assignment_expression
-        left: (member_expression object: (identifier) @mod property: (property_identifier) @prop)
-        right: (object (pair key: (property_identifier) @cjs_export_name value: (function_declaration) @cjs_fn))))
-        (#eq? @mod "module") (#eq? @prop "exports")
-`;
-
-const TS_EXPORT_ASSIGNMENT_PATTERN =
-  "    (export_assignment (identifier) @ts_export_assign)\n";
-const TS_DEFAULT_EXPORT_PATTERNS = [
-  '    (export_statement (function_declaration name: (identifier) @default)) @stmt (#match? @stmt "default")\n',
-  '    (export_statement (class_declaration name: (identifier) @default)) @stmt (#match? @stmt "default")\n',
-] as const;
-const SCSS_SYMBOL_QUERY_PATTERNS = [
-  "(mixin_statement (name) @name)",
-  "(function_statement (name) @name)",
-  "(variable_declaration (variable) @name)",
-  "(class_selector (class_name) @name)",
-  "(id_selector (id_name) @name)",
-] as const;
-
 let bindingState:
   | { loaded: true; binding: NativeBinding; supportedLanguageIds: Set<string> }
   | { loaded: false; error?: unknown }
   | undefined;
 
+export function isNativeTreeSitterDisabledByEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const rawValue = env.CODEGRAPH_DISABLE_NATIVE;
+  if (typeof rawValue !== "string") {
+    return false;
+  }
+  const normalized = rawValue.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
 function loadBinding():
   | { loaded: true; binding: NativeBinding; supportedLanguageIds: Set<string> }
   | { loaded: false; error?: unknown } {
   if (bindingState) return bindingState;
+  if (isNativeTreeSitterDisabledByEnv()) {
+    bindingState = {
+      loaded: false,
+      error: new Error("native tree-sitter disabled by CODEGRAPH_DISABLE_NATIVE"),
+    };
+    return bindingState;
+  }
   const candidates = [
     "@lzehrung/codegraph-native",
     localNativePackageRoot,
@@ -106,42 +110,41 @@ function loadBinding():
   return bindingState;
 }
 
-function normalizeQueryForNative(languageId: string, queryText: string): string {
-  if (languageId === "js") {
-    return queryText
-      .replace(/\(function\)/g, "(function_expression)")
-      .replace(JS_OBJECT_METHOD_EXPORT_PATTERN, "\n");
-  }
-  if (languageId === "ts" || languageId === "tsx") {
-    let normalized = queryText.replace(TS_EXPORT_ASSIGNMENT_PATTERN, "");
-    for (const pattern of TS_DEFAULT_EXPORT_PATTERNS) {
-      normalized = normalized.replace(pattern, "");
-    }
-    return normalized.replace(
-      /\(class_declaration name: \(identifier\) @/g,
-      "(class_declaration name: (type_identifier) @",
+export function normalizeNativeQueryForSupport(
+  support: LanguageSupport,
+  kind: NativeQueryKind,
+  queryText: string,
+): string {
+  return support.native?.normalizeQuery?.(kind, queryText) ?? queryText;
+}
+
+export function getNativeQueryMetadataForSupport(support: LanguageSupport): {
+  normalizedQueryKinds: NativeQueryKind[];
+  skippedQueryKinds: NativeQueryKind[];
+} {
+  const normalizedQueryKinds: NativeQueryKind[] = [];
+  const skippedQueryKinds: NativeQueryKind[] = [];
+
+  for (const kind of NATIVE_QUERY_KINDS) {
+    const originalQuery = support.queries[kind];
+    const normalizedQuery = normalizeNativeQueryForSupport(
+      support,
+      kind,
+      originalQuery,
     );
-  }
-  if (languageId === "scss") {
-    if (SCSS_SYMBOL_QUERY_PATTERNS.some((pattern) => queryText.includes(pattern))) {
-      return "";
+    if (normalizedQuery === originalQuery) {
+      continue;
     }
-    return queryText;
-  }
-  if (languageId === "kotlin") {
-    let normalized = queryText
-      .replace(/\bimport_header\b/g, "import")
-      .replace(/\bsimple_identifier\b/g, "identifier")
-      .replace(/\btype_identifier\b/g, "identifier");
-    if (
-      normalized.includes("import_alias") ||
-      normalized.includes("wildcard_import")
-    ) {
-      normalized = "";
+    normalizedQueryKinds.push(kind);
+    if (originalQuery.trim().length > 0 && normalizedQuery.trim().length === 0) {
+      skippedQueryKinds.push(kind);
     }
-    return normalized;
   }
-  return queryText;
+
+  return {
+    normalizedQueryKinds,
+    skippedQueryKinds,
+  };
 }
 
 export function isNativeTreeSitterAvailable(): boolean {
@@ -165,19 +168,25 @@ export function runNativeLanguageQueries(
   return getNativeQueryExecution(source, support).results;
 }
 
-export function getNativeQueryExecution(
+type NativeBindingState =
+  | { loaded: true; binding: NativeBinding; supportedLanguageIds: Set<string> }
+  | { loaded: false; error?: unknown };
+
+export function getNativeQueryExecutionForState(
   source: string,
   support: LanguageSupport,
+  state: NativeBindingState = loadBinding(),
 ): NativeQueryExecution {
-  const state = loadBinding();
   if (!state.loaded) {
-    const loadError = getNativeTreeSitterLoadError();
     return {
       results: null,
       fallbackReason: "unavailable",
-      ...(loadError
+      ...(state.error
         ? {
-            error: loadError instanceof Error ? loadError.message : String(loadError),
+            error:
+              state.error instanceof Error
+                ? state.error.message
+                : String(state.error),
           }
         : {}),
     };
@@ -190,10 +199,26 @@ export function getNativeQueryExecution(
       results: state.binding.runLanguageQueries(
         source,
         support.id,
-        normalizeQueryForNative(support.id, support.queries.imports),
-        normalizeQueryForNative(support.id, support.queries.exports),
-        normalizeQueryForNative(support.id, support.queries.locals),
-        normalizeQueryForNative(support.id, support.queries.importBindings),
+        normalizeNativeQueryForSupport(
+          support,
+          "imports",
+          support.queries.imports,
+        ),
+        normalizeNativeQueryForSupport(
+          support,
+          "exports",
+          support.queries.exports,
+        ),
+        normalizeNativeQueryForSupport(
+          support,
+          "locals",
+          support.queries.locals,
+        ),
+        normalizeNativeQueryForSupport(
+          support,
+          "importBindings",
+          support.queries.importBindings,
+        ),
       ),
     };
   } catch (error) {
@@ -203,4 +228,11 @@ export function getNativeQueryExecution(
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+export function getNativeQueryExecution(
+  source: string,
+  support: LanguageSupport,
+): NativeQueryExecution {
+  return getNativeQueryExecutionForState(source, support, loadBinding());
 }
