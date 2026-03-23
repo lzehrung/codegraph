@@ -1,5 +1,16 @@
 import type { Language, SyntaxNode } from "tree-sitter";
 
+export type NativeQueryKind =
+  | "imports"
+  | "exports"
+  | "locals"
+  | "importBindings";
+
+export interface NativeCompatibility {
+  normalizeQuery?: (kind: NativeQueryKind, query: string) => string;
+  notes?: string[];
+}
+
 export interface LanguageDefinition {
   id: string;
   extensions: string[];
@@ -71,6 +82,11 @@ export interface LanguageDefinition {
     shorthandPropertyIdentifier?: string[];
     memberExpression?: string;
   };
+
+  /**
+   * Optional native-runtime compatibility hooks for grammar/query differences.
+   */
+  native?: NativeCompatibility;
 }
 
 export interface BlockDefinition {
