@@ -616,3 +616,5 @@ This plan is complete when all of the following are true:
 - the language parity matrix is conservative and accurate
 - the scenario catalog reflects both fixture coverage and navigation/reference coverage
 - the full repo test command passes from the repo root
+
+The narrower follow-on plan for eliminating the remaining `Partial` entries in the parity matrix lives in [partial-language-support-plan.md](./partial-language-support-plan.md).
