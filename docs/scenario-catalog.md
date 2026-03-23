@@ -33,6 +33,8 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | TSX symbol parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same exported component symbols and local type symbols. | Internal regression test | 2026-03-22 |
 | CSS-family specifier parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same module specifiers for CSS, Less, and SCSS imports. | Internal regression test | 2026-03-22 |
 | SFC specifier parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same module specifiers for Vue and Svelte inline scripts, `script setup`, and component-import fixtures. | Internal regression test | 2026-03-22 |
+| End-to-end semantic parity | `tests/native-semantic-parity.test.ts` | Native-enabled and forced-JS runs produce the same graph edges, symbol presence, go-to-definition, and references for representative source-language fixtures. | Internal regression test | 2026-03-23 |
+| TypeScript normalization-sensitive semantic parity | `tests/native-semantic-parity.test.ts` | Native-enabled and forced-JS runs stay aligned for `export =` and class-export fixtures that depend on native query normalization. | Internal regression test | 2026-03-23 |
 
 ## C
 
@@ -40,6 +42,8 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | --- | --- | --- | --- | --- |
 | Header includes | `tests/samples/c/main.c` | Dependency graph includes edges to `utils.h` and `helpers.h` for `#include` directives. | Internal parity fixture | 2026-03-22 |
 | Typedefs, enums, macros, and declarations | `tests/samples/c/advanced.h` | Symbol extraction includes macro definitions, typedef-backed structs, enums, and declared functions from headers. | Internal regression fixture | 2026-03-22 |
+| Header go-to-definition | `tests/goto.test.ts` | Included function declarations and typedef-backed structs resolve to header definitions from `main.c`. | Internal regression test | 2026-03-23 |
+| Header references | `tests/references.test.ts` | Shared function references resolve across header and use-site files; typedef reference coverage currently keeps the typedef definition anchor. | Internal regression test | 2026-03-23 |
 
 ## C++
 
@@ -47,6 +51,8 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | --- | --- | --- | --- | --- |
 | Header includes | `tests/samples/cpp/main.cpp` | Dependency graph includes edges to `utils.hpp` and `helpers.hpp` for `#include` directives. | Internal parity fixture | 2026-03-22 |
 | Namespaces, aliases, enums, and templates | `tests/samples/cpp/advanced.hpp` | Symbol extraction includes namespaces, enum types, `using` aliases, classes, and template functions. | Internal regression fixture | 2026-03-22 |
+| Header go-to-definition | `tests/goto.test.ts` | Included function declarations and struct types resolve from `main.cpp` into `utils.hpp`. | Internal regression test | 2026-03-23 |
+| Header references | `tests/references.test.ts` | Shared function and struct references resolve across `main.cpp` and the included headers. | Internal regression test | 2026-03-23 |
 
 ## C#
 
@@ -68,6 +74,8 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Package imports | `tests/samples/go/main.go` | Dependency graph includes edges to `utils.go` and `helpers.go` for `import` paths. | https://github.com/tree-sitter/tree-sitter-go | 2026-01-22 |
 | Aliased imports | `tests/samples/go/aliased-imports.go` | Dependency graph still resolves edges to `utils.go` and `helpers.go` when package imports use aliases. | Internal regression fixture | 2026-03-22 |
 | Interfaces and generic types | `tests/samples/go/contracts.go` | Symbol extraction includes interface declarations, generic type declarations, and generic factory functions. | Internal regression fixture | 2026-03-22 |
+| Package go-to-definition | `tests/goto.test.ts` | Imported function navigation resolves from `main.go` into `utils.go`; imported struct-type navigation remains an explicit `not_found` limitation today. | Internal regression test | 2026-03-23 |
+| Package references | `tests/references.test.ts` | Exported function and struct references remain stable in dedicated tests, with current coverage stronger for struct symbols than for helper-function use sites. | Internal regression test | 2026-03-23 |
 
 ## HTML
 
@@ -95,6 +103,8 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | --- | --- | --- | --- | --- |
 | Package imports | `tests/samples/kotlin/main.kt` | Dependency graph includes edges to `utils/helperFunction.kt` and `helpers/helperFromHelpers.kt`. | Internal parity fixture | 2026-03-22 |
 | Enums, type aliases, and top-level properties | `tests/samples/kotlin/Models.kt` | Symbol extraction includes enum declarations and entries, type aliases, top-level properties, and generic classes. | Internal regression fixture | 2026-03-22 |
+| Package go-to-definition | `tests/goto.test.ts` | Imported top-level functions resolve from `main.kt` into `utils/helperFunction.kt`; imported class lookups currently remain `not_found`. | Internal regression test | 2026-03-23 |
+| Package references | `tests/references.test.ts` | Imported function references resolve across files; imported class reference coverage currently retains the definition anchor without a distinct use-site reference. | Internal regression test | 2026-03-23 |
 
 ## LESS
 
@@ -162,3 +172,5 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | --- | --- | --- | --- | --- |
 | Module imports | `tests/samples/swift/main.swift` | Dependency graph includes edges to `Utils.swift` and `Helpers.swift` for imported symbols used in the fixture. | Internal parity fixture | 2026-03-22 |
 | Protocols, type aliases, and subscripts | `tests/samples/swift/Protocols.swift` | Symbol extraction includes protocols, protocol members, type aliases, classes, and subscript-bearing implementations. | Internal regression fixture | 2026-03-22 |
+| Module go-to-definition | `tests/goto.test.ts` | Imported helper functions and structs resolve from `main.swift` into `Utils.swift`. | Internal regression test | 2026-03-23 |
+| Module references | `tests/references.test.ts` | Imported helper-function and struct references resolve consistently across `main.swift` and `Utils.swift`. | Internal regression test | 2026-03-23 |

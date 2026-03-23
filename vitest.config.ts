@@ -16,6 +16,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(rootDir, "src"),
+      "@lzehrung/codegraph": path.resolve(rootDir, "src/index.ts"),
       "https://esm.sh/graphology@0.25.4": "graphology",
       "https://esm.sh/graphology-layout-forceatlas2@0.10.1": "graphology-layout-forceatlas2",
       "https://esm.sh/sigma@3.0.0-beta.33": path.resolve(rootDir, "tests/graph-visualization/__mocks__/sigma.ts"),
