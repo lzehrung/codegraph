@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import Parser from "tree-sitter";
-import type { LanguageDefinition } from "./languages/types.js";
+import type {
+  LanguageDefinition,
+  NativeCompatibility,
+} from "./languages/types.js";
 import { getAllLanguages, getLanguageById } from "./languages/registry.js";
 import "./languages/all.js";
 
@@ -29,6 +32,7 @@ export type LanguageSupport = {
   createsFunctionScope: (node: Parser.SyntaxNode) => boolean;
   supportsCrossModuleSymbols: boolean;
   isTypeOnly: (stmtText: string) => boolean;
+  native?: NativeCompatibility;
 };
 
 function adaptDefinition(def: LanguageDefinition): LanguageSupport {
@@ -44,6 +48,7 @@ function adaptDefinition(def: LanguageDefinition): LanguageSupport {
     createsFunctionScope: def.createsFunctionScope || (() => false),
     supportsCrossModuleSymbols: def.supportsCrossModuleSymbols || false,
     isTypeOnly: def.isTypeOnly || (() => false),
+    ...(def.native ? { native: def.native } : {}),
   };
 }
 

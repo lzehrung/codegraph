@@ -2,6 +2,14 @@ import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
+const JS_OBJECT_METHOD_EXPORT_PATTERN = `
+      ;; CJS: module.exports = { helper () {} }
+      (expression_statement (assignment_expression
+        left: (member_expression object: (identifier) @mod property: (property_identifier) @prop)
+        right: (object (pair key: (property_identifier) @cjs_export_name value: (function_declaration) @cjs_fn))))
+        (#eq? @mod "module") (#eq? @prop "exports")
+`;
+
 export const JAVASCRIPT_DEF: LanguageDefinition = {
   id: "js",
   extensions: [".js", ".jsx", ".mjs", ".cjs"],
@@ -208,5 +216,12 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
     n.type === "arrow_function" ||
     n.type === "method_definition",
   supportsCrossModuleSymbols: true,
+  native: {
+    normalizeQuery: (_kind, query) =>
+      query
+        .replace(/\(function\)/g, "(function_expression)")
+        .replace(JS_OBJECT_METHOD_EXPORT_PATTERN, "\n"),
+    notes: ["normalizes function node compatibility for native javascript grammar"],
+  },
 };
 registerLanguage(JAVASCRIPT_DEF);

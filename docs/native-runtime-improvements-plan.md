@@ -9,6 +9,8 @@ This document is the execution plan for hardening and extending Codegraph's shar
 
 `Piscina` is intentionally isolated into its own workstream so performance experiments cannot destabilize correctness and maintainability work.
 
+For the follow-on work that equalizes language-support depth, adds end-to-end native semantic parity, and expands Rust-side language smoke coverage, see [language-support-hardening-plan.md](./language-support-hardening-plan.md).
+
 ---
 
 ## Objectives
@@ -496,6 +498,15 @@ The code is working, but some bookkeeping and native runtime logic can still be 
 - cleaner native/backend bookkeeping boundaries
 - benchmark harness
 - stability tests around fallback behavior
+
+### Current status
+
+- Implemented: `scripts/bench-native.mjs`
+- Implemented: `bench:native` and `bench:native:smoke`
+- Implemented: cold/warm full-index benchmarking, graph-only benchmarking, and a coarse cold-only CI smoke benchmark with a generous native slowdown guard
+- Implemented: benchmark JSON output includes runtime environment details, the harness can target the repo itself for larger local comparison runs, and graph workloads report processed files separately from resulting graph node count
+- Implemented: focused tests that lock the per-file native fallback contract for full and incremental indexing
+- Implemented: backend-native bookkeeping extraction into `src/native/nativeBackendReport.ts`
 
 ### Implementation steps
 

@@ -1,7 +1,10 @@
 import path from "node:path";
 import fsp from "node:fs/promises";
 import Parser from "tree-sitter";
-import { prepareParserInput } from "./languages/filePrep.js";
+import {
+  isUnsupportedParserInputError,
+  prepareParserInput,
+} from "./languages/filePrep.js";
 import { type LanguageSupport, getCompiledQueries } from "./languages.js";
 import type { FileId, EdgeTo, Edge, Graph } from "./types.js";
 import {
@@ -28,11 +31,16 @@ import {
   extractJsTsDynamicSpecifiers,
 } from "./util.js";
 import {
-  runNativeLanguageQueries,
+  getNativeQueryExecution,
   type NativeQueryResults,
 } from "./native/treeSitterNative.js";
 import { capturesByName } from "./native/queryResults.js";
 import {
+  initNativeBackendReport,
+  recordNativeBackendOutcome,
+} from "./native/nativeBackendReport.js";
+import {
+  type BuildReport,
   type ImportBinding,
   type ProjectIndex,
   type SymbolDef,
@@ -106,10 +114,15 @@ export function collectModuleSpecifiersFromSource(
     let queryFailed = false;
     try {
       const key = "py";
-      const parser = acquireParser(lang, key);
+      let parser: Parser | undefined;
       try {
-        parser.setLanguage(lang);
-        const tree = opts?.tree ?? parser.parse(source);
+        const tree =
+          opts?.tree ??
+          (() => {
+            parser = acquireParser(lang, key);
+            parser.setLanguage(lang);
+            return parser.parse(source);
+          })();
         const { imports: q } = getCompiledQueries(lang, support);
         for (const m of q.matches(tree.rootNode)) {
           const caps = Object.fromEntries(
@@ -146,7 +159,7 @@ export function collectModuleSpecifiersFromSource(
           }
         }
       } finally {
-        releaseParser(parser, key);
+        if (parser) releaseParser(parser, key);
       }
       if (out.length > 0) return out;
     } catch {
@@ -319,10 +332,15 @@ export function collectModuleSpecifiersFromSource(
   try {
     const key =
       support.id === "python" ? "py" : support.id === "js" ? "js" : "ts";
-    const parser = acquireParser(lang, key);
+    let parser: Parser | undefined;
     try {
-      parser.setLanguage(lang);
-      const tree = opts?.tree ?? parser.parse(source);
+      const tree =
+        opts?.tree ??
+        (() => {
+          parser = acquireParser(lang, key);
+          parser.setLanguage(lang);
+          return parser.parse(source);
+        })();
       const q = new Parser.Query(lang, support.queries.imports);
       for (const m of q.matches(tree.rootNode)) {
         const caps = Object.fromEntries(
@@ -368,7 +386,7 @@ export function collectModuleSpecifiersFromSource(
       }
       if (out.length > 0) return out;
     } finally {
-      releaseParser(parser, key);
+      if (parser) releaseParser(parser, key);
     }
   } catch (error) {
     queryFailed = true;
@@ -436,6 +454,7 @@ export async function collectEdgesForFile(
     cachedFileEdges?: GraphCacheEntry;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
+    report?: BuildReport;
   },
 ): Promise<Edge[]> {
   const normalizedFile = file.replace(/\\/g, "/");
@@ -473,7 +492,24 @@ export async function collectEdgesForFile(
     sup = prep.sup;
     lang = prep.lang;
     src = prep.source;
-    nativeQueries = runNativeLanguageQueries(src, sup);
+    const fastRegexDisabled = opts.fastRegexDisabledLanguages?.includes(sup.id);
+    const shouldSkipNativeForFastGraph =
+      !!opts.fast &&
+      (sup.id === "ts" || sup.id === "js") &&
+      !fastRegexDisabled;
+    if (!shouldSkipNativeForFastGraph) {
+      const nativeExecution = getNativeQueryExecution(src, sup);
+      nativeQueries = nativeExecution.results;
+      recordNativeBackendOutcome(opts.report, {
+        file: normalizedFile,
+        support: sup,
+        usedNative: !!nativeExecution.results,
+        ...(nativeExecution.fallbackReason
+          ? { fallbackReason: nativeExecution.fallbackReason }
+          : {}),
+        ...(nativeExecution.error ? { error: nativeExecution.error } : {}),
+      });
+    }
   }
 
   const fast = !!opts.fast;
@@ -644,6 +680,7 @@ export async function collectGraph(
     cachedFileEdges?: Map<string, GraphCacheEntry>;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
+    report?: BuildReport;
     baseGraph?: Graph;
     replaceFiles?: Set<string>;
   },
@@ -666,6 +703,7 @@ export async function collectGraph(
   for (const file of normalizedFiles) graph.nodes.add(file);
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
   const resolutionHints = normalizeResolutionHints(opts?.resolutionHints);
+  initNativeBackendReport(opts?.report);
 
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 32, 128));
 
@@ -708,11 +746,15 @@ export async function collectGraph(
           ...(opts?.onFallbackImportExtraction
             ? { onFallbackImportExtraction: opts.onFallbackImportExtraction }
             : {}),
+          ...(opts?.report ? { report: opts.report } : {}),
         },
       );
       addEdgeTargetsToGraph(edges);
       return edges;
     } catch (error) {
+      if (isUnsupportedParserInputError(error)) {
+        return [] as Edge[];
+      }
       console.warn(`Warning: Failed to process file ${file} for graph:`, error);
       return [] as Edge[];
     }
@@ -2268,6 +2310,9 @@ export async function buildSymbolGraphDetailed(
         walkImpls(tree.rootNode);
       }
     } catch (error) {
+      if (isUnsupportedParserInputError(error)) {
+        continue;
+      }
       console.warn(
         `Warning: Failed to build detailed symbol edges for ${file}:`,
         error,

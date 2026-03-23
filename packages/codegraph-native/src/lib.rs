@@ -3,6 +3,7 @@ use napi_derive::napi;
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language, Parser, Point, Query, QueryCapture, QueryCursor};
 
+#[derive(Debug)]
 #[napi(object)]
 pub struct NativePoint {
     pub row: u32,
@@ -10,6 +11,7 @@ pub struct NativePoint {
     pub index: u32,
 }
 
+#[derive(Debug)]
 #[napi(object)]
 pub struct NativeCapture {
     pub name: String,
@@ -19,12 +21,14 @@ pub struct NativeCapture {
     pub end: NativePoint,
 }
 
+#[derive(Debug)]
 #[napi(object)]
 pub struct NativeMatch {
     pub pattern_index: u32,
     pub captures: Vec<NativeCapture>,
 }
 
+#[derive(Debug)]
 #[napi(object)]
 pub struct NativeQueryResults {
     pub imports: Vec<NativeMatch>,
@@ -177,4 +181,124 @@ pub fn run_language_queries(
             import_bindings_query.as_str(),
         )?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        execute_query, language_for_id, run_language_queries, supported_language_ids, NativeMatch,
+    };
+    use tree_sitter::Parser;
+
+    fn parse_root(source: &str, language_id: &str) -> tree_sitter::Tree {
+        let language = language_for_id(language_id).expect("language should exist");
+        let mut parser = Parser::new();
+        parser
+            .set_language(&language)
+            .expect("parser language should be set");
+        parser
+            .parse(source, None)
+            .expect("source should parse into a tree")
+    }
+
+    fn first_capture_texts(matches: &[NativeMatch]) -> Vec<String> {
+        matches
+            .iter()
+            .flat_map(|query_match| query_match.captures.iter().map(|capture| capture.text.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn supported_language_ids_contains_expected_languages() {
+        let supported = supported_language_ids();
+        for language_id in ["ts", "tsx", "js", "python", "go", "rust", "vue", "svelte"] {
+            assert!(
+                supported.iter().any(|entry| entry == language_id),
+                "expected supported languages to include {language_id}",
+            );
+        }
+    }
+
+    #[test]
+    fn execute_query_returns_empty_for_blank_queries() {
+        let source = "export const value = 1;";
+        let language = language_for_id("ts").expect("typescript language should exist");
+        let tree = parse_root(source, "ts");
+        let matches = execute_query(source, tree.root_node(), language, "   ")
+            .expect("blank query should not fail");
+        assert!(matches.is_empty(), "blank queries should return no matches");
+    }
+
+    #[test]
+    fn execute_query_collects_named_captures_for_typescript() {
+        let source = "export const value = 1;";
+        let language = language_for_id("ts").expect("typescript language should exist");
+        let tree = parse_root(source, "ts");
+        let matches = execute_query(
+            source,
+            tree.root_node(),
+            language,
+            "(lexical_declaration (variable_declarator name: (identifier) @name))",
+        )
+        .expect("query should execute");
+
+        assert_eq!(first_capture_texts(&matches), vec!["value".to_string()]);
+    }
+
+    #[test]
+    fn run_language_queries_returns_imports_and_locals_for_javascript() {
+        let results = run_language_queries(
+            "import { helper } from \"./dep.js\";\nconst value = helper();".to_string(),
+            "js".to_string(),
+            "(import_statement (string) @mod) @stmt".to_string(),
+            "".to_string(),
+            "(variable_declarator name: (identifier) @name)".to_string(),
+            "(import_statement (import_clause (named_imports (import_specifier name: (identifier) @iname))) (string) @from) @stmt"
+                .to_string(),
+        )
+        .expect("native query execution should succeed");
+
+        assert_eq!(results.imports.len(), 1);
+        assert_eq!(results.import_bindings.len(), 1);
+        assert_eq!(
+            first_capture_texts(&results.locals),
+            vec!["value".to_string()]
+        );
+    }
+
+    #[test]
+    fn run_language_queries_rejects_unsupported_languages() {
+        let error = run_language_queries(
+            "value".to_string(),
+            "unknown".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "".to_string(),
+        )
+        .expect_err("unsupported language should fail");
+
+        assert!(
+            error.to_string().contains("Unsupported language"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn run_language_queries_surfaces_query_compile_failures() {
+        let error = run_language_queries(
+            "export const value = 1;".to_string(),
+            "ts".to_string(),
+            "(".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "".to_string(),
+        )
+        .expect_err("invalid query should fail");
+
+        assert!(
+            error.to_string().contains("Failed to compile query"),
+            "unexpected error: {error}"
+        );
+    }
 }
