@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { performance } from "node:perf_hooks";
+import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -19,6 +20,7 @@ const FIXTURE_ROOTS = {
 const DEFAULT_FIXTURES = ["typescript", "python", "go", "rust", "mixed"];
 const DEFAULT_RUNS = 3;
 const DEFAULT_WORKLOADS = ["full", "graph"];
+const DEFAULT_TEMPERATURES = ["cold", "warm"];
 
 function parseArgs(argv) {
   const options = {
@@ -28,6 +30,7 @@ function parseArgs(argv) {
     runs: DEFAULT_RUNS,
     fixtures: [...DEFAULT_FIXTURES],
     workloads: [...DEFAULT_WORKLOADS],
+    temperatures: [...DEFAULT_TEMPERATURES],
     json: false,
     maxSlowdown: 0,
   };
@@ -41,6 +44,22 @@ function parseArgs(argv) {
     }
     if (arg === "--json") {
       options.json = true;
+      continue;
+    }
+    if (arg.startsWith("--temperatures=")) {
+      options.temperatures = arg
+        .slice("--temperatures=".length)
+        .split(",")
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0);
+      continue;
+    }
+    if (arg === "--temperatures") {
+      options.temperatures = (argv[index + 1] ?? "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0);
+      index += 1;
       continue;
     }
     if (arg.startsWith("--workloads=")) {
@@ -124,6 +143,13 @@ function parseArgs(argv) {
       throw new Error(`Unknown workload '${workload}'. Expected one of: full, graph`);
     }
   }
+  for (const temperature of options.temperatures) {
+    if (temperature !== "cold" && temperature !== "warm") {
+      throw new Error(
+        `Unknown temperature '${temperature}'. Expected one of: cold, warm`,
+      );
+    }
+  }
 
   return options;
 }
@@ -138,7 +164,7 @@ function assertFixtureNames(fixtures) {
   }
 }
 
-async function runChildBenchmark(fixture, workload, mode) {
+async function runChildBenchmark(fixture, workload, temperature, mode) {
   return await new Promise((resolve, reject) => {
     const stdoutChunks = [];
     const stderrChunks = [];
@@ -149,6 +175,7 @@ async function runChildBenchmark(fixture, workload, mode) {
         "--child",
         `--fixture=${fixture}`,
         `--workloads=${workload}`,
+        `--temperatures=${temperature}`,
         `--mode=${mode}`,
       ],
       {
@@ -172,7 +199,7 @@ async function runChildBenchmark(fixture, workload, mode) {
       if (code !== 0) {
         reject(
           new Error(
-            `Benchmark child failed for ${fixture}/${workload}/${mode}: ${stderrChunks.join("").trim()}`,
+            `Benchmark child failed for ${fixture}/${workload}/${temperature}/${mode}: ${stderrChunks.join("").trim()}`,
           ),
         );
         return;
@@ -182,7 +209,7 @@ async function runChildBenchmark(fixture, workload, mode) {
       } catch (error) {
         reject(
           new Error(
-            `Failed to parse benchmark output for ${fixture}/${workload}/${mode}: ${error instanceof Error ? error.message : String(error)}`,
+            `Failed to parse benchmark output for ${fixture}/${workload}/${temperature}/${mode}: ${error instanceof Error ? error.message : String(error)}`,
           ),
         );
       }
@@ -207,42 +234,61 @@ function summarizeRuns(runs) {
     filesIndexed: sample.filesIndexed,
     filesPerSecond:
       averageElapsedMs > 0 ? (sample.filesIndexed / averageElapsedMs) * 1000 : 0,
+    measurementKind: sample.measurementKind,
     backend: sample.backend,
+    warmupBackend: sample.warmupBackend,
   };
 }
 
 function formatSummary(results) {
   const lines = [
-    "Fixture      Workload Mode    Avg ms  Fastest  Slowest  Files  Files/s  Native used/fallback",
+    "Fixture      Workload Temp  Mode    Measure Avg ms  Fastest  Slowest  Files  Files/s  Native used/fallback",
   ];
   for (const result of results) {
     for (const workload of Object.keys(result.workloads)) {
       const workloadResult = result.workloads[workload];
       if (!workloadResult) continue;
-      for (const mode of ["native", "js"]) {
-        const summary = workloadResult[mode];
-        if (!summary) continue;
-        const backend = summary.backend;
-        const backendSummary = backend
-          ? `${backend.filesUsed}/${backend.filesFellBack}`
-          : "n/a";
-        lines.push(
-          [
-            result.fixture.padEnd(12),
-            workload.padEnd(8),
-            mode.padEnd(7),
-            String(Math.round(summary.averageElapsedMs)).padStart(6),
-            String(Math.round(summary.fastestElapsedMs)).padStart(8),
-            String(Math.round(summary.slowestElapsedMs)).padStart(8),
-            String(summary.filesIndexed).padStart(6),
-            String(summary.filesPerSecond.toFixed(1)).padStart(8),
-            backendSummary.padStart(20),
-          ].join(" "),
-        );
+      for (const temperature of Object.keys(workloadResult)) {
+        const temperatureResult = workloadResult[temperature];
+        if (!temperatureResult) continue;
+        for (const mode of ["native", "js"]) {
+          const summary = temperatureResult[mode];
+          if (!summary) continue;
+          const backend = summary.backend;
+          const backendSummary = backend
+            ? `${backend.filesUsed}/${backend.filesFellBack}`
+            : "n/a";
+          lines.push(
+            [
+              result.fixture.padEnd(12),
+              workload.padEnd(8),
+              temperature.padEnd(5),
+              mode.padEnd(7),
+              summary.measurementKind.padEnd(7),
+              String(Math.round(summary.averageElapsedMs)).padStart(6),
+              String(Math.round(summary.fastestElapsedMs)).padStart(8),
+              String(Math.round(summary.slowestElapsedMs)).padStart(8),
+              String(summary.filesIndexed).padStart(6),
+              String(summary.filesPerSecond.toFixed(1)).padStart(8),
+              backendSummary.padStart(20),
+            ].join(" "),
+          );
+        }
       }
     }
   }
   return lines.join("\n");
+}
+
+function benchmarkCacheDir(fixture, workload, temperature, mode) {
+  return path.join(
+    os.tmpdir(),
+    "codegraph-native-bench",
+    fixture,
+    workload,
+    temperature,
+    mode,
+  );
 }
 
 async function runParentBenchmark(options) {
@@ -256,12 +302,15 @@ async function runParentBenchmark(options) {
     const fixtureResult = { fixture, workloads: {} };
     for (const workload of options.workloads) {
       fixtureResult.workloads[workload] = {};
-      for (const mode of ["native", "js"]) {
-        const runs = [];
-        for (let runIndex = 0; runIndex < options.runs; runIndex += 1) {
-          runs.push(await runChildBenchmark(fixture, workload, mode));
+      for (const temperature of options.temperatures) {
+        fixtureResult.workloads[workload][temperature] = {};
+        for (const mode of ["native", "js"]) {
+          const runs = [];
+          for (let runIndex = 0; runIndex < options.runs; runIndex += 1) {
+            runs.push(await runChildBenchmark(fixture, workload, temperature, mode));
+          }
+          fixtureResult.workloads[workload][temperature][mode] = summarizeRuns(runs);
         }
-        fixtureResult.workloads[workload][mode] = summarizeRuns(runs);
       }
     }
     results.push(fixtureResult);
@@ -270,22 +319,24 @@ async function runParentBenchmark(options) {
   if (options.maxSlowdown > 0) {
     for (const result of results) {
       for (const workload of Object.keys(result.workloads)) {
-        const nativeSummary = result.workloads[workload]?.native;
-        const jsSummary = result.workloads[workload]?.js;
-        if (!nativeSummary || !jsSummary) continue;
-        if (nativeSummary.filesIndexed !== jsSummary.filesIndexed) {
-          throw new Error(
-            `Benchmark mismatch for ${result.fixture}/${workload}: native indexed ${nativeSummary.filesIndexed} files but JS indexed ${jsSummary.filesIndexed}`,
-          );
-        }
-        if (jsSummary.averageElapsedMs <= 0) {
-          continue;
-        }
-        const slowdown = nativeSummary.averageElapsedMs / jsSummary.averageElapsedMs;
-        if (slowdown > options.maxSlowdown) {
-          throw new Error(
-            `Benchmark slowdown for ${result.fixture}/${workload}: native ${nativeSummary.averageElapsedMs.toFixed(2)}ms vs JS ${jsSummary.averageElapsedMs.toFixed(2)}ms exceeds max slowdown ${options.maxSlowdown}x`,
-          );
+        for (const temperature of Object.keys(result.workloads[workload] ?? {})) {
+          const nativeSummary = result.workloads[workload]?.[temperature]?.native;
+          const jsSummary = result.workloads[workload]?.[temperature]?.js;
+          if (!nativeSummary || !jsSummary) continue;
+          if (nativeSummary.filesIndexed !== jsSummary.filesIndexed) {
+            throw new Error(
+              `Benchmark mismatch for ${result.fixture}/${workload}/${temperature}: native indexed ${nativeSummary.filesIndexed} files but JS indexed ${jsSummary.filesIndexed}`,
+            );
+          }
+          if (jsSummary.averageElapsedMs <= 0) {
+            continue;
+          }
+          const slowdown = nativeSummary.averageElapsedMs / jsSummary.averageElapsedMs;
+          if (slowdown > options.maxSlowdown) {
+            throw new Error(
+              `Benchmark slowdown for ${result.fixture}/${workload}/${temperature}: native ${nativeSummary.averageElapsedMs.toFixed(2)}ms vs JS ${jsSummary.averageElapsedMs.toFixed(2)}ms exceeds max slowdown ${options.maxSlowdown}x`,
+            );
+          }
         }
       }
     }
@@ -311,24 +362,55 @@ async function runSingleBenchmarkChild(options) {
     pathToFileURL(distEntry).href
   );
   const report = { timings: {} };
+  let warmupBackend = null;
+  const workload = options.workloads[0];
+  const temperature = options.temperatures[0];
+  const cacheDir = benchmarkCacheDir(
+    options.fixture,
+    workload,
+    temperature,
+    options.mode,
+  );
+  if (temperature === "cold") {
+    fs.rmSync(cacheDir, { recursive: true, force: true });
+  } else {
+    fs.rmSync(cacheDir, { recursive: true, force: true });
+    fs.mkdirSync(cacheDir, { recursive: true });
+  }
   const start = performance.now();
   let filesIndexed = 0;
-  if (options.workloads[0] === "graph") {
+  if (workload === "graph") {
     const files = await listProjectFiles(fixtureRoot);
     const graph = await collectGraph(fixtureRoot, files, {});
     filesIndexed = graph.nodes.size;
   } else {
-    const index = await buildProjectIndex(fixtureRoot, { report });
+    if (temperature === "warm") {
+      const warmupReport = { timings: {} };
+      await buildProjectIndex(fixtureRoot, {
+        cache: "disk",
+        cacheDir,
+        report: warmupReport,
+      });
+      warmupBackend = warmupReport.backend?.native ?? null;
+    }
+    const index = await buildProjectIndex(fixtureRoot, {
+      cache: "disk",
+      cacheDir,
+      report,
+    });
     filesIndexed = index.byFile.size;
   }
   const elapsedMs = performance.now() - start;
   const payload = {
     fixture: options.fixture,
-    workload: options.workloads[0],
+    workload,
+    temperature,
     mode: options.mode,
     elapsedMs,
     filesIndexed,
+    measurementKind: workload === "full" && temperature === "warm" ? "cached" : "direct",
     backend: report.backend?.native ?? null,
+    warmupBackend,
   };
   process.stdout.write(JSON.stringify(payload));
 }

@@ -345,7 +345,9 @@ npx codegraph index --report
 npx codegraph review --report --report-file review.report.json
 # Compare native vs forced-JS indexing on representative fixtures
 npm run bench:native
-# Smoke-check the full indexing path with a coarse slowdown guard
+# `bench:native` now includes both cold and warm full-index runs plus graph-only runs by default.
+# Warm full-index runs measure cache-reuse behavior, so their measured backend counters can be zero even when the warmup pass used native parsing.
+# Smoke-check the cold full indexing path with a coarse slowdown guard
 npm run bench:native:smoke
 # Reports include graph.fallbackImportExtraction when regex fallback import extraction is used.
 # Index build reports also include backend.native with byLanguage counters so you can see where native Tree-sitter was used, where it fell back, and which query kinds were normalized or skipped.

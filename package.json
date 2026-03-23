@@ -29,7 +29,7 @@
     "test:ci": "vitest run",
     "test:native": "cargo test --manifest-path packages/codegraph-native/Cargo.toml",
     "bench:native": "node ./scripts/bench-native.mjs",
-    "bench:native:smoke": "node ./scripts/bench-native.mjs --runs 1 --fixtures typescript,python,go,rust,mixed --workloads full --max-slowdown 4",
+    "bench:native:smoke": "node ./scripts/bench-native.mjs --runs 1 --fixtures typescript,python,go,rust,mixed --workloads full --temperatures cold --max-slowdown 4",
     "test:ui": "vitest --ui",
     "test:run": "vitest run",
     "test:watch": "vitest --watch",
