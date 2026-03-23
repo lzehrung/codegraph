@@ -286,7 +286,7 @@ nativeDescribe("native semantic parity", () => {
         "go",
         ["main.go", "utils.go", "helpers.go"],
         [{ file: "utils.go", names: ["HelperFunction", "UtilityClass"] }],
-        { file: "main.go", line: 9, column: 9, expectedStatus: "ok" },
+        { file: "main.go", line: 12, column: 20, expectedStatus: "ok" },
         { file: "utils.go", line: 9, column: 6, expectedStatus: "ok" },
       ),
       sampleExpectation(
@@ -314,8 +314,8 @@ nativeDescribe("native semantic parity", () => {
         "kotlin",
         ["main.kt", "utils/helperFunction.kt", "helpers/helperFromHelpers.kt"],
         [{ file: "utils/helperFunction.kt", names: ["helperFunction", "UtilityClass"] }],
-        { file: "main.kt", line: 6, column: 15, expectedStatus: "ok" },
-        { file: "utils/helperFunction.kt", line: 3, column: 5, expectedStatus: "ok" },
+        { file: "main.kt", line: 7, column: 17, expectedStatus: "ok" },
+        { file: "utils/helperFunction.kt", line: 7, column: 7, expectedStatus: "ok" },
       ),
       sampleExpectation(
         "swift",
@@ -329,7 +329,7 @@ nativeDescribe("native semantic parity", () => {
         ["main.c", "utils.h", "utils.c", "helpers.h", "helpers.c"],
         [{ file: "utils.h", names: ["helper_function", "Utility"] }],
         { file: "main.c", line: 5, column: 15, expectedStatus: "ok" },
-        { file: "utils.h", line: 8, column: 5, expectedStatus: "ok" },
+        { file: "utils.h", line: 4, column: 16, expectedStatus: "ok" },
       ),
       sampleExpectation(
         "cpp",

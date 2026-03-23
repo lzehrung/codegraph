@@ -2,6 +2,9 @@
 
 This document is the execution plan for eliminating the remaining `Partial` entries in [language-parity.md](./language-parity.md).
 
+Status:
+- Completed on 2026-03-23. `Go`, `C`, and `Kotlin` no longer have `Partial` entries in the parity matrix.
+
 It is a follow-on plan. The broader native-runtime and language-support-hardening plans are already complete enough to treat as finished workstreams. This plan focuses only on the remaining known partial areas:
 
 - `Go`: `Go-to-definition`, `Find references`

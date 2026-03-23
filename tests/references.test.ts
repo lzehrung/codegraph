@@ -258,8 +258,11 @@ describe('Find References', () => {
       const index = await createTestIndex('go');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'go');
       const utilsFile = path.join(samplePath, 'utils.go').replace(/\\/g, '/');
+      const mainFile = path.join(samplePath, 'main.go').replace(/\\/g, '/');
 
-      await testFindReferences(index, utilsFile, 9, 6, 2);
+      const result = await testFindReferences(index, utilsFile, 9, 6, 3);
+      expectReferenceAt(result, utilsFile, 9);
+      expectReferenceAt(result, mainFile, 12);
     });
   });
 
@@ -283,8 +286,9 @@ describe('Find References', () => {
       const helpersFile = path.join(samplePath, 'helpers.h').replace(/\\/g, '/');
       const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
 
-      const result = await testFindReferences(index, utilsFile, 4, 16, 1);
+      const result = await testFindReferences(index, utilsFile, 4, 16, 2);
       expectReferenceAt(result, utilsFile, 6);
+      expectReferenceAt(result, mainFile, 6);
     });
   });
 
@@ -334,8 +338,9 @@ describe('Find References', () => {
       const helpersFile = path.join(samplePath, 'helpers', 'helperFromHelpers.kt').replace(/\\/g, '/');
       const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
 
-      const result = await testFindReferences(index, utilsFile, 7, 7, 1);
+      const result = await testFindReferences(index, utilsFile, 7, 7, 2);
       expectReferenceAt(result, utilsFile, 7);
+      expectReferenceAt(result, mainFile, 7);
     });
   });
 

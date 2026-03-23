@@ -220,7 +220,7 @@ describe('Go to Definition', () => {
       const mainFile = path.join(samplePath, 'main.go').replace(/\\/g, '/');
       const utilsFile = path.join(samplePath, 'utils.go').replace(/\\/g, '/');
 
-      await testGoToDefinition(index, mainFile, 12, 20, undefined, undefined, 'not_found');
+      await testGoToDefinition(index, mainFile, 12, 20, utilsFile, 9);
     });
   });
 
@@ -286,7 +286,7 @@ describe('Go to Definition', () => {
       const helpersFile = path.join(samplePath, 'helpers', 'helperFromHelpers.kt').replace(/\\/g, '/');
       const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
 
-      await testGoToDefinition(index, mainFile, 7, 17, undefined, undefined, 'not_found');
+      await testGoToDefinition(index, mainFile, 7, 17, utilsFile, 7);
     });
   });
 

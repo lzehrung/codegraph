@@ -4526,6 +4526,7 @@ export async function goToDefinition(
     node.parent &&
     (node.parent.type ===
       (sup.nodeTypes.memberExpression ?? "member_expression") ||
+      (sup.id === "go" && node.parent.type === "qualified_type") ||
       node.parent.type === "member_access_expression" || // C#
       node.parent.type === "qualified_name" || // C#
       node.parent.type === "field_access" || // Java
@@ -4595,6 +4596,14 @@ export async function goToDefinition(
         obj = memberNode.child(0);
         prop = memberNode.child(2);
       }
+    } else if (sup.id === "go") {
+      if (memberNode.type === "qualified_type") {
+        obj = memberNode.namedChildren[0] ?? memberNode.child(0);
+        prop = memberNode.namedChildren[1] ?? memberNode.child(1);
+      } else {
+        obj = memberNode.child(0);
+        prop = memberNode.child(2);
+      }
     } else if (sup.id === "kotlin" || sup.id === "swift") {
       if (memberNode.type === "navigation_expression") {
         obj = memberNode.namedChildren[0] ?? memberNode.child(0);
@@ -4625,6 +4634,7 @@ export async function goToDefinition(
       .propertyIdentifier ?? ["property_identifier"];
     const optionalMemberTypes = new Set<string>([
       memberExpressionType,
+      sup.id === "go" ? "qualified_type" : "",
       "optional_member_expression",
       "subscript_expression",
       "optional_chain",
@@ -4689,9 +4699,11 @@ export async function goToDefinition(
       if (optionalMemberTypes.has(expr.type)) {
         const subObj = expr.child(0);
         let subProp =
-          expr.childForFieldName?.("property") ??
-          expr.child(2) ??
-          expr.childForFieldName?.("attribute");
+          expr.type === "qualified_type"
+            ? expr.namedChildren[1] ?? expr.child(1)
+            : expr.childForFieldName?.("property") ??
+              expr.child(2) ??
+              expr.childForFieldName?.("attribute");
         if (!subProp && expr.type === "navigation_expression") {
           const suffix =
             expr.namedChildren.find((c) => c.type === "navigation_suffix") ??
@@ -5742,16 +5754,20 @@ export async function collectNamespaceMemberRefs(
         : "member_expression");
   const isPropId = (t: string) =>
     (sup.nodeTypes.propertyIdentifier || ["property_identifier"]).includes(t) ||
+    t === "field_identifier" ||
+    t === "type_identifier" ||
     t === "identifier" ||
     t === "constant";
   const isObjId = (t: string) =>
     t === "identifier" ||
     t === "type_identifier" ||
+    t === "package_identifier" ||
     t === "constant" ||
     t === "namespace_identifier";
   const walk = (node: Parser.SyntaxNode) => {
     if (
       node.type === isMember ||
+      (sup.id === "go" && node.type === "qualified_type") ||
       (isRuby && (node.type === "call" || node.type === "scope_resolution"))
     ) {
       let obj: Parser.SyntaxNode | null = null;
@@ -5764,6 +5780,9 @@ export async function collectNamespaceMemberRefs(
           obj = node.childForFieldName("receiver") ?? node.child(0);
           prop = node.childForFieldName("method") ?? node.child(2);
         }
+      } else if (sup.id === "go" && node.type === "qualified_type") {
+        obj = node.namedChildren[0] ?? node.child(0);
+        prop = node.namedChildren[1] ?? node.child(1);
       } else {
         obj = node.childForFieldName("object") ?? node.child(0);
         prop =

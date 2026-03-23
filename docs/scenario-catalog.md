@@ -44,7 +44,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Header includes | `tests/samples/c/main.c` | Dependency graph includes edges to `utils.h` and `helpers.h` for `#include` directives. | Internal parity fixture | 2026-03-22 |
 | Typedefs, enums, macros, and declarations | `tests/samples/c/advanced.h` | Symbol extraction includes macro definitions, typedef-backed structs, enums, and declared functions from headers. | Internal regression fixture | 2026-03-22 |
 | Header go-to-definition | `tests/goto.test.ts` | Included function declarations and typedef-backed structs resolve to header definitions from `main.c`. | Internal regression test | 2026-03-23 |
-| Header references | `tests/references.test.ts` | Shared function references resolve across header and use-site files; typedef reference coverage currently keeps the typedef definition anchor. | Internal regression test | 2026-03-23 |
+| Header references | `tests/references.test.ts` | Shared function references and typedef-backed type references resolve across headers and `main.c` use sites. | Internal regression test | 2026-03-23 |
 
 ## C++
 
@@ -75,8 +75,8 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Package imports | `tests/samples/go/main.go` | Dependency graph includes edges to `utils.go` and `helpers.go` for `import` paths. | https://github.com/tree-sitter/tree-sitter-go | 2026-01-22 |
 | Aliased imports | `tests/samples/go/aliased-imports.go` | Dependency graph still resolves edges to `utils.go` and `helpers.go` when package imports use aliases. | Internal regression fixture | 2026-03-22 |
 | Interfaces and generic types | `tests/samples/go/contracts.go` | Symbol extraction includes interface declarations, generic type declarations, and generic factory functions. | Internal regression fixture | 2026-03-22 |
-| Package go-to-definition | `tests/goto.test.ts` | Imported function navigation resolves from `main.go` into `utils.go`; imported struct-type navigation remains an explicit `not_found` limitation today. | Internal regression test | 2026-03-23 |
-| Package references | `tests/references.test.ts` | Exported function and struct references remain stable in dedicated tests, with current coverage stronger for struct symbols than for helper-function use sites. | Internal regression test | 2026-03-23 |
+| Package go-to-definition | `tests/goto.test.ts` | Imported functions and package-qualified struct types resolve from `main.go` into `utils.go`. | Internal regression test | 2026-03-23 |
+| Package references | `tests/references.test.ts` | Exported functions and package-qualified struct-type references resolve across `main.go` and `utils.go`. | Internal regression test | 2026-03-23 |
 
 ## HTML
 
@@ -104,8 +104,8 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | --- | --- | --- | --- | --- |
 | Package imports | `tests/samples/kotlin/main.kt` | Dependency graph includes edges to `utils/helperFunction.kt` and `helpers/helperFromHelpers.kt`. | Internal parity fixture | 2026-03-22 |
 | Enums, type aliases, and top-level properties | `tests/samples/kotlin/Models.kt` | Symbol extraction includes enum declarations and entries, type aliases, top-level properties, and generic classes. | Internal regression fixture | 2026-03-22 |
-| Package go-to-definition | `tests/goto.test.ts` | Imported top-level functions resolve from `main.kt` into `utils/helperFunction.kt`; imported class lookups currently remain `not_found`. | Internal regression test | 2026-03-23 |
-| Package references | `tests/references.test.ts` | Imported function references resolve across files; imported class reference coverage currently retains the definition anchor without a distinct use-site reference. | Internal regression test | 2026-03-23 |
+| Package go-to-definition | `tests/goto.test.ts` | Imported top-level functions and imported classes resolve from `main.kt` into `utils/helperFunction.kt`. | Internal regression test | 2026-03-23 |
+| Package references | `tests/references.test.ts` | Imported function and class references resolve across `main.kt` and `utils/helperFunction.kt`. | Internal regression test | 2026-03-23 |
 
 ## LESS
 

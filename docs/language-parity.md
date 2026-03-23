@@ -11,12 +11,12 @@ Status key:
 | TSX | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
 | JavaScript | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
 | Python | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
-| Go | Yes | Yes | Partial | Partial | Yes | No | Yes | Yes | Yes |
+| Go | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
 | Java | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
-| C | Yes | Yes | Yes | Partial | Yes | No | Yes | Yes | Yes |
+| C | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
 | C++ | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
 | C# | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
-| Kotlin | Yes | Yes | Partial | Partial | Yes | No | Yes | Yes | Yes |
+| Kotlin | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
 | Ruby | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
 | Rust | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
 | Swift | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
@@ -30,9 +30,6 @@ Status key:
 Notes:
 - The native addon uses the same Tree-sitter query model as the JS path for all listed source languages.
 - Native parity coverage includes both extraction parity and end-to-end semantic parity on the current source-language fixture set (`TypeScript`, `TSX`, `JavaScript`, `Python`, `Go`, `Java`, `C#`, `Rust`, `Kotlin`, `Swift`, `C`, `C++`, `Ruby`) plus graph/specifier parity for `HTML`, `CSS`, `Less`, `SCSS`, `Vue`, and `Svelte`.
-- `Go` go-to-definition is still partial for imported struct-type lookups, and its current reference coverage is narrower than the stronger languages.
-- `C` and `Kotlin` support semantic references, but some type-oriented reference cases are currently definition-only rather than full use-site recovery.
-- `Kotlin` go-to-definition is also partial today: imported top-level functions resolve, while some imported type/class lookups still return `not_found`.
 - `SCSS` uses the native addon for import/specifier extraction. Native SCSS symbol queries are intentionally skipped because symbol extraction is not a supported SCSS capability yet.
 - `HTML`, `CSS`, `Less`, `Vue`, and `Svelte` are graph/chunking-focused today. Their unsupported navigation and symbol features are covered by explicit `not_found` parity tests.
 
