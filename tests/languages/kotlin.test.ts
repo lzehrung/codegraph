@@ -25,6 +25,19 @@ const definition: LanguageTestDefinition = {
         to: { type: "file", path: "helpers/helperFromHelpers.kt" },
       },
     ],
+    symbols: [
+      {
+        file: "Models.kt",
+        includes: [
+          { name: "Mode" },
+          { name: "Fast" },
+          { name: "Slow" },
+          { name: "UserId" },
+          { name: "topLevelValue" },
+          { name: "Service" },
+        ],
+      },
+    ],
   },
 };
 

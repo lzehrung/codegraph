@@ -26,6 +26,31 @@ const definition: LanguageTestDefinition = {
         from: "main.go",
         to: { type: "file", path: "helpers.go" },
       },
+      {
+        from: "aliased-imports.go",
+        to: { type: "file", path: "utils.go" },
+      },
+      {
+        from: "aliased-imports.go",
+        to: { type: "file", path: "helpers.go" },
+      },
+    ],
+    symbols: [
+      {
+        file: "contracts.go",
+        includes: [
+          { name: "Runner" },
+          { name: "Service" },
+          { name: "BuildService" },
+        ],
+      },
+      {
+        file: "utils.go",
+        includes: [
+          { name: "ReExportedHelper" },
+          { name: "ConstantValue" },
+        ],
+      },
     ],
   },
 };
