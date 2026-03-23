@@ -10,12 +10,14 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           registry-url: https://npm.pkg.github.com
           scope: '@lzehrung'
       - run: npm ci
+      - run: npm run build
       - run: npm run test:all
       - run: npm run bench:native:smoke -- --json
       - run: npm publish

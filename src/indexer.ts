@@ -69,6 +69,15 @@ import {
 
 // Default number of lines to include around references for line context
 const DEFAULT_REF_CONTEXT_LINES = 5;
+const QUERY_DRIVEN_LOCALS_LANGUAGES = new Set([
+  "python",
+  "java",
+  "csharp",
+  "rust",
+  "kotlin",
+  "swift",
+  "cpp",
+]);
 
 export enum SymbolKind {
   Function = "function",
@@ -1474,15 +1483,6 @@ export function collectLocalsAndExportsFromSource(
 
   const locals: SymbolDef[] = [];
   const seenLocals = new Set<string>();
-  const queryDrivenLocalsLanguages = new Set([
-    "python",
-    "java",
-    "csharp",
-    "rust",
-    "kotlin",
-    "swift",
-    "cpp",
-  ]);
   const toKind = (s: string): SymbolKind => {
     if (s === "function") return SymbolKind.Function;
     if (s === "class") return SymbolKind.Class;
@@ -1517,7 +1517,7 @@ export function collectLocalsAndExportsFromSource(
 
   const extractLocalsFromNativeQueries = (): boolean => {
     if (!nativeQueries) return false;
-    if (!queryDrivenLocalsLanguages.has(support.id)) return false;
+    if (!QUERY_DRIVEN_LOCALS_LANGUAGES.has(support.id)) return false;
     try {
       for (const match of nativeQueries.locals) {
         for (const capture of match.captures) {
@@ -1544,7 +1544,7 @@ export function collectLocalsAndExportsFromSource(
 
   const extractLocalsFromJsQueries = (): boolean => {
     if (!tree || !support.queries.locals.trim()) return false;
-    if (!queryDrivenLocalsLanguages.has(support.id)) return false;
+    if (!QUERY_DRIVEN_LOCALS_LANGUAGES.has(support.id)) return false;
     try {
       let q: Parser.Query;
       try {

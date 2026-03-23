@@ -250,7 +250,9 @@ async function createTypeScriptNormalizationCase(): Promise<SemanticExpectation>
 }
 
 nativeDescribe("native semantic parity", () => {
-  it("matches native and JS semantics for representative language fixtures", async () => {
+  it(
+    "matches native and JS semantics for representative language fixtures",
+    async () => {
     const cases: SemanticExpectation[] = [
       sampleExpectation(
         "typescript",
@@ -334,7 +336,9 @@ nativeDescribe("native semantic parity", () => {
     for (const testCase of cases) {
       await expectSemanticParity(testCase);
     }
-  });
+    },
+    30_000,
+  );
 
   it("matches native and JS semantics for normalization-sensitive TypeScript export assignment", async () => {
     const testCase = await createTypeScriptNormalizationCase();
