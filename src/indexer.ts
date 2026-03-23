@@ -49,6 +49,19 @@ import {
   type SymbolGraph,
 } from "./graphs.js";
 import type { Edge, Range, FileId, Graph } from "./types.js";
+import {
+  getNativeTreeSitterSupportedLanguageIds,
+  getNativeQueryExecution,
+  getNativeTreeSitterLoadError,
+  isNativeTreeSitterAvailable,
+  type NativeCapture,
+  type NativeQueryResults,
+} from "./native/treeSitterNative.js";
+import {
+  capturesByName,
+  capturesNamed,
+  rangeFromNativeCapture,
+} from "./native/queryResults.js";
 
 // Default number of lines to include around references for line context
 const DEFAULT_REF_CONTEXT_LINES = 5;
@@ -162,6 +175,7 @@ export type ProjectIndex = {
           tree: Parser.Tree;
           sup: LanguageSupport | undefined;
           lang: Parser.Language;
+          nativeQueries?: NativeQueryResults | null;
         }
       >
     | undefined;
@@ -171,6 +185,36 @@ export type ProjectIndex = {
 export type ResolvedExport =
   | { kind: "resolved"; def: SymbolDef }
   | { kind: "namespace"; file: FileId };
+
+type ParsedFileContext = {
+  source: string;
+  tree: Parser.Tree;
+  sup: LanguageSupport;
+  lang: Parser.Language;
+  nativeQueries?: NativeQueryResults | null;
+};
+
+type PreparedFileContext = {
+  source: string;
+  sup: LanguageSupport;
+  lang: Parser.Language;
+  nativeQueries: NativeQueryResults | null;
+  nativeFallbackReason?: NativeBackendFallbackReason;
+  nativeError?: string;
+};
+
+function parsePreparedFileContext(context: PreparedFileContext): ParsedFileContext {
+  const { source, sup, lang, nativeQueries } = context;
+  const key = sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts";
+  const parser = acquireParser(lang, key);
+  try {
+    parser.setLanguage(lang);
+    const tree = parser.parse(source);
+    return { source, tree, sup, lang, nativeQueries };
+  } finally {
+    releaseParser(parser, key);
+  }
+}
 
 /**
  * Options for building the project index
@@ -259,12 +303,38 @@ export type ManifestReport = {
   optionsMismatch?: string[];
 };
 
+export type NativeBackendFallbackReason =
+  | "unavailable"
+  | "unsupportedLanguage"
+  | "queryFailure";
+
+export type NativeBackendReport = {
+  available: boolean;
+  enabled: boolean;
+  supportedLanguageIds: string[];
+  filesUsed: number;
+  filesFellBack: number;
+  fallbackReasons: Record<NativeBackendFallbackReason, number>;
+  errors: Array<{
+    file: string;
+    languageId: string;
+    reason: NativeBackendFallbackReason;
+    message: string;
+  }>;
+  loadError?: string;
+};
+
+export type BackendReport = {
+  native: NativeBackendReport;
+};
+
 export type BuildReport = {
   timings: BuildTimingReport;
   cache?: CacheReport;
   files?: BuildFileReport;
   graph?: GraphReport;
   manifest?: ManifestReport;
+  backend?: BackendReport;
 };
 
 export type GraphDeltaReport = {
@@ -830,6 +900,73 @@ function initManifestReport(
   return report.manifest;
 }
 
+function stringifyNativeLoadError(error: unknown): string | undefined {
+  if (!error) return undefined;
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function initBackendReport(report: BuildReport | undefined): BackendReport | undefined {
+  if (!report) return undefined;
+  if (!report.backend) {
+    const loadError = stringifyNativeLoadError(getNativeTreeSitterLoadError());
+    report.backend = {
+      native: {
+        available: isNativeTreeSitterAvailable(),
+        enabled: false,
+        supportedLanguageIds: getNativeTreeSitterSupportedLanguageIds(),
+        filesUsed: 0,
+        filesFellBack: 0,
+        fallbackReasons: {
+          unavailable: 0,
+          unsupportedLanguage: 0,
+          queryFailure: 0,
+        },
+        errors: [],
+      },
+    };
+    if (loadError) {
+      report.backend.native.loadError = loadError;
+    }
+  }
+  return report.backend;
+}
+
+function recordNativeBackendOutcome(
+  report: BuildReport | undefined,
+  outcome: {
+    usedNative: boolean;
+    file?: string;
+    languageId?: string;
+    fallbackReason?: NativeBackendFallbackReason;
+    error?: string;
+  },
+): void {
+  const backend = initBackendReport(report);
+  if (!backend) return;
+  if (outcome.usedNative) {
+    backend.native.enabled = true;
+    backend.native.filesUsed += 1;
+    return;
+  }
+  if (!outcome.fallbackReason) return;
+  backend.native.filesFellBack += 1;
+  backend.native.fallbackReasons[outcome.fallbackReason] += 1;
+  if (
+    outcome.error &&
+    outcome.file &&
+    outcome.languageId &&
+    backend.native.errors.length < 20
+  ) {
+    backend.native.errors.push({
+      file: outcome.file,
+      languageId: outcome.languageId,
+      reason: outcome.fallbackReason,
+      message: outcome.error,
+    });
+  }
+}
+
 async function fileContentHash(file: string): Promise<string> {
   const buf = await fsp.readFile(file);
   const h = crypto.createHash("sha1");
@@ -1217,13 +1354,38 @@ function toRelativeEdge(projectRoot: string, edge: Edge): Edge {
   };
 }
 
+function parseObjectPatternBindings(
+  patternText: string,
+): Array<{ imported: string; local: string }> {
+  const trimmed = patternText.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return [];
+  const body = trimmed.slice(1, -1).trim();
+  if (!body) return [];
+  const parts = body
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const out: Array<{ imported: string; local: string }> = [];
+  for (const part of parts) {
+    const withoutDefault = part.replace(/\s*=\s*.+$/, "").trim();
+    const match = withoutDefault.match(
+      /^([A-Za-z_$][\w$]*)(?::\s*([A-Za-z_$][\w$]*))?$/,
+    );
+    if (!match) continue;
+    const imported = match[1]!;
+    const local = match[2] ?? imported;
+    out.push({ imported, local });
+  }
+  return out;
+}
+
 export function collectLocalsAndExportsFromSource(
   file: string,
   source: string,
   support: LanguageSupport,
   lang: Parser.Language,
   imports: ImportBinding[] = [],
-  opts?: { tree?: Parser.Tree },
+  opts?: { tree?: Parser.Tree; nativeQueries?: NativeQueryResults | null },
 ): ModuleIndex {
   const normalizeDocstringLine = (line: string) =>
     line.replace(/^\s*(?:\/\/\/?\s?|#\s?)/, "").replace(/^\s*\*\s?/, "");
@@ -1345,6 +1507,7 @@ export function collectLocalsAndExportsFromSource(
     return base;
   };
 
+  const nativeQueries = opts?.nativeQueries ?? null;
   let tree: Parser.Tree | null = opts?.tree ?? null;
   if (!tree) {
     try {
@@ -1370,7 +1533,34 @@ export function collectLocalsAndExportsFromSource(
     if (s === "type") return SymbolKind.TypeAlias;
     return SymbolKind.Variable;
   };
-  if (tree) {
+  let usedNativePythonLocals = false;
+  if (nativeQueries && support.id === "python") {
+    try {
+      for (const match of nativeQueries.locals) {
+        for (const capture of match.captures) {
+          if (capture.name !== "name" && capture.name !== "tname") continue;
+          const nativeRange = rangeFromNativeCapture(capture);
+          const node =
+            tree?.rootNode.descendantForIndex(
+              nativeRange.start.index ?? 0,
+              nativeRange.end.index ?? 0,
+            ) ?? undefined;
+          locals.push(
+            buildSymbolDef(
+              capture.text,
+              toKind(node ? support.classifyDefinition(node) : "variable"),
+              nativeRange,
+              node,
+            ),
+          );
+        }
+      }
+      usedNativePythonLocals = true;
+    } catch {
+      usedNativePythonLocals = false;
+    }
+  }
+  if (tree && !usedNativePythonLocals) {
     if (support.id === "python") {
       try {
         const { locals: q } = getCompiledQueries(lang, support);
@@ -1453,7 +1643,248 @@ export function collectLocalsAndExportsFromSource(
   const pythonAllExports = new Set<string>();
   let hasPythonAll = false;
 
-  if (support.queries.exports.trim() && tree) {
+  let usedNativeExports = false;
+  if (support.queries.exports.trim() && nativeQueries) {
+    try {
+      for (const match of nativeQueries.exports) {
+        const map = capturesByName(match);
+        const stmtText = map["stmt"]?.text ?? "";
+        const isTypeOnly = support.isTypeOnly(stmtText);
+
+        if (support.id === "python") {
+          const leftText = map["left"]?.text ?? "";
+          const methodText = map["method"]?.text ?? "";
+          const isAllAssignment = leftText === "__all__";
+          const isAllMethod =
+            leftText === "__all__" &&
+            (methodText === "extend" || methodText === "append");
+
+          if (isAllAssignment || isAllMethod) {
+            hasPythonAll = true;
+            const items = capturesNamed(match, "all_item");
+            for (const item of items) {
+              const name = unquote(item.text);
+              pythonAllExports.add(name);
+              const local = mergedLocals.find((def) => def.localName === name);
+              if (
+                local &&
+                !exports.some(
+                  (entry) =>
+                    entry.type !== "exportStar" &&
+                    "exportedAs" in entry &&
+                    entry.exportedAs === name,
+                )
+              ) {
+                exports.push({
+                  type: "local",
+                  exportedAs: name,
+                  target: local,
+                });
+              }
+            }
+            if (isAllAssignment && map["stmt"]) {
+              const assignmentText = map["stmt"]!.text;
+              const hasTuple = /=\s*\(/.test(assignmentText);
+              if (items.length === 0 || hasTuple) {
+                const strRe = /["']([^"']+)["']/g;
+                for (let submatch; (submatch = strRe.exec(assignmentText)); ) {
+                  const name = submatch[1]!;
+                  pythonAllExports.add(name);
+                  const local = mergedLocals.find((def) => def.localName === name);
+                  if (
+                    local &&
+                    !exports.some(
+                      (entry) =>
+                        entry.type !== "exportStar" &&
+                        "exportedAs" in entry &&
+                        entry.exportedAs === name,
+                    )
+                  ) {
+                    exports.push({
+                      type: "local",
+                      exportedAs: name,
+                      target: local,
+                    });
+                  }
+                }
+              }
+            }
+            continue;
+          }
+          if (map["name"]) {
+            const nameText = map["name"]!.text;
+            const local = locals.find((def) => def.localName === nameText);
+            if (local && !nameText.startsWith("_")) {
+              exports.push({
+                type: "local",
+                exportedAs: nameText,
+                target: local,
+              });
+            }
+            continue;
+          }
+        }
+
+        if (map["from"]) {
+          const from = unquote(map["from"]!.text);
+          if (map["src"]) {
+            const srcName = map["src"]!.text;
+            const alias = map["alias"]?.text ?? srcName;
+            exports.push({
+              type: "reexport",
+              exportedAs: alias,
+              fromModule: from,
+              moduleSpecifier: from,
+              sourceSpecifier: srcName,
+              typeOnly: isTypeOnly,
+            });
+          } else if (/^\s*export\s*\*/.test(stmtText)) {
+            exports.push({
+              type: "exportStar",
+              fromModule: from,
+              moduleSpecifier: from,
+              sourceSpecifier: from,
+              typeOnly: isTypeOnly,
+            });
+          }
+          continue;
+        }
+        if (map["cjs_shorthand"]) {
+          const nameText = map["cjs_shorthand"]!.text;
+          const local = locals.find((def) => def.localName === nameText);
+          if (local) {
+            exports.push({
+              type: "local",
+              exportedAs: nameText,
+              target: local,
+            });
+          }
+          continue;
+        }
+        if (map["cjs_export_name"] && map["cjs_local"]) {
+          const exportedAs = map["cjs_export_name"]!.text;
+          const localName = map["cjs_local"]!.text;
+          const local = locals.find((def) => def.localName === localName);
+          if (local) exports.push({ type: "local", exportedAs, target: local });
+          continue;
+        }
+        if (map["cjs_export_name"] && map["cjs_fn"]) {
+          const exportedAs = map["cjs_export_name"]!.text;
+          const sym = buildSymbolDef(
+            exportedAs,
+            SymbolKind.Function,
+            rangeFromNativeCapture(map["cjs_fn"]!),
+          );
+          locals.push(sym);
+          exports.push({ type: "local", exportedAs, target: sym });
+          continue;
+        }
+        if (map["default"]) {
+          const nameText = map["default"]!.text;
+          const local = locals.find((def) => def.localName === nameText);
+          if (local) {
+            exports.push({
+              type: "local",
+              exportedAs: "default",
+              target: { ...local, kind: SymbolKind.Default },
+            });
+          }
+          continue;
+        }
+        if (map["anon_default"]) {
+          const sym = buildSymbolDef(
+            "__default_export__",
+            SymbolKind.Default,
+            rangeFromNativeCapture(map["anon_default"]!),
+          );
+          locals.push(sym);
+          exports.push({ type: "local", exportedAs: "default", target: sym });
+          continue;
+        }
+        const tsExportAssignMatch =
+          support.id === "ts" || support.id === "tsx"
+            ? stmtText.match(/^\s*export\s*=\s*([A-Za-z_$][\w$]*)\s*;?\s*$/)
+            : null;
+        if (tsExportAssignMatch) {
+          const ident = tsExportAssignMatch[1]!;
+          const local = locals.find((def) => def.localName === ident);
+          if (local) {
+            exports.push({
+              type: "local",
+              exportedAs: "default",
+              target: { ...local, kind: SymbolKind.Default },
+            });
+          }
+          continue;
+        }
+        if (map["ts_export_assign"]) {
+          const ident = map["ts_export_assign"]!.text;
+          const local = locals.find((def) => def.localName === ident);
+          if (local) {
+            exports.push({
+              type: "local",
+              exportedAs: "default",
+              target: { ...local, kind: SymbolKind.Default },
+            });
+          }
+          continue;
+        }
+        if (map["name"]) {
+          const nameText = map["name"]!.text;
+          const local = locals.find((def) => def.localName === nameText);
+          if (local) {
+            exports.push({
+              type: "local",
+              exportedAs: nameText,
+              target: local,
+            });
+            const exportText = stmtText;
+            if (/^\s*export\s+default\b/.test(exportText)) {
+              exports.push({
+                type: "local",
+                exportedAs: "default",
+                target: { ...local, kind: SymbolKind.Default },
+              });
+            }
+          }
+          continue;
+        }
+        if (map["src"]) {
+          const srcName = map["src"]!.text;
+          const alias = map["alias"]?.text ?? srcName;
+          const local = locals.find((def) => def.localName === srcName);
+          if (local) {
+            exports.push({ type: "local", exportedAs: alias, target: local });
+          }
+        }
+      }
+      if (
+        !exports.some((entry) => entry.type === "local" && entry.exportedAs === "default")
+      ) {
+        const mDefFn = source.match(
+          /\bexport\s+default\s+function\s+([A-Za-z_$][\w$]*)/,
+        );
+        const mDefCls = source.match(
+          /\bexport\s+default\s+class\s+([A-Za-z_$][\w$]*)/,
+        );
+        const name = mDefFn?.[1] ?? mDefCls?.[1];
+        if (name) {
+          const local = locals.find((def) => def.localName === name);
+          if (local) {
+            exports.push({
+              type: "local",
+              exportedAs: "default",
+              target: { ...local, kind: SymbolKind.Default },
+            });
+          }
+        }
+      }
+      usedNativeExports = true;
+    } catch {
+      usedNativeExports = false;
+    }
+  }
+  if (support.queries.exports.trim() && tree && !usedNativeExports) {
     try {
       const { exports: q } = getCompiledQueries(lang, support);
       for (const m of q.matches(tree.rootNode)) {
@@ -1566,7 +1997,7 @@ export function collectLocalsAndExportsFromSource(
               sourceSpecifier: srcName,
               typeOnly: isTypeOnly,
             });
-          } else {
+          } else if (/^\s*export\s*\*/.test(stmtText)) {
             exports.push({
               type: "exportStar",
               fromModule: from,
@@ -1629,6 +2060,21 @@ export function collectLocalsAndExportsFromSource(
           );
           locals.push(sym);
           exports.push({ type: "local", exportedAs: "default", target: sym });
+          continue;
+        }
+        const tsExportAssignMatch =
+          support.id === "ts" || support.id === "tsx"
+            ? stmtText.match(/^\s*export\s*=\s*([A-Za-z_$][\w$]*)\s*;?\s*$/)
+            : null;
+        if (tsExportAssignMatch) {
+          const ident = tsExportAssignMatch[1]!;
+          const local = locals.find((d) => d.localName === ident);
+          if (local)
+            exports.push({
+              type: "local",
+              exportedAs: "default",
+              target: { ...local, kind: SymbolKind.Default },
+            });
           continue;
         }
         if (map["ts_export_assign"]) {
@@ -1710,10 +2156,11 @@ export function collectLocalsAndExportsFromSource(
   }
 
   // Regex fallback for JS/TS exports when queries miss some patterns (e.g., re-exports)
-  if (support.id === "ts" || support.id === "js") {
+  if (support.id === "ts" || support.id === "tsx" || support.id === "js") {
     const reDecl =
       /\bexport\s+(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g;
     const reDefault = /\bexport\s+default\s+([A-Za-z_$][\w$]*)/g;
+    const reExportAssign = /\bexport\s*=\s*([A-Za-z_$][\w$]*)/g;
     const reReexport = /\bexport\s*\{\s*([^}]+)\}\s*from\s*("|')([^"']+)\2/g;
     const reReexportNs =
       /\bexport\s*\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*("|')([^"']+)\2/g;
@@ -1728,6 +2175,20 @@ export function collectLocalsAndExportsFromSource(
       }
     }
     while ((m = reDefault.exec(source))) {
+      const name = m[1]!;
+      if (
+        !exports.some((e) => e.type === "local" && e.exportedAs === "default")
+      ) {
+        const local = locals.find((d) => d.localName === name);
+        if (local)
+          exports.push({
+            type: "local",
+            exportedAs: "default",
+            target: { ...local, kind: SymbolKind.Default },
+          });
+      }
+    }
+    while ((m = reExportAssign.exec(source))) {
       const name = m[1]!;
       if (
         !exports.some((e) => e.type === "local" && e.exportedAs === "default")
@@ -1909,6 +2370,7 @@ export async function collectImportsForFile(
     tree?: Parser.Tree;
     sup?: LanguageSupport;
     lang?: Parser.Language;
+    nativeQueries?: NativeQueryResults | null;
     graphOptions?: GraphBuildOptions;
   },
 ): Promise<ImportBinding[]> {
@@ -1929,6 +2391,7 @@ export async function collectImportsForFile(
   const resolvedSource = source;
   const resolvedSup = sup;
   const resolvedLang = lang;
+  const resolvedNativeQueries = opts?.nativeQueries ?? null;
 
   const imports: ImportBinding[] = [];
 
@@ -2055,34 +2518,30 @@ export async function collectImportsForFile(
 
   const key =
     resolvedSup.id === "python" ? "py" : resolvedSup.id === "js" ? "js" : "ts";
-  const parser = acquireParser(resolvedLang, key);
-  try {
-    parser.setLanguage(resolvedLang);
-    const tree = opts?.tree ?? parser.parse(resolvedSource);
-    const tsCfg =
-      resolvedSup.id === "ts" || resolvedSup.id === "tsx"
-        ? await loadNearestTsconfigFor(file)
-        : undefined;
-    const workspaceConfig = await loadWorkspaceConfig(projectRoot);
+  const tsCfg =
+    resolvedSup.id === "ts" || resolvedSup.id === "tsx"
+      ? await loadNearestTsconfigFor(file)
+      : undefined;
+  const workspaceConfig = await loadWorkspaceConfig(projectRoot);
 
-    const resolveFrom = async (from: string) => {
-      const resolutionHints = opts?.graphOptions?.resolutionHints;
-      const resolved = await resolveImportSpecifier(
-        projectRoot,
-        file,
-        from,
-        resolvedSup.id,
-        {
-          ...(tsCfg?.matchPath ? { matchPath: tsCfg.matchPath } : {}),
-          ...(workspaceConfig ? { workspaceConfig } : {}),
-          resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
-          ...(resolutionHints ? { resolutionHints } : {}),
-        },
-      );
-      return typeof resolved === "string"
-        ? resolved.replace(/\\/g, "/")
-        : resolved;
-    };
+  const resolveFrom = async (from: string) => {
+    const resolutionHints = opts?.graphOptions?.resolutionHints;
+    const resolved = await resolveImportSpecifier(
+      projectRoot,
+      file,
+      from,
+      resolvedSup.id,
+      {
+        ...(tsCfg?.matchPath ? { matchPath: tsCfg.matchPath } : {}),
+        ...(workspaceConfig ? { workspaceConfig } : {}),
+        resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
+        ...(resolutionHints ? { resolutionHints } : {}),
+      },
+    );
+    return typeof resolved === "string"
+      ? resolved.replace(/\\/g, "/")
+      : resolved;
+  };
 
     const runFallback = async () => {
       const src =
@@ -2186,6 +2645,202 @@ export async function collectImportsForFile(
       }
     };
 
+  if (resolvedNativeQueries) {
+    try {
+      for (const match of resolvedNativeQueries.importBindings) {
+          const caps = capturesByName(match);
+          const stmtText = caps["stmt"]?.text ?? "";
+          const typeOnly = resolvedSup.isTypeOnly(stmtText);
+          const from = caps["from"] ? unquote(caps["from"]!.text) : undefined;
+          const patterns = capturesNamed(match, "pattern");
+
+          for (const pattern of patterns) {
+            if (pattern.nodeType !== "object_pattern" || !from) continue;
+            const resolved = await resolveFrom(from);
+            for (const binding of parseObjectPatternBindings(pattern.text)) {
+              imports.push({
+                kind: "named",
+                local: binding.local,
+                imported: binding.imported,
+                from,
+                resolved,
+                typeOnly,
+              });
+            }
+          }
+
+          if (!from) continue;
+          const resolved = await resolveFrom(from);
+          if (caps["def"]) {
+            imports.push({
+              kind: "default",
+              local: caps["def"]!.text,
+              from,
+              resolved,
+              typeOnly,
+            });
+          }
+          if (caps["ns"]) {
+            imports.push({
+              kind: "namespace",
+              localNS: caps["ns"]!.text,
+              from,
+              resolved,
+              typeOnly,
+            });
+          }
+
+          const inames = capturesNamed(match, "iname");
+          const aliases = capturesNamed(match, "alias");
+          for (let i = 0; i < inames.length; i++) {
+            const imported = inames[i]!.text;
+            const alias = aliases[i]?.text ?? imported;
+            imports.push({
+              kind: "named",
+              local: alias,
+              imported,
+              from,
+              resolved,
+              typeOnly,
+            });
+          }
+
+          if (
+            !caps["def"] &&
+            !caps["ns"] &&
+            inames.length === 0 &&
+            patterns.length === 0
+          ) {
+            if (resolvedSup.id === "java") {
+              const parts = from.split(".");
+              const last = parts[parts.length - 1];
+              if (last && /^[A-Z]/.test(last)) {
+                imports.push({
+                  kind: "named",
+                  local: last,
+                  imported: last,
+                  from,
+                  resolved,
+                  typeOnly,
+                });
+              }
+            } else if (resolvedSup.id === "csharp") {
+              if (caps["alias"]) {
+                const alias = caps["alias"]!.text;
+                const fromParts = from.split(".");
+                const imported = fromParts[fromParts.length - 1] ?? alias;
+                imports.push({
+                  kind: "named",
+                  local: alias,
+                  imported,
+                  from,
+                  resolved,
+                  typeOnly,
+                });
+              } else {
+                imports.push({ kind: "star", from, resolved, typeOnly });
+              }
+            } else if (resolvedSup.id === "ruby") {
+              imports.push({ kind: "star", from, resolved });
+            } else if (resolvedSup.id === "go") {
+              if (caps["alias"]) {
+                imports.push({
+                  kind: "namespace",
+                  localNS: caps["alias"]!.text,
+                  from,
+                  resolved,
+                });
+              } else {
+                const parts = from.replace(/"/g, "").split("/");
+                const last = parts[parts.length - 1];
+                if (last) {
+                  imports.push({
+                    kind: "namespace",
+                    localNS: last,
+                    from,
+                    resolved,
+                  });
+                }
+              }
+            } else if (resolvedSup.id === "rust") {
+              if (stmtText.startsWith("mod ")) {
+                imports.push({
+                  kind: "namespace",
+                  localNS: from,
+                  from,
+                  resolved,
+                });
+              } else {
+                const parts = from.split("::");
+                const last = parts[parts.length - 1];
+                if (!last) continue;
+                if (last === "*") {
+                  imports.push({ kind: "star", from, resolved });
+                } else {
+                  imports.push({
+                    kind: "named",
+                    local: last,
+                    imported: last,
+                    from,
+                    resolved,
+                  });
+                }
+              }
+            } else if (resolvedSup.id === "kotlin") {
+              const wildcard = !!caps["wild"] || from.endsWith(".*");
+              if (wildcard) {
+                imports.push({ kind: "star", from, resolved, typeOnly });
+              } else {
+                const parts = from.split(".");
+                const imported = parts[parts.length - 1];
+                if (!imported) continue;
+                imports.push({
+                  kind: "named",
+                  local: caps["alias"]?.text ?? imported,
+                  imported,
+                  from,
+                  resolved,
+                  typeOnly,
+                });
+              }
+            } else if (resolvedSup.id === "swift") {
+              const parts = from.split(".");
+              const last = parts[parts.length - 1];
+              if (!last) continue;
+              if (parts.length === 1) {
+                imports.push({
+                  kind: "namespace",
+                  localNS: last,
+                  from,
+                  resolved,
+                  typeOnly,
+                });
+                imports.push({ kind: "star", from, resolved, typeOnly });
+              } else {
+                imports.push({
+                  kind: "named",
+                  local: last,
+                  imported: last,
+                  from,
+                  resolved,
+                  typeOnly,
+                });
+              }
+            } else if (resolvedSup.id === "c" || resolvedSup.id === "cpp") {
+              imports.push({ kind: "star", from, resolved, typeOnly });
+            }
+          }
+      }
+      if (imports.length > 0) return imports;
+    } catch {
+      imports.length = 0;
+    }
+  }
+
+  const parser = acquireParser(resolvedLang, key);
+  try {
+    parser.setLanguage(resolvedLang);
+    const tree = opts?.tree ?? parser.parse(resolvedSource);
     let ranFallback = false;
     try {
       let q: Parser.Query;
@@ -2225,7 +2880,10 @@ export async function collectImportsForFile(
           const patternNode = pattern.node;
           if (patternNode.type === "object_pattern" && from) {
             for (const child of patternNode.namedChildren) {
-              if (child.type === "shorthand_property_identifier") {
+              if (
+                child.type === "shorthand_property_identifier" ||
+                child.type === "shorthand_property_identifier_pattern"
+              ) {
                 const name = sliceText(child, source);
                 const resolved = await resolveFrom(from);
                 imports.push({
@@ -2487,26 +3145,24 @@ export async function collectImportsForFile(
   }
 }
 
-export async function parseFile(file: string): Promise<{
-  source: string;
-  tree: Parser.Tree;
-  sup: LanguageSupport;
-  lang: Parser.Language;
-}> {
+export async function parseFile(file: string): Promise<ParsedFileContext> {
+  return parsePreparedFileContext(await prepareFileForIndexing(file));
+}
+
+async function prepareFileForIndexing(file: string): Promise<PreparedFileContext> {
   const prep = await prepareParserInput(file);
-  const sup = prep.sup;
-  if (!sup) throw new Error(`Unsupported file extension: ${file}`);
-  const lang = prep.lang;
-  const source = prep.source;
-  const key = sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts";
-  const parser = acquireParser(lang, key);
-  try {
-    parser.setLanguage(lang);
-    const tree = parser.parse(source);
-    return { source, tree, sup, lang };
-  } finally {
-    releaseParser(parser, key);
-  }
+  const nativeExecution = getNativeQueryExecution(prep.source, prep.sup);
+
+  return {
+    source: prep.source,
+    sup: prep.sup,
+    lang: prep.lang,
+    nativeQueries: nativeExecution.results,
+    ...(nativeExecution.fallbackReason
+      ? { nativeFallbackReason: nativeExecution.fallbackReason }
+      : {}),
+    ...(nativeExecution.error ? { nativeError: nativeExecution.error } : {}),
+  };
 }
 
 export async function ensureParsedContext(
@@ -2516,32 +3172,19 @@ export async function ensureParsedContext(
     tree: Parser.Tree;
     sup: LanguageSupport | undefined;
     lang: Parser.Language;
+    nativeQueries?: NativeQueryResults | null;
   },
-): Promise<{
-  source: string;
-  tree: Parser.Tree;
-  sup: LanguageSupport;
-  lang: Parser.Language;
-}> {
+): Promise<ParsedFileContext> {
   if (parsedEntry?.sup) {
     return {
       source: parsedEntry.source,
       tree: parsedEntry.tree,
       sup: parsedEntry.sup,
       lang: parsedEntry.lang,
+      nativeQueries: parsedEntry.nativeQueries ?? null,
     };
   }
-  const prep = await prepareParserInput(file);
-  const key =
-    prep.sup.id === "python" ? "py" : prep.sup.id === "js" ? "js" : "ts";
-  const parser = acquireParser(prep.lang, key);
-  try {
-    parser.setLanguage(prep.lang);
-    const tree = parser.parse(prep.source);
-    return { source: prep.source, tree, sup: prep.sup, lang: prep.lang };
-  } finally {
-    releaseParser(parser, key);
-  }
+  return parsePreparedFileContext(await prepareFileForIndexing(file));
 }
 
 type ManifestMode = "off" | "read-only" | "read-write";
@@ -2567,6 +3210,7 @@ async function buildIndexFromFileListShared(
   const cacheEnabled = cacheMode !== "off";
   const graphOptions = normalizeGraphOptions(opts?.graph);
   initManifestReport(report, useManifest, false);
+  initBackendReport(report);
   const normalizedFiles = Array.from(
     new Set(
       (rawFiles ?? [])
@@ -2617,15 +3261,7 @@ async function buildIndexFromFileListShared(
   const bloomFilterCache = useBloomFilters
     ? new (await import("./util/bloomFilter.js")).BloomFilterCache()
     : undefined;
-  const parsedMap = new Map<
-    string,
-    {
-      source: string;
-      tree: Parser.Tree;
-      sup: LanguageSupport;
-      lang: Parser.Language;
-    }
-  >();
+    const parsedMap = new Map<string, ParsedFileContext>();
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
   const parseStart = performance.now();
   const graph: Graph = { nodes: new Set(normalizedFiles), edges: [] };
@@ -2713,19 +3349,35 @@ async function buildIndexFromFileListShared(
         return [f, mod, []] as const;
       }
 
-      const parsed = await parseFile(f);
-      setParsedCacheEntry(
-        parsedMap,
-        f,
-        {
-          source: parsed.source,
-          tree: parsed.tree,
-          sup: parsed.sup,
-          lang: parsed.lang,
-        },
-        Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
-      );
-      const { source: src, sup, lang, tree } = parsed;
+      const prepared = await prepareFileForIndexing(f);
+      recordNativeBackendOutcome(report, {
+        usedNative: !!prepared.nativeQueries,
+        file: f,
+        languageId: prepared.sup.id,
+        ...(prepared.nativeFallbackReason
+          ? { fallbackReason: prepared.nativeFallbackReason }
+          : {}),
+        ...(prepared.nativeError ? { error: prepared.nativeError } : {}),
+      });
+      const { source: src, sup, lang, nativeQueries } = prepared;
+      let tree: Parser.Tree | undefined;
+
+      if (!nativeQueries) {
+        const parsed = parsePreparedFileContext(prepared);
+        tree = parsed.tree;
+        setParsedCacheEntry(
+          parsedMap,
+          f,
+          {
+            source: parsed.source,
+            tree: parsed.tree,
+            sup: parsed.sup,
+            lang: parsed.lang,
+            nativeQueries: parsed.nativeQueries ?? null,
+          },
+          Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
+        );
+      }
 
       if (bloomFilterCache) {
         const filter = buildBloomFilterFromSource(src, sup.id);
@@ -2736,14 +3388,16 @@ async function buildIndexFromFileListShared(
       if (!mod) {
         const imports = await collectImportsForFile(f, projectRoot, {
           source: src,
-          tree,
+          ...(tree ? { tree } : {}),
           sup,
           lang,
+          ...(nativeQueries !== undefined ? { nativeQueries } : {}),
           graphOptions,
         });
         collectJsonDependencies(imports, jsonDependencies);
         mod = collectLocalsAndExportsFromSource(f, src, sup, lang, imports, {
-          tree,
+          ...(tree ? { tree } : {}),
+          ...(nativeQueries !== undefined ? { nativeQueries } : {}),
         });
         mod.imports = imports;
 
@@ -2789,7 +3443,13 @@ async function buildIndexFromFileListShared(
 
       // 2. Recompute Edges (using the parsed tree)
       edges = await collectEdgesForFile(f, projectRoot, workspaceConfig, {
-        parsed: parsed,
+        parsed: {
+          source: src,
+          ...(tree ? { tree } : {}),
+          sup,
+          lang,
+          ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+        },
         fast: !!graphOptions.fast,
         ...(graphOptions.fastRegexDisabledLanguages
           ? {
@@ -3005,6 +3665,7 @@ export async function buildProjectIndexIncremental(
   opts?: IncrementalBuildOptions,
 ): Promise<ProjectIndex> {
   const report = opts?.report;
+  initBackendReport(report);
   const timings = report?.timings;
   const totalStart = performance.now();
   const cacheMode = opts?.cache ?? "off";
@@ -3151,15 +3812,7 @@ export async function buildProjectIndexIncremental(
       : new Map<string, string>();
     const changedFiles = new Set<string>();
     const modules = new Map<FileId, ModuleIndex>();
-    const parsedMap = new Map<
-      string,
-      {
-        source: string;
-        tree: Parser.Tree;
-        sup: LanguageSupport;
-        lang: Parser.Language;
-      }
-    >();
+    const parsedMap = new Map<string, ParsedFileContext>();
     const jsonDependencies = new Set<string>();
     const useBloomFilters = opts?.useBloomFilters ?? true; // Default to true for performance
     const bloomFilterCache = useBloomFilters
@@ -3239,14 +3892,29 @@ export async function buildProjectIndexIncremental(
             return [f, mod] as const;
           }
 
-          const parsed = await parseFile(f);
-          setParsedCacheEntry(
-            parsedMap,
-            f,
-            parsed,
-            Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
-          );
-          const { source: src, sup, lang, tree } = parsed;
+          const prepared = await prepareFileForIndexing(f);
+          recordNativeBackendOutcome(report, {
+            usedNative: !!prepared.nativeQueries,
+            file: f,
+            languageId: prepared.sup.id,
+            ...(prepared.nativeFallbackReason
+              ? { fallbackReason: prepared.nativeFallbackReason }
+              : {}),
+            ...(prepared.nativeError ? { error: prepared.nativeError } : {}),
+          });
+          const { source: src, sup, lang, nativeQueries } = prepared;
+          let tree: Parser.Tree | undefined;
+
+          if (!nativeQueries) {
+            const parsed = parsePreparedFileContext(prepared);
+            tree = parsed.tree;
+            setParsedCacheEntry(
+              parsedMap,
+              f,
+              parsed,
+              Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
+            );
+          }
 
           // Build bloom filter for this file if enabled
           if (bloomFilterCache) {
@@ -3258,9 +3926,10 @@ export async function buildProjectIndexIncremental(
 
           const imports = await collectImportsForFile(f, projectRoot, {
             source: src,
-            tree,
+            ...(tree ? { tree } : {}),
             sup,
             lang,
+            ...(nativeQueries !== undefined ? { nativeQueries } : {}),
             graphOptions,
           });
           collectJsonDependencies(imports, jsonDependencies);
@@ -3270,7 +3939,10 @@ export async function buildProjectIndexIncremental(
             sup,
             lang,
             imports,
-            { tree },
+            {
+              ...(tree ? { tree } : {}),
+              ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+            },
           );
           mod.imports = imports;
 
@@ -3619,22 +4291,9 @@ function cacheKey(file: FileId, name: string) {
 }
 
 function setParsedCacheEntry(
-  parsedMap: Map<
-    string,
-    {
-      source: string;
-      tree: Parser.Tree;
-      sup: LanguageSupport;
-      lang: Parser.Language;
-    }
-  >,
+  parsedMap: Map<string, ParsedFileContext>,
   file: string,
-  entry: {
-    source: string;
-    tree: Parser.Tree;
-    sup: LanguageSupport;
-    lang: Parser.Language;
-  },
+  entry: ParsedFileContext,
   maxEntries: number,
 ): void {
   if (parsedMap.has(file)) parsedMap.delete(file);
@@ -5108,3 +5767,4 @@ export async function collectNamespaceMemberRefs(
   walk(tree.rootNode);
   return ranges;
 }
+

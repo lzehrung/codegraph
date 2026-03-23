@@ -4,6 +4,10 @@ import os from "node:os";
 import fsp from "node:fs/promises";
 import { buildProjectIndexFromFiles, type BuildReport } from "../src/index.js";
 import { extractJsTsSpecifiers, stripJsLikeComments } from "../src/util.js";
+import {
+  getNativeTreeSitterSupportedLanguageIds,
+  isNativeTreeSitterAvailable,
+} from "../src/native/treeSitterNative.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -87,5 +91,44 @@ describe("Import extraction fallback reporting", () => {
       "./dyn",
     ]);
     expect(specs[0]?.typeOnly).toBe(true);
+  });
+
+  it("reports native backend availability and usage", async () => {
+    const root = await mkTmpDir("cg-native-report-");
+    const main = path.join(root, "main.ts");
+    const dep = path.join(root, "dep.ts");
+    await fsp.writeFile(dep, "export const value = 1;\n", "utf8");
+    await fsp.writeFile(
+      main,
+      "import { value } from './dep';\nconsole.log(value);\n",
+      "utf8",
+    );
+
+    const report: BuildReport = { timings: {} };
+    await buildProjectIndexFromFiles(root, [main, dep], { report });
+
+    const native = report.backend?.native;
+    expect(native).toBeDefined();
+    expect(native?.available).toBe(isNativeTreeSitterAvailable());
+    expect(native?.supportedLanguageIds).toEqual(
+      getNativeTreeSitterSupportedLanguageIds(),
+    );
+
+    const nativeSupportsTs =
+      isNativeTreeSitterAvailable() &&
+      getNativeTreeSitterSupportedLanguageIds().includes("ts");
+    if (nativeSupportsTs) {
+      expect(
+        (native?.filesUsed ?? 0) + (native?.fallbackReasons.queryFailure ?? 0),
+      ).toBeGreaterThan(0);
+      if ((native?.filesUsed ?? 0) > 0) {
+        expect(native?.enabled).toBe(true);
+      }
+    } else {
+      expect(native?.filesFellBack).toBeGreaterThan(0);
+      expect((native?.fallbackReasons.unavailable ?? 0) +
+        (native?.fallbackReasons.unsupportedLanguage ?? 0) +
+        (native?.fallbackReasons.queryFailure ?? 0)).toBeGreaterThan(0);
+    }
   });
 });

@@ -21,6 +21,18 @@ const definition: LanguageTestDefinition = {
       { from: "main.cpp", to: { type: "file", path: "utils.hpp" } },
       { from: "main.cpp", to: { type: "file", path: "helpers.hpp" } },
     ],
+    symbols: [
+      {
+        file: "advanced.hpp",
+        includes: [
+          { name: "demo" },
+          { name: "Mode" },
+          { name: "Count" },
+          { name: "Engine" },
+          { name: "combine" },
+        ],
+      },
+    ],
   },
 };
 

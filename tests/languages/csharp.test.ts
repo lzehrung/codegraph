@@ -28,6 +28,17 @@ const definition: LanguageTestDefinition = {
         to: { type: "file", path: "Helpers.cs" },
       },
     ],
+    symbols: [
+      {
+        file: "AdvancedTypes.cs",
+        includes: [
+          { name: "IRunnable" },
+          { name: "Toolbox" },
+          { name: "NestedTool" },
+          { name: "Execute" },
+        ],
+      },
+    ],
   },
 };
 

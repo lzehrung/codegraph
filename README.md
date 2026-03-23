@@ -116,6 +116,8 @@ Sample graph: [sample-graph.md](./sample-graph.md)
 * **Vue / Svelte SFCs** (`.vue`, `.svelte`) — script blocks are parsed with the JS/TS pipeline, so dependency graphs and go-to-definition work across components.
 
 Each listed language (including Vue/Svelte script sections) has the same dependency-graph, go-to-definition, and find-references support.
+When the optional native addon is available, all listed source languages use the same native Tree-sitter runtime and query model; unsupported capabilities still fall back through the shared JS path where needed.
+The regression suite covers deeper syntax variants too, including aliased and static imports, nested types, traits and protocols, typedefs and aliases, and Vue/Svelte script variants.
 See the coverage matrix in [docs/language-parity.md](./docs/language-parity.md).
 
 **Project files**: project manifests like package.json, pyproject.toml, pom.xml, build.gradle, requirements.txt, .sln, .idea, etc. See [docs/language-parity.md](./docs/language-parity.md) for more details.
@@ -133,7 +135,7 @@ The library provides semantic code chunking utilities for preparing codebases fo
 ### APIs
 
 ```ts
-import { chunkFile, chunkTextFile, LANG_CONFIGS } from 'codegraph';
+import { chunkFile, chunkTextFile, LANG_CONFIGS } from '@lzehrung/codegraph';
 
 // Chunk a code file semantically
 const source = `function hello(name) { return "Hello " + name; }`;
@@ -216,48 +218,42 @@ The integration examples demonstrate:
 
 ## Installation
 
-### Option 1: Install from GitHub (Recommended)
+### Option 1: Install from the `@lzehrung` registry
 
-Install directly from the GitHub repository:
+Configure the scoped registry if you have not already:
 
 ```bash
-# Install the latest from main branch
-npm install github:lzehrung/codegraph
-
-# Or pin to a specific version tag
-npm install github:lzehrung/codegraph#v1.0.0
-
-# Or pin to a specific commit
-npm install github:lzehrung/codegraph#abc1234
+npm config set @lzehrung:registry https://npm.pkg.github.com
 ```
 
-Add to your `package.json`:
+Install the package:
 
-```json
-{
-  "dependencies": {
-    "codegraph": "github:lzehrung/codegraph#v1.0.0"
-  }
-}
+```bash
+npm install @lzehrung/codegraph
 ```
 
-### Option 2: Local Development
+That is the simplest way to use the native Tree-sitter path. `@lzehrung/codegraph` automatically pulls in the matching optional native package when a published binary exists for the current platform, and the library and CLI use it automatically.
 
-Clone the repository and install dependencies:
+### Option 2: Local source checkout
+
+Clone the repository and build both the TypeScript package and optional native addon:
 
 ```bash
 git clone https://github.com/lzehrung/codegraph.git
 cd codegraph
 npm install
 npm run build
+npm run build:native
 ```
 
----
+Use this path when you are developing on codegraph itself or want to build the native addon locally.
 
 ## Requirements
 
 * **Node.js 18+**
-* Dependencies are automatically installed when you install the package
+* Published installs do not require Rust or a manual native setup step
+* Local native builds require a working Rust toolchain plus `npm run build:native`
+* If no compatible native package is available, Codegraph falls back to the JS Tree-sitter path automatically
 
 ---
 
@@ -266,6 +262,8 @@ npm run build
 ### CLI Commands
 
 After installing the package, use the `codegraph` CLI:
+
+The CLI automatically uses the native Tree-sitter path when a compatible native package is installed. If not, it falls back to the JS Tree-sitter path automatically.
 
 ```bash
 # File dependency graph only (default; no symbols)
@@ -345,6 +343,7 @@ npx codegraph apisurface
 npx codegraph index --report
 npx codegraph review --report --report-file review.report.json
 # Reports include graph.fallbackImportExtraction when regex fallback import extraction is used.
+# Index build reports also include backend.native so you can see whether native Tree-sitter was used or whether the run fell back to JS.
 
 # Analyze PR impact: map diffs to symbols and find affected code
 npx codegraph impact --base <commit-sha> --head <commit-sha>
@@ -624,6 +623,10 @@ Viewer features:
   - Use `--threads` to increase concurrency; typical sweet spot is CPU cores or cores*2.
   - Very high values may become I/O bound; 8–32 is a good range on SSDs.
 
+- Native Tree-sitter acceleration:
+  - Build the optional Rust addon with `npm run build:native`.
+  - When the addon is present, Codegraph runs supported Tree-sitter parse/query work in Rust and falls back to the JS path automatically if the addon or a query is unavailable.
+
 - Monorepo resolution:
   - Workspace detection precedence: `package.json` workspaces > `pnpm-workspace.yaml` > `lerna.json`.
   - `pnpm-workspace.yaml` supports `packages:` include globs and `!` exclude globs.
@@ -645,14 +648,22 @@ Viewer features:
 
 ## Programmatic usage (from code)
 
-Minimal TypeScript/ESM examples. Import from the package and call directly.
+Minimal TypeScript/ESM examples. Import only from `@lzehrung/codegraph` and call the API directly.
+
+The library automatically uses the native Tree-sitter path when `@lzehrung/codegraph-native` is installed for the current platform. There is no second import, feature flag, or alternate API surface for the native path.
+
+```ts
+import { buildProjectIndex } from "@lzehrung/codegraph";
+
+const index = await buildProjectIndex(process.cwd());
+```
 
 ### Session Management (Recommended for Agents)
 
 For agents performing code reviews or making multiple queries, use sessions to maintain warm caches:
 
 ```ts
-import { createCodeReviewSession } from 'codegraph';
+import { createCodeReviewSession } from '@lzehrung/codegraph';
 
 // Create a session for a PR review
 const session = await createCodeReviewSession({
@@ -697,7 +708,7 @@ session.dispose();
 **Using presets for simpler configuration:**
 
 ```ts
-import { createCodeReviewSession } from 'codegraph';
+import { createCodeReviewSession } from '@lzehrung/codegraph';
 
 // Use a preset for automatic configuration
 const session = await createCodeReviewSession({
@@ -724,7 +735,7 @@ const customSession = await createCodeReviewSession({
 **Managing multiple sessions:**
 
 ```ts
-import { SessionManager } from 'codegraph';
+import { SessionManager } from '@lzehrung/codegraph';
 
 const manager = new SessionManager();
 
@@ -755,7 +766,7 @@ const allStats = manager.getAllStats();
 Stream impact analysis results as they're discovered, allowing agents to start reasoning immediately:
 
 ```ts
-import { buildProjectIndex, analyzeImpactStreaming } from 'codegraph';
+import { buildProjectIndex, analyzeImpactStreaming } from '@lzehrung/codegraph';
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
@@ -805,7 +816,7 @@ for await (const chunk of session.analyzeImpactStream({
 Operations return partial results when some items fail, allowing agents to work with incomplete data:
 
 ```ts
-import { withPartialResults, summarizePartialResult } from 'codegraph';
+import { withPartialResults, summarizePartialResult } from '@lzehrung/codegraph';
 
 // Process files with automatic error handling
 const files = ['file1.ts', 'file2.ts', 'file3.ts'];
@@ -844,7 +855,7 @@ console.log(summarizePartialResult(result));
 Build full project index and go to definition:
 
 ```ts
-import { buildProjectIndex, goToDefinition } from 'codegraph';
+import { buildProjectIndex, goToDefinition } from '@lzehrung/codegraph';
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
@@ -859,7 +870,7 @@ if (res.status === 'ok') {
 ### Incremental indexing
 
 ```ts
-import { buildProjectIndexIncremental } from 'codegraph';
+import { buildProjectIndexIncremental } from '@lzehrung/codegraph';
 
 const root = process.cwd();
 const incremental = await buildProjectIndexIncremental(root, {
@@ -890,7 +901,7 @@ Supported keys:
 Programmatic helpers:
 
 ```ts
-import { querySymbols, querySymbolNeighbors } from 'codegraph';
+import { querySymbols, querySymbolNeighbors } from '@lzehrung/codegraph';
 
 const hits = querySymbols(symbolGraph, {
   kinds: ["function"],
@@ -915,7 +926,7 @@ import {
   tool_getFileOverview,
   tool_findSymbol,
   tool_impactJSON
-} from 'codegraph';
+} from '@lzehrung/codegraph';
 
 // 1. Get a Markdown summary of a file (Imports, Definitions with signatures/docstrings)
 // Useful for "reading" a file's structure before deciding to read the full content.
@@ -951,7 +962,7 @@ if (impact.status === 'ok') {
 ### Raw SQL from code (advanced)
 
 ```ts
-import { queryGraphSqliteRaw } from 'codegraph';
+import { queryGraphSqliteRaw } from '@lzehrung/codegraph';
 
 const result = await queryGraphSqliteRaw('./codegraph.sqlite', `
   SELECT name, file FROM symbols WHERE kind = 'class' LIMIT 10;
@@ -962,7 +973,7 @@ console.log(result.columns, result.rows);
 Find references:
 
 ```ts
-import { findReferences } from 'codegraph';
+import { findReferences } from '@lzehrung/codegraph';
 
 const refs = await findReferences(index, { file, line: 21, column: 18 });
 if (refs.status === 'ok') {
@@ -975,7 +986,7 @@ Get dependency graph in-memory and iterate edges:
 `listProjectFiles` defaults to source files plus common project manifests and lockfiles across supported languages (for example `package.json`, `requirements.txt`, `pyproject.toml`, and `Cargo.toml`). Pass custom glob patterns if you need different coverage.
 
 ```ts
-import { listProjectFiles } from 'codegraph';
+import { listProjectFiles } from '@lzehrung/codegraph';
 
 const files = await listProjectFiles(root);
 const manifests = files.filter((file) => /(?:package\.json|pyproject\.toml|Cargo\.toml)$/.test(file));
@@ -985,7 +996,7 @@ console.log(manifests);
 Discover project files with metadata (type, role, project root, optional name):
 
 ```ts
-import { discoverProjectFiles } from 'codegraph';
+import { discoverProjectFiles } from '@lzehrung/codegraph';
 
 const projectFiles = await discoverProjectFiles(root);
 const named = projectFiles.filter((file) => file.name);
@@ -993,7 +1004,7 @@ console.log(named);
 ```
 
 ```ts
-import { listProjectFiles, collectGraph } from 'codegraph';
+import { listProjectFiles, collectGraph } from '@lzehrung/codegraph';
 
 const files = await listProjectFiles(root);
 const graph = await collectGraph(root, files);
@@ -1009,7 +1020,7 @@ for (const e of graph.edges) {
 Build project index from explicit file list (multi-root):
 
 ```ts
-import { listProjectFiles, buildProjectIndexFromFiles } from 'codegraph';
+import { listProjectFiles, buildProjectIndexFromFiles } from '@lzehrung/codegraph';
 
 const tsRoot = `${root}/tests/samples/typescript`;
 const jsRoot = `${root}/tests/samples/javascript`;
@@ -1025,7 +1036,7 @@ console.log({ files: index.byFile.size, edges: index.graph.edges.length });
 Produce a Mermaid diagram string (for UI or chat rendering):
 
 ```ts
-import { graphToMermaid } from 'codegraph';
+import { graphToMermaid } from '@lzehrung/codegraph';
 
 const mermaid = graphToMermaid(graph);
 console.log(mermaid);
@@ -1034,7 +1045,7 @@ console.log(mermaid);
 Simple wrappers as "LLM tools" (no HTTP/MCP), returning JSONable payloads:
 
 ```ts
-import { listProjectFiles, collectGraph, buildProjectIndex, goToDefinition, findReferences } from 'codegraph';
+import { listProjectFiles, collectGraph, buildProjectIndex, goToDefinition, findReferences } from '@lzehrung/codegraph';
 
 export async function tool_graphJSON(root: string) {
   const files = await listProjectFiles(root);
@@ -1066,7 +1077,7 @@ import {
   goToDefinitionById,
   findReferencesById,
   symbolId,
-} from 'codegraph';
+} from '@lzehrung/codegraph';
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
@@ -1092,7 +1103,7 @@ const refsRes = await findReferencesById(index, handle);
 Analyze PR impact from git diff:
 
 ```ts
-import { buildProjectIndex, analyzeImpactFromDiff } from 'codegraph';
+import { buildProjectIndex, analyzeImpactFromDiff } from '@lzehrung/codegraph';
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
@@ -1148,7 +1159,7 @@ const reportWithBlockContext = await analyzeImpactFromDiff(root, index, {
 Agent-friendly tool wrapper (returns JSON-serializable results):
 
 ```ts
-import { tool_impactJSON, tool_impactFromDiffText } from 'codegraph';
+import { tool_impactJSON, tool_impactFromDiffText } from '@lzehrung/codegraph';
 
 // Direct API call
 const result = await tool_impactJSON(root, {
@@ -1168,7 +1179,7 @@ For backend development teams, here are common patterns for LLM agents reviewing
 
 #### 1. **API Route Impact Assessment**
 ```ts
-import { analyzeImpactFromDiff, collectImpactContext, listCandidateTestFiles } from 'codegraph';
+import { analyzeImpactFromDiff, collectImpactContext, listCandidateTestFiles } from '@lzehrung/codegraph';
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
@@ -1248,7 +1259,7 @@ console.log(`Medium-priority tests to check: ${mediumPriorityTests.length}`);
 
 #### 4. **Security-Focused Review**
 ```ts
-import { textGrep } from 'codegraph';
+import { textGrep } from '@lzehrung/codegraph';
 
 // Scan changed files for security patterns
 const securityPatterns = [
@@ -1344,21 +1355,21 @@ These recipes combine the library's core capabilities (dependency graphs, symbol
 
 2. **Indexing**
 
-   * **Locals**: functions/classes/vars/types etc.
-   * **Exports**: direct, default, named, re-exports, `export * from`.
-   * **Imports**: default/named/namespace and (for TS) import-equals via `require()`.
+   * TypeScript owns the shared indexing pipeline, resolution logic, and output shapes.
+   * The parser/query hot path stays on Tree-sitter for every supported language.
+   * When available, the optional Rust addon runs those Tree-sitter parses and queries natively, then returns plain capture data to TypeScript.
 
 3. **Graph**
 
    * For each file, collect module specifiers and resolve:
 
-     * path-like specifiers → best-effort file resolution (JS/TS).
+     * path-like specifiers -> best-effort file resolution (JS/TS).
      * otherwise, **external** nodes.
 
 4. **Navigation**
 
    * **goToDefinition** checks local scope first, then imported bindings; understands `ns.member` for namespace imports.
-   * **findReferences** builds per-file scope (module → function → block), seeds imports as bindings, and records occurrences. It also resolves through imports and namespace members.
+   * **findReferences** builds per-file scope (module -> function -> block), seeds imports as bindings, and records occurrences. It also resolves through imports and namespace members.
 
 5. **AST grep**
 
@@ -1428,21 +1439,25 @@ Yes. It detects npm/yarn/pnpm/lerna workspaces and resolves package-relative imp
 
 ## Contributing & Releases
 
-This package uses GitHub-based releases (no npm publish required). To create a new release:
+The old release ergonomics are back. Use the root scripts to cut synchronized releases for both the JS package and the optional native package:
 
 ```bash
-# Make your changes, commit them, then:
-npm run release:patch  # Bug fixes (1.0.0 → 1.0.1)
-npm run release:minor  # New features (1.0.0 → 1.1.0)
-npm run release:major  # Breaking changes (1.0.0 → 2.0.0)
+# Version, test, build, commit, tag, and push
+npm run release:patch
+npm run release:minor
+npm run release:major
+
+# Same flow, plus stage/publish the local native target, publish the native meta package, and publish the root package
+npm run publish:patch
+npm run publish:minor
+npm run publish:major
 ```
 
-Uses npm's built-in `version` command (zero dependencies):
-- Runs tests and builds the package (`preversion` hook)
-- Bumps the version in package.json
-- Creates a git commit and tag
-- Pushes everything to GitHub (`postversion` hook)
+The release scripts:
+- Keep `@lzehrung/codegraph` and `@lzehrung/codegraph-native` on the same version
+- Run tests plus JS/native builds before tagging
+- Keep staged native metadata as publish-time state instead of committed source state
+- Stage the current platform's native package automatically for local publish flows
+- Create the git commit and tag, then push both
 
-See [PUBLISHING.md](./PUBLISHING.md) for detailed instructions.
-
----
+For multi-platform releases, stage additional native target artifacts before publish. See [PUBLISHING.md](./PUBLISHING.md) for the detailed release flow.
