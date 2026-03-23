@@ -10,6 +10,7 @@ Current status:
 - Implemented: native package publishing flow and runtime loading
 - Implemented: native backend usage reporting plus native parity tests across the supported source-language set
 - Implemented: benchmark harness and a coarse CI smoke benchmark for native-vs-JS regression detection
+- Implemented: explicit per-file native fallback contract tests for full and incremental indexing
 - Not implemented yet: `Piscina` worker-pool parallelization
 - Not implemented yet: any alternate non-Tree-sitter parser backend
 
