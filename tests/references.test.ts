@@ -1,6 +1,21 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { createTestIndex, testFindReferences } from './test-utils.js';
+import { createTestIndex, createTestIndexFromFiles, testFindReferences } from './test-utils.js';
+
+function expectReferenceAt(
+  result: Awaited<ReturnType<typeof testFindReferences>>,
+  file: string,
+  line: number,
+): void {
+  if (result.status !== 'ok') {
+    return;
+  }
+  expect(
+    result.references.some(
+      (reference) => reference.file === file && reference.range.start.line === line,
+    ),
+  ).toBe(true);
+}
 
 describe('Find References', () => {
   describe('TypeScript', () => {
@@ -220,6 +235,133 @@ describe('Find References', () => {
         );
         expect(definitionRef).toBeDefined();
       }
+    });
+  });
+
+  describe('Go', () => {
+    it('should find all references to exported function', async () => {
+      const index = await createTestIndex('go');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'go');
+      const utilsFile = path.join(samplePath, 'utils.go').replace(/\\/g, '/');
+
+      const result = await testFindReferences(index, utilsFile, 5, 6, 1);
+      if (result.status === 'ok') {
+        expect(
+          result.references.some((reference) =>
+            reference.file === utilsFile && reference.range.start.line === 5,
+          ),
+        ).toBe(true);
+      }
+    });
+
+    it('should find all references to exported struct type', async () => {
+      const index = await createTestIndex('go');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'go');
+      const utilsFile = path.join(samplePath, 'utils.go').replace(/\\/g, '/');
+
+      await testFindReferences(index, utilsFile, 9, 6, 2);
+    });
+  });
+
+  describe('C', () => {
+    it('should find all references to shared function declaration', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'c');
+      const utilsFile = path.join(samplePath, 'utils.h').replace(/\\/g, '/');
+      const mainFile = path.join(samplePath, 'main.c').replace(/\\/g, '/');
+      const helpersFile = path.join(samplePath, 'helpers.h').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
+
+      const result = await testFindReferences(index, utilsFile, 8, 5, 2);
+      expectReferenceAt(result, utilsFile, 8);
+      expectReferenceAt(result, mainFile, 5);
+    });
+
+    it('should retain the typedef struct definition in references', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'c');
+      const utilsFile = path.join(samplePath, 'utils.h').replace(/\\/g, '/');
+      const mainFile = path.join(samplePath, 'main.c').replace(/\\/g, '/');
+      const helpersFile = path.join(samplePath, 'helpers.h').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
+
+      const result = await testFindReferences(index, utilsFile, 4, 16, 1);
+      expectReferenceAt(result, utilsFile, 6);
+    });
+  });
+
+  describe('C++', () => {
+    it('should find all references to shared function declaration', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'cpp');
+      const utilsFile = path.join(samplePath, 'utils.hpp').replace(/\\/g, '/');
+      const mainFile = path.join(samplePath, 'main.cpp').replace(/\\/g, '/');
+      const helpersFile = path.join(samplePath, 'helpers.hpp').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
+
+      const result = await testFindReferences(index, utilsFile, 7, 5, 2);
+      expectReferenceAt(result, utilsFile, 7);
+      expectReferenceAt(result, mainFile, 5);
+    });
+
+    it('should find all references to shared struct type', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'cpp');
+      const utilsFile = path.join(samplePath, 'utils.hpp').replace(/\\/g, '/');
+      const mainFile = path.join(samplePath, 'main.cpp').replace(/\\/g, '/');
+      const helpersFile = path.join(samplePath, 'helpers.hpp').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
+
+      const result = await testFindReferences(index, utilsFile, 3, 8, 2);
+      expectReferenceAt(result, utilsFile, 3);
+      expectReferenceAt(result, mainFile, 6);
+    });
+  });
+
+  describe('Kotlin', () => {
+    it('should find all references to imported function', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'kotlin');
+      const utilsFile = path.join(samplePath, 'utils', 'helperFunction.kt').replace(/\\/g, '/');
+      const mainFile = path.join(samplePath, 'main.kt').replace(/\\/g, '/');
+      const helpersFile = path.join(samplePath, 'helpers', 'helperFromHelpers.kt').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
+
+      const result = await testFindReferences(index, utilsFile, 3, 5, 2);
+      expectReferenceAt(result, utilsFile, 3);
+      expectReferenceAt(result, mainFile, 6);
+    });
+
+    it('should retain the imported class definition in references', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'kotlin');
+      const utilsFile = path.join(samplePath, 'utils', 'helperFunction.kt').replace(/\\/g, '/');
+      const mainFile = path.join(samplePath, 'main.kt').replace(/\\/g, '/');
+      const helpersFile = path.join(samplePath, 'helpers', 'helperFromHelpers.kt').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
+
+      const result = await testFindReferences(index, utilsFile, 7, 7, 1);
+      expectReferenceAt(result, utilsFile, 7);
+    });
+  });
+
+  describe('Swift', () => {
+    it('should find all references to imported function', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'swift');
+      const utilsFile = path.join(samplePath, 'Utils.swift').replace(/\\/g, '/');
+      const mainFile = path.join(samplePath, 'main.swift').replace(/\\/g, '/');
+      const helpersFile = path.join(samplePath, 'Helpers.swift').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
+
+      const result = await testFindReferences(index, utilsFile, 1, 13, 2);
+      expectReferenceAt(result, utilsFile, 1);
+      expectReferenceAt(result, mainFile, 5);
+    });
+
+    it('should find all references to imported struct', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'swift');
+      const utilsFile = path.join(samplePath, 'Utils.swift').replace(/\\/g, '/');
+      const mainFile = path.join(samplePath, 'main.swift').replace(/\\/g, '/');
+      const helpersFile = path.join(samplePath, 'Helpers.swift').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
+
+      const result = await testFindReferences(index, utilsFile, 5, 15, 2);
+      expectReferenceAt(result, utilsFile, 5);
+      expectReferenceAt(result, mainFile, 6);
     });
   });
 

@@ -3,6 +3,7 @@
 
 int main() {
   int value = helperFunction(2);
+  UtilityClass utility{value};
   int other = helperFromHelpers();
-  return value + other;
+  return utility.value + other;
 }

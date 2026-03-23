@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { createTestIndex, testGoToDefinition } from './test-utils.js';
+import { createTestIndex, createTestIndexFromFiles, testGoToDefinition } from './test-utils.js';
 
 describe('Go to Definition', () => {
   describe('TypeScript', () => {
@@ -201,6 +201,114 @@ describe('Go to Definition', () => {
         expect(result.definition.file).toBe(helpersFile);
         expect(result.definition.range.start.line).toBe(1); // helperFunction definition
       }
+    });
+  });
+
+  describe('Go', () => {
+    it('should find definition of imported function', async () => {
+      const index = await createTestIndex('go');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'go');
+      const mainFile = path.join(samplePath, 'main.go').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'utils.go').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, mainFile, 9, 9, utilsFile, 5);
+    });
+
+    it('should find definition of imported struct type', async () => {
+      const index = await createTestIndex('go');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'go');
+      const mainFile = path.join(samplePath, 'main.go').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'utils.go').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, mainFile, 12, 20, undefined, undefined, 'not_found');
+    });
+  });
+
+  describe('C', () => {
+    it('should find definition of included function declaration', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'c');
+      const mainFile = path.join(samplePath, 'main.c').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'utils.h').replace(/\\/g, '/');
+      const helpersFile = path.join(samplePath, 'helpers.h').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
+
+      await testGoToDefinition(index, mainFile, 5, 15, utilsFile, 8);
+    });
+
+    it('should find definition of included typedef struct', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'c');
+      const mainFile = path.join(samplePath, 'main.c').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'utils.h').replace(/\\/g, '/');
+      const helpersFile = path.join(samplePath, 'helpers.h').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
+
+      await testGoToDefinition(index, mainFile, 6, 3, utilsFile, 6);
+    });
+  });
+
+  describe('C++', () => {
+    it('should find definition of included function declaration', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'cpp');
+      const mainFile = path.join(samplePath, 'main.cpp').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'utils.hpp').replace(/\\/g, '/');
+      const helpersFile = path.join(samplePath, 'helpers.hpp').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
+
+      await testGoToDefinition(index, mainFile, 5, 15, utilsFile, 7);
+    });
+
+    it('should find definition of included struct type', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'cpp');
+      const mainFile = path.join(samplePath, 'main.cpp').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'utils.hpp').replace(/\\/g, '/');
+      const helpersFile = path.join(samplePath, 'helpers.hpp').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
+
+      await testGoToDefinition(index, mainFile, 6, 3, utilsFile, 3);
+    });
+  });
+
+  describe('Kotlin', () => {
+    it('should find definition of imported function', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'kotlin');
+      const mainFile = path.join(samplePath, 'main.kt').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'utils', 'helperFunction.kt').replace(/\\/g, '/');
+      const helpersFile = path.join(samplePath, 'helpers', 'helperFromHelpers.kt').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
+
+      await testGoToDefinition(index, mainFile, 6, 15, utilsFile, 3);
+    });
+
+    it('should find definition of imported class', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'kotlin');
+      const mainFile = path.join(samplePath, 'main.kt').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'utils', 'helperFunction.kt').replace(/\\/g, '/');
+      const helpersFile = path.join(samplePath, 'helpers', 'helperFromHelpers.kt').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
+
+      await testGoToDefinition(index, mainFile, 7, 17, undefined, undefined, 'not_found');
+    });
+  });
+
+  describe('Swift', () => {
+    it('should find definition of imported function', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'swift');
+      const mainFile = path.join(samplePath, 'main.swift').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'Utils.swift').replace(/\\/g, '/');
+      const helpersFile = path.join(samplePath, 'Helpers.swift').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
+
+      await testGoToDefinition(index, mainFile, 5, 21, utilsFile, 1);
+    });
+
+    it('should find definition of imported struct', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'swift');
+      const mainFile = path.join(samplePath, 'main.swift').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'Utils.swift').replace(/\\/g, '/');
+      const helpersFile = path.join(samplePath, 'Helpers.swift').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [mainFile, utilsFile, helpersFile]);
+
+      await testGoToDefinition(index, mainFile, 6, 23, utilsFile, 5);
     });
   });
   describe('Java', () => {
