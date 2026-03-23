@@ -33,8 +33,9 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | TSX symbol parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same exported component symbols and local type symbols. | Internal regression test | 2026-03-22 |
 | CSS-family specifier parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same module specifiers for CSS, Less, and SCSS imports. | Internal regression test | 2026-03-22 |
 | SFC specifier parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same module specifiers for Vue and Svelte inline scripts, `script setup`, and component-import fixtures. | Internal regression test | 2026-03-22 |
-| End-to-end semantic parity | `tests/native-semantic-parity.test.ts` | Native-enabled and forced-JS runs produce the same graph edges, symbol presence, go-to-definition, and references for representative source-language fixtures. | Internal regression test | 2026-03-23 |
+| End-to-end semantic parity | `tests/native-semantic-parity.test.ts` | Native-enabled and forced-JS runs produce the same graph edges, symbol presence, go-to-definition, and references for the current source-language fixture set (`TypeScript`, `TSX`, `JavaScript`, `Python`, `Go`, `Java`, `C#`, `Rust`, `Kotlin`, `Swift`, `C`, `C++`, `Ruby`). | Internal regression test | 2026-03-23 |
 | TypeScript normalization-sensitive semantic parity | `tests/native-semantic-parity.test.ts` | Native-enabled and forced-JS runs stay aligned for `export =` and class-export fixtures that depend on native query normalization. | Internal regression test | 2026-03-23 |
+| Graph/specifier native parity | `tests/native-semantic-parity.test.ts` | Native-enabled and forced-JS runs stay aligned for graph/specifier-focused fixtures (`HTML`, `CSS`, `Less`, `SCSS`, `Vue`, `Svelte`) and preserve the same `not_found` navigation behavior. | Internal regression test | 2026-03-23 |
 
 ## C
 

@@ -29,7 +29,7 @@ Status key:
 
 Notes:
 - The native addon uses the same Tree-sitter query model as the JS path for all listed source languages.
-- Native parity coverage includes both extraction parity and end-to-end semantic parity on a representative source-language set (`TypeScript`, `JavaScript`, `Python`, `Go`, `Java`, `C#`, `Rust`, `Kotlin`, `Swift`, `C`) plus graph/specifier parity for `Vue`.
+- Native parity coverage includes both extraction parity and end-to-end semantic parity on the current source-language fixture set (`TypeScript`, `TSX`, `JavaScript`, `Python`, `Go`, `Java`, `C#`, `Rust`, `Kotlin`, `Swift`, `C`, `C++`, `Ruby`) plus graph/specifier parity for `HTML`, `CSS`, `Less`, `SCSS`, `Vue`, and `Svelte`.
 - `Go` go-to-definition is still partial for imported struct-type lookups, and its current reference coverage is narrower than the stronger languages.
 - `C` and `Kotlin` support semantic references, but some type-oriented reference cases are currently definition-only rather than full use-site recovery.
 - `Kotlin` go-to-definition is also partial today: imported top-level functions resolve, while some imported type/class lookups still return `not_found`.
