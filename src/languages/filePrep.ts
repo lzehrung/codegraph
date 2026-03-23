@@ -21,6 +21,16 @@ interface ParserInput {
   lang: Parser.Language;
 }
 
+export class UnsupportedParserInputError extends Error {
+  readonly file: string;
+
+  constructor(file: string) {
+    super(`Unsupported file extension: ${file}`);
+    this.name = "UnsupportedParserInputError";
+    this.file = file;
+  }
+}
+
 const SCRIPT_SUPPORT_MAP: Record<string, LanguageSupport> = {
   js: JS_SUPPORT,
   ts: TS_SUPPORT,
@@ -38,12 +48,18 @@ export async function prepareParserInput(
   }
 
   const sup = supportForFile(file);
-  if (!sup) throw new Error(`Unsupported file extension: ${file}`);
+  if (!sup) throw new UnsupportedParserInputError(file);
   return {
     source: rawSource,
     sup,
     lang: sup.language(file),
   };
+}
+
+export function isUnsupportedParserInputError(
+  error: unknown,
+): error is UnsupportedParserInputError {
+  return error instanceof UnsupportedParserInputError;
 }
 
 async function prepareSFCParserInput(

@@ -89,6 +89,9 @@ function formatNativeBackendStatus(report: BuildReport | undefined): string | un
   const native = report?.backend?.native;
   if (!native) return undefined;
   if (native.filesUsed > 0) {
+    if (native.filesFellBack > 0) {
+      return `Backend: native tree-sitter used for ${native.filesUsed} file(s); fallback for ${native.filesFellBack} file(s)`;
+    }
     return `Backend: native tree-sitter used for ${native.filesUsed} file(s)`;
   }
   const fallbackTotal = native.filesFellBack;
@@ -102,6 +105,27 @@ function formatNativeBackendStatus(report: BuildReport | undefined): string | un
   return `Backend: JS tree-sitter fallback; native addon unavailable${reason}`;
 }
 
+function formatNativeBackendFallbackSummary(
+  report: BuildReport | undefined,
+): string | undefined {
+  const native = report?.backend?.native;
+  if (!native || native.filesFellBack === 0) return undefined;
+  const parts = Object.entries(native.byLanguage)
+    .filter(([, entry]) => entry.filesFellBack > 0)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([languageId, entry]) => {
+      const reasonSummary = Object.entries(entry.fallbackReasons)
+        .filter(([, count]) => count > 0)
+        .map(([reason, count]) => `${reason}=${count}`)
+        .join(",");
+      return reasonSummary.length > 0
+        ? `${languageId}(${reasonSummary})`
+        : `${languageId}(${entry.filesFellBack})`;
+    });
+  if (parts.length === 0) return undefined;
+  return `Native fallback summary: ${parts.join(", ")}`;
+}
+
 function maybeWriteNativeBackendStatus(
   report: BuildReport | undefined,
   showProgress: boolean,
@@ -109,6 +133,8 @@ function maybeWriteNativeBackendStatus(
   if (!showProgress) return;
   const message = formatNativeBackendStatus(report);
   if (message) writeStderrLine(message);
+  const summary = formatNativeBackendFallbackSummary(report);
+  if (summary) writeStderrLine(summary);
 }
 
 type CommandTimingReport = {
@@ -1147,7 +1173,9 @@ Examples:
       resolveNodeModules,
       dynamicImportHeuristics,
       ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
+      ...(indexReport ? { report: indexReport } : {}),
     });
+    maybeWriteNativeBackendStatus(indexReport, showProgress);
     const graphOut = stable ? stabilizeGraph(graph) : graph;
     if (format === "mermaid") await writeOut(graphToMermaid(graphOut));
     else if (format === "dot") await writeOut(graphToDOT(graphOut));

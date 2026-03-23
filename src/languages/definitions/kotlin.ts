@@ -2,6 +2,20 @@ import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
+function normalizeKotlinNativeQuery(_kind: string, query: string): string {
+  let normalized = query
+    .replace(/\bimport_header\b/g, "import")
+    .replace(/\bsimple_identifier\b/g, "identifier")
+    .replace(/\btype_identifier\b/g, "identifier");
+  if (
+    normalized.includes("import_alias") ||
+    normalized.includes("wildcard_import")
+  ) {
+    normalized = "";
+  }
+  return normalized;
+}
+
 export const KOTLIN_DEF: LanguageDefinition = {
   id: "kotlin",
   extensions: [".kt", ".kts"],
@@ -137,5 +151,9 @@ export const KOTLIN_DEF: LanguageDefinition = {
     node.type === "catch_block" ||
     node.type === "finally_block",
   supportsCrossModuleSymbols: true,
+  native: {
+    normalizeQuery: normalizeKotlinNativeQuery,
+    notes: ["normalizes kotlin import and identifier node names for the native grammar"],
+  },
 };
 registerLanguage(KOTLIN_DEF);

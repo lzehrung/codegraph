@@ -2,7 +2,11 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { buildProjectIndexFromFiles, type BuildReport } from "../src/index.js";
+import {
+  buildProjectIndexFromFiles,
+  collectGraph,
+  type BuildReport,
+} from "../src/index.js";
 import { extractJsTsSpecifiers, stripJsLikeComments } from "../src/util.js";
 import {
   getNativeTreeSitterSupportedLanguageIds,
@@ -113,6 +117,7 @@ describe("Import extraction fallback reporting", () => {
     expect(native?.supportedLanguageIds).toEqual(
       getNativeTreeSitterSupportedLanguageIds(),
     );
+    expect(native?.byLanguage.ts?.filesSeen).toBe(2);
 
     const nativeSupportsTs =
       isNativeTreeSitterAvailable() &&
@@ -123,12 +128,50 @@ describe("Import extraction fallback reporting", () => {
       ).toBeGreaterThan(0);
       if ((native?.filesUsed ?? 0) > 0) {
         expect(native?.enabled).toBe(true);
+        expect(native?.byLanguage.ts?.filesUsed).toBeGreaterThan(0);
       }
     } else {
       expect(native?.filesFellBack).toBeGreaterThan(0);
       expect((native?.fallbackReasons.unavailable ?? 0) +
         (native?.fallbackReasons.unsupportedLanguage ?? 0) +
         (native?.fallbackReasons.queryFailure ?? 0)).toBeGreaterThan(0);
+      expect(native?.byLanguage.ts?.filesFellBack).toBeGreaterThan(0);
+    }
+  });
+
+  it("reports native backend availability and usage for graph-only builds", async () => {
+    const root = await mkTmpDir("cg-native-graph-report-");
+    const main = path.join(root, "main.ts");
+    const dep = path.join(root, "dep.ts");
+    await fsp.writeFile(dep, "export const value = 1;\n", "utf8");
+    await fsp.writeFile(
+      main,
+      "import { value } from './dep';\nconsole.log(value);\n",
+      "utf8",
+    );
+
+    const report: BuildReport = { timings: {} };
+    const graph = await collectGraph(root, [main, dep], { report });
+
+    expect(graph.edges.length).toBeGreaterThan(0);
+    const native = report.backend?.native;
+    expect(native).toBeDefined();
+    expect(native?.available).toBe(isNativeTreeSitterAvailable());
+    expect(native?.supportedLanguageIds).toEqual(
+      getNativeTreeSitterSupportedLanguageIds(),
+    );
+    expect(native?.byLanguage.ts?.filesSeen).toBe(2);
+
+    const nativeSupportsTs =
+      isNativeTreeSitterAvailable() &&
+      getNativeTreeSitterSupportedLanguageIds().includes("ts");
+    if (nativeSupportsTs) {
+      expect(native?.byLanguage.ts?.filesUsed).toBe(2);
+      expect(native?.filesUsed).toBe(2);
+      expect(native?.enabled).toBe(true);
+    } else {
+      expect(native?.filesFellBack).toBeGreaterThan(0);
+      expect(native?.byLanguage.ts?.filesFellBack).toBeGreaterThan(0);
     }
   });
 });

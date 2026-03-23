@@ -254,6 +254,7 @@ Use this path when you are developing on codegraph itself or want to build the n
 * Published installs do not require Rust or a manual native setup step
 * Local native builds require a working Rust toolchain plus `npm run build:native`
 * If no compatible native package is available, Codegraph falls back to the JS Tree-sitter path automatically
+* Set `CODEGRAPH_DISABLE_NATIVE=1` to force the JS Tree-sitter path for comparison or debugging
 
 ---
 
@@ -342,8 +343,16 @@ npx codegraph apisurface
 # Emit a JSON timing/cache report to stderr (or a file)
 npx codegraph index --report
 npx codegraph review --report --report-file review.report.json
+# Compare native vs forced-JS indexing on representative fixtures
+npm run bench:native
+# `bench:native` now includes both cold and warm full-index runs plus graph-only runs by default.
+# Warm full-index runs measure cache-reuse behavior, so their measured backend counters can be zero even when the warmup pass used native parsing.
+# Use `--fixtures repo` when you want to benchmark the codegraph repo itself instead of the smaller sample fixture sets.
+# Benchmark output reports processed file count and resulting graph node count separately for graph workloads.
+# Smoke-check the cold full indexing path with a coarse slowdown guard
+npm run bench:native:smoke
 # Reports include graph.fallbackImportExtraction when regex fallback import extraction is used.
-# Index build reports also include backend.native so you can see whether native Tree-sitter was used or whether the run fell back to JS.
+# Graph, index, and review reports include backend.native with byLanguage counters so you can see where native Tree-sitter was used, where it fell back, and which query kinds were normalized or skipped.
 
 # Analyze PR impact: map diffs to symbols and find affected code
 npx codegraph impact --base <commit-sha> --head <commit-sha>
