@@ -30,8 +30,10 @@ Status key:
 Notes:
 - The native addon uses the same Tree-sitter query model as the JS path for all listed source languages.
 - Native parity coverage includes both extraction parity and end-to-end semantic parity on the current source-language fixture set (`TypeScript`, `TSX`, `JavaScript`, `Python`, `Go`, `Java`, `C#`, `Rust`, `Kotlin`, `Swift`, `C`, `C++`, `Ruby`) plus graph/specifier parity for `HTML`, `CSS`, `Less`, `SCSS`, `Vue`, and `Svelte`.
+- Deeper hardening coverage now includes Go aliased imports and interface-typed uses, Kotlin alias and wildcard imports, Java wildcard-import package fixtures, Rust nested modules and reexports, Swift static-member fixtures, C function-pointer typedef fixtures, C++ namespace/template fixtures, and Ruby nested module fixtures.
 - `SCSS` uses the native addon for import/specifier extraction. Native SCSS symbol queries are intentionally skipped because symbol extraction is not a supported SCSS capability yet.
 - `HTML`, `CSS`, `Less`, `Vue`, and `Svelte` are graph/chunking-focused today. Their unsupported navigation and symbol features are covered by explicit `not_found` parity tests.
+- A few deeper semantic shapes remain intentionally limited and are covered by explicit regression tests instead of optimistic support claims: Go dot-imported constructor navigation, Java wildcard-imported nested-type navigation, and advanced reference recovery for C function-pointer typedefs, C++ namespace aliases, Kotlin wildcard-imported type aliases, Java wildcard-imported interfaces, and Ruby namespaced classes.
 
 ## Project file discovery coverage
 

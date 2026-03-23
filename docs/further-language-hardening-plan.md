@@ -3,8 +3,9 @@
 This document is the follow-on plan for strengthening language support after the remaining `Partial` semantic entries were removed from [language-parity.md](./language-parity.md).
 
 Status:
-- New follow-on work as of 2026-03-23.
+- Implemented on the `improvement-plan-next` branch as of 2026-03-23.
 - The prior language-support hardening plans are complete enough to treat as finished.
+- Remaining advanced limitations are now documented in [language-parity.md](./language-parity.md) and covered by explicit regression tests.
 
 This plan does not target new languages. It targets deeper, more robust support for the languages and product types we already advertise.
 

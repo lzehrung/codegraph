@@ -26,6 +26,10 @@ const definition: LanguageTestDefinition = {
         from: "static-imports.java",
         to: { type: "file", path: "helpers/Helpers.java" },
       },
+      {
+        from: "WildcardImports.java",
+        to: { type: "file", path: "pkg/PackageTypes.java" },
+      },
     ],
     symbols: [
       {
@@ -40,6 +44,14 @@ const definition: LanguageTestDefinition = {
       {
         file: "utils/Utils.java",
         includes: [{ name: "UtilityClass" }],
+      },
+      {
+        file: "pkg/PackageTypes.java",
+        includes: [
+          { name: "PackageTypes" },
+          { name: "NestedValue" },
+          { name: "ServiceContract" },
+        ],
       },
     ],
   },

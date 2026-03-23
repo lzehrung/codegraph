@@ -40,12 +40,14 @@ export const RUBY_DEF: LanguageDefinition = {
       (class name: (constant) @name)
       (module name: (constant) @name)
       (method name: (identifier) @name)
+      (assignment left: (constant) @name)
     `,
     locals: `
       (class name: (constant) @name)
       (module name: (constant) @name)
       (method name: (identifier) @name)
       (assignment left: (identifier) @name)
+      (assignment left: (constant) @name)
     `,
     importBindings: `
       ((call method: (identifier) @method arguments: (argument_list (string (string_content) @from))) @stmt (#match? @method "^(require|require_relative)$"))

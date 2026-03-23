@@ -2701,7 +2701,9 @@ export async function collectImportsForFile(
             if (resolvedSup.id === "java") {
               const parts = from.split(".");
               const last = parts[parts.length - 1];
-              if (last && /^[A-Z]/.test(last)) {
+              if (last === "*") {
+                imports.push({ kind: "star", from, resolved, typeOnly });
+              } else if (last && /^[A-Z]/.test(last)) {
                 imports.push({
                   kind: "named",
                   local: last,
@@ -2967,7 +2969,14 @@ export async function collectImportsForFile(
             // import java.util.List; -> local "List"
             const parts = fromValue.split(".");
             const last = parts[parts.length - 1];
-            if (last && /^[A-Z]/.test(last)) {
+            if (last === "*") {
+              imports.push({
+                kind: "star",
+                from: fromValue,
+                resolved,
+                typeOnly,
+              });
+            } else if (last && /^[A-Z]/.test(last)) {
               imports.push({
                 kind: "named",
                 local: last,
@@ -5006,6 +5015,21 @@ export function resolveImported(
   if (hit?.kind === "namespace") return { namespace: hit.file };
   try {
     const sup = supportForFile(targetFile);
+    if (sup?.id === "java" || sup?.id === "kotlin") {
+      const siblingHit = resolveSiblingPackageExport(
+        index,
+        targetFile,
+        exportedName,
+        sup.id,
+      );
+      if (siblingHit?.kind === "resolved") return siblingHit.def;
+      if (siblingHit?.kind === "namespace") return { namespace: siblingHit.file };
+    }
+  } catch {
+    // Unsupported file extension - cannot resolve sibling package exports.
+  }
+  try {
+    const sup = supportForFile(targetFile);
     if (sup?.id === "python") {
       const base =
         fs.existsSync(targetFile) && fs.statSync(targetFile).isDirectory()
@@ -5080,6 +5104,47 @@ export type ScopeIndex = {
   all: Binding[];
   allScopes: Scope[];
 };
+
+const packageNameCache = new Map<string, string | null>();
+
+function readPackageNameForLanguage(
+  filePath: string,
+  languageId: "java" | "kotlin",
+): string | null {
+  const cacheKey = `${languageId}::${filePath}`;
+  const cached = packageNameCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+  try {
+    const source = fs.readFileSync(filePath, "utf8");
+    const packageName =
+      languageId === "kotlin"
+        ? source.match(/^\s*package\s+([A-Za-z_][\w.]*)/m)?.[1] ?? null
+        : source.match(/^\s*package\s+([A-Za-z_][\w.]*)\s*;/m)?.[1] ?? null;
+    packageNameCache.set(cacheKey, packageName);
+    return packageName;
+  } catch {
+    packageNameCache.set(cacheKey, null);
+    return null;
+  }
+}
+
+function resolveSiblingPackageExport(
+  index: ProjectIndex,
+  targetFile: string,
+  exportedName: string,
+  languageId: "java" | "kotlin",
+): ResolvedExport | null {
+  const packageName = readPackageNameForLanguage(targetFile, languageId);
+  if (!packageName) return null;
+  const targetDir = path.dirname(targetFile);
+  for (const filePath of index.byFile.keys()) {
+    if (filePath === targetFile || path.dirname(filePath) !== targetDir) continue;
+    if (readPackageNameForLanguage(filePath, languageId) !== packageName) continue;
+    const hit = resolveExport(index, filePath, exportedName);
+    if (hit) return hit;
+  }
+  return null;
+}
 
 export function buildScopeIndexFromSource(
   file: string,

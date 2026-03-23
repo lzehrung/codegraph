@@ -117,7 +117,7 @@ Sample graph: [sample-graph.md](./sample-graph.md)
 
 Each listed language participates in the same shared indexing and navigation pipeline, but semantic depth is still slightly uneven in a few places.
 When the optional native addon is available, all listed source languages use the same native Tree-sitter runtime and query model; unsupported capabilities still fall back through the shared JS path where needed.
-The regression suite covers deeper syntax variants too, and now includes representative end-to-end native semantic parity coverage for source languages plus graph/specifier parity for Vue.
+The regression suite covers deeper syntax variants too, and now includes end-to-end native semantic parity coverage for the source-language fixture set plus graph/specifier parity for the graph-first product types.
 See the coverage matrix in [docs/language-parity.md](./docs/language-parity.md).
 
 **Project files**: project manifests like package.json, pyproject.toml, pom.xml, build.gradle, requirements.txt, .sln, .idea, etc. See [docs/language-parity.md](./docs/language-parity.md) for more details.

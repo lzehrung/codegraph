@@ -290,11 +290,25 @@ nativeDescribe("native semantic parity", () => {
         { file: "utils.go", line: 9, column: 6, expectedStatus: "ok" },
       ),
       sampleExpectation(
+        "go",
+        ["aliased-types.go", "dot-imports.go", "interfaces.go", "utils.go", "helpers.go"],
+        [{ file: "utils.go", names: ["UtilityClass", "NewUtilityClass"] }],
+        { file: "aliased-types.go", line: 8, column: 22, expectedStatus: "ok" },
+        { file: "utils.go", line: 9, column: 6, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
         "java",
         ["main.java", "utils/Utils.java", "helpers/Helpers.java"],
         [{ file: "utils/Utils.java", names: ["Utils", "helperFunction"] }],
         { file: "main.java", line: 8, column: 11, expectedStatus: "ok" },
         { file: "utils/Utils.java", line: 4, column: 22, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
+        "java",
+        ["WildcardImports.java", "pkg/PackageTypes.java"],
+        [{ file: "pkg/PackageTypes.java", names: ["PackageTypes", "NestedValue", "ServiceContract"] }],
+        { file: "WildcardImports.java", line: 6, column: 16, expectedStatus: "not_found" },
+        { file: "pkg/PackageTypes.java", line: 7, column: 11, expectedStatus: "ok" },
       ),
       sampleExpectation(
         "csharp",
@@ -311,11 +325,25 @@ nativeDescribe("native semantic parity", () => {
         { file: "utils.rs", line: 1, column: 8, expectedStatus: "ok" },
       ),
       sampleExpectation(
+        "rust",
+        ["nested.rs", "nested_service.rs", "reexports.rs", "utils.rs", "helpers.rs"],
+        [{ file: "nested_service.rs", names: ["NestedRunner"] }],
+        { file: "nested.rs", line: 6, column: 18, expectedStatus: "ok" },
+        { file: "nested_service.rs", line: 1, column: 12, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
         "kotlin",
         ["main.kt", "utils/helperFunction.kt", "helpers/helperFromHelpers.kt"],
         [{ file: "utils/helperFunction.kt", names: ["helperFunction", "UtilityClass"] }],
         { file: "main.kt", line: 7, column: 17, expectedStatus: "ok" },
         { file: "utils/helperFunction.kt", line: 7, column: 7, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
+        "kotlin",
+        ["Aliases.kt", "TypeConsumers.kt", "utils/MoreTypes.kt", "utils/helperFunction.kt"],
+        [{ file: "utils/MoreTypes.kt", names: ["UtilityAlias", "UtilityFactory", "CompanionCarrier"] }],
+        { file: "TypeConsumers.kt", line: 3, column: 21, expectedStatus: "ok" },
+        { file: "utils/MoreTypes.kt", line: 3, column: 11, expectedStatus: "ok" },
       ),
       sampleExpectation(
         "swift",
@@ -325,11 +353,25 @@ nativeDescribe("native semantic parity", () => {
         { file: "Utils.swift", line: 1, column: 13, expectedStatus: "ok" },
       ),
       sampleExpectation(
+        "swift",
+        ["AdvancedUsage.swift", "StaticMembers.swift", "Utils.swift"],
+        [{ file: "StaticMembers.swift", names: ["UtilityFactory", "build"] }],
+        { file: "AdvancedUsage.swift", line: 4, column: 10, expectedStatus: "ok" },
+        { file: "StaticMembers.swift", line: 6, column: 8, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
         "c",
         ["main.c", "utils.h", "utils.c", "helpers.h", "helpers.c"],
         [{ file: "utils.h", names: ["helper_function", "Utility"] }],
         { file: "main.c", line: 5, column: 15, expectedStatus: "ok" },
         { file: "utils.h", line: 4, column: 16, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
+        "c",
+        ["advanced-use.c", "function-pointers.h", "function-pointers.c"],
+        [{ file: "function-pointers.h", names: ["Comparator", "AdvancedState", "compare_values"] }],
+        { file: "advanced-use.c", line: 4, column: 3, expectedStatus: "ok" },
+        { file: "function-pointers.h", line: 3, column: 15, expectedStatus: "ok" },
       ),
       sampleExpectation(
         "cpp",
@@ -339,6 +381,13 @@ nativeDescribe("native semantic parity", () => {
         { file: "utils.hpp", line: 7, column: 5, expectedStatus: "ok" },
       ),
       sampleExpectation(
+        "cpp",
+        ["namespace-usage.cpp", "namespaces.hpp"],
+        [{ file: "namespaces.hpp", names: ["toolkit", "Widget", "buildWidget"] }],
+        { file: "namespace-usage.cpp", line: 4, column: 12, expectedStatus: "ok" },
+        { file: "namespaces.hpp", line: 4, column: 7, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
         "ruby",
         ["main.rb", "utils.rb", "helpers.rb"],
         [{ file: "utils.rb", names: ["helper_function", "UtilityClass"] }],
@@ -346,11 +395,25 @@ nativeDescribe("native semantic parity", () => {
         { file: "utils.rb", line: 2, column: 12, expectedStatus: "ok" },
       ),
       sampleExpectation(
+        "ruby",
+        ["consumer.rb", "namespaced.rb"],
+        [{ file: "namespaced.rb", names: ["Outer", "Inner", "Tool"] }],
+        { file: "consumer.rb", line: 3, column: 22, expectedStatus: "ok" },
+        { file: "namespaced.rb", line: 5, column: 11, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
         "html",
         ["index.html", "about.html", "app.js", "inline-helper.js", "styles.css"],
         undefined,
         { file: "index.html", line: 10, column: 14, expectedStatus: "not_found" },
         { file: "index.html", line: 10, column: 14, expectedStatus: "not_found" },
+      ),
+      sampleExpectation(
+        "html",
+        ["modules.html", "app.js", "about.html"],
+        undefined,
+        { file: "modules.html", line: 3, column: 18, expectedStatus: "not_found" },
+        { file: "modules.html", line: 3, column: 18, expectedStatus: "not_found" },
       ),
       sampleExpectation(
         "css",
@@ -367,8 +430,22 @@ nativeDescribe("native semantic parity", () => {
         { file: "variables.less", line: 1, column: 2, expectedStatus: "not_found" },
       ),
       sampleExpectation(
+        "less",
+        ["secondary.less", "variables.less"],
+        undefined,
+        { file: "secondary.less", line: 1, column: 2, expectedStatus: "not_found" },
+        { file: "secondary.less", line: 1, column: 2, expectedStatus: "not_found" },
+      ),
+      sampleExpectation(
         "scss",
         ["main.scss", "use-partials.scss", "_variables.scss", "_mixins.scss"],
+        undefined,
+        { file: "_variables.scss", line: 3, column: 2, expectedStatus: "not_found" },
+        { file: "_variables.scss", line: 3, column: 2, expectedStatus: "not_found" },
+      ),
+      sampleExpectation(
+        "scss",
+        ["forward.scss", "_variables.scss", "_mixins.scss"],
         undefined,
         { file: "_variables.scss", line: 3, column: 2, expectedStatus: "not_found" },
         { file: "_variables.scss", line: 3, column: 2, expectedStatus: "not_found" },
@@ -381,11 +458,25 @@ nativeDescribe("native semantic parity", () => {
         { file: "App.vue", line: 2, column: 17, expectedStatus: "not_found" },
       ),
       sampleExpectation(
+        "vue",
+        ["TsScript.vue", "Child.vue", "logic.ts"],
+        undefined,
+        { file: "TsScript.vue", line: 2, column: 17, expectedStatus: "not_found" },
+        { file: "TsScript.vue", line: 2, column: 17, expectedStatus: "not_found" },
+      ),
+      sampleExpectation(
         "svelte",
         ["App.svelte", "Widget.svelte", "logic.ts"],
         undefined,
         { file: "App.svelte", line: 2, column: 17, expectedStatus: "not_found" },
         { file: "App.svelte", line: 2, column: 17, expectedStatus: "not_found" },
+      ),
+      sampleExpectation(
+        "svelte",
+        ["TypeScriptWidget.svelte", "Widget.svelte", "logic.ts"],
+        undefined,
+        { file: "TypeScriptWidget.svelte", line: 2, column: 17, expectedStatus: "not_found" },
+        { file: "TypeScriptWidget.svelte", line: 2, column: 17, expectedStatus: "not_found" },
       ),
     ];
 

@@ -34,6 +34,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | CSS-family specifier parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same module specifiers for CSS, Less, and SCSS imports. | Internal regression test | 2026-03-22 |
 | SFC specifier parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same module specifiers for Vue and Svelte inline scripts, `script setup`, and component-import fixtures. | Internal regression test | 2026-03-22 |
 | End-to-end semantic parity | `tests/native-semantic-parity.test.ts` | Native-enabled and forced-JS runs produce the same graph edges, symbol presence, go-to-definition, and references for the current source-language fixture set (`TypeScript`, `TSX`, `JavaScript`, `Python`, `Go`, `Java`, `C#`, `Rust`, `Kotlin`, `Swift`, `C`, `C++`, `Ruby`). | Internal regression test | 2026-03-23 |
+| Deep semantic stress parity | `tests/native-semantic-parity.test.ts` | Native-enabled and forced-JS runs stay aligned on deeper fixtures for aliased Go imports, Kotlin alias and wildcard imports, Java wildcard imports, Rust nested modules, Swift static-member imports, C advanced typedef fixtures, C++ namespace fixtures, and Ruby nested modules, including cases that intentionally stay `not_found` or definition-anchor-only today. | Internal regression test | 2026-03-23 |
 | TypeScript normalization-sensitive semantic parity | `tests/native-semantic-parity.test.ts` | Native-enabled and forced-JS runs stay aligned for `export =` and class-export fixtures that depend on native query normalization. | Internal regression test | 2026-03-23 |
 | Graph/specifier native parity | `tests/native-semantic-parity.test.ts` | Native-enabled and forced-JS runs stay aligned for graph/specifier-focused fixtures (`HTML`, `CSS`, `Less`, `SCSS`, `Vue`, `Svelte`) and preserve the same `not_found` navigation behavior. | Internal regression test | 2026-03-23 |
 
@@ -43,6 +44,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | --- | --- | --- | --- | --- |
 | Header includes | `tests/samples/c/main.c` | Dependency graph includes edges to `utils.h` and `helpers.h` for `#include` directives. | Internal parity fixture | 2026-03-22 |
 | Typedefs, enums, macros, and declarations | `tests/samples/c/advanced.h` | Symbol extraction includes macro definitions, typedef-backed structs, enums, and declared functions from headers. | Internal regression fixture | 2026-03-22 |
+| Function-pointer typedef imports | `tests/samples/c/advanced-use.c`, `tests/samples/c/function-pointers.h` | Dependency graph and go-to-definition resolve the `Comparator` typedef through `#include`, while advanced reference recovery stays definition-anchor-only for that typedef. | Internal regression fixture | 2026-03-23 |
 | Header go-to-definition | `tests/goto.test.ts` | Included function declarations and typedef-backed structs resolve to header definitions from `main.c`. | Internal regression test | 2026-03-23 |
 | Header references | `tests/references.test.ts` | Shared function references and typedef-backed type references resolve across headers and `main.c` use sites. | Internal regression test | 2026-03-23 |
 
@@ -52,6 +54,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | --- | --- | --- | --- | --- |
 | Header includes | `tests/samples/cpp/main.cpp` | Dependency graph includes edges to `utils.hpp` and `helpers.hpp` for `#include` directives. | Internal parity fixture | 2026-03-22 |
 | Namespaces, aliases, enums, and templates | `tests/samples/cpp/advanced.hpp` | Symbol extraction includes namespaces, enum types, `using` aliases, classes, and template functions. | Internal regression fixture | 2026-03-22 |
+| Namespace-qualified alias targets | `tests/samples/cpp/namespace-usage.cpp`, `tests/samples/cpp/namespaces.hpp` | Go-to-definition resolves namespace-qualified alias targets, while advanced references currently return only a minimal set for those alias targets. | Internal regression fixture | 2026-03-23 |
 | Header go-to-definition | `tests/goto.test.ts` | Included function declarations and struct types resolve from `main.cpp` into `utils.hpp`. | Internal regression test | 2026-03-23 |
 | Header references | `tests/references.test.ts` | Shared function and struct references resolve across `main.cpp` and the included headers. | Internal regression test | 2026-03-23 |
 
@@ -74,6 +77,9 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | --- | --- | --- | --- | --- |
 | Package imports | `tests/samples/go/main.go` | Dependency graph includes edges to `utils.go` and `helpers.go` for `import` paths. | https://github.com/tree-sitter/tree-sitter-go | 2026-01-22 |
 | Aliased imports | `tests/samples/go/aliased-imports.go` | Dependency graph still resolves edges to `utils.go` and `helpers.go` when package imports use aliases. | Internal regression fixture | 2026-03-22 |
+| Aliased package-qualified types | `tests/samples/go/aliased-types.go` | Go-to-definition and references resolve package-qualified type uses imported through aliases. | Internal regression fixture | 2026-03-23 |
+| Dot imports and blank imports | `tests/samples/go/dot-imports.go` | Dependency graph keeps dot and blank imports visible; dot-imported constructor navigation remains explicitly unsupported today. | Internal regression fixture | 2026-03-23 |
+| Interface-typed package uses | `tests/samples/go/interfaces.go` | References for `UtilityClass` include interface-typed argument positions that point back into the imported package. | Internal regression fixture | 2026-03-23 |
 | Interfaces and generic types | `tests/samples/go/contracts.go` | Symbol extraction includes interface declarations, generic type declarations, and generic factory functions. | Internal regression fixture | 2026-03-22 |
 | Package go-to-definition | `tests/goto.test.ts` | Imported functions and package-qualified struct types resolve from `main.go` into `utils.go`. | Internal regression test | 2026-03-23 |
 | Package references | `tests/references.test.ts` | Exported functions and package-qualified struct-type references resolve across `main.go` and `utils.go`. | Internal regression test | 2026-03-23 |
@@ -83,12 +89,14 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Scenario | Sample | Expected behavior | Source | Date added |
 | --- | --- | --- | --- | --- |
 | Script and stylesheet references | `tests/samples/html/index.html` | Dependency graph includes edges to `app.js` and `styles.css` via `src` and `href`. | https://github.com/tree-sitter/tree-sitter-html | 2026-01-22 |
+| Module-preload and module-script references | `tests/samples/html/modules.html` | Graph/specifier extraction keeps `modulepreload`, module scripts, and linked pages aligned between native and JS paths while semantic navigation stays `not_found`. | Internal regression fixture | 2026-03-23 |
 
 ## Java
 
 | Scenario | Sample | Expected behavior | Source | Date added |
 | --- | --- | --- | --- | --- |
 | Static imports | `tests/samples/java/static-imports.java` | Dependency graph includes edges to `utils/Utils.java` and `helpers/Helpers.java` for static imports. | https://github.com/tree-sitter/tree-sitter-java | 2026-01-22 |
+| Wildcard package imports | `tests/samples/java/WildcardImports.java`, `tests/samples/java/pkg/PackageTypes.java` | Dependency graph and symbol extraction stay aligned for wildcard-imported package fixtures; wildcard-imported nested-type navigation and interface reference recovery remain explicitly limited today. | Internal regression fixture | 2026-03-23 |
 | Nested classes and interfaces | `tests/samples/java/NestedTypes.java` | Symbol extraction includes nested classes, nested interfaces, and their member methods. | Internal regression fixture | 2026-03-22 |
 
 ## JavaScript
@@ -103,6 +111,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Scenario | Sample | Expected behavior | Source | Date added |
 | --- | --- | --- | --- | --- |
 | Package imports | `tests/samples/kotlin/main.kt` | Dependency graph includes edges to `utils/helperFunction.kt` and `helpers/helperFromHelpers.kt`. | Internal parity fixture | 2026-03-22 |
+| Alias and wildcard imports | `tests/samples/kotlin/Aliases.kt`, `tests/samples/kotlin/TypeConsumers.kt`, `tests/samples/kotlin/utils/MoreTypes.kt` | Dependency graph and go-to-definition resolve aliased and wildcard-imported Kotlin symbols across files; wildcard-imported type-alias references remain definition-anchor-only today. | Internal regression fixture | 2026-03-23 |
 | Enums, type aliases, and top-level properties | `tests/samples/kotlin/Models.kt` | Symbol extraction includes enum declarations and entries, type aliases, top-level properties, and generic classes. | Internal regression fixture | 2026-03-22 |
 | Package go-to-definition | `tests/goto.test.ts` | Imported top-level functions and imported classes resolve from `main.kt` into `utils/helperFunction.kt`. | Internal regression test | 2026-03-23 |
 | Package references | `tests/references.test.ts` | Imported function and class references resolve across `main.kt` and `utils/helperFunction.kt`. | Internal regression test | 2026-03-23 |
@@ -112,6 +121,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Scenario | Sample | Expected behavior | Source | Date added |
 | --- | --- | --- | --- | --- |
 | `@import` stylesheets | `tests/samples/less/main.less` | Dependency graph includes edges to `variables.less` and `theme.less` for `@import`. | https://github.com/tree-sitter/tree-sitter-css | 2026-01-22 |
+| Secondary Less imports | `tests/samples/less/secondary.less` | Native and JS graph/specifier extraction stay aligned for additional Less import fixtures while semantic navigation stays `not_found`. | Internal regression fixture | 2026-03-23 |
 
 ## Python
 
@@ -125,6 +135,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Scenario | Sample | Expected behavior | Source | Date added |
 | --- | --- | --- | --- | --- |
 | `require_relative` imports | `tests/samples/ruby/main.rb` | Dependency graph includes edges to `utils.rb` and `helpers.rb` for relative requires. | https://github.com/tree-sitter/tree-sitter-ruby | 2026-01-22 |
+| Nested modules and classes | `tests/samples/ruby/namespaced.rb`, `tests/samples/ruby/consumer.rb` | Graph edges and go-to-definition cover nested Ruby modules and classes across files, while deeper namespaced-class references remain definition-anchor-only today. | Internal regression fixture | 2026-03-23 |
 
 ## Rust
 
@@ -132,6 +143,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | --- | --- | --- | --- | --- |
 | Module and `use` imports | `tests/samples/rust/main.rs` | Dependency graph includes edges to `utils.rs` and `helpers.rs` for `mod` and `use`. | https://github.com/tree-sitter/tree-sitter-rust | 2026-01-22 |
 | Aliased `use` imports | `tests/samples/rust/aliased-use.rs` | Dependency graph still resolves edges to `utils.rs` and `helpers.rs` when `use` imports are renamed with `as`. | Internal regression fixture | 2026-03-22 |
+| Reexports and nested modules | `tests/samples/rust/reexports.rs`, `tests/samples/rust/nested.rs`, `tests/samples/rust/nested_service.rs` | Go-to-definition and references cover nested-module type resolution, and native semantic parity keeps those nested/reexport fixtures aligned with the JS path. | Internal regression fixture | 2026-03-23 |
 | Traits, impls, and exported types | `tests/samples/rust/models.rs` | Symbol extraction includes trait declarations, impl-backed methods, and exported structs from Rust modules. | Internal regression fixture | 2026-03-22 |
 
 ## SCSS
@@ -139,6 +151,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Scenario | Sample | Expected behavior | Source | Date added |
 | --- | --- | --- | --- | --- |
 | `@use` partials | `tests/samples/scss/use-partials.scss` | Dependency graph includes edges to `_variables.scss` and `_mixins.scss` for `@use`. | https://github.com/tree-sitter/tree-sitter-scss | 2026-01-22 |
+| `@forward` partials | `tests/samples/scss/forward.scss` | Native and JS graph/specifier extraction stay aligned for `@forward` and `@use as` fixtures while semantic navigation stays `not_found`. | Internal regression fixture | 2026-03-23 |
 
 ## Svelte
 
@@ -146,6 +159,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | --- | --- | --- | --- | --- |
 | Inline script imports | `tests/samples/svelte/inline-script.svelte` | Dependency graph includes edge to `logic.ts` for inline script imports. | https://github.com/tree-sitter/tree-sitter-svelte | 2026-01-22 |
 | Reactive script imports | `tests/samples/svelte/reactive.svelte` | Native and JS Tree-sitter keep module-specifier extraction aligned for reactive Svelte script blocks. | Internal regression fixture | 2026-03-22 |
+| TypeScript script imports | `tests/samples/svelte/TypeScriptWidget.svelte` | Graph/specifier extraction stays aligned for Svelte TypeScript script blocks and component imports while semantic navigation stays `not_found`. | Internal regression fixture | 2026-03-23 |
 
 ## TypeScript
 
@@ -166,12 +180,14 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | --- | --- | --- | --- | --- |
 | Inline script imports | `tests/samples/vue/inline-script.vue` | Dependency graph includes edge to `logic.ts` for inline script imports. | https://github.com/tree-sitter/tree-sitter-vue | 2026-01-22 |
 | `script setup` imports | `tests/samples/vue/script-setup.vue` | Native and JS Tree-sitter keep module-specifier extraction aligned for Vue `script setup` blocks. | Internal regression fixture | 2026-03-22 |
+| TypeScript script-block imports | `tests/samples/vue/TsScript.vue` | Graph/specifier extraction stays aligned for Vue TypeScript script blocks and sibling component imports while semantic navigation stays `not_found`. | Internal regression fixture | 2026-03-23 |
 
 ## Swift
 
 | Scenario | Sample | Expected behavior | Source | Date added |
 | --- | --- | --- | --- | --- |
 | Module imports | `tests/samples/swift/main.swift` | Dependency graph includes edges to `Utils.swift` and `Helpers.swift` for imported symbols used in the fixture. | Internal parity fixture | 2026-03-22 |
+| Extensions and static members | `tests/samples/swift/Extensions.swift`, `tests/samples/swift/StaticMembers.swift`, `tests/samples/swift/AdvancedUsage.swift` | Symbol extraction, go-to-definition, references, and native semantic parity cover imported static-member fixtures; extension methods are extracted even when not all member navigation shapes are claimed yet. | Internal regression fixture | 2026-03-23 |
 | Protocols, type aliases, and subscripts | `tests/samples/swift/Protocols.swift` | Symbol extraction includes protocols, protocol members, type aliases, classes, and subscript-bearing implementations. | Internal regression fixture | 2026-03-22 |
 | Module go-to-definition | `tests/goto.test.ts` | Imported helper functions and structs resolve from `main.swift` into `Utils.swift`. | Internal regression test | 2026-03-23 |
 | Module references | `tests/references.test.ts` | Imported helper-function and struct references resolve consistently across `main.swift` and `Utils.swift`. | Internal regression test | 2026-03-23 |

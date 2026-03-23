@@ -21,6 +21,7 @@ const definition: LanguageTestDefinition = {
     dependencyGraph: [
       { from: "main.swift", to: { type: "file", path: "Utils.swift" } },
       { from: "main.swift", to: { type: "file", path: "Helpers.swift" } },
+      { from: "AdvancedUsage.swift", to: { type: "file", path: "StaticMembers.swift" } },
     ],
     symbols: [
       {
@@ -32,6 +33,23 @@ const definition: LanguageTestDefinition = {
           { name: "WorkerName" },
           { name: "WorkerImpl" },
         ],
+      },
+      {
+        file: "Extensions.swift",
+        includes: [{ name: "makeDefault" }],
+      },
+      {
+        file: "StaticMembers.swift",
+        includes: [{ name: "Status" }, { name: "UtilityFactory" }, { name: "build" }],
+      },
+    ],
+    goToDefinition: [
+      {
+        name: "go to definition resolves UtilityFactory from imported static members file",
+        file: "AdvancedUsage.swift",
+        line: 4,
+        column: 10,
+        expectedDefinition: { file: "StaticMembers.swift", line: 6 },
       },
     ],
   },

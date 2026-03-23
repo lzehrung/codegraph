@@ -26,6 +26,16 @@ const definition: LanguageTestDefinition = {
         from: "main.rb",
         to: { type: "file", path: "helpers.rb" },
       },
+      {
+        from: "consumer.rb",
+        to: { type: "file", path: "namespaced.rb" },
+      },
+    ],
+    symbols: [
+      {
+        file: "namespaced.rb",
+        includes: [{ name: "Outer" }, { name: "Inner" }, { name: "Tool" }],
+      },
     ],
   },
 };

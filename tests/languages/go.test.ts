@@ -34,6 +34,26 @@ const definition: LanguageTestDefinition = {
         from: "aliased-imports.go",
         to: { type: "file", path: "helpers.go" },
       },
+      {
+        from: "aliased-types.go",
+        to: { type: "file", path: "utils.go" },
+      },
+      {
+        from: "aliased-types.go",
+        to: { type: "file", path: "helpers.go" },
+      },
+      {
+        from: "dot-imports.go",
+        to: { type: "file", path: "utils.go" },
+      },
+      {
+        from: "dot-imports.go",
+        to: { type: "file", path: "helpers.go" },
+      },
+      {
+        from: "interfaces.go",
+        to: { type: "file", path: "utils.go" },
+      },
     ],
     symbols: [
       {
@@ -50,6 +70,28 @@ const definition: LanguageTestDefinition = {
           { name: "ReExportedHelper" },
           { name: "ConstantValue" },
         ],
+      },
+      {
+        file: "interfaces.go",
+        includes: [{ name: "ValueReader" }, { name: "useValueReader" }],
+      },
+    ],
+    goToDefinition: [
+      {
+        name: "go to definition resolves aliased UtilityClass type",
+        file: "aliased-types.go",
+        line: 9,
+        column: 24,
+        expectedDefinition: { file: "utils.go", line: 9 },
+      },
+    ],
+    references: [
+      {
+        name: "find references for UtilityClass includes aliased type use",
+        file: "utils.go",
+        line: 9,
+        column: 6,
+        minimumCount: 4,
       },
     ],
   },
