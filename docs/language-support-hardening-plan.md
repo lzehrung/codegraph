@@ -11,6 +11,10 @@ It focuses on four gaps identified in review:
 
 This plan is written as a handoff document. A junior developer or agent should be able to implement it step by step without needing to infer intent.
 
+Follow-on:
+- the remaining `Partial` language-support closures were captured in [partial-language-support-plan.md](./partial-language-support-plan.md) and completed
+- the next depth-oriented hardening pass is captured in [further-language-hardening-plan.md](./further-language-hardening-plan.md)
+
 ---
 
 ## Objectives
