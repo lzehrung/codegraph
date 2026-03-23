@@ -1,8 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { supportById } from "../src/languages.js";
-import { getNativeQueryExecutionForState } from "../src/native/treeSitterNative.js";
+import {
+  getNativeQueryExecutionForState,
+  isNativeTreeSitterDisabledByEnv,
+} from "../src/native/treeSitterNative.js";
 
 describe("native fallback reporting", () => {
+  it("detects when native tree-sitter is disabled by environment", () => {
+    expect(isNativeTreeSitterDisabledByEnv({ CODEGRAPH_DISABLE_NATIVE: "1" })).toBe(
+      true,
+    );
+    expect(
+      isNativeTreeSitterDisabledByEnv({ CODEGRAPH_DISABLE_NATIVE: "true" }),
+    ).toBe(true);
+    expect(
+      isNativeTreeSitterDisabledByEnv({ CODEGRAPH_DISABLE_NATIVE: "yes" }),
+    ).toBe(true);
+    expect(
+      isNativeTreeSitterDisabledByEnv({ CODEGRAPH_DISABLE_NATIVE: "0" }),
+    ).toBe(false);
+  });
+
   it("reports unavailable when the native binding is not loaded", () => {
     const support = supportById("ts");
     expect(support).toBeDefined();

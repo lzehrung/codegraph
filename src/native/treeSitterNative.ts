@@ -66,10 +66,28 @@ let bindingState:
   | { loaded: false; error?: unknown }
   | undefined;
 
+export function isNativeTreeSitterDisabledByEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const rawValue = env.CODEGRAPH_DISABLE_NATIVE;
+  if (typeof rawValue !== "string") {
+    return false;
+  }
+  const normalized = rawValue.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
 function loadBinding():
   | { loaded: true; binding: NativeBinding; supportedLanguageIds: Set<string> }
   | { loaded: false; error?: unknown } {
   if (bindingState) return bindingState;
+  if (isNativeTreeSitterDisabledByEnv()) {
+    bindingState = {
+      loaded: false,
+      error: new Error("native tree-sitter disabled by CODEGRAPH_DISABLE_NATIVE"),
+    };
+    return bindingState;
+  }
   const candidates = [
     "@lzehrung/codegraph-native",
     localNativePackageRoot,

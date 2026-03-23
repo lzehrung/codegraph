@@ -254,6 +254,7 @@ Use this path when you are developing on codegraph itself or want to build the n
 * Published installs do not require Rust or a manual native setup step
 * Local native builds require a working Rust toolchain plus `npm run build:native`
 * If no compatible native package is available, Codegraph falls back to the JS Tree-sitter path automatically
+* Set `CODEGRAPH_DISABLE_NATIVE=1` to force the JS Tree-sitter path for comparison or debugging
 
 ---
 
@@ -342,6 +343,8 @@ npx codegraph apisurface
 # Emit a JSON timing/cache report to stderr (or a file)
 npx codegraph index --report
 npx codegraph review --report --report-file review.report.json
+# Compare native vs forced-JS indexing on representative fixtures
+npm run bench:native
 # Reports include graph.fallbackImportExtraction when regex fallback import extraction is used.
 # Index build reports also include backend.native with byLanguage counters so you can see where native Tree-sitter was used, where it fell back, and which query kinds were normalized or skipped.
 
