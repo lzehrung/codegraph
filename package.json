@@ -19,7 +19,7 @@
     "codegraph.skill"
   ],
   "scripts": {
-    "clean": "if exist dist rmdir /s /q dist",
+    "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\"",
     "build": "npm run clean && tsc -p tsconfig.json",
     "format": "prettier --write ./src",
     "lint": "npx eslint ./src --fix",
