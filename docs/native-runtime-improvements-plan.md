@@ -502,6 +502,7 @@ The code is working, but some bookkeeping and native runtime logic can still be 
 - Implemented: `scripts/bench-native.mjs`
 - Implemented: `bench:native` and `bench:native:smoke`
 - Implemented: cold/warm full-index benchmarking, graph-only benchmarking, and a coarse cold-only CI smoke benchmark with a generous native slowdown guard
+- Implemented: benchmark JSON output includes runtime environment details, and the harness can target the repo itself for larger local comparison runs
 - Implemented: focused tests that lock the per-file native fallback contract for full and incremental indexing
 - Implemented: backend-native bookkeeping extraction into `src/native/nativeBackendReport.ts`
 

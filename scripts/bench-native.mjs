@@ -15,6 +15,7 @@ const FIXTURE_ROOTS = {
   go: path.join(rootDir, "tests", "samples", "go"),
   rust: path.join(rootDir, "tests", "samples", "rust"),
   mixed: path.join(rootDir, "tests", "samples"),
+  repo: rootDir,
 };
 
 const DEFAULT_FIXTURES = ["typescript", "python", "go", "rust", "mixed"];
@@ -343,7 +344,21 @@ async function runParentBenchmark(options) {
   }
 
   if (options.json) {
-    process.stdout.write(`${JSON.stringify({ runs: options.runs, results }, null, 2)}\n`);
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          runs: options.runs,
+          environment: {
+            node: process.version,
+            platform: process.platform,
+            arch: process.arch,
+          },
+          results,
+        },
+        null,
+        2,
+      )}\n`,
+    );
     return;
   }
   process.stdout.write(`${formatSummary(results)}\n`);
@@ -381,7 +396,7 @@ async function runSingleBenchmarkChild(options) {
   let filesIndexed = 0;
   if (workload === "graph") {
     const files = await listProjectFiles(fixtureRoot);
-    const graph = await collectGraph(fixtureRoot, files, {});
+    const graph = await collectGraph(fixtureRoot, files, { report });
     filesIndexed = graph.nodes.size;
   } else {
     if (temperature === "warm") {

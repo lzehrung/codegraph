@@ -28,11 +28,16 @@ import {
   extractJsTsDynamicSpecifiers,
 } from "./util.js";
 import {
-  runNativeLanguageQueries,
+  getNativeQueryExecution,
   type NativeQueryResults,
 } from "./native/treeSitterNative.js";
 import { capturesByName } from "./native/queryResults.js";
 import {
+  initNativeBackendReport,
+  recordNativeBackendOutcome,
+} from "./native/nativeBackendReport.js";
+import {
+  type BuildReport,
   type ImportBinding,
   type ProjectIndex,
   type SymbolDef,
@@ -436,6 +441,7 @@ export async function collectEdgesForFile(
     cachedFileEdges?: GraphCacheEntry;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
+    report?: BuildReport;
   },
 ): Promise<Edge[]> {
   const normalizedFile = file.replace(/\\/g, "/");
@@ -473,7 +479,17 @@ export async function collectEdgesForFile(
     sup = prep.sup;
     lang = prep.lang;
     src = prep.source;
-    nativeQueries = runNativeLanguageQueries(src, sup);
+    const nativeExecution = getNativeQueryExecution(src, sup);
+    nativeQueries = nativeExecution.results;
+    recordNativeBackendOutcome(opts.report, {
+      file: normalizedFile,
+      support: sup,
+      usedNative: !!nativeExecution.results,
+      ...(nativeExecution.fallbackReason
+        ? { fallbackReason: nativeExecution.fallbackReason }
+        : {}),
+      ...(nativeExecution.error ? { error: nativeExecution.error } : {}),
+    });
   }
 
   const fast = !!opts.fast;
@@ -644,6 +660,7 @@ export async function collectGraph(
     cachedFileEdges?: Map<string, GraphCacheEntry>;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
+    report?: BuildReport;
     baseGraph?: Graph;
     replaceFiles?: Set<string>;
   },
@@ -666,6 +683,7 @@ export async function collectGraph(
   for (const file of normalizedFiles) graph.nodes.add(file);
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
   const resolutionHints = normalizeResolutionHints(opts?.resolutionHints);
+  initNativeBackendReport(opts?.report);
 
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 32, 128));
 
@@ -708,6 +726,7 @@ export async function collectGraph(
           ...(opts?.onFallbackImportExtraction
             ? { onFallbackImportExtraction: opts.onFallbackImportExtraction }
             : {}),
+          ...(opts?.report ? { report: opts.report } : {}),
         },
       );
       addEdgeTargetsToGraph(edges);

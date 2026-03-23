@@ -1173,7 +1173,9 @@ Examples:
       resolveNodeModules,
       dynamicImportHeuristics,
       ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
+      ...(indexReport ? { report: indexReport } : {}),
     });
+    maybeWriteNativeBackendStatus(indexReport, showProgress);
     const graphOut = stable ? stabilizeGraph(graph) : graph;
     if (format === "mermaid") await writeOut(graphToMermaid(graphOut));
     else if (format === "dot") await writeOut(graphToDOT(graphOut));
