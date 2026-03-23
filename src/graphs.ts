@@ -114,10 +114,15 @@ export function collectModuleSpecifiersFromSource(
     let queryFailed = false;
     try {
       const key = "py";
-      const parser = acquireParser(lang, key);
+      let parser: Parser | undefined;
       try {
-        parser.setLanguage(lang);
-        const tree = opts?.tree ?? parser.parse(source);
+        const tree =
+          opts?.tree ??
+          (() => {
+            parser = acquireParser(lang, key);
+            parser.setLanguage(lang);
+            return parser.parse(source);
+          })();
         const { imports: q } = getCompiledQueries(lang, support);
         for (const m of q.matches(tree.rootNode)) {
           const caps = Object.fromEntries(
@@ -154,7 +159,7 @@ export function collectModuleSpecifiersFromSource(
           }
         }
       } finally {
-        releaseParser(parser, key);
+        if (parser) releaseParser(parser, key);
       }
       if (out.length > 0) return out;
     } catch {
@@ -327,10 +332,15 @@ export function collectModuleSpecifiersFromSource(
   try {
     const key =
       support.id === "python" ? "py" : support.id === "js" ? "js" : "ts";
-    const parser = acquireParser(lang, key);
+    let parser: Parser | undefined;
     try {
-      parser.setLanguage(lang);
-      const tree = opts?.tree ?? parser.parse(source);
+      const tree =
+        opts?.tree ??
+        (() => {
+          parser = acquireParser(lang, key);
+          parser.setLanguage(lang);
+          return parser.parse(source);
+        })();
       const q = new Parser.Query(lang, support.queries.imports);
       for (const m of q.matches(tree.rootNode)) {
         const caps = Object.fromEntries(
@@ -376,7 +386,7 @@ export function collectModuleSpecifiersFromSource(
       }
       if (out.length > 0) return out;
     } finally {
-      releaseParser(parser, key);
+      if (parser) releaseParser(parser, key);
     }
   } catch (error) {
     queryFailed = true;

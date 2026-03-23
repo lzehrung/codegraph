@@ -1473,6 +1473,16 @@ export function collectLocalsAndExportsFromSource(
   }
 
   const locals: SymbolDef[] = [];
+  const seenLocals = new Set<string>();
+  const queryDrivenLocalsLanguages = new Set([
+    "python",
+    "java",
+    "csharp",
+    "rust",
+    "kotlin",
+    "swift",
+    "cpp",
+  ]);
   const toKind = (s: string): SymbolKind => {
     if (s === "function") return SymbolKind.Function;
     if (s === "class") return SymbolKind.Class;
@@ -1480,8 +1490,34 @@ export function collectLocalsAndExportsFromSource(
     if (s === "type") return SymbolKind.TypeAlias;
     return SymbolKind.Variable;
   };
-  let usedNativePythonLocals = false;
-  if (nativeQueries && support.id === "python") {
+
+  const pushLocal = (
+    localName: string,
+    kind: SymbolKind,
+    range: Range,
+    node?: Parser.SyntaxNode,
+  ) => {
+    const key = `${localName}:${range.start.index ?? 0}:${range.end.index ?? 0}`;
+    if (seenLocals.has(key)) return;
+    seenLocals.add(key);
+    locals.push(buildSymbolDef(localName, kind, range, node));
+  };
+
+  const classifyLocalCapture = (
+    capture: NativeCapture | Parser.QueryCapture,
+    range: Range,
+    node?: Parser.SyntaxNode,
+  ): SymbolKind => {
+    if (node) return toKind(support.classifyDefinition(node));
+    if ("name" in capture && capture.name === "tname") {
+      return SymbolKind.TypeAlias;
+    }
+    return SymbolKind.Variable;
+  };
+
+  const extractLocalsFromNativeQueries = (): boolean => {
+    if (!nativeQueries) return false;
+    if (!queryDrivenLocalsLanguages.has(support.id)) return false;
     try {
       for (const match of nativeQueries.locals) {
         for (const capture of match.captures) {
@@ -1492,47 +1528,52 @@ export function collectLocalsAndExportsFromSource(
               nativeRange.start.index ?? 0,
               nativeRange.end.index ?? 0,
             ) ?? undefined;
-          locals.push(
-            buildSymbolDef(
-              capture.text,
-              toKind(node ? support.classifyDefinition(node) : "variable"),
-              nativeRange,
-              node,
-            ),
+          pushLocal(
+            capture.text,
+            classifyLocalCapture(capture, nativeRange, node),
+            nativeRange,
+            node,
           );
         }
       }
-      usedNativePythonLocals = true;
+      return true;
     } catch {
-      usedNativePythonLocals = false;
+      return false;
     }
-  }
-  if (tree && !usedNativePythonLocals) {
-    if (support.id === "python") {
+  };
+
+  const extractLocalsFromJsQueries = (): boolean => {
+    if (!tree || !support.queries.locals.trim()) return false;
+    if (!queryDrivenLocalsLanguages.has(support.id)) return false;
+    try {
+      let q: Parser.Query;
       try {
-        const { locals: q } = getCompiledQueries(lang, support);
-        for (const m of q.matches(tree.rootNode))
-          for (const cap of m.captures) {
-            if (cap.name === "name" || cap.name === "tname") {
-              const range = toRange(cap.node);
-              const localName = sliceText(cap.node, source);
-              locals.push(
-                buildSymbolDef(
-                  localName,
-                  toKind(support.classifyDefinition(cap.node)),
-                  range,
-                  cap.node,
-                ),
-              );
-            }
-          }
-      } catch (error) {
-        console.warn(
-          `Warning: Query error in locals for ${support.id}:`,
-          error,
-        );
+        ({ locals: q } = getCompiledQueries(lang, support));
+      } catch {
+        q = new Parser.Query(lang, support.queries.locals);
       }
-    } else {
+      for (const m of q.matches(tree.rootNode)) {
+        for (const cap of m.captures) {
+          if (cap.name !== "name" && cap.name !== "tname") continue;
+          const range = toRange(cap.node);
+          pushLocal(
+            sliceText(cap.node, source),
+            classifyLocalCapture(cap, range, cap.node),
+            range,
+            cap.node,
+          );
+        }
+      }
+      return true;
+    } catch (error) {
+      console.warn(`Warning: Query error in locals for ${support.id}:`, error);
+      return false;
+    }
+  };
+
+  const usedNativeLocals = extractLocalsFromNativeQueries();
+  const usedQueryLocals = usedNativeLocals || extractLocalsFromJsQueries();
+  if (tree && !usedQueryLocals) {
       const scopeIdx = buildScopeIndexFromSource(
         file,
         source,
@@ -1551,9 +1592,8 @@ export function collectLocalsAndExportsFromSource(
         const startIndex = b.def.start.index ?? 0;
         const endIndex = b.def.end.index ?? 0;
         const node = tree.rootNode.descendantForIndex(startIndex, endIndex);
-        locals.push(buildSymbolDef(b.name, kind, b.def, node));
+        pushLocal(b.name, kind, b.def, node);
       }
-    }
   }
 
   const mergeTypeScriptNamespaceDeclarations = (
@@ -2784,10 +2824,15 @@ export async function collectImportsForFile(
     }
   }
 
-  const parser = acquireParser(resolvedLang, key);
+  let parser: Parser | undefined;
   try {
-    parser.setLanguage(resolvedLang);
-    const tree = opts?.tree ?? parser.parse(resolvedSource);
+    const tree =
+      opts?.tree ??
+      (() => {
+        parser = acquireParser(resolvedLang, key);
+        parser.setLanguage(resolvedLang);
+        return parser.parse(resolvedSource);
+      })();
     let ranFallback = false;
     try {
       let q: Parser.Query;
@@ -3088,7 +3133,7 @@ export async function collectImportsForFile(
     }
     return imports;
   } finally {
-    releaseParser(parser, key);
+    if (parser) releaseParser(parser, key);
   }
 }
 
@@ -5038,9 +5083,14 @@ export function buildScopeIndexFromSource(
       : support.id === "js"
         ? "js"
         : "ts";
-  const parser2 = acquireParser(lang, key2);
-  parser2.setLanguage(lang);
-  const tree = opts?.tree ?? parser2.parse(source);
+  let parser2: Parser | undefined;
+  const tree =
+    opts?.tree ??
+    (() => {
+      parser2 = acquireParser(lang, key2);
+      parser2.setLanguage(lang);
+      return parser2.parse(source);
+    })();
 
   const rootScope: Scope = {
     kind: "module",
@@ -5298,7 +5348,7 @@ export function buildScopeIndexFromSource(
   };
 
   walk(tree.rootNode);
-  releaseParser(parser2, key2);
+  if (parser2) releaseParser(parser2, key2);
 
   const bindings = new Map<string, Binding[]>();
   const all: Binding[] = [];
