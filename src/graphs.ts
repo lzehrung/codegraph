@@ -1,7 +1,10 @@
 import path from "node:path";
 import fsp from "node:fs/promises";
 import Parser from "tree-sitter";
-import { prepareParserInput } from "./languages/filePrep.js";
+import {
+  isUnsupportedParserInputError,
+  prepareParserInput,
+} from "./languages/filePrep.js";
 import { type LanguageSupport, getCompiledQueries } from "./languages.js";
 import type { FileId, EdgeTo, Edge, Graph } from "./types.js";
 import {
@@ -739,6 +742,9 @@ export async function collectGraph(
       addEdgeTargetsToGraph(edges);
       return edges;
     } catch (error) {
+      if (isUnsupportedParserInputError(error)) {
+        return [] as Edge[];
+      }
       console.warn(`Warning: Failed to process file ${file} for graph:`, error);
       return [] as Edge[];
     }
@@ -2294,6 +2300,9 @@ export async function buildSymbolGraphDetailed(
         walkImpls(tree.rootNode);
       }
     } catch (error) {
+      if (isUnsupportedParserInputError(error)) {
+        continue;
+      }
       console.warn(
         `Warning: Failed to build detailed symbol edges for ${file}:`,
         error,

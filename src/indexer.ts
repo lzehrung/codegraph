@@ -12,7 +12,10 @@ import {
   type LanguageSupport,
 } from "./languages.js";
 import { buildBloomFilterFromSource } from "./util/bloomFilter.js";
-import { prepareParserInput } from "./languages/filePrep.js";
+import {
+  isUnsupportedParserInputError,
+  prepareParserInput,
+} from "./languages/filePrep.js";
 import {
   listProjectFiles,
   discoverProjectFiles,
@@ -3424,6 +3427,15 @@ async function buildIndexFromFileListShared(
 
       return [f, mod, edges] as const;
     } catch (error) {
+      if (isUnsupportedParserInputError(error)) {
+        const modUnsupported: ModuleIndex = {
+          file: f,
+          exports: [],
+          imports: [],
+          locals: [],
+        };
+        return [f, modUnsupported, []] as const;
+      }
       console.warn(`Warning: Failed to process file ${f}:`, error);
       const modError: ModuleIndex = {
         file: f,
@@ -3933,6 +3945,15 @@ export async function buildProjectIndexIncremental(
           writeToCache(projectRoot, f, cacheSig, mod, opts);
           return [f, mod] as const;
         } catch (error) {
+          if (isUnsupportedParserInputError(error)) {
+            const modUnsupported: ModuleIndex = {
+              file: f,
+              exports: [],
+              imports: [],
+              locals: [],
+            };
+            return [f, modUnsupported] as const;
+          }
           console.warn(`Warning: Failed to process file ${f}:`, error);
           const modError: ModuleIndex = {
             file: f,

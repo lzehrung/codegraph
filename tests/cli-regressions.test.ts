@@ -126,6 +126,7 @@ describe('CLI regressions', () => {
     expect(report.command).toBe('graph');
     expect(report.index?.backend?.native?.byLanguage.ts?.filesSeen).toBeGreaterThan(0);
     expect(result.stderr).not.toContain('Backend:');
+    expect(result.stderr).not.toContain('Unsupported file extension');
   });
 
   it('sql runs raw queries against the SQLite graph export', async () => {
