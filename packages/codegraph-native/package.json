@@ -1,0 +1,36 @@
+{
+  "name": "@lzehrung/codegraph-native",
+  "version": "1.8.26",
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts"
+  ],
+  "scripts": {
+    "build": "node ../../node_modules/@napi-rs/cli/dist/cli.js build --platform --release --cwd . --no-js --dts index.d.ts",
+    "build:debug": "node ../../node_modules/@napi-rs/cli/dist/cli.js build --platform --cwd . --no-js --dts index.d.ts",
+    "clean": "cargo clean",
+    "create-npm-dirs": "node ../../node_modules/@napi-rs/cli/dist/cli.js create-npm-dirs --cwd .",
+    "artifacts": "node ../../node_modules/@napi-rs/cli/dist/cli.js artifacts --cwd .",
+    "prepublish:napi": "node ../../node_modules/@napi-rs/cli/dist/cli.js pre-publish --cwd ."
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "napi": {
+    "binaryName": "index",
+    "packageName": "@lzehrung/codegraph-native",
+    "targets": [
+      "x86_64-pc-windows-msvc",
+      "aarch64-pc-windows-msvc",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-musl"
+    ]
+  }
+}

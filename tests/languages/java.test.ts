@@ -27,6 +27,21 @@ const definition: LanguageTestDefinition = {
         to: { type: "file", path: "helpers/Helpers.java" },
       },
     ],
+    symbols: [
+      {
+        file: "NestedTypes.java",
+        includes: [
+          { name: "NestedTypes" },
+          { name: "InnerHelper" },
+          { name: "run" },
+          { name: "Contract" },
+        ],
+      },
+      {
+        file: "utils/Utils.java",
+        includes: [{ name: "UtilityClass" }],
+      },
+    ],
   },
 };
 
