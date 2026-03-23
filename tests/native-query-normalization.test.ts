@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { supportById } from "../src/languages.js";
-import { normalizeNativeQueryForSupport } from "../src/native/treeSitterNative.js";
+import {
+  getNativeQueryMetadataForSupport,
+  normalizeNativeQueryForSupport,
+} from "../src/native/treeSitterNative.js";
 
 describe("native query normalization", () => {
   it("keeps queries unchanged for languages without native compatibility hooks", () => {
@@ -62,6 +65,10 @@ describe("native query normalization", () => {
         "(class_selector (class_name) @name)",
       ),
     ).toBe("");
+    expect(getNativeQueryMetadataForSupport(support!)).toEqual({
+      normalizedQueryKinds: ["exports", "locals"],
+      skippedQueryKinds: ["exports", "locals"],
+    });
   });
 
   it("normalizes kotlin import and identifier node names", () => {
@@ -92,5 +99,9 @@ describe("native query normalization", () => {
         "(import_header (identifier) @from (wildcard_import) @wild) @stmt",
       ),
     ).toBe("");
+    expect(getNativeQueryMetadataForSupport(support!)).toEqual({
+      normalizedQueryKinds: ["imports", "exports", "locals", "importBindings"],
+      skippedQueryKinds: ["importBindings"],
+    });
   });
 });

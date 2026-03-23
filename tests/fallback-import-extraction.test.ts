@@ -113,6 +113,7 @@ describe("Import extraction fallback reporting", () => {
     expect(native?.supportedLanguageIds).toEqual(
       getNativeTreeSitterSupportedLanguageIds(),
     );
+    expect(native?.byLanguage.ts?.filesSeen).toBe(2);
 
     const nativeSupportsTs =
       isNativeTreeSitterAvailable() &&
@@ -123,12 +124,14 @@ describe("Import extraction fallback reporting", () => {
       ).toBeGreaterThan(0);
       if ((native?.filesUsed ?? 0) > 0) {
         expect(native?.enabled).toBe(true);
+        expect(native?.byLanguage.ts?.filesUsed).toBeGreaterThan(0);
       }
     } else {
       expect(native?.filesFellBack).toBeGreaterThan(0);
       expect((native?.fallbackReasons.unavailable ?? 0) +
         (native?.fallbackReasons.unsupportedLanguage ?? 0) +
         (native?.fallbackReasons.queryFailure ?? 0)).toBeGreaterThan(0);
+      expect(native?.byLanguage.ts?.filesFellBack).toBeGreaterThan(0);
     }
   });
 });

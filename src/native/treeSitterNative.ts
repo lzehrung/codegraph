@@ -4,6 +4,13 @@ import { createRequire } from "node:module";
 import type { LanguageSupport } from "../languages.js";
 import type { NativeQueryKind } from "../languages/types.js";
 
+export const NATIVE_QUERY_KINDS: NativeQueryKind[] = [
+  "imports",
+  "exports",
+  "locals",
+  "importBindings",
+];
+
 export type NativePoint = {
   row: number;
   column: number;
@@ -91,6 +98,35 @@ export function normalizeNativeQueryForSupport(
   queryText: string,
 ): string {
   return support.native?.normalizeQuery?.(kind, queryText) ?? queryText;
+}
+
+export function getNativeQueryMetadataForSupport(support: LanguageSupport): {
+  normalizedQueryKinds: NativeQueryKind[];
+  skippedQueryKinds: NativeQueryKind[];
+} {
+  const normalizedQueryKinds: NativeQueryKind[] = [];
+  const skippedQueryKinds: NativeQueryKind[] = [];
+
+  for (const kind of NATIVE_QUERY_KINDS) {
+    const originalQuery = support.queries[kind];
+    const normalizedQuery = normalizeNativeQueryForSupport(
+      support,
+      kind,
+      originalQuery,
+    );
+    if (normalizedQuery === originalQuery) {
+      continue;
+    }
+    normalizedQueryKinds.push(kind);
+    if (originalQuery.trim().length > 0 && normalizedQuery.trim().length === 0) {
+      skippedQueryKinds.push(kind);
+    }
+  }
+
+  return {
+    normalizedQueryKinds,
+    skippedQueryKinds,
+  };
 }
 
 export function isNativeTreeSitterAvailable(): boolean {

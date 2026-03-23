@@ -343,7 +343,7 @@ npx codegraph apisurface
 npx codegraph index --report
 npx codegraph review --report --report-file review.report.json
 # Reports include graph.fallbackImportExtraction when regex fallback import extraction is used.
-# Index build reports also include backend.native so you can see whether native Tree-sitter was used or whether the run fell back to JS.
+# Index build reports also include backend.native with byLanguage counters so you can see where native Tree-sitter was used, where it fell back, and which query kinds were normalized or skipped.
 
 # Analyze PR impact: map diffs to symbols and find affected code
 npx codegraph impact --base <commit-sha> --head <commit-sha>

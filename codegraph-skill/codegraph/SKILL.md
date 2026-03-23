@@ -36,6 +36,10 @@ Assuming the tool is available as `codegraph` (or via `npx codegraph` inside a p
   `codegraph graph --sqlite ./codegraph.sqlite`
 - Raw SQL on exported SQLite:
   `codegraph sql --db ./codegraph.sqlite --query "SELECT name, file FROM symbols WHERE kind = 'function' LIMIT 5;"`
+- Build/report diagnostics:
+  `codegraph index --report`
+  `codegraph review --report --report-file review.report.json`
+  Reports include `backend.native.byLanguage` so native usage and fallback are visible per language.
 
 ### 2. Definitions and references
 

@@ -52,6 +52,7 @@ import type { Edge, Range, FileId, Graph } from "./types.js";
 import {
   getNativeTreeSitterSupportedLanguageIds,
   getNativeQueryExecution,
+  getNativeQueryMetadataForSupport,
   getNativeTreeSitterLoadError,
   isNativeTreeSitterAvailable,
   type NativeCapture,
@@ -308,6 +309,15 @@ export type NativeBackendFallbackReason =
   | "unsupportedLanguage"
   | "queryFailure";
 
+export type NativeBackendLanguageReport = {
+  filesSeen: number;
+  filesUsed: number;
+  filesFellBack: number;
+  fallbackReasons: Record<NativeBackendFallbackReason, number>;
+  normalizedQueryKinds?: string[];
+  skippedQueryKinds?: string[];
+};
+
 export type NativeBackendReport = {
   available: boolean;
   enabled: boolean;
@@ -315,6 +325,7 @@ export type NativeBackendReport = {
   filesUsed: number;
   filesFellBack: number;
   fallbackReasons: Record<NativeBackendFallbackReason, number>;
+  byLanguage: Record<string, NativeBackendLanguageReport>;
   errors: Array<{
     file: string;
     languageId: string;
@@ -922,6 +933,7 @@ function initBackendReport(report: BuildReport | undefined): BackendReport | und
           unsupportedLanguage: 0,
           queryFailure: 0,
         },
+        byLanguage: {},
         errors: [],
       },
     };
@@ -932,10 +944,40 @@ function initBackendReport(report: BuildReport | undefined): BackendReport | und
   return report.backend;
 }
 
+function getOrCreateNativeLanguageReport(
+  backend: BackendReport,
+  support: LanguageSupport,
+): NativeBackendLanguageReport {
+  const existing = backend.native.byLanguage[support.id];
+  if (existing) {
+    return existing;
+  }
+  const metadata = getNativeQueryMetadataForSupport(support);
+  const created: NativeBackendLanguageReport = {
+    filesSeen: 0,
+    filesUsed: 0,
+    filesFellBack: 0,
+    fallbackReasons: {
+      unavailable: 0,
+      unsupportedLanguage: 0,
+      queryFailure: 0,
+    },
+    ...(metadata.normalizedQueryKinds.length > 0
+      ? { normalizedQueryKinds: [...metadata.normalizedQueryKinds] }
+      : {}),
+    ...(metadata.skippedQueryKinds.length > 0
+      ? { skippedQueryKinds: [...metadata.skippedQueryKinds] }
+      : {}),
+  };
+  backend.native.byLanguage[support.id] = created;
+  return created;
+}
+
 function recordNativeBackendOutcome(
   report: BuildReport | undefined,
   outcome: {
     usedNative: boolean;
+    support?: LanguageSupport;
     file?: string;
     languageId?: string;
     fallbackReason?: NativeBackendFallbackReason;
@@ -944,6 +986,16 @@ function recordNativeBackendOutcome(
 ): void {
   const backend = initBackendReport(report);
   if (!backend) return;
+  if (outcome.support) {
+    const languageReport = getOrCreateNativeLanguageReport(backend, outcome.support);
+    languageReport.filesSeen += 1;
+    if (outcome.usedNative) {
+      languageReport.filesUsed += 1;
+    } else if (outcome.fallbackReason) {
+      languageReport.filesFellBack += 1;
+      languageReport.fallbackReasons[outcome.fallbackReason] += 1;
+    }
+  }
   if (outcome.usedNative) {
     backend.native.enabled = true;
     backend.native.filesUsed += 1;
@@ -3352,6 +3404,7 @@ async function buildIndexFromFileListShared(
       const prepared = await prepareFileForIndexing(f);
       recordNativeBackendOutcome(report, {
         usedNative: !!prepared.nativeQueries,
+        support: prepared.sup,
         file: f,
         languageId: prepared.sup.id,
         ...(prepared.nativeFallbackReason
@@ -3895,6 +3948,7 @@ export async function buildProjectIndexIncremental(
           const prepared = await prepareFileForIndexing(f);
           recordNativeBackendOutcome(report, {
             usedNative: !!prepared.nativeQueries,
+            support: prepared.sup,
             file: f,
             languageId: prepared.sup.id,
             ...(prepared.nativeFallbackReason
@@ -5767,4 +5821,3 @@ export async function collectNamespaceMemberRefs(
   walk(tree.rootNode);
   return ranges;
 }
-
