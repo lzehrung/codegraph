@@ -2,6 +2,8 @@
 
 This document tracks the major architectural options for improving Codegraph performance. The current implementation direction is to keep one shared Tree-sitter model across languages and move hot parse/query execution into Rust, rather than introducing a separate parser stack for a subset of languages.
 
+The execution plan for the remaining native-runtime hardening, coverage, diagnostics, benchmarks, and isolated `Piscina` evaluation work lives in [native-runtime-improvements-plan.md](./native-runtime-improvements-plan.md).
+
 ---
 
 ## Plan 1: Native Rust N-API Addon (`napi-rs`) for Tree-sitter
