@@ -18,6 +18,7 @@ const FIXTURE_ROOTS = {
 
 const DEFAULT_FIXTURES = ["typescript", "python", "go", "rust", "mixed"];
 const DEFAULT_RUNS = 3;
+const DEFAULT_WORKLOADS = ["full", "graph"];
 
 function parseArgs(argv) {
   const options = {
@@ -26,6 +27,7 @@ function parseArgs(argv) {
     mode: "native",
     runs: DEFAULT_RUNS,
     fixtures: [...DEFAULT_FIXTURES],
+    workloads: [...DEFAULT_WORKLOADS],
     json: false,
     maxSlowdown: 0,
   };
@@ -39,6 +41,22 @@ function parseArgs(argv) {
     }
     if (arg === "--json") {
       options.json = true;
+      continue;
+    }
+    if (arg.startsWith("--workloads=")) {
+      options.workloads = arg
+        .slice("--workloads=".length)
+        .split(",")
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0);
+      continue;
+    }
+    if (arg === "--workloads") {
+      options.workloads = (argv[index + 1] ?? "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0);
+      index += 1;
       continue;
     }
     if (arg.startsWith("--max-slowdown=")) {
@@ -101,6 +119,11 @@ function parseArgs(argv) {
   if (!Number.isFinite(options.maxSlowdown) || options.maxSlowdown < 0) {
     throw new Error(`Invalid --max-slowdown value: ${String(options.maxSlowdown)}`);
   }
+  for (const workload of options.workloads) {
+    if (workload !== "full" && workload !== "graph") {
+      throw new Error(`Unknown workload '${workload}'. Expected one of: full, graph`);
+    }
+  }
 
   return options;
 }
@@ -115,13 +138,19 @@ function assertFixtureNames(fixtures) {
   }
 }
 
-async function runChildBenchmark(fixture, mode) {
+async function runChildBenchmark(fixture, workload, mode) {
   return await new Promise((resolve, reject) => {
     const stdoutChunks = [];
     const stderrChunks = [];
     const child = spawn(
       process.execPath,
-      [fileURLToPath(import.meta.url), "--child", `--fixture=${fixture}`, `--mode=${mode}`],
+      [
+        fileURLToPath(import.meta.url),
+        "--child",
+        `--fixture=${fixture}`,
+        `--workloads=${workload}`,
+        `--mode=${mode}`,
+      ],
       {
         cwd: rootDir,
         env: {
@@ -143,7 +172,7 @@ async function runChildBenchmark(fixture, mode) {
       if (code !== 0) {
         reject(
           new Error(
-            `Benchmark child failed for ${fixture}/${mode}: ${stderrChunks.join("").trim()}`,
+            `Benchmark child failed for ${fixture}/${workload}/${mode}: ${stderrChunks.join("").trim()}`,
           ),
         );
         return;
@@ -153,7 +182,7 @@ async function runChildBenchmark(fixture, mode) {
       } catch (error) {
         reject(
           new Error(
-            `Failed to parse benchmark output for ${fixture}/${mode}: ${error instanceof Error ? error.message : String(error)}`,
+            `Failed to parse benchmark output for ${fixture}/${workload}/${mode}: ${error instanceof Error ? error.message : String(error)}`,
           ),
         );
       }
@@ -176,31 +205,41 @@ function summarizeRuns(runs) {
     fastestElapsedMs,
     slowestElapsedMs,
     filesIndexed: sample.filesIndexed,
+    filesPerSecond:
+      averageElapsedMs > 0 ? (sample.filesIndexed / averageElapsedMs) * 1000 : 0,
     backend: sample.backend,
   };
 }
 
 function formatSummary(results) {
-  const lines = ["Fixture      Mode    Avg ms  Fastest  Slowest  Files  Native used/fallback"];
+  const lines = [
+    "Fixture      Workload Mode    Avg ms  Fastest  Slowest  Files  Files/s  Native used/fallback",
+  ];
   for (const result of results) {
-    for (const mode of ["native", "js"]) {
-      const summary = result[mode];
-      if (!summary) continue;
-      const backend = summary.backend;
-      const backendSummary = backend
-        ? `${backend.filesUsed}/${backend.filesFellBack}`
-        : "n/a";
-      lines.push(
-        [
-          result.fixture.padEnd(12),
-          mode.padEnd(7),
-          String(Math.round(summary.averageElapsedMs)).padStart(6),
-          String(Math.round(summary.fastestElapsedMs)).padStart(8),
-          String(Math.round(summary.slowestElapsedMs)).padStart(8),
-          String(summary.filesIndexed).padStart(6),
-          backendSummary.padStart(20),
-        ].join(" "),
-      );
+    for (const workload of Object.keys(result.workloads)) {
+      const workloadResult = result.workloads[workload];
+      if (!workloadResult) continue;
+      for (const mode of ["native", "js"]) {
+        const summary = workloadResult[mode];
+        if (!summary) continue;
+        const backend = summary.backend;
+        const backendSummary = backend
+          ? `${backend.filesUsed}/${backend.filesFellBack}`
+          : "n/a";
+        lines.push(
+          [
+            result.fixture.padEnd(12),
+            workload.padEnd(8),
+            mode.padEnd(7),
+            String(Math.round(summary.averageElapsedMs)).padStart(6),
+            String(Math.round(summary.fastestElapsedMs)).padStart(8),
+            String(Math.round(summary.slowestElapsedMs)).padStart(8),
+            String(summary.filesIndexed).padStart(6),
+            String(summary.filesPerSecond.toFixed(1)).padStart(8),
+            backendSummary.padStart(20),
+          ].join(" "),
+        );
+      }
     }
   }
   return lines.join("\n");
@@ -214,35 +253,40 @@ async function runParentBenchmark(options) {
 
   const results = [];
   for (const fixture of options.fixtures) {
-    const fixtureResult = { fixture };
-    for (const mode of ["native", "js"]) {
-      const runs = [];
-      for (let runIndex = 0; runIndex < options.runs; runIndex += 1) {
-        runs.push(await runChildBenchmark(fixture, mode));
+    const fixtureResult = { fixture, workloads: {} };
+    for (const workload of options.workloads) {
+      fixtureResult.workloads[workload] = {};
+      for (const mode of ["native", "js"]) {
+        const runs = [];
+        for (let runIndex = 0; runIndex < options.runs; runIndex += 1) {
+          runs.push(await runChildBenchmark(fixture, workload, mode));
+        }
+        fixtureResult.workloads[workload][mode] = summarizeRuns(runs);
       }
-      fixtureResult[mode] = summarizeRuns(runs);
     }
     results.push(fixtureResult);
   }
 
   if (options.maxSlowdown > 0) {
     for (const result of results) {
-      const nativeSummary = result.native;
-      const jsSummary = result.js;
-      if (!nativeSummary || !jsSummary) continue;
-      if (nativeSummary.filesIndexed !== jsSummary.filesIndexed) {
-        throw new Error(
-          `Benchmark mismatch for ${result.fixture}: native indexed ${nativeSummary.filesIndexed} files but JS indexed ${jsSummary.filesIndexed}`,
-        );
-      }
-      if (jsSummary.averageElapsedMs <= 0) {
-        continue;
-      }
-      const slowdown = nativeSummary.averageElapsedMs / jsSummary.averageElapsedMs;
-      if (slowdown > options.maxSlowdown) {
-        throw new Error(
-          `Benchmark slowdown for ${result.fixture}: native ${nativeSummary.averageElapsedMs.toFixed(2)}ms vs JS ${jsSummary.averageElapsedMs.toFixed(2)}ms exceeds max slowdown ${options.maxSlowdown}x`,
-        );
+      for (const workload of Object.keys(result.workloads)) {
+        const nativeSummary = result.workloads[workload]?.native;
+        const jsSummary = result.workloads[workload]?.js;
+        if (!nativeSummary || !jsSummary) continue;
+        if (nativeSummary.filesIndexed !== jsSummary.filesIndexed) {
+          throw new Error(
+            `Benchmark mismatch for ${result.fixture}/${workload}: native indexed ${nativeSummary.filesIndexed} files but JS indexed ${jsSummary.filesIndexed}`,
+          );
+        }
+        if (jsSummary.averageElapsedMs <= 0) {
+          continue;
+        }
+        const slowdown = nativeSummary.averageElapsedMs / jsSummary.averageElapsedMs;
+        if (slowdown > options.maxSlowdown) {
+          throw new Error(
+            `Benchmark slowdown for ${result.fixture}/${workload}: native ${nativeSummary.averageElapsedMs.toFixed(2)}ms vs JS ${jsSummary.averageElapsedMs.toFixed(2)}ms exceeds max slowdown ${options.maxSlowdown}x`,
+          );
+        }
       }
     }
   }
@@ -263,16 +307,27 @@ async function runSingleBenchmarkChild(options) {
     throw new Error("dist/index.js not found. Run 'npm run build' before benchmarking.");
   }
 
-  const { buildProjectIndex } = await import(pathToFileURL(distEntry).href);
+  const { buildProjectIndex, collectGraph, listProjectFiles } = await import(
+    pathToFileURL(distEntry).href
+  );
   const report = { timings: {} };
   const start = performance.now();
-  const index = await buildProjectIndex(fixtureRoot, { report });
+  let filesIndexed = 0;
+  if (options.workloads[0] === "graph") {
+    const files = await listProjectFiles(fixtureRoot);
+    const graph = await collectGraph(fixtureRoot, files, {});
+    filesIndexed = graph.nodes.size;
+  } else {
+    const index = await buildProjectIndex(fixtureRoot, { report });
+    filesIndexed = index.byFile.size;
+  }
   const elapsedMs = performance.now() - start;
   const payload = {
     fixture: options.fixture,
+    workload: options.workloads[0],
     mode: options.mode,
     elapsedMs,
-    filesIndexed: index.byFile.size,
+    filesIndexed,
     backend: report.backend?.native ?? null,
   };
   process.stdout.write(JSON.stringify(payload));

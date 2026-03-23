@@ -345,6 +345,8 @@ npx codegraph index --report
 npx codegraph review --report --report-file review.report.json
 # Compare native vs forced-JS indexing on representative fixtures
 npm run bench:native
+# Smoke-check the full indexing path with a coarse slowdown guard
+npm run bench:native:smoke
 # Reports include graph.fallbackImportExtraction when regex fallback import extraction is used.
 # Index build reports also include backend.native with byLanguage counters so you can see where native Tree-sitter was used, where it fell back, and which query kinds were normalized or skipped.
 
