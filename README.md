@@ -96,7 +96,7 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * Text file chunking for JSON/YAML/config files
   * Configurable token budgets (150-400 tokens per chunk)
   * Semantic awareness: classes, functions, methods, interfaces, namespaces, imports
-* **Cross-language parity**: All supported languages share the same go-to-definition and find-references pipeline. Capability depth is close, but not perfectly identical yet; see [docs/language-parity.md](./docs/language-parity.md) for the current per-language matrix.
+* **Cross-language parity**: All supported languages share the same go-to-definition and find-references pipeline; see [docs/language-parity.md](./docs/language-parity.md) for the current per-language matrix.
 
 ---
 
@@ -115,7 +115,7 @@ Sample graph: [sample-graph.md](./sample-graph.md)
 * **C++** (`.cpp`)
 * **Vue / Svelte SFCs** (`.vue`, `.svelte`) - script blocks are parsed with the JS/TS pipeline for dependency graphs and chunking, while semantic navigation remains intentionally limited.
 
-Each listed language participates in the same shared indexing and navigation pipeline, but semantic depth is still slightly uneven in a few places.
+Each listed language participates in the same shared indexing and navigation pipeline.
 When the optional native addon is available, all listed source languages use the same native Tree-sitter runtime and query model; unsupported capabilities still fall back through the shared JS path where needed.
 The regression suite covers deeper syntax variants too, and now includes end-to-end native semantic parity coverage for the source-language fixture set plus graph/specifier parity for the graph-first product types.
 See the coverage matrix in [docs/language-parity.md](./docs/language-parity.md).
