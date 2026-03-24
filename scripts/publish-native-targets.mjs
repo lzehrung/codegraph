@@ -6,8 +6,8 @@ const rootDir = process.cwd();
 const npmDir = path.join(rootDir, "packages", "codegraph-native", "npm");
 
 function runPublish(packageDir) {
-  const result = spawnSync("npm", ["publish", packageDir], {
-    cwd: rootDir,
+  const result = spawnSync("npm", ["publish", "."], {
+    cwd: packageDir,
     stdio: "inherit",
     shell: process.platform === "win32",
   });
