@@ -18,6 +18,8 @@ Current status:
 
 At this point, the major architecture work is complete. The remaining non-`Piscina` optimization work is targeted hot-path cleanup and better benchmark evidence, not another large backend rewrite.
 
+The next concrete follow-up plan for that remaining work is in [native-performance-followup-plan.md](./native-performance-followup-plan.md).
+
 The chosen direction is to keep one shared Tree-sitter model across languages and move hot parse/query execution into Rust, rather than introducing a separate parser stack for a subset of languages.
 
 The remaining native-runtime status is summarized here. Language-support and parity follow-on work has been completed and is now reflected directly in [language-parity.md](./language-parity.md) and [scenario-catalog.md](./scenario-catalog.md).
