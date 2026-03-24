@@ -44,6 +44,8 @@ export type NativeQueryExecution = {
   error?: string;
 };
 
+export type NativeRuntimeMode = "auto" | "on" | "off";
+
 type NativeBinding = {
   runLanguageQueries: (
     source: string,
@@ -82,19 +84,16 @@ export function isNativeTreeSitterDisabledByEnv(
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
+function normalizeNativeRuntimeMode(
+  mode?: NativeRuntimeMode,
+): NativeRuntimeMode {
+  return mode ?? "auto";
+}
+
 function loadBinding():
   | { loaded: true; binding: NativeBinding; supportedLanguageIds: Set<string> }
   | { loaded: false; error?: unknown } {
   if (bindingState) return bindingState;
-  if (isNativeTreeSitterDisabledByEnv()) {
-    bindingState = {
-      loaded: false,
-      error: new Error(
-        "native tree-sitter disabled by CODEGRAPH_DISABLE_NATIVE",
-      ),
-    };
-    return bindingState;
-  }
   const candidates = [
     "@lzehrung/codegraph-native",
     localNativePackageRoot,
@@ -115,6 +114,28 @@ function loadBinding():
   }
   bindingState = { loaded: false, error: lastError };
   return bindingState;
+}
+
+function resolveNativeBindingState(
+  mode?: NativeRuntimeMode,
+  env: NodeJS.ProcessEnv = process.env,
+): NativeBindingState {
+  const normalizedMode = normalizeNativeRuntimeMode(mode);
+  if (normalizedMode === "off") {
+    return {
+      loaded: false,
+      error: new Error("native tree-sitter disabled by explicit option"),
+    };
+  }
+  if (normalizedMode === "auto" && isNativeTreeSitterDisabledByEnv(env)) {
+    return {
+      loaded: false,
+      error: new Error(
+        "native tree-sitter disabled by CODEGRAPH_DISABLE_NATIVE",
+      ),
+    };
+  }
+  return loadBinding();
 }
 
 export function normalizeNativeQueryForSupport(
@@ -157,25 +178,30 @@ export function getNativeQueryMetadataForSupport(support: LanguageSupport): {
   };
 }
 
-export function isNativeTreeSitterAvailable(): boolean {
-  return loadBinding().loaded;
+export function isNativeTreeSitterAvailable(mode?: NativeRuntimeMode): boolean {
+  return resolveNativeBindingState(mode).loaded;
 }
 
-export function getNativeTreeSitterLoadError(): unknown {
-  const state = loadBinding();
+export function getNativeTreeSitterLoadError(
+  mode?: NativeRuntimeMode,
+): unknown {
+  const state = resolveNativeBindingState(mode);
   return state.loaded ? undefined : state.error;
 }
 
-export function getNativeTreeSitterSupportedLanguageIds(): string[] {
-  const state = loadBinding();
+export function getNativeTreeSitterSupportedLanguageIds(
+  mode?: NativeRuntimeMode,
+): string[] {
+  const state = resolveNativeBindingState(mode);
   return state.loaded ? Array.from(state.supportedLanguageIds).sort() : [];
 }
 
 export function runNativeLanguageQueries(
   source: string,
   support: LanguageSupport,
+  mode?: NativeRuntimeMode,
 ): NativeQueryResults | null {
-  return getNativeQueryExecution(source, support).results;
+  return getNativeQueryExecution(source, support, mode).results;
 }
 
 type NativeBindingState =
@@ -243,6 +269,11 @@ export function getNativeQueryExecutionForState(
 export function getNativeQueryExecution(
   source: string,
   support: LanguageSupport,
+  mode?: NativeRuntimeMode,
 ): NativeQueryExecution {
-  return getNativeQueryExecutionForState(source, support, loadBinding());
+  return getNativeQueryExecutionForState(
+    source,
+    support,
+    resolveNativeBindingState(mode),
+  );
 }

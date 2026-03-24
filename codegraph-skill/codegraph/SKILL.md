@@ -7,7 +7,7 @@ description: Static code analysis and dependency graph tool for deep codebase un
 
 ## Overview
 
-Codegraph is a lightweight multi-language code analysis tool that builds dependency graphs, symbol indexes, go-to-definition maps, and PR impact reports. It uses one shared Tree-sitter model across languages. When the optional native package is installed, Codegraph runs supported Tree-sitter parse/query work in Rust automatically; otherwise it falls back to the JS Tree-sitter path automatically.
+Codegraph is a lightweight multi-language code analysis tool that builds dependency graphs, symbol indexes, go-to-definition maps, and PR impact reports. It uses one shared Tree-sitter model across languages. Native runtime mode defaults to `auto`: when the optional native package is installed, Codegraph runs supported Tree-sitter parse/query work in Rust automatically; otherwise it falls back to the JS Tree-sitter path automatically.
 
 ## Installation Notes
 
@@ -17,6 +17,8 @@ Codegraph is a lightweight multi-language code analysis tool that builds depende
 - For published installs, the native package is pulled in automatically when a compatible binary package exists for the current platform.
 - For source checkouts, build the native addon locally with:
   `npm run build:native`
+- Global default override: `CODEGRAPH_DISABLE_NATIVE=1`
+- Explicit CLI/library/tool `native` options take precedence over `CODEGRAPH_DISABLE_NATIVE`
 
 ## Command-Line Usage
 
@@ -41,6 +43,9 @@ Assuming the tool is available as `codegraph` (or via `npx codegraph` inside a p
   `codegraph index --report`
   `codegraph review --report --report-file review.report.json`
   Graph, index, and review reports include `backend.native.byLanguage` so native usage and fallback are visible per language.
+- Explicit native runtime control:
+  `codegraph graph --native off`
+  `codegraph index --native on --report`
 
 ### 2. Definitions and references
 
@@ -85,10 +90,27 @@ Use the scoped package name:
 import { buildProjectIndex, goToDefinition, findReferences } from "@lzehrung/codegraph";
 
 const root = process.cwd();
-const index = await buildProjectIndex(root);
+const index = await buildProjectIndex(root, { native: "auto" });
+const jsOnlyIndex = await buildProjectIndex(root, { native: "off" });
 ```
 
-There is no separate native import. If the native package is installed and compatible, the library uses it automatically.
+There is no separate native import. Use `native: "auto" | "on" | "off"` in public API calls to control native usage explicitly.
+
+Agent-tool wrappers accept the same control as a trailing runtime option, for example:
+
+```ts
+import { tool_getGraph, tool_goToDefinition } from "@lzehrung/codegraph";
+
+const graph = await tool_getGraph(root, { native: "off" });
+const definition = await tool_goToDefinition(
+  root,
+  "src/main.ts",
+  10,
+  5,
+  undefined,
+  { native: "on" },
+);
+```
 
 ## Best Practices
 

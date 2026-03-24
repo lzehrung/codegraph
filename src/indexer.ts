@@ -54,6 +54,7 @@ import {
 import type { Edge, Range, FileId, Graph } from "./types.js";
 import {
   getNativeQueryExecution,
+  type NativeRuntimeMode,
   type NativeCapture,
   type NativeQueryResults,
 } from "./native/treeSitterNative.js";
@@ -259,6 +260,8 @@ export type BuildOptions = {
   preset?: "code-review" | "ci-fast" | "development" | "production";
   /** Graph building options */
   graph?: GraphBuildOptions;
+  /** Native tree-sitter runtime mode (default: "auto") */
+  native?: NativeRuntimeMode;
   /** Verify manifest consistency before reuse (incremental builds only) */
   cacheVerify?: boolean;
   /** Force full parsing for changed files during incremental builds */
@@ -3324,9 +3327,10 @@ export async function parseFile(file: string): Promise<ParsedFileContext> {
 
 async function prepareFileForIndexing(
   file: string,
+  native?: NativeRuntimeMode,
 ): Promise<PreparedFileContext> {
   const prep = await prepareParserInput(file);
-  const nativeExecution = getNativeQueryExecution(prep.source, prep.sup);
+  const nativeExecution = getNativeQueryExecution(prep.source, prep.sup, native);
 
   return {
     source: prep.source,
@@ -3524,7 +3528,7 @@ async function buildIndexFromFileListShared(
         return [f, mod, []] as const;
       }
 
-      const prepared = await prepareFileForIndexing(f);
+      const prepared = await prepareFileForIndexing(f, opts?.native);
       recordNativeBackendOutcome(report, {
         usedNative: !!prepared.nativeQueries,
         support: prepared.sup,
@@ -4077,7 +4081,7 @@ export async function buildProjectIndexIncremental(
             return [f, mod] as const;
           }
 
-          const prepared = await prepareFileForIndexing(f);
+          const prepared = await prepareFileForIndexing(f, opts?.native);
           recordNativeBackendOutcome(report, {
             usedNative: !!prepared.nativeQueries,
             support: prepared.sup,
@@ -4279,6 +4283,7 @@ export async function buildProjectIndexIncremental(
               : {}),
             resolveNodeModules: !!graphOptions.resolveNodeModules,
             dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
+            ...(opts?.native ? { native: opts.native } : {}),
             ...(graphOptions.resolutionHints
               ? { resolutionHints: graphOptions.resolutionHints }
               : {}),
