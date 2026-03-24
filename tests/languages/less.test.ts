@@ -29,6 +29,14 @@ const definition: LanguageTestDefinition = {
         from: "main.less",
         to: { type: "external", name: "cdn-noise" },
       },
+      {
+        from: "secondary.less",
+        to: { type: "file", path: "variables.less" },
+      },
+      {
+        from: "secondary.less",
+        to: { type: "file", path: "theme.less" },
+      },
     ],
   },
 };

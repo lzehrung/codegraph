@@ -16,11 +16,15 @@ export type SampleLanguage =
   | 'tsx'
   | 'python'
   | 'javascript'
+  | 'c'
+  | 'cpp'
   | 'go'
   | 'java'
   | 'csharp'
+  | 'kotlin'
   | 'ruby'
   | 'rust'
+  | 'swift'
   | 'html'
   | 'css'
   | 'scss'
@@ -63,21 +67,19 @@ export async function testGoToDefinition(
   line: number,
   column: number,
   expectedFile?: string,
-  expectedLine?: number
+  expectedLine?: number,
+  expectedStatus: "ok" | "not_found" = "ok",
 ) {
   const result = await goToDefinition(index, { file, line, column });
-  
-  if (expectedFile && expectedLine) {
-    expect(result.status).toBe('ok');
+
+  expect(result.status).toBe(expectedStatus);
+  if (expectedStatus === "ok" && expectedFile && expectedLine) {
     if (result.status === 'ok') {
       expect(result.definition.file).toBe(expectedFile);
       expect(result.definition.range.start.line).toBe(expectedLine);
     }
-  } else {
-    // If no expected values provided, just expect it to work (not fail)
-    expect(result.status).toBe('ok');
   }
-  
+
   return result;
 }
 
@@ -86,15 +88,16 @@ export async function testFindReferences(
   file: string,
   line: number,
   column: number,
-  expectedCount: number
+  expectedCount: number,
+  expectedStatus: "ok" | "not_found" = "ok",
 ) {
   const result = await findReferences(index, { file, line, column });
-  
-  expect(result.status).toBe('ok');
+
+  expect(result.status).toBe(expectedStatus);
   if (result.status === 'ok') {
     expect(result.references.length).toBeGreaterThanOrEqual(expectedCount);
   }
-  
+
   return result;
 }
 

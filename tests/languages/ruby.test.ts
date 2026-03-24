@@ -26,6 +26,34 @@ const definition: LanguageTestDefinition = {
         from: "main.rb",
         to: { type: "file", path: "helpers.rb" },
       },
+      {
+        from: "consumer.rb",
+        to: { type: "file", path: "namespaced.rb" },
+      },
+    ],
+    symbols: [
+      {
+        file: "namespaced.rb",
+        includes: [{ name: "Outer" }, { name: "Inner" }, { name: "Tool" }],
+      },
+    ],
+    goToDefinition: [
+      {
+        name: "go to definition resolves namespaced class use",
+        file: "consumer.rb",
+        line: 3,
+        column: 22,
+        expectedDefinition: { file: "namespaced.rb", line: 5 },
+      },
+    ],
+    references: [
+      {
+        name: "find references for namespaced class",
+        file: "namespaced.rb",
+        line: 5,
+        column: 11,
+        minimumCount: 2,
+      },
     ],
   },
 };

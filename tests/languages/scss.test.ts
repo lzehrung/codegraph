@@ -31,6 +31,14 @@ const definition: LanguageTestDefinition = {
         from: "use-partials.scss",
         to: { type: "external", name: "cdn-texture" },
       },
+      {
+        from: "forward.scss",
+        to: { type: "file", path: "_variables.scss" },
+      },
+      {
+        from: "forward.scss",
+        to: { type: "file", path: "_mixins.scss" },
+      },
     ],
   },
 };

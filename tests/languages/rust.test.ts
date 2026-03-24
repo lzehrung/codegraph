@@ -35,11 +35,31 @@ const definition: LanguageTestDefinition = {
         from: "aliased-use.rs",
         to: { type: "file", path: "helpers.rs" },
       },
+      {
+        from: "reexports.rs",
+        to: { type: "file", path: "utils.rs" },
+      },
+      {
+        from: "reexports.rs",
+        to: { type: "file", path: "helpers.rs" },
+      },
+      {
+        from: "nested.rs",
+        to: { type: "file", path: "nested_service.rs" },
+      },
     ],
     symbols: [
       {
         file: "models.rs",
         includes: [{ name: "Runner" }, { name: "Engine" }, { name: "run" }],
+      },
+      {
+        file: "reexports.rs",
+        includes: [{ name: "build_engine" }],
+      },
+      {
+        file: "nested_service.rs",
+        includes: [{ name: "NestedRunner" }, { name: "run" }],
       },
     ],
   },

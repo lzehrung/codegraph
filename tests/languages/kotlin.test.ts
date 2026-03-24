@@ -24,6 +24,10 @@ const definition: LanguageTestDefinition = {
         from: "main.kt",
         to: { type: "file", path: "helpers/helperFromHelpers.kt" },
       },
+      {
+        from: "Aliases.kt",
+        to: { type: "file", path: "utils/helperFunction.kt" },
+      },
     ],
     symbols: [
       {
@@ -36,6 +40,43 @@ const definition: LanguageTestDefinition = {
           { name: "topLevelValue" },
           { name: "Service" },
         ],
+      },
+      {
+        file: "utils/MoreTypes.kt",
+        includes: [
+          { name: "UtilityAlias" },
+          { name: "UtilityFactory" },
+          { name: "CompanionCarrier" },
+        ],
+      },
+      {
+        file: "Objects.kt",
+        includes: [{ name: "AppConfig" }, { name: "Builder" }],
+      },
+    ],
+    goToDefinition: [
+      {
+        name: "go to definition resolves aliased UtilityClass import",
+        file: "Aliases.kt",
+        line: 3,
+        column: 24,
+        expectedDefinition: { file: "utils/helperFunction.kt", line: 7 },
+      },
+      {
+        name: "go to definition resolves wildcard-imported type alias",
+        file: "TypeConsumers.kt",
+        line: 3,
+        column: 21,
+        expectedDefinition: { file: "utils/MoreTypes.kt", line: 3 },
+      },
+    ],
+    references: [
+      {
+        name: "find references for wildcard-imported type alias",
+        file: "utils/MoreTypes.kt",
+        line: 3,
+        column: 11,
+        minimumCount: 2,
       },
     ],
   },

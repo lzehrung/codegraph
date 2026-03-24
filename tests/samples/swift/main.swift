@@ -3,6 +3,7 @@ import Helpers
 
 func main() {
   let value = Utils.helperFunction(1)
+  let utility = Utils.UtilityStruct(value: value)
   let other = Helpers.helperFromHelpers()
-  print(value + other)
+  print(utility.value + other)
 }

@@ -1,0 +1,6 @@
+@forward "./_variables";
+@use "./_mixins" as mixins;
+
+.card {
+  @include mixins.center;
+}

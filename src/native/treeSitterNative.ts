@@ -66,6 +66,10 @@ let bindingState:
   | { loaded: false; error?: unknown }
   | undefined;
 
+export function __resetNativeTreeSitterBindingForTests(): void {
+  bindingState = undefined;
+}
+
 export function isNativeTreeSitterDisabledByEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {

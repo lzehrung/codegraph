@@ -20,9 +20,7 @@ At this point, the major architecture work is complete. The remaining non-`Pisci
 
 The chosen direction is to keep one shared Tree-sitter model across languages and move hot parse/query execution into Rust, rather than introducing a separate parser stack for a subset of languages.
 
-The execution plan for the remaining native-runtime hardening, coverage, diagnostics, benchmarks, and isolated `Piscina` evaluation work lives in [native-runtime-improvements-plan.md](./native-runtime-improvements-plan.md).
-
-The follow-on execution plan for equalizing language-support depth, adding end-to-end native semantic parity, and expanding Rust-side language smoke coverage lives in [language-support-hardening-plan.md](./language-support-hardening-plan.md).
+The remaining native-runtime status is summarized here. Language-support and parity follow-on work has been completed and is now reflected directly in [language-parity.md](./language-parity.md) and [scenario-catalog.md](./scenario-catalog.md).
 
 ---
 
@@ -46,8 +44,6 @@ Status: Implemented
 - remove redundant parsing or repeated hot-path work after native extraction
 - benchmark the native path more rigorously on representative larger roots
 - keep tightening diagnostics, coverage, and maintainability so future optimizations stay safe
-
-See [native-runtime-improvements-plan.md](./native-runtime-improvements-plan.md) for the remaining work.
 
 ---
 
