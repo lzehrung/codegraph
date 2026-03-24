@@ -38,6 +38,20 @@ export type NativeQueryResults = {
   importBindings: NativeMatch[];
 };
 
+export type CompactCapture = {
+  name: string;
+  text: string;
+};
+
+export type CompactMatch = {
+  patternIndex: number;
+  captures: CompactCapture[];
+};
+
+export type CompactQueryResults = {
+  imports: CompactMatch[];
+};
+
 export type NativeQueryExecution = {
   results: NativeQueryResults | null;
   fallbackReason?: "unavailable" | "unsupportedLanguage" | "queryFailure";
@@ -45,6 +59,13 @@ export type NativeQueryExecution = {
 };
 
 export type NativeRuntimeMode = "auto" | "on" | "off";
+
+/**
+ * Controls which query kinds are executed in a native call.
+ * - "imports": only run the imports query (used by graph mode)
+ * - "full": run all query kinds (used by full indexing)
+ */
+export type NativeQueryScope = "imports" | "full";
 
 type NativeBinding = {
   runLanguageQueries: (
@@ -55,6 +76,11 @@ type NativeBinding = {
     localsQuery: string,
     importBindingsQuery: string,
   ) => NativeQueryResults;
+  runImportsQueryCompact?: (
+    source: string,
+    languageId: string,
+    importsQuery: string,
+  ) => CompactQueryResults;
   supportedLanguageIds: () => string[];
 };
 
@@ -212,6 +238,7 @@ export function getNativeQueryExecutionForState(
   source: string,
   support: LanguageSupport,
   state: NativeBindingState = loadBinding(),
+  scope: NativeQueryScope = "full",
 ): NativeQueryExecution {
   if (!state.loaded) {
     return {
@@ -230,6 +257,7 @@ export function getNativeQueryExecutionForState(
   if (!state.supportedLanguageIds.has(support.id)) {
     return { results: null, fallbackReason: "unsupportedLanguage" };
   }
+  const importsOnly = scope === "imports";
   try {
     return {
       results: state.binding.runLanguageQueries(
@@ -240,21 +268,27 @@ export function getNativeQueryExecutionForState(
           "imports",
           support.queries.imports,
         ),
-        normalizeNativeQueryForSupport(
-          support,
-          "exports",
-          support.queries.exports,
-        ),
-        normalizeNativeQueryForSupport(
-          support,
-          "locals",
-          support.queries.locals,
-        ),
-        normalizeNativeQueryForSupport(
-          support,
-          "importBindings",
-          support.queries.importBindings,
-        ),
+        importsOnly
+          ? ""
+          : normalizeNativeQueryForSupport(
+              support,
+              "exports",
+              support.queries.exports,
+            ),
+        importsOnly
+          ? ""
+          : normalizeNativeQueryForSupport(
+              support,
+              "locals",
+              support.queries.locals,
+            ),
+        importsOnly
+          ? ""
+          : normalizeNativeQueryForSupport(
+              support,
+              "importBindings",
+              support.queries.importBindings,
+            ),
       ),
     };
   } catch (error) {
@@ -270,10 +304,81 @@ export function getNativeQueryExecution(
   source: string,
   support: LanguageSupport,
   mode?: NativeRuntimeMode,
+  scope: NativeQueryScope = "full",
 ): NativeQueryExecution {
   return getNativeQueryExecutionForState(
     source,
     support,
     resolveNativeBindingState(mode),
+    scope,
   );
+}
+
+export type CompactImportsExecution = {
+  results: CompactQueryResults | null;
+  fallbackReason?: "unavailable" | "unsupportedLanguage" | "queryFailure";
+  error?: string;
+};
+
+/**
+ * Run only the imports query with a compact payload (name + text only).
+ * Falls back to the full execution path if the compact entrypoint is not
+ * available in the native binding.
+ */
+export function getCompactImportsExecution(
+  source: string,
+  support: LanguageSupport,
+  mode?: NativeRuntimeMode,
+): CompactImportsExecution {
+  const state = resolveNativeBindingState(mode);
+  if (!state.loaded) {
+    return {
+      results: null,
+      fallbackReason: "unavailable",
+      ...(state.error
+        ? {
+            error:
+              state.error instanceof Error
+                ? state.error.message
+                : stringifyUnknown(state.error),
+          }
+        : {}),
+    };
+  }
+  if (!state.supportedLanguageIds.has(support.id)) {
+    return { results: null, fallbackReason: "unsupportedLanguage" };
+  }
+  const importsQuery = normalizeNativeQueryForSupport(
+    support,
+    "imports",
+    support.queries.imports,
+  );
+  try {
+    if (state.binding.runImportsQueryCompact) {
+      return {
+        results: state.binding.runImportsQueryCompact(
+          source,
+          support.id,
+          importsQuery,
+        ),
+      };
+    }
+    // Fallback: use full execution with imports scope
+    const full = getNativeQueryExecutionForState(source, support, state, "imports");
+    if (!full.results) return full;
+    return {
+      results: {
+        imports: full.results.imports.map((m) => ({
+          patternIndex: m.patternIndex,
+          captures: m.captures.map((c) => ({ name: c.name, text: c.text })),
+        })),
+      },
+    };
+  } catch (error) {
+    return {
+      results: null,
+      fallbackReason: "queryFailure",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }

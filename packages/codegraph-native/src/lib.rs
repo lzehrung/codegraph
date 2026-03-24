@@ -1,5 +1,7 @@
 use napi::bindgen_prelude::Result;
 use napi_derive::napi;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language, Parser, Point, Query, QueryCapture, QueryCursor};
 
@@ -37,12 +39,48 @@ pub struct NativeQueryResults {
     pub import_bindings: Vec<NativeMatch>,
 }
 
+/// Compact capture with only name and text -- used by graph-mode imports
+/// where position and node-type data are not consumed by the caller.
+#[derive(Debug)]
+#[napi(object)]
+pub struct CompactCapture {
+    pub name: String,
+    pub text: String,
+}
+
+#[derive(Debug)]
+#[napi(object)]
+pub struct CompactMatch {
+    pub pattern_index: u32,
+    pub captures: Vec<CompactCapture>,
+}
+
+#[derive(Debug)]
+#[napi(object)]
+pub struct CompactQueryResults {
+    pub imports: Vec<CompactMatch>,
+}
+
 fn point_with_index(point: Point, index: usize) -> NativePoint {
     NativePoint {
         row: point.row as u32,
         column: point.column as u32,
         index: index as u32,
     }
+}
+
+fn capture_to_compact(source: &str, capture: &QueryCapture<'_>, capture_names: &[&str]) -> CompactCapture {
+    let node = capture.node;
+    let name = capture_names
+        .get(capture.index as usize)
+        .copied()
+        .unwrap_or_default()
+        .to_string();
+    let text = source
+        .get(node.start_byte()..node.end_byte())
+        .unwrap_or("")
+        .to_string();
+    CompactCapture { name, text }
 }
 
 fn capture_to_object(source: &str, capture: &QueryCapture<'_>, capture_names: &[&str]) -> NativeCapture {
@@ -66,6 +104,79 @@ fn capture_to_object(source: &str, capture: &QueryCapture<'_>, capture_names: &[
     }
 }
 
+// ---------------------------------------------------------------------------
+// Parser pooling: one Parser instance per language, reused across calls.
+// ---------------------------------------------------------------------------
+
+struct ParserPool {
+    parsers: HashMap<String, Parser>,
+}
+
+impl ParserPool {
+    fn new() -> Self {
+        Self {
+            parsers: HashMap::new(),
+        }
+    }
+
+    fn get_or_create(&mut self, language_id: &str, language: &Language) -> Result<&mut Parser> {
+        if !self.parsers.contains_key(language_id) {
+            let mut parser = Parser::new();
+            parser
+                .set_language(language)
+                .map_err(|e| napi::Error::from_reason(format!("Failed to set parser language: {e}")))?;
+            self.parsers.insert(language_id.to_string(), parser);
+        }
+        Ok(self.parsers.get_mut(language_id).unwrap())
+    }
+}
+
+thread_local! {
+    static PARSER_POOL: RefCell<ParserPool> = RefCell::new(ParserPool::new());
+}
+
+// ---------------------------------------------------------------------------
+// Query caching: compiled Query objects keyed by (language_id, query_text).
+// ---------------------------------------------------------------------------
+
+struct QueryCache {
+    entries: HashMap<(String, String), Query>,
+}
+
+impl QueryCache {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+        }
+    }
+
+    fn get_or_compile(
+        &mut self,
+        language_id: &str,
+        language: &Language,
+        query_text: &str,
+    ) -> Result<&Query> {
+        let key = (language_id.to_string(), query_text.to_string());
+        if !self.entries.contains_key(&key) {
+            let query = Query::new(language, query_text)
+                .map_err(|e| napi::Error::from_reason(format!("Failed to compile query: {e}")))?;
+            self.entries.insert(key.clone(), query);
+        }
+        Ok(self.entries.get(&key).unwrap())
+    }
+}
+
+thread_local! {
+    static QUERY_CACHE: RefCell<QueryCache> = RefCell::new(QueryCache::new());
+}
+
+// ---------------------------------------------------------------------------
+// Query execution using cached queries.
+// ---------------------------------------------------------------------------
+
+/// Execute a query without caching. Used by tests where the language_id is
+/// not known or the query is one-off.
+#[cfg(test)]
 fn execute_query(
     source: &str,
     root: tree_sitter::Node<'_>,
@@ -96,6 +207,44 @@ fn execute_query(
     }
 
     Ok(out)
+}
+
+/// Execute a query using the compiled-query cache. The cache is keyed by
+/// (language_id, query_text) so a query compiled for one grammar is never
+/// reused for a different grammar.
+fn execute_query_cached(
+    source: &str,
+    root: tree_sitter::Node<'_>,
+    language: Language,
+    query_text: &str,
+    language_id: &str,
+) -> Result<Vec<NativeMatch>> {
+    if query_text.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    QUERY_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let query = cache.get_or_compile(language_id, &language, query_text)?;
+        let capture_names = query.capture_names();
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(query, root, source.as_bytes());
+        let mut out = Vec::new();
+
+        while let Some(query_match) = matches.next() {
+            let captures = query_match
+                .captures
+                .iter()
+                .map(|capture| capture_to_object(source, capture, &capture_names))
+                .collect();
+            out.push(NativeMatch {
+                pattern_index: query_match.pattern_index as u32,
+                captures,
+            });
+        }
+
+        Ok(out)
+    })
 }
 
 fn language_for_id(language_id: &str) -> Option<Language> {
@@ -161,24 +310,95 @@ pub fn run_language_queries(
 ) -> Result<NativeQueryResults> {
     let language = language_for_id(&language_id)
         .ok_or_else(|| napi::Error::from_reason(format!("Unsupported language: {language_id}")))?;
-    let mut parser = Parser::new();
-    parser
-        .set_language(&language)
-        .map_err(|error| napi::Error::from_reason(format!("Failed to set parser language: {error}")))?;
-    let tree = parser
-        .parse(source.as_str(), None)
-        .ok_or_else(|| napi::Error::from_reason("Failed to parse source".to_string()))?;
+
+    let tree = PARSER_POOL.with(|pool| {
+        let mut pool = pool.borrow_mut();
+        let parser = pool.get_or_create(&language_id, &language)?;
+        parser
+            .parse(source.as_str(), None)
+            .ok_or_else(|| napi::Error::from_reason("Failed to parse source".to_string()))
+    })?;
     let root = tree.root_node();
+    let lid = language_id.as_str();
 
     Ok(NativeQueryResults {
-        imports: execute_query(source.as_str(), root, language.clone(), imports_query.as_str())?,
-        exports: execute_query(source.as_str(), root, language.clone(), exports_query.as_str())?,
-        locals: execute_query(source.as_str(), root, language.clone(), locals_query.as_str())?,
-        import_bindings: execute_query(
+        imports: execute_query_cached(source.as_str(), root, language.clone(), imports_query.as_str(), lid)?,
+        exports: execute_query_cached(source.as_str(), root, language.clone(), exports_query.as_str(), lid)?,
+        locals: execute_query_cached(source.as_str(), root, language.clone(), locals_query.as_str(), lid)?,
+        import_bindings: execute_query_cached(
             source.as_str(),
             root,
             language,
             import_bindings_query.as_str(),
+            lid,
+        )?,
+    })
+}
+
+/// Execute a compact imports-only query. Returns only name+text per capture,
+/// skipping nodeType and position data to reduce marshaling overhead.
+fn execute_query_compact(
+    source: &str,
+    root: tree_sitter::Node<'_>,
+    language: Language,
+    query_text: &str,
+    language_id: &str,
+) -> Result<Vec<CompactMatch>> {
+    if query_text.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    QUERY_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let query = cache.get_or_compile(language_id, &language, query_text)?;
+        let capture_names = query.capture_names();
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(query, root, source.as_bytes());
+        let mut out = Vec::new();
+
+        while let Some(query_match) = matches.next() {
+            let captures = query_match
+                .captures
+                .iter()
+                .map(|capture| capture_to_compact(source, capture, &capture_names))
+                .collect();
+            out.push(CompactMatch {
+                pattern_index: query_match.pattern_index as u32,
+                captures,
+            });
+        }
+
+        Ok(out)
+    })
+}
+
+/// Run only the imports query and return compact results (name + text only).
+/// This is the graph-mode entrypoint optimized for minimal marshaling.
+#[napi]
+pub fn run_imports_query_compact(
+    source: String,
+    language_id: String,
+    imports_query: String,
+) -> Result<CompactQueryResults> {
+    let language = language_for_id(&language_id)
+        .ok_or_else(|| napi::Error::from_reason(format!("Unsupported language: {language_id}")))?;
+
+    let tree = PARSER_POOL.with(|pool| {
+        let mut pool = pool.borrow_mut();
+        let parser = pool.get_or_create(&language_id, &language)?;
+        parser
+            .parse(source.as_str(), None)
+            .ok_or_else(|| napi::Error::from_reason("Failed to parse source".to_string()))
+    })?;
+    let root = tree.root_node();
+
+    Ok(CompactQueryResults {
+        imports: execute_query_compact(
+            source.as_str(),
+            root,
+            language,
+            imports_query.as_str(),
+            language_id.as_str(),
         )?,
     })
 }
@@ -186,7 +406,8 @@ pub fn run_language_queries(
 #[cfg(test)]
 mod tests {
     use super::{
-        execute_query, language_for_id, run_language_queries, supported_language_ids, NativeMatch,
+        execute_query, language_for_id, run_imports_query_compact, run_language_queries,
+        supported_language_ids, NativeMatch,
     };
     use std::collections::HashSet;
     use tree_sitter::Parser;
@@ -440,5 +661,93 @@ mod tests {
                 "expected smoke query to produce at least one match for {language_id}"
             );
         }
+    }
+
+    #[test]
+    fn repeated_calls_with_same_language_produce_same_results() {
+        // Verifies parser reuse and query caching produce consistent results
+        let source = "import { foo } from './bar';\nexport const x = 1;";
+        let query_text = "(lexical_declaration (variable_declarator name: (identifier) @name))";
+
+        let first = run_language_queries(
+            source.to_string(),
+            "ts".to_string(),
+            "".to_string(),
+            "".to_string(),
+            query_text.to_string(),
+            "".to_string(),
+        )
+        .expect("first call should succeed");
+
+        let second = run_language_queries(
+            source.to_string(),
+            "ts".to_string(),
+            "".to_string(),
+            "".to_string(),
+            query_text.to_string(),
+            "".to_string(),
+        )
+        .expect("second call should succeed");
+
+        assert_eq!(first.locals.len(), second.locals.len());
+        assert_eq!(
+            first_capture_texts(&first.locals),
+            first_capture_texts(&second.locals),
+        );
+    }
+
+    #[test]
+    fn different_query_texts_do_not_cross_contaminate() {
+        let source = "export const value = 1;\nfunction helper() {}";
+
+        let results_a = run_language_queries(
+            source.to_string(),
+            "ts".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "(lexical_declaration (variable_declarator name: (identifier) @name))".to_string(),
+            "".to_string(),
+        )
+        .expect("query A should succeed");
+
+        let results_b = run_language_queries(
+            source.to_string(),
+            "ts".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "(function_declaration name: (identifier) @name)".to_string(),
+            "".to_string(),
+        )
+        .expect("query B should succeed");
+
+        assert_eq!(first_capture_texts(&results_a.locals), vec!["value"]);
+        assert_eq!(first_capture_texts(&results_b.locals), vec!["helper"]);
+    }
+
+    #[test]
+    fn compact_imports_query_returns_name_and_text_only() {
+        let results = run_imports_query_compact(
+            "import { helper } from \"./dep.js\";\nconst value = helper();".to_string(),
+            "js".to_string(),
+            "(import_statement (string) @mod) @stmt".to_string(),
+        )
+        .expect("compact imports query should succeed");
+
+        assert_eq!(results.imports.len(), 1);
+        let captures = &results.imports[0].captures;
+        assert!(captures.iter().any(|c| c.name == "mod"));
+        assert!(captures.iter().any(|c| c.name == "stmt"));
+    }
+
+    #[test]
+    fn compact_imports_returns_empty_for_blank_query() {
+        let results = run_imports_query_compact(
+            "export const x = 1;".to_string(),
+            "ts".to_string(),
+            "   ".to_string(),
+        )
+        .expect("compact blank query should succeed");
+
+        assert!(results.imports.is_empty());
     }
 }

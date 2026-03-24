@@ -32,8 +32,12 @@ import {
 } from "./util.js";
 import {
   getNativeQueryExecution,
+  getCompactImportsExecution,
+  normalizeNativeQueryForSupport,
   type NativeRuntimeMode,
+  type NativeQueryScope,
   type NativeQueryResults,
+  type CompactQueryResults,
 } from "./native/treeSitterNative.js";
 import { capturesByName } from "./native/queryResults.js";
 import {
@@ -96,6 +100,7 @@ export function collectModuleSpecifiersFromSource(
   opts?: {
     tree?: Parser.Tree;
     nativeQueries?: NativeQueryResults | null;
+    compactNativeImports?: CompactQueryResults | null;
     fast?: boolean;
     file?: string;
     fastRegexDisabledLanguages?: string[];
@@ -293,12 +298,19 @@ export function collectModuleSpecifiersFromSource(
     return out;
   }
 
+  // Resolve the imports array: prefer compact (lighter) over full native
+  const nativeImportsArray =
+    opts?.compactNativeImports?.imports ?? opts?.nativeQueries?.imports;
+  const hasNativeImports = !!nativeImportsArray;
+
   let queryFailed = false;
-  if (opts?.nativeQueries) {
+  if (hasNativeImports) {
     try {
-      for (const match of opts.nativeQueries.imports) {
-        const caps = capturesByName(match);
-        const stmtText = caps["stmt"]?.text ?? "";
+      for (const match of nativeImportsArray) {
+        const capMap = Object.fromEntries(
+          match.captures.map((c) => [c.name, c] as const),
+        );
+        const stmtText = capMap["stmt"]?.text ?? "";
         const typeOnly =
           (support.id === "ts" || support.id === "tsx") &&
           (/\b(import|export)\s+type\b/.test(stmtText) ||
@@ -334,7 +346,19 @@ export function collectModuleSpecifiersFromSource(
         const cssSeen = makeSeenSet(out);
         appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
       }
-      if (out.length > 0) return out;
+      // Native succeeded -- treat the result as authoritative even if empty,
+      // but only when the imports query was not modified by normalization.
+      // Languages whose imports query is normalized (e.g. Kotlin) may have
+      // grammar differences that cause native to miss matches, so allow
+      // JS fallback for those.
+      const normalizedImportsQuery = normalizeNativeQueryForSupport(
+        support,
+        "imports",
+        support.queries.imports,
+      );
+      if (out.length > 0 || normalizedImportsQuery === support.queries.imports) {
+        return out;
+      }
     } catch (error) {
       queryFailed = true;
       console.warn(
@@ -508,6 +532,7 @@ export async function collectEdgesForFile(
   let lang = parsed?.lang;
   let src = parsed?.source;
   let nativeQueries = parsed?.nativeQueries ?? null;
+  let compactNativeImports: CompactQueryResults | null = null;
   if (!sup || !lang || src === undefined) {
     const prep = await prepareParserInput(file);
     sup = prep.sup;
@@ -517,16 +542,17 @@ export async function collectEdgesForFile(
     const shouldSkipNativeForFastGraph =
       !!opts.fast && (sup.id === "ts" || sup.id === "js") && !fastRegexDisabled;
     if (!shouldSkipNativeForFastGraph) {
-      const nativeExecution = getNativeQueryExecution(src, sup, opts.native);
-      nativeQueries = nativeExecution.results;
+      // Use compact imports execution for graph mode -- smaller payload
+      const compactExecution = getCompactImportsExecution(src, sup, opts.native);
+      compactNativeImports = compactExecution.results;
       recordNativeBackendOutcome(opts.report, {
         file: normalizedFile,
         support: sup,
-        usedNative: !!nativeExecution.results,
-        ...(nativeExecution.fallbackReason
-          ? { fallbackReason: nativeExecution.fallbackReason }
+        usedNative: !!compactExecution.results,
+        ...(compactExecution.fallbackReason
+          ? { fallbackReason: compactExecution.fallbackReason }
           : {}),
-        ...(nativeExecution.error ? { error: nativeExecution.error } : {}),
+        ...(compactExecution.error ? { error: compactExecution.error } : {}),
       });
     }
   }
@@ -535,6 +561,7 @@ export async function collectEdgesForFile(
   const specs = collectModuleSpecifiersFromSource(sup, lang, src, {
     ...(parsed?.tree ? { tree: parsed.tree } : {}),
     ...(nativeQueries ? { nativeQueries } : {}),
+    ...(compactNativeImports ? { compactNativeImports } : {}),
     fast,
     file: normalizedFile,
     ...(opts.fastRegexDisabledLanguages
