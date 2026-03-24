@@ -79,6 +79,12 @@ const QUERY_DRIVEN_LOCALS_LANGUAGES = new Set([
   "cpp",
 ]);
 
+function parseGoImportAlias(stmtText: string): string | null {
+  const trimmed = stmtText.trim();
+  const match = trimmed.match(/^(?:import\s+)?([._A-Za-z][\w]*)\s+["'`]/);
+  return match?.[1] ?? null;
+}
+
 export enum SymbolKind {
   Function = "function",
   Class = "class",
@@ -2381,6 +2387,97 @@ export async function collectImportsForFile(
   const resolvedNativeQueries = opts?.nativeQueries ?? null;
 
   const imports: ImportBinding[] = [];
+  const normalizeGoImports = (): void => {
+    if (resolvedSup.id !== "go" || imports.length === 0) {
+      return;
+    }
+    const aliasByFrom = new Map<string, string>();
+    const importPattern =
+      /^\s*(?:import\s+)?(?:(?<alias>[._A-Za-z][\w]*)\s+)?["'`](?<from>[^"'`]+)["'`]/gm;
+    for (const match of resolvedSource.matchAll(importPattern)) {
+      const from = match.groups?.from;
+      if (!from) continue;
+      const alias = match.groups?.alias;
+      if (alias) {
+        aliasByFrom.set(from, alias);
+      }
+    }
+
+    if (aliasByFrom.size === 0) {
+      return;
+    }
+
+    const normalized: ImportBinding[] = [];
+    const seen = new Set<string>();
+    for (const imp of imports) {
+      const alias = aliasByFrom.get(imp.from);
+      let next: ImportBinding | null = imp;
+      if (alias === ".") {
+        next = {
+          kind: "star",
+          from: imp.from,
+          resolved: imp.resolved,
+          ...(imp.typeOnly ? { typeOnly: imp.typeOnly } : {}),
+        };
+      } else if (alias === "_") {
+        next = null;
+      } else if (alias && imp.kind === "namespace") {
+        next = {
+          ...imp,
+          localNS: alias,
+        };
+      }
+      if (!next) continue;
+      const key = JSON.stringify(next);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      normalized.push(next);
+    }
+
+    imports.splice(0, imports.length, ...normalized);
+  };
+  const appendJavaTextImports = async (): Promise<void> => {
+    if (resolvedSup.id !== "java" || imports.length > 0) {
+      return;
+    }
+    const importPattern =
+      /^\s*import\s+(static\s+)?([A-Za-z_][\w.]*(?:\.\*)?)\s*;/gm;
+    for (const match of resolvedSource.matchAll(importPattern)) {
+      const isStatic = !!match[1];
+      const rawSpec = match[2];
+      if (!rawSpec) continue;
+      if (rawSpec.endsWith(".*")) {
+        const resolved = await resolveFrom(
+          isStatic ? rawSpec.slice(0, -2) : rawSpec,
+        );
+        imports.push({
+          kind: "star",
+          from: rawSpec,
+          resolved,
+          typeOnly: false,
+        });
+        continue;
+      }
+
+      const parts = rawSpec.split(".");
+      const imported = parts[parts.length - 1];
+      if (!imported) continue;
+      const fromValue = isStatic ? parts.slice(0, -1).join(".") : rawSpec;
+      const resolved = await resolveFrom(fromValue);
+      imports.push({
+        kind: "named",
+        local: imported,
+        imported,
+        from: fromValue,
+        resolved,
+        typeOnly: false,
+      });
+    }
+  };
+  const finalizeLanguageSpecificImports = async (): Promise<void> => {
+    normalizeGoImports();
+    await appendJavaTextImports();
+  };
 
   if (resolvedSup.id === "python") {
     const pySrc = stripPythonCommentsAndStrings(resolvedSource);
@@ -2668,13 +2765,33 @@ export async function collectImportsForFile(
             });
           }
           if (caps["ns"]) {
-            imports.push({
-              kind: "namespace",
-              localNS: caps["ns"]!.text,
-              from,
-              resolved,
-              typeOnly,
-            });
+            if (resolvedSup.id === "go") {
+              const alias = parseGoImportAlias(stmtText);
+              if (alias === ".") {
+                imports.push({
+                  kind: "star",
+                  from,
+                  resolved,
+                  typeOnly,
+                });
+              } else if (alias !== "_") {
+                imports.push({
+                  kind: "namespace",
+                  localNS: alias ?? caps["ns"]!.text,
+                  from,
+                  resolved,
+                  typeOnly,
+                });
+              }
+            } else {
+              imports.push({
+                kind: "namespace",
+                localNS: caps["ns"]!.text,
+                from,
+                resolved,
+                typeOnly,
+              });
+            }
           }
 
           const inames = capturesNamed(match, "iname");
@@ -2733,9 +2850,21 @@ export async function collectImportsForFile(
               imports.push({ kind: "star", from, resolved });
             } else if (resolvedSup.id === "go") {
               if (caps["alias"]) {
+                const alias = caps["alias"]!.text;
+                if (alias === ".") {
+                  imports.push({
+                    kind: "star",
+                    from,
+                    resolved,
+                  });
+                  continue;
+                }
+                if (alias === "_") {
+                  continue;
+                }
                 imports.push({
                   kind: "namespace",
-                  localNS: caps["alias"]!.text,
+                  localNS: alias,
                   from,
                   resolved,
                 });
@@ -2820,6 +2949,7 @@ export async function collectImportsForFile(
             }
           }
       }
+      await finalizeLanguageSpecificImports();
       if (imports.length > 0) return imports;
     } catch {
       imports.length = 0;
@@ -2852,6 +2982,7 @@ export async function collectImportsForFile(
         } catch {
           await runFallback();
           ranFallback = true;
+          await finalizeLanguageSpecificImports();
           return imports;
         }
       }
@@ -2928,13 +3059,33 @@ export async function collectImportsForFile(
         }
         if (caps["ns"]) {
           const nsName = sliceText(caps["ns"].node, source);
-          imports.push({
-            kind: "namespace",
-            localNS: nsName,
-            from: fromValue,
-            resolved,
-            typeOnly,
-          });
+          if (resolvedSup.id === "go") {
+            const alias = parseGoImportAlias(stmtText);
+            if (alias === ".") {
+              imports.push({
+                kind: "star",
+                from: fromValue,
+                resolved,
+                typeOnly,
+              });
+            } else if (alias !== "_") {
+              imports.push({
+                kind: "namespace",
+                localNS: alias ?? nsName,
+                from: fromValue,
+                resolved,
+                typeOnly,
+              });
+            }
+          } else {
+            imports.push({
+              kind: "namespace",
+              localNS: nsName,
+              from: fromValue,
+              resolved,
+              typeOnly,
+            });
+          }
         }
         const inames = m.captures.filter(
           (c: Parser.QueryCapture) => c.name === "iname",
@@ -3024,6 +3175,17 @@ export async function collectImportsForFile(
             const aliasNode = caps["alias"];
             if (aliasNode) {
               const alias = sliceText(aliasNode.node, source);
+              if (alias === ".") {
+                imports.push({
+                  kind: "star",
+                  from: fromValue,
+                  resolved,
+                });
+                continue;
+              }
+              if (alias === "_") {
+                continue;
+              }
               imports.push({
                 kind: "namespace",
                 localNS: alias,
@@ -3136,9 +3298,11 @@ export async function collectImportsForFile(
       await runFallback();
       ranFallback = true;
     }
+    await finalizeLanguageSpecificImports();
     // Only run fallback when query path produced no results
     if (!ranFallback && imports.length === 0) {
       await runFallback();
+      await finalizeLanguageSpecificImports();
     }
     return imports;
   } finally {
@@ -4727,13 +4891,33 @@ export async function goToDefinition(
         }
         if (subObj && subProp) {
           const base = await resolveExpression(subObj);
+          const memberName = sliceText(subProp, source);
           if (base?.kind === "namespace") {
-            const memberName = sliceText(subProp, source);
             const hit = resolveExport(index, base.file, memberName);
             return hit;
           } else if (base?.kind === "resolved") {
-            // Handled by the language-specific member logic below for classes/structs
+            if (sup.id === "java" || sup.id === "ruby") {
+              const localHit = resolveExport(index, base.def.file, memberName);
+              if (localHit) return localHit;
+            }
             return null;
+          }
+        }
+      }
+      if (
+        sup.id === "java" &&
+        (expr.type === "scoped_identifier" || expr.type === "scoped_type_identifier")
+      ) {
+        const subObj = expr.childForFieldName("scope") ?? expr.child(0);
+        const subProp = expr.childForFieldName("name") ?? expr.child(2);
+        if (subObj && subProp) {
+          const base = await resolveExpression(subObj);
+          const memberName = sliceText(subProp, source);
+          if (base?.kind === "namespace") {
+            return resolveExport(index, base.file, memberName);
+          }
+          if (base?.kind === "resolved") {
+            return resolveExport(index, base.def.file, memberName);
           }
         }
       }
@@ -5612,6 +5796,34 @@ export async function findReferences(
   if (!exportedNames.length) exportedNames.push(def.localName);
 
   const exportedNameSet = new Set(exportedNames);
+  const collectNamedNodeReferences = async (
+    fileId: string,
+    symbolName: string,
+  ): Promise<Range[]> => {
+    const parsedEntry = index.parsed?.get(fileId);
+    const parsed = await ensureParsedContext(fileId, parsedEntry);
+    const identifierTypes = new Set<string>([
+      ...parsed.sup.nodeTypes.identifier,
+      ...(parsed.sup.nodeTypes.propertyIdentifier ?? []),
+      "constant",
+      "type_identifier",
+      "field_identifier",
+    ]);
+    const matches: Range[] = [];
+    const walk = (node: Parser.SyntaxNode) => {
+      if (
+        identifierTypes.has(node.type) &&
+        sliceText(node, parsed.source) === symbolName
+      ) {
+        matches.push(toRange(node));
+      }
+      for (const child of node.namedChildren) {
+        walk(child);
+      }
+    };
+    walk(parsed.tree.rootNode);
+    return matches;
+  };
   const getCandidateReferenceNames = (module: ModuleIndex): string[] => {
     const names = new Set<string>();
     let hasDirectImport = false;
@@ -5703,7 +5915,19 @@ export async function findReferences(
               via: { import: imp, namespaceMember: member },
             });
         } else {
-          if (imp.kind === "star") continue;
+          if (imp.kind === "star") {
+            const res = resolveImported(index, imp, name);
+            const matchesDef =
+              !!res &&
+              !("namespace" in res) &&
+              sameDef(res, def);
+            if (!matchesDef) continue;
+            const ranges = await collectNamedNodeReferences(f, name);
+            for (const range of ranges) {
+              refs.push({ file: f, range, via: { import: imp } });
+            }
+            continue;
+          }
           const exported =
             imp.kind === "named"
               ? imp.imported

@@ -232,12 +232,13 @@ describe('Go to Definition', () => {
       await testGoToDefinition(index, aliasFile, 9, 24, utilsFile, 9);
     });
 
-    it('should not resolve dot-imported constructors yet', async () => {
+    it('should find definition of dot-imported constructor', async () => {
       const index = await createTestIndex('go');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'go');
       const dotImportFile = path.join(samplePath, 'dot-imports.go').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'utils.go').replace(/\\/g, '/');
 
-      await testGoToDefinition(index, dotImportFile, 9, 15, undefined, undefined, 'not_found');
+      await testGoToDefinition(index, dotImportFile, 9, 15, utilsFile, 13);
     });
   });
 
@@ -405,12 +406,13 @@ describe('Go to Definition', () => {
       await testGoToDefinition(index, mainFile, 9, 15, utilsFile, 5);
     });
 
-    it('should not resolve wildcard-imported nested types yet', async () => {
+    it('should find definition of wildcard-imported nested type', async () => {
       const index = await createTestIndex('java');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'java');
       const wildcardFile = path.join(samplePath, 'WildcardImports.java').replace(/\\/g, '/');
+      const packageFile = path.join(samplePath, 'pkg', 'PackageTypes.java').replace(/\\/g, '/');
 
-      await testGoToDefinition(index, wildcardFile, 6, 16, undefined, undefined, 'not_found');
+      await testGoToDefinition(index, wildcardFile, 6, 16, packageFile, 4);
     });
   });
 

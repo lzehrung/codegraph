@@ -307,7 +307,7 @@ nativeDescribe("native semantic parity", () => {
         "java",
         ["WildcardImports.java", "pkg/PackageTypes.java"],
         [{ file: "pkg/PackageTypes.java", names: ["PackageTypes", "NestedValue", "ServiceContract"] }],
-        { file: "WildcardImports.java", line: 6, column: 16, expectedStatus: "not_found" },
+        { file: "WildcardImports.java", line: 6, column: 16, expectedStatus: "ok" },
         { file: "pkg/PackageTypes.java", line: 7, column: 11, expectedStatus: "ok" },
       ),
       sampleExpectation(

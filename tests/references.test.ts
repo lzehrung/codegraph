@@ -377,7 +377,7 @@ describe('Find References', () => {
       expectReferenceAt(result, mainFile, 7);
     });
 
-    it('should currently retain only the wildcard-imported type alias definition anchor', async () => {
+    it('should find wildcard-imported references to type aliases', async () => {
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'kotlin');
       const consumerFile = path.join(samplePath, 'TypeConsumers.kt').replace(/\\/g, '/');
       const moreTypesFile = path.join(samplePath, 'utils', 'MoreTypes.kt').replace(/\\/g, '/');
@@ -388,8 +388,9 @@ describe('Find References', () => {
         helperFile,
       ]);
 
-      const result = await testFindReferences(index, moreTypesFile, 3, 11, 1);
+      const result = await testFindReferences(index, moreTypesFile, 3, 11, 2);
       expectReferenceAt(result, moreTypesFile, 3);
+      expectReferenceAt(result, consumerFile, 3);
     });
   });
 
@@ -470,13 +471,15 @@ describe('Find References', () => {
   });
 
   describe('Java', () => {
-    it('should currently retain only the wildcard-imported interface definition anchor', async () => {
+    it('should find references to wildcard-imported interfaces', async () => {
       const index = await createTestIndex('java');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'java');
       const packageFile = path.join(samplePath, 'pkg', 'PackageTypes.java').replace(/\\/g, '/');
+      const wildcardFile = path.join(samplePath, 'WildcardImports.java').replace(/\\/g, '/');
 
-      const result = await testFindReferences(index, packageFile, 7, 11, 1);
+      const result = await testFindReferences(index, packageFile, 7, 11, 2);
       expectReferenceAt(result, packageFile, 7);
+      expectReferenceAt(result, wildcardFile, 7);
     });
   });
   describe('Ruby', () => {
@@ -495,13 +498,15 @@ describe('Find References', () => {
       await testFindReferences(index, utilsFile, 4, 10, 2);
     });
 
-    it('should currently retain only the namespaced class definition anchor', async () => {
+    it('should find references to namespaced classes', async () => {
       const index = await createTestIndex('ruby');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'ruby');
       const namespacedFile = path.join(samplePath, 'namespaced.rb').replace(/\\/g, '/');
+      const consumerFile = path.join(samplePath, 'consumer.rb').replace(/\\/g, '/');
 
-      const result = await testFindReferences(index, namespacedFile, 5, 11, 1);
+      const result = await testFindReferences(index, namespacedFile, 5, 11, 2);
       expectReferenceAt(result, namespacedFile, 5);
+      expectReferenceAt(result, consumerFile, 3);
     });
   });
 
