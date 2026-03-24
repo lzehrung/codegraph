@@ -143,7 +143,11 @@ export async function analyzeImpact(
 
         if (refs.status === "ok") {
           let keptRefs = 0;
-          for (let refIndex = 0; refIndex < refs.references.length; refIndex += 1) {
+          for (
+            let refIndex = 0;
+            refIndex < refs.references.length;
+            refIndex += 1
+          ) {
             const ref = refs.references[refIndex]!;
             if (diagnostics) diagnostics.refsScanned += 1;
             if (!includeTests && isTestFilePath(ref.file, patternMatchers)) {
@@ -156,7 +160,8 @@ export async function analyzeImpact(
             }
             if (keptRefs >= maxRefs) {
               if (diagnostics) {
-                diagnostics.refsDroppedByMaxRefs += refs.references.length - refIndex;
+                diagnostics.refsDroppedByMaxRefs +=
+                  refs.references.length - refIndex;
               }
               break;
             }
@@ -283,7 +288,6 @@ export async function analyzeImpact(
   return Array.from(impacted.values()).sort((a, b) => b.severity - a.severity);
 }
 
-
 function getDependentFiles(
   index: ProjectIndex,
   filePath: FileId,
@@ -334,7 +338,8 @@ export function seedTransitiveFromFiles(
       }
 
       for (const dependent of dependents) {
-        if (!includeTests && isTestFilePath(dependent, patternMatchers)) continue;
+        if (!includeTests && isTestFilePath(dependent, patternMatchers))
+          continue;
         if (impacted.has(dependent) || isIgnored(dependent)) continue;
 
         impacted.set(dependent, {
@@ -359,7 +364,11 @@ export function seedTransitiveFromFiles(
           : [fileChange.path];
       const dependentSet = new Set<FileId>();
       for (const lookupPath of lookupPaths) {
-        for (const dependent of getDependentFiles(index, lookupPath, reverseDeps)) {
+        for (const dependent of getDependentFiles(
+          index,
+          lookupPath,
+          reverseDeps,
+        )) {
           dependentSet.add(dependent);
         }
       }
@@ -369,7 +378,8 @@ export function seedTransitiveFromFiles(
       }
 
       for (const dependent of dependents) {
-        if (!includeTests && isTestFilePath(dependent, patternMatchers)) continue;
+        if (!includeTests && isTestFilePath(dependent, patternMatchers))
+          continue;
         if (impacted.has(dependent) || isIgnored(dependent)) continue;
 
         const hints = ["fileDeleted"];
@@ -433,7 +443,8 @@ function analyzeTransitiveImpact(
       const dependentFile = edge.from;
       if (
         visited.has(dependentFile) ||
-        (!options.includeTests && isTestFilePath(dependentFile, patternMatchers)) ||
+        (!options.includeTests &&
+          isTestFilePath(dependentFile, patternMatchers)) ||
         isIgnored(dependentFile)
       )
         continue;
@@ -452,7 +463,9 @@ function analyzeTransitiveImpact(
         0.2,
         Math.min(
           1,
-          upstreamConfidence * (edge.typeOnly ? 0.75 : 0.85) * Math.pow(0.95, depth),
+          upstreamConfidence *
+            (edge.typeOnly ? 0.75 : 0.85) *
+            Math.pow(0.95, depth),
         ),
       );
 

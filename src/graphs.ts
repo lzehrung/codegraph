@@ -512,9 +512,7 @@ export async function collectEdgesForFile(
     src = prep.source;
     const fastRegexDisabled = opts.fastRegexDisabledLanguages?.includes(sup.id);
     const shouldSkipNativeForFastGraph =
-      !!opts.fast &&
-      (sup.id === "ts" || sup.id === "js") &&
-      !fastRegexDisabled;
+      !!opts.fast && (sup.id === "ts" || sup.id === "js") && !fastRegexDisabled;
     if (!shouldSkipNativeForFastGraph) {
       const nativeExecution = getNativeQueryExecution(src, sup);
       nativeQueries = nativeExecution.results;

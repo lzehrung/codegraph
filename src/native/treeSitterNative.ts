@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import type { LanguageSupport } from "../languages.js";
 import type { NativeQueryKind } from "../languages/types.js";
+import { stringifyUnknown } from "../util.js";
 
 export const NATIVE_QUERY_KINDS: NativeQueryKind[] = [
   "imports",
@@ -88,7 +89,9 @@ function loadBinding():
   if (isNativeTreeSitterDisabledByEnv()) {
     bindingState = {
       loaded: false,
-      error: new Error("native tree-sitter disabled by CODEGRAPH_DISABLE_NATIVE"),
+      error: new Error(
+        "native tree-sitter disabled by CODEGRAPH_DISABLE_NATIVE",
+      ),
     };
     return bindingState;
   }
@@ -140,7 +143,10 @@ export function getNativeQueryMetadataForSupport(support: LanguageSupport): {
       continue;
     }
     normalizedQueryKinds.push(kind);
-    if (originalQuery.trim().length > 0 && normalizedQuery.trim().length === 0) {
+    if (
+      originalQuery.trim().length > 0 &&
+      normalizedQuery.trim().length === 0
+    ) {
       skippedQueryKinds.push(kind);
     }
   }
@@ -190,7 +196,7 @@ export function getNativeQueryExecutionForState(
             error:
               state.error instanceof Error
                 ? state.error.message
-                : String(state.error),
+                : stringifyUnknown(state.error),
           }
         : {}),
     };
