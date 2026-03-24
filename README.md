@@ -44,15 +44,15 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * Captures docstrings (leading comments), line spans, and a lightweight complexity heuristic for symbols
   * Works across JS/TS, Python, Go, Java, C#, Ruby, Rust, and Vue/Svelte script blocks with consistent scope handling
 * **Go to definition**
-  * Cross-file navigation for all supported languages
+  * Cross-file navigation through one shared pipeline across supported languages
   * TS/JS: Re-exports, namespace imports, CommonJS destructuring
   * Python: Module imports, `__all__` exports, relative imports
-  * Go/Java/C#/Ruby/Rust: Package members and namespace lookups flow through the same resolver
+  * Go/Java/C#/Ruby/Rust/C/C++/Kotlin/Swift: Package, header, and namespace lookups flow through the same shared resolver
 * **Find references**
   * Project-wide scanning with lexical scope awareness
   * TS/JS: Namespace members, re-exports, CommonJS patterns
   * Python: Module imports, `__all__` exports, relative imports
-  * Go/Java/C#/Ruby/Rust: Collects import bindings and usages within packages
+  * Go/Java/C#/Ruby/Rust/C/C++/Kotlin/Swift: Collects bindings and usages through the same shared reference pipeline
 * **AST grep**
   * Run arbitrary Tree-sitter queries across the repo
 * **Agent query helpers**
@@ -96,7 +96,7 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * Text file chunking for JSON/YAML/config files
   * Configurable token budgets (150-400 tokens per chunk)
   * Semantic awareness: classes, functions, methods, interfaces, namespaces, imports
-* **Cross-language parity**: All supported languages share the same go-to-definition and find-references pipeline, so navigation works the same way everywhere.
+* **Cross-language parity**: All supported languages share the same go-to-definition and find-references pipeline; see [docs/language-parity.md](./docs/language-parity.md) for the current per-language matrix.
 
 ---
 
@@ -113,11 +113,11 @@ Sample graph: [sample-graph.md](./sample-graph.md)
 * **Swift** (`.swift`)
 * **C** (`.c`)
 * **C++** (`.cpp`)
-* **Vue / Svelte SFCs** (`.vue`, `.svelte`) — script blocks are parsed with the JS/TS pipeline, so dependency graphs and go-to-definition work across components.
+* **Vue / Svelte SFCs** (`.vue`, `.svelte`) - script blocks are parsed with the JS/TS pipeline for dependency graphs and chunking, while semantic navigation remains intentionally limited.
 
-Each listed language (including Vue/Svelte script sections) has the same dependency-graph, go-to-definition, and find-references support.
+Each listed language participates in the same shared indexing and navigation pipeline.
 When the optional native addon is available, all listed source languages use the same native Tree-sitter runtime and query model; unsupported capabilities still fall back through the shared JS path where needed.
-The regression suite covers deeper syntax variants too, including aliased and static imports, nested types, traits and protocols, typedefs and aliases, and Vue/Svelte script variants.
+The regression suite covers deeper syntax variants and end-to-end native semantic parity for the source-language fixture set, plus graph/specifier parity for the graph-first product types.
 See the coverage matrix in [docs/language-parity.md](./docs/language-parity.md).
 
 **Project files**: project manifests like package.json, pyproject.toml, pom.xml, build.gradle, requirements.txt, .sln, .idea, etc. See [docs/language-parity.md](./docs/language-parity.md) for more details.
@@ -1126,7 +1126,7 @@ const report = await analyzeImpactFromDiff(root, index, {
 });
 
 if (report.warning) {
-  console.warn(`⚠️ Impact Warning: ${report.warning}`);
+  console.warn(`Impact Warning: ${report.warning}`);
 }
 
 console.log(`Changed symbols: ${report.changedSymbols.length}`);
@@ -1436,7 +1436,7 @@ Yes. It walks the tree, ignores `node_modules`, virtualenv caches, builds a **si
 Yes, for JS/TS. `resolveExport` recursively follows `export * from` and `export { name } from`.
 
 **Q: How "accurate" is find-references?**
-It uses a **lexical scope index** (module → function → block) and recorded bindings. It's resilient for common patterns and avoids many false positives, but avoids heavy type-checking: perfect for an agent loop foundation.
+It uses a **lexical scope index** (module -> function -> block) and recorded bindings. It's resilient for common patterns and avoids many false positives, but avoids heavy type-checking: perfect for an agent loop foundation.
 
 **Q: Does it support CommonJS destructuring?**
 Yes. Both `const { helperFunction } = require('./module')` and `const { helperFunction: alias } = require('./module')` are fully supported.

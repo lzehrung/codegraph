@@ -42,6 +42,14 @@ const definition: LanguageTestDefinition = {
         from: "App.svelte",
         to: { type: "file", path: "Widget.svelte" },
       },
+      {
+        from: "TypeScriptWidget.svelte",
+        to: { type: "file", path: "Widget.svelte" },
+      },
+      {
+        from: "TypeScriptWidget.svelte",
+        to: { type: "file", path: "logic.ts" },
+      },
     ],
   },
 };

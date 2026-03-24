@@ -403,7 +403,7 @@ const definitions: LanguageTestDefinition[] = [
         {
           name: "go to definition resolves helperFunction",
           file: "main.kt",
-          line: 5,
+          line: 6,
           column: 15,
           expectedDefinition: { file: "utils/helperFunction.kt", line: 3 },
         },

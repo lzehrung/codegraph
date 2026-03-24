@@ -9,7 +9,7 @@ This document is the execution plan for hardening and extending Codegraph's shar
 
 `Piscina` is intentionally isolated into its own workstream so performance experiments cannot destabilize correctness and maintainability work.
 
-For the follow-on work that equalizes language-support depth, adds end-to-end native semantic parity, and expands Rust-side language smoke coverage, see [language-support-hardening-plan.md](./language-support-hardening-plan.md).
+The follow-on language-support and parity work from this plan has been completed and is now reflected directly in [language-parity.md](./language-parity.md) and [scenario-catalog.md](./scenario-catalog.md).
 
 ---
 

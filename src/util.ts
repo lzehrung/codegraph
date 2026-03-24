@@ -1593,6 +1593,21 @@ type GoModuleInfo = {
   replacements: Map<string, string>;
 };
 
+type KotlinSymbolIndexEntry = {
+  packageName: string | null;
+  symbols: Set<string>;
+};
+
+type JavaSymbolIndexEntry = {
+  packageName: string | null;
+  symbols: Set<string>;
+};
+
+const kotlinImportResolutionCache = new Map<string, string | null>();
+const kotlinSymbolIndexCache = new Map<string, KotlinSymbolIndexEntry>();
+const javaImportResolutionCache = new Map<string, string | null>();
+const javaSymbolIndexCache = new Map<string, JavaSymbolIndexEntry>();
+
 function stripInlineComment(line: string): string {
   const idx = line.indexOf("//");
   return idx === -1 ? line.trim() : line.slice(0, idx).trim();
@@ -1785,6 +1800,164 @@ export async function resolveGoImportPath(
   return null;
 }
 
+async function readKotlinSymbolIndex(
+  filePath: string,
+): Promise<KotlinSymbolIndexEntry> {
+  const cached = kotlinSymbolIndexCache.get(filePath);
+  if (cached) return cached;
+
+  const source = await fsp.readFile(filePath, "utf8");
+  const packageName =
+    source.match(/^\s*package\s+([A-Za-z_][\w.]*)/m)?.[1] ?? null;
+  const symbols = new Set<string>();
+  const declarationPattern =
+    /\b(?:class|object|fun|typealias|interface)\s+([A-Za-z_][\w]*)\b/g;
+  for (const match of source.matchAll(declarationPattern)) {
+    const symbolName = match[1];
+    if (symbolName) symbols.add(symbolName);
+  }
+
+  const entry = { packageName, symbols };
+  kotlinSymbolIndexCache.set(filePath, entry);
+  return entry;
+}
+
+async function resolveKotlinImportPath(
+  projectRoot: string,
+  spec: string,
+): Promise<string | null> {
+  const cacheKey = `${projectRoot}::${spec}`;
+  const cached = kotlinImportResolutionCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  const parts = spec.split(".").filter(Boolean);
+  if (parts.length < 2) {
+    const packageDir = spec.replace(/\./g, "/");
+    const packageCandidates = await fg([`${packageDir}/**/*.kt`, `${packageDir}/**/*.kts`], {
+      cwd: projectRoot,
+      absolute: true,
+      onlyFiles: true,
+    });
+    for (const candidate of packageCandidates) {
+      try {
+        const indexEntry = await readKotlinSymbolIndex(candidate);
+        if (indexEntry.packageName !== spec) continue;
+        const resolved = path.resolve(candidate);
+        kotlinImportResolutionCache.set(cacheKey, resolved);
+        return resolved;
+      } catch {
+        // Ignore unreadable files and keep searching.
+      }
+    }
+    kotlinImportResolutionCache.set(cacheKey, null);
+    return null;
+  }
+
+  const importedName = parts[parts.length - 1]!;
+  const packageName =
+    importedName === "*"
+      ? parts.slice(0, -1).join(".")
+      : parts.slice(0, -1).join(".");
+  const packageDir = packageName.replace(/\./g, "/");
+  const candidates = await fg([`${packageDir}/**/*.kt`, `${packageDir}/**/*.kts`], {
+    cwd: projectRoot,
+    absolute: true,
+    onlyFiles: true,
+  });
+
+  for (const candidate of candidates) {
+    try {
+      const indexEntry = await readKotlinSymbolIndex(candidate);
+      if (indexEntry.packageName !== packageName) continue;
+      if (importedName !== "*" && !indexEntry.symbols.has(importedName)) continue;
+      const resolved = path.resolve(candidate);
+      kotlinImportResolutionCache.set(cacheKey, resolved);
+      return resolved;
+    } catch {
+      // Ignore unreadable files and keep searching.
+    }
+  }
+
+  kotlinImportResolutionCache.set(cacheKey, null);
+  return null;
+}
+
+async function readJavaSymbolIndex(
+  filePath: string,
+): Promise<JavaSymbolIndexEntry> {
+  const cached = javaSymbolIndexCache.get(filePath);
+  if (cached) return cached;
+
+  const source = await fsp.readFile(filePath, "utf8");
+  const packageName =
+    source.match(/^\s*package\s+([A-Za-z_][\w.]*)\s*;/m)?.[1] ?? null;
+  const symbols = new Set<string>();
+  const declarationPattern =
+    /\b(?:class|interface|enum)\s+([A-Za-z_][\w]*)\b/g;
+  for (const match of source.matchAll(declarationPattern)) {
+    const symbolName = match[1];
+    if (symbolName) symbols.add(symbolName);
+  }
+
+  const entry = { packageName, symbols };
+  javaSymbolIndexCache.set(filePath, entry);
+  return entry;
+}
+
+async function resolveJavaImportPath(
+  projectRoot: string,
+  spec: string,
+): Promise<string | null> {
+  const cacheKey = `${projectRoot}::${spec}`;
+  const cached = javaImportResolutionCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  const parts = spec.split(".").filter(Boolean);
+  if (parts.length < 2) {
+    javaImportResolutionCache.set(cacheKey, null);
+    return null;
+  }
+
+  const allCandidates = await fg(["**/*.java"], {
+    cwd: projectRoot,
+    absolute: true,
+    onlyFiles: true,
+  });
+  for (const candidate of allCandidates) {
+    try {
+      const indexEntry = await readJavaSymbolIndex(candidate);
+      if (indexEntry.packageName !== spec) continue;
+      const resolved = path.resolve(candidate);
+      javaImportResolutionCache.set(cacheKey, resolved);
+      return resolved;
+    } catch {
+      // Ignore unreadable files and keep searching.
+    }
+  }
+
+  const importedName = parts[parts.length - 1]!;
+  const packageName =
+    importedName === "*"
+      ? parts.slice(0, -1).join(".")
+      : parts.slice(0, -1).join(".");
+
+  for (const candidate of allCandidates) {
+    try {
+      const indexEntry = await readJavaSymbolIndex(candidate);
+      if (indexEntry.packageName !== packageName) continue;
+      if (importedName !== "*" && !indexEntry.symbols.has(importedName)) continue;
+      const resolved = path.resolve(candidate);
+      javaImportResolutionCache.set(cacheKey, resolved);
+      return resolved;
+    } catch {
+      // Ignore unreadable files and keep searching.
+    }
+  }
+
+  javaImportResolutionCache.set(cacheKey, null);
+  return null;
+}
+
 export async function resolveImportSpecifier(
   projectRoot: string,
   fromFile: string,
@@ -1800,6 +1973,14 @@ export async function resolveImportSpecifier(
   if (languageId === "go") {
     const goResolved = await resolveGoImportPath(projectRoot, fromFile, spec);
     if (goResolved) return goResolved;
+  }
+  if (languageId === "kotlin") {
+    const kotlinResolved = await resolveKotlinImportPath(projectRoot, spec);
+    if (kotlinResolved) return kotlinResolved;
+  }
+  if (languageId === "java") {
+    const javaResolved = await resolveJavaImportPath(projectRoot, spec);
+    if (javaResolved) return javaResolved;
   }
 
   return resolveSpecifier(
