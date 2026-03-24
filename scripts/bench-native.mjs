@@ -5,9 +5,11 @@ import process from "node:process";
 import { performance } from "node:perf_hooks";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import crypto from "node:crypto";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const distEntry = path.join(rootDir, "dist", "index.js");
+const baselinesDir = path.join(rootDir, ".bench-baselines");
 
 const FIXTURE_ROOTS = {
   typescript: path.join(rootDir, "tests", "samples", "typescript"),
@@ -34,6 +36,8 @@ function parseArgs(argv) {
     temperatures: [...DEFAULT_TEMPERATURES],
     json: false,
     maxSlowdown: 0,
+    saveBaseline: "",
+    compareBaseline: "",
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -131,6 +135,24 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (arg.startsWith("--save-baseline=")) {
+      options.saveBaseline = arg.slice("--save-baseline=".length).trim();
+      continue;
+    }
+    if (arg === "--save-baseline") {
+      options.saveBaseline = (argv[index + 1] ?? "").trim();
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--compare-baseline=")) {
+      options.compareBaseline = arg.slice("--compare-baseline=".length).trim();
+      continue;
+    }
+    if (arg === "--compare-baseline") {
+      options.compareBaseline = (argv[index + 1] ?? "").trim();
+      index += 1;
+      continue;
+    }
   }
 
   if (!Number.isFinite(options.runs) || options.runs < 1) {
@@ -161,6 +183,31 @@ function assertFixtureNames(fixtures) {
       throw new Error(
         `Unknown fixture '${fixture}'. Expected one of: ${Object.keys(FIXTURE_ROOTS).join(", ")}`,
       );
+    }
+  }
+}
+
+/**
+ * Retry-aware rmSync for Windows: sqlite WAL/SHM files and temp-cache
+ * directories can briefly hold file handles after db.close().
+ * Retries up to 3 times with a short delay on EBUSY/EPERM/EACCES.
+ */
+function robustRmSync(dir, retries = 3, delayMs = 200) {
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = error && typeof error === "object" ? error.code : "";
+      const isRetryable = code === "EBUSY" || code === "EPERM" || code === "EACCES";
+      if (!isRetryable || attempt === retries) {
+        throw error;
+      }
+      // Synchronous delay — acceptable here since bench is not latency-critical
+      const start = Date.now();
+      while (Date.now() - start < delayMs) {
+        // spin
+      }
     }
   }
 }
@@ -242,9 +289,20 @@ function summarizeRuns(runs) {
   };
 }
 
+function formatSpeedup(nativeMs, jsMs) {
+  if (jsMs <= 0 || nativeMs <= 0) return "n/a";
+  const ratio = nativeMs / jsMs;
+  if (ratio < 1) {
+    return `${(1 / ratio).toFixed(2)}x faster`;
+  }
+  return `${ratio.toFixed(2)}x slower`;
+}
+
 function formatSummary(results) {
   const lines = [
-    "Fixture      Workload Temp  Mode    Measure Avg ms  Fastest  Slowest  Files  Nodes   Files/s  Native used/fallback",
+    "",
+    "Fixture      Workload Temp  Mode    Measure Avg ms  Fastest  Slowest  Files  Nodes   Files/s  Native used/fb  Speedup",
+    "-".repeat(130),
   ];
   for (const result of results) {
     for (const workload of Object.keys(result.workloads)) {
@@ -253,6 +311,8 @@ function formatSummary(results) {
       for (const temperature of Object.keys(workloadResult)) {
         const temperatureResult = workloadResult[temperature];
         if (!temperatureResult) continue;
+        const nativeSummary = temperatureResult.native;
+        const jsSummary = temperatureResult.js;
         for (const mode of ["native", "js"]) {
           const summary = temperatureResult[mode];
           if (!summary) continue;
@@ -260,6 +320,10 @@ function formatSummary(results) {
           const backendSummary = backend
             ? `${backend.filesUsed}/${backend.filesFellBack}`
             : "n/a";
+          const speedup =
+            mode === "native" && nativeSummary && jsSummary
+              ? formatSpeedup(nativeSummary.averageElapsedMs, jsSummary.averageElapsedMs)
+              : "";
           lines.push(
             [
               result.fixture.padEnd(12),
@@ -273,20 +337,130 @@ function formatSummary(results) {
               String(summary.filesIndexed).padStart(6),
               String(summary.graphNodeCount ?? summary.filesIndexed).padStart(6),
               String(summary.filesPerSecond.toFixed(1)).padStart(8),
-              backendSummary.padStart(20),
+              backendSummary.padStart(15),
+              speedup.padStart(14),
             ].join(" "),
           );
         }
       }
     }
   }
+  lines.push("");
   return lines.join("\n");
 }
 
+function formatBaselineComparison(current, baseline) {
+  const lines = [
+    "",
+    `Comparing against baseline: ${baseline._meta?.name ?? "unknown"}`,
+    `  Baseline date: ${baseline._meta?.date ?? "unknown"}`,
+    `  Baseline runs: ${baseline._meta?.runs ?? "?"}`,
+    "",
+    "Fixture      Workload Temp  Mode      Current    Baseline     Delta",
+    "-".repeat(80),
+  ];
+
+  const baselineByKey = new Map();
+  for (const result of baseline.results ?? []) {
+    for (const workload of Object.keys(result.workloads ?? {})) {
+      for (const temperature of Object.keys(result.workloads[workload] ?? {})) {
+        for (const mode of ["native", "js"]) {
+          const summary = result.workloads[workload]?.[temperature]?.[mode];
+          if (!summary) continue;
+          baselineByKey.set(
+            `${result.fixture}/${workload}/${temperature}/${mode}`,
+            summary,
+          );
+        }
+      }
+    }
+  }
+
+  for (const result of current) {
+    for (const workload of Object.keys(result.workloads)) {
+      for (const temperature of Object.keys(result.workloads[workload] ?? {})) {
+        for (const mode of ["native", "js"]) {
+          const summary = result.workloads[workload]?.[temperature]?.[mode];
+          if (!summary) continue;
+          const key = `${result.fixture}/${workload}/${temperature}/${mode}`;
+          const base = baselineByKey.get(key);
+          const currentMs = Math.round(summary.averageElapsedMs);
+          if (!base) {
+            lines.push(
+              [
+                result.fixture.padEnd(12),
+                workload.padEnd(8),
+                temperature.padEnd(5),
+                mode.padEnd(7),
+                `${currentMs}ms`.padStart(10),
+                "---".padStart(11),
+                "(no baseline)".padStart(12),
+              ].join(" "),
+            );
+            continue;
+          }
+          const baseMs = Math.round(base.averageElapsedMs);
+          const deltaMs = currentMs - baseMs;
+          const deltaPct = baseMs > 0 ? ((deltaMs / baseMs) * 100).toFixed(1) : "n/a";
+          const sign = deltaMs > 0 ? "+" : "";
+          const indicator = deltaMs < 0 ? " (improved)" : deltaMs > 0 ? " (regressed)" : "";
+          lines.push(
+            [
+              result.fixture.padEnd(12),
+              workload.padEnd(8),
+              temperature.padEnd(5),
+              mode.padEnd(7),
+              `${currentMs}ms`.padStart(10),
+              `${baseMs}ms`.padStart(11),
+              `${sign}${deltaMs}ms (${sign}${deltaPct}%)${indicator}`.padStart(12),
+            ].join(" "),
+          );
+        }
+      }
+    }
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
+function saveBaseline(name, runs, results) {
+  fs.mkdirSync(baselinesDir, { recursive: true });
+  const safeName = name.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const filePath = path.join(baselinesDir, `${safeName}.json`);
+  const payload = {
+    _meta: {
+      name,
+      date: new Date().toISOString(),
+      runs,
+      node: process.version,
+      platform: process.platform,
+      arch: process.arch,
+    },
+    results,
+  };
+  fs.writeFileSync(filePath, JSON.stringify(payload, null, 2) + "\n", "utf8");
+  return filePath;
+}
+
+function loadBaseline(name) {
+  const safeName = name.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const filePath = path.join(baselinesDir, `${safeName}.json`);
+  if (!fs.existsSync(filePath)) {
+    throw new Error(
+      `Baseline '${name}' not found at ${filePath}. Save one first with --save-baseline=${name}`,
+    );
+  }
+  return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+/**
+ * Build a process-isolated cache directory. Uses a short random suffix
+ * so concurrent benchmark runs on the same machine never collide.
+ */
 function benchmarkCacheDir(fixture, workload, temperature, mode) {
   return path.join(
     os.tmpdir(),
-    "codegraph-native-bench",
+    `codegraph-bench-${process.pid}`,
     fixture,
     workload,
     temperature,
@@ -345,6 +519,11 @@ async function runParentBenchmark(options) {
     }
   }
 
+  if (options.saveBaseline) {
+    const filePath = saveBaseline(options.saveBaseline, options.runs, results);
+    process.stderr.write(`Baseline saved: ${filePath}\n`);
+  }
+
   if (options.json) {
     process.stdout.write(
       `${JSON.stringify(
@@ -363,7 +542,13 @@ async function runParentBenchmark(options) {
     );
     return;
   }
+
   process.stdout.write(`${formatSummary(results)}\n`);
+
+  if (options.compareBaseline) {
+    const baseline = loadBaseline(options.compareBaseline);
+    process.stdout.write(`${formatBaselineComparison(results, baseline)}\n`);
+  }
 }
 
 async function runSingleBenchmarkChild(options) {
@@ -389,9 +574,9 @@ async function runSingleBenchmarkChild(options) {
     options.mode,
   );
   if (temperature === "cold") {
-    fs.rmSync(cacheDir, { recursive: true, force: true });
+    robustRmSync(cacheDir);
   } else {
-    fs.rmSync(cacheDir, { recursive: true, force: true });
+    robustRmSync(cacheDir);
     fs.mkdirSync(cacheDir, { recursive: true });
   }
   const start = performance.now();

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import {
   buildProjectIndex,
   buildProjectIndexFromFiles,
@@ -11,7 +11,6 @@ import {
 } from '../src/index.js';
 import * as indexer from '../src/indexer.js';
 
-const tsxCommand = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -30,75 +29,10 @@ function runGit(root: string, args: string[]): string {
   return result.stdout.trim();
 }
 
-function runCliCommand(args: string[], input?: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(tsxCommand, ['tsx', 'src/cli.ts', ...args], {
-      cwd: process.cwd(),
-      shell: true,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
-    if (input) child.stdin.write(input);
-    child.stdin.end();
-
-    child.on('error', reject);
-    child.on('exit', (code) => {
-      if (code !== 0) {
-        reject(new Error(`codegraph CLI failed (${code}). stderr:\n${stderr}`));
-        return;
-      }
-      resolve(stdout);
-    });
-  });
-}
-
 function normalize(file: string): string {
   return file.replace(/\\/g, '/');
 }
 
-const multiLanguageDiff = `diff --git a/rust/main.rs b/rust/main.rs
-index e69de29..4b825dc 100644
---- a/rust/main.rs
-+++ b/rust/main.rs
-@@
- mod utils;
- mod helpers;
- 
- use utils::helper_function;
-+use helpers::helper_from_helpers;
- use helpers::helper_from_helpers;
- 
- fn main() {
-     helper_function();
-     helper_from_helpers();
- }
-diff --git a/java/main.java b/java/main.java
-index e69de29..4b825dc 100644
---- a/java/main.java
-+++ b/java/main.java
-@@
- package main;
- 
- import utils.Utils;
- import helpers.Helpers;
- 
- public class Main {
-   public static void main(String[] args) {
-     Utils.helperFunction();
-     new Utils.UtilityClass();
-     Helpers.helperFromHelpers();
-+    Helpers.helperFromHelpers();
-   }
- }
-`;
 
 describe('Review report', () => {
   it('summarizes changed files and symbols', async () => {
@@ -530,46 +464,6 @@ describe('Review report', () => {
     } finally {
       buildSpy.mockRestore();
     }
-  });
-});
-
-describe('CLI flows', () => {
-  const sampleRoot = path.resolve(process.cwd(), 'tests', 'samples', 'typescript');
-
-  it('emits a file graph by default', async () => {
-    const stdout = await runCliCommand([
-      'graph',
-      '--stdout',
-      '--fast-graph',
-      sampleRoot,
-    ]);
-    const graph = JSON.parse(stdout);
-
-    expect(graph.nodes).toBeInstanceOf(Array);
-    expect(graph.edges).toBeInstanceOf(Array);
-    expect(graph.symbols).toBeUndefined();
-  });
-
-  it('handles raw diffs touching multiple languages', async () => {
-    const root = await mkTmpDir('dg-multi-lang-');
-    const rustDir = path.join(root, 'rust');
-    const javaDir = path.join(root, 'java');
-    await fsp.mkdir(rustDir, { recursive: true });
-    await fsp.mkdir(javaDir, { recursive: true });
-    await fsp.writeFile(path.join(rustDir, 'main.rs'), 'fn main() {}', 'utf8');
-    await fsp.writeFile(path.join(javaDir, 'main.java'), 'public class Main {}', 'utf8');
-
-    const stdout = await runCliCommand([
-      'impact',
-      root,
-      '--provider',
-      'raw',
-    ], multiLanguageDiff);
-    const report = JSON.parse(stdout);
-
-    expect(report.changedFiles.length).toBeGreaterThanOrEqual(2);
-    expect(report.changedFiles.some((entry: any) => entry.file === 'rust/main.rs')).toBe(true);
-    expect(report.changedFiles.some((entry: any) => entry.file === 'java/main.java')).toBe(true);
   });
 });
 

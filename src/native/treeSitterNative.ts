@@ -38,6 +38,20 @@ export type NativeQueryResults = {
   importBindings: NativeMatch[];
 };
 
+export type CompactCapture = {
+  name: string;
+  text: string;
+};
+
+export type CompactMatch = {
+  patternIndex: number;
+  captures: CompactCapture[];
+};
+
+export type CompactQueryResults = {
+  imports: CompactMatch[];
+};
+
 export type NativeQueryExecution = {
   results: NativeQueryResults | null;
   fallbackReason?: "unavailable" | "unsupportedLanguage" | "queryFailure";
@@ -45,6 +59,13 @@ export type NativeQueryExecution = {
 };
 
 export type NativeRuntimeMode = "auto" | "on" | "off";
+
+/**
+ * Controls which query kinds are executed in a native call.
+ * - "imports": only run the imports query (used by graph mode)
+ * - "full": run all query kinds (used by full indexing)
+ */
+export type NativeQueryScope = "imports" | "full";
 
 type NativeBinding = {
   runLanguageQueries: (
@@ -55,6 +76,11 @@ type NativeBinding = {
     localsQuery: string,
     importBindingsQuery: string,
   ) => NativeQueryResults;
+  runImportsQueryCompact?: (
+    source: string,
+    languageId: string,
+    importsQuery: string,
+  ) => CompactQueryResults;
   supportedLanguageIds: () => string[];
 };
 
@@ -146,6 +172,59 @@ export function normalizeNativeQueryForSupport(
   return support.native?.normalizeQuery?.(kind, queryText) ?? queryText;
 }
 
+/**
+ * Per-language cache of normalized query text and modification status.
+ * Normalization is constant for a given (support.id, queryKind) pair,
+ * so we compute it once per language per kind.
+ */
+const normalizedQueryCache = new Map<
+  string,
+  Map<NativeQueryKind, { text: string; wasModified: boolean }>
+>();
+
+function getOrComputeNormalizedEntry(
+  support: LanguageSupport,
+  kind: NativeQueryKind,
+): { text: string; wasModified: boolean } {
+  let byKind = normalizedQueryCache.get(support.id);
+  if (!byKind) {
+    byKind = new Map();
+    normalizedQueryCache.set(support.id, byKind);
+  }
+  let entry = byKind.get(kind);
+  if (!entry) {
+    const original = support.queries[kind];
+    const normalized = normalizeNativeQueryForSupport(support, kind, original);
+    entry = { text: normalized, wasModified: normalized !== original };
+    byKind.set(kind, entry);
+  }
+  return entry;
+}
+
+/**
+ * Returns the normalized query text for the support's own query.
+ * Cached per (support.id, kind) to avoid re-running regex normalization
+ * on every file.
+ */
+export function getCachedNormalizedQuery(
+  support: LanguageSupport,
+  kind: NativeQueryKind,
+): string {
+  return getOrComputeNormalizedEntry(support, kind).text;
+}
+
+/**
+ * Returns true when the native query for this (support, kind) differs from
+ * the original JS query — meaning the language has grammar divergence and
+ * empty native results should NOT be treated as authoritative.
+ */
+export function isNativeQueryModified(
+  support: LanguageSupport,
+  kind: NativeQueryKind,
+): boolean {
+  return getOrComputeNormalizedEntry(support, kind).wasModified;
+}
+
 export function getNativeQueryMetadataForSupport(support: LanguageSupport): {
   normalizedQueryKinds: NativeQueryKind[];
   skippedQueryKinds: NativeQueryKind[];
@@ -154,19 +233,19 @@ export function getNativeQueryMetadataForSupport(support: LanguageSupport): {
   const skippedQueryKinds: NativeQueryKind[] = [];
 
   for (const kind of NATIVE_QUERY_KINDS) {
+    if (!isNativeQueryModified(support, kind)) {
+      continue;
+    }
+    normalizedQueryKinds.push(kind);
     const originalQuery = support.queries[kind];
-    const normalizedQuery = normalizeNativeQueryForSupport(
+    const normalized = normalizeNativeQueryForSupport(
       support,
       kind,
       originalQuery,
     );
-    if (normalizedQuery === originalQuery) {
-      continue;
-    }
-    normalizedQueryKinds.push(kind);
     if (
       originalQuery.trim().length > 0 &&
-      normalizedQuery.trim().length === 0
+      normalized.trim().length === 0
     ) {
       skippedQueryKinds.push(kind);
     }
@@ -212,6 +291,7 @@ export function getNativeQueryExecutionForState(
   source: string,
   support: LanguageSupport,
   state: NativeBindingState = loadBinding(),
+  scope: NativeQueryScope = "full",
 ): NativeQueryExecution {
   if (!state.loaded) {
     return {
@@ -230,31 +310,16 @@ export function getNativeQueryExecutionForState(
   if (!state.supportedLanguageIds.has(support.id)) {
     return { results: null, fallbackReason: "unsupportedLanguage" };
   }
+  const importsOnly = scope === "imports";
   try {
     return {
       results: state.binding.runLanguageQueries(
         source,
         support.id,
-        normalizeNativeQueryForSupport(
-          support,
-          "imports",
-          support.queries.imports,
-        ),
-        normalizeNativeQueryForSupport(
-          support,
-          "exports",
-          support.queries.exports,
-        ),
-        normalizeNativeQueryForSupport(
-          support,
-          "locals",
-          support.queries.locals,
-        ),
-        normalizeNativeQueryForSupport(
-          support,
-          "importBindings",
-          support.queries.importBindings,
-        ),
+        getCachedNormalizedQuery(support, "imports"),
+        importsOnly ? "" : getCachedNormalizedQuery(support, "exports"),
+        importsOnly ? "" : getCachedNormalizedQuery(support, "locals"),
+        importsOnly ? "" : getCachedNormalizedQuery(support, "importBindings"),
       ),
     };
   } catch (error) {
@@ -270,10 +335,77 @@ export function getNativeQueryExecution(
   source: string,
   support: LanguageSupport,
   mode?: NativeRuntimeMode,
+  scope: NativeQueryScope = "full",
 ): NativeQueryExecution {
   return getNativeQueryExecutionForState(
     source,
     support,
     resolveNativeBindingState(mode),
+    scope,
   );
+}
+
+export type CompactImportsExecution = {
+  results: CompactQueryResults | null;
+  fallbackReason?: "unavailable" | "unsupportedLanguage" | "queryFailure";
+  error?: string;
+};
+
+/**
+ * Run only the imports query with a compact payload (name + text only).
+ * Falls back to the full execution path if the compact entrypoint is not
+ * available in the native binding.
+ */
+export function getCompactImportsExecution(
+  source: string,
+  support: LanguageSupport,
+  mode?: NativeRuntimeMode,
+): CompactImportsExecution {
+  const state = resolveNativeBindingState(mode);
+  if (!state.loaded) {
+    return {
+      results: null,
+      fallbackReason: "unavailable",
+      ...(state.error
+        ? {
+            error:
+              state.error instanceof Error
+                ? state.error.message
+                : stringifyUnknown(state.error),
+          }
+        : {}),
+    };
+  }
+  if (!state.supportedLanguageIds.has(support.id)) {
+    return { results: null, fallbackReason: "unsupportedLanguage" };
+  }
+  const importsQuery = getCachedNormalizedQuery(support, "imports");
+  try {
+    if (state.binding.runImportsQueryCompact) {
+      return {
+        results: state.binding.runImportsQueryCompact(
+          source,
+          support.id,
+          importsQuery,
+        ),
+      };
+    }
+    // Fallback: use full execution with imports scope
+    const full = getNativeQueryExecutionForState(source, support, state, "imports");
+    if (!full.results) return full;
+    return {
+      results: {
+        imports: full.results.imports.map((m) => ({
+          patternIndex: m.patternIndex,
+          captures: m.captures.map((c) => ({ name: c.name, text: c.text })),
+        })),
+      },
+    };
+  } catch (error) {
+    return {
+      results: null,
+      fallbackReason: "queryFailure",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }

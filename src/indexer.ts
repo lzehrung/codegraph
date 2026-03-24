@@ -54,6 +54,7 @@ import {
 import type { Edge, Range, FileId, Graph } from "./types.js";
 import {
   getNativeQueryExecution,
+  isNativeQueryModified,
   type NativeRuntimeMode,
   type NativeCapture,
   type NativeQueryResults,
@@ -1478,7 +1479,15 @@ export function collectLocalsAndExportsFromSource(
 
   const nativeQueries = opts?.nativeQueries ?? null;
   let tree: Parser.Tree | null = opts?.tree ?? null;
-  if (!tree) {
+  let treeAttempted = !!tree;
+
+  // Lazily parse the JS tree on first access. This avoids re-parsing files
+  // in JS when native queries already cover the needed data and downstream
+  // logic never touches the tree (e.g. languages where native locals/exports
+  // succeed without needing tree-based enrichment).
+  const ensureTree = (): Parser.Tree | null => {
+    if (tree || treeAttempted) return tree;
+    treeAttempted = true;
     try {
       const key =
         support.id === "python" ? "py" : support.id === "js" ? "js" : "ts";
@@ -1492,7 +1501,8 @@ export function collectLocalsAndExportsFromSource(
     } catch {
       /* parse fallback: ignore */
     }
-  }
+    return tree;
+  };
 
   const locals: SymbolDef[] = [];
   const seenLocals = new Set<string>();
@@ -1532,12 +1542,16 @@ export function collectLocalsAndExportsFromSource(
     if (!nativeQueries) return false;
     if (!QUERY_DRIVEN_LOCALS_LANGUAGES.has(support.id)) return false;
     try {
+      // Lazily get the tree only for enrichment (classification + docstrings).
+      // If the tree was already provided or the language benefits from it, use
+      // it. Otherwise native captures still succeed without tree enrichment.
+      const enrichmentTree = ensureTree();
       for (const match of nativeQueries.locals) {
         for (const capture of match.captures) {
           if (capture.name !== "name" && capture.name !== "tname") continue;
           const nativeRange = rangeFromNativeCapture(capture);
           const node =
-            tree?.rootNode.descendantForIndex(
+            enrichmentTree?.rootNode.descendantForIndex(
               nativeRange.start.index ?? 0,
               nativeRange.end.index ?? 0,
             ) ?? undefined;
@@ -1556,7 +1570,8 @@ export function collectLocalsAndExportsFromSource(
   };
 
   const extractLocalsFromJsQueries = (): boolean => {
-    if (!tree || !support.queries.locals.trim()) return false;
+    const jsTree = ensureTree();
+    if (!jsTree || !support.queries.locals.trim()) return false;
     if (!QUERY_DRIVEN_LOCALS_LANGUAGES.has(support.id)) return false;
     try {
       let q: Parser.Query;
@@ -1565,7 +1580,7 @@ export function collectLocalsAndExportsFromSource(
       } catch {
         q = new Parser.Query(lang, support.queries.locals);
       }
-      for (const m of q.matches(tree.rootNode)) {
+      for (const m of q.matches(jsTree.rootNode)) {
         for (const cap of m.captures) {
           if (cap.name !== "name" && cap.name !== "tname") continue;
           const range = toRange(cap.node);
@@ -1586,26 +1601,28 @@ export function collectLocalsAndExportsFromSource(
 
   const usedNativeLocals = extractLocalsFromNativeQueries();
   const usedQueryLocals = usedNativeLocals || extractLocalsFromJsQueries();
-  if (tree && !usedQueryLocals) {
-    const scopeIdx = buildScopeIndexFromSource(
-      file,
-      source,
-      support,
-      lang,
-      imports,
-      tree ? { tree } : undefined,
-    );
-    for (const b of scopeIdx.all) {
-      if (!b.def) continue;
-      let kind: SymbolKind = SymbolKind.Variable;
-      if (b.kind === "function") kind = SymbolKind.Function;
-      else if (b.kind === "class") kind = SymbolKind.Class;
-      else if (b.kind === "type") kind = SymbolKind.TypeAlias;
-      // Find the node in tree corresponding to b.def range if possible
-      const startIndex = b.def.start.index ?? 0;
-      const endIndex = b.def.end.index ?? 0;
-      const node = tree.rootNode.descendantForIndex(startIndex, endIndex);
-      pushLocal(b.name, kind, b.def, node);
+  if (!usedQueryLocals) {
+    const scopeTree = ensureTree();
+    if (scopeTree) {
+      const scopeIdx = buildScopeIndexFromSource(
+        file,
+        source,
+        support,
+        lang,
+        imports,
+        { tree: scopeTree },
+      );
+      for (const b of scopeIdx.all) {
+        if (!b.def) continue;
+        let kind: SymbolKind = SymbolKind.Variable;
+        if (b.kind === "function") kind = SymbolKind.Function;
+        else if (b.kind === "class") kind = SymbolKind.Class;
+        else if (b.kind === "type") kind = SymbolKind.TypeAlias;
+        const startIndex = b.def.start.index ?? 0;
+        const endIndex = b.def.end.index ?? 0;
+        const node = scopeTree.rootNode.descendantForIndex(startIndex, endIndex);
+        pushLocal(b.name, kind, b.def, node);
+      }
     }
   }
 
@@ -1888,10 +1905,11 @@ export function collectLocalsAndExportsFromSource(
       usedNativeExports = false;
     }
   }
-  if (support.queries.exports.trim() && tree && !usedNativeExports) {
+  const exportTree = !usedNativeExports ? ensureTree() : null;
+  if (support.queries.exports.trim() && exportTree && !usedNativeExports) {
     try {
       const { exports: q } = getCompiledQueries(lang, support);
-      for (const m of q.matches(tree.rootNode)) {
+      for (const m of q.matches(exportTree.rootNode)) {
         const map = Object.fromEntries(
           m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const),
         );
@@ -2961,7 +2979,16 @@ export async function collectImportsForFile(
         }
       }
       await finalizeLanguageSpecificImports();
-      if (imports.length > 0) return imports;
+      // Native succeeded -- treat the result as authoritative even if empty,
+      // but only when the importBindings query was not modified by
+      // normalization. Languages whose importBindings query is normalized
+      // or blanked (e.g. Kotlin) may need the JS/text fallback.
+      if (
+        imports.length > 0 ||
+        !isNativeQueryModified(resolvedSup, "importBindings")
+      ) {
+        return imports;
+      }
     } catch {
       imports.length = 0;
     }

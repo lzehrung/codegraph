@@ -235,3 +235,83 @@ describe('textGrep API', () => {
     expect(hits.every((h) => h.line >= 1 && h.column >= 1)).toBe(true);
   });
 });
+
+const multiLanguageDiff = `diff --git a/rust/main.rs b/rust/main.rs
+index e69de29..4b825dc 100644
+--- a/rust/main.rs
++++ b/rust/main.rs
+@@
+ mod utils;
+ mod helpers;
+
+ use utils::helper_function;
++use helpers::helper_from_helpers;
+ use helpers::helper_from_helpers;
+
+ fn main() {
+     helper_function();
+     helper_from_helpers();
+ }
+diff --git a/java/main.java b/java/main.java
+index e69de29..4b825dc 100644
+--- a/java/main.java
++++ b/java/main.java
+@@
+ package main;
+
+ import utils.Utils;
+ import helpers.Helpers;
+
+ public class Main {
+   public static void main(String[] args) {
+     Utils.helperFunction();
+     new Utils.UtilityClass();
+     Helpers.helperFromHelpers();
++    Helpers.helperFromHelpers();
+   }
+ }
+`;
+
+async function mkTmpDir(prefix: string): Promise<string> {
+  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
+}
+
+describe('CLI flows', () => {
+  const sampleRoot = normalize(path.resolve(process.cwd(), 'tests', 'samples', 'typescript'));
+
+  it('emits a file graph by default', async () => {
+    const stdout = await runCliCommand([
+      'graph',
+      '--stdout',
+      '--fast-graph',
+      sampleRoot,
+    ]);
+    const graph = JSON.parse(stdout);
+
+    expect(graph.nodes).toBeInstanceOf(Array);
+    expect(graph.edges).toBeInstanceOf(Array);
+    expect(graph.symbols).toBeUndefined();
+  });
+
+  it('handles raw diffs touching multiple languages', async () => {
+    const root = await mkTmpDir('dg-multi-lang-');
+    const rustDir = path.join(root, 'rust');
+    const javaDir = path.join(root, 'java');
+    await fsp.mkdir(rustDir, { recursive: true });
+    await fsp.mkdir(javaDir, { recursive: true });
+    await fsp.writeFile(path.join(rustDir, 'main.rs'), 'fn main() {}', 'utf8');
+    await fsp.writeFile(path.join(javaDir, 'main.java'), 'public class Main {}', 'utf8');
+
+    const stdout = await runCliCommand([
+      'impact',
+      root,
+      '--provider',
+      'raw',
+    ], multiLanguageDiff);
+    const report = JSON.parse(stdout);
+
+    expect(report.changedFiles.length).toBeGreaterThanOrEqual(2);
+    expect(report.changedFiles.some((entry: any) => entry.file === 'rust/main.rs')).toBe(true);
+    expect(report.changedFiles.some((entry: any) => entry.file === 'java/main.java')).toBe(true);
+  });
+});
