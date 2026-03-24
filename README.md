@@ -47,12 +47,12 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * Cross-file navigation through one shared pipeline across supported languages
   * TS/JS: Re-exports, namespace imports, CommonJS destructuring
   * Python: Module imports, `__all__` exports, relative imports
-  * Go/Java/C#/Ruby/Rust/C/C++/Kotlin/Swift: Package, header, and namespace lookups flow through the same resolver, with current depth tracked in the parity matrix
+  * Go/Java/C#/Ruby/Rust/C/C++/Kotlin/Swift: Package, header, and namespace lookups flow through the same shared resolver
 * **Find references**
   * Project-wide scanning with lexical scope awareness
   * TS/JS: Namespace members, re-exports, CommonJS patterns
   * Python: Module imports, `__all__` exports, relative imports
-  * Go/Java/C#/Ruby/Rust/C/C++/Kotlin/Swift: Collects bindings and usages through the same shared reference pipeline, with a few language-specific limits documented in the parity matrix
+  * Go/Java/C#/Ruby/Rust/C/C++/Kotlin/Swift: Collects bindings and usages through the same shared reference pipeline
 * **AST grep**
   * Run arbitrary Tree-sitter queries across the repo
 * **Agent query helpers**
@@ -117,7 +117,7 @@ Sample graph: [sample-graph.md](./sample-graph.md)
 
 Each listed language participates in the same shared indexing and navigation pipeline.
 When the optional native addon is available, all listed source languages use the same native Tree-sitter runtime and query model; unsupported capabilities still fall back through the shared JS path where needed.
-The regression suite covers deeper syntax variants too, and now includes end-to-end native semantic parity coverage for the source-language fixture set plus graph/specifier parity for the graph-first product types.
+The regression suite covers deeper syntax variants and end-to-end native semantic parity for the source-language fixture set, plus graph/specifier parity for the graph-first product types.
 See the coverage matrix in [docs/language-parity.md](./docs/language-parity.md).
 
 **Project files**: project manifests like package.json, pyproject.toml, pom.xml, build.gradle, requirements.txt, .sln, .idea, etc. See [docs/language-parity.md](./docs/language-parity.md) for more details.
@@ -1126,7 +1126,7 @@ const report = await analyzeImpactFromDiff(root, index, {
 });
 
 if (report.warning) {
-  console.warn(`⚠️ Impact Warning: ${report.warning}`);
+  console.warn(`Impact Warning: ${report.warning}`);
 }
 
 console.log(`Changed symbols: ${report.changedSymbols.length}`);
@@ -1436,7 +1436,7 @@ Yes. It walks the tree, ignores `node_modules`, virtualenv caches, builds a **si
 Yes, for JS/TS. `resolveExport` recursively follows `export * from` and `export { name } from`.
 
 **Q: How "accurate" is find-references?**
-It uses a **lexical scope index** (module → function → block) and recorded bindings. It's resilient for common patterns and avoids many false positives, but avoids heavy type-checking: perfect for an agent loop foundation.
+It uses a **lexical scope index** (module -> function -> block) and recorded bindings. It's resilient for common patterns and avoids many false positives, but avoids heavy type-checking: perfect for an agent loop foundation.
 
 **Q: Does it support CommonJS destructuring?**
 Yes. Both `const { helperFunction } = require('./module')` and `const { helperFunction: alias } = require('./module')` are fully supported.

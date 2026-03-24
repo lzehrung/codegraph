@@ -316,6 +316,33 @@ describe('Find References', () => {
       expectReferenceAt(result, functionPointersFile, 3);
       expectReferenceAt(result, advancedUseFile, 4);
     });
+
+    it('does not recover macro-expanded typedef use sites', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'c');
+      const advancedUseFile = path.join(samplePath, 'advanced-use.c').replace(/\\/g, '/');
+      const functionPointersFile = path.join(samplePath, 'function-pointers.h').replace(/\\/g, '/');
+      const macroHeaderFile = path.join(samplePath, 'macro-typedef.h').replace(/\\/g, '/');
+      const macroUseFile = path.join(samplePath, 'macro-typedef-use.c').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [
+        advancedUseFile,
+        functionPointersFile,
+        macroHeaderFile,
+        macroUseFile,
+      ]);
+
+      const result = await testFindReferences(index, functionPointersFile, 3, 15, 2);
+      expect(result.status).toBe('ok');
+      if (result.status === 'ok') {
+        expectReferenceAt(result, functionPointersFile, 3);
+        expectReferenceAt(result, advancedUseFile, 4);
+        const macroInvocationRecovered = result.references.some(
+          (reference) =>
+            reference.file === macroUseFile &&
+            reference.range.start.line === 4,
+        );
+        expect(macroInvocationRecovered).toBe(false);
+      }
+    });
   });
 
   describe('C++', () => {
