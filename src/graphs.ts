@@ -33,7 +33,7 @@ import {
 import {
   getNativeQueryExecution,
   getCompactImportsExecution,
-  normalizeNativeQueryForSupport,
+  isNativeQueryModified,
   type NativeRuntimeMode,
   type NativeQueryScope,
   type NativeQueryResults,
@@ -351,12 +351,7 @@ export function collectModuleSpecifiersFromSource(
       // Languages whose imports query is normalized (e.g. Kotlin) may have
       // grammar differences that cause native to miss matches, so allow
       // JS fallback for those.
-      const normalizedImportsQuery = normalizeNativeQueryForSupport(
-        support,
-        "imports",
-        support.queries.imports,
-      );
-      if (out.length > 0 || normalizedImportsQuery === support.queries.imports) {
+      if (out.length > 0 || !isNativeQueryModified(support, "imports")) {
         return out;
       }
     } catch (error) {

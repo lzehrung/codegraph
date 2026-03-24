@@ -120,13 +120,16 @@ impl ParserPool {
     }
 
     fn get_or_create(&mut self, language_id: &str, language: &Language) -> Result<&mut Parser> {
-        if !self.parsers.contains_key(language_id) {
-            let mut parser = Parser::new();
-            parser
-                .set_language(language)
-                .map_err(|e| napi::Error::from_reason(format!("Failed to set parser language: {e}")))?;
-            self.parsers.insert(language_id.to_string(), parser);
+        // Fast path: lookup with &str key (no allocation when parser exists).
+        if self.parsers.contains_key(language_id) {
+            return Ok(self.parsers.get_mut(language_id).unwrap());
         }
+        // Slow path: create parser and insert (allocates key string).
+        let mut parser = Parser::new();
+        parser
+            .set_language(language)
+            .map_err(|err| napi::Error::from_reason(format!("Failed to set parser language: {err}")))?;
+        self.parsers.insert(language_id.to_string(), parser);
         Ok(self.parsers.get_mut(language_id).unwrap())
     }
 }
@@ -140,7 +143,9 @@ thread_local! {
 // ---------------------------------------------------------------------------
 
 struct QueryCache {
-    entries: HashMap<(String, String), Query>,
+    /// Nested map: language_id -> query_text -> compiled Query.
+    /// Using nested maps allows lookups with &str keys (no allocation on hits).
+    entries: HashMap<String, HashMap<String, Query>>,
 }
 
 impl QueryCache {
@@ -156,13 +161,20 @@ impl QueryCache {
         language: &Language,
         query_text: &str,
     ) -> Result<&Query> {
-        let key = (language_id.to_string(), query_text.to_string());
-        if !self.entries.contains_key(&key) {
-            let query = Query::new(language, query_text)
-                .map_err(|e| napi::Error::from_reason(format!("Failed to compile query: {e}")))?;
-            self.entries.insert(key.clone(), query);
+        // Fast path: check with &str keys (no allocation on cache hits).
+        if let Some(by_text) = self.entries.get(language_id) {
+            if by_text.contains_key(query_text) {
+                return Ok(self.entries[language_id].get(query_text).unwrap());
+            }
         }
-        Ok(self.entries.get(&key).unwrap())
+        // Slow path: compile and insert (allocates key strings).
+        let query = Query::new(language, query_text)
+            .map_err(|e| napi::Error::from_reason(format!("Failed to compile query: {e}")))?;
+        self.entries
+            .entry(language_id.to_string())
+            .or_default()
+            .insert(query_text.to_string(), query);
+        Ok(self.entries[language_id].get(query_text).unwrap())
     }
 }
 
@@ -215,7 +227,7 @@ fn execute_query(
 fn execute_query_cached(
     source: &str,
     root: tree_sitter::Node<'_>,
-    language: Language,
+    language: &Language,
     query_text: &str,
     language_id: &str,
 ) -> Result<Vec<NativeMatch>> {
@@ -225,7 +237,7 @@ fn execute_query_cached(
 
     QUERY_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        let query = cache.get_or_compile(language_id, &language, query_text)?;
+        let query = cache.get_or_compile(language_id, language, query_text)?;
         let capture_names = query.capture_names();
         let mut cursor = QueryCursor::new();
         let mut matches = cursor.matches(query, root, source.as_bytes());
@@ -322,13 +334,13 @@ pub fn run_language_queries(
     let lid = language_id.as_str();
 
     Ok(NativeQueryResults {
-        imports: execute_query_cached(source.as_str(), root, language.clone(), imports_query.as_str(), lid)?,
-        exports: execute_query_cached(source.as_str(), root, language.clone(), exports_query.as_str(), lid)?,
-        locals: execute_query_cached(source.as_str(), root, language.clone(), locals_query.as_str(), lid)?,
+        imports: execute_query_cached(source.as_str(), root, &language, imports_query.as_str(), lid)?,
+        exports: execute_query_cached(source.as_str(), root, &language, exports_query.as_str(), lid)?,
+        locals: execute_query_cached(source.as_str(), root, &language, locals_query.as_str(), lid)?,
         import_bindings: execute_query_cached(
             source.as_str(),
             root,
-            language,
+            &language,
             import_bindings_query.as_str(),
             lid,
         )?,
@@ -340,7 +352,7 @@ pub fn run_language_queries(
 fn execute_query_compact(
     source: &str,
     root: tree_sitter::Node<'_>,
-    language: Language,
+    language: &Language,
     query_text: &str,
     language_id: &str,
 ) -> Result<Vec<CompactMatch>> {
@@ -350,7 +362,7 @@ fn execute_query_compact(
 
     QUERY_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        let query = cache.get_or_compile(language_id, &language, query_text)?;
+        let query = cache.get_or_compile(language_id, language, query_text)?;
         let capture_names = query.capture_names();
         let mut cursor = QueryCursor::new();
         let mut matches = cursor.matches(query, root, source.as_bytes());
@@ -396,7 +408,7 @@ pub fn run_imports_query_compact(
         imports: execute_query_compact(
             source.as_str(),
             root,
-            language,
+            &language,
             imports_query.as_str(),
             language_id.as_str(),
         )?,

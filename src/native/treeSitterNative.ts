@@ -172,6 +172,59 @@ export function normalizeNativeQueryForSupport(
   return support.native?.normalizeQuery?.(kind, queryText) ?? queryText;
 }
 
+/**
+ * Per-language cache of normalized query text and modification status.
+ * Normalization is constant for a given (support.id, queryKind) pair,
+ * so we compute it once per language per kind.
+ */
+const normalizedQueryCache = new Map<
+  string,
+  Map<NativeQueryKind, { text: string; wasModified: boolean }>
+>();
+
+function getOrComputeNormalizedEntry(
+  support: LanguageSupport,
+  kind: NativeQueryKind,
+): { text: string; wasModified: boolean } {
+  let byKind = normalizedQueryCache.get(support.id);
+  if (!byKind) {
+    byKind = new Map();
+    normalizedQueryCache.set(support.id, byKind);
+  }
+  let entry = byKind.get(kind);
+  if (!entry) {
+    const original = support.queries[kind];
+    const normalized = normalizeNativeQueryForSupport(support, kind, original);
+    entry = { text: normalized, wasModified: normalized !== original };
+    byKind.set(kind, entry);
+  }
+  return entry;
+}
+
+/**
+ * Returns the normalized query text for the support's own query.
+ * Cached per (support.id, kind) to avoid re-running regex normalization
+ * on every file.
+ */
+export function getCachedNormalizedQuery(
+  support: LanguageSupport,
+  kind: NativeQueryKind,
+): string {
+  return getOrComputeNormalizedEntry(support, kind).text;
+}
+
+/**
+ * Returns true when the native query for this (support, kind) differs from
+ * the original JS query — meaning the language has grammar divergence and
+ * empty native results should NOT be treated as authoritative.
+ */
+export function isNativeQueryModified(
+  support: LanguageSupport,
+  kind: NativeQueryKind,
+): boolean {
+  return getOrComputeNormalizedEntry(support, kind).wasModified;
+}
+
 export function getNativeQueryMetadataForSupport(support: LanguageSupport): {
   normalizedQueryKinds: NativeQueryKind[];
   skippedQueryKinds: NativeQueryKind[];
@@ -180,19 +233,19 @@ export function getNativeQueryMetadataForSupport(support: LanguageSupport): {
   const skippedQueryKinds: NativeQueryKind[] = [];
 
   for (const kind of NATIVE_QUERY_KINDS) {
+    if (!isNativeQueryModified(support, kind)) {
+      continue;
+    }
+    normalizedQueryKinds.push(kind);
     const originalQuery = support.queries[kind];
-    const normalizedQuery = normalizeNativeQueryForSupport(
+    const normalized = normalizeNativeQueryForSupport(
       support,
       kind,
       originalQuery,
     );
-    if (normalizedQuery === originalQuery) {
-      continue;
-    }
-    normalizedQueryKinds.push(kind);
     if (
       originalQuery.trim().length > 0 &&
-      normalizedQuery.trim().length === 0
+      normalized.trim().length === 0
     ) {
       skippedQueryKinds.push(kind);
     }
@@ -263,32 +316,10 @@ export function getNativeQueryExecutionForState(
       results: state.binding.runLanguageQueries(
         source,
         support.id,
-        normalizeNativeQueryForSupport(
-          support,
-          "imports",
-          support.queries.imports,
-        ),
-        importsOnly
-          ? ""
-          : normalizeNativeQueryForSupport(
-              support,
-              "exports",
-              support.queries.exports,
-            ),
-        importsOnly
-          ? ""
-          : normalizeNativeQueryForSupport(
-              support,
-              "locals",
-              support.queries.locals,
-            ),
-        importsOnly
-          ? ""
-          : normalizeNativeQueryForSupport(
-              support,
-              "importBindings",
-              support.queries.importBindings,
-            ),
+        getCachedNormalizedQuery(support, "imports"),
+        importsOnly ? "" : getCachedNormalizedQuery(support, "exports"),
+        importsOnly ? "" : getCachedNormalizedQuery(support, "locals"),
+        importsOnly ? "" : getCachedNormalizedQuery(support, "importBindings"),
       ),
     };
   } catch (error) {
@@ -348,11 +379,7 @@ export function getCompactImportsExecution(
   if (!state.supportedLanguageIds.has(support.id)) {
     return { results: null, fallbackReason: "unsupportedLanguage" };
   }
-  const importsQuery = normalizeNativeQueryForSupport(
-    support,
-    "imports",
-    support.queries.imports,
-  );
+  const importsQuery = getCachedNormalizedQuery(support, "imports");
   try {
     if (state.binding.runImportsQueryCompact) {
       return {

@@ -54,7 +54,7 @@ import {
 import type { Edge, Range, FileId, Graph } from "./types.js";
 import {
   getNativeQueryExecution,
-  normalizeNativeQueryForSupport,
+  isNativeQueryModified,
   type NativeRuntimeMode,
   type NativeCapture,
   type NativeQueryResults,
@@ -2983,14 +2983,9 @@ export async function collectImportsForFile(
       // but only when the importBindings query was not modified by
       // normalization. Languages whose importBindings query is normalized
       // or blanked (e.g. Kotlin) may need the JS/text fallback.
-      const normalizedImportBindingsQuery = normalizeNativeQueryForSupport(
-        resolvedSup,
-        "importBindings",
-        resolvedSup.queries.importBindings,
-      );
       if (
         imports.length > 0 ||
-        normalizedImportBindingsQuery === resolvedSup.queries.importBindings
+        !isNativeQueryModified(resolvedSup, "importBindings")
       ) {
         return imports;
       }
