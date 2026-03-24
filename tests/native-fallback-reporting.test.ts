@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { supportById } from "../src/languages.js";
 import {
   getNativeQueryExecutionForState,
+  getNativeTreeSitterLoadError,
+  isNativeTreeSitterAvailable,
   isNativeTreeSitterDisabledByEnv,
 } from "../src/native/treeSitterNative.js";
 
@@ -31,6 +33,28 @@ describe("native fallback reporting", () => {
     expect(result.results).toBeNull();
     expect(result.fallbackReason).toBe("unavailable");
     expect(result.error).toContain("native addon missing");
+  });
+
+  it("treats explicit off mode as unavailable without consulting the env var", () => {
+    expect(isNativeTreeSitterAvailable("off")).toBe(false);
+    const loadError = getNativeTreeSitterLoadError("off");
+    expect(loadError).toBeInstanceOf(Error);
+    expect(String(loadError)).toContain("explicit option");
+  });
+
+  it("lets explicit on mode bypass the environment default", () => {
+    const previous = process.env.CODEGRAPH_DISABLE_NATIVE;
+    process.env.CODEGRAPH_DISABLE_NATIVE = "1";
+    try {
+      const loadError = getNativeTreeSitterLoadError("on");
+      expect(String(loadError ?? "")).not.toContain("CODEGRAPH_DISABLE_NATIVE");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.CODEGRAPH_DISABLE_NATIVE;
+      } else {
+        process.env.CODEGRAPH_DISABLE_NATIVE = previous;
+      }
+    }
   });
 
   it("reports unsupportedLanguage when the binding does not support the language", () => {

@@ -25,6 +25,13 @@ describe('Agent Tools', () => {
     expect(result.graph!.edges).toBeDefined();
   });
 
+  it('tool_getGraph accepts explicit native mode overrides', async () => {
+    const result = await tool_getGraph(samplePath, { native: 'off' });
+    expect(result.status).toBe('ok');
+    expect(result.graph).toBeDefined();
+    expect(result.graph!.nodes.length).toBeGreaterThan(0);
+  });
+
   it('tool_goToDefinition should find definition', async () => {
     const mainFile = path.join(samplePath, 'main.ts');
     // Line 7, column 25 is helperFunction() call which is imported from utils.ts

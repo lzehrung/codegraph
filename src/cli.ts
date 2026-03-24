@@ -44,6 +44,7 @@ import {
 import type {
   BuildReport,
   BuildOptions,
+  NativeRuntimeMode,
   ReviewBuildReport,
   Graph,
   SymbolGraph,
@@ -163,6 +164,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--output",
   "--stderr-file",
   "--threads",
+  "--native",
   "--cache",
   "--changed-since",
   "--git-base",
@@ -652,6 +654,16 @@ function parseReviewDepth(value: string): ReviewDepth | null {
   return null;
 }
 
+function parseNativeRuntimeMode(value: string | undefined): NativeRuntimeMode {
+  if (value === undefined) return "auto";
+  if (value === "auto" || value === "on" || value === "off") {
+    return value;
+  }
+  throw new Error(
+    `Invalid --native value "${value}". Expected auto|on|off.`,
+  );
+}
+
 type ImpactOptionsBuilder = Partial<ImpactOptions> & {
   base?: string;
   head?: string;
@@ -703,9 +715,10 @@ Graph Options:
   --dynamic-import-heuristics  Attempt to resolve dynamic imports
   --resolution-hint <hint>  Custom resolution hint (e.g., tsconfig:path)
 
-Build Options:
-  --threads N               Number of worker threads (default: auto)
-  --cache <mode>            Cache mode: disk, memory, off
+  Build Options:
+    --threads N               Number of worker threads (default: auto)
+    --native <mode>           Native runtime mode: auto, on, off
+    --cache <mode>            Cache mode: disk, memory, off
   --cache-strict            Use content hashes instead of mtime
   --progress                Show progress tracking during indexing
 
@@ -725,9 +738,10 @@ Examples:
     process.exit(0);
   }
 
-  const reportFile = getOpt("--report-file");
-  const reportEnabled = hasFlag("--report") || reportFile !== undefined;
-  const showProgress = hasFlag("--progress");
+    const reportFile = getOpt("--report-file");
+    const reportEnabled = hasFlag("--report") || reportFile !== undefined;
+    const nativeMode = parseNativeRuntimeMode(getOpt("--native"));
+    const showProgress = hasFlag("--progress");
   let lastProgressUpdate = 0;
   function handleIndexingProgress(update: {
     current: number;
@@ -773,6 +787,7 @@ Examples:
     fast: graphFlags.fast,
     resolveNodeModules: graphFlags.resolveNodeModules,
     dynamicImportHeuristics: graphFlags.dynamicImportHeuristics,
+    ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
     ...(graphFlags.resolutionHints.length > 0
       ? { resolutionHints: graphFlags.resolutionHints }
       : {}),
@@ -917,6 +932,7 @@ Examples:
     const graphOptions = hasGraphOverrides ? buildGraphOptions() : undefined;
     const delta = await buildGraphDelta(projectRootFs, {
       threads,
+      ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
       ...(cache !== undefined ? { cache } : {}),
       cacheStrict,
       cacheVerify,
@@ -1034,6 +1050,7 @@ Examples:
         ? await buildProjectIndexIncremental(projectRootFs, {
             onProgress: progressHandler,
             threads,
+            ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
             ...(sqliteCacheMode !== undefined
               ? { cache: sqliteCacheMode }
               : {}),
@@ -1048,6 +1065,7 @@ Examples:
         : await buildProjectIndexFromFiles(projectRootFs, files, {
             onProgress: progressHandler,
             threads,
+            ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
             ...(sqliteCacheMode !== undefined
               ? { cache: sqliteCacheMode }
               : {}),
@@ -1098,6 +1116,7 @@ Examples:
       const index = await buildProjectIndexFromFiles(projectRootFs, files, {
         onProgress: progressHandler,
         threads,
+        ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
         ...(cache !== undefined ? { cache } : {}),
         cacheStrict,
         graph: {
@@ -1186,6 +1205,7 @@ Examples:
       threads,
       resolveNodeModules,
       dynamicImportHeuristics,
+      ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
       ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
       ...(indexReport ? { report: indexReport } : {}),
     });
@@ -1230,6 +1250,7 @@ Examples:
     const baseIndexOptions: BuildOptions = {
       onProgress: progressHandler,
       threads,
+      ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
       ...(cache !== undefined ? { cache } : {}),
       cacheStrict,
       cacheVerify,
@@ -1301,6 +1322,7 @@ Examples:
       : path.resolve(projectRootFs, fileArg).replace(/\\/g, "/");
     const index = await buildProjectIndex(projectRootFs, {
       onProgress: progressHandler,
+      ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
     });
     const mod = index.byFile.get(file);
     if (!mod) {
@@ -1349,6 +1371,7 @@ Examples:
     const column = Number(colArg);
     const index = await buildProjectIndex(projectRootFs, {
       onProgress: progressHandler,
+      ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
     });
     const res = await goToDefinition(index, { file, line, column });
     writeJSONLine(res);
@@ -1371,6 +1394,7 @@ Examples:
     const pretty = hasFlag("--pretty");
     const index = await buildProjectIndex(projectRootFs, {
       onProgress: progressHandler,
+      ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
     });
     const res = await findReferences(index, { file, line, column });
     if (!pretty) {
@@ -1538,10 +1562,11 @@ Examples:
         cache === "off" || cache === "memory" || cache === "disk"
           ? cache
           : undefined;
-      const indexOpts: BuildOptions = {
-        threads,
-        ...(cacheMode !== undefined ? { cache: cacheMode } : {}),
-        ...(cacheStrict ? { cacheStrict: true } : {}),
+        const indexOpts: BuildOptions = {
+          threads,
+          ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+          ...(cacheMode !== undefined ? { cache: cacheMode } : {}),
+          ...(cacheStrict ? { cacheStrict: true } : {}),
       };
       if (hasGraphOverrides) {
         indexOpts.graph = {
@@ -1657,6 +1682,7 @@ Examples:
     if (cache === "off" || cache === "memory" || cache === "disk") {
       reviewOpts.cache = cache;
     }
+    if (nativeMode !== "auto") reviewOpts.native = nativeMode;
     if (cacheStrict) reviewOpts.cacheStrict = true;
     if (cacheVerify) reviewOpts.cacheVerify = true;
     if (incrementalStrict) reviewOpts.incrementalStrict = true;
@@ -1699,7 +1725,9 @@ Examples:
     const graph = await collectGraph(
       projectRootFs,
       await listProjectFiles(projectRootFs),
-      hasGraphOverrides ? buildGraphOptions() : undefined,
+      hasGraphOverrides || nativeMode !== "auto"
+        ? buildGraphOptions()
+        : undefined,
     );
     const results =
       cmd === "deps"
@@ -1743,7 +1771,9 @@ Examples:
     const graph = await collectGraph(
       projectRootFs,
       await listProjectFiles(projectRootFs),
-      hasGraphOverrides ? buildGraphOptions() : undefined,
+      hasGraphOverrides || nativeMode !== "auto"
+        ? buildGraphOptions()
+        : undefined,
     );
     const pathResult = getShortestPath(graph, from, to);
 
@@ -1779,7 +1809,9 @@ Examples:
     const graph = await collectGraph(
       projectRootFs,
       await listProjectFiles(projectRootFs),
-      hasGraphOverrides ? buildGraphOptions() : undefined,
+      hasGraphOverrides || nativeMode !== "auto"
+        ? buildGraphOptions()
+        : undefined,
     );
     const cycleDetails = sortDetailedCycles(
       findDetailedCycles(graph),
@@ -1829,7 +1861,9 @@ Examples:
     const graph = await collectGraph(
       projectRootFs,
       await listProjectFiles(projectRootFs),
-      hasGraphOverrides ? buildGraphOptions() : undefined,
+      hasGraphOverrides || nativeMode !== "auto"
+        ? buildGraphOptions()
+        : undefined,
     );
     const unresolved = getUnresolvedImports(graph);
 
@@ -1864,7 +1898,9 @@ Examples:
     const graph = await collectGraph(
       projectRootFs,
       await listProjectFiles(projectRootFs),
-      hasGraphOverrides ? buildGraphOptions() : undefined,
+      hasGraphOverrides || nativeMode !== "auto"
+        ? buildGraphOptions()
+        : undefined,
     );
     const hotspots = getHotspots(graph);
 
@@ -1885,6 +1921,7 @@ Examples:
     const json = hasFlag("--json");
     const index = await buildProjectIndex(projectRootFs, {
       onProgress: progressHandler,
+      ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
     });
     const apiSurface = getApiSurface(index);
 
