@@ -212,3 +212,9 @@ export {
   type ReviewBuildReport,
   type ReviewTimingReport,
 } from "./review.js";
+export {
+  type NativeRuntimeMode,
+  isNativeTreeSitterAvailable,
+  getNativeTreeSitterLoadError,
+  getNativeTreeSitterSupportedLanguageIds,
+} from "./native/treeSitterNative.js";

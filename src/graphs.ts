@@ -32,6 +32,7 @@ import {
 } from "./util.js";
 import {
   getNativeQueryExecution,
+  type NativeRuntimeMode,
   type NativeQueryResults,
 } from "./native/treeSitterNative.js";
 import { capturesByName } from "./native/queryResults.js";
@@ -53,6 +54,7 @@ export type GraphBuildOptions = {
   resolveNodeModules?: boolean;
   dynamicImportHeuristics?: boolean;
   resolutionHints?: string[];
+  native?: NativeRuntimeMode;
 };
 
 export type FallbackImportExtractionReason =
@@ -468,6 +470,7 @@ export async function collectEdgesForFile(
     resolveNodeModules?: boolean;
     dynamicImportHeuristics?: boolean;
     resolutionHints?: string[];
+    native?: NativeRuntimeMode;
     fileSignature?: { sig: string; gitSig?: string; cacheSig?: string };
     cachedFileEdges?: GraphCacheEntry;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
@@ -514,7 +517,7 @@ export async function collectEdgesForFile(
     const shouldSkipNativeForFastGraph =
       !!opts.fast && (sup.id === "ts" || sup.id === "js") && !fastRegexDisabled;
     if (!shouldSkipNativeForFastGraph) {
-      const nativeExecution = getNativeQueryExecution(src, sup);
+      const nativeExecution = getNativeQueryExecution(src, sup, opts.native);
       nativeQueries = nativeExecution.results;
       recordNativeBackendOutcome(opts.report, {
         file: normalizedFile,
@@ -708,6 +711,7 @@ export async function collectGraph(
     resolveNodeModules?: boolean;
     dynamicImportHeuristics?: boolean;
     resolutionHints?: string[];
+    native?: NativeRuntimeMode;
     fileSignatures?: Map<
       string,
       { sig: string; gitSig?: string; cacheSig?: string }
@@ -775,6 +779,7 @@ export async function collectGraph(
           resolveNodeModules: !!opts?.resolveNodeModules,
           dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
           resolutionHints,
+          ...(opts?.native ? { native: opts.native } : {}),
           ...(sigEntry ? { fileSignature: sigEntry } : {}),
           ...(cachedFileEdges ? { cachedFileEdges } : {}),
           ...(opts?.onFileEdges ? { onFileEdges: opts.onFileEdges } : {}),

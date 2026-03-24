@@ -11,8 +11,13 @@ import {
   type CompactImpactReport,
   type Edge,
   type ProjectIndex,
+  type NativeRuntimeMode,
 } from "./index.js";
 import path from "path";
+
+type ToolRuntimeOptions = {
+  native?: NativeRuntimeMode;
+};
 
 /**
  * Agent-friendly tool wrapper for PR impact analysis.
@@ -21,6 +26,7 @@ import path from "path";
 export async function tool_impactJSON(
   root: string,
   options: ImpactOptions,
+  runtimeOptions: ToolRuntimeOptions = {},
 ): Promise<{
   status: "ok" | "error";
   report?: ImpactReport | CompactImpactReport;
@@ -29,7 +35,10 @@ export async function tool_impactJSON(
   try {
     // Build the project index if not already available
     // In a real agent scenario, you might want to cache this
-    const index = await buildProjectIndex(root, { logLevel: "error" });
+    const index = await buildProjectIndex(root, {
+      logLevel: "error",
+      ...(runtimeOptions.native ? { native: runtimeOptions.native } : {}),
+    });
 
     // Analyze the impact
     const report = await analyzeImpactFromDiff(root, index, options);
@@ -54,16 +63,21 @@ export async function tool_impactFromDiffText(
   root: string,
   diffText: string,
   options: Omit<ImpactOptions, "provider" | "diffText"> = {},
+  runtimeOptions: ToolRuntimeOptions = {},
 ): Promise<{
   status: "ok" | "error";
   report?: ImpactReport | CompactImpactReport;
   error?: string;
 }> {
-  return tool_impactJSON(root, {
-    provider: "raw",
-    diffText,
-    ...options,
-  });
+  return tool_impactJSON(
+    root,
+    {
+      provider: "raw",
+      diffText,
+      ...options,
+    },
+    runtimeOptions,
+  );
 }
 
 /**
@@ -73,9 +87,13 @@ export async function tool_impactFromDiffText(
 export async function tool_getFileOverview(
   root: string,
   filePath: string,
+  runtimeOptions: ToolRuntimeOptions = {},
 ): Promise<string> {
   try {
-    const index = await buildProjectIndex(root, { logLevel: "error" });
+    const index = await buildProjectIndex(root, {
+      logLevel: "error",
+      ...(runtimeOptions.native ? { native: runtimeOptions.native } : {}),
+    });
     const absPath = path.resolve(root, filePath).replace(/\\/g, "/");
     const symbols = listSymbols(index, {
       file: absPath,
@@ -131,11 +149,19 @@ export async function tool_getFileOverview(
 export async function tool_findSymbol(
   root: string,
   query: string,
-  options: { maxResults?: number; index?: ProjectIndex } = {},
+  options: {
+    maxResults?: number;
+    index?: ProjectIndex;
+    native?: NativeRuntimeMode;
+  } = {},
 ): Promise<Array<{ name: string; kind: string; file: string; line: number }>> {
   try {
     const index =
-      options.index ?? (await buildProjectIndex(root, { logLevel: "error" }));
+      options.index ??
+      (await buildProjectIndex(root, {
+        logLevel: "error",
+        ...(options.native ? { native: options.native } : {}),
+      }));
     const allSymbols = listSymbols(index, { includeImports: false });
     const q = query.toLowerCase();
 
@@ -181,14 +207,19 @@ export async function tool_listProjectFiles(
 /**
  * Gets the dependency graph for the project.
  */
-export async function tool_getGraph(root: string): Promise<{
+export async function tool_getGraph(
+  root: string,
+  runtimeOptions: ToolRuntimeOptions = {},
+): Promise<{
   status: "ok" | "error";
   graph?: { nodes: string[]; edges: Edge[] };
   error?: string;
 }> {
   try {
     const files = await listProjectFiles(root);
-    const g = await collectGraph(root, files);
+    const g = await collectGraph(root, files, {
+      ...(runtimeOptions.native ? { native: runtimeOptions.native } : {}),
+    });
     return { status: "ok", graph: { nodes: [...g.nodes], edges: g.edges } };
   } catch (error) {
     return { status: "error", error: String(error) };
@@ -209,6 +240,7 @@ export async function tool_goToDefinition(
   line: number,
   column: number,
   index?: ProjectIndex,
+  runtimeOptions: ToolRuntimeOptions = {},
 ): Promise<{
   status: "ok" | "error" | "not_found";
   definition?: {
@@ -224,7 +256,12 @@ export async function tool_goToDefinition(
   reason?: string;
 }> {
   try {
-    const idx = index ?? (await buildProjectIndex(root, { logLevel: "error" }));
+    const idx =
+      index ??
+      (await buildProjectIndex(root, {
+        logLevel: "error",
+        ...(runtimeOptions.native ? { native: runtimeOptions.native } : {}),
+      }));
     const normalizedPath = normalizePathArg(root, file);
 
     const result = await goToDefinition(idx, {
@@ -247,6 +284,7 @@ export async function tool_findReferences(
   line: number,
   column: number,
   index?: ProjectIndex,
+  runtimeOptions: ToolRuntimeOptions = {},
 ): Promise<{
   status: "ok" | "error" | "not_found";
   references?: Array<{
@@ -257,7 +295,12 @@ export async function tool_findReferences(
   reason?: string;
 }> {
   try {
-    const idx = index ?? (await buildProjectIndex(root, { logLevel: "error" }));
+    const idx =
+      index ??
+      (await buildProjectIndex(root, {
+        logLevel: "error",
+        ...(runtimeOptions.native ? { native: runtimeOptions.native } : {}),
+      }));
     const normalizedPath = normalizePathArg(root, file);
 
     const result = await findReferences(idx, {

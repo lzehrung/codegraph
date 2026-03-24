@@ -254,7 +254,10 @@ Use this path when you are developing on codegraph itself or want to build the n
 * Published installs do not require Rust or a manual native setup step
 * Local native builds require a working Rust toolchain plus `npm run build:native`
 * If no compatible native package is available, Codegraph falls back to the JS Tree-sitter path automatically
-* Set `CODEGRAPH_DISABLE_NATIVE=1` to force the JS Tree-sitter path for comparison or debugging
+* Native runtime mode defaults to `auto`
+* Set `CODEGRAPH_DISABLE_NATIVE=1` to make `auto` prefer the JS Tree-sitter path by default
+* The CLI, library, and agent-tool wrappers also accept explicit native runtime overrides: `auto`, `on`, `off`
+* Explicit `native` options take precedence over `CODEGRAPH_DISABLE_NATIVE`
 
 ---
 
@@ -264,7 +267,7 @@ Use this path when you are developing on codegraph itself or want to build the n
 
 After installing the package, use the `codegraph` CLI:
 
-The CLI automatically uses the native Tree-sitter path when a compatible native package is installed. If not, it falls back to the JS Tree-sitter path automatically.
+The CLI defaults to `--native auto`, which uses the native Tree-sitter path when a compatible native package is installed and falls back automatically otherwise. Use `--native on` to prefer native explicitly, or `--native off` to force the JS Tree-sitter path for comparison and debugging.
 
 ```bash
 # File dependency graph only (default; no symbols)
@@ -340,6 +343,9 @@ npx codegraph cycles
 npx codegraph unresolved
 npx codegraph hotspots
 npx codegraph apisurface
+# Explicit native runtime control
+npx codegraph graph --native off
+npx codegraph index --native on --report
 # Emit a JSON timing/cache report to stderr (or a file)
 npx codegraph index --report
 npx codegraph review --report --report-file review.report.json
@@ -659,13 +665,16 @@ Viewer features:
 
 Minimal TypeScript/ESM examples. Import only from `@lzehrung/codegraph` and call the API directly.
 
-The library automatically uses the native Tree-sitter path when `@lzehrung/codegraph-native` is installed for the current platform. There is no second import, feature flag, or alternate API surface for the native path.
+The library defaults to `native: "auto"`, which uses the native Tree-sitter path when `@lzehrung/codegraph-native` is installed for the current platform and falls back automatically otherwise. Override that per call with `native: "on"` or `native: "off"`.
 
 ```ts
 import { buildProjectIndex } from "@lzehrung/codegraph";
 
-const index = await buildProjectIndex(process.cwd());
+const index = await buildProjectIndex(process.cwd(), { native: "auto" });
+const jsOnlyIndex = await buildProjectIndex(process.cwd(), { native: "off" });
 ```
+
+Agent-tool wrappers expose the same control as a trailing runtime option, for example `tool_getGraph(root, { native: "off" })` or `tool_goToDefinition(root, file, line, column, undefined, { native: "on" })`.
 
 ### Session Management (Recommended for Agents)
 
