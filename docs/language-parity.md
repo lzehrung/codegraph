@@ -33,7 +33,7 @@ Notes:
 - Deeper hardening coverage now includes Go aliased imports and interface-typed uses, Kotlin alias and wildcard imports, Java wildcard-import package fixtures, Rust nested modules and reexports, Swift static-member fixtures, C function-pointer typedef fixtures, C++ namespace/template fixtures, and Ruby nested module fixtures.
 - `SCSS` uses the native addon for import/specifier extraction. Native SCSS symbol queries are intentionally skipped because symbol extraction is not a supported SCSS capability yet.
 - `HTML`, `CSS`, `Less`, `Vue`, and `Svelte` are graph/chunking-focused today. Their unsupported navigation and symbol features are covered by explicit `not_found` parity tests.
-- A few deeper semantic shapes remain intentionally limited and are covered by explicit regression tests instead of optimistic support claims: advanced reference recovery for C function-pointer typedefs and C++ namespace aliases.
+- A few deeper semantic shapes remain intentionally limited and are covered by explicit regression tests instead of optimistic support claims: advanced reference recovery for C function-pointer typedefs.
 
 ## Project file discovery coverage
 

@@ -342,13 +342,15 @@ describe('Find References', () => {
       expectReferenceAt(result, mainFile, 6);
     });
 
-    it('should currently return a minimal reference set for namespace-qualified alias targets', async () => {
+    it('should find references to namespace-qualified alias targets', async () => {
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'cpp');
       const usageFile = path.join(samplePath, 'namespace-usage.cpp').replace(/\\/g, '/');
       const namespaceFile = path.join(samplePath, 'namespaces.hpp').replace(/\\/g, '/');
       const index = await createTestIndexFromFiles(samplePath, [usageFile, namespaceFile]);
 
-      await testFindReferences(index, namespaceFile, 4, 7, 1);
+      const result = await testFindReferences(index, namespaceFile, 4, 7, 2);
+      expectReferenceAt(result, namespaceFile, 4);
+      expectReferenceAt(result, usageFile, 4);
     });
   });
 

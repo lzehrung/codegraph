@@ -51,6 +51,15 @@ const definition: LanguageTestDefinition = {
         expectedDefinition: { file: "namespaces.hpp", line: 4 },
       },
     ],
+    references: [
+      {
+        name: "find references for Widget includes namespace alias usage",
+        file: "namespaces.hpp",
+        line: 4,
+        column: 7,
+        minimumCount: 2,
+      },
+    ],
   },
 };
 

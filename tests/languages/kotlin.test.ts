@@ -67,6 +67,15 @@ const definition: LanguageTestDefinition = {
         expectedDefinition: { file: "utils/helperFunction.kt", line: 7 },
       },
     ],
+    references: [
+      {
+        name: "find references for wildcard-imported type alias",
+        file: "utils/MoreTypes.kt",
+        line: 3,
+        column: 11,
+        minimumCount: 2,
+      },
+    ],
   },
 };
 

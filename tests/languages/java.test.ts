@@ -54,6 +54,24 @@ const definition: LanguageTestDefinition = {
         ],
       },
     ],
+    goToDefinition: [
+      {
+        name: "go to definition resolves wildcard-imported nested type",
+        file: "WildcardImports.java",
+        line: 6,
+        column: 16,
+        expectedDefinition: { file: "pkg/PackageTypes.java", line: 4 },
+      },
+    ],
+    references: [
+      {
+        name: "find references for wildcard-imported interface",
+        file: "pkg/PackageTypes.java",
+        line: 7,
+        column: 11,
+        minimumCount: 2,
+      },
+    ],
   },
 };
 

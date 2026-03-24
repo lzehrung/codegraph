@@ -84,6 +84,13 @@ const definition: LanguageTestDefinition = {
         column: 24,
         expectedDefinition: { file: "utils.go", line: 9 },
       },
+      {
+        name: "go to definition resolves dot-imported constructor",
+        file: "dot-imports.go",
+        line: 9,
+        column: 15,
+        expectedDefinition: { file: "utils.go", line: 13 },
+      },
     ],
     references: [
       {

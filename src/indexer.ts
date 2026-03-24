@@ -2416,7 +2416,7 @@ export async function collectImportsForFile(
         next = {
           kind: "star",
           from: imp.from,
-          resolved: imp.resolved,
+          ...(imp.resolved !== undefined ? { resolved: imp.resolved } : {}),
           ...(imp.typeOnly ? { typeOnly: imp.typeOnly } : {}),
         };
       } else if (alias === "_") {
@@ -5737,8 +5737,19 @@ export async function findReferences(
   let def: SymbolDef | null = null;
   if ("def" in req) def = req.def;
   else {
-    const got = await goToDefinition(index, req);
-    if (got.status === "ok") def = got.definition;
+    const module = index.byFile.get(req.file);
+    const localAtPosition = module?.locals.find((local) =>
+      _rangeContains(local.range, {
+        row: req.line,
+        column: req.column,
+      }),
+    );
+    if (localAtPosition) {
+      def = localAtPosition;
+    } else {
+      const got = await goToDefinition(index, req);
+      if (got.status === "ok") def = got.definition;
+    }
   }
   if (!def)
     return { status: "not_found", reason: "Could not resolve definition" };
