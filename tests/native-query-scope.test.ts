@@ -1,0 +1,268 @@
+import { describe, expect, it } from "vitest";
+import { supportById } from "../src/languages.js";
+import { collectModuleSpecifiersFromSource } from "../src/graphs.js";
+import {
+  getCompactImportsExecution,
+  getNativeQueryExecutionForState,
+  isNativeTreeSitterAvailable,
+  type NativeQueryResults,
+  type NativeQueryScope,
+} from "../src/native/treeSitterNative.js";
+
+const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
+
+/**
+ * Creates a mock binding that records which queries were non-empty.
+ */
+function createScopeSpy() {
+  const executedKinds: string[] = [];
+  const binding = {
+    runLanguageQueries: (
+      _source: string,
+      _languageId: string,
+      importsQuery: string,
+      exportsQuery: string,
+      localsQuery: string,
+      importBindingsQuery: string,
+    ): NativeQueryResults => {
+      if (importsQuery.trim()) executedKinds.push("imports");
+      if (exportsQuery.trim()) executedKinds.push("exports");
+      if (localsQuery.trim()) executedKinds.push("locals");
+      if (importBindingsQuery.trim()) executedKinds.push("importBindings");
+      return {
+        imports: [],
+        exports: [],
+        locals: [],
+        importBindings: [],
+      };
+    },
+    supportedLanguageIds: () => ["ts", "tsx", "js", "python", "go", "rust"],
+  };
+  const state = {
+    loaded: true as const,
+    binding,
+    supportedLanguageIds: new Set(["ts", "tsx", "js", "python", "go", "rust"]),
+  };
+  return { executedKinds, state };
+}
+
+describe("native query scope", () => {
+  it('scope "imports" only sends the imports query to native', () => {
+    const support = supportById("ts")!;
+    expect(support).toBeDefined();
+    const { executedKinds, state } = createScopeSpy();
+
+    const result = getNativeQueryExecutionForState(
+      "import { foo } from './bar';",
+      support,
+      state,
+      "imports",
+    );
+
+    expect(result.results).not.toBeNull();
+    expect(executedKinds).toEqual(["imports"]);
+  });
+
+  it('scope "full" sends all query kinds to native', () => {
+    const support = supportById("ts")!;
+    expect(support).toBeDefined();
+    const { executedKinds, state } = createScopeSpy();
+
+    const result = getNativeQueryExecutionForState(
+      "import { foo } from './bar'; export const x = 1;",
+      support,
+      state,
+      "full",
+    );
+
+    expect(result.results).not.toBeNull();
+    expect(executedKinds).toContain("imports");
+    expect(executedKinds).toContain("exports");
+    expect(executedKinds).toContain("locals");
+    expect(executedKinds).toContain("importBindings");
+  });
+
+  it("defaults to full scope when no scope is specified", () => {
+    const support = supportById("ts")!;
+    expect(support).toBeDefined();
+    const { executedKinds, state } = createScopeSpy();
+
+    getNativeQueryExecutionForState(
+      "export const value = 1;",
+      support,
+      state,
+    );
+
+    expect(executedKinds).toContain("imports");
+    expect(executedKinds).toContain("exports");
+    expect(executedKinds).toContain("locals");
+    expect(executedKinds).toContain("importBindings");
+  });
+
+  it('scope "imports" works for Python', () => {
+    const support = supportById("python")!;
+    expect(support).toBeDefined();
+    const { executedKinds, state } = createScopeSpy();
+
+    getNativeQueryExecutionForState(
+      "import os\n",
+      support,
+      state,
+      "imports",
+    );
+
+    expect(executedKinds).toEqual(["imports"]);
+  });
+
+  it('scope "imports" works for Go', () => {
+    const support = supportById("go")!;
+    expect(support).toBeDefined();
+    const { executedKinds, state } = createScopeSpy();
+
+    getNativeQueryExecutionForState(
+      'package main\nimport "fmt"\n',
+      support,
+      state,
+      "imports",
+    );
+
+    expect(executedKinds).toEqual(["imports"]);
+  });
+});
+
+nativeDescribe("native query scope with real binding", () => {
+  it('scope "imports" produces correct import results from real native', () => {
+    const support = supportById("ts")!;
+    const result = getNativeQueryExecutionForState(
+      "import { foo } from './bar';\nexport const x = 1;\nfunction helper() {}",
+      support,
+      undefined,
+      "imports",
+    );
+
+    expect(result.results).not.toBeNull();
+    expect(result.results!.imports.length).toBeGreaterThan(0);
+    // exports, locals, importBindings should be empty since we only requested imports
+    expect(result.results!.exports).toEqual([]);
+    expect(result.results!.locals).toEqual([]);
+    expect(result.results!.importBindings).toEqual([]);
+  });
+
+  it('scope "full" produces results for all query kinds from real native', () => {
+    const support = supportById("ts")!;
+    const result = getNativeQueryExecutionForState(
+      "import { foo } from './bar';\nexport const x = 1;\nfunction helper() {}",
+      support,
+      undefined,
+      "full",
+    );
+
+    expect(result.results).not.toBeNull();
+    expect(result.results!.imports.length).toBeGreaterThan(0);
+  });
+});
+
+describe("authoritative empty native results", () => {
+  it("treats empty native imports as authoritative for non-normalized languages", () => {
+    const support = supportById("ts")!;
+    const lang = support.language("test.ts");
+    // File with no imports -- native returns 0 matches; should NOT fall through to JS
+    const emptyNativeResults: NativeQueryResults = {
+      imports: [],
+      exports: [],
+      locals: [],
+      importBindings: [],
+    };
+    const specs = collectModuleSpecifiersFromSource(support, lang, "const x = 1;\n", {
+      nativeQueries: emptyNativeResults,
+    });
+    expect(specs).toEqual([]);
+  });
+
+  it("treats empty native imports as authoritative for TypeScript with no import keyword", () => {
+    const support = supportById("ts")!;
+    const lang = support.language("test.ts");
+    const emptyNativeResults: NativeQueryResults = {
+      imports: [],
+      exports: [],
+      locals: [],
+      importBindings: [],
+    };
+    // Source that has no import keyword at all
+    const specs = collectModuleSpecifiersFromSource(
+      support,
+      lang,
+      "export const value = 42;\n",
+      { nativeQueries: emptyNativeResults },
+    );
+    expect(specs).toEqual([]);
+  });
+
+  it("still falls through to JS fallback when native queries are absent", () => {
+    const support = supportById("ts")!;
+    const lang = support.language("test.ts");
+    // Without nativeQueries, should use JS path and find the import
+    const specs = collectModuleSpecifiersFromSource(
+      support,
+      lang,
+      "import { foo } from './bar';\n",
+    );
+    expect(specs.length).toBeGreaterThan(0);
+    expect(specs[0]!.spec).toBe("./bar");
+  });
+});
+
+nativeDescribe("compact imports execution", () => {
+  it("returns compact results with name and text only", () => {
+    const support = supportById("ts")!;
+    const execution = getCompactImportsExecution(
+      "import { foo } from './bar';\nexport const x = 1;",
+      support,
+    );
+    expect(execution.results).not.toBeNull();
+    expect(execution.results!.imports.length).toBeGreaterThan(0);
+    const firstCapture = execution.results!.imports[0]!.captures[0]!;
+    // Compact captures have only name and text, no nodeType/start/end
+    expect(firstCapture).toHaveProperty("name");
+    expect(firstCapture).toHaveProperty("text");
+    expect(firstCapture).not.toHaveProperty("nodeType");
+    expect(firstCapture).not.toHaveProperty("start");
+    expect(firstCapture).not.toHaveProperty("end");
+  });
+
+  it("produces the same specifiers as the full native path", () => {
+    const support = supportById("ts")!;
+    const lang = support.language("test.ts");
+    const source = "import { foo } from './bar';\nimport { baz } from './qux';\n";
+
+    // Full native path
+    const fullExecution = getNativeQueryExecutionForState(
+      source,
+      support,
+      undefined,
+      "imports",
+    );
+    const fullSpecs = collectModuleSpecifiersFromSource(support, lang, source, {
+      nativeQueries: fullExecution.results,
+    });
+
+    // Compact path
+    const compactExecution = getCompactImportsExecution(source, support);
+    const compactSpecs = collectModuleSpecifiersFromSource(support, lang, source, {
+      compactNativeImports: compactExecution.results,
+    });
+
+    expect(compactSpecs).toEqual(fullSpecs);
+  });
+
+  it("returns null results when native is unavailable", () => {
+    const support = supportById("ts")!;
+    const execution = getCompactImportsExecution(
+      "import { foo } from './bar';",
+      support,
+      "off",
+    );
+    expect(execution.results).toBeNull();
+    expect(execution.fallbackReason).toBe("unavailable");
+  });
+});
