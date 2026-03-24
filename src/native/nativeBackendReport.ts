@@ -11,6 +11,7 @@ import type {
   NativeBackendFallbackReason,
   NativeBackendLanguageReport,
 } from "../indexer.js";
+import { stringifyUnknown } from "../util.js";
 
 export type NativeBackendOutcome = {
   usedNative: boolean;
@@ -24,7 +25,7 @@ export type NativeBackendOutcome = {
 function stringifyNativeLoadError(error: unknown): string | undefined {
   if (!error) return undefined;
   if (error instanceof Error) return error.message;
-  return String(error);
+  return stringifyUnknown(error);
 }
 
 export function initNativeBackendReport(
@@ -93,7 +94,10 @@ export function recordNativeBackendOutcome(
   if (!backend) return;
   const resolvedLanguageId = outcome.languageId ?? outcome.support?.id;
   if (outcome.support) {
-    const languageReport = getOrCreateNativeLanguageReport(backend, outcome.support);
+    const languageReport = getOrCreateNativeLanguageReport(
+      backend,
+      outcome.support,
+    );
     languageReport.filesSeen += 1;
     if (outcome.usedNative) {
       languageReport.filesUsed += 1;

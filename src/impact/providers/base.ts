@@ -24,7 +24,6 @@ function createProvider(providerType: string): DiffProvider {
   }
 }
 
-
 async function runGitCommand(
   cwd: string,
   args: string[],

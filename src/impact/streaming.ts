@@ -106,14 +106,22 @@ export async function* analyzeImpactStreaming(
     }));
     const fileLevelFallback = options.fileLevelFallback ?? true;
     const fileLevelFallbackPaths = normalizedChanges
-      .filter((change) => change.kind !== "deleted" && !filesWithSymbols.has(change.path))
+      .filter(
+        (change) =>
+          change.kind !== "deleted" && !filesWithSymbols.has(change.path),
+      )
       .map((change) => change.path);
 
-    const impactedItems = await analyzeImpact(index, changedSymbols, normalizedChanges, {
-      ...options,
-      fileLevelFallback,
-      fileLevelFallbackPaths,
-    });
+    const impactedItems = await analyzeImpact(
+      index,
+      changedSymbols,
+      normalizedChanges,
+      {
+        ...options,
+        fileLevelFallback,
+        fileLevelFallbackPaths,
+      },
+    );
 
     for (const item of impactedItems) {
       yield { type: "impactItem", item };

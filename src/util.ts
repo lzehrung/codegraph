@@ -55,6 +55,33 @@ export function toRange(node: NodeLike | null | undefined): Range {
   };
 }
 
+export function stringifyUnknown(value: unknown): string {
+  if (value instanceof Error) return value.message;
+  if (typeof value === "string") return value;
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+  if (value === null || value === undefined) {
+    return String(value);
+  }
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "[Object]";
+    }
+  }
+  if (typeof value === "symbol") return value.toString();
+  if (typeof value === "function") {
+    return `[Function: ${value.name || "anonymous"}]`;
+  }
+  return "unknown";
+}
+
 const DEFAULT_PROJECT_FILE_IGNORES = [
   "**/node_modules/**",
   "**/.git/**",
@@ -1833,11 +1860,14 @@ async function resolveKotlinImportPath(
   const parts = spec.split(".").filter(Boolean);
   if (parts.length < 2) {
     const packageDir = spec.replace(/\./g, "/");
-    const packageCandidates = await fg([`${packageDir}/**/*.kt`, `${packageDir}/**/*.kts`], {
-      cwd: projectRoot,
-      absolute: true,
-      onlyFiles: true,
-    });
+    const packageCandidates = await fg(
+      [`${packageDir}/**/*.kt`, `${packageDir}/**/*.kts`],
+      {
+        cwd: projectRoot,
+        absolute: true,
+        onlyFiles: true,
+      },
+    );
     for (const candidate of packageCandidates) {
       try {
         const indexEntry = await readKotlinSymbolIndex(candidate);
@@ -1859,17 +1889,21 @@ async function resolveKotlinImportPath(
       ? parts.slice(0, -1).join(".")
       : parts.slice(0, -1).join(".");
   const packageDir = packageName.replace(/\./g, "/");
-  const candidates = await fg([`${packageDir}/**/*.kt`, `${packageDir}/**/*.kts`], {
-    cwd: projectRoot,
-    absolute: true,
-    onlyFiles: true,
-  });
+  const candidates = await fg(
+    [`${packageDir}/**/*.kt`, `${packageDir}/**/*.kts`],
+    {
+      cwd: projectRoot,
+      absolute: true,
+      onlyFiles: true,
+    },
+  );
 
   for (const candidate of candidates) {
     try {
       const indexEntry = await readKotlinSymbolIndex(candidate);
       if (indexEntry.packageName !== packageName) continue;
-      if (importedName !== "*" && !indexEntry.symbols.has(importedName)) continue;
+      if (importedName !== "*" && !indexEntry.symbols.has(importedName))
+        continue;
       const resolved = path.resolve(candidate);
       kotlinImportResolutionCache.set(cacheKey, resolved);
       return resolved;
@@ -1892,8 +1926,7 @@ async function readJavaSymbolIndex(
   const packageName =
     source.match(/^\s*package\s+([A-Za-z_][\w.]*)\s*;/m)?.[1] ?? null;
   const symbols = new Set<string>();
-  const declarationPattern =
-    /\b(?:class|interface|enum)\s+([A-Za-z_][\w]*)\b/g;
+  const declarationPattern = /\b(?:class|interface|enum)\s+([A-Za-z_][\w]*)\b/g;
   for (const match of source.matchAll(declarationPattern)) {
     const symbolName = match[1];
     if (symbolName) symbols.add(symbolName);
@@ -1945,7 +1978,8 @@ async function resolveJavaImportPath(
     try {
       const indexEntry = await readJavaSymbolIndex(candidate);
       if (indexEntry.packageName !== packageName) continue;
-      if (importedName !== "*" && !indexEntry.symbols.has(importedName)) continue;
+      if (importedName !== "*" && !indexEntry.symbols.has(importedName))
+        continue;
       const resolved = path.resolve(candidate);
       javaImportResolutionCache.set(cacheKey, resolved);
       return resolved;

@@ -221,7 +221,9 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
       query
         .replace(/\(function\)/g, "(function_expression)")
         .replace(JS_OBJECT_METHOD_EXPORT_PATTERN, "\n"),
-    notes: ["normalizes function node compatibility for native javascript grammar"],
+    notes: [
+      "normalizes function node compatibility for native javascript grammar",
+    ],
   },
 };
 registerLanguage(JAVASCRIPT_DEF);

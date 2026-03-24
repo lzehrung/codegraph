@@ -222,7 +222,9 @@ type PreparedFileContext = {
   nativeError?: string;
 };
 
-function parsePreparedFileContext(context: PreparedFileContext): ParsedFileContext {
+function parsePreparedFileContext(
+  context: PreparedFileContext,
+): ParsedFileContext {
   const { source, sup, lang, nativeQueries } = context;
   const key = sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts";
   const parser = acquireParser(lang, key);
@@ -240,7 +242,9 @@ function parsePreparedFileContext(context: PreparedFileContext): ParsedFileConte
  */
 export type BuildOptions = {
   /** Callback for progress tracking during parsing/indexing */
-  onProgress?: ((progress: import("./types.js").ProgressUpdate) => void) | undefined;
+  onProgress?:
+    | ((progress: import("./types.js").ProgressUpdate) => void)
+    | undefined;
   /** Number of threads for parallel processing (default: 8) */
   threads?: number;
   /** Cache mode: "off" (default), "memory", or "disk" */
@@ -1580,26 +1584,26 @@ export function collectLocalsAndExportsFromSource(
   const usedNativeLocals = extractLocalsFromNativeQueries();
   const usedQueryLocals = usedNativeLocals || extractLocalsFromJsQueries();
   if (tree && !usedQueryLocals) {
-      const scopeIdx = buildScopeIndexFromSource(
-        file,
-        source,
-        support,
-        lang,
-        imports,
-        tree ? { tree } : undefined,
-      );
-      for (const b of scopeIdx.all) {
-        if (!b.def) continue;
-        let kind: SymbolKind = SymbolKind.Variable;
-        if (b.kind === "function") kind = SymbolKind.Function;
-        else if (b.kind === "class") kind = SymbolKind.Class;
-        else if (b.kind === "type") kind = SymbolKind.TypeAlias;
-        // Find the node in tree corresponding to b.def range if possible
-        const startIndex = b.def.start.index ?? 0;
-        const endIndex = b.def.end.index ?? 0;
-        const node = tree.rootNode.descendantForIndex(startIndex, endIndex);
-        pushLocal(b.name, kind, b.def, node);
-      }
+    const scopeIdx = buildScopeIndexFromSource(
+      file,
+      source,
+      support,
+      lang,
+      imports,
+      tree ? { tree } : undefined,
+    );
+    for (const b of scopeIdx.all) {
+      if (!b.def) continue;
+      let kind: SymbolKind = SymbolKind.Variable;
+      if (b.kind === "function") kind = SymbolKind.Function;
+      else if (b.kind === "class") kind = SymbolKind.Class;
+      else if (b.kind === "type") kind = SymbolKind.TypeAlias;
+      // Find the node in tree corresponding to b.def range if possible
+      const startIndex = b.def.start.index ?? 0;
+      const endIndex = b.def.end.index ?? 0;
+      const node = tree.rootNode.descendantForIndex(startIndex, endIndex);
+      pushLocal(b.name, kind, b.def, node);
+    }
   }
 
   const mergeTypeScriptNamespaceDeclarations = (
@@ -1676,14 +1680,16 @@ export function collectLocalsAndExportsFromSource(
               }
             }
             if (isAllAssignment && map["stmt"]) {
-              const assignmentText = map["stmt"]!.text;
+              const assignmentText = map["stmt"].text;
               const hasTuple = /=\s*\(/.test(assignmentText);
               if (items.length === 0 || hasTuple) {
                 const strRe = /["']([^"']+)["']/g;
                 for (let submatch; (submatch = strRe.exec(assignmentText)); ) {
                   const name = submatch[1]!;
                   pythonAllExports.add(name);
-                  const local = mergedLocals.find((def) => def.localName === name);
+                  const local = mergedLocals.find(
+                    (def) => def.localName === name,
+                  );
                   if (
                     local &&
                     !exports.some(
@@ -1705,7 +1711,7 @@ export function collectLocalsAndExportsFromSource(
             continue;
           }
           if (map["name"]) {
-            const nameText = map["name"]!.text;
+            const nameText = map["name"].text;
             const local = locals.find((def) => def.localName === nameText);
             if (local && !nameText.startsWith("_")) {
               exports.push({
@@ -1719,9 +1725,9 @@ export function collectLocalsAndExportsFromSource(
         }
 
         if (map["from"]) {
-          const from = unquote(map["from"]!.text);
+          const from = unquote(map["from"].text);
           if (map["src"]) {
-            const srcName = map["src"]!.text;
+            const srcName = map["src"].text;
             const alias = map["alias"]?.text ?? srcName;
             exports.push({
               type: "reexport",
@@ -1743,7 +1749,7 @@ export function collectLocalsAndExportsFromSource(
           continue;
         }
         if (map["cjs_shorthand"]) {
-          const nameText = map["cjs_shorthand"]!.text;
+          const nameText = map["cjs_shorthand"].text;
           const local = locals.find((def) => def.localName === nameText);
           if (local) {
             exports.push({
@@ -1755,25 +1761,25 @@ export function collectLocalsAndExportsFromSource(
           continue;
         }
         if (map["cjs_export_name"] && map["cjs_local"]) {
-          const exportedAs = map["cjs_export_name"]!.text;
-          const localName = map["cjs_local"]!.text;
+          const exportedAs = map["cjs_export_name"].text;
+          const localName = map["cjs_local"].text;
           const local = locals.find((def) => def.localName === localName);
           if (local) exports.push({ type: "local", exportedAs, target: local });
           continue;
         }
         if (map["cjs_export_name"] && map["cjs_fn"]) {
-          const exportedAs = map["cjs_export_name"]!.text;
+          const exportedAs = map["cjs_export_name"].text;
           const sym = buildSymbolDef(
             exportedAs,
             SymbolKind.Function,
-            rangeFromNativeCapture(map["cjs_fn"]!),
+            rangeFromNativeCapture(map["cjs_fn"]),
           );
           locals.push(sym);
           exports.push({ type: "local", exportedAs, target: sym });
           continue;
         }
         if (map["default"]) {
-          const nameText = map["default"]!.text;
+          const nameText = map["default"].text;
           const local = locals.find((def) => def.localName === nameText);
           if (local) {
             exports.push({
@@ -1788,7 +1794,7 @@ export function collectLocalsAndExportsFromSource(
           const sym = buildSymbolDef(
             "__default_export__",
             SymbolKind.Default,
-            rangeFromNativeCapture(map["anon_default"]!),
+            rangeFromNativeCapture(map["anon_default"]),
           );
           locals.push(sym);
           exports.push({ type: "local", exportedAs: "default", target: sym });
@@ -1811,7 +1817,7 @@ export function collectLocalsAndExportsFromSource(
           continue;
         }
         if (map["ts_export_assign"]) {
-          const ident = map["ts_export_assign"]!.text;
+          const ident = map["ts_export_assign"].text;
           const local = locals.find((def) => def.localName === ident);
           if (local) {
             exports.push({
@@ -1823,7 +1829,7 @@ export function collectLocalsAndExportsFromSource(
           continue;
         }
         if (map["name"]) {
-          const nameText = map["name"]!.text;
+          const nameText = map["name"].text;
           const local = locals.find((def) => def.localName === nameText);
           if (local) {
             exports.push({
@@ -1843,7 +1849,7 @@ export function collectLocalsAndExportsFromSource(
           continue;
         }
         if (map["src"]) {
-          const srcName = map["src"]!.text;
+          const srcName = map["src"].text;
           const alias = map["alias"]?.text ?? srcName;
           const local = locals.find((def) => def.localName === srcName);
           if (local) {
@@ -1852,7 +1858,9 @@ export function collectLocalsAndExportsFromSource(
         }
       }
       if (
-        !exports.some((entry) => entry.type === "local" && entry.exportedAs === "default")
+        !exports.some(
+          (entry) => entry.type === "local" && entry.exportedAs === "default",
+        )
       ) {
         const mDefFn = source.match(
           /\bexport\s+default\s+function\s+([A-Za-z_$][\w$]*)/,
@@ -2627,92 +2635,51 @@ export async function collectImportsForFile(
       : resolved;
   };
 
-    const runFallback = async () => {
-      const src =
-        resolvedSup.id === "ts" || resolvedSup.id === "js"
-          ? stripJsLikeComments(resolvedSource)
-          : resolvedSource;
-      const typeOnlyImport = /\bimport\s+type\b/;
-      const reFrom = /^\s*import\s+([^\n;]*?)\s+from\s+(["'])(?<m>[^"']+)\2/gm;
-      for (const m of src.matchAll(reFrom)) {
-        const clause = m[1]!.trim();
-        const mod = m.groups?.m as string;
-        const typeOnly = typeOnlyImport.test(m[0]);
-        const resolved = await resolveFrom(mod);
-        const ns = clause.match(/^\*\s+as\s+([A-Za-z_$][\w$]*)$/);
-        if (ns) {
+  const runFallback = async () => {
+    const src =
+      resolvedSup.id === "ts" || resolvedSup.id === "js"
+        ? stripJsLikeComments(resolvedSource)
+        : resolvedSource;
+    const typeOnlyImport = /\bimport\s+type\b/;
+    const reFrom = /^\s*import\s+([^\n;]*?)\s+from\s+(["'])(?<m>[^"']+)\2/gm;
+    for (const m of src.matchAll(reFrom)) {
+      const clause = m[1]!.trim();
+      const mod = m.groups?.m as string;
+      const typeOnly = typeOnlyImport.test(m[0]);
+      const resolved = await resolveFrom(mod);
+      const ns = clause.match(/^\*\s+as\s+([A-Za-z_$][\w$]*)$/);
+      if (ns) {
+        imports.push({
+          kind: "namespace",
+          localNS: ns[1]!,
+          from: mod,
+          resolved,
+          typeOnly,
+        });
+        continue;
+      }
+      const parts = clause.split(",");
+      if (parts.length) {
+        const first = parts[0]!.trim();
+        if (first && !first.startsWith("{"))
           imports.push({
-            kind: "namespace",
-            localNS: ns[1]!,
+            kind: "default",
+            local: first,
             from: mod,
             resolved,
             typeOnly,
           });
-          continue;
-        }
-        const parts = clause.split(",");
-        if (parts.length) {
-          const first = parts[0]!.trim();
-          if (first && !first.startsWith("{"))
-            imports.push({
-              kind: "default",
-              local: first,
-              from: mod,
-              resolved,
-              typeOnly,
-            });
-          const namedBlock =
-            parts.slice(1).join(",").trim() ||
-            (first.startsWith("{") ? first : "");
-          const names = namedBlock
-            .replace(/[{}]/g, "")
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean);
-          for (const spec of names) {
-            const nm = spec.match(
-              /^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/,
-            );
-            if (!nm) continue;
-            const imported = nm[1]!;
-            const local = nm[2] ?? imported;
-            imports.push({
-              kind: "named",
-              local,
-              imported,
-              from: mod,
-              resolved,
-              typeOnly,
-            });
-          }
-        }
-      }
-      const reReqDefault =
-        /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
-      for (const m of src.matchAll(reReqDefault)) {
-        const local = m[1]!;
-        const mod = m.groups?.m as string;
-        const resolved = await resolveFrom(mod);
-        imports.push({
-          kind: "default",
-          local,
-          from: mod,
-          resolved,
-          mechanism: "cjs",
-        });
-      }
-      const reReqNamed =
-        /\b(?:const|let|var)\s*\{([^}]+)\}\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
-      for (const m of src.matchAll(reReqNamed)) {
-        const specs = m[1]!
+        const namedBlock =
+          parts.slice(1).join(",").trim() ||
+          (first.startsWith("{") ? first : "");
+        const names = namedBlock
+          .replace(/[{}]/g, "")
           .split(",")
           .map((s) => s.trim())
           .filter(Boolean);
-        const mod = m.groups?.m as string;
-        const resolved = await resolveFrom(mod);
-        for (const spec of specs) {
+        for (const spec of names) {
           const nm = spec.match(
-            /^([A-Za-z_$][\w$]*)(?::\s*([A-Za-z_$][\w$]*))?$/,
+            /^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/,
           );
           if (!nm) continue;
           const imported = nm[1]!;
@@ -2723,217 +2690,218 @@ export async function collectImportsForFile(
             imported,
             from: mod,
             resolved,
-            mechanism: "cjs",
+            typeOnly,
           });
         }
       }
-    };
+    }
+    const reReqDefault =
+      /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
+    for (const m of src.matchAll(reReqDefault)) {
+      const local = m[1]!;
+      const mod = m.groups?.m as string;
+      const resolved = await resolveFrom(mod);
+      imports.push({
+        kind: "default",
+        local,
+        from: mod,
+        resolved,
+        mechanism: "cjs",
+      });
+    }
+    const reReqNamed =
+      /\b(?:const|let|var)\s*\{([^}]+)\}\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
+    for (const m of src.matchAll(reReqNamed)) {
+      const specs = m[1]!
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const mod = m.groups?.m as string;
+      const resolved = await resolveFrom(mod);
+      for (const spec of specs) {
+        const nm = spec.match(
+          /^([A-Za-z_$][\w$]*)(?::\s*([A-Za-z_$][\w$]*))?$/,
+        );
+        if (!nm) continue;
+        const imported = nm[1]!;
+        const local = nm[2] ?? imported;
+        imports.push({
+          kind: "named",
+          local,
+          imported,
+          from: mod,
+          resolved,
+          mechanism: "cjs",
+        });
+      }
+    }
+  };
 
   if (resolvedNativeQueries) {
     try {
       for (const match of resolvedNativeQueries.importBindings) {
-          const caps = capturesByName(match);
-          const stmtText = caps["stmt"]?.text ?? "";
-          const typeOnly = resolvedSup.isTypeOnly(stmtText);
-          const from = caps["from"] ? unquote(caps["from"]!.text) : undefined;
-          const patterns = capturesNamed(match, "pattern");
+        const caps = capturesByName(match);
+        const stmtText = caps["stmt"]?.text ?? "";
+        const typeOnly = resolvedSup.isTypeOnly(stmtText);
+        const from = caps["from"] ? unquote(caps["from"].text) : undefined;
+        const patterns = capturesNamed(match, "pattern");
 
-          for (const pattern of patterns) {
-            if (pattern.nodeType !== "object_pattern" || !from) continue;
-            const resolved = await resolveFrom(from);
-            for (const binding of parseObjectPatternBindings(pattern.text)) {
-              imports.push({
-                kind: "named",
-                local: binding.local,
-                imported: binding.imported,
-                from,
-                resolved,
-                typeOnly,
-              });
-            }
-          }
-
-          if (!from) continue;
+        for (const pattern of patterns) {
+          if (pattern.nodeType !== "object_pattern" || !from) continue;
           const resolved = await resolveFrom(from);
-          if (caps["def"]) {
+          for (const binding of parseObjectPatternBindings(pattern.text)) {
             imports.push({
-              kind: "default",
-              local: caps["def"]!.text,
+              kind: "named",
+              local: binding.local,
+              imported: binding.imported,
               from,
               resolved,
               typeOnly,
             });
           }
-          if (caps["ns"]) {
-            if (resolvedSup.id === "go") {
-              const alias = parseGoImportAlias(stmtText);
+        }
+
+        if (!from) continue;
+        const resolved = await resolveFrom(from);
+        if (caps["def"]) {
+          imports.push({
+            kind: "default",
+            local: caps["def"].text,
+            from,
+            resolved,
+            typeOnly,
+          });
+        }
+        if (caps["ns"]) {
+          if (resolvedSup.id === "go") {
+            const alias = parseGoImportAlias(stmtText);
+            if (alias === ".") {
+              imports.push({
+                kind: "star",
+                from,
+                resolved,
+                typeOnly,
+              });
+            } else if (alias !== "_") {
+              imports.push({
+                kind: "namespace",
+                localNS: alias ?? caps["ns"].text,
+                from,
+                resolved,
+                typeOnly,
+              });
+            }
+          } else {
+            imports.push({
+              kind: "namespace",
+              localNS: caps["ns"].text,
+              from,
+              resolved,
+              typeOnly,
+            });
+          }
+        }
+
+        const inames = capturesNamed(match, "iname");
+        const aliases = capturesNamed(match, "alias");
+        for (let i = 0; i < inames.length; i++) {
+          const imported = inames[i]!.text;
+          const alias = aliases[i]?.text ?? imported;
+          imports.push({
+            kind: "named",
+            local: alias,
+            imported,
+            from,
+            resolved,
+            typeOnly,
+          });
+        }
+
+        if (
+          !caps["def"] &&
+          !caps["ns"] &&
+          inames.length === 0 &&
+          patterns.length === 0
+        ) {
+          if (resolvedSup.id === "java") {
+            const parts = from.split(".");
+            const last = parts[parts.length - 1];
+            if (last === "*") {
+              imports.push({ kind: "star", from, resolved, typeOnly });
+            } else if (last && /^[A-Z]/.test(last)) {
+              imports.push({
+                kind: "named",
+                local: last,
+                imported: last,
+                from,
+                resolved,
+                typeOnly,
+              });
+            }
+          } else if (resolvedSup.id === "csharp") {
+            if (caps["alias"]) {
+              const alias = caps["alias"].text;
+              const fromParts = from.split(".");
+              const imported = fromParts[fromParts.length - 1] ?? alias;
+              imports.push({
+                kind: "named",
+                local: alias,
+                imported,
+                from,
+                resolved,
+                typeOnly,
+              });
+            } else {
+              imports.push({ kind: "star", from, resolved, typeOnly });
+            }
+          } else if (resolvedSup.id === "ruby") {
+            imports.push({ kind: "star", from, resolved });
+          } else if (resolvedSup.id === "go") {
+            if (caps["alias"]) {
+              const alias = caps["alias"].text;
               if (alias === ".") {
                 imports.push({
                   kind: "star",
                   from,
                   resolved,
-                  typeOnly,
                 });
-              } else if (alias !== "_") {
-                imports.push({
-                  kind: "namespace",
-                  localNS: alias ?? caps["ns"]!.text,
-                  from,
-                  resolved,
-                  typeOnly,
-                });
+                continue;
               }
-            } else {
+              if (alias === "_") {
+                continue;
+              }
               imports.push({
                 kind: "namespace",
-                localNS: caps["ns"]!.text,
+                localNS: alias,
                 from,
                 resolved,
-                typeOnly,
               });
-            }
-          }
-
-          const inames = capturesNamed(match, "iname");
-          const aliases = capturesNamed(match, "alias");
-          for (let i = 0; i < inames.length; i++) {
-            const imported = inames[i]!.text;
-            const alias = aliases[i]?.text ?? imported;
-            imports.push({
-              kind: "named",
-              local: alias,
-              imported,
-              from,
-              resolved,
-              typeOnly,
-            });
-          }
-
-          if (
-            !caps["def"] &&
-            !caps["ns"] &&
-            inames.length === 0 &&
-            patterns.length === 0
-          ) {
-            if (resolvedSup.id === "java") {
-              const parts = from.split(".");
+            } else {
+              const parts = from.replace(/"/g, "").split("/");
               const last = parts[parts.length - 1];
-              if (last === "*") {
-                imports.push({ kind: "star", from, resolved, typeOnly });
-              } else if (last && /^[A-Z]/.test(last)) {
-                imports.push({
-                  kind: "named",
-                  local: last,
-                  imported: last,
-                  from,
-                  resolved,
-                  typeOnly,
-                });
-              }
-            } else if (resolvedSup.id === "csharp") {
-              if (caps["alias"]) {
-                const alias = caps["alias"]!.text;
-                const fromParts = from.split(".");
-                const imported = fromParts[fromParts.length - 1] ?? alias;
-                imports.push({
-                  kind: "named",
-                  local: alias,
-                  imported,
-                  from,
-                  resolved,
-                  typeOnly,
-                });
-              } else {
-                imports.push({ kind: "star", from, resolved, typeOnly });
-              }
-            } else if (resolvedSup.id === "ruby") {
-              imports.push({ kind: "star", from, resolved });
-            } else if (resolvedSup.id === "go") {
-              if (caps["alias"]) {
-                const alias = caps["alias"]!.text;
-                if (alias === ".") {
-                  imports.push({
-                    kind: "star",
-                    from,
-                    resolved,
-                  });
-                  continue;
-                }
-                if (alias === "_") {
-                  continue;
-                }
-                imports.push({
-                  kind: "namespace",
-                  localNS: alias,
-                  from,
-                  resolved,
-                });
-              } else {
-                const parts = from.replace(/"/g, "").split("/");
-                const last = parts[parts.length - 1];
-                if (last) {
-                  imports.push({
-                    kind: "namespace",
-                    localNS: last,
-                    from,
-                    resolved,
-                  });
-                }
-              }
-            } else if (resolvedSup.id === "rust") {
-              if (stmtText.startsWith("mod ")) {
-                imports.push({
-                  kind: "namespace",
-                  localNS: from,
-                  from,
-                  resolved,
-                });
-              } else {
-                const parts = from.split("::");
-                const last = parts[parts.length - 1];
-                if (!last) continue;
-                if (last === "*") {
-                  imports.push({ kind: "star", from, resolved });
-                } else {
-                  imports.push({
-                    kind: "named",
-                    local: last,
-                    imported: last,
-                    from,
-                    resolved,
-                  });
-                }
-              }
-            } else if (resolvedSup.id === "kotlin") {
-              const wildcard = !!caps["wild"] || from.endsWith(".*");
-              if (wildcard) {
-                imports.push({ kind: "star", from, resolved, typeOnly });
-              } else {
-                const parts = from.split(".");
-                const imported = parts[parts.length - 1];
-                if (!imported) continue;
-                imports.push({
-                  kind: "named",
-                  local: caps["alias"]?.text ?? imported,
-                  imported,
-                  from,
-                  resolved,
-                  typeOnly,
-                });
-              }
-            } else if (resolvedSup.id === "swift") {
-              const parts = from.split(".");
-              const last = parts[parts.length - 1];
-              if (!last) continue;
-              if (parts.length === 1) {
+              if (last) {
                 imports.push({
                   kind: "namespace",
                   localNS: last,
                   from,
                   resolved,
-                  typeOnly,
                 });
-                imports.push({ kind: "star", from, resolved, typeOnly });
+              }
+            }
+          } else if (resolvedSup.id === "rust") {
+            if (stmtText.startsWith("mod ")) {
+              imports.push({
+                kind: "namespace",
+                localNS: from,
+                from,
+                resolved,
+              });
+            } else {
+              const parts = from.split("::");
+              const last = parts[parts.length - 1];
+              if (!last) continue;
+              if (last === "*") {
+                imports.push({ kind: "star", from, resolved });
               } else {
                 imports.push({
                   kind: "named",
@@ -2941,13 +2909,53 @@ export async function collectImportsForFile(
                   imported: last,
                   from,
                   resolved,
-                  typeOnly,
                 });
               }
-            } else if (resolvedSup.id === "c" || resolvedSup.id === "cpp") {
-              imports.push({ kind: "star", from, resolved, typeOnly });
             }
+          } else if (resolvedSup.id === "kotlin") {
+            const wildcard = !!caps["wild"] || from.endsWith(".*");
+            if (wildcard) {
+              imports.push({ kind: "star", from, resolved, typeOnly });
+            } else {
+              const parts = from.split(".");
+              const imported = parts[parts.length - 1];
+              if (!imported) continue;
+              imports.push({
+                kind: "named",
+                local: caps["alias"]?.text ?? imported,
+                imported,
+                from,
+                resolved,
+                typeOnly,
+              });
+            }
+          } else if (resolvedSup.id === "swift") {
+            const parts = from.split(".");
+            const last = parts[parts.length - 1];
+            if (!last) continue;
+            if (parts.length === 1) {
+              imports.push({
+                kind: "namespace",
+                localNS: last,
+                from,
+                resolved,
+                typeOnly,
+              });
+              imports.push({ kind: "star", from, resolved, typeOnly });
+            } else {
+              imports.push({
+                kind: "named",
+                local: last,
+                imported: last,
+                from,
+                resolved,
+                typeOnly,
+              });
+            }
+          } else if (resolvedSup.id === "c" || resolvedSup.id === "cpp") {
+            imports.push({ kind: "star", from, resolved, typeOnly });
           }
+        }
       }
       await finalizeLanguageSpecificImports();
       if (imports.length > 0) return imports;
@@ -3314,7 +3322,9 @@ export async function parseFile(file: string): Promise<ParsedFileContext> {
   return parsePreparedFileContext(await prepareFileForIndexing(file));
 }
 
-async function prepareFileForIndexing(file: string): Promise<PreparedFileContext> {
+async function prepareFileForIndexing(
+  file: string,
+): Promise<PreparedFileContext> {
   const prep = await prepareParserInput(file);
   const nativeExecution = getNativeQueryExecution(prep.source, prep.sup);
 
@@ -3426,7 +3436,7 @@ async function buildIndexFromFileListShared(
   const bloomFilterCache = useBloomFilters
     ? new (await import("./util/bloomFilter.js")).BloomFilterCache()
     : undefined;
-    const parsedMap = new Map<string, ParsedFileContext>();
+  const parsedMap = new Map<string, ParsedFileContext>();
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
   const parseStart = performance.now();
   const graph: Graph = { nodes: new Set(normalizedFiles), edges: [] };
@@ -4873,10 +4883,10 @@ export async function goToDefinition(
         const subObj = expr.child(0);
         let subProp =
           expr.type === "qualified_type"
-            ? expr.namedChildren[1] ?? expr.child(1)
-            : expr.childForFieldName?.("property") ??
+            ? (expr.namedChildren[1] ?? expr.child(1))
+            : (expr.childForFieldName?.("property") ??
               expr.child(2) ??
-              expr.childForFieldName?.("attribute");
+              expr.childForFieldName?.("attribute"));
         if (!subProp && expr.type === "navigation_expression") {
           const suffix =
             expr.namedChildren.find((c) => c.type === "navigation_suffix") ??
@@ -4906,7 +4916,8 @@ export async function goToDefinition(
       }
       if (
         sup.id === "java" &&
-        (expr.type === "scoped_identifier" || expr.type === "scoped_type_identifier")
+        (expr.type === "scoped_identifier" ||
+          expr.type === "scoped_type_identifier")
       ) {
         const subObj = expr.childForFieldName("scope") ?? expr.child(0);
         const subProp = expr.childForFieldName("name") ?? expr.child(2);
@@ -5207,7 +5218,8 @@ export function resolveImported(
         sup.id,
       );
       if (siblingHit?.kind === "resolved") return siblingHit.def;
-      if (siblingHit?.kind === "namespace") return { namespace: siblingHit.file };
+      if (siblingHit?.kind === "namespace")
+        return { namespace: siblingHit.file };
     }
   } catch {
     // Unsupported file extension - cannot resolve sibling package exports.
@@ -5302,8 +5314,8 @@ function readPackageNameForLanguage(
     const source = fs.readFileSync(filePath, "utf8");
     const packageName =
       languageId === "kotlin"
-        ? source.match(/^\s*package\s+([A-Za-z_][\w.]*)/m)?.[1] ?? null
-        : source.match(/^\s*package\s+([A-Za-z_][\w.]*)\s*;/m)?.[1] ?? null;
+        ? (source.match(/^\s*package\s+([A-Za-z_][\w.]*)/m)?.[1] ?? null)
+        : (source.match(/^\s*package\s+([A-Za-z_][\w.]*)\s*;/m)?.[1] ?? null);
     packageNameCache.set(cacheKey, packageName);
     return packageName;
   } catch {
@@ -5322,8 +5334,10 @@ function resolveSiblingPackageExport(
   if (!packageName) return null;
   const targetDir = path.dirname(targetFile);
   for (const filePath of index.byFile.keys()) {
-    if (filePath === targetFile || path.dirname(filePath) !== targetDir) continue;
-    if (readPackageNameForLanguage(filePath, languageId) !== packageName) continue;
+    if (filePath === targetFile || path.dirname(filePath) !== targetDir)
+      continue;
+    if (readPackageNameForLanguage(filePath, languageId) !== packageName)
+      continue;
     const hit = resolveExport(index, filePath, exportedName);
     if (hit) return hit;
   }
@@ -5929,9 +5943,7 @@ export async function findReferences(
           if (imp.kind === "star") {
             const res = resolveImported(index, imp, name);
             const matchesDef =
-              !!res &&
-              !("namespace" in res) &&
-              sameDef(res, def);
+              !!res && !("namespace" in res) && sameDef(res, def);
             if (!matchesDef) continue;
             const ranges = await collectNamedNodeReferences(f, name);
             for (const range of ranges) {

@@ -238,7 +238,9 @@ export const TYPESCRIPT_DEF: LanguageDefinition = {
   isTypeOnly: (stmtText: string) => /\b(import|export)\s+type\b/.test(stmtText),
   native: {
     normalizeQuery: normalizeTypeScriptNativeQuery,
-    notes: ["removes unsupported export-assignment and default-export native query fragments"],
+    notes: [
+      "removes unsupported export-assignment and default-export native query fragments",
+    ],
   },
 };
 registerLanguage(TYPESCRIPT_DEF);
@@ -260,7 +262,9 @@ export const TSX_DEF: LanguageDefinition = {
   isTypeOnly: (stmtText: string) => /\b(import|export)\s+type\b/.test(stmtText),
   native: {
     normalizeQuery: normalizeTypeScriptNativeQuery,
-    notes: ["removes unsupported export-assignment and default-export native query fragments"],
+    notes: [
+      "removes unsupported export-assignment and default-export native query fragments",
+    ],
   },
 };
 registerLanguage(TSX_DEF);
