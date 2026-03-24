@@ -303,7 +303,7 @@ describe('Find References', () => {
       expectReferenceAt(result, mainFile, 6);
     });
 
-    it('should currently retain only the function-pointer typedef definition anchor', async () => {
+    it('should find references to function-pointer typedef use sites', async () => {
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'c');
       const advancedUseFile = path.join(samplePath, 'advanced-use.c').replace(/\\/g, '/');
       const functionPointersFile = path.join(samplePath, 'function-pointers.h').replace(/\\/g, '/');
@@ -312,8 +312,9 @@ describe('Find References', () => {
         functionPointersFile,
       ]);
 
-      const result = await testFindReferences(index, functionPointersFile, 3, 15, 1);
+      const result = await testFindReferences(index, functionPointersFile, 3, 15, 2);
       expectReferenceAt(result, functionPointersFile, 3);
+      expectReferenceAt(result, advancedUseFile, 4);
     });
   });
 

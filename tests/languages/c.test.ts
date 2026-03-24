@@ -47,6 +47,15 @@ const definition: LanguageTestDefinition = {
         expectedDefinition: { file: "function-pointers.h", line: 3 },
       },
     ],
+    references: [
+      {
+        name: "find references for function-pointer typedef",
+        file: "function-pointers.h",
+        line: 3,
+        column: 15,
+        minimumCount: 2,
+      },
+    ],
   },
 };
 
