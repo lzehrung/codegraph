@@ -79,6 +79,14 @@ function isHtmlLikeLanguage(languageId: string, filePath?: string): boolean {
   return !!filePath && filePath.toLowerCase().endsWith(".astro");
 }
 
+function extractKotlinImportSpecifier(statementText: string): string | null {
+  const match = statementText.match(
+    /^\s*import\s+([A-Za-z_][\w.]*(?:\.\*)?)(?:\s+as\s+[A-Za-z_][\w]*)?\s*$/m,
+  );
+  if (!match?.[1]) return null;
+  return match[1].endsWith(".*") ? match[1].slice(0, -2) : match[1];
+}
+
 export function collectModuleSpecifiersFromSource(
   support: LanguageSupport,
   lang: Parser.Language,
@@ -293,6 +301,11 @@ export function collectModuleSpecifiersFromSource(
           (support.id === "ts" || support.id === "tsx") &&
           (/\b(import|export)\s+type\b/.test(stmtText) ||
             /^\s*declare\s+module\s+["']/.test(stmtText));
+        if (support.id === "kotlin") {
+          const spec = extractKotlinImportSpecifier(stmtText);
+          if (spec) out.push({ spec, typeOnly: false });
+          continue;
+        }
         for (const capture of match.captures) {
           if (capture.name !== "mod") continue;
           out.push({ spec: unquote(capture.text), typeOnly });
@@ -360,6 +373,11 @@ export function collectModuleSpecifiersFromSource(
             // forms (declare namespace Foo, declare class Bar, etc.) never reach this
             // branch.  All string-literal ambient module declarations are type-only.
             /^\s*declare\s+module\s+["']/.test(stmtText));
+        if (support.id === "kotlin") {
+          const spec = extractKotlinImportSpecifier(stmtText);
+          if (spec) out.push({ spec, typeOnly: false });
+          continue;
+        }
         for (const cap of modNodes)
           out.push({ spec: unquote(sliceText(cap.node, source)), typeOnly });
       }
@@ -584,7 +602,26 @@ export async function collectEdgesForFile(
           typeof res === "string"
             ? { type: "file", path: res.replace(/\\/g, "/") }
             : { type: "external", name: res.external };
-      } else if (["java", "csharp", "ruby", "rust"].includes(sup.id)) {
+      } else if (sup.id === "java" || sup.id === "kotlin") {
+        const res = await resolveImportSpecifier(
+          projectRoot,
+          file,
+          spec,
+          sup.id,
+          {
+            ...(matchPath ? { matchPath } : {}),
+            ...(workspaceConfig ? { workspaceConfig } : {}),
+            resolveNodeModules: !!opts.resolveNodeModules,
+            ...(opts.resolutionHints
+              ? { resolutionHints: opts.resolutionHints }
+              : {}),
+          },
+        );
+        to =
+          typeof res === "string"
+            ? { type: "file", path: res.replace(/\\/g, "/") }
+            : { type: "external", name: res.external };
+      } else if (["csharp", "ruby", "rust"].includes(sup.id)) {
         const { resolvePathLikeModule } = await import("./util.js");
         const res = await resolvePathLikeModule(projectRoot, spec);
         if (res) {

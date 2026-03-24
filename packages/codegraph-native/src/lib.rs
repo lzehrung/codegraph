@@ -188,6 +188,7 @@ mod tests {
     use super::{
         execute_query, language_for_id, run_language_queries, supported_language_ids, NativeMatch,
     };
+    use std::collections::HashSet;
     use tree_sitter::Parser;
 
     fn parse_root(source: &str, language_id: &str) -> tree_sitter::Tree {
@@ -206,6 +207,114 @@ mod tests {
             .iter()
             .flat_map(|query_match| query_match.captures.iter().map(|capture| capture.text.clone()))
             .collect()
+    }
+
+    fn smoke_case(language_id: &str) -> (&'static str, &'static str) {
+        match language_id {
+            "c" => (
+                "typedef struct Utility { int value; } Utility;",
+                "(type_definition declarator: (type_identifier) @name)",
+            ),
+            "cpp" => (
+                "struct UtilityClass { int value; };",
+                "(struct_specifier name: (type_identifier) @name)",
+            ),
+            "css" => (
+                "@import \"base.css\";",
+                "(import_statement (string_value) @mod) @stmt",
+            ),
+            "csharp" => (
+                "class Program { void Helper() {} }",
+                "(method_declaration name: (identifier) @name)",
+            ),
+            "go" => (
+                "package main\nfunc Helper() {}",
+                "(function_declaration name: (identifier) @name)",
+            ),
+            "html" => (
+                "<script src=\"./app.js\"></script>",
+                "(script_element (start_tag (attribute (attribute_name) @attr (#eq? @attr \"src\") (quoted_attribute_value (attribute_value) @mod)))) @stmt",
+            ),
+            "java" => (
+                "class Main { void helper() {} }",
+                "(method_declaration name: (identifier) @name)",
+            ),
+            "js" => (
+                "function helper() {}",
+                "(function_declaration name: (identifier) @name)",
+            ),
+            "kotlin" => (
+                "fun helper() {}",
+                "(function_declaration (identifier) @name)",
+            ),
+            "less" => (
+                "@import \"base.css\";",
+                "(import_statement (string_value) @mod) @stmt",
+            ),
+            "python" => (
+                "def helper():\n    pass\n",
+                "(function_definition name: (identifier) @name)",
+            ),
+            "ruby" => (
+                "def helper; end",
+                "(method name: (identifier) @name)",
+            ),
+            "rust" => (
+                "fn helper() {}",
+                "(function_item name: (identifier) @name)",
+            ),
+            "scss" => (
+                "@import \"base.css\";",
+                "(import_statement (string_value) @mod) @stmt",
+            ),
+            "svelte" => (
+                "<script src=\"./dep.js\"></script>",
+                "(script_element (start_tag (attribute (attribute_name) @attr (#eq? @attr \"src\") (quoted_attribute_value (attribute_value) @mod)))) @stmt",
+            ),
+            "swift" => (
+                "func helper() {}",
+                "(function_declaration name: (simple_identifier) @name)",
+            ),
+            "ts" => (
+                "export const value = 1;",
+                "(lexical_declaration (variable_declarator name: (identifier) @name))",
+            ),
+            "tsx" => (
+                "export function Button() { return <div />; }",
+                "(function_declaration name: (identifier) @name)",
+            ),
+            "vue" => (
+                "<script src=\"./logic.ts\"></script>",
+                "(script_element (start_tag (attribute (attribute_name) @attr (#eq? @attr \"src\") (quoted_attribute_value (attribute_value) @mod)))) @stmt",
+            ),
+            other => panic!("missing smoke case for language id {other}"),
+        }
+    }
+
+    fn smoke_case_language_ids() -> HashSet<&'static str> {
+        [
+            "c",
+            "cpp",
+            "css",
+            "csharp",
+            "go",
+            "html",
+            "java",
+            "js",
+            "kotlin",
+            "less",
+            "python",
+            "ruby",
+            "rust",
+            "scss",
+            "svelte",
+            "swift",
+            "ts",
+            "tsx",
+            "vue",
+        ]
+        .into_iter()
+        .collect()
     }
 
     #[test]
@@ -300,5 +409,36 @@ mod tests {
             error.to_string().contains("Failed to compile query"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn smoke_cases_cover_all_supported_language_ids() {
+        let supported: HashSet<String> = supported_language_ids().into_iter().collect();
+        let smoke_cases: HashSet<String> = smoke_case_language_ids()
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+
+        assert_eq!(
+            smoke_cases, supported,
+            "smoke-case table must stay in sync with supported language ids"
+        );
+    }
+
+    #[test]
+    fn every_supported_language_parses_and_executes_a_smoke_query() {
+        for language_id in supported_language_ids() {
+            let (source, query) = smoke_case(language_id.as_str());
+            let language = language_for_id(language_id.as_str())
+                .expect("supported language should resolve to a parser language");
+            let tree = parse_root(source, language_id.as_str());
+            let matches = execute_query(source, tree.root_node(), language, query)
+                .unwrap_or_else(|error| panic!("smoke query failed for {language_id}: {error}"));
+
+            assert!(
+                !matches.is_empty(),
+                "expected smoke query to produce at least one match for {language_id}"
+            );
+        }
     }
 }

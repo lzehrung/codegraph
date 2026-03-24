@@ -57,6 +57,14 @@ const definition: LanguageTestDefinition = {
         from: "index.html",
         to: { type: "external", name: "https://example.com/embed" },
       },
+      {
+        from: "modules.html",
+        to: { type: "file", path: "app.js" },
+      },
+      {
+        from: "modules.html",
+        to: { type: "file", path: "about.html" },
+      },
     ],
   },
 };

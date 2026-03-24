@@ -26,6 +26,10 @@ const definition: LanguageTestDefinition = {
         from: "static-imports.java",
         to: { type: "file", path: "helpers/Helpers.java" },
       },
+      {
+        from: "WildcardImports.java",
+        to: { type: "file", path: "pkg/PackageTypes.java" },
+      },
     ],
     symbols: [
       {
@@ -40,6 +44,32 @@ const definition: LanguageTestDefinition = {
       {
         file: "utils/Utils.java",
         includes: [{ name: "UtilityClass" }],
+      },
+      {
+        file: "pkg/PackageTypes.java",
+        includes: [
+          { name: "PackageTypes" },
+          { name: "NestedValue" },
+          { name: "ServiceContract" },
+        ],
+      },
+    ],
+    goToDefinition: [
+      {
+        name: "go to definition resolves wildcard-imported nested type",
+        file: "WildcardImports.java",
+        line: 6,
+        column: 16,
+        expectedDefinition: { file: "pkg/PackageTypes.java", line: 4 },
+      },
+    ],
+    references: [
+      {
+        name: "find references for wildcard-imported interface",
+        file: "pkg/PackageTypes.java",
+        line: 7,
+        column: 11,
+        minimumCount: 2,
       },
     ],
   },

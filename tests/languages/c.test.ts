@@ -21,6 +21,7 @@ const definition: LanguageTestDefinition = {
     dependencyGraph: [
       { from: "main.c", to: { type: "file", path: "utils.h" } },
       { from: "main.c", to: { type: "file", path: "helpers.h" } },
+      { from: "advanced-use.c", to: { type: "file", path: "function-pointers.h" } },
     ],
     symbols: [
       {
@@ -31,6 +32,28 @@ const definition: LanguageTestDefinition = {
           { name: "Mode" },
           { name: "run_advanced" },
         ],
+      },
+      {
+        file: "function-pointers.h",
+        includes: [{ name: "Comparator" }, { name: "AdvancedState" }, { name: "compare_values" }],
+      },
+    ],
+    goToDefinition: [
+      {
+        name: "go to definition resolves function-pointer typedef",
+        file: "advanced-use.c",
+        line: 4,
+        column: 3,
+        expectedDefinition: { file: "function-pointers.h", line: 3 },
+      },
+    ],
+    references: [
+      {
+        name: "find references for function-pointer typedef",
+        file: "function-pointers.h",
+        line: 3,
+        column: 15,
+        minimumCount: 2,
       },
     ],
   },
