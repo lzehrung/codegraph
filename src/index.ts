@@ -214,6 +214,7 @@ export {
 } from "./review.js";
 export {
   type NativeRuntimeMode,
+  type NativeQueryScope,
   isNativeTreeSitterAvailable,
   getNativeTreeSitterLoadError,
   getNativeTreeSitterSupportedLanguageIds,
