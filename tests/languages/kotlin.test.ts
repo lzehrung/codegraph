@@ -28,10 +28,6 @@ const definition: LanguageTestDefinition = {
         from: "Aliases.kt",
         to: { type: "file", path: "utils/helperFunction.kt" },
       },
-      {
-        from: "TypeConsumers.kt",
-        to: { type: "file", path: "utils/helperFunction.kt" },
-      },
     ],
     symbols: [
       {
@@ -65,6 +61,13 @@ const definition: LanguageTestDefinition = {
         line: 3,
         column: 24,
         expectedDefinition: { file: "utils/helperFunction.kt", line: 7 },
+      },
+      {
+        name: "go to definition resolves wildcard-imported type alias",
+        file: "TypeConsumers.kt",
+        line: 3,
+        column: 21,
+        expectedDefinition: { file: "utils/MoreTypes.kt", line: 3 },
       },
     ],
     references: [
