@@ -291,7 +291,10 @@ export function listCandidateTestFiles(
   for (const changedFile of changedFiles) {
     const dependents = reverseDeps.get(changedFile) || [];
     for (const dependent of dependents) {
-      if (isTestFilePath(dependent, allPatterns) && !candidates.has(dependent)) {
+      if (
+        isTestFilePath(dependent, allPatterns) &&
+        !candidates.has(dependent)
+      ) {
         candidates.set(dependent, {
           file: dependent,
           confidence: "medium",
@@ -317,4 +320,3 @@ export function listCandidateTestFiles(
 
   return Array.from(candidates.values()).slice(0, maxCandidates);
 }
-

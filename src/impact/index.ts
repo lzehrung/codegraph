@@ -153,9 +153,7 @@ function classifyConfigImpact(
 ): { details: string; confidence: "high" | "medium" } {
   const lowerPath = change.path.toLowerCase();
   const addedLines = collectAddedLines(change).join("\n").toLowerCase();
-  const removedLines = collectRemovedLinesText(change)
-    .join("\n")
-    .toLowerCase();
+  const removedLines = collectRemovedLinesText(change).join("\n").toLowerCase();
   const lineSignals = `${addedLines}\n${removedLines}`;
 
   if (lowerPath.endsWith("package.json")) {
@@ -509,60 +507,64 @@ async function collectUntestedChangeSuggestions(
     return "medium";
   };
 
-  const suggestionEntries = await mapLimit(changedSymbols, 8, async (symbol) => {
-    const refs = await findReferences(index, {
-      def: {
-        file: symbol.file,
-        localName: symbol.name,
+  const suggestionEntries = await mapLimit(
+    changedSymbols,
+    8,
+    async (symbol) => {
+      const refs = await findReferences(index, {
+        def: {
+          file: symbol.file,
+          localName: symbol.name,
+          kind: symbol.kind,
+          range: symbol.range,
+        },
+      });
+      if (refs.status !== "ok") return undefined;
+
+      const hasTestRef = refs.references.some((entry) =>
+        testFiles.has(entry.file),
+      );
+      if (hasTestRef) return undefined;
+
+      const coverage = coverageByFile.get(symbol.file);
+      const coveredLines = countCoveredLinesForRange(coverage, symbol.range);
+      const totalLines = countTotalLinesForRange(coverage, symbol.range);
+      const hasCoverageData = totalLines > 0;
+
+      const candidateNames = candidateTests
+        .filter((entry) => entry.file !== symbol.file)
+        .slice(0, 2)
+        .map((entry) => path.basename(entry.file));
+      const coverageSummary = hasCoverageData
+        ? `Coverage currently exercises ${coveredLines}/${totalLines} changed line(s).`
+        : "No LCOV or Istanbul coverage data matched this symbol range.";
+
+      const fanIn = fanInByFile.get(symbol.file) ?? 0;
+      const confidence = confidenceFromSignals({
+        hasCoverageData,
+        coveredLines,
+        totalLines,
+        exported: symbol.exported,
+        fanIn,
         kind: symbol.kind,
+      });
+      const suggestedCommand = inferTestCommand(candidateNames);
+
+      const details =
+        candidateNames.length > 0
+          ? `Changed symbol has no discovered references in test files. ${coverageSummary} Candidate tests: ${candidateNames.join(", ")}. Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`
+          : `Changed symbol has no discovered references in test files. ${coverageSummary} Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`;
+
+      return {
+        file: symbol.file,
         range: symbol.range,
-      },
-    });
-    if (refs.status !== "ok") return undefined;
-
-    const hasTestRef = refs.references.some((entry) =>
-      testFiles.has(entry.file),
-    );
-    if (hasTestRef) return undefined;
-
-    const coverage = coverageByFile.get(symbol.file);
-    const coveredLines = countCoveredLinesForRange(coverage, symbol.range);
-    const totalLines = countTotalLinesForRange(coverage, symbol.range);
-    const hasCoverageData = totalLines > 0;
-
-    const candidateNames = candidateTests
-      .filter((entry) => entry.file !== symbol.file)
-      .slice(0, 2)
-      .map((entry) => path.basename(entry.file));
-    const coverageSummary = hasCoverageData
-      ? `Coverage currently exercises ${coveredLines}/${totalLines} changed line(s).`
-      : "No LCOV or Istanbul coverage data matched this symbol range.";
-
-    const fanIn = fanInByFile.get(symbol.file) ?? 0;
-    const confidence = confidenceFromSignals({
-      hasCoverageData,
-      coveredLines,
-      totalLines,
-      exported: symbol.exported,
-      fanIn,
-      kind: symbol.kind,
-    });
-    const suggestedCommand = inferTestCommand(candidateNames);
-
-    const details =
-      candidateNames.length > 0
-        ? `Changed symbol has no discovered references in test files. ${coverageSummary} Candidate tests: ${candidateNames.join(", ")}. Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`
-        : `Changed symbol has no discovered references in test files. ${coverageSummary} Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`;
-
-    return {
-      file: symbol.file,
-      range: symbol.range,
-      kind: "untestedChange",
-      symbol: symbol.name,
-      details,
-      confidence,
-    } satisfies ImpactSuggestion;
-  });
+        kind: "untestedChange",
+        symbol: symbol.name,
+        details,
+        confidence,
+      } satisfies ImpactSuggestion;
+    },
+  );
 
   for (const suggestion of suggestionEntries) {
     if (suggestion) suggestions.push(suggestion);
@@ -1043,7 +1045,10 @@ export async function analyzeImpactFromDiff(
   }));
   const fileLevelFallback = options.fileLevelFallback ?? true;
   const fileLevelFallbackPaths = normalizedChanges
-    .filter((change) => change.kind !== "deleted" && !filesWithSymbols.has(change.path))
+    .filter(
+      (change) =>
+        change.kind !== "deleted" && !filesWithSymbols.has(change.path),
+    )
     .map((change) => change.path);
 
   let fanInByFile: Map<string, number> | undefined;
@@ -1057,12 +1062,17 @@ export async function analyzeImpactFromDiff(
   }
 
   // Analyze impact
-  const impactedItems = await analyzeImpact(index, changedSymbols, normalizedChanges, {
-    ...options,
-    fileLevelFallback,
-    fileLevelFallbackPaths,
-    diagnostics,
-  });
+  const impactedItems = await analyzeImpact(
+    index,
+    changedSymbols,
+    normalizedChanges,
+    {
+      ...options,
+      fileLevelFallback,
+      fileLevelFallbackPaths,
+      diagnostics,
+    },
+  );
 
   const suggestions = options.verifyReferences
     ? await collectImpactSuggestions(index, projectRoot, filteredFiles, options)
@@ -1083,7 +1093,7 @@ export async function analyzeImpactFromDiff(
       : [];
 
   const coverageSuggestions = options.testCoverageSuggestions
-      ? await collectUntestedChangeSuggestions(
+    ? await collectUntestedChangeSuggestions(
         index,
         changedSymbols,
         projectRoot,

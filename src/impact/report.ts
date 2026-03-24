@@ -416,7 +416,9 @@ function buildCompactReport(
           symbols: item.symbols,
           reasons: item.reasons,
           severity: item.severity,
-          ...(item.confidence !== undefined ? { confidence: item.confidence } : {}),
+          ...(item.confidence !== undefined
+            ? { confidence: item.confidence }
+            : {}),
           ...(item.depth !== undefined ? { depth: item.depth } : {}),
           ...(item.typeOnly !== undefined ? { typeOnly: item.typeOnly } : {}),
           ...(item.explain ? { explain: item.explain } : {}),
