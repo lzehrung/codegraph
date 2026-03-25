@@ -1,6 +1,6 @@
 {
   "name": "@lzehrung/codegraph-native",
-  "version": "1.8.28",
+  "version": "1.8.29",
   "type": "module",
   "main": "./index.js",
   "types": "./index.d.ts",
@@ -32,5 +32,8 @@
       "x86_64-unknown-linux-musl",
       "aarch64-unknown-linux-musl"
     ]
+  },
+  "optionalDependencies": {
+    "@lzehrung/codegraph-native-win32-x64-msvc": "1.8.29"
   }
 }
