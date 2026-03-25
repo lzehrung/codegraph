@@ -1,6 +1,6 @@
 {
   "name": "@lzehrung/codegraph",
-  "version": "1.8.28",
+  "version": "1.8.29",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -133,7 +133,7 @@
     "tsconfig-paths": "^4.2.0"
   },
   "optionalDependencies": {
-    "@lzehrung/codegraph-native": "^1.8.28"
+    "@lzehrung/codegraph-native": "^1.8.29"
   },
   "overrides": {
     "tree-sitter": "^0.25.0"
