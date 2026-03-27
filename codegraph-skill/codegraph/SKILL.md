@@ -46,6 +46,9 @@ Assuming the tool is available as `codegraph` (or via `npx codegraph` inside a p
 - Explicit native runtime control:
   `codegraph graph --native off`
   `codegraph index --native on --report`
+- Worker threads for parallel native extraction:
+  `codegraph index --workers --threads 8`
+  Uses Piscina worker pool to offload per-file Rust extraction across CPU cores. Only applies to `index` and build commands (not `graph`). Falls back silently if the native addon or Piscina is unavailable.
 
 ### 2. Definitions and references
 
@@ -92,6 +95,7 @@ import { buildProjectIndex, goToDefinition, findReferences } from "@lzehrung/cod
 const root = process.cwd();
 const index = await buildProjectIndex(root, { native: "auto" });
 const jsOnlyIndex = await buildProjectIndex(root, { native: "off" });
+const workerIndex = await buildProjectIndex(root, { useNativeWorkers: true });
 ```
 
 There is no separate native import. Use `native: "auto" | "on" | "off"` in public API calls to control native usage explicitly.
