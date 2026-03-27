@@ -133,7 +133,7 @@ benchDescribe("bench-native harness", () => {
     ).toThrow();
   });
 
-  it("reports speedup column in table output", () => {
+  it("reports vs JS column in table output", () => {
     const output = execFileSync(
       process.execPath,
       [
@@ -149,9 +149,61 @@ benchDescribe("bench-native harness", () => {
         timeout: 60_000,
       },
     );
-    expect(output).toContain("Speedup");
+    expect(output).toContain("vs JS");
     // native row should have a speedup indicator
     expect(output).toMatch(/\dx (faster|slower)/);
+  });
+
+  it("reports vs Native column when --workers is used", () => {
+    const output = execFileSync(
+      process.execPath,
+      [
+        benchScript,
+        "--runs=1",
+        "--fixtures=typescript",
+        "--workloads=full",
+        "--temperatures=cold",
+        "--workers",
+      ],
+      {
+        cwd: rootDir,
+        encoding: "utf8",
+        timeout: 60_000,
+      },
+    );
+    expect(output).toContain("vs Native");
+    // workers row should show comparison against both JS and native
+    const lines = output.split("\n");
+    const workersLine = lines.find((l) => /\bworkers\b/.test(l));
+    expect(workersLine).toBeDefined();
+    // workers line should contain at least one speedup/slowdown indicator
+    expect(workersLine).toMatch(/\dx (faster|slower)/);
+  });
+
+  it("produces JSON output with workers mode included", () => {
+    const output = execFileSync(
+      process.execPath,
+      [
+        benchScript,
+        "--runs=1",
+        "--fixtures=typescript",
+        "--workloads=full",
+        "--temperatures=cold",
+        "--workers",
+        "--json",
+      ],
+      {
+        cwd: rootDir,
+        encoding: "utf8",
+        timeout: 60_000,
+      },
+    );
+    const parsed = JSON.parse(output);
+    expect(parsed.results).toHaveLength(1);
+    const result = parsed.results[0];
+    expect(result.workloads.full.cold.native.averageElapsedMs).toBeGreaterThan(0);
+    expect(result.workloads.full.cold.js.averageElapsedMs).toBeGreaterThan(0);
+    expect(result.workloads.full.cold.workers.averageElapsedMs).toBeGreaterThan(0);
   });
 
   it("enforces --max-slowdown threshold", () => {

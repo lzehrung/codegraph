@@ -307,8 +307,8 @@ function formatSpeedup(nativeMs, jsMs) {
 function formatSummary(results) {
   const lines = [
     "",
-    "Fixture      Workload Temp  Mode    Measure Avg ms  Fastest  Slowest  Files  Nodes   Files/s  Native used/fb  Speedup",
-    "-".repeat(130),
+    "Fixture      Workload Temp  Mode    Measure Avg ms  Fastest  Slowest  Files  Nodes   Files/s  Native used/fb  vs JS          vs Native",
+    "-".repeat(145),
   ];
   for (const result of results) {
     for (const workload of Object.keys(result.workloads)) {
@@ -317,8 +317,8 @@ function formatSummary(results) {
       for (const temperature of Object.keys(workloadResult)) {
         const temperatureResult = workloadResult[temperature];
         if (!temperatureResult) continue;
-        const nativeSummary = temperatureResult.native;
         const jsSummary = temperatureResult.js;
+        const nativeSummary = temperatureResult.native;
         for (const mode of ["native", "js", "workers"]) {
           const summary = temperatureResult[mode];
           if (!summary) continue;
@@ -326,9 +326,13 @@ function formatSummary(results) {
           const backendSummary = backend
             ? `${backend.filesUsed}/${backend.filesFellBack}`
             : "n/a";
-          const speedup =
-            mode === "native" && nativeSummary && jsSummary
-              ? formatSpeedup(nativeSummary.averageElapsedMs, jsSummary.averageElapsedMs)
+          const vsJs =
+            mode !== "js" && jsSummary
+              ? formatSpeedup(summary.averageElapsedMs, jsSummary.averageElapsedMs)
+              : "";
+          const vsNative =
+            mode === "workers" && nativeSummary
+              ? formatSpeedup(summary.averageElapsedMs, nativeSummary.averageElapsedMs)
               : "";
           lines.push(
             [
@@ -344,7 +348,8 @@ function formatSummary(results) {
               String(summary.graphNodeCount ?? summary.filesIndexed).padStart(6),
               String(summary.filesPerSecond.toFixed(1)).padStart(8),
               backendSummary.padStart(15),
-              speedup.padStart(14),
+              vsJs.padStart(14),
+              vsNative.padStart(14),
             ].join(" "),
           );
         }
