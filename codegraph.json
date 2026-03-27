@@ -1,0 +1,65 @@
+{
+  "nodes": [
+    "E:/git repos/codegraph/tests/samples/typescript/dynamic-import.ts",
+    "E:/git repos/codegraph/tests/samples/typescript/helpers.ts",
+    "E:/git repos/codegraph/tests/samples/typescript/main.ts",
+    "E:/git repos/codegraph/tests/samples/typescript/tsconfig.json",
+    "E:/git repos/codegraph/tests/samples/typescript/utils.ts"
+  ],
+  "edges": [
+    {
+      "from": "E:/git repos/codegraph/tests/samples/typescript/dynamic-import.ts",
+      "to": {
+        "type": "file",
+        "path": "E:/git repos/codegraph/tests/samples/typescript/helpers.ts"
+      },
+      "raw": "./helpers",
+      "typeOnly": false
+    },
+    {
+      "from": "E:/git repos/codegraph/tests/samples/typescript/main.ts",
+      "to": {
+        "type": "file",
+        "path": "E:/git repos/codegraph/tests/samples/typescript/utils.ts"
+      },
+      "raw": "./utils",
+      "typeOnly": false
+    },
+    {
+      "from": "E:/git repos/codegraph/tests/samples/typescript/main.ts",
+      "to": {
+        "type": "file",
+        "path": "E:/git repos/codegraph/tests/samples/typescript/utils.ts"
+      },
+      "raw": "./utils",
+      "typeOnly": false
+    },
+    {
+      "from": "E:/git repos/codegraph/tests/samples/typescript/main.ts",
+      "to": {
+        "type": "file",
+        "path": "E:/git repos/codegraph/tests/samples/typescript/utils.ts"
+      },
+      "raw": "./utils",
+      "typeOnly": false
+    },
+    {
+      "from": "E:/git repos/codegraph/tests/samples/typescript/main.ts",
+      "to": {
+        "type": "file",
+        "path": "E:/git repos/codegraph/tests/samples/typescript/utils.ts"
+      },
+      "raw": "./utils",
+      "typeOnly": false
+    },
+    {
+      "from": "E:/git repos/codegraph/tests/samples/typescript/utils.ts",
+      "to": {
+        "type": "file",
+        "path": "E:/git repos/codegraph/tests/samples/typescript/helpers.ts"
+      },
+      "raw": "./helpers",
+      "typeOnly": false
+    }
+  ]
+}
