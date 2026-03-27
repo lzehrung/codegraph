@@ -177,7 +177,7 @@ benchDescribe("bench-native harness", () => {
     const workersLine = lines.find((l) => /\bworkers\b/.test(l));
     expect(workersLine).toBeDefined();
     // workers line should contain at least one speedup/slowdown indicator
-    expect(workersLine).toMatch(/\dx (faster|slower)/);
+    expect(workersLine).toMatch(/\d+(?:\.\d+)?x (faster|slower)/);
   });
 
   it("produces JSON output with workers mode included", () => {
