@@ -49,7 +49,6 @@ Known remaining gaps:
 - by-language native diagnostics are too coarse
 - some important language scenarios are still under-documented or under-sampled
 - benchmark evidence is still limited
-- `Piscina` has not yet been evaluated against the native path
 
 ---
 
@@ -575,94 +574,26 @@ The code is working, but some bookkeeping and native runtime logic can still be 
 
 ## Workstream F: `Piscina` Evaluation and Optional Integration
 
-This workstream must remain isolated from the rest of the plan.
+### Status: Implemented
 
-### Goal
+Piscina worker-pool integration is available behind the `--workers` CLI flag and the `useNativeWorkers` build option. The implementation:
 
-Determine whether `Piscina` materially improves throughput around native extraction work, and only integrate it if the gains justify the added complexity.
+- **Parallelization boundary**: Workers handle per-file native extraction (file I/O + Rust tree-sitter parsing + query execution). The main thread owns graph assembly, module index mutation, cache writes, and report aggregation.
+- **Worker contract**: Plain JSON-serializable input (file path, language ID, normalized query strings) and output (NativeQueryResults or fallback reason). No Parser.Tree or Language objects cross the serialization boundary.
+- **SFC handling**: Vue/Svelte/Astro files are excluded from worker dispatch (they require source preprocessing/masking) and fall back to the main-thread path.
+- **Feature flag**: `--workers` flag on the CLI, `useNativeWorkers: true` in BuildOptions. Not enabled by default.
+- **Observability**: `workerPool` section in BuildReport with enabled, threads, tasksSubmitted, tasksFailed, and wallClockMs.
+- **Parity tests**: `tests/native-worker-parity.test.ts` verifies identical ModuleIndex and Graph output for TypeScript, Python, Go, and mixed fixture roots.
+- **Benchmark support**: `scripts/bench-native.mjs --workers` adds a "workers" mode alongside "native" and "js" for comparison.
 
-### Entry criteria
+### Files
 
-Do not begin this work until:
-
-- all tests are green after Workstreams A-E
-- native diagnostics are available by language
-- benchmark baselines exist for native vs JS execution
-
-### Non-goals
-
-- do not reintroduce parser divergence
-- do not parallelize before measuring
-- do not mutate shared caches or report objects directly from workers
-
-### Deliverables
-
-- benchmark comparison for native with and without `Piscina`
-- optional worker-pool path behind a flag
-- worker-pool correctness tests
-- worker-pool observability in reports
-
-### Implementation steps
-
-1. Benchmark first.
-   Using the benchmark harness from Workstream E, measure:
-   - JS path
-   - native path
-   - native plus `Piscina`
-
-   Identify whether real wall-clock gains exist and on what repo sizes.
-
-2. Define the parallelization boundary.
-   Recommended boundary:
-   - workers handle per-file native extraction
-   - the main thread owns graph assembly, final index mutation, cache writes, and report aggregation
-
-3. Design a small serializable worker contract.
-   Worker input should include:
-   - file path
-   - source text if already loaded, or enough information to load it
-   - language id
-   - normalized query text or query bundle
-   - options required for extraction
-
-   Worker output should include only plain structured data:
-   - imports, exports, locals, import bindings
-   - fallback reason if any
-   - timing metadata if useful
-
-4. Add the worker path behind a feature flag.
-   Add an internal option first, for example:
-   - `useNativeWorkers?: boolean`
-   - `nativeThreads?: number`
-
-   Do not make it the default until benchmark results justify it.
-
-5. Preserve observability.
-   Reports must show:
-   - whether `Piscina` was enabled
-   - worker count
-   - worker extraction time vs merge time if available
-   - the same native fallback counters as non-worker mode
-
-6. Add correctness parity tests.
-   For representative fixture roots, verify that:
-   - no-worker native mode
-   - worker-pool native mode
-
-   produce identical graph and symbol outputs.
-
-7. Add performance benchmarks and decide default behavior.
-   If `Piscina` shows clear wins on realistic repo sizes without harming small repos too much, consider enabling it by default.
-   Otherwise:
-   - keep it optional
-   - document when it helps
-
-### Acceptance criteria
-
-- worker-pool mode is optional first
-- worker-pool and non-worker outputs are identical
-- reports clearly expose worker-pool usage
-- benchmark evidence exists for any decision to enable or not enable it by default
+- `src/worker/nativeExtractWorker.ts` - Piscina worker entry point
+- `src/worker/nativeWorkerPool.ts` - Pool lifecycle management
+- `src/indexer.ts` - Worker pool integration in build loops, BuildOptions/BuildReport extensions
+- `src/cli.ts` - `--workers` CLI flag
+- `tests/native-worker-parity.test.ts` - Output identity tests
+- `scripts/bench-native.mjs` - Workers benchmark mode
 
 ---
 

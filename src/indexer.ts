@@ -55,6 +55,9 @@ import type { Edge, Range, FileId, Graph } from "./types.js";
 import {
   getNativeQueryExecution,
   isNativeQueryModified,
+  getCachedNormalizedQuery,
+  isNativeTreeSitterAvailable,
+  getNativeTreeSitterSupportedLanguageIds,
   type NativeRuntimeMode,
   type NativeCapture,
   type NativeQueryResults,
@@ -68,6 +71,10 @@ import {
   capturesNamed,
   rangeFromNativeCapture,
 } from "./native/queryResults.js";
+import type {
+  NativeExtractResult,
+  NativeExtractTask,
+} from "./worker/nativeExtractWorker.js";
 
 // Default number of lines to include around references for line context
 const DEFAULT_REF_CONTEXT_LINES = 5;
@@ -275,6 +282,10 @@ export type BuildOptions = {
   logLevel?: "error" | "warn" | "info" | "debug" | "silent";
   /** Keep parsed trees in memory (default: false). Set to true for faster subsequent lookups at the cost of memory. */
   keepParsed?: boolean;
+  /** Use Piscina worker threads for native extraction (default: false) */
+  useNativeWorkers?: boolean;
+  /** Number of native worker threads (default: min(cpuCount - 1, 8)) */
+  nativeThreads?: number;
 };
 
 export type IncrementalBuildOptions = BuildOptions & {
@@ -365,6 +376,15 @@ export type BackendReport = {
   native: NativeBackendReport;
 };
 
+export type WorkerPoolReport = {
+  enabled: boolean;
+  threads: number;
+  tasksSubmitted: number;
+  tasksFailed: number;
+  totalWorkerMs?: number;
+  wallClockMs?: number;
+};
+
 export type BuildReport = {
   timings: BuildTimingReport;
   cache?: CacheReport;
@@ -372,6 +392,7 @@ export type BuildReport = {
   graph?: GraphReport;
   manifest?: ManifestReport;
   backend?: BackendReport;
+  workerPool?: WorkerPoolReport;
 };
 
 export type GraphDeltaReport = {
@@ -379,6 +400,105 @@ export type GraphDeltaReport = {
   added: Edge[];
   removed: Edge[];
 };
+
+// ---------------- Worker pool helpers ----------------
+
+/** SFC files need source preprocessing the worker doesn't handle. */
+function isSFCFile(filePath: string): boolean {
+  return (
+    filePath.endsWith(".vue") ||
+    filePath.endsWith(".svelte") ||
+    filePath.endsWith(".astro")
+  );
+}
+
+type WorkerPoolSetupResult = {
+  pool: import("piscina").Piscina | null;
+  report: WorkerPoolReport | undefined;
+  startTime: number;
+};
+
+async function setupWorkerPool(
+  opts: BuildOptions | undefined,
+  concurrency: number,
+): Promise<WorkerPoolSetupResult> {
+  const report: WorkerPoolReport | undefined = opts?.useNativeWorkers
+    ? { enabled: true, threads: 0, tasksSubmitted: 0, tasksFailed: 0 }
+    : undefined;
+  let pool: import("piscina").Piscina | null = null;
+  if (opts?.useNativeWorkers && opts?.native !== "off") {
+    try {
+      const { createNativeWorkerPool } = await import(
+        "./worker/nativeWorkerPool.js"
+      );
+      const p = createNativeWorkerPool({
+        threads: opts.nativeThreads ?? concurrency,
+      });
+      pool = p;
+      if (report) {
+        report.threads =
+          (p.options as { maxThreads?: number }).maxThreads ?? concurrency;
+      }
+    } catch {
+      pool = null;
+      if (report) report.enabled = false;
+    }
+  }
+  return { pool, report, startTime: pool ? performance.now() : 0 };
+}
+
+async function teardownWorkerPool(
+  setup: WorkerPoolSetupResult,
+  buildReport: BuildReport | undefined,
+): Promise<void> {
+  if (setup.pool) {
+    if (setup.report) {
+      setup.report.wallClockMs = Math.round(
+        performance.now() - setup.startTime,
+      );
+    }
+    try {
+      await setup.pool.destroy();
+    } catch {
+      // pool destruction failure is non-fatal
+    }
+    setup.pool = null;
+  }
+  if (buildReport && setup.report) {
+    buildReport.workerPool = setup.report;
+  }
+}
+
+function buildWorkerTask(
+  filePath: string,
+  sup: LanguageSupport,
+): NativeExtractTask {
+  return {
+    filePath,
+    languageId: sup.id,
+    importsQuery: getCachedNormalizedQuery(sup, "imports"),
+    exportsQuery: getCachedNormalizedQuery(sup, "exports"),
+    localsQuery: getCachedNormalizedQuery(sup, "locals"),
+    importBindingsQuery: getCachedNormalizedQuery(sup, "importBindings"),
+  };
+}
+
+function workerResultToPrepared(
+  result: NativeExtractResult,
+  sup: LanguageSupport,
+  filePath: string,
+): PreparedFileContext {
+  return {
+    source: result.source,
+    sup,
+    lang: sup.language(filePath),
+    nativeQueries: result.nativeResults,
+    ...(result.fallbackReason
+      ? { nativeFallbackReason: result.fallbackReason }
+      : {}),
+    ...(result.error ? { nativeError: result.error } : {}),
+  };
+}
 
 // ---------------- Symbol handles (agent-friendly) ----------------
 export type SymbolHandle = string;
@@ -3463,6 +3583,10 @@ async function buildIndexFromFileListShared(
     : new Map<string, string>();
   const jsonDependencies = new Set<string>();
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
+
+  // Worker pool setup: create a Piscina pool for native extraction when requested
+  const workerSetup = await setupWorkerPool(opts, conc);
+
   const useBloomFilters = opts?.useBloomFilters ?? true; // Default to true for performance
   const bloomFilterCache = useBloomFilters
     ? new (await import("./util/bloomFilter.js")).BloomFilterCache()
@@ -3555,7 +3679,20 @@ async function buildIndexFromFileListShared(
         return [f, mod, []] as const;
       }
 
-      const prepared = await prepareFileForIndexing(f, opts?.native);
+      let prepared: PreparedFileContext;
+      if (workerSetup.pool && supCheck && !isSFCFile(f)) {
+        if (workerSetup.report) workerSetup.report.tasksSubmitted++;
+        try {
+          const workerResult: NativeExtractResult =
+            await workerSetup.pool.run(buildWorkerTask(f, supCheck));
+          prepared = workerResultToPrepared(workerResult, supCheck, f);
+        } catch {
+          if (workerSetup.report) workerSetup.report.tasksFailed++;
+          prepared = await prepareFileForIndexing(f, opts?.native);
+        }
+      } else {
+        prepared = await prepareFileForIndexing(f, opts?.native);
+      }
       recordNativeBackendOutcome(report, {
         usedNative: !!prepared.nativeQueries,
         support: prepared.sup,
@@ -3714,6 +3851,10 @@ async function buildIndexFromFileListShared(
       }
     }
   });
+
+  // Tear down worker pool and finalize report
+  await teardownWorkerPool(workerSetup, report);
+
   if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
 
   const graphStart = performance.now();
@@ -4018,6 +4159,10 @@ export async function buildProjectIndexIncremental(
     }
 
     const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
+
+    // Worker pool setup for incremental builds
+    const workerSetupIncr = await setupWorkerPool(opts, conc);
+
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
     const fileSignatures = new Map<string, FileSignature>();
     const useGitSignatures = gitAvailable;
@@ -4108,7 +4253,20 @@ export async function buildProjectIndexIncremental(
             return [f, mod] as const;
           }
 
-          const prepared = await prepareFileForIndexing(f, opts?.native);
+          let prepared: PreparedFileContext;
+          if (workerSetupIncr.pool && supCheck && !isSFCFile(f)) {
+            if (workerSetupIncr.report) workerSetupIncr.report.tasksSubmitted++;
+            try {
+              const workerResult: NativeExtractResult =
+                await workerSetupIncr.pool.run(buildWorkerTask(f, supCheck));
+              prepared = workerResultToPrepared(workerResult, supCheck, f);
+            } catch {
+              if (workerSetupIncr.report) workerSetupIncr.report.tasksFailed++;
+              prepared = await prepareFileForIndexing(f, opts?.native);
+            }
+          } else {
+            prepared = await prepareFileForIndexing(f, opts?.native);
+          }
           recordNativeBackendOutcome(report, {
             usedNative: !!prepared.nativeQueries,
             support: prepared.sup,
@@ -4232,6 +4390,8 @@ export async function buildProjectIndexIncremental(
           }
         }
       });
+      // Tear down worker pool for incremental builds
+      await teardownWorkerPool(workerSetupIncr, report);
       for (const [f, mod] of fileResults) {
         modules.set(f.replace(/\\/g, "/"), mod);
       }

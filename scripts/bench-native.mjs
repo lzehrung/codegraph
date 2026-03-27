@@ -38,6 +38,7 @@ function parseArgs(argv) {
     maxSlowdown: 0,
     saveBaseline: "",
     compareBaseline: "",
+    includeWorkers: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -49,6 +50,10 @@ function parseArgs(argv) {
     }
     if (arg === "--json") {
       options.json = true;
+      continue;
+    }
+    if (arg === "--workers") {
+      options.includeWorkers = true;
       continue;
     }
     if (arg.startsWith("--temperatures=")) {
@@ -231,6 +236,7 @@ async function runChildBenchmark(fixture, workload, temperature, mode) {
         env: {
           ...process.env,
           CODEGRAPH_DISABLE_NATIVE: mode === "js" ? "1" : "0",
+          CODEGRAPH_USE_WORKERS: mode === "workers" ? "1" : "0",
         },
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -313,7 +319,7 @@ function formatSummary(results) {
         if (!temperatureResult) continue;
         const nativeSummary = temperatureResult.native;
         const jsSummary = temperatureResult.js;
-        for (const mode of ["native", "js"]) {
+        for (const mode of ["native", "js", "workers"]) {
           const summary = temperatureResult[mode];
           if (!summary) continue;
           const backend = summary.backend;
@@ -364,7 +370,7 @@ function formatBaselineComparison(current, baseline) {
   for (const result of baseline.results ?? []) {
     for (const workload of Object.keys(result.workloads ?? {})) {
       for (const temperature of Object.keys(result.workloads[workload] ?? {})) {
-        for (const mode of ["native", "js"]) {
+        for (const mode of ["native", "js", "workers"]) {
           const summary = result.workloads[workload]?.[temperature]?.[mode];
           if (!summary) continue;
           baselineByKey.set(
@@ -379,7 +385,7 @@ function formatBaselineComparison(current, baseline) {
   for (const result of current) {
     for (const workload of Object.keys(result.workloads)) {
       for (const temperature of Object.keys(result.workloads[workload] ?? {})) {
-        for (const mode of ["native", "js"]) {
+        for (const mode of ["native", "js", "workers"]) {
           const summary = result.workloads[workload]?.[temperature]?.[mode];
           if (!summary) continue;
           const key = `${result.fixture}/${workload}/${temperature}/${mode}`;
@@ -481,7 +487,10 @@ async function runParentBenchmark(options) {
       fixtureResult.workloads[workload] = {};
       for (const temperature of options.temperatures) {
         fixtureResult.workloads[workload][temperature] = {};
-        for (const mode of ["native", "js"]) {
+        const modes = options.includeWorkers
+          ? ["native", "js", "workers"]
+          : ["native", "js"];
+        for (const mode of modes) {
           const runs = [];
           for (let runIndex = 0; runIndex < options.runs; runIndex += 1) {
             runs.push(await runChildBenchmark(fixture, workload, temperature, mode));
@@ -579,6 +588,8 @@ async function runSingleBenchmarkChild(options) {
     robustRmSync(cacheDir);
     fs.mkdirSync(cacheDir, { recursive: true });
   }
+  const useWorkers = process.env.CODEGRAPH_USE_WORKERS === "1";
+  const workerOpts = useWorkers ? { useNativeWorkers: true } : {};
   const start = performance.now();
   let filesIndexed = 0;
   let graphNodeCount = 0;
@@ -594,6 +605,7 @@ async function runSingleBenchmarkChild(options) {
         cache: "disk",
         cacheDir,
         report: warmupReport,
+        ...workerOpts,
       });
       warmupBackend = warmupReport.backend?.native ?? null;
     }
@@ -601,6 +613,7 @@ async function runSingleBenchmarkChild(options) {
       cache: "disk",
       cacheDir,
       report,
+      ...workerOpts,
     });
     filesIndexed = index.byFile.size;
     graphNodeCount = index.graph.nodes.size;

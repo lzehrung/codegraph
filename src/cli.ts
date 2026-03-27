@@ -718,6 +718,7 @@ Graph Options:
   Build Options:
     --threads N               Number of worker threads (default: auto)
     --native <mode>           Native runtime mode: auto, on, off
+    --workers                 Use Piscina worker threads for native extraction
     --cache <mode>            Cache mode: disk, memory, off
   --cache-strict            Use content hashes instead of mtime
   --progress                Show progress tracking during indexing
@@ -741,6 +742,10 @@ Examples:
     const reportFile = getOpt("--report-file");
     const reportEnabled = hasFlag("--report") || reportFile !== undefined;
     const nativeMode = parseNativeRuntimeMode(getOpt("--native"));
+    const useNativeWorkers = hasFlag("--workers");
+    const workerOpts = useNativeWorkers
+      ? ({ useNativeWorkers: true } as const)
+      : ({} as const);
     const showProgress = hasFlag("--progress");
   let lastProgressUpdate = 0;
   function handleIndexingProgress(update: {
@@ -933,6 +938,7 @@ Examples:
     const delta = await buildGraphDelta(projectRootFs, {
       threads,
       ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+      ...workerOpts,
       ...(cache !== undefined ? { cache } : {}),
       cacheStrict,
       cacheVerify,
@@ -1051,6 +1057,7 @@ Examples:
             onProgress: progressHandler,
             threads,
             ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+            ...workerOpts,
             ...(sqliteCacheMode !== undefined
               ? { cache: sqliteCacheMode }
               : {}),
@@ -1066,6 +1073,7 @@ Examples:
             onProgress: progressHandler,
             threads,
             ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+            ...workerOpts,
             ...(sqliteCacheMode !== undefined
               ? { cache: sqliteCacheMode }
               : {}),
@@ -1117,6 +1125,7 @@ Examples:
         onProgress: progressHandler,
         threads,
         ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+        ...workerOpts,
         ...(cache !== undefined ? { cache } : {}),
         cacheStrict,
         graph: {
@@ -1251,6 +1260,7 @@ Examples:
       onProgress: progressHandler,
       threads,
       ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+      ...workerOpts,
       ...(cache !== undefined ? { cache } : {}),
       cacheStrict,
       cacheVerify,
@@ -1323,6 +1333,7 @@ Examples:
     const index = await buildProjectIndex(projectRootFs, {
       onProgress: progressHandler,
       ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+      ...workerOpts,
     });
     const mod = index.byFile.get(file);
     if (!mod) {
@@ -1372,6 +1383,7 @@ Examples:
     const index = await buildProjectIndex(projectRootFs, {
       onProgress: progressHandler,
       ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+      ...workerOpts,
     });
     const res = await goToDefinition(index, { file, line, column });
     writeJSONLine(res);
@@ -1395,6 +1407,7 @@ Examples:
     const index = await buildProjectIndex(projectRootFs, {
       onProgress: progressHandler,
       ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+      ...workerOpts,
     });
     const res = await findReferences(index, { file, line, column });
     if (!pretty) {
@@ -1565,6 +1578,7 @@ Examples:
         const indexOpts: BuildOptions = {
           threads,
           ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+          ...workerOpts,
           ...(cacheMode !== undefined ? { cache: cacheMode } : {}),
           ...(cacheStrict ? { cacheStrict: true } : {}),
       };
@@ -1683,6 +1697,7 @@ Examples:
       reviewOpts.cache = cache;
     }
     if (nativeMode !== "auto") reviewOpts.native = nativeMode;
+    if (useNativeWorkers) reviewOpts.useNativeWorkers = true;
     if (cacheStrict) reviewOpts.cacheStrict = true;
     if (cacheVerify) reviewOpts.cacheVerify = true;
     if (incrementalStrict) reviewOpts.incrementalStrict = true;
@@ -1922,6 +1937,7 @@ Examples:
     const index = await buildProjectIndex(projectRootFs, {
       onProgress: progressHandler,
       ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+      ...workerOpts,
     });
     const apiSurface = getApiSurface(index);
 
