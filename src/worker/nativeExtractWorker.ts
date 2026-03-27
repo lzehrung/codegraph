@@ -57,7 +57,7 @@ let supportedIds: Set<string> | null = null;
 let loadError: string | undefined;
 
 function ensureBinding(): void {
-  if (binding) return;
+  if (binding || loadError) return;
   const candidates = [
     "@lzehrung/codegraph-native",
     localNativePackageRoot,

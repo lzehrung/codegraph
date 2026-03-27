@@ -56,6 +56,7 @@ import {
   getNativeQueryExecution,
   isNativeQueryModified,
   getCachedNormalizedQuery,
+  isNativeTreeSitterAvailable,
   type NativeRuntimeMode,
   type NativeCapture,
   type NativeQueryResults,
@@ -420,7 +421,9 @@ async function setupWorkerPool(
   opts: BuildOptions | undefined,
 ): Promise<WorkerPoolSetupResult> {
   const shouldUseWorkers =
-    !!opts?.useNativeWorkers && opts?.native !== "off";
+    !!opts?.useNativeWorkers &&
+    opts?.native !== "off" &&
+    isNativeTreeSitterAvailable(opts?.native);
   const report: WorkerPoolReport | undefined = opts?.useNativeWorkers
     ? {
         enabled: shouldUseWorkers,
@@ -4394,13 +4397,14 @@ export async function buildProjectIndexIncremental(
           }
         }
       });
-      // Tear down worker pool for incremental builds
-      await teardownWorkerPool(workerSetupIncr, report);
       for (const [f, mod] of fileResults) {
         modules.set(f.replace(/\\/g, "/"), mod);
       }
       if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
     }
+
+    // Tear down worker pool (always, even if no files changed)
+    await teardownWorkerPool(workerSetupIncr, report);
 
     for (const jsonPath of jsonDependencies) {
       ensureJsonModule(modules, jsonPath);

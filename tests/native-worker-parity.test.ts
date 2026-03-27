@@ -102,14 +102,14 @@ nativeDescribe("native worker parity", () => {
     }, 30_000);
   }
 
-  it("gracefully falls back when workers encounter errors", async () => {
+  it("skips worker pool when native is disabled and still produces valid results", async () => {
     const files = await listProjectFiles(
       path.join(sampleRoot, "typescript"),
     );
     expect(files.length).toBeGreaterThan(0);
 
     const report: BuildReport = { timings: {} };
-    // Even with workers enabled but native off, should produce valid results
+    // useNativeWorkers + native off: pool should not be created, results still valid
     const index = await buildProjectIndexFromFiles(
       path.join(sampleRoot, "typescript"),
       files,
@@ -120,5 +120,9 @@ nativeDescribe("native worker parity", () => {
       },
     );
     expect(index.byFile.size).toBeGreaterThan(0);
+    // Pool should not have been enabled since native is off
+    expect(
+      report.workerPool === undefined || report.workerPool.enabled === false,
+    ).toBe(true);
   }, 15_000);
 });
