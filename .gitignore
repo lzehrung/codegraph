@@ -9,3 +9,4 @@ packages/codegraph-native/Cargo.lock
 packages/codegraph-native/npm/
 packages/codegraph-native/artifacts/
 .bench-baselines/
+.claude/
