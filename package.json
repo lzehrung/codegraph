@@ -112,6 +112,7 @@
     "better-sqlite3": "^12.5.0",
     "fast-glob": "^3.3.3",
     "picomatch": "^4.0.3",
+    "piscina": "^4.5.1",
     "tree-sitter": "^0.25.0",
     "tree-sitter-c": "^0.24.1",
     "tree-sitter-c-sharp": "^0.23.1",
