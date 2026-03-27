@@ -80,6 +80,7 @@ export {
   type NativeBackendFallbackReason,
   type NativeBackendReport,
   type BackendReport,
+  type WorkerPoolReport,
   type GraphDeltaReport,
   type Reference,
   parseFile,

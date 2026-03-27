@@ -319,6 +319,8 @@ npx codegraph index
 npx codegraph index --json
 # Use concurrency and incremental cache
 npx codegraph index --threads 8 --cache disk
+# Enable worker threads for parallel native extraction
+npx codegraph index --workers --threads 8 --cache disk
 
 # Build the project index from multiple roots
 npx codegraph index ./src ./packages/app ./packages/lib
@@ -626,7 +628,7 @@ Viewer features:
 
 - Quick start (large monorepos):
   - Graph only: `codegraph graph --fast-graph --threads 8 --mermaid > graph.mmd`
-  - Full index: `codegraph index --threads 8 --cache disk`
+  - Full index: `codegraph index --workers --threads 8 --cache disk`
   - Detailed symbols (pruned): `codegraph graph --root . ./src --symbols-detailed --symbols-detailed-scope imported --symbols-detailed-members-only --symbols-detailed-max-edges 5000 --mermaid > graph.symbols.pruned.mmd`
 
 - Fast graph:
@@ -651,6 +653,12 @@ Viewer features:
 - Native Tree-sitter acceleration:
   - Build the optional Rust addon with `npm run build:native`.
   - When the addon is present, Codegraph runs supported Tree-sitter parse/query work in Rust and falls back to the JS path automatically if the addon or a query is unavailable.
+  - **Worker threads** (`--workers`): When combined with the native addon, offloads per-file Rust extraction to a Piscina worker pool. Each worker thread gets its own isolated parser and query cache via Rust `thread_local!` storage. SFC files (Vue/Svelte/Astro) are excluded from worker dispatch because they need source preprocessing on the main thread.
+    ```bash
+    codegraph index --workers --threads 8
+    ```
+  - Falls back silently to single-threaded extraction if Piscina is unavailable or pool creation fails.
+  - Use `--report` to see `workerPool` statistics (threads, tasks submitted/failed, wall clock time).
 
 - Monorepo resolution:
   - Workspace detection precedence: `package.json` workspaces > `pnpm-workspace.yaml` > `lerna.json`.
