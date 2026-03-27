@@ -304,11 +304,17 @@ function formatSpeedup(nativeMs, jsMs) {
   return `${ratio.toFixed(2)}x slower`;
 }
 
-function formatSummary(results) {
+function formatSummary(results, { includeWorkers = false } = {}) {
+  const modes = includeWorkers
+    ? ["native", "js", "workers"]
+    : ["native", "js"];
+  const header = includeWorkers
+    ? "Fixture      Workload Temp  Mode    Measure Avg ms  Fastest  Slowest  Files  Nodes   Files/s  Native used/fb  vs JS          vs Native"
+    : "Fixture      Workload Temp  Mode    Measure Avg ms  Fastest  Slowest  Files  Nodes   Files/s  Native used/fb  vs JS";
   const lines = [
     "",
-    "Fixture      Workload Temp  Mode    Measure Avg ms  Fastest  Slowest  Files  Nodes   Files/s  Native used/fb  vs JS          vs Native",
-    "-".repeat(145),
+    header,
+    "-".repeat(header.length),
   ];
   for (const result of results) {
     for (const workload of Object.keys(result.workloads)) {
@@ -319,7 +325,7 @@ function formatSummary(results) {
         if (!temperatureResult) continue;
         const jsSummary = temperatureResult.js;
         const nativeSummary = temperatureResult.native;
-        for (const mode of ["native", "js", "workers"]) {
+        for (const mode of modes) {
           const summary = temperatureResult[mode];
           if (!summary) continue;
           const backend = summary.backend;
@@ -330,28 +336,29 @@ function formatSummary(results) {
             mode !== "js" && jsSummary
               ? formatSpeedup(summary.averageElapsedMs, jsSummary.averageElapsedMs)
               : "";
-          const vsNative =
-            mode === "workers" && nativeSummary
-              ? formatSpeedup(summary.averageElapsedMs, nativeSummary.averageElapsedMs)
-              : "";
-          lines.push(
-            [
-              result.fixture.padEnd(12),
-              workload.padEnd(8),
-              temperature.padEnd(5),
-              mode.padEnd(7),
-              summary.measurementKind.padEnd(7),
-              String(Math.round(summary.averageElapsedMs)).padStart(6),
-              String(Math.round(summary.fastestElapsedMs)).padStart(8),
-              String(Math.round(summary.slowestElapsedMs)).padStart(8),
-              String(summary.filesIndexed).padStart(6),
-              String(summary.graphNodeCount ?? summary.filesIndexed).padStart(6),
-              String(summary.filesPerSecond.toFixed(1)).padStart(8),
-              backendSummary.padStart(15),
-              vsJs.padStart(14),
-              vsNative.padStart(14),
-            ].join(" "),
-          );
+          const cols = [
+            result.fixture.padEnd(12),
+            workload.padEnd(8),
+            temperature.padEnd(5),
+            mode.padEnd(7),
+            summary.measurementKind.padEnd(7),
+            String(Math.round(summary.averageElapsedMs)).padStart(6),
+            String(Math.round(summary.fastestElapsedMs)).padStart(8),
+            String(Math.round(summary.slowestElapsedMs)).padStart(8),
+            String(summary.filesIndexed).padStart(6),
+            String(summary.graphNodeCount ?? summary.filesIndexed).padStart(6),
+            String(summary.filesPerSecond.toFixed(1)).padStart(8),
+            backendSummary.padStart(15),
+            vsJs.padStart(14),
+          ];
+          if (includeWorkers) {
+            const vsNative =
+              mode === "workers" && nativeSummary
+                ? formatSpeedup(summary.averageElapsedMs, nativeSummary.averageElapsedMs)
+                : "";
+            cols.push(vsNative.padStart(14));
+          }
+          lines.push(cols.join(" "));
         }
       }
     }
@@ -557,7 +564,7 @@ async function runParentBenchmark(options) {
     return;
   }
 
-  process.stdout.write(`${formatSummary(results)}\n`);
+  process.stdout.write(`${formatSummary(results, { includeWorkers: options.includeWorkers })}\n`);
 
   if (options.compareBaseline) {
     const baseline = loadBaseline(options.compareBaseline);

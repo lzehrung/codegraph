@@ -19,17 +19,14 @@ function serializableModules(index: ProjectIndex) {
     file: string;
     exports: unknown[];
     imports: unknown[];
-    locals: Array<{ localName: string; kind: string }>;
+    locals: unknown[];
   }> = [];
   for (const [file, mod] of index.byFile) {
     entries.push({
       file,
       exports: mod.exports.map((e) => ({ ...e })),
       imports: mod.imports.map((i) => ({ ...i })),
-      locals: mod.locals.map((l) => ({
-        localName: l.localName,
-        kind: l.kind,
-      })),
+      locals: mod.locals.map((l) => ({ ...l })),
     });
   }
   return entries.sort((a, b) => a.file.localeCompare(b.file));
@@ -42,12 +39,19 @@ function serializableGraph(index: ProjectIndex) {
       .map((e) => ({
         from: e.from,
         to: e.to,
-        ...(e.raw ? { raw: e.raw } : {}),
+        ...(e.raw !== undefined ? { raw: e.raw } : {}),
+        ...(e.typeOnly !== undefined ? { typeOnly: e.typeOnly } : {}),
+        ...(e.resolved !== undefined ? { resolved: e.resolved } : {}),
+        ...(e.confidence !== undefined ? { confidence: e.confidence } : {}),
       }))
       .sort((a, b) => {
         const key = (x: (typeof a)) => {
           const toStr = x.to.type === "file" ? x.to.path : x.to.name;
-          return `${x.from}::${toStr}`;
+          const extras = JSON.stringify({
+            raw: "raw" in x ? x.raw : undefined,
+            typeOnly: "typeOnly" in x ? x.typeOnly : undefined,
+          });
+          return `${x.from}::${toStr}::${extras}`;
         };
         return key(a).localeCompare(key(b));
       }),
@@ -65,7 +69,7 @@ nativeDescribe("native worker parity", () => {
   for (const { name, dir } of fixtureRoots) {
     it(`produces identical output for ${name} fixtures`, async () => {
       const files = await listProjectFiles(dir);
-      if (files.length === 0) return;
+      expect(files.length).toBeGreaterThan(0);
 
       const reportBaseline: BuildReport = { timings: {} };
       const reportWorker: BuildReport = { timings: {} };
@@ -102,7 +106,7 @@ nativeDescribe("native worker parity", () => {
     const files = await listProjectFiles(
       path.join(sampleRoot, "typescript"),
     );
-    if (files.length === 0) return;
+    expect(files.length).toBeGreaterThan(0);
 
     const report: BuildReport = { timings: {} };
     // Even with workers enabled but native off, should produce valid results

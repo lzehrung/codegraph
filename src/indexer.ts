@@ -56,8 +56,6 @@ import {
   getNativeQueryExecution,
   isNativeQueryModified,
   getCachedNormalizedQuery,
-  isNativeTreeSitterAvailable,
-  getNativeTreeSitterSupportedLanguageIds,
   type NativeRuntimeMode,
   type NativeCapture,
   type NativeQueryResults,
@@ -420,24 +418,30 @@ type WorkerPoolSetupResult = {
 
 async function setupWorkerPool(
   opts: BuildOptions | undefined,
-  concurrency: number,
 ): Promise<WorkerPoolSetupResult> {
+  const shouldUseWorkers =
+    !!opts?.useNativeWorkers && opts?.native !== "off";
   const report: WorkerPoolReport | undefined = opts?.useNativeWorkers
-    ? { enabled: true, threads: 0, tasksSubmitted: 0, tasksFailed: 0 }
+    ? {
+        enabled: shouldUseWorkers,
+        threads: 0,
+        tasksSubmitted: 0,
+        tasksFailed: 0,
+      }
     : undefined;
   let pool: import("piscina").Piscina | null = null;
-  if (opts?.useNativeWorkers && opts?.native !== "off") {
+  if (shouldUseWorkers) {
     try {
       const { createNativeWorkerPool } = await import(
         "./worker/nativeWorkerPool.js"
       );
       const p = createNativeWorkerPool({
-        threads: opts.nativeThreads ?? concurrency,
+        threads: opts.nativeThreads,
       });
       pool = p;
       if (report) {
         report.threads =
-          (p.options as { maxThreads?: number }).maxThreads ?? concurrency;
+          (p.options as { maxThreads?: number }).maxThreads ?? 0;
       }
     } catch {
       pool = null;
@@ -3585,7 +3589,7 @@ async function buildIndexFromFileListShared(
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
 
   // Worker pool setup: create a Piscina pool for native extraction when requested
-  const workerSetup = await setupWorkerPool(opts, conc);
+  const workerSetup = await setupWorkerPool(opts);
 
   const useBloomFilters = opts?.useBloomFilters ?? true; // Default to true for performance
   const bloomFilterCache = useBloomFilters
@@ -4161,7 +4165,7 @@ export async function buildProjectIndexIncremental(
     const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
 
     // Worker pool setup for incremental builds
-    const workerSetupIncr = await setupWorkerPool(opts, conc);
+    const workerSetupIncr = await setupWorkerPool(opts);
 
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
     const fileSignatures = new Map<string, FileSignature>();
