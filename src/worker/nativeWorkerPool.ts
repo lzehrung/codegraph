@@ -33,7 +33,17 @@ function resolveWorkerPath(): string {
   if (fs.existsSync(sibling)) return sibling;
   // When running from src/ (e.g. vitest), resolve to the compiled dist/ worker
   const projectRoot = path.resolve(selfDir, "../..");
-  return path.resolve(projectRoot, "dist", "worker", "nativeExtractWorker.js");
+  const distWorker = path.resolve(
+    projectRoot,
+    "dist",
+    "worker",
+    "nativeExtractWorker.js",
+  );
+  if (fs.existsSync(distWorker)) return distWorker;
+  throw new Error(
+    `Native worker file not found. Expected at "${sibling}" or "${distWorker}". ` +
+      `Ensure the project has been built (dist/worker/nativeExtractWorker.js).`,
+  );
 }
 
 export function createNativeWorkerPool(

@@ -89,9 +89,14 @@ nativeDescribe("native worker parity", () => {
       const workerGraph = serializableGraph(withWorkers);
       expect(workerGraph).toEqual(baselineGraph);
 
-      // Worker pool report must be present
-      expect(reportWorker.workerPool?.enabled).toBe(true);
-      expect(reportWorker.workerPool?.threads).toBeGreaterThan(0);
+      // Worker pool report must be present and must have actually run tasks
+      const pool = reportWorker.workerPool;
+      expect(pool?.enabled).toBe(true);
+      expect(pool?.threads).toBeGreaterThan(0);
+      expect(pool?.tasksSubmitted).toBeGreaterThan(0);
+      if (pool) {
+        expect(pool.tasksFailed).toBeLessThan(pool.tasksSubmitted);
+      }
     }, 30_000);
   }
 

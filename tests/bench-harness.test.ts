@@ -151,7 +151,7 @@ benchDescribe("bench-native harness", () => {
     );
     expect(output).toContain("vs JS");
     // native row should have a speedup indicator
-    expect(output).toMatch(/\dx (faster|slower)/);
+    expect(output).toMatch(/\d+(?:\.\d+)?x (faster|slower)/);
   });
 
   it("reports vs Native column when --workers is used", () => {
