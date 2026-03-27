@@ -23,7 +23,7 @@ jobs:
       - name: Pack tarball
         id: pack
         run: |
-          TARBALL_JSON=$(npm pack --json)
+          TARBALL_JSON=$(npm pack --ignore-scripts --json)
           TARBALL_FILE=$(echo "$TARBALL_JSON" | jq -r '.[0].filename')
           echo "tarball=$TARBALL_FILE" >> "$GITHUB_OUTPUT"
       - name: Publish package
