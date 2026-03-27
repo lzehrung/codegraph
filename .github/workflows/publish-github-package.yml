@@ -20,12 +20,17 @@ jobs:
       - run: npm run build
       - run: npm run test:all
       - run: npm run bench:native:smoke -- --json
-      - run: npm publish
+      - name: Pack tarball
+        id: pack
+        run: |
+          TARBALL_JSON=$(npm pack --json)
+          TARBALL_FILE=$(echo "$TARBALL_JSON" | jq -r '.[0].filename')
+          echo "tarball=$TARBALL_FILE" >> "$GITHUB_OUTPUT"
+      - name: Publish package
+        run: npm publish "${{ steps.pack.outputs.tarball }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Pack tarball
-        run: npm pack
       - name: Upload tarball to release
-        run: gh release upload "${{ github.ref_name }}" *.tgz --clobber
+        run: gh release upload "${{ github.ref_name }}" "${{ steps.pack.outputs.tarball }}" --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

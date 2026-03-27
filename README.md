@@ -242,7 +242,7 @@ Download and install directly from a GitHub release without configuring a regist
 npm install https://github.com/lzehrung/codegraph/releases/download/vVERSION/lzehrung-codegraph-VERSION.tgz
 ```
 
-Replace `VERSION` with the desired release version (e.g. `1.8.30`). Each release attaches a pre-built `.tgz` that `npm install` can consume by URL with no registry configuration needed.
+Replace `VERSION` with the desired release version (e.g. `1.8.30`). Each release attaches a pre-built `.tgz` that `npm install` can consume by URL with no registry configuration needed. Note that this install path does not configure a scoped registry for `@lzehrung`, so npm may be unable to fetch the optional `@lzehrung/codegraph-native` package from GitHub Packages; any 404 or warning about that optional dependency is expected, and in that case codegraph will fall back to the pure JavaScript Tree-sitter implementation.
 
 ### Option 3: Local source checkout
 
