@@ -234,7 +234,17 @@ npm install @lzehrung/codegraph
 
 That is the simplest way to use the native Tree-sitter path. `@lzehrung/codegraph` automatically pulls in the matching optional native package when a published binary exists for the current platform, and the library and CLI use it automatically.
 
-### Option 2: Local source checkout
+### Option 2: Install from the release page
+
+Download and install directly from a GitHub release without configuring a registry:
+
+```bash
+npm install https://github.com/lzehrung/codegraph/releases/download/vVERSION/lzehrung-codegraph-VERSION.tgz
+```
+
+Replace `VERSION` with the desired release version (e.g. `1.8.30`). Each release attaches a pre-built `.tgz` that `npm install` can consume by URL with no registry configuration needed.
+
+### Option 3: Local source checkout
 
 Clone the repository and build both the TypeScript package and optional native addon:
 

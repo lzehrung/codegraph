@@ -6,7 +6,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
     steps:
       - uses: actions/checkout@v4
@@ -23,3 +23,9 @@ jobs:
       - run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pack tarball
+        run: npm pack
+      - name: Upload tarball to release
+        run: gh release upload "${{ github.ref_name }}" *.tgz --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
