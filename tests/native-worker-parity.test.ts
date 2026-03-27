@@ -45,14 +45,7 @@ function serializableGraph(index: ProjectIndex) {
         ...(e.confidence !== undefined ? { confidence: e.confidence } : {}),
       }))
       .sort((a, b) => {
-        const key = (x: (typeof a)) => {
-          const toStr = x.to.type === "file" ? x.to.path : x.to.name;
-          const extras = JSON.stringify({
-            raw: "raw" in x ? x.raw : undefined,
-            typeOnly: "typeOnly" in x ? x.typeOnly : undefined,
-          });
-          return `${x.from}::${toStr}::${extras}`;
-        };
+        const key = (x: typeof a) => JSON.stringify(x);
         return key(a).localeCompare(key(b));
       }),
   };

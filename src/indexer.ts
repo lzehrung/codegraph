@@ -3593,6 +3593,7 @@ async function buildIndexFromFileListShared(
 
   // Worker pool setup: create a Piscina pool for native extraction when requested
   const workerSetup = await setupWorkerPool(opts);
+  try {
 
   const useBloomFilters = opts?.useBloomFilters ?? true; // Default to true for performance
   const bloomFilterCache = useBloomFilters
@@ -3859,9 +3860,6 @@ async function buildIndexFromFileListShared(
     }
   });
 
-  // Tear down worker pool and finalize report
-  await teardownWorkerPool(workerSetup, report);
-
   if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
 
   const graphStart = performance.now();
@@ -3990,6 +3988,10 @@ async function buildIndexFromFileListShared(
     ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
     projectFiles,
   };
+
+  } finally {
+    await teardownWorkerPool(workerSetup, report);
+  }
 }
 
 export async function buildProjectIndex(
@@ -4169,6 +4171,7 @@ export async function buildProjectIndexIncremental(
 
     // Worker pool setup for incremental builds
     const workerSetupIncr = await setupWorkerPool(opts);
+    try {
 
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
     const fileSignatures = new Map<string, FileSignature>();
@@ -4403,9 +4406,6 @@ export async function buildProjectIndexIncremental(
       if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
     }
 
-    // Tear down worker pool (always, even if no files changed)
-    await teardownWorkerPool(workerSetupIncr, report);
-
     for (const jsonPath of jsonDependencies) {
       ensureJsonModule(modules, jsonPath);
     }
@@ -4546,6 +4546,10 @@ export async function buildProjectIndexIncremental(
       ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
       projectFiles,
     };
+
+    } finally {
+      await teardownWorkerPool(workerSetupIncr, report);
+    }
   } finally {
     if (cacheMode === "disk") closeDiskCacheDatabase(projectRoot, opts);
   }

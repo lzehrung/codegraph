@@ -656,7 +656,6 @@ Viewer features:
   - **Worker threads** (`--workers`): When combined with the native addon, offloads per-file Rust extraction to a Piscina worker pool. Each worker thread gets its own isolated parser and query cache via Rust `thread_local!` storage. SFC files (Vue/Svelte/Astro) are excluded from worker dispatch because they need source preprocessing on the main thread.
     ```bash
     codegraph index --workers --threads 8
-    codegraph graph --workers --mermaid > graph.mmd
     ```
   - Falls back silently to single-threaded extraction if Piscina is unavailable or pool creation fails.
   - Use `--report` to see `workerPool` statistics (threads, tasks submitted/failed, wall clock time).

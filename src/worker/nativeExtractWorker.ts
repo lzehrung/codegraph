@@ -62,16 +62,21 @@ function ensureBinding(): void {
     "@lzehrung/codegraph-native",
     localNativePackageRoot,
   ] as const;
+  let lastError: unknown;
   for (const candidate of candidates) {
     try {
       binding = require(candidate) as NativeBinding;
       supportedIds = new Set(binding.supportedLanguageIds());
       return;
-    } catch {
-      // try next candidate
+    } catch (err) {
+      lastError = err;
     }
   }
-  loadError = "native addon not available in worker";
+  loadError =
+    "native addon not available in worker" +
+    (lastError
+      ? `: ${lastError instanceof Error ? lastError.message : String(lastError)}`
+      : "");
 }
 
 export default async function runExtraction(
