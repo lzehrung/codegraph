@@ -56,7 +56,7 @@ import {
   type SymbolDef,
   SymbolKind,
 } from "./index.js";
-import type { SyntaxNodeLike } from "./languages/types.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "./languages/types.js";
 
 export type GraphBuildOptions = {
   fast?: boolean;
@@ -86,6 +86,10 @@ export type GraphCacheEntry = {
 
 const HTML_LIKE_LANGUAGE_IDS = new Set(["html", "vue", "svelte"]);
 
+function isParserTreeLike(tree: SyntaxTreeLike): tree is Parser.Tree {
+  return "walk" in tree;
+}
+
 function isHtmlLikeLanguage(languageId: string, filePath?: string): boolean {
   if (HTML_LIKE_LANGUAGE_IDS.has(languageId)) return true;
   return !!filePath && filePath.toLowerCase().endsWith(".astro");
@@ -104,7 +108,7 @@ export function collectModuleSpecifiersFromSource(
   lang: Parser.Language | undefined,
   source: string,
   opts?: {
-    tree?: Parser.Tree;
+    tree?: SyntaxTreeLike;
     nativeQueries?: NativeQueryResults | null;
     compactNativeImports?: CompactQueryResults | null;
     fast?: boolean;
@@ -366,12 +370,14 @@ export function collectModuleSpecifiersFromSource(
     }
   }
   try {
+    const jsQueryTree =
+      opts?.tree && isParserTreeLike(opts.tree) ? opts.tree : undefined;
     const matches = executeJsQueryAsNativeMatches(
       source,
       support,
       ensureResolvedLang(),
       support.queries.imports,
-      opts?.tree,
+      jsQueryTree,
     );
     for (const match of matches) {
         const caps = Object.fromEntries(
@@ -466,9 +472,9 @@ export async function collectEdgesForFile(
   opts: {
     parsed?: {
       source: string;
-      tree?: Parser.Tree;
+      tree?: SyntaxTreeLike;
       sup: LanguageSupport;
-      lang: Parser.Language;
+      lang?: Parser.Language;
       nativeQueries?: NativeQueryResults | null;
     };
     fast?: boolean;
@@ -708,9 +714,9 @@ export async function collectGraph(
       string,
       {
         source: string;
-        tree: Parser.Tree;
+        tree: SyntaxTreeLike;
         sup: LanguageSupport;
-        lang: Parser.Language;
+        lang?: Parser.Language;
       }
     >;
     fast?: boolean;
@@ -1683,7 +1689,7 @@ export async function buildSymbolGraphDetailed(
       let sup = parsedEntry?.sup;
       let lang = parsedEntry?.lang;
       let src = parsedEntry?.source;
-      let tree: Parser.Tree | ProjectedSyntaxTree | undefined = parsedEntry?.tree;
+      let tree: SyntaxTreeLike | undefined = parsedEntry?.tree;
       if (!sup || src === undefined) {
         const prep = await prepareSourceInput(file);
         sup = prep.sup;

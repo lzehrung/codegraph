@@ -206,9 +206,9 @@ export type ProjectIndex = {
         string,
         {
           source: string;
-          tree: Parser.Tree;
+          tree: SyntaxTreeLike;
           sup: LanguageSupport | undefined;
-          lang: Parser.Language;
+          lang?: Parser.Language;
           nativeQueries?: NativeQueryResults | null;
         }
       >
@@ -222,9 +222,9 @@ export type ResolvedExport =
 
 type ParsedFileContext = {
   source: string;
-  tree: Parser.Tree;
+  tree: SyntaxTreeLike;
   sup: LanguageSupport;
-  lang: Parser.Language;
+  lang?: Parser.Language;
   nativeQueries?: NativeQueryResults | null;
 };
 
@@ -241,8 +241,18 @@ type PreparedFileContext = {
 function parsePreparedFileContext(
   context: PreparedFileContext,
 ): ParsedFileContext {
-  const { source, sup, nativeQueries } = context;
-  const resolvedLang = context.lang ?? sup.language(context.file);
+  const { file, source, sup, nativeQueries } = context;
+  const nativeTreeExecution = getNativeSyntaxTreeExecution(source, sup);
+  if (nativeTreeExecution.tree) {
+    return {
+      source,
+      tree: new ProjectedSyntaxTree(source, nativeTreeExecution.tree),
+      sup,
+      nativeQueries,
+    };
+  }
+
+  const resolvedLang = context.lang ?? sup.language(file);
   const key = sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts";
   const parser = acquireParser(resolvedLang, key);
   try {
@@ -3322,9 +3332,9 @@ export async function ensureParsedContext(
   file: string,
   parsedEntry?: {
     source: string;
-    tree: Parser.Tree;
+    tree: SyntaxTreeLike;
     sup: LanguageSupport | undefined;
-    lang: Parser.Language;
+    lang?: Parser.Language;
     nativeQueries?: NativeQueryResults | null;
   },
 ): Promise<ParsedFileContext> {
@@ -3333,7 +3343,7 @@ export async function ensureParsedContext(
       source: parsedEntry.source,
       tree: parsedEntry.tree,
       sup: parsedEntry.sup,
-      lang: parsedEntry.lang,
+      ...(parsedEntry.lang ? { lang: parsedEntry.lang } : {}),
       nativeQueries: parsedEntry.nativeQueries ?? null,
     };
   }
@@ -3533,7 +3543,7 @@ async function buildIndexFromFileListShared(
       });
       const { source: src, sup, lang, nativeQueries } = prepared;
       let resolvedLang = lang;
-      let tree: Parser.Tree | undefined;
+      let tree: SyntaxTreeLike | undefined;
 
       if (!nativeQueries) {
         const parsed = parsePreparedFileContext(prepared);
@@ -3546,7 +3556,7 @@ async function buildIndexFromFileListShared(
             source: parsed.source,
             tree: parsed.tree,
             sup: parsed.sup,
-            lang: parsed.lang,
+            ...(parsed.lang ? { lang: parsed.lang } : {}),
             nativeQueries: parsed.nativeQueries ?? null,
           },
           Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
@@ -3562,7 +3572,7 @@ async function buildIndexFromFileListShared(
       if (!mod) {
         const imports = await collectImportsForFile(f, projectRoot, {
           source: src,
-          ...(tree ? { tree } : {}),
+          ...(tree && isParserTreeLike(tree) ? { tree } : {}),
           sup,
           ...(resolvedLang ? { lang: resolvedLang } : {}),
           ...(nativeQueries !== undefined ? { nativeQueries } : {}),
@@ -3623,13 +3633,12 @@ async function buildIndexFromFileListShared(
       }
 
       // 2. Recompute Edges (using the parsed tree)
-      const graphLang = resolvedLang ?? sup.language(f);
       edges = await collectEdgesForFile(f, projectRoot, workspaceConfig, {
         parsed: {
           source: src,
           ...(tree ? { tree } : {}),
           sup,
-          lang: graphLang,
+          ...(resolvedLang ? { lang: resolvedLang } : {}),
           ...(nativeQueries !== undefined ? { nativeQueries } : {}),
         },
         fast: !!graphOptions.fast,
@@ -4119,7 +4128,7 @@ export async function buildProjectIndexIncremental(
           });
           const { source: src, sup, lang, nativeQueries } = prepared;
           let resolvedLang = lang;
-          let tree: Parser.Tree | undefined;
+          let tree: SyntaxTreeLike | undefined;
 
           if (!nativeQueries) {
             const parsed = parsePreparedFileContext(prepared);
@@ -4143,7 +4152,7 @@ export async function buildProjectIndexIncremental(
 
           const imports = await collectImportsForFile(f, projectRoot, {
             source: src,
-            ...(tree ? { tree } : {}),
+            ...(tree && isParserTreeLike(tree) ? { tree } : {}),
             sup,
             ...(resolvedLang ? { lang: resolvedLang } : {}),
             ...(nativeQueries !== undefined ? { nativeQueries } : {}),
