@@ -165,7 +165,6 @@ nativeDescribe("native query scope with real binding", () => {
 describe("authoritative empty native results", () => {
   it("treats empty native imports as authoritative for non-normalized languages", () => {
     const support = supportById("ts")!;
-    const lang = support.language("test.ts");
     // File with no imports -- native returns 0 matches; should NOT fall through to JS
     const emptyNativeResults: NativeQueryResults = {
       imports: [],
@@ -173,7 +172,7 @@ describe("authoritative empty native results", () => {
       locals: [],
       importBindings: [],
     };
-    const specs = collectModuleSpecifiersFromSource(support, lang, "const x = 1;\n", {
+    const specs = collectModuleSpecifiersFromSource(support, undefined, "const x = 1;\n", {
       nativeQueries: emptyNativeResults,
     });
     expect(specs).toEqual([]);
@@ -181,7 +180,6 @@ describe("authoritative empty native results", () => {
 
   it("treats empty native imports as authoritative for TypeScript with no import keyword", () => {
     const support = supportById("ts")!;
-    const lang = support.language("test.ts");
     const emptyNativeResults: NativeQueryResults = {
       imports: [],
       exports: [],
@@ -191,7 +189,7 @@ describe("authoritative empty native results", () => {
     // Source that has no import keyword at all
     const specs = collectModuleSpecifiersFromSource(
       support,
-      lang,
+      undefined,
       "export const value = 42;\n",
       { nativeQueries: emptyNativeResults },
     );
@@ -200,11 +198,10 @@ describe("authoritative empty native results", () => {
 
   it("still falls through to JS fallback when native queries are absent", () => {
     const support = supportById("ts")!;
-    const lang = support.language("test.ts");
     // Without nativeQueries, should use JS path and find the import
     const specs = collectModuleSpecifiersFromSource(
       support,
-      lang,
+      undefined,
       "import { foo } from './bar';\n",
     );
     expect(specs.length).toBeGreaterThan(0);
@@ -232,7 +229,6 @@ nativeDescribe("compact imports execution", () => {
 
   it("produces the same specifiers as the full native path", () => {
     const support = supportById("ts")!;
-    const lang = support.language("test.ts");
     const source = "import { foo } from './bar';\nimport { baz } from './qux';\n";
 
     // Full native path
@@ -242,13 +238,13 @@ nativeDescribe("compact imports execution", () => {
       undefined,
       "imports",
     );
-    const fullSpecs = collectModuleSpecifiersFromSource(support, lang, source, {
+    const fullSpecs = collectModuleSpecifiersFromSource(support, undefined, source, {
       nativeQueries: fullExecution.results,
     });
 
     // Compact path
     const compactExecution = getCompactImportsExecution(source, support);
-    const compactSpecs = collectModuleSpecifiersFromSource(support, lang, source, {
+    const compactSpecs = collectModuleSpecifiersFromSource(support, undefined, source, {
       compactNativeImports: compactExecution.results,
     });
 
