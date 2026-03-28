@@ -137,6 +137,7 @@
     "@lzehrung/codegraph-native": "^1.8.32"
   },
   "overrides": {
-    "tree-sitter": "^0.25.0"
+    "tree-sitter": "^0.25.0",
+    "tree-sitter-css": "^0.25.0"
   }
 }
