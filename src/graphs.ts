@@ -33,6 +33,7 @@ import {
 import {
   getNativeQueryExecution,
   getCompactImportsExecution,
+  getNativeSingleQueryExecution,
   isNativeQueryModified,
   type NativeRuntimeMode,
   type NativeQueryScope,
@@ -124,44 +125,36 @@ export function collectModuleSpecifiersFromSource(
     };
     opts?.onFallbackImportExtraction?.(event);
   };
+  const resolvedNativeImports =
+    opts?.compactNativeImports?.imports ??
+    opts?.nativeQueries?.imports ??
+    getCompactImportsExecution(source, support).results?.imports ??
+    null;
 
   if (support.id === "python") {
     let queryFailed = false;
-    try {
-      const key = "py";
-      let parser: Parser | undefined;
+    if (resolvedNativeImports) {
       try {
-        const tree =
-          opts?.tree ??
-          (() => {
-            parser = acquireParser(lang, key);
-            parser.setLanguage(lang);
-            return parser.parse(source);
-          })();
-        const { imports: q } = getCompiledQueries(lang, support);
-        for (const m of q.matches(tree.rootNode)) {
-          const caps = Object.fromEntries(
-            m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const),
-          );
-          const stmtNode = caps["stmt"]?.node ?? m.captures[0]?.node;
-          if (!stmtNode) continue;
-          const stmtText = sliceText(stmtNode, source);
-          // Handle: import a, b as c
+        for (const match of resolvedNativeImports) {
+          const stmtText =
+            match.captures.find((capture) => capture.name === "stmt")?.text ??
+            match.captures[0]?.text ??
+            "";
+          if (!stmtText) continue;
           const mImport = /^\s*import\s+([^\n#]+)/.exec(stmtText);
           if (mImport) {
             const list = mImport[1]!
               .split(",")
-              .map((s) => s.trim())
+              .map((entry) => entry.trim())
               .filter(Boolean);
             for (const spec of list) {
-              const mm = spec.match(
+              const parsed = spec.match(
                 /^([A-Za-z_][\w.]*)(?:\s+as\s+[A-Za-z_][\w_]*)?$/,
               );
-              if (mm) out.push({ spec: mm[1]! });
+              if (parsed?.[1]) out.push({ spec: parsed[1] });
             }
             continue;
           }
-          // Handle: from ..pkg.sub import x, y
           const mFrom = /^\s*from\s+(\.*)([A-Za-z_][\w.]*)?\s+import\b/.exec(
             stmtText,
           );
@@ -170,15 +163,13 @@ export function collectModuleSpecifiersFromSource(
             const name = mFrom[2] ?? "";
             const mod = `${dots}${name}`;
             if (mod) out.push({ spec: mod });
-            continue;
           }
         }
-      } finally {
-        if (parser) releaseParser(parser, key);
+        return out;
+      } catch {
+        queryFailed = true;
+        out.length = 0;
       }
-      if (out.length > 0) return out;
-    } catch {
-      queryFailed = true;
     }
     // Fallback to regex-based extractor
     if ((queryFailed || out.length === 0) && shouldAttemptFallback) {
@@ -299,8 +290,7 @@ export function collectModuleSpecifiersFromSource(
   }
 
   // Resolve the imports array: prefer compact (lighter) over full native
-  const nativeImportsArray =
-    opts?.compactNativeImports?.imports ?? opts?.nativeQueries?.imports;
+  const nativeImportsArray = resolvedNativeImports;
   const hasNativeImports = !!nativeImportsArray;
 
   let queryFailed = false;
@@ -954,10 +944,25 @@ export async function astGrep(
       const prep = await prepareParserInput(file);
       const lang = prep.lang;
       const sup = prep.sup;
+      const src = prep.source;
+      const nativeExecution = getNativeSingleQueryExecution(src, sup, querySource);
+      if (nativeExecution.matches) {
+        for (const match of nativeExecution.matches) {
+          for (const capture of match.captures) {
+            hits.push({
+              file: path.relative(projectRoot, file).replace(/\\/g, "/"),
+              capture: capture.name,
+              line: capture.start.row + 1,
+              column: capture.start.column + 1,
+              snippet: capture.text.replace(/\n/g, " "),
+            });
+          }
+        }
+        continue;
+      }
       const key = sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts";
       const parser = acquireParser(lang, key);
       parser.setLanguage(lang);
-      const src = prep.source;
       const tree = parser.parse(src);
       const query = new Parser.Query(lang, querySource);
       for (const m of query.matches(tree.rootNode)) {

@@ -81,6 +81,11 @@ type NativeBinding = {
     languageId: string,
     importsQuery: string,
   ) => CompactQueryResults;
+  runQuery?: (
+    source: string,
+    languageId: string,
+    queryText: string,
+  ) => { matches: NativeMatch[] };
   supportedLanguageIds: () => string[];
 };
 
@@ -351,6 +356,12 @@ export type CompactImportsExecution = {
   error?: string;
 };
 
+export type NativeSingleQueryExecution = {
+  matches: NativeMatch[] | null;
+  fallbackReason?: "unavailable" | "unsupportedLanguage" | "queryFailure";
+  error?: string;
+};
+
 /**
  * Run only the imports query with a compact payload (name + text only).
  * Falls back to the full execution path if the compact entrypoint is not
@@ -404,6 +415,50 @@ export function getCompactImportsExecution(
   } catch (error) {
     return {
       results: null,
+      fallbackReason: "queryFailure",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export function getNativeSingleQueryExecution(
+  source: string,
+  support: LanguageSupport,
+  queryText: string,
+  mode?: NativeRuntimeMode,
+): NativeSingleQueryExecution {
+  const state = resolveNativeBindingState(mode);
+  if (!state.loaded) {
+    return {
+      matches: null,
+      fallbackReason: "unavailable",
+      ...(state.error
+        ? {
+            error:
+              state.error instanceof Error
+                ? state.error.message
+                : stringifyUnknown(state.error),
+          }
+        : {}),
+    };
+  }
+  if (!state.supportedLanguageIds.has(support.id)) {
+    return { matches: null, fallbackReason: "unsupportedLanguage" };
+  }
+  if (!state.binding.runQuery) {
+    return {
+      matches: null,
+      fallbackReason: "unavailable",
+      error: "native binding does not expose runQuery",
+    };
+  }
+  try {
+    return {
+      matches: state.binding.runQuery(source, support.id, queryText).matches,
+    };
+  } catch (error) {
+    return {
+      matches: null,
       fallbackReason: "queryFailure",
       error: error instanceof Error ? error.message : String(error),
     };

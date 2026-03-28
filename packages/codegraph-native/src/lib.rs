@@ -61,6 +61,12 @@ pub struct CompactQueryResults {
     pub imports: Vec<CompactMatch>,
 }
 
+#[derive(Debug)]
+#[napi(object)]
+pub struct NativeQueryRunResult {
+    pub matches: Vec<NativeMatch>,
+}
+
 fn point_with_index(point: Point, index: usize) -> NativePoint {
     NativePoint {
         row: point.row as u32,
@@ -410,6 +416,36 @@ pub fn run_imports_query_compact(
             root,
             &language,
             imports_query.as_str(),
+            language_id.as_str(),
+        )?,
+    })
+}
+
+/// Execute a single arbitrary query and return full capture metadata.
+#[napi]
+pub fn run_query(
+    source: String,
+    language_id: String,
+    query_text: String,
+) -> Result<NativeQueryRunResult> {
+    let language = language_for_id(&language_id)
+        .ok_or_else(|| napi::Error::from_reason(format!("Unsupported language: {language_id}")))?;
+
+    let tree = PARSER_POOL.with(|pool| {
+        let mut pool = pool.borrow_mut();
+        let parser = pool.get_or_create(&language_id, &language)?;
+        parser
+            .parse(source.as_str(), None)
+            .ok_or_else(|| napi::Error::from_reason("Failed to parse source".to_string()))
+    })?;
+    let root = tree.root_node();
+
+    Ok(NativeQueryRunResult {
+        matches: execute_query_cached(
+            source.as_str(),
+            root,
+            &language,
+            query_text.as_str(),
             language_id.as_str(),
         )?,
     })
