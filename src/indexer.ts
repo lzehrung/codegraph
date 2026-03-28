@@ -8,7 +8,6 @@ import { performance } from "node:perf_hooks";
 import { createRequire } from "node:module";
 import {
   supportForFile,
-  getCompiledQueries,
   type LanguageSupport,
 } from "./languages.js";
 import { buildBloomFilterFromSource } from "./util/bloomFilter.js";

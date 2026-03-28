@@ -5,7 +5,7 @@ import {
   isUnsupportedParserInputError,
   prepareParserInput,
 } from "./languages/filePrep.js";
-import { type LanguageSupport, getCompiledQueries } from "./languages.js";
+import { type LanguageSupport } from "./languages.js";
 import type { FileId, EdgeTo, Edge, Graph } from "./types.js";
 import {
   listProjectFiles,
