@@ -286,12 +286,13 @@ function getChunkMatches(
       return nativeExecution.matches.map(toChunkMatchFromNative);
     }
 
-    const lang = language.definition.grammar(filePath);
     const execution = getUnifiedQueryExecution(
       source,
       support,
-      lang,
       language.queryText,
+      {
+        getLanguage: () => language.definition.grammar(filePath),
+      },
     );
     if (execution.matches) {
       return execution.matches.map(toChunkMatchFromNative);

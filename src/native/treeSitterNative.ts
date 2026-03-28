@@ -560,11 +560,12 @@ export function executeJsQueryAsNativeMatches(
 export function getUnifiedQueryExecution(
   source: string,
   support: LanguageSupport,
-  lang: Parser.Language,
   queryText: string,
   opts?: {
     tree?: Parser.Tree;
     mode?: NativeRuntimeMode;
+    lang?: Parser.Language;
+    getLanguage?: () => Parser.Language;
   },
 ): UnifiedQueryExecution {
   const nativeExecution = getNativeSingleQueryExecution(
@@ -580,10 +581,14 @@ export function getUnifiedQueryExecution(
     };
   }
   try {
+    const resolvedLang = opts?.lang ?? opts?.getLanguage?.();
+    if (!resolvedLang) {
+      throw new Error("JS query fallback requires a language");
+    }
     const matches = executeJsQueryAsNativeMatches(
       source,
       support,
-      lang,
+      resolvedLang,
       queryText,
       opts?.tree,
     );

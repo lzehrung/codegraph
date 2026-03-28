@@ -2,12 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import Parser from "tree-sitter";
 import {
   collectImportsForFile,
   collectLocalsAndExportsFromSource,
   parseFile,
 } from "../src/indexer.js";
-import { supportForFile } from "../src/languages.js";
+import { languageForFile, supportForFile } from "../src/languages.js";
 import { collectModuleSpecifiersFromSource } from "../src/graphs.js";
 import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 
@@ -87,27 +88,40 @@ function sampleFile(...parts: string[]): string {
   return path.join(sampleRoot, ...parts);
 }
 
+async function parseWithJsTreeSitter(file: string) {
+  const parsed = await parseFile(file);
+  const lang = languageForFile(file);
+  const parser = new Parser();
+  parser.setLanguage(lang);
+  const tree = parser.parse(parsed.source);
+  return {
+    ...parsed,
+    tree,
+    lang,
+  };
+}
+
 async function expectNativeImportParity(
   projectDir: string,
   relativeFile: string,
 ): Promise<void> {
   const projectRoot = sampleFile(projectDir);
   const file = path.join(projectRoot, relativeFile);
-  const parsed = await parseFile(file);
-  expect(parsed.nativeQueries).not.toBeNull();
+  const nativeParsed = await parseFile(file);
+  const jsParsed = await parseWithJsTreeSitter(file);
+  expect(nativeParsed.nativeQueries).not.toBeNull();
 
   const nativeImports = await collectImportsForFile(file, projectRoot, {
-    source: parsed.source,
-    tree: parsed.tree,
-    sup: parsed.sup,
-    lang: parsed.lang,
-    nativeQueries: parsed.nativeQueries,
+    source: nativeParsed.source,
+    sup: nativeParsed.sup,
+    lang: nativeParsed.lang,
+    nativeQueries: nativeParsed.nativeQueries,
   });
   const jsImports = await collectImportsForFile(file, projectRoot, {
-    source: parsed.source,
-    tree: parsed.tree,
-    sup: parsed.sup,
-    lang: parsed.lang,
+    source: jsParsed.source,
+    tree: jsParsed.tree,
+    sup: jsParsed.sup,
+    lang: jsParsed.lang,
   });
 
   expect(simplifyImports(nativeImports)).toEqual(simplifyImports(jsImports));
@@ -115,28 +129,29 @@ async function expectNativeImportParity(
 
 async function expectNativeModuleIndexParity(relativeFile: string): Promise<void> {
   const file = sampleFile(relativeFile);
-  const parsed = await parseFile(file);
-  expect(parsed.nativeQueries).not.toBeNull();
+  const nativeParsed = await parseFile(file);
+  const jsParsed = await parseWithJsTreeSitter(file);
+  expect(nativeParsed.nativeQueries).not.toBeNull();
 
   const nativeIndex = collectLocalsAndExportsFromSource(
     file,
-    parsed.source,
-    parsed.sup,
-    parsed.lang,
+    nativeParsed.source,
+    nativeParsed.sup,
+    nativeParsed.lang,
     [],
     {
-      tree: parsed.tree,
-      nativeQueries: parsed.nativeQueries,
+      tree: nativeParsed.tree,
+      nativeQueries: nativeParsed.nativeQueries,
     },
   );
   const jsIndex = collectLocalsAndExportsFromSource(
     file,
-    parsed.source,
-    parsed.sup,
-    parsed.lang,
+    jsParsed.source,
+    jsParsed.sup,
+    jsParsed.lang,
     [],
     {
-      tree: parsed.tree,
+      tree: jsParsed.tree,
     },
   );
 
@@ -189,21 +204,21 @@ nativeDescribe("native tree-sitter integration", () => {
     await fs.writeFile(path.join(projectRoot, "cjs.js"), "module.exports = { createThing() {} };\n");
     await fs.writeFile(path.join(projectRoot, "cjs-default.js"), "module.exports = () => 1;\n");
 
-    const parsed = await parseFile(entry);
-    expect(parsed.nativeQueries).not.toBeNull();
+    const nativeParsed = await parseFile(entry);
+    const jsParsed = await parseWithJsTreeSitter(entry);
+    expect(nativeParsed.nativeQueries).not.toBeNull();
 
     const nativeImports = await collectImportsForFile(entry, projectRoot, {
-      source: parsed.source,
-      tree: parsed.tree,
-      sup: parsed.sup,
-      lang: parsed.lang,
-      nativeQueries: parsed.nativeQueries,
+      source: nativeParsed.source,
+      sup: nativeParsed.sup,
+      lang: nativeParsed.lang,
+      nativeQueries: nativeParsed.nativeQueries,
     });
     const jsImports = await collectImportsForFile(entry, projectRoot, {
-      source: parsed.source,
-      tree: parsed.tree,
-      sup: parsed.sup,
-      lang: parsed.lang,
+      source: jsParsed.source,
+      tree: jsParsed.tree,
+      sup: jsParsed.sup,
+      lang: jsParsed.lang,
     });
 
     expect(simplifyImports(nativeImports)).toEqual(simplifyImports(jsImports));
@@ -229,28 +244,29 @@ nativeDescribe("native tree-sitter integration", () => {
       ].join("\n"),
     );
 
-    const parsed = await parseFile(file);
-    expect(parsed.nativeQueries).not.toBeNull();
+    const nativeParsed = await parseFile(file);
+    const jsParsed = await parseWithJsTreeSitter(file);
+    expect(nativeParsed.nativeQueries).not.toBeNull();
 
     const nativeIndex = collectLocalsAndExportsFromSource(
       file,
-      parsed.source,
-      parsed.sup,
-      parsed.lang,
+      nativeParsed.source,
+      nativeParsed.sup,
+      nativeParsed.lang,
       [],
       {
-        tree: parsed.tree,
-        nativeQueries: parsed.nativeQueries,
+        tree: nativeParsed.tree,
+        nativeQueries: nativeParsed.nativeQueries,
       },
     );
     const jsIndex = collectLocalsAndExportsFromSource(
       file,
-      parsed.source,
-      parsed.sup,
-      parsed.lang,
+      jsParsed.source,
+      jsParsed.sup,
+      jsParsed.lang,
       [],
       {
-        tree: parsed.tree,
+        tree: jsParsed.tree,
       },
     );
 
@@ -310,28 +326,29 @@ nativeDescribe("native tree-sitter integration", () => {
       ].join("\n"),
     );
 
-    const parsed = await parseFile(file);
-    expect(parsed.nativeQueries).not.toBeNull();
+    const nativeParsed = await parseFile(file);
+    const jsParsed = await parseWithJsTreeSitter(file);
+    expect(nativeParsed.nativeQueries).not.toBeNull();
 
     const nativeIndex = collectLocalsAndExportsFromSource(
       file,
-      parsed.source,
-      parsed.sup,
-      parsed.lang,
+      nativeParsed.source,
+      nativeParsed.sup,
+      nativeParsed.lang,
       [],
       {
-        tree: parsed.tree,
-        nativeQueries: parsed.nativeQueries,
+        tree: nativeParsed.tree,
+        nativeQueries: nativeParsed.nativeQueries,
       },
     );
     const jsIndex = collectLocalsAndExportsFromSource(
       file,
-      parsed.source,
-      parsed.sup,
-      parsed.lang,
+      jsParsed.source,
+      jsParsed.sup,
+      jsParsed.lang,
       [],
       {
-        tree: parsed.tree,
+        tree: jsParsed.tree,
       },
     );
 

@@ -953,7 +953,9 @@ export async function astGrep(
       );
       const matches =
         nativeExecution.matches ??
-        getUnifiedQueryExecution(src, sup, sup.language(file), querySource)
+        getUnifiedQueryExecution(src, sup, querySource, {
+          getLanguage: () => sup.language(file),
+        })
           .matches;
       if (matches) {
         for (const match of matches) {
