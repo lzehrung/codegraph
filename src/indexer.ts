@@ -1794,223 +1794,246 @@ export function collectLocalsAndExportsFromSource(
   const pythonAllExports = new Set<string>();
   let hasPythonAll = false;
 
-  let usedNativeExports = false;
-  if (support.queries.exports.trim() && nativeQueries) {
-    try {
-      for (const match of nativeQueries.exports) {
-        const map = capturesByName(match);
-        const stmtText = map["stmt"]?.text ?? "";
-        const isTypeOnly = support.isTypeOnly(stmtText);
+  const appendExportsFromMatches = (
+    matches: NativeQueryResults["exports"],
+    treeForEnrichment?: Parser.Tree,
+  ): void => {
+    const nodeForCapture = (
+      capture: NativeCapture | undefined,
+    ): Parser.SyntaxNode | undefined => {
+      if (!capture || !treeForEnrichment) return undefined;
+      const range = rangeFromNativeCapture(capture);
+      return (
+        treeForEnrichment.rootNode.descendantForIndex(
+          range.start.index ?? 0,
+          range.end.index ?? 0,
+        ) ?? undefined
+      );
+    };
 
-        if (support.id === "python") {
-          const leftText = map["left"]?.text ?? "";
-          const methodText = map["method"]?.text ?? "";
-          const isAllAssignment = leftText === "__all__";
-          const isAllMethod =
-            leftText === "__all__" &&
-            (methodText === "extend" || methodText === "append");
+    for (const match of matches) {
+      const map = capturesByName(match);
+      const stmtText = map["stmt"]?.text ?? "";
+      const isTypeOnly = support.isTypeOnly(stmtText);
 
-          if (isAllAssignment || isAllMethod) {
-            hasPythonAll = true;
-            const items = capturesNamed(match, "all_item");
-            for (const item of items) {
-              const name = unquote(item.text);
-              pythonAllExports.add(name);
-              const local = mergedLocals.find((def) => def.localName === name);
-              if (
-                local &&
-                !exports.some(
-                  (entry) =>
-                    entry.type !== "exportStar" &&
-                    "exportedAs" in entry &&
-                    entry.exportedAs === name,
-                )
-              ) {
-                exports.push({
-                  type: "local",
-                  exportedAs: name,
-                  target: local,
-                });
-              }
-            }
-            if (isAllAssignment && map["stmt"]) {
-              const assignmentText = map["stmt"].text;
-              const hasTuple = /=\s*\(/.test(assignmentText);
-              if (items.length === 0 || hasTuple) {
-                const strRe = /["']([^"']+)["']/g;
-                for (let submatch; (submatch = strRe.exec(assignmentText)); ) {
-                  const name = submatch[1]!;
-                  pythonAllExports.add(name);
-                  const local = mergedLocals.find(
-                    (def) => def.localName === name,
-                  );
-                  if (
-                    local &&
-                    !exports.some(
-                      (entry) =>
-                        entry.type !== "exportStar" &&
-                        "exportedAs" in entry &&
-                        entry.exportedAs === name,
-                    )
-                  ) {
-                    exports.push({
-                      type: "local",
-                      exportedAs: name,
-                      target: local,
-                    });
-                  }
-                }
-              }
-            }
-            continue;
-          }
-          if (map["name"]) {
-            const nameText = map["name"].text;
-            const local = locals.find((def) => def.localName === nameText);
-            if (local && !nameText.startsWith("_")) {
+      if (support.id === "python") {
+        const leftText = map["left"]?.text ?? "";
+        const methodText = map["method"]?.text ?? "";
+        const isAllAssignment = leftText === "__all__";
+        const isAllMethod =
+          leftText === "__all__" &&
+          (methodText === "extend" || methodText === "append");
+
+        if (isAllAssignment || isAllMethod) {
+          hasPythonAll = true;
+          const items = capturesNamed(match, "all_item");
+          for (const item of items) {
+            const name = unquote(item.text);
+            pythonAllExports.add(name);
+            const local = mergedLocals.find((def) => def.localName === name);
+            if (
+              local &&
+              !exports.some(
+                (entry) =>
+                  entry.type !== "exportStar" &&
+                  "exportedAs" in entry &&
+                  entry.exportedAs === name,
+              )
+            ) {
               exports.push({
                 type: "local",
-                exportedAs: nameText,
+                exportedAs: name,
                 target: local,
               });
             }
-            continue;
           }
-        }
-
-        if (map["from"]) {
-          const from = unquote(map["from"].text);
-          if (map["src"]) {
-            const srcName = map["src"].text;
-            const alias = map["alias"]?.text ?? srcName;
-            exports.push({
-              type: "reexport",
-              exportedAs: alias,
-              fromModule: from,
-              moduleSpecifier: from,
-              sourceSpecifier: srcName,
-              typeOnly: isTypeOnly,
-            });
-          } else if (/^\s*export\s*\*/.test(stmtText)) {
-            exports.push({
-              type: "exportStar",
-              fromModule: from,
-              moduleSpecifier: from,
-              sourceSpecifier: from,
-              typeOnly: isTypeOnly,
-            });
-          }
-          continue;
-        }
-        if (map["cjs_shorthand"]) {
-          const nameText = map["cjs_shorthand"].text;
-          const local = locals.find((def) => def.localName === nameText);
-          if (local) {
-            exports.push({
-              type: "local",
-              exportedAs: nameText,
-              target: local,
-            });
-          }
-          continue;
-        }
-        if (map["cjs_export_name"] && map["cjs_local"]) {
-          const exportedAs = map["cjs_export_name"].text;
-          const localName = map["cjs_local"].text;
-          const local = locals.find((def) => def.localName === localName);
-          if (local) exports.push({ type: "local", exportedAs, target: local });
-          continue;
-        }
-        if (map["cjs_export_name"] && map["cjs_fn"]) {
-          const exportedAs = map["cjs_export_name"].text;
-          const sym = buildSymbolDef(
-            exportedAs,
-            SymbolKind.Function,
-            rangeFromNativeCapture(map["cjs_fn"]),
-          );
-          locals.push(sym);
-          exports.push({ type: "local", exportedAs, target: sym });
-          continue;
-        }
-        if (map["default"]) {
-          const nameText = map["default"].text;
-          const local = locals.find((def) => def.localName === nameText);
-          if (local) {
-            exports.push({
-              type: "local",
-              exportedAs: "default",
-              target: { ...local, kind: SymbolKind.Default },
-            });
-          }
-          continue;
-        }
-        if (map["anon_default"]) {
-          const sym = buildSymbolDef(
-            "__default_export__",
-            SymbolKind.Default,
-            rangeFromNativeCapture(map["anon_default"]),
-          );
-          locals.push(sym);
-          exports.push({ type: "local", exportedAs: "default", target: sym });
-          continue;
-        }
-        const tsExportAssignMatch =
-          support.id === "ts" || support.id === "tsx"
-            ? stmtText.match(/^\s*export\s*=\s*([A-Za-z_$][\w$]*)\s*;?\s*$/)
-            : null;
-        if (tsExportAssignMatch) {
-          const ident = tsExportAssignMatch[1]!;
-          const local = locals.find((def) => def.localName === ident);
-          if (local) {
-            exports.push({
-              type: "local",
-              exportedAs: "default",
-              target: { ...local, kind: SymbolKind.Default },
-            });
-          }
-          continue;
-        }
-        if (map["ts_export_assign"]) {
-          const ident = map["ts_export_assign"].text;
-          const local = locals.find((def) => def.localName === ident);
-          if (local) {
-            exports.push({
-              type: "local",
-              exportedAs: "default",
-              target: { ...local, kind: SymbolKind.Default },
-            });
+          if (isAllAssignment && map["stmt"]) {
+            const assignmentText = map["stmt"].text;
+            const hasTuple = /=\s*\(/.test(assignmentText);
+            if (items.length === 0 || hasTuple) {
+              const strRe = /["']([^"']+)["']/g;
+              for (let submatch; (submatch = strRe.exec(assignmentText)); ) {
+                const name = submatch[1]!;
+                pythonAllExports.add(name);
+                const local = mergedLocals.find(
+                  (def) => def.localName === name,
+                );
+                if (
+                  local &&
+                  !exports.some(
+                    (entry) =>
+                      entry.type !== "exportStar" &&
+                      "exportedAs" in entry &&
+                      entry.exportedAs === name,
+                  )
+                ) {
+                  exports.push({
+                    type: "local",
+                    exportedAs: name,
+                    target: local,
+                  });
+                }
+              }
+            }
           }
           continue;
         }
         if (map["name"]) {
           const nameText = map["name"].text;
           const local = locals.find((def) => def.localName === nameText);
-          if (local) {
+          if (local && !nameText.startsWith("_")) {
             exports.push({
               type: "local",
               exportedAs: nameText,
               target: local,
             });
-            const exportText = stmtText;
-            if (/^\s*export\s+default\b/.test(exportText)) {
-              exports.push({
-                type: "local",
-                exportedAs: "default",
-                target: { ...local, kind: SymbolKind.Default },
-              });
-            }
           }
           continue;
         }
+      }
+
+      if (map["from"]) {
+        const from = unquote(map["from"].text);
         if (map["src"]) {
           const srcName = map["src"].text;
           const alias = map["alias"]?.text ?? srcName;
-          const local = locals.find((def) => def.localName === srcName);
-          if (local) {
-            exports.push({ type: "local", exportedAs: alias, target: local });
+          exports.push({
+            type: "reexport",
+            exportedAs: alias,
+            fromModule: from,
+            moduleSpecifier: from,
+            sourceSpecifier: srcName,
+            typeOnly: isTypeOnly,
+          });
+        } else if (/^\s*export\s*\*/.test(stmtText)) {
+          exports.push({
+            type: "exportStar",
+            fromModule: from,
+            moduleSpecifier: from,
+            sourceSpecifier: from,
+            typeOnly: isTypeOnly,
+          });
+        }
+        continue;
+      }
+      if (map["cjs_shorthand"]) {
+        const nameText = map["cjs_shorthand"].text;
+        const local = locals.find((def) => def.localName === nameText);
+        if (local) {
+          exports.push({
+            type: "local",
+            exportedAs: nameText,
+            target: local,
+          });
+        }
+        continue;
+      }
+      if (map["cjs_export_name"] && map["cjs_local"]) {
+        const exportedAs = map["cjs_export_name"].text;
+        const localName = map["cjs_local"].text;
+        const local = locals.find((def) => def.localName === localName);
+        if (local) exports.push({ type: "local", exportedAs, target: local });
+        continue;
+      }
+      if (map["cjs_export_name"] && map["cjs_fn"]) {
+        const exportedAs = map["cjs_export_name"].text;
+        const fnNode = nodeForCapture(map["cjs_fn"]);
+        const sym = buildSymbolDef(
+          exportedAs,
+          SymbolKind.Function,
+          rangeFromNativeCapture(map["cjs_fn"]),
+          fnNode,
+        );
+        locals.push(sym);
+        exports.push({ type: "local", exportedAs, target: sym });
+        continue;
+      }
+      if (map["default"]) {
+        const nameText = map["default"].text;
+        const local = locals.find((def) => def.localName === nameText);
+        if (local) {
+          exports.push({
+            type: "local",
+            exportedAs: "default",
+            target: { ...local, kind: SymbolKind.Default },
+          });
+        }
+        continue;
+      }
+      if (map["anon_default"]) {
+        const defaultNode = nodeForCapture(map["anon_default"]);
+        const sym = buildSymbolDef(
+          "__default_export__",
+          SymbolKind.Default,
+          rangeFromNativeCapture(map["anon_default"]),
+          defaultNode,
+        );
+        locals.push(sym);
+        exports.push({ type: "local", exportedAs: "default", target: sym });
+        continue;
+      }
+      const tsExportAssignMatch =
+        support.id === "ts" || support.id === "tsx"
+          ? stmtText.match(/^\s*export\s*=\s*([A-Za-z_$][\w$]*)\s*;?\s*$/)
+          : null;
+      if (tsExportAssignMatch) {
+        const ident = tsExportAssignMatch[1]!;
+        const local = locals.find((def) => def.localName === ident);
+        if (local) {
+          exports.push({
+            type: "local",
+            exportedAs: "default",
+            target: { ...local, kind: SymbolKind.Default },
+          });
+        }
+        continue;
+      }
+      if (map["ts_export_assign"]) {
+        const ident = map["ts_export_assign"].text;
+        const local = locals.find((def) => def.localName === ident);
+        if (local) {
+          exports.push({
+            type: "local",
+            exportedAs: "default",
+            target: { ...local, kind: SymbolKind.Default },
+          });
+        }
+        continue;
+      }
+      if (map["name"]) {
+        const nameText = map["name"].text;
+        const local = locals.find((def) => def.localName === nameText);
+        if (local) {
+          exports.push({
+            type: "local",
+            exportedAs: nameText,
+            target: local,
+          });
+          if (/^\s*export\s+default\b/.test(stmtText)) {
+            exports.push({
+              type: "local",
+              exportedAs: "default",
+              target: { ...local, kind: SymbolKind.Default },
+            });
           }
         }
+        continue;
       }
+      if (map["src"]) {
+        const srcName = map["src"].text;
+        const alias = map["alias"]?.text ?? srcName;
+        const local = locals.find((def) => def.localName === srcName);
+        if (local) {
+          exports.push({ type: "local", exportedAs: alias, target: local });
+        }
+      }
+    }
+  };
+
+  let usedNativeExports = false;
+  if (support.queries.exports.trim() && nativeQueries) {
+    try {
+      appendExportsFromMatches(nativeQueries.exports);
       if (
         !exports.some(
           (entry) => entry.type === "local" && entry.exportedAs === "default",
@@ -2042,250 +2065,16 @@ export function collectLocalsAndExportsFromSource(
   const exportTree = !usedNativeExports ? ensureTree() : null;
   if (support.queries.exports.trim() && exportTree && !usedNativeExports) {
     try {
-      const { exports: q } = getCompiledQueries(lang, support);
-      for (const m of q.matches(exportTree.rootNode)) {
-        const map = Object.fromEntries(
-          m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const),
-        );
-        const stmtText = map["stmt"] ? sliceText(map["stmt"].node, source) : "";
-        const isTypeOnly = support.isTypeOnly(stmtText);
-
-        if (support.id === "python") {
-          // Check for __all__ patterns: assignment, augmented assignment, extend(), append()
-          const leftText = map["left"]
-            ? sliceText(map["left"].node, source)
-            : "";
-          const methodText = map["method"]
-            ? sliceText(map["method"].node, source)
-            : "";
-          const isAllAssignment = leftText === "__all__";
-          const isAllMethod =
-            leftText === "__all__" &&
-            (methodText === "extend" || methodText === "append");
-
-          if (isAllAssignment || isAllMethod) {
-            hasPythonAll = true;
-            const items = m.captures.filter(
-              (c: Parser.QueryCapture) => c.name === "all_item",
-            );
-            for (const it of items) {
-              const name = unquote(sliceText(it.node, source));
-              pythonAllExports.add(name);
-              const local = mergedLocals.find((d) => d.localName === name);
-              if (
-                local &&
-                !exports.some(
-                  (e) =>
-                    e.type !== "exportStar" &&
-                    (e as { exportedAs: string }).exportedAs === name,
-                )
-              )
-                exports.push({
-                  type: "local",
-                  exportedAs: name,
-                  target: local,
-                });
-            }
-            // Fallback for tuples/multiline patterns that tree-sitter may not fully capture.
-            // Run if tree-sitter captured 0 items, OR if statement contains tuple (parentheses)
-            // which tree-sitter queries may only partially capture.
-            if (isAllAssignment && map["stmt"]) {
-              const stmtNode = map["stmt"].node;
-              const stmtText = source.slice(
-                stmtNode.startIndex,
-                stmtNode.endIndex,
-              );
-              // Check if this is a tuple assignment (contains parentheses after =)
-              const hasTuple = /=\s*\(/.test(stmtText);
-              // Only run fallback if no items captured OR it's a tuple pattern
-              if (items.length === 0 || hasTuple) {
-                const strRe = /["']([^"']+)["']/g;
-                for (let sm; (sm = strRe.exec(stmtText)); ) {
-                  const name = sm[1]!;
-                  pythonAllExports.add(name);
-                  const local = mergedLocals.find((d) => d.localName === name);
-                  if (
-                    local &&
-                    !exports.some(
-                      (e) =>
-                        e.type !== "exportStar" &&
-                        (e as { exportedAs: string }).exportedAs === name,
-                    )
-                  )
-                    exports.push({
-                      type: "local",
-                      exportedAs: name,
-                      target: local,
-                    });
-                }
-              }
-            }
-            continue;
-          }
-          if (map["name"]) {
-            const nameText = sliceText(map["name"].node, source);
-            const local = locals.find((d) => d.localName === nameText);
-            if (local) {
-              if (!nameText.startsWith("_")) {
-                exports.push({
-                  type: "local",
-                  exportedAs: nameText,
-                  target: local,
-                });
-              }
-            }
-            continue;
-          }
-        }
-
-        if (map["from"]) {
-          const from = unquote(sliceText(map["from"].node, source));
-          if (map["src"]) {
-            const srcName = sliceText(map["src"].node, source);
-            const alias = map["alias"]
-              ? sliceText(map["alias"].node, source)
-              : srcName;
-            exports.push({
-              type: "reexport",
-              exportedAs: alias,
-              fromModule: from,
-              moduleSpecifier: from,
-              sourceSpecifier: srcName,
-              typeOnly: isTypeOnly,
-            });
-          } else if (/^\s*export\s*\*/.test(stmtText)) {
-            exports.push({
-              type: "exportStar",
-              fromModule: from,
-              moduleSpecifier: from,
-              sourceSpecifier: from,
-              typeOnly: isTypeOnly,
-            });
-          }
-          continue;
-        }
-        if (map["cjs_shorthand"]) {
-          const nameText = sliceText(map["cjs_shorthand"].node, source);
-          const local = locals.find((d) => d.localName === nameText);
-          if (local)
-            exports.push({
-              type: "local",
-              exportedAs: nameText,
-              target: local,
-            });
-          continue;
-        }
-        if (map["cjs_export_name"] && map["cjs_local"]) {
-          const exportedAs = sliceText(map["cjs_export_name"].node, source);
-          const localName = sliceText(map["cjs_local"].node, source);
-          const local = locals.find((d) => d.localName === localName);
-          if (local) exports.push({ type: "local", exportedAs, target: local });
-          continue;
-        }
-        // CJS: direct function/arrow assignment to exports/module.exports
-        if (map["cjs_export_name"] && map["cjs_fn"]) {
-          const exportedAs = sliceText(map["cjs_export_name"].node, source);
-          const defRange = toRange(map["cjs_fn"].node);
-          const sym = buildSymbolDef(
-            exportedAs,
-            SymbolKind.Function,
-            defRange,
-            map["cjs_fn"].node,
-          );
-          locals.push(sym);
-          exports.push({ type: "local", exportedAs, target: sym });
-          continue;
-        }
-        if (map["default"]) {
-          const nameText = sliceText(map["default"].node, source);
-          const local = locals.find((d) => d.localName === nameText);
-          if (local)
-            exports.push({
-              type: "local",
-              exportedAs: "default",
-              target: { ...local, kind: SymbolKind.Default },
-            });
-          continue;
-        }
-        if (map["anon_default"]) {
-          const sym = buildSymbolDef(
-            "__default_export__",
-            SymbolKind.Default,
-            toRange(map["anon_default"].node),
-            map["anon_default"].node,
-          );
-          locals.push(sym);
-          exports.push({ type: "local", exportedAs: "default", target: sym });
-          continue;
-        }
-        const tsExportAssignMatch =
-          support.id === "ts" || support.id === "tsx"
-            ? stmtText.match(/^\s*export\s*=\s*([A-Za-z_$][\w$]*)\s*;?\s*$/)
-            : null;
-        if (tsExportAssignMatch) {
-          const ident = tsExportAssignMatch[1]!;
-          const local = locals.find((d) => d.localName === ident);
-          if (local)
-            exports.push({
-              type: "local",
-              exportedAs: "default",
-              target: { ...local, kind: SymbolKind.Default },
-            });
-          continue;
-        }
-        if (map["ts_export_assign"]) {
-          const ident = sliceText(map["ts_export_assign"].node, source);
-          const local = locals.find((d) => d.localName === ident);
-          if (local)
-            exports.push({
-              type: "local",
-              exportedAs: "default",
-              target: { ...local, kind: SymbolKind.Default },
-            });
-          continue;
-        }
-        if (map["name"]) {
-          const nameNode = map["name"].node;
-          const nameText = sliceText(nameNode, source);
-          const local = locals.find((d) => d.localName === nameText);
-          if (local) {
-            exports.push({
-              type: "local",
-              exportedAs: nameText,
-              target: local,
-            });
-            let cur: Parser.SyntaxNode | null = nameNode;
-            let exportStmt: Parser.SyntaxNode | null = null;
-            while (cur) {
-              if (cur.type === "export_statement") {
-                exportStmt = cur;
-                break;
-              }
-              cur = cur.parent;
-            }
-            const exportText = exportStmt
-              ? sliceText(exportStmt, source)
-              : stmtText;
-            if (/^\s*export\s+default\b/.test(exportText)) {
-              exports.push({
-                type: "local",
-                exportedAs: "default",
-                target: { ...local, kind: SymbolKind.Default },
-              });
-            }
-          }
-          continue;
-        }
-        if (map["src"]) {
-          const srcName = sliceText(map["src"].node, source);
-          const alias = map["alias"]
-            ? sliceText(map["alias"].node, source)
-            : srcName;
-          const local = locals.find((d) => d.localName === srcName);
-          if (local)
-            exports.push({ type: "local", exportedAs: alias, target: local });
-        }
-      }
+      appendExportsFromMatches(
+        executeJsQueryAsNativeMatches(
+          source,
+          support,
+          lang,
+          support.queries.exports,
+          exportTree,
+        ),
+        exportTree,
+      );
       if (
         !exports.some((e) => e.type === "local" && e.exportedAs === "default")
       ) {
