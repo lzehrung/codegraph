@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import Parser from "tree-sitter";
 
-import { supportById } from "../src/languages.js";
+import { TS_SUPPORT, languageForFile, supportById } from "../src/languages.js";
+import { buildScopeIndexFromSource } from "../src/indexer.js";
 import {
   getNativeSyntaxTreeExecution,
   isNativeTreeSitterAvailable,
@@ -62,5 +64,45 @@ nativeDescribe("native parse tree projection", () => {
       { row: 1, column: 15 },
     );
     expect(byPosition.text).toBe("name");
+  });
+
+  it("builds the same TypeScript scope bindings as the JS tree walker", () => {
+    const source = [
+      "const top = 1;",
+      "function outer(arg: string) {",
+      "  const top = arg;",
+      "  function inner() {",
+      "    return top;",
+      "  }",
+      "  return inner();",
+      "}",
+    ].join("\n");
+
+    const file = "scope.ts";
+    const lang = languageForFile(file);
+    const parser = new Parser();
+    parser.setLanguage(lang);
+    const jsTree = parser.parse(source);
+
+    const nativeScope = buildScopeIndexFromSource(file, source, TS_SUPPORT, lang);
+    const jsScope = buildScopeIndexFromSource(file, source, TS_SUPPORT, lang, [], {
+      tree: jsTree,
+    });
+
+    const normalize = (scopeIndex: ReturnType<typeof buildScopeIndexFromSource>) =>
+      Array.from(scopeIndex.bindings.entries())
+        .map(([name, bindings]) => ({
+          name,
+          bindings: bindings.map((binding) => ({
+            kind: binding.kind,
+            def: binding.def?.start.index ?? -1,
+            occurrences: binding.occurrences
+              .map((range) => range.start.index ?? -1)
+              .sort((left, right) => left - right),
+          })),
+        }))
+        .sort((left, right) => left.name.localeCompare(right.name));
+
+    expect(normalize(nativeScope)).toEqual(normalize(jsScope));
   });
 });

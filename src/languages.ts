@@ -4,6 +4,7 @@ import Parser from "tree-sitter";
 import type {
   LanguageDefinition,
   NativeCompatibility,
+  SyntaxNodeLike,
 } from "./languages/types.js";
 import { getAllLanguages, getLanguageById } from "./languages/registry.js";
 import "./languages/all.js";
@@ -26,10 +27,10 @@ export type LanguageSupport = {
     locals: string;
     importBindings: string;
   };
-  classifyDefinition: (nameNode: Parser.SyntaxNode) => string;
-  isDeclarationName: (node: Parser.SyntaxNode) => boolean;
-  createsBlockScope: (node: Parser.SyntaxNode) => boolean;
-  createsFunctionScope: (node: Parser.SyntaxNode) => boolean;
+  classifyDefinition: (nameNode: SyntaxNodeLike) => string;
+  isDeclarationName: (node: SyntaxNodeLike) => boolean;
+  createsBlockScope: (node: SyntaxNodeLike) => boolean;
+  createsFunctionScope: (node: SyntaxNodeLike) => boolean;
   supportsCrossModuleSymbols: boolean;
   isTypeOnly: (stmtText: string) => boolean;
   native?: NativeCompatibility;

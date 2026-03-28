@@ -54,6 +54,7 @@ import type { Edge, Range, FileId, Graph } from "./types.js";
 import {
   executeJsQueryAsNativeMatches,
   getNativeQueryExecution,
+  getNativeSyntaxTreeExecution,
   isNativeQueryModified,
   getCachedNormalizedQuery,
   isNativeTreeSitterAvailable,
@@ -61,6 +62,7 @@ import {
   type NativeCapture,
   type NativeQueryResults,
 } from "./native/treeSitterNative.js";
+import { ProjectedSyntaxTree } from "./native/projectedTree.js";
 import {
   initNativeBackendReport,
   recordNativeBackendOutcome,
@@ -74,6 +76,7 @@ import type {
   NativeExtractResult,
   NativeExtractTask,
 } from "./worker/nativeExtractWorker.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "./languages/types.js";
 
 // Default number of lines to include around references for line context
 const DEFAULT_REF_CONTEXT_LINES = 5;
@@ -1490,7 +1493,7 @@ export function collectLocalsAndExportsFromSource(
   const _sourceLines = source.split(/\r?\n/);
 
   const extractLeadingDocstring = (
-    node: Parser.SyntaxNode | null,
+    node: SyntaxNodeLike | null,
   ): string | undefined => {
     if (!node) return undefined;
     // If we're looking at an identifier, look at its parent (the declaration)
@@ -1573,7 +1576,7 @@ export function collectLocalsAndExportsFromSource(
     localName: string,
     kind: SymbolKind,
     range: Range,
-    node?: Parser.SyntaxNode,
+    node?: SyntaxNodeLike,
   ): SymbolDef => {
     let lineSpan: number | undefined;
     if (
@@ -1645,7 +1648,7 @@ export function collectLocalsAndExportsFromSource(
     localName: string,
     kind: SymbolKind,
     range: Range,
-    node?: Parser.SyntaxNode,
+    node?: SyntaxNodeLike,
   ) => {
     const key = `${localName}:${range.start.index ?? 0}:${range.end.index ?? 0}`;
     if (seenLocals.has(key)) return;
@@ -1656,7 +1659,7 @@ export function collectLocalsAndExportsFromSource(
   const classifyLocalCapture = (
     capture: NativeCapture | Parser.QueryCapture,
     range: Range,
-    node?: Parser.SyntaxNode,
+    node?: SyntaxNodeLike,
   ): SymbolKind => {
     if (node) return toKind(support.classifyDefinition(node));
     if ("name" in capture && capture.name === "tname") {
@@ -1751,10 +1754,7 @@ export function collectLocalsAndExportsFromSource(
         if (b.kind === "function") kind = SymbolKind.Function;
         else if (b.kind === "class") kind = SymbolKind.Class;
         else if (b.kind === "type") kind = SymbolKind.TypeAlias;
-        const startIndex = b.def.start.index ?? 0;
-        const endIndex = b.def.end.index ?? 0;
-        const node = scopeTree.rootNode.descendantForIndex(startIndex, endIndex);
-        pushLocal(b.name, kind, b.def, node);
+        pushLocal(b.name, kind, b.def, b.node);
       }
     }
   }
@@ -5263,6 +5263,7 @@ export type Binding = {
   name: string;
   kind: BindingKind;
   def?: Range;
+  node?: SyntaxNodeLike;
   occurrences: Range[];
   import?: ImportBinding;
 };
@@ -5270,7 +5271,7 @@ export type Binding = {
 export type Scope = {
   kind: "module" | "function" | "block";
   map: Map<string, Binding>;
-  node: Parser.SyntaxNode;
+  node: SyntaxNodeLike;
   parent: Scope | undefined;
 };
 
@@ -5329,7 +5330,7 @@ export function buildScopeIndexFromSource(
   support: LanguageSupport,
   lang: Parser.Language,
   imports: ImportBinding[] = [],
-  opts?: { tree?: Parser.Tree },
+  opts?: { tree?: SyntaxTreeLike; nativeMode?: NativeRuntimeMode },
 ): ScopeIndex {
   const key2 =
     support.nodeTypes && support.id === "python"
@@ -5338,13 +5339,22 @@ export function buildScopeIndexFromSource(
         ? "js"
         : "ts";
   let parser2: Parser | undefined;
-  const tree =
-    opts?.tree ??
-    (() => {
-      parser2 = acquireParser(lang, key2);
-      parser2.setLanguage(lang);
-      return parser2.parse(source);
-    })();
+  let tree = opts?.tree ?? null;
+  if (!tree) {
+    const nativeTreeExecution = getNativeSyntaxTreeExecution(
+      source,
+      support,
+      opts?.nativeMode,
+    );
+    if (nativeTreeExecution.tree) {
+      tree = new ProjectedSyntaxTree(source, nativeTreeExecution.tree);
+    }
+  }
+  if (!tree) {
+    parser2 = acquireParser(lang, key2);
+    parser2.setLanguage(lang);
+    tree = parser2.parse(source);
+  }
 
   const rootScope: Scope = {
     kind: "module",
@@ -5398,8 +5408,8 @@ export function buildScopeIndexFromSource(
     return "local";
   };
 
-  const isParamNode = (node: Parser.SyntaxNode): boolean => {
-    let current: Parser.SyntaxNode | null = node.parent;
+  const isParamNode = (node: SyntaxNodeLike): boolean => {
+    let current: SyntaxNodeLike | null = node.parent;
     while (current) {
       if (paramParentTypes.has(current.type)) return true;
       current = current.parent;
@@ -5407,13 +5417,14 @@ export function buildScopeIndexFromSource(
     return false;
   };
 
-  const addDecl = (nameNode: Parser.SyntaxNode, kind: BindingKind) => {
+  const addDecl = (nameNode: SyntaxNodeLike, kind: BindingKind) => {
     const name = sliceText(nameNode, source);
     const target = stack[stack.length - 1];
     const b: Binding = {
       name,
       kind,
       def: toRange(nameNode),
+      node: nameNode,
       occurrences: [],
     };
     target?.map.set(name, b);
@@ -5427,7 +5438,7 @@ export function buildScopeIndexFromSource(
     return rootScope.map.get(name);
   };
 
-  const walk = (node: Parser.SyntaxNode) => {
+  const walk = (node: SyntaxNodeLike) => {
     // 1. Add declarations to the CURRENT scope (before pushing a new one)
     if (
       node.type === "function_declaration" ||
@@ -5489,7 +5500,7 @@ export function buildScopeIndexFromSource(
       ) {
         const params = node.childForFieldName("parameters");
         if (params) {
-          const q: Parser.SyntaxNode[] = [params];
+          const q: SyntaxNodeLike[] = [params];
           while (q.length) {
             const n = q.pop()!;
             if (n.type === "identifier") addDecl(n, "param");
