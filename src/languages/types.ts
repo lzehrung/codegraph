@@ -15,6 +15,7 @@ export interface SyntaxNodeLike {
   endPosition: SyntaxPositionLike;
   parent: SyntaxNodeLike | null;
   namedChildren: SyntaxNodeLike[];
+  previousSibling?: SyntaxNodeLike | null;
   previousNamedSibling?: SyntaxNodeLike | null;
   child(index: number): SyntaxNodeLike | null;
   childForFieldName(fieldName: string): SyntaxNodeLike | null;

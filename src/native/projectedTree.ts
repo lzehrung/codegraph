@@ -90,6 +90,18 @@ export class ProjectedSyntaxNode {
     return siblings[currentIndex - 1] ?? null;
   }
 
+  get previousSibling(): ProjectedSyntaxNode | null {
+    const parent = this.parent;
+    if (!parent) return null;
+    const siblings = parent.raw.childIds.flatMap((id) => {
+      const sibling = this.tree.nodeById(id);
+      return sibling ? [sibling] : [];
+    });
+    const currentIndex = siblings.findIndex((node) => node.id === this.id);
+    if (currentIndex <= 0) return null;
+    return siblings[currentIndex - 1] ?? null;
+  }
+
   child(index: number): ProjectedSyntaxNode | null {
     const childId = this.raw.childIds[index];
     if (childId === undefined) return null;

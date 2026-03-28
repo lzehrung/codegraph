@@ -55,6 +55,7 @@ import {
   type SymbolDef,
   SymbolKind,
 } from "./index.js";
+import type { SyntaxNodeLike } from "./languages/types.js";
 
 export type GraphBuildOptions = {
   fast?: boolean;
@@ -1728,17 +1729,17 @@ export async function buildSymbolGraphDetailed(
       // Collect function-like declarations (JS/TS: function_declaration, arrow/function expressions bound to vars; Python: function_definition)
       const functionNodes: Array<{
         name: string;
-        node: Parser.SyntaxNode;
+        node: SyntaxNodeLike;
         def: SymbolDef;
       }> = [];
       const classNodes: Array<{
         name: string;
-        node: Parser.SyntaxNode;
+        node: SyntaxNodeLike;
         def: SymbolDef;
       }> = [];
       // Collect simple constant string bindings for resolving computed member keys, e.g., const k = "x"; obj[k]
       const constStringOf = new Map<string, string>();
-      const collectConsts = (n: Parser.SyntaxNode) => {
+      const collectConsts = (n: SyntaxNodeLike) => {
         if (n.type === "variable_declarator") {
           const nameNode = n.childForFieldName("name");
           const valueNode = n.childForFieldName("value");
@@ -1764,7 +1765,7 @@ export async function buildSymbolGraphDetailed(
         "optional_chain",
         sup.id === "python" ? "attribute" : "",
       ]);
-      const walkCollect = (n: Parser.SyntaxNode) => {
+      const walkCollect = (n: SyntaxNodeLike) => {
         if (
           n.type === "function_declaration" ||
           n.type === "function_definition" ||
@@ -1830,8 +1831,8 @@ export async function buildSymbolGraphDetailed(
 
       // For each function, look for identifier occurrences of imported aliases in its subtree
       const scanForAliasUse = (
-        node: Parser.SyntaxNode,
-        cb: (name: string, atNode: Parser.SyntaxNode) => void,
+        node: SyntaxNodeLike,
+        cb: (name: string, atNode: SyntaxNodeLike) => void,
       ) => {
         if (isIdentifierType(sup, node.type)) {
           const name = sliceText(node, src);
@@ -1847,7 +1848,7 @@ export async function buildSymbolGraphDetailed(
       };
 
       const tryResolveNode = (
-        node: Parser.SyntaxNode,
+        node: SyntaxNodeLike,
         fromId: string,
         label: string,
       ) => {
@@ -1883,8 +1884,8 @@ export async function buildSymbolGraphDetailed(
       ]);
 
       const getCallTarget = (
-        n: Parser.SyntaxNode,
-      ): Parser.SyntaxNode | null => {
+        n: SyntaxNodeLike,
+      ): SyntaxNodeLike | null => {
         const explicitTarget =
           n.childForFieldName("function") ??
           n.childForFieldName("callee") ??
@@ -1901,7 +1902,7 @@ export async function buildSymbolGraphDetailed(
           : null;
       };
 
-      const getNewTarget = (n: Parser.SyntaxNode) =>
+      const getNewTarget = (n: SyntaxNodeLike) =>
         n.childForFieldName("constructor") ??
         n.childForFieldName("type") ??
         n.childForFieldName("name") ??
@@ -1909,14 +1910,14 @@ export async function buildSymbolGraphDetailed(
         n.child(0);
 
       const tryResolveChain = (
-        node: Parser.SyntaxNode,
+        node: SyntaxNodeLike,
         fromId?: string,
         label = "uses",
       ) => {
         const names: string[] = [];
-        let cur: Parser.SyntaxNode | null = node;
-        let base: Parser.SyntaxNode | null = null;
-        const pushProp = (p: Parser.SyntaxNode | null) => {
+        let cur: SyntaxNodeLike | null = node;
+        let base: SyntaxNodeLike | null = null;
+        const pushProp = (p: SyntaxNodeLike | null) => {
           if (!p) return;
           if (propertyIdentifierTypes.includes(p.type))
             names.push(sliceText(p, src));
@@ -1991,7 +1992,7 @@ export async function buildSymbolGraphDetailed(
 
       // Collect Python decorators on functions and add uses edges
       if (sup.id === "python") {
-        const addDecoratorUses = (n: Parser.SyntaxNode) => {
+        const addDecoratorUses = (n: SyntaxNodeLike) => {
           if (n.type === "decorated_definition") {
             const fn = n.namedChildren.find(
               (child) => child.type === "function_definition",
@@ -2059,7 +2060,7 @@ export async function buildSymbolGraphDetailed(
         if (!membersOnly)
           scanForAliasUse(
             fn.node,
-            (name: string, atNode: Parser.SyntaxNode) => {
+            (name: string, atNode: SyntaxNodeLike) => {
               if (seenAliases.has(name)) return;
               let target: SymbolDef | null = aliasToTargetDef.get(name) ?? null;
               if (!target) {
@@ -2100,12 +2101,12 @@ export async function buildSymbolGraphDetailed(
           );
 
         // Walk for member expressions of namespace imports: alias.member
-        const walkForMembers = (n: Parser.SyntaxNode) => {
-          const tryResolveChainLocal = (node: Parser.SyntaxNode) => {
+        const walkForMembers = (n: SyntaxNodeLike) => {
+          const tryResolveChainLocal = (node: SyntaxNodeLike) => {
             const names: string[] = [];
-            let cur: Parser.SyntaxNode | null = node;
-            let base: Parser.SyntaxNode | null = null;
-            const pushProp = (p: Parser.SyntaxNode | null) => {
+            let cur: SyntaxNodeLike | null = node;
+            let base: SyntaxNodeLike | null = null;
+            const pushProp = (p: SyntaxNodeLike | null) => {
               if (!p) return;
               if (propertyIdentifierTypes.includes(p.type))
                 names.push(sliceText(p, src));
@@ -2189,7 +2190,7 @@ export async function buildSymbolGraphDetailed(
         };
         walkForMembers(fn.node);
 
-        const walkForCalls = (n: Parser.SyntaxNode) => {
+        const walkForCalls = (n: SyntaxNodeLike) => {
           if (callNodeTypes.has(n.type)) {
             if (sup.id === "go") {
               const callTarget = getCallTarget(n);
@@ -2236,7 +2237,7 @@ export async function buildSymbolGraphDetailed(
         walkForCalls(fn.node);
       }
 
-      const collectIdentifiers = (n: Parser.SyntaxNode, out: string[]) => {
+      const collectIdentifiers = (n: SyntaxNodeLike, out: string[]) => {
         if (isIdentifierType(sup, n.type) || n.type === "type_identifier") {
           out.push(sliceText(n, src));
         }
@@ -2244,9 +2245,9 @@ export async function buildSymbolGraphDetailed(
       };
 
       const findFirstNodeByType = (
-        node: Parser.SyntaxNode,
+        node: SyntaxNodeLike,
         type: string,
-      ): Parser.SyntaxNode | null => {
+      ): SyntaxNodeLike | null => {
         for (const ch of node.namedChildren ?? []) {
           if (ch.type === type) return ch;
           const found = findFirstNodeByType(ch, type);
@@ -2256,9 +2257,9 @@ export async function buildSymbolGraphDetailed(
       };
 
       const collectNodesByType = (
-        node: Parser.SyntaxNode,
+        node: SyntaxNodeLike,
         type: string,
-        out: Parser.SyntaxNode[],
+        out: SyntaxNodeLike[],
       ) => {
         for (const ch of node.namedChildren ?? []) {
           if (ch.type === type) out.push(ch);
@@ -2313,7 +2314,7 @@ export async function buildSymbolGraphDetailed(
           superClause?.namedChildren?.[0] ?? superClause?.child(1);
         if (superNode) tryResolveNode(superNode, fromId, "extends");
 
-        const implementsClauses: Parser.SyntaxNode[] = [];
+        const implementsClauses: SyntaxNodeLike[] = [];
         collectNodesByType(cls.node, "implements_clause", implementsClauses);
         for (const clause of implementsClauses) {
           const names: string[] = [];
@@ -2329,7 +2330,7 @@ export async function buildSymbolGraphDetailed(
       }
 
       if (sup.id === "rust") {
-        const walkImpls = (node: Parser.SyntaxNode) => {
+        const walkImpls = (node: SyntaxNodeLike) => {
           if (node.type === "impl_item") {
             const typeIdentifiers =
               node.namedChildren?.filter(
