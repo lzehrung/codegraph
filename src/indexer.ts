@@ -238,13 +238,13 @@ function parsePreparedFileContext(
   context: PreparedFileContext,
 ): ParsedFileContext {
   const { source, sup, nativeQueries } = context;
-  const lang = context.lang ?? sup.language(context.file);
+  const resolvedLang = context.lang ?? sup.language(context.file);
   const key = sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts";
-  const parser = acquireParser(lang, key);
+  const parser = acquireParser(resolvedLang, key);
   try {
-    parser.setLanguage(lang);
+    parser.setLanguage(resolvedLang);
     const tree = parser.parse(source);
-    return { source, tree, sup, lang, nativeQueries };
+    return { source, tree, sup, lang: resolvedLang, nativeQueries };
   } finally {
     releaseParser(parser, key);
   }
@@ -4650,7 +4650,7 @@ export async function goToDefinition(
     row: Math.max(0, line - 1),
     column: Math.max(0, column - 1),
   };
-  let node: Parser.SyntaxNode | null = tree.rootNode.descendantForPosition(
+  let node: SyntaxNodeLike | null = tree.rootNode.descendantForPosition(
     pos,
     pos,
   );
@@ -4675,9 +4675,9 @@ export async function goToDefinition(
 
   if (!name) {
     const findDeclNameNode = (
-      n: Parser.SyntaxNode | null,
-    ): Parser.SyntaxNode | null => {
-      let cur: Parser.SyntaxNode | null = n;
+      n: SyntaxNodeLike | null,
+    ): SyntaxNodeLike | null => {
+      let cur: SyntaxNodeLike | null = n;
       while (cur) {
         if (
           cur.type === "function_declaration" ||
@@ -4725,8 +4725,8 @@ export async function goToDefinition(
 
   if (sup.supportsCrossModuleSymbols && isMemberAccess) {
     const memberNode = node.parent!;
-    let obj: Parser.SyntaxNode | null = null;
-    let prop: Parser.SyntaxNode | null = null;
+    let obj: SyntaxNodeLike | null = null;
+    let prop: SyntaxNodeLike | null = null;
 
     if (sup.id === "python") {
       obj = memberNode.childForFieldName("object") ?? memberNode.child(0);
@@ -4827,7 +4827,7 @@ export async function goToDefinition(
     ]);
 
     const resolveExpression = async (
-      expr: Parser.SyntaxNode,
+      expr: SyntaxNodeLike,
     ): Promise<ResolvedExport | null> => {
       const exprName = sliceText(expr, source);
       const exprIsId = sup.nodeTypes.identifier.includes(expr.type);
@@ -5032,7 +5032,7 @@ export async function goToDefinition(
 
     const findClosestBinding = (
       name: string,
-      node: Parser.SyntaxNode,
+      node: SyntaxNodeLike,
     ): SymbolDef | null => {
       // Find the scope that contains this node
       let currentScope = scopeIndex.allScopes.find((s) => {
@@ -5689,7 +5689,7 @@ function extractLineContext(
 
 function extractEnclosingBlock(
   source: string,
-  tree: Parser.Tree,
+  tree: SyntaxTreeLike,
   range: Range,
   maxLines: number,
   sup: LanguageSupport,
@@ -5794,8 +5794,8 @@ export async function findReferences(
     parsedCtx: {
       source: string;
       sup: LanguageSupport;
-      lang: Parser.Language;
-      tree: Parser.Tree;
+      lang?: Parser.Language;
+      tree: SyntaxTreeLike;
     },
   ) => {
     if (index.scopeCache.has(fileId)) return index.scopeCache.get(fileId)!;
@@ -5849,7 +5849,7 @@ export async function findReferences(
       "field_identifier",
     ]);
     const matches: Range[] = [];
-    const walk = (node: Parser.SyntaxNode) => {
+    const walk = (node: SyntaxNodeLike) => {
       if (
         identifierTypes.has(node.type) &&
         sliceText(node, parsed.source) === symbolName
@@ -6016,7 +6016,7 @@ export async function findReferences(
   if (opts?.context) {
     const perFileCache = new Map<
       string,
-      { source: string; tree: Parser.Tree; sup: LanguageSupport }
+      { source: string; tree: SyntaxTreeLike; sup: LanguageSupport }
     >();
 
     for (const ref of uniqueRefs) {
@@ -6090,14 +6090,14 @@ export async function collectNamespaceMemberRefs(
     t === "package_identifier" ||
     t === "constant" ||
     t === "namespace_identifier";
-  const walk = (node: Parser.SyntaxNode) => {
+  const walk = (node: SyntaxNodeLike) => {
     if (
       node.type === isMember ||
       (sup.id === "go" && node.type === "qualified_type") ||
       (isRuby && (node.type === "call" || node.type === "scope_resolution"))
     ) {
-      let obj: Parser.SyntaxNode | null = null;
-      let prop: Parser.SyntaxNode | null = null;
+      let obj: SyntaxNodeLike | null = null;
+      let prop: SyntaxNodeLike | null = null;
       if (isRuby) {
         if (node.type === "scope_resolution") {
           obj = node.childForFieldName("scope") ?? node.child(0);
