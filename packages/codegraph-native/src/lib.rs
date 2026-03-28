@@ -67,6 +67,27 @@ pub struct NativeQueryRunResult {
     pub matches: Vec<NativeMatch>,
 }
 
+#[derive(Debug)]
+#[napi(object)]
+pub struct NativeSyntaxNode {
+    pub id: u32,
+    pub parent_id: i32,
+    pub node_type: String,
+    pub named: bool,
+    pub start: NativePoint,
+    pub end: NativePoint,
+    pub child_ids: Vec<u32>,
+    pub named_child_ids: Vec<u32>,
+    pub child_field_names: Vec<String>,
+}
+
+#[derive(Debug)]
+#[napi(object)]
+pub struct NativeSyntaxTree {
+    pub root_id: u32,
+    pub nodes: Vec<NativeSyntaxNode>,
+}
+
 fn point_with_index(point: Point, index: usize) -> NativePoint {
     NativePoint {
         row: point.row as u32,
@@ -289,6 +310,52 @@ fn language_for_id(language_id: &str) -> Option<Language> {
     }
 }
 
+fn push_projected_node(
+    node: tree_sitter::Node<'_>,
+    parent_id: Option<u32>,
+    out: &mut Vec<NativeSyntaxNode>,
+) -> u32 {
+    let node_id = out.len() as u32;
+    let mut child_ids = Vec::new();
+    let mut named_child_ids = Vec::new();
+    let mut child_field_names = Vec::new();
+
+    out.push(NativeSyntaxNode {
+        id: node_id,
+        parent_id: parent_id.map(|id| id as i32).unwrap_or(-1),
+        node_type: node.kind().to_string(),
+        named: node.is_named(),
+        start: point_with_index(node.start_position(), node.start_byte()),
+        end: point_with_index(node.end_position(), node.end_byte()),
+        child_ids: Vec::new(),
+        named_child_ids: Vec::new(),
+        child_field_names: Vec::new(),
+    });
+
+    for child_index in 0..node.child_count() {
+        if let Some(child) = node.child(child_index) {
+            let child_id = push_projected_node(child, Some(node_id), out);
+            child_ids.push(child_id);
+            if child.is_named() {
+                named_child_ids.push(child_id);
+            }
+            child_field_names.push(
+                node.field_name_for_child(child_index as u32)
+                    .unwrap_or("")
+                    .to_string(),
+            );
+        }
+    }
+
+    let projected = out
+        .get_mut(node_id as usize)
+        .expect("projected node should exist");
+    projected.child_ids = child_ids;
+    projected.named_child_ids = named_child_ids;
+    projected.child_field_names = child_field_names;
+    node_id
+}
+
 #[napi]
 pub fn supported_language_ids() -> Vec<String> {
     [
@@ -449,6 +516,24 @@ pub fn run_query(
             language_id.as_str(),
         )?,
     })
+}
+
+#[napi]
+pub fn parse_syntax_tree(source: String, language_id: String) -> Result<NativeSyntaxTree> {
+    let language = language_for_id(&language_id)
+        .ok_or_else(|| napi::Error::from_reason(format!("Unsupported language: {language_id}")))?;
+
+    let tree = PARSER_POOL.with(|pool| {
+        let mut pool = pool.borrow_mut();
+        let parser = pool.get_or_create(&language_id, &language)?;
+        parser
+            .parse(source.as_str(), None)
+            .ok_or_else(|| napi::Error::from_reason("Failed to parse source".to_string()))
+    })?;
+
+    let mut nodes = Vec::new();
+    let root_id = push_projected_node(tree.root_node(), None, &mut nodes);
+    Ok(NativeSyntaxTree { root_id, nodes })
 }
 
 #[cfg(test)]

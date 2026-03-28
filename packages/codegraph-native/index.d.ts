@@ -48,6 +48,25 @@ export interface NativeQueryRunResult {
   matches: Array<NativeMatch>
 }
 
+export interface NativeSyntaxNode {
+  id: number
+  parentId: number
+  nodeType: string
+  named: boolean
+  start: NativePoint
+  end: NativePoint
+  childIds: Array<number>
+  namedChildIds: Array<number>
+  childFieldNames: Array<string>
+}
+
+export interface NativeSyntaxTree {
+  rootId: number
+  nodes: Array<NativeSyntaxNode>
+}
+
+export declare function parseSyntaxTree(source: string, languageId: string): NativeSyntaxTree
+
 /**
  * Run only the imports query and return compact results (name + text only).
  * This is the graph-mode entrypoint optimized for minimal marshaling.

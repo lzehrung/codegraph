@@ -43,6 +43,23 @@ export type NativeQueryResults = {
   importBindings: NativeMatch[];
 };
 
+export type NativeSyntaxNode = {
+  id: number;
+  parentId: number;
+  nodeType: string;
+  named: boolean;
+  start: NativePoint;
+  end: NativePoint;
+  childIds: number[];
+  namedChildIds: number[];
+  childFieldNames: string[];
+};
+
+export type NativeSyntaxTree = {
+  rootId: number;
+  nodes: NativeSyntaxNode[];
+};
+
 export type CompactCapture = {
   name: string;
   text: string;
@@ -91,6 +108,10 @@ type NativeBinding = {
     languageId: string,
     queryText: string,
   ) => { matches: NativeMatch[] };
+  parseSyntaxTree?: (
+    source: string,
+    languageId: string,
+  ) => NativeSyntaxTree;
   supportedLanguageIds: () => string[];
 };
 
@@ -374,6 +395,12 @@ export type UnifiedQueryExecution = {
   error?: string;
 };
 
+export type NativeSyntaxTreeExecution = {
+  tree: NativeSyntaxTree | null;
+  fallbackReason?: "unavailable" | "unsupportedLanguage" | "queryFailure";
+  error?: string;
+};
+
 /**
  * Run only the imports query with a compact payload (name + text only).
  * Falls back to the full execution path if the compact entrypoint is not
@@ -574,6 +601,49 @@ export function getUnifiedQueryExecution(
       backend: "js",
       fallbackReason:
         nativeExecution.fallbackReason ?? "queryFailure",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export function getNativeSyntaxTreeExecution(
+  source: string,
+  support: LanguageSupport,
+  mode?: NativeRuntimeMode,
+): NativeSyntaxTreeExecution {
+  const state = resolveNativeBindingState(mode);
+  if (!state.loaded) {
+    return {
+      tree: null,
+      fallbackReason: "unavailable",
+      ...(state.error
+        ? {
+            error:
+              state.error instanceof Error
+                ? state.error.message
+                : stringifyUnknown(state.error),
+          }
+        : {}),
+    };
+  }
+  if (!state.supportedLanguageIds.has(support.id)) {
+    return { tree: null, fallbackReason: "unsupportedLanguage" };
+  }
+  if (!state.binding.parseSyntaxTree) {
+    return {
+      tree: null,
+      fallbackReason: "unavailable",
+      error: "native binding does not expose parseSyntaxTree",
+    };
+  }
+  try {
+    return {
+      tree: state.binding.parseSyntaxTree(source, support.id),
+    };
+  } catch (error) {
+    return {
+      tree: null,
+      fallbackReason: "queryFailure",
       error: error instanceof Error ? error.message : String(error),
     };
   }
