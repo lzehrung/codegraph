@@ -138,6 +138,7 @@
   },
   "overrides": {
     "tree-sitter": "^0.25.0",
-    "tree-sitter-css": "^0.25.0"
+    "tree-sitter-css": "^0.25.0",
+    "node-addon-api": "^8.5.0"
   }
 }
