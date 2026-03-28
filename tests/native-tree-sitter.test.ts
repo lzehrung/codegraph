@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import Parser from "tree-sitter";
+import { parseWithJsLanguage } from "@lzehrung/codegraph-native/js-fallback";
 import {
   collectImportsForFile,
   collectLocalsAndExportsFromSource,
@@ -91,9 +91,7 @@ function sampleFile(...parts: string[]): string {
 async function parseWithJsTreeSitter(file: string) {
   const parsed = await parseFile(file);
   const lang = languageForFile(file);
-  const parser = new Parser();
-  parser.setLanguage(lang);
-  const tree = parser.parse(parsed.source);
+  const tree = parseWithJsLanguage(parsed.source, lang);
   return {
     ...parsed,
     tree,

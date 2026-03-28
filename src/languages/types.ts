@@ -1,4 +1,5 @@
-import type { Language } from "tree-sitter";
+import type { JsLanguage } from "@lzehrung/codegraph-native/js-fallback";
+export type { JsLanguage };
 
 export interface SyntaxPositionLike {
   row: number;
@@ -45,7 +46,7 @@ export interface NativeCompatibility {
 export interface LanguageDefinition {
   id: string;
   extensions: string[];
-  grammar: (filename?: string) => Language;
+  grammar: (filename?: string) => JsLanguage;
 
   /**
    * Configuration for semantic chunking.

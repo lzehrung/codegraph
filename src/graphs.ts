@@ -1,6 +1,11 @@
 import path from "node:path";
 import fsp from "node:fs/promises";
-import Parser from "tree-sitter";
+import {
+  isJsSyntaxTree,
+  parseWithJsLanguage,
+  type JsLanguage,
+  type JsSyntaxTree,
+} from "@lzehrung/codegraph-native/js-fallback";
 import {
   isUnsupportedParserInputError,
   prepareSourceInput,
@@ -18,8 +23,6 @@ import {
   resolveImportSpecifier,
   resolvePythonModule,
   normalizeResolutionHints,
-  acquireParser,
-  releaseParser,
   mapLimit,
   type ModuleSpecifier,
 } from "./util.js";
@@ -86,10 +89,6 @@ export type GraphCacheEntry = {
 
 const HTML_LIKE_LANGUAGE_IDS = new Set(["html", "vue", "svelte"]);
 
-function isParserTreeLike(tree: SyntaxTreeLike): tree is Parser.Tree {
-  return "walk" in tree;
-}
-
 function isHtmlLikeLanguage(languageId: string, filePath?: string): boolean {
   if (HTML_LIKE_LANGUAGE_IDS.has(languageId)) return true;
   return !!filePath && filePath.toLowerCase().endsWith(".astro");
@@ -105,7 +104,7 @@ function extractKotlinImportSpecifier(statementText: string): string | null {
 
 export function collectModuleSpecifiersFromSource(
   support: LanguageSupport,
-  lang: Parser.Language | undefined,
+  lang: JsLanguage | undefined,
   source: string,
   opts?: {
     tree?: SyntaxTreeLike;
@@ -134,12 +133,12 @@ export function collectModuleSpecifiersFromSource(
     };
     opts?.onFallbackImportExtraction?.(event);
   };
-  const ensureResolvedLang = (): Parser.Language => {
+  const ensureResolvedLang = (): JsLanguage => {
     if (!lang) {
       const fileForLanguage = opts?.file ?? `temp.${support.matchExts[0]?.replace(/^\./, "") ?? "txt"}`;
       lang = support.language(fileForLanguage);
     }
-    return lang;
+    return lang!;
   };
   const resolvedNativeImports =
     opts?.compactNativeImports?.imports ??
@@ -371,7 +370,7 @@ export function collectModuleSpecifiersFromSource(
   }
   try {
     const jsQueryTree =
-      opts?.tree && isParserTreeLike(opts.tree) ? opts.tree : undefined;
+      opts?.tree && isJsSyntaxTree(opts.tree) ? opts.tree : undefined;
     const matches = executeJsQueryAsNativeMatches(
       source,
       support,
@@ -474,7 +473,7 @@ export async function collectEdgesForFile(
       source: string;
       tree?: SyntaxTreeLike;
       sup: LanguageSupport;
-      lang?: Parser.Language;
+      lang?: JsLanguage;
       nativeQueries?: NativeQueryResults | null;
     };
     fast?: boolean;
@@ -716,7 +715,7 @@ export async function collectGraph(
         source: string;
         tree: SyntaxTreeLike;
         sup: LanguageSupport;
-        lang?: Parser.Language;
+        lang?: JsLanguage;
       }
     >;
     fast?: boolean;
@@ -1703,9 +1702,7 @@ export async function buildSymbolGraphDetailed(
           tree = new ProjectedSyntaxTree(src, nativeTreeExecution.tree);
         } else {
           lang ??= sup.language(file);
-          const parser = new Parser();
-          parser.setLanguage(lang);
-          tree = parser.parse(src);
+          tree = parseWithJsLanguage(src, lang);
         }
       }
       if (!sup || src === undefined || !tree) {

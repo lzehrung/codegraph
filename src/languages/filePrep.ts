@@ -1,5 +1,5 @@
 import fsp from "node:fs/promises";
-import type Parser from "tree-sitter";
+import type { JsLanguage } from "../languages/types.js";
 
 import {
   JS_SUPPORT,
@@ -18,7 +18,7 @@ import {
 interface ParserInput {
   source: string;
   sup: LanguageSupport;
-  lang: Parser.Language;
+  lang: JsLanguage;
 }
 
 interface SourceInput {

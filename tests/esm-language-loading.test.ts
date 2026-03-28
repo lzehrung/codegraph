@@ -1,5 +1,5 @@
-import Parser from "tree-sitter";
 import { describe, expect, it } from "vitest";
+import { parseWithJsLanguage } from "@lzehrung/codegraph-native/js-fallback";
 import { supportById } from "../src/languages.js";
 
 describe("esm tree-sitter loading", () => {
@@ -9,7 +9,8 @@ describe("esm tree-sitter loading", () => {
 
     const support = supportById("css");
     expect(support).toBeDefined();
-    const parser = new Parser();
-    expect(() => parser.setLanguage(support!.language("test.css"))).not.toThrow();
+    expect(() =>
+      parseWithJsLanguage("body { color: red; }", support!.language("test.css")),
+    ).not.toThrow();
   });
 });

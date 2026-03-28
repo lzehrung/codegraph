@@ -1,5 +1,4 @@
 import path from "node:path";
-import type Parser from "tree-sitter";
 import type { FileId, Range } from "../types.js";
 import type {
   ExportEntry,

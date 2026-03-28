@@ -2,10 +2,14 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
-import Parser from "tree-sitter";
 import crypto from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { createRequire } from "node:module";
+import {
+  isJsSyntaxTree,
+  parseWithJsLanguage,
+  type JsSyntaxTree,
+} from "@lzehrung/codegraph-native/js-fallback";
 import {
   supportForFile,
   type LanguageSupport,
@@ -32,8 +36,6 @@ import {
   resolveWorkspacePackage,
   normalizeResolutionHints,
   normalizePath,
-  acquireParser,
-  releaseParser,
   getGitHead,
   isGitRepo,
   getGitBlobHashes,
@@ -76,7 +78,11 @@ import type {
   NativeExtractResult,
   NativeExtractTask,
 } from "./worker/nativeExtractWorker.js";
-import type { SyntaxNodeLike, SyntaxTreeLike } from "./languages/types.js";
+import type {
+  JsLanguage,
+  SyntaxNodeLike,
+  SyntaxTreeLike,
+} from "./languages/types.js";
 
 // Default number of lines to include around references for line context
 const DEFAULT_REF_CONTEXT_LINES = 5;
@@ -89,10 +95,6 @@ const QUERY_DRIVEN_LOCALS_LANGUAGES = new Set([
   "swift",
   "cpp",
 ]);
-
-function isParserTreeLike(tree: SyntaxTreeLike): tree is Parser.Tree {
-  return "walk" in tree;
-}
 
 function parseGoImportAlias(stmtText: string): string | null {
   const trimmed = stmtText.trim();
@@ -208,7 +210,7 @@ export type ProjectIndex = {
           source: string;
           tree: SyntaxTreeLike;
           sup: LanguageSupport | undefined;
-          lang?: Parser.Language;
+          lang?: JsLanguage;
           nativeQueries?: NativeQueryResults | null;
         }
       >
@@ -224,7 +226,7 @@ type ParsedFileContext = {
   source: string;
   tree: SyntaxTreeLike;
   sup: LanguageSupport;
-  lang?: Parser.Language;
+  lang?: JsLanguage;
   nativeQueries?: NativeQueryResults | null;
 };
 
@@ -232,7 +234,7 @@ type PreparedFileContext = {
   file: string;
   source: string;
   sup: LanguageSupport;
-  lang?: Parser.Language;
+  lang?: JsLanguage;
   nativeQueries: NativeQueryResults | null;
   nativeFallbackReason?: NativeBackendFallbackReason;
   nativeError?: string;
@@ -253,15 +255,8 @@ function parsePreparedFileContext(
   }
 
   const resolvedLang = context.lang ?? sup.language(file);
-  const key = sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts";
-  const parser = acquireParser(resolvedLang, key);
-  try {
-    parser.setLanguage(resolvedLang);
-    const tree = parser.parse(source);
-    return { source, tree, sup, lang: resolvedLang, nativeQueries };
-  } finally {
-    releaseParser(parser, key);
-  }
+  const tree = parseWithJsLanguage(source, resolvedLang);
+  return { source, tree, sup, lang: resolvedLang, nativeQueries };
 }
 
 /**
@@ -1499,7 +1494,7 @@ export function collectLocalsAndExportsFromSource(
   file: string,
   source: string,
   support: LanguageSupport,
-  lang?: Parser.Language,
+  lang?: JsLanguage,
   imports: ImportBinding[] = [],
   opts?: { tree?: SyntaxTreeLike; nativeQueries?: NativeQueryResults | null },
 ): ModuleIndex {
@@ -1627,10 +1622,10 @@ export function collectLocalsAndExportsFromSource(
   let tree: SyntaxTreeLike | null = opts?.tree ?? null;
   let treeAttempted = !!tree;
   let jsQueryTree =
-    opts?.tree && isParserTreeLike(opts.tree) ? opts.tree : null;
+    opts?.tree && isJsSyntaxTree(opts.tree) ? opts.tree : null;
   let jsQueryTreeAttempted = !!jsQueryTree;
   let resolvedLang = lang;
-  const ensureResolvedLang = (): Parser.Language => {
+  const ensureResolvedLang = (): JsLanguage => {
     resolvedLang ??= support.language(file);
     return resolvedLang;
   };
@@ -1648,37 +1643,21 @@ export function collectLocalsAndExportsFromSource(
         tree = new ProjectedSyntaxTree(source, nativeTreeExecution.tree);
         return tree;
       }
-      const key =
-        support.id === "python" ? "py" : support.id === "js" ? "js" : "ts";
-      const parser = acquireParser(ensureResolvedLang(), key);
-      try {
-        parser.setLanguage(ensureResolvedLang());
-        const parsedTree = parser.parse(source);
-        tree = parsedTree;
-        jsQueryTree = parsedTree;
-        jsQueryTreeAttempted = true;
-      } finally {
-        releaseParser(parser, key);
-      }
+      const parsedTree = parseWithJsLanguage(source, ensureResolvedLang());
+      tree = parsedTree;
+      jsQueryTree = parsedTree;
+      jsQueryTreeAttempted = true;
     } catch {
       /* parse fallback: ignore */
     }
     return tree;
   };
 
-  const ensureJsQueryTree = (): Parser.Tree | null => {
+  const ensureJsQueryTree = (): JsSyntaxTree | null => {
     if (jsQueryTree || jsQueryTreeAttempted) return jsQueryTree;
     jsQueryTreeAttempted = true;
     try {
-      const key =
-        support.id === "python" ? "py" : support.id === "js" ? "js" : "ts";
-      const parser = acquireParser(ensureResolvedLang(), key);
-      try {
-        parser.setLanguage(ensureResolvedLang());
-        jsQueryTree = parser.parse(source);
-      } finally {
-        releaseParser(parser, key);
-      }
+      jsQueryTree = parseWithJsLanguage(source, ensureResolvedLang());
     } catch {
       /* parse fallback: ignore */
     }
@@ -1708,7 +1687,7 @@ export function collectLocalsAndExportsFromSource(
   };
 
   const classifyLocalCapture = (
-    capture: NativeCapture | Parser.QueryCapture,
+    capture: NativeCapture | { name: string },
     range: Range,
     node?: SyntaxNodeLike,
   ): SymbolKind => {
@@ -2362,9 +2341,9 @@ export async function collectImportsForFile(
   projectRoot: string,
   opts?: {
     source?: string;
-    tree?: Parser.Tree;
+    tree?: JsSyntaxTree;
     sup?: LanguageSupport;
-    lang?: Parser.Language;
+    lang?: JsLanguage;
     nativeQueries?: NativeQueryResults | null;
     graphOptions?: GraphBuildOptions;
   },
@@ -2386,7 +2365,7 @@ export async function collectImportsForFile(
   const resolvedSup = sup;
   let resolvedLang = lang;
   const resolvedNativeQueries = opts?.nativeQueries ?? null;
-  const ensureResolvedLang = (): Parser.Language => {
+  const ensureResolvedLang = (): JsLanguage => {
     resolvedLang ??= resolvedSup.language(file);
     return resolvedLang;
   };
@@ -2970,15 +2949,11 @@ export async function collectImportsForFile(
     }
   }
 
-  let parser: Parser | undefined;
   try {
     const tree =
       opts?.tree ??
       (() => {
-        const jsLang = ensureResolvedLang();
-        parser = acquireParser(jsLang, key);
-        parser.setLanguage(jsLang);
-        return parser.parse(resolvedSource);
+        return parseWithJsLanguage(resolvedSource, ensureResolvedLang());
       })();
     let ranFallback = false;
     try {
@@ -3301,7 +3276,8 @@ export async function collectImportsForFile(
     }
     return imports;
   } finally {
-    if (parser) releaseParser(parser, key);
+    // No parser cleanup required: JS fallback parsing is delegated to
+    // @lzehrung/codegraph-native/js-fallback.
   }
 }
 
@@ -3334,7 +3310,7 @@ export async function ensureParsedContext(
     source: string;
     tree: SyntaxTreeLike;
     sup: LanguageSupport | undefined;
-    lang?: Parser.Language;
+    lang?: JsLanguage;
     nativeQueries?: NativeQueryResults | null;
   },
 ): Promise<ParsedFileContext> {
@@ -3572,7 +3548,7 @@ async function buildIndexFromFileListShared(
       if (!mod) {
         const imports = await collectImportsForFile(f, projectRoot, {
           source: src,
-          ...(tree && isParserTreeLike(tree) ? { tree } : {}),
+          ...(tree && isJsSyntaxTree(tree) ? { tree } : {}),
           sup,
           ...(resolvedLang ? { lang: resolvedLang } : {}),
           ...(nativeQueries !== undefined ? { nativeQueries } : {}),
@@ -4152,7 +4128,7 @@ export async function buildProjectIndexIncremental(
 
           const imports = await collectImportsForFile(f, projectRoot, {
             source: src,
-            ...(tree && isParserTreeLike(tree) ? { tree } : {}),
+            ...(tree && isJsSyntaxTree(tree) ? { tree } : {}),
             sup,
             ...(resolvedLang ? { lang: resolvedLang } : {}),
             ...(nativeQueries !== undefined ? { nativeQueries } : {}),
@@ -5394,17 +5370,10 @@ export function buildScopeIndexFromSource(
   file: string,
   source: string,
   support: LanguageSupport,
-  lang?: Parser.Language,
+  lang?: JsLanguage,
   imports: ImportBinding[] = [],
   opts?: { tree?: SyntaxTreeLike; nativeMode?: NativeRuntimeMode },
 ): ScopeIndex {
-  const key2 =
-    support.nodeTypes && support.id === "python"
-      ? "py"
-      : support.id === "js"
-        ? "js"
-        : "ts";
-  let parser2: Parser | undefined;
   let tree = opts?.tree ?? null;
   if (!tree) {
     const nativeTreeExecution = getNativeSyntaxTreeExecution(
@@ -5418,9 +5387,7 @@ export function buildScopeIndexFromSource(
   }
   if (!tree) {
     const resolvedLang = lang ?? support.language(file);
-    parser2 = acquireParser(resolvedLang, key2);
-    parser2.setLanguage(resolvedLang);
-    tree = parser2.parse(source);
+    tree = parseWithJsLanguage(source, resolvedLang);
   }
 
   const rootScope: Scope = {
@@ -5680,7 +5647,6 @@ export function buildScopeIndexFromSource(
   };
 
   walk(tree.rootNode);
-  if (parser2) releaseParser(parser2, key2);
 
   const bindings = new Map<string, Binding[]>();
   const all: Binding[] = [];
@@ -5837,7 +5803,7 @@ export async function findReferences(
     parsedCtx: {
       source: string;
       sup: LanguageSupport;
-      lang?: Parser.Language;
+      lang?: JsLanguage;
       tree: SyntaxTreeLike;
     },
   ) => {

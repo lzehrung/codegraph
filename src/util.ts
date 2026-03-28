@@ -3,7 +3,6 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import { createMatchPath } from "tsconfig-paths";
-import Parser from "tree-sitter";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import type { Range } from "./types.js";
@@ -2697,28 +2696,6 @@ const resolvePythonModuleCache = new Map<
   string,
   FileId | { external: string }
 >();
-
-// ----------------- Parser pool (simple) -----------------
-type LangKey = "ts" | "tsx" | "js" | "py";
-const parserPools = new Map<LangKey, Parser[]>();
-
-export function acquireParser(lang: Parser.Language, key: LangKey): Parser {
-  const pool = parserPools.get(key) ?? [];
-  const p = pool.pop();
-  if (p) {
-    parserPools.set(key, pool);
-    return p;
-  }
-  const parser = new Parser();
-  parser.setLanguage(lang);
-  return parser;
-}
-
-export function releaseParser(parser: Parser, key: LangKey) {
-  const pool = parserPools.get(key) ?? [];
-  pool.push(parser);
-  parserPools.set(key, pool);
-}
 
 /**
  * Map over items with bounded concurrency.

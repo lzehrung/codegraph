@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import Parser from "tree-sitter";
+import { parseWithJsLanguage } from "@lzehrung/codegraph-native/js-fallback";
 
 import { TS_SUPPORT, languageForFile, supportById } from "../src/languages.js";
 import { buildScopeIndexFromSource } from "../src/indexer.js";
@@ -80,9 +80,7 @@ nativeDescribe("native parse tree projection", () => {
 
     const file = "scope.ts";
     const lang = languageForFile(file);
-    const parser = new Parser();
-    parser.setLanguage(lang);
-    const jsTree = parser.parse(source);
+    const jsTree = parseWithJsLanguage(source, lang);
 
     const nativeScope = buildScopeIndexFromSource(file, source, TS_SUPPORT, lang);
     const jsScope = buildScopeIndexFromSource(file, source, TS_SUPPORT, lang, [], {

@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import Parser from "tree-sitter";
 import type {
   LanguageDefinition,
+  JsLanguage,
   NativeCompatibility,
   SyntaxNodeLike,
 } from "./languages/types.js";
@@ -14,7 +14,7 @@ export type IdentifierNodeType = string;
 export type LanguageSupport = {
   id: string;
   matchExts: string[];
-  language: (filename: string) => Parser.Language;
+  language: (filename: string) => JsLanguage;
   nodeTypes: {
     identifier: IdentifierNodeType[];
     propertyIdentifier?: IdentifierNodeType[];
@@ -85,7 +85,7 @@ export function supportForFile(filename: string): LanguageSupport | undefined {
   }
   return LANGUAGE_SUPPORTS.find((s) => s.matchExts.includes(ext));
 }
-export function languageForFile(filename: string): Parser.Language {
+export function languageForFile(filename: string): JsLanguage {
   const sup = supportForFile(filename);
   if (!sup) throw new Error(`Unsupported file extension: ${filename}`);
   return sup.language(filename);

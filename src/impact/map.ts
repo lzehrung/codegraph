@@ -1,4 +1,3 @@
-import type Parser from "tree-sitter";
 import type { FileId } from "../types.js";
 import type { ProjectIndex, SymbolDef, SymbolHandle } from "../indexer.js";
 import { ensureParsedContext } from "../indexer.js";
