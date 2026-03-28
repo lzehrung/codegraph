@@ -210,7 +210,7 @@ describe("Cache invalidation and strict hashing", () => {
       ],
     ]);
 
-    const prepSpy = vi.spyOn(filePrep, "prepareParserInput");
+    const prepSpy = vi.spyOn(filePrep, "prepareSourceInput");
     const graph = await collectGraph(root, [trackedPath], {
       fileSignatures,
       cachedFileEdges,
@@ -355,7 +355,7 @@ describe("Cache invalidation and strict hashing", () => {
     const manifestBefore = await readManifest(root);
     const aEntryBefore = manifestBefore.files[normalize(aPath)];
 
-    const prepSpy = vi.spyOn(filePrep, "prepareParserInput");
+    const prepSpy = vi.spyOn(filePrep, "prepareSourceInput");
     const incremental = await buildProjectIndexIncremental(root, {
       threads: 2,
       cache: "disk",
@@ -434,7 +434,7 @@ describe("Cache invalidation and strict hashing", () => {
     await fsp.writeFile(aPath, `import './b';\n`, "utf8");
     await buildProjectIndex(root, { threads: 2, cache: "disk" });
 
-    const prepSpy = vi.spyOn(filePrep, "prepareParserInput");
+    const prepSpy = vi.spyOn(filePrep, "prepareSourceInput");
     await buildProjectIndexIncremental(root, {
       threads: 2,
       cache: "disk",
