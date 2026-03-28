@@ -3,7 +3,6 @@ import fsp from "node:fs/promises";
 import Parser from "tree-sitter";
 import {
   isUnsupportedParserInputError,
-  prepareParserInput,
   prepareSourceInput,
 } from "./languages/filePrep.js";
 import { type LanguageSupport } from "./languages.js";
@@ -102,7 +101,7 @@ function extractKotlinImportSpecifier(statementText: string): string | null {
 
 export function collectModuleSpecifiersFromSource(
   support: LanguageSupport,
-  lang: Parser.Language,
+  lang: Parser.Language | undefined,
   source: string,
   opts?: {
     tree?: Parser.Tree;
@@ -130,6 +129,13 @@ export function collectModuleSpecifiersFromSource(
       ...(opts?.file ? { file: opts.file } : {}),
     };
     opts?.onFallbackImportExtraction?.(event);
+  };
+  const ensureResolvedLang = (): Parser.Language => {
+    if (!lang) {
+      const fileForLanguage = opts?.file ?? `temp.${support.matchExts[0]?.replace(/^\./, "") ?? "txt"}`;
+      lang = support.language(fileForLanguage);
+    }
+    return lang;
   };
   const resolvedNativeImports =
     opts?.compactNativeImports?.imports ??
@@ -363,7 +369,7 @@ export function collectModuleSpecifiersFromSource(
     const matches = executeJsQueryAsNativeMatches(
       source,
       support,
-      lang,
+      ensureResolvedLang(),
       support.queries.imports,
       opts?.tree,
     );
@@ -509,10 +515,9 @@ export async function collectEdgesForFile(
   let src = parsed?.source;
   let nativeQueries = parsed?.nativeQueries ?? null;
   let compactNativeImports: CompactQueryResults | null = null;
-  if (!sup || !lang || src === undefined) {
-    const prep = await prepareParserInput(file);
+  if (!sup || src === undefined) {
+    const prep = await prepareSourceInput(file);
     sup = prep.sup;
-    lang = prep.lang;
     src = prep.source;
     const fastRegexDisabled = opts.fastRegexDisabledLanguages?.includes(sup.id);
     const shouldSkipNativeForFastGraph =
