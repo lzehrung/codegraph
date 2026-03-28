@@ -31,9 +31,11 @@ import {
   extractJsTsDynamicSpecifiers,
 } from "./util.js";
 import {
+  executeJsQueryAsNativeMatches,
   getNativeQueryExecution,
   getCompactImportsExecution,
   getNativeSingleQueryExecution,
+  getUnifiedQueryExecution,
   isNativeQueryModified,
   type NativeRuntimeMode,
   type NativeQueryScope,
@@ -354,28 +356,19 @@ export function collectModuleSpecifiersFromSource(
     }
   }
   try {
-    const key =
-      support.id === "python" ? "py" : support.id === "js" ? "js" : "ts";
-    let parser: Parser | undefined;
-    try {
-      const tree =
-        opts?.tree ??
-        (() => {
-          parser = acquireParser(lang, key);
-          parser.setLanguage(lang);
-          return parser.parse(source);
-        })();
-      const q = new Parser.Query(lang, support.queries.imports);
-      for (const m of q.matches(tree.rootNode)) {
+    const matches = executeJsQueryAsNativeMatches(
+      source,
+      support,
+      lang,
+      support.queries.imports,
+      opts?.tree,
+    );
+    for (const match of matches) {
         const caps = Object.fromEntries(
-          m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const),
+          match.captures.map((capture) => [capture.name, capture] as const),
         );
-        const modNodes = m.captures.filter(
-          (x: Parser.QueryCapture) => x.name === "mod",
-        );
-        const stmtText = caps["stmt"]
-          ? sliceText(caps["stmt"].node, source)
-          : "";
+        const modNodes = match.captures.filter((capture) => capture.name === "mod");
+        const stmtText = caps["stmt"]?.text ?? "";
         const typeOnly =
           (support.id === "ts" || support.id === "tsx") &&
           (/\b(import|export)\s+type\b/.test(stmtText) ||
@@ -389,34 +382,28 @@ export function collectModuleSpecifiersFromSource(
           if (spec) out.push({ spec, typeOnly: false });
           continue;
         }
-        for (const cap of modNodes)
-          out.push({ spec: unquote(sliceText(cap.node, source)), typeOnly });
-      }
-      if (htmlLikeLanguage) {
-        const htmlSeen = makeSeenSet(out);
-        appendUniqueSpecifiers(
-          out,
-          extractHtmlAttributeSpecifiers(source),
-          htmlSeen,
-        );
-        appendUniqueSpecifiers(
-          out,
-          extractHtmlInlineScriptSpecifiers(source),
-          htmlSeen,
-        );
-      }
-      if (
-        support.id === "css" ||
-        support.id === "scss" ||
-        support.id === "less"
-      ) {
-        const cssSeen = makeSeenSet(out);
-        appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
-      }
-      if (out.length > 0) return out;
-    } finally {
-      if (parser) releaseParser(parser, key);
+        for (const cap of modNodes) {
+          out.push({ spec: unquote(cap.text), typeOnly });
+        }
     }
+    if (htmlLikeLanguage) {
+      const htmlSeen = makeSeenSet(out);
+      appendUniqueSpecifiers(out, extractHtmlAttributeSpecifiers(source), htmlSeen);
+      appendUniqueSpecifiers(
+        out,
+        extractHtmlInlineScriptSpecifiers(source),
+        htmlSeen,
+      );
+    }
+    if (
+      support.id === "css" ||
+      support.id === "scss" ||
+      support.id === "less"
+    ) {
+      const cssSeen = makeSeenSet(out);
+      appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
+    }
+    if (out.length > 0) return out;
   } catch (error) {
     queryFailed = true;
     console.warn(
@@ -945,9 +932,9 @@ export async function astGrep(
       const lang = prep.lang;
       const sup = prep.sup;
       const src = prep.source;
-      const nativeExecution = getNativeSingleQueryExecution(src, sup, querySource);
-      if (nativeExecution.matches) {
-        for (const match of nativeExecution.matches) {
+      const execution = getUnifiedQueryExecution(src, sup, lang, querySource);
+      if (execution.matches) {
+        for (const match of execution.matches) {
           for (const capture of match.captures) {
             hits.push({
               file: path.relative(projectRoot, file).replace(/\\/g, "/"),
@@ -960,24 +947,6 @@ export async function astGrep(
         }
         continue;
       }
-      const key = sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts";
-      const parser = acquireParser(lang, key);
-      parser.setLanguage(lang);
-      const tree = parser.parse(src);
-      const query = new Parser.Query(lang, querySource);
-      for (const m of query.matches(tree.rootNode)) {
-        for (const cap of m.captures) {
-          const p = cap.node.startPosition;
-          hits.push({
-            file: path.relative(projectRoot, file).replace(/\\/g, "/"),
-            capture: cap.name,
-            line: p.row + 1,
-            column: p.column + 1,
-            snippet: sliceText(cap.node, src).replace(/\n/g, " "),
-          });
-        }
-      }
-      releaseParser(parser, key);
     } catch (error) {
       console.warn(
         `Warning: Failed to process file ${file} for AST grep:`,

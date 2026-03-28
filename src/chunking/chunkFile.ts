@@ -1,10 +1,7 @@
-import Parser from "tree-sitter";
-import type { QueryCapture, QueryMatch } from "tree-sitter";
-
 import type { LanguageConfig } from "./languageConfig.js";
 import { supportById } from "../languages.js";
 import {
-  getNativeSingleQueryExecution,
+  getUnifiedQueryExecution,
   type NativeMatch,
 } from "../native/treeSitterNative.js";
 
@@ -279,31 +276,19 @@ function getChunkMatches(
 ): ChunkMatch[] {
   const support = supportById(language.supportId);
   if (support) {
-    const nativeExecution = getNativeSingleQueryExecution(
+    const lang = language.definition.grammar(filePath);
+    const execution = getUnifiedQueryExecution(
       source,
       support,
+      lang,
       language.queryText,
     );
-    if (nativeExecution.matches) {
-      return nativeExecution.matches.map(toChunkMatchFromNative);
+    if (execution.matches) {
+      return execution.matches.map(toChunkMatchFromNative);
     }
   }
 
-  return getChunkMatchesFromJsFallback(language, source, filePath);
-}
-
-function getChunkMatchesFromJsFallback(
-  language: LanguageConfig,
-  source: string,
-  filePath?: string | undefined,
-): ChunkMatch[] {
-  const parser = new Parser();
-  const lang = language.definition.grammar(filePath);
-  parser.setLanguage(lang);
-  const tree = parser.parse(source);
-  const query = new Parser.Query(lang, language.queryText);
-  const matches: QueryMatch[] = query.matches(tree.rootNode);
-  return matches.map(toChunkMatchFromJs);
+  return [];
 }
 
 function toChunkMatchFromNative(match: NativeMatch): ChunkMatch {
@@ -317,25 +302,6 @@ function toChunkMatchFromNative(match: NativeMatch): ChunkMatch {
       endLine: capture.end.row + 1,
       nodeType: capture.nodeType,
     })),
-  };
-}
-
-function toChunkMatchFromJs(match: QueryMatch): ChunkMatch {
-  return {
-    captures: match.captures.map((capture) => toChunkCaptureFromJs(capture)),
-  };
-}
-
-function toChunkCaptureFromJs(capture: QueryCapture): ChunkCapture {
-  const node = capture.node;
-  return {
-    name: capture.name,
-    text: node.text,
-    startByte: node.startIndex,
-    endByte: node.endIndex,
-    startLine: node.startPosition.row + 1,
-    endLine: node.endPosition.row + 1,
-    nodeType: node.type,
   };
 }
 

@@ -53,6 +53,7 @@ import {
 } from "./graphs.js";
 import type { Edge, Range, FileId, Graph } from "./types.js";
 import {
+  executeJsQueryAsNativeMatches,
   getNativeQueryExecution,
   isNativeQueryModified,
   getCachedNormalizedQuery,
@@ -1701,21 +1702,27 @@ export function collectLocalsAndExportsFromSource(
     if (!jsTree || !support.queries.locals.trim()) return false;
     if (!QUERY_DRIVEN_LOCALS_LANGUAGES.has(support.id)) return false;
     try {
-      let q: Parser.Query;
-      try {
-        ({ locals: q } = getCompiledQueries(lang, support));
-      } catch {
-        q = new Parser.Query(lang, support.queries.locals);
-      }
-      for (const m of q.matches(jsTree.rootNode)) {
-        for (const cap of m.captures) {
+      const matches = executeJsQueryAsNativeMatches(
+        source,
+        support,
+        lang,
+        support.queries.locals,
+        jsTree,
+      );
+      for (const match of matches) {
+        for (const cap of match.captures) {
           if (cap.name !== "name" && cap.name !== "tname") continue;
-          const range = toRange(cap.node);
+          const range = rangeFromNativeCapture(cap);
+          const node =
+            jsTree.rootNode.descendantForIndex(
+              range.start.index ?? 0,
+              range.end.index ?? 0,
+            ) ?? undefined;
           pushLocal(
-            sliceText(cap.node, source),
-            classifyLocalCapture(cap, range, cap.node),
+            cap.text,
+            classifyLocalCapture(cap, range, node),
             range,
-            cap.node,
+            node,
           );
         }
       }
@@ -3132,42 +3139,30 @@ export async function collectImportsForFile(
       })();
     let ranFallback = false;
     try {
-      let q: Parser.Query;
-      try {
-        ({ importBindings: q } = getCompiledQueries(resolvedLang, resolvedSup));
-      } catch {
-        // getCompiledQueries may fail if other queries in the language
-        // definition are incompatible with the current tree-sitter version.
-        // Fall back to compiling only the import bindings query.
-        try {
-          q = new Parser.Query(
-            resolvedLang,
-            resolvedSup.queries.importBindings,
-          );
-        } catch {
-          await runFallback();
-          ranFallback = true;
-          await finalizeLanguageSpecificImports();
-          return imports;
-        }
-      }
-      for (const m of q.matches(tree.rootNode)) {
+      const matches = executeJsQueryAsNativeMatches(
+        resolvedSource,
+        resolvedSup,
+        resolvedLang,
+        resolvedSup.queries.importBindings,
+        tree,
+      );
+      for (const match of matches) {
         const caps = Object.fromEntries(
-          m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const),
+          match.captures.map((capture) => [capture.name, capture] as const),
         );
-        const stmtText = caps["stmt"]
-          ? sliceText(caps["stmt"].node, source)
-          : "";
+        const stmtText = caps["stmt"]?.text ?? "";
         const typeOnly = resolvedSup.isTypeOnly(stmtText);
         const from: string | undefined = caps["from"]
-          ? unquote(sliceText(caps["from"].node, source))
+          ? unquote(caps["from"].text)
           : undefined;
 
-        const patterns = m.captures.filter(
-          (c: Parser.QueryCapture) => c.name === "pattern",
-        );
+        const patterns = match.captures.filter((capture) => capture.name === "pattern");
         for (const pattern of patterns) {
-          const patternNode = pattern.node;
+          const patternRange = rangeFromNativeCapture(pattern);
+          const patternNode = tree.rootNode.descendantForIndex(
+            patternRange.start.index ?? 0,
+            patternRange.end.index ?? 0,
+          );
           if (patternNode.type === "object_pattern" && from) {
             for (const child of patternNode.namedChildren) {
               if (
@@ -3216,14 +3211,14 @@ export async function collectImportsForFile(
         if (caps["def"]) {
           imports.push({
             kind: "default",
-            local: sliceText(caps["def"].node, source),
+            local: caps["def"].text,
             from: fromValue,
             resolved,
             typeOnly,
           });
         }
         if (caps["ns"]) {
-          const nsName = sliceText(caps["ns"].node, source);
+          const nsName = caps["ns"].text;
           if (resolvedSup.id === "go") {
             const alias = parseGoImportAlias(stmtText);
             if (alias === ".") {
@@ -3252,17 +3247,11 @@ export async function collectImportsForFile(
             });
           }
         }
-        const inames = m.captures.filter(
-          (c: Parser.QueryCapture) => c.name === "iname",
-        );
-        const aliases = m.captures.filter(
-          (c: Parser.QueryCapture) => c.name === "alias",
-        );
+        const inames = match.captures.filter((capture) => capture.name === "iname");
+        const aliases = match.captures.filter((capture) => capture.name === "alias");
         for (let i = 0; i < inames.length; i++) {
-          const imported = sliceText(inames[i]!.node, source);
-          const alias = aliases[i]
-            ? sliceText(aliases[i]!.node, source)
-            : imported;
+          const imported = inames[i]!.text;
+          const alias = aliases[i]?.text ?? imported;
           imports.push({
             kind: "named",
             local: alias,
@@ -3305,7 +3294,7 @@ export async function collectImportsForFile(
           } else if (resolvedSup.id === "csharp") {
             const aliasNode = caps["alias"];
             if (aliasNode) {
-              const alias = sliceText(aliasNode.node, source);
+              const alias = aliasNode.text;
               // For "using Alias = Type.Path;", try to grab the last part as the imported name
               let imported = alias;
               const fromParts = fromValue.split(".");
@@ -3339,7 +3328,7 @@ export async function collectImportsForFile(
             // import "github.com/pkg/foo" -> local "foo"
             const aliasNode = caps["alias"];
             if (aliasNode) {
-              const alias = sliceText(aliasNode.node, source);
+              const alias = aliasNode.text;
               if (alias === ".") {
                 imports.push({
                   kind: "star",
@@ -3409,9 +3398,7 @@ export async function collectImportsForFile(
               const parts = fromValue.split(".");
               const imported = parts[parts.length - 1];
               if (!imported) continue;
-              const local = aliasNode
-                ? sliceText(aliasNode.node, source)
-                : imported;
+              const local = aliasNode ? aliasNode.text : imported;
               imports.push({
                 kind: "named",
                 local,

@@ -1,9 +1,14 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import Parser from "tree-sitter";
 import type { LanguageSupport } from "../languages.js";
 import type { NativeQueryKind } from "../languages/types.js";
-import { stringifyUnknown } from "../util.js";
+import {
+  acquireParser,
+  releaseParser,
+  stringifyUnknown,
+} from "../util.js";
 
 export const NATIVE_QUERY_KINDS: NativeQueryKind[] = [
   "imports",
@@ -362,6 +367,13 @@ export type NativeSingleQueryExecution = {
   error?: string;
 };
 
+export type UnifiedQueryExecution = {
+  matches: NativeMatch[] | null;
+  backend: "native" | "js";
+  fallbackReason?: "unavailable" | "unsupportedLanguage" | "queryFailure";
+  error?: string;
+};
+
 /**
  * Run only the imports query with a compact payload (name + text only).
  * Falls back to the full execution path if the compact entrypoint is not
@@ -460,6 +472,108 @@ export function getNativeSingleQueryExecution(
     return {
       matches: null,
       fallbackReason: "queryFailure",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function parserPoolKeyForSupport(support: LanguageSupport): "ts" | "js" | "py" {
+  if (support.id === "python") return "py";
+  if (support.id === "js") return "js";
+  return "ts";
+}
+
+function toNativeMatch(match: Parser.QueryMatch): NativeMatch {
+  return {
+    patternIndex: match.pattern,
+    captures: match.captures.map((capture) => ({
+      name: capture.name,
+      text: capture.node.text,
+      nodeType: capture.node.type,
+      start: {
+        row: capture.node.startPosition.row,
+        column: capture.node.startPosition.column,
+        index: capture.node.startIndex,
+      },
+      end: {
+        row: capture.node.endPosition.row,
+        column: capture.node.endPosition.column,
+        index: capture.node.endIndex,
+      },
+    })),
+  };
+}
+
+export function executeJsQueryAsNativeMatches(
+  source: string,
+  support: LanguageSupport,
+  lang: Parser.Language,
+  queryText: string,
+  tree?: Parser.Tree,
+): NativeMatch[] {
+  const key = parserPoolKeyForSupport(support);
+  let parser: Parser | undefined;
+  try {
+    const resolvedTree =
+      tree ??
+      (() => {
+        parser = acquireParser(lang, key);
+        parser.setLanguage(lang);
+        return parser.parse(source);
+      })();
+    const query = new Parser.Query(lang, queryText);
+    return query.matches(resolvedTree.rootNode).map(toNativeMatch);
+  } finally {
+    if (parser) {
+      releaseParser(parser, key);
+    }
+  }
+}
+
+export function getUnifiedQueryExecution(
+  source: string,
+  support: LanguageSupport,
+  lang: Parser.Language,
+  queryText: string,
+  opts?: {
+    tree?: Parser.Tree;
+    mode?: NativeRuntimeMode;
+  },
+): UnifiedQueryExecution {
+  const nativeExecution = getNativeSingleQueryExecution(
+    source,
+    support,
+    queryText,
+    opts?.mode,
+  );
+  if (nativeExecution.matches) {
+    return {
+      matches: nativeExecution.matches,
+      backend: "native",
+    };
+  }
+  try {
+    const matches = executeJsQueryAsNativeMatches(
+      source,
+      support,
+      lang,
+      queryText,
+      opts?.tree,
+    );
+    return {
+      matches,
+      backend: "js",
+      ...(nativeExecution.fallbackReason
+        ? { fallbackReason: nativeExecution.fallbackReason }
+        : {}),
+      ...(nativeExecution.error ? { error: nativeExecution.error } : {}),
+    };
+  } catch (error) {
+    return {
+      matches: null,
+      backend: "js",
+      fallbackReason:
+        nativeExecution.fallbackReason ?? "queryFailure",
       error: error instanceof Error ? error.message : String(error),
     };
   }
