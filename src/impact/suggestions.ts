@@ -9,6 +9,7 @@ import type {
 } from "../indexer.js";
 import { goToDefinition, ensureParsedContext } from "../indexer.js";
 import type { LanguageSupport } from "../languages.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type {
   FileChange,
   ImpactOptions,
@@ -333,7 +334,7 @@ function selectBestCandidateFile(
 }
 
 function collectReferenceCandidates(
-  tree: Parser.Tree,
+  tree: SyntaxTreeLike,
   source: string,
   sup: LanguageSupport,
   changedLines: Set<number>,
@@ -346,7 +347,7 @@ function collectReferenceCandidates(
     sup.nodeTypes.shorthandPropertyIdentifier ?? [],
   );
 
-  const walk = (node: Parser.SyntaxNode) => {
+  const walk = (node: SyntaxNodeLike) => {
     if (!node) return;
     const startLine = node.startPosition.row + 1;
     const endLine = node.endPosition.row + 1;
@@ -388,8 +389,8 @@ function rangeIntersectsLines(
   return false;
 }
 
-function isInImportOrExport(node: Parser.SyntaxNode): boolean {
-  let current: Parser.SyntaxNode | null = node.parent;
+function isInImportOrExport(node: SyntaxNodeLike): boolean {
+  let current: SyntaxNodeLike | null = node.parent;
   while (current) {
     const type = current.type;
     if (type.startsWith("import") || type.startsWith("export")) return true;
@@ -453,7 +454,7 @@ function pushUniqueSuggestion(
   output.push(suggestion);
 }
 
-function toRange(node: Parser.SyntaxNode): Range {
+function toRange(node: SyntaxNodeLike): Range {
   return {
     start: {
       line: node.startPosition.row + 1,

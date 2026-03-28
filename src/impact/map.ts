@@ -3,6 +3,7 @@ import type { FileId } from "../types.js";
 import type { ProjectIndex, SymbolDef, SymbolHandle } from "../indexer.js";
 import { ensureParsedContext } from "../indexer.js";
 import type { LanguageSupport } from "../languages.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileChange, ChangedSymbol } from "./types.js";
 
 function symbolHandleFromLocal(file: FileId, local: SymbolDef): string {
@@ -206,9 +207,9 @@ function hasOverlapSorted(sorted: number[], lo: number, hi: number): boolean {
 }
 
 function findNodesInLines(
-  tree: Parser.Tree,
+  tree: SyntaxTreeLike,
   changedLines: Set<number>,
-): Parser.SyntaxNode[] {
+): SyntaxNodeLike[] {
   if (changedLines.size === 0) return [];
 
   // Build a sorted array once for O(log n) overlap checks during the walk.
@@ -216,9 +217,9 @@ function findNodesInLines(
   const minLine = sortedLines[0]!;
   const maxLine = sortedLines[sortedLines.length - 1]!;
 
-  const nodes: Parser.SyntaxNode[] = [];
+  const nodes: SyntaxNodeLike[] = [];
 
-  function walk(node: Parser.SyntaxNode) {
+  function walk(node: SyntaxNodeLike) {
     const startLine = node.startPosition?.row + 1;
     const endLine = node.endPosition?.row + 1;
 
@@ -272,7 +273,7 @@ type NodeClassification = {
 } | null;
 
 function classifyChangedNode(
-  node: Parser.SyntaxNode,
+  node: SyntaxNodeLike,
   source: string,
   sup: LanguageSupport,
 ): NodeClassification {
@@ -324,11 +325,11 @@ function classifyChangedNode(
 }
 
 function isTypeOnlyDeclaration(
-  node: Parser.SyntaxNode,
+  node: SyntaxNodeLike,
   source: string,
 ): boolean {
   // Check if this is part of a type-only declaration
-  let current: Parser.SyntaxNode | null = node;
+  let current: SyntaxNodeLike | null = node;
   while (current) {
     const text = source.slice(current.startIndex, current.endIndex);
     if (/\btype\b|\binterface\b|\btype\b.*=/.test(text)) {
@@ -352,11 +353,11 @@ function buildTrackedPositions(locals: readonly SymbolDef[]): Set<string> {
 }
 
 function findDeclarationNameInAncestors(
-  node: Parser.SyntaxNode,
+  node: SyntaxNodeLike,
   sup: LanguageSupport,
   trackedPositions?: ReadonlySet<string>,
-): Parser.SyntaxNode | null {
-  let cur: Parser.SyntaxNode | null = node;
+): SyntaxNodeLike | null {
+  let cur: SyntaxNodeLike | null = node;
   while (cur) {
     for (const ch of cur.namedChildren || []) {
       if (sup.isDeclarationName?.(ch)) {
@@ -504,7 +505,7 @@ function computeChangedByteRanges(
  * after the `)` and therefore does not overlap the params node.
  */
 function computeSignatureChanged(
-  tree: Parser.Tree,
+  tree: SyntaxTreeLike,
   symbolDef: SymbolDef,
   changedByteRanges: ReadonlyArray<ByteRange>,
 ): boolean {
@@ -514,7 +515,7 @@ function computeSignatureChanged(
     column: symbolDef.range.start.column - 1,
   };
   const nameNode = tree.rootNode.descendantForPosition(pos, pos);
-  let declNode: Parser.SyntaxNode | null = nameNode;
+  let declNode: SyntaxNodeLike | null = nameNode;
   while (declNode && !SIGNATURE_DECL_TYPES.has(declNode.type)) {
     declNode = declNode.parent;
   }
@@ -538,7 +539,7 @@ function computeSignatureChanged(
 function findSymbolHandleForNode(
   index: ProjectIndex,
   file: FileId,
-  node: Parser.SyntaxNode,
+  node: SyntaxNodeLike,
   sup: LanguageSupport,
   classification: NodeClassification,
   source: string,
@@ -601,7 +602,7 @@ function isExported(
 }
 
 function isStyleDefinitionNode(
-  node: Parser.SyntaxNode,
+  node: SyntaxNodeLike,
   sup: LanguageSupport,
 ): boolean {
   const parentType = node.parent?.type ?? "";
@@ -637,7 +638,7 @@ function isStyleDefinitionNode(
 }
 
 function isHtmlIdAttributeValue(
-  node: Parser.SyntaxNode,
+  node: SyntaxNodeLike,
   source: string,
 ): boolean {
   if (node.type !== "attribute_value") return false;
@@ -655,7 +656,7 @@ function isHtmlIdAttributeValue(
 }
 
 function isDefinitionNameNode(
-  node: Parser.SyntaxNode,
+  node: SyntaxNodeLike,
   sup: LanguageSupport,
   source: string,
 ): boolean {
