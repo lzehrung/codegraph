@@ -13,7 +13,7 @@ import {
 import { buildBloomFilterFromSource } from "./util/bloomFilter.js";
 import {
   isUnsupportedParserInputError,
-  prepareParserInput,
+  prepareSourceInput,
 } from "./languages/filePrep.js";
 import {
   listProjectFiles,
@@ -225,9 +225,10 @@ type ParsedFileContext = {
 };
 
 type PreparedFileContext = {
+  file: string;
   source: string;
   sup: LanguageSupport;
-  lang: Parser.Language;
+  lang?: Parser.Language;
   nativeQueries: NativeQueryResults | null;
   nativeFallbackReason?: NativeBackendFallbackReason;
   nativeError?: string;
@@ -236,7 +237,8 @@ type PreparedFileContext = {
 function parsePreparedFileContext(
   context: PreparedFileContext,
 ): ParsedFileContext {
-  const { source, sup, lang, nativeQueries } = context;
+  const { source, sup, nativeQueries } = context;
+  const lang = context.lang ?? sup.language(context.file);
   const key = sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts";
   const parser = acquireParser(lang, key);
   try {
@@ -499,9 +501,9 @@ function workerResultToPrepared(
   filePath: string,
 ): PreparedFileContext {
   return {
+    file: filePath,
     source: result.source,
     sup,
-    lang: sup.language(filePath),
     nativeQueries: result.nativeResults,
     ...(result.fallbackReason
       ? { nativeFallbackReason: result.fallbackReason }
@@ -1483,7 +1485,7 @@ export function collectLocalsAndExportsFromSource(
   file: string,
   source: string,
   support: LanguageSupport,
-  lang: Parser.Language,
+  lang?: Parser.Language,
   imports: ImportBinding[] = [],
   opts?: { tree?: Parser.Tree; nativeQueries?: NativeQueryResults | null },
 ): ModuleIndex {
@@ -1610,6 +1612,11 @@ export function collectLocalsAndExportsFromSource(
   const nativeQueries = opts?.nativeQueries ?? null;
   let tree: Parser.Tree | null = opts?.tree ?? null;
   let treeAttempted = !!tree;
+  let resolvedLang = lang;
+  const ensureResolvedLang = (): Parser.Language => {
+    resolvedLang ??= support.language(file);
+    return resolvedLang;
+  };
 
   // Lazily parse the JS tree on first access. This avoids re-parsing files
   // in JS when native queries already cover the needed data and downstream
@@ -1621,9 +1628,9 @@ export function collectLocalsAndExportsFromSource(
     try {
       const key =
         support.id === "python" ? "py" : support.id === "js" ? "js" : "ts";
-      const parser = acquireParser(lang, key);
+      const parser = acquireParser(ensureResolvedLang(), key);
       try {
-        parser.setLanguage(lang);
+        parser.setLanguage(ensureResolvedLang());
         tree = parser.parse(source);
       } finally {
         releaseParser(parser, key);
@@ -1707,7 +1714,7 @@ export function collectLocalsAndExportsFromSource(
       const matches = executeJsQueryAsNativeMatches(
         source,
         support,
-        lang,
+        ensureResolvedLang(),
         support.queries.locals,
         jsTree,
       );
@@ -2068,7 +2075,7 @@ export function collectLocalsAndExportsFromSource(
         executeJsQueryAsNativeMatches(
           source,
           support,
-          lang,
+          ensureResolvedLang(),
           support.queries.exports,
           exportTree,
         ),
@@ -2322,20 +2329,23 @@ export async function collectImportsForFile(
   let sup = opts?.sup;
   let lang = opts?.lang;
 
-  if (!source || !sup || !lang) {
-    const prep = await prepareParserInput(
+  if (!source || !sup) {
+    const prep = await prepareSourceInput(
       file,
       source !== undefined ? { source } : undefined,
     );
     source = prep.source;
     sup = prep.sup;
-    lang = prep.lang;
   }
 
   const resolvedSource = source;
   const resolvedSup = sup;
-  const resolvedLang = lang;
+  let resolvedLang = lang;
   const resolvedNativeQueries = opts?.nativeQueries ?? null;
+  const ensureResolvedLang = (): Parser.Language => {
+    resolvedLang ??= resolvedSup.language(file);
+    return resolvedLang;
+  };
 
   const imports: ImportBinding[] = [];
   const normalizeGoImports = (): void => {
@@ -2921,8 +2931,9 @@ export async function collectImportsForFile(
     const tree =
       opts?.tree ??
       (() => {
-        parser = acquireParser(resolvedLang, key);
-        parser.setLanguage(resolvedLang);
+        const jsLang = ensureResolvedLang();
+        parser = acquireParser(jsLang, key);
+        parser.setLanguage(jsLang);
         return parser.parse(resolvedSource);
       })();
     let ranFallback = false;
@@ -2930,7 +2941,7 @@ export async function collectImportsForFile(
       const matches = executeJsQueryAsNativeMatches(
         resolvedSource,
         resolvedSup,
-        resolvedLang,
+        ensureResolvedLang(),
         resolvedSup.queries.importBindings,
         tree,
       );
@@ -3258,13 +3269,13 @@ async function prepareFileForIndexing(
   file: string,
   native?: NativeRuntimeMode,
 ): Promise<PreparedFileContext> {
-  const prep = await prepareParserInput(file);
+  const prep = await prepareSourceInput(file);
   const nativeExecution = getNativeQueryExecution(prep.source, prep.sup, native);
 
   return {
+    file,
     source: prep.source,
     sup: prep.sup,
-    lang: prep.lang,
     nativeQueries: nativeExecution.results,
     ...(nativeExecution.fallbackReason
       ? { nativeFallbackReason: nativeExecution.fallbackReason }
@@ -3487,11 +3498,13 @@ async function buildIndexFromFileListShared(
         ...(prepared.nativeError ? { error: prepared.nativeError } : {}),
       });
       const { source: src, sup, lang, nativeQueries } = prepared;
+      let resolvedLang = lang;
       let tree: Parser.Tree | undefined;
 
       if (!nativeQueries) {
         const parsed = parsePreparedFileContext(prepared);
         tree = parsed.tree;
+        resolvedLang = parsed.lang;
         setParsedCacheEntry(
           parsedMap,
           f,
@@ -3517,15 +3530,22 @@ async function buildIndexFromFileListShared(
           source: src,
           ...(tree ? { tree } : {}),
           sup,
-          lang,
+          ...(resolvedLang ? { lang: resolvedLang } : {}),
           ...(nativeQueries !== undefined ? { nativeQueries } : {}),
           graphOptions,
         });
         collectJsonDependencies(imports, jsonDependencies);
-        mod = collectLocalsAndExportsFromSource(f, src, sup, lang, imports, {
+        mod = collectLocalsAndExportsFromSource(
+          f,
+          src,
+          sup,
+          resolvedLang,
+          imports,
+          {
           ...(tree ? { tree } : {}),
           ...(nativeQueries !== undefined ? { nativeQueries } : {}),
-        });
+          },
+        );
         mod.imports = imports;
 
         if (sup.supportsCrossModuleSymbols) {
@@ -3569,12 +3589,13 @@ async function buildIndexFromFileListShared(
       }
 
       // 2. Recompute Edges (using the parsed tree)
+      const graphLang = resolvedLang ?? sup.language(f);
       edges = await collectEdgesForFile(f, projectRoot, workspaceConfig, {
         parsed: {
           source: src,
           ...(tree ? { tree } : {}),
           sup,
-          lang,
+          lang: graphLang,
           ...(nativeQueries !== undefined ? { nativeQueries } : {}),
         },
         fast: !!graphOptions.fast,
@@ -4063,11 +4084,13 @@ export async function buildProjectIndexIncremental(
             ...(prepared.nativeError ? { error: prepared.nativeError } : {}),
           });
           const { source: src, sup, lang, nativeQueries } = prepared;
+          let resolvedLang = lang;
           let tree: Parser.Tree | undefined;
 
           if (!nativeQueries) {
             const parsed = parsePreparedFileContext(prepared);
             tree = parsed.tree;
+            resolvedLang = parsed.lang;
             setParsedCacheEntry(
               parsedMap,
               f,
@@ -4088,7 +4111,7 @@ export async function buildProjectIndexIncremental(
             source: src,
             ...(tree ? { tree } : {}),
             sup,
-            lang,
+            ...(resolvedLang ? { lang: resolvedLang } : {}),
             ...(nativeQueries !== undefined ? { nativeQueries } : {}),
             graphOptions,
           });
@@ -4097,7 +4120,7 @@ export async function buildProjectIndexIncremental(
             f,
             src,
             sup,
-            lang,
+            resolvedLang,
             imports,
             {
               ...(tree ? { tree } : {}),
@@ -5328,7 +5351,7 @@ export function buildScopeIndexFromSource(
   file: string,
   source: string,
   support: LanguageSupport,
-  lang: Parser.Language,
+  lang?: Parser.Language,
   imports: ImportBinding[] = [],
   opts?: { tree?: SyntaxTreeLike; nativeMode?: NativeRuntimeMode },
 ): ScopeIndex {
@@ -5351,8 +5374,9 @@ export function buildScopeIndexFromSource(
     }
   }
   if (!tree) {
-    parser2 = acquireParser(lang, key2);
-    parser2.setLanguage(lang);
+    const resolvedLang = lang ?? support.language(file);
+    parser2 = acquireParser(resolvedLang, key2);
+    parser2.setLanguage(resolvedLang);
     tree = parser2.parse(source);
   }
 
