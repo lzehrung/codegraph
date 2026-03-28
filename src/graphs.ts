@@ -4,6 +4,7 @@ import Parser from "tree-sitter";
 import {
   isUnsupportedParserInputError,
   prepareParserInput,
+  prepareSourceInput,
 } from "./languages/filePrep.js";
 import { type LanguageSupport } from "./languages.js";
 import type { FileId, EdgeTo, Edge, Graph } from "./types.js";
@@ -928,13 +929,20 @@ export async function astGrep(
   const files = await listProjectFiles(projectRoot, patterns);
   for (const file of files) {
     try {
-      const prep = await prepareParserInput(file);
-      const lang = prep.lang;
+      const prep = await prepareSourceInput(file);
       const sup = prep.sup;
       const src = prep.source;
-      const execution = getUnifiedQueryExecution(src, sup, lang, querySource);
-      if (execution.matches) {
-        for (const match of execution.matches) {
+      const nativeExecution = getNativeSingleQueryExecution(
+        src,
+        sup,
+        querySource,
+      );
+      const matches =
+        nativeExecution.matches ??
+        getUnifiedQueryExecution(src, sup, sup.language(file), querySource)
+          .matches;
+      if (matches) {
+        for (const match of matches) {
           for (const capture of match.captures) {
             hits.push({
               file: path.relative(projectRoot, file).replace(/\\/g, "/"),

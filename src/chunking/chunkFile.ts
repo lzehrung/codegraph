@@ -1,6 +1,7 @@
 import type { LanguageConfig } from "./languageConfig.js";
 import { supportById } from "../languages.js";
 import {
+  getNativeSingleQueryExecution,
   getUnifiedQueryExecution,
   type NativeMatch,
 } from "../native/treeSitterNative.js";
@@ -276,6 +277,15 @@ function getChunkMatches(
 ): ChunkMatch[] {
   const support = supportById(language.supportId);
   if (support) {
+    const nativeExecution = getNativeSingleQueryExecution(
+      source,
+      support,
+      language.queryText,
+    );
+    if (nativeExecution.matches) {
+      return nativeExecution.matches.map(toChunkMatchFromNative);
+    }
+
     const lang = language.definition.grammar(filePath);
     const execution = getUnifiedQueryExecution(
       source,
