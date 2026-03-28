@@ -90,6 +90,10 @@ const QUERY_DRIVEN_LOCALS_LANGUAGES = new Set([
   "cpp",
 ]);
 
+function isParserTreeLike(tree: SyntaxTreeLike): tree is Parser.Tree {
+  return "walk" in tree;
+}
+
 function parseGoImportAlias(stmtText: string): string | null {
   const trimmed = stmtText.trim();
   const match = trimmed.match(/^(?:import\s+)?([._A-Za-z][\w]*)\s+["'`]/);
@@ -1487,7 +1491,7 @@ export function collectLocalsAndExportsFromSource(
   support: LanguageSupport,
   lang?: Parser.Language,
   imports: ImportBinding[] = [],
-  opts?: { tree?: Parser.Tree; nativeQueries?: NativeQueryResults | null },
+  opts?: { tree?: SyntaxTreeLike; nativeQueries?: NativeQueryResults | null },
 ): ModuleIndex {
   const normalizeDocstringLine = (line: string) =>
     line.replace(/^\s*(?:\/\/\/?\s?|#\s?)/, "").replace(/^\s*\*\s?/, "");
@@ -1610,8 +1614,11 @@ export function collectLocalsAndExportsFromSource(
   };
 
   const nativeQueries = opts?.nativeQueries ?? null;
-  let tree: Parser.Tree | null = opts?.tree ?? null;
+  let tree: SyntaxTreeLike | null = opts?.tree ?? null;
   let treeAttempted = !!tree;
+  let jsQueryTree =
+    opts?.tree && isParserTreeLike(opts.tree) ? opts.tree : null;
+  let jsQueryTreeAttempted = !!jsQueryTree;
   let resolvedLang = lang;
   const ensureResolvedLang = (): Parser.Language => {
     resolvedLang ??= support.language(file);
@@ -1622,16 +1629,24 @@ export function collectLocalsAndExportsFromSource(
   // in JS when native queries already cover the needed data and downstream
   // logic never touches the tree (e.g. languages where native locals/exports
   // succeed without needing tree-based enrichment).
-  const ensureTree = (): Parser.Tree | null => {
+  const ensureTree = (): SyntaxTreeLike | null => {
     if (tree || treeAttempted) return tree;
     treeAttempted = true;
     try {
+      const nativeTreeExecution = getNativeSyntaxTreeExecution(source, support);
+      if (nativeTreeExecution.tree) {
+        tree = new ProjectedSyntaxTree(source, nativeTreeExecution.tree);
+        return tree;
+      }
       const key =
         support.id === "python" ? "py" : support.id === "js" ? "js" : "ts";
       const parser = acquireParser(ensureResolvedLang(), key);
       try {
         parser.setLanguage(ensureResolvedLang());
-        tree = parser.parse(source);
+        const parsedTree = parser.parse(source);
+        tree = parsedTree;
+        jsQueryTree = parsedTree;
+        jsQueryTreeAttempted = true;
       } finally {
         releaseParser(parser, key);
       }
@@ -1639,6 +1654,25 @@ export function collectLocalsAndExportsFromSource(
       /* parse fallback: ignore */
     }
     return tree;
+  };
+
+  const ensureJsQueryTree = (): Parser.Tree | null => {
+    if (jsQueryTree || jsQueryTreeAttempted) return jsQueryTree;
+    jsQueryTreeAttempted = true;
+    try {
+      const key =
+        support.id === "python" ? "py" : support.id === "js" ? "js" : "ts";
+      const parser = acquireParser(ensureResolvedLang(), key);
+      try {
+        parser.setLanguage(ensureResolvedLang());
+        jsQueryTree = parser.parse(source);
+      } finally {
+        releaseParser(parser, key);
+      }
+    } catch {
+      /* parse fallback: ignore */
+    }
+    return jsQueryTree;
   };
 
   const locals: SymbolDef[] = [];
@@ -1707,7 +1741,7 @@ export function collectLocalsAndExportsFromSource(
   };
 
   const extractLocalsFromJsQueries = (): boolean => {
-    const jsTree = ensureTree();
+    const jsTree = ensureJsQueryTree();
     if (!jsTree || !support.queries.locals.trim()) return false;
     if (!QUERY_DRIVEN_LOCALS_LANGUAGES.has(support.id)) return false;
     try {
@@ -1802,11 +1836,11 @@ export function collectLocalsAndExportsFromSource(
 
   const appendExportsFromMatches = (
     matches: NativeQueryResults["exports"],
-    treeForEnrichment?: Parser.Tree,
+    treeForEnrichment?: SyntaxTreeLike,
   ): void => {
     const nodeForCapture = (
       capture: NativeCapture | undefined,
-    ): Parser.SyntaxNode | undefined => {
+    ): SyntaxNodeLike | undefined => {
       if (!capture || !treeForEnrichment) return undefined;
       const range = rangeFromNativeCapture(capture);
       return (
@@ -2068,8 +2102,8 @@ export function collectLocalsAndExportsFromSource(
       usedNativeExports = false;
     }
   }
-  const exportTree = !usedNativeExports ? ensureTree() : null;
-  if (support.queries.exports.trim() && exportTree && !usedNativeExports) {
+  const jsExportTree = !usedNativeExports ? ensureJsQueryTree() : null;
+  if (support.queries.exports.trim() && jsExportTree && !usedNativeExports) {
     try {
       appendExportsFromMatches(
         executeJsQueryAsNativeMatches(
@@ -2077,9 +2111,9 @@ export function collectLocalsAndExportsFromSource(
           support,
           ensureResolvedLang(),
           support.queries.exports,
-          exportTree,
+          jsExportTree,
         ),
-        exportTree,
+        jsExportTree,
       );
       if (
         !exports.some((e) => e.type === "local" && e.exportedAs === "default")
