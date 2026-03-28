@@ -36,6 +36,7 @@ import {
   getNativeQueryExecution,
   getCompactImportsExecution,
   getNativeSingleQueryExecution,
+  getNativeSyntaxTreeExecution,
   getUnifiedQueryExecution,
   isNativeQueryModified,
   type NativeRuntimeMode,
@@ -44,6 +45,7 @@ import {
   type CompactQueryResults,
 } from "./native/treeSitterNative.js";
 import { capturesByName } from "./native/queryResults.js";
+import { ProjectedSyntaxTree } from "./native/projectedTree.js";
 import {
   initNativeBackendReport,
   recordNativeBackendOutcome,
@@ -1676,17 +1678,24 @@ export async function buildSymbolGraphDetailed(
       let sup = parsedEntry?.sup;
       let lang = parsedEntry?.lang;
       let src = parsedEntry?.source;
-      let tree = parsedEntry?.tree;
-      if (!sup || !lang || src === undefined || !tree) {
-        const prep = await prepareParserInput(file);
+      let tree: Parser.Tree | ProjectedSyntaxTree | undefined = parsedEntry?.tree;
+      if (!sup || src === undefined) {
+        const prep = await prepareSourceInput(file);
         sup = prep.sup;
-        lang = prep.lang;
         src = prep.source;
-        const parser = new Parser();
-        parser.setLanguage(lang);
-        tree = parser.parse(src);
       }
-      if (!sup || !lang || src === undefined || !tree) {
+      if (sup && src !== undefined && !tree) {
+        const nativeTreeExecution = getNativeSyntaxTreeExecution(src, sup);
+        if (nativeTreeExecution.tree) {
+          tree = new ProjectedSyntaxTree(src, nativeTreeExecution.tree);
+        } else {
+          lang ??= sup.language(file);
+          const parser = new Parser();
+          parser.setLanguage(lang);
+          tree = parser.parse(src);
+        }
+      }
+      if (!sup || src === undefined || !tree) {
         throw new Error(`Failed to parse ${file}`);
       }
 
