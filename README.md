@@ -311,7 +311,7 @@ npx codegraph graph --dot > graph.dot
 dot -Tsvg graph.dot -o graph.svg
 
 # Specify a different root directory (optional, defaults to current directory)
-npx codegraph graph /path/to/project --mermaid > graph.mmd
+npx codegraph graph --root /path/to/project --mermaid > graph.mmd
 
 # Build the full project index (graph + per-file symbol indexes)
 npx codegraph index
@@ -589,7 +589,11 @@ npx tsx src/cli.ts goto <file> <line> <column>
   - Use `--compact-json` to replace repeated file and symbol IDs with numeric indices.
   - Example:
     ```bash
-    npx codegraph graph --root . ./src --symbols-detailed --compact-json > graph.json
+    npx codegraph graph --root . ./src --symbols-detailed --compact-json --output graph.json
+    ```
+  - When targeting a different repo, pass it with `--root` rather than as an extra positional path:
+    ```bash
+    npx codegraph graph --root /path/to/project --json --symbols-detailed --compact-json --output graph.json
     ```
   - Shape (simplified):
     ```json
@@ -608,7 +612,7 @@ Use the Sigma-based viewer to interactively explore `graph --json` or `graph --c
 
 ```bash
 # 1) Produce graph data
-npx codegraph graph --root . ./src --compact-json > codegraph.json
+npx codegraph graph --root . ./src --compact-json --output codegraph.json
 
 # 2) Serve the repo root and open the viewer
 python3 -m http.server 4173
