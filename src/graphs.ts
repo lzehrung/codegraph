@@ -1,11 +1,16 @@
 import path from "node:path";
 import fsp from "node:fs/promises";
-import Parser from "tree-sitter";
+import {
+  isJsSyntaxTree,
+  parseWithJsLanguage,
+  type JsLanguage,
+  type JsSyntaxTree,
+} from "@lzehrung/codegraph-native/js-fallback";
 import {
   isUnsupportedParserInputError,
-  prepareParserInput,
+  prepareSourceInput,
 } from "./languages/filePrep.js";
-import { type LanguageSupport, getCompiledQueries } from "./languages.js";
+import { type LanguageSupport } from "./languages.js";
 import type { FileId, EdgeTo, Edge, Graph } from "./types.js";
 import {
   listProjectFiles,
@@ -18,8 +23,6 @@ import {
   resolveImportSpecifier,
   resolvePythonModule,
   normalizeResolutionHints,
-  acquireParser,
-  releaseParser,
   mapLimit,
   type ModuleSpecifier,
 } from "./util.js";
@@ -31,8 +34,12 @@ import {
   extractJsTsDynamicSpecifiers,
 } from "./util.js";
 import {
+  executeJsQueryAsNativeMatches,
   getNativeQueryExecution,
   getCompactImportsExecution,
+  getNativeSingleQueryExecution,
+  getNativeSyntaxTreeExecution,
+  getUnifiedQueryExecution,
   isNativeQueryModified,
   type NativeRuntimeMode,
   type NativeQueryScope,
@@ -40,6 +47,7 @@ import {
   type CompactQueryResults,
 } from "./native/treeSitterNative.js";
 import { capturesByName } from "./native/queryResults.js";
+import { ProjectedSyntaxTree } from "./native/projectedTree.js";
 import {
   initNativeBackendReport,
   recordNativeBackendOutcome,
@@ -51,6 +59,7 @@ import {
   type SymbolDef,
   SymbolKind,
 } from "./index.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "./languages/types.js";
 
 export type GraphBuildOptions = {
   fast?: boolean;
@@ -95,10 +104,10 @@ function extractKotlinImportSpecifier(statementText: string): string | null {
 
 export function collectModuleSpecifiersFromSource(
   support: LanguageSupport,
-  lang: Parser.Language,
+  lang: JsLanguage | undefined,
   source: string,
   opts?: {
-    tree?: Parser.Tree;
+    tree?: SyntaxTreeLike;
     nativeQueries?: NativeQueryResults | null;
     compactNativeImports?: CompactQueryResults | null;
     fast?: boolean;
@@ -124,44 +133,43 @@ export function collectModuleSpecifiersFromSource(
     };
     opts?.onFallbackImportExtraction?.(event);
   };
+  const ensureResolvedLang = (): JsLanguage => {
+    if (!lang) {
+      const fileForLanguage = opts?.file ?? `temp.${support.matchExts[0]?.replace(/^\./, "") ?? "txt"}`;
+      lang = support.language(fileForLanguage);
+    }
+    return lang!;
+  };
+  const resolvedNativeImports =
+    opts?.compactNativeImports?.imports ??
+    opts?.nativeQueries?.imports ??
+    getCompactImportsExecution(source, support).results?.imports ??
+    null;
 
   if (support.id === "python") {
     let queryFailed = false;
-    try {
-      const key = "py";
-      let parser: Parser | undefined;
+    if (resolvedNativeImports !== null) {
       try {
-        const tree =
-          opts?.tree ??
-          (() => {
-            parser = acquireParser(lang, key);
-            parser.setLanguage(lang);
-            return parser.parse(source);
-          })();
-        const { imports: q } = getCompiledQueries(lang, support);
-        for (const m of q.matches(tree.rootNode)) {
-          const caps = Object.fromEntries(
-            m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const),
-          );
-          const stmtNode = caps["stmt"]?.node ?? m.captures[0]?.node;
-          if (!stmtNode) continue;
-          const stmtText = sliceText(stmtNode, source);
-          // Handle: import a, b as c
+        for (const match of resolvedNativeImports) {
+          const stmtText =
+            match.captures.find((capture) => capture.name === "stmt")?.text ??
+            match.captures[0]?.text ??
+            "";
+          if (!stmtText) continue;
           const mImport = /^\s*import\s+([^\n#]+)/.exec(stmtText);
           if (mImport) {
             const list = mImport[1]!
               .split(",")
-              .map((s) => s.trim())
+              .map((entry) => entry.trim())
               .filter(Boolean);
             for (const spec of list) {
-              const mm = spec.match(
+              const parsed = spec.match(
                 /^([A-Za-z_][\w.]*)(?:\s+as\s+[A-Za-z_][\w_]*)?$/,
               );
-              if (mm) out.push({ spec: mm[1]! });
+              if (parsed?.[1]) out.push({ spec: parsed[1] });
             }
             continue;
           }
-          // Handle: from ..pkg.sub import x, y
           const mFrom = /^\s*from\s+(\.*)([A-Za-z_][\w.]*)?\s+import\b/.exec(
             stmtText,
           );
@@ -170,15 +178,12 @@ export function collectModuleSpecifiersFromSource(
             const name = mFrom[2] ?? "";
             const mod = `${dots}${name}`;
             if (mod) out.push({ spec: mod });
-            continue;
           }
         }
-      } finally {
-        if (parser) releaseParser(parser, key);
+      } catch {
+        queryFailed = true;
+        out.length = 0;
       }
-      if (out.length > 0) return out;
-    } catch {
-      queryFailed = true;
     }
     // Fallback to regex-based extractor
     if ((queryFailed || out.length === 0) && shouldAttemptFallback) {
@@ -188,7 +193,9 @@ export function collectModuleSpecifiersFromSource(
         for (const s of extracted) out.push({ spec: s });
       }
     }
-    return out;
+    if (out.length > 0 || resolvedNativeImports !== null || queryFailed) {
+      return out;
+    }
   }
 
   function appendUniqueSpecifiers(
@@ -299,8 +306,7 @@ export function collectModuleSpecifiersFromSource(
   }
 
   // Resolve the imports array: prefer compact (lighter) over full native
-  const nativeImportsArray =
-    opts?.compactNativeImports?.imports ?? opts?.nativeQueries?.imports;
+  const nativeImportsArray = resolvedNativeImports;
   const hasNativeImports = !!nativeImportsArray;
 
   let queryFailed = false;
@@ -364,28 +370,21 @@ export function collectModuleSpecifiersFromSource(
     }
   }
   try {
-    const key =
-      support.id === "python" ? "py" : support.id === "js" ? "js" : "ts";
-    let parser: Parser | undefined;
-    try {
-      const tree =
-        opts?.tree ??
-        (() => {
-          parser = acquireParser(lang, key);
-          parser.setLanguage(lang);
-          return parser.parse(source);
-        })();
-      const q = new Parser.Query(lang, support.queries.imports);
-      for (const m of q.matches(tree.rootNode)) {
+    const jsQueryTree =
+      opts?.tree && isJsSyntaxTree(opts.tree) ? opts.tree : undefined;
+    const matches = executeJsQueryAsNativeMatches(
+      source,
+      support,
+      ensureResolvedLang(),
+      support.queries.imports,
+      jsQueryTree,
+    );
+    for (const match of matches) {
         const caps = Object.fromEntries(
-          m.captures.map((x: Parser.QueryCapture) => [x.name, x] as const),
+          match.captures.map((capture) => [capture.name, capture] as const),
         );
-        const modNodes = m.captures.filter(
-          (x: Parser.QueryCapture) => x.name === "mod",
-        );
-        const stmtText = caps["stmt"]
-          ? sliceText(caps["stmt"].node, source)
-          : "";
+        const modNodes = match.captures.filter((capture) => capture.name === "mod");
+        const stmtText = caps["stmt"]?.text ?? "";
         const typeOnly =
           (support.id === "ts" || support.id === "tsx") &&
           (/\b(import|export)\s+type\b/.test(stmtText) ||
@@ -399,34 +398,28 @@ export function collectModuleSpecifiersFromSource(
           if (spec) out.push({ spec, typeOnly: false });
           continue;
         }
-        for (const cap of modNodes)
-          out.push({ spec: unquote(sliceText(cap.node, source)), typeOnly });
-      }
-      if (htmlLikeLanguage) {
-        const htmlSeen = makeSeenSet(out);
-        appendUniqueSpecifiers(
-          out,
-          extractHtmlAttributeSpecifiers(source),
-          htmlSeen,
-        );
-        appendUniqueSpecifiers(
-          out,
-          extractHtmlInlineScriptSpecifiers(source),
-          htmlSeen,
-        );
-      }
-      if (
-        support.id === "css" ||
-        support.id === "scss" ||
-        support.id === "less"
-      ) {
-        const cssSeen = makeSeenSet(out);
-        appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
-      }
-      if (out.length > 0) return out;
-    } finally {
-      if (parser) releaseParser(parser, key);
+        for (const cap of modNodes) {
+          out.push({ spec: unquote(cap.text), typeOnly });
+        }
     }
+    if (htmlLikeLanguage) {
+      const htmlSeen = makeSeenSet(out);
+      appendUniqueSpecifiers(out, extractHtmlAttributeSpecifiers(source), htmlSeen);
+      appendUniqueSpecifiers(
+        out,
+        extractHtmlInlineScriptSpecifiers(source),
+        htmlSeen,
+      );
+    }
+    if (
+      support.id === "css" ||
+      support.id === "scss" ||
+      support.id === "less"
+    ) {
+      const cssSeen = makeSeenSet(out);
+      appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
+    }
+    if (out.length > 0) return out;
   } catch (error) {
     queryFailed = true;
     console.warn(
@@ -479,9 +472,9 @@ export async function collectEdgesForFile(
   opts: {
     parsed?: {
       source: string;
-      tree?: Parser.Tree;
+      tree?: SyntaxTreeLike;
       sup: LanguageSupport;
-      lang: Parser.Language;
+      lang?: JsLanguage;
       nativeQueries?: NativeQueryResults | null;
     };
     fast?: boolean;
@@ -528,10 +521,9 @@ export async function collectEdgesForFile(
   let src = parsed?.source;
   let nativeQueries = parsed?.nativeQueries ?? null;
   let compactNativeImports: CompactQueryResults | null = null;
-  if (!sup || !lang || src === undefined) {
-    const prep = await prepareParserInput(file);
+  if (!sup || src === undefined) {
+    const prep = await prepareSourceInput(file);
     sup = prep.sup;
-    lang = prep.lang;
     src = prep.source;
     const fastRegexDisabled = opts.fastRegexDisabledLanguages?.includes(sup.id);
     const shouldSkipNativeForFastGraph =
@@ -722,9 +714,9 @@ export async function collectGraph(
       string,
       {
         source: string;
-        tree: Parser.Tree;
+        tree: SyntaxTreeLike;
         sup: LanguageSupport;
-        lang: Parser.Language;
+        lang?: JsLanguage;
       }
     >;
     fast?: boolean;
@@ -944,35 +936,41 @@ export async function astGrep(
   projectRoot: string,
   querySource: string,
   patterns = [
-    "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs,html,htm,css,scss,less}",
+    "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs,html,htm,css,scss,less,kt,kts,swift,c,h,cc,cpp,cxx,c++,hpp,hh,hxx,ipp,tpp,inl}",
   ],
 ): Promise<AstGrepHit[]> {
   const hits: AstGrepHit[] = [];
   const files = await listProjectFiles(projectRoot, patterns);
   for (const file of files) {
     try {
-      const prep = await prepareParserInput(file);
-      const lang = prep.lang;
+      const prep = await prepareSourceInput(file);
       const sup = prep.sup;
-      const key = sup.id === "python" ? "py" : sup.id === "js" ? "js" : "ts";
-      const parser = acquireParser(lang, key);
-      parser.setLanguage(lang);
       const src = prep.source;
-      const tree = parser.parse(src);
-      const query = new Parser.Query(lang, querySource);
-      for (const m of query.matches(tree.rootNode)) {
-        for (const cap of m.captures) {
-          const p = cap.node.startPosition;
-          hits.push({
-            file: path.relative(projectRoot, file).replace(/\\/g, "/"),
-            capture: cap.name,
-            line: p.row + 1,
-            column: p.column + 1,
-            snippet: sliceText(cap.node, src).replace(/\n/g, " "),
-          });
+      const nativeExecution = getNativeSingleQueryExecution(
+        src,
+        sup,
+        querySource,
+      );
+      const matches =
+        nativeExecution.matches ??
+        getUnifiedQueryExecution(src, sup, querySource, {
+          getLanguage: () => sup.language(file),
+        })
+          .matches;
+      if (matches) {
+        for (const match of matches) {
+          for (const capture of match.captures) {
+            hits.push({
+              file: path.relative(projectRoot, file).replace(/\\/g, "/"),
+              capture: capture.name,
+              line: capture.start.row + 1,
+              column: capture.start.column + 1,
+              snippet: capture.text.replace(/\n/g, " "),
+            });
+          }
         }
+        continue;
       }
-      releaseParser(parser, key);
     } catch (error) {
       console.warn(
         `Warning: Failed to process file ${file} for AST grep:`,
@@ -987,7 +985,7 @@ export async function textGrep(
   projectRoot: string,
   patternSource: string,
   patterns = [
-    "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs,html,htm,css,scss,less}",
+    "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs,html,htm,css,scss,less,kt,kts,swift,c,h,cc,cpp,cxx,c++,hpp,hh,hxx,ipp,tpp,inl}",
   ],
   opts?: {
     ignoreCase?: boolean;
@@ -1693,17 +1691,26 @@ export async function buildSymbolGraphDetailed(
       let sup = parsedEntry?.sup;
       let lang = parsedEntry?.lang;
       let src = parsedEntry?.source;
-      let tree = parsedEntry?.tree;
-      if (!sup || !lang || src === undefined || !tree) {
-        const prep = await prepareParserInput(file);
+      let tree: SyntaxTreeLike | undefined = parsedEntry?.tree;
+      if (!sup || src === undefined) {
+        const prep = await prepareSourceInput(file);
         sup = prep.sup;
-        lang = prep.lang;
         src = prep.source;
-        const parser = new Parser();
-        parser.setLanguage(lang);
-        tree = parser.parse(src);
       }
-      if (!sup || !lang || src === undefined || !tree) {
+      if (sup && src !== undefined && !tree) {
+        const nativeTreeExecution = getNativeSyntaxTreeExecution(
+          src,
+          sup,
+          index.nativeMode,
+        );
+        if (nativeTreeExecution.tree) {
+          tree = new ProjectedSyntaxTree(src, nativeTreeExecution.tree);
+        } else {
+          lang ??= sup.language(file);
+          tree = parseWithJsLanguage(src, lang);
+        }
+      }
+      if (!sup || src === undefined || !tree) {
         throw new Error(`Failed to parse ${file}`);
       }
 
@@ -1746,17 +1753,17 @@ export async function buildSymbolGraphDetailed(
       // Collect function-like declarations (JS/TS: function_declaration, arrow/function expressions bound to vars; Python: function_definition)
       const functionNodes: Array<{
         name: string;
-        node: Parser.SyntaxNode;
+        node: SyntaxNodeLike;
         def: SymbolDef;
       }> = [];
       const classNodes: Array<{
         name: string;
-        node: Parser.SyntaxNode;
+        node: SyntaxNodeLike;
         def: SymbolDef;
       }> = [];
       // Collect simple constant string bindings for resolving computed member keys, e.g., const k = "x"; obj[k]
       const constStringOf = new Map<string, string>();
-      const collectConsts = (n: Parser.SyntaxNode) => {
+      const collectConsts = (n: SyntaxNodeLike) => {
         if (n.type === "variable_declarator") {
           const nameNode = n.childForFieldName("name");
           const valueNode = n.childForFieldName("value");
@@ -1782,7 +1789,7 @@ export async function buildSymbolGraphDetailed(
         "optional_chain",
         sup.id === "python" ? "attribute" : "",
       ]);
-      const walkCollect = (n: Parser.SyntaxNode) => {
+      const walkCollect = (n: SyntaxNodeLike) => {
         if (
           n.type === "function_declaration" ||
           n.type === "function_definition" ||
@@ -1848,8 +1855,8 @@ export async function buildSymbolGraphDetailed(
 
       // For each function, look for identifier occurrences of imported aliases in its subtree
       const scanForAliasUse = (
-        node: Parser.SyntaxNode,
-        cb: (name: string, atNode: Parser.SyntaxNode) => void,
+        node: SyntaxNodeLike,
+        cb: (name: string, atNode: SyntaxNodeLike) => void,
       ) => {
         if (isIdentifierType(sup, node.type)) {
           const name = sliceText(node, src);
@@ -1865,7 +1872,7 @@ export async function buildSymbolGraphDetailed(
       };
 
       const tryResolveNode = (
-        node: Parser.SyntaxNode,
+        node: SyntaxNodeLike,
         fromId: string,
         label: string,
       ) => {
@@ -1901,8 +1908,8 @@ export async function buildSymbolGraphDetailed(
       ]);
 
       const getCallTarget = (
-        n: Parser.SyntaxNode,
-      ): Parser.SyntaxNode | null => {
+        n: SyntaxNodeLike,
+      ): SyntaxNodeLike | null => {
         const explicitTarget =
           n.childForFieldName("function") ??
           n.childForFieldName("callee") ??
@@ -1919,7 +1926,7 @@ export async function buildSymbolGraphDetailed(
           : null;
       };
 
-      const getNewTarget = (n: Parser.SyntaxNode) =>
+      const getNewTarget = (n: SyntaxNodeLike) =>
         n.childForFieldName("constructor") ??
         n.childForFieldName("type") ??
         n.childForFieldName("name") ??
@@ -1927,14 +1934,14 @@ export async function buildSymbolGraphDetailed(
         n.child(0);
 
       const tryResolveChain = (
-        node: Parser.SyntaxNode,
+        node: SyntaxNodeLike,
         fromId?: string,
         label = "uses",
       ) => {
         const names: string[] = [];
-        let cur: Parser.SyntaxNode | null = node;
-        let base: Parser.SyntaxNode | null = null;
-        const pushProp = (p: Parser.SyntaxNode | null) => {
+        let cur: SyntaxNodeLike | null = node;
+        let base: SyntaxNodeLike | null = null;
+        const pushProp = (p: SyntaxNodeLike | null) => {
           if (!p) return;
           if (propertyIdentifierTypes.includes(p.type))
             names.push(sliceText(p, src));
@@ -2009,7 +2016,7 @@ export async function buildSymbolGraphDetailed(
 
       // Collect Python decorators on functions and add uses edges
       if (sup.id === "python") {
-        const addDecoratorUses = (n: Parser.SyntaxNode) => {
+        const addDecoratorUses = (n: SyntaxNodeLike) => {
           if (n.type === "decorated_definition") {
             const fn = n.namedChildren.find(
               (child) => child.type === "function_definition",
@@ -2077,7 +2084,7 @@ export async function buildSymbolGraphDetailed(
         if (!membersOnly)
           scanForAliasUse(
             fn.node,
-            (name: string, atNode: Parser.SyntaxNode) => {
+            (name: string, atNode: SyntaxNodeLike) => {
               if (seenAliases.has(name)) return;
               let target: SymbolDef | null = aliasToTargetDef.get(name) ?? null;
               if (!target) {
@@ -2118,12 +2125,12 @@ export async function buildSymbolGraphDetailed(
           );
 
         // Walk for member expressions of namespace imports: alias.member
-        const walkForMembers = (n: Parser.SyntaxNode) => {
-          const tryResolveChainLocal = (node: Parser.SyntaxNode) => {
+        const walkForMembers = (n: SyntaxNodeLike) => {
+          const tryResolveChainLocal = (node: SyntaxNodeLike) => {
             const names: string[] = [];
-            let cur: Parser.SyntaxNode | null = node;
-            let base: Parser.SyntaxNode | null = null;
-            const pushProp = (p: Parser.SyntaxNode | null) => {
+            let cur: SyntaxNodeLike | null = node;
+            let base: SyntaxNodeLike | null = null;
+            const pushProp = (p: SyntaxNodeLike | null) => {
               if (!p) return;
               if (propertyIdentifierTypes.includes(p.type))
                 names.push(sliceText(p, src));
@@ -2207,7 +2214,7 @@ export async function buildSymbolGraphDetailed(
         };
         walkForMembers(fn.node);
 
-        const walkForCalls = (n: Parser.SyntaxNode) => {
+        const walkForCalls = (n: SyntaxNodeLike) => {
           if (callNodeTypes.has(n.type)) {
             if (sup.id === "go") {
               const callTarget = getCallTarget(n);
@@ -2254,7 +2261,7 @@ export async function buildSymbolGraphDetailed(
         walkForCalls(fn.node);
       }
 
-      const collectIdentifiers = (n: Parser.SyntaxNode, out: string[]) => {
+      const collectIdentifiers = (n: SyntaxNodeLike, out: string[]) => {
         if (isIdentifierType(sup, n.type) || n.type === "type_identifier") {
           out.push(sliceText(n, src));
         }
@@ -2262,9 +2269,9 @@ export async function buildSymbolGraphDetailed(
       };
 
       const findFirstNodeByType = (
-        node: Parser.SyntaxNode,
+        node: SyntaxNodeLike,
         type: string,
-      ): Parser.SyntaxNode | null => {
+      ): SyntaxNodeLike | null => {
         for (const ch of node.namedChildren ?? []) {
           if (ch.type === type) return ch;
           const found = findFirstNodeByType(ch, type);
@@ -2274,9 +2281,9 @@ export async function buildSymbolGraphDetailed(
       };
 
       const collectNodesByType = (
-        node: Parser.SyntaxNode,
+        node: SyntaxNodeLike,
         type: string,
-        out: Parser.SyntaxNode[],
+        out: SyntaxNodeLike[],
       ) => {
         for (const ch of node.namedChildren ?? []) {
           if (ch.type === type) out.push(ch);
@@ -2331,7 +2338,7 @@ export async function buildSymbolGraphDetailed(
           superClause?.namedChildren?.[0] ?? superClause?.child(1);
         if (superNode) tryResolveNode(superNode, fromId, "extends");
 
-        const implementsClauses: Parser.SyntaxNode[] = [];
+        const implementsClauses: SyntaxNodeLike[] = [];
         collectNodesByType(cls.node, "implements_clause", implementsClauses);
         for (const clause of implementsClauses) {
           const names: string[] = [];
@@ -2347,7 +2354,7 @@ export async function buildSymbolGraphDetailed(
       }
 
       if (sup.id === "rust") {
-        const walkImpls = (node: Parser.SyntaxNode) => {
+        const walkImpls = (node: SyntaxNodeLike) => {
           if (node.type === "impl_item") {
             const typeIdentifiers =
               node.namedChildren?.filter(

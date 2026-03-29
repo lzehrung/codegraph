@@ -1,6 +1,12 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import {
+  executeJsQueryAsNativeMatches as executeJsQueryAsNativeMatchesViaPackage,
+  type JsLanguage,
+  type JsNativeMatch,
+  type JsSyntaxTree,
+} from "@lzehrung/codegraph-native/js-fallback";
 import type { LanguageSupport } from "../languages.js";
 import type { NativeQueryKind } from "../languages/types.js";
 import { stringifyUnknown } from "../util.js";
@@ -36,6 +42,23 @@ export type NativeQueryResults = {
   exports: NativeMatch[];
   locals: NativeMatch[];
   importBindings: NativeMatch[];
+};
+
+export type NativeSyntaxNode = {
+  id: number;
+  parentId: number;
+  nodeType: string;
+  named: boolean;
+  start: NativePoint;
+  end: NativePoint;
+  childIds: number[];
+  namedChildIds: number[];
+  childFieldNames: string[];
+};
+
+export type NativeSyntaxTree = {
+  rootId: number;
+  nodes: NativeSyntaxNode[];
 };
 
 export type CompactCapture = {
@@ -81,6 +104,15 @@ type NativeBinding = {
     languageId: string,
     importsQuery: string,
   ) => CompactQueryResults;
+  runQuery?: (
+    source: string,
+    languageId: string,
+    queryText: string,
+  ) => { matches: NativeMatch[] };
+  parseSyntaxTree?: (
+    source: string,
+    languageId: string,
+  ) => NativeSyntaxTree;
   supportedLanguageIds: () => string[];
 };
 
@@ -351,6 +383,25 @@ export type CompactImportsExecution = {
   error?: string;
 };
 
+export type NativeSingleQueryExecution = {
+  matches: NativeMatch[] | null;
+  fallbackReason?: "unavailable" | "unsupportedLanguage" | "queryFailure";
+  error?: string;
+};
+
+export type UnifiedQueryExecution = {
+  matches: NativeMatch[] | null;
+  backend: "native" | "js";
+  fallbackReason?: "unavailable" | "unsupportedLanguage" | "queryFailure";
+  error?: string;
+};
+
+export type NativeSyntaxTreeExecution = {
+  tree: NativeSyntaxTree | null;
+  fallbackReason?: "unavailable" | "unsupportedLanguage" | "queryFailure";
+  error?: string;
+};
+
 /**
  * Run only the imports query with a compact payload (name + text only).
  * Falls back to the full execution path if the compact entrypoint is not
@@ -404,6 +455,162 @@ export function getCompactImportsExecution(
   } catch (error) {
     return {
       results: null,
+      fallbackReason: "queryFailure",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export function getNativeSingleQueryExecution(
+  source: string,
+  support: LanguageSupport,
+  queryText: string,
+  mode?: NativeRuntimeMode,
+): NativeSingleQueryExecution {
+  const state = resolveNativeBindingState(mode);
+  if (!state.loaded) {
+    return {
+      matches: null,
+      fallbackReason: "unavailable",
+      ...(state.error
+        ? {
+            error:
+              state.error instanceof Error
+                ? state.error.message
+                : stringifyUnknown(state.error),
+          }
+        : {}),
+    };
+  }
+  if (!state.supportedLanguageIds.has(support.id)) {
+    return { matches: null, fallbackReason: "unsupportedLanguage" };
+  }
+  if (!state.binding.runQuery) {
+    return {
+      matches: null,
+      fallbackReason: "unavailable",
+      error: "native binding does not expose runQuery",
+    };
+  }
+  try {
+    return {
+      matches: state.binding.runQuery(source, support.id, queryText).matches,
+    };
+  } catch (error) {
+    return {
+      matches: null,
+      fallbackReason: "queryFailure",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export function executeJsQueryAsNativeMatches(
+  source: string,
+  support: LanguageSupport,
+  lang: JsLanguage,
+  queryText: string,
+  tree?: JsSyntaxTree,
+): NativeMatch[] {
+  return executeJsQueryAsNativeMatchesViaPackage(
+    source,
+    lang,
+    queryText,
+    tree,
+  ) as NativeMatch[] & JsNativeMatch[];
+}
+
+export function getUnifiedQueryExecution(
+  source: string,
+  support: LanguageSupport,
+  queryText: string,
+  opts?: {
+    tree?: JsSyntaxTree;
+    mode?: NativeRuntimeMode;
+    lang?: JsLanguage;
+    getLanguage?: () => JsLanguage;
+  },
+): UnifiedQueryExecution {
+  const nativeExecution = getNativeSingleQueryExecution(
+    source,
+    support,
+    queryText,
+    opts?.mode,
+  );
+  if (nativeExecution.matches) {
+    return {
+      matches: nativeExecution.matches,
+      backend: "native",
+    };
+  }
+  try {
+    const resolvedLang = opts?.lang ?? opts?.getLanguage?.();
+    if (!resolvedLang) {
+      throw new Error("JS query fallback requires a language");
+    }
+    const matches = executeJsQueryAsNativeMatches(
+      source,
+      support,
+      resolvedLang,
+      queryText,
+      opts?.tree,
+    );
+    return {
+      matches,
+      backend: "js",
+      ...(nativeExecution.fallbackReason
+        ? { fallbackReason: nativeExecution.fallbackReason }
+        : {}),
+      ...(nativeExecution.error ? { error: nativeExecution.error } : {}),
+    };
+  } catch (error) {
+    return {
+      matches: null,
+      backend: "js",
+      fallbackReason:
+        nativeExecution.fallbackReason ?? "queryFailure",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export function getNativeSyntaxTreeExecution(
+  source: string,
+  support: LanguageSupport,
+  mode?: NativeRuntimeMode,
+): NativeSyntaxTreeExecution {
+  const state = resolveNativeBindingState(mode);
+  if (!state.loaded) {
+    return {
+      tree: null,
+      fallbackReason: "unavailable",
+      ...(state.error
+        ? {
+            error:
+              state.error instanceof Error
+                ? state.error.message
+                : stringifyUnknown(state.error),
+          }
+        : {}),
+    };
+  }
+  if (!state.supportedLanguageIds.has(support.id)) {
+    return { tree: null, fallbackReason: "unsupportedLanguage" };
+  }
+  if (!state.binding.parseSyntaxTree) {
+    return {
+      tree: null,
+      fallbackReason: "unavailable",
+      error: "native binding does not expose parseSyntaxTree",
+    };
+  }
+  try {
+    return {
+      tree: state.binding.parseSyntaxTree(source, support.id),
+    };
+  } catch (error) {
+    return {
+      tree: null,
       fallbackReason: "queryFailure",
       error: error instanceof Error ? error.message : String(error),
     };

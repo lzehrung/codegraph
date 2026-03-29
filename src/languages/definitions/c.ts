@@ -1,5 +1,4 @@
-import type { SyntaxNode } from "tree-sitter";
-import type { LanguageDefinition } from "../types.js";
+import type { LanguageDefinition, SyntaxNodeLike } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
@@ -21,8 +20,11 @@ const GRAPH_FUNCTION_NAME_QUERY = `
   ]
 `;
 
-const isWithin = (node: SyntaxNode, ancestor: SyntaxNode | null): boolean => {
-  let current: SyntaxNode | null = node;
+const isWithin = (
+  node: SyntaxNodeLike,
+  ancestor: SyntaxNodeLike | null,
+): boolean => {
+  let current: SyntaxNodeLike | null = node;
   while (current) {
     if (ancestor && current.id === ancestor.id) return true;
     current = current.parent;
@@ -31,16 +33,16 @@ const isWithin = (node: SyntaxNode, ancestor: SyntaxNode | null): boolean => {
 };
 
 const isInField = (
-  node: SyntaxNode,
-  parent: SyntaxNode,
+  node: SyntaxNodeLike,
+  parent: SyntaxNodeLike,
   field: string,
 ): boolean => isWithin(node, parent.childForFieldName(field));
 
 const findAncestor = (
-  node: SyntaxNode,
+  node: SyntaxNodeLike,
   types: Set<string>,
-): SyntaxNode | null => {
-  let current: SyntaxNode | null = node.parent;
+): SyntaxNodeLike | null => {
+  let current: SyntaxNodeLike | null = node.parent;
   while (current) {
     if (types.has(current.type)) return current;
     current = current.parent;
@@ -59,10 +61,12 @@ const containerTypes = new Set([
 
 const paramListTypes = new Set(["parameter_declaration", "parameter_list"]);
 
-const isInParameterList = (node: SyntaxNode): boolean =>
+const isInParameterList = (node: SyntaxNodeLike): boolean =>
   !!findAncestor(node, paramListTypes);
 
-const resolveDeclaratorRoot = (ancestor: SyntaxNode): SyntaxNode | null => {
+const resolveDeclaratorRoot = (
+  ancestor: SyntaxNodeLike,
+): SyntaxNodeLike | null => {
   let declaratorNode = ancestor.childForFieldName("declarator");
   if (!declaratorNode) return null;
   if (declaratorNode.type === "init_declarator") {
@@ -77,7 +81,7 @@ const resolveDeclaratorRoot = (ancestor: SyntaxNode): SyntaxNode | null => {
 };
 
 const isInAncestorDeclarator = (
-  node: SyntaxNode,
+  node: SyntaxNodeLike,
   ancestorTypes: Set<string>,
 ): boolean => {
   const ancestor = findAncestor(node, ancestorTypes);
@@ -87,8 +91,8 @@ const isInAncestorDeclarator = (
   return isWithin(node, declaratorNode);
 };
 
-const isFunctionDeclarator = (node: SyntaxNode): boolean => {
-  let current: SyntaxNode | null = node.parent;
+const isFunctionDeclarator = (node: SyntaxNodeLike): boolean => {
+  let current: SyntaxNodeLike | null = node.parent;
   while (current) {
     if (current.type === "function_declarator") return true;
     if (containerTypes.has(current.type)) return false;

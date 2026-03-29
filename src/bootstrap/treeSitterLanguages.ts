@@ -33,5 +33,5 @@ for (const lang of getAllLanguages()) {
   const key = idToConfigKey[lang.id] || lang.id;
   // Skip languages that are not used for direct semantic chunking
   if (lang.id === "vue" || lang.id === "svelte") continue;
-  LANG_CONFIGS[key] = makeLanguageConfig(lang);
+  LANG_CONFIGS[key] = makeLanguageConfig(lang, key);
 }
