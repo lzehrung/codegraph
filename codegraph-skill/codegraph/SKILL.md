@@ -7,14 +7,14 @@ description: Static code analysis and dependency graph tool for deep codebase un
 
 ## Overview
 
-Codegraph is a lightweight multi-language code analysis tool that builds dependency graphs, symbol indexes, go-to-definition maps, and PR impact reports. It uses one shared Tree-sitter model across languages. Native runtime mode defaults to `auto`: when the optional native package is installed, Codegraph runs supported Tree-sitter parse/query work in Rust automatically; otherwise it falls back to the JS Tree-sitter path automatically.
+Codegraph is a lightweight multi-language code analysis tool that builds dependency graphs, symbol indexes, go-to-definition maps, and PR impact reports. It uses one shared Tree-sitter model across languages. Native runtime mode defaults to `auto`: Codegraph resolves parse/query work through `@lzehrung/codegraph-native`, using the native addon when available and the package-hosted JS fallback path when native is unavailable or explicitly disabled.
 
 ## Installation Notes
 
 - Package name: `@lzehrung/codegraph`
 - CLI command: `codegraph`
-- Optional native package: `@lzehrung/codegraph-native`
-- For published installs, the native package is pulled in automatically when a compatible binary package exists for the current platform.
+- Native backend package: `@lzehrung/codegraph-native`
+- Published installs of `@lzehrung/codegraph` depend on `@lzehrung/codegraph-native` directly; that package resolves the matching native artifact automatically when one exists for the current platform.
 - For source checkouts, build the native addon locally with:
   `npm run build:native`
 - Global default override: `CODEGRAPH_DISABLE_NATIVE=1`
@@ -26,6 +26,8 @@ Assuming the tool is available as `codegraph` (or via `npx codegraph` inside a p
 
 ### 1. Dependency graphs
 
+- Whole-repo graph:
+  `codegraph graph ./`
 - Fast overview:
   `codegraph graph ./src --fast-graph`
 - Full AST-based graph:
@@ -34,6 +36,7 @@ Assuming the tool is available as `codegraph` (or via `npx codegraph` inside a p
   `codegraph graph ./src --mermaid`
 - Detailed symbol graph:
   `codegraph graph ./src --symbols-detailed --compact-json`
+- For monorepos, prefer explicit roots such as `./src ./packages/app ./packages/lib` when you want product code only; use `./` when you intentionally want the whole repo.
 - SQLite export:
   `codegraph graph --sqlite ./codegraph.sqlite`
 - Raw SQL on exported SQLite:
@@ -98,7 +101,7 @@ const jsOnlyIndex = await buildProjectIndex(root, { native: "off" });
 const workerIndex = await buildProjectIndex(root, { useNativeWorkers: true });
 ```
 
-There is no separate native import. Use `native: "auto" | "on" | "off"` in public API calls to control native usage explicitly.
+There is no separate native import. Use `native: "auto" | "on" | "off"` in public API calls to control native usage explicitly. `native: "off"` means the package-hosted JS fallback path.
 
 Agent-tool wrappers accept the same control as a trailing runtime option, for example:
 

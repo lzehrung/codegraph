@@ -43,10 +43,10 @@
     "publish:patch": "node ./scripts/release.mjs patch --publish",
     "publish:minor": "node ./scripts/release.mjs minor --publish",
     "publish:major": "node ./scripts/release.mjs major --publish",
-    "graph:default": "codegraph graph ./src",
-    "graph:json": "codegraph graph ./src --json --symbols-detailed --progress --compact-json > codegraph.json",
-    "graph:mermaid": "codegraph graph ./src --mermaid --progress --symbols-detailed > graph.mermaid.mmd",
-    "graph:dot": "codegraph graph ./src --dot --progress --symbols-detailed > graph.dot",
+    "graph:default": "codegraph graph ./",
+    "graph:json": "codegraph graph ./ --json --symbols-detailed --progress --compact-json > codegraph.json",
+    "graph:mermaid": "codegraph graph ./ --mermaid --progress --symbols-detailed > graph.mermaid.mmd",
+    "graph:dot": "codegraph graph ./ --dot --progress --symbols-detailed > graph.dot",
     "visualizer:start": "http-server ./docs/graph-visualization -p 4173 -c-1",
     "build:native": "npm run build --workspace=@lzehrung/codegraph-native",
     "native:create-npm-dirs": "npm run create-npm-dirs --workspace=@lzehrung/codegraph-native",
@@ -109,36 +109,14 @@
     "vitest": "^3.2.4"
   },
   "dependencies": {
+    "@lzehrung/codegraph-native": "^1.8.33",
     "better-sqlite3": "^12.5.0",
     "fast-glob": "^3.3.3",
     "picomatch": "^4.0.3",
     "piscina": "^4.5.1",
-    "tree-sitter": "^0.25.0",
-    "tree-sitter-c": "^0.24.1",
-    "tree-sitter-c-sharp": "^0.23.1",
-    "tree-sitter-cpp": "^0.23.4",
-    "tree-sitter-css": "^0.25.0",
-    "tree-sitter-go": "^0.25.0",
-    "tree-sitter-html": "^0.23.2",
-    "tree-sitter-java": "^0.23.5",
-    "tree-sitter-javascript": "^0.25.0",
-    "tree-sitter-kotlin": "^0.3.8",
-    "tree-sitter-python": "^0.25.0",
-    "tree-sitter-ruby": "^0.23.1",
-    "tree-sitter-rust": "^0.24.0",
-    "tree-sitter-scss": "^1.0.0",
-    "tree-sitter-svelte": "^0.11.0",
-    "tree-sitter-swift": "^0.7.1",
-    "tree-sitter-typescript": "^0.23.2",
-    "tree-sitter-vue": "^0.2.1",
     "tsconfig-paths": "^4.2.0"
   },
-  "optionalDependencies": {
-    "@lzehrung/codegraph-native": "^1.8.33"
-  },
   "overrides": {
-    "tree-sitter": "^0.25.0",
-    "tree-sitter-css": "^0.25.0",
     "node-addon-api": "^8.5.0"
   }
 }

@@ -1,10 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { collectLocalsAndExportsFromSource } from "../../src/indexer.js";
 import { PY_SUPPORT } from "../../src/languages.js";
-import { loadTreeSitterLanguage } from "../../src/languages/definitions/loadLanguage.js";
 
 describe("Python __all__ exports", () => {
-  const lang = loadTreeSitterLanguage("tree-sitter-python");
+  const lang = PY_SUPPORT.language("test.py");
 
   it("extracts exports from __all__ tuple assignment", async () => {
     const source = `

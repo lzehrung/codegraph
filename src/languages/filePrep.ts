@@ -1,5 +1,5 @@
 import fsp from "node:fs/promises";
-import type Parser from "tree-sitter";
+import type { JsLanguage } from "../languages/types.js";
 
 import {
   JS_SUPPORT,
@@ -18,7 +18,12 @@ import {
 interface ParserInput {
   source: string;
   sup: LanguageSupport;
-  lang: Parser.Language;
+  lang: JsLanguage;
+}
+
+interface SourceInput {
+  source: string;
+  sup: LanguageSupport;
 }
 
 export class UnsupportedParserInputError extends Error {
@@ -41,10 +46,21 @@ export async function prepareParserInput(
   file: string,
   opts?: { source?: string },
 ): Promise<ParserInput> {
+  const prepared = await prepareSourceInput(file, opts);
+  return {
+    ...prepared,
+    lang: prepared.sup.language(file),
+  };
+}
+
+export async function prepareSourceInput(
+  file: string,
+  opts?: { source?: string },
+): Promise<SourceInput> {
   const framework = detectSFCFramework(file);
   if (framework) {
     const rawSource = opts?.source ?? (await fsp.readFile(file, "utf8"));
-    return prepareSFCParserInput(file, rawSource, framework);
+    return prepareSFCSourceInput(rawSource, framework);
   }
 
   const sup = supportForFile(file);
@@ -53,7 +69,6 @@ export async function prepareParserInput(
   return {
     source: rawSource,
     sup,
-    lang: sup.language(file),
   };
 }
 
@@ -63,20 +78,18 @@ export function isUnsupportedParserInputError(
   return error instanceof UnsupportedParserInputError;
 }
 
-async function prepareSFCParserInput(
-  file: string,
+function prepareSFCSourceInput(
   source: string,
   framework: SFCFramework,
-): Promise<ParserInput> {
+): SourceInput {
   const { maskedSource, scriptLangId } = prepareSFCScriptSource(
     source,
     framework,
   );
   const sup =
     SCRIPT_SUPPORT_MAP[scriptLangId] ?? supportById(scriptLangId) ?? JS_SUPPORT;
-  return Promise.resolve({
+  return {
     source: maskedSource,
     sup,
-    lang: sup.language(file),
-  });
+  };
 }

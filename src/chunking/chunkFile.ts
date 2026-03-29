@@ -1,6 +1,10 @@
-import type { QueryMatch, SyntaxNode } from "tree-sitter";
-
 import type { LanguageConfig } from "./languageConfig.js";
+import { supportById } from "../languages.js";
+import {
+  executeJsQueryAsNativeMatches,
+  getNativeSingleQueryExecution,
+  type NativeMatch,
+} from "../native/treeSitterNative.js";
 
 /**
  * Represents a semantic chunk of code or text, ready for LLM processing or vector embeddings.
@@ -34,6 +38,20 @@ interface BlockCandidate {
   startLine: number;
   endLine: number;
 }
+
+type ChunkCapture = {
+  name: string;
+  text: string;
+  startByte: number;
+  endByte: number;
+  startLine: number;
+  endLine: number;
+  nodeType: string;
+};
+
+type ChunkMatch = {
+  captures: ChunkCapture[];
+};
 
 /**
  * Options for semantic code chunking.
@@ -75,9 +93,7 @@ export function chunkFile(opts: ChunkFileOptions): Chunk[] {
     tokenizer = defaultTokenizer,
   } = opts;
 
-  const tree = language.parser.parse(source);
-  const root = tree.rootNode;
-  const matches: QueryMatch[] = language.query.matches(root);
+  const matches = getChunkMatches(language, source, filePath);
 
   const newlineOffsets: number[] = [];
   for (let i = 0; i < source.length; i++) {
@@ -89,69 +105,63 @@ export function chunkFile(opts: ChunkFileOptions): Chunk[] {
   const comments: BlockCandidate[] = [];
 
   for (const match of matches) {
-    let nameNode: SyntaxNode | undefined;
-    let blockNode: SyntaxNode | undefined;
-    let innerNode: SyntaxNode | undefined;
+    let nameCapture: ChunkCapture | undefined;
+    let blockCapture: ChunkCapture | undefined;
+    let innerCapture: ChunkCapture | undefined;
     let blockKind: string | undefined;
 
     for (const capture of match.captures) {
-      const { name, node } = capture;
+      const { name } = capture;
 
       if (name === language.captures.name) {
-        nameNode = node;
+        nameCapture = capture;
       }
 
       if (language.captures.comments.includes(name)) {
-        const startRow = node.startPosition.row;
-        const endRow = node.endPosition.row;
         comments.push({
           kind: name === "chunk.docstring" ? "docstring" : "comment",
-          startByte: node.startIndex,
-          endByte: node.endIndex,
-          startLine: startRow + 1,
-          endLine: endRow + 1,
+          startByte: capture.startByte,
+          endByte: capture.endByte,
+          startLine: capture.startLine,
+          endLine: capture.endLine,
         });
       }
 
       if (name === language.captures.innerBlock) {
-        innerNode = node;
+        innerCapture = capture;
       }
 
       if (
         name.startsWith(language.captures.blockPrefix) &&
         name !== language.captures.innerBlock
       ) {
-        blockNode = node;
+        blockCapture = capture;
         blockKind =
-          name.slice(language.captures.blockPrefix.length) || node.type;
+          name.slice(language.captures.blockPrefix.length) || capture.nodeType;
       }
     }
 
-    if (innerNode) {
-      const startRow = innerNode.startPosition.row;
-      const endRow = innerNode.endPosition.row;
+    if (innerCapture) {
       innerBlocks.push({
         kind: "inner",
-        startByte: innerNode.startIndex,
-        endByte: innerNode.endIndex,
-        startLine: startRow + 1,
-        endLine: endRow + 1,
+        startByte: innerCapture.startByte,
+        endByte: innerCapture.endByte,
+        startLine: innerCapture.startLine,
+        endLine: innerCapture.endLine,
       });
     }
 
-    if (blockNode) {
-      const startRow = blockNode.startPosition.row;
-      const endRow = blockNode.endPosition.row;
+    if (blockCapture) {
       const candidate: BlockCandidate = {
         kind: blockKind ?? "block",
-        startByte: blockNode.startIndex,
-        endByte: blockNode.endIndex,
-        startLine: startRow + 1,
-        endLine: endRow + 1,
+        startByte: blockCapture.startByte,
+        endByte: blockCapture.endByte,
+        startLine: blockCapture.startLine,
+        endLine: blockCapture.endLine,
       };
 
-      if (nameNode) {
-        candidate.name = nameNode.text;
+      if (nameCapture) {
+        candidate.name = nameCapture.text;
       }
 
       mainBlocks.push(candidate);
@@ -258,6 +268,52 @@ export function chunkFile(opts: ChunkFileOptions): Chunk[] {
   );
 
   return finalChunks;
+}
+
+function getChunkMatches(
+  language: LanguageConfig,
+  source: string,
+  filePath?: string | undefined,
+): ChunkMatch[] {
+  const support = supportById(language.supportId);
+  if (support) {
+    const nativeExecution = getNativeSingleQueryExecution(
+      source,
+      support,
+      language.queryText,
+    );
+    if (nativeExecution.matches) {
+      return nativeExecution.matches.map(toChunkMatchFromNative);
+    }
+
+    try {
+      const matches = executeJsQueryAsNativeMatches(
+        source,
+        support,
+        language.definition.grammar(filePath),
+        language.queryText,
+      );
+      return matches.map(toChunkMatchFromNative);
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+}
+
+function toChunkMatchFromNative(match: NativeMatch): ChunkMatch {
+  return {
+    captures: match.captures.map((capture) => ({
+      name: capture.name,
+      text: capture.text,
+      startByte: capture.start.index,
+      endByte: capture.end.index,
+      startLine: capture.start.row + 1,
+      endLine: capture.end.row + 1,
+      nodeType: capture.nodeType,
+    })),
+  };
 }
 
 function splitLargeBlockSimple(

@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import Parser from "tree-sitter";
 import type {
   LanguageDefinition,
+  JsLanguage,
   NativeCompatibility,
+  SyntaxNodeLike,
 } from "./languages/types.js";
 import { getAllLanguages, getLanguageById } from "./languages/registry.js";
 import "./languages/all.js";
@@ -13,7 +14,7 @@ export type IdentifierNodeType = string;
 export type LanguageSupport = {
   id: string;
   matchExts: string[];
-  language: (filename: string) => Parser.Language;
+  language: (filename: string) => JsLanguage;
   nodeTypes: {
     identifier: IdentifierNodeType[];
     propertyIdentifier?: IdentifierNodeType[];
@@ -26,10 +27,10 @@ export type LanguageSupport = {
     locals: string;
     importBindings: string;
   };
-  classifyDefinition: (nameNode: Parser.SyntaxNode) => string;
-  isDeclarationName: (node: Parser.SyntaxNode) => boolean;
-  createsBlockScope: (node: Parser.SyntaxNode) => boolean;
-  createsFunctionScope: (node: Parser.SyntaxNode) => boolean;
+  classifyDefinition: (nameNode: SyntaxNodeLike) => string;
+  isDeclarationName: (node: SyntaxNodeLike) => boolean;
+  createsBlockScope: (node: SyntaxNodeLike) => boolean;
+  createsFunctionScope: (node: SyntaxNodeLike) => boolean;
   supportsCrossModuleSymbols: boolean;
   isTypeOnly: (stmtText: string) => boolean;
   native?: NativeCompatibility;
@@ -84,7 +85,7 @@ export function supportForFile(filename: string): LanguageSupport | undefined {
   }
   return LANGUAGE_SUPPORTS.find((s) => s.matchExts.includes(ext));
 }
-export function languageForFile(filename: string): Parser.Language {
+export function languageForFile(filename: string): JsLanguage {
   const sup = supportForFile(filename);
   if (!sup) throw new Error(`Unsupported file extension: ${filename}`);
   return sup.language(filename);
@@ -109,36 +110,4 @@ function readFileSample(filePath: string): string | null {
 
 function isLikelyCppHeader(sample: string): boolean {
   return CPP_HEADER_HINT.test(sample);
-}
-
-// ---------------- Compiled query cache (per language grammar) ----------------
-type CompiledQueries = {
-  imports: Parser.Query;
-  exports: Parser.Query;
-  locals: Parser.Query;
-  importBindings: Parser.Query;
-};
-const queryCache = new WeakMap<Parser.Language, Map<string, CompiledQueries>>();
-
-export function getCompiledQueries(
-  lang: Parser.Language,
-  support: LanguageSupport,
-): CompiledQueries {
-  let bySupport = queryCache.get(lang);
-  if (!bySupport) {
-    bySupport = new Map<string, CompiledQueries>();
-    queryCache.set(lang, bySupport);
-  }
-  const key = support.id;
-  let cq = bySupport.get(key);
-  if (!cq) {
-    cq = {
-      imports: new Parser.Query(lang, support.queries.imports),
-      exports: new Parser.Query(lang, support.queries.exports),
-      locals: new Parser.Query(lang, support.queries.locals),
-      importBindings: new Parser.Query(lang, support.queries.importBindings),
-    };
-    bySupport.set(key, cq);
-  }
-  return cq;
 }
