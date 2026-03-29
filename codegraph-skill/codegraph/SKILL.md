@@ -26,6 +26,8 @@ Assuming the tool is available as `codegraph` (or via `npx codegraph` inside a p
 
 ### 1. Dependency graphs
 
+- Whole-repo graph:
+  `codegraph graph ./`
 - Fast overview:
   `codegraph graph ./src --fast-graph`
 - Full AST-based graph:
@@ -34,6 +36,7 @@ Assuming the tool is available as `codegraph` (or via `npx codegraph` inside a p
   `codegraph graph ./src --mermaid`
 - Detailed symbol graph:
   `codegraph graph ./src --symbols-detailed --compact-json`
+- For monorepos, prefer explicit roots such as `./src ./packages/app ./packages/lib` when you want product code only; use `./` when you intentionally want the whole repo.
 - SQLite export:
   `codegraph graph --sqlite ./codegraph.sqlite`
 - Raw SQL on exported SQLite:
