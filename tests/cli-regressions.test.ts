@@ -86,6 +86,37 @@ describe('CLI regressions', () => {
     expect(graph.edges).toBeInstanceOf(Array);
   });
 
+  it('graph --root on an absolute path writes JSON output and progress to stderr', async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-cli-abs-root-'));
+    const outPath = path.join(tmpDir, 'graph.json');
+    const result = await runCliCommandDetailed([
+      'graph',
+      '--root',
+      tsRoot,
+      '--json',
+      '--symbols-detailed',
+      '--progress',
+      '--compact-json',
+      '--output',
+      outPath,
+    ]);
+
+    const raw = await fsp.readFile(outPath, 'utf8');
+    const graph = JSON.parse(raw) as {
+      files?: unknown[];
+      fileEdges?: unknown[];
+      symbols?: unknown[];
+      symbolEdges?: unknown[];
+    };
+    expect(Array.isArray(graph.files)).toBe(true);
+    expect(Array.isArray(graph.fileEdges)).toBe(true);
+    expect(Array.isArray(graph.symbols)).toBe(true);
+    expect(Array.isArray(graph.symbolEdges)).toBe(true);
+    expect(result.stderr).toContain('Backend:');
+    expect(result.stderr).toContain('files processed');
+    expect(result.stdout.trim()).toBe('');
+  });
+
   it('graph --stable produces sorted deterministic JSON', async () => {
     const args = ['graph', '--stdout', '--stable', tsRoot];
     const out1 = await runCliCommand(args);
