@@ -201,6 +201,7 @@ export type ProjectIndex = {
   graph: Graph;
   modules: Map<FileId, ModuleIndex>;
   byFile: Map<FileId, ModuleIndex>;
+  nativeMode?: NativeRuntimeMode;
   exportCache: Map<string, ResolvedExport | null>;
   scopeCache: Map<string, ScopeIndex>;
   parsed?:
@@ -235,6 +236,7 @@ type PreparedFileContext = {
   source: string;
   sup: LanguageSupport;
   lang?: JsLanguage;
+  nativeMode?: NativeRuntimeMode;
   nativeQueries: NativeQueryResults | null;
   nativeFallbackReason?: NativeBackendFallbackReason;
   nativeError?: string;
@@ -243,8 +245,12 @@ type PreparedFileContext = {
 function parsePreparedFileContext(
   context: PreparedFileContext,
 ): ParsedFileContext {
-  const { file, source, sup, nativeQueries } = context;
-  const nativeTreeExecution = getNativeSyntaxTreeExecution(source, sup);
+  const { file, source, sup, nativeMode, nativeQueries } = context;
+  const nativeTreeExecution = getNativeSyntaxTreeExecution(
+    source,
+    sup,
+    nativeMode,
+  );
   if (nativeTreeExecution.tree) {
     return {
       source,
@@ -1496,7 +1502,11 @@ export function collectLocalsAndExportsFromSource(
   support: LanguageSupport,
   lang?: JsLanguage,
   imports: ImportBinding[] = [],
-  opts?: { tree?: SyntaxTreeLike; nativeQueries?: NativeQueryResults | null },
+  opts?: {
+    tree?: SyntaxTreeLike;
+    nativeQueries?: NativeQueryResults | null;
+    nativeMode?: NativeRuntimeMode;
+  },
 ): ModuleIndex {
   const normalizeDocstringLine = (line: string) =>
     line.replace(/^\s*(?:\/\/\/?\s?|#\s?)/, "").replace(/^\s*\*\s?/, "");
@@ -1638,7 +1648,11 @@ export function collectLocalsAndExportsFromSource(
     if (tree || treeAttempted) return tree;
     treeAttempted = true;
     try {
-      const nativeTreeExecution = getNativeSyntaxTreeExecution(source, support);
+      const nativeTreeExecution = getNativeSyntaxTreeExecution(
+        source,
+        support,
+        opts?.nativeMode,
+      );
       if (nativeTreeExecution.tree) {
         tree = new ProjectedSyntaxTree(source, nativeTreeExecution.tree);
         return tree;
@@ -3296,6 +3310,7 @@ async function prepareFileForIndexing(
     file,
     source: prep.source,
     sup: prep.sup,
+    ...(native ? { nativeMode: native } : {}),
     nativeQueries: nativeExecution.results,
     ...(nativeExecution.fallbackReason
       ? { nativeFallbackReason: nativeExecution.fallbackReason }
@@ -3562,8 +3577,9 @@ async function buildIndexFromFileListShared(
           resolvedLang,
           imports,
           {
-          ...(tree ? { tree } : {}),
-          ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+            ...(tree ? { tree } : {}),
+            ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+            ...(opts?.native ? { nativeMode: opts.native } : {}),
           },
         );
         mod.imports = imports;
@@ -3797,6 +3813,7 @@ async function buildIndexFromFileListShared(
     graph,
     modules,
     byFile: modules,
+    ...(opts?.native ? { nativeMode: opts.native } : {}),
     exportCache: new Map(),
     scopeCache: new Map(),
     parsed: keepParsed ? parsedMap : undefined,
@@ -3976,6 +3993,7 @@ export async function buildProjectIndexIncremental(
         graph: { nodes: new Set(), edges: [] },
         modules: new Map(),
         byFile: new Map(),
+        ...(opts?.native ? { nativeMode: opts.native } : {}),
         exportCache: new Map(),
         scopeCache: new Map(),
         parsed: new Map(),
@@ -4144,6 +4162,7 @@ export async function buildProjectIndexIncremental(
             {
               ...(tree ? { tree } : {}),
               ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+              ...(opts?.native ? { nativeMode: opts.native } : {}),
             },
           );
           mod.imports = imports;
@@ -4357,6 +4376,7 @@ export async function buildProjectIndexIncremental(
       graph,
       modules,
       byFile: modules,
+      ...(opts?.native ? { nativeMode: opts.native } : {}),
       exportCache: new Map(),
       scopeCache: new Map(),
       parsed: keepParsed ? parsedMap : undefined,

@@ -39,11 +39,12 @@ export interface LanguageConfig {
  */
 export function makeLanguageConfig(
   def: LanguageDefinition,
+  publicId = def.id,
 ): LanguageConfig {
   const queryText = generateChunkingQuery(def);
 
   return {
-    id: def.id,
+    id: publicId,
     supportId: def.id,
     queryText,
     definition: def,

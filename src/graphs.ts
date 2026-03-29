@@ -1697,7 +1697,11 @@ export async function buildSymbolGraphDetailed(
         src = prep.source;
       }
       if (sup && src !== undefined && !tree) {
-        const nativeTreeExecution = getNativeSyntaxTreeExecution(src, sup);
+        const nativeTreeExecution = getNativeSyntaxTreeExecution(
+          src,
+          sup,
+          index.nativeMode,
+        );
         if (nativeTreeExecution.tree) {
           tree = new ProjectedSyntaxTree(src, nativeTreeExecution.tree);
         } else {

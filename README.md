@@ -361,9 +361,10 @@ npx codegraph index --native on --report
 # Emit a JSON timing/cache report to stderr (or a file)
 npx codegraph index --report
 npx codegraph review --report --report-file review.report.json
-# Compare native vs forced-JS indexing on representative fixtures
+# Compare native addon vs forced package-hosted JS fallback on representative fixtures
 npm run bench:native
 # `bench:native` now includes both cold and warm full-index runs plus graph-only runs by default.
+# In benchmark output, `js` means the `native: "off"` package-hosted JS fallback path.
 # Warm full-index runs measure cache-reuse behavior, so their measured backend counters can be zero even when the warmup pass used native parsing.
 # Use `--fixtures repo` when you want to benchmark the codegraph repo itself instead of the smaller sample fixture sets.
 # Benchmark output reports processed file count and resulting graph node count separately for graph workloads.

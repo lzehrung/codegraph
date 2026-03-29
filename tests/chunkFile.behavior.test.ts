@@ -7,6 +7,22 @@ import { chunkTextFile } from "../src/chunking/chunkTextFile.js";
 const tokenize = (text: string) => (text.trim() ? text.trim().split(/\s+/).length : 0);
 
 describe("chunkFile detailed behavior", () => {
+  it("uses public chunking language ids while keeping internal support ids", () => {
+    expect(LANG_CONFIGS.javascript.id).toBe("javascript");
+    expect(LANG_CONFIGS.javascript.supportId).toBe("js");
+
+    const chunks = chunkFile({
+      language: LANG_CONFIGS.javascript,
+      source: "function demo() { return 1; }\n",
+      filePath: "demo.js",
+      minTokens: 1,
+      maxTokens: 50,
+      tokenizer: tokenize,
+    });
+
+    expect(chunks[0]?.languageId).toBe("javascript");
+  });
+
   it("splits large JavaScript blocks using inner control-flow hints", () => {
     const source = `
 function big(value) {
@@ -359,4 +375,3 @@ describe("chunkTextFile", () => {
     expect(combined).toContain("line 24");
   });
 });
-

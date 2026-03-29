@@ -101,7 +101,7 @@ const jsOnlyIndex = await buildProjectIndex(root, { native: "off" });
 const workerIndex = await buildProjectIndex(root, { useNativeWorkers: true });
 ```
 
-There is no separate native import. Use `native: "auto" | "on" | "off"` in public API calls to control native usage explicitly.
+There is no separate native import. Use `native: "auto" | "on" | "off"` in public API calls to control native usage explicitly. `native: "off"` means the package-hosted JS fallback path.
 
 Agent-tool wrappers accept the same control as a trailing runtime option, for example:
 
