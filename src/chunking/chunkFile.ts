@@ -1,8 +1,8 @@
 import type { LanguageConfig } from "./languageConfig.js";
 import { supportById } from "../languages.js";
 import {
+  executeJsQueryAsNativeMatches,
   getNativeSingleQueryExecution,
-  getUnifiedQueryExecution,
   type NativeMatch,
 } from "../native/treeSitterNative.js";
 
@@ -286,16 +286,16 @@ function getChunkMatches(
       return nativeExecution.matches.map(toChunkMatchFromNative);
     }
 
-    const execution = getUnifiedQueryExecution(
-      source,
-      support,
-      language.queryText,
-      {
-        getLanguage: () => language.definition.grammar(filePath),
-      },
-    );
-    if (execution.matches) {
-      return execution.matches.map(toChunkMatchFromNative);
+    try {
+      const matches = executeJsQueryAsNativeMatches(
+        source,
+        support,
+        language.definition.grammar(filePath),
+        language.queryText,
+      );
+      return matches.map(toChunkMatchFromNative);
+    } catch {
+      return [];
     }
   }
 

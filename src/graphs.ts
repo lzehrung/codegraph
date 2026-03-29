@@ -148,7 +148,7 @@ export function collectModuleSpecifiersFromSource(
 
   if (support.id === "python") {
     let queryFailed = false;
-    if (resolvedNativeImports) {
+    if (resolvedNativeImports !== null) {
       try {
         for (const match of resolvedNativeImports) {
           const stmtText =
@@ -180,7 +180,6 @@ export function collectModuleSpecifiersFromSource(
             if (mod) out.push({ spec: mod });
           }
         }
-        return out;
       } catch {
         queryFailed = true;
         out.length = 0;
@@ -194,7 +193,9 @@ export function collectModuleSpecifiersFromSource(
         for (const s of extracted) out.push({ spec: s });
       }
     }
-    return out;
+    if (out.length > 0 || resolvedNativeImports !== null || queryFailed) {
+      return out;
+    }
   }
 
   function appendUniqueSpecifiers(
@@ -935,7 +936,7 @@ export async function astGrep(
   projectRoot: string,
   querySource: string,
   patterns = [
-    "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs,html,htm,css,scss,less}",
+    "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs,html,htm,css,scss,less,kt,kts,swift,c,h,cc,cpp,cxx,c++,hpp,hh,hxx,ipp,tpp,inl}",
   ],
 ): Promise<AstGrepHit[]> {
   const hits: AstGrepHit[] = [];
@@ -984,7 +985,7 @@ export async function textGrep(
   projectRoot: string,
   patternSource: string,
   patterns = [
-    "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs,html,htm,css,scss,less}",
+    "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs,html,htm,css,scss,less,kt,kts,swift,c,h,cc,cpp,cxx,c++,hpp,hh,hxx,ipp,tpp,inl}",
   ],
   opts?: {
     ignoreCase?: boolean;

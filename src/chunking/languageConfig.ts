@@ -34,7 +34,7 @@ export interface LanguageConfig {
  * Creates a language configuration for semantic chunking.
  *
  * @param def Language definition
- * @param filename Optional filename to select the correct grammar variant (e.g. .tsx)
+ * @param publicId Public language id exposed by chunking output and lookup tables
  * @returns Language configuration object
  */
 export function makeLanguageConfig(

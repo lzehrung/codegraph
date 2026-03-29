@@ -156,7 +156,7 @@ export const DEFAULT_PROJECT_MANIFESTS = [
 ];
 
 export const DEFAULT_PROJECT_PATTERNS = [
-  "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs,html,htm,css,scss,less}",
+  "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs,html,htm,css,scss,less,kt,kts,swift,c,h,cc,cpp,cxx,c++,hpp,hh,hxx,ipp,tpp,inl}",
   ...DEFAULT_PROJECT_MANIFESTS.map((name) => `**/${name}`),
 ];
 
@@ -1690,14 +1690,24 @@ async function buildProjectSymbolIndex<TEntry extends { packageName: string | nu
     filesByPackageSymbol: new Map<string, Map<string, string[]>>(),
   };
 
-  for (const filePath of files) {
+  const indexEntries = await mapLimit(files, 8, async (filePath) => {
     try {
       const entry = await readIndexEntry(filePath);
-      if (!entry.packageName) continue;
-      addProjectSymbolFile(index, entry.packageName, filePath, entry.symbols);
+      return { filePath, entry };
     } catch {
       // Ignore unreadable files and keep indexing the project.
+      return null;
     }
+  });
+
+  for (const indexEntry of indexEntries) {
+    if (!indexEntry?.entry.packageName) continue;
+    addProjectSymbolFile(
+      index,
+      indexEntry.entry.packageName,
+      indexEntry.filePath,
+      indexEntry.entry.symbols,
+    );
   }
 
   return index;

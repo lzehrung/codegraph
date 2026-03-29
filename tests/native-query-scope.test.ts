@@ -261,4 +261,107 @@ nativeDescribe("compact imports execution", () => {
     expect(execution.results).toBeNull();
     expect(execution.fallbackReason).toBe("unavailable");
   });
+
+  it("falls back to regex extraction for Python when compact native imports are empty", () => {
+    const support = supportById("python")!;
+    const specs = collectModuleSpecifiersFromSource(
+      support,
+      undefined,
+      "import os\nfrom pkg import value\n",
+      {
+        compactNativeImports: { imports: [] },
+      },
+    );
+
+    expect(specs).toEqual([
+      { spec: "os" },
+      { spec: "pkg" },
+    ]);
+  });
+});
+
+describe("native import fallback contract by language", () => {
+  it("treats empty native imports as authoritative for TypeScript and Java", () => {
+    const cases = [
+      {
+        supportId: "ts",
+        fileName: "main.ts",
+        source: "import { foo } from './bar';\n",
+      },
+      {
+        supportId: "java",
+        fileName: "Main.java",
+        source: "package demo;\nimport demo.util.Helper;\nclass Main {}\n",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const support = supportById(testCase.supportId)!;
+      const specs = collectModuleSpecifiersFromSource(
+        support,
+        support.language(testCase.fileName),
+        testCase.source,
+        {
+          nativeQueries: {
+            imports: [],
+            exports: [],
+            locals: [],
+            importBindings: [],
+          },
+          file: testCase.fileName,
+        },
+      );
+
+      expect(specs).toEqual([]);
+    }
+  });
+
+  it("falls back to JS query extraction for Kotlin when native imports are empty", () => {
+    const support = supportById("kotlin")!;
+    const specs = collectModuleSpecifiersFromSource(
+      support,
+      support.language("Main.kt"),
+      "package demo\nimport demo.util.Helper\nclass Main\n",
+      {
+        nativeQueries: {
+          imports: [],
+          exports: [],
+          locals: [],
+          importBindings: [],
+        },
+        file: "Main.kt",
+      },
+    );
+
+    expect(specs).toEqual([{ spec: "demo.util.Helper", typeOnly: false }]);
+  });
+
+  it("uses parser fallback for Java and Kotlin when native imports are unavailable", () => {
+    const cases = [
+      {
+        supportId: "java",
+        fileName: "Main.java",
+        source: "package demo;\nimport demo.util.Helper;\nclass Main {}\n",
+        expected: [{ spec: "demo.util.Helper", typeOnly: false }],
+      },
+      {
+        supportId: "kotlin",
+        fileName: "Main.kt",
+        source: "package demo\nimport demo.util.Helper\nclass Main\n",
+        expected: [{ spec: "demo.util.Helper", typeOnly: false }],
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const support = supportById(testCase.supportId)!;
+      const specs = collectModuleSpecifiersFromSource(
+        support,
+        support.language(testCase.fileName),
+        testCase.source,
+        { file: testCase.fileName },
+      );
+
+      expect(specs).toEqual(testCase.expected);
+    }
+  });
 });

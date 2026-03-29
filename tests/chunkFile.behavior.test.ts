@@ -1,12 +1,67 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LANG_CONFIGS } from "../src/bootstrap/treeSitterLanguages.js";
 import { chunkFile } from "../src/chunking/chunkFile.js";
 import { chunkTextFile } from "../src/chunking/chunkTextFile.js";
+import * as nativeRuntime from "../src/native/treeSitterNative.js";
 
 const tokenize = (text: string) => (text.trim() ? text.trim().split(/\s+/).length : 0);
 
 describe("chunkFile detailed behavior", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("does not retry the native chunk query after the first attempt fails", () => {
+    const nativeSpy = vi
+      .spyOn(nativeRuntime, "getNativeSingleQueryExecution")
+      .mockReturnValue({
+        matches: null,
+        fallbackReason: "queryFailure",
+        error: "forced test fallback",
+      });
+    const jsFallbackSpy = vi.spyOn(nativeRuntime, "executeJsQueryAsNativeMatches");
+
+    const chunks = chunkFile({
+      language: LANG_CONFIGS.javascript,
+      source: "function demo() { return 1; }\n",
+      filePath: "demo.js",
+      minTokens: 1,
+      maxTokens: 50,
+      tokenizer: tokenize,
+    });
+
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(nativeSpy).toHaveBeenCalledTimes(1);
+    expect(jsFallbackSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the TSX grammar variant for JS fallback chunking", () => {
+    vi.spyOn(nativeRuntime, "getNativeSingleQueryExecution").mockReturnValue({
+      matches: null,
+      fallbackReason: "queryFailure",
+      error: "forced test fallback",
+    });
+
+    const chunks = chunkFile({
+      language: LANG_CONFIGS.tsx,
+      source: [
+        "type Props = { label: string };",
+        "export function Button({ label }: Props) {",
+        "  return <button>{label}</button>;",
+        "}",
+      ].join("\n"),
+      filePath: "Button.tsx",
+      minTokens: 1,
+      maxTokens: 80,
+      tokenizer: tokenize,
+    });
+
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(chunks.some((chunk) => chunk.name === "Button")).toBe(true);
+    expect(chunks.every((chunk) => chunk.languageId === "tsx")).toBe(true);
+  });
+
   it("uses public chunking language ids while keeping internal support ids", () => {
     expect(LANG_CONFIGS.javascript.id).toBe("javascript");
     expect(LANG_CONFIGS.javascript.supportId).toBe("js");

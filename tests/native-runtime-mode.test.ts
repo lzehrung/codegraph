@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import path from "node:path";
 import {
   buildProjectIndex,
@@ -10,6 +10,10 @@ import * as nativeRuntime from "../src/native/treeSitterNative.js";
 
 describe("native runtime mode", () => {
   const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   it("buildProjectIndex accepts native: off and reports native disabled", async () => {
     const report: BuildReport = { timings: {} };
