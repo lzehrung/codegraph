@@ -1,6 +1,6 @@
 {
   "name": "@lzehrung/codegraph",
-  "version": "1.8.33",
+  "version": "1.8.34",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -118,5 +118,8 @@
   },
   "overrides": {
     "node-addon-api": "^8.5.0"
+  },
+  "optionalDependencies": {
+    "@lzehrung/codegraph-native": "^1.8.34"
   }
 }
