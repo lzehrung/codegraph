@@ -1,5 +1,7 @@
 # Native Query Backend Migration Plan
 
+Status: implemented as of 2026-03-28. The document remains useful as migration history and as a checklist for guarding the final architecture.
+
 This document is the phased migration plan for making `@lzehrung/codegraph-native` the single Tree-sitter query backend for Codegraph.
 
 Target end state:
@@ -654,4 +656,3 @@ The migration is complete when all of the following are true:
 - native-only CI passes across the documented supported-language matrix
 - fallback behavior, if any remains, is explicit, narrow, and documented
 - README, parity docs, scenario catalog, and skill docs match the shipped behavior
-

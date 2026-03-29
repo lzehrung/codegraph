@@ -116,7 +116,7 @@ Sample graph: [sample-graph.md](./sample-graph.md)
 * **Vue / Svelte SFCs** (`.vue`, `.svelte`) - script blocks are parsed with the JS/TS pipeline for dependency graphs and chunking, while semantic navigation remains intentionally limited.
 
 Each listed language participates in the same shared indexing and navigation pipeline.
-When the optional native addon is available, all listed source languages use the same native Tree-sitter runtime and query model; unsupported capabilities still fall back through the shared JS path where needed.
+When the native addon is available, all listed source languages use the same native Tree-sitter runtime and query model; unsupported capabilities still fall back through the shared package-hosted JS path where needed.
 The regression suite covers deeper syntax variants and end-to-end native semantic parity for the source-language fixture set, plus graph/specifier parity for the graph-first product types.
 See the coverage matrix in [docs/language-parity.md](./docs/language-parity.md).
 
@@ -232,7 +232,7 @@ Install the package:
 npm install @lzehrung/codegraph
 ```
 
-That is the simplest way to use the native Tree-sitter path. `@lzehrung/codegraph` automatically pulls in the matching optional native package when a published binary exists for the current platform, and the library and CLI use it automatically.
+That is the simplest way to use the native Tree-sitter path. `@lzehrung/codegraph` depends on `@lzehrung/codegraph-native`, and that package resolves the matching native artifact automatically when a published binary exists for the current platform.
 
 ### Option 2: Install from the release page
 
@@ -242,11 +242,11 @@ Download and install directly from a GitHub release without configuring a regist
 npm install https://github.com/lzehrung/codegraph/releases/download/vVERSION/lzehrung-codegraph-VERSION.tgz
 ```
 
-Replace `VERSION` with the desired release version (e.g. `1.8.30`). Each release attaches a pre-built `.tgz` that `npm install` can consume by URL with no registry configuration needed. Note that this install path does not configure a scoped registry for `@lzehrung`, so npm may be unable to fetch the optional `@lzehrung/codegraph-native` package from GitHub Packages; any 404 or warning about that optional dependency is expected, and in that case codegraph will fall back to the pure JavaScript Tree-sitter implementation.
+Replace `VERSION` with the desired release version (e.g. `1.8.30`). Each release attaches a pre-built `.tgz` that `npm install` can consume by URL with no registry configuration needed. This install path still needs access to `@lzehrung/codegraph-native`, because the root package depends on it directly and that package owns both the native addon and the JS Tree-sitter fallback path.
 
 ### Option 3: Local source checkout
 
-Clone the repository and build both the TypeScript package and optional native addon:
+Clone the repository and build both the TypeScript package and the native backend package:
 
 ```bash
 git clone https://github.com/lzehrung/codegraph.git
@@ -261,11 +261,11 @@ Use this path when you are developing on codegraph itself or want to build the n
 ## Requirements
 
 * **Node.js 18+**
-* Published installs do not require Rust or a manual native setup step
+* Published installs do not require Rust or a manual native setup step on supported targets
 * Local native builds require a working Rust toolchain plus `npm run build:native`
-* If no compatible native package is available, Codegraph falls back to the JS Tree-sitter path automatically
+* If no compatible native artifact is available, Codegraph falls back through `@lzehrung/codegraph-native`'s JS Tree-sitter path automatically
 * Native runtime mode defaults to `auto`
-* Set `CODEGRAPH_DISABLE_NATIVE=1` to make `auto` prefer the JS Tree-sitter path by default
+* Set `CODEGRAPH_DISABLE_NATIVE=1` to make `auto` prefer the JS Tree-sitter fallback path by default
 * The CLI, library, and agent-tool wrappers also accept explicit native runtime overrides: `auto`, `on`, `off`
 * Explicit `native` options take precedence over `CODEGRAPH_DISABLE_NATIVE`
 
@@ -277,7 +277,7 @@ Use this path when you are developing on codegraph itself or want to build the n
 
 After installing the package, use the `codegraph` CLI:
 
-The CLI defaults to `--native auto`, which uses the native Tree-sitter path when a compatible native package is installed and falls back automatically otherwise. Use `--native on` to prefer native explicitly, or `--native off` to force the JS Tree-sitter path for comparison and debugging.
+The CLI defaults to `--native auto`, which uses the native Tree-sitter path when a compatible native artifact is available and falls back automatically otherwise. Use `--native on` to require native explicitly, or `--native off` to force the JS Tree-sitter fallback path for comparison and debugging.
 
 ```bash
 # File dependency graph only (default; no symbols)
@@ -361,9 +361,10 @@ npx codegraph index --native on --report
 # Emit a JSON timing/cache report to stderr (or a file)
 npx codegraph index --report
 npx codegraph review --report --report-file review.report.json
-# Compare native vs forced-JS indexing on representative fixtures
+# Compare native addon vs forced package-hosted JS fallback on representative fixtures
 npm run bench:native
 # `bench:native` now includes both cold and warm full-index runs plus graph-only runs by default.
+# In benchmark output, `js` means the `native: "off"` package-hosted JS fallback path.
 # Warm full-index runs measure cache-reuse behavior, so their measured backend counters can be zero even when the warmup pass used native parsing.
 # Use `--fixtures repo` when you want to benchmark the codegraph repo itself instead of the smaller sample fixture sets.
 # Benchmark output reports processed file count and resulting graph node count separately for graph workloads.
@@ -651,8 +652,8 @@ Viewer features:
   - Very high values may become I/O bound; 8–32 is a good range on SSDs.
 
 - Native Tree-sitter acceleration:
-  - Build the optional Rust addon with `npm run build:native`.
-  - When the addon is present, Codegraph runs supported Tree-sitter parse/query work in Rust and falls back to the JS path automatically if the addon or a query is unavailable.
+  - Build the native backend package with `npm run build:native`.
+  - When the addon is present, Codegraph runs supported Tree-sitter parse/query work in Rust and falls back through `@lzehrung/codegraph-native`'s JS path automatically if the addon or a query is unavailable.
   - **Worker threads** (`--workers`): When combined with the native addon, offloads per-file Rust extraction to a Piscina worker pool. Each worker thread gets its own isolated parser and query cache via Rust `thread_local!` storage. SFC files (Vue/Svelte/Astro) are excluded from worker dispatch because they need source preprocessing on the main thread.
     ```bash
     codegraph index --workers --threads 8
@@ -1393,7 +1394,7 @@ These recipes combine the library's core capabilities (dependency graphs, symbol
 
    * TypeScript owns the shared indexing pipeline, resolution logic, and output shapes.
    * The parser/query hot path stays on Tree-sitter for every supported language.
-   * When available, the optional Rust addon runs those Tree-sitter parses and queries natively, then returns plain capture data to TypeScript.
+   * When available, the native addon inside `@lzehrung/codegraph-native` runs those Tree-sitter parses and queries natively, then returns plain capture data to TypeScript.
 
 3. **Graph**
 
@@ -1475,7 +1476,7 @@ Yes. It detects npm/yarn/pnpm/lerna workspaces and resolves package-relative imp
 
 ## Contributing & Releases
 
-The old release ergonomics are back. Use the root scripts to cut synchronized releases for both the JS package and the optional native package:
+The old release ergonomics are back. Use the root scripts to cut synchronized releases for both the JS package and the native backend package:
 
 ```bash
 # Version, test, build, commit, tag, and push

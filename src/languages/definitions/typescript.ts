@@ -1,5 +1,4 @@
-import type { SyntaxNode } from "tree-sitter";
-import type { LanguageDefinition } from "../types.js";
+import type { LanguageDefinition, SyntaxNodeLike } from "../types.js";
 import { loadTypeScriptGrammars } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
@@ -187,7 +186,7 @@ const BASE_HELPERS = {
     shorthandPropertyIdentifier: ["shorthand_property_identifier"],
     memberExpression: "member_expression",
   },
-  classifyDefinition: (n: SyntaxNode) => {
+  classifyDefinition: (n: SyntaxNodeLike) => {
     const t = n.parent?.type;
     if (t === "function_declaration") return "function";
     if (t === "class_declaration") return "class";
@@ -195,7 +194,7 @@ const BASE_HELPERS = {
     if (t === "type_alias_declaration") return "type";
     return "variable";
   },
-  isDeclarationName: (node: SyntaxNode) => {
+  isDeclarationName: (node: SyntaxNodeLike) => {
     const p = node.parent?.type;
     return (
       !!p &&
@@ -217,9 +216,9 @@ const BASE_HELPERS = {
       ].includes(p)
     );
   },
-  createsBlockScope: (n: SyntaxNode) =>
+  createsBlockScope: (n: SyntaxNodeLike) =>
     n.type === "program" || n.type === "block",
-  createsFunctionScope: (n: SyntaxNode) =>
+  createsFunctionScope: (n: SyntaxNodeLike) =>
     n.type === "function_declaration" ||
     n.type === "function" ||
     n.type === "function_expression" ||

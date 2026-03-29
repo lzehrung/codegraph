@@ -52,6 +52,32 @@ describe('project file discovery', () => {
     }
   });
 
+  it('includes supported source extensions in default discovery', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codegraph-project-sources-'));
+    const files = [
+      path.join(tempDir, 'kotlin', 'Main.kt'),
+      path.join(tempDir, 'kotlin', 'script.kts'),
+      path.join(tempDir, 'swift', 'App.swift'),
+      path.join(tempDir, 'c', 'main.c'),
+      path.join(tempDir, 'c', 'utils.h'),
+      path.join(tempDir, 'cpp', 'main.cpp'),
+      path.join(tempDir, 'cpp', 'types.hpp'),
+    ];
+
+    await Promise.all(
+      files.map(async (filePath) => {
+        await createFile(filePath, '// test fixture\n');
+      }),
+    );
+
+    const discovered = await listProjectFiles(tempDir);
+    const discoveredSet = new Set(discovered.map(normalize));
+
+    for (const filePath of files.map(normalize)) {
+      expect(discoveredSet.has(filePath)).toBe(true);
+    }
+  });
+
   it('extracts project names from common manifests', async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codegraph-project-meta-'));
     const nodeDir = path.join(tempDir, 'node');

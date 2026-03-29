@@ -4,7 +4,6 @@ import {
   buildScopeIndexFromSource,
   TS_SUPPORT,
   PY_SUPPORT,
-  languageForFile,
   goToDefinition,
   findReferences,
 } from "../src/index.js";
@@ -16,8 +15,7 @@ describe("scope index quality", () => {
   it("should not duplicate bindings in root scope", () => {
     const source = `const x = 1;`;
     const file = "test.ts";
-    const lang = languageForFile(file);
-    const scopeIndex = buildScopeIndexFromSource(file, source, TS_SUPPORT, lang);
+    const scopeIndex = buildScopeIndexFromSource(file, source, TS_SUPPORT);
 
     const xBindings = scopeIndex.bindings.get("x");
     expect(xBindings).toBeDefined();
@@ -39,8 +37,7 @@ describe("scope index quality", () => {
       }
     `;
     const file = "test.ts";
-    const lang = languageForFile(file);
-    const scopeIndex = buildScopeIndexFromSource(file, source, TS_SUPPORT, lang);
+    const scopeIndex = buildScopeIndexFromSource(file, source, TS_SUPPORT);
 
     const xBindings = scopeIndex.bindings.get("x");
     expect(xBindings).toBeDefined();
@@ -145,8 +142,7 @@ describe("scope index quality", () => {
       }
     `;
     const file = "test.ts";
-    const lang = languageForFile(file);
-    const scopeIndex = buildScopeIndexFromSource(file, source, TS_SUPPORT, lang);
+    const scopeIndex = buildScopeIndexFromSource(file, source, TS_SUPPORT);
 
     const outerBinding = scopeIndex.all.find(b => b.name === "outer");
     const innerBinding = scopeIndex.all.find(b => b.name === "inner");
@@ -167,8 +163,7 @@ def foo(x):
     return x
 `;
     const file = "test.py";
-    const lang = languageForFile(file);
-    const scopeIndex = buildScopeIndexFromSource(file, source, PY_SUPPORT, lang);
+    const scopeIndex = buildScopeIndexFromSource(file, source, PY_SUPPORT);
 
     const xBindings = scopeIndex.bindings.get("x");
     expect(xBindings).toBeDefined();

@@ -3,7 +3,6 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import { createMatchPath } from "tsconfig-paths";
-import Parser from "tree-sitter";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import type { Range } from "./types.js";
@@ -82,11 +81,12 @@ export function stringifyUnknown(value: unknown): string {
   return "unknown";
 }
 
-const DEFAULT_PROJECT_FILE_IGNORES = [
+export const DEFAULT_PROJECT_FILE_IGNORES = [
   "**/node_modules/**",
   "**/.git/**",
   "**/dist/**",
   "**/build/**",
+  "**/target/**",
   "**/.venv/**",
   "**/__pycache__/**",
 ];
@@ -156,7 +156,7 @@ export const DEFAULT_PROJECT_MANIFESTS = [
 ];
 
 export const DEFAULT_PROJECT_PATTERNS = [
-  "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs,html,htm,css,scss,less}",
+  "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs,html,htm,css,scss,less,kt,kts,swift,c,h,cc,cpp,cxx,c++,hpp,hh,hxx,ipp,tpp,inl}",
   ...DEFAULT_PROJECT_MANIFESTS.map((name) => `**/${name}`),
 ];
 
@@ -1630,10 +1630,129 @@ type JavaSymbolIndexEntry = {
   symbols: Set<string>;
 };
 
+type LanguageProjectSymbolIndex = {
+  files: string[];
+  filesByPackage: Map<string, string[]>;
+  filesByPackageSymbol: Map<string, Map<string, string[]>>;
+};
+
 const kotlinImportResolutionCache = new Map<string, string | null>();
 const kotlinSymbolIndexCache = new Map<string, KotlinSymbolIndexEntry>();
+const kotlinProjectSymbolIndexCache = new Map<
+  string,
+  Promise<LanguageProjectSymbolIndex>
+>();
 const javaImportResolutionCache = new Map<string, string | null>();
 const javaSymbolIndexCache = new Map<string, JavaSymbolIndexEntry>();
+const javaProjectSymbolIndexCache = new Map<
+  string,
+  Promise<LanguageProjectSymbolIndex>
+>();
+
+async function listProjectLanguageFiles(
+  projectRoot: string,
+  patterns: string[],
+): Promise<string[]> {
+  return await listProjectFiles(projectRoot, patterns);
+}
+
+function addProjectSymbolFile(
+  index: LanguageProjectSymbolIndex,
+  packageName: string,
+  filePath: string,
+  symbols: Set<string>,
+): void {
+  const packageFiles = index.filesByPackage.get(packageName) ?? [];
+  packageFiles.push(filePath);
+  index.filesByPackage.set(packageName, packageFiles);
+
+  let symbolFiles = index.filesByPackageSymbol.get(packageName);
+  if (!symbolFiles) {
+    symbolFiles = new Map<string, string[]>();
+    index.filesByPackageSymbol.set(packageName, symbolFiles);
+  }
+  for (const symbolName of symbols) {
+    const files = symbolFiles.get(symbolName) ?? [];
+    files.push(filePath);
+    symbolFiles.set(symbolName, files);
+  }
+}
+
+async function buildProjectSymbolIndex<TEntry extends { packageName: string | null; symbols: Set<string> }>(
+  projectRoot: string,
+  patterns: string[],
+  readIndexEntry: (filePath: string) => Promise<TEntry>,
+): Promise<LanguageProjectSymbolIndex> {
+  const files = await listProjectLanguageFiles(projectRoot, patterns);
+  const index: LanguageProjectSymbolIndex = {
+    files,
+    filesByPackage: new Map<string, string[]>(),
+    filesByPackageSymbol: new Map<string, Map<string, string[]>>(),
+  };
+
+  const indexEntries = await mapLimit(files, 8, async (filePath) => {
+    try {
+      const entry = await readIndexEntry(filePath);
+      return { filePath, entry };
+    } catch {
+      // Ignore unreadable files and keep indexing the project.
+      return null;
+    }
+  });
+
+  for (const indexEntry of indexEntries) {
+    if (!indexEntry?.entry.packageName) continue;
+    addProjectSymbolFile(
+      index,
+      indexEntry.entry.packageName,
+      indexEntry.filePath,
+      indexEntry.entry.symbols,
+    );
+  }
+
+  return index;
+}
+
+function getOrCreateProjectSymbolIndex(
+  cache: Map<string, Promise<LanguageProjectSymbolIndex>>,
+  projectRoot: string,
+  buildIndex: () => Promise<LanguageProjectSymbolIndex>,
+): Promise<LanguageProjectSymbolIndex> {
+  const cached = cache.get(projectRoot);
+  if (cached) return cached;
+  const pending = buildIndex().catch((error) => {
+    cache.delete(projectRoot);
+    throw error;
+  });
+  cache.set(projectRoot, pending);
+  return pending;
+}
+
+async function getKotlinProjectSymbolIndex(
+  projectRoot: string,
+): Promise<LanguageProjectSymbolIndex> {
+  return await getOrCreateProjectSymbolIndex(
+    kotlinProjectSymbolIndexCache,
+    projectRoot,
+    async () =>
+      await buildProjectSymbolIndex(
+        projectRoot,
+        ["**/*.kt", "**/*.kts"],
+        readKotlinSymbolIndex,
+      ),
+  );
+}
+
+async function getJavaProjectSymbolIndex(
+  projectRoot: string,
+): Promise<LanguageProjectSymbolIndex> {
+  return await getOrCreateProjectSymbolIndex(
+    javaProjectSymbolIndexCache,
+    projectRoot,
+    async () =>
+      await buildProjectSymbolIndex(projectRoot, ["**/*.java"], readJavaSymbolIndex),
+  );
+}
 
 function stripInlineComment(line: string): string {
   const idx = line.indexOf("//");
@@ -1858,29 +1977,12 @@ async function resolveKotlinImportPath(
   if (cached !== undefined) return cached;
 
   const parts = spec.split(".").filter(Boolean);
+  const projectIndex = await getKotlinProjectSymbolIndex(projectRoot);
   if (parts.length < 2) {
-    const packageDir = spec.replace(/\./g, "/");
-    const packageCandidates = await fg(
-      [`${packageDir}/**/*.kt`, `${packageDir}/**/*.kts`],
-      {
-        cwd: projectRoot,
-        absolute: true,
-        onlyFiles: true,
-      },
-    );
-    for (const candidate of packageCandidates) {
-      try {
-        const indexEntry = await readKotlinSymbolIndex(candidate);
-        if (indexEntry.packageName !== spec) continue;
-        const resolved = path.resolve(candidate);
-        kotlinImportResolutionCache.set(cacheKey, resolved);
-        return resolved;
-      } catch {
-        // Ignore unreadable files and keep searching.
-      }
-    }
-    kotlinImportResolutionCache.set(cacheKey, null);
-    return null;
+    const packageCandidates = projectIndex.filesByPackage.get(spec) ?? [];
+    const resolved = packageCandidates[0] ? path.resolve(packageCandidates[0]) : null;
+    kotlinImportResolutionCache.set(cacheKey, resolved);
+    return resolved;
   }
 
   const importedName = parts[parts.length - 1]!;
@@ -1888,32 +1990,20 @@ async function resolveKotlinImportPath(
     importedName === "*"
       ? parts.slice(0, -1).join(".")
       : parts.slice(0, -1).join(".");
-  const packageDir = packageName.replace(/\./g, "/");
-  const candidates = await fg(
-    [`${packageDir}/**/*.kt`, `${packageDir}/**/*.kts`],
-    {
-      cwd: projectRoot,
-      absolute: true,
-      onlyFiles: true,
-    },
-  );
+  const packageCandidates = projectIndex.filesByPackage.get(packageName) ?? [];
 
-  for (const candidate of candidates) {
-    try {
-      const indexEntry = await readKotlinSymbolIndex(candidate);
-      if (indexEntry.packageName !== packageName) continue;
-      if (importedName !== "*" && !indexEntry.symbols.has(importedName))
-        continue;
-      const resolved = path.resolve(candidate);
-      kotlinImportResolutionCache.set(cacheKey, resolved);
-      return resolved;
-    } catch {
-      // Ignore unreadable files and keep searching.
-    }
+  if (importedName === "*") {
+    const resolved = packageCandidates[0] ? path.resolve(packageCandidates[0]) : null;
+    kotlinImportResolutionCache.set(cacheKey, resolved);
+    return resolved;
   }
 
-  kotlinImportResolutionCache.set(cacheKey, null);
-  return null;
+  const symbolFiles =
+    projectIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
+  const resolvedCandidate = symbolFiles[0] ?? packageCandidates[0] ?? null;
+  const resolved = resolvedCandidate ? path.resolve(resolvedCandidate) : null;
+  kotlinImportResolutionCache.set(cacheKey, resolved);
+  return resolved;
 }
 
 async function readJavaSymbolIndex(
@@ -1951,21 +2041,12 @@ async function resolveJavaImportPath(
     return null;
   }
 
-  const allCandidates = await fg(["**/*.java"], {
-    cwd: projectRoot,
-    absolute: true,
-    onlyFiles: true,
-  });
-  for (const candidate of allCandidates) {
-    try {
-      const indexEntry = await readJavaSymbolIndex(candidate);
-      if (indexEntry.packageName !== spec) continue;
-      const resolved = path.resolve(candidate);
-      javaImportResolutionCache.set(cacheKey, resolved);
-      return resolved;
-    } catch {
-      // Ignore unreadable files and keep searching.
-    }
+  const projectIndex = await getJavaProjectSymbolIndex(projectRoot);
+  const exactPackageFiles = projectIndex.filesByPackage.get(spec) ?? [];
+  if (exactPackageFiles[0]) {
+    const resolved = path.resolve(exactPackageFiles[0]);
+    javaImportResolutionCache.set(cacheKey, resolved);
+    return resolved;
   }
 
   const importedName = parts[parts.length - 1]!;
@@ -1974,22 +2055,19 @@ async function resolveJavaImportPath(
       ? parts.slice(0, -1).join(".")
       : parts.slice(0, -1).join(".");
 
-  for (const candidate of allCandidates) {
-    try {
-      const indexEntry = await readJavaSymbolIndex(candidate);
-      if (indexEntry.packageName !== packageName) continue;
-      if (importedName !== "*" && !indexEntry.symbols.has(importedName))
-        continue;
-      const resolved = path.resolve(candidate);
-      javaImportResolutionCache.set(cacheKey, resolved);
-      return resolved;
-    } catch {
-      // Ignore unreadable files and keep searching.
-    }
+  const packageCandidates = projectIndex.filesByPackage.get(packageName) ?? [];
+  if (importedName === "*") {
+    const resolved = packageCandidates[0] ? path.resolve(packageCandidates[0]) : null;
+    javaImportResolutionCache.set(cacheKey, resolved);
+    return resolved;
   }
 
-  javaImportResolutionCache.set(cacheKey, null);
-  return null;
+  const symbolFiles =
+    projectIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
+  const resolvedCandidate = symbolFiles[0] ?? packageCandidates[0] ?? null;
+  const resolved = resolvedCandidate ? path.resolve(resolvedCandidate) : null;
+  javaImportResolutionCache.set(cacheKey, resolved);
+  return resolved;
 }
 
 export async function resolveImportSpecifier(
@@ -2683,6 +2761,12 @@ export async function resolvePythonModule(
 }
 
 export function clearResolutionCaches(): void {
+  kotlinImportResolutionCache.clear();
+  kotlinSymbolIndexCache.clear();
+  kotlinProjectSymbolIndexCache.clear();
+  javaImportResolutionCache.clear();
+  javaSymbolIndexCache.clear();
+  javaProjectSymbolIndexCache.clear();
   fileExistsCache.clear();
   resolveSpecifierCache.clear();
   resolvePythonModuleCache.clear();
@@ -2697,28 +2781,6 @@ const resolvePythonModuleCache = new Map<
   string,
   FileId | { external: string }
 >();
-
-// ----------------- Parser pool (simple) -----------------
-type LangKey = "ts" | "tsx" | "js" | "py";
-const parserPools = new Map<LangKey, Parser[]>();
-
-export function acquireParser(lang: Parser.Language, key: LangKey): Parser {
-  const pool = parserPools.get(key) ?? [];
-  const p = pool.pop();
-  if (p) {
-    parserPools.set(key, pool);
-    return p;
-  }
-  const parser = new Parser();
-  parser.setLanguage(lang);
-  return parser;
-}
-
-export function releaseParser(parser: Parser, key: LangKey) {
-  const pool = parserPools.get(key) ?? [];
-  pool.push(parser);
-  parserPools.set(key, pool);
-}
 
 /**
  * Map over items with bounded concurrency.

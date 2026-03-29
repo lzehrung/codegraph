@@ -1,4 +1,36 @@
-import type { Language, SyntaxNode } from "tree-sitter";
+import type { JsLanguage } from "@lzehrung/codegraph-native/js-fallback";
+export type { JsLanguage };
+
+export interface SyntaxPositionLike {
+  row: number;
+  column: number;
+}
+
+export interface SyntaxNodeLike {
+  id?: number;
+  type: string;
+  text: string;
+  startIndex: number;
+  endIndex: number;
+  startPosition: SyntaxPositionLike;
+  endPosition: SyntaxPositionLike;
+  parent: SyntaxNodeLike | null;
+  namedChildren: SyntaxNodeLike[];
+  previousSibling?: SyntaxNodeLike | null;
+  previousNamedSibling?: SyntaxNodeLike | null;
+  child(index: number): SyntaxNodeLike | null;
+  childForFieldName(fieldName: string): SyntaxNodeLike | null;
+}
+
+export interface SyntaxTreeLike {
+  rootNode: SyntaxNodeLike & {
+    descendantForIndex(startIndex: number, endIndex: number): SyntaxNodeLike;
+    descendantForPosition(
+      start: SyntaxPositionLike,
+      end: SyntaxPositionLike,
+    ): SyntaxNodeLike;
+  };
+}
 
 export type NativeQueryKind =
   | "imports"
@@ -14,7 +46,7 @@ export interface NativeCompatibility {
 export interface LanguageDefinition {
   id: string;
   extensions: string[];
-  grammar: (filename?: string) => Language;
+  grammar: (filename?: string) => JsLanguage;
 
   /**
    * Configuration for semantic chunking.
@@ -46,22 +78,22 @@ export interface LanguageDefinition {
   /**
    * Helper to classify a definition node (function vs class vs var).
    */
-  classifyDefinition?: (node: SyntaxNode) => string;
+  classifyDefinition?: (node: SyntaxNodeLike) => string;
 
   /**
    * Helper to check if a node is a declaration name.
    */
-  isDeclarationName?: (node: SyntaxNode) => boolean;
+  isDeclarationName?: (node: SyntaxNodeLike) => boolean;
 
   /**
    * Helper to check if a node creates a block scope.
    */
-  createsBlockScope?: (node: SyntaxNode) => boolean;
+  createsBlockScope?: (node: SyntaxNodeLike) => boolean;
 
   /**
    * Helper to check if a node creates a function scope.
    */
-  createsFunctionScope?: (node: SyntaxNode) => boolean;
+  createsFunctionScope?: (node: SyntaxNodeLike) => boolean;
 
   /**
    * Whether the language supports cross-module symbol resolution.

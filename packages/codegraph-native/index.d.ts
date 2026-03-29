@@ -44,6 +44,29 @@ export interface NativeQueryResults {
   importBindings: Array<NativeMatch>
 }
 
+export interface NativeQueryRunResult {
+  matches: Array<NativeMatch>
+}
+
+export interface NativeSyntaxNode {
+  id: number
+  parentId: number
+  nodeType: string
+  named: boolean
+  start: NativePoint
+  end: NativePoint
+  childIds: Array<number>
+  namedChildIds: Array<number>
+  childFieldNames: Array<string>
+}
+
+export interface NativeSyntaxTree {
+  rootId: number
+  nodes: Array<NativeSyntaxNode>
+}
+
+export declare function parseSyntaxTree(source: string, languageId: string): NativeSyntaxTree
+
 /**
  * Run only the imports query and return compact results (name + text only).
  * This is the graph-mode entrypoint optimized for minimal marshaling.
@@ -51,5 +74,8 @@ export interface NativeQueryResults {
 export declare function runImportsQueryCompact(source: string, languageId: string, importsQuery: string): CompactQueryResults
 
 export declare function runLanguageQueries(source: string, languageId: string, importsQuery: string, exportsQuery: string, localsQuery: string, importBindingsQuery: string): NativeQueryResults
+
+/** Execute a single arbitrary query and return full capture metadata. */
+export declare function runQuery(source: string, languageId: string, queryText: string): NativeQueryRunResult
 
 export declare function supportedLanguageIds(): Array<string>
