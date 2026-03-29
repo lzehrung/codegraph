@@ -97,7 +97,7 @@ function commitAndTag(version) {
     "packages/codegraph-native/package.json",
   ]);
   run("git", ["commit", "-m", `v${version}`]);
-  run("git", ["tag", `v${version}`]);
+  run("git", ["tag", "-a", `v${version}`, "-m", `v${version}`]);
 }
 
 const releaseType = process.argv[2];
