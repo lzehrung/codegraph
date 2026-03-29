@@ -56,7 +56,7 @@ describe('project file discovery', () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codegraph-project-sources-'));
     const files = [
       path.join(tempDir, 'kotlin', 'Main.kt'),
-      path.join(tempDir, 'kotlin', 'settings.gradle.kts'),
+      path.join(tempDir, 'kotlin', 'script.kts'),
       path.join(tempDir, 'swift', 'App.swift'),
       path.join(tempDir, 'c', 'main.c'),
       path.join(tempDir, 'c', 'utils.h'),
