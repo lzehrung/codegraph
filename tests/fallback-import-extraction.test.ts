@@ -174,4 +174,25 @@ describe("Import extraction fallback reporting", () => {
       expect(native?.byLanguage.ts?.filesFellBack).toBeGreaterThan(0);
     }
   });
+
+  it("avoids Python query-empty fallback warnings for __future__ imports", async () => {
+    const root = await mkTmpDir("cg-python-future-import-");
+    const main = path.join(root, "main.py");
+    await fsp.writeFile(main, "from __future__ import annotations\n", "utf8");
+
+    const report: BuildReport = { timings: {} };
+    const graph = await collectGraph(root, [main], { report });
+
+    const fallback = report.graph?.fallbackImportExtraction;
+    expect(fallback?.total ?? 0).toBe(0);
+
+    const normalizedMain = main.replace(/\\/g, "/");
+    const futureEdge = graph.edges.find(
+      (entry) =>
+        entry.from === normalizedMain &&
+        entry.to.type === "external" &&
+        entry.to.name === "__future__",
+    );
+    expect(futureEdge).toBeTruthy();
+  });
 });

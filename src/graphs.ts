@@ -46,6 +46,10 @@ import {
   type NativeQueryResults,
   type CompactQueryResults,
 } from "./native/treeSitterNative.js";
+import {
+  parseCsharpUsingDirective,
+  parseRustImportStatement,
+} from "./languages/importStatementParsers.js";
 import { capturesByName } from "./native/queryResults.js";
 import { ProjectedSyntaxTree } from "./native/projectedTree.js";
 import {
@@ -326,6 +330,20 @@ export function collectModuleSpecifiersFromSource(
           if (spec) out.push({ spec, typeOnly: false });
           continue;
         }
+        if (support.id === "rust") {
+          const parsed = parseRustImportStatement(stmtText);
+          if (parsed) {
+            out.push({ spec: parsed.from, typeOnly: false });
+            continue;
+          }
+        }
+        if (support.id === "csharp") {
+          const parsed = parseCsharpUsingDirective(stmtText);
+          if (parsed) {
+            out.push({ spec: parsed.from, typeOnly: false });
+            continue;
+          }
+        }
         for (const capture of match.captures) {
           if (capture.name !== "mod") continue;
           out.push({ spec: unquote(capture.text), typeOnly });
@@ -397,6 +415,20 @@ export function collectModuleSpecifiersFromSource(
           const spec = extractKotlinImportSpecifier(stmtText);
           if (spec) out.push({ spec, typeOnly: false });
           continue;
+        }
+        if (support.id === "rust") {
+          const parsed = parseRustImportStatement(stmtText);
+          if (parsed) {
+            out.push({ spec: parsed.from, typeOnly: false });
+            continue;
+          }
+        }
+        if (support.id === "csharp") {
+          const parsed = parseCsharpUsingDirective(stmtText);
+          if (parsed) {
+            out.push({ spec: parsed.from, typeOnly: false });
+            continue;
+          }
         }
         for (const cap of modNodes) {
           out.push({ spec: unquote(cap.text), typeOnly });

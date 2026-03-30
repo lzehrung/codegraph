@@ -47,6 +47,14 @@ const definition: LanguageTestDefinition = {
         from: "nested.rs",
         to: { type: "file", path: "nested_service.rs" },
       },
+      {
+        from: "extern-crate.rs",
+        to: { type: "file", path: "utils.rs" },
+      },
+      {
+        from: "extern-crate.rs",
+        to: { type: "external", name: "serde" },
+      },
     ],
     symbols: [
       {
@@ -60,6 +68,27 @@ const definition: LanguageTestDefinition = {
       {
         file: "nested_service.rs",
         includes: [{ name: "NestedRunner" }, { name: "run" }],
+      },
+    ],
+    goToDefinition: [
+      {
+        name: "resolves aliased Rust imports",
+        file: "aliased-use.rs",
+        line: 9,
+        column: 5,
+        expectedDefinition: {
+          file: "utils.rs",
+          line: 1,
+        },
+      },
+    ],
+    references: [
+      {
+        name: "tracks aliased Rust import references",
+        file: "utils.rs",
+        line: 1,
+        column: 8,
+        minimumCount: 3,
       },
     ],
   },

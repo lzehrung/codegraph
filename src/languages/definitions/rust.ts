@@ -41,6 +41,7 @@ export const RUST_DEF: LanguageDefinition = {
   graph: {
     imports: `
       (mod_item name: (identifier) @mod) @stmt
+      (extern_crate_declaration name: (identifier) @mod) @stmt
       (use_declaration argument: (_) @mod) @stmt
     `,
     exports: `
@@ -65,6 +66,10 @@ export const RUST_DEF: LanguageDefinition = {
     `,
     importBindings: `
       (mod_item name: (identifier) @from) @stmt
+      (extern_crate_declaration name: (identifier) @from) @stmt
+      (extern_crate_declaration name: (identifier) @from alias: (identifier) @alias) @stmt
+      (use_declaration argument: (use_as_clause path: (identifier) @from alias: (identifier) @alias)) @stmt
+      (use_declaration argument: (use_as_clause path: (scoped_identifier path: (identifier) @from name: (identifier) @iname) alias: (identifier) @alias)) @stmt
       (use_declaration argument: (scoped_identifier path: (identifier) @from name: (identifier) @iname)) @stmt
       (use_declaration argument: (identifier) @from) @stmt
     `,
