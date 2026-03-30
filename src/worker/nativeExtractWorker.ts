@@ -7,6 +7,7 @@ import type {
   NativeQueryResults,
   CompactQueryResults,
 } from "../native/treeSitterNative.js";
+import { loadNativeBinding } from "../native/bindingLoader.js";
 
 export type NativeExtractTask = {
   filePath: string;
@@ -58,24 +59,21 @@ let loadError: string | undefined;
 
 function ensureBinding(): void {
   if (binding || loadError) return;
-  const candidates = [
-    "@lzehrung/codegraph-native",
-    localNativePackageRoot,
-  ] as const;
-  let lastError: unknown;
-  for (const candidate of candidates) {
-    try {
-      binding = require(candidate) as NativeBinding;
-      supportedIds = new Set(binding.supportedLanguageIds());
-      return;
-    } catch (err) {
-      lastError = err;
-    }
+  const loaded = loadNativeBinding<NativeBinding>({
+    packageName: "@lzehrung/codegraph-native",
+    localPackageRoot: localNativePackageRoot,
+    requireFn: require,
+    resolveFn: require.resolve,
+  });
+  if (loaded.binding) {
+    binding = loaded.binding;
+    supportedIds = new Set(binding.supportedLanguageIds());
+    return;
   }
   loadError =
     "native addon not available in worker" +
-    (lastError
-      ? `: ${lastError instanceof Error ? lastError.message : String(lastError)}`
+    (loaded.error
+      ? `: ${loaded.error instanceof Error ? loaded.error.message : String(loaded.error)}`
       : "");
 }
 

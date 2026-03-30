@@ -42,12 +42,13 @@ npm run publish:major
 
 Use these when you need to inspect or customize the native publish flow manually.
 
-1. Build the JS and native packages:
+1. Build the JS package and the local native workspace addon:
 
 ```powershell
 npm run build
-npm run build:native
 ```
+
+Use `npm run build:native` only when you want to rebuild the native addon without rebuilding `dist/`.
 
 2. Create the per-target npm package directories:
 
