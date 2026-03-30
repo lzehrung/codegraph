@@ -318,6 +318,13 @@ nativeDescribe("native semantic parity", () => {
         { file: "Utils.cs", line: 3, column: 24, expectedStatus: "ok" },
       ),
       sampleExpectation(
+        "csharp",
+        ["NamespaceAlias.cs"],
+        undefined,
+        { file: "NamespaceAlias.cs", line: 3, column: 20, expectedStatus: "ok" },
+        { file: "NamespaceAlias.cs", line: 3, column: 20, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
         "rust",
         ["main.rs", "utils.rs", "helpers.rs"],
         [{ file: "utils.rs", names: ["helper_function", "UtilityStruct"] }],
@@ -326,10 +333,24 @@ nativeDescribe("native semantic parity", () => {
       ),
       sampleExpectation(
         "rust",
+        ["aliased-use.rs", "utils.rs", "helpers.rs"],
+        [{ file: "utils.rs", names: ["helper_function", "UtilityStruct"] }],
+        { file: "aliased-use.rs", line: 9, column: 5, expectedStatus: "ok" },
+        { file: "utils.rs", line: 1, column: 8, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
+        "rust",
         ["nested.rs", "nested_service.rs", "reexports.rs", "utils.rs", "helpers.rs"],
         [{ file: "nested_service.rs", names: ["NestedRunner"] }],
         { file: "nested.rs", line: 6, column: 18, expectedStatus: "ok" },
         { file: "nested_service.rs", line: 1, column: 12, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
+        "rust",
+        ["extern-crate.rs", "utils.rs"],
+        [{ file: "utils.rs", names: ["helper_function", "UtilityStruct"] }],
+        { file: "extern-crate.rs", line: 6, column: 5, expectedStatus: "ok" },
+        { file: "utils.rs", line: 1, column: 8, expectedStatus: "ok" },
       ),
       sampleExpectation(
         "kotlin",

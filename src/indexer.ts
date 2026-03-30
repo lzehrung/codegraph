@@ -20,6 +20,10 @@ import {
   prepareSourceInput,
 } from "./languages/filePrep.js";
 import {
+  parseCsharpUsingDirective,
+  parseRustImportStatement,
+} from "./languages/importStatementParsers.js";
+import {
   listProjectFiles,
   discoverProjectFiles,
   DEFAULT_PROJECT_MANIFESTS,
@@ -2476,6 +2480,94 @@ export async function collectImportsForFile(
     normalizeGoImports();
     await appendJavaTextImports();
   };
+  const handledStatementImports = new Set<string>();
+  const applyStatementImportOverride = async (
+    stmtText: string,
+    typeOnly: boolean,
+  ): Promise<boolean> => {
+    const normalizedStmt = stmtText.trim();
+    if (!normalizedStmt) return false;
+
+    if (resolvedSup.id === "csharp") {
+      const parsed = parseCsharpUsingDirective(normalizedStmt);
+      if (!parsed) return false;
+      if (handledStatementImports.has(normalizedStmt)) return true;
+      handledStatementImports.add(normalizedStmt);
+
+      let fromValue = parsed.from;
+      let resolved = await resolveFrom(fromValue);
+      if (parsed.alias) {
+        const fromParts = parsed.from.split(".");
+        const imported = fromParts[fromParts.length - 1] ?? parsed.alias;
+        if (
+          typeof resolved !== "string" &&
+          fromParts.length > 1
+        ) {
+          const fallbackFrom = fromParts.slice(0, -1).join(".");
+          if (fallbackFrom) {
+            const fallbackResolved = await resolveFrom(fallbackFrom);
+            if (typeof fallbackResolved === "string") {
+              fromValue = fallbackFrom;
+              resolved = fallbackResolved;
+            }
+          }
+        }
+        imports.push({
+          kind: "named",
+          local: parsed.alias,
+          imported,
+          from: fromValue,
+          resolved,
+          typeOnly,
+        });
+      } else {
+        imports.push({
+          kind: "star",
+          from: fromValue,
+          resolved,
+          typeOnly,
+        });
+      }
+      return true;
+    }
+
+    if (resolvedSup.id === "rust") {
+      const parsed = parseRustImportStatement(normalizedStmt);
+      if (!parsed) return false;
+      if (handledStatementImports.has(normalizedStmt)) return true;
+      handledStatementImports.add(normalizedStmt);
+
+      const resolved = await resolveFrom(parsed.from);
+      if (parsed.kind === "member") {
+        imports.push({
+          kind: "named",
+          local: parsed.local,
+          imported: parsed.imported,
+          from: parsed.from,
+          resolved,
+          typeOnly,
+        });
+      } else if (parsed.kind === "module") {
+        imports.push({
+          kind: "namespace",
+          localNS: parsed.local,
+          from: parsed.from,
+          resolved,
+          typeOnly,
+        });
+      } else {
+        imports.push({
+          kind: "star",
+          from: parsed.from,
+          resolved,
+          typeOnly,
+        });
+      }
+      return true;
+    }
+
+    return false;
+  };
 
   if (resolvedSup.id === "python") {
     const pySrc = stripPythonCommentsAndStrings(resolvedSource);
@@ -2733,6 +2825,9 @@ export async function collectImportsForFile(
         const caps = capturesByName(match);
         const stmtText = caps["stmt"]?.text ?? "";
         const typeOnly = resolvedSup.isTypeOnly(stmtText);
+        if (await applyStatementImportOverride(stmtText, typeOnly)) {
+          continue;
+        }
         const from = caps["from"] ? unquote(caps["from"].text) : undefined;
         const patterns = capturesNamed(match, "pattern");
 
@@ -2984,6 +3079,9 @@ export async function collectImportsForFile(
         );
         const stmtText = caps["stmt"]?.text ?? "";
         const typeOnly = resolvedSup.isTypeOnly(stmtText);
+        if (await applyStatementImportOverride(stmtText, typeOnly)) {
+          continue;
+        }
         const from: string | undefined = caps["from"]
           ? unquote(caps["from"].text)
           : undefined;
