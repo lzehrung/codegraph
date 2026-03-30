@@ -86,6 +86,87 @@ export type ParsedCsharpUsingDirective = {
   isStatic: boolean;
 };
 
+export type ParsedKotlinImportStatement =
+  | {
+      kind: "named";
+      from: string;
+      imported: string;
+      local: string;
+    }
+  | {
+      kind: "star";
+      from: string;
+    };
+
+export function parseKotlinImportStatement(
+  stmtText: string,
+): ParsedKotlinImportStatement | null {
+  const match = stmtText
+    .trim()
+    .match(
+      /^\s*import\s+([A-Za-z_][\w.]*(?:\.\*)?)(?:\s+as\s+([A-Za-z_][\w]*))?\s*$/m,
+    );
+  const rawSpec = match?.[1];
+  if (!rawSpec) return null;
+  if (rawSpec.endsWith(".*")) {
+    return {
+      kind: "star",
+      from: rawSpec.slice(0, -2),
+    };
+  }
+
+  const parts = rawSpec.split(".");
+  const imported = parts[parts.length - 1];
+  if (!imported) return null;
+  return {
+    kind: "named",
+    from: rawSpec,
+    imported,
+    local: match?.[2] ?? imported,
+  };
+}
+
+export type ParsedJavaImportStatement =
+  | {
+      kind: "named";
+      from: string;
+      imported: string;
+      isStatic: boolean;
+    }
+  | {
+      kind: "star";
+      from: string;
+      isStatic: boolean;
+    };
+
+export function parseJavaImportStatement(
+  stmtText: string,
+): ParsedJavaImportStatement | null {
+  const match = stmtText
+    .trim()
+    .match(/^\s*import\s+(static\s+)?([A-Za-z_][\w.]*(?:\.\*)?)\s*;?\s*$/);
+  const rawSpec = match?.[2];
+  if (!rawSpec) return null;
+  const isStatic = !!match?.[1];
+  if (rawSpec.endsWith(".*")) {
+    return {
+      kind: "star",
+      from: rawSpec.slice(0, -2),
+      isStatic,
+    };
+  }
+
+  const parts = rawSpec.split(".");
+  const imported = parts[parts.length - 1];
+  if (!imported) return null;
+  return {
+    kind: "named",
+    from: isStatic ? parts.slice(0, -1).join(".") : rawSpec,
+    imported,
+    isStatic,
+  };
+}
+
 export function parseCsharpUsingDirective(
   stmtText: string,
 ): ParsedCsharpUsingDirective | null {

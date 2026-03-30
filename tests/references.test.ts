@@ -510,6 +510,17 @@ describe('Find References', () => {
       expectReferenceAt(result, packageFile, 7);
       expectReferenceAt(result, wildcardFile, 7);
     });
+
+    it('should find references to static wildcard-imported methods', async () => {
+      const index = await createTestIndex('java');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'java');
+      const utilsFile = path.join(samplePath, 'utils', 'Utils.java').replace(/\\/g, '/');
+      const wildcardFile = path.join(samplePath, 'StaticWildcardImports.java').replace(/\\/g, '/');
+
+      const result = await testFindReferences(index, utilsFile, 4, 22, 2);
+      expectReferenceAt(result, utilsFile, 4);
+      expectReferenceAt(result, wildcardFile, 7);
+    });
   });
   describe('Ruby', () => {
     it('should find all references to module function', async () => {

@@ -30,6 +30,10 @@ const definition: LanguageTestDefinition = {
         from: "WildcardImports.java",
         to: { type: "file", path: "pkg/PackageTypes.java" },
       },
+      {
+        from: "StaticWildcardImports.java",
+        to: { type: "file", path: "utils/Utils.java" },
+      },
     ],
     symbols: [
       {
@@ -62,6 +66,13 @@ const definition: LanguageTestDefinition = {
         column: 16,
         expectedDefinition: { file: "pkg/PackageTypes.java", line: 4 },
       },
+      {
+        name: "go to definition resolves static wildcard imports",
+        file: "StaticWildcardImports.java",
+        line: 7,
+        column: 5,
+        expectedDefinition: { file: "utils/Utils.java", line: 4 },
+      },
     ],
     references: [
       {
@@ -69,6 +80,13 @@ const definition: LanguageTestDefinition = {
         file: "pkg/PackageTypes.java",
         line: 7,
         column: 11,
+        minimumCount: 2,
+      },
+      {
+        name: "find references for static wildcard-imported methods",
+        file: "utils/Utils.java",
+        line: 4,
+        column: 22,
         minimumCount: 2,
       },
     ],
