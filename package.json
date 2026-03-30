@@ -21,7 +21,7 @@
   "scripts": {
     "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\"",
     "fallback:install": "npm install --prefix optional-packages/codegraph-js-fallback --no-package-lock --legacy-peer-deps",
-    "build": "npm run clean && tsc -p tsconfig.json",
+    "build": "npm run clean && tsc -p tsconfig.json && npm run build:native",
     "format": "prettier --write ./src",
     "lint": "npx eslint ./src --fix",
     "prepare": "npm run build",
@@ -36,7 +36,7 @@
     "test:run": "vitest run",
     "test:bench": "vitest tests/bench-harness.test.ts tests/native-query-scope.test.ts",
     "test:watch": "vitest --watch",
-    "preversion": "npm run test:ci && npm run build && npm run build:native",
+    "preversion": "npm run test:ci && npm run build",
     "postversion": "git push && git push --tags",
     "release:patch": "node ./scripts/release.mjs patch",
     "release:minor": "node ./scripts/release.mjs minor",

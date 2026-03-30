@@ -261,16 +261,15 @@ git clone https://github.com/lzehrung/codegraph.git
 cd codegraph
 npm install
 npm run build
-npm run build:native
 ```
 
-Use this path when you are developing on codegraph itself or want to build the native addon locally.
+Use this path when you are developing on codegraph itself. `npm run build` now builds both `dist/` and the local native workspace addon. Use `npm run build:native` only when you want to rebuild the native addon by itself.
 
 ## Requirements
 
 * **Node.js 18+**
 * Published installs do not require Rust or a manual native setup step on supported targets
-* Local native builds require a working Rust toolchain plus `npm run build:native`
+* Local source-checkout builds require a working Rust toolchain because `npm run build` also builds the native workspace addon
 * If no compatible native artifact is available, install `@lzehrung/codegraph-js-fallback` to enable the opt-in JS Tree-sitter fallback path
 * Native runtime mode defaults to `auto`
 * Set `CODEGRAPH_DISABLE_NATIVE=1` to make `auto` prefer the optional JS Tree-sitter fallback path by default when `@lzehrung/codegraph-js-fallback` is installed
@@ -664,7 +663,7 @@ Viewer features:
   - Very high values may become I/O bound; 8–32 is a good range on SSDs.
 
 - Native Tree-sitter acceleration:
-  - Build the native backend package with `npm run build:native`.
+  - `npm run build` now builds the local native workspace addon too. Use `npm run build:native` only for native-only rebuilds.
   - When the addon is present, Codegraph runs supported Tree-sitter parse/query work in Rust and falls back through `@lzehrung/codegraph-native`'s JS path automatically if the addon or a query is unavailable.
   - **Worker threads** (`--workers`): When combined with the native addon, offloads per-file Rust extraction to a Piscina worker pool. Each worker thread gets its own isolated parser and query cache via Rust `thread_local!` storage. SFC files (Vue/Svelte/Astro) are excluded from worker dispatch because they need source preprocessing on the main thread.
     ```bash

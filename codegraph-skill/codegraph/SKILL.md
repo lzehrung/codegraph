@@ -16,8 +16,7 @@ Codegraph is a lightweight multi-language code analysis tool that builds depende
 - Native backend package: `@lzehrung/codegraph-native`
 - Optional JS fallback package: `@lzehrung/codegraph-js-fallback`
 - Published installs of `@lzehrung/codegraph` depend on `@lzehrung/codegraph-native` as an optional dependency; that package resolves the matching native artifact automatically when one exists for the current platform.
-- For source checkouts, build the native addon locally with:
-  `npm run build:native`
+- For source checkouts, `npm run build` builds both `dist/` and the local native addon. Use `npm run build:native` only when you want a native-only rebuild.
 - Install the optional fallback package only when you explicitly need JS Tree-sitter fallback:
   `npm install @lzehrung/codegraph-js-fallback --legacy-peer-deps`
 - Global default override: `CODEGRAPH_DISABLE_NATIVE=1`
@@ -127,5 +126,5 @@ const definition = await tool_goToDefinition(
 - Use `--json` when you need machine-readable output.
 - Use `--fast-graph` for first-pass exploration on large repos, then rerun without it when accuracy matters.
 - Prefer `refs` over plain text search when you want semantic usages.
-- If running from a source checkout, `npm run build:native` is the simplest way to enable the native path locally.
+- If running from a source checkout, `npm run build` is the simplest way to enable the native path locally.
 - If a release publish is interrupted after version files are bumped, use `npm run publish:resume` to finish that version instead of cutting another patch release.

@@ -184,7 +184,6 @@ if (!shouldResume) {
 run("npm", ["install"]);
 run("npm", ["run", "test:ci"]);
 run("npm", ["run", "build"]);
-run("npm", ["run", "build:native"]);
 
 if (shouldPublish) {
   const publishPlan = computePublishPlan({
