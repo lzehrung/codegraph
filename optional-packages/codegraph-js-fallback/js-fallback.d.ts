@@ -59,7 +59,6 @@ export declare function parseWithJsLanguage(
   source: string,
   language: JsLanguage,
 ): JsSyntaxTree;
-export declare function isJsSyntaxTree(tree: unknown): tree is JsSyntaxTree;
 export declare function executeJsQueryAsNativeMatches(
   source: string,
   language: JsLanguage,

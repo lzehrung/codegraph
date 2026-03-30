@@ -116,7 +116,7 @@ Sample graph: [sample-graph.md](./sample-graph.md)
 * **Vue / Svelte SFCs** (`.vue`, `.svelte`) - script blocks are parsed with the JS/TS pipeline for dependency graphs and chunking, while semantic navigation remains intentionally limited.
 
 Each listed language participates in the same shared indexing and navigation pipeline.
-When the native addon is available, all listed source languages use the same native Tree-sitter runtime and query model; unsupported capabilities still fall back through the shared package-hosted JS path where needed.
+When the native addon is available, all listed source languages use the same native Tree-sitter runtime and query model; unsupported capabilities can fall back through the optional `@lzehrung/codegraph-js-fallback` package when it is installed.
 The regression suite covers deeper syntax variants and end-to-end native semantic parity for the source-language fixture set, plus graph/specifier parity for the graph-first product types.
 See the coverage matrix in [docs/language-parity.md](./docs/language-parity.md).
 
@@ -234,6 +234,14 @@ npm install @lzehrung/codegraph
 
 That is the simplest way to use the native Tree-sitter path. `@lzehrung/codegraph` depends on `@lzehrung/codegraph-native`, and that package resolves the matching native artifact automatically when a published binary exists for the current platform.
 
+If you explicitly want the JS Tree-sitter fallback path as well, install the separate opt-in package:
+
+```bash
+npm install @lzehrung/codegraph-js-fallback --legacy-peer-deps
+```
+
+`--legacy-peer-deps` is currently needed because `tree-sitter-kotlin` still publishes stale peer metadata even though the fallback stack works with the newer shared `tree-sitter` runtime used here.
+
 ### Option 2: Install from the release page
 
 Download and install directly from a GitHub release without configuring a registry:
@@ -242,7 +250,7 @@ Download and install directly from a GitHub release without configuring a regist
 npm install https://github.com/lzehrung/codegraph/releases/download/vVERSION/lzehrung-codegraph-VERSION.tgz
 ```
 
-Replace `VERSION` with the desired release version (e.g. `1.8.30`). Each release attaches a pre-built `.tgz` that `npm install` can consume by URL with no registry configuration needed. This install path still needs access to `@lzehrung/codegraph-native`, because the root package depends on it directly and that package owns both the native addon and the JS Tree-sitter fallback path.
+Replace `VERSION` with the desired release version (e.g. `1.8.30`). Each release attaches a pre-built `.tgz` that `npm install` can consume by URL with no registry configuration needed. This install path still needs access to `@lzehrung/codegraph-native`, which owns the native addon. The JS Tree-sitter fallback path is now split into the separate opt-in package `@lzehrung/codegraph-js-fallback`.
 
 ### Option 3: Local source checkout
 
@@ -263,9 +271,9 @@ Use this path when you are developing on codegraph itself or want to build the n
 * **Node.js 18+**
 * Published installs do not require Rust or a manual native setup step on supported targets
 * Local native builds require a working Rust toolchain plus `npm run build:native`
-* If no compatible native artifact is available, Codegraph falls back through `@lzehrung/codegraph-native`'s JS Tree-sitter path automatically
+* If no compatible native artifact is available, install `@lzehrung/codegraph-js-fallback` to enable the opt-in JS Tree-sitter fallback path
 * Native runtime mode defaults to `auto`
-* Set `CODEGRAPH_DISABLE_NATIVE=1` to make `auto` prefer the JS Tree-sitter fallback path by default
+* Set `CODEGRAPH_DISABLE_NATIVE=1` to make `auto` prefer the optional JS Tree-sitter fallback path by default when `@lzehrung/codegraph-js-fallback` is installed
 * The CLI, library, and agent-tool wrappers also accept explicit native runtime overrides: `auto`, `on`, `off`
 * Explicit `native` options take precedence over `CODEGRAPH_DISABLE_NATIVE`
 
@@ -277,7 +285,7 @@ Use this path when you are developing on codegraph itself or want to build the n
 
 After installing the package, use the `codegraph` CLI:
 
-The CLI defaults to `--native auto`, which uses the native Tree-sitter path when a compatible native artifact is available and falls back automatically otherwise. Use `--native on` to require native explicitly, or `--native off` to force the JS Tree-sitter fallback path for comparison and debugging.
+The CLI defaults to `--native auto`, which uses the native Tree-sitter path when a compatible native artifact is available and falls back automatically otherwise. Use `--native on` to require native explicitly, or `--native off` to force the optional JS Tree-sitter fallback path for comparison and debugging when `@lzehrung/codegraph-js-fallback` is installed.
 
 ```bash
 # File dependency graph only (default; no symbols)
@@ -361,10 +369,10 @@ npx codegraph index --native on --report
 # Emit a JSON timing/cache report to stderr (or a file)
 npx codegraph index --report
 npx codegraph review --report --report-file review.report.json
-# Compare native addon vs forced package-hosted JS fallback on representative fixtures
+# Compare native addon vs forced opt-in JS fallback on representative fixtures
 npm run bench:native
 # `bench:native` now includes both cold and warm full-index runs plus graph-only runs by default.
-# In benchmark output, `js` means the `native: "off"` package-hosted JS fallback path.
+# In benchmark output, `js` means the `native: "off"` opt-in JS fallback path.
 # Warm full-index runs measure cache-reuse behavior, so their measured backend counters can be zero even when the warmup pass used native parsing.
 # Use `--fixtures repo` when you want to benchmark the codegraph repo itself instead of the smaller sample fixture sets.
 # Benchmark output reports processed file count and resulting graph node count separately for graph workloads.

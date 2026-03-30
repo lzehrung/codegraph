@@ -1,4 +1,4 @@
-import type { JsLanguage } from "@lzehrung/codegraph-native/js-fallback";
+import type { JsLanguage } from "../jsFallback.js";
 export type { JsLanguage };
 
 export interface SyntaxPositionLike {

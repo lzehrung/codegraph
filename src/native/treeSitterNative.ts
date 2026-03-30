@@ -6,7 +6,7 @@ import {
   type JsLanguage,
   type JsNativeMatch,
   type JsSyntaxTree,
-} from "@lzehrung/codegraph-native/js-fallback";
+} from "../jsFallback.js";
 import type { LanguageSupport } from "../languages.js";
 import type { NativeQueryKind } from "../languages/types.js";
 import { stringifyUnknown } from "../util.js";
