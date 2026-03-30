@@ -132,6 +132,13 @@ export function isJsFallbackAvailable(): boolean {
   return loadJsFallbackModule().loaded;
 }
 
+export function isJsFallbackUnavailableError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("JS Tree-sitter fallback is unavailable")
+  );
+}
+
 export function loadTreeSitterLanguage(packageName: string): JsLanguage {
   return requireJsFallback("grammar loading").loadTreeSitterLanguage(
     packageName,

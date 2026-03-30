@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { createRequire } from "node:module";
 import {
+  isJsFallbackUnavailableError,
   isJsSyntaxTree,
   parseWithJsLanguage,
   type JsSyntaxTree,
@@ -248,9 +249,9 @@ type PreparedFileContext = {
   nativeError?: string;
 };
 
-function parsePreparedFileContext(
+function tryParsePreparedFileContext(
   context: PreparedFileContext,
-): ParsedFileContext {
+): ParsedFileContext | null {
   const { file, source, sup, nativeMode, nativeQueries } = context;
   const nativeTreeExecution = getNativeSyntaxTreeExecution(
     source,
@@ -266,9 +267,21 @@ function parsePreparedFileContext(
     };
   }
 
-  const resolvedLang = context.lang ?? sup.language(file);
-  const tree = parseWithJsLanguage(source, resolvedLang);
-  return { source, tree, sup, lang: resolvedLang, nativeQueries };
+  try {
+    const resolvedLang = context.lang ?? sup.language(file);
+    const tree = parseWithJsLanguage(source, resolvedLang);
+    return { source, tree, sup, lang: resolvedLang, nativeQueries };
+  } catch {
+    return null;
+  }
+}
+
+function parsePreparedFileContext(
+  context: PreparedFileContext,
+): ParsedFileContext {
+  const parsed = tryParsePreparedFileContext(context);
+  if (parsed) return parsed;
+  throw new Error(`Failed to reconstruct syntax tree for ${context.file}`);
 }
 
 /**
@@ -3727,22 +3740,25 @@ async function buildIndexFromFileListShared(
       let tree: SyntaxTreeLike | undefined;
 
       if (!nativeQueries) {
-        const parsed = parsePreparedFileContext(prepared);
-        tree = parsed.tree;
-        resolvedLang = parsed.lang;
-        setParsedCacheEntry(
-          parsedMap,
-          f,
-          {
-            source: parsed.source,
-            tree: parsed.tree,
-            sup: parsed.sup,
-            ...(parsed.lang ? { lang: parsed.lang } : {}),
-            nativeQueries: parsed.nativeQueries ?? null,
-          },
-          Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
-        );
+        const parsed = tryParsePreparedFileContext(prepared);
+        if (parsed) {
+          tree = parsed.tree;
+          resolvedLang = parsed.lang;
+          setParsedCacheEntry(
+            parsedMap,
+            f,
+            {
+              source: parsed.source,
+              tree: parsed.tree,
+              sup: parsed.sup,
+              ...(parsed.lang ? { lang: parsed.lang } : {}),
+              nativeQueries: parsed.nativeQueries ?? null,
+            },
+            Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
+          );
+        }
       }
+      const lacksParserContext = !nativeQueries && !tree;
 
       if (bloomFilterCache) {
         const filter = buildBloomFilterFromSource(src, sup.id);
@@ -3760,18 +3776,25 @@ async function buildIndexFromFileListShared(
           graphOptions,
         });
         collectJsonDependencies(imports, jsonDependencies);
-        mod = collectLocalsAndExportsFromSource(
-          f,
-          src,
-          sup,
-          resolvedLang,
-          imports,
-          {
-            ...(tree ? { tree } : {}),
-            ...(nativeQueries !== undefined ? { nativeQueries } : {}),
-            ...(opts?.native ? { nativeMode: opts.native } : {}),
-          },
-        );
+        mod = lacksParserContext
+          ? {
+              file: f,
+              exports: [],
+              imports,
+              locals: [],
+            }
+          : collectLocalsAndExportsFromSource(
+              f,
+              src,
+              sup,
+              resolvedLang,
+              imports,
+              {
+                ...(tree ? { tree } : {}),
+                ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+                ...(opts?.native ? { nativeMode: opts.native } : {}),
+              },
+            );
         mod.imports = imports;
 
         if (sup.supportsCrossModuleSymbols) {
@@ -3860,6 +3883,15 @@ async function buildIndexFromFileListShared(
           locals: [],
         };
         return [f, modUnsupported, []] as const;
+      }
+      if (isJsFallbackUnavailableError(error)) {
+        const modFallbackUnavailable: ModuleIndex = {
+          file: f,
+          exports: [],
+          imports: [],
+          locals: [],
+        };
+        return [f, modFallbackUnavailable, []] as const;
       }
       console.warn(`Warning: Failed to process file ${f}:`, error);
       const modError: ModuleIndex = {
@@ -4315,16 +4347,19 @@ export async function buildProjectIndexIncremental(
           let tree: SyntaxTreeLike | undefined;
 
           if (!nativeQueries) {
-            const parsed = parsePreparedFileContext(prepared);
-            tree = parsed.tree;
-            resolvedLang = parsed.lang;
-            setParsedCacheEntry(
-              parsedMap,
-              f,
-              parsed,
-              Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
-            );
+            const parsed = tryParsePreparedFileContext(prepared);
+            if (parsed) {
+              tree = parsed.tree;
+              resolvedLang = parsed.lang;
+              setParsedCacheEntry(
+                parsedMap,
+                f,
+                parsed,
+                Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
+              );
+            }
           }
+          const lacksParserContext = !nativeQueries && !tree;
 
           // Build bloom filter for this file if enabled
           if (bloomFilterCache) {
@@ -4343,18 +4378,25 @@ export async function buildProjectIndexIncremental(
             graphOptions,
           });
           collectJsonDependencies(imports, jsonDependencies);
-          const mod = collectLocalsAndExportsFromSource(
-            f,
-            src,
-            sup,
-            resolvedLang,
-            imports,
-            {
-              ...(tree ? { tree } : {}),
-              ...(nativeQueries !== undefined ? { nativeQueries } : {}),
-              ...(opts?.native ? { nativeMode: opts.native } : {}),
-            },
-          );
+          const mod = lacksParserContext
+            ? {
+                file: f,
+                exports: [],
+                imports,
+                locals: [],
+              }
+            : collectLocalsAndExportsFromSource(
+                f,
+                src,
+                sup,
+                resolvedLang,
+                imports,
+                {
+                  ...(tree ? { tree } : {}),
+                  ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+                  ...(opts?.native ? { nativeMode: opts.native } : {}),
+                },
+              );
           mod.imports = imports;
 
           if (sup.supportsCrossModuleSymbols) {
@@ -4406,6 +4448,15 @@ export async function buildProjectIndexIncremental(
               locals: [],
             };
             return [f, modUnsupported] as const;
+          }
+          if (isJsFallbackUnavailableError(error)) {
+            const modFallbackUnavailable: ModuleIndex = {
+              file: f,
+              exports: [],
+              imports: [],
+              locals: [],
+            };
+            return [f, modFallbackUnavailable] as const;
           }
           console.warn(`Warning: Failed to process file ${f}:`, error);
           const modError: ModuleIndex = {
