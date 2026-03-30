@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isJsFallbackAvailable } from "../src/jsFallback.js";
 import { supportById } from "../src/languages.js";
 import { collectModuleSpecifiersFromSource } from "../src/graphs.js";
 import {
@@ -10,6 +11,7 @@ import {
 } from "../src/native/treeSitterNative.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
+const jsFallbackDescribe = isJsFallbackAvailable() ? describe : describe.skip;
 
 /**
  * Creates a mock binding that records which queries were non-empty.
@@ -280,7 +282,7 @@ nativeDescribe("compact imports execution", () => {
   });
 });
 
-describe("native import fallback contract by language", () => {
+jsFallbackDescribe("native import fallback contract by language", () => {
   it("treats empty native imports as authoritative for TypeScript and Java", () => {
     const cases = [
       {

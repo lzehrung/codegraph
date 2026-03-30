@@ -9,7 +9,7 @@ import {
   isJsSyntaxTree,
   parseWithJsLanguage,
   type JsSyntaxTree,
-} from "@lzehrung/codegraph-native/js-fallback";
+} from "./jsFallback.js";
 import {
   supportForFile,
   type LanguageSupport,
@@ -3291,7 +3291,7 @@ export async function collectImportsForFile(
     return imports;
   } finally {
     // No parser cleanup required: JS fallback parsing is delegated to
-    // @lzehrung/codegraph-native/js-fallback.
+    // the optional JS fallback loader bridge.
   }
 }
 

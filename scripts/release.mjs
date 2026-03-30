@@ -10,6 +10,12 @@ const nativePackagePath = path.join(
   "codegraph-native",
   "package.json",
 );
+const jsFallbackPackagePath = path.join(
+  rootDir,
+  "optional-packages",
+  "codegraph-js-fallback",
+  "package.json",
+);
 
 const validReleaseTypes = new Set(["patch", "minor", "major"]);
 
@@ -69,6 +75,7 @@ function ensureCleanWorktree() {
 function updateVersions(nextVersion) {
   const rootPackage = readJson(rootPackagePath);
   const nativePackage = readJson(nativePackagePath);
+  const jsFallbackPackage = readJson(jsFallbackPackagePath);
 
   rootPackage.version = nextVersion;
   if (rootPackage.dependencies) {
@@ -80,9 +87,11 @@ function updateVersions(nextVersion) {
   rootPackage.optionalDependencies["@lzehrung/codegraph-native"] =
     `^${nextVersion}`;
   nativePackage.version = nextVersion;
+  jsFallbackPackage.version = nextVersion;
 
   writeJson(rootPackagePath, rootPackage);
   writeJson(nativePackagePath, nativePackage);
+  writeJson(jsFallbackPackagePath, jsFallbackPackage);
 }
 
 function restoreNativePackage(version) {
@@ -98,6 +107,7 @@ function commitAndTag(version) {
     "package.json",
     "package-lock.json",
     "packages/codegraph-native/package.json",
+    "optional-packages/codegraph-js-fallback/package.json",
   ]);
   run("git", ["commit", "-m", `v${version}`]);
   run("git", ["tag", "-a", `v${version}`, "-m", `v${version}`]);
@@ -129,6 +139,7 @@ if (shouldPublish) {
   try {
     run("npm", ["run", "publish:native:targets"]);
     run("npm", ["run", "publish:native:meta"]);
+    run("npm", ["publish", "--prefix", "optional-packages/codegraph-js-fallback"]);
     run("npm", ["publish"]);
   } finally {
     restoreNativePackage(nextVersion);
