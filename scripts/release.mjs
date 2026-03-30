@@ -71,6 +71,9 @@ function updateVersions(nextVersion) {
   const nativePackage = readJson(nativePackagePath);
 
   rootPackage.version = nextVersion;
+  if (rootPackage.dependencies) {
+    delete rootPackage.dependencies["@lzehrung/codegraph-native"];
+  }
   if (!rootPackage.optionalDependencies) {
     rootPackage.optionalDependencies = {};
   }
