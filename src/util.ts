@@ -822,6 +822,58 @@ export function stripJsLikeComments(src: string): string {
   return out;
 }
 
+function stripJsonTrailingCommas(src: string): string {
+  let out = "";
+  let inSingle = false;
+  let inDouble = false;
+  let escapeNext = false;
+
+  for (let i = 0; i < src.length; i += 1) {
+    const ch = src[i]!;
+
+    if (inSingle || inDouble) {
+      out += ch;
+      if (escapeNext) {
+        escapeNext = false;
+      } else if (ch === "\\") {
+        escapeNext = true;
+      } else if (inSingle && ch === "'") {
+        inSingle = false;
+      } else if (inDouble && ch === '"') {
+        inDouble = false;
+      }
+      continue;
+    }
+
+    if (ch === "'") {
+      inSingle = true;
+      out += ch;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      out += ch;
+      continue;
+    }
+    if (ch === ",") {
+      let j = i + 1;
+      while (j < src.length && /\s/.test(src[j]!)) j += 1;
+      const next = src[j];
+      if (next === "}" || next === "]") {
+        continue;
+      }
+    }
+
+    out += ch;
+  }
+
+  return out;
+}
+
+function parseJsonc<T>(raw: string): T {
+  return JSON.parse(stripJsonTrailingCommas(stripJsLikeComments(raw))) as T;
+}
+
 export function stripPythonCommentsAndStrings(src: string): string {
   let out = src;
   out = out.replace(/([rRuU]?[fF]?)("""|''')[\s\S]*?\2/g, "");
@@ -1111,7 +1163,7 @@ async function loadTsconfigConfig(
   cfgPath: string,
 ): Promise<{ baseUrl: string; paths: Record<string, string[]> }> {
   const raw = await fsp.readFile(cfgPath, "utf8");
-  const json = JSON.parse(stripJsLikeComments(raw)) as TsconfigJson;
+  const json = parseJsonc<TsconfigJson>(raw);
   const cfgDir = path.dirname(cfgPath);
   const co = json.compilerOptions;
   const baseUrlRaw = co?.baseUrl ?? ".";
