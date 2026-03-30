@@ -1,6 +1,7 @@
 import path from "node:path";
 import fsp from "node:fs/promises";
 import {
+  isJsFallbackAvailable,
   isJsSyntaxTree,
   parseWithJsLanguage,
   type JsLanguage,
@@ -50,6 +51,10 @@ import {
   parseCsharpUsingDirective,
   parseRustImportStatement,
 } from "./languages/importStatementParsers.js";
+import {
+  extractAngularJsReferences,
+  extractAngularJsRegistrations,
+} from "./frameworks/angularjs.js";
 import { capturesByName } from "./native/queryResults.js";
 import { ProjectedSyntaxTree } from "./native/projectedTree.js";
 import {
@@ -91,6 +96,11 @@ export type GraphCacheEntry = {
   edges: Edge[];
 };
 
+type AngularJsFileContext = {
+  file: string;
+  source: string;
+};
+
 const HTML_LIKE_LANGUAGE_IDS = new Set(["html", "vue", "svelte"]);
 
 function isHtmlLikeLanguage(languageId: string, filePath?: string): boolean {
@@ -104,6 +114,114 @@ function extractKotlinImportSpecifier(statementText: string): string | null {
   );
   if (!match?.[1]) return null;
   return match[1].endsWith(".*") ? match[1].slice(0, -2) : match[1];
+}
+
+async function collectAngularJsFrameworkEdges(
+  projectRoot: string,
+  files: string[],
+  workspaceConfig: WorkspaceConfig | undefined,
+  parsed?: Map<
+    string,
+    {
+      source: string;
+      tree: SyntaxTreeLike;
+      sup: LanguageSupport;
+      lang?: JsLanguage;
+    }
+  >,
+): Promise<Edge[]> {
+  const jsFiles = files.filter((file) => file.toLowerCase().endsWith(".js"));
+  if (jsFiles.length === 0) return [];
+
+  const contexts: AngularJsFileContext[] = [];
+  for (const file of jsFiles) {
+    const parsedSource = parsed?.get(file)?.source;
+    if (parsedSource !== undefined) {
+      contexts.push({ file, source: parsedSource });
+      continue;
+    }
+    try {
+      const source = await fsp.readFile(file, "utf8");
+      contexts.push({ file, source });
+    } catch {
+      continue;
+    }
+  }
+
+  const registrationFilesByName = new Map<string, Set<string>>();
+  for (const context of contexts) {
+    for (const registration of extractAngularJsRegistrations(context.source)) {
+      let filesForName = registrationFilesByName.get(registration.name);
+      if (!filesForName) {
+        filesForName = new Set<string>();
+        registrationFilesByName.set(registration.name, filesForName);
+      }
+      filesForName.add(context.file.replace(/\\/g, "/"));
+    }
+  }
+
+  const edges: Edge[] = [];
+  const seen = new Set<string>();
+  const pushEdge = (edge: Edge): void => {
+    const key = `${edge.from}::${edge.raw}::${
+      edge.to.type === "file" ? edge.to.path : `external:${edge.to.name}`
+    }`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    edges.push(edge);
+  };
+
+  for (const context of contexts) {
+    const normalizedFile = context.file.replace(/\\/g, "/");
+    const references = extractAngularJsReferences(context.source);
+    for (const reference of references) {
+      if (reference.kind === "templateUrl") {
+        const resolved = await resolveSpecifier(
+          context.file,
+          reference.value,
+          projectRoot,
+          undefined,
+          workspaceConfig,
+        );
+        pushEdge({
+          from: normalizedFile,
+          to:
+            typeof resolved === "string"
+              ? { type: "file", path: resolved.replace(/\\/g, "/") }
+              : { type: "external", name: resolved.external },
+          raw: reference.value,
+          resolved: "heuristic",
+          confidence: 0.9,
+        });
+        continue;
+      }
+
+      const resolvedFiles = registrationFilesByName.get(reference.value);
+      if (resolvedFiles && resolvedFiles.size > 0) {
+        for (const targetFile of resolvedFiles) {
+          if (targetFile === normalizedFile) continue;
+          pushEdge({
+            from: normalizedFile,
+            to: { type: "file", path: targetFile },
+            raw: reference.value,
+            resolved: "heuristic",
+            confidence: reference.kind === "controller" ? 0.9 : 0.8,
+          });
+        }
+        continue;
+      }
+
+      pushEdge({
+        from: normalizedFile,
+        to: { type: "external", name: reference.value },
+        raw: reference.value,
+        resolved: "heuristic",
+        confidence: reference.kind === "controller" ? 0.75 : 0.7,
+      });
+    }
+  }
+
+  return edges;
 }
 
 export function collectModuleSpecifiersFromSource(
@@ -798,6 +916,22 @@ export async function collectGraph(
     }
   };
 
+  const mergeUniqueEdges = (...edgeGroups: Edge[][]): Edge[] => {
+    const merged: Edge[] = [];
+    const seen = new Set<string>();
+    for (const group of edgeGroups) {
+      for (const edge of group) {
+        const key = `${edge.from}::${edge.raw}::${
+          edge.to.type === "file" ? edge.to.path : `external:${edge.to.name}`
+        }`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(edge);
+      }
+    }
+    return merged;
+  };
+
   if (graph.edges.length > 0) {
     addEdgeTargetsToGraph(graph.edges);
   }
@@ -848,7 +982,14 @@ export async function collectGraph(
 
   const allEdges = filePromises;
   const newEdges = allEdges.flat();
-  graph.edges = [...graph.edges, ...newEdges];
+  const angularJsEdges = await collectAngularJsFrameworkEdges(
+    projectRoot,
+    files,
+    workspaceConfig,
+    opts?.parsed,
+  );
+  addEdgeTargetsToGraph(angularJsEdges);
+  graph.edges = mergeUniqueEdges(graph.edges, newEdges, angularJsEdges);
   return graph;
 }
 
@@ -1589,6 +1730,7 @@ export async function buildSymbolGraphDetailed(
   const base = await buildSymbolGraph(index);
   const nodes = new Map(base.nodes);
   const edges = base.edges.slice();
+  let skippedJsFallbackFiles = 0;
 
   const added = new Set<string>();
   const maxEdges =
@@ -1738,6 +1880,10 @@ export async function buildSymbolGraphDetailed(
         if (nativeTreeExecution.tree) {
           tree = new ProjectedSyntaxTree(src, nativeTreeExecution.tree);
         } else {
+          if (!isJsFallbackAvailable()) {
+            skippedJsFallbackFiles += 1;
+            continue;
+          }
           lang ??= sup.language(file);
           tree = parseWithJsLanguage(src, lang);
         }
@@ -2419,6 +2565,12 @@ export async function buildSymbolGraphDetailed(
         error,
       );
     }
+  }
+
+  if (skippedJsFallbackFiles > 0) {
+    console.warn(
+      `Warning: Skipped detailed symbol edges for ${skippedJsFallbackFiles} file(s) because the JS Tree-sitter fallback is unavailable.`,
+    );
   }
 
   return { nodes, edges };

@@ -114,6 +114,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | --- | --- | --- | --- | --- |
 | Dynamic import specifier | `tests/samples/javascript/dynamic-import.js` | Dependency graph includes edge to `helpers.js` when `import()` is used. | https://github.com/tree-sitter/tree-sitter-javascript | 2026-01-22 |
 | CommonJS import bindings | `tests/native-tree-sitter.test.ts` | Import binding extraction matches between native and JS Tree-sitter for `require()` and destructured CommonJS imports. | Internal regression test | 2026-03-22 |
+| AngularJS heuristic graph enrichment | `tests/samples/javascript/angularjs/*`, `tests/angularjs-framework.test.ts` | Dependency graph adds heuristic edges for AngularJS `templateUrl`, controller-name references, and DI tokens only when files explicitly use `angular.module(...)`, and avoids triggering on non-AngularJS config objects with similar field names. | Internal regression fixture | 2026-03-30 |
 
 ## Kotlin
 
