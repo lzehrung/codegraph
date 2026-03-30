@@ -28,7 +28,7 @@ Status key:
 | Svelte | No | No | No | No | Yes | Yes | Yes | Yes | Yes |
 
 Notes:
-- The native addon uses the same Tree-sitter query model as the package-hosted JS fallback path for all listed source languages.
+- The native addon uses the same Tree-sitter query model as the opt-in `@lzehrung/codegraph-js-fallback` path for all listed source languages.
 - Native parity coverage includes both extraction parity and end-to-end semantic parity on the current source-language fixture set (`TypeScript`, `TSX`, `JavaScript`, `Python`, `Go`, `Java`, `C#`, `Rust`, `Kotlin`, `Swift`, `C`, `C++`, `Ruby`) plus graph/specifier parity for `HTML`, `CSS`, `Less`, `SCSS`, `Vue`, and `Svelte`.
 - Deeper hardening coverage now includes Go aliased imports and interface-typed uses, Kotlin alias and wildcard imports, Java wildcard-import package fixtures, Rust nested modules and reexports, Swift static-member fixtures, C function-pointer typedef fixtures, C++ namespace/template fixtures, and Ruby nested module fixtures.
 - `SCSS` uses the native addon for import/specifier extraction. Native SCSS symbol queries are intentionally skipped because symbol extraction is not a supported SCSS capability yet.

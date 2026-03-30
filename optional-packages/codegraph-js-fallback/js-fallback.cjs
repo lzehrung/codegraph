@@ -1,8 +1,8 @@
-import path from "node:path";
-import { createRequire } from "node:module";
-import Parser from "tree-sitter";
+const path = require("node:path");
+const { createRequire } = require("node:module");
+const Parser = require("tree-sitter");
 
-const require = createRequire(import.meta.url);
+const requireFromHere = createRequire(__filename);
 const languageCache = new Map();
 let typescriptCache = null;
 
@@ -32,7 +32,7 @@ function shouldFallbackToBinding(error) {
 }
 
 function loadBindingFromPackage(packageName) {
-  const packageJsonPath = require.resolve(`${packageName}/package.json`);
+  const packageJsonPath = requireFromHere.resolve(`${packageName}/package.json`);
   const packageRoot = path.dirname(packageJsonPath);
   const packageRequire = createRequire(packageJsonPath);
   const nodeGypBuild = packageRequire("node-gyp-build");
@@ -52,7 +52,7 @@ function loadBindingFromPackage(packageName) {
 
 function loadPackageModule(packageName) {
   try {
-    return require(packageName);
+    return requireFromHere(packageName);
   } catch (error) {
     if (shouldFallbackToBinding(error)) {
       return loadBindingFromPackage(packageName);
@@ -61,7 +61,7 @@ function loadPackageModule(packageName) {
   }
 }
 
-export function loadTreeSitterLanguage(packageName) {
+function loadTreeSitterLanguage(packageName) {
   const cached = languageCache.get(packageName);
   if (cached) return cached;
 
@@ -74,7 +74,7 @@ export function loadTreeSitterLanguage(packageName) {
   return candidate;
 }
 
-export function loadTypeScriptGrammars() {
+function loadTypeScriptGrammars() {
   if (typescriptCache) return typescriptCache;
   const mod = loadPackageModule("tree-sitter-typescript");
   const candidate = extractDefaultExport(mod);
@@ -88,19 +88,10 @@ export function loadTypeScriptGrammars() {
   throw new Error("Failed to load tree-sitter-typescript grammars");
 }
 
-export function parseWithJsLanguage(source, language) {
+function parseWithJsLanguage(source, language) {
   const parser = new Parser();
   parser.setLanguage(language);
   return parser.parse(source);
-}
-
-export function isJsSyntaxTree(tree) {
-  return (
-    typeof tree === "object" &&
-    tree !== null &&
-    "rootNode" in tree &&
-    "walk" in tree
-  );
 }
 
 function toNativeMatch(match) {
@@ -124,8 +115,15 @@ function toNativeMatch(match) {
   };
 }
 
-export function executeJsQueryAsNativeMatches(source, language, queryText, tree) {
+function executeJsQueryAsNativeMatches(source, language, queryText, tree) {
   const resolvedTree = tree ?? parseWithJsLanguage(source, language);
   const query = new Parser.Query(language, queryText);
   return query.matches(resolvedTree.rootNode).map(toNativeMatch);
 }
+
+module.exports = {
+  loadTreeSitterLanguage,
+  loadTypeScriptGrammars,
+  parseWithJsLanguage,
+  executeJsQueryAsNativeMatches,
+};

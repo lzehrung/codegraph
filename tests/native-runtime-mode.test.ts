@@ -6,10 +6,12 @@ import {
   collectGraph,
   type BuildReport,
 } from "../src/index.js";
+import { isJsFallbackAvailable } from "../src/jsFallback.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
 
 describe("native runtime mode", () => {
   const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
+  const jsFallbackIt = isJsFallbackAvailable() ? it : it.skip;
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -42,7 +44,7 @@ describe("native runtime mode", () => {
     expect(report.backend?.native?.enabled).toBe(false);
   });
 
-  it("threads native: off through syntax-tree reconstruction paths", async () => {
+  jsFallbackIt("threads native: off through syntax-tree reconstruction paths", async () => {
     const spy = vi.spyOn(nativeRuntime, "getNativeSyntaxTreeExecution");
 
     const index = await buildProjectIndex(samplePath, {

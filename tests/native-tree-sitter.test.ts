@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { parseWithJsLanguage } from "@lzehrung/codegraph-native/js-fallback";
+import {
+  isJsFallbackAvailable,
+  parseWithJsLanguage,
+} from "../src/jsFallback.js";
 import {
   collectImportsForFile,
   collectLocalsAndExportsFromSource,
@@ -13,6 +16,7 @@ import { collectModuleSpecifiersFromSource } from "../src/graphs.js";
 import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
+const jsFallbackDescribe = isJsFallbackAvailable() ? describe : describe.skip;
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples");
 const tempDirs: string[] = [];
 
@@ -184,7 +188,7 @@ async function expectNativeModuleSpecifierParity(relativeFile: string): Promise<
   expect(nativeSpecifiers).toEqual(jsSpecifiers);
 }
 
-nativeDescribe("native tree-sitter integration", () => {
+jsFallbackDescribe("native tree-sitter integration", () => {
   it("matches JS import extraction with and without native query results", async () => {
     const projectRoot = await makeTempProject();
     const entry = path.join(projectRoot, "entry.js");

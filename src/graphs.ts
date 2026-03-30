@@ -5,7 +5,7 @@ import {
   parseWithJsLanguage,
   type JsLanguage,
   type JsSyntaxTree,
-} from "@lzehrung/codegraph-native/js-fallback";
+} from "./jsFallback.js";
 import {
   isUnsupportedParserInputError,
   prepareSourceInput,
