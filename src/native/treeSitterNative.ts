@@ -10,6 +10,7 @@ import {
 import type { LanguageSupport } from "../languages.js";
 import type { NativeQueryKind } from "../languages/types.js";
 import { stringifyUnknown } from "../util.js";
+import { loadNativeBinding } from "./bindingLoader.js";
 
 export const NATIVE_QUERY_KINDS: NativeQueryKind[] = [
   "imports",
@@ -152,25 +153,21 @@ function loadBinding():
   | { loaded: true; binding: NativeBinding; supportedLanguageIds: Set<string> }
   | { loaded: false; error?: unknown } {
   if (bindingState) return bindingState;
-  const candidates = [
-    "@lzehrung/codegraph-native",
-    localNativePackageRoot,
-  ] as const;
-  let lastError: unknown;
-  for (const candidate of candidates) {
-    try {
-      const binding = require(candidate) as NativeBinding;
-      bindingState = {
-        loaded: true,
-        binding,
-        supportedLanguageIds: new Set(binding.supportedLanguageIds()),
-      };
-      return bindingState;
-    } catch (error) {
-      lastError = error;
-    }
+  const loaded = loadNativeBinding<NativeBinding>({
+    packageName: "@lzehrung/codegraph-native",
+    localPackageRoot: localNativePackageRoot,
+    requireFn: require,
+    resolveFn: require.resolve,
+  });
+  if (loaded.binding) {
+    bindingState = {
+      loaded: true,
+      binding: loaded.binding,
+      supportedLanguageIds: new Set(loaded.binding.supportedLanguageIds()),
+    };
+    return bindingState;
   }
-  bindingState = { loaded: false, error: lastError };
+  bindingState = { loaded: false, error: loaded.error };
   return bindingState;
 }
 
