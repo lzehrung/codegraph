@@ -414,6 +414,15 @@ describe('Go to Definition', () => {
 
       await testGoToDefinition(index, wildcardFile, 6, 16, packageFile, 4);
     });
+
+    it('should find definition of static wildcard-imported methods', async () => {
+      const index = await createTestIndex('java');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'java');
+      const wildcardFile = path.join(samplePath, 'StaticWildcardImports.java').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'utils', 'Utils.java').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, wildcardFile, 7, 5, utilsFile, 4);
+    });
   });
 
   describe('C#', () => {

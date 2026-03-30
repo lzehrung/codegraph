@@ -21,6 +21,8 @@ import {
 } from "./languages/filePrep.js";
 import {
   parseCsharpUsingDirective,
+  parseJavaImportStatement,
+  parseKotlinImportStatement,
   parseRustImportStatement,
 } from "./languages/importStatementParsers.js";
 import {
@@ -2476,9 +2478,45 @@ export async function collectImportsForFile(
       });
     }
   };
+  const appendKotlinTextImports = async (): Promise<void> => {
+    if (resolvedSup.id !== "kotlin" || imports.length > 0) {
+      return;
+    }
+    const importPattern =
+      /^\s*import\s+([A-Za-z_][\w.]*(?:\.\*)?)(?:\s+as\s+([A-Za-z_][\w]*))?\s*$/gm;
+    for (const match of resolvedSource.matchAll(importPattern)) {
+      const rawSpec = match[1];
+      if (!rawSpec) continue;
+      if (rawSpec.endsWith(".*")) {
+        const fromValue = rawSpec.slice(0, -2);
+        const resolved = await resolveFrom(fromValue);
+        imports.push({
+          kind: "star",
+          from: fromValue,
+          resolved,
+          typeOnly: false,
+        });
+        continue;
+      }
+
+      const parts = rawSpec.split(".");
+      const imported = parts[parts.length - 1];
+      if (!imported) continue;
+      const resolved = await resolveFrom(rawSpec);
+      imports.push({
+        kind: "named",
+        local: match[2] ?? imported,
+        imported,
+        from: rawSpec,
+        resolved,
+        typeOnly: false,
+      });
+    }
+  };
   const finalizeLanguageSpecificImports = async (): Promise<void> => {
     normalizeGoImports();
     await appendJavaTextImports();
+    await appendKotlinTextImports();
   };
   const handledStatementImports = new Set<string>();
   const applyStatementImportOverride = async (
@@ -2524,6 +2562,60 @@ export async function collectImportsForFile(
         imports.push({
           kind: "star",
           from: fromValue,
+          resolved,
+          typeOnly,
+        });
+      }
+      return true;
+    }
+
+    if (resolvedSup.id === "java") {
+      const parsed = parseJavaImportStatement(normalizedStmt);
+      if (!parsed) return false;
+      if (handledStatementImports.has(normalizedStmt)) return true;
+      handledStatementImports.add(normalizedStmt);
+
+      const resolved = await resolveFrom(parsed.from);
+      if (parsed.kind === "star") {
+        imports.push({
+          kind: "star",
+          from: parsed.from,
+          resolved,
+          typeOnly,
+        });
+      } else {
+        imports.push({
+          kind: "named",
+          local: parsed.imported,
+          imported: parsed.imported,
+          from: parsed.from,
+          resolved,
+          typeOnly,
+        });
+      }
+      return true;
+    }
+
+    if (resolvedSup.id === "kotlin") {
+      const parsed = parseKotlinImportStatement(normalizedStmt);
+      if (!parsed) return false;
+      if (handledStatementImports.has(normalizedStmt)) return true;
+      handledStatementImports.add(normalizedStmt);
+
+      const resolved = await resolveFrom(parsed.from);
+      if (parsed.kind === "star") {
+        imports.push({
+          kind: "star",
+          from: parsed.from,
+          resolved,
+          typeOnly,
+        });
+      } else {
+        imports.push({
+          kind: "named",
+          local: parsed.local,
+          imported: parsed.imported,
+          from: parsed.from,
           resolved,
           typeOnly,
         });

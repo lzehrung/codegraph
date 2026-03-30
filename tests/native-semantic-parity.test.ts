@@ -311,6 +311,13 @@ nativeDescribe("native semantic parity", () => {
         { file: "pkg/PackageTypes.java", line: 7, column: 11, expectedStatus: "ok" },
       ),
       sampleExpectation(
+        "java",
+        ["StaticWildcardImports.java", "utils/Utils.java"],
+        [{ file: "utils/Utils.java", names: ["Utils", "helperFunction"] }],
+        { file: "StaticWildcardImports.java", line: 7, column: 5, expectedStatus: "ok" },
+        { file: "utils/Utils.java", line: 4, column: 22, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
         "csharp",
         ["Main.cs", "Utils.cs", "Helpers.cs"],
         [{ file: "Utils.cs", names: ["UtilsClass", "HelperFunction"] }],
