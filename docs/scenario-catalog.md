@@ -24,12 +24,14 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | HTML import-specifier parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same HTML `src` and `href` module specifiers. | Internal regression test | 2026-03-22 |
 | Go import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same Go file imports for package-relative fixtures. | Internal regression test | 2026-03-22 |
 | Java import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same Java imports for package and static-import fixtures. | Internal regression test | 2026-03-22 |
+| Java static wildcard import bindings | `tests/import-binding-regressions.test.ts`, `tests/samples/java/StaticWildcardImports.java` | Import binding extraction treats `import static Type.*;` as a star import from the declaring type, and navigation/reference coverage resolves the imported members. | Internal regression test | 2026-03-29 |
 | C# import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same `using`-based imports. | Internal regression test | 2026-03-22 |
 | C# alias-using graph parity | `tests/languages/csharp.test.ts`, `tests/native-semantic-parity.test.ts` | Native and forced-JS graph extraction stay aligned for alias-based `using` directives, including namespace aliases. | Internal regression test | 2026-03-29 |
 | Rust import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same `mod` and `use` imports. | Internal regression test | 2026-03-22 |
 | Rust aliased-use and extern-crate parity | `tests/languages/rust.test.ts`, `tests/native-semantic-parity.test.ts` | Native and forced-JS extraction stay aligned for aliased `use` imports and `extern crate` graph edges. | Internal regression test | 2026-03-29 |
 | Ruby import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same `require_relative` imports. | Internal regression test | 2026-03-22 |
 | Kotlin import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same Kotlin import extraction after native query normalization. | Internal regression test | 2026-03-22 |
+| Kotlin alias import bindings | `tests/import-binding-regressions.test.ts`, `tests/samples/kotlin/Aliases.kt` | Import binding extraction retains aliased Kotlin imports even when the query path yields no direct binding matches. | Internal regression test | 2026-03-29 |
 | Swift import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same Swift imports and top-level symbol extraction. | Internal regression test | 2026-03-22 |
 | C import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same C header include edges and symbol extraction. | Internal regression test | 2026-03-22 |
 | C++ import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same C++ header include edges and symbol extraction. | Internal regression test | 2026-03-22 |
@@ -103,6 +105,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | --- | --- | --- | --- | --- |
 | Static imports | `tests/samples/java/static-imports.java` | Dependency graph includes edges to `utils/Utils.java` and `helpers/Helpers.java` for static imports. | https://github.com/tree-sitter/tree-sitter-java | 2026-01-22 |
 | Wildcard package imports | `tests/samples/java/WildcardImports.java`, `tests/samples/java/pkg/PackageTypes.java` | Dependency graph, wildcard-imported nested-type navigation, and interface references resolve across package fixtures. | Internal regression fixture | 2026-03-23 |
+| Static wildcard imports | `tests/samples/java/StaticWildcardImports.java`, `tests/samples/java/utils/Utils.java` | Dependency graph, go-to-definition, and references resolve Java static wildcard imports back to the declaring utility class. | Internal regression fixture | 2026-03-29 |
 | Nested classes and interfaces | `tests/samples/java/NestedTypes.java` | Symbol extraction includes nested classes, nested interfaces, and their member methods. | Internal regression fixture | 2026-03-22 |
 
 ## JavaScript
@@ -117,7 +120,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Scenario | Sample | Expected behavior | Source | Date added |
 | --- | --- | --- | --- | --- |
 | Package imports | `tests/samples/kotlin/main.kt` | Dependency graph includes edges to `utils/helperFunction.kt` and `helpers/helperFromHelpers.kt`. | Internal parity fixture | 2026-03-22 |
-| Alias and wildcard imports | `tests/samples/kotlin/Aliases.kt`, `tests/samples/kotlin/TypeConsumers.kt`, `tests/samples/kotlin/utils/MoreTypes.kt` | Dependency graph, go-to-definition, and references resolve aliased and wildcard-imported Kotlin symbols across files. | Internal regression fixture | 2026-03-23 |
+| Alias and wildcard imports | `tests/samples/kotlin/Aliases.kt`, `tests/samples/kotlin/TypeConsumers.kt`, `tests/samples/kotlin/utils/MoreTypes.kt` | Dependency graph, direct import-binding extraction, go-to-definition, and references resolve aliased and wildcard-imported Kotlin symbols across files. | Internal regression fixture | 2026-03-23 |
 | Enums, type aliases, and top-level properties | `tests/samples/kotlin/Models.kt` | Symbol extraction includes enum declarations and entries, type aliases, top-level properties, and generic classes. | Internal regression fixture | 2026-03-22 |
 | Package go-to-definition | `tests/goto.test.ts` | Imported top-level functions and imported classes resolve from `main.kt` into `utils/helperFunction.kt`. | Internal regression test | 2026-03-23 |
 | Package references | `tests/references.test.ts` | Imported function and class references resolve across `main.kt` and `utils/helperFunction.kt`. | Internal regression test | 2026-03-23 |
