@@ -25,30 +25,6 @@ const definition: LanguageTestDefinition = {
         from: "dynamic-import.js",
         to: { type: "file", path: "helpers.js" },
       },
-      {
-        from: "angularjs/user.service.js",
-        to: { type: "external", name: "$http" },
-      },
-      {
-        from: "angularjs/user.controller.js",
-        to: { type: "file", path: "angularjs/user.service.js" },
-      },
-      {
-        from: "angularjs/user.controller.js",
-        to: { type: "external", name: "$scope" },
-      },
-      {
-        from: "angularjs/user.controller.js",
-        to: { type: "external", name: "$state" },
-      },
-      {
-        from: "angularjs/user-card.directive.js",
-        to: { type: "file", path: "angularjs/user.controller.js" },
-      },
-      {
-        from: "angularjs/user-card.directive.js",
-        to: { type: "file", path: "angularjs/user-card.template.html" },
-      },
     ],
   },
 };

@@ -13,37 +13,19 @@ async function mkTmpDir(prefix: string): Promise<string> {
 }
 
 const normalizePath = (value: string): string => value.replace(/\\/g, "/");
+const frameworkSamplePath = (...parts: string[]): string =>
+  path.resolve(
+    process.cwd(),
+    "tests",
+    "samples",
+    "frameworks",
+    "angularjs",
+    ...parts,
+  );
 
 describe("AngularJS framework characterization", () => {
   it("keeps useful baseline JS import and symbol-use edges inside controller bodies", async () => {
-    const root = await mkTmpDir("cg-angularjs-baseline-");
-    await fsp.writeFile(
-      path.join(root, "user.service.js"),
-      [
-        "export function userService($http) {",
-        "  return {",
-        "    load() {",
-        "      return $http.get('/api/users');",
-        "    }",
-        "  };",
-        "}",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    await fsp.writeFile(
-      path.join(root, "user.controller.js"),
-      [
-        "import { userService } from './user.service.js';",
-        "angular.module('admin').controller('UserCtrl', ['$scope', '$state', 'userService', function UserCtrl($scope, $state, userService) {",
-        "  $scope.refresh = function refresh() {",
-        "    return userService.load();",
-        "  };",
-        "}]);",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
+    const root = frameworkSamplePath("baseline");
 
     const index = await buildProjectIndex(root);
     const graph = await collectGraph(root, Array.from(index.byFile.keys()));
@@ -113,51 +95,7 @@ describe("AngularJS framework characterization", () => {
   });
 
   it("adds heuristic graph edges for AngularJS template, controller, and DI wiring", async () => {
-    const root = await mkTmpDir("cg-angularjs-graph-");
-    await fsp.writeFile(
-      path.join(root, "user.service.js"),
-      [
-        "angular.module('admin').service('userService', function userService($http) {",
-        "  this.load = function load() {",
-        "    return $http.get('/api/users');",
-        "  };",
-        "});",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    await fsp.writeFile(
-      path.join(root, "user.controller.js"),
-      [
-        "angular.module('admin').controller('UserCtrl', ['$scope', '$state', 'userService', function UserCtrl($scope, $state, userService) {",
-        "  $scope.refresh = function refresh() {",
-        "    return userService.load();",
-        "  };",
-        "}]);",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    await fsp.writeFile(
-      path.join(root, "user-card.directive.js"),
-      [
-        "angular.module('admin').directive('userCard', function userCard() {",
-        "  return {",
-        "    scope: {},",
-        "    templateUrl: './user-card.template.html',",
-        "    controller: 'UserCtrl',",
-        "    controllerAs: 'vm'",
-        "  };",
-        "});",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    await fsp.writeFile(
-      path.join(root, "user-card.template.html"),
-      "<section><button ng-click=\"vm.refresh()\">Refresh</button></section>\n",
-      "utf8",
-    );
+    const root = frameworkSamplePath("graph");
 
     const index = await buildProjectIndex(root);
     const graph = await collectGraph(root, Array.from(index.byFile.keys()));
