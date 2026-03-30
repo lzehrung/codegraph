@@ -1495,11 +1495,13 @@ The old release ergonomics are back. Use the root scripts to cut synchronized re
 npm run release:patch
 npm run release:minor
 npm run release:major
+npm run release:resume
 
 # Same flow, plus stage/publish the local native target, publish the native meta package, and publish the root package
 npm run publish:patch
 npm run publish:minor
 npm run publish:major
+npm run publish:resume
 ```
 
 The release scripts:
@@ -1507,6 +1509,9 @@ The release scripts:
 - Run tests plus JS/native builds before tagging
 - Keep staged native metadata as publish-time state instead of committed source state
 - Stage the current platform's native package automatically for local publish flows
+- Skip package publishes that already completed so interrupted releases can be resumed safely
 - Create the git commit and tag, then push both
+
+If a publish is interrupted after the version bump but before commit/tag/push finishes, use `npm run publish:resume` to finish the current version instead of cutting another patch release.
 
 For multi-platform releases, stage additional native target artifacts before publish. See [PUBLISHING.md](./PUBLISHING.md) for the detailed release flow.

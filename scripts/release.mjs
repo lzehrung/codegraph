@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import {
+  bumpVersion,
+  computePublishPlan,
+  isAllowedResumePath,
+  validReleaseTypes,
+} from "./release-lib.mjs";
 
 const rootDir = process.cwd();
 const rootPackagePath = path.join(rootDir, "package.json");
@@ -16,8 +22,6 @@ const jsFallbackPackagePath = path.join(
   "codegraph-js-fallback",
   "package.json",
 );
-
-const validReleaseTypes = new Set(["patch", "minor", "major"]);
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -39,6 +43,20 @@ function run(command, args, options = {}) {
   }
 }
 
+function runOutput(command, args, options = {}) {
+  const result = spawnSync(command, args, {
+    cwd: rootDir,
+    encoding: "utf8",
+    shell: process.platform === "win32",
+    ...options,
+  });
+  return {
+    status: result.status ?? 1,
+    stdout: result.stdout?.trim() ?? "",
+    stderr: result.stderr?.trim() ?? "",
+  };
+}
+
 function gitOutput(args) {
   const result = spawnSync("git", args, {
     cwd: rootDir,
@@ -51,23 +69,29 @@ function gitOutput(args) {
   return result.stdout.trim();
 }
 
-function bumpVersion(version, releaseType) {
-  const match = version.match(/^(\d+)\.(\d+)\.(\d+)$/);
-  if (!match) {
-    throw new Error(`Unsupported version format: ${version}`);
-  }
-  const major = Number(match[1]);
-  const minor = Number(match[2]);
-  const patch = Number(match[3]);
-  if (releaseType === "patch") return `${major}.${minor}.${patch + 1}`;
-  if (releaseType === "minor") return `${major}.${minor + 1}.0`;
-  return `${major + 1}.0.0`;
-}
-
 function ensureCleanWorktree() {
   const status = gitOutput(["status", "--short"]);
   if (status) {
     console.error("Release scripts require a clean git worktree.");
+    process.exit(1);
+  }
+}
+
+function ensureResumableWorktree() {
+  const status = gitOutput(["status", "--short"]);
+  if (!status) {
+    return;
+  }
+  const unexpectedPaths = status
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.slice(3))
+    .filter((filePath) => !isAllowedResumePath(filePath));
+  if (unexpectedPaths.length > 0) {
+    console.error(
+      `Release resume only supports dirty version files. Unexpected paths: ${unexpectedPaths.join(", ")}`,
+    );
     process.exit(1);
   }
 }
@@ -101,6 +125,20 @@ function restoreNativePackage(version) {
   writeJson(nativePackagePath, nativePackage);
 }
 
+function doesLocalTagExist(version) {
+  return gitOutput(["tag", "--list", `v${version}`]).length > 0;
+}
+
+function packageExistsInRegistry(packageName, version) {
+  const result = runOutput("npm", [
+    "view",
+    `${packageName}@${version}`,
+    "version",
+    "--registry=https://npm.pkg.github.com",
+  ]);
+  return result.status === 0 && result.stdout === version;
+}
+
 function commitAndTag(version) {
   run("git", [
     "add",
@@ -109,38 +147,81 @@ function commitAndTag(version) {
     "packages/codegraph-native/package.json",
     "optional-packages/codegraph-js-fallback/package.json",
   ]);
-  run("git", ["commit", "-m", `v${version}`]);
-  run("git", ["tag", "-a", `v${version}`, "-m", `v${version}`]);
+  const commitNeeded = runOutput("git", ["diff", "--cached", "--quiet"]).status !== 0;
+  if (commitNeeded) {
+    run("git", ["commit", "-m", `v${version}`]);
+  }
+  if (!doesLocalTagExist(version)) {
+    run("git", ["tag", "-a", `v${version}`, "-m", `v${version}`]);
+  }
 }
 
 const releaseType = process.argv[2];
 const shouldPublish = process.argv.includes("--publish");
+const shouldResume = releaseType === "resume";
 
-if (!validReleaseTypes.has(releaseType)) {
-  console.error("Usage: node ./scripts/release.mjs <patch|minor|major> [--publish]");
+if (!shouldResume && !validReleaseTypes.has(releaseType)) {
+  console.error(
+    "Usage: node ./scripts/release.mjs <patch|minor|major|resume> [--publish]",
+  );
   process.exit(1);
 }
 
-ensureCleanWorktree();
+if (shouldResume) {
+  ensureResumableWorktree();
+} else {
+  ensureCleanWorktree();
+}
 
 const currentVersion = readJson(rootPackagePath).version;
-const nextVersion = bumpVersion(currentVersion, releaseType);
+const nextVersion = shouldResume
+  ? currentVersion
+  : bumpVersion(currentVersion, releaseType);
 
-updateVersions(nextVersion);
+if (!shouldResume) {
+  updateVersions(nextVersion);
+}
 run("npm", ["install"]);
 run("npm", ["run", "test:ci"]);
 run("npm", ["run", "build"]);
 run("npm", ["run", "build:native"]);
 
 if (shouldPublish) {
-  run("npm", ["run", "native:create-npm-dirs"]);
-  run("npm", ["run", "native:stage-local"]);
-  run("npm", ["run", "native:sync-meta"]);
+  const publishPlan = computePublishPlan({
+    shouldPublish,
+    publishedRoot: packageExistsInRegistry("@lzehrung/codegraph", nextVersion),
+    publishedNativeMeta: packageExistsInRegistry(
+      "@lzehrung/codegraph-native",
+      nextVersion,
+    ),
+    publishedJsFallback: packageExistsInRegistry(
+      "@lzehrung/codegraph-js-fallback",
+      nextVersion,
+    ),
+  });
+  if (
+    publishPlan.publishNativeTargets ||
+    publishPlan.publishNativeMeta
+  ) {
+    run("npm", ["run", "native:create-npm-dirs"]);
+    run("npm", ["run", "native:stage-local"]);
+    run("npm", ["run", "native:sync-meta"]);
+  }
   try {
-    run("npm", ["run", "publish:native:targets"]);
-    run("npm", ["run", "publish:native:meta"]);
-    run("npm", ["publish", "--prefix", "optional-packages/codegraph-js-fallback"]);
-    run("npm", ["publish"]);
+    if (publishPlan.publishNativeTargets) {
+      run("npm", ["run", "publish:native:targets"]);
+    }
+    if (publishPlan.publishNativeMeta) {
+      run("npm", ["run", "publish:native:meta"]);
+    }
+    if (publishPlan.publishJsFallback) {
+      run("npm", ["publish"], {
+        cwd: path.join(rootDir, "optional-packages", "codegraph-js-fallback"),
+      });
+    }
+    if (publishPlan.publishRoot) {
+      run("npm", ["publish"]);
+    }
   } finally {
     restoreNativePackage(nextVersion);
   }
