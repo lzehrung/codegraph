@@ -20,11 +20,14 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | TypeScript export-assignment parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same local/default export results for `export class` and `export = value`. | Internal regression test | 2026-03-22 |
 | Python `__all__` parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same locals and exports for `__all__`-driven modules. | Internal regression test | 2026-03-22 |
 | Python relative-import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same alias-aware relative import bindings. | Internal regression test | 2026-03-22 |
+| Python future-import graph extraction | `tests/fallback-import-extraction.test.ts` | Native graph extraction recognizes `from __future__ import ...` without dropping to regex fallback. | Internal regression test | 2026-03-29 |
 | HTML import-specifier parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same HTML `src` and `href` module specifiers. | Internal regression test | 2026-03-22 |
 | Go import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same Go file imports for package-relative fixtures. | Internal regression test | 2026-03-22 |
 | Java import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same Java imports for package and static-import fixtures. | Internal regression test | 2026-03-22 |
 | C# import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same `using`-based imports. | Internal regression test | 2026-03-22 |
+| C# alias-using graph parity | `tests/languages/csharp.test.ts`, `tests/native-semantic-parity.test.ts` | Native and forced-JS graph extraction stay aligned for alias-based `using` directives, including namespace aliases. | Internal regression test | 2026-03-29 |
 | Rust import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same `mod` and `use` imports. | Internal regression test | 2026-03-22 |
+| Rust aliased-use and extern-crate parity | `tests/languages/rust.test.ts`, `tests/native-semantic-parity.test.ts` | Native and forced-JS extraction stay aligned for aliased `use` imports and `extern crate` graph edges. | Internal regression test | 2026-03-29 |
 | Ruby import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same `require_relative` imports. | Internal regression test | 2026-03-22 |
 | Kotlin import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same Kotlin import extraction after native query normalization. | Internal regression test | 2026-03-22 |
 | Swift import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same Swift imports and top-level symbol extraction. | Internal regression test | 2026-03-22 |
@@ -65,6 +68,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Scenario | Sample | Expected behavior | Source | Date added |
 | --- | --- | --- | --- | --- |
 | Using directives | `tests/samples/csharp/Main.cs` | Dependency graph includes edges to `Utils.cs` and `Helpers.cs` for using directives. | https://github.com/tree-sitter/tree-sitter-c-sharp | 2026-01-22 |
+| Alias using graph edges | `tests/samples/csharp/AliasOnly.cs`, `tests/samples/csharp/NamespaceAlias.cs` | Dependency graph keeps alias-based `using` directives pointed at their target type/namespace instead of the alias token. Alias-only semantic navigation is intentionally not claimed yet. | Internal regression fixture | 2026-03-29 |
 | Nested types and interfaces | `tests/samples/csharp/AdvancedTypes.cs` | Symbol extraction includes interfaces, nested classes, and member methods inside namespace-scoped fixtures. | Internal regression fixture | 2026-03-22 |
 
 ## CSS
@@ -145,6 +149,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | --- | --- | --- | --- | --- |
 | Module and `use` imports | `tests/samples/rust/main.rs` | Dependency graph includes edges to `utils.rs` and `helpers.rs` for `mod` and `use`. | https://github.com/tree-sitter/tree-sitter-rust | 2026-01-22 |
 | Aliased `use` imports | `tests/samples/rust/aliased-use.rs` | Dependency graph still resolves edges to `utils.rs` and `helpers.rs` when `use` imports are renamed with `as`. | Internal regression fixture | 2026-03-22 |
+| `extern crate` graph edges | `tests/samples/rust/extern-crate.rs` | Dependency graph keeps `extern crate` edges visible while aliased `use` navigation still resolves to the imported module file. | Internal regression fixture | 2026-03-29 |
 | Reexports and nested modules | `tests/samples/rust/reexports.rs`, `tests/samples/rust/nested.rs`, `tests/samples/rust/nested_service.rs` | Go-to-definition and references cover nested-module type resolution, and native semantic parity keeps those nested/reexport fixtures aligned with the JS path. | Internal regression fixture | 2026-03-23 |
 | Traits, impls, and exported types | `tests/samples/rust/models.rs` | Symbol extraction includes trait declarations, impl-backed methods, and exported structs from Rust modules. | Internal regression fixture | 2026-03-22 |
 

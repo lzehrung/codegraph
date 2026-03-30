@@ -495,7 +495,6 @@ describe('Find References', () => {
       const index = await createTestIndex('csharp');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'csharp');
       const utilsFile = path.join(samplePath, 'Utils.cs').replace(/\\/g, '/');
-      // Since alias UUtils = Utils.UtilsClass, refs to UtilsClass should include alias usage
       await testFindReferences(index, utilsFile, 2, 20, 3);
     });
   });
@@ -565,6 +564,16 @@ describe('Find References', () => {
       const result = await testFindReferences(index, nestedServiceFile, 1, 12, 2);
       expectReferenceAt(result, nestedServiceFile, 1);
       expectReferenceAt(result, nestedFile, 6);
+    });
+
+    it('should find references through aliased Rust imports', async () => {
+      const index = await createTestIndex('rust');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'rust');
+      const utilsFile = path.join(samplePath, 'utils.rs').replace(/\\/g, '/');
+      const aliasFile = path.join(samplePath, 'aliased-use.rs').replace(/\\/g, '/');
+
+      const result = await testFindReferences(index, utilsFile, 1, 8, 3);
+      expectReferenceAt(result, aliasFile, 9);
     });
   });
 });

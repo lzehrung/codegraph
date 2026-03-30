@@ -451,7 +451,8 @@ describe('Go to Definition', () => {
       const utilsFile = path.join(samplePath, 'Utils.cs').replace(/\\/g, '/');
       // UUtils.HelperFunction() on 'U' UUtils line 10 col 5
       await testGoToDefinition(index, mainFile, 10, 5, utilsFile, 2);
-  });
+    });
+
   });
 
   describe('Ruby', () => {
@@ -507,6 +508,15 @@ describe('Go to Definition', () => {
       const nestedServiceFile = path.join(samplePath, 'nested_service.rs').replace(/\\/g, '/');
 
       await testGoToDefinition(index, nestedFile, 6, 18, nestedServiceFile, 1);
+    });
+
+    it('should find definition of aliased Rust imports', async () => {
+      const index = await createTestIndex('rust');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'rust');
+      const aliasFile = path.join(samplePath, 'aliased-use.rs').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'utils.rs').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, aliasFile, 9, 5, utilsFile, 1);
     });
     });
   });

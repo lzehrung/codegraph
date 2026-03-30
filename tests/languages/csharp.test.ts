@@ -27,6 +27,14 @@ const definition: LanguageTestDefinition = {
         from: "Main.cs",
         to: { type: "file", path: "Helpers.cs" },
       },
+      {
+        from: "AliasOnly.cs",
+        to: { type: "file", path: "Utils.cs" },
+      },
+      {
+        from: "NamespaceAlias.cs",
+        to: { type: "external", name: "System.Collections.Generic" },
+      },
     ],
     symbols: [
       {

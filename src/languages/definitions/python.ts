@@ -52,6 +52,7 @@ export const PYTHON_DEF: LanguageDefinition = {
     imports: `
       (import_statement) @stmt
       (import_from_statement) @stmt
+      (future_import_statement) @stmt
     `,
     // NOTE: These __all__ queries only capture module-level assignments.
     // Dynamic __all__ definitions inside functions, conditionals, or loops
@@ -83,6 +84,7 @@ export const PYTHON_DEF: LanguageDefinition = {
     importBindings: `
       (import_statement) @stmt
       (import_from_statement) @stmt
+      (future_import_statement) @stmt
     `,
   },
   nodeTypes: {
