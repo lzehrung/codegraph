@@ -274,6 +274,17 @@ function getCodegraphPackageRoot(): string {
   return findPackageRoot(path.dirname(fileURLToPath(import.meta.url)));
 }
 
+function getCodegraphVersion(): string {
+  const packageRoot = getCodegraphPackageRoot();
+  const packageJsonPath = path.join(packageRoot, "package.json");
+  const raw = fs.readFileSync(packageJsonPath, "utf8");
+  const parsed = JSON.parse(raw) as { version?: string };
+  if (!parsed.version) {
+    throw new Error("Unable to determine codegraph package version.");
+  }
+  return parsed.version;
+}
+
 function getBundledSkillDir(packageRoot: string): string | null {
   const candidate = path.join(packageRoot, "codegraph-skill", "codegraph");
   return pathExists(path.join(candidate, "SKILL.md")) ? candidate : null;
@@ -921,6 +932,7 @@ Commands:
   graph         Build dependency graph (default)
   doctor        Inspect backend/runtime state and local graph artifacts
   skill         Install or inspect the bundled agent skill
+  version       Print the installed codegraph version
   impact        Analyze PR impact
   review        Generate code review report
   goto          Go to definition
@@ -958,6 +970,7 @@ Output Options:
 Examples:
   codegraph graph ./src
   codegraph graph --fast-graph --mermaid ./src
+  codegraph version
   codegraph doctor
   codegraph skill install
   codegraph skill install --target ~/.codex/skills/codegraph --force
@@ -966,6 +979,11 @@ Examples:
   codegraph refs --file src/index.ts --line 42 --col 10
 `);
     process.exit(0);
+  }
+
+  if (hasFlag("--version")) {
+    writeStdoutLine(getCodegraphVersion());
+    return;
   }
 
     const reportFile = getOpt("--report-file");
@@ -1050,6 +1068,11 @@ Examples:
 
   const projectRootFs = rootOpt ? resolveAbs(rootOpt) : defaultProjectRoot;
   const projectRootAbs = projectRootFs.replace(/\\/g, "/");
+
+  if (cmd === "version") {
+    writeStdoutLine(getCodegraphVersion());
+    return;
+  }
 
   if (cmd === "doctor") {
     writeJSONLine(buildDoctorReport(parsed.positionals.at(-1)));
