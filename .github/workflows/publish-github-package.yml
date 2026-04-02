@@ -7,15 +7,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      packages: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          registry-url: https://npm.pkg.github.com
-          scope: '@lzehrung'
       - run: npm ci
       - run: npm run build
       - run: npm run test:all
@@ -26,10 +23,6 @@ jobs:
           TARBALL_JSON=$(npm pack --ignore-scripts --json)
           TARBALL_FILE=$(echo "$TARBALL_JSON" | jq -r '.[0].filename')
           echo "tarball=$TARBALL_FILE" >> "$GITHUB_OUTPUT"
-      - name: Publish package
-        run: npm publish "${{ steps.pack.outputs.tarball }}"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Upload tarball to release
         run: gh release upload "${{ github.ref_name }}" "${{ steps.pack.outputs.tarball }}" --clobber
         env:

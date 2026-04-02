@@ -28,6 +28,8 @@ npm run publish:major
 - the `@lzehrung/codegraph-native` meta package
 - the root `@lzehrung/codegraph` package
 
+The GitHub Release workflow does not publish packages again. It rebuilds, verifies, packs the root tarball, and uploads that tarball asset to the GitHub Release.
+
 ## Package Roles
 
 - `@lzehrung/codegraph`
