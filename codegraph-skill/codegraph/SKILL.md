@@ -15,6 +15,8 @@ Codegraph is a lightweight multi-language code analysis tool that builds depende
 - CLI command: `codegraph`
 - Native backend package: `@lzehrung/codegraph-native`
 - Optional JS fallback package: `@lzehrung/codegraph-js-fallback`
+- Registry: `@lzehrung` packages are published to GitHub Packages, not the public npm registry. Configure:
+  `npm config set "@lzehrung:registry" "https://npm.pkg.github.com"`
 - Published installs of `@lzehrung/codegraph` depend on `@lzehrung/codegraph-native` as an optional dependency; that package resolves the matching native artifact automatically when one exists for the current platform.
 - For source checkouts, `npm run build` always rebuilds `dist/` and attempts the local native addon when Cargo is available. Use `npm run build:native` when you want a native-only rebuild or a hard failure if Rust is missing.
 - Install the optional fallback package only when you explicitly need JS Tree-sitter fallback:
@@ -24,7 +26,33 @@ Codegraph is a lightweight multi-language code analysis tool that builds depende
 
 ## Command-Line Usage
 
-Assuming the tool is available as `codegraph` (or via `npx codegraph` inside a project that depends on `@lzehrung/codegraph`), use the following commands.
+Assuming the tool is available as `codegraph`, use the following commands.
+
+If the CLI is missing, do not suggest the unscoped `codegraph` package. Use one of these exact installation paths instead:
+
+- Global install:
+  `npm config set "@lzehrung:registry" "https://npm.pkg.github.com"`
+  `npm install -g @lzehrung/codegraph`
+- Repo-local install:
+  `npm config set "@lzehrung:registry" "https://npm.pkg.github.com"`
+  `npm install --save-dev @lzehrung/codegraph`
+- Source checkout of this repo:
+  `npm install`
+  `npm run build`
+  `node ./dist/cli.js graph --root . --json`
+
+Avoid suggesting `npm install -g codegraph`, `npm install --save-dev codegraph`, or unscoped `npx codegraph` when the package is not already installed locally.
+
+The CLI also ships a bundled skill installer:
+
+- Install into the default Codex-style target:
+  `codegraph skill install`
+- Install into an explicit target:
+  `codegraph skill install --target ~/.codex/skills/codegraph --force`
+- Inspect backend/runtime state plus local graph/cache artifacts:
+  `codegraph doctor`
+- Inspect packaged skill paths and target health:
+  `codegraph skill doctor`
 
 ### 1. Dependency graphs
 
