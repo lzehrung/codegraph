@@ -223,7 +223,7 @@ The integration examples demonstrate:
 Configure the scoped registry if you have not already:
 
 ```bash
-npm config set @lzehrung:registry https://npm.pkg.github.com
+npm config set "@lzehrung:registry" "https://npm.pkg.github.com"
 ```
 
 Install the package:
@@ -319,6 +319,17 @@ dot -Tsvg graph.dot -o graph.svg
 
 # Specify a different root directory (optional, defaults to current directory)
 npx codegraph graph --root /path/to/project --mermaid > graph.mmd
+
+# Install the bundled Codex-style skill into the default skill directory
+npx codegraph skill install
+# Install the bundled skill into an explicit target directory
+npx codegraph skill install --target ~/.codex/skills/codegraph --force
+# Inspect backend/runtime state
+npx codegraph doctor
+# Inspect one explicit graph/index artifact path
+npx codegraph doctor ./.codegraph-cache/index-v1
+# Inspect bundled skill paths and target health
+npx codegraph skill doctor
 
 # Build the full project index (graph + per-file symbol indexes)
 npx codegraph index

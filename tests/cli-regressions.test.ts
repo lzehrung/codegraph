@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { textGrep } from '../src/index.js';
 
 const tsxCliPath = path.resolve(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs');
+const sourceCliPath = path.resolve(process.cwd(), 'src', 'cli.ts');
 
 async function runCliCommand(args: string[], input?: string): Promise<string> {
   const result = await runCliCommandDetailed(args, input);
@@ -15,10 +16,11 @@ async function runCliCommand(args: string[], input?: string): Promise<string> {
 async function runCliCommandDetailed(
   args: string[],
   input?: string,
+  cwd = process.cwd(),
 ): Promise<{ stdout: string; stderr: string }> {
   return await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [tsxCliPath, 'src/cli.ts', ...args], {
-      cwd: process.cwd(),
+    const child = spawn(process.execPath, [tsxCliPath, sourceCliPath, ...args], {
+      cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -215,6 +217,127 @@ describe('CLI regressions', () => {
     expect(result.columns).toEqual(['name']);
     const names = result.rows.map((row) => String(row[0]));
     expect(names).toContain('helper');
+  });
+
+  it('skill print-path returns the bundled raw skill directory', async () => {
+    const stdout = await runCliCommand(['skill', 'print-path']);
+    const skillPath = stdout.trim();
+    expect(normalize(skillPath)).toMatch(/codegraph-skill\/codegraph$/);
+  });
+
+  it('skill doctor reports the requested target and current install status', async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-cli-skill-doctor-'));
+    const stdout = await runCliCommand([
+      'skill',
+      'doctor',
+      '--target',
+      tmpDir,
+    ]);
+    const report = JSON.parse(stdout) as {
+      bundledSkillDir: string | null;
+      installTargetDir: string;
+      installedSkill: {
+        targetDirExists: boolean;
+        skillFilePresent: boolean;
+        skillFilePath: string;
+      };
+    };
+
+    expect(report.bundledSkillDir).toContain('codegraph-skill/codegraph');
+    expect(normalize(report.installTargetDir)).toBe(normalize(tmpDir));
+    expect(report.installedSkill.targetDirExists).toBe(true);
+    expect(report.installedSkill.skillFilePresent).toBe(false);
+    expect(normalize(report.installedSkill.skillFilePath)).toBe(
+      normalize(path.join(tmpDir, 'SKILL.md')),
+    );
+  });
+
+  it('doctor reports only backend state when no artifact path is provided', async () => {
+    const stdout = await runCliCommand(['doctor']);
+    const report = JSON.parse(stdout) as {
+      native: { available: boolean; supportedLanguageIds: string[] };
+      indexArtifact?: unknown;
+    };
+
+    expect(typeof report.native.available).toBe('boolean');
+    expect(Array.isArray(report.native.supportedLanguageIds)).toBe(true);
+    expect(report.indexArtifact).toBeUndefined();
+  });
+
+  it('doctor reports the explicit index artifact path when provided', async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-cli-doctor-'));
+    await fsp.mkdir(path.join(tmpDir, '.codegraph-cache', 'index-v1'), {
+      recursive: true,
+    });
+    await fsp.writeFile(
+      path.join(tmpDir, '.codegraph-cache', 'index-v1', 'manifest.json'),
+      '{}\n',
+      'utf8',
+    );
+    await fsp.writeFile(path.join(tmpDir, 'codegraph.json'), '{}\n', 'utf8');
+
+    const cachePath = path.join(tmpDir, '.codegraph-cache', 'index-v1');
+    const result = await runCliCommandDetailed(
+      ['doctor', cachePath],
+      undefined,
+      tmpDir,
+    );
+    const report = JSON.parse(result.stdout) as {
+      native: { available: boolean; supportedLanguageIds: string[] };
+      indexArtifact: {
+        type: string;
+        exists: boolean;
+        path: string;
+        details?: Record<string, unknown>;
+      };
+    };
+
+    expect(typeof report.native.available).toBe('boolean');
+    expect(Array.isArray(report.native.supportedLanguageIds)).toBe(true);
+    expect(report.indexArtifact.type).toBe('diskCache');
+    expect(report.indexArtifact.exists).toBe(true);
+    expect(normalize(report.indexArtifact.path)).toBe(normalize(cachePath));
+    expect(report.indexArtifact.details?.manifestPresent).toBe(true);
+  });
+
+  it('skill install copies the bundled skill into the target directory', async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-cli-skill-install-'));
+    const stdout = await runCliCommand([
+      'skill',
+      'install',
+      '--target',
+      tmpDir,
+    ]);
+    const result = JSON.parse(stdout) as {
+      installed: boolean;
+      skillFilePath: string;
+      targetDir: string;
+    };
+
+    expect(result.installed).toBe(true);
+    expect(normalize(result.targetDir)).toBe(normalize(tmpDir));
+    const installedSkill = await fsp.readFile(path.join(tmpDir, 'SKILL.md'), 'utf8');
+    expect(installedSkill).toContain('name: codegraph');
+    expect(normalize(result.skillFilePath)).toBe(
+      normalize(path.join(tmpDir, 'SKILL.md')),
+    );
+  });
+
+  it('skill install --force replaces stale files in the target directory', async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-cli-skill-force-'));
+    await fsp.writeFile(path.join(tmpDir, 'stale.txt'), 'old\n', 'utf8');
+
+    await runCliCommand([
+      'skill',
+      'install',
+      '--target',
+      tmpDir,
+      '--force',
+    ]);
+
+    await expect(fsp.stat(path.join(tmpDir, 'stale.txt'))).rejects.toThrow();
+    const installedSkill = await fsp.readFile(path.join(tmpDir, 'SKILL.md'), 'utf8');
+    expect(installedSkill).toContain('name: codegraph');
   });
 
   it('grep supports plain-text regex mode via --pattern (and --glob)', async () => {

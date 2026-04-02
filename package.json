@@ -16,7 +16,8 @@
   },
   "files": [
     "dist",
-    "codegraph.skill"
+    "codegraph.skill",
+    "codegraph-skill"
   ],
   "scripts": {
     "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\"",
