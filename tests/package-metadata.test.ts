@@ -35,6 +35,18 @@ describe("package metadata", () => {
     expect(optionalDependencies["@lzehrung/codegraph-native"]).toBeDefined();
   });
 
+  it("ships both the packaged skill archive and the raw skill directory", () => {
+    const rootPackage = readJson("package.json");
+    const files =
+      Array.isArray(rootPackage.files) &&
+      rootPackage.files.every((entry) => typeof entry === "string")
+        ? rootPackage.files
+        : [];
+
+    expect(files).toContain("codegraph.skill");
+    expect(files).toContain("codegraph-skill");
+  });
+
   it("keeps JS fallback grammars out of the native package", () => {
     const nativePackage = readJson("packages/codegraph-native/package.json");
     const dependencies = readStringRecord(nativePackage.dependencies);
