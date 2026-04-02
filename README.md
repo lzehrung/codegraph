@@ -320,6 +320,8 @@ dot -Tsvg graph.dot -o graph.svg
 # Specify a different root directory (optional, defaults to current directory)
 npx codegraph graph --root /path/to/project --mermaid > graph.mmd
 
+# Print the installed CLI version
+npx codegraph version
 # Install the bundled Codex-style skill into the default skill directory
 npx codegraph skill install
 # Install the bundled skill into an explicit target directory

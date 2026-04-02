@@ -4,6 +4,7 @@ import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { textGrep } from '../src/index.js';
+import packageJson from '../package.json' with { type: 'json' };
 
 const tsxCliPath = path.resolve(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs');
 const sourceCliPath = path.resolve(process.cwd(), 'src', 'cli.ts');
@@ -76,6 +77,16 @@ describe('CLI regressions', () => {
     for (const n of graph.nodes) {
       expect(normalize(n).startsWith(tsRootNorm)).toBe(true);
     }
+  });
+
+  it('version prints the package version', async () => {
+    const stdout = await runCliCommand(['version']);
+    expect(stdout.trim()).toBe(packageJson.version);
+  });
+
+  it('--version prints the package version', async () => {
+    const stdout = await runCliCommand(['--version']);
+    expect(stdout.trim()).toBe(packageJson.version);
   });
 
   it('graph supports -o/--output to write JSON to a file', async () => {
