@@ -3,6 +3,8 @@ import path from "node:path";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { performance } from "node:perf_hooks";
+import os from "node:os";
+import { fileURLToPath } from "node:url";
 import {
   listProjectFiles,
   listChangedFiles,
@@ -40,6 +42,9 @@ import {
   chunkTextFile,
   chunkSFCFile,
   LANG_CONFIGS,
+  isNativeTreeSitterAvailable,
+  getNativeTreeSitterLoadError,
+  getNativeTreeSitterSupportedLanguageIds,
 } from "./index.js";
 import type {
   BuildReport,
@@ -204,7 +209,225 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--lcov",
   "--coverage-report",
   "--test-command-template",
+  "--target",
 ]);
+
+type SkillDoctorReport = {
+  packageRoot: string;
+  bundledSkillDir: string | null;
+  bundledArchivePath: string | null;
+  defaultTargetDir: string;
+  requestedTargetDir?: string;
+  installTargetDir: string;
+  cliAvailableOnPath: boolean;
+  installedSkill: {
+    targetDirExists: boolean;
+    skillFilePresent: boolean;
+    skillFilePath: string;
+  };
+};
+
+type IndexedArtifactReport = {
+  type: "jsonGraph" | "sqliteGraph" | "diskCache" | "unknown";
+  path: string;
+  exists: boolean;
+  details?: Record<string, string | number | boolean>;
+};
+
+type DoctorReport = {
+  native: {
+    available: boolean;
+    loadError?: string;
+    supportedLanguageIds: string[];
+  };
+  indexArtifact?: IndexedArtifactReport;
+};
+
+function normalizePathForDisplay(filePath: string): string {
+  return filePath.replace(/\\/g, "/");
+}
+
+function pathExists(filePath: string): boolean {
+  try {
+    fs.accessSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function findPackageRoot(startDir: string): string {
+  let current = path.resolve(startDir);
+  while (true) {
+    if (pathExists(path.join(current, "package.json"))) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      throw new Error("Unable to locate package root from current CLI path.");
+    }
+    current = parent;
+  }
+}
+
+function getCodegraphPackageRoot(): string {
+  return findPackageRoot(path.dirname(fileURLToPath(import.meta.url)));
+}
+
+function getBundledSkillDir(packageRoot: string): string | null {
+  const candidate = path.join(packageRoot, "codegraph-skill", "codegraph");
+  return pathExists(path.join(candidate, "SKILL.md")) ? candidate : null;
+}
+
+function getBundledSkillArchivePath(packageRoot: string): string | null {
+  const archivePath = path.join(packageRoot, "codegraph.skill");
+  return pathExists(archivePath) ? archivePath : null;
+}
+
+function getDefaultSkillTargetDir(): string {
+  const codexHome = process.env.CODEX_HOME?.trim();
+  if (codexHome) {
+    return path.join(codexHome, "skills", "codegraph");
+  }
+  return path.join(os.homedir(), ".codex", "skills", "codegraph");
+}
+
+function isCommandAvailableOnPath(command: string): boolean {
+  const pathValue = process.env.PATH;
+  if (!pathValue) return false;
+  const pathEntries = pathValue.split(path.delimiter).filter(Boolean);
+  const executableNames =
+    process.platform === "win32"
+      ? [command, `${command}.cmd`, `${command}.exe`, `${command}.bat`]
+      : [command];
+  return pathEntries.some((entry) =>
+    executableNames.some((name) => pathExists(path.join(entry, name))),
+  );
+}
+
+async function copyDirectoryRecursive(
+  sourceDir: string,
+  targetDir: string,
+  overwrite: boolean,
+): Promise<void> {
+  if (overwrite && pathExists(targetDir)) {
+    await fsp.rm(targetDir, { recursive: true, force: true });
+  }
+  await fsp.mkdir(targetDir, { recursive: true });
+  const entries = await fsp.readdir(sourceDir, { withFileTypes: true });
+  for (const entry of entries) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const targetPath = path.join(targetDir, entry.name);
+    if (entry.isDirectory()) {
+      await copyDirectoryRecursive(sourcePath, targetPath, overwrite);
+      continue;
+    }
+    if (!overwrite && pathExists(targetPath)) {
+      throw new Error(
+        `Target file already exists: ${normalizePathForDisplay(targetPath)}. Re-run with --force to overwrite.`,
+      );
+    }
+    await fsp.copyFile(sourcePath, targetPath);
+  }
+}
+
+function buildSkillDoctorReport(
+  requestedTargetDir?: string,
+): SkillDoctorReport {
+  const packageRoot = getCodegraphPackageRoot();
+  const bundledSkillDir = getBundledSkillDir(packageRoot);
+  const bundledArchivePath = getBundledSkillArchivePath(packageRoot);
+  const defaultTargetDir = getDefaultSkillTargetDir();
+  const installTargetDir = requestedTargetDir
+    ? path.resolve(requestedTargetDir)
+    : defaultTargetDir;
+  const skillFilePath = path.join(installTargetDir, "SKILL.md");
+  const targetDirExists = pathExists(installTargetDir);
+  return {
+    packageRoot: normalizePathForDisplay(packageRoot),
+    bundledSkillDir: bundledSkillDir
+      ? normalizePathForDisplay(bundledSkillDir)
+      : null,
+    bundledArchivePath: bundledArchivePath
+      ? normalizePathForDisplay(bundledArchivePath)
+      : null,
+    defaultTargetDir: normalizePathForDisplay(defaultTargetDir),
+    ...(requestedTargetDir
+      ? {
+          requestedTargetDir: normalizePathForDisplay(
+            path.resolve(requestedTargetDir),
+          ),
+        }
+      : {}),
+    installTargetDir: normalizePathForDisplay(installTargetDir),
+    cliAvailableOnPath: isCommandAvailableOnPath("codegraph"),
+    installedSkill: {
+      targetDirExists,
+      skillFilePresent: pathExists(skillFilePath),
+      skillFilePath: normalizePathForDisplay(skillFilePath),
+    },
+  };
+}
+
+function statIfExists(filePath: string): fs.Stats | null {
+  try {
+    return fs.statSync(filePath);
+  } catch {
+    return null;
+  }
+}
+
+function detectIndexedArtifactType(filePath: string): IndexedArtifactReport["type"] {
+  const normalized = normalizePathForDisplay(filePath).toLowerCase();
+  if (normalized.endsWith("/codegraph.json") || normalized.endsWith(".json")) {
+    return "jsonGraph";
+  }
+  if (normalized.endsWith("/graph.sqlite") || normalized.endsWith(".sqlite")) {
+    return "sqliteGraph";
+  }
+  if (
+    normalized.endsWith("/.codegraph-cache") ||
+    normalized.includes("/.codegraph-cache/")
+  ) {
+    return "diskCache";
+  }
+  return "unknown";
+}
+
+function buildIndexedArtifactReport(indexPath: string): IndexedArtifactReport {
+  const resolvedPath = path.resolve(indexPath);
+  const stats = statIfExists(resolvedPath);
+  const type = detectIndexedArtifactType(resolvedPath);
+  const details =
+    stats && type === "diskCache"
+      ? {
+          manifestPresent: pathExists(path.join(resolvedPath, "manifest.json")),
+          sqlitePresent: pathExists(
+            path.join(resolvedPath, "index-cache.sqlite"),
+          ),
+        }
+      : stats
+        ? { sizeBytes: stats.size, isDirectory: stats.isDirectory() }
+        : undefined;
+  return {
+    type,
+    path: normalizePathForDisplay(resolvedPath),
+    exists: !!stats,
+    ...(details ? { details } : {}),
+  };
+}
+
+function buildDoctorReport(indexPath?: string): DoctorReport {
+  const loadError = getNativeTreeSitterLoadError();
+  return {
+    native: {
+      available: isNativeTreeSitterAvailable(),
+      ...(loadError ? { loadError: String(loadError) } : {}),
+      supportedLanguageIds: getNativeTreeSitterSupportedLanguageIds(),
+    },
+    ...(indexPath ? { indexArtifact: buildIndexedArtifactReport(indexPath) } : {}),
+  };
+}
 
 function parseCliArgs(tokens: string[]): ParsedCliArgs {
   const positionals: string[] = [];
@@ -696,6 +919,8 @@ Usage: codegraph <command> [options] [path]
 
 Commands:
   graph         Build dependency graph (default)
+  doctor        Inspect backend/runtime state and local graph artifacts
+  skill         Install or inspect the bundled agent skill
   impact        Analyze PR impact
   review        Generate code review report
   goto          Go to definition
@@ -733,6 +958,10 @@ Output Options:
 Examples:
   codegraph graph ./src
   codegraph graph --fast-graph --mermaid ./src
+  codegraph doctor
+  codegraph skill install
+  codegraph skill install --target ~/.codex/skills/codegraph --force
+  codegraph skill doctor
   codegraph impact --provider git --base main --head HEAD
   codegraph refs --file src/index.ts --line 42 --col 10
 `);
@@ -821,6 +1050,70 @@ Examples:
 
   const projectRootFs = rootOpt ? resolveAbs(rootOpt) : defaultProjectRoot;
   const projectRootAbs = projectRootFs.replace(/\\/g, "/");
+
+  if (cmd === "doctor") {
+    writeJSONLine(buildDoctorReport(parsed.positionals.at(-1)));
+    return;
+  }
+
+  if (cmd === "skill") {
+    const subcommand = parsed.positionals[0] ?? "doctor";
+    const targetOpt = getOpt("--target");
+    const overwrite = hasFlag("--force");
+
+    if (subcommand === "print-path") {
+      const packageRoot = getCodegraphPackageRoot();
+      const bundledSkillDir = getBundledSkillDir(packageRoot);
+      if (!bundledSkillDir) {
+        const archivePath = getBundledSkillArchivePath(packageRoot);
+        if (archivePath) {
+          writeJSONLine({
+            packageRoot: normalizePathForDisplay(packageRoot),
+            bundledSkillDir: null,
+            bundledArchivePath: normalizePathForDisplay(archivePath),
+          });
+          return;
+        }
+        throw new Error("Bundled codegraph skill assets were not found.");
+      }
+      writeStdoutLine(normalizePathForDisplay(bundledSkillDir));
+      return;
+    }
+
+    if (subcommand === "doctor") {
+      writeJSONLine(buildSkillDoctorReport(targetOpt));
+      return;
+    }
+
+    if (subcommand === "install") {
+      const packageRoot = getCodegraphPackageRoot();
+      const bundledSkillDir = getBundledSkillDir(packageRoot);
+      if (!bundledSkillDir) {
+        const archivePath = getBundledSkillArchivePath(packageRoot);
+        throw new Error(
+          archivePath
+            ? `Bundled archive found at ${normalizePathForDisplay(archivePath)}, but raw skill files are unavailable in this package build. Upgrade to a build that ships codegraph-skill/.`
+            : "Bundled codegraph skill assets were not found.",
+        );
+      }
+      const targetDir = targetOpt
+        ? path.resolve(targetOpt)
+        : getDefaultSkillTargetDir();
+      await copyDirectoryRecursive(bundledSkillDir, targetDir, overwrite);
+      writeJSONLine({
+        installed: true,
+        targetDir: normalizePathForDisplay(targetDir),
+        skillFilePath: normalizePathForDisplay(path.join(targetDir, "SKILL.md")),
+        sourceDir: normalizePathForDisplay(bundledSkillDir),
+      });
+      return;
+    }
+
+    writeStderrLine(
+      "Usage: codegraph skill <install|print-path|doctor> [--target <dir>] [--force]",
+    );
+    process.exit(2);
+  }
 
   const includeRoots =
     cmd === "graph" || cmd === "index"
