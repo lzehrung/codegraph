@@ -26,6 +26,7 @@ import {
   normalizeResolutionHints,
   mapLimit,
   type ModuleSpecifier,
+  type ProjectFileDiscoveryOptions,
 } from "./util.js";
 // Intentionally compile only the imports query locally to avoid compiling
 // unrelated queries (which may differ per grammar) and causing warnings.
@@ -1111,9 +1112,10 @@ export async function astGrep(
   patterns = [
     "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs,html,htm,css,scss,less,kt,kts,swift,c,h,cc,cpp,cxx,c++,hpp,hh,hxx,ipp,tpp,inl}",
   ],
+  opts?: ProjectFileDiscoveryOptions,
 ): Promise<AstGrepHit[]> {
   const hits: AstGrepHit[] = [];
-  const files = await listProjectFiles(projectRoot, patterns);
+  const files = await listProjectFiles(projectRoot, patterns, opts);
   for (const file of files) {
     try {
       const prep = await prepareSourceInput(file);
@@ -1163,6 +1165,9 @@ export async function textGrep(
   opts?: {
     ignoreCase?: boolean;
     maxHits?: number;
+    includeGlobs?: string[];
+    ignoreGlobs?: string[];
+    useGitignore?: boolean;
   },
 ): Promise<TextGrepHit[]> {
   const maxHits = Math.max(1, Math.min(opts?.maxHits ?? 5000, 200_000));
@@ -1178,7 +1183,7 @@ export async function textGrep(
   }
 
   const hits: TextGrepHit[] = [];
-  const files = await listProjectFiles(projectRoot, patterns);
+  const files = await listProjectFiles(projectRoot, patterns, opts);
   for (const file of files) {
     if (hits.length >= maxHits) break;
     let src: string;

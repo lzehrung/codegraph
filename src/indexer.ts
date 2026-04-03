@@ -48,6 +48,7 @@ import {
   getGitBlobHashes,
   listChangedFiles,
   mapLimit,
+  type ProjectFileDiscoveryOptions,
   type ProjectFileInfo,
 } from "./util.js";
 import {
@@ -324,6 +325,8 @@ export type BuildOptions = {
   useNativeWorkers?: boolean;
   /** Number of native worker threads (default: min(cpuCount - 1, 8)) */
   nativeThreads?: number;
+  /** File discovery controls for project-root scans. */
+  discovery?: ProjectFileDiscoveryOptions;
 };
 
 export type IncrementalBuildOptions = BuildOptions & {
@@ -841,16 +844,25 @@ type PackageJsonDependencyInfo = {
 
 async function collectWorkspaceManifestDependencyEdges(
   projectRoot: string,
+  discovery?: ProjectFileDiscoveryOptions,
+  allowedManifestFiles?: ReadonlySet<string>,
 ): Promise<Edge[]> {
-  const manifestPaths = await listProjectFiles(projectRoot, [
-    "**/package.json",
-  ]);
-  if (manifestPaths.length === 0) return [];
+  const manifestPaths = await listProjectFiles(
+    projectRoot,
+    ["**/package.json"],
+    discovery,
+  );
+  const scopedManifestPaths = allowedManifestFiles
+    ? manifestPaths.filter((manifestPath) =>
+        allowedManifestFiles.has(manifestPath),
+      )
+    : manifestPaths;
+  if (scopedManifestPaths.length === 0) return [];
 
   const manifestByPackageName = new Map<string, string>();
   const parsedByPath = new Map<string, PackageJsonDependencyInfo>();
 
-  for (const manifestPath of manifestPaths) {
+  for (const manifestPath of scopedManifestPaths) {
     try {
       const raw = await fsp.readFile(manifestPath, "utf8");
       const parsed = JSON.parse(raw) as PackageJsonDependencyInfo;
@@ -960,6 +972,11 @@ type ManifestBuildOptions = {
   useBloomFilters?: boolean;
   preset?: BuildOptions["preset"];
   incrementalStrict?: boolean;
+  discovery?: {
+    includeGlobs?: string[];
+    ignoreGlobs?: string[];
+    useGitignore: boolean;
+  };
 };
 
 type IndexManifest = {
@@ -975,12 +992,26 @@ type IndexManifest = {
 
 async function computeConfigHash(projectRoot: string): Promise<string> {
   try {
-    const configFiles = await fg(DEFAULT_PROJECT_MANIFESTS, {
+    const configFiles = await fg(
+      [
+        ...DEFAULT_PROJECT_MANIFESTS,
+        "**/.gitignore",
+      ],
+      {
       cwd: projectRoot,
       absolute: true,
       dot: true,
-      ignore: ["**/node_modules/**"],
-    });
+      ignore: [
+        "**/node_modules/**",
+        "**/.git/**",
+        "**/dist/**",
+        "**/build/**",
+        "**/target/**",
+        "**/.venv/**",
+        "**/__pycache__/**",
+      ],
+      },
+    );
     configFiles.sort();
     const hash = crypto.createHash("sha1");
     for (const file of configFiles) {
@@ -1380,16 +1411,52 @@ function normalizeManifestBuildOptions(
     useBloomFilters: opts?.useBloomFilters ?? true,
     preset: opts?.preset,
     incrementalStrict: opts?.incrementalStrict ?? false,
+    ...(opts?.discovery ? { discovery: opts.discovery } : {}),
+  };
+}
+
+function normalizeDiscoveryOptions(
+  discovery?: ProjectFileDiscoveryOptions,
+): ManifestBuildOptions["discovery"] {
+  if (!discovery) return undefined;
+  const includeGlobs = Array.from(
+    new Set(
+      (discovery.includeGlobs ?? [])
+        .map((glob) => glob.trim())
+        .filter(Boolean),
+    ),
+  ).sort();
+  const ignoreGlobs = Array.from(
+    new Set(
+      (discovery.ignoreGlobs ?? [])
+        .map((glob) => glob.trim())
+        .filter(Boolean),
+    ),
+  ).sort();
+  const useGitignore = discovery.useGitignore !== false;
+  if (
+    includeGlobs.length === 0 &&
+    ignoreGlobs.length === 0 &&
+    useGitignore
+  ) {
+    return undefined;
+  }
+  return {
+    ...(includeGlobs.length > 0 ? { includeGlobs } : {}),
+    ...(ignoreGlobs.length > 0 ? { ignoreGlobs } : {}),
+    useGitignore,
   };
 }
 
 function normalizeBuildOptions(opts?: BuildOptions): ManifestBuildOptions {
+  const discovery = normalizeDiscoveryOptions(opts?.discovery);
   return {
     cache: opts?.cache ?? "off",
     cacheStrict: opts?.cacheStrict ?? true,
     useBloomFilters: opts?.useBloomFilters ?? true,
     preset: opts?.preset,
     incrementalStrict: opts?.incrementalStrict ?? false,
+    ...(discovery ? { discovery } : {}),
   };
 }
 
@@ -1430,7 +1497,37 @@ function diffBuildOptions(
     normalizedManifest.incrementalStrict !== normalizedCurrent.incrementalStrict
   )
     diffs.push("incrementalStrict");
+  if (
+    !normalizedDiscoveryOptionsEqual(
+      normalizedManifest.discovery,
+      normalizedCurrent.discovery,
+    )
+  ) {
+    diffs.push("discovery");
+  }
   return diffs;
+}
+
+function normalizedDiscoveryOptionsEqual(
+  a: ManifestBuildOptions["discovery"],
+  b: ManifestBuildOptions["discovery"],
+): boolean {
+  const normalizedA = a ?? { useGitignore: true };
+  const normalizedB = b ?? { useGitignore: true };
+  if (normalizedA.useGitignore !== normalizedB.useGitignore) return false;
+  const includeA = normalizedA.includeGlobs ?? [];
+  const includeB = normalizedB.includeGlobs ?? [];
+  if (includeA.length !== includeB.length) return false;
+  for (let i = 0; i < includeA.length; i++) {
+    if (includeA[i] !== includeB[i]) return false;
+  }
+  const ignoreA = normalizedA.ignoreGlobs ?? [];
+  const ignoreB = normalizedB.ignoreGlobs ?? [];
+  if (ignoreA.length !== ignoreB.length) return false;
+  for (let i = 0; i < ignoreA.length; i++) {
+    if (ignoreA[i] !== ignoreB[i]) return false;
+  }
+  return true;
 }
 
 function normalizeGraphOptions(opts?: GraphBuildOptions): GraphBuildOptions {
@@ -3942,7 +4039,11 @@ async function buildIndexFromFileListShared(
   }
 
   appendUniqueGraphEdges(
-    await collectWorkspaceManifestDependencyEdges(projectRoot),
+    await collectWorkspaceManifestDependencyEdges(
+      projectRoot,
+      opts?.discovery,
+      new Set(normalizedFiles),
+    ),
   );
   if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
 
@@ -4053,7 +4154,11 @@ export async function buildProjectIndex(
   opts?: BuildOptions,
 ): Promise<ProjectIndex> {
   try {
-    const files = await listProjectFiles(projectRoot);
+    const files = await listProjectFiles(
+      projectRoot,
+      undefined,
+      opts?.discovery,
+    );
     return buildIndexFromFileListShared(projectRoot, files, opts, {
       manifestMode: "read-write",
       warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,

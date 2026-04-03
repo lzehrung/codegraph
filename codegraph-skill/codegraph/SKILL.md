@@ -64,6 +64,10 @@ The CLI also ships a bundled skill installer:
   `codegraph graph ./src --fast-graph`
 - Full AST-based graph:
   `codegraph graph ./src`
+- Narrow scan scope and exclude generated/tests while preserving `.gitignore`:
+  `codegraph graph --root . ./src --include-glob "**/*.ts" --ignore-glob "**/*.spec.ts" --json`
+- Disable `.gitignore` filtering when ignored/generated files are intentionally in scope:
+  `codegraph graph --root . ./src --no-gitignore --json`
 - Mermaid output:
   `codegraph graph ./src --mermaid`
 - Detailed symbol graph:
@@ -157,6 +161,7 @@ const definition = await tool_goToDefinition(
 
 - If you are asked to understand an unfamiliar repo, run `codegraph doctor`, then `codegraph inspect ./src --limit 20`, then use the returned recommended commands to narrow the next graph/query pass.
 - If you are asked to assess architectural risk in a subdirectory, run `codegraph hotspots <dir> --limit 20 --json` and `codegraph cycles <dir> --sort priority --json`.
+- Use `--include-glob`, `--ignore-glob`, and `--no-gitignore` to control which files are scanned. Use `--resolve-node-modules` only when you want JS/TS bare imports resolved into `node_modules`; it does not change scan roots.
 - Use `--json` when you need machine-readable output.
 - Use `--fast-graph` for first-pass exploration on large repos, then rerun without it when accuracy matters.
 - Prefer `refs` over plain text search when you want semantic usages.

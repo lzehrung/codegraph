@@ -140,6 +140,90 @@ describe('CLI regressions', () => {
     expect(isSorted(graph.nodes.map(normalize))).toBe(true);
   });
 
+  it('graph honors .gitignore by default and --no-gitignore opts out', async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-cli-gitignore-'));
+    const srcDir = path.join(tmpDir, 'src');
+    const keptFile = path.join(srcDir, 'main.ts');
+    const ignoredFile = path.join(srcDir, 'generated.ts');
+    await fsp.mkdir(path.dirname(keptFile), { recursive: true });
+    await fsp.writeFile(path.join(tmpDir, '.gitignore'), 'src/generated.ts\n', 'utf8');
+    await fsp.writeFile(keptFile, 'export const main = 1;\n', 'utf8');
+    await fsp.writeFile(ignoredFile, 'export const generated = 1;\n', 'utf8');
+
+    const defaultGraph = JSON.parse(
+      await runCliCommand(['graph', '--root', tmpDir, srcDir, '--json']),
+    ) as { nodes: string[] };
+    expect(defaultGraph.nodes.map(normalize)).toContain(normalize(keptFile));
+    expect(defaultGraph.nodes.map(normalize)).not.toContain(
+      normalize(ignoredFile),
+    );
+
+    const fullGraph = JSON.parse(
+      await runCliCommand([
+        'graph',
+        '--root',
+        tmpDir,
+        srcDir,
+        '--json',
+        '--no-gitignore',
+      ]),
+    ) as { nodes: string[] };
+    expect(fullGraph.nodes.map(normalize)).toContain(normalize(ignoredFile));
+  });
+
+  it('graph applies additive --include-glob and --ignore-glob filters to scanned files', async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-cli-scan-glob-'));
+    const appFile = path.join(tmpDir, 'src', 'main.ts');
+    const specFile = path.join(tmpDir, 'src', 'main.spec.ts');
+    const jsFile = path.join(tmpDir, 'src', 'legacy.js');
+    await fsp.mkdir(path.dirname(appFile), { recursive: true });
+    await fsp.writeFile(appFile, 'export const main = 1;\n', 'utf8');
+    await fsp.writeFile(specFile, 'export const spec = 1;\n', 'utf8');
+    await fsp.writeFile(jsFile, 'module.exports = 1;\n', 'utf8');
+
+    const graph = JSON.parse(
+      await runCliCommand([
+        'graph',
+        '--root',
+        tmpDir,
+        '--json',
+        '--include-glob',
+        'src/**/*.ts',
+        '--ignore-glob',
+        'src/**/*.spec.ts',
+      ]),
+    ) as { nodes: string[] };
+    const nodes = graph.nodes.map(normalize);
+
+    expect(nodes).toContain(normalize(appFile));
+    expect(nodes).not.toContain(normalize(specFile));
+    expect(nodes).not.toContain(normalize(jsFile));
+  });
+
+  it('--resolve-node-modules does not make node_modules a direct scan root', async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-cli-node-modules-scan-'));
+    const packageFile = path.join(tmpDir, 'node_modules', 'my-pkg', 'index.js');
+    await fsp.mkdir(path.dirname(packageFile), { recursive: true });
+    await fsp.writeFile(packageFile, 'module.exports = 1;\n', 'utf8');
+    await fsp.writeFile(
+      path.join(tmpDir, 'main.js'),
+      'export const main = 1;\n',
+      'utf8',
+    );
+
+    const graph = JSON.parse(
+      await runCliCommand([
+        'graph',
+        '--root',
+        tmpDir,
+        '--json',
+        '--resolve-node-modules',
+      ]),
+    ) as { nodes: string[] };
+
+    expect(graph.nodes.map(normalize)).not.toContain(normalize(packageFile));
+  });
+
   it('graph --report writes native backend counters to the report file', async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-cli-report-'));
     const reportPath = path.join(tmpDir, 'graph-report.json');
@@ -509,6 +593,40 @@ describe('CLI regressions', () => {
     expect(hits.length).toBeGreaterThan(0);
     expect(hits.some((h) => h.file === 'utils.ts')).toBe(true);
     expect(hits.every((h) => typeof h.line === 'number' && typeof h.column === 'number')).toBe(true);
+  });
+
+  it('grep honors .gitignore and additive scan globs', async () => {
+    const tmpDir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'dg-cli-grep-scan-'),
+    );
+    const appFile = path.join(tmpDir, 'src', 'app.ts');
+    const specFile = path.join(tmpDir, 'src', 'app.spec.ts');
+    const ignoredFile = path.join(tmpDir, 'src', 'generated.ts');
+    const jsFile = path.join(tmpDir, 'src', 'legacy.js');
+
+    await fsp.mkdir(path.dirname(appFile), { recursive: true });
+    await fsp.writeFile(path.join(tmpDir, '.gitignore'), 'src/generated.ts\n', 'utf8');
+    await fsp.writeFile(appFile, 'export const marker = 1;\n', 'utf8');
+    await fsp.writeFile(specFile, 'export const marker = 2;\n', 'utf8');
+    await fsp.writeFile(ignoredFile, 'export const marker = 3;\n', 'utf8');
+    await fsp.writeFile(jsFile, 'export const marker = 4;\n', 'utf8');
+
+    const stdout = await runCliCommand([
+      'grep',
+      '--root',
+      tmpDir,
+      '--pattern',
+      'marker',
+      '--include-glob',
+      'src/**/*.ts',
+      '--ignore-glob',
+      'src/**/*.spec.ts',
+    ]);
+    const hits = JSON.parse(stdout) as Array<{ file: string }>;
+
+    expect(hits.map((hit) => normalize(hit.file))).toEqual([
+      normalize(path.relative(tmpDir, appFile)),
+    ]);
   });
 
   it('grep rejects ambiguous usage (both --query and --pattern)', async () => {

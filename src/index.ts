@@ -18,6 +18,7 @@ export {
   clearResolutionCaches,
 } from "./util.js";
 export type {
+  ProjectFileDiscoveryOptions,
   ProjectFileInfo,
   ProjectFileKind,
   ProjectFileRole,

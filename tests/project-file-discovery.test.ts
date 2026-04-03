@@ -319,4 +319,91 @@ describe('project file discovery', () => {
     expect(byPath.get(normalize(packageResolved))?.role).toBe('lockfile');
     expect(byPath.has(normalize(ignoredPackage))).toBe(false);
   });
+
+  it('honors root and nested .gitignore files by default', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codegraph-project-gitignore-'));
+    const keptRootFile = path.join(tempDir, 'src', 'keep.ts');
+    const ignoredRootFile = path.join(tempDir, 'src', 'drop.generated.ts');
+    const keptNestedFile = path.join(tempDir, 'nested', 'keep.ts');
+    const ignoredNestedFile = path.join(tempDir, 'nested', 'tmp', 'drop.ts');
+
+    await createFile(path.join(tempDir, '.gitignore'), '*.generated.ts\n');
+    await createFile(path.join(tempDir, 'nested', '.gitignore'), 'tmp/\n');
+    await createFile(keptRootFile, 'export const keepRoot = 1;\n');
+    await createFile(ignoredRootFile, 'export const dropRoot = 1;\n');
+    await createFile(keptNestedFile, 'export const keepNested = 1;\n');
+    await createFile(ignoredNestedFile, 'export const dropNested = 1;\n');
+
+    const discovered = new Set((await listProjectFiles(tempDir)).map(normalize));
+
+    expect(discovered.has(normalize(keptRootFile))).toBe(true);
+    expect(discovered.has(normalize(keptNestedFile))).toBe(true);
+    expect(discovered.has(normalize(ignoredRootFile))).toBe(false);
+    expect(discovered.has(normalize(ignoredNestedFile))).toBe(false);
+  });
+
+  it('does not load nested .gitignore files from directories ignored by a parent .gitignore', async () => {
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'codegraph-project-gitignore-shadow-'),
+    );
+    const ignoredFile = path.join(tempDir, 'tmp', 'keep.ts');
+    const keptFile = path.join(tempDir, 'src', 'keep.ts');
+
+    await createFile(path.join(tempDir, '.gitignore'), 'tmp/\n');
+    await createFile(path.join(tempDir, 'tmp', '.gitignore'), '!keep.ts\n');
+    await createFile(ignoredFile, 'export const shouldStayIgnored = 1;\n');
+    await createFile(keptFile, 'export const keep = 1;\n');
+
+    const discovered = new Set((await listProjectFiles(tempDir)).map(normalize));
+
+    expect(discovered.has(normalize(keptFile))).toBe(true);
+    expect(discovered.has(normalize(ignoredFile))).toBe(false);
+  });
+
+  it('treats non-slash directory patterns as directory subtree ignores', async () => {
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'codegraph-project-gitignore-dir-'),
+    );
+    const ignoredFile = path.join(tempDir, 'tmp', 'generated.ts');
+    const keptFile = path.join(tempDir, 'src', 'keep.ts');
+
+    await createFile(path.join(tempDir, '.gitignore'), 'tmp\n');
+    await createFile(path.join(tempDir, 'tmp', '.gitignore'), '!generated.ts\n');
+    await createFile(ignoredFile, 'export const generated = 1;\n');
+    await createFile(keptFile, 'export const keep = 1;\n');
+
+    const discovered = new Set((await listProjectFiles(tempDir)).map(normalize));
+
+    expect(discovered.has(normalize(keptFile))).toBe(true);
+    expect(discovered.has(normalize(ignoredFile))).toBe(false);
+  });
+
+  it('supports disabling .gitignore filtering and applying additive include/ignore globs', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codegraph-project-discovery-'));
+    const appFile = path.join(tempDir, 'src', 'app.ts');
+    const specFile = path.join(tempDir, 'src', 'app.spec.ts');
+    const ignoredFile = path.join(tempDir, 'src', 'generated.ts');
+    const jsFile = path.join(tempDir, 'src', 'legacy.js');
+
+    await createFile(path.join(tempDir, '.gitignore'), 'src/generated.ts\n');
+    await createFile(appFile, 'export const app = 1;\n');
+    await createFile(specFile, 'export const testApp = 1;\n');
+    await createFile(ignoredFile, 'export const generated = 1;\n');
+    await createFile(jsFile, 'module.exports = 1;\n');
+
+    const discovered = new Set(
+      (
+        await listProjectFiles(tempDir, undefined, {
+          includeGlobs: ['src/**/*.ts'],
+          ignoreGlobs: ['src/**/*.spec.ts'],
+          useGitignore: false,
+        })
+      ).map(normalize),
+    );
+
+    expect(discovered.has(normalize(appFile))).toBe(true);
+    expect(discovered.has(normalize(ignoredFile))).toBe(true);
+    expect(discovered.has(normalize(specFile))).toBe(false);
+    expect(discovered.has(normalize(jsFile))).toBe(false);
+  });
 });
