@@ -68,8 +68,9 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * `path <from> <to>`: Find the shortest dependency path between two files
   * `cycles`: Detect circular dependencies with SCC priority, entry edges, remediation hints, and sort modes (`--sort priority|size|fanin`)
 * **Diagnostics & Reports**
+  * `inspect`: Summarize repo shape, backend status, hotspots, cycles, unresolved imports, and recommended next commands
   * `unresolved`: List external/unresolved imports and their importers
-  * `hotspots`: Identify files with high complexity (fan-in/fan-out)
+  * `hotspots`: Identify files with high fan-in/fan-out, with cache reuse, subtree scoping, and `--limit`
   * `apisurface`: Summarize public API (exported symbols) across the repo
 * **PR impact analysis**
   * Map git diffs to changed symbols and affected code
@@ -372,8 +373,9 @@ npx codegraph path src/main.ts src/utils.ts
 npx codegraph cycles
 
 # Diagnostics and reports
+npx codegraph inspect ./src --limit 20
 npx codegraph unresolved
-npx codegraph hotspots
+npx codegraph hotspots ./src --limit 20
 npx codegraph apisurface
 # Explicit native runtime control
 npx codegraph graph --native off
@@ -668,6 +670,7 @@ Viewer features:
   - **Bloom filters** (default): Automatically built during indexing for 2-3x faster reference scanning. Disable with `useBloomFilters: false` if needed.
   - `.codegraph-cache/index-v1/manifest.json` stores the last indexed commit, graph options, and per-file signatures plus resolved edges. When you re-run `codegraph index` with the same options, unchanged files reuse the manifest entries and skip dependency extraction entirely.
   - Incremental runs treat the manifest as a cached base graph: unchanged files keep their edges, while changed files are re-parsed and their edges replaced. When no explicit Git range is provided, the manifest `lastCommit` is compared to `HEAD` to decide which files to refresh.
+  - `codegraph hotspots` and `codegraph inspect` reuse the disk index cache when `.codegraph-cache/index-v1/manifest.json` is present, and log the cache manifest path, timestamp, and last commit hash to stderr.
   - Remove the manifest (or rerun with different graph flags) to force a full graph rebuild.
   - Clear disk cache: delete `.codegraph-cache/index-v1`.
 

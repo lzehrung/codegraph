@@ -1498,39 +1498,127 @@ export function getUnresolvedImports(graph: Graph): Array<{
     .sort((a, b) => b.importers.length - a.importers.length);
 }
 
-export function getHotspots(graph: Graph): Array<{
+export type HotspotEntry = {
   file: FileId;
   fanIn: number;
   fanOut: number;
   score: number;
-}> {
+};
+
+export type HotspotOptions = {
+  limit?: number;
+  includeRoots?: string[];
+};
+
+function normalizeHotspotPath(filePath: string): string {
+  return filePath.replace(/\\/g, "/");
+}
+
+function normalizeHotspotRoots(includeRoots: string[]): string[] {
+  return includeRoots.map(normalizeHotspotPath);
+}
+
+function compareHotspotEntries(a: HotspotEntry, b: HotspotEntry): number {
+  const byScore = b.score - a.score;
+  if (byScore) return byScore;
+  const byFanIn = b.fanIn - a.fanIn;
+  if (byFanIn) return byFanIn;
+  const byFanOut = b.fanOut - a.fanOut;
+  if (byFanOut) return byFanOut;
+  return a.file < b.file ? -1 : a.file > b.file ? 1 : 0;
+}
+
+function isHotspotUnderRoots(
+  filePath: string,
+  normalizedRoots: string[],
+): boolean {
+  if (normalizedRoots.length === 0) {
+    return true;
+  }
+  const normalizedFile = normalizeHotspotPath(filePath);
+  return normalizedRoots.some((root) => {
+    return (
+      normalizedFile === root ||
+      normalizedFile.startsWith(`${root}/`)
+    );
+  });
+}
+
+function insertLimitedHotspot(
+  topHotspots: HotspotEntry[],
+  entry: HotspotEntry,
+  limit: number,
+): void {
+  const insertIndex = topHotspots.findIndex(
+    (existing) => compareHotspotEntries(entry, existing) < 0,
+  );
+  if (insertIndex === -1) {
+    topHotspots.push(entry);
+  } else {
+    topHotspots.splice(insertIndex, 0, entry);
+  }
+  if (topHotspots.length > limit) {
+    topHotspots.length = limit;
+  }
+}
+
+export function getHotspots(
+  graph: Graph,
+  options?: HotspotOptions,
+): HotspotEntry[] {
   const fanIn = new Map<string, number>();
   const fanOut = new Map<string, number>();
+  const normalizedRoots = normalizeHotspotRoots(options?.includeRoots ?? []);
+  const limit =
+    options?.limit !== undefined
+      ? Math.max(0, Math.floor(options.limit))
+      : undefined;
+  const scopedNodes = new Set<string>();
 
   for (const node of graph.nodes) {
+    if (!isHotspotUnderRoots(node, normalizedRoots)) {
+      continue;
+    }
+    scopedNodes.add(node);
     fanIn.set(node, 0);
     fanOut.set(node, 0);
   }
 
   for (const edge of graph.edges) {
+    if (!scopedNodes.has(edge.from)) {
+      continue;
+    }
     fanOut.set(edge.from, (fanOut.get(edge.from) || 0) + 1);
-    if (edge.to.type === "file") {
+    if (edge.to.type === "file" && scopedNodes.has(edge.to.path)) {
       fanIn.set(edge.to.path, (fanIn.get(edge.to.path) || 0) + 1);
     }
   }
 
-  return Array.from(graph.nodes)
-    .map((file) => {
-      const fi = fanIn.get(file) || 0;
-      const fo = fanOut.get(file) || 0;
-      return {
-        file,
-        fanIn: fi,
-        fanOut: fo,
-        score: fi * 2 + fo, // Heuristic: fan-in is more important
-      };
-    })
-    .sort((a, b) => b.score - a.score);
+  if (limit === 0) {
+    return [];
+  }
+
+  const hotspots: HotspotEntry[] = [];
+  for (const file of scopedNodes) {
+    const fi = fanIn.get(file) || 0;
+    const fo = fanOut.get(file) || 0;
+    const entry = {
+      file,
+      fanIn: fi,
+      fanOut: fo,
+      score: fi * 2 + fo,
+    };
+    if (limit === undefined) {
+      hotspots.push(entry);
+      continue;
+    }
+    insertLimitedHotspot(hotspots, entry, limit);
+  }
+
+  if (limit === undefined) {
+    hotspots.sort(compareHotspotEntries);
+  }
+  return hotspots;
 }
 
 // --------------------------- Symbol graph utilities ---------------------------
