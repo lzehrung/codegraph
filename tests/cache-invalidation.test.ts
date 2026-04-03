@@ -495,4 +495,38 @@ describe("Cache invalidation and strict hashing", () => {
       expect(normalize(fresh)).toBe(normalize(depPath));
     }
   });
+
+  it("rebuilds when .gitignore files change", async () => {
+    const root = await mkTmpDir("dg-gitignore-config-");
+    const trackedPath = path.join(root, "src", "main.ts");
+    const generatedPath = path.join(root, "src", "generated.ts");
+
+    await fsp.mkdir(path.dirname(trackedPath), { recursive: true });
+    await fsp.writeFile(trackedPath, "export const main = 1;\n", "utf8");
+    await fsp.writeFile(
+      generatedPath,
+      "export const generated = 1;\n",
+      "utf8",
+    );
+
+    const initial = await buildProjectIndex(root, {
+      threads: 2,
+      cache: "disk",
+    });
+    expect(initial.byFile.has(normalize(generatedPath))).toBe(true);
+
+    await fsp.writeFile(
+      path.join(root, ".gitignore"),
+      "src/generated.ts\n",
+      "utf8",
+    );
+
+    const rebuilt = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+    });
+
+    expect(rebuilt.byFile.has(normalize(trackedPath))).toBe(true);
+    expect(rebuilt.byFile.has(normalize(generatedPath))).toBe(false);
+  });
 });

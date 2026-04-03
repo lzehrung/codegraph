@@ -39,6 +39,7 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * Python: `import`, `from ... import`, relative imports with package resolution
   * Go/Java/C#/Ruby/Rust: Tree-sitter queries capture module imports/usings and resolve them to files or packages
   * Unresolved targets are represented as **external** nodes
+  * Scan scope respects `.gitignore` by default and can be narrowed with `--include-glob` / `--ignore-glob`
 * **Symbol index**
   * Extracts functions, classes, variables, interfaces, types, and exports
   * Captures docstrings (leading comments), line spans, and a lightweight complexity heuristic for symbols
@@ -320,6 +321,10 @@ dot -Tsvg graph.dot -o graph.svg
 
 # Specify a different root directory (optional, defaults to current directory)
 npx codegraph graph --root /path/to/project --mermaid > graph.mmd
+# Narrow scanned files and apply extra excludes on top of .gitignore
+npx codegraph graph --root . ./src --include-glob "**/*.ts" --ignore-glob "**/*.spec.ts" --json
+# Disable .gitignore filtering when generated files are intentionally in scope
+npx codegraph graph --root . ./src --no-gitignore --json
 
 # Print the installed CLI version
 npx codegraph version
@@ -694,7 +699,7 @@ Viewer features:
   - Resolution precedence for bare specifiers:
     - TypeScript `paths`/`baseUrl` (nearest `tsconfig.json`)
     - Workspace packages (npm/yarn/pnpm/lerna)
-    - `node_modules` (only when `--resolve-node-modules` is enabled)
+    - `node_modules` (only when `--resolve-node-modules` is enabled; this is a resolver toggle, not a scan toggle)
   - Package subpaths are resolved via `exports` / `main` heuristics.
 
 - Troubleshooting:
@@ -1053,6 +1058,13 @@ Get dependency graph in-memory and iterate edges:
 import { listProjectFiles } from '@lzehrung/codegraph';
 
 const files = await listProjectFiles(root);
+const tsFilesOnly = await listProjectFiles(root, undefined, {
+  includeGlobs: ["src/**/*.ts"],
+  ignoreGlobs: ["src/**/*.spec.ts"],
+});
+const includeIgnoredFiles = await listProjectFiles(root, undefined, {
+  useGitignore: false,
+});
 const manifests = files.filter((file) => /(?:package\.json|pyproject\.toml|Cargo\.toml)$/.test(file));
 console.log(manifests);
 ```
