@@ -33,6 +33,54 @@ describe("graph reports", () => {
     expect(hotspots[0].fanIn).toBe(1);
   });
 
+  it("should limit and filter hotspots by include roots", () => {
+    const scopedGraph = {
+      nodes: new Set([
+        `${root}/src/a.ts`,
+        `${root}/src/b.ts`,
+        `${root}/src/c.ts`,
+        `${root}/tests/spec.ts`,
+      ]),
+      edges: [
+        {
+          from: `${root}/src/a.ts`,
+          to: { type: "file" as const, path: `${root}/src/b.ts` },
+          raw: "./b",
+        },
+        {
+          from: `${root}/src/c.ts`,
+          to: { type: "file" as const, path: `${root}/src/b.ts` },
+          raw: "./b",
+        },
+        {
+          from: `${root}/tests/spec.ts`,
+          to: { type: "file" as const, path: `${root}/src/a.ts` },
+          raw: "../src/a",
+        },
+      ],
+    };
+
+    const hotspots = getHotspots(scopedGraph, {
+      includeRoots: [`${root}/src`],
+      limit: 2,
+    });
+
+    expect(hotspots).toEqual([
+      {
+        file: `${root}/src/b.ts`,
+        fanIn: 2,
+        fanOut: 0,
+        score: 4,
+      },
+      {
+        file: `${root}/src/a.ts`,
+        fanIn: 0,
+        fanOut: 1,
+        score: 1,
+      },
+    ]);
+  });
+
   it("should get API surface", () => {
     const mockIndex = {
       byFile: new Map([

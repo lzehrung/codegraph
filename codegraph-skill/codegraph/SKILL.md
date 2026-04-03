@@ -56,6 +56,8 @@ The CLI also ships a bundled skill installer:
 
 ### 1. Dependency graphs
 
+- First-pass repo summary and next-step suggestions:
+  `codegraph inspect ./src --limit 20`
 - Whole-repo graph:
   `codegraph graph ./`
 - Fast overview:
@@ -103,6 +105,8 @@ The CLI also ships a bundled skill installer:
 
 ### 4. Architecture and metrics
 
+- Start here when you need an architecture summary:
+  `codegraph inspect ./src --limit 20`
 - Dependencies of a file:
   `codegraph deps <file>`
 - Reverse dependencies:
@@ -114,7 +118,7 @@ The CLI also ships a bundled skill installer:
 - Public API surface:
   `codegraph apisurface`
 - Hotspots:
-  `codegraph hotspots`
+  `codegraph hotspots ./src --limit 20`
 - Semantic chunking:
   `codegraph chunk <file>`
 
@@ -151,6 +155,8 @@ const definition = await tool_goToDefinition(
 
 ## Best Practices
 
+- If you are asked to understand an unfamiliar repo, run `codegraph doctor`, then `codegraph inspect ./src --limit 20`, then use the returned recommended commands to narrow the next graph/query pass.
+- If you are asked to assess architectural risk in a subdirectory, run `codegraph hotspots <dir> --limit 20 --json` and `codegraph cycles <dir> --sort priority --json`.
 - Use `--json` when you need machine-readable output.
 - Use `--fast-graph` for first-pass exploration on large repos, then rerun without it when accuracy matters.
 - Prefer `refs` over plain text search when you want semantic usages.

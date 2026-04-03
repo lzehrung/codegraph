@@ -311,6 +311,143 @@ describe('CLI regressions', () => {
     expect(report.indexArtifact.details?.manifestPresent).toBe(true);
   });
 
+  it('hotspots honors --limit and include roots, and reuses the disk index cache when present', async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-cli-hotspots-'));
+    const srcDir = path.join(tmpDir, 'src');
+    const testDir = path.join(tmpDir, 'tests');
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.mkdir(testDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(srcDir, 'a.ts'),
+      "import { b } from './b';\nexport const a = b;\n",
+      'utf8',
+    );
+    await fsp.writeFile(
+      path.join(srcDir, 'b.ts'),
+      "export const b = 1;\n",
+      'utf8',
+    );
+    await fsp.writeFile(
+      path.join(testDir, 'spec.ts'),
+      "import { a } from '../src/a';\nexport const spec = a;\n",
+      'utf8',
+    );
+
+    await runCliCommand(['index', '--root', tmpDir]);
+    const result = await runCliCommandDetailed([
+      'hotspots',
+      '--root',
+      tmpDir,
+      srcDir,
+      '--limit',
+      '1',
+      '--json',
+    ]);
+
+    const hotspots = JSON.parse(result.stdout) as Array<{
+      file: string;
+      fanIn: number;
+      fanOut: number;
+      score: number;
+    }>;
+    expect(hotspots).toEqual([
+      {
+        file: normalize(path.join(srcDir, 'b.ts')),
+        fanIn: 1,
+        fanOut: 0,
+        score: 2,
+      },
+    ]);
+    expect(result.stderr).toContain('Index cache: manifest=');
+    expect(result.stderr).toContain('lastCommit=');
+  });
+
+  it('inspect emits backend, file summary, scoped hotspots, and recommended commands', async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-cli-inspect-'));
+    const srcDir = path.join(tmpDir, 'src');
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(srcDir, 'a.ts'),
+      "import { b } from './b';\nexport const a = b;\n",
+      'utf8',
+    );
+    await fsp.writeFile(
+      path.join(srcDir, 'b.ts'),
+      "export const b = 1;\n",
+      'utf8',
+    );
+
+    const stdout = await runCliCommand([
+      'inspect',
+      '--root',
+      tmpDir,
+      srcDir,
+      '--limit',
+      '1',
+    ]);
+    const report = JSON.parse(stdout) as {
+      root: string;
+      includeRoots: string[];
+      backend: {
+        native: {
+          available: boolean;
+          supportedLanguageIds: string[];
+        };
+      };
+      files: {
+        total: number;
+        byLanguage: Record<string, number>;
+      };
+      hotspots: Array<{ file: string; fanIn: number; fanOut: number; score: number }>;
+      unresolved: { total: number; top: Array<{ name: string; importerCount: number }> };
+      cycles: { total: number; top: Array<{ files: string[]; priorityScore: number; size: number }> };
+      recommendedCommands: string[];
+    };
+
+    expect(report.root).toBe(normalize(tmpDir));
+    expect(report.includeRoots).toEqual([normalize(srcDir)]);
+    expect(typeof report.backend.native.available).toBe('boolean');
+    expect(Array.isArray(report.backend.native.supportedLanguageIds)).toBe(true);
+    expect(report.files.total).toBe(2);
+    expect(report.files.byLanguage.ts).toBe(2);
+    expect(report.hotspots.length).toBe(1);
+    expect(report.hotspots[0].file).toBe(normalize(path.join(srcDir, 'b.ts')));
+    expect(report.unresolved.total).toBe(0);
+    expect(report.unresolved.top).toEqual([]);
+    expect(report.cycles.total).toBe(0);
+    expect(report.cycles.top).toEqual([]);
+    expect(report.recommendedCommands).toContain(
+      `codegraph hotspots --root "${normalize(tmpDir)}" "${normalize(srcDir)}" --limit 20 --json`,
+    );
+    expect(report.recommendedCommands).toContain(
+      `codegraph doctor "${normalize(path.join(tmpDir, '.codegraph-cache', 'index-v1'))}"`,
+    );
+  });
+
+  it('hotspots rejects invalid --limit values', async () => {
+    await expect(
+      runCliCommand([
+        'hotspots',
+        '--root',
+        tsRoot,
+        '--limit',
+        '0',
+      ]),
+    ).rejects.toThrow(/Invalid --limit value "0"/i);
+  });
+
+  it('inspect rejects invalid --cache values', async () => {
+    await expect(
+      runCliCommand([
+        'inspect',
+        '--root',
+        tsRoot,
+        '--cache',
+        'banana',
+      ]),
+    ).rejects.toThrow(/Invalid --cache value "banana"/i);
+  });
+
   it('skill install copies the bundled skill into the target directory', async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-cli-skill-install-'));
     const stdout = await runCliCommand([

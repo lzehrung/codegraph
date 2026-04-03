@@ -44,6 +44,7 @@ export {
   getUnresolvedImports,
   getHotspots,
   type DependencyNode,
+  type GraphBuildOptions,
   type SymbolGraph,
   type SymbolNodeKind,
   type DetailedCycle,
