@@ -45,10 +45,12 @@ import {
   isNativeTreeSitterAvailable,
   getNativeTreeSitterLoadError,
   getNativeTreeSitterSupportedLanguageIds,
+  supportForFile,
 } from "./index.js";
 import type {
   BuildReport,
   BuildOptions,
+  GraphBuildOptions,
   NativeRuntimeMode,
   ReviewBuildReport,
   Graph,
@@ -210,6 +212,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--coverage-report",
   "--test-command-template",
   "--target",
+  "--limit",
 ]);
 
 type SkillDoctorReport = {
@@ -241,6 +244,48 @@ type DoctorReport = {
     supportedLanguageIds: string[];
   };
   indexArtifact?: IndexedArtifactReport;
+};
+
+type IndexCacheMetadata = {
+  manifestPath: string;
+  updatedAt?: number;
+  lastCommit?: string;
+};
+
+type InspectReport = {
+  root: string;
+  includeRoots: string[];
+  indexCache?: IndexCacheMetadata;
+  backend: {
+    native: {
+      available: boolean;
+      loadError?: string;
+      supportedLanguageIds: string[];
+    };
+  };
+  files: {
+    total: number;
+    byLanguage: Record<string, number>;
+  };
+  hotspots: Array<{
+    file: string;
+    fanIn: number;
+    fanOut: number;
+    score: number;
+  }>;
+  unresolved: {
+    total: number;
+    top: Array<{ name: string; importerCount: number }>;
+  };
+  cycles: {
+    total: number;
+    top: Array<{
+      files: string[];
+      priorityScore: number;
+      size: number;
+    }>;
+  };
+  recommendedCommands: string[];
 };
 
 function normalizePathForDisplay(filePath: string): string {
@@ -409,12 +454,19 @@ function buildIndexedArtifactReport(indexPath: string): IndexedArtifactReport {
   const resolvedPath = path.resolve(indexPath);
   const stats = statIfExists(resolvedPath);
   const type = detectIndexedArtifactType(resolvedPath);
+  const diskCacheDir =
+    type === "diskCache" &&
+    stats &&
+    !stats.isDirectory() &&
+    path.basename(resolvedPath) === "manifest.json"
+      ? path.dirname(resolvedPath)
+      : resolvedPath;
   const details =
     stats && type === "diskCache"
       ? {
-          manifestPresent: pathExists(path.join(resolvedPath, "manifest.json")),
+          manifestPresent: pathExists(path.join(diskCacheDir, "manifest.json")),
           sqlitePresent: pathExists(
-            path.join(resolvedPath, "index-cache.sqlite"),
+            path.join(diskCacheDir, "index-cache.sqlite"),
           ),
         }
       : stats
@@ -437,6 +489,263 @@ function buildDoctorReport(indexPath?: string): DoctorReport {
       supportedLanguageIds: getNativeTreeSitterSupportedLanguageIds(),
     },
     ...(indexPath ? { indexArtifact: buildIndexedArtifactReport(indexPath) } : {}),
+  };
+}
+
+function parsePositiveIntegerOption(
+  rawValue: string | undefined,
+  optionName: string,
+  defaultValue: number,
+): number {
+  if (rawValue === undefined) {
+    return defaultValue;
+  }
+  const parsedValue = Number(rawValue);
+  if (!Number.isInteger(parsedValue) || parsedValue < 1) {
+    throw new Error(`Invalid ${optionName} value "${rawValue}". Expected a positive integer.`);
+  }
+  return parsedValue;
+}
+
+function parseCacheModeOption(
+  rawValue: string | undefined,
+): "off" | "memory" | "disk" | undefined {
+  if (rawValue === undefined) {
+    return undefined;
+  }
+  if (
+    rawValue === "off" ||
+    rawValue === "memory" ||
+    rawValue === "disk"
+  ) {
+    return rawValue;
+  }
+  throw new Error(
+    `Invalid --cache value "${rawValue}". Expected one of: off, memory, disk.`,
+  );
+}
+
+function defaultCacheIndexPath(projectRoot: string): string {
+  return path.join(projectRoot, ".codegraph-cache", "index-v1");
+}
+
+function defaultCacheManifestPath(projectRoot: string): string {
+  return path.join(defaultCacheIndexPath(projectRoot), "manifest.json");
+}
+
+function readIndexCacheMetadata(projectRoot: string): IndexCacheMetadata | null {
+  const manifestPath = defaultCacheManifestPath(projectRoot);
+  try {
+    const raw = fs.readFileSync(manifestPath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      updatedAt?: number;
+      lastCommit?: string;
+    };
+    return {
+      manifestPath: normalizePathForDisplay(manifestPath),
+      ...(typeof parsed.updatedAt === "number"
+        ? { updatedAt: parsed.updatedAt }
+        : {}),
+      ...(typeof parsed.lastCommit === "string" && parsed.lastCommit
+        ? { lastCommit: parsed.lastCommit }
+        : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function formatIndexCacheMetadata(metadata: IndexCacheMetadata): string {
+  const updatedAt =
+    metadata.updatedAt !== undefined
+      ? new Date(metadata.updatedAt).toISOString()
+      : "unknown";
+  const lastCommit = metadata.lastCommit ?? "unknown";
+  return `Index cache: manifest=${metadata.manifestPath} updatedAt=${updatedAt} lastCommit=${lastCommit}`;
+}
+
+async function buildScopedReportGraph(
+  projectRoot: string,
+  includeRoots: string[],
+  files: string[],
+  opts: {
+    cache?: "off" | "memory" | "disk";
+    graphOptions?: GraphBuildOptions;
+    nativeMode?: NativeRuntimeMode;
+    workerOpts?: { useNativeWorkers: true } | Record<string, never>;
+    progressHandler?: ((update: { current: number; total: number }) => void) | undefined;
+    report?: BuildReport;
+  },
+): Promise<{ graph: Graph; indexCache?: IndexCacheMetadata }> {
+  const useDiskCache = opts.cache === "disk" || opts.cache === undefined;
+  const indexCache = useDiskCache
+    ? readIndexCacheMetadata(projectRoot)
+    : null;
+  if (indexCache) {
+    writeStderrLine(formatIndexCacheMetadata(indexCache));
+    const index = await buildProjectIndexIncremental(projectRoot, {
+      files,
+      cache: "disk",
+      ...(opts.progressHandler ? { onProgress: opts.progressHandler } : {}),
+      ...(opts.nativeMode && opts.nativeMode !== "auto"
+        ? { native: opts.nativeMode }
+        : {}),
+      ...(opts.workerOpts ?? {}),
+      ...(opts.graphOptions ? { graph: opts.graphOptions } : {}),
+      ...(opts.report ? { report: opts.report } : {}),
+    });
+    return {
+      graph: restrictGraphToIncludeRoots(index.graph, includeRoots),
+      indexCache,
+    };
+  }
+
+  const sourceGraph = await collectGraph(projectRoot, files, {
+    ...(opts.graphOptions ?? {}),
+    ...(opts.report ? { report: opts.report } : {}),
+  });
+  return {
+    graph: restrictGraphToIncludeRoots(sourceGraph, includeRoots),
+  };
+}
+
+function countFilesByLanguage(files: Iterable<string>): Record<string, number> {
+  const byLanguage: Record<string, number> = {};
+  for (const file of files) {
+    const languageId = supportForFile(file)?.id ?? "other";
+    byLanguage[languageId] = (byLanguage[languageId] ?? 0) + 1;
+  }
+  return byLanguage;
+}
+
+function buildRecommendedInspectCommands(
+  projectRoot: string,
+  includeRoots: string[],
+  hasCycles: boolean,
+  hasUnresolvedImports: boolean,
+): string[] {
+  const rootFlag = `--root "${normalizePathForDisplay(projectRoot)}"`;
+  const targetSuffix =
+    includeRoots.length > 0
+      ? ` ${includeRoots.map((root) => `"${normalizePathForDisplay(root)}"`).join(" ")}`
+      : "";
+  const commands = [
+    `codegraph hotspots ${rootFlag}${targetSuffix} --limit 20 --json`,
+    `codegraph graph ${rootFlag}${targetSuffix} --json --symbols-detailed --compact-json`,
+  ];
+  if (hasUnresolvedImports) {
+    commands.push(`codegraph unresolved ${rootFlag} --json`);
+  }
+  if (hasCycles) {
+    commands.push(`codegraph cycles ${rootFlag} --sort priority --json`);
+  }
+  commands.push(`codegraph doctor "${normalizePathForDisplay(defaultCacheIndexPath(projectRoot))}"`);
+  return commands;
+}
+
+function restrictGraphToIncludeRoots(
+  graph: Graph,
+  includeRoots: string[],
+): Graph {
+  if (includeRoots.length === 0) {
+    return graph;
+  }
+  const normalizedRoots = includeRoots.map(normalizePathForDisplay);
+  const nodes = new Set<string>();
+  for (const file of graph.nodes) {
+    const normalizedFile = normalizePathForDisplay(file);
+    if (
+      normalizedRoots.some(
+        (root) =>
+          normalizedFile === root || normalizedFile.startsWith(`${root}/`),
+      )
+    ) {
+      nodes.add(normalizedFile);
+    }
+  }
+  const edges = graph.edges.filter((edge) => {
+    if (!nodes.has(normalizePathForDisplay(edge.from))) {
+      return false;
+    }
+    return (
+      edge.to.type === "external" ||
+      nodes.has(normalizePathForDisplay(edge.to.path))
+    );
+  });
+  return {
+    nodes,
+    edges,
+  };
+}
+
+async function buildInspectReport(
+  projectRoot: string,
+  includeRoots: string[],
+  files: string[],
+  graphOptions: GraphBuildOptions | undefined,
+  cache: "off" | "memory" | "disk" | undefined,
+  nativeMode: NativeRuntimeMode,
+  workerOpts: { useNativeWorkers: true } | Record<string, never>,
+  progressHandler:
+    | ((update: { current: number; total: number }) => void)
+    | undefined,
+  limit: number,
+): Promise<InspectReport> {
+  const { graph, indexCache } = await buildScopedReportGraph(
+    projectRoot,
+    includeRoots,
+    files,
+    {
+      ...(cache ? { cache } : {}),
+      ...(graphOptions ? { graphOptions } : {}),
+      nativeMode,
+      workerOpts,
+      ...(progressHandler ? { progressHandler } : {}),
+    },
+  );
+  const hotspots = getHotspots(graph, { limit });
+  const unresolved = getUnresolvedImports(graph);
+  const cycles = sortDetailedCycles(findDetailedCycles(graph), "priority");
+  const loadError = getNativeTreeSitterLoadError(nativeMode);
+  return {
+    root: normalizePathForDisplay(projectRoot),
+    includeRoots: includeRoots.map(normalizePathForDisplay),
+    ...(indexCache ? { indexCache } : {}),
+    backend: {
+      native: {
+        available: isNativeTreeSitterAvailable(nativeMode),
+        ...(loadError ? { loadError: String(loadError) } : {}),
+        supportedLanguageIds: getNativeTreeSitterSupportedLanguageIds(
+          nativeMode,
+        ),
+      },
+    },
+    files: {
+      total: files.length,
+      byLanguage: countFilesByLanguage(files),
+    },
+    hotspots,
+    unresolved: {
+      total: unresolved.length,
+      top: unresolved.slice(0, limit).map((entry) => ({
+        name: entry.name,
+        importerCount: entry.importers.length,
+      })),
+    },
+    cycles: {
+      total: cycles.length,
+      top: cycles.slice(0, limit).map((cycle) => ({
+        files: cycle.files.map(normalizePathForDisplay),
+        priorityScore: cycle.priorityScore,
+        size: cycle.files.length,
+      })),
+    },
+    recommendedCommands: buildRecommendedInspectCommands(
+      projectRoot,
+      includeRoots,
+      cycles.length > 0,
+      unresolved.length > 0,
+    ),
   };
 }
 
@@ -931,6 +1240,7 @@ Usage: codegraph <command> [options] [path]
 Commands:
   graph         Build dependency graph (default)
   doctor        Inspect backend/runtime state and local graph artifacts
+  inspect       Summarize repo structure and recommend next commands
   skill         Install or inspect the bundled agent skill
   version       Print the installed codegraph version
   impact        Analyze PR impact
@@ -957,6 +1267,7 @@ Graph Options:
     --native <mode>           Native runtime mode: auto, on, off
     --workers                 Use Piscina worker threads for native extraction
     --cache <mode>            Cache mode: disk, memory, off
+    --limit N                 Result limit for hotspots/inspect summaries
   --cache-strict            Use content hashes instead of mtime
   --progress                Show progress tracking during indexing
 
@@ -972,6 +1283,7 @@ Examples:
   codegraph graph --fast-graph --mermaid ./src
   codegraph version
   codegraph doctor
+  codegraph inspect ./src --limit 20
   codegraph skill install
   codegraph skill install --target ~/.codex/skills/codegraph --force
   codegraph skill doctor
@@ -1058,6 +1370,8 @@ Examples:
       cmd === "graph-delta" ||
       cmd === "index" ||
       cmd === "grep" ||
+      cmd === "hotspots" ||
+      cmd === "inspect" ||
       cmd === "impact") &&
     !rootOpt &&
     parsed.positionals.length === 1 &&
@@ -1139,7 +1453,10 @@ Examples:
   }
 
   const includeRoots =
-    cmd === "graph" || cmd === "index"
+    cmd === "graph" ||
+    cmd === "index" ||
+    cmd === "hotspots" ||
+    cmd === "inspect"
       ? rootOpt
         ? // If the user explicitly sets --root, treat all remaining positionals as include roots.
           parsed.positionals
@@ -1245,7 +1562,7 @@ Examples:
   if (cmd === "graph-delta") {
     const files = await resolveFiles();
     const threads = Number(getOpt("--threads") ?? 0);
-    const cache = getOpt("--cache") as "off" | "memory" | "disk" | undefined;
+    const cache = parseCacheModeOption(getOpt("--cache"));
     const cacheStrict = hasFlag("--cache-strict");
     const cacheVerify = hasFlag("--cache-verify");
     const incrementalStrict = hasFlag("--incremental-strict");
@@ -1305,7 +1622,7 @@ Examples:
     const wantSymbols = hasExplicitSymbolFlag;
     const detailedSymbols = hasFlag("--symbols-detailed");
     const threads = Number(getOpt("--threads") ?? 0);
-    const cache = getOpt("--cache") as "off" | "memory" | "disk" | undefined;
+    const cache = parseCacheModeOption(getOpt("--cache"));
     const cacheStrict = hasFlag("--cache-strict");
     const stable = hasFlag("--stable");
     const format = hasFlag("--mermaid")
@@ -1560,7 +1877,7 @@ Examples:
       );
     }
     const threads = Number(getOpt("--threads") ?? 0);
-    const cache = getOpt("--cache") as "off" | "memory" | "disk" | undefined;
+    const cache = parseCacheModeOption(getOpt("--cache"));
     const cacheStrict = hasFlag("--cache-strict");
     const full = hasFlag("--json") || hasFlag("--full");
     const cacheVerify = hasFlag("--cache-verify");
@@ -1824,7 +2141,7 @@ Examples:
     const threads = threadsRaw ? Number(threadsRaw) : 0;
     if (threadsRaw) options.threads = threads;
 
-    const cache = getOpt("--cache");
+    const cache = parseCacheModeOption(getOpt("--cache"));
     if (cache !== undefined) options.cache = cache;
 
     const cacheStrict = hasFlag("--cache-strict");
@@ -1992,7 +2309,7 @@ Examples:
     }
     const threadsRaw = getOpt("--threads");
     const threads = threadsRaw !== undefined ? Number(threadsRaw) : undefined;
-    const cache = getOpt("--cache");
+    const cache = parseCacheModeOption(getOpt("--cache"));
     const cacheStrict = hasFlag("--cache-strict");
     const cacheVerify = hasFlag("--cache-verify");
     const incrementalStrict = hasFlag("--incremental-strict");
@@ -2224,22 +2541,61 @@ Examples:
     return;
   }
 
-  if (cmd === "hotspots") {
-    const json = hasFlag("--json");
-    const graph = await collectGraph(
+  if (cmd === "inspect") {
+    const cache = parseCacheModeOption(getOpt("--cache"));
+    const limit = parsePositiveIntegerOption(
+      getOpt("--limit"),
+      "--limit",
+      20,
+    );
+    const files = await resolveFilesFromRoots();
+    const report = await buildInspectReport(
       projectRootFs,
-      await listProjectFiles(projectRootFs),
+      includeRootsAbs,
+      files,
       hasGraphOverrides || nativeMode !== "auto"
         ? buildGraphOptions()
         : undefined,
+      cache,
+      nativeMode,
+      workerOpts,
+      progressHandler,
+      limit,
     );
-    const hotspots = getHotspots(graph);
+    writeJSONLine(report);
+    return;
+  }
+
+  if (cmd === "hotspots") {
+    const json = hasFlag("--json");
+    const cache = parseCacheModeOption(getOpt("--cache"));
+    const limit = parsePositiveIntegerOption(
+      getOpt("--limit"),
+      "--limit",
+      20,
+    );
+    const files = await resolveFilesFromRoots();
+    const { graph } = await buildScopedReportGraph(
+      projectRootFs,
+      includeRootsAbs,
+      files,
+      {
+        ...(cache ? { cache } : {}),
+        ...(hasGraphOverrides || nativeMode !== "auto"
+          ? { graphOptions: buildGraphOptions() }
+          : {}),
+        nativeMode,
+        workerOpts,
+        ...(progressHandler ? { progressHandler } : {}),
+      },
+    );
+    const hotspots = getHotspots(graph, { limit });
 
     if (json) {
       writeJSONLine(hotspots);
     } else {
       writeStdoutLine("Top hotspots (files with high fan-in/out):");
-      for (const item of hotspots.slice(0, 20)) {
+      for (const item of hotspots) {
         writeStdoutLine(
           `- ${path.relative(projectRootFs, item.file)} (fan-in: ${item.fanIn}, fan-out: ${item.fanOut}, score: ${item.score.toFixed(1)})`,
         );
