@@ -2,6 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
+import picomatch from "picomatch";
 import { createMatchPath } from "tsconfig-paths";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
@@ -160,17 +161,183 @@ export const DEFAULT_PROJECT_PATTERNS = [
   ...DEFAULT_PROJECT_MANIFESTS.map((name) => `**/${name}`),
 ];
 
+export type ProjectFileDiscoveryOptions = {
+  includeGlobs?: string[];
+  ignoreGlobs?: string[];
+  useGitignore?: boolean;
+  gitignoreRoot?: string;
+};
+
+type GitignoreRule = {
+  baseDir: string;
+  negated: boolean;
+  dirOnly: boolean;
+  matches: (relativePath: string) => boolean;
+};
+
+function normalizeGlobPattern(globPattern: string): string {
+  return globPattern.trim().replace(/\\/g, "/");
+}
+
+function stripGitignoreTrailingSpaces(line: string): string {
+  let end = line.length;
+  while (end > 0 && line[end - 1] === " ") {
+    let slashCount = 0;
+    for (let i = end - 2; i >= 0 && line[i] === "\\"; i -= 1) {
+      slashCount += 1;
+    }
+    if (slashCount % 2 === 1) {
+      break;
+    }
+    end -= 1;
+  }
+  return line.slice(0, end);
+}
+
+function parseGitignoreRule(
+  baseDir: string,
+  rawLine: string,
+): GitignoreRule | null {
+  const trimmedLine = stripGitignoreTrailingSpaces(rawLine);
+  if (!trimmedLine) return null;
+  if (trimmedLine.startsWith("#")) return null;
+
+  const negated = trimmedLine.startsWith("!");
+  let pattern = negated ? trimmedLine.slice(1) : trimmedLine;
+  if (!pattern || pattern === "/") return null;
+
+  const dirOnly = pattern.endsWith("/");
+  if (dirOnly) {
+    pattern = pattern.slice(0, -1);
+  }
+  if (pattern.startsWith("/")) {
+    pattern = pattern.slice(1);
+  }
+  pattern = pattern.replace(/^\\([#!])/, "$1").replace(/\\/g, "/");
+  if (!pattern) return null;
+
+  const anchored =
+    trimmedLine.startsWith("/") || (negated && trimmedLine.startsWith("!/"));
+  const baseMatcherPattern =
+    anchored || pattern.includes("/")
+      ? pattern
+      : `**/${pattern}`;
+  const matcherPattern = dirOnly
+    ? `${baseMatcherPattern}/**`
+    : [baseMatcherPattern, `${baseMatcherPattern}/**`];
+  const matches = picomatch(matcherPattern, { dot: true });
+  return {
+    baseDir: normalizePath(baseDir),
+    negated,
+    dirOnly,
+    matches,
+  };
+}
+
+async function loadGitignoreRules(projectRoot: string): Promise<GitignoreRule[]> {
+  const gitignoreFiles = await fg(["**/.gitignore"], {
+    cwd: projectRoot,
+    absolute: true,
+    dot: true,
+    ignore: DEFAULT_PROJECT_FILE_IGNORES,
+  });
+  gitignoreFiles.sort((left, right) => normalizePath(left).localeCompare(
+    normalizePath(right),
+  ));
+  const rules: GitignoreRule[] = [];
+  for (const gitignoreFile of gitignoreFiles) {
+    if (isIgnoredByGitignore(gitignoreFile, rules)) {
+      continue;
+    }
+    try {
+      const baseDir = path.dirname(gitignoreFile);
+      const raw = await fsp.readFile(gitignoreFile, "utf8");
+      rules.push(
+        ...raw
+          .split(/\r?\n/)
+          .map((line) => parseGitignoreRule(baseDir, line))
+          .filter((rule): rule is GitignoreRule => !!rule),
+      );
+    } catch {
+      continue;
+    }
+  }
+  return rules;
+}
+
+function matchesDiscoveryGlob(
+  absolutePath: string,
+  projectRoot: string,
+  matcher: (relativePath: string) => boolean,
+): boolean {
+  const relativePath = normalizePath(path.relative(projectRoot, absolutePath));
+  if (!relativePath || relativePath.startsWith("..")) {
+    return false;
+  }
+  return matcher(relativePath);
+}
+
+function isIgnoredByGitignore(
+  absolutePath: string,
+  rules: GitignoreRule[],
+): boolean {
+  let ignored = false;
+  for (const rule of rules) {
+    const relativePath = normalizePath(
+      path.relative(rule.baseDir, absolutePath),
+    );
+    if (!relativePath || relativePath.startsWith("..")) {
+      continue;
+    }
+    if (rule.dirOnly && !relativePath.includes("/")) {
+      continue;
+    }
+    if (rule.matches(relativePath)) {
+      ignored = !rule.negated;
+    }
+  }
+  return ignored;
+}
+
 export async function listProjectFiles(
   projectRoot: string,
   patterns = DEFAULT_PROJECT_PATTERNS,
+  options?: ProjectFileDiscoveryOptions,
 ): Promise<string[]> {
   try {
+    const includeMatchers = (options?.includeGlobs ?? [])
+      .map(normalizeGlobPattern)
+      .filter(Boolean)
+      .map((globPattern) => picomatch(globPattern, { dot: true }));
+    const userIgnoreGlobs = (options?.ignoreGlobs ?? [])
+      .map(normalizeGlobPattern)
+      .filter(Boolean);
+    const gitignoreRoot = options?.gitignoreRoot
+      ? path.resolve(options.gitignoreRoot)
+      : projectRoot;
+    const gitignoreRules =
+      options?.useGitignore === false
+        ? []
+        : await loadGitignoreRules(gitignoreRoot);
     const files = await fg(patterns, {
       cwd: projectRoot,
       absolute: true,
-      ignore: DEFAULT_PROJECT_FILE_IGNORES,
+      dot: true,
+      ignore: [...DEFAULT_PROJECT_FILE_IGNORES, ...userIgnoreGlobs],
     });
-    return files.map(normalizePath);
+    return files
+      .map(normalizePath)
+      .filter((filePath) => {
+        if (
+          includeMatchers.length > 0 &&
+          !includeMatchers.some((matcher) =>
+            matchesDiscoveryGlob(filePath, projectRoot, matcher),
+          )
+        ) {
+          return false;
+        }
+        return !isIgnoredByGitignore(filePath, gitignoreRules);
+      });
   } catch (error) {
     console.warn(`Warning: Failed to list files in ${projectRoot}:`, error);
     return [];

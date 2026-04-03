@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
+import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { buildProjectIndexFromFiles } from "../src/index.js";
 import {
   createTestIndex,
   expectFileInIndex,
@@ -7,6 +10,49 @@ import {
 } from "./test-utils.js";
 
 describe("Project Indexing", () => {
+  it("does not add workspace manifest edges outside explicit file-list indexes", async () => {
+    const root = await fsp.mkdtemp(
+      path.join(os.tmpdir(), "dg-explicit-manifest-scope-"),
+    );
+    const appManifest = path.join(root, "apps", "app", "package.json");
+    const libManifest = path.join(root, "packages", "lib", "package.json");
+
+    await fsp.mkdir(path.dirname(appManifest), { recursive: true });
+    await fsp.mkdir(path.dirname(libManifest), { recursive: true });
+    await fsp.writeFile(
+      appManifest,
+      JSON.stringify(
+        {
+          name: "app",
+          dependencies: {
+            lib: "workspace:*",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fsp.writeFile(
+      libManifest,
+      JSON.stringify({ name: "lib" }, null, 2),
+      "utf8",
+    );
+
+    const index = await buildProjectIndexFromFiles(root, [appManifest]);
+
+    expect(index.byFile.has(appManifest.replace(/\\/g, "/"))).toBe(true);
+    expect(index.byFile.has(libManifest.replace(/\\/g, "/"))).toBe(false);
+    expect(
+      index.graph.edges.some(
+        (edge) =>
+          edge.from === appManifest.replace(/\\/g, "/") &&
+          edge.to.type === "file" &&
+          edge.to.path === libManifest.replace(/\\/g, "/"),
+      ),
+    ).toBe(false);
+  });
+
   describe("TypeScript Project", () => {
     it("should index all TypeScript files", async () => {
       const index = await createTestIndex("typescript");

@@ -63,6 +63,7 @@ import type {
   ReviewDepth,
   ImpactOptions,
 } from "./index.js";
+import type { ProjectFileDiscoveryOptions } from "./util.js";
 
 function toJSON(obj: unknown): string {
   return JSON.stringify(obj, null, 2);
@@ -207,6 +208,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--resolution-hint",
   "--review-depth",
   "--ignore-glob",
+  "--include-glob",
   "--report-file",
   "--lcov",
   "--coverage-report",
@@ -570,6 +572,7 @@ async function buildScopedReportGraph(
   files: string[],
   opts: {
     cache?: "off" | "memory" | "disk";
+    discovery?: ProjectFileDiscoveryOptions;
     graphOptions?: GraphBuildOptions;
     nativeMode?: NativeRuntimeMode;
     workerOpts?: { useNativeWorkers: true } | Record<string, never>;
@@ -586,6 +589,7 @@ async function buildScopedReportGraph(
     const index = await buildProjectIndexIncremental(projectRoot, {
       files,
       cache: "disk",
+      ...(opts.discovery ? { discovery: opts.discovery } : {}),
       ...(opts.progressHandler ? { onProgress: opts.progressHandler } : {}),
       ...(opts.nativeMode && opts.nativeMode !== "auto"
         ? { native: opts.nativeMode }
@@ -682,6 +686,7 @@ async function buildInspectReport(
   projectRoot: string,
   includeRoots: string[],
   files: string[],
+  discovery: ProjectFileDiscoveryOptions,
   graphOptions: GraphBuildOptions | undefined,
   cache: "off" | "memory" | "disk" | undefined,
   nativeMode: NativeRuntimeMode,
@@ -697,6 +702,7 @@ async function buildInspectReport(
     files,
     {
       ...(cache ? { cache } : {}),
+      discovery,
       ...(graphOptions ? { graphOptions } : {}),
       nativeMode,
       workerOpts,
@@ -1258,9 +1264,12 @@ Graph Options:
                             5-10x faster but may miss dynamic imports,
                             re-exports, and complex patterns. Best for
                             quick overviews of large codebases.
-  --resolve-node-modules    Include node_modules in resolution
-  --dynamic-import-heuristics  Attempt to resolve dynamic imports
-  --resolution-hint <hint>  Custom resolution hint (e.g., tsconfig:path)
+    --resolve-node-modules    Include node_modules in resolution
+    --dynamic-import-heuristics  Attempt to resolve dynamic imports
+    --resolution-hint <hint>  Custom resolution hint (e.g., tsconfig:path)
+    --include-glob <glob>     Restrict discovered files to extra glob(s), relative to each scan root
+    --ignore-glob <glob>      Exclude extra discovered files by glob, relative to each scan root
+    --no-gitignore            Do not apply .gitignore files during file discovery
 
   Build Options:
     --threads N               Number of worker threads (default: auto)
@@ -1284,6 +1293,7 @@ Examples:
   codegraph version
   codegraph doctor
   codegraph inspect ./src --limit 20
+  codegraph graph --root . ./src --include-glob "**/*.ts" --ignore-glob "**/*.spec.ts"
   codegraph skill install
   codegraph skill install --target ~/.codex/skills/codegraph --force
   codegraph skill doctor
@@ -1382,6 +1392,13 @@ Examples:
 
   const projectRootFs = rootOpt ? resolveAbs(rootOpt) : defaultProjectRoot;
   const projectRootAbs = projectRootFs.replace(/\\/g, "/");
+  const includeGlobs = parsed.options.get("--include-glob") ?? [];
+  const scanIgnoreGlobs = parsed.options.get("--ignore-glob") ?? [];
+  const discoveryOptions: ProjectFileDiscoveryOptions = {
+    ...(includeGlobs.length > 0 ? { includeGlobs } : {}),
+    ...(scanIgnoreGlobs.length > 0 ? { ignoreGlobs: scanIgnoreGlobs } : {}),
+    ...(hasFlag("--no-gitignore") ? { useGitignore: false } : {}),
+  };
 
   if (cmd === "version") {
     writeStdoutLine(getCodegraphVersion());
@@ -1479,13 +1496,28 @@ Examples:
 
   const resolveFilesFromRoots = async (): Promise<string[]> => {
     if (includeRootsAbs.length === 0)
-      return await listProjectFiles(projectRootFs);
+      return await listProjectFiles(
+        projectRootFs,
+        undefined,
+        discoveryOptions,
+      );
     const normalizedRoots = includeRootsAbs;
     const all: string[][] = await Promise.all(
-      normalizedRoots.map(async (r) => await listProjectFiles(r)),
+      normalizedRoots.map(
+        async (r) =>
+          await listProjectFiles(r, undefined, {
+            ...discoveryOptions,
+            gitignoreRoot: projectRootFs,
+          }),
+      ),
     );
     return Array.from(new Set(all.flat()));
   };
+
+  const listProjectFilesForScan = async (
+    scanRoot: string,
+  ): Promise<string[]> =>
+    await listProjectFiles(scanRoot, undefined, discoveryOptions);
 
   const resolveChangedFiles = async (): Promise<string[] | null> => {
     if (gitBase) {
@@ -1689,6 +1721,7 @@ Examples:
         ? await buildProjectIndexIncremental(projectRootFs, {
             onProgress: progressHandler,
             threads,
+            discovery: discoveryOptions,
             ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
             ...workerOpts,
             ...(sqliteCacheMode !== undefined
@@ -1705,6 +1738,7 @@ Examples:
         : await buildProjectIndexFromFiles(projectRootFs, files, {
             onProgress: progressHandler,
             threads,
+            discovery: discoveryOptions,
             ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
             ...workerOpts,
             ...(sqliteCacheMode !== undefined
@@ -1757,6 +1791,7 @@ Examples:
       const index = await buildProjectIndexFromFiles(projectRootFs, files, {
         onProgress: progressHandler,
         threads,
+        discovery: discoveryOptions,
         ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
         ...workerOpts,
         ...(cache !== undefined ? { cache } : {}),
@@ -1892,6 +1927,7 @@ Examples:
     const baseIndexOptions: BuildOptions = {
       onProgress: progressHandler,
       threads,
+      discovery: discoveryOptions,
       ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
       ...workerOpts,
       ...(cache !== undefined ? { cache } : {}),
@@ -1965,6 +2001,7 @@ Examples:
       : path.resolve(projectRootFs, fileArg).replace(/\\/g, "/");
     const index = await buildProjectIndex(projectRootFs, {
       onProgress: progressHandler,
+      discovery: discoveryOptions,
       ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
       ...workerOpts,
     });
@@ -2015,6 +2052,7 @@ Examples:
     const column = Number(colArg);
     const index = await buildProjectIndex(projectRootFs, {
       onProgress: progressHandler,
+      discovery: discoveryOptions,
       ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
       ...workerOpts,
     });
@@ -2039,6 +2077,7 @@ Examples:
     const pretty = hasFlag("--pretty");
     const index = await buildProjectIndex(projectRootFs, {
       onProgress: progressHandler,
+      discovery: discoveryOptions,
       ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
       ...workerOpts,
     });
@@ -2073,7 +2112,12 @@ Examples:
     }
 
     if (querySource) {
-      const hits = await astGrep(projectRootFs, querySource, patterns);
+      const hits = await astGrep(
+        projectRootFs,
+        querySource,
+        patterns,
+        discoveryOptions,
+      );
       writeJSONLine(hits);
       return;
     }
@@ -2085,7 +2129,11 @@ Examples:
       projectRootFs,
       patternSource!,
       patterns,
-      maxHits !== undefined ? { ignoreCase, maxHits } : { ignoreCase },
+      {
+        ignoreCase,
+        ...(maxHits !== undefined ? { maxHits } : {}),
+        ...discoveryOptions,
+      },
     );
     writeJSONLine(hits);
     return;
@@ -2225,6 +2273,7 @@ Examples:
       }
       const index = await buildProjectIndex(projectRootFs, {
         ...indexOpts,
+        discovery: discoveryOptions,
         onProgress: progressHandler,
       });
       const report = await analyzeImpactFromDiff(
@@ -2321,6 +2370,7 @@ Examples:
     const maxTests =
       maxTestsRaw !== undefined ? Number(maxTestsRaw) : undefined;
     const reviewOpts: Parameters<typeof buildReviewReport>[1] = {};
+    reviewOpts.discovery = discoveryOptions;
     if (reviewDepth) reviewOpts.reviewDepth = reviewDepth;
     if (base !== undefined) reviewOpts.gitBase = base;
     if (head !== undefined) reviewOpts.gitHead = head;
@@ -2372,7 +2422,7 @@ Examples:
 
     const graph = await collectGraph(
       projectRootFs,
-      await listProjectFiles(projectRootFs),
+      await listProjectFilesForScan(projectRootFs),
       hasGraphOverrides || nativeMode !== "auto"
         ? buildGraphOptions()
         : undefined,
@@ -2418,7 +2468,7 @@ Examples:
 
     const graph = await collectGraph(
       projectRootFs,
-      await listProjectFiles(projectRootFs),
+      await listProjectFilesForScan(projectRootFs),
       hasGraphOverrides || nativeMode !== "auto"
         ? buildGraphOptions()
         : undefined,
@@ -2456,7 +2506,7 @@ Examples:
 
     const graph = await collectGraph(
       projectRootFs,
-      await listProjectFiles(projectRootFs),
+      await listProjectFilesForScan(projectRootFs),
       hasGraphOverrides || nativeMode !== "auto"
         ? buildGraphOptions()
         : undefined,
@@ -2508,7 +2558,7 @@ Examples:
     const json = hasFlag("--json");
     const graph = await collectGraph(
       projectRootFs,
-      await listProjectFiles(projectRootFs),
+      await listProjectFilesForScan(projectRootFs),
       hasGraphOverrides || nativeMode !== "auto"
         ? buildGraphOptions()
         : undefined,
@@ -2553,6 +2603,7 @@ Examples:
       projectRootFs,
       includeRootsAbs,
       files,
+      discoveryOptions,
       hasGraphOverrides || nativeMode !== "auto"
         ? buildGraphOptions()
         : undefined,
@@ -2581,6 +2632,7 @@ Examples:
       files,
       {
         ...(cache ? { cache } : {}),
+        discovery: discoveryOptions,
         ...(hasGraphOverrides || nativeMode !== "auto"
           ? { graphOptions: buildGraphOptions() }
           : {}),
@@ -2608,6 +2660,7 @@ Examples:
     const json = hasFlag("--json");
     const index = await buildProjectIndex(projectRootFs, {
       onProgress: progressHandler,
+      discovery: discoveryOptions,
       ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
       ...workerOpts,
     });
