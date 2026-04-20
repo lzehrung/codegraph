@@ -10,6 +10,7 @@ describe("document link graph extraction", () => {
     const indexFile = path.join(root, "index.md").replace(/\\/g, "/");
     const guideFile = path.join(root, "guide.md").replace(/\\/g, "/");
     const imageFile = path.join(root, "images", "diagram.svg").replace(/\\/g, "/");
+    const imageSpecifier = "./images/diagram.svg";
     const graph = await collectGraph(root, [indexFile, guideFile]);
 
     expect(
@@ -27,6 +28,15 @@ describe("document link graph extraction", () => {
           edge.from === indexFile &&
           edge.to.type === "file" &&
           edge.to.path === imageFile,
+      ),
+    ).toBe(false);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === indexFile &&
+          edge.to.type === "external" &&
+          (edge.to.name === imageSpecifier || edge.raw === imageSpecifier),
       ),
     ).toBe(false);
   });

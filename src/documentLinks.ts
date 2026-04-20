@@ -330,7 +330,7 @@ function dedupeModuleSpecifiers(entries: ModuleSpecifier[]): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
   const seen = new Set<string>();
   for (const entry of entries) {
-    const key = `${entry.spec}::${entry.raw ?? ""}::${entry.typeOnly ? 1 : 0}`;
+    const key = `${entry.spec}::${entry.typeOnly ? 1 : 0}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(entry);
