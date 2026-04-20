@@ -28,6 +28,12 @@ import {
   type ModuleSpecifier,
   type ProjectFileDiscoveryOptions,
 } from "./util.js";
+import {
+  extractGraphOnlyModuleSpecifiers,
+  extractHtmlAttributeSpecifiers,
+  extractHtmlInlineScriptSpecifiers,
+  isGraphOnlyLanguage,
+} from "./documentLinks.js";
 // Intentionally compile only the imports query locally to avoid compiling
 // unrelated queries (which may differ per grammar) and causing warnings.
 import {
@@ -241,9 +247,13 @@ export function collectModuleSpecifiersFromSource(
 ): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
   const htmlLikeLanguage = isHtmlLikeLanguage(support.id, opts?.file);
+  const graphOnlyLanguage = isGraphOnlyLanguage(support.id);
   const fastRegexDisabled = opts?.fastRegexDisabledLanguages?.includes(
     support.id,
   );
+  if (graphOnlyLanguage) {
+    return extractGraphOnlyModuleSpecifiers(support.id, source);
+  }
   const shouldAttemptFallback =
     support.id === "python"
       ? /\b(import|from)\b/.test(source)
@@ -338,67 +348,6 @@ export function collectModuleSpecifiersFromSource(
     return new Set(
       target.map((entry) => `${entry.spec}::${entry.typeOnly ? 1 : 0}`),
     );
-  }
-
-  function extractHtmlInlineScriptSpecifiers(
-    source: string,
-  ): ModuleSpecifier[] {
-    const out: ModuleSpecifier[] = [];
-    const inlineScriptRe = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
-    for (const match of source.matchAll(inlineScriptRe)) {
-      const attrs = match[1] ?? "";
-      if (/\bsrc\s*=\s*["'][^"']+["']/i.test(attrs)) continue;
-      const body = match[2] ?? "";
-      if (!body.trim()) continue;
-      out.push(...extractJsTsSpecifiers(body));
-    }
-    return out;
-  }
-
-  function extractHtmlAttributeSpecifiers(source: string): ModuleSpecifier[] {
-    const out: ModuleSpecifier[] = [];
-    const tagAttrNames: Record<string, string[]> = {
-      script: ["src"],
-      link: ["href"],
-      a: ["href"],
-      img: ["src", "srcset"],
-      source: ["src", "srcset"],
-      video: ["src"],
-      audio: ["src"],
-      iframe: ["src"],
-      track: ["src"],
-    };
-    const tagRe =
-      /<(script|link|a|img|source|video|audio|iframe|track)\b([^>]*)>/gi;
-    for (const match of source.matchAll(tagRe)) {
-      const tag = (match[1] ?? "").toLowerCase();
-      const attrs = match[2] ?? "";
-      const attrNames = tagAttrNames[tag] ?? [];
-
-      for (const attrName of attrNames) {
-        const attrRe = new RegExp(
-          `(?:^|\\s)${attrName}\\s*=\\s*(?:"([^"]+)"|'([^']+)'|([^\\s"'=<>\\x60]+))`,
-          "i",
-        );
-        const attrMatch = attrs.match(attrRe);
-        const raw = (
-          attrMatch?.[1] ??
-          attrMatch?.[2] ??
-          attrMatch?.[3]
-        )?.trim();
-        if (!raw) continue;
-        if (attrName === "srcset") {
-          const candidates = raw
-            .split(",")
-            .map((entry) => entry.trim().split(/\s+/)[0]?.trim())
-            .filter((entry): entry is string => !!entry);
-          for (const spec of candidates) out.push({ spec });
-          continue;
-        }
-        out.push({ spec: raw });
-      }
-    }
-    return out;
   }
 
   function extractCssUrlSpecifiers(source: string): ModuleSpecifier[] {
@@ -733,7 +682,7 @@ export async function collectEdgesForFile(
 
   const edges: Edge[] = [];
   const edgeResolutionTasks = specs.map(
-    async ({ spec, typeOnly, resolved, confidence }) => {
+    async ({ spec, raw, typeOnly, resolved, confidence }) => {
       let to: EdgeTo;
       if (sup.id === "python") {
         const relDotsMatch = spec.startsWith(".") ? spec.match(/^\.+/) : null;
@@ -786,7 +735,7 @@ export async function collectEdgesForFile(
         to =
           typeof res === "string"
             ? { type: "file", path: res.replace(/\\/g, "/") }
-            : { type: "external", name: res.external };
+            : { type: "external", name: raw ?? res.external };
       } else if (["csharp", "ruby", "rust"].includes(sup.id)) {
         const { resolvePathLikeModule } = await import("./util.js");
         const res = await resolvePathLikeModule(projectRoot, spec);
@@ -810,7 +759,7 @@ export async function collectEdgesForFile(
           to =
             typeof res2 === "string"
               ? { type: "file", path: res2.replace(/\\/g, "/") }
-              : { type: "external", name: res2.external };
+              : { type: "external", name: raw ?? res2.external };
         }
       } else {
         const res = await resolveSpecifier(
@@ -829,11 +778,12 @@ export async function collectEdgesForFile(
         to =
           typeof res === "string"
             ? { type: "file", path: res.replace(/\\/g, "/") }
-            : { type: "external", name: res.external };
+            : { type: "external", name: raw ?? res.external };
       }
       return {
         to,
         spec,
+        ...(raw !== undefined && { raw }),
         ...(typeOnly !== undefined && { typeOnly }),
         ...(resolved !== undefined && { resolved }),
         ...(confidence !== undefined && { confidence }),
@@ -841,13 +791,20 @@ export async function collectEdgesForFile(
     },
   );
 
-  for (const { to, spec, typeOnly, resolved, confidence } of await Promise.all(
+  for (const {
+    to,
+    spec,
+    raw,
+    typeOnly,
+    resolved,
+    confidence,
+  } of await Promise.all(
     edgeResolutionTasks,
   )) {
     edges.push({
       from: normalizedFile,
       to,
-      raw: spec,
+      raw: raw ?? spec,
       ...(typeOnly !== undefined && { typeOnly }),
       ...(resolved !== undefined && { resolved }),
       ...(confidence !== undefined && { confidence }),

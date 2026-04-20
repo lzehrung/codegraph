@@ -1,0 +1,535 @@
+import path from "node:path";
+import {
+  extractJsTsSpecifiers,
+  type ModuleSpecifier,
+} from "./util.js";
+
+export const GRAPH_ONLY_LANGUAGE_IDS = new Set([
+  "markdown",
+  "mdx",
+  "astro",
+  "hbs",
+  "rst",
+  "adoc",
+]);
+
+const DEFAULT_HTML_TAG_ATTRS: Record<string, string[]> = {
+  script: ["src"],
+  link: ["href"],
+  a: ["href"],
+  img: ["src", "srcset"],
+  source: ["src", "srcset"],
+  video: ["src"],
+  audio: ["src"],
+  iframe: ["src"],
+  track: ["src"],
+};
+
+const HTML_TAG_RE =
+  /<(script|link|a|img|source|video|audio|iframe|track)\b([^>]*)>/gi;
+
+const DOCUMENT_RELATIVE_EXTENSIONS = new Set([
+  ".md",
+  ".mdx",
+  ".astro",
+  ".hbs",
+  ".handlebars",
+  ".rst",
+  ".adoc",
+  ".asciidoc",
+  ".html",
+  ".htm",
+  ".css",
+  ".scss",
+  ".less",
+  ".js",
+  ".jsx",
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".mjs",
+  ".cjs",
+  ".json",
+  ".svg",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".avif",
+  ".mp4",
+  ".webm",
+  ".mp3",
+  ".wav",
+  ".ogg",
+  ".txt",
+  ".yaml",
+  ".yml",
+]);
+
+export function isGraphOnlyLanguage(languageId: string): boolean {
+  return GRAPH_ONLY_LANGUAGE_IDS.has(languageId);
+}
+
+export function extractHtmlInlineScriptSpecifiers(
+  source: string,
+): ModuleSpecifier[] {
+  const out: ModuleSpecifier[] = [];
+  const inlineScriptRe = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+  for (const match of source.matchAll(inlineScriptRe)) {
+    const attrs = match[1] ?? "";
+    if (/\bsrc\s*=\s*["'][^"']+["']/i.test(attrs)) continue;
+    const body = match[2] ?? "";
+    if (!body.trim()) continue;
+    out.push(...extractJsTsSpecifiers(body));
+  }
+  return dedupeModuleSpecifiers(out);
+}
+
+export function extractHtmlAttributeSpecifiers(
+  source: string,
+  tagAttrNames: Record<string, string[]> = DEFAULT_HTML_TAG_ATTRS,
+): ModuleSpecifier[] {
+  const out: ModuleSpecifier[] = [];
+
+  for (const match of source.matchAll(HTML_TAG_RE)) {
+    const tag = (match[1] ?? "").toLowerCase();
+    const attrs = match[2] ?? "";
+    const attrNames = tagAttrNames[tag] ?? [];
+
+    for (const attrName of attrNames) {
+      const attrRe = new RegExp(
+        `(?:^|\\s)${attrName}\\s*=\\s*(?:"([^"]+)"|'([^']+)'|([^\\s"'=<>\\x60]+))`,
+        "i",
+      );
+      const attrMatch = attrs.match(attrRe);
+      const raw = (
+        attrMatch?.[1] ??
+        attrMatch?.[2] ??
+        attrMatch?.[3]
+      )?.trim();
+      if (!raw) continue;
+      if (attrName === "srcset") {
+        const candidates = raw
+          .split(",")
+          .map((entry) => entry.trim().split(/\s+/)[0]?.trim())
+          .filter((entry): entry is string => !!entry);
+        for (const spec of candidates) {
+          const normalized = normalizeLinkSpecifier(spec, {
+            preferRelative: true,
+          });
+          if (normalized) out.push(normalized);
+        }
+        continue;
+      }
+      const normalized = normalizeLinkSpecifier(raw, { preferRelative: true });
+      if (normalized) out.push(normalized);
+    }
+  }
+
+  return dedupeModuleSpecifiers(out);
+}
+
+export function extractGraphOnlyModuleSpecifiers(
+  languageId: string,
+  source: string,
+): ModuleSpecifier[] {
+  if (languageId === "markdown") {
+    return extractMarkdownModuleSpecifiers(source);
+  }
+  if (languageId === "mdx") {
+    return extractMdxModuleSpecifiers(source);
+  }
+  if (languageId === "astro") {
+    return extractAstroModuleSpecifiers(source);
+  }
+  if (languageId === "hbs") {
+    return extractHandlebarsModuleSpecifiers(source);
+  }
+  if (languageId === "rst") {
+    return extractRstModuleSpecifiers(source);
+  }
+  if (languageId === "adoc") {
+    return extractAsciidocModuleSpecifiers(source);
+  }
+  return [];
+}
+
+export function extractMarkdownModuleSpecifiers(
+  source: string,
+): ModuleSpecifier[] {
+  const sanitized = stripMarkdownCode(source);
+  const referenceDefs = collectMarkdownReferenceDefinitions(sanitized);
+  const out: ModuleSpecifier[] = [];
+
+  for (const match of sanitized.matchAll(/!?\[[^\]]+\]\(([^)\n]+)\)/g)) {
+    const fullMatch = match[0] ?? "";
+    if (fullMatch.startsWith("!")) continue;
+    const rawDestination = match[1];
+    if (!rawDestination) continue;
+    const destination = extractMarkdownDestination(rawDestination);
+    const normalized = normalizeLinkSpecifier(destination, {
+      preferRelative: true,
+    });
+    if (normalized) out.push(normalized);
+  }
+
+  for (const match of sanitized.matchAll(/!?\[([^\]]+)\]\[([^\]]*)\]/g)) {
+    const fullMatch = match[0] ?? "";
+    if (fullMatch.startsWith("!")) continue;
+    const text = match[1]?.trim();
+    const label = match[2]?.trim();
+    const resolvedLabel = normalizeReferenceLabel(label || text);
+    if (!resolvedLabel) continue;
+    const destination = referenceDefs.get(resolvedLabel);
+    if (!destination) continue;
+    out.push(destination);
+  }
+
+  for (const match of sanitized.matchAll(/<([^>\s]+)>/g)) {
+    const candidate = match[1]?.trim();
+    if (!candidate) continue;
+    if (candidate.startsWith("/") || candidate.startsWith("?")) continue;
+    const normalized = normalizeLinkSpecifier(candidate, {
+      preferRelative: true,
+    });
+    if (normalized) out.push(normalized);
+  }
+
+  out.push(
+    ...extractHtmlAttributeSpecifiers(sanitized, {
+      a: ["href"],
+    }),
+  );
+
+  return dedupeModuleSpecifiers(out);
+}
+
+export function extractMdxModuleSpecifiers(source: string): ModuleSpecifier[] {
+  const sanitized = stripMarkdownCode(source);
+  const out = extractMarkdownModuleSpecifiers(source);
+  out.push(...extractJsTsSpecifiers(sanitized));
+  return dedupeModuleSpecifiers(out);
+}
+
+export function extractAstroModuleSpecifiers(
+  source: string,
+): ModuleSpecifier[] {
+  const out: ModuleSpecifier[] = [];
+  out.push(...extractHtmlAttributeSpecifiers(source));
+  out.push(...extractHtmlInlineScriptSpecifiers(source));
+
+  const frontmatterMatch = source.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (frontmatterMatch?.[1]) {
+    out.push(...extractJsTsSpecifiers(frontmatterMatch[1]));
+  }
+
+  return dedupeModuleSpecifiers(out);
+}
+
+export function extractHandlebarsModuleSpecifiers(
+  source: string,
+): ModuleSpecifier[] {
+  const out: ModuleSpecifier[] = [];
+  out.push(...extractHtmlAttributeSpecifiers(source));
+
+  for (const match of source.matchAll(/\{\{\s*>\s*(?:"([^"]+)"|'([^']+)'|([^\s}]+))/g)) {
+    const rawSpecifier = match[1] ?? match[2] ?? match[3];
+    if (!rawSpecifier) continue;
+    const normalized = normalizeLinkSpecifier(rawSpecifier, {
+      preferRelative: true,
+    });
+    if (normalized) out.push(normalized);
+  }
+
+  return dedupeModuleSpecifiers(out);
+}
+
+export function extractRstModuleSpecifiers(
+  source: string,
+): ModuleSpecifier[] {
+  const out: ModuleSpecifier[] = [];
+  const namedTargets = collectRstTargetDefinitions(source);
+
+  for (const match of source.matchAll(/`[^`<\n]*<([^>\n]+)>`_/g)) {
+    const rawSpecifier = match[1]?.trim();
+    if (!rawSpecifier) continue;
+    const normalized = normalizeLinkSpecifier(rawSpecifier, {
+      preferRelative: true,
+      forceRelative: true,
+    });
+    if (normalized) out.push(normalized);
+  }
+
+  for (const match of source.matchAll(/`([^`\n]+)`_/g)) {
+    const label = normalizeReferenceLabel(match[1]);
+    if (!label) continue;
+    const normalized = namedTargets.get(label);
+    if (normalized) out.push(normalized);
+  }
+
+  for (const match of source.matchAll(/^\s*\.\.\s+include::\s+([^\s]+)\s*$/gm)) {
+    const rawSpecifier = match[1]?.trim();
+    if (!rawSpecifier) continue;
+    const normalized = normalizeLinkSpecifier(rawSpecifier, {
+      preferRelative: true,
+      forceRelative: true,
+    });
+    if (normalized) out.push(normalized);
+  }
+
+  out.push(...extractRstToctreeSpecifiers(source));
+
+  return dedupeModuleSpecifiers(out);
+}
+
+export function extractAsciidocModuleSpecifiers(
+  source: string,
+): ModuleSpecifier[] {
+  const out: ModuleSpecifier[] = [];
+
+  for (const match of source.matchAll(/\b(?:xref|link):([^\[\s]+)\[[^\]]*]/g)) {
+    const rawSpecifier = match[1]?.trim();
+    if (!rawSpecifier) continue;
+    const normalized = normalizeLinkSpecifier(rawSpecifier, {
+      preferRelative: true,
+      forceRelative: true,
+    });
+    if (normalized) out.push(normalized);
+  }
+
+  for (const match of source.matchAll(/\binclude::([^\[\n]+)\[[^\]]*]/g)) {
+    const rawSpecifier = match[1]?.trim();
+    if (!rawSpecifier) continue;
+    const normalized = normalizeLinkSpecifier(rawSpecifier, {
+      preferRelative: true,
+      forceRelative: true,
+    });
+    if (normalized) out.push(normalized);
+  }
+
+  for (const match of source.matchAll(/<<([^>,]+)(?:,[^>]*)?>>/g)) {
+    const rawSpecifier = match[1]?.trim();
+    if (!rawSpecifier) continue;
+    const normalized = normalizeLinkSpecifier(rawSpecifier, {
+      preferRelative: true,
+      forceRelative: true,
+    });
+    if (normalized) out.push(normalized);
+  }
+
+  out.push(
+    ...extractHtmlAttributeSpecifiers(source, {
+      a: ["href"],
+    }),
+  );
+
+  return dedupeModuleSpecifiers(out);
+}
+
+function dedupeModuleSpecifiers(entries: ModuleSpecifier[]): ModuleSpecifier[] {
+  const out: ModuleSpecifier[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    const key = `${entry.spec}::${entry.raw ?? ""}::${entry.typeOnly ? 1 : 0}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(entry);
+  }
+  return out;
+}
+
+function collectMarkdownReferenceDefinitions(
+  source: string,
+): Map<string, ModuleSpecifier> {
+  const out = new Map<string, ModuleSpecifier>();
+  const definitionRe =
+    /^\s{0,3}\[([^\]]+)\]:\s*(<[^>\n]+>|[^ \t\n]+)(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*$/gm;
+
+  for (const match of source.matchAll(definitionRe)) {
+    const label = normalizeReferenceLabel(match[1]);
+    const rawDestination = match[2];
+    if (!label || !rawDestination) continue;
+    const normalized = normalizeLinkSpecifier(rawDestination, {
+      preferRelative: true,
+    });
+    if (normalized) out.set(label, normalized);
+  }
+
+  return out;
+}
+
+function collectRstTargetDefinitions(
+  source: string,
+): Map<string, ModuleSpecifier> {
+  const out = new Map<string, ModuleSpecifier>();
+  const definitionRe = /^\s*\.\.\s+_([^:]+):\s*(\S+)\s*$/gm;
+
+  for (const match of source.matchAll(definitionRe)) {
+    const label = normalizeReferenceLabel(match[1]);
+    const rawSpecifier = match[2];
+    if (!label || !rawSpecifier) continue;
+    const normalized = normalizeLinkSpecifier(rawSpecifier, {
+      preferRelative: true,
+      forceRelative: true,
+    });
+    if (normalized) out.set(label, normalized);
+  }
+
+  return out;
+}
+
+function extractRstToctreeSpecifiers(source: string): ModuleSpecifier[] {
+  const out: ModuleSpecifier[] = [];
+  const lines = source.split(/\r?\n/);
+  let inToctree = false;
+
+  for (const line of lines) {
+    if (/^\s*\.\.\s+toctree::\s*$/.test(line)) {
+      inToctree = true;
+      continue;
+    }
+
+    if (!inToctree) continue;
+
+    if (!line.trim()) {
+      continue;
+    }
+
+    const indentMatch = line.match(/^(\s+)(.+)$/);
+    if (!indentMatch) {
+      inToctree = false;
+      continue;
+    }
+
+    const content = indentMatch[2]?.trim();
+    if (!content || content.startsWith(":")) {
+      continue;
+    }
+
+    const titledMatch = content.match(/<([^>]+)>/);
+    const rawSpecifier = titledMatch?.[1]?.trim() ?? content;
+    const normalized = normalizeLinkSpecifier(rawSpecifier, {
+      preferRelative: true,
+      forceRelative: true,
+    });
+    if (normalized) out.push(normalized);
+  }
+
+  return out;
+}
+
+function normalizeReferenceLabel(label: string | undefined): string | null {
+  const normalized = label?.trim().replace(/\s+/g, " ").toLowerCase();
+  return normalized ? normalized : null;
+}
+
+function extractMarkdownDestination(rawDestination: string): string {
+  const trimmed = rawDestination.trim();
+  if (!trimmed) return trimmed;
+  if (trimmed.startsWith("<")) {
+    const endIndex = trimmed.indexOf(">");
+    if (endIndex > 0) return trimmed.slice(0, endIndex + 1);
+  }
+  const whitespaceIndex = trimmed.search(/\s/);
+  return whitespaceIndex >= 0
+    ? trimmed.slice(0, whitespaceIndex)
+    : trimmed;
+}
+
+function normalizeLinkSpecifier(
+  rawSpecifier: string,
+  opts?: { preferRelative?: boolean; forceRelative?: boolean },
+): ModuleSpecifier | null {
+  const original = rawSpecifier.trim();
+  if (!original) return null;
+
+  let normalized = original;
+  if (normalized.startsWith("<") && normalized.endsWith(">")) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+  if (!normalized || normalized.startsWith("#")) return null;
+  if (isObviouslyDynamicSpecifier(normalized)) return null;
+
+  const hasSchemePrefix = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(normalized);
+  const isWindowsAbsolutePath = /^[A-Za-z]:[\\/]/.test(normalized);
+  const isProtocolRelative = normalized.startsWith("//");
+
+  if (!hasSchemePrefix && !isProtocolRelative && !isWindowsAbsolutePath) {
+    const hashIndex = normalized.indexOf("#");
+    if (hashIndex >= 0) normalized = normalized.slice(0, hashIndex);
+    const queryIndex = normalized.indexOf("?");
+    if (queryIndex >= 0) normalized = normalized.slice(0, queryIndex);
+  }
+
+  normalized = normalized.trim();
+  if (!normalized) return null;
+
+  if (opts?.forceRelative && shouldForceRelativePath(normalized)) {
+    normalized = `./${normalized}`;
+  } else if (opts?.preferRelative && shouldPreferRelativePath(normalized)) {
+    normalized = `./${normalized}`;
+  }
+
+  if (normalized === original) return { spec: normalized };
+  return { spec: normalized, raw: original };
+}
+
+function shouldForceRelativePath(specifier: string): boolean {
+  if (
+    specifier.startsWith(".") ||
+    specifier.startsWith("/") ||
+    specifier.startsWith("#") ||
+    specifier.startsWith("@") ||
+    specifier.startsWith("//")
+  ) {
+    return false;
+  }
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(specifier)) return false;
+  if (/^[A-Za-z]:[\\/]/.test(specifier)) return false;
+  return true;
+}
+
+function shouldPreferRelativePath(specifier: string): boolean {
+  if (
+    specifier.startsWith(".") ||
+    specifier.startsWith("/") ||
+    specifier.startsWith("#") ||
+    specifier.startsWith("@") ||
+    specifier.startsWith("//")
+  ) {
+    return false;
+  }
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(specifier)) return false;
+  if (/^[A-Za-z]:[\\/]/.test(specifier)) return false;
+  if (specifier.includes("/")) return true;
+
+  const ext = path.extname(specifier).toLowerCase();
+  return DOCUMENT_RELATIVE_EXTENSIONS.has(ext);
+}
+
+function isObviouslyDynamicSpecifier(specifier: string): boolean {
+  return (
+    specifier.includes("{{") ||
+    specifier.includes("}}") ||
+    specifier.includes("{%") ||
+    specifier.includes("%}") ||
+    specifier.includes("<%") ||
+    specifier.includes("%>") ||
+    specifier.includes("${")
+  );
+}
+
+function stripMarkdownCode(source: string): string {
+  let sanitized = source.replace(
+    /(^|\n)(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\2[^\n]*(?=\n|$)/g,
+    maskMatch,
+  );
+  sanitized = sanitized.replace(/`[^`\n]*`/g, maskMatch);
+  return sanitized;
+}
+
+function maskMatch(segment: string): string {
+  return segment.replace(/[^\r\n]/g, " ");
+}

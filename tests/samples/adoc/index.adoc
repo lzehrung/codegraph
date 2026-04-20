@@ -1,0 +1,7 @@
+= Docs
+
+xref:guide.adoc[Guide]
+link:./summary.adoc[Summary]
+include::partials/intro.adoc[]
+<<appendix.adoc#top,Appendix>>
+link:https://example.com/adoc[External]

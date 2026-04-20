@@ -60,6 +60,10 @@ import {
   type FallbackImportExtractionReason,
   type SymbolGraph,
 } from "./graphs.js";
+import {
+  extractGraphOnlyModuleSpecifiers,
+  isGraphOnlyLanguage,
+} from "./documentLinks.js";
 import type { Edge, Range, FileId, Graph } from "./types.js";
 import {
   executeJsQueryAsNativeMatches,
@@ -1624,6 +1628,10 @@ export function collectLocalsAndExportsFromSource(
     nativeMode?: NativeRuntimeMode;
   },
 ): ModuleIndex {
+  if (isGraphOnlyLanguage(support.id)) {
+    return { file, exports: [], imports, locals: [] };
+  }
+
   const normalizeDocstringLine = (line: string) =>
     line.replace(/^\s*(?:\/\/\/?\s?|#\s?)/, "").replace(/^\s*\*\s?/, "");
 
@@ -2494,6 +2502,37 @@ export async function collectImportsForFile(
   const resolvedSource = source;
   const resolvedSup = sup;
   let resolvedLang = lang;
+  if (isGraphOnlyLanguage(resolvedSup.id)) {
+    const workspaceConfig = await loadWorkspaceConfig(projectRoot);
+    const resolutionHints = opts?.graphOptions?.resolutionHints;
+    const imports: ImportBinding[] = [];
+    for (const entry of extractGraphOnlyModuleSpecifiers(
+      resolvedSup.id,
+      resolvedSource,
+    )) {
+      const resolved = await resolveSpecifier(
+        file,
+        entry.spec,
+        projectRoot,
+        undefined,
+        workspaceConfig,
+        {
+          resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
+          ...(resolutionHints ? { resolutionHints } : {}),
+        },
+      );
+      imports.push({
+        kind: "star",
+        from: entry.raw ?? entry.spec,
+        resolved:
+          typeof resolved === "string"
+            ? resolved.replace(/\\/g, "/")
+            : resolved,
+      });
+    }
+    return imports;
+  }
+
   const resolvedNativeQueries = opts?.nativeQueries ?? null;
   const ensureResolvedLang = (): JsLanguage => {
     resolvedLang ??= resolvedSup.language(file);

@@ -20,10 +20,16 @@ Status key:
 | Ruby | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
 | Rust | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
 | Swift | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
-| HTML | No | No | No | No | Yes | No | Yes | Yes | Yes |
+| HTML | Yes | No | No | No | Yes | No | Yes | Yes | Yes |
+| Astro | Yes | No | No | No | No | No | Yes | No | No |
+| Handlebars | Yes | No | No | No | No | No | Yes | No | No |
 | CSS | No | No | No | No | Yes | No | Yes | Yes | Yes |
 | SCSS | Yes | No | No | No | Yes | No | Yes | Yes | Yes |
 | Less | No | No | No | No | Yes | No | Yes | Yes | Yes |
+| Markdown | Yes | No | No | No | No | No | Yes | No | No |
+| MDX | Yes | No | No | No | No | No | Yes | No | No |
+| reStructuredText | Yes | No | No | No | No | No | Yes | No | No |
+| AsciiDoc | Yes | No | No | No | No | No | Yes | No | No |
 | Vue | No | No | No | No | Yes | Yes | Yes | Yes | Yes |
 | Svelte | No | No | No | No | Yes | Yes | Yes | Yes | Yes |
 
@@ -34,6 +40,8 @@ Notes:
 - JavaScript graphing now includes an isolated AngularJS heuristic layer for `templateUrl`, controller-name, and DI-token file/external edges when a file explicitly uses `angular.module(...)`. This coverage lives in dedicated framework tests, not in the generic JavaScript fixture set, and it is not a general claim that arbitrary `controller` or `templateUrl` config objects are Angular-aware.
 - `SCSS` uses the native addon for import/specifier extraction. Native SCSS symbol queries are intentionally skipped because symbol extraction is not a supported SCSS capability yet.
 - `HTML`, `CSS`, `Less`, `Vue`, and `Svelte` are graph/chunking-focused today. Their unsupported navigation and symbol features are covered by explicit `not_found` parity tests.
+- `Markdown` and `MDX` are graph-first today. They use shared text extraction for document links and MDX static imports, and they intentionally do not claim semantic chunking, navigation, references, or native-addon parity yet.
+- `Astro`, `Handlebars`, `reStructuredText`, and `AsciiDoc` are also graph-first today. They use shared text extraction for local links and format-specific include/import syntax, and they intentionally do not claim semantic chunking, navigation, references, or native-addon parity yet.
 - One deeper semantic shape remains intentionally limited and is covered by explicit regression tests instead of an optimistic support claim: macro-expanded or otherwise non-local C typedef reference recovery beyond the current direct declaration use-site coverage.
 - Another intentionally limited semantic shape is C# alias-only `using Alias = Namespace.Type;` navigation without a companion namespace import. Graph extraction is covered, but alias-only member navigation is not claimed yet.
 

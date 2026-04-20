@@ -157,7 +157,7 @@ export const DEFAULT_PROJECT_MANIFESTS = [
 ];
 
 export const DEFAULT_PROJECT_PATTERNS = [
-  "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs,html,htm,css,scss,less,kt,kts,swift,c,h,cc,cpp,cxx,c++,hpp,hh,hxx,ipp,tpp,inl}",
+  "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,astro,hbs,handlebars,md,mdx,rst,adoc,asciidoc,go,java,cs,rb,rs,html,htm,css,scss,less,kt,kts,swift,c,h,cc,cpp,cxx,c++,hpp,hh,hxx,ipp,tpp,inl}",
   ...DEFAULT_PROJECT_MANIFESTS.map((name) => `**/${name}`),
 ];
 
@@ -1067,6 +1067,7 @@ export function normalizeResolutionHints(hints?: string[]): string[] {
 
 export type ModuleSpecifier = {
   spec: string;
+  raw?: string;
   typeOnly?: boolean;
   resolved?: "heuristic" | "precise";
   confidence?: number;
@@ -1688,6 +1689,14 @@ export async function resolveWorkspacePackage(
     ".css",
     ".scss",
     ".less",
+    ".md",
+    ".mdx",
+    ".astro",
+    ".hbs",
+    ".handlebars",
+    ".rst",
+    ".adoc",
+    ".asciidoc",
     ".html",
     ".vue",
     ".svelte",
@@ -1788,6 +1797,14 @@ export async function resolvePathLikeModule(
     ".css",
     ".scss",
     ".less",
+    ".md",
+    ".mdx",
+    ".astro",
+    ".hbs",
+    ".handlebars",
+    ".rst",
+    ".adoc",
+    ".asciidoc",
     ".html",
     ".vue",
     ".svelte",
@@ -2357,6 +2374,14 @@ export async function resolveSpecifier(
     ".css",
     ".scss",
     ".less",
+    ".md",
+    ".mdx",
+    ".astro",
+    ".hbs",
+    ".handlebars",
+    ".rst",
+    ".adoc",
+    ".asciidoc",
     ".html",
     ".vue",
     ".svelte",
@@ -2546,6 +2571,14 @@ async function resolveFromNodeModules(
           ".mjs",
           ".cjs",
           ".json",
+          ".md",
+          ".mdx",
+          ".astro",
+          ".hbs",
+          ".handlebars",
+          ".rst",
+          ".adoc",
+          ".asciidoc",
           ".vue",
           ".svelte",
           ".go",
