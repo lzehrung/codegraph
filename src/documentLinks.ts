@@ -530,7 +530,7 @@ function shouldPreferRelativePath(specifier: string): boolean {
 function findMarkdownLabelEnd(source: string, openIndex: number): number {
   let depth = 0;
   for (let index = openIndex; index < source.length; index += 1) {
-    const char = source[index];
+    const char = source.charAt(index);
     if (char === "\\") {
       index += 1;
       continue;
@@ -556,8 +556,7 @@ function parseMarkdownInlineLink(
   let sawDestinationStart = false;
 
   for (let index = startIndex; index < source.length; index += 1) {
-    const char = source[index];
-    if (char === undefined) return null;
+    const char = source.charAt(index);
     if (char === "\n") return null;
     if (char === "\\") {
       index += 1;
