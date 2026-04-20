@@ -63,6 +63,8 @@ import {
 } from "./graphs.js";
 import {
   extractGraphOnlyModuleSpecifiers,
+  graphOnlyLanguageSupportsImportAliases,
+  graphOnlySpecifierNeedsResolutionConfig,
   isGraphOnlyLanguage,
 } from "./documentLinks.js";
 import type { Edge, Range, FileId, Graph } from "./types.js";
@@ -2504,36 +2506,53 @@ export async function collectImportsForFile(
   const resolvedSup = sup;
   let resolvedLang = lang;
   if (isGraphOnlyLanguage(resolvedSup.id)) {
-    const { matchPath } = await loadNearestTsconfigFor(file);
-    const workspaceConfig = await loadWorkspaceConfig(projectRoot);
+    const entries = Array.from(
+      extractGraphOnlyModuleSpecifiers(
+        resolvedSup.id,
+        resolvedSource,
+      ),
+    );
+    const needsGraphOnlyResolutionConfig =
+      graphOnlyLanguageSupportsImportAliases(resolvedSup.id) &&
+      entries.some(({ spec }) => graphOnlySpecifierNeedsResolutionConfig(spec));
+    const { matchPath } = needsGraphOnlyResolutionConfig
+      ? await loadNearestTsconfigFor(file)
+      : { matchPath: undefined };
+    const workspaceConfig = needsGraphOnlyResolutionConfig
+      ? await loadWorkspaceConfig(projectRoot)
+      : undefined;
     const resolutionHints = opts?.graphOptions?.resolutionHints;
-    const imports: ImportBinding[] = [];
-    for (const entry of extractGraphOnlyModuleSpecifiers(
-      resolvedSup.id,
-      resolvedSource,
-    )) {
-      const resolved = await resolveSpecifier(
-        file,
-        entry.spec,
-        projectRoot,
-        matchPath,
-        workspaceConfig,
-        {
-          resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
-          resolutionExtensions: GRAPH_ONLY_RESOLUTION_EXTENSIONS,
-          ...(resolutionHints ? { resolutionHints } : {}),
-        },
-      );
-      imports.push({
+    const resolvedSpecifiers = await Promise.all(
+      entries.map((entry) =>
+        resolveSpecifier(
+          file,
+          entry.spec,
+          projectRoot,
+          matchPath,
+          workspaceConfig,
+          {
+            resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
+            resolutionExtensions: GRAPH_ONLY_RESOLUTION_EXTENSIONS,
+            ...(resolutionHints ? { resolutionHints } : {}),
+          },
+        ),
+      ),
+    );
+    return entries.map((entry, index) => {
+      const resolved = resolvedSpecifiers[index];
+      if (resolved === undefined) {
+        throw new Error(
+          `Missing graph-only resolution result for ${resolvedSup.id}:${entry.spec}`,
+        );
+      }
+      return {
         kind: "star",
         from: entry.raw ?? entry.spec,
-        resolved:
-          typeof resolved === "string"
-            ? resolved.replace(/\\/g, "/")
-            : resolved,
-      });
-    }
-    return imports;
+        ...(typeof resolved === "string"
+          ? { resolved: resolved.replace(/\\/g, "/") }
+          : { resolved }),
+      };
+    });
   }
 
   const resolvedNativeQueries = opts?.nativeQueries ?? null;

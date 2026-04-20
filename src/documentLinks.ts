@@ -13,6 +13,11 @@ export const GRAPH_ONLY_LANGUAGE_IDS = new Set([
   "adoc",
 ]);
 
+const GRAPH_ONLY_ALIAS_LANGUAGE_IDS = new Set([
+  "mdx",
+  "astro",
+]);
+
 const DEFAULT_HTML_TAG_ATTRS: Record<string, string[]> = {
   script: ["src"],
   link: ["href"],
@@ -70,6 +75,26 @@ const DOCUMENT_RELATIVE_EXTENSIONS = new Set([
 
 export function isGraphOnlyLanguage(languageId: string): boolean {
   return GRAPH_ONLY_LANGUAGE_IDS.has(languageId);
+}
+
+export function graphOnlyLanguageSupportsImportAliases(
+  languageId: string,
+): boolean {
+  return GRAPH_ONLY_ALIAS_LANGUAGE_IDS.has(languageId);
+}
+
+export function graphOnlySpecifierNeedsResolutionConfig(
+  specifier: string,
+): boolean {
+  return !(
+    specifier.startsWith("./") ||
+    specifier.startsWith("../") ||
+    specifier.startsWith("/") ||
+    specifier.startsWith("#") ||
+    specifier.startsWith("//") ||
+    /^[A-Za-z][A-Za-z0-9+.-]*:/.test(specifier) ||
+    /^[A-Za-z]:[\\/]/.test(specifier)
+  );
 }
 
 export function extractHtmlInlineScriptSpecifiers(

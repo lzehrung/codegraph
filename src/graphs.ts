@@ -33,6 +33,8 @@ import {
   extractGraphOnlyModuleSpecifiers,
   extractHtmlAttributeSpecifiers,
   extractHtmlInlineScriptSpecifiers,
+  graphOnlyLanguageSupportsImportAliases,
+  graphOnlySpecifierNeedsResolutionConfig,
   isGraphOnlyLanguage,
 } from "./documentLinks.js";
 // Intentionally compile only the imports query locally to avoid compiling
@@ -677,8 +679,13 @@ export async function collectEdgesForFile(
   }
 
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
+  const graphOnlyAliasLanguage =
+    graphOnlyLanguageSupportsImportAliases(sup.id);
+  const needsGraphOnlyResolutionConfig =
+    graphOnlyAliasLanguage &&
+    specs.some(({ spec }) => graphOnlySpecifierNeedsResolutionConfig(spec));
   const { matchPath } =
-    sup.id === "ts" || graphOnlyLanguage
+    sup.id === "ts" || needsGraphOnlyResolutionConfig
       ? await loadNearestTsconfigFor(file)
       : { matchPath: undefined };
   const resolutionExtensions = graphOnlyLanguage
