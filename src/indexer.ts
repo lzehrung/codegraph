@@ -37,6 +37,7 @@ import {
   stripPythonCommentsAndStrings,
   loadNearestTsconfigFor,
   loadWorkspaceConfig,
+  GRAPH_ONLY_RESOLUTION_EXTENSIONS,
   resolveSpecifier,
   resolveImportSpecifier,
   resolvePythonModule,
@@ -2503,6 +2504,7 @@ export async function collectImportsForFile(
   const resolvedSup = sup;
   let resolvedLang = lang;
   if (isGraphOnlyLanguage(resolvedSup.id)) {
+    const { matchPath } = await loadNearestTsconfigFor(file);
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
     const resolutionHints = opts?.graphOptions?.resolutionHints;
     const imports: ImportBinding[] = [];
@@ -2514,10 +2516,11 @@ export async function collectImportsForFile(
         file,
         entry.spec,
         projectRoot,
-        undefined,
+        matchPath,
         workspaceConfig,
         {
           resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
+          resolutionExtensions: GRAPH_ONLY_RESOLUTION_EXTENSIONS,
           ...(resolutionHints ? { resolutionHints } : {}),
         },
       );

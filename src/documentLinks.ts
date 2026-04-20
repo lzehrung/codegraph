@@ -557,6 +557,7 @@ function parseMarkdownInlineLink(
 
   for (let index = startIndex; index < source.length; index += 1) {
     const char = source[index];
+    if (char === undefined) return null;
     if (char === "\n") return null;
     if (char === "\\") {
       index += 1;

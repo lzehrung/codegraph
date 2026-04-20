@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { buildProjectIndex } from "../src/index.js";
+import { buildProjectIndex, collectGraph } from "../src/index.js";
 import { resolveSpecifier } from "../src/util.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -211,5 +211,127 @@ describe("Import Resolution", () => {
     if (typeof resolved !== "string") {
       expect(resolved.external).toBe("https://cdn.example.com/lib.js");
     }
+  });
+
+  it("does not resolve source-language imports to graph-only document files", async () => {
+    const root = await mkTmpDir("dg-resolve-doc-regression-");
+    await fsp.writeFile(
+      path.join(root, "main.ts"),
+      'import guide from "./guide";\nexport const x = guide;\n',
+      "utf8",
+    );
+    await fsp.writeFile(path.join(root, "guide.md"), "# guide\n", "utf8");
+
+    const index = await buildProjectIndex(root);
+    const mainFile = Array.from(index.byFile.keys()).find((f) =>
+      f.endsWith("main.ts"),
+    );
+
+    expect(mainFile).toBeDefined();
+
+    const mainModule = index.byFile.get(mainFile!);
+    const guideImport = mainModule?.imports[0];
+
+    expect(guideImport).toBeDefined();
+    expect(typeof guideImport?.resolved).toBe("object");
+    if (guideImport?.resolved && typeof guideImport.resolved !== "string") {
+      expect(guideImport.resolved.external).toBe("./guide");
+    }
+  });
+
+  it("resolves tsconfig path aliases for mdx static imports", async () => {
+    const root = await mkTmpDir("dg-resolve-mdx-alias-");
+    const componentFile = path.join(root, "src", "components", "Card.tsx");
+    const pageFile = path.join(root, "page.mdx");
+
+    await fsp.mkdir(path.dirname(componentFile), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify(
+        {
+          compilerOptions: {
+            baseUrl: ".",
+            paths: {
+              "@/*": ["src/*"],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fsp.writeFile(
+      componentFile,
+      "export default function Card() { return null; }\n",
+      "utf8",
+    );
+    await fsp.writeFile(pageFile, 'import Card from "@/components/Card";\n', "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedComponent = componentFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedComponent]);
+    const index = await buildProjectIndex(root);
+    const pageModule = index.byFile.get(normalizedPage);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedPage &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedComponent,
+      ),
+    ).toBe(true);
+    expect(pageModule?.imports.some((imp) => imp.resolved === normalizedComponent)).toBe(
+      true,
+    );
+  });
+
+  it("resolves tsconfig path aliases for astro frontmatter imports", async () => {
+    const root = await mkTmpDir("dg-resolve-astro-alias-");
+    const layoutFile = path.join(root, "src", "components", "Layout.astro");
+    const pageFile = path.join(root, "page.astro");
+
+    await fsp.mkdir(path.dirname(layoutFile), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify(
+        {
+          compilerOptions: {
+            baseUrl: ".",
+            paths: {
+              "@/*": ["src/*"],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fsp.writeFile(layoutFile, "<slot />\n", "utf8");
+    await fsp.writeFile(
+      pageFile,
+      ['---', 'import Layout from "@/components/Layout";', '---', "<Layout />"].join("\n"),
+      "utf8",
+    );
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedLayout = layoutFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedLayout]);
+    const index = await buildProjectIndex(root);
+    const pageModule = index.byFile.get(normalizedPage);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedPage &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedLayout,
+      ),
+    ).toBe(true);
+    expect(pageModule?.imports.some((imp) => imp.resolved === normalizedLayout)).toBe(
+      true,
+    );
   });
 });
