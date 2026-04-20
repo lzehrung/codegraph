@@ -163,12 +163,7 @@ export function extractMarkdownModuleSpecifiers(
   const referenceDefs = collectMarkdownReferenceDefinitions(sanitized);
   const out: ModuleSpecifier[] = [];
 
-  for (const match of sanitized.matchAll(/!?\[[^\]]+\]\(([^)\n]+)\)/g)) {
-    const fullMatch = match[0] ?? "";
-    if (fullMatch.startsWith("!")) continue;
-    const rawDestination = match[1];
-    if (!rawDestination) continue;
-    const destination = extractMarkdownDestination(rawDestination);
+  for (const destination of collectMarkdownInlineLinkDestinations(sanitized)) {
     const normalized = normalizeLinkSpecifier(destination, {
       preferRelative: true,
     });
@@ -191,6 +186,7 @@ export function extractMarkdownModuleSpecifiers(
     const candidate = match[1]?.trim();
     if (!candidate) continue;
     if (candidate.startsWith("/") || candidate.startsWith("?")) continue;
+    if (!isLikelyMarkdownAutolinkTarget(candidate)) continue;
     const normalized = normalizeLinkSpecifier(candidate, {
       preferRelative: true,
     });
@@ -292,6 +288,7 @@ export function extractAsciidocModuleSpecifiers(
   for (const match of source.matchAll(/\b(?:xref|link):([^\[\s]+)\[[^\]]*]/g)) {
     const rawSpecifier = match[1]?.trim();
     if (!rawSpecifier) continue;
+    if (!isLikelyAsciidocFileTarget(rawSpecifier)) continue;
     const normalized = normalizeLinkSpecifier(rawSpecifier, {
       preferRelative: true,
       forceRelative: true,
@@ -312,6 +309,7 @@ export function extractAsciidocModuleSpecifiers(
   for (const match of source.matchAll(/<<([^>,]+)(?:,[^>]*)?>>/g)) {
     const rawSpecifier = match[1]?.trim();
     if (!rawSpecifier) continue;
+    if (!isLikelyAsciidocFileTarget(rawSpecifier)) continue;
     const normalized = normalizeLinkSpecifier(rawSpecifier, {
       preferRelative: true,
       forceRelative: true,
@@ -425,6 +423,26 @@ function normalizeReferenceLabel(label: string | undefined): string | null {
   return normalized ? normalized : null;
 }
 
+function collectMarkdownInlineLinkDestinations(source: string): string[] {
+  const out: string[] = [];
+
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] !== "[") continue;
+    if (source[index - 1] === "!") continue;
+
+    const labelEnd = findMarkdownLabelEnd(source, index + 1);
+    if (labelEnd < 0 || source[labelEnd + 1] !== "(") continue;
+
+    const parsed = parseMarkdownInlineLink(source, labelEnd + 2);
+    if (!parsed) continue;
+
+    out.push(extractMarkdownDestination(parsed.destination));
+    index = parsed.endIndex;
+  }
+
+  return out;
+}
+
 function extractMarkdownDestination(rawDestination: string): string {
   const trimmed = rawDestination.trim();
   if (!trimmed) return trimmed;
@@ -507,6 +525,116 @@ function shouldPreferRelativePath(specifier: string): boolean {
 
   const ext = path.extname(specifier).toLowerCase();
   return DOCUMENT_RELATIVE_EXTENSIONS.has(ext);
+}
+
+function findMarkdownLabelEnd(source: string, openIndex: number): number {
+  let depth = 0;
+  for (let index = openIndex; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === "\\") {
+      index += 1;
+      continue;
+    }
+    if (char === "[") {
+      depth += 1;
+      continue;
+    }
+    if (char !== "]") continue;
+    if (depth === 0) return index;
+    depth -= 1;
+  }
+  return -1;
+}
+
+function parseMarkdownInlineLink(
+  source: string,
+  startIndex: number,
+): { destination: string; endIndex: number } | null {
+  let depth = 1;
+  let destinationEnd = -1;
+  let quote: '"' | "'" | null = null;
+  let sawDestinationStart = false;
+
+  for (let index = startIndex; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === "\n") return null;
+    if (char === "\\") {
+      index += 1;
+      continue;
+    }
+
+    if (!sawDestinationStart) {
+      if (/\s/.test(char)) continue;
+      sawDestinationStart = true;
+    }
+
+    if (destinationEnd >= 0) {
+      if (quote) {
+        if (char === quote) quote = null;
+        continue;
+      }
+      if (char === '"' || char === "'") {
+        quote = char;
+        continue;
+      }
+    }
+
+    if (char === "(") {
+      depth += 1;
+      continue;
+    }
+
+    if (char === ")") {
+      depth -= 1;
+      if (depth !== 0) continue;
+      const destination = source
+        .slice(
+          startIndex,
+          destinationEnd >= 0 ? destinationEnd : index,
+        )
+        .trim();
+      return destination ? { destination, endIndex: index } : null;
+    }
+
+    if (destinationEnd < 0 && /\s/.test(char) && depth === 1) {
+      destinationEnd = index;
+    }
+  }
+
+  return null;
+}
+
+function isLikelyMarkdownAutolinkTarget(candidate: string): boolean {
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(candidate)) return true;
+  if (candidate.startsWith("//")) return true;
+  if (candidate.startsWith("./") || candidate.startsWith("../")) return true;
+  if (candidate.startsWith("/") || candidate.startsWith("\\")) return true;
+  if (candidate.includes("@")) return true;
+  if (/^[A-Za-z][A-Za-z0-9:_-]*\/?$/.test(candidate)) return false;
+  if (candidate.includes("/") || candidate.includes("\\")) return true;
+  return path.extname(candidate).length > 0;
+}
+
+function isLikelyAsciidocFileTarget(rawSpecifier: string): boolean {
+  const trimmed = rawSpecifier.trim();
+  if (!trimmed || trimmed.startsWith("#")) return false;
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(trimmed)) return true;
+  if (trimmed.startsWith("//")) return true;
+  if (/^[A-Za-z]:[\\/]/.test(trimmed)) return true;
+
+  const withoutFragment = trimmed.split("#", 1)[0]?.split("?", 1)[0]?.trim() ?? "";
+  if (!withoutFragment) return false;
+  if (
+    withoutFragment.startsWith("./") ||
+    withoutFragment.startsWith("../") ||
+    withoutFragment.startsWith("/")
+  ) {
+    return true;
+  }
+  if (withoutFragment.includes("/") || withoutFragment.includes("\\")) {
+    return true;
+  }
+  return path.extname(withoutFragment).length > 0;
 }
 
 function isObviouslyDynamicSpecifier(specifier: string): boolean {

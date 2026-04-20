@@ -115,7 +115,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 
 | Scenario | Sample | Expected behavior | Source | Date added |
 | --- | --- | --- | --- | --- |
-| Inline, reference-style, and autolink document links | `tests/samples/markdown/index.md` | Dependency graph resolves inline links, reference-style links, autolinks, and raw HTML anchors to sibling Markdown or HTML files, while hash-only anchors and image links stay out of the document graph. | Internal regression fixture | 2026-04-20 |
+| Inline, reference-style, and autolink document links | `tests/samples/markdown/index.md` | Dependency graph resolves inline links, reference-style links, autolinks, and raw HTML anchors to sibling Markdown or HTML files, while hash-only anchors, image links, and raw HTML/JSX tags stay out of the document graph. | Internal regression fixture | 2026-04-20 |
 
 ## MDX
 
@@ -133,7 +133,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 
 | Scenario | Sample | Expected behavior | Source | Date added |
 | --- | --- | --- | --- | --- |
-| `xref`, `link`, `include`, and anchor references | `tests/samples/adoc/index.adoc` | Dependency graph resolves AsciiDoc `xref`, `link`, `include`, and `<<target>>` references to local `.adoc` files while semantic navigation stays `not_found`. | Internal regression fixture | 2026-04-20 |
+| `xref`, `link`, `include`, and anchor references | `tests/samples/adoc/index.adoc` | Dependency graph resolves AsciiDoc `xref`, `link`, `include`, and `<<target>>` references to local `.adoc` files, while anchor-only cross references stay out of the file graph and semantic navigation remains `not_found`. | Internal regression fixture | 2026-04-20 |
 
 ## Java
 

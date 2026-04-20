@@ -75,7 +75,143 @@ describe("document link graph extraction", () => {
           edge.from === pageFile &&
           edge.to.type === "external" &&
           edge.to.name.includes("dynamicPath"),
+        ),
+    ).toBe(false);
+  });
+
+  it("resolves markdown destinations containing parentheses", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-"));
+    const indexFile = path.join(root, "index.md");
+    const guideFile = path.join(root, "guide(v2).md");
+
+    await fsp.writeFile(indexFile, "[Guide](./guide(v2).md)\n", "utf8");
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+
+    const graph = await collectGraph(root, [
+      indexFile.replace(/\\/g, "/"),
+      guideFile.replace(/\\/g, "/"),
+    ]);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === indexFile.replace(/\\/g, "/") &&
+          edge.to.type === "file" &&
+          edge.to.path === guideFile.replace(/\\/g, "/"),
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores raw HTML and JSX tags in markdown-style autolinks", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-mdx-"));
+    const pageFile = path.join(root, "page.mdx");
+    const guideFile = path.join(root, "guide.md");
+
+    await fsp.writeFile(
+      pageFile,
+      ["<Guide />", "<br>", "<./guide.md>"].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedGuide]);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedPage &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedGuide,
+      ),
+    ).toBe(true);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedPage &&
+          edge.to.type === "external" &&
+          (edge.to.name === "Guide" || edge.to.name === "br"),
       ),
     ).toBe(false);
+  });
+
+  it("ignores anchor-only asciidoc xrefs while keeping file references", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-adoc-"));
+    const indexFile = path.join(root, "index.asciidoc");
+    const guideFile = path.join(root, "guide.asciidoc");
+
+    await fsp.writeFile(
+      indexFile,
+      ["xref:guide.asciidoc[Guide]", "<<local-anchor,See below>>"].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(guideFile, "= Guide\n", "utf8");
+
+    const normalizedIndex = indexFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedIndex, normalizedGuide]);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedIndex &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedGuide,
+      ),
+    ).toBe(true);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedIndex &&
+          edge.to.type === "external" &&
+          edge.to.name === "local-anchor",
+      ),
+    ).toBe(false);
+  });
+
+  it("supports graph extraction for .handlebars aliases", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-hbs-"));
+    const pageFile = path.join(root, "page.handlebars");
+    const guideFile = path.join(root, "guide.asciidoc");
+    const partialFile = path.join(root, "partials", "card.handlebars");
+
+    await fsp.mkdir(path.dirname(partialFile), { recursive: true });
+    await fsp.writeFile(
+      pageFile,
+      ['<a href="./guide.asciidoc">Guide</a>', "{{> ./partials/card.handlebars }}"].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(guideFile, "= Guide\n", "utf8");
+    await fsp.writeFile(partialFile, "<div>Card</div>\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const normalizedPartial = partialFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [
+      normalizedPage,
+      normalizedGuide,
+      normalizedPartial,
+    ]);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedPage &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedGuide,
+      ),
+    ).toBe(true);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedPage &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedPartial,
+      ),
+    ).toBe(true);
   });
 });

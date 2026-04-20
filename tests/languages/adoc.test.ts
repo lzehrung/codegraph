@@ -26,6 +26,10 @@ const definition: LanguageTestDefinition = {
         from: "index.adoc",
         to: { type: "external", name: "https://example.com/adoc" },
       },
+      {
+        from: "index.asciidoc",
+        to: { type: "file", path: "guide.asciidoc" },
+      },
     ],
     goToDefinition: [
       {
