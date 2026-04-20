@@ -224,4 +224,39 @@ describe("document link graph extraction", () => {
       ),
     ).toBe(true);
   });
+
+  it("ignores dynamic JSX-style html attribute expressions", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-astro-"));
+    const pageFile = path.join(root, "page.astro");
+    const guideFile = path.join(root, "guide.md");
+
+    await fsp.writeFile(
+      pageFile,
+      ['<a href={dynamicPath}>Dynamic</a>', '<a href="./guide.md">Guide</a>'].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedGuide]);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedPage &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedGuide,
+      ),
+    ).toBe(true);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedPage &&
+          edge.to.type === "external" &&
+          (edge.to.name === "{dynamicPath}" || edge.raw === "{dynamicPath}"),
+      ),
+    ).toBe(false);
+  });
 });

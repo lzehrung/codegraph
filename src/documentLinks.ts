@@ -185,6 +185,12 @@ export function extractMarkdownModuleSpecifiers(
   source: string,
 ): ModuleSpecifier[] {
   const sanitized = stripMarkdownCode(source);
+  return extractMarkdownModuleSpecifiersFromSanitized(sanitized);
+}
+
+function extractMarkdownModuleSpecifiersFromSanitized(
+  sanitized: string,
+): ModuleSpecifier[] {
   const referenceDefs = collectMarkdownReferenceDefinitions(sanitized);
   const out: ModuleSpecifier[] = [];
 
@@ -229,7 +235,7 @@ export function extractMarkdownModuleSpecifiers(
 
 export function extractMdxModuleSpecifiers(source: string): ModuleSpecifier[] {
   const sanitized = stripMarkdownCode(source);
-  const out = extractMarkdownModuleSpecifiers(source);
+  const out = extractMarkdownModuleSpecifiersFromSanitized(sanitized);
   out.push(...extractJsTsSpecifiers(sanitized));
   return dedupeModuleSpecifiers(out);
 }
@@ -664,6 +670,8 @@ function isLikelyAsciidocFileTarget(rawSpecifier: string): boolean {
 
 function isObviouslyDynamicSpecifier(specifier: string): boolean {
   return (
+    specifier.includes("{") ||
+    specifier.includes("}") ||
     specifier.includes("{{") ||
     specifier.includes("}}") ||
     specifier.includes("{%") ||
