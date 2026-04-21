@@ -1069,6 +1069,7 @@ export type ModuleSpecifier = {
   spec: string;
   raw?: string;
   typeOnly?: boolean;
+  resolutionKind?: "document" | "source";
   resolved?: "heuristic" | "precise";
   confidence?: number;
 };
@@ -1784,10 +1785,48 @@ export const GRAPH_ONLY_RESOLUTION_EXTENSIONS = [
   ".asciidoc",
 ] as const;
 
-export const GRAPH_ONLY_PREFERRED_RESOLUTION_EXTENSIONS = [
-  ...GRAPH_ONLY_RESOLUTION_EXTENSIONS,
-  ...DEFAULT_RESOLUTION_EXTENSIONS,
-] as const;
+const GRAPH_ONLY_LANGUAGE_DOCUMENT_RESOLUTION_EXTENSIONS: Record<
+  string,
+  readonly string[]
+> = {
+  markdown: [".md", ".mdx"],
+  mdx: [".mdx", ".md"],
+  astro: [".astro"],
+  hbs: [".hbs", ".handlebars"],
+  rst: [".rst"],
+  adoc: [".adoc", ".asciidoc"],
+};
+
+const GRAPH_ONLY_LANGUAGE_SOURCE_RESOLUTION_EXTENSIONS: Record<
+  string,
+  readonly string[]
+> = {
+  mdx: DEFAULT_RESOLUTION_EXTENSIONS,
+  astro: [".astro", ...DEFAULT_RESOLUTION_EXTENSIONS],
+};
+
+export function getGraphOnlyResolutionExtensions(
+  languageId: string,
+  resolutionKind: "document" | "source" = "document",
+): string[] {
+  const normalizedLanguageId = languageId.toLowerCase();
+  const preferredExtensions =
+    resolutionKind === "source"
+      ? (GRAPH_ONLY_LANGUAGE_SOURCE_RESOLUTION_EXTENSIONS[
+          normalizedLanguageId
+        ] ?? DEFAULT_RESOLUTION_EXTENSIONS)
+      : (GRAPH_ONLY_LANGUAGE_DOCUMENT_RESOLUTION_EXTENSIONS[
+          normalizedLanguageId
+        ] ?? GRAPH_ONLY_RESOLUTION_EXTENSIONS);
+  const includeGraphOnlyFallbacks = resolutionKind === "document";
+  return Array.from(
+    new Set([
+      ...preferredExtensions,
+      ...(includeGraphOnlyFallbacks ? GRAPH_ONLY_RESOLUTION_EXTENSIONS : []),
+      ...DEFAULT_RESOLUTION_EXTENSIONS,
+    ]),
+  );
+}
 
 function getResolutionExtensions(
   resolutionExtensions?: readonly string[],

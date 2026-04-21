@@ -339,6 +339,7 @@ describe("Import Resolution", () => {
     const root = await mkTmpDir("dg-resolve-rst-prefer-doc-");
     const indexFile = path.join(root, "index.rst");
     const apiDocFile = path.join(root, "api.rst");
+    const apiMarkdownFile = path.join(root, "api.md");
     const apiSourceFile = path.join(root, "api.ts");
 
     await fsp.writeFile(
@@ -347,14 +348,17 @@ describe("Import Resolution", () => {
       "utf8",
     );
     await fsp.writeFile(apiDocFile, "API docs\n========\n", "utf8");
+    await fsp.writeFile(apiMarkdownFile, "# API\n", "utf8");
     await fsp.writeFile(apiSourceFile, "export const api = 1;\n", "utf8");
 
     const normalizedIndex = indexFile.replace(/\\/g, "/");
     const normalizedApiDoc = apiDocFile.replace(/\\/g, "/");
+    const normalizedApiMarkdown = apiMarkdownFile.replace(/\\/g, "/");
     const normalizedApiSource = apiSourceFile.replace(/\\/g, "/");
     const graph = await collectGraph(root, [
       normalizedIndex,
       normalizedApiDoc,
+      normalizedApiMarkdown,
       normalizedApiSource,
     ]);
     const index = await buildProjectIndex(root);
@@ -375,6 +379,15 @@ describe("Import Resolution", () => {
           edge.from === normalizedIndex &&
           edge.to.type === "file" &&
           edge.to.path === normalizedApiSource,
+      ),
+    ).toBe(false);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedIndex &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedApiMarkdown,
       ),
     ).toBe(false);
 
@@ -387,6 +400,7 @@ describe("Import Resolution", () => {
     const root = await mkTmpDir("dg-resolve-rst-titled-");
     const indexFile = path.join(root, "index.rst");
     const apiDocFile = path.join(root, "api.rst");
+    const apiMarkdownFile = path.join(root, "api.md");
     const apiSourceFile = path.join(root, "api.ts");
 
     await fsp.writeFile(
@@ -395,14 +409,17 @@ describe("Import Resolution", () => {
       "utf8",
     );
     await fsp.writeFile(apiDocFile, "API docs\n========\n", "utf8");
+    await fsp.writeFile(apiMarkdownFile, "# API\n", "utf8");
     await fsp.writeFile(apiSourceFile, "export const api = 1;\n", "utf8");
 
     const normalizedIndex = indexFile.replace(/\\/g, "/");
     const normalizedApiDoc = apiDocFile.replace(/\\/g, "/");
+    const normalizedApiMarkdown = apiMarkdownFile.replace(/\\/g, "/");
     const normalizedApiSource = apiSourceFile.replace(/\\/g, "/");
     const graph = await collectGraph(root, [
       normalizedIndex,
       normalizedApiDoc,
+      normalizedApiMarkdown,
       normalizedApiSource,
     ]);
     const index = await buildProjectIndex(root);
@@ -423,6 +440,15 @@ describe("Import Resolution", () => {
           edge.from === normalizedIndex &&
           edge.to.type === "file" &&
           edge.to.path === normalizedApiSource,
+      ),
+    ).toBe(false);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedIndex &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedApiMarkdown,
       ),
     ).toBe(false);
 
@@ -435,18 +461,22 @@ describe("Import Resolution", () => {
     const root = await mkTmpDir("dg-resolve-adoc-prefer-doc-");
     const indexFile = path.join(root, "index.adoc");
     const apiDocFile = path.join(root, "api.adoc");
+    const apiMarkdownFile = path.join(root, "api.md");
     const apiSourceFile = path.join(root, "api.ts");
 
     await fsp.writeFile(indexFile, "xref:api[API]\n", "utf8");
     await fsp.writeFile(apiDocFile, "= API\n", "utf8");
+    await fsp.writeFile(apiMarkdownFile, "# API\n", "utf8");
     await fsp.writeFile(apiSourceFile, "export const api = 1;\n", "utf8");
 
     const normalizedIndex = indexFile.replace(/\\/g, "/");
     const normalizedApiDoc = apiDocFile.replace(/\\/g, "/");
+    const normalizedApiMarkdown = apiMarkdownFile.replace(/\\/g, "/");
     const normalizedApiSource = apiSourceFile.replace(/\\/g, "/");
     const graph = await collectGraph(root, [
       normalizedIndex,
       normalizedApiDoc,
+      normalizedApiMarkdown,
       normalizedApiSource,
     ]);
     const index = await buildProjectIndex(root);
@@ -470,9 +500,114 @@ describe("Import Resolution", () => {
       ),
     ).toBe(false);
 
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedIndex &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedApiMarkdown,
+      ),
+    ).toBe(false);
+
     expect(indexModule?.imports.some((imp) => imp.resolved === normalizedApiDoc)).toBe(
       true,
     );
+  });
+
+  it("keeps mdx static imports resolving to source files before markdown siblings", async () => {
+    const root = await mkTmpDir("dg-resolve-mdx-source-before-doc-");
+    const pageFile = path.join(root, "page.mdx");
+    const componentFile = path.join(root, "Card.tsx");
+    const markdownFile = path.join(root, "Card.md");
+
+    await fsp.writeFile(
+      pageFile,
+      'import Card from "./Card";\n\n<Card />\n',
+      "utf8",
+    );
+    await fsp.writeFile(
+      componentFile,
+      "export default function Card() { return null; }\n",
+      "utf8",
+    );
+    await fsp.writeFile(markdownFile, "# Card\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedComponent = componentFile.replace(/\\/g, "/");
+    const normalizedMarkdown = markdownFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [
+      normalizedPage,
+      normalizedComponent,
+      normalizedMarkdown,
+    ]);
+    const index = await buildProjectIndex(root);
+    const pageModule = index.byFile.get(normalizedPage);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedPage &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedComponent,
+      ),
+    ).toBe(true);
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedPage &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedMarkdown,
+      ),
+    ).toBe(false);
+    expect(
+      pageModule?.imports.some((imp) => imp.resolved === normalizedComponent),
+    ).toBe(true);
+  });
+
+  it("keeps astro frontmatter imports resolving to astro components before markdown siblings", async () => {
+    const root = await mkTmpDir("dg-resolve-astro-source-before-doc-");
+    const pageFile = path.join(root, "page.astro");
+    const componentFile = path.join(root, "Layout.astro");
+    const markdownFile = path.join(root, "Layout.md");
+
+    await fsp.writeFile(
+      pageFile,
+      ['---', 'import Layout from "./Layout";', '---', "<Layout />"].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(componentFile, "<slot />\n", "utf8");
+    await fsp.writeFile(markdownFile, "# Layout\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedComponent = componentFile.replace(/\\/g, "/");
+    const normalizedMarkdown = markdownFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [
+      normalizedPage,
+      normalizedComponent,
+      normalizedMarkdown,
+    ]);
+    const index = await buildProjectIndex(root);
+    const pageModule = index.byFile.get(normalizedPage);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedPage &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedComponent,
+      ),
+    ).toBe(true);
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedPage &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedMarkdown,
+      ),
+    ).toBe(false);
+    expect(
+      pageModule?.imports.some((imp) => imp.resolved === normalizedComponent),
+    ).toBe(true);
   });
 
   it("resolves tsconfig path aliases for tsx dependency graphs", async () => {

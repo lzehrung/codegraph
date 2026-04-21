@@ -107,7 +107,7 @@ export function extractHtmlInlineScriptSpecifiers(
     if (/\bsrc\s*=\s*["'][^"']+["']/i.test(attrs)) continue;
     const body = match[2] ?? "";
     if (!body.trim()) continue;
-    out.push(...extractJsTsSpecifiers(body));
+    out.push(...markResolutionKind(extractJsTsSpecifiers(body), "source"));
   }
   return dedupeModuleSpecifiers(out);
 }
@@ -143,12 +143,16 @@ export function extractHtmlAttributeSpecifiers(
         for (const spec of candidates) {
           const normalized = normalizeLinkSpecifier(spec, {
             preferRelative: true,
+            resolutionKind: "document",
           });
           if (normalized) out.push(normalized);
         }
         continue;
       }
-      const normalized = normalizeLinkSpecifier(raw, { preferRelative: true });
+      const normalized = normalizeLinkSpecifier(raw, {
+        preferRelative: true,
+        resolutionKind: "document",
+      });
       if (normalized) out.push(normalized);
     }
   }
@@ -197,6 +201,7 @@ function extractMarkdownModuleSpecifiersFromSanitized(
   for (const destination of collectMarkdownInlineLinkDestinations(sanitized)) {
     const normalized = normalizeLinkSpecifier(destination, {
       preferRelative: true,
+      resolutionKind: "document",
     });
     if (normalized) out.push(normalized);
   }
@@ -220,6 +225,7 @@ function extractMarkdownModuleSpecifiersFromSanitized(
     if (!isLikelyMarkdownAutolinkTarget(candidate)) continue;
     const normalized = normalizeLinkSpecifier(candidate, {
       preferRelative: true,
+      resolutionKind: "document",
     });
     if (normalized) out.push(normalized);
   }
@@ -236,7 +242,7 @@ function extractMarkdownModuleSpecifiersFromSanitized(
 export function extractMdxModuleSpecifiers(source: string): ModuleSpecifier[] {
   const sanitized = stripMarkdownCode(source);
   const out = extractMarkdownModuleSpecifiersFromSanitized(sanitized);
-  out.push(...extractJsTsSpecifiers(sanitized));
+  out.push(...markResolutionKind(extractJsTsSpecifiers(sanitized), "source"));
   return dedupeModuleSpecifiers(out);
 }
 
@@ -249,7 +255,9 @@ export function extractAstroModuleSpecifiers(
 
   const frontmatterMatch = source.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (frontmatterMatch?.[1]) {
-    out.push(...extractJsTsSpecifiers(frontmatterMatch[1]));
+    out.push(
+      ...markResolutionKind(extractJsTsSpecifiers(frontmatterMatch[1]), "source"),
+    );
   }
 
   return dedupeModuleSpecifiers(out);
@@ -266,6 +274,7 @@ export function extractHandlebarsModuleSpecifiers(
     if (!rawSpecifier) continue;
     const normalized = normalizeLinkSpecifier(rawSpecifier, {
       preferRelative: true,
+      resolutionKind: "document",
     });
     if (normalized) out.push(normalized);
   }
@@ -284,6 +293,7 @@ export function extractRstModuleSpecifiers(
     if (!rawSpecifier) continue;
     const normalized = normalizeLinkSpecifier(rawSpecifier, {
       preferRelative: true,
+      resolutionKind: "document",
       forceRelative: true,
     });
     if (normalized) out.push(normalized);
@@ -301,6 +311,7 @@ export function extractRstModuleSpecifiers(
     if (!rawSpecifier) continue;
     const normalized = normalizeLinkSpecifier(rawSpecifier, {
       preferRelative: true,
+      resolutionKind: "document",
       forceRelative: true,
     });
     if (normalized) out.push(normalized);
@@ -327,6 +338,7 @@ export function extractAsciidocModuleSpecifiers(
     if (!fileLikeTarget) continue;
     const normalized = normalizeLinkSpecifier(rawSpecifier, {
       preferRelative: true,
+      resolutionKind: "document",
       forceRelative: true,
     });
     if (normalized) out.push(normalized);
@@ -337,6 +349,7 @@ export function extractAsciidocModuleSpecifiers(
     if (!rawSpecifier) continue;
     const normalized = normalizeLinkSpecifier(rawSpecifier, {
       preferRelative: true,
+      resolutionKind: "document",
       forceRelative: true,
     });
     if (normalized) out.push(normalized);
@@ -348,6 +361,7 @@ export function extractAsciidocModuleSpecifiers(
     if (!isLikelyAsciidocFileTarget(rawSpecifier)) continue;
     const normalized = normalizeLinkSpecifier(rawSpecifier, {
       preferRelative: true,
+      resolutionKind: "document",
       forceRelative: true,
     });
     if (normalized) out.push(normalized);
@@ -366,7 +380,7 @@ function dedupeModuleSpecifiers(entries: ModuleSpecifier[]): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
   const seen = new Set<string>();
   for (const entry of entries) {
-    const key = `${entry.spec}::${entry.typeOnly ? 1 : 0}`;
+    const key = `${entry.spec}::${entry.typeOnly ? 1 : 0}::${entry.resolutionKind ?? ""}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(entry);
@@ -387,6 +401,7 @@ function collectMarkdownReferenceDefinitions(
     if (!label || !rawDestination) continue;
     const normalized = normalizeLinkSpecifier(rawDestination, {
       preferRelative: true,
+      resolutionKind: "document",
     });
     if (normalized) out.set(label, normalized);
   }
@@ -406,6 +421,7 @@ function collectRstTargetDefinitions(
     if (!label || !rawSpecifier) continue;
     const normalized = normalizeLinkSpecifier(rawSpecifier, {
       preferRelative: true,
+      resolutionKind: "document",
       forceRelative: true,
     });
     if (normalized) out.set(label, normalized);
@@ -446,6 +462,7 @@ function extractRstToctreeSpecifiers(source: string): ModuleSpecifier[] {
     const rawSpecifier = titledMatch?.[1]?.trim() ?? content;
     const normalized = normalizeLinkSpecifier(rawSpecifier, {
       preferRelative: true,
+      resolutionKind: "document",
       forceRelative: true,
     });
     if (normalized) out.push(normalized);
@@ -494,7 +511,11 @@ function extractMarkdownDestination(rawDestination: string): string {
 
 function normalizeLinkSpecifier(
   rawSpecifier: string,
-  opts?: { preferRelative?: boolean; forceRelative?: boolean },
+  opts?: {
+    preferRelative?: boolean;
+    forceRelative?: boolean;
+    resolutionKind?: "document" | "source";
+  },
 ): ModuleSpecifier | null {
   const original = rawSpecifier.trim();
   if (!original) return null;
@@ -526,8 +547,27 @@ function normalizeLinkSpecifier(
     normalized = `./${normalized}`;
   }
 
-  if (normalized === original) return { spec: normalized };
-  return { spec: normalized, raw: original };
+  if (normalized === original) {
+    return {
+      spec: normalized,
+      ...(opts?.resolutionKind ? { resolutionKind: opts.resolutionKind } : {}),
+    };
+  }
+  return {
+    spec: normalized,
+    raw: original,
+    ...(opts?.resolutionKind ? { resolutionKind: opts.resolutionKind } : {}),
+  };
+}
+
+function markResolutionKind(
+  entries: ModuleSpecifier[],
+  resolutionKind: "document" | "source",
+): ModuleSpecifier[] {
+  return entries.map((entry) => ({
+    ...entry,
+    resolutionKind,
+  }));
 }
 
 function shouldForceRelativePath(specifier: string): boolean {

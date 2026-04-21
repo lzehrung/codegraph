@@ -19,7 +19,7 @@ import {
   unquote,
   loadNearestTsconfigFor,
   loadWorkspaceConfig,
-  GRAPH_ONLY_PREFERRED_RESOLUTION_EXTENSIONS,
+  getGraphOnlyResolutionExtensions,
   type WorkspaceConfig,
   resolveSpecifier,
   resolveImportSpecifier,
@@ -688,14 +688,16 @@ export async function collectEdgesForFile(
     sup.id === "ts" || sup.id === "tsx" || needsGraphOnlyResolutionConfig
       ? await loadNearestTsconfigFor(file)
       : { matchPath: undefined };
-  const resolutionExtensions = graphOnlyLanguage
-    ? GRAPH_ONLY_PREFERRED_RESOLUTION_EXTENSIONS
-    : undefined;
-
   const edges: Edge[] = [];
   const edgeResolutionTasks = specs.map(
-    async ({ spec, raw, typeOnly, resolved, confidence }) => {
+    async ({ spec, raw, typeOnly, resolved, confidence, resolutionKind }) => {
       let to: EdgeTo;
+      const resolutionExtensions = graphOnlyLanguage
+        ? getGraphOnlyResolutionExtensions(
+            sup.id,
+            resolutionKind ?? "document",
+          )
+        : undefined;
       if (sup.id === "python") {
         const relDotsMatch = spec.startsWith(".") ? spec.match(/^\.+/) : null;
         const relDots = relDotsMatch ? relDotsMatch[0].length : 0;
