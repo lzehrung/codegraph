@@ -685,7 +685,7 @@ export async function collectEdgesForFile(
     graphOnlyAliasLanguage &&
     specs.some(({ spec }) => graphOnlySpecifierNeedsResolutionConfig(spec));
   const { matchPath } =
-    sup.id === "ts" || needsGraphOnlyResolutionConfig
+    sup.id === "ts" || sup.id === "tsx" || needsGraphOnlyResolutionConfig
       ? await loadNearestTsconfigFor(file)
       : { matchPath: undefined };
   const resolutionExtensions = graphOnlyLanguage

@@ -20,7 +20,7 @@ export const MDX_DEF: LanguageDefinition = {
     importBindings: "",
   },
   nodeTypes: {
-    identifier: ["text"],
+    identifier: [],
   },
 };
 

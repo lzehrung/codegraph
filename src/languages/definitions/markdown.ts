@@ -20,7 +20,7 @@ export const MARKDOWN_DEF: LanguageDefinition = {
     importBindings: "",
   },
   nodeTypes: {
-    identifier: ["text"],
+    identifier: [],
   },
 };
 

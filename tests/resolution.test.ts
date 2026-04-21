@@ -382,4 +382,51 @@ describe("Import Resolution", () => {
       true,
     );
   });
+
+  it("resolves tsconfig path aliases for tsx dependency graphs", async () => {
+    const root = await mkTmpDir("dg-resolve-tsx-alias-");
+    const buttonFile = path.join(root, "src", "components", "Button.tsx");
+    const appFile = path.join(root, "App.tsx");
+
+    await fsp.mkdir(path.dirname(buttonFile), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify(
+        {
+          compilerOptions: {
+            baseUrl: ".",
+            paths: {
+              "@/*": ["src/*"],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fsp.writeFile(
+      buttonFile,
+      "export function Button() { return null; }\n",
+      "utf8",
+    );
+    await fsp.writeFile(
+      appFile,
+      'import { Button } from "@/components/Button";\nexport function App() { return <Button />; }\n',
+      "utf8",
+    );
+
+    const normalizedApp = appFile.replace(/\\/g, "/");
+    const normalizedButton = buttonFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedApp, normalizedButton]);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedApp &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedButton,
+      ),
+    ).toBe(true);
+  });
 });

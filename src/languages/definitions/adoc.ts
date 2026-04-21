@@ -19,7 +19,7 @@ export const ADOC_DEF: LanguageDefinition = {
     importBindings: "",
   },
   nodeTypes: {
-    identifier: ["text"],
+    identifier: [],
   },
 };
 

@@ -19,7 +19,7 @@ export const ASTRO_DEF: LanguageDefinition = {
     importBindings: "",
   },
   nodeTypes: {
-    identifier: ["text"],
+    identifier: [],
   },
 };
 
