@@ -383,6 +383,98 @@ describe("Import Resolution", () => {
     );
   });
 
+  it("prefers graph-only document extensions for titled rst toctree targets", async () => {
+    const root = await mkTmpDir("dg-resolve-rst-titled-");
+    const indexFile = path.join(root, "index.rst");
+    const apiDocFile = path.join(root, "api.rst");
+    const apiSourceFile = path.join(root, "api.ts");
+
+    await fsp.writeFile(
+      indexFile,
+      ["Docs", "====", "", ".. toctree::", "", "   API Reference <api>"].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(apiDocFile, "API docs\n========\n", "utf8");
+    await fsp.writeFile(apiSourceFile, "export const api = 1;\n", "utf8");
+
+    const normalizedIndex = indexFile.replace(/\\/g, "/");
+    const normalizedApiDoc = apiDocFile.replace(/\\/g, "/");
+    const normalizedApiSource = apiSourceFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [
+      normalizedIndex,
+      normalizedApiDoc,
+      normalizedApiSource,
+    ]);
+    const index = await buildProjectIndex(root);
+    const indexModule = index.byFile.get(normalizedIndex);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedIndex &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedApiDoc,
+      ),
+    ).toBe(true);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedIndex &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedApiSource,
+      ),
+    ).toBe(false);
+
+    expect(indexModule?.imports.some((imp) => imp.resolved === normalizedApiDoc)).toBe(
+      true,
+    );
+  });
+
+  it("prefers graph-only document extensions for extensionless asciidoc targets", async () => {
+    const root = await mkTmpDir("dg-resolve-adoc-prefer-doc-");
+    const indexFile = path.join(root, "index.adoc");
+    const apiDocFile = path.join(root, "api.adoc");
+    const apiSourceFile = path.join(root, "api.ts");
+
+    await fsp.writeFile(indexFile, "xref:api[API]\n", "utf8");
+    await fsp.writeFile(apiDocFile, "= API\n", "utf8");
+    await fsp.writeFile(apiSourceFile, "export const api = 1;\n", "utf8");
+
+    const normalizedIndex = indexFile.replace(/\\/g, "/");
+    const normalizedApiDoc = apiDocFile.replace(/\\/g, "/");
+    const normalizedApiSource = apiSourceFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [
+      normalizedIndex,
+      normalizedApiDoc,
+      normalizedApiSource,
+    ]);
+    const index = await buildProjectIndex(root);
+    const indexModule = index.byFile.get(normalizedIndex);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedIndex &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedApiDoc,
+      ),
+    ).toBe(true);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedIndex &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedApiSource,
+      ),
+    ).toBe(false);
+
+    expect(indexModule?.imports.some((imp) => imp.resolved === normalizedApiDoc)).toBe(
+      true,
+    );
+  });
+
   it("resolves tsconfig path aliases for tsx dependency graphs", async () => {
     const root = await mkTmpDir("dg-resolve-tsx-alias-");
     const buttonFile = path.join(root, "src", "components", "Button.tsx");

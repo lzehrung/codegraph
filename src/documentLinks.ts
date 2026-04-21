@@ -316,10 +316,15 @@ export function extractAsciidocModuleSpecifiers(
 ): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
 
-  for (const match of source.matchAll(/\b(?:xref|link):([^\[\s]+)\[[^\]]*]/g)) {
-    const rawSpecifier = match[1]?.trim();
+  for (const match of source.matchAll(/\b(xref|link):([^\[\s]+)\[[^\]]*]/g)) {
+    const directive = (match[1] ?? "").toLowerCase();
+    const rawSpecifier = match[2]?.trim();
     if (!rawSpecifier) continue;
-    if (!isLikelyAsciidocFileTarget(rawSpecifier)) continue;
+    const fileLikeTarget =
+      directive === "xref"
+        ? isLikelyAsciidocXrefTarget(rawSpecifier)
+        : isLikelyAsciidocFileTarget(rawSpecifier);
+    if (!fileLikeTarget) continue;
     const normalized = normalizeLinkSpecifier(rawSpecifier, {
       preferRelative: true,
       forceRelative: true,
@@ -640,9 +645,22 @@ function isLikelyMarkdownAutolinkTarget(candidate: string): boolean {
   if (candidate.startsWith("//")) return true;
   if (candidate.startsWith("./") || candidate.startsWith("../")) return true;
   if (candidate.startsWith("/") || candidate.startsWith("\\")) return true;
+  if (/^[^\s/@]+@[^\s/@]+\.[^\s/@]+$/.test(candidate)) return false;
   if (/^[A-Za-z][A-Za-z0-9:_-]*\/?$/.test(candidate)) return false;
   if (candidate.includes("/") || candidate.includes("\\")) return true;
   return path.extname(candidate).length > 0;
+}
+
+function isLikelyAsciidocXrefTarget(rawSpecifier: string): boolean {
+  if (isLikelyAsciidocFileTarget(rawSpecifier)) return true;
+
+  const withoutFragment = rawSpecifier
+    .trim()
+    .split("#", 1)[0]
+    ?.split("?", 1)[0]
+    ?.trim() ?? "";
+  if (!withoutFragment) return false;
+  return /^[A-Za-z0-9._-]+$/.test(withoutFragment);
 }
 
 function isLikelyAsciidocFileTarget(rawSpecifier: string): boolean {

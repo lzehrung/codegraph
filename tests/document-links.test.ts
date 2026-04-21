@@ -147,6 +147,41 @@ describe("document link graph extraction", () => {
     ).toBe(false);
   });
 
+  it("ignores markdown email autolinks while keeping file autolinks", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-email-"));
+    const pageFile = path.join(root, "page.md");
+    const guideFile = path.join(root, "guide.md");
+
+    await fsp.writeFile(
+      pageFile,
+      ["<user@example.com>", "<./guide.md>"].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedGuide]);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedPage &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedGuide,
+      ),
+    ).toBe(true);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedPage &&
+          edge.to.type === "external" &&
+          edge.to.name === "user@example.com",
+      ),
+    ).toBe(false);
+  });
+
   it("ignores anchor-only asciidoc xrefs while keeping file references", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-adoc-"));
     const indexFile = path.join(root, "index.asciidoc");
@@ -233,6 +268,44 @@ describe("document link graph extraction", () => {
     await fsp.writeFile(
       pageFile,
       ['<a href={dynamicPath}>Dynamic</a>', '<a href="./guide.md">Guide</a>'].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedGuide]);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedPage &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedGuide,
+      ),
+    ).toBe(true);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedPage &&
+          edge.to.type === "external" &&
+          (edge.to.name === "{dynamicPath}" || edge.raw === "{dynamicPath}"),
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores dynamic JSX-style html attribute expressions in mdx", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-mdx-dynamic-"));
+    const pageFile = path.join(root, "page.mdx");
+    const guideFile = path.join(root, "guide.md");
+
+    await fsp.writeFile(
+      pageFile,
+      [
+        '<a href={dynamicPath}>Dynamic</a>',
+        '<a href="./guide.md">Guide</a>',
+      ].join("\n"),
       "utf8",
     );
     await fsp.writeFile(guideFile, "# Guide\n", "utf8");
