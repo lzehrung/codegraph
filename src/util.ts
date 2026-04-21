@@ -1784,15 +1784,19 @@ export const GRAPH_ONLY_RESOLUTION_EXTENSIONS = [
   ".asciidoc",
 ] as const;
 
+export const GRAPH_ONLY_PREFERRED_RESOLUTION_EXTENSIONS = [
+  ...GRAPH_ONLY_RESOLUTION_EXTENSIONS,
+  ...DEFAULT_RESOLUTION_EXTENSIONS,
+] as const;
+
 function getResolutionExtensions(
-  additionalExtensions?: readonly string[],
+  resolutionExtensions?: readonly string[],
 ): string[] {
-  return Array.from(
-    new Set([
-      ...DEFAULT_RESOLUTION_EXTENSIONS,
-      ...(additionalExtensions ?? []),
-    ]),
-  );
+  const extensions =
+    resolutionExtensions === undefined
+      ? DEFAULT_RESOLUTION_EXTENSIONS
+      : resolutionExtensions;
+  return Array.from(new Set(extensions));
 }
 
 export async function resolvePathLikeModule(

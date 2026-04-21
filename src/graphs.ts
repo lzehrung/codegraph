@@ -19,7 +19,7 @@ import {
   unquote,
   loadNearestTsconfigFor,
   loadWorkspaceConfig,
-  GRAPH_ONLY_RESOLUTION_EXTENSIONS,
+  GRAPH_ONLY_PREFERRED_RESOLUTION_EXTENSIONS,
   type WorkspaceConfig,
   resolveSpecifier,
   resolveImportSpecifier,
@@ -689,7 +689,7 @@ export async function collectEdgesForFile(
       ? await loadNearestTsconfigFor(file)
       : { matchPath: undefined };
   const resolutionExtensions = graphOnlyLanguage
-    ? GRAPH_ONLY_RESOLUTION_EXTENSIONS
+    ? GRAPH_ONLY_PREFERRED_RESOLUTION_EXTENSIONS
     : undefined;
 
   const edges: Edge[] = [];

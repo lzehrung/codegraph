@@ -37,7 +37,7 @@ import {
   stripPythonCommentsAndStrings,
   loadNearestTsconfigFor,
   loadWorkspaceConfig,
-  GRAPH_ONLY_RESOLUTION_EXTENSIONS,
+  GRAPH_ONLY_PREFERRED_RESOLUTION_EXTENSIONS,
   resolveSpecifier,
   resolveImportSpecifier,
   resolvePythonModule,
@@ -2532,7 +2532,7 @@ export async function collectImportsForFile(
           workspaceConfig,
           {
             resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
-            resolutionExtensions: GRAPH_ONLY_RESOLUTION_EXTENSIONS,
+            resolutionExtensions: GRAPH_ONLY_PREFERRED_RESOLUTION_EXTENSIONS,
             ...(resolutionHints ? { resolutionHints } : {}),
           },
         ),
