@@ -3896,8 +3896,9 @@ async function buildIndexFromFileListShared(
       const { source: src, sup, lang, nativeQueries } = prepared;
       let resolvedLang = lang;
       let tree: SyntaxTreeLike | undefined;
+      const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
 
-      if (!nativeQueries) {
+      if (!nativeQueries && !graphOnlyLanguage) {
         const parsed = tryParsePreparedFileContext(prepared);
         if (parsed) {
           tree = parsed.tree;
@@ -4511,8 +4512,9 @@ export async function buildProjectIndexIncremental(
           const { source: src, sup, lang, nativeQueries } = prepared;
           let resolvedLang = lang;
           let tree: SyntaxTreeLike | undefined;
+          const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
 
-          if (!nativeQueries) {
+          if (!nativeQueries && !graphOnlyLanguage) {
             const parsed = tryParsePreparedFileContext(prepared);
             if (parsed) {
               tree = parsed.tree;

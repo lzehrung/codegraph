@@ -1669,7 +1669,7 @@ export function resolvePackageSubpath(spec: string): {
 export async function resolveWorkspacePackage(
   spec: string,
   ws: WorkspaceConfig | undefined,
-  additionalExtensions?: readonly string[],
+  resolutionExtensions?: readonly string[],
 ): Promise<string | null> {
   if (!ws) return null;
   const { name, subpath } = resolvePackageSubpath(spec);
@@ -1677,7 +1677,7 @@ export async function resolveWorkspacePackage(
   if (!pkg) return null;
   const baseDir = pkg.path;
 
-  const exts = getResolutionExtensions(additionalExtensions);
+  const exts = getResolutionExtensions(resolutionExtensions);
   const tryResolveRelative = async (rel: string): Promise<string | null> => {
     const raw = path.resolve(baseDir, rel);
     const candidates: string[] = [raw];
@@ -1802,10 +1802,10 @@ function getResolutionExtensions(
 export async function resolvePathLikeModule(
   projectRoot: string,
   spec: string,
-  additionalExtensions?: readonly string[],
+  resolutionExtensions?: readonly string[],
 ): Promise<string | null> {
   const parts = spec.split(/[/.:]+/).filter(Boolean);
-  const exts = getResolutionExtensions(additionalExtensions);
+  const exts = getResolutionExtensions(resolutionExtensions);
 
   // Try matching progressively shorter prefixes (e.g. a.b.c -> a/b/c, a/b, a)
   for (let i = parts.length; i > 0; i--) {
@@ -2513,7 +2513,7 @@ async function resolveFromNodeModules(
   spec: string,
   fromFile: string,
   _projectRoot: string,
-  additionalExtensions?: readonly string[],
+  resolutionExtensions?: readonly string[],
 ): Promise<string | null> {
   try {
     // Walk up from the file directory to project root looking for node_modules
@@ -2531,7 +2531,7 @@ async function resolveFromNodeModules(
         const pkgPath = path.join(nmDir, "package.json");
         const pkg = await loadJSON<MinimalPackageJson>(pkgPath);
         const baseDir = nmDir;
-        const exts = getResolutionExtensions(additionalExtensions);
+        const exts = getResolutionExtensions(resolutionExtensions);
         const tryResolveRelative = async (
           rel: string,
         ): Promise<string | null> => {
