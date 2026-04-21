@@ -31,8 +31,8 @@ const definition: LanguageTestDefinition = {
       {
         name: "rst remains graph-only for go-to-definition",
         file: "index.rst",
-        line: 3,
-        column: 2,
+        line: 4,
+        column: 3,
         expectedStatus: "not_found",
       },
     ],
@@ -40,8 +40,8 @@ const definition: LanguageTestDefinition = {
       {
         name: "rst remains graph-only for references",
         file: "index.rst",
-        line: 3,
-        column: 2,
+        line: 4,
+        column: 3,
         expectedStatus: "not_found",
       },
     ],

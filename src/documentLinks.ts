@@ -640,7 +640,6 @@ function isLikelyMarkdownAutolinkTarget(candidate: string): boolean {
   if (candidate.startsWith("//")) return true;
   if (candidate.startsWith("./") || candidate.startsWith("../")) return true;
   if (candidate.startsWith("/") || candidate.startsWith("\\")) return true;
-  if (candidate.includes("@")) return true;
   if (/^[A-Za-z][A-Za-z0-9:_-]*\/?$/.test(candidate)) return false;
   if (candidate.includes("/") || candidate.includes("\\")) return true;
   return path.extname(candidate).length > 0;
