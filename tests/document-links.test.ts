@@ -182,6 +182,34 @@ describe("document link graph extraction", () => {
     ).toBe(false);
   });
 
+  it("keeps scheme-less domain paths external instead of forcing them relative", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-domain-"));
+    const pageFile = path.join(root, "page.md");
+
+    await fsp.writeFile(pageFile, "[Docs](example.com/docs)\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage]);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedPage &&
+          edge.to.type === "external" &&
+          edge.to.name === "example.com/docs",
+      ),
+    ).toBe(true);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedPage &&
+          edge.to.type === "external" &&
+          edge.to.name === "./example.com/docs",
+      ),
+    ).toBe(false);
+  });
+
   it("ignores anchor-only asciidoc xrefs while keeping file references", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-adoc-"));
     const indexFile = path.join(root, "index.asciidoc");

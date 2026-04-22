@@ -597,7 +597,13 @@ function shouldPreferRelativePath(specifier: string): boolean {
   }
   if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(specifier)) return false;
   if (/^[A-Za-z]:[\\/]/.test(specifier)) return false;
-  if (specifier.includes("/")) return true;
+  if (specifier.includes("/")) {
+    const firstSegment = specifier.split(/[\\/]/, 1)[0] ?? "";
+    if (/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\.[A-Za-z]{2,}$/i.test(firstSegment)) {
+      return false;
+    }
+    return true;
+  }
 
   const ext = path.extname(specifier).toLowerCase();
   return DOCUMENT_RELATIVE_EXTENSIONS.has(ext);
