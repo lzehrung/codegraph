@@ -157,7 +157,7 @@ export const DEFAULT_PROJECT_MANIFESTS = [
 ];
 
 export const DEFAULT_PROJECT_PATTERNS = [
-  "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,go,java,cs,rb,rs,html,htm,css,scss,less,kt,kts,swift,c,h,cc,cpp,cxx,c++,hpp,hh,hxx,ipp,tpp,inl}",
+  "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,vue,svelte,astro,hbs,handlebars,md,mdx,rst,adoc,asciidoc,go,java,cs,rb,rs,html,htm,css,scss,less,kt,kts,swift,c,h,cc,cpp,cxx,c++,hpp,hh,hxx,ipp,tpp,inl}",
   ...DEFAULT_PROJECT_MANIFESTS.map((name) => `**/${name}`),
 ];
 
@@ -1067,7 +1067,10 @@ export function normalizeResolutionHints(hints?: string[]): string[] {
 
 export type ModuleSpecifier = {
   spec: string;
+  raw?: string;
   typeOnly?: boolean;
+  resolutionKind?: "document" | "source";
+  dropIfUnresolved?: boolean;
   resolved?: "heuristic" | "precise";
   confidence?: number;
 };
@@ -1668,6 +1671,7 @@ export function resolvePackageSubpath(spec: string): {
 export async function resolveWorkspacePackage(
   spec: string,
   ws: WorkspaceConfig | undefined,
+  resolutionExtensions?: readonly string[],
 ): Promise<string | null> {
   if (!ws) return null;
   const { name, subpath } = resolvePackageSubpath(spec);
@@ -1675,43 +1679,7 @@ export async function resolveWorkspacePackage(
   if (!pkg) return null;
   const baseDir = pkg.path;
 
-  const exts = [
-    ".ts",
-    ".tsx",
-    ".js",
-    ".jsx",
-    ".mts",
-    ".cts",
-    ".mjs",
-    ".cjs",
-    ".json",
-    ".css",
-    ".scss",
-    ".less",
-    ".html",
-    ".vue",
-    ".svelte",
-    ".go",
-    ".java",
-    ".cs",
-    ".rb",
-    ".rs",
-    ".c",
-    ".h",
-    ".cc",
-    ".cpp",
-    ".cxx",
-    ".c++",
-    ".hpp",
-    ".hh",
-    ".hxx",
-    ".ipp",
-    ".tpp",
-    ".inl",
-    ".kt",
-    ".kts",
-    ".swift",
-  ];
+  const exts = getResolutionExtensions(resolutionExtensions);
   const tryResolveRelative = async (rel: string): Promise<string | null> => {
     const raw = path.resolve(baseDir, rel);
     const candidates: string[] = [raw];
@@ -1769,49 +1737,115 @@ export async function resolveWorkspacePackage(
 
 export type FileId = string;
 
+const DEFAULT_RESOLUTION_EXTENSIONS = [
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".mts",
+  ".cts",
+  ".mjs",
+  ".cjs",
+  ".json",
+  ".css",
+  ".scss",
+  ".less",
+  ".html",
+  ".vue",
+  ".svelte",
+  ".go",
+  ".java",
+  ".cs",
+  ".rb",
+  ".rs",
+  ".c",
+  ".h",
+  ".cc",
+  ".cpp",
+  ".cxx",
+  ".c++",
+  ".hpp",
+  ".hh",
+  ".hxx",
+  ".ipp",
+  ".tpp",
+  ".inl",
+  ".kt",
+  ".kts",
+  ".swift",
+] as const;
+
+export const GRAPH_ONLY_RESOLUTION_EXTENSIONS = [
+  ".md",
+  ".mdx",
+  ".astro",
+  ".hbs",
+  ".handlebars",
+  ".rst",
+  ".adoc",
+  ".asciidoc",
+] as const;
+
+const GRAPH_ONLY_LANGUAGE_DOCUMENT_RESOLUTION_EXTENSIONS: Record<
+  string,
+  readonly string[]
+> = {
+  markdown: [".md", ".mdx"],
+  mdx: [".mdx", ".md"],
+  astro: [".astro"],
+  hbs: [".hbs", ".handlebars"],
+  rst: [".rst"],
+  adoc: [".adoc", ".asciidoc"],
+};
+
+const GRAPH_ONLY_LANGUAGE_SOURCE_RESOLUTION_EXTENSIONS: Record<
+  string,
+  readonly string[]
+> = {
+  mdx: DEFAULT_RESOLUTION_EXTENSIONS,
+  astro: [".astro", ...DEFAULT_RESOLUTION_EXTENSIONS],
+};
+
+export function getGraphOnlyResolutionExtensions(
+  languageId: string,
+  resolutionKind: "document" | "source" = "document",
+): string[] {
+  const normalizedLanguageId = languageId.toLowerCase();
+  const preferredExtensions =
+    resolutionKind === "source"
+      ? (GRAPH_ONLY_LANGUAGE_SOURCE_RESOLUTION_EXTENSIONS[
+          normalizedLanguageId
+        ] ?? DEFAULT_RESOLUTION_EXTENSIONS)
+      : (GRAPH_ONLY_LANGUAGE_DOCUMENT_RESOLUTION_EXTENSIONS[
+          normalizedLanguageId
+        ] ?? GRAPH_ONLY_RESOLUTION_EXTENSIONS);
+  const includeGraphOnlyFallbacks = resolutionKind === "document";
+  return Array.from(
+    new Set([
+      ...preferredExtensions,
+      ...(includeGraphOnlyFallbacks ? GRAPH_ONLY_RESOLUTION_EXTENSIONS : []),
+      ...DEFAULT_RESOLUTION_EXTENSIONS,
+    ]),
+  );
+}
+
+function getResolutionExtensions(
+  resolutionExtensions?: readonly string[],
+): string[] {
+  const extensions =
+    resolutionExtensions === undefined
+      ? DEFAULT_RESOLUTION_EXTENSIONS
+      : resolutionExtensions;
+  return Array.from(new Set(extensions));
+}
+
 export async function resolvePathLikeModule(
   projectRoot: string,
   spec: string,
+  resolutionExtensions?: readonly string[],
 ): Promise<string | null> {
   const parts = spec.split(/[/.:]+/).filter(Boolean);
-  // Try extensions from the file
-  const exts = [
-    ".ts",
-    ".tsx",
-    ".js",
-    ".jsx",
-    ".mts",
-    ".cts",
-    ".mjs",
-    ".cjs",
-    ".json",
-    ".css",
-    ".scss",
-    ".less",
-    ".html",
-    ".vue",
-    ".svelte",
-    ".go",
-    ".java",
-    ".cs",
-    ".rb",
-    ".rs",
-    ".c",
-    ".h",
-    ".cc",
-    ".cpp",
-    ".cxx",
-    ".c++",
-    ".hpp",
-    ".hh",
-    ".hxx",
-    ".ipp",
-    ".tpp",
-    ".inl",
-    ".kt",
-    ".kts",
-    ".swift",
-  ];
+  const exts = getResolutionExtensions(resolutionExtensions);
 
   // Try matching progressively shorter prefixes (e.g. a.b.c -> a/b/c, a/b, a)
   for (let i = parts.length; i > 0; i--) {
@@ -2335,37 +2369,23 @@ export async function resolveSpecifier(
   projectRoot: string,
   matchPath?: MatchPathFn,
   workspaceConfig?: WorkspaceConfig,
-  opts?: { resolveNodeModules?: boolean; resolutionHints?: string[] },
+  opts?: {
+    resolveNodeModules?: boolean;
+    resolutionHints?: string[];
+    resolutionExtensions?: readonly string[];
+  },
 ): Promise<FileId | { external: string }> {
   const resolutionHints = normalizeResolutionHints(opts?.resolutionHints);
   const hintKey = resolutionHints.join("|");
+  const resolutionExtensions = getResolutionExtensions(
+    opts?.resolutionExtensions,
+  );
+  const extensionKey = resolutionExtensions.join("|");
   const cacheKey = `${fromFile}::${spec}::nm=${
     opts?.resolveNodeModules ? 1 : 0
-  }::hints=${hintKey}`;
+  }::hints=${hintKey}::exts=${extensionKey}`;
   const cached = resolveSpecifierCache.get(cacheKey);
   if (cached) return cached;
-  const exts = [
-    ".ts",
-    ".tsx",
-    ".js",
-    ".jsx",
-    ".mts",
-    ".cts",
-    ".mjs",
-    ".cjs",
-    ".json",
-    ".css",
-    ".scss",
-    ".less",
-    ".html",
-    ".vue",
-    ".svelte",
-    ".go",
-    ".java",
-    ".cs",
-    ".rb",
-    ".rs",
-  ];
   const buildCandidates = (base: string): string[] => {
     const candidates: string[] = [base];
     const baseExt = path.extname(base);
@@ -2375,8 +2395,10 @@ export async function resolveSpecifier(
         baseExt === ".mjs" ? ".mts" : baseExt === ".cjs" ? ".cts" : ".ts";
       candidates.unshift(baseWithoutExt + tsExt);
     }
-    for (const e of exts) candidates.push(base + e);
-    for (const e of exts) candidates.push(path.join(base, "index" + e));
+    for (const e of resolutionExtensions) candidates.push(base + e);
+    for (const e of resolutionExtensions) {
+      candidates.push(path.join(base, "index" + e));
+    }
     return candidates;
   };
   const tryResolveCandidates = async (
@@ -2428,7 +2450,7 @@ export async function resolveSpecifier(
           return false;
         }
       },
-      [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json"],
+      resolutionExtensions,
     );
     if (m) {
       const cand = path.resolve(m);
@@ -2437,8 +2459,7 @@ export async function resolveSpecifier(
         resolveSpecifierCache.set(cacheKey, cand);
         return cand;
       }
-      const tsExts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json"];
-      for (const e of tsExts) {
+      for (const e of resolutionExtensions) {
         const pth = cand + e;
         try {
           fs.accessSync(pth, fs.constants.R_OK);
@@ -2448,7 +2469,7 @@ export async function resolveSpecifier(
           /* file not found: try next */
         }
       }
-      for (const e of tsExts) {
+      for (const e of resolutionExtensions) {
         const pth = path.join(cand, "index" + e);
         try {
           fs.accessSync(pth, fs.constants.R_OK);
@@ -2464,7 +2485,11 @@ export async function resolveSpecifier(
   }
 
   if (!spec.startsWith(".") && !spec.startsWith("/")) {
-    const resolvedWs = await resolveWorkspacePackage(spec, workspaceConfig);
+    const resolvedWs = await resolveWorkspacePackage(
+      spec,
+      workspaceConfig,
+      opts?.resolutionExtensions,
+    );
     if (resolvedWs) {
       resolveSpecifierCache.set(cacheKey, resolvedWs);
       return resolvedWs;
@@ -2482,14 +2507,23 @@ export async function resolveSpecifier(
       prefersPathLikeFallback || spec.includes("/") || spec.includes(".");
     if (shouldTryPathLikeFallback) {
       // Try path-like fallback for languages that often map package-like names to source paths.
-      const pathLike = await resolvePathLikeModule(projectRoot, spec);
+      const pathLike = await resolvePathLikeModule(
+        projectRoot,
+        spec,
+        opts?.resolutionExtensions,
+      );
       if (pathLike) {
         resolveSpecifierCache.set(cacheKey, pathLike);
         return pathLike;
       }
     }
     if (opts?.resolveNodeModules) {
-      const nm = await resolveFromNodeModules(spec, fromFile, projectRoot);
+      const nm = await resolveFromNodeModules(
+        spec,
+        fromFile,
+        projectRoot,
+        opts?.resolutionExtensions,
+      );
       if (nm) {
         resolveSpecifierCache.set(cacheKey, nm);
         return nm;
@@ -2519,6 +2553,7 @@ async function resolveFromNodeModules(
   spec: string,
   fromFile: string,
   _projectRoot: string,
+  resolutionExtensions?: readonly string[],
 ): Promise<string | null> {
   try {
     // Walk up from the file directory to project root looking for node_modules
@@ -2536,24 +2571,7 @@ async function resolveFromNodeModules(
         const pkgPath = path.join(nmDir, "package.json");
         const pkg = await loadJSON<MinimalPackageJson>(pkgPath);
         const baseDir = nmDir;
-        const exts = [
-          ".ts",
-          ".tsx",
-          ".js",
-          ".jsx",
-          ".mts",
-          ".cts",
-          ".mjs",
-          ".cjs",
-          ".json",
-          ".vue",
-          ".svelte",
-          ".go",
-          ".java",
-          ".cs",
-          ".rb",
-          ".rs",
-        ];
+        const exts = getResolutionExtensions(resolutionExtensions);
         const tryResolveRelative = async (
           rel: string,
         ): Promise<string | null> => {

@@ -32,6 +32,17 @@ export const LANG_CONFIGS: Record<string, LanguageConfig> = {};
 for (const lang of getAllLanguages()) {
   const key = idToConfigKey[lang.id] || lang.id;
   // Skip languages that are not used for direct semantic chunking
-  if (lang.id === "vue" || lang.id === "svelte") continue;
+  if (
+    lang.id === "vue" ||
+    lang.id === "svelte" ||
+    lang.id === "markdown" ||
+    lang.id === "mdx" ||
+    lang.id === "astro" ||
+    lang.id === "hbs" ||
+    lang.id === "rst" ||
+    lang.id === "adoc"
+  ) {
+    continue;
+  }
   LANG_CONFIGS[key] = makeLanguageConfig(lang, key);
 }

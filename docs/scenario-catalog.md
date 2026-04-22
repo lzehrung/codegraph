@@ -99,6 +99,42 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Script and stylesheet references | `tests/samples/html/index.html` | Dependency graph includes edges to `app.js` and `styles.css` via `src` and `href`. | https://github.com/tree-sitter/tree-sitter-html | 2026-01-22 |
 | Module-preload and module-script references | `tests/samples/html/modules.html` | Graph/specifier extraction keeps `modulepreload`, module scripts, and linked pages aligned between native and JS paths while semantic navigation stays `not_found`. | Internal regression fixture | 2026-03-23 |
 
+## Astro
+
+| Scenario | Sample | Expected behavior | Source | Date added |
+| --- | --- | --- | --- | --- |
+| Frontmatter imports and local page links | `tests/samples/astro/page.astro` | Dependency graph resolves Astro frontmatter imports, inline script imports, and local HTML-style links to sibling Astro and Markdown files while semantic navigation stays `not_found`. | Internal regression fixture | 2026-04-20 |
+
+## Handlebars
+
+| Scenario | Sample | Expected behavior | Source | Date added |
+| --- | --- | --- | --- | --- |
+| HTML-style links and relative partials | `tests/samples/hbs/page.hbs` | Dependency graph resolves static HTML-style links and relative Handlebars partial includes while ignoring dynamic path expressions such as `{{dynamicPath}}`. | Internal regression fixture | 2026-04-20 |
+
+## Markdown
+
+| Scenario | Sample | Expected behavior | Source | Date added |
+| --- | --- | --- | --- | --- |
+| Inline, reference-style, and autolink document links | `tests/samples/markdown/index.md` | Dependency graph resolves inline links, reference-style links, autolinks, and raw HTML anchors to sibling Markdown or HTML files, while hash-only anchors, image links, and raw HTML/JSX tags stay out of the document graph. | Internal regression fixture | 2026-04-20 |
+
+## MDX
+
+| Scenario | Sample | Expected behavior | Source | Date added |
+| --- | --- | --- | --- | --- |
+| Static imports, document links, and raw HTML anchors | `tests/samples/mdx/page.mdx` | Dependency graph resolves MDX static imports/exports, Markdown-style document links, and raw HTML anchors to local files while semantic navigation stays `not_found`. | Internal regression fixture | 2026-04-20 |
+
+## reStructuredText
+
+| Scenario | Sample | Expected behavior | Source | Date added |
+| --- | --- | --- | --- | --- |
+| Inline links, target definitions, includes, and toctrees | `tests/samples/rst/index.rst` | Dependency graph resolves explicit reStructuredText links, named target definitions, `include` directives, and Sphinx-style `toctree` entries to local `.rst` files while semantic navigation stays `not_found`. | Internal regression fixture | 2026-04-20 |
+
+## AsciiDoc
+
+| Scenario | Sample | Expected behavior | Source | Date added |
+| --- | --- | --- | --- | --- |
+| `xref`, `link`, `include`, and anchor references | `tests/samples/adoc/index.adoc` | Dependency graph resolves AsciiDoc `xref`, `link`, `include`, and `<<target>>` references to local `.adoc` files, while anchor-only cross references stay out of the file graph and semantic navigation remains `not_found`. | Internal regression fixture | 2026-04-20 |
+
 ## Java
 
 | Scenario | Sample | Expected behavior | Source | Date added |
