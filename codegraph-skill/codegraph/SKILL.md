@@ -7,7 +7,7 @@ description: Static code analysis and dependency graph tool for deep codebase un
 
 ## Overview
 
-Codegraph is a lightweight multi-language code analysis tool that builds dependency graphs, symbol indexes, go-to-definition maps, and PR impact reports. It uses one shared Tree-sitter model across languages. Native runtime mode defaults to `auto`: Codegraph resolves parse/query work through `@lzehrung/codegraph-native`, using the native addon when available and the separate opt-in `@lzehrung/codegraph-js-fallback` package when native is unavailable or explicitly disabled.
+Codegraph is a lightweight multi-language code analysis tool that builds dependency graphs, symbol indexes, go-to-definition maps, and PR impact reports. It uses one shared Tree-sitter model across languages, plus graph-first text extraction for document and template formats like Markdown, MDX, Astro, Handlebars, reStructuredText, and AsciiDoc. Native runtime mode defaults to `auto`: Codegraph resolves parse/query work through `@lzehrung/codegraph-native`, using the native addon when available and the separate opt-in `@lzehrung/codegraph-js-fallback` package when native is unavailable or explicitly disabled.
 
 ## Installation Notes
 
@@ -64,6 +64,7 @@ The CLI also ships a bundled skill installer:
   `codegraph graph ./src --fast-graph`
 - Full AST-based graph:
   `codegraph graph ./src`
+- Graphs also include graph-first document/template edges for HTML, Astro, Handlebars, Markdown, MDX, reStructuredText, and AsciiDoc local links, plus MDX/Astro static imports.
 - Narrow scan scope and exclude generated/tests while preserving `.gitignore`:
   `codegraph graph --root . ./src --include-glob "**/*.ts" --ignore-glob "**/*.spec.ts" --json`
 - Disable `.gitignore` filtering when ignored/generated files are intentionally in scope:

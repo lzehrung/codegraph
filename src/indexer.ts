@@ -37,6 +37,7 @@ import {
   stripPythonCommentsAndStrings,
   loadNearestTsconfigFor,
   loadWorkspaceConfig,
+  getGraphOnlyResolutionExtensions,
   resolveSpecifier,
   resolveImportSpecifier,
   resolvePythonModule,
@@ -60,6 +61,12 @@ import {
   type FallbackImportExtractionReason,
   type SymbolGraph,
 } from "./graphs.js";
+import {
+  extractGraphOnlyModuleSpecifiers,
+  graphOnlyLanguageSupportsImportAliases,
+  graphOnlySpecifierNeedsResolutionConfig,
+  isGraphOnlyLanguage,
+} from "./documentLinks.js";
 import type { Edge, Range, FileId, Graph } from "./types.js";
 import {
   executeJsQueryAsNativeMatches,
@@ -1624,6 +1631,10 @@ export function collectLocalsAndExportsFromSource(
     nativeMode?: NativeRuntimeMode;
   },
 ): ModuleIndex {
+  if (isGraphOnlyLanguage(support.id)) {
+    return { file, exports: [], imports, locals: [] };
+  }
+
   const normalizeDocstringLine = (line: string) =>
     line.replace(/^\s*(?:\/\/\/?\s?|#\s?)/, "").replace(/^\s*\*\s?/, "");
 
@@ -2494,6 +2505,65 @@ export async function collectImportsForFile(
   const resolvedSource = source;
   const resolvedSup = sup;
   let resolvedLang = lang;
+  if (isGraphOnlyLanguage(resolvedSup.id)) {
+    const entries = Array.from(
+      extractGraphOnlyModuleSpecifiers(
+        resolvedSup.id,
+        resolvedSource,
+      ),
+    );
+    const needsGraphOnlyResolutionConfig =
+      graphOnlyLanguageSupportsImportAliases(resolvedSup.id) &&
+      entries.some(({ spec }) => graphOnlySpecifierNeedsResolutionConfig(spec));
+    const { matchPath } = needsGraphOnlyResolutionConfig
+      ? await loadNearestTsconfigFor(file)
+      : { matchPath: undefined };
+    const workspaceConfig = needsGraphOnlyResolutionConfig
+      ? await loadWorkspaceConfig(projectRoot)
+      : undefined;
+    const resolutionHints = opts?.graphOptions?.resolutionHints;
+    const resolvedSpecifiers = await Promise.all(
+      entries.map((entry) =>
+        resolveSpecifier(
+          file,
+          entry.spec,
+          projectRoot,
+          matchPath,
+          workspaceConfig,
+          {
+            resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
+            resolutionExtensions: getGraphOnlyResolutionExtensions(
+              resolvedSup.id,
+              entry.resolutionKind ?? "document",
+            ),
+            ...(resolutionHints ? { resolutionHints } : {}),
+          },
+        ),
+      ),
+    );
+    return entries.flatMap((entry, index) => {
+      const resolved = resolvedSpecifiers[index];
+      if (resolved === undefined) {
+        throw new Error(
+          `Missing graph-only resolution result for ${resolvedSup.id}:${entry.spec}`,
+        );
+      }
+      if (typeof resolved !== "string" && entry.dropIfUnresolved) {
+        return [];
+      }
+      const from = entry.raw ?? entry.spec;
+      return [
+        {
+          kind: "star" as const,
+          from,
+          ...(typeof resolved === "string"
+            ? { resolved: resolved.replace(/\\/g, "/") }
+            : { resolved: { ...resolved, external: from } }),
+        },
+      ];
+    });
+  }
+
   const resolvedNativeQueries = opts?.nativeQueries ?? null;
   const ensureResolvedLang = (): JsLanguage => {
     resolvedLang ??= resolvedSup.language(file);
@@ -3835,8 +3905,9 @@ async function buildIndexFromFileListShared(
       const { source: src, sup, lang, nativeQueries } = prepared;
       let resolvedLang = lang;
       let tree: SyntaxTreeLike | undefined;
+      const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
 
-      if (!nativeQueries) {
+      if (!nativeQueries && !graphOnlyLanguage) {
         const parsed = tryParsePreparedFileContext(prepared);
         if (parsed) {
           tree = parsed.tree;
@@ -4450,8 +4521,9 @@ export async function buildProjectIndexIncremental(
           const { source: src, sup, lang, nativeQueries } = prepared;
           let resolvedLang = lang;
           let tree: SyntaxTreeLike | undefined;
+          const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
 
-          if (!nativeQueries) {
+          if (!nativeQueries && !graphOnlyLanguage) {
             const parsed = tryParsePreparedFileContext(prepared);
             if (parsed) {
               tree = parsed.tree;

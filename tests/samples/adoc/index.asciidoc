@@ -1,0 +1,4 @@
+= Alias Docs
+
+xref:guide.asciidoc[Guide]
+<<local-anchor,See below>>

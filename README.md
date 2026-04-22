@@ -1,6 +1,6 @@
 # codegraph
 
-A tiny tool to **understand a repo**, **navigate code**, and **answer questions** fast. It supports JavaScript/TypeScript, Python, Go, Java, C#, Ruby, Rust, Kotlin, Swift, C, C++, and the script blocks inside Vue/Svelte files. Built-in **code review** and **impact analysis** utilities map PR diffs to changed symbols and affected code, with streaming, ignore patterns, and optional reference verification.
+A tiny tool to **understand a repo**, **navigate code**, and **answer questions** fast. It supports JavaScript/TypeScript, Python, Go, Java, C#, Ruby, Rust, Kotlin, Swift, C, C++, graph-first document/template formats like HTML, Astro, Markdown, MDX, reStructuredText, AsciiDoc, Handlebars, and the script blocks inside Vue/Svelte files. Built-in **code review** and **impact analysis** utilities map PR diffs to changed symbols and affected code, with streaming, ignore patterns, and optional reference verification.
 
 It builds:
 
@@ -38,6 +38,7 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * JSON modules referenced from JS/TS (including `assert { type: "json" }`) are treated as default-only dependencies
   * Python: `import`, `from ... import`, relative imports with package resolution
   * Go/Java/C#/Ruby/Rust: Tree-sitter queries capture module imports/usings and resolve them to files or packages
+  * HTML/Astro/Handlebars/Markdown/MDX/reStructuredText/AsciiDoc: graph-first document and template links via `href`/`src`, Markdown links, MDX/Astro static imports, Sphinx-style includes/toctrees, and AsciiDoc `xref`/`include`
   * Unresolved targets are represented as **external** nodes
   * Scan scope respects `.gitignore` by default and can be narrowed with `--include-glob` / `--ignore-glob`
 * **Symbol index**
@@ -98,7 +99,7 @@ Sample graph: [sample-graph.md](./sample-graph.md)
   * Text file chunking for JSON/YAML/config files
   * Configurable token budgets (150-400 tokens per chunk)
   * Semantic awareness: classes, functions, methods, interfaces, namespaces, imports
-* **Cross-language parity**: All supported languages share the same go-to-definition and find-references pipeline; see [docs/language-parity.md](./docs/language-parity.md) for the current per-language matrix.
+* **Cross-language parity**: Supported source languages share the same go-to-definition and find-references pipeline, while graph-first document/template formats participate in the dependency graph with intentionally narrower capability claims; see [docs/language-parity.md](./docs/language-parity.md) for the current per-language matrix.
 
 ---
 
@@ -115,16 +116,24 @@ Sample graph: [sample-graph.md](./sample-graph.md)
 * **Swift** (`.swift`)
 * **C** (`.c`)
 * **C++** (`.cpp`)
+* **HTML** (`.html`, `.htm`) - graph/chunking-first markup support
+* **Astro** (`.astro`) - graph-first component and document-link support
+* **Handlebars** (`.hbs`, `.handlebars`) - graph-first template-link and partial support
+* **CSS / SCSS / Less** (`.css`, `.scss`, `.less`) - graph/chunking-first stylesheet support
+* **Markdown** (`.md`) - graph-first document-link support
+* **MDX** (`.mdx`) - graph-first document-link plus static import/export support
+* **reStructuredText** (`.rst`) - graph-first document-link, `include`, and `toctree` support
+* **AsciiDoc** (`.adoc`, `.asciidoc`) - graph-first document-link, `xref`, and `include` support
 * **Vue / Svelte SFCs** (`.vue`, `.svelte`) - script blocks are parsed with the JS/TS pipeline for dependency graphs and chunking, while semantic navigation remains intentionally limited.
 
-Each listed language participates in the same shared indexing and navigation pipeline.
+Each listed language or graph-first format participates in the shared indexing pipeline for the capabilities it supports.
 When the native addon is available, all listed source languages use the same native Tree-sitter runtime and query model; unsupported capabilities can fall back through the optional `@lzehrung/codegraph-js-fallback` package when it is installed.
 The regression suite covers deeper syntax variants and end-to-end native semantic parity for the source-language fixture set, plus graph/specifier parity for the graph-first product types.
 See the coverage matrix in [docs/language-parity.md](./docs/language-parity.md).
 
 **Project files**: project manifests like package.json, pyproject.toml, pom.xml, build.gradle, requirements.txt, .sln, .idea, etc. See [docs/language-parity.md](./docs/language-parity.md) for more details.
 
-**Text files**: JSON, YAML, configuration files, documentation
+**Text files**: JSON, YAML, configuration files, and documentation use token-based text chunking. Markdown, MDX, reStructuredText, and AsciiDoc additionally participate in the dependency graph as graph-first document formats.
 
 **Single File Components**: Vue (`.vue`) and Svelte (`.svelte`) files are split into their `<template>`, `<script>`, and `<style>` regions, then chunked with the appropriate HTML/JS/TS/CSS grammars. Each block falls back to token-based chunking if semantic parsing fails, so hybrid files always produce chunks.
 
