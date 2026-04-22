@@ -185,10 +185,14 @@ describe("document link graph extraction", () => {
   it("keeps scheme-less domain paths external instead of forcing them relative", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-domain-"));
     const pageFile = path.join(root, "page.md");
+    const shadowedLocalPath = path.join(root, "example.com", "docs");
 
+    await fsp.mkdir(path.dirname(shadowedLocalPath), { recursive: true });
+    await fsp.writeFile(shadowedLocalPath, "shadowed local path\n", "utf8");
     await fsp.writeFile(pageFile, "[Docs](example.com/docs)\n", "utf8");
 
     const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedShadowedLocalPath = shadowedLocalPath.replace(/\\/g, "/");
     const graph = await collectGraph(root, [normalizedPage]);
 
     expect(
@@ -204,8 +208,39 @@ describe("document link graph extraction", () => {
       graph.edges.some(
         (edge) =>
           edge.from === normalizedPage &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedShadowedLocalPath,
+      ),
+    ).toBe(false);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedPage &&
           edge.to.type === "external" &&
           edge.to.name === "./example.com/docs",
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores markdown links inside indented code blocks", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-indented-"));
+    const pageFile = path.join(root, "page.md");
+    const guideFile = path.join(root, "guide.md");
+
+    await fsp.writeFile(pageFile, "    [Guide](./guide.md)\n", "utf8");
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedGuide]);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedPage &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedGuide,
       ),
     ).toBe(false);
   });
@@ -217,7 +252,11 @@ describe("document link graph extraction", () => {
 
     await fsp.writeFile(
       indexFile,
-      ["xref:guide.asciidoc[Guide]", "<<local-anchor,See below>>"].join("\n"),
+      [
+        "xref:guide.asciidoc[Guide]",
+        "<<local-anchor,See below>>",
+        "xref:local-anchor[]",
+      ].join("\n"),
       "utf8",
     );
     await fsp.writeFile(guideFile, "= Guide\n", "utf8");
@@ -241,6 +280,15 @@ describe("document link graph extraction", () => {
           edge.from === normalizedIndex &&
           edge.to.type === "external" &&
           edge.to.name === "local-anchor",
+      ),
+    ).toBe(false);
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === normalizedIndex &&
+          edge.to.type === "file" &&
+          edge.to.path.endsWith("/local-anchor"),
       ),
     ).toBe(false);
   });

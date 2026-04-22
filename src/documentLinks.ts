@@ -336,12 +336,21 @@ export function extractAsciidocModuleSpecifiers(
         ? isLikelyAsciidocXrefTarget(rawSpecifier)
         : isLikelyAsciidocFileTarget(rawSpecifier);
     if (!fileLikeTarget) continue;
+    const ambiguousXrefTarget =
+      directive === "xref" &&
+      isAmbiguousAsciidocXrefTarget(rawSpecifier);
     const normalized = normalizeLinkSpecifier(rawSpecifier, {
       preferRelative: true,
       resolutionKind: "document",
       forceRelative: true,
     });
-    if (normalized) out.push(normalized);
+    if (normalized) {
+      out.push(
+        ambiguousXrefTarget
+          ? { ...normalized, dropIfUnresolved: true }
+          : normalized,
+      );
+    }
   }
 
   for (const match of source.matchAll(/\binclude::([^\[\n]+)\[[^\]]*]/g)) {
@@ -380,7 +389,7 @@ function dedupeModuleSpecifiers(entries: ModuleSpecifier[]): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
   const seen = new Set<string>();
   for (const entry of entries) {
-    const key = `${entry.spec}::${entry.typeOnly ? 1 : 0}::${entry.resolutionKind ?? ""}`;
+    const key = `${entry.spec}::${entry.typeOnly ? 1 : 0}::${entry.resolutionKind ?? ""}::${entry.dropIfUnresolved ? 1 : 0}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(entry);
@@ -599,7 +608,7 @@ function shouldPreferRelativePath(specifier: string): boolean {
   if (/^[A-Za-z]:[\\/]/.test(specifier)) return false;
   if (specifier.includes("/")) {
     const firstSegment = specifier.split(/[\\/]/, 1)[0] ?? "";
-    if (/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\.[A-Za-z]{2,}$/i.test(firstSegment)) {
+    if (/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/i.test(firstSegment)) {
       return false;
     }
     return true;
@@ -709,6 +718,13 @@ function isLikelyAsciidocXrefTarget(rawSpecifier: string): boolean {
   return /^[A-Za-z0-9._-]+$/.test(withoutFragment);
 }
 
+function isAmbiguousAsciidocXrefTarget(rawSpecifier: string): boolean {
+  return (
+    isLikelyAsciidocXrefTarget(rawSpecifier) &&
+    !isLikelyAsciidocFileTarget(rawSpecifier)
+  );
+}
+
 function isLikelyAsciidocFileTarget(rawSpecifier: string): boolean {
   const trimmed = rawSpecifier.trim();
   if (!trimmed || trimmed.startsWith("#")) return false;
@@ -751,6 +767,7 @@ function stripMarkdownCode(source: string): string {
     maskMatch,
   );
   sanitized = sanitized.replace(/`[^`\n]*`/g, maskMatch);
+  sanitized = sanitized.replace(/^(?: {4}|\t).*$/gm, maskMatch);
   return sanitized;
 }
 

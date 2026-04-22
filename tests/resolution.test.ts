@@ -259,6 +259,22 @@ describe("Import Resolution", () => {
     }
   });
 
+  it("drops ambiguous asciidoc xrefs when they do not resolve to a file", async () => {
+    const root = await mkTmpDir("dg-resolve-adoc-anchor-only-");
+    const pageFile = path.join(root, "page.adoc");
+
+    await fsp.writeFile(pageFile, "xref:local-anchor[]\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage]);
+    const index = await buildProjectIndex(root);
+    const pageModule = index.byFile.get(normalizedPage);
+
+    expect(graph.edges).toHaveLength(0);
+    expect(pageModule).toBeDefined();
+    expect(pageModule?.imports).toHaveLength(0);
+  });
+
   it("resolves tsconfig path aliases for mdx static imports", async () => {
     const root = await mkTmpDir("dg-resolve-mdx-alias-");
     const componentFile = path.join(root, "src", "components", "Card.tsx");

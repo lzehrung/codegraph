@@ -2541,21 +2541,26 @@ export async function collectImportsForFile(
         ),
       ),
     );
-    return entries.map((entry, index) => {
+    return entries.flatMap((entry, index) => {
       const resolved = resolvedSpecifiers[index];
       if (resolved === undefined) {
         throw new Error(
           `Missing graph-only resolution result for ${resolvedSup.id}:${entry.spec}`,
         );
       }
+      if (typeof resolved !== "string" && entry.dropIfUnresolved) {
+        return [];
+      }
       const from = entry.raw ?? entry.spec;
-      return {
-        kind: "star",
-        from,
-        ...(typeof resolved === "string"
-          ? { resolved: resolved.replace(/\\/g, "/") }
-          : { resolved: { ...resolved, external: from } }),
-      };
+      return [
+        {
+          kind: "star" as const,
+          from,
+          ...(typeof resolved === "string"
+            ? { resolved: resolved.replace(/\\/g, "/") }
+            : { resolved: { ...resolved, external: from } }),
+        },
+      ];
     });
   }
 

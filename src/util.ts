@@ -1070,6 +1070,7 @@ export type ModuleSpecifier = {
   raw?: string;
   typeOnly?: boolean;
   resolutionKind?: "document" | "source";
+  dropIfUnresolved?: boolean;
   resolved?: "heuristic" | "precise";
   confidence?: number;
 };

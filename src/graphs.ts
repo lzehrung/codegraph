@@ -690,7 +690,15 @@ export async function collectEdgesForFile(
       : { matchPath: undefined };
   const edges: Edge[] = [];
   const edgeResolutionTasks = specs.map(
-    async ({ spec, raw, typeOnly, resolved, confidence, resolutionKind }) => {
+    async ({
+      spec,
+      raw,
+      typeOnly,
+      resolved,
+      confidence,
+      resolutionKind,
+      dropIfUnresolved,
+    }) => {
       let to: EdgeTo;
       const resolutionExtensions = graphOnlyLanguage
         ? getGraphOnlyResolutionExtensions(
@@ -798,6 +806,9 @@ export async function collectEdgesForFile(
             ? { type: "file", path: res.replace(/\\/g, "/") }
             : { type: "external", name: raw ?? res.external };
       }
+      if (to.type === "external" && dropIfUnresolved) {
+        return null;
+      }
       return {
         to,
         spec,
@@ -809,16 +820,16 @@ export async function collectEdgesForFile(
     },
   );
 
-  for (const {
-    to,
-    spec,
-    raw,
-    typeOnly,
-    resolved,
-    confidence,
-  } of await Promise.all(
-    edgeResolutionTasks,
-  )) {
+  for (const resolvedEdge of await Promise.all(edgeResolutionTasks)) {
+    if (!resolvedEdge) continue;
+    const {
+      to,
+      spec,
+      raw,
+      typeOnly,
+      resolved,
+      confidence,
+    } = resolvedEdge;
     edges.push({
       from: normalizedFile,
       to,
