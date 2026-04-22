@@ -1524,30 +1524,40 @@ Yes. It detects npm/yarn/pnpm/lerna workspaces and resolves package-relative imp
 
 ## Contributing & Releases
 
-The old release ergonomics are back. Use the root scripts to cut synchronized releases for both the JS package and the native backend package:
+Use the root release scripts to cut independent releases for the packages that actually changed:
 
 ```bash
-# Version, test, build, commit, tag, and push
+# Detect changed packages, bump them, test, build, commit, tag, and push
 npm run release:patch
 npm run release:minor
 npm run release:major
 npm run release:resume
 
-# Same flow, plus stage/publish the local native target, publish the native meta package, and publish the root package
+# Same flow, plus publish only the changed packages that do not already exist in the registry
 npm run publish:patch
 npm run publish:minor
 npm run publish:major
 npm run publish:resume
+
+# Force a package-scoped release when needed
+npm run publish:patch -- --package js-fallback
+npm run release:minor -- --package @lzehrung/codegraph-native
 ```
 
 The release scripts:
-- Keep `@lzehrung/codegraph` and `@lzehrung/codegraph-native` on the same version
+- Detect package changes independently for:
+  - `@lzehrung/codegraph`
+  - `@lzehrung/codegraph-native`
+  - `@lzehrung/codegraph-js-fallback`
+- Bump only the selected or changed packages
 - Run tests plus JS/native builds before tagging
 - Keep staged native metadata as publish-time state instead of committed source state
 - Stage the current platform's native package automatically for local publish flows
 - Skip package publishes that already completed so interrupted releases can be resumed safely
-- Create the git commit and tag, then push both
+- Create package-scoped git tags like `@lzehrung/codegraph-js-fallback@1.8.44`
 
-If a publish is interrupted after the version bump but before commit/tag/push finishes, use `npm run publish:resume` to finish the current version instead of cutting another patch release.
+`npm run release:*` and `npm run publish:*` default to changed packages only. Use `--package root`, `--package native`, `--package js-fallback`, or a full package name to force a specific package.
+
+If a publish is interrupted after version files are bumped, use `npm run publish:resume` to finish the pending package versions instead of cutting another patch release.
 
 For multi-platform releases, stage additional native target artifacts before publish. See [PUBLISHING.md](./PUBLISHING.md) for the detailed release flow.

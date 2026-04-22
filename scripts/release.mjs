@@ -4,7 +4,15 @@ import { spawnSync } from "node:child_process";
 import {
   bumpVersion,
   computePublishPlan,
+  detectChangedReleasePackages,
+  getReleasePackage,
   isAllowedResumePath,
+  releasePackages,
+  restoreNativePackageManifest,
+  sanitizeJsFallbackPackageManifest,
+  selectLatestLegacyTag,
+  selectLatestSemverTag,
+  tagNameForPackageVersion,
   validReleaseTypes,
 } from "./release-lib.mjs";
 
@@ -22,6 +30,7 @@ const jsFallbackPackagePath = path.join(
   "codegraph-js-fallback",
   "package.json",
 );
+const originalNativePackageJson = fs.readFileSync(nativePackagePath, "utf8");
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -69,25 +78,29 @@ function gitOutput(args) {
   return result.stdout.trim();
 }
 
-function ensureCleanWorktree() {
+function getDirtyPaths() {
   const status = gitOutput(["status", "--short"]);
-  if (status) {
+  if (!status) {
+    return [];
+  }
+  return status
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.slice(3).replace(/\\/g, "/"));
+}
+
+function ensureCleanWorktree() {
+  const dirtyPaths = getDirtyPaths();
+  if (dirtyPaths.length > 0) {
     console.error("Release scripts require a clean git worktree.");
     process.exit(1);
   }
 }
 
 function ensureResumableWorktree() {
-  const status = gitOutput(["status", "--short"]);
-  if (!status) {
-    return;
-  }
-  const unexpectedPaths = status
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => line.slice(3))
-    .filter((filePath) => !isAllowedResumePath(filePath));
+  const dirtyPaths = getDirtyPaths();
+  const unexpectedPaths = dirtyPaths.filter((filePath) => !isAllowedResumePath(filePath));
   if (unexpectedPaths.length > 0) {
     console.error(
       `Release resume only supports dirty version files. Unexpected paths: ${unexpectedPaths.join(", ")}`,
@@ -96,24 +109,34 @@ function ensureResumableWorktree() {
   }
 }
 
-function updateVersions(nextVersion) {
+function readCurrentPackageVersions() {
+  return new Map(
+    releasePackages.map((pkg) => [
+      pkg.id,
+      readJson(path.join(rootDir, pkg.manifestPath)).version,
+    ]),
+  );
+}
+
+function normalizeManagedManifests(versionPlan) {
   const rootPackage = readJson(rootPackagePath);
   const nativePackage = readJson(nativePackagePath);
-  const jsFallbackPackage = readJson(jsFallbackPackagePath);
+  const jsFallbackPackage = sanitizeJsFallbackPackageManifest(
+    readJson(jsFallbackPackagePath),
+  );
 
-  rootPackage.version = nextVersion;
-  if (rootPackage.dependencies) {
-    delete rootPackage.dependencies["@lzehrung/codegraph-native"];
+  const rootVersion = versionPlan.get("root");
+  const nativeVersion = versionPlan.get("native");
+  const jsFallbackVersion = versionPlan.get("js-fallback");
+
+  if (rootVersion) {
+    rootPackage.version = rootVersion;
   }
-  if (!rootPackage.optionalDependencies) {
-    rootPackage.optionalDependencies = {};
+  if (nativeVersion) {
+    nativePackage.version = nativeVersion;
   }
-  rootPackage.optionalDependencies["@lzehrung/codegraph-native"] =
-    `^${nextVersion}`;
-  nativePackage.version = nextVersion;
-  jsFallbackPackage.version = nextVersion;
-  if (jsFallbackPackage.dependencies) {
-    delete jsFallbackPackage.dependencies["@lzehrung/codegraph"];
+  if (jsFallbackVersion) {
+    jsFallbackPackage.version = jsFallbackVersion;
   }
 
   writeJson(rootPackagePath, rootPackage);
@@ -121,15 +144,38 @@ function updateVersions(nextVersion) {
   writeJson(jsFallbackPackagePath, jsFallbackPackage);
 }
 
-function restoreNativePackage(version) {
-  const nativePackage = readJson(nativePackagePath);
-  nativePackage.version = version;
-  delete nativePackage.optionalDependencies;
-  writeJson(nativePackagePath, nativePackage);
+function restoreNativePackage(versionPlan) {
+  const intendedVersion = versionPlan.get("native");
+  if (!intendedVersion) {
+    fs.writeFileSync(nativePackagePath, originalNativePackageJson);
+    return;
+  }
+  const sourceManifest = JSON.parse(originalNativePackageJson);
+  writeJson(
+    nativePackagePath,
+    restoreNativePackageManifest(sourceManifest, intendedVersion),
+  );
 }
 
-function doesLocalTagExist(version) {
-  return gitOutput(["tag", "--list", `v${version}`]).length > 0;
+function doesLocalTagExist(tagName) {
+  return gitOutput(["tag", "--list", tagName]).length > 0;
+}
+
+function listTags(pattern) {
+  const output = gitOutput(["tag", "--list", pattern]);
+  return output ? output.split("\n").filter(Boolean) : [];
+}
+
+function getLatestLegacyReleaseTag() {
+  return selectLatestLegacyTag(listTags("v*"));
+}
+
+function getLatestPackageReleaseTag(packageName) {
+  return selectLatestSemverTag(listTags(`${packageName}@*`));
+}
+
+function getBaselineTagForPackage(packageName) {
+  return getLatestPackageReleaseTag(packageName) ?? getLatestLegacyReleaseTag();
 }
 
 function packageExistsInRegistry(packageName, version) {
@@ -142,7 +188,70 @@ function packageExistsInRegistry(packageName, version) {
   return result.status === 0 && result.stdout === version;
 }
 
-function commitAndTag(version) {
+function getChangedPathsSinceRef(refName) {
+  if (!refName) {
+    return [];
+  }
+  const output = gitOutput(["diff", "--name-only", `${refName}..HEAD`]);
+  return output ? output.split("\n").filter(Boolean) : [];
+}
+
+function packageHasOwnedChanges(pkg) {
+  const baselineTag = getBaselineTagForPackage(pkg.name);
+  if (!baselineTag) {
+    return true;
+  }
+  return detectChangedReleasePackages(getChangedPathsSinceRef(baselineTag)).includes(
+    pkg.id,
+  );
+}
+
+function resolveRequestedPackages(packageSelectors) {
+  if (packageSelectors.length === 0) {
+    return [];
+  }
+  const selectedIds = new Set(packageSelectors.map((selector) => getReleasePackage(selector).id));
+  return releasePackages.filter((pkg) => selectedIds.has(pkg.id));
+}
+
+function determineReleasePackages({ shouldResume, requestedPackages }) {
+  if (requestedPackages.length > 0) {
+    return requestedPackages;
+  }
+  if (shouldResume) {
+    const dirtyPaths = getDirtyPaths();
+    const resumedPackageIds = new Set(
+      dirtyPaths
+        .filter((filePath) => filePath !== "package-lock.json")
+        .map((filePath) =>
+          releasePackages.find((pkg) => pkg.manifestPath === filePath)?.id ?? null,
+        )
+        .filter((pkgId) => pkgId),
+    );
+    if (resumedPackageIds.size > 0) {
+      return releasePackages.filter((pkg) => resumedPackageIds.has(pkg.id));
+    }
+    return releasePackages;
+  }
+  return releasePackages.filter((pkg) => packageHasOwnedChanges(pkg));
+}
+
+function planVersions(selectedPackages, currentVersions, { releaseType, shouldResume }) {
+  const versionPlan = new Map();
+  for (const pkg of selectedPackages) {
+    const currentVersion = currentVersions.get(pkg.id);
+    if (!currentVersion) {
+      throw new Error(`Missing current version for ${pkg.name}`);
+    }
+    versionPlan.set(
+      pkg.id,
+      shouldResume ? currentVersion : bumpVersion(currentVersion, releaseType),
+    );
+  }
+  return versionPlan;
+}
+
+function commitAndTag(selectedPackages, versionPlan) {
   run("git", [
     "add",
     "package.json",
@@ -152,20 +261,53 @@ function commitAndTag(version) {
   ]);
   const commitNeeded = runOutput("git", ["diff", "--cached", "--quiet"]).status !== 0;
   if (commitNeeded) {
-    run("git", ["commit", "-m", `v${version}`]);
+    const releaseLabels = selectedPackages.map(
+      (pkg) => `${pkg.name}@${versionPlan.get(pkg.id)}`,
+    );
+    run("git", ["commit", "-m", `release: ${releaseLabels.join(", ")}`]);
   }
-  if (!doesLocalTagExist(version)) {
-    run("git", ["tag", "-a", `v${version}`, "-m", `v${version}`]);
+  for (const pkg of selectedPackages) {
+    const version = versionPlan.get(pkg.id);
+    if (!version) {
+      continue;
+    }
+    const tagName = tagNameForPackageVersion(pkg.name, version);
+    if (!doesLocalTagExist(tagName)) {
+      run("git", ["tag", "-a", tagName, "-m", tagName]);
+    }
   }
 }
 
-const releaseType = process.argv[2];
-const shouldPublish = process.argv.includes("--publish");
+function parseArgs(argv) {
+  const [releaseType, ...rawArgs] = argv;
+  const shouldPublish = rawArgs.includes("--publish");
+  const packageSelectors = [];
+
+  for (let index = 0; index < rawArgs.length; index += 1) {
+    const arg = rawArgs[index];
+    if (arg !== "--package") {
+      continue;
+    }
+    const selector = rawArgs[index + 1];
+    if (!selector) {
+      console.error("Missing package selector after --package");
+      process.exit(1);
+    }
+    packageSelectors.push(selector);
+    index += 1;
+  }
+
+  return { releaseType, shouldPublish, packageSelectors };
+}
+
+const { releaseType, shouldPublish, packageSelectors } = parseArgs(
+  process.argv.slice(2),
+);
 const shouldResume = releaseType === "resume";
 
 if (!shouldResume && !validReleaseTypes.has(releaseType)) {
   console.error(
-    "Usage: node ./scripts/release.mjs <patch|minor|major|resume> [--publish]",
+    "Usage: node ./scripts/release.mjs <patch|minor|major|resume> [--publish] [--package <root|native|js-fallback|package-name>]",
   );
   process.exit(1);
 }
@@ -176,59 +318,64 @@ if (shouldResume) {
   ensureCleanWorktree();
 }
 
-const currentVersion = readJson(rootPackagePath).version;
-const nextVersion = shouldResume
-  ? currentVersion
-  : bumpVersion(currentVersion, releaseType);
+const requestedPackages = resolveRequestedPackages(packageSelectors);
+const currentVersions = readCurrentPackageVersions();
+const selectedPackages = determineReleasePackages({
+  shouldResume,
+  requestedPackages,
+});
 
-if (!shouldResume) {
-  updateVersions(nextVersion);
+if (selectedPackages.length === 0) {
+  console.log("No publishable package changes detected.");
+  process.exit(0);
 }
-run("npm", ["install"]);
+
+const versionPlan = planVersions(selectedPackages, currentVersions, {
+  releaseType,
+  shouldResume,
+});
+
+normalizeManagedManifests(versionPlan);
+run("npm", ["install", "--legacy-peer-deps"]);
+normalizeManagedManifests(versionPlan);
 run("npm", ["run", "test:ci"]);
 run("npm", ["run", "build"]);
 
 if (shouldPublish) {
+  const publishedPackageNames = new Set(
+    selectedPackages
+      .filter((pkg) =>
+        packageExistsInRegistry(pkg.name, versionPlan.get(pkg.id)),
+      )
+      .map((pkg) => pkg.name),
+  );
   const publishPlan = computePublishPlan({
     shouldPublish,
-    publishedRoot: packageExistsInRegistry("@lzehrung/codegraph", nextVersion),
-    publishedNativeMeta: packageExistsInRegistry(
-      "@lzehrung/codegraph-native",
-      nextVersion,
-    ),
-    publishedJsFallback: packageExistsInRegistry(
-      "@lzehrung/codegraph-js-fallback",
-      nextVersion,
-    ),
+    selectedPackageNames: selectedPackages.map((pkg) => pkg.name),
+    publishedPackageNames,
   });
-  if (
-    publishPlan.publishNativeTargets ||
-    publishPlan.publishNativeMeta
-  ) {
+  if (publishPlan.publishNativeTargets) {
     run("npm", ["run", "native:create-npm-dirs"]);
     run("npm", ["run", "native:stage-local"]);
     run("npm", ["run", "native:sync-meta"]);
   }
   try {
-    if (publishPlan.publishNativeTargets) {
+    normalizeManagedManifests(versionPlan);
+    if (publishPlan.publishByPackage["@lzehrung/codegraph-native"]) {
       run("npm", ["run", "publish:native:targets"]);
-    }
-    if (publishPlan.publishNativeMeta) {
       run("npm", ["run", "publish:native:meta"]);
     }
-    if (publishPlan.publishJsFallback) {
-      run("npm", ["publish"], {
-        cwd: path.join(rootDir, "optional-packages", "codegraph-js-fallback"),
-      });
+    if (publishPlan.publishByPackage["@lzehrung/codegraph-js-fallback"]) {
+      run("npm", ["publish", "--workspace=@lzehrung/codegraph-js-fallback"]);
     }
-    if (publishPlan.publishRoot) {
+    if (publishPlan.publishByPackage["@lzehrung/codegraph"]) {
       run("npm", ["publish"]);
     }
   } finally {
-    restoreNativePackage(nextVersion);
+    restoreNativePackage(versionPlan);
   }
 }
 
-commitAndTag(nextVersion);
+commitAndTag(selectedPackages, versionPlan);
 run("git", ["push"]);
 run("git", ["push", "--tags"]);
