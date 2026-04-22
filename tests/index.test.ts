@@ -310,4 +310,66 @@ describe("Project Indexing", () => {
       expect(mixedModule!.exports.length).toBeGreaterThan(0);
     });
   });
+
+  describe("Graph-Only Document Projects", () => {
+    it("keeps graph-only modules semantically inert while preserving imports", async () => {
+      const markdownPath = path.resolve(
+        process.cwd(),
+        "tests",
+        "samples",
+        "markdown",
+      );
+      const mdxPath = path.resolve(process.cwd(), "tests", "samples", "mdx");
+      const rstPath = path.resolve(process.cwd(), "tests", "samples", "rst");
+      const adocPath = path.resolve(process.cwd(), "tests", "samples", "adoc");
+
+      const markdownFile = path.join(markdownPath, "index.md").replace(/\\/g, "/");
+      const mdxFile = path.join(mdxPath, "page.mdx").replace(/\\/g, "/");
+      const rstFile = path.join(rstPath, "index.rst").replace(/\\/g, "/");
+      const adocFile = path.join(adocPath, "index.adoc").replace(/\\/g, "/");
+
+      const markdownIndex = await buildProjectIndexFromFiles(markdownPath, [
+        markdownFile,
+        path.join(markdownPath, "guide.md").replace(/\\/g, "/"),
+      ]);
+      const mdxIndex = await buildProjectIndexFromFiles(mdxPath, [
+        mdxFile,
+        path.join(mdxPath, "guide.md").replace(/\\/g, "/"),
+        path.join(mdxPath, "components", "Card.tsx").replace(/\\/g, "/"),
+      ]);
+      const rstIndex = await buildProjectIndexFromFiles(rstPath, [
+        rstFile,
+        path.join(rstPath, "guide.rst").replace(/\\/g, "/"),
+      ]);
+      const adocIndex = await buildProjectIndexFromFiles(adocPath, [
+        adocFile,
+        path.join(adocPath, "guide.adoc").replace(/\\/g, "/"),
+      ]);
+
+      const markdownModule = markdownIndex.byFile.get(markdownFile);
+      const mdxModule = mdxIndex.byFile.get(mdxFile);
+      const rstModule = rstIndex.byFile.get(rstFile);
+      const adocModule = adocIndex.byFile.get(adocFile);
+
+      expect(markdownModule).toBeDefined();
+      expect(markdownModule!.imports.length).toBeGreaterThan(0);
+      expect(markdownModule!.exports).toHaveLength(0);
+      expect(markdownModule!.locals).toHaveLength(0);
+
+      expect(mdxModule).toBeDefined();
+      expect(mdxModule!.imports.length).toBeGreaterThan(0);
+      expect(mdxModule!.exports).toHaveLength(0);
+      expect(mdxModule!.locals).toHaveLength(0);
+
+      expect(rstModule).toBeDefined();
+      expect(rstModule!.imports.length).toBeGreaterThan(0);
+      expect(rstModule!.exports).toHaveLength(0);
+      expect(rstModule!.locals).toHaveLength(0);
+
+      expect(adocModule).toBeDefined();
+      expect(adocModule!.imports.length).toBeGreaterThan(0);
+      expect(adocModule!.exports).toHaveLength(0);
+      expect(adocModule!.locals).toHaveLength(0);
+    });
+  });
 });
