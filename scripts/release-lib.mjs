@@ -1,11 +1,75 @@
 export const validReleaseTypes = new Set(["patch", "minor", "major"]);
 
+export const releasePackages = [
+  {
+    id: "root",
+    name: "@lzehrung/codegraph",
+    manifestPath: "package.json",
+    publishWorkspace: null,
+    ownedFiles: new Set(["package.json", "README.md", "codegraph.skill"]),
+    ownedPrefixes: ["src/", "codegraph-skill/"],
+  },
+  {
+    id: "native",
+    name: "@lzehrung/codegraph-native",
+    manifestPath: "packages/codegraph-native/package.json",
+    publishWorkspace: "@lzehrung/codegraph-native",
+    ownedFiles: new Set([]),
+    ownedPrefixes: ["packages/codegraph-native/"],
+  },
+  {
+    id: "js-fallback",
+    name: "@lzehrung/codegraph-js-fallback",
+    manifestPath: "optional-packages/codegraph-js-fallback/package.json",
+    publishWorkspace: "@lzehrung/codegraph-js-fallback",
+    ownedFiles: new Set([]),
+    ownedPrefixes: ["optional-packages/codegraph-js-fallback/"],
+  },
+];
+
 export const managedReleasePaths = new Set([
-  "package.json",
   "package-lock.json",
-  "packages/codegraph-native/package.json",
-  "optional-packages/codegraph-js-fallback/package.json",
+  ...releasePackages.map((pkg) => pkg.manifestPath),
 ]);
+
+function compareSemverDescending(left, right) {
+  const leftParts = left.split(".").map(Number);
+  const rightParts = right.split(".").map(Number);
+  const maxLength = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < maxLength; index += 1) {
+    const leftPart = leftParts[index] ?? 0;
+    const rightPart = rightParts[index] ?? 0;
+    if (leftPart === rightPart) {
+      continue;
+    }
+    return rightPart - leftPart;
+  }
+  return 0;
+}
+
+function normalizeFilePath(filePath) {
+  return filePath.replace(/\\/g, "/");
+}
+
+function packageOwnsPath(pkg, filePath) {
+  const normalizedPath = normalizeFilePath(filePath);
+  if (pkg.ownedFiles.has(normalizedPath)) {
+    return true;
+  }
+  return pkg.ownedPrefixes.some((prefix) => normalizedPath.startsWith(prefix));
+}
+
+function parsePackageTagVersion(tagName) {
+  const versionSeparator = tagName.lastIndexOf("@");
+  if (versionSeparator <= 0) {
+    return null;
+  }
+  return tagName.slice(versionSeparator + 1);
+}
+
+function isSemverLike(version) {
+  return /^\d+\.\d+\.\d+$/.test(version);
+}
 
 export function bumpVersion(version, releaseType) {
   const match = version.match(/^(\d+)\.(\d+)\.(\d+)$/);
@@ -21,29 +85,99 @@ export function bumpVersion(version, releaseType) {
 }
 
 export function isAllowedResumePath(filePath) {
-  return managedReleasePaths.has(filePath);
+  return managedReleasePaths.has(normalizeFilePath(filePath));
+}
+
+export function getReleasePackage(selector) {
+  const normalizedSelector = selector.trim();
+  const match = releasePackages.find(
+    (pkg) => pkg.id === normalizedSelector || pkg.name === normalizedSelector,
+  );
+  if (!match) {
+    const knownSelectors = releasePackages
+      .flatMap((pkg) => [pkg.id, pkg.name])
+      .join(", ");
+    throw new Error(
+      `Unknown release package selector: ${selector}. Use one of: ${knownSelectors}`,
+    );
+  }
+  return match;
+}
+
+export function detectChangedReleasePackages(changedPaths) {
+  const matchedPackages = new Set();
+  for (const changedPath of changedPaths) {
+    const match = releasePackages.find((pkg) =>
+      packageOwnsPath(pkg, changedPath),
+    );
+    if (match) {
+      matchedPackages.add(match.id);
+    }
+  }
+  return releasePackages
+    .map((pkg) => pkg.id)
+    .filter((pkgId) => matchedPackages.has(pkgId));
+}
+
+export function selectLatestSemverTag(tagNames) {
+  const semverTags = tagNames
+    .map((tagName) => ({ tagName, version: parsePackageTagVersion(tagName) }))
+    .filter((entry) => entry.version && isSemverLike(entry.version))
+    .sort((left, right) =>
+      compareSemverDescending(left.version ?? "0.0.0", right.version ?? "0.0.0"),
+    );
+  return semverTags[0]?.tagName ?? null;
+}
+
+export function selectLatestLegacyTag(tagNames) {
+  const legacyTags = tagNames
+    .map((tagName) => ({ tagName, version: tagName.startsWith("v") ? tagName.slice(1) : null }))
+    .filter((entry) => entry.version && isSemverLike(entry.version))
+    .sort((left, right) =>
+      compareSemverDescending(left.version ?? "0.0.0", right.version ?? "0.0.0"),
+    );
+  return legacyTags[0]?.tagName ?? null;
+}
+
+export function tagNameForPackageVersion(packageName, version) {
+  return `${packageName}@${version}`;
 }
 
 export function computePublishPlan({
   shouldPublish,
-  publishedRoot,
-  publishedNativeMeta,
-  publishedJsFallback,
+  selectedPackageNames,
+  publishedPackageNames,
 }) {
-  if (!shouldPublish) {
-    return {
-      publishNativeTargets: false,
-      publishNativeMeta: false,
-      publishJsFallback: false,
-      publishRoot: false,
-    };
-  }
-
-  const publishNativeMeta = !publishedNativeMeta;
+  const publishByPackage = Object.fromEntries(
+    selectedPackageNames.map((packageName) => [
+      packageName,
+      shouldPublish && !publishedPackageNames.has(packageName),
+    ]),
+  );
   return {
-    publishNativeTargets: publishNativeMeta,
-    publishNativeMeta,
-    publishJsFallback: !publishedJsFallback,
-    publishRoot: !publishedRoot,
+    publishByPackage,
+    publishNativeTargets:
+      publishByPackage["@lzehrung/codegraph-native"] ?? false,
+  };
+}
+
+export function sanitizeJsFallbackPackageManifest(pkg) {
+  const normalized = { ...pkg };
+  if (
+    normalized.dependencies &&
+    typeof normalized.dependencies === "object" &&
+    !Array.isArray(normalized.dependencies)
+  ) {
+    const dependencies = { ...normalized.dependencies };
+    delete dependencies["@lzehrung/codegraph"];
+    normalized.dependencies = dependencies;
+  }
+  return normalized;
+}
+
+export function restoreNativePackageManifest(pkg, version) {
+  return {
+    ...pkg,
+    version,
   };
 }

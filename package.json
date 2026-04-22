@@ -21,14 +21,14 @@
   ],
   "scripts": {
     "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\"",
-    "fallback:install": "npm install --prefix optional-packages/codegraph-js-fallback --no-package-lock --legacy-peer-deps",
+    "fallback:install": "npm install --workspace=@lzehrung/codegraph-js-fallback --legacy-peer-deps",
     "build": "npm run clean && tsc -p tsconfig.json && node ./scripts/build-native-if-available.mjs",
     "format": "prettier --write ./src",
     "lint": "npx eslint ./src --fix",
     "prepare": "npm run build",
     "test": "vitest",
     "test:all": "npm run test:native && npm run test:ci",
-    "test:ci": "npm run fallback:install && vitest run",
+    "test:ci": "vitest run",
     "test:native": "cargo test --manifest-path packages/codegraph-native/Cargo.toml",
     "bench:native": "node ./scripts/bench-native.mjs",
     "bench:native:smoke": "node ./scripts/bench-native.mjs --runs 1 --fixtures typescript,python,go,rust,mixed --workloads full --temperatures cold --max-slowdown 4",
@@ -70,7 +70,8 @@
     "node": ">=18"
   },
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "optional-packages/*"
   ],
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
@@ -94,6 +95,7 @@
   "devDependencies": {
     "@eslint/js": "^9.39.2",
     "@napi-rs/cli": "^3.5.1",
+    "@opencode-ai/plugin": "1.1.36",
     "@types/better-sqlite3": "^7.6.13",
     "@types/jsdom": "^28.0.1",
     "@types/node": "^24.7.2",
