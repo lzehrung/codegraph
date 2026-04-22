@@ -73,4 +73,16 @@ describe("package metadata", () => {
     expect(dependencies["tree-sitter-typescript"]).toBeDefined();
     expect(dependencies["tree-sitter-vue"]).toBeDefined();
   });
+
+  it("does not publish local file dependencies in the JS fallback package", () => {
+    const fallbackPackage = readJson(
+      "optional-packages/codegraph-js-fallback/package.json",
+    );
+    const dependencies = readStringRecord(fallbackPackage.dependencies);
+
+    expect(
+      Object.values(dependencies).some((version) => version.startsWith("file:")),
+    ).toBe(false);
+    expect(dependencies["@lzehrung/codegraph"]).toBeUndefined();
+  });
 });
