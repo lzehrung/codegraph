@@ -21,6 +21,9 @@ describe("release script helpers", () => {
 
   it("allows resume only for managed release files", () => {
     expect(isAllowedResumePath("package.json")).toBe(true);
+    expect(isAllowedResumePath("scripts/release-lib.mjs")).toBe(true);
+    expect(isAllowedResumePath("scripts/release.mjs")).toBe(true);
+    expect(isAllowedResumePath("tests/release-script.test.ts")).toBe(true);
     expect(
       isAllowedResumePath("optional-packages/codegraph-js-fallback/package.json"),
     ).toBe(true);
