@@ -1,6 +1,6 @@
 {
   "name": "@lzehrung/codegraph-js-fallback",
-  "version": "1.8.41",
+  "version": "1.8.42",
   "main": "./js-fallback.cjs",
   "types": "./js-fallback.d.ts",
   "exports": {
