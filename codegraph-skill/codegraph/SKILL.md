@@ -166,5 +166,3 @@ const definition = await tool_goToDefinition(
 - Use `--json` when you need machine-readable output.
 - Use `--fast-graph` for first-pass exploration on large repos, then rerun without it when accuracy matters.
 - Prefer `refs` over plain text search when you want semantic usages.
-- If running from a source checkout, `npm run build` is the simplest way to enable the native path locally when Rust is installed.
-- If a release publish is interrupted after version files are bumped, use `npm run publish:resume` to finish that version instead of cutting another patch release.
