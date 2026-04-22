@@ -239,6 +239,26 @@ describe("Import Resolution", () => {
     }
   });
 
+  it("preserves authored graph-only specifiers for unresolved index imports", async () => {
+    const root = await mkTmpDir("dg-resolve-graph-only-unresolved-");
+    const pageFile = path.join(root, "page.md");
+
+    await fsp.writeFile(pageFile, "[Raw HTML](raw.html#section)\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const index = await buildProjectIndex(root);
+    const pageModule = index.byFile.get(normalizedPage);
+    const rawImport = pageModule?.imports[0];
+
+    expect(pageModule).toBeDefined();
+    expect(rawImport).toBeDefined();
+    expect(rawImport?.from).toBe("raw.html#section");
+    expect(typeof rawImport?.resolved).toBe("object");
+    if (rawImport?.resolved && typeof rawImport.resolved !== "string") {
+      expect(rawImport.resolved.external).toBe("raw.html#section");
+    }
+  });
+
   it("resolves tsconfig path aliases for mdx static imports", async () => {
     const root = await mkTmpDir("dg-resolve-mdx-alias-");
     const componentFile = path.join(root, "src", "components", "Card.tsx");

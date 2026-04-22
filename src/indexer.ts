@@ -2548,12 +2548,13 @@ export async function collectImportsForFile(
           `Missing graph-only resolution result for ${resolvedSup.id}:${entry.spec}`,
         );
       }
+      const from = entry.raw ?? entry.spec;
       return {
         kind: "star",
-        from: entry.raw ?? entry.spec,
+        from,
         ...(typeof resolved === "string"
           ? { resolved: resolved.replace(/\\/g, "/") }
-          : { resolved }),
+          : { resolved: { ...resolved, external: from } }),
       };
     });
   }
