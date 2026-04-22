@@ -52,6 +52,18 @@ function run(command, args, options = {}) {
   }
 }
 
+function runGit(args, options = {}) {
+  const result = spawnSync("git", args, {
+    cwd: rootDir,
+    stdio: "inherit",
+    shell: false,
+    ...options,
+  });
+  if (result.status !== 0) {
+    process.exit(result.status ?? 1);
+  }
+}
+
 function runOutput(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: rootDir,
@@ -70,7 +82,7 @@ function gitOutput(args) {
   const result = spawnSync("git", args, {
     cwd: rootDir,
     encoding: "utf8",
-    shell: process.platform === "win32",
+    shell: false,
   });
   if (result.status !== 0) {
     process.exit(result.status ?? 1);
@@ -85,8 +97,7 @@ function getDirtyPaths() {
   }
   return status
     .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
+    .filter((line) => line.trim().length > 0)
     .map((line) => line.slice(3).replace(/\\/g, "/"));
 }
 
@@ -252,19 +263,22 @@ function planVersions(selectedPackages, currentVersions, { releaseType, shouldRe
 }
 
 function commitAndTag(selectedPackages, versionPlan) {
-  run("git", [
+  runGit([
     "add",
     "package.json",
     "package-lock.json",
     "packages/codegraph-native/package.json",
     "optional-packages/codegraph-js-fallback/package.json",
   ]);
-  const commitNeeded = runOutput("git", ["diff", "--cached", "--quiet"]).status !== 0;
+  const commitNeeded = spawnSync("git", ["diff", "--cached", "--quiet"], {
+    cwd: rootDir,
+    shell: false,
+  }).status !== 0;
   if (commitNeeded) {
     const releaseLabels = selectedPackages.map(
       (pkg) => `${pkg.name}@${versionPlan.get(pkg.id)}`,
     );
-    run("git", ["commit", "-m", `release: ${releaseLabels.join(", ")}`]);
+    runGit(["commit", "-m", `release: ${releaseLabels.join(", ")}`]);
   }
   for (const pkg of selectedPackages) {
     const version = versionPlan.get(pkg.id);
@@ -273,7 +287,7 @@ function commitAndTag(selectedPackages, versionPlan) {
     }
     const tagName = tagNameForPackageVersion(pkg.name, version);
     if (!doesLocalTagExist(tagName)) {
-      run("git", ["tag", "-a", tagName, "-m", tagName]);
+      runGit(["tag", "-a", tagName, "-m", tagName]);
     }
   }
 }
@@ -377,5 +391,5 @@ if (shouldPublish) {
 }
 
 commitAndTag(selectedPackages, versionPlan);
-run("git", ["push"]);
-run("git", ["push", "--tags"]);
+runGit(["push"]);
+runGit(["push", "--tags"]);

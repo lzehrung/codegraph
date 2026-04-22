@@ -29,6 +29,9 @@ export const releasePackages = [
 
 export const managedReleasePaths = new Set([
   "package-lock.json",
+  "scripts/release-lib.mjs",
+  "scripts/release.mjs",
+  "tests/release-script.test.ts",
   ...releasePackages.map((pkg) => pkg.manifestPath),
 ]);
 
