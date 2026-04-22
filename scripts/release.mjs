@@ -112,6 +112,9 @@ function updateVersions(nextVersion) {
     `^${nextVersion}`;
   nativePackage.version = nextVersion;
   jsFallbackPackage.version = nextVersion;
+  if (jsFallbackPackage.dependencies) {
+    delete jsFallbackPackage.dependencies["@lzehrung/codegraph"];
+  }
 
   writeJson(rootPackagePath, rootPackage);
   writeJson(nativePackagePath, nativePackage);

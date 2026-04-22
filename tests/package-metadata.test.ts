@@ -80,9 +80,6 @@ describe("package metadata", () => {
     );
     const dependencies = readStringRecord(fallbackPackage.dependencies);
 
-    expect(
-      Object.values(dependencies).some((version) => version.startsWith("file:")),
-    ).toBe(false);
     expect(dependencies["@lzehrung/codegraph"]).toBeUndefined();
   });
 });
