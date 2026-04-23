@@ -40,4 +40,47 @@ describe("logging behavior", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("records config hash read failures without bypassing logLevel", async () => {
+    const root = await mkTmpDir("dg-logging-config-hash-");
+    const gitignorePath = path.join(root, ".gitignore");
+    await fsp.writeFile(gitignorePath, "dist/\n", "utf8");
+    await fsp.writeFile(
+      path.join(root, "a.ts"),
+      "export const a = 1;\n",
+      "utf8",
+    );
+
+    const originalReadFile = fsp.readFile.bind(fsp);
+    const readSpy = vi
+      .spyOn(fsp, "readFile")
+      .mockImplementation(async (filePath, options) => {
+        if (String(filePath).endsWith(".gitignore")) {
+          throw new Error("mocked config hash read failure");
+        }
+        return await originalReadFile(filePath, options as never);
+      });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+
+    try {
+      const report: BuildReport = { timings: {} };
+      await buildProjectIndex(root, {
+        logLevel: "silent",
+        report,
+      });
+
+      expect(warnSpy).not.toHaveBeenCalled();
+      expect(debugSpy).not.toHaveBeenCalled();
+      expect(report.manifest?.configHashError).toContain(".gitignore");
+      expect(report.manifest?.configHashError).toContain(
+        "mocked config hash read failure",
+      );
+    } finally {
+      debugSpy.mockRestore();
+      warnSpy.mockRestore();
+      readSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

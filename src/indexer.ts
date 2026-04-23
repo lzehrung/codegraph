@@ -387,6 +387,7 @@ export type ManifestReport = {
   mismatches?: number;
   missing?: number;
   optionsMismatch?: string[];
+  configHashError?: string;
 };
 
 export type NativeBackendFallbackReason =
@@ -1003,7 +1004,15 @@ type IndexManifest = {
   files: Record<string, ManifestFileEntry>;
 };
 
-async function computeConfigHash(projectRoot: string): Promise<string> {
+type ConfigHashResult = {
+  hash: string;
+  error?: string;
+};
+
+async function computeConfigHash(
+  projectRoot: string,
+  logLevel?: LogLevel,
+): Promise<ConfigHashResult> {
   try {
     const configFiles = await fg(
       [...DEFAULT_PROJECT_MANIFESTS, "**/.gitignore"],
@@ -1024,6 +1033,7 @@ async function computeConfigHash(projectRoot: string): Promise<string> {
     );
     configFiles.sort();
     const hash = crypto.createHash("sha1");
+    let firstError: string | undefined;
     for (const file of configFiles) {
       try {
         const content = await fsp.readFile(file, "utf8");
@@ -1031,16 +1041,45 @@ async function computeConfigHash(projectRoot: string): Promise<string> {
         hash.update(rel);
         hash.update(content);
       } catch (err) {
-        console.debug(
-          `computeConfigHash: failed to read config file "${file}":`,
-          err,
+        const message = `Failed to read config file "${file}": ${stringifyUnknown(err)}`;
+        if (!firstError) {
+          firstError = message;
+        }
+        logWithLevel(
+          logLevel,
+          "debug",
+          "computeConfigHash:",
+          message,
         );
       }
     }
-    return hash.digest("hex");
-  } catch {
-    return "";
+    return {
+      hash: hash.digest("hex"),
+      ...(firstError ? { error: firstError } : {}),
+    };
+  } catch (error) {
+    return {
+      hash: "",
+      error: `Failed to enumerate config files: ${stringifyUnknown(error)}`,
+    };
   }
+}
+
+function recordConfigHashResult(
+  manifestReport: ManifestReport | undefined,
+  configHashResult: ConfigHashResult,
+  logLevel: LogLevel | undefined,
+): string {
+  if (!configHashResult.error) return configHashResult.hash;
+  if (manifestReport) {
+    manifestReport.configHashError = configHashResult.error;
+  }
+  logWithLevel(
+    logLevel,
+    "warn",
+    `Warning: ${configHashResult.error}`,
+  );
+  return configHashResult.hash;
 }
 
 function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
@@ -4217,7 +4256,12 @@ async function buildIndexFromFileListShared(
     if (manifestEntries && manifestEntries.size > 0) {
       const writeManifestStart = performance.now();
       const lastCommit = await getGitHead(projectRoot);
-      const configHash = await computeConfigHash(projectRoot);
+      const configHashResult = await computeConfigHash(projectRoot, opts?.logLevel);
+      const configHash = recordConfigHashResult(
+        report?.manifest,
+        configHashResult,
+        opts?.logLevel,
+      );
       const manifestData: IndexManifest = {
         version: MANIFEST_VERSION,
         projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
@@ -4349,7 +4393,15 @@ export async function buildProjectIndexIncremental(
     }
 
     // Check config hash
-    const currentConfigHash = await computeConfigHash(projectRoot);
+    const currentConfigHashResult = await computeConfigHash(
+      projectRoot,
+      opts?.logLevel,
+    );
+    const currentConfigHash = recordConfigHashResult(
+      manifestReport,
+      currentConfigHashResult,
+      opts?.logLevel,
+    );
     const configChanged =
       !!currentConfigHash &&
       (!manifest?.configHash || currentConfigHash !== manifest.configHash);
@@ -4468,7 +4520,12 @@ export async function buildProjectIndexIncremental(
     if (allFiles.size === 0) {
       const writeManifestStart = performance.now();
       const lastCommit = await getGitHead(projectRoot);
-      const configHash = await computeConfigHash(projectRoot);
+      const configHashResult = await computeConfigHash(projectRoot, opts?.logLevel);
+      const configHash = recordConfigHashResult(
+        manifestReport,
+        configHashResult,
+        opts?.logLevel,
+      );
       const manifestData: IndexManifest = {
         version: MANIFEST_VERSION,
         projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
