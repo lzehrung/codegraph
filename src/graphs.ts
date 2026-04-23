@@ -881,6 +881,7 @@ export async function collectGraph(
     report?: BuildReport;
     baseGraph?: Graph;
     replaceFiles?: Set<string>;
+    logLevel?: LogLevel;
   },
 ): Promise<Graph> {
   const normalizePath = (file: string) => file.replace(/\\/g, "/");

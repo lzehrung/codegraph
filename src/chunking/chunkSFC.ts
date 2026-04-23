@@ -1,7 +1,6 @@
 import type { Chunk } from "./chunkFile.js";
 import { chunkFile } from "./chunkFile.js";
 import { chunkTextFile } from "./chunkTextFile.js";
-import type { TextChunkOptions } from "./chunkTextFile.js";
 import { LANG_CONFIGS } from "../bootstrap/treeSitterLanguages.js";
 import {
   parseSFC,
@@ -48,7 +47,6 @@ export function chunkSFCFile(opts: ChunkSFCOptions): Chunk[] {
       minTokens,
       maxTokens,
       tokenizer,
-      logLevel,
     });
   }
 
@@ -66,6 +64,7 @@ export function chunkSFCFile(opts: ChunkSFCOptions): Chunk[] {
       minTokens,
       maxTokens,
       tokenizer,
+      ...(logLevel ? { logLevel } : {}),
     });
     for (const chunk of blockChunks) {
       chunk.id = makeChunkId();
@@ -178,6 +177,6 @@ function chunkTextBlock(
     minTokens,
     maxTokens,
     tokenizer,
-  } as TextChunkOptions);
+  });
   return textChunks;
 }

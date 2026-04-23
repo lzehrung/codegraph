@@ -1638,6 +1638,7 @@ export function collectLocalsAndExportsFromSource(
     tree?: SyntaxTreeLike;
     nativeQueries?: NativeQueryResults | null;
     nativeMode?: NativeRuntimeMode;
+    logLevel?: LogLevel;
   },
 ): ModuleIndex {
   if (isGraphOnlyLanguage(support.id)) {
@@ -2500,6 +2501,7 @@ export async function collectImportsForFile(
     lang?: JsLanguage;
     nativeQueries?: NativeQueryResults | null;
     graphOptions?: GraphBuildOptions;
+    logLevel?: LogLevel;
   },
 ): Promise<ImportBinding[]> {
   let source = opts?.source;
@@ -4217,7 +4219,7 @@ async function buildIndexFromFileListShared(
 
     if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
     const projectFiles = await discoverProjectFiles(projectRoot, {
-      logLevel: opts?.logLevel,
+      ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
     });
 
     const keepParsed = opts?.keepParsed ?? false;
@@ -4828,7 +4830,7 @@ export async function buildProjectIndexIncremental(
 
       if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
       const projectFiles = await discoverProjectFiles(projectRoot, {
-        logLevel: opts?.logLevel,
+        ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
       });
 
       const keepParsed = opts?.keepParsed ?? false;

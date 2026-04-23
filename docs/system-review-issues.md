@@ -20,4 +20,4 @@
   Acceptance criteria:
   when worker startup fails, callers can determine why from the structured build report instead of seeing a silent fallback.
 
-- [ ] Do a final review pass after fixes and capture any remaining risks or improvement opportunities.
+- [x] Do a final review pass after fixes and capture any remaining risks or improvement opportunities.
