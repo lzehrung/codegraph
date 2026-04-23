@@ -100,18 +100,22 @@ function resolveSessionIdentity(options: SessionOptions): SessionIdentity {
     const buildOptions = options.buildOptions
       ? mergePreset(presetOpts.buildOptions ?? {}, options.buildOptions)
       : presetOpts.buildOptions;
+    const normalizedBuildOptions = normalizeBuildOptions(buildOptions);
     return {
       root: path.resolve(options.root),
       timeout: options.timeout ?? presetOpts.timeout ?? 30 * 60 * 1000,
       incremental: options.incremental ?? presetOpts.incremental ?? true,
-      buildOptions: normalizeBuildOptions(buildOptions),
+      ...(normalizedBuildOptions
+        ? { buildOptions: normalizedBuildOptions }
+        : {}),
     };
   }
+  const normalizedBuildOptions = normalizeBuildOptions(options.buildOptions);
   return {
     root: path.resolve(options.root),
     timeout: options.timeout ?? 30 * 60 * 1000,
     incremental: options.incremental ?? true,
-    buildOptions: normalizeBuildOptions(options.buildOptions),
+    ...(normalizedBuildOptions ? { buildOptions: normalizedBuildOptions } : {}),
   };
 }
 

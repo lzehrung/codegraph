@@ -2973,13 +2973,13 @@ export async function resolvePythonModule(
   for (const c of candidates) {
     try {
       if (await isDirectory(c)) {
-        const res = path.resolve(c);
+        const res = normalizePath(path.resolve(c));
         resolvePythonModuleCache.set(cacheKey, res);
         return res;
       }
       await fsp.access(c, fs.constants.R_OK);
       {
-        const res = path.resolve(c);
+        const res = normalizePath(path.resolve(c));
         resolvePythonModuleCache.set(cacheKey, res);
         return res;
       }
@@ -3014,13 +3014,13 @@ export async function resolvePythonModule(
     for (const c of anchorCandidates) {
       try {
         if (await isDirectory(c)) {
-          const res = path.resolve(c);
+          const res = normalizePath(path.resolve(c));
           resolvePythonModuleCache.set(cacheKey, res);
           return res;
         }
         await fsp.access(c, fs.constants.R_OK);
         {
-          const res = path.resolve(c);
+          const res = normalizePath(path.resolve(c));
           resolvePythonModuleCache.set(cacheKey, res);
           return res;
         }
@@ -3037,7 +3037,7 @@ export async function resolvePythonModule(
   return ext;
 }
 
-export function clearResolutionCaches(): void {
+export function clearImportResolutionCaches(): void {
   kotlinImportResolutionCache.clear();
   kotlinSymbolIndexCache.clear();
   kotlinProjectSymbolIndexCache.clear();
@@ -3047,6 +3047,10 @@ export function clearResolutionCaches(): void {
   fileExistsCache.clear();
   resolveSpecifierCache.clear();
   resolvePythonModuleCache.clear();
+}
+
+export function clearResolutionCaches(): void {
+  clearImportResolutionCaches();
   tsconfigCache.clear();
   workspaceCache.clear();
 }

@@ -45,7 +45,7 @@ import {
   isGitRepo,
   getGitBlobHashes,
   listChangedFiles,
-  clearResolutionCaches,
+  clearImportResolutionCaches,
   mapLimit,
   stringifyUnknown,
   type ProjectFileDiscoveryOptions,
@@ -3783,7 +3783,7 @@ async function buildIndexFromFileListShared(
   opts?: BuildOptions,
   helperOpts?: BuildIndexHelperOptions,
 ): Promise<ProjectIndex> {
-  clearResolutionCaches();
+  clearImportResolutionCaches();
   const report = opts?.report;
   const timings = report?.timings;
   const totalStart = performance.now();
@@ -4351,7 +4351,7 @@ export async function buildProjectIndexIncremental(
   projectRoot: string,
   opts?: IncrementalBuildOptions,
 ): Promise<ProjectIndex> {
-  clearResolutionCaches();
+  clearImportResolutionCaches();
   const report = opts?.report;
   initNativeBackendReport(report);
   const timings = report?.timings;
@@ -4927,7 +4927,15 @@ export async function buildProjectIndexIncremental(
       if (manifestEntries.size > 0) {
         const writeManifestStart = performance.now();
         const lastCommit = await getGitHead(projectRoot);
-        const configHash = await computeConfigHash(projectRoot);
+        const configHashResult = await computeConfigHash(
+          projectRoot,
+          opts?.logLevel,
+        );
+        const configHash = recordConfigHashResult(
+          manifestReport,
+          configHashResult,
+          opts?.logLevel,
+        );
         const manifestData: IndexManifest = {
           version: MANIFEST_VERSION,
           projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
@@ -6506,10 +6514,18 @@ export async function findReferences(
     fileId: string,
     symbolName: string,
     expectedDef: SymbolDef,
+    maxVerified?: number,
   ): Promise<Range[]> => {
     const matches = await collectNamedNodeReferences(fileId, symbolName);
     const verified: Range[] = [];
     for (const range of matches) {
+      if (
+        maxVerified !== undefined &&
+        maxVerified > 0 &&
+        verified.length >= maxVerified
+      ) {
+        break;
+      }
       const resolved = await goToDefinition(index, {
         file: fileId,
         line: range.start.line,
@@ -6554,6 +6570,18 @@ export async function findReferences(
     if (!hasDirectImport) return [];
     return Array.from(names);
   };
+  const hasExpandedNamedImport = (
+    module: ModuleIndex,
+    targetFile: string,
+    symbolName: string,
+  ): boolean =>
+    module.imports.some(
+      (candidate) =>
+        candidate.kind === "named" &&
+        candidate.local === symbolName &&
+        candidate.imported === symbolName &&
+        candidate.resolved === targetFile,
+    );
 
   // Use bloom filters to pre-filter files that might contain references
   let candidateFiles = Array.from(index.byFile.keys()).filter(
@@ -6624,10 +6652,18 @@ export async function findReferences(
             const matchesDef =
               !!res && !("namespace" in res) && sameDef(res, def);
             if (!matchesDef) continue;
+            if (hasExpandedNamedImport(m, targetFile, name)) {
+              continue;
+            }
+            const remainingReferences =
+              maxReferences !== undefined
+                ? Math.max(0, maxReferences - refs.length)
+                : undefined;
             const ranges = await collectVerifiedNamedNodeReferences(
               f,
               name,
               def,
+              remainingReferences,
             );
             for (const range of ranges) {
               if (hasReachedMaxReferences()) break;

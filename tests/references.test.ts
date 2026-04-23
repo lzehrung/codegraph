@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fsp from 'node:fs/promises';
+import * as indexer from '../src/indexer.js';
 import { createTestIndex, createTestIndexFromFiles, testFindReferences, createTestIndexFromPath } from './test-utils.js';
 
 function expectReferenceAt(
@@ -176,6 +177,54 @@ describe('Find References', () => {
       expect(barRefs.status).toBe('ok');
       if (barRefs.status === 'ok') {
         expectReferenceAt(barRefs, normalizedMain, 4);
+      }
+    });
+
+    it('should avoid semantic fallback work for expanded wildcard imports', async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-py-star-expanded-'));
+      const utilFile = path.join(root, 'util.py');
+      const mainFile = path.join(root, 'main.py');
+      await fsp.writeFile(
+        utilFile,
+        ['foo = 1', ''].join('\n'),
+        'utf8',
+      );
+      await fsp.writeFile(
+        mainFile,
+        [
+          'from util import *',
+          'print(foo)',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+
+      const index = await createTestIndexFromPath(root);
+      const normalizedUtil = utilFile.replace(/\\/g, '/');
+      const utilModule = index.byFile.get(normalizedUtil);
+      const fooDef = utilModule?.locals.find((local) => local.localName === 'foo');
+
+      expect(fooDef).toBeDefined();
+      if (!fooDef) {
+        throw new Error('Expected foo definition to exist');
+      }
+
+      const goToDefinitionSpy = vi.spyOn(indexer, 'goToDefinition');
+      try {
+        const result = await indexer.findReferences(
+          index,
+          { def: fooDef },
+          { maxReferences: 2 },
+        );
+
+        expect(result.status).toBe('ok');
+        if (result.status === 'ok') {
+          expect(result.references).toHaveLength(2);
+          expectReferenceAt(result, mainFile.replace(/\\/g, '/'), 2);
+        }
+        expect(goToDefinitionSpy).not.toHaveBeenCalled();
+      } finally {
+        goToDefinitionSpy.mockRestore();
       }
     });
   });
