@@ -6,7 +6,14 @@ export const releasePackages = [
     name: "@lzehrung/codegraph",
     manifestPath: "package.json",
     publishWorkspace: null,
-    ownedFiles: new Set(["package.json", "README.md", "codegraph.skill"]),
+    ownedFiles: new Set([
+      "package.json",
+      "README.md",
+      "codegraph.skill",
+      "scripts/release-lib.mjs",
+      "scripts/release.mjs",
+      "tests/release-script.test.ts",
+    ]),
     ownedPrefixes: ["src/", "codegraph-skill/"],
   },
   {
