@@ -12,7 +12,7 @@
   Acceptance criteria:
   Library code does not emit uncontrolled `console.warn` noise on normal paths when `logLevel: "silent"` is requested, and important degradations remain observable through reports or explicit error surfaces.
 
-- [ ] Fail explicitly on invalid project roots and discovery failures instead of returning silent empty indexes.
+- [x] Fail explicitly on invalid project roots and discovery failures instead of returning silent empty indexes.
   Acceptance criteria:
   invalid or unreadable roots raise actionable errors, while legitimate empty projects remain distinguishable from discovery failures.
 

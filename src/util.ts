@@ -301,28 +301,49 @@ function isIgnoredByGitignore(
   return ignored;
 }
 
+async function ensureDirectoryReadable(
+  directoryPath: string,
+  label: string,
+): Promise<string> {
+  const resolvedPath = path.resolve(directoryPath);
+  let stats: fs.Stats;
+  try {
+    stats = await fsp.stat(resolvedPath);
+  } catch (error) {
+    throw new Error(
+      `${label} does not exist or is not readable: ${resolvedPath} (${stringifyUnknown(error)})`,
+    );
+  }
+  if (!stats.isDirectory()) {
+    throw new Error(`${label} is not a directory: ${resolvedPath}`);
+  }
+  return resolvedPath;
+}
+
 export async function listProjectFiles(
   projectRoot: string,
   patterns = DEFAULT_PROJECT_PATTERNS,
   options?: ProjectFileDiscoveryOptions,
 ): Promise<string[]> {
+  const root = await ensureDirectoryReadable(projectRoot, "Project root");
+  const includeMatchers = (options?.includeGlobs ?? [])
+    .map(normalizeGlobPattern)
+    .filter(Boolean)
+    .map((globPattern) => picomatch(globPattern, { dot: true }));
+  const userIgnoreGlobs = (options?.ignoreGlobs ?? [])
+    .map(normalizeGlobPattern)
+    .filter(Boolean);
+  const gitignoreRoot = options?.gitignoreRoot
+    ? await ensureDirectoryReadable(options.gitignoreRoot, "Gitignore root")
+    : root;
+
   try {
-    const includeMatchers = (options?.includeGlobs ?? [])
-      .map(normalizeGlobPattern)
-      .filter(Boolean)
-      .map((globPattern) => picomatch(globPattern, { dot: true }));
-    const userIgnoreGlobs = (options?.ignoreGlobs ?? [])
-      .map(normalizeGlobPattern)
-      .filter(Boolean);
-    const gitignoreRoot = options?.gitignoreRoot
-      ? path.resolve(options.gitignoreRoot)
-      : projectRoot;
     const gitignoreRules =
       options?.useGitignore === false
         ? []
         : await loadGitignoreRules(gitignoreRoot);
     const files = await fg(patterns, {
-      cwd: projectRoot,
+      cwd: root,
       absolute: true,
       dot: true,
       ignore: [...DEFAULT_PROJECT_FILE_IGNORES, ...userIgnoreGlobs],
@@ -331,7 +352,7 @@ export async function listProjectFiles(
       if (
         includeMatchers.length > 0 &&
         !includeMatchers.some((matcher) =>
-          matchesDiscoveryGlob(filePath, projectRoot, matcher),
+          matchesDiscoveryGlob(filePath, root, matcher),
         )
       ) {
         return false;
@@ -339,13 +360,9 @@ export async function listProjectFiles(
       return !isIgnoredByGitignore(filePath, gitignoreRules);
     });
   } catch (error) {
-    logWithLevel(
-      options?.logLevel,
-      "warn",
-      `Warning: Failed to list files in ${projectRoot}:`,
-      error,
+    throw new Error(
+      `Failed to list files in ${root}: ${stringifyUnknown(error)}`,
     );
-    return [];
   }
 }
 
@@ -858,8 +875,9 @@ export async function discoverProjectFiles(
   projectRoot: string,
   options?: { logLevel?: LogLevel },
 ): Promise<ProjectFileInfo[]> {
+  void options;
+  const root = await ensureDirectoryReadable(projectRoot, "Project root");
   try {
-    const root = path.resolve(projectRoot);
     const allPatterns = PROJECT_FILE_DEFINITIONS.flatMap((def) =>
       def.patterns.map(toProjectGlob),
     );
@@ -913,13 +931,9 @@ export async function discoverProjectFiles(
       return a.path.localeCompare(b.path);
     });
   } catch (error) {
-    logWithLevel(
-      options?.logLevel,
-      "warn",
-      `Warning: Failed to discover project files in ${projectRoot}:`,
-      error,
+    throw new Error(
+      `Failed to discover project files in ${root}: ${stringifyUnknown(error)}`,
     );
-    return [];
   }
 }
 
