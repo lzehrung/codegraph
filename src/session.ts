@@ -3,6 +3,7 @@
  * Maintains warm caches across multiple queries for better agent UX
  */
 
+import path from "node:path";
 import type { ProjectIndex, BuildOptions } from "./indexer.js";
 import {
   buildProjectIndex,
@@ -40,6 +41,83 @@ export type SessionOptions = {
 };
 
 export type SessionStatus = "initializing" | "ready" | "expired" | "error";
+
+type SessionIdentity = {
+  root: string;
+  timeout: number;
+  incremental: boolean;
+  buildOptions?: Record<string, unknown>;
+};
+
+function normalizeStringArray(values?: string[]): string[] | undefined {
+  if (!values || values.length === 0) return undefined;
+  return [...values].sort();
+}
+
+function normalizeBuildOptions(
+  options?: BuildOptions,
+): Record<string, unknown> | undefined {
+  if (!options) return undefined;
+  return {
+    cache: options.cache,
+    cacheDir: options.cacheDir ? path.resolve(options.cacheDir) : undefined,
+    cacheStrict: options.cacheStrict,
+    useBloomFilters: options.useBloomFilters,
+    preset: options.preset,
+    graph: options.graph
+      ? {
+          fast: options.graph.fast,
+          resolveNodeModules: options.graph.resolveNodeModules,
+          dynamicImportHeuristics: options.graph.dynamicImportHeuristics,
+          resolutionHints: normalizeStringArray(options.graph.resolutionHints),
+          fastRegexDisabledLanguages: normalizeStringArray(
+            options.graph.fastRegexDisabledLanguages,
+          ),
+        }
+      : undefined,
+    native: options.native,
+    cacheVerify: options.cacheVerify,
+    incrementalStrict: options.incrementalStrict,
+    parsedCacheMaxEntries: options.parsedCacheMaxEntries,
+    logLevel: options.logLevel,
+    keepParsed: options.keepParsed,
+    useNativeWorkers: options.useNativeWorkers,
+    nativeThreads: options.nativeThreads,
+    threads: options.threads,
+    discovery: options.discovery
+      ? {
+          includeGlobs: normalizeStringArray(options.discovery.includeGlobs),
+          ignoreGlobs: normalizeStringArray(options.discovery.ignoreGlobs),
+          useGitignore: options.discovery.useGitignore,
+        }
+      : undefined,
+  };
+}
+
+function resolveSessionIdentity(options: SessionOptions): SessionIdentity {
+  if (options.preset) {
+    const presetOpts = getSessionPreset(options.preset, options.root);
+    const buildOptions = options.buildOptions
+      ? mergePreset(presetOpts.buildOptions ?? {}, options.buildOptions)
+      : presetOpts.buildOptions;
+    return {
+      root: path.resolve(options.root),
+      timeout: options.timeout ?? presetOpts.timeout ?? 30 * 60 * 1000,
+      incremental: options.incremental ?? presetOpts.incremental ?? true,
+      buildOptions: normalizeBuildOptions(buildOptions),
+    };
+  }
+  return {
+    root: path.resolve(options.root),
+    timeout: options.timeout ?? 30 * 60 * 1000,
+    incremental: options.incremental ?? true,
+    buildOptions: normalizeBuildOptions(options.buildOptions),
+  };
+}
+
+function sessionIdentityFingerprint(identity: SessionIdentity): string {
+  return JSON.stringify(identity);
+}
 
 /**
  * Interface for CodeReviewSession for TypeScript consumers.
@@ -88,23 +166,33 @@ export class CodeReviewSession implements ICodeReviewSession {
   private buildOptions: BuildOptions | undefined;
   private incremental: boolean;
   private initPromise: Promise<void> | null = null;
+  private identityFingerprint: string;
 
   constructor(options: SessionOptions) {
-    this.root = options.root;
+    const identity = resolveSessionIdentity(options);
+    this.root = identity.root;
+    this.buildOptions = options.preset
+      ? (options.buildOptions
+          ? mergePreset(
+              getSessionPreset(options.preset, options.root).buildOptions ?? {},
+              options.buildOptions,
+            )
+          : getSessionPreset(options.preset, options.root).buildOptions)
+      : options.buildOptions;
+    this.timeout = identity.timeout;
+    this.incremental = identity.incremental;
+    this.identityFingerprint = sessionIdentityFingerprint(identity);
+  }
 
-    // Apply preset if specified
-    if (options.preset) {
-      const presetOpts = getSessionPreset(options.preset, options.root);
-      this.buildOptions = options.buildOptions
-        ? mergePreset(presetOpts.buildOptions ?? {}, options.buildOptions)
-        : presetOpts.buildOptions;
-      this.timeout = options.timeout ?? presetOpts.timeout ?? 30 * 60 * 1000;
-      this.incremental = options.incremental ?? presetOpts.incremental ?? true;
-    } else {
-      this.buildOptions = options.buildOptions;
-      this.timeout = options.timeout ?? 30 * 60 * 1000; // 30 minutes default
-      this.incremental = options.incremental ?? true;
-    }
+  matchesOptions(options: SessionOptions): boolean {
+    return (
+      this.identityFingerprint ===
+      sessionIdentityFingerprint(resolveSessionIdentity(options))
+    );
+  }
+
+  getRoot(): string {
+    return this.root;
   }
 
   /**
@@ -319,6 +407,10 @@ export class SessionManager {
       session = new CodeReviewSession(options);
       this.sessions.set(sessionId, session);
       await session.init();
+    } else if (!session.matchesOptions(options)) {
+      throw new Error(
+        `Session "${sessionId}" already exists for a different configuration (existing root: ${session.getRoot()}, requested root: ${path.resolve(options.root)}). Use a different session id or dispose the existing session first.`,
+      );
     } else if (!session.isReady()) {
       // Re-initialize if expired
       await session.init();

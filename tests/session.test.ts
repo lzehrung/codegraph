@@ -5,6 +5,8 @@ import {
   createCodeReviewSession,
 } from "../src/session.js";
 import path from "node:path";
+import os from "node:os";
+import fsp from "node:fs/promises";
 
 const sampleRoot = path.resolve("tests/samples/typescript");
 
@@ -166,6 +168,39 @@ describe("SessionManager", () => {
     });
 
     expect(session1).toBe(session2);
+  });
+
+  test("should reject reusing a session id for a different root", async () => {
+    const rootA = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-root-a-"));
+    const rootB = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-root-b-"));
+    await fsp.writeFile(path.join(rootA, "a.ts"), "export const a = 1;\n", "utf8");
+    await fsp.writeFile(path.join(rootB, "b.ts"), "export const b = 1;\n", "utf8");
+
+    await manager.getOrCreateSession("shared", {
+      root: rootA,
+      buildOptions: { cache: "memory" },
+    });
+
+    await expect(
+      manager.getOrCreateSession("shared", {
+        root: rootB,
+        buildOptions: { cache: "memory" },
+      }),
+    ).rejects.toThrow(/different configuration/);
+  });
+
+  test("should reject reusing a session id for different build options", async () => {
+    await manager.getOrCreateSession("shared", {
+      root: sampleRoot,
+      buildOptions: { cache: "memory", useBloomFilters: true },
+    });
+
+    await expect(
+      manager.getOrCreateSession("shared", {
+        root: sampleRoot,
+        buildOptions: { cache: "disk", useBloomFilters: true },
+      }),
+    ).rejects.toThrow(/different configuration/);
   });
 
   test("should manage multiple sessions", async () => {
