@@ -45,6 +45,7 @@ import {
   isGitRepo,
   getGitBlobHashes,
   listChangedFiles,
+  clearResolutionCaches,
   mapLimit,
   stringifyUnknown,
   type ProjectFileDiscoveryOptions,
@@ -3743,6 +3744,7 @@ async function buildIndexFromFileListShared(
   opts?: BuildOptions,
   helperOpts?: BuildIndexHelperOptions,
 ): Promise<ProjectIndex> {
+  clearResolutionCaches();
   const report = opts?.report;
   const timings = report?.timings;
   const totalStart = performance.now();
@@ -3778,9 +3780,25 @@ async function buildIndexFromFileListShared(
   if (timings && useManifest) {
     timings.manifestMs = Math.round(performance.now() - manifestStart);
   }
+  const staleCachedEdgeFiles = new Set<string>();
+  if (manifest) {
+    for (const [file, entry] of Object.entries(manifest.files ?? {})) {
+      if (
+        entry.edges.some(
+          (edge) => edge.to.type === "file" && !fs.existsSync(edge.to.path),
+        )
+      ) {
+        staleCachedEdgeFiles.add(file);
+      }
+    }
+  }
   const cachedGraphEntries =
     manifest && graphOptionsEqual(manifest.graphOptions, graphOptions)
-      ? new Map<string, ManifestFileEntry>(Object.entries(manifest.files ?? {}))
+      ? new Map<string, ManifestFileEntry>(
+          Object.entries(manifest.files ?? {}).filter(
+            ([file]) => !staleCachedEdgeFiles.has(file),
+          ),
+        )
       : undefined;
   if (report?.manifest) {
     report.manifest.reused = !!cachedGraphEntries;
@@ -4289,6 +4307,7 @@ export async function buildProjectIndexIncremental(
   projectRoot: string,
   opts?: IncrementalBuildOptions,
 ): Promise<ProjectIndex> {
+  clearResolutionCaches();
   const report = opts?.report;
   initNativeBackendReport(report);
   const timings = report?.timings;
@@ -4396,8 +4415,12 @@ export async function buildProjectIndexIncremental(
       );
 
     const trackedEntries = manifest.files ?? {};
+    const trackedFileList = Object.keys(trackedEntries);
     const trackedFiles = new Set(
-      Object.keys(trackedEntries).filter((file) => fs.existsSync(file)),
+      trackedFileList.filter((file) => fs.existsSync(file)),
+    );
+    const deletedTrackedFiles = new Set(
+      trackedFileList.filter((file) => !fs.existsSync(file)),
     );
     const fileReport = initFileReport(report);
     if (fileReport) {
@@ -4426,7 +4449,42 @@ export async function buildProjectIndexIncremental(
       fileReport.total = allFiles.size;
     }
 
+    const workspaceConfig = await loadWorkspaceConfig(projectRoot);
+    const dependentFilesOfDeletedTracked = new Set<string>();
+    if (deletedTrackedFiles.size > 0) {
+      for (const [file, entry] of Object.entries(trackedEntries)) {
+        if (deletedTrackedFiles.has(file)) continue;
+        if (
+          entry.edges.some(
+            (edge) =>
+              edge.to.type === "file" && deletedTrackedFiles.has(edge.to.path),
+          )
+        ) {
+          dependentFilesOfDeletedTracked.add(file);
+        }
+      }
+    }
+
     if (allFiles.size === 0) {
+      const writeManifestStart = performance.now();
+      const lastCommit = await getGitHead(projectRoot);
+      const configHash = await computeConfigHash(projectRoot);
+      const manifestData: IndexManifest = {
+        version: MANIFEST_VERSION,
+        projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
+        updatedAt: Date.now(),
+        ...(lastCommit ? { lastCommit } : {}),
+        ...(configHash ? { configHash } : {}),
+        graphOptions,
+        buildOptions: summarizeBuildOptions(opts),
+        files: {},
+      };
+      await writeManifest(projectRoot, opts, manifestData);
+      if (timings) {
+        timings.writeManifestMs = Math.round(
+          performance.now() - writeManifestStart,
+        );
+      }
       return {
         graph: { nodes: new Set(), edges: [] },
         modules: new Map(),
@@ -4443,7 +4501,6 @@ export async function buildProjectIndexIncremental(
     // Worker pool setup for incremental builds
     const workerSetupIncr = await setupWorkerPool(opts);
     try {
-      const workspaceConfig = await loadWorkspaceConfig(projectRoot);
       const fileSignatures = new Map<string, FileSignature>();
       const useGitSignatures = gitAvailable;
       const gitSigMap = useGitSignatures
@@ -4466,6 +4523,7 @@ export async function buildProjectIndexIncremental(
       explicitFiles.forEach(markAsChanged);
       manifestDiffFiles.forEach(markAsChanged);
       gitFiles.forEach(markAsChanged);
+      dependentFilesOfDeletedTracked.forEach(markAsChanged);
       if (fileReport) {
         fileReport.changed = changedFiles.size;
       }
@@ -4742,8 +4800,8 @@ export async function buildProjectIndexIncremental(
       }
 
       const cachedGraphEntries = new Map<string, ManifestFileEntry>(
-        Object.entries(manifest.files ?? {}).filter(([file]) =>
-          fs.existsSync(file),
+        Object.entries(manifest.files ?? {}).filter(
+          ([file]) => !deletedTrackedFiles.has(file),
         ),
       );
       const manifestEntries = new Map<string, ManifestFileEntry>(
@@ -4763,7 +4821,9 @@ export async function buildProjectIndexIncremental(
           baseGraph.nodes.add(file);
           for (const edge of entry.edges) {
             baseGraph.edges.push(edge);
-            if (edge.to.type === "file") baseGraph.nodes.add(edge.to.path);
+            if (edge.to.type === "file" && fs.existsSync(edge.to.path)) {
+              baseGraph.nodes.add(edge.to.path);
+            }
           }
         }
       }

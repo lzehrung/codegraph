@@ -393,6 +393,72 @@ describe("Cache invalidation and strict hashing", () => {
     expect(aEdges).toEqual([]);
   });
 
+  it("recomputes unchanged importers when a referenced dependency is deleted", async () => {
+    const root = await mkTmpDir("dg-incremental-deleted-dependency-");
+    const mainPath = path.join(root, "main.ts");
+    const utilPath = path.join(root, "util.ts");
+
+    await fsp.writeFile(
+      mainPath,
+      `import { helper } from "./util";\nexport const run = () => helper();\n`,
+      "utf8",
+    );
+    await fsp.writeFile(utilPath, `export function helper() { return 1; }\n`, "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    await fsp.unlink(utilPath);
+
+    const incremental = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+    });
+    const manifestAfter = await readManifest(root);
+    const normalizedMain = normalize(mainPath);
+    const normalizedUtil = normalize(utilPath);
+
+    expect(manifestAfter.files[normalizedUtil]).toBeUndefined();
+    expect(
+      incremental.graph.nodes.has(normalizedUtil),
+    ).toBe(false);
+    expect(
+      incremental.graph.edges.some(
+        (edge) =>
+          edge.from === normalizedMain &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedUtil,
+      ),
+    ).toBe(false);
+
+    const mainModule = incremental.byFile.get(normalizedMain);
+    expect(mainModule).toBeDefined();
+    expect(
+      mainModule?.imports.some(
+        (imp) =>
+          typeof imp.resolved === "string" && imp.resolved === normalizedUtil,
+      ),
+    ).toBe(false);
+  });
+
+  it("persists an empty manifest when incremental rebuild deletes the last tracked file", async () => {
+    const root = await mkTmpDir("dg-incremental-empty-after-delete-");
+    const onlyPath = path.join(root, "only.ts");
+
+    await fsp.writeFile(onlyPath, `export const value = 1;\n`, "utf8");
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+
+    await fsp.unlink(onlyPath);
+
+    const incremental = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+    });
+    const manifestAfter = await readManifest(root);
+
+    expect(incremental.graph.nodes.size).toBe(0);
+    expect(incremental.graph.edges).toEqual([]);
+    expect(Object.keys(manifestAfter.files)).toEqual([]);
+  });
+
   it("updates only explicit files in incremental builds", async () => {
     const root = await mkTmpDir("dg-incremental-explicit-");
     const aPath = path.join(root, "a.ts");
@@ -494,6 +560,45 @@ describe("Cache invalidation and strict hashing", () => {
     if (typeof fresh === "string") {
       expect(normalize(fresh)).toBe(normalize(depPath));
     }
+  });
+
+  it("clears stale positive resolve caches across index builds", async () => {
+    const root = await mkTmpDir("dg-resolve-cache-positive-");
+    const main = path.join(root, "main.ts");
+    const depPath = path.join(root, "dep.ts");
+
+    await fsp.writeFile(main, "import { dep } from './dep'\n", "utf8");
+    await fsp.writeFile(depPath, "export const dep = 1\n", "utf8");
+
+    const first = await buildProjectIndex(root);
+    expect(
+      first.graph.edges.some(
+        (edge) =>
+          edge.from === normalize(main) &&
+          edge.to.type === "file" &&
+          edge.to.path === normalize(depPath),
+      ),
+    ).toBe(true);
+
+    await fsp.unlink(depPath);
+
+    const rebuilt = await buildProjectIndex(root);
+    expect(
+      rebuilt.graph.edges.some(
+        (edge) =>
+          edge.from === normalize(main) &&
+          edge.to.type === "file" &&
+          edge.to.path === normalize(depPath),
+      ),
+    ).toBe(false);
+    const mainModule = rebuilt.byFile.get(normalize(main));
+    expect(mainModule).toBeDefined();
+    expect(
+      mainModule?.imports.some(
+        (imp) =>
+          typeof imp.resolved === "string" && imp.resolved === normalize(depPath),
+      ),
+    ).toBe(false);
   });
 
   it("rebuilds when .gitignore files change", async () => {
