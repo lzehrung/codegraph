@@ -6424,6 +6424,26 @@ export async function findReferences(
     walk(parsed.tree.rootNode);
     return matches;
   };
+  const collectVerifiedNamedNodeReferences = async (
+    fileId: string,
+    symbolName: string,
+    expectedDef: SymbolDef,
+  ): Promise<Range[]> => {
+    const matches = await collectNamedNodeReferences(fileId, symbolName);
+    const verified: Range[] = [];
+    for (const range of matches) {
+      const resolved = await goToDefinition(index, {
+        file: fileId,
+        line: range.start.line,
+        column: range.start.column,
+      });
+      if (resolved.status !== "ok") continue;
+      if (sameDef(resolved.definition, expectedDef)) {
+        verified.push(range);
+      }
+    }
+    return verified;
+  };
   const getCandidateReferenceNames = (module: ModuleIndex): string[] => {
     const names = new Set<string>();
     let hasDirectImport = false;
@@ -6520,7 +6540,11 @@ export async function findReferences(
             const matchesDef =
               !!res && !("namespace" in res) && sameDef(res, def);
             if (!matchesDef) continue;
-            const ranges = await collectNamedNodeReferences(f, name);
+            const ranges = await collectVerifiedNamedNodeReferences(
+              f,
+              name,
+              def,
+            );
             for (const range of ranges) {
               refs.push({ file: f, range, via: { import: imp } });
             }

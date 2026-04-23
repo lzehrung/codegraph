@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { createTestIndex, createTestIndexFromFiles, testFindReferences } from './test-utils.js';
+import os from 'node:os';
+import fsp from 'node:fs/promises';
+import { createTestIndex, createTestIndexFromFiles, testFindReferences, createTestIndexFromPath } from './test-utils.js';
 
 function expectReferenceAt(
   result: Awaited<ReturnType<typeof testFindReferences>>,
@@ -134,6 +136,46 @@ describe('Find References', () => {
           ref.file.includes('main.py')
         );
         expect(mainPyRefs.length).toBeGreaterThan(0);
+      }
+    });
+
+    it('should ignore shadowed names for wildcard imports while keeping real references', async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-py-star-refs-'));
+      const utilFile = path.join(root, 'util.py');
+      const mainFile = path.join(root, 'main.py');
+      await fsp.writeFile(
+        utilFile,
+        ['foo = 1', 'bar = 2', ''].join('\n'),
+        'utf8',
+      );
+      await fsp.writeFile(
+        mainFile,
+        [
+          'from util import *',
+          'foo = 2',
+          'print(foo)',
+          'print(bar)',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+
+      const index = await createTestIndexFromPath(root);
+      const normalizedUtil = utilFile.replace(/\\/g, '/');
+      const normalizedMain = mainFile.replace(/\\/g, '/');
+
+      const fooRefs = await testFindReferences(index, normalizedUtil, 1, 1, 1);
+      expect(fooRefs.status).toBe('ok');
+      if (fooRefs.status === 'ok') {
+        expect(
+          fooRefs.references.some((reference) => reference.file === normalizedMain),
+        ).toBe(false);
+      }
+
+      const barRefs = await testFindReferences(index, normalizedUtil, 2, 1, 2);
+      expect(barRefs.status).toBe('ok');
+      if (barRefs.status === 'ok') {
+        expectReferenceAt(barRefs, normalizedMain, 4);
       }
     });
   });
