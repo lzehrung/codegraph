@@ -11,10 +11,7 @@ import {
   parseWithJsLanguage,
   type JsSyntaxTree,
 } from "./jsFallback.js";
-import {
-  supportForFile,
-  type LanguageSupport,
-} from "./languages.js";
+import { supportForFile, type LanguageSupport } from "./languages.js";
 import { buildBloomFilterFromSource } from "./util/bloomFilter.js";
 import {
   isUnsupportedParserInputError,
@@ -52,6 +49,7 @@ import {
   type ProjectFileDiscoveryOptions,
   type ProjectFileInfo,
 } from "./util.js";
+import { logWithLevel, type LogLevel } from "./logging.js";
 import {
   collectGraph,
   collectEdgesForFile,
@@ -325,7 +323,7 @@ export type BuildOptions = {
   /** Max parsed AST entries retained in memory (LRU-style), default 1024 */
   parsedCacheMaxEntries?: number;
   /** Log level for build warnings (default: "warn") */
-  logLevel?: "error" | "warn" | "info" | "debug" | "silent";
+  logLevel?: LogLevel;
   /** Keep parsed trees in memory (default: false). Set to true for faster subsequent lookups at the cost of memory. */
   keepParsed?: boolean;
   /** Use Piscina worker threads for native extraction (default: false) */
@@ -484,16 +482,14 @@ async function setupWorkerPool(
   let pool: import("piscina").Piscina | null = null;
   if (shouldUseWorkers) {
     try {
-      const { createNativeWorkerPool } = await import(
-        "./worker/nativeWorkerPool.js"
-      );
+      const { createNativeWorkerPool } =
+        await import("./worker/nativeWorkerPool.js");
       const p = createNativeWorkerPool({
         threads: opts.nativeThreads,
       });
       pool = p;
       if (report) {
-        report.threads =
-          (p.options as { maxThreads?: number }).maxThreads ?? 0;
+        report.threads = (p.options as { maxThreads?: number }).maxThreads ?? 0;
       }
     } catch {
       pool = null;
@@ -853,11 +849,15 @@ async function collectWorkspaceManifestDependencyEdges(
   projectRoot: string,
   discovery?: ProjectFileDiscoveryOptions,
   allowedManifestFiles?: ReadonlySet<string>,
+  logLevel?: LogLevel,
 ): Promise<Edge[]> {
   const manifestPaths = await listProjectFiles(
     projectRoot,
     ["**/package.json"],
-    discovery,
+    {
+      ...discovery,
+      ...(logLevel ? { logLevel } : {}),
+    },
   );
   const scopedManifestPaths = allowedManifestFiles
     ? manifestPaths.filter((manifestPath) =>
@@ -1000,23 +1000,20 @@ type IndexManifest = {
 async function computeConfigHash(projectRoot: string): Promise<string> {
   try {
     const configFiles = await fg(
-      [
-        ...DEFAULT_PROJECT_MANIFESTS,
-        "**/.gitignore",
-      ],
+      [...DEFAULT_PROJECT_MANIFESTS, "**/.gitignore"],
       {
-      cwd: projectRoot,
-      absolute: true,
-      dot: true,
-      ignore: [
-        "**/node_modules/**",
-        "**/.git/**",
-        "**/dist/**",
-        "**/build/**",
-        "**/target/**",
-        "**/.venv/**",
-        "**/__pycache__/**",
-      ],
+        cwd: projectRoot,
+        absolute: true,
+        dot: true,
+        ignore: [
+          "**/node_modules/**",
+          "**/.git/**",
+          "**/dist/**",
+          "**/build/**",
+          "**/target/**",
+          "**/.venv/**",
+          "**/__pycache__/**",
+        ],
       },
     );
     configFiles.sort();
@@ -1122,7 +1119,12 @@ function createFallbackImportExtractionHandler(
     if (!shouldLog) return;
     if (warningCount >= warningLimit) return;
     warningCount += 1;
-    console.warn("Warning: Regex fallback import extraction", event);
+    logWithLevel(
+      opts?.logLevel,
+      event.reason === "fast" ? "debug" : "warn",
+      "Warning: Regex fallback import extraction",
+      event,
+    );
   };
 }
 
@@ -1307,7 +1309,12 @@ function writeToCache(
            updated_at = excluded.updated_at`,
       ).run(file, sig, PARSED_CACHE_VERSION, JSON.stringify(mod), Date.now());
     } catch (error) {
-      console.warn("Warning: Failed to write to cache:", error);
+      logWithLevel(
+        opts?.logLevel,
+        "warn",
+        "Warning: Failed to write to cache:",
+        error,
+      );
     }
   }
 }
@@ -1341,7 +1348,12 @@ async function writeManifest(
     await fsp.mkdir(path.dirname(mf), { recursive: true });
     await fsp.writeFile(mf, JSON.stringify(manifest, null, 2), "utf8");
   } catch (error) {
-    console.warn("Warning: Failed to write manifest:", error);
+    logWithLevel(
+      opts?.logLevel,
+      "warn",
+      "Warning: Failed to write manifest:",
+      error,
+    );
   }
 }
 
@@ -1428,24 +1440,16 @@ function normalizeDiscoveryOptions(
   if (!discovery) return undefined;
   const includeGlobs = Array.from(
     new Set(
-      (discovery.includeGlobs ?? [])
-        .map((glob) => glob.trim())
-        .filter(Boolean),
+      (discovery.includeGlobs ?? []).map((glob) => glob.trim()).filter(Boolean),
     ),
   ).sort();
   const ignoreGlobs = Array.from(
     new Set(
-      (discovery.ignoreGlobs ?? [])
-        .map((glob) => glob.trim())
-        .filter(Boolean),
+      (discovery.ignoreGlobs ?? []).map((glob) => glob.trim()).filter(Boolean),
     ),
   ).sort();
   const useGitignore = discovery.useGitignore !== false;
-  if (
-    includeGlobs.length === 0 &&
-    ignoreGlobs.length === 0 &&
-    useGitignore
-  ) {
+  if (includeGlobs.length === 0 && ignoreGlobs.length === 0 && useGitignore) {
     return undefined;
   }
   return {
@@ -1758,8 +1762,7 @@ export function collectLocalsAndExportsFromSource(
   const nativeQueries = opts?.nativeQueries ?? null;
   let tree: SyntaxTreeLike | null = opts?.tree ?? null;
   let treeAttempted = !!tree;
-  let jsQueryTree =
-    opts?.tree && isJsSyntaxTree(opts.tree) ? opts.tree : null;
+  let jsQueryTree = opts?.tree && isJsSyntaxTree(opts.tree) ? opts.tree : null;
   let jsQueryTreeAttempted = !!jsQueryTree;
   let resolvedLang = lang;
   const ensureResolvedLang = (): JsLanguage => {
@@ -1901,7 +1904,12 @@ export function collectLocalsAndExportsFromSource(
       }
       return true;
     } catch (error) {
-      console.warn(`Warning: Query error in locals for ${support.id}:`, error);
+      logWithLevel(
+        opts?.logLevel,
+        "warn",
+        `Warning: Query error in locals for ${support.id}:`,
+        error,
+      );
       return false;
     }
   };
@@ -2507,16 +2515,13 @@ export async function collectImportsForFile(
   let resolvedLang = lang;
   if (isGraphOnlyLanguage(resolvedSup.id)) {
     const entries = Array.from(
-      extractGraphOnlyModuleSpecifiers(
-        resolvedSup.id,
-        resolvedSource,
-      ),
+      extractGraphOnlyModuleSpecifiers(resolvedSup.id, resolvedSource),
     );
     const needsGraphOnlyResolutionConfig =
       graphOnlyLanguageSupportsImportAliases(resolvedSup.id) &&
       entries.some(({ spec }) => graphOnlySpecifierNeedsResolutionConfig(spec));
     const { matchPath } = needsGraphOnlyResolutionConfig
-      ? await loadNearestTsconfigFor(file)
+      ? await loadNearestTsconfigFor(file, opts?.logLevel)
       : { matchPath: undefined };
     const workspaceConfig = needsGraphOnlyResolutionConfig
       ? await loadWorkspaceConfig(projectRoot)
@@ -2717,10 +2722,7 @@ export async function collectImportsForFile(
       if (parsed.alias) {
         const fromParts = parsed.from.split(".");
         const imported = fromParts[fromParts.length - 1] ?? parsed.alias;
-        if (
-          typeof resolved !== "string" &&
-          fromParts.length > 1
-        ) {
+        if (typeof resolved !== "string" && fromParts.length > 1) {
           const fallbackFrom = fromParts.slice(0, -1).join(".");
           if (fallbackFrom) {
             const fallbackResolved = await resolveFrom(fallbackFrom);
@@ -2966,7 +2968,7 @@ export async function collectImportsForFile(
     resolvedSup.id === "python" ? "py" : resolvedSup.id === "js" ? "js" : "ts";
   const tsCfg =
     resolvedSup.id === "ts" || resolvedSup.id === "tsx"
-      ? await loadNearestTsconfigFor(file)
+      ? await loadNearestTsconfigFor(file, opts?.logLevel)
       : undefined;
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
 
@@ -3358,7 +3360,9 @@ export async function collectImportsForFile(
           ? unquote(caps["from"].text)
           : undefined;
 
-        const patterns = match.captures.filter((capture) => capture.name === "pattern");
+        const patterns = match.captures.filter(
+          (capture) => capture.name === "pattern",
+        );
         for (const pattern of patterns) {
           const patternRange = rangeFromNativeCapture(pattern);
           const patternNode = tree.rootNode.descendantForIndex(
@@ -3449,8 +3453,12 @@ export async function collectImportsForFile(
             });
           }
         }
-        const inames = match.captures.filter((capture) => capture.name === "iname");
-        const aliases = match.captures.filter((capture) => capture.name === "alias");
+        const inames = match.captures.filter(
+          (capture) => capture.name === "iname",
+        );
+        const aliases = match.captures.filter(
+          (capture) => capture.name === "alias",
+        );
         for (let i = 0; i < inames.length; i++) {
           const imported = inames[i]!.text;
           const alias = aliases[i]?.text ?? imported;
@@ -3674,7 +3682,11 @@ async function prepareFileForIndexing(
   native?: NativeRuntimeMode,
 ): Promise<PreparedFileContext> {
   const prep = await prepareSourceInput(file);
-  const nativeExecution = getNativeQueryExecution(prep.source, prep.sup, native);
+  const nativeExecution = getNativeQueryExecution(
+    prep.source,
+    prep.sup,
+    native,
+  );
 
   return {
     file,
@@ -3744,7 +3756,7 @@ async function buildIndexFromFileListShared(
     ),
   );
   if (normalizedFiles.length === 0 && helperOpts?.warnNoFilesMessage) {
-    console.warn(helperOpts.warnNoFilesMessage);
+    logWithLevel(opts?.logLevel, "warn", helperOpts.warnNoFilesMessage);
   }
   const fileReport = initFileReport(report);
   const onFallbackImportExtraction = createFallbackImportExtractionHandler(
@@ -3785,61 +3797,239 @@ async function buildIndexFromFileListShared(
   // Worker pool setup: create a Piscina pool for native extraction when requested
   const workerSetup = await setupWorkerPool(opts);
   try {
+    const useBloomFilters = opts?.useBloomFilters ?? true; // Default to true for performance
+    const bloomFilterCache = useBloomFilters
+      ? new (await import("./util/bloomFilter.js")).BloomFilterCache()
+      : undefined;
+    const parsedMap = new Map<string, ParsedFileContext>();
+    const workspaceConfig = await loadWorkspaceConfig(projectRoot);
+    const parseStart = performance.now();
+    const graph: Graph = { nodes: new Set(normalizedFiles), edges: [] };
+    const onFileEdges = manifestEntries
+      ? (file: string, entry: GraphCacheEntry) => {
+          if (!entry?.sig) return;
+          manifestEntries.set(file, {
+            sig: entry.sig,
+            ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
+            edges: entry.edges,
+          });
+        }
+      : undefined;
+    let processedFiles = 0;
+    const totalFiles = normalizedFiles.length;
+    const fileResults = await mapLimit(normalizedFiles, conc, async (f) => {
+      try {
+        const sigInfo = await fileSignature(
+          f,
+          opts?.cacheStrict,
+          gitSigMap.get(f),
+          { forceContentHash: cacheEnabled },
+        );
+        fileSignatures.set(f, sigInfo);
 
-  const useBloomFilters = opts?.useBloomFilters ?? true; // Default to true for performance
-  const bloomFilterCache = useBloomFilters
-    ? new (await import("./util/bloomFilter.js")).BloomFilterCache()
-    : undefined;
-  const parsedMap = new Map<string, ParsedFileContext>();
-  const workspaceConfig = await loadWorkspaceConfig(projectRoot);
-  const parseStart = performance.now();
-  const graph: Graph = { nodes: new Set(normalizedFiles), edges: [] };
-  const onFileEdges = manifestEntries
-    ? (file: string, entry: GraphCacheEntry) => {
-        if (!entry?.sig) return;
-        manifestEntries.set(file, {
-          sig: entry.sig,
-          ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
-          edges: entry.edges,
+        const cacheSig = cacheEnabled
+          ? await cacheSignatureForFile(f, sigInfo)
+          : sigInfo.cacheSig;
+        let mod: ModuleIndex | null = cacheEnabled
+          ? tryLoadFromCache(projectRoot, f, cacheSig, opts, report)
+          : null;
+        if (mod && fileReport) {
+          fileReport.cached = (fileReport.cached ?? 0) + 1;
+        }
+
+        // Check if edges are cached (via collectEdgesForFile logic essentially)
+        // We manually check here to decide if we need to parse
+        const cachedEdgesEntry = cachedGraphEntries?.get(f);
+        const edgesCached =
+          !!cachedEdgesEntry &&
+          ((cachedEdgesEntry.gitSig &&
+            cachedEdgesEntry.gitSig === sigInfo.gitSig) ||
+            cachedEdgesEntry.sig === sigInfo.sig);
+
+        let edges: import("./types.js").Edge[] = [];
+
+        if (mod && edgesCached) {
+          // Both cached, no need to parse
+          edges = await collectEdgesForFile(f, projectRoot, workspaceConfig, {
+            fast: !!graphOptions.fast,
+            ...(graphOptions.fastRegexDisabledLanguages
+              ? {
+                  fastRegexDisabledLanguages:
+                    graphOptions.fastRegexDisabledLanguages,
+                }
+              : {}),
+            resolveNodeModules: !!graphOptions.resolveNodeModules,
+            dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
+            ...(graphOptions.resolutionHints
+              ? { resolutionHints: graphOptions.resolutionHints }
+              : {}),
+            fileSignature: sigInfo,
+            ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
+            ...(onFileEdges ? { onFileEdges } : {}),
+            ...(onFallbackImportExtraction
+              ? { onFallbackImportExtraction }
+              : {}),
+          });
+          if (bloomFilterCache) {
+            const filter = await buildBloomFilterForFile(f);
+            if (filter) bloomFilterCache.set(f, filter);
+          }
+          return [f, mod, edges] as const;
+        }
+
+        if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
+
+        // FIX: Check support before parsing to avoid throwing errors for non-code files
+        const supCheck = supportForFile(f);
+        if (!supCheck) {
+          const mod: ModuleIndex = {
+            file: f,
+            exports: [],
+            imports: [],
+            locals: [],
+          };
+          return [f, mod, []] as const;
+        }
+
+        let prepared: PreparedFileContext;
+        if (workerSetup.pool && supCheck && !isSFCFile(f)) {
+          if (workerSetup.report) workerSetup.report.tasksSubmitted++;
+          try {
+            const workerResult: NativeExtractResult =
+              await workerSetup.pool.run(buildWorkerTask(f, supCheck));
+            prepared = workerResultToPrepared(workerResult, supCheck, f);
+          } catch {
+            if (workerSetup.report) workerSetup.report.tasksFailed++;
+            prepared = await prepareFileForIndexing(f, opts?.native);
+          }
+        } else {
+          prepared = await prepareFileForIndexing(f, opts?.native);
+        }
+        recordNativeBackendOutcome(report, {
+          usedNative: !!prepared.nativeQueries,
+          support: prepared.sup,
+          file: f,
+          languageId: prepared.sup.id,
+          ...(prepared.nativeFallbackReason
+            ? { fallbackReason: prepared.nativeFallbackReason }
+            : {}),
+          ...(prepared.nativeError ? { error: prepared.nativeError } : {}),
         });
-      }
-    : undefined;
-  let processedFiles = 0;
-  const totalFiles = normalizedFiles.length;
-  const fileResults = await mapLimit(normalizedFiles, conc, async (f) => {
-    try {
-      const sigInfo = await fileSignature(
-        f,
-        opts?.cacheStrict,
-        gitSigMap.get(f),
-        { forceContentHash: cacheEnabled },
-      );
-      fileSignatures.set(f, sigInfo);
+        const { source: src, sup, lang, nativeQueries } = prepared;
+        let resolvedLang = lang;
+        let tree: SyntaxTreeLike | undefined;
+        const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
 
-      const cacheSig = cacheEnabled
-        ? await cacheSignatureForFile(f, sigInfo)
-        : sigInfo.cacheSig;
-      let mod: ModuleIndex | null = cacheEnabled
-        ? tryLoadFromCache(projectRoot, f, cacheSig, opts, report)
-        : null;
-      if (mod && fileReport) {
-        fileReport.cached = (fileReport.cached ?? 0) + 1;
-      }
+        if (!nativeQueries && !graphOnlyLanguage) {
+          const parsed = tryParsePreparedFileContext(prepared);
+          if (parsed) {
+            tree = parsed.tree;
+            resolvedLang = parsed.lang;
+            setParsedCacheEntry(
+              parsedMap,
+              f,
+              {
+                source: parsed.source,
+                tree: parsed.tree,
+                sup: parsed.sup,
+                ...(parsed.lang ? { lang: parsed.lang } : {}),
+                nativeQueries: parsed.nativeQueries ?? null,
+              },
+              Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
+            );
+          }
+        }
+        const lacksParserContext = !nativeQueries && !tree;
 
-      // Check if edges are cached (via collectEdgesForFile logic essentially)
-      // We manually check here to decide if we need to parse
-      const cachedEdgesEntry = cachedGraphEntries?.get(f);
-      const edgesCached =
-        !!cachedEdgesEntry &&
-        ((cachedEdgesEntry.gitSig &&
-          cachedEdgesEntry.gitSig === sigInfo.gitSig) ||
-          cachedEdgesEntry.sig === sigInfo.sig);
+        if (bloomFilterCache) {
+          const filter = buildBloomFilterFromSource(src, sup.id);
+          bloomFilterCache.set(f, filter);
+        }
 
-      let edges: import("./types.js").Edge[] = [];
+        // 1. Recompute ModuleIndex if needed
+        if (!mod) {
+          const imports = await collectImportsForFile(f, projectRoot, {
+            source: src,
+            ...(tree && isJsSyntaxTree(tree) ? { tree } : {}),
+            sup,
+            ...(resolvedLang ? { lang: resolvedLang } : {}),
+            ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+            graphOptions,
+          });
+          collectJsonDependencies(imports, jsonDependencies);
+          mod = lacksParserContext
+            ? {
+                file: f,
+                exports: [],
+                imports,
+                locals: [],
+              }
+            : collectLocalsAndExportsFromSource(
+                f,
+                src,
+                sup,
+                resolvedLang,
+                imports,
+                {
+                  ...(tree ? { tree } : {}),
+                  ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+                  ...(opts?.native ? { nativeMode: opts.native } : {}),
+                },
+              );
+          mod.imports = imports;
 
-      if (mod && edgesCached) {
-        // Both cached, no need to parse
+          if (sup.supportsCrossModuleSymbols) {
+            if (sup.id === "ts" || sup.id === "js") {
+              const { matchPath } = await loadNearestTsconfigFor(
+                f,
+                opts?.logLevel,
+              );
+              for (const e of mod.exports)
+                if (
+                  e.type === "reexport" ||
+                  e.type === "exportStar" ||
+                  e.type === "namespaceReexport"
+                ) {
+                  if (e.fromModule.startsWith(".")) {
+                    const resolved = await resolveSpecifier(
+                      f,
+                      e.fromModule,
+                      projectRoot,
+                      matchPath,
+                      workspaceConfig,
+                      {
+                        resolveNodeModules: !!graphOptions.resolveNodeModules,
+                        ...(graphOptions.resolutionHints
+                          ? { resolutionHints: graphOptions.resolutionHints }
+                          : {}),
+                      },
+                    );
+                    if (typeof resolved === "string") e.fromModule = resolved;
+                  } else {
+                    const pkgResolved = await resolveWorkspacePackage(
+                      e.fromModule,
+                      workspaceConfig,
+                    );
+                    if (pkgResolved) e.fromModule = pkgResolved;
+                  }
+                }
+            }
+          }
+          writeToCache(projectRoot, f, cacheSig, mod, opts);
+        } else {
+          // If mod was cached but edges weren't, we still need to collect json deps from mod
+          collectJsonDependencies(mod.imports, jsonDependencies);
+        }
+
+        // 2. Recompute Edges (using the parsed tree)
         edges = await collectEdgesForFile(f, projectRoot, workspaceConfig, {
+          parsed: {
+            source: src,
+            ...(tree ? { tree } : {}),
+            sup,
+            ...(resolvedLang ? { lang: resolvedLang } : {}),
+            ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+          },
           fast: !!graphOptions.fast,
           ...(graphOptions.fastRegexDisabledLanguages
             ? {
@@ -3857,364 +4047,197 @@ async function buildIndexFromFileListShared(
           ...(onFileEdges ? { onFileEdges } : {}),
           ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
         });
-        if (bloomFilterCache) {
-          const filter = await buildBloomFilterForFile(f);
-          if (filter) bloomFilterCache.set(f, filter);
+
+        if (!mod) {
+          mod = {
+            file: f,
+            exports: [],
+            imports: [],
+            locals: [],
+          };
         }
+
         return [f, mod, edges] as const;
-      }
-
-      if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
-
-      // FIX: Check support before parsing to avoid throwing errors for non-code files
-      const supCheck = supportForFile(f);
-      if (!supCheck) {
-        const mod: ModuleIndex = {
+      } catch (error) {
+        if (isUnsupportedParserInputError(error)) {
+          const modUnsupported: ModuleIndex = {
+            file: f,
+            exports: [],
+            imports: [],
+            locals: [],
+          };
+          return [f, modUnsupported, []] as const;
+        }
+        if (isJsFallbackUnavailableError(error)) {
+          const modFallbackUnavailable: ModuleIndex = {
+            file: f,
+            exports: [],
+            imports: [],
+            locals: [],
+          };
+          return [f, modFallbackUnavailable, []] as const;
+        }
+        logWithLevel(
+          opts?.logLevel,
+          "warn",
+          `Warning: Failed to process file ${f}:`,
+          error,
+        );
+        const modError: ModuleIndex = {
           file: f,
           exports: [],
           imports: [],
           locals: [],
         };
-        return [f, mod, []] as const;
-      }
-
-      let prepared: PreparedFileContext;
-      if (workerSetup.pool && supCheck && !isSFCFile(f)) {
-        if (workerSetup.report) workerSetup.report.tasksSubmitted++;
-        try {
-          const workerResult: NativeExtractResult =
-            await workerSetup.pool.run(buildWorkerTask(f, supCheck));
-          prepared = workerResultToPrepared(workerResult, supCheck, f);
-        } catch {
-          if (workerSetup.report) workerSetup.report.tasksFailed++;
-          prepared = await prepareFileForIndexing(f, opts?.native);
-        }
-      } else {
-        prepared = await prepareFileForIndexing(f, opts?.native);
-      }
-      recordNativeBackendOutcome(report, {
-        usedNative: !!prepared.nativeQueries,
-        support: prepared.sup,
-        file: f,
-        languageId: prepared.sup.id,
-        ...(prepared.nativeFallbackReason
-          ? { fallbackReason: prepared.nativeFallbackReason }
-          : {}),
-        ...(prepared.nativeError ? { error: prepared.nativeError } : {}),
-      });
-      const { source: src, sup, lang, nativeQueries } = prepared;
-      let resolvedLang = lang;
-      let tree: SyntaxTreeLike | undefined;
-      const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
-
-      if (!nativeQueries && !graphOnlyLanguage) {
-        const parsed = tryParsePreparedFileContext(prepared);
-        if (parsed) {
-          tree = parsed.tree;
-          resolvedLang = parsed.lang;
-          setParsedCacheEntry(
-            parsedMap,
-            f,
-            {
-              source: parsed.source,
-              tree: parsed.tree,
-              sup: parsed.sup,
-              ...(parsed.lang ? { lang: parsed.lang } : {}),
-              nativeQueries: parsed.nativeQueries ?? null,
-            },
-            Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
-          );
+        return [f, modError, []] as const;
+      } finally {
+        if (opts?.onProgress) {
+          opts.onProgress({
+            type: "progress",
+            message: `Indexed ${f}`,
+            current: ++processedFiles,
+            total: totalFiles,
+          });
         }
       }
-      const lacksParserContext = !nativeQueries && !tree;
+    });
 
-      if (bloomFilterCache) {
-        const filter = buildBloomFilterFromSource(src, sup.id);
-        bloomFilterCache.set(f, filter);
+    if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
+
+    const graphStart = performance.now();
+    const appendUniqueGraphEdges = (edges: Edge[]) => {
+      if (edges.length === 0) return;
+      const seen = new Set(
+        graph.edges.map(
+          (edge) =>
+            `${edge.from}::${edge.to.type === "file" ? edge.to.path : edge.to.name}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`,
+        ),
+      );
+      for (const edge of edges) {
+        const key = `${edge.from}::${edge.to.type === "file" ? edge.to.path : edge.to.name}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        graph.edges.push(edge);
+        if (edge.to.type === "file") graph.nodes.add(edge.to.path);
       }
+    };
 
-      // 1. Recompute ModuleIndex if needed
-      if (!mod) {
-        const imports = await collectImportsForFile(f, projectRoot, {
-          source: src,
-          ...(tree && isJsSyntaxTree(tree) ? { tree } : {}),
-          sup,
-          ...(resolvedLang ? { lang: resolvedLang } : {}),
-          ...(nativeQueries !== undefined ? { nativeQueries } : {}),
-          graphOptions,
-        });
-        collectJsonDependencies(imports, jsonDependencies);
-        mod = lacksParserContext
-          ? {
-              file: f,
-              exports: [],
-              imports,
-              locals: [],
-            }
-          : collectLocalsAndExportsFromSource(
-              f,
-              src,
-              sup,
-              resolvedLang,
-              imports,
-              {
-                ...(tree ? { tree } : {}),
-                ...(nativeQueries !== undefined ? { nativeQueries } : {}),
-                ...(opts?.native ? { nativeMode: opts.native } : {}),
-              },
-            );
-        mod.imports = imports;
-
-        if (sup.supportsCrossModuleSymbols) {
-          if (sup.id === "ts" || sup.id === "js") {
-            const { matchPath } = await loadNearestTsconfigFor(f);
-            for (const e of mod.exports)
-              if (
-                e.type === "reexport" ||
-                e.type === "exportStar" ||
-                e.type === "namespaceReexport"
-              ) {
-                if (e.fromModule.startsWith(".")) {
-                  const resolved = await resolveSpecifier(
-                    f,
-                    e.fromModule,
-                    projectRoot,
-                    matchPath,
-                    workspaceConfig,
-                    {
-                      resolveNodeModules: !!graphOptions.resolveNodeModules,
-                      ...(graphOptions.resolutionHints
-                        ? { resolutionHints: graphOptions.resolutionHints }
-                        : {}),
-                    },
-                  );
-                  if (typeof resolved === "string") e.fromModule = resolved;
-                } else {
-                  const pkgResolved = await resolveWorkspacePackage(
-                    e.fromModule,
-                    workspaceConfig,
-                  );
-                  if (pkgResolved) e.fromModule = pkgResolved;
-                }
-              }
-          }
-        }
-        writeToCache(projectRoot, f, cacheSig, mod, opts);
-      } else {
-        // If mod was cached but edges weren't, we still need to collect json deps from mod
-        collectJsonDependencies(mod.imports, jsonDependencies);
-      }
-
-      // 2. Recompute Edges (using the parsed tree)
-      edges = await collectEdgesForFile(f, projectRoot, workspaceConfig, {
-        parsed: {
-          source: src,
-          ...(tree ? { tree } : {}),
-          sup,
-          ...(resolvedLang ? { lang: resolvedLang } : {}),
-          ...(nativeQueries !== undefined ? { nativeQueries } : {}),
-        },
-        fast: !!graphOptions.fast,
-        ...(graphOptions.fastRegexDisabledLanguages
-          ? {
-              fastRegexDisabledLanguages:
-                graphOptions.fastRegexDisabledLanguages,
-            }
-          : {}),
-        resolveNodeModules: !!graphOptions.resolveNodeModules,
-        dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
-        ...(graphOptions.resolutionHints
-          ? { resolutionHints: graphOptions.resolutionHints }
-          : {}),
-        fileSignature: sigInfo,
-        ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
-        ...(onFileEdges ? { onFileEdges } : {}),
-        ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
-      });
-
-      if (!mod) {
-        mod = {
-          file: f,
-          exports: [],
-          imports: [],
-          locals: [],
-        };
-      }
-
-      return [f, mod, edges] as const;
-    } catch (error) {
-      if (isUnsupportedParserInputError(error)) {
-        const modUnsupported: ModuleIndex = {
-          file: f,
-          exports: [],
-          imports: [],
-          locals: [],
-        };
-        return [f, modUnsupported, []] as const;
-      }
-      if (isJsFallbackUnavailableError(error)) {
-        const modFallbackUnavailable: ModuleIndex = {
-          file: f,
-          exports: [],
-          imports: [],
-          locals: [],
-        };
-        return [f, modFallbackUnavailable, []] as const;
-      }
-      console.warn(`Warning: Failed to process file ${f}:`, error);
-      const modError: ModuleIndex = {
-        file: f,
-        exports: [],
-        imports: [],
-        locals: [],
-      };
-      return [f, modError, []] as const;
-    } finally {
-      if (opts?.onProgress) {
-        opts.onProgress({
-          type: "progress",
-          message: `Indexed ${f}`,
-          current: ++processedFiles,
-          total: totalFiles,
-        });
+    for (const [file, mod, edges] of fileResults) {
+      modules.set(file, mod);
+      for (const e of edges) {
+        graph.edges.push(e);
+        if (e.to.type === "file") graph.nodes.add(e.to.path);
       }
     }
-  });
 
-  if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
-
-  const graphStart = performance.now();
-  const appendUniqueGraphEdges = (edges: Edge[]) => {
-    if (edges.length === 0) return;
-    const seen = new Set(
-      graph.edges.map(
-        (edge) =>
-          `${edge.from}::${edge.to.type === "file" ? edge.to.path : edge.to.name}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`,
+    appendUniqueGraphEdges(
+      await collectWorkspaceManifestDependencyEdges(
+        projectRoot,
+        opts?.discovery,
+        new Set(normalizedFiles),
+        opts?.logLevel,
       ),
     );
-    for (const edge of edges) {
-      const key = `${edge.from}::${edge.to.type === "file" ? edge.to.path : edge.to.name}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      graph.edges.push(edge);
-      if (edge.to.type === "file") graph.nodes.add(edge.to.path);
+    if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
+
+    for (const jsonPath of jsonDependencies) {
+      ensureJsonModule(modules, jsonPath);
     }
-  };
 
-  for (const [file, mod, edges] of fileResults) {
-    modules.set(file, mod);
-    for (const e of edges) {
-      graph.edges.push(e);
-      if (e.to.type === "file") graph.nodes.add(e.to.path);
-    }
-  }
-
-  appendUniqueGraphEdges(
-    await collectWorkspaceManifestDependencyEdges(
-      projectRoot,
-      opts?.discovery,
-      new Set(normalizedFiles),
-    ),
-  );
-  if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
-
-  for (const jsonPath of jsonDependencies) {
-    ensureJsonModule(modules, jsonPath);
-  }
-
-  for (const [_file, mod] of modules) {
-    for (const imp of [...mod.imports]) {
-      if (imp.kind === "star" && typeof imp.resolved === "string") {
-        const target = modules.get(imp.resolved);
-        if (!target) continue;
-        const targetSup =
-          typeof imp.resolved === "string"
-            ? supportForFile(imp.resolved)
-            : null;
-        const exported =
-          target.exports.filter((e) => e.type === "local").length > 0
-            ? target.exports
-                .filter(
-                  (e): e is Extract<ExportEntry, { type: "local" }> =>
-                    e.type === "local",
-                )
-                .map((e) => e.target)
-            : target.locals.filter((l) => !l.localName.startsWith("_"));
-        const seen = new Set<string>();
-        for (const sym of exported) {
-          if (!sym.localName || seen.has(sym.localName)) continue;
-          seen.add(sym.localName);
-          const treatAsNamespace =
-            targetSup?.id === "ruby" && sym.kind === SymbolKind.Class;
-          if (treatAsNamespace) {
-            mod.imports.push({
-              kind: "namespace",
-              localNS: sym.localName,
-              from: imp.from,
-              resolved: imp.resolved,
-            });
-          } else {
-            mod.imports.push({
-              kind: "named",
-              local: sym.localName,
-              imported: sym.localName,
-              from: imp.from,
-              resolved: imp.resolved,
-            });
+    for (const [_file, mod] of modules) {
+      for (const imp of [...mod.imports]) {
+        if (imp.kind === "star" && typeof imp.resolved === "string") {
+          const target = modules.get(imp.resolved);
+          if (!target) continue;
+          const targetSup =
+            typeof imp.resolved === "string"
+              ? supportForFile(imp.resolved)
+              : null;
+          const exported =
+            target.exports.filter((e) => e.type === "local").length > 0
+              ? target.exports
+                  .filter(
+                    (e): e is Extract<ExportEntry, { type: "local" }> =>
+                      e.type === "local",
+                  )
+                  .map((e) => e.target)
+              : target.locals.filter((l) => !l.localName.startsWith("_"));
+          const seen = new Set<string>();
+          for (const sym of exported) {
+            if (!sym.localName || seen.has(sym.localName)) continue;
+            seen.add(sym.localName);
+            const treatAsNamespace =
+              targetSup?.id === "ruby" && sym.kind === SymbolKind.Class;
+            if (treatAsNamespace) {
+              mod.imports.push({
+                kind: "namespace",
+                localNS: sym.localName,
+                from: imp.from,
+                resolved: imp.resolved,
+              });
+            } else {
+              mod.imports.push({
+                kind: "named",
+                local: sym.localName,
+                imported: sym.localName,
+                from: imp.from,
+                resolved: imp.resolved,
+              });
+            }
           }
         }
       }
     }
-  }
 
-  if (manifestEntries && manifestEntries.size > 0) {
-    const writeManifestStart = performance.now();
-    const lastCommit = await getGitHead(projectRoot);
-    const configHash = await computeConfigHash(projectRoot);
-    const manifestData: IndexManifest = {
-      version: MANIFEST_VERSION,
-      projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
-      updatedAt: Date.now(),
-      ...(lastCommit ? { lastCommit } : {}),
-      ...(configHash ? { configHash } : {}),
-      graphOptions,
-      buildOptions: summarizeBuildOptions(opts),
-      files: Object.fromEntries(manifestEntries),
-    };
-    await writeManifest(projectRoot, opts, manifestData);
-    if (timings)
-      timings.writeManifestMs = Math.round(
-        performance.now() - writeManifestStart,
-      );
-  }
-
-  if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
-  const projectFiles = await discoverProjectFiles(projectRoot);
-
-  const keepParsed = opts?.keepParsed ?? false;
-  const maxParsedEntries = Math.max(1, opts?.parsedCacheMaxEntries ?? 1024);
-  if (!keepParsed) {
-    parsedMap.clear();
-  } else {
-    while (parsedMap.size > maxParsedEntries) {
-      const oldest = parsedMap.keys().next().value;
-      if (!oldest) break;
-      parsedMap.delete(oldest);
+    if (manifestEntries && manifestEntries.size > 0) {
+      const writeManifestStart = performance.now();
+      const lastCommit = await getGitHead(projectRoot);
+      const configHash = await computeConfigHash(projectRoot);
+      const manifestData: IndexManifest = {
+        version: MANIFEST_VERSION,
+        projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
+        updatedAt: Date.now(),
+        ...(lastCommit ? { lastCommit } : {}),
+        ...(configHash ? { configHash } : {}),
+        graphOptions,
+        buildOptions: summarizeBuildOptions(opts),
+        files: Object.fromEntries(manifestEntries),
+      };
+      await writeManifest(projectRoot, opts, manifestData);
+      if (timings)
+        timings.writeManifestMs = Math.round(
+          performance.now() - writeManifestStart,
+        );
     }
-  }
 
-  return {
-    graph,
-    modules,
-    byFile: modules,
-    ...(opts?.native ? { nativeMode: opts.native } : {}),
-    exportCache: new Map(),
-    scopeCache: new Map(),
-    parsed: keepParsed ? parsedMap : undefined,
-    ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
-    projectFiles,
-  };
+    if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
+    const projectFiles = await discoverProjectFiles(projectRoot, {
+      logLevel: opts?.logLevel,
+    });
 
+    const keepParsed = opts?.keepParsed ?? false;
+    const maxParsedEntries = Math.max(1, opts?.parsedCacheMaxEntries ?? 1024);
+    if (!keepParsed) {
+      parsedMap.clear();
+    } else {
+      while (parsedMap.size > maxParsedEntries) {
+        const oldest = parsedMap.keys().next().value;
+        if (!oldest) break;
+        parsedMap.delete(oldest);
+      }
+    }
+
+    return {
+      graph,
+      modules,
+      byFile: modules,
+      ...(opts?.native ? { nativeMode: opts.native } : {}),
+      exportCache: new Map(),
+      scopeCache: new Map(),
+      parsed: keepParsed ? parsedMap : undefined,
+      ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
+      projectFiles,
+    };
   } finally {
     await teardownWorkerPool(workerSetup, report);
   }
@@ -4225,11 +4248,10 @@ export async function buildProjectIndex(
   opts?: BuildOptions,
 ): Promise<ProjectIndex> {
   try {
-    const files = await listProjectFiles(
-      projectRoot,
-      undefined,
-      opts?.discovery,
-    );
+    const files = await listProjectFiles(projectRoot, undefined, {
+      ...opts?.discovery,
+      ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+    });
     return buildIndexFromFileListShared(projectRoot, files, opts, {
       manifestMode: "read-write",
       warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,
@@ -4286,13 +4308,18 @@ export async function buildProjectIndexIncremental(
       manifestReport.reason = "missing";
     }
     const optionDiffs = diffBuildOptions(manifest?.buildOptions, opts);
-    if (optionDiffs.length > 0) {
-      console.warn(
-        `Warning: Manifest options differ from current build options: ${optionDiffs.join(
+    const warningOptionDiffs = optionDiffs.filter((diff) => diff !== "cache");
+    if (warningOptionDiffs.length > 0) {
+      logWithLevel(
+        opts?.logLevel,
+        "warn",
+        `Warning: Manifest options differ from current build options: ${warningOptionDiffs.join(
           ", ",
         )}`,
       );
-      if (manifestReport) manifestReport.optionsMismatch = optionDiffs;
+    }
+    if (manifestReport && optionDiffs.length > 0) {
+      manifestReport.optionsMismatch = optionDiffs;
     }
 
     // Check config hash
@@ -4307,7 +4334,11 @@ export async function buildProjectIndexIncremental(
       configChanged
     ) {
       if (configChanged) {
-        console.warn("Configuration changed, rebuilding index...");
+        logWithLevel(
+          opts?.logLevel,
+          "warn",
+          "Configuration changed, rebuilding index...",
+        );
       }
       if (manifestReport && manifest) {
         manifestReport.reason = "graphOptionsMismatch";
@@ -4342,7 +4373,9 @@ export async function buildProjectIndexIncremental(
         manifestReport.missing = missing;
       }
       if (mismatches > 0 || missing > 0) {
-        console.warn(
+        logWithLevel(
+          opts?.logLevel,
+          "warn",
           `Warning: Manifest verification failed (mismatches: ${mismatches}, missing: ${missing}). Rebuilding full index.`,
         );
         return await buildProjectIndexFromExport(projectRoot, opts);
@@ -4403,405 +4436,419 @@ export async function buildProjectIndexIncremental(
     // Worker pool setup for incremental builds
     const workerSetupIncr = await setupWorkerPool(opts);
     try {
-
-    const workspaceConfig = await loadWorkspaceConfig(projectRoot);
-    const fileSignatures = new Map<string, FileSignature>();
-    const useGitSignatures = gitAvailable;
-    const gitSigMap = useGitSignatures
-      ? await getGitBlobHashes(projectRoot, Array.from(allFiles), {
-          gitAvailable,
-        })
-      : new Map<string, string>();
-    const changedFiles = new Set<string>();
-    const modules = new Map<FileId, ModuleIndex>();
-    const parsedMap = new Map<string, ParsedFileContext>();
-    const jsonDependencies = new Set<string>();
-    const useBloomFilters = opts?.useBloomFilters ?? true; // Default to true for performance
-    const bloomFilterCache = useBloomFilters
-      ? new (await import("./util/bloomFilter.js")).BloomFilterCache()
-      : undefined;
-
-    const markAsChanged = (file: string) => {
-      if (fs.existsSync(file)) changedFiles.add(file);
-    };
-    explicitFiles.forEach(markAsChanged);
-    manifestDiffFiles.forEach(markAsChanged);
-    gitFiles.forEach(markAsChanged);
-    if (fileReport) {
-      fileReport.changed = changedFiles.size;
-    }
-
-    for (const file of allFiles) {
-      const sigInfo = await fileSignature(
-        file,
-        opts?.cacheStrict,
-        gitSigMap.get(file),
-        { forceContentHash: cacheEnabled },
-      );
-      fileSignatures.set(file, sigInfo);
-      const entry = trackedEntries[file];
-      const hasMatchingGitSig =
-        !!entry?.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
-      const hasMatchingSig = entry?.sig === sigInfo.sig;
-      if (!entry || !(hasMatchingGitSig || hasMatchingSig)) {
-        changedFiles.add(file);
-      }
-    }
-
-    for (const file of allFiles) {
-      if (changedFiles.has(file)) continue;
-      const sigInfo = fileSignatures.get(file)!;
-      const cacheSig = cacheEnabled
-        ? await cacheSignatureForFile(file, sigInfo)
-        : sigInfo.cacheSig;
-      const cached = cacheEnabled
-        ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report)
-        : null;
-      if (cached) {
-        if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
-        modules.set(file, cached);
-        collectJsonDependencies(cached.imports, jsonDependencies);
-        if (bloomFilterCache) {
-          const filter = await buildBloomFilterForFile(file);
-          if (filter) bloomFilterCache.set(file, filter);
-        }
-      } else {
-        changedFiles.add(file);
-      }
-    }
-
-    const changedList = Array.from(changedFiles);
-    if (fileReport) {
-      fileReport.changed = changedList.length;
-    }
-    if (changedList.length > 0) {
-      const parseStart = performance.now();
-      let processedFiles = 0;
-      const totalFiles = changedList.length;
-      const fileResults = await mapLimit(changedList, conc, async (f) => {
-        try {
-          if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
-
-          // FIX: Check support before parsing to avoid throwing errors for non-code files
-          const supCheck = supportForFile(f);
-          if (!supCheck) {
-            const mod: ModuleIndex = {
-              file: f,
-              exports: [],
-              imports: [],
-              locals: [],
-            };
-            return [f, mod] as const;
-          }
-
-          let prepared: PreparedFileContext;
-          if (workerSetupIncr.pool && supCheck && !isSFCFile(f)) {
-            if (workerSetupIncr.report) workerSetupIncr.report.tasksSubmitted++;
-            try {
-              const workerResult: NativeExtractResult =
-                await workerSetupIncr.pool.run(buildWorkerTask(f, supCheck));
-              prepared = workerResultToPrepared(workerResult, supCheck, f);
-            } catch {
-              if (workerSetupIncr.report) workerSetupIncr.report.tasksFailed++;
-              prepared = await prepareFileForIndexing(f, opts?.native);
-            }
-          } else {
-            prepared = await prepareFileForIndexing(f, opts?.native);
-          }
-          recordNativeBackendOutcome(report, {
-            usedNative: !!prepared.nativeQueries,
-            support: prepared.sup,
-            file: f,
-            languageId: prepared.sup.id,
-            ...(prepared.nativeFallbackReason
-              ? { fallbackReason: prepared.nativeFallbackReason }
-              : {}),
-            ...(prepared.nativeError ? { error: prepared.nativeError } : {}),
-          });
-          const { source: src, sup, lang, nativeQueries } = prepared;
-          let resolvedLang = lang;
-          let tree: SyntaxTreeLike | undefined;
-          const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
-
-          if (!nativeQueries && !graphOnlyLanguage) {
-            const parsed = tryParsePreparedFileContext(prepared);
-            if (parsed) {
-              tree = parsed.tree;
-              resolvedLang = parsed.lang;
-              setParsedCacheEntry(
-                parsedMap,
-                f,
-                parsed,
-                Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
-              );
-            }
-          }
-          const lacksParserContext = !nativeQueries && !tree;
-
-          // Build bloom filter for this file if enabled
-          if (bloomFilterCache) {
-            const { buildBloomFilterFromSource } =
-              await import("./util/bloomFilter.js");
-            const filter = buildBloomFilterFromSource(src, sup.id);
-            bloomFilterCache.set(f, filter);
-          }
-
-          const imports = await collectImportsForFile(f, projectRoot, {
-            source: src,
-            ...(tree && isJsSyntaxTree(tree) ? { tree } : {}),
-            sup,
-            ...(resolvedLang ? { lang: resolvedLang } : {}),
-            ...(nativeQueries !== undefined ? { nativeQueries } : {}),
-            graphOptions,
-          });
-          collectJsonDependencies(imports, jsonDependencies);
-          const mod = lacksParserContext
-            ? {
-                file: f,
-                exports: [],
-                imports,
-                locals: [],
-              }
-            : collectLocalsAndExportsFromSource(
-                f,
-                src,
-                sup,
-                resolvedLang,
-                imports,
-                {
-                  ...(tree ? { tree } : {}),
-                  ...(nativeQueries !== undefined ? { nativeQueries } : {}),
-                  ...(opts?.native ? { nativeMode: opts.native } : {}),
-                },
-              );
-          mod.imports = imports;
-
-          if (sup.supportsCrossModuleSymbols) {
-            if (sup.id === "ts" || sup.id === "js") {
-              const { matchPath } = await loadNearestTsconfigFor(f);
-              for (const e of mod.exports)
-                if (
-                  e.type === "reexport" ||
-                  e.type === "exportStar" ||
-                  e.type === "namespaceReexport"
-                ) {
-                  if (e.fromModule.startsWith(".")) {
-                    const resolved = await resolveSpecifier(
-                      f,
-                      e.fromModule,
-                      projectRoot,
-                      matchPath,
-                      workspaceConfig,
-                      {
-                        resolveNodeModules: !!graphOptions.resolveNodeModules,
-                        ...(graphOptions.resolutionHints
-                          ? { resolutionHints: graphOptions.resolutionHints }
-                          : {}),
-                      },
-                    );
-                    if (typeof resolved === "string") e.fromModule = resolved;
-                  } else {
-                    const pkgResolved = await resolveWorkspacePackage(
-                      e.fromModule,
-                      workspaceConfig,
-                    );
-                    if (pkgResolved) e.fromModule = pkgResolved;
-                  }
-                }
-            }
-          }
-          const sigInfo = fileSignatures.get(f)!;
-          const cacheSig = cacheEnabled
-            ? await cacheSignatureForFile(f, sigInfo)
-            : sigInfo.cacheSig;
-          writeToCache(projectRoot, f, cacheSig, mod, opts);
-          return [f, mod] as const;
-        } catch (error) {
-          if (isUnsupportedParserInputError(error)) {
-            const modUnsupported: ModuleIndex = {
-              file: f,
-              exports: [],
-              imports: [],
-              locals: [],
-            };
-            return [f, modUnsupported] as const;
-          }
-          if (isJsFallbackUnavailableError(error)) {
-            const modFallbackUnavailable: ModuleIndex = {
-              file: f,
-              exports: [],
-              imports: [],
-              locals: [],
-            };
-            return [f, modFallbackUnavailable] as const;
-          }
-          console.warn(`Warning: Failed to process file ${f}:`, error);
-          const modError: ModuleIndex = {
-            file: f,
-            exports: [],
-            imports: [],
-            locals: [],
-          };
-          return [f, modError] as const;
-        } finally {
-          if (opts?.onProgress) {
-            opts.onProgress({
-              type: "progress",
-              message: `Indexed ${f}`,
-              current: ++processedFiles,
-              total: totalFiles,
-            });
-          }
-        }
-      });
-      for (const [f, mod] of fileResults) {
-        modules.set(f.replace(/\\/g, "/"), mod);
-      }
-      if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
-    }
-
-    for (const jsonPath of jsonDependencies) {
-      ensureJsonModule(modules, jsonPath);
-    }
-
-    for (const [_file, m] of modules) {
-      for (const imp of [...m.imports]) {
-        if (imp.kind === "star" && typeof imp.resolved === "string") {
-          const target = modules.get(imp.resolved);
-          if (target) {
-            let exported: string[] = [];
-            const viaAll = target.exports.filter((e) => e.type === "local");
-            if (viaAll.length) exported = viaAll.map((e) => e.exportedAs);
-            else
-              exported = target.locals
-                .map((l) => l.localName)
-                .filter((n) => !n.startsWith("_"));
-            for (const name of exported)
-              m.imports.push({
-                kind: "named",
-                local: name,
-                imported: name,
-                from: imp.from,
-                resolved: imp.resolved,
-              });
-          }
-        }
-      }
-    }
-
-    const cachedGraphEntries = new Map<string, ManifestFileEntry>(
-      Object.entries(manifest.files ?? {}).filter(([file]) =>
-        fs.existsSync(file),
-      ),
-    );
-    const manifestEntries = new Map<string, ManifestFileEntry>(
-      cachedGraphEntries,
-    );
-
-    const baseGraph: Graph | undefined =
-      cachedGraphEntries.size > 0
-        ? {
-            nodes: new Set<string>(),
-            edges: [],
-          }
+      const workspaceConfig = await loadWorkspaceConfig(projectRoot);
+      const fileSignatures = new Map<string, FileSignature>();
+      const useGitSignatures = gitAvailable;
+      const gitSigMap = useGitSignatures
+        ? await getGitBlobHashes(projectRoot, Array.from(allFiles), {
+            gitAvailable,
+          })
+        : new Map<string, string>();
+      const changedFiles = new Set<string>();
+      const modules = new Map<FileId, ModuleIndex>();
+      const parsedMap = new Map<string, ParsedFileContext>();
+      const jsonDependencies = new Set<string>();
+      const useBloomFilters = opts?.useBloomFilters ?? true; // Default to true for performance
+      const bloomFilterCache = useBloomFilters
+        ? new (await import("./util/bloomFilter.js")).BloomFilterCache()
         : undefined;
 
-    if (baseGraph) {
-      for (const [file, entry] of cachedGraphEntries) {
-        baseGraph.nodes.add(file);
-        for (const edge of entry.edges) {
-          baseGraph.edges.push(edge);
-          if (edge.to.type === "file") baseGraph.nodes.add(edge.to.path);
+      const markAsChanged = (file: string) => {
+        if (fs.existsSync(file)) changedFiles.add(file);
+      };
+      explicitFiles.forEach(markAsChanged);
+      manifestDiffFiles.forEach(markAsChanged);
+      gitFiles.forEach(markAsChanged);
+      if (fileReport) {
+        fileReport.changed = changedFiles.size;
+      }
+
+      for (const file of allFiles) {
+        const sigInfo = await fileSignature(
+          file,
+          opts?.cacheStrict,
+          gitSigMap.get(file),
+          { forceContentHash: cacheEnabled },
+        );
+        fileSignatures.set(file, sigInfo);
+        const entry = trackedEntries[file];
+        const hasMatchingGitSig =
+          !!entry?.gitSig &&
+          !!sigInfo.gitSig &&
+          entry.gitSig === sigInfo.gitSig;
+        const hasMatchingSig = entry?.sig === sigInfo.sig;
+        if (!entry || !(hasMatchingGitSig || hasMatchingSig)) {
+          changedFiles.add(file);
         }
       }
-    }
 
-    const filesList = Array.from(changedFiles);
-    const graphStart = performance.now();
-    const graph =
-      filesList.length === 0 && baseGraph
-        ? { nodes: new Set(baseGraph.nodes), edges: [...baseGraph.edges] }
-        : await collectGraph(projectRoot, filesList, {
-            parsed: parsedMap,
-            fast: !!graphOptions.fast,
-            ...(graphOptions.fastRegexDisabledLanguages
-              ? {
-                  fastRegexDisabledLanguages:
-                    graphOptions.fastRegexDisabledLanguages,
-                }
-              : {}),
-            resolveNodeModules: !!graphOptions.resolveNodeModules,
-            dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
-            ...(opts?.native ? { native: opts.native } : {}),
-            ...(graphOptions.resolutionHints
-              ? { resolutionHints: graphOptions.resolutionHints }
-              : {}),
-            fileSignatures,
-            cachedFileEdges: cachedGraphEntries,
-            ...(onFallbackImportExtraction
-              ? { onFallbackImportExtraction }
-              : {}),
-            ...(baseGraph ? { baseGraph } : {}),
-            replaceFiles: new Set<string>(changedFiles),
-            onFileEdges: (file, entry) => {
-              if (!entry?.sig) return;
-              manifestEntries.set(file, {
-                sig: entry.sig,
-                ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
-                edges: entry.edges,
-              });
-            },
-          });
-    if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
-
-    if (manifestEntries.size > 0) {
-      const writeManifestStart = performance.now();
-      const lastCommit = await getGitHead(projectRoot);
-      const configHash = await computeConfigHash(projectRoot);
-      const manifestData: IndexManifest = {
-        version: MANIFEST_VERSION,
-        projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
-        updatedAt: Date.now(),
-        ...(lastCommit ? { lastCommit } : {}),
-        ...(configHash ? { configHash } : {}),
-        graphOptions,
-        buildOptions: summarizeBuildOptions(opts),
-        files: Object.fromEntries(manifestEntries),
-      };
-      await writeManifest(projectRoot, opts, manifestData);
-      if (timings)
-        timings.writeManifestMs = Math.round(
-          performance.now() - writeManifestStart,
-        );
-    }
-
-    if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
-    const projectFiles = await discoverProjectFiles(projectRoot);
-
-    const keepParsed = opts?.keepParsed ?? false;
-    const maxParsedEntries = Math.max(1, opts?.parsedCacheMaxEntries ?? 1024);
-    if (!keepParsed) {
-      parsedMap.clear();
-    } else {
-      while (parsedMap.size > maxParsedEntries) {
-        const oldest = parsedMap.keys().next().value;
-        if (!oldest) break;
-        parsedMap.delete(oldest);
+      for (const file of allFiles) {
+        if (changedFiles.has(file)) continue;
+        const sigInfo = fileSignatures.get(file)!;
+        const cacheSig = cacheEnabled
+          ? await cacheSignatureForFile(file, sigInfo)
+          : sigInfo.cacheSig;
+        const cached = cacheEnabled
+          ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report)
+          : null;
+        if (cached) {
+          if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
+          modules.set(file, cached);
+          collectJsonDependencies(cached.imports, jsonDependencies);
+          if (bloomFilterCache) {
+            const filter = await buildBloomFilterForFile(file);
+            if (filter) bloomFilterCache.set(file, filter);
+          }
+        } else {
+          changedFiles.add(file);
+        }
       }
-    }
 
-    return {
-      graph,
-      modules,
-      byFile: modules,
-      ...(opts?.native ? { nativeMode: opts.native } : {}),
-      exportCache: new Map(),
-      scopeCache: new Map(),
-      parsed: keepParsed ? parsedMap : undefined,
-      ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
-      projectFiles,
-    };
+      const changedList = Array.from(changedFiles);
+      if (fileReport) {
+        fileReport.changed = changedList.length;
+      }
+      if (changedList.length > 0) {
+        const parseStart = performance.now();
+        let processedFiles = 0;
+        const totalFiles = changedList.length;
+        const fileResults = await mapLimit(changedList, conc, async (f) => {
+          try {
+            if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
 
+            // FIX: Check support before parsing to avoid throwing errors for non-code files
+            const supCheck = supportForFile(f);
+            if (!supCheck) {
+              const mod: ModuleIndex = {
+                file: f,
+                exports: [],
+                imports: [],
+                locals: [],
+              };
+              return [f, mod] as const;
+            }
+
+            let prepared: PreparedFileContext;
+            if (workerSetupIncr.pool && supCheck && !isSFCFile(f)) {
+              if (workerSetupIncr.report)
+                workerSetupIncr.report.tasksSubmitted++;
+              try {
+                const workerResult: NativeExtractResult =
+                  await workerSetupIncr.pool.run(buildWorkerTask(f, supCheck));
+                prepared = workerResultToPrepared(workerResult, supCheck, f);
+              } catch {
+                if (workerSetupIncr.report)
+                  workerSetupIncr.report.tasksFailed++;
+                prepared = await prepareFileForIndexing(f, opts?.native);
+              }
+            } else {
+              prepared = await prepareFileForIndexing(f, opts?.native);
+            }
+            recordNativeBackendOutcome(report, {
+              usedNative: !!prepared.nativeQueries,
+              support: prepared.sup,
+              file: f,
+              languageId: prepared.sup.id,
+              ...(prepared.nativeFallbackReason
+                ? { fallbackReason: prepared.nativeFallbackReason }
+                : {}),
+              ...(prepared.nativeError ? { error: prepared.nativeError } : {}),
+            });
+            const { source: src, sup, lang, nativeQueries } = prepared;
+            let resolvedLang = lang;
+            let tree: SyntaxTreeLike | undefined;
+            const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
+
+            if (!nativeQueries && !graphOnlyLanguage) {
+              const parsed = tryParsePreparedFileContext(prepared);
+              if (parsed) {
+                tree = parsed.tree;
+                resolvedLang = parsed.lang;
+                setParsedCacheEntry(
+                  parsedMap,
+                  f,
+                  parsed,
+                  Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
+                );
+              }
+            }
+            const lacksParserContext = !nativeQueries && !tree;
+
+            // Build bloom filter for this file if enabled
+            if (bloomFilterCache) {
+              const { buildBloomFilterFromSource } =
+                await import("./util/bloomFilter.js");
+              const filter = buildBloomFilterFromSource(src, sup.id);
+              bloomFilterCache.set(f, filter);
+            }
+
+            const imports = await collectImportsForFile(f, projectRoot, {
+              source: src,
+              ...(tree && isJsSyntaxTree(tree) ? { tree } : {}),
+              sup,
+              ...(resolvedLang ? { lang: resolvedLang } : {}),
+              ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+              graphOptions,
+            });
+            collectJsonDependencies(imports, jsonDependencies);
+            const mod = lacksParserContext
+              ? {
+                  file: f,
+                  exports: [],
+                  imports,
+                  locals: [],
+                }
+              : collectLocalsAndExportsFromSource(
+                  f,
+                  src,
+                  sup,
+                  resolvedLang,
+                  imports,
+                  {
+                    ...(tree ? { tree } : {}),
+                    ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+                    ...(opts?.native ? { nativeMode: opts.native } : {}),
+                  },
+                );
+            mod.imports = imports;
+
+            if (sup.supportsCrossModuleSymbols) {
+              if (sup.id === "ts" || sup.id === "js") {
+                const { matchPath } = await loadNearestTsconfigFor(
+                  f,
+                  opts?.logLevel,
+                );
+                for (const e of mod.exports)
+                  if (
+                    e.type === "reexport" ||
+                    e.type === "exportStar" ||
+                    e.type === "namespaceReexport"
+                  ) {
+                    if (e.fromModule.startsWith(".")) {
+                      const resolved = await resolveSpecifier(
+                        f,
+                        e.fromModule,
+                        projectRoot,
+                        matchPath,
+                        workspaceConfig,
+                        {
+                          resolveNodeModules: !!graphOptions.resolveNodeModules,
+                          ...(graphOptions.resolutionHints
+                            ? { resolutionHints: graphOptions.resolutionHints }
+                            : {}),
+                        },
+                      );
+                      if (typeof resolved === "string") e.fromModule = resolved;
+                    } else {
+                      const pkgResolved = await resolveWorkspacePackage(
+                        e.fromModule,
+                        workspaceConfig,
+                      );
+                      if (pkgResolved) e.fromModule = pkgResolved;
+                    }
+                  }
+              }
+            }
+            const sigInfo = fileSignatures.get(f)!;
+            const cacheSig = cacheEnabled
+              ? await cacheSignatureForFile(f, sigInfo)
+              : sigInfo.cacheSig;
+            writeToCache(projectRoot, f, cacheSig, mod, opts);
+            return [f, mod] as const;
+          } catch (error) {
+            if (isUnsupportedParserInputError(error)) {
+              const modUnsupported: ModuleIndex = {
+                file: f,
+                exports: [],
+                imports: [],
+                locals: [],
+              };
+              return [f, modUnsupported] as const;
+            }
+            if (isJsFallbackUnavailableError(error)) {
+              const modFallbackUnavailable: ModuleIndex = {
+                file: f,
+                exports: [],
+                imports: [],
+                locals: [],
+              };
+              return [f, modFallbackUnavailable] as const;
+            }
+            logWithLevel(
+              opts?.logLevel,
+              "warn",
+              `Warning: Failed to process file ${f}:`,
+              error,
+            );
+            const modError: ModuleIndex = {
+              file: f,
+              exports: [],
+              imports: [],
+              locals: [],
+            };
+            return [f, modError] as const;
+          } finally {
+            if (opts?.onProgress) {
+              opts.onProgress({
+                type: "progress",
+                message: `Indexed ${f}`,
+                current: ++processedFiles,
+                total: totalFiles,
+              });
+            }
+          }
+        });
+        for (const [f, mod] of fileResults) {
+          modules.set(f.replace(/\\/g, "/"), mod);
+        }
+        if (timings)
+          timings.parseMs = Math.round(performance.now() - parseStart);
+      }
+
+      for (const jsonPath of jsonDependencies) {
+        ensureJsonModule(modules, jsonPath);
+      }
+
+      for (const [_file, m] of modules) {
+        for (const imp of [...m.imports]) {
+          if (imp.kind === "star" && typeof imp.resolved === "string") {
+            const target = modules.get(imp.resolved);
+            if (target) {
+              let exported: string[] = [];
+              const viaAll = target.exports.filter((e) => e.type === "local");
+              if (viaAll.length) exported = viaAll.map((e) => e.exportedAs);
+              else
+                exported = target.locals
+                  .map((l) => l.localName)
+                  .filter((n) => !n.startsWith("_"));
+              for (const name of exported)
+                m.imports.push({
+                  kind: "named",
+                  local: name,
+                  imported: name,
+                  from: imp.from,
+                  resolved: imp.resolved,
+                });
+            }
+          }
+        }
+      }
+
+      const cachedGraphEntries = new Map<string, ManifestFileEntry>(
+        Object.entries(manifest.files ?? {}).filter(([file]) =>
+          fs.existsSync(file),
+        ),
+      );
+      const manifestEntries = new Map<string, ManifestFileEntry>(
+        cachedGraphEntries,
+      );
+
+      const baseGraph: Graph | undefined =
+        cachedGraphEntries.size > 0
+          ? {
+              nodes: new Set<string>(),
+              edges: [],
+            }
+          : undefined;
+
+      if (baseGraph) {
+        for (const [file, entry] of cachedGraphEntries) {
+          baseGraph.nodes.add(file);
+          for (const edge of entry.edges) {
+            baseGraph.edges.push(edge);
+            if (edge.to.type === "file") baseGraph.nodes.add(edge.to.path);
+          }
+        }
+      }
+
+      const filesList = Array.from(changedFiles);
+      const graphStart = performance.now();
+      const graph =
+        filesList.length === 0 && baseGraph
+          ? { nodes: new Set(baseGraph.nodes), edges: [...baseGraph.edges] }
+          : await collectGraph(projectRoot, filesList, {
+              parsed: parsedMap,
+              fast: !!graphOptions.fast,
+              ...(graphOptions.fastRegexDisabledLanguages
+                ? {
+                    fastRegexDisabledLanguages:
+                      graphOptions.fastRegexDisabledLanguages,
+                  }
+                : {}),
+              resolveNodeModules: !!graphOptions.resolveNodeModules,
+              dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
+              ...(opts?.native ? { native: opts.native } : {}),
+              ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+              ...(graphOptions.resolutionHints
+                ? { resolutionHints: graphOptions.resolutionHints }
+                : {}),
+              fileSignatures,
+              cachedFileEdges: cachedGraphEntries,
+              ...(onFallbackImportExtraction
+                ? { onFallbackImportExtraction }
+                : {}),
+              ...(baseGraph ? { baseGraph } : {}),
+              replaceFiles: new Set<string>(changedFiles),
+              onFileEdges: (file, entry) => {
+                if (!entry?.sig) return;
+                manifestEntries.set(file, {
+                  sig: entry.sig,
+                  ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
+                  edges: entry.edges,
+                });
+              },
+            });
+      if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
+
+      if (manifestEntries.size > 0) {
+        const writeManifestStart = performance.now();
+        const lastCommit = await getGitHead(projectRoot);
+        const configHash = await computeConfigHash(projectRoot);
+        const manifestData: IndexManifest = {
+          version: MANIFEST_VERSION,
+          projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
+          updatedAt: Date.now(),
+          ...(lastCommit ? { lastCommit } : {}),
+          ...(configHash ? { configHash } : {}),
+          graphOptions,
+          buildOptions: summarizeBuildOptions(opts),
+          files: Object.fromEntries(manifestEntries),
+        };
+        await writeManifest(projectRoot, opts, manifestData);
+        if (timings)
+          timings.writeManifestMs = Math.round(
+            performance.now() - writeManifestStart,
+          );
+      }
+
+      if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
+      const projectFiles = await discoverProjectFiles(projectRoot, {
+        logLevel: opts?.logLevel,
+      });
+
+      const keepParsed = opts?.keepParsed ?? false;
+      const maxParsedEntries = Math.max(1, opts?.parsedCacheMaxEntries ?? 1024);
+      if (!keepParsed) {
+        parsedMap.clear();
+      } else {
+        while (parsedMap.size > maxParsedEntries) {
+          const oldest = parsedMap.keys().next().value;
+          if (!oldest) break;
+          parsedMap.delete(oldest);
+        }
+      }
+
+      return {
+        graph,
+        modules,
+        byFile: modules,
+        ...(opts?.native ? { nativeMode: opts.native } : {}),
+        exportCache: new Map(),
+        scopeCache: new Map(),
+        parsed: keepParsed ? parsedMap : undefined,
+        ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
+        projectFiles,
+      };
     } finally {
       await teardownWorkerPool(workerSetupIncr, report);
     }

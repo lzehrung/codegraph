@@ -8,7 +8,7 @@
   Acceptance criteria:
   `changedSymbol` events respect scope filtering before emission, and impacted items are yielded incrementally instead of only after the full analysis completes.
 
-- [ ] Unify library logging and observability behavior under `logLevel` and structured reports.
+- [x] Unify library logging and observability behavior under `logLevel` and structured reports.
   Acceptance criteria:
   Library code does not emit uncontrolled `console.warn` noise on normal paths when `logLevel: "silent"` is requested, and important degradations remain observable through reports or explicit error surfaces.
 

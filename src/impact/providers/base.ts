@@ -94,11 +94,8 @@ class GitDiffProvider implements DiffProvider {
           ).toLocaleString()} lines). Impact analysis may be incomplete or slow.`;
         }
       }
-    } catch (error: unknown) {
+    } catch {
       // Ignore stat failures, proceed to full diff
-      console.error(
-        `Git stat failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
     }
 
     const args = [

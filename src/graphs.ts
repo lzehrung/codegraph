@@ -29,6 +29,7 @@ import {
   type ModuleSpecifier,
   type ProjectFileDiscoveryOptions,
 } from "./util.js";
+import { logWithLevel, type LogLevel } from "./logging.js";
 import {
   extractGraphOnlyModuleSpecifiers,
   extractHtmlAttributeSpecifiers,
@@ -87,6 +88,7 @@ export type GraphBuildOptions = {
   dynamicImportHeuristics?: boolean;
   resolutionHints?: string[];
   native?: NativeRuntimeMode;
+  logLevel?: LogLevel;
 };
 
 export type FallbackImportExtractionReason =
@@ -246,6 +248,7 @@ export function collectModuleSpecifiersFromSource(
     file?: string;
     fastRegexDisabledLanguages?: string[];
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
+    logLevel?: LogLevel;
   },
 ): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
@@ -271,7 +274,9 @@ export function collectModuleSpecifiersFromSource(
   };
   const ensureResolvedLang = (): JsLanguage => {
     if (!lang) {
-      const fileForLanguage = opts?.file ?? `temp.${support.matchExts[0]?.replace(/^\./, "") ?? "txt"}`;
+      const fileForLanguage =
+        opts?.file ??
+        `temp.${support.matchExts[0]?.replace(/^\./, "") ?? "txt"}`;
       lang = support.language(fileForLanguage);
     }
     return lang!;
@@ -451,7 +456,9 @@ export function collectModuleSpecifiersFromSource(
       }
     } catch (error) {
       queryFailed = true;
-      console.warn(
+      logWithLevel(
+        opts?.logLevel,
+        "warn",
         `Warning: Native query error in collectModuleSpecifiersFromSource for ${support.id}:`,
         error,
       );
@@ -469,45 +476,51 @@ export function collectModuleSpecifiersFromSource(
       jsQueryTree,
     );
     for (const match of matches) {
-        const caps = Object.fromEntries(
-          match.captures.map((capture) => [capture.name, capture] as const),
-        );
-        const modNodes = match.captures.filter((capture) => capture.name === "mod");
-        const stmtText = caps["stmt"]?.text ?? "";
-        const typeOnly =
-          (support.id === "ts" || support.id === "tsx") &&
-          (/\b(import|export)\s+type\b/.test(stmtText) ||
-            // declare module "..." {} — only string-literal module names can appear
-            // here because the TSQ uses `name: (string)`, so identifier-named ambient
-            // forms (declare namespace Foo, declare class Bar, etc.) never reach this
-            // branch.  All string-literal ambient module declarations are type-only.
-            /^\s*declare\s+module\s+["']/.test(stmtText));
-        if (support.id === "kotlin") {
-          const spec = extractKotlinImportSpecifier(stmtText);
-          if (spec) out.push({ spec, typeOnly: false });
+      const caps = Object.fromEntries(
+        match.captures.map((capture) => [capture.name, capture] as const),
+      );
+      const modNodes = match.captures.filter(
+        (capture) => capture.name === "mod",
+      );
+      const stmtText = caps["stmt"]?.text ?? "";
+      const typeOnly =
+        (support.id === "ts" || support.id === "tsx") &&
+        (/\b(import|export)\s+type\b/.test(stmtText) ||
+          // declare module "..." {} — only string-literal module names can appear
+          // here because the TSQ uses `name: (string)`, so identifier-named ambient
+          // forms (declare namespace Foo, declare class Bar, etc.) never reach this
+          // branch.  All string-literal ambient module declarations are type-only.
+          /^\s*declare\s+module\s+["']/.test(stmtText));
+      if (support.id === "kotlin") {
+        const spec = extractKotlinImportSpecifier(stmtText);
+        if (spec) out.push({ spec, typeOnly: false });
+        continue;
+      }
+      if (support.id === "rust") {
+        const parsed = parseRustImportStatement(stmtText);
+        if (parsed) {
+          out.push({ spec: parsed.from, typeOnly: false });
           continue;
         }
-        if (support.id === "rust") {
-          const parsed = parseRustImportStatement(stmtText);
-          if (parsed) {
-            out.push({ spec: parsed.from, typeOnly: false });
-            continue;
-          }
+      }
+      if (support.id === "csharp") {
+        const parsed = parseCsharpUsingDirective(stmtText);
+        if (parsed) {
+          out.push({ spec: parsed.from, typeOnly: false });
+          continue;
         }
-        if (support.id === "csharp") {
-          const parsed = parseCsharpUsingDirective(stmtText);
-          if (parsed) {
-            out.push({ spec: parsed.from, typeOnly: false });
-            continue;
-          }
-        }
-        for (const cap of modNodes) {
-          out.push({ spec: unquote(cap.text), typeOnly });
-        }
+      }
+      for (const cap of modNodes) {
+        out.push({ spec: unquote(cap.text), typeOnly });
+      }
     }
     if (htmlLikeLanguage) {
       const htmlSeen = makeSeenSet(out);
-      appendUniqueSpecifiers(out, extractHtmlAttributeSpecifiers(source), htmlSeen);
+      appendUniqueSpecifiers(
+        out,
+        extractHtmlAttributeSpecifiers(source),
+        htmlSeen,
+      );
       appendUniqueSpecifiers(
         out,
         extractHtmlInlineScriptSpecifiers(source),
@@ -525,7 +538,9 @@ export function collectModuleSpecifiersFromSource(
     if (out.length > 0) return out;
   } catch (error) {
     queryFailed = true;
-    console.warn(
+    logWithLevel(
+      opts?.logLevel,
+      "warn",
       `Warning: Query error in collectModuleSpecifiersFromSource for ${support.id}:`,
       error,
     );
@@ -591,6 +606,7 @@ export async function collectEdgesForFile(
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
     report?: BuildReport;
+    logLevel?: LogLevel;
   },
 ): Promise<Edge[]> {
   const normalizedFile = file.replace(/\\/g, "/");
@@ -633,7 +649,11 @@ export async function collectEdgesForFile(
       !!opts.fast && (sup.id === "ts" || sup.id === "js") && !fastRegexDisabled;
     if (!shouldSkipNativeForFastGraph) {
       // Use compact imports execution for graph mode -- smaller payload
-      const compactExecution = getCompactImportsExecution(src, sup, opts.native);
+      const compactExecution = getCompactImportsExecution(
+        src,
+        sup,
+        opts.native,
+      );
       compactNativeImports = compactExecution.results;
       recordNativeBackendOutcome(opts.report, {
         file: normalizedFile,
@@ -660,6 +680,7 @@ export async function collectEdgesForFile(
     ...(opts.onFallbackImportExtraction
       ? { onFallbackImportExtraction: opts.onFallbackImportExtraction }
       : {}),
+    ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
   });
 
   if ((sup.id === "ts" || sup.id === "js") && opts.dynamicImportHeuristics) {
@@ -679,14 +700,13 @@ export async function collectEdgesForFile(
   }
 
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
-  const graphOnlyAliasLanguage =
-    graphOnlyLanguageSupportsImportAliases(sup.id);
+  const graphOnlyAliasLanguage = graphOnlyLanguageSupportsImportAliases(sup.id);
   const needsGraphOnlyResolutionConfig =
     graphOnlyAliasLanguage &&
     specs.some(({ spec }) => graphOnlySpecifierNeedsResolutionConfig(spec));
   const { matchPath } =
     sup.id === "ts" || sup.id === "tsx" || needsGraphOnlyResolutionConfig
-      ? await loadNearestTsconfigFor(file)
+      ? await loadNearestTsconfigFor(file, opts?.logLevel)
       : { matchPath: undefined };
   const edges: Edge[] = [];
   const edgeResolutionTasks = specs.map(
@@ -701,10 +721,7 @@ export async function collectEdgesForFile(
     }) => {
       let to: EdgeTo;
       const resolutionExtensions = graphOnlyLanguage
-        ? getGraphOnlyResolutionExtensions(
-            sup.id,
-            resolutionKind ?? "document",
-          )
+        ? getGraphOnlyResolutionExtensions(sup.id, resolutionKind ?? "document")
         : undefined;
       if (sup.id === "python") {
         const relDotsMatch = spec.startsWith(".") ? spec.match(/^\.+/) : null;
@@ -773,9 +790,7 @@ export async function collectEdgesForFile(
             workspaceConfig,
             {
               resolveNodeModules: !!opts.resolveNodeModules,
-              ...(resolutionExtensions
-                ? { resolutionExtensions }
-                : {}),
+              ...(resolutionExtensions ? { resolutionExtensions } : {}),
               ...(opts.resolutionHints
                 ? { resolutionHints: opts.resolutionHints }
                 : {}),
@@ -822,14 +837,7 @@ export async function collectEdgesForFile(
 
   for (const resolvedEdge of await Promise.all(edgeResolutionTasks)) {
     if (!resolvedEdge) continue;
-    const {
-      to,
-      spec,
-      raw,
-      typeOnly,
-      resolved,
-      confidence,
-    } = resolvedEdge;
+    const { to, spec, raw, typeOnly, resolved, confidence } = resolvedEdge;
     edges.push({
       from: normalizedFile,
       to,
@@ -962,7 +970,12 @@ export async function collectGraph(
       if (isUnsupportedParserInputError(error)) {
         return [] as Edge[];
       }
-      console.warn(`Warning: Failed to process file ${file} for graph:`, error);
+      logWithLevel(
+        opts?.logLevel,
+        "warn",
+        `Warning: Failed to process file ${file} for graph:`,
+        error,
+      );
       return [] as Edge[];
     }
   });
@@ -1116,8 +1129,7 @@ export async function astGrep(
         nativeExecution.matches ??
         getUnifiedQueryExecution(src, sup, querySource, {
           getLanguage: () => sup.language(file),
-        })
-          .matches;
+        }).matches;
       if (matches) {
         for (const match of matches) {
           for (const capture of match.captures) {
@@ -1133,7 +1145,9 @@ export async function astGrep(
         continue;
       }
     } catch (error) {
-      console.warn(
+      logWithLevel(
+        opts?.logLevel,
+        "warn",
         `Warning: Failed to process file ${file} for AST grep:`,
         error,
       );
@@ -1528,10 +1542,7 @@ function isHotspotUnderRoots(
   }
   const normalizedFile = normalizeHotspotPath(filePath);
   return normalizedRoots.some((root) => {
-    return (
-      normalizedFile === root ||
-      normalizedFile.startsWith(`${root}/`)
-    );
+    return normalizedFile === root || normalizedFile.startsWith(`${root}/`);
   });
 }
 
@@ -1804,6 +1815,7 @@ export async function buildSymbolGraphDetailed(
     files?: Set<FileId>;
     maxEdges?: number;
     membersOnly?: boolean;
+    logLevel?: LogLevel;
   },
 ): Promise<SymbolGraph> {
   const base = await buildSymbolGraph(index);
@@ -2164,9 +2176,7 @@ export async function buildSymbolGraphDetailed(
         "composite_literal",
       ]);
 
-      const getCallTarget = (
-        n: SyntaxNodeLike,
-      ): SyntaxNodeLike | null => {
+      const getCallTarget = (n: SyntaxNodeLike): SyntaxNodeLike | null => {
         const explicitTarget =
           n.childForFieldName("function") ??
           n.childForFieldName("callee") ??
@@ -2339,47 +2349,43 @@ export async function buildSymbolGraphDetailed(
         if (!nodes.has(fromId)) nodes.set(fromId, nodeForDef(fn.def));
         const seenAliases = new Set<string>();
         if (!membersOnly)
-          scanForAliasUse(
-            fn.node,
-            (name: string, atNode: SyntaxNodeLike) => {
-              if (seenAliases.has(name)) return;
-              let target: SymbolDef | null = aliasToTargetDef.get(name) ?? null;
-              if (!target) {
-                const modFile = aliasToTargetModule.get(name);
-                if (modFile) {
-                  // If used as a member (u.helper), prefer that member name
-                  let exportedName: string | null = null;
-                  const p = atNode.parent;
-                  if (
-                    p &&
-                    (p.type === memberExpressionType ||
-                      p.type === "optional_member_expression")
-                  ) {
-                    const prop =
-                      p.childForFieldName?.("property") ?? p.child(2);
-                    if (prop && propertyIdentifierTypes.includes(prop.type))
-                      exportedName = sliceText(prop, src);
-                  }
-                  if (exportedName) {
-                    target = resolveExportFrom(modFile, exportedName);
-                    if (!target) {
-                      const m = index.byFile.get(modFile);
-                      target =
-                        (m?.locals ?? []).find(
-                          (l: SymbolDef) => l.localName === exportedName,
-                        ) ?? null;
-                    }
-                  }
-                  // Do not fall back to default or arbitrary first local to avoid spurious edges
+          scanForAliasUse(fn.node, (name: string, atNode: SyntaxNodeLike) => {
+            if (seenAliases.has(name)) return;
+            let target: SymbolDef | null = aliasToTargetDef.get(name) ?? null;
+            if (!target) {
+              const modFile = aliasToTargetModule.get(name);
+              if (modFile) {
+                // If used as a member (u.helper), prefer that member name
+                let exportedName: string | null = null;
+                const p = atNode.parent;
+                if (
+                  p &&
+                  (p.type === memberExpressionType ||
+                    p.type === "optional_member_expression")
+                ) {
+                  const prop = p.childForFieldName?.("property") ?? p.child(2);
+                  if (prop && propertyIdentifierTypes.includes(prop.type))
+                    exportedName = sliceText(prop, src);
                 }
+                if (exportedName) {
+                  target = resolveExportFrom(modFile, exportedName);
+                  if (!target) {
+                    const m = index.byFile.get(modFile);
+                    target =
+                      (m?.locals ?? []).find(
+                        (l: SymbolDef) => l.localName === exportedName,
+                      ) ?? null;
+                  }
+                }
+                // Do not fall back to default or arbitrary first local to avoid spurious edges
               }
-              if (!target) return;
-              seenAliases.add(name);
-              const toId = defNodeId(target);
-              if (!nodes.has(toId)) nodes.set(toId, nodeForDef(target));
-              if (!recordEdge(fromId, toId, "uses")) return;
-            },
-          );
+            }
+            if (!target) return;
+            seenAliases.add(name);
+            const toId = defNodeId(target);
+            if (!nodes.has(toId)) nodes.set(toId, nodeForDef(target));
+            if (!recordEdge(fromId, toId, "uses")) return;
+          });
 
         // Walk for member expressions of namespace imports: alias.member
         const walkForMembers = (n: SyntaxNodeLike) => {
@@ -2639,7 +2645,9 @@ export async function buildSymbolGraphDetailed(
       if (isUnsupportedParserInputError(error)) {
         continue;
       }
-      console.warn(
+      logWithLevel(
+        opts?.logLevel,
+        "warn",
         `Warning: Failed to build detailed symbol edges for ${file}:`,
         error,
       );
@@ -2647,7 +2655,9 @@ export async function buildSymbolGraphDetailed(
   }
 
   if (skippedJsFallbackFiles > 0) {
-    console.warn(
+    logWithLevel(
+      opts?.logLevel,
+      "warn",
       `Warning: Skipped detailed symbol edges for ${skippedJsFallbackFiles} file(s) because the JS Tree-sitter fallback is unavailable.`,
     );
   }
