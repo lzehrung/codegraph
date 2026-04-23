@@ -16,7 +16,7 @@
   Acceptance criteria:
   invalid or unreadable roots raise actionable errors, while legitimate empty projects remain distinguishable from discovery failures.
 
-- [ ] Surface native worker bootstrap failures in diagnostics/reporting.
+- [x] Surface native worker bootstrap failures in diagnostics/reporting.
   Acceptance criteria:
   when worker startup fails, callers can determine why from the structured build report instead of seeing a silent fallback.
 

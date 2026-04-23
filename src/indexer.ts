@@ -46,6 +46,7 @@ import {
   getGitBlobHashes,
   listChangedFiles,
   mapLimit,
+  stringifyUnknown,
   type ProjectFileDiscoveryOptions,
   type ProjectFileInfo,
 } from "./util.js";
@@ -427,6 +428,7 @@ export type WorkerPoolReport = {
   threads: number;
   tasksSubmitted: number;
   tasksFailed: number;
+  startupError?: string;
   totalWorkerMs?: number;
   wallClockMs?: number;
 };
@@ -491,9 +493,12 @@ async function setupWorkerPool(
       if (report) {
         report.threads = (p.options as { maxThreads?: number }).maxThreads ?? 0;
       }
-    } catch {
+    } catch (error) {
       pool = null;
-      if (report) report.enabled = false;
+      if (report) {
+        report.enabled = false;
+        report.startupError = stringifyUnknown(error);
+      }
     }
   }
   return { pool, report, startTime: pool ? performance.now() : 0 };
