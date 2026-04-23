@@ -6318,7 +6318,12 @@ function extractEnclosingBlock(
 export async function findReferences(
   index: ProjectIndex,
   req: { file: FileId; line: number; column: number } | { def: SymbolDef },
-  opts?: { context?: "line" | "block"; lines?: number; blockMaxLines?: number },
+  opts?: {
+    context?: "line" | "block";
+    lines?: number;
+    blockMaxLines?: number;
+    maxReferences?: number;
+  },
 ): Promise<
   | { status: "ok"; definition: SymbolDef; references: Reference[] }
   | { status: "not_found"; reason: string }
@@ -6378,15 +6383,31 @@ export async function findReferences(
   const scope = getCachedScope(definitionFile, mod, parsedContext);
 
   const refs: Reference[] = [];
+  const maxReferences =
+    typeof opts?.maxReferences === "number" && opts.maxReferences > 0
+      ? opts.maxReferences
+      : undefined;
+  const seenRefs = new Set<string>();
+  const hasReachedMaxReferences = (): boolean =>
+    maxReferences !== undefined && refs.length >= maxReferences;
+  const pushRef = (ref: Reference): void => {
+    const key = `${ref.file}:${ref.range.start.line}:${ref.range.start.column}`;
+    if (seenRefs.has(key)) return;
+    seenRefs.add(key);
+    refs.push(ref);
+  };
 
   const localBindings = scope.bindings.get(def.localName) ?? [];
   const localBinding = localBindings.find(
     (b) => b.def && b.def.start.index === def.range.start.index,
   );
-  if (localBinding)
-    for (const occ of localBinding.occurrences)
-      refs.push({ file: definitionFile, range: occ });
-  refs.push({ file: definitionFile, range: def.range });
+  pushRef({ file: definitionFile, range: def.range });
+  if (localBinding) {
+    for (const occ of localBinding.occurrences) {
+      if (hasReachedMaxReferences()) break;
+      pushRef({ file: definitionFile, range: occ });
+    }
+  }
 
   const exportedNames: string[] = [];
 
@@ -6481,6 +6502,7 @@ export async function findReferences(
   let candidateFiles = Array.from(index.byFile.keys()).filter(
     (f) => f !== definitionFile,
   );
+  candidateFiles.sort((left, right) => left.localeCompare(right));
   if (index.bloomFilters && exportedNames.length > 0) {
     candidateFiles = candidateFiles.filter((file) => {
       const mod = index.byFile.get(file);
@@ -6499,6 +6521,7 @@ export async function findReferences(
   }
 
   for (const f of candidateFiles) {
+    if (hasReachedMaxReferences()) break;
     const m = index.byFile.get(f);
     if (!m) continue;
 
@@ -6513,10 +6536,12 @@ export async function findReferences(
     };
 
     for (const imp of m.imports) {
+      if (hasReachedMaxReferences()) break;
       const targetFile =
         typeof imp.resolved === "string" ? imp.resolved : undefined;
       if (!targetFile) continue;
       for (const name of exportedNames) {
+        if (hasReachedMaxReferences()) break;
         if (imp.kind === "namespace") {
           const hit = resolveExport(index, targetFile, name);
           const matchesDef =
@@ -6528,12 +6553,14 @@ export async function findReferences(
           const nsName = imp.localNS;
           const member = name;
           const ranges = await collectNamespaceMemberRefs(f, nsName, member);
-          for (const r of ranges)
-            refs.push({
+          for (const r of ranges) {
+            if (hasReachedMaxReferences()) break;
+            pushRef({
               file: f,
               range: r,
               via: { import: imp, namespaceMember: member },
             });
+          }
         } else {
           if (imp.kind === "star") {
             const res = resolveImported(index, imp, name);
@@ -6546,7 +6573,8 @@ export async function findReferences(
               def,
             );
             for (const range of ranges) {
-              refs.push({ file: f, range, via: { import: imp } });
+              if (hasReachedMaxReferences()) break;
+              pushRef({ file: f, range, via: { import: imp } });
             }
             continue;
           }
@@ -6569,8 +6597,10 @@ export async function findReferences(
             // Only include occurrences if this binding is actually the one from this import.
             // A binding from an import will have b.import set.
             if (b.import === imp) {
-              for (const occ of b.occurrences)
-                refs.push({ file: f, range: occ, via: { import: imp } });
+              for (const occ of b.occurrences) {
+                if (hasReachedMaxReferences()) break;
+                pushRef({ file: f, range: occ, via: { import: imp } });
+              }
             }
           }
         }
@@ -6578,17 +6608,7 @@ export async function findReferences(
     }
   }
 
-  const seen = new Set<string>();
-  const uniqueRefs: typeof refs = [];
-  for (const ref of refs) {
-    const key = `${ref.file}:${ref.range.start.line}:${ref.range.start.column}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      uniqueRefs.push(ref);
-    }
-  }
-
-  uniqueRefs.sort((a, b) => {
+  refs.sort((a, b) => {
     if (a.file === b.file) {
       const aIndex = a.range.start.index ?? 0;
       const bIndex = b.range.start.index ?? 0;
@@ -6604,7 +6624,7 @@ export async function findReferences(
       { source: string; tree: SyntaxTreeLike; sup: LanguageSupport }
     >();
 
-    for (const ref of uniqueRefs) {
+    for (const ref of refs) {
       let cached = perFileCache.get(ref.file);
       if (!cached) {
         const parsedEntry = index.parsed?.get(ref.file);
@@ -6633,7 +6653,7 @@ export async function findReferences(
     }
   }
 
-  return { status: "ok", definition: def, references: uniqueRefs };
+  return { status: "ok", definition: def, references: refs };
 }
 
 // Detailed symbol graph re-export compatibility
