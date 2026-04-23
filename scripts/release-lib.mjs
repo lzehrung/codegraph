@@ -178,6 +178,21 @@ export function sanitizeJsFallbackPackageManifest(pkg) {
   return normalized;
 }
 
+export function sanitizePublishedRootPackageManifest(pkg) {
+  const normalized = { ...pkg };
+  delete normalized.devDependencies;
+  delete normalized.scripts;
+  delete normalized.workspaces;
+  return normalized;
+}
+
+export function restoreRootPackageManifest(pkg, version) {
+  return {
+    ...pkg,
+    version,
+  };
+}
+
 export function restoreNativePackageManifest(pkg, version) {
   return {
     ...pkg,
