@@ -39,5 +39,9 @@ export function logWithLevel(
     console.warn(...args);
     return;
   }
-  console.log(...args);
+  if (severity === "info") {
+    console.info(...args);
+    return;
+  }
+  console.debug(...args);
 }

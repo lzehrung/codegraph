@@ -7,6 +7,7 @@ import {
   buildProjectIndexIncremental,
   type BuildReport,
 } from "../src/index.js";
+import { logWithLevel } from "../src/logging.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -81,6 +82,25 @@ describe("logging behavior", () => {
       warnSpy.mockRestore();
       readSpy.mockRestore();
       await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("routes info and debug severities to their matching console methods", () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      logWithLevel("info", "info", "info message");
+      logWithLevel("debug", "debug", "debug message");
+
+      expect(infoSpy).toHaveBeenCalledOnce();
+      expect(debugSpy).toHaveBeenCalledOnce();
+      expect(logSpy).not.toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+      debugSpy.mockRestore();
+      infoSpy.mockRestore();
     }
   });
 });

@@ -203,6 +203,54 @@ describe("SessionManager", () => {
     ).rejects.toThrow(/different configuration/);
   });
 
+  test("should reject reusing a session id when graph options drift", async () => {
+    await manager.getOrCreateSession("shared", {
+      root: sampleRoot,
+      buildOptions: {
+        cache: "memory",
+        graph: { fast: true, logLevel: "warn" },
+      },
+    });
+
+    await expect(
+      manager.getOrCreateSession("shared", {
+        root: sampleRoot,
+        buildOptions: {
+          cache: "memory",
+          graph: { fast: true, logLevel: "debug" },
+        },
+      }),
+    ).rejects.toThrow(/different configuration/);
+  });
+
+  test("should reject reusing a session id when discovery options drift", async () => {
+    const gitignoreRoot = await fsp.mkdtemp(
+      path.join(os.tmpdir(), "dg-session-gitignore-root-"),
+    );
+
+    try {
+      await manager.getOrCreateSession("shared", {
+        root: sampleRoot,
+        buildOptions: {
+          cache: "memory",
+          discovery: { useGitignore: true, gitignoreRoot: sampleRoot },
+        },
+      });
+
+      await expect(
+        manager.getOrCreateSession("shared", {
+          root: sampleRoot,
+          buildOptions: {
+            cache: "memory",
+            discovery: { useGitignore: true, gitignoreRoot },
+          },
+        }),
+      ).rejects.toThrow(/different configuration/);
+    } finally {
+      await fsp.rm(gitignoreRoot, { recursive: true, force: true });
+    }
+  });
+
   test("should manage multiple sessions", async () => {
     const session1 = await manager.getOrCreateSession("session-1", {
       root: sampleRoot,

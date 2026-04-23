@@ -69,6 +69,8 @@ function normalizeBuildOptions(
           fast: options.graph.fast,
           resolveNodeModules: options.graph.resolveNodeModules,
           dynamicImportHeuristics: options.graph.dynamicImportHeuristics,
+          native: options.graph.native,
+          logLevel: options.graph.logLevel,
           resolutionHints: normalizeStringArray(options.graph.resolutionHints),
           fastRegexDisabledLanguages: normalizeStringArray(
             options.graph.fastRegexDisabledLanguages,
@@ -89,6 +91,9 @@ function normalizeBuildOptions(
           includeGlobs: normalizeStringArray(options.discovery.includeGlobs),
           ignoreGlobs: normalizeStringArray(options.discovery.ignoreGlobs),
           useGitignore: options.discovery.useGitignore,
+          gitignoreRoot: options.discovery.gitignoreRoot
+            ? path.resolve(options.discovery.gitignoreRoot)
+            : undefined,
         }
       : undefined,
   };

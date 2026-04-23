@@ -875,7 +875,6 @@ export async function discoverProjectFiles(
   projectRoot: string,
   options?: { logLevel?: LogLevel },
 ): Promise<ProjectFileInfo[]> {
-  void options;
   const root = await ensureDirectoryReadable(projectRoot, "Project root");
   try {
     const allPatterns = PROJECT_FILE_DEFINITIONS.flatMap((def) =>
@@ -931,6 +930,11 @@ export async function discoverProjectFiles(
       return a.path.localeCompare(b.path);
     });
   } catch (error) {
+    logWithLevel(
+      options?.logLevel,
+      "debug",
+      `discoverProjectFiles failed for ${root}: ${stringifyUnknown(error)}`,
+    );
     throw new Error(
       `Failed to discover project files in ${root}: ${stringifyUnknown(error)}`,
     );
