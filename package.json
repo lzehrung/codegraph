@@ -127,6 +127,6 @@
     "node-addon-api": "^8.5.0"
   },
   "optionalDependencies": {
-    "@lzehrung/codegraph-native": "^1.8.43"
+    "@lzehrung/codegraph-native": "^1.8.45"
   }
 }

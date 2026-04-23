@@ -48,6 +48,16 @@ describe("release script helpers", () => {
     ).toEqual(["root", "native", "js-fallback"]);
   });
 
+  it("treats release packaging scripts as root package changes", () => {
+    expect(
+      detectChangedReleasePackages([
+        "scripts/release.mjs",
+        "scripts/release-lib.mjs",
+        "tests/release-script.test.ts",
+      ]),
+    ).toEqual(["root"]);
+  });
+
   it("publishes only selected packages that are not already in the registry", () => {
     expect(
       computePublishPlan({
