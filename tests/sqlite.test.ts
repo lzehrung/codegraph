@@ -398,6 +398,60 @@ export const run = () => helper();
     db.close();
   });
 
+  it("removes inbound edges for deleted files even when importers are unchanged", async () => {
+    const root = await mkTmpDir("dg-sqlite-delete-inbound-");
+    const mainPath = path.join(root, "main.ts");
+    const utilPath = path.join(root, "util.ts");
+
+    await fsp.writeFile(
+      mainPath,
+      `import { helper } from "./util";
+export const run = () => helper();
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      utilPath,
+      `export function helper() { return 1; }
+`,
+      "utf8",
+    );
+
+    const baseIndex = await buildProjectIndex(root);
+    const baseSgraph = await buildSymbolGraphDetailed(baseIndex);
+    const dbPath = path.join(root, "graph.sqlite");
+    await writeGraphSqlite({
+      fileGraph: baseIndex.graph,
+      symbolGraph: baseSgraph,
+      outputPath: dbPath,
+    });
+
+    await fsp.unlink(utilPath);
+    const nextIndex = await buildProjectIndex(root);
+    const nextSgraph = await buildSymbolGraphDetailed(nextIndex);
+
+    await updateGraphSqlite({
+      fileGraph: nextIndex.graph,
+      symbolGraph: nextSgraph,
+      outputPath: dbPath,
+      changedFiles: [],
+      deletedFiles: [utilPath.replace(/\\/g, "/")],
+      fullGraphSync: true,
+    });
+
+    const rows = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT from_path, to_path, to_type FROM file_edges ORDER BY from_path, to_path;",
+    );
+    expect(rows.rows).toEqual([]);
+
+    const remainingFile = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT path FROM files ORDER BY path;",
+    );
+    expect(remainingFile.rows).toEqual([[mainPath.replace(/\\/g, "/")]]);
+  });
+
 
   it("records temporal snapshots for full and incremental updates", async () => {
     const root = await mkTmpDir("dg-sqlite-snapshots-");

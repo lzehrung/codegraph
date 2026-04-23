@@ -552,6 +552,14 @@ const deleteFileEdgesForFiles = (db: BetterSqliteDatabase, files: string[]) => {
   ).run(files);
 };
 
+const deleteFileEdgesToFiles = (db: BetterSqliteDatabase, files: string[]) => {
+  if (files.length === 0) return;
+  const placeholders = files.map(() => "?").join(", ");
+  db.prepare(
+    `DELETE FROM file_edges WHERE to_type = 'file' AND to_path IN (${placeholders});`,
+  ).run(files);
+};
+
 const deleteFilesByPath = (db: BetterSqliteDatabase, files: string[]) => {
   if (files.length === 0) return;
   const placeholders = files.map(() => "?").join(", ");
@@ -675,6 +683,7 @@ export async function updateGraphSqlite(
     const removedSymbolIds = readSymbolIdsForFiles(db, touchedFiles);
     deleteBySymbolIds(db, removedSymbolIds);
     deleteFileEdgesForFiles(db, touchedFiles);
+    deleteFileEdgesToFiles(db, [...deletedSet]);
     deleteFilesByPath(db, [...deletedSet]);
 
     const fileEntries: Array<{ path: string; isExternal: boolean }> = [];
