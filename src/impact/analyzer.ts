@@ -87,6 +87,7 @@ export async function analyzeImpact(
     refContext,
     refContextLines,
     refBlockMaxLines,
+    onImpactItem,
   } = options;
   const diagnostics = options.diagnostics;
 
@@ -100,6 +101,38 @@ export async function analyzeImpact(
   const processedSymbols = new Set<string>();
 
   const { fanInByFile, reverseDeps } = buildDependencyStats(index.graph.edges);
+
+  const emitImpactItem = (
+    item: ImpactItem,
+    phase: "partial" | "final",
+  ): void => {
+    onImpactItem?.(
+      {
+        ...item,
+        symbols: [...item.symbols],
+        reasons: [...item.reasons],
+        ...(item.refs
+          ? {
+              refs: item.refs.map((ref) => ({
+                range: ref.range,
+                ...(ref.context !== undefined ? { context: ref.context } : {}),
+              })),
+            }
+          : {}),
+        ...(item.explain
+          ? {
+              explain: {
+                ...item.explain,
+                ...(item.explain.hints
+                  ? { hints: [...item.explain.hints] }
+                  : {}),
+              },
+            }
+          : {}),
+      },
+      phase,
+    );
+  };
 
   // Filter out changed symbols in ignored files
   const filteredChangedSymbols = changedSymbols.filter(
@@ -257,6 +290,7 @@ export async function analyzeImpact(
             }
 
             impacted.set(ref.file, impactItem);
+            emitImpactItem(impactItem, "partial");
           }
         }
       }),
@@ -277,15 +311,28 @@ export async function analyzeImpact(
       changedFiles,
       options,
       reverseDeps,
+      emitImpactItem,
     );
   }
 
   // Transitive impact via graph traversal (skip if membersOnly)
   if (!options.membersOnly) {
-    analyzeTransitiveImpact(impacted, depth, options, reverseDeps);
+    analyzeTransitiveImpact(
+      impacted,
+      depth,
+      options,
+      reverseDeps,
+      emitImpactItem,
+    );
   }
 
-  return Array.from(impacted.values()).sort((a, b) => b.severity - a.severity);
+  const sorted = Array.from(impacted.values()).sort(
+    (a, b) => b.severity - a.severity,
+  );
+  for (const item of sorted) {
+    emitImpactItem(item, "final");
+  }
+  return sorted;
 }
 
 function getDependentFiles(
@@ -307,6 +354,7 @@ export function seedTransitiveFromFiles(
   changedFiles: FileChange[],
   options: Partial<ImpactOptions>,
   reverseDeps?: Map<FileId, Edge[]>,
+  emitImpactItem?: (item: ImpactItem, phase: "partial" | "final") => void,
 ): void {
   const { includeTests = false, testPatterns, ignoreGlobs = [] } = options;
   const patternMatchers = compileTestPatterns(testPatterns);
@@ -355,6 +403,7 @@ export function seedTransitiveFromFiles(
           },
           confidence: 0.5,
         });
+        emitImpactItem?.(impacted.get(dependent)!, "partial");
         if (diagnostics) diagnostics.fallbackSeededDependents += 1;
       }
     } else if (fileChange.kind === "deleted" || fileChange.kind === "renamed") {
@@ -402,6 +451,7 @@ export function seedTransitiveFromFiles(
         };
 
         impacted.set(dependent, impactItem);
+        emitImpactItem?.(impactItem, "partial");
         if (diagnostics) diagnostics.fallbackSeededDependents += 1;
       }
     }
@@ -413,6 +463,7 @@ function analyzeTransitiveImpact(
   maxDepth: number,
   options: Partial<ImpactOptions>,
   reverseDeps: Map<FileId, Edge[]>,
+  emitImpactItem?: (item: ImpactItem, phase: "partial" | "final") => void,
 ): void {
   const { testPatterns, ignoreGlobs = [] } = options;
   const patternMatchers = compileTestPatterns(testPatterns);
@@ -495,6 +546,7 @@ function analyzeTransitiveImpact(
       }
 
       impacted.set(dependentFile, transitiveItem);
+      emitImpactItem?.(transitiveItem, "partial");
 
       queue.push({
         file: dependentFile,

@@ -4,7 +4,7 @@
   Acceptance criteria:
   Full `writeGraphSqlite` rewrites replace prior graph state instead of appending duplicate edges or retaining deleted files/symbols.
 
-- [ ] Make impact streaming internally consistent and incrementally useful.
+- [x] Make impact streaming internally consistent and incrementally useful.
   Acceptance criteria:
   `changedSymbol` events respect scope filtering before emission, and impacted items are yielded incrementally instead of only after the full analysis completes.
 
