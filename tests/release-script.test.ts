@@ -5,8 +5,10 @@ import {
   detectChangedReleasePackages,
   getReleasePackage,
   isAllowedResumePath,
+  restoreRootPackageManifest,
   restoreNativePackageManifest,
   sanitizeJsFallbackPackageManifest,
+  sanitizePublishedRootPackageManifest,
   selectLatestLegacyTag,
   selectLatestSemverTag,
   tagNameForPackageVersion,
@@ -117,6 +119,55 @@ describe("release script helpers", () => {
       version: "1.8.44",
       dependencies: {
         "tree-sitter": "^0.25.0",
+      },
+    });
+  });
+
+  it("sanitizes the root package manifest for publishing", () => {
+    expect(
+      sanitizePublishedRootPackageManifest({
+        name: "@lzehrung/codegraph",
+        version: "1.8.44",
+        workspaces: ["packages/*", "optional-packages/*"],
+        scripts: {
+          build: "npm run clean && tsc -p tsconfig.json",
+          "publish:patch": "node ./scripts/release.mjs patch --publish",
+        },
+        devDependencies: {
+          vitest: "^3.2.4",
+        },
+        dependencies: {
+          "better-sqlite3": "^12.5.0",
+        },
+      }),
+    ).toEqual({
+      name: "@lzehrung/codegraph",
+      version: "1.8.44",
+      dependencies: {
+        "better-sqlite3": "^12.5.0",
+      },
+    });
+  });
+
+  it("restores the root source manifest shape while keeping the selected version", () => {
+    expect(
+      restoreRootPackageManifest(
+        {
+          name: "@lzehrung/codegraph",
+          version: "1.8.43",
+          workspaces: ["packages/*", "optional-packages/*"],
+          scripts: {
+            "publish:patch": "node ./scripts/release.mjs patch --publish",
+          },
+        },
+        "1.8.44",
+      ),
+    ).toEqual({
+      name: "@lzehrung/codegraph",
+      version: "1.8.44",
+      workspaces: ["packages/*", "optional-packages/*"],
+      scripts: {
+        "publish:patch": "node ./scripts/release.mjs patch --publish",
       },
     });
   });

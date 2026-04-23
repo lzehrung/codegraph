@@ -8,7 +8,9 @@ import {
   getReleasePackage,
   isAllowedResumePath,
   releasePackages,
+  restoreRootPackageManifest,
   restoreNativePackageManifest,
+  sanitizePublishedRootPackageManifest,
   sanitizeJsFallbackPackageManifest,
   selectLatestLegacyTag,
   selectLatestSemverTag,
@@ -18,6 +20,7 @@ import {
 
 const rootDir = process.cwd();
 const rootPackagePath = path.join(rootDir, "package.json");
+const originalRootPackageJson = fs.readFileSync(rootPackagePath, "utf8");
 const nativePackagePath = path.join(
   rootDir,
   "packages",
@@ -165,6 +168,33 @@ function restoreNativePackage(versionPlan) {
   writeJson(
     nativePackagePath,
     restoreNativePackageManifest(sourceManifest, intendedVersion),
+  );
+}
+
+function writePublishReadyRootPackage(versionPlan) {
+  const intendedVersion = versionPlan.get("root");
+  if (!intendedVersion) {
+    return;
+  }
+  const sourceManifest = JSON.parse(originalRootPackageJson);
+  writeJson(
+    rootPackagePath,
+    sanitizePublishedRootPackageManifest(
+      restoreRootPackageManifest(sourceManifest, intendedVersion),
+    ),
+  );
+}
+
+function restoreRootPackage(versionPlan) {
+  const intendedVersion = versionPlan.get("root");
+  if (!intendedVersion) {
+    fs.writeFileSync(rootPackagePath, originalRootPackageJson);
+    return;
+  }
+  const sourceManifest = JSON.parse(originalRootPackageJson);
+  writeJson(
+    rootPackagePath,
+    restoreRootPackageManifest(sourceManifest, intendedVersion),
   );
 }
 
@@ -375,6 +405,7 @@ if (shouldPublish) {
   }
   try {
     normalizeManagedManifests(versionPlan);
+    writePublishReadyRootPackage(versionPlan);
     if (publishPlan.publishByPackage["@lzehrung/codegraph-native"]) {
       run("npm", ["run", "publish:native:targets"]);
       run("npm", ["run", "publish:native:meta"]);
@@ -386,6 +417,7 @@ if (shouldPublish) {
       run("npm", ["publish"]);
     }
   } finally {
+    restoreRootPackage(versionPlan);
     restoreNativePackage(versionPlan);
   }
 }
