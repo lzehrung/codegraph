@@ -1,6 +1,6 @@
 # System Review Issues
 
-- [ ] Make full SQLite graph exports idempotent and remove stale rows on rewrite.
+- [x] Make full SQLite graph exports idempotent and remove stale rows on rewrite.
   Acceptance criteria:
   Full `writeGraphSqlite` rewrites replace prior graph state instead of appending duplicate edges or retaining deleted files/symbols.
 

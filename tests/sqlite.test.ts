@@ -89,6 +89,50 @@ export function run() { helper(); new Widget(); }
     db.close();
   });
 
+  it("keeps full SQLite exports idempotent across repeated writes", async () => {
+    const root = await mkTmpDir("dg-sqlite-idempotent-");
+    await fsp.writeFile(
+      path.join(root, "main.ts"),
+      `import { helper } from "./util";
+export function run() { return helper(); }
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "util.ts"),
+      `export function helper() { return 1; }
+`,
+      "utf8",
+    );
+
+    const index = await buildProjectIndex(root);
+    const sgraph = await buildSymbolGraphDetailed(index);
+    const dbPath = path.join(root, "graph.sqlite");
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+    });
+
+    const firstCounts = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT (SELECT COUNT(*) FROM files), (SELECT COUNT(*) FROM file_edges), (SELECT COUNT(*) FROM symbols), (SELECT COUNT(*) FROM symbol_edges);",
+    );
+
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+    });
+
+    const secondCounts = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT (SELECT COUNT(*) FROM files), (SELECT COUNT(*) FROM file_edges), (SELECT COUNT(*) FROM symbols), (SELECT COUNT(*) FROM symbol_edges);",
+    );
+
+    expect(secondCounts.rows).toEqual(firstCounts.rows);
+  });
+
   it("migrates older DBs missing symbols.visibility", async () => {
     const root = await mkTmpDir("dg-sqlite-migrate-");
     const main = `
@@ -219,6 +263,69 @@ export function run() { return new NewWidget(); }
     expect(newSymbols).toEqual(["NewWidget"]);
     expect(helperSymbols).toEqual(["helper"]);
     db.close();
+  });
+
+  it("removes stale files and edges when a full export rewrites an existing DB", async () => {
+    const root = await mkTmpDir("dg-sqlite-full-rewrite-");
+    await fsp.writeFile(
+      path.join(root, "main.ts"),
+      `import { helper } from "./util";
+export const run = () => helper();
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "util.ts"),
+      `export function helper() { return 1; }
+`,
+      "utf8",
+    );
+
+    const dbPath = path.join(root, "graph.sqlite");
+    let index = await buildProjectIndex(root);
+    let sgraph = await buildSymbolGraphDetailed(index);
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+    });
+
+    await fsp.unlink(path.join(root, "util.ts"));
+    await fsp.writeFile(
+      path.join(root, "main.ts"),
+      `export const run = () => 1;
+`,
+      "utf8",
+    );
+
+    index = await buildProjectIndex(root);
+    sgraph = await buildSymbolGraphDetailed(index);
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+    });
+
+    const utilPath = path.join(root, "util.ts").replace(/\\/g, "/");
+    const utilFiles = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT path FROM files WHERE path = ?;",
+      [utilPath],
+    );
+    const utilEdges = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT to_path FROM file_edges WHERE to_path = ?;",
+      [utilPath],
+    );
+    const utilSymbols = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT id FROM symbols WHERE file = ?;",
+      [utilPath],
+    );
+
+    expect(utilFiles.rows).toEqual([]);
+    expect(utilEdges.rows).toEqual([]);
+    expect(utilSymbols.rows).toEqual([]);
   });
 
 

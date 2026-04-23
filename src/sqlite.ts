@@ -507,6 +507,15 @@ const insertSymbolEdges = (
   }
 };
 
+const clearCurrentGraphState = (db: BetterSqliteDatabase) => {
+  db.exec(`
+    DELETE FROM symbol_edges;
+    DELETE FROM file_edges;
+    DELETE FROM symbols;
+    DELETE FROM files;
+  `);
+};
+
 const readSymbolIdsForFiles = (
   db: BetterSqliteDatabase,
   files: string[],
@@ -620,6 +629,7 @@ export async function writeGraphSqlite(
   ensureSchema(db);
 
   const runInsert = db.transaction(() => {
+    clearCurrentGraphState(db);
     const fileEntries: Array<{ path: string; isExternal: boolean }> = [];
     for (const file of options.fileGraph.nodes) {
       fileEntries.push({ path: file, isExternal: false });
