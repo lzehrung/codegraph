@@ -142,89 +142,97 @@ describe('Find References', () => {
 
     it('should ignore shadowed names for wildcard imports while keeping real references', async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-py-star-refs-'));
-      const utilFile = path.join(root, 'util.py');
-      const mainFile = path.join(root, 'main.py');
-      await fsp.writeFile(
-        utilFile,
-        ['foo = 1', 'bar = 2', ''].join('\n'),
-        'utf8',
-      );
-      await fsp.writeFile(
-        mainFile,
-        [
-          'from util import *',
-          'foo = 2',
-          'print(foo)',
-          'print(bar)',
-          '',
-        ].join('\n'),
-        'utf8',
-      );
+      try {
+        const utilFile = path.join(root, 'util.py');
+        const mainFile = path.join(root, 'main.py');
+        await fsp.writeFile(
+          utilFile,
+          ['foo = 1', 'bar = 2', ''].join('\n'),
+          'utf8',
+        );
+        await fsp.writeFile(
+          mainFile,
+          [
+            'from util import *',
+            'foo = 2',
+            'print(foo)',
+            'print(bar)',
+            '',
+          ].join('\n'),
+          'utf8',
+        );
 
-      const index = await createTestIndexFromPath(root);
-      const normalizedUtil = utilFile.replace(/\\/g, '/');
-      const normalizedMain = mainFile.replace(/\\/g, '/');
+        const index = await createTestIndexFromPath(root);
+        const normalizedUtil = utilFile.replace(/\\/g, '/');
+        const normalizedMain = mainFile.replace(/\\/g, '/');
 
-      const fooRefs = await testFindReferences(index, normalizedUtil, 1, 1, 1);
-      expect(fooRefs.status).toBe('ok');
-      if (fooRefs.status === 'ok') {
-        expect(
-          fooRefs.references.some((reference) => reference.file === normalizedMain),
-        ).toBe(false);
-      }
+        const fooRefs = await testFindReferences(index, normalizedUtil, 1, 1, 1);
+        expect(fooRefs.status).toBe('ok');
+        if (fooRefs.status === 'ok') {
+          expect(
+            fooRefs.references.some((reference) => reference.file === normalizedMain),
+          ).toBe(false);
+        }
 
-      const barRefs = await testFindReferences(index, normalizedUtil, 2, 1, 2);
-      expect(barRefs.status).toBe('ok');
-      if (barRefs.status === 'ok') {
-        expectReferenceAt(barRefs, normalizedMain, 4);
+        const barRefs = await testFindReferences(index, normalizedUtil, 2, 1, 2);
+        expect(barRefs.status).toBe('ok');
+        if (barRefs.status === 'ok') {
+          expectReferenceAt(barRefs, normalizedMain, 4);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
       }
     });
 
     it('should avoid semantic fallback work for expanded wildcard imports', async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-py-star-expanded-'));
-      const utilFile = path.join(root, 'util.py');
-      const mainFile = path.join(root, 'main.py');
-      await fsp.writeFile(
-        utilFile,
-        ['foo = 1', ''].join('\n'),
-        'utf8',
-      );
-      await fsp.writeFile(
-        mainFile,
-        [
-          'from util import *',
-          'print(foo)',
-          '',
-        ].join('\n'),
-        'utf8',
-      );
-
-      const index = await createTestIndexFromPath(root);
-      const normalizedUtil = utilFile.replace(/\\/g, '/');
-      const utilModule = index.byFile.get(normalizedUtil);
-      const fooDef = utilModule?.locals.find((local) => local.localName === 'foo');
-
-      expect(fooDef).toBeDefined();
-      if (!fooDef) {
-        throw new Error('Expected foo definition to exist');
-      }
-
-      const goToDefinitionSpy = vi.spyOn(indexer, 'goToDefinition');
       try {
-        const result = await indexer.findReferences(
-          index,
-          { def: fooDef },
-          { maxReferences: 2 },
+        const utilFile = path.join(root, 'util.py');
+        const mainFile = path.join(root, 'main.py');
+        await fsp.writeFile(
+          utilFile,
+          ['foo = 1', ''].join('\n'),
+          'utf8',
+        );
+        await fsp.writeFile(
+          mainFile,
+          [
+            'from util import *',
+            'print(foo)',
+            '',
+          ].join('\n'),
+          'utf8',
         );
 
-        expect(result.status).toBe('ok');
-        if (result.status === 'ok') {
-          expect(result.references).toHaveLength(2);
-          expectReferenceAt(result, mainFile.replace(/\\/g, '/'), 2);
+        const index = await createTestIndexFromPath(root);
+        const normalizedUtil = utilFile.replace(/\\/g, '/');
+        const utilModule = index.byFile.get(normalizedUtil);
+        const fooDef = utilModule?.locals.find((local) => local.localName === 'foo');
+
+        expect(fooDef).toBeDefined();
+        if (!fooDef) {
+          throw new Error('Expected foo definition to exist');
         }
-        expect(goToDefinitionSpy).not.toHaveBeenCalled();
+
+        const goToDefinitionSpy = vi.spyOn(indexer, 'goToDefinition');
+        try {
+          const result = await indexer.findReferences(
+            index,
+            { def: fooDef },
+            { maxReferences: 2 },
+          );
+
+          expect(result.status).toBe('ok');
+          if (result.status === 'ok') {
+            expect(result.references).toHaveLength(2);
+            expectReferenceAt(result, mainFile.replace(/\\/g, '/'), 2);
+          }
+          expect(goToDefinitionSpy).not.toHaveBeenCalled();
+        } finally {
+          goToDefinitionSpy.mockRestore();
+        }
       } finally {
-        goToDefinitionSpy.mockRestore();
+        await fsp.rm(root, { recursive: true, force: true });
       }
     });
   });

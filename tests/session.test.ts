@@ -173,20 +173,25 @@ describe("SessionManager", () => {
   test("should reject reusing a session id for a different root", async () => {
     const rootA = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-root-a-"));
     const rootB = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-root-b-"));
-    await fsp.writeFile(path.join(rootA, "a.ts"), "export const a = 1;\n", "utf8");
-    await fsp.writeFile(path.join(rootB, "b.ts"), "export const b = 1;\n", "utf8");
+    try {
+      await fsp.writeFile(path.join(rootA, "a.ts"), "export const a = 1;\n", "utf8");
+      await fsp.writeFile(path.join(rootB, "b.ts"), "export const b = 1;\n", "utf8");
 
-    await manager.getOrCreateSession("shared", {
-      root: rootA,
-      buildOptions: { cache: "memory" },
-    });
-
-    await expect(
-      manager.getOrCreateSession("shared", {
-        root: rootB,
+      await manager.getOrCreateSession("shared", {
+        root: rootA,
         buildOptions: { cache: "memory" },
-      }),
-    ).rejects.toThrow(/different configuration/);
+      });
+
+      await expect(
+        manager.getOrCreateSession("shared", {
+          root: rootB,
+          buildOptions: { cache: "memory" },
+        }),
+      ).rejects.toThrow(/different configuration/);
+    } finally {
+      await fsp.rm(rootA, { recursive: true, force: true });
+      await fsp.rm(rootB, { recursive: true, force: true });
+    }
   });
 
   test("should reject reusing a session id for different build options", async () => {

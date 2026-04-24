@@ -360,6 +360,11 @@ export async function listProjectFiles(
       return !isIgnoredByGitignore(filePath, gitignoreRules);
     });
   } catch (error) {
+    logWithLevel(
+      options?.logLevel,
+      "debug",
+      `listProjectFiles failed for ${root}: ${stringifyUnknown(error)}`,
+    );
     throw new Error(
       `Failed to list files in ${root}: ${stringifyUnknown(error)}`,
     );
