@@ -47,6 +47,13 @@ describe("package metadata", () => {
     expect(files).toContain("codegraph-skill");
   });
 
+  it("keeps the published CLI bin path normalized for npm", () => {
+    const rootPackage = readJson("package.json");
+    const bin = readStringRecord(rootPackage.bin);
+
+    expect(bin.codegraph).toBe("dist/cli.js");
+  });
+
   it("keeps JS fallback grammars out of the native package", () => {
     const nativePackage = readJson("packages/codegraph-native/package.json");
     const dependencies = readStringRecord(nativePackage.dependencies);
