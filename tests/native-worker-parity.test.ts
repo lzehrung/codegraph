@@ -1,5 +1,5 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildProjectIndexFromFiles,
   listProjectFiles,
@@ -7,6 +7,7 @@ import {
   type BuildReport,
 } from "../src/index.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
+import * as nativeWorkerPool from "../src/worker/nativeWorkerPool.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable()
   ? describe
@@ -101,9 +102,7 @@ nativeDescribe("native worker parity", () => {
   }
 
   it("skips worker pool when native is disabled and still produces valid results", async () => {
-    const files = await listProjectFiles(
-      path.join(sampleRoot, "typescript"),
-    );
+    const files = await listProjectFiles(path.join(sampleRoot, "typescript"));
     expect(files.length).toBeGreaterThan(0);
 
     const report: BuildReport = { timings: {} };
@@ -123,4 +122,38 @@ nativeDescribe("native worker parity", () => {
       report.workerPool === undefined || report.workerPool.enabled === false,
     ).toBe(true);
   }, 15_000);
+
+  it("records worker startup failures in the build report", async () => {
+    const files = await listProjectFiles(path.join(sampleRoot, "typescript"));
+    expect(files.length).toBeGreaterThan(0);
+
+    const report: BuildReport = { timings: {} };
+    const startupFailure = vi
+      .spyOn(nativeWorkerPool, "createNativeWorkerPool")
+      .mockImplementation(() => {
+        throw new Error("synthetic worker startup failure");
+      });
+
+    try {
+      const index = await buildProjectIndexFromFiles(
+        path.join(sampleRoot, "typescript"),
+        files,
+        {
+          native: "on",
+          useNativeWorkers: true,
+          report,
+        },
+      );
+
+      expect(index.byFile.size).toBeGreaterThan(0);
+      expect(report.workerPool?.enabled).toBe(false);
+      expect(report.workerPool?.threads).toBe(0);
+      expect(report.workerPool?.tasksSubmitted).toBe(0);
+      expect(report.workerPool?.startupError).toContain(
+        "synthetic worker startup failure",
+      );
+    } finally {
+      startupFailure.mockRestore();
+    }
+  });
 });

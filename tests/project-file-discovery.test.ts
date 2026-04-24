@@ -1,37 +1,77 @@
-import { describe, it, expect } from 'vitest';
-import path from 'node:path';
-import os from 'node:os';
-import fs from 'node:fs/promises';
-import { listProjectFiles, discoverProjectFiles } from '../src/index.js';
-import { DEFAULT_PROJECT_MANIFESTS } from '../src/util.js';
+import { describe, it, expect } from "vitest";
+import path from "node:path";
+import os from "node:os";
+import fs from "node:fs/promises";
+import {
+  buildProjectIndex,
+  listProjectFiles,
+  discoverProjectFiles,
+} from "../src/index.js";
+import { DEFAULT_PROJECT_MANIFESTS } from "../src/util.js";
 
-const normalize = (value: string) => value.replace(/\\/g, '/');
+const normalize = (value: string) => value.replace(/\\/g, "/");
 
 function toManifestFilename(manifest: string): string {
-  if (manifest.includes('*')) {
-    return manifest.replace('*', 'Sample');
+  if (manifest.includes("*")) {
+    return manifest.replace("*", "Sample");
   }
   return manifest;
 }
 
 async function createFile(filePath: string, contents: string) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, contents, 'utf8');
+  await fs.writeFile(filePath, contents, "utf8");
 }
 
-describe('project file discovery', () => {
-  it('includes common manifests and lockfiles in default discovery', async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codegraph-project-'));
-    const manifestDir = path.join(tempDir, 'manifests');
-    const sourceFile = path.join(tempDir, 'src', 'main.ts');
+describe("project file discovery", () => {
+  it("fails explicitly when the project root is invalid", async () => {
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "codegraph-project-missing-"),
+    );
+    const missingRoot = path.join(tempDir, "missing-root");
+
+    await expect(listProjectFiles(missingRoot)).rejects.toThrow(
+      /Project root does not exist or is not readable:/,
+    );
+    await expect(discoverProjectFiles(missingRoot)).rejects.toThrow(
+      /Project root does not exist or is not readable:/,
+    );
+    await expect(buildProjectIndex(missingRoot)).rejects.toThrow(
+      /Project root does not exist or is not readable:/,
+    );
+  });
+
+  it("treats an empty readable directory as an empty project", async () => {
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "codegraph-project-empty-"),
+    );
+
+    await expect(listProjectFiles(tempDir)).resolves.toEqual([]);
+    await expect(discoverProjectFiles(tempDir)).resolves.toEqual([]);
+
+    const index = await buildProjectIndex(tempDir);
+    expect(index.modules.size).toBe(0);
+    expect(index.graph.nodes.size).toBe(0);
+    expect(index.graph.edges).toEqual([]);
+  });
+
+  it("includes common manifests and lockfiles in default discovery", async () => {
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "codegraph-project-"),
+    );
+    const manifestDir = path.join(tempDir, "manifests");
+    const sourceFile = path.join(tempDir, "src", "main.ts");
     const manifestFiles = DEFAULT_PROJECT_MANIFESTS.map(toManifestFilename);
-    const isCaseInsensitive = os.platform() === 'win32' || os.platform() === 'darwin';
-    
-    const uniqueManifestFiles = isCaseInsensitive 
-      ? Array.from(new Map(manifestFiles.map(m => [m.toLowerCase(), m])).values())
+    const isCaseInsensitive =
+      os.platform() === "win32" || os.platform() === "darwin";
+
+    const uniqueManifestFiles = isCaseInsensitive
+      ? Array.from(
+          new Map(manifestFiles.map((m) => [m.toLowerCase(), m])).values(),
+        )
       : manifestFiles;
 
-    await createFile(sourceFile, 'export const value = 1;\n');
+    await createFile(sourceFile, "export const value = 1;\n");
     await Promise.all(
       uniqueManifestFiles.map(async (manifest) => {
         const filePath = path.join(manifestDir, manifest);
@@ -43,38 +83,43 @@ describe('project file discovery', () => {
     const discovered = await listProjectFiles(tempDir);
     const discoveredSet = new Set(discovered.map(normalize));
 
-    const expected = [sourceFile, ...uniqueManifestFiles.map((manifest) => path.join(manifestDir, manifest))].map(
-      normalize,
-    );
+    const expected = [
+      sourceFile,
+      ...uniqueManifestFiles.map((manifest) =>
+        path.join(manifestDir, manifest),
+      ),
+    ].map(normalize);
 
     for (const filePath of expected) {
       expect(discoveredSet.has(filePath)).toBe(true);
     }
   });
 
-  it('includes supported source extensions in default discovery', async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codegraph-project-sources-'));
+  it("includes supported source extensions in default discovery", async () => {
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "codegraph-project-sources-"),
+    );
     const files = [
-      path.join(tempDir, 'kotlin', 'Main.kt'),
-      path.join(tempDir, 'kotlin', 'script.kts'),
-      path.join(tempDir, 'docs', 'guide.md'),
-      path.join(tempDir, 'docs', 'page.mdx'),
-      path.join(tempDir, 'docs', 'page.astro'),
-      path.join(tempDir, 'docs', 'template.hbs'),
-      path.join(tempDir, 'docs', 'template.handlebars'),
-      path.join(tempDir, 'docs', 'index.rst'),
-      path.join(tempDir, 'docs', 'index.adoc'),
-      path.join(tempDir, 'docs', 'index.asciidoc'),
-      path.join(tempDir, 'swift', 'App.swift'),
-      path.join(tempDir, 'c', 'main.c'),
-      path.join(tempDir, 'c', 'utils.h'),
-      path.join(tempDir, 'cpp', 'main.cpp'),
-      path.join(tempDir, 'cpp', 'types.hpp'),
+      path.join(tempDir, "kotlin", "Main.kt"),
+      path.join(tempDir, "kotlin", "script.kts"),
+      path.join(tempDir, "docs", "guide.md"),
+      path.join(tempDir, "docs", "page.mdx"),
+      path.join(tempDir, "docs", "page.astro"),
+      path.join(tempDir, "docs", "template.hbs"),
+      path.join(tempDir, "docs", "template.handlebars"),
+      path.join(tempDir, "docs", "index.rst"),
+      path.join(tempDir, "docs", "index.adoc"),
+      path.join(tempDir, "docs", "index.asciidoc"),
+      path.join(tempDir, "swift", "App.swift"),
+      path.join(tempDir, "c", "main.c"),
+      path.join(tempDir, "c", "utils.h"),
+      path.join(tempDir, "cpp", "main.cpp"),
+      path.join(tempDir, "cpp", "types.hpp"),
     ];
 
     await Promise.all(
       files.map(async (filePath) => {
-        await createFile(filePath, '// test fixture\n');
+        await createFile(filePath, "// test fixture\n");
       }),
     );
 
@@ -86,61 +131,72 @@ describe('project file discovery', () => {
     }
   });
 
-  it('extracts project names from common manifests', async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codegraph-project-meta-'));
-    const nodeDir = path.join(tempDir, 'node');
-    const pythonDir = path.join(tempDir, 'python');
-    const rustDir = path.join(tempDir, 'rust');
-    const goDir = path.join(tempDir, 'go');
-    const javaDir = path.join(tempDir, 'java');
-    const gradleDir = path.join(tempDir, 'gradle');
-    const kotlinDir = path.join(tempDir, 'kotlin');
-    const dotnetDir = path.join(tempDir, 'dotnet');
-    const ideDir = path.join(tempDir, 'ide');
-    const swiftDir = path.join(tempDir, 'swift');
-    const swiftIdeDir = path.join(tempDir, 'swift-ide');
-    const gemDir = path.join(tempDir, 'gem');
-    const nativeDir = path.join(tempDir, 'native');
+  it("extracts project names from common manifests", async () => {
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "codegraph-project-meta-"),
+    );
+    const nodeDir = path.join(tempDir, "node");
+    const pythonDir = path.join(tempDir, "python");
+    const rustDir = path.join(tempDir, "rust");
+    const goDir = path.join(tempDir, "go");
+    const javaDir = path.join(tempDir, "java");
+    const gradleDir = path.join(tempDir, "gradle");
+    const kotlinDir = path.join(tempDir, "kotlin");
+    const dotnetDir = path.join(tempDir, "dotnet");
+    const ideDir = path.join(tempDir, "ide");
+    const swiftDir = path.join(tempDir, "swift");
+    const swiftIdeDir = path.join(tempDir, "swift-ide");
+    const gemDir = path.join(tempDir, "gem");
+    const nativeDir = path.join(tempDir, "native");
 
-    const packageJson = path.join(nodeDir, 'package.json');
-    const pyproject = path.join(pythonDir, 'pyproject.toml');
-    const cargo = path.join(rustDir, 'Cargo.toml');
-    const goMod = path.join(goDir, 'go.mod');
-    const pom = path.join(javaDir, 'pom.xml');
-    const settingsGradle = path.join(gradleDir, 'settings.gradle');
-    const settingsGradleKts = path.join(kotlinDir, 'settings.gradle.kts');
-    const csproj = path.join(dotnetDir, 'App.csproj');
-    const fsproj = path.join(dotnetDir, 'Library.fsproj');
-    const vbproj = path.join(dotnetDir, 'Widget.vbproj');
-    const sln = path.join(dotnetDir, 'Solution.sln');
-    const swiftPackage = path.join(swiftDir, 'Package.swift');
-    const xcodeprojDir = path.join(swiftIdeDir, 'App.xcodeproj');
-    const xcworkspaceDir = path.join(swiftIdeDir, 'App.xcworkspace');
-    const gemspec = path.join(gemDir, 'ruby-gem.gemspec');
-    const cmakeLists = path.join(nativeDir, 'CMakeLists.txt');
-    const vcpkg = path.join(nativeDir, 'vcpkg.json');
-    const ideaDir = path.join(ideDir, '.idea');
+    const packageJson = path.join(nodeDir, "package.json");
+    const pyproject = path.join(pythonDir, "pyproject.toml");
+    const cargo = path.join(rustDir, "Cargo.toml");
+    const goMod = path.join(goDir, "go.mod");
+    const pom = path.join(javaDir, "pom.xml");
+    const settingsGradle = path.join(gradleDir, "settings.gradle");
+    const settingsGradleKts = path.join(kotlinDir, "settings.gradle.kts");
+    const csproj = path.join(dotnetDir, "App.csproj");
+    const fsproj = path.join(dotnetDir, "Library.fsproj");
+    const vbproj = path.join(dotnetDir, "Widget.vbproj");
+    const sln = path.join(dotnetDir, "Solution.sln");
+    const swiftPackage = path.join(swiftDir, "Package.swift");
+    const xcodeprojDir = path.join(swiftIdeDir, "App.xcodeproj");
+    const xcworkspaceDir = path.join(swiftIdeDir, "App.xcworkspace");
+    const gemspec = path.join(gemDir, "ruby-gem.gemspec");
+    const cmakeLists = path.join(nativeDir, "CMakeLists.txt");
+    const vcpkg = path.join(nativeDir, "vcpkg.json");
+    const ideaDir = path.join(ideDir, ".idea");
 
-    await createFile(packageJson, JSON.stringify({ name: 'node-app' }, null, 2));
+    await createFile(
+      packageJson,
+      JSON.stringify({ name: "node-app" }, null, 2),
+    );
     await createFile(pyproject, '[project]\nname = "py-app"\n');
     await createFile(cargo, '[package]\nname = "rust-app"\n');
-    await createFile(goMod, 'module example.com/go-app\n');
-    await createFile(pom, '<project><artifactId>mvn-app</artifactId></project>');
+    await createFile(goMod, "module example.com/go-app\n");
+    await createFile(
+      pom,
+      "<project><artifactId>mvn-app</artifactId></project>",
+    );
     await createFile(settingsGradle, 'rootProject.name = "gradle-app"\n');
     await createFile(settingsGradleKts, 'rootProject.name = "kotlin-app"\n');
     await createFile(
       csproj,
-      '<Project><PropertyGroup><AssemblyName>DotNetApp</AssemblyName></PropertyGroup></Project>',
+      "<Project><PropertyGroup><AssemblyName>DotNetApp</AssemblyName></PropertyGroup></Project>",
     );
     await createFile(
       fsproj,
-      '<Project><PropertyGroup><AssemblyName>FSharpLib</AssemblyName></PropertyGroup></Project>',
+      "<Project><PropertyGroup><AssemblyName>FSharpLib</AssemblyName></PropertyGroup></Project>",
     );
     await createFile(
       vbproj,
-      '<Project><PropertyGroup><PackageId>VisualBasicLib</PackageId></PropertyGroup></Project>',
+      "<Project><PropertyGroup><PackageId>VisualBasicLib</PackageId></PropertyGroup></Project>",
     );
-    await createFile(sln, 'Microsoft Visual Studio Solution File, Format Version 12.00\n');
+    await createFile(
+      sln,
+      "Microsoft Visual Studio Solution File, Format Version 12.00\n",
+    );
     await createFile(
       swiftPackage,
       'import PackageDescription\n\nlet package = Package(name: "swift-app")\n',
@@ -151,8 +207,8 @@ describe('project file discovery', () => {
       gemspec,
       'Gem::Specification.new do |spec|\n  spec.name = "ruby-gem"\nend\n',
     );
-    await createFile(cmakeLists, 'cmake_minimum_required(VERSION 3.20)\n');
-    await createFile(vcpkg, JSON.stringify({ name: 'native-app' }, null, 2));
+    await createFile(cmakeLists, "cmake_minimum_required(VERSION 3.20)\n");
+    await createFile(vcpkg, JSON.stringify({ name: "native-app" }, null, 2));
     await fs.mkdir(ideaDir, { recursive: true });
 
     const discovered = await discoverProjectFiles(tempDir);
@@ -160,116 +216,136 @@ describe('project file discovery', () => {
       discovered.map((entry) => [normalize(entry.path), entry]),
     );
 
-    expect(byPath.get(normalize(packageJson))?.name).toBe('node-app');
-    expect(byPath.get(normalize(packageJson))?.type).toBe('node');
-    expect(byPath.get(normalize(pyproject))?.name).toBe('py-app');
-    expect(byPath.get(normalize(pyproject))?.type).toBe('python');
-    expect(byPath.get(normalize(cargo))?.name).toBe('rust-app');
-    expect(byPath.get(normalize(cargo))?.type).toBe('rust');
-    expect(byPath.get(normalize(goMod))?.name).toBe('example.com/go-app');
-    expect(byPath.get(normalize(goMod))?.type).toBe('go');
-    expect(byPath.get(normalize(pom))?.name).toBe('mvn-app');
-    expect(byPath.get(normalize(pom))?.type).toBe('maven');
-    expect(byPath.get(normalize(settingsGradle))?.name).toBe('gradle-app');
-    expect(byPath.get(normalize(settingsGradle))?.type).toBe('gradle');
-    expect(byPath.get(normalize(settingsGradleKts))?.name).toBe('kotlin-app');
-    expect(byPath.get(normalize(settingsGradleKts))?.type).toBe('gradle');
-    expect(byPath.get(normalize(csproj))?.name).toBe('DotNetApp');
-    expect(byPath.get(normalize(csproj))?.role).toBe('manifest');
-    expect(byPath.get(normalize(fsproj))?.name).toBe('FSharpLib');
-    expect(byPath.get(normalize(fsproj))?.type).toBe('dotnet');
-    expect(byPath.get(normalize(vbproj))?.name).toBe('VisualBasicLib');
-    expect(byPath.get(normalize(vbproj))?.type).toBe('dotnet');
-    expect(byPath.get(normalize(sln))?.name).toBe('Solution');
-    expect(byPath.get(normalize(sln))?.role).toBe('solution');
-    expect(byPath.get(normalize(swiftPackage))?.name).toBe('swift-app');
-    expect(byPath.get(normalize(swiftPackage))?.type).toBe('swift');
-    expect(byPath.get(normalize(xcodeprojDir))?.kind).toBe('dir');
-    expect(byPath.get(normalize(xcodeprojDir))?.type).toBe('swift');
-    expect(byPath.get(normalize(xcodeprojDir))?.name).toBe('App');
-    expect(byPath.get(normalize(xcworkspaceDir))?.kind).toBe('dir');
-    expect(byPath.get(normalize(xcworkspaceDir))?.type).toBe('swift');
-    expect(byPath.get(normalize(gemspec))?.name).toBe('ruby-gem');
-    expect(byPath.get(normalize(gemspec))?.type).toBe('ruby');
-    expect(byPath.get(normalize(cmakeLists))?.type).toBe('native');
-    expect(byPath.get(normalize(cmakeLists))?.name).toBe('native');
-    expect(byPath.get(normalize(vcpkg))?.type).toBe('native');
-    expect(byPath.get(normalize(vcpkg))?.name).toBe('native-app');
+    expect(byPath.get(normalize(packageJson))?.name).toBe("node-app");
+    expect(byPath.get(normalize(packageJson))?.type).toBe("node");
+    expect(byPath.get(normalize(pyproject))?.name).toBe("py-app");
+    expect(byPath.get(normalize(pyproject))?.type).toBe("python");
+    expect(byPath.get(normalize(cargo))?.name).toBe("rust-app");
+    expect(byPath.get(normalize(cargo))?.type).toBe("rust");
+    expect(byPath.get(normalize(goMod))?.name).toBe("example.com/go-app");
+    expect(byPath.get(normalize(goMod))?.type).toBe("go");
+    expect(byPath.get(normalize(pom))?.name).toBe("mvn-app");
+    expect(byPath.get(normalize(pom))?.type).toBe("maven");
+    expect(byPath.get(normalize(settingsGradle))?.name).toBe("gradle-app");
+    expect(byPath.get(normalize(settingsGradle))?.type).toBe("gradle");
+    expect(byPath.get(normalize(settingsGradleKts))?.name).toBe("kotlin-app");
+    expect(byPath.get(normalize(settingsGradleKts))?.type).toBe("gradle");
+    expect(byPath.get(normalize(csproj))?.name).toBe("DotNetApp");
+    expect(byPath.get(normalize(csproj))?.role).toBe("manifest");
+    expect(byPath.get(normalize(fsproj))?.name).toBe("FSharpLib");
+    expect(byPath.get(normalize(fsproj))?.type).toBe("dotnet");
+    expect(byPath.get(normalize(vbproj))?.name).toBe("VisualBasicLib");
+    expect(byPath.get(normalize(vbproj))?.type).toBe("dotnet");
+    expect(byPath.get(normalize(sln))?.name).toBe("Solution");
+    expect(byPath.get(normalize(sln))?.role).toBe("solution");
+    expect(byPath.get(normalize(swiftPackage))?.name).toBe("swift-app");
+    expect(byPath.get(normalize(swiftPackage))?.type).toBe("swift");
+    expect(byPath.get(normalize(xcodeprojDir))?.kind).toBe("dir");
+    expect(byPath.get(normalize(xcodeprojDir))?.type).toBe("swift");
+    expect(byPath.get(normalize(xcodeprojDir))?.name).toBe("App");
+    expect(byPath.get(normalize(xcworkspaceDir))?.kind).toBe("dir");
+    expect(byPath.get(normalize(xcworkspaceDir))?.type).toBe("swift");
+    expect(byPath.get(normalize(gemspec))?.name).toBe("ruby-gem");
+    expect(byPath.get(normalize(gemspec))?.type).toBe("ruby");
+    expect(byPath.get(normalize(cmakeLists))?.type).toBe("native");
+    expect(byPath.get(normalize(cmakeLists))?.name).toBe("native");
+    expect(byPath.get(normalize(vcpkg))?.type).toBe("native");
+    expect(byPath.get(normalize(vcpkg))?.name).toBe("native-app");
     expect(byPath.get(normalize(ideaDir))?.projectRoot).toBe(normalize(ideDir));
-    expect(byPath.get(normalize(ideaDir))?.kind).toBe('dir');
-    expect(byPath.get(normalize(ideaDir))?.role).toBe('ide');
+    expect(byPath.get(normalize(ideaDir))?.kind).toBe("dir");
+    expect(byPath.get(normalize(ideaDir))?.role).toBe("ide");
   });
 
-  it('handles fallback naming and ignores excluded directories', async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codegraph-project-edge-'));
-    const badJsonDir = path.join(tempDir, 'bad-json');
-    const poetryDir = path.join(tempDir, 'poetry');
-    const cargoDir = path.join(tempDir, 'cargo');
-    const pomDir = path.join(tempDir, 'pom');
-    const gradleDir = path.join(tempDir, 'gradle');
-    const dotnetDir = path.join(tempDir, 'dotnet');
-    const composerDir = path.join(tempDir, 'composer');
-    const workspaceDir = path.join(tempDir, 'workspace');
-    const goWorkDir = path.join(tempDir, 'go-workspace');
-    const toolchainDir = path.join(tempDir, 'toolchain');
-    const wrapperDir = path.join(tempDir, 'wrappers');
-    const dotnetConfigDir = path.join(tempDir, 'dotnet-config');
-    const nativeConfigDir = path.join(tempDir, 'native-config');
-    const swiftLockDir = path.join(tempDir, 'swift-lock');
-    const ignoredDir = path.join(tempDir, 'node_modules', 'ignored');
+  it("handles fallback naming and ignores excluded directories", async () => {
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "codegraph-project-edge-"),
+    );
+    const badJsonDir = path.join(tempDir, "bad-json");
+    const poetryDir = path.join(tempDir, "poetry");
+    const cargoDir = path.join(tempDir, "cargo");
+    const pomDir = path.join(tempDir, "pom");
+    const gradleDir = path.join(tempDir, "gradle");
+    const dotnetDir = path.join(tempDir, "dotnet");
+    const composerDir = path.join(tempDir, "composer");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const goWorkDir = path.join(tempDir, "go-workspace");
+    const toolchainDir = path.join(tempDir, "toolchain");
+    const wrapperDir = path.join(tempDir, "wrappers");
+    const dotnetConfigDir = path.join(tempDir, "dotnet-config");
+    const nativeConfigDir = path.join(tempDir, "native-config");
+    const swiftLockDir = path.join(tempDir, "swift-lock");
+    const ignoredDir = path.join(tempDir, "node_modules", "ignored");
 
-    const badPackage = path.join(badJsonDir, 'package.json');
-    const pyproject = path.join(poetryDir, 'pyproject.toml');
-    const cargo = path.join(cargoDir, 'Cargo.toml');
-    const pom = path.join(pomDir, 'pom.xml');
-    const gradle = path.join(gradleDir, 'build.gradle');
-    const csproj = path.join(dotnetDir, 'Library.csproj');
-    const composer = path.join(composerDir, 'composer.json');
-    const pnpmWorkspace = path.join(workspaceDir, 'pnpm-workspace.yaml');
-    const lerna = path.join(workspaceDir, 'lerna.json');
-    const nx = path.join(workspaceDir, 'nx.json');
-    const turbo = path.join(workspaceDir, 'turbo.json');
-    const goWork = path.join(goWorkDir, 'go.work');
-    const rustToolchain = path.join(toolchainDir, 'rust-toolchain');
-    const rustToolchainToml = path.join(toolchainDir, 'rust-toolchain.toml');
-    const mvnw = path.join(wrapperDir, 'mvnw');
-    const gradlew = path.join(wrapperDir, 'gradlew');
-    const dirBuildProps = path.join(dotnetConfigDir, 'Directory.Build.props');
-    const dirBuildTargets = path.join(dotnetConfigDir, 'Directory.Build.targets');
-    const globalJson = path.join(dotnetConfigDir, 'global.json');
-    const cmakePresets = path.join(nativeConfigDir, 'CMakePresets.json');
-    const mesonOptions = path.join(nativeConfigDir, 'meson_options.txt');
-    const conanfile = path.join(nativeConfigDir, 'conanfile.txt');
-    const packageResolved = path.join(swiftLockDir, 'Package.resolved');
-    const ignoredPackage = path.join(ignoredDir, 'package.json');
+    const badPackage = path.join(badJsonDir, "package.json");
+    const pyproject = path.join(poetryDir, "pyproject.toml");
+    const cargo = path.join(cargoDir, "Cargo.toml");
+    const pom = path.join(pomDir, "pom.xml");
+    const gradle = path.join(gradleDir, "build.gradle");
+    const csproj = path.join(dotnetDir, "Library.csproj");
+    const composer = path.join(composerDir, "composer.json");
+    const pnpmWorkspace = path.join(workspaceDir, "pnpm-workspace.yaml");
+    const lerna = path.join(workspaceDir, "lerna.json");
+    const nx = path.join(workspaceDir, "nx.json");
+    const turbo = path.join(workspaceDir, "turbo.json");
+    const goWork = path.join(goWorkDir, "go.work");
+    const rustToolchain = path.join(toolchainDir, "rust-toolchain");
+    const rustToolchainToml = path.join(toolchainDir, "rust-toolchain.toml");
+    const mvnw = path.join(wrapperDir, "mvnw");
+    const gradlew = path.join(wrapperDir, "gradlew");
+    const dirBuildProps = path.join(dotnetConfigDir, "Directory.Build.props");
+    const dirBuildTargets = path.join(
+      dotnetConfigDir,
+      "Directory.Build.targets",
+    );
+    const globalJson = path.join(dotnetConfigDir, "global.json");
+    const cmakePresets = path.join(nativeConfigDir, "CMakePresets.json");
+    const mesonOptions = path.join(nativeConfigDir, "meson_options.txt");
+    const conanfile = path.join(nativeConfigDir, "conanfile.txt");
+    const packageResolved = path.join(swiftLockDir, "Package.resolved");
+    const ignoredPackage = path.join(ignoredDir, "package.json");
 
-    await createFile(badPackage, '{ invalid json');
-    await createFile(pyproject, "[tool.poetry]\nname = 'poetry-app' # comment\n");
+    await createFile(badPackage, "{ invalid json");
+    await createFile(
+      pyproject,
+      "[tool.poetry]\nname = 'poetry-app' # comment\n",
+    );
     await createFile(cargo, '[package]\nname = "cargo-app" # comment\n');
     await createFile(
       pom,
-      '<project><parent><name>Parent</name></parent><name>PomApp</name></project>',
+      "<project><parent><name>Parent</name></parent><name>PomApp</name></project>",
     );
     await createFile(gradle, 'plugins { id "java" }\n');
-    await createFile(csproj, '<Project></Project>');
-    await createFile(composer, JSON.stringify({ name: 'vendor/app' }, null, 2));
+    await createFile(csproj, "<Project></Project>");
+    await createFile(composer, JSON.stringify({ name: "vendor/app" }, null, 2));
     await createFile(pnpmWorkspace, 'packages:\n  - "packages/*"\n');
-    await createFile(lerna, JSON.stringify({ name: 'lerna-space' }, null, 2));
-    await createFile(nx, JSON.stringify({ name: 'nx-space' }, null, 2));
-    await createFile(turbo, JSON.stringify({ name: 'turbo-space' }, null, 2));
-    await createFile(goWork, 'go 1.20\nuse ./module\n');
-    await createFile(rustToolchain, 'stable\n');
+    await createFile(lerna, JSON.stringify({ name: "lerna-space" }, null, 2));
+    await createFile(nx, JSON.stringify({ name: "nx-space" }, null, 2));
+    await createFile(turbo, JSON.stringify({ name: "turbo-space" }, null, 2));
+    await createFile(goWork, "go 1.20\nuse ./module\n");
+    await createFile(rustToolchain, "stable\n");
     await createFile(rustToolchainToml, '[toolchain]\nchannel = "stable"\n');
-    await createFile(mvnw, '#!/bin/sh\n');
-    await createFile(gradlew, '#!/bin/sh\n');
-    await createFile(dirBuildProps, '<Project></Project>\n');
-    await createFile(dirBuildTargets, '<Project></Project>\n');
-    await createFile(globalJson, JSON.stringify({ sdk: { version: '8.0.100' } }, null, 2));
+    await createFile(mvnw, "#!/bin/sh\n");
+    await createFile(gradlew, "#!/bin/sh\n");
+    await createFile(dirBuildProps, "<Project></Project>\n");
+    await createFile(dirBuildTargets, "<Project></Project>\n");
+    await createFile(
+      globalJson,
+      JSON.stringify({ sdk: { version: "8.0.100" } }, null, 2),
+    );
     await createFile(cmakePresets, JSON.stringify({ version: 3 }, null, 2));
-    await createFile(mesonOptions, 'option("feature", type : "boolean", value : true)\n');
-    await createFile(conanfile, '[requires]\nfmt/10.1.1\n');
-    await createFile(packageResolved, JSON.stringify({ version: 2, pins: [] }, null, 2));
-    await createFile(ignoredPackage, JSON.stringify({ name: 'ignored' }, null, 2));
+    await createFile(
+      mesonOptions,
+      'option("feature", type : "boolean", value : true)\n',
+    );
+    await createFile(conanfile, "[requires]\nfmt/10.1.1\n");
+    await createFile(
+      packageResolved,
+      JSON.stringify({ version: 2, pins: [] }, null, 2),
+    );
+    await createFile(
+      ignoredPackage,
+      JSON.stringify({ name: "ignored" }, null, 2),
+    );
 
     const discovered = await discoverProjectFiles(tempDir);
     const byPath = new Map(
@@ -277,72 +353,76 @@ describe('project file discovery', () => {
     );
 
     const badEntry = byPath.get(normalize(badPackage));
-    expect(badEntry?.name).toBe('bad-json');
-    expect(badEntry?.type).toBe('node');
-    expect(badEntry?.role).toBe('manifest');
-    expect(byPath.get(normalize(pyproject))?.name).toBe('poetry-app');
-    expect(byPath.get(normalize(cargo))?.name).toBe('cargo-app');
-    expect(byPath.get(normalize(pom))?.name).toBe('PomApp');
-    expect(byPath.get(normalize(gradle))?.name).toBe('gradle');
-    expect(byPath.get(normalize(csproj))?.name).toBe('Library');
-    expect(byPath.get(normalize(composer))?.name).toBe('vendor/app');
-    expect(byPath.get(normalize(pnpmWorkspace))?.type).toBe('node');
-    expect(byPath.get(normalize(pnpmWorkspace))?.role).toBe('config');
-    expect(byPath.get(normalize(pnpmWorkspace))?.name).toBe('workspace');
-    expect(byPath.get(normalize(lerna))?.name).toBe('lerna-space');
-    expect(byPath.get(normalize(lerna))?.type).toBe('node');
-    expect(byPath.get(normalize(nx))?.name).toBe('nx-space');
-    expect(byPath.get(normalize(nx))?.type).toBe('node');
-    expect(byPath.get(normalize(turbo))?.name).toBe('turbo-space');
-    expect(byPath.get(normalize(turbo))?.type).toBe('node');
-    expect(byPath.get(normalize(goWork))?.type).toBe('go');
-    expect(byPath.get(normalize(goWork))?.role).toBe('config');
-    expect(byPath.get(normalize(goWork))?.name).toBe('go-workspace');
-    expect(byPath.get(normalize(rustToolchain))?.type).toBe('rust');
-    expect(byPath.get(normalize(rustToolchain))?.role).toBe('config');
-    expect(byPath.get(normalize(rustToolchain))?.name).toBe('toolchain');
-    expect(byPath.get(normalize(rustToolchainToml))?.type).toBe('rust');
-    expect(byPath.get(normalize(rustToolchainToml))?.role).toBe('config');
-    expect(byPath.get(normalize(mvnw))?.type).toBe('maven');
-    expect(byPath.get(normalize(mvnw))?.role).toBe('config');
-    expect(byPath.get(normalize(mvnw))?.name).toBe('wrappers');
-    expect(byPath.get(normalize(gradlew))?.type).toBe('gradle');
-    expect(byPath.get(normalize(gradlew))?.role).toBe('config');
-    expect(byPath.get(normalize(gradlew))?.name).toBe('wrappers');
-    expect(byPath.get(normalize(dirBuildProps))?.type).toBe('dotnet');
-    expect(byPath.get(normalize(dirBuildProps))?.role).toBe('config');
-    expect(byPath.get(normalize(dirBuildProps))?.name).toBe('dotnet-config');
-    expect(byPath.get(normalize(dirBuildTargets))?.type).toBe('dotnet');
-    expect(byPath.get(normalize(dirBuildTargets))?.role).toBe('config');
-    expect(byPath.get(normalize(globalJson))?.type).toBe('dotnet');
-    expect(byPath.get(normalize(globalJson))?.role).toBe('config');
-    expect(byPath.get(normalize(cmakePresets))?.type).toBe('native');
-    expect(byPath.get(normalize(cmakePresets))?.role).toBe('config');
-    expect(byPath.get(normalize(cmakePresets))?.name).toBe('native-config');
-    expect(byPath.get(normalize(mesonOptions))?.type).toBe('native');
-    expect(byPath.get(normalize(mesonOptions))?.role).toBe('config');
-    expect(byPath.get(normalize(conanfile))?.type).toBe('native');
-    expect(byPath.get(normalize(conanfile))?.role).toBe('manifest');
-    expect(byPath.get(normalize(packageResolved))?.type).toBe('swift');
-    expect(byPath.get(normalize(packageResolved))?.role).toBe('lockfile');
+    expect(badEntry?.name).toBe("bad-json");
+    expect(badEntry?.type).toBe("node");
+    expect(badEntry?.role).toBe("manifest");
+    expect(byPath.get(normalize(pyproject))?.name).toBe("poetry-app");
+    expect(byPath.get(normalize(cargo))?.name).toBe("cargo-app");
+    expect(byPath.get(normalize(pom))?.name).toBe("PomApp");
+    expect(byPath.get(normalize(gradle))?.name).toBe("gradle");
+    expect(byPath.get(normalize(csproj))?.name).toBe("Library");
+    expect(byPath.get(normalize(composer))?.name).toBe("vendor/app");
+    expect(byPath.get(normalize(pnpmWorkspace))?.type).toBe("node");
+    expect(byPath.get(normalize(pnpmWorkspace))?.role).toBe("config");
+    expect(byPath.get(normalize(pnpmWorkspace))?.name).toBe("workspace");
+    expect(byPath.get(normalize(lerna))?.name).toBe("lerna-space");
+    expect(byPath.get(normalize(lerna))?.type).toBe("node");
+    expect(byPath.get(normalize(nx))?.name).toBe("nx-space");
+    expect(byPath.get(normalize(nx))?.type).toBe("node");
+    expect(byPath.get(normalize(turbo))?.name).toBe("turbo-space");
+    expect(byPath.get(normalize(turbo))?.type).toBe("node");
+    expect(byPath.get(normalize(goWork))?.type).toBe("go");
+    expect(byPath.get(normalize(goWork))?.role).toBe("config");
+    expect(byPath.get(normalize(goWork))?.name).toBe("go-workspace");
+    expect(byPath.get(normalize(rustToolchain))?.type).toBe("rust");
+    expect(byPath.get(normalize(rustToolchain))?.role).toBe("config");
+    expect(byPath.get(normalize(rustToolchain))?.name).toBe("toolchain");
+    expect(byPath.get(normalize(rustToolchainToml))?.type).toBe("rust");
+    expect(byPath.get(normalize(rustToolchainToml))?.role).toBe("config");
+    expect(byPath.get(normalize(mvnw))?.type).toBe("maven");
+    expect(byPath.get(normalize(mvnw))?.role).toBe("config");
+    expect(byPath.get(normalize(mvnw))?.name).toBe("wrappers");
+    expect(byPath.get(normalize(gradlew))?.type).toBe("gradle");
+    expect(byPath.get(normalize(gradlew))?.role).toBe("config");
+    expect(byPath.get(normalize(gradlew))?.name).toBe("wrappers");
+    expect(byPath.get(normalize(dirBuildProps))?.type).toBe("dotnet");
+    expect(byPath.get(normalize(dirBuildProps))?.role).toBe("config");
+    expect(byPath.get(normalize(dirBuildProps))?.name).toBe("dotnet-config");
+    expect(byPath.get(normalize(dirBuildTargets))?.type).toBe("dotnet");
+    expect(byPath.get(normalize(dirBuildTargets))?.role).toBe("config");
+    expect(byPath.get(normalize(globalJson))?.type).toBe("dotnet");
+    expect(byPath.get(normalize(globalJson))?.role).toBe("config");
+    expect(byPath.get(normalize(cmakePresets))?.type).toBe("native");
+    expect(byPath.get(normalize(cmakePresets))?.role).toBe("config");
+    expect(byPath.get(normalize(cmakePresets))?.name).toBe("native-config");
+    expect(byPath.get(normalize(mesonOptions))?.type).toBe("native");
+    expect(byPath.get(normalize(mesonOptions))?.role).toBe("config");
+    expect(byPath.get(normalize(conanfile))?.type).toBe("native");
+    expect(byPath.get(normalize(conanfile))?.role).toBe("manifest");
+    expect(byPath.get(normalize(packageResolved))?.type).toBe("swift");
+    expect(byPath.get(normalize(packageResolved))?.role).toBe("lockfile");
     expect(byPath.has(normalize(ignoredPackage))).toBe(false);
   });
 
-  it('honors root and nested .gitignore files by default', async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codegraph-project-gitignore-'));
-    const keptRootFile = path.join(tempDir, 'src', 'keep.ts');
-    const ignoredRootFile = path.join(tempDir, 'src', 'drop.generated.ts');
-    const keptNestedFile = path.join(tempDir, 'nested', 'keep.ts');
-    const ignoredNestedFile = path.join(tempDir, 'nested', 'tmp', 'drop.ts');
+  it("honors root and nested .gitignore files by default", async () => {
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "codegraph-project-gitignore-"),
+    );
+    const keptRootFile = path.join(tempDir, "src", "keep.ts");
+    const ignoredRootFile = path.join(tempDir, "src", "drop.generated.ts");
+    const keptNestedFile = path.join(tempDir, "nested", "keep.ts");
+    const ignoredNestedFile = path.join(tempDir, "nested", "tmp", "drop.ts");
 
-    await createFile(path.join(tempDir, '.gitignore'), '*.generated.ts\n');
-    await createFile(path.join(tempDir, 'nested', '.gitignore'), 'tmp/\n');
-    await createFile(keptRootFile, 'export const keepRoot = 1;\n');
-    await createFile(ignoredRootFile, 'export const dropRoot = 1;\n');
-    await createFile(keptNestedFile, 'export const keepNested = 1;\n');
-    await createFile(ignoredNestedFile, 'export const dropNested = 1;\n');
+    await createFile(path.join(tempDir, ".gitignore"), "*.generated.ts\n");
+    await createFile(path.join(tempDir, "nested", ".gitignore"), "tmp/\n");
+    await createFile(keptRootFile, "export const keepRoot = 1;\n");
+    await createFile(ignoredRootFile, "export const dropRoot = 1;\n");
+    await createFile(keptNestedFile, "export const keepNested = 1;\n");
+    await createFile(ignoredNestedFile, "export const dropNested = 1;\n");
 
-    const discovered = new Set((await listProjectFiles(tempDir)).map(normalize));
+    const discovered = new Set(
+      (await listProjectFiles(tempDir)).map(normalize),
+    );
 
     expect(discovered.has(normalize(keptRootFile))).toBe(true);
     expect(discovered.has(normalize(keptNestedFile))).toBe(true);
@@ -350,60 +430,69 @@ describe('project file discovery', () => {
     expect(discovered.has(normalize(ignoredNestedFile))).toBe(false);
   });
 
-  it('does not load nested .gitignore files from directories ignored by a parent .gitignore', async () => {
+  it("does not load nested .gitignore files from directories ignored by a parent .gitignore", async () => {
     const tempDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), 'codegraph-project-gitignore-shadow-'),
+      path.join(os.tmpdir(), "codegraph-project-gitignore-shadow-"),
     );
-    const ignoredFile = path.join(tempDir, 'tmp', 'keep.ts');
-    const keptFile = path.join(tempDir, 'src', 'keep.ts');
+    const ignoredFile = path.join(tempDir, "tmp", "keep.ts");
+    const keptFile = path.join(tempDir, "src", "keep.ts");
 
-    await createFile(path.join(tempDir, '.gitignore'), 'tmp/\n');
-    await createFile(path.join(tempDir, 'tmp', '.gitignore'), '!keep.ts\n');
-    await createFile(ignoredFile, 'export const shouldStayIgnored = 1;\n');
-    await createFile(keptFile, 'export const keep = 1;\n');
+    await createFile(path.join(tempDir, ".gitignore"), "tmp/\n");
+    await createFile(path.join(tempDir, "tmp", ".gitignore"), "!keep.ts\n");
+    await createFile(ignoredFile, "export const shouldStayIgnored = 1;\n");
+    await createFile(keptFile, "export const keep = 1;\n");
 
-    const discovered = new Set((await listProjectFiles(tempDir)).map(normalize));
+    const discovered = new Set(
+      (await listProjectFiles(tempDir)).map(normalize),
+    );
 
     expect(discovered.has(normalize(keptFile))).toBe(true);
     expect(discovered.has(normalize(ignoredFile))).toBe(false);
   });
 
-  it('treats non-slash directory patterns as directory subtree ignores', async () => {
+  it("treats non-slash directory patterns as directory subtree ignores", async () => {
     const tempDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), 'codegraph-project-gitignore-dir-'),
+      path.join(os.tmpdir(), "codegraph-project-gitignore-dir-"),
     );
-    const ignoredFile = path.join(tempDir, 'tmp', 'generated.ts');
-    const keptFile = path.join(tempDir, 'src', 'keep.ts');
+    const ignoredFile = path.join(tempDir, "tmp", "generated.ts");
+    const keptFile = path.join(tempDir, "src", "keep.ts");
 
-    await createFile(path.join(tempDir, '.gitignore'), 'tmp\n');
-    await createFile(path.join(tempDir, 'tmp', '.gitignore'), '!generated.ts\n');
-    await createFile(ignoredFile, 'export const generated = 1;\n');
-    await createFile(keptFile, 'export const keep = 1;\n');
+    await createFile(path.join(tempDir, ".gitignore"), "tmp\n");
+    await createFile(
+      path.join(tempDir, "tmp", ".gitignore"),
+      "!generated.ts\n",
+    );
+    await createFile(ignoredFile, "export const generated = 1;\n");
+    await createFile(keptFile, "export const keep = 1;\n");
 
-    const discovered = new Set((await listProjectFiles(tempDir)).map(normalize));
+    const discovered = new Set(
+      (await listProjectFiles(tempDir)).map(normalize),
+    );
 
     expect(discovered.has(normalize(keptFile))).toBe(true);
     expect(discovered.has(normalize(ignoredFile))).toBe(false);
   });
 
-  it('supports disabling .gitignore filtering and applying additive include/ignore globs', async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codegraph-project-discovery-'));
-    const appFile = path.join(tempDir, 'src', 'app.ts');
-    const specFile = path.join(tempDir, 'src', 'app.spec.ts');
-    const ignoredFile = path.join(tempDir, 'src', 'generated.ts');
-    const jsFile = path.join(tempDir, 'src', 'legacy.js');
+  it("supports disabling .gitignore filtering and applying additive include/ignore globs", async () => {
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "codegraph-project-discovery-"),
+    );
+    const appFile = path.join(tempDir, "src", "app.ts");
+    const specFile = path.join(tempDir, "src", "app.spec.ts");
+    const ignoredFile = path.join(tempDir, "src", "generated.ts");
+    const jsFile = path.join(tempDir, "src", "legacy.js");
 
-    await createFile(path.join(tempDir, '.gitignore'), 'src/generated.ts\n');
-    await createFile(appFile, 'export const app = 1;\n');
-    await createFile(specFile, 'export const testApp = 1;\n');
-    await createFile(ignoredFile, 'export const generated = 1;\n');
-    await createFile(jsFile, 'module.exports = 1;\n');
+    await createFile(path.join(tempDir, ".gitignore"), "src/generated.ts\n");
+    await createFile(appFile, "export const app = 1;\n");
+    await createFile(specFile, "export const testApp = 1;\n");
+    await createFile(ignoredFile, "export const generated = 1;\n");
+    await createFile(jsFile, "module.exports = 1;\n");
 
     const discovered = new Set(
       (
         await listProjectFiles(tempDir, undefined, {
-          includeGlobs: ['src/**/*.ts'],
-          ignoreGlobs: ['src/**/*.spec.ts'],
+          includeGlobs: ["src/**/*.ts"],
+          ignoreGlobs: ["src/**/*.spec.ts"],
           useGitignore: false,
         })
       ).map(normalize),

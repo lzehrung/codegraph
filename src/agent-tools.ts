@@ -185,7 +185,6 @@ export async function tool_findSymbol(
 
     return matches.slice(0, options.maxResults ?? 20);
   } catch (error) {
-    console.error(error);
     return [];
   }
 }

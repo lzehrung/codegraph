@@ -16,12 +16,56 @@ export type ImpactStreamChunk =
   | { type: "projectFiles"; files: ProjectFileInfo[] }
   | import("../types.js").ProgressUpdate
   | { type: "changedSymbol"; symbol: ChangedSymbol }
-  | { type: "impactItem"; item: ImpactItem }
+  | { type: "impactItem"; item: ImpactItem; partial?: boolean }
   | {
       type: "complete";
       summary: { totalChanged: number; totalImpacted: number };
     }
   | { type: "error"; error: string };
+
+type AsyncQueue<T> = {
+  push: (value: T) => void;
+  close: () => void;
+  next: () => Promise<IteratorResult<T>>;
+};
+
+function createAsyncQueue<T>(): AsyncQueue<T> {
+  const values: T[] = [];
+  const waiters: Array<(result: IteratorResult<T>) => void> = [];
+  let closed = false;
+
+  return {
+    push(value: T) {
+      if (closed) return;
+      const waiter = waiters.shift();
+      if (waiter) {
+        waiter({ value, done: false });
+        return;
+      }
+      values.push(value);
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      while (waiters.length > 0) {
+        const waiter = waiters.shift();
+        waiter?.({ value: undefined, done: true });
+      }
+    },
+    async next(): Promise<IteratorResult<T>> {
+      if (values.length > 0) {
+        const nextValue = values.shift()!;
+        return { value: nextValue, done: false };
+      }
+      if (closed) {
+        return { value: undefined, done: true };
+      }
+      return await new Promise<IteratorResult<T>>((resolve) => {
+        waiters.push(resolve);
+      });
+    },
+  };
+}
 
 /**
  * Stream impact analysis results as they're discovered
@@ -78,15 +122,14 @@ export async function* analyzeImpactStreaming(
       const symbols = mapped.changedSymbols;
 
       if (symbols.length > 0) filesWithSymbols.add(absPath);
-      for (const symbol of symbols) {
+      const emittedSymbols =
+        options.scope === "imported"
+          ? symbols.filter((symbol) => symbol.exported)
+          : symbols;
+      for (const symbol of emittedSymbols) {
         yield { type: "changedSymbol", symbol };
         changedSymbols.push(symbol);
       }
-    }
-
-    // Honor scope option
-    if (options.scope === "imported") {
-      changedSymbols = changedSymbols.filter((s) => s.exported);
     }
 
     // Step 3: Analyze impact (stream results)
@@ -111,20 +154,52 @@ export async function* analyzeImpactStreaming(
           change.kind !== "deleted" && !filesWithSymbols.has(change.path),
       )
       .map((change) => change.path);
+    const impactQueue = createAsyncQueue<ImpactStreamChunk>();
+    const emittedSignatures = new Set<string>();
+    let impactedItems: ImpactItem[] = [];
+    let impactError: string | null = null;
+    const queueImpactItem = (item: ImpactItem, partial: boolean) => {
+      const signature = JSON.stringify(item);
+      const key = `${item.file}::${partial ? "partial" : "final"}::${signature}`;
+      if (emittedSignatures.has(key)) return;
+      emittedSignatures.add(key);
+      impactQueue.push({
+        type: "impactItem",
+        item,
+        ...(partial ? { partial: true } : {}),
+      });
+    };
 
-    const impactedItems = await analyzeImpact(
-      index,
-      changedSymbols,
-      normalizedChanges,
-      {
-        ...options,
-        fileLevelFallback,
-        fileLevelFallbackPaths,
+    void analyzeImpact(index, changedSymbols, normalizedChanges, {
+      ...options,
+      fileLevelFallback,
+      fileLevelFallbackPaths,
+      onImpactItem: (item, phase) => {
+        queueImpactItem(item, phase === "partial");
       },
-    );
+    })
+      .then((items) => {
+        impactedItems = items;
+      })
+      .catch((error) => {
+        impactError = error instanceof Error ? error.message : String(error);
+      })
+      .finally(() => {
+        impactQueue.close();
+      });
 
-    for (const item of impactedItems) {
-      yield { type: "impactItem", item };
+    while (true) {
+      const nextChunk = await impactQueue.next();
+      if (nextChunk.done) break;
+      yield nextChunk.value;
+    }
+
+    if (impactError) {
+      yield {
+        type: "error",
+        error: impactError,
+      };
+      return;
     }
 
     // Step 4: Complete

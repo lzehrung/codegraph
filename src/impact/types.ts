@@ -402,4 +402,6 @@ export type ImpactOptions = DiffProviderOptions & {
   fileLevelFallbackPaths?: string[];
   /** @internal Mutable diagnostics accumulator used across impact analysis stages */
   diagnostics?: ImpactDiagnostics;
+  /** @internal Internal callback used by streaming analysis to emit progressive impact snapshots */
+  onImpactItem?: (item: ImpactItem, phase: "partial" | "final") => void;
 };
