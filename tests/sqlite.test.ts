@@ -89,6 +89,50 @@ export function run() { helper(); new Widget(); }
     db.close();
   });
 
+  it("keeps full SQLite exports idempotent across repeated writes", async () => {
+    const root = await mkTmpDir("dg-sqlite-idempotent-");
+    await fsp.writeFile(
+      path.join(root, "main.ts"),
+      `import { helper } from "./util";
+export function run() { return helper(); }
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "util.ts"),
+      `export function helper() { return 1; }
+`,
+      "utf8",
+    );
+
+    const index = await buildProjectIndex(root);
+    const sgraph = await buildSymbolGraphDetailed(index);
+    const dbPath = path.join(root, "graph.sqlite");
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+    });
+
+    const firstCounts = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT (SELECT COUNT(*) FROM files), (SELECT COUNT(*) FROM file_edges), (SELECT COUNT(*) FROM symbols), (SELECT COUNT(*) FROM symbol_edges);",
+    );
+
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+    });
+
+    const secondCounts = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT (SELECT COUNT(*) FROM files), (SELECT COUNT(*) FROM file_edges), (SELECT COUNT(*) FROM symbols), (SELECT COUNT(*) FROM symbol_edges);",
+    );
+
+    expect(secondCounts.rows).toEqual(firstCounts.rows);
+  });
+
   it("migrates older DBs missing symbols.visibility", async () => {
     const root = await mkTmpDir("dg-sqlite-migrate-");
     const main = `
@@ -221,6 +265,69 @@ export function run() { return new NewWidget(); }
     db.close();
   });
 
+  it("removes stale files and edges when a full export rewrites an existing DB", async () => {
+    const root = await mkTmpDir("dg-sqlite-full-rewrite-");
+    await fsp.writeFile(
+      path.join(root, "main.ts"),
+      `import { helper } from "./util";
+export const run = () => helper();
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "util.ts"),
+      `export function helper() { return 1; }
+`,
+      "utf8",
+    );
+
+    const dbPath = path.join(root, "graph.sqlite");
+    let index = await buildProjectIndex(root);
+    let sgraph = await buildSymbolGraphDetailed(index);
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+    });
+
+    await fsp.unlink(path.join(root, "util.ts"));
+    await fsp.writeFile(
+      path.join(root, "main.ts"),
+      `export const run = () => 1;
+`,
+      "utf8",
+    );
+
+    index = await buildProjectIndex(root);
+    sgraph = await buildSymbolGraphDetailed(index);
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+    });
+
+    const utilPath = path.join(root, "util.ts").replace(/\\/g, "/");
+    const utilFiles = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT path FROM files WHERE path = ?;",
+      [utilPath],
+    );
+    const utilEdges = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT to_path FROM file_edges WHERE to_path = ?;",
+      [utilPath],
+    );
+    const utilSymbols = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT id FROM symbols WHERE file = ?;",
+      [utilPath],
+    );
+
+    expect(utilFiles.rows).toEqual([]);
+    expect(utilEdges.rows).toEqual([]);
+    expect(utilSymbols.rows).toEqual([]);
+  });
+
 
   it("removes deleted files and stale edges during incremental updates", async () => {
     const root = await mkTmpDir("dg-sqlite-delete-");
@@ -289,6 +396,60 @@ export const run = () => helper();
     expect(utilSymbols).toEqual([]);
     expect(staleEdges).toEqual([]);
     db.close();
+  });
+
+  it("removes inbound edges for deleted files even when importers are unchanged", async () => {
+    const root = await mkTmpDir("dg-sqlite-delete-inbound-");
+    const mainPath = path.join(root, "main.ts");
+    const utilPath = path.join(root, "util.ts");
+
+    await fsp.writeFile(
+      mainPath,
+      `import { helper } from "./util";
+export const run = () => helper();
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      utilPath,
+      `export function helper() { return 1; }
+`,
+      "utf8",
+    );
+
+    const baseIndex = await buildProjectIndex(root);
+    const baseSgraph = await buildSymbolGraphDetailed(baseIndex);
+    const dbPath = path.join(root, "graph.sqlite");
+    await writeGraphSqlite({
+      fileGraph: baseIndex.graph,
+      symbolGraph: baseSgraph,
+      outputPath: dbPath,
+    });
+
+    await fsp.unlink(utilPath);
+    const nextIndex = await buildProjectIndex(root);
+    const nextSgraph = await buildSymbolGraphDetailed(nextIndex);
+
+    await updateGraphSqlite({
+      fileGraph: nextIndex.graph,
+      symbolGraph: nextSgraph,
+      outputPath: dbPath,
+      changedFiles: [],
+      deletedFiles: [utilPath.replace(/\\/g, "/")],
+      fullGraphSync: true,
+    });
+
+    const rows = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT from_path, to_path, to_type FROM file_edges ORDER BY from_path, to_path;",
+    );
+    expect(rows.rows).toEqual([]);
+
+    const remainingFile = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT path FROM files ORDER BY path;",
+    );
+    expect(remainingFile.rows).toEqual([[mainPath.replace(/\\/g, "/")]]);
   });
 
 

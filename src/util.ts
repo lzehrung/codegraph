@@ -7,6 +7,7 @@ import { createMatchPath } from "tsconfig-paths";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import type { Range } from "./types.js";
+import { logWithLevel, type LogLevel } from "./logging.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -166,6 +167,7 @@ export type ProjectFileDiscoveryOptions = {
   ignoreGlobs?: string[];
   useGitignore?: boolean;
   gitignoreRoot?: string;
+  logLevel?: LogLevel;
 };
 
 type GitignoreRule = {
@@ -219,9 +221,7 @@ function parseGitignoreRule(
   const anchored =
     trimmedLine.startsWith("/") || (negated && trimmedLine.startsWith("!/"));
   const baseMatcherPattern =
-    anchored || pattern.includes("/")
-      ? pattern
-      : `**/${pattern}`;
+    anchored || pattern.includes("/") ? pattern : `**/${pattern}`;
   const matcherPattern = dirOnly
     ? `${baseMatcherPattern}/**`
     : [baseMatcherPattern, `${baseMatcherPattern}/**`];
@@ -234,16 +234,18 @@ function parseGitignoreRule(
   };
 }
 
-async function loadGitignoreRules(projectRoot: string): Promise<GitignoreRule[]> {
+async function loadGitignoreRules(
+  projectRoot: string,
+): Promise<GitignoreRule[]> {
   const gitignoreFiles = await fg(["**/.gitignore"], {
     cwd: projectRoot,
     absolute: true,
     dot: true,
     ignore: DEFAULT_PROJECT_FILE_IGNORES,
   });
-  gitignoreFiles.sort((left, right) => normalizePath(left).localeCompare(
-    normalizePath(right),
-  ));
+  gitignoreFiles.sort((left, right) =>
+    normalizePath(left).localeCompare(normalizePath(right)),
+  );
   const rules: GitignoreRule[] = [];
   for (const gitignoreFile of gitignoreFiles) {
     if (isIgnoredByGitignore(gitignoreFile, rules)) {
@@ -299,48 +301,73 @@ function isIgnoredByGitignore(
   return ignored;
 }
 
+async function ensureDirectoryReadable(
+  directoryPath: string,
+  label: string,
+): Promise<string> {
+  const resolvedPath = path.resolve(directoryPath);
+  let stats: fs.Stats;
+  try {
+    stats = await fsp.stat(resolvedPath);
+  } catch (error) {
+    throw new Error(
+      `${label} does not exist or is not readable: ${resolvedPath} (${stringifyUnknown(error)})`,
+    );
+  }
+  if (!stats.isDirectory()) {
+    throw new Error(`${label} is not a directory: ${resolvedPath}`);
+  }
+  return resolvedPath;
+}
+
 export async function listProjectFiles(
   projectRoot: string,
   patterns = DEFAULT_PROJECT_PATTERNS,
   options?: ProjectFileDiscoveryOptions,
 ): Promise<string[]> {
+  const root = await ensureDirectoryReadable(projectRoot, "Project root");
+  const includeMatchers = (options?.includeGlobs ?? [])
+    .map(normalizeGlobPattern)
+    .filter(Boolean)
+    .map((globPattern) => picomatch(globPattern, { dot: true }));
+  const userIgnoreGlobs = (options?.ignoreGlobs ?? [])
+    .map(normalizeGlobPattern)
+    .filter(Boolean);
+  const gitignoreRoot = options?.gitignoreRoot
+    ? await ensureDirectoryReadable(options.gitignoreRoot, "Gitignore root")
+    : root;
+
   try {
-    const includeMatchers = (options?.includeGlobs ?? [])
-      .map(normalizeGlobPattern)
-      .filter(Boolean)
-      .map((globPattern) => picomatch(globPattern, { dot: true }));
-    const userIgnoreGlobs = (options?.ignoreGlobs ?? [])
-      .map(normalizeGlobPattern)
-      .filter(Boolean);
-    const gitignoreRoot = options?.gitignoreRoot
-      ? path.resolve(options.gitignoreRoot)
-      : projectRoot;
     const gitignoreRules =
       options?.useGitignore === false
         ? []
         : await loadGitignoreRules(gitignoreRoot);
     const files = await fg(patterns, {
-      cwd: projectRoot,
+      cwd: root,
       absolute: true,
       dot: true,
       ignore: [...DEFAULT_PROJECT_FILE_IGNORES, ...userIgnoreGlobs],
     });
-    return files
-      .map(normalizePath)
-      .filter((filePath) => {
-        if (
-          includeMatchers.length > 0 &&
-          !includeMatchers.some((matcher) =>
-            matchesDiscoveryGlob(filePath, projectRoot, matcher),
-          )
-        ) {
-          return false;
-        }
-        return !isIgnoredByGitignore(filePath, gitignoreRules);
-      });
+    return files.map(normalizePath).filter((filePath) => {
+      if (
+        includeMatchers.length > 0 &&
+        !includeMatchers.some((matcher) =>
+          matchesDiscoveryGlob(filePath, root, matcher),
+        )
+      ) {
+        return false;
+      }
+      return !isIgnoredByGitignore(filePath, gitignoreRules);
+    });
   } catch (error) {
-    console.warn(`Warning: Failed to list files in ${projectRoot}:`, error);
-    return [];
+    logWithLevel(
+      options?.logLevel,
+      "debug",
+      `listProjectFiles failed for ${root}: ${stringifyUnknown(error)}`,
+    );
+    throw new Error(
+      `Failed to list files in ${root}: ${stringifyUnknown(error)}`,
+    );
   }
 }
 
@@ -851,9 +878,10 @@ async function buildProjectFileInfo(
 
 export async function discoverProjectFiles(
   projectRoot: string,
+  options?: { logLevel?: LogLevel },
 ): Promise<ProjectFileInfo[]> {
+  const root = await ensureDirectoryReadable(projectRoot, "Project root");
   try {
-    const root = path.resolve(projectRoot);
     const allPatterns = PROJECT_FILE_DEFINITIONS.flatMap((def) =>
       def.patterns.map(toProjectGlob),
     );
@@ -907,11 +935,14 @@ export async function discoverProjectFiles(
       return a.path.localeCompare(b.path);
     });
   } catch (error) {
-    console.warn(
-      `Warning: Failed to discover project files in ${projectRoot}:`,
-      error,
+    logWithLevel(
+      options?.logLevel,
+      "debug",
+      `discoverProjectFiles failed for ${root}: ${stringifyUnknown(error)}`,
     );
-    return [];
+    throw new Error(
+      `Failed to discover project files in ${root}: ${stringifyUnknown(error)}`,
+    );
   }
 }
 
@@ -1376,6 +1407,7 @@ async function loadTsconfigConfig(
 
 export async function loadNearestTsconfigFor(
   file: string,
+  logLevel?: LogLevel,
 ): Promise<{ matchPath?: MatchPathFn }> {
   const dir = path.dirname(file);
   if (tsconfigCache.has(dir)) return tsconfigCache.get(dir)!;
@@ -1393,7 +1425,12 @@ export async function loadNearestTsconfigFor(
     tsconfigCache.set(dir, val);
     return val;
   } catch (error) {
-    console.warn(`Warning: Failed to load tsconfig at ${cfgPath}:`, error);
+    logWithLevel(
+      logLevel,
+      "warn",
+      `Warning: Failed to load tsconfig at ${cfgPath}:`,
+      error,
+    );
     const val = {};
     tsconfigCache.set(dir, val);
     return val;
@@ -1931,7 +1968,9 @@ function addProjectSymbolFile(
   }
 }
 
-async function buildProjectSymbolIndex<TEntry extends { packageName: string | null; symbols: Set<string> }>(
+async function buildProjectSymbolIndex<
+  TEntry extends { packageName: string | null; symbols: Set<string> },
+>(
   projectRoot: string,
   patterns: string[],
   readIndexEntry: (filePath: string) => Promise<TEntry>,
@@ -2003,7 +2042,11 @@ async function getJavaProjectSymbolIndex(
     javaProjectSymbolIndexCache,
     projectRoot,
     async () =>
-      await buildProjectSymbolIndex(projectRoot, ["**/*.java"], readJavaSymbolIndex),
+      await buildProjectSymbolIndex(
+        projectRoot,
+        ["**/*.java"],
+        readJavaSymbolIndex,
+      ),
   );
 }
 
@@ -2233,7 +2276,9 @@ async function resolveKotlinImportPath(
   const projectIndex = await getKotlinProjectSymbolIndex(projectRoot);
   if (parts.length < 2) {
     const packageCandidates = projectIndex.filesByPackage.get(spec) ?? [];
-    const resolved = packageCandidates[0] ? path.resolve(packageCandidates[0]) : null;
+    const resolved = packageCandidates[0]
+      ? path.resolve(packageCandidates[0])
+      : null;
     kotlinImportResolutionCache.set(cacheKey, resolved);
     return resolved;
   }
@@ -2246,7 +2291,9 @@ async function resolveKotlinImportPath(
   const packageCandidates = projectIndex.filesByPackage.get(packageName) ?? [];
 
   if (importedName === "*") {
-    const resolved = packageCandidates[0] ? path.resolve(packageCandidates[0]) : null;
+    const resolved = packageCandidates[0]
+      ? path.resolve(packageCandidates[0])
+      : null;
     kotlinImportResolutionCache.set(cacheKey, resolved);
     return resolved;
   }
@@ -2310,7 +2357,9 @@ async function resolveJavaImportPath(
 
   const packageCandidates = projectIndex.filesByPackage.get(packageName) ?? [];
   if (importedName === "*") {
-    const resolved = packageCandidates[0] ? path.resolve(packageCandidates[0]) : null;
+    const resolved = packageCandidates[0]
+      ? path.resolve(packageCandidates[0])
+      : null;
     javaImportResolutionCache.set(cacheKey, resolved);
     return resolved;
   }
@@ -2933,13 +2982,13 @@ export async function resolvePythonModule(
   for (const c of candidates) {
     try {
       if (await isDirectory(c)) {
-        const res = path.resolve(c);
+        const res = normalizePath(path.resolve(c));
         resolvePythonModuleCache.set(cacheKey, res);
         return res;
       }
       await fsp.access(c, fs.constants.R_OK);
       {
-        const res = path.resolve(c);
+        const res = normalizePath(path.resolve(c));
         resolvePythonModuleCache.set(cacheKey, res);
         return res;
       }
@@ -2974,13 +3023,13 @@ export async function resolvePythonModule(
     for (const c of anchorCandidates) {
       try {
         if (await isDirectory(c)) {
-          const res = path.resolve(c);
+          const res = normalizePath(path.resolve(c));
           resolvePythonModuleCache.set(cacheKey, res);
           return res;
         }
         await fsp.access(c, fs.constants.R_OK);
         {
-          const res = path.resolve(c);
+          const res = normalizePath(path.resolve(c));
           resolvePythonModuleCache.set(cacheKey, res);
           return res;
         }
@@ -2997,7 +3046,7 @@ export async function resolvePythonModule(
   return ext;
 }
 
-export function clearResolutionCaches(): void {
+export function clearImportResolutionCaches(): void {
   kotlinImportResolutionCache.clear();
   kotlinSymbolIndexCache.clear();
   kotlinProjectSymbolIndexCache.clear();
@@ -3007,6 +3056,10 @@ export function clearResolutionCaches(): void {
   fileExistsCache.clear();
   resolveSpecifierCache.clear();
   resolvePythonModuleCache.clear();
+}
+
+export function clearResolutionCaches(): void {
+  clearImportResolutionCaches();
   tsconfigCache.clear();
   workspaceCache.clear();
 }

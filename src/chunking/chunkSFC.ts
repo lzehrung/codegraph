@@ -1,7 +1,6 @@
 import type { Chunk } from "./chunkFile.js";
 import { chunkFile } from "./chunkFile.js";
 import { chunkTextFile } from "./chunkTextFile.js";
-import type { TextChunkOptions } from "./chunkTextFile.js";
 import { LANG_CONFIGS } from "../bootstrap/treeSitterLanguages.js";
 import {
   parseSFC,
@@ -12,6 +11,7 @@ import {
   type SFCBlock,
   type SFCFramework,
 } from "../languages/sfc.js";
+import { logWithLevel, type LogLevel } from "../logging.js";
 
 export interface ChunkSFCOptions {
   source: string;
@@ -20,6 +20,7 @@ export interface ChunkSFCOptions {
   minTokens?: number;
   maxTokens?: number;
   tokenizer?: ((text: string) => number) | undefined;
+  logLevel?: LogLevel;
 }
 
 export function chunkSFCFile(opts: ChunkSFCOptions): Chunk[] {
@@ -30,6 +31,7 @@ export function chunkSFCFile(opts: ChunkSFCOptions): Chunk[] {
     minTokens = 150,
     maxTokens = 400,
     tokenizer,
+    logLevel,
   } = opts;
   const baseBlocks = parseSFC(source);
   const blocks =
@@ -62,6 +64,7 @@ export function chunkSFCFile(opts: ChunkSFCOptions): Chunk[] {
       minTokens,
       maxTokens,
       tokenizer,
+      ...(logLevel ? { logLevel } : {}),
     });
     for (const chunk of blockChunks) {
       chunk.id = makeChunkId();
@@ -85,8 +88,17 @@ function chunkBlock(opts: {
   minTokens: number;
   maxTokens: number;
   tokenizer?: ((text: string) => number) | undefined;
+  logLevel?: LogLevel;
 }): Chunk[] {
-  const { block, framework, filePath, minTokens, maxTokens, tokenizer } = opts;
+  const {
+    block,
+    framework,
+    filePath,
+    minTokens,
+    maxTokens,
+    tokenizer,
+    logLevel,
+  } = opts;
 
   if (!block.content.trim()) {
     return [];
@@ -106,7 +118,9 @@ function chunkBlock(opts: {
           tokenizer,
         });
       } catch (error) {
-        console.warn(
+        logWithLevel(
+          logLevel,
+          "warn",
           `Warning: Semantic chunking failed for ${framework} ${block.type} block:`,
           error,
         );
@@ -163,6 +177,6 @@ function chunkTextBlock(
     minTokens,
     maxTokens,
     tokenizer,
-  } as TextChunkOptions);
+  });
   return textChunks;
 }

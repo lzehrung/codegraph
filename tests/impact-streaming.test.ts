@@ -138,4 +138,107 @@ rename to setup-renamed.ts
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("filters changedSymbol events before emission when scope=imported", async () => {
+    const root = await mkTmpDir("dg-stream-scope-");
+    await fsp.writeFile(
+      path.join(root, "a.ts"),
+      `function helper() { return 1; }
+export function run() { return helper(); }
+`,
+      "utf8",
+    );
+    const index = await buildProjectIndex(root);
+
+    try {
+      const diffText = `diff --git a/a.ts b/a.ts
+index 1234567..abcdef0 100644
+--- a/a.ts
++++ b/a.ts
+@@ -1,2 +1,2 @@
+-function helper() { return 1; }
++function helper() { return 2; }
+ export function run() { return helper(); }
+`;
+
+      const changedSymbols: string[] = [];
+      let completeSummary:
+        | { totalChanged: number; totalImpacted: number }
+        | undefined;
+
+      for await (const chunk of analyzeImpactStreaming(root, index, {
+        provider: "raw",
+        diffText,
+        scope: "imported",
+      })) {
+        if (chunk.type === "changedSymbol") {
+          changedSymbols.push(chunk.symbol.name);
+        }
+        if (chunk.type === "complete") {
+          completeSummary = chunk.summary;
+        }
+      }
+
+      expect(changedSymbols).toEqual([]);
+      expect(completeSummary?.totalChanged).toBe(0);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("emits progressive impact items before completion", async () => {
+    const root = await mkTmpDir("dg-stream-progressive-");
+    await fsp.writeFile(
+      path.join(root, "feature.ts"),
+      `export function helper() { return 1; }
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "consumer.ts"),
+      `import { helper } from "./feature";
+export function run() { return helper(); }
+`,
+      "utf8",
+    );
+    const index = await buildProjectIndex(root);
+
+    try {
+      const diffText = `diff --git a/feature.ts b/feature.ts
+index 1234567..abcdef0 100644
+--- a/feature.ts
++++ b/feature.ts
+@@ -1 +1 @@
+-export function helper() { return 1; }
++export function helper() { return 2; }
+`;
+
+      const chunkTypes: string[] = [];
+      const impactItems: Array<{ file: string; partial: boolean }> = [];
+
+      for await (const chunk of analyzeImpactStreaming(root, index, {
+        provider: "raw",
+        diffText,
+      })) {
+        chunkTypes.push(chunk.type);
+        if (chunk.type === "impactItem") {
+          impactItems.push({
+            file: chunk.item.file,
+            partial: chunk.partial ?? false,
+          });
+        }
+      }
+
+      expect(impactItems.some((item) => item.partial)).toBe(true);
+      expect(
+        impactItems.some((item) => item.file.endsWith("consumer.ts")),
+      ).toBe(true);
+      const firstImpactIndex = chunkTypes.indexOf("impactItem");
+      const completeIndex = chunkTypes.lastIndexOf("complete");
+      expect(firstImpactIndex).toBeGreaterThan(-1);
+      expect(completeIndex).toBeGreaterThan(firstImpactIndex);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

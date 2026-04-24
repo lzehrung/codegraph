@@ -560,6 +560,7 @@ export async function buildReviewReport(
       ...(appliedOptions ?? {}),
       files: filesToIndex,
       graph: graphOptions,
+      ...(includeSymbolDetails && maxCallsites > 0 ? { keepParsed: true } : {}),
       ...(indexReport ? { report: indexReport } : {}),
     };
     index = await buildProjectIndexIncremental(projectRoot, indexOpts);
@@ -633,11 +634,13 @@ export async function buildReviewReport(
   const referencesStart = performance.now();
   const referenceResults =
     includeSymbolDetails && maxCallsites > 0
-      ? await runWithConcurrency(
+        ? await runWithConcurrency(
           defsToResolve,
           referenceConcurrency,
           async (def) => {
-            const refs = await findReferences(index, { def });
+            const refs = await findReferences(index, { def }, {
+              maxReferences: maxCallsites + 1,
+            });
             return { def, refs };
           },
         )
