@@ -15,6 +15,7 @@ export {
   resolvePackageSubpath,
   getGitHead,
   listChangedFiles,
+  clearImportResolutionCaches,
   clearResolutionCaches,
 } from "./util.js";
 export type {

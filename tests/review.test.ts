@@ -388,6 +388,64 @@ describe('Review report', () => {
     }
   });
 
+  it('keeps parsed trees and bounds reference work for review callsites', async () => {
+    const root = await mkTmpDir('dg-review-reference-bounds-');
+    const srcDir = path.join(root, 'src');
+    await fsp.mkdir(srcDir, { recursive: true });
+    const featureFile = path.join(srcDir, 'feature.ts');
+    const consumerFile = path.join(srcDir, 'consumer.ts');
+    await fsp.writeFile(
+      featureFile,
+      `export function greet(name: string) { return name; }\n`,
+      'utf8',
+    );
+    await fsp.writeFile(
+      consumerFile,
+      `import { greet } from './feature';\nexport const run = () => greet('hi');\n`,
+      'utf8',
+    );
+
+    await buildProjectIndex(root);
+
+    const originalBuildProjectIndexIncremental =
+      indexer.buildProjectIndexIncremental;
+    const originalFindReferences = indexer.findReferences;
+    const capturedIndexOpts: Array<indexer.IncrementalBuildOptions | undefined> = [];
+    const capturedReferenceLimits: number[] = [];
+
+    const buildSpy = vi
+      .spyOn(indexer, 'buildProjectIndexIncremental')
+      .mockImplementation(async (projectRoot, opts) => {
+        capturedIndexOpts.push(opts);
+        return await originalBuildProjectIndexIncremental(projectRoot, opts);
+      });
+
+    const findSpy = vi
+      .spyOn(indexer, 'findReferences')
+      .mockImplementation(async (idx, req, opts) => {
+        if (opts?.maxReferences !== undefined) {
+          capturedReferenceLimits.push(opts.maxReferences);
+        }
+        return await originalFindReferences(idx, req, opts);
+      });
+
+    try {
+      const report = await buildReviewReport(root, {
+        files: [featureFile],
+        includeSymbolDetails: true,
+        maxCallsites: 2,
+      });
+
+      expect(report.status).toBe('ok');
+      expect(capturedIndexOpts.some((opts) => opts?.keepParsed)).toBe(true);
+      expect(capturedReferenceLimits.length).toBeGreaterThan(0);
+      expect(capturedReferenceLimits.every((value) => value === 3)).toBe(true);
+    } finally {
+      findSpy.mockRestore();
+      buildSpy.mockRestore();
+    }
+  });
+
   it('applies review depth presets to symbol details and graph options', async () => {
     const root = await mkTmpDir('dg-review-presets-');
     const srcDir = path.join(root, 'src');

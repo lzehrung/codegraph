@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import {
   buildProjectIndex,
   buildProjectIndexIncremental,
+  type BuildReport,
 } from "../src/index.js";
 import * as indexer from "../src/indexer.js";
 import { collectGraph } from "../src/graphs.js";
@@ -15,6 +16,9 @@ import {
   getGitBlobHash,
   listProjectFiles,
   resolveSpecifier,
+  loadNearestTsconfigFor,
+  loadWorkspaceConfig,
+  clearImportResolutionCaches,
   clearResolutionCaches,
 } from "../src/util.js";
 import * as util from "../src/util.js";
@@ -393,6 +397,72 @@ describe("Cache invalidation and strict hashing", () => {
     expect(aEdges).toEqual([]);
   });
 
+  it("recomputes unchanged importers when a referenced dependency is deleted", async () => {
+    const root = await mkTmpDir("dg-incremental-deleted-dependency-");
+    const mainPath = path.join(root, "main.ts");
+    const utilPath = path.join(root, "util.ts");
+
+    await fsp.writeFile(
+      mainPath,
+      `import { helper } from "./util";\nexport const run = () => helper();\n`,
+      "utf8",
+    );
+    await fsp.writeFile(utilPath, `export function helper() { return 1; }\n`, "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    await fsp.unlink(utilPath);
+
+    const incremental = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+    });
+    const manifestAfter = await readManifest(root);
+    const normalizedMain = normalize(mainPath);
+    const normalizedUtil = normalize(utilPath);
+
+    expect(manifestAfter.files[normalizedUtil]).toBeUndefined();
+    expect(
+      incremental.graph.nodes.has(normalizedUtil),
+    ).toBe(false);
+    expect(
+      incremental.graph.edges.some(
+        (edge) =>
+          edge.from === normalizedMain &&
+          edge.to.type === "file" &&
+          edge.to.path === normalizedUtil,
+      ),
+    ).toBe(false);
+
+    const mainModule = incremental.byFile.get(normalizedMain);
+    expect(mainModule).toBeDefined();
+    expect(
+      mainModule?.imports.some(
+        (imp) =>
+          typeof imp.resolved === "string" && imp.resolved === normalizedUtil,
+      ),
+    ).toBe(false);
+  });
+
+  it("persists an empty manifest when incremental rebuild deletes the last tracked file", async () => {
+    const root = await mkTmpDir("dg-incremental-empty-after-delete-");
+    const onlyPath = path.join(root, "only.ts");
+
+    await fsp.writeFile(onlyPath, `export const value = 1;\n`, "utf8");
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+
+    await fsp.unlink(onlyPath);
+
+    const incremental = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+    });
+    const manifestAfter = await readManifest(root);
+
+    expect(incremental.graph.nodes.size).toBe(0);
+    expect(incremental.graph.edges).toEqual([]);
+    expect(Object.keys(manifestAfter.files)).toEqual([]);
+  });
+
   it("updates only explicit files in incremental builds", async () => {
     const root = await mkTmpDir("dg-incremental-explicit-");
     const aPath = path.join(root, "a.ts");
@@ -493,6 +563,150 @@ describe("Cache invalidation and strict hashing", () => {
     expect(typeof fresh).toBe("string");
     if (typeof fresh === "string") {
       expect(normalize(fresh)).toBe(normalize(depPath));
+    }
+  });
+
+  it("clears stale positive resolve caches across index builds", async () => {
+    const root = await mkTmpDir("dg-resolve-cache-positive-");
+    const main = path.join(root, "main.ts");
+    const depPath = path.join(root, "dep.ts");
+
+    await fsp.writeFile(main, "import { dep } from './dep'\n", "utf8");
+    await fsp.writeFile(depPath, "export const dep = 1\n", "utf8");
+
+    const first = await buildProjectIndex(root);
+    expect(
+      first.graph.edges.some(
+        (edge) =>
+          edge.from === normalize(main) &&
+          edge.to.type === "file" &&
+          edge.to.path === normalize(depPath),
+      ),
+    ).toBe(true);
+
+    await fsp.unlink(depPath);
+
+    const rebuilt = await buildProjectIndex(root);
+    expect(
+      rebuilt.graph.edges.some(
+        (edge) =>
+          edge.from === normalize(main) &&
+          edge.to.type === "file" &&
+          edge.to.path === normalize(depPath),
+      ),
+    ).toBe(false);
+    const mainModule = rebuilt.byFile.get(normalize(main));
+    expect(mainModule).toBeDefined();
+    expect(
+      mainModule?.imports.some(
+        (imp) =>
+          typeof imp.resolved === "string" && imp.resolved === normalize(depPath),
+      ),
+    ).toBe(false);
+  });
+
+  it("writes a string config hash after incremental updates and reuses it", async () => {
+    const root = await mkTmpDir("dg-incremental-config-hash-");
+    const entryFile = path.join(root, "entry.ts");
+    await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
+
+    await buildProjectIndex(root, { cache: "disk" });
+    await fsp.writeFile(entryFile, "export const value = 2;\n", "utf8");
+
+    await buildProjectIndexIncremental(root, { cache: "disk" });
+
+    const manifestPath = path.join(
+      root,
+      ".codegraph-cache",
+      "index-v1",
+      "manifest.json",
+    );
+    const manifest = JSON.parse(
+      await fsp.readFile(manifestPath, "utf8"),
+    ) as { configHash?: unknown };
+    expect(typeof manifest.configHash).toBe("string");
+
+    const report: BuildReport = { timings: {} };
+    await buildProjectIndexIncremental(root, {
+      cache: "disk",
+      logLevel: "silent",
+      report,
+    });
+
+    expect(report.manifest?.used).toBe(true);
+    expect(report.manifest?.reused).toBe(true);
+    expect(report.manifest?.reason).toBeUndefined();
+  });
+
+  it("preserves stable config caches when clearing import resolution state", async () => {
+    const root = await mkTmpDir("dg-import-cache-preserve-");
+    const srcDir = path.join(root, "src");
+    const pkgDir = path.join(root, "packages", "shared");
+    const tsconfigPath = path.join(root, "tsconfig.json");
+    const packageJsonPath = path.join(root, "package.json");
+    const sourceFile = path.join(srcDir, "main.ts");
+    const sharedManifestPath = path.join(pkgDir, "package.json");
+
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.mkdir(pkgDir, { recursive: true });
+    await fsp.writeFile(
+      tsconfigPath,
+      JSON.stringify({
+        compilerOptions: {
+          baseUrl: ".",
+          paths: { "@shared/*": ["packages/shared/src/*"] },
+        },
+      }),
+      "utf8",
+    );
+    await fsp.writeFile(
+      packageJsonPath,
+      JSON.stringify({ private: true, workspaces: ["packages/*"] }),
+      "utf8",
+    );
+    await fsp.writeFile(
+      sharedManifestPath,
+      JSON.stringify({ name: "@shared/core" }),
+      "utf8",
+    );
+    await fsp.writeFile(
+      sourceFile,
+      "import { shared } from '@shared/core';\nexport const main = shared;\n",
+      "utf8",
+    );
+
+    const originalReadFile = fsp.readFile.bind(fsp);
+    const readSpy = vi
+      .spyOn(fsp, "readFile")
+      .mockImplementation(async (filePath, options) => {
+        return await originalReadFile(filePath, options as never);
+      });
+
+    try {
+      await loadNearestTsconfigFor(sourceFile);
+      await loadWorkspaceConfig(root);
+
+      clearImportResolutionCaches();
+
+      await loadNearestTsconfigFor(sourceFile);
+      await loadWorkspaceConfig(root);
+
+      const tsconfigReads = readSpy.mock.calls.filter(
+        ([filePath]) => normalize(String(filePath)) === normalize(tsconfigPath),
+      );
+      const rootPackageReads = readSpy.mock.calls.filter(
+        ([filePath]) => normalize(String(filePath)) === normalize(packageJsonPath),
+      );
+      const sharedManifestReads = readSpy.mock.calls.filter(
+        ([filePath]) =>
+          normalize(String(filePath)) === normalize(sharedManifestPath),
+      );
+      expect(tsconfigReads).toHaveLength(1);
+      expect(rootPackageReads).toHaveLength(3);
+      expect(sharedManifestReads).toHaveLength(1);
+    } finally {
+      readSpy.mockRestore();
+      clearResolutionCaches();
     }
   });
 

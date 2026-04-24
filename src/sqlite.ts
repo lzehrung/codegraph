@@ -507,6 +507,15 @@ const insertSymbolEdges = (
   }
 };
 
+const clearCurrentGraphState = (db: BetterSqliteDatabase) => {
+  db.exec(`
+    DELETE FROM symbol_edges;
+    DELETE FROM file_edges;
+    DELETE FROM symbols;
+    DELETE FROM files;
+  `);
+};
+
 const readSymbolIdsForFiles = (
   db: BetterSqliteDatabase,
   files: string[],
@@ -540,6 +549,14 @@ const deleteFileEdgesForFiles = (db: BetterSqliteDatabase, files: string[]) => {
   const placeholders = files.map(() => "?").join(", ");
   db.prepare(
     `DELETE FROM file_edges WHERE from_path IN (${placeholders});`,
+  ).run(files);
+};
+
+const deleteFileEdgesToFiles = (db: BetterSqliteDatabase, files: string[]) => {
+  if (files.length === 0) return;
+  const placeholders = files.map(() => "?").join(", ");
+  db.prepare(
+    `DELETE FROM file_edges WHERE to_type = 'file' AND to_path IN (${placeholders});`,
   ).run(files);
 };
 
@@ -620,6 +637,7 @@ export async function writeGraphSqlite(
   ensureSchema(db);
 
   const runInsert = db.transaction(() => {
+    clearCurrentGraphState(db);
     const fileEntries: Array<{ path: string; isExternal: boolean }> = [];
     for (const file of options.fileGraph.nodes) {
       fileEntries.push({ path: file, isExternal: false });
@@ -665,6 +683,7 @@ export async function updateGraphSqlite(
     const removedSymbolIds = readSymbolIdsForFiles(db, touchedFiles);
     deleteBySymbolIds(db, removedSymbolIds);
     deleteFileEdgesForFiles(db, touchedFiles);
+    deleteFileEdgesToFiles(db, [...deletedSet]);
     deleteFilesByPath(db, [...deletedSet]);
 
     const fileEntries: Array<{ path: string; isExternal: boolean }> = [];
