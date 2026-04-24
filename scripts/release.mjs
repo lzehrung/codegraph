@@ -4,9 +4,13 @@ import { spawnSync } from "node:child_process";
 import {
   bumpVersion,
   computePublishPlan,
+  computePublishExecutionSteps,
   detectChangedReleasePackages,
   getReleasePackage,
   isAllowedResumePath,
+  parseGitStatusPaths,
+  recoverNativePackageManifestForResume,
+  recoverRootPackageManifestForResume,
   releasePackages,
   restoreRootPackageManifest,
   restoreNativePackageManifest,
@@ -20,7 +24,6 @@ import {
 
 const rootDir = process.cwd();
 const rootPackagePath = path.join(rootDir, "package.json");
-const originalRootPackageJson = fs.readFileSync(rootPackagePath, "utf8");
 const nativePackagePath = path.join(
   rootDir,
   "packages",
@@ -33,14 +36,47 @@ const jsFallbackPackagePath = path.join(
   "codegraph-js-fallback",
   "package.json",
 );
-const originalNativePackageJson = fs.readFileSync(nativePackagePath, "utf8");
+const currentRootPackage = readJson(rootPackagePath);
+const currentNativePackage = readJson(nativePackagePath);
+const originalRootPackageJson = `${JSON.stringify(
+  recoverRootPackageManifestForResume(
+    currentRootPackage,
+    readJsonFromString(readGitFile("package.json")),
+  ),
+  null,
+  2,
+)}\n`;
+const originalNativePackageJson = `${JSON.stringify(
+  recoverNativePackageManifestForResume(
+    currentNativePackage,
+    readJsonFromString(readGitFile("packages/codegraph-native/package.json")),
+  ),
+  null,
+  2,
+)}\n`;
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+function readJsonFromString(contents) {
+  return JSON.parse(contents);
+}
+
 function writeJson(filePath, value) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function readGitFile(relativePath) {
+  const result = spawnSync("git", ["show", `HEAD:${relativePath}`], {
+    cwd: rootDir,
+    encoding: "utf8",
+    shell: false,
+  });
+  if (result.status !== 0) {
+    process.exit(result.status ?? 1);
+  }
+  return result.stdout;
 }
 
 function run(command, args, options = {}) {
@@ -51,7 +87,7 @@ function run(command, args, options = {}) {
     ...options,
   });
   if (result.status !== 0) {
-    process.exit(result.status ?? 1);
+    throw new Error(`${command} ${args.join(" ")} failed with status ${result.status ?? 1}`);
   }
 }
 
@@ -63,7 +99,7 @@ function runGit(args, options = {}) {
     ...options,
   });
   if (result.status !== 0) {
-    process.exit(result.status ?? 1);
+    throw new Error(`git ${args.join(" ")} failed with status ${result.status ?? 1}`);
   }
 }
 
@@ -94,14 +130,15 @@ function gitOutput(args) {
 }
 
 function getDirtyPaths() {
-  const status = gitOutput(["status", "--short"]);
-  if (!status) {
-    return [];
+  const result = spawnSync("git", ["status", "--short", "-z"], {
+    cwd: rootDir,
+    encoding: "utf8",
+    shell: false,
+  });
+  if (result.status !== 0) {
+    process.exit(result.status ?? 1);
   }
-  return status
-    .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => line.slice(3).replace(/\\/g, "/"));
+  return parseGitStatusPaths(result.stdout ?? "");
 }
 
 function ensureCleanWorktree() {
@@ -133,8 +170,8 @@ function readCurrentPackageVersions() {
 }
 
 function normalizeManagedManifests(versionPlan) {
-  const rootPackage = readJson(rootPackagePath);
-  const nativePackage = readJson(nativePackagePath);
+  const rootPackage = JSON.parse(originalRootPackageJson);
+  const nativePackage = JSON.parse(originalNativePackageJson);
   const jsFallbackPackage = sanitizeJsFallbackPackageManifest(
     readJson(jsFallbackPackagePath),
   );
@@ -405,16 +442,26 @@ if (shouldPublish) {
   }
   try {
     normalizeManagedManifests(versionPlan);
-    writePublishReadyRootPackage(versionPlan);
-    if (publishPlan.publishByPackage["@lzehrung/codegraph-native"]) {
-      run("npm", ["run", "publish:native:targets"]);
-      run("npm", ["run", "publish:native:meta"]);
-    }
-    if (publishPlan.publishByPackage["@lzehrung/codegraph-js-fallback"]) {
-      run("npm", ["publish", "--workspace=@lzehrung/codegraph-js-fallback"]);
-    }
-    if (publishPlan.publishByPackage["@lzehrung/codegraph"]) {
-      run("npm", ["publish"]);
+    for (const step of computePublishExecutionSteps(publishPlan)) {
+      if (step === "publishNativeTargets") {
+        run("npm", ["run", "publish:native:targets"]);
+        continue;
+      }
+      if (step === "publishNativeMeta") {
+        run("npm", ["run", "publish:native:meta"]);
+        continue;
+      }
+      if (step === "publishJsFallback") {
+        run("npm", ["publish", "--workspace=@lzehrung/codegraph-js-fallback"]);
+        continue;
+      }
+      if (step === "prepareRootManifest") {
+        writePublishReadyRootPackage(versionPlan);
+        continue;
+      }
+      if (step === "publishRoot") {
+        run("npm", ["publish"]);
+      }
     }
   } finally {
     restoreRootPackage(versionPlan);
