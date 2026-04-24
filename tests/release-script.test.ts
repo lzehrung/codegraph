@@ -2,9 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   bumpVersion,
   computePublishPlan,
+  computePublishExecutionSteps,
   detectChangedReleasePackages,
   getReleasePackage,
   isAllowedResumePath,
+  parseGitStatusPaths,
+  recoverNativePackageManifestForResume,
+  recoverRootPackageManifestForResume,
   restoreRootPackageManifest,
   restoreNativePackageManifest,
   sanitizeJsFallbackPackageManifest,
@@ -30,6 +34,18 @@ describe("release script helpers", () => {
       isAllowedResumePath("optional-packages/codegraph-js-fallback/package.json"),
     ).toBe(true);
     expect(isAllowedResumePath("src/indexer.ts")).toBe(false);
+  });
+
+  it("parses null-delimited git status output for modified and renamed paths", () => {
+    expect(
+      parseGitStatusPaths(
+        [
+          " M package.json",
+          "R  scripts/release-renamed.mjs",
+          "scripts/release.mjs",
+        ].join("\0"),
+      ),
+    ).toEqual(["package.json", "scripts/release-renamed.mjs"]);
   });
 
   it("resolves release package selectors by id and package name", () => {
@@ -90,6 +106,25 @@ describe("release script helpers", () => {
       },
       publishNativeTargets: true,
     });
+  });
+
+  it("publishes native and fallback packages before preparing the root manifest", () => {
+    expect(
+      computePublishExecutionSteps({
+        publishByPackage: {
+          "@lzehrung/codegraph-native": true,
+          "@lzehrung/codegraph-js-fallback": true,
+          "@lzehrung/codegraph": true,
+        },
+        publishNativeTargets: true,
+      }),
+    ).toEqual([
+      "publishNativeTargets",
+      "publishNativeMeta",
+      "publishJsFallback",
+      "prepareRootManifest",
+      "publishRoot",
+    ]);
   });
 
   it("selects the latest package-scoped tag by version", () => {
@@ -178,6 +213,76 @@ describe("release script helpers", () => {
       workspaces: ["packages/*", "optional-packages/*"],
       scripts: {
         "publish:patch": "node ./scripts/release.mjs patch --publish",
+      },
+    });
+  });
+
+  it("recovers a sanitized root manifest during release resume", () => {
+    expect(
+      recoverRootPackageManifestForResume(
+        {
+          name: "@lzehrung/codegraph",
+          version: "1.8.46",
+          dependencies: {
+            "better-sqlite3": "^12.5.0",
+          },
+        },
+        {
+          name: "@lzehrung/codegraph",
+          version: "1.8.45",
+          scripts: {
+            "publish:resume": "node ./scripts/release.mjs resume --publish",
+          },
+          workspaces: ["packages/*", "optional-packages/*"],
+          devDependencies: {
+            vitest: "^3.2.4",
+          },
+          dependencies: {
+            "better-sqlite3": "^12.5.0",
+          },
+        },
+      ),
+    ).toEqual({
+      name: "@lzehrung/codegraph",
+      version: "1.8.46",
+      scripts: {
+        "publish:resume": "node ./scripts/release.mjs resume --publish",
+      },
+      workspaces: ["packages/*", "optional-packages/*"],
+      devDependencies: {
+        vitest: "^3.2.4",
+      },
+      dependencies: {
+        "better-sqlite3": "^12.5.0",
+      },
+    });
+  });
+
+  it("recovers a generated native manifest during release resume", () => {
+    expect(
+      recoverNativePackageManifestForResume(
+        {
+          name: "@lzehrung/codegraph-native",
+          version: "1.8.46",
+          optionalDependencies: {
+            "@lzehrung/codegraph-native-win32-x64-msvc": "1.8.46",
+          },
+        },
+        {
+          name: "@lzehrung/codegraph-native",
+          version: "1.8.45",
+          files: ["index.js", "index.d.ts"],
+          napi: {
+            packageName: "@lzehrung/codegraph-native",
+          },
+        },
+      ),
+    ).toEqual({
+      name: "@lzehrung/codegraph-native",
+      version: "1.8.46",
+      files: ["index.js", "index.d.ts"],
+      napi: {
+        packageName: "@lzehrung/codegraph-native",
       },
     });
   });

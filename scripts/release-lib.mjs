@@ -98,6 +98,24 @@ export function isAllowedResumePath(filePath) {
   return managedReleasePaths.has(normalizeFilePath(filePath));
 }
 
+export function parseGitStatusPaths(statusOutput) {
+  if (!statusOutput) {
+    return [];
+  }
+  const entries = statusOutput.split("\0").filter(Boolean);
+  const paths = [];
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    const statusCode = entry.slice(0, 2);
+    const currentPath = normalizeFilePath(entry.slice(3));
+    paths.push(currentPath);
+    if (statusCode.includes("R") || statusCode.includes("C")) {
+      index += 1;
+    }
+  }
+  return paths;
+}
+
 export function getReleasePackage(selector) {
   const normalizedSelector = selector.trim();
   const match = releasePackages.find(
@@ -171,6 +189,20 @@ export function computePublishPlan({
   };
 }
 
+export function computePublishExecutionSteps(publishPlan) {
+  const steps = [];
+  if (publishPlan.publishByPackage["@lzehrung/codegraph-native"]) {
+    steps.push("publishNativeTargets", "publishNativeMeta");
+  }
+  if (publishPlan.publishByPackage["@lzehrung/codegraph-js-fallback"]) {
+    steps.push("publishJsFallback");
+  }
+  if (publishPlan.publishByPackage["@lzehrung/codegraph"]) {
+    steps.push("prepareRootManifest", "publishRoot");
+  }
+  return steps;
+}
+
 export function sanitizeJsFallbackPackageManifest(pkg) {
   const normalized = { ...pkg };
   if (
@@ -198,6 +230,21 @@ export function restoreRootPackageManifest(pkg, version) {
     ...pkg,
     version,
   };
+}
+
+export function recoverRootPackageManifestForResume(currentPkg, sourcePkg) {
+  const hasSourceOnlyFields =
+    "scripts" in currentPkg &&
+    "workspaces" in currentPkg &&
+    "devDependencies" in currentPkg;
+  if (hasSourceOnlyFields) {
+    return currentPkg;
+  }
+  return restoreRootPackageManifest(sourcePkg, currentPkg.version);
+}
+
+export function recoverNativePackageManifestForResume(currentPkg, sourcePkg) {
+  return restoreNativePackageManifest(sourcePkg, currentPkg.version);
 }
 
 export function restoreNativePackageManifest(pkg, version) {
