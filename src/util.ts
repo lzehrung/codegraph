@@ -333,15 +333,19 @@ export async function listProjectFiles(
   const userIgnoreGlobs = (options?.ignoreGlobs ?? [])
     .map(normalizeGlobPattern)
     .filter(Boolean);
-  const gitignoreRoot = options?.gitignoreRoot
-    ? await ensureDirectoryReadable(options.gitignoreRoot, "Gitignore root")
-    : root;
 
   try {
     const gitignoreRules =
       options?.useGitignore === false
         ? []
-        : await loadGitignoreRules(gitignoreRoot);
+        : await loadGitignoreRules(
+            options?.gitignoreRoot
+              ? await ensureDirectoryReadable(
+                  options.gitignoreRoot,
+                  "Gitignore root",
+                )
+              : root,
+          );
     const files = await fg(patterns, {
       cwd: root,
       absolute: true,
