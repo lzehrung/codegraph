@@ -103,4 +103,41 @@ describe("logging behavior", () => {
       infoSpy.mockRestore();
     }
   });
+
+  it("keeps tsconfig resolution warnings silent during full and incremental builds", async () => {
+    const root = await mkTmpDir("dg-logging-tsconfig-");
+    const sourceFile = path.join(root, "main.ts");
+    await fsp.writeFile(path.join(root, "tsconfig.json"), "{ invalid", "utf8");
+    await fsp.writeFile(
+      sourceFile,
+      "import { helper } from './helper';\nexport const value = helper;\n",
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "helper.ts"),
+      "export const helper = 1;\n",
+      "utf8",
+    );
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await buildProjectIndex(root, { cache: "disk", logLevel: "silent" });
+
+      await fsp.writeFile(
+        sourceFile,
+        "import { helper } from './helper';\nexport const value = helper + 1;\n",
+        "utf8",
+      );
+      await buildProjectIndexIncremental(root, {
+        cache: "disk",
+        files: [sourceFile],
+        logLevel: "silent",
+      });
+
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

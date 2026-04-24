@@ -3924,6 +3924,7 @@ async function buildIndexFromFileListShared(
               : {}),
             resolveNodeModules: !!graphOptions.resolveNodeModules,
             dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
+            ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
             ...(graphOptions.resolutionHints
               ? { resolutionHints: graphOptions.resolutionHints }
               : {}),
@@ -4019,6 +4020,7 @@ async function buildIndexFromFileListShared(
             ...(resolvedLang ? { lang: resolvedLang } : {}),
             ...(nativeQueries !== undefined ? { nativeQueries } : {}),
             graphOptions,
+            ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
           });
           collectJsonDependencies(imports, jsonDependencies);
           mod = lacksParserContext
@@ -4038,6 +4040,7 @@ async function buildIndexFromFileListShared(
                   ...(tree ? { tree } : {}),
                   ...(nativeQueries !== undefined ? { nativeQueries } : {}),
                   ...(opts?.native ? { nativeMode: opts.native } : {}),
+                  ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
                 },
               );
           mod.imports = imports;
@@ -4103,6 +4106,7 @@ async function buildIndexFromFileListShared(
             : {}),
           resolveNodeModules: !!graphOptions.resolveNodeModules,
           dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
+          ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
           ...(graphOptions.resolutionHints
             ? { resolutionHints: graphOptions.resolutionHints }
             : {}),
@@ -4711,6 +4715,7 @@ export async function buildProjectIndexIncremental(
               ...(resolvedLang ? { lang: resolvedLang } : {}),
               ...(nativeQueries !== undefined ? { nativeQueries } : {}),
               graphOptions,
+              ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
             });
             collectJsonDependencies(imports, jsonDependencies);
             const mod = lacksParserContext
@@ -4730,6 +4735,7 @@ export async function buildProjectIndexIncremental(
                     ...(tree ? { tree } : {}),
                     ...(nativeQueries !== undefined ? { nativeQueries } : {}),
                     ...(opts?.native ? { nativeMode: opts.native } : {}),
+                    ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
                   },
                 );
             mod.imports = imports;

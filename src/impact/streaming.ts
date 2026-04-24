@@ -53,8 +53,8 @@ function createAsyncQueue<T>(): AsyncQueue<T> {
       }
     },
     async next(): Promise<IteratorResult<T>> {
-      const nextValue = values.shift();
-      if (nextValue !== undefined) {
+      if (values.length > 0) {
+        const nextValue = values.shift()!;
         return { value: nextValue, done: false };
       }
       if (closed) {
