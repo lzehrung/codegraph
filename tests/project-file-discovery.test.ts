@@ -503,4 +503,20 @@ describe("project file discovery", () => {
     expect(discovered.has(normalize(specFile))).toBe(false);
     expect(discovered.has(normalize(jsFile))).toBe(false);
   });
+
+  it("does not validate gitignoreRoot when gitignore filtering is disabled", async () => {
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "codegraph-project-discovery-no-gitignore-root-"),
+    );
+    const appFile = path.join(tempDir, "src", "app.ts");
+
+    await createFile(appFile, "export const app = 1;\n");
+
+    const discovered = await listProjectFiles(tempDir, undefined, {
+      useGitignore: false,
+      gitignoreRoot: path.join(tempDir, "missing-gitignore-root"),
+    });
+
+    expect(discovered.map(normalize)).toContain(normalize(appFile));
+  });
 });
