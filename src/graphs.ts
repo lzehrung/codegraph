@@ -256,6 +256,8 @@ export function collectModuleSpecifiersFromSource(
   },
 ): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
+  const supportsRegexImportRecovery =
+    support.id === "ts" || support.id === "tsx" || support.id === "js";
   const htmlLikeLanguage = isHtmlLikeLanguage(support.id, opts?.file);
   const graphOnlyLanguage = isGraphOnlyLanguage(support.id);
   const fastRegexDisabled = opts?.fastRegexDisabledLanguages?.includes(
@@ -377,7 +379,7 @@ export function collectModuleSpecifiersFromSource(
 
   // Fast path for JS/TS: regex-based extraction after comment stripping
   if (
-    (support.id === "ts" || support.id === "js") &&
+    supportsRegexImportRecovery &&
     opts?.fast &&
     !fastRegexDisabled
   ) {
@@ -471,6 +473,25 @@ export function collectModuleSpecifiersFromSource(
       out.length = 0;
     }
   }
+  if (supportsRegexImportRecovery && !isJsFallbackAvailable()) {
+    fallbackReasonOverride = "js-fallback-unavailable";
+    if ((queryFailed || out.length === 0) && shouldAttemptFallback) {
+      try {
+        const extracted = extractJsTsSpecifiers(source);
+        if (extracted.length > 0) {
+          reportFallback(
+            fallbackReasonOverride ??
+              (queryFailed ? "query-error" : "query-empty"),
+          );
+          out.push(...extracted);
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return out;
+  }
+
   try {
     const jsQueryTree =
       opts?.tree && isJsSyntaxTree(opts.tree) ? opts.tree : undefined;
@@ -564,7 +585,7 @@ export function collectModuleSpecifiersFromSource(
   }
 
   // Regex fallback if the query path produced no results
-  if (support.id === "ts" || support.id === "js") {
+  if (supportsRegexImportRecovery) {
     if ((queryFailed || out.length === 0) && shouldAttemptFallback) {
       try {
         const extracted = extractJsTsSpecifiers(source);
@@ -1843,7 +1864,7 @@ export async function buildSymbolGraphDetailed(
   const base = await buildSymbolGraph(index);
   const nodes = new Map(base.nodes);
   const edges = base.edges.slice();
-  let skippedJsFallbackFiles = 0;
+  let skippedSyntaxTreeFiles = 0;
 
   const added = new Set<string>();
   const maxEdges =
@@ -1994,7 +2015,7 @@ export async function buildSymbolGraphDetailed(
           tree = new ProjectedSyntaxTree(src, nativeTreeExecution.tree);
         } else {
           if (!isJsFallbackAvailable()) {
-            skippedJsFallbackFiles += 1;
+            skippedSyntaxTreeFiles += 1;
             continue;
           }
           lang ??= sup.language(file);
@@ -2676,11 +2697,11 @@ export async function buildSymbolGraphDetailed(
     }
   }
 
-  if (skippedJsFallbackFiles > 0) {
+  if (skippedSyntaxTreeFiles > 0) {
     logWithLevel(
       opts?.logLevel,
       "warn",
-      `Warning: Skipped detailed symbol edges for ${skippedJsFallbackFiles} file(s) because the JS Tree-sitter fallback is unavailable.`,
+      `Warning: Skipped detailed symbol edges for ${skippedSyntaxTreeFiles} file(s) because no syntax-tree backend was available.`,
     );
   }
 

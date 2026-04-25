@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { createRequire } from "node:module";
 import {
+  isJsFallbackAvailable,
   isJsFallbackUnavailableError,
   isJsSyntaxTree,
   parseWithJsLanguage,
@@ -3155,7 +3156,9 @@ export async function collectImportsForFile(
 
   const runFallback = async () => {
     const src =
-      resolvedSup.id === "ts" || resolvedSup.id === "js"
+      resolvedSup.id === "ts" ||
+      resolvedSup.id === "tsx" ||
+      resolvedSup.id === "js"
         ? stripJsLikeComments(resolvedSource)
         : resolvedSource;
     const typeOnlyImport = /\bimport\s+type\b/;
@@ -3254,6 +3257,11 @@ export async function collectImportsForFile(
       }
     }
   };
+
+  const shouldUseTextImportRecoveryOnly =
+    resolvedSup.id === "ts" ||
+    resolvedSup.id === "tsx" ||
+    resolvedSup.id === "js";
 
   if (resolvedNativeQueries) {
     try {
@@ -3492,6 +3500,13 @@ export async function collectImportsForFile(
     } catch {
       imports.length = 0;
     }
+  }
+
+  if (shouldUseTextImportRecoveryOnly && !isJsFallbackAvailable()) {
+    reportFallback("js-fallback-unavailable");
+    await runFallback();
+    await finalizeLanguageSpecificImports();
+    return imports;
   }
 
   try {

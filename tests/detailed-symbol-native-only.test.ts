@@ -76,7 +76,7 @@ describe("detailed symbol graph in native-only installs", () => {
       ),
     ).toBe(false);
     expect(warnings).toContain(
-      "Warning: Skipped detailed symbol edges for 2 file(s) because the JS Tree-sitter fallback is unavailable.",
+      "Warning: Skipped detailed symbol edges for 2 file(s) because no syntax-tree backend was available.",
     );
     expect(detailed.edges).toEqual([]);
   });
@@ -134,5 +134,84 @@ describe("detailed symbol graph in native-only installs", () => {
         warning.includes("Warning: Failed to process file"),
       ),
     ).toBe(false);
+  });
+
+  it("recovers TypeScript imports without loading the JS fallback package", async () => {
+    const root = await mkTmpDir("cg-ts-imports-native-only-");
+    const entryFile = path.join(root, "entry.ts");
+    const depFile = path.join(root, "dep.ts");
+    await fsp.writeFile(
+      entryFile,
+      [
+        "import value, { helper as alias } from './dep';",
+        "export { helper } from './dep';",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      depFile,
+      [
+        "export default 1;",
+        "export const helper = 2;",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const parseSpy = vi.fn(() => {
+      throw new Error(
+        "JS Tree-sitter fallback is unavailable for TypeScript grammar loading. Install @lzehrung/codegraph-js-fallback to enable it",
+      );
+    });
+    const querySpy = vi.fn(() => {
+      throw new Error(
+        "JS Tree-sitter fallback is unavailable for JS query execution. Install @lzehrung/codegraph-js-fallback to enable it",
+      );
+    });
+
+    vi.resetModules();
+    vi.doMock("../src/jsFallback.js", async () => {
+      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>(
+        "../src/jsFallback.js",
+      );
+      return {
+        ...actual,
+        isJsFallbackAvailable: () => false,
+        parseWithJsLanguage: parseSpy,
+        executeJsQueryAsNativeMatches: querySpy,
+      };
+    });
+
+    const { collectImportsForFile } = await import("../src/indexer.js");
+    const { supportForFile } = await import("../src/languages.js");
+    const support = supportForFile(entryFile);
+    expect(support).toBeDefined();
+
+    const imports = await collectImportsForFile(entryFile, root, {
+      source: await fsp.readFile(entryFile, "utf8"),
+      sup: support!,
+      lang: support!.language(entryFile),
+    });
+
+    expect(imports).toEqual([
+      {
+        kind: "default",
+        local: "value",
+        from: "./dep",
+        resolved: normalizePath(depFile),
+        typeOnly: false,
+      },
+      {
+        kind: "named",
+        local: "alias",
+        imported: "helper",
+        from: "./dep",
+        resolved: normalizePath(depFile),
+        typeOnly: false,
+      },
+    ]);
+    expect(parseSpy).not.toHaveBeenCalled();
+    expect(querySpy).not.toHaveBeenCalled();
   });
 });

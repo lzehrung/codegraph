@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { isJsFallbackAvailable } from "../src/jsFallback.js";
 import { supportById } from "../src/languages.js";
 import { collectModuleSpecifiersFromSource } from "../src/graphs.js";
@@ -9,9 +9,14 @@ import {
   type NativeQueryResults,
   type NativeQueryScope,
 } from "../src/native/treeSitterNative.js";
+import * as jsFallback from "../src/jsFallback.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
 const jsFallbackDescribe = isJsFallbackAvailable() ? describe : describe.skip;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 /**
  * Creates a mock binding that records which queries were non-empty.
@@ -208,6 +213,30 @@ describe("authoritative empty native results", () => {
     );
     expect(specs.length).toBeGreaterThan(0);
     expect(specs[0]!.spec).toBe("./bar");
+  });
+
+  it("uses regex recovery for TypeScript when JS fallback is unavailable", () => {
+    const support = supportById("ts")!;
+    const executeSpy = vi
+      .spyOn(jsFallback, "executeJsQueryAsNativeMatches")
+      .mockImplementation(() => {
+        throw new Error("JS fallback should not be used for TypeScript import recovery");
+      });
+
+    const specs = collectModuleSpecifiersFromSource(
+      support,
+      undefined,
+      "import { foo } from './bar';\nexport { baz } from './qux';\n",
+      {
+        file: "main.ts",
+      },
+    );
+
+    expect(specs).toEqual([
+      { spec: "./bar", typeOnly: false },
+      { spec: "./qux", typeOnly: false },
+    ]);
+    expect(executeSpy).not.toHaveBeenCalled();
   });
 });
 
