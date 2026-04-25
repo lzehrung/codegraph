@@ -282,7 +282,7 @@ Use this path when you are developing on codegraph itself. `npm run build` now a
 * Published installs do not require Rust or a manual native setup step on supported targets
 * Local source checkouts do not require Rust just to build `dist/`, but the native workspace addon only builds when Cargo is available
 * If no compatible native artifact is available, install `@lzehrung/codegraph-js-fallback` to enable the opt-in JS Tree-sitter fallback path
-* Native-only installs do not need `@lzehrung/codegraph-js-fallback` for normal JS/TS import extraction; regex recovery is used as the final degraded path when query recovery is unavailable
+* Native-only installs do not need `@lzehrung/codegraph-js-fallback` for normal JS, TS, or TSX import extraction; regex recovery is used as the final degraded path when query recovery is unavailable
 * Native runtime mode defaults to `auto`
 * Set `CODEGRAPH_DISABLE_NATIVE=1` to make `auto` prefer the optional JS Tree-sitter fallback path by default when `@lzehrung/codegraph-js-fallback` is installed
 * The CLI, library, and agent-tool wrappers also accept explicit native runtime overrides: `auto`, `on`, `off`
@@ -701,7 +701,7 @@ Viewer features:
 
 - Native Tree-sitter acceleration:
   - `npm run build` now attempts the local native workspace build when Cargo is available. Use `npm run build:native` when you want native-only rebuilds or a hard failure if Rust is missing.
-  - When the addon is present, Codegraph runs supported Tree-sitter parse/query work in Rust. If native mode is `auto`, unavailable query recovery paths can degrade through the optional JS fallback package or final regex import extraction; if native mode is `on`, a missing native addon is a hard error.
+  - When the addon is present, Codegraph runs supported Tree-sitter parse/query work in Rust. If native mode is `auto`, unavailable query recovery paths can degrade through the optional JS fallback package or final regex import extraction. Native-only installs do not need the JS fallback package for normal JS, TS, or TSX import extraction. If native mode is `on`, a missing native addon is a hard error.
   - **Worker threads** (`--workers`): When combined with the native addon, offloads per-file Rust extraction to a Piscina worker pool. Each worker thread gets its own isolated parser and query cache via Rust `thread_local!` storage. SFC files (Vue/Svelte/Astro) are excluded from worker dispatch because they need source preprocessing on the main thread.
     ```bash
     codegraph index --workers --threads 8
