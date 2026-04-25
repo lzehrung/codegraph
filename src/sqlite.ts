@@ -630,116 +630,150 @@ const readOrCreateDb = async (outputPath: string) => {
   return { db };
 };
 
+async function withSqliteDatabase<T>(
+  outputPath: string,
+  callback: (db: BetterSqliteDatabase) => T | Promise<T>,
+): Promise<T> {
+  const { db } = await readOrCreateDb(outputPath);
+  try {
+    ensureSchema(db);
+    return await callback(db);
+  } finally {
+    db.close();
+  }
+}
+
+const deleteUnreferencedExternalFiles = (db: BetterSqliteDatabase) => {
+  db.exec(`
+    DELETE FROM files
+    WHERE is_external = 1
+      AND path NOT IN (
+        SELECT DISTINCT to_path
+        FROM file_edges
+        WHERE to_type = 'external'
+      );
+  `);
+};
+
+const dedupePreservingOrder = (values: string[]): string[] => {
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    deduped.push(value);
+  }
+  return deduped;
+};
+
 export async function writeGraphSqlite(
   options: SqliteGraphOptions,
 ): Promise<void> {
-  const { db } = await readOrCreateDb(options.outputPath);
-  ensureSchema(db);
-
-  const runInsert = db.transaction(() => {
-    clearCurrentGraphState(db);
-    const fileEntries: Array<{ path: string; isExternal: boolean }> = [];
-    for (const file of options.fileGraph.nodes) {
-      fileEntries.push({ path: file, isExternal: false });
-    }
-    for (const edge of options.fileGraph.edges) {
-      if (edge.to.type === "external") {
-        fileEntries.push({ path: edge.to.name, isExternal: true });
-      } else {
-        fileEntries.push({ path: edge.to.path, isExternal: false });
+  await withSqliteDatabase(options.outputPath, async (db) => {
+    const runInsert = db.transaction(() => {
+      clearCurrentGraphState(db);
+      const fileEntries: Array<{ path: string; isExternal: boolean }> = [];
+      for (const file of options.fileGraph.nodes) {
+        fileEntries.push({ path: file, isExternal: false });
       }
-    }
-    insertFiles(db, dedupeFileEntries(fileEntries));
-    insertFileEdges(db, options.fileGraph.edges);
-    insertSymbols(db, [...options.symbolGraph.nodes.values()]);
-    insertSymbolEdges(db, options.symbolGraph.edges);
-    recordGraphSnapshot(db, {
-      mode: "full",
-      changedFiles: [],
-      deletedFiles: [],
-      fileNodes: options.fileGraph.nodes.size,
-      fileEdges: options.fileGraph.edges.length,
-      symbolNodes: options.symbolGraph.nodes.size,
-      symbolEdges: options.symbolGraph.edges.length,
+      for (const edge of options.fileGraph.edges) {
+        if (edge.to.type === "external") {
+          fileEntries.push({ path: edge.to.name, isExternal: true });
+        } else {
+          fileEntries.push({ path: edge.to.path, isExternal: false });
+        }
+      }
+      insertFiles(db, dedupeFileEntries(fileEntries));
+      insertFileEdges(db, options.fileGraph.edges);
+      insertSymbols(db, [...options.symbolGraph.nodes.values()]);
+      insertSymbolEdges(db, options.symbolGraph.edges);
+      recordGraphSnapshot(db, {
+        mode: "full",
+        changedFiles: [],
+        deletedFiles: [],
+        fileNodes: options.fileGraph.nodes.size,
+        fileEdges: options.fileGraph.edges.length,
+        symbolNodes: options.symbolGraph.nodes.size,
+        symbolEdges: options.symbolGraph.edges.length,
+      });
     });
+    runInsert();
+    db.exec("ANALYZE;");
   });
-  runInsert();
-  db.exec("ANALYZE;");
-  db.close();
 }
 
 export async function updateGraphSqlite(
   options: SqliteGraphUpdateOptions,
 ): Promise<void> {
-  const { db } = await readOrCreateDb(options.outputPath);
-  ensureSchema(db);
+  await withSqliteDatabase(options.outputPath, async (db) => {
+    const runUpdate = db.transaction(() => {
+      const changedSet = new Set(options.changedFiles);
+      const deletedSet = new Set(options.deletedFiles ?? []);
+      const touchedSet = new Set([...changedSet, ...deletedSet]);
+      const touchedFiles = [...touchedSet];
 
-  const runUpdate = db.transaction(() => {
-    const changedSet = new Set(options.changedFiles);
-    const deletedSet = new Set(options.deletedFiles ?? []);
-    const touchedSet = new Set([...changedSet, ...deletedSet]);
-    const touchedFiles = [...touchedSet];
+      const removedSymbolIds = readSymbolIdsForFiles(db, touchedFiles);
+      deleteBySymbolIds(db, removedSymbolIds);
+      deleteFileEdgesForFiles(db, touchedFiles);
+      deleteFileEdgesToFiles(db, [...deletedSet]);
+      deleteFilesByPath(db, [...deletedSet]);
 
-    const removedSymbolIds = readSymbolIdsForFiles(db, touchedFiles);
-    deleteBySymbolIds(db, removedSymbolIds);
-    deleteFileEdgesForFiles(db, touchedFiles);
-    deleteFileEdgesToFiles(db, [...deletedSet]);
-    deleteFilesByPath(db, [...deletedSet]);
-
-    const fileEntries: Array<{ path: string; isExternal: boolean }> = [];
-    for (const file of changedSet) {
-      fileEntries.push({ path: file, isExternal: false });
-    }
-
-    for (const edge of options.fileGraph.edges) {
-      if (!changedSet.has(edge.from)) continue;
-      if (edge.to.type === "external") {
-        fileEntries.push({ path: edge.to.name, isExternal: true });
-      } else {
-        fileEntries.push({ path: edge.to.path, isExternal: false });
+      const fileEntries: Array<{ path: string; isExternal: boolean }> = [];
+      for (const file of changedSet) {
+        fileEntries.push({ path: file, isExternal: false });
       }
-    }
 
-    if (fileEntries.length > 0) {
-      insertFiles(db, dedupeFileEntries(fileEntries));
-    }
+      for (const edge of options.fileGraph.edges) {
+        if (!changedSet.has(edge.from)) continue;
+        if (edge.to.type === "external") {
+          fileEntries.push({ path: edge.to.name, isExternal: true });
+        } else {
+          fileEntries.push({ path: edge.to.path, isExternal: false });
+        }
+      }
 
-    const changedSymbolIds = collectSymbolIdsForFiles(
-      options.symbolGraph,
-      changedSet,
-    );
-    const changedSymbolNodes = [...changedSymbolIds]
-      .map((id) => options.symbolGraph.nodes.get(id))
-      .filter((node): node is SymbolNode => !!node);
-    if (changedSymbolNodes.length > 0) {
-      insertSymbols(db, changedSymbolNodes);
-    }
+      if (fileEntries.length > 0) {
+        insertFiles(db, dedupeFileEntries(fileEntries));
+      }
 
-    const fileEdges = fileGraphEdgesForFiles(options.fileGraph, changedSet);
-    if (fileEdges.length > 0) {
-      insertFileEdges(db, fileEdges);
-    }
+      const changedSymbolIds = collectSymbolIdsForFiles(
+        options.symbolGraph,
+        changedSet,
+      );
+      const changedSymbolNodes = [...changedSymbolIds]
+        .map((id) => options.symbolGraph.nodes.get(id))
+        .filter((node): node is SymbolNode => !!node);
+      if (changedSymbolNodes.length > 0) {
+        insertSymbols(db, changedSymbolNodes);
+      }
 
-    const symbolEdges = options.fullGraphSync
-      ? symbolGraphEdgesForSymbolIds(options.symbolGraph, changedSymbolIds)
-      : symbolGraphEdgesForFiles(options.symbolGraph, changedSet);
-    if (symbolEdges.length > 0) {
-      insertSymbolEdges(db, symbolEdges);
-    }
+      const fileEdges = fileGraphEdgesForFiles(options.fileGraph, changedSet);
+      if (fileEdges.length > 0) {
+        insertFileEdges(db, fileEdges);
+      }
 
-    recordGraphSnapshot(db, {
-      mode: "incremental",
-      changedFiles: [...changedSet],
-      deletedFiles: [...deletedSet],
-      fileNodes: changedSet.size,
-      fileEdges: fileEdges.length,
-      symbolNodes: changedSymbolNodes.length,
-      symbolEdges: symbolEdges.length,
+      const symbolEdges = options.fullGraphSync
+        ? symbolGraphEdgesForSymbolIds(options.symbolGraph, changedSymbolIds)
+        : symbolGraphEdgesForFiles(options.symbolGraph, changedSet);
+      if (symbolEdges.length > 0) {
+        insertSymbolEdges(db, symbolEdges);
+      }
+
+      deleteUnreferencedExternalFiles(db);
+
+      recordGraphSnapshot(db, {
+        mode: "incremental",
+        changedFiles: [...changedSet],
+        deletedFiles: [...deletedSet],
+        fileNodes: changedSet.size,
+        fileEdges: fileEdges.length,
+        symbolNodes: changedSymbolNodes.length,
+        symbolEdges: symbolEdges.length,
+      });
     });
+    runUpdate();
+    db.exec("ANALYZE;");
   });
-  runUpdate();
-  db.exec("ANALYZE;");
-  db.close();
 }
 
 export async function queryGraphSqlite(
@@ -750,193 +784,187 @@ export async function queryGraphSqlite(
   if (!parsed) {
     throw new Error("Unsupported query text.");
   }
-  const { db } = await readOrCreateDb(outputPath);
-  ensureSchema(db);
-
-  switch (parsed.kind) {
-    case "mostCalledMethods": {
-      const rows = execRowsParams(
-        db,
-        `
-          SELECT s.name, s.file, COUNT(*) as cnt
-          FROM symbol_edges e
-          JOIN symbols s ON s.id = e.to_id
-          WHERE e.label = ? AND s.kind = ?
-          GROUP BY s.id
-          ORDER BY cnt DESC
-          LIMIT ?;
-        `,
-        ["calls", "function", parsed.limit],
-      );
-      db.close();
-      return {
-        kind: parsed.kind,
-        results: rows.map((row) => ({
-          name: String(row[0]),
-          file: String(row[1]),
-          count: Number(row[2]),
-        })),
-      };
-    }
-    case "dependencyChain": {
-      const rows = execRowsParams(
-        db,
-        `SELECT file FROM symbols WHERE name = ? AND kind = ? LIMIT 1;`,
-        [parsed.className, "class"],
-      );
-      const startFile = rows[0] ? toSqliteText(rows[0][0]) : "";
-      if (!startFile) {
-        db.close();
-        return { kind: parsed.kind, results: [] };
+  return await withSqliteDatabase(outputPath, async (db) => {
+    switch (parsed.kind) {
+      case "mostCalledMethods": {
+        const rows = execRowsParams(
+          db,
+          `
+            SELECT s.name, s.file, COUNT(*) as cnt
+            FROM symbol_edges e
+            JOIN symbols s ON s.id = e.to_id
+            WHERE e.label = ? AND s.kind = ?
+            GROUP BY s.id
+            ORDER BY cnt DESC
+            LIMIT ?;
+          `,
+          ["calls", "function", parsed.limit],
+        );
+        return {
+          kind: parsed.kind,
+          results: rows.map((row) => ({
+            name: String(row[0]),
+            file: String(row[1]),
+            count: Number(row[2]),
+          })),
+        };
       }
-      const edges = loadFileEdges(db, "file").map((edge) => ({
-        from: edge.from,
-        to: edge.to,
-      }));
-      const chain = bfsDependencies(edges, startFile);
-      db.close();
-      return { kind: parsed.kind, results: chain };
-    }
-    case "controllersMostEndpoints": {
-      const rows = execRowsParams(
-        db,
-        `
-          SELECT c.name, c.file, COUNT(f.id) as cnt
-          FROM symbols c
-          LEFT JOIN symbols f
-            ON f.file = c.file
-            AND f.kind = ?
-            AND (
-              lower(f.name) LIKE ? OR
-              lower(f.name) LIKE ? OR
-              lower(f.name) LIKE ? OR
-              lower(f.name) LIKE ? OR
-              lower(f.name) LIKE ?
-            )
-          WHERE c.kind = ? AND c.name LIKE ?
-          GROUP BY c.id
-          ORDER BY cnt DESC
-          LIMIT ?;
-        `,
-        [
-          "function",
-          "get%",
-          "post%",
-          "put%",
-          "delete%",
-          "patch%",
-          "class",
-          "%Controller",
-          parsed.limit,
-        ],
-      );
-      db.close();
-      return {
-        kind: parsed.kind,
-        results: rows.map((row) => ({
-          name: String(row[0]),
-          file: String(row[1]),
-          count: Number(row[2]),
-        })),
-      };
-    }
-    case "classesImplementing": {
-      const rows = execRowsParams(
-        db,
-        `
-          SELECT DISTINCT s.name, s.file
-          FROM symbol_edges e
-          JOIN symbols s ON s.id = e.from_id
-          JOIN symbols t ON t.id = e.to_id
-          WHERE e.label = ? AND t.name = ?;
-        `,
-        ["implements", parsed.interfaceName],
-      );
-      db.close();
-      return {
-        kind: parsed.kind,
-        results: rows.map((row) => ({
-          name: String(row[0]),
-          file: String(row[1]),
-        })),
-      };
-    }
-    case "affectedFunctionsForModule": {
-      const edges = loadFileEdges(db, "file").map((edge) => ({
-        from: edge.from,
-        to: edge.to,
-      }));
-      const reverseDeps = bfsReverseDependencies(edges, parsed.modulePath);
-      const impactedFiles = [parsed.modulePath, ...reverseDeps];
-      if (impactedFiles.length === 0) {
-        db.close();
-        return { kind: parsed.kind, results: [] };
+      case "dependencyChain": {
+        const rows = execRowsParams(
+          db,
+          `SELECT file FROM symbols WHERE name = ? AND kind = ? ORDER BY file;`,
+          [parsed.className, "class"],
+        );
+        const startFiles = rows
+          .map((row) => toSqliteText(row[0]))
+          .filter(Boolean);
+        if (startFiles.length === 0) {
+          return { kind: parsed.kind, results: [] };
+        }
+        const edges = loadFileEdges(db, "file").map((edge) => ({
+          from: edge.from,
+          to: edge.to,
+        }));
+        const chain = dedupePreservingOrder(
+          startFiles.flatMap((startFile) => bfsDependencies(edges, startFile)),
+        );
+        return { kind: parsed.kind, results: chain };
       }
-      const placeholders = impactedFiles.map(() => "?").join(", ");
-      const rows = execRowsParams(
-        db,
-        `
-          SELECT name, file
-          FROM symbols
-          WHERE kind = ?
-            AND file IN (${placeholders});
-        `,
-        ["function", ...impactedFiles],
-      );
-      db.close();
-      return {
-        kind: parsed.kind,
-        results: rows.map((row) => ({
-          name: String(row[0]),
-          file: String(row[1]),
-        })),
-      };
+      case "controllersMostEndpoints": {
+        const rows = execRowsParams(
+          db,
+          `
+            SELECT c.name, c.file, COUNT(f.id) as cnt
+            FROM symbols c
+            LEFT JOIN symbols f
+              ON f.file = c.file
+              AND f.kind = ?
+              AND (
+                lower(f.name) LIKE ? OR
+                lower(f.name) LIKE ? OR
+                lower(f.name) LIKE ? OR
+                lower(f.name) LIKE ? OR
+                lower(f.name) LIKE ?
+              )
+            WHERE c.kind = ? AND c.name LIKE ?
+            GROUP BY c.id
+            ORDER BY cnt DESC
+            LIMIT ?;
+          `,
+          [
+            "function",
+            "get%",
+            "post%",
+            "put%",
+            "delete%",
+            "patch%",
+            "class",
+            "%Controller",
+            parsed.limit,
+          ],
+        );
+        return {
+          kind: parsed.kind,
+          results: rows.map((row) => ({
+            name: String(row[0]),
+            file: String(row[1]),
+            count: Number(row[2]),
+          })),
+        };
+      }
+      case "classesImplementing": {
+        const rows = execRowsParams(
+          db,
+          `
+            SELECT DISTINCT s.name, s.file
+            FROM symbol_edges e
+            JOIN symbols s ON s.id = e.from_id
+            JOIN symbols t ON t.id = e.to_id
+            WHERE e.label = ? AND t.name = ?;
+          `,
+          ["implements", parsed.interfaceName],
+        );
+        return {
+          kind: parsed.kind,
+          results: rows.map((row) => ({
+            name: String(row[0]),
+            file: String(row[1]),
+          })),
+        };
+      }
+      case "affectedFunctionsForModule": {
+        const edges = loadFileEdges(db, "file").map((edge) => ({
+          from: edge.from,
+          to: edge.to,
+        }));
+        const reverseDeps = bfsReverseDependencies(edges, parsed.modulePath);
+        const impactedFiles = [parsed.modulePath, ...reverseDeps];
+        if (impactedFiles.length === 0) {
+          return { kind: parsed.kind, results: [] };
+        }
+        const placeholders = impactedFiles.map(() => "?").join(", ");
+        const rows = execRowsParams(
+          db,
+          `
+            SELECT name, file
+            FROM symbols
+            WHERE kind = ?
+              AND file IN (${placeholders});
+          `,
+          ["function", ...impactedFiles],
+        );
+        return {
+          kind: parsed.kind,
+          results: rows.map((row) => ({
+            name: String(row[0]),
+            file: String(row[1]),
+          })),
+        };
+      }
+      case "highestComplexityClasses": {
+        const rows = execRowsParams(
+          db,
+          `
+            SELECT name, file, COALESCE(complexity, 0) as score
+            FROM symbols
+            WHERE kind = ?
+            ORDER BY score DESC
+            LIMIT ?;
+          `,
+          ["class", parsed.limit],
+        );
+        return {
+          kind: parsed.kind,
+          results: rows.map((row) => ({
+            name: String(row[0]),
+            file: String(row[1]),
+            complexity: Number(row[2]),
+          })),
+        };
+      }
+      case "highestComplexityFunctions": {
+        const rows = execRowsParams(
+          db,
+          `
+            SELECT name, file, COALESCE(complexity, 0) as score
+            FROM symbols
+            WHERE kind = ?
+            ORDER BY score DESC
+            LIMIT ?;
+          `,
+          ["function", parsed.limit],
+        );
+        return {
+          kind: parsed.kind,
+          results: rows.map((row) => ({
+            name: String(row[0]),
+            file: String(row[1]),
+            complexity: Number(row[2]),
+          })),
+        };
+      }
     }
-    case "highestComplexityClasses": {
-      const rows = execRowsParams(
-        db,
-        `
-          SELECT name, file, COALESCE(complexity, 0) as score
-          FROM symbols
-          WHERE kind = ?
-          ORDER BY score DESC
-          LIMIT ?;
-        `,
-        ["class", parsed.limit],
-      );
-      db.close();
-      return {
-        kind: parsed.kind,
-        results: rows.map((row) => ({
-          name: String(row[0]),
-          file: String(row[1]),
-          complexity: Number(row[2]),
-        })),
-      };
-    }
-    case "highestComplexityFunctions": {
-      const rows = execRowsParams(
-        db,
-        `
-          SELECT name, file, COALESCE(complexity, 0) as score
-          FROM symbols
-          WHERE kind = ?
-          ORDER BY score DESC
-          LIMIT ?;
-        `,
-        ["function", parsed.limit],
-      );
-      db.close();
-      return {
-        kind: parsed.kind,
-        results: rows.map((row) => ({
-          name: String(row[0]),
-          file: String(row[1]),
-          complexity: Number(row[2]),
-        })),
-      };
-    }
-  }
+  });
 }
 
 export async function queryGraphSqliteRaw(
@@ -944,11 +972,10 @@ export async function queryGraphSqliteRaw(
   sql: string,
   params: Array<string | number | null> = [],
 ): Promise<RawSqlResult> {
-  const { db } = await readOrCreateDb(outputPath);
-  ensureSchema(db);
-  const stmt = db.prepare(sql);
-  const columns = stmt.columns().map((col) => col.name);
-  const rows = stmt.raw().all(params) as Array<Array<unknown>>;
-  db.close();
-  return { columns, rows };
+  return await withSqliteDatabase(outputPath, async (db) => {
+    const stmt = db.prepare(sql);
+    const columns = stmt.columns().map((col) => col.name);
+    const rows = stmt.raw().all(params) as Array<Array<unknown>>;
+    return { columns, rows };
+  });
 }
