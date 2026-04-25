@@ -15,6 +15,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Scenario | Sample | Expected behavior | Source | Date added |
 | --- | --- | --- | --- | --- |
 | Opt-in JS fallback packaging | `tests/package-metadata.test.ts` | The root package keeps native runtime support as an optional dependency, the native package no longer carries JS grammar dependencies, and the opt-in fallback package owns the JS Tree-sitter grammar stack. | Internal regression test | 2026-03-29 |
+| JS fallback unavailable recovery | `tests/logging-behavior.test.ts` | JS/TS import binding extraction recovers through regex when the JS fallback package is unavailable, reports `js-fallback-unavailable`, and avoids per-file warning spam. | Internal regression test | 2026-04-25 |
 | JavaScript import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same import bindings for ES modules and CommonJS requires. | Internal regression test | 2026-03-22 |
 | JavaScript mixed-module parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same import bindings for files that mix ES imports, CommonJS destructuring, and re-exports. | Internal regression test | 2026-03-22 |
 | TypeScript export-assignment parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same local/default export results for `export class` and `export = value`. | Internal regression test | 2026-03-22 |

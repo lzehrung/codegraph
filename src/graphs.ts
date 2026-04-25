@@ -2,6 +2,7 @@ import path from "node:path";
 import fsp from "node:fs/promises";
 import {
   isJsFallbackAvailable,
+  isJsFallbackUnavailableError,
   isJsSyntaxTree,
   parseWithJsLanguage,
   type JsLanguage,
@@ -53,6 +54,7 @@ import {
   getNativeSyntaxTreeExecution,
   getUnifiedQueryExecution,
   isNativeQueryModified,
+  isNativeRequiredUnavailableError,
   type NativeRuntimeMode,
   type NativeQueryScope,
   type NativeQueryResults,
@@ -93,6 +95,7 @@ export type GraphBuildOptions = {
 
 export type FallbackImportExtractionReason =
   | "fast"
+  | "js-fallback-unavailable"
   | "query-error"
   | "query-empty";
 
@@ -248,6 +251,7 @@ export function collectModuleSpecifiersFromSource(
     file?: string;
     fastRegexDisabledLanguages?: string[];
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
+    native?: NativeRuntimeMode;
     logLevel?: LogLevel;
   },
 ): ModuleSpecifier[] {
@@ -284,7 +288,8 @@ export function collectModuleSpecifiersFromSource(
   const resolvedNativeImports =
     opts?.compactNativeImports?.imports ??
     opts?.nativeQueries?.imports ??
-    getCompactImportsExecution(source, support).results?.imports ??
+    getCompactImportsExecution(source, support, opts?.native).results
+      ?.imports ??
     null;
 
   if (support.id === "python") {
@@ -390,6 +395,7 @@ export function collectModuleSpecifiersFromSource(
   const hasNativeImports = !!nativeImportsArray;
 
   let queryFailed = false;
+  let fallbackReasonOverride: FallbackImportExtractionReason | undefined;
   if (hasNativeImports) {
     try {
       for (const match of nativeImportsArray) {
@@ -486,7 +492,7 @@ export function collectModuleSpecifiersFromSource(
       const typeOnly =
         (support.id === "ts" || support.id === "tsx") &&
         (/\b(import|export)\s+type\b/.test(stmtText) ||
-          // declare module "..." {} — only string-literal module names can appear
+          // declare module "..." {} - only string-literal module names can appear
           // here because the TSQ uses `name: (string)`, so identifier-named ambient
           // forms (declare namespace Foo, declare class Bar, etc.) never reach this
           // branch.  All string-literal ambient module declarations are type-only.
@@ -537,13 +543,23 @@ export function collectModuleSpecifiersFromSource(
     }
     if (out.length > 0) return out;
   } catch (error) {
+    if (isNativeRequiredUnavailableError(error)) throw error;
     queryFailed = true;
-    logWithLevel(
-      opts?.logLevel,
-      "warn",
-      `Warning: Query error in collectModuleSpecifiersFromSource for ${support.id}:`,
-      error,
-    );
+    if (isJsFallbackUnavailableError(error)) {
+      fallbackReasonOverride = "js-fallback-unavailable";
+      logWithLevel(
+        opts?.logLevel,
+        "debug",
+        `JS fallback unavailable for ${support.id} query recovery; using regex import extraction.`,
+      );
+    } else {
+      logWithLevel(
+        opts?.logLevel,
+        "warn",
+        `Warning: Query error in collectModuleSpecifiersFromSource for ${support.id}:`,
+        error,
+      );
+    }
     // fall through to regex fallback
   }
 
@@ -553,7 +569,10 @@ export function collectModuleSpecifiersFromSource(
       try {
         const extracted = extractJsTsSpecifiers(source);
         if (extracted.length > 0) {
-          reportFallback(queryFailed ? "query-error" : "query-empty");
+          reportFallback(
+            fallbackReasonOverride ??
+              (queryFailed ? "query-error" : "query-empty"),
+          );
           out.push(...extracted);
         }
       } catch {
@@ -680,6 +699,7 @@ export async function collectEdgesForFile(
     ...(opts.onFallbackImportExtraction
       ? { onFallbackImportExtraction: opts.onFallbackImportExtraction }
       : {}),
+    ...(opts.native ? { native: opts.native } : {}),
     ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
   });
 
@@ -968,6 +988,7 @@ export async function collectGraph(
       addEdgeTargetsToGraph(edges);
       return edges;
     } catch (error) {
+      if (isNativeRequiredUnavailableError(error)) throw error;
       if (isUnsupportedParserInputError(error)) {
         return [] as Edge[];
       }

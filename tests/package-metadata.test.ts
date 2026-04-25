@@ -10,9 +10,7 @@ function readJson(relativePath: string): Record<string, unknown> {
   >;
 }
 
-function readStringRecord(
-  value: unknown,
-): Record<string, string> {
+function readStringRecord(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object") {
     return {};
   }
@@ -26,13 +24,16 @@ function readStringRecord(
 describe("package metadata", () => {
   it("keeps the native package optional at the root package boundary", () => {
     const rootPackage = readJson("package.json");
+    const nativePackage = readJson("packages/codegraph-native/package.json");
     const dependencies = readStringRecord(rootPackage.dependencies);
     const optionalDependencies = readStringRecord(
       rootPackage.optionalDependencies,
     );
 
     expect(dependencies["@lzehrung/codegraph-native"]).toBeUndefined();
-    expect(optionalDependencies["@lzehrung/codegraph-native"]).toBeDefined();
+    expect(optionalDependencies["@lzehrung/codegraph-native"]).toBe(
+      `^${nativePackage.version}`,
+    );
   });
 
   it("ships both the packaged skill archive and the raw skill directory", () => {

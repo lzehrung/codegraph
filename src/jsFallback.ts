@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import fs from "node:fs";
 
 export interface JsPoint {
   row: number;
@@ -70,13 +71,22 @@ type JsFallbackModule = {
 };
 
 const require = createRequire(import.meta.url);
-const localJsFallbackPackageRoots = [
-  path.resolve(process.cwd(), "optional-packages/codegraph-js-fallback"),
-  path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "../optional-packages/codegraph-js-fallback",
-  ),
-];
+function existingLocalJsFallbackCandidates(): string[] {
+  const roots = [
+    path.resolve(process.cwd(), "optional-packages/codegraph-js-fallback"),
+    path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../optional-packages/codegraph-js-fallback",
+    ),
+  ];
+  const candidates: string[] = [];
+  for (const packageRoot of roots) {
+    const entry = path.join(packageRoot, "js-fallback.cjs");
+    if (!fs.existsSync(entry)) continue;
+    candidates.push(packageRoot, entry);
+  }
+  return candidates;
+}
 
 let jsFallbackState:
   | { loaded: true; module: JsFallbackModule }
@@ -90,10 +100,7 @@ function loadJsFallbackModule():
 
   const candidates = [
     "@lzehrung/codegraph-js-fallback",
-    ...localJsFallbackPackageRoots.flatMap((packageRoot) => [
-      packageRoot,
-      path.join(packageRoot, "js-fallback.cjs"),
-    ]),
+    ...existingLocalJsFallbackCandidates(),
   ] as const;
   let lastError: unknown;
 
@@ -179,7 +186,10 @@ export function executeJsQueryAsNativeMatches(
   queryText: string,
   tree?: JsSyntaxTree,
 ): JsNativeMatch[] {
-  return requireJsFallback(
-    "JS query execution",
-  ).executeJsQueryAsNativeMatches(source, language, queryText, tree);
+  return requireJsFallback("JS query execution").executeJsQueryAsNativeMatches(
+    source,
+    language,
+    queryText,
+    tree,
+  );
 }
