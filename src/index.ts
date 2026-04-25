@@ -208,6 +208,7 @@ export {
 export {
   buildReviewReport,
   type ReviewDepth,
+  type ReviewDiagnostics,
   type ReviewReport,
   type ReviewRiskLevel,
   type ReviewRiskSummary,

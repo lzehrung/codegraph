@@ -204,31 +204,38 @@ export class CodeReviewSession implements ICodeReviewSession {
     return this.root;
   }
 
+  private async buildIndex(): Promise<ProjectIndex> {
+    if (this.incremental) {
+      return await buildProjectIndexIncremental(this.root, this.buildOptions);
+    }
+    return await buildProjectIndex(this.root, this.buildOptions);
+  }
+
+  private commitReadyIndex(index: ProjectIndex): void {
+    this.index = index;
+    this.status = "ready";
+    this.touch();
+  }
+
   /**
    * Initialize the session (builds the index)
    */
   async init(): Promise<void> {
+    if (this.status === "ready" && this.index) {
+      return;
+    }
     if (this.initPromise) {
       return this.initPromise;
     }
 
     this.initPromise = (async () => {
+      const previousStatus = this.status;
       try {
         this.status = "initializing";
-
-        if (this.incremental) {
-          this.index = await buildProjectIndexIncremental(
-            this.root,
-            this.buildOptions,
-          );
-        } else {
-          this.index = await buildProjectIndex(this.root, this.buildOptions);
-        }
-
-        this.status = "ready";
-        this.lastActivity = Date.now();
+        const nextIndex = await this.buildIndex();
+        this.commitReadyIndex(nextIndex);
       } catch (error) {
-        this.status = "error";
+        this.status = previousStatus === "expired" ? "expired" : "error";
         throw error;
       } finally {
         this.initPromise = null;
@@ -336,20 +343,19 @@ export class CodeReviewSession implements ICodeReviewSession {
    * Refresh the index (incremental rebuild)
    */
   async refresh(): Promise<void> {
+    const previousIndex = this.index;
+    const previousStatus = this.status;
     this.status = "initializing";
     try {
-      if (this.incremental) {
-        this.index = await buildProjectIndexIncremental(
-          this.root,
-          this.buildOptions,
-        );
-      } else {
-        this.index = await buildProjectIndex(this.root, this.buildOptions);
-      }
-      this.status = "ready";
-      this.touch();
+      const nextIndex = await this.buildIndex();
+      this.commitReadyIndex(nextIndex);
     } catch (error) {
-      this.status = "error";
+      if (previousIndex && previousStatus === "ready") {
+        this.index = previousIndex;
+        this.status = "ready";
+      } else {
+        this.status = "error";
+      }
       throw error;
     }
   }
@@ -403,6 +409,20 @@ export class CodeReviewSession implements ICodeReviewSession {
 export class SessionManager {
   private sessions = new Map<string, CodeReviewSession>();
 
+  private ensureSessionIdCompatible(
+    sessionId: string,
+    options: SessionOptions,
+  ): CodeReviewSession | undefined {
+    const existing = this.sessions.get(sessionId);
+    if (!existing) return undefined;
+    if (!existing.matchesOptions(options)) {
+      throw new Error(
+        `Session "${sessionId}" already exists for a different configuration (existing root: ${existing.getRoot()}, requested root: ${path.resolve(options.root)}). Use a different session id or dispose the existing session first.`,
+      );
+    }
+    return existing;
+  }
+
   /**
    * Create or get a session for a repository
    */
@@ -410,19 +430,25 @@ export class SessionManager {
     sessionId: string,
     options: SessionOptions,
   ): Promise<CodeReviewSession> {
-    let session = this.sessions.get(sessionId);
+    let session = this.ensureSessionIdCompatible(sessionId, options);
 
     if (!session) {
       session = new CodeReviewSession(options);
+      try {
+        await session.init();
+      } catch (error) {
+        session.dispose();
+        throw error;
+      }
       this.sessions.set(sessionId, session);
-      await session.init();
-    } else if (!session.matchesOptions(options)) {
-      throw new Error(
-        `Session "${sessionId}" already exists for a different configuration (existing root: ${session.getRoot()}, requested root: ${path.resolve(options.root)}). Use a different session id or dispose the existing session first.`,
-      );
     } else if (!session.isReady()) {
-      // Re-initialize if expired
-      await session.init();
+      try {
+        await session.init();
+      } catch (error) {
+        this.sessions.delete(sessionId);
+        session.dispose();
+        throw error;
+      }
     }
 
     return session;
@@ -497,13 +523,40 @@ export class SessionManager {
   async warmup(
     sessions: Array<{ id: string; options: SessionOptions }>,
   ): Promise<void> {
+    const requestedFingerprints = new Map<string, string>();
+    const replacementSessions: Array<{
+      id: string;
+      existing?: CodeReviewSession;
+      session: CodeReviewSession;
+    }> = [];
     const initializedSessions: Array<{ id: string; session: CodeReviewSession }> =
       [];
     try {
       for (const { id, options } of sessions) {
+        const requestedFingerprint = sessionIdentityFingerprint(
+          resolveSessionIdentity(options),
+        );
+        const existingFingerprint = requestedFingerprints.get(id);
+        if (existingFingerprint && existingFingerprint !== requestedFingerprint) {
+          throw new Error(
+            `Warmup requested conflicting configurations for session "${id}".`,
+          );
+        }
+        if (existingFingerprint === requestedFingerprint) {
+          continue;
+        }
+        requestedFingerprints.set(id, requestedFingerprint);
+
+        const existing = this.ensureSessionIdCompatible(id, options);
+        if (existing?.isReady()) {
+          continue;
+        }
         const session = new CodeReviewSession(options);
         await session.init();
         initializedSessions.push({ id, session });
+        replacementSessions.push(
+          existing ? { id, existing, session } : { id, session },
+        );
       }
     } catch (error) {
       for (const { session } of initializedSessions) {
@@ -511,8 +564,9 @@ export class SessionManager {
       }
       throw error;
     }
-    for (const initialized of initializedSessions) {
-      this.sessions.set(initialized.id, initialized.session);
+    for (const replacement of replacementSessions) {
+      replacement.existing?.dispose();
+      this.sessions.set(replacement.id, replacement.session);
     }
   }
 }

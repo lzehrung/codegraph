@@ -504,7 +504,7 @@ WHERE to_path = 'src/auth.ts' AND to_type = 'file';
 
 ```jsonc
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "status": "ok",
   "summary": {
     "filesChanged": 3,
@@ -550,7 +550,11 @@ WHERE to_path = 'src/auth.ts' AND to_type = 'file';
   ],
   "candidateTests": [
     { "file": "tests/foo.test.ts", "confidence": "high", "reason": "importsChanged" }
-  ]
+  ],
+  "diagnostics": {
+    "missingFiles": [],
+    "symbolMappingParseFailures": []
+  }
 }
 ```
 
@@ -559,6 +563,8 @@ Feed this JSON directly to an agent (or your own scripts) to highlight symbol-le
 `schemaVersion` identifies the review JSON schema for CI validation and compatibility checks.
 
 `riskSummary` and `reviewTasks` provide agent-ready guidance on review focus areas and likely risk hotspots.
+
+`changedFiles[].status` distinguishes normal updates from real Git deletions and explicit missing input files. `diagnostics.symbolMappingParseFailures` reports files where symbol-level diff mapping degraded, and `diagnostics.missingFiles` reports explicit paths that were not present on disk.
 
 Graph delta exports (`graph-delta`) report file-level edge additions/removals for changed files and are intended for lightweight CI artifacts.
 
