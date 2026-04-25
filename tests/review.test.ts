@@ -196,6 +196,20 @@ describe('Review report', () => {
     expect(report.head).toBe('HEAD');
   });
 
+  it('surfaces invalid git revisions instead of reporting no changes', async () => {
+    const root = await mkTmpDir('dg-review-invalid-git-');
+    runGit(root, ['init']);
+    runGit(root, ['config', 'user.email', 'test@git.local']);
+    runGit(root, ['config', 'user.name', 'Codegraph Bot']);
+    await fsp.writeFile(path.join(root, 'tracked.ts'), `export const value = 1;\n`, 'utf8');
+    runGit(root, ['add', '.']);
+    runGit(root, ['commit', '-m', 'initial']);
+
+    await expect(
+      buildReviewReport(root, { gitBase: 'definitely-not-a-ref' }),
+    ).rejects.toThrow(/definitely-not-a-ref/);
+  });
+
   it('reports deleted files surfaced by git diffs', async () => {
     const root = await mkTmpDir('dg-review-deleted-');
     runGit(root, ['init']);
