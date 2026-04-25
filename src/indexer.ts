@@ -73,6 +73,7 @@ import {
   getNativeQueryExecution,
   getNativeSyntaxTreeExecution,
   isNativeQueryModified,
+  isNativeRequiredUnavailableError,
   getCachedNormalizedQuery,
   isNativeTreeSitterAvailable,
   type NativeRuntimeMode,
@@ -362,6 +363,8 @@ export type BuildFileReport = {
   changed?: number;
   cached?: number;
   parsed?: number;
+  failed?: number;
+  errors?: Array<{ file: string; message: string }>;
 };
 
 export type FallbackImportExtractionReport = {
@@ -374,6 +377,7 @@ export type FallbackImportExtractionReport = {
       reason: FallbackImportExtractionReason;
     }
   >;
+  byReason?: Record<FallbackImportExtractionReason, number>;
 };
 
 export type GraphReport = {
@@ -431,6 +435,7 @@ export type WorkerPoolReport = {
   tasksSubmitted: number;
   tasksFailed: number;
   startupError?: string;
+  errors?: Array<{ file: string; message: string }>;
   totalWorkerMs?: number;
   wallClockMs?: number;
 };
@@ -1045,12 +1050,7 @@ async function computeConfigHash(
         if (!firstError) {
           firstError = message;
         }
-        logWithLevel(
-          logLevel,
-          "debug",
-          "computeConfigHash:",
-          message,
-        );
+        logWithLevel(logLevel, "debug", "computeConfigHash:", message);
       }
     }
     return {
@@ -1074,11 +1074,7 @@ function recordConfigHashResult(
   if (manifestReport) {
     manifestReport.configHashError = configHashResult.error;
   }
-  logWithLevel(
-    logLevel,
-    "warn",
-    `Warning: ${configHashResult.error}`,
-  );
+  logWithLevel(logLevel, "warn", `Warning: ${configHashResult.error}`);
   return configHashResult.hash;
 }
 
@@ -1116,6 +1112,24 @@ function initFileReport(
   return report.files;
 }
 
+function recordFileFailure(
+  report: BuildReport | undefined,
+  file: string,
+  error: unknown,
+): void {
+  const fileReport = initFileReport(report);
+  if (!fileReport) return;
+  fileReport.failed = (fileReport.failed ?? 0) + 1;
+  const errors = fileReport.errors ?? [];
+  if (errors.length < 20) {
+    errors.push({
+      file: file.replace(/\\/g, "/"),
+      message: stringifyUnknown(error),
+    });
+  }
+  fileReport.errors = errors;
+}
+
 function initFallbackImportExtractionReport(
   report: BuildReport | undefined,
 ): FallbackImportExtractionReport | undefined {
@@ -1125,6 +1139,12 @@ function initFallbackImportExtractionReport(
       fallbackImportExtraction: {
         total: 0,
         byLanguage: {},
+        byReason: {
+          fast: 0,
+          "js-fallback-unavailable": 0,
+          "query-error": 0,
+          "query-empty": 0,
+        },
         files: {},
       },
     };
@@ -1132,6 +1152,12 @@ function initFallbackImportExtractionReport(
     report.graph.fallbackImportExtraction = {
       total: 0,
       byLanguage: {},
+      byReason: {
+        fast: 0,
+        "js-fallback-unavailable": 0,
+        "query-error": 0,
+        "query-empty": 0,
+      },
       files: {},
     };
   }
@@ -1143,8 +1169,7 @@ function createFallbackImportExtractionHandler(
   opts?: BuildOptions,
 ): ((event: FallbackImportExtractionEvent) => void) | undefined {
   const fallbackReport = initFallbackImportExtractionReport(report);
-  const warningLimit = 20;
-  let warningCount = 0;
+  const warned = new Set<string>();
   const logLevel = opts?.logLevel ?? "warn";
   const shouldLog = logLevel !== "silent" && logLevel !== "error";
 
@@ -1155,6 +1180,13 @@ function createFallbackImportExtractionHandler(
         fallbackReport.total += 1;
         fallbackReport.byLanguage[event.language] =
           (fallbackReport.byLanguage[event.language] ?? 0) + 1;
+        fallbackReport.byReason ??= {
+          fast: 0,
+          "js-fallback-unavailable": 0,
+          "query-error": 0,
+          "query-empty": 0,
+        };
+        fallbackReport.byReason[event.reason] += 1;
       }
       fallbackReport.files[filePath] = {
         language: event.language,
@@ -1162,14 +1194,21 @@ function createFallbackImportExtractionHandler(
       };
     }
     if (!shouldLog) return;
-    if (warningCount >= warningLimit) return;
-    warningCount += 1;
-    logWithLevel(
-      opts?.logLevel,
-      event.reason === "fast" ? "debug" : "warn",
-      "Warning: Regex fallback import extraction",
-      event,
-    );
+    const warningKey = `${event.language}:${event.reason}`;
+    if (warned.has(warningKey)) return;
+    warned.add(warningKey);
+    const severity =
+      event.reason === "fast" || event.reason === "js-fallback-unavailable"
+        ? "debug"
+        : "warn";
+    const message =
+      event.reason === "js-fallback-unavailable"
+        ? `JS fallback unavailable for ${event.language} query recovery; using regex import extraction.`
+        : "Regex fallback import extraction";
+    logWithLevel(opts?.logLevel, severity, message, {
+      language: event.language,
+      reason: event.reason,
+    });
   };
 }
 
@@ -1205,7 +1244,7 @@ async function fileStatSignature(
     // Default to strict mode (content-hash) for reliability
     // This is more reliable than mtime, especially with git operations
     const useStrict = strict !== false; // True unless explicitly set to false
-    const shouldHash = useStrict || opts?.includeContentHash === true;
+    const shouldHash = useStrict || !!opts?.includeContentHash;
     const contentHash = shouldHash ? await fileContentHash(file) : undefined;
     if (!useStrict) {
       return contentHash
@@ -1230,7 +1269,7 @@ async function fileSignature(
   gitSig?: string,
   opts?: { forceContentHash?: boolean },
 ): Promise<FileSignature> {
-  const includeContentHash = opts?.forceContentHash === true;
+  const includeContentHash = !!opts?.forceContentHash;
   const statOpts = includeContentHash
     ? { includeContentHash: true }
     : undefined;
@@ -2541,6 +2580,7 @@ export async function collectImportsForFile(
     lang?: JsLanguage;
     nativeQueries?: NativeQueryResults | null;
     graphOptions?: GraphBuildOptions;
+    onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
     logLevel?: LogLevel;
   },
 ): Promise<ImportBinding[]> {
@@ -2623,6 +2663,13 @@ export async function collectImportsForFile(
   };
 
   const imports: ImportBinding[] = [];
+  const reportFallback = (reason: FallbackImportExtractionReason) => {
+    opts?.onFallbackImportExtraction?.({
+      file: file.replace(/\\/g, "/"),
+      language: resolvedSup.id,
+      reason,
+    });
+  };
   const normalizeGoImports = (): void => {
     if (resolvedSup.id !== "go" || imports.length === 0) {
       return;
@@ -3380,11 +3427,25 @@ export async function collectImportsForFile(
   }
 
   try {
-    const tree =
-      opts?.tree ??
-      (() => {
-        return parseWithJsLanguage(resolvedSource, ensureResolvedLang());
-      })();
+    let tree: JsSyntaxTree;
+    try {
+      tree =
+        opts?.tree ?? parseWithJsLanguage(resolvedSource, ensureResolvedLang());
+    } catch (error) {
+      if (isNativeRequiredUnavailableError(error)) throw error;
+      if (isJsFallbackUnavailableError(error)) {
+        reportFallback("js-fallback-unavailable");
+        logWithLevel(
+          opts?.logLevel,
+          "debug",
+          `JS fallback unavailable for ${resolvedSup.id} import-binding recovery; using regex import extraction.`,
+        );
+        await runFallback();
+        await finalizeLanguageSpecificImports();
+        return imports;
+      }
+      throw error;
+    }
     let ranFallback = false;
     try {
       const matches = executeJsQueryAsNativeMatches(
@@ -3703,7 +3764,11 @@ export async function collectImportsForFile(
           }
         }
       }
-    } catch {
+    } catch (error) {
+      if (isNativeRequiredUnavailableError(error)) throw error;
+      if (isJsFallbackUnavailableError(error)) {
+        reportFallback("js-fallback-unavailable");
+      }
       await runFallback();
       ranFallback = true;
     }
@@ -3963,8 +4028,18 @@ async function buildIndexFromFileListShared(
             const workerResult: NativeExtractResult =
               await workerSetup.pool.run(buildWorkerTask(f, supCheck));
             prepared = workerResultToPrepared(workerResult, supCheck, f);
-          } catch {
+          } catch (error) {
+            if (isNativeRequiredUnavailableError(error)) throw error;
             if (workerSetup.report) workerSetup.report.tasksFailed++;
+            if (workerSetup.report) {
+              workerSetup.report.errors ??= [];
+              if (workerSetup.report.errors.length < 20) {
+                workerSetup.report.errors.push({
+                  file: f,
+                  message: stringifyUnknown(error),
+                });
+              }
+            }
             prepared = await prepareFileForIndexing(f, opts?.native);
           }
         } else {
@@ -4021,6 +4096,9 @@ async function buildIndexFromFileListShared(
             ...(nativeQueries !== undefined ? { nativeQueries } : {}),
             graphOptions,
             ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+            ...(onFallbackImportExtraction
+              ? { onFallbackImportExtraction }
+              : {}),
           });
           collectJsonDependencies(imports, jsonDependencies);
           mod = lacksParserContext
@@ -4127,6 +4205,7 @@ async function buildIndexFromFileListShared(
 
         return [f, mod, edges] as const;
       } catch (error) {
+        if (isNativeRequiredUnavailableError(error)) throw error;
         if (isUnsupportedParserInputError(error)) {
           const modUnsupported: ModuleIndex = {
             file: f,
@@ -4145,6 +4224,7 @@ async function buildIndexFromFileListShared(
           };
           return [f, modFallbackUnavailable, []] as const;
         }
+        recordFileFailure(report, f, error);
         logWithLevel(
           opts?.logLevel,
           "warn",
@@ -4260,7 +4340,10 @@ async function buildIndexFromFileListShared(
     if (manifestEntries && manifestEntries.size > 0) {
       const writeManifestStart = performance.now();
       const lastCommit = await getGitHead(projectRoot);
-      const configHashResult = await computeConfigHash(projectRoot, opts?.logLevel);
+      const configHashResult = await computeConfigHash(
+        projectRoot,
+        opts?.logLevel,
+      );
       const configHash = recordConfigHashResult(
         report?.manifest,
         configHashResult,
@@ -4524,7 +4607,10 @@ export async function buildProjectIndexIncremental(
     if (allFiles.size === 0) {
       const writeManifestStart = performance.now();
       const lastCommit = await getGitHead(projectRoot);
-      const configHashResult = await computeConfigHash(projectRoot, opts?.logLevel);
+      const configHashResult = await computeConfigHash(
+        projectRoot,
+        opts?.logLevel,
+      );
       const configHash = recordConfigHashResult(
         manifestReport,
         configHashResult,
@@ -4662,9 +4748,19 @@ export async function buildProjectIndexIncremental(
                 const workerResult: NativeExtractResult =
                   await workerSetupIncr.pool.run(buildWorkerTask(f, supCheck));
                 prepared = workerResultToPrepared(workerResult, supCheck, f);
-              } catch {
+              } catch (error) {
+                if (isNativeRequiredUnavailableError(error)) throw error;
                 if (workerSetupIncr.report)
                   workerSetupIncr.report.tasksFailed++;
+                if (workerSetupIncr.report) {
+                  workerSetupIncr.report.errors ??= [];
+                  if (workerSetupIncr.report.errors.length < 20) {
+                    workerSetupIncr.report.errors.push({
+                      file: f,
+                      message: stringifyUnknown(error),
+                    });
+                  }
+                }
                 prepared = await prepareFileForIndexing(f, opts?.native);
               }
             } else {
@@ -4716,6 +4812,9 @@ export async function buildProjectIndexIncremental(
               ...(nativeQueries !== undefined ? { nativeQueries } : {}),
               graphOptions,
               ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+              ...(onFallbackImportExtraction
+                ? { onFallbackImportExtraction }
+                : {}),
             });
             collectJsonDependencies(imports, jsonDependencies);
             const mod = lacksParserContext
@@ -4784,6 +4883,7 @@ export async function buildProjectIndexIncremental(
             writeToCache(projectRoot, f, cacheSig, mod, opts);
             return [f, mod] as const;
           } catch (error) {
+            if (isNativeRequiredUnavailableError(error)) throw error;
             if (isUnsupportedParserInputError(error)) {
               const modUnsupported: ModuleIndex = {
                 file: f,
@@ -4802,6 +4902,7 @@ export async function buildProjectIndexIncremental(
               };
               return [f, modFallbackUnavailable] as const;
             }
+            recordFileFailure(report, f, error);
             logWithLevel(
               opts?.logLevel,
               "warn",
