@@ -61,4 +61,27 @@ describe("git diff semantics", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("surfaces invalid git revisions instead of returning empty results", async () => {
+    const root = await fs.mkdtemp(path.join(process.cwd(), "tmp-git-invalid-"));
+    try {
+      git(root, ["init"]);
+      git(root, ["config", "user.email", "tests@example.com"]);
+      git(root, ["config", "user.name", "Tests"]);
+
+      const file = path.join(root, "a.ts");
+      await fs.writeFile(file, "export const a = 1;\n", "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+
+      await expect(
+        listChangedFiles(root, { base: "definitely-not-a-ref", head: "HEAD" }),
+      ).rejects.toThrow(/definitely-not-a-ref/);
+      await expect(
+        getUnifiedDiff(root, { base: "definitely-not-a-ref", head: "HEAD" }),
+      ).rejects.toThrow(/definitely-not-a-ref/);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });

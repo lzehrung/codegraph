@@ -146,6 +146,11 @@ export interface ICodeReviewSession {
     line: number;
     column: number;
   }): Promise<unknown>;
+  analyzeImpactStream(
+    options: Omit<ImpactOptions, "provider"> & {
+      provider?: ImpactOptions["provider"];
+    },
+  ): AsyncGenerator<ImpactStreamChunk>;
   goToDefinition(params: {
     file: string;
     line: number;
@@ -408,6 +413,24 @@ export class CodeReviewSession implements ICodeReviewSession {
  */
 export class SessionManager {
   private sessions = new Map<string, CodeReviewSession>();
+  private pendingSessions = new Map<
+    string,
+    {
+      cancelled: boolean;
+      fingerprint: string;
+      promise: Promise<CodeReviewSession>;
+    }
+  >();
+
+  private createSessionConfigurationError(
+    sessionId: string,
+    existing: CodeReviewSession,
+    options: SessionOptions,
+  ): Error {
+    return new Error(
+      `Session "${sessionId}" already exists for a different configuration (existing root: ${existing.getRoot()}, requested root: ${path.resolve(options.root)}). Use a different session id or dispose the existing session first.`,
+    );
+  }
 
   private ensureSessionIdCompatible(
     sessionId: string,
@@ -416,11 +439,71 @@ export class SessionManager {
     const existing = this.sessions.get(sessionId);
     if (!existing) return undefined;
     if (!existing.matchesOptions(options)) {
-      throw new Error(
-        `Session "${sessionId}" already exists for a different configuration (existing root: ${existing.getRoot()}, requested root: ${path.resolve(options.root)}). Use a different session id or dispose the existing session first.`,
-      );
+      throw this.createSessionConfigurationError(sessionId, existing, options);
     }
     return existing;
+  }
+
+  private getPendingCompatibleSession(
+    sessionId: string,
+    options: SessionOptions,
+  ): Promise<CodeReviewSession> | undefined {
+    const pending = this.pendingSessions.get(sessionId);
+    if (!pending) return undefined;
+    const requestedFingerprint = sessionIdentityFingerprint(
+      resolveSessionIdentity(options),
+    );
+    if (pending.fingerprint !== requestedFingerprint) {
+      const existing = this.sessions.get(sessionId);
+      if (existing) {
+        throw this.createSessionConfigurationError(sessionId, existing, options);
+      }
+      throw new Error(
+        `Session "${sessionId}" is already initializing with a different configuration.`,
+      );
+    }
+    return pending.promise;
+  }
+
+  private trackPendingSession(
+    sessionId: string,
+    options: SessionOptions,
+    promise: Promise<CodeReviewSession>,
+  ): Promise<CodeReviewSession> {
+    const fingerprint = sessionIdentityFingerprint(resolveSessionIdentity(options));
+    this.pendingSessions.set(sessionId, {
+      cancelled: false,
+      fingerprint,
+      promise,
+    });
+    promise
+      .finally(() => {
+        const pending = this.pendingSessions.get(sessionId);
+        if (pending?.promise === promise) {
+          this.pendingSessions.delete(sessionId);
+        }
+      })
+      .catch(() => {});
+    return promise;
+  }
+
+  private async initializeManagedSession(
+    sessionId: string,
+    session: CodeReviewSession,
+    isCancelled: () => boolean,
+  ): Promise<CodeReviewSession> {
+    try {
+      await session.init();
+      if (isCancelled()) {
+        session.dispose();
+        throw new Error(`Session "${sessionId}" was disposed during initialization.`);
+      }
+      this.sessions.set(sessionId, session);
+      return session;
+    } catch (error) {
+      session.dispose();
+      throw error;
+    }
   }
 
   /**
@@ -430,17 +513,25 @@ export class SessionManager {
     sessionId: string,
     options: SessionOptions,
   ): Promise<CodeReviewSession> {
+    const pending = this.getPendingCompatibleSession(sessionId, options);
+    if (pending) {
+      return await pending;
+    }
+
     let session = this.ensureSessionIdCompatible(sessionId, options);
 
     if (!session) {
       session = new CodeReviewSession(options);
-      try {
-        await session.init();
-      } catch (error) {
-        session.dispose();
-        throw error;
-      }
-      this.sessions.set(sessionId, session);
+      let promise!: Promise<CodeReviewSession>;
+      promise = this.initializeManagedSession(
+        sessionId,
+        session,
+        () => {
+          const pending = this.pendingSessions.get(sessionId);
+          return pending?.promise === promise && pending.cancelled;
+        },
+      );
+      return await this.trackPendingSession(sessionId, options, promise);
     } else if (!session.isReady()) {
       try {
         await session.init();
@@ -465,6 +556,10 @@ export class SessionManager {
    * Dispose of a session
    */
   disposeSession(sessionId: string): void {
+    const pending = this.pendingSessions.get(sessionId);
+    if (pending) {
+      pending.cancelled = true;
+    }
     const session = this.sessions.get(sessionId);
     if (session) {
       session.dispose();
@@ -476,6 +571,9 @@ export class SessionManager {
    * Dispose of all sessions
    */
   disposeAll(): void {
+    for (const pending of this.pendingSessions.values()) {
+      pending.cancelled = true;
+    }
     for (const session of this.sessions.values()) {
       session.dispose();
     }
@@ -546,6 +644,12 @@ export class SessionManager {
           continue;
         }
         requestedFingerprints.set(id, requestedFingerprint);
+
+        const pending = this.getPendingCompatibleSession(id, options);
+        if (pending) {
+          await pending;
+          continue;
+        }
 
         const existing = this.ensureSessionIdCompatible(id, options);
         if (existing?.isReady()) {

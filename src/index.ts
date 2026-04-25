@@ -131,6 +131,7 @@ export {
   CodeReviewSession,
   SessionManager,
   createCodeReviewSession,
+  type ICodeReviewSession,
   type SessionOptions,
   type SessionStatus,
 } from "./session.js";
