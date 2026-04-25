@@ -156,6 +156,9 @@ describe("logging behavior", () => {
     );
     await fsp.writeFile(dependencyFile, "export const dep = 1;\n", "utf8");
 
+    const availabilitySpy = vi
+      .spyOn(jsFallback, "isJsFallbackAvailable")
+      .mockReturnValue(false);
     const parseSpy = vi
       .spyOn(jsFallback, "parseWithJsLanguage")
       .mockImplementation(() => {
@@ -195,6 +198,7 @@ describe("logging behavior", () => {
       debugSpy.mockRestore();
       warnSpy.mockRestore();
       parseSpy.mockRestore();
+      availabilitySpy.mockRestore();
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
