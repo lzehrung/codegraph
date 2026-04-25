@@ -1,9 +1,10 @@
-import { describe, test, expect, beforeEach } from "vitest";
+import { describe, test, expect, beforeEach, vi } from "vitest";
 import {
   CodeReviewSession,
   SessionManager,
   createCodeReviewSession,
 } from "../src/session.js";
+import * as indexer from "../src/indexer.js";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
@@ -68,6 +69,30 @@ describe("CodeReviewSession", () => {
     await session.refresh();
 
     expect(session.isReady()).toBe(true);
+  });
+
+  test("should preserve the last ready index when refresh fails", async () => {
+    const session = await createCodeReviewSession({
+      root: sampleRoot,
+      buildOptions: { cache: "memory", useBloomFilters: true },
+    });
+
+    const buildSpy = vi
+      .spyOn(indexer, "buildProjectIndexIncremental")
+      .mockRejectedValue(new Error("synthetic refresh failure"));
+
+    try {
+      await expect(session.refresh()).rejects.toThrow("synthetic refresh failure");
+      expect(session.getStatus()).toBe("ready");
+      expect(session.isReady()).toBe(true);
+
+      const file = path.resolve(sampleRoot, "src/index.ts");
+      await expect(
+        session.findReferences({ file, line: 1, column: 10 }),
+      ).resolves.toBeDefined();
+    } finally {
+      buildSpy.mockRestore();
+    }
   });
 
   test("should expire after timeout", async () => {
@@ -168,6 +193,51 @@ describe("SessionManager", () => {
     });
 
     expect(session1).toBe(session2);
+  });
+
+  test("should not retain failed getOrCreate sessions", async () => {
+    const badRoot = path.join(os.tmpdir(), `dg-session-missing-${Date.now()}`);
+
+    await expect(
+      manager.getOrCreateSession("broken", {
+        root: badRoot,
+        buildOptions: { cache: "memory" },
+      }),
+    ).rejects.toThrow();
+
+    expect(manager.getSession("broken")).toBeUndefined();
+    expect(manager.getSessionIds()).toEqual([]);
+  });
+
+  test("should remove expired sessions when reinitialization fails", async () => {
+    const session = await manager.getOrCreateSession("expiring", {
+      root: sampleRoot,
+      buildOptions: { cache: "memory", useBloomFilters: true },
+      timeout: 100,
+    });
+
+    expect(session.getStatus()).toBe("ready");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(session.getStatus()).toBe("expired");
+
+    const buildSpy = vi
+      .spyOn(indexer, "buildProjectIndexIncremental")
+      .mockRejectedValue(new Error("synthetic reinit failure"));
+
+    try {
+      await expect(
+        manager.getOrCreateSession("expiring", {
+          root: sampleRoot,
+          buildOptions: { cache: "memory", useBloomFilters: true },
+          timeout: 100,
+        }),
+      ).rejects.toThrow("synthetic reinit failure");
+
+      expect(manager.getSession("expiring")).toBeUndefined();
+      expect(manager.getSessionIds()).toEqual([]);
+    } finally {
+      buildSpy.mockRestore();
+    }
   });
 
   test("should reject reusing a session id for a different root", async () => {
@@ -378,5 +448,51 @@ describe("SessionManager", () => {
         // Windows can transiently hold temp directories briefly after failed init.
       }
     }
+  });
+
+  test("should reject warmup collisions with existing sessions", async () => {
+    const rootA = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-warm-a-"));
+    const rootB = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-warm-b-"));
+
+    try {
+      await fsp.writeFile(path.join(rootA, "a.ts"), "export const a = 1;\n", "utf8");
+      await fsp.writeFile(path.join(rootB, "b.ts"), "export const b = 1;\n", "utf8");
+
+      const existing = await manager.getOrCreateSession("shared", {
+        root: rootA,
+        buildOptions: { cache: "memory" },
+      });
+
+      await expect(
+        manager.warmup([
+          { id: "shared", options: { root: rootB, buildOptions: { cache: "memory" } } },
+        ]),
+      ).rejects.toThrow(/different configuration/);
+
+      expect(manager.getSession("shared")).toBe(existing);
+      expect(manager.getSession("shared")?.getRoot()).toBe(rootA);
+    } finally {
+      await fsp.rm(rootA, { recursive: true, force: true });
+      await fsp.rm(rootB, { recursive: true, force: true });
+    }
+  });
+
+  test("should keep matching warmup sessions instead of replacing them", async () => {
+    const existing = await manager.getOrCreateSession("shared", {
+      root: sampleRoot,
+      buildOptions: { cache: "memory", useBloomFilters: true },
+    });
+
+    await manager.warmup([
+      {
+        id: "shared",
+        options: {
+          root: sampleRoot,
+          buildOptions: { cache: "memory", useBloomFilters: true },
+        },
+      },
+    ]);
+
+    expect(manager.getSession("shared")).toBe(existing);
   });
 });
