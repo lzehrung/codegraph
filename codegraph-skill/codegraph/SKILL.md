@@ -83,7 +83,7 @@ The CLI also ships a bundled skill installer:
   `codegraph graph --report`
   `codegraph index --report`
   `codegraph review --report --report-file review.report.json`
-  Graph, index, and review reports include `backend.native.byLanguage` so native usage and fallback are visible per language. Reports also include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used.
+  Graph, index, and review reports include `backend.native.byLanguage` so native usage and fallback are visible per language. Reports also include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Review JSON also reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, and distinguishes `changedFiles[].status` as `updated`, `deleted`, or `missing`.
 - Explicit native runtime control:
   `codegraph graph --native off`
   `codegraph index --native on --report`

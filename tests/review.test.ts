@@ -10,6 +10,7 @@ import {
   buildReviewReport,
 } from '../src/index.js';
 import * as indexer from '../src/indexer.js';
+import * as impactMap from '../src/impact/map.js';
 
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -46,7 +47,7 @@ describe('Review report', () => {
       files: [filePath],
     });
 
-    expect(report.schemaVersion).toBe(1);
+    expect(report.schemaVersion).toBe(2);
     expect(report.status).toBe('ok');
     expect(report.riskSummary.level).toBeDefined();
     expect(report.reviewTasks.length).toBeGreaterThan(0);
@@ -215,9 +216,69 @@ describe('Review report', () => {
       expect(report.summary.filesChanged).toBe(1);
       expect(report.changedFiles[0]?.status).toBe('deleted');
       expect(report.changedFiles[0]?.symbols).toEqual([]);
+      expect(report.diagnostics).toBeUndefined();
       expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
+    }
+  });
+
+  it('marks explicitly missing files as missing instead of deleted', async () => {
+    const root = await mkTmpDir('dg-review-missing-');
+    const missingFile = path.join(root, 'missing.ts');
+
+    const report = await buildReviewReport(root, {
+      files: [missingFile],
+    });
+
+    expect(report.status).toBe('ok');
+    expect(report.schemaVersion).toBe(2);
+    expect(report.changedFiles[0]?.file).toBe('missing.ts');
+    expect(report.changedFiles[0]?.status).toBe('missing');
+    expect(report.diagnostics?.missingFiles).toEqual(['missing.ts']);
+    expect(report.diagnostics?.symbolMappingParseFailures).toEqual([]);
+    expect(report.riskSummary.signals).toContain('missing-files');
+    expect(report.reviewTasks.some((task) => task.reason === 'missing-files')).toBe(true);
+  });
+
+  it('reports review diagnostics when symbol mapping degrades', async () => {
+    const root = await mkTmpDir('dg-review-parse-failure-');
+    const filePath = path.join(root, 'feature.ts');
+    await fsp.writeFile(filePath, `export const value = 1;\n`, 'utf8');
+
+    await buildProjectIndex(root);
+
+    const locateSpy = vi
+      .spyOn(impactMap, 'locateChangedSymbolsWithLines')
+      .mockResolvedValue({
+        changedSymbols: [],
+        changedLines: new Set<number>(),
+        parseFailed: true,
+      });
+
+    try {
+      const report = await buildReviewReport(root, {
+        files: [filePath],
+        diffText: [
+          'diff --git a/feature.ts b/feature.ts',
+          'index 1234567..abcdef0 100644',
+          '--- a/feature.ts',
+          '+++ b/feature.ts',
+          '@@ -1 +1 @@',
+          '-export const value = 0;',
+          '+export const value = 1;',
+          '',
+        ].join('\n'),
+      });
+
+      expect(report.diagnostics?.missingFiles).toEqual([]);
+      expect(report.diagnostics?.symbolMappingParseFailures).toEqual(['feature.ts']);
+      expect(report.riskSummary.signals).toContain('symbol-mapping-degraded');
+      expect(
+        report.reviewTasks.some((task) => task.reason === 'symbol-mapping-degraded'),
+      ).toBe(true);
+    } finally {
+      locateSpy.mockRestore();
     }
   });
 

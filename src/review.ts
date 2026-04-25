@@ -34,7 +34,7 @@ import {
 
 type ReviewFileSummary = {
   file: string;
-  status: "updated" | "deleted";
+  status: "updated" | "deleted" | "missing";
   symbols: ReviewSymbolSummary[];
 };
 
@@ -69,6 +69,7 @@ export type ReviewReport = {
   changedFiles: ReviewFileSummary[];
   graphDelta: Edge[];
   candidateTests: CandidateTestFile[];
+  diagnostics?: ReviewDiagnostics;
 };
 
 export type ReviewOptions = IncrementalBuildOptions & {
@@ -102,6 +103,11 @@ export type ReviewTask = {
   description: string;
   priority: ReviewTaskPriority;
   reason: string;
+};
+
+export type ReviewDiagnostics = {
+  missingFiles: string[];
+  symbolMappingParseFailures: string[];
 };
 
 export type ReviewTimingReport = {
@@ -146,7 +152,7 @@ const REVIEW_PRESETS: Record<ReviewDepth, ReviewPreset> = {
   },
 };
 
-const REVIEW_SCHEMA_VERSION = 1;
+const REVIEW_SCHEMA_VERSION = 2;
 
 function mergeGraphOptions(
   base: IncrementalBuildOptions["graph"] | undefined,
@@ -206,6 +212,8 @@ function computeRiskSummary(input: {
   filesChanged: number;
   symbolsChanged: number;
   exportedChanged: number;
+  missingFiles: number;
+  parseFailures: number;
 }): ReviewRiskSummary {
   const signals: string[] = [];
   let score = 0;
@@ -223,6 +231,14 @@ function computeRiskSummary(input: {
     score += 20;
     signals.push("many-files-changed");
   }
+  if (input.missingFiles > 0) {
+    score += 30;
+    signals.push("missing-files");
+  }
+  if (input.parseFailures > 0) {
+    score += 25;
+    signals.push("symbol-mapping-degraded");
+  }
   const normalizedScore = Math.min(100, score);
   let level: ReviewRiskLevel = "low";
   if (normalizedScore >= 70) level = "high";
@@ -239,6 +255,8 @@ function buildReviewTasks(input: {
   symbolsChanged: number;
   exportedChanged: number;
   candidateTests: number;
+  missingFiles: number;
+  parseFailures: number;
 }): ReviewTask[] {
   const tasks: ReviewTask[] = [
     {
@@ -284,7 +302,36 @@ function buildReviewTasks(input: {
     });
   }
 
+  if (input.parseFailures > 0) {
+    tasks.push({
+      id: "analysis-degraded",
+      title: "Validate degraded symbol mapping",
+      description:
+        "Some changed files could not be mapped cleanly to symbols. Review syntax errors, parser support, or fall back to file-level inspection.",
+      priority: "high",
+      reason: "symbol-mapping-degraded",
+    });
+  }
+
+  if (input.missingFiles > 0) {
+    tasks.push({
+      id: "missing-input-files",
+      title: "Validate missing review inputs",
+      description:
+        "Some explicitly requested files were missing on disk. Confirm paths and whether the intended change was a real deletion.",
+      priority: "high",
+      reason: "missing-files",
+    });
+  }
+
   return tasks;
+}
+
+function hasDiagnostics(diagnostics: ReviewDiagnostics): boolean {
+  return (
+    diagnostics.missingFiles.length > 0 ||
+    diagnostics.symbolMappingParseFailures.length > 0
+  );
 }
 
 function isExported(mod: { exports: ExportEntry[] }, handle: string): boolean {
@@ -419,10 +466,12 @@ export async function buildReviewReport(
     );
 
   const changedFiles = new Set<string>();
+  const explicitFiles = new Set<string>();
   const changesStart = performance.now();
   for (const file of appliedOptions.files ?? []) {
     const normalized = normalizeFile(file);
     changedFiles.add(normalized);
+    explicitFiles.add(normalized);
   }
 
   if (appliedOptions.gitBase || appliedOptions.changedSince) {
@@ -449,6 +498,8 @@ export async function buildReviewReport(
       filesChanged: 0,
       symbolsChanged: 0,
       exportedChanged: 0,
+      missingFiles: 0,
+      parseFailures: 0,
     });
     const projectFiles = await discoverProjectFiles(projectRoot);
     const report: ReviewReport = {
@@ -462,6 +513,8 @@ export async function buildReviewReport(
         symbolsChanged: 0,
         exportedChanged: 0,
         candidateTests: 0,
+        missingFiles: 0,
+        parseFailures: 0,
       }),
       changedFiles: [],
       graphDelta: [],
@@ -477,6 +530,10 @@ export async function buildReviewReport(
   }
 
   const changedFileList = Array.from(changedFiles).sort(comparePaths);
+  const diagnostics: ReviewDiagnostics = {
+    missingFiles: [],
+    symbolMappingParseFailures: [],
+  };
   const fastGraphRequested = appliedOptions.graph?.fast ?? false;
   const graphOptions = appliedOptions.graph
     ? { ...appliedOptions.graph, fast: fastGraphRequested }
@@ -512,6 +569,9 @@ export async function buildReviewReport(
       exists: await fileExists(file),
     })),
   );
+  const existenceByFile = new Map(
+    existenceChecks.map((entry) => [entry.file, entry.exists] as const),
+  );
   const filesToIndex = existenceChecks
     .filter((entry) => entry.exists)
     .map((entry) => entry.file);
@@ -532,10 +592,12 @@ export async function buildReviewReport(
     reviewTimings.diffMs = Math.round(performance.now() - diffStart);
   }
   const diffHunksByFile = new Map<string, Hunk[]>();
+  const diffKindsByFile = new Map<string, string>();
   if (diff) {
     for (const fileChange of diff.files) {
       const absPath = normalizePath(path.resolve(projectRoot, fileChange.path));
       diffHunksByFile.set(absPath, fileChange.hunks);
+      diffKindsByFile.set(absPath, fileChange.kind);
     }
   }
 
@@ -588,6 +650,7 @@ export async function buildReviewReport(
           locals: [] as SymbolDef[],
           handles: [] as string[],
           diffLinesByHandle: new Map<string, Set<number>>(),
+          parseFailed: false,
         };
       }
       if (!hunks) {
@@ -599,10 +662,14 @@ export async function buildReviewReport(
           locals,
           handles: locals.map((local) => symbolId(local)),
           diffLinesByHandle: new Map<string, Set<number>>(),
+          parseFailed: false,
         };
       }
-      const { changedSymbols, changedLines } =
+      const { changedSymbols, changedLines, parseFailed } =
         await locateChangedSymbolsWithLines(index, file, hunks);
+      if (parseFailed) {
+        diagnostics.symbolMappingParseFailures.push(relativePath(projectRoot, file));
+      }
       const uniqueSymbols = new Map<string, SymbolDef>();
       for (const symbol of changedSymbols) {
         uniqueSymbols.set(symbol.id, {
@@ -626,6 +693,7 @@ export async function buildReviewReport(
           hunks,
           changedLines,
         ),
+        parseFailed,
       };
     }),
   );
@@ -710,10 +778,17 @@ export async function buildReviewReport(
     fileEntries.map(
       async ({ file, mod, locals, handles, diffLinesByHandle }) => {
         if (!mod) {
+          const fileExistsOnDisk = existenceByFile.get(file) ?? false;
+          const isDeletedByDiff = diffKindsByFile.get(file) === "deleted";
+          const isMissingExplicitInput =
+            !fileExistsOnDisk && explicitFiles.has(file) && !isDeletedByDiff;
+          if (isMissingExplicitInput) {
+            diagnostics.missingFiles.push(relativePath(projectRoot, file));
+          }
           return {
             summary: {
               file: relativePath(projectRoot, file),
-              status: "deleted",
+              status: isMissingExplicitInput ? "missing" : "deleted",
               symbols: [],
             } satisfies ReviewFileSummary,
             handles: [] as string[],
@@ -816,16 +891,21 @@ export async function buildReviewReport(
       filesChanged: summaries.length,
       symbolsChanged: changedSymbolIds.length,
       exportedChanged: exportedChangedCount,
+      missingFiles: diagnostics.missingFiles.length,
+      parseFailures: diagnostics.symbolMappingParseFailures.length,
     }),
     reviewTasks: buildReviewTasks({
       filesChanged: summaries.length,
       symbolsChanged: changedSymbolIds.length,
       exportedChanged: exportedChangedCount,
       candidateTests: candidateTests.length,
+      missingFiles: diagnostics.missingFiles.length,
+      parseFailures: diagnostics.symbolMappingParseFailures.length,
     }),
     changedFiles: summaries,
     graphDelta,
     candidateTests,
+    ...(hasDiagnostics(diagnostics) ? { diagnostics } : {}),
   };
   if (appliedOptions.gitBase !== undefined)
     report.base = appliedOptions.gitBase;
