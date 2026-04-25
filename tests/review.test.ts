@@ -558,4 +558,53 @@ describe('Indexing helper', () => {
     );
     expect(subsetExportStar).toBeDefined();
   });
+
+  it('keeps Ruby star-import namespace expansion in sync for incremental builds', async () => {
+    const root = await mkTmpDir('dg-review-ruby-incremental-');
+    const utilPath = path.join(root, 'util.rb');
+    const mainPath = path.join(root, 'main.rb');
+    await fsp.writeFile(
+      utilPath,
+      [
+        'class Tool',
+        '  VALUE = 1',
+        'end',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    await fsp.writeFile(
+      mainPath,
+      [
+        "require_relative './util'",
+        '',
+        'value = Tool::VALUE',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const normalizedMainPath = mainPath.replace(/\\/g, '/');
+    const fullIndex = await buildProjectIndex(root, { cache: 'disk' });
+    const fullMainModule = fullIndex.byFile.get(normalizedMainPath);
+    expect(fullMainModule).toBeDefined();
+
+    const incrementalIndex = await indexer.buildProjectIndexIncremental(root, {
+      cache: 'disk',
+      files: [mainPath],
+    });
+    const incrementalMainModule = incrementalIndex.byFile.get(normalizedMainPath);
+    expect(incrementalMainModule).toBeDefined();
+
+    const hasToolNamespaceImport = (imports: NonNullable<typeof fullMainModule>['imports']) =>
+      imports.some(
+        (imp) =>
+          imp.kind === 'namespace' &&
+          imp.localNS === 'Tool' &&
+          imp.resolved === utilPath.replace(/\\/g, '/'),
+      );
+
+    expect(hasToolNamespaceImport(fullMainModule?.imports ?? [])).toBe(true);
+    expect(hasToolNamespaceImport(incrementalMainModule?.imports ?? [])).toBe(true);
+  });
 });

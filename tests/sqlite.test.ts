@@ -452,6 +452,50 @@ export const run = () => helper();
     expect(remainingFile.rows).toEqual([[mainPath.replace(/\\/g, "/")]]);
   });
 
+  it("removes orphaned external file rows during incremental updates", async () => {
+    const root = await mkTmpDir("dg-sqlite-orphan-external-");
+    const mainPath = path.join(root, "main.ts");
+    const dbPath = path.join(root, "graph.sqlite");
+
+    await fsp.writeFile(
+      mainPath,
+      `import lodash from "lodash";
+export const value = lodash;
+`,
+      "utf8",
+    );
+
+    let index = await buildProjectIndex(root);
+    let sgraph = await buildSymbolGraphDetailed(index);
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+    });
+
+    await fsp.writeFile(
+      mainPath,
+      `export const value = 1;
+`,
+      "utf8",
+    );
+
+    index = await buildProjectIndex(root);
+    sgraph = await buildSymbolGraphDetailed(index);
+    await updateGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+      changedFiles: [mainPath.replace(/\\/g, "/")],
+    });
+
+    const externalRows = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT path FROM files WHERE is_external = 1 ORDER BY path;",
+    );
+    expect(externalRows.rows).toEqual([]);
+  });
+
 
   it("records temporal snapshots for full and incremental updates", async () => {
     const root = await mkTmpDir("dg-sqlite-snapshots-");
@@ -595,6 +639,41 @@ export interface UserRepository {}
     expect(complexity.results.length).toBeGreaterThan(0);
   });
 
+  it("merges dependency chains across duplicate class names deterministically", async () => {
+    const root = await mkTmpDir("dg-sqlite-duplicate-class-");
+    await fsp.writeFile(
+      path.join(root, "a.ts"),
+      `export class Service {}
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "b.ts"),
+      `import "./a";
+export class Service {}
+`,
+      "utf8",
+    );
+
+    const index = await buildProjectIndex(root);
+    const sgraph = await buildSymbolGraphDetailed(index);
+    const dbPath = path.join(root, "graph.sqlite");
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+    });
+
+    const chain = await queryGraphSqlite(
+      dbPath,
+      "Show me the dependency chain for the Service class",
+    );
+    expect(chain.kind).toBe("dependencyChain");
+    if (chain.kind === "dependencyChain") {
+      expect(chain.results).toEqual([path.join(root, "a.ts").replace(/\\/g, "/")]);
+    }
+  });
+
   it("executes raw SQL queries with column metadata", async () => {
     const root = await mkTmpDir("dg-sqlite-raw-");
     const main = `
@@ -620,5 +699,30 @@ export function helper() { return 1; }
     expect(result.columns).toEqual(["name", "kind"]);
     const names = result.rows.map((row) => String(row[0]));
     expect(names).toEqual(["Gadget", "Widget"]);
+  });
+
+  it("closes the database handle after raw SQL failures", async () => {
+    const root = await mkTmpDir("dg-sqlite-raw-failure-");
+    await fsp.writeFile(
+      path.join(root, "main.ts"),
+      `export const value = 1;
+`,
+      "utf8",
+    );
+
+    const index = await buildProjectIndex(root);
+    const sgraph = await buildSymbolGraphDetailed(index);
+    const dbPath = path.join(root, "graph.sqlite");
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+    });
+
+    await expect(
+      queryGraphSqliteRaw(dbPath, "SELECT * FROM missing_table;"),
+    ).rejects.toThrow();
+
+    await expect(fsp.rm(dbPath, { force: true })).resolves.toBeUndefined();
   });
 });

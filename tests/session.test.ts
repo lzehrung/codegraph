@@ -349,4 +349,34 @@ describe("SessionManager", () => {
     expect(allStats["session-2"]).toBeDefined();
     expect(allStats["session-2"].status).toBe("ready");
   });
+
+  test("should not retain failed warmup sessions", async () => {
+    const goodRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-warmup-good-"));
+    const badRoot = path.join(os.tmpdir(), `dg-session-warmup-missing-${Date.now()}`);
+
+    try {
+      await fsp.writeFile(
+        path.join(goodRoot, "index.ts"),
+        "export const value = 1;\n",
+        "utf8",
+      );
+
+      await expect(
+        manager.warmup([
+          { id: "good", options: { root: goodRoot, buildOptions: { cache: "memory" } } },
+          { id: "bad", options: { root: badRoot, buildOptions: { cache: "memory" } } },
+        ]),
+      ).rejects.toThrow();
+
+      expect(manager.getSession("good")).toBeUndefined();
+      expect(manager.getSession("bad")).toBeUndefined();
+      expect(manager.getSessionIds()).toEqual([]);
+    } finally {
+      try {
+        await fsp.rm(goodRoot, { recursive: true, force: true });
+      } catch {
+        // Windows can transiently hold temp directories briefly after failed init.
+      }
+    }
+  });
 });

@@ -497,13 +497,23 @@ export class SessionManager {
   async warmup(
     sessions: Array<{ id: string; options: SessionOptions }>,
   ): Promise<void> {
-    await Promise.all(
-      sessions.map(async ({ id, options }) => {
+    const initializedSessions: Array<{ id: string; session: CodeReviewSession }> =
+      [];
+    try {
+      for (const { id, options } of sessions) {
         const session = new CodeReviewSession(options);
-        this.sessions.set(id, session);
         await session.init();
-      }),
-    );
+        initializedSessions.push({ id, session });
+      }
+    } catch (error) {
+      for (const { session } of initializedSessions) {
+        session.dispose();
+      }
+      throw error;
+    }
+    for (const initialized of initializedSessions) {
+      this.sessions.set(initialized.id, initialized.session);
+    }
   }
 }
 

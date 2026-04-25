@@ -81,6 +81,66 @@ describe('Find References', () => {
     });
   });
 
+  describe('TSX', () => {
+    it('should keep block context scoped to the enclosing component', async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-tsx-block-context-'));
+      try {
+        const buttonFile = path.join(root, 'Button.tsx');
+        const appFile = path.join(root, 'App.tsx');
+        await fsp.writeFile(
+          buttonFile,
+          [
+            'export function Button(props: { label: string }) {',
+            '  return <button>{props.label}</button>;',
+            '}',
+            '',
+          ].join('\n'),
+          'utf8',
+        );
+        await fsp.writeFile(
+          appFile,
+          [
+            "import { Button } from './Button';",
+            '',
+            'function unrelated() {',
+            "  return 'nope';",
+            '}',
+            '',
+            'export function App() {',
+            '  return <Button label="hi" />;',
+            '}',
+            '',
+            'function trailing() {',
+            "  return 'tail';",
+            '}',
+            '',
+          ].join('\n'),
+          'utf8',
+        );
+
+        const index = await createTestIndexFromPath(root);
+        const result = await indexer.findReferences(
+          index,
+          { file: buttonFile.replace(/\\/g, '/'), line: 1, column: 17 },
+          { context: 'block', blockMaxLines: 50, maxReferences: 2 },
+        );
+
+        expect(result.status).toBe('ok');
+        if (result.status === 'ok') {
+          const appReference = result.references.find(
+            (reference) => reference.file === appFile.replace(/\\/g, '/'),
+          );
+          expect(appReference?.context).toContain('function App()');
+          expect(appReference?.context).toContain('<Button label="hi" />');
+          expect(appReference?.context).not.toContain('function unrelated()');
+          expect(appReference?.context).not.toContain('function trailing()');
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe('Python', () => {
     it('should find all references to exported function', async () => {
       const index = await createTestIndex('python');
