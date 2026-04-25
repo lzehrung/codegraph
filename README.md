@@ -274,7 +274,7 @@ npm install
 npm run build
 ```
 
-Use this path when you are developing on codegraph itself. `npm run build` now always rebuilds `dist/` and attempts the local native workspace build when Cargo is available. Use `npm run build:native` when you specifically want to rebuild the native addon and fail fast if Rust is not installed.
+Use this path when you are developing on codegraph itself. `npm run build` now always rebuilds `dist/` and attempts the local native workspace build when Cargo is available, but it falls back to the JavaScript build output with a warning if the native workspace build is unavailable or fails. Use `npm run build:native` when you specifically want to rebuild the native addon and fail fast if Rust is not installed.
 
 ## Requirements
 

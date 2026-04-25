@@ -2842,17 +2842,17 @@ export async function listChangedFiles(
     head?: string | undefined;
   },
 ): Promise<string[]> {
+  const args = ["diff", "--name-only", "--diff-filter=ACDMRTUXB"];
+  if (opts.base) {
+    const head = opts.head ?? "HEAD";
+    args.push(`${opts.base}..${head}`);
+  } else if (opts.changedSince) {
+    args.push(opts.changedSince);
+  } else {
+    return [];
+  }
+  args.push("--");
   try {
-    const args = ["diff", "--name-only", "--diff-filter=ACDMRTUXB"];
-    if (opts.base) {
-      const head = opts.head ?? "HEAD";
-      args.push(`${opts.base}..${head}`);
-    } else if (opts.changedSince) {
-      args.push(opts.changedSince);
-    } else {
-      return [];
-    }
-    args.push("--");
     const { stdout } = await execFileAsync("git", args, {
       cwd: projectRoot,
       env: process.env,
@@ -2867,8 +2867,8 @@ export async function listChangedFiles(
       if (abs) out.push(abs);
     }
     return Array.from(new Set(out));
-  } catch {
-    return [];
+  } catch (error) {
+    throw createGitDiffError(projectRoot, args, error);
   }
 }
 
@@ -2885,30 +2885,50 @@ export async function getUnifiedDiff(
     head?: string | undefined;
   },
 ): Promise<string> {
+  const args = [
+    "diff",
+    "--unified=0",
+    "--no-color",
+    "--diff-filter=ACDMRTUXB",
+  ];
+  if (opts.base) {
+    const head = opts.head ?? "HEAD";
+    args.push(`${opts.base}..${head}`);
+  } else if (opts.changedSince) {
+    args.push(opts.changedSince);
+  } else {
+    return "";
+  }
+  args.push("--");
   try {
-    const args = [
-      "diff",
-      "--unified=0",
-      "--no-color",
-      "--diff-filter=ACDMRTUXB",
-    ];
-    if (opts.base) {
-      const head = opts.head ?? "HEAD";
-      args.push(`${opts.base}..${head}`);
-    } else if (opts.changedSince) {
-      args.push(opts.changedSince);
-    } else {
-      return "";
-    }
-    args.push("--");
     const { stdout } = await execFileAsync("git", args, {
       cwd: projectRoot,
       env: process.env,
     });
     return stdout;
-  } catch {
-    return "";
+  } catch (error) {
+    throw createGitDiffError(projectRoot, args, error);
   }
+}
+
+function createGitDiffError(
+  projectRoot: string,
+  args: string[],
+  error: unknown,
+): Error {
+  let detail = stringifyUnknown(error);
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "stderr" in error &&
+    typeof error.stderr === "string" &&
+    error.stderr.trim()
+  ) {
+    detail = error.stderr.trim();
+  }
+  return new Error(
+    `git ${args.join(" ")} failed in ${projectRoot}: ${detail}`,
+  );
 }
 
 async function findPythonPackageAnchor(startDir: string): Promise<string> {

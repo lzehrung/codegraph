@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach, vi } from "vitest";
+import type { ICodeReviewSession } from "../src/index.js";
 import {
   CodeReviewSession,
   SessionManager,
@@ -39,6 +40,18 @@ describe("CodeReviewSession", () => {
     expect(stats.symbolCount).toBeGreaterThan(0);
     expect(stats.lastActivity).toBeInstanceOf(Date);
     expect(stats.timeUntilExpiration).toBeGreaterThan(0);
+  });
+
+  test("should expose analyzeImpactStream on the session interface", async () => {
+    const session = await createCodeReviewSession({
+      root: sampleRoot,
+      buildOptions: { cache: "memory", useBloomFilters: true },
+    });
+
+    const typedSession = ((value: ICodeReviewSession) => value)(session);
+
+    expect(typedSession.isReady()).toBe(true);
+    expect(typedSession.analyzeImpactStream).toBeTypeOf("function");
   });
 
   test("should find references using cached index", async () => {
@@ -193,6 +206,61 @@ describe("SessionManager", () => {
     });
 
     expect(session1).toBe(session2);
+  });
+
+  test("should share one initialization across concurrent same-id creation", async () => {
+    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental");
+
+    try {
+      const [sessionA, sessionB] = await Promise.all([
+        manager.getOrCreateSession("shared", {
+          root: sampleRoot,
+          buildOptions: { cache: "memory", useBloomFilters: true },
+        }),
+        manager.getOrCreateSession("shared", {
+          root: sampleRoot,
+          buildOptions: { cache: "memory", useBloomFilters: true },
+        }),
+      ]);
+
+      expect(sessionA).toBe(sessionB);
+      expect(manager.getSession("shared")).toBe(sessionA);
+      expect(manager.getSessionIds()).toEqual(["shared"]);
+      expect(buildSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      buildSpy.mockRestore();
+    }
+  });
+
+  test("should not repopulate a session disposed during initialization", async () => {
+    const originalBuild = indexer.buildProjectIndexIncremental;
+    let releaseBuild: (() => void) | null = null;
+    const buildGate = new Promise<void>((resolve) => {
+      releaseBuild = resolve;
+    });
+    const buildSpy = vi
+      .spyOn(indexer, "buildProjectIndexIncremental")
+      .mockImplementation(async (...args) => {
+        await buildGate;
+        return await originalBuild(...args);
+      });
+
+    try {
+      const pendingSession = manager.getOrCreateSession("pending", {
+        root: sampleRoot,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+
+      await Promise.resolve();
+      manager.disposeSession("pending");
+      releaseBuild?.();
+
+      await expect(pendingSession).rejects.toThrow(/disposed during initialization/);
+      expect(manager.getSession("pending")).toBeUndefined();
+      expect(manager.getSessionIds()).toEqual([]);
+    } finally {
+      buildSpy.mockRestore();
+    }
   });
 
   test("should not retain failed getOrCreate sessions", async () => {
