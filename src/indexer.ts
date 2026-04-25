@@ -705,6 +705,74 @@ function ensureJsonModule(modules: Map<FileId, ModuleIndex>, filePath: string) {
   modules.set(normalized, mod);
 }
 
+function expandStarImports(modules: Map<FileId, ModuleIndex>): void {
+  const importAlreadyPresent = (
+    imports: ImportBinding[],
+    candidate: ImportBinding,
+  ): boolean =>
+    imports.some((existing) => {
+      if (existing.kind !== candidate.kind) return false;
+      if (existing.from !== candidate.from) return false;
+      if (existing.resolved !== candidate.resolved) return false;
+      if ((existing.typeOnly ?? false) !== (candidate.typeOnly ?? false)) {
+        return false;
+      }
+      if (candidate.kind === "named" && existing.kind === "named") {
+        return (
+          existing.local === candidate.local &&
+          existing.imported === candidate.imported
+        );
+      }
+      if (candidate.kind === "namespace" && existing.kind === "namespace") {
+        return existing.localNS === candidate.localNS;
+      }
+      return false;
+    });
+
+  for (const mod of modules.values()) {
+    for (const imp of [...mod.imports]) {
+      if (imp.kind !== "star" || typeof imp.resolved !== "string") continue;
+      const target = modules.get(imp.resolved);
+      if (!target) continue;
+      const targetSup = supportForFile(imp.resolved);
+      const exportedSymbols =
+        target.exports.filter((entry) => entry.type === "local").length > 0
+          ? target.exports
+              .filter(
+                (entry): entry is Extract<ExportEntry, { type: "local" }> =>
+                  entry.type === "local",
+              )
+              .map((entry) => entry.target)
+          : target.locals.filter((local) => !local.localName.startsWith("_"));
+      const seen = new Set<string>();
+      for (const sym of exportedSymbols) {
+        if (!sym.localName || seen.has(sym.localName)) continue;
+        seen.add(sym.localName);
+        const treatAsNamespace =
+          targetSup?.id === "ruby" && sym.kind === SymbolKind.Class;
+        const expandedImport: ImportBinding = treatAsNamespace
+          ? {
+              kind: "namespace",
+              localNS: sym.localName,
+              from: imp.from,
+              resolved: imp.resolved,
+              ...(imp.typeOnly !== undefined ? { typeOnly: imp.typeOnly } : {}),
+            }
+          : {
+              kind: "named",
+              local: sym.localName,
+              imported: sym.localName,
+              from: imp.from,
+              resolved: imp.resolved,
+              ...(imp.typeOnly !== undefined ? { typeOnly: imp.typeOnly } : {}),
+            };
+        if (importAlreadyPresent(mod.imports, expandedImport)) continue;
+        mod.imports.push(expandedImport);
+      }
+    }
+  }
+}
+
 export function goToDefinitionById(
   index: ProjectIndex,
   id: SymbolHandle,
@@ -4292,50 +4360,7 @@ async function buildIndexFromFileListShared(
       ensureJsonModule(modules, jsonPath);
     }
 
-    for (const [_file, mod] of modules) {
-      for (const imp of [...mod.imports]) {
-        if (imp.kind === "star" && typeof imp.resolved === "string") {
-          const target = modules.get(imp.resolved);
-          if (!target) continue;
-          const targetSup =
-            typeof imp.resolved === "string"
-              ? supportForFile(imp.resolved)
-              : null;
-          const exported =
-            target.exports.filter((e) => e.type === "local").length > 0
-              ? target.exports
-                  .filter(
-                    (e): e is Extract<ExportEntry, { type: "local" }> =>
-                      e.type === "local",
-                  )
-                  .map((e) => e.target)
-              : target.locals.filter((l) => !l.localName.startsWith("_"));
-          const seen = new Set<string>();
-          for (const sym of exported) {
-            if (!sym.localName || seen.has(sym.localName)) continue;
-            seen.add(sym.localName);
-            const treatAsNamespace =
-              targetSup?.id === "ruby" && sym.kind === SymbolKind.Class;
-            if (treatAsNamespace) {
-              mod.imports.push({
-                kind: "namespace",
-                localNS: sym.localName,
-                from: imp.from,
-                resolved: imp.resolved,
-              });
-            } else {
-              mod.imports.push({
-                kind: "named",
-                local: sym.localName,
-                imported: sym.localName,
-                from: imp.from,
-                resolved: imp.resolved,
-              });
-            }
-          }
-        }
-      }
-    }
+    expandStarImports(modules);
 
     if (manifestEntries && manifestEntries.size > 0) {
       const writeManifestStart = performance.now();
@@ -4938,30 +4963,7 @@ export async function buildProjectIndexIncremental(
         ensureJsonModule(modules, jsonPath);
       }
 
-      for (const [_file, m] of modules) {
-        for (const imp of [...m.imports]) {
-          if (imp.kind === "star" && typeof imp.resolved === "string") {
-            const target = modules.get(imp.resolved);
-            if (target) {
-              let exported: string[] = [];
-              const viaAll = target.exports.filter((e) => e.type === "local");
-              if (viaAll.length) exported = viaAll.map((e) => e.exportedAs);
-              else
-                exported = target.locals
-                  .map((l) => l.localName)
-                  .filter((n) => !n.startsWith("_"));
-              for (const name of exported)
-                m.imports.push({
-                  kind: "named",
-                  local: name,
-                  imported: name,
-                  from: imp.from,
-                  resolved: imp.resolved,
-                });
-            }
-          }
-        }
-      }
+      expandStarImports(modules);
 
       const cachedGraphEntries = new Map<string, ManifestFileEntry>(
         Object.entries(manifest.files ?? {}).filter(
@@ -6441,42 +6443,67 @@ function extractEnclosingBlock(
 
   // Climb to find an enclosing block (function, class, etc.)
   let current = node;
-  const isBlockType = (type: string) => {
-    // TypeScript/JavaScript block types
-    if (sup.id === "ts" || sup.id === "js") {
-      return [
-        "function_declaration",
-        "method_definition",
-        "class_declaration",
-        "arrow_function",
-        "function_expression",
-        "statement_block",
-        "class_body",
-      ].includes(type);
+  let genericCandidate: SyntaxNodeLike | null = null;
+  const isRootLikeNode = (type: string): boolean =>
+    type === "program" ||
+    type === "module" ||
+    type === "source_file" ||
+    type === "document";
+  const blockTypePriority = (type: string): number => {
+    if (sup.id === "ts" || sup.id === "tsx" || sup.id === "js") {
+      if (
+        type === "function_declaration" ||
+        type === "method_definition" ||
+        type === "class_declaration" ||
+        type === "arrow_function" ||
+        type === "function_expression"
+      ) {
+        return 2;
+      }
+      if (type === "statement_block" || type === "class_body") {
+        return 1;
+      }
+      return 0;
     }
-    // Python block types
     if (sup.id === "python") {
-      return ["function_definition", "class_definition", "suite"].includes(
-        type,
-      );
+      if (type === "function_definition" || type === "class_definition") {
+        return 2;
+      }
+      if (type === "suite") {
+        return 1;
+      }
+      return 0;
     }
-    return false;
+    return 0;
   };
 
-  while (current && !isBlockType(current.type)) {
+  let bestBlockNode: SyntaxNodeLike | null = null;
+  let bestBlockPriority = 0;
+  while (current) {
+    const priority = blockTypePriority(current.type);
+    if (priority > bestBlockPriority) {
+      bestBlockNode = current;
+      bestBlockPriority = priority;
+      if (priority >= 2) break;
+    }
+    if (!isRootLikeNode(current.type) && current.startPosition.row !== current.endPosition.row) {
+      genericCandidate = current;
+    }
     const parent = current.parent;
     if (!parent) break;
     current = parent;
   }
 
-  if (!current)
+  const blockNode = bestBlockNode ?? genericCandidate;
+
+  if (!blockNode)
     return extractLineContext(
       source,
       range.start.line,
       DEFAULT_REF_CONTEXT_LINES,
     ); // fallback to line context
 
-  const blockText = sliceText(current, source);
+  const blockText = sliceText(blockNode, source);
   const blockLines = blockText.split(/\r?\n/);
 
   // If block is too long, truncate it

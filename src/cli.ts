@@ -2289,7 +2289,7 @@ Examples:
         writeStdoutLine(`Impact Analysis Report`);
         writeStdoutLine(`======================`);
         if (impactReport.warning) {
-          writeStdoutLine(`⚠️  WARNING: ${impactReport.warning}`);
+          writeStdoutLine(`WARNING: ${impactReport.warning}`);
           writeStdoutLine(``);
         }
         writeStdoutLine(`Changed files: ${impactReport.changedFiles.length}`);

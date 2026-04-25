@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import os from "node:os";
+import fsp from "node:fs/promises";
 
 const tsxCliPath = path.resolve(
   process.cwd(),
@@ -9,6 +11,7 @@ const tsxCliPath = path.resolve(
   "dist",
   "cli.mjs",
 );
+const codegraphCliPath = path.resolve(process.cwd(), "src", "cli.ts");
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples", "typescript");
 const impactDiff = `diff --git a/utils.ts b/utils.ts
 index 1234567..abcdef0 100644
@@ -28,10 +31,23 @@ index 1234567..abcdef0 100644
 +export const IMPACT_FLAG = "impact";
 `;
 
-function runImpactCli(args: string[]) {
+function runGit(root: string, args: string[]): string {
+  const result = spawnSync("git", args, {
+    cwd: root,
+    env: process.env,
+    encoding: "utf8",
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(" ")} failed (${result.status}): ${result.stderr}`);
+  }
+  return result.stdout.trim();
+}
+
+function runImpactCli(args: string[], opts?: { cwd?: string; stdin?: string }) {
   return new Promise<string>((resolve, reject) => {
-    const child = spawn(process.execPath, [tsxCliPath, "src/cli.ts", ...args], {
-      cwd: process.cwd(),
+    const child = spawn(process.execPath, [tsxCliPath, codegraphCliPath, ...args], {
+      cwd: opts?.cwd ?? process.cwd(),
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
@@ -42,7 +58,11 @@ function runImpactCli(args: string[]) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
     });
-    child.stdin.write(impactDiff);
+    if (opts && Object.hasOwn(opts, "stdin")) {
+      child.stdin.write(opts.stdin);
+    } else {
+      child.stdin.write(impactDiff);
+    }
     child.stdin.end();
     child.on("error", reject);
     child.on("exit", (code) => {
@@ -100,4 +120,48 @@ describe("impact CLI output", () => {
     expect(stdout).toContain("utils.ts");
     expect(stdout).not.toContain("helpers.ts");
   });
+
+  it("prints ASCII warnings in pretty mode for large git diffs", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-cli-warning-"));
+    try {
+      runGit(root, ["init"]);
+      runGit(root, ["config", "user.email", "impact@test.local"]);
+      runGit(root, ["config", "user.name", "Codegraph Bot"]);
+
+      const filePath = path.join(root, "notes.txt");
+      await fsp.writeFile(filePath, "seed\n", "utf8");
+      runGit(root, ["add", "."]);
+      runGit(root, ["commit", "-m", "initial"]);
+
+      const largeBody = Array.from({ length: 50001 }, (_, i) => `line ${i}`).join("\n");
+      await fsp.writeFile(filePath, `${largeBody}\n`, "utf8");
+      runGit(root, ["add", "notes.txt"]);
+      runGit(root, ["commit", "-m", "large"]);
+
+      const base = runGit(root, ["rev-parse", "HEAD^"]);
+      const head = runGit(root, ["rev-parse", "HEAD"]);
+
+      const stdout = await runImpactCli(
+        [
+          "impact",
+          "--root",
+          root,
+          "--provider",
+          "git",
+          "--base",
+          base,
+          "--head",
+          head,
+          "--pretty",
+        ],
+        { cwd: root, stdin: "" },
+      );
+
+      expect(stdout).toContain("WARNING: Large diff detected");
+      expect(stdout).not.toContain("⚠");
+      expect(stdout).not.toContain("âš");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  }, 30000);
 });
