@@ -127,7 +127,7 @@ Sample graph: [sample-graph.md](./sample-graph.md)
 * **Vue / Svelte SFCs** (`.vue`, `.svelte`) - script blocks are parsed with the JS/TS pipeline for dependency graphs and chunking, while semantic navigation remains intentionally limited.
 
 Each listed language or graph-first format participates in the shared indexing pipeline for the capabilities it supports.
-When the native addon is available, all listed source languages use the same native Tree-sitter runtime and query model; unsupported capabilities can fall back through the optional `@lzehrung/codegraph-js-fallback` package when it is installed.
+When the native addon is available, all listed source languages use the same native Tree-sitter runtime and query model. The optional `@lzehrung/codegraph-js-fallback` package is only needed for forced JS fallback mode or JS query recovery paths; missing fallback support is reported once and import extraction degrades to regex where supported.
 The regression suite covers deeper syntax variants and end-to-end native semantic parity for the source-language fixture set, plus graph/specifier parity for the graph-first product types.
 See the coverage matrix in [docs/language-parity.md](./docs/language-parity.md).
 
@@ -282,6 +282,7 @@ Use this path when you are developing on codegraph itself. `npm run build` now a
 * Published installs do not require Rust or a manual native setup step on supported targets
 * Local source checkouts do not require Rust just to build `dist/`, but the native workspace addon only builds when Cargo is available
 * If no compatible native artifact is available, install `@lzehrung/codegraph-js-fallback` to enable the opt-in JS Tree-sitter fallback path
+* Native-only installs do not need `@lzehrung/codegraph-js-fallback` for normal JS/TS import extraction; regex recovery is used as the final degraded path when query recovery is unavailable
 * Native runtime mode defaults to `auto`
 * Set `CODEGRAPH_DISABLE_NATIVE=1` to make `auto` prefer the optional JS Tree-sitter fallback path by default when `@lzehrung/codegraph-js-fallback` is installed
 * The CLI, library, and agent-tool wrappers also accept explicit native runtime overrides: `auto`, `on`, `off`
@@ -295,7 +296,7 @@ Use this path when you are developing on codegraph itself. `npm run build` now a
 
 After installing the package, use the `codegraph` CLI:
 
-The CLI defaults to `--native auto`, which uses the native Tree-sitter path when a compatible native artifact is available and falls back automatically otherwise. Use `--native on` to require native explicitly, or `--native off` to force the optional JS Tree-sitter fallback path for comparison and debugging when `@lzehrung/codegraph-js-fallback` is installed.
+The CLI defaults to `--native auto`, which uses the native Tree-sitter path when a compatible native artifact is available and falls back automatically otherwise. Use `--native on` to require native explicitly and fail if it is unavailable, or `--native off` to force the optional JS Tree-sitter fallback path for comparison and debugging when `@lzehrung/codegraph-js-fallback` is installed.
 
 ```bash
 # File dependency graph only (default; no symbols)
@@ -406,7 +407,7 @@ npm run bench:native
 # Benchmark output reports processed file count and resulting graph node count separately for graph workloads.
 # Smoke-check the cold full indexing path with a coarse slowdown guard
 npm run bench:native:smoke
-# Reports include graph.fallbackImportExtraction when regex fallback import extraction is used.
+# Reports include graph.fallbackImportExtraction when regex fallback import extraction is used, including by-language and by-reason counters.
 # Graph, index, and review reports include backend.native with byLanguage counters so you can see where native Tree-sitter was used, where it fell back, and which query kinds were normalized or skipped.
 
 # Analyze PR impact: map diffs to symbols and find affected code
@@ -694,7 +695,7 @@ Viewer features:
 
 - Native Tree-sitter acceleration:
   - `npm run build` now attempts the local native workspace build when Cargo is available. Use `npm run build:native` when you want native-only rebuilds or a hard failure if Rust is missing.
-  - When the addon is present, Codegraph runs supported Tree-sitter parse/query work in Rust and falls back through `@lzehrung/codegraph-native`'s JS path automatically if the addon or a query is unavailable.
+  - When the addon is present, Codegraph runs supported Tree-sitter parse/query work in Rust. If native mode is `auto`, unavailable query recovery paths can degrade through the optional JS fallback package or final regex import extraction; if native mode is `on`, a missing native addon is a hard error.
   - **Worker threads** (`--workers`): When combined with the native addon, offloads per-file Rust extraction to a Piscina worker pool. Each worker thread gets its own isolated parser and query cache via Rust `thread_local!` storage. SFC files (Vue/Svelte/Astro) are excluded from worker dispatch because they need source preprocessing on the main thread.
     ```bash
     codegraph index --workers --threads 8
@@ -725,7 +726,7 @@ Viewer features:
 
 Minimal TypeScript/ESM examples. Import only from `@lzehrung/codegraph` and call the API directly.
 
-The library defaults to `native: "auto"`, which uses the native Tree-sitter path when `@lzehrung/codegraph-native` is installed for the current platform and falls back automatically otherwise. Override that per call with `native: "on"` or `native: "off"`.
+The library defaults to `native: "auto"`, which uses the native Tree-sitter path when `@lzehrung/codegraph-native` is installed for the current platform and falls back automatically otherwise. Override that per call with `native: "on"` or `native: "off"`; `native: "on"` requires the native addon and raises an error if it cannot be loaded.
 
 ```ts
 import { buildProjectIndex } from "@lzehrung/codegraph";

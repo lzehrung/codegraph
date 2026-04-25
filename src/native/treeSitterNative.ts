@@ -110,10 +110,7 @@ type NativeBinding = {
     languageId: string,
     queryText: string,
   ) => { matches: NativeMatch[] };
-  parseSyntaxTree?: (
-    source: string,
-    languageId: string,
-  ) => NativeSyntaxTree;
+  parseSyntaxTree?: (source: string, languageId: string) => NativeSyntaxTree;
   supportedLanguageIds: () => string[];
 };
 
@@ -244,7 +241,7 @@ export function getCachedNormalizedQuery(
 
 /**
  * Returns true when the native query for this (support, kind) differs from
- * the original JS query — meaning the language has grammar divergence and
+ * the original JS query - meaning the language has grammar divergence and
  * empty native results should NOT be treated as authoritative.
  */
 export function isNativeQueryModified(
@@ -272,10 +269,7 @@ export function getNativeQueryMetadataForSupport(support: LanguageSupport): {
       kind,
       originalQuery,
     );
-    if (
-      originalQuery.trim().length > 0 &&
-      normalized.trim().length === 0
-    ) {
+    if (originalQuery.trim().length > 0 && normalized.trim().length === 0) {
       skippedQueryKinds.push(kind);
     }
   }
@@ -315,6 +309,25 @@ export function runNativeLanguageQueries(
 type NativeBindingState =
   | { loaded: true; binding: NativeBinding; supportedLanguageIds: Set<string> }
   | { loaded: false; error?: unknown };
+
+const NATIVE_REQUIRED_ERROR_PREFIX =
+  "native tree-sitter required by explicit option but unavailable";
+
+export function isNativeRequiredUnavailableError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.startsWith(NATIVE_REQUIRED_ERROR_PREFIX)
+  );
+}
+
+function throwIfNativeRequiredUnavailable(
+  mode: NativeRuntimeMode | undefined,
+  state: NativeBindingState,
+): void {
+  if (normalizeNativeRuntimeMode(mode) !== "on" || state.loaded) return;
+  const suffix = state.error ? `: ${stringifyUnknown(state.error)}` : "";
+  throw new Error(`${NATIVE_REQUIRED_ERROR_PREFIX}${suffix}`);
+}
 
 export function getNativeQueryExecutionForState(
   source: string,
@@ -366,12 +379,9 @@ export function getNativeQueryExecution(
   mode?: NativeRuntimeMode,
   scope: NativeQueryScope = "full",
 ): NativeQueryExecution {
-  return getNativeQueryExecutionForState(
-    source,
-    support,
-    resolveNativeBindingState(mode),
-    scope,
-  );
+  const state = resolveNativeBindingState(mode);
+  throwIfNativeRequiredUnavailable(mode, state);
+  return getNativeQueryExecutionForState(source, support, state, scope);
 }
 
 export type CompactImportsExecution = {
@@ -410,6 +420,7 @@ export function getCompactImportsExecution(
   mode?: NativeRuntimeMode,
 ): CompactImportsExecution {
   const state = resolveNativeBindingState(mode);
+  throwIfNativeRequiredUnavailable(mode, state);
   if (!state.loaded) {
     return {
       results: null,
@@ -439,7 +450,12 @@ export function getCompactImportsExecution(
       };
     }
     // Fallback: use full execution with imports scope
-    const full = getNativeQueryExecutionForState(source, support, state, "imports");
+    const full = getNativeQueryExecutionForState(
+      source,
+      support,
+      state,
+      "imports",
+    );
     if (!full.results) return full;
     return {
       results: {
@@ -465,6 +481,7 @@ export function getNativeSingleQueryExecution(
   mode?: NativeRuntimeMode,
 ): NativeSingleQueryExecution {
   const state = resolveNativeBindingState(mode);
+  throwIfNativeRequiredUnavailable(mode, state);
   if (!state.loaded) {
     return {
       matches: null,
@@ -564,8 +581,7 @@ export function getUnifiedQueryExecution(
     return {
       matches: null,
       backend: "js",
-      fallbackReason:
-        nativeExecution.fallbackReason ?? "queryFailure",
+      fallbackReason: nativeExecution.fallbackReason ?? "queryFailure",
       error: error instanceof Error ? error.message : String(error),
     };
   }
@@ -577,6 +593,7 @@ export function getNativeSyntaxTreeExecution(
   mode?: NativeRuntimeMode,
 ): NativeSyntaxTreeExecution {
   const state = resolveNativeBindingState(mode);
+  throwIfNativeRequiredUnavailable(mode, state);
   if (!state.loaded) {
     return {
       tree: null,

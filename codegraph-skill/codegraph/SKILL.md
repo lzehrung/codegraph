@@ -7,7 +7,7 @@ description: Static code analysis and dependency graph tool for deep codebase un
 
 ## Overview
 
-Codegraph is a lightweight multi-language code analysis tool that builds dependency graphs, symbol indexes, go-to-definition maps, and PR impact reports. It uses one shared Tree-sitter model across languages, plus graph-first text extraction for document and template formats like Markdown, MDX, Astro, Handlebars, reStructuredText, and AsciiDoc. Native runtime mode defaults to `auto`: Codegraph resolves parse/query work through `@lzehrung/codegraph-native`, using the native addon when available and the separate opt-in `@lzehrung/codegraph-js-fallback` package when native is unavailable or explicitly disabled.
+Codegraph is a lightweight multi-language code analysis tool that builds dependency graphs, symbol indexes, go-to-definition maps, and PR impact reports. It uses one shared Tree-sitter model across languages, plus graph-first text extraction for document and template formats like Markdown, MDX, Astro, Handlebars, reStructuredText, and AsciiDoc. Native runtime mode defaults to `auto`: Codegraph resolves parse/query work through `@lzehrung/codegraph-native`, using the native addon when available and the separate opt-in `@lzehrung/codegraph-js-fallback` package only when native is unavailable, explicitly disabled, or needed for JS query recovery.
 
 ## Installation Notes
 
@@ -21,6 +21,7 @@ Codegraph is a lightweight multi-language code analysis tool that builds depende
 - For source checkouts, `npm run build` always rebuilds `dist/` and attempts the local native addon when Cargo is available. Use `npm run build:native` when you want a native-only rebuild or a hard failure if Rust is missing.
 - Install the optional fallback package only when you explicitly need JS Tree-sitter fallback:
   `npm install @lzehrung/codegraph-js-fallback --legacy-peer-deps`
+- Native-only installs do not need the JS fallback package for normal JS/TS import extraction. If JS query recovery is unavailable, Codegraph reports that once per language/reason and uses regex import extraction as the final degraded path where supported.
 - Global default override: `CODEGRAPH_DISABLE_NATIVE=1`
 - Explicit CLI/library/tool `native` options take precedence over `CODEGRAPH_DISABLE_NATIVE`
 
@@ -82,7 +83,7 @@ The CLI also ships a bundled skill installer:
   `codegraph graph --report`
   `codegraph index --report`
   `codegraph review --report --report-file review.report.json`
-  Graph, index, and review reports include `backend.native.byLanguage` so native usage and fallback are visible per language.
+  Graph, index, and review reports include `backend.native.byLanguage` so native usage and fallback are visible per language. Reports also include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used.
 - Explicit native runtime control:
   `codegraph graph --native off`
   `codegraph index --native on --report`
@@ -140,7 +141,7 @@ const jsOnlyIndex = await buildProjectIndex(root, { native: "off" });
 const workerIndex = await buildProjectIndex(root, { useNativeWorkers: true });
 ```
 
-There is no separate native import. Use `native: "auto" | "on" | "off"` in public API calls to control native usage explicitly. `native: "off"` means the opt-in JS fallback path and requires `@lzehrung/codegraph-js-fallback`.
+There is no separate native import. Use `native: "auto" | "on" | "off"` in public API calls to control native usage explicitly. `native: "on"` fails if the native addon cannot be loaded. `native: "off"` means the opt-in JS fallback path and requires `@lzehrung/codegraph-js-fallback`.
 
 Agent-tool wrappers accept the same control as a trailing runtime option, for example:
 
