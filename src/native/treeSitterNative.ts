@@ -8,7 +8,10 @@ import {
   type JsSyntaxTree,
 } from "../jsFallback.js";
 import type { LanguageSupport } from "../languages.js";
-import type { NativeQueryKind } from "../languages/types.js";
+import type {
+  NativeCompatibilityQueryKind,
+  NativeQueryKind,
+} from "../languages/types.js";
 import { stringifyUnknown } from "../util.js";
 import { loadNativeBinding } from "./bindingLoader.js";
 
@@ -192,7 +195,7 @@ function resolveNativeBindingState(
 
 export function normalizeNativeQueryForSupport(
   support: LanguageSupport,
-  kind: NativeQueryKind,
+  kind: NativeCompatibilityQueryKind,
   queryText: string,
 ): string {
   return support.native?.normalizeQuery?.(kind, queryText) ?? queryText;
@@ -520,9 +523,15 @@ export function getNativeSingleQueryExecution(
       error: "native binding does not expose runQuery",
     };
   }
+  const normalizedQuery = normalizeNativeQueryForSupport(
+    support,
+    "adHoc",
+    queryText,
+  );
   try {
     return {
-      matches: state.binding.runQuery(source, support.id, queryText).matches,
+      matches: state.binding.runQuery(source, support.id, normalizedQuery)
+        .matches,
     };
   } catch (error) {
     return {
