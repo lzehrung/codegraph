@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
 import { analyzeImpact, seedTransitiveFromFiles, calculateSeverity } from "../src/impact/analyzer.js";
+import { DEFAULT_SEVERITY_WEIGHTS } from "../src/impact/types.js";
 import { SymbolKind } from "../src/indexer.js";
 import type { ProjectIndex } from "../src/indexer.js";
 import type { Edge } from "../src/types.js";
@@ -459,6 +460,76 @@ describe("Impact Analyzer Edge Cases", () => {
       // Both should be 1.0 due to clamping, but high fan-in should be marked in explain
       expect(highFanInResult.severity).toBe(1.0);
       expect(lowFanInResult.severity).toBe(1.0);
+    });
+
+    it("should reject invalid severity weights instead of silently repairing them", () => {
+      const mockIndex = {
+        graph: { edges: [] },
+        byFile: new Map()
+      };
+
+      const changedSymbol = {
+        id: "test.ts::func::100",
+        file: "test.ts",
+        name: "func",
+        kind: SymbolKind.Function,
+        exported: false,
+        range: { start: { line: 1, column: 1, index: 100 }, end: { line: 3, column: 2, index: 150 } },
+        typeOnly: false
+      };
+
+      const ref = {
+        file: "user.ts",
+        range: { start: { line: 5, column: 10 } }
+      };
+
+      expect(() =>
+        calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndex, undefined, {
+          ...DEFAULT_SEVERITY_WEIGHTS,
+          depthDecay: 1,
+          sameFile: -1
+        }),
+      ).toThrow(/Invalid severity weights/);
+    });
+
+    it("should use the cached graph fan-in fallback when no fan-in map is provided", () => {
+      const mockIndex = {
+        graph: {
+          edges: [
+            { to: { type: "file", path: "user.ts" } },
+            { to: { type: "file", path: "user.ts" } }
+          ]
+        },
+        byFile: new Map()
+      };
+
+      const changedSymbol = {
+        id: "test.ts::func::100",
+        file: "test.ts",
+        name: "func",
+        kind: SymbolKind.Function,
+        exported: false,
+        range: { start: { line: 1, column: 1, index: 100 }, end: { line: 3, column: 2, index: 150 } },
+        typeOnly: false
+      };
+
+      const ref = {
+        file: "user.ts",
+        range: { start: { line: 5, column: 10 } }
+      };
+
+      const fallbackResult = calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndex);
+      const explicitFanInResult = calculateSeverity(
+        changedSymbol,
+        ref,
+        ["directRef"],
+        0,
+        mockIndex,
+        new Map([["user.ts", 2]])
+      );
+
+      expect(fallbackResult.explain.fanIn).toBe(2);
+      expect(fallbackResult).toEqual(explicitFanInResult);
     });
   });
 
