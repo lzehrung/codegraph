@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
@@ -7,27 +8,35 @@ import os from "node:os";
 const rootDir = path.resolve(__dirname, "..");
 const benchScript = path.join(rootDir, "scripts", "bench-native.mjs");
 const distEntry = path.join(rootDir, "dist", "index.js");
+const longBenchTimeoutMs = 70_000;
 
-const hasDist = fs.existsSync(distEntry);
-const benchDescribe = hasDist ? describe : describe.skip;
+function runBench(args: string[], timeout = 60_000): string {
+  return execFileSync(process.execPath, [benchScript, ...args], {
+    cwd: rootDir,
+    encoding: "utf8",
+    timeout,
+  });
+}
 
-benchDescribe("bench-native harness", () => {
+describe("bench-native harness", () => {
+  beforeAll(() => {
+    if (!fs.existsSync(distEntry)) {
+      throw new Error(
+        "bench-native harness requires dist/index.js; run npm run build before this suite.",
+      );
+    }
+  });
+
   it("runs a single-fixture smoke benchmark and produces JSON output", () => {
-    const output = execFileSync(
-      process.execPath,
+    const output = runBench(
       [
-        benchScript,
         "--runs=1",
         "--fixtures=typescript",
         "--workloads=graph",
         "--temperatures=cold",
         "--json",
       ],
-      {
-        cwd: rootDir,
-        encoding: "utf8",
-        timeout: 60_000,
-      },
+      60_000,
     );
     const parsed = JSON.parse(output);
     expect(parsed.runs).toBe(1);
@@ -44,13 +53,11 @@ benchDescribe("bench-native harness", () => {
 
   it("saves and loads baselines", () => {
     const baselinesDir = path.join(rootDir, ".bench-baselines");
-    const baselineName = `test-harness-${process.pid}`;
+    const baselineName = `test-harness-${process.pid}-${randomUUID()}`;
     const baselineFile = path.join(baselinesDir, `${baselineName}.json`);
     try {
-      execFileSync(
-        process.execPath,
+      runBench(
         [
-          benchScript,
           "--runs=1",
           "--fixtures=typescript",
           "--workloads=graph",
@@ -58,11 +65,7 @@ benchDescribe("bench-native harness", () => {
           `--save-baseline=${baselineName}`,
           "--json",
         ],
-        {
-          cwd: rootDir,
-          encoding: "utf8",
-          timeout: 60_000,
-        },
+        60_000,
       );
 
       expect(fs.existsSync(baselineFile)).toBe(true);
@@ -72,21 +75,15 @@ benchDescribe("bench-native harness", () => {
       expect(baseline.results).toHaveLength(1);
 
       // Compare against itself
-      const compareOutput = execFileSync(
-        process.execPath,
+      const compareOutput = runBench(
         [
-          benchScript,
           "--runs=1",
           "--fixtures=typescript",
           "--workloads=graph",
           "--temperatures=cold",
           `--compare-baseline=${baselineName}`,
         ],
-        {
-          cwd: rootDir,
-          encoding: "utf8",
-          timeout: 60_000,
-        },
+        60_000,
       );
       expect(compareOutput).toContain("Comparing against baseline:");
       expect(compareOutput).toContain(baselineName);
@@ -107,69 +104,41 @@ benchDescribe("bench-native harness", () => {
 
   it("rejects unknown fixture names", () => {
     expect(() =>
-      execFileSync(
-        process.execPath,
-        [benchScript, "--fixtures=nonexistent", "--runs=1"],
-        {
-          cwd: rootDir,
-          encoding: "utf8",
-          timeout: 10_000,
-        },
-      ),
+      runBench(["--fixtures=nonexistent", "--runs=1"], 10_000),
     ).toThrow();
   });
 
   it("rejects unknown workload names", () => {
     expect(() =>
-      execFileSync(
-        process.execPath,
-        [benchScript, "--workloads=invalid", "--runs=1"],
-        {
-          cwd: rootDir,
-          encoding: "utf8",
-          timeout: 10_000,
-        },
-      ),
+      runBench(["--workloads=invalid", "--runs=1"], 10_000),
     ).toThrow();
   });
 
   it("reports vs JS column in table output", () => {
-    const output = execFileSync(
-      process.execPath,
+    const output = runBench(
       [
-        benchScript,
         "--runs=1",
         "--fixtures=typescript",
         "--workloads=graph",
         "--temperatures=cold",
       ],
-      {
-        cwd: rootDir,
-        encoding: "utf8",
-        timeout: 60_000,
-      },
+      60_000,
     );
     expect(output).toContain("vs JS");
     // native row should have a speedup indicator
     expect(output).toMatch(/\d+(?:\.\d+)?x (faster|slower)/);
-  });
+  }, longBenchTimeoutMs);
 
   it("reports vs Native column when --workers is used", () => {
-    const output = execFileSync(
-      process.execPath,
+    const output = runBench(
       [
-        benchScript,
         "--runs=1",
         "--fixtures=typescript",
         "--workloads=full",
         "--temperatures=cold",
         "--workers",
       ],
-      {
-        cwd: rootDir,
-        encoding: "utf8",
-        timeout: 60_000,
-      },
+      60_000,
     );
     expect(output).toContain("vs Native");
     // workers row should show comparison against both JS and native
@@ -178,13 +147,11 @@ benchDescribe("bench-native harness", () => {
     expect(workersLine).toBeDefined();
     // workers line should contain at least one speedup/slowdown indicator
     expect(workersLine).toMatch(/\d+(?:\.\d+)?x (faster|slower)/);
-  });
+  }, longBenchTimeoutMs);
 
   it("produces JSON output with workers mode included", () => {
-    const output = execFileSync(
-      process.execPath,
+    const output = runBench(
       [
-        benchScript,
         "--runs=1",
         "--fixtures=typescript",
         "--workloads=full",
@@ -192,11 +159,7 @@ benchDescribe("bench-native harness", () => {
         "--workers",
         "--json",
       ],
-      {
-        cwd: rootDir,
-        encoding: "utf8",
-        timeout: 60_000,
-      },
+      60_000,
     );
     const parsed = JSON.parse(output);
     expect(parsed.results).toHaveLength(1);
@@ -204,27 +167,21 @@ benchDescribe("bench-native harness", () => {
     expect(result.workloads.full.cold.native.averageElapsedMs).toBeGreaterThan(0);
     expect(result.workloads.full.cold.js.averageElapsedMs).toBeGreaterThan(0);
     expect(result.workloads.full.cold.workers.averageElapsedMs).toBeGreaterThan(0);
-  });
+  }, longBenchTimeoutMs);
 
   it("enforces --max-slowdown threshold", () => {
     // max-slowdown of 0.001 should always fail since native can't be 1000x faster
     expect(() =>
-      execFileSync(
-        process.execPath,
+      runBench(
         [
-          benchScript,
           "--runs=1",
           "--fixtures=typescript",
           "--workloads=graph",
           "--temperatures=cold",
           "--max-slowdown=0.001",
         ],
-        {
-          cwd: rootDir,
-          encoding: "utf8",
-          timeout: 60_000,
-        },
+        60_000,
       ),
     ).toThrow();
-  });
+  }, longBenchTimeoutMs);
 });
