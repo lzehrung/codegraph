@@ -21,7 +21,7 @@ Codegraph is a lightweight multi-language code analysis tool that builds depende
 - For source checkouts, `npm run build` always rebuilds `dist/` and attempts the local native addon when Cargo is available, but it falls back to the JavaScript build output with a warning if the native workspace build is unavailable or fails. Use `npm run build:native` when you want a native-only rebuild or a hard failure if Rust is missing.
 - Install the optional fallback package only when you explicitly need JS Tree-sitter fallback:
   `npm install @lzehrung/codegraph-js-fallback --legacy-peer-deps`
-- Native-only installs do not need the JS fallback package for normal JS, TS, or TSX import extraction, symbol indexing, chunking, or AST grep. If JS-family query recovery degrades, Codegraph reports that once per language/reason in diagnostics and stays on native-owned recovery paths where supported.
+- Native-only installs do not need the JS fallback package for normal JS, TS, TSX, or Kotlin import extraction, symbol indexing, chunking, or AST grep. If JS-family query recovery degrades, Codegraph reports that once per language/reason in diagnostics and stays on native-owned recovery paths where supported.
 - Global default override: `CODEGRAPH_DISABLE_NATIVE=1`
 - Explicit CLI/library/tool `native` options take precedence over `CODEGRAPH_DISABLE_NATIVE`
 
@@ -83,7 +83,7 @@ The CLI also ships a bundled skill installer:
   `codegraph graph --report`
   `codegraph index --report`
   `codegraph review --report --report-file review.report.json`
-  Graph, index, and review reports include `backend.native.byLanguage` so native usage and fallback are visible per language. Reports also include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Review JSON also reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, and distinguishes `changedFiles[].status` as `updated`, `deleted`, or `missing`.
+  Graph, index, and review reports include `backend.native.byLanguage` so native usage and fallback are visible per language. Build reports also include `backend.parser` when syntax-tree backend degradation leaves files without parser context. Reports also include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Review JSON also reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, and distinguishes `changedFiles[].status` as `updated`, `deleted`, or `missing`.
 - Explicit native runtime control:
   `codegraph graph --native off`
   `codegraph index --native on --report`

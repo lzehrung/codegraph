@@ -225,6 +225,58 @@ describe("detailed symbol graph in native-only installs", () => {
     expect(querySpy).not.toHaveBeenCalled();
   });
 
+  it("recovers Kotlin alias imports without loading the JS fallback package", async () => {
+    const root = path.resolve(process.cwd(), "tests", "samples", "kotlin");
+    const entryFile = path.join(root, "Aliases.kt");
+    const depFile = path.join(root, "utils", "helperFunction.kt");
+
+    const parseSpy = vi.fn(() => {
+      throw new Error(
+        "JS Tree-sitter fallback is unavailable for Kotlin grammar loading. Install @lzehrung/codegraph-js-fallback to enable it",
+      );
+    });
+    const querySpy = vi.fn(() => {
+      throw new Error(
+        "JS Tree-sitter fallback is unavailable for JS query execution. Install @lzehrung/codegraph-js-fallback to enable it",
+      );
+    });
+
+    vi.resetModules();
+    vi.doMock("../src/jsFallback.js", async () => {
+      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>(
+        "../src/jsFallback.js",
+      );
+      return {
+        ...actual,
+        isJsFallbackAvailable: () => false,
+        parseWithJsLanguage: parseSpy,
+        executeJsQueryAsNativeMatches: querySpy,
+      };
+    });
+
+    const { collectImportsForFile, parseFile } = await import("../src/indexer.js");
+    const parsed = await parseFile(entryFile);
+    const imports = await collectImportsForFile(entryFile, root, {
+      source: parsed.source,
+      sup: parsed.sup,
+      lang: parsed.lang,
+      nativeQueries: parsed.nativeQueries,
+    });
+
+    expect(imports).toEqual([
+      {
+        kind: "named",
+        local: "RenamedUtilityClass",
+        imported: "UtilityClass",
+        from: "utils.UtilityClass",
+        resolved: normalizePath(depFile),
+        typeOnly: false,
+      },
+    ]);
+    expect(parseSpy).not.toHaveBeenCalled();
+    expect(querySpy).not.toHaveBeenCalled();
+  });
+
   it("indexes TypeScript locals and exports without loading the JS fallback package", async () => {
     const root = await mkTmpDir("cg-ts-index-native-only-");
     const entryFile = path.join(root, "entry.ts");

@@ -38,6 +38,9 @@ Goal: make the native backend the default and complete query owner for supported
 - [ ] Inventory every remaining `executeJsQueryAsNativeMatches` hot path and classify whether it is required for native-unavailable mode only or still needed in native-available mode.
   Acceptance criteria:
   The inventory is reflected in this plan and no hot path is left unclassified.
+- [x] Move Kotlin import/specifier extraction off JS query fallback in native-loaded mode.
+  Acceptance criteria:
+  Native-loaded Kotlin import and wildcard/alias specifier extraction stay authoritative without requiring `@lzehrung/codegraph-js-fallback`.
 - [ ] Remove native-available JS query fallback for supported source-language import/specifier extraction.
   Acceptance criteria:
   Native-loaded runs do not require JS query fallback for supported source languages; recovery stays native-owned or fails explicitly as unsupported.

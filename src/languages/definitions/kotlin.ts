@@ -2,17 +2,23 @@ import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
-function normalizeKotlinNativeQuery(_kind: string, query: string): string {
+function normalizeKotlinNativeQuery(kind: string, query: string): string {
+  if (kind === "imports") {
+    return `
+      (import (qualified_identifier) @mod) @stmt
+    `;
+  }
+  if (kind === "importBindings") {
+    return `
+      (import (qualified_identifier) @from (identifier) @alias) @stmt
+      (import (qualified_identifier) @from "*" @wild) @stmt
+      (import (qualified_identifier) @from) @stmt
+    `;
+  }
   let normalized = query
     .replace(/\bimport_header\b/g, "import")
     .replace(/\bsimple_identifier\b/g, "identifier")
     .replace(/\btype_identifier\b/g, "identifier");
-  if (
-    normalized.includes("import_alias") ||
-    normalized.includes("wildcard_import")
-  ) {
-    normalized = "";
-  }
   return normalized;
 }
 
@@ -153,6 +159,7 @@ export const KOTLIN_DEF: LanguageDefinition = {
   supportsCrossModuleSymbols: true,
   native: {
     normalizeQuery: normalizeKotlinNativeQuery,
+    authoritativeKinds: ["imports", "importBindings"],
     notes: [
       "normalizes kotlin import and identifier node names for the native grammar",
     ],

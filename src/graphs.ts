@@ -52,6 +52,7 @@ import {
   getCompactImportsExecution,
   getNativeSyntaxTreeExecution,
   getUnifiedQueryExecution,
+  isNativeQueryAuthoritative,
   isNativeQueryModified,
   isNativeRequiredUnavailableError,
   shouldAvoidJsFallbackForLanguage,
@@ -460,7 +461,7 @@ export function collectModuleSpecifiersFromSource(
       // Languages whose imports query is normalized (e.g. Kotlin) may have
       // grammar differences that cause native to miss matches, so allow
       // JS fallback for those.
-      if (out.length > 0 || !isNativeQueryModified(support, "imports")) {
+      if (out.length > 0 || isNativeQueryAuthoritative(support, "imports")) {
         return out;
       }
     } catch (error) {

@@ -28,6 +28,10 @@ const definition: LanguageTestDefinition = {
         from: "Aliases.kt",
         to: { type: "file", path: "utils/helperFunction.kt" },
       },
+      {
+        from: "TypeConsumers.kt",
+        to: { type: "file", path: "utils/helperFunction.kt" },
+      },
     ],
     symbols: [
       {
