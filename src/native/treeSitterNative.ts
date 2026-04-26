@@ -254,6 +254,16 @@ export function isNativeQueryModified(
   return getOrComputeNormalizedEntry(support, kind).wasModified;
 }
 
+export function isNativeQueryAuthoritative(
+  support: LanguageSupport,
+  kind: NativeQueryKind,
+): boolean {
+  if (!isNativeQueryModified(support, kind)) {
+    return true;
+  }
+  return support.native?.authoritativeKinds?.includes(kind) ?? false;
+}
+
 export function getNativeQueryMetadataForSupport(support: LanguageSupport): {
   normalizedQueryKinds: NativeQueryKind[];
   skippedQueryKinds: NativeQueryKind[];

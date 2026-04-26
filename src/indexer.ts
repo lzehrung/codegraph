@@ -73,6 +73,7 @@ import {
   executeJsQueryAsNativeMatches,
   getNativeQueryExecution,
   getNativeSyntaxTreeExecution,
+  isNativeQueryAuthoritative,
   isNativeQueryModified,
   isNativeRequiredUnavailableError,
   getCachedNormalizedQuery,
@@ -3629,7 +3630,7 @@ export async function collectImportsForFile(
       // or blanked (e.g. Kotlin) may need the JS/text fallback.
       if (
         imports.length > 0 ||
-        !isNativeQueryModified(resolvedSup, "importBindings")
+        isNativeQueryAuthoritative(resolvedSup, "importBindings")
       ) {
         return imports;
       }

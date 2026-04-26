@@ -388,7 +388,7 @@ jsFallbackDescribe("native import fallback contract by language", () => {
     }
   });
 
-  it("falls back to JS query extraction for Kotlin when native imports are empty", () => {
+  it("treats empty native imports as authoritative for Kotlin once native normalization is authoritative", () => {
     const support = supportById("kotlin")!;
     const specs = collectModuleSpecifiersFromSource(
       support,
@@ -405,7 +405,7 @@ jsFallbackDescribe("native import fallback contract by language", () => {
       },
     );
 
-    expect(specs).toEqual([{ spec: "demo.util.Helper", typeOnly: false }]);
+    expect(specs).toEqual([]);
   });
 
   it("uses parser fallback for Java and Kotlin when native imports are unavailable", () => {
