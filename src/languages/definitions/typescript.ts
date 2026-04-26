@@ -3,13 +3,18 @@ import { loadTypeScriptGrammars } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
 function normalizeTypeScriptNativeQuery(kind: string, query: string): string {
+  let normalized = query.replace(
+    /\(class_declaration name: \(identifier\) @/g,
+    "(class_declaration name: (type_identifier) @",
+  );
   if (kind !== "exports") {
-    return query;
+    return normalized;
   }
-  return query.replace(
+  normalized = normalized.replace(
     /^\s*\(export_assignment \(identifier\) @ts_export_assign\)\s*$/gm,
     "",
   );
+  return normalized;
 }
 
 const BASE_STRUCTURE = {
