@@ -80,6 +80,7 @@ import {
   type BuildReport,
   type ImportBinding,
   type ProjectIndex,
+  type ResolvedExport,
   type SymbolDef,
   SymbolKind,
 } from "./index.js";
@@ -1934,13 +1935,16 @@ export async function buildSymbolGraphDetailed(
     Array.isArray(sup.nodeTypes?.identifier) &&
     sup.nodeTypes.identifier.includes(t);
 
-  // Resolve an exported symbol definition from a module file, following re-exports recursively
-  const resolveExportFrom = (
+  type ResolvedDetailedExport = ResolvedExport;
+
+  const normalizeModuleFile = (file: string) => file.replace(/\\/g, "/");
+
+  const resolveExportNamespace = (
     file: string,
     exportedName: string,
-    cache: Map<string, SymbolDef | null> = new Map(),
-  ): SymbolDef | null => {
-    const normalizedFile = file.replace(/\\/g, "/");
+    cache: Map<string, ResolvedDetailedExport | null> = new Map(),
+  ): ResolvedDetailedExport | null => {
+    const normalizedFile = normalizeModuleFile(file);
     const key = `${normalizedFile}::${exportedName}`;
     if (cache.has(key)) return cache.get(key) ?? null;
     cache.set(key, null);
@@ -1948,32 +1952,24 @@ export async function buildSymbolGraphDetailed(
     if (!mod) {
       return null;
     }
-    // Direct local export
+
     for (const e of mod.exports)
       if (e.type === "local" && e.exportedAs === exportedName) {
-        const res = e.target;
+        const res: ResolvedDetailedExport = { kind: "resolved", def: e.target };
         cache.set(key, res);
         return res;
       }
-    // Namespace re-export
+
     for (const e of mod.exports)
       if (e.type === "namespaceReexport" && e.exportedAs === exportedName) {
-        // This is tricky: we return a placeholder def for the module itself?
-        // Or we should let the caller handle it.
-        // For now, let's return a dummy def pointing to the module start.
-        const res: SymbolDef = {
-          file: e.fromModule.replace(/\\/g, "/"),
-          localName: exportedName,
-          kind: SymbolKind.Variable,
-          range: {
-            start: { line: 1, column: 1, index: 0 },
-            end: { line: 1, column: 1, index: 0 },
-          },
+        const res: ResolvedDetailedExport = {
+          kind: "namespace",
+          file: normalizeModuleFile(e.fromModule),
         };
         cache.set(key, res);
         return res;
       }
-    // Named re-export: export { x as y } from '...'
+
     for (const e of mod.exports)
       if (
         e.type === "reexport" &&
@@ -1981,34 +1977,84 @@ export async function buildSymbolGraphDetailed(
         typeof e.fromModule === "string"
       ) {
         const down =
-          resolveExportFrom(
+          resolveExportNamespace(
             e.fromModule,
             e.sourceSpecifier || exportedName,
             cache,
-          ) || resolveExportFrom(e.fromModule, exportedName, cache);
+          ) || resolveExportNamespace(e.fromModule, exportedName, cache);
         if (down) {
           cache.set(key, down);
           return down;
         }
       }
-    // export * from '...'
+
     for (const e of mod.exports)
       if (e.type === "exportStar" && typeof e.fromModule === "string") {
-        const down = resolveExportFrom(e.fromModule, exportedName, cache);
+        const down = resolveExportNamespace(e.fromModule, exportedName, cache);
         if (down) {
           cache.set(key, down);
           return down;
         }
       }
-    // Fallback: treat local with same name as exported (Python or missing export metadata)
+
     const local = mod.locals.find((l) => l.localName === exportedName);
     if (local) {
-      cache.set(key, local);
-      return local;
+      const res: ResolvedDetailedExport = { kind: "resolved", def: local };
+      cache.set(key, res);
+      return res;
     }
+
     cache.set(key, null);
     return null;
   };
+
+  const resolveExportDef = (
+    file: string,
+    exportedName: string,
+    cache?: Map<string, ResolvedDetailedExport | null>,
+  ): SymbolDef | null => {
+    const resolved = resolveExportNamespace(file, exportedName, cache);
+    return resolved?.kind === "resolved" ? resolved.def : null;
+  };
+
+  const resolveMemberPathFromModule = (
+    startFile: string,
+    names: string[],
+  ): SymbolDef | null => {
+    let file: string | null = normalizeModuleFile(startFile);
+    let targetDef: SymbolDef | null = null;
+    for (const seg of [...names].reverse()) {
+      if (!file) break;
+      const resolved = resolveExportNamespace(file, seg);
+      if (!resolved) {
+        targetDef = null;
+        break;
+      }
+      if (resolved.kind === "namespace") {
+        file = normalizeModuleFile(resolved.file);
+        targetDef = null;
+        continue;
+      }
+      targetDef = resolved.def;
+      file = normalizeModuleFile(targetDef.file);
+    }
+
+    if (targetDef) {
+      return targetDef;
+    }
+
+    const fileKey = typeof file === "string" ? normalizeModuleFile(file) : null;
+    const mod = fileKey ? index.byFile.get(fileKey) : undefined;
+    const last = names[0];
+    return mod?.locals.find((l) => l.localName === last) ?? null;
+  };
+
+  // Resolve an exported symbol definition from a module file, following re-exports recursively
+  const resolveExportFrom = (
+    file: string,
+    exportedName: string,
+    cache: Map<string, ResolvedDetailedExport | null> = new Map(),
+  ): SymbolDef | null => resolveExportDef(file, exportedName, cache);
 
   for (const [file, mod] of index.byFile) {
     if (opts?.files && !opts.files.has(file)) continue;
@@ -2075,10 +2121,19 @@ export async function buildSymbolGraphDetailed(
             : undefined;
         if (!tmod || !targetFile) continue;
         if (imp.kind === "named") {
-          const def =
-            resolveExportFrom(targetFile, imp.imported) ||
-            tmod.locals.find((l) => l.localName === imp.imported);
-          if (def) aliasToTargetDef.set(imp.local, def);
+          const resolved =
+            resolveExportNamespace(targetFile, imp.imported) ??
+            (tmod.locals.find((l) => l.localName === imp.imported)
+              ? {
+                  kind: "resolved",
+                  def: tmod.locals.find((l) => l.localName === imp.imported)!,
+                }
+              : null);
+          if (resolved?.kind === "resolved") {
+            aliasToTargetDef.set(imp.local, resolved.def);
+          } else if (resolved?.kind === "namespace") {
+            aliasToTargetModule.set(imp.local, normalizeModuleFile(resolved.file));
+          }
         } else if (imp.kind === "default") {
           const def =
             resolveExportFrom(targetFile, "default") ||
@@ -2319,31 +2374,7 @@ export async function buildSymbolGraphDetailed(
         const alias = sliceText(cur, src);
         const targetFile = aliasToTargetModule.get(alias);
         if (!targetFile || names.length === 0) return false;
-        let file: string | null = targetFile;
-        let targetDef: SymbolDef | null = null;
-        for (const seg of names.reverse()) {
-          if (!file) break;
-          // Check if seg is a namespace re-export (export * as seg from '...')
-          const m = index.byFile.get(file.replace(/\\/g, "/"));
-          const nsReexport = m?.exports.find(
-            (e) =>
-              (e.type === "namespaceReexport" ||
-                (e.type === "reexport" && e.sourceSpecifier === "")) &&
-              e.exportedAs === seg,
-          );
-          if (
-            nsReexport &&
-            (nsReexport.type === "reexport" ||
-              nsReexport.type === "namespaceReexport") &&
-            typeof nsReexport.fromModule === "string"
-          ) {
-            file = nsReexport.fromModule.replace(/\\/g, "/");
-            continue;
-          }
-          targetDef = resolveExportFrom(file, seg);
-          if (!targetDef) break;
-          file = targetDef.file;
-        }
+        const targetDef = resolveMemberPathFromModule(targetFile, names);
         if (targetDef && fromId) {
           const toId = defNodeId(targetDef);
           if (!nodes.has(toId)) nodes.set(toId, nodeForDef(targetDef));
@@ -2505,38 +2536,7 @@ export async function buildSymbolGraphDetailed(
             const alias = sliceText(cur, src);
             const targetFile = aliasToTargetModule.get(alias);
             if (!targetFile || names.length === 0) return;
-            let file: string | null = targetFile;
-            let targetDef: SymbolDef | null = null;
-            for (const seg of names.reverse()) {
-              if (!file) break;
-              // Check if seg is a namespace re-export (export * as seg from '...')
-              const m = index.byFile.get(file.replace(/\\/g, "/"));
-              const nsReexport = m?.exports.find(
-                (e) =>
-                  e.type === "reexport" &&
-                  e.exportedAs === seg &&
-                  e.sourceSpecifier === "",
-              );
-              if (
-                nsReexport &&
-                nsReexport.type === "reexport" &&
-                typeof nsReexport.fromModule === "string"
-              ) {
-                file = nsReexport.fromModule.replace(/\\/g, "/");
-                continue;
-              }
-              targetDef = resolveExportFrom(file, seg);
-              if (!targetDef) break;
-              file = targetDef.file;
-            }
-            if (!targetDef) {
-              const fileKey =
-                typeof file === "string" ? file.replace(/\\/g, "/") : file;
-              const m = index.byFile.get(fileKey ?? "");
-              const last = names[0];
-              if (m)
-                targetDef = m.locals.find((l) => l.localName === last) ?? null;
-            }
+            const targetDef = resolveMemberPathFromModule(targetFile, names);
             if (targetDef) {
               const toId = defNodeId(targetDef);
               if (!nodes.has(toId)) nodes.set(toId, nodeForDef(targetDef));
