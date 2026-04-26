@@ -2,22 +2,13 @@ import type { LanguageDefinition, SyntaxNodeLike } from "../types.js";
 import { loadTypeScriptGrammars } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
-function normalizeTypeScriptNativeQuery(_kind: string, query: string): string {
-  let normalized = query.replace(
+function normalizeTypeScriptNativeQuery(kind: string, query: string): string {
+  if (kind !== "exports") {
+    return query;
+  }
+  return query.replace(
     /^\s*\(export_assignment \(identifier\) @ts_export_assign\)\s*$/gm,
     "",
-  );
-  normalized = normalized.replace(
-    /^\s*\(export_statement \(function_declaration name: \(identifier\) @default\)\) @stmt \(#match\? @stmt "default"\)\s*$/gm,
-    "",
-  );
-  normalized = normalized.replace(
-    /^\s*\(export_statement \(class_declaration name: \(identifier\) @default\)\) @stmt \(#match\? @stmt "default"\)\s*$/gm,
-    "",
-  );
-  return normalized.replace(
-    /\(class_declaration name: \(identifier\) @/g,
-    "(class_declaration name: (type_identifier) @",
   );
 }
 
@@ -149,21 +140,19 @@ const BASE_GRAPH = {
   `,
   exports: `
     (export_statement) @stmt
-    (export_statement (function_declaration name: (identifier) @name)) @stmt
-    (export_statement (class_declaration name: (identifier) @name)) @stmt
-    (export_statement (lexical_declaration (variable_declarator name: (identifier) @name))) @stmt
+    (export_statement declaration: (function_declaration name: (identifier) @name)) @stmt
+    (export_statement declaration: (class_declaration name: (type_identifier) @name)) @stmt
+    (export_statement declaration: (lexical_declaration (variable_declarator name: (identifier) @name))) @stmt
     (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)) (string) @from) @stmt
     (export_statement (export_clause (export_specifier name: (identifier) @src)) (string) @from) @stmt
     (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias))) @stmt
     (export_statement (export_clause (export_specifier name: (identifier) @src))) @stmt
     (export_statement (string) @from) @stmt
-    (export_statement (function_declaration name: (identifier) @default)) @stmt (#match? @stmt "default")
-    (export_statement (class_declaration name: (identifier) @default)) @stmt (#match? @stmt "default")
     (export_assignment (identifier) @ts_export_assign)
   `,
   locals: `
     (function_declaration name: (identifier) @name)
-    (class_declaration name: (identifier) @name)
+    (class_declaration name: (type_identifier) @name)
     (variable_declarator name: (identifier) @name)
     (interface_declaration name: (type_identifier) @name)
     (type_alias_declaration name: (type_identifier) @name)
@@ -237,8 +226,9 @@ export const TYPESCRIPT_DEF: LanguageDefinition = {
   isTypeOnly: (stmtText: string) => /\b(import|export)\s+type\b/.test(stmtText),
   native: {
     normalizeQuery: normalizeTypeScriptNativeQuery,
+    authoritativeKinds: ["exports"],
     notes: [
-      "removes unsupported export-assignment and default-export native query fragments",
+      "drops unsupported TypeScript export-assignment nodes while keeping native export results authoritative",
     ],
   },
 };
@@ -261,8 +251,9 @@ export const TSX_DEF: LanguageDefinition = {
   isTypeOnly: (stmtText: string) => /\b(import|export)\s+type\b/.test(stmtText),
   native: {
     normalizeQuery: normalizeTypeScriptNativeQuery,
+    authoritativeKinds: ["exports"],
     notes: [
-      "removes unsupported export-assignment and default-export native query fragments",
+      "drops unsupported TypeScript export-assignment nodes while keeping native export results authoritative",
     ],
   },
 };

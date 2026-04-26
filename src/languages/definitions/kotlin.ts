@@ -159,7 +159,7 @@ export const KOTLIN_DEF: LanguageDefinition = {
   supportsCrossModuleSymbols: true,
   native: {
     normalizeQuery: normalizeKotlinNativeQuery,
-    authoritativeKinds: ["imports", "importBindings"],
+    authoritativeKinds: ["imports", "importBindings", "exports", "locals"],
     notes: [
       "normalizes kotlin import and identifier node names for the native grammar",
     ],
