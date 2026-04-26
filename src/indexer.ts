@@ -87,7 +87,7 @@ import {
 import { ProjectedSyntaxTree } from "./native/projectedTree.js";
 import {
   initNativeBackendReport,
-  recordNativeBackendOutcome,
+  recordNativeExecutionOutcome,
 } from "./native/nativeBackendReport.js";
 import {
   capturesByName,
@@ -269,6 +269,19 @@ type PreparedFileParseAttempt = {
   jsError?: string;
 };
 
+type IndexedFileGraphContext = {
+  source: string;
+  sup: LanguageSupport;
+  lang?: JsLanguage;
+  nativeQueries?: NativeQueryResults | null;
+  tree?: SyntaxTreeLike;
+};
+
+type IndexedFileModuleResult = {
+  module: ModuleIndex;
+  graphContext: IndexedFileGraphContext;
+};
+
 function attemptParsePreparedFileContext(
   context: PreparedFileContext,
 ): PreparedFileParseAttempt {
@@ -375,6 +388,228 @@ function recordParserBackendDegradation(
     (parserReport.byLanguage[entry.languageId] ?? 0) + 1;
   if (parserReport.files.length >= 20) return;
   parserReport.files.push(entry);
+}
+
+function createEmptyModuleIndex(file: string): ModuleIndex {
+  return {
+    file,
+    exports: [],
+    imports: [],
+    locals: [],
+  };
+}
+
+async function prepareFileContextForBuild(
+  file: string,
+  support: LanguageSupport,
+  opts: BuildOptions | undefined,
+  workerSetup: WorkerPoolSetupResult,
+  report: BuildReport | undefined,
+): Promise<PreparedFileContext> {
+  let prepared: PreparedFileContext;
+  if (workerSetup.pool && !isSFCFile(file)) {
+    if (workerSetup.report) workerSetup.report.tasksSubmitted++;
+    try {
+      const workerResult: NativeExtractResult = await workerSetup.pool.run(
+        buildWorkerTask(file, support),
+      );
+      prepared = workerResultToPrepared(workerResult, support, file);
+    } catch (error) {
+      if (isNativeRequiredUnavailableError(error)) throw error;
+      if (workerSetup.report) workerSetup.report.tasksFailed++;
+      if (workerSetup.report) {
+        workerSetup.report.errors ??= [];
+        if (workerSetup.report.errors.length < 20) {
+          workerSetup.report.errors.push({
+            file,
+            message: stringifyUnknown(error),
+          });
+        }
+      }
+      prepared = await prepareFileForIndexing(file, opts?.native);
+    }
+  } else {
+    prepared = await prepareFileForIndexing(file, opts?.native);
+  }
+  recordNativeExecutionOutcome(report, {
+    file,
+    support: prepared.sup,
+    languageId: prepared.sup.id,
+    results: prepared.nativeQueries,
+    ...(prepared.nativeFallbackReason
+      ? { fallbackReason: prepared.nativeFallbackReason }
+      : {}),
+    ...(prepared.nativeError ? { error: prepared.nativeError } : {}),
+  });
+  return prepared;
+}
+
+async function resolveCrossModuleSymbolExports(
+  file: string,
+  mod: ModuleIndex,
+  support: LanguageSupport,
+  projectRoot: string,
+  graphOptions: GraphBuildOptions,
+  workspaceConfig: Awaited<ReturnType<typeof loadWorkspaceConfig>>,
+  logLevel: LogLevel | undefined,
+): Promise<void> {
+  if (!support.supportsCrossModuleSymbols) return;
+  if (support.id !== "ts" && support.id !== "js") return;
+  const { matchPath } = await loadNearestTsconfigFor(file, logLevel);
+  for (const entry of mod.exports) {
+    if (
+      entry.type !== "reexport" &&
+      entry.type !== "exportStar" &&
+      entry.type !== "namespaceReexport"
+    ) {
+      continue;
+    }
+    if (entry.fromModule.startsWith(".")) {
+      const resolved = await resolveSpecifier(
+        file,
+        entry.fromModule,
+        projectRoot,
+        matchPath,
+        workspaceConfig,
+        {
+          resolveNodeModules: !!graphOptions.resolveNodeModules,
+          ...(graphOptions.resolutionHints
+            ? { resolutionHints: graphOptions.resolutionHints }
+            : {}),
+        },
+      );
+      if (typeof resolved === "string") entry.fromModule = resolved;
+      continue;
+    }
+    const pkgResolved = await resolveWorkspacePackage(
+      entry.fromModule,
+      workspaceConfig,
+    );
+    if (pkgResolved) entry.fromModule = pkgResolved;
+  }
+}
+
+async function buildIndexedModuleForFile(args: {
+  file: string;
+  support: LanguageSupport;
+  projectRoot: string;
+  opts: BuildOptions | undefined;
+  report: BuildReport | undefined;
+  graphOptions: GraphBuildOptions;
+  workspaceConfig: Awaited<ReturnType<typeof loadWorkspaceConfig>>;
+  workerSetup: WorkerPoolSetupResult;
+  parsedMap: Map<string, ParsedFileContext>;
+  parsedCacheMaxEntries: number;
+  jsonDependencies: Set<string>;
+  bloomFilterCache: import("./util/bloomFilter.js").BloomFilterCache | undefined;
+  onFallbackImportExtraction:
+    | ((event: FallbackImportExtractionEvent) => void)
+    | undefined;
+  fileSignatures: Map<string, FileSignature>;
+  cacheEnabled: boolean;
+}): Promise<IndexedFileModuleResult> {
+  const prepared = await prepareFileContextForBuild(
+    args.file,
+    args.support,
+    args.opts,
+    args.workerSetup,
+    args.report,
+  );
+  const { source, sup, nativeQueries } = prepared;
+  let resolvedLang = prepared.lang;
+  let tree: SyntaxTreeLike | undefined;
+  const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
+
+  if (!nativeQueries && !graphOnlyLanguage) {
+    const parseAttempt = attemptParsePreparedFileContext(prepared);
+    const parsed = parseAttempt.parsed;
+    if (parsed) {
+      tree = parsed.tree;
+      resolvedLang = parsed.lang;
+      setParsedCacheEntry(
+        args.parsedMap,
+        args.file,
+        parsed,
+        args.parsedCacheMaxEntries,
+      );
+    } else {
+      recordParserBackendDegradation(args.report, {
+        file: args.file,
+        languageId: prepared.sup.id,
+        ...(parseAttempt.nativeFallbackReason
+          ? { nativeFallbackReason: parseAttempt.nativeFallbackReason }
+          : {}),
+        ...(parseAttempt.nativeError
+          ? { nativeError: parseAttempt.nativeError }
+          : {}),
+        ...(parseAttempt.jsError ? { jsError: parseAttempt.jsError } : {}),
+      });
+    }
+  }
+  const lacksParserContext = !nativeQueries && !tree;
+
+  if (args.bloomFilterCache) {
+    const filter = buildBloomFilterFromSource(source, sup.id);
+    args.bloomFilterCache.set(args.file, filter);
+  }
+
+  const imports = await collectImportsForFile(args.file, args.projectRoot, {
+    source,
+    ...(tree && isJsSyntaxTree(tree) ? { tree } : {}),
+    sup,
+    ...(resolvedLang ? { lang: resolvedLang } : {}),
+    ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+    graphOptions: args.graphOptions,
+    ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
+    ...(args.onFallbackImportExtraction
+      ? { onFallbackImportExtraction: args.onFallbackImportExtraction }
+      : {}),
+  });
+  collectJsonDependencies(imports, args.jsonDependencies);
+  const mod = lacksParserContext
+    ? { ...createEmptyModuleIndex(args.file), imports }
+    : collectLocalsAndExportsFromSource(
+        args.file,
+        source,
+        sup,
+        resolvedLang,
+        imports,
+        {
+          ...(tree ? { tree } : {}),
+          ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+          ...(args.opts?.native ? { nativeMode: args.opts.native } : {}),
+          ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
+        },
+      );
+  mod.imports = imports;
+  await resolveCrossModuleSymbolExports(
+    args.file,
+    mod,
+    sup,
+    args.projectRoot,
+    args.graphOptions,
+    args.workspaceConfig,
+    args.opts?.logLevel,
+  );
+
+  const sigInfo = args.fileSignatures.get(args.file);
+  if (sigInfo) {
+    const cacheSig = args.cacheEnabled
+      ? await cacheSignatureForFile(args.file, sigInfo)
+      : sigInfo.cacheSig;
+    writeToCache(args.projectRoot, args.file, cacheSig, mod, args.opts);
+  }
+
+  return {
+    module: mod,
+    graphContext: {
+      source,
+      sup,
+      ...(resolvedLang ? { lang: resolvedLang } : {}),
+      ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+      ...(tree ? { tree } : {}),
+    },
+  };
 }
 
 /**
@@ -4243,159 +4478,31 @@ async function buildIndexFromFileListShared(
           return [f, mod, []] as const;
         }
 
-        let prepared: PreparedFileContext;
-        if (workerSetup.pool && supCheck && !isSFCFile(f)) {
-          if (workerSetup.report) workerSetup.report.tasksSubmitted++;
-          try {
-            const workerResult: NativeExtractResult =
-              await workerSetup.pool.run(buildWorkerTask(f, supCheck));
-            prepared = workerResultToPrepared(workerResult, supCheck, f);
-          } catch (error) {
-            if (isNativeRequiredUnavailableError(error)) throw error;
-            if (workerSetup.report) workerSetup.report.tasksFailed++;
-            if (workerSetup.report) {
-              workerSetup.report.errors ??= [];
-              if (workerSetup.report.errors.length < 20) {
-                workerSetup.report.errors.push({
-                  file: f,
-                  message: stringifyUnknown(error),
-                });
-              }
-            }
-            prepared = await prepareFileForIndexing(f, opts?.native);
-          }
-        } else {
-          prepared = await prepareFileForIndexing(f, opts?.native);
-        }
-        recordNativeBackendOutcome(report, {
-          usedNative: !!prepared.nativeQueries,
-          support: prepared.sup,
-          file: f,
-          languageId: prepared.sup.id,
-          ...(prepared.nativeFallbackReason
-            ? { fallbackReason: prepared.nativeFallbackReason }
-            : {}),
-          ...(prepared.nativeError ? { error: prepared.nativeError } : {}),
-        });
-        const { source: src, sup, lang, nativeQueries } = prepared;
-        let resolvedLang = lang;
-        let tree: SyntaxTreeLike | undefined;
-        const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
-
-        if (!nativeQueries && !graphOnlyLanguage) {
-          const parseAttempt = attemptParsePreparedFileContext(prepared);
-          const parsed = parseAttempt.parsed;
-          if (parsed) {
-            tree = parsed.tree;
-            resolvedLang = parsed.lang;
-            setParsedCacheEntry(
-              parsedMap,
-              f,
-              {
-                source: parsed.source,
-                tree: parsed.tree,
-                sup: parsed.sup,
-                ...(parsed.lang ? { lang: parsed.lang } : {}),
-                nativeQueries: parsed.nativeQueries ?? null,
-              },
-              Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
-            );
-          } else {
-            recordParserBackendDegradation(report, {
-              file: f,
-              languageId: prepared.sup.id,
-              ...(parseAttempt.nativeFallbackReason
-                ? { nativeFallbackReason: parseAttempt.nativeFallbackReason }
-                : {}),
-              ...(parseAttempt.nativeError
-                ? { nativeError: parseAttempt.nativeError }
-                : {}),
-              ...(parseAttempt.jsError ? { jsError: parseAttempt.jsError } : {}),
-            });
-          }
-        }
-        const lacksParserContext = !nativeQueries && !tree;
-
-        if (bloomFilterCache) {
-          const filter = buildBloomFilterFromSource(src, sup.id);
-          bloomFilterCache.set(f, filter);
-        }
-
+        let graphContext: IndexedFileGraphContext | undefined;
         // 1. Recompute ModuleIndex if needed
         if (!mod) {
-          const imports = await collectImportsForFile(f, projectRoot, {
-            source: src,
-            ...(tree && isJsSyntaxTree(tree) ? { tree } : {}),
-            sup,
-            ...(resolvedLang ? { lang: resolvedLang } : {}),
-            ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+          const built = await buildIndexedModuleForFile({
+            file: f,
+            support: supCheck,
+            projectRoot,
+            opts,
+            report,
             graphOptions,
-            ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-            ...(onFallbackImportExtraction
-              ? { onFallbackImportExtraction }
-              : {}),
+            workspaceConfig,
+            workerSetup,
+            parsedMap,
+            parsedCacheMaxEntries: Math.max(
+              1,
+              opts?.parsedCacheMaxEntries ?? 1024,
+            ),
+            jsonDependencies,
+            bloomFilterCache,
+            onFallbackImportExtraction,
+            fileSignatures,
+            cacheEnabled,
           });
-          collectJsonDependencies(imports, jsonDependencies);
-          mod = lacksParserContext
-            ? {
-                file: f,
-                exports: [],
-                imports,
-                locals: [],
-              }
-            : collectLocalsAndExportsFromSource(
-                f,
-                src,
-                sup,
-                resolvedLang,
-                imports,
-                {
-                  ...(tree ? { tree } : {}),
-                  ...(nativeQueries !== undefined ? { nativeQueries } : {}),
-                  ...(opts?.native ? { nativeMode: opts.native } : {}),
-                  ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-                },
-              );
-          mod.imports = imports;
-
-          if (sup.supportsCrossModuleSymbols) {
-            if (sup.id === "ts" || sup.id === "js") {
-              const { matchPath } = await loadNearestTsconfigFor(
-                f,
-                opts?.logLevel,
-              );
-              for (const e of mod.exports)
-                if (
-                  e.type === "reexport" ||
-                  e.type === "exportStar" ||
-                  e.type === "namespaceReexport"
-                ) {
-                  if (e.fromModule.startsWith(".")) {
-                    const resolved = await resolveSpecifier(
-                      f,
-                      e.fromModule,
-                      projectRoot,
-                      matchPath,
-                      workspaceConfig,
-                      {
-                        resolveNodeModules: !!graphOptions.resolveNodeModules,
-                        ...(graphOptions.resolutionHints
-                          ? { resolutionHints: graphOptions.resolutionHints }
-                          : {}),
-                      },
-                    );
-                    if (typeof resolved === "string") e.fromModule = resolved;
-                  } else {
-                    const pkgResolved = await resolveWorkspacePackage(
-                      e.fromModule,
-                      workspaceConfig,
-                    );
-                    if (pkgResolved) e.fromModule = pkgResolved;
-                  }
-                }
-            }
-          }
-          writeToCache(projectRoot, f, cacheSig, mod, opts);
+          mod = built.module;
+          graphContext = built.graphContext;
         } else {
           // If mod was cached but edges weren't, we still need to collect json deps from mod
           collectJsonDependencies(mod.imports, jsonDependencies);
@@ -4403,13 +4510,7 @@ async function buildIndexFromFileListShared(
 
         // 2. Recompute Edges (using the parsed tree)
         edges = await collectEdgesForFile(f, projectRoot, workspaceConfig, {
-          parsed: {
-            source: src,
-            ...(tree ? { tree } : {}),
-            sup,
-            ...(resolvedLang ? { lang: resolvedLang } : {}),
-            ...(nativeQueries !== undefined ? { nativeQueries } : {}),
-          },
+          ...(graphContext ? { parsed: graphContext } : {}),
           fast: !!graphOptions.fast,
           ...(graphOptions.fastRegexDisabledLanguages
             ? {
@@ -4932,163 +5033,27 @@ export async function buildProjectIndexIncremental(
               return [f, mod] as const;
             }
 
-            let prepared: PreparedFileContext;
-            if (workerSetupIncr.pool && supCheck && !isSFCFile(f)) {
-              if (workerSetupIncr.report)
-                workerSetupIncr.report.tasksSubmitted++;
-              try {
-                const workerResult: NativeExtractResult =
-                  await workerSetupIncr.pool.run(buildWorkerTask(f, supCheck));
-                prepared = workerResultToPrepared(workerResult, supCheck, f);
-              } catch (error) {
-                if (isNativeRequiredUnavailableError(error)) throw error;
-                if (workerSetupIncr.report)
-                  workerSetupIncr.report.tasksFailed++;
-                if (workerSetupIncr.report) {
-                  workerSetupIncr.report.errors ??= [];
-                  if (workerSetupIncr.report.errors.length < 20) {
-                    workerSetupIncr.report.errors.push({
-                      file: f,
-                      message: stringifyUnknown(error),
-                    });
-                  }
-                }
-                prepared = await prepareFileForIndexing(f, opts?.native);
-              }
-            } else {
-              prepared = await prepareFileForIndexing(f, opts?.native);
-            }
-            recordNativeBackendOutcome(report, {
-              usedNative: !!prepared.nativeQueries,
-              support: prepared.sup,
+            const built = await buildIndexedModuleForFile({
               file: f,
-              languageId: prepared.sup.id,
-              ...(prepared.nativeFallbackReason
-                ? { fallbackReason: prepared.nativeFallbackReason }
-                : {}),
-              ...(prepared.nativeError ? { error: prepared.nativeError } : {}),
-            });
-            const { source: src, sup, lang, nativeQueries } = prepared;
-            let resolvedLang = lang;
-            let tree: SyntaxTreeLike | undefined;
-            const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
-
-            if (!nativeQueries && !graphOnlyLanguage) {
-              const parseAttempt = attemptParsePreparedFileContext(prepared);
-              const parsed = parseAttempt.parsed;
-              if (parsed) {
-                tree = parsed.tree;
-                resolvedLang = parsed.lang;
-                setParsedCacheEntry(
-                  parsedMap,
-                  f,
-                  parsed,
-                  Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
-                );
-              } else {
-                recordParserBackendDegradation(report, {
-                  file: f,
-                  languageId: prepared.sup.id,
-                  ...(parseAttempt.nativeFallbackReason
-                    ? { nativeFallbackReason: parseAttempt.nativeFallbackReason }
-                    : {}),
-                  ...(parseAttempt.nativeError
-                    ? { nativeError: parseAttempt.nativeError }
-                    : {}),
-                  ...(parseAttempt.jsError
-                    ? { jsError: parseAttempt.jsError }
-                    : {}),
-                });
-              }
-            }
-            const lacksParserContext = !nativeQueries && !tree;
-
-            // Build bloom filter for this file if enabled
-            if (bloomFilterCache) {
-              const { buildBloomFilterFromSource } =
-                await import("./util/bloomFilter.js");
-              const filter = buildBloomFilterFromSource(src, sup.id);
-              bloomFilterCache.set(f, filter);
-            }
-
-            const imports = await collectImportsForFile(f, projectRoot, {
-              source: src,
-              ...(tree && isJsSyntaxTree(tree) ? { tree } : {}),
-              sup,
-              ...(resolvedLang ? { lang: resolvedLang } : {}),
-              ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+              support: supCheck,
+              projectRoot,
+              opts,
+              report,
               graphOptions,
-              ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-              ...(onFallbackImportExtraction
-                ? { onFallbackImportExtraction }
-                : {}),
+              workspaceConfig,
+              workerSetup: workerSetupIncr,
+              parsedMap,
+              parsedCacheMaxEntries: Math.max(
+                1,
+                opts?.parsedCacheMaxEntries ?? 1024,
+              ),
+              jsonDependencies,
+              bloomFilterCache,
+              onFallbackImportExtraction,
+              fileSignatures,
+              cacheEnabled,
             });
-            collectJsonDependencies(imports, jsonDependencies);
-            const mod = lacksParserContext
-              ? {
-                  file: f,
-                  exports: [],
-                  imports,
-                  locals: [],
-                }
-              : collectLocalsAndExportsFromSource(
-                  f,
-                  src,
-                  sup,
-                  resolvedLang,
-                  imports,
-                  {
-                    ...(tree ? { tree } : {}),
-                    ...(nativeQueries !== undefined ? { nativeQueries } : {}),
-                    ...(opts?.native ? { nativeMode: opts.native } : {}),
-                    ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-                  },
-                );
-            mod.imports = imports;
-
-            if (sup.supportsCrossModuleSymbols) {
-              if (sup.id === "ts" || sup.id === "js") {
-                const { matchPath } = await loadNearestTsconfigFor(
-                  f,
-                  opts?.logLevel,
-                );
-                for (const e of mod.exports)
-                  if (
-                    e.type === "reexport" ||
-                    e.type === "exportStar" ||
-                    e.type === "namespaceReexport"
-                  ) {
-                    if (e.fromModule.startsWith(".")) {
-                      const resolved = await resolveSpecifier(
-                        f,
-                        e.fromModule,
-                        projectRoot,
-                        matchPath,
-                        workspaceConfig,
-                        {
-                          resolveNodeModules: !!graphOptions.resolveNodeModules,
-                          ...(graphOptions.resolutionHints
-                            ? { resolutionHints: graphOptions.resolutionHints }
-                            : {}),
-                        },
-                      );
-                      if (typeof resolved === "string") e.fromModule = resolved;
-                    } else {
-                      const pkgResolved = await resolveWorkspacePackage(
-                        e.fromModule,
-                        workspaceConfig,
-                      );
-                      if (pkgResolved) e.fromModule = pkgResolved;
-                    }
-                  }
-              }
-            }
-            const sigInfo = fileSignatures.get(f)!;
-            const cacheSig = cacheEnabled
-              ? await cacheSignatureForFile(f, sigInfo)
-              : sigInfo.cacheSig;
-            writeToCache(projectRoot, f, cacheSig, mod, opts);
-            return [f, mod] as const;
+            return [f, built.module] as const;
           } catch (error) {
             if (isNativeRequiredUnavailableError(error)) throw error;
             if (isUnsupportedParserInputError(error)) {

@@ -75,12 +75,16 @@ Goal: make the native backend the default and complete query owner for supported
 
 ## Phase 5: Decompose And Reuse
 
-- [ ] Collapse duplicated full-build and incremental-build file processing paths behind one shared per-file pipeline.
+- [x] Collapse duplicated full-build and incremental-build file processing paths behind one shared per-file pipeline.
   Acceptance criteria:
   Native preparation, parser reconstruction, report bookkeeping, and module assembly logic live in one shared implementation.
-- [ ] Consolidate native report bookkeeping helpers so graph/index paths record outcomes consistently.
+  Result:
+  Full and incremental index builds now share one per-file module pipeline for worker/native preparation, parser degradation reporting, bloom-filter population, locals/exports assembly, cache writes, and cross-module export normalization.
+- [x] Consolidate native report bookkeeping helpers so graph/index paths record outcomes consistently.
   Acceptance criteria:
   There is one obvious path for recording native usage, fallback reasons, and parser-backend degradation.
+  Result:
+  Native execution bookkeeping now flows through shared helpers in `src/native/nativeBackendReport.ts`, and the graph/index paths use the same `results -> usedNative/fallback` recording contract.
 
 ## Phase 6: Test And Docs Hardening
 
@@ -96,8 +100,4 @@ Goal: make the native backend the default and complete query owner for supported
 
 ## Remaining Follow-Up Work
 
-- [ ] Audit syntax-tree consumers that still require JS parser reconstruction when native queries succeed.
-- [ ] Decide per consumer whether to use projected native trees, explicit capability limits, or native-side expansion.
-- [ ] Prevent silent imports-only module indexes when no syntax-tree backend is available.
-- [ ] Collapse duplicated full-build and incremental-build file processing paths behind one shared per-file pipeline.
-- [ ] Consolidate native report bookkeeping helpers so graph/index paths record outcomes consistently.
+- [x] No remaining native-ownership gaps are open for supported source-language workflows.

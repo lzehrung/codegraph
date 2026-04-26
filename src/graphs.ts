@@ -74,7 +74,7 @@ import { capturesByName } from "./native/queryResults.js";
 import { ProjectedSyntaxTree } from "./native/projectedTree.js";
 import {
   initNativeBackendReport,
-  recordNativeBackendOutcome,
+  recordNativeExecutionOutcome,
 } from "./native/nativeBackendReport.js";
 import {
   type BuildReport,
@@ -728,10 +728,10 @@ export async function collectEdgesForFile(
         opts.native,
       );
       compactNativeImports = compactExecution.results;
-      recordNativeBackendOutcome(opts.report, {
+      recordNativeExecutionOutcome(opts.report, {
         file: normalizedFile,
         support: sup,
-        usedNative: !!compactExecution.results,
+        results: compactExecution.results,
         ...(compactExecution.fallbackReason
           ? { fallbackReason: compactExecution.fallbackReason }
           : {}),
