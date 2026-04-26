@@ -124,6 +124,7 @@ async function expectNativeImportParity(
     tree: jsParsed.tree,
     sup: jsParsed.sup,
     lang: jsParsed.lang,
+    nativeMode: "off",
   });
 
   expect(simplifyImports(nativeImports)).toEqual(simplifyImports(jsImports));
@@ -154,6 +155,7 @@ async function expectNativeModuleIndexParity(relativeFile: string): Promise<void
     [],
     {
       tree: jsParsed.tree,
+      nativeMode: "off",
     },
   );
 
@@ -182,6 +184,7 @@ async function expectNativeModuleSpecifierParity(relativeFile: string): Promise<
     {
       tree: parsed.tree,
       file,
+      native: "off",
     },
   );
 
@@ -221,6 +224,7 @@ jsFallbackDescribe("native tree-sitter integration", () => {
       tree: jsParsed.tree,
       sup: jsParsed.sup,
       lang: jsParsed.lang,
+      nativeMode: "off",
     });
 
     expect(simplifyImports(nativeImports)).toEqual(simplifyImports(jsImports));
@@ -269,6 +273,7 @@ jsFallbackDescribe("native tree-sitter integration", () => {
       [],
       {
         tree: jsParsed.tree,
+        nativeMode: "off",
       },
     );
 
@@ -309,6 +314,7 @@ jsFallbackDescribe("native tree-sitter integration", () => {
       {
         tree: parsed.tree,
         file,
+        native: "off",
       },
     );
 
@@ -351,6 +357,7 @@ jsFallbackDescribe("native tree-sitter integration", () => {
       [],
       {
         tree: jsParsed.tree,
+        nativeMode: "off",
       },
     );
 
@@ -415,6 +422,7 @@ jsFallbackDescribe("native tree-sitter integration", () => {
       "cpp/utils.hpp",
       "cpp/advanced.hpp",
       "cpp/namespaces.hpp",
+      "javascript/mixed.js",
       "tsx/components/Button.tsx",
       "ruby/utils.rb",
       "ruby/namespaced.rb",

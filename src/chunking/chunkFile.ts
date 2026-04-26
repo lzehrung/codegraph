@@ -288,7 +288,6 @@ function getChunkMatches(
       return nativeExecution.matches.map(toChunkMatchFromNative);
     }
     if (
-      shouldAvoidJsFallbackForLanguage(support.id) &&
       isNativeBindingLoadedForLanguage(support.id)
     ) {
       return [];

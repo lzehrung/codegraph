@@ -77,6 +77,7 @@ import {
   isNativeQueryModified,
   isNativeRequiredUnavailableError,
   getCachedNormalizedQuery,
+  isNativeBindingLoadedForLanguage,
   isNativeTreeSitterAvailable,
   shouldAvoidJsFallbackForLanguage,
   type NativeRuntimeMode,
@@ -2127,7 +2128,7 @@ export function collectLocalsAndExportsFromSource(
   };
 
   const extractLocalsFromJsQueries = (): boolean => {
-    if (shouldAvoidJsFallbackForLanguage(support.id) && nativeQueries) {
+    if (isNativeBindingLoadedForLanguage(support.id, opts?.nativeMode)) {
       return false;
     }
     const jsTree = ensureJsQueryTree();
@@ -2438,12 +2439,15 @@ export function collectLocalsAndExportsFromSource(
         const nameText = map["name"].text;
         const local = locals.find((def) => def.localName === nameText);
         if (local) {
-          exports.push({
-            type: "local",
-            exportedAs: nameText,
-            target: local,
-          });
-          if (/^\s*export\s+default\b/.test(stmtText)) {
+          const isDefaultExport = /^\s*export\s+default\b/.test(stmtText);
+          if (!isDefaultExport) {
+            exports.push({
+              type: "local",
+              exportedAs: nameText,
+              target: local,
+            });
+          }
+          if (isDefaultExport) {
             exports.push({
               type: "local",
               exportedAs: "default",
@@ -2458,8 +2462,13 @@ export function collectLocalsAndExportsFromSource(
         const alias = map["alias"]?.text ?? srcName;
         const local = locals.find((def) => def.localName === srcName);
         if (local) {
-          exports.push({ type: "local", exportedAs: alias, target: local });
+          exports.push({
+            type: "local",
+            exportedAs: alias,
+            target: local,
+          });
         }
+        continue;
       }
     }
   };
@@ -2498,7 +2507,7 @@ export function collectLocalsAndExportsFromSource(
   }
   const jsExportTree =
     !usedNativeExports &&
-    !(shouldAvoidJsFallbackForLanguage(support.id) && nativeQueries)
+    !isNativeBindingLoadedForLanguage(support.id, opts?.nativeMode)
       ? ensureJsQueryTree()
       : null;
   if (support.queries.exports.trim() && jsExportTree && !usedNativeExports) {

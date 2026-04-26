@@ -10,6 +10,14 @@ const JS_OBJECT_METHOD_EXPORT_PATTERN = `
         (#eq? @mod "module") (#eq? @prop "exports")
 `;
 
+const JS_OBJECT_METHOD_EXPORT_NATIVE_PATTERN = `
+      ;; CJS: module.exports = { helper () {} }
+      (expression_statement (assignment_expression
+        left: (member_expression object: (identifier) @mod property: (property_identifier) @prop)
+        right: (object (method_definition name: (property_identifier) @cjs_export_name) @cjs_fn)))
+        (#eq? @mod "module") (#eq? @prop "exports")
+`;
+
 export const JAVASCRIPT_DEF: LanguageDefinition = {
   id: "js",
   extensions: [".js", ".jsx", ".mjs", ".cjs"],
@@ -107,9 +115,9 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
     `,
     exports: `
       (export_statement) @stmt
-      (export_statement (function_declaration name: (identifier) @name))
-      (export_statement (class_declaration name: (identifier) @name))
-      (export_statement (lexical_declaration (variable_declarator (identifier) @name)))
+      (export_statement declaration: (function_declaration name: (identifier) @name)) @stmt
+      (export_statement declaration: (class_declaration name: (identifier) @name)) @stmt
+      (export_statement declaration: (lexical_declaration (variable_declarator name: (identifier) @name))) @stmt
       (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)) (string) @from)
       (export_statement (export_clause (export_specifier name: (identifier) @src)) (string) @from)
       (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)))
@@ -220,7 +228,11 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
     normalizeQuery: (_kind, query) =>
       query
         .replace(/\(function\)/g, "(function_expression)")
-        .replace(JS_OBJECT_METHOD_EXPORT_PATTERN, "\n"),
+        .replace(
+          JS_OBJECT_METHOD_EXPORT_PATTERN,
+          JS_OBJECT_METHOD_EXPORT_NATIVE_PATTERN,
+        ),
+    authoritativeKinds: ["exports"],
     notes: [
       "normalizes function node compatibility for native javascript grammar",
     ],

@@ -414,13 +414,13 @@ jsFallbackDescribe("native import fallback contract by language", () => {
         supportId: "java",
         fileName: "Main.java",
         source: "package demo;\nimport demo.util.Helper;\nclass Main {}\n",
-        expected: [{ spec: "demo.util.Helper", typeOnly: false }],
+        expected: [{ spec: "demo.util.Helper" }],
       },
       {
         supportId: "kotlin",
         fileName: "Main.kt",
         source: "package demo\nimport demo.util.Helper\nclass Main\n",
-        expected: [{ spec: "demo.util.Helper", typeOnly: false }],
+        expected: [{ spec: "demo.util.Helper" }],
       },
     ] as const;
 
