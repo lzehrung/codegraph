@@ -51,6 +51,55 @@ type DependencyStats = {
   reverseDeps: Map<FileId, Edge[]>;
 };
 
+const cachedFanInByGraph = new WeakMap<object, Map<FileId, number>>();
+
+const severityWeightKeys: ReadonlyArray<keyof SeverityWeights> = [
+  "directRef",
+  "namespaceMember",
+  "importAlias",
+  "transitive",
+  "exported",
+  "sameFile",
+  "typeOnly",
+  "depthDecay",
+];
+
+function normalizeSeverityWeights(
+  weights: SeverityWeights,
+): SeverityWeights {
+  const normalized: SeverityWeights = { ...DEFAULT_SEVERITY_WEIGHTS };
+  const invalidEntries: string[] = [];
+
+  for (const key of severityWeightKeys) {
+    const value = weights[key];
+    if (!Number.isFinite(value) || value <= 0) {
+      invalidEntries.push(`${key}=${String(value)}`);
+      continue;
+    }
+    normalized[key] = value;
+  }
+
+  if (normalized.depthDecay >= 1) {
+    invalidEntries.push(`depthDecay=${String(weights.depthDecay)}`);
+  }
+
+  if (invalidEntries.length > 0) {
+    throw new RangeError(
+      `Invalid severity weights: ${invalidEntries.join(", ")}`,
+    );
+  }
+
+  return normalized;
+}
+
+function getCachedFanInByFile(index: ProjectIndex): Map<FileId, number> {
+  const cached = cachedFanInByGraph.get(index.graph);
+  if (cached) return cached;
+  const { fanInByFile } = buildDependencyStats(index.graph.edges);
+  cachedFanInByGraph.set(index.graph, fanInByFile);
+  return fanInByFile;
+}
+
 function buildDependencyStats(edges: Edge[]): DependencyStats {
   const fanInByFile = new Map<FileId, number>();
   const reverseDeps = new Map<FileId, Edge[]>();
@@ -566,18 +615,7 @@ export function calculateSeverity(
   fanInByFile?: Map<FileId, number>,
   weights: SeverityWeights = DEFAULT_SEVERITY_WEIGHTS,
 ): SeverityResult {
-  // Validate weights - ensure all values are positive numbers
-  const validatedWeights = { ...DEFAULT_SEVERITY_WEIGHTS };
-  for (const [key, value] of Object.entries(weights)) {
-    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-      (validatedWeights as Record<string, number>)[key] = value;
-    }
-    // Invalid values silently fall back to defaults
-  }
-  // Ensure depthDecay is < 1 to actually decay
-  if (validatedWeights.depthDecay >= 1) {
-    validatedWeights.depthDecay = DEFAULT_SEVERITY_WEIGHTS.depthDecay;
-  }
+  const validatedWeights = normalizeSeverityWeights(weights);
 
   let score = 1.0;
   let confidence = 1.0; // Start with high confidence
@@ -614,11 +652,8 @@ export function calculateSeverity(
   }
 
   // Calculate fan-in (how many files depend on the impacted file)
-  const fanIn = fanInByFile
-    ? fanInByFile.get(ref.file) || 0
-    : [...index.graph.edges].filter(
-        (e) => e.to.type === "file" && e.to.path === ref.file,
-      ).length;
+  const fanInCounts = fanInByFile ?? getCachedFanInByFile(index);
+  const fanIn = fanInCounts.get(ref.file) ?? 0;
   if (fanIn > 0) {
     const fanInFactor = 1 + Math.min(Math.log10(fanIn + 1), 1); // Cap at doubling
     score *= fanInFactor;
