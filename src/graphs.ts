@@ -55,6 +55,7 @@ import {
   getUnifiedQueryExecution,
   isNativeQueryModified,
   isNativeRequiredUnavailableError,
+  shouldAvoidJsFallbackForLanguage,
   type NativeRuntimeMode,
   type NativeQueryScope,
   type NativeQueryResults,
@@ -256,8 +257,9 @@ export function collectModuleSpecifiersFromSource(
   },
 ): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
-  const supportsRegexImportRecovery =
-    support.id === "ts" || support.id === "tsx" || support.id === "js";
+  const supportsRegexImportRecovery = shouldAvoidJsFallbackForLanguage(
+    support.id,
+  );
   const htmlLikeLanguage = isHtmlLikeLanguage(support.id, opts?.file);
   const graphOnlyLanguage = isGraphOnlyLanguage(support.id);
   const fastRegexDisabled = opts?.fastRegexDisabledLanguages?.includes(
@@ -464,17 +466,21 @@ export function collectModuleSpecifiersFromSource(
       }
     } catch (error) {
       queryFailed = true;
-      logWithLevel(
-        opts?.logLevel,
-        "warn",
-        `Warning: Native query error in collectModuleSpecifiersFromSource for ${support.id}:`,
-        error,
-      );
+      if (!htmlLikeLanguage) {
+        logWithLevel(
+          opts?.logLevel,
+          "warn",
+          `Warning: Native query error in collectModuleSpecifiersFromSource for ${support.id}:`,
+          error,
+        );
+      }
       out.length = 0;
     }
   }
-  if (supportsRegexImportRecovery && !isJsFallbackAvailable()) {
-    fallbackReasonOverride = "js-fallback-unavailable";
+  if (supportsRegexImportRecovery) {
+    if (!isJsFallbackAvailable()) {
+      fallbackReasonOverride = "js-fallback-unavailable";
+    }
     if ((queryFailed || out.length === 0) && shouldAttemptFallback) {
       try {
         const extracted = extractJsTsSpecifiers(source);
@@ -574,12 +580,14 @@ export function collectModuleSpecifiersFromSource(
         `JS fallback unavailable for ${support.id} query recovery; using regex import extraction.`,
       );
     } else {
-      logWithLevel(
-        opts?.logLevel,
-        "warn",
-        `Warning: Query error in collectModuleSpecifiersFromSource for ${support.id}:`,
-        error,
-      );
+      if (!htmlLikeLanguage) {
+        logWithLevel(
+          opts?.logLevel,
+          "warn",
+          `Warning: Query error in collectModuleSpecifiersFromSource for ${support.id}:`,
+          error,
+        );
+      }
     }
     // fall through to regex fallback
   }
@@ -606,7 +614,6 @@ export function collectModuleSpecifiersFromSource(
     const attributeSpecs = extractHtmlAttributeSpecifiers(source);
     const inlineSpecs = extractHtmlInlineScriptSpecifiers(source);
     if (attributeSpecs.length > 0 || inlineSpecs.length > 0) {
-      reportFallback(queryFailed ? "query-error" : "query-empty");
       const fallbackSeen = makeSeenSet(out);
       appendUniqueSpecifiers(out, attributeSpecs, fallbackSeen);
       appendUniqueSpecifiers(out, inlineSpecs, fallbackSeen);
@@ -2004,6 +2011,9 @@ export async function buildSymbolGraphDetailed(
         const prep = await prepareSourceInput(file);
         sup = prep.sup;
         src = prep.source;
+      }
+      if (sup && !sup.supportsCrossModuleSymbols) {
+        continue;
       }
       if (sup && src !== undefined && !tree) {
         const nativeTreeExecution = getNativeSyntaxTreeExecution(

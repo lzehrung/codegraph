@@ -77,6 +77,7 @@ import {
   isNativeRequiredUnavailableError,
   getCachedNormalizedQuery,
   isNativeTreeSitterAvailable,
+  shouldAvoidJsFallbackForLanguage,
   type NativeRuntimeMode,
   type NativeCapture,
   type NativeQueryResults,
@@ -1267,12 +1268,16 @@ function createFallbackImportExtractionHandler(
     if (warned.has(warningKey)) return;
     warned.add(warningKey);
     const severity =
-      event.reason === "fast" || event.reason === "js-fallback-unavailable"
+      event.reason === "fast" ||
+      event.reason === "js-fallback-unavailable" ||
+      shouldAvoidJsFallbackForLanguage(event.language)
         ? "debug"
         : "warn";
     const message =
       event.reason === "js-fallback-unavailable"
         ? `JS fallback unavailable for ${event.language} query recovery; using regex import extraction.`
+        : shouldAvoidJsFallbackForLanguage(event.language)
+          ? `Native import recovery degraded for ${event.language}; using native-owned fallback extraction.`
         : "Regex fallback import extraction";
     logWithLevel(opts?.logLevel, severity, message, {
       language: event.language,
@@ -2028,6 +2033,9 @@ export function collectLocalsAndExportsFromSource(
   };
 
   const extractLocalsFromJsQueries = (): boolean => {
+    if (shouldAvoidJsFallbackForLanguage(support.id) && nativeQueries) {
+      return false;
+    }
     const jsTree = ensureJsQueryTree();
     if (!jsTree || !support.queries.locals.trim()) return false;
     if (!QUERY_DRIVEN_LOCALS_LANGUAGES.has(support.id)) return false;
@@ -2394,7 +2402,11 @@ export function collectLocalsAndExportsFromSource(
       usedNativeExports = false;
     }
   }
-  const jsExportTree = !usedNativeExports ? ensureJsQueryTree() : null;
+  const jsExportTree =
+    !usedNativeExports &&
+    !(shouldAvoidJsFallbackForLanguage(support.id) && nativeQueries)
+      ? ensureJsQueryTree()
+      : null;
   if (support.queries.exports.trim() && jsExportTree && !usedNativeExports) {
     try {
       appendExportsFromMatches(
@@ -3256,12 +3268,43 @@ export async function collectImportsForFile(
         });
       }
     }
+    const reImportEquals =
+      /\bimport\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
+    for (const m of src.matchAll(reImportEquals)) {
+      const local = m[1]!;
+      const mod = m.groups?.m as string;
+      const resolved = await resolveFrom(mod);
+      imports.push({
+        kind: "default",
+        local,
+        from: mod,
+        resolved,
+        mechanism: "cjs",
+      });
+    }
   };
 
-  const shouldUseTextImportRecoveryOnly =
-    resolvedSup.id === "ts" ||
-    resolvedSup.id === "tsx" ||
-    resolvedSup.id === "js";
+  const shouldUseTextImportRecoveryOnly = shouldAvoidJsFallbackForLanguage(
+    resolvedSup.id,
+  );
+  const hasPotentialTextImportRecovery =
+    shouldUseTextImportRecoveryOnly &&
+    /\b(import|require|from)\b/.test(resolvedSource);
+
+  if (shouldUseTextImportRecoveryOnly) {
+    const importCountBeforeFallback = imports.length;
+    if (hasPotentialTextImportRecovery) {
+      await runFallback();
+    }
+    await finalizeLanguageSpecificImports();
+    if (
+      imports.length > importCountBeforeFallback &&
+      !isJsFallbackAvailable()
+    ) {
+      reportFallback("js-fallback-unavailable");
+    }
+    return imports;
+  }
 
   if (resolvedNativeQueries) {
     try {
@@ -3500,13 +3543,6 @@ export async function collectImportsForFile(
     } catch {
       imports.length = 0;
     }
-  }
-
-  if (shouldUseTextImportRecoveryOnly && !isJsFallbackAvailable()) {
-    reportFallback("js-fallback-unavailable");
-    await runFallback();
-    await finalizeLanguageSpecificImports();
-    return imports;
   }
 
   try {

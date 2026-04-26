@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isJsFallbackAvailable } from "../src/jsFallback.js";
 import { supportById } from "../src/languages.js";
-import { collectModuleSpecifiersFromSource } from "../src/graphs.js";
+import {
+  collectModuleSpecifiersFromSource,
+  type FallbackImportExtractionEvent,
+} from "../src/graphs.js";
 import {
   getCompactImportsExecution,
   getNativeQueryExecutionForState,
@@ -222,6 +225,7 @@ describe("authoritative empty native results", () => {
       .mockImplementation(() => {
         throw new Error("JS fallback should not be used for TypeScript import recovery");
       });
+    const fallbackEvents: FallbackImportExtractionEvent[] = [];
 
     const specs = collectModuleSpecifiersFromSource(
       support,
@@ -229,14 +233,51 @@ describe("authoritative empty native results", () => {
       "import { foo } from './bar';\nexport { baz } from './qux';\n",
       {
         file: "main.ts",
+        native: "off",
+        onFallbackImportExtraction: (event) => fallbackEvents.push(event),
       },
     );
 
-    expect(specs).toEqual([
-      { spec: "./bar", typeOnly: false },
-      { spec: "./qux", typeOnly: false },
-    ]);
+    expect(specs).toEqual([{ spec: "./bar" }, { spec: "./qux" }]);
     expect(executeSpy).not.toHaveBeenCalled();
+    expect(fallbackEvents).toEqual([
+      expect.objectContaining({
+        language: "ts",
+        reason: "query-empty",
+        file: "main.ts",
+      }),
+    ]);
+  });
+
+  it("recovers HTML specifiers without warning when JS query fallback fails", () => {
+    const support = supportById("html")!;
+    const executeSpy = vi
+      .spyOn(jsFallback, "executeJsQueryAsNativeMatches")
+      .mockImplementation(() => {
+        throw new Error("HTML JS query fallback should not be required");
+      });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const specs = collectModuleSpecifiersFromSource(
+        support,
+        undefined,
+        '<script src="./app.js"></script><a href="./about.html">About</a>',
+        {
+          file: "index.html",
+          native: "off",
+        },
+      );
+
+      expect(specs).toEqual([
+        { spec: "./app.js", resolutionKind: "document" },
+        { spec: "./about.html", resolutionKind: "document" },
+      ]);
+      expect(executeSpy).toHaveBeenCalledOnce();
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 

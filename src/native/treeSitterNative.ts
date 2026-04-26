@@ -409,6 +409,20 @@ export type NativeSyntaxTreeExecution = {
   error?: string;
 };
 
+const NATIVE_ONLY_JS_FAMILY_LANGUAGE_IDS = new Set(["js", "ts", "tsx"]);
+
+export function shouldAvoidJsFallbackForLanguage(languageId: string): boolean {
+  return NATIVE_ONLY_JS_FAMILY_LANGUAGE_IDS.has(languageId);
+}
+
+export function isNativeBindingLoadedForLanguage(
+  languageId: string,
+  mode?: NativeRuntimeMode,
+): boolean {
+  const state = resolveNativeBindingState(mode);
+  return state.loaded && state.supportedLanguageIds.has(languageId);
+}
+
 /**
  * Run only the imports query with a compact payload (name + text only).
  * Falls back to the full execution path if the compact entrypoint is not
@@ -555,6 +569,19 @@ export function getUnifiedQueryExecution(
     return {
       matches: nativeExecution.matches,
       backend: "native",
+    };
+  }
+  if (
+    shouldAvoidJsFallbackForLanguage(support.id) &&
+    isNativeBindingLoadedForLanguage(support.id, opts?.mode)
+  ) {
+    return {
+      matches: null,
+      backend: "native",
+      ...(nativeExecution.fallbackReason
+        ? { fallbackReason: nativeExecution.fallbackReason }
+        : {}),
+      ...(nativeExecution.error ? { error: nativeExecution.error } : {}),
     };
   }
   try {

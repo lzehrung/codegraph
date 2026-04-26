@@ -76,7 +76,7 @@ describe("detailed symbol graph in native-only installs", () => {
       ),
     ).toBe(false);
     expect(warnings).toContain(
-      "Warning: Skipped detailed symbol edges for 2 file(s) because no syntax-tree backend was available.",
+      "Warning: Skipped detailed symbol edges for 1 file(s) because no syntax-tree backend was available.",
     );
     expect(detailed.edges).toEqual([]);
   });
@@ -210,6 +210,123 @@ describe("detailed symbol graph in native-only installs", () => {
         resolved: normalizePath(depFile),
         typeOnly: false,
       },
+    ]);
+    expect(parseSpy).not.toHaveBeenCalled();
+    expect(querySpy).not.toHaveBeenCalled();
+  });
+
+  it("indexes TypeScript locals and exports without loading the JS fallback package", async () => {
+    const root = await mkTmpDir("cg-ts-index-native-only-");
+    const entryFile = path.join(root, "entry.ts");
+    await fsp.writeFile(
+      entryFile,
+      [
+        "export class Service {",
+        "  run() {",
+        "    return 1;",
+        "  }",
+        "}",
+        "export const helper = () => new Service();",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const parseSpy = vi.fn(() => {
+      throw new Error(
+        "JS Tree-sitter fallback is unavailable for TypeScript grammar loading. Install @lzehrung/codegraph-js-fallback to enable it",
+      );
+    });
+    const querySpy = vi.fn(() => {
+      throw new Error(
+        "JS Tree-sitter fallback is unavailable for JS query execution. Install @lzehrung/codegraph-js-fallback to enable it",
+      );
+    });
+
+    vi.resetModules();
+    vi.doMock("../src/jsFallback.js", async () => {
+      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>(
+        "../src/jsFallback.js",
+      );
+      return {
+        ...actual,
+        isJsFallbackAvailable: () => false,
+        parseWithJsLanguage: parseSpy,
+        executeJsQueryAsNativeMatches: querySpy,
+      };
+    });
+
+    const { buildProjectIndex } = await import("../src/indexer.js");
+    const index = await buildProjectIndex(root);
+    const moduleIndex = index.byFile.get(normalizePath(entryFile));
+
+    expect(moduleIndex?.locals.map((entry) => entry.localName)).toEqual(
+      expect.arrayContaining(["Service", "helper"]),
+    );
+    expect(
+      moduleIndex?.exports
+        .filter((entry) => entry.type === "local")
+        .map((entry) => entry.exportedAs),
+    ).toEqual(expect.arrayContaining(["Service", "helper"]));
+    expect(parseSpy).not.toHaveBeenCalled();
+    expect(querySpy).not.toHaveBeenCalled();
+  });
+
+  it("runs TypeScript AST grep without loading the JS fallback package", async () => {
+    const root = await mkTmpDir("cg-ts-grep-native-only-");
+    const entryFile = path.join(root, "entry.ts");
+    await fsp.writeFile(
+      entryFile,
+      [
+        "import { helper } from './dep';",
+        "export const value = helper();",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "dep.ts"),
+      "export function helper() { return 1; }\n",
+      "utf8",
+    );
+
+    const parseSpy = vi.fn(() => {
+      throw new Error(
+        "JS Tree-sitter fallback is unavailable for TypeScript grammar loading. Install @lzehrung/codegraph-js-fallback to enable it",
+      );
+    });
+    const querySpy = vi.fn(() => {
+      throw new Error(
+        "JS Tree-sitter fallback is unavailable for JS query execution. Install @lzehrung/codegraph-js-fallback to enable it",
+      );
+    });
+
+    vi.resetModules();
+    vi.doMock("../src/jsFallback.js", async () => {
+      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>(
+        "../src/jsFallback.js",
+      );
+      return {
+        ...actual,
+        isJsFallbackAvailable: () => false,
+        parseWithJsLanguage: parseSpy,
+        executeJsQueryAsNativeMatches: querySpy,
+      };
+    });
+
+    const { astGrep } = await import("../src/index.js");
+    const hits = await astGrep(
+      root,
+      "(import_statement (string) @mod)",
+      ["**/*.ts"],
+    );
+
+    expect(hits).toEqual([
+      expect.objectContaining({
+        file: "entry.ts",
+        capture: "mod",
+        snippet: "'./dep'",
+      }),
     ]);
     expect(parseSpy).not.toHaveBeenCalled();
     expect(querySpy).not.toHaveBeenCalled();
