@@ -226,5 +226,28 @@ export function uses(): number { return utilFn() }
     const edge = sg.edges.find(e => e.from === (usesDef).id && e.to === (helperDef).id && e.label === 'uses');
     expect(edge).toBeDefined();
   });
-});
 
+  it('TypeScript: named import of namespace re-export resolves to downstream symbol', async () => {
+    const root = await mkTmpDir('dg-ts-ns-named-');
+    const utilSub = `export function helper(){ return 1 }\n`;
+    const util = `export * as sub from './utilSub'\n`;
+    const main = `import { sub } from './util'\nexport function uses(){ return sub.helper() }\n`;
+    await fsp.writeFile(path.join(root, 'utilSub.ts'), utilSub, 'utf8');
+    await fsp.writeFile(path.join(root, 'util.ts'), util, 'utf8');
+    await fsp.writeFile(path.join(root, 'main.ts'), main, 'utf8');
+
+    const index = await buildProjectIndex(root);
+    const sg = await buildSymbolGraphDetailed(index);
+    const nodes = [...sg.nodes.values()].map(n => ({ ...n, file: norm(n.file) }));
+
+    const helperDef = nodes.find(n => n.file.endsWith('/utilSub.ts') && n.name === 'helper');
+    const usesDef = nodes.find(n => n.file.endsWith('/main.ts') && n.name === 'uses');
+    const fakeNamespaceNode = nodes.find(n => n.file.endsWith('/utilSub.ts') && n.name === 'sub');
+    expect(helperDef).toBeDefined();
+    expect(usesDef).toBeDefined();
+    expect(fakeNamespaceNode).toBeUndefined();
+
+    const edge = sg.edges.find(e => e.from === (usesDef).id && e.to === (helperDef).id && e.label === 'uses');
+    expect(edge).toBeDefined();
+  });
+});

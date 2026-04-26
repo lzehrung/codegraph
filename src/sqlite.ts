@@ -669,7 +669,7 @@ const dedupePreservingOrder = (values: string[]): string[] => {
 export async function writeGraphSqlite(
   options: SqliteGraphOptions,
 ): Promise<void> {
-  await withSqliteDatabase(options.outputPath, async (db) => {
+  await withSqliteDatabase(options.outputPath, (db) => {
     const runInsert = db.transaction(() => {
       clearCurrentGraphState(db);
       const fileEntries: Array<{ path: string; isExternal: boolean }> = [];
@@ -705,7 +705,7 @@ export async function writeGraphSqlite(
 export async function updateGraphSqlite(
   options: SqliteGraphUpdateOptions,
 ): Promise<void> {
-  await withSqliteDatabase(options.outputPath, async (db) => {
+  await withSqliteDatabase(options.outputPath, (db) => {
     const runUpdate = db.transaction(() => {
       const changedSet = new Set(options.changedFiles);
       const deletedSet = new Set(options.deletedFiles ?? []);
@@ -784,7 +784,7 @@ export async function queryGraphSqlite(
   if (!parsed) {
     throw new Error("Unsupported query text.");
   }
-  return await withSqliteDatabase(outputPath, async (db) => {
+  return await withSqliteDatabase(outputPath, (db) => {
     switch (parsed.kind) {
       case "mostCalledMethods": {
         const rows = execRowsParams(
@@ -972,7 +972,7 @@ export async function queryGraphSqliteRaw(
   sql: string,
   params: Array<string | number | null> = [],
 ): Promise<RawSqlResult> {
-  return await withSqliteDatabase(outputPath, async (db) => {
+  return await withSqliteDatabase(outputPath, (db) => {
     const stmt = db.prepare(sql);
     const columns = stmt.columns().map((col) => col.name);
     const rows = stmt.raw().all(params) as Array<Array<unknown>>;
