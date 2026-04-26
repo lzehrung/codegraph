@@ -12,14 +12,8 @@ describe("chunkFile detailed behavior", () => {
     vi.restoreAllMocks();
   });
 
-  it("does not retry the native chunk query after the first attempt fails", () => {
-    const nativeSpy = vi
-      .spyOn(nativeRuntime, "getNativeSingleQueryExecution")
-      .mockReturnValue({
-        matches: null,
-        fallbackReason: "queryFailure",
-        error: "forced test fallback",
-      });
+  it("uses native chunk queries for JavaScript without touching the JS fallback", () => {
+    const nativeSpy = vi.spyOn(nativeRuntime, "getNativeSingleQueryExecution");
     const jsFallbackSpy = vi.spyOn(nativeRuntime, "executeJsQueryAsNativeMatches");
 
     const chunks = chunkFile({
@@ -33,15 +27,12 @@ describe("chunkFile detailed behavior", () => {
 
     expect(chunks.length).toBeGreaterThan(0);
     expect(nativeSpy).toHaveBeenCalledTimes(1);
-    expect(jsFallbackSpy).toHaveBeenCalledTimes(1);
+    expect(jsFallbackSpy).not.toHaveBeenCalled();
   });
 
-  it("uses the TSX grammar variant for JS fallback chunking", () => {
-    vi.spyOn(nativeRuntime, "getNativeSingleQueryExecution").mockReturnValue({
-      matches: null,
-      fallbackReason: "queryFailure",
-      error: "forced test fallback",
-    });
+  it("uses native chunk queries for TSX without touching the JS fallback", () => {
+    const nativeSpy = vi.spyOn(nativeRuntime, "getNativeSingleQueryExecution");
+    const jsFallbackSpy = vi.spyOn(nativeRuntime, "executeJsQueryAsNativeMatches");
 
     const chunks = chunkFile({
       language: LANG_CONFIGS.tsx,
@@ -60,6 +51,8 @@ describe("chunkFile detailed behavior", () => {
     expect(chunks.length).toBeGreaterThan(0);
     expect(chunks.some((chunk) => chunk.name === "Button")).toBe(true);
     expect(chunks.every((chunk) => chunk.languageId === "tsx")).toBe(true);
+    expect(nativeSpy).toHaveBeenCalledTimes(1);
+    expect(jsFallbackSpy).not.toHaveBeenCalled();
   });
 
   it("uses public chunking language ids while keeping internal support ids", () => {

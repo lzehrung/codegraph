@@ -7,7 +7,7 @@ description: Static code analysis and dependency graph tool for deep codebase un
 
 ## Overview
 
-Codegraph is a lightweight multi-language code analysis tool that builds dependency graphs, symbol indexes, go-to-definition maps, and PR impact reports. It uses one shared Tree-sitter model across languages, plus graph-first text extraction for document and template formats like Markdown, MDX, Astro, Handlebars, reStructuredText, and AsciiDoc. Native runtime mode defaults to `auto`: Codegraph resolves parse/query work through `@lzehrung/codegraph-native`, using the native addon when available and the separate opt-in `@lzehrung/codegraph-js-fallback` package only when native is unavailable, explicitly disabled, or needed for JS query recovery.
+Codegraph is a lightweight multi-language code analysis tool that builds dependency graphs, symbol indexes, go-to-definition maps, and PR impact reports. It uses one shared Tree-sitter model across languages, plus graph-first text extraction for document and template formats like Markdown, MDX, Astro, Handlebars, reStructuredText, and AsciiDoc. Native runtime mode defaults to `auto`: Codegraph resolves parse/query work through `@lzehrung/codegraph-native`, using the native addon when available and the separate opt-in `@lzehrung/codegraph-js-fallback` package only when native is unavailable or explicitly disabled.
 
 ## Installation Notes
 
@@ -21,7 +21,7 @@ Codegraph is a lightweight multi-language code analysis tool that builds depende
 - For source checkouts, `npm run build` always rebuilds `dist/` and attempts the local native addon when Cargo is available, but it falls back to the JavaScript build output with a warning if the native workspace build is unavailable or fails. Use `npm run build:native` when you want a native-only rebuild or a hard failure if Rust is missing.
 - Install the optional fallback package only when you explicitly need JS Tree-sitter fallback:
   `npm install @lzehrung/codegraph-js-fallback --legacy-peer-deps`
-- Native-only installs do not need the JS fallback package for normal JS, TS, or TSX import extraction. If JS query recovery is unavailable, Codegraph reports that once per language/reason and uses regex import extraction as the final degraded path where supported.
+- Native-only installs do not need the JS fallback package for normal JS, TS, or TSX import extraction, symbol indexing, chunking, or AST grep. If JS-family query recovery degrades, Codegraph reports that once per language/reason in diagnostics and stays on native-owned recovery paths where supported.
 - Global default override: `CODEGRAPH_DISABLE_NATIVE=1`
 - Explicit CLI/library/tool `native` options take precedence over `CODEGRAPH_DISABLE_NATIVE`
 

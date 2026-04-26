@@ -3,6 +3,8 @@ import { supportById } from "../languages.js";
 import {
   executeJsQueryAsNativeMatches,
   getNativeSingleQueryExecution,
+  isNativeBindingLoadedForLanguage,
+  shouldAvoidJsFallbackForLanguage,
   type NativeMatch,
 } from "../native/treeSitterNative.js";
 
@@ -284,6 +286,12 @@ function getChunkMatches(
     );
     if (nativeExecution.matches) {
       return nativeExecution.matches.map(toChunkMatchFromNative);
+    }
+    if (
+      shouldAvoidJsFallbackForLanguage(support.id) &&
+      isNativeBindingLoadedForLanguage(support.id)
+    ) {
+      return [];
     }
 
     try {
