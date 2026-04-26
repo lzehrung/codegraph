@@ -950,20 +950,35 @@ export async function discoverProjectFiles(
   }
 }
 
-export function stripJsLikeComments(src: string): string {
+function transformJsLikeTrivia(
+  src: string,
+  options?: { maskStrings?: boolean; preserveLength?: boolean },
+): string {
   let out = "";
   let i = 0;
   let inSingle = false;
   let inDouble = false;
   let inTemplate = false;
   let escapeNext = false;
+  const maskStrings = options?.maskStrings ?? false;
+  const preserveLength = options?.preserveLength ?? false;
+  const maskedChar = (ch: string) => (ch === "\n" || ch === "\r" ? ch : " ");
 
   while (i < src.length) {
     const ch = src[i]!;
     const next = src[i + 1] ?? "";
 
     if (inSingle || inDouble || inTemplate) {
-      out += ch;
+      const isClosingQuote =
+        !escapeNext &&
+        ((inSingle && ch === "'") ||
+          (inDouble && ch === '"') ||
+          (inTemplate && ch === "`"));
+      if (maskStrings) {
+        out += isClosingQuote ? ch : maskedChar(ch);
+      } else {
+        out += ch;
+      }
       if (escapeNext) {
         escapeNext = false;
       } else if (ch === "\\") {
@@ -999,21 +1014,28 @@ export function stripJsLikeComments(src: string): string {
     }
 
     if (ch === "/" && next === "*") {
+      if (preserveLength) out += "  ";
       i += 2;
       while (i < src.length) {
         if (src[i] === "*" && src[i + 1] === "/") {
+          if (preserveLength) out += "  ";
           i += 2;
           break;
         }
-        if (src[i] === "\n") out += "\n";
+        if (preserveLength) out += maskedChar(src[i]!);
+        else if (src[i] === "\n") out += "\n";
         i += 1;
       }
       continue;
     }
 
     if (ch === "/" && next === "/") {
+      if (preserveLength) out += "  ";
       i += 2;
-      while (i < src.length && src[i] !== "\n") i += 1;
+      while (i < src.length && src[i] !== "\n") {
+        if (preserveLength) out += " ";
+        i += 1;
+      }
       continue;
     }
 
@@ -1022,6 +1044,17 @@ export function stripJsLikeComments(src: string): string {
   }
 
   return out;
+}
+
+export function stripJsLikeComments(src: string): string {
+  return transformJsLikeTrivia(src);
+}
+
+export function maskJsLikeCommentsAndStrings(src: string): string {
+  return transformJsLikeTrivia(src, {
+    maskStrings: true,
+    preserveLength: true,
+  });
 }
 
 function stripJsonTrailingCommas(src: string): string {

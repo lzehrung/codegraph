@@ -31,6 +31,7 @@ import {
   sliceText,
   toRange,
   unquote,
+  maskJsLikeCommentsAndStrings,
   stripJsLikeComments,
   stripPythonCommentsAndStrings,
   loadNearestTsconfigFor,
@@ -1186,6 +1187,174 @@ export function listSymbols(
   }
 
   return out;
+}
+
+function appendJsLikeRegexFallbackExports(
+  file: string,
+  source: string,
+  locals: SymbolDef[],
+  exports: ExportEntry[],
+): void {
+  const maskedSource = maskJsLikeCommentsAndStrings(source);
+  const reDecl =
+    /\bexport\s+(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g;
+  const reDefault = /\bexport\s+default\s+([A-Za-z_$][\w$]*)/g;
+  const reExportAssign = /\bexport\s*=\s*([A-Za-z_$][\w$]*)/g;
+  const reReexport = /\bexport\s*\{\s*([^}]+)\}\s*from\s*("|')([^"']*)\2/g;
+  const reReexportNs =
+    /\bexport\s*\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*("|')([^"']*)\2/g;
+  const reStar = /\bexport\s*\*\s*from\s*("|')([^"']*)\1/g;
+  const reCjsFn =
+    /(?:^|[;\n\r])\s*(?:exports|module\.exports)\.([A-Za-z_$][\w$]*)\s*=\s*(function\b|\([^)]*\)\s*=>)/g;
+  const reCjsObjFn = /([A-Za-z_$][\w$]*)\s*:\s*(function\b|\([^)]*\)\s*=>)/g;
+  const moduleExportsObject = /module\.exports\s*=\s*\{([^}]*)\}/s;
+  let match: RegExpExecArray | null;
+
+  while ((match = reDecl.exec(maskedSource))) {
+    const name = match[1]!;
+    if (!exports.some((entry) => entry.type === "local" && entry.exportedAs === name)) {
+      const local = locals.find((def) => def.localName === name);
+      if (local) exports.push({ type: "local", exportedAs: name, target: local });
+    }
+  }
+
+  while ((match = reDefault.exec(maskedSource))) {
+    const name = match[1]!;
+    if (!exports.some((entry) => entry.type === "local" && entry.exportedAs === "default")) {
+      const local = locals.find((def) => def.localName === name);
+      if (local) {
+        exports.push({
+          type: "local",
+          exportedAs: "default",
+          target: { ...local, kind: SymbolKind.Default },
+        });
+      }
+    }
+  }
+
+  while ((match = reExportAssign.exec(maskedSource))) {
+    const name = match[1]!;
+    if (!exports.some((entry) => entry.type === "local" && entry.exportedAs === "default")) {
+      const local = locals.find((def) => def.localName === name);
+      if (local) {
+        exports.push({
+          type: "local",
+          exportedAs: "default",
+          target: { ...local, kind: SymbolKind.Default },
+        });
+      }
+    }
+  }
+
+  while ((match = reReexport.exec(maskedSource))) {
+    const list = match[1]!
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const from = source.slice(match.index, reReexport.lastIndex).match(/from\s*("|')([^"']+)\1/)?.[2];
+    if (!from) continue;
+    for (const spec of list) {
+      const entryMatch = spec.match(
+        /^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/,
+      );
+      if (!entryMatch) continue;
+      const srcName = entryMatch[1]!;
+      const alias = entryMatch[2] ?? srcName;
+      if (
+        !exports.some(
+          (entry) =>
+            entry.type === "reexport" &&
+            entry.exportedAs === alias &&
+            entry.fromModule === from,
+        )
+      ) {
+        exports.push({
+          type: "reexport",
+          exportedAs: alias,
+          fromModule: from,
+          sourceSpecifier: srcName,
+        });
+      }
+    }
+  }
+
+  while ((match = reReexportNs.exec(maskedSource))) {
+    const alias = match[1]!;
+    const from = source.slice(match.index, reReexportNs.lastIndex).match(/from\s*("|')([^"']+)\1/)?.[2];
+    if (!from) continue;
+    if (
+      !exports.some(
+        (entry) =>
+          (entry.type === "reexport" || entry.type === "namespaceReexport") &&
+          entry.exportedAs === alias &&
+          entry.fromModule === from,
+      )
+    ) {
+      exports.push({
+        type: "namespaceReexport",
+        exportedAs: alias,
+        fromModule: from,
+      });
+    }
+  }
+
+  while ((match = reStar.exec(maskedSource))) {
+    const from = source.slice(match.index, reStar.lastIndex).match(/("|')([^"']+)\1/)?.[2];
+    if (!from) continue;
+    if (!exports.some((entry) => entry.type === "exportStar" && entry.fromModule === from)) {
+      exports.push({
+        type: "exportStar",
+        fromModule: from,
+        sourceSpecifier: from,
+      });
+    }
+  }
+
+  while ((match = reCjsFn.exec(maskedSource))) {
+    const exportedAs = match[1]!;
+    let local = locals.find((def) => def.localName === exportedAs);
+    if (!local) {
+      const idx = match.index + match[0].indexOf(exportedAs);
+      const pos = { line: 1, column: 1, index: idx };
+      local = {
+        file,
+        localName: exportedAs,
+        kind: SymbolKind.Function,
+        range: { start: pos, end: pos },
+      };
+      locals.push(local);
+    }
+    if (!exports.some((entry) => entry.type === "local" && entry.exportedAs === exportedAs)) {
+      exports.push({ type: "local", exportedAs, target: local });
+    }
+  }
+
+  const moduleExportsObjMatch = moduleExportsObject.exec(maskedSource);
+  if (!moduleExportsObjMatch || moduleExportsObjMatch.index === undefined) {
+    return;
+  }
+
+  const objContent = moduleExportsObjMatch[1]!;
+  let objectMatch: RegExpExecArray | null;
+  while ((objectMatch = reCjsObjFn.exec(objContent))) {
+    const exportedAs = objectMatch[1]!;
+    let local = locals.find((def) => def.localName === exportedAs);
+    if (!local) {
+      const idx =
+        moduleExportsObjMatch.index + moduleExportsObjMatch[0].indexOf(exportedAs);
+      const pos = { line: 1, column: 1, index: idx };
+      local = {
+        file,
+        localName: exportedAs,
+        kind: SymbolKind.Function,
+        range: { start: pos, end: pos },
+      };
+      locals.push(local);
+    }
+    if (!exports.some((entry) => entry.type === "local" && entry.exportedAs === exportedAs)) {
+      exports.push({ type: "local", exportedAs, target: local });
+    }
+  }
 }
 
 export type ApiSurface = Array<{
@@ -2784,167 +2953,7 @@ export function collectLocalsAndExportsFromSource(
 
   // Regex fallback for JS/TS exports when queries miss some patterns (e.g., re-exports)
   if (support.id === "ts" || support.id === "tsx" || support.id === "js") {
-    const reDecl =
-      /\bexport\s+(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g;
-    const reDefault = /\bexport\s+default\s+([A-Za-z_$][\w$]*)/g;
-    const reExportAssign = /\bexport\s*=\s*([A-Za-z_$][\w$]*)/g;
-    const reReexport = /\bexport\s*\{\s*([^}]+)\}\s*from\s*("|')([^"']+)\2/g;
-    const reReexportNs =
-      /\bexport\s*\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*("|')([^"']+)\2/g;
-    const reStar = /\bexport\s*\*\s*from\s*("|')([^"']+)\1/g;
-    let m: RegExpExecArray | null;
-    while ((m = reDecl.exec(source))) {
-      const name = m[1]!;
-      if (!exports.some((e) => e.type === "local" && e.exportedAs === name)) {
-        const local = locals.find((d) => d.localName === name);
-        if (local)
-          exports.push({ type: "local", exportedAs: name, target: local });
-      }
-    }
-    while ((m = reDefault.exec(source))) {
-      const name = m[1]!;
-      if (
-        !exports.some((e) => e.type === "local" && e.exportedAs === "default")
-      ) {
-        const local = locals.find((d) => d.localName === name);
-        if (local)
-          exports.push({
-            type: "local",
-            exportedAs: "default",
-            target: { ...local, kind: SymbolKind.Default },
-          });
-      }
-    }
-    while ((m = reExportAssign.exec(source))) {
-      const name = m[1]!;
-      if (
-        !exports.some((e) => e.type === "local" && e.exportedAs === "default")
-      ) {
-        const local = locals.find((d) => d.localName === name);
-        if (local)
-          exports.push({
-            type: "local",
-            exportedAs: "default",
-            target: { ...local, kind: SymbolKind.Default },
-          });
-      }
-    }
-    while ((m = reReexport.exec(source))) {
-      const list = m[1]!
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-      const from = m[3]!;
-      for (const spec of list) {
-        const mm = spec.match(
-          /^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/,
-        );
-        if (!mm) continue;
-        const srcName = mm[1]!;
-        const alias = mm[2] ?? srcName;
-        if (
-          !exports.some(
-            (e) =>
-              e.type === "reexport" &&
-              e.exportedAs === alias &&
-              e.fromModule === from,
-          )
-        ) {
-          exports.push({
-            type: "reexport",
-            exportedAs: alias,
-            fromModule: from,
-            sourceSpecifier: srcName,
-          });
-        }
-      }
-    }
-    while ((m = reReexportNs.exec(source))) {
-      const alias = m[1]!;
-      const from = m[3]!;
-      if (
-        !exports.some(
-          (e) =>
-            (e.type === "reexport" || e.type === "namespaceReexport") &&
-            e.exportedAs === alias &&
-            e.fromModule === from,
-        )
-      ) {
-        exports.push({
-          type: "namespaceReexport",
-          exportedAs: alias,
-          fromModule: from,
-        });
-      }
-    }
-    while ((m = reStar.exec(source))) {
-      const from = m[2]!;
-      if (
-        !exports.some((e) => e.type === "exportStar" && e.fromModule === from)
-      ) {
-        exports.push({
-          type: "exportStar",
-          fromModule: from,
-          sourceSpecifier: from,
-        });
-      }
-    }
-    // CommonJS: exports.name = function/arrow, module.exports.name = function/arrow
-    const reCjsFn =
-      /(?:^|[;\n\r])\s*(?:exports|module\.exports)\.([A-Za-z_$][\w$]*)\s*=\s*(function\b|\([^)]*\)\s*=>)/g;
-    while ((m = reCjsFn.exec(source))) {
-      const exportedAs = m[1]!;
-      if (!locals.find((d) => d.localName === exportedAs)) {
-        const idx = m.index + m[0].indexOf(exportedAs);
-        const pos = { line: 1, column: 1, index: idx };
-        const sym: SymbolDef = {
-          file,
-          localName: exportedAs,
-          kind: SymbolKind.Function,
-          range: { start: pos, end: pos },
-        };
-        locals.push(sym);
-      }
-      const local = locals.find((d) => d.localName === exportedAs)!;
-      if (
-        !exports.some((e) => e.type === "local" && e.exportedAs === exportedAs)
-      ) {
-        exports.push({ type: "local", exportedAs, target: local });
-      }
-    }
-    // CommonJS: module.exports = { helper: function(){}, ... }
-    const reCjsObjFn = /([A-Za-z_$][\w$]*)\s*:\s*(function\b|\([^)]*\)\s*=>)/g;
-    const moduleExportsObjMatch = source.match(
-      /module\.exports\s*=\s*\{([^}]*)\}/s,
-    );
-    if (moduleExportsObjMatch && moduleExportsObjMatch.index !== undefined) {
-      const objContent = moduleExportsObjMatch[1]!;
-      let mObj: RegExpExecArray | null;
-      while ((mObj = reCjsObjFn.exec(objContent))) {
-        const exportedAs = mObj[1]!;
-        if (!locals.find((d) => d.localName === exportedAs)) {
-          const idx =
-            moduleExportsObjMatch.index +
-            moduleExportsObjMatch[0].indexOf(exportedAs);
-          const pos = { line: 1, column: 1, index: idx };
-          const sym: SymbolDef = {
-            file,
-            localName: exportedAs,
-            kind: SymbolKind.Function,
-            range: { start: pos, end: pos },
-          };
-          locals.push(sym);
-        }
-        const local = locals.find((d) => d.localName === exportedAs)!;
-        if (
-          !exports.some(
-            (e) => e.type === "local" && e.exportedAs === exportedAs,
-          )
-        ) {
-          exports.push({ type: "local", exportedAs, target: local });
-        }
-      }
-    }
+    appendJsLikeRegexFallbackExports(file, source, locals, exports);
   }
 
   if (support.id === "python" && hasPythonAll) {
