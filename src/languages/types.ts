@@ -42,6 +42,7 @@ export type NativeCompatibilityQueryKind = NativeQueryKind | "adHoc";
 
 export interface NativeCompatibility {
   normalizeQuery?: (kind: NativeCompatibilityQueryKind, query: string) => string;
+  authoritativeKinds?: NativeQueryKind[];
   notes?: string[];
 }
 
