@@ -50,6 +50,7 @@ import {
   executeJsQueryAsNativeMatches,
   getNativeQueryExecution,
   getCompactImportsExecution,
+  isNativeBindingLoadedForLanguage,
   getNativeSyntaxTreeExecution,
   getUnifiedQueryExecution,
   isNativeQueryAuthoritative,
@@ -130,6 +131,27 @@ function extractKotlinImportSpecifier(statementText: string): string | null {
   );
   if (!match?.[1]) return null;
   return match[1].endsWith(".*") ? match[1].slice(0, -2) : match[1];
+}
+
+function normalizeModuleSpecifiers(
+  specifiers: ModuleSpecifier[],
+): ModuleSpecifier[] {
+  return specifiers.map((entry) =>
+    entry.typeOnly
+      ? entry
+      : {
+          spec: entry.spec,
+          ...(entry.raw !== undefined ? { raw: entry.raw } : {}),
+          ...(entry.resolutionKind
+            ? { resolutionKind: entry.resolutionKind }
+            : {}),
+          ...(entry.dropIfUnresolved ? { dropIfUnresolved: true } : {}),
+          ...(entry.resolved ? { resolved: entry.resolved } : {}),
+          ...(entry.confidence !== undefined
+            ? { confidence: entry.confidence }
+            : {}),
+        },
+  );
 }
 
 async function collectAngularJsFrameworkEdges(
@@ -344,7 +366,7 @@ export function collectModuleSpecifiersFromSource(
       }
     }
     if (out.length > 0 || resolvedNativeImports !== null || queryFailed) {
-      return out;
+      return normalizeModuleSpecifiers(out);
     }
   }
 
@@ -391,7 +413,7 @@ export function collectModuleSpecifiersFromSource(
     } catch {
       // ignore
     }
-    return out;
+    return normalizeModuleSpecifiers(out);
   }
 
   // Resolve the imports array: prefer compact (lighter) over full native
@@ -462,7 +484,7 @@ export function collectModuleSpecifiersFromSource(
       // grammar differences that cause native to miss matches, so allow
       // JS fallback for those.
       if (out.length > 0 || isNativeQueryAuthoritative(support, "imports")) {
-        return out;
+        return normalizeModuleSpecifiers(out);
       }
     } catch (error) {
       queryFailed = true;
@@ -495,7 +517,11 @@ export function collectModuleSpecifiersFromSource(
         // ignore
       }
     }
-    return out;
+    return normalizeModuleSpecifiers(out);
+  }
+
+  if (isNativeBindingLoadedForLanguage(support.id, opts?.native)) {
+    return normalizeModuleSpecifiers(out);
   }
 
   try {
@@ -568,7 +594,7 @@ export function collectModuleSpecifiersFromSource(
       const cssSeen = makeSeenSet(out);
       appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
     }
-    if (out.length > 0) return out;
+    if (out.length > 0) return normalizeModuleSpecifiers(out);
   } catch (error) {
     if (isNativeRequiredUnavailableError(error)) throw error;
     queryFailed = true;
@@ -619,7 +645,7 @@ export function collectModuleSpecifiersFromSource(
       appendUniqueSpecifiers(out, inlineSpecs, fallbackSeen);
     }
   }
-  return out;
+  return normalizeModuleSpecifiers(out);
 }
 
 const cloneEdge = (edge: Edge): Edge => ({
