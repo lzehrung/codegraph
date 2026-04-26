@@ -59,13 +59,17 @@ Goal: make the native backend the default and complete query owner for supported
 
 ## Phase 4: Syntax Tree Ownership And Degradation Behavior
 
-- [ ] Audit syntax-tree consumers that still require JS parser reconstruction when native queries succeed.
+- [x] Audit syntax-tree consumers that still require JS parser reconstruction when native queries succeed.
   Acceptance criteria:
   The remaining native syntax-tree gaps are enumerated and linked to concrete consumers.
-- [ ] Decide per consumer whether to use projected native trees, explicit capability limits, or native-side expansion.
+  Audit result:
+  - `collectLocalsAndExportsFromSource()`: native locals/exports use `ProjectedSyntaxTree` for classification/docstrings when `parseSyntaxTree` is available; JS parser reconstruction is now limited to explicit native-off or native-unavailable mode.
+  - `buildScopeIndexFromSource()` and downstream `goToDefinition()` / `findReferences()`: native-loaded source-language semantic navigation now uses `ProjectedSyntaxTree` ownership, validated by native-only semantic smoke coverage with the JS fallback package mocked unavailable.
+  - `buildSymbolGraphDetailed()`: semantic edge extraction now relies on native `parseSyntaxTree` ownership for supported source languages; JS parser reconstruction remains only for graph-first or native-unavailable paths.
+- [x] Decide per consumer whether to use projected native trees, explicit capability limits, or native-side expansion.
   Acceptance criteria:
   Each syntax-tree-dependent workflow has one chosen ownership path instead of ad hoc fallback.
-- [ ] Prevent silent imports-only module indexes when no syntax-tree backend is available.
+- [x] Prevent silent imports-only module indexes when no syntax-tree backend is available.
   Acceptance criteria:
   Index builds either surface the degradation clearly in reports or fail explicitly when the requested workflow requires unavailable parser context.
 
