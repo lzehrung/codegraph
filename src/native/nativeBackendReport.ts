@@ -22,6 +22,15 @@ export type NativeBackendOutcome = {
   error?: string;
 };
 
+export type NativeExecutionOutcome = {
+  support?: LanguageSupport;
+  file?: string;
+  languageId?: string;
+  results?: unknown;
+  fallbackReason?: NativeBackendFallbackReason;
+  error?: string;
+};
+
 function stringifyNativeLoadError(error: unknown): string | undefined {
   if (!error) return undefined;
   if (error instanceof Error) return error.message;
@@ -127,4 +136,20 @@ export function recordNativeBackendOutcome(
       message: outcome.error,
     });
   }
+}
+
+export function recordNativeExecutionOutcome(
+  report: BuildReport | undefined,
+  outcome: NativeExecutionOutcome,
+): void {
+  recordNativeBackendOutcome(report, {
+    usedNative: outcome.results !== null && outcome.results !== undefined,
+    ...(outcome.support ? { support: outcome.support } : {}),
+    ...(outcome.file ? { file: outcome.file } : {}),
+    ...(outcome.languageId ? { languageId: outcome.languageId } : {}),
+    ...(outcome.fallbackReason
+      ? { fallbackReason: outcome.fallbackReason }
+      : {}),
+    ...(outcome.error ? { error: outcome.error } : {}),
+  });
 }
