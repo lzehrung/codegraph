@@ -35,9 +35,15 @@ Goal: make the native backend the default and complete query owner for supported
 
 ## Phase 3: Eliminate JS Query Dependencies In Hot Paths
 
-- [ ] Inventory every remaining `executeJsQueryAsNativeMatches` hot path and classify whether it is required for native-unavailable mode only or still needed in native-available mode.
+- [x] Inventory every remaining `executeJsQueryAsNativeMatches` hot path and classify whether it is required for native-unavailable mode only or still needed in native-available mode.
   Acceptance criteria:
   The inventory is reflected in this plan and no hot path is left unclassified.
+  Current inventory:
+  - `src/graphs.ts`: graph/specifier extraction fallback. Still active in native-available mode for some normalized-but-not-authoritative languages and in native-unavailable mode more broadly.
+  - `src/indexer.ts` locals path: query-driven locals fallback. Still active in native-available mode for languages whose native locals are not yet authoritative, plus native-unavailable mode.
+  - `src/indexer.ts` exports path: export extraction fallback. Still active in native-available mode for languages whose native exports are not yet authoritative, plus native-unavailable mode.
+  - `src/indexer.ts` import-bindings path: now native-owned for JS/TS/TSX and Kotlin when native is available; still active for other native-unavailable or not-yet-authoritative cases.
+  - `src/chunking/chunkFile.ts`: semantic chunk query fallback. Still active in native-available mode for languages whose ad hoc chunk query is not yet authoritative, plus native-unavailable mode.
 - [x] Move Kotlin import/specifier extraction off JS query fallback in native-loaded mode.
   Acceptance criteria:
   Native-loaded Kotlin import and wildcard/alias specifier extraction stay authoritative without requiring `@lzehrung/codegraph-js-fallback`.

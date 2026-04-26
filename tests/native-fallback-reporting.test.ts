@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import os from "node:os";
+import fsp from "node:fs/promises";
+import { describe, expect, it, vi } from "vitest";
 import { supportById } from "../src/languages.js";
 import {
   getNativeQueryExecutionForState,
@@ -112,5 +115,72 @@ describe("native fallback reporting", () => {
         ]),
       }),
     ]);
+  });
+
+  it("routes astGrep through unified single-query execution without a redundant direct native call", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-astgrep-unified-"));
+    const file = path.join(root, "entry.ts");
+    await fsp.writeFile(
+      file,
+      "import { helper } from './dep';\n",
+      "utf8",
+    );
+
+    try {
+      const unifiedSpy = vi.fn(() => ({
+        matches: [
+          {
+            patternIndex: 0,
+            captures: [
+              {
+                name: "mod",
+                text: "'./dep'",
+                nodeType: "string",
+                start: { row: 0, column: 23, index: 23 },
+                end: { row: 0, column: 30, index: 30 },
+              },
+            ],
+          },
+        ],
+        backend: "native" as const,
+      }));
+      const singleSpy = vi.fn(() => ({
+        matches: null,
+        fallbackReason: "queryFailure" as const,
+        error: "legacy single-query path should not run",
+      }));
+
+      vi.resetModules();
+      vi.doMock("../src/native/treeSitterNative.js", async () => {
+        const actual = await vi.importActual<
+          typeof import("../src/native/treeSitterNative.js")
+        >("../src/native/treeSitterNative.js");
+        return {
+          ...actual,
+          getUnifiedQueryExecution: unifiedSpy,
+          getNativeSingleQueryExecution: singleSpy,
+        };
+      });
+
+      const { astGrep } = await import("../src/index.js");
+      const hits = await astGrep(
+        root,
+        '(import_statement source: (string) @mod)',
+        ["**/*.ts"],
+      );
+
+      expect(unifiedSpy).toHaveBeenCalledTimes(1);
+      expect(singleSpy).not.toHaveBeenCalled();
+      expect(hits).toEqual([
+        expect.objectContaining({
+          file: "entry.ts",
+          capture: "mod",
+          snippet: "'./dep'",
+        }),
+      ]);
+    } finally {
+      vi.doUnmock("../src/native/treeSitterNative.js");
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });
