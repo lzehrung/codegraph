@@ -1,0 +1,82 @@
+# Native Query Ownership Plan
+
+Goal: make the native backend the default and complete query owner for supported source-language workflows so users only need the JS fallback package when the native addon itself cannot be installed or loaded.
+
+## Exit Criteria
+
+- [ ] Supported source languages do not require `@lzehrung/codegraph-js-fallback` for normal graph extraction, symbol indexing, go-to-definition prerequisites, references prerequisites, semantic chunking, or AST grep when the native addon is available.
+- [ ] Native degradation is observable through structured reports and concise CLI diagnostics rather than silent data loss.
+- [ ] The remaining JS fallback surface is deliberate, documented, and limited to explicit native-unavailable scenarios or unsupported graph-first formats.
+- [ ] The regression suite proves native-only install behavior and native-vs-JS parity for supported workflows.
+
+## Phase 1: Tracking And Diagnostics
+
+- [x] Add a structured tracker for parser-backend degradation during index builds.
+  Acceptance criteria:
+  Build reports distinguish native-query fallback from missing syntax-tree context so incomplete symbol indexes are observable.
+- [x] Surface parser-backend degradation in CLI/report output without adding noisy per-file warnings on healthy runs.
+  Acceptance criteria:
+  `--report` and verbose flows expose aggregate missing-backend counts and bounded examples.
+- [ ] Keep the plan updated as work lands.
+  Acceptance criteria:
+  Completed tasks are checked off in this file in the same commits that land the work.
+
+## Phase 2: Native Ad Hoc Query Ownership
+
+- [x] Normalize ad hoc/native single-query execution through the same compatibility hooks used by built-in native queries.
+  Acceptance criteria:
+  `astGrep` and chunking use a native query text that is compatibility-adjusted per language before execution.
+- [x] Remove redundant native query execution on AST grep fallback paths.
+  Acceptance criteria:
+  `astGrep` performs at most one native single-query attempt per file before deciding whether fallback is needed.
+- [x] Add regression tests for normalized ad hoc native queries and AST grep parity.
+  Acceptance criteria:
+  Tests fail if native ad hoc queries regress for languages with normalization-sensitive grammars.
+
+## Phase 3: Eliminate JS Query Dependencies In Hot Paths
+
+- [ ] Inventory every remaining `executeJsQueryAsNativeMatches` hot path and classify whether it is required for native-unavailable mode only or still needed in native-available mode.
+  Acceptance criteria:
+  The inventory is reflected in this plan and no hot path is left unclassified.
+- [ ] Remove native-available JS query fallback for supported source-language import/specifier extraction.
+  Acceptance criteria:
+  Native-loaded runs do not require JS query fallback for supported source languages; recovery stays native-owned or fails explicitly as unsupported.
+- [ ] Remove native-available JS query fallback for supported source-language locals/exports extraction.
+  Acceptance criteria:
+  Native-loaded runs build locals/exports without JS query execution for supported source languages.
+- [ ] Reduce or eliminate query normalization gaps that currently force non-authoritative native empties.
+  Acceptance criteria:
+  Language-specific native compatibility hooks no longer blank or weaken core query kinds for supported source-language workflows without a documented follow-up item.
+
+## Phase 4: Syntax Tree Ownership And Degradation Behavior
+
+- [ ] Audit syntax-tree consumers that still require JS parser reconstruction when native queries succeed.
+  Acceptance criteria:
+  The remaining native syntax-tree gaps are enumerated and linked to concrete consumers.
+- [ ] Decide per consumer whether to use projected native trees, explicit capability limits, or native-side expansion.
+  Acceptance criteria:
+  Each syntax-tree-dependent workflow has one chosen ownership path instead of ad hoc fallback.
+- [ ] Prevent silent imports-only module indexes when no syntax-tree backend is available.
+  Acceptance criteria:
+  Index builds either surface the degradation clearly in reports or fail explicitly when the requested workflow requires unavailable parser context.
+
+## Phase 5: Decompose And Reuse
+
+- [ ] Collapse duplicated full-build and incremental-build file processing paths behind one shared per-file pipeline.
+  Acceptance criteria:
+  Native preparation, parser reconstruction, report bookkeeping, and module assembly logic live in one shared implementation.
+- [ ] Consolidate native report bookkeeping helpers so graph/index paths record outcomes consistently.
+  Acceptance criteria:
+  There is one obvious path for recording native usage, fallback reasons, and parser-backend degradation.
+
+## Phase 6: Test And Docs Hardening
+
+- [ ] Add native-only install coverage across graph, index, AST grep, chunking, and semantic parity for representative source languages.
+  Acceptance criteria:
+  The suite proves behavior when the native addon is available and the JS fallback package is absent.
+- [ ] Extend docs to explain the native-first contract, remaining limits, and when JS fallback is actually required.
+  Acceptance criteria:
+  `README.md`, `docs/language-parity.md`, `docs/scenario-catalog.md`, and `codegraph-skill/codegraph/SKILL.md` match the real behavior.
+- [ ] Run a final full verification pass before closing the plan.
+  Acceptance criteria:
+  `npm run build` and the relevant targeted/native parity suites are green, and any residual non-green areas are documented here.

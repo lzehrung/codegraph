@@ -38,8 +38,10 @@ export type NativeQueryKind =
   | "locals"
   | "importBindings";
 
+export type NativeCompatibilityQueryKind = NativeQueryKind | "adHoc";
+
 export interface NativeCompatibility {
-  normalizeQuery?: (kind: NativeQueryKind, query: string) => string;
+  normalizeQuery?: (kind: NativeCompatibilityQueryKind, query: string) => string;
   notes?: string[];
 }
 

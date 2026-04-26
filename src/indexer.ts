@@ -260,9 +260,16 @@ type PreparedFileContext = {
   nativeError?: string;
 };
 
-function tryParsePreparedFileContext(
+type PreparedFileParseAttempt = {
+  parsed: ParsedFileContext | null;
+  nativeFallbackReason?: NativeBackendFallbackReason;
+  nativeError?: string;
+  jsError?: string;
+};
+
+function attemptParsePreparedFileContext(
   context: PreparedFileContext,
-): ParsedFileContext | null {
+): PreparedFileParseAttempt {
   const { file, source, sup, nativeMode, nativeQueries } = context;
   const nativeTreeExecution = getNativeSyntaxTreeExecution(
     source,
@@ -271,20 +278,45 @@ function tryParsePreparedFileContext(
   );
   if (nativeTreeExecution.tree) {
     return {
-      source,
-      tree: new ProjectedSyntaxTree(source, nativeTreeExecution.tree),
-      sup,
-      nativeQueries,
+      parsed: {
+        source,
+        tree: new ProjectedSyntaxTree(source, nativeTreeExecution.tree),
+        sup,
+        nativeQueries,
+      },
     };
   }
 
   try {
     const resolvedLang = context.lang ?? sup.language(file);
     const tree = parseWithJsLanguage(source, resolvedLang);
-    return { source, tree, sup, lang: resolvedLang, nativeQueries };
-  } catch {
-    return null;
+    return {
+      parsed: { source, tree, sup, lang: resolvedLang, nativeQueries },
+      ...(nativeTreeExecution.fallbackReason
+        ? { nativeFallbackReason: nativeTreeExecution.fallbackReason }
+        : {}),
+      ...(nativeTreeExecution.error
+        ? { nativeError: nativeTreeExecution.error }
+        : {}),
+    };
+  } catch (error) {
+    return {
+      parsed: null,
+      ...(nativeTreeExecution.fallbackReason
+        ? { nativeFallbackReason: nativeTreeExecution.fallbackReason }
+        : {}),
+      ...(nativeTreeExecution.error
+        ? { nativeError: nativeTreeExecution.error }
+        : {}),
+      jsError: stringifyUnknown(error),
+    };
   }
+}
+
+function tryParsePreparedFileContext(
+  context: PreparedFileContext,
+): ParsedFileContext | null {
+  return attemptParsePreparedFileContext(context).parsed;
 }
 
 function parsePreparedFileContext(
@@ -293,6 +325,54 @@ function parsePreparedFileContext(
   const parsed = tryParsePreparedFileContext(context);
   if (parsed) return parsed;
   throw new Error(`Failed to reconstruct syntax tree for ${context.file}`);
+}
+
+function initParserBackendDegradationReport(
+  report: BuildReport | undefined,
+): ParserBackendDegradationReport | undefined {
+  if (!report) return undefined;
+  initNativeBackendReport(report);
+  report.backend ??= {
+    native: {
+      available: false,
+      enabled: false,
+      supportedLanguageIds: [],
+      filesUsed: 0,
+      filesFellBack: 0,
+      fallbackReasons: {
+        unavailable: 0,
+        unsupportedLanguage: 0,
+        queryFailure: 0,
+      },
+      byLanguage: {},
+      errors: [],
+    },
+  };
+  report.backend.parser ??= {
+    total: 0,
+    byLanguage: {},
+    files: [],
+  };
+  return report.backend.parser;
+}
+
+function recordParserBackendDegradation(
+  report: BuildReport | undefined,
+  entry: {
+    file: string;
+    languageId: string;
+    nativeFallbackReason?: NativeBackendFallbackReason;
+    nativeError?: string;
+    jsError?: string;
+  },
+): void {
+  const parserReport = initParserBackendDegradationReport(report);
+  if (!parserReport) return;
+  parserReport.total += 1;
+  parserReport.byLanguage[entry.languageId] =
+    (parserReport.byLanguage[entry.languageId] ?? 0) + 1;
+  if (parserReport.files.length >= 20) return;
+  parserReport.files.push(entry);
 }
 
 /**
@@ -427,8 +507,21 @@ export type NativeBackendReport = {
   loadError?: string;
 };
 
+export type ParserBackendDegradationReport = {
+  total: number;
+  byLanguage: Record<string, number>;
+  files: Array<{
+    file: string;
+    languageId: string;
+    nativeFallbackReason?: NativeBackendFallbackReason;
+    nativeError?: string;
+    jsError?: string;
+  }>;
+};
+
 export type BackendReport = {
   native: NativeBackendReport;
+  parser?: ParserBackendDegradationReport;
 };
 
 export type WorkerPoolReport = {
@@ -4180,7 +4273,8 @@ async function buildIndexFromFileListShared(
         const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
 
         if (!nativeQueries && !graphOnlyLanguage) {
-          const parsed = tryParsePreparedFileContext(prepared);
+          const parseAttempt = attemptParsePreparedFileContext(prepared);
+          const parsed = parseAttempt.parsed;
           if (parsed) {
             tree = parsed.tree;
             resolvedLang = parsed.lang;
@@ -4196,6 +4290,18 @@ async function buildIndexFromFileListShared(
               },
               Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
             );
+          } else {
+            recordParserBackendDegradation(report, {
+              file: f,
+              languageId: prepared.sup.id,
+              ...(parseAttempt.nativeFallbackReason
+                ? { nativeFallbackReason: parseAttempt.nativeFallbackReason }
+                : {}),
+              ...(parseAttempt.nativeError
+                ? { nativeError: parseAttempt.nativeError }
+                : {}),
+              ...(parseAttempt.jsError ? { jsError: parseAttempt.jsError } : {}),
+            });
           }
         }
         const lacksParserContext = !nativeQueries && !tree;
@@ -4858,7 +4964,8 @@ export async function buildProjectIndexIncremental(
             const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
 
             if (!nativeQueries && !graphOnlyLanguage) {
-              const parsed = tryParsePreparedFileContext(prepared);
+              const parseAttempt = attemptParsePreparedFileContext(prepared);
+              const parsed = parseAttempt.parsed;
               if (parsed) {
                 tree = parsed.tree;
                 resolvedLang = parsed.lang;
@@ -4868,6 +4975,20 @@ export async function buildProjectIndexIncremental(
                   parsed,
                   Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
                 );
+              } else {
+                recordParserBackendDegradation(report, {
+                  file: f,
+                  languageId: prepared.sup.id,
+                  ...(parseAttempt.nativeFallbackReason
+                    ? { nativeFallbackReason: parseAttempt.nativeFallbackReason }
+                    : {}),
+                  ...(parseAttempt.nativeError
+                    ? { nativeError: parseAttempt.nativeError }
+                    : {}),
+                  ...(parseAttempt.jsError
+                    ? { jsError: parseAttempt.jsError }
+                    : {}),
+                });
               }
             }
             const lacksParserContext = !nativeQueries && !tree;

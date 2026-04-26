@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { supportById } from "../src/languages.js";
 import {
   getNativeQueryExecutionForState,
+  getNativeSingleQueryExecution,
   getNativeTreeSitterLoadError,
   isNativeTreeSitterAvailable,
   isNativeTreeSitterDisabledByEnv,
@@ -90,5 +91,26 @@ describe("native fallback reporting", () => {
     expect(result.results).toBeNull();
     expect(result.fallbackReason).toBe("queryFailure");
     expect(result.error).toContain("bad native query");
+  });
+
+  it("normalizes ad hoc native queries through language compatibility hooks", () => {
+    const support = supportById("ts");
+    expect(support).toBeDefined();
+    const result = getNativeSingleQueryExecution(
+      "class UtilityClass {}",
+      support!,
+      "(class_declaration name: (identifier) @name)",
+    );
+    expect(result.matches).not.toBeNull();
+    expect(result.matches).toEqual([
+      expect.objectContaining({
+        captures: expect.arrayContaining([
+          expect.objectContaining({
+            name: "name",
+            text: "UtilityClass",
+          }),
+        ]),
+      }),
+    ]);
   });
 });
