@@ -64,7 +64,7 @@ export const KOTLIN_DEF: LanguageDefinition = {
       "catch_block",
       "finally_block",
     ],
-    comments: ["line_comment", "multiline_comment"],
+    comments: ["line_comment", "block_comment"],
   },
   graph: {
     imports: `

@@ -303,7 +303,6 @@ describe("Cache invalidation and strict hashing", () => {
         from: normalize(aPath),
         to: { type: "file", path: normalize(bPath) },
         raw: "./b",
-        typeOnly: false,
       },
     ]);
     expect(bEntryBefore.edges).toEqual([
@@ -311,7 +310,6 @@ describe("Cache invalidation and strict hashing", () => {
         from: normalize(bPath),
         to: { type: "file", path: normalize(cPath) },
         raw: "./c",
-        typeOnly: false,
       },
     ]);
 
@@ -332,7 +330,6 @@ describe("Cache invalidation and strict hashing", () => {
         from: normalize(bPath),
         to: { type: "file", path: normalize(dPath) },
         raw: "./d",
-        typeOnly: false,
       },
     ]);
 
