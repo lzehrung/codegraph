@@ -137,6 +137,20 @@ function formatNativeBackendFallbackSummary(
   return `Native fallback summary: ${parts.join(", ")}`;
 }
 
+function formatParserBackendSummary(
+  report: BuildReport | undefined,
+): string | undefined {
+  const parser = report?.backend?.parser;
+  if (!parser || parser.total === 0) return undefined;
+  const parts = Object.entries(parser.byLanguage)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([languageId, count]) => `${languageId}(${count})`);
+  if (parts.length === 0) {
+    return `Parser backend degradation: ${parser.total} file(s)`;
+  }
+  return `Parser backend degradation: ${parser.total} file(s) [${parts.join(", ")}]`;
+}
+
 function maybeWriteNativeBackendStatus(
   report: BuildReport | undefined,
   showProgress: boolean,
@@ -146,6 +160,8 @@ function maybeWriteNativeBackendStatus(
   if (message) writeStderrLine(message);
   const summary = formatNativeBackendFallbackSummary(report);
   if (summary) writeStderrLine(summary);
+  const parserSummary = formatParserBackendSummary(report);
+  if (parserSummary) writeStderrLine(parserSummary);
 }
 
 type CommandTimingReport = {

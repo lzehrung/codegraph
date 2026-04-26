@@ -50,7 +50,6 @@ import {
   executeJsQueryAsNativeMatches,
   getNativeQueryExecution,
   getCompactImportsExecution,
-  getNativeSingleQueryExecution,
   getNativeSyntaxTreeExecution,
   getUnifiedQueryExecution,
   isNativeQueryModified,
@@ -1170,16 +1169,9 @@ export async function astGrep(
       const prep = await prepareSourceInput(file);
       const sup = prep.sup;
       const src = prep.source;
-      const nativeExecution = getNativeSingleQueryExecution(
-        src,
-        sup,
-        querySource,
-      );
-      const matches =
-        nativeExecution.matches ??
-        getUnifiedQueryExecution(src, sup, querySource, {
-          getLanguage: () => sup.language(file),
-        }).matches;
+      const matches = getUnifiedQueryExecution(src, sup, querySource, {
+        getLanguage: () => sup.language(file),
+      }).matches;
       if (matches) {
         for (const match of matches) {
           for (const capture of match.captures) {
