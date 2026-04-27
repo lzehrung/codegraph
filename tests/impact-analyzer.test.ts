@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
+import os from "node:os";
+import fsp from "node:fs/promises";
 import { analyzeImpact, seedTransitiveFromFiles, calculateSeverity } from "../src/impact/analyzer.js";
 import { DEFAULT_SEVERITY_WEIGHTS } from "../src/impact/types.js";
-import { SymbolKind } from "../src/indexer.js";
+import { buildProjectIndexFromFiles, SymbolKind } from "../src/indexer.js";
 import type { ProjectIndex } from "../src/indexer.js";
 import type { Edge } from "../src/types.js";
 import { createTestIndex } from "./test-utils.js";
@@ -120,6 +122,38 @@ describe("Impact Analyzer Edge Cases", () => {
         (item) => item.file === dependentFile,
       );
       expect(fallbackItem?.reasons).toContain("fileLevelChange");
+    });
+
+    it("applies ignore globs for sparse explicit-file indexes", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-analyzer-"));
+      try {
+        const libFile = path.join(root, "lib.ts");
+        const consumerFile = path.join(root, "consumer.ts");
+        await fsp.writeFile(libFile, "export const lib = 1;\n", "utf8");
+        await fsp.writeFile(
+          consumerFile,
+          "import { lib } from './lib';\nexport const seen = lib;\n",
+          "utf8",
+        );
+
+        const index = await buildProjectIndexFromFiles(root, [libFile, consumerFile], {
+          cache: "memory",
+        });
+        const impacted = await analyzeImpact(
+          index,
+          [],
+          [{ path: libFile.replace(/\\/g, "/"), kind: "modified", hunks: [] }],
+          {
+            fileLevelFallback: true,
+            fileLevelFallbackPaths: [libFile.replace(/\\/g, "/")],
+            ignoreGlobs: ["consumer.ts"],
+          },
+        );
+
+        expect(impacted).toHaveLength(0);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
     });
 
     it("should respect includeTests option", async () => {
