@@ -1154,6 +1154,23 @@ export function isFilePathWithinRoot(
   );
 }
 
+export function assertFilePathWithinRoot(
+  projectRoot: string,
+  filePath: string,
+  label: string = "File",
+): string {
+  const normalizedRoot = normalizePath(path.resolve(projectRoot));
+  const normalizedFile = normalizePath(
+    resolveFilePathFromRoot(normalizedRoot, filePath),
+  );
+  if (!isFilePathWithinRoot(normalizedRoot, normalizedFile)) {
+    throw new Error(
+      `${label} is outside project root: ${normalizedFile} (root: ${normalizedRoot})`,
+    );
+  }
+  return normalizedFile;
+}
+
 export function toProjectRelativePath(
   projectRoot: string,
   filePath: string,

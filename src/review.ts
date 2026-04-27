@@ -35,17 +35,16 @@ import {
   createIndexTestFileMatcher,
 } from "./impact/testPatterns.js";
 import {
+  assertFilePathWithinRoot,
   normalizePath,
   listChangedFiles,
   fileExists,
   getUnifiedDiff,
   discoverProjectFiles,
-  isFilePathWithinRoot,
   loadNearestTsconfigFor,
   loadWorkspaceConfig,
   listResolutionCandidates,
   listWorkspacePackageResolutionCandidates,
-  resolveFilePathFromRoot,
   toProjectRelativePath,
   type ProjectFileInfo,
   type WorkspaceConfig,
@@ -1070,19 +1069,14 @@ export async function buildReviewReport(
   const reviewReport = appliedOptions.report;
   const reviewTimings = reviewReport?.timings;
   const totalStart = performance.now();
-  const normalizeFile = (file: string) =>
-    normalizePath(resolveFilePathFromRoot(projectRoot, file));
+  const normalizeFile = (file: string, label: string) =>
+    assertFilePathWithinRoot(projectRoot, file, label);
 
   const changedFiles = new Set<string>();
   const explicitFiles = new Set<string>();
   const changesStart = performance.now();
   for (const file of appliedOptions.files ?? []) {
-    const normalized = normalizeFile(file);
-    if (!isFilePathWithinRoot(projectRoot, normalized)) {
-      throw new Error(
-        `Review file is outside project root: ${normalized} (root: ${normalizePath(path.resolve(projectRoot))})`,
-      );
-    }
+    const normalized = normalizeFile(file, "Review file");
     changedFiles.add(normalized);
     explicitFiles.add(normalized);
   }
@@ -1104,6 +1098,46 @@ export async function buildReviewReport(
   }
   if (reviewTimings) {
     reviewTimings.changesMs = Math.round(performance.now() - changesStart);
+  }
+
+  const diffStart = performance.now();
+  const diffText =
+    appliedOptions.diffText ??
+    ((appliedOptions.gitBase || appliedOptions.changedSince) &&
+    changedFiles.size > 0
+      ? await getUnifiedDiff(projectRoot, {
+          base: appliedOptions.gitBase,
+          head: appliedOptions.gitHead,
+          changedSince: appliedOptions.changedSince,
+        })
+      : "");
+  const diff = diffText ? parseUnifiedDiff(diffText) : null;
+  if (reviewTimings) {
+    reviewTimings.diffMs = Math.round(performance.now() - diffStart);
+  }
+  const diffHunksByFile = new Map<string, Hunk[]>();
+  const diffKindsByFile = new Map<string, string>();
+  const diffChangesByFile = new Map<string, FileChange>();
+  if (diff) {
+    for (const fileChange of diff.files) {
+      const absPath = normalizeFile(fileChange.path, "Review diff file");
+      const normalizedChange: FileChange = {
+        ...fileChange,
+        path: absPath,
+        ...(fileChange.oldPath
+          ? {
+              oldPath: normalizeFile(
+                fileChange.oldPath,
+                "Review old diff file",
+              ),
+            }
+          : {}),
+      };
+      changedFiles.add(absPath);
+      diffHunksByFile.set(absPath, normalizedChange.hunks);
+      diffKindsByFile.set(absPath, normalizedChange.kind);
+      diffChangesByFile.set(absPath, normalizedChange);
+    }
   }
 
   if (changedFiles.size === 0) {
@@ -1191,33 +1225,6 @@ export async function buildReviewReport(
   const hasUnavailableChangedFiles = existenceChecks.some(
     (entry) => !entry.exists,
   );
-
-  const diffStart = performance.now();
-  const diffText =
-    appliedOptions.diffText ??
-    ((appliedOptions.gitBase || appliedOptions.changedSince) &&
-    changedFileList.length > 0
-      ? await getUnifiedDiff(projectRoot, {
-          base: appliedOptions.gitBase,
-          head: appliedOptions.gitHead,
-          changedSince: appliedOptions.changedSince,
-        })
-      : "");
-  const diff = diffText ? parseUnifiedDiff(diffText) : null;
-  if (reviewTimings) {
-    reviewTimings.diffMs = Math.round(performance.now() - diffStart);
-  }
-  const diffHunksByFile = new Map<string, Hunk[]>();
-  const diffKindsByFile = new Map<string, string>();
-  const diffChangesByFile = new Map<string, FileChange>();
-  if (diff) {
-    for (const fileChange of diff.files) {
-      const absPath = normalizeFile(fileChange.path);
-      diffHunksByFile.set(absPath, fileChange.hunks);
-      diffKindsByFile.set(absPath, fileChange.kind);
-      diffChangesByFile.set(absPath, fileChange);
-    }
-  }
   const deletedFiles = changedFileList.filter(
     (file) => diffKindsByFile.get(file) === "deleted",
   );
