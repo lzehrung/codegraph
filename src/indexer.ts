@@ -25,6 +25,7 @@ import {
   parseRustImportStatement,
 } from "./languages/importStatementParsers.js";
 import {
+  assertFilePathWithinRoot,
   listProjectFiles,
   discoverProjectFiles,
   DEFAULT_PROJECT_MANIFESTS,
@@ -51,6 +52,7 @@ import {
   clearImportResolutionCaches,
   mapLimit,
   stringifyUnknown,
+  isFilePathWithinRoot,
   type ProjectFileDiscoveryOptions,
   type ProjectFileInfo,
 } from "./util.js";
@@ -1584,6 +1586,32 @@ type ConfigHashResult = {
   hash: string;
   error?: string;
 };
+
+function normalizeIndexedFileInputs(
+  projectRoot: string,
+  files: readonly string[],
+  label: string,
+): string[] {
+  return Array.from(
+    new Set(
+      files
+        .filter(Boolean)
+        .map((file) => assertFilePathWithinRoot(projectRoot, file, label)),
+    ),
+  );
+}
+
+function sanitizeManifestEntriesForRoot(
+  projectRoot: string,
+  files: Record<string, ManifestFileEntry> | undefined,
+): Record<string, ManifestFileEntry> {
+  const sanitizedEntries: Record<string, ManifestFileEntry> = {};
+  for (const [file, entry] of Object.entries(files ?? {})) {
+    if (!isFilePathWithinRoot(projectRoot, file)) continue;
+    sanitizedEntries[file] = entry;
+  }
+  return sanitizedEntries;
+}
 
 async function computeConfigHash(
   projectRoot: string,
@@ -4331,10 +4359,7 @@ async function buildIndexFromFileListShared(
   initNativeBackendReport(report);
   const normalizedFiles = Array.from(
     new Set(
-      (rawFiles ?? [])
-        .filter(Boolean)
-        .map((file) => path.resolve(file))
-        .map((resolved) => resolved.replace(/\\/g, "/")),
+      normalizeIndexedFileInputs(projectRoot, rawFiles ?? [], "Index file"),
     ),
   );
   if (normalizedFiles.length === 0 && helperOpts?.warnNoFilesMessage) {
@@ -4350,12 +4375,16 @@ async function buildIndexFromFileListShared(
   }
   const manifestStart = performance.now();
   const manifest = useManifest ? await loadManifest(projectRoot, opts) : null;
+  const manifestFiles = sanitizeManifestEntriesForRoot(
+    projectRoot,
+    manifest?.files,
+  );
   if (timings && useManifest) {
     timings.manifestMs = Math.round(performance.now() - manifestStart);
   }
   const staleCachedEdgeFiles = new Set<string>();
   if (manifest) {
-    for (const [file, entry] of Object.entries(manifest.files ?? {})) {
+    for (const [file, entry] of Object.entries(manifestFiles)) {
       if (
         entry.edges.some(
           (edge) => edge.to.type === "file" && !fs.existsSync(edge.to.path),
@@ -4368,7 +4397,7 @@ async function buildIndexFromFileListShared(
   const cachedGraphEntries =
     manifest && graphOptionsEqual(manifest.graphOptions, graphOptions)
       ? new Map<string, ManifestFileEntry>(
-          Object.entries(manifest.files ?? {}).filter(
+          Object.entries(manifestFiles).filter(
             ([file]) => !staleCachedEdgeFiles.has(file),
           ),
         )
@@ -4855,9 +4884,12 @@ export async function buildProjectIndexIncremental(
     }
 
     const normalizeFilePath = (file: string): string =>
-      normalizePath(resolveFilePathFromRoot(projectRoot, file));
+      assertFilePathWithinRoot(projectRoot, file, "Incremental file");
 
-    const trackedEntries = manifest.files ?? {};
+    const trackedEntries = sanitizeManifestEntriesForRoot(
+      projectRoot,
+      manifest.files,
+    );
     const trackedFileList = Object.keys(trackedEntries);
     const trackedFiles = new Set(
       trackedFileList.filter((file) => fs.existsSync(file)),
@@ -4870,7 +4902,11 @@ export async function buildProjectIndexIncremental(
       fileReport.total = trackedFiles.size;
     }
 
-    const explicitFiles = (opts?.files ?? []).map(normalizeFilePath);
+    const explicitFiles = normalizeIndexedFileInputs(
+      projectRoot,
+      opts?.files ?? [],
+      "Incremental file",
+    );
     const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
     const gitOpts: { base?: string; head?: string; changedSince?: string } = {};
     if (opts?.gitBase) gitOpts.base = opts.gitBase;
@@ -5125,7 +5161,7 @@ export async function buildProjectIndexIncremental(
       expandStarImports(modules);
 
       const cachedGraphEntries = new Map<string, ManifestFileEntry>(
-        Object.entries(manifest.files ?? {}).filter(
+        Object.entries(trackedEntries).filter(
           ([file]) => !deletedTrackedFiles.has(file),
         ),
       );
@@ -5262,18 +5298,22 @@ export async function buildGraphDelta(
   projectRoot: string,
   opts?: IncrementalBuildOptions,
 ): Promise<GraphDeltaReport> {
-  const normalizeFilePath = (file: string): string =>
-    normalizePath(resolveFilePathFromRoot(projectRoot, file));
   const manifest = await loadManifest(projectRoot, opts);
+  const trackedEntries = sanitizeManifestEntriesForRoot(
+    projectRoot,
+    manifest?.files,
+  );
   const graphOptions = normalizeGraphOptions(opts?.graph);
   const strictIncremental = opts?.incrementalStrict ?? false;
   if (strictIncremental && graphOptions.fast) {
     graphOptions.fast = false;
   }
 
-  const explicitFiles = (opts?.files ?? [])
-    .map(normalizeFilePath)
-    .filter((file) => fs.existsSync(file));
+  const explicitFiles = normalizeIndexedFileInputs(
+    projectRoot,
+    opts?.files ?? [],
+    "Graph delta file",
+  ).filter((file) => fs.existsSync(file));
   const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
   const gitOpts: { base?: string; head?: string; changedSince?: string } = {};
   if (opts?.gitBase) gitOpts.base = opts.gitBase;
@@ -5284,7 +5324,6 @@ export async function buildGraphDelta(
     ? await listChangedFiles(projectRoot, gitOpts)
     : [];
 
-  const trackedEntries = manifest?.files ?? {};
   const trackedFiles = new Set(
     Object.keys(trackedEntries).filter((file) => fs.existsSync(file)),
   );
