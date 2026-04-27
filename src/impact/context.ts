@@ -253,14 +253,20 @@ export function listCandidateTestFiles(
     testPatterns?: string[];
     /** Maximum number of candidates to return */
     maxCandidates?: number;
+    /** Explicit project root for sparse indexes that lack metadata */
+    projectRoot?: string;
   } = {},
 ): CandidateTestFile[] {
-  const { testPatterns = [], maxCandidates = 100 } = options;
+  const { testPatterns = [], maxCandidates = 100, projectRoot } = options;
   const candidates = new Map<FileId, CandidateTestFile>();
   const resolveGraphFile = createGraphFileResolver(index.graph.nodes);
   // Default test patterns (can be extended by caller)
   const allPatterns = compileTestPatterns(testPatterns);
-  const isIndexTestFile = createIndexTestFileMatcher(index, allPatterns);
+  const isIndexTestFile = createIndexTestFileMatcher(
+    index,
+    allPatterns,
+    projectRoot,
+  );
 
   // Build reverse dependency map: file -> files that depend on it
   const reverseDeps = new Map<FileId, FileId[]>();

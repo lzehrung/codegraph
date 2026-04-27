@@ -1,5 +1,6 @@
 import type { FileId } from "../types.js";
 import type { FileChange } from "./types.js";
+import pm from "picomatch";
 import {
   isFilePathWithinRoot,
   normalizePath,
@@ -57,6 +58,43 @@ export function toImpactReportFilePath(
   filePath: string,
 ): string {
   return toProjectRelativePath(projectRoot, filePath) ?? normalizePath(filePath);
+}
+
+export function createImpactIgnoreMatcher(
+  projectRoot: string,
+  ignoreGlobs: readonly string[],
+): (filePath: string) => boolean {
+  if (ignoreGlobs.length === 0) {
+    return () => false;
+  }
+  const matchesGlob = pm([...ignoreGlobs]);
+  return (filePath: string): boolean => {
+    const normalizedFile = normalizePath(filePath);
+    return (
+      matchesGlob(toImpactReportFilePath(projectRoot, normalizedFile)) ||
+      matchesGlob(normalizedFile)
+    );
+  };
+}
+
+export function normalizeImpactDiffFiles(
+  projectRoot: string,
+  diffFiles: readonly FileChange[],
+  isIgnored: (filePath: string) => boolean,
+): { files: FileChange[]; ignoredCount: number } {
+  const normalizedFiles: FileChange[] = [];
+  let ignoredCount = 0;
+
+  for (const change of diffFiles) {
+    const normalizedChange = normalizeImpactFileChange(projectRoot, change);
+    if (isIgnored(normalizedChange.path)) {
+      ignoredCount += 1;
+      continue;
+    }
+    normalizedFiles.push(normalizedChange);
+  }
+
+  return { files: normalizedFiles, ignoredCount };
 }
 
 export function createGraphFileResolver(

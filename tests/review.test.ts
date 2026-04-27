@@ -357,7 +357,7 @@ describe("Review report", () => {
     });
   });
 
-  it("respects custom test patterns for deleted-file review candidates", async () => {
+  it("respects directory-prefixed custom test patterns for sparse deleted-file review candidates", async () => {
     const root = await mkTmpDir("dg-review-custom-tests-");
     const srcDir = path.join(root, "src");
     const checksDir = path.join(root, "checks");
@@ -378,7 +378,7 @@ describe("Review report", () => {
     const report = await buildReviewReport(root, {
       files: [libFile],
       cache: "memory",
-      testPatterns: ["\\.verify\\.ts$"],
+      testPatterns: ["^checks/.*\\.verify\\.ts$"],
       diffText: [
         "diff --git a/src/lib.ts b/src/lib.ts",
         "deleted file mode 100644",
@@ -393,6 +393,62 @@ describe("Review report", () => {
 
     expect(report.candidateTests).toContainEqual({
       file: "checks/lib.verify.ts",
+      confidence: "high",
+      reason: "importsChanged",
+    });
+  });
+
+  it("treats alias imports as direct deleted-file test candidates", async () => {
+    const root = await mkTmpDir("dg-review-alias-import-");
+    const srcDir = path.join(root, "src");
+    const testsDir = path.join(root, "tests");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.mkdir(testsDir, { recursive: true });
+    const libFile = path.join(srcDir, "lib.ts");
+    const testFile = path.join(testsDir, "lib.test.ts");
+    await fsp.writeFile(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify(
+        {
+          compilerOptions: {
+            baseUrl: ".",
+            paths: {
+              "@lib": ["src/lib.ts"],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fsp.writeFile(libFile, `export const gone = 1;\n`, "utf8");
+    await fsp.writeFile(
+      testFile,
+      `import { gone } from '@lib';\nexport const seen = gone;\n`,
+      "utf8",
+    );
+
+    await buildProjectIndex(root, { cache: "memory" });
+    await fsp.unlink(libFile);
+
+    const report = await buildReviewReport(root, {
+      files: [libFile],
+      cache: "memory",
+      diffText: [
+        "diff --git a/src/lib.ts b/src/lib.ts",
+        "deleted file mode 100644",
+        "index 1111111..0000000",
+        "--- a/src/lib.ts",
+        "+++ /dev/null",
+        "@@ -1 +0,0 @@",
+        "-export const gone = 1;",
+        "",
+      ].join("\n"),
+    });
+
+    expect(report.candidateTests).toContainEqual({
+      file: "tests/lib.test.ts",
       confidence: "high",
       reason: "importsChanged",
     });
