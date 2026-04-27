@@ -276,6 +276,13 @@ nativeDescribe("native semantic parity", () => {
         { file: "utils.ts", line: 3, column: 17, expectedStatus: "ok" },
       ),
       sampleExpectation(
+        "tsx",
+        ["JsxImportApp.tsx", "components/Button.tsx"],
+        [{ file: "components/Button.tsx", names: ["Button"] }],
+        { file: "JsxImportApp.tsx", line: 4, column: 11, expectedStatus: "ok" },
+        { file: "components/Button.tsx", line: 5, column: 17, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
         "python",
         ["main.py", "utils.py", "helpers.py"],
         [{ file: "utils.py", names: ["helper_function", "UtilityClass"] }],

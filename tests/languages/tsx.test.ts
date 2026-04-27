@@ -25,6 +25,10 @@ const definition: LanguageTestDefinition = {
         from: "App.tsx",
         to: { type: "file", path: "utils.ts" },
       },
+      {
+        from: "JsxImportApp.tsx",
+        to: { type: "file", path: "components/Button.tsx" },
+      },
     ],
   },
 };

@@ -49,6 +49,41 @@ describe("Import Resolution", () => {
     );
   });
 
+  it("should resolve .jsx imports to .tsx source files", async () => {
+    const root = await mkTmpDir("dg-resolve-jsx-tsx-");
+    const buttonFile = path.join(root, "components", "Button.tsx");
+    const appFile = path.join(root, "App.tsx");
+
+    await fsp.mkdir(path.dirname(buttonFile), { recursive: true });
+    await fsp.writeFile(
+      buttonFile,
+      "export function Button() { return null; }\n",
+      "utf8",
+    );
+    await fsp.writeFile(
+      appFile,
+      'import { Button } from "./components/Button.jsx";\nexport function App() { return <Button />; }\n',
+      "utf8",
+    );
+
+    const resolved = await resolveSpecifier(
+      appFile,
+      "./components/Button.jsx",
+      root,
+    );
+
+    expect(resolved).toBe(buttonFile);
+
+    const index = await buildProjectIndex(root);
+    const normalizedApp = appFile.replace(/\\/g, "/");
+    const normalizedButton = buttonFile.replace(/\\/g, "/");
+    const appModule = index.byFile.get(normalizedApp);
+    const buttonImport = appModule?.imports[0];
+
+    expect(buttonImport?.from).toBe("./components/Button.jsx");
+    expect(buttonImport?.resolved).toBe(normalizedButton);
+  });
+
   it("should resolve .mjs imports to .mts source files", async () => {
     const root = await mkTmpDir("dg-resolve-mjs-mts-");
 

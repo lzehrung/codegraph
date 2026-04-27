@@ -65,6 +65,23 @@ describe('Go to Definition', () => {
     });
   });
 
+  describe('TSX', () => {
+    it('should find definition of JSX imports authored with .jsx extensions', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'tsx');
+      const appFile = path.join(samplePath, 'JsxImportApp.tsx').replace(/\\/g, '/');
+      const buttonFile = path.join(samplePath, 'components', 'Button.tsx').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [appFile, buttonFile]);
+
+      const result = await testGoToDefinition(index, appFile, 4, 11);
+
+      expect(result.status).toBe('ok');
+      if (result.status === 'ok') {
+        expect(result.definition.file).toBe(buttonFile);
+        expect(result.definition.range.start.line).toBe(5);
+      }
+    });
+  });
+
   describe('Python', () => {
     it('should find definition of imported function', async () => {
       const index = await createTestIndex('python');
