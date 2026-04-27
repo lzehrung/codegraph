@@ -64,6 +64,7 @@ import type {
   ImpactOptions,
 } from "./index.js";
 import {
+  assertFilePathWithinRoot,
   normalizePath,
   resolveFilePathFromRoot,
   type ProjectFileDiscoveryOptions,
@@ -312,6 +313,40 @@ type InspectReport = {
 
 function normalizePathForDisplay(filePath: string): string {
   return filePath.replace(/\\/g, "/");
+}
+
+type CliProjectFileInput =
+  | { status: "ok"; file: string }
+  | { status: "error"; reason: "outside_project_root"; error: string };
+
+function resolveCliProjectFile(
+  projectRoot: string,
+  fileArg: string,
+  label: string,
+): CliProjectFileInput {
+  try {
+    return {
+      status: "ok",
+      file: assertFilePathWithinRoot(projectRoot, fileArg, label),
+    };
+  } catch (error) {
+    return {
+      status: "error",
+      reason: "outside_project_root",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function writeCliProjectFileError(
+  result: Extract<CliProjectFileInput, { status: "error" }>,
+  output: "json" | "text" = "json",
+): void {
+  if (output === "json") {
+    writeJSONLine(result);
+    return;
+  }
+  writeStdoutLine(`error: ${result.reason}: ${result.error}`);
 }
 
 function pathExists(filePath: string): boolean {
@@ -2007,9 +2042,12 @@ Examples:
       writeStderrLine("Usage: dumpmod <file>");
       process.exit(2);
     }
-    const file = path.isAbsolute(fileArg)
-      ? normalizePath(fileArg)
-      : normalizePath(resolveFilePathFromRoot(projectRootFs, fileArg));
+    const resolvedFile = resolveCliProjectFile(projectRootFs, fileArg, "File");
+    if (resolvedFile.status === "error") {
+      writeCliProjectFileError(resolvedFile);
+      return;
+    }
+    const file = resolvedFile.file;
     const index = await buildProjectIndex(projectRootFs, {
       onProgress: progressHandler,
       discovery: discoveryOptions,
@@ -2056,9 +2094,12 @@ Examples:
       writeStderrLine("Usage: goto <file> <line> <column>");
       process.exit(2);
     }
-    const file = path.isAbsolute(fileArg)
-      ? normalizePath(fileArg)
-      : normalizePath(resolveFilePathFromRoot(projectRootFs, fileArg));
+    const resolvedFile = resolveCliProjectFile(projectRootFs, fileArg, "File");
+    if (resolvedFile.status === "error") {
+      writeCliProjectFileError(resolvedFile);
+      return;
+    }
+    const file = resolvedFile.file;
     const line = Number(lineArg);
     const column = Number(colArg);
     const index = await buildProjectIndex(projectRootFs, {
@@ -2080,12 +2121,15 @@ Examples:
       writeStderrLine("Usage: refs --file <file> --line <line> --col <column>");
       process.exit(2);
     }
-    const file = path.isAbsolute(fileArg)
-      ? normalizePath(fileArg)
-      : normalizePath(resolveFilePathFromRoot(projectRootFs, fileArg));
     const line = Number(lineArg);
     const column = Number(colArg);
     const pretty = hasFlag("--pretty");
+    const resolvedFile = resolveCliProjectFile(projectRootFs, fileArg, "File");
+    if (resolvedFile.status === "error") {
+      writeCliProjectFileError(resolvedFile, pretty ? "text" : "json");
+      return;
+    }
+    const file = resolvedFile.file;
     const index = await buildProjectIndex(projectRootFs, {
       onProgress: progressHandler,
       discovery: discoveryOptions,
@@ -2424,12 +2468,15 @@ Examples:
       writeStderrLine(`Usage: ${cmd} <file> [--depth N] [--json]`);
       process.exit(2);
     }
-    const file = path.isAbsolute(fileArg)
-      ? normalizePath(fileArg)
-      : normalizePath(resolveFilePathFromRoot(projectRootFs, fileArg));
     const depthRaw = getOpt("--depth");
     const depth = depthRaw !== undefined ? Number(depthRaw) : undefined;
     const json = hasFlag("--json");
+    const resolvedFile = resolveCliProjectFile(projectRootFs, fileArg, "File");
+    if (resolvedFile.status === "error") {
+      writeCliProjectFileError(resolvedFile, json ? "json" : "text");
+      return;
+    }
+    const file = resolvedFile.file;
 
     const graph = await collectGraph(
       projectRootFs,
@@ -2469,13 +2516,23 @@ Examples:
       writeStderrLine("Usage: path <from-file> <to-file> [--json]");
       process.exit(2);
     }
-    const from = path.isAbsolute(fromArg)
-      ? normalizePath(fromArg)
-      : normalizePath(resolveFilePathFromRoot(projectRootFs, fromArg));
-    const to = path.isAbsolute(toArg)
-      ? normalizePath(toArg)
-      : normalizePath(resolveFilePathFromRoot(projectRootFs, toArg));
     const json = hasFlag("--json");
+    const resolvedFrom = resolveCliProjectFile(
+      projectRootFs,
+      fromArg,
+      "From file",
+    );
+    if (resolvedFrom.status === "error") {
+      writeCliProjectFileError(resolvedFrom, json ? "json" : "text");
+      return;
+    }
+    const resolvedTo = resolveCliProjectFile(projectRootFs, toArg, "To file");
+    if (resolvedTo.status === "error") {
+      writeCliProjectFileError(resolvedTo, json ? "json" : "text");
+      return;
+    }
+    const from = resolvedFrom.file;
+    const to = resolvedTo.file;
 
     const graph = await collectGraph(
       projectRootFs,
