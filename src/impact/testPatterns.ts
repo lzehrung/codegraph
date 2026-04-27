@@ -33,15 +33,8 @@ export function isTestFilePath(file: FileId, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(normalized));
 }
 
-function inferIndexProjectRoot(index: ProjectIndex): string | null {
-  const projectRoot = index.projectFiles?.find(
-    (entry) => entry.projectRoot,
-  )?.projectRoot;
-  if (projectRoot) {
-    return normalizePath(projectRoot);
-  }
-
-  const directories = Array.from(index.byFile.keys(), (file) =>
+function inferCommonProjectRoot(files: readonly FileId[]): string | null {
+  const directories = Array.from(files, (file) =>
     path.posix.dirname(normalizePath(file)),
   );
   if (directories.length === 0) {
@@ -66,14 +59,32 @@ function inferIndexProjectRoot(index: ProjectIndex): string | null {
   return sharedSegments.join("/");
 }
 
+function inferIndexProjectRoot(
+  index: ProjectIndex,
+  referenceFiles: readonly FileId[] = [],
+): string | null {
+  const projectRoot = index.projectFiles?.find(
+    (entry) => entry.projectRoot,
+  )?.projectRoot;
+  if (projectRoot) {
+    return normalizePath(projectRoot);
+  }
+
+  return inferCommonProjectRoot([
+    ...index.byFile.keys(),
+    ...referenceFiles,
+  ]);
+}
+
 export function createIndexTestFileMatcher(
   index: ProjectIndex,
   patterns: RegExp[],
   projectRootOverride?: string,
+  referenceFiles: readonly FileId[] = [],
 ): (file: FileId) => boolean {
   const projectRoot = projectRootOverride
     ? normalizePath(projectRootOverride)
-    : inferIndexProjectRoot(index);
+    : inferIndexProjectRoot(index, referenceFiles);
 
   return (file: FileId): boolean => {
     const normalized = normalizePath(file);

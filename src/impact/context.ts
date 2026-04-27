@@ -260,12 +260,14 @@ export function listCandidateTestFiles(
   const { testPatterns = [], maxCandidates = 100, projectRoot } = options;
   const candidates = new Map<FileId, CandidateTestFile>();
   const resolveGraphFile = createGraphFileResolver(index.graph.nodes);
+  const resolvedChangedFiles = changedFiles.map((file) => resolveGraphFile(file));
   // Default test patterns (can be extended by caller)
   const allPatterns = compileTestPatterns(testPatterns);
   const isIndexTestFile = createIndexTestFileMatcher(
     index,
     allPatterns,
     projectRoot,
+    resolvedChangedFiles,
   );
 
   // Build reverse dependency map: file -> files that depend on it
@@ -300,7 +302,7 @@ export function listCandidateTestFiles(
   }
 
   // Find test files that depend on changed files (lower confidence)
-  for (const changedFile of changedFiles.map((file) => resolveGraphFile(file))) {
+  for (const changedFile of resolvedChangedFiles) {
     const dependents = reverseDeps.get(changedFile) || [];
     for (const dependent of dependents) {
       if (isIndexTestFile(dependent) && !candidates.has(dependent)) {

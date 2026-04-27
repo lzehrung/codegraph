@@ -4,7 +4,8 @@ import os from "node:os";
 import fsp from "node:fs/promises";
 import { collectImpactContext, listCandidateTestFiles } from "../src/impact/index.js";
 import { createTestIndex } from "./test-utils.js";
-import { buildProjectIndex } from "../src/index.js";
+import { buildProjectIndex, buildProjectIndexFromFiles } from "../src/index.js";
+import { normalizePath } from "../src/util.js";
 
 describe("Impact Context Collection", () => {
   describe("collectImpactContext", () => {
@@ -268,6 +269,44 @@ describe("Impact Context Collection", () => {
           file: path.join(root, "tests", "feature.test.ts").replace(/\\/g, "/"),
           confidence: "high",
           reason: "importsChanged",
+        });
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("infers a usable root for sparse indexes from changed files", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-context-"));
+      try {
+        const srcDir = path.join(root, "src");
+        const checksDir = path.join(root, "checks");
+        await fsp.mkdir(srcDir, { recursive: true });
+        await fsp.mkdir(checksDir, { recursive: true });
+        const libFile = path.join(srcDir, "lib.ts");
+        const verifyFile = path.join(checksDir, "lib.verify.ts");
+        await fsp.writeFile(libFile, "export const lib = 1;\n", "utf8");
+        await fsp.writeFile(
+          verifyFile,
+          "import { lib } from '../src/lib';\nlib;\n",
+          "utf8",
+        );
+
+        const index = await buildProjectIndexFromFiles(root, [verifyFile], {
+          cache: "memory",
+        });
+        const candidates = listCandidateTestFiles(
+          index,
+          [libFile],
+          [],
+          {
+            testPatterns: ["^checks/.*\\.verify\\.ts$"],
+          },
+        );
+
+        expect(candidates).toContainEqual({
+          file: normalizePath(verifyFile),
+          confidence: "medium",
+          reason: "dependsOnChanged",
         });
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
