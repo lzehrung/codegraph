@@ -22,6 +22,7 @@ import {
   type ImpactStreamChunk,
 } from "./impact/streaming.js";
 import { getSessionPreset, mergePreset, type PresetName } from "./presets.js";
+import { normalizePath } from "./util.js";
 
 export type SessionOptions = {
   /** Project root directory */
@@ -128,6 +129,11 @@ function sessionIdentityFingerprint(identity: SessionIdentity): string {
   return JSON.stringify(identity);
 }
 
+function normalizeSessionFilePath(root: string, file: string): string {
+  const absolutePath = path.isAbsolute(file) ? file : path.resolve(root, file);
+  return normalizePath(absolutePath);
+}
+
 /**
  * Interface for CodeReviewSession for TypeScript consumers.
  * Use this type when you need to type a session parameter without coupling to the class.
@@ -186,12 +192,12 @@ export class CodeReviewSession implements ICodeReviewSession {
     const identity = resolveSessionIdentity(options);
     this.root = identity.root;
     this.buildOptions = options.preset
-      ? (options.buildOptions
-          ? mergePreset(
-              getSessionPreset(options.preset, options.root).buildOptions ?? {},
-              options.buildOptions,
-            )
-          : getSessionPreset(options.preset, options.root).buildOptions)
+      ? options.buildOptions
+        ? mergePreset(
+            getSessionPreset(options.preset, options.root).buildOptions ?? {},
+            options.buildOptions,
+          )
+        : getSessionPreset(options.preset, options.root).buildOptions
       : options.buildOptions;
     this.timeout = identity.timeout;
     this.incremental = identity.incremental;
@@ -333,7 +339,10 @@ export class CodeReviewSession implements ICodeReviewSession {
    */
   async findReferences(params: { file: string; line: number; column: number }) {
     const index = this.getIndex();
-    return await findReferences(index, params);
+    return await findReferences(index, {
+      ...params,
+      file: normalizeSessionFilePath(this.root, params.file),
+    });
   }
 
   /**
@@ -341,7 +350,10 @@ export class CodeReviewSession implements ICodeReviewSession {
    */
   async goToDefinition(params: { file: string; line: number; column: number }) {
     const index = this.getIndex();
-    return await goToDefinition(index, params);
+    return await goToDefinition(index, {
+      ...params,
+      file: normalizeSessionFilePath(this.root, params.file),
+    });
   }
 
   /**
@@ -456,7 +468,11 @@ export class SessionManager {
     if (pending.fingerprint !== requestedFingerprint) {
       const existing = this.sessions.get(sessionId);
       if (existing) {
-        throw this.createSessionConfigurationError(sessionId, existing, options);
+        throw this.createSessionConfigurationError(
+          sessionId,
+          existing,
+          options,
+        );
       }
       throw new Error(
         `Session "${sessionId}" is already initializing with a different configuration.`,
@@ -470,7 +486,9 @@ export class SessionManager {
     options: SessionOptions,
     promise: Promise<CodeReviewSession>,
   ): Promise<CodeReviewSession> {
-    const fingerprint = sessionIdentityFingerprint(resolveSessionIdentity(options));
+    const fingerprint = sessionIdentityFingerprint(
+      resolveSessionIdentity(options),
+    );
     this.pendingSessions.set(sessionId, {
       cancelled: false,
       fingerprint,
@@ -496,7 +514,9 @@ export class SessionManager {
       await session.init();
       if (isCancelled()) {
         session.dispose();
-        throw new Error(`Session "${sessionId}" was disposed during initialization.`);
+        throw new Error(
+          `Session "${sessionId}" was disposed during initialization.`,
+        );
       }
       this.sessions.set(sessionId, session);
       return session;
@@ -523,14 +543,10 @@ export class SessionManager {
     if (!session) {
       session = new CodeReviewSession(options);
       let promise!: Promise<CodeReviewSession>;
-      promise = this.initializeManagedSession(
-        sessionId,
-        session,
-        () => {
-          const pending = this.pendingSessions.get(sessionId);
-          return pending?.promise === promise && pending.cancelled;
-        },
-      );
+      promise = this.initializeManagedSession(sessionId, session, () => {
+        const pending = this.pendingSessions.get(sessionId);
+        return pending?.promise === promise && pending.cancelled;
+      });
       return await this.trackPendingSession(sessionId, options, promise);
     } else if (!session.isReady()) {
       try {
@@ -627,15 +643,20 @@ export class SessionManager {
       existing?: CodeReviewSession;
       session: CodeReviewSession;
     }> = [];
-    const initializedSessions: Array<{ id: string; session: CodeReviewSession }> =
-      [];
+    const initializedSessions: Array<{
+      id: string;
+      session: CodeReviewSession;
+    }> = [];
     try {
       for (const { id, options } of sessions) {
         const requestedFingerprint = sessionIdentityFingerprint(
           resolveSessionIdentity(options),
         );
         const existingFingerprint = requestedFingerprints.get(id);
-        if (existingFingerprint && existingFingerprint !== requestedFingerprint) {
+        if (
+          existingFingerprint &&
+          existingFingerprint !== requestedFingerprint
+        ) {
           throw new Error(
             `Warmup requested conflicting configurations for session "${id}".`,
           );
