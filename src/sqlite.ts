@@ -62,6 +62,7 @@ const loadBetterSqlite3 = () => {
 };
 
 type BetterSqliteDatabase = import("better-sqlite3").Database;
+type BetterSqliteStatement = import("better-sqlite3").Statement;
 
 const SQLITE_SCHEMA_VERSION = 2;
 
@@ -620,13 +621,20 @@ const recordGraphSnapshot = (
   }
 };
 
-const readOrCreateDb = async (outputPath: string) => {
+const readOrCreateDb = async (
+  outputPath: string,
+  options?: { readonly?: boolean },
+) => {
+  const readonly = options?.readonly ?? false;
   const dir = path.dirname(outputPath);
-  if (dir) {
+  if (dir && !readonly) {
     await fs.mkdir(dir, { recursive: true });
   }
   const BetterSqlite3 = loadBetterSqlite3();
-  const db = new BetterSqlite3(outputPath);
+  const db = new BetterSqlite3(outputPath, {
+    readonly,
+    fileMustExist: readonly,
+  });
   return { db };
 };
 
@@ -641,6 +649,29 @@ async function withSqliteDatabase<T>(
   } finally {
     db.close();
   }
+}
+
+async function withReadOnlySqliteDatabase<T>(
+  outputPath: string,
+  callback: (db: BetterSqliteDatabase) => T | Promise<T>,
+): Promise<T> {
+  const { db } = await readOrCreateDb(outputPath, { readonly: true });
+  try {
+    return await callback(db);
+  } finally {
+    db.close();
+  }
+}
+
+function assertReadOnlyQueryStatement(
+  stmt: BetterSqliteStatement,
+): void {
+  if (stmt.reader && stmt.readonly) {
+    return;
+  }
+  throw new Error(
+    "Raw SQLite queries must be read-only result-producing statements such as SELECT or PRAGMA.",
+  );
 }
 
 const deleteUnreferencedExternalFiles = (db: BetterSqliteDatabase) => {
@@ -972,8 +1003,9 @@ export async function queryGraphSqliteRaw(
   sql: string,
   params: Array<string | number | null> = [],
 ): Promise<RawSqlResult> {
-  return await withSqliteDatabase(outputPath, (db) => {
+  return await withReadOnlySqliteDatabase(outputPath, (db) => {
     const stmt = db.prepare(sql);
+    assertReadOnlyQueryStatement(stmt);
     const columns = stmt.columns().map((col) => col.name);
     const rows = stmt.raw().all(params) as Array<Array<unknown>>;
     return { columns, rows };

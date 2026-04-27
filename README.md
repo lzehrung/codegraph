@@ -1112,7 +1112,7 @@ if (impact.status === "ok") {
 }
 ```
 
-### Raw SQL from code (advanced)
+### Read-only SQL from code (advanced)
 
 ```ts
 import { queryGraphSqliteRaw } from "@lzehrung/codegraph";
@@ -1125,6 +1125,8 @@ const result = await queryGraphSqliteRaw(
 );
 console.log(result.columns, result.rows);
 ```
+
+`queryGraphSqliteRaw()` is intentionally read-only. It accepts result-producing statements such as `SELECT ...` and `PRAGMA ...`, and rejects mutating SQL.
 
 Find references:
 

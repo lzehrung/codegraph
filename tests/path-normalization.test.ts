@@ -50,10 +50,6 @@ describe("cross-platform path normalization", () => {
   });
 
   it("accepts Windows drive-letter case differences within the same root", () => {
-    if (process.platform !== "win32") {
-      return;
-    }
-
     const root = "C:/Repo";
     const file = "c:/Repo/src/main.ts";
 

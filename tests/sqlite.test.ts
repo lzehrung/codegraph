@@ -725,4 +725,33 @@ export function helper() { return 1; }
 
     await expect(fsp.rm(dbPath, { force: true })).resolves.toBeUndefined();
   });
+
+  it("rejects mutating raw SQL queries before execution", async () => {
+    const root = await mkTmpDir("dg-sqlite-raw-readonly-");
+    await fsp.writeFile(
+      path.join(root, "main.ts"),
+      `export const value = 1;
+`,
+      "utf8",
+    );
+
+    const index = await buildProjectIndex(root);
+    const sgraph = await buildSymbolGraphDetailed(index);
+    const dbPath = path.join(root, "graph.sqlite");
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+    });
+
+    await expect(
+      queryGraphSqliteRaw(dbPath, "DELETE FROM symbols RETURNING name;"),
+    ).rejects.toThrow(/read-only result-producing statements/);
+
+    const remaining = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT COUNT(*) FROM symbols;",
+    );
+    expect(remaining.rows).toEqual([[1]]);
+  });
 });
