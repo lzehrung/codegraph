@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
+import os from "node:os";
+import fsp from "node:fs/promises";
 import { collectImpactContext, listCandidateTestFiles } from "../src/impact/index.js";
 import { createTestIndex } from "./test-utils.js";
+import { buildProjectIndex } from "../src/index.js";
 
 describe("Impact Context Collection", () => {
   describe("collectImpactContext", () => {
@@ -230,6 +233,44 @@ describe("Impact Context Collection", () => {
           const confidenceOrder = { high: 3, medium: 2, low: 1 };
           expect(confidenceOrder[prev.confidence]).toBeGreaterThanOrEqual(confidenceOrder[curr.confidence]);
         }
+      }
+    });
+
+    it("accepts project-relative changed files from impact reports", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-context-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        await fsp.mkdir(path.join(root, "tests"), { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "src", "feature.ts"),
+          "export function feature() { return 1; }\n",
+          "utf8",
+        );
+        await fsp.writeFile(
+          path.join(root, "tests", "feature.test.ts"),
+          "import { feature } from '../src/feature';\nfeature();\n",
+          "utf8",
+        );
+
+        const index = await buildProjectIndex(root, { logLevel: "error" });
+        const changedSymbolIds = [
+          `${path.join(root, "src", "feature.ts").replace(/\\/g, "/")}::feature::16`,
+        ];
+
+        const candidates = listCandidateTestFiles(
+          index,
+          ["src/feature.ts"],
+          changedSymbolIds,
+          { maxCandidates: 5 },
+        );
+
+        expect(candidates).toContainEqual({
+          file: path.join(root, "tests", "feature.test.ts").replace(/\\/g, "/"),
+          confidence: "high",
+          reason: "importsChanged",
+        });
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
       }
     });
   });

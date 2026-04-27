@@ -27,7 +27,10 @@ import {
   listCandidateTestFiles,
   type CandidateTestFile,
 } from "./impact/context.js";
-import { compileTestPatterns, isTestFilePath } from "./impact/testPatterns.js";
+import {
+  compileTestPatterns,
+  createIndexTestFileMatcher,
+} from "./impact/testPatterns.js";
 import {
   normalizePath,
   listChangedFiles,
@@ -296,6 +299,7 @@ function listDirectDeletedFileTestImporters(
     deletedFiles.map((file) => normalizePath(file)),
   );
   const compiledPatterns = compileTestPatterns(testPatterns);
+  const isIndexTestFile = createIndexTestFileMatcher(index, compiledPatterns);
   const candidates = new Map<FileId, CandidateTestFile>();
   const relativeSpecsByFile = new Map<FileId, Set<string>>();
 
@@ -310,7 +314,7 @@ function listDirectDeletedFileTestImporters(
   }
 
   for (const mod of index.byFile.values()) {
-    if (!isTestFilePath(mod.file, compiledPatterns)) continue;
+    if (!isIndexTestFile(mod.file)) continue;
     const relativeSpecs = new Set(relativeSpecsByFile.get(mod.file) ?? []);
     for (const imp of mod.imports) {
       if (!imp.from.startsWith(".")) continue;

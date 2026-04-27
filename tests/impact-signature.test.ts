@@ -47,7 +47,7 @@ describe("impact signature hint", () => {
 
       const report = expectImpactReport(result);
       expect(report.impacted.length).toBeGreaterThan(0);
-      const impact = report.impacted.find((item) => item.file === consumer);
+      const impact = report.impacted.find((item) => item.file === "consumer.ts");
       expect(impact).toBeDefined();
       expect(impact?.explain?.hints).toContain("signatureChanged");
     } finally {
