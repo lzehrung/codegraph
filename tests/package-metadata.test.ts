@@ -65,6 +65,14 @@ describe("package metadata", () => {
     expect(normalizedDescription).not.toContain("js/ts/python monorepos");
   });
 
+  it("keeps lint as a non-mutating verification gate and exposes lint:fix separately", () => {
+    const rootPackage = readJson("package.json");
+    const scripts = readStringRecord(rootPackage.scripts);
+
+    expect(scripts.lint).toBe("npx eslint ./src");
+    expect(scripts["lint:fix"]).toBe("npx eslint ./src --fix");
+  });
+
   it("keeps JS fallback grammars out of the native package", () => {
     const nativePackage = readJson("packages/codegraph-native/package.json");
     const dependencies = readStringRecord(nativePackage.dependencies);
