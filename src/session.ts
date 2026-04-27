@@ -4,7 +4,13 @@
  */
 
 import path from "node:path";
-import type { ProjectIndex, BuildOptions } from "./indexer.js";
+import type {
+  ProjectIndex,
+  BuildOptions,
+  GoToResult,
+  Reference,
+  SymbolDef,
+} from "./indexer.js";
 import {
   buildProjectIndex,
   buildProjectIndexIncremental,
@@ -22,7 +28,9 @@ import {
   type ImpactStreamChunk,
 } from "./impact/streaming.js";
 import { getSessionPreset, mergePreset, type PresetName } from "./presets.js";
-import { normalizePath, resolveFilePathFromRoot } from "./util.js";
+import {
+  assertFilePathWithinRoot,
+} from "./util.js";
 
 export type SessionOptions = {
   /** Project root directory */
@@ -129,8 +137,44 @@ function sessionIdentityFingerprint(identity: SessionIdentity): string {
   return JSON.stringify(identity);
 }
 
-function normalizeSessionFilePath(root: string, file: string): string {
-  return normalizePath(resolveFilePathFromRoot(root, file));
+type SessionInputError = {
+  status: "error";
+  reason: "outside_project_root";
+  error: string;
+};
+
+type SessionFindReferencesResult =
+  | { status: "ok"; definition: SymbolDef; references: Reference[] }
+  | { status: "not_found"; reason: string }
+  | SessionInputError;
+
+type SessionGoToDefinitionResult = GoToResult | SessionInputError;
+
+function resolveSessionFileInput(
+  root: string,
+  file: string,
+  label: string,
+): { status: "ok"; file: string } | SessionInputError {
+  try {
+    return {
+      status: "ok",
+      file: assertFilePathWithinRoot(root, file, label),
+    };
+  } catch (error) {
+    return {
+      status: "error",
+      reason: "outside_project_root",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function requireSessionImpactProvider(options: Partial<ImpactOptions>): void {
+  if (!options.provider) {
+    throw new Error(
+      "Impact provider is required. Set provider to 'git', 'github', or 'raw'.",
+    );
+  }
 }
 
 /**
@@ -141,26 +185,18 @@ export interface ICodeReviewSession {
   init(): Promise<void>;
   isReady(): boolean;
   getStatus(): SessionStatus;
-  analyzeImpact(
-    options: Omit<ImpactOptions, "provider"> & {
-      provider?: ImpactOptions["provider"];
-    },
-  ): Promise<ImpactReport | CompactImpactReport>;
+  analyzeImpact(options: ImpactOptions): Promise<ImpactReport | CompactImpactReport>;
   findReferences(params: {
     file: string;
     line: number;
     column: number;
-  }): Promise<unknown>;
-  analyzeImpactStream(
-    options: Omit<ImpactOptions, "provider"> & {
-      provider?: ImpactOptions["provider"];
-    },
-  ): AsyncGenerator<ImpactStreamChunk>;
+  }): Promise<SessionFindReferencesResult>;
+  analyzeImpactStream(options: ImpactOptions): AsyncGenerator<ImpactStreamChunk>;
   goToDefinition(params: {
     file: string;
     line: number;
     column: number;
-  }): Promise<unknown>;
+  }): Promise<SessionGoToDefinitionResult>;
   refresh(): Promise<void>;
   dispose(): void;
   getStats(): {
@@ -308,16 +344,11 @@ export class CodeReviewSession implements ICodeReviewSession {
    * Results are cached in the warm index
    */
   async analyzeImpact(
-    options: Omit<ImpactOptions, "provider"> & {
-      provider?: ImpactOptions["provider"];
-    },
+    options: ImpactOptions,
   ): Promise<ImpactReport | CompactImpactReport> {
     const index = this.getIndex();
-    return await analyzeImpactFromDiff(
-      this.root,
-      index,
-      options as ImpactOptions,
-    );
+    requireSessionImpactProvider(options);
+    return await analyzeImpactFromDiff(this.root, index, options);
   }
 
   /**
@@ -325,33 +356,56 @@ export class CodeReviewSession implements ICodeReviewSession {
    * Better for agents as they can start processing immediately
    */
   async *analyzeImpactStream(
-    options: Omit<ImpactOptions, "provider"> & {
-      provider?: ImpactOptions["provider"];
-    },
+    options: ImpactOptions,
   ): AsyncGenerator<ImpactStreamChunk> {
     const index = this.getIndex();
-    yield* analyzeImpactStreaming(this.root, index, options as ImpactOptions);
+    requireSessionImpactProvider(options);
+    yield* analyzeImpactStreaming(this.root, index, options);
   }
 
   /**
    * Find references to a symbol
    */
-  async findReferences(params: { file: string; line: number; column: number }) {
+  async findReferences(params: {
+    file: string;
+    line: number;
+    column: number;
+  }): Promise<SessionFindReferencesResult> {
     const index = this.getIndex();
+    const resolved = resolveSessionFileInput(
+      this.root,
+      params.file,
+      "Session file",
+    );
+    if (resolved.status === "error") {
+      return resolved;
+    }
     return await findReferences(index, {
       ...params,
-      file: normalizeSessionFilePath(this.root, params.file),
+      file: resolved.file,
     });
   }
 
   /**
    * Go to definition of a symbol
    */
-  async goToDefinition(params: { file: string; line: number; column: number }) {
+  async goToDefinition(params: {
+    file: string;
+    line: number;
+    column: number;
+  }): Promise<SessionGoToDefinitionResult> {
     const index = this.getIndex();
+    const resolved = resolveSessionFileInput(
+      this.root,
+      params.file,
+      "Session file",
+    );
+    if (resolved.status === "error") {
+      return resolved;
+    }
     return await goToDefinition(index, {
       ...params,
-      file: normalizeSessionFilePath(this.root, params.file),
+      file: resolved.file,
     });
   }
 

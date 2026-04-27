@@ -806,6 +806,9 @@ const def = await session.goToDefinition({
   column: 8,
 });
 
+// Session impact calls use the same required provider contract as analyzeImpactFromDiff().
+// Session navigation rejects files outside the session root with { status: "error", reason: "outside_project_root" }.
+
 // Refresh the index after external changes
 await session.refresh();
 

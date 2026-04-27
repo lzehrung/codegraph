@@ -111,6 +111,36 @@ describe("CodeReviewSession", () => {
     }
   });
 
+  test("should reject out-of-root session navigation paths explicitly", async () => {
+    const session = await createCodeReviewSession({
+      root: sampleRoot,
+      buildOptions: { cache: "memory", useBloomFilters: true },
+    });
+    const outsideFile = path.resolve("README.md");
+
+    const definition = await session.goToDefinition({
+      file: outsideFile,
+      line: 1,
+      column: 1,
+    });
+    const references = await session.findReferences({
+      file: outsideFile,
+      line: 1,
+      column: 1,
+    });
+
+    expect(definition.status).toBe("error");
+    expect(references.status).toBe("error");
+    if (definition.status === "error") {
+      expect(definition.reason).toBe("outside_project_root");
+      expect(definition.error).toContain("outside project root");
+    }
+    if (references.status === "error") {
+      expect(references.reason).toBe("outside_project_root");
+      expect(references.error).toContain("outside project root");
+    }
+  });
+
   test("should keep Windows-style absolute paths absolute even on non-Windows hosts", () => {
     expect(resolveFilePathFromRoot("/repo", "C:/repo/src/main.ts")).toBe(
       "C:/repo/src/main.ts",
@@ -222,6 +252,29 @@ describe("CodeReviewSession", () => {
     await expect(
       session.findReferences({ file, line: 1, column: 17 }),
     ).rejects.toThrow();
+  });
+
+  test("should reject missing impact providers explicitly", async () => {
+    const session = await createCodeReviewSession({
+      root: sampleRoot,
+      buildOptions: { cache: "memory", useBloomFilters: true },
+    });
+
+    await expect(
+      Reflect.apply(session.analyzeImpact, session, [{ diffText: "diff --git a/main.ts b/main.ts\n" }]),
+    ).rejects.toThrow(/Impact provider is required/);
+
+    await expect(
+      (async () => {
+        for await (const _chunk of Reflect.apply(
+          session.analyzeImpactStream,
+          session,
+          [{ diffText: "diff --git a/main.ts b/main.ts\n" }],
+        )) {
+          break;
+        }
+      })(),
+    ).rejects.toThrow(/Impact provider is required/);
   });
 });
 
