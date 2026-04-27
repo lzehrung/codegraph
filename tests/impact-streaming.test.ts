@@ -186,6 +186,42 @@ index 1234567..abcdef0 100644
     }
   });
 
+  it("normalizes absolute raw diff paths before applying ignoreGlobs in streaming mode", async () => {
+    const root = path.resolve(process.cwd(), "tests", "samples", "typescript");
+    const index = await buildProjectIndex(root);
+    const absoluteMain = path.join(root, "main.ts").replace(/\\/g, "/");
+    const diffText = `diff --git a/${absoluteMain} b/${absoluteMain}
+index 1234567..abcdef0 100644
+--- a/${absoluteMain}
++++ b/${absoluteMain}
+@@ -1,1 +1,2 @@
+ import { helperFunction } from './utils';
++console.log("ignored");
+`;
+
+    const chunkTypes: string[] = [];
+    const changedSymbols: string[] = [];
+    const impactedFiles: string[] = [];
+
+    for await (const chunk of analyzeImpactStreaming(root, index, {
+      provider: "raw",
+      diffText,
+      ignoreGlobs: ["main.ts"],
+    })) {
+      chunkTypes.push(chunk.type);
+      if (chunk.type === "changedSymbol") {
+        changedSymbols.push(chunk.symbol.file);
+      }
+      if (chunk.type === "impactItem") {
+        impactedFiles.push(chunk.item.file);
+      }
+    }
+
+    expect(changedSymbols).toEqual([]);
+    expect(impactedFiles).toEqual([]);
+    expect(chunkTypes[chunkTypes.length - 1]).toBe("complete");
+  });
+
   it("emits progressive impact items before completion", async () => {
     const root = await mkTmpDir("dg-stream-progressive-");
     await fsp.writeFile(

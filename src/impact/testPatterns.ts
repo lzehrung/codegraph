@@ -69,8 +69,11 @@ function inferIndexProjectRoot(index: ProjectIndex): string | null {
 export function createIndexTestFileMatcher(
   index: ProjectIndex,
   patterns: RegExp[],
+  projectRootOverride?: string,
 ): (file: FileId) => boolean {
-  const projectRoot = inferIndexProjectRoot(index);
+  const projectRoot = projectRootOverride
+    ? normalizePath(projectRootOverride)
+    : inferIndexProjectRoot(index);
 
   return (file: FileId): boolean => {
     const normalized = normalizePath(file);

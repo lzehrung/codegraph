@@ -1,6 +1,5 @@
 import path from "node:path";
 import fs from "node:fs/promises";
-import pm from "picomatch";
 import { SymbolKind, type ProjectIndex, findReferences } from "../indexer.js";
 import type {
   ImpactReport,
@@ -19,7 +18,8 @@ import { collectImpactSuggestions } from "./suggestions.js";
 import { listCandidateTestFiles } from "./context.js";
 import { mapLimit, resolveFilePathFromRoot } from "../util.js";
 import {
-  normalizeImpactFileChange,
+  createImpactIgnoreMatcher,
+  normalizeImpactDiffFiles,
   normalizeImpactFilePath,
 } from "./path.js";
 import {
@@ -400,7 +400,11 @@ async function collectUntestedChangeSuggestions(
 ): Promise<ImpactSuggestion[]> {
   const suggestions: ImpactSuggestion[] = [];
   const testPatterns = compileTestPatterns(options?.testPatterns);
-  const isIndexTestFile = createIndexTestFileMatcher(index, testPatterns);
+  const isIndexTestFile = createIndexTestFileMatcher(
+    index,
+    testPatterns,
+    projectRoot,
+  );
   const testFiles = new Set<string>();
   for (const file of index.byFile.keys()) {
     if (isIndexTestFile(file)) {
@@ -435,6 +439,7 @@ async function collectUntestedChangeSuggestions(
           ? { testPatterns: options.testPatterns }
           : {}),
         maxCandidates: 3,
+        projectRoot,
       }).filter((entry) => entry.file !== file),
     );
   }
@@ -971,19 +976,15 @@ export async function analyzeImpactFromDiff(
   const diff = await getDiff(options);
 
   const { ignoreGlobs = [] } = options;
-  const isIgnored: (p: string) => boolean =
-    ignoreGlobs.length > 0
-      ? (pm as (g: string[]) => (s: string) => boolean)(ignoreGlobs)
-      : () => false;
-
-  // Filter out ignored files from diff
-  const filteredFiles =
-    ignoreGlobs.length > 0
-      ? diff.files.filter((f) => !isIgnored(f.path))
-      : diff.files;
+  const isIgnored = createImpactIgnoreMatcher(projectRoot, ignoreGlobs);
+  const normalizedDiff = normalizeImpactDiffFiles(
+    projectRoot,
+    diff.files,
+    isIgnored,
+  );
   const diagnostics: ImpactDiagnostics = {
     changedFilesTotal: diff.files.length,
-    changedFilesIgnored: diff.files.length - filteredFiles.length,
+    changedFilesIgnored: normalizedDiff.ignoredCount,
     changedFilesWithoutSymbols: 0,
     symbolMappingParseFailures: 0,
     refsScanned: 0,
@@ -995,9 +996,7 @@ export async function analyzeImpactFromDiff(
   };
 
   // Map all changed files to changed symbols
-  const normalizedChanges = filteredFiles.map((change) =>
-    normalizeImpactFileChange(projectRoot, change),
-  );
+  const normalizedChanges = normalizedDiff.files;
   const changedByFile = await mapLimit(
     normalizedChanges.map((fileChange, idx) => ({ fileChange, idx })),
     8,
@@ -1061,6 +1060,7 @@ export async function analyzeImpactFromDiff(
     normalizedChanges,
     {
       ...options,
+      projectRoot,
       fileLevelFallback,
       fileLevelFallbackPaths,
       diagnostics,

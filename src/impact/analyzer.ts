@@ -1,6 +1,5 @@
 import type { FileId, Edge } from "../types.js";
 import type { ProjectIndex, SymbolDef, Reference } from "../indexer.js";
-import pm from "picomatch";
 import {
   compileTestPatterns,
   createIndexTestFileMatcher,
@@ -16,6 +15,7 @@ import type {
 import { DEFAULT_SEVERITY_WEIGHTS } from "./types.js";
 import { findReferences } from "../indexer.js";
 import { Semaphore } from "../util/semaphore.js";
+import { createImpactIgnoreMatcher } from "./path.js";
 
 /**
  * Priority order for ImpactReason — higher number wins when merging explain.reason.
@@ -128,7 +128,7 @@ export async function analyzeImpact(
   index: ProjectIndex,
   changedSymbols: ChangedSymbol[],
   changedFiles: FileChange[],
-  options: Partial<ImpactOptions> = {},
+  options: Partial<ImpactOptions> & { projectRoot?: string } = {},
 ): Promise<ImpactItem[]> {
   const {
     maxRefs = 1000,
@@ -142,13 +142,23 @@ export async function analyzeImpact(
     onImpactItem,
   } = options;
   const diagnostics = options.diagnostics;
+  const projectRoot =
+    options.projectRoot ??
+    index.projectFiles?.find((entry) => entry.projectRoot)?.projectRoot;
+  const normalizedOptions = {
+    ...options,
+    ...(projectRoot ? { projectRoot } : {}),
+  };
 
   const patternMatchers = compileTestPatterns(testPatterns);
-  const isIndexTestFile = createIndexTestFileMatcher(index, patternMatchers);
-  const isIgnored: (p: string) => boolean =
-    ignoreGlobs.length > 0
-      ? (pm as (g: string[]) => (s: string) => boolean)(ignoreGlobs)
-      : () => false;
+  const isIndexTestFile = createIndexTestFileMatcher(
+    index,
+    patternMatchers,
+    projectRoot,
+  );
+  const isIgnored = projectRoot
+    ? createImpactIgnoreMatcher(projectRoot, ignoreGlobs)
+    : () => false;
 
   const impacted = new Map<FileId, ImpactItem>();
   const processedSymbols = new Set<string>();
@@ -362,7 +372,7 @@ export async function analyzeImpact(
       index,
       impacted,
       changedFiles,
-      options,
+      normalizedOptions,
       reverseDeps,
       emitImpactItem,
     );
@@ -373,7 +383,7 @@ export async function analyzeImpact(
     analyzeTransitiveImpact(
       impacted,
       depth,
-      options,
+      normalizedOptions,
       isIndexTestFile,
       reverseDeps,
       emitImpactItem,
@@ -406,19 +416,25 @@ export function seedTransitiveFromFiles(
   index: ProjectIndex,
   impacted: Map<FileId, ImpactItem>,
   changedFiles: FileChange[],
-  options: Partial<ImpactOptions>,
+  options: Partial<ImpactOptions> & { projectRoot?: string },
   reverseDeps?: Map<FileId, Edge[]>,
   emitImpactItem?: (item: ImpactItem, phase: "partial" | "final") => void,
 ): void {
   const { includeTests = false, testPatterns, ignoreGlobs = [] } = options;
+  const projectRoot =
+    options.projectRoot ??
+    index.projectFiles?.find((entry) => entry.projectRoot)?.projectRoot;
   const patternMatchers = compileTestPatterns(testPatterns);
-  const isIndexTestFile = createIndexTestFileMatcher(index, patternMatchers);
+  const isIndexTestFile = createIndexTestFileMatcher(
+    index,
+    patternMatchers,
+    projectRoot,
+  );
   const fallbackPathSet = new Set(options.fileLevelFallbackPaths ?? []);
   const diagnostics = options.diagnostics;
-  const isIgnored: (p: string) => boolean =
-    ignoreGlobs.length > 0
-      ? (pm as (g: string[]) => (s: string) => boolean)(ignoreGlobs)
-      : () => false;
+  const isIgnored = projectRoot
+    ? createImpactIgnoreMatcher(projectRoot, ignoreGlobs)
+    : () => false;
 
   for (const fileChange of changedFiles) {
     if (isIgnored(fileChange.path)) continue;
@@ -516,16 +532,15 @@ export function seedTransitiveFromFiles(
 function analyzeTransitiveImpact(
   impacted: Map<FileId, ImpactItem>,
   maxDepth: number,
-  options: Partial<ImpactOptions>,
+  options: Partial<ImpactOptions> & { projectRoot?: string },
   isIndexTestFile: (file: FileId) => boolean,
   reverseDeps: Map<FileId, Edge[]>,
   emitImpactItem?: (item: ImpactItem, phase: "partial" | "final") => void,
 ): void {
   const { ignoreGlobs = [] } = options;
-  const isIgnored: (p: string) => boolean =
-    ignoreGlobs.length > 0
-      ? (pm as (g: string[]) => (s: string) => boolean)(ignoreGlobs)
-      : () => false;
+  const isIgnored = options.projectRoot
+    ? createImpactIgnoreMatcher(options.projectRoot, ignoreGlobs)
+    : () => false;
 
   const visited = new Set<FileId>();
   const queue: Array<{ file: FileId; depth: number; reason: ImpactReason }> =
