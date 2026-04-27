@@ -9,6 +9,11 @@ import type {
 import { goToDefinition, ensureParsedContext } from "../indexer.js";
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import {
+  isAbsoluteFilePath,
+  normalizePath,
+  resolveFilePathFromRoot,
+} from "../util.js";
 import type {
   FileChange,
   ImpactOptions,
@@ -418,8 +423,7 @@ function collectChangedLines(hunks: FileChange["hunks"]): Set<number> {
 }
 
 function resolveFilePath(projectRoot: string, file: FileId): FileId {
-  if (path.isAbsolute(file)) return normalizeFilePath(file);
-  return normalizeFilePath(path.resolve(projectRoot, file));
+  return normalizePath(resolveFilePathFromRoot(projectRoot, file));
 }
 
 function normalizeFilePath(file: FileId): FileId {
@@ -428,7 +432,7 @@ function normalizeFilePath(file: FileId): FileId {
 
 function toProjectRelative(projectRoot: string, file: FileId): FileId {
   const normalized = normalizeFilePath(file);
-  if (!path.isAbsolute(normalized)) return normalized;
+  if (!isAbsoluteFilePath(normalized)) return normalized;
   const rel = path.relative(projectRoot, normalized).replace(/\\/g, "/");
   return rel.length > 0 ? rel : normalized;
 }

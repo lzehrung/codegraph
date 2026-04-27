@@ -43,6 +43,7 @@ import {
   resolveWorkspacePackage,
   normalizeResolutionHints,
   normalizePath,
+  resolveFilePathFromRoot,
   getGitHead,
   isGitRepo,
   getGitBlobHashes,
@@ -4850,10 +4851,7 @@ export async function buildProjectIndexIncremental(
     }
 
     const normalizeFilePath = (file: string): string =>
-      (path.isAbsolute(file) ? file : path.resolve(projectRoot, file)).replace(
-        /\\/g,
-        "/",
-      );
+      normalizePath(resolveFilePathFromRoot(projectRoot, file));
 
     const trackedEntries = manifest.files ?? {};
     const trackedFileList = Object.keys(trackedEntries);
@@ -5259,9 +5257,7 @@ export async function buildGraphDelta(
   opts?: IncrementalBuildOptions,
 ): Promise<GraphDeltaReport> {
   const normalizeFilePath = (file: string): string =>
-    normalizePath(
-      path.isAbsolute(file) ? file : path.resolve(projectRoot, file),
-    );
+    normalizePath(resolveFilePathFromRoot(projectRoot, file));
   const manifest = await loadManifest(projectRoot, opts);
   const graphOptions = normalizeGraphOptions(opts?.graph);
   const strictIncremental = opts?.incrementalStrict ?? false;

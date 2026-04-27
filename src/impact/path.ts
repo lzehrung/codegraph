@@ -1,10 +1,8 @@
-import path from "node:path";
+import { normalizePath, resolveFilePathFromRoot } from "../util.js";
 
 export function normalizeImpactFilePath(
   projectRoot: string,
   filePath: string,
 ): string {
-  return path.isAbsolute(filePath)
-    ? filePath.replace(/\\/g, "/")
-    : path.resolve(projectRoot, filePath).replace(/\\/g, "/");
+  return normalizePath(resolveFilePathFromRoot(projectRoot, filePath));
 }

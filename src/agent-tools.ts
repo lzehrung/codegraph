@@ -14,6 +14,7 @@ import {
   type NativeRuntimeMode,
 } from "./index.js";
 import path from "path";
+import { normalizePath, resolveFilePathFromRoot } from "./util.js";
 
 type ToolRuntimeOptions = {
   native?: NativeRuntimeMode;
@@ -154,7 +155,11 @@ export async function tool_findSymbol(
     index?: ProjectIndex;
     native?: NativeRuntimeMode;
   } = {},
-): Promise<Array<{ name: string; kind: string; file: string; line: number }>> {
+): Promise<{
+  status: "ok" | "error";
+  matches?: Array<{ name: string; kind: string; file: string; line: number }>;
+  error?: string;
+}> {
   try {
     const index =
       options.index ??
@@ -183,9 +188,15 @@ export async function tool_findSymbol(
       return a.name.localeCompare(b.name);
     });
 
-    return matches.slice(0, options.maxResults ?? 20);
+    return {
+      status: "ok",
+      matches: matches.slice(0, options.maxResults ?? 20),
+    };
   } catch (error) {
-    return [];
+    return {
+      status: "error",
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -226,8 +237,7 @@ export async function tool_getGraph(
 }
 
 function normalizePathArg(root: string, file: string): string {
-  const absPath = path.isAbsolute(file) ? file : path.resolve(root, file);
-  return absPath.replace(/\\/g, "/");
+  return normalizePath(resolveFilePathFromRoot(root, file));
 }
 
 /**

@@ -63,7 +63,11 @@ import type {
   ReviewDepth,
   ImpactOptions,
 } from "./index.js";
-import type { ProjectFileDiscoveryOptions } from "./util.js";
+import {
+  normalizePath,
+  resolveFilePathFromRoot,
+  type ProjectFileDiscoveryOptions,
+} from "./util.js";
 
 function toJSON(obj: unknown): string {
   return JSON.stringify(obj, null, 2);
@@ -836,9 +840,9 @@ async function writeCommandReport(
 ) {
   const payload = JSON.stringify(report, null, 2);
   if (reportFile) {
-    const resolved = path.isAbsolute(reportFile)
-      ? reportFile.replace(/\\/g, "/")
-      : path.resolve(process.cwd(), reportFile).replace(/\\/g, "/");
+    const resolved = normalizePath(
+      resolveFilePathFromRoot(process.cwd(), reportFile),
+    );
     await fsp.writeFile(resolved, `${payload}\n`, "utf8");
   } else {
     writeStderrLine(payload);
@@ -1389,7 +1393,7 @@ Examples:
 
   const rootOpt = getOpt("--root");
   const resolveAbs = (p: string) =>
-    path.isAbsolute(p) ? p : path.resolve(process.cwd(), p);
+    resolveFilePathFromRoot(process.cwd(), p);
 
   const defaultProjectRoot =
     (cmd === "graph" ||
@@ -1499,8 +1503,7 @@ Examples:
           : []
       : [];
   const includeRootsAbs = includeRoots
-    .map((r) => (path.isAbsolute(r) ? r : path.resolve(projectRootFs, r)))
-    .map((r) => r.replace(/\\/g, "/"));
+    .map((r) => normalizePath(resolveFilePathFromRoot(projectRootFs, r)));
 
   const isUnderIncludeRoots = (filePath: string): boolean => {
     if (includeRootsAbs.length === 0) return true;
@@ -1600,8 +1603,8 @@ Examples:
       process.exit(1);
     }
     const dbPath = path.isAbsolute(dbOpt)
-      ? dbOpt.replace(/\\/g, "/")
-      : path.resolve(process.cwd(), dbOpt).replace(/\\/g, "/");
+      ? normalizePath(dbOpt)
+      : normalizePath(resolveFilePathFromRoot(process.cwd(), dbOpt));
     const result = await queryGraphSqliteRaw(dbPath, queryText);
     writeJSONLine(result);
     return;
@@ -1631,9 +1634,7 @@ Examples:
       ...(graphOptions ? { graph: graphOptions } : {}),
     });
     const outputFile = outputArg
-      ? path.isAbsolute(outputArg)
-        ? outputArg.replace(/\\/g, "/")
-        : path.resolve(process.cwd(), outputArg).replace(/\\/g, "/")
+      ? normalizePath(resolveFilePathFromRoot(process.cwd(), outputArg))
       : undefined;
     if (outputFile) {
       await fsp.writeFile(outputFile, `${toJSON(delta)}\n`, "utf8");
@@ -1684,21 +1685,15 @@ Examples:
     const resolutionHints = graphFlags.resolutionHints;
     const compact = defaultGraphMode ? true : hasFlag("--compact-json");
     const outputFile = outputArg
-      ? path.isAbsolute(outputArg)
-        ? outputArg.replace(/\\/g, "/")
-        : path.resolve(process.cwd(), outputArg).replace(/\\/g, "/")
+      ? normalizePath(resolveFilePathFromRoot(process.cwd(), outputArg))
       : defaultGraphMode && !stdoutMode
         ? path.resolve(process.cwd(), "codegraph.json").replace(/\\/g, "/")
         : undefined;
     const sqliteFile = sqliteArg
-      ? path.isAbsolute(sqliteArg)
-        ? sqliteArg.replace(/\\/g, "/")
-        : path.resolve(process.cwd(), sqliteArg).replace(/\\/g, "/")
+      ? normalizePath(resolveFilePathFromRoot(process.cwd(), sqliteArg))
       : undefined;
     stderrFilePath = stderrArg
-      ? path.isAbsolute(stderrArg)
-        ? stderrArg.replace(/\\/g, "/")
-        : path.resolve(process.cwd(), stderrArg).replace(/\\/g, "/")
+      ? normalizePath(resolveFilePathFromRoot(process.cwd(), stderrArg))
       : defaultGraphMode
         ? path.resolve(process.cwd(), "codegraph.err").replace(/\\/g, "/")
         : undefined;
@@ -2013,8 +2008,8 @@ Examples:
       process.exit(2);
     }
     const file = path.isAbsolute(fileArg)
-      ? fileArg.replace(/\\/g, "/")
-      : path.resolve(projectRootFs, fileArg).replace(/\\/g, "/");
+      ? normalizePath(fileArg)
+      : normalizePath(resolveFilePathFromRoot(projectRootFs, fileArg));
     const index = await buildProjectIndex(projectRootFs, {
       onProgress: progressHandler,
       discovery: discoveryOptions,
@@ -2062,8 +2057,8 @@ Examples:
       process.exit(2);
     }
     const file = path.isAbsolute(fileArg)
-      ? fileArg.replace(/\\/g, "/")
-      : path.resolve(projectRootFs, fileArg).replace(/\\/g, "/");
+      ? normalizePath(fileArg)
+      : normalizePath(resolveFilePathFromRoot(projectRootFs, fileArg));
     const line = Number(lineArg);
     const column = Number(colArg);
     const index = await buildProjectIndex(projectRootFs, {
@@ -2086,8 +2081,8 @@ Examples:
       process.exit(2);
     }
     const file = path.isAbsolute(fileArg)
-      ? fileArg.replace(/\\/g, "/")
-      : path.resolve(projectRootFs, fileArg).replace(/\\/g, "/");
+      ? normalizePath(fileArg)
+      : normalizePath(resolveFilePathFromRoot(projectRootFs, fileArg));
     const line = Number(lineArg);
     const column = Number(colArg);
     const pretty = hasFlag("--pretty");
@@ -2430,8 +2425,8 @@ Examples:
       process.exit(2);
     }
     const file = path.isAbsolute(fileArg)
-      ? fileArg.replace(/\\/g, "/")
-      : path.resolve(projectRootFs, fileArg).replace(/\\/g, "/");
+      ? normalizePath(fileArg)
+      : normalizePath(resolveFilePathFromRoot(projectRootFs, fileArg));
     const depthRaw = getOpt("--depth");
     const depth = depthRaw !== undefined ? Number(depthRaw) : undefined;
     const json = hasFlag("--json");
@@ -2475,11 +2470,11 @@ Examples:
       process.exit(2);
     }
     const from = path.isAbsolute(fromArg)
-      ? fromArg.replace(/\\/g, "/")
-      : path.resolve(projectRootFs, fromArg).replace(/\\/g, "/");
+      ? normalizePath(fromArg)
+      : normalizePath(resolveFilePathFromRoot(projectRootFs, fromArg));
     const to = path.isAbsolute(toArg)
-      ? toArg.replace(/\\/g, "/")
-      : path.resolve(projectRootFs, toArg).replace(/\\/g, "/");
+      ? normalizePath(toArg)
+      : normalizePath(resolveFilePathFromRoot(projectRootFs, toArg));
     const json = hasFlag("--json");
 
     const graph = await collectGraph(

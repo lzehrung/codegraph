@@ -4,7 +4,8 @@ import {
   tool_listProjectFiles,
   tool_getGraph,
   tool_goToDefinition,
-  tool_findReferences
+  tool_findReferences,
+  tool_findSymbol,
 } from '../src/agent-tools.js';
 
 describe('Agent Tools', () => {
@@ -59,6 +60,23 @@ describe('Agent Tools', () => {
     expect(result.status).toBe('ok');
     if (result.status === 'ok') {
        expect(result.definition.file.replace(/\\/g, '/')).toContain('utils.ts');
+    }
+  });
+
+  it('tool_findSymbol returns structured matches', async () => {
+    const result = await tool_findSymbol(samplePath, 'helperFunction');
+    expect(result.status).toBe('ok');
+    if (result.status === 'ok') {
+      expect(result.matches.length).toBeGreaterThan(0);
+      expect(result.matches.some((match) => match.name === 'helperFunction')).toBe(true);
+    }
+  });
+
+  it('tool_findSymbol returns structured errors for invalid roots', async () => {
+    const result = await tool_findSymbol('Z:/definitely-missing-codegraph-root', 'helperFunction');
+    expect(result.status).toBe('error');
+    if (result.status === 'error') {
+      expect(result.error).toContain('Project root does not exist or is not readable');
     }
   });
 });

@@ -1121,6 +1121,21 @@ export function normalizePath(p: string): string {
   return typeof p === "string" ? p.replace(/\\/g, "/") : "";
 }
 
+export function isAbsoluteFilePath(filePath: string): boolean {
+  return (
+    path.posix.isAbsolute(filePath) || path.win32.isAbsolute(filePath)
+  );
+}
+
+export function resolveFilePathFromRoot(
+  projectRoot: string,
+  filePath: string,
+): string {
+  return isAbsoluteFilePath(filePath)
+    ? filePath
+    : path.resolve(projectRoot, filePath);
+}
+
 export function normalizeResolutionHints(hints?: string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();

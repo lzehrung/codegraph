@@ -357,6 +357,83 @@ describe("Review report", () => {
     });
   });
 
+  it("respects custom test patterns for deleted-file review candidates", async () => {
+    const root = await mkTmpDir("dg-review-custom-tests-");
+    const srcDir = path.join(root, "src");
+    const checksDir = path.join(root, "checks");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.mkdir(checksDir, { recursive: true });
+    const libFile = path.join(srcDir, "lib.ts");
+    const verifyFile = path.join(checksDir, "lib.verify.ts");
+    await fsp.writeFile(libFile, `export const gone = 1;\n`, "utf8");
+    await fsp.writeFile(
+      verifyFile,
+      `import { gone } from '../src/lib';\nexport const seen = gone;\n`,
+      "utf8",
+    );
+
+    await buildProjectIndex(root, { cache: "memory" });
+    await fsp.unlink(libFile);
+
+    const report = await buildReviewReport(root, {
+      files: [libFile],
+      cache: "memory",
+      testPatterns: ["\\.verify\\.ts$"],
+      diffText: [
+        "diff --git a/src/lib.ts b/src/lib.ts",
+        "deleted file mode 100644",
+        "index 1111111..0000000",
+        "--- a/src/lib.ts",
+        "+++ /dev/null",
+        "@@ -1 +0,0 @@",
+        "-export const gone = 1;",
+        "",
+      ].join("\n"),
+    });
+
+    expect(report.candidateTests).toContainEqual({
+      file: "checks/lib.verify.ts",
+      confidence: "high",
+      reason: "importsChanged",
+    });
+  });
+
+  it("treats side-effect imports as direct deleted-file test candidates", async () => {
+    const root = await mkTmpDir("dg-review-side-effect-");
+    const srcDir = path.join(root, "src");
+    const testsDir = path.join(root, "tests");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.mkdir(testsDir, { recursive: true });
+    const libFile = path.join(srcDir, "lib.ts");
+    const testFile = path.join(testsDir, "lib.test.ts");
+    await fsp.writeFile(libFile, `export const gone = 1;\n`, "utf8");
+    await fsp.writeFile(testFile, `import '../src/lib';\n`, "utf8");
+
+    await buildProjectIndex(root, { cache: "memory" });
+    await fsp.unlink(libFile);
+
+    const report = await buildReviewReport(root, {
+      files: [libFile],
+      cache: "memory",
+      diffText: [
+        "diff --git a/src/lib.ts b/src/lib.ts",
+        "deleted file mode 100644",
+        "index 1111111..0000000",
+        "--- a/src/lib.ts",
+        "+++ /dev/null",
+        "@@ -1 +0,0 @@",
+        "-export const gone = 1;",
+        "",
+      ].join("\n"),
+    });
+
+    expect(report.candidateTests).toContainEqual({
+      file: "tests/lib.test.ts",
+      confidence: "high",
+      reason: "importsChanged",
+    });
+  });
+
   it("includes importer edges for deleted files in graphDelta", async () => {
     const root = await mkTmpDir("dg-review-deleted-edges-");
     const srcDir = path.join(root, "src");
