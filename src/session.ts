@@ -222,6 +222,7 @@ export class CodeReviewSession implements ICodeReviewSession {
   private incremental: boolean;
   private initPromise: Promise<void> | null = null;
   private identityFingerprint: string;
+  private lifecycleVersion = 0;
 
   constructor(options: SessionOptions) {
     const identity = resolveSessionIdentity(options);
@@ -257,6 +258,19 @@ export class CodeReviewSession implements ICodeReviewSession {
     return await buildProjectIndex(this.root, this.buildOptions);
   }
 
+  private createDisposedDuringOperationError(operation: string): Error {
+    return new Error(`Session was disposed during ${operation}.`);
+  }
+
+  private assertLifecycleVersion(
+    expectedLifecycleVersion: number,
+    operation: string,
+  ): void {
+    if (this.lifecycleVersion !== expectedLifecycleVersion) {
+      throw this.createDisposedDuringOperationError(operation);
+    }
+  }
+
   private commitReadyIndex(index: ProjectIndex): void {
     this.index = index;
     this.status = "ready";
@@ -274,19 +288,27 @@ export class CodeReviewSession implements ICodeReviewSession {
       return this.initPromise;
     }
 
-    this.initPromise = (async () => {
+    const lifecycleVersion = this.lifecycleVersion;
+    let initPromise!: Promise<void>;
+    initPromise = (async () => {
       const previousStatus = this.status;
       try {
         this.status = "initializing";
         const nextIndex = await this.buildIndex();
+        this.assertLifecycleVersion(lifecycleVersion, "initialization");
         this.commitReadyIndex(nextIndex);
       } catch (error) {
-        this.status = previousStatus === "expired" ? "expired" : "error";
+        if (this.lifecycleVersion === lifecycleVersion) {
+          this.status = previousStatus === "expired" ? "expired" : "error";
+        }
         throw error;
       } finally {
-        this.initPromise = null;
+        if (this.initPromise === initPromise) {
+          this.initPromise = null;
+        }
       }
     })();
+    this.initPromise = initPromise;
 
     return this.initPromise;
   }
@@ -415,11 +437,16 @@ export class CodeReviewSession implements ICodeReviewSession {
   async refresh(): Promise<void> {
     const previousIndex = this.index;
     const previousStatus = this.status;
+    const lifecycleVersion = this.lifecycleVersion;
     this.status = "initializing";
     try {
       const nextIndex = await this.buildIndex();
+      this.assertLifecycleVersion(lifecycleVersion, "refresh");
       this.commitReadyIndex(nextIndex);
     } catch (error) {
+      if (this.lifecycleVersion !== lifecycleVersion) {
+        throw error;
+      }
       if (previousIndex && previousStatus === "ready") {
         this.index = previousIndex;
         this.status = "ready";
@@ -434,8 +461,10 @@ export class CodeReviewSession implements ICodeReviewSession {
    * Dispose of the session and free resources
    */
   dispose(): void {
+    this.lifecycleVersion += 1;
     this.status = "expired";
     this.index = null;
+    this.initPromise = null;
   }
 
   /**
@@ -537,16 +566,23 @@ export class SessionManager {
   private trackPendingSession(
     sessionId: string,
     options: SessionOptions,
-    promise: Promise<CodeReviewSession>,
+    session: CodeReviewSession,
   ): Promise<CodeReviewSession> {
     const fingerprint = sessionIdentityFingerprint(
       resolveSessionIdentity(options),
     );
-    this.pendingSessions.set(sessionId, {
+    const pendingSession = {
       cancelled: false,
       fingerprint,
-      promise,
-    });
+      promise: Promise.resolve(session),
+    };
+    const promise = this.initializeManagedSession(
+      sessionId,
+      session,
+      () => pendingSession.cancelled,
+    );
+    pendingSession.promise = promise;
+    this.pendingSessions.set(sessionId, pendingSession);
     promise
       .finally(() => {
         const pending = this.pendingSessions.get(sessionId);
@@ -595,12 +631,7 @@ export class SessionManager {
 
     if (!session) {
       session = new CodeReviewSession(options);
-      let promise!: Promise<CodeReviewSession>;
-      promise = this.initializeManagedSession(sessionId, session, () => {
-        const pending = this.pendingSessions.get(sessionId);
-        return pending?.promise === promise && pending.cancelled;
-      });
-      return await this.trackPendingSession(sessionId, options, promise);
+      return await this.trackPendingSession(sessionId, options, session);
     } else if (!session.isReady()) {
       try {
         await session.init();
@@ -628,6 +659,7 @@ export class SessionManager {
     const pending = this.pendingSessions.get(sessionId);
     if (pending) {
       pending.cancelled = true;
+      this.pendingSessions.delete(sessionId);
     }
     const session = this.sessions.get(sessionId);
     if (session) {
@@ -643,6 +675,7 @@ export class SessionManager {
     for (const pending of this.pendingSessions.values()) {
       pending.cancelled = true;
     }
+    this.pendingSessions.clear();
     for (const session of this.sessions.values()) {
       session.dispose();
     }

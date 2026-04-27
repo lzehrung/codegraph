@@ -237,6 +237,69 @@ describe("CodeReviewSession", () => {
     expect(session.isReady()).toBe(false);
   });
 
+  test("should keep a disposed session expired when init completes later", async () => {
+    const originalBuild = indexer.buildProjectIndexIncremental;
+    let releaseBuild: (() => void) | null = null;
+    const buildGate = new Promise<void>((resolve) => {
+      releaseBuild = resolve;
+    });
+    const buildSpy = vi
+      .spyOn(indexer, "buildProjectIndexIncremental")
+      .mockImplementation(async (...args) => {
+        await buildGate;
+        return await originalBuild(...args);
+      });
+
+    try {
+      const session = new CodeReviewSession({
+        root: sampleRoot,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+
+      const initPromise = session.init();
+      session.dispose();
+      releaseBuild?.();
+
+      await expect(initPromise).rejects.toThrow(
+        /disposed during initialization/,
+      );
+      expect(session.getStatus()).toBe("expired");
+      expect(session.isReady()).toBe(false);
+    } finally {
+      buildSpy.mockRestore();
+    }
+  });
+
+  test("should keep a disposed session expired when refresh completes later", async () => {
+    const session = await createCodeReviewSession({
+      root: sampleRoot,
+      buildOptions: { cache: "memory", useBloomFilters: true },
+    });
+    const originalBuild = indexer.buildProjectIndexIncremental;
+    let releaseBuild: (() => void) | null = null;
+    const buildGate = new Promise<void>((resolve) => {
+      releaseBuild = resolve;
+    });
+    const buildSpy = vi
+      .spyOn(indexer, "buildProjectIndexIncremental")
+      .mockImplementation(async (...args) => {
+        await buildGate;
+        return await originalBuild(...args);
+      });
+
+    try {
+      const refreshPromise = session.refresh();
+      session.dispose();
+      releaseBuild?.();
+
+      await expect(refreshPromise).rejects.toThrow(/disposed during refresh/);
+      expect(session.getStatus()).toBe("expired");
+      expect(session.isReady()).toBe(false);
+    } finally {
+      buildSpy.mockRestore();
+    }
+  });
+
   test("should throw error when used after expiration", async () => {
     const session = await createCodeReviewSession({
       root: sampleRoot,
@@ -364,6 +427,86 @@ describe("SessionManager", () => {
       );
       expect(manager.getSession("pending")).toBeUndefined();
       expect(manager.getSessionIds()).toEqual([]);
+    } finally {
+      buildSpy.mockRestore();
+    }
+  });
+
+  test("should allow immediate recreation after disposing a pending session", async () => {
+    const originalBuild = indexer.buildProjectIndexIncremental;
+    let releaseBuild: (() => void) | null = null;
+    const buildGate = new Promise<void>((resolve) => {
+      releaseBuild = resolve;
+    });
+    const buildSpy = vi
+      .spyOn(indexer, "buildProjectIndexIncremental")
+      .mockImplementation(async (...args) => {
+        await buildGate;
+        return await originalBuild(...args);
+      });
+
+    try {
+      const firstSession = manager.getOrCreateSession("pending", {
+        root: sampleRoot,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+
+      await Promise.resolve();
+      manager.disposeSession("pending");
+      const secondSession = manager.getOrCreateSession("pending", {
+        root: sampleRoot,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+      releaseBuild?.();
+
+      await expect(firstSession).rejects.toThrow(
+        /disposed during initialization/,
+      );
+      await expect(secondSession).resolves.toMatchObject({
+        getStatus: expect.any(Function),
+      });
+      expect((await secondSession).getStatus()).toBe("ready");
+      expect(manager.getSession("pending")).toBe(await secondSession);
+    } finally {
+      buildSpy.mockRestore();
+    }
+  });
+
+  test("should allow immediate recreation after disposeAll cancels a pending session", async () => {
+    const originalBuild = indexer.buildProjectIndexIncremental;
+    let releaseBuild: (() => void) | null = null;
+    const buildGate = new Promise<void>((resolve) => {
+      releaseBuild = resolve;
+    });
+    const buildSpy = vi
+      .spyOn(indexer, "buildProjectIndexIncremental")
+      .mockImplementation(async (...args) => {
+        await buildGate;
+        return await originalBuild(...args);
+      });
+
+    try {
+      const firstSession = manager.getOrCreateSession("pending", {
+        root: sampleRoot,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+
+      await Promise.resolve();
+      manager.disposeAll();
+      const secondSession = manager.getOrCreateSession("pending", {
+        root: sampleRoot,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+      releaseBuild?.();
+
+      await expect(firstSession).rejects.toThrow(
+        /disposed during initialization/,
+      );
+      await expect(secondSession).resolves.toMatchObject({
+        getStatus: expect.any(Function),
+      });
+      expect((await secondSession).getStatus()).toBe("ready");
+      expect(manager.getSession("pending")).toBe(await secondSession);
     } finally {
       buildSpy.mockRestore();
     }

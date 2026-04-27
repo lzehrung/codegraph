@@ -1,19 +1,20 @@
-import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { inspectDistForTests } from "./ensure-dist-for-tests-lib.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const requiredEntries = [
-  path.join(rootDir, "dist", "index.js"),
-  path.join(rootDir, "dist", "cli.js"),
-];
+const distState = inspectDistForTests(rootDir);
 
-if (requiredEntries.every((entry) => fs.existsSync(entry))) {
+if (!distState.needsBuild) {
   process.exit(0);
 }
 
-console.warn("[codegraph] dist artifacts missing; running npm run build before tests.");
+const buildReason =
+  distState.reason === "stale" ? "stale" : "missing";
+console.warn(
+  `[codegraph] dist artifacts ${buildReason}; running npm run build before tests.`,
+);
 
 const result = spawnSync("npm", ["run", "build"], {
   cwd: rootDir,
