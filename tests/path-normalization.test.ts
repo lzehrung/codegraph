@@ -48,4 +48,16 @@ describe("cross-platform path normalization", () => {
       toProjectRelativePath("/workspace/codegraph", "C:/repo/src/main.ts"),
     ).toBeNull();
   });
+
+  it("accepts Windows drive-letter case differences within the same root", () => {
+    if (process.platform !== "win32") {
+      return;
+    }
+
+    const root = "C:/Repo";
+    const file = "c:/Repo/src/main.ts";
+
+    expect(isFilePathWithinRoot(root, file)).toBe(true);
+    expect(toProjectRelativePath(root, file)).toBe("src/main.ts");
+  });
 });
