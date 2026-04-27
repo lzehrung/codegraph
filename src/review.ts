@@ -34,7 +34,9 @@ import {
   fileExists,
   getUnifiedDiff,
   discoverProjectFiles,
+  isFilePathWithinRoot,
   resolveFilePathFromRoot,
+  toProjectRelativePath,
   type ProjectFileInfo,
 } from "./util.js";
 import { supportForFile } from "./languages.js";
@@ -194,7 +196,7 @@ function applyReviewPresetOptions(opts: ReviewOptions): ReviewOptions {
 }
 
 function relativePath(root: string, file: string): string {
-  return normalizePath(path.relative(root, file));
+  return toProjectRelativePath(root, file) ?? normalizePath(file);
 }
 
 function comparePaths(left: string, right: string): number {
@@ -864,6 +866,11 @@ export async function buildReviewReport(
   const changesStart = performance.now();
   for (const file of appliedOptions.files ?? []) {
     const normalized = normalizeFile(file);
+    if (!isFilePathWithinRoot(projectRoot, normalized)) {
+      throw new Error(
+        `Review file is outside project root: ${normalized} (root: ${normalizePath(path.resolve(projectRoot))})`,
+      );
+    }
     changedFiles.add(normalized);
     explicitFiles.add(normalized);
   }
@@ -993,7 +1000,7 @@ export async function buildReviewReport(
   const diffChangesByFile = new Map<string, FileChange>();
   if (diff) {
     for (const fileChange of diff.files) {
-      const absPath = normalizePath(path.resolve(projectRoot, fileChange.path));
+      const absPath = normalizeFile(fileChange.path);
       diffHunksByFile.set(absPath, fileChange.hunks);
       diffKindsByFile.set(absPath, fileChange.kind);
       diffChangesByFile.set(absPath, fileChange);

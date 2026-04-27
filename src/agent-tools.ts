@@ -13,12 +13,34 @@ import {
   type ProjectIndex,
   type NativeRuntimeMode,
 } from "./index.js";
-import path from "path";
-import { normalizePath, resolveFilePathFromRoot } from "./util.js";
+import {
+  fileExists,
+  normalizePath,
+  resolveFilePathFromRoot,
+  toProjectRelativePath,
+} from "./util.js";
 
 type ToolRuntimeOptions = {
   native?: NativeRuntimeMode;
 };
+
+type ToolFileOverviewResult =
+  | {
+      status: "ok";
+      file: string;
+      overview: string;
+      hasSymbols: boolean;
+    }
+  | {
+      status: "not_found";
+      file: string;
+      reason: "file_not_found" | "file_not_indexed";
+      error: string;
+    }
+  | {
+      status: "error";
+      error: string;
+    };
 
 /**
  * Agent-friendly tool wrapper for PR impact analysis.
@@ -89,58 +111,77 @@ export async function tool_getFileOverview(
   root: string,
   filePath: string,
   runtimeOptions: ToolRuntimeOptions = {},
-): Promise<string> {
+): Promise<ToolFileOverviewResult> {
   try {
     const index = await buildProjectIndex(root, {
       logLevel: "error",
       ...(runtimeOptions.native ? { native: runtimeOptions.native } : {}),
     });
-    const absPath = path.resolve(root, filePath).replace(/\\/g, "/");
-    const symbols = listSymbols(index, {
-      file: absPath,
-      includeImports: true,
-    });
 
-    if (symbols.length === 0) {
-      return `No symbols found in ${filePath}. The file might be empty, ignored, or failed to parse.`;
+    const absPath = normalizePathArg(root, filePath);
+    const relativeFile =
+      toProjectRelativePath(root, absPath) ?? normalizePath(filePath);
+    const mod = index.byFile.get(absPath);
+    if (!mod) {
+      const reason = (await fileExists(absPath))
+        ? "file_not_indexed"
+        : "file_not_found";
+      return {
+        status: "not_found",
+        file: relativeFile,
+        reason,
+        error:
+          reason === "file_not_found"
+            ? `File was not found under the project root: ${relativeFile}`
+            : `File is not indexed: ${relativeFile}`,
+      };
     }
 
-    const imports = symbols.filter(
-      (s) => s.kind === "import" || s.kind === "namespaceImport",
-    );
-    const defs = symbols.filter(
-      (s) => s.kind !== "import" && s.kind !== "namespaceImport",
-    );
+    const symbols = listSymbolsForOverview(index, absPath);
 
-    const lines: string[] = [`# Overview of ${filePath}`];
+    const lines: string[] = [`# Overview of ${relativeFile}`];
+    const hasSymbols =
+      symbols.imports.length > 0 || symbols.definitions.length > 0;
 
-    if (imports.length > 0) {
+    if (symbols.imports.length > 0) {
       lines.push("\n## Imports");
-      // Group by file (from ID: file::local::import) is hard because ID format for imports is specific
-      // We'll just list them simply for now
-      const uniqueImports = Array.from(new Set(imports.map((i) => i.name)));
+      const uniqueImports = Array.from(new Set(symbols.imports.map((i) => i.name)));
       lines.push(`Imported symbols: ${uniqueImports.sort().join(", ")}`);
     }
 
-    if (defs.length > 0) {
+    if (symbols.definitions.length > 0) {
       lines.push("\n## Definitions");
-      // Sort by line number
-      defs.sort(
+      symbols.definitions.sort(
         (a, b) => (a.range?.start.line ?? 0) - (b.range?.start.line ?? 0),
       );
 
-      for (const def of defs) {
+      for (const def of symbols.definitions) {
         const lineInfo = def.range ? `(line ${def.range.start.line})` : "";
         lines.push(`### ${def.kind} \`${def.name}\` ${lineInfo}`);
         if (def.docstring) {
-          lines.push(`> ${def.docstring.split("\n")[0]}...`); // First line of docstring
+          lines.push(`> ${def.docstring.split("\n")[0]}...`);
         }
       }
+    } else {
+      lines.push("\n## Definitions");
+      lines.push("No definitions found.");
     }
 
-    return lines.join("\n");
+    if (!hasSymbols) {
+      lines.push("\nNo symbols found.");
+    }
+
+    return {
+      status: "ok",
+      file: relativeFile,
+      overview: lines.join("\n"),
+      hasSymbols,
+    };
   } catch (error) {
-    return `Error generating overview: ${error instanceof Error ? error.message : String(error)}`;
+    return {
+      status: "error",
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -175,7 +216,7 @@ export async function tool_findSymbol(
       .map((s) => ({
         name: s.name,
         kind: s.kind,
-        file: path.relative(root, s.file),
+        file: toProjectRelativePath(root, s.file) ?? normalizePath(s.file),
         line: s.range?.start.line ?? 0,
       }));
 
@@ -238,6 +279,27 @@ export async function tool_getGraph(
 
 function normalizePathArg(root: string, file: string): string {
   return normalizePath(resolveFilePathFromRoot(root, file));
+}
+
+function listSymbolsForOverview(index: ProjectIndex, file: string): {
+  imports: Array<{ name: string }>;
+  definitions: ReturnType<typeof listSymbols>;
+} {
+  const symbols = listSymbols(index, { file, includeImports: false });
+  const mod = index.byFile.get(file);
+  const imports =
+    mod?.imports.map((entry) => ({
+      name:
+        entry.kind === "namespace"
+          ? entry.localNS
+          : entry.kind === "star"
+            ? entry.from
+            : entry.local,
+    })) ?? [];
+  return {
+    imports,
+    definitions: symbols,
+  };
 }
 
 /**

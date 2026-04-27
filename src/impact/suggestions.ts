@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { FileId, Range } from "../types.js";
 import type {
   ExportEntry,
@@ -10,9 +9,9 @@ import { goToDefinition, ensureParsedContext } from "../indexer.js";
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import {
-  isAbsoluteFilePath,
   normalizePath,
   resolveFilePathFromRoot,
+  toProjectRelativePath,
 } from "../util.js";
 import type {
   FileChange,
@@ -431,10 +430,7 @@ function normalizeFilePath(file: FileId): FileId {
 }
 
 function toProjectRelative(projectRoot: string, file: FileId): FileId {
-  const normalized = normalizeFilePath(file);
-  if (!isAbsoluteFilePath(normalized)) return normalized;
-  const rel = path.relative(projectRoot, normalized).replace(/\\/g, "/");
-  return rel.length > 0 ? rel : normalized;
+  return toProjectRelativePath(projectRoot, file) ?? normalizeFilePath(file);
 }
 
 function pushUniqueSuggestion(
