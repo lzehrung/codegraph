@@ -1136,8 +1136,19 @@ export function resolveFilePathFromRoot(
     : path.resolve(projectRoot, filePath);
 }
 
-function normalizedPathPrefix(directory: string): string {
-  return directory.endsWith("/") ? directory : `${directory}/`;
+function isRelativeToRoot(
+  normalizedRoot: string,
+  normalizedFile: string,
+): boolean {
+  if (normalizedFile === normalizedRoot) {
+    return true;
+  }
+  const relativePath = path.relative(normalizedRoot, normalizedFile);
+  return (
+    relativePath.length > 0 &&
+    !relativePath.startsWith("..") &&
+    !path.isAbsolute(relativePath)
+  );
 }
 
 export function isFilePathWithinRoot(
@@ -1148,10 +1159,7 @@ export function isFilePathWithinRoot(
   const normalizedFile = normalizePath(
     resolveFilePathFromRoot(normalizedRoot, filePath),
   );
-  return (
-    normalizedFile === normalizedRoot ||
-    normalizedFile.startsWith(normalizedPathPrefix(normalizedRoot))
-  );
+  return isRelativeToRoot(normalizedRoot, normalizedFile);
 }
 
 export function assertFilePathWithinRoot(
