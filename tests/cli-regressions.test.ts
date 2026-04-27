@@ -257,6 +257,64 @@ describe('CLI regressions', () => {
     expect(result.stderr).not.toContain('Unsupported file extension');
   });
 
+  it('rejects out-of-root file navigation inputs explicitly', async () => {
+    const outsideFile = path.resolve(process.cwd(), 'README.md');
+
+    const dumpmod = JSON.parse(
+      await runCliCommand(['dumpmod', outsideFile, '--root', tsRoot]),
+    ) as { status: string; reason?: string; error?: string };
+    expect(dumpmod.status).toBe('error');
+    expect(dumpmod.reason).toBe('outside_project_root');
+    expect(dumpmod.error).toContain('outside project root');
+
+    const goto = JSON.parse(
+      await runCliCommand(['goto', outsideFile, '1', '1', '--root', tsRoot]),
+    ) as { status: string; reason?: string; error?: string };
+    expect(goto.status).toBe('error');
+    expect(goto.reason).toBe('outside_project_root');
+
+    const refs = JSON.parse(
+      await runCliCommand([
+        'refs',
+        '--file',
+        outsideFile,
+        '--line',
+        '1',
+        '--col',
+        '1',
+        '--root',
+        tsRoot,
+      ]),
+    ) as { status: string; reason?: string; error?: string };
+    expect(refs.status).toBe('error');
+    expect(refs.reason).toBe('outside_project_root');
+
+    const deps = JSON.parse(
+      await runCliCommand([
+        'deps',
+        outsideFile,
+        '--root',
+        tsRoot,
+        '--json',
+      ]),
+    ) as { status: string; reason?: string; error?: string };
+    expect(deps.status).toBe('error');
+    expect(deps.reason).toBe('outside_project_root');
+
+    const pathResult = JSON.parse(
+      await runCliCommand([
+        'path',
+        outsideFile,
+        'main.ts',
+        '--root',
+        tsRoot,
+        '--json',
+      ]),
+    ) as { status: string; reason?: string; error?: string };
+    expect(pathResult.status).toBe('error');
+    expect(pathResult.reason).toBe('outside_project_root');
+  });
+
   it('graph --native off disables native backend reporting explicitly', async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-cli-native-off-'));
     const reportPath = path.join(tmpDir, 'graph-report.json');
