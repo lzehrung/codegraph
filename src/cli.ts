@@ -169,6 +169,31 @@ function maybeWriteNativeBackendStatus(
   if (parserSummary) writeStderrLine(parserSummary);
 }
 
+function normalizeEntrypointPath(filePath: string): string {
+  const resolvedPath = path.resolve(filePath);
+  try {
+    return fs.realpathSync.native(resolvedPath);
+  } catch {
+    return resolvedPath;
+  }
+}
+
+function isDirectCliExecution(
+  importMetaUrl: string,
+  argv: string[] = process.argv,
+): boolean {
+  const argv1 = argv[1];
+  if (!argv1) return false;
+
+  const modulePath = normalizeEntrypointPath(fileURLToPath(importMetaUrl));
+  const invokedPath = normalizeEntrypointPath(argv1);
+
+  if (process.platform === "win32") {
+    return modulePath.toLowerCase() === invokedPath.toLowerCase();
+  }
+  return modulePath === invokedPath;
+}
+
 type CommandTimingReport = {
   totalMs?: number;
   resolveFilesMs?: number;
@@ -2852,11 +2877,7 @@ Examples:
   process.exit(1);
 }
 
-if (
-  import.meta.url === `file://${process.argv[1]}` ||
-  import.meta.url.endsWith("cli.ts") ||
-  import.meta.url.endsWith("cli.js")
-) {
+if (isDirectCliExecution(import.meta.url)) {
   main().catch((e) => {
     writeError(e);
     process.exit(1);

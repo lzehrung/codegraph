@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { textGrep } from '../src/index.js';
 import packageJson from '../package.json' with { type: 'json' };
 
@@ -87,6 +88,46 @@ describe('CLI regressions', () => {
   it('--version prints the package version', async () => {
     const stdout = await runCliCommand(['--version']);
     expect(stdout.trim()).toBe(packageJson.version);
+  });
+
+  it('importing cli.ts as a module does not execute the entrypoint', async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-cli-import-'));
+    const importerPath = path.join(tmpDir, 'import-cli.mjs');
+    const sentinel = 'cli-import-safe';
+    await fsp.writeFile(
+      importerPath,
+      `import ${JSON.stringify(pathToFileURL(sourceCliPath).href)};\nconsole.log(${JSON.stringify(sentinel)});\n`,
+      'utf8',
+    );
+
+    const result = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+      const child = spawn(process.execPath, [tsxCliPath, importerPath], {
+        cwd: process.cwd(),
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk.toString();
+      });
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk.toString();
+      });
+      child.stdin.end();
+
+      child.on('error', reject);
+      child.on('exit', (code) => {
+        if (code !== 0) {
+          reject(new Error(`codegraph CLI import failed (${code}). stderr:\n${stderr}`));
+          return;
+        }
+        resolve({ stdout, stderr });
+      });
+    });
+
+    expect(result.stdout.trim()).toBe(sentinel);
+    expect(result.stderr).not.toContain('Unknown command');
   });
 
   it('graph supports -o/--output to write JSON to a file', async () => {
