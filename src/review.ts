@@ -34,6 +34,7 @@ import {
   fileExists,
   getUnifiedDiff,
   discoverProjectFiles,
+  resolveFilePathFromRoot,
   type ProjectFileInfo,
 } from "./util.js";
 import { supportForFile } from "./languages.js";
@@ -285,23 +286,39 @@ function buildDeletedImportCandidates(
 function listDirectDeletedFileTestImporters(
   index: ProjectIndex,
   deletedFiles: readonly string[],
+  testPatterns: string[] = [],
 ): CandidateTestFile[] {
   if (deletedFiles.length === 0) return [];
 
   const deletedFileSet = new Set(
     deletedFiles.map((file) => normalizePath(file)),
   );
-  const testPatterns = compileTestPatterns([]);
+  const compiledPatterns = compileTestPatterns(testPatterns);
   const candidates = new Map<FileId, CandidateTestFile>();
+  const relativeSpecsByFile = new Map<FileId, Set<string>>();
+
+  for (const edge of index.graph.edges) {
+    if (!edge.raw.startsWith(".")) continue;
+    let specs = relativeSpecsByFile.get(edge.from);
+    if (!specs) {
+      specs = new Set<string>();
+      relativeSpecsByFile.set(edge.from, specs);
+    }
+    specs.add(edge.raw);
+  }
 
   for (const mod of index.byFile.values()) {
-    if (!isTestFilePath(mod.file, testPatterns)) continue;
+    if (!isTestFilePath(mod.file, compiledPatterns)) continue;
+    const relativeSpecs = new Set(relativeSpecsByFile.get(mod.file) ?? []);
     for (const imp of mod.imports) {
       if (!imp.from.startsWith(".")) continue;
+      relativeSpecs.add(imp.from);
+    }
+    for (const spec of relativeSpecs) {
       for (const deletedFile of deletedFileSet) {
         const resolvedCandidates = buildDeletedImportCandidates(
           mod.file,
-          imp.from,
+          spec,
           deletedFile,
         );
         if (!resolvedCandidates.has(deletedFile)) continue;
@@ -840,9 +857,7 @@ export async function buildReviewReport(
   const reviewTimings = reviewReport?.timings;
   const totalStart = performance.now();
   const normalizeFile = (file: string) =>
-    normalizePath(
-      path.isAbsolute(file) ? file : path.resolve(projectRoot, file),
-    );
+    normalizePath(resolveFilePathFromRoot(projectRoot, file));
 
   const changedFiles = new Set<string>();
   const explicitFiles = new Set<string>();
@@ -1291,7 +1306,11 @@ export async function buildReviewReport(
         ? { testPatterns: appliedOptions.testPatterns }
         : {}),
     }),
-    listDirectDeletedFileTestImporters(index, deletedFiles),
+    listDirectDeletedFileTestImporters(
+      index,
+      deletedFiles,
+      appliedOptions.testPatterns,
+    ),
   )
     .map((candidate) => ({
       ...candidate,

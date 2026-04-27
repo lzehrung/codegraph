@@ -9,6 +9,7 @@ import * as indexer from "../src/indexer.js";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
+import { resolveFilePathFromRoot } from "../src/util.js";
 
 const sampleRoot = path.resolve("tests/samples/typescript");
 
@@ -92,7 +93,7 @@ describe("CodeReviewSession", () => {
     }
   });
 
-  test("should normalize absolute Windows-style session navigation paths", async () => {
+  test("should normalize host-native absolute session navigation paths", async () => {
     const session = await createCodeReviewSession({
       root: sampleRoot,
       buildOptions: { cache: "memory", useBloomFilters: true },
@@ -108,6 +109,15 @@ describe("CodeReviewSession", () => {
     if (result.status === "ok") {
       expect(result.definition.file.replace(/\\/g, "/")).toContain("utils.ts");
     }
+  });
+
+  test("should keep Windows-style absolute paths absolute even on non-Windows hosts", () => {
+    expect(resolveFilePathFromRoot("/repo", "C:/repo/src/main.ts")).toBe(
+      "C:/repo/src/main.ts",
+    );
+    expect(
+      resolveFilePathFromRoot("/repo", String.raw`C:\repo\src\main.ts`),
+    ).toBe(String.raw`C:\repo\src\main.ts`);
   });
 
   test("should refresh the index", async () => {

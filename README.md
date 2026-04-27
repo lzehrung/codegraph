@@ -1078,9 +1078,13 @@ console.log(overview);
 // 2. Find symbols by name (fuzzy search)
 // Useful for locating relevant code when the file path is unknown.
 const matches = await tool_findSymbol(process.cwd(), "collectGraph");
-console.log(matches);
-// Output:
-// [{ name: 'collectGraph', kind: 'function', file: 'src/graphs.ts', line: 150 }, ...]
+if (matches.status === "ok") {
+  console.log(matches.matches);
+  // Output:
+  // [{ name: 'collectGraph', kind: 'function', file: 'src/graphs.ts', line: 150 }, ...]
+} else {
+  console.error(matches.error);
+}
 
 // 3. Analyze PR impact programmatically
 // Returns a JSON report suitable for LLM consumption.

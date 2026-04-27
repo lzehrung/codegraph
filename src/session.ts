@@ -22,7 +22,7 @@ import {
   type ImpactStreamChunk,
 } from "./impact/streaming.js";
 import { getSessionPreset, mergePreset, type PresetName } from "./presets.js";
-import { normalizePath } from "./util.js";
+import { normalizePath, resolveFilePathFromRoot } from "./util.js";
 
 export type SessionOptions = {
   /** Project root directory */
@@ -130,8 +130,7 @@ function sessionIdentityFingerprint(identity: SessionIdentity): string {
 }
 
 function normalizeSessionFilePath(root: string, file: string): string {
-  const absolutePath = path.isAbsolute(file) ? file : path.resolve(root, file);
-  return normalizePath(absolutePath);
+  return normalizePath(resolveFilePathFromRoot(root, file));
 }
 
 /**

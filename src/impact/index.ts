@@ -17,7 +17,7 @@ import { analyzeImpact } from "./analyzer.js";
 import { buildImpactReport } from "./report.js";
 import { collectImpactSuggestions } from "./suggestions.js";
 import { listCandidateTestFiles } from "./context.js";
-import { mapLimit } from "../util.js";
+import { mapLimit, resolveFilePathFromRoot } from "../util.js";
 import { normalizeImpactFilePath } from "./path.js";
 
 export * from "./types.js";
@@ -923,9 +923,7 @@ async function loadCoverageByFile(
   };
 
   for (const coveragePath of allPaths) {
-    const abs = path.isAbsolute(coveragePath)
-      ? coveragePath
-      : path.resolve(projectRoot, coveragePath);
+    const abs = resolveFilePathFromRoot(projectRoot, coveragePath);
     let text = "";
     try {
       text = await fs.readFile(abs, "utf8");
