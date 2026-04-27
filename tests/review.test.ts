@@ -1,66 +1,68 @@
-import { describe, it, expect, vi } from 'vitest';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import fsp from 'node:fs/promises';
-import { spawnSync } from 'node:child_process';
+import { describe, it, expect, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import fsp from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import {
   buildProjectIndex,
   buildProjectIndexFromFiles,
   buildReviewReport,
-} from '../src/index.js';
-import * as indexer from '../src/indexer.js';
-import * as impactMap from '../src/impact/map.js';
-
+} from "../src/index.js";
+import * as indexer from "../src/indexer.js";
+import * as impactMap from "../src/impact/map.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
 function runGit(root: string, args: string[]): string {
-  const result = spawnSync('git', args, {
+  const result = spawnSync("git", args, {
     cwd: root,
     env: process.env,
-    encoding: 'utf8',
+    encoding: "utf8",
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    throw new Error(`git ${args.join(' ')} failed (${result.status}): ${result.stderr}`);
+    throw new Error(
+      `git ${args.join(" ")} failed (${result.status}): ${result.stderr}`,
+    );
   }
   return result.stdout.trim();
 }
 
 function normalize(file: string): string {
-  return file.replace(/\\/g, '/');
+  return file.replace(/\\/g, "/");
 }
 
+describe("Review report", () => {
+  it("summarizes changed files and symbols", async () => {
+    const root = await mkTmpDir("dg-review-");
+    const filePath = path.join(root, "foo.ts");
+    await fsp.writeFile(filePath, `export const a = 1;\n`, "utf8");
 
-describe('Review report', () => {
-  it('summarizes changed files and symbols', async () => {
-    const root = await mkTmpDir('dg-review-');
-    const filePath = path.join(root, 'foo.ts');
-    await fsp.writeFile(filePath, `export const a = 1;\n`, 'utf8');
-
-    await buildProjectIndex(root, { cache: 'disk', threads: 2 });
+    await buildProjectIndex(root, { cache: "disk", threads: 2 });
     const report = await buildReviewReport(root, {
-      cache: 'disk',
+      cache: "disk",
       files: [filePath],
     });
 
     expect(report.schemaVersion).toBe(2);
-    expect(report.status).toBe('ok');
+    expect(report.status).toBe("ok");
     expect(report.riskSummary.level).toBeDefined();
     expect(report.reviewTasks.length).toBeGreaterThan(0);
     expect(report.changedFiles.length).toBe(1);
-    expect(report.changedFiles[0]?.symbols.some((s) => s.name === 'a')).toBe(true);
+    expect(report.changedFiles[0]?.symbols.some((s) => s.name === "a")).toBe(
+      true,
+    );
   });
 
-  it('includes definition snippets and callsites when enabled', async () => {
-    const root = await mkTmpDir('dg-review-details-');
-    const srcDir = path.join(root, 'src');
+  it("includes definition snippets and callsites when enabled", async () => {
+    const root = await mkTmpDir("dg-review-details-");
+    const srcDir = path.join(root, "src");
     await fsp.mkdir(srcDir, { recursive: true });
-    const featureFile = path.join(srcDir, 'feature.ts');
-    const consumerFile = path.join(srcDir, 'consumer.ts');
+    const featureFile = path.join(srcDir, "feature.ts");
+    const consumerFile = path.join(srcDir, "consumer.ts");
     await fsp.writeFile(
       featureFile,
       [
@@ -68,8 +70,8 @@ describe('Review report', () => {
         `  return \`hi \${name}\`;`,
         `}`,
         ``,
-      ].join('\n'),
-      'utf8',
+      ].join("\n"),
+      "utf8",
     );
     await fsp.writeFile(
       consumerFile,
@@ -80,8 +82,8 @@ describe('Review report', () => {
         `  greet('world');`,
         `}`,
         ``,
-      ].join('\n'),
-      'utf8',
+      ].join("\n"),
+      "utf8",
     );
 
     await buildProjectIndex(root);
@@ -92,8 +94,8 @@ describe('Review report', () => {
         `  return \`hello \${name}\`;`,
         `}`,
         ``,
-      ].join('\n'),
-      'utf8',
+      ].join("\n"),
+      "utf8",
     );
 
     const report = await buildReviewReport(root, {
@@ -102,31 +104,31 @@ describe('Review report', () => {
       maxCallsites: 2,
     });
     const featureSummary = report.changedFiles.find(
-      (entry) => entry.file === 'src/feature.ts',
+      (entry) => entry.file === "src/feature.ts",
     );
     expect(featureSummary).toBeDefined();
     const greetSummary = featureSummary?.symbols.find(
-      (symbol) => symbol.name === 'greet',
+      (symbol) => symbol.name === "greet",
     );
     expect(greetSummary).toBeDefined();
-    expect(greetSummary?.definitionSnippet).toContain('function greet');
+    expect(greetSummary?.definitionSnippet).toContain("function greet");
     const callsites = greetSummary?.callsites ?? [];
     expect(callsites.length).toBeGreaterThan(0);
     expect(callsites.length).toBeLessThanOrEqual(2);
     expect(
       callsites.some(
         (site) =>
-          site.file === 'src/consumer.ts' &&
+          site.file === "src/consumer.ts" &&
           (site.range.start.line === 1 || site.range.start.line === 4),
       ),
     ).toBe(true);
   });
 
-  it('limits symbols to diff hunks and includes diff snippets when provided', async () => {
-    const root = await mkTmpDir('dg-review-diff-');
-    const srcDir = path.join(root, 'src');
+  it("limits symbols to diff hunks and includes diff snippets when provided", async () => {
+    const root = await mkTmpDir("dg-review-diff-");
+    const srcDir = path.join(root, "src");
     await fsp.mkdir(srcDir, { recursive: true });
-    const featureFile = path.join(srcDir, 'feature.ts');
+    const featureFile = path.join(srcDir, "feature.ts");
     await fsp.writeFile(
       featureFile,
       [
@@ -138,24 +140,24 @@ describe('Review report', () => {
         `  return 5;`,
         `}`,
         ``,
-      ].join('\n'),
-      'utf8',
+      ].join("\n"),
+      "utf8",
     );
 
     await buildProjectIndex(root);
 
     const diffText = [
-      'diff --git a/src/feature.ts b/src/feature.ts',
-      'index 1234567..abcdef0 100644',
-      '--- a/src/feature.ts',
-      '+++ b/src/feature.ts',
-      '@@ -1,3 +1,3 @@',
-      ' export function alpha() {',
-      '-  return 1;',
-      '+  return 2;',
-      ' }',
-      '',
-    ].join('\n');
+      "diff --git a/src/feature.ts b/src/feature.ts",
+      "index 1234567..abcdef0 100644",
+      "--- a/src/feature.ts",
+      "+++ b/src/feature.ts",
+      "@@ -1,3 +1,3 @@",
+      " export function alpha() {",
+      "-  return 1;",
+      "+  return 2;",
+      " }",
+      "",
+    ].join("\n");
 
     const report = await buildReviewReport(root, {
       files: [featureFile],
@@ -163,107 +165,321 @@ describe('Review report', () => {
       includeSymbolDetails: true,
     });
 
-    const summary = report.changedFiles.find((entry) => entry.file === 'src/feature.ts');
+    const summary = report.changedFiles.find(
+      (entry) => entry.file === "src/feature.ts",
+    );
     expect(summary).toBeDefined();
     const symbols = summary?.symbols ?? [];
-    expect(symbols.some((symbol) => symbol.name === 'alpha')).toBe(true);
-    expect(symbols.some((symbol) => symbol.name === 'beta')).toBe(false);
+    expect(symbols.some((symbol) => symbol.name === "alpha")).toBe(true);
+    expect(symbols.some((symbol) => symbol.name === "beta")).toBe(false);
 
-    const alpha = symbols.find((symbol) => symbol.name === 'alpha');
-    expect(alpha?.diffSnippets?.some((snippet) => snippet.includes('return 2;'))).toBe(true);
+    const alpha = symbols.find((symbol) => symbol.name === "alpha");
+    expect(
+      alpha?.diffSnippets?.some((snippet) => snippet.includes("return 2;")),
+    ).toBe(true);
   });
 
-  it('identifies git-tracked changed files without explicit listings', async () => {
-    const root = await mkTmpDir('dg-review-git-');
-    runGit(root, ['init']);
-    runGit(root, ['config', 'user.email', 'test@git.local']);
-    runGit(root, ['config', 'user.name', 'Codegraph Bot']);
-    const filePath = path.join(root, 'tracked.ts');
-    await fsp.writeFile(filePath, `export const value = 1;\n`, 'utf8');
-    runGit(root, ['add', '.']);
-    runGit(root, ['commit', '-m', 'initial']);
-    await fsp.writeFile(filePath, `export const value = 2;\n`, 'utf8');
-    runGit(root, ['add', 'tracked.ts']);
-    runGit(root, ['commit', '-m', 'change']);
+  it("identifies git-tracked changed files without explicit listings", async () => {
+    const root = await mkTmpDir("dg-review-git-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    const filePath = path.join(root, "tracked.ts");
+    await fsp.writeFile(filePath, `export const value = 1;\n`, "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+    await fsp.writeFile(filePath, `export const value = 2;\n`, "utf8");
+    runGit(root, ["add", "tracked.ts"]);
+    runGit(root, ["commit", "-m", "change"]);
 
-    const base = runGit(root, ['rev-parse', 'HEAD^']);
+    const base = runGit(root, ["rev-parse", "HEAD^"]);
     const report = await buildReviewReport(root, { gitBase: base });
 
-    expect(report.status).toBe('ok');
+    expect(report.status).toBe("ok");
     expect(report.summary.filesChanged).toBe(1);
-    expect(report.changedFiles[0]?.file).toBe('tracked.ts');
+    expect(report.changedFiles[0]?.file).toBe("tracked.ts");
     expect(report.base).toBe(base);
-    expect(report.head).toBe('HEAD');
+    expect(report.head).toBe("HEAD");
   });
 
-  it('surfaces invalid git revisions instead of reporting no changes', async () => {
-    const root = await mkTmpDir('dg-review-invalid-git-');
-    runGit(root, ['init']);
-    runGit(root, ['config', 'user.email', 'test@git.local']);
-    runGit(root, ['config', 'user.name', 'Codegraph Bot']);
-    await fsp.writeFile(path.join(root, 'tracked.ts'), `export const value = 1;\n`, 'utf8');
-    runGit(root, ['add', '.']);
-    runGit(root, ['commit', '-m', 'initial']);
+  it("surfaces invalid git revisions instead of reporting no changes", async () => {
+    const root = await mkTmpDir("dg-review-invalid-git-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    await fsp.writeFile(
+      path.join(root, "tracked.ts"),
+      `export const value = 1;\n`,
+      "utf8",
+    );
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
 
     await expect(
-      buildReviewReport(root, { gitBase: 'definitely-not-a-ref' }),
+      buildReviewReport(root, { gitBase: "definitely-not-a-ref" }),
     ).rejects.toThrow(/definitely-not-a-ref/);
   });
 
-  it('reports deleted files surfaced by git diffs', async () => {
-    const root = await mkTmpDir('dg-review-deleted-');
-    runGit(root, ['init']);
-    runGit(root, ['config', 'user.email', 'delete@git.local']);
-    runGit(root, ['config', 'user.name', 'Codegraph Bot']);
-    const filePath = path.join(root, 'gone.ts');
-    await fsp.writeFile(filePath, `export const gone = true;\n`, 'utf8');
-    runGit(root, ['add', '.']);
-    runGit(root, ['commit', '-m', 'initial']);
-    runGit(root, ['rm', 'gone.ts']);
-    runGit(root, ['commit', '-m', 'remove']);
+  it("reports deleted files surfaced by git diffs", async () => {
+    const root = await mkTmpDir("dg-review-deleted-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "delete@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    const filePath = path.join(root, "gone.ts");
+    const testFile = path.join(root, "gone.test.ts");
+    await fsp.writeFile(filePath, `export const gone = true;\n`, "utf8");
+    await fsp.writeFile(
+      testFile,
+      `import { gone } from './gone';\nexport const seen = gone;\n`,
+      "utf8",
+    );
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+    runGit(root, ["rm", "gone.ts"]);
+    runGit(root, ["commit", "-m", "remove"]);
 
-    const base = runGit(root, ['rev-parse', 'HEAD^']);
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const report = await buildReviewReport(root, { gitBase: base });
+    const base = runGit(root, ["rev-parse", "HEAD^"]);
+    const report = await buildReviewReport(root, {
+      gitBase: base,
+      cache: "memory",
+    });
 
-      expect(report.summary.filesChanged).toBe(1);
-      expect(report.changedFiles[0]?.status).toBe('deleted');
-      expect(report.changedFiles[0]?.symbols).toEqual([]);
-      expect(report.diagnostics).toBeUndefined();
-      expect(warnSpy).not.toHaveBeenCalled();
-    } finally {
-      warnSpy.mockRestore();
-    }
+    expect(report.summary.filesChanged).toBe(1);
+    expect(report.changedFiles[0]?.status).toBe("deleted");
+    expect(
+      report.changedFiles[0]?.symbols.some((symbol) => symbol.name === "gone"),
+    ).toBe(true);
+    expect(
+      report.changedFiles[0]?.symbols.some((symbol) => symbol.exported),
+    ).toBe(true);
+    expect(report.summary.symbolsChanged).toBe(1);
+    expect(report.riskSummary.signals).toContain("exported-symbols-changed");
+    expect(report.candidateTests).toContainEqual({
+      file: "gone.test.ts",
+      confidence: "high",
+      reason: "importsChanged",
+    });
+    expect(report.diagnostics).toBeUndefined();
   });
 
-  it('marks explicitly missing files as missing instead of deleted', async () => {
-    const root = await mkTmpDir('dg-review-missing-');
-    const missingFile = path.join(root, 'missing.ts');
+  it("treats barrel export edits as exported symbol changes", async () => {
+    const root = await mkTmpDir("dg-review-barrel-edit-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const aFile = path.join(srcDir, "a.ts");
+    const bFile = path.join(srcDir, "b.ts");
+    const indexFile = path.join(srcDir, "index.ts");
+    await fsp.writeFile(aFile, `export const fromA = 1;\n`, "utf8");
+    await fsp.writeFile(bFile, `export const fromB = 2;\n`, "utf8");
+    await fsp.writeFile(indexFile, `export * from './a';\n`, "utf8");
+
+    await buildProjectIndex(root, { cache: "memory" });
+    await fsp.writeFile(indexFile, `export * from './b';\n`, "utf8");
+
+    const report = await buildReviewReport(root, {
+      files: [indexFile],
+      cache: "memory",
+      includeSymbolDetails: true,
+      diffText: [
+        "diff --git a/src/index.ts b/src/index.ts",
+        "index 1111111..2222222 100644",
+        "--- a/src/index.ts",
+        "+++ b/src/index.ts",
+        "@@ -1 +1 @@",
+        "-export * from './a';",
+        "+export * from './b';",
+        "",
+      ].join("\n"),
+    });
+
+    const fileSummary = report.changedFiles.find(
+      (entry) => entry.file === "src/index.ts",
+    );
+    expect(fileSummary?.symbols).toContainEqual(
+      expect.objectContaining({
+        name: "*",
+        kind: "exportStar",
+        exported: true,
+      }),
+    );
+    expect(report.summary.symbolsChanged).toBe(1);
+    expect(report.riskSummary.signals).toContain("exported-symbols-changed");
+    expect(report.riskSummary.level).toBe("medium");
+  });
+
+  it("reconstructs deleted files from raw diff text", async () => {
+    const root = await mkTmpDir("dg-review-diff-delete-");
+    const srcDir = path.join(root, "src");
+    const testsDir = path.join(root, "tests");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.mkdir(testsDir, { recursive: true });
+    const libFile = path.join(srcDir, "lib.ts");
+    const testFile = path.join(testsDir, "lib.test.ts");
+    await fsp.writeFile(libFile, `export const gone = 1;\n`, "utf8");
+    await fsp.writeFile(
+      testFile,
+      `import { gone } from '../src/lib';\nexport const seen = gone;\n`,
+      "utf8",
+    );
+
+    await buildProjectIndex(root, { cache: "memory" });
+    await fsp.unlink(libFile);
+
+    const report = await buildReviewReport(root, {
+      files: [libFile],
+      cache: "memory",
+      includeSymbolDetails: true,
+      diffText: [
+        "diff --git a/src/lib.ts b/src/lib.ts",
+        "deleted file mode 100644",
+        "index 1111111..0000000",
+        "--- a/src/lib.ts",
+        "+++ /dev/null",
+        "@@ -1 +0,0 @@",
+        "-export const gone = 1;",
+        "",
+      ].join("\n"),
+    });
+
+    expect(report.changedFiles[0]?.status).toBe("deleted");
+    expect(report.changedFiles[0]?.symbols).toContainEqual(
+      expect.objectContaining({
+        name: "gone",
+        exported: true,
+      }),
+    );
+    expect(report.summary.symbolsChanged).toBe(1);
+    expect(report.riskSummary.signals).toContain("exported-symbols-changed");
+    expect(report.candidateTests).toContainEqual({
+      file: "tests/lib.test.ts",
+      confidence: "high",
+      reason: "importsChanged",
+    });
+  });
+
+  it("includes importer edges for deleted files in graphDelta", async () => {
+    const root = await mkTmpDir("dg-review-deleted-edges-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const libFile = path.join(srcDir, "lib.ts");
+    const mainFile = path.join(srcDir, "main.ts");
+    await fsp.writeFile(libFile, `export const gone = 1;\n`, "utf8");
+    await fsp.writeFile(
+      mainFile,
+      `import { gone } from './lib';\nexport const seen = gone;\n`,
+      "utf8",
+    );
+
+    await buildProjectIndex(root, { cache: "memory" });
+    await fsp.unlink(libFile);
+
+    const report = await buildReviewReport(root, {
+      files: [libFile],
+      cache: "memory",
+      diffText: [
+        "diff --git a/src/lib.ts b/src/lib.ts",
+        "deleted file mode 100644",
+        "index 1111111..0000000",
+        "--- a/src/lib.ts",
+        "+++ /dev/null",
+        "@@ -1 +0,0 @@",
+        "-export const gone = 1;",
+        "",
+      ].join("\n"),
+    });
+
+    expect(report.graphDelta).toContainEqual({
+      from: "src/main.ts",
+      to: { type: "file", path: "src/lib.ts" },
+      raw: "./lib",
+    });
+  });
+
+  it("reports deleted re-export files as exported API changes", async () => {
+    const root = await mkTmpDir("dg-review-deleted-barrel-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "delete@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    const srcDir = path.join(root, "src");
+    const testsDir = path.join(root, "tests");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.mkdir(testsDir, { recursive: true });
+    const implFile = path.join(srcDir, "impl.ts");
+    const barrelFile = path.join(srcDir, "index.ts");
+    const testFile = path.join(testsDir, "index.test.ts");
+    await fsp.writeFile(implFile, `export const impl = 1;\n`, "utf8");
+    await fsp.writeFile(barrelFile, `export * from './impl';\n`, "utf8");
+    await fsp.writeFile(
+      testFile,
+      `import { impl } from '../src/index';\nexport const seen = impl;\n`,
+      "utf8",
+    );
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+    runGit(root, ["rm", "src/index.ts"]);
+    runGit(root, ["commit", "-m", "remove barrel"]);
+
+    const base = runGit(root, ["rev-parse", "HEAD^"]);
+    const report = await buildReviewReport(root, {
+      gitBase: base,
+      cache: "memory",
+      includeSymbolDetails: true,
+    });
+
+    const barrelSummary = report.changedFiles.find(
+      (entry) => entry.file === "src/index.ts",
+    );
+    expect(barrelSummary?.status).toBe("deleted");
+    expect(barrelSummary?.symbols).toContainEqual(
+      expect.objectContaining({
+        name: "*",
+        kind: "exportStar",
+        exported: true,
+      }),
+    );
+    expect(report.summary.symbolsChanged).toBe(1);
+    expect(report.riskSummary.signals).toContain("exported-symbols-changed");
+    expect(report.candidateTests).toContainEqual({
+      file: "tests/index.test.ts",
+      confidence: "high",
+      reason: "importsChanged",
+    });
+    expect(report.graphDelta).toContainEqual({
+      from: "src/index.ts",
+      to: { type: "file", path: "src/impl.ts" },
+      raw: "./impl",
+    });
+  });
+
+  it("marks explicitly missing files as missing instead of deleted", async () => {
+    const root = await mkTmpDir("dg-review-missing-");
+    const missingFile = path.join(root, "missing.ts");
 
     const report = await buildReviewReport(root, {
       files: [missingFile],
     });
 
-    expect(report.status).toBe('ok');
+    expect(report.status).toBe("ok");
     expect(report.schemaVersion).toBe(2);
-    expect(report.changedFiles[0]?.file).toBe('missing.ts');
-    expect(report.changedFiles[0]?.status).toBe('missing');
-    expect(report.diagnostics?.missingFiles).toEqual(['missing.ts']);
+    expect(report.changedFiles[0]?.file).toBe("missing.ts");
+    expect(report.changedFiles[0]?.status).toBe("missing");
+    expect(report.diagnostics?.missingFiles).toEqual(["missing.ts"]);
     expect(report.diagnostics?.symbolMappingParseFailures).toEqual([]);
-    expect(report.riskSummary.signals).toContain('missing-files');
-    expect(report.reviewTasks.some((task) => task.reason === 'missing-files')).toBe(true);
+    expect(report.riskSummary.signals).toContain("missing-files");
+    expect(
+      report.reviewTasks.some((task) => task.reason === "missing-files"),
+    ).toBe(true);
   });
 
-  it('reports review diagnostics when symbol mapping degrades', async () => {
-    const root = await mkTmpDir('dg-review-parse-failure-');
-    const filePath = path.join(root, 'feature.ts');
-    await fsp.writeFile(filePath, `export const value = 1;\n`, 'utf8');
+  it("reports review diagnostics when symbol mapping degrades", async () => {
+    const root = await mkTmpDir("dg-review-parse-failure-");
+    const filePath = path.join(root, "feature.ts");
+    await fsp.writeFile(filePath, `export const value = 1;\n`, "utf8");
 
     await buildProjectIndex(root);
 
     const locateSpy = vi
-      .spyOn(impactMap, 'locateChangedSymbolsWithLines')
+      .spyOn(impactMap, "locateChangedSymbolsWithLines")
       .mockResolvedValue({
         changedSymbols: [],
         changedLines: new Set<number>(),
@@ -274,66 +490,99 @@ describe('Review report', () => {
       const report = await buildReviewReport(root, {
         files: [filePath],
         diffText: [
-          'diff --git a/feature.ts b/feature.ts',
-          'index 1234567..abcdef0 100644',
-          '--- a/feature.ts',
-          '+++ b/feature.ts',
-          '@@ -1 +1 @@',
-          '-export const value = 0;',
-          '+export const value = 1;',
-          '',
-        ].join('\n'),
+          "diff --git a/feature.ts b/feature.ts",
+          "index 1234567..abcdef0 100644",
+          "--- a/feature.ts",
+          "+++ b/feature.ts",
+          "@@ -1 +1 @@",
+          "-export const value = 0;",
+          "+export const value = 1;",
+          "",
+        ].join("\n"),
       });
 
       expect(report.diagnostics?.missingFiles).toEqual([]);
-      expect(report.diagnostics?.symbolMappingParseFailures).toEqual(['feature.ts']);
-      expect(report.riskSummary.signals).toContain('symbol-mapping-degraded');
+      expect(report.diagnostics?.symbolMappingParseFailures).toEqual([
+        "feature.ts",
+      ]);
+      expect(report.riskSummary.signals).toContain("symbol-mapping-degraded");
       expect(
-        report.reviewTasks.some((task) => task.reason === 'symbol-mapping-degraded'),
+        report.reviewTasks.some(
+          (task) => task.reason === "symbol-mapping-degraded",
+        ),
       ).toBe(true);
     } finally {
       locateSpy.mockRestore();
     }
   });
 
-  it('returns candidate tests after warming the manifest cache', async () => {
-    const root = await mkTmpDir('dg-review-candidates-');
-    const srcDir = path.join(root, 'src');
-    const testsDir = path.join(root, 'tests');
+  it("returns candidate tests after warming the manifest cache", async () => {
+    const root = await mkTmpDir("dg-review-candidates-");
+    const srcDir = path.join(root, "src");
+    const testsDir = path.join(root, "tests");
     await fsp.mkdir(srcDir, { recursive: true });
     await fsp.mkdir(testsDir, { recursive: true });
-    const featureFile = path.join(srcDir, 'feature.ts');
-    const testFile = path.join(testsDir, 'feature.test.ts');
-    await fsp.writeFile(featureFile, `export function helper() { return 1; }\n`, 'utf8');
+    const featureFile = path.join(srcDir, "feature.ts");
+    const testFile = path.join(testsDir, "feature.test.ts");
+    await fsp.writeFile(
+      featureFile,
+      `export function helper() { return 1; }\n`,
+      "utf8",
+    );
     await fsp.writeFile(
       testFile,
       `import { helper } from '../src/feature';\nhelper();\n`,
-      'utf8'
+      "utf8",
     );
 
     await buildProjectIndex(root);
-    const manifestPath = path.join(root, '.codegraph-cache', 'index-v1', 'manifest.json');
+    const manifestPath = path.join(
+      root,
+      ".codegraph-cache",
+      "index-v1",
+      "manifest.json",
+    );
     expect(fs.existsSync(manifestPath)).toBe(true);
 
-    await fsp.writeFile(featureFile, `export function helper() { return 2; }\n`, 'utf8');
+    await fsp.writeFile(
+      featureFile,
+      `export function helper() { return 2; }\n`,
+      "utf8",
+    );
     const report = await buildReviewReport(root, {
       files: [featureFile],
       maxCandidates: 5,
     });
 
     expect(report.summary.candidateTests).toBeGreaterThan(0);
-    expect(report.candidateTests.some((candidate) => candidate.file === 'tests/feature.test.ts')).toBe(true);
-    expect(report.candidateTests.some((candidate) => candidate.confidence === 'high')).toBe(true);
+    expect(
+      report.candidateTests.some(
+        (candidate) => candidate.file === "tests/feature.test.ts",
+      ),
+    ).toBe(true);
+    expect(
+      report.candidateTests.some(
+        (candidate) => candidate.confidence === "high",
+      ),
+    ).toBe(true);
   });
 
-  it('processes symbol details across files in parallel', async () => {
-    const root = await mkTmpDir('dg-review-parallel-');
-    const srcDir = path.join(root, 'src');
+  it("processes symbol details across files in parallel", async () => {
+    const root = await mkTmpDir("dg-review-parallel-");
+    const srcDir = path.join(root, "src");
     await fsp.mkdir(srcDir, { recursive: true });
-    const alphaFile = path.join(srcDir, 'alpha.ts');
-    const betaFile = path.join(srcDir, 'beta.ts');
-    await fsp.writeFile(alphaFile, `export function alpha() { return 'a'; }\n`, 'utf8');
-    await fsp.writeFile(betaFile, `export function beta() { return 'b'; }\n`, 'utf8');
+    const alphaFile = path.join(srcDir, "alpha.ts");
+    const betaFile = path.join(srcDir, "beta.ts");
+    await fsp.writeFile(
+      alphaFile,
+      `export function alpha() { return 'a'; }\n`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      betaFile,
+      `export function beta() { return 'b'; }\n`,
+      "utf8",
+    );
 
     await buildProjectIndex(root);
 
@@ -355,9 +604,9 @@ describe('Review report', () => {
     };
 
     const findSpy = vi
-      .spyOn(indexer, 'findReferences')
+      .spyOn(indexer, "findReferences")
       .mockImplementation((idx, req) => {
-        const def = 'def' in req ? req.def : null;
+        const def = "def" in req ? req.def : null;
         const entry = createDeferred(def ?? null);
         return entry.promise;
       });
@@ -374,39 +623,47 @@ describe('Review report', () => {
           if (predicate()) return;
           await new Promise((resolve) => setTimeout(resolve, 10));
         }
-        throw new Error('Timed out waiting for parallel calls');
+        throw new Error("Timed out waiting for parallel calls");
       };
 
       await waitFor(() => deferreds.length === 2);
 
       for (const entry of deferreds) {
         if (!entry.def) {
-          entry.resolve({ status: 'not_found', reason: 'missing def' });
+          entry.resolve({ status: "not_found", reason: "missing def" });
           continue;
         }
         entry.resolve({
-          status: 'ok',
+          status: "ok",
           definition: entry.def,
           references: [],
         });
       }
 
       const report = await reportPromise;
-      expect(report.status).toBe('ok');
+      expect(report.status).toBe("ok");
       expect(report.changedFiles.length).toBe(2);
     } finally {
       findSpy.mockRestore();
     }
   });
 
-  it('respects reference concurrency limits', async () => {
-    const root = await mkTmpDir('dg-review-concurrency-');
-    const srcDir = path.join(root, 'src');
+  it("respects reference concurrency limits", async () => {
+    const root = await mkTmpDir("dg-review-concurrency-");
+    const srcDir = path.join(root, "src");
     await fsp.mkdir(srcDir, { recursive: true });
-    const alphaFile = path.join(srcDir, 'alpha.ts');
-    const betaFile = path.join(srcDir, 'beta.ts');
-    await fsp.writeFile(alphaFile, `export function alpha() { return 'a'; }\n`, 'utf8');
-    await fsp.writeFile(betaFile, `export function beta() { return 'b'; }\n`, 'utf8');
+    const alphaFile = path.join(srcDir, "alpha.ts");
+    const betaFile = path.join(srcDir, "beta.ts");
+    await fsp.writeFile(
+      alphaFile,
+      `export function alpha() { return 'a'; }\n`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      betaFile,
+      `export function beta() { return 'b'; }\n`,
+      "utf8",
+    );
 
     await buildProjectIndex(root);
 
@@ -416,7 +673,7 @@ describe('Review report', () => {
     let maxInFlight = 0;
 
     const findSpy = vi
-      .spyOn(indexer, 'findReferences')
+      .spyOn(indexer, "findReferences")
       .mockImplementation(() => {
         inFlight += 1;
         maxInFlight = Math.max(maxInFlight, inFlight);
@@ -446,38 +703,38 @@ describe('Review report', () => {
           if (predicate()) return;
           await new Promise((resolve) => setTimeout(resolve, 10));
         }
-        throw new Error('Timed out waiting for findReferences calls');
+        throw new Error("Timed out waiting for findReferences calls");
       };
 
       await waitFor(() => deferreds.length === 1);
-      deferreds[0]?.resolve({ status: 'not_found', reason: 'missing def' });
+      deferreds[0]?.resolve({ status: "not_found", reason: "missing def" });
 
       await waitFor(() => deferreds.length === 2);
-      deferreds[1]?.resolve({ status: 'not_found', reason: 'missing def' });
+      deferreds[1]?.resolve({ status: "not_found", reason: "missing def" });
 
       const report = await reportPromise;
-      expect(report.status).toBe('ok');
+      expect(report.status).toBe("ok");
       expect(maxInFlight).toBe(1);
     } finally {
       findSpy.mockRestore();
     }
   });
 
-  it('keeps parsed trees and bounds reference work for review callsites', async () => {
-    const root = await mkTmpDir('dg-review-reference-bounds-');
-    const srcDir = path.join(root, 'src');
+  it("keeps parsed trees and bounds reference work for review callsites", async () => {
+    const root = await mkTmpDir("dg-review-reference-bounds-");
+    const srcDir = path.join(root, "src");
     await fsp.mkdir(srcDir, { recursive: true });
-    const featureFile = path.join(srcDir, 'feature.ts');
-    const consumerFile = path.join(srcDir, 'consumer.ts');
+    const featureFile = path.join(srcDir, "feature.ts");
+    const consumerFile = path.join(srcDir, "consumer.ts");
     await fsp.writeFile(
       featureFile,
       `export function greet(name: string) { return name; }\n`,
-      'utf8',
+      "utf8",
     );
     await fsp.writeFile(
       consumerFile,
       `import { greet } from './feature';\nexport const run = () => greet('hi');\n`,
-      'utf8',
+      "utf8",
     );
 
     await buildProjectIndex(root);
@@ -485,18 +742,20 @@ describe('Review report', () => {
     const originalBuildProjectIndexIncremental =
       indexer.buildProjectIndexIncremental;
     const originalFindReferences = indexer.findReferences;
-    const capturedIndexOpts: Array<indexer.IncrementalBuildOptions | undefined> = [];
+    const capturedIndexOpts: Array<
+      indexer.IncrementalBuildOptions | undefined
+    > = [];
     const capturedReferenceLimits: number[] = [];
 
     const buildSpy = vi
-      .spyOn(indexer, 'buildProjectIndexIncremental')
+      .spyOn(indexer, "buildProjectIndexIncremental")
       .mockImplementation(async (projectRoot, opts) => {
         capturedIndexOpts.push(opts);
         return await originalBuildProjectIndexIncremental(projectRoot, opts);
       });
 
     const findSpy = vi
-      .spyOn(indexer, 'findReferences')
+      .spyOn(indexer, "findReferences")
       .mockImplementation(async (idx, req, opts) => {
         if (opts?.maxReferences !== undefined) {
           capturedReferenceLimits.push(opts.maxReferences);
@@ -511,7 +770,7 @@ describe('Review report', () => {
         maxCallsites: 2,
       });
 
-      expect(report.status).toBe('ok');
+      expect(report.status).toBe("ok");
       expect(capturedIndexOpts.some((opts) => opts?.keepParsed)).toBe(true);
       expect(capturedReferenceLimits.length).toBeGreaterThan(0);
       expect(capturedReferenceLimits.every((value) => value === 3)).toBe(true);
@@ -521,11 +780,11 @@ describe('Review report', () => {
     }
   });
 
-  it('applies review depth presets to symbol details and graph options', async () => {
-    const root = await mkTmpDir('dg-review-presets-');
-    const srcDir = path.join(root, 'src');
+  it("applies review depth presets to symbol details and graph options", async () => {
+    const root = await mkTmpDir("dg-review-presets-");
+    const srcDir = path.join(root, "src");
     await fsp.mkdir(srcDir, { recursive: true });
-    const featureFile = path.join(srcDir, 'feature.ts');
+    const featureFile = path.join(srcDir, "feature.ts");
     await fsp.writeFile(
       featureFile,
       [
@@ -533,10 +792,10 @@ describe('Review report', () => {
         `  return \`hello \${name}\`;`,
         `}`,
         ``,
-      ].join('\n'),
-      'utf8',
+      ].join("\n"),
+      "utf8",
     );
-    const consumers = ['alpha', 'beta', 'gamma'].map((name) => ({
+    const consumers = ["alpha", "beta", "gamma"].map((name) => ({
       name,
       file: path.join(srcDir, `${name}.ts`),
     }));
@@ -550,32 +809,32 @@ describe('Review report', () => {
           `  return greet('${consumer.name}');`,
           `}`,
           ``,
-        ].join('\n'),
-        'utf8',
+        ].join("\n"),
+        "utf8",
       );
     }
 
     await buildProjectIndex(root);
 
-    const buildSpy = vi.spyOn(indexer, 'buildProjectIndexIncremental');
+    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental");
     try {
       const minimal = await buildReviewReport(root, {
         files: [featureFile],
-        reviewDepth: 'minimal',
+        reviewDepth: "minimal",
       });
       const standard = await buildReviewReport(root, {
         files: [featureFile],
-        reviewDepth: 'standard',
+        reviewDepth: "standard",
       });
       const deep = await buildReviewReport(root, {
         files: [featureFile],
-        reviewDepth: 'deep',
+        reviewDepth: "deep",
       });
 
       const findGreet = (report: Awaited<typeof minimal>) =>
         report.changedFiles
-          .find((entry) => entry.file === 'src/feature.ts')
-          ?.symbols.find((symbol) => symbol.name === 'greet');
+          .find((entry) => entry.file === "src/feature.ts")
+          ?.symbols.find((symbol) => symbol.name === "greet");
 
       const minimalGreet = findGreet(minimal);
       expect(minimalGreet).toBeDefined();
@@ -583,7 +842,7 @@ describe('Review report', () => {
       expect(minimalGreet?.callsites).toBeUndefined();
 
       const standardGreet = findGreet(standard);
-      expect(standardGreet?.definitionSnippet).toContain('function greet');
+      expect(standardGreet?.definitionSnippet).toContain("function greet");
       expect(standardGreet?.callsites?.length).toBeGreaterThan(0);
       expect(standardGreet?.callsites?.length).toBeLessThanOrEqual(2);
 
@@ -600,86 +859,88 @@ describe('Review report', () => {
   });
 });
 
-describe('Indexing helper', () => {
-  it('keeps star-import expansions in sync between full and subset builds', async () => {
-    const root = await mkTmpDir('dg-review-indexer-');
-    const libDir = path.join(root, 'lib');
+describe("Indexing helper", () => {
+  it("keeps star-import expansions in sync between full and subset builds", async () => {
+    const root = await mkTmpDir("dg-review-indexer-");
+    const libDir = path.join(root, "lib");
     await fsp.mkdir(libDir, { recursive: true });
-    const utilsPath = path.join(libDir, 'utils.ts');
-    const indexPath = path.join(libDir, 'index.ts');
-    await fsp.writeFile(utilsPath, `export function helper() { return 'ok'; }\n`, 'utf8');
-    await fsp.writeFile(indexPath, `export * from './utils';\n`, 'utf8');
+    const utilsPath = path.join(libDir, "utils.ts");
+    const indexPath = path.join(libDir, "index.ts");
+    await fsp.writeFile(
+      utilsPath,
+      `export function helper() { return 'ok'; }\n`,
+      "utf8",
+    );
+    await fsp.writeFile(indexPath, `export * from './utils';\n`, "utf8");
 
     const fullIndex = await buildProjectIndex(root);
     const fullModule = fullIndex.byFile.get(normalize(indexPath));
-    if (!fullModule) throw new Error('Full index missing index.ts');
+    if (!fullModule) throw new Error("Full index missing index.ts");
     const utilsNormalized = normalize(utilsPath);
     const fullExportStar = fullModule.exports.find(
       (exp) =>
-        exp.type === 'exportStar' &&
-        typeof exp.fromModule === 'string' &&
-        normalize(exp.fromModule) === utilsNormalized
+        exp.type === "exportStar" &&
+        typeof exp.fromModule === "string" &&
+        normalize(exp.fromModule) === utilsNormalized,
     );
     expect(fullExportStar).toBeDefined();
 
-    const subsetIndex = await buildProjectIndexFromFiles(root, [indexPath, utilsPath]);
+    const subsetIndex = await buildProjectIndexFromFiles(root, [
+      indexPath,
+      utilsPath,
+    ]);
     const subsetModule = subsetIndex.byFile.get(normalize(indexPath));
-    if (!subsetModule) throw new Error('Subset index missing index.ts');
+    if (!subsetModule) throw new Error("Subset index missing index.ts");
     const subsetExportStar = subsetModule.exports.find(
       (exp) =>
-        exp.type === 'exportStar' &&
-        typeof exp.fromModule === 'string' &&
-        normalize(exp.fromModule) === utilsNormalized
+        exp.type === "exportStar" &&
+        typeof exp.fromModule === "string" &&
+        normalize(exp.fromModule) === utilsNormalized,
     );
     expect(subsetExportStar).toBeDefined();
   });
 
-  it('keeps Ruby star-import namespace expansion in sync for incremental builds', async () => {
-    const root = await mkTmpDir('dg-review-ruby-incremental-');
-    const utilPath = path.join(root, 'util.rb');
-    const mainPath = path.join(root, 'main.rb');
+  it("keeps Ruby star-import namespace expansion in sync for incremental builds", async () => {
+    const root = await mkTmpDir("dg-review-ruby-incremental-");
+    const utilPath = path.join(root, "util.rb");
+    const mainPath = path.join(root, "main.rb");
     await fsp.writeFile(
       utilPath,
-      [
-        'class Tool',
-        '  VALUE = 1',
-        'end',
-        '',
-      ].join('\n'),
-      'utf8',
+      ["class Tool", "  VALUE = 1", "end", ""].join("\n"),
+      "utf8",
     );
     await fsp.writeFile(
       mainPath,
-      [
-        "require_relative './util'",
-        '',
-        'value = Tool::VALUE',
-        '',
-      ].join('\n'),
-      'utf8',
+      ["require_relative './util'", "", "value = Tool::VALUE", ""].join("\n"),
+      "utf8",
     );
 
-    const normalizedMainPath = mainPath.replace(/\\/g, '/');
-    const fullIndex = await buildProjectIndex(root, { cache: 'disk' });
+    const normalizedMainPath = mainPath.replace(/\\/g, "/");
+    const fullIndex = await buildProjectIndex(root, { cache: "disk" });
     const fullMainModule = fullIndex.byFile.get(normalizedMainPath);
     expect(fullMainModule).toBeDefined();
 
     const incrementalIndex = await indexer.buildProjectIndexIncremental(root, {
-      cache: 'disk',
+      cache: "disk",
       files: [mainPath],
     });
-    const incrementalMainModule = incrementalIndex.byFile.get(normalizedMainPath);
+    const incrementalMainModule =
+      incrementalIndex.byFile.get(normalizedMainPath);
     expect(incrementalMainModule).toBeDefined();
 
-    const hasToolNamespaceImport = (imports: NonNullable<typeof fullMainModule>['imports']) =>
+    const hasToolNamespaceImport = (
+      imports: NonNullable<typeof fullMainModule>["imports"],
+    ) =>
       imports.some(
         (imp) =>
-          imp.kind === 'namespace' &&
-          imp.localNS === 'Tool' &&
-          imp.resolved === utilPath.replace(/\\/g, '/'),
+          imp.kind === "namespace" &&
+          imp.localNS === "Tool" &&
+          imp.resolved === utilPath.replace(/\\/g, "/"),
       );
 
     expect(hasToolNamespaceImport(fullMainModule?.imports ?? [])).toBe(true);
-    expect(hasToolNamespaceImport(incrementalMainModule?.imports ?? [])).toBe(true);
+    expect(hasToolNamespaceImport(incrementalMainModule?.imports ?? [])).toBe(
+      true,
+    );
   });
 });
