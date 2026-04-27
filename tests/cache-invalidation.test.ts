@@ -494,6 +494,60 @@ describe("Cache invalidation and strict hashing", () => {
     expect(cEdges).toEqual(cEntryBefore.edges);
   });
 
+  it("rejects explicit incremental files outside the project root", async () => {
+    const root = await mkTmpDir("dg-incremental-explicit-root-");
+    const insideFile = path.join(root, "inside.ts");
+    await fsp.writeFile(insideFile, `export const inside = 1;\n`, "utf8");
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+
+    await expect(
+      buildProjectIndexIncremental(root, {
+        threads: 2,
+        cache: "disk",
+        files: [path.resolve("README.md")],
+      }),
+    ).rejects.toThrow(/outside project root/);
+  });
+
+  it("drops out-of-root manifest entries during incremental reuse", async () => {
+    const root = await mkTmpDir("dg-incremental-manifest-sanitize-");
+    const insideFile = path.join(root, "inside.ts");
+    const outsideFile = path.join(os.tmpdir(), `dg-outside-${Date.now()}.ts`);
+
+    await fsp.writeFile(insideFile, `export const inside = 1;\n`, "utf8");
+    await fsp.writeFile(outsideFile, `export const outside = 1;\n`, "utf8");
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+
+    const manifest = await readManifest(root);
+    manifest.files[normalize(outsideFile)] = {
+      sig: "synthetic",
+      edges: [],
+    };
+    await fsp.writeFile(
+      path.join(root, ".codegraph-cache", "index-v1", "manifest.json"),
+      JSON.stringify(manifest, null, 2),
+      "utf8",
+    );
+
+    try {
+      const incremental = await buildProjectIndexIncremental(root, {
+        threads: 2,
+        cache: "disk",
+      });
+      const manifestAfter = await readManifest(root);
+
+      expect(incremental.byFile.has(normalize(outsideFile))).toBe(false);
+      expect(
+        [...incremental.graph.nodes].includes(normalize(outsideFile)),
+      ).toBe(false);
+      expect(Object.keys(manifestAfter.files)).not.toContain(
+        normalize(outsideFile),
+      );
+    } finally {
+      await fsp.rm(outsideFile, { force: true });
+    }
+  });
+
   it("rebuilds when graph options change", async () => {
     const root = await mkTmpDir("dg-incremental-graph-opts-");
     const aPath = path.join(root, "a.ts");
