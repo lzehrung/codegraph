@@ -100,8 +100,10 @@ describe("Agent Tools", () => {
     const result = await tool_goToDefinition(samplePath, mainFile, 7, 25);
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
-      expect(result.definition.file.replace(/\\/g, "/")).toContain("utils.ts");
+      expect(result.definition.file).toBe("utils.ts");
       expect(result.definition.range.start.line).toBe(1);
+      expect(path.isAbsolute(result.definition.file)).toBe(false);
+      expect(path.isAbsolute(result.via?.importedFrom ?? "")).toBe(false);
     }
   });
 
@@ -111,7 +113,13 @@ describe("Agent Tools", () => {
     const result = await tool_findReferences(samplePath, utilsFile, 1, 17);
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
+      expect(result.definition?.file).toBe("utils.ts");
       expect(result.references.length).toBeGreaterThan(0);
+      expect(result.references.every((reference) => !path.isAbsolute(reference.file))).toBe(
+        true,
+      );
+      const firstImportReference = result.references.find((reference) => reference.via?.import);
+      expect(firstImportReference?.via?.import?.resolved).toBe("utils.ts");
     }
   });
 
@@ -119,7 +127,7 @@ describe("Agent Tools", () => {
     const result = await tool_goToDefinition(samplePath, "main.ts", 7, 25);
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
-      expect(result.definition.file.replace(/\\/g, "/")).toContain("utils.ts");
+      expect(result.definition.file).toBe("utils.ts");
     }
   });
 

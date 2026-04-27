@@ -10,8 +10,11 @@ import {
   type ImpactReport,
   type CompactImpactReport,
   type Edge,
+  type ImportBinding,
   type ProjectIndex,
+  type Reference,
   type NativeRuntimeMode,
+  type SymbolDef,
 } from "./index.js";
 import {
   fileExists,
@@ -335,6 +338,68 @@ function listSymbolsForOverview(index: ProjectIndex, file: string): {
   };
 }
 
+function normalizeToolFileOutput(root: string, filePath: string): string {
+  return toProjectRelativePath(root, filePath) ?? normalizePath(filePath);
+}
+
+function normalizeToolModuleRef(root: string, filePath: string): string {
+  return normalizeToolFileOutput(root, filePath);
+}
+
+function normalizeToolImportBinding(
+  root: string,
+  binding: ImportBinding,
+): ImportBinding {
+  const resolved =
+    typeof binding.resolved === "string"
+      ? normalizeToolFileOutput(root, binding.resolved)
+      : binding.resolved;
+  if (resolved === binding.resolved || resolved === undefined) {
+    return binding;
+  }
+  return { ...binding, resolved };
+}
+
+function normalizeToolDefinition(root: string, definition: SymbolDef): SymbolDef {
+  return {
+    ...definition,
+    file: normalizeToolFileOutput(root, definition.file),
+  };
+}
+
+function normalizeToolGoToVia(
+  root: string,
+  via: { importedFrom?: string | undefined; exportedName?: string | undefined },
+): { importedFrom?: string; exportedName?: string } {
+  const normalizedVia: { importedFrom?: string; exportedName?: string } = {};
+  if (via.importedFrom) {
+    normalizedVia.importedFrom = normalizeToolModuleRef(root, via.importedFrom);
+  }
+  if (via.exportedName) {
+    normalizedVia.exportedName = via.exportedName;
+  }
+  return normalizedVia;
+}
+
+function normalizeToolReference(root: string, reference: Reference): Reference {
+  return {
+    ...reference,
+    file: normalizeToolFileOutput(root, reference.file),
+    ...(reference.via
+      ? {
+          via: {
+            ...reference.via,
+            ...(reference.via.import
+              ? {
+                  import: normalizeToolImportBinding(root, reference.via.import),
+                }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
 /**
  * Go to definition for a symbol at a specific location.
  */
@@ -347,14 +412,10 @@ export async function tool_goToDefinition(
   runtimeOptions: ToolRuntimeOptions = {},
 ): Promise<{
   status: "ok" | "error" | "not_found";
-  definition?: {
-    file: string;
-    range: {
-      start: {
-        line: number;
-        column: number;
-      };
-    };
+  definition?: SymbolDef;
+  via?: {
+    importedFrom?: string;
+    exportedName?: string;
   };
   error?: string;
   reason?: string;
@@ -376,7 +437,15 @@ export async function tool_goToDefinition(
       line,
       column,
     });
-    return result;
+    if (result.status !== "ok") {
+      return result;
+    }
+    const { definition, via, ...rest } = result;
+    return {
+      ...rest,
+      definition: normalizeToolDefinition(root, definition),
+      ...(via ? { via: normalizeToolGoToVia(root, via) } : {}),
+    };
   } catch (error) {
     return { status: "error", error: String(error) };
   }
@@ -394,10 +463,8 @@ export async function tool_findReferences(
   runtimeOptions: ToolRuntimeOptions = {},
 ): Promise<{
   status: "ok" | "error" | "not_found";
-  references?: Array<{
-    file: string;
-    range: { start: { line: number; column: number } };
-  }>;
+  definition?: SymbolDef;
+  references?: Reference[];
   error?: string;
   reason?: string;
 }> {
@@ -418,7 +485,16 @@ export async function tool_findReferences(
       line,
       column,
     });
-    return result;
+    if (result.status !== "ok") {
+      return result;
+    }
+    return {
+      ...result,
+      definition: normalizeToolDefinition(root, result.definition),
+      references: result.references.map((reference) =>
+        normalizeToolReference(root, reference),
+      ),
+    };
   } catch (error) {
     return { status: "error", error: String(error) };
   }

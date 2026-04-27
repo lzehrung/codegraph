@@ -11,6 +11,7 @@ import {
   collectLocalsAndExportsFromSource,
   type ExportEntry,
   findReferences,
+  type ImportBinding,
   type IncrementalBuildOptions,
   type ModuleIndex,
   type ProjectIndex,
@@ -38,6 +39,7 @@ import {
   getUnifiedDiff,
   discoverProjectFiles,
   isFilePathWithinRoot,
+  loadNearestTsconfigFor,
   resolveFilePathFromRoot,
   toProjectRelativePath,
   type ProjectFileInfo,
@@ -288,46 +290,152 @@ function buildDeletedImportCandidates(
   return candidates;
 }
 
-function listDirectDeletedFileTestImporters(
+function matchesDeletedImportTarget(
+  fromFile: string,
+  spec: string,
+  resolved: string | undefined,
+  deletedFile: string,
+): boolean {
+  if (resolved && normalizePath(resolved) === deletedFile) {
+    return true;
+  }
+  if (!spec.startsWith(".")) {
+    return false;
+  }
+  return buildDeletedImportCandidates(fromFile, spec, deletedFile).has(
+    deletedFile,
+  );
+}
+
+function getImportResolvedPath(
+  entry: Pick<ImportBinding, "resolved">,
+): string | undefined {
+  return typeof entry.resolved === "string" ? entry.resolved : undefined;
+}
+
+function buildDeletedAliasCandidates(
+  candidate: string,
+  targetFile: string,
+): Set<string> {
+  const normalizedCandidate = normalizePath(candidate);
+  const normalizedTarget = normalizePath(targetFile);
+  const candidates = new Set<string>([normalizedCandidate]);
+  const candidateExt = path.extname(normalizedCandidate);
+  const targetExt = path.extname(normalizedTarget);
+
+  if (!targetExt) {
+    return candidates;
+  }
+
+  if (!candidateExt) {
+    candidates.add(`${normalizedCandidate}${targetExt}`);
+    candidates.add(
+      normalizePath(path.join(normalizedCandidate, `index${targetExt}`)),
+    );
+    return candidates;
+  }
+
+  if (candidateExt !== targetExt) {
+    const candidateBase = normalizedCandidate.slice(0, -candidateExt.length);
+    candidates.add(`${candidateBase}${targetExt}`);
+  }
+
+  return candidates;
+}
+
+function deletedImportResolutionExtensions(targetFile: string): string[] {
+  const targetExt = path.extname(targetFile);
+  return targetExt ? [targetExt] : [];
+}
+
+async function resolveDeletedAliasImportTarget(
+  fromFile: string,
+  spec: string,
+  deletedFile: string,
+): Promise<string | undefined> {
+  if (spec.startsWith(".") || spec.startsWith("/") || /^[A-Za-z]:[\\/]/.test(spec)) {
+    return undefined;
+  }
+  const { matchPath } = await loadNearestTsconfigFor(fromFile);
+  if (!matchPath) {
+    return undefined;
+  }
+  const matched = matchPath(
+    spec,
+    undefined,
+    (candidate) =>
+      buildDeletedAliasCandidates(candidate, deletedFile).has(
+        normalizePath(deletedFile),
+      ),
+    deletedImportResolutionExtensions(deletedFile),
+  );
+  return matched ? normalizePath(matched) : undefined;
+}
+
+async function listDirectDeletedFileTestImporters(
   index: ProjectIndex,
   deletedFiles: readonly string[],
   testPatterns: string[] = [],
-): CandidateTestFile[] {
+  projectRoot?: string,
+): Promise<CandidateTestFile[]> {
   if (deletedFiles.length === 0) return [];
 
   const deletedFileSet = new Set(
     deletedFiles.map((file) => normalizePath(file)),
   );
   const compiledPatterns = compileTestPatterns(testPatterns);
-  const isIndexTestFile = createIndexTestFileMatcher(index, compiledPatterns);
+  const isIndexTestFile = createIndexTestFileMatcher(
+    index,
+    compiledPatterns,
+    projectRoot,
+  );
   const candidates = new Map<FileId, CandidateTestFile>();
-  const relativeSpecsByFile = new Map<FileId, Set<string>>();
+  const importsByFile = new Map<FileId, Array<{ spec: string; resolved?: string }>>();
 
   for (const edge of index.graph.edges) {
-    if (!edge.raw.startsWith(".")) continue;
-    let specs = relativeSpecsByFile.get(edge.from);
-    if (!specs) {
-      specs = new Set<string>();
-      relativeSpecsByFile.set(edge.from, specs);
+    let imports = importsByFile.get(edge.from);
+    if (!imports) {
+      imports = [];
+      importsByFile.set(edge.from, imports);
     }
-    specs.add(edge.raw);
+    imports.push({
+      spec: edge.raw,
+      ...(edge.to.type === "file" ? { resolved: edge.to.path } : {}),
+    });
   }
 
   for (const mod of index.byFile.values()) {
     if (!isIndexTestFile(mod.file)) continue;
-    const relativeSpecs = new Set(relativeSpecsByFile.get(mod.file) ?? []);
-    for (const imp of mod.imports) {
-      if (!imp.from.startsWith(".")) continue;
-      relativeSpecs.add(imp.from);
+    const uniqueImports = new Map<string, { spec: string; resolved?: string }>();
+    for (const entry of importsByFile.get(mod.file) ?? []) {
+      uniqueImports.set(`${entry.spec}::${entry.resolved ?? ""}`, entry);
     }
-    for (const spec of relativeSpecs) {
+    for (const imp of mod.imports) {
+      const resolved = getImportResolvedPath(imp);
+      uniqueImports.set(`${imp.from}::${resolved ?? ""}`, {
+        spec: imp.from,
+        ...(resolved ? { resolved } : {}),
+      });
+    }
+    for (const entry of uniqueImports.values()) {
       for (const deletedFile of deletedFileSet) {
-        const resolvedCandidates = buildDeletedImportCandidates(
-          mod.file,
-          spec,
-          deletedFile,
-        );
-        if (!resolvedCandidates.has(deletedFile)) continue;
+        const resolvedAliasTarget =
+          entry.resolved ??
+          (await resolveDeletedAliasImportTarget(
+            mod.file,
+            entry.spec,
+            deletedFile,
+          ));
+        if (
+          !matchesDeletedImportTarget(
+            mod.file,
+            entry.spec,
+            resolvedAliasTarget,
+            deletedFile,
+          )
+        ) {
+          continue;
+        }
         candidates.set(mod.file, {
           file: mod.file,
           confidence: "high",
@@ -339,7 +447,6 @@ function listDirectDeletedFileTestImporters(
 
   return Array.from(candidates.values());
 }
-
 async function readGitFileAtRevision(
   projectRoot: string,
   revision: string,
@@ -661,23 +768,29 @@ function toRelativeEdge(projectRoot: string, edge: Edge): Edge {
   };
 }
 
-function collectDeletedImporterEdges(
+async function collectDeletedImporterEdges(
   index: ProjectIndex,
   deletedFiles: readonly string[],
-): Edge[] {
+): Promise<Edge[]> {
   if (deletedFiles.length === 0) return [];
   const deletedFileSet = new Set(deletedFiles.map((file) => normalizePath(file)));
   const edges = new Map<string, Edge>();
   for (const mod of index.byFile.values()) {
     for (const imp of mod.imports) {
       for (const deletedFile of deletedFileSet) {
-        const matchesDeletedFile =
-          typeof imp.resolved === "string"
-            ? normalizePath(imp.resolved) === deletedFile
-            : imp.from.startsWith(".") &&
-              buildDeletedImportCandidates(mod.file, imp.from, deletedFile).has(
-                deletedFile,
-              );
+        const resolvedAliasTarget =
+          getImportResolvedPath(imp) ??
+          (await resolveDeletedAliasImportTarget(
+            mod.file,
+            imp.from,
+            deletedFile,
+          ));
+        const matchesDeletedFile = matchesDeletedImportTarget(
+          mod.file,
+          imp.from,
+          resolvedAliasTarget,
+          deletedFile,
+        );
         if (!matchesDeletedFile) continue;
         const edge: Edge = {
           from: mod.file,
@@ -1299,7 +1412,7 @@ export async function buildReviewReport(
     const relativeEdge = toRelativeEdge(projectRoot, edge);
     graphEdges.set(edgeKey(relativeEdge), relativeEdge);
   }
-  for (const edge of collectDeletedImporterEdges(index, deletedFiles)) {
+  for (const edge of await collectDeletedImporterEdges(index, deletedFiles)) {
     const relativeEdge = toRelativeEdge(projectRoot, edge);
     graphEdges.set(edgeKey(relativeEdge), relativeEdge);
   }
@@ -1316,11 +1429,13 @@ export async function buildReviewReport(
       ...(appliedOptions.testPatterns
         ? { testPatterns: appliedOptions.testPatterns }
         : {}),
+      projectRoot,
     }),
-    listDirectDeletedFileTestImporters(
+    await listDirectDeletedFileTestImporters(
       index,
       deletedFiles,
       appliedOptions.testPatterns,
+      projectRoot,
     ),
   )
     .map((candidate) => ({

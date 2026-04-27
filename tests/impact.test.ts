@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import { SymbolKind } from "../src/index.js";
 import { parseUnifiedDiff } from "../src/impact/parse.js";
 import { analyzeImpactFromDiff, listCandidateTestFiles } from "../src/impact/index.js";
 import { buildImpactReport } from "../src/impact/report.js";
@@ -1001,7 +1002,10 @@ index 1234567..abcdef0 100644
 
       for (const [file, mod] of index.byFile) {
         for (const local of mod.locals) {
-          if (local.kind === "function" && local.range.end.line - local.range.start.line > 1) {
+          if (
+            local.kind === SymbolKind.Function &&
+            local.range.end.line - local.range.start.line > 1
+          ) {
             functionSymbol = {
               id: `${file}::${local.localName}::${local.range.start.index}`,
               file,
@@ -1288,6 +1292,53 @@ index 1234567..abcdef0 100644
       const changedSymbolsFiles = report.changedSymbols.map(s => s.file);
       expect(changedSymbolsFiles).toContain("main.ts");
       expect(changedSymbolsFiles).not.toContain("utils.ts");
+    });
+
+    it("should normalize absolute raw diff paths before applying ignoreGlobs", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
+      const index = await createTestIndex("typescript");
+      const absoluteMain = path.join(samplePath, "main.ts").replace(/\\/g, "/");
+
+      const diffText = `diff --git a/${absoluteMain} b/${absoluteMain}
+index 1234567..abcdef0 100644
+--- a/${absoluteMain}
++++ b/${absoluteMain}
+@@ -1,1 +1,2 @@
+ import { helperFunction } from './utils';
++console.log("ignored");
+`;
+
+      const report = await analyzeImpactFromDiff(samplePath, index, {
+        provider: "raw",
+        diffText,
+        ignoreGlobs: ["main.ts"]
+      });
+
+      expect(report.changedFiles).toEqual([]);
+      expect(report.changedSymbols).toEqual([]);
+    });
+
+    it("should apply ignoreGlobs to impacted files using project-relative paths", async () => {
+      const index = await createTestIndex("typescript");
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
+
+      const diffText = `diff --git a/utils.ts b/utils.ts
+index 1234567..abcdef0 100644
+--- a/utils.ts
++++ b/utils.ts
+@@ -1,2 +1,3 @@
+ export function helperFunction(): number {
++  console.log("ignored dependent");
+   return 42;
+ }`;
+
+      const report = await analyzeImpactFromDiff(samplePath, index, {
+        provider: "raw",
+        diffText,
+        ignoreGlobs: ["main.ts"]
+      });
+
+      expect(report.impacted.map((item) => item.file)).not.toContain("main.ts");
     });
   });
 });

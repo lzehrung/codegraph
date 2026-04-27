@@ -8,9 +8,10 @@ import type { ImpactOptions, ChangedSymbol, ImpactItem } from "./types.js";
 import { getDiff } from "./providers/base.js";
 import { locateChangedSymbolsWithLines } from "./map.js";
 import { analyzeImpact } from "./analyzer.js";
-import pm from "picomatch";
 import { discoverProjectFiles, type ProjectFileInfo } from "../util.js";
 import {
+  createImpactIgnoreMatcher,
+  normalizeImpactDiffFiles,
   normalizeImpactFilePath,
   toImpactReportFilePath,
 } from "./path.js";
@@ -96,16 +97,12 @@ export async function* analyzeImpactStreaming(
 
     const diff = await getDiff(options);
     const { ignoreGlobs = [] } = options;
-    const isIgnored: (p: string) => boolean =
-      ignoreGlobs.length > 0
-        ? (pm as (g: string[]) => (s: string) => boolean)(ignoreGlobs)
-        : () => false;
-
-    // Filter out ignored files from diff
-    const filteredFiles =
-      ignoreGlobs.length > 0
-        ? diff.files.filter((f) => !isIgnored(f.path))
-        : diff.files;
+    const isIgnored = createImpactIgnoreMatcher(projectRoot, ignoreGlobs);
+    const normalizedDiff = normalizeImpactDiffFiles(
+      projectRoot,
+      diff.files,
+      isIgnored,
+    );
 
     // Step 2: Map changed files to symbols
     yield {
@@ -117,7 +114,7 @@ export async function* analyzeImpactStreaming(
 
     let changedSymbols: ChangedSymbol[] = [];
     const filesWithSymbols = new Set<string>();
-    for (const fileChange of filteredFiles) {
+    for (const fileChange of normalizedDiff.files) {
       const absPath = normalizeImpactFilePath(projectRoot, fileChange.path);
       const mapped = await locateChangedSymbolsWithLines(
         index,
@@ -151,13 +148,7 @@ export async function* analyzeImpactStreaming(
       total: 4,
     };
 
-    const normalizedChanges = filteredFiles.map((change) => ({
-      ...change,
-      path: normalizeImpactFilePath(projectRoot, change.path),
-      ...(change.oldPath
-        ? { oldPath: normalizeImpactFilePath(projectRoot, change.oldPath) }
-        : {}),
-    }));
+    const normalizedChanges = normalizedDiff.files;
     const fileLevelFallback = options.fileLevelFallback ?? true;
     const fileLevelFallbackPaths = normalizedChanges
       .filter(
@@ -186,6 +177,7 @@ export async function* analyzeImpactStreaming(
 
     void analyzeImpact(index, changedSymbols, normalizedChanges, {
       ...options,
+      projectRoot,
       fileLevelFallback,
       fileLevelFallbackPaths,
       onImpactItem: (item, phase) => {
