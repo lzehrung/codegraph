@@ -454,6 +454,112 @@ describe("Review report", () => {
     });
   });
 
+  it("treats workspace package imports as direct deleted-file test candidates", async () => {
+    const root = await mkTmpDir("dg-review-workspace-import-");
+    const libDir = path.join(root, "packages", "lib");
+    const appDir = path.join(root, "packages", "app");
+    const libFile = path.join(libDir, "src", "index.ts");
+    const testFile = path.join(appDir, "tests", "lib.test.ts");
+
+    await fsp.mkdir(path.dirname(libFile), { recursive: true });
+    await fsp.mkdir(path.dirname(testFile), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ private: true, workspaces: ["packages/*"] }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(libDir, "package.json"),
+      JSON.stringify({ name: "@repo/lib", main: "src/index.ts" }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(appDir, "package.json"),
+      JSON.stringify({ name: "@repo/app" }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(libFile, `export const gone = 1;\n`, "utf8");
+    await fsp.writeFile(
+      testFile,
+      `import { gone } from '@repo/lib';\nexport const seen = gone;\n`,
+      "utf8",
+    );
+
+    await buildProjectIndex(root, { cache: "memory" });
+    await fsp.unlink(libFile);
+
+    const report = await buildReviewReport(root, {
+      files: [libFile],
+      cache: "memory",
+      diffText: [
+        "diff --git a/packages/lib/src/index.ts b/packages/lib/src/index.ts",
+        "deleted file mode 100644",
+        "index 1111111..0000000",
+        "--- a/packages/lib/src/index.ts",
+        "+++ /dev/null",
+        "@@ -1 +0,0 @@",
+        "-export const gone = 1;",
+        "",
+      ].join("\n"),
+    });
+
+    expect(report.candidateTests).toContainEqual({
+      file: "packages/app/tests/lib.test.ts",
+      confidence: "high",
+      reason: "importsChanged",
+    });
+    expect(report.graphDelta).toContainEqual({
+      from: "packages/app/tests/lib.test.ts",
+      to: { type: "file", path: "packages/lib/src/index.ts" },
+      raw: "@repo/lib",
+    });
+  });
+
+  it("treats .jsx imports as direct deleted-file test candidates for .tsx files", async () => {
+    const root = await mkTmpDir("dg-review-jsx-tsx-delete-");
+    const srcDir = path.join(root, "src");
+    const testsDir = path.join(root, "tests");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.mkdir(testsDir, { recursive: true });
+    const viewFile = path.join(srcDir, "view.tsx");
+    const testFile = path.join(testsDir, "view.test.tsx");
+    await fsp.writeFile(viewFile, `export function View() { return null; }\n`, "utf8");
+    await fsp.writeFile(
+      testFile,
+      `import { View } from '../src/view.jsx';\nexport const seen = View;\n`,
+      "utf8",
+    );
+
+    await buildProjectIndex(root, { cache: "memory" });
+    await fsp.unlink(viewFile);
+
+    const report = await buildReviewReport(root, {
+      files: [viewFile],
+      cache: "memory",
+      diffText: [
+        "diff --git a/src/view.tsx b/src/view.tsx",
+        "deleted file mode 100644",
+        "index 1111111..0000000",
+        "--- a/src/view.tsx",
+        "+++ /dev/null",
+        "@@ -1 +0,0 @@",
+        "-export function View() { return null; }",
+        "",
+      ].join("\n"),
+    });
+
+    expect(report.candidateTests).toContainEqual({
+      file: "tests/view.test.tsx",
+      confidence: "high",
+      reason: "importsChanged",
+    });
+    expect(report.graphDelta).toContainEqual({
+      from: "tests/view.test.tsx",
+      to: { type: "file", path: "src/view.tsx" },
+      raw: "../src/view.jsx",
+    });
+  });
+
   it("treats side-effect imports as direct deleted-file test candidates", async () => {
     const root = await mkTmpDir("dg-review-side-effect-");
     const srcDir = path.join(root, "src");

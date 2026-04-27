@@ -6,6 +6,7 @@
 - Never use `=== true`, `=== false`, etc. in boolean conditions; keep them as terse and simple as possible like `!condition`. Extract conditions to variables when the variable name adds clarity/insight into the reason for the condition.
 - Always consider the impact of a change on tests or when more test cases are needed. Never make tests pass for the sake of passing; always exercise real behavior.
 - Always keep documentation updated and accurate while being minimal and concise.
+- Within any claimed cross-language capability, behavior should stay consistent across all supported languages for that capability. Avoid language-subset branches; if a limitation is intentional, document it in the parity docs and cover it with explicit tests in the same change.
 - When language support changes, update `docs/language-parity.md` and `docs/scenario-catalog.md` in the same change so support claims, limitations, and fixture coverage stay aligned.
 - When adding or changing a cross-file language scenario, add or update the nearest language test in `tests/languages/*.test.ts` and the shared semantic coverage in `tests/goto.test.ts`, `tests/references.test.ts`, and `tests/native-semantic-parity.test.ts` when the language uses the native runtime.
 - Always keep the README.md table of contents updated whenever README sections are added, removed, or renamed.

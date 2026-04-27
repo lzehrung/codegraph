@@ -40,9 +40,13 @@ import {
   discoverProjectFiles,
   isFilePathWithinRoot,
   loadNearestTsconfigFor,
+  loadWorkspaceConfig,
+  listResolutionCandidates,
+  listWorkspacePackageResolutionCandidates,
   resolveFilePathFromRoot,
   toProjectRelativePath,
   type ProjectFileInfo,
+  type WorkspaceConfig,
 } from "./util.js";
 import { supportForFile } from "./languages.js";
 
@@ -262,32 +266,14 @@ function buildDeletedImportCandidates(
   spec: string,
   targetFile: string,
 ): Set<string> {
-  const normalizedTarget = normalizePath(targetFile);
   const normalizedSpec = spec.replace(/\\/g, "/");
   const basePath = normalizeSpecifierBase(fromFile, normalizedSpec);
-  const candidates = new Set<string>([basePath]);
-  const specExt = path.extname(normalizedSpec);
-  const targetExt = path.extname(normalizedTarget);
-
-  if (!targetExt) return candidates;
-
-  if (!specExt) {
-    candidates.add(`${basePath}${targetExt}`);
-    candidates.add(normalizePath(path.join(basePath, `index${targetExt}`)));
-    return candidates;
-  }
-
-  const baseWithoutExt = basePath.slice(0, -specExt.length);
-  const isJsTsPair =
-    (specExt === ".js" && targetExt === ".ts") ||
-    (specExt === ".mjs" && targetExt === ".mts") ||
-    (specExt === ".cjs" && targetExt === ".cts");
-
-  if (isJsTsPair) {
-    candidates.add(`${baseWithoutExt}${targetExt}`);
-  }
-
-  return candidates;
+  return new Set(
+    listResolutionCandidates(
+      basePath,
+      deletedImportResolutionExtensions(targetFile),
+    ).map((candidate) => normalizePath(candidate)),
+  );
 }
 
 function matchesDeletedImportTarget(
@@ -317,30 +303,12 @@ function buildDeletedAliasCandidates(
   candidate: string,
   targetFile: string,
 ): Set<string> {
-  const normalizedCandidate = normalizePath(candidate);
-  const normalizedTarget = normalizePath(targetFile);
-  const candidates = new Set<string>([normalizedCandidate]);
-  const candidateExt = path.extname(normalizedCandidate);
-  const targetExt = path.extname(normalizedTarget);
-
-  if (!targetExt) {
-    return candidates;
-  }
-
-  if (!candidateExt) {
-    candidates.add(`${normalizedCandidate}${targetExt}`);
-    candidates.add(
-      normalizePath(path.join(normalizedCandidate, `index${targetExt}`)),
-    );
-    return candidates;
-  }
-
-  if (candidateExt !== targetExt) {
-    const candidateBase = normalizedCandidate.slice(0, -candidateExt.length);
-    candidates.add(`${candidateBase}${targetExt}`);
-  }
-
-  return candidates;
+  return new Set(
+    listResolutionCandidates(
+      normalizePath(candidate),
+      deletedImportResolutionExtensions(targetFile),
+    ).map((resolvedCandidate) => normalizePath(resolvedCandidate)),
+  );
 }
 
 function deletedImportResolutionExtensions(targetFile: string): string[] {
@@ -349,6 +317,8 @@ function deletedImportResolutionExtensions(targetFile: string): string[] {
 }
 
 async function resolveDeletedAliasImportTarget(
+  projectRoot: string | undefined,
+  workspaceConfig: WorkspaceConfig | undefined,
   fromFile: string,
   spec: string,
   deletedFile: string,
@@ -356,20 +326,38 @@ async function resolveDeletedAliasImportTarget(
   if (spec.startsWith(".") || spec.startsWith("/") || /^[A-Za-z]:[\\/]/.test(spec)) {
     return undefined;
   }
+  const deletedTarget = normalizePath(deletedFile);
+  const resolutionExtensions = deletedImportResolutionExtensions(deletedFile);
   const { matchPath } = await loadNearestTsconfigFor(fromFile);
-  if (!matchPath) {
+  if (matchPath) {
+    const matched = matchPath(
+      spec,
+      undefined,
+      (candidate) =>
+        buildDeletedAliasCandidates(candidate, deletedFile).has(deletedTarget),
+      resolutionExtensions,
+    );
+    if (matched) {
+      const resolvedMatch = Array.from(
+        buildDeletedAliasCandidates(matched, deletedFile),
+      ).find((candidate) => candidate === deletedTarget);
+      if (resolvedMatch) {
+        return resolvedMatch;
+      }
+    }
+  }
+
+  if (!projectRoot) {
     return undefined;
   }
-  const matched = matchPath(
+
+  return listWorkspacePackageResolutionCandidates(
     spec,
-    undefined,
-    (candidate) =>
-      buildDeletedAliasCandidates(candidate, deletedFile).has(
-        normalizePath(deletedFile),
-      ),
-    deletedImportResolutionExtensions(deletedFile),
-  );
-  return matched ? normalizePath(matched) : undefined;
+    workspaceConfig,
+    resolutionExtensions,
+  )
+    .map((candidate) => normalizePath(candidate))
+    .find((candidate) => candidate === deletedTarget);
 }
 
 async function listDirectDeletedFileTestImporters(
@@ -391,6 +379,9 @@ async function listDirectDeletedFileTestImporters(
   );
   const candidates = new Map<FileId, CandidateTestFile>();
   const importsByFile = new Map<FileId, Array<{ spec: string; resolved?: string }>>();
+  const workspaceConfig = projectRoot
+    ? await loadWorkspaceConfig(projectRoot)
+    : undefined;
 
   for (const edge of index.graph.edges) {
     let imports = importsByFile.get(edge.from);
@@ -419,13 +410,19 @@ async function listDirectDeletedFileTestImporters(
     }
     for (const entry of uniqueImports.values()) {
       for (const deletedFile of deletedFileSet) {
+        const resolvedImportPath = entry.resolved
+          ? normalizePath(entry.resolved)
+          : undefined;
         const resolvedAliasTarget =
-          entry.resolved ??
-          (await resolveDeletedAliasImportTarget(
-            mod.file,
-            entry.spec,
-            deletedFile,
-          ));
+          resolvedImportPath === deletedFile
+            ? resolvedImportPath
+            : await resolveDeletedAliasImportTarget(
+                projectRoot,
+                workspaceConfig,
+                mod.file,
+                entry.spec,
+                deletedFile,
+              );
         if (
           !matchesDeletedImportTarget(
             mod.file,
@@ -725,23 +722,13 @@ function buildExportSummaries(
 function resolveReviewSpecifierTarget(fromFile: string, spec: string): string {
   const normalizedSpec = spec.replace(/\\/g, "/");
   const basePath = normalizeSpecifierBase(fromFile, normalizedSpec);
-  const candidates = new Set<string>([basePath]);
-  const specExt = path.extname(normalizedSpec);
-  const fromExt = path.extname(fromFile);
-  if (!specExt && fromExt) {
-    candidates.add(`${basePath}${fromExt}`);
-    candidates.add(normalizePath(path.join(basePath, `index${fromExt}`)));
-  }
-  if (specExt) {
-    const baseWithoutExt = basePath.slice(0, -specExt.length);
-    if (specExt === ".js") candidates.add(`${baseWithoutExt}.ts`);
-    if (specExt === ".mjs") candidates.add(`${baseWithoutExt}.mts`);
-    if (specExt === ".cjs") candidates.add(`${baseWithoutExt}.cts`);
-  }
+  const candidates = listResolutionCandidates(basePath).map((candidate) =>
+    normalizePath(candidate),
+  );
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) return candidate;
   }
-  return Array.from(candidates)[0] ?? basePath;
+  return candidates[0] ?? basePath;
 }
 
 function edgeKey(edge: Edge): string {
@@ -771,20 +758,31 @@ function toRelativeEdge(projectRoot: string, edge: Edge): Edge {
 async function collectDeletedImporterEdges(
   index: ProjectIndex,
   deletedFiles: readonly string[],
+  projectRoot?: string,
 ): Promise<Edge[]> {
   if (deletedFiles.length === 0) return [];
   const deletedFileSet = new Set(deletedFiles.map((file) => normalizePath(file)));
   const edges = new Map<string, Edge>();
+  const workspaceConfig = projectRoot
+    ? await loadWorkspaceConfig(projectRoot)
+    : undefined;
   for (const mod of index.byFile.values()) {
     for (const imp of mod.imports) {
       for (const deletedFile of deletedFileSet) {
+        const resolvedImportPath = getImportResolvedPath(imp);
+        const normalizedResolvedImportPath = resolvedImportPath
+          ? normalizePath(resolvedImportPath)
+          : undefined;
         const resolvedAliasTarget =
-          getImportResolvedPath(imp) ??
-          (await resolveDeletedAliasImportTarget(
-            mod.file,
-            imp.from,
-            deletedFile,
-          ));
+          normalizedResolvedImportPath === deletedFile
+            ? normalizedResolvedImportPath
+            : await resolveDeletedAliasImportTarget(
+                projectRoot,
+                workspaceConfig,
+                mod.file,
+                imp.from,
+                deletedFile,
+              );
         const matchesDeletedFile = matchesDeletedImportTarget(
           mod.file,
           imp.from,
@@ -1412,7 +1410,11 @@ export async function buildReviewReport(
     const relativeEdge = toRelativeEdge(projectRoot, edge);
     graphEdges.set(edgeKey(relativeEdge), relativeEdge);
   }
-  for (const edge of await collectDeletedImporterEdges(index, deletedFiles)) {
+  for (const edge of await collectDeletedImporterEdges(
+    index,
+    deletedFiles,
+    projectRoot,
+  )) {
     const relativeEdge = toRelativeEdge(projectRoot, edge);
     graphEdges.set(edgeKey(relativeEdge), relativeEdge);
   }

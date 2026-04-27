@@ -139,6 +139,21 @@ describe('Find References', () => {
         await fsp.rm(root, { recursive: true, force: true });
       }
     });
+
+    it('should find references for JSX imports authored with .jsx extensions', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'tsx');
+      const appFile = path.join(samplePath, 'JsxImportApp.tsx').replace(/\\/g, '/');
+      const buttonFile = path.join(samplePath, 'components', 'Button.tsx').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [appFile, buttonFile]);
+
+      const result = await testFindReferences(index, buttonFile, 5, 17, 2);
+
+      expect(result.status).toBe('ok');
+      if (result.status === 'ok') {
+        expectReferenceAt(result, buttonFile, 5);
+        expectReferenceAt(result, appFile, 4);
+      }
+    });
   });
 
   describe('Python', () => {

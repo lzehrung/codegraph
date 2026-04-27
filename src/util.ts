@@ -1799,59 +1799,14 @@ export async function resolveWorkspacePackage(
   const pkg = ws.packages.get(name);
   if (!pkg) return null;
   const baseDir = pkg.path;
-
-  const exts = getResolutionExtensions(resolutionExtensions);
-  const tryResolveRelative = async (rel: string): Promise<string | null> => {
-    const raw = path.resolve(baseDir, rel);
-    const candidates: string[] = [raw];
-    for (const e of exts) candidates.push(raw + e);
-    for (const e of exts) candidates.push(path.join(raw, "index" + e));
-    for (const c of candidates) if (await fileExists(c)) return path.resolve(c);
-    return null;
-  };
-  const pickExportTarget = (target: unknown): string | null => {
-    if (!target) return null;
-    if (typeof target === "string") return target;
-    if (typeof target === "object" && target !== null) {
-      const t = target as Record<string, unknown>;
-      const cand = t.import ?? t.default ?? t.require ?? t.module;
-      if (typeof cand === "string") return cand;
+  for (const candidate of listWorkspacePackageResolutionCandidates(
+    spec,
+    ws,
+    resolutionExtensions,
+  )) {
+    if (await fileExists(candidate)) {
+      return path.resolve(candidate);
     }
-    return null;
-  };
-  if (pkg.exports) {
-    const key = subpath ? `./${subpath}` : ".";
-    if (typeof pkg.exports === "string" && key === ".") {
-      const hit = await tryResolveRelative(pkg.exports);
-      if (hit) return hit;
-    } else if (typeof pkg.exports === "object") {
-      const map = pkg.exports as Record<string, unknown>;
-      const target = map[key] ?? (key === "." ? map["."] : undefined);
-      const rel = pickExportTarget(target);
-      if (rel) {
-        const hit = await tryResolveRelative(rel);
-        if (hit) return hit;
-      }
-    }
-  }
-
-  if (subpath) {
-    const raw = path.join(baseDir, subpath);
-    const candidates: string[] = [raw];
-    for (const e of exts) candidates.push(raw + e);
-    for (const e of exts) candidates.push(path.join(raw, "index" + e));
-    for (const c of candidates) {
-      if (await fileExists(c)) return path.resolve(c);
-    }
-    return null;
-  }
-
-  const mainField = pkg.main ? path.resolve(baseDir, pkg.main) : null;
-  if (mainField && (await fileExists(mainField))) return mainField;
-
-  const idxCandidates = exts.flatMap((e) => [path.join(baseDir, "index" + e)]);
-  for (const c of idxCandidates) {
-    if (await fileExists(c)) return path.resolve(c);
   }
   return baseDir;
 }
@@ -1927,6 +1882,20 @@ const GRAPH_ONLY_LANGUAGE_SOURCE_RESOLUTION_EXTENSIONS: Record<
   astro: [".astro", ...DEFAULT_RESOLUTION_EXTENSIONS],
 };
 
+const EXPLICIT_SPECIFIER_EXTENSION_FAMILIES: Record<
+  string,
+  readonly string[]
+> = {
+  ".ts": [".ts", ".tsx", ".js", ".jsx"],
+  ".tsx": [".tsx", ".jsx", ".ts", ".js"],
+  ".js": [".ts", ".tsx", ".js", ".jsx"],
+  ".jsx": [".tsx", ".jsx", ".ts", ".js"],
+  ".mts": [".mts", ".mjs"],
+  ".mjs": [".mts", ".mjs"],
+  ".cts": [".cts", ".cjs"],
+  ".cjs": [".cts", ".cjs"],
+};
+
 export function getGraphOnlyResolutionExtensions(
   languageId: string,
   resolutionKind: "document" | "source" = "document",
@@ -1958,6 +1927,105 @@ function getResolutionExtensions(
       ? DEFAULT_RESOLUTION_EXTENSIONS
       : resolutionExtensions;
   return Array.from(new Set(extensions));
+}
+
+export function listResolutionCandidates(
+  base: string,
+  resolutionExtensions?: readonly string[],
+): string[] {
+  const extensions = getResolutionExtensions(resolutionExtensions);
+  const baseExt = path.extname(base).toLowerCase();
+  if (!baseExt) {
+    return Array.from(
+      new Set([
+        base,
+        ...extensions.map((extension) => `${base}${extension}`),
+        ...extensions.map((extension) => path.join(base, `index${extension}`)),
+      ]),
+    );
+  }
+
+  const compatibleExtensions =
+    EXPLICIT_SPECIFIER_EXTENSION_FAMILIES[baseExt] ?? [baseExt];
+  const baseWithoutExt = base.slice(0, -baseExt.length);
+  const candidates = compatibleExtensions
+    .filter(
+      (extension) => extension === baseExt || extensions.includes(extension),
+    )
+    .map((extension) => `${baseWithoutExt}${extension}`);
+  return candidates.length > 0 ? Array.from(new Set(candidates)) : [base];
+}
+
+async function findFirstExistingResolutionCandidate(
+  base: string,
+  resolutionExtensions?: readonly string[],
+): Promise<string | null> {
+  for (const candidate of listResolutionCandidates(base, resolutionExtensions)) {
+    if (await fileExists(candidate)) {
+      return path.resolve(candidate);
+    }
+  }
+  return null;
+}
+
+export function listWorkspacePackageResolutionCandidates(
+  spec: string,
+  ws: WorkspaceConfig | undefined,
+  resolutionExtensions?: readonly string[],
+): string[] {
+  if (!ws) return [];
+  const { name, subpath } = resolvePackageSubpath(spec);
+  const pkg = ws.packages.get(name);
+  if (!pkg) return [];
+  const baseDir = pkg.path;
+  const candidates: string[] = [];
+  const pushRelativeCandidates = (rel: string): void => {
+    candidates.push(
+      ...listResolutionCandidates(path.resolve(baseDir, rel), resolutionExtensions),
+    );
+  };
+  const pickExportTarget = (target: unknown): string | null => {
+    if (!target) return null;
+    if (typeof target === "string") return target;
+    if (typeof target === "object" && target !== null) {
+      const typedTarget = target as Record<string, unknown>;
+      const candidate =
+        typedTarget.import ??
+        typedTarget.default ??
+        typedTarget.require ??
+        typedTarget.module;
+      if (typeof candidate === "string") return candidate;
+    }
+    return null;
+  };
+
+  if (pkg.exports) {
+    const key = subpath ? `./${subpath}` : ".";
+    if (typeof pkg.exports === "string" && key === ".") {
+      pushRelativeCandidates(pkg.exports);
+    } else if (typeof pkg.exports === "object") {
+      const exportMap = pkg.exports as Record<string, unknown>;
+      const target =
+        exportMap[key] ?? (key === "." ? exportMap["."] : undefined);
+      const rel = pickExportTarget(target);
+      if (rel) {
+        pushRelativeCandidates(rel);
+      }
+    }
+  }
+
+  if (subpath) {
+    pushRelativeCandidates(subpath);
+    return Array.from(new Set(candidates));
+  }
+
+  if (pkg.main) {
+    pushRelativeCandidates(pkg.main);
+  }
+  candidates.push(
+    ...listResolutionCandidates(path.join(baseDir, "index"), resolutionExtensions),
+  );
+  return Array.from(new Set(candidates));
 }
 
 export async function resolvePathLikeModule(
@@ -2519,31 +2587,6 @@ export async function resolveSpecifier(
   }::hints=${hintKey}::exts=${extensionKey}`;
   const cached = resolveSpecifierCache.get(cacheKey);
   if (cached) return cached;
-  const buildCandidates = (base: string): string[] => {
-    const candidates: string[] = [base];
-    const baseExt = path.extname(base);
-    if (baseExt === ".js" || baseExt === ".mjs" || baseExt === ".cjs") {
-      const baseWithoutExt = base.slice(0, -baseExt.length);
-      const tsExt =
-        baseExt === ".mjs" ? ".mts" : baseExt === ".cjs" ? ".cts" : ".ts";
-      candidates.unshift(baseWithoutExt + tsExt);
-    }
-    for (const e of resolutionExtensions) candidates.push(base + e);
-    for (const e of resolutionExtensions) {
-      candidates.push(path.join(base, "index" + e));
-    }
-    return candidates;
-  };
-  const tryResolveCandidates = async (
-    candidates: string[],
-  ): Promise<string | null> => {
-    const existence = await Promise.all(
-      candidates.map((candidate) => fileExists(candidate)),
-    );
-    const firstHit = existence.indexOf(true);
-    if (firstHit < 0) return null;
-    return path.resolve(candidates[firstHit]!);
-  };
   const hasSchemePrefix = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(spec);
   const isWindowsAbsolutePath = /^[A-Za-z]:[\\/]/.test(spec);
   if (!isWindowsAbsolutePath && (hasSchemePrefix || spec.startsWith("//"))) {
@@ -2560,8 +2603,10 @@ export async function resolveSpecifier(
       : spec.startsWith("/")
         ? path.join(projectRoot, spec)
         : path.resolve(path.dirname(fromFile), spec);
-    const candidates = buildCandidates(base);
-    const hit = await tryResolveCandidates(candidates);
+    const hit = await findFirstExistingResolutionCandidate(
+      base,
+      resolutionExtensions,
+    );
     if (hit) {
       resolveSpecifierCache.set(cacheKey, hit);
       return hit;
@@ -2669,8 +2714,10 @@ export async function resolveSpecifier(
         ? hint
         : path.resolve(projectRoot, hint);
       const base = path.resolve(baseDir, spec);
-      const candidates = buildCandidates(base);
-      const hit = await tryResolveCandidates(candidates);
+      const hit = await findFirstExistingResolutionCandidate(
+        base,
+        resolutionExtensions,
+      );
       if (hit) {
         resolveSpecifierCache.set(cacheKey, hit);
         return hit;
@@ -2704,17 +2751,13 @@ async function resolveFromNodeModules(
         const pkgPath = path.join(nmDir, "package.json");
         const pkg = await loadJSON<MinimalPackageJson>(pkgPath);
         const baseDir = nmDir;
-        const exts = getResolutionExtensions(resolutionExtensions);
         const tryResolveRelative = async (
           rel: string,
         ): Promise<string | null> => {
-          const raw = path.resolve(baseDir, rel);
-          const candidates: string[] = [raw];
-          for (const e of exts) candidates.push(raw + e);
-          for (const e of exts) candidates.push(path.join(raw, "index" + e));
-          for (const c of candidates)
-            if (await fileExists(c)) return path.resolve(c);
-          return null;
+          return await findFirstExistingResolutionCandidate(
+            path.resolve(baseDir, rel),
+            resolutionExtensions,
+          );
         };
         // Exports map handling (simplified)
         const pickExportTarget = (target: unknown): string | null => {
@@ -2743,21 +2786,28 @@ async function resolveFromNodeModules(
           }
         }
         if (subpath) {
-          const raw = path.join(baseDir, subpath);
-          const candidates: string[] = [raw];
-          for (const e of exts) candidates.push(raw + e);
-          for (const e of exts) candidates.push(path.join(raw, "index" + e));
-          for (const c of candidates)
-            if (await fileExists(c)) return path.resolve(c);
+          const hit = await findFirstExistingResolutionCandidate(
+            path.join(baseDir, subpath),
+            resolutionExtensions,
+          );
+          if (hit) return hit;
         }
         const mainField =
           typeof pkg?.main === "string"
             ? path.resolve(baseDir, pkg.main)
             : null;
-        if (mainField && (await fileExists(mainField))) return mainField;
-        const idxCandidates = exts.map((e) => path.join(baseDir, "index" + e));
-        for (const c of idxCandidates)
-          if (await fileExists(c)) return path.resolve(c);
+        if (mainField) {
+          const mainHit = await findFirstExistingResolutionCandidate(
+            mainField,
+            resolutionExtensions,
+          );
+          if (mainHit) return mainHit;
+        }
+        const indexHit = await findFirstExistingResolutionCandidate(
+          path.join(baseDir, "index"),
+          resolutionExtensions,
+        );
+        if (indexHit) return indexHit;
         return baseDir;
       }
       const parent = path.dirname(dir);

@@ -224,6 +224,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Scenario | Sample | Expected behavior | Source | Date added |
 | --- | --- | --- | --- | --- |
 | Component imports | `tests/samples/tsx/App.tsx` | Dependency graph includes edges to `components/Button.tsx` and `utils.ts` for TSX imports. | https://github.com/tree-sitter/tree-sitter-typescript | 2026-01-22 |
+| Authored `.jsx` imports to `.tsx` sources | `tests/samples/tsx/JsxImportApp.tsx`, `tests/samples/tsx/components/Button.tsx` | Graph extraction, go-to-definition, references, and native semantic parity treat authored `.jsx` specifiers as source links to sibling `.tsx` files. | Internal regression fixture | 2026-04-27 |
 
 ## Vue
 
