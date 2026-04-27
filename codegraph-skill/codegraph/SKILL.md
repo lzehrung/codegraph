@@ -77,8 +77,9 @@ The CLI also ships a bundled skill installer:
 - For monorepos, prefer explicit roots such as `./src ./packages/app ./packages/lib` when you want product code only; use `./` when you intentionally want the whole repo.
 - SQLite export:
   `codegraph graph --sqlite ./codegraph.sqlite`
-- Raw SQL on exported SQLite:
+- Read-only SQL on exported SQLite:
   `codegraph sql --db ./codegraph.sqlite --query "SELECT name, file FROM symbols WHERE kind = 'function' LIMIT 5;"`
+  Accepts read-only result-producing statements such as `SELECT` and `PRAGMA`, and rejects mutating SQL.
 - Build/report diagnostics:
   `codegraph graph --report`
   `codegraph index --report`

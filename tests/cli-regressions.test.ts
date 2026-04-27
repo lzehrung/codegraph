@@ -413,6 +413,41 @@ describe('CLI regressions', () => {
     expect(names).toContain('helper');
   });
 
+  it('sql rejects mutating statements and leaves the graph export intact', async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dg-cli-sql-readonly-'));
+    await fsp.writeFile(
+      path.join(tmpDir, 'main.ts'),
+      'export function helper() { return 1; }\n',
+      'utf8',
+    );
+    const dbPath = path.join(tmpDir, 'graph.sqlite');
+    await runCliCommand(['graph', '--root', tmpDir, '--sqlite', dbPath]);
+
+    await expect(
+      runCliCommandDetailed([
+        'sql',
+        '--db',
+        dbPath,
+        '--query',
+        "DELETE FROM symbols RETURNING name;",
+      ]),
+    ).rejects.toThrow(/read-only result-producing statements/);
+
+    const stdout = await runCliCommand([
+      'sql',
+      '--db',
+      dbPath,
+      '--query',
+      "SELECT COUNT(*) AS count FROM symbols;",
+    ]);
+    const result = JSON.parse(stdout) as {
+      columns: string[];
+      rows: Array<Array<unknown>>;
+    };
+    expect(result.columns).toEqual(['count']);
+    expect(result.rows).toEqual([[1]]);
+  });
+
   it('skill print-path returns the bundled raw skill directory', async () => {
     const stdout = await runCliCommand(['skill', 'print-path']);
     const skillPath = stdout.trim();
