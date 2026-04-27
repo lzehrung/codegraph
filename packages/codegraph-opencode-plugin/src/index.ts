@@ -60,6 +60,95 @@ const stringifyResult = (value: unknown): string => {
 const formatResponse = (response: ToolResponse): string =>
   stringifyResult(response);
 
+const formatOverviewFromDumpmod = (result: {
+  file?: unknown;
+  locals?: unknown;
+  imports?: unknown;
+}): string => {
+  const file = typeof result.file === "string" ? result.file : "unknown file";
+  const locals = Array.isArray(result.locals) ? result.locals : [];
+  const imports = Array.isArray(result.imports) ? result.imports : [];
+  const lines: string[] = [`# Overview of ${file}`];
+
+  if (imports.length > 0) {
+    const importedSymbols = imports
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return null;
+        if ("local" in entry && typeof entry.local === "string") {
+          return entry.local;
+        }
+        if ("localNS" in entry && typeof entry.localNS === "string") {
+          return entry.localNS;
+        }
+        if ("from" in entry && typeof entry.from === "string") {
+          return entry.from;
+        }
+        return null;
+      })
+      .filter((entry): entry is string => typeof entry === "string");
+    if (importedSymbols.length > 0) {
+      lines.push("\n## Imports");
+      lines.push(
+        `Imported symbols: ${Array.from(new Set(importedSymbols)).sort().join(", ")}`,
+      );
+    }
+  }
+
+  lines.push("\n## Definitions");
+  if (locals.length === 0) {
+    lines.push("No definitions found.");
+    lines.push("\nNo symbols found.");
+    return lines.join("\n");
+  }
+
+  for (const entry of locals) {
+    if (!entry || typeof entry !== "object") continue;
+    const name = "name" in entry && typeof entry.name === "string"
+      ? entry.name
+      : "unknown";
+    const kind = "kind" in entry && typeof entry.kind === "string"
+      ? entry.kind
+      : "symbol";
+    const start =
+      "start" in entry && entry.start && typeof entry.start === "object"
+        ? entry.start
+        : undefined;
+    const line =
+      start && "line" in start && typeof start.line === "number"
+        ? start.line
+        : null;
+    lines.push(`### ${kind} \`${name}\` ${line ? `(line ${line})` : ""}`.trim());
+  }
+
+  return lines.join("\n");
+};
+
+const normalizeOverviewResult = (result: unknown): string => {
+  if (typeof result === "string") {
+    return result;
+  }
+  if (result && typeof result === "object" && "status" in result) {
+    const overviewResult = result as {
+      status?: unknown;
+      overview?: unknown;
+      error?: unknown;
+    };
+    if (
+      overviewResult.status === "ok" &&
+      typeof overviewResult.overview === "string"
+    ) {
+      return overviewResult.overview;
+    }
+    if (typeof overviewResult.error === "string") {
+      return overviewResult.error;
+    }
+  }
+  if (result && typeof result === "object") {
+    return formatOverviewFromDumpmod(result);
+  }
+  return stringifyResult(result);
+};
+
 // Helper to run codegraph via library or CLI
 async function runCodegraph(
   context: ToolContext,
@@ -308,6 +397,7 @@ export const overview = tool({
         }
         return codegraph.tool_getFileOverview(root, filePath);
       },
+      { normalizeResult: normalizeOverviewResult },
     );
   },
 });

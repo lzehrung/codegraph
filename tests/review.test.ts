@@ -548,6 +548,17 @@ describe("Review report", () => {
     ).toBe(true);
   });
 
+  it("rejects explicit files outside the project root", async () => {
+    const root = await mkTmpDir("dg-review-root-boundary-");
+    const outsideFile = path.resolve("README.md");
+
+    await expect(
+      buildReviewReport(root, {
+        files: [outsideFile],
+      }),
+    ).rejects.toThrow(/outside project root/i);
+  });
+
   it("reports review diagnostics when symbol mapping degrades", async () => {
     const root = await mkTmpDir("dg-review-parse-failure-");
     const filePath = path.join(root, "feature.ts");

@@ -1066,14 +1066,21 @@ import {
 // 1. Get a Markdown summary of a file (Imports, Definitions with signatures/docstrings)
 // Useful for "reading" a file's structure before deciding to read the full content.
 const overview = await tool_getFileOverview(process.cwd(), "src/utils.ts");
-console.log(overview);
-// Output:
-// # Overview of src/utils.ts
-// ## Imports
-// Imported symbols: fs, path
-// ## Definitions
-// ### function `readFile` (line 10)
-// > Reads a file safely...
+if (overview.status === "ok") {
+  console.log(overview.overview);
+  console.log(overview.hasSymbols);
+  // Output:
+  // # Overview of src/utils.ts
+  // ## Imports
+  // Imported symbols: fs, path
+  // ## Definitions
+  // ### function `readFile` (line 10)
+  // > Reads a file safely...
+} else if (overview.status === "not_found") {
+  console.error(overview.reason, overview.error);
+} else {
+  console.error(overview.error);
+}
 
 // 2. Find symbols by name (fuzzy search)
 // Useful for locating relevant code when the file path is unknown.

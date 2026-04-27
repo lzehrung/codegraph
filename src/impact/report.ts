@@ -21,7 +21,11 @@ import type {
   ImpactDiagnostics,
 } from "./types.js";
 import { buildSymbolGraphDetailed, findDetailedCycles } from "../graphs.js";
-import { normalizePath, discoverProjectFiles } from "../util.js";
+import {
+  normalizePath,
+  discoverProjectFiles,
+  resolveFilePathFromRoot,
+} from "../util.js";
 
 export async function buildImpactReport(
   projectRoot: string,
@@ -529,11 +533,11 @@ function buildReexportChains(
         continue;
       }
       let resolvedSourcePath = entry.fromModule;
-      if (
-        !path.isAbsolute(entry.fromModule) &&
-        entry.fromModule.startsWith(".")
-      ) {
-        resolvedSourcePath = path.resolve(path.dirname(file), entry.fromModule);
+      if (entry.fromModule.startsWith(".")) {
+        resolvedSourcePath = resolveFilePathFromRoot(
+          path.dirname(file),
+          entry.fromModule,
+        );
       }
       const sourceFile = normalizePath(resolvedSourcePath);
       const edges = reexportsBySource.get(sourceFile) ?? [];
@@ -768,11 +772,7 @@ function buildSurfaceArea(
 
   const changedFiles = new Set(
     diffFiles.map((fileChange) =>
-      normalizePath(
-        path.isAbsolute(fileChange.path)
-          ? fileChange.path
-          : path.resolve(projectRoot, fileChange.path),
-      ),
+      normalizePath(resolveFilePathFromRoot(projectRoot, fileChange.path)),
     ),
   );
   const impactedFiles = new Set(

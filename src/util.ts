@@ -1136,6 +1136,38 @@ export function resolveFilePathFromRoot(
     : path.resolve(projectRoot, filePath);
 }
 
+function normalizedPathPrefix(directory: string): string {
+  return directory.endsWith("/") ? directory : `${directory}/`;
+}
+
+export function isFilePathWithinRoot(
+  projectRoot: string,
+  filePath: string,
+): boolean {
+  const normalizedRoot = normalizePath(path.resolve(projectRoot));
+  const normalizedFile = normalizePath(
+    resolveFilePathFromRoot(normalizedRoot, filePath),
+  );
+  return (
+    normalizedFile === normalizedRoot ||
+    normalizedFile.startsWith(normalizedPathPrefix(normalizedRoot))
+  );
+}
+
+export function toProjectRelativePath(
+  projectRoot: string,
+  filePath: string,
+): string | null {
+  const normalizedRoot = normalizePath(path.resolve(projectRoot));
+  const normalizedFile = normalizePath(
+    resolveFilePathFromRoot(normalizedRoot, filePath),
+  );
+  if (!isFilePathWithinRoot(normalizedRoot, normalizedFile)) {
+    return null;
+  }
+  return normalizePath(path.relative(normalizedRoot, normalizedFile));
+}
+
 export function normalizeResolutionHints(hints?: string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
