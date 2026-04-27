@@ -179,6 +179,73 @@ describe("Review report", () => {
     ).toBe(true);
   });
 
+  it("treats raw diff text as a source of changed files", async () => {
+    const root = await mkTmpDir("dg-review-diff-only-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const featureFile = path.join(srcDir, "feature.ts");
+    await fsp.writeFile(
+      featureFile,
+      [
+        `export function alpha() {`,
+        `  return 2;`,
+        `}`,
+        ``,
+        `export function beta() {`,
+        `  return 5;`,
+        `}`,
+        ``,
+      ].join("\n"),
+      "utf8",
+    );
+
+    const report = await buildReviewReport(root, {
+      diffText: [
+        "diff --git a/src/feature.ts b/src/feature.ts",
+        "index 1234567..abcdef0 100644",
+        "--- a/src/feature.ts",
+        "+++ b/src/feature.ts",
+        "@@ -1,3 +1,3 @@",
+        " export function alpha() {",
+        "-  return 1;",
+        "+  return 2;",
+        " }",
+        "",
+      ].join("\n"),
+      includeSymbolDetails: true,
+    });
+
+    expect(report.status).toBe("ok");
+    expect(report.summary.filesChanged).toBe(1);
+    const summary = report.changedFiles.find(
+      (entry) => entry.file === "src/feature.ts",
+    );
+    expect(summary).toBeDefined();
+    const symbols = summary?.symbols ?? [];
+    expect(symbols.some((symbol) => symbol.name === "alpha")).toBe(true);
+    expect(symbols.some((symbol) => symbol.name === "beta")).toBe(false);
+  });
+
+  it("rejects raw diff files outside the project root", async () => {
+    const root = await mkTmpDir("dg-review-diff-outside-");
+    const outsideFile = path.resolve("README.md");
+
+    await expect(
+      buildReviewReport(root, {
+        diffText: [
+          `diff --git a/${outsideFile} b/${outsideFile}`,
+          "index 1234567..abcdef0 100644",
+          `--- a/${outsideFile}`,
+          `+++ b/${outsideFile}`,
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+          "",
+        ].join("\n"),
+      }),
+    ).rejects.toThrow(/outside project root/);
+  });
+
   it("identifies git-tracked changed files without explicit listings", async () => {
     const root = await mkTmpDir("dg-review-git-");
     runGit(root, ["init"]);
