@@ -1,10 +1,14 @@
+import fs from "node:fs";
 import path from "node:path";
 import fsp from "node:fs/promises";
+import { execFile } from "node:child_process";
 import { performance } from "node:perf_hooks";
-import type { Edge, Range } from "./types.js";
+import { promisify } from "node:util";
+import type { Edge, FileId, Range } from "./types.js";
 import {
   buildProjectIndexIncremental,
   type BuildReport,
+  collectLocalsAndExportsFromSource,
   type ExportEntry,
   findReferences,
   type IncrementalBuildOptions,
@@ -18,11 +22,12 @@ import {
   mapChangedLinesToSymbols,
 } from "./impact/map.js";
 import { parseUnifiedDiff } from "./impact/parse.js";
-import type { Hunk } from "./impact/types.js";
+import type { FileChange, Hunk } from "./impact/types.js";
 import {
   listCandidateTestFiles,
   type CandidateTestFile,
 } from "./impact/context.js";
+import { compileTestPatterns, isTestFilePath } from "./impact/testPatterns.js";
 import {
   normalizePath,
   listChangedFiles,
@@ -31,6 +36,9 @@ import {
   discoverProjectFiles,
   type ProjectFileInfo,
 } from "./util.js";
+import { supportForFile } from "./languages.js";
+
+const execFileAsync = promisify(execFile);
 
 type ReviewFileSummary = {
   file: string;
@@ -131,6 +139,13 @@ type ReviewPreset = {
   graph: { fast: boolean };
 };
 
+type DeletedFileSnapshot = {
+  source: string;
+  module: ModuleIndex;
+};
+
+type ReviewableExportEntry = Exclude<ExportEntry, { type: "local" }>;
+
 const REVIEW_PRESETS: Record<ReviewDepth, ReviewPreset> = {
   minimal: {
     includeSymbolDetails: false,
@@ -200,6 +215,187 @@ function compareEdges(left: Edge, right: Edge): number {
   const leftTypeOnly = left.typeOnly ? 1 : 0;
   const rightTypeOnly = right.typeOnly ? 1 : 0;
   return leftTypeOnly - rightTypeOnly;
+}
+
+function confidenceRank(confidence: CandidateTestFile["confidence"]): number {
+  if (confidence === "high") return 3;
+  if (confidence === "medium") return 2;
+  return 1;
+}
+
+function mergeCandidateTestEntries(
+  baseCandidates: CandidateTestFile[],
+  additionalCandidates: CandidateTestFile[],
+): CandidateTestFile[] {
+  const merged = new Map<FileId, CandidateTestFile>();
+  const upsert = (candidate: CandidateTestFile) => {
+    const existing = merged.get(candidate.file);
+    if (!existing) {
+      merged.set(candidate.file, candidate);
+      return;
+    }
+    if (
+      confidenceRank(candidate.confidence) > confidenceRank(existing.confidence)
+    ) {
+      merged.set(candidate.file, candidate);
+    }
+  };
+  for (const candidate of baseCandidates) upsert(candidate);
+  for (const candidate of additionalCandidates) upsert(candidate);
+  return Array.from(merged.values());
+}
+
+function normalizeSpecifierBase(fromFile: string, spec: string): string {
+  return normalizePath(path.resolve(path.dirname(fromFile), spec));
+}
+
+function buildDeletedImportCandidates(
+  fromFile: string,
+  spec: string,
+  targetFile: string,
+): Set<string> {
+  const normalizedTarget = normalizePath(targetFile);
+  const normalizedSpec = spec.replace(/\\/g, "/");
+  const basePath = normalizeSpecifierBase(fromFile, normalizedSpec);
+  const candidates = new Set<string>([basePath]);
+  const specExt = path.extname(normalizedSpec);
+  const targetExt = path.extname(normalizedTarget);
+
+  if (!targetExt) return candidates;
+
+  if (!specExt) {
+    candidates.add(`${basePath}${targetExt}`);
+    candidates.add(normalizePath(path.join(basePath, `index${targetExt}`)));
+    return candidates;
+  }
+
+  const baseWithoutExt = basePath.slice(0, -specExt.length);
+  const isJsTsPair =
+    (specExt === ".js" && targetExt === ".ts") ||
+    (specExt === ".mjs" && targetExt === ".mts") ||
+    (specExt === ".cjs" && targetExt === ".cts");
+
+  if (isJsTsPair) {
+    candidates.add(`${baseWithoutExt}${targetExt}`);
+  }
+
+  return candidates;
+}
+
+function listDirectDeletedFileTestImporters(
+  index: ProjectIndex,
+  deletedFiles: readonly string[],
+): CandidateTestFile[] {
+  if (deletedFiles.length === 0) return [];
+
+  const deletedFileSet = new Set(
+    deletedFiles.map((file) => normalizePath(file)),
+  );
+  const testPatterns = compileTestPatterns([]);
+  const candidates = new Map<FileId, CandidateTestFile>();
+
+  for (const mod of index.byFile.values()) {
+    if (!isTestFilePath(mod.file, testPatterns)) continue;
+    for (const imp of mod.imports) {
+      if (!imp.from.startsWith(".")) continue;
+      for (const deletedFile of deletedFileSet) {
+        const resolvedCandidates = buildDeletedImportCandidates(
+          mod.file,
+          imp.from,
+          deletedFile,
+        );
+        if (!resolvedCandidates.has(deletedFile)) continue;
+        candidates.set(mod.file, {
+          file: mod.file,
+          confidence: "high",
+          reason: "importsChanged",
+        });
+      }
+    }
+  }
+
+  return Array.from(candidates.values());
+}
+
+async function readGitFileAtRevision(
+  projectRoot: string,
+  revision: string,
+  file: string,
+): Promise<string | null> {
+  const relativeFile = normalizePath(path.relative(projectRoot, file));
+  if (!relativeFile || relativeFile.startsWith("..")) return null;
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["show", `${revision}:${relativeFile}`],
+      {
+        cwd: projectRoot,
+        encoding: "utf8",
+        maxBuffer: 16 * 1024 * 1024,
+      },
+    );
+    return stdout;
+  } catch {
+    return null;
+  }
+}
+
+async function buildDeletedFileSnapshots(
+  projectRoot: string,
+  deletedFiles: readonly string[],
+  opts: {
+    revision?: string;
+    diffChangesByFile?: ReadonlyMap<FileId, FileChange>;
+  },
+): Promise<Map<FileId, DeletedFileSnapshot>> {
+  const snapshots = new Map<FileId, DeletedFileSnapshot>();
+  if (deletedFiles.length === 0) return snapshots;
+
+  for (const file of deletedFiles) {
+    const support = supportForFile(file);
+    if (!support) continue;
+    const source =
+      (opts.revision
+        ? await readGitFileAtRevision(projectRoot, opts.revision, file)
+        : null) ??
+      reconstructDeletedSourceFromDiff(opts.diffChangesByFile?.get(file));
+    if (source === null) continue;
+    const normalizedFile = normalizePath(file);
+    const module = collectLocalsAndExportsFromSource(
+      normalizedFile,
+      source,
+      support,
+    );
+    snapshots.set(normalizedFile, {
+      source,
+      module,
+    });
+  }
+
+  return snapshots;
+}
+
+function reconstructDeletedSourceFromDiff(
+  change: FileChange | undefined,
+): string | null {
+  if (!change || change.kind !== "deleted" || change.hunks.length === 0) {
+    return null;
+  }
+  const oldLines: string[] = [];
+  for (const hunk of change.hunks) {
+    let oldLine = hunk.oldStart;
+    for (const line of hunk.lines) {
+      const prefix = line[0];
+      if (prefix === "+") continue;
+      if (prefix !== " " && prefix !== "-") continue;
+      while (oldLines.length < oldLine - 1) {
+        oldLines.push("");
+      }
+      oldLines[oldLine - 1] = line.slice(1);
+      oldLine += 1;
+    }
+  }
+  return oldLines.length > 0 ? oldLines.join("\n") : null;
 }
 
 function sortSymbols(symbols: SymbolDef[]): SymbolDef[] {
@@ -338,6 +534,189 @@ function isExported(mod: { exports: ExportEntry[] }, handle: string): boolean {
   return mod.exports.some(
     (e) => e.type === "local" && symbolId(e.target) === handle,
   );
+}
+
+function listReviewableExports(mod: ModuleIndex): ReviewableExportEntry[] {
+  return mod.exports.filter(
+    (entry): entry is ReviewableExportEntry => entry.type !== "local",
+  );
+}
+
+function exportSummaryHandle(
+  file: string,
+  entry: ReviewableExportEntry,
+): string {
+  const exportedAs = entry.type === "exportStar" ? "*" : entry.exportedAs;
+  return `${file}::export::${entry.type}::${exportedAs}::${entry.fromModule}`;
+}
+
+function exportSummaryName(entry: ReviewableExportEntry): string {
+  return entry.type === "exportStar" ? "*" : entry.exportedAs;
+}
+
+function exportSummaryKind(entry: ReviewableExportEntry): string {
+  return entry.type;
+}
+
+function diffLineLooksExportLike(line: string): boolean {
+  const prefix = line[0];
+  if (prefix !== "+" && prefix !== "-") return false;
+  const trimmed = line.slice(1).trimStart();
+  return (
+    trimmed.startsWith("export ") ||
+    trimmed.startsWith("module.exports") ||
+    trimmed.startsWith("exports.")
+  );
+}
+
+function shouldIncludeExportSummaries(
+  mod: ModuleIndex,
+  hunks: Hunk[] | undefined,
+  locals: readonly SymbolDef[],
+): boolean {
+  if (listReviewableExports(mod).length === 0) return false;
+  if (!hunks) return true;
+  if (locals.length === 0) return true;
+  return hunks.some((hunk) => hunk.lines.some(diffLineLooksExportLike));
+}
+
+function buildExportSummaries(
+  file: string,
+  mod: ModuleIndex,
+): ReviewSymbolSummary[] {
+  return listReviewableExports(mod).map((entry) => ({
+    name: exportSummaryName(entry),
+    kind: exportSummaryKind(entry),
+    handle: exportSummaryHandle(file, entry),
+    exported: true,
+  }));
+}
+
+function resolveReviewSpecifierTarget(fromFile: string, spec: string): string {
+  const normalizedSpec = spec.replace(/\\/g, "/");
+  const basePath = normalizeSpecifierBase(fromFile, normalizedSpec);
+  const candidates = new Set<string>([basePath]);
+  const specExt = path.extname(normalizedSpec);
+  const fromExt = path.extname(fromFile);
+  if (!specExt && fromExt) {
+    candidates.add(`${basePath}${fromExt}`);
+    candidates.add(normalizePath(path.join(basePath, `index${fromExt}`)));
+  }
+  if (specExt) {
+    const baseWithoutExt = basePath.slice(0, -specExt.length);
+    if (specExt === ".js") candidates.add(`${baseWithoutExt}.ts`);
+    if (specExt === ".mjs") candidates.add(`${baseWithoutExt}.mts`);
+    if (specExt === ".cjs") candidates.add(`${baseWithoutExt}.cts`);
+  }
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return Array.from(candidates)[0] ?? basePath;
+}
+
+function edgeKey(edge: Edge): string {
+  const toKey =
+    edge.to.type === "file"
+      ? `file:${edge.to.path}`
+      : `external:${edge.to.name}`;
+  const typeOnly = edge.typeOnly ? "1" : "0";
+  return `${edge.from}|${toKey}|${edge.raw}|${typeOnly}`;
+}
+
+function toRelativeEdge(projectRoot: string, edge: Edge): Edge {
+  return {
+    from: relativePath(projectRoot, edge.from),
+    to:
+      edge.to.type === "file"
+        ? {
+            type: "file",
+            path: relativePath(projectRoot, edge.to.path),
+          }
+        : edge.to,
+    raw: edge.raw,
+    ...(edge.typeOnly ? { typeOnly: edge.typeOnly } : {}),
+  };
+}
+
+function collectDeletedImporterEdges(
+  index: ProjectIndex,
+  deletedFiles: readonly string[],
+): Edge[] {
+  if (deletedFiles.length === 0) return [];
+  const deletedFileSet = new Set(deletedFiles.map((file) => normalizePath(file)));
+  const edges = new Map<string, Edge>();
+  for (const mod of index.byFile.values()) {
+    for (const imp of mod.imports) {
+      for (const deletedFile of deletedFileSet) {
+        const matchesDeletedFile =
+          typeof imp.resolved === "string"
+            ? normalizePath(imp.resolved) === deletedFile
+            : imp.from.startsWith(".") &&
+              buildDeletedImportCandidates(mod.file, imp.from, deletedFile).has(
+                deletedFile,
+              );
+        if (!matchesDeletedFile) continue;
+        const edge: Edge = {
+          from: mod.file,
+          to: { type: "file", path: deletedFile },
+          raw: imp.from,
+          ...(imp.typeOnly ? { typeOnly: imp.typeOnly } : {}),
+        };
+        edges.set(edgeKey(edge), edge);
+      }
+    }
+  }
+  return Array.from(edges.values());
+}
+
+function collectDeletedSnapshotEdges(
+  deletedSnapshots: ReadonlyMap<FileId, DeletedFileSnapshot>,
+): Edge[] {
+  const edges = new Map<string, Edge>();
+  for (const [file, snapshot] of deletedSnapshots.entries()) {
+    for (const imp of snapshot.module.imports) {
+      const to =
+        typeof imp.resolved === "string"
+          ? { type: "file" as const, path: normalizePath(imp.resolved) }
+          : imp.resolved && "external" in imp.resolved
+            ? { type: "external" as const, name: imp.resolved.external }
+            : imp.from.startsWith(".")
+              ? {
+                  type: "file" as const,
+                  path: resolveReviewSpecifierTarget(file, imp.from),
+                }
+              : { type: "external" as const, name: imp.from };
+      const edge: Edge = {
+        from: file,
+        to,
+        raw: imp.from,
+        ...(imp.typeOnly ? { typeOnly: imp.typeOnly } : {}),
+      };
+      edges.set(edgeKey(edge), edge);
+    }
+    for (const entry of listReviewableExports(snapshot.module)) {
+      const to = entry.fromModule.startsWith(".")
+        ? {
+            type: "file" as const,
+            path: resolveReviewSpecifierTarget(file, entry.fromModule),
+          }
+        : path.isAbsolute(entry.fromModule)
+          ? {
+              type: "file" as const,
+              path: normalizePath(entry.fromModule),
+            }
+          : { type: "external" as const, name: entry.fromModule };
+      const raw = entry.moduleSpecifier ?? entry.fromModule;
+      const edge: Edge = {
+        from: file,
+        to,
+        raw,
+        ...(entry.typeOnly ? { typeOnly: entry.typeOnly } : {}),
+      };
+      edges.set(edgeKey(edge), edge);
+    }
+  }
+  return Array.from(edges.values());
 }
 
 function rangeSnippet(source: string, range: Range): string {
@@ -575,6 +954,9 @@ export async function buildReviewReport(
   const filesToIndex = existenceChecks
     .filter((entry) => entry.exists)
     .map((entry) => entry.file);
+  const hasUnavailableChangedFiles = existenceChecks.some(
+    (entry) => !entry.exists,
+  );
 
   const diffStart = performance.now();
   const diffText =
@@ -593,42 +975,47 @@ export async function buildReviewReport(
   }
   const diffHunksByFile = new Map<string, Hunk[]>();
   const diffKindsByFile = new Map<string, string>();
+  const diffChangesByFile = new Map<string, FileChange>();
   if (diff) {
     for (const fileChange of diff.files) {
       const absPath = normalizePath(path.resolve(projectRoot, fileChange.path));
       diffHunksByFile.set(absPath, fileChange.hunks);
       diffKindsByFile.set(absPath, fileChange.kind);
+      diffChangesByFile.set(absPath, fileChange);
     }
   }
+  const deletedFiles = changedFileList.filter(
+    (file) => diffKindsByFile.get(file) === "deleted",
+  );
+  const deletedSnapshots = await buildDeletedFileSnapshots(
+    projectRoot,
+    deletedFiles,
+    {
+      ...(appliedOptions.gitBase ?? appliedOptions.changedSince
+        ? { revision: appliedOptions.gitBase ?? appliedOptions.changedSince }
+        : {}),
+      diffChangesByFile,
+    },
+  );
 
-  let index: ProjectIndex;
-  if (filesToIndex.length === 0) {
-    index = {
-      graph: { nodes: new Set(), edges: [] },
-      modules: new Map(),
-      byFile: new Map(),
-      exportCache: new Map(),
-      scopeCache: new Map(),
-      parsed: new Map(),
-    };
-  } else {
-    const indexStart = performance.now();
-    const indexReport =
-      reviewReport?.indexReport ?? (reviewReport ? { timings: {} } : undefined);
-    if (reviewReport && !reviewReport.indexReport && indexReport) {
-      reviewReport.indexReport = indexReport;
-    }
-    const indexOpts: IncrementalBuildOptions = {
-      ...(appliedOptions ?? {}),
-      files: filesToIndex,
-      graph: graphOptions,
-      ...(includeSymbolDetails && maxCallsites > 0 ? { keepParsed: true } : {}),
-      ...(indexReport ? { report: indexReport } : {}),
-    };
-    index = await buildProjectIndexIncremental(projectRoot, indexOpts);
-    if (reviewTimings) {
-      reviewTimings.indexMs = Math.round(performance.now() - indexStart);
-    }
+  const indexStart = performance.now();
+  const indexReport =
+    reviewReport?.indexReport ?? (reviewReport ? { timings: {} } : undefined);
+  if (reviewReport && !reviewReport.indexReport && indexReport) {
+    reviewReport.indexReport = indexReport;
+  }
+  const indexOpts: IncrementalBuildOptions = {
+    ...(appliedOptions ?? {}),
+    graph: graphOptions,
+    ...(includeSymbolDetails && maxCallsites > 0 ? { keepParsed: true } : {}),
+    ...(indexReport ? { report: indexReport } : {}),
+  };
+  if (!hasUnavailableChangedFiles) {
+    indexOpts.files = filesToIndex;
+  }
+  const index = await buildProjectIndexIncremental(projectRoot, indexOpts);
+  if (reviewTimings) {
+    reviewTimings.indexMs = Math.round(performance.now() - indexStart);
   }
 
   const filesWithModules = changedFileList.map((file) => ({
@@ -668,7 +1055,9 @@ export async function buildReviewReport(
       const { changedSymbols, changedLines, parseFailed } =
         await locateChangedSymbolsWithLines(index, file, hunks);
       if (parseFailed) {
-        diagnostics.symbolMappingParseFailures.push(relativePath(projectRoot, file));
+        diagnostics.symbolMappingParseFailures.push(
+          relativePath(projectRoot, file),
+        );
       }
       const uniqueSymbols = new Map<string, SymbolDef>();
       for (const symbol of changedSymbols) {
@@ -702,13 +1091,17 @@ export async function buildReviewReport(
   const referencesStart = performance.now();
   const referenceResults =
     includeSymbolDetails && maxCallsites > 0
-        ? await runWithConcurrency(
+      ? await runWithConcurrency(
           defsToResolve,
           referenceConcurrency,
           async (def) => {
-            const refs = await findReferences(index, { def }, {
-              maxReferences: maxCallsites + 1,
-            });
+            const refs = await findReferences(
+              index,
+              { def },
+              {
+                maxReferences: maxCallsites + 1,
+              },
+            );
             return { def, refs };
           },
         )
@@ -776,7 +1169,49 @@ export async function buildReviewReport(
 
   const summariesWithHandles = await Promise.all(
     fileEntries.map(
-      async ({ file, mod, locals, handles, diffLinesByHandle }) => {
+      async ({ file, mod, hunks, locals, handles, diffLinesByHandle }) => {
+        const deletedSnapshot = deletedSnapshots.get(file);
+        if (!mod && deletedSnapshot) {
+          const deletedLocals = sortSymbols(deletedSnapshot.module.locals);
+          const localSymbols: ReviewSymbolSummary[] = includeSymbolDetails
+            ? deletedLocals.map((local) => {
+                const handle = symbolId(local);
+                const definitionSnippet = rangeSnippet(
+                  deletedSnapshot.source,
+                  local.range,
+                );
+                return {
+                  name: local.localName,
+                  kind: local.kind,
+                  handle,
+                  exported: isExported(deletedSnapshot.module, handle),
+                  ...(definitionSnippet ? { definitionSnippet } : {}),
+                };
+              })
+            : deletedLocals.map((local) => {
+                const handle = symbolId(local);
+                return {
+                  name: local.localName,
+                  kind: local.kind,
+                  handle,
+                  exported: isExported(deletedSnapshot.module, handle),
+                };
+              });
+          const exportSymbols = buildExportSummaries(file, deletedSnapshot.module);
+          const symbols = [...localSymbols, ...exportSymbols];
+          const handles = [
+            ...deletedLocals.map((local) => symbolId(local)),
+            ...exportSymbols.map((symbol) => symbol.handle),
+          ];
+          return {
+            summary: {
+              file: relativePath(projectRoot, file),
+              status: "deleted",
+              symbols,
+            } satisfies ReviewFileSummary,
+            handles,
+          };
+        }
         if (!mod) {
           const fileExistsOnDisk = existenceByFile.get(file) ?? false;
           const isDeletedByDiff = diffKindsByFile.get(file) === "deleted";
@@ -794,7 +1229,7 @@ export async function buildReviewReport(
             handles: [] as string[],
           };
         }
-        const symbols: ReviewSymbolSummary[] = includeSymbolDetails
+        const localSymbols: ReviewSymbolSummary[] = includeSymbolDetails
           ? await Promise.all(
               locals.map((local) =>
                 buildSymbolSummary(local, mod, diffLinesByHandle),
@@ -809,13 +1244,17 @@ export async function buildReviewReport(
                 exported: isExported(mod, handle),
               };
             });
+        const exportSymbols = shouldIncludeExportSummaries(mod, hunks, locals)
+          ? buildExportSummaries(file, mod)
+          : [];
+        const symbols = [...localSymbols, ...exportSymbols];
         return {
           summary: {
             file: relativePath(projectRoot, file),
             status: "updated",
             symbols,
           } satisfies ReviewFileSummary,
-          handles,
+          handles: [...handles, ...exportSymbols.map((symbol) => symbol.handle)],
         };
       },
     ),
@@ -829,49 +1268,44 @@ export async function buildReviewReport(
     return count + exportedInFile.length;
   }, 0);
 
-  const graphDelta: Edge[] = index.graph.edges
-    .filter((edge) => changedFiles.has(edge.from))
-    .map((edge) => {
-      const from = relativePath(projectRoot, edge.from);
-      const to =
-        edge.to.type === "file"
-          ? {
-              type: "file" as const,
-              path: relativePath(projectRoot, edge.to.path),
-            }
-          : edge.to;
-      return {
-        from,
-        to,
-        raw: edge.raw,
-        ...(edge.typeOnly ? { typeOnly: edge.typeOnly } : {}),
-      };
-    })
-    .sort(compareEdges);
+  const graphEdges = new Map<string, Edge>();
+  for (const edge of index.graph.edges.filter((entry) => changedFiles.has(entry.from))) {
+    const relativeEdge = toRelativeEdge(projectRoot, edge);
+    graphEdges.set(edgeKey(relativeEdge), relativeEdge);
+  }
+  for (const edge of collectDeletedImporterEdges(index, deletedFiles)) {
+    const relativeEdge = toRelativeEdge(projectRoot, edge);
+    graphEdges.set(edgeKey(relativeEdge), relativeEdge);
+  }
+  for (const edge of collectDeletedSnapshotEdges(deletedSnapshots)) {
+    const relativeEdge = toRelativeEdge(projectRoot, edge);
+    graphEdges.set(edgeKey(relativeEdge), relativeEdge);
+  }
+  const graphDelta = Array.from(graphEdges.values()).sort(compareEdges);
 
   const candidateStart = performance.now();
-  const candidateTests = listCandidateTestFiles(
-    index,
-    changedFileList,
-    changedSymbolIds,
-    {
+  const candidateTests = mergeCandidateTestEntries(
+    listCandidateTestFiles(index, changedFileList, changedSymbolIds, {
       maxCandidates: appliedOptions.maxCandidates ?? 50,
       ...(appliedOptions.testPatterns
         ? { testPatterns: appliedOptions.testPatterns }
         : {}),
-    },
+    }),
+    listDirectDeletedFileTestImporters(index, deletedFiles),
   )
     .map((candidate) => ({
       ...candidate,
       file: relativePath(projectRoot, candidate.file),
     }))
     .sort((left, right) => {
+      const confidenceCompare =
+        confidenceRank(right.confidence) - confidenceRank(left.confidence);
+      if (confidenceCompare !== 0) return confidenceCompare;
       const fileCompare = comparePaths(left.file, right.file);
       if (fileCompare !== 0) return fileCompare;
-      const confidenceCompare = left.confidence.localeCompare(right.confidence);
-      if (confidenceCompare !== 0) return confidenceCompare;
       return left.reason.localeCompare(right.reason);
-    });
+    })
+    .slice(0, appliedOptions.maxCandidates ?? 50);
   if (reviewTimings) {
     reviewTimings.candidatesMs = Math.round(performance.now() - candidateStart);
   }

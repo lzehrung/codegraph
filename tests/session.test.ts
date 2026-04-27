@@ -60,15 +60,54 @@ describe("CodeReviewSession", () => {
       buildOptions: { cache: "memory", useBloomFilters: true },
     });
 
-    const file = path.resolve(sampleRoot, "src/index.ts");
+    const file = path.resolve(sampleRoot, "utils.ts");
 
     const result = await session.findReferences({
       file,
       line: 1,
-      column: 10,
+      column: 17,
     });
 
-    expect(result).toBeDefined();
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.references.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("should normalize relative session navigation paths", async () => {
+    const session = await createCodeReviewSession({
+      root: sampleRoot,
+      buildOptions: { cache: "memory", useBloomFilters: true },
+    });
+
+    const result = await session.goToDefinition({
+      file: "main.ts",
+      line: 7,
+      column: 25,
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.definition.file.replace(/\\/g, "/")).toContain("utils.ts");
+    }
+  });
+
+  test("should normalize absolute Windows-style session navigation paths", async () => {
+    const session = await createCodeReviewSession({
+      root: sampleRoot,
+      buildOptions: { cache: "memory", useBloomFilters: true },
+    });
+
+    const result = await session.goToDefinition({
+      file: path.join(sampleRoot, "main.ts"),
+      line: 7,
+      column: 25,
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.definition.file.replace(/\\/g, "/")).toContain("utils.ts");
+    }
   });
 
   test("should refresh the index", async () => {
@@ -95,14 +134,16 @@ describe("CodeReviewSession", () => {
       .mockRejectedValue(new Error("synthetic refresh failure"));
 
     try {
-      await expect(session.refresh()).rejects.toThrow("synthetic refresh failure");
+      await expect(session.refresh()).rejects.toThrow(
+        "synthetic refresh failure",
+      );
       expect(session.getStatus()).toBe("ready");
       expect(session.isReady()).toBe(true);
 
-      const file = path.resolve(sampleRoot, "src/index.ts");
+      const file = path.resolve(sampleRoot, "utils.ts");
       await expect(
-        session.findReferences({ file, line: 1, column: 10 }),
-      ).resolves.toBeDefined();
+        session.findReferences({ file, line: 1, column: 17 }),
+      ).resolves.toMatchObject({ status: "ok" });
     } finally {
       buildSpy.mockRestore();
     }
@@ -166,10 +207,10 @@ describe("CodeReviewSession", () => {
     // Wait for expiration
     await new Promise((resolve) => setTimeout(resolve, 150));
 
-    const file = path.resolve(sampleRoot, "src/index.ts");
+    const file = path.resolve(sampleRoot, "utils.ts");
 
     await expect(
-      session.findReferences({ file, line: 1, column: 10 }),
+      session.findReferences({ file, line: 1, column: 17 }),
     ).rejects.toThrow();
   });
 });
@@ -255,7 +296,9 @@ describe("SessionManager", () => {
       manager.disposeSession("pending");
       releaseBuild?.();
 
-      await expect(pendingSession).rejects.toThrow(/disposed during initialization/);
+      await expect(pendingSession).rejects.toThrow(
+        /disposed during initialization/,
+      );
       expect(manager.getSession("pending")).toBeUndefined();
       expect(manager.getSessionIds()).toEqual([]);
     } finally {
@@ -309,11 +352,23 @@ describe("SessionManager", () => {
   });
 
   test("should reject reusing a session id for a different root", async () => {
-    const rootA = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-root-a-"));
-    const rootB = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-root-b-"));
+    const rootA = await fsp.mkdtemp(
+      path.join(os.tmpdir(), "dg-session-root-a-"),
+    );
+    const rootB = await fsp.mkdtemp(
+      path.join(os.tmpdir(), "dg-session-root-b-"),
+    );
     try {
-      await fsp.writeFile(path.join(rootA, "a.ts"), "export const a = 1;\n", "utf8");
-      await fsp.writeFile(path.join(rootB, "b.ts"), "export const b = 1;\n", "utf8");
+      await fsp.writeFile(
+        path.join(rootA, "a.ts"),
+        "export const a = 1;\n",
+        "utf8",
+      );
+      await fsp.writeFile(
+        path.join(rootB, "b.ts"),
+        "export const b = 1;\n",
+        "utf8",
+      );
 
       await manager.getOrCreateSession("shared", {
         root: rootA,
@@ -489,8 +544,13 @@ describe("SessionManager", () => {
   });
 
   test("should not retain failed warmup sessions", async () => {
-    const goodRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-warmup-good-"));
-    const badRoot = path.join(os.tmpdir(), `dg-session-warmup-missing-${Date.now()}`);
+    const goodRoot = await fsp.mkdtemp(
+      path.join(os.tmpdir(), "dg-session-warmup-good-"),
+    );
+    const badRoot = path.join(
+      os.tmpdir(),
+      `dg-session-warmup-missing-${Date.now()}`,
+    );
 
     try {
       await fsp.writeFile(
@@ -501,8 +561,14 @@ describe("SessionManager", () => {
 
       await expect(
         manager.warmup([
-          { id: "good", options: { root: goodRoot, buildOptions: { cache: "memory" } } },
-          { id: "bad", options: { root: badRoot, buildOptions: { cache: "memory" } } },
+          {
+            id: "good",
+            options: { root: goodRoot, buildOptions: { cache: "memory" } },
+          },
+          {
+            id: "bad",
+            options: { root: badRoot, buildOptions: { cache: "memory" } },
+          },
         ]),
       ).rejects.toThrow();
 
@@ -519,12 +585,24 @@ describe("SessionManager", () => {
   });
 
   test("should reject warmup collisions with existing sessions", async () => {
-    const rootA = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-warm-a-"));
-    const rootB = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-warm-b-"));
+    const rootA = await fsp.mkdtemp(
+      path.join(os.tmpdir(), "dg-session-warm-a-"),
+    );
+    const rootB = await fsp.mkdtemp(
+      path.join(os.tmpdir(), "dg-session-warm-b-"),
+    );
 
     try {
-      await fsp.writeFile(path.join(rootA, "a.ts"), "export const a = 1;\n", "utf8");
-      await fsp.writeFile(path.join(rootB, "b.ts"), "export const b = 1;\n", "utf8");
+      await fsp.writeFile(
+        path.join(rootA, "a.ts"),
+        "export const a = 1;\n",
+        "utf8",
+      );
+      await fsp.writeFile(
+        path.join(rootB, "b.ts"),
+        "export const b = 1;\n",
+        "utf8",
+      );
 
       const existing = await manager.getOrCreateSession("shared", {
         root: rootA,
@@ -533,7 +611,10 @@ describe("SessionManager", () => {
 
       await expect(
         manager.warmup([
-          { id: "shared", options: { root: rootB, buildOptions: { cache: "memory" } } },
+          {
+            id: "shared",
+            options: { root: rootB, buildOptions: { cache: "memory" } },
+          },
         ]),
       ).rejects.toThrow(/different configuration/);
 

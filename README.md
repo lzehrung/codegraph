@@ -4,127 +4,127 @@ A tiny tool to **understand a repo**, **navigate code**, and **answer questions*
 
 It builds:
 
-* a **module dependency graph** (imports / re-exports / `require()` / dynamic `import()`),
-* a per-file **symbol index** (locals + exports),
-* **go to definition** and **find references**,
-* plus a minimal **AST grep** (Tree-sitter query runner).
+- a **module dependency graph** (imports / re-exports / `require()` / dynamic `import()`),
+- a per-file **symbol index** (locals + exports),
+- **go to definition** and **find references**,
+- plus a minimal **AST grep** (Tree-sitter query runner).
 
 It stays small on purpose and is built to be easy to extend to new grammars.
 
-Sample graph: [sample-graph.md](./sample-graph.md)
+Sample graph output can be generated with `npm run graph:mermaid` or `npm run graph:json`.
 
 ## Table of contents
 
-* [Features](#features)
-* [Supported languages](#supported-languages)
-* [Semantic Chunking](#semantic-chunking)
-* [Installation](#installation)
-* [Requirements](#requirements)
-* [Usage](#usage)
-* [Performance](#performance)
-* [Programmatic usage (from code)](#programmatic-usage-from-code)
-* [How it works (high level)](#how-it-works-high-level)
-* [Extending to other languages](#extending-to-other-languages)
-* [Unit testing](#unit-testing)
-* [FAQ](#faq)
-* [Contributing & Releases](#contributing--releases)
+- [Features](#features)
+- [Supported languages](#supported-languages)
+- [Semantic Chunking](#semantic-chunking)
+- [Installation](#installation)
+- [Requirements](#requirements)
+- [Usage](#usage)
+- [Performance](#performance)
+- [Programmatic usage (from code)](#programmatic-usage-from-code)
+- [How it works (high level)](#how-it-works-high-level)
+- [Extending to other languages](#extending-to-other-languages)
+- [Unit testing](#unit-testing)
+- [FAQ](#faq)
+- [Contributing & Releases](#contributing--releases)
 
 ---
 
 ## Features
 
-* **Dependency graph**
-  * JS/TS: `import`, `export ... from`, `export * from`, `require()`, `import()`, CommonJS destructuring
-  * JSON modules referenced from JS/TS (including `assert { type: "json" }`) are treated as default-only dependencies
-  * Python: `import`, `from ... import`, relative imports with package resolution
-  * Go/Java/C#/Ruby/Rust: Tree-sitter queries capture module imports/usings and resolve them to files or packages
-  * HTML/Astro/Handlebars/Markdown/MDX/reStructuredText/AsciiDoc: graph-first document and template links via `href`/`src`, Markdown links, MDX/Astro static imports, Sphinx-style includes/toctrees, and AsciiDoc `xref`/`include`
-  * Unresolved targets are represented as **external** nodes
-  * Scan scope respects `.gitignore` by default and can be narrowed with `--include-glob` / `--ignore-glob`
-* **Symbol index**
-  * Extracts functions, classes, variables, interfaces, types, and exports
-  * Captures docstrings (leading comments), line spans, and a lightweight complexity heuristic for symbols
-  * Works across JS/TS, Python, Go, Java, C#, Ruby, Rust, and Vue/Svelte script blocks with consistent scope handling
-* **Go to definition**
-  * Cross-file navigation through one shared pipeline across supported languages
-  * TS/JS: Re-exports, namespace imports, CommonJS destructuring
-  * Python: Module imports, `__all__` exports, relative imports
-  * Go/Java/C#/Ruby/Rust/C/C++/Kotlin/Swift: Package, header, and namespace lookups flow through the same shared resolver
-* **Find references**
-  * Project-wide scanning with lexical scope awareness
-  * TS/JS: Namespace members, re-exports, CommonJS patterns
-  * Python: Module imports, `__all__` exports, relative imports
-  * Go/Java/C#/Ruby/Rust/C/C++/Kotlin/Swift: Collects bindings and usages through the same shared reference pipeline
-* **AST grep**
-  * Run arbitrary Tree-sitter queries across the repo
-* **Agent query helpers**
-  * Parse simple text queries and retrieve matching symbols or neighbor subgraphs
-  * Export graphs as triples for downstream knowledge-graph storage
-  * Detailed symbol graphs include semantic edges like `calls`, `instantiates`, `extends`, `implements`, and `decorates`
-* **SQLite graph output**
-  * Export file and symbol graphs into a queryable SQLite database with indexed tables
-  * Supports incremental updates by re-writing changed files, deleting removed files, patching affected symbol/file edges, and recording temporal snapshots in SQLite
-* **Dependency Analysis**
-  * `deps <file>`: List all dependencies of a file
-  * `rdeps <file>`: List all files that depend on a file
-  * `path <from> <to>`: Find the shortest dependency path between two files
-  * `cycles`: Detect circular dependencies with SCC priority, entry edges, remediation hints, and sort modes (`--sort priority|size|fanin`)
-* **Diagnostics & Reports**
-  * `inspect`: Summarize repo shape, backend status, hotspots, cycles, unresolved imports, and recommended next commands
-  * `unresolved`: List external/unresolved imports and their importers
-  * `hotspots`: Identify files with high fan-in/fan-out, with cache reuse, subtree scoping, and `--limit`
-  * `apisurface`: Summarize public API (exported symbols) across the repo
-* **PR impact analysis**
-  * Map git diffs to changed symbols and affected code
-  * Analyze direct and transitive dependencies with severity scoring
-  * **Ignore patterns**: Exclude specific files (e.g. generated code, locks) via `ignoreGlobs` to reduce noise.
-  * **Large diff support**: Handles 50k+ line PRs via asynchronous streaming (no 1MB buffer limit)
-  * **Circuit breaker**: Detects extremely large diffs and provides a warning if analysis might be partial
-  * Git/GitHub integration with configurable depth and scope
-  * Missing import/export/declaration suggestions include a high/medium/low confidence score for quick triage
-* **Why not use an LSP?**
-  * **Latency & "Cold Start"**: LSPs are designed for long-running editor sessions. They take minutes to initialize and type-check a large repo. `codegraph` parses and indexes in seconds, making it suitable for ephemeral agent environments.
-  * **Multi-Language Complexity**: An agent environment would need to manage separate heavy LSP processes for TS, Python, Go, Java, etc. `codegraph` is a single lightweight library that handles all of them uniformly.
-  * **"Global" vs. "Local" Context**: LSPs answer "what is under my cursor?". `codegraph` answers "what is the structure of this module?" or "what depends on this file?". It provides the high-level graph view that agents need to plan their exploration.
-  * **Robustness to Broken Code**: LSPs often fail or degrade when code doesn't compile or dependencies are missing. `codegraph` uses robust parsing (Tree-sitter) to extract structure even from broken or incomplete projects, which is critical when agents are tasked with fixing builds.
-* **Monorepo support**
-  * Workspace detection (npm/yarn/pnpm/lerna)
-  * Per-file TypeScript config resolution
-  * Package-relative import resolution
-* **Project file discovery**
-  * Finds common manifests (package.json, pyproject.toml, pom.xml, build.gradle, .csproj, .sln, .idea)
-  * Extracts lightweight project names when metadata is available
-* **Semantic chunking**
-  * Tree-sitter-based code splitting for JS/TS/Python into embedding-ready chunks
-  * Text file chunking for JSON/YAML/config files
-  * Configurable token budgets (150-400 tokens per chunk)
-  * Semantic awareness: classes, functions, methods, interfaces, namespaces, imports
-* **Cross-language parity**: Supported source languages share the same go-to-definition and find-references pipeline, while graph-first document/template formats participate in the dependency graph with intentionally narrower capability claims; see [docs/language-parity.md](./docs/language-parity.md) for the current per-language matrix.
+- **Dependency graph**
+  - JS/TS: `import`, `export ... from`, `export * from`, `require()`, `import()`, CommonJS destructuring
+  - JSON modules referenced from JS/TS (including `assert { type: "json" }`) are treated as default-only dependencies
+  - Python: `import`, `from ... import`, relative imports with package resolution
+  - Go/Java/C#/Ruby/Rust: Tree-sitter queries capture module imports/usings and resolve them to files or packages
+  - HTML/Astro/Handlebars/Markdown/MDX/reStructuredText/AsciiDoc: graph-first document and template links via `href`/`src`, Markdown links, MDX/Astro static imports, Sphinx-style includes/toctrees, and AsciiDoc `xref`/`include`
+  - Unresolved targets are represented as **external** nodes
+  - Scan scope respects `.gitignore` by default and can be narrowed with `--include-glob` / `--ignore-glob`
+- **Symbol index**
+  - Extracts functions, classes, variables, interfaces, types, and exports
+  - Captures docstrings (leading comments), line spans, and a lightweight complexity heuristic for symbols
+  - Works across JS/TS, Python, Go, Java, C#, Ruby, Rust, and Vue/Svelte script blocks with consistent scope handling
+- **Go to definition**
+  - Cross-file navigation through one shared pipeline across supported languages
+  - TS/JS: Re-exports, namespace imports, CommonJS destructuring
+  - Python: Module imports, `__all__` exports, relative imports
+  - Go/Java/C#/Ruby/Rust/C/C++/Kotlin/Swift: Package, header, and namespace lookups flow through the same shared resolver
+- **Find references**
+  - Project-wide scanning with lexical scope awareness
+  - TS/JS: Namespace members, re-exports, CommonJS patterns
+  - Python: Module imports, `__all__` exports, relative imports
+  - Go/Java/C#/Ruby/Rust/C/C++/Kotlin/Swift: Collects bindings and usages through the same shared reference pipeline
+- **AST grep**
+  - Run arbitrary Tree-sitter queries across the repo
+- **Agent query helpers**
+  - Parse simple text queries and retrieve matching symbols or neighbor subgraphs
+  - Export graphs as triples for downstream knowledge-graph storage
+  - Detailed symbol graphs include semantic edges like `calls`, `instantiates`, `extends`, `implements`, and `decorates`
+- **SQLite graph output**
+  - Export file and symbol graphs into a queryable SQLite database with indexed tables
+  - Supports incremental updates by re-writing changed files, deleting removed files, patching affected symbol/file edges, and recording temporal snapshots in SQLite
+- **Dependency Analysis**
+  - `deps <file>`: List all dependencies of a file
+  - `rdeps <file>`: List all files that depend on a file
+  - `path <from> <to>`: Find the shortest dependency path between two files
+  - `cycles`: Detect circular dependencies with SCC priority, entry edges, remediation hints, and sort modes (`--sort priority|size|fanin`)
+- **Diagnostics & Reports**
+  - `inspect`: Summarize repo shape, backend status, hotspots, cycles, unresolved imports, and recommended next commands
+  - `unresolved`: List external/unresolved imports and their importers
+  - `hotspots`: Identify files with high fan-in/fan-out, with cache reuse, subtree scoping, and `--limit`
+  - `apisurface`: Summarize public API (exported symbols) across the repo
+- **PR impact analysis**
+  - Map git diffs to changed symbols and affected code
+  - Analyze direct and transitive dependencies with severity scoring
+  - **Ignore patterns**: Exclude specific files (e.g. generated code, locks) via `ignoreGlobs` to reduce noise.
+  - **Large diff support**: Handles 50k+ line PRs via asynchronous streaming (no 1MB buffer limit)
+  - **Circuit breaker**: Detects extremely large diffs and provides a warning if analysis might be partial
+  - Git/GitHub integration with configurable depth and scope
+  - Missing import/export/declaration suggestions include a high/medium/low confidence score for quick triage
+- **Why not use an LSP?**
+  - **Latency & "Cold Start"**: LSPs are designed for long-running editor sessions. They take minutes to initialize and type-check a large repo. `codegraph` parses and indexes in seconds, making it suitable for ephemeral agent environments.
+  - **Multi-Language Complexity**: An agent environment would need to manage separate heavy LSP processes for TS, Python, Go, Java, etc. `codegraph` is a single lightweight library that handles all of them uniformly.
+  - **"Global" vs. "Local" Context**: LSPs answer "what is under my cursor?". `codegraph` answers "what is the structure of this module?" or "what depends on this file?". It provides the high-level graph view that agents need to plan their exploration.
+  - **Robustness to Broken Code**: LSPs often fail or degrade when code doesn't compile or dependencies are missing. `codegraph` uses robust parsing (Tree-sitter) to extract structure even from broken or incomplete projects, which is critical when agents are tasked with fixing builds.
+- **Monorepo support**
+  - Workspace detection (npm/yarn/pnpm/lerna)
+  - Per-file TypeScript config resolution
+  - Package-relative import resolution
+- **Project file discovery**
+  - Finds common manifests (package.json, pyproject.toml, pom.xml, build.gradle, .csproj, .sln, .idea)
+  - Extracts lightweight project names when metadata is available
+- **Semantic chunking**
+  - Tree-sitter-based code splitting for JS/TS/Python into embedding-ready chunks
+  - Text file chunking for JSON/YAML/config files
+  - Configurable token budgets (150-400 tokens per chunk)
+  - Semantic awareness: classes, functions, methods, interfaces, namespaces, imports
+- **Cross-language parity**: Supported source languages share the same go-to-definition and find-references pipeline, while graph-first document/template formats participate in the dependency graph with intentionally narrower capability claims; see [docs/language-parity.md](./docs/language-parity.md) for the current per-language matrix.
 
 ---
 
 ## Supported languages
 
-* **JavaScript / TypeScript** (`.ts`, `.tsx`, `.js`, `.jsx`, `.mts`, `.cts`, `.mjs`, `.cjs`)
-* **Python** (`.py`)
-* **Go** (`.go`)
-* **Java** (`.java`)
-* **C#** (`.cs`)
-* **Ruby** (`.rb`)
-* **Rust** (`.rs`)
-* **Kotlin** (`.kt`)
-* **Swift** (`.swift`)
-* **C** (`.c`)
-* **C++** (`.cpp`)
-* **HTML** (`.html`, `.htm`) - graph/chunking-first markup support
-* **Astro** (`.astro`) - graph-first component and document-link support
-* **Handlebars** (`.hbs`, `.handlebars`) - graph-first template-link and partial support
-* **CSS / SCSS / Less** (`.css`, `.scss`, `.less`) - graph/chunking-first stylesheet support
-* **Markdown** (`.md`) - graph-first document-link support
-* **MDX** (`.mdx`) - graph-first document-link plus static import/export support
-* **reStructuredText** (`.rst`) - graph-first document-link, `include`, and `toctree` support
-* **AsciiDoc** (`.adoc`, `.asciidoc`) - graph-first document-link, `xref`, and `include` support
-* **Vue / Svelte SFCs** (`.vue`, `.svelte`) - script blocks are parsed with the JS/TS pipeline for dependency graphs and chunking, while semantic navigation remains intentionally limited.
+- **JavaScript / TypeScript** (`.ts`, `.tsx`, `.js`, `.jsx`, `.mts`, `.cts`, `.mjs`, `.cjs`)
+- **Python** (`.py`)
+- **Go** (`.go`)
+- **Java** (`.java`)
+- **C#** (`.cs`)
+- **Ruby** (`.rb`)
+- **Rust** (`.rs`)
+- **Kotlin** (`.kt`)
+- **Swift** (`.swift`)
+- **C** (`.c`)
+- **C++** (`.cpp`)
+- **HTML** (`.html`, `.htm`) - graph/chunking-first markup support
+- **Astro** (`.astro`) - graph-first component and document-link support
+- **Handlebars** (`.hbs`, `.handlebars`) - graph-first template-link and partial support
+- **CSS / SCSS / Less** (`.css`, `.scss`, `.less`) - graph/chunking-first stylesheet support
+- **Markdown** (`.md`) - graph-first document-link support
+- **MDX** (`.mdx`) - graph-first document-link plus static import/export support
+- **reStructuredText** (`.rst`) - graph-first document-link, `include`, and `toctree` support
+- **AsciiDoc** (`.adoc`, `.asciidoc`) - graph-first document-link, `xref`, and `include` support
+- **Vue / Svelte SFCs** (`.vue`, `.svelte`) - script blocks are parsed with the JS/TS pipeline for dependency graphs and chunking, while semantic navigation remains intentionally limited.
 
 Each listed language or graph-first format participates in the shared indexing pipeline for the capabilities it supports.
 When the native addon is available, all listed source languages use the same native Tree-sitter runtime and query model. The optional `@lzehrung/codegraph-js-fallback` package is only needed for forced JS fallback mode or when the native addon itself is unavailable; native-only installs do not need it for normal supported source-language graph extraction, symbol indexing, chunking, or AST grep. When query recovery degrades in `auto` mode, Codegraph reports that once in diagnostics and uses the native-owned final recovery path where supported.
@@ -146,7 +146,7 @@ The library provides semantic code chunking utilities for preparing codebases fo
 ### APIs
 
 ```ts
-import { chunkFile, chunkTextFile, LANG_CONFIGS } from '@lzehrung/codegraph';
+import { chunkFile, chunkTextFile, LANG_CONFIGS } from "@lzehrung/codegraph";
 
 // Chunk a code file semantically
 const source = `function hello(name) { return "Hello " + name; }`;
@@ -154,8 +154,8 @@ const chunks = chunkFile({
   language: LANG_CONFIGS.javascript,
   source,
   filePath: "utils.js",
-  minTokens: 150,  // Merge small chunks
-  maxTokens: 400,  // Split large chunks
+  minTokens: 150, // Merge small chunks
+  maxTokens: 400, // Split large chunks
 });
 
 // Chunk text files by token budget
@@ -174,23 +174,23 @@ Each chunk includes:
 
 ```ts
 interface Chunk {
-  id: string;           // Unique identifier
-  languageId: string;   // "javascript", "typescript", "python", etc.
-  filePath?: string;    // Optional source file path
-  type: string;         // "function", "class", "method", "import", "misc", etc.
-  name?: string;        // Symbol name if applicable
-  startLine: number;     // 1-based start line
-  endLine: number;       // 1-based end line
-  text: string;         // The chunk content
-  tokenCount: number;   // Token count estimate
+  id: string; // Unique identifier
+  languageId: string; // "javascript", "typescript", "python", etc.
+  filePath?: string; // Optional source file path
+  type: string; // "function", "class", "method", "import", "misc", etc.
+  name?: string; // Symbol name if applicable
+  startLine: number; // 1-based start line
+  endLine: number; // 1-based end line
+  text: string; // The chunk content
+  tokenCount: number; // Token count estimate
 }
 ```
 
 ### Configuration Options
 
-* **`minTokens`**: Minimum tokens per chunk (default: 150). Smaller chunks are merged.
-* **`maxTokens`**: Maximum tokens per chunk (default: 400). Larger chunks are split.
-* **`tokenizer`**: Custom token counting function (default: whitespace-based).
+- **`minTokens`**: Minimum tokens per chunk (default: 150). Smaller chunks are merged.
+- **`maxTokens`**: Maximum tokens per chunk (default: 400). Larger chunks are split.
+- **`tokenizer`**: Custom token counting function (default: whitespace-based).
 
 ### Example Output
 
@@ -213,13 +213,14 @@ interface Chunk {
 ### Testing & Reference
 
 See the test suites for comprehensive examples:
+
 - `tests/languages/*.test.ts`: Data-driven tests for each supported language
 - `tests/chunkFile.behavior.test.ts`: Detailed behavior and edge case tests
-- `docs/chunking-test-plan.md`: Living checklist for enum/docstring/CLI regression guards
-- `tests/chunk-cli.test.ts`: CLI `chunk` command smoke tests for language overrides and token limits
+- `tests/languages/chunkSFC.test.ts`: SFC chunking coverage for Vue/Svelte block splitting
 - `tests/samples/chunking/integration-example.test.ts`: Agent-focused integration examples showing how to filter chunks by type, prepare them for embeddings, and implement decision-making logic
 
 The integration examples demonstrate:
+
 - Semantic chunking of code files with type-based filtering
 - Text file chunking for configuration processing
 - Intelligent splitting of large code blocks
@@ -278,15 +279,15 @@ Use this path when you are developing on codegraph itself. `npm run build` now a
 
 ## Requirements
 
-* **Node.js 18+**
-* Published installs do not require Rust or a manual native setup step on supported targets
-* Local source checkouts do not require Rust just to build `dist/`, but the native workspace addon only builds when Cargo is available
-* If no compatible native artifact is available, install `@lzehrung/codegraph-js-fallback` to enable the opt-in JS Tree-sitter fallback path
-* Native-only installs do not need `@lzehrung/codegraph-js-fallback` for normal supported source-language graph extraction, symbol indexing, chunking, or AST grep; native-owned recovery is used as the final degraded path when query recovery is unavailable
-* Native runtime mode defaults to `auto`
-* Set `CODEGRAPH_DISABLE_NATIVE=1` to make `auto` prefer the optional JS Tree-sitter fallback path by default when `@lzehrung/codegraph-js-fallback` is installed
-* The CLI, library, and agent-tool wrappers also accept explicit native runtime overrides: `auto`, `on`, `off`
-* Explicit `native` options take precedence over `CODEGRAPH_DISABLE_NATIVE`
+- **Node.js 18+**
+- Published installs do not require Rust or a manual native setup step on supported targets
+- Local source checkouts do not require Rust just to build `dist/`, but the native workspace addon only builds when Cargo is available
+- If no compatible native artifact is available, install `@lzehrung/codegraph-js-fallback` to enable the opt-in JS Tree-sitter fallback path
+- Native-only installs do not need `@lzehrung/codegraph-js-fallback` for normal supported source-language graph extraction, symbol indexing, chunking, or AST grep; native-owned recovery is used as the final degraded path when query recovery is unavailable
+- Native runtime mode defaults to `auto`
+- Set `CODEGRAPH_DISABLE_NATIVE=1` to make `auto` prefer the optional JS Tree-sitter fallback path by default when `@lzehrung/codegraph-js-fallback` is installed
+- The CLI, library, and agent-tool wrappers also accept explicit native runtime overrides: `auto`, `on`, `off`
+- Explicit `native` options take precedence over `CODEGRAPH_DISABLE_NATIVE`
 
 ---
 
@@ -468,6 +469,7 @@ reviewing a PR.
 The SQLite export is a **first-class query interface** for agent workflows. The schema is:
 
 **Tables**
+
 - `files(path TEXT PRIMARY KEY, is_external INTEGER)`
 - `symbols(id TEXT PRIMARY KEY, file TEXT, name TEXT, kind TEXT, docstring TEXT, line_span INTEGER, complexity INTEGER, visibility TEXT)`
 - `file_edges(from_path TEXT, to_path TEXT, to_type TEXT, raw TEXT, type_only INTEGER)`
@@ -477,11 +479,13 @@ The SQLite export is a **first-class query interface** for agent workflows. The 
 - `graph_snapshot_files(snapshot_id INTEGER, file_path TEXT, change_kind TEXT)`
 
 **Indexes (most relevant)**
+
 - `idx_symbols_name`, `idx_symbols_kind`, `idx_symbols_name_kind`, `idx_symbols_file_kind`, `idx_symbols_kind_complexity`
 - `idx_file_edges_from`, `idx_file_edges_to`, `idx_file_edges_type`
 - `idx_symbol_edges_from`, `idx_symbol_edges_to`, `idx_symbol_edges_label`, `idx_symbol_edges_label_to`, `idx_symbol_edges_label_from`, `idx_symbol_edges_label_from_to`
 
 **Example SQL**
+
 ```sql
 -- Most-called functions
 SELECT s.name, s.file, COUNT(*) AS calls
@@ -509,12 +513,12 @@ WHERE to_path = 'src/auth.ts' AND to_type = 'file';
   "summary": {
     "filesChanged": 3,
     "symbolsChanged": 12,
-    "candidateTests": 5
+    "candidateTests": 5,
   },
   "riskSummary": {
     "level": "medium",
     "score": 60,
-    "signals": ["exported-symbols-changed"]
+    "signals": ["exported-symbols-changed"],
   },
   "reviewTasks": [
     {
@@ -522,8 +526,8 @@ WHERE to_path = 'src/auth.ts' AND to_type = 'file';
       "title": "Review changed symbols",
       "description": "Scan the changed symbols and confirm behavioral changes align with intent.",
       "priority": "medium",
-      "reason": "baseline-review"
-    }
+      "reason": "baseline-review",
+    },
   ],
   "changedFiles": [
     {
@@ -536,25 +540,39 @@ WHERE to_path = 'src/auth.ts' AND to_type = 'file';
           "exported": true,
           "definitionSnippet": "export function doThing() {\\n  ...\\n}",
           "diffSnippets": [
-            "export function doThing() {\\n  return updatedValue;\\n}"
+            "export function doThing() {\\n  return updatedValue;\\n}",
           ],
           "callsites": [
-            { "file": "src/bar.ts", "range": { "start": { "line": 10, "column": 3 }, "end": { "line": 10, "column": 10 } } }
-          ]
-        }
-      ]
-    }
+            {
+              "file": "src/bar.ts",
+              "range": {
+                "start": { "line": 10, "column": 3 },
+                "end": { "line": 10, "column": 10 },
+              },
+            },
+          ],
+        },
+      ],
+    },
   ],
   "graphDelta": [
-    { "from": "src/foo.ts", "to": { "type": "file", "path": "src/bar.ts" }, "raw": "./bar" }
+    {
+      "from": "src/foo.ts",
+      "to": { "type": "file", "path": "src/bar.ts" },
+      "raw": "./bar",
+    },
   ],
   "candidateTests": [
-    { "file": "tests/foo.test.ts", "confidence": "high", "reason": "importsChanged" }
+    {
+      "file": "tests/foo.test.ts",
+      "confidence": "high",
+      "reason": "importsChanged",
+    },
   ],
   "diagnostics": {
     "missingFiles": [],
-    "symbolMappingParseFailures": []
-  }
+    "symbolMappingParseFailures": [],
+  },
 }
 ```
 
@@ -594,14 +612,22 @@ npx tsx src/cli.ts goto <file> <line> <column>
 
 ### Output formats
 
-* Plain `graph` outputs **file dependency graph only**:
+- Plain `graph` outputs **file dependency graph only**:
 
   ```json
   {
     "nodes": ["/abs/path/a.ts", "..."],
     "edges": [
-      { "from": "/abs/path/a.ts", "to": { "type": "external", "name": "react" }, "raw": "react" },
-      { "from": "/abs/path/a.ts", "to": { "type": "file", "path": "/abs/path/b.ts" }, "raw": "./b" }
+      {
+        "from": "/abs/path/a.ts",
+        "to": { "type": "external", "name": "react" },
+        "raw": "react"
+      },
+      {
+        "from": "/abs/path/a.ts",
+        "to": { "type": "file", "path": "/abs/path/b.ts" },
+        "raw": "./b"
+      }
     ]
   }
   ```
@@ -611,7 +637,6 @@ npx tsx src/cli.ts goto <file> <line> <column>
   - Use `--fast-graph` for faster JS/TS specifier extraction.
 
   When using `--symbols`:
-
   - Mermaid/DOT output includes:
     - File nodes and file-to-file edges (dependency graph)
     - Symbol nodes (definitions and import aliases)
@@ -620,7 +645,6 @@ npx tsx src/cli.ts goto <file> <line> <column>
   - Use `--symbols-only` to omit file nodes/edges and render only symbols.
 
   When using `--symbols-detailed`:
-
   - Adds symbol -> symbol edges labeled `uses` when a symbol’s body references another symbol (via local references, named/default imports, and namespace members).
   - Can be combined with `--symbols` to include both usage edges and import edges alongside file nodes.
   - Pruning options for large repos:
@@ -628,7 +652,7 @@ npx tsx src/cli.ts goto <file> <line> <column>
     - `--symbols-detailed-max-edges N`
     - `--symbols-detailed-members-only`
 
-- Compact JSON output:
+* Compact JSON output:
   - Use `--compact-json` to replace repeated file and symbol IDs with numeric indices.
   - Example:
     ```bash
@@ -642,7 +666,9 @@ npx tsx src/cli.ts goto <file> <line> <column>
     ```json
     {
       "files": ["/abs/path/a.ts", "..."],
-      "fileEdges": [{ "from": 0, "to": { "type": "file", "path": 1 }, "raw": "./b" }],
+      "fileEdges": [
+        { "from": 0, "to": { "type": "file", "path": 1 }, "raw": "./b" }
+      ],
       "symbols": [{ "id": 0, "file": 0, "name": "foo", "kind": "function" }],
       "symbolEdges": [{ "from": 0, "to": 1, "label": "uses" }],
       "symbolIdIndex": ["/abs/path/a.ts::foo::123", "..."]
@@ -666,6 +692,7 @@ npm run visualizer:start
 ```
 
 Viewer features:
+
 - Renders file dependency graphs with Sigma.js.
 - Supports both default JSON and compact JSON graph payloads.
 - Optional symbol node rendering for compact JSON payloads.
@@ -696,7 +723,7 @@ Viewer features:
   - Clear disk cache: delete `.codegraph-cache/index-v1`.
 
 - Threads:
-  - Use `--threads` to increase concurrency; typical sweet spot is CPU cores or cores*2.
+  - Use `--threads` to increase concurrency; typical sweet spot is CPU cores or cores\*2.
   - Very high values may become I/O bound; 8–32 is a good range on SSDs.
 
 - Native Tree-sitter acceleration:
@@ -748,13 +775,13 @@ Agent-tool wrappers expose the same control as a trailing runtime option, for ex
 For agents performing code reviews or making multiple queries, use sessions to maintain warm caches:
 
 ```ts
-import { createCodeReviewSession } from '@lzehrung/codegraph';
+import { createCodeReviewSession } from "@lzehrung/codegraph";
 
 // Create a session for a PR review
 const session = await createCodeReviewSession({
-  root: '/path/to/repo',
+  root: "/path/to/repo",
   buildOptions: {
-    cache: 'disk',
+    cache: "disk",
     useBloomFilters: true, // Default: faster reference scanning
   },
   timeout: 30 * 60 * 1000, // 30 minutes
@@ -762,19 +789,19 @@ const session = await createCodeReviewSession({
 
 // All operations share the same warm index
 const impact = await session.analyzeImpact({
-  provider: 'git',
-  base: 'main',
-  head: 'feature-branch',
+  provider: "git",
+  base: "main",
+  head: "feature-branch",
 });
 
 const refs = await session.findReferences({
-  file: '/path/to/file.ts',
+  file: "/path/to/file.ts",
   line: 10,
   column: 5,
 });
 
 const def = await session.goToDefinition({
-  file: '/path/to/file.ts',
+  file: "/path/to/file.ts",
   line: 15,
   column: 8,
 });
@@ -793,18 +820,18 @@ session.dispose();
 **Using presets for simpler configuration:**
 
 ```ts
-import { createCodeReviewSession } from '@lzehrung/codegraph';
+import { createCodeReviewSession } from "@lzehrung/codegraph";
 
 // Use a preset for automatic configuration
 const session = await createCodeReviewSession({
-  root: '/path/to/repo',
-  preset: 'code-review', // Auto-configures all options
+  root: "/path/to/repo",
+  preset: "code-review", // Auto-configures all options
 });
 
 // Or combine preset with custom options
 const customSession = await createCodeReviewSession({
-  root: '/path/to/repo',
-  preset: 'ci-fast',
+  root: "/path/to/repo",
+  preset: "ci-fast",
   buildOptions: {
     threads: 16, // Override preset's thread count
   },
@@ -820,22 +847,22 @@ const customSession = await createCodeReviewSession({
 **Managing multiple sessions:**
 
 ```ts
-import { SessionManager } from '@lzehrung/codegraph';
+import { SessionManager } from "@lzehrung/codegraph";
 
 const manager = new SessionManager();
 
 // Create sessions for different PRs or repos
-const pr1Session = await manager.getOrCreateSession('pr-123', {
-  root: '/path/to/repo',
+const pr1Session = await manager.getOrCreateSession("pr-123", {
+  root: "/path/to/repo",
 });
 
-const pr2Session = await manager.getOrCreateSession('pr-456', {
-  root: '/path/to/repo',
+const pr2Session = await manager.getOrCreateSession("pr-456", {
+  root: "/path/to/repo",
 });
 
 // Sessions are automatically reused if already initialized
-const sameSession = await manager.getOrCreateSession('pr-123', {
-  root: '/path/to/repo',
+const sameSession = await manager.getOrCreateSession("pr-123", {
+  root: "/path/to/repo",
 });
 // pr1Session === sameSession
 
@@ -851,28 +878,32 @@ const allStats = manager.getAllStats();
 Stream impact analysis results as they're discovered, allowing agents to start reasoning immediately:
 
 ```ts
-import { buildProjectIndex, analyzeImpactStreaming } from '@lzehrung/codegraph';
+import { buildProjectIndex, analyzeImpactStreaming } from "@lzehrung/codegraph";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
 
 // Stream results
 for await (const chunk of analyzeImpactStreaming(root, index, {
-  provider: 'git',
-  base: 'main',
-  head: 'feature-branch',
+  provider: "git",
+  base: "main",
+  head: "feature-branch",
 })) {
-  if (chunk.type === 'progress') {
+  if (chunk.type === "progress") {
     console.log(`${chunk.message}: ${chunk.current}/${chunk.total}`);
-  } else if (chunk.type === 'changedSymbol') {
+  } else if (chunk.type === "changedSymbol") {
     console.log(`Changed: ${chunk.symbol.name} in ${chunk.symbol.file}`);
     // Start reasoning about this symbol immediately
-  } else if (chunk.type === 'impactItem') {
-    console.log(`Impacted: ${chunk.item.file} (severity: ${chunk.item.severity})`);
+  } else if (chunk.type === "impactItem") {
+    console.log(
+      `Impacted: ${chunk.item.file} (severity: ${chunk.item.severity})`,
+    );
     // Process impact as it arrives
-  } else if (chunk.type === 'complete') {
-    console.log(`Analysis complete: ${chunk.summary.totalImpacted} files impacted`);
-  } else if (chunk.type === 'error') {
+  } else if (chunk.type === "complete") {
+    console.log(
+      `Analysis complete: ${chunk.summary.totalImpacted} files impacted`,
+    );
+  } else if (chunk.type === "error") {
     console.error(`Error: ${chunk.error}`);
   }
 }
@@ -881,15 +912,15 @@ for await (const chunk of analyzeImpactStreaming(root, index, {
 **Using streaming with sessions:**
 
 ```ts
-const session = await createCodeReviewSession({ root: '/path/to/repo' });
+const session = await createCodeReviewSession({ root: "/path/to/repo" });
 
 for await (const chunk of session.analyzeImpactStream({
-  provider: 'git',
-  base: 'main',
-  head: 'feature-branch',
+  provider: "git",
+  base: "main",
+  head: "feature-branch",
 })) {
   // Process chunks as they arrive
-  if (chunk.type === 'impactItem') {
+  if (chunk.type === "impactItem") {
     // Agent can start analyzing this file immediately
     await analyzeImpactedFile(chunk.item);
   }
@@ -901,24 +932,33 @@ for await (const chunk of session.analyzeImpactStream({
 Operations return partial results when some items fail, allowing agents to work with incomplete data:
 
 ```ts
-import { withPartialResults, summarizePartialResult } from '@lzehrung/codegraph';
+import {
+  withPartialResults,
+  summarizePartialResult,
+} from "@lzehrung/codegraph";
 
 // Process files with automatic error handling
-const files = ['file1.ts', 'file2.ts', 'file3.ts'];
-const result = await withPartialResults(files, async (file) => {
-  // Process file (may throw)
-  return await analyzeFile(file);
-}, {
-  continueOnError: true, // Keep going even if some fail
-  concurrency: 8,
-});
+const files = ["file1.ts", "file2.ts", "file3.ts"];
+const result = await withPartialResults(
+  files,
+  async (file) => {
+    // Process file (may throw)
+    return await analyzeFile(file);
+  },
+  {
+    continueOnError: true, // Keep going even if some fail
+    concurrency: 8,
+  },
+);
 
 // Check result status
-if (result.status === 'complete') {
-  console.log('✓ All files processed successfully');
-} else if (result.status === 'partial') {
+if (result.status === "complete") {
+  console.log("✓ All files processed successfully");
+} else if (result.status === "partial") {
   console.log(`⚠ Partial success: ${result.coverage * 100}% complete`);
-  console.log(`Succeeded: ${result.metadata?.succeeded}, Failed: ${result.metadata?.failed}`);
+  console.log(
+    `Succeeded: ${result.metadata?.succeeded}, Failed: ${result.metadata?.failed}`,
+  );
 
   // Still use partial data
   processResults(result.data);
@@ -928,7 +968,7 @@ if (result.status === 'complete') {
     console.error(`${error.target}: ${error.message}`);
   }
 } else {
-  console.error('✗ Operation failed completely');
+  console.error("✗ Operation failed completely");
 }
 
 // Get a human-readable summary
@@ -940,27 +980,36 @@ console.log(summarizePartialResult(result));
 Build full project index and go to definition:
 
 ```ts
-import { buildProjectIndex, goToDefinition } from '@lzehrung/codegraph';
+import { buildProjectIndex, goToDefinition } from "@lzehrung/codegraph";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
 
-const file = `${root}/tests/samples/monorepo/packages/pkg-b/src/index.js`.replace(/\\/g, '/');
+const file =
+  `${root}/tests/samples/monorepo/packages/pkg-b/src/index.js`.replace(
+    /\\/g,
+    "/",
+  );
 const res = await goToDefinition(index, { file, line: 21, column: 18 });
-if (res.status === 'ok') {
-  console.log('Def:', res.definition.file, res.definition.localName, res.definition.range);
+if (res.status === "ok") {
+  console.log(
+    "Def:",
+    res.definition.file,
+    res.definition.localName,
+    res.definition.range,
+  );
 }
 ```
 
 ### Incremental indexing
 
 ```ts
-import { buildProjectIndexIncremental } from '@lzehrung/codegraph';
+import { buildProjectIndexIncremental } from "@lzehrung/codegraph";
 
 const root = process.cwd();
 const incremental = await buildProjectIndexIncremental(root, {
-  gitBase: 'origin/main',
-  gitHead: 'HEAD',
+  gitBase: "origin/main",
+  gitHead: "HEAD",
 });
 ```
 
@@ -978,6 +1027,7 @@ docstring:"rate limit" auth
 ```
 
 Supported keys:
+
 - `kind` or `kinds` (comma-separated)
 - `name`
 - `file`
@@ -986,7 +1036,7 @@ Supported keys:
 Programmatic helpers:
 
 ```ts
-import { querySymbols, querySymbolNeighbors } from '@lzehrung/codegraph';
+import { querySymbols, querySymbolNeighbors } from "@lzehrung/codegraph";
 
 const hits = querySymbols(symbolGraph, {
   kinds: ["function"],
@@ -1010,12 +1060,12 @@ These functions are designed to be imported and used directly by agent codebases
 import {
   tool_getFileOverview,
   tool_findSymbol,
-  tool_impactJSON
-} from '@lzehrung/codegraph';
+  tool_impactJSON,
+} from "@lzehrung/codegraph";
 
 // 1. Get a Markdown summary of a file (Imports, Definitions with signatures/docstrings)
 // Useful for "reading" a file's structure before deciding to read the full content.
-const overview = await tool_getFileOverview(process.cwd(), 'src/utils.ts');
+const overview = await tool_getFileOverview(process.cwd(), "src/utils.ts");
 console.log(overview);
 // Output:
 // # Overview of src/utils.ts
@@ -1027,7 +1077,7 @@ console.log(overview);
 
 // 2. Find symbols by name (fuzzy search)
 // Useful for locating relevant code when the file path is unknown.
-const matches = await tool_findSymbol(process.cwd(), 'collectGraph');
+const matches = await tool_findSymbol(process.cwd(), "collectGraph");
 console.log(matches);
 // Output:
 // [{ name: 'collectGraph', kind: 'function', file: 'src/graphs.ts', line: 150 }, ...]
@@ -1035,34 +1085,45 @@ console.log(matches);
 // 3. Analyze PR impact programmatically
 // Returns a JSON report suitable for LLM consumption.
 const impact = await tool_impactJSON(process.cwd(), {
-  provider: 'git',
-  base: 'main',
-  head: 'feature-branch'
+  provider: "git",
+  base: "main",
+  head: "feature-branch",
 });
-if (impact.status === 'ok') {
-  console.log('Impacted files:', impact.report.impacted.map(i => i.file));
+if (impact.status === "ok") {
+  console.log(
+    "Impacted files:",
+    impact.report.impacted.map((i) => i.file),
+  );
 }
 ```
 
 ### Raw SQL from code (advanced)
 
 ```ts
-import { queryGraphSqliteRaw } from '@lzehrung/codegraph';
+import { queryGraphSqliteRaw } from "@lzehrung/codegraph";
 
-const result = await queryGraphSqliteRaw('./codegraph.sqlite', `
+const result = await queryGraphSqliteRaw(
+  "./codegraph.sqlite",
+  `
   SELECT name, file FROM symbols WHERE kind = 'class' LIMIT 10;
-`);
+`,
+);
 console.log(result.columns, result.rows);
 ```
 
 Find references:
 
 ```ts
-import { findReferences } from '@lzehrung/codegraph';
+import { findReferences } from "@lzehrung/codegraph";
 
 const refs = await findReferences(index, { file, line: 21, column: 18 });
-if (refs.status === 'ok') {
-  console.log('Refs:', refs.references.map(r => `${r.file}:${r.range.start.line}:${r.range.start.column}`));
+if (refs.status === "ok") {
+  console.log(
+    "Refs:",
+    refs.references.map(
+      (r) => `${r.file}:${r.range.start.line}:${r.range.start.column}`,
+    ),
+  );
 }
 ```
 
@@ -1071,7 +1132,7 @@ Get dependency graph in-memory and iterate edges:
 `listProjectFiles` defaults to source files plus common project manifests and lockfiles across supported languages (for example `package.json`, `requirements.txt`, `pyproject.toml`, and `Cargo.toml`). Pass custom glob patterns if you need different coverage.
 
 ```ts
-import { listProjectFiles } from '@lzehrung/codegraph';
+import { listProjectFiles } from "@lzehrung/codegraph";
 
 const files = await listProjectFiles(root);
 const tsFilesOnly = await listProjectFiles(root, undefined, {
@@ -1081,14 +1142,16 @@ const tsFilesOnly = await listProjectFiles(root, undefined, {
 const includeIgnoredFiles = await listProjectFiles(root, undefined, {
   useGitignore: false,
 });
-const manifests = files.filter((file) => /(?:package\.json|pyproject\.toml|Cargo\.toml)$/.test(file));
+const manifests = files.filter((file) =>
+  /(?:package\.json|pyproject\.toml|Cargo\.toml)$/.test(file),
+);
 console.log(manifests);
 ```
 
 Discover project files with metadata (type, role, project root, optional name):
 
 ```ts
-import { discoverProjectFiles } from '@lzehrung/codegraph';
+import { discoverProjectFiles } from "@lzehrung/codegraph";
 
 const projectFiles = await discoverProjectFiles(root);
 const named = projectFiles.filter((file) => file.name);
@@ -1096,13 +1159,15 @@ console.log(named);
 ```
 
 ```ts
-import { listProjectFiles, collectGraph } from '@lzehrung/codegraph';
+import { listProjectFiles, collectGraph } from "@lzehrung/codegraph";
 
 const files = await listProjectFiles(root);
 const graph = await collectGraph(root, files);
 
-type EdgeTo = { type: 'file'; path: string } | { type: 'external'; name: string };
-const toRef = (t: EdgeTo) => (t.type === 'file' ? t.path : t.name);
+type EdgeTo =
+  | { type: "file"; path: string }
+  | { type: "external"; name: string };
+const toRef = (t: EdgeTo) => (t.type === "file" ? t.path : t.name);
 
 for (const e of graph.edges) {
   console.log(`${e.from} -> ${toRef(e.to)}  (${e.raw})`);
@@ -1112,7 +1177,10 @@ for (const e of graph.edges) {
 Build project index from explicit file list (multi-root):
 
 ```ts
-import { listProjectFiles, buildProjectIndexFromFiles } from '@lzehrung/codegraph';
+import {
+  listProjectFiles,
+  buildProjectIndexFromFiles,
+} from "@lzehrung/codegraph";
 
 const tsRoot = `${root}/tests/samples/typescript`;
 const jsRoot = `${root}/tests/samples/javascript`;
@@ -1121,14 +1189,17 @@ const files = [
   ...(await listProjectFiles(jsRoot)),
 ];
 
-const index = await buildProjectIndexFromFiles(root, Array.from(new Set(files)));
+const index = await buildProjectIndexFromFiles(
+  root,
+  Array.from(new Set(files)),
+);
 console.log({ files: index.byFile.size, edges: index.graph.edges.length });
 ```
 
 Produce a Mermaid diagram string (for UI or chat rendering):
 
 ```ts
-import { graphToMermaid } from '@lzehrung/codegraph';
+import { graphToMermaid } from "@lzehrung/codegraph";
 
 const mermaid = graphToMermaid(graph);
 console.log(mermaid);
@@ -1137,7 +1208,13 @@ console.log(mermaid);
 Simple wrappers as "LLM tools" (no HTTP/MCP), returning JSONable payloads:
 
 ```ts
-import { listProjectFiles, collectGraph, buildProjectIndex, goToDefinition, findReferences } from '@lzehrung/codegraph';
+import {
+  listProjectFiles,
+  collectGraph,
+  buildProjectIndex,
+  goToDefinition,
+  findReferences,
+} from "@lzehrung/codegraph";
 
 export async function tool_graphJSON(root: string) {
   const files = await listProjectFiles(root);
@@ -1145,20 +1222,39 @@ export async function tool_graphJSON(root: string) {
   return { nodes: [...g.nodes], edges: g.edges };
 }
 
-export async function tool_goto(root: string, file: string, line: number, column: number) {
+export async function tool_goto(
+  root: string,
+  file: string,
+  line: number,
+  column: number,
+) {
   const index = await buildProjectIndex(root);
-  return await goToDefinition(index, { file: file.replace(/\\/g, '/'), line, column });
+  return await goToDefinition(index, {
+    file: file.replace(/\\/g, "/"),
+    line,
+    column,
+  });
 }
 
-export async function tool_refs(root: string, file: string, line: number, column: number) {
+export async function tool_refs(
+  root: string,
+  file: string,
+  line: number,
+  column: number,
+) {
   const index = await buildProjectIndex(root);
-  return await findReferences(index, { file: file.replace(/\\/g, '/'), line, column });
+  return await findReferences(index, {
+    file: file.replace(/\\/g, "/"),
+    line,
+    column,
+  });
 }
 ```
 
 ### Agent-friendly symbol handles (no line/column)
 
 Use stable handles instead of cursor positions. A handle is either:
+
 - `${file}::${localName}::${startIndex}` for a definition, or
 - `${file}::${alias}::import` for an import alias (named/default/namespace).
 
@@ -1169,18 +1265,22 @@ import {
   goToDefinitionById,
   findReferencesById,
   symbolId,
-} from '@lzehrung/codegraph';
+} from "@lzehrung/codegraph";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
 
 // Enumerate symbols in a file, including import aliases
-const file = `${root}/tests/samples/monorepo/packages/pkg-b/src/index.js`.replace(/\\/g, '/');
+const file =
+  `${root}/tests/samples/monorepo/packages/pkg-b/src/index.js`.replace(
+    /\\/g,
+    "/",
+  );
 const items = listSymbols(index, { file, includeImports: true });
 // Items include: { id, file, name, kind, range, docstring }
 
 // Pick a handle (e.g., for alias "aHelper" or a local def)
-const handle = items.find(i => i.name === 'aHelper')?.id!;
+const handle = items.find((i) => i.name === "aHelper")?.id!;
 
 // Go to definition from the handle
 const defRes = await goToDefinitionById(index, handle);
@@ -1195,17 +1295,17 @@ const refsRes = await findReferencesById(index, handle);
 Analyze PR impact from git diff:
 
 ```ts
-import { buildProjectIndex, analyzeImpactFromDiff } from '@lzehrung/codegraph';
+import { buildProjectIndex, analyzeImpactFromDiff } from "@lzehrung/codegraph";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
 
 // Analyze impact from git commits
 const report = await analyzeImpactFromDiff(root, index, {
-  provider: 'git',
-  base: 'main',
-  head: 'feature-branch',
-  ignoreGlobs: ['**/package-lock.json']
+  provider: "git",
+  base: "main",
+  head: "feature-branch",
+  ignoreGlobs: ["**/package-lock.json"],
 });
 
 if (report.warning) {
@@ -1215,11 +1315,15 @@ if (report.warning) {
 console.log(`Changed symbols: ${report.changedSymbols.length}`);
 console.log(`Impacted files: ${report.impacted.length}`);
 for (const item of report.impacted.slice(0, 5)) {
-  console.log(`${item.file}: ${item.symbols.join(', ')} (${(item.severity * 100).toFixed(1)}% severity)`);
+  console.log(
+    `${item.file}: ${item.symbols.join(", ")} (${(item.severity * 100).toFixed(1)}% severity)`,
+  );
   // Access reference contexts if requested
   if (item.refs) {
     for (const ref of item.refs.slice(0, 2)) {
-      console.log(`  Reference at ${ref.range.start.line}:${ref.range.start.column}:`);
+      console.log(
+        `  Reference at ${ref.range.start.line}:${ref.range.start.column}:`,
+      );
       console.log(`    ${ref.context}`);
     }
   }
@@ -1231,35 +1335,35 @@ Analyze PR impact with reference contexts:
 ```ts
 // Include line context snippets for references
 const reportWithLineContext = await analyzeImpactFromDiff(root, index, {
-  provider: 'git',
-  base: 'main',
-  head: 'feature-branch',
-  refContext: 'line',  // Include ±5 lines around each reference
-  refContextLines: 3    // Override default of 5 lines
+  provider: "git",
+  base: "main",
+  head: "feature-branch",
+  refContext: "line", // Include ±5 lines around each reference
+  refContextLines: 3, // Override default of 5 lines
 });
 
 // Include block context snippets for references
 const reportWithBlockContext = await analyzeImpactFromDiff(root, index, {
-  provider: 'git',
-  base: 'main',
-  head: 'feature-branch',
-  refContext: 'block',      // Include enclosing function/class
-  refBlockMaxLines: 30      // Limit to 30 lines (default: 60)
+  provider: "git",
+  base: "main",
+  head: "feature-branch",
+  refContext: "block", // Include enclosing function/class
+  refBlockMaxLines: 30, // Limit to 30 lines (default: 60)
 });
 ```
 
 Agent-friendly tool wrapper (returns JSON-serializable results):
 
 ```ts
-import { tool_impactJSON, tool_impactFromDiffText } from '@lzehrung/codegraph';
+import { tool_impactJSON, tool_impactFromDiffText } from "@lzehrung/codegraph";
 
 // Direct API call
 const result = await tool_impactJSON(root, {
-  provider: 'raw',
-  diffText: `diff --git a/utils.ts b/utils.ts\n...`
+  provider: "raw",
+  diffText: `diff --git a/utils.ts b/utils.ts\n...`,
 });
 
-if (result.status === 'ok') {
+if (result.status === "ok") {
   // Use result.report for analysis
   console.log(result.report);
 }
@@ -1270,31 +1374,38 @@ if (result.status === 'ok') {
 For backend development teams, here are common patterns for LLM agents reviewing PRs:
 
 #### 1. **API Route Impact Assessment**
+
 ```ts
-import { analyzeImpactFromDiff, collectImpactContext, listCandidateTestFiles } from '@lzehrung/codegraph';
+import {
+  analyzeImpactFromDiff,
+  collectImpactContext,
+  listCandidateTestFiles,
+} from "@lzehrung/codegraph";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
 
 // Get impact report with enhanced context
 const impact = await analyzeImpactFromDiff(root, index, {
-  provider: 'git',
-  base: 'main',
-  head: 'feature-branch',
-  depth: 2,  // Include transitive dependencies
-  compact: true  // Use compact format for efficiency
+  provider: "git",
+  base: "main",
+  head: "feature-branch",
+  depth: 2, // Include transitive dependencies
+  compact: true, // Use compact format for efficiency
 });
 
 // Focus on API routes and controllers
-const apiRoutes = impact.impacted.filter(item =>
-  item.file.includes('routes') ||
-  item.file.includes('controllers') ||
-  item.file.includes('api')
+const apiRoutes = impact.impacted.filter(
+  (item) =>
+    item.file.includes("routes") ||
+    item.file.includes("controllers") ||
+    item.file.includes("api"),
 );
 
 // Check for breaking changes
-const breakingChanges = impact.changedSymbols.filter(symbol =>
-  symbol.exported && symbol.explain?.hints?.includes('signatureChanged')
+const breakingChanges = impact.changedSymbols.filter(
+  (symbol) =>
+    symbol.exported && symbol.explain?.hints?.includes("signatureChanged"),
 );
 
 console.log(`API routes impacted: ${apiRoutes.length}`);
@@ -1302,26 +1413,28 @@ console.log(`Breaking changes: ${breakingChanges.length}`);
 ```
 
 #### 2. **Database Schema Impact Analysis**
+
 ```ts
 // Analyze schema/model changes
-const schemaChanges = impact.changedSymbols.filter(symbol =>
-  symbol.file.includes('models') ||
-  symbol.file.includes('schema') ||
-  symbol.file.includes('migrations')
+const schemaChanges = impact.changedSymbols.filter(
+  (symbol) =>
+    symbol.file.includes("models") ||
+    symbol.file.includes("schema") ||
+    symbol.file.includes("migrations"),
 );
 
 // Get broader context for schema changes
 if (schemaChanges.length > 0) {
   const context = await collectImpactContext(
     index,
-    impact.impacted.map(i => i.file),
-    impact.changedSymbols.map(s => s.id),
-    3  // 3-hop context for data layer changes
+    impact.impacted.map((i) => i.file),
+    impact.changedSymbols.map((s) => s.id),
+    3, // 3-hop context for data layer changes
   );
 
   // Find services that might need migration logic
-  const affectedServices = context.symbolNeighbors.filter(n =>
-    n.file.includes('services') || n.file.includes('repositories')
+  const affectedServices = context.symbolNeighbors.filter(
+    (n) => n.file.includes("services") || n.file.includes("repositories"),
   );
 
   console.log(`Services needing migration review: ${affectedServices.length}`);
@@ -1329,49 +1442,56 @@ if (schemaChanges.length > 0) {
 ```
 
 #### 3. **Test Coverage Validation**
+
 ```ts
 // Find candidate tests that might need updates
 const candidateTests = listCandidateTestFiles(
   index,
-  impact.changedFiles.map(f => f.file),
-  impact.changedSymbols.map(s => s.id),
+  impact.changedFiles.map((f) => f.file),
+  impact.changedSymbols.map((s) => s.id),
   {
-    testPatterns: ['test', 'spec', '__tests__', '.test.'],  // Custom patterns
-    maxCandidates: 20
-  }
+    testPatterns: ["test", "spec", "__tests__", ".test."], // Custom patterns
+    maxCandidates: 20,
+  },
 );
 
 // Prioritize high-confidence test candidates
-const highPriorityTests = candidateTests.filter(t => t.confidence === 'high');
-const mediumPriorityTests = candidateTests.filter(t => t.confidence === 'medium');
+const highPriorityTests = candidateTests.filter((t) => t.confidence === "high");
+const mediumPriorityTests = candidateTests.filter(
+  (t) => t.confidence === "medium",
+);
 
 console.log(`High-priority tests to review: ${highPriorityTests.length}`);
 console.log(`Medium-priority tests to check: ${mediumPriorityTests.length}`);
 ```
 
 #### 4. **Security-Focused Review**
+
 ```ts
-import { textGrep } from '@lzehrung/codegraph';
+import { textGrep } from "@lzehrung/codegraph";
 
 // Scan changed files for security patterns
 const securityPatterns = [
-  'exec\\(|eval\\(|spawn\\(',  // Command execution
-  'password|secret|key.*=',   // Credential storage
-  'sql.*\\+|\\$\\{.*\\}',      // SQL injection risks
-  'innerHTML|outerHTML',      // XSS risks
+  "exec\\(|eval\\(|spawn\\(", // Command execution
+  "password|secret|key.*=", // Credential storage
+  "sql.*\\+|\\$\\{.*\\}", // SQL injection risks
+  "innerHTML|outerHTML", // XSS risks
 ];
 
-const securityFindings: Array<{file: string, pattern: string, line: number}> = [];
+const securityFindings: Array<{ file: string; pattern: string; line: number }> =
+  [];
 
 for (const changedFile of impact.changedFiles) {
   for (const pattern of securityPatterns) {
     try {
-      const matches = await textGrep(root, pattern, [changedFile.file], { maxHits: 200 });
+      const matches = await textGrep(root, pattern, [changedFile.file], {
+        maxHits: 200,
+      });
       for (const match of matches) {
         securityFindings.push({
           file: match.file,
           pattern,
-          line: match.line
+          line: match.line,
         });
       }
     } catch (e) {
@@ -1387,18 +1507,21 @@ if (securityFindings.length > 0) {
 ```
 
 #### 5. **Configuration and Environment Impact**
+
 ```ts
 // Check for configuration changes
-const configChanges = impact.impacted.filter(item =>
-  item.file.includes('config') ||
-  item.file.includes('env') ||
-  item.file.includes('settings')
+const configChanges = impact.impacted.filter(
+  (item) =>
+    item.file.includes("config") ||
+    item.file.includes("env") ||
+    item.file.includes("settings"),
 );
 
 // Validate environment variable usage
-const envUsage = impact.changedSymbols.filter(symbol =>
-  symbol.name.toLowerCase().includes('env') ||
-  symbol.name.toLowerCase().includes('config')
+const envUsage = impact.changedSymbols.filter(
+  (symbol) =>
+    symbol.name.toLowerCase().includes("env") ||
+    symbol.name.toLowerCase().includes("config"),
 );
 
 if (configChanges.length > 0 || envUsage.length > 0) {
@@ -1407,23 +1530,29 @@ if (configChanges.length > 0 || envUsage.length > 0) {
 ```
 
 #### 6. **Performance Regression Detection**
+
 ```ts
 // Look for algorithm changes in performance-critical code
-const performanceCritical = impact.changedSymbols.filter(symbol =>
-  symbol.file.includes('utils') ||
-  symbol.file.includes('algorithms') ||
-  symbol.kind === 'function' && symbol.explain?.hints?.includes('signatureChanged')
+const performanceCritical = impact.changedSymbols.filter(
+  (symbol) =>
+    symbol.file.includes("utils") ||
+    symbol.file.includes("algorithms") ||
+    (symbol.kind === "function" &&
+      symbol.explain?.hints?.includes("signatureChanged")),
 );
 
 // Check for new database queries
 const queryPatterns = [
-  'SELECT|INSERT|UPDATE|DELETE',  // SQL queries
-  'find\\(|findOne\\(|aggregate\\(', // MongoDB queries
-  'query\\(|execute\\('              // General query patterns
+  "SELECT|INSERT|UPDATE|DELETE", // SQL queries
+  "find\\(|findOne\\(|aggregate\\(", // MongoDB queries
+  "query\\(|execute\\(", // General query patterns
 ];
 
 for (const pattern of queryPatterns) {
-  const matches = await textGrep(root, pattern, undefined, { maxHits: 1, ignoreCase: true });
+  const matches = await textGrep(root, pattern, undefined, {
+    maxHits: 1,
+    ignoreCase: true,
+  });
   if (matches.length > 0) {
     console.log(`Database queries modified - review performance impact`);
     break;
@@ -1438,34 +1567,28 @@ These recipes combine the library's core capabilities (dependency graphs, symbol
 ## How it works (high level)
 
 1. **Language adapters** expose:
-
-   * file extensions,
-   * Tree-sitter grammar,
-   * a few node-type helpers,
-   * 4 small **queries** (imports, exports, locals, importBindings),
-   * definition classification and scope behavior.
+   - file extensions,
+   - Tree-sitter grammar,
+   - a few node-type helpers,
+   - 4 small **queries** (imports, exports, locals, importBindings),
+   - definition classification and scope behavior.
 
 2. **Indexing**
-
-   * TypeScript owns the shared indexing pipeline, resolution logic, and output shapes.
-   * The parser/query hot path stays on Tree-sitter for every supported language.
-   * When available, the native addon inside `@lzehrung/codegraph-native` runs those Tree-sitter parses and queries natively, then returns plain capture data to TypeScript.
+   - TypeScript owns the shared indexing pipeline, resolution logic, and output shapes.
+   - The parser/query hot path stays on Tree-sitter for every supported language.
+   - When available, the native addon inside `@lzehrung/codegraph-native` runs those Tree-sitter parses and queries natively, then returns plain capture data to TypeScript.
 
 3. **Graph**
-
-   * For each file, collect module specifiers and resolve:
-
-     * path-like specifiers -> best-effort file resolution (JS/TS).
-     * otherwise, **external** nodes.
+   - For each file, collect module specifiers and resolve:
+     - path-like specifiers -> best-effort file resolution (JS/TS).
+     - otherwise, **external** nodes.
 
 4. **Navigation**
-
-   * **goToDefinition** checks local scope first, then imported bindings; understands `ns.member` for namespace imports.
-   * **findReferences** builds per-file scope (module -> function -> block), seeds imports as bindings, and records occurrences. It also resolves through imports and namespace members.
+   - **goToDefinition** checks local scope first, then imported bindings; understands `ns.member` for namespace imports.
+   - **findReferences** builds per-file scope (module -> function -> block), seeds imports as bindings, and records occurrences. It also resolves through imports and namespace members.
 
 5. **AST grep**
-
-   * Runs any Tree-sitter query across matched files and prints hits as `file:line:col: @capture: snippet`.
+   - Runs any Tree-sitter query across matched files and prints hits as `file:line:col: @capture: snippet`.
 
 ---
 
@@ -1476,17 +1599,17 @@ We use a **unified language definition** system that powers both the dependency 
 To add a new language (e.g., Go):
 
 1.  **Create a definition file**:
-    *   Add `src/languages/definitions/go.ts`.
-    *   Implement the `LanguageDefinition` interface (grammar, extensions, structure, graph queries).
-    *   This single definition auto-generates the Tree-sitter queries for chunking.
+    - Add `src/languages/definitions/go.ts`.
+    - Implement the `LanguageDefinition` interface (grammar, extensions, structure, graph queries).
+    - This single definition auto-generates the Tree-sitter queries for chunking.
 
 2.  **Register the language**:
-    *   Add it to `src/languages.ts` (for the graph).
-    *   Add it to `src/bootstrap/treeSitterLanguages.ts` (for chunking).
+    - Add it to `src/languages.ts` (for the graph).
+    - Add it to `src/bootstrap/treeSitterLanguages.ts` (for chunking).
 
 3.  **Add tests**:
-    *   Add a sample file: `tests/languages/samples/go.sample.go`.
-    *   Add a test definition: `tests/languages/go.test.ts`.
+    - Add a sample file: `tests/languages/samples/go.sample.go`.
+    - Add a test definition: `tests/languages/go.test.ts`.
 
 You can keep it **80/20** first; the core system degrades gracefully (unresolvable edges become `external`).
 
@@ -1496,17 +1619,17 @@ You can keep it **80/20** first; the core system degrades gracefully (unresolvab
 
 The core is intentionally **pure** and **test-friendly**:
 
-* `collectLocalsAndExportsFromSource(file, source, support, lang)`
-* `collectModuleSpecifiersFromSource(support, lang, source)`
-* `buildScopeIndexFromSource(file, source, support, lang, imports)`
-* `resolveExport(index, file, exportedName)`
-* `goToDefinition(index, req)`
-* `findReferences(index, req)`
+- `collectLocalsAndExportsFromSource(file, source, support, lang)`
+- `collectModuleSpecifiersFromSource(support, lang, source)`
+- `buildScopeIndexFromSource(file, source, support, lang, imports)`
+- `resolveExport(index, file, exportedName)`
+- `goToDefinition(index, req)`
+- `findReferences(index, req)`
 
 Strategy:
 
-* Feed **inline strings** as source and assert on returned JSONable structures.
-* For end-to-end tests, create a small temp directory with a few files and run the CLI with `tsx`.
+- Feed **inline strings** as source and assert on returned JSONable structures.
+- For end-to-end tests, create a small temp directory with a few files and run the CLI with `tsx`.
 
 ---
 
@@ -1552,6 +1675,7 @@ npm run release:minor -- --package @lzehrung/codegraph-native
 ```
 
 The release scripts:
+
 - Detect package changes independently for:
   - `@lzehrung/codegraph`
   - `@lzehrung/codegraph-native`
