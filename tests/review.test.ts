@@ -434,6 +434,45 @@ describe("Review report", () => {
     });
   });
 
+  it("does not classify every file as a test when the project root path contains tests", async () => {
+    const tempParent = path.join(process.cwd(), "tests", ".tmp");
+    await fsp.mkdir(tempParent, { recursive: true });
+    const root = await fsp.mkdtemp(path.join(tempParent, "dg-review-root-tests-"));
+    try {
+      const srcDir = path.join(root, "src");
+      await fsp.mkdir(srcDir, { recursive: true });
+      const libFile = path.join(srcDir, "lib.ts");
+      await fsp.writeFile(libFile, `export const gone = 1;\n`, "utf8");
+      await fsp.writeFile(
+        path.join(root, "main.ts"),
+        `import { gone } from "./src/lib";\nexport const seen = gone;\n`,
+        "utf8",
+      );
+
+      await buildProjectIndex(root, { cache: "memory" });
+      await fsp.unlink(libFile);
+
+      const report = await buildReviewReport(root, {
+        files: [libFile],
+        cache: "memory",
+        diffText: [
+          "diff --git a/src/lib.ts b/src/lib.ts",
+          "deleted file mode 100644",
+          "index 1111111..0000000",
+          "--- a/src/lib.ts",
+          "+++ /dev/null",
+          "@@ -1 +0,0 @@",
+          "-export const gone = 1;",
+          "",
+        ].join("\n"),
+      });
+
+      expect(report.candidateTests).toHaveLength(0);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("includes importer edges for deleted files in graphDelta", async () => {
     const root = await mkTmpDir("dg-review-deleted-edges-");
     const srcDir = path.join(root, "src");

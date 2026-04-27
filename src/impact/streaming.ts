@@ -10,7 +10,10 @@ import { locateChangedSymbolsWithLines } from "./map.js";
 import { analyzeImpact } from "./analyzer.js";
 import pm from "picomatch";
 import { discoverProjectFiles, type ProjectFileInfo } from "../util.js";
-import { normalizeImpactFilePath } from "./path.js";
+import {
+  normalizeImpactFilePath,
+  toImpactReportFilePath,
+} from "./path.js";
 
 export type ImpactStreamChunk =
   | { type: "projectFiles"; files: ProjectFileInfo[] }
@@ -77,6 +80,8 @@ export async function* analyzeImpactStreaming(
   options: ImpactOptions,
 ): AsyncGenerator<ImpactStreamChunk> {
   try {
+    const displayFile = (filePath: string): string =>
+      toImpactReportFilePath(projectRoot, filePath);
     const projectFiles =
       index.projectFiles ?? (await discoverProjectFiles(projectRoot));
     yield { type: "projectFiles", files: projectFiles };
@@ -127,7 +132,13 @@ export async function* analyzeImpactStreaming(
           ? symbols.filter((symbol) => symbol.exported)
           : symbols;
       for (const symbol of emittedSymbols) {
-        yield { type: "changedSymbol", symbol };
+        yield {
+          type: "changedSymbol",
+          symbol: {
+            ...symbol,
+            file: displayFile(symbol.file),
+          },
+        };
         changedSymbols.push(symbol);
       }
     }
@@ -165,7 +176,10 @@ export async function* analyzeImpactStreaming(
       emittedSignatures.add(key);
       impactQueue.push({
         type: "impactItem",
-        item,
+        item: {
+          ...item,
+          file: displayFile(item.file),
+        },
         ...(partial ? { partial: true } : {}),
       });
     };

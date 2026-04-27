@@ -22,10 +22,15 @@ import type {
 } from "./types.js";
 import { buildSymbolGraphDetailed, findDetailedCycles } from "../graphs.js";
 import {
-  normalizePath,
   discoverProjectFiles,
+  normalizePath,
   resolveFilePathFromRoot,
 } from "../util.js";
+import {
+  createGraphFileResolver,
+  normalizeImpactFileChange,
+  toImpactReportFilePath,
+} from "./path.js";
 
 export async function buildImpactReport(
   projectRoot: string,
@@ -37,13 +42,17 @@ export async function buildImpactReport(
   options: Partial<ImpactOptions> & { warning?: string | undefined } = {},
   diagnostics?: ImpactDiagnostics,
 ): Promise<ImpactReport | CompactImpactReport> {
+  const normalizedDiffFiles = diffFiles.map((change) =>
+    normalizeImpactFileChange(projectRoot, change),
+  );
+  const displayFile = (file: FileId): FileId =>
+    toImpactReportFilePath(projectRoot, file);
   const exportSummary = buildExportSummary(changedSymbols);
   const reexportChains = buildReexportChains(index, changedSymbols);
   const topImpacts = buildTopImpacts(impactedItems);
   const surfaceArea = buildSurfaceArea(
-    projectRoot,
     index,
-    diffFiles,
+    normalizedDiffFiles,
     impactedItems,
   );
   const projectFiles =
@@ -62,8 +71,8 @@ export async function buildImpactReport(
   };
 
   // Build changedFiles summary
-  const changedFiles = diffFiles.map((fileChange) => ({
-    file: fileChange.path,
+  const changedFiles = normalizedDiffFiles.map((fileChange) => ({
+    file: displayFile(fileChange.path),
     hunks: fileChange.hunks.map((hunk) => newFileRangeForHunk(hunk)),
   }));
 
@@ -73,7 +82,7 @@ export async function buildImpactReport(
   const symbolCoupling = new Map<string, number>();
 
   const relevantFiles = new Set<FileId>();
-  for (const fileChange of diffFiles) relevantFiles.add(fileChange.path);
+  for (const fileChange of normalizedDiffFiles) relevantFiles.add(fileChange.path);
   for (const symbol of changedSymbols) relevantFiles.add(symbol.file);
   for (const item of impactedItems) relevantFiles.add(item.file);
 
@@ -136,10 +145,13 @@ export async function buildImpactReport(
     }
   }
 
-  const clusters = buildClusters(changedFiles, impactedItems, fileEdges);
+  const changedFileEntries = normalizedDiffFiles.map((fileChange) => ({
+    file: normalizePath(fileChange.path),
+  }));
+  const clusters = buildClusters(changedFileEntries, impactedItems, fileEdges);
   const cycles = buildImpactCycles(
     index,
-    changedFiles,
+    changedFileEntries,
     impactedItems,
     symbolCoupling,
   );
@@ -147,7 +159,6 @@ export async function buildImpactReport(
   // Check if compact format is requested
   if (options.compact) {
     const report = buildCompactReport(
-      index,
       changedFiles,
       changedSymbols,
       impactedItems,
@@ -161,6 +172,7 @@ export async function buildImpactReport(
       fileEdges,
       symbolEdges,
       projectFiles,
+      displayFile,
     );
     if (options.warning) report.warning = options.warning;
     if (diagnostics) report.diagnostics = diagnostics;
@@ -170,17 +182,91 @@ export async function buildImpactReport(
   const report: ImpactReport = {
     projectFiles,
     changedFiles,
-    changedSymbols,
-    impacted: impactedItems,
-    ...(suggestions.length > 0 ? { suggestions } : {}),
-    ...(exportSummary.length > 0 ? { exportSummary } : {}),
-    ...(reexportChains ? { reexportChains } : {}),
-    ...(topImpacts.length > 0 ? { topImpacts } : {}),
-    surfaceArea,
-    clusters,
-    ...(cycles.length > 0 ? { cycles } : {}),
+    changedSymbols: changedSymbols.map((symbol) => ({
+      ...symbol,
+      file: displayFile(symbol.file),
+    })),
+    impacted: impactedItems.map((item) => ({
+      ...item,
+      file: displayFile(item.file),
+    })),
+    ...(suggestions.length > 0
+      ? {
+          suggestions: suggestions.map((suggestion) => ({
+            ...suggestion,
+            file: displayFile(suggestion.file),
+            ...(suggestion.relatedFile
+              ? { relatedFile: displayFile(suggestion.relatedFile) }
+              : {}),
+          })),
+        }
+      : {}),
+    ...(exportSummary.length > 0
+      ? {
+          exportSummary: exportSummary.map((entry) => ({
+            ...entry,
+            file: displayFile(entry.file),
+          })),
+        }
+      : {}),
+    ...(reexportChains
+      ? {
+          reexportChains: {
+            chains: reexportChains.chains.map((entry) => ({
+              ...entry,
+              file: displayFile(entry.file),
+              paths: entry.paths.map((pathChain) =>
+                pathChain.map((file) => displayFile(file)),
+              ),
+            })),
+          },
+        }
+      : {}),
+    ...(topImpacts.length > 0
+      ? {
+          topImpacts: topImpacts.map((item) => ({
+            ...item,
+            file: displayFile(item.file),
+          })),
+        }
+      : {}),
+    surfaceArea: {
+      files: surfaceArea.files.map((item) => ({
+        ...item,
+        file: displayFile(item.file),
+      })),
+      topFanIn: surfaceArea.topFanIn.map((file) => displayFile(file)),
+      topFanOut: surfaceArea.topFanOut.map((file) => displayFile(file)),
+    },
+    clusters: clusters.map((cluster) => ({
+      ...cluster,
+      files: cluster.files.map((file) => displayFile(file)),
+      changedFiles: cluster.changedFiles.map((file) => displayFile(file)),
+    })),
+    ...(cycles.length > 0
+      ? {
+          cycles: cycles.map((cycle) => ({
+            ...cycle,
+            files: cycle.files.map((file) => displayFile(file)),
+            entryEdges: cycle.entryEdges.map((edge) => ({
+              ...edge,
+              from: displayFile(edge.from),
+              to: displayFile(edge.to),
+            })),
+            internalEdges: cycle.internalEdges.map((edge) => ({
+              ...edge,
+              from: displayFile(edge.from),
+              to: displayFile(edge.to),
+            })),
+          })),
+        }
+      : {}),
     graph: {
-      fileEdges,
+      fileEdges: fileEdges.map((edge) => ({
+        ...edge,
+        from: displayFile(edge.from),
+        to: displayFile(edge.to),
+      })),
       symbolEdges,
     },
   };
@@ -195,20 +281,7 @@ function buildImpactCycles(
   impactedItems: ImpactItem[],
   symbolCoupling: Map<string, number>,
 ): ImpactCycle[] {
-  const graphNodes = Array.from(index.graph.nodes);
-  const graphNodeSet = new Set(graphNodes);
-  const canonicalizeFile = (file: FileId): FileId => {
-    if (graphNodeSet.has(file)) return file;
-    const normalizedPath = file.replace(/\\/g, "/");
-    const normalizedSuffix = normalizedPath.startsWith("/")
-      ? normalizedPath.slice(1)
-      : normalizedPath;
-    const match = graphNodes.find(
-      (node) =>
-        node === normalizedPath || node.endsWith(`/${normalizedSuffix}`),
-    );
-    return match ?? file;
-  };
+  const canonicalizeFile = createGraphFileResolver(index.graph.nodes);
 
   const changedSet = new Set(
     changedFiles.map((entry) => canonicalizeFile(entry.file)),
@@ -239,7 +312,6 @@ function buildImpactCycles(
 }
 
 function buildCompactReport(
-  index: ProjectIndex,
   changedFiles: Array<{
     file: FileId;
     hunks: Array<{ start: number; end: number }>;
@@ -260,58 +332,59 @@ function buildCompactReport(
   }>,
   symbolEdges: Array<{ from: number; to: number; label: string }>,
   projectFiles: ProjectIndex["projectFiles"],
+  displayFile: (file: FileId) => FileId,
 ): CompactImpactReport {
   // Collect all unique file paths
   const allFiles = new Set<FileId>();
 
   // Add files from changedFiles
   for (const cf of changedFiles) {
-    allFiles.add(cf.file);
+    allFiles.add(displayFile(cf.file));
   }
 
   // Add files from changedSymbols
   for (const cs of changedSymbols) {
-    allFiles.add(cs.file);
+    allFiles.add(displayFile(cs.file));
   }
 
   // Add files from impactedItems
   for (const ii of impactedItems) {
-    allFiles.add(ii.file);
+    allFiles.add(displayFile(ii.file));
   }
 
   // Add files from fileEdges
   for (const fe of fileEdges) {
-    allFiles.add(fe.from);
-    allFiles.add(fe.to);
+    allFiles.add(displayFile(fe.from));
+    allFiles.add(displayFile(fe.to));
   }
 
   // Add files from surface area
   for (const item of surfaceArea.files) {
-    allFiles.add(item.file);
+    allFiles.add(displayFile(item.file));
   }
   for (const file of surfaceArea.topFanIn) {
-    allFiles.add(file);
+    allFiles.add(displayFile(file));
   }
   for (const file of surfaceArea.topFanOut) {
-    allFiles.add(file);
+    allFiles.add(displayFile(file));
   }
 
   for (const cycle of cycles) {
-    for (const file of cycle.files) allFiles.add(file);
+    for (const file of cycle.files) allFiles.add(displayFile(file));
   }
 
   // Add files from suggestions
   for (const suggestion of suggestions) {
-    allFiles.add(suggestion.file);
-    if (suggestion.relatedFile) allFiles.add(suggestion.relatedFile);
+    allFiles.add(displayFile(suggestion.file));
+    if (suggestion.relatedFile) allFiles.add(displayFile(suggestion.relatedFile));
   }
 
   if (reexportChains) {
     for (const chain of reexportChains.chains) {
-      allFiles.add(chain.file);
+      allFiles.add(displayFile(chain.file));
       for (const pathChain of chain.paths) {
         for (const file of pathChain) {
-          allFiles.add(file);
+          allFiles.add(displayFile(file));
         }
       }
     }
@@ -325,7 +398,7 @@ function buildCompactReport(
 
   // Convert to compact format
   const compactChangedFiles = changedFiles.map((cf) => ({
-    file: fileIndex.get(cf.file)!,
+    file: fileIndex.get(displayFile(cf.file))!,
     hunks: cf.hunks,
   }));
 
@@ -340,7 +413,7 @@ function buildCompactReport(
       typeOnly?: boolean;
     } = {
       id: cs.id,
-      file: fileIndex.get(cs.file)!,
+      file: fileIndex.get(displayFile(cs.file))!,
       name: cs.name,
       kind: cs.kind,
       exported: cs.exported,
@@ -365,7 +438,7 @@ function buildCompactReport(
       typeOnly?: boolean;
       explain?: NonNullable<ImpactItem["explain"]>;
     } = {
-      file: fileIndex.get(ii.file)!,
+      file: fileIndex.get(displayFile(ii.file))!,
       symbols: ii.symbols,
       reasons: ii.reasons,
       severity: ii.severity,
@@ -381,12 +454,12 @@ function buildCompactReport(
   const compactSuggestions =
     suggestions.length > 0
       ? suggestions.map((suggestion) => ({
-          file: fileIndex.get(suggestion.file)!,
+          file: fileIndex.get(displayFile(suggestion.file))!,
           kind: suggestion.kind,
           ...(suggestion.range ? { range: suggestion.range } : {}),
           ...(suggestion.symbol ? { symbol: suggestion.symbol } : {}),
           ...(suggestion.relatedFile !== undefined
-            ? { relatedFile: fileIndex.get(suggestion.relatedFile)! }
+            ? { relatedFile: fileIndex.get(displayFile(suggestion.relatedFile))! }
             : {}),
           ...(suggestion.details ? { details: suggestion.details } : {}),
           confidence: suggestion.confidence,
@@ -396,7 +469,7 @@ function buildCompactReport(
   const compactExportSummary =
     exportSummary.length > 0
       ? exportSummary.map((entry) => ({
-          file: fileIndex.get(entry.file)!,
+          file: fileIndex.get(displayFile(entry.file))!,
           symbols: entry.symbols,
         }))
       : undefined;
@@ -405,9 +478,9 @@ function buildCompactReport(
     ? {
         chains: reexportChains.chains.map((entry) => ({
           symbol: entry.symbol,
-          file: fileIndex.get(entry.file)!,
+          file: fileIndex.get(displayFile(entry.file))!,
           paths: entry.paths.map((pathChain) =>
-            pathChain.map((file) => fileIndex.get(file)!),
+            pathChain.map((file) => fileIndex.get(displayFile(file))!),
           ),
         })),
       }
@@ -416,7 +489,7 @@ function buildCompactReport(
   const compactTopImpacts =
     topImpacts.length > 0
       ? topImpacts.map((item) => ({
-          file: fileIndex.get(item.file)!,
+          file: fileIndex.get(displayFile(item.file))!,
           symbols: item.symbols,
           reasons: item.reasons,
           severity: item.severity,
@@ -431,36 +504,36 @@ function buildCompactReport(
 
   const compactSurfaceArea: CompactImpactSurfaceArea = {
     files: surfaceArea.files.map((item) => ({
-      file: fileIndex.get(item.file)!,
+      file: fileIndex.get(displayFile(item.file))!,
       fanIn: item.fanIn,
       fanOut: item.fanOut,
       changed: item.changed,
       impacted: item.impacted,
     })),
-    topFanIn: surfaceArea.topFanIn.map((file) => fileIndex.get(file)!),
-    topFanOut: surfaceArea.topFanOut.map((file) => fileIndex.get(file)!),
+    topFanIn: surfaceArea.topFanIn.map((file) => fileIndex.get(displayFile(file))!),
+    topFanOut: surfaceArea.topFanOut.map((file) => fileIndex.get(displayFile(file))!),
   };
 
   const compactClusters: CompactImpactCluster[] = clusters.map((cluster) => ({
     id: cluster.id,
-    files: cluster.files.map((file) => fileIndex.get(file)!),
-    changedFiles: cluster.changedFiles.map((file) => fileIndex.get(file)!),
+    files: cluster.files.map((file) => fileIndex.get(displayFile(file))!),
+    changedFiles: cluster.changedFiles.map((file) => fileIndex.get(displayFile(file))!),
     totalSeverity: cluster.totalSeverity,
   }));
 
   const compactCycles =
     cycles.length > 0
       ? cycles.map((cycle) => ({
-          files: cycle.files.map((file) => fileIndex.get(file)!),
+          files: cycle.files.map((file) => fileIndex.get(displayFile(file))!),
           entryEdges: cycle.entryEdges.map((edge) => ({
-            from: fileIndex.get(edge.from)!,
-            to: fileIndex.get(edge.to)!,
+            from: fileIndex.get(displayFile(edge.from))!,
+            to: fileIndex.get(displayFile(edge.to))!,
             raw: edge.raw,
             ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
           })),
           internalEdges: cycle.internalEdges.map((edge) => ({
-            from: fileIndex.get(edge.from)!,
-            to: fileIndex.get(edge.to)!,
+            from: fileIndex.get(displayFile(edge.from))!,
+            to: fileIndex.get(displayFile(edge.to))!,
             raw: edge.raw,
             ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
           })),
@@ -477,8 +550,8 @@ function buildCompactReport(
 
   const compactFileEdges = fileEdges.map((fe) => {
     const edge: { from: number; to: number; typeOnly?: boolean } = {
-      from: fileIndex.get(fe.from)!,
-      to: fileIndex.get(fe.to)!,
+      from: fileIndex.get(displayFile(fe.from))!,
+      to: fileIndex.get(displayFile(fe.to))!,
     };
     if (fe.typeOnly !== undefined) {
       edge.typeOnly = fe.typeOnly;
@@ -747,7 +820,6 @@ function buildClusters(
 }
 
 function buildSurfaceArea(
-  projectRoot: string,
   index: ProjectIndex,
   diffFiles: FileChange[],
   impactedItems: ImpactItem[],
@@ -771,9 +843,7 @@ function buildSurfaceArea(
   }
 
   const changedFiles = new Set(
-    diffFiles.map((fileChange) =>
-      normalizePath(resolveFilePathFromRoot(projectRoot, fileChange.path)),
-    ),
+    diffFiles.map((fileChange) => normalizePath(fileChange.path)),
   );
   const impactedFiles = new Set(
     impactedItems.map((item) => normalizePath(item.file)),

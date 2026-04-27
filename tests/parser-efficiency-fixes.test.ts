@@ -89,9 +89,7 @@ describe("signatureChanged hint accuracy", () => {
         }),
       );
 
-      const impact = result.impacted.find(
-        (item) => item.file === consumer.replace(/\\/g, "/"),
-      );
+      const impact = result.impacted.find((item) => item.file === "app.ts");
       expect(impact).toBeDefined();
       expect(impact?.explain?.hints).toContain("signatureChanged");
     });
@@ -136,9 +134,7 @@ describe("signatureChanged hint accuracy", () => {
         }),
       );
 
-      const impact = result.impacted.find(
-        (item) => item.file === consumer.replace(/\\/g, "/"),
-      );
+      const impact = result.impacted.find((item) => item.file === "app.ts");
       // Impact must exist (the function changed) but signatureChanged should NOT
       expect(impact).toBeDefined();
       expect(impact!.explain?.hints ?? []).not.toContain("signatureChanged");
@@ -181,9 +177,7 @@ describe("signatureChanged hint accuracy", () => {
         }),
       );
 
-      const impact = result.impacted.find(
-        (item) => item.file === consumer.replace(/\\/g, "/"),
-      );
+      const impact = result.impacted.find((item) => item.file === "app.ts");
       expect(impact).toBeDefined();
       expect(impact!.explain?.hints ?? []).not.toContain("signatureChanged");
     });

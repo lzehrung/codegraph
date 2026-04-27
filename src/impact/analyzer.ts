@@ -1,7 +1,10 @@
 import type { FileId, Edge } from "../types.js";
 import type { ProjectIndex, SymbolDef, Reference } from "../indexer.js";
 import pm from "picomatch";
-import { compileTestPatterns, isTestFilePath } from "./testPatterns.js";
+import {
+  compileTestPatterns,
+  createIndexTestFileMatcher,
+} from "./testPatterns.js";
 import type {
   ChangedSymbol,
   ImpactItem,
@@ -141,6 +144,7 @@ export async function analyzeImpact(
   const diagnostics = options.diagnostics;
 
   const patternMatchers = compileTestPatterns(testPatterns);
+  const isIndexTestFile = createIndexTestFileMatcher(index, patternMatchers);
   const isIgnored: (p: string) => boolean =
     ignoreGlobs.length > 0
       ? (pm as (g: string[]) => (s: string) => boolean)(ignoreGlobs)
@@ -232,7 +236,7 @@ export async function analyzeImpact(
           ) {
             const ref = refs.references[refIndex]!;
             if (diagnostics) diagnostics.refsScanned += 1;
-            if (!includeTests && isTestFilePath(ref.file, patternMatchers)) {
+            if (!includeTests && isIndexTestFile(ref.file)) {
               if (diagnostics) diagnostics.refsFilteredTests += 1;
               continue;
             }
@@ -370,6 +374,7 @@ export async function analyzeImpact(
       impacted,
       depth,
       options,
+      isIndexTestFile,
       reverseDeps,
       emitImpactItem,
     );
@@ -407,6 +412,7 @@ export function seedTransitiveFromFiles(
 ): void {
   const { includeTests = false, testPatterns, ignoreGlobs = [] } = options;
   const patternMatchers = compileTestPatterns(testPatterns);
+  const isIndexTestFile = createIndexTestFileMatcher(index, patternMatchers);
   const fallbackPathSet = new Set(options.fileLevelFallbackPaths ?? []);
   const diagnostics = options.diagnostics;
   const isIgnored: (p: string) => boolean =
@@ -435,7 +441,7 @@ export function seedTransitiveFromFiles(
       }
 
       for (const dependent of dependents) {
-        if (!includeTests && isTestFilePath(dependent, patternMatchers))
+        if (!includeTests && isIndexTestFile(dependent))
           continue;
         if (impacted.has(dependent) || isIgnored(dependent)) continue;
 
@@ -476,7 +482,7 @@ export function seedTransitiveFromFiles(
       }
 
       for (const dependent of dependents) {
-        if (!includeTests && isTestFilePath(dependent, patternMatchers))
+        if (!includeTests && isIndexTestFile(dependent))
           continue;
         if (impacted.has(dependent) || isIgnored(dependent)) continue;
 
@@ -511,11 +517,11 @@ function analyzeTransitiveImpact(
   impacted: Map<FileId, ImpactItem>,
   maxDepth: number,
   options: Partial<ImpactOptions>,
+  isIndexTestFile: (file: FileId) => boolean,
   reverseDeps: Map<FileId, Edge[]>,
   emitImpactItem?: (item: ImpactItem, phase: "partial" | "final") => void,
 ): void {
-  const { testPatterns, ignoreGlobs = [] } = options;
-  const patternMatchers = compileTestPatterns(testPatterns);
+  const { ignoreGlobs = [] } = options;
   const isIgnored: (p: string) => boolean =
     ignoreGlobs.length > 0
       ? (pm as (g: string[]) => (s: string) => boolean)(ignoreGlobs)
@@ -543,8 +549,7 @@ function analyzeTransitiveImpact(
       const dependentFile = edge.from;
       if (
         visited.has(dependentFile) ||
-        (!options.includeTests &&
-          isTestFilePath(dependentFile, patternMatchers)) ||
+        (!options.includeTests && isIndexTestFile(dependentFile)) ||
         isIgnored(dependentFile)
       )
         continue;

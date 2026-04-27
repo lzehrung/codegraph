@@ -18,7 +18,14 @@ import { buildImpactReport } from "./report.js";
 import { collectImpactSuggestions } from "./suggestions.js";
 import { listCandidateTestFiles } from "./context.js";
 import { mapLimit, resolveFilePathFromRoot } from "../util.js";
-import { normalizeImpactFilePath } from "./path.js";
+import {
+  normalizeImpactFileChange,
+  normalizeImpactFilePath,
+} from "./path.js";
+import {
+  compileTestPatterns,
+  createIndexTestFileMatcher,
+} from "./testPatterns.js";
 
 export * from "./types.js";
 export { analyzeImpactStreaming, type ImpactStreamChunk } from "./streaming.js";
@@ -379,30 +386,6 @@ function collectConfigAndBreakingSuggestions(
   return suggestions;
 }
 
-function isLikelyTestFile(filePath: string, extraPatterns?: string[]): boolean {
-  const defaultPatterns = [
-    /(^|\/)__tests__\//i,
-    /\.(?:test|spec)\./i,
-    /_test\.py$/i,
-    /_test\.go$/i,
-    /tests?\.py$/i,
-  ];
-  for (const pattern of defaultPatterns) {
-    if (pattern.test(filePath)) return true;
-  }
-  if (!extraPatterns || extraPatterns.length === 0) return false;
-  for (const raw of extraPatterns) {
-    if (!raw.trim()) continue;
-    try {
-      const re = new RegExp(raw, "i");
-      if (re.test(filePath)) return true;
-    } catch {
-      continue;
-    }
-  }
-  return false;
-}
-
 async function collectUntestedChangeSuggestions(
   index: ProjectIndex,
   changedSymbols: ChangedSymbol[],
@@ -416,9 +399,11 @@ async function collectUntestedChangeSuggestions(
   },
 ): Promise<ImpactSuggestion[]> {
   const suggestions: ImpactSuggestion[] = [];
+  const testPatterns = compileTestPatterns(options?.testPatterns);
+  const isIndexTestFile = createIndexTestFileMatcher(index, testPatterns);
   const testFiles = new Set<string>();
   for (const file of index.byFile.keys()) {
-    if (isLikelyTestFile(file, options?.testPatterns)) {
+    if (isIndexTestFile(file)) {
       testFiles.add(file);
     }
   }
@@ -432,12 +417,27 @@ async function collectUntestedChangeSuggestions(
     }
   }
 
-  const candidateTests = listCandidateTestFiles(
-    index,
-    Array.from(new Set(changedSymbols.map((entry) => entry.file))),
-    changedSymbols.map((entry) => entry.id),
-    { maxCandidates: 3 },
-  );
+  const candidateTestsByFile = new Map<string, ReturnType<typeof listCandidateTestFiles>>();
+  const changedSymbolIdsByFile = new Map<string, string[]>();
+  for (const symbol of changedSymbols) {
+    const existing = changedSymbolIdsByFile.get(symbol.file);
+    if (existing) {
+      existing.push(symbol.id);
+    } else {
+      changedSymbolIdsByFile.set(symbol.file, [symbol.id]);
+    }
+  }
+  for (const [file, symbolIds] of changedSymbolIdsByFile) {
+    candidateTestsByFile.set(
+      file,
+      listCandidateTestFiles(index, [file], symbolIds, {
+        ...(options?.testPatterns
+          ? { testPatterns: options.testPatterns }
+          : {}),
+        maxCandidates: 3,
+      }).filter((entry) => entry.file !== file),
+    );
+  }
 
   const coverageOptions: { lcovPaths?: string[]; coveragePaths?: string[] } =
     {};
@@ -531,8 +531,8 @@ async function collectUntestedChangeSuggestions(
       const totalLines = countTotalLinesForRange(coverage, symbol.range);
       const hasCoverageData = totalLines > 0;
 
-      const candidateNames = candidateTests
-        .filter((entry) => entry.file !== symbol.file)
+      const candidateNames = (candidateTestsByFile.get(symbol.file) ?? [])
+        .filter((entry) => entry.confidence !== "low")
         .slice(0, 2)
         .map((entry) => path.basename(entry.file));
       const coverageSummary = hasCoverageData
@@ -995,19 +995,21 @@ export async function analyzeImpactFromDiff(
   };
 
   // Map all changed files to changed symbols
+  const normalizedChanges = filteredFiles.map((change) =>
+    normalizeImpactFileChange(projectRoot, change),
+  );
   const changedByFile = await mapLimit(
-    filteredFiles.map((fileChange, idx) => ({ fileChange, idx })),
+    normalizedChanges.map((fileChange, idx) => ({ fileChange, idx })),
     8,
     async ({ fileChange, idx }) => {
-      const absPath = normalizeImpactFilePath(projectRoot, fileChange.path);
       const mapped = await locateChangedSymbolsWithLines(
         index,
-        absPath,
+        fileChange.path,
         fileChange.hunks,
       );
       return {
         idx,
-        path: absPath,
+        path: fileChange.path,
         kind: fileChange.kind,
         symbols: mapped.changedSymbols,
         parseFailed: mapped.parseFailed,
@@ -1034,13 +1036,6 @@ export async function analyzeImpactFromDiff(
     changedSymbols = changedSymbols.filter((s) => s.exported);
   }
 
-  const normalizedChanges = filteredFiles.map((change) => ({
-    ...change,
-    path: normalizeImpactFilePath(projectRoot, change.path),
-    ...(change.oldPath
-      ? { oldPath: normalizeImpactFilePath(projectRoot, change.oldPath) }
-      : {}),
-  }));
   const fileLevelFallback = options.fileLevelFallback ?? true;
   const fileLevelFallbackPaths = normalizedChanges
     .filter(
@@ -1073,18 +1068,18 @@ export async function analyzeImpactFromDiff(
   );
 
   const suggestions = options.verifyReferences
-    ? await collectImpactSuggestions(index, projectRoot, filteredFiles, options)
+    ? await collectImpactSuggestions(index, projectRoot, normalizedChanges, options)
     : [];
 
   const configAndBreaking =
     options.configImpactRules || options.detectBreakingChanges
       ? collectConfigAndBreakingSuggestions(
-          index,
-          projectRoot,
-          filteredFiles,
-          changedSymbols,
-          {
-            configImpactRules: !!options.configImpactRules,
+        index,
+        projectRoot,
+        normalizedChanges,
+        changedSymbols,
+        {
+          configImpactRules: !!options.configImpactRules,
             detectBreakingChanges: !!options.detectBreakingChanges,
           },
         )
@@ -1121,7 +1116,7 @@ export async function analyzeImpactFromDiff(
   return await buildImpactReport(
     projectRoot,
     index,
-    filteredFiles,
+    normalizedChanges,
     changedSymbols,
     impactedItems,
     mergedSuggestions,

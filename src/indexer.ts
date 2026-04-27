@@ -6574,6 +6574,27 @@ function extractLineContext(
   return allLines.slice(startLine, endLine).join("\n");
 }
 
+function extractLineContextWithMaxTotal(
+  source: string,
+  line: number,
+  maxLines: number,
+): string {
+  const allLines = source.split(/\r?\n/);
+  const safeMaxLines = Math.max(1, maxLines);
+  const focusIndex = Math.max(0, line - 1);
+  let startLine = Math.max(
+    0,
+    focusIndex - Math.floor((safeMaxLines - 1) / 2),
+  );
+  let endLine = Math.min(allLines.length, startLine + safeMaxLines);
+
+  if (endLine - startLine < safeMaxLines) {
+    startLine = Math.max(0, endLine - safeMaxLines);
+  }
+
+  return allLines.slice(startLine, endLine).join("\n");
+}
+
 function extractEnclosingBlock(
   source: string,
   tree: SyntaxTreeLike,
@@ -6587,11 +6608,7 @@ function extractEnclosingBlock(
     range.end.index ?? range.start.index ?? 0,
   );
   if (!node)
-    return extractLineContext(
-      source,
-      range.start.line,
-      DEFAULT_REF_CONTEXT_LINES,
-    ); // fallback to line context
+    return extractLineContextWithMaxTotal(source, range.start.line, maxLines);
 
   // Climb to find an enclosing block (function, class, etc.)
   let current = node;
@@ -6649,18 +6666,17 @@ function extractEnclosingBlock(
   const blockNode = bestBlockNode ?? genericCandidate;
 
   if (!blockNode)
-    return extractLineContext(
-      source,
-      range.start.line,
-      DEFAULT_REF_CONTEXT_LINES,
-    ); // fallback to line context
+    return extractLineContextWithMaxTotal(source, range.start.line, maxLines);
 
   const blockText = sliceText(blockNode, source);
   const blockLines = blockText.split(/\r?\n/);
 
   // If block is too long, truncate it
   if (blockLines.length > maxLines) {
-    return blockLines.slice(0, maxLines).join("\n") + "\n...";
+    if (maxLines <= 1) {
+      return "...";
+    }
+    return [...blockLines.slice(0, maxLines - 1), "..."].join("\n");
   }
 
   return blockText;

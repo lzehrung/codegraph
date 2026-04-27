@@ -49,14 +49,14 @@ diff --git a/lib.py b/lib.py
       const report = result;
       
       // Check TS impact
-      const tsImpact = report.impacted.find((i: any) => i.file === tsConsumer);
+      const tsImpact = report.impacted.find((item) => item.file === "consumer.ts");
       expect(tsImpact).toBeDefined();
-      expect(tsImpact.explain.hints).toContain("signatureChanged");
+      expect(tsImpact?.explain?.hints).toContain("signatureChanged");
 
       // Check Python impact
-      const pyImpact = report.impacted.find((i: any) => i.file === pyConsumer);
+      const pyImpact = report.impacted.find((item) => item.file === "consumer.py");
       expect(pyImpact).toBeDefined();
-      expect(pyImpact.explain.hints).toContain("signatureChanged");
+      expect(pyImpact?.explain?.hints).toContain("signatureChanged");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

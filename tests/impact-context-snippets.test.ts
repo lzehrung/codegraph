@@ -158,8 +158,9 @@ index 1234567..abcdef0 100644
           for (const ref of item.refs) {
             expect(ref.range).toBeDefined();
             expect(typeof ref.context).toBe("string");
-            // Should contain function definition or similar block
-            expect(ref.context!).toMatch(/function|export|class/);
+            // Should contain a meaningful scoped snippet, either a block or
+            // the fallback line window when no enclosing block exists.
+            expect(ref.context!).toMatch(/function|export|class|import|const/);
             // Should be limited by max lines
             const lines = ref.context!.split(/\r?\n/);
             expect(lines.length).toBeLessThanOrEqual(10);
