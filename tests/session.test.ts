@@ -235,6 +235,7 @@ describe("CodeReviewSession", () => {
 
     expect(session.getStatus()).toBe("expired");
     expect(session.isReady()).toBe(false);
+    expect(session.getStats().timeUntilExpiration).toBe(0);
   });
 
   test("should keep a disposed session expired when init completes later", async () => {
@@ -787,6 +788,84 @@ describe("SessionManager", () => {
       } catch {
         // Windows can transiently hold temp directories briefly after failed init.
       }
+    }
+  });
+
+  test("should not repopulate sessions when warmup is disposed mid-initialization", async () => {
+    const originalBuild = indexer.buildProjectIndexIncremental;
+    let releaseBuild: (() => void) | null = null;
+    const buildGate = new Promise<void>((resolve) => {
+      releaseBuild = resolve;
+    });
+    const buildSpy = vi
+      .spyOn(indexer, "buildProjectIndexIncremental")
+      .mockImplementation(async (...args) => {
+        await buildGate;
+        return await originalBuild(...args);
+      });
+
+    try {
+      const warmupPromise = manager.warmup([
+        {
+          id: "warm",
+          options: {
+            root: sampleRoot,
+            buildOptions: { cache: "memory", useBloomFilters: true },
+          },
+        },
+      ]);
+
+      await Promise.resolve();
+      manager.disposeAll();
+      releaseBuild?.();
+
+      await expect(warmupPromise).rejects.toThrow(
+        /disposed during initialization/,
+      );
+      expect(manager.getSession("warm")).toBeUndefined();
+      expect(manager.getSessionIds()).toEqual([]);
+    } finally {
+      buildSpy.mockRestore();
+    }
+  });
+
+  test("should share warmup work with concurrent getOrCreateSession", async () => {
+    const originalBuild = indexer.buildProjectIndexIncremental;
+    let releaseBuild: (() => void) | null = null;
+    const buildGate = new Promise<void>((resolve) => {
+      releaseBuild = resolve;
+    });
+    const buildSpy = vi
+      .spyOn(indexer, "buildProjectIndexIncremental")
+      .mockImplementation(async (...args) => {
+        await buildGate;
+        return await originalBuild(...args);
+      });
+
+    try {
+      const warmupPromise = manager.warmup([
+        {
+          id: "shared",
+          options: {
+            root: sampleRoot,
+            buildOptions: { cache: "memory", useBloomFilters: true },
+          },
+        },
+      ]);
+      const sessionPromise = manager.getOrCreateSession("shared", {
+        root: sampleRoot,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+
+      await Promise.resolve();
+      releaseBuild?.();
+
+      const [, session] = await Promise.all([warmupPromise, sessionPromise]);
+      expect(session).toBe(manager.getSession("shared"));
+      expect(buildSpy).toHaveBeenCalledTimes(1);
+      expect(manager.getSessionIds()).toEqual(["shared"]);
+    } finally {
+      buildSpy.mockRestore();
     }
   });
 

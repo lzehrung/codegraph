@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
@@ -10,12 +10,23 @@ const benchScript = path.join(rootDir, "scripts", "bench-native.mjs");
 const distEntry = path.join(rootDir, "dist", "index.js");
 const longBenchTimeoutMs = 70_000;
 
-function runBench(args: string[], timeout = 60_000): string {
-  return execFileSync(process.execPath, [benchScript, ...args], {
+function runBenchResult(args: string[], timeout = 60_000) {
+  return spawnSync(process.execPath, [benchScript, ...args], {
     cwd: rootDir,
     encoding: "utf8",
     timeout,
   });
+}
+
+function runBench(args: string[], timeout = 60_000): string {
+  const result = runBenchResult(args, timeout);
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(result.stderr || `Bench script exited with ${result.status}`);
+  }
+  return result.stdout;
 }
 
 describe("bench-native harness", () => {
@@ -103,15 +114,17 @@ describe("bench-native harness", () => {
   });
 
   it("rejects unknown fixture names", () => {
-    expect(() =>
-      runBench(["--fixtures=nonexistent", "--runs=1"], 10_000),
-    ).toThrow();
+    const result = runBenchResult(["--fixtures=nonexistent", "--runs=1"], 10_000);
+    expect(result.error).toBeUndefined();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Unknown fixture");
   });
 
   it("rejects unknown workload names", () => {
-    expect(() =>
-      runBench(["--workloads=invalid", "--runs=1"], 10_000),
-    ).toThrow();
+    const result = runBenchResult(["--workloads=invalid", "--runs=1"], 10_000);
+    expect(result.error).toBeUndefined();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Unknown workload");
   });
 
   it("reports vs JS column in table output", () => {

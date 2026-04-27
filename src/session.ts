@@ -493,10 +493,10 @@ export class CodeReviewSession implements ICodeReviewSession {
       fileCount,
       symbolCount,
       lastActivity: new Date(this.lastActivity),
-      timeUntilExpiration: Math.max(
-        0,
-        this.timeout - (Date.now() - this.lastActivity),
-      ),
+      timeUntilExpiration:
+        this.status === "ready"
+          ? Math.max(0, this.timeout - (Date.now() - this.lastActivity))
+          : 0,
     };
   }
 }
@@ -512,6 +512,7 @@ export class SessionManager {
     {
       cancelled: boolean;
       fingerprint: string;
+      retainPending: boolean;
       promise: Promise<CodeReviewSession>;
     }
   >();
@@ -563,10 +564,12 @@ export class SessionManager {
     return pending.promise;
   }
 
-  private trackPendingSession(
+  private trackSession(
     sessionId: string,
     options: SessionOptions,
     session: CodeReviewSession,
+    retainPending: boolean,
+    onReady: (session: CodeReviewSession) => void,
   ): Promise<CodeReviewSession> {
     const fingerprint = sessionIdentityFingerprint(
       resolveSessionIdentity(options),
@@ -574,45 +577,36 @@ export class SessionManager {
     const pendingSession = {
       cancelled: false,
       fingerprint,
+      retainPending,
       promise: Promise.resolve(session),
     };
-    const promise = this.initializeManagedSession(
-      sessionId,
-      session,
-      () => pendingSession.cancelled,
-    );
+    const promise = (async () => {
+      try {
+        await session.init();
+        if (pendingSession.cancelled) {
+          session.dispose();
+          throw new Error(
+            `Session "${sessionId}" was disposed during initialization.`,
+          );
+        }
+        onReady(session);
+        return session;
+      } catch (error) {
+        session.dispose();
+        throw error;
+      }
+    })();
     pendingSession.promise = promise;
     this.pendingSessions.set(sessionId, pendingSession);
     promise
       .finally(() => {
         const pending = this.pendingSessions.get(sessionId);
-        if (pending?.promise === promise) {
+        if (pending?.promise === promise && !pending.retainPending) {
           this.pendingSessions.delete(sessionId);
         }
       })
       .catch(() => {});
     return promise;
-  }
-
-  private async initializeManagedSession(
-    sessionId: string,
-    session: CodeReviewSession,
-    isCancelled: () => boolean,
-  ): Promise<CodeReviewSession> {
-    try {
-      await session.init();
-      if (isCancelled()) {
-        session.dispose();
-        throw new Error(
-          `Session "${sessionId}" was disposed during initialization.`,
-        );
-      }
-      this.sessions.set(sessionId, session);
-      return session;
-    } catch (error) {
-      session.dispose();
-      throw error;
-    }
   }
 
   /**
@@ -631,7 +625,15 @@ export class SessionManager {
 
     if (!session) {
       session = new CodeReviewSession(options);
-      return await this.trackPendingSession(sessionId, options, session);
+      return await this.trackSession(
+        sessionId,
+        options,
+        session,
+        false,
+        (readySession) => {
+          this.sessions.set(sessionId, readySession);
+        },
+      );
     } else if (!session.isReady()) {
       try {
         await session.init();
@@ -729,10 +731,6 @@ export class SessionManager {
       existing?: CodeReviewSession;
       session: CodeReviewSession;
     }> = [];
-    const initializedSessions: Array<{
-      id: string;
-      session: CodeReviewSession;
-    }> = [];
     try {
       for (const { id, options } of sessions) {
         const requestedFingerprint = sessionIdentityFingerprint(
@@ -763,21 +761,37 @@ export class SessionManager {
           continue;
         }
         const session = new CodeReviewSession(options);
-        await session.init();
-        initializedSessions.push({ id, session });
         replacementSessions.push(
           existing ? { id, existing, session } : { id, session },
         );
+        await this.trackSession(
+          id,
+          options,
+          session,
+          true,
+          () => {},
+        );
       }
     } catch (error) {
-      for (const { session } of initializedSessions) {
-        session.dispose();
+      for (const replacement of replacementSessions) {
+        const pending = this.pendingSessions.get(replacement.id);
+        if (pending) {
+          pending.cancelled = true;
+          this.pendingSessions.delete(replacement.id);
+        }
+        replacement.session.dispose();
       }
       throw error;
     }
     for (const replacement of replacementSessions) {
+      const pending = this.pendingSessions.get(replacement.id);
+      if (!pending || pending.cancelled) {
+        replacement.session.dispose();
+        continue;
+      }
       replacement.existing?.dispose();
       this.sessions.set(replacement.id, replacement.session);
+      this.pendingSessions.delete(replacement.id);
     }
   }
 }

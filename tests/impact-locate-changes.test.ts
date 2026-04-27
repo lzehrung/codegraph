@@ -39,7 +39,6 @@ describe('Impact: changed-lines → symbol mapping', () => {
     const mod = index.byFile.get(file)!;
 
     const targets = mod.locals.slice(0, 2);
-    console.log('Targets:', targets.map(t => ({ name: t.localName, kind: t.kind, line: t.range.start.line })));
     if (targets.length < 2) {
       // Not enough locals to make this meaningful; skip gracefully
       expect(true).toBe(true);
