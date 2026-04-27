@@ -8,6 +8,7 @@ import type { Edge, FileId, Range } from "./types.js";
 import {
   buildProjectIndexIncremental,
   type BuildReport,
+  collectImportsForFile,
   collectLocalsAndExportsFromSource,
   type ExportEntry,
   findReferences,
@@ -18,6 +19,7 @@ import {
   type SymbolDef,
   symbolId,
 } from "./indexer.js";
+import type { GraphBuildOptions } from "./graphs.js";
 import {
   locateChangedSymbolsWithLines,
   mapChangedLinesToSymbols,
@@ -473,6 +475,7 @@ async function buildDeletedFileSnapshots(
   opts: {
     revision?: string;
     diffChangesByFile?: ReadonlyMap<FileId, FileChange>;
+    graphOptions?: GraphBuildOptions;
   },
 ): Promise<Map<FileId, DeletedFileSnapshot>> {
   const snapshots = new Map<FileId, DeletedFileSnapshot>();
@@ -488,10 +491,17 @@ async function buildDeletedFileSnapshots(
       reconstructDeletedSourceFromDiff(opts.diffChangesByFile?.get(file));
     if (source === null) continue;
     const normalizedFile = normalizePath(file);
+    const imports = await collectImportsForFile(normalizedFile, projectRoot, {
+      source,
+      sup: support,
+      ...(opts.graphOptions ? { graphOptions: opts.graphOptions } : {}),
+    });
     const module = collectLocalsAndExportsFromSource(
       normalizedFile,
       source,
       support,
+      undefined,
+      imports,
     );
     snapshots.set(normalizedFile, {
       source,
@@ -719,12 +729,21 @@ function buildExportSummaries(
   }));
 }
 
-function resolveReviewSpecifierTarget(fromFile: string, spec: string): string {
+function resolveReviewSpecifierTarget(
+  fromFile: string,
+  spec: string,
+  knownDeletedFiles?: ReadonlySet<FileId>,
+): string {
   const normalizedSpec = spec.replace(/\\/g, "/");
   const basePath = normalizeSpecifierBase(fromFile, normalizedSpec);
   const candidates = listResolutionCandidates(basePath).map((candidate) =>
     normalizePath(candidate),
   );
+  if (knownDeletedFiles) {
+    for (const candidate of candidates) {
+      if (knownDeletedFiles.has(candidate)) return candidate;
+    }
+  }
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) return candidate;
   }
@@ -807,18 +826,23 @@ function collectDeletedSnapshotEdges(
   deletedSnapshots: ReadonlyMap<FileId, DeletedFileSnapshot>,
 ): Edge[] {
   const edges = new Map<string, Edge>();
+  const deletedSnapshotFiles = new Set(deletedSnapshots.keys());
   for (const [file, snapshot] of deletedSnapshots.entries()) {
     for (const imp of snapshot.module.imports) {
       const to =
         typeof imp.resolved === "string"
           ? { type: "file" as const, path: normalizePath(imp.resolved) }
-          : imp.resolved && "external" in imp.resolved
-            ? { type: "external" as const, name: imp.resolved.external }
-            : imp.from.startsWith(".")
-              ? {
-                  type: "file" as const,
-                  path: resolveReviewSpecifierTarget(file, imp.from),
-                }
+          : imp.from.startsWith(".")
+            ? {
+                type: "file" as const,
+                path: resolveReviewSpecifierTarget(
+                  file,
+                  imp.from,
+                  deletedSnapshotFiles,
+                ),
+              }
+            : imp.resolved && "external" in imp.resolved
+              ? { type: "external" as const, name: imp.resolved.external }
               : { type: "external" as const, name: imp.from };
       const edge: Edge = {
         from: file,
@@ -832,7 +856,11 @@ function collectDeletedSnapshotEdges(
       const to = entry.fromModule.startsWith(".")
         ? {
             type: "file" as const,
-            path: resolveReviewSpecifierTarget(file, entry.fromModule),
+            path: resolveReviewSpecifierTarget(
+              file,
+              entry.fromModule,
+              deletedSnapshotFiles,
+            ),
           }
         : path.isAbsolute(entry.fromModule)
           ? {
@@ -1132,6 +1160,7 @@ export async function buildReviewReport(
         ? { revision: appliedOptions.gitBase ?? appliedOptions.changedSince }
         : {}),
       diffChangesByFile,
+      graphOptions,
     },
   );
 

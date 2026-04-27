@@ -22,6 +22,7 @@ describe("Agent Tools", () => {
     const result = await tool_listProjectFiles(samplePath);
     expect(result.status).toBe("ok");
     expect(result.files).toBeDefined();
+    expect(result.files?.every((file) => !path.isAbsolute(file))).toBe(true);
     expect(result.files!.some((f) => f.replace(/\\/g, "/").endsWith("main.ts"))).toBe(
       true,
     );
@@ -33,6 +34,14 @@ describe("Agent Tools", () => {
     expect(result.graph).toBeDefined();
     expect(result.graph!.nodes.length).toBeGreaterThan(0);
     expect(result.graph!.edges).toBeDefined();
+    expect(result.graph?.nodes.every((node) => !path.isAbsolute(node))).toBe(true);
+    expect(
+      result.graph?.edges.every(
+        (edge) =>
+          !path.isAbsolute(edge.from) &&
+          (edge.to.type !== "file" || !path.isAbsolute(edge.to.path)),
+      ),
+    ).toBe(true);
   });
 
   it("tool_getGraph accepts explicit native mode overrides", async () => {
