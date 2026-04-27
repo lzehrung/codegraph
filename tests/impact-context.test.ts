@@ -312,5 +312,45 @@ describe("Impact Context Collection", () => {
         await fsp.rm(root, { recursive: true, force: true });
       }
     });
+
+    it("uses the index root for one-directory sparse indexes", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-context-"));
+      try {
+        const checksDir = path.join(root, "checks");
+        await fsp.mkdir(checksDir, { recursive: true });
+        const helperFile = path.join(checksDir, "helper.ts");
+        const verifyFile = path.join(checksDir, "lib.verify.ts");
+        await fsp.writeFile(
+          helperFile,
+          "export function helper() { return 1; }\n",
+          "utf8",
+        );
+        await fsp.writeFile(
+          verifyFile,
+          "import { helper } from './helper';\nhelper();\n",
+          "utf8",
+        );
+
+        const index = await buildProjectIndexFromFiles(root, [helperFile, verifyFile], {
+          cache: "memory",
+        });
+        const candidates = listCandidateTestFiles(
+          index,
+          [helperFile],
+          [],
+          {
+            testPatterns: ["^checks/.*\\.verify\\.ts$"],
+          },
+        );
+
+        expect(candidates).toContainEqual({
+          file: normalizePath(verifyFile),
+          confidence: "medium",
+          reason: "dependsOnChanged",
+        });
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 });

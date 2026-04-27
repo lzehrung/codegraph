@@ -814,6 +814,69 @@ describe("Review report", () => {
     });
   });
 
+  it("includes deleted-to-deleted alias import edges on a cold review pass", async () => {
+    const root = await mkTmpDir("dg-review-deleted-alias-chain-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const depFile = path.join(srcDir, "dep.ts");
+    const consumerFile = path.join(srcDir, "consumer.ts");
+    await fsp.writeFile(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify(
+        {
+          compilerOptions: {
+            baseUrl: ".",
+            paths: {
+              "@dep": ["src/dep.ts"],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fsp.writeFile(depFile, `export const dep = 1;\n`, "utf8");
+    await fsp.writeFile(
+      consumerFile,
+      `import { dep } from '@dep';\nexport const seen = dep;\n`,
+      "utf8",
+    );
+
+    await fsp.unlink(consumerFile);
+    await fsp.unlink(depFile);
+
+    const report = await buildReviewReport(root, {
+      files: [consumerFile, depFile],
+      cache: "memory",
+      diffText: [
+        "diff --git a/src/consumer.ts b/src/consumer.ts",
+        "deleted file mode 100644",
+        "index 1111111..0000000",
+        "--- a/src/consumer.ts",
+        "+++ /dev/null",
+        "@@ -1,2 +0,0 @@",
+        "-import { dep } from '@dep';",
+        "-export const seen = dep;",
+        "",
+        "diff --git a/src/dep.ts b/src/dep.ts",
+        "deleted file mode 100644",
+        "index 2222222..0000000",
+        "--- a/src/dep.ts",
+        "+++ /dev/null",
+        "@@ -1 +0,0 @@",
+        "-export const dep = 1;",
+        "",
+      ].join("\n"),
+    });
+
+    expect(report.graphDelta).toContainEqual({
+      from: "src/consumer.ts",
+      to: { type: "file", path: "src/dep.ts" },
+      raw: "@dep",
+    });
+  });
+
   it("includes deleted consumer workspace import edges in graphDelta", async () => {
     const root = await mkTmpDir("dg-review-deleted-workspace-consumer-");
     const libDir = path.join(root, "packages", "lib");
@@ -860,6 +923,71 @@ describe("Review report", () => {
         "@@ -1,2 +0,0 @@",
         "-import { lib } from '@repo/lib';",
         "-export const seen = lib;",
+        "",
+      ].join("\n"),
+    });
+
+    expect(report.graphDelta).toContainEqual({
+      from: "packages/app/src/consumer.ts",
+      to: { type: "file", path: "packages/lib/src/index.ts" },
+      raw: "@repo/lib",
+    });
+  });
+
+  it("includes deleted-to-deleted workspace import edges on a cold review pass", async () => {
+    const root = await mkTmpDir("dg-review-deleted-workspace-chain-");
+    const libDir = path.join(root, "packages", "lib");
+    const appDir = path.join(root, "packages", "app");
+    const depFile = path.join(libDir, "src", "index.ts");
+    const consumerFile = path.join(appDir, "src", "consumer.ts");
+
+    await fsp.mkdir(path.dirname(depFile), { recursive: true });
+    await fsp.mkdir(path.dirname(consumerFile), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ private: true, workspaces: ["packages/*"] }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(libDir, "package.json"),
+      JSON.stringify({ name: "@repo/lib", main: "src/index.ts" }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(appDir, "package.json"),
+      JSON.stringify({ name: "@repo/app" }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(depFile, `export const dep = 1;\n`, "utf8");
+    await fsp.writeFile(
+      consumerFile,
+      `import { dep } from '@repo/lib';\nexport const seen = dep;\n`,
+      "utf8",
+    );
+
+    await fsp.unlink(consumerFile);
+    await fsp.unlink(depFile);
+
+    const report = await buildReviewReport(root, {
+      files: [consumerFile, depFile],
+      cache: "memory",
+      diffText: [
+        "diff --git a/packages/app/src/consumer.ts b/packages/app/src/consumer.ts",
+        "deleted file mode 100644",
+        "index 1111111..0000000",
+        "--- a/packages/app/src/consumer.ts",
+        "+++ /dev/null",
+        "@@ -1,2 +0,0 @@",
+        "-import { dep } from '@repo/lib';",
+        "-export const seen = dep;",
+        "",
+        "diff --git a/packages/lib/src/index.ts b/packages/lib/src/index.ts",
+        "deleted file mode 100644",
+        "index 2222222..0000000",
+        "--- a/packages/lib/src/index.ts",
+        "+++ /dev/null",
+        "@@ -1 +0,0 @@",
+        "-export const dep = 1;",
         "",
       ].join("\n"),
     });
@@ -924,6 +1052,64 @@ describe("Review report", () => {
       from: "src/index.ts",
       to: { type: "file", path: "src/impl.ts" },
       raw: "./impl",
+    });
+  });
+
+  it("includes deleted alias re-export edges on a cold review pass", async () => {
+    const root = await mkTmpDir("dg-review-deleted-alias-reexport-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const depFile = path.join(srcDir, "dep.ts");
+    const barrelFile = path.join(srcDir, "index.ts");
+    await fsp.writeFile(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify(
+        {
+          compilerOptions: {
+            baseUrl: ".",
+            paths: {
+              "@dep": ["src/dep.ts"],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fsp.writeFile(depFile, `export const dep = 1;\n`, "utf8");
+    await fsp.writeFile(barrelFile, `export * from '@dep';\n`, "utf8");
+
+    await fsp.unlink(barrelFile);
+    await fsp.unlink(depFile);
+
+    const report = await buildReviewReport(root, {
+      files: [barrelFile, depFile],
+      cache: "memory",
+      diffText: [
+        "diff --git a/src/index.ts b/src/index.ts",
+        "deleted file mode 100644",
+        "index 1111111..0000000",
+        "--- a/src/index.ts",
+        "+++ /dev/null",
+        "@@ -1 +0,0 @@",
+        "-export * from '@dep';",
+        "",
+        "diff --git a/src/dep.ts b/src/dep.ts",
+        "deleted file mode 100644",
+        "index 2222222..0000000",
+        "--- a/src/dep.ts",
+        "+++ /dev/null",
+        "@@ -1 +0,0 @@",
+        "-export const dep = 1;",
+        "",
+      ].join("\n"),
+    });
+
+    expect(report.graphDelta).toContainEqual({
+      from: "src/index.ts",
+      to: { type: "file", path: "src/dep.ts" },
+      raw: "@dep",
     });
   });
 
