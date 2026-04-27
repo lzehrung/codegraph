@@ -4,6 +4,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { parseUnifiedDiff } from "../src/impact/parse.js";
 import { analyzeImpactFromDiff, listCandidateTestFiles } from "../src/impact/index.js";
+import { buildImpactReport } from "../src/impact/report.js";
 import { CompactImpactReport, type ImpactItem } from "../src/impact/types.js";
 import type { Range } from "../src/types.js";
 import { createTestIndex } from "./test-utils.js";
@@ -709,6 +710,42 @@ index 1234567..abcdef0 100644
           report.surfaceArea.files.some((entry) => entry.file === file),
         ).toBe(true);
       }
+    });
+
+    it("preserves Windows-style absolute changed paths in surface area summaries", async () => {
+      const report = await buildImpactReport(
+        "/workspace/codegraph",
+        {
+          graph: {
+            nodes: new Set(["C:/repo/src/main.ts"]),
+            edges: [],
+          },
+          modules: new Map(),
+          byFile: new Map(),
+          exportCache: new Map(),
+          scopeCache: new Map(),
+          projectFiles: [],
+        },
+        [
+          {
+            path: "C:/repo/src/main.ts",
+            kind: "modified",
+            oldPath: "C:/repo/src/main.ts",
+            hunks: [],
+          },
+        ],
+        [],
+        [],
+        [],
+      );
+
+      expect(report.surfaceArea.files).toContainEqual({
+        file: "C:/repo/src/main.ts",
+        fanIn: 0,
+        fanOut: 0,
+        changed: true,
+        impacted: false,
+      });
     });
 
     it("should handle empty diffs", async () => {

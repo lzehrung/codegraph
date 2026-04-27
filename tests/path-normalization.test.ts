@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { resolveFilePathFromRoot, isAbsoluteFilePath } from "../src/util.js";
+import {
+  resolveFilePathFromRoot,
+  isAbsoluteFilePath,
+  isFilePathWithinRoot,
+  toProjectRelativePath,
+} from "../src/util.js";
 import { normalizeImpactFilePath } from "../src/impact/path.js";
 
 describe("cross-platform path normalization", () => {
@@ -27,5 +32,20 @@ describe("cross-platform path normalization", () => {
         String.raw`C:\repo\src\main.ts`,
       ),
     ).toBe("C:/repo/src/main.ts");
+  });
+
+  it("does not treat Windows-style absolute paths as inside a POSIX project root", () => {
+    expect(
+      isFilePathWithinRoot("/workspace/codegraph", "src/main.ts"),
+    ).toBe(true);
+    expect(
+      toProjectRelativePath("/workspace/codegraph", "src/main.ts"),
+    ).toBe("src/main.ts");
+    expect(
+      isFilePathWithinRoot("/workspace/codegraph", "C:/repo/src/main.ts"),
+    ).toBe(false);
+    expect(
+      toProjectRelativePath("/workspace/codegraph", "C:/repo/src/main.ts"),
+    ).toBeNull();
   });
 });
