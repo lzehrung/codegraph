@@ -63,9 +63,9 @@ function inferIndexProjectRoot(
   index: ProjectIndex,
   referenceFiles: readonly FileId[] = [],
 ): string | null {
-  const projectRoot = index.projectFiles?.find(
-    (entry) => entry.projectRoot,
-  )?.projectRoot;
+  const projectRoot =
+    index.projectRoot ??
+    index.projectFiles?.find((entry) => entry.projectRoot)?.projectRoot;
   if (projectRoot) {
     return normalizePath(projectRoot);
   }

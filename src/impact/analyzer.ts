@@ -144,6 +144,7 @@ export async function analyzeImpact(
   const diagnostics = options.diagnostics;
   const projectRoot =
     options.projectRoot ??
+    index.projectRoot ??
     index.projectFiles?.find((entry) => entry.projectRoot)?.projectRoot;
   const normalizedOptions = {
     ...options,
@@ -423,6 +424,7 @@ export function seedTransitiveFromFiles(
   const { includeTests = false, testPatterns, ignoreGlobs = [] } = options;
   const projectRoot =
     options.projectRoot ??
+    index.projectRoot ??
     index.projectFiles?.find((entry) => entry.projectRoot)?.projectRoot;
   const patternMatchers = compileTestPatterns(testPatterns);
   const isIndexTestFile = createIndexTestFileMatcher(

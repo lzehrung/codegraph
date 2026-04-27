@@ -223,6 +223,7 @@ export type ProjectIndex = {
   graph: Graph;
   modules: Map<FileId, ModuleIndex>;
   byFile: Map<FileId, ModuleIndex>;
+  projectRoot?: string;
   nativeMode?: NativeRuntimeMode;
   exportCache: Map<string, ResolvedExport | null>;
   scopeCache: Map<string, ScopeIndex>;
@@ -4316,6 +4317,7 @@ async function buildIndexFromFileListShared(
   helperOpts?: BuildIndexHelperOptions,
 ): Promise<ProjectIndex> {
   clearImportResolutionCaches();
+  const normalizedProjectRoot = normalizePath(projectRoot);
   const report = opts?.report;
   const timings = report?.timings;
   const totalStart = performance.now();
@@ -4690,6 +4692,7 @@ async function buildIndexFromFileListShared(
       graph,
       modules,
       byFile: modules,
+      projectRoot: normalizedProjectRoot,
       ...(opts?.native ? { nativeMode: opts.native } : {}),
       exportCache: new Map(),
       scopeCache: new Map(),
@@ -4742,6 +4745,7 @@ export async function buildProjectIndexIncremental(
   opts?: IncrementalBuildOptions,
 ): Promise<ProjectIndex> {
   clearImportResolutionCaches();
+  const normalizedProjectRoot = normalizePath(projectRoot);
   const report = opts?.report;
   initNativeBackendReport(report);
   const timings = report?.timings;
@@ -4936,6 +4940,7 @@ export async function buildProjectIndexIncremental(
         graph: { nodes: new Set(), edges: [] },
         modules: new Map(),
         byFile: new Map(),
+        projectRoot: normalizedProjectRoot,
         ...(opts?.native ? { nativeMode: opts.native } : {}),
         exportCache: new Map(),
         scopeCache: new Map(),
@@ -5237,6 +5242,7 @@ export async function buildProjectIndexIncremental(
         graph,
         modules,
         byFile: modules,
+        projectRoot: normalizedProjectRoot,
         ...(opts?.native ? { nativeMode: opts.native } : {}),
         exportCache: new Map(),
         scopeCache: new Map(),

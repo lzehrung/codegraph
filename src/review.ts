@@ -750,6 +750,83 @@ function resolveReviewSpecifierTarget(
   return candidates[0] ?? basePath;
 }
 
+async function resolveDeletedSnapshotBareTarget(
+  projectRoot: string | undefined,
+  workspaceConfig: WorkspaceConfig | undefined,
+  fromFile: string,
+  spec: string,
+  knownDeletedFiles: readonly FileId[],
+): Promise<string | undefined> {
+  for (const deletedFile of knownDeletedFiles) {
+    const resolved = await resolveDeletedAliasImportTarget(
+      projectRoot,
+      workspaceConfig,
+      fromFile,
+      spec,
+      deletedFile,
+    );
+    if (resolved === deletedFile) {
+      return deletedFile;
+    }
+  }
+  return undefined;
+}
+
+async function resolveDeletedSnapshotTarget(input: {
+  projectRoot: string | undefined;
+  workspaceConfig: WorkspaceConfig | undefined;
+  fromFile: string;
+  spec: string;
+  knownDeletedFiles: readonly FileId[];
+  knownDeletedFileSet: ReadonlySet<FileId>;
+  resolved?: FileId | { external: string };
+}): Promise<{ type: "file"; path: string } | { type: "external"; name: string }> {
+  const {
+    projectRoot,
+    workspaceConfig,
+    fromFile,
+    spec,
+    knownDeletedFiles,
+    knownDeletedFileSet,
+    resolved,
+  } = input;
+
+  if (typeof resolved === "string") {
+    const normalizedResolved = normalizePath(resolved);
+    if (knownDeletedFileSet.has(normalizedResolved)) {
+      return { type: "file", path: normalizedResolved };
+    }
+  }
+
+  if (spec.startsWith(".") || spec.startsWith("/") || /^[A-Za-z]:[\\/]/.test(spec)) {
+    const targetPath = spec.startsWith(".")
+      ? resolveReviewSpecifierTarget(fromFile, spec, knownDeletedFileSet)
+      : normalizePath(spec);
+    return { type: "file", path: targetPath };
+  }
+
+  const resolvedDeletedTarget = await resolveDeletedSnapshotBareTarget(
+    projectRoot,
+    workspaceConfig,
+    fromFile,
+    spec,
+    knownDeletedFiles,
+  );
+  if (resolvedDeletedTarget) {
+    return { type: "file", path: resolvedDeletedTarget };
+  }
+
+  if (typeof resolved === "string") {
+    return { type: "file", path: normalizePath(resolved) };
+  }
+
+  if (resolved && "external" in resolved) {
+    return { type: "external", name: resolved.external };
+  }
+
+  return { type: "external", name: spec };
+}
+
 function edgeKey(edge: Edge): string {
   const toKey =
     edge.to.type === "file"
@@ -822,28 +899,27 @@ async function collectDeletedImporterEdges(
   return Array.from(edges.values());
 }
 
-function collectDeletedSnapshotEdges(
+async function collectDeletedSnapshotEdges(
   deletedSnapshots: ReadonlyMap<FileId, DeletedFileSnapshot>,
-): Edge[] {
+  projectRoot?: string,
+): Promise<Edge[]> {
   const edges = new Map<string, Edge>();
-  const deletedSnapshotFiles = new Set(deletedSnapshots.keys());
+  const deletedSnapshotFiles = Array.from(deletedSnapshots.keys());
+  const deletedSnapshotFileSet = new Set(deletedSnapshotFiles);
+  const workspaceConfig = projectRoot
+    ? await loadWorkspaceConfig(projectRoot)
+    : undefined;
   for (const [file, snapshot] of deletedSnapshots.entries()) {
     for (const imp of snapshot.module.imports) {
-      const to =
-        typeof imp.resolved === "string"
-          ? { type: "file" as const, path: normalizePath(imp.resolved) }
-          : imp.from.startsWith(".")
-            ? {
-                type: "file" as const,
-                path: resolveReviewSpecifierTarget(
-                  file,
-                  imp.from,
-                  deletedSnapshotFiles,
-                ),
-              }
-            : imp.resolved && "external" in imp.resolved
-              ? { type: "external" as const, name: imp.resolved.external }
-              : { type: "external" as const, name: imp.from };
+      const to = await resolveDeletedSnapshotTarget({
+        projectRoot,
+        workspaceConfig,
+        fromFile: file,
+        spec: imp.from,
+        knownDeletedFiles: deletedSnapshotFiles,
+        knownDeletedFileSet: deletedSnapshotFileSet,
+        ...(imp.resolved ? { resolved: imp.resolved } : {}),
+      });
       const edge: Edge = {
         from: file,
         to,
@@ -853,21 +929,14 @@ function collectDeletedSnapshotEdges(
       edges.set(edgeKey(edge), edge);
     }
     for (const entry of listReviewableExports(snapshot.module)) {
-      const to = entry.fromModule.startsWith(".")
-        ? {
-            type: "file" as const,
-            path: resolveReviewSpecifierTarget(
-              file,
-              entry.fromModule,
-              deletedSnapshotFiles,
-            ),
-          }
-        : path.isAbsolute(entry.fromModule)
-          ? {
-              type: "file" as const,
-              path: normalizePath(entry.fromModule),
-            }
-          : { type: "external" as const, name: entry.fromModule };
+      const to = await resolveDeletedSnapshotTarget({
+        projectRoot,
+        workspaceConfig,
+        fromFile: file,
+        spec: entry.fromModule,
+        knownDeletedFiles: deletedSnapshotFiles,
+        knownDeletedFileSet: deletedSnapshotFileSet,
+      });
       const raw = entry.moduleSpecifier ?? entry.fromModule;
       const edge: Edge = {
         from: file,
@@ -1447,7 +1516,10 @@ export async function buildReviewReport(
     const relativeEdge = toRelativeEdge(projectRoot, edge);
     graphEdges.set(edgeKey(relativeEdge), relativeEdge);
   }
-  for (const edge of collectDeletedSnapshotEdges(deletedSnapshots)) {
+  for (const edge of await collectDeletedSnapshotEdges(
+    deletedSnapshots,
+    projectRoot,
+  )) {
     const relativeEdge = toRelativeEdge(projectRoot, edge);
     graphEdges.set(edgeKey(relativeEdge), relativeEdge);
   }
