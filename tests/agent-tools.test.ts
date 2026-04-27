@@ -85,6 +85,15 @@ describe("Agent Tools", () => {
     }
   });
 
+  it("tool_getFileOverview rejects files outside the project root", async () => {
+    const result = await tool_getFileOverview(samplePath, path.resolve("README.md"));
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.reason).toBe("outside_project_root");
+      expect(result.error).toContain("outside project root");
+    }
+  });
+
   it("tool_goToDefinition should find definition", async () => {
     const mainFile = path.join(samplePath, "main.ts");
     // Line 7, column 25 is helperFunction() call which is imported from utils.ts
@@ -111,6 +120,34 @@ describe("Agent Tools", () => {
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
       expect(result.definition.file.replace(/\\/g, "/")).toContain("utils.ts");
+    }
+  });
+
+  it("tool_goToDefinition rejects files outside the project root", async () => {
+    const result = await tool_goToDefinition(
+      samplePath,
+      path.resolve("README.md"),
+      1,
+      1,
+    );
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.reason).toBe("outside_project_root");
+      expect(result.error).toContain("outside project root");
+    }
+  });
+
+  it("tool_findReferences rejects files outside the project root", async () => {
+    const result = await tool_findReferences(
+      samplePath,
+      path.resolve("README.md"),
+      1,
+      1,
+    );
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.reason).toBe("outside_project_root");
+      expect(result.error).toContain("outside project root");
     }
   });
 

@@ -548,7 +548,56 @@ index 1111111..2222222 100644
         entry.kind === "untestedChange" && entry.symbol === "helperFunction",
     );
     expect(untested).toBeDefined();
-    expect(untested?.details?.includes("Candidate tests:")).toBe(true);
+    expect(untested?.details?.includes("Candidate tests:")).toBe(false);
+  });
+
+  it("keeps untested-change candidate tests scoped to the changed file", async () => {
+    const root = await mkTmpDir("dg-impact-untested-scope-");
+    try {
+      await fsp.writeFile(
+        path.join(root, "a.ts"),
+        "export function alpha() { return 1; }\n",
+        "utf8",
+      );
+      await fsp.writeFile(
+        path.join(root, "b.ts"),
+        "export function beta() { return 2; }\n",
+        "utf8",
+      );
+      await fsp.writeFile(
+        path.join(root, "b.test.ts"),
+        "import { beta } from './b';\nbeta();\n",
+        "utf8",
+      );
+
+      const diffText = `diff --git a/a.ts b/a.ts
+index 1111111..2222222 100644
+--- a/a.ts
++++ b/a.ts
+@@ -1 +1 @@
+-export function alpha() { return 1; }
++export function alpha() { return 10; }
+diff --git a/b.ts b/b.ts
+index 3333333..4444444 100644
+--- a/b.ts
++++ b/b.ts
+@@ -1 +1 @@
+-export function beta() { return 2; }
++export function beta() { return 20; }
+`;
+
+      const report = await buildReportForRoot(root, diffText, {
+        testCoverageSuggestions: true,
+      });
+
+      const alphaSuggestion = (report.suggestions ?? []).find(
+        (entry) => entry.kind === "untestedChange" && entry.symbol === "alpha",
+      );
+      expect(alphaSuggestion).toBeDefined();
+      expect(alphaSuggestion?.details?.includes("b.test.ts")).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("uses LCOV coverage to upgrade untested suggestions and includes a test command hint", async () => {

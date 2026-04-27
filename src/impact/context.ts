@@ -2,7 +2,11 @@ import type { FileId } from "../types.js";
 import type { ProjectIndex } from "../indexer.js";
 import { buildSymbolGraphDetailed } from "../graphs.js";
 import type { SymbolEdge } from "../graphs.js";
-import { compileTestPatterns, isTestFilePath } from "./testPatterns.js";
+import { createGraphFileResolver } from "./path.js";
+import {
+  compileTestPatterns,
+  createIndexTestFileMatcher,
+} from "./testPatterns.js";
 
 export interface CandidateTestFile {
   file: FileId;
@@ -253,8 +257,10 @@ export function listCandidateTestFiles(
 ): CandidateTestFile[] {
   const { testPatterns = [], maxCandidates = 100 } = options;
   const candidates = new Map<FileId, CandidateTestFile>();
+  const resolveGraphFile = createGraphFileResolver(index.graph.nodes);
   // Default test patterns (can be extended by caller)
   const allPatterns = compileTestPatterns(testPatterns);
+  const isIndexTestFile = createIndexTestFileMatcher(index, allPatterns);
 
   // Build reverse dependency map: file -> files that depend on it
   const reverseDeps = new Map<FileId, FileId[]>();
@@ -271,13 +277,13 @@ export function listCandidateTestFiles(
   for (const symbolId of changedSymbolIds) {
     // Extract file from symbol ID (format: "file::name::index")
     const file = symbolId.split("::")[0];
-    if (file) symbolFiles.add(file);
+    if (file) symbolFiles.add(resolveGraphFile(file));
   }
 
   for (const file of symbolFiles) {
     const dependents = reverseDeps.get(file) || [];
     for (const dependent of dependents) {
-      if (isTestFilePath(dependent, allPatterns)) {
+      if (isIndexTestFile(dependent)) {
         candidates.set(dependent, {
           file: dependent,
           confidence: "high",
@@ -288,13 +294,10 @@ export function listCandidateTestFiles(
   }
 
   // Find test files that depend on changed files (lower confidence)
-  for (const changedFile of changedFiles) {
+  for (const changedFile of changedFiles.map((file) => resolveGraphFile(file))) {
     const dependents = reverseDeps.get(changedFile) || [];
     for (const dependent of dependents) {
-      if (
-        isTestFilePath(dependent, allPatterns) &&
-        !candidates.has(dependent)
-      ) {
+      if (isIndexTestFile(dependent) && !candidates.has(dependent)) {
         candidates.set(dependent, {
           file: dependent,
           confidence: "medium",
@@ -308,7 +311,7 @@ export function listCandidateTestFiles(
   if (candidates.size < maxCandidates) {
     for (const [file] of index.byFile) {
       if (candidates.size >= maxCandidates) break;
-      if (!candidates.has(file) && isTestFilePath(file, allPatterns)) {
+      if (!candidates.has(file) && isIndexTestFile(file)) {
         candidates.set(file, {
           file,
           confidence: "low",

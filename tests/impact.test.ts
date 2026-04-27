@@ -366,6 +366,33 @@ index 1234567..abcdef0 100644
       expect(Array.isArray(report.impacted)).toBe(true);
     });
 
+    it("rejects raw diff files outside the project root", async () => {
+      const index = await createTestIndex("typescript");
+      const samplePath = path.resolve(
+        process.cwd(),
+        "tests",
+        "samples",
+        "typescript",
+      );
+      const outsideFile = path.resolve(process.cwd(), "README.md").replace(/\\/g, "/");
+
+      const diffText = `diff --git a/${outsideFile} b/${outsideFile}
+index 1234567..abcdef0 100644
+--- a/${outsideFile}
++++ b/${outsideFile}
+@@ -1 +1 @@
+-old
++new
+`;
+
+      await expect(
+        analyzeImpactFromDiff(samplePath, index, {
+          provider: "raw",
+          diffText,
+        }),
+      ).rejects.toThrow(/outside project root/i);
+    });
+
     it("should include project file metadata in impact reports", async () => {
       const index = await createTestIndex("typescript");
       const samplePath = path.resolve(
@@ -495,10 +522,8 @@ index 1234567..abcdef0 100644
         diffText,
       });
 
-      const helperFile = path
-        .join(samplePath, "helpers.ts")
-        .replace(/\\/g, "/");
-      const utilsFile = path.join(samplePath, "utils.ts").replace(/\\/g, "/");
+      const helperFile = "helpers.ts";
+      const utilsFile = "utils.ts";
       const chains = report.reexportChains?.chains ?? [];
 
       const helperChain = chains.find(
@@ -550,10 +575,8 @@ index 1234567..abcdef0 100644
         throw new Error("Expected compact impact report");
       }
 
-      const helperFile = path
-        .join(samplePath, "helpers.ts")
-        .replace(/\\/g, "/");
-      const utilsFile = path.join(samplePath, "utils.ts").replace(/\\/g, "/");
+      const helperFile = "helpers.ts";
+      const utilsFile = "utils.ts";
 
       const chains = report.reexportChains?.chains ?? [];
       const helperChain = chains.find(
@@ -584,6 +607,13 @@ index 1234567..abcdef0 100644
       const cFile = path.join(root, "c.ts").replace(/\\/g, "/");
       const dFile = path.join(root, "d.ts").replace(/\\/g, "/");
       const eFile = path.join(root, "e.ts").replace(/\\/g, "/");
+      const relLibFile = "lib.ts";
+      const relAFile = "a.ts";
+      const relBFile = "b.ts";
+      const relIndexFile = "index.ts";
+      const relCFile = "c.ts";
+      const relDFile = "d.ts";
+      const relEFile = "e.ts";
 
       await fsp.writeFile(libFile, `export const foo = 1;`);
       await fsp.writeFile(aFile, `export { foo } from "./lib";`);
@@ -622,28 +652,28 @@ index 1234567..abcdef0 100644
         });
 
         const chain = report.reexportChains?.chains.find(
-          (entry) => entry.symbol === "foo" && entry.file === libFile,
+          (entry) => entry.symbol === "foo" && entry.file === relLibFile,
         );
         expect(chain).toBeDefined();
 
         const paths = chain?.paths.map((pathChain) => pathChain.join("::")) ?? [];
         const rawPaths = chain?.paths ?? [];
         const expected = [
-          [libFile, aFile],
-          [libFile, bFile],
-          [libFile, aFile, indexFile],
-          [libFile, bFile, indexFile],
-          [libFile, aFile, indexFile, cFile],
-          [libFile, bFile, indexFile, cFile],
+          [relLibFile, relAFile],
+          [relLibFile, relBFile],
+          [relLibFile, relAFile, relIndexFile],
+          [relLibFile, relBFile, relIndexFile],
+          [relLibFile, relAFile, relIndexFile, relCFile],
+          [relLibFile, relBFile, relIndexFile, relCFile],
         ].map((pathChain) => pathChain.join("::"));
 
         for (const expectedPath of expected) {
           expect(paths).toContain(expectedPath);
         }
-        expect(rawPaths.some((pathChain) => pathChain.includes(dFile))).toBe(
+        expect(rawPaths.some((pathChain) => pathChain.includes(relDFile))).toBe(
           false,
         );
-        expect(rawPaths.some((pathChain) => pathChain.includes(eFile))).toBe(
+        expect(rawPaths.some((pathChain) => pathChain.includes(relEFile))).toBe(
           false,
         );
       } finally {
@@ -682,9 +712,7 @@ index 1234567..abcdef0 100644
       expect(report.surfaceArea.topFanIn.length).toBeLessThanOrEqual(10);
       expect(report.surfaceArea.topFanOut.length).toBeLessThanOrEqual(10);
 
-      const changedFilePath = path
-        .join(samplePath, "utils.ts")
-        .replace(/\\/g, "/");
+      const changedFilePath = "utils.ts";
       const changedEntry = report.surfaceArea.files.find(
         (item) => item.file === changedFilePath,
       );
@@ -712,11 +740,12 @@ index 1234567..abcdef0 100644
       }
     });
 
-    it("preserves Windows-style absolute changed paths in surface area summaries", async () => {
-      const report = await buildImpactReport(
-        "/workspace/codegraph",
-        {
-          graph: {
+    it("rejects Windows-style absolute changed paths outside the project root", async () => {
+      await expect(
+        buildImpactReport(
+          "/workspace/codegraph",
+          {
+            graph: {
             nodes: new Set(["C:/repo/src/main.ts"]),
             edges: [],
           },
@@ -734,18 +763,11 @@ index 1234567..abcdef0 100644
             hunks: [],
           },
         ],
-        [],
-        [],
-        [],
-      );
-
-      expect(report.surfaceArea.files).toContainEqual({
-        file: "C:/repo/src/main.ts",
-        fanIn: 0,
-        fanOut: 0,
-        changed: true,
-        impacted: false,
-      });
+          [],
+          [],
+          [],
+        ),
+      ).rejects.toThrow(/outside project root/i);
     });
 
     it("should handle empty diffs", async () => {
@@ -1140,6 +1162,43 @@ index 1234567..abcdef0 100644
       }
     });
 
+    it("deduplicates compact file identities for changed files and symbols", async () => {
+      const index = await createTestIndex("typescript");
+
+      const diffText = `diff --git a/utils.ts b/utils.ts
+index 1234567..abcdef0 100644
+--- a/utils.ts
++++ b/utils.ts
+@@ -1 +1 @@
+-export function helperFunction() {
++export function helperFunctionUpdated() {
+`;
+
+      const report = await analyzeImpactFromDiff(
+        path.resolve(process.cwd(), "tests", "samples", "typescript"),
+        index,
+        {
+          provider: "raw",
+          diffText,
+          compact: true,
+        },
+      );
+
+      if (!("files" in report)) {
+        throw new Error("Expected result to be a compact report");
+      }
+
+      const utilsEntries = report.files.filter((file) => file === "utils.ts");
+      expect(utilsEntries).toHaveLength(1);
+      expect(report.files.some((file) => file.includes("/utils.ts"))).toBe(false);
+
+      const changedFilePath = report.files[report.changedFiles[0]!.file];
+      expect(changedFilePath).toBe("utils.ts");
+
+      const changedSymbolPath = report.files[report.changedSymbols[0]!.file];
+      expect(changedSymbolPath).toBe("utils.ts");
+    });
+
     it("should generate regular report when compact=false or not specified", async () => {
       const index = await createTestIndex("typescript");
 
@@ -1227,11 +1286,8 @@ index 1234567..abcdef0 100644
       expect(report.changedFiles.map(f => f.file)).not.toContain("utils.ts");
 
       const changedSymbolsFiles = report.changedSymbols.map(s => s.file);
-      const mainTsAbs = path.join(samplePath, "main.ts").replace(/\\/g, "/");
-      const utilsTsAbs = path.join(samplePath, "utils.ts").replace(/\\/g, "/");
-
-      expect(changedSymbolsFiles).toContain(mainTsAbs);
-      expect(changedSymbolsFiles).not.toContain(utilsTsAbs);
+      expect(changedSymbolsFiles).toContain("main.ts");
+      expect(changedSymbolsFiles).not.toContain("utils.ts");
     });
   });
 });

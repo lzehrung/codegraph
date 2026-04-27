@@ -440,7 +440,7 @@ npx codegraph impact --base main --head feature --coverage-report coverage/cover
 # Programmatic API equivalent
 await analyzeImpactFromDiff(root, index, { provider: "git", base: "main", head: "feature", verifyReferences: true });
 
-Impact JSON responses can include `exportSummary` (exported changed symbols by file), `reexportChains` (file-level re-export chains for exported changes), `topImpacts` (top 10 impacted items with reasons), `surfaceArea` (fan-in/fan-out summary with top 10 lists), and `clusters` (connected change/impact groups with aggregated severity) when applicable.
+Impact JSON responses can include `exportSummary` (exported changed symbols by file), `reexportChains` (file-level re-export chains for exported changes), `topImpacts` (top 10 impacted items with reasons), `surfaceArea` (fan-in/fan-out summary with top 10 lists), and `clusters` (connected change/impact groups with aggregated severity) when applicable. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
 
 # Generate a PR review bundle (incremental graph + symbol summary)
 npx codegraph review --base origin/main --head HEAD > review.json
@@ -1079,6 +1079,7 @@ if (overview.status === "ok") {
 } else if (overview.status === "not_found") {
   console.error(overview.reason, overview.error);
 } else {
+  // Invalid roots and files outside the project root return structured errors.
   console.error(overview.error);
 }
 

@@ -15,6 +15,7 @@ import {
 } from "./index.js";
 import {
   fileExists,
+  isFilePathWithinRoot,
   normalizePath,
   resolveFilePathFromRoot,
   toProjectRelativePath,
@@ -40,6 +41,7 @@ type ToolFileOverviewResult =
   | {
       status: "error";
       error: string;
+      reason?: "outside_project_root";
     };
 
 /**
@@ -118,9 +120,11 @@ export async function tool_getFileOverview(
       ...(runtimeOptions.native ? { native: runtimeOptions.native } : {}),
     });
 
-    const absPath = normalizePathArg(root, filePath);
-    const relativeFile =
-      toProjectRelativePath(root, absPath) ?? normalizePath(filePath);
+    const resolvedFile = resolveToolFileInput(root, filePath);
+    if (resolvedFile.status === "error") {
+      return resolvedFile;
+    }
+    const { absPath, relativeFile } = resolvedFile;
     const mod = index.byFile.get(absPath);
     if (!mod) {
       const reason = (await fileExists(absPath))
@@ -281,6 +285,35 @@ function normalizePathArg(root: string, file: string): string {
   return normalizePath(resolveFilePathFromRoot(root, file));
 }
 
+function resolveToolFileInput(
+  root: string,
+  filePath: string,
+):
+  | {
+      status: "ok";
+      absPath: string;
+      relativeFile: string;
+    }
+  | {
+      status: "error";
+      error: string;
+      reason: "outside_project_root";
+    } {
+  const absPath = normalizePathArg(root, filePath);
+  if (!isFilePathWithinRoot(root, absPath)) {
+    return {
+      status: "error",
+      reason: "outside_project_root",
+      error: `File is outside project root: ${normalizePath(filePath)}`,
+    };
+  }
+  return {
+    status: "ok",
+    absPath,
+    relativeFile: toProjectRelativePath(root, absPath) ?? normalizePath(filePath),
+  };
+}
+
 function listSymbolsForOverview(index: ProjectIndex, file: string): {
   imports: Array<{ name: string }>;
   definitions: ReturnType<typeof listSymbols>;
@@ -333,10 +366,13 @@ export async function tool_goToDefinition(
         logLevel: "error",
         ...(runtimeOptions.native ? { native: runtimeOptions.native } : {}),
       }));
-    const normalizedPath = normalizePathArg(root, file);
+    const resolvedFile = resolveToolFileInput(root, file);
+    if (resolvedFile.status === "error") {
+      return resolvedFile;
+    }
 
     const result = await goToDefinition(idx, {
-      file: normalizedPath,
+      file: resolvedFile.absPath,
       line,
       column,
     });
@@ -372,10 +408,13 @@ export async function tool_findReferences(
         logLevel: "error",
         ...(runtimeOptions.native ? { native: runtimeOptions.native } : {}),
       }));
-    const normalizedPath = normalizePathArg(root, file);
+    const resolvedFile = resolveToolFileInput(root, file);
+    if (resolvedFile.status === "error") {
+      return resolvedFile;
+    }
 
     const result = await findReferences(idx, {
-      file: normalizedPath,
+      file: resolvedFile.absPath,
       line,
       column,
     });

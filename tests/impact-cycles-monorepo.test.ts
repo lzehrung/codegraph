@@ -42,7 +42,7 @@ index 1111111..2222222 100644
 
     expect(report.cycles?.length ?? 0).toBeGreaterThan(0);
     const cycle = report.cycles?.find((entry) =>
-      entry.files.some((file) => file.endsWith("/a.ts")),
+      entry.files.includes("a.ts"),
     );
     expect(cycle).toBeDefined();
     expect(cycle?.touchesChangedFile).toBe(true);
