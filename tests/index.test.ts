@@ -53,6 +53,17 @@ describe("Project Indexing", () => {
     ).toBe(false);
   });
 
+  it("rejects explicit file-list inputs outside the project root", async () => {
+    const root = await fsp.mkdtemp(
+      path.join(os.tmpdir(), "dg-explicit-file-root-"),
+    );
+    const outsideFile = path.resolve("README.md");
+
+    await expect(
+      buildProjectIndexFromFiles(root, [outsideFile], { cache: "memory" }),
+    ).rejects.toThrow(/outside project root/);
+  });
+
   describe("TypeScript Project", () => {
     it("should index all TypeScript files", async () => {
       const index = await createTestIndex("typescript");

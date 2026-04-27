@@ -55,4 +55,19 @@ describe('Graph delta export', () => {
       hasFileEdge(delta.removed, 'a.ts', 'b.ts', './b'),
     ).toBe(true);
   });
+
+  it("rejects changed files outside the project root", async () => {
+    const root = await mkTmpDir("dg-graph-delta-root-");
+    const insideFile = path.join(root, "a.ts");
+    await fsp.writeFile(insideFile, `export const a = 1;\n`, "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 2 });
+
+    await expect(
+      buildGraphDelta(root, {
+        cache: "disk",
+        threads: 2,
+        files: [path.resolve("README.md")],
+      }),
+    ).rejects.toThrow(/outside project root/);
+  });
 });
