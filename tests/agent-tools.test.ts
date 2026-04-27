@@ -1,7 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
+import * as codegraph from "../src/index.js";
 import {
   tool_listProjectFiles,
   tool_getGraph,
@@ -95,11 +96,20 @@ describe("Agent Tools", () => {
   });
 
   it("tool_getFileOverview rejects files outside the project root", async () => {
-    const result = await tool_getFileOverview(samplePath, path.resolve("README.md"));
-    expect(result.status).toBe("error");
-    if (result.status === "error") {
-      expect(result.reason).toBe("outside_project_root");
-      expect(result.error).toContain("outside project root");
+    const buildSpy = vi.spyOn(codegraph, "buildProjectIndex");
+    try {
+      const result = await tool_getFileOverview(
+        samplePath,
+        path.resolve("README.md"),
+      );
+      expect(result.status).toBe("error");
+      if (result.status === "error") {
+        expect(result.reason).toBe("outside_project_root");
+        expect(result.error).toContain("outside project root");
+      }
+      expect(buildSpy).not.toHaveBeenCalled();
+    } finally {
+      buildSpy.mockRestore();
     }
   });
 
@@ -141,30 +151,42 @@ describe("Agent Tools", () => {
   });
 
   it("tool_goToDefinition rejects files outside the project root", async () => {
-    const result = await tool_goToDefinition(
-      samplePath,
-      path.resolve("README.md"),
-      1,
-      1,
-    );
-    expect(result.status).toBe("error");
-    if (result.status === "error") {
-      expect(result.reason).toBe("outside_project_root");
-      expect(result.error).toContain("outside project root");
+    const buildSpy = vi.spyOn(codegraph, "buildProjectIndex");
+    try {
+      const result = await tool_goToDefinition(
+        samplePath,
+        path.resolve("README.md"),
+        1,
+        1,
+      );
+      expect(result.status).toBe("error");
+      if (result.status === "error") {
+        expect(result.reason).toBe("outside_project_root");
+        expect(result.error).toContain("outside project root");
+      }
+      expect(buildSpy).not.toHaveBeenCalled();
+    } finally {
+      buildSpy.mockRestore();
     }
   });
 
   it("tool_findReferences rejects files outside the project root", async () => {
-    const result = await tool_findReferences(
-      samplePath,
-      path.resolve("README.md"),
-      1,
-      1,
-    );
-    expect(result.status).toBe("error");
-    if (result.status === "error") {
-      expect(result.reason).toBe("outside_project_root");
-      expect(result.error).toContain("outside project root");
+    const buildSpy = vi.spyOn(codegraph, "buildProjectIndex");
+    try {
+      const result = await tool_findReferences(
+        samplePath,
+        path.resolve("README.md"),
+        1,
+        1,
+      );
+      expect(result.status).toBe("error");
+      if (result.status === "error") {
+        expect(result.reason).toBe("outside_project_root");
+        expect(result.error).toContain("outside project root");
+      }
+      expect(buildSpy).not.toHaveBeenCalled();
+    } finally {
+      buildSpy.mockRestore();
     }
   });
 

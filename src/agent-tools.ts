@@ -118,15 +118,15 @@ export async function tool_getFileOverview(
   runtimeOptions: ToolRuntimeOptions = {},
 ): Promise<ToolFileOverviewResult> {
   try {
-    const index = await buildProjectIndex(root, {
-      logLevel: "error",
-      ...(runtimeOptions.native ? { native: runtimeOptions.native } : {}),
-    });
-
     const resolvedFile = resolveToolFileInput(root, filePath);
     if (resolvedFile.status === "error") {
       return resolvedFile;
     }
+
+    const index = await buildProjectIndex(root, {
+      logLevel: "error",
+      ...(runtimeOptions.native ? { native: runtimeOptions.native } : {}),
+    });
     const { absPath, relativeFile } = resolvedFile;
     const mod = index.byFile.get(absPath);
     if (!mod) {
@@ -454,16 +454,17 @@ export async function tool_goToDefinition(
   reason?: string;
 }> {
   try {
+    const resolvedFile = resolveToolFileInput(root, file);
+    if (resolvedFile.status === "error") {
+      return resolvedFile;
+    }
+
     const idx =
       index ??
       (await buildProjectIndex(root, {
         logLevel: "error",
         ...(runtimeOptions.native ? { native: runtimeOptions.native } : {}),
       }));
-    const resolvedFile = resolveToolFileInput(root, file);
-    if (resolvedFile.status === "error") {
-      return resolvedFile;
-    }
 
     const result = await goToDefinition(idx, {
       file: resolvedFile.absPath,
@@ -502,16 +503,17 @@ export async function tool_findReferences(
   reason?: string;
 }> {
   try {
+    const resolvedFile = resolveToolFileInput(root, file);
+    if (resolvedFile.status === "error") {
+      return resolvedFile;
+    }
+
     const idx =
       index ??
       (await buildProjectIndex(root, {
         logLevel: "error",
         ...(runtimeOptions.native ? { native: runtimeOptions.native } : {}),
       }));
-    const resolvedFile = resolveToolFileInput(root, file);
-    if (resolvedFile.status === "error") {
-      return resolvedFile;
-    }
 
     const result = await findReferences(idx, {
       file: resolvedFile.absPath,

@@ -55,6 +55,16 @@ describe("package metadata", () => {
     expect(bin.codegraph).toBe("dist/cli.js");
   });
 
+  it("keeps the root package description aligned with the multi-language surface", () => {
+    const rootPackage = readJson("package.json");
+    const description =
+      typeof rootPackage.description === "string" ? rootPackage.description : "";
+    const normalizedDescription = description.toLowerCase();
+
+    expect(normalizedDescription).toContain("multi-language");
+    expect(normalizedDescription).not.toContain("js/ts/python monorepos");
+  });
+
   it("keeps JS fallback grammars out of the native package", () => {
     const nativePackage = readJson("packages/codegraph-native/package.json");
     const dependencies = readStringRecord(nativePackage.dependencies);
