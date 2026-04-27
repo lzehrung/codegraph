@@ -673,6 +673,204 @@ describe("Review report", () => {
     });
   });
 
+  it("includes deleted consumer import edges in graphDelta", async () => {
+    const root = await mkTmpDir("dg-review-deleted-consumer-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const libFile = path.join(srcDir, "lib.ts");
+    const consumerFile = path.join(srcDir, "consumer.ts");
+    await fsp.writeFile(libFile, `export const lib = 1;\n`, "utf8");
+    await fsp.writeFile(
+      consumerFile,
+      `import { lib } from './lib';\nexport const seen = lib;\n`,
+      "utf8",
+    );
+
+    await buildProjectIndex(root, { cache: "memory" });
+    await fsp.unlink(consumerFile);
+
+    const report = await buildReviewReport(root, {
+      files: [consumerFile],
+      cache: "memory",
+      diffText: [
+        "diff --git a/src/consumer.ts b/src/consumer.ts",
+        "deleted file mode 100644",
+        "index 1111111..0000000",
+        "--- a/src/consumer.ts",
+        "+++ /dev/null",
+        "@@ -1,2 +0,0 @@",
+        "-import { lib } from './lib';",
+        "-export const seen = lib;",
+        "",
+      ].join("\n"),
+    });
+
+    expect(report.graphDelta).toContainEqual({
+      from: "src/consumer.ts",
+      to: { type: "file", path: "src/lib.ts" },
+      raw: "./lib",
+    });
+  });
+
+  it("includes deleted-to-deleted import edges without relying on warm caches", async () => {
+    const root = await mkTmpDir("dg-review-deleted-chain-cold-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const depFile = path.join(srcDir, "dep.ts");
+    const consumerFile = path.join(srcDir, "consumer.ts");
+    await fsp.writeFile(depFile, `export const dep = 1;\n`, "utf8");
+    await fsp.writeFile(
+      consumerFile,
+      `import { dep } from './dep';\nexport const seen = dep;\n`,
+      "utf8",
+    );
+
+    await fsp.unlink(consumerFile);
+    await fsp.unlink(depFile);
+
+    const report = await buildReviewReport(root, {
+      files: [consumerFile, depFile],
+      cache: "memory",
+      diffText: [
+        "diff --git a/src/consumer.ts b/src/consumer.ts",
+        "deleted file mode 100644",
+        "index 1111111..0000000",
+        "--- a/src/consumer.ts",
+        "+++ /dev/null",
+        "@@ -1,2 +0,0 @@",
+        "-import { dep } from './dep';",
+        "-export const seen = dep;",
+        "",
+        "diff --git a/src/dep.ts b/src/dep.ts",
+        "deleted file mode 100644",
+        "index 2222222..0000000",
+        "--- a/src/dep.ts",
+        "+++ /dev/null",
+        "@@ -1 +0,0 @@",
+        "-export const dep = 1;",
+        "",
+      ].join("\n"),
+    });
+
+    expect(report.graphDelta).toContainEqual({
+      from: "src/consumer.ts",
+      to: { type: "file", path: "src/dep.ts" },
+      raw: "./dep",
+    });
+  });
+
+  it("includes deleted consumer alias import edges in graphDelta", async () => {
+    const root = await mkTmpDir("dg-review-deleted-alias-consumer-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const libFile = path.join(srcDir, "lib.ts");
+    const consumerFile = path.join(srcDir, "consumer.ts");
+    await fsp.writeFile(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify(
+        {
+          compilerOptions: {
+            baseUrl: ".",
+            paths: {
+              "@lib": ["src/lib.ts"],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fsp.writeFile(libFile, `export const lib = 1;\n`, "utf8");
+    await fsp.writeFile(
+      consumerFile,
+      `import { lib } from '@lib';\nexport const seen = lib;\n`,
+      "utf8",
+    );
+
+    await buildProjectIndex(root, { cache: "memory" });
+    await fsp.unlink(consumerFile);
+
+    const report = await buildReviewReport(root, {
+      files: [consumerFile],
+      cache: "memory",
+      diffText: [
+        "diff --git a/src/consumer.ts b/src/consumer.ts",
+        "deleted file mode 100644",
+        "index 1111111..0000000",
+        "--- a/src/consumer.ts",
+        "+++ /dev/null",
+        "@@ -1,2 +0,0 @@",
+        "-import { lib } from '@lib';",
+        "-export const seen = lib;",
+        "",
+      ].join("\n"),
+    });
+
+    expect(report.graphDelta).toContainEqual({
+      from: "src/consumer.ts",
+      to: { type: "file", path: "src/lib.ts" },
+      raw: "@lib",
+    });
+  });
+
+  it("includes deleted consumer workspace import edges in graphDelta", async () => {
+    const root = await mkTmpDir("dg-review-deleted-workspace-consumer-");
+    const libDir = path.join(root, "packages", "lib");
+    const appDir = path.join(root, "packages", "app");
+    const libFile = path.join(libDir, "src", "index.ts");
+    const consumerFile = path.join(appDir, "src", "consumer.ts");
+
+    await fsp.mkdir(path.dirname(libFile), { recursive: true });
+    await fsp.mkdir(path.dirname(consumerFile), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ private: true, workspaces: ["packages/*"] }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(libDir, "package.json"),
+      JSON.stringify({ name: "@repo/lib", main: "src/index.ts" }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(appDir, "package.json"),
+      JSON.stringify({ name: "@repo/app" }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(libFile, `export const lib = 1;\n`, "utf8");
+    await fsp.writeFile(
+      consumerFile,
+      `import { lib } from '@repo/lib';\nexport const seen = lib;\n`,
+      "utf8",
+    );
+
+    await buildProjectIndex(root, { cache: "memory" });
+    await fsp.unlink(consumerFile);
+
+    const report = await buildReviewReport(root, {
+      files: [consumerFile],
+      cache: "memory",
+      diffText: [
+        "diff --git a/packages/app/src/consumer.ts b/packages/app/src/consumer.ts",
+        "deleted file mode 100644",
+        "index 1111111..0000000",
+        "--- a/packages/app/src/consumer.ts",
+        "+++ /dev/null",
+        "@@ -1,2 +0,0 @@",
+        "-import { lib } from '@repo/lib';",
+        "-export const seen = lib;",
+        "",
+      ].join("\n"),
+    });
+
+    expect(report.graphDelta).toContainEqual({
+      from: "packages/app/src/consumer.ts",
+      to: { type: "file", path: "packages/lib/src/index.ts" },
+      raw: "@repo/lib",
+    });
+  });
+
   it("reports deleted re-export files as exported API changes", async () => {
     const root = await mkTmpDir("dg-review-deleted-barrel-");
     runGit(root, ["init"]);

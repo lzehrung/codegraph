@@ -256,7 +256,10 @@ export async function tool_listProjectFiles(
 ): Promise<{ status: "ok" | "error"; files?: string[]; error?: string }> {
   try {
     const files = await listProjectFiles(root);
-    return { status: "ok", files };
+    return {
+      status: "ok",
+      files: files.map((file) => normalizeToolFileOutput(root, file)),
+    };
   } catch (error) {
     return { status: "error", error: String(error) };
   }
@@ -278,7 +281,13 @@ export async function tool_getGraph(
     const g = await collectGraph(root, files, {
       ...(runtimeOptions.native ? { native: runtimeOptions.native } : {}),
     });
-    return { status: "ok", graph: { nodes: [...g.nodes], edges: g.edges } };
+    return {
+      status: "ok",
+      graph: normalizeToolGraph(root, {
+        nodes: [...g.nodes],
+        edges: g.edges,
+      }),
+    };
   } catch (error) {
     return { status: "error", error: String(error) };
   }
@@ -397,6 +406,30 @@ function normalizeToolReference(root: string, reference: Reference): Reference {
           },
         }
       : {}),
+  };
+}
+
+function normalizeToolEdge(root: string, edge: Edge): Edge {
+  return {
+    ...edge,
+    from: normalizeToolFileOutput(root, edge.from),
+    to:
+      edge.to.type === "file"
+        ? {
+            type: "file",
+            path: normalizeToolFileOutput(root, edge.to.path),
+          }
+        : edge.to,
+  };
+}
+
+function normalizeToolGraph(
+  root: string,
+  graph: { nodes: string[]; edges: Edge[] },
+): { nodes: string[]; edges: Edge[] } {
+  return {
+    nodes: graph.nodes.map((node) => normalizeToolFileOutput(root, node)),
+    edges: graph.edges.map((edge) => normalizeToolEdge(root, edge)),
   };
 }
 

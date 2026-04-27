@@ -2996,7 +2996,7 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
-  return { file, exports, imports: [], locals };
+  return { file, exports, imports, locals };
 }
 
 export async function collectImportsForFile(
