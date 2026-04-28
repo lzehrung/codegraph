@@ -1,3 +1,5 @@
+import path from "node:path";
+
 export type ParsedRustImportStatement =
   | {
       kind: "member";
@@ -96,8 +98,10 @@ export type ParsedPhpImportStatement =
       from: string;
       imported: string;
       local: string;
-      importType: "class" | "function" | "const";
+      importType: PhpImportType;
     };
+
+export type PhpImportType = "class" | "function" | "const";
 
 function splitTopLevelCommaList(input: string): string[] {
   const items: string[] = [];
@@ -123,7 +127,7 @@ function splitTopLevelCommaList(input: string): string[] {
 
 function parsePhpImportClause(
   rawClause: string,
-  importType: "class" | "function" | "const",
+  importType: PhpImportType,
 ): ParsedPhpImportStatement[] {
   const clause = rawClause.trim().replace(/;$/, "");
   if (!clause) return [];
@@ -178,15 +182,20 @@ function parsePhpImportClause(
 
 export function parsePhpImportStatement(
   stmtText: string,
+  fromFile?: string,
 ): ParsedPhpImportStatement[] {
   const trimmed = stmtText.trim();
   if (!trimmed) return [];
 
   const includeMatch = trimmed.match(
-    /^(?:require|require_once|include|include_once)\s*\(?\s*["']([^"']+)["']\s*\)?\s*;?$/i,
+    /^(?:require_once|include_once|require|include)\s*(?<expr>.+?)\s*;?$/is,
   );
-  if (includeMatch?.[1]) {
-    return [{ kind: "include", from: includeMatch[1] }];
+  const includeExpr = includeMatch?.groups?.expr?.trim();
+  if (includeExpr) {
+    const includePath = resolvePhpIncludePath(includeExpr, fromFile);
+    if (includePath) {
+      return [{ kind: "include", from: includePath }];
+    }
   }
 
   const useMatch = trimmed.match(/^(?:use)\s+(.+?)\s*;?$/is);
@@ -207,6 +216,149 @@ export function parsePhpImportStatement(
     results.push(...parsePhpImportClause(body, importType));
   }
   return results;
+}
+
+function stripOuterParens(input: string): string {
+  let current = input.trim();
+  while (current.startsWith("(") && current.endsWith(")")) {
+    let depth = 0;
+    let isWrapped = true;
+    for (let i = 0; i < current.length; i += 1) {
+      const ch = current[i];
+      if (ch === "(") depth += 1;
+      if (ch === ")") {
+        depth -= 1;
+        if (depth === 0 && i < current.length - 1) {
+          isWrapped = false;
+          break;
+        }
+      }
+    }
+    if (!isWrapped || depth !== 0) break;
+    current = current.slice(1, -1).trim();
+  }
+  return current;
+}
+
+function splitPhpConcatenation(input: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let depth = 0;
+  let quote: "'" | '"' | null = null;
+
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+    const prev = i > 0 ? input[i - 1] : "";
+    if (quote) {
+      current += ch;
+      if (ch === quote && prev !== "\\") {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === "(") depth += 1;
+    if (ch === ")") depth = Math.max(0, depth - 1);
+    if (ch === "." && depth === 0) {
+      const trimmed = current.trim();
+      if (trimmed) parts.push(trimmed);
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+
+  const trimmed = current.trim();
+  if (trimmed) parts.push(trimmed);
+  return parts;
+}
+
+function parsePhpStringLiteral(token: string): string | null {
+  if (token.length < 2) return null;
+  const quote = token[0];
+  if ((quote !== "'" && quote !== '"') || token[token.length - 1] !== quote) {
+    return null;
+  }
+  const body = token.slice(1, -1);
+  if (quote === "'") {
+    return body.replace(/\\\\/g, "\\").replace(/\\'/g, "'");
+  }
+  return body
+    .replace(/\\\\/g, "\\")
+    .replace(/\\"/g, '"')
+    .replace(/\\'/g, "'");
+}
+
+function evaluatePhpIncludeToken(token: string, fromFile?: string): string | null {
+  const trimmed = stripOuterParens(token.trim());
+  const literal = parsePhpStringLiteral(trimmed);
+  if (literal !== null) {
+    return literal;
+  }
+
+  if (!fromFile) {
+    return null;
+  }
+
+  if (/^__DIR__$/i.test(trimmed)) {
+    return path.dirname(fromFile);
+  }
+  if (/^__FILE__$/i.test(trimmed)) {
+    return fromFile;
+  }
+
+  const dirnameMatch = trimmed.match(/^dirname\s*\((.+)\)$/is);
+  if (dirnameMatch?.[1]) {
+    const innerValue = evaluatePhpIncludeToken(dirnameMatch[1], fromFile);
+    return innerValue ? path.dirname(innerValue) : null;
+  }
+
+  return null;
+}
+
+function resolvePhpIncludePath(expr: string, fromFile?: string): string | null {
+  const normalizedExpr = stripOuterParens(expr.trim().replace(/;$/, ""));
+  const parts = splitPhpConcatenation(normalizedExpr);
+  if (parts.length === 0) {
+    return null;
+  }
+
+  let combined = "";
+  for (const part of parts) {
+    const evaluated = evaluatePhpIncludeToken(part, fromFile);
+    if (evaluated === null) {
+      return null;
+    }
+    combined += evaluated;
+  }
+
+  if (!combined) {
+    return null;
+  }
+
+  if (!fromFile) {
+    return combined.replace(/\\/g, "/");
+  }
+
+  const normalizedPath = path.normalize(combined);
+  if (!path.isAbsolute(normalizedPath)) {
+    return normalizedPath.replace(/\\/g, "/");
+  }
+
+  const relativePath = path
+    .relative(path.dirname(fromFile), normalizedPath)
+    .replace(/\\/g, "/");
+  if (
+    relativePath.startsWith(".") ||
+    relativePath.startsWith("/")
+  ) {
+    return relativePath;
+  }
+  return `./${relativePath}`;
 }
 
 export type ParsedKotlinImportStatement =

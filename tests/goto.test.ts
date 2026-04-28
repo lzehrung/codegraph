@@ -197,6 +197,33 @@ describe('Go to Definition', () => {
         expect(result.definition.range.start.line).toBe(5);
       }
     });
+
+    it('should find definition through PHP __DIR__ includes', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const consumerFile = path.join(samplePath, 'dir-include-consumer.php').replace(/\\/g, '/');
+      const helpersFile = path.join(samplePath, 'helpers.php').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, consumerFile, 5, 6, helpersFile, 3);
+    });
+
+    it('should find definition of fully-qualified Composer-mapped classes', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const consumerFile = path.join(samplePath, 'composer-qualified-consumer.php').replace(/\\/g, '/');
+      const serviceFile = path.join(samplePath, 'src', 'Domain', 'Service.php').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, consumerFile, 3, 27, serviceFile, 5);
+    });
+
+    it('should respect PHP function import kinds when class names collide', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const consumerFile = path.join(samplePath, 'function-import-consumer.php').replace(/\\/g, '/');
+      const functionFile = path.join(samplePath, 'src', 'Collision', 'ThingFunction.php').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, consumerFile, 5, 10, functionFile, 5);
+    });
   });
 
   describe('JavaScript', () => {

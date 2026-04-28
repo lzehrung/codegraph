@@ -136,6 +136,17 @@ function extractKotlinImportSpecifier(statementText: string): string | null {
   return match[1].endsWith(".*") ? match[1].slice(0, -2) : match[1];
 }
 
+function extractPhpQualifiedClassSpecifiers(source: string): ModuleSpecifier[] {
+  const specifiers: ModuleSpecifier[] = [];
+  const newClassPattern = /\bnew\s+(\\?[A-Za-z_][\w]*(?:\\[A-Za-z_][\w]*)+)/g;
+  for (const match of source.matchAll(newClassPattern)) {
+    const spec = match[1]?.trim();
+    if (!spec || !spec.includes("\\")) continue;
+    specifiers.push({ spec, phpImportType: "class" });
+  }
+  return specifiers;
+}
+
 function normalizeModuleSpecifiers(
   specifiers: ModuleSpecifier[],
 ): ModuleSpecifier[] {
@@ -145,6 +156,9 @@ function normalizeModuleSpecifiers(
       : {
           spec: entry.spec,
           ...(entry.raw !== undefined ? { raw: entry.raw } : {}),
+          ...(entry.phpImportType
+            ? { phpImportType: entry.phpImportType }
+            : {}),
           ...(entry.resolutionKind
             ? { resolutionKind: entry.resolutionKind }
             : {}),
@@ -401,8 +415,14 @@ export function collectModuleSpecifiersFromSource(
             match.captures[0]?.text ??
             "";
           if (!stmtText) continue;
-          for (const parsed of parsePhpImportStatement(stmtText)) {
-            out.push({ spec: parsed.from, typeOnly: false });
+          for (const parsed of parsePhpImportStatement(stmtText, opts?.file)) {
+            out.push({
+              spec: parsed.from,
+              typeOnly: false,
+              ...(parsed.kind === "named"
+                ? { phpImportType: parsed.importType }
+                : {}),
+            });
           }
         }
       } catch {
@@ -411,6 +431,12 @@ export function collectModuleSpecifiersFromSource(
       }
     }
     if (out.length > 0 || phpMatches !== null || queryFailed) {
+      const qualifiedClassSpecifiers = extractPhpQualifiedClassSpecifiers(
+        source,
+      );
+      if (qualifiedClassSpecifiers.length > 0) {
+        out.push(...qualifiedClassSpecifiers);
+      }
       return normalizeModuleSpecifiers(out);
     }
   }
@@ -833,6 +859,7 @@ export async function collectEdgesForFile(
       spec,
       raw,
       typeOnly,
+      phpImportType,
       resolved,
       confidence,
       resolutionKind,
@@ -905,6 +932,7 @@ export async function collectEdgesForFile(
                 ...(opts.resolutionHints
                   ? { resolutionHints: opts.resolutionHints }
                   : {}),
+                ...(phpImportType ? { phpImportType } : {}),
               })
             : await resolvePathLikeModule(projectRoot, spec);
         if (res && typeof res === "string") {

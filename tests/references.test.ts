@@ -362,6 +362,37 @@ describe('Find References', () => {
         expectReferenceAt(helperResult, groupedFile, 9);
       }
     });
+
+    it('should find references for fully-qualified Composer-mapped classes', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const serviceFile = path.join(samplePath, 'src', 'Domain', 'Service.php').replace(/\\/g, '/');
+      const qualifiedConsumerFile = path.join(samplePath, 'composer-qualified-consumer.php').replace(/\\/g, '/');
+
+      const result = await testFindReferences(index, serviceFile, 5, 7, 3);
+
+      expect(result.status).toBe('ok');
+      if (result.status === 'ok') {
+        expectReferenceAt(result, serviceFile, 5);
+        expectReferenceAt(result, path.join(samplePath, 'composer-consumer.php').replace(/\\/g, '/'), 5);
+        expectReferenceAt(result, qualifiedConsumerFile, 3);
+      }
+    });
+
+    it('should find references for function imports when class names collide', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const functionFile = path.join(samplePath, 'src', 'Collision', 'ThingFunction.php').replace(/\\/g, '/');
+      const consumerFile = path.join(samplePath, 'function-import-consumer.php').replace(/\\/g, '/');
+
+      const result = await testFindReferences(index, functionFile, 5, 10, 2);
+
+      expect(result.status).toBe('ok');
+      if (result.status === 'ok') {
+        expectReferenceAt(result, functionFile, 5);
+        expectReferenceAt(result, consumerFile, 5);
+      }
+    });
   });
 
   describe('JavaScript', () => {

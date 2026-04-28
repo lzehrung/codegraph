@@ -37,7 +37,7 @@ Sample graph output can be generated with `npm run graph:mermaid` or `npm run gr
   - JS/TS: `import`, `export ... from`, `export * from`, `require()`, `import()`, CommonJS destructuring
   - JSON modules referenced from JS/TS (including `assert { type: "json" }`) are treated as default-only dependencies
   - Python: `import`, `from ... import`, relative imports with package resolution
-  - PHP: `require`, `require_once`, `include`, `include_once`, grouped `use` imports, and Composer autoload metadata (`psr-4`, `autoload-dev`, `classmap`, `autoload.files`)
+  - PHP: `require`, `require_once`, `include`, `include_once`, constant-foldable include paths like `__DIR__ . '/file.php'`, grouped `use` imports, fully-qualified class references, and Composer autoload metadata (`psr-4`, `autoload-dev`, `classmap`, `autoload.files`)
   - Go/Java/C#/Ruby/Rust: Tree-sitter queries capture module imports/usings and resolve them to files or packages
   - HTML/Astro/Handlebars/Markdown/MDX/reStructuredText/AsciiDoc: graph-first document and template links via `href`/`src`, Markdown links, MDX/Astro static imports, Sphinx-style includes/toctrees, and AsciiDoc `xref`/`include`
   - Unresolved targets are represented as **external** nodes
@@ -50,13 +50,13 @@ Sample graph output can be generated with `npm run graph:mermaid` or `npm run gr
   - Cross-file navigation through one shared pipeline across supported languages
   - TS/JS: Re-exports, namespace imports, CommonJS destructuring
   - Python: Module imports, `__all__` exports, relative imports
-  - PHP: Direct include edges, grouped `use` imports, and Composer-aware namespace resolution
+  - PHP: Direct and `__DIR__` include edges, grouped `use` imports, fully-qualified class references, and Composer-aware namespace resolution
   - Go/Java/C#/Ruby/Rust/C/C++/Kotlin/Swift: Package, header, and namespace lookups flow through the same shared resolver
 - **Find references**
   - Project-wide scanning with lexical scope awareness
   - TS/JS: Namespace members, re-exports, CommonJS patterns
   - Python: Module imports, `__all__` exports, relative imports
-  - PHP: Direct include edges, grouped `use` imports, and Composer-aware symbol resolution
+  - PHP: Direct and `__DIR__` include edges, grouped `use` imports, fully-qualified class references, and Composer-aware symbol resolution
   - Go/Java/C#/Ruby/Rust/C/C++/Kotlin/Swift: Collects bindings and usages through the same shared reference pipeline
 - **AST grep**
   - Run arbitrary Tree-sitter queries across the repo

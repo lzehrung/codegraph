@@ -839,6 +839,169 @@ describe("Import Resolution", () => {
     }
   });
 
+  it("does not resolve PHP symbols outside Composer classmap boundaries", async () => {
+    const root = await mkTmpDir("dg-resolve-php-classmap-boundary-");
+    const legacyDir = path.join(root, "legacy");
+    const otherDir = path.join(root, "other");
+    const consumerFile = path.join(root, "consumer.php");
+    const allowedServiceFile = path.join(otherDir, "AllowedService.php");
+    const legacyServiceFile = path.join(legacyDir, "LegacyService.php");
+
+    await fsp.mkdir(legacyDir, { recursive: true });
+    await fsp.mkdir(otherDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { classmap: ["other/"] } }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      allowedServiceFile,
+      ["<?php", "", "class AllowedService {}", ""].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      legacyServiceFile,
+      ["<?php", "", "class LegacyService {}", ""].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      ["<?php", "", "use LegacyService;", "", "$service = new LegacyService();", ""].join("\n"),
+      "utf8",
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await goToDefinition(index, {
+      file: consumerFile.replace(/\\/g, "/"),
+      line: 5,
+      column: 16,
+    });
+
+    expect(result.status).toBe("not_found");
+  });
+
+  it("resolves PHP __DIR__ include expressions", async () => {
+    const root = await mkTmpDir("dg-resolve-php-dir-include-");
+    const consumerFile = path.join(root, "consumer.php");
+    const helpersFile = path.join(root, "helpers.php");
+
+    await fsp.writeFile(
+      helpersFile,
+      ["<?php", "", "function helper_from_dir(): string", "{", "    return 'ok';", "}", ""].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      ["<?php", "", "require __DIR__ . '/helpers.php';", "", "$value = helper_from_dir();", ""].join("\n"),
+      "utf8",
+    );
+
+    const consumerPath = consumerFile.replace(/\\/g, "/");
+    const helpersPath = helpersFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [consumerPath, helpersPath]);
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === consumerPath &&
+          edge.to.type === "file" &&
+          edge.to.path === helpersPath,
+      ),
+    ).toBe(true);
+
+    const index = await buildProjectIndex(root);
+    const result = await goToDefinition(index, {
+      file: consumerPath,
+      line: 5,
+      column: 12,
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.definition.file).toBe(helpersPath);
+      expect(result.definition.range.start.line).toBe(3);
+    }
+  });
+
+  it("resolves fully-qualified PHP class references without use statements", async () => {
+    const root = await mkTmpDir("dg-resolve-php-qualified-");
+    const srcDir = path.join(root, "src", "Domain");
+    const consumerFile = path.join(root, "consumer.php");
+    const serviceFile = path.join(srcDir, "Service.php");
+
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { "psr-4": { "App\\\\": "src/" } } }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      serviceFile,
+      ["<?php", "", "namespace App\\Domain;", "", "class Service {}", ""].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      ["<?php", "", "$service = new App\\Domain\\Service();", ""].join("\n"),
+      "utf8",
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await goToDefinition(index, {
+      file: consumerFile.replace(/\\/g, "/"),
+      line: 3,
+      column: 27,
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.definition.file).toBe(serviceFile.replace(/\\/g, "/"));
+      expect(result.definition.range.start.line).toBe(5);
+    }
+  });
+
+  it("resolves PHP function imports to functions even when classes share the same basename", async () => {
+    const root = await mkTmpDir("dg-resolve-php-function-kind-");
+    const srcDir = path.join(root, "src", "Collision");
+    const consumerFile = path.join(root, "consumer.php");
+    const classFile = path.join(srcDir, "Thing.php");
+    const functionFile = path.join(srcDir, "ThingFunction.php");
+
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { "psr-4": { "App\\\\": "src/" } } }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      classFile,
+      ["<?php", "", "namespace App\\Collision;", "", "class Thing {}", ""].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      functionFile,
+      ["<?php", "", "namespace App\\Collision;", "", "function Thing(): string", "{", "    return 'ok';", "}", ""].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      ["<?php", "", "use function App\\Collision\\Thing;", "", "$value = Thing();", ""].join("\n"),
+      "utf8",
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await goToDefinition(index, {
+      file: consumerFile.replace(/\\/g, "/"),
+      line: 5,
+      column: 10,
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.definition.file).toBe(functionFile.replace(/\\/g, "/"));
+      expect(result.definition.range.start.line).toBe(5);
+    }
+  });
+
   it("treats PHP autoload.files entries as implicit file dependencies and symbol sources", async () => {
     const root = await mkTmpDir("dg-resolve-php-autoload-files-");
     const bootstrapDir = path.join(root, "bootstrap");

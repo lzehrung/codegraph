@@ -1209,6 +1209,7 @@ export type ModuleSpecifier = {
   spec: string;
   raw?: string;
   typeOnly?: boolean;
+  phpImportType?: "class" | "function" | "const";
   resolutionKind?: "document" | "source";
   dropIfUnresolved?: boolean;
   resolved?: "heuristic" | "precise";
@@ -2101,6 +2102,7 @@ type JavaSymbolIndexEntry = {
 type PhpSymbolIndexEntry = {
   packageName: string | null;
   symbols: Set<string>;
+  kindsBySymbol: Map<string, Set<"class" | "function" | "const">>;
 };
 
 type PhpComposerConfig = {
@@ -2135,6 +2137,7 @@ const phpProjectSymbolIndexCache = new Map<
   Promise<LanguageProjectSymbolIndex>
 >();
 const phpComposerConfigCache = new Map<string, Promise<PhpComposerConfig | null>>();
+const phpComposerAutoloadFileCache = new Map<string, Promise<Set<string>>>();
 
 async function listProjectLanguageFiles(
   projectRoot: string,
@@ -2549,19 +2552,34 @@ async function readPhpSymbolIndex(
   const packageName =
     source.match(/^\s*namespace\s+([^;{]+)\s*[;{]/m)?.[1]?.trim() ?? "";
   const symbols = new Set<string>();
+  const kindsBySymbol = new Map<string, Set<"class" | "function" | "const">>();
+  const addSymbol = (
+    symbolName: string,
+    symbolKind: "class" | "function" | "const",
+  ): void => {
+    symbols.add(symbolName);
+    const currentKinds = kindsBySymbol.get(symbolName) ?? new Set();
+    currentKinds.add(symbolKind);
+    kindsBySymbol.set(symbolName, currentKinds);
+  };
   const declarationPattern =
-    /\b(?:class|interface|trait|enum|function)\s+([A-Za-z_][\w]*)\b/g;
+    /\b(class|interface|trait|enum|function)\s+([A-Za-z_][\w]*)\b/g;
   for (const match of source.matchAll(declarationPattern)) {
-    const symbolName = match[1];
-    if (symbolName) symbols.add(symbolName);
+    const declarationType = match[1];
+    const symbolName = match[2];
+    if (!symbolName || !declarationType) continue;
+    addSymbol(
+      symbolName,
+      declarationType === "function" ? "function" : "class",
+    );
   }
   const constPattern = /\bconst\s+([A-Za-z_][\w]*)\b/g;
   for (const match of source.matchAll(constPattern)) {
     const symbolName = match[1];
-    if (symbolName) symbols.add(symbolName);
+    if (symbolName) addSymbol(symbolName, "const");
   }
 
-  const entry = { packageName, symbols };
+  const entry = { packageName, symbols, kindsBySymbol };
   phpSymbolIndexCache.set(filePath, entry);
   return entry;
 }
@@ -2672,20 +2690,44 @@ async function resolvePhpComposerMappedPath(
 async function resolvePhpSymbolImportPath(
   projectRoot: string,
   spec: string,
+  preferredKind?: "class" | "function" | "const",
+  allowedFiles?: Set<string>,
 ): Promise<string | null> {
   const normalizedSpec = spec.replace(/^\\+/, "");
   const projectIndex = await getPhpProjectSymbolIndex(projectRoot);
+  const pickCandidate = async (
+    candidates: string[],
+    symbolName?: string,
+  ): Promise<string | null> => {
+    for (const candidate of candidates) {
+      const resolvedCandidate = path.resolve(candidate);
+      if (allowedFiles && !allowedFiles.has(resolvedCandidate)) {
+        continue;
+      }
+      if (!symbolName || !preferredKind) {
+        return resolvedCandidate;
+      }
+      const entry = await readPhpSymbolIndex(resolvedCandidate);
+      const symbolKinds = entry.kindsBySymbol.get(symbolName);
+      if (symbolKinds?.has(preferredKind)) {
+        return resolvedCandidate;
+      }
+    }
+    return null;
+  };
+
   const exactNamespaceFiles =
     projectIndex.filesByPackage.get(normalizedSpec) ?? [];
-  if (exactNamespaceFiles[0]) {
-    return path.resolve(exactNamespaceFiles[0]);
+  const exactNamespaceHit = await pickCandidate(exactNamespaceFiles);
+  if (exactNamespaceHit) {
+    return exactNamespaceHit;
   }
 
   const parts = normalizedSpec.split("\\").filter(Boolean);
   if (parts.length === 1) {
     const globalFiles =
       projectIndex.filesByPackageSymbol.get("")?.get(parts[0]!) ?? [];
-    return globalFiles[0] ? path.resolve(globalFiles[0]) : null;
+    return await pickCandidate(globalFiles, parts[0]);
   }
 
   if (parts.length < 2) {
@@ -2696,12 +2738,13 @@ async function resolvePhpSymbolImportPath(
   const packageName = parts.slice(0, -1).join("\\");
   const symbolFiles =
     projectIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
-  if (symbolFiles[0]) {
-    return path.resolve(symbolFiles[0]);
+  const symbolHit = await pickCandidate(symbolFiles, importedName);
+  if (symbolHit) {
+    return symbolHit;
   }
 
   const packageFiles = projectIndex.filesByPackage.get(packageName) ?? [];
-  return packageFiles[0] ? path.resolve(packageFiles[0]) : null;
+  return await pickCandidate(packageFiles, importedName);
 }
 
 async function findPhpComposerPath(
@@ -2738,12 +2781,56 @@ export async function getPhpComposerImplicitFiles(
   return Array.from(deduped);
 }
 
+async function getPhpComposerAutoloadFiles(
+  composerPath: string,
+  composerConfig: PhpComposerConfig,
+): Promise<Set<string>> {
+  const cached = phpComposerAutoloadFileCache.get(composerPath);
+  if (cached) {
+    return await cached;
+  }
+
+  const pending = (async () => {
+    const candidates = new Set<string>();
+    const roots = new Set<string>([
+      ...composerConfig.classmap,
+      ...composerConfig.files,
+      ...Array.from(composerConfig.psr4.values()).flat(),
+      ...Array.from(composerConfig.psr0.values()).flat(),
+    ]);
+
+    for (const root of roots) {
+      try {
+        const stat = await fsp.stat(root);
+        if (stat.isDirectory()) {
+          const files = await listProjectFiles(root, ["**/*.php"]);
+          for (const filePath of files) {
+            candidates.add(path.resolve(filePath));
+          }
+          continue;
+        }
+        if (stat.isFile() && root.toLowerCase().endsWith(".php")) {
+          candidates.add(path.resolve(root));
+        }
+      } catch {
+        // Ignore missing Composer autoload roots.
+      }
+    }
+
+    return candidates;
+  })();
+
+  phpComposerAutoloadFileCache.set(composerPath, pending);
+  return await pending;
+}
+
 async function resolvePhpImportPath(
   projectRoot: string,
   fromFile: string,
   spec: string,
+  preferredKind?: "class" | "function" | "const",
 ): Promise<string | null> {
-  const cacheKey = `${projectRoot}::${fromFile}::${spec}`;
+  const cacheKey = `${projectRoot}::${fromFile}::${spec}::${preferredKind ?? "any"}`;
   const cached = phpImportResolutionCache.get(cacheKey);
   if (cached !== undefined) return cached;
 
@@ -2770,28 +2857,49 @@ async function resolvePhpImportPath(
   if (composerPath) {
     const composerConfig = await loadPhpComposerConfig(composerPath);
     if (composerConfig) {
-      const psr4Resolved = await resolvePhpComposerMappedPath(
-        normalizedSpec,
-        composerConfig.psr4,
-      );
-      if (psr4Resolved) {
-        phpImportResolutionCache.set(cacheKey, psr4Resolved);
-        return psr4Resolved;
+      if (!preferredKind || preferredKind === "class") {
+        const psr4Resolved = await resolvePhpComposerMappedPath(
+          normalizedSpec,
+          composerConfig.psr4,
+        );
+        if (psr4Resolved) {
+          phpImportResolutionCache.set(cacheKey, psr4Resolved);
+          return psr4Resolved;
+        }
+        const psr0Resolved = await resolvePhpComposerMappedPath(
+          normalizedSpec,
+          composerConfig.psr0,
+        );
+        if (psr0Resolved) {
+          phpImportResolutionCache.set(cacheKey, psr0Resolved);
+          return psr0Resolved;
+        }
       }
-      const psr0Resolved = await resolvePhpComposerMappedPath(
-        normalizedSpec,
-        composerConfig.psr0,
+
+      const autoloadFiles = await getPhpComposerAutoloadFiles(
+        composerPath,
+        composerConfig,
       );
-      if (psr0Resolved) {
-        phpImportResolutionCache.set(cacheKey, psr0Resolved);
-        return psr0Resolved;
+      const symbolResolved = await resolvePhpSymbolImportPath(
+        projectRoot,
+        normalizedSpec,
+        preferredKind,
+        autoloadFiles,
+      );
+      if (symbolResolved) {
+        phpImportResolutionCache.set(cacheKey, symbolResolved);
+        return symbolResolved;
       }
+
+      phpImportResolutionCache.set(cacheKey, null);
+      return null;
     }
   }
 
   const symbolResolved = await resolvePhpSymbolImportPath(
     projectRoot,
     normalizedSpec,
+    preferredKind,
   );
   if (symbolResolved) {
     phpImportResolutionCache.set(cacheKey, symbolResolved);
@@ -2862,6 +2970,7 @@ export async function resolveImportSpecifier(
     workspaceConfig?: WorkspaceConfig;
     resolveNodeModules?: boolean;
     resolutionHints?: string[];
+    phpImportType?: "class" | "function" | "const";
   },
 ): Promise<FileId | { external: string }> {
   if (languageId === "go") {
@@ -2877,7 +2986,12 @@ export async function resolveImportSpecifier(
     if (javaResolved) return javaResolved;
   }
   if (languageId === "php") {
-    const phpResolved = await resolvePhpImportPath(projectRoot, fromFile, spec);
+    const phpResolved = await resolvePhpImportPath(
+      projectRoot,
+      fromFile,
+      spec,
+      opts?.phpImportType,
+    );
     if (phpResolved) return phpResolved;
   }
 

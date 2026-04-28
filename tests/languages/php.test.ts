@@ -22,6 +22,7 @@ const definition: LanguageTestDefinition = {
     dependencyGraph: [
       { from: "main.php", to: { type: "file", path: "utils.php" } },
       { from: "main.php", to: { type: "file", path: "helpers.php" } },
+      { from: "dir-include-consumer.php", to: { type: "file", path: "helpers.php" } },
       { from: "grouped-consumer.php", to: { type: "file", path: "helpers.php" } },
       { from: "grouped-consumer.php", to: { type: "file", path: "partials/shared.php" } },
       {
@@ -39,6 +40,14 @@ const definition: LanguageTestDefinition = {
       {
         from: "composer-consumer.php",
         to: { type: "file", path: "src/Domain/Service.php" },
+      },
+      {
+        from: "composer-qualified-consumer.php",
+        to: { type: "file", path: "src/Domain/Service.php" },
+      },
+      {
+        from: "function-import-consumer.php",
+        to: { type: "file", path: "src/Collision/ThingFunction.php" },
       },
     ],
     symbols: [
@@ -61,6 +70,14 @@ const definition: LanguageTestDefinition = {
       {
         file: "src/Support/DEFAULT_NAME.php",
         includes: [{ name: "DEFAULT_NAME" }],
+      },
+      {
+        file: "src/Collision/Thing.php",
+        includes: [{ name: "Thing" }],
+      },
+      {
+        file: "src/Collision/ThingFunction.php",
+        includes: [{ name: "Thing" }],
       },
     ],
     goToDefinition: [
@@ -92,6 +109,27 @@ const definition: LanguageTestDefinition = {
         column: 16,
         expectedDefinition: { file: "src/Domain/Service.php", line: 5 },
       },
+      {
+        name: "go to definition resolves PHP __DIR__ includes",
+        file: "dir-include-consumer.php",
+        line: 5,
+        column: 6,
+        expectedDefinition: { file: "helpers.php", line: 3 },
+      },
+      {
+        name: "go to definition resolves Composer-mapped fully-qualified PHP classes",
+        file: "composer-qualified-consumer.php",
+        line: 3,
+        column: 27,
+        expectedDefinition: { file: "src/Domain/Service.php", line: 5 },
+      },
+      {
+        name: "go to definition respects PHP function import kind",
+        file: "function-import-consumer.php",
+        line: 5,
+        column: 10,
+        expectedDefinition: { file: "src/Collision/ThingFunction.php", line: 5 },
+      },
     ],
     references: [
       {
@@ -114,6 +152,20 @@ const definition: LanguageTestDefinition = {
         line: 5,
         column: 10,
         minimumCount: 2,
+      },
+      {
+        name: "find references for PHP function imports with colliding class names",
+        file: "src/Collision/ThingFunction.php",
+        line: 5,
+        column: 10,
+        minimumCount: 2,
+      },
+      {
+        name: "find references for Composer-mapped fully-qualified PHP classes",
+        file: "src/Domain/Service.php",
+        line: 5,
+        column: 7,
+        minimumCount: 3,
       },
     ],
   },

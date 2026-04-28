@@ -5,7 +5,7 @@ Checklist for landing a new first-class source language without drifting from re
 ## 1. Define the support surface first
 
 - Decide whether the language is source-language parity or graph-first only.
-- List the exact syntax/resolution forms you will claim in `docs/language-parity.md` and `docs/scenario-catalog.md`.
+- List the exact syntax and resolution forms you will claim in `docs/language-parity.md` and `docs/scenario-catalog.md`.
 - If any limitation is intentional, document it before implementation and cover it with an explicit regression test.
 
 ## 2. Wire registration and discovery
@@ -15,8 +15,8 @@ Checklist for landing a new first-class source language without drifting from re
 - Export support from `src/languages.ts` when the public support surface expects it.
 - Add chunking bootstrap registration in `src/bootstrap/treeSitterLanguages.ts`.
 - Extend `src/chunking/languageConfig.ts` if the language participates in semantic chunking.
-- Add the file extension to discovery/resolution in `src/util.ts`.
-- Update CLI language validation/help in `src/cli.ts` when a command accepts a language override.
+- Add the file extension to discovery and resolution in `src/util.ts`.
+- Update CLI language validation and help in `src/cli.ts` when a command accepts a language override.
 
 ## 3. Wire both runtime paths
 
@@ -37,7 +37,7 @@ Checklist for landing a new first-class source language without drifting from re
 
 - Add statement-level parsing helpers in `src/languages/importStatementParsers.ts` when the query captures a whole statement instead of normalized binding captures.
 - Extend `src/indexer.ts` so import bindings normalize into the shared `ImportBinding` model.
-- Extend `src/graphs.ts` only where graph/specifier extraction needs language-specific recovery.
+- Extend `src/graphs.ts` only where graph and specifier extraction need language-specific recovery.
 - Extend `src/util.ts` for language-specific module resolution, package metadata parsing, and caches.
 - Keep dynamic or ambiguous cases conservative. Prefer `external` or `not_found` over false-positive navigation.
 
@@ -61,12 +61,12 @@ Checklist for landing a new first-class source language without drifting from re
 - Update `docs/language-parity.md`.
 - Update `docs/scenario-catalog.md`.
 - Update `README.md` when supported-language lists or capability summaries changed.
-- Update `codegraph-skill/codegraph/SKILL.md` when the repo’s agent-facing capability surface changed.
+- Update `codegraph-skill/codegraph/SKILL.md` when the repo's agent-facing capability surface changed.
 
 ## 9. Verify the real support claim
 
 - Run the focused language suite.
 - Run the shared semantic suites.
 - Run the native parity and native-only ownership suites if the language uses the native runtime.
-- Run `npm run build` after grammar/runtime changes.
+- Run `npm run build` after grammar and runtime changes.
 - Do not claim support until the docs, fixtures, and verification output all agree.
