@@ -7041,19 +7041,26 @@ export async function findReferences(
   if (!exportedNames.length) exportedNames.push(def.localName);
 
   const exportedNameSet = new Set(exportedNames);
-  const definitionParsed = await ensureParsedContext(
-    definitionFile,
-    index.parsed?.get(definitionFile),
-  );
-  const phpQualifiedNames =
-    definitionParsed.sup.id === "php"
-      ? (() => {
-          const phpNamespace = readPhpNamespaceFromSource(definitionParsed.source);
-          if (!phpNamespace) return [];
-          const qualifiedName = `${phpNamespace}\\${def.localName}`;
-          return [qualifiedName, `\\${qualifiedName}`];
-        })()
-      : [];
+  let phpQualifiedNames: string[] = [];
+  try {
+    const definitionParsed = await ensureParsedContext(
+      definitionFile,
+      index.parsed?.get(definitionFile),
+    );
+    phpQualifiedNames =
+      definitionParsed.sup.id === "php"
+        ? (() => {
+            const phpNamespace = readPhpNamespaceFromSource(
+              definitionParsed.source,
+            );
+            if (!phpNamespace) return [];
+            const qualifiedName = `${phpNamespace}\\${def.localName}`;
+            return [qualifiedName, `\\${qualifiedName}`];
+          })()
+        : [];
+  } catch {
+    phpQualifiedNames = [];
+  }
   const collectNamedNodeReferences = async (
     fileId: string,
     symbolName: string,

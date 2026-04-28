@@ -2676,7 +2676,7 @@ async function readPhpSymbolIndex(
 function extractPhpTopLevelConstNames(source: string): string[] {
   const names: string[] = [];
   const classLikeStack: number[] = [];
-  let pendingBlockType: "classLike" | "namespace" | null = null;
+  let pendingClassLikeBlock = false;
 
   const isWordBoundary = (index: number): boolean => {
     const ch = source[index];
@@ -2723,17 +2723,17 @@ function extractPhpTopLevelConstNames(source: string): string[] {
     }
 
     if (ch === "{") {
-      if (pendingBlockType === "classLike") {
+      if (pendingClassLikeBlock) {
         classLikeStack.push(index);
       }
-      pendingBlockType = null;
+      pendingClassLikeBlock = false;
       continue;
     }
     if (ch === "}") {
       if (classLikeStack.length > 0) {
         classLikeStack.pop();
       }
-      pendingBlockType = null;
+      pendingClassLikeBlock = false;
       continue;
     }
     if (!/[A-Za-z_]/.test(ch)) continue;
@@ -2752,12 +2752,7 @@ function extractPhpTopLevelConstNames(source: string): string[] {
       word === "trait" ||
       word === "enum"
     ) {
-      pendingBlockType = "classLike";
-      index = end - 1;
-      continue;
-    }
-    if (word === "namespace") {
-      pendingBlockType = "namespace";
+      pendingClassLikeBlock = true;
       index = end - 1;
       continue;
     }
