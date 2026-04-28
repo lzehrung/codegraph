@@ -2222,6 +2222,23 @@ function addProjectSymbolFile(
   }
 }
 
+function sortProjectSymbolIndex(index: LanguageProjectSymbolIndex): void {
+  for (const [packageName, files] of index.filesByPackage) {
+    files.sort((left, right) =>
+      normalizePath(left).localeCompare(normalizePath(right)),
+    );
+    index.filesByPackage.set(packageName, files);
+  }
+  for (const symbolFiles of index.filesByPackageSymbol.values()) {
+    for (const [symbolName, files] of symbolFiles) {
+      files.sort((left, right) =>
+        normalizePath(left).localeCompare(normalizePath(right)),
+      );
+      symbolFiles.set(symbolName, files);
+    }
+  }
+}
+
 async function buildProjectSymbolIndex<
   TEntry extends { packageName: string | null; symbols: Set<string> },
 >(
@@ -2256,6 +2273,7 @@ async function buildProjectSymbolIndex<
     );
   }
 
+  sortProjectSymbolIndex(index);
   return index;
 }
 
@@ -2302,6 +2320,25 @@ async function getJavaProjectSymbolIndex(
         readJavaSymbolIndex,
       ),
   );
+}
+
+async function getJvmProjectSymbolIndex(
+  projectRoot: string,
+  languageId: "java" | "kotlin",
+): Promise<LanguageProjectSymbolIndex> {
+  return languageId === "kotlin"
+    ? await getKotlinProjectSymbolIndex(projectRoot)
+    : await getJavaProjectSymbolIndex(projectRoot);
+}
+
+export async function resolveJvmPackageImportPaths(
+  projectRoot: string,
+  spec: string,
+  languageId: "java" | "kotlin",
+): Promise<string[]> {
+  const projectIndex = await getJvmProjectSymbolIndex(projectRoot, languageId);
+  const packageCandidates = projectIndex.filesByPackage.get(spec) ?? [];
+  return packageCandidates.map((candidate) => path.resolve(candidate));
 }
 
 async function getPhpProjectSymbolIndex(

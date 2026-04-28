@@ -25,6 +25,7 @@ import {
   resolveSpecifier,
   resolveImportSpecifier,
   resolvePythonModule,
+  resolveJvmPackageImportPaths,
   getPhpComposerImplicitFiles,
   normalizeResolutionHints,
   mapLimit,
@@ -985,6 +986,21 @@ export async function collectEdgesForFile(
             ? { type: "file", path: res.replace(/\\/g, "/") }
             : { type: "external", name: res.external };
       } else if (sup.id === "java" || sup.id === "kotlin") {
+        const packageTargets = await resolveJvmPackageImportPaths(
+          projectRoot,
+          spec,
+          sup.id,
+        );
+        if (packageTargets.length > 0) {
+          return packageTargets.map((targetPath) => ({
+            to: { type: "file", path: targetPath.replace(/\\/g, "/") } as EdgeTo,
+            spec,
+            ...(raw !== undefined && { raw }),
+            ...(typeOnly !== undefined && { typeOnly }),
+            ...(resolved !== undefined && { resolved }),
+            ...(confidence !== undefined && { confidence }),
+          }));
+        }
         const res = await resolveImportSpecifier(
           projectRoot,
           file,
@@ -1063,28 +1079,32 @@ export async function collectEdgesForFile(
       if (to.type === "external" && dropIfUnresolved) {
         return null;
       }
-      return {
-        to,
-        spec,
-        ...(raw !== undefined && { raw }),
-        ...(typeOnly !== undefined && { typeOnly }),
-        ...(resolved !== undefined && { resolved }),
-        ...(confidence !== undefined && { confidence }),
-      };
+      return [
+        {
+          to,
+          spec,
+          ...(raw !== undefined && { raw }),
+          ...(typeOnly !== undefined && { typeOnly }),
+          ...(resolved !== undefined && { resolved }),
+          ...(confidence !== undefined && { confidence }),
+        },
+      ];
     },
   );
 
   for (const resolvedEdge of await Promise.all(edgeResolutionTasks)) {
     if (!resolvedEdge) continue;
-    const { to, spec, raw, typeOnly, resolved, confidence } = resolvedEdge;
-    edges.push({
-      from: normalizedFile,
-      to,
-      raw: raw ?? spec,
-      ...(typeOnly !== undefined && { typeOnly }),
-      ...(resolved !== undefined && { resolved }),
-      ...(confidence !== undefined && { confidence }),
-    });
+    for (const edgeEntry of resolvedEdge) {
+      const { to, spec, raw, typeOnly, resolved, confidence } = edgeEntry;
+      edges.push({
+        from: normalizedFile,
+        to,
+        raw: raw ?? spec,
+        ...(typeOnly !== undefined && { typeOnly }),
+        ...(resolved !== undefined && { resolved }),
+        ...(confidence !== undefined && { confidence }),
+      });
+    }
   }
 
   if (sup.id === "php") {
