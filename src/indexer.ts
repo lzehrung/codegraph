@@ -5706,6 +5706,13 @@ function inferPhpQualifiedReferenceImportType(
     ) {
       return "function";
     }
+    if (
+      current.type === "scoped_call_expression" ||
+      current.type === "scoped_property_access_expression" ||
+      current.type === "class_constant_access_expression"
+    ) {
+      return "class";
+    }
     current = current.parent;
   }
   return undefined;

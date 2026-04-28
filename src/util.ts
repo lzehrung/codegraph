@@ -2109,6 +2109,7 @@ type PhpComposerConfig = {
   psr4: Map<string, string[]>;
   psr0: Map<string, string[]>;
   classmap: string[];
+  excludeFromClassmap: string[];
   files: string[];
 };
 
@@ -2598,12 +2599,22 @@ function readComposerNamespaceDirs(
     const targets = Array.isArray(rawTarget) ? rawTarget : [rawTarget];
     const dirs = targets
       .filter((target): target is string => typeof target === "string")
-      .map((target) => path.resolve(composerDir, target));
+      .map((target) => resolveComposerPath(target, composerDir));
     if (dirs.length > 0) {
       result.set(prefix, dirs);
     }
   }
   return result;
+}
+
+function resolveComposerPath(entry: string, composerDir: string): string {
+  if (entry.startsWith("/") || entry.startsWith("\\")) {
+    return path.resolve(composerDir, `.${entry}`);
+  }
+  if (/^[A-Za-z]:[\\/]/.test(entry) || path.isAbsolute(entry)) {
+    return path.resolve(entry);
+  }
+  return path.resolve(composerDir, entry);
 }
 
 function readComposerStringList(
@@ -2613,7 +2624,7 @@ function readComposerStringList(
   if (!Array.isArray(value)) return [];
   return value
     .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => path.resolve(composerDir, entry));
+    .map((entry) => resolveComposerPath(entry, composerDir));
 }
 
 async function loadPhpComposerConfig(
@@ -2648,12 +2659,19 @@ async function loadPhpComposerConfig(
         ...readComposerStringList(autoload.classmap, composerDir),
         ...readComposerStringList(autoloadDev.classmap, composerDir),
       ];
+      const excludeFromClassmap = [
+        ...readComposerStringList(autoload["exclude-from-classmap"], composerDir),
+        ...readComposerStringList(
+          autoloadDev["exclude-from-classmap"],
+          composerDir,
+        ),
+      ];
       const files = [
         ...readComposerStringList(autoload.files, composerDir),
         ...readComposerStringList(autoloadDev.files, composerDir),
       ];
 
-      return { psr4, psr0, classmap, files };
+      return { psr4, psr0, classmap, excludeFromClassmap, files };
     } catch {
       return null;
     }
@@ -2805,11 +2823,15 @@ async function getPhpComposerAutoloadFiles(
         if (stat.isDirectory()) {
           const files = await listProjectFiles(root, ["**/*.php"]);
           for (const filePath of files) {
+            if (isPhpComposerClassmapExcluded(filePath, composerConfig)) {
+              continue;
+            }
             candidates.add(path.resolve(filePath));
           }
           continue;
         }
         if (stat.isFile() && root.toLowerCase().endsWith(".php")) {
+          if (isPhpComposerClassmapExcluded(root, composerConfig)) continue;
           candidates.add(path.resolve(root));
         }
       } catch {
@@ -2822,6 +2844,23 @@ async function getPhpComposerAutoloadFiles(
 
   phpComposerAutoloadFileCache.set(composerPath, pending);
   return await pending;
+}
+
+function isPhpComposerClassmapExcluded(
+  filePath: string,
+  composerConfig: PhpComposerConfig,
+): boolean {
+  const normalizedFile = normalizePath(path.resolve(filePath));
+  return composerConfig.excludeFromClassmap.some((entry) => {
+    const normalizedEntry = normalizePath(path.resolve(entry)).replace(
+      /\/+$/,
+      "",
+    );
+    return (
+      normalizedFile === normalizedEntry ||
+      normalizedFile.startsWith(`${normalizedEntry}/`)
+    );
+  });
 }
 
 async function resolvePhpImportPath(
@@ -2886,7 +2925,10 @@ async function resolvePhpImportPath(
         preferredKind,
         autoloadFiles,
       );
-      if (symbolResolved) {
+      if (
+        symbolResolved &&
+        !isPhpComposerClassmapExcluded(symbolResolved, composerConfig)
+      ) {
         phpImportResolutionCache.set(cacheKey, symbolResolved);
         return symbolResolved;
       }

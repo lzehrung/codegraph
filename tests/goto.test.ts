@@ -216,6 +216,42 @@ describe('Go to Definition', () => {
       await testGoToDefinition(index, consumerFile, 3, 27, serviceFile, 5);
     });
 
+    it('should find definition of fully-qualified Composer-mapped static class references', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const consumerFile = path.join(samplePath, 'composer-static-qualified-consumer.php').replace(/\\/g, '/');
+      const serviceFile = path.join(samplePath, 'src', 'Domain', 'Service.php').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, consumerFile, 3, 23, serviceFile, 5);
+    });
+
+    it('should find definition of fully-qualified Composer-mapped static constant references', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const consumerFile = path.join(samplePath, 'composer-static-constant-consumer.php').replace(/\\/g, '/');
+      const serviceFile = path.join(samplePath, 'src', 'Domain', 'Service.php').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, consumerFile, 3, 23, serviceFile, 5);
+    });
+
+    it('should find definition of fully-qualified Composer-mapped static property references', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const consumerFile = path.join(samplePath, 'composer-static-property-consumer.php').replace(/\\/g, '/');
+      const serviceFile = path.join(samplePath, 'src', 'Domain', 'Service.php').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, consumerFile, 3, 25, serviceFile, 5);
+    });
+
+    it('should find definition of fully-qualified Composer-mapped type references', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const consumerFile = path.join(samplePath, 'composer-type-qualified-consumer.php').replace(/\\/g, '/');
+      const serviceFile = path.join(samplePath, 'src', 'Domain', 'Service.php').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, consumerFile, 3, 37, serviceFile, 5);
+    });
+
     it('should respect PHP function import kinds when class names collide', async () => {
       const index = await createTestIndex('php');
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');

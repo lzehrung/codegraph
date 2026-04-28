@@ -368,14 +368,22 @@ describe('Find References', () => {
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
       const serviceFile = path.join(samplePath, 'src', 'Domain', 'Service.php').replace(/\\/g, '/');
       const qualifiedConsumerFile = path.join(samplePath, 'composer-qualified-consumer.php').replace(/\\/g, '/');
+      const staticConsumerFile = path.join(samplePath, 'composer-static-qualified-consumer.php').replace(/\\/g, '/');
+      const staticConstantConsumerFile = path.join(samplePath, 'composer-static-constant-consumer.php').replace(/\\/g, '/');
+      const staticPropertyConsumerFile = path.join(samplePath, 'composer-static-property-consumer.php').replace(/\\/g, '/');
+      const typedConsumerFile = path.join(samplePath, 'composer-type-qualified-consumer.php').replace(/\\/g, '/');
 
-      const result = await testFindReferences(index, serviceFile, 5, 7, 3);
+      const result = await testFindReferences(index, serviceFile, 5, 7, 7);
 
       expect(result.status).toBe('ok');
       if (result.status === 'ok') {
         expectReferenceAt(result, serviceFile, 5);
         expectReferenceAt(result, path.join(samplePath, 'composer-consumer.php').replace(/\\/g, '/'), 5);
         expectReferenceAt(result, qualifiedConsumerFile, 3);
+        expectReferenceAt(result, staticConsumerFile, 3);
+        expectReferenceAt(result, staticConstantConsumerFile, 3);
+        expectReferenceAt(result, staticPropertyConsumerFile, 3);
+        expectReferenceAt(result, typedConsumerFile, 3);
       }
     });
 

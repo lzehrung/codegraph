@@ -136,14 +136,74 @@ function extractKotlinImportSpecifier(statementText: string): string | null {
   return match[1].endsWith(".*") ? match[1].slice(0, -2) : match[1];
 }
 
-function extractPhpQualifiedClassSpecifiers(source: string): ModuleSpecifier[] {
+function extractPhpQualifiedSpecifiersFromTree(
+  source: string,
+  tree: SyntaxTreeLike,
+): ModuleSpecifier[] {
   const specifiers: ModuleSpecifier[] = [];
-  const newClassPattern = /\bnew\s+(\\?[A-Za-z_][\w]*(?:\\[A-Za-z_][\w]*)+)/g;
-  for (const match of source.matchAll(newClassPattern)) {
-    const spec = match[1]?.trim();
-    if (!spec || !spec.includes("\\")) continue;
-    specifiers.push({ spec, phpImportType: "class" });
-  }
+  const seen = new Set<string>();
+  const pushSpecifier = (
+    spec: string | null,
+    phpImportType: "class" | "function" | "const",
+  ): void => {
+    const normalized = spec?.trim();
+    if (!normalized || !normalized.includes("\\")) return;
+    const key = `${phpImportType}::${normalized}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    specifiers.push({ spec: normalized, phpImportType });
+  };
+
+  const walk = (node: SyntaxNodeLike): void => {
+    if (node.type === "object_creation_expression") {
+      const target =
+        node.namedChildren.find(
+          (child) =>
+            child.type === "qualified_name" || child.type === "relative_name",
+        ) ?? node.child(0);
+      if (target) {
+        pushSpecifier(sliceText(target, source), "class");
+      }
+    } else if (node.type === "scoped_call_expression") {
+      const target =
+        node.namedChildren.find(
+          (child) =>
+            child.type === "qualified_name" || child.type === "relative_name",
+        ) ?? node.child(0);
+      if (target) {
+        pushSpecifier(sliceText(target, source), "class");
+      }
+    } else if (node.type === "scoped_property_access_expression") {
+      const target =
+        node.namedChildren.find(
+          (child) =>
+            child.type === "qualified_name" || child.type === "relative_name",
+        ) ?? node.child(0);
+      if (target) {
+        pushSpecifier(sliceText(target, source), "class");
+      }
+    } else if (node.type === "class_constant_access_expression") {
+      const target =
+        node.namedChildren.find(
+          (child) =>
+            child.type === "qualified_name" || child.type === "relative_name",
+        ) ?? node.child(0);
+      if (target) {
+        pushSpecifier(sliceText(target, source), "class");
+      }
+    } else if (
+      (node.type === "qualified_name" || node.type === "relative_name") &&
+      node.parent?.type === "named_type"
+    ) {
+      pushSpecifier(sliceText(node, source), "class");
+    }
+
+    for (const child of node.namedChildren) {
+      walk(child);
+    }
+  };
+
+  walk(tree.rootNode);
   return specifiers;
 }
 
@@ -430,13 +490,35 @@ export function collectModuleSpecifiersFromSource(
         out.length = 0;
       }
     }
-    if (out.length > 0 || phpMatches !== null || queryFailed) {
-      const qualifiedClassSpecifiers = extractPhpQualifiedClassSpecifiers(
+    const phpTree =
+      opts?.tree ??
+      (() => {
+        const nativeTreeExecution = getNativeSyntaxTreeExecution(
+          source,
+          support,
+          opts?.native,
+        );
+        return nativeTreeExecution.tree
+          ? new ProjectedSyntaxTree(source, nativeTreeExecution.tree)
+          : null;
+      })() ??
+      (() => {
+        try {
+          return parseWithJsLanguage(source, ensureResolvedLang());
+        } catch {
+          return null;
+        }
+      })();
+    if (phpTree) {
+      const qualifiedSpecifiers = extractPhpQualifiedSpecifiersFromTree(
         source,
+        phpTree,
       );
-      if (qualifiedClassSpecifiers.length > 0) {
-        out.push(...qualifiedClassSpecifiers);
+      if (qualifiedSpecifiers.length > 0) {
+        out.push(...qualifiedSpecifiers);
       }
+    }
+    if (out.length > 0 || phpMatches !== null || queryFailed) {
       return normalizeModuleSpecifiers(out);
     }
   }

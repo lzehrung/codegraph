@@ -46,6 +46,22 @@ const definition: LanguageTestDefinition = {
         to: { type: "file", path: "src/Domain/Service.php" },
       },
       {
+        from: "composer-static-qualified-consumer.php",
+        to: { type: "file", path: "src/Domain/Service.php" },
+      },
+      {
+        from: "composer-static-constant-consumer.php",
+        to: { type: "file", path: "src/Domain/Service.php" },
+      },
+      {
+        from: "composer-static-property-consumer.php",
+        to: { type: "file", path: "src/Domain/Service.php" },
+      },
+      {
+        from: "composer-type-qualified-consumer.php",
+        to: { type: "file", path: "src/Domain/Service.php" },
+      },
+      {
         from: "function-import-consumer.php",
         to: { type: "file", path: "src/Collision/ThingFunction.php" },
       },
@@ -124,6 +140,34 @@ const definition: LanguageTestDefinition = {
         expectedDefinition: { file: "src/Domain/Service.php", line: 5 },
       },
       {
+        name: "go to definition resolves Composer-mapped fully-qualified PHP static class references",
+        file: "composer-static-qualified-consumer.php",
+        line: 3,
+        column: 23,
+        expectedDefinition: { file: "src/Domain/Service.php", line: 5 },
+      },
+      {
+        name: "go to definition resolves Composer-mapped fully-qualified PHP static constant references",
+        file: "composer-static-constant-consumer.php",
+        line: 3,
+        column: 23,
+        expectedDefinition: { file: "src/Domain/Service.php", line: 5 },
+      },
+      {
+        name: "go to definition resolves Composer-mapped fully-qualified PHP static property references",
+        file: "composer-static-property-consumer.php",
+        line: 3,
+        column: 25,
+        expectedDefinition: { file: "src/Domain/Service.php", line: 5 },
+      },
+      {
+        name: "go to definition resolves Composer-mapped fully-qualified PHP type references",
+        file: "composer-type-qualified-consumer.php",
+        line: 3,
+        column: 37,
+        expectedDefinition: { file: "src/Domain/Service.php", line: 5 },
+      },
+      {
         name: "go to definition respects PHP function import kind",
         file: "function-import-consumer.php",
         line: 5,
@@ -165,7 +209,7 @@ const definition: LanguageTestDefinition = {
         file: "src/Domain/Service.php",
         line: 5,
         column: 7,
-        minimumCount: 3,
+        minimumCount: 7,
       },
     ],
   },
