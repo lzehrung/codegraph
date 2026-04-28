@@ -22,6 +22,13 @@ function readStringRecord(value: unknown): Record<string, string> {
 }
 
 describe("package metadata", () => {
+  it("keeps the declared ISC license text in the repo root", () => {
+    const licensePath = path.resolve(process.cwd(), "LICENSE");
+
+    expect(fs.existsSync(licensePath)).toBe(true);
+    expect(fs.readFileSync(licensePath, "utf8")).toContain("ISC License");
+  });
+
   it("keeps the native package optional at the root package boundary", () => {
     const rootPackage = readJson("package.json");
     const nativePackage = readJson("packages/codegraph-native/package.json");

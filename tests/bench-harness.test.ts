@@ -5,7 +5,7 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 
-const rootDir = path.resolve(__dirname, "..");
+const rootDir = process.cwd();
 const benchScript = path.join(rootDir, "scripts", "bench-native.mjs");
 const distEntry = path.join(rootDir, "dist", "index.js");
 const longBenchTimeoutMs = 70_000;
