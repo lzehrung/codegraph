@@ -49,8 +49,15 @@ export function runBuildNativeIfAvailable({
   spawnSyncImpl = spawnSync,
   platform = process.platform,
   logger = console,
+  strict = false,
 } = {}) {
   if (!hasCargo({ spawnSyncImpl, platform })) {
+    if (strict) {
+      logger.warn(
+        "[codegraph] Native workspace build is required, but Cargo is unavailable.",
+      );
+      return 1;
+    }
     logger.warn(SKIP_MESSAGE);
     return 0;
   }
@@ -64,6 +71,10 @@ export function runBuildNativeIfAvailable({
   }
 
   if (result.error) {
+    if (strict) {
+      logger.warn(buildFailureMessage(stringifyError(result.error)));
+      return 1;
+    }
     logger.warn(buildFailureMessage(stringifyError(result.error)));
     return 0;
   }
@@ -72,5 +83,5 @@ export function runBuildNativeIfAvailable({
   const failureDetail =
     stderr || `Exited with status ${result.status ?? "unknown"}.`;
   logger.warn(buildFailureMessage(failureDetail));
-  return 0;
+  return strict ? (result.status ?? 1) : 0;
 }

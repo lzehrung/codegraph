@@ -256,13 +256,20 @@ npm install @lzehrung/codegraph-js-fallback --legacy-peer-deps
 
 ### Option 2: Install from the release page
 
-Download and install directly from a GitHub release without configuring a registry:
+Download and install the root package tarball directly from a GitHub release:
 
 ```bash
 npm install https://github.com/lzehrung/codegraph/releases/download/vVERSION/lzehrung-codegraph-VERSION.tgz
 ```
 
-Replace `VERSION` with the desired release version (e.g. `1.8.30`). Each release attaches a pre-built `.tgz` that `npm install` can consume by URL with no registry configuration needed. This install path still needs access to `@lzehrung/codegraph-native`, which owns the native addon. The JS Tree-sitter fallback path is now split into the separate opt-in package `@lzehrung/codegraph-js-fallback`.
+Replace `VERSION` with the desired release version (e.g. `1.8.30`). Each release attaches a pre-built `.tgz` that `npm install` can consume by URL with no registry configuration needed for the root package itself.
+
+Important: the tarball alone does not bundle the native addon or the optional JS fallback grammars. To analyze source languages after a tarball install, you still need one of these:
+
+- configure the `@lzehrung` registry so the optional `@lzehrung/codegraph-native` package can resolve for your platform
+- install the separate `@lzehrung/codegraph-js-fallback` package explicitly if you want the non-native Tree-sitter path
+
+Without one of those extra runtime packages, the CLI/library still installs, but source-language parsing features will report the native addon as unavailable.
 
 ### Option 3: Local source checkout
 
@@ -275,7 +282,7 @@ npm install
 npm run build
 ```
 
-Use this path when you are developing on codegraph itself. `npm run build` now always rebuilds `dist/` and attempts the local native workspace build when Cargo is available, but it falls back to the JavaScript build output with a warning if the native workspace build is unavailable or fails. Use `npm run build:native` when you specifically want to rebuild the native addon and fail fast if Rust is not installed.
+Use this path when you are developing on codegraph itself. `npm run build` now always rebuilds `dist/` and attempts the local native workspace build when Cargo is available, but it falls back to the JavaScript build output with a warning if the native workspace build is unavailable or fails. Release flows now add a strict native verification step whenever the native package is part of the release. Use `npm run build:native` when you specifically want to rebuild the native addon and fail fast if Rust is not installed.
 
 ## Requirements
 
@@ -1702,7 +1709,7 @@ The release scripts:
 - Keep staged native metadata as publish-time state instead of committed source state
 - Stage the current platform's native package automatically for local publish flows
 - Skip package publishes that already completed so interrupted releases can be resumed safely
-- Create package-scoped git tags like `@lzehrung/codegraph-js-fallback@1.8.44`
+- Create both `vX.Y.Z` and `@lzehrung/codegraph@X.Y.Z` for root releases, while workspace packages keep package-scoped tags like `@lzehrung/codegraph-js-fallback@1.8.44`
 
 `npm run release:*` and `npm run publish:*` default to changed packages only. Use `--package root`, `--package native`, `--package js-fallback`, or a full package name to force a specific package.
 

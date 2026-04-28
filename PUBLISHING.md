@@ -112,7 +112,7 @@ npm publish --workspace=@lzehrung/codegraph-js-fallback
 
 ## Release Notes
 
-- Releases use package-scoped git tags like `@lzehrung/codegraph@1.8.44`.
+- Root releases create both `v1.8.44` and `@lzehrung/codegraph@1.8.44`; workspace package releases keep package-scoped tags like `@lzehrung/codegraph-native@1.8.44`.
 - `@lzehrung/codegraph`, `@lzehrung/codegraph-native`, and `@lzehrung/codegraph-js-fallback` version independently.
 - `src/native/treeSitterNative.ts` prefers the installed `@lzehrung/codegraph-native` package and falls back to the local workspace package for development.
 - If a native binary or query is unavailable at runtime, Codegraph automatically uses the JS Tree-sitter implementation.

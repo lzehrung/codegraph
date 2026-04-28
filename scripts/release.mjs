@@ -18,7 +18,7 @@ import {
   sanitizeJsFallbackPackageManifest,
   selectLatestLegacyTag,
   selectLatestSemverTag,
-  tagNameForPackageVersion,
+  tagNamesForPackageVersion,
   validReleaseTypes,
 } from "./release-lib.mjs";
 
@@ -352,8 +352,10 @@ function commitAndTag(selectedPackages, versionPlan) {
     if (!version) {
       continue;
     }
-    const tagName = tagNameForPackageVersion(pkg.name, version);
-    if (!doesLocalTagExist(tagName)) {
+    for (const tagName of tagNamesForPackageVersion(pkg.name, version)) {
+      if (doesLocalTagExist(tagName)) {
+        continue;
+      }
       runGit(["tag", "-a", tagName, "-m", tagName]);
     }
   }
@@ -421,6 +423,9 @@ run("npm", ["install", "--legacy-peer-deps"]);
 normalizeManagedManifests(versionPlan);
 run("npm", ["run", "test:ci"]);
 run("npm", ["run", "build"]);
+if (selectedPackages.some((pkg) => pkg.id === "native")) {
+  run("node", ["./scripts/build-native-if-available.mjs", "--strict"]);
+}
 
 if (shouldPublish) {
   const publishedPackageNames = new Set(

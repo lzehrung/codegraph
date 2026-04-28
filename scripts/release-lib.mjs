@@ -171,6 +171,14 @@ export function tagNameForPackageVersion(packageName, version) {
   return `${packageName}@${version}`;
 }
 
+export function tagNamesForPackageVersion(packageName, version) {
+  const packageScopedTag = tagNameForPackageVersion(packageName, version);
+  if (packageName !== "@lzehrung/codegraph") {
+    return [packageScopedTag];
+  }
+  return [`v${version}`, packageScopedTag];
+}
+
 export function computePublishPlan({
   shouldPublish,
   selectedPackageNames,
