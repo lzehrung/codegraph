@@ -144,6 +144,61 @@ describe('Go to Definition', () => {
     });
   });
 
+  describe('PHP', () => {
+    it('should find definition of imported function', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const mainFile = path.join(samplePath, 'main.php').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'utils.php').replace(/\\/g, '/');
+
+      const result = await testGoToDefinition(index, mainFile, 9, 11);
+
+      if (result.status === 'ok') {
+        expect(result.definition.file).toBe(utilsFile);
+        expect(result.definition.range.start.line).toBe(13);
+      }
+    });
+
+    it('should find definition of imported class', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const mainFile = path.join(samplePath, 'main.php').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'utils.php').replace(/\\/g, '/');
+
+      const result = await testGoToDefinition(index, mainFile, 10, 12);
+
+      if (result.status === 'ok') {
+        expect(result.definition.file).toBe(utilsFile);
+        expect(result.definition.range.start.line).toBe(5);
+      }
+    });
+
+    it('should find definition of grouped use aliases', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const groupedFile = path.join(samplePath, 'grouped-consumer.php').replace(/\\/g, '/');
+      const toolboxFile = path.join(samplePath, 'src', 'Support', 'Toolbox.php').replace(/\\/g, '/');
+      const helperFile = path.join(samplePath, 'src', 'Support', 'support_helper.php').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, groupedFile, 8, 10, toolboxFile, 5);
+      await testGoToDefinition(index, groupedFile, 9, 12, helperFile, 5);
+    });
+
+    it('should find definition of Composer-mapped classes', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const mainFile = path.join(samplePath, 'composer-consumer.php').replace(/\\/g, '/');
+      const serviceFile = path.join(samplePath, 'src', 'Domain', 'Service.php').replace(/\\/g, '/');
+
+      const result = await testGoToDefinition(index, mainFile, 5, 16);
+
+      if (result.status === 'ok') {
+        expect(result.definition.file).toBe(serviceFile);
+        expect(result.definition.range.start.line).toBe(5);
+      }
+    });
+  });
+
   describe('JavaScript', () => {
     it('should find definition of imported function', async () => {
       const index = await createTestIndex('javascript');

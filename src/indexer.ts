@@ -22,6 +22,7 @@ import {
   parseCsharpUsingDirective,
   parseJavaImportStatement,
   parseKotlinImportStatement,
+  parsePhpImportStatement,
   parseRustImportStatement,
 } from "./languages/importStatementParsers.js";
 import {
@@ -42,6 +43,7 @@ import {
   resolveImportSpecifier,
   resolvePythonModule,
   resolveWorkspacePackage,
+  getPhpComposerImplicitFiles,
   normalizeResolutionHints,
   normalizePath,
   resolveFilePathFromRoot,
@@ -112,6 +114,7 @@ import type {
 const DEFAULT_REF_CONTEXT_LINES = 5;
 const QUERY_DRIVEN_LOCALS_LANGUAGES = new Set([
   "python",
+  "php",
   "java",
   "csharp",
   "rust",
@@ -179,7 +182,7 @@ export type ImportBinding =
       from: string;
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
-      mechanism?: "es" | "cjs" | "python";
+      mechanism?: "es" | "cjs" | "python" | "php";
       resolvedType?: "heuristic" | "precise";
       confidence?: number;
     }
@@ -190,7 +193,7 @@ export type ImportBinding =
       from: string;
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
-      mechanism?: "es" | "cjs" | "python";
+      mechanism?: "es" | "cjs" | "python" | "php";
       resolvedType?: "heuristic" | "precise";
       confidence?: number;
     }
@@ -200,7 +203,7 @@ export type ImportBinding =
       from: string;
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
-      mechanism?: "es" | "cjs" | "python";
+      mechanism?: "es" | "cjs" | "python" | "php";
       resolvedType?: "heuristic" | "precise";
       confidence?: number;
     }
@@ -209,7 +212,7 @@ export type ImportBinding =
       from: string;
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
-      mechanism?: "es" | "cjs" | "python";
+      mechanism?: "es" | "cjs" | "python" | "php";
       resolvedType?: "heuristic" | "precise";
       confidence?: number;
     };
@@ -3250,10 +3253,46 @@ export async function collectImportsForFile(
       });
     }
   };
+  const appendPhpComposerImplicitImports = async (): Promise<void> => {
+    if (resolvedSup.id !== "php") {
+      return;
+    }
+
+    const implicitFiles = await getPhpComposerImplicitFiles(projectRoot, file);
+    const seenResolved = new Set(
+      imports
+        .map((entry) => (typeof entry.resolved === "string" ? entry.resolved : null))
+        .filter((entry): entry is string => !!entry),
+    );
+
+    for (const implicitFile of implicitFiles) {
+      const normalizedResolved = implicitFile.replace(/\\/g, "/");
+      if (normalizedResolved === file.replace(/\\/g, "/")) {
+        continue;
+      }
+      if (seenResolved.has(normalizedResolved)) {
+        continue;
+      }
+
+      const relativeFrom = path.relative(path.dirname(file), implicitFile).replace(/\\/g, "/");
+      const from =
+        relativeFrom.startsWith(".") || relativeFrom.startsWith("/")
+          ? relativeFrom
+          : `./${relativeFrom}`;
+      imports.push({
+        kind: "star",
+        from,
+        resolved: normalizedResolved,
+        mechanism: "php",
+      });
+      seenResolved.add(normalizedResolved);
+    }
+  };
   const finalizeLanguageSpecificImports = async (): Promise<void> => {
     normalizeGoImports();
     await appendJavaTextImports();
     await appendKotlinTextImports();
+    await appendPhpComposerImplicitImports();
   };
   const handledStatementImports = new Set<string>();
   const applyStatementImportOverride = async (
@@ -3387,6 +3426,37 @@ export async function collectImportsForFile(
           from: parsed.from,
           resolved,
           typeOnly,
+        });
+      }
+      return true;
+    }
+
+    if (resolvedSup.id === "php") {
+      const parsed = parsePhpImportStatement(normalizedStmt);
+      if (parsed.length === 0) return false;
+      if (handledStatementImports.has(normalizedStmt)) return true;
+      handledStatementImports.add(normalizedStmt);
+
+      for (const entry of parsed) {
+        const resolved = await resolveFrom(entry.from);
+        if (entry.kind === "include") {
+          imports.push({
+            kind: "star",
+            from: entry.from,
+            resolved,
+            typeOnly,
+            mechanism: "php",
+          });
+          continue;
+        }
+        imports.push({
+          kind: "named",
+          local: entry.local,
+          imported: entry.imported,
+          from: entry.from,
+          resolved,
+          typeOnly,
+          mechanism: "php",
         });
       }
       return true;

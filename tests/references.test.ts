@@ -312,6 +312,58 @@ describe('Find References', () => {
     });
   });
 
+  describe('PHP', () => {
+    it('should find all references to imported function', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const utilsFile = path.join(samplePath, 'utils.php').replace(/\\/g, '/');
+
+      const result = await testFindReferences(index, utilsFile, 13, 11, 2);
+
+      expect(result.status).toBe('ok');
+      if (result.status === 'ok') {
+        expectReferenceAt(result, utilsFile, 13);
+        expectReferenceAt(result, path.join(samplePath, 'main.php').replace(/\\/g, '/'), 9);
+      }
+    });
+
+    it('should find all references to imported class', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const utilsFile = path.join(samplePath, 'utils.php').replace(/\\/g, '/');
+
+      const result = await testFindReferences(index, utilsFile, 5, 7, 2);
+
+      expect(result.status).toBe('ok');
+      if (result.status === 'ok') {
+        expectReferenceAt(result, utilsFile, 5);
+        expectReferenceAt(result, path.join(samplePath, 'main.php').replace(/\\/g, '/'), 10);
+      }
+    });
+
+    it('should find references through grouped use aliases', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const toolboxFile = path.join(samplePath, 'src', 'Support', 'Toolbox.php').replace(/\\/g, '/');
+      const helperFile = path.join(samplePath, 'src', 'Support', 'support_helper.php').replace(/\\/g, '/');
+      const groupedFile = path.join(samplePath, 'grouped-consumer.php').replace(/\\/g, '/');
+
+      const toolboxResult = await testFindReferences(index, toolboxFile, 5, 7, 2);
+      expect(toolboxResult.status).toBe('ok');
+      if (toolboxResult.status === 'ok') {
+        expectReferenceAt(toolboxResult, toolboxFile, 5);
+        expectReferenceAt(toolboxResult, groupedFile, 8);
+      }
+
+      const helperResult = await testFindReferences(index, helperFile, 5, 10, 2);
+      expect(helperResult.status).toBe('ok');
+      if (helperResult.status === 'ok') {
+        expectReferenceAt(helperResult, helperFile, 5);
+        expectReferenceAt(helperResult, groupedFile, 9);
+      }
+    });
+  });
+
   describe('JavaScript', () => {
     it('should find all references to exported function', async () => {
       const index = await createTestIndex('javascript');

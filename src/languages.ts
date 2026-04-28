@@ -57,6 +57,7 @@ export const TS_SUPPORT = adaptDefinition(getLanguageById("ts")!);
 export const TSX_SUPPORT = adaptDefinition(getLanguageById("tsx")!);
 export const JS_SUPPORT = adaptDefinition(getLanguageById("js")!);
 export const PY_SUPPORT = adaptDefinition(getLanguageById("python")!);
+export const PHP_SUPPORT = adaptDefinition(getLanguageById("php")!);
 export const HTML_SUPPORT = adaptDefinition(getLanguageById("html")!);
 export const CSS_SUPPORT = adaptDefinition(getLanguageById("css")!);
 export const SCSS_SUPPORT = adaptDefinition(getLanguageById("scss")!);

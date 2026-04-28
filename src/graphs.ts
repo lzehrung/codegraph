@@ -1,5 +1,5 @@
-import path from "node:path";
 import fsp from "node:fs/promises";
+import path from "node:path";
 import {
   isJsFallbackAvailable,
   isJsFallbackUnavailableError,
@@ -25,6 +25,7 @@ import {
   resolveSpecifier,
   resolveImportSpecifier,
   resolvePythonModule,
+  getPhpComposerImplicitFiles,
   normalizeResolutionHints,
   mapLimit,
   type ModuleSpecifier,
@@ -64,6 +65,7 @@ import {
 } from "./native/treeSitterNative.js";
 import {
   parseCsharpUsingDirective,
+  parsePhpImportStatement,
   parseRustImportStatement,
 } from "./languages/importStatementParsers.js";
 import {
@@ -367,6 +369,48 @@ export function collectModuleSpecifiersFromSource(
       }
     }
     if (out.length > 0 || resolvedNativeImports !== null || queryFailed) {
+      return normalizeModuleSpecifiers(out);
+    }
+  }
+
+  if (support.id === "php") {
+    let queryFailed = false;
+    const phpMatches =
+      resolvedNativeImports ??
+      (() => {
+        try {
+          const jsQueryTree =
+            opts?.tree && isJsSyntaxTree(opts.tree) ? opts.tree : undefined;
+          return executeJsQueryAsNativeMatches(
+            source,
+            support,
+            ensureResolvedLang(),
+            support.queries.imports,
+            jsQueryTree,
+          );
+        } catch {
+          queryFailed = true;
+          return null;
+        }
+      })();
+    if (phpMatches) {
+      try {
+        for (const match of phpMatches) {
+          const stmtText =
+            match.captures.find((capture) => capture.name === "stmt")?.text ??
+            match.captures[0]?.text ??
+            "";
+          if (!stmtText) continue;
+          for (const parsed of parsePhpImportStatement(stmtText)) {
+            out.push({ spec: parsed.from, typeOnly: false });
+          }
+        }
+      } catch {
+        queryFailed = true;
+        out.length = 0;
+      }
+    }
+    if (out.length > 0 || phpMatches !== null || queryFailed) {
       return normalizeModuleSpecifiers(out);
     }
   }
@@ -850,10 +894,20 @@ export async function collectEdgesForFile(
           typeof res === "string"
             ? { type: "file", path: res.replace(/\\/g, "/") }
             : { type: "external", name: raw ?? res.external };
-      } else if (["csharp", "ruby", "rust"].includes(sup.id)) {
+      } else if (["csharp", "ruby", "rust", "php"].includes(sup.id)) {
         const { resolvePathLikeModule } = await import("./util.js");
-        const res = await resolvePathLikeModule(projectRoot, spec);
-        if (res) {
+        const res =
+          sup.id === "php"
+            ? await resolveImportSpecifier(projectRoot, file, spec, sup.id, {
+                ...(matchPath ? { matchPath } : {}),
+                ...(workspaceConfig ? { workspaceConfig } : {}),
+                resolveNodeModules: !!opts.resolveNodeModules,
+                ...(opts.resolutionHints
+                  ? { resolutionHints: opts.resolutionHints }
+                  : {}),
+              })
+            : await resolvePathLikeModule(projectRoot, spec);
+        if (res && typeof res === "string") {
           to = { type: "file", path: res.replace(/\\/g, "/") };
         } else {
           // Fallback to resolveSpecifier for relative paths like ./foo
@@ -921,6 +975,32 @@ export async function collectEdgesForFile(
       ...(resolved !== undefined && { resolved }),
       ...(confidence !== undefined && { confidence }),
     });
+  }
+
+  if (sup.id === "php") {
+    const implicitFiles = await getPhpComposerImplicitFiles(projectRoot, file);
+    const seenFileTargets = new Set(
+      edges
+        .map((edge) => (edge.to.type === "file" ? edge.to.path : null))
+        .filter((target): target is string => !!target),
+    );
+    for (const implicitFile of implicitFiles) {
+      const normalizedTarget = implicitFile.replace(/\\/g, "/");
+      if (normalizedTarget === normalizedFile || seenFileTargets.has(normalizedTarget)) {
+        continue;
+      }
+
+      const relativeRaw = path.relative(path.dirname(file), implicitFile).replace(/\\/g, "/");
+      edges.push({
+        from: normalizedFile,
+        to: { type: "file", path: normalizedTarget },
+        raw:
+          relativeRaw.startsWith(".") || relativeRaw.startsWith("/")
+            ? relativeRaw
+            : `./${relativeRaw}`,
+      });
+      seenFileTargets.add(normalizedTarget);
+    }
   }
   emitCacheEntry(edges);
   return edges;

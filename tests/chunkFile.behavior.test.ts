@@ -58,6 +58,8 @@ describe("chunkFile detailed behavior", () => {
   it("uses public chunking language ids while keeping internal support ids", () => {
     expect(LANG_CONFIGS.javascript.id).toBe("javascript");
     expect(LANG_CONFIGS.javascript.supportId).toBe("js");
+    expect(LANG_CONFIGS.php.id).toBe("php");
+    expect(LANG_CONFIGS.php.supportId).toBe("php");
 
     const chunks = chunkFile({
       language: LANG_CONFIGS.javascript,

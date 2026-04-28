@@ -1,6 +1,6 @@
 # codegraph
 
-A tiny tool to **understand a repo**, **navigate code**, and **answer questions** fast. It supports JavaScript/TypeScript, Python, Go, Java, C#, Ruby, Rust, Kotlin, Swift, C, C++, graph-first document/template formats like HTML, Astro, Markdown, MDX, reStructuredText, AsciiDoc, Handlebars, and the script blocks inside Vue/Svelte files. Built-in **code review** and **impact analysis** utilities map PR diffs to changed symbols and affected code, with streaming, ignore patterns, and optional reference verification.
+A tiny tool to **understand a repo**, **navigate code**, and **answer questions** fast. It supports JavaScript/TypeScript, Python, PHP, Go, Java, C#, Ruby, Rust, Kotlin, Swift, C, C++, graph-first document/template formats like HTML, Astro, Markdown, MDX, reStructuredText, AsciiDoc, Handlebars, and the script blocks inside Vue/Svelte files. Built-in **code review** and **impact analysis** utilities map PR diffs to changed symbols and affected code, with streaming, ignore patterns, and optional reference verification.
 
 It builds:
 
@@ -37,6 +37,7 @@ Sample graph output can be generated with `npm run graph:mermaid` or `npm run gr
   - JS/TS: `import`, `export ... from`, `export * from`, `require()`, `import()`, CommonJS destructuring
   - JSON modules referenced from JS/TS (including `assert { type: "json" }`) are treated as default-only dependencies
   - Python: `import`, `from ... import`, relative imports with package resolution
+  - PHP: `require`, `require_once`, `include`, `include_once`, grouped `use` imports, and Composer autoload metadata (`psr-4`, `autoload-dev`, `classmap`, `autoload.files`)
   - Go/Java/C#/Ruby/Rust: Tree-sitter queries capture module imports/usings and resolve them to files or packages
   - HTML/Astro/Handlebars/Markdown/MDX/reStructuredText/AsciiDoc: graph-first document and template links via `href`/`src`, Markdown links, MDX/Astro static imports, Sphinx-style includes/toctrees, and AsciiDoc `xref`/`include`
   - Unresolved targets are represented as **external** nodes
@@ -44,16 +45,18 @@ Sample graph output can be generated with `npm run graph:mermaid` or `npm run gr
 - **Symbol index**
   - Extracts functions, classes, variables, interfaces, types, and exports
   - Captures docstrings (leading comments), line spans, and a lightweight complexity heuristic for symbols
-  - Works across JS/TS, Python, Go, Java, C#, Ruby, Rust, and Vue/Svelte script blocks with consistent scope handling
+  - Works across JS/TS, Python, PHP, Go, Java, C#, Ruby, Rust, and Vue/Svelte script blocks with consistent scope handling
 - **Go to definition**
   - Cross-file navigation through one shared pipeline across supported languages
   - TS/JS: Re-exports, namespace imports, CommonJS destructuring
   - Python: Module imports, `__all__` exports, relative imports
+  - PHP: Direct include edges, grouped `use` imports, and Composer-aware namespace resolution
   - Go/Java/C#/Ruby/Rust/C/C++/Kotlin/Swift: Package, header, and namespace lookups flow through the same shared resolver
 - **Find references**
   - Project-wide scanning with lexical scope awareness
   - TS/JS: Namespace members, re-exports, CommonJS patterns
   - Python: Module imports, `__all__` exports, relative imports
+  - PHP: Direct include edges, grouped `use` imports, and Composer-aware symbol resolution
   - Go/Java/C#/Ruby/Rust/C/C++/Kotlin/Swift: Collects bindings and usages through the same shared reference pipeline
 - **AST grep**
   - Run arbitrary Tree-sitter queries across the repo
@@ -92,10 +95,10 @@ Sample graph output can be generated with `npm run graph:mermaid` or `npm run gr
   - Per-file TypeScript config resolution
   - Package-relative import resolution
 - **Project file discovery**
-  - Finds common manifests (package.json, pyproject.toml, pom.xml, build.gradle, .csproj, .sln, .idea)
+  - Finds common manifests (package.json, pyproject.toml, composer.json, pom.xml, build.gradle, .csproj, .sln, .idea)
   - Extracts lightweight project names when metadata is available
 - **Semantic chunking**
-  - Tree-sitter-based code splitting for JS/TS/Python into embedding-ready chunks
+  - Tree-sitter-based code splitting for JS/TS/Python/PHP into embedding-ready chunks
   - Text file chunking for JSON/YAML/config files
   - Configurable token budgets (150-400 tokens per chunk)
   - Semantic awareness: classes, functions, methods, interfaces, namespaces, imports
@@ -107,6 +110,7 @@ Sample graph output can be generated with `npm run graph:mermaid` or `npm run gr
 
 - **JavaScript / TypeScript** (`.ts`, `.tsx`, `.js`, `.jsx`, `.mts`, `.cts`, `.mjs`, `.cjs`)
 - **Python** (`.py`)
+- **PHP** (`.php`)
 - **Go** (`.go`)
 - **Java** (`.java`)
 - **C#** (`.cs`)
@@ -1620,6 +1624,8 @@ These recipes combine the library's core capabilities (dependency graphs, symbol
 
 We use a **unified language definition** system that powers both the dependency graph and semantic chunking.
 
+For the full repo checklist, see [docs/adding-language-support.md](./docs/adding-language-support.md).
+
 To add a new language (e.g., Go):
 
 1.  **Create a definition file**:
@@ -1635,7 +1641,7 @@ To add a new language (e.g., Go):
     - Add a sample file: `tests/languages/samples/go.sample.go`.
     - Add a test definition: `tests/languages/go.test.ts`.
 
-You can keep it **80/20** first; the core system degrades gracefully (unresolvable edges become `external`).
+Do not stop at "80/20" support unless the parity docs and scenario catalog explicitly mark the limitation and the tests prove it.
 
 ---
 

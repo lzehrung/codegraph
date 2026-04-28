@@ -11,6 +11,7 @@ Status key:
 | TSX | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
 | JavaScript | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
 | Python | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
+| PHP | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
 | Go | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
 | Java | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
 | C | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
@@ -36,8 +37,8 @@ Status key:
 Notes:
 - The native addon uses the same Tree-sitter query model as the opt-in `@lzehrung/codegraph-js-fallback` path for all listed source languages.
 - Native-only installs do not require `@lzehrung/codegraph-js-fallback` for normal supported source-language graph extraction, symbol indexing, chunking, or AST grep. When query recovery degrades in `auto` mode, Codegraph reports it in diagnostics and stays on native-owned recovery paths where the language supports them.
-- Native parity coverage includes both extraction parity and end-to-end semantic parity on the current source-language fixture set (`TypeScript`, `TSX`, `JavaScript`, `Python`, `Go`, `Java`, `C#`, `Rust`, `Kotlin`, `Swift`, `C`, `C++`, `Ruby`) plus graph/specifier parity for `HTML`, `CSS`, `Less`, `SCSS`, `Vue`, and `Svelte`.
-- Deeper hardening coverage now includes Go aliased imports and interface-typed uses, Kotlin alias and wildcard imports plus native-owned import-binding recovery, Java wildcard-import package fixtures plus static wildcard imports, Rust aliased `use` imports plus `extern crate` graph fixtures, C# alias-using graph fixtures, Python `from __future__ import ...` import extraction, Swift static-member fixtures, C function-pointer typedef fixtures, C++ namespace/template fixtures, and Ruby nested module fixtures.
+- Native parity coverage includes both extraction parity and end-to-end semantic parity on the current source-language fixture set (`TypeScript`, `TSX`, `JavaScript`, `Python`, `PHP`, `Go`, `Java`, `C#`, `Rust`, `Kotlin`, `Swift`, `C`, `C++`, `Ruby`) plus graph/specifier parity for `HTML`, `CSS`, `Less`, `SCSS`, `Vue`, and `Svelte`.
+- Deeper hardening coverage now includes Go aliased imports and interface-typed uses, Kotlin alias and wildcard imports plus native-owned import-binding recovery, Java wildcard-import package fixtures plus static wildcard imports, Rust aliased `use` imports plus `extern crate` graph fixtures, C# alias-using graph fixtures, Python `from __future__ import ...` import extraction, PHP grouped `use` imports plus Composer `psr-4`, `autoload-dev`, `classmap`, and `autoload.files` resolution, Swift static-member fixtures, C function-pointer typedef fixtures, C++ namespace/template fixtures, and Ruby nested module fixtures.
 - JavaScript graphing now includes an isolated AngularJS heuristic layer for `templateUrl`, controller-name, and DI-token file/external edges when a file explicitly uses `angular.module(...)`. This coverage lives in dedicated framework tests, not in the generic JavaScript fixture set, and it is not a general claim that arbitrary `controller` or `templateUrl` config objects are Angular-aware.
 - `SCSS` uses the native addon for import/specifier extraction. Native SCSS symbol queries remain intentionally skipped because symbol extraction is not a supported SCSS capability in either runtime path yet.
 - `HTML`, `CSS`, `Less`, `Vue`, and `Svelte` are graph/chunking-focused today. Their unsupported navigation and symbol features are covered by explicit `not_found` parity tests.

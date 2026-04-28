@@ -86,6 +86,129 @@ export type ParsedCsharpUsingDirective = {
   isStatic: boolean;
 };
 
+export type ParsedPhpImportStatement =
+  | {
+      kind: "include";
+      from: string;
+    }
+  | {
+      kind: "named";
+      from: string;
+      imported: string;
+      local: string;
+      importType: "class" | "function" | "const";
+    };
+
+function splitTopLevelCommaList(input: string): string[] {
+  const items: string[] = [];
+  let depth = 0;
+  let current = "";
+
+  for (const ch of input) {
+    if (ch === "{") depth += 1;
+    if (ch === "}") depth = Math.max(0, depth - 1);
+    if (ch === "," && depth === 0) {
+      const trimmed = current.trim();
+      if (trimmed) items.push(trimmed);
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+
+  const trimmed = current.trim();
+  if (trimmed) items.push(trimmed);
+  return items;
+}
+
+function parsePhpImportClause(
+  rawClause: string,
+  importType: "class" | "function" | "const",
+): ParsedPhpImportStatement[] {
+  const clause = rawClause.trim().replace(/;$/, "");
+  if (!clause) return [];
+
+  const groupMatch = clause.match(/^(.+?\\)\{(.+)\}$/);
+  if (groupMatch?.[1] && groupMatch[2]) {
+    const prefix = groupMatch[1];
+    const members = splitTopLevelCommaList(groupMatch[2]);
+    const results: ParsedPhpImportStatement[] = [];
+
+    for (const member of members) {
+      const typedMemberMatch = member.match(/^(function|const)\s+(.+)$/);
+      const memberType =
+        typedMemberMatch?.[1] === "function"
+          ? "function"
+          : typedMemberMatch?.[1] === "const"
+            ? "const"
+            : importType;
+      const body = (typedMemberMatch?.[2] ?? member).trim();
+      const aliasMatch = body.match(/^(.*?)\s+as\s+([A-Za-z_][\w]*)$/i);
+      const fullPath = `${prefix}${(aliasMatch?.[1] ?? body).trim()}`;
+      const parts = fullPath.split("\\").filter(Boolean);
+      const imported = parts[parts.length - 1];
+      if (!imported) continue;
+      results.push({
+        kind: "named",
+        from: fullPath,
+        imported,
+        local: aliasMatch?.[2] ?? imported,
+        importType: memberType,
+      });
+    }
+
+    return results;
+  }
+
+  const aliasMatch = clause.match(/^(.*?)\s+as\s+([A-Za-z_][\w]*)$/i);
+  const fullPath = (aliasMatch?.[1] ?? clause).trim();
+  const parts = fullPath.split("\\").filter(Boolean);
+  const imported = parts[parts.length - 1];
+  if (!imported) return [];
+  return [
+    {
+      kind: "named",
+      from: fullPath,
+      imported,
+      local: aliasMatch?.[2] ?? imported,
+      importType,
+    },
+  ];
+}
+
+export function parsePhpImportStatement(
+  stmtText: string,
+): ParsedPhpImportStatement[] {
+  const trimmed = stmtText.trim();
+  if (!trimmed) return [];
+
+  const includeMatch = trimmed.match(
+    /^(?:require|require_once|include|include_once)\s*\(?\s*["']([^"']+)["']\s*\)?\s*;?$/i,
+  );
+  if (includeMatch?.[1]) {
+    return [{ kind: "include", from: includeMatch[1] }];
+  }
+
+  const useMatch = trimmed.match(/^(?:use)\s+(.+?)\s*;?$/is);
+  const useBody = useMatch?.[1]?.trim();
+  if (!useBody) return [];
+
+  const clauses = splitTopLevelCommaList(useBody);
+  const results: ParsedPhpImportStatement[] = [];
+  for (const clause of clauses) {
+    const typedClauseMatch = clause.match(/^(function|const)\s+(.+)$/is);
+    const importType =
+      typedClauseMatch?.[1] === "function"
+        ? "function"
+        : typedClauseMatch?.[1] === "const"
+          ? "const"
+          : "class";
+    const body = (typedClauseMatch?.[2] ?? clause).trim();
+    results.push(...parsePhpImportClause(body, importType));
+  }
+  return results;
+}
+
 export type ParsedKotlinImportStatement =
   | {
       kind: "named";

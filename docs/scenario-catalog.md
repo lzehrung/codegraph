@@ -25,6 +25,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Python `__all__` parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same locals and exports for `__all__`-driven modules. | Internal regression test | 2026-03-22 |
 | Python relative-import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same alias-aware relative import bindings. | Internal regression test | 2026-03-22 |
 | Python future-import graph extraction | `tests/fallback-import-extraction.test.ts` | Native graph extraction recognizes `from __future__ import ...` without dropping to regex fallback. | Internal regression test | 2026-03-29 |
+| PHP import and symbol parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same PHP import bindings, module specifiers, and symbol extraction for direct includes, grouped `use` imports, and Composer-mapped fixtures. | Internal regression test | 2026-04-28 |
 | HTML import-specifier parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same HTML `src` and `href` module specifiers. | Internal regression test | 2026-03-22 |
 | Go import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same Go file imports for package-relative fixtures. | Internal regression test | 2026-03-22 |
 | Java import parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same Java imports for package and static-import fixtures. | Internal regression test | 2026-03-22 |
@@ -43,8 +44,8 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | TSX symbol parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same exported component symbols and local type symbols. | Internal regression test | 2026-03-22 |
 | CSS-family specifier parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same module specifiers for CSS, Less, and SCSS imports. | Internal regression test | 2026-03-22 |
 | SFC specifier parity | `tests/native-tree-sitter.test.ts` | Native and JS Tree-sitter produce the same module specifiers for Vue and Svelte inline scripts, `script setup`, and component-import fixtures. | Internal regression test | 2026-03-22 |
-| End-to-end semantic parity | `tests/native-semantic-parity.test.ts` | Native-enabled and forced-JS runs produce the same graph edges, symbol presence, go-to-definition, and references for the current source-language fixture set (`TypeScript`, `TSX`, `JavaScript`, `Python`, `Go`, `Java`, `C#`, `Rust`, `Kotlin`, `Swift`, `C`, `C++`, `Ruby`). | Internal regression test | 2026-03-23 |
-| Deep semantic stress parity | `tests/native-semantic-parity.test.ts` | Native-enabled and forced-JS runs stay aligned on deeper fixtures for aliased and dot Go imports, Kotlin alias and wildcard imports, Java wildcard imports, Rust nested modules, Swift static-member imports, C advanced typedef fixtures, C++ namespace fixtures, and Ruby nested modules, including the intentionally limited macro-expanded C typedef case. | Internal regression test | 2026-03-23 |
+| End-to-end semantic parity | `tests/native-semantic-parity.test.ts` | Native-enabled and forced-JS runs produce the same graph edges, symbol presence, go-to-definition, and references for the current source-language fixture set (`TypeScript`, `TSX`, `JavaScript`, `Python`, `PHP`, `Go`, `Java`, `C#`, `Rust`, `Kotlin`, `Swift`, `C`, `C++`, `Ruby`). | Internal regression test | 2026-03-23 |
+| Deep semantic stress parity | `tests/native-semantic-parity.test.ts` | Native-enabled and forced-JS runs stay aligned on deeper fixtures for PHP grouped imports and Composer autoload metadata, aliased and dot Go imports, Kotlin alias and wildcard imports, Java wildcard imports, Rust nested modules, Swift static-member imports, C advanced typedef fixtures, C++ namespace fixtures, and Ruby nested modules, including the intentionally limited macro-expanded C typedef case. | Internal regression test | 2026-03-23 |
 | TypeScript normalization-sensitive semantic parity | `tests/native-semantic-parity.test.ts` | Native-enabled and forced-JS runs stay aligned for `export =` and class-export fixtures that depend on native query normalization. | Internal regression test | 2026-03-23 |
 | Graph/specifier native parity | `tests/native-semantic-parity.test.ts` | Native-enabled and forced-JS runs stay aligned for graph/specifier-focused fixtures (`HTML`, `CSS`, `Less`, `SCSS`, `Vue`, `Svelte`) and preserve the same `not_found` navigation behavior. | Internal regression test | 2026-03-23 |
 
@@ -179,6 +180,16 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | --- | --- | --- | --- | --- |
 | Relative `from` imports | `tests/samples/python/relative-imports.py` | Dependency graph includes edges to `utils.py` and `helpers.py` for relative `from` imports. | https://github.com/tree-sitter/tree-sitter-python | 2026-01-22 |
 | `__all__` export filtering | `tests/languages/python-all.test.ts` | Export extraction respects `__all__` tuple/list assignments and avoids false positives from nearby strings. | Internal regression test | 2026-03-22 |
+
+## PHP
+
+| Scenario | Sample | Expected behavior | Source | Date added |
+| --- | --- | --- | --- | --- |
+| Direct include and require edges | `tests/samples/php/main.php`, `tests/samples/php/grouped-consumer.php` | Dependency graph includes edges for `require`, `require_once`, `include`, and `include_once` when the target is statically resolvable. | Internal parity fixture | 2026-04-28 |
+| Grouped `use` aliases, functions, and constants | `tests/samples/php/grouped-consumer.php`, `tests/samples/php/src/Support/*`, `tests/import-binding-regressions.test.ts` | Import binding extraction, go-to-definition, and references resolve grouped class/function/constant imports, including aliases. | Internal regression fixture | 2026-04-28 |
+| Composer PSR-4 and autoload-dev resolution | `tests/samples/php/composer-consumer.php`, `tests/resolution.test.ts` | Namespace-qualified imports resolve through `composer.json` `autoload.psr-4` and `autoload-dev.psr-4` mappings. | Internal regression fixture | 2026-04-28 |
+| Composer classmap and autoload.files resolution | `tests/resolution.test.ts` | Global-namespace class lookups resolve through Composer `classmap`, and `autoload.files` entries behave as implicit file dependencies and symbol sources for PHP files in the project. | Internal regression test | 2026-04-28 |
+| Shared semantic coverage | `tests/goto.test.ts`, `tests/references.test.ts` | Imported functions, classes, grouped aliases, and Composer-mapped symbols resolve through the same shared navigation/reference pipeline used by other source languages. | Internal regression test | 2026-04-28 |
 
 ## Ruby
 

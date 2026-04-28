@@ -15,6 +15,7 @@ export type SampleLanguage =
   | 'typescript'
   | 'tsx'
   | 'python'
+  | 'php'
   | 'javascript'
   | 'c'
   | 'cpp'
