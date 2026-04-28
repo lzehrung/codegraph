@@ -32,6 +32,10 @@ const definition: LanguageTestDefinition = {
         from: "TypeConsumers.kt",
         to: { type: "file", path: "utils/helperFunction.kt" },
       },
+      {
+        from: "TypeConsumers.kt",
+        to: { type: "file", path: "utils/MoreTypes.kt" },
+      },
     ],
     symbols: [
       {
@@ -73,6 +77,13 @@ const definition: LanguageTestDefinition = {
         column: 21,
         expectedDefinition: { file: "utils/MoreTypes.kt", line: 3 },
       },
+      {
+        name: "go to definition resolves wildcard-imported helper functions",
+        file: "TypeConsumers.kt",
+        line: 12,
+        column: 10,
+        expectedDefinition: { file: "utils/helperFunction.kt", line: 3 },
+      },
     ],
     references: [
       {
@@ -80,6 +91,13 @@ const definition: LanguageTestDefinition = {
         file: "utils/MoreTypes.kt",
         line: 3,
         column: 11,
+        minimumCount: 2,
+      },
+      {
+        name: "find references for wildcard-imported helper functions",
+        file: "utils/helperFunction.kt",
+        line: 3,
+        column: 5,
         minimumCount: 2,
       },
     ],

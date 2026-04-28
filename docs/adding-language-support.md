@@ -41,6 +41,13 @@ Checklist for landing a new first-class source language without drifting from re
 - Extend `src/util.ts` for language-specific module resolution, package metadata parsing, and caches.
 - Keep dynamic or ambiguous cases conservative. Prefer `external` or `not_found` over false-positive navigation.
 
+### Sort vs expand
+
+- If a resolver is choosing among multiple candidate files for a named symbol, deterministic sorting is usually enough.
+- If a resolver is handling a package-wide or wildcard import that semantically depends on multiple files, expand it to multiple graph edges instead of picking the first candidate.
+- When you keep a single-target fallback, add stable ordering before any `candidates[0]` or equivalent first-match pick.
+- When you expand to multiple graph edges, add fixtures that prove the behavior across more than one file in the imported package.
+
 ## 6. Add fixture coverage in layers
 
 - Add or extend `tests/languages/<language>.test.ts`.

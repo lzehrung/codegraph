@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildProjectIndex,
   clearResolutionCaches,
+  collectGraph,
   collectImportsForFile,
   parseFile,
 } from "../src/index.js";
@@ -123,5 +124,70 @@ describe("Kotlin import resolution regression", () => {
     expect(index.byFile.has(normalizedSourceService)).toBe(true);
     expect(index.byFile.has(normalizedIgnoredHelper)).toBe(false);
     expect(elapsedMs).toBeLessThan(10000);
+  });
+
+  it("expands Kotlin wildcard package imports to all source package files", async () => {
+    const root = await mkTmpDir("cg-kotlin-wildcard-");
+    const pkgDir = path.join(root, "src", "demo", "pkg");
+    const generatedDir = path.join(
+      root,
+      "build",
+      "generated",
+      "source",
+      "kapt",
+      "main",
+      "demo",
+      "pkg",
+    );
+    const mainFile = path.join(root, "src", "Main.kt");
+    const alphaFile = path.join(pkgDir, "Alpha.kt");
+    const betaFile = path.join(pkgDir, "Beta.kt");
+    const ignoredFile = path.join(generatedDir, "Generated.kt");
+
+    await fsp.mkdir(pkgDir, { recursive: true });
+    await fsp.mkdir(generatedDir, { recursive: true });
+    await fsp.writeFile(
+      alphaFile,
+      ["package demo.pkg", "class Alpha", "fun helperFunction(): Int = 1"].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      betaFile,
+      ["package demo.pkg", "typealias Alias = Alpha"].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      ignoredFile,
+      ["package demo.pkg", "class Generated"].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      mainFile,
+      [
+        "import demo.pkg.*",
+        "",
+        "fun run(): Alias {",
+        "  helperFunction()",
+        "  return Alpha()",
+        "}",
+      ].join("\n"),
+      "utf8",
+    );
+
+    clearResolutionCaches();
+    const graph = await collectGraph(root, [
+      mainFile.replace(/\\/g, "/"),
+      alphaFile.replace(/\\/g, "/"),
+      betaFile.replace(/\\/g, "/"),
+    ]);
+
+    const fileEdges = graph.edges
+      .filter((edge) => edge.from === mainFile.replace(/\\/g, "/"))
+      .filter((edge) => edge.to.type === "file")
+      .map((edge) => edge.to.path);
+
+    expect(fileEdges).toContain(alphaFile.replace(/\\/g, "/"));
+    expect(fileEdges).toContain(betaFile.replace(/\\/g, "/"));
+    expect(fileEdges).not.toContain(ignoredFile.replace(/\\/g, "/"));
   });
 });

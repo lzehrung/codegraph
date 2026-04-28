@@ -31,6 +31,10 @@ const definition: LanguageTestDefinition = {
         to: { type: "file", path: "pkg/PackageTypes.java" },
       },
       {
+        from: "WildcardImports.java",
+        to: { type: "file", path: "pkg/PackageService.java" },
+      },
+      {
         from: "StaticWildcardImports.java",
         to: { type: "file", path: "utils/Utils.java" },
       },
@@ -57,6 +61,10 @@ const definition: LanguageTestDefinition = {
           { name: "ServiceContract" },
         ],
       },
+      {
+        file: "pkg/PackageService.java",
+        includes: [{ name: "PackageService" }],
+      },
     ],
     goToDefinition: [
       {
@@ -65,6 +73,13 @@ const definition: LanguageTestDefinition = {
         line: 6,
         column: 16,
         expectedDefinition: { file: "pkg/PackageTypes.java", line: 4 },
+      },
+      {
+        name: "go to definition resolves wildcard-imported package interfaces across files",
+        file: "WildcardImports.java",
+        line: 8,
+        column: 3,
+        expectedDefinition: { file: "pkg/PackageService.java", line: 3 },
       },
       {
         name: "go to definition resolves static wildcard imports",
@@ -80,6 +95,13 @@ const definition: LanguageTestDefinition = {
         file: "pkg/PackageTypes.java",
         line: 7,
         column: 11,
+        minimumCount: 2,
+      },
+      {
+        name: "find references for wildcard-imported package interfaces across files",
+        file: "pkg/PackageService.java",
+        line: 3,
+        column: 18,
         minimumCount: 2,
       },
       {

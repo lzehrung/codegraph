@@ -145,7 +145,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Scenario | Sample | Expected behavior | Source | Date added |
 | --- | --- | --- | --- | --- |
 | Static imports | `tests/samples/java/static-imports.java` | Dependency graph includes edges to `utils/Utils.java` and `helpers/Helpers.java` for static imports. | https://github.com/tree-sitter/tree-sitter-java | 2026-01-22 |
-| Wildcard package imports | `tests/samples/java/WildcardImports.java`, `tests/samples/java/pkg/PackageTypes.java` | Dependency graph, wildcard-imported nested-type navigation, and interface references resolve across package fixtures. | Internal regression fixture | 2026-03-23 |
+| Wildcard package imports | `tests/samples/java/WildcardImports.java`, `tests/samples/java/pkg/*.java`, `tests/java-import-resolution-regression.test.ts` | Dependency graph expands `import pkg.*;` across all source files in the imported package instead of picking one representative file, and wildcard-imported nested-type/interface navigation stays correct across package fixtures. | Internal regression fixture | 2026-03-23 |
 | Static wildcard imports | `tests/samples/java/StaticWildcardImports.java`, `tests/samples/java/utils/Utils.java` | Dependency graph, go-to-definition, and references resolve Java static wildcard imports back to the declaring utility class. | Internal regression fixture | 2026-03-29 |
 | Nested classes and interfaces | `tests/samples/java/NestedTypes.java` | Symbol extraction includes nested classes, nested interfaces, and their member methods. | Internal regression fixture | 2026-03-22 |
 
@@ -162,7 +162,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Scenario | Sample | Expected behavior | Source | Date added |
 | --- | --- | --- | --- | --- |
 | Package imports | `tests/samples/kotlin/main.kt` | Dependency graph includes edges to `utils/helperFunction.kt` and `helpers/helperFromHelpers.kt`. | Internal parity fixture | 2026-03-22 |
-| Alias and wildcard imports | `tests/samples/kotlin/Aliases.kt`, `tests/samples/kotlin/TypeConsumers.kt`, `tests/samples/kotlin/utils/MoreTypes.kt` | Dependency graph, direct import-binding extraction, go-to-definition, and references resolve aliased and wildcard-imported Kotlin symbols across files. | Internal regression fixture | 2026-03-23 |
+| Alias and wildcard imports | `tests/samples/kotlin/Aliases.kt`, `tests/samples/kotlin/TypeConsumers.kt`, `tests/samples/kotlin/utils/*.kt`, `tests/kotlin-import-resolution-regression.test.ts` | Dependency graph expands `import utils.*` across all source files in the imported package, and direct import-binding extraction, go-to-definition, and references resolve aliased and wildcard-imported Kotlin symbols across files. | Internal regression fixture | 2026-03-23 |
 | Enums, type aliases, and top-level properties | `tests/samples/kotlin/Models.kt` | Symbol extraction includes enum declarations and entries, type aliases, top-level properties, and generic classes. | Internal regression fixture | 2026-03-22 |
 | Package go-to-definition | `tests/goto.test.ts` | Imported top-level functions and imported classes resolve from `main.kt` into `utils/helperFunction.kt`. | Internal regression test | 2026-03-23 |
 | Package references | `tests/references.test.ts` | Imported function and class references resolve across `main.kt` and `utils/helperFunction.kt`. | Internal regression test | 2026-03-23 |

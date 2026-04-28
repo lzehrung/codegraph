@@ -346,7 +346,14 @@ function resolvePhpIncludePath(expr: string, fromFile?: string): string | null {
 
   const normalizedPath = path.normalize(combined);
   if (!path.isAbsolute(normalizedPath)) {
-    return normalizedPath.replace(/\\/g, "/");
+    const relativePath = normalizedPath.replace(/\\/g, "/");
+    if (
+      relativePath.startsWith("./") ||
+      relativePath.startsWith("../")
+    ) {
+      return relativePath;
+    }
+    return `./${relativePath}`;
   }
 
   const relativePath = path

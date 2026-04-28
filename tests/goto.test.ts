@@ -485,6 +485,20 @@ describe('Go to Definition', () => {
 
       await testGoToDefinition(index, consumerFile, 3, 21, moreTypesFile, 3);
     });
+
+    it('should find definition of wildcard-imported helper functions', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'kotlin');
+      const consumerFile = path.join(samplePath, 'TypeConsumers.kt').replace(/\\/g, '/');
+      const moreTypesFile = path.join(samplePath, 'utils', 'MoreTypes.kt').replace(/\\/g, '/');
+      const helperFile = path.join(samplePath, 'utils', 'helperFunction.kt').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [
+        consumerFile,
+        moreTypesFile,
+        helperFile,
+      ]);
+
+      await testGoToDefinition(index, consumerFile, 12, 10, helperFile, 3);
+    });
   });
 
   describe('Swift', () => {
@@ -548,6 +562,15 @@ describe('Go to Definition', () => {
       const packageFile = path.join(samplePath, 'pkg', 'PackageTypes.java').replace(/\\/g, '/');
 
       await testGoToDefinition(index, wildcardFile, 6, 16, packageFile, 4);
+    });
+
+    it('should find definition of wildcard-imported package interfaces across files', async () => {
+      const index = await createTestIndex('java');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'java');
+      const wildcardFile = path.join(samplePath, 'WildcardImports.java').replace(/\\/g, '/');
+      const packageFile = path.join(samplePath, 'pkg', 'PackageService.java').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, wildcardFile, 8, 3, packageFile, 3);
     });
 
     it('should find definition of static wildcard-imported methods', async () => {

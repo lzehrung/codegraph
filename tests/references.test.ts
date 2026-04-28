@@ -687,6 +687,22 @@ describe('Find References', () => {
       expectReferenceAt(result, moreTypesFile, 3);
       expectReferenceAt(result, consumerFile, 3);
     });
+
+    it('should find wildcard-imported references to helper functions', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'kotlin');
+      const consumerFile = path.join(samplePath, 'TypeConsumers.kt').replace(/\\/g, '/');
+      const moreTypesFile = path.join(samplePath, 'utils', 'MoreTypes.kt').replace(/\\/g, '/');
+      const helperFile = path.join(samplePath, 'utils', 'helperFunction.kt').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [
+        consumerFile,
+        moreTypesFile,
+        helperFile,
+      ]);
+
+      const result = await testFindReferences(index, helperFile, 3, 5, 2);
+      expectReferenceAt(result, helperFile, 3);
+      expectReferenceAt(result, consumerFile, 12);
+    });
   });
 
   describe('Swift', () => {
@@ -774,6 +790,17 @@ describe('Find References', () => {
       const result = await testFindReferences(index, packageFile, 7, 11, 2);
       expectReferenceAt(result, packageFile, 7);
       expectReferenceAt(result, wildcardFile, 7);
+    });
+
+    it('should find references to wildcard-imported package interfaces across files', async () => {
+      const index = await createTestIndex('java');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'java');
+      const packageFile = path.join(samplePath, 'pkg', 'PackageService.java').replace(/\\/g, '/');
+      const wildcardFile = path.join(samplePath, 'WildcardImports.java').replace(/\\/g, '/');
+
+      const result = await testFindReferences(index, packageFile, 3, 18, 2);
+      expectReferenceAt(result, packageFile, 3);
+      expectReferenceAt(result, wildcardFile, 8);
     });
 
     it('should find references to static wildcard-imported methods', async () => {

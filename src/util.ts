@@ -2664,15 +2664,127 @@ async function readPhpSymbolIndex(
       declarationType === "function" ? "function" : "class",
     );
   }
-  const constPattern = /\bconst\s+([A-Za-z_][\w]*)\b/g;
-  for (const match of source.matchAll(constPattern)) {
-    const symbolName = match[1];
-    if (symbolName) addSymbol(symbolName, "const");
+  for (const symbolName of extractPhpTopLevelConstNames(source)) {
+    addSymbol(symbolName, "const");
   }
 
   const entry = { packageName, symbols, kindsBySymbol };
   phpSymbolIndexCache.set(filePath, entry);
   return entry;
+}
+
+function extractPhpTopLevelConstNames(source: string): string[] {
+  const names: string[] = [];
+  const classLikeStack: number[] = [];
+  let pendingBlockType: "classLike" | "namespace" | null = null;
+
+  const isWordBoundary = (index: number): boolean => {
+    const ch = source[index];
+    return !ch || !/[A-Za-z0-9_]/.test(ch);
+  };
+
+  for (let index = 0; index < source.length; index += 1) {
+    const ch = source[index] ?? "";
+    const next = source[index + 1] ?? "";
+
+    if (ch === "/" && next === "/") {
+      index += 2;
+      while (index < source.length && source[index] !== "\n") index += 1;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      index += 2;
+      while (
+        index < source.length - 1 &&
+        !(source[index] === "*" && source[index + 1] === "/")
+      ) {
+        index += 1;
+      }
+      index += 1;
+      continue;
+    }
+    if (ch === "#") {
+      index += 1;
+      while (index < source.length && source[index] !== "\n") index += 1;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      const quote = ch;
+      index += 1;
+      while (index < source.length) {
+        if (source[index] === "\\") {
+          index += 2;
+          continue;
+        }
+        if (source[index] === quote) break;
+        index += 1;
+      }
+      continue;
+    }
+
+    if (ch === "{") {
+      if (pendingBlockType === "classLike") {
+        classLikeStack.push(index);
+      }
+      pendingBlockType = null;
+      continue;
+    }
+    if (ch === "}") {
+      if (classLikeStack.length > 0) {
+        classLikeStack.pop();
+      }
+      pendingBlockType = null;
+      continue;
+    }
+    if (!/[A-Za-z_]/.test(ch)) continue;
+
+    let end = index + 1;
+    while (end < source.length && /[A-Za-z0-9_]/.test(source[end]!)) end += 1;
+    const word = source.slice(index, end);
+    if (!isWordBoundary(index - 1) || !isWordBoundary(end)) {
+      index = end - 1;
+      continue;
+    }
+
+    if (
+      word === "class" ||
+      word === "interface" ||
+      word === "trait" ||
+      word === "enum"
+    ) {
+      pendingBlockType = "classLike";
+      index = end - 1;
+      continue;
+    }
+    if (word === "namespace") {
+      pendingBlockType = "namespace";
+      index = end - 1;
+      continue;
+    }
+    if (word === "const" && classLikeStack.length === 0) {
+      let nameStart = end;
+      while (nameStart < source.length && /\s/.test(source[nameStart]!)) {
+        nameStart += 1;
+      }
+      let nameEnd = nameStart;
+      while (
+        nameEnd < source.length &&
+        /[A-Za-z0-9_]/.test(source[nameEnd]!)
+      ) {
+        nameEnd += 1;
+      }
+      const symbolName = source.slice(nameStart, nameEnd);
+      if (/^[A-Za-z_][\w]*$/.test(symbolName)) {
+        names.push(symbolName);
+      }
+      index = end - 1;
+      continue;
+    }
+
+    index = end - 1;
+  }
+
+  return names;
 }
 
 function readComposerNamespaceDirs(
@@ -2746,8 +2858,8 @@ async function loadPhpComposerConfig(
         ...readComposerNamespaceDirs(autoloadDev["psr-0"], composerDir),
       ]);
       const classmap = [
-        ...readComposerStringList(autoload.classmap, composerDir),
-        ...readComposerStringList(autoloadDev.classmap, composerDir),
+        ...readComposerStringList(autoload["classmap"], composerDir),
+        ...readComposerStringList(autoloadDev["classmap"], composerDir),
       ];
       const excludeFromClassmap = [
         ...readComposerStringList(autoload["exclude-from-classmap"], composerDir),
@@ -2757,8 +2869,8 @@ async function loadPhpComposerConfig(
         ),
       ];
       const files = [
-        ...readComposerStringList(autoload.files, composerDir),
-        ...readComposerStringList(autoloadDev.files, composerDir),
+        ...readComposerStringList(autoload["files"], composerDir),
+        ...readComposerStringList(autoloadDev["files"], composerDir),
       ];
 
       return { psr4, psr0, classmap, excludeFromClassmap, files };
@@ -3789,6 +3901,7 @@ export function clearImportResolutionCaches(): void {
   phpSymbolIndexCache.clear();
   phpProjectSymbolIndexCache.clear();
   phpComposerConfigCache.clear();
+  phpComposerAutoloadFileCache.clear();
   fileExistsCache.clear();
   resolveSpecifierCache.clear();
   resolvePythonModuleCache.clear();

@@ -2,7 +2,12 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { buildProjectIndex, collectGraph, goToDefinition } from "../src/index.js";
+import {
+  buildProjectIndex,
+  clearImportResolutionCaches,
+  collectGraph,
+  goToDefinition,
+} from "../src/index.js";
 import { resolveSpecifier } from "../src/util.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -922,6 +927,48 @@ describe("Import Resolution", () => {
     }
   });
 
+  it("resolves PHP relative include strings that start with ./", async () => {
+    const root = await mkTmpDir("dg-resolve-php-relative-include-");
+    const consumerFile = path.join(root, "consumer.php");
+    const helpersFile = path.join(root, "helpers.php");
+
+    await fsp.writeFile(
+      helpersFile,
+      ["<?php", "", "function helper_from_relative(): string", "{", "    return 'ok';", "}", ""].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      ["<?php", "", "require './helpers.php';", "", "$value = helper_from_relative();", ""].join("\n"),
+      "utf8",
+    );
+
+    const consumerPath = consumerFile.replace(/\\/g, "/");
+    const helpersPath = helpersFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [consumerPath, helpersPath]);
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === consumerPath &&
+          edge.to.type === "file" &&
+          edge.to.path === helpersPath,
+      ),
+    ).toBe(true);
+
+    const index = await buildProjectIndex(root);
+    const result = await goToDefinition(index, {
+      file: consumerPath,
+      line: 5,
+      column: 12,
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.definition.file).toBe(helpersPath);
+      expect(result.definition.range.start.line).toBe(3);
+    }
+  });
+
   it("resolves fully-qualified PHP class references without use statements", async () => {
     const root = await mkTmpDir("dg-resolve-php-qualified-");
     const srcDir = path.join(root, "src", "Domain");
@@ -1076,6 +1123,120 @@ describe("Import Resolution", () => {
     if (result.status === "ok") {
       expect(result.definition.file).toBe(functionFile.replace(/\\/g, "/"));
       expect(result.definition.range.start.line).toBe(5);
+    }
+  });
+
+  it("prefers namespace-level PHP const imports over class constants", async () => {
+    const root = await mkTmpDir("dg-resolve-php-const-kind-");
+    const srcDir = path.join(root, "src", "Domain");
+    const consumerFile = path.join(root, "consumer.php");
+    const classFile = path.join(srcDir, "AClass.php");
+    const constFile = path.join(srcDir, "ZConst.php");
+
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { "psr-4": { "App\\\\": "src/" } } }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      classFile,
+      [
+        "<?php",
+        "",
+        "namespace App\\Domain;",
+        "",
+        "class AClass",
+        "{",
+        "    public const NAME = 'class';",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      constFile,
+      [
+        "<?php",
+        "",
+        "namespace App\\Domain;",
+        "",
+        "const NAME = 'namespace';",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      [
+        "<?php",
+        "",
+        "use const App\\Domain\\NAME;",
+        "",
+        "$value = NAME;",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await goToDefinition(index, {
+      file: consumerFile.replace(/\\/g, "/"),
+      line: 5,
+      column: 10,
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.definition.file).toBe(constFile.replace(/\\/g, "/"));
+      expect(result.definition.range.start.line).toBe(5);
+    }
+  });
+
+  it("clears cached PHP Composer autoload surfaces when import caches reset", async () => {
+    const root = await mkTmpDir("dg-resolve-php-autoload-cache-clear-");
+    const srcDir = path.join(root, "src");
+    const consumerFile = path.join(root, "consumer.php");
+    const serviceFile = path.join(srcDir, "NewService.php");
+
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      ["<?php", "", "use NewService;", "", "$service = new NewService();", ""].join("\n"),
+      "utf8",
+    );
+
+    let index = await buildProjectIndex(root);
+    let result = await goToDefinition(index, {
+      file: consumerFile.replace(/\\/g, "/"),
+      line: 5,
+      column: 16,
+    });
+    expect(result.status).toBe("not_found");
+
+    await fsp.writeFile(
+      serviceFile,
+      ["<?php", "", "class NewService {}", ""].join("\n"),
+      "utf8",
+    );
+
+    clearImportResolutionCaches();
+    index = await buildProjectIndex(root);
+    result = await goToDefinition(index, {
+      file: consumerFile.replace(/\\/g, "/"),
+      line: 5,
+      column: 16,
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.definition.file).toBe(serviceFile.replace(/\\/g, "/"));
+      expect(result.definition.range.start.line).toBe(3);
     }
   });
 
