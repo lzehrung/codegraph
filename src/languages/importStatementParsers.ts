@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isAbsoluteFilePath, normalizePath } from "../util.js";
 
 export type ParsedRustImportStatement =
   | {
@@ -345,7 +346,7 @@ function resolvePhpIncludePath(expr: string, fromFile?: string): string | null {
   }
 
   const normalizedPath = path.normalize(combined);
-  if (!path.isAbsolute(normalizedPath)) {
+  if (!isAbsoluteFilePath(normalizedPath)) {
     const relativePath = normalizedPath.replace(/\\/g, "/");
     if (
       relativePath.startsWith("./") ||
@@ -356,9 +357,17 @@ function resolvePhpIncludePath(expr: string, fromFile?: string): string | null {
     return `./${relativePath}`;
   }
 
-  const relativePath = path
-    .relative(path.dirname(fromFile), normalizedPath)
-    .replace(/\\/g, "/");
+  const relativePath =
+    path.win32.isAbsolute(fromFile) && path.win32.isAbsolute(normalizedPath)
+    ? normalizePath(
+        path.win32.relative(
+          normalizePath(path.win32.dirname(fromFile)),
+          normalizePath(normalizedPath),
+        ),
+      )
+    : path
+        .relative(path.dirname(fromFile), normalizedPath)
+        .replace(/\\/g, "/");
   if (
     relativePath.startsWith(".") ||
     relativePath.startsWith("/")
