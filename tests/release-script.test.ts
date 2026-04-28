@@ -16,6 +16,7 @@ import {
   selectLatestLegacyTag,
   selectLatestSemverTag,
   tagNameForPackageVersion,
+  tagNamesForPackageVersion,
 } from "../scripts/release-lib.mjs";
 
 describe("release script helpers", () => {
@@ -147,6 +148,18 @@ describe("release script helpers", () => {
     expect(
       tagNameForPackageVersion("@lzehrung/codegraph-js-fallback", "1.8.44"),
     ).toBe("@lzehrung/codegraph-js-fallback@1.8.44");
+  });
+
+  it("formats both repo and package-scoped tags for root releases", () => {
+    expect(tagNamesForPackageVersion("@lzehrung/codegraph", "1.8.44")).toEqual(
+      ["v1.8.44", "@lzehrung/codegraph@1.8.44"],
+    );
+  });
+
+  it("keeps non-root releases package-scoped only", () => {
+    expect(
+      tagNamesForPackageVersion("@lzehrung/codegraph-native", "1.8.44"),
+    ).toEqual(["@lzehrung/codegraph-native@1.8.44"]);
   });
 
   it("sanitizes the fallback package manifest for publishing", () => {
