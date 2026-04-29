@@ -7,3 +7,7 @@ fun consumeAlias(): UtilityAlias {
 fun consumeCompanion(): UtilityClass {
   return CompanionCarrier.build(3)
 }
+
+fun consumeHelper(): Int {
+  return helperFunction(4)
+}

@@ -17,6 +17,29 @@ function extractDefaultExport(value) {
   return value;
 }
 
+function packageLanguageExportName(packageName) {
+  if (!packageName.startsWith("tree-sitter-")) return null;
+  return packageName.slice("tree-sitter-".length).replace(/-/g, "_");
+}
+
+function resolveLanguageCandidate(packageName, value) {
+  const candidate = extractDefaultExport(value);
+  if (isObject(candidate) && "language" in candidate) {
+    return candidate;
+  }
+  const exportName = packageLanguageExportName(packageName);
+  if (
+    exportName &&
+    isObject(candidate) &&
+    exportName in candidate &&
+    isObject(candidate[exportName]) &&
+    "language" in candidate[exportName]
+  ) {
+    return candidate[exportName];
+  }
+  return candidate;
+}
+
 function shouldFallbackToBinding(error) {
   if (isObject(error) && "code" in error) {
     const { code } = error;
@@ -66,7 +89,7 @@ function loadTreeSitterLanguage(packageName) {
   if (cached) return cached;
 
   const mod = loadPackageModule(packageName);
-  const candidate = extractDefaultExport(mod);
+  const candidate = resolveLanguageCandidate(packageName, mod);
   if (!candidate) {
     throw new Error(`Failed to load Tree-sitter language from ${packageName}`);
   }

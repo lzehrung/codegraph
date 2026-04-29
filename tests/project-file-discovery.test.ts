@@ -110,6 +110,7 @@ describe("project file discovery", () => {
       path.join(tempDir, "docs", "index.rst"),
       path.join(tempDir, "docs", "index.adoc"),
       path.join(tempDir, "docs", "index.asciidoc"),
+      path.join(tempDir, "php", "index.php"),
       path.join(tempDir, "swift", "App.swift"),
       path.join(tempDir, "c", "main.c"),
       path.join(tempDir, "c", "utils.h"),

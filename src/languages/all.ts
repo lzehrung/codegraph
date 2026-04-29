@@ -1,6 +1,7 @@
 import "./definitions/typescript.js";
 import "./definitions/javascript.js";
 import "./definitions/python.js";
+import "./definitions/php.js";
 import "./definitions/html.js";
 import "./definitions/astro.js";
 import "./definitions/hbs.js";
