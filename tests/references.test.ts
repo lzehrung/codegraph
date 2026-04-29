@@ -407,13 +407,34 @@ describe('Find References', () => {
       const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
       const libraryFile = path.join(samplePath, 'multi-namespace', 'Library.php').replace(/\\/g, '/');
       const consumerFile = path.join(samplePath, 'bracketed-consumer.php').replace(/\\/g, '/');
+      const qualifiedConsumerFile = path.join(samplePath, 'bracketed-qualified-consumer.php').replace(/\\/g, '/');
+
+      const result = await testFindReferences(index, libraryFile, 8, 11, 3);
+
+      expect(result.status).toBe('ok');
+      if (result.status === 'ok') {
+        expectReferenceAt(result, libraryFile, 8);
+        expectReferenceAt(result, consumerFile, 5);
+        expectReferenceAt(result, qualifiedConsumerFile, 3);
+      }
+    });
+
+    it('should find fully-qualified references for classes declared in later PHP namespace blocks', async () => {
+      const root = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const files = [
+        path.join(root, 'multi-namespace', 'Library.php'),
+        path.join(root, 'bracketed-qualified-consumer.php'),
+      ];
+      const index = await createTestIndexFromFiles(root, files);
+      const libraryFile = path.join(root, 'multi-namespace', 'Library.php').replace(/\\/g, '/');
+      const qualifiedConsumerFile = path.join(root, 'bracketed-qualified-consumer.php').replace(/\\/g, '/');
 
       const result = await testFindReferences(index, libraryFile, 8, 11, 2);
 
       expect(result.status).toBe('ok');
       if (result.status === 'ok') {
         expectReferenceAt(result, libraryFile, 8);
-        expectReferenceAt(result, consumerFile, 5);
+        expectReferenceAt(result, qualifiedConsumerFile, 3);
       }
     });
   });

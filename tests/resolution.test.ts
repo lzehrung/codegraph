@@ -807,6 +807,72 @@ describe("Import Resolution", () => {
     }
   });
 
+  it("merges duplicate PHP PSR-4 prefixes across autoload and autoload-dev", async () => {
+    const root = await mkTmpDir("dg-resolve-php-autoload-merge-");
+    const srcDir = path.join(root, "src", "Domain");
+    const devDir = path.join(root, "dev-tools", "Testing");
+    const prodConsumerFile = path.join(root, "prod-consumer.php");
+    const devConsumerFile = path.join(root, "dev-consumer.php");
+    const serviceFile = path.join(srcDir, "Service.php");
+    const harnessFile = path.join(devDir, "Harness.php");
+
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.mkdir(devDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify(
+        {
+          autoload: { "psr-4": { "App\\\\": "src/" } },
+          "autoload-dev": { "psr-4": { "App\\\\": "dev-tools/" } },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fsp.writeFile(
+      serviceFile,
+      ["<?php", "", "namespace App\\Domain;", "", "class Service {}", ""].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      harnessFile,
+      ["<?php", "", "namespace App\\Testing;", "", "class Harness {}", ""].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      prodConsumerFile,
+      ["<?php", "", "use App\\Domain\\Service;", "", "$service = new Service();", ""].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      devConsumerFile,
+      ["<?php", "", "use App\\Testing\\Harness;", "", "$tool = new Harness();", ""].join("\n"),
+      "utf8",
+    );
+
+    const index = await buildProjectIndex(root);
+    const prodResult = await goToDefinition(index, {
+      file: prodConsumerFile.replace(/\\/g, "/"),
+      line: 5,
+      column: 16,
+    });
+    const devResult = await goToDefinition(index, {
+      file: devConsumerFile.replace(/\\/g, "/"),
+      line: 5,
+      column: 13,
+    });
+
+    expect(prodResult.status).toBe("ok");
+    if (prodResult.status === "ok") {
+      expect(prodResult.definition.file).toBe(serviceFile.replace(/\\/g, "/"));
+    }
+    expect(devResult.status).toBe("ok");
+    if (devResult.status === "ok") {
+      expect(devResult.definition.file).toBe(harnessFile.replace(/\\/g, "/"));
+    }
+  });
+
   it("resolves PHP PSR-0 imports that use underscores in the class name portion", async () => {
     const root = await mkTmpDir("dg-resolve-php-psr0-");
     const decoyDir = path.join(root, "aaa-decoy");
@@ -1435,6 +1501,104 @@ describe("Import Resolution", () => {
       file: consumerFile.replace(/\\/g, "/"),
       line: 5,
       column: 17,
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.definition.file).toBe(libraryFile.replace(/\\/g, "/"));
+      expect(result.definition.range.start.line).toBe(8);
+    }
+  });
+
+  it("resolves PHP namespace-relative references inside later bracketed namespace blocks", async () => {
+    const root = await mkTmpDir("dg-resolve-php-namespace-relative-");
+    const srcDir = path.join(root, "src");
+    const consumerFile = path.join(srcDir, "consumer.php");
+
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(
+      consumerFile,
+      [
+        "<?php",
+        "",
+        "namespace App\\One {",
+        "    class FirstService {}",
+        "}",
+        "",
+        "namespace App\\Two {",
+        "    class SecondService {}",
+        "",
+        "    $service = new namespace\\SecondService();",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await goToDefinition(index, {
+      file: consumerFile.replace(/\\/g, "/"),
+      line: 10,
+      column: 31,
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.definition.file).toBe(consumerFile.replace(/\\/g, "/"));
+      expect(result.definition.range.start.line).toBe(8);
+    }
+  });
+
+  it("resolves cross-file PHP namespace-relative references inside later bracketed namespace blocks", async () => {
+    const root = await mkTmpDir("dg-resolve-php-namespace-relative-cross-file-");
+    const srcDir = path.join(root, "src");
+    const consumerFile = path.join(srcDir, "consumer.php");
+    const libraryFile = path.join(srcDir, "Library.php");
+
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      libraryFile,
+      [
+        "<?php",
+        "",
+        "namespace App\\One {",
+        "    class FirstService {}",
+        "}",
+        "",
+        "namespace App\\Two {",
+        "    class SecondService {}",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      [
+        "<?php",
+        "",
+        "namespace App\\One {",
+        "    class Placeholder {}",
+        "}",
+        "",
+        "namespace App\\Two {",
+        "    $service = new namespace\\SecondService();",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await goToDefinition(index, {
+      file: consumerFile.replace(/\\/g, "/"),
+      line: 8,
+      column: 31,
     });
 
     expect(result.status).toBe("ok");

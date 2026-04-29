@@ -69,6 +69,10 @@ const definition: LanguageTestDefinition = {
         from: "bracketed-consumer.php",
         to: { type: "file", path: "multi-namespace/Library.php" },
       },
+      {
+        from: "bracketed-qualified-consumer.php",
+        to: { type: "file", path: "multi-namespace/Library.php" },
+      },
     ],
     symbols: [
       {
@@ -189,6 +193,13 @@ const definition: LanguageTestDefinition = {
         column: 17,
         expectedDefinition: { file: "multi-namespace/Library.php", line: 8 },
       },
+      {
+        name: "go to definition resolves fully-qualified PHP references from later namespace blocks",
+        file: "bracketed-qualified-consumer.php",
+        line: 3,
+        column: 29,
+        expectedDefinition: { file: "multi-namespace/Library.php", line: 8 },
+      },
     ],
     references: [
       {
@@ -231,7 +242,7 @@ const definition: LanguageTestDefinition = {
         file: "multi-namespace/Library.php",
         line: 8,
         column: 11,
-        minimumCount: 2,
+        minimumCount: 3,
       },
     ],
   },

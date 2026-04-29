@@ -305,6 +305,7 @@ nativeDescribe("native semantic parity", () => {
           "composer-type-qualified-consumer.php",
           "function-import-consumer.php",
           "bracketed-consumer.php",
+          "bracketed-qualified-consumer.php",
           "partials/shared.php",
           "multi-namespace/Library.php",
           "src/Collision/Thing.php",
@@ -326,7 +327,11 @@ nativeDescribe("native semantic parity", () => {
       ),
       sampleExpectation(
         "php",
-        ["bracketed-consumer.php", "multi-namespace/Library.php"],
+        [
+          "bracketed-consumer.php",
+          "bracketed-qualified-consumer.php",
+          "multi-namespace/Library.php",
+        ],
         [{ file: "multi-namespace/Library.php", names: ["SecondService"] }],
         { file: "bracketed-consumer.php", line: 5, column: 17, expectedStatus: "ok" },
         { file: "multi-namespace/Library.php", line: 8, column: 11, expectedStatus: "ok" },

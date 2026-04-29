@@ -3036,6 +3036,20 @@ function readComposerNamespaceDirs(
   return result;
 }
 
+function mergeComposerNamespaceDirMaps(
+  ...maps: Map<string, string[]>[]
+): Map<string, string[]> {
+  const merged = new Map<string, string[]>();
+  for (const map of maps) {
+    for (const [prefix, dirs] of map) {
+      const currentDirs = merged.get(prefix) ?? [];
+      const dedupedDirs = Array.from(new Set([...currentDirs, ...dirs]));
+      merged.set(prefix, dedupedDirs);
+    }
+  }
+  return merged;
+}
+
 function resolveComposerPath(entry: string, composerDir: string): string {
   if (entry.startsWith("/") || entry.startsWith("\\")) {
     return path.resolve(composerDir, `.${entry}`);
@@ -3076,14 +3090,14 @@ async function loadPhpComposerConfig(
           ? (parsed["autoload-dev"] as Record<string, unknown>)
           : {};
 
-      const psr4 = new Map<string, string[]>([
-        ...readComposerNamespaceDirs(autoload["psr-4"], composerDir),
-        ...readComposerNamespaceDirs(autoloadDev["psr-4"], composerDir),
-      ]);
-      const psr0 = new Map<string, string[]>([
-        ...readComposerNamespaceDirs(autoload["psr-0"], composerDir),
-        ...readComposerNamespaceDirs(autoloadDev["psr-0"], composerDir),
-      ]);
+      const psr4 = mergeComposerNamespaceDirMaps(
+        readComposerNamespaceDirs(autoload["psr-4"], composerDir),
+        readComposerNamespaceDirs(autoloadDev["psr-4"], composerDir),
+      );
+      const psr0 = mergeComposerNamespaceDirMaps(
+        readComposerNamespaceDirs(autoload["psr-0"], composerDir),
+        readComposerNamespaceDirs(autoloadDev["psr-0"], composerDir),
+      );
       const classmap = [
         ...readComposerStringList(autoload["classmap"], composerDir),
         ...readComposerStringList(autoloadDev["classmap"], composerDir),

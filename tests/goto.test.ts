@@ -269,6 +269,15 @@ describe('Go to Definition', () => {
 
       await testGoToDefinition(index, consumerFile, 5, 17, libraryFile, 8);
     });
+
+    it('should find fully-qualified definitions from later PHP namespace blocks', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const consumerFile = path.join(samplePath, 'bracketed-qualified-consumer.php').replace(/\\/g, '/');
+      const libraryFile = path.join(samplePath, 'multi-namespace', 'Library.php').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, consumerFile, 3, 29, libraryFile, 8);
+    });
   });
 
   describe('JavaScript', () => {
