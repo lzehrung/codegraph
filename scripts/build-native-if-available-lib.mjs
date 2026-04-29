@@ -49,7 +49,7 @@ function isWindowsArtifactFile(entryName) {
   );
 }
 
-function findWindowsNativeArtifacts(packageDir, readdirSyncImpl) {
+function findWindowsNativeArtifacts(packageDir, readdirSyncImpl, pathImpl) {
   const artifacts = [];
   const packageEntries = readdirSyncImpl(packageDir, {
     withFileTypes: true,
@@ -59,11 +59,11 @@ function findWindowsNativeArtifacts(packageDir, readdirSyncImpl) {
       continue;
     }
     if (isWindowsArtifactFile(entry.name)) {
-      artifacts.push(path.join(packageDir, entry.name));
+      artifacts.push(pathImpl.join(packageDir, entry.name));
     }
   }
 
-  const npmDir = path.join(packageDir, "npm");
+  const npmDir = pathImpl.join(packageDir, "npm");
   let npmEntries = [];
   try {
     npmEntries = readdirSyncImpl(npmDir, { withFileTypes: true });
@@ -75,11 +75,11 @@ function findWindowsNativeArtifacts(packageDir, readdirSyncImpl) {
     if (!platformDir.isDirectory() || !platformDir.name.startsWith("win32-")) {
       continue;
     }
-    const nestedDir = path.join(npmDir, platformDir.name);
+    const nestedDir = pathImpl.join(npmDir, platformDir.name);
     const nestedEntries = readdirSyncImpl(nestedDir, { withFileTypes: true });
     for (const nestedEntry of nestedEntries) {
       if (!nestedEntry.isDirectory() && isWindowsArtifactFile(nestedEntry.name)) {
-        artifacts.push(path.join(nestedDir, nestedEntry.name));
+        artifacts.push(pathImpl.join(nestedDir, nestedEntry.name));
       }
     }
   }
@@ -92,9 +92,14 @@ function cleanWindowsNativeArtifacts({
   cwd,
   readdirSyncImpl,
   rmSyncImpl,
+  pathImpl,
 }) {
-  const packageDir = path.join(cwd, "packages", "codegraph-native");
-  const artifactPaths = findWindowsNativeArtifacts(packageDir, readdirSyncImpl);
+  const packageDir = pathImpl.join(cwd, "packages", "codegraph-native");
+  const artifactPaths = findWindowsNativeArtifacts(
+    packageDir,
+    readdirSyncImpl,
+    pathImpl,
+  );
   for (const artifactPath of artifactPaths) {
     try {
       rmSyncImpl(artifactPath, { force: true });
@@ -138,11 +143,13 @@ export function runBuildNativeIfAvailable({
   }
 
   if (platform === "win32") {
+    const windowsPath = path.win32;
     cleanWindowsNativeArtifacts({
       logger,
       cwd,
       readdirSyncImpl,
       rmSyncImpl,
+      pathImpl: windowsPath,
     });
   }
 
