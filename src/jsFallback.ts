@@ -73,10 +73,10 @@ type JsFallbackModule = {
 const require = createRequire(import.meta.url);
 function existingLocalJsFallbackCandidates(): string[] {
   const roots = [
-    path.resolve(process.cwd(), "optional-packages/codegraph-js-fallback"),
+    path.resolve(process.cwd(), "packages/codegraph-js-fallback"),
     path.resolve(
       path.dirname(fileURLToPath(import.meta.url)),
-      "../optional-packages/codegraph-js-fallback",
+      "../packages/codegraph-js-fallback",
     ),
   ];
   const candidates: string[] = [];

@@ -80,6 +80,17 @@ describe("package metadata", () => {
     expect(scripts["lint:fix"]).toBe("npx eslint ./src --fix");
   });
 
+  it("keeps all publishable workspaces under the packages directory", () => {
+    const rootPackage = readJson("package.json");
+    const workspaces =
+      Array.isArray(rootPackage.workspaces) &&
+      rootPackage.workspaces.every((entry) => typeof entry === "string")
+        ? rootPackage.workspaces
+        : [];
+
+    expect(workspaces).toEqual(["packages/*"]);
+  });
+
   it("keeps JS fallback grammars out of the native package", () => {
     const nativePackage = readJson("packages/codegraph-native/package.json");
     const dependencies = readStringRecord(nativePackage.dependencies);
@@ -97,9 +108,7 @@ describe("package metadata", () => {
   });
 
   it("keeps JS fallback grammars in the separate opt-in package", () => {
-    const fallbackPackage = readJson(
-      "optional-packages/codegraph-js-fallback/package.json",
-    );
+    const fallbackPackage = readJson("packages/codegraph-js-fallback/package.json");
     const dependencies = readStringRecord(fallbackPackage.dependencies);
 
     expect(dependencies["tree-sitter"]).toBeDefined();
@@ -109,9 +118,7 @@ describe("package metadata", () => {
   });
 
   it("does not publish local file dependencies in the JS fallback package", () => {
-    const fallbackPackage = readJson(
-      "optional-packages/codegraph-js-fallback/package.json",
-    );
+    const fallbackPackage = readJson("packages/codegraph-js-fallback/package.json");
     const dependencies = readStringRecord(fallbackPackage.dependencies);
 
     expect(dependencies["@lzehrung/codegraph"]).toBeUndefined();

@@ -32,7 +32,7 @@ const nativePackagePath = path.join(
 );
 const jsFallbackPackagePath = path.join(
   rootDir,
-  "optional-packages",
+  "packages",
   "codegraph-js-fallback",
   "package.json",
 );
@@ -335,7 +335,7 @@ function commitAndTag(selectedPackages, versionPlan) {
     "package.json",
     "package-lock.json",
     "packages/codegraph-native/package.json",
-    "optional-packages/codegraph-js-fallback/package.json",
+    "packages/codegraph-js-fallback/package.json",
   ]);
   const commitNeeded = spawnSync("git", ["diff", "--cached", "--quiet"], {
     cwd: rootDir,

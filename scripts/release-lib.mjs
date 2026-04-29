@@ -27,10 +27,10 @@ export const releasePackages = [
   {
     id: "js-fallback",
     name: "@lzehrung/codegraph-js-fallback",
-    manifestPath: "optional-packages/codegraph-js-fallback/package.json",
+    manifestPath: "packages/codegraph-js-fallback/package.json",
     publishWorkspace: "@lzehrung/codegraph-js-fallback",
     ownedFiles: new Set([]),
-    ownedPrefixes: ["optional-packages/codegraph-js-fallback/"],
+    ownedPrefixes: ["packages/codegraph-js-fallback/"],
   },
 ];
 
