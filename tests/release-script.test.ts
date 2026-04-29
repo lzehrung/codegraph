@@ -31,9 +31,9 @@ describe("release script helpers", () => {
     expect(isAllowedResumePath("scripts/release-lib.mjs")).toBe(true);
     expect(isAllowedResumePath("scripts/release.mjs")).toBe(true);
     expect(isAllowedResumePath("tests/release-script.test.ts")).toBe(true);
-    expect(
-      isAllowedResumePath("optional-packages/codegraph-js-fallback/package.json"),
-    ).toBe(true);
+    expect(isAllowedResumePath("packages/codegraph-js-fallback/package.json")).toBe(
+      true,
+    );
     expect(isAllowedResumePath("src/indexer.ts")).toBe(false);
   });
 
@@ -59,7 +59,7 @@ describe("release script helpers", () => {
       detectChangedReleasePackages([
         "src/index.ts",
         "packages/codegraph-native/Cargo.toml",
-        "optional-packages/codegraph-js-fallback/package.json",
+        "packages/codegraph-js-fallback/package.json",
         "docs/scenario-catalog.md",
       ]),
     ).toEqual(["root", "native", "js-fallback"]);
@@ -186,7 +186,7 @@ describe("release script helpers", () => {
       sanitizePublishedRootPackageManifest({
         name: "@lzehrung/codegraph",
         version: "1.8.44",
-        workspaces: ["packages/*", "optional-packages/*"],
+        workspaces: ["packages/*"],
         scripts: {
           build: "npm run clean && tsc -p tsconfig.json",
           "publish:patch": "node ./scripts/release.mjs patch --publish",
@@ -213,7 +213,7 @@ describe("release script helpers", () => {
         {
           name: "@lzehrung/codegraph",
           version: "1.8.43",
-          workspaces: ["packages/*", "optional-packages/*"],
+          workspaces: ["packages/*"],
           scripts: {
             "publish:patch": "node ./scripts/release.mjs patch --publish",
           },
@@ -223,7 +223,7 @@ describe("release script helpers", () => {
     ).toEqual({
       name: "@lzehrung/codegraph",
       version: "1.8.44",
-      workspaces: ["packages/*", "optional-packages/*"],
+      workspaces: ["packages/*"],
       scripts: {
         "publish:patch": "node ./scripts/release.mjs patch --publish",
       },
@@ -246,7 +246,7 @@ describe("release script helpers", () => {
           scripts: {
             "publish:resume": "node ./scripts/release.mjs resume --publish",
           },
-          workspaces: ["packages/*", "optional-packages/*"],
+          workspaces: ["packages/*"],
           devDependencies: {
             vitest: "^3.2.4",
           },
@@ -261,7 +261,7 @@ describe("release script helpers", () => {
       scripts: {
         "publish:resume": "node ./scripts/release.mjs resume --publish",
       },
-      workspaces: ["packages/*", "optional-packages/*"],
+      workspaces: ["packages/*"],
       devDependencies: {
         vitest: "^3.2.4",
       },

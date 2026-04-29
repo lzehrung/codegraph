@@ -20,7 +20,7 @@ Checklist for landing a new first-class source language without drifting from re
 
 ## 3. Wire both runtime paths
 
-- Add the JS fallback grammar dependency in `optional-packages/codegraph-js-fallback/package.json`.
+- Add the JS fallback grammar dependency in `packages/codegraph-js-fallback/package.json`.
 - Update the fallback loader if the grammar package exports a non-standard symbol.
 - Add the native grammar dependency in `packages/codegraph-native/Cargo.toml`.
 - Register the native language id and smoke coverage in `packages/codegraph-native/src/lib.rs`.

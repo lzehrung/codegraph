@@ -71,8 +71,7 @@
     "node": ">=18"
   },
   "workspaces": [
-    "packages/*",
-    "optional-packages/*"
+    "packages/*"
   ],
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"

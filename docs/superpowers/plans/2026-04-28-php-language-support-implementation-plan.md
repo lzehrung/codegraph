@@ -21,7 +21,7 @@
 - Modify: `src/languages/filePrep.ts`
 - Modify: `src/cli.ts`
 - Modify: `src/jsFallback.ts` only if loader typing/support needs adjustment
-- Modify: `optional-packages/codegraph-js-fallback/package.json`
+- Modify: `packages/codegraph-js-fallback/package.json`
 - Modify: `packages/codegraph-native/Cargo.toml`
 - Modify: `packages/codegraph-native/src/lib.rs`
 - Test: `tests/project-file-discovery.test.ts`
