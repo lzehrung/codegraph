@@ -97,6 +97,12 @@ Language adapters expose:
 
 AST grep runs any Tree-sitter query across matched files and prints hits as `file:line:col: @capture: snippet`.
 
+### Design tradeoffs
+
+- Native parse and query work, TypeScript indexing and reporting: Rust handles the syntax-tree hot path when the native addon is available, while TypeScript keeps graph assembly, resolution, review logic, CLI behavior, and SQLite export in one shared implementation. That keeps the performance-critical layer small and lets native and non-native modes share output contracts and tests.
+- Read-only SQLite inspection: `codegraph sql` and `queryGraphSqliteRaw()` treat the SQLite export as a query artifact, not a writable application database. Keeping that surface read-only makes CI and agent workflows safer, avoids accidental artifact corruption, and preserves reproducible graph output.
+- Stable symbol handles for automation: cursor-based navigation is convenient for editor-style entrypoints, but serialized handles are a better contract for review bundles, repeated agent calls, and cross-step automation. They let downstream tools refer back to definitions and import aliases without depending on the exact cursor that found them originally.
+
 ## Extending to other languages
 
 Codegraph uses one unified language-definition system that powers both dependency graph extraction and semantic chunking.
