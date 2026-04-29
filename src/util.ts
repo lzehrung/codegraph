@@ -2945,6 +2945,52 @@ function tokenizePhpSource(source: string): PhpScannerToken[] {
       index += 1;
       continue;
     }
+    if (ch === "#" && next === "[") {
+      index += 2;
+      let depth = 1;
+      while (index < source.length && depth > 0) {
+        const current = source[index] ?? "";
+        const afterCurrent = source[index + 1] ?? "";
+        if (current === "'" || current === '"') {
+          const quote = current;
+          index += 1;
+          while (index < source.length) {
+            if (source[index] === "\\") {
+              index += 2;
+              continue;
+            }
+            if (source[index] === quote) break;
+            index += 1;
+          }
+          index += 1;
+          continue;
+        }
+        if (current === "/" && afterCurrent === "*") {
+          index += 2;
+          while (
+            index < source.length - 1 &&
+            !(source[index] === "*" && source[index + 1] === "/")
+          ) {
+            index += 1;
+          }
+          index += 2;
+          continue;
+        }
+        if (current === "[" || current === "(" || current === "{") {
+          depth += 1;
+          index += 1;
+          continue;
+        }
+        if (current === "]" || current === ")" || current === "}") {
+          depth -= 1;
+          index += 1;
+          continue;
+        }
+        index += 1;
+      }
+      index -= 1;
+      continue;
+    }
     if (ch === "#") {
       index += 1;
       while (index < source.length && source[index] !== "\n") index += 1;

@@ -384,6 +384,16 @@ describe('Find References', () => {
         expectReferenceAt(result, staticConstantConsumerFile, 3);
         expectReferenceAt(result, staticPropertyConsumerFile, 3);
         expectReferenceAt(result, typedConsumerFile, 3);
+        const uniqueRanges = new Set(
+          result.references.map((reference) =>
+            [
+              reference.file,
+              reference.range.start.index ?? -1,
+              reference.range.end.index ?? -1,
+            ].join(':'),
+          ),
+        );
+        expect(uniqueRanges.size).toBe(result.references.length);
       }
     });
 

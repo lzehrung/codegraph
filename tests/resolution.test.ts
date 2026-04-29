@@ -1343,6 +1343,43 @@ describe("Import Resolution", () => {
     expect(result.status).toBe("not_found");
   });
 
+  it("indexes PHP declarations that share a line with attributes", async () => {
+    const root = await mkTmpDir("dg-resolve-php-attributes-");
+    const srcDir = path.join(root, "src");
+    const consumerFile = path.join(root, "consumer.php");
+    const serviceFile = path.join(srcDir, "AttrService.php");
+
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      serviceFile,
+      ["<?php", "", "#[Route('/attr')] class AttrService {}", ""].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      ["<?php", "", "use AttrService;", "", "$service = new AttrService();", ""].join("\n"),
+      "utf8",
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await goToDefinition(index, {
+      file: consumerFile.replace(/\\/g, "/"),
+      line: 5,
+      column: 16,
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.definition.file).toBe(serviceFile.replace(/\\/g, "/"));
+      expect(result.definition.range.start.line).toBe(3);
+    }
+  });
+
   it("prefers namespace-level PHP const imports over class constants", async () => {
     const root = await mkTmpDir("dg-resolve-php-const-kind-");
     const srcDir = path.join(root, "src", "Domain");
