@@ -6,13 +6,60 @@ It is built for agent and human workflows that need repo structure fast without 
 
 ## Table of contents
 
+- [Why Codegraph](#why-codegraph)
 - [Features](#features)
 - [Quick start](#quick-start)
+- [Common workflows](#common-workflows)
 - [Supported languages](#supported-languages)
 - [Documentation](#documentation)
 - [Installation options](#installation-options)
 - [FAQ](#faq)
 - [Contributing and releases](#contributing-and-releases)
+
+## Why Codegraph
+
+Use Codegraph when you need fast structural answers about a repo without relying on a full editor session or language-server setup.
+
+- Triage an unfamiliar codebase with one pass that highlights hotspots, unresolved imports, cycles, and next commands to run.
+- Review diffs with changed symbols, graph deltas, likely regression tests, and risk signals that agents or humans can consume directly.
+- Export graph data as JSON, Mermaid, DOT, or SQLite, then inspect it from scripts or the browser graph viewer app.
+- Keep one workflow across source languages, monorepos, and graph-first document and template formats instead of stitching together separate tools.
+
+Real `inspect ./src --limit 10` output against this repo looks like:
+
+```json
+{
+  "backend": {
+    "native": {
+      "available": true
+    }
+  },
+  "files": {
+    "total": 80,
+    "byLanguage": {
+      "ts": 80
+    }
+  },
+  "hotspots": [
+    {
+      "file": "E:/git repos/codegraph/src/languages/types.ts",
+      "fanIn": 35,
+      "fanOut": 1,
+      "score": 71
+    },
+    {
+      "file": "E:/git repos/codegraph/src/indexer.ts",
+      "fanIn": 16,
+      "fanOut": 27,
+      "score": 59
+    }
+  ],
+  "recommendedCommands": [
+    "codegraph hotspots --root \"E:/git repos/codegraph/src\" --limit 20 --json",
+    "codegraph graph --root \"E:/git repos/codegraph/src\" --json --symbols-detailed --compact-json"
+  ]
+}
+```
 
 ## Features
 
@@ -58,6 +105,13 @@ node ./dist/cli.js apisurface
 ```
 
 If you install the published CLI instead of using a source checkout, replace `node ./dist/cli.js` with `codegraph`.
+
+## Common workflows
+
+- Repo triage: run `codegraph inspect ./src --limit 20`, then follow with `codegraph hotspots ./src --limit 20` or `codegraph unresolved` to focus the next pass.
+- PR review: run `codegraph review --base origin/main --head HEAD > review.json` for an agent-ready bundle, or `codegraph impact --base origin/main --head HEAD --pretty` for a shorter human-readable summary.
+- Visual graph exploration: run `codegraph graph --root . ./src --compact-json --output codegraph.json`, then open `docs/graph-visualization/` to inspect the graph in the browser viewer app.
+- Public API inspection: run `codegraph apisurface` to summarize exported symbols before refactors, reviews, or release checks.
 
 ## Supported languages
 
