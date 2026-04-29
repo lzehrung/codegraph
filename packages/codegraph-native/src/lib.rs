@@ -297,6 +297,7 @@ fn language_for_id(language_id: &str) -> Option<Language> {
         "java" => Some(tree_sitter_java::LANGUAGE.into()),
         "js" => Some(tree_sitter_javascript::LANGUAGE.into()),
         "kotlin" => Some(tree_sitter_kotlin_ng::LANGUAGE.into()),
+        "php" => Some(tree_sitter_php::LANGUAGE_PHP.into()),
         "python" => Some(tree_sitter_python::LANGUAGE.into()),
         "ruby" => Some(tree_sitter_ruby::LANGUAGE.into()),
         "rust" => Some(tree_sitter_rust::LANGUAGE.into()),
@@ -369,6 +370,7 @@ pub fn supported_language_ids() -> Vec<String> {
         "js",
         "kotlin",
         "less",
+        "php",
         "python",
         "ruby",
         "rust",
@@ -605,6 +607,10 @@ mod tests {
                 "@import \"base.css\";",
                 "(import_statement (string_value) @mod) @stmt",
             ),
+            "php" => (
+                "<?php function helper() {}",
+                "(function_definition name: (name) @name)",
+            ),
             "python" => (
                 "def helper():\n    pass\n",
                 "(function_definition name: (identifier) @name)",
@@ -657,6 +663,7 @@ mod tests {
             "js",
             "kotlin",
             "less",
+            "php",
             "python",
             "ruby",
             "rust",
@@ -674,7 +681,7 @@ mod tests {
     #[test]
     fn supported_language_ids_contains_expected_languages() {
         let supported = supported_language_ids();
-        for language_id in ["ts", "tsx", "js", "python", "go", "rust", "vue", "svelte"] {
+        for language_id in ["ts", "tsx", "js", "python", "php", "go", "rust", "vue", "svelte"] {
             assert!(
                 supported.iter().any(|entry| entry == language_id),
                 "expected supported languages to include {language_id}",

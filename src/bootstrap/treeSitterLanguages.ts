@@ -12,6 +12,7 @@ const idToConfigKey: Record<string, string> = {
   ts: "typescript",
   tsx: "tsx",
   python: "python",
+  php: "php",
   html: "html",
   css: "css",
   scss: "scss",

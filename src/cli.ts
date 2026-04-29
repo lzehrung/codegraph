@@ -2785,7 +2785,7 @@ Examples:
         "  --max-tokens N    Maximum tokens per chunk (default: 400)",
       );
       writeStderrLine(
-        "  --language LANG   Language override (javascript, typescript, tsx, python, vue, svelte, json, yaml, text)",
+        "  --language LANG   Language override (javascript, typescript, tsx, python, php, vue, svelte, json, yaml, text)",
       );
       writeStderrLine("  --text            Force text chunking mode");
       process.exit(2);
@@ -2808,6 +2808,7 @@ Examples:
           ".cts": "typescript",
           ".tsx": "tsx",
           ".py": "python",
+          ".php": "php",
           ".json": "json",
           ".yaml": "yaml",
           ".yml": "yaml",
@@ -2829,7 +2830,9 @@ Examples:
       if (
         forceText ||
         (!isSFC &&
-          !["javascript", "typescript", "tsx", "python"].includes(languageId))
+          !["javascript", "typescript", "tsx", "python", "php"].includes(
+            languageId,
+          ))
       ) {
         // Use text chunking for non-code files or when forced
         chunks = chunkTextFile({

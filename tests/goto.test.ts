@@ -144,6 +144,142 @@ describe('Go to Definition', () => {
     });
   });
 
+  describe('PHP', () => {
+    it('should find definition of imported function', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const mainFile = path.join(samplePath, 'main.php').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'utils.php').replace(/\\/g, '/');
+
+      const result = await testGoToDefinition(index, mainFile, 9, 11);
+
+      if (result.status === 'ok') {
+        expect(result.definition.file).toBe(utilsFile);
+        expect(result.definition.range.start.line).toBe(13);
+      }
+    });
+
+    it('should find definition of imported class', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const mainFile = path.join(samplePath, 'main.php').replace(/\\/g, '/');
+      const utilsFile = path.join(samplePath, 'utils.php').replace(/\\/g, '/');
+
+      const result = await testGoToDefinition(index, mainFile, 10, 12);
+
+      if (result.status === 'ok') {
+        expect(result.definition.file).toBe(utilsFile);
+        expect(result.definition.range.start.line).toBe(5);
+      }
+    });
+
+    it('should find definition of grouped use aliases', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const groupedFile = path.join(samplePath, 'grouped-consumer.php').replace(/\\/g, '/');
+      const toolboxFile = path.join(samplePath, 'src', 'Support', 'Toolbox.php').replace(/\\/g, '/');
+      const helperFile = path.join(samplePath, 'src', 'Support', 'support_helper.php').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, groupedFile, 8, 10, toolboxFile, 5);
+      await testGoToDefinition(index, groupedFile, 9, 12, helperFile, 5);
+    });
+
+    it('should find definition of Composer-mapped classes', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const mainFile = path.join(samplePath, 'composer-consumer.php').replace(/\\/g, '/');
+      const serviceFile = path.join(samplePath, 'src', 'Domain', 'Service.php').replace(/\\/g, '/');
+
+      const result = await testGoToDefinition(index, mainFile, 5, 16);
+
+      if (result.status === 'ok') {
+        expect(result.definition.file).toBe(serviceFile);
+        expect(result.definition.range.start.line).toBe(5);
+      }
+    });
+
+    it('should find definition through PHP __DIR__ includes', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const consumerFile = path.join(samplePath, 'dir-include-consumer.php').replace(/\\/g, '/');
+      const helpersFile = path.join(samplePath, 'helpers.php').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, consumerFile, 5, 6, helpersFile, 3);
+    });
+
+    it('should find definition of fully-qualified Composer-mapped classes', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const consumerFile = path.join(samplePath, 'composer-qualified-consumer.php').replace(/\\/g, '/');
+      const serviceFile = path.join(samplePath, 'src', 'Domain', 'Service.php').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, consumerFile, 3, 27, serviceFile, 5);
+    });
+
+    it('should find definition of fully-qualified Composer-mapped static class references', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const consumerFile = path.join(samplePath, 'composer-static-qualified-consumer.php').replace(/\\/g, '/');
+      const serviceFile = path.join(samplePath, 'src', 'Domain', 'Service.php').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, consumerFile, 3, 23, serviceFile, 5);
+    });
+
+    it('should find definition of fully-qualified Composer-mapped static constant references', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const consumerFile = path.join(samplePath, 'composer-static-constant-consumer.php').replace(/\\/g, '/');
+      const serviceFile = path.join(samplePath, 'src', 'Domain', 'Service.php').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, consumerFile, 3, 23, serviceFile, 5);
+    });
+
+    it('should find definition of fully-qualified Composer-mapped static property references', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const consumerFile = path.join(samplePath, 'composer-static-property-consumer.php').replace(/\\/g, '/');
+      const serviceFile = path.join(samplePath, 'src', 'Domain', 'Service.php').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, consumerFile, 3, 25, serviceFile, 5);
+    });
+
+    it('should find definition of fully-qualified Composer-mapped type references', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const consumerFile = path.join(samplePath, 'composer-type-qualified-consumer.php').replace(/\\/g, '/');
+      const serviceFile = path.join(samplePath, 'src', 'Domain', 'Service.php').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, consumerFile, 3, 37, serviceFile, 5);
+    });
+
+    it('should respect PHP function import kinds when class names collide', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const consumerFile = path.join(samplePath, 'function-import-consumer.php').replace(/\\/g, '/');
+      const functionFile = path.join(samplePath, 'src', 'Collision', 'ThingFunction.php').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, consumerFile, 5, 10, functionFile, 5);
+    });
+
+    it('should find definitions from PHP bracketed namespace blocks', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const consumerFile = path.join(samplePath, 'bracketed-consumer.php').replace(/\\/g, '/');
+      const libraryFile = path.join(samplePath, 'multi-namespace', 'Library.php').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, consumerFile, 5, 17, libraryFile, 8);
+    });
+
+    it('should find fully-qualified definitions from later PHP namespace blocks', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const consumerFile = path.join(samplePath, 'bracketed-qualified-consumer.php').replace(/\\/g, '/');
+      const libraryFile = path.join(samplePath, 'multi-namespace', 'Library.php').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, consumerFile, 3, 29, libraryFile, 8);
+    });
+  });
+
   describe('JavaScript', () => {
     it('should find definition of imported function', async () => {
       const index = await createTestIndex('javascript');
@@ -367,6 +503,20 @@ describe('Go to Definition', () => {
 
       await testGoToDefinition(index, consumerFile, 3, 21, moreTypesFile, 3);
     });
+
+    it('should find definition of wildcard-imported helper functions', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'kotlin');
+      const consumerFile = path.join(samplePath, 'TypeConsumers.kt').replace(/\\/g, '/');
+      const moreTypesFile = path.join(samplePath, 'utils', 'MoreTypes.kt').replace(/\\/g, '/');
+      const helperFile = path.join(samplePath, 'utils', 'helperFunction.kt').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [
+        consumerFile,
+        moreTypesFile,
+        helperFile,
+      ]);
+
+      await testGoToDefinition(index, consumerFile, 12, 10, helperFile, 3);
+    });
   });
 
   describe('Swift', () => {
@@ -430,6 +580,15 @@ describe('Go to Definition', () => {
       const packageFile = path.join(samplePath, 'pkg', 'PackageTypes.java').replace(/\\/g, '/');
 
       await testGoToDefinition(index, wildcardFile, 6, 16, packageFile, 4);
+    });
+
+    it('should find definition of wildcard-imported package interfaces across files', async () => {
+      const index = await createTestIndex('java');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'java');
+      const wildcardFile = path.join(samplePath, 'WildcardImports.java').replace(/\\/g, '/');
+      const packageFile = path.join(samplePath, 'pkg', 'PackageService.java').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, wildcardFile, 8, 3, packageFile, 3);
     });
 
     it('should find definition of static wildcard-imported methods', async () => {

@@ -1,3 +1,6 @@
+import path from "node:path";
+import { isAbsoluteFilePath, normalizePath } from "../util.js";
+
 export type ParsedRustImportStatement =
   | {
       kind: "member";
@@ -85,6 +88,294 @@ export type ParsedCsharpUsingDirective = {
   alias?: string;
   isStatic: boolean;
 };
+
+export type ParsedPhpImportStatement =
+  | {
+      kind: "include";
+      from: string;
+    }
+  | {
+      kind: "named";
+      from: string;
+      imported: string;
+      local: string;
+      importType: PhpImportType;
+    };
+
+export type PhpImportType = "class" | "function" | "const";
+
+function splitTopLevelCommaList(input: string): string[] {
+  const items: string[] = [];
+  let depth = 0;
+  let current = "";
+
+  for (const ch of input) {
+    if (ch === "{") depth += 1;
+    if (ch === "}") depth = Math.max(0, depth - 1);
+    if (ch === "," && depth === 0) {
+      const trimmed = current.trim();
+      if (trimmed) items.push(trimmed);
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+
+  const trimmed = current.trim();
+  if (trimmed) items.push(trimmed);
+  return items;
+}
+
+function parsePhpImportClause(
+  rawClause: string,
+  importType: PhpImportType,
+): ParsedPhpImportStatement[] {
+  const clause = rawClause.trim().replace(/;$/, "");
+  if (!clause) return [];
+
+  const groupMatch = clause.match(/^(.+?\\)\{(.+)\}$/);
+  if (groupMatch?.[1] && groupMatch[2]) {
+    const prefix = groupMatch[1];
+    const members = splitTopLevelCommaList(groupMatch[2]);
+    const results: ParsedPhpImportStatement[] = [];
+
+    for (const member of members) {
+      const typedMemberMatch = member.match(/^(function|const)\s+(.+)$/);
+      const memberType =
+        typedMemberMatch?.[1] === "function"
+          ? "function"
+          : typedMemberMatch?.[1] === "const"
+            ? "const"
+            : importType;
+      const body = (typedMemberMatch?.[2] ?? member).trim();
+      const aliasMatch = body.match(/^(.*?)\s+as\s+([A-Za-z_][\w]*)$/i);
+      const fullPath = `${prefix}${(aliasMatch?.[1] ?? body).trim()}`;
+      const parts = fullPath.split("\\").filter(Boolean);
+      const imported = parts[parts.length - 1];
+      if (!imported) continue;
+      results.push({
+        kind: "named",
+        from: fullPath,
+        imported,
+        local: aliasMatch?.[2] ?? imported,
+        importType: memberType,
+      });
+    }
+
+    return results;
+  }
+
+  const aliasMatch = clause.match(/^(.*?)\s+as\s+([A-Za-z_][\w]*)$/i);
+  const fullPath = (aliasMatch?.[1] ?? clause).trim();
+  const parts = fullPath.split("\\").filter(Boolean);
+  const imported = parts[parts.length - 1];
+  if (!imported) return [];
+  return [
+    {
+      kind: "named",
+      from: fullPath,
+      imported,
+      local: aliasMatch?.[2] ?? imported,
+      importType,
+    },
+  ];
+}
+
+export function parsePhpImportStatement(
+  stmtText: string,
+  fromFile?: string,
+): ParsedPhpImportStatement[] {
+  const trimmed = stmtText.trim();
+  if (!trimmed) return [];
+
+  const includeMatch = trimmed.match(
+    /^(?:require_once|include_once|require|include)\s*(?<expr>.+?)\s*;?$/is,
+  );
+  const includeExpr = includeMatch?.groups?.expr?.trim();
+  if (includeExpr) {
+    const includePath = resolvePhpIncludePath(includeExpr, fromFile);
+    if (includePath) {
+      return [{ kind: "include", from: includePath }];
+    }
+  }
+
+  const useMatch = trimmed.match(/^(?:use)\s+(.+?)\s*;?$/is);
+  const useBody = useMatch?.[1]?.trim();
+  if (!useBody) return [];
+
+  const clauses = splitTopLevelCommaList(useBody);
+  const results: ParsedPhpImportStatement[] = [];
+  for (const clause of clauses) {
+    const typedClauseMatch = clause.match(/^(function|const)\s+(.+)$/is);
+    const importType =
+      typedClauseMatch?.[1] === "function"
+        ? "function"
+        : typedClauseMatch?.[1] === "const"
+          ? "const"
+          : "class";
+    const body = (typedClauseMatch?.[2] ?? clause).trim();
+    results.push(...parsePhpImportClause(body, importType));
+  }
+  return results;
+}
+
+function stripOuterParens(input: string): string {
+  let current = input.trim();
+  while (current.startsWith("(") && current.endsWith(")")) {
+    let depth = 0;
+    let isWrapped = true;
+    for (let i = 0; i < current.length; i += 1) {
+      const ch = current[i];
+      if (ch === "(") depth += 1;
+      if (ch === ")") {
+        depth -= 1;
+        if (depth === 0 && i < current.length - 1) {
+          isWrapped = false;
+          break;
+        }
+      }
+    }
+    if (!isWrapped || depth !== 0) break;
+    current = current.slice(1, -1).trim();
+  }
+  return current;
+}
+
+function splitPhpConcatenation(input: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let depth = 0;
+  let quote: "'" | '"' | null = null;
+
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+    const prev = i > 0 ? input[i - 1] : "";
+    if (quote) {
+      current += ch;
+      if (ch === quote && prev !== "\\") {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === "(") depth += 1;
+    if (ch === ")") depth = Math.max(0, depth - 1);
+    if (ch === "." && depth === 0) {
+      const trimmed = current.trim();
+      if (trimmed) parts.push(trimmed);
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+
+  const trimmed = current.trim();
+  if (trimmed) parts.push(trimmed);
+  return parts;
+}
+
+function parsePhpStringLiteral(token: string): string | null {
+  if (token.length < 2) return null;
+  const quote = token[0];
+  if ((quote !== "'" && quote !== '"') || token[token.length - 1] !== quote) {
+    return null;
+  }
+  const body = token.slice(1, -1);
+  if (quote === "'") {
+    return body.replace(/\\\\/g, "\\").replace(/\\'/g, "'");
+  }
+  return body
+    .replace(/\\\\/g, "\\")
+    .replace(/\\"/g, '"')
+    .replace(/\\'/g, "'");
+}
+
+function evaluatePhpIncludeToken(token: string, fromFile?: string): string | null {
+  const trimmed = stripOuterParens(token.trim());
+  const literal = parsePhpStringLiteral(trimmed);
+  if (literal !== null) {
+    return literal;
+  }
+
+  if (!fromFile) {
+    return null;
+  }
+
+  if (/^__DIR__$/i.test(trimmed)) {
+    return path.dirname(fromFile);
+  }
+  if (/^__FILE__$/i.test(trimmed)) {
+    return fromFile;
+  }
+
+  const dirnameMatch = trimmed.match(/^dirname\s*\((.+)\)$/is);
+  if (dirnameMatch?.[1]) {
+    const innerValue = evaluatePhpIncludeToken(dirnameMatch[1], fromFile);
+    return innerValue ? path.dirname(innerValue) : null;
+  }
+
+  return null;
+}
+
+function resolvePhpIncludePath(expr: string, fromFile?: string): string | null {
+  const normalizedExpr = stripOuterParens(expr.trim().replace(/;$/, ""));
+  const parts = splitPhpConcatenation(normalizedExpr);
+  if (parts.length === 0) {
+    return null;
+  }
+
+  let combined = "";
+  for (const part of parts) {
+    const evaluated = evaluatePhpIncludeToken(part, fromFile);
+    if (evaluated === null) {
+      return null;
+    }
+    combined += evaluated;
+  }
+
+  if (!combined) {
+    return null;
+  }
+
+  if (!fromFile) {
+    return combined.replace(/\\/g, "/");
+  }
+
+  const normalizedPath = path.normalize(combined);
+  if (!isAbsoluteFilePath(normalizedPath)) {
+    const relativePath = normalizedPath.replace(/\\/g, "/");
+    if (
+      relativePath.startsWith("./") ||
+      relativePath.startsWith("../")
+    ) {
+      return relativePath;
+    }
+    return `./${relativePath}`;
+  }
+
+  const relativePath =
+    path.win32.isAbsolute(fromFile) && path.win32.isAbsolute(normalizedPath)
+    ? normalizePath(
+        path.win32.relative(
+          normalizePath(path.win32.dirname(fromFile)),
+          normalizePath(normalizedPath),
+        ),
+      )
+    : path
+        .relative(path.dirname(fromFile), normalizedPath)
+        .replace(/\\/g, "/");
+  if (
+    relativePath.startsWith(".") ||
+    relativePath.startsWith("/")
+  ) {
+    return relativePath;
+  }
+  return `./${relativePath}`;
+}
 
 export type ParsedKotlinImportStatement =
   | {
