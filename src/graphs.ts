@@ -1,5 +1,5 @@
-import path from "node:path";
 import fsp from "node:fs/promises";
+import path from "node:path";
 import {
   isJsFallbackAvailable,
   isJsFallbackUnavailableError,
@@ -25,6 +25,8 @@ import {
   resolveSpecifier,
   resolveImportSpecifier,
   resolvePythonModule,
+  resolveJvmPackageImportPaths,
+  getPhpComposerImplicitFiles,
   normalizeResolutionHints,
   mapLimit,
   type ModuleSpecifier,
@@ -64,6 +66,7 @@ import {
 } from "./native/treeSitterNative.js";
 import {
   parseCsharpUsingDirective,
+  parsePhpImportStatement,
   parseRustImportStatement,
 } from "./languages/importStatementParsers.js";
 import {
@@ -134,6 +137,77 @@ function extractKotlinImportSpecifier(statementText: string): string | null {
   return match[1].endsWith(".*") ? match[1].slice(0, -2) : match[1];
 }
 
+function extractPhpQualifiedSpecifiersFromTree(
+  source: string,
+  tree: SyntaxTreeLike,
+): ModuleSpecifier[] {
+  const specifiers: ModuleSpecifier[] = [];
+  const seen = new Set<string>();
+  const pushSpecifier = (
+    spec: string | null,
+    phpImportType: "class" | "function" | "const",
+  ): void => {
+    const normalized = spec?.trim();
+    if (!normalized || !normalized.includes("\\")) return;
+    const key = `${phpImportType}::${normalized}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    specifiers.push({ spec: normalized, phpImportType });
+  };
+
+  const walk = (node: SyntaxNodeLike): void => {
+    if (node.type === "object_creation_expression") {
+      const target =
+        node.namedChildren.find(
+          (child) =>
+            child.type === "qualified_name" || child.type === "relative_name",
+        ) ?? node.child(0);
+      if (target) {
+        pushSpecifier(sliceText(target, source), "class");
+      }
+    } else if (node.type === "scoped_call_expression") {
+      const target =
+        node.namedChildren.find(
+          (child) =>
+            child.type === "qualified_name" || child.type === "relative_name",
+        ) ?? node.child(0);
+      if (target) {
+        pushSpecifier(sliceText(target, source), "class");
+      }
+    } else if (node.type === "scoped_property_access_expression") {
+      const target =
+        node.namedChildren.find(
+          (child) =>
+            child.type === "qualified_name" || child.type === "relative_name",
+        ) ?? node.child(0);
+      if (target) {
+        pushSpecifier(sliceText(target, source), "class");
+      }
+    } else if (node.type === "class_constant_access_expression") {
+      const target =
+        node.namedChildren.find(
+          (child) =>
+            child.type === "qualified_name" || child.type === "relative_name",
+        ) ?? node.child(0);
+      if (target) {
+        pushSpecifier(sliceText(target, source), "class");
+      }
+    } else if (
+      (node.type === "qualified_name" || node.type === "relative_name") &&
+      node.parent?.type === "named_type"
+    ) {
+      pushSpecifier(sliceText(node, source), "class");
+    }
+
+    for (const child of node.namedChildren) {
+      walk(child);
+    }
+  };
+
+  walk(tree.rootNode);
+  return specifiers;
+}
+
 function normalizeModuleSpecifiers(
   specifiers: ModuleSpecifier[],
 ): ModuleSpecifier[] {
@@ -143,6 +217,9 @@ function normalizeModuleSpecifiers(
       : {
           spec: entry.spec,
           ...(entry.raw !== undefined ? { raw: entry.raw } : {}),
+          ...(entry.phpImportType
+            ? { phpImportType: entry.phpImportType }
+            : {}),
           ...(entry.resolutionKind
             ? { resolutionKind: entry.resolutionKind }
             : {}),
@@ -367,6 +444,82 @@ export function collectModuleSpecifiersFromSource(
       }
     }
     if (out.length > 0 || resolvedNativeImports !== null || queryFailed) {
+      return normalizeModuleSpecifiers(out);
+    }
+  }
+
+  if (support.id === "php") {
+    let queryFailed = false;
+    const phpMatches =
+      resolvedNativeImports ??
+      (() => {
+        try {
+          const jsQueryTree =
+            opts?.tree && isJsSyntaxTree(opts.tree) ? opts.tree : undefined;
+          return executeJsQueryAsNativeMatches(
+            source,
+            support,
+            ensureResolvedLang(),
+            support.queries.imports,
+            jsQueryTree,
+          );
+        } catch {
+          queryFailed = true;
+          return null;
+        }
+      })();
+    if (phpMatches) {
+      try {
+        for (const match of phpMatches) {
+          const stmtText =
+            match.captures.find((capture) => capture.name === "stmt")?.text ??
+            match.captures[0]?.text ??
+            "";
+          if (!stmtText) continue;
+          for (const parsed of parsePhpImportStatement(stmtText, opts?.file)) {
+            out.push({
+              spec: parsed.from,
+              typeOnly: false,
+              ...(parsed.kind === "named"
+                ? { phpImportType: parsed.importType }
+                : {}),
+            });
+          }
+        }
+      } catch {
+        queryFailed = true;
+        out.length = 0;
+      }
+    }
+    const phpTree =
+      opts?.tree ??
+      (() => {
+        const nativeTreeExecution = getNativeSyntaxTreeExecution(
+          source,
+          support,
+          opts?.native,
+        );
+        return nativeTreeExecution.tree
+          ? new ProjectedSyntaxTree(source, nativeTreeExecution.tree)
+          : null;
+      })() ??
+      (() => {
+        try {
+          return parseWithJsLanguage(source, ensureResolvedLang());
+        } catch {
+          return null;
+        }
+      })();
+    if (phpTree) {
+      const qualifiedSpecifiers = extractPhpQualifiedSpecifiersFromTree(
+        source,
+        phpTree,
+      );
+      if (qualifiedSpecifiers.length > 0) {
+        out.push(...qualifiedSpecifiers);
+      }
+    }
+    if (out.length > 0 || phpMatches !== null || queryFailed) {
       return normalizeModuleSpecifiers(out);
     }
   }
@@ -789,6 +942,7 @@ export async function collectEdgesForFile(
       spec,
       raw,
       typeOnly,
+      phpImportType,
       resolved,
       confidence,
       resolutionKind,
@@ -832,6 +986,21 @@ export async function collectEdgesForFile(
             ? { type: "file", path: res.replace(/\\/g, "/") }
             : { type: "external", name: res.external };
       } else if (sup.id === "java" || sup.id === "kotlin") {
+        const packageTargets = await resolveJvmPackageImportPaths(
+          projectRoot,
+          spec,
+          sup.id,
+        );
+        if (packageTargets.length > 0) {
+          return packageTargets.map((targetPath) => ({
+            to: { type: "file", path: targetPath.replace(/\\/g, "/") } as EdgeTo,
+            spec,
+            ...(raw !== undefined && { raw }),
+            ...(typeOnly !== undefined && { typeOnly }),
+            ...(resolved !== undefined && { resolved }),
+            ...(confidence !== undefined && { confidence }),
+          }));
+        }
         const res = await resolveImportSpecifier(
           projectRoot,
           file,
@@ -850,10 +1019,21 @@ export async function collectEdgesForFile(
           typeof res === "string"
             ? { type: "file", path: res.replace(/\\/g, "/") }
             : { type: "external", name: raw ?? res.external };
-      } else if (["csharp", "ruby", "rust"].includes(sup.id)) {
+      } else if (["csharp", "ruby", "rust", "php"].includes(sup.id)) {
         const { resolvePathLikeModule } = await import("./util.js");
-        const res = await resolvePathLikeModule(projectRoot, spec);
-        if (res) {
+        const res =
+          sup.id === "php"
+            ? await resolveImportSpecifier(projectRoot, file, spec, sup.id, {
+                ...(matchPath ? { matchPath } : {}),
+                ...(workspaceConfig ? { workspaceConfig } : {}),
+                resolveNodeModules: !!opts.resolveNodeModules,
+                ...(opts.resolutionHints
+                  ? { resolutionHints: opts.resolutionHints }
+                  : {}),
+                ...(phpImportType ? { phpImportType } : {}),
+              })
+            : await resolvePathLikeModule(projectRoot, spec);
+        if (res && typeof res === "string") {
           to = { type: "file", path: res.replace(/\\/g, "/") };
         } else {
           // Fallback to resolveSpecifier for relative paths like ./foo
@@ -899,28 +1079,58 @@ export async function collectEdgesForFile(
       if (to.type === "external" && dropIfUnresolved) {
         return null;
       }
-      return {
-        to,
-        spec,
-        ...(raw !== undefined && { raw }),
-        ...(typeOnly !== undefined && { typeOnly }),
-        ...(resolved !== undefined && { resolved }),
-        ...(confidence !== undefined && { confidence }),
-      };
+      return [
+        {
+          to,
+          spec,
+          ...(raw !== undefined && { raw }),
+          ...(typeOnly !== undefined && { typeOnly }),
+          ...(resolved !== undefined && { resolved }),
+          ...(confidence !== undefined && { confidence }),
+        },
+      ];
     },
   );
 
   for (const resolvedEdge of await Promise.all(edgeResolutionTasks)) {
     if (!resolvedEdge) continue;
-    const { to, spec, raw, typeOnly, resolved, confidence } = resolvedEdge;
-    edges.push({
-      from: normalizedFile,
-      to,
-      raw: raw ?? spec,
-      ...(typeOnly !== undefined && { typeOnly }),
-      ...(resolved !== undefined && { resolved }),
-      ...(confidence !== undefined && { confidence }),
-    });
+    for (const edgeEntry of resolvedEdge) {
+      const { to, spec, raw, typeOnly, resolved, confidence } = edgeEntry;
+      edges.push({
+        from: normalizedFile,
+        to,
+        raw: raw ?? spec,
+        ...(typeOnly !== undefined && { typeOnly }),
+        ...(resolved !== undefined && { resolved }),
+        ...(confidence !== undefined && { confidence }),
+      });
+    }
+  }
+
+  if (sup.id === "php") {
+    const implicitFiles = await getPhpComposerImplicitFiles(projectRoot, file);
+    const seenFileTargets = new Set(
+      edges
+        .map((edge) => (edge.to.type === "file" ? edge.to.path : null))
+        .filter((target): target is string => !!target),
+    );
+    for (const implicitFile of implicitFiles) {
+      const normalizedTarget = implicitFile.replace(/\\/g, "/");
+      if (normalizedTarget === normalizedFile || seenFileTargets.has(normalizedTarget)) {
+        continue;
+      }
+
+      const relativeRaw = path.relative(path.dirname(file), implicitFile).replace(/\\/g, "/");
+      edges.push({
+        from: normalizedFile,
+        to: { type: "file", path: normalizedTarget },
+        raw:
+          relativeRaw.startsWith(".") || relativeRaw.startsWith("/")
+            ? relativeRaw
+            : `./${relativeRaw}`,
+      });
+      seenFileTargets.add(normalizedTarget);
+    }
   }
   emitCacheEntry(edges);
   return edges;

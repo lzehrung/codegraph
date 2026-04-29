@@ -103,6 +103,7 @@ describe("package metadata", () => {
     const dependencies = readStringRecord(fallbackPackage.dependencies);
 
     expect(dependencies["tree-sitter"]).toBeDefined();
+    expect(dependencies["tree-sitter-php"]).toBeDefined();
     expect(dependencies["tree-sitter-typescript"]).toBeDefined();
     expect(dependencies["tree-sitter-vue"]).toBeDefined();
   });

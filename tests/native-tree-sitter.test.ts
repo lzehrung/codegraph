@@ -366,6 +366,9 @@ jsFallbackDescribe("native tree-sitter integration", () => {
 
   it("matches import extraction for representative compiled languages", async () => {
     const cases = [
+      ["php", "main.php"],
+      ["php", "grouped-consumer.php"],
+      ["php", "composer-consumer.php"],
       ["go", "main.go"],
       ["go", "aliased-imports.go"],
       ["go", "aliased-types.go"],
@@ -401,6 +404,10 @@ jsFallbackDescribe("native tree-sitter integration", () => {
 
   it("matches symbol extraction for representative compiled languages", async () => {
     const cases = [
+      "php/utils.php",
+      "php/src/Support/Toolbox.php",
+      "php/src/Support/support_helper.php",
+      "php/src/Domain/Service.php",
       "go/utils.go",
       "go/contracts.go",
       "java/utils/Utils.java",
@@ -435,6 +442,9 @@ jsFallbackDescribe("native tree-sitter integration", () => {
 
   it("matches module specifier extraction for stylesheet and component languages", async () => {
     const cases = [
+      "php/main.php",
+      "php/grouped-consumer.php",
+      "php/composer-consumer.php",
       "css/main.css",
       "less/main.less",
       "less/secondary.less",

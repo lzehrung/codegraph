@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildProjectIndex,
   clearResolutionCaches,
+  collectGraph,
   collectImportsForFile,
   parseFile,
 } from "../src/index.js";
@@ -103,5 +104,60 @@ describe("Java import resolution regression", () => {
     expect(index.byFile.has(normalizedSourcePackage)).toBe(true);
     expect(index.byFile.has(normalizedIgnoredPackage)).toBe(false);
     expect(elapsedMs).toBeLessThan(10000);
+  });
+
+  it("expands Java wildcard package imports to all source package files", async () => {
+    const root = await mkTmpDir("cg-java-wildcard-");
+    const sourceDir = path.join(root, "src", "pkg");
+    const targetDir = path.join(root, "target", "generated-sources", "pkg");
+    const mainFile = path.join(root, "src", "Main.java");
+    const alphaFile = path.join(sourceDir, "Alpha.java");
+    const betaFile = path.join(sourceDir, "Beta.java");
+    const ignoredFile = path.join(targetDir, "Generated.java");
+
+    await fsp.mkdir(sourceDir, { recursive: true });
+    await fsp.mkdir(targetDir, { recursive: true });
+    await fsp.writeFile(
+      alphaFile,
+      ["package pkg;", "public class Alpha {}", "interface InternalContract {}"].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      betaFile,
+      ["package pkg;", "public interface Beta {", "  void serve();", "}"].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      ignoredFile,
+      ["package pkg;", "public class Generated {}"].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      mainFile,
+      [
+        "import pkg.*;",
+        "public class Main {",
+        "  Alpha alpha = new Alpha();",
+        "  Beta beta = () -> {};",
+        "}",
+      ].join("\n"),
+      "utf8",
+    );
+
+    clearResolutionCaches();
+    const graph = await collectGraph(root, [
+      mainFile.replace(/\\/g, "/"),
+      alphaFile.replace(/\\/g, "/"),
+      betaFile.replace(/\\/g, "/"),
+    ]);
+
+    const fileEdges = graph.edges
+      .filter((edge) => edge.from === mainFile.replace(/\\/g, "/"))
+      .filter((edge) => edge.to.type === "file")
+      .map((edge) => edge.to.path);
+
+    expect(fileEdges).toContain(alphaFile.replace(/\\/g, "/"));
+    expect(fileEdges).toContain(betaFile.replace(/\\/g, "/"));
+    expect(fileEdges).not.toContain(ignoredFile.replace(/\\/g, "/"));
   });
 });

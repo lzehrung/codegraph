@@ -56,4 +56,13 @@ describe("cross-platform path normalization", () => {
     expect(isFilePathWithinRoot(root, file)).toBe(true);
     expect(toProjectRelativePath(root, file)).toBe("src/main.ts");
   });
+
+  it("resolves relative paths against Windows-style roots on any host OS", () => {
+    const root = "C:/Repo";
+    const file = "src/main.ts";
+
+    expect(resolveFilePathFromRoot(root, file)).toBe("C:\\Repo\\src\\main.ts");
+    expect(isFilePathWithinRoot(root, file)).toBe(true);
+    expect(toProjectRelativePath(root, file)).toBe("src/main.ts");
+  });
 });

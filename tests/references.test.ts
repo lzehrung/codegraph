@@ -312,6 +312,143 @@ describe('Find References', () => {
     });
   });
 
+  describe('PHP', () => {
+    it('should find all references to imported function', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const utilsFile = path.join(samplePath, 'utils.php').replace(/\\/g, '/');
+
+      const result = await testFindReferences(index, utilsFile, 13, 11, 2);
+
+      expect(result.status).toBe('ok');
+      if (result.status === 'ok') {
+        expectReferenceAt(result, utilsFile, 13);
+        expectReferenceAt(result, path.join(samplePath, 'main.php').replace(/\\/g, '/'), 9);
+      }
+    });
+
+    it('should find all references to imported class', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const utilsFile = path.join(samplePath, 'utils.php').replace(/\\/g, '/');
+
+      const result = await testFindReferences(index, utilsFile, 5, 7, 2);
+
+      expect(result.status).toBe('ok');
+      if (result.status === 'ok') {
+        expectReferenceAt(result, utilsFile, 5);
+        expectReferenceAt(result, path.join(samplePath, 'main.php').replace(/\\/g, '/'), 10);
+      }
+    });
+
+    it('should find references through grouped use aliases', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const toolboxFile = path.join(samplePath, 'src', 'Support', 'Toolbox.php').replace(/\\/g, '/');
+      const helperFile = path.join(samplePath, 'src', 'Support', 'support_helper.php').replace(/\\/g, '/');
+      const groupedFile = path.join(samplePath, 'grouped-consumer.php').replace(/\\/g, '/');
+
+      const toolboxResult = await testFindReferences(index, toolboxFile, 5, 7, 2);
+      expect(toolboxResult.status).toBe('ok');
+      if (toolboxResult.status === 'ok') {
+        expectReferenceAt(toolboxResult, toolboxFile, 5);
+        expectReferenceAt(toolboxResult, groupedFile, 8);
+      }
+
+      const helperResult = await testFindReferences(index, helperFile, 5, 10, 2);
+      expect(helperResult.status).toBe('ok');
+      if (helperResult.status === 'ok') {
+        expectReferenceAt(helperResult, helperFile, 5);
+        expectReferenceAt(helperResult, groupedFile, 9);
+      }
+    });
+
+    it('should find references for fully-qualified Composer-mapped classes', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const serviceFile = path.join(samplePath, 'src', 'Domain', 'Service.php').replace(/\\/g, '/');
+      const qualifiedConsumerFile = path.join(samplePath, 'composer-qualified-consumer.php').replace(/\\/g, '/');
+      const staticConsumerFile = path.join(samplePath, 'composer-static-qualified-consumer.php').replace(/\\/g, '/');
+      const staticConstantConsumerFile = path.join(samplePath, 'composer-static-constant-consumer.php').replace(/\\/g, '/');
+      const staticPropertyConsumerFile = path.join(samplePath, 'composer-static-property-consumer.php').replace(/\\/g, '/');
+      const typedConsumerFile = path.join(samplePath, 'composer-type-qualified-consumer.php').replace(/\\/g, '/');
+
+      const result = await testFindReferences(index, serviceFile, 5, 7, 7);
+
+      expect(result.status).toBe('ok');
+      if (result.status === 'ok') {
+        expectReferenceAt(result, serviceFile, 5);
+        expectReferenceAt(result, path.join(samplePath, 'composer-consumer.php').replace(/\\/g, '/'), 5);
+        expectReferenceAt(result, qualifiedConsumerFile, 3);
+        expectReferenceAt(result, staticConsumerFile, 3);
+        expectReferenceAt(result, staticConstantConsumerFile, 3);
+        expectReferenceAt(result, staticPropertyConsumerFile, 3);
+        expectReferenceAt(result, typedConsumerFile, 3);
+        const uniqueRanges = new Set(
+          result.references.map((reference) =>
+            [
+              reference.file,
+              reference.range.start.index ?? -1,
+              reference.range.end.index ?? -1,
+            ].join(':'),
+          ),
+        );
+        expect(uniqueRanges.size).toBe(result.references.length);
+      }
+    });
+
+    it('should find references for function imports when class names collide', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const functionFile = path.join(samplePath, 'src', 'Collision', 'ThingFunction.php').replace(/\\/g, '/');
+      const consumerFile = path.join(samplePath, 'function-import-consumer.php').replace(/\\/g, '/');
+
+      const result = await testFindReferences(index, functionFile, 5, 10, 2);
+
+      expect(result.status).toBe('ok');
+      if (result.status === 'ok') {
+        expectReferenceAt(result, functionFile, 5);
+        expectReferenceAt(result, consumerFile, 5);
+      }
+    });
+
+    it('should find references for classes declared in PHP bracketed namespace blocks', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const libraryFile = path.join(samplePath, 'multi-namespace', 'Library.php').replace(/\\/g, '/');
+      const consumerFile = path.join(samplePath, 'bracketed-consumer.php').replace(/\\/g, '/');
+      const qualifiedConsumerFile = path.join(samplePath, 'bracketed-qualified-consumer.php').replace(/\\/g, '/');
+
+      const result = await testFindReferences(index, libraryFile, 8, 11, 3);
+
+      expect(result.status).toBe('ok');
+      if (result.status === 'ok') {
+        expectReferenceAt(result, libraryFile, 8);
+        expectReferenceAt(result, consumerFile, 5);
+        expectReferenceAt(result, qualifiedConsumerFile, 3);
+      }
+    });
+
+    it('should find fully-qualified references for classes declared in later PHP namespace blocks', async () => {
+      const root = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const files = [
+        path.join(root, 'multi-namespace', 'Library.php'),
+        path.join(root, 'bracketed-qualified-consumer.php'),
+      ];
+      const index = await createTestIndexFromFiles(root, files);
+      const libraryFile = path.join(root, 'multi-namespace', 'Library.php').replace(/\\/g, '/');
+      const qualifiedConsumerFile = path.join(root, 'bracketed-qualified-consumer.php').replace(/\\/g, '/');
+
+      const result = await testFindReferences(index, libraryFile, 8, 11, 2);
+
+      expect(result.status).toBe('ok');
+      if (result.status === 'ok') {
+        expectReferenceAt(result, libraryFile, 8);
+        expectReferenceAt(result, qualifiedConsumerFile, 3);
+      }
+    });
+  });
+
   describe('JavaScript', () => {
     it('should find all references to exported function', async () => {
       const index = await createTestIndex('javascript');
@@ -596,6 +733,22 @@ describe('Find References', () => {
       expectReferenceAt(result, moreTypesFile, 3);
       expectReferenceAt(result, consumerFile, 3);
     });
+
+    it('should find wildcard-imported references to helper functions', async () => {
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'kotlin');
+      const consumerFile = path.join(samplePath, 'TypeConsumers.kt').replace(/\\/g, '/');
+      const moreTypesFile = path.join(samplePath, 'utils', 'MoreTypes.kt').replace(/\\/g, '/');
+      const helperFile = path.join(samplePath, 'utils', 'helperFunction.kt').replace(/\\/g, '/');
+      const index = await createTestIndexFromFiles(samplePath, [
+        consumerFile,
+        moreTypesFile,
+        helperFile,
+      ]);
+
+      const result = await testFindReferences(index, helperFile, 3, 5, 2);
+      expectReferenceAt(result, helperFile, 3);
+      expectReferenceAt(result, consumerFile, 12);
+    });
   });
 
   describe('Swift', () => {
@@ -683,6 +836,17 @@ describe('Find References', () => {
       const result = await testFindReferences(index, packageFile, 7, 11, 2);
       expectReferenceAt(result, packageFile, 7);
       expectReferenceAt(result, wildcardFile, 7);
+    });
+
+    it('should find references to wildcard-imported package interfaces across files', async () => {
+      const index = await createTestIndex('java');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'java');
+      const packageFile = path.join(samplePath, 'pkg', 'PackageService.java').replace(/\\/g, '/');
+      const wildcardFile = path.join(samplePath, 'WildcardImports.java').replace(/\\/g, '/');
+
+      const result = await testFindReferences(index, packageFile, 3, 18, 2);
+      expectReferenceAt(result, packageFile, 3);
+      expectReferenceAt(result, wildcardFile, 8);
     });
 
     it('should find references to static wildcard-imported methods', async () => {

@@ -22,6 +22,7 @@ import {
   parseCsharpUsingDirective,
   parseJavaImportStatement,
   parseKotlinImportStatement,
+  parsePhpImportStatement,
   parseRustImportStatement,
 } from "./languages/importStatementParsers.js";
 import {
@@ -42,6 +43,7 @@ import {
   resolveImportSpecifier,
   resolvePythonModule,
   resolveWorkspacePackage,
+  getPhpComposerImplicitFiles,
   normalizeResolutionHints,
   normalizePath,
   resolveFilePathFromRoot,
@@ -112,6 +114,7 @@ import type {
 const DEFAULT_REF_CONTEXT_LINES = 5;
 const QUERY_DRIVEN_LOCALS_LANGUAGES = new Set([
   "python",
+  "php",
   "java",
   "csharp",
   "rust",
@@ -179,7 +182,7 @@ export type ImportBinding =
       from: string;
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
-      mechanism?: "es" | "cjs" | "python";
+      mechanism?: "es" | "cjs" | "python" | "php";
       resolvedType?: "heuristic" | "precise";
       confidence?: number;
     }
@@ -188,9 +191,10 @@ export type ImportBinding =
       local: string;
       imported: string;
       from: string;
+      phpImportType?: "class" | "function" | "const";
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
-      mechanism?: "es" | "cjs" | "python";
+      mechanism?: "es" | "cjs" | "python" | "php";
       resolvedType?: "heuristic" | "precise";
       confidence?: number;
     }
@@ -200,7 +204,7 @@ export type ImportBinding =
       from: string;
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
-      mechanism?: "es" | "cjs" | "python";
+      mechanism?: "es" | "cjs" | "python" | "php";
       resolvedType?: "heuristic" | "precise";
       confidence?: number;
     }
@@ -209,7 +213,7 @@ export type ImportBinding =
       from: string;
       resolved?: FileId | { external: string };
       typeOnly?: boolean;
-      mechanism?: "es" | "cjs" | "python";
+      mechanism?: "es" | "cjs" | "python" | "php";
       resolvedType?: "heuristic" | "precise";
       confidence?: number;
     };
@@ -3250,10 +3254,46 @@ export async function collectImportsForFile(
       });
     }
   };
+  const appendPhpComposerImplicitImports = async (): Promise<void> => {
+    if (resolvedSup.id !== "php") {
+      return;
+    }
+
+    const implicitFiles = await getPhpComposerImplicitFiles(projectRoot, file);
+    const seenResolved = new Set(
+      imports
+        .map((entry) => (typeof entry.resolved === "string" ? entry.resolved : null))
+        .filter((entry): entry is string => !!entry),
+    );
+
+    for (const implicitFile of implicitFiles) {
+      const normalizedResolved = implicitFile.replace(/\\/g, "/");
+      if (normalizedResolved === file.replace(/\\/g, "/")) {
+        continue;
+      }
+      if (seenResolved.has(normalizedResolved)) {
+        continue;
+      }
+
+      const relativeFrom = path.relative(path.dirname(file), implicitFile).replace(/\\/g, "/");
+      const from =
+        relativeFrom.startsWith(".") || relativeFrom.startsWith("/")
+          ? relativeFrom
+          : `./${relativeFrom}`;
+      imports.push({
+        kind: "star",
+        from,
+        resolved: normalizedResolved,
+        mechanism: "php",
+      });
+      seenResolved.add(normalizedResolved);
+    }
+  };
   const finalizeLanguageSpecificImports = async (): Promise<void> => {
     normalizeGoImports();
     await appendJavaTextImports();
     await appendKotlinTextImports();
+    await appendPhpComposerImplicitImports();
   };
   const handledStatementImports = new Set<string>();
   const applyStatementImportOverride = async (
@@ -3392,6 +3432,39 @@ export async function collectImportsForFile(
       return true;
     }
 
+    if (resolvedSup.id === "php") {
+      const parsed = parsePhpImportStatement(normalizedStmt, file);
+      if (parsed.length === 0) return false;
+      if (handledStatementImports.has(normalizedStmt)) return true;
+      handledStatementImports.add(normalizedStmt);
+
+      for (const entry of parsed) {
+        if (entry.kind === "include") {
+          const resolved = await resolveFrom(entry.from);
+          imports.push({
+            kind: "star",
+            from: entry.from,
+            resolved,
+            typeOnly,
+            mechanism: "php",
+          });
+          continue;
+        }
+        const resolved = await resolveFrom(entry.from, entry.importType);
+        imports.push({
+          kind: "named",
+          local: entry.local,
+          imported: entry.imported,
+          from: entry.from,
+          phpImportType: entry.importType,
+          resolved,
+          typeOnly,
+          mechanism: "php",
+        });
+      }
+      return true;
+    }
+
     return false;
   };
 
@@ -3524,7 +3597,10 @@ export async function collectImportsForFile(
       : undefined;
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
 
-  const resolveFrom = async (from: string) => {
+  const resolveFrom = async (
+    from: string,
+    phpImportType?: "class" | "function" | "const",
+  ) => {
     const resolutionHints = opts?.graphOptions?.resolutionHints;
     const resolved = await resolveImportSpecifier(
       projectRoot,
@@ -3536,6 +3612,7 @@ export async function collectImportsForFile(
         ...(workspaceConfig ? { workspaceConfig } : {}),
         resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
         ...(resolutionHints ? { resolutionHints } : {}),
+        ...(phpImportType ? { phpImportType } : {}),
       },
     );
     return typeof resolved === "string"
@@ -5448,13 +5525,18 @@ export function resolveExport(
   index: ProjectIndex,
   file: FileId,
   exportedName: string,
+  opts?: { preferredKind?: SymbolKind },
 ): ResolvedExport | null {
   const visited = new Set<string>();
+  const matchesPreferredKind = (def: SymbolDef): boolean =>
+    !opts?.preferredKind || def.kind === opts.preferredKind;
   function _resolve(fileInner: FileId, name: string): ResolvedExport | null {
     const normalizedFile = fileInner.replace(/\\/g, "/");
     const mod = index.byFile.get(normalizedFile);
     if (!mod) return null;
-    const key = cacheKey(normalizedFile, name);
+    const key = opts?.preferredKind
+      ? `${cacheKey(normalizedFile, name)}::${opts.preferredKind}`
+      : cacheKey(normalizedFile, name);
     if (index.exportCache.has(key)) return index.exportCache.get(key)!;
 
     // Detect and break cycles
@@ -5463,14 +5545,18 @@ export function resolveExport(
     visited.add(cycleKey);
 
     const goPackageExport = resolveGoPackageExport(index, normalizedFile, name);
-    if (goPackageExport) {
+    if (goPackageExport && matchesPreferredKind(goPackageExport)) {
       const res: ResolvedExport = { kind: "resolved", def: goPackageExport };
       index.exportCache.set(key, res);
       return res;
     }
 
     for (const e of mod.exports)
-      if (e.type === "local" && e.exportedAs === name) {
+      if (
+        e.type === "local" &&
+        e.exportedAs === name &&
+        matchesPreferredKind(e.target)
+      ) {
         const res: ResolvedExport = { kind: "resolved", def: e.target };
         index.exportCache.set(key, res);
         return res;
@@ -5505,7 +5591,9 @@ export function resolveExport(
       }
 
     // Fallback: treat local with same name as exported (Python/Ruby or missing export metadata)
-    const local = mod.locals.find((l) => l.localName === name);
+    const local = mod.locals.find(
+      (l) => l.localName === name && matchesPreferredKind(l),
+    );
     if (local) {
       const res: ResolvedExport = { kind: "resolved", def: local };
       index.exportCache.set(key, res);
@@ -5561,6 +5649,139 @@ function resolveGoPackageExport(
   return null;
 }
 
+function readPhpNamespaceName(
+  namespaceNode: SyntaxNodeLike,
+  source: string,
+): string | null {
+  const namespaceName =
+    namespaceNode.childForFieldName?.("name") ??
+    namespaceNode.namedChildren.find((child) => child.type === "namespace_name");
+  return namespaceName ? sliceText(namespaceName, source).trim() : null;
+}
+
+function findClosestPhpNamespaceDefinition(
+  root: SyntaxNodeLike,
+  targetIndex: number,
+): SyntaxNodeLike | null {
+  let bestMatch: SyntaxNodeLike | null = null;
+
+  const visit = (node: SyntaxNodeLike): void => {
+    if (node.startIndex > targetIndex) {
+      return;
+    }
+    if (
+      node.type === "namespace_definition" &&
+      (!bestMatch || node.startIndex >= bestMatch.startIndex)
+    ) {
+      bestMatch = node;
+    }
+    for (const child of node.namedChildren) {
+      visit(child);
+    }
+  };
+
+  visit(root);
+  return bestMatch;
+}
+
+function readPhpNamespaceFromNode(
+  tree: SyntaxTreeLike,
+  node: SyntaxNodeLike | null,
+  source: string,
+): string | null {
+  if (!node) return null;
+  let current: SyntaxNodeLike | null = node;
+  while (current) {
+    if (current.type === "namespace_definition") {
+      return readPhpNamespaceName(current, source);
+    }
+    current = current.parent;
+  }
+  const namespaceNode = findClosestPhpNamespaceDefinition(
+    tree.rootNode,
+    node.startIndex,
+  );
+  return namespaceNode ? readPhpNamespaceName(namespaceNode, source) : null;
+}
+
+function readPhpNamespaceFromRange(
+  tree: SyntaxTreeLike,
+  source: string,
+  range: Range,
+): string | null {
+  const row = Math.max(0, range.start.line - 1);
+  const column = Math.max(0, range.start.column - 1);
+  const position = { row, column };
+  const node = tree.rootNode.descendantForPosition(position, position);
+  return readPhpNamespaceFromNode(tree, node, source);
+}
+
+function getPhpQualifiedReference(
+  node: SyntaxNodeLike | null,
+  source: string,
+): string | null {
+  if (!node) return null;
+  if (node.type === "qualified_name" || node.type === "relative_name") {
+    return sliceText(node, source);
+  }
+  const parent = node.parent;
+  if (
+    parent &&
+    (parent.type === "qualified_name" || parent.type === "relative_name")
+  ) {
+    return sliceText(parent, source);
+  }
+  return null;
+}
+
+function normalizePhpQualifiedReference(
+  rawName: string,
+  source: string,
+  tree: SyntaxTreeLike,
+  node: SyntaxNodeLike | null,
+): string | null {
+  const trimmed = rawName.trim().replace(/^\\+/, "");
+  if (!trimmed) return null;
+  if (!trimmed.startsWith("namespace\\")) {
+    return trimmed;
+  }
+  const currentNamespace = readPhpNamespaceFromNode(tree, node, source);
+  const relativeSuffix = trimmed.slice("namespace\\".length);
+  if (!relativeSuffix) {
+    return currentNamespace;
+  }
+  if (!currentNamespace) {
+    return relativeSuffix;
+  }
+  return `${currentNamespace}\\${relativeSuffix}`;
+}
+
+function inferPhpQualifiedReferenceImportType(
+  node: SyntaxNodeLike,
+): "class" | "function" | undefined {
+  let current: SyntaxNodeLike | null = node;
+  while (current) {
+    if (current.type === "object_creation_expression") {
+      return "class";
+    }
+    if (
+      current.type === "function_call_expression" ||
+      current.type === "call_expression"
+    ) {
+      return "function";
+    }
+    if (
+      current.type === "scoped_call_expression" ||
+      current.type === "scoped_property_access_expression" ||
+      current.type === "class_constant_access_expression"
+    ) {
+      return "class";
+    }
+    current = current.parent;
+  }
+  return undefined;
+}
+
 export type GoToRequest = { file: FileId; line: number; column: number };
 export type GoToResult =
   | {
@@ -5614,6 +5835,8 @@ export async function goToDefinition(
 
   const isId = sup.nodeTypes.identifier.includes(node.type);
   let name: string | null = isId ? sliceText(node, source) : null;
+  const phpQualifiedReference =
+    sup.id === "php" ? getPhpQualifiedReference(node, source) : null;
 
   if (!name) {
     const findDeclNameNode = (
@@ -5958,6 +6181,49 @@ export async function goToDefinition(
     }
   }
 
+  if (sup.id === "php" && phpQualifiedReference && index.projectRoot) {
+    const normalizedQualifiedReference = normalizePhpQualifiedReference(
+      phpQualifiedReference,
+      source,
+      tree,
+      node,
+    );
+    if (normalizedQualifiedReference?.includes("\\")) {
+      const phpImportType = inferPhpQualifiedReferenceImportType(node);
+      const resolvedTarget = await resolveImportSpecifier(
+        index.projectRoot,
+        file,
+        normalizedQualifiedReference,
+        "php",
+        {
+          ...(phpImportType ? { phpImportType } : {}),
+        },
+      );
+      if (typeof resolvedTarget === "string") {
+        const exportedName =
+          normalizedQualifiedReference.split("\\").filter(Boolean).pop() ?? null;
+        if (exportedName) {
+          const preferredKind =
+            phpImportType === "function"
+              ? SymbolKind.Function
+              : phpImportType === "class"
+                ? SymbolKind.Class
+                : undefined;
+          const hit = resolveExport(index, resolvedTarget, exportedName, {
+            ...(preferredKind ? { preferredKind } : {}),
+          });
+          if (hit?.kind === "resolved") {
+            return {
+              status: "ok",
+              definition: hit.def,
+              via: { importedFrom: resolvedTarget, exportedName },
+            };
+          }
+        }
+      }
+    }
+  }
+
   if (name) {
     let scopeIndex = index.scopeCache.get(file);
     if (!scopeIndex) {
@@ -6149,7 +6415,19 @@ export function resolveImported(
   const targetFile =
     typeof imp.resolved === "string" ? imp.resolved : undefined;
   if (!targetFile) return null;
-  const hit = resolveExport(index, targetFile, exportedName);
+  const preferredKind =
+    imp.kind === "named"
+      ? imp.phpImportType === "function"
+        ? SymbolKind.Function
+        : imp.phpImportType === "class"
+          ? SymbolKind.Class
+          : imp.phpImportType === "const"
+            ? SymbolKind.Variable
+            : undefined
+      : undefined;
+  const hit = resolveExport(index, targetFile, exportedName, {
+    ...(preferredKind ? { preferredKind } : {}),
+  });
   if (hit?.kind === "resolved") return hit.def;
   if (hit?.kind === "namespace") return { namespace: hit.file };
   try {
@@ -6829,33 +7107,59 @@ export async function findReferences(
   if (!exportedNames.length) exportedNames.push(def.localName);
 
   const exportedNameSet = new Set(exportedNames);
+  let phpQualifiedNames: string[] = [];
+  try {
+    const definitionParsed = await ensureParsedContext(
+      definitionFile,
+      index.parsed?.get(definitionFile),
+    );
+    phpQualifiedNames =
+      definitionParsed.sup.id === "php"
+        ? (() => {
+            const phpNamespace = readPhpNamespaceFromRange(
+              definitionParsed.tree,
+              definitionParsed.source,
+              def.range,
+            );
+            if (!phpNamespace) return [];
+            const qualifiedName = `${phpNamespace}\\${def.localName}`;
+            return [qualifiedName, `\\${qualifiedName}`];
+          })()
+        : [];
+  } catch {
+    phpQualifiedNames = [];
+  }
   const collectNamedNodeReferences = async (
     fileId: string,
     symbolName: string,
   ): Promise<Range[]> => {
-    const parsedEntry = index.parsed?.get(fileId);
-    const parsed = await ensureParsedContext(fileId, parsedEntry);
-    const identifierTypes = new Set<string>([
-      ...parsed.sup.nodeTypes.identifier,
-      ...(parsed.sup.nodeTypes.propertyIdentifier ?? []),
-      "constant",
-      "type_identifier",
-      "field_identifier",
-    ]);
-    const matches: Range[] = [];
-    const walk = (node: SyntaxNodeLike) => {
-      if (
-        identifierTypes.has(node.type) &&
-        sliceText(node, parsed.source) === symbolName
-      ) {
-        matches.push(toRange(node));
-      }
-      for (const child of node.namedChildren) {
-        walk(child);
-      }
-    };
-    walk(parsed.tree.rootNode);
-    return matches;
+    try {
+      const parsedEntry = index.parsed?.get(fileId);
+      const parsed = await ensureParsedContext(fileId, parsedEntry);
+      const identifierTypes = new Set<string>([
+        ...parsed.sup.nodeTypes.identifier,
+        ...(parsed.sup.nodeTypes.propertyIdentifier ?? []),
+        "constant",
+        "type_identifier",
+        "field_identifier",
+      ]);
+      const matches: Range[] = [];
+      const walk = (node: SyntaxNodeLike) => {
+        if (
+          identifierTypes.has(node.type) &&
+          sliceText(node, parsed.source) === symbolName
+        ) {
+          matches.push(toRange(node));
+        }
+        for (const child of node.namedChildren) {
+          walk(child);
+        }
+      };
+      walk(parsed.tree.rootNode);
+      return matches;
+    } catch {
+      return [];
+    }
   };
   const collectVerifiedNamedNodeReferences = async (
     fileId: string,
@@ -7043,6 +7347,26 @@ export async function findReferences(
               }
             }
           }
+        }
+      }
+    }
+
+    if (phpQualifiedNames.length > 0) {
+      const remainingReferences =
+        maxReferences !== undefined
+          ? Math.max(0, maxReferences - refs.length)
+          : undefined;
+      for (const candidateName of [...exportedNames, ...phpQualifiedNames]) {
+        if (hasReachedMaxReferences()) break;
+        const ranges = await collectVerifiedNamedNodeReferences(
+          f,
+          candidateName,
+          def,
+          remainingReferences,
+        );
+        for (const range of ranges) {
+          if (hasReachedMaxReferences()) break;
+          pushRef({ file: f, range });
         }
       }
     }
