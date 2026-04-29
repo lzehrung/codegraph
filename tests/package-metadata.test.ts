@@ -10,6 +10,10 @@ function readJson(relativePath: string): Record<string, unknown> {
   >;
 }
 
+function readText(relativePath: string): string {
+  return fs.readFileSync(path.resolve(process.cwd(), relativePath), "utf8");
+}
+
 function readStringRecord(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object") {
     return {};
@@ -39,6 +43,7 @@ describe("package metadata", () => {
 
     expect(dependencies["@lzehrung/codegraph-native"]).toBeUndefined();
     expect(optionalDependencies["@lzehrung/codegraph-native"]).toBe(
+      // eslint-disable-next-line @typescript-eslint/restrict-template-expressions
       `^${nativePackage.version}`,
     );
   });
@@ -60,6 +65,13 @@ describe("package metadata", () => {
     const bin = readStringRecord(rootPackage.bin);
 
     expect(bin.codegraph).toBe("dist/cli.js");
+  });
+
+  it("requires Node 20 or newer in package metadata", () => {
+    const rootPackage = readJson("package.json");
+    const engines = readStringRecord(rootPackage.engines);
+
+    expect(engines.node).toBe(">=20");
   });
 
   it("keeps the root package description aligned with the multi-language surface", () => {
@@ -122,5 +134,37 @@ describe("package metadata", () => {
     const dependencies = readStringRecord(fallbackPackage.dependencies);
 
     expect(dependencies["@lzehrung/codegraph"]).toBeUndefined();
+  });
+
+  it("keeps the landing README linked to the canonical reference docs", () => {
+    const readme = readText("README.md");
+
+    expect(readme).toContain("./docs/installation.md");
+    expect(readme).toContain("./docs/cli.md");
+    expect(readme).toContain("./docs/library-api.md");
+    expect(readme).toContain("./docs/agent-workflows.md");
+    expect(readme).toContain("./docs/how-it-works.md");
+    expect(readme).toContain("./PUBLISHING.md");
+  });
+
+  it("keeps public-facing docs ASCII-clean", () => {
+    const docs = [
+      "README.md",
+      "AGENTS.md",
+      "PUBLISHING.md",
+      "docs/installation.md",
+      "docs/cli.md",
+      "docs/library-api.md",
+      "docs/agent-workflows.md",
+      "docs/how-it-works.md",
+      "codegraph-skill/codegraph/SKILL.md",
+    ];
+
+    for (const relativePath of docs) {
+      const hasNonAscii = [...readText(relativePath)].some(
+        (character) => character.charCodeAt(0) > 0x7f,
+      );
+      expect(hasNonAscii).toBe(false);
+    }
   });
 });
