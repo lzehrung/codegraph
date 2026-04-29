@@ -260,6 +260,15 @@ describe('Go to Definition', () => {
 
       await testGoToDefinition(index, consumerFile, 5, 10, functionFile, 5);
     });
+
+    it('should find definitions from PHP bracketed namespace blocks', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const consumerFile = path.join(samplePath, 'bracketed-consumer.php').replace(/\\/g, '/');
+      const libraryFile = path.join(samplePath, 'multi-namespace', 'Library.php').replace(/\\/g, '/');
+
+      await testGoToDefinition(index, consumerFile, 5, 17, libraryFile, 8);
+    });
   });
 
   describe('JavaScript', () => {

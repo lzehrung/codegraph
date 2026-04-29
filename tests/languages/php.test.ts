@@ -65,6 +65,10 @@ const definition: LanguageTestDefinition = {
         from: "function-import-consumer.php",
         to: { type: "file", path: "src/Collision/ThingFunction.php" },
       },
+      {
+        from: "bracketed-consumer.php",
+        to: { type: "file", path: "multi-namespace/Library.php" },
+      },
     ],
     symbols: [
       {
@@ -94,6 +98,10 @@ const definition: LanguageTestDefinition = {
       {
         file: "src/Collision/ThingFunction.php",
         includes: [{ name: "Thing" }],
+      },
+      {
+        file: "multi-namespace/Library.php",
+        includes: [{ name: "FirstService" }, { name: "SecondService" }],
       },
     ],
     goToDefinition: [
@@ -174,6 +182,13 @@ const definition: LanguageTestDefinition = {
         column: 10,
         expectedDefinition: { file: "src/Collision/ThingFunction.php", line: 5 },
       },
+      {
+        name: "go to definition resolves PHP imports from bracketed namespace blocks",
+        file: "bracketed-consumer.php",
+        line: 5,
+        column: 17,
+        expectedDefinition: { file: "multi-namespace/Library.php", line: 8 },
+      },
     ],
     references: [
       {
@@ -210,6 +225,13 @@ const definition: LanguageTestDefinition = {
         line: 5,
         column: 7,
         minimumCount: 7,
+      },
+      {
+        name: "find references for PHP classes from bracketed namespace blocks",
+        file: "multi-namespace/Library.php",
+        line: 8,
+        column: 11,
+        minimumCount: 2,
       },
     ],
   },

@@ -2152,10 +2152,19 @@ type JavaSymbolIndexEntry = {
   symbols: Set<string>;
 };
 
+type PhpSymbolKind = "class" | "function" | "const";
+
+type PhpPackageSymbolIndexEntry = {
+  packageName: string;
+  symbols: Set<string>;
+  kindsBySymbol: Map<string, Set<PhpSymbolKind>>;
+};
+
 type PhpSymbolIndexEntry = {
   packageName: string | null;
   symbols: Set<string>;
-  kindsBySymbol: Map<string, Set<"class" | "function" | "const">>;
+  kindsBySymbol: Map<string, Set<PhpSymbolKind>>;
+  packageEntries: PhpPackageSymbolIndexEntry[];
 };
 
 type PhpComposerConfig = {
@@ -2347,12 +2356,38 @@ async function getPhpProjectSymbolIndex(
   return await getOrCreateProjectSymbolIndex(
     phpProjectSymbolIndexCache,
     projectRoot,
-    async () =>
-      await buildProjectSymbolIndex(
-        projectRoot,
-        ["**/*.php"],
-        readPhpSymbolIndex,
-      ),
+    async () => {
+      const files = await listProjectLanguageFiles(projectRoot, ["**/*.php"]);
+      const index: LanguageProjectSymbolIndex = {
+        files,
+        filesByPackage: new Map<string, string[]>(),
+        filesByPackageSymbol: new Map<string, Map<string, string[]>>(),
+      };
+
+      const indexEntries = await mapLimit(files, 8, async (filePath) => {
+        try {
+          const entry = await readPhpSymbolIndex(filePath);
+          return { filePath, entry };
+        } catch {
+          return null;
+        }
+      });
+
+      for (const indexEntry of indexEntries) {
+        if (!indexEntry) continue;
+        for (const packageEntry of indexEntry.entry.packageEntries) {
+          addProjectSymbolFile(
+            index,
+            packageEntry.packageName,
+            indexEntry.filePath,
+            packageEntry.symbols,
+          );
+        }
+      }
+
+      sortProjectSymbolIndex(index);
+      return index;
+    },
   );
 }
 
@@ -2640,52 +2675,259 @@ async function readPhpSymbolIndex(
   if (cached) return cached;
 
   const source = await fsp.readFile(filePath, "utf8");
-  const packageName =
-    source.match(/^\s*namespace\s+([^;{]+)\s*[;{]/m)?.[1]?.trim() ?? "";
+  const packageEntries = extractPhpTopLevelPackageEntries(source);
+  const primaryEntry = packageEntries[0] ?? {
+    packageName: "",
+    symbols: new Set<string>(),
+    kindsBySymbol: new Map<string, Set<PhpSymbolKind>>(),
+  };
   const symbols = new Set<string>();
-  const kindsBySymbol = new Map<string, Set<"class" | "function" | "const">>();
+  const kindsBySymbol = new Map<string, Set<PhpSymbolKind>>();
   const addSymbol = (
     symbolName: string,
-    symbolKind: "class" | "function" | "const",
+    symbolKind: PhpSymbolKind,
   ): void => {
     symbols.add(symbolName);
     const currentKinds = kindsBySymbol.get(symbolName) ?? new Set();
     currentKinds.add(symbolKind);
     kindsBySymbol.set(symbolName, currentKinds);
   };
-  const declarationPattern =
-    /\b(class|interface|trait|enum|function)\s+([A-Za-z_][\w]*)\b/g;
-  for (const match of source.matchAll(declarationPattern)) {
-    const declarationType = match[1];
-    const symbolName = match[2];
-    if (!symbolName || !declarationType) continue;
-    addSymbol(
-      symbolName,
-      declarationType === "function" ? "function" : "class",
-    );
-  }
-  for (const symbolName of extractPhpTopLevelConstNames(source)) {
-    addSymbol(symbolName, "const");
+  for (const packageEntry of packageEntries) {
+    for (const symbolName of packageEntry.symbols) {
+      const symbolKinds = packageEntry.kindsBySymbol.get(symbolName);
+      if (!symbolKinds) continue;
+      for (const symbolKind of symbolKinds) {
+        addSymbol(symbolName, symbolKind);
+      }
+    }
   }
 
-  const entry = { packageName, symbols, kindsBySymbol };
+  const entry = {
+    packageName: primaryEntry.packageName,
+    symbols,
+    kindsBySymbol,
+    packageEntries,
+  };
   phpSymbolIndexCache.set(filePath, entry);
   return entry;
 }
 
-function extractPhpTopLevelConstNames(source: string): string[] {
-  const names: string[] = [];
-  const classLikeStack: number[] = [];
-  let pendingClassLikeBlock = false;
+type PhpScannerToken =
+  | { type: "word"; value: string }
+  | { type: "brace_open" | "brace_close" | "paren_open" | "paren_close" }
+  | { type: "semicolon" | "comma" | "backslash" | "ampersand" | "equals" };
 
-  const isWordBoundary = (index: number): boolean => {
-    const ch = source[index];
-    return !ch || !/[A-Za-z0-9_]/.test(ch);
+function extractPhpTopLevelPackageEntries(
+  source: string,
+): PhpPackageSymbolIndexEntry[] {
+  const packageEntries = new Map<string, PhpPackageSymbolIndexEntry>();
+  const getPackageEntry = (packageName: string): PhpPackageSymbolIndexEntry => {
+    const existing = packageEntries.get(packageName);
+    if (existing) return existing;
+    const entry: PhpPackageSymbolIndexEntry = {
+      packageName,
+      symbols: new Set<string>(),
+      kindsBySymbol: new Map<string, Set<PhpSymbolKind>>(),
+    };
+    packageEntries.set(packageName, entry);
+    return entry;
   };
+  const addSymbol = (
+    packageName: string,
+    symbolName: string,
+    symbolKind: PhpSymbolKind,
+  ): void => {
+    const entry = getPackageEntry(packageName);
+    entry.symbols.add(symbolName);
+    const symbolKinds = entry.kindsBySymbol.get(symbolName) ?? new Set();
+    symbolKinds.add(symbolKind);
+    entry.kindsBySymbol.set(symbolName, symbolKinds);
+  };
+  const tokens = tokenizePhpSource(source);
+  let braceDepth = 0;
+  const namespaceBlockDepths: Array<{ packageName: string; depth: number }> = [];
+  const classLikeDepths: number[] = [];
+  const functionLikeDepths: number[] = [];
+  let activeNamespace = "";
+  let pendingBlock:
+    | { type: "class" | "function" }
+    | null = null;
+
+  const inDeclarationBody = (): boolean =>
+    classLikeDepths.length > 0 || functionLikeDepths.length > 0;
+  const currentNamespace = (): string =>
+    namespaceBlockDepths[namespaceBlockDepths.length - 1]?.packageName ??
+    activeNamespace;
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (!token) continue;
+
+    if (token.type === "brace_open") {
+      braceDepth += 1;
+      if (pendingBlock?.type === "class") {
+        classLikeDepths.push(braceDepth);
+      } else if (pendingBlock?.type === "function") {
+        functionLikeDepths.push(braceDepth);
+      }
+      pendingBlock = null;
+      continue;
+    }
+
+    if (token.type === "brace_close") {
+      if (classLikeDepths[classLikeDepths.length - 1] === braceDepth) {
+        classLikeDepths.pop();
+      }
+      if (functionLikeDepths[functionLikeDepths.length - 1] === braceDepth) {
+        functionLikeDepths.pop();
+      }
+      if (
+        namespaceBlockDepths[namespaceBlockDepths.length - 1]?.depth ===
+        braceDepth
+      ) {
+        namespaceBlockDepths.pop();
+      }
+      braceDepth = Math.max(0, braceDepth - 1);
+      pendingBlock = null;
+      continue;
+    }
+
+    if (token.type === "semicolon") {
+      pendingBlock = null;
+      continue;
+    }
+
+    if (token.type !== "word") {
+      continue;
+    }
+
+    if (token.value === "namespace" && !inDeclarationBody()) {
+      let packageName = "";
+      let lookahead = index + 1;
+      while (lookahead < tokens.length) {
+        const nextToken = tokens[lookahead];
+        if (!nextToken) break;
+        if (nextToken.type === "word") {
+          packageName += nextToken.value;
+          lookahead += 1;
+          continue;
+        }
+        if (nextToken.type === "backslash") {
+          packageName += "\\";
+          lookahead += 1;
+          continue;
+        }
+        if (nextToken.type === "brace_open") {
+          braceDepth += 1;
+          namespaceBlockDepths.push({ packageName, depth: braceDepth });
+          index = lookahead;
+          break;
+        }
+        if (nextToken.type === "semicolon") {
+          activeNamespace = packageName;
+          index = lookahead;
+          break;
+        }
+        lookahead += 1;
+      }
+      continue;
+    }
+
+    if (
+      (token.value === "class" ||
+        token.value === "interface" ||
+        token.value === "trait" ||
+        token.value === "enum") &&
+      !inDeclarationBody()
+    ) {
+      let lookahead = index + 1;
+      let symbolName: string | null = null;
+      while (lookahead < tokens.length) {
+        const nextToken = tokens[lookahead];
+        if (!nextToken) break;
+        if (nextToken.type === "word") {
+          symbolName = nextToken.value;
+          break;
+        }
+        if (
+          nextToken.type === "brace_open" ||
+          nextToken.type === "semicolon"
+        ) {
+          break;
+        }
+        lookahead += 1;
+      }
+      if (symbolName) {
+        addSymbol(currentNamespace(), symbolName, "class");
+      }
+      pendingBlock = { type: "class" };
+      continue;
+    }
+
+    if (token.value === "function" && !inDeclarationBody()) {
+      let lookahead = index + 1;
+      if (tokens[lookahead]?.type === "ampersand") {
+        lookahead += 1;
+      }
+      const nextToken = tokens[lookahead];
+      if (nextToken?.type === "word") {
+        addSymbol(currentNamespace(), nextToken.value, "function");
+      }
+      pendingBlock = { type: "function" };
+      continue;
+    }
+
+    if (token.value === "const" && !inDeclarationBody()) {
+      let lookahead = index + 1;
+      let expectingName = true;
+      while (lookahead < tokens.length) {
+        const nextToken = tokens[lookahead];
+        if (!nextToken || nextToken.type === "semicolon") {
+          index = lookahead;
+          break;
+        }
+        if (nextToken.type === "comma") {
+          expectingName = true;
+          lookahead += 1;
+          continue;
+        }
+        if (nextToken.type === "equals") {
+          expectingName = false;
+          lookahead += 1;
+          continue;
+        }
+        if (nextToken.type === "word" && expectingName) {
+          addSymbol(currentNamespace(), nextToken.value, "const");
+          expectingName = false;
+          lookahead += 1;
+          continue;
+        }
+        lookahead += 1;
+      }
+    }
+  }
+
+  if (packageEntries.size === 0) {
+    packageEntries.set("", {
+      packageName: "",
+      symbols: new Set<string>(),
+      kindsBySymbol: new Map<string, Set<PhpSymbolKind>>(),
+    });
+  }
+
+  return Array.from(packageEntries.values()).sort((left, right) =>
+    left.packageName.localeCompare(right.packageName),
+  );
+}
+
+function tokenizePhpSource(source: string): PhpScannerToken[] {
+  const tokens: PhpScannerToken[] = [];
 
   for (let index = 0; index < source.length; index += 1) {
     const ch = source[index] ?? "";
     const next = source[index + 1] ?? "";
+
+    if (/\s/.test(ch)) continue;
 
     if (ch === "/" && next === "/") {
       index += 2;
@@ -2722,64 +2964,54 @@ function extractPhpTopLevelConstNames(source: string): string[] {
       continue;
     }
 
-    if (ch === "{") {
-      if (pendingClassLikeBlock) {
-        classLikeStack.push(index);
+    if (/[A-Za-z_]/.test(ch)) {
+      let end = index + 1;
+      while (end < source.length && /[A-Za-z0-9_]/.test(source[end] ?? "")) {
+        end += 1;
       }
-      pendingClassLikeBlock = false;
+      tokens.push({ type: "word", value: source.slice(index, end) });
+      index = end - 1;
+      continue;
+    }
+
+    if (ch === "{") {
+      tokens.push({ type: "brace_open" });
       continue;
     }
     if (ch === "}") {
-      if (classLikeStack.length > 0) {
-        classLikeStack.pop();
-      }
-      pendingClassLikeBlock = false;
+      tokens.push({ type: "brace_close" });
       continue;
     }
-    if (!/[A-Za-z_]/.test(ch)) continue;
-
-    let end = index + 1;
-    while (end < source.length && /[A-Za-z0-9_]/.test(source[end]!)) end += 1;
-    const word = source.slice(index, end);
-    if (!isWordBoundary(index - 1) || !isWordBoundary(end)) {
-      index = end - 1;
+    if (ch === "(") {
+      tokens.push({ type: "paren_open" });
       continue;
     }
-
-    if (
-      word === "class" ||
-      word === "interface" ||
-      word === "trait" ||
-      word === "enum"
-    ) {
-      pendingClassLikeBlock = true;
-      index = end - 1;
+    if (ch === ")") {
+      tokens.push({ type: "paren_close" });
       continue;
     }
-    if (word === "const" && classLikeStack.length === 0) {
-      let nameStart = end;
-      while (nameStart < source.length && /\s/.test(source[nameStart]!)) {
-        nameStart += 1;
-      }
-      let nameEnd = nameStart;
-      while (
-        nameEnd < source.length &&
-        /[A-Za-z0-9_]/.test(source[nameEnd]!)
-      ) {
-        nameEnd += 1;
-      }
-      const symbolName = source.slice(nameStart, nameEnd);
-      if (/^[A-Za-z_][\w]*$/.test(symbolName)) {
-        names.push(symbolName);
-      }
-      index = end - 1;
+    if (ch === ";") {
+      tokens.push({ type: "semicolon" });
       continue;
     }
-
-    index = end - 1;
+    if (ch === ",") {
+      tokens.push({ type: "comma" });
+      continue;
+    }
+    if (ch === "\\") {
+      tokens.push({ type: "backslash" });
+      continue;
+    }
+    if (ch === "&") {
+      tokens.push({ type: "ampersand" });
+      continue;
+    }
+    if (ch === "=") {
+      tokens.push({ type: "equals" });
+    }
   }
 
-  return names;
+  return tokens;
 }
 
 function readComposerNamespaceDirs(
@@ -2878,20 +3110,61 @@ async function loadPhpComposerConfig(
   return await pending;
 }
 
-async function resolvePhpComposerMappedPath(
+function sortPhpComposerMappings(
+  mappings: Map<string, string[]>,
+): Array<[string, string[]]> {
+  return Array.from(mappings.entries()).sort(
+    (left, right) => right[0].length - left[0].length,
+  );
+}
+
+async function resolvePhpPsr4MappedPath(
   spec: string,
   mappings: Map<string, string[]>,
 ): Promise<string | null> {
   const normalizedSpec = spec.replace(/^\\+/, "");
-  const mappingEntries = Array.from(mappings.entries()).sort(
-    (left, right) => right[0].length - left[0].length,
-  );
+  const mappingEntries = sortPhpComposerMappings(mappings);
 
   for (const [prefix, dirs] of mappingEntries) {
     if (!normalizedSpec.startsWith(prefix)) continue;
     const suffix = normalizedSpec.slice(prefix.length).replace(/\\/g, "/");
     for (const dir of dirs) {
       const basePath = suffix ? path.join(dir, suffix) : dir;
+      const resolved = await findFirstExistingResolutionCandidate(basePath, [
+        ".php",
+      ]);
+      if (resolved) return resolved;
+    }
+  }
+
+  return null;
+}
+
+function buildPhpPsr0RelativePath(
+  spec: string,
+  prefix: string,
+): string | null {
+  if (!spec.startsWith(prefix)) return null;
+  const suffix = spec.slice(prefix.length);
+  const namespaceParts = suffix.split("\\");
+  const classPart = namespaceParts.pop() ?? "";
+  const namespacePath = namespaceParts.filter(Boolean).join("/");
+  const classPath = classPart.replace(/_/g, "/");
+  return [namespacePath, classPath].filter(Boolean).join("/");
+}
+
+async function resolvePhpPsr0MappedPath(
+  spec: string,
+  mappings: Map<string, string[]>,
+): Promise<string | null> {
+  const normalizedSpec = spec.replace(/^\\+/, "");
+  const mappingEntries = sortPhpComposerMappings(mappings);
+
+  for (const [prefix, dirs] of mappingEntries) {
+    const relativePath = buildPhpPsr0RelativePath(normalizedSpec, prefix);
+    if (relativePath === null) continue;
+    for (const dir of dirs) {
+      const basePath = relativePath ? path.join(dir, relativePath) : dir;
       const resolved = await findFirstExistingResolutionCandidate(basePath, [
         ".php",
       ]);
@@ -3094,7 +3367,7 @@ async function resolvePhpImportPath(
     const composerConfig = await loadPhpComposerConfig(composerPath);
     if (composerConfig) {
       if (!preferredKind || preferredKind === "class") {
-        const psr4Resolved = await resolvePhpComposerMappedPath(
+        const psr4Resolved = await resolvePhpPsr4MappedPath(
           normalizedSpec,
           composerConfig.psr4,
         );
@@ -3102,7 +3375,7 @@ async function resolvePhpImportPath(
           phpImportResolutionCache.set(cacheKey, psr4Resolved);
           return psr4Resolved;
         }
-        const psr0Resolved = await resolvePhpComposerMappedPath(
+        const psr0Resolved = await resolvePhpPsr0MappedPath(
           normalizedSpec,
           composerConfig.psr0,
         );

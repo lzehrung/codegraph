@@ -40,6 +40,7 @@ Checklist for landing a new first-class source language without drifting from re
 - Extend `src/graphs.ts` only where graph and specifier extraction need language-specific recovery.
 - Extend `src/util.ts` for language-specific module resolution, package metadata parsing, and caches.
 - Keep dynamic or ambiguous cases conservative. Prefer `external` or `not_found` over false-positive navigation.
+- If the language allows more than one package or namespace surface in a single file, model the symbol index per package/namespace entry instead of assuming one file maps to one package.
 
 ### Sort vs expand
 

@@ -807,6 +807,66 @@ describe("Import Resolution", () => {
     }
   });
 
+  it("resolves PHP PSR-0 imports that use underscores in the class name portion", async () => {
+    const root = await mkTmpDir("dg-resolve-php-psr0-");
+    const decoyDir = path.join(root, "aaa-decoy");
+    const libDir = path.join(root, "lib", "Utils");
+    const consumerFile = path.join(root, "consumer.php");
+    const decoyFile = path.join(decoyDir, "StringHelper.php");
+    const legacyFile = path.join(libDir, "StringHelper.php");
+
+    await fsp.mkdir(decoyDir, { recursive: true });
+    await fsp.mkdir(libDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { "psr-0": { Legacy_: "lib/" } } }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      decoyFile,
+      ["<?php", "", "class Legacy_Utils_StringHelper {}", ""].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      legacyFile,
+      ["<?php", "", "class Legacy_Utils_StringHelper {}", ""].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      [
+        "<?php",
+        "",
+        "use Legacy_Utils_StringHelper;",
+        "",
+        "$helper = new Legacy_Utils_StringHelper();",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const index = await buildProjectIndex(root);
+    const consumerModule = index.byFile.get(consumerFile.replace(/\\/g, "/"));
+    const helperImport = consumerModule?.imports.find(
+      (entry) =>
+        entry.kind === "named" && entry.local === "Legacy_Utils_StringHelper",
+    );
+
+    expect(helperImport?.resolved).toBe(legacyFile.replace(/\\/g, "/"));
+
+    const result = await goToDefinition(index, {
+      file: consumerFile.replace(/\\/g, "/"),
+      line: 5,
+      column: 16,
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.definition.file).toBe(legacyFile.replace(/\\/g, "/"));
+      expect(result.definition.range.start.line).toBe(3);
+    }
+  });
+
   it("resolves PHP classmap entries for global-namespace classes", async () => {
     const root = await mkTmpDir("dg-resolve-php-classmap-");
     const legacyDir = path.join(root, "legacy");
@@ -1126,6 +1186,97 @@ describe("Import Resolution", () => {
     }
   });
 
+  it("does not index PHP methods as top-level functions for Composer symbol resolution", async () => {
+    const root = await mkTmpDir("dg-resolve-php-method-pollution-");
+    const srcDir = path.join(root, "src", "Domain");
+    const consumerFile = path.join(root, "consumer.php");
+    const serviceFile = path.join(srcDir, "Service.php");
+
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      serviceFile,
+      [
+        "<?php",
+        "",
+        "class Service",
+        "{",
+        "    public function make(): string",
+        "    {",
+        "        return 'ok';",
+        "    }",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      ["<?php", "", "use function make;", "", "$value = make();", ""].join("\n"),
+      "utf8",
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await goToDefinition(index, {
+      file: consumerFile.replace(/\\/g, "/"),
+      line: 5,
+      column: 10,
+    });
+
+    expect(result.status).toBe("not_found");
+  });
+
+  it("does not index PHP declarations that only appear inside comments", async () => {
+    const root = await mkTmpDir("dg-resolve-php-comment-pollution-");
+    const srcDir = path.join(root, "src");
+    const consumerFile = path.join(root, "consumer.php");
+    const commentOnlyFile = path.join(srcDir, "CommentOnly.php");
+
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      commentOnlyFile,
+      [
+        "<?php",
+        "",
+        "// function GhostHelper() {}",
+        "/** class PhantomClass {} */",
+        "echo 'placeholder';",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      [
+        "<?php",
+        "",
+        "use function GhostHelper;",
+        "",
+        "$value = GhostHelper();",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await goToDefinition(index, {
+      file: consumerFile.replace(/\\/g, "/"),
+      line: 5,
+      column: 10,
+    });
+
+    expect(result.status).toBe("not_found");
+  });
+
   it("prefers namespace-level PHP const imports over class constants", async () => {
     const root = await mkTmpDir("dg-resolve-php-const-kind-");
     const srcDir = path.join(root, "src", "Domain");
@@ -1190,6 +1341,106 @@ describe("Import Resolution", () => {
     if (result.status === "ok") {
       expect(result.definition.file).toBe(constFile.replace(/\\/g, "/"));
       expect(result.definition.range.start.line).toBe(5);
+    }
+  });
+
+  it("does not index PHP const initializer identifiers as constants", async () => {
+    const root = await mkTmpDir("dg-resolve-php-const-initializer-");
+    const srcDir = path.join(root, "src");
+    const consumerFile = path.join(root, "consumer.php");
+    const constFile = path.join(srcDir, "Constants.php");
+
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      constFile,
+      [
+        "<?php",
+        "",
+        "const REAL_NAME = VALUE_ALIAS;",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      [
+        "<?php",
+        "",
+        "use const VALUE_ALIAS;",
+        "",
+        "$value = VALUE_ALIAS;",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await goToDefinition(index, {
+      file: consumerFile.replace(/\\/g, "/"),
+      line: 5,
+      column: 12,
+    });
+
+    expect(result.status).toBe("not_found");
+  });
+
+  it("resolves PHP imports from bracketed namespace blocks later in the same file", async () => {
+    const root = await mkTmpDir("dg-resolve-php-bracketed-namespace-");
+    const srcDir = path.join(root, "src");
+    const consumerFile = path.join(root, "consumer.php");
+    const libraryFile = path.join(srcDir, "Library.php");
+
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      libraryFile,
+      [
+        "<?php",
+        "",
+        "namespace App\\One {",
+        "    class FirstService {}",
+        "}",
+        "",
+        "namespace App\\Two {",
+        "    class SecondService {}",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      [
+        "<?php",
+        "",
+        "use App\\Two\\SecondService;",
+        "",
+        "$service = new SecondService();",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await goToDefinition(index, {
+      file: consumerFile.replace(/\\/g, "/"),
+      line: 5,
+      column: 17,
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.definition.file).toBe(libraryFile.replace(/\\/g, "/"));
+      expect(result.definition.range.start.line).toBe(8);
     }
   });
 

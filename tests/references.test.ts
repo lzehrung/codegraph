@@ -401,6 +401,21 @@ describe('Find References', () => {
         expectReferenceAt(result, consumerFile, 5);
       }
     });
+
+    it('should find references for classes declared in PHP bracketed namespace blocks', async () => {
+      const index = await createTestIndex('php');
+      const samplePath = path.resolve(process.cwd(), 'tests', 'samples', 'php');
+      const libraryFile = path.join(samplePath, 'multi-namespace', 'Library.php').replace(/\\/g, '/');
+      const consumerFile = path.join(samplePath, 'bracketed-consumer.php').replace(/\\/g, '/');
+
+      const result = await testFindReferences(index, libraryFile, 8, 11, 2);
+
+      expect(result.status).toBe('ok');
+      if (result.status === 'ok') {
+        expectReferenceAt(result, libraryFile, 8);
+        expectReferenceAt(result, consumerFile, 5);
+      }
+    });
   });
 
   describe('JavaScript', () => {

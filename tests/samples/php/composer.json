@@ -3,6 +3,7 @@
   "autoload": {
     "psr-4": {
       "App\\": "src/"
-    }
+    },
+    "classmap": ["multi-namespace/"]
   }
 }
