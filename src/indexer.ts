@@ -75,6 +75,16 @@ import {
   isGraphOnlyLanguage,
 } from "./documentLinks.js";
 import {
+  attemptParsePreparedFileContext,
+  ensureParsedContext as ensureParsedContextFromModule,
+  parseFile as parseFileFromModule,
+  parsePreparedFileContext,
+  prepareFileForIndexing,
+  type ParsedFileCacheEntry,
+  type ParsedFileContext,
+  type PreparedFileContext,
+} from "./indexer/parse-context.js";
+import {
   DEFAULT_REF_CONTEXT_LINES,
   QUERY_DRIVEN_LOCALS_LANGUAGES,
   compareEdges,
@@ -85,7 +95,6 @@ import {
 import type { Edge, Range, FileId, Graph } from "./types.js";
 import {
   executeJsQueryAsNativeMatches,
-  getNativeQueryExecution,
   getNativeSyntaxTreeExecution,
   isNativeQueryAuthoritative,
   isNativeQueryModified,
@@ -223,16 +232,7 @@ export type ProjectIndex = {
   exportCache: Map<string, ResolvedExport | null>;
   scopeCache: Map<string, ScopeIndex>;
   parsed?:
-    | Map<
-        string,
-        {
-          source: string;
-          tree: SyntaxTreeLike;
-          sup: LanguageSupport | undefined;
-          lang?: JsLanguage;
-          nativeQueries?: NativeQueryResults | null;
-        }
-      >
+    | Map<string, ParsedFileCacheEntry>
     | undefined;
   bloomFilters?: import("./util/bloomFilter.js").BloomFilterCache;
   projectFiles?: ProjectFileInfo[];
@@ -240,32 +240,6 @@ export type ProjectIndex = {
 export type ResolvedExport =
   | { kind: "resolved"; def: SymbolDef }
   | { kind: "namespace"; file: FileId };
-
-type ParsedFileContext = {
-  source: string;
-  tree: SyntaxTreeLike;
-  sup: LanguageSupport;
-  lang?: JsLanguage;
-  nativeQueries?: NativeQueryResults | null;
-};
-
-type PreparedFileContext = {
-  file: string;
-  source: string;
-  sup: LanguageSupport;
-  lang?: JsLanguage;
-  nativeMode?: NativeRuntimeMode;
-  nativeQueries: NativeQueryResults | null;
-  nativeFallbackReason?: NativeBackendFallbackReason;
-  nativeError?: string;
-};
-
-type PreparedFileParseAttempt = {
-  parsed: ParsedFileContext | null;
-  nativeFallbackReason?: NativeBackendFallbackReason;
-  nativeError?: string;
-  jsError?: string;
-};
 
 type IndexedFileGraphContext = {
   source: string;
@@ -279,66 +253,6 @@ type IndexedFileModuleResult = {
   module: ModuleIndex;
   graphContext: IndexedFileGraphContext;
 };
-
-function attemptParsePreparedFileContext(
-  context: PreparedFileContext,
-): PreparedFileParseAttempt {
-  const { file, source, sup, nativeMode, nativeQueries } = context;
-  const nativeTreeExecution = getNativeSyntaxTreeExecution(
-    source,
-    sup,
-    nativeMode,
-  );
-  if (nativeTreeExecution.tree) {
-    return {
-      parsed: {
-        source,
-        tree: new ProjectedSyntaxTree(source, nativeTreeExecution.tree),
-        sup,
-        nativeQueries,
-      },
-    };
-  }
-
-  try {
-    const resolvedLang = context.lang ?? sup.language(file);
-    const tree = parseWithJsLanguage(source, resolvedLang);
-    return {
-      parsed: { source, tree, sup, lang: resolvedLang, nativeQueries },
-      ...(nativeTreeExecution.fallbackReason
-        ? { nativeFallbackReason: nativeTreeExecution.fallbackReason }
-        : {}),
-      ...(nativeTreeExecution.error
-        ? { nativeError: nativeTreeExecution.error }
-        : {}),
-    };
-  } catch (error) {
-    return {
-      parsed: null,
-      ...(nativeTreeExecution.fallbackReason
-        ? { nativeFallbackReason: nativeTreeExecution.fallbackReason }
-        : {}),
-      ...(nativeTreeExecution.error
-        ? { nativeError: nativeTreeExecution.error }
-        : {}),
-      jsError: stringifyUnknown(error),
-    };
-  }
-}
-
-function tryParsePreparedFileContext(
-  context: PreparedFileContext,
-): ParsedFileContext | null {
-  return attemptParsePreparedFileContext(context).parsed;
-}
-
-function parsePreparedFileContext(
-  context: PreparedFileContext,
-): ParsedFileContext {
-  const parsed = tryParsePreparedFileContext(context);
-  if (parsed) return parsed;
-  throw new Error(`Failed to reconstruct syntax tree for ${context.file}`);
-}
 
 function initParserBackendDegradationReport(
   report: BuildReport | undefined,
@@ -4307,53 +4221,14 @@ export async function collectImportsForFile(
 }
 
 export async function parseFile(file: string): Promise<ParsedFileContext> {
-  return parsePreparedFileContext(await prepareFileForIndexing(file));
-}
-
-async function prepareFileForIndexing(
-  file: string,
-  native?: NativeRuntimeMode,
-): Promise<PreparedFileContext> {
-  const prep = await prepareSourceInput(file);
-  const nativeExecution = getNativeQueryExecution(
-    prep.source,
-    prep.sup,
-    native,
-  );
-
-  return {
-    file,
-    source: prep.source,
-    sup: prep.sup,
-    ...(native ? { nativeMode: native } : {}),
-    nativeQueries: nativeExecution.results,
-    ...(nativeExecution.fallbackReason
-      ? { nativeFallbackReason: nativeExecution.fallbackReason }
-      : {}),
-    ...(nativeExecution.error ? { nativeError: nativeExecution.error } : {}),
-  };
+  return await parseFileFromModule(file);
 }
 
 export async function ensureParsedContext(
   file: string,
-  parsedEntry?: {
-    source: string;
-    tree: SyntaxTreeLike;
-    sup: LanguageSupport | undefined;
-    lang?: JsLanguage;
-    nativeQueries?: NativeQueryResults | null;
-  },
+  parsedEntry?: ParsedFileCacheEntry,
 ): Promise<ParsedFileContext> {
-  if (parsedEntry?.sup) {
-    return {
-      source: parsedEntry.source,
-      tree: parsedEntry.tree,
-      sup: parsedEntry.sup,
-      ...(parsedEntry.lang ? { lang: parsedEntry.lang } : {}),
-      nativeQueries: parsedEntry.nativeQueries ?? null,
-    };
-  }
-  return parsePreparedFileContext(await prepareFileForIndexing(file));
+  return await ensureParsedContextFromModule(file, parsedEntry);
 }
 
 type ManifestMode = "off" | "read-only" | "read-write";
