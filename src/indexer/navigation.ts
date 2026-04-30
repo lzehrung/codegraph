@@ -3,15 +3,28 @@ import type { JsLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/ty
 import { ensureParsedContext } from "./parse-context.js";
 import { resolveMemberAccessDefinition } from "./navigation-goto.js";
 import {
+  findClosestBinding,
+  findDeclarationNameNode,
+  getOrBuildScopeIndex,
+  resolveNamedDefinition,
+} from "./navigation-local.js";
+import {
   getPhpQualifiedReference,
   inferPhpQualifiedReferenceImportType,
   normalizePhpQualifiedReference,
   readPhpNamespaceFromRange,
 } from "./navigation-php.js";
+import {
+  buildPhpQualifiedNames,
+  collectVerifiedNamedNodeReferences,
+  getCachedScope,
+  getCandidateReferenceNames,
+  hasExpandedNamedImport,
+} from "./navigation-references.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
 import { extractEnclosingBlock, extractLineContext, rangeContains, sameDef } from "./reference-context.js";
 import { DEFAULT_REF_CONTEXT_LINES } from "./shared.js";
-import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
+import { type ScopeIndex } from "./scope.js";
 import { type FileId, type Range } from "../types.js";
 import { resolveImportSpecifier, sliceText, toRange } from "../util.js";
 import {
@@ -65,35 +78,7 @@ export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Pro
   const phpQualifiedReference = sup.id === "php" ? getPhpQualifiedReference(node, source) : null;
 
   if (!name) {
-    const findDeclNameNode = (currentNode: SyntaxNodeLike | null): SyntaxNodeLike | null => {
-      let current: SyntaxNodeLike | null = currentNode;
-      while (current) {
-        if (
-          current.type === "function_declaration" ||
-          current.type === "class_declaration" ||
-          current.type === "variable_declarator" ||
-          current.type === "interface_declaration" ||
-          current.type === "type_alias_declaration" ||
-          current.type === "function_definition" ||
-          current.type === "class_definition" ||
-          current.type === "assignment"
-        ) {
-          let named = current.childForFieldName("name");
-          if (!named && current.type === "assignment") {
-            const left = current.child(0);
-            if (left && sup.nodeTypes.identifier.includes(left.type)) {
-              named = left;
-            }
-          }
-          if (named && sup.nodeTypes.identifier.includes(named.type)) {
-            return named;
-          }
-        }
-        current = current.parent;
-      }
-      return null;
-    };
-    const declNameNode = findDeclNameNode(node);
+    const declNameNode = findDeclarationNameNode(sup, node);
     if (declNameNode) {
       name = sliceText(declNameNode, source);
     }
@@ -150,151 +135,16 @@ export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Pro
   }
 
   if (name) {
-    let scopeIndex = index.scopeCache.get(file);
-    if (!scopeIndex) {
-      scopeIndex = buildScopeIndexFromSource(file, source, sup, lang, mod.imports, { tree });
-      index.scopeCache.set(file, scopeIndex);
-    }
-
-    const findClosestBinding = (bindingName: string, currentNode: SyntaxNodeLike): SymbolDef | null => {
-      let currentScope = scopeIndex.allScopes.find((scope) => {
-        const start = scope.node.startIndex;
-        const end = scope.node.endIndex;
-        return currentNode.startIndex >= start && currentNode.endIndex <= end;
-      });
-
-      if (currentScope) {
-        let best = currentScope;
-        for (const scope of scopeIndex.allScopes) {
-          if (
-            currentNode.startIndex >= scope.node.startIndex &&
-            currentNode.endIndex <= scope.node.endIndex &&
-            scope.node.startIndex >= best.node.startIndex &&
-            scope.node.endIndex <= best.node.endIndex
-          ) {
-            best = scope;
-          }
-        }
-        currentScope = best;
-      }
-
-      while (currentScope) {
-        const binding = currentScope.map.get(bindingName);
-        if (binding && binding.def) {
-          let kind = SymbolKind.Variable;
-          if (binding.kind === "function") {
-            kind = SymbolKind.Function;
-          } else if (binding.kind === "class") {
-            kind = SymbolKind.Class;
-          } else if (binding.kind === "type") {
-            kind = SymbolKind.TypeAlias;
-          }
-          return {
-            file,
-            localName: binding.name,
-            kind,
-            range: binding.def,
-          };
-        }
-        currentScope = currentScope.parent;
-      }
-      return null;
-    };
-
-    const local = findClosestBinding(name, node);
+    const scopeIndex = getOrBuildScopeIndex(index, file, source, sup, lang, mod, tree);
+    const local = findClosestBinding(scopeIndex, file, name, node);
     if (local) {
       return { status: "ok", definition: local };
     }
 
     if (sup.supportsCrossModuleSymbols) {
-      const hit = resolveExport(index, file, name);
-      if (hit?.kind === "resolved") {
-        return {
-          status: "ok",
-          definition: hit.def,
-          via: { exportedName: name },
-        };
-      }
-      if (hit?.kind === "namespace") {
-        const targetFile = hit.file;
-        const targetMod = index.byFile.get(targetFile);
-        if (targetMod) {
-          const firstExport = targetMod.exports.find((entry) => entry.type === "local");
-          if (firstExport) {
-            return {
-              status: "ok",
-              definition: firstExport.target,
-              via: { exportedName: name },
-            };
-          }
-        }
-      }
-
-      for (const imp of mod.imports) {
-        if (imp.kind === "default" && imp.local === name) {
-          const result = resolveImported(index, imp, "default");
-          if (result) {
-            const target = "namespace" in result ? null : result;
-            if (target) {
-              return {
-                status: "ok",
-                definition: target,
-                via: {
-                  ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
-                  exportedName: "default",
-                },
-              };
-            }
-          }
-        } else if (imp.kind === "named" && imp.local === name) {
-          const result = resolveImported(index, imp, imp.imported);
-          if (result) {
-            const target = "namespace" in result ? null : result;
-            if (target) {
-              return {
-                status: "ok",
-                definition: target,
-                via: {
-                  ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
-                  exportedName: imp.imported,
-                },
-              };
-            }
-          }
-        } else if (imp.kind === "star") {
-          const result = resolveImported(index, imp, name);
-          if (result) {
-            const target = "namespace" in result ? null : result;
-            if (target) {
-              return {
-                status: "ok",
-                definition: target,
-                via: {
-                  ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
-                  exportedName: name,
-                },
-              };
-            }
-          }
-        } else if (imp.kind === "namespace" && imp.localNS === name) {
-          const targetFile = typeof imp.resolved === "string" ? imp.resolved.replace(/\\/g, "/") : undefined;
-          if (targetFile) {
-            const targetMod = index.byFile.get(targetFile);
-            if (targetMod) {
-              const firstExport = targetMod.exports.find((entry) => entry.type === "local");
-              if (firstExport) {
-                return {
-                  status: "ok",
-                  definition: firstExport.target,
-                  via: {
-                    ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
-                    exportedName: firstExport.exportedAs,
-                  },
-                };
-              }
-            }
-          }
-        }
+      const resolvedName = resolveNamedDefinition(index, mod, file, name);
+      if (resolvedName) {
+        return resolvedName;
       }
     }
   }
@@ -303,11 +153,6 @@ export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Pro
     status: "not_found",
     reason: "No matching local or imported definition",
   };
-}
-
-function toModuleRef(resolved?: FileId | { external: string }): string | undefined {
-  if (!resolved) return undefined;
-  return typeof resolved === "string" ? resolved : resolved.external;
 }
 
 export async function findReferences(
@@ -345,35 +190,11 @@ export async function findReferences(
   const definitionFile = def.file;
   const parsedDef = index.parsed?.get(definitionFile);
   const parsedContext = await ensureParsedContext(definitionFile, parsedDef);
-  const getCachedScope = (
-    fileId: string,
-    moduleIndex: ModuleIndex,
-    parsedCtx: {
-      source: string;
-      sup: LanguageSupport;
-      lang?: JsLanguage;
-      tree: SyntaxTreeLike;
-    },
-  ): ScopeIndex => {
-    if (index.scopeCache.has(fileId)) return index.scopeCache.get(fileId)!;
-    const scopeIndex = buildScopeIndexFromSource(
-      fileId,
-      parsedCtx.source,
-      parsedCtx.sup,
-      parsedCtx.lang,
-      moduleIndex.imports,
-      {
-        tree: parsedCtx.tree,
-      },
-    );
-    index.scopeCache.set(fileId, scopeIndex);
-    return scopeIndex;
-  };
 
   const mod = index.byFile.get(definitionFile);
   if (!mod) return { status: "not_found", reason: "Module not found" };
 
-  const scope = getCachedScope(definitionFile, mod, parsedContext);
+  const scope = getCachedScope(index, definitionFile, mod, parsedContext);
   const refs: Reference[] = [];
   const maxReferences =
     typeof opts?.maxReferences === "number" && opts.maxReferences > 0 ? opts.maxReferences : undefined;
@@ -409,106 +230,7 @@ export async function findReferences(
   }
 
   const exportedNameSet = new Set(exportedNames);
-  let phpQualifiedNames: string[] = [];
-  try {
-    const definitionParsed = await ensureParsedContext(definitionFile, index.parsed?.get(definitionFile));
-    phpQualifiedNames =
-      definitionParsed.sup.id === "php"
-        ? (() => {
-            const phpNamespace = readPhpNamespaceFromRange(definitionParsed.tree, definitionParsed.source, def.range);
-            if (!phpNamespace) return [];
-            const qualifiedName = `${phpNamespace}\\${def.localName}`;
-            return [qualifiedName, `\\${qualifiedName}`];
-          })()
-        : [];
-  } catch {
-    phpQualifiedNames = [];
-  }
-
-  const collectNamedNodeReferences = async (fileId: string, symbolName: string): Promise<Range[]> => {
-    try {
-      const parsedEntry = index.parsed?.get(fileId);
-      const parsed = await ensureParsedContext(fileId, parsedEntry);
-      const identifierTypes = new Set<string>([
-        ...parsed.sup.nodeTypes.identifier,
-        ...(parsed.sup.nodeTypes.propertyIdentifier ?? []),
-        "constant",
-        "type_identifier",
-        "field_identifier",
-      ]);
-      const matches: Range[] = [];
-      const walk = (node: SyntaxNodeLike): void => {
-        if (identifierTypes.has(node.type) && sliceText(node, parsed.source) === symbolName) {
-          matches.push(toRange(node));
-        }
-        for (const child of node.namedChildren) {
-          walk(child);
-        }
-      };
-      walk(parsed.tree.rootNode);
-      return matches;
-    } catch {
-      return [];
-    }
-  };
-
-  const collectVerifiedNamedNodeReferences = async (
-    fileId: string,
-    symbolName: string,
-    expectedDef: SymbolDef,
-    maxVerified?: number,
-  ): Promise<Range[]> => {
-    const matches = await collectNamedNodeReferences(fileId, symbolName);
-    const verified: Range[] = [];
-    for (const range of matches) {
-      if (maxVerified !== undefined && maxVerified > 0 && verified.length >= maxVerified) {
-        break;
-      }
-      const resolved = await goToDefinition(index, {
-        file: fileId,
-        line: range.start.line,
-        column: range.start.column,
-      });
-      if (resolved.status !== "ok") continue;
-      if (sameDef(resolved.definition, expectedDef)) {
-        verified.push(range);
-      }
-    }
-    return verified;
-  };
-
-  const getCandidateReferenceNames = (module: ModuleIndex): string[] => {
-    const names = new Set<string>();
-    let hasDirectImport = false;
-
-    for (const imp of module.imports) {
-      const resolved = typeof imp.resolved === "string" ? imp.resolved : undefined;
-      if (!resolved || resolved !== definitionFile) continue;
-      hasDirectImport = true;
-
-      if (imp.kind === "named") {
-        if (exportedNameSet.has(imp.imported)) names.add(imp.local);
-      } else if (imp.kind === "default") {
-        if (exportedNameSet.has("default")) names.add(imp.local);
-      } else if (imp.kind === "namespace" || imp.kind === "star") {
-        for (const name of exportedNameSet) {
-          names.add(name);
-        }
-      }
-    }
-
-    if (!hasDirectImport) return [];
-    return Array.from(names);
-  };
-
-  const hasExpandedNamedImport = (module: ModuleIndex, targetFile: string, symbolName: string): boolean =>
-    module.imports.some(
-      (candidate) =>
-        candidate.kind === "named" &&
-        candidate.local === symbolName &&
-        candidate.imported === symbolName &&
-        candidate.resolved === targetFile,
-    );
+  const phpQualifiedNames = await buildPhpQualifiedNames(index, definitionFile, def);
 
   let candidateFiles = Array.from(index.byFile.keys()).filter((candidateFile) => candidateFile !== definitionFile);
   candidateFiles.sort((left, right) => left.localeCompare(right));
@@ -519,7 +241,7 @@ export async function findReferences(
       const filter = index.bloomFilters?.get(candidateFile);
       if (!filter) return true;
 
-      const aliases = getCandidateReferenceNames(module);
+      const aliases = getCandidateReferenceNames(module, definitionFile, exportedNameSet);
       if (aliases.length === 0) {
         return exportedNames.some((exportedName) => filter.mightContain(exportedName));
       }
@@ -537,7 +259,7 @@ export async function findReferences(
       if (!scopeIndex) {
         const parsedEntry = index.parsed?.get(fileId);
         const parsed = await ensureParsedContext(fileId, parsedEntry);
-        scopeIndex = getCachedScope(fileId, module, parsed);
+        scopeIndex = getCachedScope(index, fileId, module, parsed);
       }
       return scopeIndex;
     };
@@ -572,7 +294,14 @@ export async function findReferences(
           }
           const remainingReferences =
             maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
-          const ranges = await collectVerifiedNamedNodeReferences(fileId, exportedName, def, remainingReferences);
+          const ranges = await collectVerifiedNamedNodeReferences(
+            index,
+            fileId,
+            exportedName,
+            def,
+            (params) => goToDefinition(index, params),
+            remainingReferences,
+          );
           for (const range of ranges) {
             if (hasReachedMaxReferences()) break;
             pushRef({ file: fileId, range, via: { import: imp } });
@@ -606,7 +335,14 @@ export async function findReferences(
       const remainingReferences = maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
       for (const candidateName of [...exportedNames, ...phpQualifiedNames]) {
         if (hasReachedMaxReferences()) break;
-        const ranges = await collectVerifiedNamedNodeReferences(fileId, candidateName, def, remainingReferences);
+        const ranges = await collectVerifiedNamedNodeReferences(
+          index,
+          fileId,
+          candidateName,
+          def,
+          (params) => goToDefinition(index, params),
+          remainingReferences,
+        );
         for (const range of ranges) {
           if (hasReachedMaxReferences()) break;
           pushRef({ file: fileId, range });
