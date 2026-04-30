@@ -1,5 +1,5 @@
 import { type LanguageSupport } from "../languages.js";
-import type { JsLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext } from "./parse-context.js";
 import { resolveMemberAccessDefinition } from "./navigation-goto.js";
 import {
@@ -12,7 +12,6 @@ import {
   getPhpQualifiedReference,
   inferPhpQualifiedReferenceImportType,
   normalizePhpQualifiedReference,
-  readPhpNamespaceFromRange,
 } from "./navigation-php.js";
 import {
   buildPhpQualifiedNames,
@@ -30,10 +29,8 @@ import { resolveImportSpecifier, sliceText, toRange } from "../util.js";
 import {
   type GoToRequest,
   type GoToResult,
-  type ModuleIndex,
   type ProjectIndex,
   type Reference,
-  type ResolvedExport,
   type SymbolDef,
   SymbolKind,
 } from "./types.js";
