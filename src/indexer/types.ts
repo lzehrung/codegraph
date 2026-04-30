@@ -5,7 +5,7 @@ import type {
 import type { LogLevel } from "../logging.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { ScopeIndex } from "./scope.js";
-import type { ParsedFileCacheEntry } from "./parse-context.js";
+import type { ParsedFileContext } from "./parse-context.js";
 import type { Edge, FileId, Graph, Range } from "../types.js";
 import type { ProjectFileDiscoveryOptions, ProjectFileInfo } from "../util.js";
 
@@ -115,7 +115,7 @@ export type ProjectIndex = {
   nativeMode?: NativeRuntimeMode;
   exportCache: Map<string, ResolvedExport | null>;
   scopeCache: Map<string, ScopeIndex>;
-  parsed?: Map<string, ParsedFileCacheEntry> | undefined;
+  parsed?: Map<string, ParsedFileContext> | undefined;
   bloomFilters?: import("../util/bloomFilter.js").BloomFilterCache;
   projectFiles?: ProjectFileInfo[];
 };
