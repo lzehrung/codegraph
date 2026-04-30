@@ -571,7 +571,7 @@ export async function collectImportsForFile(
         for (const c of sub) {
           try {
             if (fs.existsSync(c)) {
-              nsResolved = fs.statSync(c).isDirectory() ? c : c;
+              nsResolved = c.replace(/\\/g, "/");
               break;
             }
           } catch {
