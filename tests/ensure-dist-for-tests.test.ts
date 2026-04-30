@@ -13,19 +13,12 @@ async function createTempRoot(): Promise<string> {
   return root;
 }
 
-async function setFileMtime(
-  filePath: string,
-  timestamp: Date,
-  contents = "export const value = 1;\n",
-): Promise<void> {
+async function setFileMtime(filePath: string, timestamp: Date, contents = "export const value = 1;\n"): Promise<void> {
   await fsp.writeFile(filePath, contents, "utf8");
   await fsp.utimes(filePath, timestamp, timestamp);
 }
 
-async function setFreshnessInputsTimestamp(
-  root: string,
-  timestamp: Date,
-): Promise<void> {
+async function setFreshnessInputsTimestamp(root: string, timestamp: Date): Promise<void> {
   await fsp.utimes(path.join(root, "package.json"), timestamp, timestamp);
   await fsp.utimes(path.join(root, "tsconfig.json"), timestamp, timestamp);
   await fsp.utimes(path.join(root, "src"), timestamp, timestamp);
@@ -36,14 +29,8 @@ describe("inspectDistForTests", () => {
     const root = await createTempRoot();
 
     try {
-      await setFreshnessInputsTimestamp(
-        root,
-        new Date("2026-04-27T12:00:00.000Z"),
-      );
-      await setFileMtime(
-        path.join(root, "src", "index.ts"),
-        new Date("2026-04-27T12:00:00.000Z"),
-      );
+      await setFreshnessInputsTimestamp(root, new Date("2026-04-27T12:00:00.000Z"));
+      await setFileMtime(path.join(root, "src", "index.ts"), new Date("2026-04-27T12:00:00.000Z"));
 
       expect(inspectDistForTests(root)).toMatchObject({
         needsBuild: true,

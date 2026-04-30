@@ -20,9 +20,7 @@ export interface LanguageSample {
   expectedChunks: (chunks: Chunk[]) => void; // Function to assert on chunks
 }
 
-export type GraphEdgeExpectation =
-  | { type: "file"; path: string }
-  | { type: "external"; name: string };
+export type GraphEdgeExpectation = { type: "file"; path: string } | { type: "external"; name: string };
 
 export interface DependencyGraphExpectation {
   from: string; // Path relative to tests/samples/<language>/

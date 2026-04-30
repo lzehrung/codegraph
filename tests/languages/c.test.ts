@@ -26,12 +26,7 @@ const definition: LanguageTestDefinition = {
     symbols: [
       {
         file: "advanced.h",
-        includes: [
-          { name: "DEFAULT_COUNT" },
-          { name: "AdvancedOptions" },
-          { name: "Mode" },
-          { name: "run_advanced" },
-        ],
+        includes: [{ name: "DEFAULT_COUNT" }, { name: "AdvancedOptions" }, { name: "Mode" }, { name: "run_advanced" }],
       },
       {
         file: "function-pointers.h",

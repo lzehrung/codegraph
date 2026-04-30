@@ -25,8 +25,7 @@ export const SWIFT_DEF: LanguageDefinition = {
       },
       {
         type: "property_declaration",
-        nameQuery:
-          "name: (pattern bound_identifier: (simple_identifier) @chunk.name)",
+        nameQuery: "name: (pattern bound_identifier: (simple_identifier) @chunk.name)",
         captureId: "property",
       },
       {
@@ -96,57 +95,26 @@ export const SWIFT_DEF: LanguageDefinition = {
     if (!parent) return "variable";
     if (parent.type === "function_declaration") return "function";
     if (parent.type === "protocol_function_declaration") return "function";
-    if (
-      parent.type === "class_declaration" ||
-      parent.type === "protocol_declaration"
-    )
-      return "class";
+    if (parent.type === "class_declaration" || parent.type === "protocol_declaration") return "class";
     if (parent.type === "typealias_declaration") return "type";
     return "variable";
   },
   isDeclarationName: (node) => {
     const parent = node.parent;
     if (!parent) return false;
-    if (
-      parent.type === "class_declaration" &&
-      parent.childForFieldName("name")?.id === node.id
-    )
+    if (parent.type === "class_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
+    if (parent.type === "protocol_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
+    if (parent.type === "function_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
+    if (parent.type === "typealias_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
+    if (parent.type === "parameter" && parent.childForFieldName("name")?.id === node.id) return true;
+    if (parent.type === "protocol_function_declaration" && parent.childForFieldName("name")?.id === node.id)
       return true;
-    if (
-      parent.type === "protocol_declaration" &&
-      parent.childForFieldName("name")?.id === node.id
-    )
-      return true;
-    if (
-      parent.type === "function_declaration" &&
-      parent.childForFieldName("name")?.id === node.id
-    )
-      return true;
-    if (
-      parent.type === "typealias_declaration" &&
-      parent.childForFieldName("name")?.id === node.id
-    )
-      return true;
-    if (
-      parent.type === "parameter" &&
-      parent.childForFieldName("name")?.id === node.id
-    )
-      return true;
-    if (
-      parent.type === "protocol_function_declaration" &&
-      parent.childForFieldName("name")?.id === node.id
-    )
-      return true;
-    if (
-      parent.type === "protocol_property_declaration" &&
-      parent.childForFieldName("name")?.id === node.id
-    )
+    if (parent.type === "protocol_property_declaration" && parent.childForFieldName("name")?.id === node.id)
       return true;
     if (
       parent.type === "pattern" &&
       parent.childForFieldName("bound_identifier")?.id === node.id &&
-      (parent.parent?.type === "property_declaration" ||
-        parent.parent?.type === "protocol_property_declaration")
+      (parent.parent?.type === "property_declaration" || parent.parent?.type === "protocol_property_declaration")
     )
       return true;
     return false;

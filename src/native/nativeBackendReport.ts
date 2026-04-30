@@ -37,9 +37,7 @@ function stringifyNativeLoadError(error: unknown): string | undefined {
   return stringifyUnknown(error);
 }
 
-export function initNativeBackendReport(
-  report: BuildReport | undefined,
-): BackendReport | undefined {
+export function initNativeBackendReport(report: BuildReport | undefined): BackendReport | undefined {
   if (!report) return undefined;
   if (!report.backend) {
     const loadError = stringifyNativeLoadError(getNativeTreeSitterLoadError());
@@ -84,29 +82,19 @@ function getOrCreateNativeLanguageReport(
       unsupportedLanguage: 0,
       queryFailure: 0,
     },
-    ...(metadata.normalizedQueryKinds.length > 0
-      ? { normalizedQueryKinds: [...metadata.normalizedQueryKinds] }
-      : {}),
-    ...(metadata.skippedQueryKinds.length > 0
-      ? { skippedQueryKinds: [...metadata.skippedQueryKinds] }
-      : {}),
+    ...(metadata.normalizedQueryKinds.length > 0 ? { normalizedQueryKinds: [...metadata.normalizedQueryKinds] } : {}),
+    ...(metadata.skippedQueryKinds.length > 0 ? { skippedQueryKinds: [...metadata.skippedQueryKinds] } : {}),
   };
   backend.native.byLanguage[support.id] = created;
   return created;
 }
 
-export function recordNativeBackendOutcome(
-  report: BuildReport | undefined,
-  outcome: NativeBackendOutcome,
-): void {
+export function recordNativeBackendOutcome(report: BuildReport | undefined, outcome: NativeBackendOutcome): void {
   const backend = initNativeBackendReport(report);
   if (!backend) return;
   const resolvedLanguageId = outcome.languageId ?? outcome.support?.id;
   if (outcome.support) {
-    const languageReport = getOrCreateNativeLanguageReport(
-      backend,
-      outcome.support,
-    );
+    const languageReport = getOrCreateNativeLanguageReport(backend, outcome.support);
     languageReport.filesSeen += 1;
     if (outcome.usedNative) {
       languageReport.filesUsed += 1;
@@ -123,12 +111,7 @@ export function recordNativeBackendOutcome(
   if (!outcome.fallbackReason) return;
   backend.native.filesFellBack += 1;
   backend.native.fallbackReasons[outcome.fallbackReason] += 1;
-  if (
-    outcome.error &&
-    outcome.file &&
-    resolvedLanguageId &&
-    backend.native.errors.length < 20
-  ) {
+  if (outcome.error && outcome.file && resolvedLanguageId && backend.native.errors.length < 20) {
     backend.native.errors.push({
       file: outcome.file,
       languageId: resolvedLanguageId,
@@ -138,18 +121,13 @@ export function recordNativeBackendOutcome(
   }
 }
 
-export function recordNativeExecutionOutcome(
-  report: BuildReport | undefined,
-  outcome: NativeExecutionOutcome,
-): void {
+export function recordNativeExecutionOutcome(report: BuildReport | undefined, outcome: NativeExecutionOutcome): void {
   recordNativeBackendOutcome(report, {
     usedNative: outcome.results !== null && outcome.results !== undefined,
     ...(outcome.support ? { support: outcome.support } : {}),
     ...(outcome.file ? { file: outcome.file } : {}),
     ...(outcome.languageId ? { languageId: outcome.languageId } : {}),
-    ...(outcome.fallbackReason
-      ? { fallbackReason: outcome.fallbackReason }
-      : {}),
+    ...(outcome.fallbackReason ? { fallbackReason: outcome.fallbackReason } : {}),
     ...(outcome.error ? { error: outcome.error } : {}),
   });
 }

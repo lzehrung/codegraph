@@ -11,7 +11,7 @@ class LegacyClass {
 
 module.exports = {
   legacyFunction,
-  LegacyClass
+  LegacyClass,
 };
 
 // Also export individual items

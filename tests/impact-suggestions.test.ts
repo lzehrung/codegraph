@@ -6,12 +6,7 @@ import { analyzeImpactFromDiff } from "../src/impact/index.js";
 import type { ImpactReport } from "../src/impact/types.js";
 import { buildProjectIndex } from "../src/index.js";
 
-const samplePath = path.resolve(
-  process.cwd(),
-  "tests",
-  "samples",
-  "impact-suggestions",
-);
+const samplePath = path.resolve(process.cwd(), "tests", "samples", "impact-suggestions");
 
 async function buildSampleReport(
   diffText: string,
@@ -31,24 +26,16 @@ async function buildSampleReport(
     provider: "raw",
     diffText,
     verifyReferences: options?.verifyReferences ?? true,
-    ...(options?.maxSuggestions !== undefined
-      ? { maxSuggestions: options.maxSuggestions }
-      : {}),
+    ...(options?.maxSuggestions !== undefined ? { maxSuggestions: options.maxSuggestions } : {}),
     ...(options?.configImpactRules ? { configImpactRules: true } : {}),
     ...(options?.detectBreakingChanges ? { detectBreakingChanges: true } : {}),
-    ...(options?.testCoverageSuggestions
-      ? { testCoverageSuggestions: true }
-      : {}),
+    ...(options?.testCoverageSuggestions ? { testCoverageSuggestions: true } : {}),
     ...(options?.lcovPaths ? { lcovPaths: options.lcovPaths } : {}),
     ...(options?.coveragePaths ? { coveragePaths: options.coveragePaths } : {}),
-    ...(options?.testCommandTemplate
-      ? { testCommandTemplate: options.testCommandTemplate }
-      : {}),
+    ...(options?.testCommandTemplate ? { testCommandTemplate: options.testCommandTemplate } : {}),
   })) as ImpactReport;
   return report;
 }
-
-
 
 async function buildReportForRoot(
   root: string,
@@ -69,19 +56,13 @@ async function buildReportForRoot(
     provider: "raw",
     diffText,
     verifyReferences: options?.verifyReferences ?? true,
-    ...(options?.maxSuggestions !== undefined
-      ? { maxSuggestions: options.maxSuggestions }
-      : {}),
+    ...(options?.maxSuggestions !== undefined ? { maxSuggestions: options.maxSuggestions } : {}),
     ...(options?.configImpactRules ? { configImpactRules: true } : {}),
     ...(options?.detectBreakingChanges ? { detectBreakingChanges: true } : {}),
-    ...(options?.testCoverageSuggestions
-      ? { testCoverageSuggestions: true }
-      : {}),
+    ...(options?.testCoverageSuggestions ? { testCoverageSuggestions: true } : {}),
     ...(options?.lcovPaths ? { lcovPaths: options.lcovPaths } : {}),
     ...(options?.coveragePaths ? { coveragePaths: options.coveragePaths } : {}),
-    ...(options?.testCommandTemplate
-      ? { testCommandTemplate: options.testCommandTemplate }
-      : {}),
+    ...(options?.testCommandTemplate ? { testCommandTemplate: options.testCommandTemplate } : {}),
   })) as ImpactReport;
   return report;
 }
@@ -129,17 +110,13 @@ index 1111111..2222222 100644
     expect(missingExport?.confidence).toBe("medium");
 
     const sharedUtilImport = suggestions.find(
-      (suggestion) =>
-        suggestion.kind === "missingImport" &&
-        suggestion.symbol === "sharedUtil",
+      (suggestion) => suggestion.kind === "missingImport" && suggestion.symbol === "sharedUtil",
     );
     expect(sharedUtilImport).toBeDefined();
     expect(sharedUtilImport?.confidence).toBe("low");
 
     const missingDeclaration = suggestions.find(
-      (suggestion) =>
-        suggestion.kind === "missingDeclaration" &&
-        suggestion.symbol === "undeclaredFunction",
+      (suggestion) => suggestion.kind === "missingDeclaration" && suggestion.symbol === "undeclaredFunction",
     );
     expect(missingDeclaration).toBeDefined();
     expect(missingDeclaration?.confidence).toBe("medium");
@@ -222,9 +199,7 @@ index 1111111..2222222 100644
       configImpactRules: true,
     });
 
-    const config = (report.suggestions ?? []).find(
-      (entry) => entry.kind === "configImpact",
-    );
+    const config = (report.suggestions ?? []).find((entry) => entry.kind === "configImpact");
     expect(config).toBeDefined();
     expect(config?.details?.toLowerCase().includes("dependency")).toBe(true);
   });
@@ -247,9 +222,7 @@ index 1111111..2222222 100644
       configImpactRules: true,
     });
 
-    const config = (report.suggestions ?? []).find(
-      (entry) => entry.kind === "configImpact",
-    );
+    const config = (report.suggestions ?? []).find((entry) => entry.kind === "configImpact");
     expect(config).toBeDefined();
     expect(config?.details?.toLowerCase().includes("dependency")).toBe(true);
   });
@@ -274,9 +247,7 @@ index 1111111..2222222 100644
       detectBreakingChanges: true,
     });
     const suggestions = report.suggestions ?? [];
-    const breaking = suggestions.find(
-      (entry) => entry.kind === "breakingChange",
-    );
+    const breaking = suggestions.find((entry) => entry.kind === "breakingChange");
     expect(breaking).toBeDefined();
   });
 
@@ -329,10 +300,7 @@ index 1111111..2222222 100644
     });
 
     const breaking = (report.suggestions ?? []).find(
-      (entry) =>
-        entry.kind === "breakingChange" &&
-        entry.symbol === "default" &&
-        entry.confidence === "high",
+      (entry) => entry.kind === "breakingChange" && entry.symbol === "default" && entry.confidence === "high",
     );
     expect(breaking).toBeDefined();
   });
@@ -353,10 +321,7 @@ index 1111111..2222222 100644
     });
 
     const breaking = (report.suggestions ?? []).find(
-      (entry) =>
-        entry.kind === "breakingChange" &&
-        entry.symbol === "helperFunction" &&
-        entry.confidence === "high",
+      (entry) => entry.kind === "breakingChange" && entry.symbol === "helperFunction" && entry.confidence === "high",
     );
     expect(breaking).toBeDefined();
   });
@@ -520,8 +485,7 @@ index 1111111..2222222 100644
     });
 
     const helperBreakings = (report.suggestions ?? []).filter(
-      (entry) =>
-        entry.kind === "breakingChange" && entry.symbol === "helperFunction",
+      (entry) => entry.kind === "breakingChange" && entry.symbol === "helperFunction",
     );
     expect(helperBreakings).toHaveLength(1);
     expect(helperBreakings[0]?.confidence).toBe("high");
@@ -543,10 +507,7 @@ index 1111111..2222222 100644
       testCoverageSuggestions: true,
     });
     const suggestions = report.suggestions ?? [];
-    const untested = suggestions.find(
-      (entry) =>
-        entry.kind === "untestedChange" && entry.symbol === "helperFunction",
-    );
+    const untested = suggestions.find((entry) => entry.kind === "untestedChange" && entry.symbol === "helperFunction");
     expect(untested).toBeDefined();
     expect(untested?.details?.includes("Candidate tests:")).toBe(false);
   });
@@ -554,21 +515,9 @@ index 1111111..2222222 100644
   it("keeps untested-change candidate tests scoped to the changed file", async () => {
     const root = await mkTmpDir("dg-impact-untested-scope-");
     try {
-      await fsp.writeFile(
-        path.join(root, "a.ts"),
-        "export function alpha() { return 1; }\n",
-        "utf8",
-      );
-      await fsp.writeFile(
-        path.join(root, "b.ts"),
-        "export function beta() { return 2; }\n",
-        "utf8",
-      );
-      await fsp.writeFile(
-        path.join(root, "b.test.ts"),
-        "import { beta } from './b';\nbeta();\n",
-        "utf8",
-      );
+      await fsp.writeFile(path.join(root, "a.ts"), "export function alpha() { return 1; }\n", "utf8");
+      await fsp.writeFile(path.join(root, "b.ts"), "export function beta() { return 2; }\n", "utf8");
+      await fsp.writeFile(path.join(root, "b.test.ts"), "import { beta } from './b';\nbeta();\n", "utf8");
 
       const diffText = `diff --git a/a.ts b/a.ts
 index 1111111..2222222 100644
@@ -622,23 +571,17 @@ index 1111111..2222222 100644
       });
 
       const untested = (report.suggestions ?? []).find(
-        (entry) =>
-          entry.kind === "untestedChange" && entry.symbol === "helperFunction",
+        (entry) => entry.kind === "untestedChange" && entry.symbol === "helperFunction",
       );
       expect(untested).toBeDefined();
       expect(untested?.confidence).toBe("high");
-      expect(untested?.details?.includes("Coverage currently exercises 0/")).toBe(
-        true,
-      );
+      expect(untested?.details?.includes("Coverage currently exercises 0/")).toBe(true);
       expect(untested?.details?.includes("Suggested command:")).toBe(true);
-      expect(untested?.details?.includes("npm run test -- helpers.test.ts.")).toBe(
-        false,
-      );
+      expect(untested?.details?.includes("npm run test -- helpers.test.ts.")).toBe(false);
     } finally {
       await fsp.rm(lcovPath, { force: true });
     }
   });
-
 
   it("adds tsconfig alias blast-radius details when path keys change", async () => {
     const root = await mkTmpDir("dg-impact-tsconfig-");
@@ -691,9 +634,7 @@ index 1111111..2222222 100644
       verifyReferences: false,
       configImpactRules: true,
     });
-    const config = (report.suggestions ?? []).find(
-      (entry) => entry.kind === "configImpact",
-    );
+    const config = (report.suggestions ?? []).find((entry) => entry.kind === "configImpact");
     expect(config?.details?.includes("@shared/*")).toBe(true);
     expect(config?.details?.includes("main.ts")).toBe(true);
   });
@@ -714,9 +655,7 @@ index 1111111..2222222 100644
       verifyReferences: false,
       configImpactRules: true,
     });
-    const viteConfig = (viteReport.suggestions ?? []).find(
-      (entry) => entry.kind === "configImpact",
-    );
+    const viteConfig = (viteReport.suggestions ?? []).find((entry) => entry.kind === "configImpact");
     expect(viteConfig?.details?.toLowerCase().includes("entrypoint")).toBe(true);
 
     const nxDiff = `diff --git a/nx.json b/nx.json
@@ -735,9 +674,7 @@ index 1111111..2222222 100644
       verifyReferences: false,
       configImpactRules: true,
     });
-    const nxConfig = (nxReport.suggestions ?? []).find(
-      (entry) => entry.kind === "configImpact",
-    );
+    const nxConfig = (nxReport.suggestions ?? []).find((entry) => entry.kind === "configImpact");
     expect(nxConfig?.details?.toLowerCase().includes("monorepo")).toBe(true);
   });
 
@@ -773,9 +710,7 @@ index 1111111..2222222 100644
       const untested = (report.suggestions ?? []).find(
         (entry) => entry.kind === "untestedChange" && entry.symbol === "helperFunction",
       );
-      expect(untested?.details?.includes("Coverage currently exercises 0/")).toBe(
-        true,
-      );
+      expect(untested?.details?.includes("Coverage currently exercises 0/")).toBe(true);
     } finally {
       await fsp.rm(coveragePath, { force: true });
     }
@@ -791,15 +726,27 @@ index 1111111..2222222 100644
 `,
       "utf8",
     );
-    await fsp.writeFile(path.join(root, "a.ts"), `import { helperFunction } from "./helpers";
+    await fsp.writeFile(
+      path.join(root, "a.ts"),
+      `import { helperFunction } from "./helpers";
 export const a = helperFunction();
-`, "utf8");
-    await fsp.writeFile(path.join(root, "b.ts"), `import { helperFunction } from "./helpers";
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "b.ts"),
+      `import { helperFunction } from "./helpers";
 export const b = helperFunction();
-`, "utf8");
-    await fsp.writeFile(path.join(root, "c.ts"), `import { helperFunction } from "./helpers";
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "c.ts"),
+      `import { helperFunction } from "./helpers";
 export const c = helperFunction();
-`, "utf8");
+`,
+      "utf8",
+    );
 
     const diffText = `diff --git a/helpers.ts b/helpers.ts
 index 1111111..2222222 100644
@@ -819,9 +766,7 @@ index 1111111..2222222 100644
       (entry) => entry.kind === "untestedChange" && entry.symbol === "helperFunction",
     );
     expect(untested?.confidence).toBe("high");
-    expect(untested?.details?.includes("Suggested command: pnpm vitest")).toBe(
-      true,
-    );
+    expect(untested?.details?.includes("Suggested command: pnpm vitest")).toBe(true);
   });
 
   it("produces untested-change suggestions for Python symbols when tests do not reference the symbol", async () => {
@@ -850,8 +795,7 @@ index 1111111..2222222 100644
     });
 
     const untested = (report.suggestions ?? []).find(
-      (entry) =>
-        entry.kind === "untestedChange" && entry.symbol === "helper_function",
+      (entry) => entry.kind === "untestedChange" && entry.symbol === "helper_function",
     );
     expect(untested).toBeDefined();
   });
@@ -892,8 +836,7 @@ index 1111111..2222222 100644
     });
 
     const untested = (report.suggestions ?? []).find(
-      (entry) =>
-        entry.kind === "untestedChange" && entry.symbol === "helper_function",
+      (entry) => entry.kind === "untestedChange" && entry.symbol === "helper_function",
     );
     expect(untested).toBeUndefined();
   });
@@ -966,17 +909,13 @@ index 1111111..2222222 100644
         coveragePaths: [jsonPath],
       });
       const untested = (report.suggestions ?? []).find(
-        (entry) =>
-          entry.kind === "untestedChange" && entry.symbol === "helperFunction",
+        (entry) => entry.kind === "untestedChange" && entry.symbol === "helperFunction",
       );
       expect(untested?.details?.includes("Coverage currently exercises")).toBe(true);
-      expect(untested?.confidence === "low" || untested?.confidence === "medium").toBe(
-        true,
-      );
+      expect(untested?.confidence === "low" || untested?.confidence === "medium").toBe(true);
     } finally {
       await fsp.rm(lcovPath, { force: true });
       await fsp.rm(jsonPath, { force: true });
     }
   });
-
 });

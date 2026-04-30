@@ -31,13 +31,7 @@ function defaultTokenizer(text: string): number {
  * @returns Array of text chunks
  */
 export function chunkTextFile(opts: TextChunkOptions): Chunk[] {
-  const {
-    source,
-    filePath,
-    languageId = "text",
-    maxTokens = 400,
-    tokenizer = defaultTokenizer,
-  } = opts;
+  const { source, filePath, languageId = "text", maxTokens = 400, tokenizer = defaultTokenizer } = opts;
 
   const lines = source.split(/\r?\n/);
   const chunks: Chunk[] = [];

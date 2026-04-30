@@ -5,21 +5,20 @@ $primary-color: #333;
 
 @mixin border-radius($radius) {
   -webkit-border-radius: $radius;
-     -moz-border-radius: $radius;
-      -ms-border-radius: $radius;
-          border-radius: $radius;
+  -moz-border-radius: $radius;
+  -ms-border-radius: $radius;
+  border-radius: $radius;
 }
 
-.box { 
-    @include border-radius(10px);
-    color: $primary-color;
-    
-    .nested {
-        display: none;
-    }
+.box {
+  @include border-radius(10px);
+  color: $primary-color;
+
+  .nested {
+    display: none;
+  }
 }
 
 @function calculate-width($n) {
   @return $n * 100px;
 }
-

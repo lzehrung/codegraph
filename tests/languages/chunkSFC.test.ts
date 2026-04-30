@@ -5,8 +5,7 @@ import { describe, it, expect } from "vitest";
 import { chunkSFCFile } from "../../src/chunking/chunkSFC.js";
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
-const sample = (name: string) =>
-  fs.readFileSync(path.join(dirname, "samples", name), "utf8");
+const sample = (name: string) => fs.readFileSync(path.join(dirname, "samples", name), "utf8");
 
 describe("chunkSFCFile", () => {
   it("chunks Vue single-file components across template/script/style blocks", () => {
@@ -34,4 +33,3 @@ describe("chunkSFCFile", () => {
     expect(chunks.some((c) => c.type.startsWith("template"))).toBe(true);
   });
 });
-

@@ -100,7 +100,6 @@ index 1234567..abcdef0 100644
       expect(diff.files[0].oldPath).toBe("oldname.ts");
     });
 
-
     it("should parse diff with copies as added files", () => {
       const diffText = `diff --git a/src/original.ts b/src/copied.ts
 similarity index 100%
@@ -157,7 +156,6 @@ index 1234567..abcdef0 100644
       expect(hunk?.lines).toContain("+  return 43;");
     });
 
-
     it("should parse hunks with both added and removed lines", () => {
       const diffText = `diff --git a/mixed.ts b/mixed.ts
 index 1111111..2222222 100644
@@ -197,7 +195,6 @@ new mode 100755
   });
 
   describe("Impact Analysis", () => {
-
     it("adds file-level fallback impact for mode-only changes", async () => {
       const root = await fsp.mkdtemp(path.join(process.cwd(), "tmp-impact-mode-only-"));
       try {
@@ -215,10 +212,7 @@ export const run = () => 1;
           "utf8",
         );
 
-        const index = await buildProjectIndexFromFiles(root, [
-          path.join(root, "main.ts"),
-          path.join(root, "setup.ts"),
-        ]);
+        const index = await buildProjectIndexFromFiles(root, [path.join(root, "main.ts"), path.join(root, "setup.ts")]);
 
         const diffText = `diff --git a/setup.ts b/setup.ts
 old mode 100644
@@ -231,11 +225,7 @@ new mode 100755
         });
 
         expect(
-          report.impacted.some(
-            (item) =>
-              item.file.endsWith("main.ts") &&
-              item.reasons.includes("fileLevelChange"),
-          ),
+          report.impacted.some((item) => item.file.endsWith("main.ts") && item.reasons.includes("fileLevelChange")),
         ).toBe(true);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
@@ -259,10 +249,7 @@ export const run = () => 1;
           "utf8",
         );
 
-        const index = await buildProjectIndexFromFiles(root, [
-          path.join(root, "main.ts"),
-          path.join(root, "setup.ts"),
-        ]);
+        const index = await buildProjectIndexFromFiles(root, [path.join(root, "main.ts"), path.join(root, "setup.ts")]);
 
         const diffText = `diff --git a/setup.ts b/setup.ts
 index 1234567..abcdef0 100644
@@ -279,11 +266,7 @@ index 1234567..abcdef0 100644
         });
 
         expect(
-          report.impacted.some(
-            (item) =>
-              item.file.endsWith("main.ts") &&
-              item.reasons.includes("fileLevelChange"),
-          ),
+          report.impacted.some((item) => item.file.endsWith("main.ts") && item.reasons.includes("fileLevelChange")),
         ).toBe(true);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
@@ -291,9 +274,7 @@ index 1234567..abcdef0 100644
     });
 
     it("normalizes rename oldPath before fallback seeding", async () => {
-      const root = await fsp.mkdtemp(
-        path.join(process.cwd(), "tmp-impact-rename-normalize-"),
-      );
+      const root = await fsp.mkdtemp(path.join(process.cwd(), "tmp-impact-rename-normalize-"));
       try {
         await fsp.writeFile(
           path.join(root, "consumer.ts"),
@@ -330,9 +311,7 @@ rename to setup-renamed.ts
           diffText,
         });
 
-        expect(
-          report.impacted.some((item) => item.file.endsWith("consumer.ts")),
-        ).toBe(true);
+        expect(report.impacted.some((item) => item.file.endsWith("consumer.ts"))).toBe(true);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
@@ -358,7 +337,7 @@ index 1234567..abcdef0 100644
 
       const report = await analyzeImpactFromDiff(samplePath, index, {
         provider: "raw",
-        diffText
+        diffText,
       });
 
       expect(report).toBeDefined();
@@ -369,12 +348,7 @@ index 1234567..abcdef0 100644
 
     it("rejects raw diff files outside the project root", async () => {
       const index = await createTestIndex("typescript");
-      const samplePath = path.resolve(
-        process.cwd(),
-        "tests",
-        "samples",
-        "typescript",
-      );
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
       const outsideFile = path.resolve(process.cwd(), "README.md").replace(/\\/g, "/");
 
       const diffText = `diff --git a/${outsideFile} b/${outsideFile}
@@ -396,12 +370,7 @@ index 1234567..abcdef0 100644
 
     it("should include project file metadata in impact reports", async () => {
       const index = await createTestIndex("typescript");
-      const samplePath = path.resolve(
-        process.cwd(),
-        "tests",
-        "samples",
-        "typescript",
-      );
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
 
       const diffText = `diff --git a/utils.ts b/utils.ts
 index 1234567..abcdef0 100644
@@ -423,9 +392,7 @@ index 1234567..abcdef0 100644
 
       const projectFiles = report.projectFiles ?? [];
       expect(projectFiles.length).toBeGreaterThan(0);
-      const tsconfig = projectFiles.find((entry) =>
-        entry.path.endsWith("/tsconfig.json"),
-      );
+      const tsconfig = projectFiles.find((entry) => entry.path.endsWith("/tsconfig.json"));
       expect(tsconfig?.type).toBe("typescript");
 
       const compact = await analyzeImpactFromDiff(samplePath, index, {
@@ -441,12 +408,7 @@ index 1234567..abcdef0 100644
 
     it("should include export summaries and top impacts", async () => {
       const index = await createTestIndex("typescript");
-      const samplePath = path.resolve(
-        process.cwd(),
-        "tests",
-        "samples",
-        "typescript",
-      );
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
 
       const diffText = `diff --git a/utils.ts b/utils.ts
 index 1234567..abcdef0 100644
@@ -461,16 +423,12 @@ index 1234567..abcdef0 100644
 
       const report = await analyzeImpactFromDiff(samplePath, index, {
         provider: "raw",
-        diffText
+        diffText,
       });
 
       const exportSummary = report.exportSummary ?? [];
-      const exportedChanged = report.changedSymbols.filter(
-        (symbol) => symbol.exported,
-      );
-      const exportedFiles = [
-        ...new Set(exportedChanged.map((symbol) => symbol.file)),
-      ].sort();
+      const exportedChanged = report.changedSymbols.filter((symbol) => symbol.exported);
+      const exportedFiles = [...new Set(exportedChanged.map((symbol) => symbol.file))].sort();
       const summaryFiles = exportSummary.map((entry) => entry.file).sort();
 
       // exportSummary should list every file that contains exported changed symbols.
@@ -495,12 +453,7 @@ index 1234567..abcdef0 100644
 
     it("should include reexport chains for exported changed symbols", async () => {
       const index = await createTestIndex("typescript");
-      const samplePath = path.resolve(
-        process.cwd(),
-        "tests",
-        "samples",
-        "typescript",
-      );
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
 
       const diffText = `diff --git a/helpers.ts b/helpers.ts
 index 1234567..abcdef0 100644
@@ -527,20 +480,13 @@ index 1234567..abcdef0 100644
       const utilsFile = "utils.ts";
       const chains = report.reexportChains?.chains ?? [];
 
-      const helperChain = chains.find(
-        (entry) => entry.symbol === "helperFunction" && entry.file === helperFile,
-      );
+      const helperChain = chains.find((entry) => entry.symbol === "helperFunction" && entry.file === helperFile);
       expect(helperChain).toBeDefined();
-      expect(
-        helperChain?.paths.some(
-          (pathChain) =>
-            pathChain.join("::") === [helperFile, utilsFile].join("::"),
-        ),
-      ).toBe(true);
-
-      const anotherChain = chains.find(
-        (entry) => entry.symbol === "anotherHelper" && entry.file === helperFile,
+      expect(helperChain?.paths.some((pathChain) => pathChain.join("::") === [helperFile, utilsFile].join("::"))).toBe(
+        true,
       );
+
+      const anotherChain = chains.find((entry) => entry.symbol === "anotherHelper" && entry.file === helperFile);
       expect(anotherChain).toBeDefined();
       // anotherHelper is not re-exported from utils.ts in the fixtures.
       expect(anotherChain?.paths.length).toBe(0);
@@ -548,12 +494,7 @@ index 1234567..abcdef0 100644
 
     it("should compact reexport chains using file indices", async () => {
       const index = await createTestIndex("typescript");
-      const samplePath = path.resolve(
-        process.cwd(),
-        "tests",
-        "samples",
-        "typescript",
-      );
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
 
       const diffText = `diff --git a/helpers.ts b/helpers.ts
 index 1234567..abcdef0 100644
@@ -581,20 +522,15 @@ index 1234567..abcdef0 100644
 
       const chains = report.reexportChains?.chains ?? [];
       const helperChain = chains.find(
-        (entry) =>
-          entry.symbol === "helperFunction" &&
-          report.files[entry.file] === helperFile,
+        (entry) => entry.symbol === "helperFunction" && report.files[entry.file] === helperFile,
       );
       expect(helperChain).toBeDefined();
       const resolvedPaths = helperChain?.paths.map((pathChain) =>
         pathChain.map((fileIndex) => report.files[fileIndex]),
       );
-      expect(
-        resolvedPaths?.some(
-          (pathChain) =>
-            pathChain.join("::") === [helperFile, utilsFile].join("::"),
-        ),
-      ).toBe(true);
+      expect(resolvedPaths?.some((pathChain) => pathChain.join("::") === [helperFile, utilsFile].join("::"))).toBe(
+        true,
+      );
     });
 
     it("should include multiple reexport paths and respect depth limits", async () => {
@@ -619,24 +555,13 @@ index 1234567..abcdef0 100644
       await fsp.writeFile(libFile, `export const foo = 1;`);
       await fsp.writeFile(aFile, `export { foo } from "./lib";`);
       await fsp.writeFile(bFile, `export { foo } from "./lib";`);
-      await fsp.writeFile(
-        indexFile,
-        `export * from "./a";\nexport * from "./b";`,
-      );
+      await fsp.writeFile(indexFile, `export * from "./a";\nexport * from "./b";`);
       await fsp.writeFile(cFile, `export * from "./index";`);
       await fsp.writeFile(dFile, `export * from "./c";`);
       await fsp.writeFile(eFile, `export * from "./d";`);
 
       try {
-        const index = await buildProjectIndexFromFiles(root, [
-          libFile,
-          aFile,
-          bFile,
-          indexFile,
-          cFile,
-          dFile,
-          eFile,
-        ]);
+        const index = await buildProjectIndexFromFiles(root, [libFile, aFile, bFile, indexFile, cFile, dFile, eFile]);
 
         const diffText = `diff --git a/lib.ts b/lib.ts
 index 1234567..abcdef0 100644
@@ -671,12 +596,8 @@ index 1234567..abcdef0 100644
         for (const expectedPath of expected) {
           expect(paths).toContain(expectedPath);
         }
-        expect(rawPaths.some((pathChain) => pathChain.includes(relDFile))).toBe(
-          false,
-        );
-        expect(rawPaths.some((pathChain) => pathChain.includes(relEFile))).toBe(
-          false,
-        );
+        expect(rawPaths.some((pathChain) => pathChain.includes(relDFile))).toBe(false);
+        expect(rawPaths.some((pathChain) => pathChain.includes(relEFile))).toBe(false);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
@@ -684,12 +605,7 @@ index 1234567..abcdef0 100644
 
     it("should include surface area summaries", async () => {
       const index = await createTestIndex("typescript");
-      const samplePath = path.resolve(
-        process.cwd(),
-        "tests",
-        "samples",
-        "typescript",
-      );
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
 
       const diffText = `diff --git a/utils.ts b/utils.ts
 index 1234567..abcdef0 100644
@@ -714,30 +630,22 @@ index 1234567..abcdef0 100644
       expect(report.surfaceArea.topFanOut.length).toBeLessThanOrEqual(10);
 
       const changedFilePath = "utils.ts";
-      const changedEntry = report.surfaceArea.files.find(
-        (item) => item.file === changedFilePath,
-      );
+      const changedEntry = report.surfaceArea.files.find((item) => item.file === changedFilePath);
       if (changedEntry) {
         expect(changedEntry.changed).toBe(true);
       }
 
       if (report.impacted.length > 0) {
         const impactedFile = report.impacted[0]?.file;
-        const impactedEntry = report.surfaceArea.files.find(
-          (item) => item.file === impactedFile,
-        );
+        const impactedEntry = report.surfaceArea.files.find((item) => item.file === impactedFile);
         expect(impactedEntry?.impacted).toBe(true);
       }
 
       for (const file of report.surfaceArea.topFanIn) {
-        expect(
-          report.surfaceArea.files.some((entry) => entry.file === file),
-        ).toBe(true);
+        expect(report.surfaceArea.files.some((entry) => entry.file === file)).toBe(true);
       }
       for (const file of report.surfaceArea.topFanOut) {
-        expect(
-          report.surfaceArea.files.some((entry) => entry.file === file),
-        ).toBe(true);
+        expect(report.surfaceArea.files.some((entry) => entry.file === file)).toBe(true);
       }
     });
 
@@ -747,23 +655,23 @@ index 1234567..abcdef0 100644
           "/workspace/codegraph",
           {
             graph: {
-            nodes: new Set(["C:/repo/src/main.ts"]),
-            edges: [],
+              nodes: new Set(["C:/repo/src/main.ts"]),
+              edges: [],
+            },
+            modules: new Map(),
+            byFile: new Map(),
+            exportCache: new Map(),
+            scopeCache: new Map(),
+            projectFiles: [],
           },
-          modules: new Map(),
-          byFile: new Map(),
-          exportCache: new Map(),
-          scopeCache: new Map(),
-          projectFiles: [],
-        },
-        [
-          {
-            path: "C:/repo/src/main.ts",
-            kind: "modified",
-            oldPath: "C:/repo/src/main.ts",
-            hunks: [],
-          },
-        ],
+          [
+            {
+              path: "C:/repo/src/main.ts",
+              kind: "modified",
+              oldPath: "C:/repo/src/main.ts",
+              hunks: [],
+            },
+          ],
           [],
           [],
           [],
@@ -779,7 +687,7 @@ index 1234567..abcdef0 100644
 
       const report = await analyzeImpactFromDiff(samplePath, index, {
         provider: "raw",
-        diffText
+        diffText,
       });
 
       expect(report.changedFiles).toHaveLength(0);
@@ -810,7 +718,7 @@ index 1234567..0000000
       const report = await analyzeImpactFromDiff(samplePath, index, {
         provider: "raw",
         diffText,
-        depth: 2 // Enable transitive analysis
+        depth: 2, // Enable transitive analysis
       });
 
       expect(report).toBeDefined();
@@ -818,7 +726,7 @@ index 1234567..0000000
       expect(report.changedFiles[0].file).toBe("utils.ts");
 
       // Should have transitive impact from files that depend on the deleted file
-      const transitiveItems = report.impacted.filter(item => (item.depth ?? 0) > 0);
+      const transitiveItems = report.impacted.filter((item) => (item.depth ?? 0) > 0);
       if (transitiveItems.length > 0) {
         // If there are transitive items, they should have appropriate hints
         for (const item of transitiveItems) {
@@ -848,7 +756,7 @@ index 1234567..abcdef0 100644
 
       const report = await analyzeImpactFromDiff(samplePath, index, {
         provider: "raw",
-        diffText
+        diffText,
       });
 
       expect(report).toBeDefined();
@@ -890,12 +798,7 @@ index 1234567..abcdef0 100644
         }
       }
 
-      const candidates = listCandidateTestFiles(
-        index,
-        changedFiles,
-        changedSymbolIds,
-        { maxCandidates: 10 }
-      );
+      const candidates = listCandidateTestFiles(index, changedFiles, changedSymbolIds, { maxCandidates: 10 });
 
       expect(Array.isArray(candidates)).toBe(true);
 
@@ -908,9 +811,9 @@ index 1234567..abcdef0 100644
 
       // Candidates should be sorted by confidence (high first)
       if (candidates.length > 1) {
-        const highCount = candidates.filter(c => c.confidence === "high").length;
-        const mediumCount = candidates.filter(c => c.confidence === "medium").length;
-        const lowCount = candidates.filter(c => c.confidence === "low").length;
+        const highCount = candidates.filter((c) => c.confidence === "high").length;
+        const mediumCount = candidates.filter((c) => c.confidence === "medium").length;
+        const lowCount = candidates.filter((c) => c.confidence === "low").length;
 
         // High confidence should come first
         if (highCount > 0) {
@@ -945,7 +848,7 @@ index 1234567..abcdef0 100644
               kind: exp.target.kind,
               exported: true,
               range: exp.target.range,
-              typeOnly: false
+              typeOnly: false,
             };
             break;
           }
@@ -971,14 +874,12 @@ index 1234567..abcdef0 100644
           index,
           {
             provider: "raw",
-            diffText
-          }
+            diffText,
+          },
         );
 
         // Find the impact item that contains this symbol
-        const relevantImpact = report.impacted.find(item =>
-          item.symbols.includes(exportedSymbol.name)
-        );
+        const relevantImpact = report.impacted.find((item) => item.symbols.includes(exportedSymbol.name));
 
         if (relevantImpact?.explain?.hints) {
           expect(relevantImpact.explain.hints).toContain("exportChanged");
@@ -1002,10 +903,7 @@ index 1234567..abcdef0 100644
 
       for (const [file, mod] of index.byFile) {
         for (const local of mod.locals) {
-          if (
-            local.kind === SymbolKind.Function &&
-            local.range.end.line - local.range.start.line > 1
-          ) {
+          if (local.kind === SymbolKind.Function && local.range.end.line - local.range.start.line > 1) {
             functionSymbol = {
               id: `${file}::${local.localName}::${local.range.start.index}`,
               file,
@@ -1013,7 +911,7 @@ index 1234567..abcdef0 100644
               kind: local.kind,
               exported: false,
               range: local.range,
-              typeOnly: false
+              typeOnly: false,
             };
             break;
           }
@@ -1038,13 +936,13 @@ index 1234567..abcdef0 100644
           index,
           {
             provider: "raw",
-            diffText
-          }
+            diffText,
+          },
         );
 
         // Find impact items that might have signatureChanged hints
         const itemsWithHints = report.impacted.filter((item: ImpactItem) =>
-          item.explain?.hints?.includes("signatureChanged")
+          item.explain?.hints?.includes("signatureChanged"),
         );
 
         // The test passes if hints are generated appropriately (may not always trigger)
@@ -1068,18 +966,14 @@ index 1234567..abcdef0 100644
  }
 `;
 
-      const report = await analyzeImpactFromDiff(
-        path.resolve(process.cwd(), "tests", "samples", "typescript"),
-        index,
-        {
-          provider: "raw",
-          diffText,
-          compact: true
-        }
-      );
+      const report = await analyzeImpactFromDiff(path.resolve(process.cwd(), "tests", "samples", "typescript"), index, {
+        provider: "raw",
+        diffText,
+        compact: true,
+      });
 
-      if (!('files' in report)) {
-        throw new Error('Expected result to be a compact report');
+      if (!("files" in report)) {
+        throw new Error("Expected result to be a compact report");
       }
 
       // Verify compact report structure
@@ -1178,15 +1072,11 @@ index 1234567..abcdef0 100644
 +export function helperFunctionUpdated() {
 `;
 
-      const report = await analyzeImpactFromDiff(
-        path.resolve(process.cwd(), "tests", "samples", "typescript"),
-        index,
-        {
-          provider: "raw",
-          diffText,
-          compact: true,
-        },
-      );
+      const report = await analyzeImpactFromDiff(path.resolve(process.cwd(), "tests", "samples", "typescript"), index, {
+        provider: "raw",
+        diffText,
+        compact: true,
+      });
 
       if (!("files" in report)) {
         throw new Error("Expected result to be a compact report");
@@ -1217,15 +1107,11 @@ index 1234567..abcdef0 100644
  }
 `;
 
-      const report = await analyzeImpactFromDiff(
-        path.resolve(process.cwd(), "tests", "samples", "typescript"),
-        index,
-        {
-          provider: "raw",
-          diffText,
-          compact: false
-        }
-      );
+      const report = await analyzeImpactFromDiff(path.resolve(process.cwd(), "tests", "samples", "typescript"), index, {
+        provider: "raw",
+        diffText,
+        compact: false,
+      });
 
       // Verify regular report structure (uses file paths, not indices)
       expect(report).toHaveProperty("changedFiles");
@@ -1282,14 +1168,14 @@ index 1234567..abcdef0 100644
       const report = await analyzeImpactFromDiff(samplePath, index, {
         provider: "raw",
         diffText,
-        ignoreGlobs: ["**/utils.ts"]
+        ignoreGlobs: ["**/utils.ts"],
       });
 
       // utils.ts should be excluded from changedFiles and changedSymbols
-      expect(report.changedFiles.map(f => f.file)).toContain("main.ts");
-      expect(report.changedFiles.map(f => f.file)).not.toContain("utils.ts");
+      expect(report.changedFiles.map((f) => f.file)).toContain("main.ts");
+      expect(report.changedFiles.map((f) => f.file)).not.toContain("utils.ts");
 
-      const changedSymbolsFiles = report.changedSymbols.map(s => s.file);
+      const changedSymbolsFiles = report.changedSymbols.map((s) => s.file);
       expect(changedSymbolsFiles).toContain("main.ts");
       expect(changedSymbolsFiles).not.toContain("utils.ts");
     });
@@ -1311,7 +1197,7 @@ index 1234567..abcdef0 100644
       const report = await analyzeImpactFromDiff(samplePath, index, {
         provider: "raw",
         diffText,
-        ignoreGlobs: ["main.ts"]
+        ignoreGlobs: ["main.ts"],
       });
 
       expect(report.changedFiles).toEqual([]);
@@ -1335,7 +1221,7 @@ index 1234567..abcdef0 100644
       const report = await analyzeImpactFromDiff(samplePath, index, {
         provider: "raw",
         diffText,
-        ignoreGlobs: ["main.ts"]
+        ignoreGlobs: ["main.ts"],
       });
 
       expect(report.impacted.map((item) => item.file)).not.toContain("main.ts");

@@ -37,9 +37,7 @@ const symbolNodeToTripleNode = (node: SymbolNode): TripleNode => ({
   file: node.file,
   ...(node.docstring ? { docstring: node.docstring } : {}),
   ...(node.lineSpan ? { lineSpan: node.lineSpan } : {}),
-  ...(typeof node.complexity === "number"
-    ? { complexity: node.complexity }
-    : {}),
+  ...(typeof node.complexity === "number" ? { complexity: node.complexity } : {}),
 });
 
 const fileNode = (path: string): TripleNode => ({
@@ -54,18 +52,12 @@ const externalNode = (name: string): TripleNode => ({
   name,
 });
 
-export function graphToTriples(
-  fileGraph: Graph,
-  symbolGraph: SymbolGraph,
-): Triple[] {
+export function graphToTriples(fileGraph: Graph, symbolGraph: SymbolGraph): Triple[] {
   const triples: Triple[] = [];
 
   for (const edge of fileGraph.edges) {
     const subject = fileNode(edge.from);
-    const object =
-      edge.to.type === "file"
-        ? fileNode(edge.to.path)
-        : externalNode(edge.to.name);
+    const object = edge.to.type === "file" ? fileNode(edge.to.path) : externalNode(edge.to.name);
     triples.push({
       subject,
       predicate: "imports",

@@ -1,9 +1,4 @@
-import type {
-  SymbolGraph,
-  SymbolNode,
-  SymbolEdge,
-  SymbolNodeKind,
-} from "./graphs.js";
+import type { SymbolGraph, SymbolNode, SymbolEdge, SymbolNodeKind } from "./graphs.js";
 
 export type SymbolQuery = {
   text?: string;
@@ -23,8 +18,7 @@ export type GraphQuery =
   | { kind: "highestComplexityFunctions"; limit: number };
 
 const tokenize = (input: string): string[] =>
-  input.match(/[^\s"]+:"[^"]+"|"[^"]+"|\S+/g)?.map((token) => token.trim()) ??
-  [];
+  input.match(/[^\s"]+:"[^"]+"|"[^"]+"|\S+/g)?.map((token) => token.trim()) ?? [];
 
 const normalizeToken = (token: string): string =>
   token.startsWith('"') && token.endsWith('"') ? token.slice(1, -1) : token;
@@ -112,8 +106,7 @@ export function parseGraphQuery(input: string): GraphQuery | null {
   }
   if (lower.includes("affected") && lower.includes("module")) {
     const match =
-      /change (?:this )?module\s+["']?([^"']+)["']?/i.exec(text) ??
-      /module\s+["']?([^"']+)["']?/i.exec(text);
+      /change (?:this )?module\s+["']?([^"']+)["']?/i.exec(text) ?? /module\s+["']?([^"']+)["']?/i.exec(text);
     if (!match) return null;
     return {
       kind: "affectedFunctionsForModule",
@@ -134,26 +127,15 @@ const includesFolded = (value: string | undefined, needle: string): boolean => {
   return value.toLowerCase().includes(needle.toLowerCase());
 };
 
-export function querySymbols(
-  sg: SymbolGraph,
-  query: SymbolQuery,
-): SymbolNode[] {
+export function querySymbols(sg: SymbolGraph, query: SymbolQuery): SymbolNode[] {
   const textNeedle = query.text?.trim();
   return [...sg.nodes.values()].filter((node) => {
     if (query.kinds && !query.kinds.includes(node.kind)) return false;
-    if (query.nameIncludes && !includesFolded(node.name, query.nameIncludes))
-      return false;
-    if (query.fileIncludes && !includesFolded(node.file, query.fileIncludes))
-      return false;
-    if (
-      query.docstringIncludes &&
-      !includesFolded(node.docstring, query.docstringIncludes)
-    )
-      return false;
+    if (query.nameIncludes && !includesFolded(node.name, query.nameIncludes)) return false;
+    if (query.fileIncludes && !includesFolded(node.file, query.fileIncludes)) return false;
+    if (query.docstringIncludes && !includesFolded(node.docstring, query.docstringIncludes)) return false;
     if (textNeedle) {
-      const haystack = [node.name, node.file, node.docstring]
-        .filter(Boolean)
-        .join(" ");
+      const haystack = [node.name, node.file, node.docstring].filter(Boolean).join(" ");
       if (!includesFolded(haystack, textNeedle)) return false;
     }
     return true;
@@ -172,18 +154,10 @@ export type NeighborResult = {
   edges: SymbolEdge[];
 };
 
-export function querySymbolNeighbors(
-  sg: SymbolGraph,
-  query: NeighborQuery,
-): NeighborResult {
+export function querySymbolNeighbors(sg: SymbolGraph, query: NeighborQuery): NeighborResult {
   const direction = query.direction ?? "both";
-  const maxDepth =
-    typeof query.maxDepth === "number" && query.maxDepth > 0
-      ? query.maxDepth
-      : 1;
-  const labelFilter = query.edgeLabels?.length
-    ? new Set(query.edgeLabels)
-    : null;
+  const maxDepth = typeof query.maxDepth === "number" && query.maxDepth > 0 ? query.maxDepth : 1;
+  const labelFilter = query.edgeLabels?.length ? new Set(query.edgeLabels) : null;
 
   const outgoing = new Map<string, SymbolEdge[]>();
   const incoming = new Map<string, SymbolEdge[]>();
@@ -198,9 +172,7 @@ export function querySymbolNeighbors(
   }
 
   const visited = new Set<string>();
-  const frontier: Array<{ id: string; depth: number }> = [
-    { id: query.symbolId, depth: 0 },
-  ];
+  const frontier: Array<{ id: string; depth: number }> = [{ id: query.symbolId, depth: 0 }];
   visited.add(query.symbolId);
 
   const edgeSet = new Set<string>();
@@ -232,11 +204,7 @@ export function querySymbolNeighbors(
     }
   }
 
-  const edges = sg.edges.filter((edge) =>
-    edgeSet.has(`${edge.from}->${edge.to}::${edge.label ?? ""}`),
-  );
-  const nodes = [...visited]
-    .map((id) => sg.nodes.get(id))
-    .filter((node): node is SymbolNode => !!node);
+  const edges = sg.edges.filter((edge) => edgeSet.has(`${edge.from}->${edge.to}::${edge.label ?? ""}`));
+  const nodes = [...visited].map((id) => sg.nodes.get(id)).filter((node): node is SymbolNode => !!node);
   return { nodes, edges };
 }

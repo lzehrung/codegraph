@@ -15,10 +15,7 @@ import { describe, it, expect } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fsp from "node:fs/promises";
-import {
-  buildProjectIndex,
-  analyzeImpactFromDiff,
-} from "../src/index.js";
+import { buildProjectIndex, analyzeImpactFromDiff } from "../src/index.js";
 import type { CompactImpactReport, ImpactReport, ImpactItem } from "../src/impact/types.js";
 import { collectChangedLines } from "../src/impact/map.js";
 import { seedTransitiveFromFiles } from "../src/impact/analyzer.js";
@@ -29,17 +26,12 @@ import type { Edge } from "../src/types.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function nonCompact(
-  report: ImpactReport | CompactImpactReport,
-): ImpactReport {
+function nonCompact(report: ImpactReport | CompactImpactReport): ImpactReport {
   if ("files" in report) throw new Error("Expected non-compact ImpactReport");
   return report;
 }
 
-async function withTmpDir(
-  name: string,
-  fn: (dir: string) => Promise<void>,
-): Promise<void> {
+async function withTmpDir(name: string, fn: (dir: string) => Promise<void>): Promise<void> {
   // Use os.tmpdir() + mkdtemp for guaranteed uniqueness (safe under concurrent
   // Vitest workers) and to keep temp artifacts out of the repo working tree.
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), `codegraph-${name}-`));
@@ -61,14 +53,8 @@ describe("signatureChanged hint accuracy", () => {
       const consumer = path.join(root, "app.ts");
       // Write the POST-diff (new) file so the index and parsed source match the
       // new-file view that the diff hunks are interpreted against.
-      await fsp.writeFile(
-        file,
-        "export function add(a: number, b: number, c?: number): number { return a + b; }\n",
-      );
-      await fsp.writeFile(
-        consumer,
-        'import { add } from "./lib"; console.log(add(1, 2));\n',
-      );
+      await fsp.writeFile(file, "export function add(a: number, b: number, c?: number): number { return a + b; }\n");
+      await fsp.writeFile(consumer, 'import { add } from "./lib"; console.log(add(1, 2));\n');
       const index = await buildProjectIndex(root);
 
       // Diff: old signature → new signature (param added)
@@ -102,16 +88,9 @@ describe("signatureChanged hint accuracy", () => {
       // Write the POST-diff (new) file: body changed, params unchanged.
       await fsp.writeFile(
         file,
-        [
-          "export function compute(x: number): number {",
-          "  return x * 3;",
-          "}",
-        ].join("\n") + "\n",
+        ["export function compute(x: number): number {", "  return x * 3;", "}"].join("\n") + "\n",
       );
-      await fsp.writeFile(
-        consumer,
-        'import { compute } from "./lib"; console.log(compute(5));\n',
-      );
+      await fsp.writeFile(consumer, 'import { compute } from "./lib"; console.log(compute(5));\n');
       const index = await buildProjectIndex(root);
 
       // Diff: body changed on line 2, params on line 1 untouched
@@ -149,14 +128,8 @@ describe("signatureChanged hint accuracy", () => {
       const file = path.join(root, "lib.ts");
       const consumer = path.join(root, "app.ts");
       // Write the POST-diff (new) file: body changed, params unchanged.
-      await fsp.writeFile(
-        file,
-        "export function add(a: number): number { return a + 2; }\n",
-      );
-      await fsp.writeFile(
-        consumer,
-        'import { add } from "./lib"; console.log(add(1));\n',
-      );
+      await fsp.writeFile(file, "export function add(a: number): number { return a + 2; }\n");
+      await fsp.writeFile(consumer, 'import { add } from "./lib"; console.log(add(1));\n');
       const index = await buildProjectIndex(root);
 
       // Diff: only the body portion changed on the single line, params unchanged
@@ -212,9 +185,7 @@ describe("seedTransitiveFromFiles – always runs", () => {
     };
 
     const impacted = new Map<string, ImpactItem>();
-    const changedFiles = [
-      { path: deletedFile, kind: "deleted" as const, hunks: [] },
-    ];
+    const changedFiles = [{ path: deletedFile, kind: "deleted" as const, hunks: [] }];
 
     // Even with a non-empty changedSymbols we still want the deleted-file path seeded
     seedTransitiveFromFiles(index, impacted, changedFiles, {});
@@ -228,9 +199,7 @@ describe("seedTransitiveFromFiles – always runs", () => {
   it("does NOT add already-impacted files a second time", async () => {
     const libFile = path.resolve("src/lib.ts");
     const consumerFile = path.resolve("src/consumer.ts");
-    const edges: Edge[] = [
-      { from: consumerFile, to: { type: "file", path: libFile }, raw: "./lib" },
-    ];
+    const edges: Edge[] = [{ from: consumerFile, to: { type: "file", path: libFile }, raw: "./lib" }];
     const index: ProjectIndex = {
       graph: { nodes: new Set([libFile, consumerFile]), edges },
       modules: new Map(),
@@ -244,12 +213,7 @@ describe("seedTransitiveFromFiles – always runs", () => {
       [consumerFile, { file: consumerFile, severity: originalSeverity, symbols: [], reasons: ["directRef"], depth: 0 }],
     ]);
 
-    seedTransitiveFromFiles(
-      index,
-      impacted,
-      [{ path: libFile, kind: "deleted" as const, hunks: [] }],
-      {},
-    );
+    seedTransitiveFromFiles(index, impacted, [{ path: libFile, kind: "deleted" as const, hunks: [] }], {});
 
     // Existing entry must not be overwritten by the transitive seeder
     expect(impacted.get(consumerFile)?.severity).toBe(originalSeverity);
@@ -269,24 +233,18 @@ describe("collectChangedLines", () => {
   it("returns an empty set for a hunk whose lines array is empty", () => {
     // A hunk object with no line entries (zero changed lines) must not produce
     // any output – exercises the early-return path inside the hunk loop.
-    const lines = collectChangedLines([
-      { oldStart: 1, newStart: 1, lines: [] },
-    ]);
+    const lines = collectChangedLines([{ oldStart: 1, newStart: 1, lines: [] }]);
     expect(lines.size).toBe(0);
   });
 
   it("maps added lines to new-file positions", () => {
-    const lines = collectChangedLines([
-      { oldStart: 1, newStart: 1, lines: ["+new line"] },
-    ]);
+    const lines = collectChangedLines([{ oldStart: 1, newStart: 1, lines: ["+new line"] }]);
     expect(lines.has(1)).toBe(true);
   });
 
   it("maps deleted lines to the current new-file cursor position", () => {
     // A deletion at the start of a hunk (newStart=5)
-    const lines = collectChangedLines([
-      { oldStart: 5, newStart: 5, lines: ["-deleted"] },
-    ]);
+    const lines = collectChangedLines([{ oldStart: 5, newStart: 5, lines: ["-deleted"] }]);
     // Should map to newLine=5, not oldLine
     expect(lines.has(5)).toBe(true);
   });
@@ -341,19 +299,10 @@ describe("collectChangedLines", () => {
 describe("method_definition in isDeclarationName", () => {
   it("JS – a method-body edit is attributed to the enclosing class", async () => {
     await withTmpDir("method-def-js", async (root) => {
-      await fsp.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({ name: "test", type: "module" }),
-      );
+      await fsp.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "test", type: "module" }));
       await fsp.writeFile(
         path.join(root, "lib.js"),
-        [
-          "export class Calculator {",
-          "  add(a, b) {",
-          "    return a + b;",
-          "  }",
-          "}",
-        ].join("\n") + "\n",
+        ["export class Calculator {", "  add(a, b) {", "    return a + b;", "  }", "}"].join("\n") + "\n",
       );
       await fsp.writeFile(
         path.join(root, "app.js"),
@@ -380,19 +329,10 @@ describe("method_definition in isDeclarationName", () => {
 
   it("TS – a method-body edit is attributed to the enclosing class", async () => {
     await withTmpDir("method-def-ts", async (root) => {
-      await fsp.writeFile(
-        path.join(root, "tsconfig.json"),
-        JSON.stringify({ compilerOptions: { strict: true } }),
-      );
+      await fsp.writeFile(path.join(root, "tsconfig.json"), JSON.stringify({ compilerOptions: { strict: true } }));
       await fsp.writeFile(
         path.join(root, "service.ts"),
-        [
-          "export class UserService {",
-          "  fetchUser(id: number) {",
-          "    return { id };",
-          "  }",
-          "}",
-        ].join("\n") + "\n",
+        ["export class UserService {", "  fetchUser(id: number) {", "    return { id };", "  }", "}"].join("\n") + "\n",
       );
       await fsp.writeFile(
         path.join(root, "main.ts"),
@@ -422,31 +362,19 @@ describe("method_definition in isDeclarationName", () => {
 describe("TypeScript declare module augmentation", () => {
   it("creates an edge for declare module '...' {} augmentations", async () => {
     await withTmpDir("ts-ambient-module", async (root) => {
-      await fsp.writeFile(
-        path.join(root, "tsconfig.json"),
-        JSON.stringify({ compilerOptions: { strict: true } }),
-      );
+      await fsp.writeFile(path.join(root, "tsconfig.json"), JSON.stringify({ compilerOptions: { strict: true } }));
       // augmentation file that extends 'react' typings
       await fsp.writeFile(
         path.join(root, "react-augment.d.ts"),
-        [
-          `declare module "react" {`,
-          `  interface ComponentProps { "data-testid"?: string; }`,
-          `}`,
-        ].join("\n") + "\n",
+        [`declare module "react" {`, `  interface ComponentProps { "data-testid"?: string; }`, `}`].join("\n") + "\n",
       );
 
       const index = await buildProjectIndex(root);
 
       // There should be an edge from react-augment.d.ts to the external 'react' package
-      const augmentFile = path
-        .join(root, "react-augment.d.ts")
-        .replace(/\\/g, "/");
+      const augmentFile = path.join(root, "react-augment.d.ts").replace(/\\/g, "/");
       const edges = index.graph.edges.filter(
-        (e: Edge) =>
-          e.from === augmentFile &&
-          e.to.type === "external" &&
-          e.to.name === "react",
+        (e: Edge) => e.from === augmentFile && e.to.type === "external" && e.to.name === "react",
       );
       expect(edges.length).toBeGreaterThan(0);
       // Ambient module augmentations are purely type-level dependencies
@@ -473,7 +401,7 @@ describe("appendUniqueSpecifiers deduplication", () => {
           "<html>",
           "  <script src='./app.js'></script>",
           "  <script type='module'>",
-          "    import './app.js';",  // exact same specifier as src attribute
+          "    import './app.js';", // exact same specifier as src attribute
           "  </script>",
           "</html>",
         ].join("\n"),
@@ -485,10 +413,7 @@ describe("appendUniqueSpecifiers deduplication", () => {
       const appFile = path.join(root, "app.js").replace(/\\/g, "/");
 
       const edgesFromHtml = index.graph.edges.filter(
-        (e: Edge) =>
-          e.from === htmlFile &&
-          e.to.type === "file" &&
-          e.to.path === appFile,
+        (e: Edge) => e.from === htmlFile && e.to.type === "file" && e.to.path === appFile,
       );
 
       // Both extraction paths discovered ./app.js but it should appear once

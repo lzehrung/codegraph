@@ -39,12 +39,7 @@ const definition: LanguageTestDefinition = {
     symbols: [
       {
         file: "AdvancedTypes.cs",
-        includes: [
-          { name: "IRunnable" },
-          { name: "Toolbox" },
-          { name: "NestedTool" },
-          { name: "Execute" },
-        ],
+        includes: [{ name: "IRunnable" }, { name: "Toolbox" }, { name: "NestedTool" }, { name: "Execute" }],
       },
     ],
   },

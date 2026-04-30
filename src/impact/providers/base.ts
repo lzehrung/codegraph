@@ -24,11 +24,7 @@ function createProvider(providerType: string): DiffProvider {
   }
 }
 
-async function runGitCommand(
-  cwd: string,
-  args: string[],
-  rejectOnFailure: boolean,
-): Promise<string> {
+async function runGitCommand(cwd: string, args: string[], rejectOnFailure: boolean): Promise<string> {
   return await new Promise((resolve, reject) => {
     const child = spawn("git", args, { cwd });
     let stdout = "";
@@ -39,11 +35,7 @@ async function runGitCommand(
     const maybeResolve = () => {
       if (closeCode === null || !stdoutEnded) return;
       if (closeCode !== 0 && rejectOnFailure) {
-        reject(
-          new Error(
-            `git ${args.join(" ")} failed with code ${closeCode}: ${stderr}`,
-          ),
-        );
+        reject(new Error(`git ${args.join(" ")} failed with code ${closeCode}: ${stderr}`));
         return;
       }
       resolve(stdout.trim());
@@ -69,19 +61,13 @@ async function runGitCommand(
 
 // Forward declarations - will be implemented in separate files
 class GitDiffProvider implements DiffProvider {
-  async getDiff(
-    opts: Extract<DiffProviderOptions, { provider: "git" }>,
-  ): Promise<Diff> {
+  async getDiff(opts: Extract<DiffProviderOptions, { provider: "git" }>): Promise<Diff> {
     const cwd = opts.cwd || process.cwd();
 
     // Circuit breaker: check diff size first
     let warning: string | undefined;
     try {
-      const statOutput = await runGitCommand(
-        cwd,
-        ["diff", "--shortstat", `${opts.base}..${opts.head}`],
-        false,
-      );
+      const statOutput = await runGitCommand(cwd, ["diff", "--shortstat", `${opts.base}..${opts.head}`], false);
       if (statOutput) {
         const insertionMatch = statOutput.match(/(\d+) insertion/);
         const deletionMatch = statOutput.match(/(\d+) deletion/);
@@ -89,21 +75,14 @@ class GitDiffProvider implements DiffProvider {
         const deletions = deletionMatch ? parseInt(deletionMatch[1]!) : 0;
 
         if (insertions + deletions > 50000) {
-          warning = `Large diff detected (${(
-            insertions + deletions
-          ).toLocaleString()} lines). Impact analysis may be incomplete or slow.`;
+          warning = `Large diff detected (${(insertions + deletions).toLocaleString()} lines). Impact analysis may be incomplete or slow.`;
         }
       }
     } catch {
       // Ignore stat failures, proceed to full diff
     }
 
-    const args = [
-      "diff",
-      "--no-ext-diff",
-      "--unified=0",
-      `${opts.base}..${opts.head}`,
-    ];
+    const args = ["diff", "--no-ext-diff", "--unified=0", `${opts.base}..${opts.head}`];
 
     try {
       const child = spawn("git", args, { cwd });
@@ -125,17 +104,13 @@ class GitDiffProvider implements DiffProvider {
         });
       });
     } catch (error: unknown) {
-      throw new Error(
-        `Git diff failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      throw new Error(`Git diff failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }
 
 class GitHubDiffProvider implements DiffProvider {
-  async getDiff(
-    opts: Extract<DiffProviderOptions, { provider: "github" }>,
-  ): Promise<Diff> {
+  async getDiff(opts: Extract<DiffProviderOptions, { provider: "github" }>): Promise<Diff> {
     const [owner, repo] = opts.repo.split("/");
     const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${opts.pr}`;
     const res = await fetch(url, {
@@ -145,17 +120,14 @@ class GitHubDiffProvider implements DiffProvider {
         "User-Agent": "codegraph-impact",
       },
     });
-    if (!res.ok)
-      throw new Error(`GitHub PR diff failed: ${res.status} ${res.statusText}`);
+    if (!res.ok) throw new Error(`GitHub PR diff failed: ${res.status} ${res.statusText}`);
     const diffText = await res.text();
     return parseUnifiedDiff(diffText);
   }
 }
 
 class RawDiffProvider implements DiffProvider {
-  async getDiff(
-    opts: Extract<DiffProviderOptions, { provider: "raw" }>,
-  ): Promise<Diff> {
+  async getDiff(opts: Extract<DiffProviderOptions, { provider: "raw" }>): Promise<Diff> {
     return Promise.resolve(parseUnifiedDiff(opts.diffText));
   }
 }

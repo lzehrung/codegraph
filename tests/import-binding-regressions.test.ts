@@ -2,9 +2,7 @@ import { describe, expect, it } from "vitest";
 import path from "node:path";
 import { collectImportsForFile, parseFile } from "../src/indexer.js";
 
-function simplifyImports(
-  imports: Awaited<ReturnType<typeof collectImportsForFile>>,
-): unknown[] {
+function simplifyImports(imports: Awaited<ReturnType<typeof collectImportsForFile>>): unknown[] {
   return imports.map((entry) => ({
     kind: entry.kind,
     ...(entry.kind === "named"
@@ -19,10 +17,7 @@ function simplifyImports(
         }
       : {}),
     from: entry.from,
-    resolved:
-      typeof entry.resolved === "string"
-        ? entry.resolved.replace(/\\/g, "/")
-        : entry.resolved,
+    resolved: typeof entry.resolved === "string" ? entry.resolved.replace(/\\/g, "/") : entry.resolved,
   }));
 }
 

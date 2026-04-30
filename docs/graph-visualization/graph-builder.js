@@ -192,10 +192,7 @@ export function buildGraph(payload, options) {
         const parentFileKey = `f:${symbol.file}`;
         if (!graph.hasNode(parentFileKey)) return;
         const symbolKey = `s:${index}`;
-        const rawName =
-          typeof symbol.name === "string"
-            ? symbol.name
-            : symbolIdIndex?.[index] ?? symbolKey;
+        const rawName = typeof symbol.name === "string" ? symbol.name : (symbolIdIndex?.[index] ?? symbolKey);
         const symbolLabel = shortLabel(rawName) || symbolKey;
         addNodeIfMissing(graph, symbolKey, {
           label: symbolLabel,

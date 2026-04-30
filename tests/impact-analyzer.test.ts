@@ -19,8 +19,8 @@ describe("Impact Analyzer Edge Cases", () => {
         {
           path: "src/deleted-file.ts",
           kind: "deleted" as const,
-          hunks: []
-        }
+          hunks: [],
+        },
       ];
 
       const impacted = new Map();
@@ -65,8 +65,8 @@ describe("Impact Analyzer Edge Cases", () => {
           path: newPath,
           kind: "renamed" as const,
           oldPath,
-          hunks: []
-        }
+          hunks: [],
+        },
       ];
 
       const impacted = new Map();
@@ -75,18 +75,11 @@ describe("Impact Analyzer Edge Cases", () => {
 
       // Should handle renamed files with fileRenamed hint
       const impactedItems = Array.from(impacted.values());
-      expect(impactedItems.some((item) => item.file === dependentOnOld)).toBe(
-        true,
-      );
-      expect(impactedItems.some((item) => item.file === dependentOnNew)).toBe(
-        true,
-      );
-      expect(
-        impactedItems.some((item) => item.explain?.hints?.includes("fileRenamed")),
-      ).toBe(true);
+      expect(impactedItems.some((item) => item.file === dependentOnOld)).toBe(true);
+      expect(impactedItems.some((item) => item.file === dependentOnNew)).toBe(true);
+      expect(impactedItems.some((item) => item.explain?.hints?.includes("fileRenamed"))).toBe(true);
       expect(impactedItems.every((item) => item.confidence === 0.5)).toBe(true);
     });
-
 
     it("supports file-level fallback for modified files without symbols", async () => {
       const changedFile = path.resolve("src/setup.ts");
@@ -107,20 +100,13 @@ describe("Impact Analyzer Edge Cases", () => {
       };
 
       const impacted = new Map();
-      await seedTransitiveFromFiles(
-        index,
-        impacted,
-        [{ path: changedFile, kind: "modified", hunks: [] }],
-        {
-          includeTests: false,
-          fileLevelFallback: true,
-          fileLevelFallbackPaths: [changedFile],
-        },
-      );
+      await seedTransitiveFromFiles(index, impacted, [{ path: changedFile, kind: "modified", hunks: [] }], {
+        includeTests: false,
+        fileLevelFallback: true,
+        fileLevelFallbackPaths: [changedFile],
+      });
 
-      const fallbackItem = Array.from(impacted.values()).find(
-        (item) => item.file === dependentFile,
-      );
+      const fallbackItem = Array.from(impacted.values()).find((item) => item.file === dependentFile);
       expect(fallbackItem?.reasons).toContain("fileLevelChange");
     });
 
@@ -130,11 +116,7 @@ describe("Impact Analyzer Edge Cases", () => {
         const libFile = path.join(root, "lib.ts");
         const consumerFile = path.join(root, "consumer.ts");
         await fsp.writeFile(libFile, "export const lib = 1;\n", "utf8");
-        await fsp.writeFile(
-          consumerFile,
-          "import { lib } from './lib';\nexport const seen = lib;\n",
-          "utf8",
-        );
+        await fsp.writeFile(consumerFile, "import { lib } from './lib';\nexport const seen = lib;\n", "utf8");
 
         const index = await buildProjectIndexFromFiles(root, [libFile, consumerFile], {
           cache: "memory",
@@ -164,8 +146,8 @@ describe("Impact Analyzer Edge Cases", () => {
         {
           path: "src/utils.ts",
           kind: "deleted" as const,
-          hunks: []
-        }
+          hunks: [],
+        },
       ];
 
       const impactedWithTests = new Map();
@@ -178,7 +160,6 @@ describe("Impact Analyzer Edge Cases", () => {
       expect(impactedWithTests.size).toBeGreaterThanOrEqual(0);
       expect(impactedWithoutTests.size).toBeGreaterThanOrEqual(0);
     });
-
 
     it("ignores invalid custom test regex patterns", async () => {
       const featureFile = path.resolve("src/feature.ts");
@@ -199,12 +180,10 @@ describe("Impact Analyzer Edge Cases", () => {
       };
 
       const impacted = new Map();
-      await seedTransitiveFromFiles(
-        index,
-        impacted,
-        [{ path: featureFile, kind: "deleted", hunks: [] }],
-        { includeTests: false, testPatterns: ["[invalid"] },
-      );
+      await seedTransitiveFromFiles(index, impacted, [{ path: featureFile, kind: "deleted", hunks: [] }], {
+        includeTests: false,
+        testPatterns: ["[invalid"],
+      });
 
       expect(Array.from(impacted.values()).some((item) => item.file.endsWith("latest.ts"))).toBe(true);
     });
@@ -228,16 +207,12 @@ describe("Impact Analyzer Edge Cases", () => {
       };
 
       const impacted = new Map();
-      await seedTransitiveFromFiles(
-        index,
-        impacted,
-        [{ path: featureFile, kind: "deleted", hunks: [] }],
-        { includeTests: false },
-      );
+      await seedTransitiveFromFiles(index, impacted, [{ path: featureFile, kind: "deleted", hunks: [] }], {
+        includeTests: false,
+      });
 
       expect(Array.from(impacted.values()).some((item) => item.file.endsWith("latest.ts"))).toBe(true);
     });
-
 
     it("supports case-sensitive custom test patterns", async () => {
       const featureFile = path.resolve("src/feature.ts");
@@ -258,18 +233,12 @@ describe("Impact Analyzer Edge Cases", () => {
       };
 
       const impacted = new Map();
-      await seedTransitiveFromFiles(
-        index,
-        impacted,
-        [{ path: featureFile, kind: "deleted", hunks: [] }],
-        { includeTests: false, testPatterns: ["MyTests\\.ts$"] },
-      );
+      await seedTransitiveFromFiles(index, impacted, [{ path: featureFile, kind: "deleted", hunks: [] }], {
+        includeTests: false,
+        testPatterns: ["MyTests\\.ts$"],
+      });
 
-      expect(
-        Array.from(impacted.values()).some((item) =>
-          item.file.endsWith("MyTests.ts"),
-        ),
-      ).toBe(false);
+      expect(Array.from(impacted.values()).some((item) => item.file.endsWith("MyTests.ts"))).toBe(false);
     });
 
     it("supports custom test patterns", async () => {
@@ -295,26 +264,22 @@ describe("Impact Analyzer Edge Cases", () => {
         index,
         impactedWithoutPattern,
         [{ path: featureFile, kind: "deleted", hunks: [] }],
-        { includeTests: false },
+        {
+          includeTests: false,
+        },
       );
-      expect(
-        Array.from(impactedWithoutPattern.values()).some((item) =>
-          item.file.endsWith("feature.case.ts"),
-        ),
-      ).toBe(true);
+      expect(Array.from(impactedWithoutPattern.values()).some((item) => item.file.endsWith("feature.case.ts"))).toBe(
+        true,
+      );
 
       const impactedWithPattern = new Map();
-      await seedTransitiveFromFiles(
-        index,
-        impactedWithPattern,
-        [{ path: featureFile, kind: "deleted", hunks: [] }],
-        { includeTests: false, testPatterns: ["case\\.ts$"] },
+      await seedTransitiveFromFiles(index, impactedWithPattern, [{ path: featureFile, kind: "deleted", hunks: [] }], {
+        includeTests: false,
+        testPatterns: ["case\\.ts$"],
+      });
+      expect(Array.from(impactedWithPattern.values()).some((item) => item.file.endsWith("feature.case.ts"))).toBe(
+        false,
       );
-      expect(
-        Array.from(impactedWithPattern.values()).some((item) =>
-          item.file.endsWith("feature.case.ts"),
-        ),
-      ).toBe(false);
     });
   });
 
@@ -322,7 +287,7 @@ describe("Impact Analyzer Edge Cases", () => {
     it("should calculate severity with hints for exported symbols", async () => {
       const mockIndex = {
         graph: { edges: [] },
-        byFile: new Map()
+        byFile: new Map(),
       };
 
       const changedSymbol = {
@@ -332,12 +297,12 @@ describe("Impact Analyzer Edge Cases", () => {
         kind: SymbolKind.Function,
         exported: true,
         range: { start: { line: 1, column: 1, index: 100 }, end: { line: 3, column: 2, index: 150 } },
-        typeOnly: false
+        typeOnly: false,
       };
 
       const ref = {
         file: "user.ts",
-        range: { start: { line: 5, column: 10 } }
+        range: { start: { line: 5, column: 10 } },
       };
 
       const result = await calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndex);
@@ -350,7 +315,7 @@ describe("Impact Analyzer Edge Cases", () => {
     it("should apply depth decay correctly", async () => {
       const mockIndex = {
         graph: { edges: [] },
-        byFile: new Map()
+        byFile: new Map(),
       };
 
       const changedSymbol = {
@@ -360,12 +325,12 @@ describe("Impact Analyzer Edge Cases", () => {
         kind: SymbolKind.Function,
         exported: false,
         range: { start: { line: 1, column: 1, index: 100 }, end: { line: 3, column: 2, index: 150 } },
-        typeOnly: false
+        typeOnly: false,
       };
 
       const ref = {
         file: "user.ts",
-        range: { start: { line: 5, column: 10 } }
+        range: { start: { line: 5, column: 10 } },
       };
 
       const depth0 = await calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndex);
@@ -380,7 +345,7 @@ describe("Impact Analyzer Edge Cases", () => {
     it("should boost severity for same-file references", async () => {
       const mockIndex = {
         graph: { edges: [] },
-        byFile: new Map()
+        byFile: new Map(),
       };
 
       const changedSymbol = {
@@ -390,17 +355,17 @@ describe("Impact Analyzer Edge Cases", () => {
         kind: SymbolKind.Function,
         exported: false,
         range: { start: { line: 1, column: 1, index: 100 }, end: { line: 3, column: 2, index: 150 } },
-        typeOnly: false
+        typeOnly: false,
       };
 
       const sameFileRef = {
         file: "test.ts", // Same file
-        range: { start: { line: 5, column: 10 } }
+        range: { start: { line: 5, column: 10 } },
       };
 
       const differentFileRef = {
         file: "other.ts", // Different file
-        range: { start: { line: 5, column: 10 } }
+        range: { start: { line: 5, column: 10 } },
       };
 
       const sameFileResult = await calculateSeverity(changedSymbol, sameFileRef, ["directRef"], 0, mockIndex);
@@ -417,7 +382,7 @@ describe("Impact Analyzer Edge Cases", () => {
     it("should penalize type-only changes", async () => {
       const mockIndex = {
         graph: { edges: [] },
-        byFile: new Map()
+        byFile: new Map(),
       };
 
       const typeOnlySymbol = {
@@ -427,7 +392,7 @@ describe("Impact Analyzer Edge Cases", () => {
         kind: SymbolKind.TypeAlias,
         exported: false,
         range: { start: { line: 1, column: 1, index: 100 }, end: { line: 2, column: 20, index: 120 } },
-        typeOnly: true
+        typeOnly: true,
       };
 
       const runtimeSymbol = {
@@ -437,12 +402,12 @@ describe("Impact Analyzer Edge Cases", () => {
         kind: SymbolKind.Function,
         exported: false,
         range: { start: { line: 1, column: 1, index: 100 }, end: { line: 3, column: 2, index: 150 } },
-        typeOnly: false
+        typeOnly: false,
       };
 
       const ref = {
         file: "user.ts",
-        range: { start: { line: 5, column: 10 } }
+        range: { start: { line: 5, column: 10 } },
       };
 
       const typeOnlyResult = await calculateSeverity(typeOnlySymbol, ref, ["directRef"], 0, mockIndex);
@@ -459,15 +424,15 @@ describe("Impact Analyzer Edge Cases", () => {
           edges: [
             { to: { type: "file", path: "user.ts" } }, // One dependency
             { to: { type: "file", path: "user.ts" } }, // Another dependency
-            { to: { type: "file", path: "user.ts" } }  // Third dependency
-          ]
+            { to: { type: "file", path: "user.ts" } }, // Third dependency
+          ],
         },
-        byFile: new Map()
+        byFile: new Map(),
       };
 
       const mockIndexNoDeps = {
         graph: { edges: [] },
-        byFile: new Map()
+        byFile: new Map(),
       };
 
       const changedSymbol = {
@@ -477,12 +442,12 @@ describe("Impact Analyzer Edge Cases", () => {
         kind: SymbolKind.Function,
         exported: false,
         range: { start: { line: 1, column: 1, index: 100 }, end: { line: 3, column: 2, index: 150 } },
-        typeOnly: false
+        typeOnly: false,
       };
 
       const ref = {
         file: "user.ts",
-        range: { start: { line: 5, column: 10 } }
+        range: { start: { line: 5, column: 10 } },
       };
 
       const highFanInResult = await calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndexWithDeps);
@@ -499,7 +464,7 @@ describe("Impact Analyzer Edge Cases", () => {
     it("should reject invalid severity weights instead of silently repairing them", () => {
       const mockIndex = {
         graph: { edges: [] },
-        byFile: new Map()
+        byFile: new Map(),
       };
 
       const changedSymbol = {
@@ -509,19 +474,19 @@ describe("Impact Analyzer Edge Cases", () => {
         kind: SymbolKind.Function,
         exported: false,
         range: { start: { line: 1, column: 1, index: 100 }, end: { line: 3, column: 2, index: 150 } },
-        typeOnly: false
+        typeOnly: false,
       };
 
       const ref = {
         file: "user.ts",
-        range: { start: { line: 5, column: 10 } }
+        range: { start: { line: 5, column: 10 } },
       };
 
       expect(() =>
         calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndex, undefined, {
           ...DEFAULT_SEVERITY_WEIGHTS,
           depthDecay: 1,
-          sameFile: -1
+          sameFile: -1,
         }),
       ).toThrow(/Invalid severity weights/);
     });
@@ -529,12 +494,9 @@ describe("Impact Analyzer Edge Cases", () => {
     it("should use the cached graph fan-in fallback when no fan-in map is provided", () => {
       const mockIndex = {
         graph: {
-          edges: [
-            { to: { type: "file", path: "user.ts" } },
-            { to: { type: "file", path: "user.ts" } }
-          ]
+          edges: [{ to: { type: "file", path: "user.ts" } }, { to: { type: "file", path: "user.ts" } }],
         },
-        byFile: new Map()
+        byFile: new Map(),
       };
 
       const changedSymbol = {
@@ -544,12 +506,12 @@ describe("Impact Analyzer Edge Cases", () => {
         kind: SymbolKind.Function,
         exported: false,
         range: { start: { line: 1, column: 1, index: 100 }, end: { line: 3, column: 2, index: 150 } },
-        typeOnly: false
+        typeOnly: false,
       };
 
       const ref = {
         file: "user.ts",
-        range: { start: { line: 5, column: 10 } }
+        range: { start: { line: 5, column: 10 } },
       };
 
       const fallbackResult = calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndex);
@@ -559,7 +521,7 @@ describe("Impact Analyzer Edge Cases", () => {
         ["directRef"],
         0,
         mockIndex,
-        new Map([["user.ts", 2]])
+        new Map([["user.ts", 2]]),
       );
 
       expect(fallbackResult.explain.fanIn).toBe(2);
@@ -576,8 +538,8 @@ describe("Impact Analyzer Edge Cases", () => {
         {
           path: "src/deleted.ts",
           kind: "deleted" as const,
-          hunks: []
-        }
+          hunks: [],
+        },
       ];
 
       const result = await analyzeImpact(index, [], fileChanges, { depth: 1 });
@@ -606,33 +568,33 @@ describe("Impact Analyzer Edge Cases", () => {
               kind: local.kind,
               exported: false,
               range: local.range,
-              typeOnly: false
-            }
+              typeOnly: false,
+            },
           ];
 
           const fileChanges = [
             {
               path: firstFile,
               kind: "modified" as const,
-              hunks: []
-            }
+              hunks: [],
+            },
           ];
 
           const membersOnlyResult = await analyzeImpact(index, changedSymbols, fileChanges, {
             membersOnly: true,
-            depth: 2
+            depth: 2,
           });
 
           const withTransitiveResult = await analyzeImpact(index, changedSymbols, fileChanges, {
             membersOnly: false,
-            depth: 2
+            depth: 2,
           });
 
           // Members-only should limit depth to 0
-          expect(membersOnlyResult.every(item => (item.depth ?? 0) === 0)).toBe(true);
+          expect(membersOnlyResult.every((item) => (item.depth ?? 0) === 0)).toBe(true);
 
           // With transitive, there might be deeper items (depending on the graph)
-          const hasDeepItems = withTransitiveResult.some(item => (item.depth ?? 0) > 0);
+          const hasDeepItems = withTransitiveResult.some((item) => (item.depth ?? 0) > 0);
           expect(hasDeepItems || withTransitiveResult.length >= 0).toBe(true);
         }
       }
@@ -658,8 +620,8 @@ describe("Impact Analyzer Edge Cases", () => {
               kind: local.kind,
               exported: false,
               range: local.range,
-              typeOnly: false
-            }
+              typeOnly: false,
+            },
           ];
 
           const result = await analyzeImpact(index, changedSymbols, [], { maxRefs: 5 });
@@ -689,8 +651,8 @@ describe("Impact Analyzer Edge Cases", () => {
               kind: local.kind,
               exported: false,
               range: local.range,
-              typeOnly: true  // Mark as type-only
-            }
+              typeOnly: true, // Mark as type-only
+            },
           ];
 
           const result = await analyzeImpact(index, changedSymbols, [], {});

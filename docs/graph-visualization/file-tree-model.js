@@ -142,13 +142,19 @@ export function buildEdgeIndexes(payload) {
       if (!edge || typeof edge !== "object") continue;
       if (typeof edge.from === "number") {
         let list = fileEdgesByFrom.get(edge.from);
-        if (!list) { list = []; fileEdgesByFrom.set(edge.from, list); }
+        if (!list) {
+          list = [];
+          fileEdgesByFrom.set(edge.from, list);
+        }
         list.push(edge);
       }
       const to = edge.to;
       if (to && typeof to === "object" && to.type === "file" && typeof to.path === "number") {
         let list = fileEdgesByTo.get(to.path);
-        if (!list) { list = []; fileEdgesByTo.set(to.path, list); }
+        if (!list) {
+          list = [];
+          fileEdgesByTo.set(to.path, list);
+        }
         list.push(edge);
       }
     }
@@ -159,12 +165,18 @@ export function buildEdgeIndexes(payload) {
       if (!edge || typeof edge !== "object") continue;
       if (typeof edge.from === "number") {
         let list = symbolEdgesByFrom.get(edge.from);
-        if (!list) { list = []; symbolEdgesByFrom.set(edge.from, list); }
+        if (!list) {
+          list = [];
+          symbolEdgesByFrom.set(edge.from, list);
+        }
         list.push(edge);
       }
       if (typeof edge.to === "number") {
         let list = symbolEdgesByTo.get(edge.to);
-        if (!list) { list = []; symbolEdgesByTo.set(edge.to, list); }
+        if (!list) {
+          list = [];
+          symbolEdgesByTo.set(edge.to, list);
+        }
         list.push(edge);
       }
     }

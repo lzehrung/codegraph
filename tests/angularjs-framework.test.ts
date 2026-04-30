@@ -2,11 +2,7 @@ import { describe, expect, it } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import {
-  buildProjectIndex,
-  buildSymbolGraphDetailed,
-  collectGraph,
-} from "../src/index.js";
+import { buildProjectIndex, buildSymbolGraphDetailed, collectGraph } from "../src/index.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -14,14 +10,7 @@ async function mkTmpDir(prefix: string): Promise<string> {
 
 const normalizePath = (value: string): string => value.replace(/\\/g, "/");
 const frameworkSamplePath = (...parts: string[]): string =>
-  path.resolve(
-    process.cwd(),
-    "tests",
-    "samples",
-    "frameworks",
-    "angularjs",
-    ...parts,
-  );
+  path.resolve(process.cwd(), "tests", "samples", "frameworks", "angularjs", ...parts);
 
 describe("AngularJS framework characterization", () => {
   it("keeps useful baseline JS import and symbol-use edges inside controller bodies", async () => {
@@ -31,9 +20,7 @@ describe("AngularJS framework characterization", () => {
     const graph = await collectGraph(root, Array.from(index.byFile.keys()));
     const detailed = await buildSymbolGraphDetailed(index);
 
-    const controllerFile = normalizePath(
-      path.join(root, "user.controller.js"),
-    );
+    const controllerFile = normalizePath(path.join(root, "user.controller.js"));
     const serviceFile = normalizePath(path.join(root, "user.service.js"));
     const controllerModule = index.byFile.get(controllerFile);
     expect(controllerModule?.imports).toEqual(
@@ -50,9 +37,7 @@ describe("AngularJS framework characterization", () => {
     expect(
       graph.edges.some(
         (edge) =>
-          edge.from === controllerFile &&
-          edge.to.type === "file" &&
-          normalizePath(edge.to.path) === serviceFile,
+          edge.from === controllerFile && edge.to.type === "file" && normalizePath(edge.to.path) === serviceFile,
       ),
     ).toBe(true);
 
@@ -60,36 +45,23 @@ describe("AngularJS framework characterization", () => {
       ...node,
       file: normalizePath(node.file),
     }));
-    const refreshDef = nodes.find(
-      (node) => node.file === controllerFile && node.name === "refresh",
-    );
+    const refreshDef = nodes.find((node) => node.file === controllerFile && node.name === "refresh");
     const importedUserService = nodes.find(
-      (node) =>
-        node.file === controllerFile &&
-        node.name === "userService" &&
-        node.kind === "import",
+      (node) => node.file === controllerFile && node.name === "userService" && node.kind === "import",
     );
-    const serviceDef = nodes.find(
-      (node) => node.file === serviceFile && node.name === "userService",
-    );
+    const serviceDef = nodes.find((node) => node.file === serviceFile && node.name === "userService");
 
     expect(refreshDef).toBeDefined();
     expect(importedUserService).toBeDefined();
     expect(serviceDef).toBeDefined();
     expect(
       detailed.edges.some(
-        (edge) =>
-          edge.from === refreshDef?.id &&
-          edge.to === serviceDef?.id &&
-          edge.label === "uses",
+        (edge) => edge.from === refreshDef?.id && edge.to === serviceDef?.id && edge.label === "uses",
       ),
     ).toBe(true);
     expect(
       detailed.edges.some(
-        (edge) =>
-          edge.from === importedUserService?.id &&
-          edge.to === serviceDef?.id &&
-          edge.label === "userService",
+        (edge) => edge.from === importedUserService?.id && edge.to === serviceDef?.id && edge.label === "userService",
       ),
     ).toBe(true);
   });
@@ -101,16 +73,10 @@ describe("AngularJS framework characterization", () => {
     const graph = await collectGraph(root, Array.from(index.byFile.keys()));
     const detailed = await buildSymbolGraphDetailed(index);
 
-    const directiveFile = normalizePath(
-      path.join(root, "user-card.directive.js"),
-    );
+    const directiveFile = normalizePath(path.join(root, "user-card.directive.js"));
     const serviceFile = normalizePath(path.join(root, "user.service.js"));
-    const controllerFile = normalizePath(
-      path.join(root, "user.controller.js"),
-    );
-    const templateFile = normalizePath(
-      path.join(root, "user-card.template.html"),
-    );
+    const controllerFile = normalizePath(path.join(root, "user.controller.js"));
+    const templateFile = normalizePath(path.join(root, "user-card.template.html"));
 
     expect(index.byFile.get(directiveFile)?.imports).toEqual([]);
     expect(
@@ -124,18 +90,12 @@ describe("AngularJS framework characterization", () => {
     ).toBe(true);
     expect(
       graph.edges.some(
-        (edge) =>
-          edge.from === controllerFile &&
-          edge.to.type === "external" &&
-          edge.to.name === "$scope",
+        (edge) => edge.from === controllerFile && edge.to.type === "external" && edge.to.name === "$scope",
       ),
     ).toBe(true);
     expect(
       graph.edges.some(
-        (edge) =>
-          edge.from === controllerFile &&
-          edge.to.type === "external" &&
-          edge.to.name === "$state",
+        (edge) => edge.from === controllerFile && edge.to.type === "external" && edge.to.name === "$state",
       ),
     ).toBe(true);
     expect(
@@ -161,21 +121,9 @@ describe("AngularJS framework characterization", () => {
       ...node,
       file: normalizePath(node.file),
     }));
-    expect(
-      nodes.some(
-        (node) => node.file === controllerFile && node.name === "UserCtrl",
-      ),
-    ).toBe(false);
-    expect(
-      nodes.some(
-        (node) => node.file === directiveFile && node.name === "userCard",
-      ),
-    ).toBe(false);
-    expect(
-      nodes.some(
-        (node) => node.file === controllerFile && node.name === "$state",
-      ),
-    ).toBe(false);
+    expect(nodes.some((node) => node.file === controllerFile && node.name === "UserCtrl")).toBe(false);
+    expect(nodes.some((node) => node.file === directiveFile && node.name === "userCard")).toBe(false);
+    expect(nodes.some((node) => node.file === controllerFile && node.name === "$state")).toBe(false);
   });
 
   it("does not trigger AngularJS heuristics for non-AngularJS controller/template config", async () => {
@@ -191,39 +139,23 @@ describe("AngularJS framework characterization", () => {
       ].join("\n"),
       "utf8",
     );
-    await fsp.writeFile(
-      path.join(root, "user.controller.js"),
-      "export function UserCtrl() {}\n",
-      "utf8",
-    );
-    await fsp.writeFile(
-      path.join(root, "user-card.template.html"),
-      "<section></section>\n",
-      "utf8",
-    );
+    await fsp.writeFile(path.join(root, "user.controller.js"), "export function UserCtrl() {}\n", "utf8");
+    await fsp.writeFile(path.join(root, "user-card.template.html"), "<section></section>\n", "utf8");
 
     const index = await buildProjectIndex(root);
     const graph = await collectGraph(root, Array.from(index.byFile.keys()));
     const configFile = normalizePath(path.join(root, "page-config.js"));
     const controllerFile = normalizePath(path.join(root, "user.controller.js"));
-    const templateFile = normalizePath(
-      path.join(root, "user-card.template.html"),
-    );
+    const templateFile = normalizePath(path.join(root, "user-card.template.html"));
 
     expect(
       graph.edges.some(
-        (edge) =>
-          edge.from === configFile &&
-          edge.to.type === "file" &&
-          normalizePath(edge.to.path) === controllerFile,
+        (edge) => edge.from === configFile && edge.to.type === "file" && normalizePath(edge.to.path) === controllerFile,
       ),
     ).toBe(false);
     expect(
       graph.edges.some(
-        (edge) =>
-          edge.from === configFile &&
-          edge.to.type === "file" &&
-          normalizePath(edge.to.path) === templateFile,
+        (edge) => edge.from === configFile && edge.to.type === "file" && normalizePath(edge.to.path) === templateFile,
       ),
     ).toBe(false);
   });

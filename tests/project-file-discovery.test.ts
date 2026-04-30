@@ -2,11 +2,7 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
-import {
-  buildProjectIndex,
-  listProjectFiles,
-  discoverProjectFiles,
-} from "../src/index.js";
+import { buildProjectIndex, listProjectFiles, discoverProjectFiles } from "../src/index.js";
 import { DEFAULT_PROJECT_MANIFESTS } from "../src/util.js";
 
 const normalize = (value: string) => value.replace(/\\/g, "/");
@@ -25,26 +21,16 @@ async function createFile(filePath: string, contents: string) {
 
 describe("project file discovery", () => {
   it("fails explicitly when the project root is invalid", async () => {
-    const tempDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "codegraph-project-missing-"),
-    );
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-missing-"));
     const missingRoot = path.join(tempDir, "missing-root");
 
-    await expect(listProjectFiles(missingRoot)).rejects.toThrow(
-      /Project root does not exist or is not readable:/,
-    );
-    await expect(discoverProjectFiles(missingRoot)).rejects.toThrow(
-      /Project root does not exist or is not readable:/,
-    );
-    await expect(buildProjectIndex(missingRoot)).rejects.toThrow(
-      /Project root does not exist or is not readable:/,
-    );
+    await expect(listProjectFiles(missingRoot)).rejects.toThrow(/Project root does not exist or is not readable:/);
+    await expect(discoverProjectFiles(missingRoot)).rejects.toThrow(/Project root does not exist or is not readable:/);
+    await expect(buildProjectIndex(missingRoot)).rejects.toThrow(/Project root does not exist or is not readable:/);
   });
 
   it("treats an empty readable directory as an empty project", async () => {
-    const tempDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "codegraph-project-empty-"),
-    );
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-empty-"));
 
     await expect(listProjectFiles(tempDir)).resolves.toEqual([]);
     await expect(discoverProjectFiles(tempDir)).resolves.toEqual([]);
@@ -56,19 +42,14 @@ describe("project file discovery", () => {
   });
 
   it("includes common manifests and lockfiles in default discovery", async () => {
-    const tempDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "codegraph-project-"),
-    );
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-"));
     const manifestDir = path.join(tempDir, "manifests");
     const sourceFile = path.join(tempDir, "src", "main.ts");
     const manifestFiles = DEFAULT_PROJECT_MANIFESTS.map(toManifestFilename);
-    const isCaseInsensitive =
-      os.platform() === "win32" || os.platform() === "darwin";
+    const isCaseInsensitive = os.platform() === "win32" || os.platform() === "darwin";
 
     const uniqueManifestFiles = isCaseInsensitive
-      ? Array.from(
-          new Map(manifestFiles.map((m) => [m.toLowerCase(), m])).values(),
-        )
+      ? Array.from(new Map(manifestFiles.map((m) => [m.toLowerCase(), m])).values())
       : manifestFiles;
 
     await createFile(sourceFile, "export const value = 1;\n");
@@ -83,12 +64,9 @@ describe("project file discovery", () => {
     const discovered = await listProjectFiles(tempDir);
     const discoveredSet = new Set(discovered.map(normalize));
 
-    const expected = [
-      sourceFile,
-      ...uniqueManifestFiles.map((manifest) =>
-        path.join(manifestDir, manifest),
-      ),
-    ].map(normalize);
+    const expected = [sourceFile, ...uniqueManifestFiles.map((manifest) => path.join(manifestDir, manifest))].map(
+      normalize,
+    );
 
     for (const filePath of expected) {
       expect(discoveredSet.has(filePath)).toBe(true);
@@ -96,9 +74,7 @@ describe("project file discovery", () => {
   });
 
   it("includes supported source extensions in default discovery", async () => {
-    const tempDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "codegraph-project-sources-"),
-    );
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-sources-"));
     const files = [
       path.join(tempDir, "kotlin", "Main.kt"),
       path.join(tempDir, "kotlin", "script.kts"),
@@ -133,9 +109,7 @@ describe("project file discovery", () => {
   });
 
   it("extracts project names from common manifests", async () => {
-    const tempDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "codegraph-project-meta-"),
-    );
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-meta-"));
     const nodeDir = path.join(tempDir, "node");
     const pythonDir = path.join(tempDir, "python");
     const rustDir = path.join(tempDir, "rust");
@@ -169,17 +143,11 @@ describe("project file discovery", () => {
     const vcpkg = path.join(nativeDir, "vcpkg.json");
     const ideaDir = path.join(ideDir, ".idea");
 
-    await createFile(
-      packageJson,
-      JSON.stringify({ name: "node-app" }, null, 2),
-    );
+    await createFile(packageJson, JSON.stringify({ name: "node-app" }, null, 2));
     await createFile(pyproject, '[project]\nname = "py-app"\n');
     await createFile(cargo, '[package]\nname = "rust-app"\n');
     await createFile(goMod, "module example.com/go-app\n");
-    await createFile(
-      pom,
-      "<project><artifactId>mvn-app</artifactId></project>",
-    );
+    await createFile(pom, "<project><artifactId>mvn-app</artifactId></project>");
     await createFile(settingsGradle, 'rootProject.name = "gradle-app"\n');
     await createFile(settingsGradleKts, 'rootProject.name = "kotlin-app"\n');
     await createFile(
@@ -190,32 +158,18 @@ describe("project file discovery", () => {
       fsproj,
       "<Project><PropertyGroup><AssemblyName>FSharpLib</AssemblyName></PropertyGroup></Project>",
     );
-    await createFile(
-      vbproj,
-      "<Project><PropertyGroup><PackageId>VisualBasicLib</PackageId></PropertyGroup></Project>",
-    );
-    await createFile(
-      sln,
-      "Microsoft Visual Studio Solution File, Format Version 12.00\n",
-    );
-    await createFile(
-      swiftPackage,
-      'import PackageDescription\n\nlet package = Package(name: "swift-app")\n',
-    );
+    await createFile(vbproj, "<Project><PropertyGroup><PackageId>VisualBasicLib</PackageId></PropertyGroup></Project>");
+    await createFile(sln, "Microsoft Visual Studio Solution File, Format Version 12.00\n");
+    await createFile(swiftPackage, 'import PackageDescription\n\nlet package = Package(name: "swift-app")\n');
     await fs.mkdir(xcodeprojDir, { recursive: true });
     await fs.mkdir(xcworkspaceDir, { recursive: true });
-    await createFile(
-      gemspec,
-      'Gem::Specification.new do |spec|\n  spec.name = "ruby-gem"\nend\n',
-    );
+    await createFile(gemspec, 'Gem::Specification.new do |spec|\n  spec.name = "ruby-gem"\nend\n');
     await createFile(cmakeLists, "cmake_minimum_required(VERSION 3.20)\n");
     await createFile(vcpkg, JSON.stringify({ name: "native-app" }, null, 2));
     await fs.mkdir(ideaDir, { recursive: true });
 
     const discovered = await discoverProjectFiles(tempDir);
-    const byPath = new Map(
-      discovered.map((entry) => [normalize(entry.path), entry]),
-    );
+    const byPath = new Map(discovered.map((entry) => [normalize(entry.path), entry]));
 
     expect(byPath.get(normalize(packageJson))?.name).toBe("node-app");
     expect(byPath.get(normalize(packageJson))?.type).toBe("node");
@@ -258,9 +212,7 @@ describe("project file discovery", () => {
   });
 
   it("handles fallback naming and ignores excluded directories", async () => {
-    const tempDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "codegraph-project-edge-"),
-    );
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-edge-"));
     const badJsonDir = path.join(tempDir, "bad-json");
     const poetryDir = path.join(tempDir, "poetry");
     const cargoDir = path.join(tempDir, "cargo");
@@ -294,10 +246,7 @@ describe("project file discovery", () => {
     const mvnw = path.join(wrapperDir, "mvnw");
     const gradlew = path.join(wrapperDir, "gradlew");
     const dirBuildProps = path.join(dotnetConfigDir, "Directory.Build.props");
-    const dirBuildTargets = path.join(
-      dotnetConfigDir,
-      "Directory.Build.targets",
-    );
+    const dirBuildTargets = path.join(dotnetConfigDir, "Directory.Build.targets");
     const globalJson = path.join(dotnetConfigDir, "global.json");
     const cmakePresets = path.join(nativeConfigDir, "CMakePresets.json");
     const mesonOptions = path.join(nativeConfigDir, "meson_options.txt");
@@ -306,15 +255,9 @@ describe("project file discovery", () => {
     const ignoredPackage = path.join(ignoredDir, "package.json");
 
     await createFile(badPackage, "{ invalid json");
-    await createFile(
-      pyproject,
-      "[tool.poetry]\nname = 'poetry-app' # comment\n",
-    );
+    await createFile(pyproject, "[tool.poetry]\nname = 'poetry-app' # comment\n");
     await createFile(cargo, '[package]\nname = "cargo-app" # comment\n');
-    await createFile(
-      pom,
-      "<project><parent><name>Parent</name></parent><name>PomApp</name></project>",
-    );
+    await createFile(pom, "<project><parent><name>Parent</name></parent><name>PomApp</name></project>");
     await createFile(gradle, 'plugins { id "java" }\n');
     await createFile(csproj, "<Project></Project>");
     await createFile(composer, JSON.stringify({ name: "vendor/app" }, null, 2));
@@ -329,29 +272,15 @@ describe("project file discovery", () => {
     await createFile(gradlew, "#!/bin/sh\n");
     await createFile(dirBuildProps, "<Project></Project>\n");
     await createFile(dirBuildTargets, "<Project></Project>\n");
-    await createFile(
-      globalJson,
-      JSON.stringify({ sdk: { version: "8.0.100" } }, null, 2),
-    );
+    await createFile(globalJson, JSON.stringify({ sdk: { version: "8.0.100" } }, null, 2));
     await createFile(cmakePresets, JSON.stringify({ version: 3 }, null, 2));
-    await createFile(
-      mesonOptions,
-      'option("feature", type : "boolean", value : true)\n',
-    );
+    await createFile(mesonOptions, 'option("feature", type : "boolean", value : true)\n');
     await createFile(conanfile, "[requires]\nfmt/10.1.1\n");
-    await createFile(
-      packageResolved,
-      JSON.stringify({ version: 2, pins: [] }, null, 2),
-    );
-    await createFile(
-      ignoredPackage,
-      JSON.stringify({ name: "ignored" }, null, 2),
-    );
+    await createFile(packageResolved, JSON.stringify({ version: 2, pins: [] }, null, 2));
+    await createFile(ignoredPackage, JSON.stringify({ name: "ignored" }, null, 2));
 
     const discovered = await discoverProjectFiles(tempDir);
-    const byPath = new Map(
-      discovered.map((entry) => [normalize(entry.path), entry]),
-    );
+    const byPath = new Map(discovered.map((entry) => [normalize(entry.path), entry]));
 
     const badEntry = byPath.get(normalize(badPackage));
     expect(badEntry?.name).toBe("bad-json");
@@ -406,9 +335,7 @@ describe("project file discovery", () => {
   });
 
   it("honors root and nested .gitignore files by default", async () => {
-    const tempDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "codegraph-project-gitignore-"),
-    );
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-gitignore-"));
     const keptRootFile = path.join(tempDir, "src", "keep.ts");
     const ignoredRootFile = path.join(tempDir, "src", "drop.generated.ts");
     const keptNestedFile = path.join(tempDir, "nested", "keep.ts");
@@ -421,9 +348,7 @@ describe("project file discovery", () => {
     await createFile(keptNestedFile, "export const keepNested = 1;\n");
     await createFile(ignoredNestedFile, "export const dropNested = 1;\n");
 
-    const discovered = new Set(
-      (await listProjectFiles(tempDir)).map(normalize),
-    );
+    const discovered = new Set((await listProjectFiles(tempDir)).map(normalize));
 
     expect(discovered.has(normalize(keptRootFile))).toBe(true);
     expect(discovered.has(normalize(keptNestedFile))).toBe(true);
@@ -432,9 +357,7 @@ describe("project file discovery", () => {
   });
 
   it("does not load nested .gitignore files from directories ignored by a parent .gitignore", async () => {
-    const tempDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "codegraph-project-gitignore-shadow-"),
-    );
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-gitignore-shadow-"));
     const ignoredFile = path.join(tempDir, "tmp", "keep.ts");
     const keptFile = path.join(tempDir, "src", "keep.ts");
 
@@ -443,41 +366,30 @@ describe("project file discovery", () => {
     await createFile(ignoredFile, "export const shouldStayIgnored = 1;\n");
     await createFile(keptFile, "export const keep = 1;\n");
 
-    const discovered = new Set(
-      (await listProjectFiles(tempDir)).map(normalize),
-    );
+    const discovered = new Set((await listProjectFiles(tempDir)).map(normalize));
 
     expect(discovered.has(normalize(keptFile))).toBe(true);
     expect(discovered.has(normalize(ignoredFile))).toBe(false);
   });
 
   it("treats non-slash directory patterns as directory subtree ignores", async () => {
-    const tempDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "codegraph-project-gitignore-dir-"),
-    );
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-gitignore-dir-"));
     const ignoredFile = path.join(tempDir, "tmp", "generated.ts");
     const keptFile = path.join(tempDir, "src", "keep.ts");
 
     await createFile(path.join(tempDir, ".gitignore"), "tmp\n");
-    await createFile(
-      path.join(tempDir, "tmp", ".gitignore"),
-      "!generated.ts\n",
-    );
+    await createFile(path.join(tempDir, "tmp", ".gitignore"), "!generated.ts\n");
     await createFile(ignoredFile, "export const generated = 1;\n");
     await createFile(keptFile, "export const keep = 1;\n");
 
-    const discovered = new Set(
-      (await listProjectFiles(tempDir)).map(normalize),
-    );
+    const discovered = new Set((await listProjectFiles(tempDir)).map(normalize));
 
     expect(discovered.has(normalize(keptFile))).toBe(true);
     expect(discovered.has(normalize(ignoredFile))).toBe(false);
   });
 
   it("supports disabling .gitignore filtering and applying additive include/ignore globs", async () => {
-    const tempDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "codegraph-project-discovery-"),
-    );
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-discovery-"));
     const appFile = path.join(tempDir, "src", "app.ts");
     const specFile = path.join(tempDir, "src", "app.spec.ts");
     const ignoredFile = path.join(tempDir, "src", "generated.ts");
@@ -506,9 +418,7 @@ describe("project file discovery", () => {
   });
 
   it("does not validate gitignoreRoot when gitignore filtering is disabled", async () => {
-    const tempDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "codegraph-project-discovery-no-gitignore-root-"),
-    );
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-discovery-no-gitignore-root-"));
     const appFile = path.join(tempDir, "src", "app.ts");
 
     await createFile(appFile, "export const app = 1;\n");

@@ -118,16 +118,10 @@ export function parseGitStatusPaths(statusOutput) {
 
 export function getReleasePackage(selector) {
   const normalizedSelector = selector.trim();
-  const match = releasePackages.find(
-    (pkg) => pkg.id === normalizedSelector || pkg.name === normalizedSelector,
-  );
+  const match = releasePackages.find((pkg) => pkg.id === normalizedSelector || pkg.name === normalizedSelector);
   if (!match) {
-    const knownSelectors = releasePackages
-      .flatMap((pkg) => [pkg.id, pkg.name])
-      .join(", ");
-    throw new Error(
-      `Unknown release package selector: ${selector}. Use one of: ${knownSelectors}`,
-    );
+    const knownSelectors = releasePackages.flatMap((pkg) => [pkg.id, pkg.name]).join(", ");
+    throw new Error(`Unknown release package selector: ${selector}. Use one of: ${knownSelectors}`);
   }
   return match;
 }
@@ -135,25 +129,19 @@ export function getReleasePackage(selector) {
 export function detectChangedReleasePackages(changedPaths) {
   const matchedPackages = new Set();
   for (const changedPath of changedPaths) {
-    const match = releasePackages.find((pkg) =>
-      packageOwnsPath(pkg, changedPath),
-    );
+    const match = releasePackages.find((pkg) => packageOwnsPath(pkg, changedPath));
     if (match) {
       matchedPackages.add(match.id);
     }
   }
-  return releasePackages
-    .map((pkg) => pkg.id)
-    .filter((pkgId) => matchedPackages.has(pkgId));
+  return releasePackages.map((pkg) => pkg.id).filter((pkgId) => matchedPackages.has(pkgId));
 }
 
 export function selectLatestSemverTag(tagNames) {
   const semverTags = tagNames
     .map((tagName) => ({ tagName, version: parsePackageTagVersion(tagName) }))
     .filter((entry) => entry.version && isSemverLike(entry.version))
-    .sort((left, right) =>
-      compareSemverDescending(left.version ?? "0.0.0", right.version ?? "0.0.0"),
-    );
+    .sort((left, right) => compareSemverDescending(left.version ?? "0.0.0", right.version ?? "0.0.0"));
   return semverTags[0]?.tagName ?? null;
 }
 
@@ -161,9 +149,7 @@ export function selectLatestLegacyTag(tagNames) {
   const legacyTags = tagNames
     .map((tagName) => ({ tagName, version: tagName.startsWith("v") ? tagName.slice(1) : null }))
     .filter((entry) => entry.version && isSemverLike(entry.version))
-    .sort((left, right) =>
-      compareSemverDescending(left.version ?? "0.0.0", right.version ?? "0.0.0"),
-    );
+    .sort((left, right) => compareSemverDescending(left.version ?? "0.0.0", right.version ?? "0.0.0"));
   return legacyTags[0]?.tagName ?? null;
 }
 
@@ -179,21 +165,13 @@ export function tagNamesForPackageVersion(packageName, version) {
   return [`v${version}`, packageScopedTag];
 }
 
-export function computePublishPlan({
-  shouldPublish,
-  selectedPackageNames,
-  publishedPackageNames,
-}) {
+export function computePublishPlan({ shouldPublish, selectedPackageNames, publishedPackageNames }) {
   const publishByPackage = Object.fromEntries(
-    selectedPackageNames.map((packageName) => [
-      packageName,
-      shouldPublish && !publishedPackageNames.has(packageName),
-    ]),
+    selectedPackageNames.map((packageName) => [packageName, shouldPublish && !publishedPackageNames.has(packageName)]),
   );
   return {
     publishByPackage,
-    publishNativeTargets:
-      publishByPackage["@lzehrung/codegraph-native"] ?? false,
+    publishNativeTargets: publishByPackage["@lzehrung/codegraph-native"] ?? false,
   };
 }
 
@@ -241,10 +219,7 @@ export function restoreRootPackageManifest(pkg, version) {
 }
 
 export function recoverRootPackageManifestForResume(currentPkg, sourcePkg) {
-  const hasSourceOnlyFields =
-    "scripts" in currentPkg &&
-    "workspaces" in currentPkg &&
-    "devDependencies" in currentPkg;
+  const hasSourceOnlyFields = "scripts" in currentPkg && "workspaces" in currentPkg && "devDependencies" in currentPkg;
   if (hasSourceOnlyFields) {
     return currentPkg;
   }

@@ -16,19 +16,12 @@ const LOG_SEVERITY_RANK: Record<LogSeverity, number> = {
   debug: 3,
 };
 
-export function shouldLog(
-  level: LogLevel | undefined,
-  severity: LogSeverity,
-): boolean {
+export function shouldLog(level: LogLevel | undefined, severity: LogSeverity): boolean {
   const effectiveLevel = level ?? "warn";
   return LOG_LEVEL_RANK[effectiveLevel] >= LOG_SEVERITY_RANK[severity];
 }
 
-export function logWithLevel(
-  level: LogLevel | undefined,
-  severity: LogSeverity,
-  ...args: unknown[]
-): void {
+export function logWithLevel(level: LogLevel | undefined, severity: LogSeverity, ...args: unknown[]): void {
   if (!shouldLog(level, severity)) return;
 
   if (severity === "error") {

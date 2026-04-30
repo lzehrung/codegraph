@@ -25,10 +25,7 @@ for (const dirent of targetDirs) {
   const packagePath = path.join(packageDir, "package.json");
   if (!fs.existsSync(packagePath)) continue;
   const targetPackage = JSON.parse(fs.readFileSync(packagePath, "utf8"));
-  const mainFile =
-    typeof targetPackage.main === "string"
-      ? path.join(packageDir, targetPackage.main)
-      : null;
+  const mainFile = typeof targetPackage.main === "string" ? path.join(packageDir, targetPackage.main) : null;
   if (!mainFile || !fs.existsSync(mainFile)) continue;
   runPublish(packageDir);
 }

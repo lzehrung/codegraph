@@ -50,24 +50,24 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
     const streamResult = await parseUnifiedDiffStreaming(stream);
 
     expect(streamResult).toEqual(syncResult);
-    
+
     expect(streamResult.files).toHaveLength(6);
-    
-    const added = streamResult.files.find(f => f.path === "added.ts");
+
+    const added = streamResult.files.find((f) => f.path === "added.ts");
     expect(added?.kind).toBe("added");
-    
-    const deleted = streamResult.files.find(f => f.path === "deleted.ts");
+
+    const deleted = streamResult.files.find((f) => f.path === "deleted.ts");
     expect(deleted?.kind).toBe("deleted");
-    
-    const modified = streamResult.files.find(f => f.path === "modified.ts");
+
+    const modified = streamResult.files.find((f) => f.path === "modified.ts");
     expect(modified?.kind).toBe("modified");
-    
-    const renamed = streamResult.files.find(f => f.path === "renamed_new.ts");
+
+    const renamed = streamResult.files.find((f) => f.path === "renamed_new.ts");
     expect(renamed?.kind).toBe("renamed");
     expect(renamed?.oldPath).toBe("renamed_old.ts");
     expect(renamed?.similarityIndex).toBe(92);
 
-    const copied = streamResult.files.find(f => f.path === "copied.ts");
+    const copied = streamResult.files.find((f) => f.path === "copied.ts");
     expect(copied?.kind).toBe("added");
     expect(copied?.oldPath).toBe("source.ts");
 
@@ -81,7 +81,6 @@ Binary files a/assets/logo.png and b/assets/logo.png differ
     const result = await parseUnifiedDiffStreaming(stream);
     expect(result.files).toHaveLength(6);
   });
-
 
   it("should parse very large hunks consistently", async () => {
     const oldLines = Array.from({ length: 2500 }, (_, idx) => `old_${idx}`);
@@ -108,7 +107,7 @@ ${hunkLines.join("\n")}
   });
 
   it("should handle multi-line chunks correctly", async () => {
-    const chunks = sampleDiff.split("\n").map(l => l + "\n");
+    const chunks = sampleDiff.split("\n").map((l) => l + "\n");
     const stream = Readable.from(chunks);
     const result = await parseUnifiedDiffStreaming(stream);
     expect(result.files).toHaveLength(6);
@@ -118,9 +117,9 @@ ${hunkLines.join("\n")}
     const stream = new Readable({
       read() {
         this.emit("error", new Error("stream error"));
-      }
+      },
     });
-    
+
     await expect(parseUnifiedDiffStreaming(stream)).rejects.toThrow("stream error");
   });
 });

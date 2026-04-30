@@ -181,9 +181,7 @@ describe("buildGraph -- legacy format", () => {
 
 describe("buildGraph -- edge cases", () => {
   it("throws on unsupported payload", () => {
-    expect(() => buildGraph({}, { showExternal: false, includeSymbols: false })).toThrow(
-      "Unsupported graph payload",
-    );
+    expect(() => buildGraph({}, { showExternal: false, includeSymbols: false })).toThrow("Unsupported graph payload");
   });
 
   it("handles empty compact payload", () => {

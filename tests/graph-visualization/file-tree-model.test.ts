@@ -176,9 +176,7 @@ describe("autoExpandSingleChildren", () => {
     const node = {
       type: "directory" as const,
       expanded: false,
-      children: [
-        { type: "directory" as const, expanded: false, children: [{ type: "file" as const, name: "a.ts" }] },
-      ],
+      children: [{ type: "directory" as const, expanded: false, children: [{ type: "file" as const, name: "a.ts" }] }],
     };
     autoExpandSingleChildren(node);
     expect(node.expanded).toBe(true);

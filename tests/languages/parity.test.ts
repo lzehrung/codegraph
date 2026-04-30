@@ -13,11 +13,7 @@ const definitions: LanguageTestDefinition[] = [
       symbols: [
         {
           file: "utils.ts",
-          includes: [
-            { name: "helperFunction" },
-            { name: "UtilityClass" },
-            { name: "UtilityType" },
-          ],
+          includes: [{ name: "helperFunction" }, { name: "UtilityClass" }, { name: "UtilityType" }],
         },
       ],
       goToDefinition: [

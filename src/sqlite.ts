@@ -74,11 +74,7 @@ const toSqliteText = (value: unknown): string => {
   return "";
 };
 
-const hasColumn = (
-  db: BetterSqliteDatabase,
-  table: string,
-  column: string,
-): boolean => {
+const hasColumn = (db: BetterSqliteDatabase, table: string, column: string): boolean => {
   const rows = db.prepare(`PRAGMA table_info(${table});`).raw().all();
   for (const row of rows) {
     if (!Array.isArray(row)) continue;
@@ -155,9 +151,10 @@ const ensureSchema = (db: BetterSqliteDatabase) => {
   `);
 
   ensureSymbolsVisibilityColumn(db);
-  db.prepare(
-    "INSERT OR REPLACE INTO graph_metadata (key, value) VALUES (?, ?);",
-  ).run(["schema_version", String(SQLITE_SCHEMA_VERSION)]);
+  db.prepare("INSERT OR REPLACE INTO graph_metadata (key, value) VALUES (?, ?);").run([
+    "schema_version",
+    String(SQLITE_SCHEMA_VERSION),
+  ]);
 
   const indexSpecs: Array<{ name: string; sql: string }> = [
     {
@@ -259,9 +256,7 @@ const ensureSchema = (db: BetterSqliteDatabase) => {
   ];
 
   const indexRows = db
-    .prepare(
-      "SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%';",
-    )
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%';")
     .raw()
     .all() as Array<Array<unknown>>;
   const existingIndexes = new Set<string>();
@@ -283,10 +278,7 @@ const ensureSchema = (db: BetterSqliteDatabase) => {
   }
 };
 
-const execRows = (
-  db: BetterSqliteDatabase,
-  sql: string,
-): Array<Array<unknown>> => {
+const execRows = (db: BetterSqliteDatabase, sql: string): Array<Array<unknown>> => {
   const rows = db.prepare(sql).raw().all();
   const normalized: Array<Array<unknown>> = [];
   for (const row of rows) {
@@ -319,9 +311,7 @@ const loadFileEdges = (db: BetterSqliteDatabase, toType?: string) => {
   const sql = hasFilter
     ? "SELECT from_path, to_path FROM file_edges WHERE to_type = ?;"
     : "SELECT from_path, to_path, to_type FROM file_edges;";
-  const rows = hasFilter
-    ? execRowsParams(db, sql, [toType])
-    : execRows(db, sql);
+  const rows = hasFilter ? execRowsParams(db, sql, [toType]) : execRows(db, sql);
   return rows.map((row) => ({
     from: String(row[0]),
     to: String(row[1]),
@@ -329,10 +319,7 @@ const loadFileEdges = (db: BetterSqliteDatabase, toType?: string) => {
   }));
 };
 
-const bfsDependencies = (
-  edges: Array<{ from: string; to: string }>,
-  start: string,
-) => {
+const bfsDependencies = (edges: Array<{ from: string; to: string }>, start: string) => {
   const adj = new Map<string, string[]>();
   for (const edge of edges) {
     const list = adj.get(edge.from) ?? [];
@@ -359,10 +346,7 @@ const bfsDependencies = (
   return result;
 };
 
-const bfsReverseDependencies = (
-  edges: Array<{ from: string; to: string }>,
-  start: string,
-) => {
+const bfsReverseDependencies = (edges: Array<{ from: string; to: string }>, start: string) => {
   const adj = new Map<string, string[]>();
   for (const edge of edges) {
     const list = adj.get(edge.to) ?? [];
@@ -389,10 +373,7 @@ const bfsReverseDependencies = (
   return result;
 };
 
-const collectSymbolIdsForFiles = (
-  symbolGraph: SymbolGraph,
-  changedSet: Set<string>,
-): Set<string> => {
+const collectSymbolIdsForFiles = (symbolGraph: SymbolGraph, changedSet: Set<string>): Set<string> => {
   const ids = new Set<string>();
   for (const [id, node] of symbolGraph.nodes.entries()) {
     if (changedSet.has(node.file)) ids.add(id);
@@ -400,10 +381,7 @@ const collectSymbolIdsForFiles = (
   return ids;
 };
 
-const symbolGraphEdgesForFiles = (
-  symbolGraph: SymbolGraph,
-  changedSet: Set<string>,
-) => {
+const symbolGraphEdgesForFiles = (symbolGraph: SymbolGraph, changedSet: Set<string>) => {
   const edgeList = [];
   for (const edge of symbolGraph.edges) {
     const fromNode = symbolGraph.nodes.get(edge.from);
@@ -419,10 +397,7 @@ const symbolGraphEdgesForFiles = (
 const fileGraphEdgesForFiles = (fileGraph: Graph, changedSet: Set<string>) =>
   fileGraph.edges.filter((edge) => changedSet.has(edge.from));
 
-const symbolGraphEdgesForSymbolIds = (
-  symbolGraph: SymbolGraph,
-  symbolIds: Set<string>,
-) => {
+const symbolGraphEdgesForSymbolIds = (symbolGraph: SymbolGraph, symbolIds: Set<string>) => {
   const edgeList = [];
   for (const edge of symbolGraph.edges) {
     if (symbolIds.has(edge.from) || symbolIds.has(edge.to)) {
@@ -432,13 +407,8 @@ const symbolGraphEdgesForSymbolIds = (
   return edgeList;
 };
 
-const insertFiles = (
-  db: BetterSqliteDatabase,
-  files: Array<{ path: string; isExternal: boolean }>,
-) => {
-  const stmt = db.prepare(
-    "INSERT OR REPLACE INTO files (path, is_external) VALUES (?, ?);",
-  );
+const insertFiles = (db: BetterSqliteDatabase, files: Array<{ path: string; isExternal: boolean }>) => {
+  const stmt = db.prepare("INSERT OR REPLACE INTO files (path, is_external) VALUES (?, ?);");
   for (const file of files) {
     stmt.run([file.path, file.isExternal ? 1 : 0]);
   }
@@ -486,23 +456,12 @@ const insertFileEdges = (db: BetterSqliteDatabase, edges: Graph["edges"]) => {
   );
   for (const edge of edges) {
     const toPath = edge.to.type === "file" ? edge.to.path : edge.to.name;
-    stmt.run([
-      edge.from,
-      toPath,
-      edge.to.type,
-      edge.raw,
-      edge.typeOnly ? 1 : 0,
-    ]);
+    stmt.run([edge.from, toPath, edge.to.type, edge.raw, edge.typeOnly ? 1 : 0]);
   }
 };
 
-const insertSymbolEdges = (
-  db: BetterSqliteDatabase,
-  edges: SymbolGraph["edges"],
-) => {
-  const stmt = db.prepare(
-    "INSERT INTO symbol_edges (from_id, to_id, label) VALUES (?, ?, ?);",
-  );
+const insertSymbolEdges = (db: BetterSqliteDatabase, edges: SymbolGraph["edges"]) => {
+  const stmt = db.prepare("INSERT INTO symbol_edges (from_id, to_id, label) VALUES (?, ?, ?);");
   for (const edge of edges) {
     stmt.run([edge.from, edge.to, edge.label ?? null]);
   }
@@ -517,10 +476,7 @@ const clearCurrentGraphState = (db: BetterSqliteDatabase) => {
   `);
 };
 
-const readSymbolIdsForFiles = (
-  db: BetterSqliteDatabase,
-  files: string[],
-): string[] => {
+const readSymbolIdsForFiles = (db: BetterSqliteDatabase, files: string[]): string[] => {
   if (files.length === 0) return [];
   const placeholders = files.map(() => "?").join(", ");
   const sql = `SELECT id FROM symbols WHERE file IN (${placeholders});`;
@@ -536,29 +492,21 @@ const readSymbolIdsForFiles = (
 const deleteBySymbolIds = (db: BetterSqliteDatabase, ids: string[]) => {
   if (ids.length === 0) return;
   const placeholders = ids.map(() => "?").join(", ");
-  db.prepare(
-    `DELETE FROM symbol_edges WHERE from_id IN (${placeholders});`,
-  ).run(ids);
-  db.prepare(`DELETE FROM symbol_edges WHERE to_id IN (${placeholders});`).run(
-    ids,
-  );
+  db.prepare(`DELETE FROM symbol_edges WHERE from_id IN (${placeholders});`).run(ids);
+  db.prepare(`DELETE FROM symbol_edges WHERE to_id IN (${placeholders});`).run(ids);
   db.prepare(`DELETE FROM symbols WHERE id IN (${placeholders});`).run(ids);
 };
 
 const deleteFileEdgesForFiles = (db: BetterSqliteDatabase, files: string[]) => {
   if (files.length === 0) return;
   const placeholders = files.map(() => "?").join(", ");
-  db.prepare(
-    `DELETE FROM file_edges WHERE from_path IN (${placeholders});`,
-  ).run(files);
+  db.prepare(`DELETE FROM file_edges WHERE from_path IN (${placeholders});`).run(files);
 };
 
 const deleteFileEdgesToFiles = (db: BetterSqliteDatabase, files: string[]) => {
   if (files.length === 0) return;
   const placeholders = files.map(() => "?").join(", ");
-  db.prepare(
-    `DELETE FROM file_edges WHERE to_type = 'file' AND to_path IN (${placeholders});`,
-  ).run(files);
+  db.prepare(`DELETE FROM file_edges WHERE to_type = 'file' AND to_path IN (${placeholders});`).run(files);
 };
 
 const deleteFilesByPath = (db: BetterSqliteDatabase, files: string[]) => {
@@ -579,8 +527,7 @@ const recordGraphSnapshot = (
     symbolEdges: number;
   },
 ) => {
-  const snapshotStmt = db.prepare(
-    `INSERT INTO graph_snapshots (
+  const snapshotStmt = db.prepare(`INSERT INTO graph_snapshots (
       created_at,
       mode,
       changed_files,
@@ -589,8 +536,7 @@ const recordGraphSnapshot = (
       file_edges,
       symbol_nodes,
       symbol_edges
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
-  );
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`);
   const result = snapshotStmt.run([
     Date.now(),
     options.mode,
@@ -621,10 +567,7 @@ const recordGraphSnapshot = (
   }
 };
 
-const readOrCreateDb = async (
-  outputPath: string,
-  options?: { readonly?: boolean },
-) => {
+const readOrCreateDb = async (outputPath: string, options?: { readonly?: boolean }) => {
   const readonly = options?.readonly ?? false;
   const dir = path.dirname(outputPath);
   if (dir && !readonly) {
@@ -663,15 +606,11 @@ async function withReadOnlySqliteDatabase<T>(
   }
 }
 
-function assertReadOnlyQueryStatement(
-  stmt: BetterSqliteStatement,
-): void {
+function assertReadOnlyQueryStatement(stmt: BetterSqliteStatement): void {
   if (stmt.reader && stmt.readonly) {
     return;
   }
-  throw new Error(
-    "Raw SQLite queries must be read-only result-producing statements such as SELECT or PRAGMA.",
-  );
+  throw new Error("Raw SQLite queries must be read-only result-producing statements such as SELECT or PRAGMA.");
 }
 
 const deleteUnreferencedExternalFiles = (db: BetterSqliteDatabase) => {
@@ -697,9 +636,7 @@ const dedupePreservingOrder = (values: string[]): string[] => {
   return deduped;
 };
 
-export async function writeGraphSqlite(
-  options: SqliteGraphOptions,
-): Promise<void> {
+export async function writeGraphSqlite(options: SqliteGraphOptions): Promise<void> {
   await withSqliteDatabase(options.outputPath, (db) => {
     const runInsert = db.transaction(() => {
       clearCurrentGraphState(db);
@@ -733,9 +670,7 @@ export async function writeGraphSqlite(
   });
 }
 
-export async function updateGraphSqlite(
-  options: SqliteGraphUpdateOptions,
-): Promise<void> {
+export async function updateGraphSqlite(options: SqliteGraphUpdateOptions): Promise<void> {
   await withSqliteDatabase(options.outputPath, (db) => {
     const runUpdate = db.transaction(() => {
       const changedSet = new Set(options.changedFiles);
@@ -767,10 +702,7 @@ export async function updateGraphSqlite(
         insertFiles(db, dedupeFileEntries(fileEntries));
       }
 
-      const changedSymbolIds = collectSymbolIdsForFiles(
-        options.symbolGraph,
-        changedSet,
-      );
+      const changedSymbolIds = collectSymbolIdsForFiles(options.symbolGraph, changedSet);
       const changedSymbolNodes = [...changedSymbolIds]
         .map((id) => options.symbolGraph.nodes.get(id))
         .filter((node): node is SymbolNode => !!node);
@@ -807,10 +739,7 @@ export async function updateGraphSqlite(
   });
 }
 
-export async function queryGraphSqlite(
-  outputPath: string,
-  queryText: string,
-): Promise<GraphQueryResult> {
+export async function queryGraphSqlite(outputPath: string, queryText: string): Promise<GraphQueryResult> {
   const parsed = parseGraphQuery(queryText);
   if (!parsed) {
     throw new Error("Unsupported query text.");
@@ -841,14 +770,11 @@ export async function queryGraphSqlite(
         };
       }
       case "dependencyChain": {
-        const rows = execRowsParams(
-          db,
-          `SELECT file FROM symbols WHERE name = ? AND kind = ? ORDER BY file;`,
-          [parsed.className, "class"],
-        );
-        const startFiles = rows
-          .map((row) => toSqliteText(row[0]))
-          .filter(Boolean);
+        const rows = execRowsParams(db, `SELECT file FROM symbols WHERE name = ? AND kind = ? ORDER BY file;`, [
+          parsed.className,
+          "class",
+        ]);
+        const startFiles = rows.map((row) => toSqliteText(row[0])).filter(Boolean);
         if (startFiles.length === 0) {
           return { kind: parsed.kind, results: [] };
         }
@@ -856,9 +782,7 @@ export async function queryGraphSqlite(
           from: edge.from,
           to: edge.to,
         }));
-        const chain = dedupePreservingOrder(
-          startFiles.flatMap((startFile) => bfsDependencies(edges, startFile)),
-        );
+        const chain = dedupePreservingOrder(startFiles.flatMap((startFile) => bfsDependencies(edges, startFile)));
         return { kind: parsed.kind, results: chain };
       }
       case "controllersMostEndpoints": {
@@ -882,17 +806,7 @@ export async function queryGraphSqlite(
             ORDER BY cnt DESC
             LIMIT ?;
           `,
-          [
-            "function",
-            "get%",
-            "post%",
-            "put%",
-            "delete%",
-            "patch%",
-            "class",
-            "%Controller",
-            parsed.limit,
-          ],
+          ["function", "get%", "post%", "put%", "delete%", "patch%", "class", "%Controller", parsed.limit],
         );
         return {
           kind: parsed.kind,

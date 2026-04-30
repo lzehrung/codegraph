@@ -10,11 +10,8 @@ if (!distState.needsBuild) {
   process.exit(0);
 }
 
-const buildReason =
-  distState.reason === "stale" ? "stale" : "missing";
-console.warn(
-  `[codegraph] dist artifacts ${buildReason}; running npm run build before tests.`,
-);
+const buildReason = distState.reason === "stale" ? "stale" : "missing";
+console.warn(`[codegraph] dist artifacts ${buildReason}; running npm run build before tests.`);
 
 const result = spawnSync("npm", ["run", "build"], {
   cwd: rootDir,

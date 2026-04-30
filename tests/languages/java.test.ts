@@ -42,12 +42,7 @@ const definition: LanguageTestDefinition = {
     symbols: [
       {
         file: "NestedTypes.java",
-        includes: [
-          { name: "NestedTypes" },
-          { name: "InnerHelper" },
-          { name: "run" },
-          { name: "Contract" },
-        ],
+        includes: [{ name: "NestedTypes" }, { name: "InnerHelper" }, { name: "run" }, { name: "Contract" }],
       },
       {
         file: "utils/Utils.java",
@@ -55,11 +50,7 @@ const definition: LanguageTestDefinition = {
       },
       {
         file: "pkg/PackageTypes.java",
-        includes: [
-          { name: "PackageTypes" },
-          { name: "NestedValue" },
-          { name: "ServiceContract" },
-        ],
+        includes: [{ name: "PackageTypes" }, { name: "NestedValue" }, { name: "ServiceContract" }],
       },
       {
         file: "pkg/PackageService.java",

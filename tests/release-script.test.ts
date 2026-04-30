@@ -31,21 +31,13 @@ describe("release script helpers", () => {
     expect(isAllowedResumePath("scripts/release-lib.mjs")).toBe(true);
     expect(isAllowedResumePath("scripts/release.mjs")).toBe(true);
     expect(isAllowedResumePath("tests/release-script.test.ts")).toBe(true);
-    expect(isAllowedResumePath("packages/codegraph-js-fallback/package.json")).toBe(
-      true,
-    );
+    expect(isAllowedResumePath("packages/codegraph-js-fallback/package.json")).toBe(true);
     expect(isAllowedResumePath("src/indexer.ts")).toBe(false);
   });
 
   it("parses null-delimited git status output for modified and renamed paths", () => {
     expect(
-      parseGitStatusPaths(
-        [
-          " M package.json",
-          "R  scripts/release-renamed.mjs",
-          "scripts/release.mjs",
-        ].join("\0"),
-      ),
+      parseGitStatusPaths([" M package.json", "R  scripts/release-renamed.mjs", "scripts/release.mjs"].join("\0")),
     ).toEqual(["package.json", "scripts/release-renamed.mjs"]);
   });
 
@@ -67,11 +59,7 @@ describe("release script helpers", () => {
 
   it("treats release packaging scripts as root package changes", () => {
     expect(
-      detectChangedReleasePackages([
-        "scripts/release.mjs",
-        "scripts/release-lib.mjs",
-        "tests/release-script.test.ts",
-      ]),
+      detectChangedReleasePackages(["scripts/release.mjs", "scripts/release-lib.mjs", "tests/release-script.test.ts"]),
     ).toEqual(["root"]);
   });
 
@@ -79,10 +67,7 @@ describe("release script helpers", () => {
     expect(
       computePublishPlan({
         shouldPublish: true,
-        selectedPackageNames: [
-          "@lzehrung/codegraph",
-          "@lzehrung/codegraph-js-fallback",
-        ],
+        selectedPackageNames: ["@lzehrung/codegraph", "@lzehrung/codegraph-js-fallback"],
         publishedPackageNames: new Set(["@lzehrung/codegraph"]),
       }),
     ).toEqual({
@@ -119,47 +104,36 @@ describe("release script helpers", () => {
         },
         publishNativeTargets: true,
       }),
-    ).toEqual([
-      "publishNativeTargets",
-      "publishNativeMeta",
-      "publishJsFallback",
-      "prepareRootManifest",
-      "publishRoot",
-    ]);
+    ).toEqual(["publishNativeTargets", "publishNativeMeta", "publishJsFallback", "prepareRootManifest", "publishRoot"]);
   });
 
   it("selects the latest package-scoped tag by version", () => {
     expect(
-      selectLatestSemverTag([
-        "@lzehrung/codegraph@1.8.41",
-        "@lzehrung/codegraph@1.8.43",
-        "@lzehrung/codegraph@1.8.42",
-      ]),
+      selectLatestSemverTag(["@lzehrung/codegraph@1.8.41", "@lzehrung/codegraph@1.8.43", "@lzehrung/codegraph@1.8.42"]),
     ).toBe("@lzehrung/codegraph@1.8.43");
   });
 
   it("selects the latest legacy synchronized release tag by version", () => {
-    expect(selectLatestLegacyTag(["v1.8.40", "v1.8.42", "v1.8.41"])).toBe(
-      "v1.8.42",
-    );
+    expect(selectLatestLegacyTag(["v1.8.40", "v1.8.42", "v1.8.41"])).toBe("v1.8.42");
   });
 
   it("formats package-scoped release tags", () => {
-    expect(
-      tagNameForPackageVersion("@lzehrung/codegraph-js-fallback", "1.8.44"),
-    ).toBe("@lzehrung/codegraph-js-fallback@1.8.44");
-  });
-
-  it("formats both repo and package-scoped tags for root releases", () => {
-    expect(tagNamesForPackageVersion("@lzehrung/codegraph", "1.8.44")).toEqual(
-      ["v1.8.44", "@lzehrung/codegraph@1.8.44"],
+    expect(tagNameForPackageVersion("@lzehrung/codegraph-js-fallback", "1.8.44")).toBe(
+      "@lzehrung/codegraph-js-fallback@1.8.44",
     );
   });
 
+  it("formats both repo and package-scoped tags for root releases", () => {
+    expect(tagNamesForPackageVersion("@lzehrung/codegraph", "1.8.44")).toEqual([
+      "v1.8.44",
+      "@lzehrung/codegraph@1.8.44",
+    ]);
+  });
+
   it("keeps non-root releases package-scoped only", () => {
-    expect(
-      tagNamesForPackageVersion("@lzehrung/codegraph-native", "1.8.44"),
-    ).toEqual(["@lzehrung/codegraph-native@1.8.44"]);
+    expect(tagNamesForPackageVersion("@lzehrung/codegraph-native", "1.8.44")).toEqual([
+      "@lzehrung/codegraph-native@1.8.44",
+    ]);
   });
 
   it("sanitizes the fallback package manifest for publishing", () => {
