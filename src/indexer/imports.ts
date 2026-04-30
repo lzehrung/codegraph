@@ -54,7 +54,7 @@ import {
 import { parseGoImportAlias } from "./shared.js";
 import type { LanguageSupport } from "../languages.js";
 import type { JsLanguage } from "../languages/types.js";
-import type { ImportBinding } from "../indexer.js";
+import type { ImportBinding } from "./types.js";
 
 function parseObjectPatternBindings(
   patternText: string,

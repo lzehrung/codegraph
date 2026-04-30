@@ -27,7 +27,7 @@ import {
 } from "../util.js";
 import { buildScopeIndexFromSource } from "./scope.js";
 import { QUERY_DRIVEN_LOCALS_LANGUAGES } from "./shared.js";
-import { SymbolKind } from "../indexer.js";
+import { SymbolKind } from "./types.js";
 import type { LanguageSupport } from "../languages.js";
 import type {
   JsLanguage,
@@ -39,7 +39,7 @@ import type {
   ImportBinding,
   ModuleIndex,
   SymbolDef,
-} from "../indexer.js";
+} from "./types.js";
 import type { Range } from "../types.js";
 function appendJsLikeRegexFallbackExports(
   file: string,

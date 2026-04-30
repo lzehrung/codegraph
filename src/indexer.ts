@@ -104,6 +104,37 @@ import {
   buildScopeIndexFromSource as buildScopeIndexFromSourceFromModule,
   type ScopeIndex,
 } from "./indexer/scope.js";
+import {
+  SymbolKind,
+  type ApiSurface,
+  type BackendReport,
+  type BuildFileReport,
+  type BuildOptions,
+  type BuildReport,
+  type BuildTimingReport,
+  type CacheReport,
+  type ExportEntry,
+  type FallbackImportExtractionReport,
+  type GoToRequest,
+  type GoToResult,
+  type GraphDeltaReport,
+  type GraphReport,
+  type ImportBinding,
+  type IncrementalBuildOptions,
+  type ManifestReport,
+  type ModuleIndex,
+  type NativeBackendFallbackReason,
+  type NativeBackendLanguageReport,
+  type NativeBackendReport,
+  type ParserBackendDegradationReport,
+  type ProjectIndex,
+  type Reference,
+  type ResolvedExport,
+  type SymbolDef,
+  type SymbolHandle,
+  type SymbolListItem,
+  type WorkerPoolReport,
+} from "./indexer/types.js";
 import type { Edge, Range, FileId, Graph } from "./types.js";
 import {
   executeJsQueryAsNativeMatches,
@@ -139,119 +170,37 @@ import type {
   SyntaxTreeLike,
 } from "./languages/types.js";
 
-export enum SymbolKind {
-  Function = "function",
-  Class = "class",
-  Variable = "variable",
-  Interface = "interface",
-  TypeAlias = "type",
-  Default = "default",
-}
-
-// Shared Pos, Range, FileId types imported from ./types
-
-export type SymbolDef = {
-  file: FileId;
-  localName: string;
-  kind: SymbolKind;
-  range: Range;
-  docstring?: string;
-  lineSpan?: number;
-  complexity?: number;
-};
-
-export type ExportEntry =
-  | { type: "local"; exportedAs: string; target: SymbolDef }
-  | {
-      type: "reexport";
-      exportedAs: string;
-      fromModule: string;
-      moduleSpecifier?: string;
-      sourceSpecifier: string;
-      typeOnly?: boolean;
-    }
-  | {
-      type: "namespaceReexport";
-      exportedAs: string;
-      fromModule: string;
-      moduleSpecifier?: string;
-      typeOnly?: boolean;
-    }
-  | {
-      type: "exportStar";
-      fromModule: string;
-      moduleSpecifier?: string;
-      sourceSpecifier: string;
-      typeOnly?: boolean;
-    };
-
-export type ImportBinding =
-  | {
-      kind: "default";
-      local: string;
-      from: string;
-      resolved?: FileId | { external: string };
-      typeOnly?: boolean;
-      mechanism?: "es" | "cjs" | "python" | "php";
-      resolvedType?: "heuristic" | "precise";
-      confidence?: number;
-    }
-  | {
-      kind: "named";
-      local: string;
-      imported: string;
-      from: string;
-      phpImportType?: "class" | "function" | "const";
-      resolved?: FileId | { external: string };
-      typeOnly?: boolean;
-      mechanism?: "es" | "cjs" | "python" | "php";
-      resolvedType?: "heuristic" | "precise";
-      confidence?: number;
-    }
-  | {
-      kind: "namespace";
-      localNS: string;
-      from: string;
-      resolved?: FileId | { external: string };
-      typeOnly?: boolean;
-      mechanism?: "es" | "cjs" | "python" | "php";
-      resolvedType?: "heuristic" | "precise";
-      confidence?: number;
-    }
-  | {
-      kind: "star";
-      from: string;
-      resolved?: FileId | { external: string };
-      typeOnly?: boolean;
-      mechanism?: "es" | "cjs" | "python" | "php";
-      resolvedType?: "heuristic" | "precise";
-      confidence?: number;
-    };
-
-export type ModuleIndex = {
-  file: FileId;
-  exports: ExportEntry[];
-  imports: ImportBinding[];
-  locals: SymbolDef[];
-};
-
-export type ProjectIndex = {
-  graph: Graph;
-  modules: Map<FileId, ModuleIndex>;
-  byFile: Map<FileId, ModuleIndex>;
-  projectRoot?: string;
-  nativeMode?: NativeRuntimeMode;
-  exportCache: Map<string, ResolvedExport | null>;
-  scopeCache: Map<string, ScopeIndex>;
-  parsed?:
-    | Map<string, ParsedFileCacheEntry>
-    | undefined;
-  bloomFilters?: import("./util/bloomFilter.js").BloomFilterCache;
-  projectFiles?: ProjectFileInfo[];
-};
-export type ResolvedExport =
-  | { kind: "resolved"; def: SymbolDef }
-  | { kind: "namespace"; file: FileId };
+export { SymbolKind } from "./indexer/types.js";
+export type {
+  ApiSurface,
+  BackendReport,
+  BuildFileReport,
+  BuildOptions,
+  BuildReport,
+  BuildTimingReport,
+  CacheReport,
+  ExportEntry,
+  FallbackImportExtractionReport,
+  GoToRequest,
+  GoToResult,
+  GraphDeltaReport,
+  GraphReport,
+  ImportBinding,
+  IncrementalBuildOptions,
+  ManifestReport,
+  ModuleIndex,
+  NativeBackendFallbackReason,
+  NativeBackendLanguageReport,
+  NativeBackendReport,
+  ParserBackendDegradationReport,
+  ProjectIndex,
+  Reference,
+  ResolvedExport,
+  SymbolDef,
+  SymbolHandle,
+  SymbolListItem,
+  WorkerPoolReport,
+} from "./indexer/types.js";
 
 type IndexedFileGraphContext = {
   source: string;
@@ -536,182 +485,6 @@ async function buildIndexedModuleForFile(args: {
   };
 }
 
-/**
- * Options for building the project index
- */
-export type BuildOptions = {
-  /** Callback for progress tracking during parsing/indexing */
-  onProgress?:
-    | ((progress: import("./types.js").ProgressUpdate) => void)
-    | undefined;
-  /** Number of threads for parallel processing (default: 8) */
-  threads?: number;
-  /** Cache mode: "off" (default), "memory", or "disk" */
-  cache?: "off" | "memory" | "disk";
-  /** Custom cache directory (default: .codegraph-cache/index-v1) */
-  cacheDir?: string;
-  /** Use content-hash for cache validation (default: true). Set to false to use mtime+size only */
-  cacheStrict?: boolean;
-  /** Build bloom filters for faster reference scanning (default: true) */
-  useBloomFilters?: boolean;
-  /** Preset configuration (overrides individual options if set) */
-  preset?: "code-review" | "ci-fast" | "development" | "production";
-  /** Graph building options */
-  graph?: GraphBuildOptions;
-  /** Native tree-sitter runtime mode (default: "auto") */
-  native?: NativeRuntimeMode;
-  /** Verify manifest consistency before reuse (incremental builds only) */
-  cacheVerify?: boolean;
-  /** Force full parsing for changed files during incremental builds */
-  incrementalStrict?: boolean;
-  /** Optional build report data for observability */
-  report?: BuildReport;
-  /** Max parsed AST entries retained in memory (LRU-style), default 1024 */
-  parsedCacheMaxEntries?: number;
-  /** Log level for build warnings (default: "warn") */
-  logLevel?: LogLevel;
-  /** Keep parsed trees in memory (default: false). Set to true for faster subsequent lookups at the cost of memory. */
-  keepParsed?: boolean;
-  /** Use Piscina worker threads for native extraction (default: false) */
-  useNativeWorkers?: boolean;
-  /** Number of native worker threads (default: min(cpuCount - 1, 8)) */
-  nativeThreads?: number;
-  /** File discovery controls for project-root scans. */
-  discovery?: ProjectFileDiscoveryOptions;
-};
-
-export type IncrementalBuildOptions = BuildOptions & {
-  files?: string[];
-  changedSince?: string;
-  gitBase?: string;
-  gitHead?: string;
-};
-
-export type CacheReport = {
-  mode: "off" | "memory" | "disk";
-  hits: number;
-  misses: number;
-};
-
-export type BuildTimingReport = {
-  totalMs?: number;
-  manifestMs?: number;
-  parseMs?: number;
-  graphMs?: number;
-  writeManifestMs?: number;
-};
-
-export type BuildFileReport = {
-  total: number;
-  changed?: number;
-  cached?: number;
-  parsed?: number;
-  failed?: number;
-  errors?: Array<{ file: string; message: string }>;
-};
-
-export type FallbackImportExtractionReport = {
-  total: number;
-  byLanguage: Record<string, number>;
-  files: Record<
-    string,
-    {
-      language: string;
-      reason: FallbackImportExtractionReason;
-    }
-  >;
-  byReason?: Record<FallbackImportExtractionReason, number>;
-};
-
-export type GraphReport = {
-  fallbackImportExtraction: FallbackImportExtractionReport;
-};
-
-export type ManifestReport = {
-  used: boolean;
-  reused: boolean;
-  reason?: string;
-  mismatches?: number;
-  missing?: number;
-  optionsMismatch?: string[];
-  configHashError?: string;
-};
-
-export type NativeBackendFallbackReason =
-  | "unavailable"
-  | "unsupportedLanguage"
-  | "queryFailure";
-
-export type NativeBackendLanguageReport = {
-  filesSeen: number;
-  filesUsed: number;
-  filesFellBack: number;
-  fallbackReasons: Record<NativeBackendFallbackReason, number>;
-  normalizedQueryKinds?: string[];
-  skippedQueryKinds?: string[];
-};
-
-export type NativeBackendReport = {
-  available: boolean;
-  enabled: boolean;
-  supportedLanguageIds: string[];
-  filesUsed: number;
-  filesFellBack: number;
-  fallbackReasons: Record<NativeBackendFallbackReason, number>;
-  byLanguage: Record<string, NativeBackendLanguageReport>;
-  errors: Array<{
-    file: string;
-    languageId: string;
-    reason: NativeBackendFallbackReason;
-    message: string;
-  }>;
-  loadError?: string;
-};
-
-export type ParserBackendDegradationReport = {
-  total: number;
-  byLanguage: Record<string, number>;
-  files: Array<{
-    file: string;
-    languageId: string;
-    nativeFallbackReason?: NativeBackendFallbackReason;
-    nativeError?: string;
-    jsError?: string;
-  }>;
-};
-
-export type BackendReport = {
-  native: NativeBackendReport;
-  parser?: ParserBackendDegradationReport;
-};
-
-export type WorkerPoolReport = {
-  enabled: boolean;
-  threads: number;
-  tasksSubmitted: number;
-  tasksFailed: number;
-  startupError?: string;
-  errors?: Array<{ file: string; message: string }>;
-  totalWorkerMs?: number;
-  wallClockMs?: number;
-};
-
-export type BuildReport = {
-  timings: BuildTimingReport;
-  cache?: CacheReport;
-  files?: BuildFileReport;
-  graph?: GraphReport;
-  manifest?: ManifestReport;
-  backend?: BackendReport;
-  workerPool?: WorkerPoolReport;
-};
-
-export type GraphDeltaReport = {
-  changedFiles: string[];
-  added: Edge[];
-  removed: Edge[];
-};
-
 // ---------------- Worker pool helpers ----------------
 
 /** SFC files need source preprocessing the worker doesn't handle. */
@@ -821,8 +594,6 @@ function workerResultToPrepared(
 }
 
 // ---------------- Symbol handles (agent-friendly) ----------------
-export type SymbolHandle = string;
-
 export function symbolId(def: SymbolDef): SymbolHandle {
   const idx = def?.range?.start?.index ?? 0;
   return `${def.file}::${def.localName}::${idx}`;
@@ -1051,15 +822,6 @@ export async function findReferencesById(
   return await findReferences(index, { def });
 }
 
-export type SymbolListItem = {
-  id: SymbolHandle;
-  file: FileId;
-  name: string;
-  kind: SymbolKind | "import" | "namespaceImport";
-  range?: Range;
-  docstring?: string;
-};
-
 export function listSymbols(
   index: ProjectIndex,
   opts?: { file?: FileId; includeImports?: boolean },
@@ -1279,16 +1041,6 @@ function appendJsLikeRegexFallbackExports(
     }
   }
 }
-
-export type ApiSurface = Array<{
-  file: FileId;
-  exports: Array<{
-    name: string;
-    kind: string;
-    exportedAs: string;
-    target?: { file: FileId; name: string };
-  }>;
-}>;
 
 export function getApiSurface(index: ProjectIndex): ApiSurface {
   const out: ApiSurface = [];
@@ -3588,18 +3340,6 @@ function inferPhpQualifiedReferenceImportType(
   return undefined;
 }
 
-export type GoToRequest = { file: FileId; line: number; column: number };
-export type GoToResult =
-  | {
-      status: "ok";
-      definition: SymbolDef;
-      via?: {
-        importedFrom?: string | undefined;
-        exportedName?: string | undefined;
-      };
-    }
-  | { status: "not_found"; reason: string };
-
 export async function goToDefinition(
   index: ProjectIndex,
   req: GoToRequest,
@@ -4359,13 +4099,6 @@ export function buildScopeIndexFromSource(
     opts,
   );
 }
-
-export type Reference = {
-  file: FileId;
-  range: Range;
-  context?: string;
-  via?: { import?: ImportBinding; namespaceMember?: string };
-};
 
 export async function findReferences(
   index: ProjectIndex,

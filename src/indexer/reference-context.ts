@@ -5,7 +5,7 @@ import type {
   SyntaxTreeLike,
 } from "../languages/types.js";
 import type { Range } from "../types.js";
-import type { SymbolDef } from "../indexer.js";
+import type { SymbolDef } from "./types.js";
 
 export function sameDef(left: SymbolDef, right: SymbolDef): boolean {
   const leftIndex = left.range.start.index ?? 0;

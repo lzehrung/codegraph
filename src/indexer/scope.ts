@@ -12,7 +12,7 @@ import type {
   SyntaxTreeLike,
 } from "../languages/types.js";
 import type { Range } from "../types.js";
-import type { ImportBinding } from "../indexer.js";
+import type { ImportBinding } from "./types.js";
 
 export type BindingKind =
   | "local"
