@@ -98,13 +98,7 @@ export const PHP_DEF: LanguageDefinition = {
   `,
   },
   nodeTypes: {
-    identifier: [
-      "name",
-      "variable_name",
-      "namespace_name",
-      "qualified_name",
-      "relative_name",
-    ],
+    identifier: ["name", "variable_name", "namespace_name", "qualified_name", "relative_name"],
     propertyIdentifier: ["name"],
     memberExpression: "member_access_expression",
   },
@@ -140,15 +134,10 @@ export const PHP_DEF: LanguageDefinition = {
       return parent.childForFieldName("name")?.id === node.id;
     }
 
-    return (
-      parent.type === "const_element" &&
-      parent.namedChildren.some((child) => child.id === node.id && child.type === "name")
-    );
+    return parent.type === "const_element" && parent.namedChildren.some((child) => child.id === node.id && child.type === "name");
   },
-  createsBlockScope: (node) =>
-    node.type === "compound_statement" || node.type === "program",
-  createsFunctionScope: (node) =>
-    node.type === "function_definition" || node.type === "method_declaration",
+  createsBlockScope: (node) => node.type === "compound_statement" || node.type === "program",
+  createsFunctionScope: (node) => node.type === "function_definition" || node.type === "method_declaration",
   supportsCrossModuleSymbols: true,
 };
 

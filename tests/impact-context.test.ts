@@ -31,7 +31,7 @@ describe("Impact Context Collection", () => {
         index,
         impactedFiles,
         changedSymbolIds,
-        2 // 2-hop context
+        2, // 2-hop context
       );
 
       expect(context).toBeDefined();
@@ -60,12 +60,7 @@ describe("Impact Context Collection", () => {
     it("should handle empty inputs gracefully", async () => {
       const index = await createTestIndex("typescript");
 
-      const context = await collectImpactContext(
-        index,
-        [],
-        [],
-        1
-      );
+      const context = await collectImpactContext(index, [], [], 1);
 
       expect(context.fileSubgraph.nodes.size).toBe(0);
       expect(context.fileSubgraph.edges.length).toBe(0);
@@ -97,12 +92,7 @@ describe("Impact Context Collection", () => {
       }
 
       if (symbolId) {
-        const context = await collectImpactContext(
-          index,
-          [testFile],
-          [symbolId],
-          1
-        );
+        const context = await collectImpactContext(index, [testFile], [symbolId], 1);
 
         // Should find some symbol neighbors if the symbol is actually used
         expect(context.symbolNeighbors.length).toBeGreaterThanOrEqual(0);
@@ -118,12 +108,7 @@ describe("Impact Context Collection", () => {
       const mockFiles = ["/src/utils.ts", "/src/helpers.ts"];
       const mockSymbolIds = ["utils.ts::helper::100"];
 
-      const candidates = listCandidateTestFiles(
-        index,
-        mockFiles,
-        mockSymbolIds,
-        { maxCandidates: 10 }
-      );
+      const candidates = listCandidateTestFiles(index, mockFiles, mockSymbolIds, { maxCandidates: 10 });
 
       // Should return empty or very low confidence candidates
       expect(Array.isArray(candidates)).toBe(true);
@@ -144,12 +129,7 @@ describe("Impact Context Collection", () => {
         }
       }
 
-      const candidates = listCandidateTestFiles(
-        index,
-        files,
-        changedSymbolIds,
-        { maxCandidates: 5 }
-      );
+      const candidates = listCandidateTestFiles(index, files, changedSymbolIds, { maxCandidates: 5 });
 
       expect(candidates.length).toBeLessThanOrEqual(5);
     });
@@ -158,15 +138,10 @@ describe("Impact Context Collection", () => {
       const index = await createTestIndex("typescript");
 
       // Test with a very specific pattern that shouldn't match the default patterns
-      const candidates = listCandidateTestFiles(
-        index,
-        Array.from(index.byFile.keys()),
-        [],
-        {
-          testPatterns: ["VerySpecificTestPattern"], // Should not match anything
-          maxCandidates: 10
-        }
-      );
+      const candidates = listCandidateTestFiles(index, Array.from(index.byFile.keys()), [], {
+        testPatterns: ["VerySpecificTestPattern"], // Should not match anything
+        maxCandidates: 10,
+      });
 
       // Should return candidates based on the very specific pattern (likely none)
       // or fall back to default patterns if the specific pattern doesn't match
@@ -218,12 +193,7 @@ describe("Impact Context Collection", () => {
       }
 
       if (changedSymbolIds.length > 0) {
-        const candidates = listCandidateTestFiles(
-          index,
-          files.slice(0, 3),
-          changedSymbolIds,
-          { maxCandidates: 10 }
-        );
+        const candidates = listCandidateTestFiles(index, files.slice(0, 3), changedSymbolIds, { maxCandidates: 10 });
 
         // Check that candidates are properly sorted by confidence
         for (let i = 1; i < candidates.length; i++) {
@@ -242,28 +212,13 @@ describe("Impact Context Collection", () => {
       try {
         await fsp.mkdir(path.join(root, "src"), { recursive: true });
         await fsp.mkdir(path.join(root, "tests"), { recursive: true });
-        await fsp.writeFile(
-          path.join(root, "src", "feature.ts"),
-          "export function feature() { return 1; }\n",
-          "utf8",
-        );
-        await fsp.writeFile(
-          path.join(root, "tests", "feature.test.ts"),
-          "import { feature } from '../src/feature';\nfeature();\n",
-          "utf8",
-        );
+        await fsp.writeFile(path.join(root, "src", "feature.ts"), "export function feature() { return 1; }\n", "utf8");
+        await fsp.writeFile(path.join(root, "tests", "feature.test.ts"), "import { feature } from '../src/feature';\nfeature();\n", "utf8");
 
         const index = await buildProjectIndex(root, { logLevel: "error" });
-        const changedSymbolIds = [
-          `${path.join(root, "src", "feature.ts").replace(/\\/g, "/")}::feature::16`,
-        ];
+        const changedSymbolIds = [`${path.join(root, "src", "feature.ts").replace(/\\/g, "/")}::feature::16`];
 
-        const candidates = listCandidateTestFiles(
-          index,
-          ["src/feature.ts"],
-          changedSymbolIds,
-          { maxCandidates: 5 },
-        );
+        const candidates = listCandidateTestFiles(index, ["src/feature.ts"], changedSymbolIds, { maxCandidates: 5 });
 
         expect(candidates).toContainEqual({
           file: path.join(root, "tests", "feature.test.ts").replace(/\\/g, "/"),
@@ -285,23 +240,14 @@ describe("Impact Context Collection", () => {
         const libFile = path.join(srcDir, "lib.ts");
         const verifyFile = path.join(checksDir, "lib.verify.ts");
         await fsp.writeFile(libFile, "export const lib = 1;\n", "utf8");
-        await fsp.writeFile(
-          verifyFile,
-          "import { lib } from '../src/lib';\nlib;\n",
-          "utf8",
-        );
+        await fsp.writeFile(verifyFile, "import { lib } from '../src/lib';\nlib;\n", "utf8");
 
         const index = await buildProjectIndexFromFiles(root, [verifyFile], {
           cache: "memory",
         });
-        const candidates = listCandidateTestFiles(
-          index,
-          [libFile],
-          [],
-          {
-            testPatterns: ["^checks/.*\\.verify\\.ts$"],
-          },
-        );
+        const candidates = listCandidateTestFiles(index, [libFile], [], {
+          testPatterns: ["^checks/.*\\.verify\\.ts$"],
+        });
 
         expect(candidates).toContainEqual({
           file: normalizePath(verifyFile),
@@ -320,28 +266,15 @@ describe("Impact Context Collection", () => {
         await fsp.mkdir(checksDir, { recursive: true });
         const helperFile = path.join(checksDir, "helper.ts");
         const verifyFile = path.join(checksDir, "lib.verify.ts");
-        await fsp.writeFile(
-          helperFile,
-          "export function helper() { return 1; }\n",
-          "utf8",
-        );
-        await fsp.writeFile(
-          verifyFile,
-          "import { helper } from './helper';\nhelper();\n",
-          "utf8",
-        );
+        await fsp.writeFile(helperFile, "export function helper() { return 1; }\n", "utf8");
+        await fsp.writeFile(verifyFile, "import { helper } from './helper';\nhelper();\n", "utf8");
 
         const index = await buildProjectIndexFromFiles(root, [helperFile, verifyFile], {
           cache: "memory",
         });
-        const candidates = listCandidateTestFiles(
-          index,
-          [helperFile],
-          [],
-          {
-            testPatterns: ["^checks/.*\\.verify\\.ts$"],
-          },
-        );
+        const candidates = listCandidateTestFiles(index, [helperFile], [], {
+          testPatterns: ["^checks/.*\\.verify\\.ts$"],
+        });
 
         expect(candidates).toContainEqual({
           file: normalizePath(verifyFile),

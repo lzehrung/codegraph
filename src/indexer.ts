@@ -7,19 +7,8 @@ import {
 } from "./indexer/parse-context.js";
 import { collectImportsForFile as collectImportsForFileFromImportsModule } from "./indexer/imports.js";
 import { collectLocalsAndExportsFromSource as collectLocalsAndExportsFromLocalsModule } from "./indexer/locals-and-exports.js";
-import {
-  buildGraphDelta,
-  buildProjectIndex,
-  buildProjectIndexFromFiles,
-  buildProjectIndexIncremental,
-} from "./indexer/build-index.js";
-import {
-  collectNamespaceMemberRefs,
-  findReferences,
-  goToDefinition,
-  resolveExport,
-  resolveImported,
-} from "./indexer/navigation.js";
+import { buildGraphDelta, buildProjectIndex, buildProjectIndexFromFiles, buildProjectIndexIncremental } from "./indexer/build-index.js";
+import { collectNamespaceMemberRefs, findReferences, goToDefinition, resolveExport, resolveImported } from "./indexer/navigation.js";
 import {
   defFromSymbolId,
   findReferencesById,
@@ -60,10 +49,7 @@ import {
   type SymbolListItem,
   type WorkerPoolReport,
 } from "./indexer/types.js";
-import {
-  buildScopeIndexFromSource as buildScopeIndexFromSourceFromModule,
-  type ScopeIndex,
-} from "./indexer/scope.js";
+import { buildScopeIndexFromSource as buildScopeIndexFromSourceFromModule, type ScopeIndex } from "./indexer/scope.js";
 import type { LanguageSupport } from "./languages.js";
 import type { JsLanguage, SyntaxTreeLike } from "./languages/types.js";
 import type { NativeQueryResults, NativeRuntimeMode } from "./native/treeSitterNative.js";
@@ -102,20 +88,9 @@ export type {
   WorkerPoolReport,
 } from "./indexer/types.js";
 
-export {
-  buildGraphDelta,
-  buildProjectIndex,
-  buildProjectIndexFromFiles,
-  buildProjectIndexIncremental,
-} from "./indexer/build-index.js";
+export { buildGraphDelta, buildProjectIndex, buildProjectIndexFromFiles, buildProjectIndexIncremental } from "./indexer/build-index.js";
 
-export {
-  collectNamespaceMemberRefs,
-  findReferences,
-  goToDefinition,
-  resolveExport,
-  resolveImported,
-} from "./indexer/navigation.js";
+export { collectNamespaceMemberRefs, findReferences, goToDefinition, resolveExport, resolveImported } from "./indexer/navigation.js";
 
 export {
   defFromSymbolId,
@@ -140,14 +115,7 @@ export function collectLocalsAndExportsFromSource(
     logLevel?: import("./logging.js").LogLevel;
   },
 ): ModuleIndex {
-  return collectLocalsAndExportsFromLocalsModule(
-    file,
-    source,
-    support,
-    lang,
-    imports,
-    opts,
-  );
+  return collectLocalsAndExportsFromLocalsModule(file, source, support, lang, imports, opts);
 }
 
 export async function collectImportsForFile(
@@ -171,10 +139,7 @@ export async function parseFile(file: string): Promise<ParsedFileContext> {
   return await parseFileFromModule(file);
 }
 
-export async function ensureParsedContext(
-  file: string,
-  parsedEntry?: ParsedFileCacheEntry,
-): Promise<ParsedFileContext> {
+export async function ensureParsedContext(file: string, parsedEntry?: ParsedFileCacheEntry): Promise<ParsedFileContext> {
   return await ensureParsedContextFromModule(file, parsedEntry);
 }
 
@@ -186,20 +151,10 @@ export function buildScopeIndexFromSource(
   imports: ImportBinding[] = [],
   opts?: { tree?: SyntaxTreeLike; nativeMode?: NativeRuntimeMode },
 ): ScopeIndex {
-  return buildScopeIndexFromSourceFromModule(
-    file,
-    source,
-    support,
-    lang,
-    imports,
-    opts,
-  );
+  return buildScopeIndexFromSourceFromModule(file, source, support, lang, imports, opts);
 }
 
-export async function __buildSymbolGraphDetailedCompat(
-  index: ProjectIndex,
-): Promise<SymbolGraph> {
+export async function __buildSymbolGraphDetailedCompat(index: ProjectIndex): Promise<SymbolGraph> {
   const { buildSymbolGraphDetailed } = await import("./index.js");
   return await buildSymbolGraphDetailed(index);
 }
-

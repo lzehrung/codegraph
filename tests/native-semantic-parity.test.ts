@@ -2,18 +2,10 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import {
-  buildProjectIndexFromFiles,
-  findReferences,
-  goToDefinition,
-  listSymbols,
-  type ProjectIndex,
-} from "../src/index.js";
+import { buildProjectIndexFromFiles, findReferences, goToDefinition, listSymbols, type ProjectIndex } from "../src/index.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
 
-const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable()
-  ? describe
-  : describe.skip;
+const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples");
 const tempDirs: string[] = [];
 
@@ -53,31 +45,21 @@ function normalizeFile(file: string): string {
 function normalizeGraphEdges(index: ProjectIndex): string[] {
   return index.graph.edges
     .map((edge) => {
-      const target =
-        edge.to.type === "file"
-          ? `file:${normalizeFile(edge.to.path)}`
-          : `external:${edge.to.name}`;
+      const target = edge.to.type === "file" ? `file:${normalizeFile(edge.to.path)}` : `external:${edge.to.name}`;
       return `${normalizeFile(edge.from)}=>${target}`;
     })
     .sort();
 }
 
-function normalizeSymbols(
-  index: ProjectIndex,
-  expectations: SymbolExpectation[] | undefined,
-): Record<string, string[]> {
+function normalizeSymbols(index: ProjectIndex, expectations: SymbolExpectation[] | undefined): Record<string, string[]> {
   if (!expectations) {
     return {};
   }
   const normalized: Record<string, string[]> = {};
   for (const expectation of expectations) {
     const file = normalizeFile(expectation.file);
-    const symbolNames = new Set(
-      listSymbols(index, { file }).map((symbol) => symbol.name),
-    );
-    normalized[file] = expectation.names
-      .filter((name) => symbolNames.has(name))
-      .sort();
+    const symbolNames = new Set(listSymbols(index, { file }).map((symbol) => symbol.name));
+    normalized[file] = expectation.names.filter((name) => symbolNames.has(name)).sort();
   }
   return normalized;
 }
@@ -104,10 +86,7 @@ async function normalizeGoto(
 async function normalizeReferences(
   index: ProjectIndex,
   request: SemanticExpectation["references"],
-): Promise<
-  | { status: "ok"; refs: string[] }
-  | { status: "not_found" }
-> {
+): Promise<{ status: "ok"; refs: string[] } | { status: "not_found" }> {
   const result = await findReferences(index, {
     file: normalizeFile(request.file),
     line: request.line,
@@ -118,16 +97,11 @@ async function normalizeReferences(
   }
   return {
     status: "ok",
-    refs: result.references
-      .map((reference) => `${normalizeFile(reference.file)}:${reference.range.start.line}`)
-      .sort(),
+    refs: result.references.map((reference) => `${normalizeFile(reference.file)}:${reference.range.start.line}`).sort(),
   };
 }
 
-async function withNativeMode<T>(
-  mode: "native" | "js",
-  run: () => Promise<T>,
-): Promise<T> {
+async function withNativeMode<T>(mode: "native" | "js", run: () => Promise<T>): Promise<T> {
   const previous = process.env.CODEGRAPH_DISABLE_NATIVE;
   if (mode === "js") {
     process.env.CODEGRAPH_DISABLE_NATIVE = "1";
@@ -147,10 +121,7 @@ async function withNativeMode<T>(
   }
 }
 
-async function buildSemanticIndex(
-  expectation: SemanticExpectation,
-  mode: "native" | "js",
-): Promise<ProjectIndex> {
+async function buildSemanticIndex(expectation: SemanticExpectation, mode: "native" | "js"): Promise<ProjectIndex> {
   return await withNativeMode(mode, async () => {
     const files = expectation.files.map(normalizeFile);
     return await buildProjectIndexFromFiles(expectation.root, files);
@@ -177,16 +148,12 @@ function sampleExpectation(
   };
 }
 
-async function expectSemanticParity(
-  expectation: SemanticExpectation,
-): Promise<void> {
+async function expectSemanticParity(expectation: SemanticExpectation): Promise<void> {
   const nativeIndex = await buildSemanticIndex(expectation, "native");
   const jsIndex = await buildSemanticIndex(expectation, "js");
 
   expect(normalizeGraphEdges(nativeIndex)).toEqual(normalizeGraphEdges(jsIndex));
-  expect(normalizeSymbols(nativeIndex, expectation.symbols)).toEqual(
-    normalizeSymbols(jsIndex, expectation.symbols),
-  );
+  expect(normalizeSymbols(nativeIndex, expectation.symbols)).toEqual(normalizeSymbols(jsIndex, expectation.symbols));
 
   const nativeGoto = await normalizeGoto(nativeIndex, expectation.goto);
   const jsGoto = await normalizeGoto(jsIndex, expectation.goto);
@@ -207,21 +174,12 @@ async function createTypeScriptNormalizationCase(): Promise<SemanticExpectation>
 
   await fsp.writeFile(
     moduleFile,
-    [
-      "class InternalClass {}",
-      "export class ExportedClass {}",
-      "const assigned = InternalClass;",
-      "export = assigned;",
-    ].join("\n"),
+    ["class InternalClass {}", "export class ExportedClass {}", "const assigned = InternalClass;", "export = assigned;"].join("\n"),
     "utf8",
   );
   await fsp.writeFile(
     consumerFile,
-    [
-      "import assigned = require('./module');",
-      "const instance = new assigned();",
-      "console.log(instance);",
-    ].join("\n"),
+    ["import assigned = require('./module');", "const instance = new assigned();", "console.log(instance);"].join("\n"),
     "utf8",
   );
 
@@ -250,9 +208,7 @@ async function createTypeScriptNormalizationCase(): Promise<SemanticExpectation>
 }
 
 nativeDescribe("native semantic parity", () => {
-  it(
-    "matches native and JS semantics for representative language fixtures",
-    async () => {
+  it("matches native and JS semantics for representative language fixtures", async () => {
     const cases: SemanticExpectation[] = [
       sampleExpectation(
         "typescript",
@@ -327,11 +283,7 @@ nativeDescribe("native semantic parity", () => {
       ),
       sampleExpectation(
         "php",
-        [
-          "bracketed-consumer.php",
-          "bracketed-qualified-consumer.php",
-          "multi-namespace/Library.php",
-        ],
+        ["bracketed-consumer.php", "bracketed-qualified-consumer.php", "multi-namespace/Library.php"],
         [{ file: "multi-namespace/Library.php", names: ["SecondService"] }],
         { file: "bracketed-consumer.php", line: 5, column: 17, expectedStatus: "ok" },
         { file: "multi-namespace/Library.php", line: 8, column: 11, expectedStatus: "ok" },
@@ -589,9 +541,7 @@ nativeDescribe("native semantic parity", () => {
     for (const testCase of cases) {
       await expectSemanticParity(testCase);
     }
-    },
-    30_000,
-  );
+  }, 30_000);
 
   it("matches native and JS semantics for normalization-sensitive TypeScript export assignment", async () => {
     const testCase = await createTypeScriptNormalizationCase();

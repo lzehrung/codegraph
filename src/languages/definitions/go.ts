@@ -24,13 +24,7 @@ export const GO_DEF: LanguageDefinition = {
         captureId: "type",
       },
     ],
-    splitPoints: [
-      "if_statement",
-      "for_statement",
-      "expression_switch_statement",
-      "type_switch_statement",
-      "select_statement",
-    ],
+    splitPoints: ["if_statement", "for_statement", "expression_switch_statement", "type_switch_statement", "select_statement"],
     comments: ["comment"],
   },
   graph: {
@@ -57,39 +51,21 @@ export const GO_DEF: LanguageDefinition = {
     `,
   },
   nodeTypes: {
-    identifier: [
-      "identifier",
-      "field_identifier",
-      "type_identifier",
-      "package_identifier",
-    ],
+    identifier: ["identifier", "field_identifier", "type_identifier", "package_identifier"],
     memberExpression: "selector_expression",
   },
   supportsCrossModuleSymbols: true,
   createsFunctionScope: (node) =>
-    node.type === "function_declaration" ||
-    node.type === "method_declaration" ||
-    node.type === "func_literal",
+    node.type === "function_declaration" || node.type === "method_declaration" || node.type === "func_literal",
   createsBlockScope: (node) => node.type === "block",
   isDeclarationName: (node) => {
     const p = node.parent;
     if (!p) return false;
-    if (
-      p.type === "function_declaration" &&
-      p.childForFieldName("name")?.id === node.id
-    )
-      return true;
-    if (
-      p.type === "method_declaration" &&
-      p.childForFieldName("name")?.id === node.id
-    )
-      return true;
-    if (p.type === "type_spec" && p.childForFieldName("name")?.id === node.id)
-      return true;
-    if (p.type === "var_spec" && p.childForFieldName("name")?.id === node.id)
-      return true;
-    if (p.type === "const_spec" && p.childForFieldName("name")?.id === node.id)
-      return true;
+    if (p.type === "function_declaration" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "method_declaration" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "type_spec" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "var_spec" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "const_spec" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "short_var_declaration") return true;
     if (p.type === "parameter_declaration") return true;
     return false;

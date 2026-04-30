@@ -58,18 +58,11 @@ const definition: LanguageTestDefinition = {
     symbols: [
       {
         file: "contracts.go",
-        includes: [
-          { name: "Runner" },
-          { name: "Service" },
-          { name: "BuildService" },
-        ],
+        includes: [{ name: "Runner" }, { name: "Service" }, { name: "BuildService" }],
       },
       {
         file: "utils.go",
-        includes: [
-          { name: "ReExportedHelper" },
-          { name: "ConstantValue" },
-        ],
+        includes: [{ name: "ReExportedHelper" }, { name: "ConstantValue" }],
       },
       {
         file: "interfaces.go",

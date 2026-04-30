@@ -5,16 +5,7 @@ import type { Edge } from "../types.js";
 
 export const DEFAULT_REF_CONTEXT_LINES = 5;
 
-export const QUERY_DRIVEN_LOCALS_LANGUAGES = new Set([
-  "python",
-  "php",
-  "java",
-  "csharp",
-  "rust",
-  "kotlin",
-  "swift",
-  "cpp",
-]);
+export const QUERY_DRIVEN_LOCALS_LANGUAGES = new Set(["python", "php", "java", "csharp", "rust", "kotlin", "swift", "cpp"]);
 
 export function parseGoImportAlias(stmtText: string): string | null {
   const trimmed = stmtText.trim();
@@ -23,10 +14,7 @@ export function parseGoImportAlias(stmtText: string): string | null {
 }
 
 export function edgeKey(edge: Edge): string {
-  const toKey =
-    edge.to.type === "file"
-      ? `file:${edge.to.path}`
-      : `external:${edge.to.name}`;
+  const toKey = edge.to.type === "file" ? `file:${edge.to.path}` : `external:${edge.to.name}`;
   const typeOnly = edge.typeOnly ? "1" : "0";
   return `${edge.from}|${toKey}|${edge.raw}|${typeOnly}`;
 }

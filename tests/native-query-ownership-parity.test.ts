@@ -6,10 +6,7 @@ import { LANG_CONFIGS } from "../src/bootstrap/treeSitterLanguages.js";
 import { chunkFile, type Chunk } from "../src/chunking/chunkFile.js";
 import { chunkSFCFile } from "../src/chunking/chunkSFC.js";
 import { astGrep } from "../src/index.js";
-import {
-  __resetNativeTreeSitterBindingForTests,
-  isNativeTreeSitterAvailable,
-} from "../src/native/treeSitterNative.js";
+import { __resetNativeTreeSitterBindingForTests, isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
 
@@ -35,10 +32,7 @@ function withRuntimeMode<T>(mode: RuntimeMode, run: () => T): T {
   }
 }
 
-async function withRuntimeModeAsync<T>(
-  mode: RuntimeMode,
-  run: () => Promise<T>,
-): Promise<T> {
+async function withRuntimeModeAsync<T>(mode: RuntimeMode, run: () => Promise<T>): Promise<T> {
   const previous = process.env.CODEGRAPH_DISABLE_NATIVE;
   if (mode === "js") {
     process.env.CODEGRAPH_DISABLE_NATIVE = "1";
@@ -71,8 +65,7 @@ function normalizeChunks(chunks: Chunk[]) {
   }));
 }
 
-const tokenize = (text: string) =>
-  text.trim() ? text.trim().split(/\s+/).length : 0;
+const tokenize = (text: string) => (text.trim() ? text.trim().split(/\s+/).length : 0);
 
 afterEach(() => {
   delete process.env.CODEGRAPH_DISABLE_NATIVE;
@@ -85,35 +78,21 @@ nativeDescribe("native query ownership parity", () => {
       {
         config: LANG_CONFIGS.javascript,
         filePath: "sample.js",
-        source: [
-          "function alpha(input) {",
-          "  if (!input) return 0;",
-          "  return input + 1;",
-          "}",
-          "",
-          "const beta = () => alpha(2);",
-        ].join("\n"),
+        source: ["function alpha(input) {", "  if (!input) return 0;", "  return input + 1;", "}", "", "const beta = () => alpha(2);"].join(
+          "\n",
+        ),
       },
       {
         config: LANG_CONFIGS.typescript,
         filePath: "sample.ts",
-        source: [
-          "export namespace Tools {",
-          "  export function build(value: number): number {",
-          "    return value + 1;",
-          "  }",
-          "}",
-        ].join("\n"),
+        source: ["export namespace Tools {", "  export function build(value: number): number {", "    return value + 1;", "  }", "}"].join(
+          "\n",
+        ),
       },
       {
         config: LANG_CONFIGS.python,
         filePath: "sample.py",
-        source: [
-          "def classify(value):",
-          "    if value > 0:",
-          '        return "positive"',
-          "    return \"zero\"",
-        ].join("\n"),
+        source: ["def classify(value):", "    if value > 0:", '        return "positive"', '    return "zero"'].join("\n"),
       },
     ];
 
@@ -184,14 +163,10 @@ nativeDescribe("native query ownership parity", () => {
 
   it("keeps astGrep results identical when native owns query execution", async () => {
     const projectRoot = path.resolve(process.cwd(), "tests", "samples", "typescript");
-    const query = '(import_statement source: (string) @mod)';
+    const query = "(import_statement source: (string) @mod)";
 
-    const nativeHits = await withRuntimeModeAsync("native", async () =>
-      await astGrep(projectRoot, query, ["**/*.ts"]),
-    );
-    const jsHits = await withRuntimeModeAsync("js", async () =>
-      await astGrep(projectRoot, query, ["**/*.ts"]),
-    );
+    const nativeHits = await withRuntimeModeAsync("native", async () => await astGrep(projectRoot, query, ["**/*.ts"]));
+    const jsHits = await withRuntimeModeAsync("js", async () => await astGrep(projectRoot, query, ["**/*.ts"]));
 
     expect(nativeHits).toEqual(jsHits);
   });

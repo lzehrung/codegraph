@@ -2,11 +2,7 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import {
-  buildProjectIndex,
-  buildSymbolGraphDetailed,
-  resolveExport,
-} from "../src/index.js";
+import { buildProjectIndex, buildSymbolGraphDetailed, resolveExport } from "../src/index.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -39,11 +35,7 @@ describe("Circular re-exports resolution", () => {
     const Main = path.join(root, "main.ts");
     await fsp.writeFile(A, "export { b as a } from './B'\n", "utf8");
     await fsp.writeFile(B, "export { a as b } from './A'\n", "utf8");
-    await fsp.writeFile(
-      Main,
-      "import { a } from './A'\nexport const value = a\n",
-      "utf8",
-    );
+    await fsp.writeFile(Main, "import { a } from './A'\nexport const value = a\n", "utf8");
 
     const index = await buildProjectIndex(root);
     const detailed = await buildSymbolGraphDetailed(index);

@@ -50,17 +50,11 @@ describe("JSON module imports", () => {
   it("creates stub modules with default exports for JSON files", () => {
     const jsonModule = index.byFile.get(jsonFile);
     expect(jsonModule).toBeDefined();
-    expect(
-      jsonModule?.exports.some(
-        (e) => e.type === "local" && e.exportedAs === "default"
-      )
-    ).toBe(true);
+    expect(jsonModule?.exports.some((e) => e.type === "local" && e.exportedAs === "default")).toBe(true);
 
     const jsModule = index.byFile.get(jsFile);
     expect(jsModule).toBeDefined();
-    const defaultImport = jsModule?.imports.find(
-      (imp) => imp.kind === "default" && imp.from.includes("./data.json")
-    );
+    const defaultImport = jsModule?.imports.find((imp) => imp.kind === "default" && imp.from.includes("./data.json"));
     expect(defaultImport?.resolved).toBe(jsonFile);
   });
 
@@ -78,9 +72,7 @@ describe("JSON module imports", () => {
   });
 
   it("emits dependency edges pointing to JSON modules", () => {
-    const hasEdge = index.graph.edges.some(
-      (edge) => edge.to.type === "file" && edge.to.path === jsonFile
-    );
+    const hasEdge = index.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path === jsonFile);
     expect(hasEdge).toBe(true);
   });
 
@@ -93,4 +85,3 @@ describe("JSON module imports", () => {
     expect(result.status).toBe("not_found");
   });
 });
-

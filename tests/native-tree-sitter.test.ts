@@ -2,15 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import {
-  isJsFallbackAvailable,
-  parseWithJsLanguage,
-} from "../src/jsFallback.js";
-import {
-  collectImportsForFile,
-  collectLocalsAndExportsFromSource,
-  parseFile,
-} from "../src/indexer.js";
+import { isJsFallbackAvailable, parseWithJsLanguage } from "../src/jsFallback.js";
+import { collectImportsForFile, collectLocalsAndExportsFromSource, parseFile } from "../src/indexer.js";
 import { languageForFile, supportForFile } from "../src/languages.js";
 import { collectModuleSpecifiersFromSource } from "../src/graphs.js";
 import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
@@ -21,9 +14,7 @@ const sampleRoot = path.resolve(process.cwd(), "tests", "samples");
 const tempDirs: string[] = [];
 
 afterAll(async () => {
-  await Promise.all(
-    tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
+  await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
 async function makeTempProject(): Promise<string> {
@@ -32,21 +23,14 @@ async function makeTempProject(): Promise<string> {
   return dir;
 }
 
-function simplifyImports(
-  imports: Awaited<ReturnType<typeof collectImportsForFile>>,
-): unknown[] {
+function simplifyImports(imports: Awaited<ReturnType<typeof collectImportsForFile>>): unknown[] {
   return imports.map((entry) => ({
     ...entry,
-    resolved:
-      typeof entry.resolved === "string"
-        ? entry.resolved.replace(/\\/g, "/")
-        : entry.resolved,
+    resolved: typeof entry.resolved === "string" ? entry.resolved.replace(/\\/g, "/") : entry.resolved,
   }));
 }
 
-function simplifyModuleIndex(
-  index: ReturnType<typeof collectLocalsAndExportsFromSource>,
-): unknown {
+function simplifyModuleIndex(index: ReturnType<typeof collectLocalsAndExportsFromSource>): unknown {
   return {
     locals: index.locals.map((local) => ({
       localName: local.localName,
@@ -103,10 +87,7 @@ async function parseWithJsTreeSitter(file: string) {
   };
 }
 
-async function expectNativeImportParity(
-  projectDir: string,
-  relativeFile: string,
-): Promise<void> {
+async function expectNativeImportParity(projectDir: string, relativeFile: string): Promise<void> {
   const projectRoot = sampleFile(projectDir);
   const file = path.join(projectRoot, relativeFile);
   const nativeParsed = await parseFile(file);
@@ -136,28 +117,14 @@ async function expectNativeModuleIndexParity(relativeFile: string): Promise<void
   const jsParsed = await parseWithJsTreeSitter(file);
   expect(nativeParsed.nativeQueries).not.toBeNull();
 
-  const nativeIndex = collectLocalsAndExportsFromSource(
-    file,
-    nativeParsed.source,
-    nativeParsed.sup,
-    nativeParsed.lang,
-    [],
-    {
-      tree: nativeParsed.tree,
-      nativeQueries: nativeParsed.nativeQueries,
-    },
-  );
-  const jsIndex = collectLocalsAndExportsFromSource(
-    file,
-    jsParsed.source,
-    jsParsed.sup,
-    jsParsed.lang,
-    [],
-    {
-      tree: jsParsed.tree,
-      nativeMode: "off",
-    },
-  );
+  const nativeIndex = collectLocalsAndExportsFromSource(file, nativeParsed.source, nativeParsed.sup, nativeParsed.lang, [], {
+    tree: nativeParsed.tree,
+    nativeQueries: nativeParsed.nativeQueries,
+  });
+  const jsIndex = collectLocalsAndExportsFromSource(file, jsParsed.source, jsParsed.sup, jsParsed.lang, [], {
+    tree: jsParsed.tree,
+    nativeMode: "off",
+  });
 
   expect(simplifyModuleIndex(nativeIndex)).toEqual(simplifyModuleIndex(jsIndex));
 }
@@ -167,26 +134,16 @@ async function expectNativeModuleSpecifierParity(relativeFile: string): Promise<
   const parsed = await parseFile(file);
   expect(parsed.nativeQueries).not.toBeNull();
 
-  const nativeSpecifiers = collectModuleSpecifiersFromSource(
-    parsed.sup,
-    parsed.lang,
-    parsed.source,
-    {
-      tree: parsed.tree,
-      nativeQueries: parsed.nativeQueries,
-      file,
-    },
-  );
-  const jsSpecifiers = collectModuleSpecifiersFromSource(
-    parsed.sup,
-    parsed.lang,
-    parsed.source,
-    {
-      tree: parsed.tree,
-      file,
-      native: "off",
-    },
-  );
+  const nativeSpecifiers = collectModuleSpecifiersFromSource(parsed.sup, parsed.lang, parsed.source, {
+    tree: parsed.tree,
+    nativeQueries: parsed.nativeQueries,
+    file,
+  });
+  const jsSpecifiers = collectModuleSpecifiersFromSource(parsed.sup, parsed.lang, parsed.source, {
+    tree: parsed.tree,
+    file,
+    native: "off",
+  });
 
   expect(nativeSpecifiers).toEqual(jsSpecifiers);
 }
@@ -237,7 +194,7 @@ jsFallbackDescribe("native tree-sitter integration", () => {
       file,
       [
         '"""module docs"""',
-        "__all__ = [\"exported_function\", \"ExportedClass\"]",
+        '__all__ = ["exported_function", "ExportedClass"]',
         "",
         "def exported_function():",
         "    return 1",
@@ -254,28 +211,14 @@ jsFallbackDescribe("native tree-sitter integration", () => {
     const jsParsed = await parseWithJsTreeSitter(file);
     expect(nativeParsed.nativeQueries).not.toBeNull();
 
-    const nativeIndex = collectLocalsAndExportsFromSource(
-      file,
-      nativeParsed.source,
-      nativeParsed.sup,
-      nativeParsed.lang,
-      [],
-      {
-        tree: nativeParsed.tree,
-        nativeQueries: nativeParsed.nativeQueries,
-      },
-    );
-    const jsIndex = collectLocalsAndExportsFromSource(
-      file,
-      jsParsed.source,
-      jsParsed.sup,
-      jsParsed.lang,
-      [],
-      {
-        tree: jsParsed.tree,
-        nativeMode: "off",
-      },
-    );
+    const nativeIndex = collectLocalsAndExportsFromSource(file, nativeParsed.source, nativeParsed.sup, nativeParsed.lang, [], {
+      tree: nativeParsed.tree,
+      nativeQueries: nativeParsed.nativeQueries,
+    });
+    const jsIndex = collectLocalsAndExportsFromSource(file, jsParsed.source, jsParsed.sup, jsParsed.lang, [], {
+      tree: jsParsed.tree,
+      nativeMode: "off",
+    });
 
     expect(simplifyModuleIndex(nativeIndex)).toEqual(simplifyModuleIndex(jsIndex));
   });
@@ -297,26 +240,16 @@ jsFallbackDescribe("native tree-sitter integration", () => {
     const support = supportForFile(file);
     expect(support).toBeDefined();
 
-    const nativeSpecifiers = collectModuleSpecifiersFromSource(
-      parsed.sup,
-      parsed.lang,
-      source,
-      {
-        tree: parsed.tree,
-        nativeQueries: parsed.nativeQueries,
-        file,
-      },
-    );
-    const jsSpecifiers = collectModuleSpecifiersFromSource(
-      parsed.sup,
-      parsed.lang,
-      source,
-      {
-        tree: parsed.tree,
-        file,
-        native: "off",
-      },
-    );
+    const nativeSpecifiers = collectModuleSpecifiersFromSource(parsed.sup, parsed.lang, source, {
+      tree: parsed.tree,
+      nativeQueries: parsed.nativeQueries,
+      file,
+    });
+    const jsSpecifiers = collectModuleSpecifiersFromSource(parsed.sup, parsed.lang, source, {
+      tree: parsed.tree,
+      file,
+      native: "off",
+    });
 
     expect(nativeSpecifiers).toEqual(jsSpecifiers);
   });
@@ -326,40 +259,21 @@ jsFallbackDescribe("native tree-sitter integration", () => {
     const file = path.join(projectRoot, "module.ts");
     await fs.writeFile(
       file,
-      [
-        "class InternalClass {}",
-        "export class ExportedClass {}",
-        "const assigned = InternalClass;",
-        "export = assigned;",
-      ].join("\n"),
+      ["class InternalClass {}", "export class ExportedClass {}", "const assigned = InternalClass;", "export = assigned;"].join("\n"),
     );
 
     const nativeParsed = await parseFile(file);
     const jsParsed = await parseWithJsTreeSitter(file);
     expect(nativeParsed.nativeQueries).not.toBeNull();
 
-    const nativeIndex = collectLocalsAndExportsFromSource(
-      file,
-      nativeParsed.source,
-      nativeParsed.sup,
-      nativeParsed.lang,
-      [],
-      {
-        tree: nativeParsed.tree,
-        nativeQueries: nativeParsed.nativeQueries,
-      },
-    );
-    const jsIndex = collectLocalsAndExportsFromSource(
-      file,
-      jsParsed.source,
-      jsParsed.sup,
-      jsParsed.lang,
-      [],
-      {
-        tree: jsParsed.tree,
-        nativeMode: "off",
-      },
-    );
+    const nativeIndex = collectLocalsAndExportsFromSource(file, nativeParsed.source, nativeParsed.sup, nativeParsed.lang, [], {
+      tree: nativeParsed.tree,
+      nativeQueries: nativeParsed.nativeQueries,
+    });
+    const jsIndex = collectLocalsAndExportsFromSource(file, jsParsed.source, jsParsed.sup, jsParsed.lang, [], {
+      tree: jsParsed.tree,
+      nativeMode: "off",
+    });
 
     expect(simplifyModuleIndex(nativeIndex)).toEqual(simplifyModuleIndex(jsIndex));
   });

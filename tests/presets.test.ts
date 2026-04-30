@@ -138,9 +138,7 @@ describe("Presets", () => {
       const merged = mergePreset(preset, custom);
 
       expect(merged.graph?.fast).toBe(true);
-      expect(merged.graph?.resolveNodeModules).toBe(
-        preset.graph?.resolveNodeModules,
-      );
+      expect(merged.graph?.resolveNodeModules).toBe(preset.graph?.resolveNodeModules);
     });
 
     test("should handle undefined custom options", () => {
@@ -167,12 +165,7 @@ describe("Presets", () => {
 
   describe("Preset consistency", () => {
     test("all presets should have required fields", () => {
-      const presetNames: Array<keyof typeof BUILD_PRESETS> = [
-        "code-review",
-        "ci-fast",
-        "development",
-        "production",
-      ];
+      const presetNames: Array<keyof typeof BUILD_PRESETS> = ["code-review", "ci-fast", "development", "production"];
 
       for (const name of presetNames) {
         const buildPreset = BUILD_PRESETS[name];

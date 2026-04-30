@@ -18,13 +18,7 @@ export {
   clearImportResolutionCaches,
   clearResolutionCaches,
 } from "./util.js";
-export type {
-  ProjectFileDiscoveryOptions,
-  ProjectFileInfo,
-  ProjectFileKind,
-  ProjectFileRole,
-  ProjectFileType,
-} from "./util.js";
+export type { ProjectFileDiscoveryOptions, ProjectFileInfo, ProjectFileKind, ProjectFileRole, ProjectFileType } from "./util.js";
 export {
   collectGraph,
   graphToDOT,
@@ -157,13 +151,7 @@ export {
   filterErrorsBySeverity,
   summarizePartialResult,
 } from "./util/partialResults.js";
-export {
-  LazyArray,
-  LazyProjectIndex,
-  createSymbolLoader,
-  type LazyModuleIndex,
-  type LazyLoadOptions,
-} from "./util/lazySymbols.js";
+export { LazyArray, LazyProjectIndex, createSymbolLoader, type LazyModuleIndex, type LazyLoadOptions } from "./util/lazySymbols.js";
 export {
   computeSymbolHash,
   symbolIdentifier,
@@ -192,20 +180,10 @@ export {
   type GraphQueryResult,
   type RawSqlResult,
 } from "./sqlite.js";
-export {
-  chunkFile,
-  type Chunk,
-  type ChunkFileOptions,
-} from "./chunking/chunkFile.js";
-export {
-  chunkTextFile,
-  type TextChunkOptions,
-} from "./chunking/chunkTextFile.js";
+export { chunkFile, type Chunk, type ChunkFileOptions } from "./chunking/chunkFile.js";
+export { chunkTextFile, type TextChunkOptions } from "./chunking/chunkTextFile.js";
 export { chunkSFCFile, type ChunkSFCOptions } from "./chunking/chunkSFC.js";
-export {
-  LANG_CONFIGS,
-  type LanguageConfig,
-} from "./bootstrap/treeSitterLanguages.js";
+export { LANG_CONFIGS, type LanguageConfig } from "./bootstrap/treeSitterLanguages.js";
 export {
   buildReviewReport,
   type ReviewDepth,

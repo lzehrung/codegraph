@@ -38,14 +38,7 @@ export const PYTHON_DEF: LanguageDefinition = {
       { type: "import_statement", captureId: "imports" },
       { type: "import_from_statement", captureId: "imports" },
     ],
-    splitPoints: [
-      "if_statement",
-      "for_statement",
-      "while_statement",
-      "try_statement",
-      "with_statement",
-      "match_statement",
-    ],
+    splitPoints: ["if_statement", "for_statement", "while_statement", "try_statement", "with_statement", "match_statement"],
     comments: ["comment"],
   },
   graph: {
@@ -100,19 +93,10 @@ export const PYTHON_DEF: LanguageDefinition = {
   },
   isDeclarationName: (node) => {
     const t = node.parent?.type;
-    return (
-      !!t &&
-      [
-        "function_definition",
-        "class_definition",
-        "assignment",
-        "aliased_import",
-      ].includes(t)
-    );
+    return !!t && ["function_definition", "class_definition", "assignment", "aliased_import"].includes(t);
   },
   createsBlockScope: (n) => n.type === "module" || n.type === "block",
-  createsFunctionScope: (n) =>
-    n.type === "function_definition" || n.type === "lambda",
+  createsFunctionScope: (n) => n.type === "function_definition" || n.type === "lambda",
   supportsCrossModuleSymbols: true,
 };
 registerLanguage(PYTHON_DEF);

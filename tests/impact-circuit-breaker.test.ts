@@ -32,9 +32,7 @@ describe("Impact Circuit Breaker & Warning Propagation", () => {
   };
 
   const setupMocks = (statOutput: string, diffContent = "") => {
-    mockSpawn
-      .mockReturnValueOnce(setupSpawnCall(statOutput))
-      .mockReturnValueOnce(setupSpawnCall(diffContent));
+    mockSpawn.mockReturnValueOnce(setupSpawnCall(statOutput)).mockReturnValueOnce(setupSpawnCall(diffContent));
   };
 
   const index: ProjectIndex = {
@@ -95,11 +93,7 @@ describe("Impact Circuit Breaker & Warning Propagation", () => {
   it("should fallback gracefully if shortstat fails", async () => {
     mockSpawn
       .mockReturnValueOnce(setupSpawnCall("", 1))
-      .mockReturnValueOnce(
-        setupSpawnCall(
-          "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n",
-        ),
-      );
+      .mockReturnValueOnce(setupSpawnCall("diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n"));
 
     const result = await analyzeImpactFromDiff(".", index, {
       provider: "git",
@@ -112,10 +106,7 @@ describe("Impact Circuit Breaker & Warning Propagation", () => {
   });
 
   it("should propagate warning to compact report", async () => {
-    setupMocks(
-      " 1 file changed, 60000 insertions(+)",
-      "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n",
-    );
+    setupMocks(" 1 file changed, 60000 insertions(+)", "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n");
 
     const result = await analyzeImpactFromDiff(".", index, {
       provider: "git",
@@ -129,20 +120,14 @@ describe("Impact Circuit Breaker & Warning Propagation", () => {
   });
 
   it("recovers after a large diff and clears warning on smaller follow-up diff", async () => {
-    setupMocks(
-      " 1 file changed, 60000 insertions(+)",
-      "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n",
-    );
+    setupMocks(" 1 file changed, 60000 insertions(+)", "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n");
     const first = await analyzeImpactFromDiff(".", index, {
       provider: "git",
       base: "A",
       head: "B",
     });
 
-    setupMocks(
-      " 1 file changed, 1 insertion(+), 1 deletion(-)",
-      "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n",
-    );
+    setupMocks(" 1 file changed, 1 insertion(+), 1 deletion(-)", "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n");
     const second = await analyzeImpactFromDiff(".", index, {
       provider: "git",
       base: "A",

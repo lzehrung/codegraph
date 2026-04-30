@@ -173,9 +173,7 @@ function parseArgs(argv) {
   }
   for (const temperature of options.temperatures) {
     if (temperature !== "cold" && temperature !== "warm") {
-      throw new Error(
-        `Unknown temperature '${temperature}'. Expected one of: cold, warm`,
-      );
+      throw new Error(`Unknown temperature '${temperature}'. Expected one of: cold, warm`);
     }
   }
 
@@ -185,9 +183,7 @@ function parseArgs(argv) {
 function assertFixtureNames(fixtures) {
   for (const fixture of fixtures) {
     if (!(fixture in FIXTURE_ROOTS)) {
-      throw new Error(
-        `Unknown fixture '${fixture}'. Expected one of: ${Object.keys(FIXTURE_ROOTS).join(", ")}`,
-      );
+      throw new Error(`Unknown fixture '${fixture}'. Expected one of: ${Object.keys(FIXTURE_ROOTS).join(", ")}`);
     }
   }
 }
@@ -251,11 +247,7 @@ async function runChildBenchmark(fixture, workload, temperature, mode) {
     child.on("error", reject);
     child.on("close", (code) => {
       if (code !== 0) {
-        reject(
-          new Error(
-            `Benchmark child failed for ${fixture}/${workload}/${temperature}/${mode}: ${stderrChunks.join("").trim()}`,
-          ),
-        );
+        reject(new Error(`Benchmark child failed for ${fixture}/${workload}/${temperature}/${mode}: ${stderrChunks.join("").trim()}`));
         return;
       }
       try {
@@ -287,8 +279,7 @@ function summarizeRuns(runs) {
     slowestElapsedMs,
     filesIndexed: sample.filesIndexed,
     graphNodeCount: sample.graphNodeCount,
-    filesPerSecond:
-      averageElapsedMs > 0 ? (sample.filesIndexed / averageElapsedMs) * 1000 : 0,
+    filesPerSecond: averageElapsedMs > 0 ? (sample.filesIndexed / averageElapsedMs) * 1000 : 0,
     measurementKind: sample.measurementKind,
     backend: sample.backend,
     warmupBackend: sample.warmupBackend,
@@ -305,17 +296,11 @@ function formatSpeedup(nativeMs, jsMs) {
 }
 
 function formatSummary(results, { includeWorkers = false } = {}) {
-  const modes = includeWorkers
-    ? ["native", "js", "workers"]
-    : ["native", "js"];
+  const modes = includeWorkers ? ["native", "js", "workers"] : ["native", "js"];
   const header = includeWorkers
     ? "Fixture      Workload Temp  Mode    Measure Avg ms  Fastest  Slowest  Files  Nodes   Files/s  Native used/fb  vs JS          vs Native"
     : "Fixture      Workload Temp  Mode    Measure Avg ms  Fastest  Slowest  Files  Nodes   Files/s  Native used/fb  vs JS";
-  const lines = [
-    "",
-    header,
-    "-".repeat(header.length),
-  ];
+  const lines = ["", header, "-".repeat(header.length)];
   for (const result of results) {
     for (const workload of Object.keys(result.workloads)) {
       const workloadResult = result.workloads[workload];
@@ -329,13 +314,8 @@ function formatSummary(results, { includeWorkers = false } = {}) {
           const summary = temperatureResult[mode];
           if (!summary) continue;
           const backend = summary.backend;
-          const backendSummary = backend
-            ? `${backend.filesUsed}/${backend.filesFellBack}`
-            : "n/a";
-          const vsJs =
-            mode !== "js" && jsSummary
-              ? formatSpeedup(summary.averageElapsedMs, jsSummary.averageElapsedMs)
-              : "";
+          const backendSummary = backend ? `${backend.filesUsed}/${backend.filesFellBack}` : "n/a";
+          const vsJs = mode !== "js" && jsSummary ? formatSpeedup(summary.averageElapsedMs, jsSummary.averageElapsedMs) : "";
           const cols = [
             result.fixture.padEnd(12),
             workload.padEnd(8),
@@ -353,9 +333,7 @@ function formatSummary(results, { includeWorkers = false } = {}) {
           ];
           if (includeWorkers) {
             const vsNative =
-              mode === "workers" && nativeSummary
-                ? formatSpeedup(summary.averageElapsedMs, nativeSummary.averageElapsedMs)
-                : "";
+              mode === "workers" && nativeSummary ? formatSpeedup(summary.averageElapsedMs, nativeSummary.averageElapsedMs) : "";
             cols.push(vsNative.padStart(14));
           }
           lines.push(cols.join(" "));
@@ -385,10 +363,7 @@ function formatBaselineComparison(current, baseline) {
         for (const mode of ["native", "js", "workers"]) {
           const summary = result.workloads[workload]?.[temperature]?.[mode];
           if (!summary) continue;
-          baselineByKey.set(
-            `${result.fixture}/${workload}/${temperature}/${mode}`,
-            summary,
-          );
+          baselineByKey.set(`${result.fixture}/${workload}/${temperature}/${mode}`, summary);
         }
       }
     }
@@ -464,9 +439,7 @@ function loadBaseline(name) {
   const safeName = name.replace(/[^a-zA-Z0-9_-]/g, "_");
   const filePath = path.join(baselinesDir, `${safeName}.json`);
   if (!fs.existsSync(filePath)) {
-    throw new Error(
-      `Baseline '${name}' not found at ${filePath}. Save one first with --save-baseline=${name}`,
-    );
+    throw new Error(`Baseline '${name}' not found at ${filePath}. Save one first with --save-baseline=${name}`);
   }
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
@@ -476,14 +449,7 @@ function loadBaseline(name) {
  * so concurrent benchmark runs on the same machine never collide.
  */
 function benchmarkCacheDir(fixture, workload, temperature, mode) {
-  return path.join(
-    os.tmpdir(),
-    `codegraph-bench-${process.pid}`,
-    fixture,
-    workload,
-    temperature,
-    mode,
-  );
+  return path.join(os.tmpdir(), `codegraph-bench-${process.pid}`, fixture, workload, temperature, mode);
 }
 
 async function runParentBenchmark(options) {
@@ -499,9 +465,7 @@ async function runParentBenchmark(options) {
       fixtureResult.workloads[workload] = {};
       for (const temperature of options.temperatures) {
         fixtureResult.workloads[workload][temperature] = {};
-        const modes = options.includeWorkers
-          ? ["native", "js", "workers"]
-          : ["native", "js"];
+        const modes = options.includeWorkers ? ["native", "js", "workers"] : ["native", "js"];
         for (const mode of modes) {
           const runs = [];
           for (let runIndex = 0; runIndex < options.runs; runIndex += 1) {
@@ -581,19 +545,12 @@ async function runSingleBenchmarkChild(options) {
     throw new Error("dist/index.js not found. Run 'npm run build' before benchmarking.");
   }
 
-  const { buildProjectIndex, collectGraph, listProjectFiles } = await import(
-    pathToFileURL(distEntry).href
-  );
+  const { buildProjectIndex, collectGraph, listProjectFiles } = await import(pathToFileURL(distEntry).href);
   const report = { timings: {} };
   let warmupBackend = null;
   const workload = options.workloads[0];
   const temperature = options.temperatures[0];
-  const cacheDir = benchmarkCacheDir(
-    options.fixture,
-    workload,
-    temperature,
-    options.mode,
-  );
+  const cacheDir = benchmarkCacheDir(options.fixture, workload, temperature, options.mode);
   if (temperature === "cold") {
     robustRmSync(cacheDir);
   } else {
@@ -649,12 +606,12 @@ async function runSingleBenchmarkChild(options) {
 const options = parseArgs(process.argv.slice(2));
 if (options.child) {
   runSingleBenchmarkChild(options).catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+    process.stderr.write(`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
     process.exitCode = 1;
   });
 } else {
   runParentBenchmark(options).catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+    process.stderr.write(`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
     process.exitCode = 1;
   });
 }

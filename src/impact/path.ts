@@ -1,79 +1,45 @@
 import type { FileId } from "../types.js";
 import type { FileChange } from "./types.js";
 import pm from "picomatch";
-import {
-  isFilePathWithinRoot,
-  normalizePath,
-  resolveFilePathFromRoot,
-  toProjectRelativePath,
-} from "../util.js";
+import { isFilePathWithinRoot, normalizePath, resolveFilePathFromRoot, toProjectRelativePath } from "../util.js";
 
-export function normalizeImpactFilePath(
-  projectRoot: string,
-  filePath: string,
-): string {
+export function normalizeImpactFilePath(projectRoot: string, filePath: string): string {
   return normalizePath(resolveFilePathFromRoot(projectRoot, filePath));
 }
 
-export function assertImpactFilePathWithinRoot(
-  projectRoot: string,
-  filePath: string,
-  label: string = "Impact file",
-): string {
+export function assertImpactFilePathWithinRoot(projectRoot: string, filePath: string, label: string = "Impact file"): string {
   const normalized = normalizeImpactFilePath(projectRoot, filePath);
   if (!isFilePathWithinRoot(projectRoot, normalized)) {
-    throw new Error(
-      `${label} is outside project root: ${normalized} (root: ${normalizePath(projectRoot)})`,
-    );
+    throw new Error(`${label} is outside project root: ${normalized} (root: ${normalizePath(projectRoot)})`);
   }
   return normalized;
 }
 
-export function normalizeImpactFileChange(
-  projectRoot: string,
-  change: FileChange,
-): FileChange {
-  const normalizedPath = assertImpactFilePathWithinRoot(
-    projectRoot,
-    change.path,
-    "Impact diff file",
-  );
+export function normalizeImpactFileChange(projectRoot: string, change: FileChange): FileChange {
+  const normalizedPath = assertImpactFilePathWithinRoot(projectRoot, change.path, "Impact diff file");
   return {
     ...change,
     path: normalizedPath,
     ...(change.oldPath
       ? {
-          oldPath: assertImpactFilePathWithinRoot(
-            projectRoot,
-            change.oldPath,
-            "Impact old diff file",
-          ),
+          oldPath: assertImpactFilePathWithinRoot(projectRoot, change.oldPath, "Impact old diff file"),
         }
       : {}),
   };
 }
 
-export function toImpactReportFilePath(
-  projectRoot: string,
-  filePath: string,
-): string {
+export function toImpactReportFilePath(projectRoot: string, filePath: string): string {
   return toProjectRelativePath(projectRoot, filePath) ?? normalizePath(filePath);
 }
 
-export function createImpactIgnoreMatcher(
-  projectRoot: string,
-  ignoreGlobs: readonly string[],
-): (filePath: string) => boolean {
+export function createImpactIgnoreMatcher(projectRoot: string, ignoreGlobs: readonly string[]): (filePath: string) => boolean {
   if (ignoreGlobs.length === 0) {
     return () => false;
   }
   const matchesGlob = pm([...ignoreGlobs]);
   return (filePath: string): boolean => {
     const normalizedFile = normalizePath(filePath);
-    return (
-      matchesGlob(toImpactReportFilePath(projectRoot, normalizedFile)) ||
-      matchesGlob(normalizedFile)
-    );
+    return matchesGlob(toImpactReportFilePath(projectRoot, normalizedFile)) || matchesGlob(normalizedFile);
   };
 }
 
@@ -97,12 +63,8 @@ export function normalizeImpactDiffFiles(
   return { files: normalizedFiles, ignoredCount };
 }
 
-export function createGraphFileResolver(
-  graphNodes: Iterable<FileId>,
-): (filePath: string) => FileId {
-  const normalizedNodes = Array.from(
-    new Set(Array.from(graphNodes, (node) => normalizePath(node))),
-  );
+export function createGraphFileResolver(graphNodes: Iterable<FileId>): (filePath: string) => FileId {
+  const normalizedNodes = Array.from(new Set(Array.from(graphNodes, (node) => normalizePath(node))));
   const exactNodes = new Set(normalizedNodes);
   const cache = new Map<string, FileId>();
 

@@ -45,35 +45,19 @@ describe("Resolution precedence", () => {
     );
 
     await fsp.mkdir(path.join(root, "src"), { recursive: true });
-    await fsp.writeFile(
-      path.join(root, "src", "foo.ts"),
-      "export const foo = 1;\n",
-      "utf8",
-    );
+    await fsp.writeFile(path.join(root, "src", "foo.ts"), "export const foo = 1;\n", "utf8");
 
     const wsDir = path.join(root, "packages", "foo-pkg");
     await fsp.mkdir(wsDir, { recursive: true });
-    await fsp.writeFile(
-      path.join(wsDir, "package.json"),
-      JSON.stringify({ name: "foo", main: "index.js" }, null, 2),
-      "utf8",
-    );
+    await fsp.writeFile(path.join(wsDir, "package.json"), JSON.stringify({ name: "foo", main: "index.js" }, null, 2), "utf8");
     await fsp.writeFile(path.join(wsDir, "index.js"), "module.exports = 123;\n", "utf8");
 
     const main = path.join(root, "main.ts");
-    await fsp.writeFile(
-      main,
-      "import { foo } from 'foo';\nconsole.log(foo);\n",
-      "utf8",
-    );
+    await fsp.writeFile(main, "import { foo } from 'foo';\nconsole.log(foo);\n", "utf8");
 
-    const files = [main, path.join(root, "src", "foo.ts")].map((f) =>
-      f.replace(/\\/g, "/"),
-    );
+    const files = [main, path.join(root, "src", "foo.ts")].map((f) => f.replace(/\\/g, "/"));
     const graph = await collectGraph(root, files);
-    const edge = graph.edges.find(
-      (e) => e.from.endsWith("/main.ts") && e.raw === "foo" && e.to.type === "file",
-    );
+    const edge = graph.edges.find((e) => e.from.endsWith("/main.ts") && e.raw === "foo" && e.to.type === "file");
     expect(edge).toBeDefined();
     expect(edge?.to.type).toBe("file");
     if (edge?.to.type === "file") {
@@ -81,4 +65,3 @@ describe("Resolution precedence", () => {
     }
   });
 });
-

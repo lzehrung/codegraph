@@ -11,17 +11,10 @@ describe("Python __all__ exports", () => {
     await fsp.writeFile(file, source, "utf8");
     try {
       const parsed = await parseFile(file);
-      return collectLocalsAndExportsFromSource(
-        file,
-        parsed.source,
-        parsed.sup,
-        parsed.lang,
-        [],
-        {
-          tree: parsed.tree,
-          nativeQueries: parsed.nativeQueries,
-        },
-      );
+      return collectLocalsAndExportsFromSource(file, parsed.source, parsed.sup, parsed.lang, [], {
+        tree: parsed.tree,
+        nativeQueries: parsed.nativeQueries,
+      });
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -39,7 +32,7 @@ __all__ = (
 `;
     const mod = await collectModule(source);
 
-    const exportedNames = mod.exports.map(e => e.exportedAs).sort();
+    const exportedNames = mod.exports.map((e) => e.exportedAs).sort();
     expect(exportedNames).toEqual(["bar", "foo"]);
   });
 
@@ -57,7 +50,7 @@ description = "This module uses private_func internally"
 `;
     const mod = await collectModule(source);
 
-    const exportedNames = mod.exports.map(e => e.exportedAs).sort();
+    const exportedNames = mod.exports.map((e) => e.exportedAs).sort();
     // It should NOT contain private_func
     expect(exportedNames).toEqual(["foo"]);
   });

@@ -303,9 +303,7 @@ function renderTreeNode(node, parentUl, depth, filter) {
       const childUl = document.createElement("ul");
       childUl.className = `tree-list tree-children${isExpanded ? "" : " collapsed"}`;
 
-      const symbolsToShow = filter
-        ? node.symbols.filter((s) => matchesFilter(s.name, filter))
-        : node.symbols;
+      const symbolsToShow = filter ? node.symbols.filter((s) => matchesFilter(s.name, filter)) : node.symbols;
 
       for (const sym of symbolsToShow) {
         renderSymbolNode(sym, childUl, depth + 1, filter);
@@ -668,14 +666,10 @@ function selectAndPanToNode(graphKey) {
 
   const nodeDisplayData = sigma.getNodeDisplayData(graphKey);
   if (nodeDisplayData) {
-    sigma.getCamera().animate(
-      { x: nodeDisplayData.x, y: nodeDisplayData.y, ratio: 0.15 },
-      { duration: 400 },
-    );
+    sigma.getCamera().animate({ x: nodeDisplayData.x, y: nodeDisplayData.y, ratio: 0.15 }, { duration: 400 });
   }
 
-  const label = currentGraph.getNodeAttribute(graphKey, "fullLabel") ||
-    currentGraph.getNodeAttribute(graphKey, "label");
+  const label = currentGraph.getNodeAttribute(graphKey, "fullLabel") || currentGraph.getNodeAttribute(graphKey, "label");
   setStatus(`Selected: ${label}`);
 }
 

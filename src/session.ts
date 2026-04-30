@@ -4,33 +4,12 @@
  */
 
 import path from "node:path";
-import type {
-  ProjectIndex,
-  BuildOptions,
-  GoToResult,
-  Reference,
-  SymbolDef,
-} from "./indexer.js";
-import {
-  buildProjectIndex,
-  buildProjectIndexIncremental,
-  findReferences,
-  goToDefinition,
-} from "./indexer.js";
-import {
-  analyzeImpactFromDiff,
-  type ImpactOptions,
-  type ImpactReport,
-  type CompactImpactReport,
-} from "./impact/index.js";
-import {
-  analyzeImpactStreaming,
-  type ImpactStreamChunk,
-} from "./impact/streaming.js";
+import type { ProjectIndex, BuildOptions, GoToResult, Reference, SymbolDef } from "./indexer.js";
+import { buildProjectIndex, buildProjectIndexIncremental, findReferences, goToDefinition } from "./indexer.js";
+import { analyzeImpactFromDiff, type ImpactOptions, type ImpactReport, type CompactImpactReport } from "./impact/index.js";
+import { analyzeImpactStreaming, type ImpactStreamChunk } from "./impact/streaming.js";
 import { getSessionPreset, mergePreset, type PresetName } from "./presets.js";
-import {
-  assertFilePathWithinRoot,
-} from "./util.js";
+import { assertFilePathWithinRoot } from "./util.js";
 
 export type SessionOptions = {
   /** Project root directory */
@@ -63,9 +42,7 @@ function normalizeStringArray(values?: string[]): string[] | undefined {
   return [...values].sort();
 }
 
-function normalizeBuildOptions(
-  options?: BuildOptions,
-): Record<string, unknown> | undefined {
+function normalizeBuildOptions(options?: BuildOptions): Record<string, unknown> | undefined {
   if (!options) return undefined;
   return {
     cache: options.cache,
@@ -81,9 +58,7 @@ function normalizeBuildOptions(
           native: options.graph.native,
           logLevel: options.graph.logLevel,
           resolutionHints: normalizeStringArray(options.graph.resolutionHints),
-          fastRegexDisabledLanguages: normalizeStringArray(
-            options.graph.fastRegexDisabledLanguages,
-          ),
+          fastRegexDisabledLanguages: normalizeStringArray(options.graph.fastRegexDisabledLanguages),
         }
       : undefined,
     native: options.native,
@@ -100,9 +75,7 @@ function normalizeBuildOptions(
           includeGlobs: normalizeStringArray(options.discovery.includeGlobs),
           ignoreGlobs: normalizeStringArray(options.discovery.ignoreGlobs),
           useGitignore: options.discovery.useGitignore,
-          gitignoreRoot: options.discovery.gitignoreRoot
-            ? path.resolve(options.discovery.gitignoreRoot)
-            : undefined,
+          gitignoreRoot: options.discovery.gitignoreRoot ? path.resolve(options.discovery.gitignoreRoot) : undefined,
         }
       : undefined,
   };
@@ -111,17 +84,13 @@ function normalizeBuildOptions(
 function resolveSessionIdentity(options: SessionOptions): SessionIdentity {
   if (options.preset) {
     const presetOpts = getSessionPreset(options.preset, options.root);
-    const buildOptions = options.buildOptions
-      ? mergePreset(presetOpts.buildOptions ?? {}, options.buildOptions)
-      : presetOpts.buildOptions;
+    const buildOptions = options.buildOptions ? mergePreset(presetOpts.buildOptions ?? {}, options.buildOptions) : presetOpts.buildOptions;
     const normalizedBuildOptions = normalizeBuildOptions(buildOptions);
     return {
       root: path.resolve(options.root),
       timeout: options.timeout ?? presetOpts.timeout ?? 30 * 60 * 1000,
       incremental: options.incremental ?? presetOpts.incremental ?? true,
-      ...(normalizedBuildOptions
-        ? { buildOptions: normalizedBuildOptions }
-        : {}),
+      ...(normalizedBuildOptions ? { buildOptions: normalizedBuildOptions } : {}),
     };
   }
   const normalizedBuildOptions = normalizeBuildOptions(options.buildOptions);
@@ -150,11 +119,7 @@ type SessionFindReferencesResult =
 
 type SessionGoToDefinitionResult = GoToResult | SessionInputError;
 
-function resolveSessionFileInput(
-  root: string,
-  file: string,
-  label: string,
-): { status: "ok"; file: string } | SessionInputError {
+function resolveSessionFileInput(root: string, file: string, label: string): { status: "ok"; file: string } | SessionInputError {
   try {
     return {
       status: "ok",
@@ -171,9 +136,7 @@ function resolveSessionFileInput(
 
 function requireSessionImpactProvider(options: Partial<ImpactOptions>): void {
   if (!options.provider) {
-    throw new Error(
-      "Impact provider is required. Set provider to 'git', 'github', or 'raw'.",
-    );
+    throw new Error("Impact provider is required. Set provider to 'git', 'github', or 'raw'.");
   }
 }
 
@@ -186,17 +149,9 @@ export interface ICodeReviewSession {
   isReady(): boolean;
   getStatus(): SessionStatus;
   analyzeImpact(options: ImpactOptions): Promise<ImpactReport | CompactImpactReport>;
-  findReferences(params: {
-    file: string;
-    line: number;
-    column: number;
-  }): Promise<SessionFindReferencesResult>;
+  findReferences(params: { file: string; line: number; column: number }): Promise<SessionFindReferencesResult>;
   analyzeImpactStream(options: ImpactOptions): AsyncGenerator<ImpactStreamChunk>;
-  goToDefinition(params: {
-    file: string;
-    line: number;
-    column: number;
-  }): Promise<SessionGoToDefinitionResult>;
+  goToDefinition(params: { file: string; line: number; column: number }): Promise<SessionGoToDefinitionResult>;
   refresh(): Promise<void>;
   dispose(): void;
   getStats(): {
@@ -229,10 +184,7 @@ export class CodeReviewSession implements ICodeReviewSession {
     this.root = identity.root;
     this.buildOptions = options.preset
       ? options.buildOptions
-        ? mergePreset(
-            getSessionPreset(options.preset, options.root).buildOptions ?? {},
-            options.buildOptions,
-          )
+        ? mergePreset(getSessionPreset(options.preset, options.root).buildOptions ?? {}, options.buildOptions)
         : getSessionPreset(options.preset, options.root).buildOptions
       : options.buildOptions;
     this.timeout = identity.timeout;
@@ -241,10 +193,7 @@ export class CodeReviewSession implements ICodeReviewSession {
   }
 
   matchesOptions(options: SessionOptions): boolean {
-    return (
-      this.identityFingerprint ===
-      sessionIdentityFingerprint(resolveSessionIdentity(options))
-    );
+    return this.identityFingerprint === sessionIdentityFingerprint(resolveSessionIdentity(options));
   }
 
   getRoot(): string {
@@ -262,10 +211,7 @@ export class CodeReviewSession implements ICodeReviewSession {
     return new Error(`Session was disposed during ${operation}.`);
   }
 
-  private assertLifecycleVersion(
-    expectedLifecycleVersion: number,
-    operation: string,
-  ): void {
+  private assertLifecycleVersion(expectedLifecycleVersion: number, operation: string): void {
     if (this.lifecycleVersion !== expectedLifecycleVersion) {
       throw this.createDisposedDuringOperationError(operation);
     }
@@ -340,10 +286,7 @@ export class CodeReviewSession implements ICodeReviewSession {
    * Check if session has expired
    */
   private checkExpiration(): void {
-    if (
-      this.status === "ready" &&
-      Date.now() - this.lastActivity > this.timeout
-    ) {
+    if (this.status === "ready" && Date.now() - this.lastActivity > this.timeout) {
       this.status = "expired";
       this.index = null;
     }
@@ -365,9 +308,7 @@ export class CodeReviewSession implements ICodeReviewSession {
    * Analyze impact from a diff
    * Results are cached in the warm index
    */
-  async analyzeImpact(
-    options: ImpactOptions,
-  ): Promise<ImpactReport | CompactImpactReport> {
+  async analyzeImpact(options: ImpactOptions): Promise<ImpactReport | CompactImpactReport> {
     const index = this.getIndex();
     requireSessionImpactProvider(options);
     return await analyzeImpactFromDiff(this.root, index, options);
@@ -377,9 +318,7 @@ export class CodeReviewSession implements ICodeReviewSession {
    * Stream impact analysis results
    * Better for agents as they can start processing immediately
    */
-  async *analyzeImpactStream(
-    options: ImpactOptions,
-  ): AsyncGenerator<ImpactStreamChunk> {
+  async *analyzeImpactStream(options: ImpactOptions): AsyncGenerator<ImpactStreamChunk> {
     const index = this.getIndex();
     requireSessionImpactProvider(options);
     yield* analyzeImpactStreaming(this.root, index, options);
@@ -388,17 +327,9 @@ export class CodeReviewSession implements ICodeReviewSession {
   /**
    * Find references to a symbol
    */
-  async findReferences(params: {
-    file: string;
-    line: number;
-    column: number;
-  }): Promise<SessionFindReferencesResult> {
+  async findReferences(params: { file: string; line: number; column: number }): Promise<SessionFindReferencesResult> {
     const index = this.getIndex();
-    const resolved = resolveSessionFileInput(
-      this.root,
-      params.file,
-      "Session file",
-    );
+    const resolved = resolveSessionFileInput(this.root, params.file, "Session file");
     if (resolved.status === "error") {
       return resolved;
     }
@@ -411,17 +342,9 @@ export class CodeReviewSession implements ICodeReviewSession {
   /**
    * Go to definition of a symbol
    */
-  async goToDefinition(params: {
-    file: string;
-    line: number;
-    column: number;
-  }): Promise<SessionGoToDefinitionResult> {
+  async goToDefinition(params: { file: string; line: number; column: number }): Promise<SessionGoToDefinitionResult> {
     const index = this.getIndex();
-    const resolved = resolveSessionFileInput(
-      this.root,
-      params.file,
-      "Session file",
-    );
+    const resolved = resolveSessionFileInput(this.root, params.file, "Session file");
     if (resolved.status === "error") {
       return resolved;
     }
@@ -481,22 +404,14 @@ export class CodeReviewSession implements ICodeReviewSession {
 
     const index = this.index;
     const fileCount = index?.byFile.size ?? 0;
-    const symbolCount = index
-      ? Array.from(index.byFile.values()).reduce(
-          (sum, mod) => sum + mod.locals.length,
-          0,
-        )
-      : 0;
+    const symbolCount = index ? Array.from(index.byFile.values()).reduce((sum, mod) => sum + mod.locals.length, 0) : 0;
 
     return {
       status: this.status,
       fileCount,
       symbolCount,
       lastActivity: new Date(this.lastActivity),
-      timeUntilExpiration:
-        this.status === "ready"
-          ? Math.max(0, this.timeout - (Date.now() - this.lastActivity))
-          : 0,
+      timeUntilExpiration: this.status === "ready" ? Math.max(0, this.timeout - (Date.now() - this.lastActivity)) : 0,
     };
   }
 }
@@ -517,20 +432,13 @@ export class SessionManager {
     }
   >();
 
-  private createSessionConfigurationError(
-    sessionId: string,
-    existing: CodeReviewSession,
-    options: SessionOptions,
-  ): Error {
+  private createSessionConfigurationError(sessionId: string, existing: CodeReviewSession, options: SessionOptions): Error {
     return new Error(
       `Session "${sessionId}" already exists for a different configuration (existing root: ${existing.getRoot()}, requested root: ${path.resolve(options.root)}). Use a different session id or dispose the existing session first.`,
     );
   }
 
-  private ensureSessionIdCompatible(
-    sessionId: string,
-    options: SessionOptions,
-  ): CodeReviewSession | undefined {
+  private ensureSessionIdCompatible(sessionId: string, options: SessionOptions): CodeReviewSession | undefined {
     const existing = this.sessions.get(sessionId);
     if (!existing) return undefined;
     if (!existing.matchesOptions(options)) {
@@ -539,27 +447,16 @@ export class SessionManager {
     return existing;
   }
 
-  private getPendingCompatibleSession(
-    sessionId: string,
-    options: SessionOptions,
-  ): Promise<CodeReviewSession> | undefined {
+  private getPendingCompatibleSession(sessionId: string, options: SessionOptions): Promise<CodeReviewSession> | undefined {
     const pending = this.pendingSessions.get(sessionId);
     if (!pending) return undefined;
-    const requestedFingerprint = sessionIdentityFingerprint(
-      resolveSessionIdentity(options),
-    );
+    const requestedFingerprint = sessionIdentityFingerprint(resolveSessionIdentity(options));
     if (pending.fingerprint !== requestedFingerprint) {
       const existing = this.sessions.get(sessionId);
       if (existing) {
-        throw this.createSessionConfigurationError(
-          sessionId,
-          existing,
-          options,
-        );
+        throw this.createSessionConfigurationError(sessionId, existing, options);
       }
-      throw new Error(
-        `Session "${sessionId}" is already initializing with a different configuration.`,
-      );
+      throw new Error(`Session "${sessionId}" is already initializing with a different configuration.`);
     }
     return pending.promise;
   }
@@ -571,9 +468,7 @@ export class SessionManager {
     retainPending: boolean,
     onReady: (session: CodeReviewSession) => void,
   ): Promise<CodeReviewSession> {
-    const fingerprint = sessionIdentityFingerprint(
-      resolveSessionIdentity(options),
-    );
+    const fingerprint = sessionIdentityFingerprint(resolveSessionIdentity(options));
     const pendingSession = {
       cancelled: false,
       fingerprint,
@@ -585,9 +480,7 @@ export class SessionManager {
         await session.init();
         if (pendingSession.cancelled) {
           session.dispose();
-          throw new Error(
-            `Session "${sessionId}" was disposed during initialization.`,
-          );
+          throw new Error(`Session "${sessionId}" was disposed during initialization.`);
         }
         onReady(session);
         return session;
@@ -612,10 +505,7 @@ export class SessionManager {
   /**
    * Create or get a session for a repository
    */
-  async getOrCreateSession(
-    sessionId: string,
-    options: SessionOptions,
-  ): Promise<CodeReviewSession> {
+  async getOrCreateSession(sessionId: string, options: SessionOptions): Promise<CodeReviewSession> {
     const pending = this.getPendingCompatibleSession(sessionId, options);
     if (pending) {
       return await pending;
@@ -625,15 +515,9 @@ export class SessionManager {
 
     if (!session) {
       session = new CodeReviewSession(options);
-      return await this.trackSession(
-        sessionId,
-        options,
-        session,
-        false,
-        (readySession) => {
-          this.sessions.set(sessionId, readySession);
-        },
-      );
+      return await this.trackSession(sessionId, options, session, false, (readySession) => {
+        this.sessions.set(sessionId, readySession);
+      });
     } else if (!session.isReady()) {
       try {
         await session.init();
@@ -722,9 +606,7 @@ export class SessionManager {
    * Useful for Lambda/serverless cold start optimization.
    * @param sessions - Array of session configs to pre-warm
    */
-  async warmup(
-    sessions: Array<{ id: string; options: SessionOptions }>,
-  ): Promise<void> {
+  async warmup(sessions: Array<{ id: string; options: SessionOptions }>): Promise<void> {
     const requestedFingerprints = new Map<string, string>();
     const replacementSessions: Array<{
       id: string;
@@ -733,17 +615,10 @@ export class SessionManager {
     }> = [];
     try {
       for (const { id, options } of sessions) {
-        const requestedFingerprint = sessionIdentityFingerprint(
-          resolveSessionIdentity(options),
-        );
+        const requestedFingerprint = sessionIdentityFingerprint(resolveSessionIdentity(options));
         const existingFingerprint = requestedFingerprints.get(id);
-        if (
-          existingFingerprint &&
-          existingFingerprint !== requestedFingerprint
-        ) {
-          throw new Error(
-            `Warmup requested conflicting configurations for session "${id}".`,
-          );
+        if (existingFingerprint && existingFingerprint !== requestedFingerprint) {
+          throw new Error(`Warmup requested conflicting configurations for session "${id}".`);
         }
         if (existingFingerprint === requestedFingerprint) {
           continue;
@@ -761,16 +636,8 @@ export class SessionManager {
           continue;
         }
         const session = new CodeReviewSession(options);
-        replacementSessions.push(
-          existing ? { id, existing, session } : { id, session },
-        );
-        await this.trackSession(
-          id,
-          options,
-          session,
-          true,
-          () => {},
-        );
+        replacementSessions.push(existing ? { id, existing, session } : { id, session });
+        await this.trackSession(id, options, session, true, () => {});
       }
     } catch (error) {
       for (const replacement of replacementSessions) {
@@ -800,9 +667,7 @@ export class SessionManager {
  * Create a new code review session
  * Convenience function for creating a session
  */
-export async function createCodeReviewSession(
-  options: SessionOptions,
-): Promise<CodeReviewSession> {
+export async function createCodeReviewSession(options: SessionOptions): Promise<CodeReviewSession> {
   const session = new CodeReviewSession(options);
   await session.init();
   return session;

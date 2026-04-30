@@ -1,10 +1,6 @@
 import { describe, test, expect, beforeEach, vi } from "vitest";
 import type { ICodeReviewSession } from "../src/index.js";
-import {
-  CodeReviewSession,
-  SessionManager,
-  createCodeReviewSession,
-} from "../src/session.js";
+import { CodeReviewSession, SessionManager, createCodeReviewSession } from "../src/session.js";
 import * as indexer from "../src/indexer.js";
 import path from "node:path";
 import os from "node:os";
@@ -142,12 +138,8 @@ describe("CodeReviewSession", () => {
   });
 
   test("should keep Windows-style absolute paths absolute even on non-Windows hosts", () => {
-    expect(resolveFilePathFromRoot("/repo", "C:/repo/src/main.ts")).toBe(
-      "C:/repo/src/main.ts",
-    );
-    expect(
-      resolveFilePathFromRoot("/repo", String.raw`C:\repo\src\main.ts`),
-    ).toBe(String.raw`C:\repo\src\main.ts`);
+    expect(resolveFilePathFromRoot("/repo", "C:/repo/src/main.ts")).toBe("C:/repo/src/main.ts");
+    expect(resolveFilePathFromRoot("/repo", String.raw`C:\repo\src\main.ts`)).toBe(String.raw`C:\repo\src\main.ts`);
   });
 
   test("should refresh the index", async () => {
@@ -169,21 +161,15 @@ describe("CodeReviewSession", () => {
       buildOptions: { cache: "memory", useBloomFilters: true },
     });
 
-    const buildSpy = vi
-      .spyOn(indexer, "buildProjectIndexIncremental")
-      .mockRejectedValue(new Error("synthetic refresh failure"));
+    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockRejectedValue(new Error("synthetic refresh failure"));
 
     try {
-      await expect(session.refresh()).rejects.toThrow(
-        "synthetic refresh failure",
-      );
+      await expect(session.refresh()).rejects.toThrow("synthetic refresh failure");
       expect(session.getStatus()).toBe("ready");
       expect(session.isReady()).toBe(true);
 
       const file = path.resolve(sampleRoot, "utils.ts");
-      await expect(
-        session.findReferences({ file, line: 1, column: 17 }),
-      ).resolves.toMatchObject({ status: "ok" });
+      await expect(session.findReferences({ file, line: 1, column: 17 })).resolves.toMatchObject({ status: "ok" });
     } finally {
       buildSpy.mockRestore();
     }
@@ -244,12 +230,10 @@ describe("CodeReviewSession", () => {
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
-    const buildSpy = vi
-      .spyOn(indexer, "buildProjectIndexIncremental")
-      .mockImplementation(async (...args) => {
-        await buildGate;
-        return await originalBuild(...args);
-      });
+    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      await buildGate;
+      return await originalBuild(...args);
+    });
 
     try {
       const session = new CodeReviewSession({
@@ -261,9 +245,7 @@ describe("CodeReviewSession", () => {
       session.dispose();
       releaseBuild?.();
 
-      await expect(initPromise).rejects.toThrow(
-        /disposed during initialization/,
-      );
+      await expect(initPromise).rejects.toThrow(/disposed during initialization/);
       expect(session.getStatus()).toBe("expired");
       expect(session.isReady()).toBe(false);
     } finally {
@@ -281,12 +263,10 @@ describe("CodeReviewSession", () => {
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
-    const buildSpy = vi
-      .spyOn(indexer, "buildProjectIndexIncremental")
-      .mockImplementation(async (...args) => {
-        await buildGate;
-        return await originalBuild(...args);
-      });
+    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      await buildGate;
+      return await originalBuild(...args);
+    });
 
     try {
       const refreshPromise = session.refresh();
@@ -313,9 +293,7 @@ describe("CodeReviewSession", () => {
 
     const file = path.resolve(sampleRoot, "utils.ts");
 
-    await expect(
-      session.findReferences({ file, line: 1, column: 17 }),
-    ).rejects.toThrow();
+    await expect(session.findReferences({ file, line: 1, column: 17 })).rejects.toThrow();
   });
 
   test("should reject missing impact providers explicitly", async () => {
@@ -324,17 +302,15 @@ describe("CodeReviewSession", () => {
       buildOptions: { cache: "memory", useBloomFilters: true },
     });
 
-    await expect(
-      Reflect.apply(session.analyzeImpact, session, [{ diffText: "diff --git a/main.ts b/main.ts\n" }]),
-    ).rejects.toThrow(/Impact provider is required/);
+    await expect(Reflect.apply(session.analyzeImpact, session, [{ diffText: "diff --git a/main.ts b/main.ts\n" }])).rejects.toThrow(
+      /Impact provider is required/,
+    );
 
     await expect(
       (async () => {
-        for await (const _chunk of Reflect.apply(
-          session.analyzeImpactStream,
-          session,
-          [{ diffText: "diff --git a/main.ts b/main.ts\n" }],
-        )) {
+        for await (const _chunk of Reflect.apply(session.analyzeImpactStream, session, [
+          { diffText: "diff --git a/main.ts b/main.ts\n" },
+        ])) {
           break;
         }
       })(),
@@ -406,12 +382,10 @@ describe("SessionManager", () => {
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
-    const buildSpy = vi
-      .spyOn(indexer, "buildProjectIndexIncremental")
-      .mockImplementation(async (...args) => {
-        await buildGate;
-        return await originalBuild(...args);
-      });
+    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      await buildGate;
+      return await originalBuild(...args);
+    });
 
     try {
       const pendingSession = manager.getOrCreateSession("pending", {
@@ -423,9 +397,7 @@ describe("SessionManager", () => {
       manager.disposeSession("pending");
       releaseBuild?.();
 
-      await expect(pendingSession).rejects.toThrow(
-        /disposed during initialization/,
-      );
+      await expect(pendingSession).rejects.toThrow(/disposed during initialization/);
       expect(manager.getSession("pending")).toBeUndefined();
       expect(manager.getSessionIds()).toEqual([]);
     } finally {
@@ -439,12 +411,10 @@ describe("SessionManager", () => {
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
-    const buildSpy = vi
-      .spyOn(indexer, "buildProjectIndexIncremental")
-      .mockImplementation(async (...args) => {
-        await buildGate;
-        return await originalBuild(...args);
-      });
+    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      await buildGate;
+      return await originalBuild(...args);
+    });
 
     try {
       const firstSession = manager.getOrCreateSession("pending", {
@@ -460,9 +430,7 @@ describe("SessionManager", () => {
       });
       releaseBuild?.();
 
-      await expect(firstSession).rejects.toThrow(
-        /disposed during initialization/,
-      );
+      await expect(firstSession).rejects.toThrow(/disposed during initialization/);
       await expect(secondSession).resolves.toMatchObject({
         getStatus: expect.any(Function),
       });
@@ -479,12 +447,10 @@ describe("SessionManager", () => {
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
-    const buildSpy = vi
-      .spyOn(indexer, "buildProjectIndexIncremental")
-      .mockImplementation(async (...args) => {
-        await buildGate;
-        return await originalBuild(...args);
-      });
+    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      await buildGate;
+      return await originalBuild(...args);
+    });
 
     try {
       const firstSession = manager.getOrCreateSession("pending", {
@@ -500,9 +466,7 @@ describe("SessionManager", () => {
       });
       releaseBuild?.();
 
-      await expect(firstSession).rejects.toThrow(
-        /disposed during initialization/,
-      );
+      await expect(firstSession).rejects.toThrow(/disposed during initialization/);
       await expect(secondSession).resolves.toMatchObject({
         getStatus: expect.any(Function),
       });
@@ -538,9 +502,7 @@ describe("SessionManager", () => {
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(session.getStatus()).toBe("expired");
 
-    const buildSpy = vi
-      .spyOn(indexer, "buildProjectIndexIncremental")
-      .mockRejectedValue(new Error("synthetic reinit failure"));
+    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockRejectedValue(new Error("synthetic reinit failure"));
 
     try {
       await expect(
@@ -559,23 +521,11 @@ describe("SessionManager", () => {
   });
 
   test("should reject reusing a session id for a different root", async () => {
-    const rootA = await fsp.mkdtemp(
-      path.join(os.tmpdir(), "dg-session-root-a-"),
-    );
-    const rootB = await fsp.mkdtemp(
-      path.join(os.tmpdir(), "dg-session-root-b-"),
-    );
+    const rootA = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-root-a-"));
+    const rootB = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-root-b-"));
     try {
-      await fsp.writeFile(
-        path.join(rootA, "a.ts"),
-        "export const a = 1;\n",
-        "utf8",
-      );
-      await fsp.writeFile(
-        path.join(rootB, "b.ts"),
-        "export const b = 1;\n",
-        "utf8",
-      );
+      await fsp.writeFile(path.join(rootA, "a.ts"), "export const a = 1;\n", "utf8");
+      await fsp.writeFile(path.join(rootB, "b.ts"), "export const b = 1;\n", "utf8");
 
       await manager.getOrCreateSession("shared", {
         root: rootA,
@@ -629,9 +579,7 @@ describe("SessionManager", () => {
   });
 
   test("should reject reusing a session id when discovery options drift", async () => {
-    const gitignoreRoot = await fsp.mkdtemp(
-      path.join(os.tmpdir(), "dg-session-gitignore-root-"),
-    );
+    const gitignoreRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-gitignore-root-"));
 
     try {
       await manager.getOrCreateSession("shared", {
@@ -751,20 +699,11 @@ describe("SessionManager", () => {
   });
 
   test("should not retain failed warmup sessions", async () => {
-    const goodRoot = await fsp.mkdtemp(
-      path.join(os.tmpdir(), "dg-session-warmup-good-"),
-    );
-    const badRoot = path.join(
-      os.tmpdir(),
-      `dg-session-warmup-missing-${Date.now()}`,
-    );
+    const goodRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-warmup-good-"));
+    const badRoot = path.join(os.tmpdir(), `dg-session-warmup-missing-${Date.now()}`);
 
     try {
-      await fsp.writeFile(
-        path.join(goodRoot, "index.ts"),
-        "export const value = 1;\n",
-        "utf8",
-      );
+      await fsp.writeFile(path.join(goodRoot, "index.ts"), "export const value = 1;\n", "utf8");
 
       await expect(
         manager.warmup([
@@ -797,12 +736,10 @@ describe("SessionManager", () => {
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
-    const buildSpy = vi
-      .spyOn(indexer, "buildProjectIndexIncremental")
-      .mockImplementation(async (...args) => {
-        await buildGate;
-        return await originalBuild(...args);
-      });
+    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      await buildGate;
+      return await originalBuild(...args);
+    });
 
     try {
       const warmupPromise = manager.warmup([
@@ -819,9 +756,7 @@ describe("SessionManager", () => {
       manager.disposeAll();
       releaseBuild?.();
 
-      await expect(warmupPromise).rejects.toThrow(
-        /disposed during initialization/,
-      );
+      await expect(warmupPromise).rejects.toThrow(/disposed during initialization/);
       expect(manager.getSession("warm")).toBeUndefined();
       expect(manager.getSessionIds()).toEqual([]);
     } finally {
@@ -835,12 +770,10 @@ describe("SessionManager", () => {
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
-    const buildSpy = vi
-      .spyOn(indexer, "buildProjectIndexIncremental")
-      .mockImplementation(async (...args) => {
-        await buildGate;
-        return await originalBuild(...args);
-      });
+    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      await buildGate;
+      return await originalBuild(...args);
+    });
 
     try {
       const warmupPromise = manager.warmup([
@@ -870,24 +803,12 @@ describe("SessionManager", () => {
   });
 
   test("should reject warmup collisions with existing sessions", async () => {
-    const rootA = await fsp.mkdtemp(
-      path.join(os.tmpdir(), "dg-session-warm-a-"),
-    );
-    const rootB = await fsp.mkdtemp(
-      path.join(os.tmpdir(), "dg-session-warm-b-"),
-    );
+    const rootA = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-warm-a-"));
+    const rootB = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-warm-b-"));
 
     try {
-      await fsp.writeFile(
-        path.join(rootA, "a.ts"),
-        "export const a = 1;\n",
-        "utf8",
-      );
-      await fsp.writeFile(
-        path.join(rootB, "b.ts"),
-        "export const b = 1;\n",
-        "utf8",
-      );
+      await fsp.writeFile(path.join(rootA, "a.ts"), "export const a = 1;\n", "utf8");
+      await fsp.writeFile(path.join(rootB, "b.ts"), "export const b = 1;\n", "utf8");
 
       const existing = await manager.getOrCreateSession("shared", {
         root: rootA,

@@ -2,16 +2,9 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import {
-  buildProjectIndexFromFiles,
-  collectGraph,
-  type BuildReport,
-} from "../src/index.js";
+import { buildProjectIndexFromFiles, collectGraph, type BuildReport } from "../src/index.js";
 import { extractJsTsSpecifiers, stripJsLikeComments } from "../src/util.js";
-import {
-  getNativeTreeSitterSupportedLanguageIds,
-  isNativeTreeSitterAvailable,
-} from "../src/native/treeSitterNative.js";
+import { getNativeTreeSitterSupportedLanguageIds, isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -23,11 +16,7 @@ describe("Import extraction fallback reporting", () => {
     const main = path.join(root, "main.ts");
     const dep = path.join(root, "dep.ts");
     await fsp.writeFile(dep, "export const value = 1;\n", "utf8");
-    await fsp.writeFile(
-      main,
-      "import util = require('./dep');\nconsole.log(util);\n",
-      "utf8",
-    );
+    await fsp.writeFile(main, "import util = require('./dep');\nconsole.log(util);\n", "utf8");
 
     const report: BuildReport = { timings: {} };
     const index = await buildProjectIndexFromFiles(root, [main], { report });
@@ -39,17 +28,9 @@ describe("Import extraction fallback reporting", () => {
     const normalizedMain = main.replace(/\\/g, "/");
     const normalizedDep = dep.replace(/\\/g, "/");
     const mod = index.byFile.get(normalizedMain);
-    const importBinding = mod?.imports.find(
-      (entry) =>
-        entry.kind === "default" &&
-        entry.local === "util" &&
-        entry.from === "./dep",
-    );
+    const importBinding = mod?.imports.find((entry) => entry.kind === "default" && entry.local === "util" && entry.from === "./dep");
     const edge = index.graph.edges.find(
-      (entry) =>
-        entry.from === normalizedMain &&
-        entry.to.type === "file" &&
-        entry.to.path === normalizedDep,
+      (entry) => entry.from === normalizedMain && entry.to.type === "file" && entry.to.path === normalizedDep,
     );
     expect(importBinding).toBeTruthy();
     expect(edge).toBeTruthy();
@@ -85,15 +66,7 @@ describe("Import extraction fallback reporting", () => {
     ].join("\n");
 
     const specs = extractJsTsSpecifiers(source);
-    expect(specs.map((entry) => entry.spec)).toEqual([
-      "./types",
-      "./bar",
-      "./side",
-      "./baz",
-      "./req",
-      "./pick",
-      "./dyn",
-    ]);
+    expect(specs.map((entry) => entry.spec)).toEqual(["./types", "./bar", "./side", "./baz", "./req", "./pick", "./dyn"]);
     expect(specs[0]?.typeOnly).toBe(true);
   });
 
@@ -102,11 +75,7 @@ describe("Import extraction fallback reporting", () => {
     const main = path.join(root, "main.ts");
     const dep = path.join(root, "dep.ts");
     await fsp.writeFile(dep, "export const value = 1;\n", "utf8");
-    await fsp.writeFile(
-      main,
-      "import { value } from './dep';\nconsole.log(value);\n",
-      "utf8",
-    );
+    await fsp.writeFile(main, "import { value } from './dep';\nconsole.log(value);\n", "utf8");
 
     const report: BuildReport = { timings: {} };
     await buildProjectIndexFromFiles(root, [main, dep], { report });
@@ -114,27 +83,23 @@ describe("Import extraction fallback reporting", () => {
     const native = report.backend?.native;
     expect(native).toBeDefined();
     expect(native?.available).toBe(isNativeTreeSitterAvailable());
-    expect(native?.supportedLanguageIds).toEqual(
-      getNativeTreeSitterSupportedLanguageIds(),
-    );
+    expect(native?.supportedLanguageIds).toEqual(getNativeTreeSitterSupportedLanguageIds());
     expect(native?.byLanguage.ts?.filesSeen).toBe(2);
 
-    const nativeSupportsTs =
-      isNativeTreeSitterAvailable() &&
-      getNativeTreeSitterSupportedLanguageIds().includes("ts");
+    const nativeSupportsTs = isNativeTreeSitterAvailable() && getNativeTreeSitterSupportedLanguageIds().includes("ts");
     if (nativeSupportsTs) {
-      expect(
-        (native?.filesUsed ?? 0) + (native?.fallbackReasons.queryFailure ?? 0),
-      ).toBeGreaterThan(0);
+      expect((native?.filesUsed ?? 0) + (native?.fallbackReasons.queryFailure ?? 0)).toBeGreaterThan(0);
       if ((native?.filesUsed ?? 0) > 0) {
         expect(native?.enabled).toBe(true);
         expect(native?.byLanguage.ts?.filesUsed).toBeGreaterThan(0);
       }
     } else {
       expect(native?.filesFellBack).toBeGreaterThan(0);
-      expect((native?.fallbackReasons.unavailable ?? 0) +
-        (native?.fallbackReasons.unsupportedLanguage ?? 0) +
-        (native?.fallbackReasons.queryFailure ?? 0)).toBeGreaterThan(0);
+      expect(
+        (native?.fallbackReasons.unavailable ?? 0) +
+          (native?.fallbackReasons.unsupportedLanguage ?? 0) +
+          (native?.fallbackReasons.queryFailure ?? 0),
+      ).toBeGreaterThan(0);
       expect(native?.byLanguage.ts?.filesFellBack).toBeGreaterThan(0);
     }
   });
@@ -144,11 +109,7 @@ describe("Import extraction fallback reporting", () => {
     const main = path.join(root, "main.ts");
     const dep = path.join(root, "dep.ts");
     await fsp.writeFile(dep, "export const value = 1;\n", "utf8");
-    await fsp.writeFile(
-      main,
-      "import { value } from './dep';\nconsole.log(value);\n",
-      "utf8",
-    );
+    await fsp.writeFile(main, "import { value } from './dep';\nconsole.log(value);\n", "utf8");
 
     const report: BuildReport = { timings: {} };
     const graph = await collectGraph(root, [main, dep], { report });
@@ -157,14 +118,10 @@ describe("Import extraction fallback reporting", () => {
     const native = report.backend?.native;
     expect(native).toBeDefined();
     expect(native?.available).toBe(isNativeTreeSitterAvailable());
-    expect(native?.supportedLanguageIds).toEqual(
-      getNativeTreeSitterSupportedLanguageIds(),
-    );
+    expect(native?.supportedLanguageIds).toEqual(getNativeTreeSitterSupportedLanguageIds());
     expect(native?.byLanguage.ts?.filesSeen).toBe(2);
 
-    const nativeSupportsTs =
-      isNativeTreeSitterAvailable() &&
-      getNativeTreeSitterSupportedLanguageIds().includes("ts");
+    const nativeSupportsTs = isNativeTreeSitterAvailable() && getNativeTreeSitterSupportedLanguageIds().includes("ts");
     if (nativeSupportsTs) {
       expect(native?.byLanguage.ts?.filesUsed).toBe(2);
       expect(native?.filesUsed).toBe(2);
@@ -188,10 +145,7 @@ describe("Import extraction fallback reporting", () => {
 
     const normalizedMain = main.replace(/\\/g, "/");
     const futureEdge = graph.edges.find(
-      (entry) =>
-        entry.from === normalizedMain &&
-        entry.to.type === "external" &&
-        entry.to.name === "__future__",
+      (entry) => entry.from === normalizedMain && entry.to.type === "external" && entry.to.name === "__future__",
     );
     expect(futureEdge).toBeTruthy();
   });

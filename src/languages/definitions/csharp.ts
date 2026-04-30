@@ -29,14 +29,7 @@ export const CSHARP_DEF: LanguageDefinition = {
         captureId: "namespace",
       },
     ],
-    splitPoints: [
-      "if_statement",
-      "for_statement",
-      "foreach_statement",
-      "while_statement",
-      "switch_statement",
-      "try_statement",
-    ],
+    splitPoints: ["if_statement", "for_statement", "foreach_statement", "while_statement", "switch_statement", "try_statement"],
     comments: ["comment"],
   },
   graph: {
@@ -65,32 +58,16 @@ export const CSHARP_DEF: LanguageDefinition = {
     memberExpression: "member_access_expression",
   },
   supportsCrossModuleSymbols: true,
-  createsFunctionScope: (node) =>
-    node.type === "method_declaration" ||
-    node.type === "constructor_declaration",
+  createsFunctionScope: (node) => node.type === "method_declaration" || node.type === "constructor_declaration",
   createsBlockScope: (node) => node.type === "block",
   isDeclarationName: (node) => {
     const p = node.parent;
     if (!p) return false;
-    if (
-      p.type === "class_declaration" &&
-      p.childForFieldName("name")?.id === node.id
-    )
-      return true;
-    if (
-      p.type === "interface_declaration" &&
-      p.childForFieldName("name")?.id === node.id
-    )
-      return true;
-    if (
-      p.type === "method_declaration" &&
-      p.childForFieldName("name")?.id === node.id
-    )
-      return true;
-    if (p.type === "variable_declarator" && p.child(0)?.id === node.id)
-      return true;
-    if (p.type === "parameter" && p.childForFieldName("name")?.id === node.id)
-      return true;
+    if (p.type === "class_declaration" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "interface_declaration" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "method_declaration" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "variable_declarator" && p.child(0)?.id === node.id) return true;
+    if (p.type === "parameter" && p.childForFieldName("name")?.id === node.id) return true;
     return false;
   },
 };

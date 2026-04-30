@@ -16,6 +16,16 @@ export default tseslint.config(
       },
     },
     rules: {
+      "max-len": [
+        "error",
+        {
+          code: 140,
+          ignoreUrls: true,
+          ignoreStrings: true,
+          ignoreTemplateLiterals: true,
+          ignoreRegExpLiterals: true,
+        },
+      ],
       "no-useless-escape": "off",
       "prefer-const": "off",
       "@typescript-eslint/no-explicit-any": "error",

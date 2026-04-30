@@ -20,10 +20,7 @@ const GRAPH_FUNCTION_NAME_QUERY = `
   ]
 `;
 
-const isWithin = (
-  node: SyntaxNodeLike,
-  ancestor: SyntaxNodeLike | null,
-): boolean => {
+const isWithin = (node: SyntaxNodeLike, ancestor: SyntaxNodeLike | null): boolean => {
   let current: SyntaxNodeLike | null = node;
   while (current) {
     if (ancestor && current.id === ancestor.id) return true;
@@ -32,16 +29,9 @@ const isWithin = (
   return false;
 };
 
-const isInField = (
-  node: SyntaxNodeLike,
-  parent: SyntaxNodeLike,
-  field: string,
-): boolean => isWithin(node, parent.childForFieldName(field));
+const isInField = (node: SyntaxNodeLike, parent: SyntaxNodeLike, field: string): boolean => isWithin(node, parent.childForFieldName(field));
 
-const findAncestor = (
-  node: SyntaxNodeLike,
-  types: Set<string>,
-): SyntaxNodeLike | null => {
+const findAncestor = (node: SyntaxNodeLike, types: Set<string>): SyntaxNodeLike | null => {
   let current: SyntaxNodeLike | null = node.parent;
   while (current) {
     if (types.has(current.type)) return current;
@@ -61,12 +51,9 @@ const containerTypes = new Set([
 
 const paramListTypes = new Set(["parameter_declaration", "parameter_list"]);
 
-const isInParameterList = (node: SyntaxNodeLike): boolean =>
-  !!findAncestor(node, paramListTypes);
+const isInParameterList = (node: SyntaxNodeLike): boolean => !!findAncestor(node, paramListTypes);
 
-const resolveDeclaratorRoot = (
-  ancestor: SyntaxNodeLike,
-): SyntaxNodeLike | null => {
+const resolveDeclaratorRoot = (ancestor: SyntaxNodeLike): SyntaxNodeLike | null => {
   let declaratorNode = ancestor.childForFieldName("declarator");
   if (!declaratorNode) return null;
   if (declaratorNode.type === "init_declarator") {
@@ -80,10 +67,7 @@ const resolveDeclaratorRoot = (
   return declaratorNode;
 };
 
-const isInAncestorDeclarator = (
-  node: SyntaxNodeLike,
-  ancestorTypes: Set<string>,
-): boolean => {
+const isInAncestorDeclarator = (node: SyntaxNodeLike, ancestorTypes: Set<string>): boolean => {
   const ancestor = findAncestor(node, ancestorTypes);
   if (!ancestor) return false;
   const declaratorNode = resolveDeclaratorRoot(ancestor);
@@ -143,14 +127,7 @@ export const C_DEF: LanguageDefinition = {
         captureId: "macro",
       },
     ],
-    splitPoints: [
-      "if_statement",
-      "for_statement",
-      "while_statement",
-      "do_statement",
-      "switch_statement",
-      "case_statement",
-    ],
+    splitPoints: ["if_statement", "for_statement", "while_statement", "do_statement", "switch_statement", "case_statement"],
     comments: ["comment"],
   },
   graph: {
@@ -198,30 +175,18 @@ export const C_DEF: LanguageDefinition = {
   classifyDefinition: (node) => {
     const parent = node.parent;
     if (!parent) return "variable";
-    if (
-      parent.type === "struct_specifier" ||
-      parent.type === "union_specifier" ||
-      parent.type === "enum_specifier"
-    )
-      return "class";
-    if (
-      parent.type === "type_definition" &&
-      isInField(node, parent, "declarator")
-    )
-      return "type";
+    if (parent.type === "struct_specifier" || parent.type === "union_specifier" || parent.type === "enum_specifier") return "class";
+    if (parent.type === "type_definition" && isInField(node, parent, "declarator")) return "type";
     const container = findAncestor(node, containerTypes);
     if (container?.type === "function_definition") return "function";
-    if (container?.type === "declaration" && isFunctionDeclarator(node))
-      return "function";
+    if (container?.type === "declaration" && isFunctionDeclarator(node)) return "function";
     return "variable";
   },
   isDeclarationName: (node) => {
     const parent = node.parent;
     if (!parent) return false;
     if (
-      (parent.type === "struct_specifier" ||
-        parent.type === "union_specifier" ||
-        parent.type === "enum_specifier") &&
+      (parent.type === "struct_specifier" || parent.type === "union_specifier" || parent.type === "enum_specifier") &&
       isInField(node, parent, "name")
     )
       return true;
@@ -232,25 +197,11 @@ export const C_DEF: LanguageDefinition = {
       isInAncestorDeclarator(node, new Set(["type_definition"]))
     )
       return true;
-    if (
-      isInAncestorDeclarator(node, new Set(["function_definition"])) &&
-      !isInParameterList(node)
-    )
-      return true;
-    if (
-      isInAncestorDeclarator(node, new Set(["declaration"])) &&
-      !isInParameterList(node)
-    )
-      return true;
-    if (parent.type === "enumerator" && isInField(node, parent, "name"))
-      return true;
-    if (parent.type === "preproc_def" && isInField(node, parent, "name"))
-      return true;
-    if (
-      parent.type === "preproc_function_def" &&
-      isInField(node, parent, "name")
-    )
-      return true;
+    if (isInAncestorDeclarator(node, new Set(["function_definition"])) && !isInParameterList(node)) return true;
+    if (isInAncestorDeclarator(node, new Set(["declaration"])) && !isInParameterList(node)) return true;
+    if (parent.type === "enumerator" && isInField(node, parent, "name")) return true;
+    if (parent.type === "preproc_def" && isInField(node, parent, "name")) return true;
+    if (parent.type === "preproc_function_def" && isInField(node, parent, "name")) return true;
     return false;
   },
   createsFunctionScope: (node) => node.type === "function_definition",

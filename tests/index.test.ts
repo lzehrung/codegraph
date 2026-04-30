@@ -3,17 +3,11 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { buildProjectIndexFromFiles } from "../src/index.js";
-import {
-  createTestIndex,
-  expectFileInIndex,
-  expectModuleCount,
-} from "./test-utils.js";
+import { createTestIndex, expectFileInIndex, expectModuleCount } from "./test-utils.js";
 
 describe("Project Indexing", () => {
   it("does not add workspace manifest edges outside explicit file-list indexes", async () => {
-    const root = await fsp.mkdtemp(
-      path.join(os.tmpdir(), "dg-explicit-manifest-scope-"),
-    );
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-explicit-manifest-scope-"));
     const appManifest = path.join(root, "apps", "app", "package.json");
     const libManifest = path.join(root, "packages", "lib", "package.json");
 
@@ -33,11 +27,7 @@ describe("Project Indexing", () => {
       ),
       "utf8",
     );
-    await fsp.writeFile(
-      libManifest,
-      JSON.stringify({ name: "lib" }, null, 2),
-      "utf8",
-    );
+    await fsp.writeFile(libManifest, JSON.stringify({ name: "lib" }, null, 2), "utf8");
 
     const index = await buildProjectIndexFromFiles(root, [appManifest]);
 
@@ -46,22 +36,16 @@ describe("Project Indexing", () => {
     expect(
       index.graph.edges.some(
         (edge) =>
-          edge.from === appManifest.replace(/\\/g, "/") &&
-          edge.to.type === "file" &&
-          edge.to.path === libManifest.replace(/\\/g, "/"),
+          edge.from === appManifest.replace(/\\/g, "/") && edge.to.type === "file" && edge.to.path === libManifest.replace(/\\/g, "/"),
       ),
     ).toBe(false);
   });
 
   it("rejects explicit file-list inputs outside the project root", async () => {
-    const root = await fsp.mkdtemp(
-      path.join(os.tmpdir(), "dg-explicit-file-root-"),
-    );
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-explicit-file-root-"));
     const outsideFile = path.resolve("README.md");
 
-    await expect(
-      buildProjectIndexFromFiles(root, [outsideFile], { cache: "memory" }),
-    ).rejects.toThrow(/outside project root/);
+    await expect(buildProjectIndexFromFiles(root, [outsideFile], { cache: "memory" })).rejects.toThrow(/outside project root/);
   });
 
   describe("TypeScript Project", () => {
@@ -70,44 +54,19 @@ describe("Project Indexing", () => {
 
       expectModuleCount(index, 5);
 
-      const samplePath = path.resolve(
-        process.cwd(),
-        "tests",
-        "samples",
-        "typescript"
-      );
-      expectFileInIndex(
-        index,
-        path.join(samplePath, "main.ts").replace(/\\/g, "/")
-      );
-      expectFileInIndex(
-        index,
-        path.join(samplePath, "utils.ts").replace(/\\/g, "/")
-      );
-      expectFileInIndex(
-        index,
-        path.join(samplePath, "helpers.ts").replace(/\\/g, "/")
-      );
-      expectFileInIndex(
-        index,
-        path.join(samplePath, "dynamic-import.ts").replace(/\\/g, "/")
-      );
-      expectFileInIndex(
-        index,
-        path.join(samplePath, "tsconfig.json").replace(/\\/g, "/")
-      );
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
+      expectFileInIndex(index, path.join(samplePath, "main.ts").replace(/\\/g, "/"));
+      expectFileInIndex(index, path.join(samplePath, "utils.ts").replace(/\\/g, "/"));
+      expectFileInIndex(index, path.join(samplePath, "helpers.ts").replace(/\\/g, "/"));
+      expectFileInIndex(index, path.join(samplePath, "dynamic-import.ts").replace(/\\/g, "/"));
+      expectFileInIndex(index, path.join(samplePath, "tsconfig.json").replace(/\\/g, "/"));
     });
 
     it("should detect imports and exports", async () => {
       const index = await createTestIndex("typescript");
 
       // Check that utils.ts has exports
-      const samplePath = path.resolve(
-        process.cwd(),
-        "tests",
-        "samples",
-        "typescript"
-      );
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
       const utilsFile = path.join(samplePath, "utils.ts").replace(/\\/g, "/");
       const utilsModule = index.byFile.get(utilsFile);
 
@@ -119,12 +78,7 @@ describe("Project Indexing", () => {
     it("should detect imports in main.ts", async () => {
       const index = await createTestIndex("typescript");
 
-      const samplePath = path.resolve(
-        process.cwd(),
-        "tests",
-        "samples",
-        "typescript"
-      );
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
       const mainFile = path.join(samplePath, "main.ts").replace(/\\/g, "/");
       const mainModule = index.byFile.get(mainFile);
 
@@ -139,43 +93,18 @@ describe("Project Indexing", () => {
 
       expectModuleCount(index, 5);
 
-      const samplePath = path.resolve(
-        process.cwd(),
-        "tests",
-        "samples",
-        "python"
-      );
-      expectFileInIndex(
-        index,
-        path.join(samplePath, "main.py").replace(/\\/g, "/")
-      );
-      expectFileInIndex(
-        index,
-        path.join(samplePath, "utils.py").replace(/\\/g, "/")
-      );
-      expectFileInIndex(
-        index,
-        path.join(samplePath, "helpers.py").replace(/\\/g, "/")
-      );
-      expectFileInIndex(
-        index,
-        path.join(samplePath, "relative-imports.py").replace(/\\/g, "/")
-      );
-      expectFileInIndex(
-        index,
-        path.join(samplePath, "__init__.py").replace(/\\/g, "/")
-      );
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "python");
+      expectFileInIndex(index, path.join(samplePath, "main.py").replace(/\\/g, "/"));
+      expectFileInIndex(index, path.join(samplePath, "utils.py").replace(/\\/g, "/"));
+      expectFileInIndex(index, path.join(samplePath, "helpers.py").replace(/\\/g, "/"));
+      expectFileInIndex(index, path.join(samplePath, "relative-imports.py").replace(/\\/g, "/"));
+      expectFileInIndex(index, path.join(samplePath, "__init__.py").replace(/\\/g, "/"));
     });
 
     it("should detect Python imports and exports", async () => {
       const index = await createTestIndex("python");
 
-      const samplePath = path.resolve(
-        process.cwd(),
-        "tests",
-        "samples",
-        "python"
-      );
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "python");
       const utilsFile = path.join(samplePath, "utils.py").replace(/\\/g, "/");
       const utilsModule = index.byFile.get(utilsFile);
 
@@ -187,12 +116,7 @@ describe("Project Indexing", () => {
     it("should detect Python imports in main.py", async () => {
       const index = await createTestIndex("python");
 
-      const samplePath = path.resolve(
-        process.cwd(),
-        "tests",
-        "samples",
-        "python"
-      );
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "python");
       const mainFile = path.join(samplePath, "main.py").replace(/\\/g, "/");
       const mainModule = index.byFile.get(mainFile);
 
@@ -207,51 +131,20 @@ describe("Project Indexing", () => {
 
       expectModuleCount(index, 7);
 
-      const samplePath = path.resolve(
-        process.cwd(),
-        "tests",
-        "samples",
-        "javascript"
-      );
-      expectFileInIndex(
-        index,
-        path.join(samplePath, "main.js").replace(/\\/g, "/")
-      );
-      expectFileInIndex(
-        index,
-        path.join(samplePath, "utils.js").replace(/\\/g, "/")
-      );
-      expectFileInIndex(
-        index,
-        path.join(samplePath, "helpers.js").replace(/\\/g, "/")
-      );
-      expectFileInIndex(
-        index,
-        path.join(samplePath, "dynamic-import.js").replace(/\\/g, "/")
-      );
-      expectFileInIndex(
-        index,
-        path.join(samplePath, "legacy.js").replace(/\\/g, "/")
-      );
-      expectFileInIndex(
-        index,
-        path.join(samplePath, "mixed.js").replace(/\\/g, "/")
-      );
-      expectFileInIndex(
-        index,
-        path.join(samplePath, "package.json").replace(/\\/g, "/")
-      );
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "javascript");
+      expectFileInIndex(index, path.join(samplePath, "main.js").replace(/\\/g, "/"));
+      expectFileInIndex(index, path.join(samplePath, "utils.js").replace(/\\/g, "/"));
+      expectFileInIndex(index, path.join(samplePath, "helpers.js").replace(/\\/g, "/"));
+      expectFileInIndex(index, path.join(samplePath, "dynamic-import.js").replace(/\\/g, "/"));
+      expectFileInIndex(index, path.join(samplePath, "legacy.js").replace(/\\/g, "/"));
+      expectFileInIndex(index, path.join(samplePath, "mixed.js").replace(/\\/g, "/"));
+      expectFileInIndex(index, path.join(samplePath, "package.json").replace(/\\/g, "/"));
     });
 
     it("should detect JavaScript ES6 imports and exports", async () => {
       const index = await createTestIndex("javascript");
 
-      const samplePath = path.resolve(
-        process.cwd(),
-        "tests",
-        "samples",
-        "javascript"
-      );
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "javascript");
       const utilsFile = path.join(samplePath, "utils.js").replace(/\\/g, "/");
       const utilsModule = index.byFile.get(utilsFile);
 
@@ -263,12 +156,7 @@ describe("Project Indexing", () => {
     it("should detect JavaScript imports in main.js", async () => {
       const index = await createTestIndex("javascript");
 
-      const samplePath = path.resolve(
-        process.cwd(),
-        "tests",
-        "samples",
-        "javascript"
-      );
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "javascript");
       const mainFile = path.join(samplePath, "main.js").replace(/\\/g, "/");
       const mainModule = index.byFile.get(mainFile);
 
@@ -279,27 +167,15 @@ describe("Project Indexing", () => {
     it("should detect CommonJS require statements", async () => {
       const index = await createTestIndex("javascript");
 
-      const samplePath = path.resolve(
-        process.cwd(),
-        "tests",
-        "samples",
-        "javascript"
-      );
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "javascript");
       const mainFile = path.join(samplePath, "main.js").replace(/\\/g, "/");
       const mainModule = index.byFile.get(mainFile);
 
       expect(mainModule).toBeDefined();
 
       // Should detect both ES6 imports and CommonJS requires
-      const hasES6Import = mainModule!.imports.some(
-        (imp) =>
-          imp.kind === "default" ||
-          imp.kind === "named" ||
-          imp.kind === "namespace"
-      );
-      const hasCommonJSRequire = mainModule!.imports.some(
-        (imp) => imp.mechanism === "cjs"
-      );
+      const hasES6Import = mainModule!.imports.some((imp) => imp.kind === "default" || imp.kind === "named" || imp.kind === "namespace");
+      const hasCommonJSRequire = mainModule!.imports.some((imp) => imp.mechanism === "cjs");
 
       expect(hasES6Import || hasCommonJSRequire).toBe(true);
     });
@@ -307,12 +183,7 @@ describe("Project Indexing", () => {
     it("should detect mixed module systems", async () => {
       const index = await createTestIndex("javascript");
 
-      const samplePath = path.resolve(
-        process.cwd(),
-        "tests",
-        "samples",
-        "javascript"
-      );
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "javascript");
       const mixedFile = path.join(samplePath, "mixed.js").replace(/\\/g, "/");
       const mixedModule = index.byFile.get(mixedFile);
 
@@ -324,12 +195,7 @@ describe("Project Indexing", () => {
 
   describe("Graph-Only Document Projects", () => {
     it("keeps graph-only modules semantically inert while preserving imports", async () => {
-      const markdownPath = path.resolve(
-        process.cwd(),
-        "tests",
-        "samples",
-        "markdown",
-      );
+      const markdownPath = path.resolve(process.cwd(), "tests", "samples", "markdown");
       const mdxPath = path.resolve(process.cwd(), "tests", "samples", "mdx");
       const rstPath = path.resolve(process.cwd(), "tests", "samples", "rst");
       const adocPath = path.resolve(process.cwd(), "tests", "samples", "adoc");
@@ -348,14 +214,8 @@ describe("Project Indexing", () => {
         path.join(mdxPath, "guide.md").replace(/\\/g, "/"),
         path.join(mdxPath, "components", "Card.tsx").replace(/\\/g, "/"),
       ]);
-      const rstIndex = await buildProjectIndexFromFiles(rstPath, [
-        rstFile,
-        path.join(rstPath, "guide.rst").replace(/\\/g, "/"),
-      ]);
-      const adocIndex = await buildProjectIndexFromFiles(adocPath, [
-        adocFile,
-        path.join(adocPath, "guide.adoc").replace(/\\/g, "/"),
-      ]);
+      const rstIndex = await buildProjectIndexFromFiles(rstPath, [rstFile, path.join(rstPath, "guide.rst").replace(/\\/g, "/")]);
+      const adocIndex = await buildProjectIndexFromFiles(adocPath, [adocFile, path.join(adocPath, "guide.adoc").replace(/\\/g, "/")]);
 
       const markdownModule = markdownIndex.byFile.get(markdownFile);
       const mdxModule = mdxIndex.byFile.get(mdxFile);

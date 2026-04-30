@@ -24,9 +24,7 @@ describe("Agent Tools", () => {
     expect(result.status).toBe("ok");
     expect(result.files).toBeDefined();
     expect(result.files?.every((file) => !path.isAbsolute(file))).toBe(true);
-    expect(result.files!.some((f) => f.replace(/\\/g, "/").endsWith("main.ts"))).toBe(
-      true,
-    );
+    expect(result.files!.some((f) => f.replace(/\\/g, "/").endsWith("main.ts"))).toBe(true);
   });
 
   it("tool_getGraph should return graph", async () => {
@@ -37,11 +35,7 @@ describe("Agent Tools", () => {
     expect(result.graph!.edges).toBeDefined();
     expect(result.graph?.nodes.every((node) => !path.isAbsolute(node))).toBe(true);
     expect(
-      result.graph?.edges.every(
-        (edge) =>
-          !path.isAbsolute(edge.from) &&
-          (edge.to.type !== "file" || !path.isAbsolute(edge.to.path)),
-      ),
+      result.graph?.edges.every((edge) => !path.isAbsolute(edge.from) && (edge.to.type !== "file" || !path.isAbsolute(edge.to.path))),
     ).toBe(true);
   });
 
@@ -85,10 +79,7 @@ describe("Agent Tools", () => {
   });
 
   it("tool_getFileOverview returns structured errors for invalid roots", async () => {
-    const result = await tool_getFileOverview(
-      "Z:/definitely-missing-codegraph-root",
-      "main.ts",
-    );
+    const result = await tool_getFileOverview("Z:/definitely-missing-codegraph-root", "main.ts");
     expect(result.status).toBe("error");
     if (result.status === "error") {
       expect(result.error).toContain("Project root does not exist or is not readable");
@@ -98,10 +89,7 @@ describe("Agent Tools", () => {
   it("tool_getFileOverview rejects files outside the project root", async () => {
     const buildSpy = vi.spyOn(codegraph, "buildProjectIndex");
     try {
-      const result = await tool_getFileOverview(
-        samplePath,
-        path.resolve("README.md"),
-      );
+      const result = await tool_getFileOverview(samplePath, path.resolve("README.md"));
       expect(result.status).toBe("error");
       if (result.status === "error") {
         expect(result.reason).toBe("outside_project_root");
@@ -134,9 +122,7 @@ describe("Agent Tools", () => {
     if (result.status === "ok") {
       expect(result.definition?.file).toBe("utils.ts");
       expect(result.references.length).toBeGreaterThan(0);
-      expect(result.references.every((reference) => !path.isAbsolute(reference.file))).toBe(
-        true,
-      );
+      expect(result.references.every((reference) => !path.isAbsolute(reference.file))).toBe(true);
       const firstImportReference = result.references.find((reference) => reference.via?.import);
       expect(firstImportReference?.via?.import?.resolved).toBe("utils.ts");
     }
@@ -153,12 +139,7 @@ describe("Agent Tools", () => {
   it("tool_goToDefinition rejects files outside the project root", async () => {
     const buildSpy = vi.spyOn(codegraph, "buildProjectIndex");
     try {
-      const result = await tool_goToDefinition(
-        samplePath,
-        path.resolve("README.md"),
-        1,
-        1,
-      );
+      const result = await tool_goToDefinition(samplePath, path.resolve("README.md"), 1, 1);
       expect(result.status).toBe("error");
       if (result.status === "error") {
         expect(result.reason).toBe("outside_project_root");
@@ -173,12 +154,7 @@ describe("Agent Tools", () => {
   it("tool_findReferences rejects files outside the project root", async () => {
     const buildSpy = vi.spyOn(codegraph, "buildProjectIndex");
     try {
-      const result = await tool_findReferences(
-        samplePath,
-        path.resolve("README.md"),
-        1,
-        1,
-      );
+      const result = await tool_findReferences(samplePath, path.resolve("README.md"), 1, 1);
       expect(result.status).toBe("error");
       if (result.status === "error") {
         expect(result.reason).toBe("outside_project_root");
@@ -195,17 +171,12 @@ describe("Agent Tools", () => {
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
       expect(result.matches.length).toBeGreaterThan(0);
-      expect(
-        result.matches.some((match) => match.name === "helperFunction"),
-      ).toBe(true);
+      expect(result.matches.some((match) => match.name === "helperFunction")).toBe(true);
     }
   });
 
   it("tool_findSymbol returns structured errors for invalid roots", async () => {
-    const result = await tool_findSymbol(
-      "Z:/definitely-missing-codegraph-root",
-      "helperFunction",
-    );
+    const result = await tool_findSymbol("Z:/definitely-missing-codegraph-root", "helperFunction");
     expect(result.status).toBe("error");
     if (result.status === "error") {
       expect(result.error).toContain("Project root does not exist or is not readable");

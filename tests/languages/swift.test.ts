@@ -26,13 +26,7 @@ const definition: LanguageTestDefinition = {
     symbols: [
       {
         file: "Protocols.swift",
-        includes: [
-          { name: "Worker" },
-          { name: "name" },
-          { name: "act" },
-          { name: "WorkerName" },
-          { name: "WorkerImpl" },
-        ],
+        includes: [{ name: "Worker" }, { name: "name" }, { name: "act" }, { name: "WorkerName" }, { name: "WorkerImpl" }],
       },
       {
         file: "Extensions.swift",

@@ -8,11 +8,7 @@ import { supportForFile } from "../languages.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { shouldAvoidJsFallbackForLanguage } from "../native/treeSitterNative.js";
 import { buildBloomFilterFromSource } from "../util/bloomFilter.js";
-import type {
-  FallbackImportExtractionEvent,
-  GraphCacheEntry,
-  GraphBuildOptions,
-} from "../graphs.js";
+import type { FallbackImportExtractionEvent, GraphCacheEntry, GraphBuildOptions } from "../graphs.js";
 import type { Edge } from "../types.js";
 import {
   DEFAULT_PROJECT_MANIFESTS,
@@ -63,9 +59,7 @@ export async function collectWorkspaceManifestDependencyEdges(
     ...(logLevel ? { logLevel } : {}),
   });
   const scopedManifestPaths = allowedManifestFiles
-    ? manifestPaths.filter((manifestPath) =>
-        allowedManifestFiles.has(manifestPath),
-      )
+    ? manifestPaths.filter((manifestPath) => allowedManifestFiles.has(manifestPath))
     : manifestPaths;
   if (scopedManifestPaths.length === 0) return [];
 
@@ -87,12 +81,7 @@ export async function collectWorkspaceManifestDependencyEdges(
 
   const edges: Edge[] = [];
   for (const [fromManifest, parsed] of parsedByPath.entries()) {
-    const dependencySets = [
-      parsed.dependencies,
-      parsed.devDependencies,
-      parsed.peerDependencies,
-      parsed.optionalDependencies,
-    ];
+    const dependencySets = [parsed.dependencies, parsed.devDependencies, parsed.peerDependencies, parsed.optionalDependencies];
     for (const dependencySet of dependencySets) {
       if (!dependencySet) continue;
       for (const dependencyName of Object.keys(dependencySet)) {
@@ -122,16 +111,10 @@ function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
 }
 
 function diskCacheDatabasePath(projectRoot: string, opts?: BuildOptions): string {
-  return path.join(cacheRoot(projectRoot, opts), "index-cache.sqlite").replace(
-    /\\/g,
-    "/",
-  );
+  return path.join(cacheRoot(projectRoot, opts), "index-cache.sqlite").replace(/\\/g, "/");
 }
 
-function getDiskCacheDatabase(
-  projectRoot: string,
-  opts?: BuildOptions,
-): BetterSqliteDatabase {
+function getDiskCacheDatabase(projectRoot: string, opts?: BuildOptions): BetterSqliteDatabase {
   const dbPath = diskCacheDatabasePath(projectRoot, opts);
   const existing = diskCacheDatabases.get(dbPath);
   if (existing) return existing;
@@ -154,10 +137,7 @@ function getDiskCacheDatabase(
   return db;
 }
 
-export function closeDiskCacheDatabase(
-  projectRoot: string,
-  opts?: BuildOptions,
-): void {
+export function closeDiskCacheDatabase(projectRoot: string, opts?: BuildOptions): void {
   const dbPath = diskCacheDatabasePath(projectRoot, opts);
   const db = diskCacheDatabases.get(dbPath);
   if (!db) return;
@@ -207,18 +187,8 @@ type ConfigHashResult = {
   error?: string;
 };
 
-export function normalizeIndexedFileInputs(
-  projectRoot: string,
-  files: readonly string[],
-  label: string,
-): string[] {
-  return Array.from(
-    new Set(
-      files
-        .filter(Boolean)
-        .map((file) => assertFilePathWithinRoot(projectRoot, file, label)),
-    ),
-  );
+export function normalizeIndexedFileInputs(projectRoot: string, files: readonly string[], label: string): string[] {
+  return Array.from(new Set(files.filter(Boolean).map((file) => assertFilePathWithinRoot(projectRoot, file, label))));
 }
 
 export function sanitizeManifestEntriesForRoot(
@@ -233,24 +203,13 @@ export function sanitizeManifestEntriesForRoot(
   return sanitizedEntries;
 }
 
-export async function computeConfigHash(
-  projectRoot: string,
-  logLevel?: LogLevel,
-): Promise<ConfigHashResult> {
+export async function computeConfigHash(projectRoot: string, logLevel?: LogLevel): Promise<ConfigHashResult> {
   try {
     const configFiles = await fg([...DEFAULT_PROJECT_MANIFESTS, "**/.gitignore"], {
       cwd: projectRoot,
       absolute: true,
       dot: true,
-      ignore: [
-        "**/node_modules/**",
-        "**/.git/**",
-        "**/dist/**",
-        "**/build/**",
-        "**/target/**",
-        "**/.venv/**",
-        "**/__pycache__/**",
-      ],
+      ignore: ["**/node_modules/**", "**/.git/**", "**/dist/**", "**/build/**", "**/target/**", "**/.venv/**", "**/__pycache__/**"],
     });
     configFiles.sort();
     const hash = crypto.createHash("sha1");
@@ -299,10 +258,7 @@ export type FileSignature = {
   contentHash?: string;
 };
 
-export function initCacheReport(
-  report: BuildReport | undefined,
-  mode: BuildOptions["cache"] | undefined,
-): CacheReport | undefined {
+export function initCacheReport(report: BuildReport | undefined, mode: BuildOptions["cache"] | undefined): CacheReport | undefined {
   if (!report) return undefined;
   if (!report.cache) {
     report.cache = { mode: mode ?? "off", hits: 0, misses: 0 };
@@ -310,9 +266,7 @@ export function initCacheReport(
   return report.cache;
 }
 
-export function initFileReport(
-  report: BuildReport | undefined,
-): BuildFileReport | undefined {
+export function initFileReport(report: BuildReport | undefined): BuildFileReport | undefined {
   if (!report) return undefined;
   if (!report.files) {
     report.files = { total: 0, cached: 0, parsed: 0 };
@@ -320,11 +274,7 @@ export function initFileReport(
   return report.files;
 }
 
-export function recordFileFailure(
-  report: BuildReport | undefined,
-  file: string,
-  error: unknown,
-): void {
+export function recordFileFailure(report: BuildReport | undefined, file: string, error: unknown): void {
   const fileReport = initFileReport(report);
   if (!fileReport) return;
   fileReport.failed = (fileReport.failed ?? 0) + 1;
@@ -338,9 +288,7 @@ export function recordFileFailure(
   fileReport.errors = errors;
 }
 
-function initFallbackImportExtractionReport(
-  report: BuildReport | undefined,
-): FallbackImportExtractionReport | undefined {
+function initFallbackImportExtractionReport(report: BuildReport | undefined): FallbackImportExtractionReport | undefined {
   if (!report) return undefined;
   if (!report.graph) {
     report.graph = {
@@ -386,8 +334,7 @@ export function createFallbackImportExtractionHandler(
     if (fallbackReport) {
       if (!fallbackReport.files[filePath]) {
         fallbackReport.total += 1;
-        fallbackReport.byLanguage[event.language] =
-          (fallbackReport.byLanguage[event.language] ?? 0) + 1;
+        fallbackReport.byLanguage[event.language] = (fallbackReport.byLanguage[event.language] ?? 0) + 1;
         fallbackReport.byReason ??= {
           fast: 0,
           "js-fallback-unavailable": 0,
@@ -406,9 +353,7 @@ export function createFallbackImportExtractionHandler(
     if (warned.has(warningKey)) return;
     warned.add(warningKey);
     const severity =
-      event.reason === "fast" ||
-      event.reason === "js-fallback-unavailable" ||
-      shouldAvoidJsFallbackForLanguage(event.language)
+      event.reason === "fast" || event.reason === "js-fallback-unavailable" || shouldAvoidJsFallbackForLanguage(event.language)
         ? "debug"
         : "warn";
     const message =
@@ -424,11 +369,7 @@ export function createFallbackImportExtractionHandler(
   };
 }
 
-export function initManifestReport(
-  report: BuildReport | undefined,
-  used: boolean,
-  reused: boolean,
-): ManifestReport | undefined {
+export function initManifestReport(report: BuildReport | undefined, used: boolean, reused: boolean): ManifestReport | undefined {
   if (!report) return undefined;
   if (!report.manifest) {
     report.manifest = { used, reused };
@@ -457,9 +398,7 @@ async function fileStatSignature(
     const shouldHash = useStrict || !!opts?.includeContentHash;
     const contentHash = shouldHash ? await fileContentHash(file) : undefined;
     if (!useStrict) {
-      return contentHash
-        ? { sig: `${stat.mtimeMs}:${stat.size}`, contentHash }
-        : { sig: `${stat.mtimeMs}:${stat.size}` };
+      return contentHash ? { sig: `${stat.mtimeMs}:${stat.size}`, contentHash } : { sig: `${stat.mtimeMs}:${stat.size}` };
     }
     if (contentHash) {
       return {
@@ -494,10 +433,7 @@ export async function fileSignature(
   return { sig, cacheSig, ...(contentHash ? { contentHash } : {}) };
 }
 
-export async function cacheSignatureForFile(
-  file: string,
-  sigInfo: FileSignature,
-): Promise<string> {
+export async function cacheSignatureForFile(file: string, sigInfo: FileSignature): Promise<string> {
   if (sigInfo.gitSig) return sigInfo.gitSig;
   if (sigInfo.contentHash) return sigInfo.contentHash;
   const contentHash = await fileContentHash(file);
@@ -505,9 +441,7 @@ export async function cacheSignatureForFile(
   return contentHash;
 }
 
-export async function buildBloomFilterForFile(
-  file: string,
-): Promise<import("../util/bloomFilter.js").BloomFilter | null> {
+export async function buildBloomFilterForFile(file: string): Promise<import("../util/bloomFilter.js").BloomFilter | null> {
   try {
     const source = await fsp.readFile(file, "utf8");
     const support = supportForFile(file);
@@ -526,12 +460,7 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     imports?: unknown;
     locals?: unknown;
   };
-  return (
-    typeof mod.file === "string" &&
-    Array.isArray(mod.exports) &&
-    Array.isArray(mod.imports) &&
-    Array.isArray(mod.locals)
-  );
+  return typeof mod.file === "string" && Array.isArray(mod.exports) && Array.isArray(mod.imports) && Array.isArray(mod.locals);
 }
 
 export function tryLoadFromCache(
@@ -556,9 +485,9 @@ export function tryLoadFromCache(
   if (mode === "disk") {
     try {
       const db = getDiskCacheDatabase(projectRoot, opts);
-      const row = db
-        .prepare("SELECT sig, version, payload FROM module_cache WHERE file = ?")
-        .get(file) as { sig: string; version: number; payload: string } | undefined;
+      const row = db.prepare("SELECT sig, version, payload FROM module_cache WHERE file = ?").get(file) as
+        | { sig: string; version: number; payload: string }
+        | undefined;
       if (row && row.sig === sig && row.version === PARSED_CACHE_VERSION) {
         const parsed = JSON.parse(row.payload) as unknown;
         if (isModuleIndex(parsed)) {
@@ -574,13 +503,7 @@ export function tryLoadFromCache(
   return null;
 }
 
-export function writeToCache(
-  projectRoot: string,
-  file: string,
-  sig: string,
-  mod: ModuleIndex,
-  opts?: BuildOptions,
-): void {
+export function writeToCache(projectRoot: string, file: string, sig: string, mod: ModuleIndex, opts?: BuildOptions): void {
   const mode = opts?.cache ?? "off";
   if (mode === "memory") {
     memoryCache.set(file, { version: PARSED_CACHE_VERSION, sig, mod });
@@ -606,10 +529,7 @@ function manifestFilePath(projectRoot: string, opts?: BuildOptions): string {
   return path.join(cacheRoot(projectRoot, opts), "manifest.json");
 }
 
-export async function loadManifest(
-  projectRoot: string,
-  opts?: BuildOptions,
-): Promise<IndexManifest | null> {
+export async function loadManifest(projectRoot: string, opts?: BuildOptions): Promise<IndexManifest | null> {
   try {
     const manifestPath = manifestFilePath(projectRoot, opts);
     const raw = await fsp.readFile(manifestPath, "utf8");
@@ -621,19 +541,11 @@ export async function loadManifest(
   }
 }
 
-export async function writeManifest(
-  projectRoot: string,
-  opts: BuildOptions | undefined,
-  manifest: IndexManifest,
-): Promise<void> {
+export async function writeManifest(projectRoot: string, opts: BuildOptions | undefined, manifest: IndexManifest): Promise<void> {
   try {
     const manifestPath = manifestFilePath(projectRoot, opts);
     await fsp.mkdir(path.dirname(manifestPath), { recursive: true });
-    await fsp.writeFile(
-      manifestPath,
-      JSON.stringify(manifest, null, 2),
-      "utf8",
-    );
+    await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
   } catch (error) {
     logWithLevel(opts?.logLevel, "warn", "Warning: Failed to write manifest:", error);
   }
@@ -649,25 +561,20 @@ export async function verifyManifestEntries(
   const files = Object.keys(entries);
   const existingFiles = files.filter((file) => fs.existsSync(file));
   const missing = files.length - existingFiles.length;
-  const gitSigMap = gitAvailable
-    ? await getGitBlobHashes(projectRoot, existingFiles, { gitAvailable })
-    : new Map<string, string>();
+  const gitSigMap = gitAvailable ? await getGitBlobHashes(projectRoot, existingFiles, { gitAvailable }) : new Map<string, string>();
   let mismatches = 0;
   for (const file of existingFiles) {
     const entry = entries[file];
     if (!entry) continue;
     const sigInfo = await fileSignature(file, opts?.cacheStrict, gitSigMap.get(file));
-    const matchesGitSig =
-      !!entry.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
+    const matchesGitSig = !!entry.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
     const matchesSig = entry.sig === sigInfo.sig;
     if (!matchesGitSig && !matchesSig) mismatches += 1;
   }
   return { mismatches, missing };
 }
 
-function normalizeManifestBuildOptions(
-  opts?: ManifestBuildOptions,
-): ManifestBuildOptions {
+function normalizeManifestBuildOptions(opts?: ManifestBuildOptions): ManifestBuildOptions {
   return {
     cache: opts?.cache ?? "off",
     cacheStrict: opts?.cacheStrict ?? true,
@@ -678,16 +585,10 @@ function normalizeManifestBuildOptions(
   };
 }
 
-function normalizeDiscoveryOptions(
-  discovery?: ProjectFileDiscoveryOptions,
-): ManifestBuildOptions["discovery"] {
+function normalizeDiscoveryOptions(discovery?: ProjectFileDiscoveryOptions): ManifestBuildOptions["discovery"] {
   if (!discovery) return undefined;
-  const includeGlobs = Array.from(
-    new Set((discovery.includeGlobs ?? []).map((glob) => glob.trim()).filter(Boolean)),
-  ).sort();
-  const ignoreGlobs = Array.from(
-    new Set((discovery.ignoreGlobs ?? []).map((glob) => glob.trim()).filter(Boolean)),
-  ).sort();
+  const includeGlobs = Array.from(new Set((discovery.includeGlobs ?? []).map((glob) => glob.trim()).filter(Boolean))).sort();
+  const ignoreGlobs = Array.from(new Set((discovery.ignoreGlobs ?? []).map((glob) => glob.trim()).filter(Boolean))).sort();
   const useGitignore = discovery.useGitignore !== false;
   if (includeGlobs.length === 0 && ignoreGlobs.length === 0 && useGitignore) {
     return undefined;
@@ -728,10 +629,7 @@ function normalizeLanguageList(list?: string[]): string[] {
   return out;
 }
 
-function normalizedDiscoveryOptionsEqual(
-  a: ManifestBuildOptions["discovery"],
-  b: ManifestBuildOptions["discovery"],
-): boolean {
+function normalizedDiscoveryOptionsEqual(a: ManifestBuildOptions["discovery"], b: ManifestBuildOptions["discovery"]): boolean {
   const normalizedA = a ?? { useGitignore: true };
   const normalizedB = b ?? { useGitignore: true };
   if (normalizedA.useGitignore !== normalizedB.useGitignore) return false;
@@ -750,10 +648,7 @@ function normalizedDiscoveryOptionsEqual(
   return true;
 }
 
-export function diffBuildOptions(
-  manifestOpts: ManifestBuildOptions | undefined,
-  currentOpts: BuildOptions | undefined,
-): string[] {
+export function diffBuildOptions(manifestOpts: ManifestBuildOptions | undefined, currentOpts: BuildOptions | undefined): string[] {
   if (!manifestOpts) return [];
   const normalizedManifest = normalizeManifestBuildOptions(manifestOpts);
   const normalizedCurrent = normalizeBuildOptions(currentOpts);
@@ -766,44 +661,28 @@ export function diffBuildOptions(
     diffs.push("useBloomFilters");
   }
   if (normalizedManifest.preset !== normalizedCurrent.preset) diffs.push("preset");
-  if (
-    normalizedManifest.incrementalStrict !== normalizedCurrent.incrementalStrict
-  ) {
+  if (normalizedManifest.incrementalStrict !== normalizedCurrent.incrementalStrict) {
     diffs.push("incrementalStrict");
   }
-  if (
-    !normalizedDiscoveryOptionsEqual(
-      normalizedManifest.discovery,
-      normalizedCurrent.discovery,
-    )
-  ) {
+  if (!normalizedDiscoveryOptionsEqual(normalizedManifest.discovery, normalizedCurrent.discovery)) {
     diffs.push("discovery");
   }
   return diffs;
 }
 
-export function normalizeGraphOptions(
-  opts?: GraphBuildOptions,
-): GraphBuildOptions {
+export function normalizeGraphOptions(opts?: GraphBuildOptions): GraphBuildOptions {
   const resolutionHints = normalizeResolutionHints(opts?.resolutionHints);
-  const fastRegexDisabledLanguages = normalizeLanguageList(
-    opts?.fastRegexDisabledLanguages,
-  );
+  const fastRegexDisabledLanguages = normalizeLanguageList(opts?.fastRegexDisabledLanguages);
   return {
     fast: !!opts?.fast,
-    ...(fastRegexDisabledLanguages.length > 0
-      ? { fastRegexDisabledLanguages }
-      : {}),
+    ...(fastRegexDisabledLanguages.length > 0 ? { fastRegexDisabledLanguages } : {}),
     resolveNodeModules: !!opts?.resolveNodeModules,
     dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
     ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
   };
 }
 
-export function graphOptionsEqual(
-  a?: GraphBuildOptions,
-  b?: GraphBuildOptions,
-): boolean {
+export function graphOptionsEqual(a?: GraphBuildOptions, b?: GraphBuildOptions): boolean {
   if (!a && !b) return true;
   if (!a || !b) return false;
   const normalizedA = normalizeGraphOptions(a);
@@ -812,10 +691,7 @@ export function graphOptionsEqual(
   if (!!normalizedA.resolveNodeModules !== !!normalizedB.resolveNodeModules) {
     return false;
   }
-  if (
-    !!normalizedA.dynamicImportHeuristics !==
-    !!normalizedB.dynamicImportHeuristics
-  ) {
+  if (!!normalizedA.dynamicImportHeuristics !== !!normalizedB.dynamicImportHeuristics) {
     return false;
   }
   const disabledA = normalizedA.fastRegexDisabledLanguages ?? [];

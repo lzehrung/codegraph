@@ -12,11 +12,7 @@ async function mkTmpDir(prefix: string): Promise<string> {
 describe("disk cache uses sqlite backend", () => {
   it("persists module cache in sqlite and reuses entries", async () => {
     const root = await mkTmpDir("dg-disk-cache-");
-    await fsp.writeFile(
-      path.join(root, "a.ts"),
-      'import { b } from "./b";\nexport const a = b + 1;\n',
-      "utf8",
-    );
+    await fsp.writeFile(path.join(root, "a.ts"), 'import { b } from "./b";\nexport const a = b + 1;\n', "utf8");
     await fsp.writeFile(path.join(root, "b.ts"), "export const b = 2;\n", "utf8");
 
     const report1: BuildReport = {};

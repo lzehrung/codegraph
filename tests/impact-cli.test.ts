@@ -4,13 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";
 import fsp from "node:fs/promises";
 
-const tsxCliPath = path.resolve(
-  process.cwd(),
-  "node_modules",
-  "tsx",
-  "dist",
-  "cli.mjs",
-);
+const tsxCliPath = path.resolve(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
 const codegraphCliPath = path.resolve(process.cwd(), "src", "cli.ts");
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples", "typescript");
 const impactDiff = `diff --git a/utils.ts b/utils.ts
@@ -77,25 +71,14 @@ function runImpactCli(args: string[], opts?: { cwd?: string; stdin?: string }) {
 
 describe("impact CLI output", () => {
   it("prints JSON by default", async () => {
-    const stdout = await runImpactCli([
-      "impact",
-      sampleRoot,
-      "--provider",
-      "raw",
-    ]);
+    const stdout = await runImpactCli(["impact", sampleRoot, "--provider", "raw"]);
     const report = JSON.parse(stdout);
     expect(report.changedFiles).toHaveLength(1);
     expect(report.changedFiles[0]?.file).toBe("utils.ts");
   });
 
   it("supports pretty summaries", async () => {
-    const stdout = await runImpactCli([
-      "impact",
-      sampleRoot,
-      "--provider",
-      "raw",
-      "--pretty",
-    ]);
+    const stdout = await runImpactCli(["impact", sampleRoot, "--provider", "raw", "--pretty"]);
     expect(stdout).toContain("Impact Analysis Report");
     expect(stdout).toContain("Changed files: 1");
     expect(stdout).toContain("Changed symbols:");
@@ -141,21 +124,10 @@ describe("impact CLI output", () => {
       const base = runGit(root, ["rev-parse", "HEAD^"]);
       const head = runGit(root, ["rev-parse", "HEAD"]);
 
-      const stdout = await runImpactCli(
-        [
-          "impact",
-          "--root",
-          root,
-          "--provider",
-          "git",
-          "--base",
-          base,
-          "--head",
-          head,
-          "--pretty",
-        ],
-        { cwd: root, stdin: "" },
-      );
+      const stdout = await runImpactCli(["impact", "--root", root, "--provider", "git", "--base", base, "--head", head, "--pretty"], {
+        cwd: root,
+        stdin: "",
+      });
 
       expect(stdout).toContain("WARNING: Large diff detected");
       expect(stdout).not.toContain("⚠");

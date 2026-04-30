@@ -8,10 +8,7 @@ import {
   type JsLanguage,
   type JsSyntaxTree,
 } from "./jsFallback.js";
-import {
-  isUnsupportedParserInputError,
-  prepareSourceInput,
-} from "./languages/filePrep.js";
+import { isUnsupportedParserInputError, prepareSourceInput } from "./languages/filePrep.js";
 import { type LanguageSupport } from "./languages.js";
 import type { FileId, EdgeTo, Edge, Graph } from "./types.js";
 import {
@@ -43,11 +40,7 @@ import {
 } from "./documentLinks.js";
 // Intentionally compile only the imports query locally to avoid compiling
 // unrelated queries (which may differ per grammar) and causing warnings.
-import {
-  extractJsTsSpecifiers,
-  extractPythonSpecifiers,
-  extractJsTsDynamicSpecifiers,
-} from "./util.js";
+import { extractJsTsSpecifiers, extractPythonSpecifiers, extractJsTsDynamicSpecifiers } from "./util.js";
 import {
   executeJsQueryAsNativeMatches,
   getNativeQueryExecution,
@@ -64,29 +57,12 @@ import {
   type NativeQueryResults,
   type CompactQueryResults,
 } from "./native/treeSitterNative.js";
-import {
-  parseCsharpUsingDirective,
-  parsePhpImportStatement,
-  parseRustImportStatement,
-} from "./languages/importStatementParsers.js";
-import {
-  extractAngularJsReferences,
-  extractAngularJsRegistrations,
-} from "./frameworks/angularjs.js";
+import { parseCsharpUsingDirective, parsePhpImportStatement, parseRustImportStatement } from "./languages/importStatementParsers.js";
+import { extractAngularJsReferences, extractAngularJsRegistrations } from "./frameworks/angularjs.js";
 import { capturesByName } from "./native/queryResults.js";
 import { ProjectedSyntaxTree } from "./native/projectedTree.js";
-import {
-  initNativeBackendReport,
-  recordNativeExecutionOutcome,
-} from "./native/nativeBackendReport.js";
-import {
-  type BuildReport,
-  type ImportBinding,
-  type ProjectIndex,
-  type ResolvedExport,
-  type SymbolDef,
-  SymbolKind,
-} from "./index.js";
+import { initNativeBackendReport, recordNativeExecutionOutcome } from "./native/nativeBackendReport.js";
+import { type BuildReport, type ImportBinding, type ProjectIndex, type ResolvedExport, type SymbolDef, SymbolKind } from "./index.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "./languages/types.js";
 
 export type GraphBuildOptions = {
@@ -99,11 +75,7 @@ export type GraphBuildOptions = {
   logLevel?: LogLevel;
 };
 
-export type FallbackImportExtractionReason =
-  | "fast"
-  | "js-fallback-unavailable"
-  | "query-error"
-  | "query-empty";
+export type FallbackImportExtractionReason = "fast" | "js-fallback-unavailable" | "query-error" | "query-empty";
 
 export type FallbackImportExtractionEvent = {
   file?: string;
@@ -130,23 +102,15 @@ function isHtmlLikeLanguage(languageId: string, filePath?: string): boolean {
 }
 
 function extractKotlinImportSpecifier(statementText: string): string | null {
-  const match = statementText.match(
-    /^\s*import\s+([A-Za-z_][\w.]*(?:\.\*)?)(?:\s+as\s+[A-Za-z_][\w]*)?\s*$/m,
-  );
+  const match = statementText.match(/^\s*import\s+([A-Za-z_][\w.]*(?:\.\*)?)(?:\s+as\s+[A-Za-z_][\w]*)?\s*$/m);
   if (!match?.[1]) return null;
   return match[1].endsWith(".*") ? match[1].slice(0, -2) : match[1];
 }
 
-function extractPhpQualifiedSpecifiersFromTree(
-  source: string,
-  tree: SyntaxTreeLike,
-): ModuleSpecifier[] {
+function extractPhpQualifiedSpecifiersFromTree(source: string, tree: SyntaxTreeLike): ModuleSpecifier[] {
   const specifiers: ModuleSpecifier[] = [];
   const seen = new Set<string>();
-  const pushSpecifier = (
-    spec: string | null,
-    phpImportType: "class" | "function" | "const",
-  ): void => {
+  const pushSpecifier = (spec: string | null, phpImportType: "class" | "function" | "const"): void => {
     const normalized = spec?.trim();
     if (!normalized || !normalized.includes("\\")) return;
     const key = `${phpImportType}::${normalized}`;
@@ -157,45 +121,26 @@ function extractPhpQualifiedSpecifiersFromTree(
 
   const walk = (node: SyntaxNodeLike): void => {
     if (node.type === "object_creation_expression") {
-      const target =
-        node.namedChildren.find(
-          (child) =>
-            child.type === "qualified_name" || child.type === "relative_name",
-        ) ?? node.child(0);
+      const target = node.namedChildren.find((child) => child.type === "qualified_name" || child.type === "relative_name") ?? node.child(0);
       if (target) {
         pushSpecifier(sliceText(target, source), "class");
       }
     } else if (node.type === "scoped_call_expression") {
-      const target =
-        node.namedChildren.find(
-          (child) =>
-            child.type === "qualified_name" || child.type === "relative_name",
-        ) ?? node.child(0);
+      const target = node.namedChildren.find((child) => child.type === "qualified_name" || child.type === "relative_name") ?? node.child(0);
       if (target) {
         pushSpecifier(sliceText(target, source), "class");
       }
     } else if (node.type === "scoped_property_access_expression") {
-      const target =
-        node.namedChildren.find(
-          (child) =>
-            child.type === "qualified_name" || child.type === "relative_name",
-        ) ?? node.child(0);
+      const target = node.namedChildren.find((child) => child.type === "qualified_name" || child.type === "relative_name") ?? node.child(0);
       if (target) {
         pushSpecifier(sliceText(target, source), "class");
       }
     } else if (node.type === "class_constant_access_expression") {
-      const target =
-        node.namedChildren.find(
-          (child) =>
-            child.type === "qualified_name" || child.type === "relative_name",
-        ) ?? node.child(0);
+      const target = node.namedChildren.find((child) => child.type === "qualified_name" || child.type === "relative_name") ?? node.child(0);
       if (target) {
         pushSpecifier(sliceText(target, source), "class");
       }
-    } else if (
-      (node.type === "qualified_name" || node.type === "relative_name") &&
-      node.parent?.type === "named_type"
-    ) {
+    } else if ((node.type === "qualified_name" || node.type === "relative_name") && node.parent?.type === "named_type") {
       pushSpecifier(sliceText(node, source), "class");
     }
 
@@ -208,26 +153,18 @@ function extractPhpQualifiedSpecifiersFromTree(
   return specifiers;
 }
 
-function normalizeModuleSpecifiers(
-  specifiers: ModuleSpecifier[],
-): ModuleSpecifier[] {
+function normalizeModuleSpecifiers(specifiers: ModuleSpecifier[]): ModuleSpecifier[] {
   return specifiers.map((entry) =>
     entry.typeOnly
       ? entry
       : {
           spec: entry.spec,
           ...(entry.raw !== undefined ? { raw: entry.raw } : {}),
-          ...(entry.phpImportType
-            ? { phpImportType: entry.phpImportType }
-            : {}),
-          ...(entry.resolutionKind
-            ? { resolutionKind: entry.resolutionKind }
-            : {}),
+          ...(entry.phpImportType ? { phpImportType: entry.phpImportType } : {}),
+          ...(entry.resolutionKind ? { resolutionKind: entry.resolutionKind } : {}),
           ...(entry.dropIfUnresolved ? { dropIfUnresolved: true } : {}),
           ...(entry.resolved ? { resolved: entry.resolved } : {}),
-          ...(entry.confidence !== undefined
-            ? { confidence: entry.confidence }
-            : {}),
+          ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}),
         },
   );
 }
@@ -279,9 +216,7 @@ async function collectAngularJsFrameworkEdges(
   const edges: Edge[] = [];
   const seen = new Set<string>();
   const pushEdge = (edge: Edge): void => {
-    const key = `${edge.from}::${edge.raw}::${
-      edge.to.type === "file" ? edge.to.path : `external:${edge.to.name}`
-    }`;
+    const key = `${edge.from}::${edge.raw}::${edge.to.type === "file" ? edge.to.path : `external:${edge.to.name}`}`;
     if (seen.has(key)) return;
     seen.add(key);
     edges.push(edge);
@@ -292,13 +227,7 @@ async function collectAngularJsFrameworkEdges(
     const references = extractAngularJsReferences(context.source);
     for (const reference of references) {
       if (reference.kind === "templateUrl") {
-        const resolved = await resolveSpecifier(
-          context.file,
-          reference.value,
-          projectRoot,
-          undefined,
-          workspaceConfig,
-        );
+        const resolved = await resolveSpecifier(context.file, reference.value, projectRoot, undefined, workspaceConfig);
         pushEdge({
           from: normalizedFile,
           to:
@@ -357,21 +286,14 @@ export function collectModuleSpecifiersFromSource(
   },
 ): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
-  const supportsRegexImportRecovery = shouldAvoidJsFallbackForLanguage(
-    support.id,
-  );
+  const supportsRegexImportRecovery = shouldAvoidJsFallbackForLanguage(support.id);
   const htmlLikeLanguage = isHtmlLikeLanguage(support.id, opts?.file);
   const graphOnlyLanguage = isGraphOnlyLanguage(support.id);
-  const fastRegexDisabled = opts?.fastRegexDisabledLanguages?.includes(
-    support.id,
-  );
+  const fastRegexDisabled = opts?.fastRegexDisabledLanguages?.includes(support.id);
   if (graphOnlyLanguage) {
     return extractGraphOnlyModuleSpecifiers(support.id, source);
   }
-  const shouldAttemptFallback =
-    support.id === "python"
-      ? /\b(import|from)\b/.test(source)
-      : /\b(import|require|from)\b/.test(source);
+  const shouldAttemptFallback = support.id === "python" ? /\b(import|from)\b/.test(source) : /\b(import|require|from)\b/.test(source);
   const reportFallback = (reason: FallbackImportExtractionReason) => {
     const event: FallbackImportExtractionEvent = {
       language: support.id,
@@ -382,9 +304,7 @@ export function collectModuleSpecifiersFromSource(
   };
   const ensureResolvedLang = (): JsLanguage => {
     if (!lang) {
-      const fileForLanguage =
-        opts?.file ??
-        `temp.${support.matchExts[0]?.replace(/^\./, "") ?? "txt"}`;
+      const fileForLanguage = opts?.file ?? `temp.${support.matchExts[0]?.replace(/^\./, "") ?? "txt"}`;
       lang = support.language(fileForLanguage);
     }
     return lang!;
@@ -392,8 +312,7 @@ export function collectModuleSpecifiersFromSource(
   const resolvedNativeImports =
     opts?.compactNativeImports?.imports ??
     opts?.nativeQueries?.imports ??
-    getCompactImportsExecution(source, support, opts?.native).results
-      ?.imports ??
+    getCompactImportsExecution(source, support, opts?.native).results?.imports ??
     null;
 
   if (support.id === "python") {
@@ -401,10 +320,7 @@ export function collectModuleSpecifiersFromSource(
     if (resolvedNativeImports !== null) {
       try {
         for (const match of resolvedNativeImports) {
-          const stmtText =
-            match.captures.find((capture) => capture.name === "stmt")?.text ??
-            match.captures[0]?.text ??
-            "";
+          const stmtText = match.captures.find((capture) => capture.name === "stmt")?.text ?? match.captures[0]?.text ?? "";
           if (!stmtText) continue;
           const mImport = /^\s*import\s+([^\n#]+)/.exec(stmtText);
           if (mImport) {
@@ -413,16 +329,12 @@ export function collectModuleSpecifiersFromSource(
               .map((entry) => entry.trim())
               .filter(Boolean);
             for (const spec of list) {
-              const parsed = spec.match(
-                /^([A-Za-z_][\w.]*)(?:\s+as\s+[A-Za-z_][\w_]*)?$/,
-              );
+              const parsed = spec.match(/^([A-Za-z_][\w.]*)(?:\s+as\s+[A-Za-z_][\w_]*)?$/);
               if (parsed?.[1]) out.push({ spec: parsed[1] });
             }
             continue;
           }
-          const mFrom = /^\s*from\s+(\.*)([A-Za-z_][\w.]*)?\s+import\b/.exec(
-            stmtText,
-          );
+          const mFrom = /^\s*from\s+(\.*)([A-Za-z_][\w.]*)?\s+import\b/.exec(stmtText);
           if (mFrom) {
             const dots = mFrom[1] ?? "";
             const name = mFrom[2] ?? "";
@@ -454,15 +366,8 @@ export function collectModuleSpecifiersFromSource(
       resolvedNativeImports ??
       (() => {
         try {
-          const jsQueryTree =
-            opts?.tree && isJsSyntaxTree(opts.tree) ? opts.tree : undefined;
-          return executeJsQueryAsNativeMatches(
-            source,
-            support,
-            ensureResolvedLang(),
-            support.queries.imports,
-            jsQueryTree,
-          );
+          const jsQueryTree = opts?.tree && isJsSyntaxTree(opts.tree) ? opts.tree : undefined;
+          return executeJsQueryAsNativeMatches(source, support, ensureResolvedLang(), support.queries.imports, jsQueryTree);
         } catch {
           queryFailed = true;
           return null;
@@ -471,18 +376,13 @@ export function collectModuleSpecifiersFromSource(
     if (phpMatches) {
       try {
         for (const match of phpMatches) {
-          const stmtText =
-            match.captures.find((capture) => capture.name === "stmt")?.text ??
-            match.captures[0]?.text ??
-            "";
+          const stmtText = match.captures.find((capture) => capture.name === "stmt")?.text ?? match.captures[0]?.text ?? "";
           if (!stmtText) continue;
           for (const parsed of parsePhpImportStatement(stmtText, opts?.file)) {
             out.push({
               spec: parsed.from,
               typeOnly: false,
-              ...(parsed.kind === "named"
-                ? { phpImportType: parsed.importType }
-                : {}),
+              ...(parsed.kind === "named" ? { phpImportType: parsed.importType } : {}),
             });
           }
         }
@@ -494,14 +394,8 @@ export function collectModuleSpecifiersFromSource(
     const phpTree =
       opts?.tree ??
       (() => {
-        const nativeTreeExecution = getNativeSyntaxTreeExecution(
-          source,
-          support,
-          opts?.native,
-        );
-        return nativeTreeExecution.tree
-          ? new ProjectedSyntaxTree(source, nativeTreeExecution.tree)
-          : null;
+        const nativeTreeExecution = getNativeSyntaxTreeExecution(source, support, opts?.native);
+        return nativeTreeExecution.tree ? new ProjectedSyntaxTree(source, nativeTreeExecution.tree) : null;
       })() ??
       (() => {
         try {
@@ -511,10 +405,7 @@ export function collectModuleSpecifiersFromSource(
         }
       })();
     if (phpTree) {
-      const qualifiedSpecifiers = extractPhpQualifiedSpecifiersFromTree(
-        source,
-        phpTree,
-      );
+      const qualifiedSpecifiers = extractPhpQualifiedSpecifiersFromTree(source, phpTree);
       if (qualifiedSpecifiers.length > 0) {
         out.push(...qualifiedSpecifiers);
       }
@@ -524,11 +415,7 @@ export function collectModuleSpecifiersFromSource(
     }
   }
 
-  function appendUniqueSpecifiers(
-    target: ModuleSpecifier[],
-    incoming: ModuleSpecifier[],
-    seen: Set<string>,
-  ): void {
+  function appendUniqueSpecifiers(target: ModuleSpecifier[], incoming: ModuleSpecifier[], seen: Set<string>): void {
     for (const entry of incoming) {
       const key = `${entry.spec}::${entry.typeOnly ? 1 : 0}`;
       if (seen.has(key)) continue;
@@ -538,9 +425,7 @@ export function collectModuleSpecifiersFromSource(
   }
 
   function makeSeenSet(target: ModuleSpecifier[]): Set<string> {
-    return new Set(
-      target.map((entry) => `${entry.spec}::${entry.typeOnly ? 1 : 0}`),
-    );
+    return new Set(target.map((entry) => `${entry.spec}::${entry.typeOnly ? 1 : 0}`));
   }
 
   function extractCssUrlSpecifiers(source: string): ModuleSpecifier[] {
@@ -556,11 +441,7 @@ export function collectModuleSpecifiersFromSource(
   }
 
   // Fast path for JS/TS: regex-based extraction after comment stripping
-  if (
-    supportsRegexImportRecovery &&
-    opts?.fast &&
-    !fastRegexDisabled
-  ) {
+  if (supportsRegexImportRecovery && opts?.fast && !fastRegexDisabled) {
     try {
       reportFallback("fast");
       for (const s of extractJsTsSpecifiers(source)) out.push(s);
@@ -579,14 +460,11 @@ export function collectModuleSpecifiersFromSource(
   if (hasNativeImports) {
     try {
       for (const match of nativeImportsArray) {
-        const capMap = Object.fromEntries(
-          match.captures.map((c) => [c.name, c] as const),
-        );
+        const capMap = Object.fromEntries(match.captures.map((c) => [c.name, c] as const));
         const stmtText = capMap["stmt"]?.text ?? "";
         const typeOnly =
           (support.id === "ts" || support.id === "tsx") &&
-          (/\b(import|export)\s+type\b/.test(stmtText) ||
-            /^\s*declare\s+module\s+["']/.test(stmtText));
+          (/\b(import|export)\s+type\b/.test(stmtText) || /^\s*declare\s+module\s+["']/.test(stmtText));
         if (support.id === "kotlin") {
           const spec = extractKotlinImportSpecifier(stmtText);
           if (spec) out.push({ spec, typeOnly: false });
@@ -613,22 +491,10 @@ export function collectModuleSpecifiersFromSource(
       }
       if (htmlLikeLanguage) {
         const htmlSeen = makeSeenSet(out);
-        appendUniqueSpecifiers(
-          out,
-          extractHtmlAttributeSpecifiers(source),
-          htmlSeen,
-        );
-        appendUniqueSpecifiers(
-          out,
-          extractHtmlInlineScriptSpecifiers(source),
-          htmlSeen,
-        );
+        appendUniqueSpecifiers(out, extractHtmlAttributeSpecifiers(source), htmlSeen);
+        appendUniqueSpecifiers(out, extractHtmlInlineScriptSpecifiers(source), htmlSeen);
       }
-      if (
-        support.id === "css" ||
-        support.id === "scss" ||
-        support.id === "less"
-      ) {
+      if (support.id === "css" || support.id === "scss" || support.id === "less") {
         const cssSeen = makeSeenSet(out);
         appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
       }
@@ -643,12 +509,7 @@ export function collectModuleSpecifiersFromSource(
     } catch (error) {
       queryFailed = true;
       if (!htmlLikeLanguage) {
-        logWithLevel(
-          opts?.logLevel,
-          "warn",
-          `Warning: Native query error in collectModuleSpecifiersFromSource for ${support.id}:`,
-          error,
-        );
+        logWithLevel(opts?.logLevel, "warn", `Warning: Native query error in collectModuleSpecifiersFromSource for ${support.id}:`, error);
       }
       out.length = 0;
     }
@@ -661,10 +522,7 @@ export function collectModuleSpecifiersFromSource(
       try {
         const extracted = extractJsTsSpecifiers(source);
         if (extracted.length > 0) {
-          reportFallback(
-            fallbackReasonOverride ??
-              (queryFailed ? "query-error" : "query-empty"),
-          );
+          reportFallback(fallbackReasonOverride ?? (queryFailed ? "query-error" : "query-empty"));
           out.push(...extracted);
         }
       } catch {
@@ -679,22 +537,11 @@ export function collectModuleSpecifiersFromSource(
   }
 
   try {
-    const jsQueryTree =
-      opts?.tree && isJsSyntaxTree(opts.tree) ? opts.tree : undefined;
-    const matches = executeJsQueryAsNativeMatches(
-      source,
-      support,
-      ensureResolvedLang(),
-      support.queries.imports,
-      jsQueryTree,
-    );
+    const jsQueryTree = opts?.tree && isJsSyntaxTree(opts.tree) ? opts.tree : undefined;
+    const matches = executeJsQueryAsNativeMatches(source, support, ensureResolvedLang(), support.queries.imports, jsQueryTree);
     for (const match of matches) {
-      const caps = Object.fromEntries(
-        match.captures.map((capture) => [capture.name, capture] as const),
-      );
-      const modNodes = match.captures.filter(
-        (capture) => capture.name === "mod",
-      );
+      const caps = Object.fromEntries(match.captures.map((capture) => [capture.name, capture] as const));
+      const modNodes = match.captures.filter((capture) => capture.name === "mod");
       const stmtText = caps["stmt"]?.text ?? "";
       const typeOnly =
         (support.id === "ts" || support.id === "tsx") &&
@@ -729,22 +576,10 @@ export function collectModuleSpecifiersFromSource(
     }
     if (htmlLikeLanguage) {
       const htmlSeen = makeSeenSet(out);
-      appendUniqueSpecifiers(
-        out,
-        extractHtmlAttributeSpecifiers(source),
-        htmlSeen,
-      );
-      appendUniqueSpecifiers(
-        out,
-        extractHtmlInlineScriptSpecifiers(source),
-        htmlSeen,
-      );
+      appendUniqueSpecifiers(out, extractHtmlAttributeSpecifiers(source), htmlSeen);
+      appendUniqueSpecifiers(out, extractHtmlInlineScriptSpecifiers(source), htmlSeen);
     }
-    if (
-      support.id === "css" ||
-      support.id === "scss" ||
-      support.id === "less"
-    ) {
+    if (support.id === "css" || support.id === "scss" || support.id === "less") {
       const cssSeen = makeSeenSet(out);
       appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
     }
@@ -754,19 +589,10 @@ export function collectModuleSpecifiersFromSource(
     queryFailed = true;
     if (isJsFallbackUnavailableError(error)) {
       fallbackReasonOverride = "js-fallback-unavailable";
-      logWithLevel(
-        opts?.logLevel,
-        "debug",
-        `JS fallback unavailable for ${support.id} query recovery; using regex import extraction.`,
-      );
+      logWithLevel(opts?.logLevel, "debug", `JS fallback unavailable for ${support.id} query recovery; using regex import extraction.`);
     } else {
       if (!htmlLikeLanguage) {
-        logWithLevel(
-          opts?.logLevel,
-          "warn",
-          `Warning: Query error in collectModuleSpecifiersFromSource for ${support.id}:`,
-          error,
-        );
+        logWithLevel(opts?.logLevel, "warn", `Warning: Query error in collectModuleSpecifiersFromSource for ${support.id}:`, error);
       }
     }
     // fall through to regex fallback
@@ -778,10 +604,7 @@ export function collectModuleSpecifiersFromSource(
       try {
         const extracted = extractJsTsSpecifiers(source);
         if (extracted.length > 0) {
-          reportFallback(
-            fallbackReasonOverride ??
-              (queryFailed ? "query-error" : "query-empty"),
-          );
+          reportFallback(fallbackReasonOverride ?? (queryFailed ? "query-error" : "query-empty"));
           out.push(...extracted);
         }
       } catch {
@@ -804,10 +627,7 @@ export function collectModuleSpecifiersFromSource(
 
 const cloneEdge = (edge: Edge): Edge => ({
   ...edge,
-  to:
-    edge.to.type === "file"
-      ? { type: "file", path: edge.to.path }
-      : { type: "external", name: edge.to.name },
+  to: edge.to.type === "file" ? { type: "file", path: edge.to.path } : { type: "external", name: edge.to.name },
 });
 
 export async function collectEdgesForFile(
@@ -851,8 +671,7 @@ export async function collectEdgesForFile(
   };
 
   const cached = sig || gitSig ? opts.cachedFileEdges : undefined;
-  const matchesGitSig =
-    !!gitSig && !!cached?.gitSig && cached.gitSig === gitSig;
+  const matchesGitSig = !!gitSig && !!cached?.gitSig && cached.gitSig === gitSig;
   const matchesSig = !!sig && !!cached && cached.sig === sig;
 
   if (cached && (matchesGitSig || matchesSig)) {
@@ -872,23 +691,16 @@ export async function collectEdgesForFile(
     sup = prep.sup;
     src = prep.source;
     const fastRegexDisabled = opts.fastRegexDisabledLanguages?.includes(sup.id);
-    const shouldSkipNativeForFastGraph =
-      !!opts.fast && (sup.id === "ts" || sup.id === "js") && !fastRegexDisabled;
+    const shouldSkipNativeForFastGraph = !!opts.fast && (sup.id === "ts" || sup.id === "js") && !fastRegexDisabled;
     if (!shouldSkipNativeForFastGraph) {
       // Use compact imports execution for graph mode -- smaller payload
-      const compactExecution = getCompactImportsExecution(
-        src,
-        sup,
-        opts.native,
-      );
+      const compactExecution = getCompactImportsExecution(src, sup, opts.native);
       compactNativeImports = compactExecution.results;
       recordNativeExecutionOutcome(opts.report, {
         file: normalizedFile,
         support: sup,
         results: compactExecution.results,
-        ...(compactExecution.fallbackReason
-          ? { fallbackReason: compactExecution.fallbackReason }
-          : {}),
+        ...(compactExecution.fallbackReason ? { fallbackReason: compactExecution.fallbackReason } : {}),
         ...(compactExecution.error ? { error: compactExecution.error } : {}),
       });
     }
@@ -901,22 +713,14 @@ export async function collectEdgesForFile(
     ...(compactNativeImports ? { compactNativeImports } : {}),
     fast,
     file: normalizedFile,
-    ...(opts.fastRegexDisabledLanguages
-      ? { fastRegexDisabledLanguages: opts.fastRegexDisabledLanguages }
-      : {}),
-    ...(opts.onFallbackImportExtraction
-      ? { onFallbackImportExtraction: opts.onFallbackImportExtraction }
-      : {}),
+    ...(opts.fastRegexDisabledLanguages ? { fastRegexDisabledLanguages: opts.fastRegexDisabledLanguages } : {}),
+    ...(opts.onFallbackImportExtraction ? { onFallbackImportExtraction: opts.onFallbackImportExtraction } : {}),
     ...(opts.native ? { native: opts.native } : {}),
     ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
   });
 
   if ((sup.id === "ts" || sup.id === "js") && opts.dynamicImportHeuristics) {
-    const dynamicSpecs = extractJsTsDynamicSpecifiers(
-      src,
-      normalizedFile,
-      projectRoot,
-    );
+    const dynamicSpecs = extractJsTsDynamicSpecifiers(src, normalizedFile, projectRoot);
     if (dynamicSpecs.length > 0) {
       const existing = new Set(specs.map((entry) => entry.spec));
       for (const entry of dynamicSpecs) {
@@ -929,68 +733,32 @@ export async function collectEdgesForFile(
 
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
   const graphOnlyAliasLanguage = graphOnlyLanguageSupportsImportAliases(sup.id);
-  const needsGraphOnlyResolutionConfig =
-    graphOnlyAliasLanguage &&
-    specs.some(({ spec }) => graphOnlySpecifierNeedsResolutionConfig(spec));
+  const needsGraphOnlyResolutionConfig = graphOnlyAliasLanguage && specs.some(({ spec }) => graphOnlySpecifierNeedsResolutionConfig(spec));
   const { matchPath } =
     sup.id === "ts" || sup.id === "tsx" || needsGraphOnlyResolutionConfig
       ? await loadNearestTsconfigFor(file, opts?.logLevel)
       : { matchPath: undefined };
   const edges: Edge[] = [];
   const edgeResolutionTasks = specs.map(
-    async ({
-      spec,
-      raw,
-      typeOnly,
-      phpImportType,
-      resolved,
-      confidence,
-      resolutionKind,
-      dropIfUnresolved,
-    }) => {
+    async ({ spec, raw, typeOnly, phpImportType, resolved, confidence, resolutionKind, dropIfUnresolved }) => {
       let to: EdgeTo;
-      const resolutionExtensions = graphOnlyLanguage
-        ? getGraphOnlyResolutionExtensions(sup.id, resolutionKind ?? "document")
-        : undefined;
+      const resolutionExtensions = graphOnlyLanguage ? getGraphOnlyResolutionExtensions(sup.id, resolutionKind ?? "document") : undefined;
       if (sup.id === "python") {
         const relDotsMatch = spec.startsWith(".") ? spec.match(/^\.+/) : null;
         const relDots = relDotsMatch ? relDotsMatch[0].length : 0;
         const isDotsOnly = /^\.+$/.test(spec);
-        const res = await resolvePythonModule(
-          projectRoot,
-          file,
-          isDotsOnly ? null : spec,
-          relDots,
-        );
-        to =
-          typeof res === "string"
-            ? { type: "file", path: res.replace(/\\/g, "/") }
-            : { type: "external", name: res.external };
+        const res = await resolvePythonModule(projectRoot, file, isDotsOnly ? null : spec, relDots);
+        to = typeof res === "string" ? { type: "file", path: res.replace(/\\/g, "/") } : { type: "external", name: res.external };
       } else if (sup.id === "go") {
-        const res = await resolveImportSpecifier(
-          projectRoot,
-          file,
-          spec,
-          sup.id,
-          {
-            ...(matchPath ? { matchPath } : {}),
-            ...(workspaceConfig ? { workspaceConfig } : {}),
-            resolveNodeModules: !!opts.resolveNodeModules,
-            ...(opts.resolutionHints
-              ? { resolutionHints: opts.resolutionHints }
-              : {}),
-          },
-        );
-        to =
-          typeof res === "string"
-            ? { type: "file", path: res.replace(/\\/g, "/") }
-            : { type: "external", name: res.external };
+        const res = await resolveImportSpecifier(projectRoot, file, spec, sup.id, {
+          ...(matchPath ? { matchPath } : {}),
+          ...(workspaceConfig ? { workspaceConfig } : {}),
+          resolveNodeModules: !!opts.resolveNodeModules,
+          ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+        });
+        to = typeof res === "string" ? { type: "file", path: res.replace(/\\/g, "/") } : { type: "external", name: res.external };
       } else if (sup.id === "java" || sup.id === "kotlin") {
-        const packageTargets = await resolveJvmPackageImportPaths(
-          projectRoot,
-          spec,
-          sup.id,
-        );
+        const packageTargets = await resolveJvmPackageImportPaths(projectRoot, spec, sup.id);
         if (packageTargets.length > 0) {
           return packageTargets.map((targetPath) => ({
             to: { type: "file", path: targetPath.replace(/\\/g, "/") } as EdgeTo,
@@ -1001,24 +769,13 @@ export async function collectEdgesForFile(
             ...(confidence !== undefined && { confidence }),
           }));
         }
-        const res = await resolveImportSpecifier(
-          projectRoot,
-          file,
-          spec,
-          sup.id,
-          {
-            ...(matchPath ? { matchPath } : {}),
-            ...(workspaceConfig ? { workspaceConfig } : {}),
-            resolveNodeModules: !!opts.resolveNodeModules,
-            ...(opts.resolutionHints
-              ? { resolutionHints: opts.resolutionHints }
-              : {}),
-          },
-        );
-        to =
-          typeof res === "string"
-            ? { type: "file", path: res.replace(/\\/g, "/") }
-            : { type: "external", name: raw ?? res.external };
+        const res = await resolveImportSpecifier(projectRoot, file, spec, sup.id, {
+          ...(matchPath ? { matchPath } : {}),
+          ...(workspaceConfig ? { workspaceConfig } : {}),
+          resolveNodeModules: !!opts.resolveNodeModules,
+          ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+        });
+        to = typeof res === "string" ? { type: "file", path: res.replace(/\\/g, "/") } : { type: "external", name: raw ?? res.external };
       } else if (["csharp", "ruby", "rust", "php"].includes(sup.id)) {
         const { resolvePathLikeModule } = await import("./util.js");
         const res =
@@ -1027,9 +784,7 @@ export async function collectEdgesForFile(
                 ...(matchPath ? { matchPath } : {}),
                 ...(workspaceConfig ? { workspaceConfig } : {}),
                 resolveNodeModules: !!opts.resolveNodeModules,
-                ...(opts.resolutionHints
-                  ? { resolutionHints: opts.resolutionHints }
-                  : {}),
+                ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
                 ...(phpImportType ? { phpImportType } : {}),
               })
             : await resolvePathLikeModule(projectRoot, spec);
@@ -1037,44 +792,21 @@ export async function collectEdgesForFile(
           to = { type: "file", path: res.replace(/\\/g, "/") };
         } else {
           // Fallback to resolveSpecifier for relative paths like ./foo
-          const res2 = await resolveSpecifier(
-            file,
-            spec,
-            projectRoot,
-            matchPath,
-            workspaceConfig,
-            {
-              resolveNodeModules: !!opts.resolveNodeModules,
-              ...(resolutionExtensions ? { resolutionExtensions } : {}),
-              ...(opts.resolutionHints
-                ? { resolutionHints: opts.resolutionHints }
-                : {}),
-            },
-          );
-          to =
-            typeof res2 === "string"
-              ? { type: "file", path: res2.replace(/\\/g, "/") }
-              : { type: "external", name: raw ?? res2.external };
-        }
-      } else {
-        const res = await resolveSpecifier(
-          file,
-          spec,
-          projectRoot,
-          matchPath,
-          workspaceConfig,
-          {
+          const res2 = await resolveSpecifier(file, spec, projectRoot, matchPath, workspaceConfig, {
             resolveNodeModules: !!opts.resolveNodeModules,
             ...(resolutionExtensions ? { resolutionExtensions } : {}),
-            ...(opts.resolutionHints
-              ? { resolutionHints: opts.resolutionHints }
-              : {}),
-          },
-        );
-        to =
-          typeof res === "string"
-            ? { type: "file", path: res.replace(/\\/g, "/") }
-            : { type: "external", name: raw ?? res.external };
+            ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+          });
+          to =
+            typeof res2 === "string" ? { type: "file", path: res2.replace(/\\/g, "/") } : { type: "external", name: raw ?? res2.external };
+        }
+      } else {
+        const res = await resolveSpecifier(file, spec, projectRoot, matchPath, workspaceConfig, {
+          resolveNodeModules: !!opts.resolveNodeModules,
+          ...(resolutionExtensions ? { resolutionExtensions } : {}),
+          ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+        });
+        to = typeof res === "string" ? { type: "file", path: res.replace(/\\/g, "/") } : { type: "external", name: raw ?? res.external };
       }
       if (to.type === "external" && dropIfUnresolved) {
         return null;
@@ -1110,9 +842,7 @@ export async function collectEdgesForFile(
   if (sup.id === "php") {
     const implicitFiles = await getPhpComposerImplicitFiles(projectRoot, file);
     const seenFileTargets = new Set(
-      edges
-        .map((edge) => (edge.to.type === "file" ? edge.to.path : null))
-        .filter((target): target is string => !!target),
+      edges.map((edge) => (edge.to.type === "file" ? edge.to.path : null)).filter((target): target is string => !!target),
     );
     for (const implicitFile of implicitFiles) {
       const normalizedTarget = implicitFile.replace(/\\/g, "/");
@@ -1124,10 +854,7 @@ export async function collectEdgesForFile(
       edges.push({
         from: normalizedFile,
         to: { type: "file", path: normalizedTarget },
-        raw:
-          relativeRaw.startsWith(".") || relativeRaw.startsWith("/")
-            ? relativeRaw
-            : `./${relativeRaw}`,
+        raw: relativeRaw.startsWith(".") || relativeRaw.startsWith("/") ? relativeRaw : `./${relativeRaw}`,
       });
       seenFileTargets.add(normalizedTarget);
     }
@@ -1156,10 +883,7 @@ export async function collectGraph(
     dynamicImportHeuristics?: boolean;
     resolutionHints?: string[];
     native?: NativeRuntimeMode;
-    fileSignatures?: Map<
-      string,
-      { sig: string; gitSig?: string; cacheSig?: string }
-    >;
+    fileSignatures?: Map<string, { sig: string; gitSig?: string; cacheSig?: string }>;
     cachedFileEdges?: Map<string, GraphCacheEntry>;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
@@ -1173,9 +897,7 @@ export async function collectGraph(
   const normalizedFiles = files.map(normalizePath);
   const hasExplicitReplace = !!opts?.replaceFiles;
   const replaceSet = hasExplicitReplace
-    ? new Set(
-        Array.from(opts.replaceFiles ?? [], (file) => normalizePath(file)),
-      )
+    ? new Set(Array.from(opts.replaceFiles ?? [], (file) => normalizePath(file)))
     : new Set<string>(normalizedFiles);
   const baseGraph = opts?.baseGraph;
   const graph: Graph = baseGraph
@@ -1202,9 +924,7 @@ export async function collectGraph(
     const seen = new Set<string>();
     for (const group of edgeGroups) {
       for (const edge of group) {
-        const key = `${edge.from}::${edge.raw}::${
-          edge.to.type === "file" ? edge.to.path : `external:${edge.to.name}`
-        }`;
+        const key = `${edge.from}::${edge.raw}::${edge.to.type === "file" ? edge.to.path : `external:${edge.to.name}`}`;
         if (seen.has(key)) continue;
         seen.add(key);
         merged.push(edge);
@@ -1221,35 +941,23 @@ export async function collectGraph(
     try {
       const normalizedFile = file.replace(/\\/g, "/");
       const sigEntry = opts?.fileSignatures?.get(normalizedFile);
-      const shouldReplace =
-        hasExplicitReplace && replaceSet.has(normalizedFile);
-      const cachedFileEdges = !shouldReplace
-        ? opts?.cachedFileEdges?.get(normalizedFile)
-        : undefined;
+      const shouldReplace = hasExplicitReplace && replaceSet.has(normalizedFile);
+      const cachedFileEdges = !shouldReplace ? opts?.cachedFileEdges?.get(normalizedFile) : undefined;
       const parsedEntry = opts?.parsed?.get(file);
-      const edges = await collectEdgesForFile(
-        file,
-        projectRoot,
-        workspaceConfig,
-        {
-          ...(parsedEntry ? { parsed: parsedEntry } : {}),
-          fast: !!opts?.fast,
-          ...(opts?.fastRegexDisabledLanguages
-            ? { fastRegexDisabledLanguages: opts.fastRegexDisabledLanguages }
-            : {}),
-          resolveNodeModules: !!opts?.resolveNodeModules,
-          dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
-          resolutionHints,
-          ...(opts?.native ? { native: opts.native } : {}),
-          ...(sigEntry ? { fileSignature: sigEntry } : {}),
-          ...(cachedFileEdges ? { cachedFileEdges } : {}),
-          ...(opts?.onFileEdges ? { onFileEdges: opts.onFileEdges } : {}),
-          ...(opts?.onFallbackImportExtraction
-            ? { onFallbackImportExtraction: opts.onFallbackImportExtraction }
-            : {}),
-          ...(opts?.report ? { report: opts.report } : {}),
-        },
-      );
+      const edges = await collectEdgesForFile(file, projectRoot, workspaceConfig, {
+        ...(parsedEntry ? { parsed: parsedEntry } : {}),
+        fast: !!opts?.fast,
+        ...(opts?.fastRegexDisabledLanguages ? { fastRegexDisabledLanguages: opts.fastRegexDisabledLanguages } : {}),
+        resolveNodeModules: !!opts?.resolveNodeModules,
+        dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
+        resolutionHints,
+        ...(opts?.native ? { native: opts.native } : {}),
+        ...(sigEntry ? { fileSignature: sigEntry } : {}),
+        ...(cachedFileEdges ? { cachedFileEdges } : {}),
+        ...(opts?.onFileEdges ? { onFileEdges: opts.onFileEdges } : {}),
+        ...(opts?.onFallbackImportExtraction ? { onFallbackImportExtraction: opts.onFallbackImportExtraction } : {}),
+        ...(opts?.report ? { report: opts.report } : {}),
+      });
       addEdgeTargetsToGraph(edges);
       return edges;
     } catch (error) {
@@ -1257,24 +965,14 @@ export async function collectGraph(
       if (isUnsupportedParserInputError(error)) {
         return [] as Edge[];
       }
-      logWithLevel(
-        opts?.logLevel,
-        "warn",
-        `Warning: Failed to process file ${file} for graph:`,
-        error,
-      );
+      logWithLevel(opts?.logLevel, "warn", `Warning: Failed to process file ${file} for graph:`, error);
       return [] as Edge[];
     }
   });
 
   const allEdges = filePromises;
   const newEdges = allEdges.flat();
-  const angularJsEdges = await collectAngularJsFrameworkEdges(
-    projectRoot,
-    files,
-    workspaceConfig,
-    opts?.parsed,
-  );
+  const angularJsEdges = await collectAngularJsFrameworkEdges(projectRoot, files, workspaceConfig, opts?.parsed);
   addEdgeTargetsToGraph(angularJsEdges);
   graph.edges = mergeUniqueEdges(graph.edges, newEdges, angularJsEdges);
   return graph;
@@ -1326,9 +1024,7 @@ export function graphToDOT(graph: Graph): string {
     const id = idOf.get(label)!;
     if (declared.has(id)) return;
     declared.add(id);
-    lines.push(
-      `  ${id} [label="${dotLabel(label)}"${attrs ? ", " + attrs : ""}];`,
-    );
+    lines.push(`  ${id} [label="${dotLabel(label)}"${attrs ? ", " + attrs : ""}];`);
   };
 
   for (const f of graph.nodes) declare(f, "");
@@ -1342,11 +1038,7 @@ export function graphToDOT(graph: Graph): string {
     const toId = idOf.get(edgeTargetToString(e.to))!;
     const attrs: string[] = [];
     if (e.typeOnly) attrs.push("style=dotted");
-    lines.push(
-      `  ${fromId} -> ${toId}${
-        attrs.length ? " [" + attrs.join(",") + "]" : ""
-      };`,
-    );
+    lines.push(`  ${fromId} -> ${toId}${attrs.length ? " [" + attrs.join(",") + "]" : ""};`);
   }
   lines.push("}");
   return lines.join("\n");
@@ -1360,15 +1052,10 @@ export function graphToMermaid(graph: Graph): string {
     const id = idOf.get(label)!;
     if (declared.has(id)) return;
     declared.add(id);
-    lines.push(
-      isExternal
-        ? `${id}(["${mermaidLabel(label)}"])`
-        : `${id}["${mermaidLabel(label)}"]`,
-    );
+    lines.push(isExternal ? `${id}(["${mermaidLabel(label)}"])` : `${id}["${mermaidLabel(label)}"]`);
   };
   for (const f of graph.nodes) declare(f, false);
-  for (const e of graph.edges)
-    declare(edgeTargetToString(e.to), e.to.type === "external");
+  for (const e of graph.edges) declare(edgeTargetToString(e.to), e.to.type === "external");
   for (const e of graph.edges) {
     const fromId = idOf.get(e.from)!;
     const toId = idOf.get(edgeTargetToString(e.to))!;
@@ -1425,12 +1112,7 @@ export async function astGrep(
         continue;
       }
     } catch (error) {
-      logWithLevel(
-        opts?.logLevel,
-        "warn",
-        `Warning: Failed to process file ${file} for AST grep:`,
-        error,
-      );
+      logWithLevel(opts?.logLevel, "warn", `Warning: Failed to process file ${file} for AST grep:`, error);
     }
   }
   return hits;
@@ -1457,9 +1139,7 @@ export async function textGrep(
   try {
     re = new RegExp(patternSource, flags);
   } catch (e) {
-    throw new Error(
-      `Invalid regex for textGrep: ${patternSource} (${(e as Error).message ?? String(e)})`,
-    );
+    throw new Error(`Invalid regex for textGrep: ${patternSource} (${(e as Error).message ?? String(e)})`);
   }
 
   const hits: TextGrepHit[] = [];
@@ -1499,11 +1179,7 @@ export async function textGrep(
 
 export type DependencyNode = { file: FileId; depth: number };
 
-export function getDependencies(
-  graph: Graph,
-  startFile: FileId,
-  opts: { depth?: number } = {},
-): DependencyNode[] {
+export function getDependencies(graph: Graph, startFile: FileId, opts: { depth?: number } = {}): DependencyNode[] {
   const maxDepth = opts.depth ?? Number.POSITIVE_INFINITY;
   const out: DependencyNode[] = [];
   const visited = new Set<string>();
@@ -1528,11 +1204,7 @@ export function getDependencies(
   return out;
 }
 
-export function getReverseDependencies(
-  graph: Graph,
-  targetFile: FileId,
-  opts: { depth?: number } = {},
-): DependencyNode[] {
+export function getReverseDependencies(graph: Graph, targetFile: FileId, opts: { depth?: number } = {}): DependencyNode[] {
   const maxDepth = opts.depth ?? Number.POSITIVE_INFINITY;
   const out: DependencyNode[] = [];
   const visited = new Set<string>();
@@ -1557,11 +1229,7 @@ export function getReverseDependencies(
   return out;
 }
 
-export function getShortestPath(
-  graph: Graph,
-  from: FileId,
-  to: FileId,
-): FileId[] | null {
+export function getShortestPath(graph: Graph, from: FileId, to: FileId): FileId[] | null {
   const visited = new Map<string, string | null>();
   const queue: string[] = [from];
   visited.set(from, null);
@@ -1615,10 +1283,7 @@ export type DetailedCycle = {
 
 export type CycleSortMode = "priority" | "size" | "fanin";
 
-export function sortDetailedCycles(
-  cycles: DetailedCycle[],
-  mode: CycleSortMode = "priority",
-): DetailedCycle[] {
+export function sortDetailedCycles(cycles: DetailedCycle[], mode: CycleSortMode = "priority"): DetailedCycle[] {
   const sorted = [...cycles];
   sorted.sort((a, b) => {
     if (mode === "size") {
@@ -1636,10 +1301,7 @@ export function sortDetailedCycles(
   return sorted;
 }
 
-export function findDetailedCycles(
-  graph: Graph,
-  options: { symbolCoupling?: Map<string, number> } = {},
-): DetailedCycle[] {
+export function findDetailedCycles(graph: Graph, options: { symbolCoupling?: Map<string, number> } = {}): DetailedCycle[] {
   const nodes = Array.from(graph.nodes);
   const indexMap = new Map<string, number>();
   nodes.forEach((n, i) => indexMap.set(n, i));
@@ -1728,23 +1390,18 @@ export function findDetailedCycles(
       }
     }
 
-    const priorityScore =
-      files.length * 3 + fanInFromOutside * 2 + internalEdgeCount;
-    const couplingForEdge = (edge: CycleInternalEdge): number =>
-      options.symbolCoupling?.get(`${edge.from} -> ${edge.to}`) ?? 0;
-    const weakestEdge = internalEdges.reduce<CycleInternalEdge | null>(
-      (best, edge) => {
-        if (!best) return edge;
-        const bestCoupling = couplingForEdge(best);
-        const edgeCoupling = couplingForEdge(edge);
-        if (edgeCoupling !== bestCoupling) {
-          return edgeCoupling < bestCoupling ? edge : best;
-        }
-        if (!!edge.typeOnly && !best.typeOnly) return edge;
-        return best;
-      },
-      null,
-    );
+    const priorityScore = files.length * 3 + fanInFromOutside * 2 + internalEdgeCount;
+    const couplingForEdge = (edge: CycleInternalEdge): number => options.symbolCoupling?.get(`${edge.from} -> ${edge.to}`) ?? 0;
+    const weakestEdge = internalEdges.reduce<CycleInternalEdge | null>((best, edge) => {
+      if (!best) return edge;
+      const bestCoupling = couplingForEdge(best);
+      const edgeCoupling = couplingForEdge(edge);
+      if (edgeCoupling !== bestCoupling) {
+        return edgeCoupling < bestCoupling ? edge : best;
+      }
+      if (!!edge.typeOnly && !best.typeOnly) return edge;
+      return best;
+    }, null);
 
     const remediationHint = weakestEdge
       ? `Break ${weakestEdge.from} -> ${weakestEdge.to} (import ${weakestEdge.raw}) to reduce SCC coupling; estimated symbol coupling=${couplingForEdge(weakestEdge)}.`
@@ -1813,10 +1470,7 @@ function compareHotspotEntries(a: HotspotEntry, b: HotspotEntry): number {
   return a.file < b.file ? -1 : a.file > b.file ? 1 : 0;
 }
 
-function isHotspotUnderRoots(
-  filePath: string,
-  normalizedRoots: string[],
-): boolean {
+function isHotspotUnderRoots(filePath: string, normalizedRoots: string[]): boolean {
   if (normalizedRoots.length === 0) {
     return true;
   }
@@ -1826,14 +1480,8 @@ function isHotspotUnderRoots(
   });
 }
 
-function insertLimitedHotspot(
-  topHotspots: HotspotEntry[],
-  entry: HotspotEntry,
-  limit: number,
-): void {
-  const insertIndex = topHotspots.findIndex(
-    (existing) => compareHotspotEntries(entry, existing) < 0,
-  );
+function insertLimitedHotspot(topHotspots: HotspotEntry[], entry: HotspotEntry, limit: number): void {
+  const insertIndex = topHotspots.findIndex((existing) => compareHotspotEntries(entry, existing) < 0);
   if (insertIndex === -1) {
     topHotspots.push(entry);
   } else {
@@ -1844,17 +1492,11 @@ function insertLimitedHotspot(
   }
 }
 
-export function getHotspots(
-  graph: Graph,
-  options?: HotspotOptions,
-): HotspotEntry[] {
+export function getHotspots(graph: Graph, options?: HotspotOptions): HotspotEntry[] {
   const fanIn = new Map<string, number>();
   const fanOut = new Map<string, number>();
   const normalizedRoots = normalizeHotspotRoots(options?.includeRoots ?? []);
-  const limit =
-    options?.limit !== undefined
-      ? Math.max(0, Math.floor(options.limit))
-      : undefined;
+  const limit = options?.limit !== undefined ? Math.max(0, Math.floor(options.limit)) : undefined;
   const scopedNodes = new Set<string>();
 
   for (const node of graph.nodes) {
@@ -1905,15 +1547,7 @@ export function getHotspots(
 
 // --------------------------- Symbol graph utilities ---------------------------
 
-export type SymbolNodeKind =
-  | "function"
-  | "class"
-  | "variable"
-  | "interface"
-  | "type"
-  | "default"
-  | "import"
-  | "namespaceImport";
+export type SymbolNodeKind = "function" | "class" | "variable" | "interface" | "type" | "default" | "import" | "namespaceImport";
 
 /**
  * Access visibility of a symbol. Used to track language-specific visibility modifiers:
@@ -1939,14 +1573,9 @@ export type SymbolGraph = {
   edges: SymbolEdge[];
 };
 
-function defNodeId(def: {
-  file: string;
-  localName: string;
-  range?: { start: { index?: number } };
-}) {
+function defNodeId(def: { file: string; localName: string; range?: { start: { index?: number } } }) {
   const idx = def.range?.start?.index ?? 0;
-  const f =
-    typeof def.file === "string" ? def.file.replace(/\\/g, "/") : def.file;
+  const f = typeof def.file === "string" ? def.file.replace(/\\/g, "/") : def.file;
   return `${f}::${def.localName}::${idx}`;
 }
 
@@ -1966,15 +1595,11 @@ function nodeForDef(def: {
     kind: (def.kind as SymbolNodeKind) ?? "variable",
     ...(def.docstring ? { docstring: def.docstring } : {}),
     ...(def.lineSpan ? { lineSpan: def.lineSpan } : {}),
-    ...(typeof def.complexity === "number"
-      ? { complexity: def.complexity }
-      : {}),
+    ...(typeof def.complexity === "number" ? { complexity: def.complexity } : {}),
   };
 }
 
-export async function buildSymbolGraph(
-  index: ProjectIndex,
-): Promise<SymbolGraph> {
+export async function buildSymbolGraph(index: ProjectIndex): Promise<SymbolGraph> {
   await Promise.resolve();
   const nodes = new Map<string, SymbolNode>();
   const edges: SymbolEdge[] = [];
@@ -2001,10 +1626,7 @@ export async function buildSymbolGraph(
   for (const [file, mod] of index.byFile) {
     for (const imp of mod.imports) {
       if (!imp) continue;
-      const targetFile =
-        typeof imp.resolved === "string"
-          ? normalizePath(imp.resolved)
-          : undefined;
+      const targetFile = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : undefined;
       const targetMod = targetFile ? index.byFile.get(targetFile) : undefined;
 
       if (imp.kind === "named") {
@@ -2017,14 +1639,10 @@ export async function buildSymbolGraph(
             kind: "import",
           });
         if (targetMod) {
-          let exp = targetMod.exports.find(
-            (e) => e.type === "local" && e.exportedAs === imp.imported,
-          );
+          let exp = targetMod.exports.find((e) => e.type === "local" && e.exportedAs === imp.imported);
           if (!exp) {
             // fallback: match local by name
-            const loc = targetMod.locals.find(
-              (l) => l.localName === imp.imported,
-            );
+            const loc = targetMod.locals.find((l) => l.localName === imp.imported);
             if (loc)
               exp = {
                 type: "local",
@@ -2050,9 +1668,7 @@ export async function buildSymbolGraph(
           });
         if (targetMod) {
           // try explicit default export; else fall back to a single export
-          let exp = targetMod.exports.find(
-            (e) => e.type === "local" && e.exportedAs === "default",
-          );
+          let exp = targetMod.exports.find((e) => e.type === "local" && e.exportedAs === "default");
           if (!exp) exp = targetMod.exports.find((e) => e.type === "local");
           if (exp && exp.type === "local") {
             const def = exp.target;
@@ -2071,9 +1687,7 @@ export async function buildSymbolGraph(
             kind: "namespaceImport",
           });
         if (targetMod) {
-          const exportedLocals = targetMod.exports.filter(
-            (e) => e.type === "local",
-          );
+          const exportedLocals = targetMod.exports.filter((e) => e.type === "local");
           for (const e of exportedLocals) {
             const def = e.target;
             const toId = defNodeId(def);
@@ -2104,10 +1718,7 @@ export async function buildSymbolGraphDetailed(
   let skippedSyntaxTreeFiles = 0;
 
   const added = new Set<string>();
-  const maxEdges =
-    typeof opts?.maxEdges === "number" && opts.maxEdges > 0
-      ? opts.maxEdges
-      : Number.POSITIVE_INFINITY;
+  const maxEdges = typeof opts?.maxEdges === "number" && opts.maxEdges > 0 ? opts.maxEdges : Number.POSITIVE_INFINITY;
   const membersOnly = !!opts?.membersOnly;
   const scopeMode = opts?.scope ?? "all";
 
@@ -2116,10 +1727,7 @@ export async function buildSymbolGraphDetailed(
   if (scopeMode === "imported") {
     for (const [, m] of index.byFile) {
       for (const imp of m.imports) {
-        const target =
-          typeof imp.resolved === "string"
-            ? normalizePath(imp.resolved)
-            : undefined;
+        const target = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : undefined;
         if (target) importedByOthers.add(target);
       }
     }
@@ -2128,9 +1736,7 @@ export async function buildSymbolGraphDetailed(
   let edgeCount = edges.length;
   const maybePushEdge = (fromId: string, toId: string, label?: string) => {
     if (edgeCount >= maxEdges) return false;
-    edges.push(
-      label ? { from: fromId, to: toId, label } : { from: fromId, to: toId },
-    );
+    edges.push(label ? { from: fromId, to: toId, label } : { from: fromId, to: toId });
     edgeCount++;
     return true;
   };
@@ -2142,8 +1748,7 @@ export async function buildSymbolGraphDetailed(
   };
 
   const isIdentifierType = (sup: LanguageSupport, t: string) =>
-    Array.isArray(sup.nodeTypes?.identifier) &&
-    sup.nodeTypes.identifier.includes(t);
+    Array.isArray(sup.nodeTypes?.identifier) && sup.nodeTypes.identifier.includes(t);
 
   type ResolvedDetailedExport = ResolvedExport;
 
@@ -2181,17 +1786,10 @@ export async function buildSymbolGraphDetailed(
       }
 
     for (const e of mod.exports)
-      if (
-        e.type === "reexport" &&
-        e.exportedAs === exportedName &&
-        typeof e.fromModule === "string"
-      ) {
+      if (e.type === "reexport" && e.exportedAs === exportedName && typeof e.fromModule === "string") {
         const down =
-          resolveExportNamespace(
-            e.fromModule,
-            e.sourceSpecifier || exportedName,
-            cache,
-          ) || resolveExportNamespace(e.fromModule, exportedName, cache);
+          resolveExportNamespace(e.fromModule, e.sourceSpecifier || exportedName, cache) ||
+          resolveExportNamespace(e.fromModule, exportedName, cache);
         if (down) {
           cache.set(key, down);
           return down;
@@ -2218,19 +1816,12 @@ export async function buildSymbolGraphDetailed(
     return null;
   };
 
-  const resolveExportDef = (
-    file: string,
-    exportedName: string,
-    cache?: Map<string, ResolvedDetailedExport | null>,
-  ): SymbolDef | null => {
+  const resolveExportDef = (file: string, exportedName: string, cache?: Map<string, ResolvedDetailedExport | null>): SymbolDef | null => {
     const resolved = resolveExportNamespace(file, exportedName, cache);
     return resolved?.kind === "resolved" ? resolved.def : null;
   };
 
-  const resolveMemberPathFromModule = (
-    startFile: string,
-    names: string[],
-  ): SymbolDef | null => {
+  const resolveMemberPathFromModule = (startFile: string, names: string[]): SymbolDef | null => {
     let file: string | null = normalizeModuleFile(startFile);
     let targetDef: SymbolDef | null = null;
     for (const seg of [...names].reverse()) {
@@ -2269,11 +1860,8 @@ export async function buildSymbolGraphDetailed(
   for (const [file, mod] of index.byFile) {
     if (opts?.files && !opts.files.has(file)) continue;
     if (scopeMode === "imported") {
-      const hasFuncOrClass = mod.locals.some(
-        (l) => l.kind === SymbolKind.Function || l.kind === SymbolKind.Class,
-      );
-      const isImportedOrImports =
-        importedByOthers.has(normalizePath(file)) || mod.imports.length > 0;
+      const hasFuncOrClass = mod.locals.some((l) => l.kind === SymbolKind.Function || l.kind === SymbolKind.Class);
+      const isImportedOrImports = importedByOthers.has(normalizePath(file)) || mod.imports.length > 0;
       if (!(hasFuncOrClass && isImportedOrImports)) continue;
     }
     try {
@@ -2291,11 +1879,7 @@ export async function buildSymbolGraphDetailed(
         continue;
       }
       if (sup && src !== undefined && !tree) {
-        const nativeTreeExecution = getNativeSyntaxTreeExecution(
-          src,
-          sup,
-          index.nativeMode,
-        );
+        const nativeTreeExecution = getNativeSyntaxTreeExecution(src, sup, index.nativeMode);
         if (nativeTreeExecution.tree) {
           tree = new ProjectedSyntaxTree(src, nativeTreeExecution.tree);
         } else {
@@ -2316,19 +1900,13 @@ export async function buildSymbolGraphDetailed(
       // And for namespace imports: alias -> target module file path (string)
       const aliasToTargetModule = new Map<string, string>();
       const targetModOf = (imp: ImportBinding) => {
-        const targetFile =
-          typeof imp.resolved === "string"
-            ? imp.resolved.replace(/\\/g, "/")
-            : undefined;
+        const targetFile = typeof imp.resolved === "string" ? imp.resolved.replace(/\\/g, "/") : undefined;
         return targetFile ? index.byFile.get(targetFile) : undefined;
       };
       for (const imp of mod.imports) {
         if (!imp) continue;
         const tmod = targetModOf(imp);
-        const targetFile =
-          typeof imp.resolved === "string"
-            ? imp.resolved.replace(/\\/g, "/")
-            : undefined;
+        const targetFile = typeof imp.resolved === "string" ? imp.resolved.replace(/\\/g, "/") : undefined;
         if (!tmod || !targetFile) continue;
         if (imp.kind === "named") {
           const resolved =
@@ -2345,9 +1923,7 @@ export async function buildSymbolGraphDetailed(
             aliasToTargetModule.set(imp.local, normalizeModuleFile(resolved.file));
           }
         } else if (imp.kind === "default") {
-          const def =
-            resolveExportFrom(targetFile, "default") ||
-            tmod.exports.find((e) => e.type === "local")?.target;
+          const def = resolveExportFrom(targetFile, "default") || tmod.exports.find((e) => e.type === "local")?.target;
           if (def) aliasToTargetDef.set(imp.local, def);
           // Also treat default imports as potential namespace holders for member usage (u.helper())
           aliasToTargetModule.set(imp.local, targetFile);
@@ -2356,7 +1932,9 @@ export async function buildSymbolGraphDetailed(
         }
       }
 
-      // Collect function-like declarations (JS/TS: function_declaration, arrow/function expressions bound to vars; Python: function_definition)
+      // Collect function-like declarations.
+      // JS/TS: function_declaration, arrow/function expressions bound to vars.
+      // Python: function_definition.
       const functionNodes: Array<{
         name: string;
         node: SyntaxNodeLike;
@@ -2384,10 +1962,8 @@ export async function buildSymbolGraphDetailed(
       collectConsts(tree.rootNode);
 
       // Node type helpers (must be initialized before any walkers that reference them)
-      const memberExpressionType =
-        sup.nodeTypes.memberExpression ?? "member_expression";
-      const propertyIdentifierTypes: string[] = sup.nodeTypes
-        .propertyIdentifier ?? ["property_identifier"];
+      const memberExpressionType = sup.nodeTypes.memberExpression ?? "member_expression";
+      const propertyIdentifierTypes: string[] = sup.nodeTypes.propertyIdentifier ?? ["property_identifier"];
       const optionalMemberTypes = new Set<string>([
         memberExpressionType,
         "optional_member_expression",
@@ -2405,18 +1981,13 @@ export async function buildSymbolGraphDetailed(
           n.type === "method" ||
           n.type === "singleton_method"
         ) {
-          const nameNode =
-            n.childForFieldName("name") ?? n.childForFieldName("type");
+          const nameNode = n.childForFieldName("name") ?? n.childForFieldName("type");
           const name = nameNode ? sliceText(nameNode, src) : undefined;
           if (name) {
             const def = mod.locals.find((d) => d.localName === name);
             if (def) functionNodes.push({ name, node: n, def });
           }
-        } else if (
-          n.type === "class_declaration" ||
-          n.type === "class_definition" ||
-          n.type === "class"
-        ) {
+        } else if (n.type === "class_declaration" || n.type === "class_definition" || n.type === "class") {
           const nameNode = n.childForFieldName("name");
           const name = nameNode ? sliceText(nameNode, src) : undefined;
           if (name) {
@@ -2443,8 +2014,7 @@ export async function buildSymbolGraphDetailed(
               let name: string | null = null;
               if (left.type === memberExpressionType) {
                 const prop = left.child(2);
-                if (prop && propertyIdentifierTypes.includes(prop.type))
-                  name = sliceText(prop, src);
+                if (prop && propertyIdentifierTypes.includes(prop.type)) name = sliceText(prop, src);
               } else if (left.type === "identifier") {
                 name = sliceText(left, src);
               }
@@ -2460,10 +2030,7 @@ export async function buildSymbolGraphDetailed(
       walkCollect(tree.rootNode);
 
       // For each function, look for identifier occurrences of imported aliases in its subtree
-      const scanForAliasUse = (
-        node: SyntaxNodeLike,
-        cb: (name: string, atNode: SyntaxNodeLike) => void,
-      ) => {
+      const scanForAliasUse = (node: SyntaxNodeLike, cb: (name: string, atNode: SyntaxNodeLike) => void) => {
         if (isIdentifierType(sup, node.type)) {
           const name = sliceText(node, src);
           cb(name, node);
@@ -2477,15 +2044,8 @@ export async function buildSymbolGraphDetailed(
         return mod.locals.find((d) => d.localName === name) ?? null;
       };
 
-      const tryResolveNode = (
-        node: SyntaxNodeLike,
-        fromId: string,
-        label: string,
-      ) => {
-        if (
-          isIdentifierType(sup, node.type) ||
-          node.type === "type_identifier"
-        ) {
+      const tryResolveNode = (node: SyntaxNodeLike, fromId: string, label: string) => {
+        if (isIdentifierType(sup, node.type) || node.type === "type_identifier") {
           const name = sliceText(node, src);
           const target = resolveIdentifier(name);
           if (target) {
@@ -2500,18 +2060,8 @@ export async function buildSymbolGraphDetailed(
         }
       };
 
-      const callNodeTypes = new Set<string>([
-        "call_expression",
-        "call",
-        "method_invocation",
-        "invocation_expression",
-      ]);
-      const newNodeTypes = new Set<string>([
-        "new_expression",
-        "object_creation_expression",
-        "struct_expression",
-        "composite_literal",
-      ]);
+      const callNodeTypes = new Set<string>(["call_expression", "call", "method_invocation", "invocation_expression"]);
+      const newNodeTypes = new Set<string>(["new_expression", "object_creation_expression", "struct_expression", "composite_literal"]);
 
       const getCallTarget = (n: SyntaxNodeLike): SyntaxNodeLike | null => {
         const explicitTarget =
@@ -2522,12 +2072,8 @@ export async function buildSymbolGraphDetailed(
           n.childForFieldName("member") ??
           n.childForFieldName("expression");
         if (explicitTarget) return explicitTarget;
-        const nonArgumentChildren = n.namedChildren.filter(
-          (ch) => ch.type !== "argument_list",
-        );
-        return nonArgumentChildren.length === 1
-          ? (nonArgumentChildren[0] ?? null)
-          : null;
+        const nonArgumentChildren = n.namedChildren.filter((ch) => ch.type !== "argument_list");
+        return nonArgumentChildren.length === 1 ? (nonArgumentChildren[0] ?? null) : null;
       };
 
       const getNewTarget = (n: SyntaxNodeLike) =>
@@ -2537,18 +2083,13 @@ export async function buildSymbolGraphDetailed(
         n.namedChildren.find((ch) => ch.type === "type_identifier") ??
         n.child(0);
 
-      const tryResolveChain = (
-        node: SyntaxNodeLike,
-        fromId?: string,
-        label = "uses",
-      ) => {
+      const tryResolveChain = (node: SyntaxNodeLike, fromId?: string, label = "uses") => {
         const names: string[] = [];
         let cur: SyntaxNodeLike | null = node;
         let base: SyntaxNodeLike | null = null;
         const pushProp = (p: SyntaxNodeLike | null) => {
           if (!p) return;
-          if (propertyIdentifierTypes.includes(p.type))
-            names.push(sliceText(p, src));
+          if (propertyIdentifierTypes.includes(p.type)) names.push(sliceText(p, src));
           else if (p.type === "string") names.push(unquote(sliceText(p, src)));
           else if (p.type === "identifier") {
             const keyName = sliceText(p, src);
@@ -2562,16 +2103,9 @@ export async function buildSymbolGraphDetailed(
             const idx = cur.child(2);
             pushProp(idx);
             cur = base;
-          } else if (
-            cur.type === memberExpressionType ||
-            cur.type === "optional_member_expression" ||
-            cur.type === "attribute"
-          ) {
+          } else if (cur.type === memberExpressionType || cur.type === "optional_member_expression" || cur.type === "attribute") {
             base = cur.child(0) ?? base;
-            const prop =
-              cur.childForFieldName?.("property") ??
-              cur.child(2) ??
-              cur.childForFieldName?.("attribute");
+            const prop = cur.childForFieldName?.("property") ?? cur.child(2) ?? cur.childForFieldName?.("attribute");
             pushProp(prop);
             cur = base;
           } else if (cur.type === "optional_chain") {
@@ -2598,9 +2132,7 @@ export async function buildSymbolGraphDetailed(
       if (sup.id === "python") {
         const addDecoratorUses = (n: SyntaxNodeLike) => {
           if (n.type === "decorated_definition") {
-            const fn = n.namedChildren.find(
-              (child) => child.type === "function_definition",
-            );
+            const fn = n.namedChildren.find((child) => child.type === "function_definition");
             if (fn) addDecoratorUses(fn);
             for (const d of n.namedChildren) {
               if (d.type !== "decorator") continue;
@@ -2611,10 +2143,7 @@ export async function buildSymbolGraphDetailed(
               if (!def) continue;
               const fromId = defNodeId(def);
               if (!nodes.has(fromId)) nodes.set(fromId, nodeForDef(def));
-              const expr =
-                d.childForFieldName?.("name") ??
-                d.namedChildren?.[0] ??
-                d.child(1);
+              const expr = d.childForFieldName?.("name") ?? d.namedChildren?.[0] ?? d.child(1);
               if (expr) tryResolveNode(expr, fromId, "decorates");
             }
           } else if (n.type === "function_definition") {
@@ -2631,20 +2160,14 @@ export async function buildSymbolGraphDetailed(
                   if (prev.type === "decorated_definition") {
                     for (const d of prev.namedChildren) {
                       if (d.type === "decorator") {
-                        const expr =
-                          d.childForFieldName?.("name") ??
-                          d.namedChildren?.[0] ??
-                          d.child(1);
+                        const expr = d.childForFieldName?.("name") ?? d.namedChildren?.[0] ?? d.child(1);
                         if (expr) tryResolveNode(expr, fromId, "decorates");
                       } else if (d.type === "attribute") {
                         tryResolveNode(d, fromId, "decorates");
                       }
                     }
                   } else if (prev.type === "decorator") {
-                    const expr =
-                      prev.childForFieldName?.("name") ??
-                      prev.namedChildren?.[0] ??
-                      prev.child(1);
+                    const expr = prev.childForFieldName?.("name") ?? prev.namedChildren?.[0] ?? prev.child(1);
                     if (expr) tryResolveNode(expr, fromId, "decorates");
                   }
                   prev = prev.previousSibling;
@@ -2671,23 +2194,15 @@ export async function buildSymbolGraphDetailed(
                 // If used as a member (u.helper), prefer that member name
                 let exportedName: string | null = null;
                 const p = atNode.parent;
-                if (
-                  p &&
-                  (p.type === memberExpressionType ||
-                    p.type === "optional_member_expression")
-                ) {
+                if (p && (p.type === memberExpressionType || p.type === "optional_member_expression")) {
                   const prop = p.childForFieldName?.("property") ?? p.child(2);
-                  if (prop && propertyIdentifierTypes.includes(prop.type))
-                    exportedName = sliceText(prop, src);
+                  if (prop && propertyIdentifierTypes.includes(prop.type)) exportedName = sliceText(prop, src);
                 }
                 if (exportedName) {
                   target = resolveExportFrom(modFile, exportedName);
                   if (!target) {
                     const m = index.byFile.get(modFile);
-                    target =
-                      (m?.locals ?? []).find(
-                        (l: SymbolDef) => l.localName === exportedName,
-                      ) ?? null;
+                    target = (m?.locals ?? []).find((l: SymbolDef) => l.localName === exportedName) ?? null;
                   }
                 }
                 // Do not fall back to default or arbitrary first local to avoid spurious edges
@@ -2708,10 +2223,8 @@ export async function buildSymbolGraphDetailed(
             let base: SyntaxNodeLike | null = null;
             const pushProp = (p: SyntaxNodeLike | null) => {
               if (!p) return;
-              if (propertyIdentifierTypes.includes(p.type))
-                names.push(sliceText(p, src));
-              else if (p.type === "string")
-                names.push(unquote(sliceText(p, src)));
+              if (propertyIdentifierTypes.includes(p.type)) names.push(sliceText(p, src));
+              else if (p.type === "string") names.push(unquote(sliceText(p, src)));
               else if (p.type === "identifier") {
                 const keyName = sliceText(p, src);
                 const v = constStringOf.get(keyName);
@@ -2724,16 +2237,9 @@ export async function buildSymbolGraphDetailed(
                 const idx = cur.child(2);
                 pushProp(idx);
                 cur = base;
-              } else if (
-                cur.type === memberExpressionType ||
-                cur.type === "optional_member_expression" ||
-                cur.type === "attribute"
-              ) {
+              } else if (cur.type === memberExpressionType || cur.type === "optional_member_expression" || cur.type === "attribute") {
                 base = cur.child(0) ?? base;
-                const prop =
-                  cur.childForFieldName?.("property") ??
-                  cur.child(2) ??
-                  cur.childForFieldName?.("attribute");
+                const prop = cur.childForFieldName?.("property") ?? cur.child(2) ?? cur.childForFieldName?.("attribute");
                 pushProp(prop);
                 cur = base;
               } else if (cur.type === "optional_chain") {
@@ -2763,18 +2269,10 @@ export async function buildSymbolGraphDetailed(
           if (callNodeTypes.has(n.type)) {
             if (sup.id === "go") {
               const callTarget = getCallTarget(n);
-              const calleeName =
-                callTarget && isIdentifierType(sup, callTarget.type)
-                  ? sliceText(callTarget, src)
-                  : null;
+              const calleeName = callTarget && isIdentifierType(sup, callTarget.type) ? sliceText(callTarget, src) : null;
               if (calleeName === "new" || calleeName === "make") {
-                const argList =
-                  n.childForFieldName("arguments") ??
-                  n.childForFieldName("argument_list");
-                const typeNode =
-                  argList?.namedChildren?.find(
-                    (child) => child.type === "type_identifier",
-                  ) ?? null;
+                const argList = n.childForFieldName("arguments") ?? n.childForFieldName("argument_list");
+                const typeNode = argList?.namedChildren?.find((child) => child.type === "type_identifier") ?? null;
                 if (typeNode) {
                   tryResolveNode(typeNode, fromId, "instantiates");
                 }
@@ -2813,10 +2311,7 @@ export async function buildSymbolGraphDetailed(
         for (const ch of n.namedChildren ?? []) collectIdentifiers(ch, out);
       };
 
-      const findFirstNodeByType = (
-        node: SyntaxNodeLike,
-        type: string,
-      ): SyntaxNodeLike | null => {
+      const findFirstNodeByType = (node: SyntaxNodeLike, type: string): SyntaxNodeLike | null => {
         for (const ch of node.namedChildren ?? []) {
           if (ch.type === type) return ch;
           const found = findFirstNodeByType(ch, type);
@@ -2825,11 +2320,7 @@ export async function buildSymbolGraphDetailed(
         return null;
       };
 
-      const collectNodesByType = (
-        node: SyntaxNodeLike,
-        type: string,
-        out: SyntaxNodeLike[],
-      ) => {
+      const collectNodesByType = (node: SyntaxNodeLike, type: string, out: SyntaxNodeLike[]) => {
         for (const ch of node.namedChildren ?? []) {
           if (ch.type === type) out.push(ch);
           collectNodesByType(ch, type, out);
@@ -2841,10 +2332,7 @@ export async function buildSymbolGraphDetailed(
         if (!nodes.has(fromId)) nodes.set(fromId, nodeForDef(cls.def));
         if (sup.id === "java") {
           const superClass = findFirstNodeByType(cls.node, "superclass");
-          const superNode =
-            superClass?.childForFieldName("name") ??
-            superClass?.namedChildren?.[0] ??
-            null;
+          const superNode = superClass?.childForFieldName("name") ?? superClass?.namedChildren?.[0] ?? null;
           if (superNode) tryResolveNode(superNode, fromId, "extends");
 
           const interfaces = findFirstNodeByType(cls.node, "super_interfaces");
@@ -2879,8 +2367,7 @@ export async function buildSymbolGraphDetailed(
         }
 
         const superClause = findFirstNodeByType(cls.node, "extends_clause");
-        const superNode =
-          superClause?.namedChildren?.[0] ?? superClause?.child(1);
+        const superNode = superClause?.namedChildren?.[0] ?? superClause?.child(1);
         if (superNode) tryResolveNode(superNode, fromId, "extends");
 
         const implementsClauses: SyntaxNodeLike[] = [];
@@ -2901,10 +2388,7 @@ export async function buildSymbolGraphDetailed(
       if (sup.id === "rust") {
         const walkImpls = (node: SyntaxNodeLike) => {
           if (node.type === "impl_item") {
-            const typeIdentifiers =
-              node.namedChildren?.filter(
-                (child) => child.type === "type_identifier",
-              ) ?? [];
+            const typeIdentifiers = node.namedChildren?.filter((child) => child.type === "type_identifier") ?? [];
             if (typeIdentifiers.length >= 2) {
               const traitName = sliceText(typeIdentifiers[0], src);
               const typeName = sliceText(typeIdentifiers[1], src);
@@ -2927,12 +2411,7 @@ export async function buildSymbolGraphDetailed(
       if (isUnsupportedParserInputError(error)) {
         continue;
       }
-      logWithLevel(
-        opts?.logLevel,
-        "warn",
-        `Warning: Failed to build detailed symbol edges for ${file}:`,
-        error,
-      );
+      logWithLevel(opts?.logLevel, "warn", `Warning: Failed to build detailed symbol edges for ${file}:`, error);
     }
   }
 
@@ -2947,21 +2426,15 @@ export async function buildSymbolGraphDetailed(
   return { nodes, edges };
 }
 
-export function graphToMermaidSymbols(
-  sg: SymbolGraph,
-  projectRoot?: string,
-): string {
+export function graphToMermaidSymbols(sg: SymbolGraph, projectRoot?: string): string {
   const idOf = new Map<string, string>();
   const labels = new Map<string, string>();
   let i = 0;
   const toDisp = (node: SymbolNode) => {
-    const rel = projectRoot
-      ? path.relative(projectRoot, node.file).replace(/\\/g, "/")
-      : node.file;
+    const rel = projectRoot ? path.relative(projectRoot, node.file).replace(/\\/g, "/") : node.file;
     const base = path.basename(rel);
     if (node.kind === "import") return `${base}:${node.name} (import)`;
-    if (node.kind === "namespaceImport")
-      return `${base}:${node.name} (namespace)`;
+    if (node.kind === "namespaceImport") return `${base}:${node.name} (namespace)`;
     return `${base}:${node.name}`;
   };
   for (const [id, n] of sg.nodes) {
@@ -2979,28 +2452,21 @@ export function graphToMermaidSymbols(
   for (const e of sg.edges) {
     const fromId = idOf.get(e.from)!;
     const toId = idOf.get(e.to)!;
-    if (e.label)
-      lines.push(`${fromId} -- "${mermaidLabel(e.label)}" --> ${toId}`);
+    if (e.label) lines.push(`${fromId} -- "${mermaidLabel(e.label)}" --> ${toId}`);
     else lines.push(`${fromId} --> ${toId}`);
   }
   return lines.join("\n");
 }
 
-export function graphToDOTSymbols(
-  sg: SymbolGraph,
-  projectRoot?: string,
-): string {
+export function graphToDOTSymbols(sg: SymbolGraph, projectRoot?: string): string {
   const idOf = new Map<string, string>();
   const labels = new Map<string, string>();
   let i = 0;
   const toDisp = (node: SymbolNode) => {
-    const rel = projectRoot
-      ? path.relative(projectRoot, node.file).replace(/\\/g, "/")
-      : node.file;
+    const rel = projectRoot ? path.relative(projectRoot, node.file).replace(/\\/g, "/") : node.file;
     const base = path.basename(rel);
     if (node.kind === "import") return `${base}:${node.name} (import)`;
-    if (node.kind === "namespaceImport")
-      return `${base}:${node.name} (namespace)`;
+    if (node.kind === "namespaceImport") return `${base}:${node.name} (namespace)`;
     return `${base}:${node.name}`;
   };
   for (const [id, n] of sg.nodes) {
@@ -3020,26 +2486,17 @@ export function graphToDOTSymbols(
     const toId = idOf.get(e.to)!;
     const attrs: string[] = [];
     if (e.label) attrs.push(`label="${dotLabel(e.label)}"`);
-    lines.push(
-      `  ${fromId} -> ${toId}${
-        attrs.length ? " [" + attrs.join(",") + "]" : ""
-      };`,
-    );
+    lines.push(`  ${fromId} -> ${toId}${attrs.length ? " [" + attrs.join(",") + "]" : ""};`);
   }
   lines.push("}");
   return lines.join("\n");
 }
 
-export function graphToMermaidSymbolsWithFiles(
-  sg: SymbolGraph,
-  fg: Graph,
-  projectRoot?: string,
-): string {
+export function graphToMermaidSymbolsWithFiles(sg: SymbolGraph, fg: Graph, projectRoot?: string): string {
   const fileIdOf = new Map<string, string>();
   const fileNodeMeta = new Map<string, { label: string; external: boolean }>();
   let fi = 0;
-  const fileLabel = (file: string) =>
-    projectRoot ? path.relative(projectRoot, file).replace(/\\/g, "/") : file;
+  const fileLabel = (file: string) => (projectRoot ? path.relative(projectRoot, file).replace(/\\/g, "/") : file);
   const ensureFile = (file: string) => {
     if (!fileIdOf.has(file)) {
       const id = `f${fi++}`;
@@ -3067,8 +2524,7 @@ export function graphToMermaidSymbolsWithFiles(
   const symDisp = (node: SymbolNode) => {
     const base = path.basename(node.file);
     if (node.kind === "import") return `${base}:${node.name} (import)`;
-    if (node.kind === "namespaceImport")
-      return `${base}:${node.name} (namespace)`;
+    if (node.kind === "namespaceImport") return `${base}:${node.name} (namespace)`;
     return `${base}:${node.name}`;
   };
   for (const [id, n] of sg.nodes) {
@@ -3083,11 +2539,7 @@ export function graphToMermaidSymbolsWithFiles(
   for (const [id, meta] of fileNodeMeta) {
     if (declared.has(id)) continue;
     declared.add(id);
-    lines.push(
-      meta.external
-        ? `${id}(["${mermaidLabel(meta.label)}"])`
-        : `${id}["${mermaidLabel(meta.label)}"]`,
-    );
+    lines.push(meta.external ? `${id}(["${mermaidLabel(meta.label)}"])` : `${id}["${mermaidLabel(meta.label)}"]`);
   }
   for (const [id, label] of symLabels) {
     if (declared.has(id)) continue;
@@ -3111,24 +2563,18 @@ export function graphToMermaidSymbolsWithFiles(
   for (const e of sg.edges) {
     const fromId = symIdOf.get(e.from)!;
     const toId = symIdOf.get(e.to)!;
-    if (e.label)
-      lines.push(`${fromId} -- "${mermaidLabel(e.label)}" --> ${toId}`);
+    if (e.label) lines.push(`${fromId} -- "${mermaidLabel(e.label)}" --> ${toId}`);
     else lines.push(`${fromId} --> ${toId}`);
   }
 
   return lines.join("\n");
 }
 
-export function graphToDOTSymbolsWithFiles(
-  sg: SymbolGraph,
-  fg: Graph,
-  projectRoot?: string,
-): string {
+export function graphToDOTSymbolsWithFiles(sg: SymbolGraph, fg: Graph, projectRoot?: string): string {
   const fileIdOf = new Map<string, string>();
   const fileNodeMeta = new Map<string, { label: string; external: boolean }>();
   let fi = 0;
-  const fileLabel = (file: string) =>
-    projectRoot ? path.relative(projectRoot, file).replace(/\\/g, "/") : file;
+  const fileLabel = (file: string) => (projectRoot ? path.relative(projectRoot, file).replace(/\\/g, "/") : file);
   const ensureFile = (file: string) => {
     if (!fileIdOf.has(file)) {
       const id = `f${fi++}`;
@@ -3156,8 +2602,7 @@ export function graphToDOTSymbolsWithFiles(
   const symDisp = (node: SymbolNode) => {
     const base = path.basename(node.file);
     if (node.kind === "import") return `${base}:${node.name} (import)`;
-    if (node.kind === "namespaceImport")
-      return `${base}:${node.name} (namespace)`;
+    if (node.kind === "namespaceImport") return `${base}:${node.name} (namespace)`;
     return `${base}:${node.name}`;
   };
   for (const [id, n] of sg.nodes) {
@@ -3171,11 +2616,7 @@ export function graphToDOTSymbolsWithFiles(
   lines.push("  rankdir=LR;");
   lines.push('  node [shape=box, fontsize=10, fontname="Arial"];\n');
   for (const [id, meta] of fileNodeMeta) {
-    lines.push(
-      `  ${id} [label="${dotLabel(meta.label)}", ${
-        meta.external ? "shape=ellipse, style=dashed" : "shape=box"
-      }];`,
-    );
+    lines.push(`  ${id} [label="${dotLabel(meta.label)}", ${meta.external ? "shape=ellipse, style=dashed" : "shape=box"}];`);
   }
   for (const [id, label] of symLabels) {
     lines.push(`  ${id} [label="${dotLabel(label)}"];`);
@@ -3196,11 +2637,7 @@ export function graphToDOTSymbolsWithFiles(
     const toId = symIdOf.get(e.to)!;
     const attrs: string[] = [];
     if (e.label) attrs.push(`label="${dotLabel(e.label)}"`);
-    lines.push(
-      `  ${fromId} -> ${toId}${
-        attrs.length ? " [" + attrs.join(",") + "]" : ""
-      };`,
-    );
+    lines.push(`  ${fromId} -> ${toId}${attrs.length ? " [" + attrs.join(",") + "]" : ""};`);
   }
   lines.push("}");
   return lines.join("\n");

@@ -13,6 +13,7 @@
 ## File Structure
 
 **Create:**
+
 - `src/indexer/shared.ts`
 - `src/indexer/parse-context.ts`
 - `src/indexer/locals-and-exports.ts`
@@ -24,11 +25,13 @@
 - `src/indexer/build-index.ts`
 
 **Modify:**
+
 - `src/indexer.ts`
 - `src/index.ts`
 - `docs/how-it-works.md` if the internal architecture section needs a concise update after the final extraction
 
 **Test:**
+
 - `tests/goto.test.ts`
 - `tests/references.test.ts`
 - `tests/native-semantic-parity.test.ts`
@@ -49,6 +52,7 @@
 ### Task 1: Freeze the Behavioral Baseline
 
 **Files:**
+
 - Modify: `tests/fallback-import-extraction.test.ts` only if extraction seams lack direct characterization
 - Modify: `tests/detailed-symbol-native-only.test.ts` only if parse-context seams lack direct characterization
 - Modify: `tests/references.test.ts` only if navigation helpers lack direct characterization
@@ -105,6 +109,7 @@ git commit -m "test: lock indexer decomposition seams"
 ### Task 2: Extract Shared Types and Pure Helpers
 
 **Files:**
+
 - Create: `src/indexer/shared.ts`
 - Modify: `src/indexer.ts`
 
@@ -135,11 +140,7 @@ Do not move BuildOptions, BuildReport, ProjectIndex, or public API function sign
 Implementation shape:
 
 ```typescript
-import {
-  DEFAULT_REF_CONTEXT_LINES,
-  QUERY_DRIVEN_LOCALS_LANGUAGES,
-  parseGoImportAlias,
-} from "./indexer/shared.js";
+import { DEFAULT_REF_CONTEXT_LINES, QUERY_DRIVEN_LOCALS_LANGUAGES, parseGoImportAlias } from "./indexer/shared.js";
 ```
 
 - [ ] **Step 3: Run build, lint, and narrow semantic checks**
@@ -164,6 +165,7 @@ git commit -m "refactor: extract indexer shared helpers"
 ### Task 3: Extract Parse Context and Native/JS Reconstruction
 
 **Files:**
+
 - Create: `src/indexer/parse-context.ts`
 - Modify: `src/indexer.ts`
 
@@ -228,6 +230,7 @@ git commit -m "refactor: extract indexer parse context"
 ### Task 4: Extract Local/Export Collection
 
 **Files:**
+
 - Create: `src/indexer/locals-and-exports.ts`
 - Modify: `src/indexer.ts`
 
@@ -279,6 +282,7 @@ git commit -m "refactor: extract indexer locals and exports"
 ### Task 5: Extract Import Collection
 
 **Files:**
+
 - Create: `src/indexer/imports.ts`
 - Modify: `src/indexer.ts`
 
@@ -331,6 +335,7 @@ git commit -m "refactor: extract indexer imports"
 ### Task 6: Extract Reference Context and Scope Helpers
 
 **Files:**
+
 - Create: `src/indexer/reference-context.ts`
 - Create: `src/indexer/scope.ts`
 - Modify: `src/indexer.ts`
@@ -373,6 +378,7 @@ git commit -m "refactor: extract indexer scope helpers"
 ### Task 7: Extract Navigation APIs
 
 **Files:**
+
 - Create: `src/indexer/navigation.ts`
 - Modify: `src/indexer.ts`
 
@@ -436,6 +442,7 @@ git commit -m "refactor: extract indexer navigation"
 ### Task 8: Extract Cache, Manifest, and Build Orchestration
 
 **Files:**
+
 - Create: `src/indexer/build-cache.ts`
 - Create: `src/indexer/build-index.ts`
 - Modify: `src/indexer.ts`
@@ -499,6 +506,7 @@ git commit -m "refactor: extract indexer build pipeline"
 ### Task 9: Final Facade Cleanup and Full Verification
 
 **Files:**
+
 - Modify: `src/indexer.ts`
 - Modify: `docs/how-it-works.md` only if the architecture description is now materially misleading
 

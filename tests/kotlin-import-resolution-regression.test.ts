@@ -2,13 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import {
-  buildProjectIndex,
-  clearResolutionCaches,
-  collectGraph,
-  collectImportsForFile,
-  parseFile,
-} from "../src/index.js";
+import { buildProjectIndex, clearResolutionCaches, collectGraph, collectImportsForFile, parseFile } from "../src/index.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -18,16 +12,7 @@ describe("Kotlin import resolution regression", () => {
   it("ignores generated trees when resolving package imports from a repo root", async () => {
     const root = await mkTmpDir("cg-kotlin-root-");
     const sourceDir = path.join(root, "src", "demo", "pkg");
-    const generatedDir = path.join(
-      root,
-      "build",
-      "generated",
-      "source",
-      "kapt",
-      "main",
-      "demo",
-      "pkg",
-    );
+    const generatedDir = path.join(root, "build", "generated", "source", "kapt", "main", "demo", "pkg");
     const mainFile = path.join(root, "src", "Main.kt");
     const sourceHelperFile = path.join(sourceDir, "Helper.kt");
     const sourceServiceFile = path.join(sourceDir, "Service.kt");
@@ -35,42 +20,18 @@ describe("Kotlin import resolution regression", () => {
 
     await fsp.mkdir(sourceDir, { recursive: true });
     await fsp.mkdir(generatedDir, { recursive: true });
-    await fsp.writeFile(
-      sourceHelperFile,
-      [
-        "package demo.pkg",
-        "class Helper",
-        "fun helperFunction(): Int = 1",
-      ].join("\n"),
-      "utf8",
-    );
+    await fsp.writeFile(sourceHelperFile, ["package demo.pkg", "class Helper", "fun helperFunction(): Int = 1"].join("\n"), "utf8");
     await fsp.writeFile(
       sourceServiceFile,
-      [
-        "package demo.pkg",
-        "class Service",
-        "fun serviceFunction(): Int = helperFunction()",
-      ].join("\n"),
+      ["package demo.pkg", "class Service", "fun serviceFunction(): Int = helperFunction()"].join("\n"),
       "utf8",
     );
-    await fsp.writeFile(
-      ignoredHelperFile,
-      [
-        "package demo.pkg",
-        "class Helper",
-        "fun helperFunction(): Int = 999",
-      ].join("\n"),
-      "utf8",
-    );
+    await fsp.writeFile(ignoredHelperFile, ["package demo.pkg", "class Helper", "fun helperFunction(): Int = 999"].join("\n"), "utf8");
 
     for (let index = 0; index < 250; index += 1) {
       await fsp.writeFile(
         path.join(generatedDir, `Generated${index}.kt`),
-        [
-          "package demo.pkg",
-          `class Generated${index}`,
-          `fun generated${index}(): Int = ${index}`,
-        ].join("\n"),
+        ["package demo.pkg", `class Generated${index}`, `fun generated${index}(): Int = ${index}`].join("\n"),
         "utf8",
       );
     }
@@ -129,16 +90,7 @@ describe("Kotlin import resolution regression", () => {
   it("expands Kotlin wildcard package imports to all source package files", async () => {
     const root = await mkTmpDir("cg-kotlin-wildcard-");
     const pkgDir = path.join(root, "src", "demo", "pkg");
-    const generatedDir = path.join(
-      root,
-      "build",
-      "generated",
-      "source",
-      "kapt",
-      "main",
-      "demo",
-      "pkg",
-    );
+    const generatedDir = path.join(root, "build", "generated", "source", "kapt", "main", "demo", "pkg");
     const mainFile = path.join(root, "src", "Main.kt");
     const alphaFile = path.join(pkgDir, "Alpha.kt");
     const betaFile = path.join(pkgDir, "Beta.kt");
@@ -146,40 +98,17 @@ describe("Kotlin import resolution regression", () => {
 
     await fsp.mkdir(pkgDir, { recursive: true });
     await fsp.mkdir(generatedDir, { recursive: true });
-    await fsp.writeFile(
-      alphaFile,
-      ["package demo.pkg", "class Alpha", "fun helperFunction(): Int = 1"].join("\n"),
-      "utf8",
-    );
-    await fsp.writeFile(
-      betaFile,
-      ["package demo.pkg", "typealias Alias = Alpha"].join("\n"),
-      "utf8",
-    );
-    await fsp.writeFile(
-      ignoredFile,
-      ["package demo.pkg", "class Generated"].join("\n"),
-      "utf8",
-    );
+    await fsp.writeFile(alphaFile, ["package demo.pkg", "class Alpha", "fun helperFunction(): Int = 1"].join("\n"), "utf8");
+    await fsp.writeFile(betaFile, ["package demo.pkg", "typealias Alias = Alpha"].join("\n"), "utf8");
+    await fsp.writeFile(ignoredFile, ["package demo.pkg", "class Generated"].join("\n"), "utf8");
     await fsp.writeFile(
       mainFile,
-      [
-        "import demo.pkg.*",
-        "",
-        "fun run(): Alias {",
-        "  helperFunction()",
-        "  return Alpha()",
-        "}",
-      ].join("\n"),
+      ["import demo.pkg.*", "", "fun run(): Alias {", "  helperFunction()", "  return Alpha()", "}"].join("\n"),
       "utf8",
     );
 
     clearResolutionCaches();
-    const graph = await collectGraph(root, [
-      mainFile.replace(/\\/g, "/"),
-      alphaFile.replace(/\\/g, "/"),
-      betaFile.replace(/\\/g, "/"),
-    ]);
+    const graph = await collectGraph(root, [mainFile.replace(/\\/g, "/"), alphaFile.replace(/\\/g, "/"), betaFile.replace(/\\/g, "/")]);
 
     const fileEdges = graph.edges
       .filter((edge) => edge.from === mainFile.replace(/\\/g, "/"))

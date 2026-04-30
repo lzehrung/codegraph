@@ -37,11 +37,7 @@ export function computeSymbolHash(def: SymbolDef, source: string): SymbolHash {
   const symbolText = source.slice(startIdx, endIdx);
 
   // Compute hash of the symbol's content
-  const hash = crypto
-    .createHash("sha256")
-    .update(symbolText)
-    .digest("hex")
-    .slice(0, 16); // Use first 16 chars for compactness
+  const hash = crypto.createHash("sha256").update(symbolText).digest("hex").slice(0, 16); // Use first 16 chars for compactness
 
   return {
     id,
@@ -119,11 +115,7 @@ export type SymbolManifestEntry = {
 /**
  * Compute symbol hashes for a file
  */
-export function computeFileSymbolHashes(
-  symbols: SymbolDef[],
-  exports: ExportEntry[],
-  source: string,
-): SymbolHash[] {
+export function computeFileSymbolHashes(symbols: SymbolDef[], exports: ExportEntry[], source: string): SymbolHash[] {
   const hashes: SymbolHash[] = [];
   const exportedNames = new Set(
     exports

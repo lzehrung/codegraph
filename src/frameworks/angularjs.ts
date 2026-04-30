@@ -31,22 +31,17 @@ const ANGULAR_JS_FUNCTION_INJECTION_PATTERN =
 const ANGULAR_JS_COMPONENT_CONTROLLER_PATTERN =
   /\.\s*component\s*\(\s*(['"])([^'"`]+)\1\s*,\s*\{[\s\S]*?controller\s*:\s*function(?:\s+[A-Za-z_$][\w$]*)?\s*\(([^)]*)\)/gs;
 
-const ANGULAR_JS_INJECT_ASSIGNMENT_PATTERN =
-  /([A-Za-z_$][\w$]*)\s*\.\s*\$inject\s*=\s*\[([\s\S]*?)\]/gs;
+const ANGULAR_JS_INJECT_ASSIGNMENT_PATTERN = /([A-Za-z_$][\w$]*)\s*\.\s*\$inject\s*=\s*\[([\s\S]*?)\]/gs;
 
-const ANGULAR_JS_TEMPLATE_URL_PATTERN =
-  /templateUrl\s*:\s*(['"`])([^'"`]+)\1/gs;
+const ANGULAR_JS_TEMPLATE_URL_PATTERN = /templateUrl\s*:\s*(['"`])([^'"`]+)\1/gs;
 
-const ANGULAR_JS_CONTROLLER_REF_PATTERN =
-  /controller\s*:\s*(['"])([^'"`]+)\1/gs;
+const ANGULAR_JS_CONTROLLER_REF_PATTERN = /controller\s*:\s*(['"])([^'"`]+)\1/gs;
 
 function looksLikeAngularJsSource(source: string): boolean {
   return /angular\s*\.\s*module\s*\(/.test(source);
 }
 
-function parseRegistrationKind(
-  value: string,
-): AngularJsRegistrationKind | undefined {
+function parseRegistrationKind(value: string): AngularJsRegistrationKind | undefined {
   if (value === "component") return "component";
   if (value === "constant") return "constant";
   if (value === "controller") return "controller";
@@ -86,9 +81,7 @@ function pushUnique(target: string[], seen: Set<string>, value: string): void {
   target.push(value);
 }
 
-export function extractAngularJsRegistrations(
-  source: string,
-): AngularJsRegistration[] {
+export function extractAngularJsRegistrations(source: string): AngularJsRegistration[] {
   if (!looksLikeAngularJsSource(source)) return [];
 
   const out: AngularJsRegistration[] = [];

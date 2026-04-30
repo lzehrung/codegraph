@@ -9,9 +9,7 @@ export class Semaphore {
 
   constructor(permits: number) {
     if (!Number.isFinite(permits) || permits < 1) {
-      throw new Error(
-        `Semaphore permits must be a positive number, got: ${permits}`,
-      );
+      throw new Error(`Semaphore permits must be a positive number, got: ${permits}`);
     }
     this.permits = Math.floor(permits);
   }
@@ -66,15 +64,9 @@ export class Semaphore {
  * Map over items with bounded concurrency using a semaphore.
  * Unlike basic mapLimit, this correctly handles nested async operations.
  */
-export async function mapLimitSemaphore<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T, semaphore: Semaphore) => Promise<R>,
-): Promise<R[]> {
+export async function mapLimitSemaphore<T, R>(items: T[], limit: number, fn: (item: T, semaphore: Semaphore) => Promise<R>): Promise<R[]> {
   const semaphore = new Semaphore(limit);
-  const results = await Promise.all(
-    items.map((item) => semaphore.withPermit(() => fn(item, semaphore))),
-  );
+  const results = await Promise.all(items.map((item) => semaphore.withPermit(() => fn(item, semaphore))));
   return results;
 }
 

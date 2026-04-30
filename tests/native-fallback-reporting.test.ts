@@ -13,18 +13,10 @@ import {
 
 describe("native fallback reporting", () => {
   it("detects when native tree-sitter is disabled by environment", () => {
-    expect(isNativeTreeSitterDisabledByEnv({ CODEGRAPH_DISABLE_NATIVE: "1" })).toBe(
-      true,
-    );
-    expect(
-      isNativeTreeSitterDisabledByEnv({ CODEGRAPH_DISABLE_NATIVE: "true" }),
-    ).toBe(true);
-    expect(
-      isNativeTreeSitterDisabledByEnv({ CODEGRAPH_DISABLE_NATIVE: "yes" }),
-    ).toBe(true);
-    expect(
-      isNativeTreeSitterDisabledByEnv({ CODEGRAPH_DISABLE_NATIVE: "0" }),
-    ).toBe(false);
+    expect(isNativeTreeSitterDisabledByEnv({ CODEGRAPH_DISABLE_NATIVE: "1" })).toBe(true);
+    expect(isNativeTreeSitterDisabledByEnv({ CODEGRAPH_DISABLE_NATIVE: "true" })).toBe(true);
+    expect(isNativeTreeSitterDisabledByEnv({ CODEGRAPH_DISABLE_NATIVE: "yes" })).toBe(true);
+    expect(isNativeTreeSitterDisabledByEnv({ CODEGRAPH_DISABLE_NATIVE: "0" })).toBe(false);
   });
 
   it("reports unavailable when the native binding is not loaded", () => {
@@ -99,11 +91,7 @@ describe("native fallback reporting", () => {
   it("normalizes ad hoc native queries through language compatibility hooks", () => {
     const support = supportById("ts");
     expect(support).toBeDefined();
-    const result = getNativeSingleQueryExecution(
-      "class UtilityClass {}",
-      support!,
-      "(class_declaration name: (identifier) @name)",
-    );
+    const result = getNativeSingleQueryExecution("class UtilityClass {}", support!, "(class_declaration name: (identifier) @name)");
     expect(result.matches).not.toBeNull();
     expect(result.matches).toEqual([
       expect.objectContaining({
@@ -120,11 +108,7 @@ describe("native fallback reporting", () => {
   it("routes astGrep through unified single-query execution without a redundant direct native call", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-astgrep-unified-"));
     const file = path.join(root, "entry.ts");
-    await fsp.writeFile(
-      file,
-      "import { helper } from './dep';\n",
-      "utf8",
-    );
+    await fsp.writeFile(file, "import { helper } from './dep';\n", "utf8");
 
     try {
       const unifiedSpy = vi.fn(() => ({
@@ -152,9 +136,7 @@ describe("native fallback reporting", () => {
 
       vi.resetModules();
       vi.doMock("../src/native/treeSitterNative.js", async () => {
-        const actual = await vi.importActual<
-          typeof import("../src/native/treeSitterNative.js")
-        >("../src/native/treeSitterNative.js");
+        const actual = await vi.importActual<typeof import("../src/native/treeSitterNative.js")>("../src/native/treeSitterNative.js");
         return {
           ...actual,
           getUnifiedQueryExecution: unifiedSpy,
@@ -163,11 +145,7 @@ describe("native fallback reporting", () => {
       });
 
       const { astGrep } = await import("../src/index.js");
-      const hits = await astGrep(
-        root,
-        '(import_statement source: (string) @mod)',
-        ["**/*.ts"],
-      );
+      const hits = await astGrep(root, "(import_statement source: (string) @mod)", ["**/*.ts"]);
 
       expect(unifiedSpy).toHaveBeenCalledTimes(1);
       expect(singleSpy).not.toHaveBeenCalled();

@@ -11,10 +11,7 @@ import { stringifyUnknown } from "../util.js";
 import type { LanguageSupport } from "../languages.js";
 import type { JsLanguage, SyntaxTreeLike } from "../languages/types.js";
 
-type NativeFallbackReason =
-  | "unavailable"
-  | "unsupportedLanguage"
-  | "queryFailure";
+type NativeFallbackReason = "unavailable" | "unsupportedLanguage" | "queryFailure";
 
 export type ParsedFileContext = {
   source: string;
@@ -50,15 +47,9 @@ export type PreparedFileParseAttempt = {
   jsError?: string;
 };
 
-export function attemptParsePreparedFileContext(
-  context: PreparedFileContext,
-): PreparedFileParseAttempt {
+export function attemptParsePreparedFileContext(context: PreparedFileContext): PreparedFileParseAttempt {
   const { file, source, sup, nativeMode, nativeQueries } = context;
-  const nativeTreeExecution = getNativeSyntaxTreeExecution(
-    source,
-    sup,
-    nativeMode,
-  );
+  const nativeTreeExecution = getNativeSyntaxTreeExecution(source, sup, nativeMode);
   if (nativeTreeExecution.tree) {
     return {
       parsed: {
@@ -75,51 +66,32 @@ export function attemptParsePreparedFileContext(
     const tree = parseWithJsLanguage(source, resolvedLang);
     return {
       parsed: { source, tree, sup, lang: resolvedLang, nativeQueries },
-      ...(nativeTreeExecution.fallbackReason
-        ? { nativeFallbackReason: nativeTreeExecution.fallbackReason }
-        : {}),
-      ...(nativeTreeExecution.error
-        ? { nativeError: nativeTreeExecution.error }
-        : {}),
+      ...(nativeTreeExecution.fallbackReason ? { nativeFallbackReason: nativeTreeExecution.fallbackReason } : {}),
+      ...(nativeTreeExecution.error ? { nativeError: nativeTreeExecution.error } : {}),
     };
   } catch (error) {
     return {
       parsed: null,
-      ...(nativeTreeExecution.fallbackReason
-        ? { nativeFallbackReason: nativeTreeExecution.fallbackReason }
-        : {}),
-      ...(nativeTreeExecution.error
-        ? { nativeError: nativeTreeExecution.error }
-        : {}),
+      ...(nativeTreeExecution.fallbackReason ? { nativeFallbackReason: nativeTreeExecution.fallbackReason } : {}),
+      ...(nativeTreeExecution.error ? { nativeError: nativeTreeExecution.error } : {}),
       jsError: stringifyUnknown(error),
     };
   }
 }
 
-export function tryParsePreparedFileContext(
-  context: PreparedFileContext,
-): ParsedFileContext | null {
+export function tryParsePreparedFileContext(context: PreparedFileContext): ParsedFileContext | null {
   return attemptParsePreparedFileContext(context).parsed;
 }
 
-export function parsePreparedFileContext(
-  context: PreparedFileContext,
-): ParsedFileContext {
+export function parsePreparedFileContext(context: PreparedFileContext): ParsedFileContext {
   const parsed = tryParsePreparedFileContext(context);
   if (parsed) return parsed;
   throw new Error(`Failed to reconstruct syntax tree for ${context.file}`);
 }
 
-export async function prepareFileForIndexing(
-  file: string,
-  native?: NativeRuntimeMode,
-): Promise<PreparedFileContext> {
+export async function prepareFileForIndexing(file: string, native?: NativeRuntimeMode): Promise<PreparedFileContext> {
   const prep = await prepareSourceInput(file);
-  const nativeExecution = getNativeQueryExecution(
-    prep.source,
-    prep.sup,
-    native,
-  );
+  const nativeExecution = getNativeQueryExecution(prep.source, prep.sup, native);
 
   return {
     file,
@@ -127,9 +99,7 @@ export async function prepareFileForIndexing(
     sup: prep.sup,
     ...(native ? { nativeMode: native } : {}),
     nativeQueries: nativeExecution.results,
-    ...(nativeExecution.fallbackReason
-      ? { nativeFallbackReason: nativeExecution.fallbackReason }
-      : {}),
+    ...(nativeExecution.fallbackReason ? { nativeFallbackReason: nativeExecution.fallbackReason } : {}),
     ...(nativeExecution.error ? { nativeError: nativeExecution.error } : {}),
   };
 }
@@ -138,10 +108,7 @@ export async function parseFile(file: string): Promise<ParsedFileContext> {
   return parsePreparedFileContext(await prepareFileForIndexing(file));
 }
 
-export async function ensureParsedContext(
-  file: string,
-  parsedEntry?: ParsedFileCacheEntry,
-): Promise<ParsedFileContext> {
+export async function ensureParsedContext(file: string, parsedEntry?: ParsedFileCacheEntry): Promise<ParsedFileContext> {
   if (parsedEntry?.sup) {
     return {
       source: parsedEntry.source,

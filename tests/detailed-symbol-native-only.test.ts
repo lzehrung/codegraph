@@ -20,32 +20,20 @@ describe("detailed symbol graph in native-only installs", () => {
 
   it("skips files cleanly when syntax-tree fallback is unavailable", async () => {
     const root = await mkTmpDir("cg-detailed-native-only-");
-    await fsp.writeFile(
-      path.join(root, "legacy.js"),
-      "export function render(value) { return value; }\n",
-      "utf8",
-    );
-    await fsp.writeFile(
-      path.join(root, "template.html"),
-      "<div><script>export const value = 1;</script></div>\n",
-      "utf8",
-    );
+    await fsp.writeFile(path.join(root, "legacy.js"), "export function render(value) { return value; }\n", "utf8");
+    await fsp.writeFile(path.join(root, "template.html"), "<div><script>export const value = 1;</script></div>\n", "utf8");
 
     const index = await buildProjectIndex(root);
     index.parsed = new Map();
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const parseSpy = vi.fn(() => {
-      throw new Error(
-        "JS Tree-sitter fallback is unavailable for grammar loading. Install @lzehrung/codegraph-js-fallback to enable it",
-      );
+      throw new Error("JS Tree-sitter fallback is unavailable for grammar loading. Install @lzehrung/codegraph-js-fallback to enable it");
     });
 
     vi.resetModules();
     vi.doMock("../src/jsFallback.js", async () => {
-      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>(
-        "../src/jsFallback.js",
-      );
+      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>("../src/jsFallback.js");
       return {
         ...actual,
         isJsFallbackAvailable: () => false,
@@ -53,9 +41,7 @@ describe("detailed symbol graph in native-only installs", () => {
       };
     });
     vi.doMock("../src/native/treeSitterNative.js", async () => {
-      const actual = await vi.importActual<
-        typeof import("../src/native/treeSitterNative.js")
-      >("../src/native/treeSitterNative.js");
+      const actual = await vi.importActual<typeof import("../src/native/treeSitterNative.js")>("../src/native/treeSitterNative.js");
       return {
         ...actual,
         getNativeSyntaxTreeExecution: vi.fn(() => ({
@@ -70,14 +56,8 @@ describe("detailed symbol graph in native-only installs", () => {
     const warnings = warnSpy.mock.calls.map((call) => String(call[0] ?? ""));
 
     expect(parseSpy).not.toHaveBeenCalled();
-    expect(
-      warnings.some((warning) =>
-        warning.includes("Failed to build detailed symbol edges for"),
-      ),
-    ).toBe(false);
-    expect(warnings).toContain(
-      "Warning: Skipped detailed symbol edges for 1 file(s) because no syntax-tree backend was available.",
-    );
+    expect(warnings.some((warning) => warning.includes("Failed to build detailed symbol edges for"))).toBe(false);
+    expect(warnings).toContain("Warning: Skipped detailed symbol edges for 1 file(s) because no syntax-tree backend was available.");
     expect(detailed.edges).toEqual([]);
   });
 
@@ -91,25 +71,19 @@ describe("detailed symbol graph in native-only installs", () => {
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const parseSpy = vi.fn(() => {
-      throw new Error(
-        "JS Tree-sitter fallback is unavailable for grammar loading. Install @lzehrung/codegraph-js-fallback to enable it",
-      );
+      throw new Error("JS Tree-sitter fallback is unavailable for grammar loading. Install @lzehrung/codegraph-js-fallback to enable it");
     });
 
     vi.resetModules();
     vi.doMock("../src/jsFallback.js", async () => {
-      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>(
-        "../src/jsFallback.js",
-      );
+      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>("../src/jsFallback.js");
       return {
         ...actual,
         parseWithJsLanguage: parseSpy,
       };
     });
     vi.doMock("../src/native/treeSitterNative.js", async () => {
-      const actual = await vi.importActual<
-        typeof import("../src/native/treeSitterNative.js")
-      >("../src/native/treeSitterNative.js");
+      const actual = await vi.importActual<typeof import("../src/native/treeSitterNative.js")>("../src/native/treeSitterNative.js");
       return {
         ...actual,
         getNativeQueryExecution: vi.fn(() => ({
@@ -139,11 +113,7 @@ describe("detailed symbol graph in native-only installs", () => {
         nativeFallbackReason: "unavailable",
       }),
     );
-    expect(
-      warnings.some((warning) =>
-        warning.includes("Warning: Failed to process file"),
-      ),
-    ).toBe(false);
+    expect(warnings.some((warning) => warning.includes("Warning: Failed to process file"))).toBe(false);
   });
 
   it("recovers TypeScript imports without loading the JS fallback package", async () => {
@@ -152,22 +122,10 @@ describe("detailed symbol graph in native-only installs", () => {
     const depFile = path.join(root, "dep.ts");
     await fsp.writeFile(
       entryFile,
-      [
-        "import value, { helper as alias } from './dep';",
-        "export { helper } from './dep';",
-        "",
-      ].join("\n"),
+      ["import value, { helper as alias } from './dep';", "export { helper } from './dep';", ""].join("\n"),
       "utf8",
     );
-    await fsp.writeFile(
-      depFile,
-      [
-        "export default 1;",
-        "export const helper = 2;",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
+    await fsp.writeFile(depFile, ["export default 1;", "export const helper = 2;", ""].join("\n"), "utf8");
 
     const parseSpy = vi.fn(() => {
       throw new Error(
@@ -182,9 +140,7 @@ describe("detailed symbol graph in native-only installs", () => {
 
     vi.resetModules();
     vi.doMock("../src/jsFallback.js", async () => {
-      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>(
-        "../src/jsFallback.js",
-      );
+      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>("../src/jsFallback.js");
       return {
         ...actual,
         isJsFallbackAvailable: () => false,
@@ -243,9 +199,7 @@ describe("detailed symbol graph in native-only installs", () => {
 
     vi.resetModules();
     vi.doMock("../src/jsFallback.js", async () => {
-      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>(
-        "../src/jsFallback.js",
-      );
+      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>("../src/jsFallback.js");
       return {
         ...actual,
         isJsFallbackAvailable: () => false,
@@ -282,15 +236,7 @@ describe("detailed symbol graph in native-only installs", () => {
     const entryFile = path.join(root, "entry.ts");
     await fsp.writeFile(
       entryFile,
-      [
-        "export class Service {",
-        "  run() {",
-        "    return 1;",
-        "  }",
-        "}",
-        "export const helper = () => new Service();",
-        "",
-      ].join("\n"),
+      ["export class Service {", "  run() {", "    return 1;", "  }", "}", "export const helper = () => new Service();", ""].join("\n"),
       "utf8",
     );
 
@@ -307,9 +253,7 @@ describe("detailed symbol graph in native-only installs", () => {
 
     vi.resetModules();
     vi.doMock("../src/jsFallback.js", async () => {
-      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>(
-        "../src/jsFallback.js",
-      );
+      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>("../src/jsFallback.js");
       return {
         ...actual,
         isJsFallbackAvailable: () => false,
@@ -322,14 +266,10 @@ describe("detailed symbol graph in native-only installs", () => {
     const index = await buildProjectIndex(root);
     const moduleIndex = index.byFile.get(normalizePath(entryFile));
 
-    expect(moduleIndex?.locals.map((entry) => entry.localName)).toEqual(
+    expect(moduleIndex?.locals.map((entry) => entry.localName)).toEqual(expect.arrayContaining(["Service", "helper"]));
+    expect(moduleIndex?.exports.filter((entry) => entry.type === "local").map((entry) => entry.exportedAs)).toEqual(
       expect.arrayContaining(["Service", "helper"]),
     );
-    expect(
-      moduleIndex?.exports
-        .filter((entry) => entry.type === "local")
-        .map((entry) => entry.exportedAs),
-    ).toEqual(expect.arrayContaining(["Service", "helper"]));
     expect(parseSpy).not.toHaveBeenCalled();
     expect(querySpy).not.toHaveBeenCalled();
   });
@@ -337,20 +277,8 @@ describe("detailed symbol graph in native-only installs", () => {
   it("runs TypeScript AST grep without loading the JS fallback package", async () => {
     const root = await mkTmpDir("cg-ts-grep-native-only-");
     const entryFile = path.join(root, "entry.ts");
-    await fsp.writeFile(
-      entryFile,
-      [
-        "import { helper } from './dep';",
-        "export const value = helper();",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    await fsp.writeFile(
-      path.join(root, "dep.ts"),
-      "export function helper() { return 1; }\n",
-      "utf8",
-    );
+    await fsp.writeFile(entryFile, ["import { helper } from './dep';", "export const value = helper();", ""].join("\n"), "utf8");
+    await fsp.writeFile(path.join(root, "dep.ts"), "export function helper() { return 1; }\n", "utf8");
 
     const parseSpy = vi.fn(() => {
       throw new Error(
@@ -365,9 +293,7 @@ describe("detailed symbol graph in native-only installs", () => {
 
     vi.resetModules();
     vi.doMock("../src/jsFallback.js", async () => {
-      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>(
-        "../src/jsFallback.js",
-      );
+      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>("../src/jsFallback.js");
       return {
         ...actual,
         isJsFallbackAvailable: () => false,
@@ -377,11 +303,7 @@ describe("detailed symbol graph in native-only installs", () => {
     });
 
     const { astGrep } = await import("../src/index.js");
-    const hits = await astGrep(
-      root,
-      "(import_statement (string) @mod)",
-      ["**/*.ts"],
-    );
+    const hits = await astGrep(root, "(import_statement (string) @mod)", ["**/*.ts"]);
 
     expect(hits).toEqual([
       expect.objectContaining({

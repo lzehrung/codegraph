@@ -2,13 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import {
-  buildProjectIndex,
-  buildProjectIndexIncremental,
-  collectImportsForFile,
-  supportForFile,
-  type BuildReport,
-} from "../src/index.js";
+import { buildProjectIndex, buildProjectIndexIncremental, collectImportsForFile, supportForFile, type BuildReport } from "../src/index.js";
 import type { FallbackImportExtractionEvent } from "../src/graphs.js";
 import { logWithLevel } from "../src/logging.js";
 import * as jsFallback from "../src/jsFallback.js";
@@ -20,11 +14,7 @@ async function mkTmpDir(prefix: string): Promise<string> {
 describe("logging behavior", () => {
   it("suppresses manifest mismatch warnings when logLevel is silent", async () => {
     const root = await mkTmpDir("dg-logging-manifest-");
-    await fsp.writeFile(
-      path.join(root, "a.ts"),
-      "export const a = 1;\n",
-      "utf8",
-    );
+    await fsp.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -50,21 +40,15 @@ describe("logging behavior", () => {
     const root = await mkTmpDir("dg-logging-config-hash-");
     const gitignorePath = path.join(root, ".gitignore");
     await fsp.writeFile(gitignorePath, "dist/\n", "utf8");
-    await fsp.writeFile(
-      path.join(root, "a.ts"),
-      "export const a = 1;\n",
-      "utf8",
-    );
+    await fsp.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
 
     const originalReadFile = fsp.readFile.bind(fsp);
-    const readSpy = vi
-      .spyOn(fsp, "readFile")
-      .mockImplementation(async (filePath, options) => {
-        if (String(filePath).endsWith(".gitignore")) {
-          throw new Error("mocked config hash read failure");
-        }
-        return await originalReadFile(filePath, options as never);
-      });
+    const readSpy = vi.spyOn(fsp, "readFile").mockImplementation(async (filePath, options) => {
+      if (String(filePath).endsWith(".gitignore")) {
+        throw new Error("mocked config hash read failure");
+      }
+      return await originalReadFile(filePath, options as never);
+    });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
 
@@ -78,9 +62,7 @@ describe("logging behavior", () => {
       expect(warnSpy).not.toHaveBeenCalled();
       expect(debugSpy).not.toHaveBeenCalled();
       expect(report.manifest?.configHashError).toContain(".gitignore");
-      expect(report.manifest?.configHashError).toContain(
-        "mocked config hash read failure",
-      );
+      expect(report.manifest?.configHashError).toContain("mocked config hash read failure");
     } finally {
       debugSpy.mockRestore();
       warnSpy.mockRestore();
@@ -112,26 +94,14 @@ describe("logging behavior", () => {
     const root = await mkTmpDir("dg-logging-tsconfig-");
     const sourceFile = path.join(root, "main.ts");
     await fsp.writeFile(path.join(root, "tsconfig.json"), "{ invalid", "utf8");
-    await fsp.writeFile(
-      sourceFile,
-      "import { helper } from './helper';\nexport const value = helper;\n",
-      "utf8",
-    );
-    await fsp.writeFile(
-      path.join(root, "helper.ts"),
-      "export const helper = 1;\n",
-      "utf8",
-    );
+    await fsp.writeFile(sourceFile, "import { helper } from './helper';\nexport const value = helper;\n", "utf8");
+    await fsp.writeFile(path.join(root, "helper.ts"), "export const helper = 1;\n", "utf8");
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       await buildProjectIndex(root, { cache: "disk", logLevel: "silent" });
 
-      await fsp.writeFile(
-        sourceFile,
-        "import { helper } from './helper';\nexport const value = helper + 1;\n",
-        "utf8",
-      );
+      await fsp.writeFile(sourceFile, "import { helper } from './helper';\nexport const value = helper + 1;\n", "utf8");
       await buildProjectIndexIncremental(root, {
         cache: "disk",
         files: [sourceFile],
@@ -149,23 +119,13 @@ describe("logging behavior", () => {
     const root = await mkTmpDir("dg-logging-js-fallback-");
     const sourceFile = path.join(root, "main.ts");
     const dependencyFile = path.join(root, "dep.ts");
-    await fsp.writeFile(
-      sourceFile,
-      "import { dep } from './dep';\nexport const value = dep;\n",
-      "utf8",
-    );
+    await fsp.writeFile(sourceFile, "import { dep } from './dep';\nexport const value = dep;\n", "utf8");
     await fsp.writeFile(dependencyFile, "export const dep = 1;\n", "utf8");
 
-    const availabilitySpy = vi
-      .spyOn(jsFallback, "isJsFallbackAvailable")
-      .mockReturnValue(false);
-    const parseSpy = vi
-      .spyOn(jsFallback, "parseWithJsLanguage")
-      .mockImplementation(() => {
-        throw new Error(
-          "JS Tree-sitter fallback is unavailable for test recovery",
-        );
-      });
+    const availabilitySpy = vi.spyOn(jsFallback, "isJsFallbackAvailable").mockReturnValue(false);
+    const parseSpy = vi.spyOn(jsFallback, "parseWithJsLanguage").mockImplementation(() => {
+      throw new Error("JS Tree-sitter fallback is unavailable for test recovery");
+    });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
     const fallbackEvents: FallbackImportExtractionEvent[] = [];
@@ -181,11 +141,7 @@ describe("logging behavior", () => {
         onFallbackImportExtraction: (event) => fallbackEvents.push(event),
       });
 
-      expect(imports).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ kind: "named", imported: "dep" }),
-        ]),
-      );
+      expect(imports).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "named", imported: "dep" })]));
       expect(fallbackEvents).toContainEqual(
         expect.objectContaining({
           language: "ts",

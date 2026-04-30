@@ -181,16 +181,11 @@ describe("buildGraph -- legacy format", () => {
 
 describe("buildGraph -- edge cases", () => {
   it("throws on unsupported payload", () => {
-    expect(() => buildGraph({}, { showExternal: false, includeSymbols: false })).toThrow(
-      "Unsupported graph payload",
-    );
+    expect(() => buildGraph({}, { showExternal: false, includeSymbols: false })).toThrow("Unsupported graph payload");
   });
 
   it("handles empty compact payload", () => {
-    const graph = buildGraph(
-      { files: [], fileEdges: [], symbols: [], symbolEdges: [] },
-      { showExternal: false, includeSymbols: false },
-    );
+    const graph = buildGraph({ files: [], fileEdges: [], symbols: [], symbolEdges: [] }, { showExternal: false, includeSymbols: false });
     expect(graph.order).toBe(0);
     expect(graph.size).toBe(0);
   });

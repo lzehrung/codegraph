@@ -13,10 +13,7 @@ import crypto from "node:crypto";
  * @param falsePositiveRate - Target false positive rate (default: 0.01 = 1%)
  * @returns Optimal size in bits and hash count
  */
-export function calculateOptimalBloomParams(
-  expectedItems: number,
-  falsePositiveRate = 0.01,
-): { size: number; hashCount: number } {
+export function calculateOptimalBloomParams(expectedItems: number, falsePositiveRate = 0.01): { size: number; hashCount: number } {
   // Ensure reasonable bounds
   const n = Math.max(1, expectedItems);
   const p = Math.max(0.0001, Math.min(0.5, falsePositiveRate));
@@ -58,14 +55,8 @@ export class BloomFilter {
    * @param expectedItems - Expected number of items to be added
    * @param falsePositiveRate - Target false positive rate (default: 0.01 = 1%)
    */
-  static createOptimal(
-    expectedItems: number,
-    falsePositiveRate = 0.01,
-  ): BloomFilter {
-    const { size, hashCount } = calculateOptimalBloomParams(
-      expectedItems,
-      falsePositiveRate,
-    );
+  static createOptimal(expectedItems: number, falsePositiveRate = 0.01): BloomFilter {
+    const { size, hashCount } = calculateOptimalBloomParams(expectedItems, falsePositiveRate);
     return new BloomFilter(size, hashCount);
   }
 
@@ -153,11 +144,7 @@ export class BloomFilter {
   /**
    * Deserialize from buffer
    */
-  static fromBuffer(
-    buffer: Buffer,
-    size: number,
-    hashCount: number,
-  ): BloomFilter {
+  static fromBuffer(buffer: Buffer, size: number, hashCount: number): BloomFilter {
     const filter = new BloomFilter(size, hashCount);
     filter.bits = new Uint8Array(buffer);
     return filter;
@@ -178,11 +165,7 @@ export class BloomFilter {
  * @param languageId - The language identifier (unused, for future extension)
  * @param falsePositiveRate - Target false positive rate (default: 0.01 = 1%)
  */
-export function buildBloomFilterFromSource(
-  source: string,
-  languageId: string,
-  falsePositiveRate = 0.01,
-): BloomFilter {
+export function buildBloomFilterFromSource(source: string, languageId: string, falsePositiveRate = 0.01): BloomFilter {
   // Extract all identifiers using a simple regex
   // This is a fast heuristic - doesn't need to be perfect
   const identifierPattern = /\b[a-zA-Z_$][a-zA-Z0-9_$]*\b/g;
@@ -192,10 +175,7 @@ export function buildBloomFilterFromSource(
   const unique = matches ? new Set(matches) : new Set<string>();
 
   // Create optimally-sized filter based on unique identifier count
-  const filter = BloomFilter.createOptimal(
-    unique.size || 100,
-    falsePositiveRate,
-  );
+  const filter = BloomFilter.createOptimal(unique.size || 100, falsePositiveRate);
 
   for (const identifier of unique) {
     filter.add(identifier);

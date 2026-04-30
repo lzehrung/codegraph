@@ -24,33 +24,17 @@ import {
 
 const rootDir = process.cwd();
 const rootPackagePath = path.join(rootDir, "package.json");
-const nativePackagePath = path.join(
-  rootDir,
-  "packages",
-  "codegraph-native",
-  "package.json",
-);
-const jsFallbackPackagePath = path.join(
-  rootDir,
-  "packages",
-  "codegraph-js-fallback",
-  "package.json",
-);
+const nativePackagePath = path.join(rootDir, "packages", "codegraph-native", "package.json");
+const jsFallbackPackagePath = path.join(rootDir, "packages", "codegraph-js-fallback", "package.json");
 const currentRootPackage = readJson(rootPackagePath);
 const currentNativePackage = readJson(nativePackagePath);
 const originalRootPackageJson = `${JSON.stringify(
-  recoverRootPackageManifestForResume(
-    currentRootPackage,
-    readJsonFromString(readGitFile("package.json")),
-  ),
+  recoverRootPackageManifestForResume(currentRootPackage, readJsonFromString(readGitFile("package.json"))),
   null,
   2,
 )}\n`;
 const originalNativePackageJson = `${JSON.stringify(
-  recoverNativePackageManifestForResume(
-    currentNativePackage,
-    readJsonFromString(readGitFile("packages/codegraph-native/package.json")),
-  ),
+  recoverNativePackageManifestForResume(currentNativePackage, readJsonFromString(readGitFile("packages/codegraph-native/package.json"))),
   null,
   2,
 )}\n`;
@@ -153,28 +137,19 @@ function ensureResumableWorktree() {
   const dirtyPaths = getDirtyPaths();
   const unexpectedPaths = dirtyPaths.filter((filePath) => !isAllowedResumePath(filePath));
   if (unexpectedPaths.length > 0) {
-    console.error(
-      `Release resume only supports dirty version files. Unexpected paths: ${unexpectedPaths.join(", ")}`,
-    );
+    console.error(`Release resume only supports dirty version files. Unexpected paths: ${unexpectedPaths.join(", ")}`);
     process.exit(1);
   }
 }
 
 function readCurrentPackageVersions() {
-  return new Map(
-    releasePackages.map((pkg) => [
-      pkg.id,
-      readJson(path.join(rootDir, pkg.manifestPath)).version,
-    ]),
-  );
+  return new Map(releasePackages.map((pkg) => [pkg.id, readJson(path.join(rootDir, pkg.manifestPath)).version]));
 }
 
 function normalizeManagedManifests(versionPlan) {
   const rootPackage = JSON.parse(originalRootPackageJson);
   const nativePackage = JSON.parse(originalNativePackageJson);
-  const jsFallbackPackage = sanitizeJsFallbackPackageManifest(
-    readJson(jsFallbackPackagePath),
-  );
+  const jsFallbackPackage = sanitizeJsFallbackPackageManifest(readJson(jsFallbackPackagePath));
 
   const rootVersion = versionPlan.get("root");
   const nativeVersion = versionPlan.get("native");
@@ -202,10 +177,7 @@ function restoreNativePackage(versionPlan) {
     return;
   }
   const sourceManifest = JSON.parse(originalNativePackageJson);
-  writeJson(
-    nativePackagePath,
-    restoreNativePackageManifest(sourceManifest, intendedVersion),
-  );
+  writeJson(nativePackagePath, restoreNativePackageManifest(sourceManifest, intendedVersion));
 }
 
 function writePublishReadyRootPackage(versionPlan) {
@@ -214,12 +186,7 @@ function writePublishReadyRootPackage(versionPlan) {
     return;
   }
   const sourceManifest = JSON.parse(originalRootPackageJson);
-  writeJson(
-    rootPackagePath,
-    sanitizePublishedRootPackageManifest(
-      restoreRootPackageManifest(sourceManifest, intendedVersion),
-    ),
-  );
+  writeJson(rootPackagePath, sanitizePublishedRootPackageManifest(restoreRootPackageManifest(sourceManifest, intendedVersion)));
 }
 
 function restoreRootPackage(versionPlan) {
@@ -229,10 +196,7 @@ function restoreRootPackage(versionPlan) {
     return;
   }
   const sourceManifest = JSON.parse(originalRootPackageJson);
-  writeJson(
-    rootPackagePath,
-    restoreRootPackageManifest(sourceManifest, intendedVersion),
-  );
+  writeJson(rootPackagePath, restoreRootPackageManifest(sourceManifest, intendedVersion));
 }
 
 function doesLocalTagExist(tagName) {
@@ -257,12 +221,7 @@ function getBaselineTagForPackage(packageName) {
 }
 
 function packageExistsInRegistry(packageName, version) {
-  const result = runOutput("npm", [
-    "view",
-    `${packageName}@${version}`,
-    "version",
-    "--registry=https://npm.pkg.github.com",
-  ]);
+  const result = runOutput("npm", ["view", `${packageName}@${version}`, "version", "--registry=https://npm.pkg.github.com"]);
   return result.status === 0 && result.stdout === version;
 }
 
@@ -279,9 +238,7 @@ function packageHasOwnedChanges(pkg) {
   if (!baselineTag) {
     return true;
   }
-  return detectChangedReleasePackages(getChangedPathsSinceRef(baselineTag)).includes(
-    pkg.id,
-  );
+  return detectChangedReleasePackages(getChangedPathsSinceRef(baselineTag)).includes(pkg.id);
 }
 
 function resolveRequestedPackages(packageSelectors) {
@@ -301,9 +258,7 @@ function determineReleasePackages({ shouldResume, requestedPackages }) {
     const resumedPackageIds = new Set(
       dirtyPaths
         .filter((filePath) => filePath !== "package-lock.json")
-        .map((filePath) =>
-          releasePackages.find((pkg) => pkg.manifestPath === filePath)?.id ?? null,
-        )
+        .map((filePath) => releasePackages.find((pkg) => pkg.manifestPath === filePath)?.id ?? null)
         .filter((pkgId) => pkgId),
     );
     if (resumedPackageIds.size > 0) {
@@ -321,10 +276,7 @@ function planVersions(selectedPackages, currentVersions, { releaseType, shouldRe
     if (!currentVersion) {
       throw new Error(`Missing current version for ${pkg.name}`);
     }
-    versionPlan.set(
-      pkg.id,
-      shouldResume ? currentVersion : bumpVersion(currentVersion, releaseType),
-    );
+    versionPlan.set(pkg.id, shouldResume ? currentVersion : bumpVersion(currentVersion, releaseType));
   }
   return versionPlan;
 }
@@ -337,14 +289,13 @@ function commitAndTag(selectedPackages, versionPlan) {
     "packages/codegraph-native/package.json",
     "packages/codegraph-js-fallback/package.json",
   ]);
-  const commitNeeded = spawnSync("git", ["diff", "--cached", "--quiet"], {
-    cwd: rootDir,
-    shell: false,
-  }).status !== 0;
+  const commitNeeded =
+    spawnSync("git", ["diff", "--cached", "--quiet"], {
+      cwd: rootDir,
+      shell: false,
+    }).status !== 0;
   if (commitNeeded) {
-    const releaseLabels = selectedPackages.map(
-      (pkg) => `${pkg.name}@${versionPlan.get(pkg.id)}`,
-    );
+    const releaseLabels = selectedPackages.map((pkg) => `${pkg.name}@${versionPlan.get(pkg.id)}`);
     runGit(["commit", "-m", `release: ${releaseLabels.join(", ")}`]);
   }
   for (const pkg of selectedPackages) {
@@ -383,9 +334,7 @@ function parseArgs(argv) {
   return { releaseType, shouldPublish, packageSelectors };
 }
 
-const { releaseType, shouldPublish, packageSelectors } = parseArgs(
-  process.argv.slice(2),
-);
+const { releaseType, shouldPublish, packageSelectors } = parseArgs(process.argv.slice(2));
 const shouldResume = releaseType === "resume";
 
 if (!shouldResume && !validReleaseTypes.has(releaseType)) {
@@ -429,11 +378,7 @@ if (selectedPackages.some((pkg) => pkg.id === "native")) {
 
 if (shouldPublish) {
   const publishedPackageNames = new Set(
-    selectedPackages
-      .filter((pkg) =>
-        packageExistsInRegistry(pkg.name, versionPlan.get(pkg.id)),
-      )
-      .map((pkg) => pkg.name),
+    selectedPackages.filter((pkg) => packageExistsInRegistry(pkg.name, versionPlan.get(pkg.id))).map((pkg) => pkg.name),
   );
   const publishPlan = computePublishPlan({
     shouldPublish,

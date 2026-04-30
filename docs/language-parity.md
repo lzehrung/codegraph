@@ -1,40 +1,42 @@
 # Language coverage parity matrix
 
 Status key:
+
 - Yes = supported and covered
 - Partial = supported with intentional limitations
 - No = not supported for that capability
 
-| Language | Dependency graph | Symbol extraction | Go-to-definition | Find references | Chunking | SFC integration | PR impact mapping | Native addon | Native parity tests |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| TypeScript | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
-| TSX | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
-| JavaScript | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
-| Python | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
-| PHP | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
-| Go | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
-| Java | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
-| C | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
-| C++ | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
-| C# | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
-| Kotlin | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
-| Ruby | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
-| Rust | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
-| Swift | Yes | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes |
-| HTML | Yes | No | No | No | Yes | No | Yes | Yes | Yes |
-| Astro | Yes | No | No | No | No | No | Yes | No | No |
-| Handlebars | Yes | No | No | No | No | No | Yes | No | No |
-| CSS | No | No | No | No | Yes | No | Yes | Yes | Yes |
-| SCSS | Yes | No | No | No | Yes | No | Yes | Yes | Yes |
-| Less | No | No | No | No | Yes | No | Yes | Yes | Yes |
-| Markdown | Yes | No | No | No | No | No | Yes | No | No |
-| MDX | Yes | No | No | No | No | No | Yes | No | No |
-| reStructuredText | Yes | No | No | No | No | No | Yes | No | No |
-| AsciiDoc | Yes | No | No | No | No | No | Yes | No | No |
-| Vue | No | No | No | No | Yes | Yes | Yes | Yes | Yes |
-| Svelte | No | No | No | No | Yes | Yes | Yes | Yes | Yes |
+| Language         | Dependency graph | Symbol extraction | Go-to-definition | Find references | Chunking | SFC integration | PR impact mapping | Native addon | Native parity tests |
+| ---------------- | ---------------- | ----------------- | ---------------- | --------------- | -------- | --------------- | ----------------- | ------------ | ------------------- |
+| TypeScript       | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
+| TSX              | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
+| JavaScript       | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
+| Python           | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
+| PHP              | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
+| Go               | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
+| Java             | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
+| C                | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
+| C++              | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
+| C#               | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
+| Kotlin           | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
+| Ruby             | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
+| Rust             | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
+| Swift            | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
+| HTML             | Yes              | No                | No               | No              | Yes      | No              | Yes               | Yes          | Yes                 |
+| Astro            | Yes              | No                | No               | No              | No       | No              | Yes               | No           | No                  |
+| Handlebars       | Yes              | No                | No               | No              | No       | No              | Yes               | No           | No                  |
+| CSS              | No               | No                | No               | No              | Yes      | No              | Yes               | Yes          | Yes                 |
+| SCSS             | Yes              | No                | No               | No              | Yes      | No              | Yes               | Yes          | Yes                 |
+| Less             | No               | No                | No               | No              | Yes      | No              | Yes               | Yes          | Yes                 |
+| Markdown         | Yes              | No                | No               | No              | No       | No              | Yes               | No           | No                  |
+| MDX              | Yes              | No                | No               | No              | No       | No              | Yes               | No           | No                  |
+| reStructuredText | Yes              | No                | No               | No              | No       | No              | Yes               | No           | No                  |
+| AsciiDoc         | Yes              | No                | No               | No              | No       | No              | Yes               | No           | No                  |
+| Vue              | No               | No                | No               | No              | Yes      | Yes             | Yes               | Yes          | Yes                 |
+| Svelte           | No               | No                | No               | No              | Yes      | Yes             | Yes               | Yes          | Yes                 |
 
 Notes:
+
 - The native addon uses the same Tree-sitter query model as the opt-in `@lzehrung/codegraph-js-fallback` path for all listed source languages.
 - Native-only installs do not require `@lzehrung/codegraph-js-fallback` for normal supported source-language graph extraction, symbol indexing, chunking, or AST grep. When query recovery degrades in `auto` mode, Codegraph reports it in diagnostics and stays on native-owned recovery paths where the language supports them.
 - Native parity coverage includes both extraction parity and end-to-end semantic parity on the current source-language fixture set (`TypeScript`, `TSX`, `JavaScript`, `Python`, `PHP`, `Go`, `Java`, `C#`, `Rust`, `Kotlin`, `Swift`, `C`, `C++`, `Ruby`) plus graph/specifier parity for `HTML`, `CSS`, `Less`, `SCSS`, `Vue`, and `Svelte`.
@@ -50,6 +52,7 @@ Notes:
 ## Project file discovery coverage
 
 Status key:
+
 - Yes = extracts a project name from metadata
 - Partial = detected, but name falls back to directory or filename
 - No = not detected

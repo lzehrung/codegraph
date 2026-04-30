@@ -1,7 +1,7 @@
-import { helperFunction, UtilityClass, CONSTANT_VALUE, UtilityType } from './utils';
-import * as utils from './utils';
-import { helperFunction as helperAlias } from './utils';
-import defaultExport from './utils';
+import { helperFunction, UtilityClass, CONSTANT_VALUE, UtilityType } from "./utils";
+import * as utils from "./utils";
+import { helperFunction as helperAlias } from "./utils";
+import defaultExport from "./utils";
 
 // Namespace import usage
 const utilsResult = utils.helperFunction();
@@ -21,7 +21,7 @@ const defaultResult = defaultExport();
 // Type usage
 const typedValue: UtilityType = {
   id: 1,
-  name: "test"
+  name: "test",
 };
 
 // Constant usage

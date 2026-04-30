@@ -8,19 +8,11 @@ import {
   type JsSyntaxTree,
 } from "../jsFallback.js";
 import type { LanguageSupport } from "../languages.js";
-import type {
-  NativeCompatibilityQueryKind,
-  NativeQueryKind,
-} from "../languages/types.js";
+import type { NativeCompatibilityQueryKind, NativeQueryKind } from "../languages/types.js";
 import { stringifyUnknown } from "../util.js";
 import { loadNativeBinding } from "./bindingLoader.js";
 
-export const NATIVE_QUERY_KINDS: NativeQueryKind[] = [
-  "imports",
-  "exports",
-  "locals",
-  "importBindings",
-];
+export const NATIVE_QUERY_KINDS: NativeQueryKind[] = ["imports", "exports", "locals", "importBindings"];
 
 export type NativePoint = {
   row: number;
@@ -103,25 +95,14 @@ type NativeBinding = {
     localsQuery: string,
     importBindingsQuery: string,
   ) => NativeQueryResults;
-  runImportsQueryCompact?: (
-    source: string,
-    languageId: string,
-    importsQuery: string,
-  ) => CompactQueryResults;
-  runQuery?: (
-    source: string,
-    languageId: string,
-    queryText: string,
-  ) => { matches: NativeMatch[] };
+  runImportsQueryCompact?: (source: string, languageId: string, importsQuery: string) => CompactQueryResults;
+  runQuery?: (source: string, languageId: string, queryText: string) => { matches: NativeMatch[] };
   parseSyntaxTree?: (source: string, languageId: string) => NativeSyntaxTree;
   supportedLanguageIds: () => string[];
 };
 
 const require = createRequire(import.meta.url);
-const localNativePackageRoot = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../packages/codegraph-native",
-);
+const localNativePackageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../packages/codegraph-native");
 
 let bindingState:
   | { loaded: true; binding: NativeBinding; supportedLanguageIds: Set<string> }
@@ -132,9 +113,7 @@ export function __resetNativeTreeSitterBindingForTests(): void {
   bindingState = undefined;
 }
 
-export function isNativeTreeSitterDisabledByEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
+export function isNativeTreeSitterDisabledByEnv(env: NodeJS.ProcessEnv = process.env): boolean {
   const rawValue = env.CODEGRAPH_DISABLE_NATIVE;
   if (typeof rawValue !== "string") {
     return false;
@@ -143,15 +122,11 @@ export function isNativeTreeSitterDisabledByEnv(
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
-function normalizeNativeRuntimeMode(
-  mode?: NativeRuntimeMode,
-): NativeRuntimeMode {
+function normalizeNativeRuntimeMode(mode?: NativeRuntimeMode): NativeRuntimeMode {
   return mode ?? "auto";
 }
 
-function loadBinding():
-  | { loaded: true; binding: NativeBinding; supportedLanguageIds: Set<string> }
-  | { loaded: false; error?: unknown } {
+function loadBinding(): { loaded: true; binding: NativeBinding; supportedLanguageIds: Set<string> } | { loaded: false; error?: unknown } {
   if (bindingState) return bindingState;
   const loaded = loadNativeBinding<NativeBinding>({
     packageName: "@lzehrung/codegraph-native",
@@ -171,10 +146,7 @@ function loadBinding():
   return bindingState;
 }
 
-function resolveNativeBindingState(
-  mode?: NativeRuntimeMode,
-  env: NodeJS.ProcessEnv = process.env,
-): NativeBindingState {
+function resolveNativeBindingState(mode?: NativeRuntimeMode, env: NodeJS.ProcessEnv = process.env): NativeBindingState {
   const normalizedMode = normalizeNativeRuntimeMode(mode);
   if (normalizedMode === "off") {
     return {
@@ -185,19 +157,13 @@ function resolveNativeBindingState(
   if (normalizedMode === "auto" && isNativeTreeSitterDisabledByEnv(env)) {
     return {
       loaded: false,
-      error: new Error(
-        "native tree-sitter disabled by CODEGRAPH_DISABLE_NATIVE",
-      ),
+      error: new Error("native tree-sitter disabled by CODEGRAPH_DISABLE_NATIVE"),
     };
   }
   return loadBinding();
 }
 
-export function normalizeNativeQueryForSupport(
-  support: LanguageSupport,
-  kind: NativeCompatibilityQueryKind,
-  queryText: string,
-): string {
+export function normalizeNativeQueryForSupport(support: LanguageSupport, kind: NativeCompatibilityQueryKind, queryText: string): string {
   return support.native?.normalizeQuery?.(kind, queryText) ?? queryText;
 }
 
@@ -206,15 +172,9 @@ export function normalizeNativeQueryForSupport(
  * Normalization is constant for a given (support.id, queryKind) pair,
  * so we compute it once per language per kind.
  */
-const normalizedQueryCache = new Map<
-  string,
-  Map<NativeQueryKind, { text: string; wasModified: boolean }>
->();
+const normalizedQueryCache = new Map<string, Map<NativeQueryKind, { text: string; wasModified: boolean }>>();
 
-function getOrComputeNormalizedEntry(
-  support: LanguageSupport,
-  kind: NativeQueryKind,
-): { text: string; wasModified: boolean } {
+function getOrComputeNormalizedEntry(support: LanguageSupport, kind: NativeQueryKind): { text: string; wasModified: boolean } {
   let byKind = normalizedQueryCache.get(support.id);
   if (!byKind) {
     byKind = new Map();
@@ -235,10 +195,7 @@ function getOrComputeNormalizedEntry(
  * Cached per (support.id, kind) to avoid re-running regex normalization
  * on every file.
  */
-export function getCachedNormalizedQuery(
-  support: LanguageSupport,
-  kind: NativeQueryKind,
-): string {
+export function getCachedNormalizedQuery(support: LanguageSupport, kind: NativeQueryKind): string {
   return getOrComputeNormalizedEntry(support, kind).text;
 }
 
@@ -247,17 +204,11 @@ export function getCachedNormalizedQuery(
  * the original JS query - meaning the language has grammar divergence and
  * empty native results should NOT be treated as authoritative.
  */
-export function isNativeQueryModified(
-  support: LanguageSupport,
-  kind: NativeQueryKind,
-): boolean {
+export function isNativeQueryModified(support: LanguageSupport, kind: NativeQueryKind): boolean {
   return getOrComputeNormalizedEntry(support, kind).wasModified;
 }
 
-export function isNativeQueryAuthoritative(
-  support: LanguageSupport,
-  kind: NativeQueryKind,
-): boolean {
+export function isNativeQueryAuthoritative(support: LanguageSupport, kind: NativeQueryKind): boolean {
   if (!isNativeQueryModified(support, kind)) {
     return true;
   }
@@ -277,11 +228,7 @@ export function getNativeQueryMetadataForSupport(support: LanguageSupport): {
     }
     normalizedQueryKinds.push(kind);
     const originalQuery = support.queries[kind];
-    const normalized = normalizeNativeQueryForSupport(
-      support,
-      kind,
-      originalQuery,
-    );
+    const normalized = normalizeNativeQueryForSupport(support, kind, originalQuery);
     if (originalQuery.trim().length > 0 && normalized.trim().length === 0) {
       skippedQueryKinds.push(kind);
     }
@@ -297,46 +244,29 @@ export function isNativeTreeSitterAvailable(mode?: NativeRuntimeMode): boolean {
   return resolveNativeBindingState(mode).loaded;
 }
 
-export function getNativeTreeSitterLoadError(
-  mode?: NativeRuntimeMode,
-): unknown {
+export function getNativeTreeSitterLoadError(mode?: NativeRuntimeMode): unknown {
   const state = resolveNativeBindingState(mode);
   return state.loaded ? undefined : state.error;
 }
 
-export function getNativeTreeSitterSupportedLanguageIds(
-  mode?: NativeRuntimeMode,
-): string[] {
+export function getNativeTreeSitterSupportedLanguageIds(mode?: NativeRuntimeMode): string[] {
   const state = resolveNativeBindingState(mode);
   return state.loaded ? Array.from(state.supportedLanguageIds).sort() : [];
 }
 
-export function runNativeLanguageQueries(
-  source: string,
-  support: LanguageSupport,
-  mode?: NativeRuntimeMode,
-): NativeQueryResults | null {
+export function runNativeLanguageQueries(source: string, support: LanguageSupport, mode?: NativeRuntimeMode): NativeQueryResults | null {
   return getNativeQueryExecution(source, support, mode).results;
 }
 
-type NativeBindingState =
-  | { loaded: true; binding: NativeBinding; supportedLanguageIds: Set<string> }
-  | { loaded: false; error?: unknown };
+type NativeBindingState = { loaded: true; binding: NativeBinding; supportedLanguageIds: Set<string> } | { loaded: false; error?: unknown };
 
-const NATIVE_REQUIRED_ERROR_PREFIX =
-  "native tree-sitter required by explicit option but unavailable";
+const NATIVE_REQUIRED_ERROR_PREFIX = "native tree-sitter required by explicit option but unavailable";
 
 export function isNativeRequiredUnavailableError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    error.message.startsWith(NATIVE_REQUIRED_ERROR_PREFIX)
-  );
+  return error instanceof Error && error.message.startsWith(NATIVE_REQUIRED_ERROR_PREFIX);
 }
 
-function throwIfNativeRequiredUnavailable(
-  mode: NativeRuntimeMode | undefined,
-  state: NativeBindingState,
-): void {
+function throwIfNativeRequiredUnavailable(mode: NativeRuntimeMode | undefined, state: NativeBindingState): void {
   if (normalizeNativeRuntimeMode(mode) !== "on" || state.loaded) return;
   const suffix = state.error ? `: ${stringifyUnknown(state.error)}` : "";
   throw new Error(`${NATIVE_REQUIRED_ERROR_PREFIX}${suffix}`);
@@ -354,10 +284,7 @@ export function getNativeQueryExecutionForState(
       fallbackReason: "unavailable",
       ...(state.error
         ? {
-            error:
-              state.error instanceof Error
-                ? state.error.message
-                : stringifyUnknown(state.error),
+            error: state.error instanceof Error ? state.error.message : stringifyUnknown(state.error),
           }
         : {}),
     };
@@ -428,10 +355,7 @@ export function shouldAvoidJsFallbackForLanguage(languageId: string): boolean {
   return NATIVE_ONLY_JS_FAMILY_LANGUAGE_IDS.has(languageId);
 }
 
-export function isNativeBindingLoadedForLanguage(
-  languageId: string,
-  mode?: NativeRuntimeMode,
-): boolean {
+export function isNativeBindingLoadedForLanguage(languageId: string, mode?: NativeRuntimeMode): boolean {
   const state = resolveNativeBindingState(mode);
   return state.loaded && state.supportedLanguageIds.has(languageId);
 }
@@ -441,11 +365,7 @@ export function isNativeBindingLoadedForLanguage(
  * Falls back to the full execution path if the compact entrypoint is not
  * available in the native binding.
  */
-export function getCompactImportsExecution(
-  source: string,
-  support: LanguageSupport,
-  mode?: NativeRuntimeMode,
-): CompactImportsExecution {
+export function getCompactImportsExecution(source: string, support: LanguageSupport, mode?: NativeRuntimeMode): CompactImportsExecution {
   const state = resolveNativeBindingState(mode);
   throwIfNativeRequiredUnavailable(mode, state);
   if (!state.loaded) {
@@ -454,10 +374,7 @@ export function getCompactImportsExecution(
       fallbackReason: "unavailable",
       ...(state.error
         ? {
-            error:
-              state.error instanceof Error
-                ? state.error.message
-                : stringifyUnknown(state.error),
+            error: state.error instanceof Error ? state.error.message : stringifyUnknown(state.error),
           }
         : {}),
     };
@@ -469,20 +386,11 @@ export function getCompactImportsExecution(
   try {
     if (state.binding.runImportsQueryCompact) {
       return {
-        results: state.binding.runImportsQueryCompact(
-          source,
-          support.id,
-          importsQuery,
-        ),
+        results: state.binding.runImportsQueryCompact(source, support.id, importsQuery),
       };
     }
     // Fallback: use full execution with imports scope
-    const full = getNativeQueryExecutionForState(
-      source,
-      support,
-      state,
-      "imports",
-    );
+    const full = getNativeQueryExecutionForState(source, support, state, "imports");
     if (!full.results) return full;
     return {
       results: {
@@ -515,10 +423,7 @@ export function getNativeSingleQueryExecution(
       fallbackReason: "unavailable",
       ...(state.error
         ? {
-            error:
-              state.error instanceof Error
-                ? state.error.message
-                : stringifyUnknown(state.error),
+            error: state.error instanceof Error ? state.error.message : stringifyUnknown(state.error),
           }
         : {}),
     };
@@ -533,15 +438,10 @@ export function getNativeSingleQueryExecution(
       error: "native binding does not expose runQuery",
     };
   }
-  const normalizedQuery = normalizeNativeQueryForSupport(
-    support,
-    "adHoc",
-    queryText,
-  );
+  const normalizedQuery = normalizeNativeQueryForSupport(support, "adHoc", queryText);
   try {
     return {
-      matches: state.binding.runQuery(source, support.id, normalizedQuery)
-        .matches,
+      matches: state.binding.runQuery(source, support.id, normalizedQuery).matches,
     };
   } catch (error) {
     return {
@@ -559,12 +459,7 @@ export function executeJsQueryAsNativeMatches(
   queryText: string,
   tree?: JsSyntaxTree,
 ): NativeMatch[] {
-  return executeJsQueryAsNativeMatchesViaPackage(
-    source,
-    lang,
-    queryText,
-    tree,
-  ) as NativeMatch[] & JsNativeMatch[];
+  return executeJsQueryAsNativeMatchesViaPackage(source, lang, queryText, tree) as NativeMatch[] & JsNativeMatch[];
 }
 
 export function getUnifiedQueryExecution(
@@ -578,28 +473,18 @@ export function getUnifiedQueryExecution(
     getLanguage?: () => JsLanguage;
   },
 ): UnifiedQueryExecution {
-  const nativeExecution = getNativeSingleQueryExecution(
-    source,
-    support,
-    queryText,
-    opts?.mode,
-  );
+  const nativeExecution = getNativeSingleQueryExecution(source, support, queryText, opts?.mode);
   if (nativeExecution.matches) {
     return {
       matches: nativeExecution.matches,
       backend: "native",
     };
   }
-  if (
-    shouldAvoidJsFallbackForLanguage(support.id) &&
-    isNativeBindingLoadedForLanguage(support.id, opts?.mode)
-  ) {
+  if (shouldAvoidJsFallbackForLanguage(support.id) && isNativeBindingLoadedForLanguage(support.id, opts?.mode)) {
     return {
       matches: null,
       backend: "native",
-      ...(nativeExecution.fallbackReason
-        ? { fallbackReason: nativeExecution.fallbackReason }
-        : {}),
+      ...(nativeExecution.fallbackReason ? { fallbackReason: nativeExecution.fallbackReason } : {}),
       ...(nativeExecution.error ? { error: nativeExecution.error } : {}),
     };
   }
@@ -608,19 +493,11 @@ export function getUnifiedQueryExecution(
     if (!resolvedLang) {
       throw new Error("JS query fallback requires a language");
     }
-    const matches = executeJsQueryAsNativeMatches(
-      source,
-      support,
-      resolvedLang,
-      queryText,
-      opts?.tree,
-    );
+    const matches = executeJsQueryAsNativeMatches(source, support, resolvedLang, queryText, opts?.tree);
     return {
       matches,
       backend: "js",
-      ...(nativeExecution.fallbackReason
-        ? { fallbackReason: nativeExecution.fallbackReason }
-        : {}),
+      ...(nativeExecution.fallbackReason ? { fallbackReason: nativeExecution.fallbackReason } : {}),
       ...(nativeExecution.error ? { error: nativeExecution.error } : {}),
     };
   } catch (error) {
@@ -646,10 +523,7 @@ export function getNativeSyntaxTreeExecution(
       fallbackReason: "unavailable",
       ...(state.error
         ? {
-            error:
-              state.error instanceof Error
-                ? state.error.message
-                : stringifyUnknown(state.error),
+            error: state.error instanceof Error ? state.error.message : stringifyUnknown(state.error),
           }
         : {}),
     };

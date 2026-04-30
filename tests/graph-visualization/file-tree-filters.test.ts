@@ -1,11 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
-import {
-  kindAbbrev,
-  matchesFilter,
-  subtreeMatchesFilter,
-  highlightMatch,
-} from "../../docs/graph-visualization/file-tree-filters.js";
+import { kindAbbrev, matchesFilter, subtreeMatchesFilter, highlightMatch } from "../../docs/graph-visualization/file-tree-filters.js";
 
 describe("kindAbbrev", () => {
   it("maps known kinds to abbreviations", () => {

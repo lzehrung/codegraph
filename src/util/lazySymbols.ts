@@ -302,21 +302,10 @@ export class LazyProjectIndex {
 /**
  * Create a lazy loader for a file's symbols
  */
-export function createSymbolLoader(
-  file: FileId,
-  source: string,
-  imports: ImportBinding[],
-): () => Promise<SymbolDef[]> {
+export function createSymbolLoader(file: FileId, source: string, imports: ImportBinding[]): () => Promise<SymbolDef[]> {
   return async () => {
     const parsed = await parseFile(file);
-    const module = collectLocalsAndExportsFromSource(
-      file,
-      source,
-      parsed.sup,
-      parsed.lang,
-      imports,
-      { tree: parsed.tree },
-    );
+    const module = collectLocalsAndExportsFromSource(file, source, parsed.sup, parsed.lang, imports, { tree: parsed.tree });
     return module.locals;
   };
 }

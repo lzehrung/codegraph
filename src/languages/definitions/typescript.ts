@@ -3,17 +3,11 @@ import { loadTypeScriptGrammars } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
 function normalizeTypeScriptNativeQuery(kind: string, query: string): string {
-  let normalized = query.replace(
-    /\(class_declaration name: \(identifier\) @/g,
-    "(class_declaration name: (type_identifier) @",
-  );
+  let normalized = query.replace(/\(class_declaration name: \(identifier\) @/g, "(class_declaration name: (type_identifier) @");
   if (kind !== "exports") {
     return normalized;
   }
-  normalized = normalized.replace(
-    /^\s*\(export_assignment \(identifier\) @ts_export_assign\)\s*$/gm,
-    "",
-  );
+  normalized = normalized.replace(/^\s*\(export_assignment \(identifier\) @ts_export_assign\)\s*$/gm, "");
   return normalized;
 }
 
@@ -31,8 +25,7 @@ const BASE_STRUCTURE = {
     },
     {
       type: "method_definition",
-      nameQuery:
-        "name: (_) @chunk.name body: (statement_block) @chunk.block.method",
+      nameQuery: "name: (_) @chunk.name body: (statement_block) @chunk.block.method",
       captureId: "method",
     },
 
@@ -83,14 +76,12 @@ const BASE_STRUCTURE = {
     },
     {
       type: "internal_module",
-      nameQuery:
-        "name: (identifier) @chunk.name body: (statement_block) @chunk.block.namespace",
+      nameQuery: "name: (identifier) @chunk.name body: (statement_block) @chunk.block.namespace",
       captureId: "namespace",
     },
     {
       type: "module",
-      nameQuery:
-        "name: (identifier) @chunk.name body: (statement_block) @chunk.block.namespace",
+      nameQuery: "name: (identifier) @chunk.name body: (statement_block) @chunk.block.namespace",
       captureId: "namespace",
     },
 
@@ -210,8 +201,7 @@ const BASE_HELPERS = {
       ].includes(p)
     );
   },
-  createsBlockScope: (n: SyntaxNodeLike) =>
-    n.type === "program" || n.type === "block",
+  createsBlockScope: (n: SyntaxNodeLike) => n.type === "program" || n.type === "block",
   createsFunctionScope: (n: SyntaxNodeLike) =>
     n.type === "function_declaration" ||
     n.type === "function" ||
@@ -232,9 +222,7 @@ export const TYPESCRIPT_DEF: LanguageDefinition = {
   native: {
     normalizeQuery: normalizeTypeScriptNativeQuery,
     authoritativeKinds: ["exports"],
-    notes: [
-      "drops unsupported TypeScript export-assignment nodes while keeping native export results authoritative",
-    ],
+    notes: ["drops unsupported TypeScript export-assignment nodes while keeping native export results authoritative"],
   },
 };
 registerLanguage(TYPESCRIPT_DEF);
@@ -245,11 +233,7 @@ export const TSX_DEF: LanguageDefinition = {
   grammar: () => loadTypeScriptGrammars().tsx,
   structure: {
     ...BASE_STRUCTURE,
-    blocks: [
-      ...BASE_STRUCTURE.blocks,
-      { type: "jsx_element", captureId: "jsx" },
-      { type: "jsx_self_closing_element", captureId: "jsx" },
-    ],
+    blocks: [...BASE_STRUCTURE.blocks, { type: "jsx_element", captureId: "jsx" }, { type: "jsx_self_closing_element", captureId: "jsx" }],
   },
   graph: BASE_GRAPH,
   ...BASE_HELPERS,
@@ -257,9 +241,7 @@ export const TSX_DEF: LanguageDefinition = {
   native: {
     normalizeQuery: normalizeTypeScriptNativeQuery,
     authoritativeKinds: ["exports"],
-    notes: [
-      "drops unsupported TypeScript export-assignment nodes while keeping native export results authoritative",
-    ],
+    notes: ["drops unsupported TypeScript export-assignment nodes while keeping native export results authoritative"],
   },
 };
 registerLanguage(TSX_DEF);

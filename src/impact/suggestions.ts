@@ -1,24 +1,10 @@
 import type { FileId, Range } from "../types.js";
-import type {
-  ExportEntry,
-  ImportBinding,
-  ModuleIndex,
-  ProjectIndex,
-} from "../indexer.js";
+import type { ExportEntry, ImportBinding, ModuleIndex, ProjectIndex } from "../indexer.js";
 import { goToDefinition, ensureParsedContext } from "../indexer.js";
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import {
-  normalizePath,
-  resolveFilePathFromRoot,
-  toProjectRelativePath,
-} from "../util.js";
-import type {
-  FileChange,
-  ImpactOptions,
-  ImpactSuggestion,
-  ImpactSuggestionConfidence,
-} from "./types.js";
+import { normalizePath, resolveFilePathFromRoot, toProjectRelativePath } from "../util.js";
+import type { FileChange, ImpactOptions, ImpactSuggestion, ImpactSuggestionConfidence } from "./types.js";
 
 type ReferenceCandidate = {
   name: string;
@@ -68,40 +54,23 @@ export async function collectImpactSuggestions(
     const mod = index.byFile.get(absoluteFile);
     const importedLocals = collectImportedLocals(mod);
     const importedFiles = collectImportedFiles(mod);
-    const missingExportSuggestions = collectMissingExportSuggestions(
-      mod,
-      exportLookup,
-      reportFile,
-      projectRoot,
-      importedFiles,
-    );
+    const missingExportSuggestions = collectMissingExportSuggestions(mod, exportLookup, reportFile, projectRoot, importedFiles);
 
     for (const suggestion of missingExportSuggestions) {
-      if (maxSuggestions !== undefined && output.length >= maxSuggestions)
-        break;
+      if (maxSuggestions !== undefined && output.length >= maxSuggestions) break;
       pushUniqueSuggestion(output, seen, suggestion);
     }
 
-    const parsedEntry = await ensureParsedContext(
-      absoluteFile,
-      index.parsed?.get(absoluteFile),
-    );
+    const parsedEntry = await ensureParsedContext(absoluteFile, index.parsed?.get(absoluteFile));
     if (!parsedEntry) continue;
 
     const changedLines = collectChangedLines(fileChange.hunks);
-    const candidates = collectReferenceCandidates(
-      parsedEntry.tree,
-      parsedEntry.source,
-      parsedEntry.sup,
-      changedLines,
-    );
+    const candidates = collectReferenceCandidates(parsedEntry.tree, parsedEntry.source, parsedEntry.sup, changedLines);
 
     for (const candidate of candidates) {
-      if (maxSuggestions !== undefined && output.length >= maxSuggestions)
-        break;
+      if (maxSuggestions !== undefined && output.length >= maxSuggestions) break;
       if (importedLocals.has(candidate.name)) continue;
-      if (mod && mod.locals.some((local) => local.localName === candidate.name))
-        continue;
+      if (mod && mod.locals.some((local) => local.localName === candidate.name)) continue;
 
       const result = await goToDefinition(index, {
         file: absoluteFile,
@@ -111,18 +80,11 @@ export async function collectImpactSuggestions(
 
       if (result.status === "ok") continue;
 
-      const exportCandidates =
-        exportLookup.filesByExportName.get(candidate.name) ?? new Set<FileId>();
-      const filteredCandidates = [...exportCandidates].filter(
-        (file) => file !== absoluteFile,
-      );
+      const exportCandidates = exportLookup.filesByExportName.get(candidate.name) ?? new Set<FileId>();
+      const filteredCandidates = [...exportCandidates].filter((file) => file !== absoluteFile);
 
       if (filteredCandidates.length > 0) {
-        const relatedFile = selectBestCandidateFile(
-          index,
-          absoluteFile,
-          filteredCandidates,
-        );
+        const relatedFile = selectBestCandidateFile(index, absoluteFile, filteredCandidates);
         const confidence = determineSuggestionConfidence({
           symbol: candidate.name,
           exportCandidateCount: filteredCandidates.length,
@@ -186,12 +148,7 @@ function collectExportNames(mod: ModuleIndex): Set<string> {
 }
 
 function getExportedName(entry: ExportEntry): string | null {
-  if (
-    entry.type === "local" ||
-    entry.type === "reexport" ||
-    entry.type === "namespaceReexport"
-  )
-    return entry.exportedAs;
+  if (entry.type === "local" || entry.type === "reexport" || entry.type === "namespaceReexport") return entry.exportedAs;
   return null;
 }
 
@@ -207,8 +164,7 @@ function collectImportedLocals(mod?: ModuleIndex): Set<string> {
 
 function getImportLocal(binding: ImportBinding): string | null {
   if (binding.kind === "namespace") return binding.localNS;
-  if (binding.kind === "default" || binding.kind === "named")
-    return binding.local;
+  if (binding.kind === "default" || binding.kind === "named") return binding.local;
   return null;
 }
 
@@ -261,16 +217,13 @@ function collectMissingExportSuggestions(
 
     if (binding.kind === "named") {
       if (!exportedNames.has(binding.imported)) {
-        const exportCandidates =
-          lookup.filesByExportName.get(binding.imported) ?? new Set<FileId>();
+        const exportCandidates = lookup.filesByExportName.get(binding.imported) ?? new Set<FileId>();
         const candidateList = [...exportCandidates];
-        const singleCandidate =
-          candidateList.length === 1 ? candidateList[0] : undefined;
+        const singleCandidate = candidateList.length === 1 ? candidateList[0] : undefined;
         const confidence = determineSuggestionConfidence({
           symbol: binding.imported,
           exportCandidateCount: candidateList.length,
-          importedCandidate:
-            singleCandidate !== undefined && importedFiles.has(singleCandidate),
+          importedCandidate: singleCandidate !== undefined && importedFiles.has(singleCandidate),
         });
         suggestions.push({
           file: reportFile,
@@ -286,16 +239,13 @@ function collectMissingExportSuggestions(
 
     if (binding.kind === "default") {
       if (!exportedNames.has("default")) {
-        const exportCandidates =
-          lookup.filesByExportName.get("default") ?? new Set<FileId>();
+        const exportCandidates = lookup.filesByExportName.get("default") ?? new Set<FileId>();
         const candidateList = [...exportCandidates];
-        const singleCandidate =
-          candidateList.length === 1 ? candidateList[0] : undefined;
+        const singleCandidate = candidateList.length === 1 ? candidateList[0] : undefined;
         const confidence = determineSuggestionConfidence({
           symbol: "default",
           exportCandidateCount: candidateList.length,
-          importedCandidate:
-            singleCandidate !== undefined && importedFiles.has(singleCandidate),
+          importedCandidate: singleCandidate !== undefined && importedFiles.has(singleCandidate),
         });
         suggestions.push({
           file: reportFile,
@@ -312,11 +262,7 @@ function collectMissingExportSuggestions(
   return suggestions;
 }
 
-function selectBestCandidateFile(
-  index: ProjectIndex,
-  sourceFile: FileId,
-  candidates: FileId[],
-): FileId {
+function selectBestCandidateFile(index: ProjectIndex, sourceFile: FileId, candidates: FileId[]): FileId {
   if (candidates.length === 0) {
     throw new Error("selectBestCandidateFile called with no candidates");
   }
@@ -343,12 +289,8 @@ function collectReferenceCandidates(
   changedLines: Set<number>,
 ): ReferenceCandidate[] {
   const candidates: ReferenceCandidate[] = [];
-  const propertyIdentifiers = new Set<string>(
-    sup.nodeTypes.propertyIdentifier ?? [],
-  );
-  const shorthandPropertyIdentifiers = new Set<string>(
-    sup.nodeTypes.shorthandPropertyIdentifier ?? [],
-  );
+  const propertyIdentifiers = new Set<string>(sup.nodeTypes.propertyIdentifier ?? []);
+  const shorthandPropertyIdentifiers = new Set<string>(sup.nodeTypes.shorthandPropertyIdentifier ?? []);
 
   const walk = (node: SyntaxNodeLike) => {
     if (!node) return;
@@ -360,9 +302,7 @@ function collectReferenceCandidates(
     if (sup.nodeTypes.identifier.includes(node.type)) {
       if (!sup.isDeclarationName(node) && !isInImportOrExport(node)) {
         const isPropertyIdentifier = propertyIdentifiers.has(node.type);
-        const isShorthandPropertyIdentifier = shorthandPropertyIdentifiers.has(
-          node.type,
-        );
+        const isShorthandPropertyIdentifier = shorthandPropertyIdentifiers.has(node.type);
         if (!isPropertyIdentifier && !isShorthandPropertyIdentifier) {
           candidates.push({
             name: source.slice(node.startIndex, node.endIndex),
@@ -381,11 +321,7 @@ function collectReferenceCandidates(
   return candidates;
 }
 
-function rangeIntersectsLines(
-  startLine: number,
-  endLine: number,
-  changedLines: Set<number>,
-): boolean {
+function rangeIntersectsLines(startLine: number, endLine: number, changedLines: Set<number>): boolean {
   for (let line = startLine; line <= endLine; line++) {
     if (changedLines.has(line)) return true;
   }
@@ -433,20 +369,10 @@ function toProjectRelative(projectRoot: string, file: FileId): FileId {
   return toProjectRelativePath(projectRoot, file) ?? normalizeFilePath(file);
 }
 
-function pushUniqueSuggestion(
-  output: ImpactSuggestion[],
-  seen: Set<string>,
-  suggestion: ImpactSuggestion,
-): void {
+function pushUniqueSuggestion(output: ImpactSuggestion[], seen: Set<string>, suggestion: ImpactSuggestion): void {
   const range = suggestion.range?.start;
   const rangeKey = range ? `${range.line}:${range.column}` : "no-range";
-  const keyParts = [
-    suggestion.file,
-    suggestion.kind,
-    suggestion.symbol ?? "",
-    suggestion.relatedFile ?? "",
-    rangeKey,
-  ];
+  const keyParts = [suggestion.file, suggestion.kind, suggestion.symbol ?? "", suggestion.relatedFile ?? "", rangeKey];
   const key = keyParts.join("|");
   if (seen.has(key)) return;
   seen.add(key);

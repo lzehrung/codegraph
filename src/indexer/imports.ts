@@ -1,11 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import {
-  isJsFallbackAvailable,
-  isJsFallbackUnavailableError,
-  parseWithJsLanguage,
-  type JsSyntaxTree,
-} from "../jsFallback.js";
+import { isJsFallbackAvailable, isJsFallbackUnavailableError, parseWithJsLanguage, type JsSyntaxTree } from "../jsFallback.js";
 import { prepareSourceInput } from "../languages/filePrep.js";
 import {
   parseCsharpUsingDirective,
@@ -28,22 +23,14 @@ import {
   unquote,
 } from "../util.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
-import {
-  type FallbackImportExtractionEvent,
-  type FallbackImportExtractionReason,
-  type GraphBuildOptions,
-} from "../graphs.js";
+import { type FallbackImportExtractionEvent, type FallbackImportExtractionReason, type GraphBuildOptions } from "../graphs.js";
 import {
   extractGraphOnlyModuleSpecifiers,
   graphOnlyLanguageSupportsImportAliases,
   graphOnlySpecifierNeedsResolutionConfig,
   isGraphOnlyLanguage,
 } from "../documentLinks.js";
-import {
-  capturesByName,
-  capturesNamed,
-  rangeFromNativeCapture,
-} from "../native/queryResults.js";
+import { capturesByName, capturesNamed, rangeFromNativeCapture } from "../native/queryResults.js";
 import {
   executeJsQueryAsNativeMatches,
   isNativeQueryAuthoritative,
@@ -56,9 +43,7 @@ import type { LanguageSupport } from "../languages.js";
 import type { JsLanguage } from "../languages/types.js";
 import type { ImportBinding } from "./types.js";
 
-function parseObjectPatternBindings(
-  patternText: string,
-): Array<{ imported: string; local: string }> {
+function parseObjectPatternBindings(patternText: string): Array<{ imported: string; local: string }> {
   const trimmed = patternText.trim();
   if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return [];
   const body = trimmed.slice(1, -1).trim();
@@ -70,9 +55,7 @@ function parseObjectPatternBindings(
   const out: Array<{ imported: string; local: string }> = [];
   for (const part of parts) {
     const withoutDefault = part.replace(/\s*=\s*.+$/, "").trim();
-    const match = withoutDefault.match(
-      /^([A-Za-z_$][\w$]*)(?::\s*([A-Za-z_$][\w$]*))?$/,
-    );
+    const match = withoutDefault.match(/^([A-Za-z_$][\w$]*)(?::\s*([A-Za-z_$][\w$]*))?$/);
     if (!match) continue;
     const imported = match[1]!;
     const local = match[2] ?? imported;
@@ -100,10 +83,7 @@ export async function collectImportsForFile(
   let lang = opts?.lang;
 
   if (!source || !sup) {
-    const prep = await prepareSourceInput(
-      file,
-      source !== undefined ? { source } : undefined,
-    );
+    const prep = await prepareSourceInput(file, source !== undefined ? { source } : undefined);
     source = prep.source;
     sup = prep.sup;
   }
@@ -112,44 +92,25 @@ export async function collectImportsForFile(
   const resolvedSup = sup;
   let resolvedLang = lang;
   if (isGraphOnlyLanguage(resolvedSup.id)) {
-    const entries = Array.from(
-      extractGraphOnlyModuleSpecifiers(resolvedSup.id, resolvedSource),
-    );
+    const entries = Array.from(extractGraphOnlyModuleSpecifiers(resolvedSup.id, resolvedSource));
     const needsGraphOnlyResolutionConfig =
-      graphOnlyLanguageSupportsImportAliases(resolvedSup.id) &&
-      entries.some(({ spec }) => graphOnlySpecifierNeedsResolutionConfig(spec));
-    const { matchPath } = needsGraphOnlyResolutionConfig
-      ? await loadNearestTsconfigFor(file, opts?.logLevel)
-      : { matchPath: undefined };
-    const workspaceConfig = needsGraphOnlyResolutionConfig
-      ? await loadWorkspaceConfig(projectRoot)
-      : undefined;
+      graphOnlyLanguageSupportsImportAliases(resolvedSup.id) && entries.some(({ spec }) => graphOnlySpecifierNeedsResolutionConfig(spec));
+    const { matchPath } = needsGraphOnlyResolutionConfig ? await loadNearestTsconfigFor(file, opts?.logLevel) : { matchPath: undefined };
+    const workspaceConfig = needsGraphOnlyResolutionConfig ? await loadWorkspaceConfig(projectRoot) : undefined;
     const resolutionHints = opts?.graphOptions?.resolutionHints;
     const resolvedSpecifiers = await Promise.all(
       entries.map((entry) =>
-        resolveSpecifier(
-          file,
-          entry.spec,
-          projectRoot,
-          matchPath,
-          workspaceConfig,
-          {
-            resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
-            resolutionExtensions: getGraphOnlyResolutionExtensions(
-              resolvedSup.id,
-              entry.resolutionKind ?? "document",
-            ),
-            ...(resolutionHints ? { resolutionHints } : {}),
-          },
-        ),
+        resolveSpecifier(file, entry.spec, projectRoot, matchPath, workspaceConfig, {
+          resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
+          resolutionExtensions: getGraphOnlyResolutionExtensions(resolvedSup.id, entry.resolutionKind ?? "document"),
+          ...(resolutionHints ? { resolutionHints } : {}),
+        }),
       ),
     );
     return entries.flatMap((entry, index) => {
       const resolved = resolvedSpecifiers[index];
       if (resolved === undefined) {
-        throw new Error(
-          `Missing graph-only resolution result for ${resolvedSup.id}:${entry.spec}`,
-        );
+        throw new Error(`Missing graph-only resolution result for ${resolvedSup.id}:${entry.spec}`);
       }
       if (typeof resolved !== "string" && entry.dropIfUnresolved) {
         return [];
@@ -159,9 +120,7 @@ export async function collectImportsForFile(
         {
           kind: "star" as const,
           from,
-          ...(typeof resolved === "string"
-            ? { resolved: resolved.replace(/\\/g, "/") }
-            : { resolved: { ...resolved, external: from } }),
+          ...(typeof resolved === "string" ? { resolved: resolved.replace(/\\/g, "/") } : { resolved: { ...resolved, external: from } }),
         },
       ];
     });
@@ -186,8 +145,7 @@ export async function collectImportsForFile(
       return;
     }
     const aliasByFrom = new Map<string, string>();
-    const importPattern =
-      /^\s*(?:import\s+)?(?:(?<alias>[._A-Za-z][\w]*)\s+)?["'`](?<from>[^"'`]+)["'`]/gm;
+    const importPattern = /^\s*(?:import\s+)?(?:(?<alias>[._A-Za-z][\w]*)\s+)?["'`](?<from>[^"'`]+)["'`]/gm;
     for (const match of resolvedSource.matchAll(importPattern)) {
       const from = match.groups?.from;
       if (!from) continue;
@@ -234,16 +192,13 @@ export async function collectImportsForFile(
     if (resolvedSup.id !== "java" || imports.length > 0) {
       return;
     }
-    const importPattern =
-      /^\s*import\s+(static\s+)?([A-Za-z_][\w.]*(?:\.\*)?)\s*;/gm;
+    const importPattern = /^\s*import\s+(static\s+)?([A-Za-z_][\w.]*(?:\.\*)?)\s*;/gm;
     for (const match of resolvedSource.matchAll(importPattern)) {
       const isStatic = !!match[1];
       const rawSpec = match[2];
       if (!rawSpec) continue;
       if (rawSpec.endsWith(".*")) {
-        const resolved = await resolveFrom(
-          isStatic ? rawSpec.slice(0, -2) : rawSpec,
-        );
+        const resolved = await resolveFrom(isStatic ? rawSpec.slice(0, -2) : rawSpec);
         imports.push({
           kind: "star",
           from: rawSpec,
@@ -272,8 +227,7 @@ export async function collectImportsForFile(
     if (resolvedSup.id !== "kotlin" || imports.length > 0) {
       return;
     }
-    const importPattern =
-      /^\s*import\s+([A-Za-z_][\w.]*(?:\.\*)?)(?:\s+as\s+([A-Za-z_][\w]*))?\s*$/gm;
+    const importPattern = /^\s*import\s+([A-Za-z_][\w.]*(?:\.\*)?)(?:\s+as\s+([A-Za-z_][\w]*))?\s*$/gm;
     for (const match of resolvedSource.matchAll(importPattern)) {
       const rawSpec = match[1];
       if (!rawSpec) continue;
@@ -310,9 +264,7 @@ export async function collectImportsForFile(
 
     const implicitFiles = await getPhpComposerImplicitFiles(projectRoot, file);
     const seenResolved = new Set(
-      imports
-        .map((entry) => (typeof entry.resolved === "string" ? entry.resolved : null))
-        .filter((entry): entry is string => !!entry),
+      imports.map((entry) => (typeof entry.resolved === "string" ? entry.resolved : null)).filter((entry): entry is string => !!entry),
     );
 
     for (const implicitFile of implicitFiles) {
@@ -325,10 +277,7 @@ export async function collectImportsForFile(
       }
 
       const relativeFrom = path.relative(path.dirname(file), implicitFile).replace(/\\/g, "/");
-      const from =
-        relativeFrom.startsWith(".") || relativeFrom.startsWith("/")
-          ? relativeFrom
-          : `./${relativeFrom}`;
+      const from = relativeFrom.startsWith(".") || relativeFrom.startsWith("/") ? relativeFrom : `./${relativeFrom}`;
       imports.push({
         kind: "star",
         from,
@@ -345,10 +294,7 @@ export async function collectImportsForFile(
     await appendPhpComposerImplicitImports();
   };
   const handledStatementImports = new Set<string>();
-  const applyStatementImportOverride = async (
-    stmtText: string,
-    typeOnly: boolean,
-  ): Promise<boolean> => {
+  const applyStatementImportOverride = async (stmtText: string, typeOnly: boolean): Promise<boolean> => {
     const normalizedStmt = stmtText.trim();
     if (!normalizedStmt) return false;
 
@@ -523,12 +469,7 @@ export async function collectImportsForFile(
       const m = moduleSpec.match(/^(\.+)(.*)$/);
       const relDots = m ? m[1]!.length : 0;
       const mod = m ? m[2] || null : moduleSpec;
-      const resolved = await resolvePythonModule(
-        projectRoot,
-        file,
-        mod,
-        relDots,
-      );
+      const resolved = await resolvePythonModule(projectRoot, file, mod, relDots);
       imports.push({
         kind: "star",
         from: moduleSpec,
@@ -536,38 +477,21 @@ export async function collectImportsForFile(
         mechanism: "python",
       });
     };
-    const pushNamed = async (
-      moduleSpec: string,
-      imported: string,
-      local: string,
-    ) => {
+    const pushNamed = async (moduleSpec: string, imported: string, local: string) => {
       const m = moduleSpec.match(/^(\.+)(.*)$/);
       const relDots = m ? m[1]!.length : 0;
       const mod = m ? m[2] || null : moduleSpec;
-      const resolved = await resolvePythonModule(
-        projectRoot,
-        file,
-        mod,
-        relDots,
-      );
+      const resolved = await resolvePythonModule(projectRoot, file, mod, relDots);
       let nsResolved: string | undefined;
       if (typeof resolved === "string") {
         let baseDir = resolved;
         try {
           const st = fs.statSync(baseDir);
-          if (
-            !st.isDirectory() &&
-            baseDir.toLowerCase().endsWith("__init__.py")
-          )
-            baseDir = path.dirname(baseDir);
+          if (!st.isDirectory() && baseDir.toLowerCase().endsWith("__init__.py")) baseDir = path.dirname(baseDir);
         } catch {
           /* stat failed */
         }
-        const sub = [
-          path.join(baseDir, `${imported}.py`),
-          path.join(baseDir, imported, "__init__.py"),
-          path.join(baseDir, imported),
-        ];
+        const sub = [path.join(baseDir, `${imported}.py`), path.join(baseDir, imported, "__init__.py"), path.join(baseDir, imported)];
         for (const c of sub) {
           try {
             if (fs.existsSync(c)) {
@@ -618,9 +542,7 @@ export async function collectImportsForFile(
           await pushStar(mod);
           continue;
         }
-        const am = it.match(
-          /^([A-Za-z_][\w_]*)(?:\s+as\s+([A-Za-z_][\w_]*))?$/,
-        );
+        const am = it.match(/^([A-Za-z_][\w_]*)(?:\s+as\s+([A-Za-z_][\w_]*))?$/);
         if (am) {
           const imported = am[1]!;
           const local = am[2] ?? imported;
@@ -628,8 +550,7 @@ export async function collectImportsForFile(
         }
       }
     }
-    const reImp =
-      /^(?:\s*)import\s+([A-Za-z_][\w.]*)\s*(?:as\s+([A-Za-z_][\w_]*))?/gm;
+    const reImp = /^(?:\s*)import\s+([A-Za-z_][\w.]*)\s*(?:as\s+([A-Za-z_][\w_]*))?/gm;
     for (const m of pySrc.matchAll(reImp)) {
       const dotted = m[1]!;
       const local = (m[2] ?? dotted.split(".")[0]) as string;
@@ -638,44 +559,25 @@ export async function collectImportsForFile(
     return imports;
   }
 
-  const key =
-    resolvedSup.id === "python" ? "py" : resolvedSup.id === "js" ? "js" : "ts";
-  const tsCfg =
-    resolvedSup.id === "ts" || resolvedSup.id === "tsx"
-      ? await loadNearestTsconfigFor(file, opts?.logLevel)
-      : undefined;
+  const key = resolvedSup.id === "python" ? "py" : resolvedSup.id === "js" ? "js" : "ts";
+  const tsCfg = resolvedSup.id === "ts" || resolvedSup.id === "tsx" ? await loadNearestTsconfigFor(file, opts?.logLevel) : undefined;
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
 
-  const resolveFrom = async (
-    from: string,
-    phpImportType?: "class" | "function" | "const",
-  ) => {
+  const resolveFrom = async (from: string, phpImportType?: "class" | "function" | "const") => {
     const resolutionHints = opts?.graphOptions?.resolutionHints;
-    const resolved = await resolveImportSpecifier(
-      projectRoot,
-      file,
-      from,
-      resolvedSup.id,
-      {
-        ...(tsCfg?.matchPath ? { matchPath: tsCfg.matchPath } : {}),
-        ...(workspaceConfig ? { workspaceConfig } : {}),
-        resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
-        ...(resolutionHints ? { resolutionHints } : {}),
-        ...(phpImportType ? { phpImportType } : {}),
-      },
-    );
-    return typeof resolved === "string"
-      ? resolved.replace(/\\/g, "/")
-      : resolved;
+    const resolved = await resolveImportSpecifier(projectRoot, file, from, resolvedSup.id, {
+      ...(tsCfg?.matchPath ? { matchPath: tsCfg.matchPath } : {}),
+      ...(workspaceConfig ? { workspaceConfig } : {}),
+      resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
+      ...(resolutionHints ? { resolutionHints } : {}),
+      ...(phpImportType ? { phpImportType } : {}),
+    });
+    return typeof resolved === "string" ? resolved.replace(/\\/g, "/") : resolved;
   };
 
   const runFallback = async () => {
     const src =
-      resolvedSup.id === "ts" ||
-      resolvedSup.id === "tsx" ||
-      resolvedSup.id === "js"
-        ? stripJsLikeComments(resolvedSource)
-        : resolvedSource;
+      resolvedSup.id === "ts" || resolvedSup.id === "tsx" || resolvedSup.id === "js" ? stripJsLikeComments(resolvedSource) : resolvedSource;
     const typeOnlyImport = /\bimport\s+type\b/;
     const reFrom = /^\s*import\s+([^\n;]*?)\s+from\s+(["'])(?<m>[^"']+)\2/gm;
     for (const m of src.matchAll(reFrom)) {
@@ -705,18 +607,14 @@ export async function collectImportsForFile(
             resolved,
             typeOnly,
           });
-        const namedBlock =
-          parts.slice(1).join(",").trim() ||
-          (first.startsWith("{") ? first : "");
+        const namedBlock = parts.slice(1).join(",").trim() || (first.startsWith("{") ? first : "");
         const names = namedBlock
           .replace(/[{}]/g, "")
           .split(",")
           .map((s) => s.trim())
           .filter(Boolean);
         for (const spec of names) {
-          const nm = spec.match(
-            /^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/,
-          );
+          const nm = spec.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
           if (!nm) continue;
           const imported = nm[1]!;
           const local = nm[2] ?? imported;
@@ -731,8 +629,7 @@ export async function collectImportsForFile(
         }
       }
     }
-    const reReqDefault =
-      /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
+    const reReqDefault = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
     for (const m of src.matchAll(reReqDefault)) {
       const local = m[1]!;
       const mod = m.groups?.m as string;
@@ -745,8 +642,7 @@ export async function collectImportsForFile(
         mechanism: "cjs",
       });
     }
-    const reReqNamed =
-      /\b(?:const|let|var)\s*\{([^}]+)\}\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
+    const reReqNamed = /\b(?:const|let|var)\s*\{([^}]+)\}\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
     for (const m of src.matchAll(reReqNamed)) {
       const specs = m[1]!
         .split(",")
@@ -755,9 +651,7 @@ export async function collectImportsForFile(
       const mod = m.groups?.m as string;
       const resolved = await resolveFrom(mod);
       for (const spec of specs) {
-        const nm = spec.match(
-          /^([A-Za-z_$][\w$]*)(?::\s*([A-Za-z_$][\w$]*))?$/,
-        );
+        const nm = spec.match(/^([A-Za-z_$][\w$]*)(?::\s*([A-Za-z_$][\w$]*))?$/);
         if (!nm) continue;
         const imported = nm[1]!;
         const local = nm[2] ?? imported;
@@ -771,8 +665,7 @@ export async function collectImportsForFile(
         });
       }
     }
-    const reImportEquals =
-      /\bimport\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
+    const reImportEquals = /\bimport\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*(["'])(?<m>[^"']+)\2\s*\)/g;
     for (const m of src.matchAll(reImportEquals)) {
       const local = m[1]!;
       const mod = m.groups?.m as string;
@@ -787,12 +680,8 @@ export async function collectImportsForFile(
     }
   };
 
-  const shouldUseTextImportRecoveryOnly = shouldAvoidJsFallbackForLanguage(
-    resolvedSup.id,
-  );
-  const hasPotentialTextImportRecovery =
-    shouldUseTextImportRecoveryOnly &&
-    /\b(import|require|from)\b/.test(resolvedSource);
+  const shouldUseTextImportRecoveryOnly = shouldAvoidJsFallbackForLanguage(resolvedSup.id);
+  const hasPotentialTextImportRecovery = shouldUseTextImportRecoveryOnly && /\b(import|require|from)\b/.test(resolvedSource);
 
   if (shouldUseTextImportRecoveryOnly) {
     const importCountBeforeFallback = imports.length;
@@ -800,10 +689,7 @@ export async function collectImportsForFile(
       await runFallback();
     }
     await finalizeLanguageSpecificImports();
-    if (
-      imports.length > importCountBeforeFallback &&
-      !isJsFallbackAvailable()
-    ) {
+    if (imports.length > importCountBeforeFallback && !isJsFallbackAvailable()) {
       reportFallback("js-fallback-unavailable");
     }
     return imports;
@@ -892,12 +778,7 @@ export async function collectImportsForFile(
           });
         }
 
-        if (
-          !caps["def"] &&
-          !caps["ns"] &&
-          inames.length === 0 &&
-          patterns.length === 0
-        ) {
+        if (!caps["def"] && !caps["ns"] && inames.length === 0 && patterns.length === 0) {
           if (resolvedSup.id === "java") {
             const parts = from.split(".");
             const last = parts[parts.length - 1];
@@ -1037,10 +918,7 @@ export async function collectImportsForFile(
       // but only when the importBindings query was not modified by
       // normalization. Languages whose importBindings query is normalized
       // or blanked (e.g. Kotlin) may need the JS/text fallback.
-      if (
-        imports.length > 0 ||
-        isNativeQueryAuthoritative(resolvedSup, "importBindings")
-      ) {
+      if (imports.length > 0 || isNativeQueryAuthoritative(resolvedSup, "importBindings")) {
         return imports;
       }
     } catch {
@@ -1051,8 +929,7 @@ export async function collectImportsForFile(
   try {
     let tree: JsSyntaxTree;
     try {
-      tree =
-        opts?.tree ?? parseWithJsLanguage(resolvedSource, ensureResolvedLang());
+      tree = opts?.tree ?? parseWithJsLanguage(resolvedSource, ensureResolvedLang());
     } catch (error) {
       if (isNativeRequiredUnavailableError(error)) throw error;
       if (isJsFallbackUnavailableError(error)) {
@@ -1078,33 +955,21 @@ export async function collectImportsForFile(
         tree,
       );
       for (const match of matches) {
-        const caps = Object.fromEntries(
-          match.captures.map((capture) => [capture.name, capture] as const),
-        );
+        const caps = Object.fromEntries(match.captures.map((capture) => [capture.name, capture] as const));
         const stmtText = caps["stmt"]?.text ?? "";
         const typeOnly = resolvedSup.isTypeOnly(stmtText);
         if (await applyStatementImportOverride(stmtText, typeOnly)) {
           continue;
         }
-        const from: string | undefined = caps["from"]
-          ? unquote(caps["from"].text)
-          : undefined;
+        const from: string | undefined = caps["from"] ? unquote(caps["from"].text) : undefined;
 
-        const patterns = match.captures.filter(
-          (capture) => capture.name === "pattern",
-        );
+        const patterns = match.captures.filter((capture) => capture.name === "pattern");
         for (const pattern of patterns) {
           const patternRange = rangeFromNativeCapture(pattern);
-          const patternNode = tree.rootNode.descendantForIndex(
-            patternRange.start.index ?? 0,
-            patternRange.end.index ?? 0,
-          );
+          const patternNode = tree.rootNode.descendantForIndex(patternRange.start.index ?? 0, patternRange.end.index ?? 0);
           if (patternNode.type === "object_pattern" && from) {
             for (const child of patternNode.namedChildren) {
-              if (
-                child.type === "shorthand_property_identifier" ||
-                child.type === "shorthand_property_identifier_pattern"
-              ) {
+              if (child.type === "shorthand_property_identifier" || child.type === "shorthand_property_identifier_pattern") {
                 const name = sliceText(child, source);
                 const resolved = await resolveFrom(from);
                 imports.push({
@@ -1118,12 +983,7 @@ export async function collectImportsForFile(
               } else if (child.type === "pair_pattern") {
                 const key = child.childForFieldName("key");
                 const value = child.childForFieldName("value");
-                if (
-                  key &&
-                  value &&
-                  key.type === "property_identifier" &&
-                  value.type === "identifier"
-                ) {
+                if (key && value && key.type === "property_identifier" && value.type === "identifier") {
                   const imported = sliceText(key, source);
                   const local = sliceText(value, source);
                   const resolved = await resolveFrom(from);
@@ -1183,12 +1043,8 @@ export async function collectImportsForFile(
             });
           }
         }
-        const inames = match.captures.filter(
-          (capture) => capture.name === "iname",
-        );
-        const aliases = match.captures.filter(
-          (capture) => capture.name === "alias",
-        );
+        const inames = match.captures.filter((capture) => capture.name === "iname");
+        const aliases = match.captures.filter((capture) => capture.name === "alias");
         for (let i = 0; i < inames.length; i++) {
           const imported = inames[i]!.text;
           const alias = aliases[i]?.text ?? imported;
@@ -1203,13 +1059,7 @@ export async function collectImportsForFile(
         }
 
         // Heuristics for languages where we captured @from but no explicit bindings
-        if (
-          fromValue &&
-          !caps["def"] &&
-          !caps["ns"] &&
-          inames.length === 0 &&
-          patterns.length === 0
-        ) {
+        if (fromValue && !caps["def"] && !caps["ns"] && inames.length === 0 && patterns.length === 0) {
           if (resolvedSup.id === "java") {
             // import java.util.List; -> local "List"
             const parts = fromValue.split(".");
@@ -1406,4 +1256,3 @@ export async function collectImportsForFile(
     // the optional JS fallback loader bridge.
   }
 }
-

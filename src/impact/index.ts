@@ -17,15 +17,8 @@ import { buildImpactReport } from "./report.js";
 import { collectImpactSuggestions } from "./suggestions.js";
 import { listCandidateTestFiles } from "./context.js";
 import { mapLimit, resolveFilePathFromRoot } from "../util.js";
-import {
-  createImpactIgnoreMatcher,
-  normalizeImpactDiffFiles,
-  normalizeImpactFilePath,
-} from "./path.js";
-import {
-  compileTestPatterns,
-  createIndexTestFileMatcher,
-} from "./testPatterns.js";
+import { createImpactIgnoreMatcher, normalizeImpactDiffFiles, normalizeImpactFilePath } from "./path.js";
+import { compileTestPatterns, createIndexTestFileMatcher } from "./testPatterns.js";
 
 export * from "./types.js";
 export { analyzeImpactStreaming, type ImpactStreamChunk } from "./streaming.js";
@@ -120,10 +113,7 @@ function aliasMatchesImport(alias: string, rawSpecifier: string): boolean {
   return rawSpecifier === alias;
 }
 
-function collectTsconfigBlastRadius(
-  index: ProjectIndex,
-  aliases: string[],
-): { aliases: string[]; importers: string[] } {
+function collectTsconfigBlastRadius(index: ProjectIndex, aliases: string[]): { aliases: string[]; importers: string[] } {
   if (aliases.length === 0) {
     return { aliases: [], importers: [] };
   }
@@ -166,32 +156,24 @@ function classifyConfigImpact(
   if (lowerPath.endsWith("package.json")) {
     if (lineSignals.includes('"scripts"')) {
       return {
-        details:
-          "package.json scripts changed; CI/build workflows may be affected across packages.",
+        details: "package.json scripts changed; CI/build workflows may be affected across packages.",
         confidence: "medium",
       };
     }
-    if (
-      lineSignals.includes('"dependencies"') ||
-      lineSignals.includes('"devdependencies"')
-    ) {
+    if (lineSignals.includes('"dependencies"') || lineSignals.includes('"devdependencies"')) {
       return {
-        details:
-          "package.json dependency graph changed; dependency resolution can affect multiple workspaces.",
+        details: "package.json dependency graph changed; dependency resolution can affect multiple workspaces.",
         confidence: "high",
       };
     }
   }
 
-  const isTsconfig =
-    lowerPath.endsWith("tsconfig.json") || lowerPath.endsWith("jsconfig.json");
+  const isTsconfig = lowerPath.endsWith("tsconfig.json") || lowerPath.endsWith("jsconfig.json");
   if (isTsconfig) {
     const aliases = collectTsconfigPathAliases(change);
     const blastRadius = collectTsconfigBlastRadius(index, aliases);
     if (blastRadius.aliases.length > 0) {
-      const relImporters = blastRadius.importers
-        .slice(0, 5)
-        .map((file) => path.relative(projectRoot, file).replace(/\\/g, "/"));
+      const relImporters = blastRadius.importers.slice(0, 5).map((file) => path.relative(projectRoot, file).replace(/\\/g, "/"));
       const importerSummary =
         blastRadius.importers.length > 0
           ? `Likely impacted importer files: ${relImporters.join(", ")}${
@@ -204,8 +186,7 @@ function classifyConfigImpact(
       };
     }
     return {
-      details:
-        "TypeScript/JavaScript compiler config changed; type-checking and module resolution can shift project-wide.",
+      details: "TypeScript/JavaScript compiler config changed; type-checking and module resolution can shift project-wide.",
       confidence: "high",
     };
   }
@@ -217,22 +198,16 @@ function classifyConfigImpact(
     lowerPath.includes("esbuild.config");
   if (isBuildToolConfig) {
     const signalParts: string[] = [];
-    if (lineSignals.includes("alias"))
-      signalParts.push("module alias resolution");
+    if (lineSignals.includes("alias")) signalParts.push("module alias resolution");
     if (lineSignals.includes("input") || lineSignals.includes("entry")) {
       signalParts.push("entrypoint selection");
     }
     if (lineSignals.includes("output") || lineSignals.includes("outdir")) {
       signalParts.push("bundle output targets");
     }
-    if (lineSignals.includes("plugin"))
-      signalParts.push("plugin execution order");
-    if (lineSignals.includes("define"))
-      signalParts.push("compile-time constants");
-    const detailsSuffix =
-      signalParts.length > 0
-        ? ` Detected changes touch ${signalParts.join(", ")}.`
-        : "";
+    if (lineSignals.includes("plugin")) signalParts.push("plugin execution order");
+    if (lineSignals.includes("define")) signalParts.push("compile-time constants");
+    const detailsSuffix = signalParts.length > 0 ? ` Detected changes touch ${signalParts.join(", ")}.` : "";
     return {
       details: `Build tool configuration changed (${path.basename(change.path)}); bundling and runtime artifact behavior may change.${detailsSuffix}`,
       confidence: "high",
@@ -261,14 +236,12 @@ function classifyConfigImpact(
 
   if (lowerPath.includes(".env")) {
     return {
-      details:
-        "Environment configuration changed; runtime behavior may differ across services and deploy environments.",
+      details: "Environment configuration changed; runtime behavior may differ across services and deploy environments.",
       confidence: "medium",
     };
   }
   return {
-    details:
-      "Configuration change detected; impact can be broad and may require full-project validation.",
+    details: "Configuration change detected; impact can be broad and may require full-project validation.",
     confidence: "high",
   };
 }
@@ -306,14 +279,9 @@ function collectConfigAndBreakingSuggestions(
   for (const fileChange of fileChanges) {
     const normalized = normalizeImpactFilePath(projectRoot, fileChange.path);
     removedLinesByFile.set(normalized, collectRemovedLines(fileChange));
-    if (!opts.configImpactRules || !matchesConfigSemantics(fileChange.path))
-      continue;
+    if (!opts.configImpactRules || !matchesConfigSemantics(fileChange.path)) continue;
 
-    const configSemantics = classifyConfigImpact(
-      index,
-      projectRoot,
-      fileChange,
-    );
+    const configSemantics = classifyConfigImpact(index, projectRoot, fileChange);
     suggestions.push({
       file: normalized,
       kind: "configImpact",
@@ -356,8 +324,7 @@ function collectConfigAndBreakingSuggestions(
         range: symbol.range,
         kind: "breakingChange",
         symbol: symbol.name,
-        details:
-          "Exported symbol overlaps removed lines; verify call sites for potential breaking changes.",
+        details: "Exported symbol overlaps removed lines; verify call sites for potential breaking changes.",
         confidence: "medium",
       });
     }
@@ -368,15 +335,12 @@ function collectConfigAndBreakingSuggestions(
       if (!removedLines || removedLines.size === 0) continue;
       const mod = index.byFile.get(normalized);
       const hasExports = (mod?.exports.length ?? 0) > 0;
-      const alreadyHasForFile = Array.from(breakingByKey.values()).some(
-        (entry) => entry.file === normalized,
-      );
+      const alreadyHasForFile = Array.from(breakingByKey.values()).some((entry) => entry.file === normalized);
       if (!hasExports || alreadyHasForFile) continue;
       upsertBreakingSuggestion({
         file: normalized,
         kind: "breakingChange",
-        details:
-          "Removed lines in a module with exports may indicate breaking API changes.",
+        details: "Removed lines in a module with exports may indicate breaking API changes.",
         confidence: "low",
       });
     }
@@ -400,11 +364,7 @@ async function collectUntestedChangeSuggestions(
 ): Promise<ImpactSuggestion[]> {
   const suggestions: ImpactSuggestion[] = [];
   const testPatterns = compileTestPatterns(options?.testPatterns);
-  const isIndexTestFile = createIndexTestFileMatcher(
-    index,
-    testPatterns,
-    projectRoot,
-  );
+  const isIndexTestFile = createIndexTestFileMatcher(index, testPatterns, projectRoot);
   const testFiles = new Set<string>();
   for (const file of index.byFile.keys()) {
     if (isIndexTestFile(file)) {
@@ -435,48 +395,31 @@ async function collectUntestedChangeSuggestions(
     candidateTestsByFile.set(
       file,
       listCandidateTestFiles(index, [file], symbolIds, {
-        ...(options?.testPatterns
-          ? { testPatterns: options.testPatterns }
-          : {}),
+        ...(options?.testPatterns ? { testPatterns: options.testPatterns } : {}),
         maxCandidates: 3,
         projectRoot,
       }).filter((entry) => entry.file !== file),
     );
   }
 
-  const coverageOptions: { lcovPaths?: string[]; coveragePaths?: string[] } =
-    {};
+  const coverageOptions: { lcovPaths?: string[]; coveragePaths?: string[] } = {};
   if (options?.lcovPaths) coverageOptions.lcovPaths = options.lcovPaths;
-  if (options?.coveragePaths)
-    coverageOptions.coveragePaths = options.coveragePaths;
+  if (options?.coveragePaths) coverageOptions.coveragePaths = options.coveragePaths;
   const coverageByFile = await loadCoverageByFile(projectRoot, coverageOptions);
 
   const inferTestCommand = (candidateNames: string[]): string => {
     const template = options?.testCommandTemplate?.trim();
     if (template) {
       if (template.includes("{files}")) {
-        const fileArg =
-          candidateNames.length > 0 ? candidateNames.join(" ") : "";
+        const fileArg = candidateNames.length > 0 ? candidateNames.join(" ") : "";
         return template.replace("{files}", fileArg).trim();
       }
       return template;
     }
-    const hasPnpm = index.graph.nodes.has(
-      path.resolve(projectRoot, "pnpm-lock.yaml").replace(/\\/g, "/"),
-    );
-    const hasYarn = index.graph.nodes.has(
-      path.resolve(projectRoot, "yarn.lock").replace(/\\/g, "/"),
-    );
-    const hasPackage = index.graph.nodes.has(
-      path.resolve(projectRoot, "package.json").replace(/\\/g, "/"),
-    );
-    const runner = hasPnpm
-      ? "pnpm"
-      : hasYarn
-        ? "yarn"
-        : hasPackage
-          ? "npm run"
-          : "npm run";
+    const hasPnpm = index.graph.nodes.has(path.resolve(projectRoot, "pnpm-lock.yaml").replace(/\\/g, "/"));
+    const hasYarn = index.graph.nodes.has(path.resolve(projectRoot, "yarn.lock").replace(/\\/g, "/"));
+    const hasPackage = index.graph.nodes.has(path.resolve(projectRoot, "package.json").replace(/\\/g, "/"));
+    const runner = hasPnpm ? "pnpm" : hasYarn ? "yarn" : hasPackage ? "npm run" : "npm run";
     if (candidateNames.length === 0) {
       return runner === "npm run" ? "npm run test" : `${runner} test`;
     }
@@ -495,11 +438,7 @@ async function collectUntestedChangeSuggestions(
     kind: ChangedSymbol["kind"];
   }): "low" | "medium" | "high" => {
     let score = 2;
-    if (
-      signals.hasCoverageData &&
-      signals.coveredLines === 0 &&
-      signals.totalLines > 0
-    ) {
+    if (signals.hasCoverageData && signals.coveredLines === 0 && signals.totalLines > 0) {
       score += 2;
     }
     if (!signals.hasCoverageData) score += 1;
@@ -512,64 +451,58 @@ async function collectUntestedChangeSuggestions(
     return "medium";
   };
 
-  const suggestionEntries = await mapLimit(
-    changedSymbols,
-    8,
-    async (symbol) => {
-      const refs = await findReferences(index, {
-        def: {
-          file: symbol.file,
-          localName: symbol.name,
-          kind: symbol.kind,
-          range: symbol.range,
-        },
-      });
-      if (refs.status !== "ok") return undefined;
-
-      const hasTestRef = refs.references.some((entry) =>
-        testFiles.has(entry.file),
-      );
-      if (hasTestRef) return undefined;
-
-      const coverage = coverageByFile.get(symbol.file);
-      const coveredLines = countCoveredLinesForRange(coverage, symbol.range);
-      const totalLines = countTotalLinesForRange(coverage, symbol.range);
-      const hasCoverageData = totalLines > 0;
-
-      const candidateNames = (candidateTestsByFile.get(symbol.file) ?? [])
-        .filter((entry) => entry.confidence !== "low")
-        .slice(0, 2)
-        .map((entry) => path.basename(entry.file));
-      const coverageSummary = hasCoverageData
-        ? `Coverage currently exercises ${coveredLines}/${totalLines} changed line(s).`
-        : "No LCOV or Istanbul coverage data matched this symbol range.";
-
-      const fanIn = fanInByFile.get(symbol.file) ?? 0;
-      const confidence = confidenceFromSignals({
-        hasCoverageData,
-        coveredLines,
-        totalLines,
-        exported: symbol.exported,
-        fanIn,
-        kind: symbol.kind,
-      });
-      const suggestedCommand = inferTestCommand(candidateNames);
-
-      const details =
-        candidateNames.length > 0
-          ? `Changed symbol has no discovered references in test files. ${coverageSummary} Candidate tests: ${candidateNames.join(", ")}. Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`
-          : `Changed symbol has no discovered references in test files. ${coverageSummary} Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`;
-
-      return {
+  const suggestionEntries = await mapLimit(changedSymbols, 8, async (symbol) => {
+    const refs = await findReferences(index, {
+      def: {
         file: symbol.file,
+        localName: symbol.name,
+        kind: symbol.kind,
         range: symbol.range,
-        kind: "untestedChange",
-        symbol: symbol.name,
-        details,
-        confidence,
-      } satisfies ImpactSuggestion;
-    },
-  );
+      },
+    });
+    if (refs.status !== "ok") return undefined;
+
+    const hasTestRef = refs.references.some((entry) => testFiles.has(entry.file));
+    if (hasTestRef) return undefined;
+
+    const coverage = coverageByFile.get(symbol.file);
+    const coveredLines = countCoveredLinesForRange(coverage, symbol.range);
+    const totalLines = countTotalLinesForRange(coverage, symbol.range);
+    const hasCoverageData = totalLines > 0;
+
+    const candidateNames = (candidateTestsByFile.get(symbol.file) ?? [])
+      .filter((entry) => entry.confidence !== "low")
+      .slice(0, 2)
+      .map((entry) => path.basename(entry.file));
+    const coverageSummary = hasCoverageData
+      ? `Coverage currently exercises ${coveredLines}/${totalLines} changed line(s).`
+      : "No LCOV or Istanbul coverage data matched this symbol range.";
+
+    const fanIn = fanInByFile.get(symbol.file) ?? 0;
+    const confidence = confidenceFromSignals({
+      hasCoverageData,
+      coveredLines,
+      totalLines,
+      exported: symbol.exported,
+      fanIn,
+      kind: symbol.kind,
+    });
+    const suggestedCommand = inferTestCommand(candidateNames);
+
+    const details =
+      candidateNames.length > 0
+        ? `Changed symbol has no discovered references in test files. ${coverageSummary} Candidate tests: ${candidateNames.join(", ")}. Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`
+        : `Changed symbol has no discovered references in test files. ${coverageSummary} Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`;
+
+    return {
+      file: symbol.file,
+      range: symbol.range,
+      kind: "untestedChange",
+      symbol: symbol.name,
+      details,
+      confidence,
+    } satisfies ImpactSuggestion;
+  });
 
   for (const suggestion of suggestionEntries) {
     if (suggestion) suggestions.push(suggestion);
@@ -657,11 +590,7 @@ function countParams(raw: string): number {
       if (braceDepth > 0) braceDepth -= 1;
       continue;
     }
-    const atTopLevel =
-      parenDepth === 0 &&
-      bracketDepth === 0 &&
-      braceDepth === 0 &&
-      typeAngleDepth === 0;
+    const atTopLevel = parenDepth === 0 && bracketDepth === 0 && braceDepth === 0 && typeAngleDepth === 0;
 
     if (ch === ":") {
       if (atTopLevel) inTypeAnnotation = true;
@@ -712,9 +641,7 @@ function parseExportSignature(line: string): ExportSignature | null {
     };
   }
 
-  const functionMatch = line.match(
-    /^\s*export\s+(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)(?:\s*<[^>]+>)?\s*\(([^)]*)\)/,
-  );
+  const functionMatch = line.match(/^\s*export\s+(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)(?:\s*<[^>]+>)?\s*\(([^)]*)\)/);
   if (functionMatch) {
     const name = functionMatch[1];
     if (!name) return null;
@@ -724,9 +651,7 @@ function parseExportSignature(line: string): ExportSignature | null {
     };
   }
 
-  const constArrowMatch = line.match(
-    /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:<[^>]+>\s*)?\(([^)]*)\)\s*=>/,
-  );
+  const constArrowMatch = line.match(/^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:<[^>]+>\s*)?\(([^)]*)\)\s*=>/);
   if (constArrowMatch) {
     const name = constArrowMatch[1];
     if (!name) return null;
@@ -736,9 +661,7 @@ function parseExportSignature(line: string): ExportSignature | null {
     };
   }
 
-  const constArrowSingleParamMatch = line.match(
-    /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?([A-Za-z_$][\w$]*)\s*=>/,
-  );
+  const constArrowSingleParamMatch = line.match(/^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?([A-Za-z_$][\w$]*)\s*=>/);
   if (constArrowSingleParamMatch) {
     const name = constArrowSingleParamMatch[1];
     if (!name) return null;
@@ -816,9 +739,7 @@ function detectExportSignatureChanges(change: FileChange): SignatureChange[] {
     }
     if (!matched && added.length > 0) {
       const candidates = addedByHunk.get(removedSig.hunkIndex) ?? [];
-      const candidate = candidates.find(
-        (entry) => Math.abs(entry.line - removedSig.line) <= 3,
-      );
+      const candidate = candidates.find((entry) => Math.abs(entry.line - removedSig.line) <= 3);
       const renameDetails = candidate
         ? `Exported symbol ${removedSig.name} appears to be removed or renamed (for example ${candidate.name}). Verify backward compatibility for downstream imports.`
         : `Exported symbol ${removedSig.name} appears to be removed or renamed. Verify backward compatibility for downstream imports.`;
@@ -843,10 +764,7 @@ async function loadCoverageByFile(
   options?: { lcovPaths?: string[]; coveragePaths?: string[] },
 ): Promise<Map<string, FileCoverage>> {
   const coverage = new Map<string, FileCoverage>();
-  const allPaths = [
-    ...(options?.lcovPaths ?? []),
-    ...(options?.coveragePaths ?? []),
-  ];
+  const allPaths = [...(options?.lcovPaths ?? []), ...(options?.coveragePaths ?? [])];
   if (allPaths.length === 0) return coverage;
 
   const ensureFileCoverage = (filePath: string): FileCoverage => {
@@ -865,9 +783,7 @@ async function loadCoverageByFile(
     for (const rawLine of text.split(/\r?\n/)) {
       if (rawLine.startsWith("SF:")) {
         const filePath = rawLine.slice(3).trim();
-        currentFile = filePath
-          ? normalizeImpactFilePath(projectRoot, filePath)
-          : null;
+        currentFile = filePath ? normalizeImpactFilePath(projectRoot, filePath) : null;
         continue;
       }
       if (!currentFile || !rawLine.startsWith("DA:")) continue;
@@ -903,9 +819,7 @@ async function loadCoverageByFile(
       }
       const normalizedFile = normalizeImpactFilePath(projectRoot, fileKey);
       const fileCoverage = ensureFileCoverage(normalizedFile);
-      const mapEntries = Object.entries(
-        statementMap as Record<string, unknown>,
-      );
+      const mapEntries = Object.entries(statementMap as Record<string, unknown>);
       for (const [statementId, rangeValue] of mapEntries) {
         if (!rangeValue || typeof rangeValue !== "object") continue;
         const start = (rangeValue as { start?: { line?: number } }).start;
@@ -943,10 +857,7 @@ async function loadCoverageByFile(
   return coverage;
 }
 
-function countCoveredLinesForRange(
-  coverage: FileCoverage | undefined,
-  range: ChangedSymbol["range"],
-): number {
+function countCoveredLinesForRange(coverage: FileCoverage | undefined, range: ChangedSymbol["range"]): number {
   if (!coverage) return 0;
   let count = 0;
   for (let line = range.start.line; line <= range.end.line; line += 1) {
@@ -955,10 +866,7 @@ function countCoveredLinesForRange(
   return count;
 }
 
-function countTotalLinesForRange(
-  coverage: FileCoverage | undefined,
-  range: ChangedSymbol["range"],
-): number {
+function countTotalLinesForRange(coverage: FileCoverage | undefined, range: ChangedSymbol["range"]): number {
   if (!coverage) return 0;
   let count = 0;
   for (let line = range.start.line; line <= range.end.line; line += 1) {
@@ -977,11 +885,7 @@ export async function analyzeImpactFromDiff(
 
   const { ignoreGlobs = [] } = options;
   const isIgnored = createImpactIgnoreMatcher(projectRoot, ignoreGlobs);
-  const normalizedDiff = normalizeImpactDiffFiles(
-    projectRoot,
-    diff.files,
-    isIgnored,
-  );
+  const normalizedDiff = normalizeImpactDiffFiles(projectRoot, diff.files, isIgnored);
   const diagnostics: ImpactDiagnostics = {
     changedFilesTotal: diff.files.length,
     changedFilesIgnored: normalizedDiff.ignoredCount,
@@ -1001,11 +905,7 @@ export async function analyzeImpactFromDiff(
     normalizedChanges.map((fileChange, idx) => ({ fileChange, idx })),
     8,
     async ({ fileChange, idx }) => {
-      const mapped = await locateChangedSymbolsWithLines(
-        index,
-        fileChange.path,
-        fileChange.hunks,
-      );
+      const mapped = await locateChangedSymbolsWithLines(index, fileChange.path, fileChange.hunks);
       return {
         idx,
         path: fileChange.path,
@@ -1037,10 +937,7 @@ export async function analyzeImpactFromDiff(
 
   const fileLevelFallback = options.fileLevelFallback ?? true;
   const fileLevelFallbackPaths = normalizedChanges
-    .filter(
-      (change) =>
-        change.kind !== "deleted" && !filesWithSymbols.has(change.path),
-    )
+    .filter((change) => change.kind !== "deleted" && !filesWithSymbols.has(change.path))
     .map((change) => change.path);
 
   let fanInByFile: Map<string, number> | undefined;
@@ -1054,63 +951,34 @@ export async function analyzeImpactFromDiff(
   }
 
   // Analyze impact
-  const impactedItems = await analyzeImpact(
-    index,
-    changedSymbols,
-    normalizedChanges,
-    {
-      ...options,
-      projectRoot,
-      fileLevelFallback,
-      fileLevelFallbackPaths,
-      diagnostics,
-    },
-  );
+  const impactedItems = await analyzeImpact(index, changedSymbols, normalizedChanges, {
+    ...options,
+    projectRoot,
+    fileLevelFallback,
+    fileLevelFallbackPaths,
+    diagnostics,
+  });
 
-  const suggestions = options.verifyReferences
-    ? await collectImpactSuggestions(index, projectRoot, normalizedChanges, options)
-    : [];
+  const suggestions = options.verifyReferences ? await collectImpactSuggestions(index, projectRoot, normalizedChanges, options) : [];
 
   const configAndBreaking =
     options.configImpactRules || options.detectBreakingChanges
-      ? collectConfigAndBreakingSuggestions(
-        index,
-        projectRoot,
-        normalizedChanges,
-        changedSymbols,
-        {
+      ? collectConfigAndBreakingSuggestions(index, projectRoot, normalizedChanges, changedSymbols, {
           configImpactRules: !!options.configImpactRules,
-            detectBreakingChanges: !!options.detectBreakingChanges,
-          },
-        )
+          detectBreakingChanges: !!options.detectBreakingChanges,
+        })
       : [];
 
   const coverageSuggestions = options.testCoverageSuggestions
-    ? await collectUntestedChangeSuggestions(
-        index,
-        changedSymbols,
-        projectRoot,
-        fanInByFile,
-        {
-          ...(options.lcovPaths ? { lcovPaths: options.lcovPaths } : {}),
-          ...(options.coveragePaths
-            ? { coveragePaths: options.coveragePaths }
-            : {}),
-          ...(options.testCommandTemplate
-            ? { testCommandTemplate: options.testCommandTemplate }
-            : {}),
-          ...(options.testPatterns
-            ? { testPatterns: options.testPatterns }
-            : {}),
-        },
-      )
+    ? await collectUntestedChangeSuggestions(index, changedSymbols, projectRoot, fanInByFile, {
+        ...(options.lcovPaths ? { lcovPaths: options.lcovPaths } : {}),
+        ...(options.coveragePaths ? { coveragePaths: options.coveragePaths } : {}),
+        ...(options.testCommandTemplate ? { testCommandTemplate: options.testCommandTemplate } : {}),
+        ...(options.testPatterns ? { testPatterns: options.testPatterns } : {}),
+      })
     : [];
 
-  const mergedSuggestions = [
-    ...suggestions,
-    ...configAndBreaking,
-    ...coverageSuggestions,
-  ];
+  const mergedSuggestions = [...suggestions, ...configAndBreaking, ...coverageSuggestions];
 
   // Build report
   return await buildImpactReport(
@@ -1127,9 +995,4 @@ export async function analyzeImpactFromDiff(
 
 // Re-export functions for testing and advanced usage
 export { seedTransitiveFromFiles, calculateSeverity } from "./analyzer.js";
-export {
-  collectImpactContext,
-  listCandidateTestFiles,
-  type ImpactContext,
-  type CandidateTestFile,
-} from "./context.js";
+export { collectImpactContext, listCandidateTestFiles, type ImpactContext, type CandidateTestFile } from "./context.js";

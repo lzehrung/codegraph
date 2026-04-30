@@ -1,29 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { supportForFile, type LanguageSupport } from "../languages.js";
-import type {
-  JsLanguage,
-  SyntaxNodeLike,
-  SyntaxTreeLike,
-} from "../languages/types.js";
+import type { JsLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext } from "./parse-context.js";
-import {
-  extractEnclosingBlock,
-  extractLineContext,
-  rangeContains,
-  sameDef,
-} from "./reference-context.js";
+import { extractEnclosingBlock, extractLineContext, rangeContains, sameDef } from "./reference-context.js";
 import { DEFAULT_REF_CONTEXT_LINES } from "./shared.js";
 import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
-import {
-  type FileId,
-  type Range,
-} from "../types.js";
-import {
-  resolveImportSpecifier,
-  sliceText,
-  toRange,
-} from "../util.js";
+import { type FileId, type Range } from "../types.js";
+import { resolveImportSpecifier, sliceText, toRange } from "../util.js";
 import {
   type GoToRequest,
   type GoToResult,
@@ -47,16 +31,13 @@ export function resolveExport(
   opts?: { preferredKind?: SymbolKind },
 ): ResolvedExport | null {
   const visited = new Set<string>();
-  const matchesPreferredKind = (def: SymbolDef): boolean =>
-    !opts?.preferredKind || def.kind === opts.preferredKind;
+  const matchesPreferredKind = (def: SymbolDef): boolean => !opts?.preferredKind || def.kind === opts.preferredKind;
 
   function resolveFromFile(fileInner: FileId, name: string): ResolvedExport | null {
     const normalizedFile = fileInner.replace(/\\/g, "/");
     const mod = index.byFile.get(normalizedFile);
     if (!mod) return null;
-    const key = opts?.preferredKind
-      ? `${cacheKey(normalizedFile, name)}::${opts.preferredKind}`
-      : cacheKey(normalizedFile, name);
+    const key = opts?.preferredKind ? `${cacheKey(normalizedFile, name)}::${opts.preferredKind}` : cacheKey(normalizedFile, name);
     if (index.exportCache.has(key)) return index.exportCache.get(key)!;
 
     const cycleKey = `${normalizedFile}::${name}`;
@@ -71,11 +52,7 @@ export function resolveExport(
     }
 
     for (const entry of mod.exports) {
-      if (
-        entry.type === "local" &&
-        entry.exportedAs === name &&
-        matchesPreferredKind(entry.target)
-      ) {
+      if (entry.type === "local" && entry.exportedAs === name && matchesPreferredKind(entry.target)) {
         const result: ResolvedExport = { kind: "resolved", def: entry.target };
         index.exportCache.set(key, result);
         return result;
@@ -94,14 +71,8 @@ export function resolveExport(
     }
 
     for (const entry of mod.exports) {
-      if (
-        entry.type === "reexport" &&
-        entry.exportedAs === name &&
-        typeof entry.fromModule === "string"
-      ) {
-        const downstream =
-          resolveFromFile(entry.fromModule, entry.sourceSpecifier || name) ??
-          resolveFromFile(entry.fromModule, name);
+      if (entry.type === "reexport" && entry.exportedAs === name && typeof entry.fromModule === "string") {
+        const downstream = resolveFromFile(entry.fromModule, entry.sourceSpecifier || name) ?? resolveFromFile(entry.fromModule, name);
         if (downstream) {
           index.exportCache.set(key, downstream);
           return downstream;
@@ -119,10 +90,7 @@ export function resolveExport(
       }
     }
 
-    const local = mod.locals.find(
-      (candidate) =>
-        candidate.localName === name && matchesPreferredKind(candidate),
-    );
+    const local = mod.locals.find((candidate) => candidate.localName === name && matchesPreferredKind(candidate));
     if (local) {
       const result: ResolvedExport = { kind: "resolved", def: local };
       index.exportCache.set(key, result);
@@ -153,11 +121,7 @@ function readGoPackageName(filePath: string): string | null {
   }
 }
 
-function resolveGoPackageExport(
-  index: ProjectIndex,
-  file: FileId,
-  exportedName: string,
-): SymbolDef | null {
+function resolveGoPackageExport(index: ProjectIndex, file: FileId, exportedName: string): SymbolDef | null {
   try {
     const support = supportForFile(file);
     if (!support || support.id !== "go") return null;
@@ -180,30 +144,20 @@ function resolveGoPackageExport(
   return null;
 }
 
-function readPhpNamespaceName(
-  namespaceNode: SyntaxNodeLike,
-  source: string,
-): string | null {
+function readPhpNamespaceName(namespaceNode: SyntaxNodeLike, source: string): string | null {
   const namespaceName =
-    namespaceNode.childForFieldName?.("name") ??
-    namespaceNode.namedChildren.find((child) => child.type === "namespace_name");
+    namespaceNode.childForFieldName?.("name") ?? namespaceNode.namedChildren.find((child) => child.type === "namespace_name");
   return namespaceName ? sliceText(namespaceName, source).trim() : null;
 }
 
-function findClosestPhpNamespaceDefinition(
-  root: SyntaxNodeLike,
-  targetIndex: number,
-): SyntaxNodeLike | null {
+function findClosestPhpNamespaceDefinition(root: SyntaxNodeLike, targetIndex: number): SyntaxNodeLike | null {
   let bestMatch: SyntaxNodeLike | null = null;
 
   const visit = (node: SyntaxNodeLike): void => {
     if (node.startIndex > targetIndex) {
       return;
     }
-    if (
-      node.type === "namespace_definition" &&
-      (!bestMatch || node.startIndex >= bestMatch.startIndex)
-    ) {
+    if (node.type === "namespace_definition" && (!bestMatch || node.startIndex >= bestMatch.startIndex)) {
       bestMatch = node;
     }
     for (const child of node.namedChildren) {
@@ -215,11 +169,7 @@ function findClosestPhpNamespaceDefinition(
   return bestMatch;
 }
 
-function readPhpNamespaceFromNode(
-  tree: SyntaxTreeLike,
-  node: SyntaxNodeLike | null,
-  source: string,
-): string | null {
+function readPhpNamespaceFromNode(tree: SyntaxTreeLike, node: SyntaxNodeLike | null, source: string): string | null {
   if (!node) return null;
   let current: SyntaxNodeLike | null = node;
   while (current) {
@@ -228,18 +178,11 @@ function readPhpNamespaceFromNode(
     }
     current = current.parent;
   }
-  const namespaceNode = findClosestPhpNamespaceDefinition(
-    tree.rootNode,
-    node.startIndex,
-  );
+  const namespaceNode = findClosestPhpNamespaceDefinition(tree.rootNode, node.startIndex);
   return namespaceNode ? readPhpNamespaceName(namespaceNode, source) : null;
 }
 
-function readPhpNamespaceFromRange(
-  tree: SyntaxTreeLike,
-  source: string,
-  range: Range,
-): string | null {
+function readPhpNamespaceFromRange(tree: SyntaxTreeLike, source: string, range: Range): string | null {
   const row = Math.max(0, range.start.line - 1);
   const column = Math.max(0, range.start.column - 1);
   const position = { row, column };
@@ -247,30 +190,19 @@ function readPhpNamespaceFromRange(
   return readPhpNamespaceFromNode(tree, node, source);
 }
 
-function getPhpQualifiedReference(
-  node: SyntaxNodeLike | null,
-  source: string,
-): string | null {
+function getPhpQualifiedReference(node: SyntaxNodeLike | null, source: string): string | null {
   if (!node) return null;
   if (node.type === "qualified_name" || node.type === "relative_name") {
     return sliceText(node, source);
   }
   const parent = node.parent;
-  if (
-    parent &&
-    (parent.type === "qualified_name" || parent.type === "relative_name")
-  ) {
+  if (parent && (parent.type === "qualified_name" || parent.type === "relative_name")) {
     return sliceText(parent, source);
   }
   return null;
 }
 
-function normalizePhpQualifiedReference(
-  rawName: string,
-  source: string,
-  tree: SyntaxTreeLike,
-  node: SyntaxNodeLike | null,
-): string | null {
+function normalizePhpQualifiedReference(rawName: string, source: string, tree: SyntaxTreeLike, node: SyntaxNodeLike | null): string | null {
   const trimmed = rawName.trim().replace(/^\\+/, "");
   if (!trimmed) return null;
   if (!trimmed.startsWith("namespace\\")) {
@@ -287,18 +219,13 @@ function normalizePhpQualifiedReference(
   return `${currentNamespace}\\${relativeSuffix}`;
 }
 
-function inferPhpQualifiedReferenceImportType(
-  node: SyntaxNodeLike,
-): "class" | "function" | undefined {
+function inferPhpQualifiedReferenceImportType(node: SyntaxNodeLike): "class" | "function" | undefined {
   let current: SyntaxNodeLike | null = node;
   while (current) {
     if (current.type === "object_creation_expression") {
       return "class";
     }
-    if (
-      current.type === "function_call_expression" ||
-      current.type === "call_expression"
-    ) {
+    if (current.type === "function_call_expression" || current.type === "call_expression") {
       return "function";
     }
     if (
@@ -313,10 +240,7 @@ function inferPhpQualifiedReferenceImportType(
   return undefined;
 }
 
-export async function goToDefinition(
-  index: ProjectIndex,
-  req: GoToRequest,
-): Promise<GoToResult> {
+export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Promise<GoToResult> {
   const { file, line, column } = req;
   const mod = index.byFile.get(file);
   if (!mod) return { status: "not_found", reason: "File not indexed" };
@@ -332,10 +256,7 @@ export async function goToDefinition(
     row: Math.max(0, line - 1),
     column: Math.max(0, column - 1),
   };
-  let node: SyntaxNodeLike | null = tree.rootNode.descendantForPosition(
-    pos,
-    pos,
-  );
+  let node: SyntaxNodeLike | null = tree.rootNode.descendantForPosition(pos, pos);
 
   if (node && node.type === "variable_declarator") {
     const value = node.childForFieldName("value");
@@ -354,13 +275,10 @@ export async function goToDefinition(
 
   const isId = sup.nodeTypes.identifier.includes(node.type);
   let name: string | null = isId ? sliceText(node, source) : null;
-  const phpQualifiedReference =
-    sup.id === "php" ? getPhpQualifiedReference(node, source) : null;
+  const phpQualifiedReference = sup.id === "php" ? getPhpQualifiedReference(node, source) : null;
 
   if (!name) {
-    const findDeclNameNode = (
-      currentNode: SyntaxNodeLike | null,
-    ): SyntaxNodeLike | null => {
+    const findDeclNameNode = (currentNode: SyntaxNodeLike | null): SyntaxNodeLike | null => {
       let current: SyntaxNodeLike | null = currentNode;
       while (current) {
         if (
@@ -396,8 +314,7 @@ export async function goToDefinition(
 
   const isMemberAccess =
     node.parent &&
-    (node.parent.type ===
-      (sup.nodeTypes.memberExpression ?? "member_expression") ||
+    (node.parent.type === (sup.nodeTypes.memberExpression ?? "member_expression") ||
       (sup.id === "go" && node.parent.type === "qualified_type") ||
       node.parent.type === "member_access_expression" ||
       node.parent.type === "qualified_name" ||
@@ -422,21 +339,14 @@ export async function goToDefinition(
       obj = memberNode.child(0);
       prop = memberNode.child(2);
       let current = obj;
-      while (
-        current &&
-        (current.type === "qualified_name" ||
-          current.type === "member_access_expression")
-      ) {
+      while (current && (current.type === "qualified_name" || current.type === "member_access_expression")) {
         current = current.child(0);
       }
     } else if (sup.id === "java") {
       if (memberNode.type === "method_invocation") {
         obj = memberNode.childForFieldName("object") ?? memberNode.child(0);
         prop = memberNode.childForFieldName("name") ?? memberNode.child(2);
-      } else if (
-        memberNode.type === "scoped_identifier" ||
-        memberNode.type === "scoped_type_identifier"
-      ) {
+      } else if (memberNode.type === "scoped_identifier" || memberNode.type === "scoped_type_identifier") {
         obj = memberNode.childForFieldName("scope") ?? memberNode.child(0);
         prop = memberNode.childForFieldName("name") ?? memberNode.child(2);
       } else {
@@ -470,16 +380,9 @@ export async function goToDefinition(
     } else if (sup.id === "kotlin" || sup.id === "swift") {
       if (memberNode.type === "navigation_expression") {
         obj = memberNode.namedChildren[0] ?? memberNode.child(0);
-        const suffix =
-          memberNode.namedChildren.find(
-            (child) => child.type === "navigation_suffix",
-          ) ?? memberNode.child(1);
+        const suffix = memberNode.namedChildren.find((child) => child.type === "navigation_suffix") ?? memberNode.child(1);
         if (suffix) {
-          prop =
-            suffix.childForFieldName("suffix") ??
-            suffix.childForFieldName("name") ??
-            suffix.namedChildren[0] ??
-            suffix.child(0);
+          prop = suffix.childForFieldName("suffix") ?? suffix.childForFieldName("name") ?? suffix.namedChildren[0] ?? suffix.child(0);
         }
       } else {
         obj = memberNode.child(0);
@@ -490,8 +393,7 @@ export async function goToDefinition(
       prop = memberNode.child(2);
     }
 
-    const memberExpressionType =
-      sup.nodeTypes.memberExpression ?? "member_expression";
+    const memberExpressionType = sup.nodeTypes.memberExpression ?? "member_expression";
     const optionalMemberTypes = new Set<string>([
       memberExpressionType,
       sup.id === "go" ? "qualified_type" : "",
@@ -501,39 +403,24 @@ export async function goToDefinition(
       sup.id === "python" ? "attribute" : "",
     ]);
 
-    const resolveExpression = async (
-      expr: SyntaxNodeLike,
-    ): Promise<ResolvedExport | null> => {
+    const resolveExpression = async (expr: SyntaxNodeLike): Promise<ResolvedExport | null> => {
       const exprName = sliceText(expr, source);
       const exprIsId = sup.nodeTypes.identifier.includes(expr.type);
-      if (
-        exprIsId ||
-        expr.type === "identifier" ||
-        expr.type === "type_identifier" ||
-        expr.type === "constant"
-      ) {
+      if (exprIsId || expr.type === "identifier" || expr.type === "type_identifier" || expr.type === "constant") {
         const imp = mod.imports.find(
           (candidate) =>
             (candidate.kind === "named" && candidate.local === exprName) ||
             (candidate.kind === "default" && candidate.local === exprName) ||
-            (candidate.kind === "namespace" &&
-              candidate.localNS === exprName),
+            (candidate.kind === "namespace" && candidate.localNS === exprName),
         );
         if (imp) {
           if (imp.kind === "namespace") {
             return {
               kind: "namespace",
-              file:
-                typeof imp.resolved === "string"
-                  ? imp.resolved.replace(/\\/g, "/")
-                  : imp.resolved?.external || "",
+              file: typeof imp.resolved === "string" ? imp.resolved.replace(/\\/g, "/") : imp.resolved?.external || "",
             };
           }
-          const result = resolveImported(
-            index,
-            imp,
-            imp.kind === "named" ? imp.imported : "default",
-          );
+          const result = resolveImported(index, imp, imp.kind === "named" ? imp.imported : "default");
           if (result) {
             if ("namespace" in result) {
               return { kind: "namespace", file: result.namespace };
@@ -545,9 +432,7 @@ export async function goToDefinition(
         const local = mod.locals.find((candidate) => candidate.localName === exprName);
         if (local) return { kind: "resolved", def: local };
 
-        for (const starImport of mod.imports.filter(
-          (candidate) => candidate.kind === "star",
-        )) {
+        for (const starImport of mod.imports.filter((candidate) => candidate.kind === "star")) {
           const result = resolveImported(index, starImport, exprName);
           if (result) {
             if ("namespace" in result) {
@@ -564,19 +449,12 @@ export async function goToDefinition(
         let subProp =
           expr.type === "qualified_type"
             ? (expr.namedChildren[1] ?? expr.child(1))
-            : (expr.childForFieldName?.("property") ??
-              expr.child(2) ??
-              expr.childForFieldName?.("attribute"));
+            : (expr.childForFieldName?.("property") ?? expr.child(2) ?? expr.childForFieldName?.("attribute"));
         if (!subProp && expr.type === "navigation_expression") {
-          const suffix =
-            expr.namedChildren.find((child) => child.type === "navigation_suffix") ??
-            expr.child(1);
+          const suffix = expr.namedChildren.find((child) => child.type === "navigation_suffix") ?? expr.child(1);
           if (suffix) {
             subProp =
-              suffix.childForFieldName?.("suffix") ??
-              suffix.childForFieldName?.("name") ??
-              suffix.namedChildren[0] ??
-              suffix.child(0);
+              suffix.childForFieldName?.("suffix") ?? suffix.childForFieldName?.("name") ?? suffix.namedChildren[0] ?? suffix.child(0);
           }
         }
         if (subObj && subProp) {
@@ -595,11 +473,7 @@ export async function goToDefinition(
         }
       }
 
-      if (
-        sup.id === "java" &&
-        (expr.type === "scoped_identifier" ||
-          expr.type === "scoped_type_identifier")
-      ) {
+      if (sup.id === "java" && (expr.type === "scoped_identifier" || expr.type === "scoped_type_identifier")) {
         const subObj = expr.childForFieldName("scope") ?? expr.child(0);
         const subProp = expr.childForFieldName("name") ?? expr.child(2);
         if (subObj && subProp) {
@@ -639,15 +513,7 @@ export async function goToDefinition(
       }
     }
 
-    if (
-      obj &&
-      prop &&
-      node.id === prop.id &&
-      (sup.id === "csharp" ||
-        sup.id === "java" ||
-        sup.id === "ruby" ||
-        sup.id === "rust")
-    ) {
+    if (obj && prop && node.id === prop.id && (sup.id === "csharp" || sup.id === "java" || sup.id === "ruby" || sup.id === "rust")) {
       const member = sliceText(prop, source);
       let objDef: SymbolDef | null = null;
       const result = await resolveExpression(obj);
@@ -661,10 +527,7 @@ export async function goToDefinition(
           row: start.line - 1,
           column: start.column - 1,
         };
-        const nameNode = targetTree.rootNode.descendantForPosition(
-          targetPosition,
-          targetPosition,
-        );
+        const nameNode = targetTree.rootNode.descendantForPosition(targetPosition, targetPosition);
         const container = nameNode.parent;
 
         if (container) {
@@ -698,33 +561,17 @@ export async function goToDefinition(
   }
 
   if (sup.id === "php" && phpQualifiedReference && index.projectRoot) {
-    const normalizedQualifiedReference = normalizePhpQualifiedReference(
-      phpQualifiedReference,
-      source,
-      tree,
-      node,
-    );
+    const normalizedQualifiedReference = normalizePhpQualifiedReference(phpQualifiedReference, source, tree, node);
     if (normalizedQualifiedReference?.includes("\\")) {
       const phpImportType = inferPhpQualifiedReferenceImportType(node);
-      const resolvedTarget = await resolveImportSpecifier(
-        index.projectRoot,
-        file,
-        normalizedQualifiedReference,
-        "php",
-        {
-          ...(phpImportType ? { phpImportType } : {}),
-        },
-      );
+      const resolvedTarget = await resolveImportSpecifier(index.projectRoot, file, normalizedQualifiedReference, "php", {
+        ...(phpImportType ? { phpImportType } : {}),
+      });
       if (typeof resolvedTarget === "string") {
-        const exportedName =
-          normalizedQualifiedReference.split("\\").filter(Boolean).pop() ?? null;
+        const exportedName = normalizedQualifiedReference.split("\\").filter(Boolean).pop() ?? null;
         if (exportedName) {
           const preferredKind =
-            phpImportType === "function"
-              ? SymbolKind.Function
-              : phpImportType === "class"
-                ? SymbolKind.Class
-                : undefined;
+            phpImportType === "function" ? SymbolKind.Function : phpImportType === "class" ? SymbolKind.Class : undefined;
           const hit = resolveExport(index, resolvedTarget, exportedName, {
             ...(preferredKind ? { preferredKind } : {}),
           });
@@ -743,21 +590,11 @@ export async function goToDefinition(
   if (name) {
     let scopeIndex = index.scopeCache.get(file);
     if (!scopeIndex) {
-      scopeIndex = buildScopeIndexFromSource(
-        file,
-        source,
-        sup,
-        lang,
-        mod.imports,
-        { tree },
-      );
+      scopeIndex = buildScopeIndexFromSource(file, source, sup, lang, mod.imports, { tree });
       index.scopeCache.set(file, scopeIndex);
     }
 
-    const findClosestBinding = (
-      bindingName: string,
-      currentNode: SyntaxNodeLike,
-    ): SymbolDef | null => {
+    const findClosestBinding = (bindingName: string, currentNode: SyntaxNodeLike): SymbolDef | null => {
       let currentScope = scopeIndex.allScopes.find((scope) => {
         const start = scope.node.startIndex;
         const end = scope.node.endIndex;
@@ -819,9 +656,7 @@ export async function goToDefinition(
         const targetFile = hit.file;
         const targetMod = index.byFile.get(targetFile);
         if (targetMod) {
-          const firstExport = targetMod.exports.find(
-            (entry) => entry.type === "local",
-          );
+          const firstExport = targetMod.exports.find((entry) => entry.type === "local");
           if (firstExport) {
             return {
               status: "ok",
@@ -842,9 +677,7 @@ export async function goToDefinition(
                 status: "ok",
                 definition: target,
                 via: {
-                  ...(toModuleRef(imp.resolved)
-                    ? { importedFrom: toModuleRef(imp.resolved) }
-                    : {}),
+                  ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
                   exportedName: "default",
                 },
               };
@@ -859,9 +692,7 @@ export async function goToDefinition(
                 status: "ok",
                 definition: target,
                 via: {
-                  ...(toModuleRef(imp.resolved)
-                    ? { importedFrom: toModuleRef(imp.resolved) }
-                    : {}),
+                  ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
                   exportedName: imp.imported,
                 },
               };
@@ -876,33 +707,24 @@ export async function goToDefinition(
                 status: "ok",
                 definition: target,
                 via: {
-                  ...(toModuleRef(imp.resolved)
-                    ? { importedFrom: toModuleRef(imp.resolved) }
-                    : {}),
+                  ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
                   exportedName: name,
                 },
               };
             }
           }
         } else if (imp.kind === "namespace" && imp.localNS === name) {
-          const targetFile =
-            typeof imp.resolved === "string"
-              ? imp.resolved.replace(/\\/g, "/")
-              : undefined;
+          const targetFile = typeof imp.resolved === "string" ? imp.resolved.replace(/\\/g, "/") : undefined;
           if (targetFile) {
             const targetMod = index.byFile.get(targetFile);
             if (targetMod) {
-              const firstExport = targetMod.exports.find(
-                (entry) => entry.type === "local",
-              );
+              const firstExport = targetMod.exports.find((entry) => entry.type === "local");
               if (firstExport) {
                 return {
                   status: "ok",
                   definition: firstExport.target,
                   via: {
-                    ...(toModuleRef(imp.resolved)
-                      ? { importedFrom: toModuleRef(imp.resolved) }
-                      : {}),
+                    ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
                     exportedName: firstExport.exportedAs,
                   },
                 };
@@ -925,13 +747,8 @@ function toModuleRef(resolved?: FileId | { external: string }): string | undefin
   return typeof resolved === "string" ? resolved : resolved.external;
 }
 
-export function resolveImported(
-  index: ProjectIndex,
-  imp: ImportBinding,
-  exportedName: string,
-): SymbolDef | { namespace: FileId } | null {
-  const targetFile =
-    typeof imp.resolved === "string" ? imp.resolved : undefined;
+export function resolveImported(index: ProjectIndex, imp: ImportBinding, exportedName: string): SymbolDef | { namespace: FileId } | null {
+  const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
   if (!targetFile) return null;
 
   const preferredKind =
@@ -954,12 +771,7 @@ export function resolveImported(
   try {
     const support = supportForFile(targetFile);
     if (support?.id === "java" || support?.id === "kotlin") {
-      const siblingHit = resolveSiblingPackageExport(
-        index,
-        targetFile,
-        exportedName,
-        support.id,
-      );
+      const siblingHit = resolveSiblingPackageExport(index, targetFile, exportedName, support.id);
       if (siblingHit?.kind === "resolved") return siblingHit.def;
       if (siblingHit?.kind === "namespace") {
         return { namespace: siblingHit.file };
@@ -972,10 +784,7 @@ export function resolveImported(
   try {
     const support = supportForFile(targetFile);
     if (support?.id === "python") {
-      const base =
-        fs.existsSync(targetFile) && fs.statSync(targetFile).isDirectory()
-          ? targetFile
-          : path.dirname(targetFile);
+      const base = fs.existsSync(targetFile) && fs.statSync(targetFile).isDirectory() ? targetFile : path.dirname(targetFile);
       const subCandidates = [
         path.join(base, `${exportedName}.py`),
         path.join(base, exportedName, "__init__.py"),
@@ -1017,10 +826,7 @@ export function resolveImported(
 
 const packageNameCache = new Map<string, string | null>();
 
-function readPackageNameForLanguage(
-  filePath: string,
-  languageId: "java" | "kotlin",
-): string | null {
+function readPackageNameForLanguage(filePath: string, languageId: "java" | "kotlin"): string | null {
   const cacheKey = `${languageId}::${filePath}`;
   const cached = packageNameCache.get(cacheKey);
   if (cached !== undefined) return cached;
@@ -1069,10 +875,7 @@ export async function findReferences(
     blockMaxLines?: number;
     maxReferences?: number;
   },
-): Promise<
-  | { status: "ok"; definition: SymbolDef; references: Reference[] }
-  | { status: "not_found"; reason: string }
-> {
+): Promise<{ status: "ok"; definition: SymbolDef; references: Reference[] } | { status: "not_found"; reason: string }> {
   let def: SymbolDef | null = null;
   if ("def" in req) {
     def = req.def;
@@ -1109,14 +912,9 @@ export async function findReferences(
     },
   ): ScopeIndex => {
     if (index.scopeCache.has(fileId)) return index.scopeCache.get(fileId)!;
-    const scopeIndex = buildScopeIndexFromSource(
-      fileId,
-      parsedCtx.source,
-      parsedCtx.sup,
-      parsedCtx.lang,
-      moduleIndex.imports,
-      { tree: parsedCtx.tree },
-    );
+    const scopeIndex = buildScopeIndexFromSource(fileId, parsedCtx.source, parsedCtx.sup, parsedCtx.lang, moduleIndex.imports, {
+      tree: parsedCtx.tree,
+    });
     index.scopeCache.set(fileId, scopeIndex);
     return scopeIndex;
   };
@@ -1126,13 +924,9 @@ export async function findReferences(
 
   const scope = getCachedScope(definitionFile, mod, parsedContext);
   const refs: Reference[] = [];
-  const maxReferences =
-    typeof opts?.maxReferences === "number" && opts.maxReferences > 0
-      ? opts.maxReferences
-      : undefined;
+  const maxReferences = typeof opts?.maxReferences === "number" && opts.maxReferences > 0 ? opts.maxReferences : undefined;
   const seenRefs = new Set<string>();
-  const hasReachedMaxReferences = (): boolean =>
-    maxReferences !== undefined && refs.length >= maxReferences;
+  const hasReachedMaxReferences = (): boolean => maxReferences !== undefined && refs.length >= maxReferences;
   const pushRef = (ref: Reference): void => {
     const key = `${ref.file}:${ref.range.start.line}:${ref.range.start.column}`;
     if (seenRefs.has(key)) return;
@@ -1141,9 +935,7 @@ export async function findReferences(
   };
 
   const localBindings = scope.bindings.get(def.localName) ?? [];
-  const localBinding = localBindings.find(
-    (binding) => binding.def && binding.def.start.index === def.range.start.index,
-  );
+  const localBinding = localBindings.find((binding) => binding.def && binding.def.start.index === def.range.start.index);
   pushRef({ file: definitionFile, range: def.range });
   if (localBinding) {
     for (const occurrence of localBinding.occurrences) {
@@ -1165,18 +957,11 @@ export async function findReferences(
   const exportedNameSet = new Set(exportedNames);
   let phpQualifiedNames: string[] = [];
   try {
-    const definitionParsed = await ensureParsedContext(
-      definitionFile,
-      index.parsed?.get(definitionFile),
-    );
+    const definitionParsed = await ensureParsedContext(definitionFile, index.parsed?.get(definitionFile));
     phpQualifiedNames =
       definitionParsed.sup.id === "php"
         ? (() => {
-            const phpNamespace = readPhpNamespaceFromRange(
-              definitionParsed.tree,
-              definitionParsed.source,
-              def.range,
-            );
+            const phpNamespace = readPhpNamespaceFromRange(definitionParsed.tree, definitionParsed.source, def.range);
             if (!phpNamespace) return [];
             const qualifiedName = `${phpNamespace}\\${def.localName}`;
             return [qualifiedName, `\\${qualifiedName}`];
@@ -1186,10 +971,7 @@ export async function findReferences(
     phpQualifiedNames = [];
   }
 
-  const collectNamedNodeReferences = async (
-    fileId: string,
-    symbolName: string,
-  ): Promise<Range[]> => {
+  const collectNamedNodeReferences = async (fileId: string, symbolName: string): Promise<Range[]> => {
     try {
       const parsedEntry = index.parsed?.get(fileId);
       const parsed = await ensureParsedContext(fileId, parsedEntry);
@@ -1202,10 +984,7 @@ export async function findReferences(
       ]);
       const matches: Range[] = [];
       const walk = (node: SyntaxNodeLike): void => {
-        if (
-          identifierTypes.has(node.type) &&
-          sliceText(node, parsed.source) === symbolName
-        ) {
+        if (identifierTypes.has(node.type) && sliceText(node, parsed.source) === symbolName) {
           matches.push(toRange(node));
         }
         for (const child of node.namedChildren) {
@@ -1228,11 +1007,7 @@ export async function findReferences(
     const matches = await collectNamedNodeReferences(fileId, symbolName);
     const verified: Range[] = [];
     for (const range of matches) {
-      if (
-        maxVerified !== undefined &&
-        maxVerified > 0 &&
-        verified.length >= maxVerified
-      ) {
+      if (maxVerified !== undefined && maxVerified > 0 && verified.length >= maxVerified) {
         break;
       }
       const resolved = await goToDefinition(index, {
@@ -1253,8 +1028,7 @@ export async function findReferences(
     let hasDirectImport = false;
 
     for (const imp of module.imports) {
-      const resolved =
-        typeof imp.resolved === "string" ? imp.resolved : undefined;
+      const resolved = typeof imp.resolved === "string" ? imp.resolved : undefined;
       if (!resolved || resolved !== definitionFile) continue;
       hasDirectImport = true;
 
@@ -1273,11 +1047,7 @@ export async function findReferences(
     return Array.from(names);
   };
 
-  const hasExpandedNamedImport = (
-    module: ModuleIndex,
-    targetFile: string,
-    symbolName: string,
-  ): boolean =>
+  const hasExpandedNamedImport = (module: ModuleIndex, targetFile: string, symbolName: string): boolean =>
     module.imports.some(
       (candidate) =>
         candidate.kind === "named" &&
@@ -1286,9 +1056,7 @@ export async function findReferences(
         candidate.resolved === targetFile,
     );
 
-  let candidateFiles = Array.from(index.byFile.keys()).filter(
-    (candidateFile) => candidateFile !== definitionFile,
-  );
+  let candidateFiles = Array.from(index.byFile.keys()).filter((candidateFile) => candidateFile !== definitionFile);
   candidateFiles.sort((left, right) => left.localeCompare(right));
   if (index.bloomFilters && exportedNames.length > 0) {
     candidateFiles = candidateFiles.filter((candidateFile) => {
@@ -1299,9 +1067,7 @@ export async function findReferences(
 
       const aliases = getCandidateReferenceNames(module);
       if (aliases.length === 0) {
-        return exportedNames.some((exportedName) =>
-          filter.mightContain(exportedName),
-        );
+        return exportedNames.some((exportedName) => filter.mightContain(exportedName));
       }
       return aliases.some((alias) => filter.mightContain(alias));
     });
@@ -1324,25 +1090,17 @@ export async function findReferences(
 
     for (const imp of module.imports) {
       if (hasReachedMaxReferences()) break;
-      const targetFile =
-        typeof imp.resolved === "string" ? imp.resolved : undefined;
+      const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
       if (!targetFile) continue;
 
       for (const exportedName of exportedNames) {
         if (hasReachedMaxReferences()) break;
         if (imp.kind === "namespace") {
           const hit = resolveExport(index, targetFile, exportedName);
-          const matchesDef =
-            hit?.kind === "resolved"
-              ? sameDef(hit.def, def)
-              : targetFile === definitionFile;
+          const matchesDef = hit?.kind === "resolved" ? sameDef(hit.def, def) : targetFile === definitionFile;
           if (!matchesDef) continue;
           await ensureScope();
-          const ranges = await collectNamespaceMemberRefs(
-            fileId,
-            imp.localNS,
-            exportedName,
-          );
+          const ranges = await collectNamespaceMemberRefs(fileId, imp.localNS, exportedName);
           for (const range of ranges) {
             if (hasReachedMaxReferences()) break;
             pushRef({
@@ -1353,38 +1111,21 @@ export async function findReferences(
           }
         } else if (imp.kind === "star") {
           const result = resolveImported(index, imp, exportedName);
-          const matchesDef =
-            !!result && !("namespace" in result) && sameDef(result, def);
+          const matchesDef = !!result && !("namespace" in result) && sameDef(result, def);
           if (!matchesDef) continue;
           if (hasExpandedNamedImport(module, targetFile, exportedName)) {
             continue;
           }
-          const remainingReferences =
-            maxReferences !== undefined
-              ? Math.max(0, maxReferences - refs.length)
-              : undefined;
-          const ranges = await collectVerifiedNamedNodeReferences(
-            fileId,
-            exportedName,
-            def,
-            remainingReferences,
-          );
+          const remainingReferences = maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
+          const ranges = await collectVerifiedNamedNodeReferences(fileId, exportedName, def, remainingReferences);
           for (const range of ranges) {
             if (hasReachedMaxReferences()) break;
             pushRef({ file: fileId, range, via: { import: imp } });
           }
         } else {
-          const exported =
-            imp.kind === "named"
-              ? imp.imported
-              : imp.kind === "default"
-                ? "default"
-                : exportedName;
+          const exported = imp.kind === "named" ? imp.imported : imp.kind === "default" ? "default" : exportedName;
           const hit = resolveExport(index, targetFile, exported);
-          const matchesDef =
-            hit?.kind === "resolved"
-              ? sameDef(hit.def, def)
-              : targetFile === definitionFile;
+          const matchesDef = hit?.kind === "resolved" ? sameDef(hit.def, def) : targetFile === definitionFile;
           if (!matchesDef) continue;
           const resolvedScope = await ensureScope();
           const localName = imp.local;
@@ -1402,18 +1143,10 @@ export async function findReferences(
     }
 
     if (phpQualifiedNames.length > 0) {
-      const remainingReferences =
-        maxReferences !== undefined
-          ? Math.max(0, maxReferences - refs.length)
-          : undefined;
+      const remainingReferences = maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
       for (const candidateName of [...exportedNames, ...phpQualifiedNames]) {
         if (hasReachedMaxReferences()) break;
-        const ranges = await collectVerifiedNamedNodeReferences(
-          fileId,
-          candidateName,
-          def,
-          remainingReferences,
-        );
+        const ranges = await collectVerifiedNamedNodeReferences(fileId, candidateName, def, remainingReferences);
         for (const range of ranges) {
           if (hasReachedMaxReferences()) break;
           pushRef({ file: fileId, range });
@@ -1432,10 +1165,7 @@ export async function findReferences(
   });
 
   if (opts?.context) {
-    const perFileCache = new Map<
-      string,
-      { source: string; tree: SyntaxTreeLike; sup: LanguageSupport }
-    >();
+    const perFileCache = new Map<string, { source: string; tree: SyntaxTreeLike; sup: LanguageSupport }>();
 
     for (const ref of refs) {
       let cached = perFileCache.get(ref.file);
@@ -1451,13 +1181,7 @@ export async function findReferences(
         ref.context = extractLineContext(cached.source, ref.range.start.line, lines);
       } else if (opts.context === "block") {
         const maxLines = opts.blockMaxLines ?? 60;
-        ref.context = extractEnclosingBlock(
-          cached.source,
-          cached.tree,
-          ref.range,
-          maxLines,
-          cached.sup,
-        );
+        ref.context = extractEnclosingBlock(cached.source, cached.tree, ref.range, maxLines, cached.sup);
       }
     }
   }
@@ -1465,11 +1189,7 @@ export async function findReferences(
   return { status: "ok", definition: def, references: refs };
 }
 
-export async function collectNamespaceMemberRefs(
-  file: string,
-  ns: string,
-  member: string,
-): Promise<Range[]> {
+export async function collectNamespaceMemberRefs(file: string, ns: string, member: string): Promise<Range[]> {
   const parsed = await ensureParsedContext(file, undefined);
   const sup = parsed.sup;
   const source = parsed.source;
@@ -1477,12 +1197,7 @@ export async function collectNamespaceMemberRefs(
   const ranges: Range[] = [];
   const isRuby = sup.id === "ruby";
   const memberExpressionType =
-    sup.nodeTypes.memberExpression ??
-    (sup.id === "python"
-      ? "attribute"
-      : sup.id === "ruby"
-        ? "call"
-        : "member_expression");
+    sup.nodeTypes.memberExpression ?? (sup.id === "python" ? "attribute" : sup.id === "ruby" ? "call" : "member_expression");
   const isPropertyIdentifier = (nodeType: string): boolean =>
     (sup.nodeTypes.propertyIdentifier ?? ["property_identifier"]).includes(nodeType) ||
     nodeType === "field_identifier" ||
@@ -1517,17 +1232,9 @@ export async function collectNamespaceMemberRefs(
         prop = node.namedChildren[1] ?? node.child(1);
       } else {
         obj = node.childForFieldName("object") ?? node.child(0);
-        prop =
-          node.childForFieldName("property") ??
-          node.childForFieldName("attribute") ??
-          node.child(2);
+        prop = node.childForFieldName("property") ?? node.childForFieldName("attribute") ?? node.child(2);
       }
-      if (
-        obj &&
-        prop &&
-        isObjectIdentifier(obj.type) &&
-        isPropertyIdentifier(prop.type)
-      ) {
+      if (obj && prop && isObjectIdentifier(obj.type) && isPropertyIdentifier(prop.type)) {
         const objectName = sliceText(obj, source);
         const propertyName = sliceText(prop, source);
         if (objectName === ns && propertyName === member) {

@@ -10,13 +10,8 @@ function symbolHandleFromLocal(file: FileId, local: SymbolDef): string {
   return `${file}::${local.localName}::${index}`;
 }
 
-export async function locateChangedSymbols(
-  index: ProjectIndex,
-  file: FileId,
-  hunks: FileChange["hunks"],
-): Promise<ChangedSymbol[]> {
-  return (await locateChangedSymbolsWithLines(index, file, hunks))
-    .changedSymbols;
+export async function locateChangedSymbols(index: ProjectIndex, file: FileId, hunks: FileChange["hunks"]): Promise<ChangedSymbol[]> {
+  return (await locateChangedSymbolsWithLines(index, file, hunks)).changedSymbols;
 }
 
 export async function locateChangedSymbolsWithLines(
@@ -34,8 +29,7 @@ export async function locateChangedSymbolsWithLines(
   } catch {
     return { changedSymbols: [], changedLines: new Set(), parseFailed: true };
   }
-  if (!parsedEntry)
-    return { changedSymbols: [], changedLines: new Set(), parseFailed: true };
+  if (!parsedEntry) return { changedSymbols: [], changedLines: new Set(), parseFailed: true };
 
   const { source, tree } = parsedEntry;
   const sup = parsedEntry.sup;
@@ -69,20 +63,10 @@ export async function locateChangedSymbolsWithLines(
 
   for (const node of changedNodes) {
     const classification = classifyChangedNode(node, source, sup);
-    const symbolHandle = findSymbolHandleForNode(
-      index,
-      file,
-      node,
-      sup,
-      classification,
-      source,
-      trackedPositions,
-    );
+    const symbolHandle = findSymbolHandleForNode(index, file, node, sup, classification, source, trackedPositions);
     if (!symbolHandle) continue;
 
-    const symbolDef = mod?.locals.find(
-      (l) => symbolHandleFromLocal(file, l) === symbolHandle,
-    );
+    const symbolDef = mod?.locals.find((l) => symbolHandleFromLocal(file, l) === symbolHandle);
     if (!symbolDef) continue;
 
     const existing = seenHandles.get(symbolHandle);
@@ -106,11 +90,7 @@ export async function locateChangedSymbolsWithLines(
         lines,
         // Computed once here so calculateSeverity doesn't re-parse the AST
         // once per reference (which could be hundreds of calls for hot symbols).
-        signatureChanged: computeSignatureChanged(
-          tree,
-          symbolDef,
-          changedByteRanges,
-        ),
+        signatureChanged: computeSignatureChanged(tree, symbolDef, changedByteRanges),
       });
     }
   }
@@ -166,15 +146,7 @@ export async function mapChangedLinesToSymbols(
     }
     if (matchingLines.length === 0) continue;
     const classification = classifyChangedNode(node, source, sup);
-    const symbolHandle = findSymbolHandleForNode(
-      index,
-      file,
-      node,
-      sup,
-      classification,
-      source,
-      trackedPositions,
-    );
+    const symbolHandle = findSymbolHandleForNode(index, file, node, sup, classification, source, trackedPositions);
     if (!symbolHandle) continue;
     const existing = linesByHandle.get(symbolHandle) ?? new Set<number>();
     for (const line of matchingLines) existing.add(line);
@@ -205,10 +177,7 @@ function hasOverlapSorted(sorted: number[], lo: number, hi: number): boolean {
   return false;
 }
 
-function findNodesInLines(
-  tree: SyntaxTreeLike,
-  changedLines: Set<number>,
-): SyntaxNodeLike[] {
+function findNodesInLines(tree: SyntaxTreeLike, changedLines: Set<number>): SyntaxNodeLike[] {
   if (changedLines.size === 0) return [];
 
   // Build a sorted array once for O(log n) overlap checks during the walk.
@@ -271,11 +240,7 @@ type NodeClassification = {
   typeOnly?: boolean;
 } | null;
 
-function classifyChangedNode(
-  node: SyntaxNodeLike,
-  source: string,
-  sup: LanguageSupport,
-): NodeClassification {
+function classifyChangedNode(node: SyntaxNodeLike, source: string, sup: LanguageSupport): NodeClassification {
   if (sup.id === "html" && isHtmlIdAttributeValue(node, source)) {
     return { type: "definition" };
   }
@@ -294,10 +259,7 @@ function classifyChangedNode(
   }
 
   // Check for import statements
-  if (
-    node.type === "import_statement" ||
-    node.type === "import_equals_declaration"
-  ) {
+  if (node.type === "import_statement" || node.type === "import_equals_declaration") {
     return {
       type: "import",
       typeOnly: sup.isTypeOnly(source.slice(node.startIndex, node.endIndex)),
@@ -313,20 +275,14 @@ function classifyChangedNode(
   }
 
   // Check for callsites (identifiers that are not declarations)
-  if (
-    sup.nodeTypes.identifier.includes(node.type) &&
-    !sup.isDeclarationName?.(node)
-  ) {
+  if (sup.nodeTypes.identifier.includes(node.type) && !sup.isDeclarationName?.(node)) {
     return { type: "callsite" };
   }
 
   return null;
 }
 
-function isTypeOnlyDeclaration(
-  node: SyntaxNodeLike,
-  source: string,
-): boolean {
+function isTypeOnlyDeclaration(node: SyntaxNodeLike, source: string): boolean {
   // Check if this is part of a type-only declaration
   let current: SyntaxNodeLike | null = node;
   while (current) {
@@ -397,10 +353,7 @@ type ByteRange = { start: number; end: number };
  * single-line function where only the body changes, the edit range starts after
  * the closing `)` of the parameter list and therefore does not overlap params.
  */
-function computeChangedByteRanges(
-  source: string,
-  hunks: FileChange["hunks"],
-): ByteRange[] {
+function computeChangedByteRanges(source: string, hunks: FileChange["hunks"]): ByteRange[] {
   // Build 0-indexed line-start byte offsets for the new source.
   const lineStarts: number[] = [0];
   for (let i = 0; i < source.length; i++) {
@@ -447,8 +400,7 @@ function computeChangedByteRanges(
           while (
             sfx < oldText.length - pfx &&
             sfx < newText.length - pfx &&
-            oldText[oldText.length - 1 - sfx] ===
-              newText[newText.length - 1 - sfx]
+            oldText[oldText.length - 1 - sfx] === newText[newText.length - 1 - sfx]
           )
             sfx++;
           const start = lineStart + pfx;
@@ -470,10 +422,7 @@ function computeChangedByteRanges(
       // does not create spurious overlap with content near the last line.
       if (deleted.length > added.length) {
         const deletionCursorLine = Math.max(newLine - 1, 0);
-        const cursor =
-          deletionCursorLine >= lineStarts.length
-            ? source.length
-            : lineStarts[deletionCursorLine]!;
+        const cursor = deletionCursorLine >= lineStarts.length ? source.length : lineStarts[deletionCursorLine]!;
         // Ensure the sentinel range is non-empty: computeSignatureChanged uses
         // strict overlap (r.start < paramsEnd && r.end > paramsStart), so a
         // zero-length range (start === end) would never overlap anything.
@@ -503,11 +452,7 @@ function computeChangedByteRanges(
  * `function f(a) { return a + 1; }` produces a changed byte range that starts
  * after the `)` and therefore does not overlap the params node.
  */
-function computeSignatureChanged(
-  tree: SyntaxTreeLike,
-  symbolDef: SymbolDef,
-  changedByteRanges: ReadonlyArray<ByteRange>,
-): boolean {
+function computeSignatureChanged(tree: SyntaxTreeLike, symbolDef: SymbolDef, changedByteRanges: ReadonlyArray<ByteRange>): boolean {
   if (changedByteRanges.length === 0) return false;
   const pos = {
     row: symbolDef.range.start.line - 1,
@@ -519,9 +464,7 @@ function computeSignatureChanged(
     declNode = declNode.parent;
   }
   if (!declNode) return false;
-  const params =
-    declNode.childForFieldName("parameters") ||
-    declNode.childForFieldName("params");
+  const params = declNode.childForFieldName("parameters") || declNode.childForFieldName("params");
   if (!params) return false;
   // Note: namedChildCount === 0 is intentionally NOT checked here.
   // A signature edit that removes ALL parameters (e.g. f(a) → f()) should
@@ -548,14 +491,9 @@ function findSymbolHandleForNode(
   if (!mod) return null;
 
   // Exact declaration name node
-  if (
-    classification?.type === "definition" &&
-    isDefinitionNameNode(node, sup, source)
-  ) {
+  if (classification?.type === "definition" && isDefinitionNameNode(node, sup, source)) {
     const local = mod.locals.find(
-      (l) =>
-        l.range.start.line === node.startPosition?.row + 1 &&
-        l.range.start.column === node.startPosition?.column + 1,
+      (l) => l.range.start.line === node.startPosition?.row + 1 && l.range.start.column === node.startPosition?.column + 1,
     );
     if (local) {
       return symbolHandleFromLocal(file, local);
@@ -573,9 +511,7 @@ function findSymbolHandleForNode(
   const nameNode = findDeclarationNameInAncestors(node, sup, trackedPositions);
   if (nameNode) {
     const local = mod.locals.find(
-      (l) =>
-        l.range.start.line === nameNode.startPosition?.row + 1 &&
-        l.range.start.column === nameNode.startPosition?.column + 1,
+      (l) => l.range.start.line === nameNode.startPosition?.row + 1 && l.range.start.column === nameNode.startPosition?.column + 1,
     );
     return local ? symbolHandleFromLocal(file, local) : null;
   }
@@ -583,27 +519,17 @@ function findSymbolHandleForNode(
   return null;
 }
 
-function isExported(
-  index: ProjectIndex,
-  file: FileId,
-  symbolDef: SymbolDef,
-): boolean {
+function isExported(index: ProjectIndex, file: FileId, symbolDef: SymbolDef): boolean {
   const mod = index.byFile.get(file);
   if (!mod) return false;
 
   const symbolIndex = symbolDef.range.start.index ?? 0;
   return mod.exports.some(
-    (e) =>
-      e.type === "local" &&
-      e.target.localName === symbolDef.localName &&
-      (e.target.range.start.index ?? 0) === symbolIndex,
+    (e) => e.type === "local" && e.target.localName === symbolDef.localName && (e.target.range.start.index ?? 0) === symbolIndex,
   );
 }
 
-function isStyleDefinitionNode(
-  node: SyntaxNodeLike,
-  sup: LanguageSupport,
-): boolean {
+function isStyleDefinitionNode(node: SyntaxNodeLike, sup: LanguageSupport): boolean {
   const parentType = node.parent?.type ?? "";
   if (sup.id === "css" || sup.id === "less") {
     if (node.type === "class_name" && parentType === "class_selector") {
@@ -636,10 +562,7 @@ function isStyleDefinitionNode(
   return false;
 }
 
-function isHtmlIdAttributeValue(
-  node: SyntaxNodeLike,
-  source: string,
-): boolean {
+function isHtmlIdAttributeValue(node: SyntaxNodeLike, source: string): boolean {
   if (node.type !== "attribute_value") return false;
   const quoted = node.parent;
   if (!quoted) return false;
@@ -647,18 +570,11 @@ function isHtmlIdAttributeValue(
   if (!attribute || attribute.type !== "attribute") return false;
   const nameNode = attribute.childForFieldName?.("name") ?? attribute.child(0);
   if (!nameNode || nameNode.type !== "attribute_name") return false;
-  const nameText = source
-    .slice(nameNode.startIndex, nameNode.endIndex)
-    .trim()
-    .toLowerCase();
+  const nameText = source.slice(nameNode.startIndex, nameNode.endIndex).trim().toLowerCase();
   return nameText === "id";
 }
 
-function isDefinitionNameNode(
-  node: SyntaxNodeLike,
-  sup: LanguageSupport,
-  source: string,
-): boolean {
+function isDefinitionNameNode(node: SyntaxNodeLike, sup: LanguageSupport, source: string): boolean {
   if (sup.isDeclarationName?.(node)) return true;
   if (sup.id === "html") return isHtmlIdAttributeValue(node, source);
   if (sup.id === "css" || sup.id === "less" || sup.id === "scss") {

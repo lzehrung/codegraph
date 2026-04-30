@@ -13,16 +13,8 @@ async function mkTmpDir(prefix: string): Promise<string> {
 describe("impact cycles and monorepo manifest modeling", () => {
   it("surfaces relevant dependency cycles in impact reports", async () => {
     const root = await mkTmpDir("dg-impact-cycles-");
-    await fsp.writeFile(
-      path.join(root, "a.ts"),
-      'import { b } from "./b";\nexport const a = () => b();\n',
-      "utf8",
-    );
-    await fsp.writeFile(
-      path.join(root, "b.ts"),
-      'import { a } from "./a";\nexport const b = () => a();\n',
-      "utf8",
-    );
+    await fsp.writeFile(path.join(root, "a.ts"), 'import { b } from "./b";\nexport const a = () => b();\n', "utf8");
+    await fsp.writeFile(path.join(root, "b.ts"), 'import { a } from "./a";\nexport const b = () => a();\n', "utf8");
 
     const index = await buildProjectIndex(root);
     const diffText = `diff --git a/a.ts b/a.ts
@@ -41,9 +33,7 @@ index 1111111..2222222 100644
     })) as ImpactReport;
 
     expect(report.cycles?.length ?? 0).toBeGreaterThan(0);
-    const cycle = report.cycles?.find((entry) =>
-      entry.files.includes("a.ts"),
-    );
+    const cycle = report.cycles?.find((entry) => entry.files.includes("a.ts"));
     expect(cycle).toBeDefined();
     expect(cycle?.touchesChangedFile).toBe(true);
     expect(cycle?.severity).toBe("high");
@@ -79,22 +69,10 @@ index 1111111..2222222 100644
       }),
       "utf8",
     );
-    await fsp.writeFile(
-      path.join(root, "packages", "shared", "package.json"),
-      JSON.stringify({ name: "@repo/shared" }),
-      "utf8",
-    );
+    await fsp.writeFile(path.join(root, "packages", "shared", "package.json"), JSON.stringify({ name: "@repo/shared" }), "utf8");
 
-    await fsp.writeFile(
-      path.join(root, "packages", "app", "main.ts"),
-      'export const app = "app";\n',
-      "utf8",
-    );
-    await fsp.writeFile(
-      path.join(root, "packages", "shared", "lib.py"),
-      "def helper():\n    return 'ok'\n",
-      "utf8",
-    );
+    await fsp.writeFile(path.join(root, "packages", "app", "main.ts"), 'export const app = "app";\n', "utf8");
+    await fsp.writeFile(path.join(root, "packages", "shared", "lib.py"), "def helper():\n    return 'ok'\n", "utf8");
 
     const index = await buildProjectIndex(root);
     const edge = index.graph.edges.find(

@@ -129,9 +129,7 @@ for await (const chunk of analyzeImpactStreaming(root, index, {
   } else if (chunk.type === "impactItem") {
     console.log(`Impacted: ${chunk.item.file} (${chunk.item.severity})`);
   } else if (chunk.type === "complete") {
-    console.log(
-      `Analysis complete: ${chunk.summary.totalImpacted} files impacted`,
-    );
+    console.log(`Analysis complete: ${chunk.summary.totalImpacted} files impacted`);
   } else if (chunk.type === "error") {
     console.error(`Error: ${chunk.error}`);
   }
@@ -161,28 +159,19 @@ for await (const chunk of session.analyzeImpactStream({
 Use partial-result helpers when the agent should keep going even if a subset of files fails:
 
 ```ts
-import {
-  withPartialResults,
-  summarizePartialResult,
-} from "@lzehrung/codegraph";
+import { withPartialResults, summarizePartialResult } from "@lzehrung/codegraph";
 
 const files = ["file1.ts", "file2.ts", "file3.ts"];
-const result = await withPartialResults(
-  files,
-  async (file) => await analyzeFile(file),
-  {
-    continueOnError: true,
-    concurrency: 8,
-  },
-);
+const result = await withPartialResults(files, async (file) => await analyzeFile(file), {
+  continueOnError: true,
+  concurrency: 8,
+});
 
 if (result.status === "complete") {
   console.log("All files processed successfully");
 } else if (result.status === "partial") {
   console.log(`Partial success: ${result.coverage * 100}% complete`);
-  console.log(
-    `Succeeded: ${result.metadata?.succeeded}, Failed: ${result.metadata?.failed}`,
-  );
+  console.log(`Succeeded: ${result.metadata?.succeeded}, Failed: ${result.metadata?.failed}`);
   processResults(result.data);
   for (const error of result.errors) {
     console.error(`${error.target}: ${error.message}`);
@@ -234,13 +223,7 @@ const neighbors = querySymbolNeighbors(symbolGraph, {
 These wrappers are designed to be imported directly into agent runtimes:
 
 ```ts
-import {
-  tool_getFileOverview,
-  tool_findSymbol,
-  tool_impactJSON,
-  tool_getGraph,
-  tool_goToDefinition,
-} from "@lzehrung/codegraph";
+import { tool_getFileOverview, tool_findSymbol, tool_impactJSON, tool_getGraph, tool_goToDefinition } from "@lzehrung/codegraph";
 
 const overview = await tool_getFileOverview(process.cwd(), "src/utils.ts");
 const matches = await tool_findSymbol(process.cwd(), "collectGraph");
@@ -250,14 +233,7 @@ const impact = await tool_impactJSON(process.cwd(), {
   head: "feature-branch",
 });
 const graph = await tool_getGraph(process.cwd(), { native: "off" });
-const definition = await tool_goToDefinition(
-  process.cwd(),
-  "src/main.ts",
-  10,
-  5,
-  undefined,
-  { native: "on" },
-);
+const definition = await tool_goToDefinition(process.cwd(), "src/main.ts", 10, 5, undefined, { native: "on" });
 ```
 
 Wrapper notes:
@@ -292,10 +268,7 @@ These patterns combine Codegraph's core capabilities with backend-review heurist
 ### 1. API route impact assessment
 
 ```ts
-import {
-  analyzeImpactFromDiff,
-  buildProjectIndex,
-} from "@lzehrung/codegraph";
+import { analyzeImpactFromDiff, buildProjectIndex } from "@lzehrung/codegraph";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
@@ -308,16 +281,10 @@ const impact = await analyzeImpactFromDiff(root, index, {
 });
 
 const apiRoutes = impact.impacted.filter(
-  (item) =>
-    item.file.includes("routes") ||
-    item.file.includes("controllers") ||
-    item.file.includes("api"),
+  (item) => item.file.includes("routes") || item.file.includes("controllers") || item.file.includes("api"),
 );
 
-const breakingChanges = impact.changedSymbols.filter(
-  (symbol) =>
-    symbol.exported && symbol.explain?.hints?.includes("signatureChanged"),
-);
+const breakingChanges = impact.changedSymbols.filter((symbol) => symbol.exported && symbol.explain?.hints?.includes("signatureChanged"));
 
 console.log(`API routes impacted: ${apiRoutes.length}`);
 console.log(`Breaking changes: ${breakingChanges.length}`);
@@ -326,15 +293,10 @@ console.log(`Breaking changes: ${breakingChanges.length}`);
 ### 2. Database schema impact analysis
 
 ```ts
-import {
-  collectImpactContext,
-} from "@lzehrung/codegraph";
+import { collectImpactContext } from "@lzehrung/codegraph";
 
 const schemaChanges = impact.changedSymbols.filter(
-  (symbol) =>
-    symbol.file.includes("models") ||
-    symbol.file.includes("schema") ||
-    symbol.file.includes("migrations"),
+  (symbol) => symbol.file.includes("models") || symbol.file.includes("schema") || symbol.file.includes("migrations"),
 );
 
 if (schemaChanges.length > 0) {
@@ -346,9 +308,7 @@ if (schemaChanges.length > 0) {
   );
 
   const affectedServices = context.symbolNeighbors.filter(
-    (neighbor) =>
-      neighbor.file.includes("services") ||
-      neighbor.file.includes("repositories"),
+    (neighbor) => neighbor.file.includes("services") || neighbor.file.includes("repositories"),
   );
 
   console.log(`Services needing migration review: ${affectedServices.length}`);
@@ -370,12 +330,8 @@ const candidateTests = listCandidateTestFiles(
   },
 );
 
-const highPriorityTests = candidateTests.filter(
-  (test) => test.confidence === "high",
-);
-const mediumPriorityTests = candidateTests.filter(
-  (test) => test.confidence === "medium",
-);
+const highPriorityTests = candidateTests.filter((test) => test.confidence === "high");
+const mediumPriorityTests = candidateTests.filter((test) => test.confidence === "medium");
 
 console.log(`High-priority tests to review: ${highPriorityTests.length}`);
 console.log(`Medium-priority tests to check: ${mediumPriorityTests.length}`);
@@ -386,15 +342,9 @@ console.log(`Medium-priority tests to check: ${mediumPriorityTests.length}`);
 ```ts
 import { textGrep } from "@lzehrung/codegraph";
 
-const securityPatterns = [
-  "exec\\(|eval\\(|spawn\\(",
-  "password|secret|key.*=",
-  "sql.*\\+|\\$\\{.*\\}",
-  "innerHTML|outerHTML",
-];
+const securityPatterns = ["exec\\(|eval\\(|spawn\\(", "password|secret|key.*=", "sql.*\\+|\\$\\{.*\\}", "innerHTML|outerHTML"];
 
-const securityFindings: Array<{ file: string; pattern: string; line: number }> =
-  [];
+const securityFindings: Array<{ file: string; pattern: string; line: number }> = [];
 
 for (const changedFile of impact.changedFiles) {
   for (const pattern of securityPatterns) {
@@ -441,11 +391,7 @@ if (configChanges.length > 0) {
 
 ```ts
 const perfHotspots = impact.impacted.filter(
-  (item) =>
-    item.file.includes("query") ||
-    item.file.includes("cache") ||
-    item.file.includes("index") ||
-    item.file.includes("perf"),
+  (item) => item.file.includes("query") || item.file.includes("cache") || item.file.includes("index") || item.file.includes("perf"),
 );
 
 if (perfHotspots.length > 0) {

@@ -4,11 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import {
-  buildProjectIndex,
-  buildProjectIndexFromFiles,
-  buildReviewReport,
-} from "../src/index.js";
+import { buildProjectIndex, buildProjectIndexFromFiles, buildReviewReport } from "../src/index.js";
 import * as indexer from "../src/indexer.js";
 import * as impactMap from "../src/impact/map.js";
 
@@ -24,9 +20,7 @@ function runGit(root: string, args: string[]): string {
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    throw new Error(
-      `git ${args.join(" ")} failed (${result.status}): ${result.stderr}`,
-    );
+    throw new Error(`git ${args.join(" ")} failed (${result.status}): ${result.stderr}`);
   }
   return result.stdout.trim();
 }
@@ -52,9 +46,7 @@ describe("Review report", () => {
     expect(report.riskSummary.level).toBeDefined();
     expect(report.reviewTasks.length).toBeGreaterThan(0);
     expect(report.changedFiles.length).toBe(1);
-    expect(report.changedFiles[0]?.symbols.some((s) => s.name === "a")).toBe(
-      true,
-    );
+    expect(report.changedFiles[0]?.symbols.some((s) => s.name === "a")).toBe(true);
   });
 
   it("includes definition snippets and callsites when enabled", async () => {
@@ -63,65 +55,32 @@ describe("Review report", () => {
     await fsp.mkdir(srcDir, { recursive: true });
     const featureFile = path.join(srcDir, "feature.ts");
     const consumerFile = path.join(srcDir, "consumer.ts");
-    await fsp.writeFile(
-      featureFile,
-      [
-        `export function greet(name: string) {`,
-        `  return \`hi \${name}\`;`,
-        `}`,
-        ``,
-      ].join("\n"),
-      "utf8",
-    );
+    await fsp.writeFile(featureFile, [`export function greet(name: string) {`, `  return \`hi \${name}\`;`, `}`, ``].join("\n"), "utf8");
     await fsp.writeFile(
       consumerFile,
-      [
-        `import { greet } from './feature';`,
-        ``,
-        `export function run() {`,
-        `  greet('world');`,
-        `}`,
-        ``,
-      ].join("\n"),
+      [`import { greet } from './feature';`, ``, `export function run() {`, `  greet('world');`, `}`, ``].join("\n"),
       "utf8",
     );
 
     await buildProjectIndex(root);
-    await fsp.writeFile(
-      featureFile,
-      [
-        `export function greet(name: string) {`,
-        `  return \`hello \${name}\`;`,
-        `}`,
-        ``,
-      ].join("\n"),
-      "utf8",
-    );
+    await fsp.writeFile(featureFile, [`export function greet(name: string) {`, `  return \`hello \${name}\`;`, `}`, ``].join("\n"), "utf8");
 
     const report = await buildReviewReport(root, {
       files: [featureFile],
       includeSymbolDetails: true,
       maxCallsites: 2,
     });
-    const featureSummary = report.changedFiles.find(
-      (entry) => entry.file === "src/feature.ts",
-    );
+    const featureSummary = report.changedFiles.find((entry) => entry.file === "src/feature.ts");
     expect(featureSummary).toBeDefined();
-    const greetSummary = featureSummary?.symbols.find(
-      (symbol) => symbol.name === "greet",
-    );
+    const greetSummary = featureSummary?.symbols.find((symbol) => symbol.name === "greet");
     expect(greetSummary).toBeDefined();
     expect(greetSummary?.definitionSnippet).toContain("function greet");
     const callsites = greetSummary?.callsites ?? [];
     expect(callsites.length).toBeGreaterThan(0);
     expect(callsites.length).toBeLessThanOrEqual(2);
-    expect(
-      callsites.some(
-        (site) =>
-          site.file === "src/consumer.ts" &&
-          (site.range.start.line === 1 || site.range.start.line === 4),
-      ),
-    ).toBe(true);
+    expect(callsites.some((site) => site.file === "src/consumer.ts" && (site.range.start.line === 1 || site.range.start.line === 4))).toBe(
+      true,
+    );
   });
 
   it("limits symbols to diff hunks and includes diff snippets when provided", async () => {
@@ -131,16 +90,7 @@ describe("Review report", () => {
     const featureFile = path.join(srcDir, "feature.ts");
     await fsp.writeFile(
       featureFile,
-      [
-        `export function alpha() {`,
-        `  return 2;`,
-        `}`,
-        ``,
-        `export function beta() {`,
-        `  return 5;`,
-        `}`,
-        ``,
-      ].join("\n"),
+      [`export function alpha() {`, `  return 2;`, `}`, ``, `export function beta() {`, `  return 5;`, `}`, ``].join("\n"),
       "utf8",
     );
 
@@ -165,18 +115,14 @@ describe("Review report", () => {
       includeSymbolDetails: true,
     });
 
-    const summary = report.changedFiles.find(
-      (entry) => entry.file === "src/feature.ts",
-    );
+    const summary = report.changedFiles.find((entry) => entry.file === "src/feature.ts");
     expect(summary).toBeDefined();
     const symbols = summary?.symbols ?? [];
     expect(symbols.some((symbol) => symbol.name === "alpha")).toBe(true);
     expect(symbols.some((symbol) => symbol.name === "beta")).toBe(false);
 
     const alpha = symbols.find((symbol) => symbol.name === "alpha");
-    expect(
-      alpha?.diffSnippets?.some((snippet) => snippet.includes("return 2;")),
-    ).toBe(true);
+    expect(alpha?.diffSnippets?.some((snippet) => snippet.includes("return 2;"))).toBe(true);
   });
 
   it("treats raw diff text as a source of changed files", async () => {
@@ -186,16 +132,7 @@ describe("Review report", () => {
     const featureFile = path.join(srcDir, "feature.ts");
     await fsp.writeFile(
       featureFile,
-      [
-        `export function alpha() {`,
-        `  return 2;`,
-        `}`,
-        ``,
-        `export function beta() {`,
-        `  return 5;`,
-        `}`,
-        ``,
-      ].join("\n"),
+      [`export function alpha() {`, `  return 2;`, `}`, ``, `export function beta() {`, `  return 5;`, `}`, ``].join("\n"),
       "utf8",
     );
 
@@ -217,9 +154,7 @@ describe("Review report", () => {
 
     expect(report.status).toBe("ok");
     expect(report.summary.filesChanged).toBe(1);
-    const summary = report.changedFiles.find(
-      (entry) => entry.file === "src/feature.ts",
-    );
+    const summary = report.changedFiles.find((entry) => entry.file === "src/feature.ts");
     expect(summary).toBeDefined();
     const symbols = summary?.symbols ?? [];
     expect(symbols.some((symbol) => symbol.name === "alpha")).toBe(true);
@@ -274,17 +209,11 @@ describe("Review report", () => {
     runGit(root, ["init"]);
     runGit(root, ["config", "user.email", "test@git.local"]);
     runGit(root, ["config", "user.name", "Codegraph Bot"]);
-    await fsp.writeFile(
-      path.join(root, "tracked.ts"),
-      `export const value = 1;\n`,
-      "utf8",
-    );
+    await fsp.writeFile(path.join(root, "tracked.ts"), `export const value = 1;\n`, "utf8");
     runGit(root, ["add", "."]);
     runGit(root, ["commit", "-m", "initial"]);
 
-    await expect(
-      buildReviewReport(root, { gitBase: "definitely-not-a-ref" }),
-    ).rejects.toThrow(/definitely-not-a-ref/);
+    await expect(buildReviewReport(root, { gitBase: "definitely-not-a-ref" })).rejects.toThrow(/definitely-not-a-ref/);
   });
 
   it("reports deleted files surfaced by git diffs", async () => {
@@ -295,11 +224,7 @@ describe("Review report", () => {
     const filePath = path.join(root, "gone.ts");
     const testFile = path.join(root, "gone.test.ts");
     await fsp.writeFile(filePath, `export const gone = true;\n`, "utf8");
-    await fsp.writeFile(
-      testFile,
-      `import { gone } from './gone';\nexport const seen = gone;\n`,
-      "utf8",
-    );
+    await fsp.writeFile(testFile, `import { gone } from './gone';\nexport const seen = gone;\n`, "utf8");
     runGit(root, ["add", "."]);
     runGit(root, ["commit", "-m", "initial"]);
     runGit(root, ["rm", "gone.ts"]);
@@ -313,12 +238,8 @@ describe("Review report", () => {
 
     expect(report.summary.filesChanged).toBe(1);
     expect(report.changedFiles[0]?.status).toBe("deleted");
-    expect(
-      report.changedFiles[0]?.symbols.some((symbol) => symbol.name === "gone"),
-    ).toBe(true);
-    expect(
-      report.changedFiles[0]?.symbols.some((symbol) => symbol.exported),
-    ).toBe(true);
+    expect(report.changedFiles[0]?.symbols.some((symbol) => symbol.name === "gone")).toBe(true);
+    expect(report.changedFiles[0]?.symbols.some((symbol) => symbol.exported)).toBe(true);
     expect(report.summary.symbolsChanged).toBe(1);
     expect(report.riskSummary.signals).toContain("exported-symbols-changed");
     expect(report.candidateTests).toContainEqual({
@@ -359,9 +280,7 @@ describe("Review report", () => {
       ].join("\n"),
     });
 
-    const fileSummary = report.changedFiles.find(
-      (entry) => entry.file === "src/index.ts",
-    );
+    const fileSummary = report.changedFiles.find((entry) => entry.file === "src/index.ts");
     expect(fileSummary?.symbols).toContainEqual(
       expect.objectContaining({
         name: "*",
@@ -383,11 +302,7 @@ describe("Review report", () => {
     const libFile = path.join(srcDir, "lib.ts");
     const testFile = path.join(testsDir, "lib.test.ts");
     await fsp.writeFile(libFile, `export const gone = 1;\n`, "utf8");
-    await fsp.writeFile(
-      testFile,
-      `import { gone } from '../src/lib';\nexport const seen = gone;\n`,
-      "utf8",
-    );
+    await fsp.writeFile(testFile, `import { gone } from '../src/lib';\nexport const seen = gone;\n`, "utf8");
 
     await buildProjectIndex(root, { cache: "memory" });
     await fsp.unlink(libFile);
@@ -433,11 +348,7 @@ describe("Review report", () => {
     const libFile = path.join(srcDir, "lib.ts");
     const verifyFile = path.join(checksDir, "lib.verify.ts");
     await fsp.writeFile(libFile, `export const gone = 1;\n`, "utf8");
-    await fsp.writeFile(
-      verifyFile,
-      `import { gone } from '../src/lib';\nexport const seen = gone;\n`,
-      "utf8",
-    );
+    await fsp.writeFile(verifyFile, `import { gone } from '../src/lib';\nexport const seen = gone;\n`, "utf8");
 
     await buildProjectIndex(root, { cache: "memory" });
     await fsp.unlink(libFile);
@@ -490,11 +401,7 @@ describe("Review report", () => {
       "utf8",
     );
     await fsp.writeFile(libFile, `export const gone = 1;\n`, "utf8");
-    await fsp.writeFile(
-      testFile,
-      `import { gone } from '@lib';\nexport const seen = gone;\n`,
-      "utf8",
-    );
+    await fsp.writeFile(testFile, `import { gone } from '@lib';\nexport const seen = gone;\n`, "utf8");
 
     await buildProjectIndex(root, { cache: "memory" });
     await fsp.unlink(libFile);
@@ -530,27 +437,11 @@ describe("Review report", () => {
 
     await fsp.mkdir(path.dirname(libFile), { recursive: true });
     await fsp.mkdir(path.dirname(testFile), { recursive: true });
-    await fsp.writeFile(
-      path.join(root, "package.json"),
-      JSON.stringify({ private: true, workspaces: ["packages/*"] }, null, 2),
-      "utf8",
-    );
-    await fsp.writeFile(
-      path.join(libDir, "package.json"),
-      JSON.stringify({ name: "@repo/lib", main: "src/index.ts" }, null, 2),
-      "utf8",
-    );
-    await fsp.writeFile(
-      path.join(appDir, "package.json"),
-      JSON.stringify({ name: "@repo/app" }, null, 2),
-      "utf8",
-    );
+    await fsp.writeFile(path.join(root, "package.json"), JSON.stringify({ private: true, workspaces: ["packages/*"] }, null, 2), "utf8");
+    await fsp.writeFile(path.join(libDir, "package.json"), JSON.stringify({ name: "@repo/lib", main: "src/index.ts" }, null, 2), "utf8");
+    await fsp.writeFile(path.join(appDir, "package.json"), JSON.stringify({ name: "@repo/app" }, null, 2), "utf8");
     await fsp.writeFile(libFile, `export const gone = 1;\n`, "utf8");
-    await fsp.writeFile(
-      testFile,
-      `import { gone } from '@repo/lib';\nexport const seen = gone;\n`,
-      "utf8",
-    );
+    await fsp.writeFile(testFile, `import { gone } from '@repo/lib';\nexport const seen = gone;\n`, "utf8");
 
     await buildProjectIndex(root, { cache: "memory" });
     await fsp.unlink(libFile);
@@ -591,11 +482,7 @@ describe("Review report", () => {
     const viewFile = path.join(srcDir, "view.tsx");
     const testFile = path.join(testsDir, "view.test.tsx");
     await fsp.writeFile(viewFile, `export function View() { return null; }\n`, "utf8");
-    await fsp.writeFile(
-      testFile,
-      `import { View } from '../src/view.jsx';\nexport const seen = View;\n`,
-      "utf8",
-    );
+    await fsp.writeFile(testFile, `import { View } from '../src/view.jsx';\nexport const seen = View;\n`, "utf8");
 
     await buildProjectIndex(root, { cache: "memory" });
     await fsp.unlink(viewFile);
@@ -672,11 +559,7 @@ describe("Review report", () => {
       await fsp.mkdir(srcDir, { recursive: true });
       const libFile = path.join(srcDir, "lib.ts");
       await fsp.writeFile(libFile, `export const gone = 1;\n`, "utf8");
-      await fsp.writeFile(
-        path.join(root, "main.ts"),
-        `import { gone } from "./src/lib";\nexport const seen = gone;\n`,
-        "utf8",
-      );
+      await fsp.writeFile(path.join(root, "main.ts"), `import { gone } from "./src/lib";\nexport const seen = gone;\n`, "utf8");
 
       await buildProjectIndex(root, { cache: "memory" });
       await fsp.unlink(libFile);
@@ -709,11 +592,7 @@ describe("Review report", () => {
     const libFile = path.join(srcDir, "lib.ts");
     const mainFile = path.join(srcDir, "main.ts");
     await fsp.writeFile(libFile, `export const gone = 1;\n`, "utf8");
-    await fsp.writeFile(
-      mainFile,
-      `import { gone } from './lib';\nexport const seen = gone;\n`,
-      "utf8",
-    );
+    await fsp.writeFile(mainFile, `import { gone } from './lib';\nexport const seen = gone;\n`, "utf8");
 
     await buildProjectIndex(root, { cache: "memory" });
     await fsp.unlink(libFile);
@@ -747,11 +626,7 @@ describe("Review report", () => {
     const libFile = path.join(srcDir, "lib.ts");
     const consumerFile = path.join(srcDir, "consumer.ts");
     await fsp.writeFile(libFile, `export const lib = 1;\n`, "utf8");
-    await fsp.writeFile(
-      consumerFile,
-      `import { lib } from './lib';\nexport const seen = lib;\n`,
-      "utf8",
-    );
+    await fsp.writeFile(consumerFile, `import { lib } from './lib';\nexport const seen = lib;\n`, "utf8");
 
     await buildProjectIndex(root, { cache: "memory" });
     await fsp.unlink(consumerFile);
@@ -786,11 +661,7 @@ describe("Review report", () => {
     const depFile = path.join(srcDir, "dep.ts");
     const consumerFile = path.join(srcDir, "consumer.ts");
     await fsp.writeFile(depFile, `export const dep = 1;\n`, "utf8");
-    await fsp.writeFile(
-      consumerFile,
-      `import { dep } from './dep';\nexport const seen = dep;\n`,
-      "utf8",
-    );
+    await fsp.writeFile(consumerFile, `import { dep } from './dep';\nexport const seen = dep;\n`, "utf8");
 
     await fsp.unlink(consumerFile);
     await fsp.unlink(depFile);
@@ -849,11 +720,7 @@ describe("Review report", () => {
       "utf8",
     );
     await fsp.writeFile(libFile, `export const lib = 1;\n`, "utf8");
-    await fsp.writeFile(
-      consumerFile,
-      `import { lib } from '@lib';\nexport const seen = lib;\n`,
-      "utf8",
-    );
+    await fsp.writeFile(consumerFile, `import { lib } from '@lib';\nexport const seen = lib;\n`, "utf8");
 
     await buildProjectIndex(root, { cache: "memory" });
     await fsp.unlink(consumerFile);
@@ -904,11 +771,7 @@ describe("Review report", () => {
       "utf8",
     );
     await fsp.writeFile(depFile, `export const dep = 1;\n`, "utf8");
-    await fsp.writeFile(
-      consumerFile,
-      `import { dep } from '@dep';\nexport const seen = dep;\n`,
-      "utf8",
-    );
+    await fsp.writeFile(consumerFile, `import { dep } from '@dep';\nexport const seen = dep;\n`, "utf8");
 
     await fsp.unlink(consumerFile);
     await fsp.unlink(depFile);
@@ -953,27 +816,11 @@ describe("Review report", () => {
 
     await fsp.mkdir(path.dirname(libFile), { recursive: true });
     await fsp.mkdir(path.dirname(consumerFile), { recursive: true });
-    await fsp.writeFile(
-      path.join(root, "package.json"),
-      JSON.stringify({ private: true, workspaces: ["packages/*"] }, null, 2),
-      "utf8",
-    );
-    await fsp.writeFile(
-      path.join(libDir, "package.json"),
-      JSON.stringify({ name: "@repo/lib", main: "src/index.ts" }, null, 2),
-      "utf8",
-    );
-    await fsp.writeFile(
-      path.join(appDir, "package.json"),
-      JSON.stringify({ name: "@repo/app" }, null, 2),
-      "utf8",
-    );
+    await fsp.writeFile(path.join(root, "package.json"), JSON.stringify({ private: true, workspaces: ["packages/*"] }, null, 2), "utf8");
+    await fsp.writeFile(path.join(libDir, "package.json"), JSON.stringify({ name: "@repo/lib", main: "src/index.ts" }, null, 2), "utf8");
+    await fsp.writeFile(path.join(appDir, "package.json"), JSON.stringify({ name: "@repo/app" }, null, 2), "utf8");
     await fsp.writeFile(libFile, `export const lib = 1;\n`, "utf8");
-    await fsp.writeFile(
-      consumerFile,
-      `import { lib } from '@repo/lib';\nexport const seen = lib;\n`,
-      "utf8",
-    );
+    await fsp.writeFile(consumerFile, `import { lib } from '@repo/lib';\nexport const seen = lib;\n`, "utf8");
 
     await buildProjectIndex(root, { cache: "memory" });
     await fsp.unlink(consumerFile);
@@ -1010,27 +857,11 @@ describe("Review report", () => {
 
     await fsp.mkdir(path.dirname(depFile), { recursive: true });
     await fsp.mkdir(path.dirname(consumerFile), { recursive: true });
-    await fsp.writeFile(
-      path.join(root, "package.json"),
-      JSON.stringify({ private: true, workspaces: ["packages/*"] }, null, 2),
-      "utf8",
-    );
-    await fsp.writeFile(
-      path.join(libDir, "package.json"),
-      JSON.stringify({ name: "@repo/lib", main: "src/index.ts" }, null, 2),
-      "utf8",
-    );
-    await fsp.writeFile(
-      path.join(appDir, "package.json"),
-      JSON.stringify({ name: "@repo/app" }, null, 2),
-      "utf8",
-    );
+    await fsp.writeFile(path.join(root, "package.json"), JSON.stringify({ private: true, workspaces: ["packages/*"] }, null, 2), "utf8");
+    await fsp.writeFile(path.join(libDir, "package.json"), JSON.stringify({ name: "@repo/lib", main: "src/index.ts" }, null, 2), "utf8");
+    await fsp.writeFile(path.join(appDir, "package.json"), JSON.stringify({ name: "@repo/app" }, null, 2), "utf8");
     await fsp.writeFile(depFile, `export const dep = 1;\n`, "utf8");
-    await fsp.writeFile(
-      consumerFile,
-      `import { dep } from '@repo/lib';\nexport const seen = dep;\n`,
-      "utf8",
-    );
+    await fsp.writeFile(consumerFile, `import { dep } from '@repo/lib';\nexport const seen = dep;\n`, "utf8");
 
     await fsp.unlink(consumerFile);
     await fsp.unlink(depFile);
@@ -1080,11 +911,7 @@ describe("Review report", () => {
     const testFile = path.join(testsDir, "index.test.ts");
     await fsp.writeFile(implFile, `export const impl = 1;\n`, "utf8");
     await fsp.writeFile(barrelFile, `export * from './impl';\n`, "utf8");
-    await fsp.writeFile(
-      testFile,
-      `import { impl } from '../src/index';\nexport const seen = impl;\n`,
-      "utf8",
-    );
+    await fsp.writeFile(testFile, `import { impl } from '../src/index';\nexport const seen = impl;\n`, "utf8");
     runGit(root, ["add", "."]);
     runGit(root, ["commit", "-m", "initial"]);
     runGit(root, ["rm", "src/index.ts"]);
@@ -1097,9 +924,7 @@ describe("Review report", () => {
       includeSymbolDetails: true,
     });
 
-    const barrelSummary = report.changedFiles.find(
-      (entry) => entry.file === "src/index.ts",
-    );
+    const barrelSummary = report.changedFiles.find((entry) => entry.file === "src/index.ts");
     expect(barrelSummary?.status).toBe("deleted");
     expect(barrelSummary?.symbols).toContainEqual(
       expect.objectContaining({
@@ -1195,9 +1020,7 @@ describe("Review report", () => {
     expect(report.diagnostics?.missingFiles).toEqual(["missing.ts"]);
     expect(report.diagnostics?.symbolMappingParseFailures).toEqual([]);
     expect(report.riskSummary.signals).toContain("missing-files");
-    expect(
-      report.reviewTasks.some((task) => task.reason === "missing-files"),
-    ).toBe(true);
+    expect(report.reviewTasks.some((task) => task.reason === "missing-files")).toBe(true);
   });
 
   it("rejects explicit files outside the project root", async () => {
@@ -1218,13 +1041,11 @@ describe("Review report", () => {
 
     await buildProjectIndex(root);
 
-    const locateSpy = vi
-      .spyOn(impactMap, "locateChangedSymbolsWithLines")
-      .mockResolvedValue({
-        changedSymbols: [],
-        changedLines: new Set<number>(),
-        parseFailed: true,
-      });
+    const locateSpy = vi.spyOn(impactMap, "locateChangedSymbolsWithLines").mockResolvedValue({
+      changedSymbols: [],
+      changedLines: new Set<number>(),
+      parseFailed: true,
+    });
 
     try {
       const report = await buildReviewReport(root, {
@@ -1242,15 +1063,9 @@ describe("Review report", () => {
       });
 
       expect(report.diagnostics?.missingFiles).toEqual([]);
-      expect(report.diagnostics?.symbolMappingParseFailures).toEqual([
-        "feature.ts",
-      ]);
+      expect(report.diagnostics?.symbolMappingParseFailures).toEqual(["feature.ts"]);
       expect(report.riskSummary.signals).toContain("symbol-mapping-degraded");
-      expect(
-        report.reviewTasks.some(
-          (task) => task.reason === "symbol-mapping-degraded",
-        ),
-      ).toBe(true);
+      expect(report.reviewTasks.some((task) => task.reason === "symbol-mapping-degraded")).toBe(true);
     } finally {
       locateSpy.mockRestore();
     }
@@ -1264,47 +1079,22 @@ describe("Review report", () => {
     await fsp.mkdir(testsDir, { recursive: true });
     const featureFile = path.join(srcDir, "feature.ts");
     const testFile = path.join(testsDir, "feature.test.ts");
-    await fsp.writeFile(
-      featureFile,
-      `export function helper() { return 1; }\n`,
-      "utf8",
-    );
-    await fsp.writeFile(
-      testFile,
-      `import { helper } from '../src/feature';\nhelper();\n`,
-      "utf8",
-    );
+    await fsp.writeFile(featureFile, `export function helper() { return 1; }\n`, "utf8");
+    await fsp.writeFile(testFile, `import { helper } from '../src/feature';\nhelper();\n`, "utf8");
 
     await buildProjectIndex(root);
-    const manifestPath = path.join(
-      root,
-      ".codegraph-cache",
-      "index-v1",
-      "manifest.json",
-    );
+    const manifestPath = path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
     expect(fs.existsSync(manifestPath)).toBe(true);
 
-    await fsp.writeFile(
-      featureFile,
-      `export function helper() { return 2; }\n`,
-      "utf8",
-    );
+    await fsp.writeFile(featureFile, `export function helper() { return 2; }\n`, "utf8");
     const report = await buildReviewReport(root, {
       files: [featureFile],
       maxCandidates: 5,
     });
 
     expect(report.summary.candidateTests).toBeGreaterThan(0);
-    expect(
-      report.candidateTests.some(
-        (candidate) => candidate.file === "tests/feature.test.ts",
-      ),
-    ).toBe(true);
-    expect(
-      report.candidateTests.some(
-        (candidate) => candidate.confidence === "high",
-      ),
-    ).toBe(true);
+    expect(report.candidateTests.some((candidate) => candidate.file === "tests/feature.test.ts")).toBe(true);
+    expect(report.candidateTests.some((candidate) => candidate.confidence === "high")).toBe(true);
   });
 
   it("processes symbol details across files in parallel", async () => {
@@ -1313,16 +1103,8 @@ describe("Review report", () => {
     await fsp.mkdir(srcDir, { recursive: true });
     const alphaFile = path.join(srcDir, "alpha.ts");
     const betaFile = path.join(srcDir, "beta.ts");
-    await fsp.writeFile(
-      alphaFile,
-      `export function alpha() { return 'a'; }\n`,
-      "utf8",
-    );
-    await fsp.writeFile(
-      betaFile,
-      `export function beta() { return 'b'; }\n`,
-      "utf8",
-    );
+    await fsp.writeFile(alphaFile, `export function alpha() { return 'a'; }\n`, "utf8");
+    await fsp.writeFile(betaFile, `export function beta() { return 'b'; }\n`, "utf8");
 
     await buildProjectIndex(root);
 
@@ -1343,13 +1125,11 @@ describe("Review report", () => {
       return entry;
     };
 
-    const findSpy = vi
-      .spyOn(indexer, "findReferences")
-      .mockImplementation((idx, req) => {
-        const def = "def" in req ? req.def : null;
-        const entry = createDeferred(def ?? null);
-        return entry.promise;
-      });
+    const findSpy = vi.spyOn(indexer, "findReferences").mockImplementation((idx, req) => {
+      const def = "def" in req ? req.def : null;
+      const entry = createDeferred(def ?? null);
+      return entry.promise;
+    });
 
     try {
       const reportPromise = buildReviewReport(root, {
@@ -1394,16 +1174,8 @@ describe("Review report", () => {
     await fsp.mkdir(srcDir, { recursive: true });
     const alphaFile = path.join(srcDir, "alpha.ts");
     const betaFile = path.join(srcDir, "beta.ts");
-    await fsp.writeFile(
-      alphaFile,
-      `export function alpha() { return 'a'; }\n`,
-      "utf8",
-    );
-    await fsp.writeFile(
-      betaFile,
-      `export function beta() { return 'b'; }\n`,
-      "utf8",
-    );
+    await fsp.writeFile(alphaFile, `export function alpha() { return 'a'; }\n`, "utf8");
+    await fsp.writeFile(betaFile, `export function beta() { return 'b'; }\n`, "utf8");
 
     await buildProjectIndex(root);
 
@@ -1412,23 +1184,21 @@ describe("Review report", () => {
     let inFlight = 0;
     let maxInFlight = 0;
 
-    const findSpy = vi
-      .spyOn(indexer, "findReferences")
-      .mockImplementation(() => {
-        inFlight += 1;
-        maxInFlight = Math.max(maxInFlight, inFlight);
-        let resolveFn: (value: RefResult) => void = () => {};
-        const promise = new Promise<RefResult>((resolve) => {
-          resolveFn = resolve;
-        });
-        deferreds.push({
-          resolve: (value: RefResult) => {
-            inFlight -= 1;
-            resolveFn(value);
-          },
-        });
-        return promise;
+    const findSpy = vi.spyOn(indexer, "findReferences").mockImplementation(() => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      let resolveFn: (value: RefResult) => void = () => {};
+      const promise = new Promise<RefResult>((resolve) => {
+        resolveFn = resolve;
       });
+      deferreds.push({
+        resolve: (value: RefResult) => {
+          inFlight -= 1;
+          resolveFn(value);
+        },
+      });
+      return promise;
+    });
 
     try {
       const reportPromise = buildReviewReport(root, {
@@ -1466,42 +1236,27 @@ describe("Review report", () => {
     await fsp.mkdir(srcDir, { recursive: true });
     const featureFile = path.join(srcDir, "feature.ts");
     const consumerFile = path.join(srcDir, "consumer.ts");
-    await fsp.writeFile(
-      featureFile,
-      `export function greet(name: string) { return name; }\n`,
-      "utf8",
-    );
-    await fsp.writeFile(
-      consumerFile,
-      `import { greet } from './feature';\nexport const run = () => greet('hi');\n`,
-      "utf8",
-    );
+    await fsp.writeFile(featureFile, `export function greet(name: string) { return name; }\n`, "utf8");
+    await fsp.writeFile(consumerFile, `import { greet } from './feature';\nexport const run = () => greet('hi');\n`, "utf8");
 
     await buildProjectIndex(root);
 
-    const originalBuildProjectIndexIncremental =
-      indexer.buildProjectIndexIncremental;
+    const originalBuildProjectIndexIncremental = indexer.buildProjectIndexIncremental;
     const originalFindReferences = indexer.findReferences;
-    const capturedIndexOpts: Array<
-      indexer.IncrementalBuildOptions | undefined
-    > = [];
+    const capturedIndexOpts: Array<indexer.IncrementalBuildOptions | undefined> = [];
     const capturedReferenceLimits: number[] = [];
 
-    const buildSpy = vi
-      .spyOn(indexer, "buildProjectIndexIncremental")
-      .mockImplementation(async (projectRoot, opts) => {
-        capturedIndexOpts.push(opts);
-        return await originalBuildProjectIndexIncremental(projectRoot, opts);
-      });
+    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockImplementation(async (projectRoot, opts) => {
+      capturedIndexOpts.push(opts);
+      return await originalBuildProjectIndexIncremental(projectRoot, opts);
+    });
 
-    const findSpy = vi
-      .spyOn(indexer, "findReferences")
-      .mockImplementation(async (idx, req, opts) => {
-        if (opts?.maxReferences !== undefined) {
-          capturedReferenceLimits.push(opts.maxReferences);
-        }
-        return await originalFindReferences(idx, req, opts);
-      });
+    const findSpy = vi.spyOn(indexer, "findReferences").mockImplementation(async (idx, req, opts) => {
+      if (opts?.maxReferences !== undefined) {
+        capturedReferenceLimits.push(opts.maxReferences);
+      }
+      return await originalFindReferences(idx, req, opts);
+    });
 
     try {
       const report = await buildReviewReport(root, {
@@ -1525,16 +1280,7 @@ describe("Review report", () => {
     const srcDir = path.join(root, "src");
     await fsp.mkdir(srcDir, { recursive: true });
     const featureFile = path.join(srcDir, "feature.ts");
-    await fsp.writeFile(
-      featureFile,
-      [
-        `export function greet(name: string) {`,
-        `  return \`hello \${name}\`;`,
-        `}`,
-        ``,
-      ].join("\n"),
-      "utf8",
-    );
+    await fsp.writeFile(featureFile, [`export function greet(name: string) {`, `  return \`hello \${name}\`;`, `}`, ``].join("\n"), "utf8");
     const consumers = ["alpha", "beta", "gamma"].map((name) => ({
       name,
       file: path.join(srcDir, `${name}.ts`),
@@ -1572,9 +1318,7 @@ describe("Review report", () => {
       });
 
       const findGreet = (report: Awaited<typeof minimal>) =>
-        report.changedFiles
-          .find((entry) => entry.file === "src/feature.ts")
-          ?.symbols.find((symbol) => symbol.name === "greet");
+        report.changedFiles.find((entry) => entry.file === "src/feature.ts")?.symbols.find((symbol) => symbol.name === "greet");
 
       const minimalGreet = findGreet(minimal);
       expect(minimalGreet).toBeDefined();
@@ -1606,11 +1350,7 @@ describe("Indexing helper", () => {
     await fsp.mkdir(libDir, { recursive: true });
     const utilsPath = path.join(libDir, "utils.ts");
     const indexPath = path.join(libDir, "index.ts");
-    await fsp.writeFile(
-      utilsPath,
-      `export function helper() { return 'ok'; }\n`,
-      "utf8",
-    );
+    await fsp.writeFile(utilsPath, `export function helper() { return 'ok'; }\n`, "utf8");
     await fsp.writeFile(indexPath, `export * from './utils';\n`, "utf8");
 
     const fullIndex = await buildProjectIndex(root);
@@ -1618,24 +1358,15 @@ describe("Indexing helper", () => {
     if (!fullModule) throw new Error("Full index missing index.ts");
     const utilsNormalized = normalize(utilsPath);
     const fullExportStar = fullModule.exports.find(
-      (exp) =>
-        exp.type === "exportStar" &&
-        typeof exp.fromModule === "string" &&
-        normalize(exp.fromModule) === utilsNormalized,
+      (exp) => exp.type === "exportStar" && typeof exp.fromModule === "string" && normalize(exp.fromModule) === utilsNormalized,
     );
     expect(fullExportStar).toBeDefined();
 
-    const subsetIndex = await buildProjectIndexFromFiles(root, [
-      indexPath,
-      utilsPath,
-    ]);
+    const subsetIndex = await buildProjectIndexFromFiles(root, [indexPath, utilsPath]);
     const subsetModule = subsetIndex.byFile.get(normalize(indexPath));
     if (!subsetModule) throw new Error("Subset index missing index.ts");
     const subsetExportStar = subsetModule.exports.find(
-      (exp) =>
-        exp.type === "exportStar" &&
-        typeof exp.fromModule === "string" &&
-        normalize(exp.fromModule) === utilsNormalized,
+      (exp) => exp.type === "exportStar" && typeof exp.fromModule === "string" && normalize(exp.fromModule) === utilsNormalized,
     );
     expect(subsetExportStar).toBeDefined();
   });
@@ -1644,16 +1375,8 @@ describe("Indexing helper", () => {
     const root = await mkTmpDir("dg-review-ruby-incremental-");
     const utilPath = path.join(root, "util.rb");
     const mainPath = path.join(root, "main.rb");
-    await fsp.writeFile(
-      utilPath,
-      ["class Tool", "  VALUE = 1", "end", ""].join("\n"),
-      "utf8",
-    );
-    await fsp.writeFile(
-      mainPath,
-      ["require_relative './util'", "", "value = Tool::VALUE", ""].join("\n"),
-      "utf8",
-    );
+    await fsp.writeFile(utilPath, ["class Tool", "  VALUE = 1", "end", ""].join("\n"), "utf8");
+    await fsp.writeFile(mainPath, ["require_relative './util'", "", "value = Tool::VALUE", ""].join("\n"), "utf8");
 
     const normalizedMainPath = mainPath.replace(/\\/g, "/");
     const fullIndex = await buildProjectIndex(root, { cache: "disk" });
@@ -1664,23 +1387,13 @@ describe("Indexing helper", () => {
       cache: "disk",
       files: [mainPath],
     });
-    const incrementalMainModule =
-      incrementalIndex.byFile.get(normalizedMainPath);
+    const incrementalMainModule = incrementalIndex.byFile.get(normalizedMainPath);
     expect(incrementalMainModule).toBeDefined();
 
-    const hasToolNamespaceImport = (
-      imports: NonNullable<typeof fullMainModule>["imports"],
-    ) =>
-      imports.some(
-        (imp) =>
-          imp.kind === "namespace" &&
-          imp.localNS === "Tool" &&
-          imp.resolved === utilPath.replace(/\\/g, "/"),
-      );
+    const hasToolNamespaceImport = (imports: NonNullable<typeof fullMainModule>["imports"]) =>
+      imports.some((imp) => imp.kind === "namespace" && imp.localNS === "Tool" && imp.resolved === utilPath.replace(/\\/g, "/"));
 
     expect(hasToolNamespaceImport(fullMainModule?.imports ?? [])).toBe(true);
-    expect(hasToolNamespaceImport(incrementalMainModule?.imports ?? [])).toBe(
-      true,
-    );
+    expect(hasToolNamespaceImport(incrementalMainModule?.imports ?? [])).toBe(true);
   });
 });

@@ -1,11 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import path from "node:path";
-import {
-  buildProjectIndex,
-  buildSymbolGraphDetailed,
-  collectGraph,
-  type BuildReport,
-} from "../src/index.js";
+import { buildProjectIndex, buildSymbolGraphDetailed, collectGraph, type BuildReport } from "../src/index.js";
 import { isJsFallbackAvailable } from "../src/jsFallback.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
 

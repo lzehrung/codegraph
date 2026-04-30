@@ -2,13 +2,7 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import {
-  buildProjectIndex,
-  buildSymbolGraphDetailed,
-  parseSymbolQuery,
-  querySymbols,
-  querySymbolNeighbors,
-} from "../src/index.js";
+import { buildProjectIndex, buildSymbolGraphDetailed, parseSymbolQuery, querySymbols, querySymbolNeighbors } from "../src/index.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -43,12 +37,8 @@ describe("Agent query helpers", () => {
       ...n,
       file: normalizePath(n.file),
     }));
-    const addDef = nodes.find(
-      (n) => n.file.endsWith("/main.ts") && n.name === "add",
-    );
-    const callDef = nodes.find(
-      (n) => n.file.endsWith("/main.ts") && n.name === "call",
-    );
+    const addDef = nodes.find((n) => n.file.endsWith("/main.ts") && n.name === "add");
+    const callDef = nodes.find((n) => n.file.endsWith("/main.ts") && n.name === "call");
     expect(addDef).toBeDefined();
     expect(callDef).toBeDefined();
 

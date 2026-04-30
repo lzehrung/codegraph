@@ -16,13 +16,7 @@ import {
   type NativeRuntimeMode,
   type SymbolDef,
 } from "./index.js";
-import {
-  fileExists,
-  isFilePathWithinRoot,
-  normalizePath,
-  resolveFilePathFromRoot,
-  toProjectRelativePath,
-} from "./util.js";
+import { fileExists, isFilePathWithinRoot, normalizePath, resolveFilePathFromRoot, toProjectRelativePath } from "./util.js";
 
 type ToolRuntimeOptions = {
   native?: NativeRuntimeMode;
@@ -130,9 +124,7 @@ export async function tool_getFileOverview(
     const { absPath, relativeFile } = resolvedFile;
     const mod = index.byFile.get(absPath);
     if (!mod) {
-      const reason = (await fileExists(absPath))
-        ? "file_not_indexed"
-        : "file_not_found";
+      const reason = (await fileExists(absPath)) ? "file_not_indexed" : "file_not_found";
       return {
         status: "not_found",
         file: relativeFile,
@@ -147,8 +139,7 @@ export async function tool_getFileOverview(
     const symbols = listSymbolsForOverview(index, absPath);
 
     const lines: string[] = [`# Overview of ${relativeFile}`];
-    const hasSymbols =
-      symbols.imports.length > 0 || symbols.definitions.length > 0;
+    const hasSymbols = symbols.imports.length > 0 || symbols.definitions.length > 0;
 
     if (symbols.imports.length > 0) {
       lines.push("\n## Imports");
@@ -158,9 +149,7 @@ export async function tool_getFileOverview(
 
     if (symbols.definitions.length > 0) {
       lines.push("\n## Definitions");
-      symbols.definitions.sort(
-        (a, b) => (a.range?.start.line ?? 0) - (b.range?.start.line ?? 0),
-      );
+      symbols.definitions.sort((a, b) => (a.range?.start.line ?? 0) - (b.range?.start.line ?? 0));
 
       for (const def of symbols.definitions) {
         const lineInfo = def.range ? `(line ${def.range.start.line})` : "";
@@ -251,9 +240,7 @@ export async function tool_findSymbol(
 /**
  * Lists all files in the project that codegraph can analyze.
  */
-export async function tool_listProjectFiles(
-  root: string,
-): Promise<{ status: "ok" | "error"; files?: string[]; error?: string }> {
+export async function tool_listProjectFiles(root: string): Promise<{ status: "ok" | "error"; files?: string[]; error?: string }> {
   try {
     const files = await listProjectFiles(root);
     return {
@@ -326,7 +313,10 @@ function resolveToolFileInput(
   };
 }
 
-function listSymbolsForOverview(index: ProjectIndex, file: string): {
+function listSymbolsForOverview(
+  index: ProjectIndex,
+  file: string,
+): {
   imports: Array<{ name: string }>;
   definitions: ReturnType<typeof listSymbols>;
 } {
@@ -334,12 +324,7 @@ function listSymbolsForOverview(index: ProjectIndex, file: string): {
   const mod = index.byFile.get(file);
   const imports =
     mod?.imports.map((entry) => ({
-      name:
-        entry.kind === "namespace"
-          ? entry.localNS
-          : entry.kind === "star"
-            ? entry.from
-            : entry.local,
+      name: entry.kind === "namespace" ? entry.localNS : entry.kind === "star" ? entry.from : entry.local,
     })) ?? [];
   return {
     imports,
@@ -355,14 +340,8 @@ function normalizeToolModuleRef(root: string, filePath: string): string {
   return normalizeToolFileOutput(root, filePath);
 }
 
-function normalizeToolImportBinding(
-  root: string,
-  binding: ImportBinding,
-): ImportBinding {
-  const resolved =
-    typeof binding.resolved === "string"
-      ? normalizeToolFileOutput(root, binding.resolved)
-      : binding.resolved;
+function normalizeToolImportBinding(root: string, binding: ImportBinding): ImportBinding {
+  const resolved = typeof binding.resolved === "string" ? normalizeToolFileOutput(root, binding.resolved) : binding.resolved;
   if (resolved === binding.resolved || resolved === undefined) {
     return binding;
   }
@@ -423,10 +402,7 @@ function normalizeToolEdge(root: string, edge: Edge): Edge {
   };
 }
 
-function normalizeToolGraph(
-  root: string,
-  graph: { nodes: string[]; edges: Edge[] },
-): { nodes: string[]; edges: Edge[] } {
+function normalizeToolGraph(root: string, graph: { nodes: string[]; edges: Edge[] }): { nodes: string[]; edges: Edge[] } {
   return {
     nodes: graph.nodes.map((node) => normalizeToolFileOutput(root, node)),
     edges: graph.edges.map((edge) => normalizeToolEdge(root, edge)),
@@ -526,9 +502,7 @@ export async function tool_findReferences(
     return {
       ...result,
       definition: normalizeToolDefinition(root, result.definition),
-      references: result.references.map((reference) =>
-        normalizeToolReference(root, reference),
-      ),
+      references: result.references.map((reference) => normalizeToolReference(root, reference)),
     };
   } catch (error) {
     return { status: "error", error: String(error) };

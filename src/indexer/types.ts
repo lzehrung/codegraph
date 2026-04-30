@@ -1,7 +1,4 @@
-import type {
-  FallbackImportExtractionReason,
-  GraphBuildOptions,
-} from "../graphs.js";
+import type { FallbackImportExtractionReason, GraphBuildOptions } from "../graphs.js";
 import type { LogLevel } from "../logging.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { ScopeIndex } from "./scope.js";
@@ -103,9 +100,7 @@ export type ModuleIndex = {
   locals: SymbolDef[];
 };
 
-export type ResolvedExport =
-  | { kind: "resolved"; def: SymbolDef }
-  | { kind: "namespace"; file: FileId };
+export type ResolvedExport = { kind: "resolved"; def: SymbolDef } | { kind: "namespace"; file: FileId };
 
 export type ProjectIndex = {
   graph: Graph;
@@ -121,9 +116,7 @@ export type ProjectIndex = {
 };
 
 export type BuildOptions = {
-  onProgress?:
-    | ((progress: import("../types.js").ProgressUpdate) => void)
-    | undefined;
+  onProgress?: ((progress: import("../types.js").ProgressUpdate) => void) | undefined;
   threads?: number;
   cache?: "off" | "memory" | "disk";
   cacheDir?: string;
@@ -200,10 +193,7 @@ export type ManifestReport = {
   configHashError?: string;
 };
 
-export type NativeBackendFallbackReason =
-  | "unavailable"
-  | "unsupportedLanguage"
-  | "queryFailure";
+export type NativeBackendFallbackReason = "unavailable" | "unsupportedLanguage" | "queryFailure";
 
 export type NativeBackendLanguageReport = {
   filesSeen: number;

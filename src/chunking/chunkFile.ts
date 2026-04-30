@@ -86,14 +86,7 @@ function defaultTokenizer(text: string): number {
  * @returns Array of semantic chunks
  */
 export function chunkFile(opts: ChunkFileOptions): Chunk[] {
-  const {
-    language,
-    source,
-    filePath,
-    minTokens = 150,
-    maxTokens = 400,
-    tokenizer = defaultTokenizer,
-  } = opts;
+  const { language, source, filePath, minTokens = 150, maxTokens = 400, tokenizer = defaultTokenizer } = opts;
 
   const matches = getChunkMatches(language, source, filePath);
 
@@ -133,13 +126,9 @@ export function chunkFile(opts: ChunkFileOptions): Chunk[] {
         innerCapture = capture;
       }
 
-      if (
-        name.startsWith(language.captures.blockPrefix) &&
-        name !== language.captures.innerBlock
-      ) {
+      if (name.startsWith(language.captures.blockPrefix) && name !== language.captures.innerBlock) {
         blockCapture = capture;
-        blockKind =
-          name.slice(language.captures.blockPrefix.length) || capture.nodeType;
+        blockKind = name.slice(language.captures.blockPrefix.length) || capture.nodeType;
       }
     }
 
@@ -171,15 +160,12 @@ export function chunkFile(opts: ChunkFileOptions): Chunk[] {
   }
 
   mainBlocks.sort((a, b) => a.startByte - b.startByte || a.endByte - b.endByte);
-  innerBlocks.sort(
-    (a, b) => a.startByte - b.startByte || a.endByte - b.endByte,
-  );
+  innerBlocks.sort((a, b) => a.startByte - b.startByte || a.endByte - b.endByte);
   comments.sort((a, b) => a.startByte - b.startByte || a.endByte - b.endByte);
 
   const preliminaryChunks: Chunk[] = [];
   let chunkIdCounter = 0;
-  const makeChunkId = () =>
-    `${language.id}:${filePath ?? "unknown"}:${chunkIdCounter++}`;
+  const makeChunkId = () => `${language.id}:${filePath ?? "unknown"}:${chunkIdCounter++}`;
 
   for (const block of mainBlocks) {
     const text = source.slice(block.startByte, block.endByte);
@@ -200,21 +186,10 @@ export function chunkFile(opts: ChunkFileOptions): Chunk[] {
       continue;
     }
 
-    const innerInRange = innerBlocks.filter(
-      (ib) => ib.startByte > block.startByte && ib.endByte < block.endByte,
-    );
+    const innerInRange = innerBlocks.filter((ib) => ib.startByte > block.startByte && ib.endByte < block.endByte);
 
     if (innerInRange.length === 0) {
-      splitLargeBlockSimple(
-        block,
-        source,
-        tokenizer,
-        maxTokens,
-        makeChunkId,
-        preliminaryChunks,
-        language.id,
-        filePath,
-      );
+      splitLargeBlockSimple(block, source, tokenizer, maxTokens, makeChunkId, preliminaryChunks, language.id, filePath);
     } else {
       splitLargeBlockUsingInnerBlocks(
         block,
@@ -247,59 +222,28 @@ export function chunkFile(opts: ChunkFileOptions): Chunk[] {
     });
   }
 
-  preliminaryChunks.sort(
-    (a, b) => a.startLine - b.startLine || a.endLine - b.endLine,
-  );
+  preliminaryChunks.sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);
 
-  const mergedChunks = mergeSmallChunks(
-    preliminaryChunks,
-    minTokens,
-    maxTokens,
-    tokenizer,
-  );
+  const mergedChunks = mergeSmallChunks(preliminaryChunks, minTokens, maxTokens, tokenizer);
 
-  const finalChunks = fillGapsWithMiscChunks(
-    mergedChunks,
-    source,
-    language.id,
-    filePath,
-    tokenizer,
-    minTokens,
-    maxTokens,
-    makeChunkId,
-  );
+  const finalChunks = fillGapsWithMiscChunks(mergedChunks, source, language.id, filePath, tokenizer, minTokens, maxTokens, makeChunkId);
 
   return finalChunks;
 }
 
-function getChunkMatches(
-  language: LanguageConfig,
-  source: string,
-  filePath?: string | undefined,
-): ChunkMatch[] {
+function getChunkMatches(language: LanguageConfig, source: string, filePath?: string | undefined): ChunkMatch[] {
   const support = supportById(language.supportId);
   if (support) {
-    const nativeExecution = getNativeSingleQueryExecution(
-      source,
-      support,
-      language.queryText,
-    );
+    const nativeExecution = getNativeSingleQueryExecution(source, support, language.queryText);
     if (nativeExecution.matches) {
       return nativeExecution.matches.map(toChunkMatchFromNative);
     }
-    if (
-      isNativeBindingLoadedForLanguage(support.id)
-    ) {
+    if (isNativeBindingLoadedForLanguage(support.id)) {
       return [];
     }
 
     try {
-      const matches = executeJsQueryAsNativeMatches(
-        source,
-        support,
-        language.definition.grammar(filePath),
-        language.queryText,
-      );
+      const matches = executeJsQueryAsNativeMatches(source, support, language.definition.grammar(filePath), language.queryText);
       return matches.map(toChunkMatchFromNative);
     } catch {
       return [];
@@ -409,16 +353,7 @@ function splitLargeBlockUsingInnerBlocks(
   }
 
   if (segments.length === 0) {
-    splitLargeBlockSimple(
-      block,
-      source,
-      tokenizer,
-      maxTokens,
-      makeChunkId,
-      out,
-      languageId,
-      filePath,
-    );
+    splitLargeBlockSimple(block, source, tokenizer, maxTokens, makeChunkId, out, languageId, filePath);
     return;
   }
 
@@ -430,10 +365,7 @@ function splitLargeBlockUsingInnerBlocks(
   const pushChunk = () => {
     const chunkText = source.slice(currentStart, currentEnd);
     const tokenCount = tokenizer(chunkText);
-    const [startRowZero] = locateLineAndColFromByte(
-      newlineOffsets,
-      currentStart,
-    );
+    const [startRowZero] = locateLineAndColFromByte(newlineOffsets, currentStart);
     const [endRowZero] = locateLineAndColFromByte(newlineOffsets, currentEnd);
 
     out.push({
@@ -470,10 +402,7 @@ function splitLargeBlockUsingInnerBlocks(
   pushChunk();
 }
 
-function locateLineAndColFromByte(
-  newlineOffsets: number[],
-  byteOffset: number,
-): [number, number] {
+function locateLineAndColFromByte(newlineOffsets: number[], byteOffset: number): [number, number] {
   let low = 0;
   let high = newlineOffsets.length;
   while (low < high) {
@@ -487,12 +416,7 @@ function locateLineAndColFromByte(
   return [line, col];
 }
 
-function mergeSmallChunks(
-  chunks: Chunk[],
-  minTokens: number,
-  maxTokens: number,
-  tokenizer: (text: string) => number,
-): Chunk[] {
+function mergeSmallChunks(chunks: Chunk[], minTokens: number, maxTokens: number, tokenizer: (text: string) => number): Chunk[] {
   if (chunks.length === 0) return [];
 
   const merged: Chunk[] = [];
@@ -515,10 +439,7 @@ function mergeSmallChunks(
         endLine: next.endLine,
         text: combinedText,
         tokenCount: combinedTokens,
-        type:
-          current.type === next.type
-            ? current.type
-            : `${current.type}+${next.type}`,
+        type: current.type === next.type ? current.type : `${current.type}+${next.type}`,
         ...(resolvedName !== undefined ? { name: resolvedName } : {}),
       };
       i++;

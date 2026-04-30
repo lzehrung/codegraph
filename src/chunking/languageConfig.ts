@@ -2,12 +2,7 @@ import type { LanguageDefinition } from "../languages/types.js";
 import { generateChunkingQuery } from "../languages/queryGenerator.js";
 
 /** Supported programming languages for semantic chunking */
-export type SupportedLanguage =
-  | "javascript"
-  | "typescript"
-  | "tsx"
-  | "python"
-  | "php";
+export type SupportedLanguage = "javascript" | "typescript" | "tsx" | "python" | "php";
 
 /**
  * Configuration for a specific language's chunking behavior.
@@ -42,10 +37,7 @@ export interface LanguageConfig {
  * @param publicId Public language id exposed by chunking output and lookup tables
  * @returns Language configuration object
  */
-export function makeLanguageConfig(
-  def: LanguageDefinition,
-  publicId = def.id,
-): LanguageConfig {
+export function makeLanguageConfig(def: LanguageDefinition, publicId = def.id): LanguageConfig {
   const queryText = generateChunkingQuery(def);
 
   return {

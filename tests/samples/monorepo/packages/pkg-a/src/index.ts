@@ -7,7 +7,9 @@ export class AClass {
   constructor(value: number = 1) {
     this.value = value;
   }
-  getValue(): number { return this.value; }
+  getValue(): number {
+    return this.value;
+  }
 }
 
 export const A_CONST = "A";
@@ -18,5 +20,3 @@ export default function aDefault(): string {
 
 // Internal alias import (via @utils/*)
 // export { extraUtil as A_EXTRA } from '@utils/extra';
-
-

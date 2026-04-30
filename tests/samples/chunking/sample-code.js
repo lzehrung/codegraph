@@ -10,34 +10,34 @@ function validateEmail(email) {
 
 function processUsers(users) {
   return users
-    .filter(user => validateEmail(user.email))
-    .map(user => ({
+    .filter((user) => validateEmail(user.email))
+    .map((user) => ({
       id: user.id,
       name: user.name,
-      email: user.email.toLowerCase()
+      email: user.email.toLowerCase(),
     }));
 }
 
 // Database connection
 const db = {
   connect() {
-    console.log('Connecting to database...');
-    return Promise.resolve({ status: 'connected' });
+    console.log("Connecting to database...");
+    return Promise.resolve({ status: "connected" });
   },
 
   async saveUser(user) {
     const connection = await this.connect();
 
     if (user.age < 18) {
-      throw new Error('User must be 18 or older');
+      throw new Error("User must be 18 or older");
     }
 
     return {
       ...user,
       id: Date.now(),
-      createdAt: new Date()
+      createdAt: new Date(),
     };
-  }
+  },
 };
 
 // Export utilities

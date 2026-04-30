@@ -150,14 +150,7 @@ Agent-tool wrappers accept the same control as a trailing runtime option, for ex
 import { tool_getGraph, tool_goToDefinition } from "@lzehrung/codegraph";
 
 const graph = await tool_getGraph(root, { native: "off" });
-const definition = await tool_goToDefinition(
-  root,
-  "src/main.ts",
-  10,
-  5,
-  undefined,
-  { native: "on" },
-);
+const definition = await tool_goToDefinition(root, "src/main.ts", 10, 5, undefined, { native: "on" });
 ```
 
 ## Best Practices

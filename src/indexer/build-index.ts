@@ -2,17 +2,49 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { supportForFile, type LanguageSupport } from "../languages.js";
-import { loadWorkspaceConfig, listProjectFiles, discoverProjectFiles, getGitHead, isGitRepo, getGitBlobHashes, listChangedFiles, clearImportResolutionCaches, mapLimit, stringifyUnknown, assertFilePathWithinRoot, normalizePath, resolveSpecifier, resolveWorkspacePackage, type ProjectFileInfo } from "../util.js";
+import {
+  loadWorkspaceConfig,
+  listProjectFiles,
+  discoverProjectFiles,
+  getGitHead,
+  isGitRepo,
+  getGitBlobHashes,
+  listChangedFiles,
+  clearImportResolutionCaches,
+  mapLimit,
+  stringifyUnknown,
+  assertFilePathWithinRoot,
+  normalizePath,
+  resolveSpecifier,
+  resolveWorkspacePackage,
+  type ProjectFileInfo,
+} from "../util.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
-import { collectGraph, collectEdgesForFile, type FallbackImportExtractionEvent, type GraphCacheEntry, type GraphBuildOptions } from "../graphs.js";
+import {
+  collectGraph,
+  collectEdgesForFile,
+  type FallbackImportExtractionEvent,
+  type GraphCacheEntry,
+  type GraphBuildOptions,
+} from "../graphs.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
-import { attemptParsePreparedFileContext, prepareFileForIndexing, type ParsedFileContext, type PreparedFileContext } from "./parse-context.js";
+import {
+  attemptParsePreparedFileContext,
+  prepareFileForIndexing,
+  type ParsedFileContext,
+  type PreparedFileContext,
+} from "./parse-context.js";
 import { collectImportsForFile } from "./imports.js";
 import { collectLocalsAndExportsFromSource } from "./locals-and-exports.js";
 import { compareEdges, edgeKey, toRelativeEdge } from "./shared.js";
 import { buildBloomFilterFromSource } from "../util/bloomFilter.js";
 import { initNativeBackendReport, recordNativeExecutionOutcome } from "../native/nativeBackendReport.js";
-import { getCachedNormalizedQuery, isNativeRequiredUnavailableError, isNativeTreeSitterAvailable, type NativeRuntimeMode } from "../native/treeSitterNative.js";
+import {
+  getCachedNormalizedQuery,
+  isNativeRequiredUnavailableError,
+  isNativeTreeSitterAvailable,
+  type NativeRuntimeMode,
+} from "../native/treeSitterNative.js";
 import type { NativeExtractResult, NativeExtractTask } from "../worker/nativeExtractWorker.js";
 import type { JsLanguage, SyntaxTreeLike } from "../languages/types.js";
 import type { Edge, FileId, Graph } from "../types.js";
@@ -74,9 +106,7 @@ type IndexedFileModuleResult = {
   graphContext: IndexedFileGraphContext;
 };
 
-function initParserBackendDegradationReport(
-  report: BuildReport | undefined,
-): ParserBackendDegradationReport | undefined {
+function initParserBackendDegradationReport(report: BuildReport | undefined): ParserBackendDegradationReport | undefined {
   if (!report) return undefined;
   initNativeBackendReport(report);
   report.backend ??= {
@@ -116,8 +146,7 @@ function recordParserBackendDegradation(
   const parserReport = initParserBackendDegradationReport(report);
   if (!parserReport) return;
   parserReport.total += 1;
-  parserReport.byLanguage[entry.languageId] =
-    (parserReport.byLanguage[entry.languageId] ?? 0) + 1;
+  parserReport.byLanguage[entry.languageId] = (parserReport.byLanguage[entry.languageId] ?? 0) + 1;
   if (parserReport.files.length >= 20) return;
   parserReport.files.push(entry);
 }
@@ -127,11 +156,7 @@ function createEmptyModuleIndex(file: string): ModuleIndex {
 }
 
 function isSFCFile(filePath: string): boolean {
-  return (
-    filePath.endsWith(".vue") ||
-    filePath.endsWith(".svelte") ||
-    filePath.endsWith(".astro")
-  );
+  return filePath.endsWith(".vue") || filePath.endsWith(".svelte") || filePath.endsWith(".astro");
 }
 
 type WorkerPoolSetupResult = {
@@ -140,10 +165,7 @@ type WorkerPoolSetupResult = {
   startTime: number;
 };
 
-function buildWorkerTask(
-  filePath: string,
-  sup: LanguageSupport,
-): NativeExtractTask {
+function buildWorkerTask(filePath: string, sup: LanguageSupport): NativeExtractTask {
   return {
     filePath,
     languageId: sup.id,
@@ -154,11 +176,7 @@ function buildWorkerTask(
   };
 }
 
-function workerResultToPrepared(
-  result: NativeExtractResult,
-  sup: LanguageSupport,
-  filePath: string,
-): PreparedFileContext {
+function workerResultToPrepared(result: NativeExtractResult, sup: LanguageSupport, filePath: string): PreparedFileContext {
   return {
     file: filePath,
     source: result.source,
@@ -169,13 +187,8 @@ function workerResultToPrepared(
   };
 }
 
-async function setupWorkerPool(
-  opts: BuildOptions | undefined,
-): Promise<WorkerPoolSetupResult> {
-  const shouldUseWorkers =
-    !!opts?.useNativeWorkers &&
-    opts?.native !== "off" &&
-    isNativeTreeSitterAvailable(opts?.native);
+async function setupWorkerPool(opts: BuildOptions | undefined): Promise<WorkerPoolSetupResult> {
+  const shouldUseWorkers = !!opts?.useNativeWorkers && opts?.native !== "off" && isNativeTreeSitterAvailable(opts?.native);
   const report: WorkerPoolReport | undefined = opts?.useNativeWorkers
     ? {
         enabled: shouldUseWorkers,
@@ -187,15 +200,13 @@ async function setupWorkerPool(
   let pool: import("piscina").Piscina | null = null;
   if (shouldUseWorkers) {
     try {
-      const { createNativeWorkerPool } =
-        await import("../worker/nativeWorkerPool.js");
+      const { createNativeWorkerPool } = await import("../worker/nativeWorkerPool.js");
       const createdPool = createNativeWorkerPool({
         threads: opts.nativeThreads,
       });
       pool = createdPool;
       if (report) {
-        report.threads =
-          (createdPool.options as { maxThreads?: number }).maxThreads ?? 0;
+        report.threads = (createdPool.options as { maxThreads?: number }).maxThreads ?? 0;
       }
     } catch (error) {
       pool = null;
@@ -208,10 +219,7 @@ async function setupWorkerPool(
   return { pool, report, startTime: pool ? performance.now() : 0 };
 }
 
-async function teardownWorkerPool(
-  setup: WorkerPoolSetupResult,
-  buildReport: BuildReport | undefined,
-): Promise<void> {
+async function teardownWorkerPool(setup: WorkerPoolSetupResult, buildReport: BuildReport | undefined): Promise<void> {
   if (setup.pool) {
     if (setup.report) {
       setup.report.wallClockMs = Math.round(performance.now() - setup.startTime);
@@ -239,9 +247,7 @@ async function prepareFileContextForBuild(
   if (workerSetup.pool && !isSFCFile(file)) {
     if (workerSetup.report) workerSetup.report.tasksSubmitted++;
     try {
-      const workerResult: NativeExtractResult = await workerSetup.pool.run(
-        buildWorkerTask(file, support),
-      );
+      const workerResult: NativeExtractResult = await workerSetup.pool.run(buildWorkerTask(file, support));
       prepared = workerResultToPrepared(workerResult, support, file);
     } catch (error) {
       if (isNativeRequiredUnavailableError(error)) throw error;
@@ -265,9 +271,7 @@ async function prepareFileContextForBuild(
     support: prepared.sup,
     languageId: prepared.sup.id,
     results: prepared.nativeQueries,
-    ...(prepared.nativeFallbackReason
-      ? { fallbackReason: prepared.nativeFallbackReason }
-      : {}),
+    ...(prepared.nativeFallbackReason ? { fallbackReason: prepared.nativeFallbackReason } : {}),
     ...(prepared.nativeError ? { error: prepared.nativeError } : {}),
   });
   return prepared;
@@ -284,48 +288,25 @@ async function resolveCrossModuleSymbolExports(
 ): Promise<void> {
   if (!support.supportsCrossModuleSymbols) return;
   if (support.id !== "ts" && support.id !== "js") return;
-  const { matchPath } = await import("../util.js").then((mod) =>
-    mod.loadNearestTsconfigFor(file, logLevel),
-  );
+  const { matchPath } = await import("../util.js").then((mod) => mod.loadNearestTsconfigFor(file, logLevel));
   for (const entry of mod.exports) {
-    if (
-      entry.type !== "reexport" &&
-      entry.type !== "exportStar" &&
-      entry.type !== "namespaceReexport"
-    ) {
+    if (entry.type !== "reexport" && entry.type !== "exportStar" && entry.type !== "namespaceReexport") {
       continue;
     }
     if (entry.fromModule.startsWith(".")) {
-      const resolved = await resolveSpecifier(
-        file,
-        entry.fromModule,
-        projectRoot,
-        matchPath,
-        workspaceConfig,
-        {
-          resolveNodeModules: !!graphOptions.resolveNodeModules,
-          ...(graphOptions.resolutionHints
-            ? { resolutionHints: graphOptions.resolutionHints }
-            : {}),
-        },
-      );
+      const resolved = await resolveSpecifier(file, entry.fromModule, projectRoot, matchPath, workspaceConfig, {
+        resolveNodeModules: !!graphOptions.resolveNodeModules,
+        ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
+      });
       if (typeof resolved === "string") entry.fromModule = resolved;
       continue;
     }
-    const pkgResolved = await resolveWorkspacePackage(
-      entry.fromModule,
-      workspaceConfig,
-    );
+    const pkgResolved = await resolveWorkspacePackage(entry.fromModule, workspaceConfig);
     if (pkgResolved) entry.fromModule = pkgResolved;
   }
 }
 
-function setParsedCacheEntry(
-  parsedMap: Map<string, ParsedFileContext>,
-  file: string,
-  entry: ParsedFileContext,
-  maxEntries: number,
-): void {
+function setParsedCacheEntry(parsedMap: Map<string, ParsedFileContext>, file: string, entry: ParsedFileContext, maxEntries: number): void {
   if (parsedMap.has(file)) parsedMap.delete(file);
   parsedMap.set(file, entry);
   while (parsedMap.size > maxEntries) {
@@ -348,19 +329,11 @@ async function buildIndexedModuleForFile(args: {
   parsedCacheMaxEntries: number;
   jsonDependencies: Set<string>;
   bloomFilterCache: import("../util/bloomFilter.js").BloomFilterCache | undefined;
-  onFallbackImportExtraction:
-    | ((event: FallbackImportExtractionEvent) => void)
-    | undefined;
+  onFallbackImportExtraction: ((event: FallbackImportExtractionEvent) => void) | undefined;
   fileSignatures: Map<string, FileSignature>;
   cacheEnabled: boolean;
 }): Promise<IndexedFileModuleResult> {
-  const prepared = await prepareFileContextForBuild(
-    args.file,
-    args.support,
-    args.opts,
-    args.workerSetup,
-    args.report,
-  );
+  const prepared = await prepareFileContextForBuild(args.file, args.support, args.opts, args.workerSetup, args.report);
   const { source, sup, nativeQueries } = prepared;
   let resolvedLang = prepared.lang;
   let tree: SyntaxTreeLike | undefined;
@@ -372,19 +345,12 @@ async function buildIndexedModuleForFile(args: {
     if (parsed) {
       tree = parsed.tree;
       resolvedLang = parsed.lang;
-      setParsedCacheEntry(
-        args.parsedMap,
-        args.file,
-        parsed,
-        args.parsedCacheMaxEntries,
-      );
+      setParsedCacheEntry(args.parsedMap, args.file, parsed, args.parsedCacheMaxEntries);
     } else {
       recordParserBackendDegradation(args.report, {
         file: args.file,
         languageId: prepared.sup.id,
-        ...(parseAttempt.nativeFallbackReason
-          ? { nativeFallbackReason: parseAttempt.nativeFallbackReason }
-          : {}),
+        ...(parseAttempt.nativeFallbackReason ? { nativeFallbackReason: parseAttempt.nativeFallbackReason } : {}),
         ...(parseAttempt.nativeError ? { nativeError: parseAttempt.nativeError } : {}),
         ...(parseAttempt.jsError ? { jsError: parseAttempt.jsError } : {}),
       });
@@ -405,26 +371,17 @@ async function buildIndexedModuleForFile(args: {
     ...(nativeQueries !== undefined ? { nativeQueries } : {}),
     graphOptions: args.graphOptions,
     ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
-    ...(args.onFallbackImportExtraction
-      ? { onFallbackImportExtraction: args.onFallbackImportExtraction }
-      : {}),
+    ...(args.onFallbackImportExtraction ? { onFallbackImportExtraction: args.onFallbackImportExtraction } : {}),
   });
   collectJsonDependencies(imports, args.jsonDependencies);
   const mod = lacksParserContext
     ? { ...createEmptyModuleIndex(args.file), imports }
-    : collectLocalsAndExportsFromSource(
-        args.file,
-        source,
-        sup,
-        resolvedLang,
-        imports,
-        {
-          ...(tree ? { tree } : {}),
-          ...(nativeQueries !== undefined ? { nativeQueries } : {}),
-          ...(args.opts?.native ? { nativeMode: args.opts.native } : {}),
-          ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
-        },
-      );
+    : collectLocalsAndExportsFromSource(args.file, source, sup, resolvedLang, imports, {
+        ...(tree ? { tree } : {}),
+        ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+        ...(args.opts?.native ? { nativeMode: args.opts.native } : {}),
+        ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
+      });
   mod.imports = imports;
   await resolveCrossModuleSymbolExports(
     args.file,
@@ -438,9 +395,7 @@ async function buildIndexedModuleForFile(args: {
 
   const sigInfo = args.fileSignatures.get(args.file);
   if (sigInfo) {
-    const cacheSig = args.cacheEnabled
-      ? await cacheSignatureForFile(args.file, sigInfo)
-      : sigInfo.cacheSig;
+    const cacheSig = args.cacheEnabled ? await cacheSignatureForFile(args.file, sigInfo) : sigInfo.cacheSig;
     writeToCache(args.projectRoot, args.file, cacheSig, mod, args.opts);
   }
 
@@ -460,13 +415,9 @@ function isJsonFile(filePath: string): boolean {
   return filePath.toLowerCase().endsWith(".json");
 }
 
-function collectJsonDependencies(
-  imports: ImportBinding[],
-  bucket: Set<string>,
-): void {
+function collectJsonDependencies(imports: ImportBinding[], bucket: Set<string>): void {
   for (const imp of imports) {
-    const resolved =
-      typeof imp.resolved === "string" ? imp.resolved.replace(/\\/g, "/") : null;
+    const resolved = typeof imp.resolved === "string" ? imp.resolved.replace(/\\/g, "/") : null;
     if (resolved && isJsonFile(resolved)) bucket.add(resolved);
   }
 }
@@ -492,10 +443,7 @@ function ensureJsonModule(modules: Map<FileId, ModuleIndex>, filePath: string): 
 }
 
 function expandStarImports(modules: Map<FileId, ModuleIndex>): void {
-  const importAlreadyPresent = (
-    imports: ImportBinding[],
-    candidate: ImportBinding,
-  ): boolean =>
+  const importAlreadyPresent = (imports: ImportBinding[], candidate: ImportBinding): boolean =>
     imports.some((existing) => {
       if (existing.kind !== candidate.kind) return false;
       if (existing.from !== candidate.from) return false;
@@ -504,10 +452,7 @@ function expandStarImports(modules: Map<FileId, ModuleIndex>): void {
         return false;
       }
       if (candidate.kind === "named" && existing.kind === "named") {
-        return (
-          existing.local === candidate.local &&
-          existing.imported === candidate.imported
-        );
+        return existing.local === candidate.local && existing.imported === candidate.imported;
       }
       if (candidate.kind === "namespace" && existing.kind === "namespace") {
         return existing.localNS === candidate.localNS;
@@ -524,18 +469,14 @@ function expandStarImports(modules: Map<FileId, ModuleIndex>): void {
       const exportedSymbols =
         target.exports.filter((entry) => entry.type === "local").length > 0
           ? target.exports
-              .filter(
-                (entry): entry is Extract<typeof entry, { type: "local" }> =>
-                  entry.type === "local",
-              )
+              .filter((entry): entry is Extract<typeof entry, { type: "local" }> => entry.type === "local")
               .map((entry) => entry.target)
           : target.locals.filter((local) => !local.localName.startsWith("_"));
       const seen = new Set<string>();
       for (const symbol of exportedSymbols) {
         if (!symbol.localName || seen.has(symbol.localName)) continue;
         seen.add(symbol.localName);
-        const treatAsNamespace =
-          targetSupport?.id === "ruby" && symbol.kind === SymbolKind.Class;
+        const treatAsNamespace = targetSupport?.id === "ruby" && symbol.kind === SymbolKind.Class;
         const expandedImport: ImportBinding = treatAsNamespace
           ? {
               kind: "namespace",
@@ -566,10 +507,7 @@ type BuildIndexHelperOptions = {
   warnNoFilesMessage?: string;
 };
 
-async function buildProjectIndexFromExport(
-  projectRoot: string,
-  opts?: BuildOptions,
-): Promise<ProjectIndex> {
+async function buildProjectIndexFromExport(projectRoot: string, opts?: BuildOptions): Promise<ProjectIndex> {
   return buildProjectIndex(projectRoot, opts);
 }
 
@@ -592,9 +530,7 @@ async function buildIndexFromFileListShared(
   const graphOptions = normalizeGraphOptions(opts?.graph);
   initManifestReport(report, useManifest, false);
   initNativeBackendReport(report);
-  const normalizedFiles = Array.from(
-    new Set(normalizeIndexedFileInputs(projectRoot, rawFiles ?? [], "Index file")),
-  );
+  const normalizedFiles = Array.from(new Set(normalizeIndexedFileInputs(projectRoot, rawFiles ?? [], "Index file")));
   if (normalizedFiles.length === 0 && helperOpts?.warnNoFilesMessage) {
     logWithLevel(opts?.logLevel, "warn", helperOpts.warnNoFilesMessage);
   }
@@ -617,9 +553,7 @@ async function buildIndexFromFileListShared(
   }
   const cachedGraphEntries =
     manifest && graphOptionsEqual(manifest.graphOptions, graphOptions)
-      ? new Map<string, ManifestFileEntry>(
-          Object.entries(manifestFiles).filter(([file]) => !staleCachedEdgeFiles.has(file)),
-        )
+      ? new Map<string, ManifestFileEntry>(Object.entries(manifestFiles).filter(([file]) => !staleCachedEdgeFiles.has(file)))
       : undefined;
   if (report?.manifest) {
     report.manifest.reused = !!cachedGraphEntries;
@@ -629,17 +563,13 @@ async function buildIndexFromFileListShared(
   const fileSignatures = new Map<string, FileSignature>();
   const gitAvailable = await isGitRepo(projectRoot);
   const useGitSignatures = gitAvailable && (cacheMode !== "off" || opts?.cacheStrict);
-  const gitSigMap = useGitSignatures
-    ? await getGitBlobHashes(projectRoot, normalizedFiles, { gitAvailable })
-    : new Map<string, string>();
+  const gitSigMap = useGitSignatures ? await getGitBlobHashes(projectRoot, normalizedFiles, { gitAvailable }) : new Map<string, string>();
   const jsonDependencies = new Set<string>();
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
   const workerSetup = await setupWorkerPool(opts);
   try {
     const useBloomFilters = opts?.useBloomFilters ?? true;
-    const bloomFilterCache = useBloomFilters
-      ? new (await import("../util/bloomFilter.js")).BloomFilterCache()
-      : undefined;
+    const bloomFilterCache = useBloomFilters ? new (await import("../util/bloomFilter.js")).BloomFilterCache() : undefined;
     const parsedMap = new Map<string, ParsedFileContext>();
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
     const parseStart = performance.now();
@@ -663,24 +593,19 @@ async function buildIndexFromFileListShared(
         });
         fileSignatures.set(file, sigInfo);
         const cacheSig = cacheEnabled ? await cacheSignatureForFile(file, sigInfo) : sigInfo.cacheSig;
-        let mod: ModuleIndex | null = cacheEnabled
-          ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report)
-          : null;
+        let mod: ModuleIndex | null = cacheEnabled ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
         if (mod && fileReport) {
           fileReport.cached = (fileReport.cached ?? 0) + 1;
         }
         const cachedEdgesEntry = cachedGraphEntries?.get(file);
         const edgesCached =
           !!cachedEdgesEntry &&
-          ((cachedEdgesEntry.gitSig && cachedEdgesEntry.gitSig === sigInfo.gitSig) ||
-            cachedEdgesEntry.sig === sigInfo.sig);
+          ((cachedEdgesEntry.gitSig && cachedEdgesEntry.gitSig === sigInfo.gitSig) || cachedEdgesEntry.sig === sigInfo.sig);
         let edges: Edge[] = [];
         if (mod && edgesCached) {
           edges = await collectEdgesForFile(file, projectRoot, workspaceConfig, {
             fast: !!graphOptions.fast,
-            ...(graphOptions.fastRegexDisabledLanguages
-              ? { fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages }
-              : {}),
+            ...(graphOptions.fastRegexDisabledLanguages ? { fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages } : {}),
             resolveNodeModules: !!graphOptions.resolveNodeModules,
             dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
             ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
@@ -726,9 +651,7 @@ async function buildIndexFromFileListShared(
         edges = await collectEdgesForFile(file, projectRoot, workspaceConfig, {
           ...(graphContext ? { parsed: graphContext } : {}),
           fast: !!graphOptions.fast,
-          ...(graphOptions.fastRegexDisabledLanguages
-            ? { fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages }
-            : {}),
+          ...(graphOptions.fastRegexDisabledLanguages ? { fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages } : {}),
           resolveNodeModules: !!graphOptions.resolveNodeModules,
           dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
           ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
@@ -764,8 +687,7 @@ async function buildIndexFromFileListShared(
       if (edges.length === 0) return;
       const seen = new Set(
         graph.edges.map(
-          (edge) =>
-            `${edge.from}::${edge.to.type === "file" ? edge.to.path : edge.to.name}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`,
+          (edge) => `${edge.from}::${edge.to.type === "file" ? edge.to.path : edge.to.name}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`,
         ),
       );
       for (const edge of edges) {
@@ -784,12 +706,7 @@ async function buildIndexFromFileListShared(
       }
     }
     appendUniqueGraphEdges(
-      await collectWorkspaceManifestDependencyEdges(
-        projectRoot,
-        opts?.discovery,
-        new Set(normalizedFiles),
-        opts?.logLevel,
-      ),
+      await collectWorkspaceManifestDependencyEdges(projectRoot, opts?.discovery, new Set(normalizedFiles), opts?.logLevel),
     );
     if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
     for (const jsonPath of jsonDependencies) {
@@ -848,10 +765,7 @@ async function buildIndexFromFileListShared(
   }
 }
 
-export async function buildProjectIndex(
-  projectRoot: string,
-  opts?: BuildOptions,
-): Promise<ProjectIndex> {
+export async function buildProjectIndex(projectRoot: string, opts?: BuildOptions): Promise<ProjectIndex> {
   try {
     const files = await listProjectFiles(projectRoot, undefined, {
       ...opts?.discovery,
@@ -868,11 +782,7 @@ export async function buildProjectIndex(
   }
 }
 
-export async function buildProjectIndexFromFiles(
-  projectRoot: string,
-  inputFiles: string[],
-  opts?: BuildOptions,
-): Promise<ProjectIndex> {
+export async function buildProjectIndexFromFiles(projectRoot: string, inputFiles: string[], opts?: BuildOptions): Promise<ProjectIndex> {
   try {
     return buildIndexFromFileListShared(projectRoot, inputFiles, opts, {
       manifestMode: "read-only",
@@ -885,10 +795,7 @@ export async function buildProjectIndexFromFiles(
   }
 }
 
-export async function buildProjectIndexIncremental(
-  projectRoot: string,
-  opts?: IncrementalBuildOptions,
-): Promise<ProjectIndex> {
+export async function buildProjectIndexIncremental(projectRoot: string, opts?: IncrementalBuildOptions): Promise<ProjectIndex> {
   clearImportResolutionCaches();
   const normalizedProjectRoot = normalizePath(projectRoot);
   const report = opts?.report;
@@ -911,24 +818,14 @@ export async function buildProjectIndexIncremental(
     const optionDiffs = diffBuildOptions(manifest?.buildOptions, opts);
     const warningOptionDiffs = optionDiffs.filter((diff) => diff !== "cache");
     if (warningOptionDiffs.length > 0) {
-      logWithLevel(
-        opts?.logLevel,
-        "warn",
-        `Warning: Manifest options differ from current build options: ${warningOptionDiffs.join(", ")}`,
-      );
+      logWithLevel(opts?.logLevel, "warn", `Warning: Manifest options differ from current build options: ${warningOptionDiffs.join(", ")}`);
     }
     if (manifestReport && optionDiffs.length > 0) {
       manifestReport.optionsMismatch = optionDiffs;
     }
     const currentConfigHashResult = await computeConfigHash(projectRoot, opts?.logLevel);
-    const currentConfigHash = recordConfigHashResult(
-      manifestReport,
-      currentConfigHashResult,
-      opts?.logLevel,
-    );
-    const configChanged =
-      !!currentConfigHash &&
-      (!manifest?.configHash || currentConfigHash !== manifest.configHash);
+    const currentConfigHash = recordConfigHashResult(manifestReport, currentConfigHashResult, opts?.logLevel);
+    const configChanged = !!currentConfigHash && (!manifest?.configHash || currentConfigHash !== manifest.configHash);
     if (!manifest || !graphOptionsEqual(manifest.graphOptions, graphOptions) || configChanged) {
       if (configChanged) {
         logWithLevel(opts?.logLevel, "warn", "Configuration changed, rebuilding index...");
@@ -939,11 +836,7 @@ export async function buildProjectIndexIncremental(
     const gitAvailable = await isGitRepo(projectRoot);
     const currentHead = gitAvailable ? await getGitHead(projectRoot) : null;
     const hasExplicitGitRange = !!opts?.gitBase || !!opts?.gitHead;
-    const manifestCommitMismatch =
-      !hasExplicitGitRange &&
-      !!manifest.lastCommit &&
-      !!currentHead &&
-      manifest.lastCommit !== currentHead;
+    const manifestCommitMismatch = !hasExplicitGitRange && !!manifest.lastCommit && !!currentHead && manifest.lastCommit !== currentHead;
     const manifestDiffFiles = manifestCommitMismatch
       ? await listChangedFiles(projectRoot, {
           base: manifest.lastCommit,
@@ -952,12 +845,7 @@ export async function buildProjectIndexIncremental(
       : [];
     if (manifestReport) manifestReport.reused = true;
     if (opts?.cacheVerify) {
-      const { mismatches, missing } = await verifyManifestEntries(
-        projectRoot,
-        manifest,
-        opts,
-        gitAvailable,
-      );
+      const { mismatches, missing } = await verifyManifestEntries(projectRoot, manifest, opts, gitAvailable);
       if (manifestReport) {
         manifestReport.mismatches = mismatches;
         manifestReport.missing = missing;
@@ -977,11 +865,7 @@ export async function buildProjectIndexIncremental(
     const deletedTrackedFiles = new Set(trackedFileList.filter((file) => !fs.existsSync(file)));
     const fileReport = initFileReport(report);
     if (fileReport) fileReport.total = trackedFiles.size;
-    const explicitFiles = normalizeIndexedFileInputs(
-      projectRoot,
-      opts?.files ?? [],
-      "Incremental file",
-    );
+    const explicitFiles = normalizeIndexedFileInputs(projectRoot, opts?.files ?? [], "Incremental file");
     const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
     const gitOpts: { base?: string; head?: string; changedSince?: string } = {};
     if (opts?.gitBase) gitOpts.base = opts.gitBase;
@@ -1048,9 +932,7 @@ export async function buildProjectIndexIncremental(
       const parsedMap = new Map<string, ParsedFileContext>();
       const jsonDependencies = new Set<string>();
       const useBloomFilters = opts?.useBloomFilters ?? true;
-      const bloomFilterCache = useBloomFilters
-        ? new (await import("../util/bloomFilter.js")).BloomFilterCache()
-        : undefined;
+      const bloomFilterCache = useBloomFilters ? new (await import("../util/bloomFilter.js")).BloomFilterCache() : undefined;
       const markAsChanged = (file: string) => {
         if (fs.existsSync(file)) changedFiles.add(file);
       };
@@ -1065,8 +947,7 @@ export async function buildProjectIndexIncremental(
         });
         fileSignatures.set(file, sigInfo);
         const entry = trackedEntries[file];
-        const hasMatchingGitSig =
-          !!entry?.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
+        const hasMatchingGitSig = !!entry?.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
         const hasMatchingSig = entry?.sig === sigInfo.sig;
         if (!entry || !(hasMatchingGitSig || hasMatchingSig)) {
           changedFiles.add(file);
@@ -1076,9 +957,7 @@ export async function buildProjectIndexIncremental(
         if (changedFiles.has(file)) continue;
         const sigInfo = fileSignatures.get(file)!;
         const cacheSig = cacheEnabled ? await cacheSignatureForFile(file, sigInfo) : sigInfo.cacheSig;
-        const cached = cacheEnabled
-          ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report)
-          : null;
+        const cached = cacheEnabled ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
         if (cached) {
           if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
           modules.set(file, cached);
@@ -1152,8 +1031,7 @@ export async function buildProjectIndexIncremental(
         Object.entries(trackedEntries).filter(([file]) => !deletedTrackedFiles.has(file)),
       );
       const manifestEntries = new Map<string, ManifestFileEntry>(cachedGraphEntries);
-      const baseGraph: Graph | undefined =
-        cachedGraphEntries.size > 0 ? { nodes: new Set<string>(), edges: [] } : undefined;
+      const baseGraph: Graph | undefined = cachedGraphEntries.size > 0 ? { nodes: new Set<string>(), edges: [] } : undefined;
       if (baseGraph) {
         for (const [file, entry] of cachedGraphEntries) {
           baseGraph.nodes.add(file);
@@ -1173,9 +1051,7 @@ export async function buildProjectIndexIncremental(
           : await collectGraph(projectRoot, filesList, {
               parsed: parsedMap,
               fast: !!graphOptions.fast,
-              ...(graphOptions.fastRegexDisabledLanguages
-                ? { fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages }
-                : {}),
+              ...(graphOptions.fastRegexDisabledLanguages ? { fastRegexDisabledLanguages: graphOptions.fastRegexDisabledLanguages } : {}),
               resolveNodeModules: !!graphOptions.resolveNodeModules,
               dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
               ...(opts?.native ? { native: opts.native } : {}),
@@ -1251,37 +1127,26 @@ export async function buildProjectIndexIncremental(
   }
 }
 
-export async function buildGraphDelta(
-  projectRoot: string,
-  opts?: IncrementalBuildOptions,
-): Promise<GraphDeltaReport> {
+export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBuildOptions): Promise<GraphDeltaReport> {
   const manifest = await loadManifest(projectRoot, opts);
   const trackedEntries = sanitizeManifestEntriesForRoot(projectRoot, manifest?.files);
   const graphOptions = normalizeGraphOptions(opts?.graph);
   const strictIncremental = opts?.incrementalStrict ?? false;
   if (strictIncremental && graphOptions.fast) graphOptions.fast = false;
-  const explicitFiles = normalizeIndexedFileInputs(
-    projectRoot,
-    opts?.files ?? [],
-    "Graph delta file",
-  ).filter((file) => fs.existsSync(file));
+  const explicitFiles = normalizeIndexedFileInputs(projectRoot, opts?.files ?? [], "Graph delta file").filter((file) =>
+    fs.existsSync(file),
+  );
   const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
   const gitOpts: { base?: string; head?: string; changedSince?: string } = {};
   if (opts?.gitBase) gitOpts.base = opts.gitBase;
   if (opts?.gitHead) gitOpts.head = opts.gitHead;
   if (!opts?.gitBase && opts?.changedSince) gitOpts.changedSince = opts.changedSince;
   const gitFiles = needsGitScan ? await listChangedFiles(projectRoot, gitOpts) : [];
-  const trackedFiles = new Set(
-    Object.keys(trackedEntries).filter((file) => fs.existsSync(file)),
-  );
+  const trackedFiles = new Set(Object.keys(trackedEntries).filter((file) => fs.existsSync(file)));
   const gitAvailable = await isGitRepo(projectRoot);
   const currentHead = gitAvailable ? await getGitHead(projectRoot) : null;
   const hasExplicitGitRange = !!opts?.gitBase || !!opts?.gitHead;
-  const manifestCommitMismatch =
-    !hasExplicitGitRange &&
-    !!manifest?.lastCommit &&
-    !!currentHead &&
-    manifest.lastCommit !== currentHead;
+  const manifestCommitMismatch = !hasExplicitGitRange && !!manifest?.lastCommit && !!currentHead && manifest.lastCommit !== currentHead;
   const manifestDiffFiles = manifestCommitMismatch
     ? await listChangedFiles(projectRoot, {
         base: manifest?.lastCommit,
@@ -1308,8 +1173,7 @@ export async function buildGraphDelta(
     for (const file of allFiles) {
       const sigInfo = await fileSignature(file, opts?.cacheStrict, gitSigMap.get(file));
       const entry = trackedEntries[file];
-      const hasMatchingGitSig =
-        !!entry?.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
+      const hasMatchingGitSig = !!entry?.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
       const hasMatchingSig = entry?.sig === sigInfo.sig;
       if (!entry || !(hasMatchingGitSig || hasMatchingSig)) {
         changedFiles.add(file);
@@ -1340,9 +1204,7 @@ export async function buildGraphDelta(
   for (const [key, edge] of beforeEdges) {
     if (!afterEdges.has(key)) removed.push(edge);
   }
-  const changedFilesRelative = changedList.map((file) =>
-    normalizePath(path.relative(projectRoot, file)),
-  );
+  const changedFilesRelative = changedList.map((file) => normalizePath(path.relative(projectRoot, file)));
   const addedRelative = added.map((edge) => toRelativeEdge(projectRoot, edge));
   const removedRelative = removed.map((edge) => toRelativeEdge(projectRoot, edge));
   return {

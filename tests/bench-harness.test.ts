@@ -32,23 +32,12 @@ function runBench(args: string[], timeout = 60_000): string {
 describe("bench-native harness", () => {
   beforeAll(() => {
     if (!fs.existsSync(distEntry)) {
-      throw new Error(
-        "bench-native harness requires dist/index.js; run npm run build before this suite.",
-      );
+      throw new Error("bench-native harness requires dist/index.js; run npm run build before this suite.");
     }
   });
 
   it("runs a single-fixture smoke benchmark and produces JSON output", () => {
-    const output = runBench(
-      [
-        "--runs=1",
-        "--fixtures=typescript",
-        "--workloads=graph",
-        "--temperatures=cold",
-        "--json",
-      ],
-      60_000,
-    );
+    const output = runBench(["--runs=1", "--fixtures=typescript", "--workloads=graph", "--temperatures=cold", "--json"], 60_000);
     const parsed = JSON.parse(output);
     expect(parsed.runs).toBe(1);
     expect(parsed.environment).toBeDefined();
@@ -68,14 +57,7 @@ describe("bench-native harness", () => {
     const baselineFile = path.join(baselinesDir, `${baselineName}.json`);
     try {
       runBench(
-        [
-          "--runs=1",
-          "--fixtures=typescript",
-          "--workloads=graph",
-          "--temperatures=cold",
-          `--save-baseline=${baselineName}`,
-          "--json",
-        ],
+        ["--runs=1", "--fixtures=typescript", "--workloads=graph", "--temperatures=cold", `--save-baseline=${baselineName}`, "--json"],
         60_000,
       );
 
@@ -87,13 +69,7 @@ describe("bench-native harness", () => {
 
       // Compare against itself
       const compareOutput = runBench(
-        [
-          "--runs=1",
-          "--fixtures=typescript",
-          "--workloads=graph",
-          "--temperatures=cold",
-          `--compare-baseline=${baselineName}`,
-        ],
+        ["--runs=1", "--fixtures=typescript", "--workloads=graph", "--temperatures=cold", `--compare-baseline=${baselineName}`],
         60_000,
       );
       expect(compareOutput).toContain("Comparing against baseline:");
@@ -127,74 +103,57 @@ describe("bench-native harness", () => {
     expect(result.stderr).toContain("Unknown workload");
   });
 
-  it("reports vs JS column in table output", () => {
-    const output = runBench(
-      [
-        "--runs=1",
-        "--fixtures=typescript",
-        "--workloads=graph",
-        "--temperatures=cold",
-      ],
-      60_000,
-    );
-    expect(output).toContain("vs JS");
-    // native row should have a speedup indicator
-    expect(output).toMatch(/\d+(?:\.\d+)?x (faster|slower)/);
-  }, longBenchTimeoutMs);
+  it(
+    "reports vs JS column in table output",
+    () => {
+      const output = runBench(["--runs=1", "--fixtures=typescript", "--workloads=graph", "--temperatures=cold"], 60_000);
+      expect(output).toContain("vs JS");
+      // native row should have a speedup indicator
+      expect(output).toMatch(/\d+(?:\.\d+)?x (faster|slower)/);
+    },
+    longBenchTimeoutMs,
+  );
 
-  it("reports vs Native column when --workers is used", () => {
-    const output = runBench(
-      [
-        "--runs=1",
-        "--fixtures=typescript",
-        "--workloads=full",
-        "--temperatures=cold",
-        "--workers",
-      ],
-      60_000,
-    );
-    expect(output).toContain("vs Native");
-    // workers row should show comparison against both JS and native
-    const lines = output.split("\n");
-    const workersLine = lines.find((l) => /\bworkers\b/.test(l));
-    expect(workersLine).toBeDefined();
-    // workers line should contain at least one speedup/slowdown indicator
-    expect(workersLine).toMatch(/\d+(?:\.\d+)?x (faster|slower)/);
-  }, longBenchTimeoutMs);
+  it(
+    "reports vs Native column when --workers is used",
+    () => {
+      const output = runBench(["--runs=1", "--fixtures=typescript", "--workloads=full", "--temperatures=cold", "--workers"], 60_000);
+      expect(output).toContain("vs Native");
+      // workers row should show comparison against both JS and native
+      const lines = output.split("\n");
+      const workersLine = lines.find((l) => /\bworkers\b/.test(l));
+      expect(workersLine).toBeDefined();
+      // workers line should contain at least one speedup/slowdown indicator
+      expect(workersLine).toMatch(/\d+(?:\.\d+)?x (faster|slower)/);
+    },
+    longBenchTimeoutMs,
+  );
 
-  it("produces JSON output with workers mode included", () => {
-    const output = runBench(
-      [
-        "--runs=1",
-        "--fixtures=typescript",
-        "--workloads=full",
-        "--temperatures=cold",
-        "--workers",
-        "--json",
-      ],
-      60_000,
-    );
-    const parsed = JSON.parse(output);
-    expect(parsed.results).toHaveLength(1);
-    const result = parsed.results[0];
-    expect(result.workloads.full.cold.native.averageElapsedMs).toBeGreaterThan(0);
-    expect(result.workloads.full.cold.js.averageElapsedMs).toBeGreaterThan(0);
-    expect(result.workloads.full.cold.workers.averageElapsedMs).toBeGreaterThan(0);
-  }, longBenchTimeoutMs);
-
-  it("enforces --max-slowdown threshold", () => {
-    // max-slowdown of 0.001 should always fail since native can't be 1000x faster
-    expect(() =>
-      runBench(
-        [
-          "--runs=1",
-          "--fixtures=typescript",
-          "--workloads=graph",
-          "--temperatures=cold",
-          "--max-slowdown=0.001",
-        ],
+  it(
+    "produces JSON output with workers mode included",
+    () => {
+      const output = runBench(
+        ["--runs=1", "--fixtures=typescript", "--workloads=full", "--temperatures=cold", "--workers", "--json"],
         60_000,
-      ),
-    ).toThrow();
-  }, longBenchTimeoutMs);
+      );
+      const parsed = JSON.parse(output);
+      expect(parsed.results).toHaveLength(1);
+      const result = parsed.results[0];
+      expect(result.workloads.full.cold.native.averageElapsedMs).toBeGreaterThan(0);
+      expect(result.workloads.full.cold.js.averageElapsedMs).toBeGreaterThan(0);
+      expect(result.workloads.full.cold.workers.averageElapsedMs).toBeGreaterThan(0);
+    },
+    longBenchTimeoutMs,
+  );
+
+  it(
+    "enforces --max-slowdown threshold",
+    () => {
+      // max-slowdown of 0.001 should always fail since native can't be 1000x faster
+      expect(() =>
+        runBench(["--runs=1", "--fixtures=typescript", "--workloads=graph", "--temperatures=cold", "--max-slowdown=0.001"], 60_000),
+      ).toThrow();
+    },
+    longBenchTimeoutMs,
+  );
 });
