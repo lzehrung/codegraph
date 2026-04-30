@@ -73,6 +73,16 @@ import {
   type FallbackImportExtractionReason,
 } from "./graphs/specifiers.js";
 import {
+  buildSymbolGraph,
+  defNodeId,
+  nodeForDef,
+  type SymbolEdge,
+  type SymbolGraph,
+  type SymbolNode,
+  type SymbolNodeKind,
+  type SymbolVisibility,
+} from "./graphs/symbol-graph.js";
+import {
   type BuildReport,
   type ImportBinding,
   type ProjectIndex,
@@ -85,11 +95,13 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "./languages/types.js";
 
 export { collectModuleSpecifiersFromSource };
 export { astGrep, findCycles, findDetailedCycles, getDependencies, getHotspots, getReverseDependencies };
+export { buildSymbolGraph };
 export { getShortestPath, getUnresolvedImports, graphToDOT, graphToDOTSymbols, graphToDOTSymbolsWithFiles };
 export { graphToMermaid, graphToMermaidSymbols, graphToMermaidSymbolsWithFiles, sortDetailedCycles, textGrep };
 export type { AstGrepHit, CycleInternalEdge, CycleSortMode, DependencyNode, DetailedCycle, HotspotEntry };
 export type { CollectModuleSpecifiersOptions, FallbackImportExtractionEvent, FallbackImportExtractionReason };
 export type { HotspotOptions, TextGrepHit };
+export type { SymbolEdge, SymbolGraph, SymbolNode, SymbolNodeKind, SymbolVisibility };
 
 export type GraphBuildOptions = {
   fast?: boolean;
@@ -471,169 +483,6 @@ export async function collectGraph(
 }
 
 // --------------------------- Symbol graph utilities ---------------------------
-
-export type SymbolNodeKind =
-  | "function"
-  | "class"
-  | "variable"
-  | "interface"
-  | "type"
-  | "default"
-  | "import"
-  | "namespaceImport";
-
-/**
- * Access visibility of a symbol. Used to track language-specific visibility modifiers:
- * - "public": Accessible from anywhere (default for exports, Python public names)
- * - "private": Class/module private (TypeScript private, Python _underscore, Rust private)
- * - "protected": Accessible to subclasses (TypeScript/Java protected)
- * - "internal": Package/module internal (Rust pub(crate), C# internal)
- */
-export type SymbolVisibility = "public" | "private" | "protected" | "internal";
-export type SymbolNode = {
-  id: string;
-  file: FileId;
-  name: string;
-  kind: SymbolNodeKind;
-  docstring?: string;
-  lineSpan?: number;
-  complexity?: number;
-  visibility?: SymbolVisibility;
-};
-export type SymbolEdge = { from: string; to: string; label?: string };
-export type SymbolGraph = {
-  nodes: Map<string, SymbolNode>;
-  edges: SymbolEdge[];
-};
-
-function defNodeId(def: { file: string; localName: string; range?: { start: { index?: number } } }) {
-  const idx = def.range?.start?.index ?? 0;
-  const f = typeof def.file === "string" ? def.file.replace(/\\/g, "/") : def.file;
-  return `${f}::${def.localName}::${idx}`;
-}
-
-function nodeForDef(def: {
-  file: string;
-  localName: string;
-  kind: string;
-  range?: { start: { index?: number } };
-  docstring?: string;
-  lineSpan?: number;
-  complexity?: number;
-}): SymbolNode {
-  return {
-    id: defNodeId(def),
-    file: def.file,
-    name: def.localName,
-    kind: (def.kind as SymbolNodeKind) ?? "variable",
-    ...(def.docstring ? { docstring: def.docstring } : {}),
-    ...(def.lineSpan ? { lineSpan: def.lineSpan } : {}),
-    ...(typeof def.complexity === "number" ? { complexity: def.complexity } : {}),
-  };
-}
-
-export async function buildSymbolGraph(index: ProjectIndex): Promise<SymbolGraph> {
-  await Promise.resolve();
-  const nodes = new Map<string, SymbolNode>();
-  const edges: SymbolEdge[] = [];
-  const seenEdges = new Set<string>();
-
-  const addEdge = (from: string, to: string, label?: string) => {
-    const key = `${from}->${to}::${label ?? ""}`;
-    if (seenEdges.has(key)) return;
-    seenEdges.add(key);
-    edges.push(label ? { from, to, label } : { from, to });
-  };
-
-  // Add definition nodes for all locals
-  for (const [, mod] of index.byFile) {
-    for (const def of mod.locals) {
-      const n = nodeForDef(def);
-      if (!nodes.has(n.id)) nodes.set(n.id, n);
-    }
-  }
-
-  const normalizePath = (p: string) => p.replace(/\\/g, "/");
-
-  // Resolve imports to exported locals and add edges from aliases to defs
-  for (const [file, mod] of index.byFile) {
-    for (const imp of mod.imports) {
-      if (!imp) continue;
-      const targetFile = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : undefined;
-      const targetMod = targetFile ? index.byFile.get(targetFile) : undefined;
-
-      if (imp.kind === "named") {
-        const aliasId = `${file}::${imp.local}::import`;
-        if (!nodes.has(aliasId))
-          nodes.set(aliasId, {
-            id: aliasId,
-            file,
-            name: imp.local,
-            kind: "import",
-          });
-        if (targetMod) {
-          let exp = targetMod.exports.find((e) => e.type === "local" && e.exportedAs === imp.imported);
-          if (!exp) {
-            // fallback: match local by name
-            const loc = targetMod.locals.find((l) => l.localName === imp.imported);
-            if (loc)
-              exp = {
-                type: "local",
-                exportedAs: imp.imported,
-                target: loc,
-              };
-          }
-          if (exp && exp.type === "local") {
-            const def = exp.target;
-            const toId = defNodeId(def);
-            if (!nodes.has(toId)) nodes.set(toId, nodeForDef(def));
-            addEdge(aliasId, toId, imp.imported);
-          }
-        }
-      } else if (imp.kind === "default") {
-        const aliasId = `${file}::${imp.local}::import`;
-        if (!nodes.has(aliasId))
-          nodes.set(aliasId, {
-            id: aliasId,
-            file,
-            name: imp.local,
-            kind: "import",
-          });
-        if (targetMod) {
-          // try explicit default export; else fall back to a single export
-          let exp = targetMod.exports.find((e) => e.type === "local" && e.exportedAs === "default");
-          if (!exp) exp = targetMod.exports.find((e) => e.type === "local");
-          if (exp && exp.type === "local") {
-            const def = exp.target;
-            const toId = defNodeId(def);
-            if (!nodes.has(toId)) nodes.set(toId, nodeForDef(def));
-            addEdge(aliasId, toId, "default");
-          }
-        }
-      } else if (imp.kind === "namespace") {
-        const aliasId = `${file}::${imp.localNS}::import`;
-        if (!nodes.has(aliasId))
-          nodes.set(aliasId, {
-            id: aliasId,
-            file,
-            name: imp.localNS,
-            kind: "namespaceImport",
-          });
-        if (targetMod) {
-          const exportedLocals = targetMod.exports.filter((e) => e.type === "local");
-          for (const e of exportedLocals) {
-            const def = e.target;
-            const toId = defNodeId(def);
-            if (!nodes.has(toId)) nodes.set(toId, nodeForDef(def));
-            addEdge(aliasId, toId, e.exportedAs);
-          }
-        }
-      }
-    }
-  }
-
-  return { nodes, edges };
-}
 
 export async function buildSymbolGraphDetailed(
   index: ProjectIndex,
