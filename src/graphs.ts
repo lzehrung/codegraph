@@ -62,10 +62,11 @@ import {
   parsePhpImportStatement,
   parseRustImportStatement,
 } from "./languages/importStatementParsers.js";
-import { extractAngularJsReferences, extractAngularJsRegistrations } from "./frameworks/angularjs.js";
 import { capturesByName } from "./native/queryResults.js";
 import { ProjectedSyntaxTree } from "./native/projectedTree.js";
 import { initNativeBackendReport, recordNativeExecutionOutcome } from "./native/nativeBackendReport.js";
+import { collectAngularJsFrameworkEdges } from "./graphs/angularjs.js";
+import { getHotspots, type HotspotEntry, type HotspotOptions } from "./graphs/hotspots.js";
 import {
   type BuildReport,
   type ImportBinding,
@@ -74,7 +75,11 @@ import {
   type SymbolDef,
   SymbolKind,
 } from "./index.js";
+import type { ParsedFileContext } from "./indexer/parse-context.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "./languages/types.js";
+
+export { getHotspots };
+export type { HotspotEntry, HotspotOptions };
 
 export type GraphBuildOptions = {
   fast?: boolean;
@@ -98,11 +103,6 @@ export type GraphCacheEntry = {
   sig: string;
   gitSig?: string;
   edges: Edge[];
-};
-
-type AngularJsFileContext = {
-  file: string;
-  source: string;
 };
 
 const HTML_LIKE_LANGUAGE_IDS = new Set(["html", "vue", "svelte"]);
@@ -185,106 +185,6 @@ function normalizeModuleSpecifiers(specifiers: ModuleSpecifier[]): ModuleSpecifi
           ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}),
         },
   );
-}
-
-async function collectAngularJsFrameworkEdges(
-  projectRoot: string,
-  files: string[],
-  workspaceConfig: WorkspaceConfig | undefined,
-  parsed?: Map<
-    string,
-    {
-      source: string;
-      tree: SyntaxTreeLike;
-      sup: LanguageSupport;
-      lang?: JsLanguage;
-    }
-  >,
-): Promise<Edge[]> {
-  const jsFiles = files.filter((file) => file.toLowerCase().endsWith(".js"));
-  if (jsFiles.length === 0) return [];
-
-  const contexts: AngularJsFileContext[] = [];
-  for (const file of jsFiles) {
-    const parsedSource = parsed?.get(file)?.source;
-    if (parsedSource !== undefined) {
-      contexts.push({ file, source: parsedSource });
-      continue;
-    }
-    try {
-      const source = await fsp.readFile(file, "utf8");
-      contexts.push({ file, source });
-    } catch {
-      continue;
-    }
-  }
-
-  const registrationFilesByName = new Map<string, Set<string>>();
-  for (const context of contexts) {
-    for (const registration of extractAngularJsRegistrations(context.source)) {
-      let filesForName = registrationFilesByName.get(registration.name);
-      if (!filesForName) {
-        filesForName = new Set<string>();
-        registrationFilesByName.set(registration.name, filesForName);
-      }
-      filesForName.add(context.file.replace(/\\/g, "/"));
-    }
-  }
-
-  const edges: Edge[] = [];
-  const seen = new Set<string>();
-  const pushEdge = (edge: Edge): void => {
-    const key = `${edge.from}::${edge.raw}::${edge.to.type === "file" ? edge.to.path : `external:${edge.to.name}`}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    edges.push(edge);
-  };
-
-  for (const context of contexts) {
-    const normalizedFile = context.file.replace(/\\/g, "/");
-    const references = extractAngularJsReferences(context.source);
-    for (const reference of references) {
-      if (reference.kind === "templateUrl") {
-        const resolved = await resolveSpecifier(context.file, reference.value, projectRoot, undefined, workspaceConfig);
-        pushEdge({
-          from: normalizedFile,
-          to:
-            typeof resolved === "string"
-              ? { type: "file", path: resolved.replace(/\\/g, "/") }
-              : { type: "external", name: resolved.external },
-          raw: reference.value,
-          resolved: "heuristic",
-          confidence: 0.9,
-        });
-        continue;
-      }
-
-      const resolvedFiles = registrationFilesByName.get(reference.value);
-      if (resolvedFiles && resolvedFiles.size > 0) {
-        for (const targetFile of resolvedFiles) {
-          if (targetFile === normalizedFile) continue;
-          pushEdge({
-            from: normalizedFile,
-            to: { type: "file", path: targetFile },
-            raw: reference.value,
-            resolved: "heuristic",
-            confidence: reference.kind === "controller" ? 0.9 : 0.8,
-          });
-        }
-        continue;
-      }
-
-      pushEdge({
-        from: normalizedFile,
-        to: { type: "external", name: reference.value },
-        raw: reference.value,
-        resolved: "heuristic",
-        confidence: reference.kind === "controller" ? 0.75 : 0.7,
-      });
-    }
-  }
-
-  return edges;
 }
 
 export function collectModuleSpecifiersFromSource(
@@ -932,15 +832,7 @@ export async function collectGraph(
   projectRoot: string,
   files: string[],
   opts?: {
-    parsed?: Map<
-      string,
-      {
-        source: string;
-        tree: SyntaxTreeLike;
-        sup: LanguageSupport;
-        lang?: JsLanguage;
-      }
-    >;
+    parsed?: Map<string, ParsedFileContext>;
     fast?: boolean;
     fastRegexDisabledLanguages?: string[];
     threads?: number;
@@ -1511,113 +1403,6 @@ export function getUnresolvedImports(graph: Graph): Array<{
   return Array.from(unresolved.entries())
     .map(([name, importers]) => ({ name, importers }))
     .sort((a, b) => b.importers.length - a.importers.length);
-}
-
-export type HotspotEntry = {
-  file: FileId;
-  fanIn: number;
-  fanOut: number;
-  score: number;
-};
-
-export type HotspotOptions = {
-  limit?: number;
-  includeRoots?: string[];
-};
-
-function normalizeHotspotPath(filePath: string): string {
-  return filePath.replace(/\\/g, "/");
-}
-
-function normalizeHotspotRoots(includeRoots: string[]): string[] {
-  return includeRoots.map(normalizeHotspotPath);
-}
-
-function compareHotspotEntries(a: HotspotEntry, b: HotspotEntry): number {
-  const byScore = b.score - a.score;
-  if (byScore) return byScore;
-  const byFanIn = b.fanIn - a.fanIn;
-  if (byFanIn) return byFanIn;
-  const byFanOut = b.fanOut - a.fanOut;
-  if (byFanOut) return byFanOut;
-  if (a.file < b.file) return -1;
-  if (a.file > b.file) return 1;
-  return 0;
-}
-
-function isHotspotUnderRoots(filePath: string, normalizedRoots: string[]): boolean {
-  if (normalizedRoots.length === 0) {
-    return true;
-  }
-  const normalizedFile = normalizeHotspotPath(filePath);
-  return normalizedRoots.some((root) => {
-    return normalizedFile === root || normalizedFile.startsWith(`${root}/`);
-  });
-}
-
-function insertLimitedHotspot(topHotspots: HotspotEntry[], entry: HotspotEntry, limit: number): void {
-  const insertIndex = topHotspots.findIndex((existing) => compareHotspotEntries(entry, existing) < 0);
-  if (insertIndex === -1) {
-    topHotspots.push(entry);
-  } else {
-    topHotspots.splice(insertIndex, 0, entry);
-  }
-  if (topHotspots.length > limit) {
-    topHotspots.length = limit;
-  }
-}
-
-export function getHotspots(graph: Graph, options?: HotspotOptions): HotspotEntry[] {
-  const fanIn = new Map<string, number>();
-  const fanOut = new Map<string, number>();
-  const normalizedRoots = normalizeHotspotRoots(options?.includeRoots ?? []);
-  const limit = options?.limit !== undefined ? Math.max(0, Math.floor(options.limit)) : undefined;
-  const scopedNodes = new Set<string>();
-
-  for (const node of graph.nodes) {
-    if (!isHotspotUnderRoots(node, normalizedRoots)) {
-      continue;
-    }
-    scopedNodes.add(node);
-    fanIn.set(node, 0);
-    fanOut.set(node, 0);
-  }
-
-  for (const edge of graph.edges) {
-    if (!scopedNodes.has(edge.from)) {
-      continue;
-    }
-    fanOut.set(edge.from, (fanOut.get(edge.from) || 0) + 1);
-    if (edge.to.type === "file" && scopedNodes.has(edge.to.path)) {
-      fanIn.set(edge.to.path, (fanIn.get(edge.to.path) || 0) + 1);
-    }
-  }
-
-  if (limit === 0) {
-    return [];
-  }
-
-  const hotspots: HotspotEntry[] = [];
-  for (const file of scopedNodes) {
-    const fi = fanIn.get(file) || 0;
-    const fo = fanOut.get(file) || 0;
-    const entry = {
-      file,
-      fanIn: fi,
-      fanOut: fo,
-      score: fi * 2 + fo,
-    };
-    if (limit === undefined) {
-      hotspots.push(entry);
-      continue;
-    }
-    insertLimitedHotspot(hotspots, entry, limit);
-  }
-
-  if (limit === undefined) {
-    hotspots.sort(compareHotspotEntries);
-  }
-  return hotspots;
 }
 
 // --------------------------- Symbol graph utilities ---------------------------
