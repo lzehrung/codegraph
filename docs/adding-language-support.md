@@ -36,7 +36,7 @@ Checklist for landing a new first-class source language without drifting from re
 ## 5. Implement import binding and resolution
 
 - Add statement-level parsing helpers in `src/languages/importStatementParsers.ts` when the query captures a whole statement instead of normalized binding captures.
-- Extend `src/indexer.ts` so import bindings normalize into the shared `ImportBinding` model.
+- Extend the relevant `src/indexer/` module behind the `src/indexer.ts` facade so import bindings normalize into the shared `ImportBinding` model.
 - Extend `src/graphs.ts` only where graph and specifier extraction need language-specific recovery.
 - Extend `src/util.ts` for language-specific module resolution, package metadata parsing, and caches.
 - Keep dynamic or ambiguous cases conservative. Prefer `external` or `not_found` over false-positive navigation.
