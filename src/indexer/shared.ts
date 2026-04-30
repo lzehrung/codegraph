@@ -5,7 +5,16 @@ import type { Edge } from "../types.js";
 
 export const DEFAULT_REF_CONTEXT_LINES = 5;
 
-export const QUERY_DRIVEN_LOCALS_LANGUAGES = new Set(["python", "php", "java", "csharp", "rust", "kotlin", "swift", "cpp"]);
+export const QUERY_DRIVEN_LOCALS_LANGUAGES = new Set([
+  "python",
+  "php",
+  "java",
+  "csharp",
+  "rust",
+  "kotlin",
+  "swift",
+  "cpp",
+]);
 
 export function parseGoImportAlias(stmtText: string): string | null {
   const trimmed = stmtText.trim();

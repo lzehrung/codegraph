@@ -107,8 +107,10 @@ export const SWIFT_DEF: LanguageDefinition = {
     if (parent.type === "function_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
     if (parent.type === "typealias_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
     if (parent.type === "parameter" && parent.childForFieldName("name")?.id === node.id) return true;
-    if (parent.type === "protocol_function_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
-    if (parent.type === "protocol_property_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
+    if (parent.type === "protocol_function_declaration" && parent.childForFieldName("name")?.id === node.id)
+      return true;
+    if (parent.type === "protocol_property_declaration" && parent.childForFieldName("name")?.id === node.id)
+      return true;
     if (
       parent.type === "pattern" &&
       parent.childForFieldName("bound_identifier")?.id === node.id &&

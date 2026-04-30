@@ -287,7 +287,8 @@ export function extractAsciidocModuleSpecifiers(source: string): ModuleSpecifier
     const directive = (match[1] ?? "").toLowerCase();
     const rawSpecifier = match[2]?.trim();
     if (!rawSpecifier) continue;
-    const fileLikeTarget = directive === "xref" ? isLikelyAsciidocXrefTarget(rawSpecifier) : isLikelyAsciidocFileTarget(rawSpecifier);
+    const fileLikeTarget =
+      directive === "xref" ? isLikelyAsciidocXrefTarget(rawSpecifier) : isLikelyAsciidocFileTarget(rawSpecifier);
     if (!fileLikeTarget) continue;
     const ambiguousXrefTarget = directive === "xref" && isAmbiguousAsciidocXrefTarget(rawSpecifier);
     const normalized = normalizeLinkSpecifier(rawSpecifier, {

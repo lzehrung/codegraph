@@ -2,7 +2,13 @@ import os from "node:os";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { buildProjectIndex, clearResolutionCaches, collectGraph, collectImportsForFile, parseFile } from "../src/index.js";
+import {
+  buildProjectIndex,
+  clearResolutionCaches,
+  collectGraph,
+  collectImportsForFile,
+  parseFile,
+} from "../src/index.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -33,7 +39,12 @@ describe("Java import resolution regression", () => {
     for (let index = 0; index < 250; index += 1) {
       await fsp.writeFile(
         path.join(targetDir, `Generated${index}.java`),
-        ["package pkg;", `public class Generated${index} {`, `  public static final int VALUE_${index} = ${index};`, "}"].join("\n"),
+        [
+          "package pkg;",
+          `public class Generated${index} {`,
+          `  public static final int VALUE_${index} = ${index};`,
+          "}",
+        ].join("\n"),
         "utf8",
       );
     }
@@ -96,17 +107,31 @@ describe("Java import resolution regression", () => {
 
     await fsp.mkdir(sourceDir, { recursive: true });
     await fsp.mkdir(targetDir, { recursive: true });
-    await fsp.writeFile(alphaFile, ["package pkg;", "public class Alpha {}", "interface InternalContract {}"].join("\n"), "utf8");
-    await fsp.writeFile(betaFile, ["package pkg;", "public interface Beta {", "  void serve();", "}"].join("\n"), "utf8");
+    await fsp.writeFile(
+      alphaFile,
+      ["package pkg;", "public class Alpha {}", "interface InternalContract {}"].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      betaFile,
+      ["package pkg;", "public interface Beta {", "  void serve();", "}"].join("\n"),
+      "utf8",
+    );
     await fsp.writeFile(ignoredFile, ["package pkg;", "public class Generated {}"].join("\n"), "utf8");
     await fsp.writeFile(
       mainFile,
-      ["import pkg.*;", "public class Main {", "  Alpha alpha = new Alpha();", "  Beta beta = () -> {};", "}"].join("\n"),
+      ["import pkg.*;", "public class Main {", "  Alpha alpha = new Alpha();", "  Beta beta = () -> {};", "}"].join(
+        "\n",
+      ),
       "utf8",
     );
 
     clearResolutionCaches();
-    const graph = await collectGraph(root, [mainFile.replace(/\\/g, "/"), alphaFile.replace(/\\/g, "/"), betaFile.replace(/\\/g, "/")]);
+    const graph = await collectGraph(root, [
+      mainFile.replace(/\\/g, "/"),
+      alphaFile.replace(/\\/g, "/"),
+      betaFile.replace(/\\/g, "/"),
+    ]);
 
     const fileEdges = graph.edges
       .filter((edge) => edge.from === mainFile.replace(/\\/g, "/"))

@@ -24,7 +24,13 @@ export const GO_DEF: LanguageDefinition = {
         captureId: "type",
       },
     ],
-    splitPoints: ["if_statement", "for_statement", "expression_switch_statement", "type_switch_statement", "select_statement"],
+    splitPoints: [
+      "if_statement",
+      "for_statement",
+      "expression_switch_statement",
+      "type_switch_statement",
+      "select_statement",
+    ],
     comments: ["comment"],
   },
   graph: {

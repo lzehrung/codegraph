@@ -55,7 +55,11 @@ describe("Review report", () => {
     await fsp.mkdir(srcDir, { recursive: true });
     const featureFile = path.join(srcDir, "feature.ts");
     const consumerFile = path.join(srcDir, "consumer.ts");
-    await fsp.writeFile(featureFile, [`export function greet(name: string) {`, `  return \`hi \${name}\`;`, `}`, ``].join("\n"), "utf8");
+    await fsp.writeFile(
+      featureFile,
+      [`export function greet(name: string) {`, `  return \`hi \${name}\`;`, `}`, ``].join("\n"),
+      "utf8",
+    );
     await fsp.writeFile(
       consumerFile,
       [`import { greet } from './feature';`, ``, `export function run() {`, `  greet('world');`, `}`, ``].join("\n"),
@@ -63,7 +67,11 @@ describe("Review report", () => {
     );
 
     await buildProjectIndex(root);
-    await fsp.writeFile(featureFile, [`export function greet(name: string) {`, `  return \`hello \${name}\`;`, `}`, ``].join("\n"), "utf8");
+    await fsp.writeFile(
+      featureFile,
+      [`export function greet(name: string) {`, `  return \`hello \${name}\`;`, `}`, ``].join("\n"),
+      "utf8",
+    );
 
     const report = await buildReviewReport(root, {
       files: [featureFile],
@@ -78,9 +86,11 @@ describe("Review report", () => {
     const callsites = greetSummary?.callsites ?? [];
     expect(callsites.length).toBeGreaterThan(0);
     expect(callsites.length).toBeLessThanOrEqual(2);
-    expect(callsites.some((site) => site.file === "src/consumer.ts" && (site.range.start.line === 1 || site.range.start.line === 4))).toBe(
-      true,
-    );
+    expect(
+      callsites.some(
+        (site) => site.file === "src/consumer.ts" && (site.range.start.line === 1 || site.range.start.line === 4),
+      ),
+    ).toBe(true);
   });
 
   it("limits symbols to diff hunks and includes diff snippets when provided", async () => {
@@ -90,7 +100,9 @@ describe("Review report", () => {
     const featureFile = path.join(srcDir, "feature.ts");
     await fsp.writeFile(
       featureFile,
-      [`export function alpha() {`, `  return 2;`, `}`, ``, `export function beta() {`, `  return 5;`, `}`, ``].join("\n"),
+      [`export function alpha() {`, `  return 2;`, `}`, ``, `export function beta() {`, `  return 5;`, `}`, ``].join(
+        "\n",
+      ),
       "utf8",
     );
 
@@ -132,7 +144,9 @@ describe("Review report", () => {
     const featureFile = path.join(srcDir, "feature.ts");
     await fsp.writeFile(
       featureFile,
-      [`export function alpha() {`, `  return 2;`, `}`, ``, `export function beta() {`, `  return 5;`, `}`, ``].join("\n"),
+      [`export function alpha() {`, `  return 2;`, `}`, ``, `export function beta() {`, `  return 5;`, `}`, ``].join(
+        "\n",
+      ),
       "utf8",
     );
 
@@ -437,8 +451,16 @@ describe("Review report", () => {
 
     await fsp.mkdir(path.dirname(libFile), { recursive: true });
     await fsp.mkdir(path.dirname(testFile), { recursive: true });
-    await fsp.writeFile(path.join(root, "package.json"), JSON.stringify({ private: true, workspaces: ["packages/*"] }, null, 2), "utf8");
-    await fsp.writeFile(path.join(libDir, "package.json"), JSON.stringify({ name: "@repo/lib", main: "src/index.ts" }, null, 2), "utf8");
+    await fsp.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ private: true, workspaces: ["packages/*"] }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(libDir, "package.json"),
+      JSON.stringify({ name: "@repo/lib", main: "src/index.ts" }, null, 2),
+      "utf8",
+    );
     await fsp.writeFile(path.join(appDir, "package.json"), JSON.stringify({ name: "@repo/app" }, null, 2), "utf8");
     await fsp.writeFile(libFile, `export const gone = 1;\n`, "utf8");
     await fsp.writeFile(testFile, `import { gone } from '@repo/lib';\nexport const seen = gone;\n`, "utf8");
@@ -559,7 +581,11 @@ describe("Review report", () => {
       await fsp.mkdir(srcDir, { recursive: true });
       const libFile = path.join(srcDir, "lib.ts");
       await fsp.writeFile(libFile, `export const gone = 1;\n`, "utf8");
-      await fsp.writeFile(path.join(root, "main.ts"), `import { gone } from "./src/lib";\nexport const seen = gone;\n`, "utf8");
+      await fsp.writeFile(
+        path.join(root, "main.ts"),
+        `import { gone } from "./src/lib";\nexport const seen = gone;\n`,
+        "utf8",
+      );
 
       await buildProjectIndex(root, { cache: "memory" });
       await fsp.unlink(libFile);
@@ -816,8 +842,16 @@ describe("Review report", () => {
 
     await fsp.mkdir(path.dirname(libFile), { recursive: true });
     await fsp.mkdir(path.dirname(consumerFile), { recursive: true });
-    await fsp.writeFile(path.join(root, "package.json"), JSON.stringify({ private: true, workspaces: ["packages/*"] }, null, 2), "utf8");
-    await fsp.writeFile(path.join(libDir, "package.json"), JSON.stringify({ name: "@repo/lib", main: "src/index.ts" }, null, 2), "utf8");
+    await fsp.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ private: true, workspaces: ["packages/*"] }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(libDir, "package.json"),
+      JSON.stringify({ name: "@repo/lib", main: "src/index.ts" }, null, 2),
+      "utf8",
+    );
     await fsp.writeFile(path.join(appDir, "package.json"), JSON.stringify({ name: "@repo/app" }, null, 2), "utf8");
     await fsp.writeFile(libFile, `export const lib = 1;\n`, "utf8");
     await fsp.writeFile(consumerFile, `import { lib } from '@repo/lib';\nexport const seen = lib;\n`, "utf8");
@@ -857,8 +891,16 @@ describe("Review report", () => {
 
     await fsp.mkdir(path.dirname(depFile), { recursive: true });
     await fsp.mkdir(path.dirname(consumerFile), { recursive: true });
-    await fsp.writeFile(path.join(root, "package.json"), JSON.stringify({ private: true, workspaces: ["packages/*"] }, null, 2), "utf8");
-    await fsp.writeFile(path.join(libDir, "package.json"), JSON.stringify({ name: "@repo/lib", main: "src/index.ts" }, null, 2), "utf8");
+    await fsp.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ private: true, workspaces: ["packages/*"] }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(libDir, "package.json"),
+      JSON.stringify({ name: "@repo/lib", main: "src/index.ts" }, null, 2),
+      "utf8",
+    );
     await fsp.writeFile(path.join(appDir, "package.json"), JSON.stringify({ name: "@repo/app" }, null, 2), "utf8");
     await fsp.writeFile(depFile, `export const dep = 1;\n`, "utf8");
     await fsp.writeFile(consumerFile, `import { dep } from '@repo/lib';\nexport const seen = dep;\n`, "utf8");
@@ -1237,7 +1279,11 @@ describe("Review report", () => {
     const featureFile = path.join(srcDir, "feature.ts");
     const consumerFile = path.join(srcDir, "consumer.ts");
     await fsp.writeFile(featureFile, `export function greet(name: string) { return name; }\n`, "utf8");
-    await fsp.writeFile(consumerFile, `import { greet } from './feature';\nexport const run = () => greet('hi');\n`, "utf8");
+    await fsp.writeFile(
+      consumerFile,
+      `import { greet } from './feature';\nexport const run = () => greet('hi');\n`,
+      "utf8",
+    );
 
     await buildProjectIndex(root);
 
@@ -1280,7 +1326,11 @@ describe("Review report", () => {
     const srcDir = path.join(root, "src");
     await fsp.mkdir(srcDir, { recursive: true });
     const featureFile = path.join(srcDir, "feature.ts");
-    await fsp.writeFile(featureFile, [`export function greet(name: string) {`, `  return \`hello \${name}\`;`, `}`, ``].join("\n"), "utf8");
+    await fsp.writeFile(
+      featureFile,
+      [`export function greet(name: string) {`, `  return \`hello \${name}\`;`, `}`, ``].join("\n"),
+      "utf8",
+    );
     const consumers = ["alpha", "beta", "gamma"].map((name) => ({
       name,
       file: path.join(srcDir, `${name}.ts`),
@@ -1318,7 +1368,9 @@ describe("Review report", () => {
       });
 
       const findGreet = (report: Awaited<typeof minimal>) =>
-        report.changedFiles.find((entry) => entry.file === "src/feature.ts")?.symbols.find((symbol) => symbol.name === "greet");
+        report.changedFiles
+          .find((entry) => entry.file === "src/feature.ts")
+          ?.symbols.find((symbol) => symbol.name === "greet");
 
       const minimalGreet = findGreet(minimal);
       expect(minimalGreet).toBeDefined();
@@ -1358,7 +1410,10 @@ describe("Indexing helper", () => {
     if (!fullModule) throw new Error("Full index missing index.ts");
     const utilsNormalized = normalize(utilsPath);
     const fullExportStar = fullModule.exports.find(
-      (exp) => exp.type === "exportStar" && typeof exp.fromModule === "string" && normalize(exp.fromModule) === utilsNormalized,
+      (exp) =>
+        exp.type === "exportStar" &&
+        typeof exp.fromModule === "string" &&
+        normalize(exp.fromModule) === utilsNormalized,
     );
     expect(fullExportStar).toBeDefined();
 
@@ -1366,7 +1421,10 @@ describe("Indexing helper", () => {
     const subsetModule = subsetIndex.byFile.get(normalize(indexPath));
     if (!subsetModule) throw new Error("Subset index missing index.ts");
     const subsetExportStar = subsetModule.exports.find(
-      (exp) => exp.type === "exportStar" && typeof exp.fromModule === "string" && normalize(exp.fromModule) === utilsNormalized,
+      (exp) =>
+        exp.type === "exportStar" &&
+        typeof exp.fromModule === "string" &&
+        normalize(exp.fromModule) === utilsNormalized,
     );
     expect(subsetExportStar).toBeDefined();
   });
@@ -1391,7 +1449,9 @@ describe("Indexing helper", () => {
     expect(incrementalMainModule).toBeDefined();
 
     const hasToolNamespaceImport = (imports: NonNullable<typeof fullMainModule>["imports"]) =>
-      imports.some((imp) => imp.kind === "namespace" && imp.localNS === "Tool" && imp.resolved === utilPath.replace(/\\/g, "/"));
+      imports.some(
+        (imp) => imp.kind === "namespace" && imp.localNS === "Tool" && imp.resolved === utilPath.replace(/\\/g, "/"),
+      );
 
     expect(hasToolNamespaceImport(fullMainModule?.imports ?? [])).toBe(true);
     expect(hasToolNamespaceImport(incrementalMainModule?.imports ?? [])).toBe(true);

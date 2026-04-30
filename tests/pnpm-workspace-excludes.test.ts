@@ -13,9 +13,19 @@ describe("pnpm-workspace.yaml parsing", () => {
   it("supports ! exclude globs for workspace members", async () => {
     const root = await mkTmpDir("dg-pnpm-ws-");
 
-    await fsp.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "root", private: true }, null, 2), "utf8");
+    await fsp.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "root", private: true }, null, 2),
+      "utf8",
+    );
 
-    const pnpmYaml = ["# comment line should be ignored", "packages:", "  - 'packages/*'", "  - '!packages/excluded'", ""].join("\n");
+    const pnpmYaml = [
+      "# comment line should be ignored",
+      "packages:",
+      "  - 'packages/*'",
+      "  - '!packages/excluded'",
+      "",
+    ].join("\n");
     await fsp.writeFile(path.join(root, "pnpm-workspace.yaml"), pnpmYaml, "utf8");
 
     const includedDir = path.join(root, "packages", "included");
@@ -35,9 +45,15 @@ describe("pnpm-workspace.yaml parsing", () => {
   it("handles negated and overlapping pnpm patterns", async () => {
     const root = await mkTmpDir("dg-pnpm-overlap-");
 
-    await fsp.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "root", private: true }, null, 2), "utf8");
+    await fsp.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "root", private: true }, null, 2),
+      "utf8",
+    );
 
-    const pnpmYaml = ["packages:", "  - 'packages/*'", "  - 'packages/public-*'", "  - '!packages/private-*'", ""].join("\n");
+    const pnpmYaml = ["packages:", "  - 'packages/*'", "  - 'packages/public-*'", "  - '!packages/private-*'", ""].join(
+      "\n",
+    );
     await fsp.writeFile(path.join(root, "pnpm-workspace.yaml"), pnpmYaml, "utf8");
 
     const publicDir = path.join(root, "packages", "public-a");
@@ -48,8 +64,16 @@ describe("pnpm-workspace.yaml parsing", () => {
     await fsp.mkdir(publicOverlapDir, { recursive: true });
 
     await fsp.writeFile(path.join(publicDir, "package.json"), JSON.stringify({ name: "public-a" }, null, 2), "utf8");
-    await fsp.writeFile(path.join(privateExcludedDir, "package.json"), JSON.stringify({ name: "private-secret" }, null, 2), "utf8");
-    await fsp.writeFile(path.join(publicOverlapDir, "package.json"), JSON.stringify({ name: "public-b" }, null, 2), "utf8");
+    await fsp.writeFile(
+      path.join(privateExcludedDir, "package.json"),
+      JSON.stringify({ name: "private-secret" }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(publicOverlapDir, "package.json"),
+      JSON.stringify({ name: "public-b" }, null, 2),
+      "utf8",
+    );
 
     const cfg = await loadWorkspaceConfig(root);
     expect(cfg).toBeDefined();
@@ -61,7 +85,11 @@ describe("pnpm-workspace.yaml parsing", () => {
   it("ignores malformed entries after packages block ends", async () => {
     const root = await mkTmpDir("dg-pnpm-malformed-");
 
-    await fsp.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "root", private: true }, null, 2), "utf8");
+    await fsp.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "root", private: true }, null, 2),
+      "utf8",
+    );
 
     const pnpmYaml = ["packages:", "  - 'packages/*'", "onlyBuiltDependencies:", "  - esbuild", ""].join("\n");
     await fsp.writeFile(path.join(root, "pnpm-workspace.yaml"), pnpmYaml, "utf8");

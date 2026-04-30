@@ -1,7 +1,14 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
 
-import { buildProjectIndex, listSymbols, goToDefinitionById, findReferencesById, symbolId, defFromSymbolId } from "../src/index.js";
+import {
+  buildProjectIndex,
+  listSymbols,
+  goToDefinitionById,
+  findReferencesById,
+  symbolId,
+  defFromSymbolId,
+} from "../src/index.js";
 
 const norm = (p: string) => p.replace(/\\/g, "/");
 

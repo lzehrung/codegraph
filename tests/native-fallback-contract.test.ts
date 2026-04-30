@@ -105,7 +105,13 @@ async function computeJsOnlyModule(file: string, projectRoot: string): Promise<u
     sup: prepared.sup,
     lang: prepared.lang,
   });
-  const moduleIndex = collectLocalsAndExportsFromSource(normalizeFile(file), prepared.source, prepared.sup, prepared.lang, imports);
+  const moduleIndex = collectLocalsAndExportsFromSource(
+    normalizeFile(file),
+    prepared.source,
+    prepared.sup,
+    prepared.lang,
+    imports,
+  );
   moduleIndex.imports = imports;
   return simplifyModule(moduleIndex);
 }

@@ -16,7 +16,13 @@ import {
   type NativeRuntimeMode,
   type SymbolDef,
 } from "./index.js";
-import { fileExists, isFilePathWithinRoot, normalizePath, resolveFilePathFromRoot, toProjectRelativePath } from "./util.js";
+import {
+  fileExists,
+  isFilePathWithinRoot,
+  normalizePath,
+  resolveFilePathFromRoot,
+  toProjectRelativePath,
+} from "./util.js";
 
 type ToolRuntimeOptions = {
   native?: NativeRuntimeMode;
@@ -240,7 +246,9 @@ export async function tool_findSymbol(
 /**
  * Lists all files in the project that codegraph can analyze.
  */
-export async function tool_listProjectFiles(root: string): Promise<{ status: "ok" | "error"; files?: string[]; error?: string }> {
+export async function tool_listProjectFiles(
+  root: string,
+): Promise<{ status: "ok" | "error"; files?: string[]; error?: string }> {
   try {
     const files = await listProjectFiles(root);
     return {
@@ -349,7 +357,8 @@ function normalizeToolModuleRef(root: string, filePath: string): string {
 }
 
 function normalizeToolImportBinding(root: string, binding: ImportBinding): ImportBinding {
-  const resolved = typeof binding.resolved === "string" ? normalizeToolFileOutput(root, binding.resolved) : binding.resolved;
+  const resolved =
+    typeof binding.resolved === "string" ? normalizeToolFileOutput(root, binding.resolved) : binding.resolved;
   if (resolved === binding.resolved || resolved === undefined) {
     return binding;
   }
@@ -410,7 +419,10 @@ function normalizeToolEdge(root: string, edge: Edge): Edge {
   };
 }
 
-function normalizeToolGraph(root: string, graph: { nodes: string[]; edges: Edge[] }): { nodes: string[]; edges: Edge[] } {
+function normalizeToolGraph(
+  root: string,
+  graph: { nodes: string[]; edges: Edge[] },
+): { nodes: string[]; edges: Edge[] } {
   return {
     nodes: graph.nodes.map((node) => normalizeToolFileOutput(root, node)),
     edges: graph.edges.map((edge) => normalizeToolEdge(root, edge)),

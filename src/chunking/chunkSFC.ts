@@ -26,7 +26,8 @@ export interface ChunkSFCOptions {
 export function chunkSFCFile(opts: ChunkSFCOptions): Chunk[] {
   const { source, filePath, framework, minTokens = 150, maxTokens = 400, tokenizer, logLevel } = opts;
   const baseBlocks = parseSFC(source);
-  const blocks = framework === "svelte" ? [...baseBlocks, ...buildSvelteTemplateBlocks(source, baseBlocks)] : baseBlocks;
+  const blocks =
+    framework === "svelte" ? [...baseBlocks, ...buildSvelteTemplateBlocks(source, baseBlocks)] : baseBlocks;
 
   if (blocks.length === 0) {
     return chunkTextFile({
@@ -96,7 +97,12 @@ function chunkBlock(opts: {
           tokenizer,
         });
       } catch (error) {
-        logWithLevel(logLevel, "warn", `Warning: Semantic chunking failed for ${framework} ${block.type} block:`, error);
+        logWithLevel(
+          logLevel,
+          "warn",
+          `Warning: Semantic chunking failed for ${framework} ${block.type} block:`,
+          error,
+        );
       }
     }
   }

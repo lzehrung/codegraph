@@ -37,7 +37,9 @@ export function resolveExport(
     const normalizedFile = fileInner.replace(/\\/g, "/");
     const mod = index.byFile.get(normalizedFile);
     if (!mod) return null;
-    const key = opts?.preferredKind ? `${cacheKey(normalizedFile, name)}::${opts.preferredKind}` : cacheKey(normalizedFile, name);
+    const key = opts?.preferredKind
+      ? `${cacheKey(normalizedFile, name)}::${opts.preferredKind}`
+      : cacheKey(normalizedFile, name);
     if (index.exportCache.has(key)) return index.exportCache.get(key)!;
 
     const cycleKey = `${normalizedFile}::${name}`;
@@ -72,7 +74,8 @@ export function resolveExport(
 
     for (const entry of mod.exports) {
       if (entry.type === "reexport" && entry.exportedAs === name && typeof entry.fromModule === "string") {
-        const downstream = resolveFromFile(entry.fromModule, entry.sourceSpecifier || name) ?? resolveFromFile(entry.fromModule, name);
+        const downstream =
+          resolveFromFile(entry.fromModule, entry.sourceSpecifier || name) ?? resolveFromFile(entry.fromModule, name);
         if (downstream) {
           index.exportCache.set(key, downstream);
           return downstream;
@@ -146,7 +149,8 @@ function resolveGoPackageExport(index: ProjectIndex, file: FileId, exportedName:
 
 function readPhpNamespaceName(namespaceNode: SyntaxNodeLike, source: string): string | null {
   const namespaceName =
-    namespaceNode.childForFieldName?.("name") ?? namespaceNode.namedChildren.find((child) => child.type === "namespace_name");
+    namespaceNode.childForFieldName?.("name") ??
+    namespaceNode.namedChildren.find((child) => child.type === "namespace_name");
   return namespaceName ? sliceText(namespaceName, source).trim() : null;
 }
 
@@ -386,9 +390,14 @@ export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Pro
     } else if (sup.id === "kotlin" || sup.id === "swift") {
       if (memberNode.type === "navigation_expression") {
         obj = memberNode.namedChildren[0] ?? memberNode.child(0);
-        const suffix = memberNode.namedChildren.find((child) => child.type === "navigation_suffix") ?? memberNode.child(1);
+        const suffix =
+          memberNode.namedChildren.find((child) => child.type === "navigation_suffix") ?? memberNode.child(1);
         if (suffix) {
-          prop = suffix.childForFieldName("suffix") ?? suffix.childForFieldName("name") ?? suffix.namedChildren[0] ?? suffix.child(0);
+          prop =
+            suffix.childForFieldName("suffix") ??
+            suffix.childForFieldName("name") ??
+            suffix.namedChildren[0] ??
+            suffix.child(0);
         }
       } else {
         obj = memberNode.child(0);
@@ -460,7 +469,10 @@ export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Pro
           const suffix = expr.namedChildren.find((child) => child.type === "navigation_suffix") ?? expr.child(1);
           if (suffix) {
             subProp =
-              suffix.childForFieldName?.("suffix") ?? suffix.childForFieldName?.("name") ?? suffix.namedChildren[0] ?? suffix.child(0);
+              suffix.childForFieldName?.("suffix") ??
+              suffix.childForFieldName?.("name") ??
+              suffix.namedChildren[0] ??
+              suffix.child(0);
           }
         }
         if (subObj && subProp) {
@@ -519,7 +531,12 @@ export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Pro
       }
     }
 
-    if (obj && prop && node.id === prop.id && (sup.id === "csharp" || sup.id === "java" || sup.id === "ruby" || sup.id === "rust")) {
+    if (
+      obj &&
+      prop &&
+      node.id === prop.id &&
+      (sup.id === "csharp" || sup.id === "java" || sup.id === "ruby" || sup.id === "rust")
+    ) {
       const member = sliceText(prop, source);
       let objDef: SymbolDef | null = null;
       const result = await resolveExpression(obj);
@@ -570,9 +587,15 @@ export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Pro
     const normalizedQualifiedReference = normalizePhpQualifiedReference(phpQualifiedReference, source, tree, node);
     if (normalizedQualifiedReference?.includes("\\")) {
       const phpImportType = inferPhpQualifiedReferenceImportType(node);
-      const resolvedTarget = await resolveImportSpecifier(index.projectRoot, file, normalizedQualifiedReference, "php", {
-        ...(phpImportType ? { phpImportType } : {}),
-      });
+      const resolvedTarget = await resolveImportSpecifier(
+        index.projectRoot,
+        file,
+        normalizedQualifiedReference,
+        "php",
+        {
+          ...(phpImportType ? { phpImportType } : {}),
+        },
+      );
       if (typeof resolvedTarget === "string") {
         const exportedName = normalizedQualifiedReference.split("\\").filter(Boolean).pop() ?? null;
         if (exportedName) {
@@ -758,7 +781,11 @@ function toModuleRef(resolved?: FileId | { external: string }): string | undefin
   return typeof resolved === "string" ? resolved : resolved.external;
 }
 
-export function resolveImported(index: ProjectIndex, imp: ImportBinding, exportedName: string): SymbolDef | { namespace: FileId } | null {
+export function resolveImported(
+  index: ProjectIndex,
+  imp: ImportBinding,
+  exportedName: string,
+): SymbolDef | { namespace: FileId } | null {
   const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
   if (!targetFile) return null;
 
@@ -795,7 +822,8 @@ export function resolveImported(index: ProjectIndex, imp: ImportBinding, exporte
   try {
     const support = supportForFile(targetFile);
     if (support?.id === "python") {
-      const base = fs.existsSync(targetFile) && fs.statSync(targetFile).isDirectory() ? targetFile : path.dirname(targetFile);
+      const base =
+        fs.existsSync(targetFile) && fs.statSync(targetFile).isDirectory() ? targetFile : path.dirname(targetFile);
       const subCandidates = [
         path.join(base, `${exportedName}.py`),
         path.join(base, exportedName, "__init__.py"),
@@ -923,9 +951,16 @@ export async function findReferences(
     },
   ): ScopeIndex => {
     if (index.scopeCache.has(fileId)) return index.scopeCache.get(fileId)!;
-    const scopeIndex = buildScopeIndexFromSource(fileId, parsedCtx.source, parsedCtx.sup, parsedCtx.lang, moduleIndex.imports, {
-      tree: parsedCtx.tree,
-    });
+    const scopeIndex = buildScopeIndexFromSource(
+      fileId,
+      parsedCtx.source,
+      parsedCtx.sup,
+      parsedCtx.lang,
+      moduleIndex.imports,
+      {
+        tree: parsedCtx.tree,
+      },
+    );
     index.scopeCache.set(fileId, scopeIndex);
     return scopeIndex;
   };
@@ -935,7 +970,8 @@ export async function findReferences(
 
   const scope = getCachedScope(definitionFile, mod, parsedContext);
   const refs: Reference[] = [];
-  const maxReferences = typeof opts?.maxReferences === "number" && opts.maxReferences > 0 ? opts.maxReferences : undefined;
+  const maxReferences =
+    typeof opts?.maxReferences === "number" && opts.maxReferences > 0 ? opts.maxReferences : undefined;
   const seenRefs = new Set<string>();
   const hasReachedMaxReferences = (): boolean => maxReferences !== undefined && refs.length >= maxReferences;
   const pushRef = (ref: Reference): void => {
@@ -946,7 +982,9 @@ export async function findReferences(
   };
 
   const localBindings = scope.bindings.get(def.localName) ?? [];
-  const localBinding = localBindings.find((binding) => binding.def && binding.def.start.index === def.range.start.index);
+  const localBinding = localBindings.find(
+    (binding) => binding.def && binding.def.start.index === def.range.start.index,
+  );
   pushRef({ file: definitionFile, range: def.range });
   if (localBinding) {
     for (const occurrence of localBinding.occurrences) {
@@ -1127,7 +1165,8 @@ export async function findReferences(
           if (hasExpandedNamedImport(module, targetFile, exportedName)) {
             continue;
           }
-          const remainingReferences = maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
+          const remainingReferences =
+            maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
           const ranges = await collectVerifiedNamedNodeReferences(fileId, exportedName, def, remainingReferences);
           for (const range of ranges) {
             if (hasReachedMaxReferences()) break;

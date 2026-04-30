@@ -37,7 +37,10 @@ describe("bench-native harness", () => {
   });
 
   it("runs a single-fixture smoke benchmark and produces JSON output", () => {
-    const output = runBench(["--runs=1", "--fixtures=typescript", "--workloads=graph", "--temperatures=cold", "--json"], 60_000);
+    const output = runBench(
+      ["--runs=1", "--fixtures=typescript", "--workloads=graph", "--temperatures=cold", "--json"],
+      60_000,
+    );
     const parsed = JSON.parse(output);
     expect(parsed.runs).toBe(1);
     expect(parsed.environment).toBeDefined();
@@ -57,7 +60,14 @@ describe("bench-native harness", () => {
     const baselineFile = path.join(baselinesDir, `${baselineName}.json`);
     try {
       runBench(
-        ["--runs=1", "--fixtures=typescript", "--workloads=graph", "--temperatures=cold", `--save-baseline=${baselineName}`, "--json"],
+        [
+          "--runs=1",
+          "--fixtures=typescript",
+          "--workloads=graph",
+          "--temperatures=cold",
+          `--save-baseline=${baselineName}`,
+          "--json",
+        ],
         60_000,
       );
 
@@ -69,7 +79,13 @@ describe("bench-native harness", () => {
 
       // Compare against itself
       const compareOutput = runBench(
-        ["--runs=1", "--fixtures=typescript", "--workloads=graph", "--temperatures=cold", `--compare-baseline=${baselineName}`],
+        [
+          "--runs=1",
+          "--fixtures=typescript",
+          "--workloads=graph",
+          "--temperatures=cold",
+          `--compare-baseline=${baselineName}`,
+        ],
         60_000,
       );
       expect(compareOutput).toContain("Comparing against baseline:");
@@ -106,7 +122,10 @@ describe("bench-native harness", () => {
   it(
     "reports vs JS column in table output",
     () => {
-      const output = runBench(["--runs=1", "--fixtures=typescript", "--workloads=graph", "--temperatures=cold"], 60_000);
+      const output = runBench(
+        ["--runs=1", "--fixtures=typescript", "--workloads=graph", "--temperatures=cold"],
+        60_000,
+      );
       expect(output).toContain("vs JS");
       // native row should have a speedup indicator
       expect(output).toMatch(/\d+(?:\.\d+)?x (faster|slower)/);
@@ -117,7 +136,10 @@ describe("bench-native harness", () => {
   it(
     "reports vs Native column when --workers is used",
     () => {
-      const output = runBench(["--runs=1", "--fixtures=typescript", "--workloads=full", "--temperatures=cold", "--workers"], 60_000);
+      const output = runBench(
+        ["--runs=1", "--fixtures=typescript", "--workloads=full", "--temperatures=cold", "--workers"],
+        60_000,
+      );
       expect(output).toContain("vs Native");
       // workers row should show comparison against both JS and native
       const lines = output.split("\n");
@@ -151,7 +173,10 @@ describe("bench-native harness", () => {
     () => {
       // max-slowdown of 0.001 should always fail since native can't be 1000x faster
       expect(() =>
-        runBench(["--runs=1", "--fixtures=typescript", "--workloads=graph", "--temperatures=cold", "--max-slowdown=0.001"], 60_000),
+        runBench(
+          ["--runs=1", "--fixtures=typescript", "--workloads=graph", "--temperatures=cold", "--max-slowdown=0.001"],
+          60_000,
+        ),
       ).toThrow();
     },
     longBenchTimeoutMs,

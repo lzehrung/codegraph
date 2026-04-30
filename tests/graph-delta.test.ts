@@ -14,7 +14,9 @@ function hasFileEdge(
   toPath: string,
   raw: string,
 ): boolean {
-  return edges.some((edge) => edge.from === from && edge.to.type === "file" && edge.to.path === toPath && edge.raw === raw);
+  return edges.some(
+    (edge) => edge.from === from && edge.to.type === "file" && edge.to.path === toPath && edge.raw === raw,
+  );
 }
 
 describe("Graph delta export", () => {

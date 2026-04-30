@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import { collectGraph, buildProjectIndexFromFiles, buildSymbolGraph, graphToMermaidSymbolsWithFiles } from "../src/index.js";
+import {
+  collectGraph,
+  buildProjectIndexFromFiles,
+  buildSymbolGraph,
+  graphToMermaidSymbolsWithFiles,
+} from "../src/index.js";
 import { getSamplePath, expectEdgeCount } from "./test-utils.js";
 
 type EdgeTo = { type: "file"; path: string } | { type: "external"; name: string };
@@ -22,10 +27,14 @@ describe("Dependency Graph", () => {
       expect(graph.edges.length).toBeGreaterThan(0);
 
       // Should have edges from main.ts to utils.ts and helpers.ts
-      const mainToUtils = graph.edges.find((edge) => edge.from.includes("main.ts") && toStr(edge.to).includes("utils.ts"));
+      const mainToUtils = graph.edges.find(
+        (edge) => edge.from.includes("main.ts") && toStr(edge.to).includes("utils.ts"),
+      );
       expect(mainToUtils).toBeDefined();
 
-      const utilsToHelpers = graph.edges.find((edge) => edge.from.includes("utils.ts") && toStr(edge.to).includes("helpers.ts"));
+      const utilsToHelpers = graph.edges.find(
+        (edge) => edge.from.includes("utils.ts") && toStr(edge.to).includes("helpers.ts"),
+      );
       expect(utilsToHelpers).toBeDefined();
     });
 
@@ -61,10 +70,14 @@ describe("Dependency Graph", () => {
       expect(graph.edges.length).toBeGreaterThan(0);
 
       // Should have edges from main.py to utils.py and helpers.py
-      const mainToUtils = graph.edges.find((edge) => edge.from.includes("main.py") && toStr(edge.to).includes("utils.py"));
+      const mainToUtils = graph.edges.find(
+        (edge) => edge.from.includes("main.py") && toStr(edge.to).includes("utils.py"),
+      );
       expect(mainToUtils).toBeDefined();
 
-      const utilsToHelpers = graph.edges.find((edge) => edge.from.includes("utils.py") && toStr(edge.to).includes("helpers.py"));
+      const utilsToHelpers = graph.edges.find(
+        (edge) => edge.from.includes("utils.py") && toStr(edge.to).includes("helpers.py"),
+      );
       expect(utilsToHelpers).toBeDefined();
     });
 
@@ -80,7 +93,9 @@ describe("Dependency Graph", () => {
       const graph = await collectGraph(samplePath, files);
 
       // Should have edges involving __init__.py
-      const initEdges = graph.edges.filter((edge) => edge.from.includes("__init__.py") || toStr(edge.to).includes("__init__.py"));
+      const initEdges = graph.edges.filter(
+        (edge) => edge.from.includes("__init__.py") || toStr(edge.to).includes("__init__.py"),
+      );
       expect(initEdges.length).toBeGreaterThan(0);
     });
   });
@@ -102,10 +117,14 @@ describe("Dependency Graph", () => {
       expect(graph.edges.length).toBeGreaterThan(0);
 
       // Should have edges from main.js to utils.js and helpers.js
-      const mainToUtils = graph.edges.find((edge) => edge.from.includes("main.js") && toStr(edge.to).includes("utils.js"));
+      const mainToUtils = graph.edges.find(
+        (edge) => edge.from.includes("main.js") && toStr(edge.to).includes("utils.js"),
+      );
       expect(mainToUtils).toBeDefined();
 
-      const utilsToHelpers = graph.edges.find((edge) => edge.from.includes("utils.js") && toStr(edge.to).includes("helpers.js"));
+      const utilsToHelpers = graph.edges.find(
+        (edge) => edge.from.includes("utils.js") && toStr(edge.to).includes("helpers.js"),
+      );
       expect(utilsToHelpers).toBeDefined();
     });
 
@@ -159,7 +178,10 @@ describe("Dependency Graph", () => {
   describe("Hybrid symbol+file Mermaid rendering", () => {
     it("includes file nodes and symbol edges together", async () => {
       const samplePath = getSamplePath("typescript");
-      const files = [path.join(samplePath, "main.ts").replace(/\\/g, "/"), path.join(samplePath, "utils.ts").replace(/\\/g, "/")];
+      const files = [
+        path.join(samplePath, "main.ts").replace(/\\/g, "/"),
+        path.join(samplePath, "utils.ts").replace(/\\/g, "/"),
+      ];
       const graph = await collectGraph(samplePath, files);
       const index = await buildProjectIndexFromFiles(samplePath, files);
       const sgraph = await buildSymbolGraph(index);
@@ -189,10 +211,14 @@ describe("Dependency Graph", () => {
       expect(graph.edges.length).toBeGreaterThan(0);
 
       // Should have edges from main.go to utils.go and utils.go to helpers.go
-      const mainToUtils = graph.edges.find((edge) => edge.from.includes("main.go") && toStr(edge.to).includes("utils.go"));
+      const mainToUtils = graph.edges.find(
+        (edge) => edge.from.includes("main.go") && toStr(edge.to).includes("utils.go"),
+      );
       expect(mainToUtils).toBeDefined();
 
-      const utilsToHelpers = graph.edges.find((edge) => edge.from.includes("utils.go") && toStr(edge.to).includes("helpers.go"));
+      const utilsToHelpers = graph.edges.find(
+        (edge) => edge.from.includes("utils.go") && toStr(edge.to).includes("helpers.go"),
+      );
       expect(utilsToHelpers).toBeDefined();
     });
   });
@@ -211,10 +237,14 @@ describe("Dependency Graph", () => {
       expect(graph.nodes).toHaveLength(3);
       expect(graph.edges.length).toBeGreaterThan(0);
 
-      const mainToUtils = graph.edges.find((edge) => edge.from.includes("main.java") && toStr(edge.to).includes("utils/Utils.java"));
+      const mainToUtils = graph.edges.find(
+        (edge) => edge.from.includes("main.java") && toStr(edge.to).includes("utils/Utils.java"),
+      );
       expect(mainToUtils).toBeDefined();
 
-      const mainToHelpers = graph.edges.find((edge) => edge.from.includes("main.java") && toStr(edge.to).includes("helpers/Helpers.java"));
+      const mainToHelpers = graph.edges.find(
+        (edge) => edge.from.includes("main.java") && toStr(edge.to).includes("helpers/Helpers.java"),
+      );
       expect(mainToHelpers).toBeDefined();
     });
   });
@@ -232,10 +262,14 @@ describe("Dependency Graph", () => {
       expect(graph.nodes).toHaveLength(3);
       expect(graph.edges.length).toBeGreaterThan(0);
 
-      const mainToUtils = graph.edges.find((edge) => edge.from.includes("Main.cs") && toStr(edge.to).includes("Utils.cs"));
+      const mainToUtils = graph.edges.find(
+        (edge) => edge.from.includes("Main.cs") && toStr(edge.to).includes("Utils.cs"),
+      );
       expect(mainToUtils).toBeDefined();
 
-      const mainToHelpers = graph.edges.find((edge) => edge.from.includes("Main.cs") && toStr(edge.to).includes("Helpers.cs"));
+      const mainToHelpers = graph.edges.find(
+        (edge) => edge.from.includes("Main.cs") && toStr(edge.to).includes("Helpers.cs"),
+      );
       expect(mainToHelpers).toBeDefined();
     });
   });
@@ -253,10 +287,14 @@ describe("Dependency Graph", () => {
       expect(graph.nodes).toHaveLength(3);
       expect(graph.edges.length).toBeGreaterThan(0);
 
-      const mainToUtils = graph.edges.find((edge) => edge.from.includes("main.rb") && toStr(edge.to).includes("utils.rb"));
+      const mainToUtils = graph.edges.find(
+        (edge) => edge.from.includes("main.rb") && toStr(edge.to).includes("utils.rb"),
+      );
       expect(mainToUtils).toBeDefined();
 
-      const mainToHelpers = graph.edges.find((edge) => edge.from.includes("main.rb") && toStr(edge.to).includes("helpers.rb"));
+      const mainToHelpers = graph.edges.find(
+        (edge) => edge.from.includes("main.rb") && toStr(edge.to).includes("helpers.rb"),
+      );
       expect(mainToHelpers).toBeDefined();
     });
   });
@@ -275,10 +313,14 @@ describe("Dependency Graph", () => {
       expect(graph.nodes).toHaveLength(3);
       expect(graph.edges.length).toBeGreaterThan(0);
 
-      const mainToUtils = graph.edges.find((edge) => edge.from.includes("main.rs") && toStr(edge.to).includes("utils.rs"));
+      const mainToUtils = graph.edges.find(
+        (edge) => edge.from.includes("main.rs") && toStr(edge.to).includes("utils.rs"),
+      );
       expect(mainToUtils).toBeDefined();
 
-      const mainToHelpers = graph.edges.find((edge) => edge.from.includes("main.rs") && toStr(edge.to).includes("helpers.rs"));
+      const mainToHelpers = graph.edges.find(
+        (edge) => edge.from.includes("main.rs") && toStr(edge.to).includes("helpers.rs"),
+      );
       expect(mainToHelpers).toBeDefined();
     });
   });

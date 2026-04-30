@@ -64,7 +64,9 @@ describe("project file discovery", () => {
     const discovered = await listProjectFiles(tempDir);
     const discoveredSet = new Set(discovered.map(normalize));
 
-    const expected = [sourceFile, ...uniqueManifestFiles.map((manifest) => path.join(manifestDir, manifest))].map(normalize);
+    const expected = [sourceFile, ...uniqueManifestFiles.map((manifest) => path.join(manifestDir, manifest))].map(
+      normalize,
+    );
 
     for (const filePath of expected) {
       expect(discoveredSet.has(filePath)).toBe(true);
@@ -148,8 +150,14 @@ describe("project file discovery", () => {
     await createFile(pom, "<project><artifactId>mvn-app</artifactId></project>");
     await createFile(settingsGradle, 'rootProject.name = "gradle-app"\n');
     await createFile(settingsGradleKts, 'rootProject.name = "kotlin-app"\n');
-    await createFile(csproj, "<Project><PropertyGroup><AssemblyName>DotNetApp</AssemblyName></PropertyGroup></Project>");
-    await createFile(fsproj, "<Project><PropertyGroup><AssemblyName>FSharpLib</AssemblyName></PropertyGroup></Project>");
+    await createFile(
+      csproj,
+      "<Project><PropertyGroup><AssemblyName>DotNetApp</AssemblyName></PropertyGroup></Project>",
+    );
+    await createFile(
+      fsproj,
+      "<Project><PropertyGroup><AssemblyName>FSharpLib</AssemblyName></PropertyGroup></Project>",
+    );
     await createFile(vbproj, "<Project><PropertyGroup><PackageId>VisualBasicLib</PackageId></PropertyGroup></Project>");
     await createFile(sln, "Microsoft Visual Studio Solution File, Format Version 12.00\n");
     await createFile(swiftPackage, 'import PackageDescription\n\nlet package = Package(name: "swift-app")\n');

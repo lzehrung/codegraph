@@ -70,7 +70,12 @@ describe("native query scope", () => {
     expect(support).toBeDefined();
     const { executedKinds, state } = createScopeSpy();
 
-    const result = getNativeQueryExecutionForState("import { foo } from './bar'; export const x = 1;", support, state, "full");
+    const result = getNativeQueryExecutionForState(
+      "import { foo } from './bar'; export const x = 1;",
+      support,
+      state,
+      "full",
+    );
 
     expect(result.results).not.toBeNull();
     expect(executedKinds).toContain("imports");
@@ -191,11 +196,16 @@ describe("authoritative empty native results", () => {
     });
     const fallbackEvents: FallbackImportExtractionEvent[] = [];
 
-    const specs = collectModuleSpecifiersFromSource(support, undefined, "import { foo } from './bar';\nexport { baz } from './qux';\n", {
-      file: "main.ts",
-      native: "off",
-      onFallbackImportExtraction: (event) => fallbackEvents.push(event),
-    });
+    const specs = collectModuleSpecifiersFromSource(
+      support,
+      undefined,
+      "import { foo } from './bar';\nexport { baz } from './qux';\n",
+      {
+        file: "main.ts",
+        native: "off",
+        onFallbackImportExtraction: (event) => fallbackEvents.push(event),
+      },
+    );
 
     expect(specs).toEqual([{ spec: "./bar" }, { spec: "./qux" }]);
     expect(executeSpy).not.toHaveBeenCalled();

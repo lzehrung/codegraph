@@ -128,7 +128,8 @@ export async function analyzeImpact(
     onImpactItem,
   } = options;
   const diagnostics = options.diagnostics;
-  const projectRoot = options.projectRoot ?? index.projectRoot ?? index.projectFiles?.find((entry) => entry.projectRoot)?.projectRoot;
+  const projectRoot =
+    options.projectRoot ?? index.projectRoot ?? index.projectFiles?.find((entry) => entry.projectRoot)?.projectRoot;
   const normalizedOptions = {
     ...options,
     ...(projectRoot ? { projectRoot } : {}),
@@ -262,7 +263,9 @@ export async function analyzeImpact(
             const existingHints = existing?.explain?.hints ?? [];
             const newHints = severityResult.explain.hints ?? [];
             const mergedHints =
-              existingHints.length === 0 && newHints.length === 0 ? undefined : [...new Set([...existingHints, ...newHints])];
+              existingHints.length === 0 && newHints.length === 0
+                ? undefined
+                : [...new Set([...existingHints, ...newHints])];
 
             // Preserve the strongest explain.reason seen so far.  Spreading
             // severityResult.explain unconditionally could downgrade a prior
@@ -332,7 +335,9 @@ function getDependentFiles(index: ProjectIndex, filePath: FileId, reverseDeps?: 
   if (reverseDeps) {
     return reverseDeps.get(filePath)?.map((edge) => edge.from) ?? [];
   }
-  return index.graph.edges.filter((edge) => edge.to.type === "file" && edge.to.path === filePath).map((edge) => edge.from);
+  return index.graph.edges
+    .filter((edge) => edge.to.type === "file" && edge.to.path === filePath)
+    .map((edge) => edge.from);
 }
 
 export function seedTransitiveFromFiles(
@@ -344,7 +349,8 @@ export function seedTransitiveFromFiles(
   emitImpactItem?: (item: ImpactItem, phase: "partial" | "final") => void,
 ): void {
   const { includeTests = false, testPatterns, ignoreGlobs = [] } = options;
-  const projectRoot = options.projectRoot ?? index.projectRoot ?? index.projectFiles?.find((entry) => entry.projectRoot)?.projectRoot;
+  const projectRoot =
+    options.projectRoot ?? index.projectRoot ?? index.projectFiles?.find((entry) => entry.projectRoot)?.projectRoot;
   const patternMatchers = compileTestPatterns(testPatterns);
   const isIndexTestFile = createIndexTestFileMatcher(index, patternMatchers, projectRoot);
   const fallbackPathSet = new Set(options.fileLevelFallbackPaths ?? []);
@@ -359,7 +365,10 @@ export function seedTransitiveFromFiles(
     const shouldSeedModifiedFallback =
       fileChange.kind === "modified" &&
       options.fileLevelFallback &&
-      (fallbackPathSet.has(fileChange.path) || fileChange.isBinary || fileChange.modeChanged || fileChange.hunks.length === 0);
+      (fallbackPathSet.has(fileChange.path) ||
+        fileChange.isBinary ||
+        fileChange.modeChanged ||
+        fileChange.hunks.length === 0);
 
     if (shouldSeedModifiedFallback) {
       if (impacted.has(fileChange.path)) continue;
@@ -389,7 +398,8 @@ export function seedTransitiveFromFiles(
         if (diagnostics) diagnostics.fallbackSeededDependents += 1;
       }
     } else if (fileChange.kind === "deleted" || fileChange.kind === "renamed") {
-      const lookupPaths = fileChange.kind === "renamed" && fileChange.oldPath ? [fileChange.oldPath, fileChange.path] : [fileChange.path];
+      const lookupPaths =
+        fileChange.kind === "renamed" && fileChange.oldPath ? [fileChange.oldPath, fileChange.path] : [fileChange.path];
       const dependentSet = new Set<FileId>();
       for (const lookupPath of lookupPaths) {
         for (const dependent of getDependentFiles(index, lookupPath, reverseDeps)) {
@@ -462,7 +472,12 @@ function analyzeTransitiveImpact(
     const edgesIn = reverseDeps.get(file) || [];
     for (const edge of edgesIn) {
       const dependentFile = edge.from;
-      if (visited.has(dependentFile) || (!options.includeTests && isIndexTestFile(dependentFile)) || isIgnored(dependentFile)) continue;
+      if (
+        visited.has(dependentFile) ||
+        (!options.includeTests && isIndexTestFile(dependentFile)) ||
+        isIgnored(dependentFile)
+      )
+        continue;
 
       visited.add(dependentFile);
 
@@ -474,7 +489,10 @@ function analyzeTransitiveImpact(
 
       const severity = calculateTransitiveSeverity(edge, depth + 1);
       const upstreamConfidence = impacted.get(file)?.confidence ?? 0.6;
-      const nextConfidence = Math.max(0.2, Math.min(1, upstreamConfidence * (edge.typeOnly ? 0.75 : 0.85) * Math.pow(0.95, depth)));
+      const nextConfidence = Math.max(
+        0.2,
+        Math.min(1, upstreamConfidence * (edge.typeOnly ? 0.75 : 0.85) * Math.pow(0.95, depth)),
+      );
 
       // Calculate fan-in for transitive items too
       const fanIn = reverseDeps.get(dependentFile)?.length || 0;

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { resolveFilePathFromRoot, isAbsoluteFilePath, isFilePathWithinRoot, toProjectRelativePath } from "../src/util.js";
+import {
+  resolveFilePathFromRoot,
+  isAbsoluteFilePath,
+  isFilePathWithinRoot,
+  toProjectRelativePath,
+} from "../src/util.js";
 import { normalizeImpactFilePath } from "../src/impact/path.js";
 
 describe("cross-platform path normalization", () => {
@@ -15,7 +20,9 @@ describe("cross-platform path normalization", () => {
 
   it("normalizes impact paths without re-rooting Windows-style absolute inputs", () => {
     expect(normalizeImpactFilePath("/workspace/codegraph", "C:/repo/src/main.ts")).toBe("C:/repo/src/main.ts");
-    expect(normalizeImpactFilePath("/workspace/codegraph", String.raw`C:\repo\src\main.ts`)).toBe("C:/repo/src/main.ts");
+    expect(normalizeImpactFilePath("/workspace/codegraph", String.raw`C:\repo\src\main.ts`)).toBe(
+      "C:/repo/src/main.ts",
+    );
   });
 
   it("does not treat Windows-style absolute paths as inside a POSIX project root", () => {

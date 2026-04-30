@@ -35,7 +35,9 @@ describe("Agent Tools", () => {
     expect(result.graph!.edges).toBeDefined();
     expect(result.graph?.nodes.every((node) => !path.isAbsolute(node))).toBe(true);
     expect(
-      result.graph?.edges.every((edge) => !path.isAbsolute(edge.from) && (edge.to.type !== "file" || !path.isAbsolute(edge.to.path))),
+      result.graph?.edges.every(
+        (edge) => !path.isAbsolute(edge.from) && (edge.to.type !== "file" || !path.isAbsolute(edge.to.path)),
+      ),
     ).toBe(true);
   });
 

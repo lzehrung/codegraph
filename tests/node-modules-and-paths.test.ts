@@ -23,7 +23,10 @@ describe("Node modules resolution (opt-in) and path normalization", () => {
     const g2 = await (await import("../src/graphs.js")).collectGraph(root, files, { resolveNodeModules: true });
     expect(
       g2.edges.some(
-        (e) => e.raw === "my-pkg" && e.to.type === "file" && e.to.path.replace(/\\/g, "/").endsWith("/node_modules/my-pkg/index.js"),
+        (e) =>
+          e.raw === "my-pkg" &&
+          e.to.type === "file" &&
+          e.to.path.replace(/\\/g, "/").endsWith("/node_modules/my-pkg/index.js"),
       ),
     ).toBe(true);
   });

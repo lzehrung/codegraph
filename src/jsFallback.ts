@@ -62,7 +62,12 @@ type JsFallbackModule = {
     tsx: JsLanguage;
   };
   parseWithJsLanguage: (source: string, language: JsLanguage) => JsSyntaxTree;
-  executeJsQueryAsNativeMatches: (source: string, language: JsLanguage, queryText: string, tree?: JsSyntaxTree) => JsNativeMatch[];
+  executeJsQueryAsNativeMatches: (
+    source: string,
+    language: JsLanguage,
+    queryText: string,
+    tree?: JsSyntaxTree,
+  ) => JsNativeMatch[];
 };
 
 const require = createRequire(import.meta.url);
@@ -107,7 +112,9 @@ function requireJsFallback(feature: string): JsFallbackModule {
   if (state.loaded) return state.module;
 
   const suffix = state.error instanceof Error && state.error.message ? ` (${state.error.message})` : "";
-  throw new Error(`JS Tree-sitter fallback is unavailable for ${feature}. Install @lzehrung/codegraph-js-fallback to enable it${suffix}`);
+  throw new Error(
+    `JS Tree-sitter fallback is unavailable for ${feature}. Install @lzehrung/codegraph-js-fallback to enable it${suffix}`,
+  );
 }
 
 export function __resetJsFallbackModuleForTests(): void {

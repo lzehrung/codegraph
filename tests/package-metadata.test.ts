@@ -15,7 +15,9 @@ function readStringRecord(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object") {
     return {};
   }
-  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  );
 }
 
 describe("package metadata", () => {
@@ -50,7 +52,9 @@ describe("package metadata", () => {
   it("ships both the packaged skill archive and the raw skill directory", () => {
     const rootPackage = readJson("package.json");
     const files =
-      Array.isArray(rootPackage.files) && rootPackage.files.every((entry) => typeof entry === "string") ? rootPackage.files : [];
+      Array.isArray(rootPackage.files) && rootPackage.files.every((entry) => typeof entry === "string")
+        ? rootPackage.files
+        : [];
 
     expect(files).toContain("codegraph.skill");
     expect(files).toContain("codegraph-skill");
@@ -101,7 +105,8 @@ describe("package metadata", () => {
     const nativePackage = readJson("packages/codegraph-native/package.json");
     const dependencies = readStringRecord(nativePackage.dependencies);
     const optionalDependencies = readStringRecord(nativePackage.optionalDependencies);
-    const exportsField = nativePackage.exports && typeof nativePackage.exports === "object" ? nativePackage.exports : {};
+    const exportsField =
+      nativePackage.exports && typeof nativePackage.exports === "object" ? nativePackage.exports : {};
 
     expect(Object.keys(dependencies)).toEqual([]);
     expect(Object.keys(optionalDependencies)).toEqual([]);

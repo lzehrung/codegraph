@@ -669,7 +669,8 @@ function selectAndPanToNode(graphKey) {
     sigma.getCamera().animate({ x: nodeDisplayData.x, y: nodeDisplayData.y, ratio: 0.15 }, { duration: 400 });
   }
 
-  const label = currentGraph.getNodeAttribute(graphKey, "fullLabel") || currentGraph.getNodeAttribute(graphKey, "label");
+  const label =
+    currentGraph.getNodeAttribute(graphKey, "fullLabel") || currentGraph.getNodeAttribute(graphKey, "label");
   setStatus(`Selected: ${label}`);
 }
 

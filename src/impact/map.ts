@@ -10,7 +10,11 @@ function symbolHandleFromLocal(file: FileId, local: SymbolDef): string {
   return `${file}::${local.localName}::${index}`;
 }
 
-export async function locateChangedSymbols(index: ProjectIndex, file: FileId, hunks: FileChange["hunks"]): Promise<ChangedSymbol[]> {
+export async function locateChangedSymbols(
+  index: ProjectIndex,
+  file: FileId,
+  hunks: FileChange["hunks"],
+): Promise<ChangedSymbol[]> {
   return (await locateChangedSymbolsWithLines(index, file, hunks)).changedSymbols;
 }
 
@@ -452,7 +456,11 @@ function computeChangedByteRanges(source: string, hunks: FileChange["hunks"]): B
  * `function f(a) { return a + 1; }` produces a changed byte range that starts
  * after the `)` and therefore does not overlap the params node.
  */
-function computeSignatureChanged(tree: SyntaxTreeLike, symbolDef: SymbolDef, changedByteRanges: ReadonlyArray<ByteRange>): boolean {
+function computeSignatureChanged(
+  tree: SyntaxTreeLike,
+  symbolDef: SymbolDef,
+  changedByteRanges: ReadonlyArray<ByteRange>,
+): boolean {
   if (changedByteRanges.length === 0) return false;
   const pos = {
     row: symbolDef.range.start.line - 1,
@@ -494,7 +502,9 @@ function findSymbolHandleForNode(
   if (classification?.type === "definition" && isDefinitionNameNode(node, sup, source)) {
     const definitionLine = node.startPosition?.row + 1;
     const definitionColumn = node.startPosition?.column + 1;
-    const local = mod.locals.find((l) => l.range.start.line === definitionLine && l.range.start.column === definitionColumn);
+    const local = mod.locals.find(
+      (l) => l.range.start.line === definitionLine && l.range.start.column === definitionColumn,
+    );
     if (local) {
       return symbolHandleFromLocal(file, local);
     }
@@ -512,7 +522,9 @@ function findSymbolHandleForNode(
   if (nameNode) {
     const ancestorLine = nameNode.startPosition?.row + 1;
     const ancestorColumn = nameNode.startPosition?.column + 1;
-    const local = mod.locals.find((l) => l.range.start.line === ancestorLine && l.range.start.column === ancestorColumn);
+    const local = mod.locals.find(
+      (l) => l.range.start.line === ancestorLine && l.range.start.column === ancestorColumn,
+    );
     return local ? symbolHandleFromLocal(file, local) : null;
   }
 
@@ -525,7 +537,10 @@ function isExported(index: ProjectIndex, file: FileId, symbolDef: SymbolDef): bo
 
   const symbolIndex = symbolDef.range.start.index ?? 0;
   return mod.exports.some(
-    (e) => e.type === "local" && e.target.localName === symbolDef.localName && (e.target.range.start.index ?? 0) === symbolIndex,
+    (e) =>
+      e.type === "local" &&
+      e.target.localName === symbolDef.localName &&
+      (e.target.range.start.index ?? 0) === symbolIndex,
   );
 }
 

@@ -53,7 +53,8 @@ export function parseSFC(source: string): SFCBlock[] {
     const type = tagName === "template" || tagName === "script" || tagName === "style" ? tagName : "custom";
     const content = source.slice(contentStart, contentEnd);
     const startLine = lineForOffset(lineIndex, contentStart);
-    const endLine = contentStart === contentEnd ? startLine : lineForOffset(lineIndex, Math.max(contentStart, contentEnd - 1));
+    const endLine =
+      contentStart === contentEnd ? startLine : lineForOffset(lineIndex, Math.max(contentStart, contentEnd - 1));
 
     blocks.push({
       type: type,

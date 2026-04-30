@@ -54,7 +54,13 @@ export async function collectImpactSuggestions(
     const mod = index.byFile.get(absoluteFile);
     const importedLocals = collectImportedLocals(mod);
     const importedFiles = collectImportedFiles(mod);
-    const missingExportSuggestions = collectMissingExportSuggestions(mod, exportLookup, reportFile, projectRoot, importedFiles);
+    const missingExportSuggestions = collectMissingExportSuggestions(
+      mod,
+      exportLookup,
+      reportFile,
+      projectRoot,
+      importedFiles,
+    );
 
     for (const suggestion of missingExportSuggestions) {
       if (maxSuggestions !== undefined && output.length >= maxSuggestions) break;
@@ -148,7 +154,8 @@ function collectExportNames(mod: ModuleIndex): Set<string> {
 }
 
 function getExportedName(entry: ExportEntry): string | null {
-  if (entry.type === "local" || entry.type === "reexport" || entry.type === "namespaceReexport") return entry.exportedAs;
+  if (entry.type === "local" || entry.type === "reexport" || entry.type === "namespaceReexport")
+    return entry.exportedAs;
   return null;
 }
 

@@ -15,7 +15,11 @@ async function runCliCommand(args: string[], input?: string): Promise<string> {
   return result.stdout;
 }
 
-async function runCliCommandDetailed(args: string[], input?: string, cwd = process.cwd()): Promise<{ stdout: string; stderr: string }> {
+async function runCliCommandDetailed(
+  args: string[],
+  input?: string,
+  cwd = process.cwd(),
+): Promise<{ stdout: string; stderr: string }> {
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [tsxCliPath, sourceCliPath, ...args], {
       cwd,
@@ -181,11 +185,15 @@ describe("CLI regressions", () => {
     await fsp.writeFile(keptFile, "export const main = 1;\n", "utf8");
     await fsp.writeFile(ignoredFile, "export const generated = 1;\n", "utf8");
 
-    const defaultGraph = JSON.parse(await runCliCommand(["graph", "--root", tmpDir, srcDir, "--json"])) as { nodes: string[] };
+    const defaultGraph = JSON.parse(await runCliCommand(["graph", "--root", tmpDir, srcDir, "--json"])) as {
+      nodes: string[];
+    };
     expect(defaultGraph.nodes.map(normalize)).toContain(normalize(keptFile));
     expect(defaultGraph.nodes.map(normalize)).not.toContain(normalize(ignoredFile));
 
-    const fullGraph = JSON.parse(await runCliCommand(["graph", "--root", tmpDir, srcDir, "--json", "--no-gitignore"])) as {
+    const fullGraph = JSON.parse(
+      await runCliCommand(["graph", "--root", tmpDir, srcDir, "--json", "--no-gitignore"]),
+    ) as {
       nodes: string[];
     };
     expect(fullGraph.nodes.map(normalize)).toContain(normalize(ignoredFile));
@@ -202,7 +210,16 @@ describe("CLI regressions", () => {
     await fsp.writeFile(jsFile, "module.exports = 1;\n", "utf8");
 
     const graph = JSON.parse(
-      await runCliCommand(["graph", "--root", tmpDir, "--json", "--include-glob", "src/**/*.ts", "--ignore-glob", "src/**/*.spec.ts"]),
+      await runCliCommand([
+        "graph",
+        "--root",
+        tmpDir,
+        "--json",
+        "--include-glob",
+        "src/**/*.ts",
+        "--ignore-glob",
+        "src/**/*.spec.ts",
+      ]),
     ) as { nodes: string[] };
     const nodes = graph.nodes.map(normalize);
 
@@ -218,7 +235,9 @@ describe("CLI regressions", () => {
     await fsp.writeFile(packageFile, "module.exports = 1;\n", "utf8");
     await fsp.writeFile(path.join(tmpDir, "main.js"), "export const main = 1;\n", "utf8");
 
-    const graph = JSON.parse(await runCliCommand(["graph", "--root", tmpDir, "--json", "--resolve-node-modules"])) as { nodes: string[] };
+    const graph = JSON.parse(await runCliCommand(["graph", "--root", tmpDir, "--json", "--resolve-node-modules"])) as {
+      nodes: string[];
+    };
 
     expect(graph.nodes.map(normalize)).not.toContain(normalize(packageFile));
   });
@@ -269,7 +288,9 @@ describe("CLI regressions", () => {
     expect(goto.status).toBe("error");
     expect(goto.reason).toBe("outside_project_root");
 
-    const refs = JSON.parse(await runCliCommand(["refs", "--file", outsideFile, "--line", "1", "--col", "1", "--root", tsRoot])) as {
+    const refs = JSON.parse(
+      await runCliCommand(["refs", "--file", outsideFile, "--line", "1", "--col", "1", "--root", tsRoot]),
+    ) as {
       status: string;
       reason?: string;
       error?: string;
@@ -285,7 +306,9 @@ describe("CLI regressions", () => {
     expect(deps.status).toBe("error");
     expect(deps.reason).toBe("outside_project_root");
 
-    const pathResult = JSON.parse(await runCliCommand(["path", outsideFile, "main.ts", "--root", tsRoot, "--json"])) as {
+    const pathResult = JSON.parse(
+      await runCliCommand(["path", outsideFile, "main.ts", "--root", tsRoot, "--json"]),
+    ) as {
       status: string;
       reason?: string;
       error?: string;
@@ -297,7 +320,16 @@ describe("CLI regressions", () => {
   it("graph --native off disables native backend reporting explicitly", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-native-off-"));
     const reportPath = path.join(tmpDir, "graph-report.json");
-    await runCliCommandDetailed(["graph", "--stdout", "--native", "off", "--report", "--report-file", reportPath, tsRoot]);
+    await runCliCommandDetailed([
+      "graph",
+      "--stdout",
+      "--native",
+      "off",
+      "--report",
+      "--report-file",
+      reportPath,
+      tsRoot,
+    ]);
 
     const rawReport = await fsp.readFile(reportPath, "utf8");
     const report = JSON.parse(rawReport) as {
@@ -322,7 +354,13 @@ describe("CLI regressions", () => {
     await fsp.writeFile(path.join(tmpDir, "main.ts"), "export function helper() { return 1; }\n", "utf8");
     const dbPath = path.join(tmpDir, "graph.sqlite");
     await runCliCommand(["graph", "--root", tmpDir, "--sqlite", dbPath]);
-    const stdout = await runCliCommand(["sql", "--db", dbPath, "--query", "SELECT name FROM symbols WHERE kind = 'function';"]);
+    const stdout = await runCliCommand([
+      "sql",
+      "--db",
+      dbPath,
+      "--query",
+      "SELECT name FROM symbols WHERE kind = 'function';",
+    ]);
     const result = JSON.parse(stdout) as {
       columns: string[];
       rows: Array<Array<unknown>>;
@@ -338,9 +376,9 @@ describe("CLI regressions", () => {
     const dbPath = path.join(tmpDir, "graph.sqlite");
     await runCliCommand(["graph", "--root", tmpDir, "--sqlite", dbPath]);
 
-    await expect(runCliCommandDetailed(["sql", "--db", dbPath, "--query", "DELETE FROM symbols RETURNING name;"])).rejects.toThrow(
-      /read-only result-producing statements/,
-    );
+    await expect(
+      runCliCommandDetailed(["sql", "--db", dbPath, "--query", "DELETE FROM symbols RETURNING name;"]),
+    ).rejects.toThrow(/read-only result-producing statements/);
 
     const stdout = await runCliCommand(["sql", "--db", dbPath, "--query", "SELECT COUNT(*) AS count FROM symbols;"]);
     const result = JSON.parse(stdout) as {
@@ -425,7 +463,11 @@ describe("CLI regressions", () => {
     await fsp.mkdir(testDir, { recursive: true });
     await fsp.writeFile(path.join(srcDir, "a.ts"), "import { b } from './b';\nexport const a = b;\n", "utf8");
     await fsp.writeFile(path.join(srcDir, "b.ts"), "export const b = 1;\n", "utf8");
-    await fsp.writeFile(path.join(testDir, "spec.ts"), "import { a } from '../src/a';\nexport const spec = a;\n", "utf8");
+    await fsp.writeFile(
+      path.join(testDir, "spec.ts"),
+      "import { a } from '../src/a';\nexport const spec = a;\n",
+      "utf8",
+    );
 
     await runCliCommand(["index", "--root", tmpDir]);
     const result = await runCliCommandDetailed(["hotspots", "--root", tmpDir, srcDir, "--limit", "1", "--json"]);
@@ -490,15 +532,21 @@ describe("CLI regressions", () => {
     expect(report.recommendedCommands).toContain(
       `codegraph hotspots --root "${normalize(tmpDir)}" "${normalize(srcDir)}" --limit 20 --json`,
     );
-    expect(report.recommendedCommands).toContain(`codegraph doctor "${normalize(path.join(tmpDir, ".codegraph-cache", "index-v1"))}"`);
+    expect(report.recommendedCommands).toContain(
+      `codegraph doctor "${normalize(path.join(tmpDir, ".codegraph-cache", "index-v1"))}"`,
+    );
   });
 
   it("hotspots rejects invalid --limit values", async () => {
-    await expect(runCliCommand(["hotspots", "--root", tsRoot, "--limit", "0"])).rejects.toThrow(/Invalid --limit value "0"/i);
+    await expect(runCliCommand(["hotspots", "--root", tsRoot, "--limit", "0"])).rejects.toThrow(
+      /Invalid --limit value "0"/i,
+    );
   });
 
   it("inspect rejects invalid --cache values", async () => {
-    await expect(runCliCommand(["inspect", "--root", tsRoot, "--cache", "banana"])).rejects.toThrow(/Invalid --cache value "banana"/i);
+    await expect(runCliCommand(["inspect", "--root", tsRoot, "--cache", "banana"])).rejects.toThrow(
+      /Invalid --cache value "banana"/i,
+    );
   });
 
   it("skill install copies the bundled skill into the target directory", async () => {
@@ -529,7 +577,17 @@ describe("CLI regressions", () => {
   });
 
   it("grep supports plain-text regex mode via --pattern (and --glob)", async () => {
-    const stdout = await runCliCommand(["grep", "--root", tsRoot, "--pattern", "helperFunction", "--glob", "utils.ts", "--max-hits", "50"]);
+    const stdout = await runCliCommand([
+      "grep",
+      "--root",
+      tsRoot,
+      "--pattern",
+      "helperFunction",
+      "--glob",
+      "utils.ts",
+      "--max-hits",
+      "50",
+    ]);
     const hits = JSON.parse(stdout) as Array<{
       file: string;
       line: number;
@@ -572,9 +630,9 @@ describe("CLI regressions", () => {
   });
 
   it("grep rejects ambiguous usage (both --query and --pattern)", async () => {
-    await expect(runCliCommand(["grep", "--root", tsRoot, "--query", "(identifier) @id", "--pattern", "foo"])).rejects.toThrow(
-      /Usage: grep/i,
-    );
+    await expect(
+      runCliCommand(["grep", "--root", tsRoot, "--query", "(identifier) @id", "--pattern", "foo"]),
+    ).rejects.toThrow(/Usage: grep/i);
   });
 });
 

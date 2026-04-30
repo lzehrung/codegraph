@@ -4,7 +4,10 @@ import os from "node:os";
 import fsp from "node:fs/promises";
 import { buildProjectIndexFromFiles, collectGraph, type BuildReport } from "../src/index.js";
 import { extractJsTsSpecifiers, stripJsLikeComments } from "../src/util.js";
-import { getNativeTreeSitterSupportedLanguageIds, isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
+import {
+  getNativeTreeSitterSupportedLanguageIds,
+  isNativeTreeSitterAvailable,
+} from "../src/native/treeSitterNative.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -28,7 +31,9 @@ describe("Import extraction fallback reporting", () => {
     const normalizedMain = main.replace(/\\/g, "/");
     const normalizedDep = dep.replace(/\\/g, "/");
     const mod = index.byFile.get(normalizedMain);
-    const importBinding = mod?.imports.find((entry) => entry.kind === "default" && entry.local === "util" && entry.from === "./dep");
+    const importBinding = mod?.imports.find(
+      (entry) => entry.kind === "default" && entry.local === "util" && entry.from === "./dep",
+    );
     const edge = index.graph.edges.find(
       (entry) => entry.from === normalizedMain && entry.to.type === "file" && entry.to.path === normalizedDep,
     );
@@ -66,7 +71,15 @@ describe("Import extraction fallback reporting", () => {
     ].join("\n");
 
     const specs = extractJsTsSpecifiers(source);
-    expect(specs.map((entry) => entry.spec)).toEqual(["./types", "./bar", "./side", "./baz", "./req", "./pick", "./dyn"]);
+    expect(specs.map((entry) => entry.spec)).toEqual([
+      "./types",
+      "./bar",
+      "./side",
+      "./baz",
+      "./req",
+      "./pick",
+      "./dyn",
+    ]);
     expect(specs[0]?.typeOnly).toBe(true);
   });
 

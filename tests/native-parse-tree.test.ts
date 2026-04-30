@@ -44,7 +44,10 @@ nativeDescribe("native parse tree projection", () => {
     expect(execution.tree).not.toBeNull();
 
     const tree = new ProjectedSyntaxTree(source, execution.tree!);
-    const byIndex = tree.rootNode.descendantForIndex(source.indexOf("name.upper"), source.indexOf("name.upper") + "name".length);
+    const byIndex = tree.rootNode.descendantForIndex(
+      source.indexOf("name.upper"),
+      source.indexOf("name.upper") + "name".length,
+    );
     expect(byIndex.text).toBe("name");
 
     const byPosition = tree.rootNode.descendantForPosition({ row: 1, column: 11 }, { row: 1, column: 15 });
@@ -79,7 +82,9 @@ nativeDescribe("native parse tree projection", () => {
           bindings: bindings.map((binding) => ({
             kind: binding.kind,
             def: binding.def?.start.index ?? -1,
-            occurrences: binding.occurrences.map((range) => range.start.index ?? -1).sort((left, right) => left - right),
+            occurrences: binding.occurrences
+              .map((range) => range.start.index ?? -1)
+              .sort((left, right) => left - right),
           })),
         }))
         .sort((left, right) => left.name.localeCompare(right.name));

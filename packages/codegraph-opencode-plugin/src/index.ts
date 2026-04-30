@@ -257,31 +257,36 @@ export const graph = tool({
   },
   async execute(args, context) {
     const format = args.format ?? "json";
-    return runCodegraph(context, ["graph", ".", ...(format === "mermaid" ? ["--mermaid"] : ["--json", "--compact-json"])], async () => {
-      if (!codegraph) {
-        throw new Error("Library not loaded");
-      }
-      const root = normalizeRoot(context);
-      if (format === "mermaid") {
-        const graphOutput = await codegraph.tool_getGraph(root);
-        const graph = graphOutput.graph;
-        if (!graph) {
-          // If the library could not produce a structured graph, return the
-          // raw JSON output instead of attempting Mermaid rendering.
-          return graphOutput;
+    return runCodegraph(
+      context,
+      ["graph", ".", ...(format === "mermaid" ? ["--mermaid"] : ["--json", "--compact-json"])],
+      async () => {
+        if (!codegraph) {
+          throw new Error("Library not loaded");
         }
-        return codegraph.graphToMermaid({
-          nodes: new Set(graph.nodes),
-          edges: graph.edges ?? [],
-        });
-      }
-      return codegraph.tool_getGraph(root);
-    });
+        const root = normalizeRoot(context);
+        if (format === "mermaid") {
+          const graphOutput = await codegraph.tool_getGraph(root);
+          const graph = graphOutput.graph;
+          if (!graph) {
+            // If the library could not produce a structured graph, return the
+            // raw JSON output instead of attempting Mermaid rendering.
+            return graphOutput;
+          }
+          return codegraph.graphToMermaid({
+            nodes: new Set(graph.nodes),
+            edges: graph.edges ?? [],
+          });
+        }
+        return codegraph.tool_getGraph(root);
+      },
+    );
   },
 });
 
 export const definition = tool({
-  description: "Find the definition location for a symbol. Provide a file path (relative to worktree is best) plus 1-based line/column.",
+  description:
+    "Find the definition location for a symbol. Provide a file path (relative to worktree is best) plus 1-based line/column.",
   args: {
     file: tool.schema.string().describe("Source file path (relative to worktree preferred)"),
     line: tool.schema.number().describe("Line number (1-based)"),
@@ -300,7 +305,8 @@ export const definition = tool({
 });
 
 export const references = tool({
-  description: "Find references to a symbol. Provide a file path (relative to worktree is best) plus 1-based line/column.",
+  description:
+    "Find references to a symbol. Provide a file path (relative to worktree is best) plus 1-based line/column.",
   args: {
     file: tool.schema.string().describe("Source file path (relative to worktree preferred)"),
     line: tool.schema.number().describe("Line number (1-based)"),
@@ -309,17 +315,22 @@ export const references = tool({
   async execute(args, context) {
     const root = normalizeRoot(context);
     const filePath = normalizeFilePath(root, args.file);
-    return runCodegraph(context, ["refs", "--file", filePath, "--line", String(args.line), "--col", String(args.column)], async () => {
-      if (!codegraph) {
-        throw new Error("Library not loaded");
-      }
-      return codegraph.tool_findReferences(root, filePath, args.line, args.column);
-    });
+    return runCodegraph(
+      context,
+      ["refs", "--file", filePath, "--line", String(args.line), "--col", String(args.column)],
+      async () => {
+        if (!codegraph) {
+          throw new Error("Library not loaded");
+        }
+        return codegraph.tool_findReferences(root, filePath, args.line, args.column);
+      },
+    );
   },
 });
 
 export const overview = tool({
-  description: "Summarize a file's imports and definitions for fast onboarding. Provide a file path (relative to worktree is best).",
+  description:
+    "Summarize a file's imports and definitions for fast onboarding. Provide a file path (relative to worktree is best).",
   args: {
     file: tool.schema.string().describe("Source file path (relative to worktree preferred)"),
   },

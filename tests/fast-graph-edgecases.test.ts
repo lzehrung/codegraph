@@ -38,7 +38,9 @@ describe("Fast graph edge cases", () => {
     const commented = `// import x from './x'\n/* import y from './y' */\n/*\nimport z from './z'\n*/\n`;
     const file = path.join(root, "commented.ts");
     await fsp.writeFile(file, commented, "utf8");
-    const gFast = await (await import("../src/graphs.js")).collectGraph(root, [file.replace(/\\/g, "/")], { fast: true });
+    const gFast = await (
+      await import("../src/graphs.js")
+    ).collectGraph(root, [file.replace(/\\/g, "/")], { fast: true });
     const edgesFrom = gFast.edges.filter(edgeFrom(file));
     expect(edgesFrom.length).toBe(0);
   });

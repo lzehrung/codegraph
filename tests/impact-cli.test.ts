@@ -124,10 +124,13 @@ describe("impact CLI output", () => {
       const base = runGit(root, ["rev-parse", "HEAD^"]);
       const head = runGit(root, ["rev-parse", "HEAD"]);
 
-      const stdout = await runImpactCli(["impact", "--root", root, "--provider", "git", "--base", base, "--head", head, "--pretty"], {
-        cwd: root,
-        stdin: "",
-      });
+      const stdout = await runImpactCli(
+        ["impact", "--root", root, "--provider", "git", "--base", base, "--head", head, "--pretty"],
+        {
+          cwd: root,
+          stdin: "",
+        },
+      );
 
       expect(stdout).toContain("WARNING: Large diff detected");
       expect(stdout).not.toContain("⚠");

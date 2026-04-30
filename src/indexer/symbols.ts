@@ -1,4 +1,13 @@
-import type { ApiSurface, ExportEntry, GoToResult, ImportBinding, ProjectIndex, SymbolDef, SymbolHandle, SymbolListItem } from "./types.js";
+import type {
+  ApiSurface,
+  ExportEntry,
+  GoToResult,
+  ImportBinding,
+  ProjectIndex,
+  SymbolDef,
+  SymbolHandle,
+  SymbolListItem,
+} from "./types.js";
 import { findReferences, resolveExport, resolveImported } from "./navigation.js";
 
 export function symbolId(def: SymbolDef): SymbolHandle {
@@ -33,7 +42,9 @@ export function resolveSymbolId(index: ProjectIndex, id: SymbolHandle): SymbolDe
     const mod = index.byFile.get(file);
     if (!mod) return null;
 
-    const named = mod.imports.find((imp): imp is ImportBinding & { kind: "named" } => imp.kind === "named" && imp.local === alias);
+    const named = mod.imports.find(
+      (imp): imp is ImportBinding & { kind: "named" } => imp.kind === "named" && imp.local === alias,
+    );
     if (named) {
       const result = resolveImported(index, named, named.imported);
       if (result && !("namespace" in result)) return result;
@@ -55,7 +66,9 @@ export function resolveSymbolId(index: ProjectIndex, id: SymbolHandle): SymbolDe
         const hit = resolveExport(index, target, "default");
         if (hit?.kind === "resolved") return hit.def;
         const targetModule = index.byFile.get(target);
-        const first = targetModule?.exports.find((entry): entry is ExportEntry & { type: "local" } => entry.type === "local");
+        const first = targetModule?.exports.find(
+          (entry): entry is ExportEntry & { type: "local" } => entry.type === "local",
+        );
         if (first) return first.target;
       }
     }
@@ -65,7 +78,9 @@ export function resolveSymbolId(index: ProjectIndex, id: SymbolHandle): SymbolDe
       const target = typeof namespaceImport.resolved === "string" ? namespaceImport.resolved : undefined;
       if (target) {
         const targetModule = index.byFile.get(target);
-        const first = targetModule?.exports.find((entry): entry is ExportEntry & { type: "local" } => entry.type === "local");
+        const first = targetModule?.exports.find(
+          (entry): entry is ExportEntry & { type: "local" } => entry.type === "local",
+        );
         if (first) return first.target;
         const firstLocal = targetModule?.locals?.[0];
         if (firstLocal) return firstLocal;

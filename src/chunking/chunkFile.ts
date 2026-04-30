@@ -226,7 +226,16 @@ export function chunkFile(opts: ChunkFileOptions): Chunk[] {
 
   const mergedChunks = mergeSmallChunks(preliminaryChunks, minTokens, maxTokens, tokenizer);
 
-  const finalChunks = fillGapsWithMiscChunks(mergedChunks, source, language.id, filePath, tokenizer, minTokens, maxTokens, makeChunkId);
+  const finalChunks = fillGapsWithMiscChunks(
+    mergedChunks,
+    source,
+    language.id,
+    filePath,
+    tokenizer,
+    minTokens,
+    maxTokens,
+    makeChunkId,
+  );
 
   return finalChunks;
 }
@@ -243,7 +252,12 @@ function getChunkMatches(language: LanguageConfig, source: string, filePath?: st
     }
 
     try {
-      const matches = executeJsQueryAsNativeMatches(source, support, language.definition.grammar(filePath), language.queryText);
+      const matches = executeJsQueryAsNativeMatches(
+        source,
+        support,
+        language.definition.grammar(filePath),
+        language.queryText,
+      );
       return matches.map(toChunkMatchFromNative);
     } catch {
       return [];
@@ -416,7 +430,12 @@ function locateLineAndColFromByte(newlineOffsets: number[], byteOffset: number):
   return [line, col];
 }
 
-function mergeSmallChunks(chunks: Chunk[], minTokens: number, maxTokens: number, tokenizer: (text: string) => number): Chunk[] {
+function mergeSmallChunks(
+  chunks: Chunk[],
+  minTokens: number,
+  maxTokens: number,
+  tokenizer: (text: string) => number,
+): Chunk[] {
   if (chunks.length === 0) return [];
 
   const merged: Chunk[] = [];

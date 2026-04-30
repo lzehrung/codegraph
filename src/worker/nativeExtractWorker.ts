@@ -41,7 +41,10 @@ type NativeBinding = {
 };
 
 const require = createRequire(import.meta.url);
-const localNativePackageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../packages/codegraph-native");
+const localNativePackageRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../packages/codegraph-native",
+);
 
 let binding: NativeBinding | null = null;
 let supportedIds: Set<string> | null = null;

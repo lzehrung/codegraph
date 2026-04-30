@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isJsFallbackAvailable, isJsFallbackUnavailableError, parseWithJsLanguage, type JsSyntaxTree } from "../jsFallback.js";
+import {
+  isJsFallbackAvailable,
+  isJsFallbackUnavailableError,
+  parseWithJsLanguage,
+  type JsSyntaxTree,
+} from "../jsFallback.js";
 import { prepareSourceInput } from "../languages/filePrep.js";
 import {
   parseCsharpUsingDirective,
@@ -23,7 +28,11 @@ import {
   unquote,
 } from "../util.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
-import { type FallbackImportExtractionEvent, type FallbackImportExtractionReason, type GraphBuildOptions } from "../graphs.js";
+import {
+  type FallbackImportExtractionEvent,
+  type FallbackImportExtractionReason,
+  type GraphBuildOptions,
+} from "../graphs.js";
 import {
   extractGraphOnlyModuleSpecifiers,
   graphOnlyLanguageSupportsImportAliases,
@@ -94,8 +103,11 @@ export async function collectImportsForFile(
   if (isGraphOnlyLanguage(resolvedSup.id)) {
     const entries = Array.from(extractGraphOnlyModuleSpecifiers(resolvedSup.id, resolvedSource));
     const needsGraphOnlyResolutionConfig =
-      graphOnlyLanguageSupportsImportAliases(resolvedSup.id) && entries.some(({ spec }) => graphOnlySpecifierNeedsResolutionConfig(spec));
-    const { matchPath } = needsGraphOnlyResolutionConfig ? await loadNearestTsconfigFor(file, opts?.logLevel) : { matchPath: undefined };
+      graphOnlyLanguageSupportsImportAliases(resolvedSup.id) &&
+      entries.some(({ spec }) => graphOnlySpecifierNeedsResolutionConfig(spec));
+    const { matchPath } = needsGraphOnlyResolutionConfig
+      ? await loadNearestTsconfigFor(file, opts?.logLevel)
+      : { matchPath: undefined };
     const workspaceConfig = needsGraphOnlyResolutionConfig ? await loadWorkspaceConfig(projectRoot) : undefined;
     const resolutionHints = opts?.graphOptions?.resolutionHints;
     const resolvedSpecifiers = await Promise.all(
@@ -120,7 +132,9 @@ export async function collectImportsForFile(
         {
           kind: "star" as const,
           from,
-          ...(typeof resolved === "string" ? { resolved: resolved.replace(/\\/g, "/") } : { resolved: { ...resolved, external: from } }),
+          ...(typeof resolved === "string"
+            ? { resolved: resolved.replace(/\\/g, "/") }
+            : { resolved: { ...resolved, external: from } }),
         },
       ];
     });
@@ -264,7 +278,9 @@ export async function collectImportsForFile(
 
     const implicitFiles = await getPhpComposerImplicitFiles(projectRoot, file);
     const seenResolved = new Set(
-      imports.map((entry) => (typeof entry.resolved === "string" ? entry.resolved : null)).filter((entry): entry is string => !!entry),
+      imports
+        .map((entry) => (typeof entry.resolved === "string" ? entry.resolved : null))
+        .filter((entry): entry is string => !!entry),
     );
 
     for (const implicitFile of implicitFiles) {
@@ -491,7 +507,11 @@ export async function collectImportsForFile(
         } catch {
           /* stat failed */
         }
-        const sub = [path.join(baseDir, `${imported}.py`), path.join(baseDir, imported, "__init__.py"), path.join(baseDir, imported)];
+        const sub = [
+          path.join(baseDir, `${imported}.py`),
+          path.join(baseDir, imported, "__init__.py"),
+          path.join(baseDir, imported),
+        ];
         for (const c of sub) {
           try {
             if (fs.existsSync(c)) {
@@ -565,7 +585,10 @@ export async function collectImportsForFile(
   } else if (resolvedSup.id === "js") {
     key = "js";
   }
-  const tsCfg = resolvedSup.id === "ts" || resolvedSup.id === "tsx" ? await loadNearestTsconfigFor(file, opts?.logLevel) : undefined;
+  const tsCfg =
+    resolvedSup.id === "ts" || resolvedSup.id === "tsx"
+      ? await loadNearestTsconfigFor(file, opts?.logLevel)
+      : undefined;
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
 
   const resolveFrom = async (from: string, phpImportType?: "class" | "function" | "const") => {
@@ -582,7 +605,9 @@ export async function collectImportsForFile(
 
   const runFallback = async () => {
     const src =
-      resolvedSup.id === "ts" || resolvedSup.id === "tsx" || resolvedSup.id === "js" ? stripJsLikeComments(resolvedSource) : resolvedSource;
+      resolvedSup.id === "ts" || resolvedSup.id === "tsx" || resolvedSup.id === "js"
+        ? stripJsLikeComments(resolvedSource)
+        : resolvedSource;
     const typeOnlyImport = /\bimport\s+type\b/;
     const reFrom = /^\s*import\s+([^\n;]*?)\s+from\s+(["'])(?<m>[^"']+)\2/gm;
     for (const m of src.matchAll(reFrom)) {
@@ -686,7 +711,8 @@ export async function collectImportsForFile(
   };
 
   const shouldUseTextImportRecoveryOnly = shouldAvoidJsFallbackForLanguage(resolvedSup.id);
-  const hasPotentialTextImportRecovery = shouldUseTextImportRecoveryOnly && /\b(import|require|from)\b/.test(resolvedSource);
+  const hasPotentialTextImportRecovery =
+    shouldUseTextImportRecoveryOnly && /\b(import|require|from)\b/.test(resolvedSource);
 
   if (shouldUseTextImportRecoveryOnly) {
     const importCountBeforeFallback = imports.length;
@@ -971,10 +997,16 @@ export async function collectImportsForFile(
         const patterns = match.captures.filter((capture) => capture.name === "pattern");
         for (const pattern of patterns) {
           const patternRange = rangeFromNativeCapture(pattern);
-          const patternNode = tree.rootNode.descendantForIndex(patternRange.start.index ?? 0, patternRange.end.index ?? 0);
+          const patternNode = tree.rootNode.descendantForIndex(
+            patternRange.start.index ?? 0,
+            patternRange.end.index ?? 0,
+          );
           if (patternNode.type === "object_pattern" && from) {
             for (const child of patternNode.namedChildren) {
-              if (child.type === "shorthand_property_identifier" || child.type === "shorthand_property_identifier_pattern") {
+              if (
+                child.type === "shorthand_property_identifier" ||
+                child.type === "shorthand_property_identifier_pattern"
+              ) {
                 const name = sliceText(child, source);
                 const resolved = await resolveFrom(from);
                 imports.push({

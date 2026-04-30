@@ -57,12 +57,23 @@ import {
   type NativeQueryResults,
   type CompactQueryResults,
 } from "./native/treeSitterNative.js";
-import { parseCsharpUsingDirective, parsePhpImportStatement, parseRustImportStatement } from "./languages/importStatementParsers.js";
+import {
+  parseCsharpUsingDirective,
+  parsePhpImportStatement,
+  parseRustImportStatement,
+} from "./languages/importStatementParsers.js";
 import { extractAngularJsReferences, extractAngularJsRegistrations } from "./frameworks/angularjs.js";
 import { capturesByName } from "./native/queryResults.js";
 import { ProjectedSyntaxTree } from "./native/projectedTree.js";
 import { initNativeBackendReport, recordNativeExecutionOutcome } from "./native/nativeBackendReport.js";
-import { type BuildReport, type ImportBinding, type ProjectIndex, type ResolvedExport, type SymbolDef, SymbolKind } from "./index.js";
+import {
+  type BuildReport,
+  type ImportBinding,
+  type ProjectIndex,
+  type ResolvedExport,
+  type SymbolDef,
+  SymbolKind,
+} from "./index.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "./languages/types.js";
 
 export type GraphBuildOptions = {
@@ -110,6 +121,10 @@ function extractKotlinImportSpecifier(statementText: string): string | null {
 function extractPhpQualifiedSpecifiersFromTree(source: string, tree: SyntaxTreeLike): ModuleSpecifier[] {
   const specifiers: ModuleSpecifier[] = [];
   const seen = new Set<string>();
+  const isPhpQualifiedNameNode = (node: SyntaxNodeLike): boolean =>
+    node.type === "qualified_name" || node.type === "relative_name";
+  const findPhpQualifiedTarget = (node: SyntaxNodeLike): SyntaxNodeLike | null =>
+    node.namedChildren.find(isPhpQualifiedNameNode) ?? node.child(0);
   const pushSpecifier = (spec: string | null, phpImportType: "class" | "function" | "const"): void => {
     const normalized = spec?.trim();
     if (!normalized || !normalized.includes("\\")) return;
@@ -121,26 +136,29 @@ function extractPhpQualifiedSpecifiersFromTree(source: string, tree: SyntaxTreeL
 
   const walk = (node: SyntaxNodeLike): void => {
     if (node.type === "object_creation_expression") {
-      const target = node.namedChildren.find((child) => child.type === "qualified_name" || child.type === "relative_name") ?? node.child(0);
+      const target = findPhpQualifiedTarget(node);
       if (target) {
         pushSpecifier(sliceText(target, source), "class");
       }
     } else if (node.type === "scoped_call_expression") {
-      const target = node.namedChildren.find((child) => child.type === "qualified_name" || child.type === "relative_name") ?? node.child(0);
+      const target = findPhpQualifiedTarget(node);
       if (target) {
         pushSpecifier(sliceText(target, source), "class");
       }
     } else if (node.type === "scoped_property_access_expression") {
-      const target = node.namedChildren.find((child) => child.type === "qualified_name" || child.type === "relative_name") ?? node.child(0);
+      const target = findPhpQualifiedTarget(node);
       if (target) {
         pushSpecifier(sliceText(target, source), "class");
       }
     } else if (node.type === "class_constant_access_expression") {
-      const target = node.namedChildren.find((child) => child.type === "qualified_name" || child.type === "relative_name") ?? node.child(0);
+      const target = findPhpQualifiedTarget(node);
       if (target) {
         pushSpecifier(sliceText(target, source), "class");
       }
-    } else if ((node.type === "qualified_name" || node.type === "relative_name") && node.parent?.type === "named_type") {
+    } else if (
+      (node.type === "qualified_name" || node.type === "relative_name") &&
+      node.parent?.type === "named_type"
+    ) {
       pushSpecifier(sliceText(node, source), "class");
     }
 
@@ -293,7 +311,8 @@ export function collectModuleSpecifiersFromSource(
   if (graphOnlyLanguage) {
     return extractGraphOnlyModuleSpecifiers(support.id, source);
   }
-  const shouldAttemptFallback = support.id === "python" ? /\b(import|from)\b/.test(source) : /\b(import|require|from)\b/.test(source);
+  const shouldAttemptFallback =
+    support.id === "python" ? /\b(import|from)\b/.test(source) : /\b(import|require|from)\b/.test(source);
   const reportFallback = (reason: FallbackImportExtractionReason) => {
     const event: FallbackImportExtractionEvent = {
       language: support.id,
@@ -320,7 +339,8 @@ export function collectModuleSpecifiersFromSource(
     if (resolvedNativeImports !== null) {
       try {
         for (const match of resolvedNativeImports) {
-          const stmtText = match.captures.find((capture) => capture.name === "stmt")?.text ?? match.captures[0]?.text ?? "";
+          const stmtText =
+            match.captures.find((capture) => capture.name === "stmt")?.text ?? match.captures[0]?.text ?? "";
           if (!stmtText) continue;
           const mImport = /^\s*import\s+([^\n#]+)/.exec(stmtText);
           if (mImport) {
@@ -367,7 +387,13 @@ export function collectModuleSpecifiersFromSource(
       (() => {
         try {
           const jsQueryTree = opts?.tree && isJsSyntaxTree(opts.tree) ? opts.tree : undefined;
-          return executeJsQueryAsNativeMatches(source, support, ensureResolvedLang(), support.queries.imports, jsQueryTree);
+          return executeJsQueryAsNativeMatches(
+            source,
+            support,
+            ensureResolvedLang(),
+            support.queries.imports,
+            jsQueryTree,
+          );
         } catch {
           queryFailed = true;
           return null;
@@ -376,7 +402,8 @@ export function collectModuleSpecifiersFromSource(
     if (phpMatches) {
       try {
         for (const match of phpMatches) {
-          const stmtText = match.captures.find((capture) => capture.name === "stmt")?.text ?? match.captures[0]?.text ?? "";
+          const stmtText =
+            match.captures.find((capture) => capture.name === "stmt")?.text ?? match.captures[0]?.text ?? "";
           if (!stmtText) continue;
           for (const parsed of parsePhpImportStatement(stmtText, opts?.file)) {
             out.push({
@@ -509,7 +536,12 @@ export function collectModuleSpecifiersFromSource(
     } catch (error) {
       queryFailed = true;
       if (!htmlLikeLanguage) {
-        logWithLevel(opts?.logLevel, "warn", `Warning: Native query error in collectModuleSpecifiersFromSource for ${support.id}:`, error);
+        logWithLevel(
+          opts?.logLevel,
+          "warn",
+          `Warning: Native query error in collectModuleSpecifiersFromSource for ${support.id}:`,
+          error,
+        );
       }
       out.length = 0;
     }
@@ -538,7 +570,13 @@ export function collectModuleSpecifiersFromSource(
 
   try {
     const jsQueryTree = opts?.tree && isJsSyntaxTree(opts.tree) ? opts.tree : undefined;
-    const matches = executeJsQueryAsNativeMatches(source, support, ensureResolvedLang(), support.queries.imports, jsQueryTree);
+    const matches = executeJsQueryAsNativeMatches(
+      source,
+      support,
+      ensureResolvedLang(),
+      support.queries.imports,
+      jsQueryTree,
+    );
     for (const match of matches) {
       const caps = Object.fromEntries(match.captures.map((capture) => [capture.name, capture] as const));
       const modNodes = match.captures.filter((capture) => capture.name === "mod");
@@ -589,10 +627,19 @@ export function collectModuleSpecifiersFromSource(
     queryFailed = true;
     if (isJsFallbackUnavailableError(error)) {
       fallbackReasonOverride = "js-fallback-unavailable";
-      logWithLevel(opts?.logLevel, "debug", `JS fallback unavailable for ${support.id} query recovery; using regex import extraction.`);
+      logWithLevel(
+        opts?.logLevel,
+        "debug",
+        `JS fallback unavailable for ${support.id} query recovery; using regex import extraction.`,
+      );
     } else {
       if (!htmlLikeLanguage) {
-        logWithLevel(opts?.logLevel, "warn", `Warning: Query error in collectModuleSpecifiersFromSource for ${support.id}:`, error);
+        logWithLevel(
+          opts?.logLevel,
+          "warn",
+          `Warning: Query error in collectModuleSpecifiersFromSource for ${support.id}:`,
+          error,
+        );
       }
     }
     // fall through to regex fallback
@@ -733,7 +780,8 @@ export async function collectEdgesForFile(
 
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
   const graphOnlyAliasLanguage = graphOnlyLanguageSupportsImportAliases(sup.id);
-  const needsGraphOnlyResolutionConfig = graphOnlyAliasLanguage && specs.some(({ spec }) => graphOnlySpecifierNeedsResolutionConfig(spec));
+  const needsGraphOnlyResolutionConfig =
+    graphOnlyAliasLanguage && specs.some(({ spec }) => graphOnlySpecifierNeedsResolutionConfig(spec));
   const { matchPath } =
     sup.id === "ts" || sup.id === "tsx" || needsGraphOnlyResolutionConfig
       ? await loadNearestTsconfigFor(file, opts?.logLevel)
@@ -742,13 +790,18 @@ export async function collectEdgesForFile(
   const edgeResolutionTasks = specs.map(async (entry) => {
     const { spec, raw, typeOnly, phpImportType, resolved, confidence, resolutionKind, dropIfUnresolved } = entry;
     let to: EdgeTo;
-    const resolutionExtensions = graphOnlyLanguage ? getGraphOnlyResolutionExtensions(sup.id, resolutionKind ?? "document") : undefined;
+    const resolutionExtensions = graphOnlyLanguage
+      ? getGraphOnlyResolutionExtensions(sup.id, resolutionKind ?? "document")
+      : undefined;
     if (sup.id === "python") {
       const relDotsMatch = spec.startsWith(".") ? spec.match(/^\.+/) : null;
       const relDots = relDotsMatch ? relDotsMatch[0].length : 0;
       const isDotsOnly = /^\.+$/.test(spec);
       const res = await resolvePythonModule(projectRoot, file, isDotsOnly ? null : spec, relDots);
-      to = typeof res === "string" ? { type: "file", path: res.replace(/\\/g, "/") } : { type: "external", name: res.external };
+      to =
+        typeof res === "string"
+          ? { type: "file", path: res.replace(/\\/g, "/") }
+          : { type: "external", name: res.external };
     } else if (sup.id === "go") {
       const res = await resolveImportSpecifier(projectRoot, file, spec, sup.id, {
         ...(matchPath ? { matchPath } : {}),
@@ -756,7 +809,10 @@ export async function collectEdgesForFile(
         resolveNodeModules: !!opts.resolveNodeModules,
         ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
       });
-      to = typeof res === "string" ? { type: "file", path: res.replace(/\\/g, "/") } : { type: "external", name: res.external };
+      to =
+        typeof res === "string"
+          ? { type: "file", path: res.replace(/\\/g, "/") }
+          : { type: "external", name: res.external };
     } else if (sup.id === "java" || sup.id === "kotlin") {
       const packageTargets = await resolveJvmPackageImportPaths(projectRoot, spec, sup.id);
       if (packageTargets.length > 0) {
@@ -775,7 +831,10 @@ export async function collectEdgesForFile(
         resolveNodeModules: !!opts.resolveNodeModules,
         ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
       });
-      to = typeof res === "string" ? { type: "file", path: res.replace(/\\/g, "/") } : { type: "external", name: raw ?? res.external };
+      to =
+        typeof res === "string"
+          ? { type: "file", path: res.replace(/\\/g, "/") }
+          : { type: "external", name: raw ?? res.external };
     } else if (["csharp", "ruby", "rust", "php"].includes(sup.id)) {
       const { resolvePathLikeModule } = await import("./util.js");
       const res =
@@ -797,7 +856,10 @@ export async function collectEdgesForFile(
           ...(resolutionExtensions ? { resolutionExtensions } : {}),
           ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
         });
-        to = typeof res2 === "string" ? { type: "file", path: res2.replace(/\\/g, "/") } : { type: "external", name: raw ?? res2.external };
+        to =
+          typeof res2 === "string"
+            ? { type: "file", path: res2.replace(/\\/g, "/") }
+            : { type: "external", name: raw ?? res2.external };
       }
     } else {
       const res = await resolveSpecifier(file, spec, projectRoot, matchPath, workspaceConfig, {
@@ -805,7 +867,10 @@ export async function collectEdgesForFile(
         ...(resolutionExtensions ? { resolutionExtensions } : {}),
         ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
       });
-      to = typeof res === "string" ? { type: "file", path: res.replace(/\\/g, "/") } : { type: "external", name: raw ?? res.external };
+      to =
+        typeof res === "string"
+          ? { type: "file", path: res.replace(/\\/g, "/") }
+          : { type: "external", name: raw ?? res.external };
     }
     if (to.type === "external" && dropIfUnresolved) {
       return null;
@@ -840,7 +905,9 @@ export async function collectEdgesForFile(
   if (sup.id === "php") {
     const implicitFiles = await getPhpComposerImplicitFiles(projectRoot, file);
     const seenFileTargets = new Set(
-      edges.map((edge) => (edge.to.type === "file" ? edge.to.path : null)).filter((target): target is string => !!target),
+      edges
+        .map((edge) => (edge.to.type === "file" ? edge.to.path : null))
+        .filter((target): target is string => !!target),
     );
     for (const implicitFile of implicitFiles) {
       const normalizedTarget = implicitFile.replace(/\\/g, "/");
@@ -1202,7 +1269,11 @@ export function getDependencies(graph: Graph, startFile: FileId, opts: { depth?:
   return out;
 }
 
-export function getReverseDependencies(graph: Graph, targetFile: FileId, opts: { depth?: number } = {}): DependencyNode[] {
+export function getReverseDependencies(
+  graph: Graph,
+  targetFile: FileId,
+  opts: { depth?: number } = {},
+): DependencyNode[] {
   const maxDepth = opts.depth ?? Number.POSITIVE_INFINITY;
   const out: DependencyNode[] = [];
   const visited = new Set<string>();
@@ -1299,7 +1370,10 @@ export function sortDetailedCycles(cycles: DetailedCycle[], mode: CycleSortMode 
   return sorted;
 }
 
-export function findDetailedCycles(graph: Graph, options: { symbolCoupling?: Map<string, number> } = {}): DetailedCycle[] {
+export function findDetailedCycles(
+  graph: Graph,
+  options: { symbolCoupling?: Map<string, number> } = {},
+): DetailedCycle[] {
   const nodes = Array.from(graph.nodes);
   const indexMap = new Map<string, number>();
   nodes.forEach((n, i) => indexMap.set(n, i));
@@ -1389,7 +1463,8 @@ export function findDetailedCycles(graph: Graph, options: { symbolCoupling?: Map
     }
 
     const priorityScore = files.length * 3 + fanInFromOutside * 2 + internalEdgeCount;
-    const couplingForEdge = (edge: CycleInternalEdge): number => options.symbolCoupling?.get(`${edge.from} -> ${edge.to}`) ?? 0;
+    const couplingForEdge = (edge: CycleInternalEdge): number =>
+      options.symbolCoupling?.get(`${edge.from} -> ${edge.to}`) ?? 0;
     const weakestEdge = internalEdges.reduce<CycleInternalEdge | null>((best, edge) => {
       if (!best) return edge;
       const bestCoupling = couplingForEdge(best);
@@ -1547,7 +1622,15 @@ export function getHotspots(graph: Graph, options?: HotspotOptions): HotspotEntr
 
 // --------------------------- Symbol graph utilities ---------------------------
 
-export type SymbolNodeKind = "function" | "class" | "variable" | "interface" | "type" | "default" | "import" | "namespaceImport";
+export type SymbolNodeKind =
+  | "function"
+  | "class"
+  | "variable"
+  | "interface"
+  | "type"
+  | "default"
+  | "import"
+  | "namespaceImport";
 
 /**
  * Access visibility of a symbol. Used to track language-specific visibility modifiers:
@@ -1816,7 +1899,11 @@ export async function buildSymbolGraphDetailed(
     return null;
   };
 
-  const resolveExportDef = (file: string, exportedName: string, cache?: Map<string, ResolvedDetailedExport | null>): SymbolDef | null => {
+  const resolveExportDef = (
+    file: string,
+    exportedName: string,
+    cache?: Map<string, ResolvedDetailedExport | null>,
+  ): SymbolDef | null => {
     const resolved = resolveExportNamespace(file, exportedName, cache);
     return resolved?.kind === "resolved" ? resolved.def : null;
   };
@@ -2061,7 +2148,12 @@ export async function buildSymbolGraphDetailed(
       };
 
       const callNodeTypes = new Set<string>(["call_expression", "call", "method_invocation", "invocation_expression"]);
-      const newNodeTypes = new Set<string>(["new_expression", "object_creation_expression", "struct_expression", "composite_literal"]);
+      const newNodeTypes = new Set<string>([
+        "new_expression",
+        "object_creation_expression",
+        "struct_expression",
+        "composite_literal",
+      ]);
 
       const getCallTarget = (n: SyntaxNodeLike): SyntaxNodeLike | null => {
         const explicitTarget =
@@ -2103,7 +2195,11 @@ export async function buildSymbolGraphDetailed(
             const idx = cur.child(2);
             pushProp(idx);
             cur = base;
-          } else if (cur.type === memberExpressionType || cur.type === "optional_member_expression" || cur.type === "attribute") {
+          } else if (
+            cur.type === memberExpressionType ||
+            cur.type === "optional_member_expression" ||
+            cur.type === "attribute"
+          ) {
             base = cur.child(0) ?? base;
             const prop = cur.childForFieldName?.("property") ?? cur.child(2) ?? cur.childForFieldName?.("attribute");
             pushProp(prop);
@@ -2237,9 +2333,14 @@ export async function buildSymbolGraphDetailed(
                 const idx = cur.child(2);
                 pushProp(idx);
                 cur = base;
-              } else if (cur.type === memberExpressionType || cur.type === "optional_member_expression" || cur.type === "attribute") {
+              } else if (
+                cur.type === memberExpressionType ||
+                cur.type === "optional_member_expression" ||
+                cur.type === "attribute"
+              ) {
                 base = cur.child(0) ?? base;
-                const prop = cur.childForFieldName?.("property") ?? cur.child(2) ?? cur.childForFieldName?.("attribute");
+                const prop =
+                  cur.childForFieldName?.("property") ?? cur.child(2) ?? cur.childForFieldName?.("attribute");
                 pushProp(prop);
                 cur = base;
               } else if (cur.type === "optional_chain") {
@@ -2269,7 +2370,8 @@ export async function buildSymbolGraphDetailed(
           if (callNodeTypes.has(n.type)) {
             if (sup.id === "go") {
               const callTarget = getCallTarget(n);
-              const calleeName = callTarget && isIdentifierType(sup, callTarget.type) ? sliceText(callTarget, src) : null;
+              const calleeName =
+                callTarget && isIdentifierType(sup, callTarget.type) ? sliceText(callTarget, src) : null;
               if (calleeName === "new" || calleeName === "make") {
                 const argList = n.childForFieldName("arguments") ?? n.childForFieldName("argument_list");
                 const typeNode = argList?.namedChildren?.find((child) => child.type === "type_identifier") ?? null;
@@ -2616,7 +2718,9 @@ export function graphToDOTSymbolsWithFiles(sg: SymbolGraph, fg: Graph, projectRo
   lines.push("  rankdir=LR;");
   lines.push('  node [shape=box, fontsize=10, fontname="Arial"];\n');
   for (const [id, meta] of fileNodeMeta) {
-    lines.push(`  ${id} [label="${dotLabel(meta.label)}", ${meta.external ? "shape=ellipse, style=dashed" : "shape=box"}];`);
+    lines.push(
+      `  ${id} [label="${dotLabel(meta.label)}", ${meta.external ? "shape=ellipse, style=dashed" : "shape=box"}];`,
+    );
   }
   for (const [id, label] of symLabels) {
     lines.push(`  ${id} [label="${dotLabel(label)}"];`);

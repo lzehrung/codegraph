@@ -117,10 +117,17 @@ async function expectNativeModuleIndexParity(relativeFile: string): Promise<void
   const jsParsed = await parseWithJsTreeSitter(file);
   expect(nativeParsed.nativeQueries).not.toBeNull();
 
-  const nativeIndex = collectLocalsAndExportsFromSource(file, nativeParsed.source, nativeParsed.sup, nativeParsed.lang, [], {
-    tree: nativeParsed.tree,
-    nativeQueries: nativeParsed.nativeQueries,
-  });
+  const nativeIndex = collectLocalsAndExportsFromSource(
+    file,
+    nativeParsed.source,
+    nativeParsed.sup,
+    nativeParsed.lang,
+    [],
+    {
+      tree: nativeParsed.tree,
+      nativeQueries: nativeParsed.nativeQueries,
+    },
+  );
   const jsIndex = collectLocalsAndExportsFromSource(file, jsParsed.source, jsParsed.sup, jsParsed.lang, [], {
     tree: jsParsed.tree,
     nativeMode: "off",
@@ -211,10 +218,17 @@ jsFallbackDescribe("native tree-sitter integration", () => {
     const jsParsed = await parseWithJsTreeSitter(file);
     expect(nativeParsed.nativeQueries).not.toBeNull();
 
-    const nativeIndex = collectLocalsAndExportsFromSource(file, nativeParsed.source, nativeParsed.sup, nativeParsed.lang, [], {
-      tree: nativeParsed.tree,
-      nativeQueries: nativeParsed.nativeQueries,
-    });
+    const nativeIndex = collectLocalsAndExportsFromSource(
+      file,
+      nativeParsed.source,
+      nativeParsed.sup,
+      nativeParsed.lang,
+      [],
+      {
+        tree: nativeParsed.tree,
+        nativeQueries: nativeParsed.nativeQueries,
+      },
+    );
     const jsIndex = collectLocalsAndExportsFromSource(file, jsParsed.source, jsParsed.sup, jsParsed.lang, [], {
       tree: jsParsed.tree,
       nativeMode: "off",
@@ -259,17 +273,29 @@ jsFallbackDescribe("native tree-sitter integration", () => {
     const file = path.join(projectRoot, "module.ts");
     await fs.writeFile(
       file,
-      ["class InternalClass {}", "export class ExportedClass {}", "const assigned = InternalClass;", "export = assigned;"].join("\n"),
+      [
+        "class InternalClass {}",
+        "export class ExportedClass {}",
+        "const assigned = InternalClass;",
+        "export = assigned;",
+      ].join("\n"),
     );
 
     const nativeParsed = await parseFile(file);
     const jsParsed = await parseWithJsTreeSitter(file);
     expect(nativeParsed.nativeQueries).not.toBeNull();
 
-    const nativeIndex = collectLocalsAndExportsFromSource(file, nativeParsed.source, nativeParsed.sup, nativeParsed.lang, [], {
-      tree: nativeParsed.tree,
-      nativeQueries: nativeParsed.nativeQueries,
-    });
+    const nativeIndex = collectLocalsAndExportsFromSource(
+      file,
+      nativeParsed.source,
+      nativeParsed.sup,
+      nativeParsed.lang,
+      [],
+      {
+        tree: nativeParsed.tree,
+        nativeQueries: nativeParsed.nativeQueries,
+      },
+    );
     const jsIndex = collectLocalsAndExportsFromSource(file, jsParsed.source, jsParsed.sup, jsParsed.lang, [], {
       tree: jsParsed.tree,
       nativeMode: "off",

@@ -36,7 +36,9 @@ describe("Project Indexing", () => {
     expect(
       index.graph.edges.some(
         (edge) =>
-          edge.from === appManifest.replace(/\\/g, "/") && edge.to.type === "file" && edge.to.path === libManifest.replace(/\\/g, "/"),
+          edge.from === appManifest.replace(/\\/g, "/") &&
+          edge.to.type === "file" &&
+          edge.to.path === libManifest.replace(/\\/g, "/"),
       ),
     ).toBe(false);
   });
@@ -45,7 +47,9 @@ describe("Project Indexing", () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-explicit-file-root-"));
     const outsideFile = path.resolve("README.md");
 
-    await expect(buildProjectIndexFromFiles(root, [outsideFile], { cache: "memory" })).rejects.toThrow(/outside project root/);
+    await expect(buildProjectIndexFromFiles(root, [outsideFile], { cache: "memory" })).rejects.toThrow(
+      /outside project root/,
+    );
   });
 
   describe("TypeScript Project", () => {
@@ -174,7 +178,9 @@ describe("Project Indexing", () => {
       expect(mainModule).toBeDefined();
 
       // Should detect both ES6 imports and CommonJS requires
-      const hasES6Import = mainModule!.imports.some((imp) => imp.kind === "default" || imp.kind === "named" || imp.kind === "namespace");
+      const hasES6Import = mainModule!.imports.some(
+        (imp) => imp.kind === "default" || imp.kind === "named" || imp.kind === "namespace",
+      );
       const hasCommonJSRequire = mainModule!.imports.some((imp) => imp.mechanism === "cjs");
 
       expect(hasES6Import || hasCommonJSRequire).toBe(true);
@@ -214,8 +220,14 @@ describe("Project Indexing", () => {
         path.join(mdxPath, "guide.md").replace(/\\/g, "/"),
         path.join(mdxPath, "components", "Card.tsx").replace(/\\/g, "/"),
       ]);
-      const rstIndex = await buildProjectIndexFromFiles(rstPath, [rstFile, path.join(rstPath, "guide.rst").replace(/\\/g, "/")]);
-      const adocIndex = await buildProjectIndexFromFiles(adocPath, [adocFile, path.join(adocPath, "guide.adoc").replace(/\\/g, "/")]);
+      const rstIndex = await buildProjectIndexFromFiles(rstPath, [
+        rstFile,
+        path.join(rstPath, "guide.rst").replace(/\\/g, "/"),
+      ]);
+      const adocIndex = await buildProjectIndexFromFiles(adocPath, [
+        adocFile,
+        path.join(adocPath, "guide.adoc").replace(/\\/g, "/"),
+      ]);
 
       const markdownModule = markdownIndex.byFile.get(markdownFile);
       const mdxModule = mdxIndex.byFile.get(mdxFile);

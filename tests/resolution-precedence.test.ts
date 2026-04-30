@@ -49,7 +49,11 @@ describe("Resolution precedence", () => {
 
     const wsDir = path.join(root, "packages", "foo-pkg");
     await fsp.mkdir(wsDir, { recursive: true });
-    await fsp.writeFile(path.join(wsDir, "package.json"), JSON.stringify({ name: "foo", main: "index.js" }, null, 2), "utf8");
+    await fsp.writeFile(
+      path.join(wsDir, "package.json"),
+      JSON.stringify({ name: "foo", main: "index.js" }, null, 2),
+      "utf8",
+    );
     await fsp.writeFile(path.join(wsDir, "index.js"), "module.exports = 123;\n", "utf8");
 
     const main = path.join(root, "main.ts");

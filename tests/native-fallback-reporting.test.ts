@@ -91,7 +91,11 @@ describe("native fallback reporting", () => {
   it("normalizes ad hoc native queries through language compatibility hooks", () => {
     const support = supportById("ts");
     expect(support).toBeDefined();
-    const result = getNativeSingleQueryExecution("class UtilityClass {}", support!, "(class_declaration name: (identifier) @name)");
+    const result = getNativeSingleQueryExecution(
+      "class UtilityClass {}",
+      support!,
+      "(class_declaration name: (identifier) @name)",
+    );
     expect(result.matches).not.toBeNull();
     expect(result.matches).toEqual([
       expect.objectContaining({
@@ -136,7 +140,9 @@ describe("native fallback reporting", () => {
 
       vi.resetModules();
       vi.doMock("../src/native/treeSitterNative.js", async () => {
-        const actual = await vi.importActual<typeof import("../src/native/treeSitterNative.js")>("../src/native/treeSitterNative.js");
+        const actual = await vi.importActual<typeof import("../src/native/treeSitterNative.js")>(
+          "../src/native/treeSitterNative.js",
+        );
         return {
           ...actual,
           getUnifiedQueryExecution: unifiedSpy,

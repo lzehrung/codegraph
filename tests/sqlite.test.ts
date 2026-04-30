@@ -287,7 +287,9 @@ export const run = () => helper();
 
     const utilPath = path.join(root, "util.ts").replace(/\\/g, "/");
     const utilFiles = await queryGraphSqliteRaw(dbPath, "SELECT path FROM files WHERE path = ?;", [utilPath]);
-    const utilEdges = await queryGraphSqliteRaw(dbPath, "SELECT to_path FROM file_edges WHERE to_path = ?;", [utilPath]);
+    const utilEdges = await queryGraphSqliteRaw(dbPath, "SELECT to_path FROM file_edges WHERE to_path = ?;", [
+      utilPath,
+    ]);
     const utilSymbols = await queryGraphSqliteRaw(dbPath, "SELECT id FROM symbols WHERE file = ?;", [utilPath]);
 
     expect(utilFiles.rows).toEqual([]);
@@ -341,9 +343,15 @@ export const run = () => helper();
 
     const BetterSqlite3 = loadBetterSqlite3();
     const db = new BetterSqlite3(dbPath);
-    const utilFiles = dbQuery(db, `SELECT path FROM files WHERE path = '${path.join(root, "util.ts").replace(/\\/g, "/")}';`);
+    const utilFiles = dbQuery(
+      db,
+      `SELECT path FROM files WHERE path = '${path.join(root, "util.ts").replace(/\\/g, "/")}';`,
+    );
     const utilSymbols = dbQuery(db, "SELECT name FROM symbols WHERE name = 'helper';");
-    const staleEdges = dbQuery(db, `SELECT to_path FROM file_edges WHERE to_path = '${path.join(root, "util.ts").replace(/\\/g, "/")}';`);
+    const staleEdges = dbQuery(
+      db,
+      `SELECT to_path FROM file_edges WHERE to_path = '${path.join(root, "util.ts").replace(/\\/g, "/")}';`,
+    );
 
     expect(utilFiles).toEqual([]);
     expect(utilSymbols).toEqual([]);
@@ -392,7 +400,10 @@ export const run = () => helper();
       fullGraphSync: true,
     });
 
-    const rows = await queryGraphSqliteRaw(dbPath, "SELECT from_path, to_path, to_type FROM file_edges ORDER BY from_path, to_path;");
+    const rows = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT from_path, to_path, to_type FROM file_edges ORDER BY from_path, to_path;",
+    );
     expect(rows.rows).toEqual([]);
 
     const remainingFile = await queryGraphSqliteRaw(dbPath, "SELECT path FROM files ORDER BY path;");
@@ -436,7 +447,10 @@ export const value = lodash;
       changedFiles: [mainPath.replace(/\\/g, "/")],
     });
 
-    const externalRows = await queryGraphSqliteRaw(dbPath, "SELECT path FROM files WHERE is_external = 1 ORDER BY path;");
+    const externalRows = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT path FROM files WHERE is_external = 1 ORDER BY path;",
+    );
     expect(externalRows.rows).toEqual([]);
   });
 
@@ -547,7 +561,10 @@ export interface UserRepository {}
     }
 
     const modulePath = path.join(root, "auth.ts").replace(/\\/g, "/");
-    const affected = await queryGraphSqlite(dbPath, `What functions would be affected if I change this module ${modulePath}`);
+    const affected = await queryGraphSqlite(
+      dbPath,
+      `What functions would be affected if I change this module ${modulePath}`,
+    );
     expect(affected.kind).toBe("affectedFunctionsForModule");
     if (affected.kind === "affectedFunctionsForModule") {
       expect(affected.results.some((row) => row.name === "runAuth")).toBe(true);
@@ -608,7 +625,10 @@ export function helper() { return 1; }
       outputPath: dbPath,
     });
 
-    const result = await queryGraphSqliteRaw(dbPath, "SELECT name, kind FROM symbols WHERE kind = 'class' ORDER BY name;");
+    const result = await queryGraphSqliteRaw(
+      dbPath,
+      "SELECT name, kind FROM symbols WHERE kind = 'class' ORDER BY name;",
+    );
     expect(result.columns).toEqual(["name", "kind"]);
     const names = result.rows.map((row) => String(row[0]));
     expect(names).toEqual(["Gadget", "Widget"]);

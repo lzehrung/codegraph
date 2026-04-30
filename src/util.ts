@@ -26,7 +26,9 @@ export function sliceText(node: NodeLike | null | undefined, src: string): strin
 export function unquote(s: string): string {
   if (!s || typeof s !== "string") return s;
   const t = s.trim();
-  return (t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'")) || (t.startsWith("`") && t.endsWith("`"))
+  return (t.startsWith('"') && t.endsWith('"')) ||
+    (t.startsWith("'") && t.endsWith("'")) ||
+    (t.startsWith("`") && t.endsWith("`"))
     ? t.slice(1, -1)
     : t;
 }
@@ -247,7 +249,11 @@ async function loadGitignoreRules(projectRoot: string): Promise<GitignoreRule[]>
   return rules;
 }
 
-function matchesDiscoveryGlob(absolutePath: string, projectRoot: string, matcher: (relativePath: string) => boolean): boolean {
+function matchesDiscoveryGlob(
+  absolutePath: string,
+  projectRoot: string,
+  matcher: (relativePath: string) => boolean,
+): boolean {
   const relativePath = normalizePath(path.relative(projectRoot, absolutePath));
   if (!relativePath || relativePath.startsWith("..")) {
     return false;
@@ -302,7 +308,9 @@ export async function listProjectFiles(
     const gitignoreRules =
       options?.useGitignore === false
         ? []
-        : await loadGitignoreRules(options?.gitignoreRoot ? await ensureDirectoryReadable(options.gitignoreRoot, "Gitignore root") : root);
+        : await loadGitignoreRules(
+            options?.gitignoreRoot ? await ensureDirectoryReadable(options.gitignoreRoot, "Gitignore root") : root,
+          );
     const files = await fg(patterns, {
       cwd: root,
       absolute: true,
@@ -310,7 +318,10 @@ export async function listProjectFiles(
       ignore: [...DEFAULT_PROJECT_FILE_IGNORES, ...userIgnoreGlobs],
     });
     return files.map(normalizePath).filter((filePath) => {
-      if (includeMatchers.length > 0 && !includeMatchers.some((matcher) => matchesDiscoveryGlob(filePath, root, matcher))) {
+      if (
+        includeMatchers.length > 0 &&
+        !includeMatchers.some((matcher) => matchesDiscoveryGlob(filePath, root, matcher))
+      ) {
         return false;
       }
       return !isIgnoredByGitignore(filePath, gitignoreRules);
@@ -796,7 +807,10 @@ async function buildProjectFileInfo(def: ProjectFileDefinition, filePath: string
   };
 }
 
-export async function discoverProjectFiles(projectRoot: string, options?: { logLevel?: LogLevel }): Promise<ProjectFileInfo[]> {
+export async function discoverProjectFiles(
+  projectRoot: string,
+  options?: { logLevel?: LogLevel },
+): Promise<ProjectFileInfo[]> {
   const root = await ensureDirectoryReadable(projectRoot, "Project root");
   try {
     const allPatterns = PROJECT_FILE_DEFINITIONS.flatMap((def) => def.patterns.map(toProjectGlob));
@@ -869,7 +883,8 @@ function transformJsLikeTrivia(src: string, options?: { maskStrings?: boolean; p
     const next = src[i + 1] ?? "";
 
     if (inSingle || inDouble || inTemplate) {
-      const isClosingQuote = !escapeNext && ((inSingle && ch === "'") || (inDouble && ch === '"') || (inTemplate && ch === "`"));
+      const isClosingQuote =
+        !escapeNext && ((inSingle && ch === "'") || (inDouble && ch === '"') || (inTemplate && ch === "`"));
       if (maskStrings) {
         out += isClosingQuote ? ch : maskedChar(ch);
       } else {
@@ -1043,8 +1058,12 @@ function resolveComparableProjectRoot(projectRoot: string): string {
 }
 
 function isRelativeToRoot(normalizedRoot: string, normalizedFile: string): boolean {
-  const comparableRoot = path.win32.isAbsolute(normalizedRoot) ? normalizeWindowsComparablePath(normalizedRoot) : normalizedRoot;
-  const comparableFile = path.win32.isAbsolute(normalizedFile) ? normalizeWindowsComparablePath(normalizedFile) : normalizedFile;
+  const comparableRoot = path.win32.isAbsolute(normalizedRoot)
+    ? normalizeWindowsComparablePath(normalizedRoot)
+    : normalizedRoot;
+  const comparableFile = path.win32.isAbsolute(normalizedFile)
+    ? normalizeWindowsComparablePath(normalizedFile)
+    : normalizedFile;
 
   if (path.win32.isAbsolute(comparableRoot) && path.win32.isAbsolute(comparableFile)) {
     if (comparableFile === comparableRoot) {
@@ -1598,7 +1617,11 @@ export async function loadWorkspaceConfig(projectRoot: string): Promise<Workspac
   if (rootPkg?.workspaces) {
     if (Array.isArray(rootPkg.workspaces)) {
       for (const g of rootPkg.workspaces) addWorkspaceGlob(workspaceGlobs, g);
-    } else if (typeof rootPkg.workspaces === "object" && rootPkg.workspaces !== null && "packages" in rootPkg.workspaces) {
+    } else if (
+      typeof rootPkg.workspaces === "object" &&
+      rootPkg.workspaces !== null &&
+      "packages" in rootPkg.workspaces
+    ) {
       const packages = (rootPkg.workspaces as { packages?: unknown }).packages;
       if (Array.isArray(packages)) {
         for (const g of packages) addWorkspaceGlob(workspaceGlobs, g);
@@ -1729,7 +1752,16 @@ const DEFAULT_RESOLUTION_EXTENSIONS = [
   ".swift",
 ] as const;
 
-export const GRAPH_ONLY_RESOLUTION_EXTENSIONS = [".md", ".mdx", ".astro", ".hbs", ".handlebars", ".rst", ".adoc", ".asciidoc"] as const;
+export const GRAPH_ONLY_RESOLUTION_EXTENSIONS = [
+  ".md",
+  ".mdx",
+  ".astro",
+  ".hbs",
+  ".handlebars",
+  ".rst",
+  ".adoc",
+  ".asciidoc",
+] as const;
 
 const GRAPH_ONLY_LANGUAGE_DOCUMENT_RESOLUTION_EXTENSIONS: Record<string, readonly string[]> = {
   markdown: [".md", ".mdx"],
@@ -1756,7 +1788,10 @@ const EXPLICIT_SPECIFIER_EXTENSION_FAMILIES: Record<string, readonly string[]> =
   ".cjs": [".cts", ".cjs"],
 };
 
-export function getGraphOnlyResolutionExtensions(languageId: string, resolutionKind: "document" | "source" = "document"): string[] {
+export function getGraphOnlyResolutionExtensions(
+  languageId: string,
+  resolutionKind: "document" | "source" = "document",
+): string[] {
   const normalizedLanguageId = languageId.toLowerCase();
   const preferredExtensions =
     resolutionKind === "source"
@@ -1798,7 +1833,10 @@ export function listResolutionCandidates(base: string, resolutionExtensions?: re
   return candidates.length > 0 ? Array.from(new Set(candidates)) : [base];
 }
 
-async function findFirstExistingResolutionCandidate(base: string, resolutionExtensions?: readonly string[]): Promise<string | null> {
+async function findFirstExistingResolutionCandidate(
+  base: string,
+  resolutionExtensions?: readonly string[],
+): Promise<string | null> {
   for (const candidate of listResolutionCandidates(base, resolutionExtensions)) {
     if (await fileExists(candidate)) {
       return path.resolve(candidate);
@@ -1946,7 +1984,12 @@ async function listProjectLanguageFiles(projectRoot: string, patterns: string[])
   return await listProjectFiles(projectRoot, patterns);
 }
 
-function addProjectSymbolFile(index: LanguageProjectSymbolIndex, packageName: string, filePath: string, symbols: Set<string>): void {
+function addProjectSymbolFile(
+  index: LanguageProjectSymbolIndex,
+  packageName: string,
+  filePath: string,
+  symbols: Set<string>,
+): void {
   const packageFiles = index.filesByPackage.get(packageName) ?? [];
   packageFiles.push(filePath);
   index.filesByPackage.set(packageName, packageFiles);
@@ -2038,11 +2081,20 @@ async function getJavaProjectSymbolIndex(projectRoot: string): Promise<LanguageP
   );
 }
 
-async function getJvmProjectSymbolIndex(projectRoot: string, languageId: "java" | "kotlin"): Promise<LanguageProjectSymbolIndex> {
-  return languageId === "kotlin" ? await getKotlinProjectSymbolIndex(projectRoot) : await getJavaProjectSymbolIndex(projectRoot);
+async function getJvmProjectSymbolIndex(
+  projectRoot: string,
+  languageId: "java" | "kotlin",
+): Promise<LanguageProjectSymbolIndex> {
+  return languageId === "kotlin"
+    ? await getKotlinProjectSymbolIndex(projectRoot)
+    : await getJavaProjectSymbolIndex(projectRoot);
 }
 
-export async function resolveJvmPackageImportPaths(projectRoot: string, spec: string, languageId: "java" | "kotlin"): Promise<string[]> {
+export async function resolveJvmPackageImportPaths(
+  projectRoot: string,
+  spec: string,
+  languageId: "java" | "kotlin",
+): Promise<string[]> {
   const projectIndex = await getJvmProjectSymbolIndex(projectRoot, languageId);
   const packageCandidates = projectIndex.filesByPackage.get(spec) ?? [];
   return packageCandidates.map((candidate) => path.resolve(candidate));
@@ -2391,7 +2443,8 @@ function extractPhpTopLevelPackageEntries(source: string): PhpPackageSymbolIndex
   let pendingBlock: { type: "class" | "function" } | null = null;
 
   const inDeclarationBody = (): boolean => classLikeDepths.length > 0 || functionLikeDepths.length > 0;
-  const currentNamespace = (): string => namespaceBlockDepths[namespaceBlockDepths.length - 1]?.packageName ?? activeNamespace;
+  const currentNamespace = (): string =>
+    namespaceBlockDepths[namespaceBlockDepths.length - 1]?.packageName ?? activeNamespace;
 
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
@@ -2718,7 +2771,9 @@ function resolveComposerPath(entry: string, composerDir: string): string {
 
 function readComposerStringList(value: unknown, composerDir: string): string[] {
   if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is string => typeof entry === "string").map((entry) => resolveComposerPath(entry, composerDir));
+  return value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => resolveComposerPath(entry, composerDir));
 }
 
 async function loadPhpComposerConfig(composerPath: string): Promise<PhpComposerConfig | null> {
@@ -2730,9 +2785,12 @@ async function loadPhpComposerConfig(composerPath: string): Promise<PhpComposerC
       const raw = await fsp.readFile(composerPath, "utf8");
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       const composerDir = path.dirname(composerPath);
-      const autoload = parsed.autoload && typeof parsed.autoload === "object" ? (parsed.autoload as Record<string, unknown>) : {};
+      const autoload =
+        parsed.autoload && typeof parsed.autoload === "object" ? (parsed.autoload as Record<string, unknown>) : {};
       const autoloadDev =
-        parsed["autoload-dev"] && typeof parsed["autoload-dev"] === "object" ? (parsed["autoload-dev"] as Record<string, unknown>) : {};
+        parsed["autoload-dev"] && typeof parsed["autoload-dev"] === "object"
+          ? (parsed["autoload-dev"] as Record<string, unknown>)
+          : {};
 
       const psr4 = mergeComposerNamespaceDirMaps(
         readComposerNamespaceDirs(autoload["psr-4"], composerDir),
@@ -2893,7 +2951,10 @@ export async function getPhpComposerImplicitFiles(projectRoot: string, fromFile:
   return Array.from(deduped);
 }
 
-async function getPhpComposerAutoloadFiles(composerPath: string, composerConfig: PhpComposerConfig): Promise<Set<string>> {
+async function getPhpComposerAutoloadFiles(
+  composerPath: string,
+  composerConfig: PhpComposerConfig,
+): Promise<Set<string>> {
   const cached = phpComposerAutoloadFileCache.get(composerPath);
   if (cached) {
     return await cached;
@@ -2956,7 +3017,8 @@ async function resolvePhpImportPath(
   if (cached !== undefined) return cached;
 
   const normalizedSpec = spec.trim();
-  const isPathLike = normalizedSpec.startsWith(".") || normalizedSpec.startsWith("/") || /^[A-Za-z]:[\\/]/.test(normalizedSpec);
+  const isPathLike =
+    normalizedSpec.startsWith(".") || normalizedSpec.startsWith("/") || /^[A-Za-z]:[\\/]/.test(normalizedSpec);
   if (isPathLike) {
     const resolved = await resolveSpecifier(fromFile, normalizedSpec, projectRoot, undefined, undefined, {
       resolutionExtensions: [".php"],
@@ -2984,7 +3046,12 @@ async function resolvePhpImportPath(
       }
 
       const autoloadFiles = await getPhpComposerAutoloadFiles(composerPath, composerConfig);
-      const symbolResolved = await resolvePhpSymbolImportPath(projectRoot, normalizedSpec, preferredKind, autoloadFiles);
+      const symbolResolved = await resolvePhpSymbolImportPath(
+        projectRoot,
+        normalizedSpec,
+        preferredKind,
+        autoloadFiles,
+      );
       if (symbolResolved && !isPhpComposerClassmapExcluded(symbolResolved, composerConfig)) {
         phpImportResolutionCache.set(cacheKey, symbolResolved);
         return symbolResolved;
@@ -3305,7 +3372,11 @@ export async function isGitRepo(projectRoot: string): Promise<boolean> {
   }
 }
 
-export async function getGitBlobHash(projectRoot: string, file: string, opts?: { gitAvailable?: boolean }): Promise<string | null> {
+export async function getGitBlobHash(
+  projectRoot: string,
+  file: string,
+  opts?: { gitAvailable?: boolean },
+): Promise<string | null> {
   try {
     if (opts?.gitAvailable === false) return null;
     const relPath = normalizePath(path.relative(projectRoot, file));
@@ -3476,7 +3547,13 @@ export async function getUnifiedDiff(
 
 function createGitDiffError(projectRoot: string, args: string[], error: unknown): Error {
   let detail = stringifyUnknown(error);
-  if (typeof error === "object" && error !== null && "stderr" in error && typeof error.stderr === "string" && error.stderr.trim()) {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "stderr" in error &&
+    typeof error.stderr === "string" &&
+    error.stderr.trim()
+  ) {
     detail = error.stderr.trim();
   }
   return new Error(`git ${args.join(" ")} failed in ${projectRoot}: ${detail}`);

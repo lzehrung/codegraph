@@ -37,7 +37,8 @@ const isWithin = (node: SyntaxNodeLike, ancestor: SyntaxNodeLike | null): boolea
   return false;
 };
 
-const isInField = (node: SyntaxNodeLike, parent: SyntaxNodeLike, field: string): boolean => isWithin(node, parent.childForFieldName(field));
+const isInField = (node: SyntaxNodeLike, parent: SyntaxNodeLike, field: string): boolean =>
+  isWithin(node, parent.childForFieldName(field));
 
 const findAncestor = (node: SyntaxNodeLike, types: Set<string>): SyntaxNodeLike | null => {
   let current: SyntaxNodeLike | null = node.parent;
@@ -200,7 +201,11 @@ export const CPP_DEF: LanguageDefinition = {
       parent.type === "namespace_definition"
     )
       return "class";
-    if (parent.type === "alias_declaration" || (parent.type === "type_definition" && isInField(node, parent, "declarator"))) return "type";
+    if (
+      parent.type === "alias_declaration" ||
+      (parent.type === "type_definition" && isInField(node, parent, "declarator"))
+    )
+      return "type";
     const container = findAncestor(node, containerTypes);
     if (container?.type === "function_definition") return "function";
     if (container?.type === "declaration" && isFunctionDeclarator(node)) return "function";
@@ -225,7 +230,11 @@ export const CPP_DEF: LanguageDefinition = {
       return true;
     if (isInAncestorDeclarator(node, new Set(["function_definition"])) && !isInParameterList(node)) return true;
     if (isInAncestorDeclarator(node, new Set(["declaration"])) && !isInParameterList(node)) return true;
-    if (parent.type === "qualified_identifier" && parent.parent?.type === "using_declaration" && isInField(node, parent, "name"))
+    if (
+      parent.type === "qualified_identifier" &&
+      parent.parent?.type === "using_declaration" &&
+      isInField(node, parent, "name")
+    )
       return true;
     if (parent.type === "enumerator" && isInField(node, parent, "name")) return true;
     return false;

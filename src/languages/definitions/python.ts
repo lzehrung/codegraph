@@ -38,7 +38,14 @@ export const PYTHON_DEF: LanguageDefinition = {
       { type: "import_statement", captureId: "imports" },
       { type: "import_from_statement", captureId: "imports" },
     ],
-    splitPoints: ["if_statement", "for_statement", "while_statement", "try_statement", "with_statement", "match_statement"],
+    splitPoints: [
+      "if_statement",
+      "for_statement",
+      "while_statement",
+      "try_statement",
+      "with_statement",
+      "match_statement",
+    ],
     comments: ["comment"],
   },
   graph: {

@@ -161,7 +161,9 @@ describe("CodeReviewSession", () => {
       buildOptions: { cache: "memory", useBloomFilters: true },
     });
 
-    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockRejectedValue(new Error("synthetic refresh failure"));
+    const buildSpy = vi
+      .spyOn(indexer, "buildProjectIndexIncremental")
+      .mockRejectedValue(new Error("synthetic refresh failure"));
 
     try {
       await expect(session.refresh()).rejects.toThrow("synthetic refresh failure");
@@ -302,9 +304,9 @@ describe("CodeReviewSession", () => {
       buildOptions: { cache: "memory", useBloomFilters: true },
     });
 
-    await expect(Reflect.apply(session.analyzeImpact, session, [{ diffText: "diff --git a/main.ts b/main.ts\n" }])).rejects.toThrow(
-      /Impact provider is required/,
-    );
+    await expect(
+      Reflect.apply(session.analyzeImpact, session, [{ diffText: "diff --git a/main.ts b/main.ts\n" }]),
+    ).rejects.toThrow(/Impact provider is required/);
 
     await expect(
       (async () => {
@@ -502,7 +504,9 @@ describe("SessionManager", () => {
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(session.getStatus()).toBe("expired");
 
-    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockRejectedValue(new Error("synthetic reinit failure"));
+    const buildSpy = vi
+      .spyOn(indexer, "buildProjectIndexIncremental")
+      .mockRejectedValue(new Error("synthetic reinit failure"));
 
     try {
       await expect(

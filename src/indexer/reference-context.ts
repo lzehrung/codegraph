@@ -42,7 +42,13 @@ export function extractLineContextWithMaxTotal(source: string, line: number, max
   return allLines.slice(startLine, endLine).join("\n");
 }
 
-export function extractEnclosingBlock(source: string, tree: SyntaxTreeLike, range: Range, maxLines: number, sup: LanguageSupport): string {
+export function extractEnclosingBlock(
+  source: string,
+  tree: SyntaxTreeLike,
+  range: Range,
+  maxLines: number,
+  sup: LanguageSupport,
+): string {
   const node = tree.rootNode.descendantForIndex(range.start.index ?? 0, range.end.index ?? range.start.index ?? 0);
   if (!node) {
     return extractLineContextWithMaxTotal(source, range.start.line, maxLines);

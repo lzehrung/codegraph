@@ -224,7 +224,9 @@ new mode 100755
           diffText,
         });
 
-        expect(report.impacted.some((item) => item.file.endsWith("main.ts") && item.reasons.includes("fileLevelChange"))).toBe(true);
+        expect(
+          report.impacted.some((item) => item.file.endsWith("main.ts") && item.reasons.includes("fileLevelChange")),
+        ).toBe(true);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
@@ -263,7 +265,9 @@ index 1234567..abcdef0 100644
           diffText,
         });
 
-        expect(report.impacted.some((item) => item.file.endsWith("main.ts") && item.reasons.includes("fileLevelChange"))).toBe(true);
+        expect(
+          report.impacted.some((item) => item.file.endsWith("main.ts") && item.reasons.includes("fileLevelChange")),
+        ).toBe(true);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
@@ -286,7 +290,10 @@ export const run = () => setup();
           "utf8",
         );
 
-        const index = await buildProjectIndexFromFiles(root, [path.join(root, "consumer.ts"), path.join(root, "setup.ts")]);
+        const index = await buildProjectIndexFromFiles(root, [
+          path.join(root, "consumer.ts"),
+          path.join(root, "setup.ts"),
+        ]);
 
         const diffText = `diff --git a/setup.ts b/setup-renamed.ts
 similarity index 100%
@@ -475,7 +482,9 @@ index 1234567..abcdef0 100644
 
       const helperChain = chains.find((entry) => entry.symbol === "helperFunction" && entry.file === helperFile);
       expect(helperChain).toBeDefined();
-      expect(helperChain?.paths.some((pathChain) => pathChain.join("::") === [helperFile, utilsFile].join("::"))).toBe(true);
+      expect(helperChain?.paths.some((pathChain) => pathChain.join("::") === [helperFile, utilsFile].join("::"))).toBe(
+        true,
+      );
 
       const anotherChain = chains.find((entry) => entry.symbol === "anotherHelper" && entry.file === helperFile);
       expect(anotherChain).toBeDefined();
@@ -512,10 +521,16 @@ index 1234567..abcdef0 100644
       const utilsFile = "utils.ts";
 
       const chains = report.reexportChains?.chains ?? [];
-      const helperChain = chains.find((entry) => entry.symbol === "helperFunction" && report.files[entry.file] === helperFile);
+      const helperChain = chains.find(
+        (entry) => entry.symbol === "helperFunction" && report.files[entry.file] === helperFile,
+      );
       expect(helperChain).toBeDefined();
-      const resolvedPaths = helperChain?.paths.map((pathChain) => pathChain.map((fileIndex) => report.files[fileIndex]));
-      expect(resolvedPaths?.some((pathChain) => pathChain.join("::") === [helperFile, utilsFile].join("::"))).toBe(true);
+      const resolvedPaths = helperChain?.paths.map((pathChain) =>
+        pathChain.map((fileIndex) => report.files[fileIndex]),
+      );
+      expect(resolvedPaths?.some((pathChain) => pathChain.join("::") === [helperFile, utilsFile].join("::"))).toBe(
+        true,
+      );
     });
 
     it("should include multiple reexport paths and respect depth limits", async () => {
@@ -562,7 +577,9 @@ index 1234567..abcdef0 100644
           diffText,
         });
 
-        const chain = report.reexportChains?.chains.find((entry) => entry.symbol === "foo" && entry.file === relLibFile);
+        const chain = report.reexportChains?.chains.find(
+          (entry) => entry.symbol === "foo" && entry.file === relLibFile,
+        );
         expect(chain).toBeDefined();
 
         const paths = chain?.paths.map((pathChain) => pathChain.join("::")) ?? [];
@@ -852,10 +869,14 @@ index 1234567..abcdef0 100644
  }
 `;
 
-        const report = await analyzeImpactFromDiff(path.resolve(process.cwd(), "tests", "samples", "typescript"), index, {
-          provider: "raw",
-          diffText,
-        });
+        const report = await analyzeImpactFromDiff(
+          path.resolve(process.cwd(), "tests", "samples", "typescript"),
+          index,
+          {
+            provider: "raw",
+            diffText,
+          },
+        );
 
         // Find the impact item that contains this symbol
         const relevantImpact = report.impacted.find((item) => item.symbols.includes(exportedSymbol.name));
@@ -910,13 +931,19 @@ index 1234567..abcdef0 100644
  }
 `;
 
-        const report = await analyzeImpactFromDiff(path.resolve(process.cwd(), "tests", "samples", "typescript"), index, {
-          provider: "raw",
-          diffText,
-        });
+        const report = await analyzeImpactFromDiff(
+          path.resolve(process.cwd(), "tests", "samples", "typescript"),
+          index,
+          {
+            provider: "raw",
+            diffText,
+          },
+        );
 
         // Find impact items that might have signatureChanged hints
-        const itemsWithHints = report.impacted.filter((item: ImpactItem) => item.explain?.hints?.includes("signatureChanged"));
+        const itemsWithHints = report.impacted.filter((item: ImpactItem) =>
+          item.explain?.hints?.includes("signatureChanged"),
+        );
 
         // The test passes if hints are generated appropriately (may not always trigger)
         expect(Array.isArray(itemsWithHints)).toBe(true);

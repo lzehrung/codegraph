@@ -3,13 +3,20 @@ import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import * as indexer from "../src/indexer.js";
-import { createTestIndex, createTestIndexFromFiles, testFindReferences, createTestIndexFromPath } from "./test-utils.js";
+import {
+  createTestIndex,
+  createTestIndexFromFiles,
+  testFindReferences,
+  createTestIndexFromPath,
+} from "./test-utils.js";
 
 function expectReferenceAt(result: Awaited<ReturnType<typeof testFindReferences>>, file: string, line: number): void {
   if (result.status !== "ok") {
     return;
   }
-  expect(result.references.some((reference) => reference.file === file && reference.range.start.line === line)).toBe(true);
+  expect(result.references.some((reference) => reference.file === file && reference.range.start.line === line)).toBe(
+    true,
+  );
 }
 
 describe("Find References", () => {
@@ -61,7 +68,9 @@ describe("Find References", () => {
       expect(result.status).toBe("ok");
       if (result.status === "ok") {
         // Should find both direct usage and namespace usage
-        const namespaceUsage = result.references.find((ref) => ref.file.includes("main.ts") && ref.via?.namespaceMember);
+        const namespaceUsage = result.references.find(
+          (ref) => ref.file.includes("main.ts") && ref.via?.namespaceMember,
+        );
         expect(namespaceUsage).toBeDefined();
       }
     });
@@ -75,7 +84,12 @@ describe("Find References", () => {
         const appFile = path.join(root, "App.tsx");
         await fsp.writeFile(
           buttonFile,
-          ["export function Button(props: { label: string }) {", "  return <button>{props.label}</button>;", "}", ""].join("\n"),
+          [
+            "export function Button(props: { label: string }) {",
+            "  return <button>{props.label}</button>;",
+            "}",
+            "",
+          ].join("\n"),
           "utf8",
         );
         await fsp.writeFile(
@@ -194,7 +208,11 @@ describe("Find References", () => {
         const utilFile = path.join(root, "util.py");
         const mainFile = path.join(root, "main.py");
         await fsp.writeFile(utilFile, ["foo = 1", "bar = 2", ""].join("\n"), "utf8");
-        await fsp.writeFile(mainFile, ["from util import *", "foo = 2", "print(foo)", "print(bar)", ""].join("\n"), "utf8");
+        await fsp.writeFile(
+          mainFile,
+          ["from util import *", "foo = 2", "print(foo)", "print(bar)", ""].join("\n"),
+          "utf8",
+        );
 
         const index = await createTestIndexFromPath(root);
         const normalizedUtil = utilFile.replace(/\\/g, "/");
@@ -310,8 +328,12 @@ describe("Find References", () => {
       const serviceFile = path.join(samplePath, "src", "Domain", "Service.php").replace(/\\/g, "/");
       const qualifiedConsumerFile = path.join(samplePath, "composer-qualified-consumer.php").replace(/\\/g, "/");
       const staticConsumerFile = path.join(samplePath, "composer-static-qualified-consumer.php").replace(/\\/g, "/");
-      const staticConstantConsumerFile = path.join(samplePath, "composer-static-constant-consumer.php").replace(/\\/g, "/");
-      const staticPropertyConsumerFile = path.join(samplePath, "composer-static-property-consumer.php").replace(/\\/g, "/");
+      const staticConstantConsumerFile = path
+        .join(samplePath, "composer-static-constant-consumer.php")
+        .replace(/\\/g, "/");
+      const staticPropertyConsumerFile = path
+        .join(samplePath, "composer-static-property-consumer.php")
+        .replace(/\\/g, "/");
       const typedConsumerFile = path.join(samplePath, "composer-type-qualified-consumer.php").replace(/\\/g, "/");
 
       const result = await testFindReferences(index, serviceFile, 5, 7, 7);
@@ -368,7 +390,10 @@ describe("Find References", () => {
 
     it("should find fully-qualified references for classes declared in later PHP namespace blocks", async () => {
       const root = path.resolve(process.cwd(), "tests", "samples", "php");
-      const files = [path.join(root, "multi-namespace", "Library.php"), path.join(root, "bracketed-qualified-consumer.php")];
+      const files = [
+        path.join(root, "multi-namespace", "Library.php"),
+        path.join(root, "bracketed-qualified-consumer.php"),
+      ];
       const index = await createTestIndexFromFiles(root, files);
       const libraryFile = path.join(root, "multi-namespace", "Library.php").replace(/\\/g, "/");
       const qualifiedConsumerFile = path.join(root, "bracketed-qualified-consumer.php").replace(/\\/g, "/");
@@ -431,7 +456,9 @@ describe("Find References", () => {
       expect(result.status).toBe("ok");
       if (result.status === "ok") {
         // Should find both direct usage and namespace usage
-        const namespaceUsage = result.references.find((ref) => ref.file.includes("main.js") && ref.via?.namespaceMember);
+        const namespaceUsage = result.references.find(
+          (ref) => ref.file.includes("main.js") && ref.via?.namespaceMember,
+        );
         expect(namespaceUsage).toBeDefined();
       }
     });
@@ -481,7 +508,9 @@ describe("Find References", () => {
 
       const result = await testFindReferences(index, utilsFile, 5, 6, 1);
       if (result.status === "ok") {
-        expect(result.references.some((reference) => reference.file === utilsFile && reference.range.start.line === 5)).toBe(true);
+        expect(
+          result.references.some((reference) => reference.file === utilsFile && reference.range.start.line === 5),
+        ).toBe(true);
       }
     });
 
@@ -551,7 +580,12 @@ describe("Find References", () => {
       const functionPointersFile = path.join(samplePath, "function-pointers.h").replace(/\\/g, "/");
       const macroHeaderFile = path.join(samplePath, "macro-typedef.h").replace(/\\/g, "/");
       const macroUseFile = path.join(samplePath, "macro-typedef-use.c").replace(/\\/g, "/");
-      const index = await createTestIndexFromFiles(samplePath, [advancedUseFile, functionPointersFile, macroHeaderFile, macroUseFile]);
+      const index = await createTestIndexFromFiles(samplePath, [
+        advancedUseFile,
+        functionPointersFile,
+        macroHeaderFile,
+        macroUseFile,
+      ]);
 
       const result = await testFindReferences(index, functionPointersFile, 3, 15, 2);
       expect(result.status).toBe("ok");

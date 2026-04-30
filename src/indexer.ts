@@ -7,8 +7,19 @@ import {
 } from "./indexer/parse-context.js";
 import { collectImportsForFile as collectImportsForFileFromImportsModule } from "./indexer/imports.js";
 import { collectLocalsAndExportsFromSource as collectLocalsAndExportsFromLocalsModule } from "./indexer/locals-and-exports.js";
-import { buildGraphDelta, buildProjectIndex, buildProjectIndexFromFiles, buildProjectIndexIncremental } from "./indexer/build-index.js";
-import { collectNamespaceMemberRefs, findReferences, goToDefinition, resolveExport, resolveImported } from "./indexer/navigation.js";
+import {
+  buildGraphDelta,
+  buildProjectIndex,
+  buildProjectIndexFromFiles,
+  buildProjectIndexIncremental,
+} from "./indexer/build-index.js";
+import {
+  collectNamespaceMemberRefs,
+  findReferences,
+  goToDefinition,
+  resolveExport,
+  resolveImported,
+} from "./indexer/navigation.js";
 import {
   defFromSymbolId,
   findReferencesById,
@@ -88,9 +99,20 @@ export type {
   WorkerPoolReport,
 } from "./indexer/types.js";
 
-export { buildGraphDelta, buildProjectIndex, buildProjectIndexFromFiles, buildProjectIndexIncremental } from "./indexer/build-index.js";
+export {
+  buildGraphDelta,
+  buildProjectIndex,
+  buildProjectIndexFromFiles,
+  buildProjectIndexIncremental,
+} from "./indexer/build-index.js";
 
-export { collectNamespaceMemberRefs, findReferences, goToDefinition, resolveExport, resolveImported } from "./indexer/navigation.js";
+export {
+  collectNamespaceMemberRefs,
+  findReferences,
+  goToDefinition,
+  resolveExport,
+  resolveImported,
+} from "./indexer/navigation.js";
 
 export {
   defFromSymbolId,
@@ -139,7 +161,10 @@ export async function parseFile(file: string): Promise<ParsedFileContext> {
   return await parseFileFromModule(file);
 }
 
-export async function ensureParsedContext(file: string, parsedEntry?: ParsedFileCacheEntry): Promise<ParsedFileContext> {
+export async function ensureParsedContext(
+  file: string,
+  parsedEntry?: ParsedFileCacheEntry,
+): Promise<ParsedFileContext> {
   return await ensureParsedContextFromModule(file, parsedEntry);
 }
 

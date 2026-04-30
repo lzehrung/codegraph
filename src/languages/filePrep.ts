@@ -1,7 +1,14 @@
 import fsp from "node:fs/promises";
 import type { JsLanguage } from "../languages/types.js";
 
-import { JS_SUPPORT, TS_SUPPORT, TSX_SUPPORT, supportForFile, supportById, type LanguageSupport } from "../languages.js";
+import {
+  JS_SUPPORT,
+  TS_SUPPORT,
+  TSX_SUPPORT,
+  supportForFile,
+  supportById,
+  type LanguageSupport,
+} from "../languages.js";
 import { prepareSFCScriptSource, detectSFCFramework, type SFCFramework } from "./sfc.js";
 
 interface ParserInput {

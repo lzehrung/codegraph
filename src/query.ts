@@ -17,9 +17,11 @@ export type GraphQuery =
   | { kind: "highestComplexityClasses"; limit: number }
   | { kind: "highestComplexityFunctions"; limit: number };
 
-const tokenize = (input: string): string[] => input.match(/[^\s"]+:"[^"]+"|"[^"]+"|\S+/g)?.map((token) => token.trim()) ?? [];
+const tokenize = (input: string): string[] =>
+  input.match(/[^\s"]+:"[^"]+"|"[^"]+"|\S+/g)?.map((token) => token.trim()) ?? [];
 
-const normalizeToken = (token: string): string => (token.startsWith('"') && token.endsWith('"') ? token.slice(1, -1) : token);
+const normalizeToken = (token: string): string =>
+  token.startsWith('"') && token.endsWith('"') ? token.slice(1, -1) : token;
 
 export function parseSymbolQuery(input: string): SymbolQuery {
   const query: SymbolQuery = {};
@@ -103,7 +105,8 @@ export function parseGraphQuery(input: string): GraphQuery | null {
     };
   }
   if (lower.includes("affected") && lower.includes("module")) {
-    const match = /change (?:this )?module\s+["']?([^"']+)["']?/i.exec(text) ?? /module\s+["']?([^"']+)["']?/i.exec(text);
+    const match =
+      /change (?:this )?module\s+["']?([^"']+)["']?/i.exec(text) ?? /module\s+["']?([^"']+)["']?/i.exec(text);
     if (!match) return null;
     return {
       kind: "affectedFunctionsForModule",

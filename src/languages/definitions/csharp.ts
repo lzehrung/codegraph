@@ -29,7 +29,14 @@ export const CSHARP_DEF: LanguageDefinition = {
         captureId: "namespace",
       },
     ],
-    splitPoints: ["if_statement", "for_statement", "foreach_statement", "while_statement", "switch_statement", "try_statement"],
+    splitPoints: [
+      "if_statement",
+      "for_statement",
+      "foreach_statement",
+      "while_statement",
+      "switch_statement",
+      "try_statement",
+    ],
     comments: ["comment"],
   },
   graph: {

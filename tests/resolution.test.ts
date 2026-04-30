@@ -183,7 +183,9 @@ describe("Import Resolution", () => {
     expect(helperFunc).toBeDefined();
 
     // There should be a "uses" edge from main to helper
-    const usesEdge = symbolGraph.edges.find((e) => e.from === mainFunc.id && e.to === helperFunc.id && e.label === "uses");
+    const usesEdge = symbolGraph.edges.find(
+      (e) => e.from === mainFunc.id && e.to === helperFunc.id && e.label === "uses",
+    );
     expect(usesEdge).toBeDefined();
   });
 
@@ -288,7 +290,9 @@ describe("Import Resolution", () => {
     const pageModule = index.byFile.get(normalizedPage);
 
     expect(
-      graph.edges.some((edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedComponent),
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedComponent,
+      ),
     ).toBe(true);
     expect(pageModule?.imports.some((imp) => imp.resolved === normalizedComponent)).toBe(true);
   });
@@ -316,7 +320,11 @@ describe("Import Resolution", () => {
       "utf8",
     );
     await fsp.writeFile(layoutFile, "<slot />\n", "utf8");
-    await fsp.writeFile(pageFile, ["---", 'import Layout from "@/components/Layout";', "---", "<Layout />"].join("\n"), "utf8");
+    await fsp.writeFile(
+      pageFile,
+      ["---", 'import Layout from "@/components/Layout";', "---", "<Layout />"].join("\n"),
+      "utf8",
+    );
 
     const normalizedPage = pageFile.replace(/\\/g, "/");
     const normalizedLayout = layoutFile.replace(/\\/g, "/");
@@ -324,9 +332,11 @@ describe("Import Resolution", () => {
     const index = await buildProjectIndex(root);
     const pageModule = index.byFile.get(normalizedPage);
 
-    expect(graph.edges.some((edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedLayout)).toBe(
-      true,
-    );
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedLayout,
+      ),
+    ).toBe(true);
     expect(pageModule?.imports.some((imp) => imp.resolved === normalizedLayout)).toBe(true);
   });
 
@@ -346,20 +356,31 @@ describe("Import Resolution", () => {
     const normalizedApiDoc = apiDocFile.replace(/\\/g, "/");
     const normalizedApiMarkdown = apiMarkdownFile.replace(/\\/g, "/");
     const normalizedApiSource = apiSourceFile.replace(/\\/g, "/");
-    const graph = await collectGraph(root, [normalizedIndex, normalizedApiDoc, normalizedApiMarkdown, normalizedApiSource]);
+    const graph = await collectGraph(root, [
+      normalizedIndex,
+      normalizedApiDoc,
+      normalizedApiMarkdown,
+      normalizedApiSource,
+    ]);
     const index = await buildProjectIndex(root);
     const indexModule = index.byFile.get(normalizedIndex);
 
-    expect(graph.edges.some((edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedApiDoc)).toBe(
-      true,
-    );
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedApiDoc,
+      ),
+    ).toBe(true);
 
     expect(
-      graph.edges.some((edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedApiSource),
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedApiSource,
+      ),
     ).toBe(false);
 
     expect(
-      graph.edges.some((edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedApiMarkdown),
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedApiMarkdown,
+      ),
     ).toBe(false);
 
     expect(indexModule?.imports.some((imp) => imp.resolved === normalizedApiDoc)).toBe(true);
@@ -372,7 +393,11 @@ describe("Import Resolution", () => {
     const apiMarkdownFile = path.join(root, "api.md");
     const apiSourceFile = path.join(root, "api.ts");
 
-    await fsp.writeFile(indexFile, ["Docs", "====", "", ".. toctree::", "", "   API Reference <api>"].join("\n"), "utf8");
+    await fsp.writeFile(
+      indexFile,
+      ["Docs", "====", "", ".. toctree::", "", "   API Reference <api>"].join("\n"),
+      "utf8",
+    );
     await fsp.writeFile(apiDocFile, "API docs\n========\n", "utf8");
     await fsp.writeFile(apiMarkdownFile, "# API\n", "utf8");
     await fsp.writeFile(apiSourceFile, "export const api = 1;\n", "utf8");
@@ -381,20 +406,31 @@ describe("Import Resolution", () => {
     const normalizedApiDoc = apiDocFile.replace(/\\/g, "/");
     const normalizedApiMarkdown = apiMarkdownFile.replace(/\\/g, "/");
     const normalizedApiSource = apiSourceFile.replace(/\\/g, "/");
-    const graph = await collectGraph(root, [normalizedIndex, normalizedApiDoc, normalizedApiMarkdown, normalizedApiSource]);
+    const graph = await collectGraph(root, [
+      normalizedIndex,
+      normalizedApiDoc,
+      normalizedApiMarkdown,
+      normalizedApiSource,
+    ]);
     const index = await buildProjectIndex(root);
     const indexModule = index.byFile.get(normalizedIndex);
 
-    expect(graph.edges.some((edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedApiDoc)).toBe(
-      true,
-    );
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedApiDoc,
+      ),
+    ).toBe(true);
 
     expect(
-      graph.edges.some((edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedApiSource),
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedApiSource,
+      ),
     ).toBe(false);
 
     expect(
-      graph.edges.some((edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedApiMarkdown),
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedApiMarkdown,
+      ),
     ).toBe(false);
 
     expect(indexModule?.imports.some((imp) => imp.resolved === normalizedApiDoc)).toBe(true);
@@ -416,20 +452,31 @@ describe("Import Resolution", () => {
     const normalizedApiDoc = apiDocFile.replace(/\\/g, "/");
     const normalizedApiMarkdown = apiMarkdownFile.replace(/\\/g, "/");
     const normalizedApiSource = apiSourceFile.replace(/\\/g, "/");
-    const graph = await collectGraph(root, [normalizedIndex, normalizedApiDoc, normalizedApiMarkdown, normalizedApiSource]);
+    const graph = await collectGraph(root, [
+      normalizedIndex,
+      normalizedApiDoc,
+      normalizedApiMarkdown,
+      normalizedApiSource,
+    ]);
     const index = await buildProjectIndex(root);
     const indexModule = index.byFile.get(normalizedIndex);
 
-    expect(graph.edges.some((edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedApiDoc)).toBe(
-      true,
-    );
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedApiDoc,
+      ),
+    ).toBe(true);
 
     expect(
-      graph.edges.some((edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedApiSource),
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedApiSource,
+      ),
     ).toBe(false);
 
     expect(
-      graph.edges.some((edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedApiMarkdown),
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedApiMarkdown,
+      ),
     ).toBe(false);
 
     expect(indexModule?.imports.some((imp) => imp.resolved === normalizedApiDoc)).toBe(true);
@@ -453,11 +500,15 @@ describe("Import Resolution", () => {
     const pageModule = index.byFile.get(normalizedPage);
 
     expect(
-      graph.edges.some((edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedComponent),
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedComponent,
+      ),
     ).toBe(true);
-    expect(graph.edges.some((edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedMarkdown)).toBe(
-      false,
-    );
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedMarkdown,
+      ),
+    ).toBe(false);
     expect(pageModule?.imports.some((imp) => imp.resolved === normalizedComponent)).toBe(true);
   });
 
@@ -479,11 +530,15 @@ describe("Import Resolution", () => {
     const pageModule = index.byFile.get(normalizedPage);
 
     expect(
-      graph.edges.some((edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedComponent),
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedComponent,
+      ),
     ).toBe(true);
-    expect(graph.edges.some((edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedMarkdown)).toBe(
-      false,
-    );
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedMarkdown,
+      ),
+    ).toBe(false);
     expect(pageModule?.imports.some((imp) => imp.resolved === normalizedComponent)).toBe(true);
   });
 
@@ -510,15 +565,21 @@ describe("Import Resolution", () => {
       "utf8",
     );
     await fsp.writeFile(buttonFile, "export function Button() { return null; }\n", "utf8");
-    await fsp.writeFile(appFile, 'import { Button } from "@/components/Button";\nexport function App() { return <Button />; }\n', "utf8");
+    await fsp.writeFile(
+      appFile,
+      'import { Button } from "@/components/Button";\nexport function App() { return <Button />; }\n',
+      "utf8",
+    );
 
     const normalizedApp = appFile.replace(/\\/g, "/");
     const normalizedButton = buttonFile.replace(/\\/g, "/");
     const graph = await collectGraph(root, [normalizedApp, normalizedButton]);
 
-    expect(graph.edges.some((edge) => edge.from === normalizedApp && edge.to.type === "file" && edge.to.path === normalizedButton)).toBe(
-      true,
-    );
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedApp && edge.to.type === "file" && edge.to.path === normalizedButton,
+      ),
+    ).toBe(true);
   });
 
   it("resolves PHP PSR-4 imports declared in composer.json", async () => {
@@ -533,8 +594,16 @@ describe("Import Resolution", () => {
       JSON.stringify({ autoload: { "psr-4": { "App\\\\": "src/" } } }, null, 2),
       "utf8",
     );
-    await fsp.writeFile(serviceFile, ["<?php", "", "namespace App\\Domain;", "", "class Service {}", ""].join("\n"), "utf8");
-    await fsp.writeFile(consumerFile, ["<?php", "", "use App\\Domain\\Service;", "", "$service = new Service();", ""].join("\n"), "utf8");
+    await fsp.writeFile(
+      serviceFile,
+      ["<?php", "", "namespace App\\Domain;", "", "class Service {}", ""].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      ["<?php", "", "use App\\Domain\\Service;", "", "$service = new Service();", ""].join("\n"),
+      "utf8",
+    );
 
     const index = await buildProjectIndex(root);
     const result = await goToDefinition(index, {
@@ -563,7 +632,11 @@ describe("Import Resolution", () => {
       "utf8",
     );
     await fsp.writeFile(toolFile, ["<?php", "", "namespace Dev;", "", "class Harness {}", ""].join("\n"), "utf8");
-    await fsp.writeFile(consumerFile, ["<?php", "", "use Dev\\Harness;", "", "$tool = new Harness();", ""].join("\n"), "utf8");
+    await fsp.writeFile(
+      consumerFile,
+      ["<?php", "", "use Dev\\Harness;", "", "$tool = new Harness();", ""].join("\n"),
+      "utf8",
+    );
 
     const index = await buildProjectIndex(root);
     const result = await goToDefinition(index, {
@@ -602,14 +675,26 @@ describe("Import Resolution", () => {
       ),
       "utf8",
     );
-    await fsp.writeFile(serviceFile, ["<?php", "", "namespace App\\Domain;", "", "class Service {}", ""].join("\n"), "utf8");
-    await fsp.writeFile(harnessFile, ["<?php", "", "namespace App\\Testing;", "", "class Harness {}", ""].join("\n"), "utf8");
+    await fsp.writeFile(
+      serviceFile,
+      ["<?php", "", "namespace App\\Domain;", "", "class Service {}", ""].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      harnessFile,
+      ["<?php", "", "namespace App\\Testing;", "", "class Harness {}", ""].join("\n"),
+      "utf8",
+    );
     await fsp.writeFile(
       prodConsumerFile,
       ["<?php", "", "use App\\Domain\\Service;", "", "$service = new Service();", ""].join("\n"),
       "utf8",
     );
-    await fsp.writeFile(devConsumerFile, ["<?php", "", "use App\\Testing\\Harness;", "", "$tool = new Harness();", ""].join("\n"), "utf8");
+    await fsp.writeFile(
+      devConsumerFile,
+      ["<?php", "", "use App\\Testing\\Harness;", "", "$tool = new Harness();", ""].join("\n"),
+      "utf8",
+    );
 
     const index = await buildProjectIndex(root);
     const prodResult = await goToDefinition(index, {
@@ -643,7 +728,11 @@ describe("Import Resolution", () => {
 
     await fsp.mkdir(decoyDir, { recursive: true });
     await fsp.mkdir(libDir, { recursive: true });
-    await fsp.writeFile(path.join(root, "composer.json"), JSON.stringify({ autoload: { "psr-0": { Legacy_: "lib/" } } }, null, 2), "utf8");
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { "psr-0": { Legacy_: "lib/" } } }, null, 2),
+      "utf8",
+    );
     await fsp.writeFile(decoyFile, ["<?php", "", "class Legacy_Utils_StringHelper {}", ""].join("\n"), "utf8");
     await fsp.writeFile(legacyFile, ["<?php", "", "class Legacy_Utils_StringHelper {}", ""].join("\n"), "utf8");
     await fsp.writeFile(
@@ -654,7 +743,9 @@ describe("Import Resolution", () => {
 
     const index = await buildProjectIndex(root);
     const consumerModule = index.byFile.get(consumerFile.replace(/\\/g, "/"));
-    const helperImport = consumerModule?.imports.find((entry) => entry.kind === "named" && entry.local === "Legacy_Utils_StringHelper");
+    const helperImport = consumerModule?.imports.find(
+      (entry) => entry.kind === "named" && entry.local === "Legacy_Utils_StringHelper",
+    );
 
     expect(helperImport?.resolved).toBe(legacyFile.replace(/\\/g, "/"));
 
@@ -678,9 +769,17 @@ describe("Import Resolution", () => {
     const serviceFile = path.join(legacyDir, "LegacyService.php");
 
     await fsp.mkdir(legacyDir, { recursive: true });
-    await fsp.writeFile(path.join(root, "composer.json"), JSON.stringify({ autoload: { classmap: ["legacy/"] } }, null, 2), "utf8");
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { classmap: ["legacy/"] } }, null, 2),
+      "utf8",
+    );
     await fsp.writeFile(serviceFile, ["<?php", "", "class LegacyService {}", ""].join("\n"), "utf8");
-    await fsp.writeFile(consumerFile, ["<?php", "", "use LegacyService;", "", "$service = new LegacyService();", ""].join("\n"), "utf8");
+    await fsp.writeFile(
+      consumerFile,
+      ["<?php", "", "use LegacyService;", "", "$service = new LegacyService();", ""].join("\n"),
+      "utf8",
+    );
 
     const index = await buildProjectIndex(root);
     const result = await goToDefinition(index, {
@@ -706,10 +805,18 @@ describe("Import Resolution", () => {
 
     await fsp.mkdir(legacyDir, { recursive: true });
     await fsp.mkdir(otherDir, { recursive: true });
-    await fsp.writeFile(path.join(root, "composer.json"), JSON.stringify({ autoload: { classmap: ["other/"] } }, null, 2), "utf8");
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { classmap: ["other/"] } }, null, 2),
+      "utf8",
+    );
     await fsp.writeFile(allowedServiceFile, ["<?php", "", "class AllowedService {}", ""].join("\n"), "utf8");
     await fsp.writeFile(legacyServiceFile, ["<?php", "", "class LegacyService {}", ""].join("\n"), "utf8");
-    await fsp.writeFile(consumerFile, ["<?php", "", "use LegacyService;", "", "$service = new LegacyService();", ""].join("\n"), "utf8");
+    await fsp.writeFile(
+      consumerFile,
+      ["<?php", "", "use LegacyService;", "", "$service = new LegacyService();", ""].join("\n"),
+      "utf8",
+    );
 
     const index = await buildProjectIndex(root);
     const result = await goToDefinition(index, {
@@ -740,7 +847,9 @@ describe("Import Resolution", () => {
     const consumerPath = consumerFile.replace(/\\/g, "/");
     const helpersPath = helpersFile.replace(/\\/g, "/");
     const graph = await collectGraph(root, [consumerPath, helpersPath]);
-    expect(graph.edges.some((edge) => edge.from === consumerPath && edge.to.type === "file" && edge.to.path === helpersPath)).toBe(true);
+    expect(
+      graph.edges.some((edge) => edge.from === consumerPath && edge.to.type === "file" && edge.to.path === helpersPath),
+    ).toBe(true);
 
     const index = await buildProjectIndex(root);
     const result = await goToDefinition(index, {
@@ -775,7 +884,9 @@ describe("Import Resolution", () => {
     const consumerPath = consumerFile.replace(/\\/g, "/");
     const helpersPath = helpersFile.replace(/\\/g, "/");
     const graph = await collectGraph(root, [consumerPath, helpersPath]);
-    expect(graph.edges.some((edge) => edge.from === consumerPath && edge.to.type === "file" && edge.to.path === helpersPath)).toBe(true);
+    expect(
+      graph.edges.some((edge) => edge.from === consumerPath && edge.to.type === "file" && edge.to.path === helpersPath),
+    ).toBe(true);
 
     const index = await buildProjectIndex(root);
     const result = await goToDefinition(index, {
@@ -803,7 +914,11 @@ describe("Import Resolution", () => {
       JSON.stringify({ autoload: { "psr-4": { "App\\\\": "src/" } } }, null, 2),
       "utf8",
     );
-    await fsp.writeFile(serviceFile, ["<?php", "", "namespace App\\Domain;", "", "class Service {}", ""].join("\n"), "utf8");
+    await fsp.writeFile(
+      serviceFile,
+      ["<?php", "", "namespace App\\Domain;", "", "class Service {}", ""].join("\n"),
+      "utf8",
+    );
     await fsp.writeFile(consumerFile, ["<?php", "", "$service = new App\\Domain\\Service();", ""].join("\n"), "utf8");
 
     const index = await buildProjectIndex(root);
@@ -855,7 +970,9 @@ describe("Import Resolution", () => {
     const consumerPath = consumerFile.replace(/\\/g, "/");
     const servicePath = serviceFile.replace(/\\/g, "/");
     const graph = await collectGraph(root, [consumerPath, servicePath]);
-    expect(graph.edges.some((edge) => edge.from === consumerPath && edge.to.type === "file" && edge.to.path === servicePath)).toBe(true);
+    expect(
+      graph.edges.some((edge) => edge.from === consumerPath && edge.to.type === "file" && edge.to.path === servicePath),
+    ).toBe(true);
 
     const index = await buildProjectIndex(root);
     const result = await goToDefinition(index, {
@@ -895,13 +1012,23 @@ describe("Import Resolution", () => {
       JSON.stringify({ autoload: { "psr-4": { "App\\\\": "src/" } } }, null, 2),
       "utf8",
     );
-    await fsp.writeFile(classFile, ["<?php", "", "namespace App\\Collision;", "", "class Thing {}", ""].join("\n"), "utf8");
     await fsp.writeFile(
-      functionFile,
-      ["<?php", "", "namespace App\\Collision;", "", "function Thing(): string", "{", "    return 'ok';", "}", ""].join("\n"),
+      classFile,
+      ["<?php", "", "namespace App\\Collision;", "", "class Thing {}", ""].join("\n"),
       "utf8",
     );
-    await fsp.writeFile(consumerFile, ["<?php", "", "use function App\\Collision\\Thing;", "", "$value = Thing();", ""].join("\n"), "utf8");
+    await fsp.writeFile(
+      functionFile,
+      ["<?php", "", "namespace App\\Collision;", "", "function Thing(): string", "{", "    return 'ok';", "}", ""].join(
+        "\n",
+      ),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      ["<?php", "", "use function App\\Collision\\Thing;", "", "$value = Thing();", ""].join("\n"),
+      "utf8",
+    );
 
     const index = await buildProjectIndex(root);
     const result = await goToDefinition(index, {
@@ -924,15 +1051,32 @@ describe("Import Resolution", () => {
     const serviceFile = path.join(srcDir, "Service.php");
 
     await fsp.mkdir(srcDir, { recursive: true });
-    await fsp.writeFile(path.join(root, "composer.json"), JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2), "utf8");
     await fsp.writeFile(
-      serviceFile,
-      ["<?php", "", "class Service", "{", "    public function make(): string", "    {", "        return 'ok';", "    }", "}", ""].join(
-        "\n",
-      ),
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2),
       "utf8",
     );
-    await fsp.writeFile(consumerFile, ["<?php", "", "use function make;", "", "$value = make();", ""].join("\n"), "utf8");
+    await fsp.writeFile(
+      serviceFile,
+      [
+        "<?php",
+        "",
+        "class Service",
+        "{",
+        "    public function make(): string",
+        "    {",
+        "        return 'ok';",
+        "    }",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      ["<?php", "", "use function make;", "", "$value = make();", ""].join("\n"),
+      "utf8",
+    );
 
     const index = await buildProjectIndex(root);
     const result = await goToDefinition(index, {
@@ -951,13 +1095,23 @@ describe("Import Resolution", () => {
     const commentOnlyFile = path.join(srcDir, "CommentOnly.php");
 
     await fsp.mkdir(srcDir, { recursive: true });
-    await fsp.writeFile(path.join(root, "composer.json"), JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2), "utf8");
     await fsp.writeFile(
-      commentOnlyFile,
-      ["<?php", "", "// function GhostHelper() {}", "/** class PhantomClass {} */", "echo 'placeholder';", ""].join("\n"),
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2),
       "utf8",
     );
-    await fsp.writeFile(consumerFile, ["<?php", "", "use function GhostHelper;", "", "$value = GhostHelper();", ""].join("\n"), "utf8");
+    await fsp.writeFile(
+      commentOnlyFile,
+      ["<?php", "", "// function GhostHelper() {}", "/** class PhantomClass {} */", "echo 'placeholder';", ""].join(
+        "\n",
+      ),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      ["<?php", "", "use function GhostHelper;", "", "$value = GhostHelper();", ""].join("\n"),
+      "utf8",
+    );
 
     const index = await buildProjectIndex(root);
     const result = await goToDefinition(index, {
@@ -976,9 +1130,17 @@ describe("Import Resolution", () => {
     const serviceFile = path.join(srcDir, "AttrService.php");
 
     await fsp.mkdir(srcDir, { recursive: true });
-    await fsp.writeFile(path.join(root, "composer.json"), JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2), "utf8");
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2),
+      "utf8",
+    );
     await fsp.writeFile(serviceFile, ["<?php", "", "#[Route('/attr')] class AttrService {}", ""].join("\n"), "utf8");
-    await fsp.writeFile(consumerFile, ["<?php", "", "use AttrService;", "", "$service = new AttrService();", ""].join("\n"), "utf8");
+    await fsp.writeFile(
+      consumerFile,
+      ["<?php", "", "use AttrService;", "", "$service = new AttrService();", ""].join("\n"),
+      "utf8",
+    );
 
     const index = await buildProjectIndex(root);
     const result = await goToDefinition(index, {
@@ -1009,11 +1171,29 @@ describe("Import Resolution", () => {
     );
     await fsp.writeFile(
       classFile,
-      ["<?php", "", "namespace App\\Domain;", "", "class AClass", "{", "    public const NAME = 'class';", "}", ""].join("\n"),
+      [
+        "<?php",
+        "",
+        "namespace App\\Domain;",
+        "",
+        "class AClass",
+        "{",
+        "    public const NAME = 'class';",
+        "}",
+        "",
+      ].join("\n"),
       "utf8",
     );
-    await fsp.writeFile(constFile, ["<?php", "", "namespace App\\Domain;", "", "const NAME = 'namespace';", ""].join("\n"), "utf8");
-    await fsp.writeFile(consumerFile, ["<?php", "", "use const App\\Domain\\NAME;", "", "$value = NAME;", ""].join("\n"), "utf8");
+    await fsp.writeFile(
+      constFile,
+      ["<?php", "", "namespace App\\Domain;", "", "const NAME = 'namespace';", ""].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      ["<?php", "", "use const App\\Domain\\NAME;", "", "$value = NAME;", ""].join("\n"),
+      "utf8",
+    );
 
     const index = await buildProjectIndex(root);
     const result = await goToDefinition(index, {
@@ -1036,9 +1216,17 @@ describe("Import Resolution", () => {
     const constFile = path.join(srcDir, "Constants.php");
 
     await fsp.mkdir(srcDir, { recursive: true });
-    await fsp.writeFile(path.join(root, "composer.json"), JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2), "utf8");
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2),
+      "utf8",
+    );
     await fsp.writeFile(constFile, ["<?php", "", "const REAL_NAME = VALUE_ALIAS;", ""].join("\n"), "utf8");
-    await fsp.writeFile(consumerFile, ["<?php", "", "use const VALUE_ALIAS;", "", "$value = VALUE_ALIAS;", ""].join("\n"), "utf8");
+    await fsp.writeFile(
+      consumerFile,
+      ["<?php", "", "use const VALUE_ALIAS;", "", "$value = VALUE_ALIAS;", ""].join("\n"),
+      "utf8",
+    );
 
     const index = await buildProjectIndex(root);
     const result = await goToDefinition(index, {
@@ -1057,7 +1245,11 @@ describe("Import Resolution", () => {
     const libraryFile = path.join(srcDir, "Library.php");
 
     await fsp.mkdir(srcDir, { recursive: true });
-    await fsp.writeFile(path.join(root, "composer.json"), JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2), "utf8");
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2),
+      "utf8",
+    );
     await fsp.writeFile(
       libraryFile,
       [
@@ -1140,7 +1332,11 @@ describe("Import Resolution", () => {
     const libraryFile = path.join(srcDir, "Library.php");
 
     await fsp.mkdir(srcDir, { recursive: true });
-    await fsp.writeFile(path.join(root, "composer.json"), JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2), "utf8");
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2),
+      "utf8",
+    );
     await fsp.writeFile(
       libraryFile,
       [
@@ -1195,8 +1391,16 @@ describe("Import Resolution", () => {
     const serviceFile = path.join(srcDir, "NewService.php");
 
     await fsp.mkdir(srcDir, { recursive: true });
-    await fsp.writeFile(path.join(root, "composer.json"), JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2), "utf8");
-    await fsp.writeFile(consumerFile, ["<?php", "", "use NewService;", "", "$service = new NewService();", ""].join("\n"), "utf8");
+    await fsp.writeFile(
+      path.join(root, "composer.json"),
+      JSON.stringify({ autoload: { classmap: ["src/"] } }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      ["<?php", "", "use NewService;", "", "$service = new NewService();", ""].join("\n"),
+      "utf8",
+    );
 
     let index = await buildProjectIndex(root);
     let result = await goToDefinition(index, {
@@ -1249,7 +1453,11 @@ describe("Import Resolution", () => {
     );
     await fsp.writeFile(visibleFile, ["<?php", "", "class VisibleService {}", ""].join("\n"), "utf8");
     await fsp.writeFile(hiddenFile, ["<?php", "", "class HiddenService {}", ""].join("\n"), "utf8");
-    await fsp.writeFile(consumerFile, ["<?php", "", "use HiddenService;", "", "$service = new HiddenService();", ""].join("\n"), "utf8");
+    await fsp.writeFile(
+      consumerFile,
+      ["<?php", "", "use HiddenService;", "", "$service = new HiddenService();", ""].join("\n"),
+      "utf8",
+    );
 
     const index = await buildProjectIndex(root);
     const result = await goToDefinition(index, {
@@ -1283,7 +1491,11 @@ describe("Import Resolution", () => {
     const consumerPath = consumerFile.replace(/\\/g, "/");
     const bootstrapPath = bootstrapFile.replace(/\\/g, "/");
     const graph = await collectGraph(root, [consumerPath, bootstrapPath]);
-    expect(graph.edges.some((edge) => edge.from === consumerPath && edge.to.type === "file" && edge.to.path === bootstrapPath)).toBe(true);
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === consumerPath && edge.to.type === "file" && edge.to.path === bootstrapPath,
+      ),
+    ).toBe(true);
 
     const index = await buildProjectIndex(root);
     const result = await goToDefinition(index, {

@@ -14,7 +14,9 @@ describe("Symbol-level graph", () => {
       const sg = await buildSymbolGraph(index);
 
       const nodes = [...sg.nodes.values()].map((n) => ({ ...n, file: norm(n.file) }));
-      const utilsDef = nodes.find((n) => n.file.endsWith("/tests/samples/typescript/utils.ts") && n.name === "helperFunction");
+      const utilsDef = nodes.find(
+        (n) => n.file.endsWith("/tests/samples/typescript/utils.ts") && n.name === "helperFunction",
+      );
       expect(utilsDef).toBeDefined();
 
       const mainImport = nodes.find(
@@ -25,7 +27,9 @@ describe("Symbol-level graph", () => {
       );
       expect(mainImport).toBeDefined();
 
-      const hasEdge = sg.edges.some((e) => e.from === mainImport.id && e.to === utilsDef.id && e.label === "helperFunction");
+      const hasEdge = sg.edges.some(
+        (e) => e.from === mainImport.id && e.to === utilsDef.id && e.label === "helperFunction",
+      );
       expect(hasEdge).toBe(true);
     });
 
@@ -53,7 +57,9 @@ describe("Symbol-level graph", () => {
         (n) => n.file.endsWith("/tests/samples/python/main.py") && n.name === "helper_function" && n.kind === "import",
       );
       expect(namedImport).toBeDefined();
-      const namedEdge = sg.edges.some((e) => e.from === namedImport.id && e.to === def.id && e.label === "helper_function");
+      const namedEdge = sg.edges.some(
+        (e) => e.from === namedImport.id && e.to === def.id && e.label === "helper_function",
+      );
       expect(namedEdge).toBe(true);
 
       const nsImport = nodes.find(

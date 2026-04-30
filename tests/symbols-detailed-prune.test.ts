@@ -47,7 +47,9 @@ describe("Symbols-detailed pruning flags", () => {
     await buildSymbolGraphDetailed(index, { scope: "all" });
 
     expect(
-      warnSpy.mock.calls.some((call) => call.some((value) => typeof value === "string" && value.includes("Unsupported file extension"))),
+      warnSpy.mock.calls.some((call) =>
+        call.some((value) => typeof value === "string" && value.includes("Unsupported file extension")),
+      ),
     ).toBe(false);
   });
 });

@@ -2,7 +2,13 @@ import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { buildProjectIndex, buildProjectIndexIncremental, collectImportsForFile, supportForFile, type BuildReport } from "../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexIncremental,
+  collectImportsForFile,
+  supportForFile,
+  type BuildReport,
+} from "../src/index.js";
 import type { FallbackImportExtractionEvent } from "../src/graphs.js";
 import { logWithLevel } from "../src/logging.js";
 import * as jsFallback from "../src/jsFallback.js";

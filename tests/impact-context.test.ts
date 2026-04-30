@@ -213,7 +213,11 @@ describe("Impact Context Collection", () => {
         await fsp.mkdir(path.join(root, "src"), { recursive: true });
         await fsp.mkdir(path.join(root, "tests"), { recursive: true });
         await fsp.writeFile(path.join(root, "src", "feature.ts"), "export function feature() { return 1; }\n", "utf8");
-        await fsp.writeFile(path.join(root, "tests", "feature.test.ts"), "import { feature } from '../src/feature';\nfeature();\n", "utf8");
+        await fsp.writeFile(
+          path.join(root, "tests", "feature.test.ts"),
+          "import { feature } from '../src/feature';\nfeature();\n",
+          "utf8",
+        );
 
         const index = await buildProjectIndex(root, { logLevel: "error" });
         const changedSymbolIds = [`${path.join(root, "src", "feature.ts").replace(/\\/g, "/")}::feature::16`];

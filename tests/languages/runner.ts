@@ -85,7 +85,9 @@ export function runLanguageTests(def: LanguageTestDefinition) {
       beforeAll(async () => {
         const parityFiles = collectParityFiles();
         index =
-          parityFiles.length > 0 ? await createTestIndexFromFiles(samplePath, parityFiles) : await createTestIndexFromPath(samplePath);
+          parityFiles.length > 0
+            ? await createTestIndexFromFiles(samplePath, parityFiles)
+            : await createTestIndexFromPath(samplePath);
         graph = parityFiles.length > 0 ? await collectGraph(samplePath, parityFiles) : index.graph;
       });
 
@@ -100,7 +102,7 @@ export function runLanguageTests(def: LanguageTestDefinition) {
 
       if (def.parity.dependencyGraph) {
         it("builds the dependency graph", () => {
-          for (const expectation of def.parity.dependencyGraph ?? []) {
+          for (const expectation of def.parity?.dependencyGraph ?? []) {
             const found = graph.edges.some((edge) => matchEdge(edge, expectation));
             expect(found).toBe(true);
           }
@@ -109,7 +111,7 @@ export function runLanguageTests(def: LanguageTestDefinition) {
 
       if (def.parity.symbols) {
         it("extracts symbols", () => {
-          for (const expectation of def.parity.symbols ?? []) {
+          for (const expectation of def.parity?.symbols ?? []) {
             const filePath = resolveSamplePath(expectation.file);
             for (const symbol of expectation.includes) {
               const matches = findSymbolsByName(index, symbol.name, filePath);

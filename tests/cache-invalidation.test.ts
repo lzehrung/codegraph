@@ -42,7 +42,9 @@ function readModuleCacheUpdatedAt(root: string, file: string): number | null {
   const BetterSqlite3 = loadBetterSqlite3();
   const db = new BetterSqlite3(dbPath, { readonly: true });
   try {
-    const row = db.prepare("SELECT updated_at FROM module_cache WHERE file = ?").get(file) as { updated_at: number } | undefined;
+    const row = db.prepare("SELECT updated_at FROM module_cache WHERE file = ?").get(file) as
+      | { updated_at: number }
+      | undefined;
     return row?.updated_at ?? null;
   } finally {
     db.close();
@@ -381,12 +383,16 @@ describe("Cache invalidation and strict hashing", () => {
     expect(manifestAfter.files[normalizedUtil]).toBeUndefined();
     expect(incremental.graph.nodes.has(normalizedUtil)).toBe(false);
     expect(
-      incremental.graph.edges.some((edge) => edge.from === normalizedMain && edge.to.type === "file" && edge.to.path === normalizedUtil),
+      incremental.graph.edges.some(
+        (edge) => edge.from === normalizedMain && edge.to.type === "file" && edge.to.path === normalizedUtil,
+      ),
     ).toBe(false);
 
     const mainModule = incremental.byFile.get(normalizedMain);
     expect(mainModule).toBeDefined();
-    expect(mainModule?.imports.some((imp) => typeof imp.resolved === "string" && imp.resolved === normalizedUtil)).toBe(false);
+    expect(mainModule?.imports.some((imp) => typeof imp.resolved === "string" && imp.resolved === normalizedUtil)).toBe(
+      false,
+    );
   });
 
   it("persists an empty manifest when incremental rebuild deletes the last tracked file", async () => {
@@ -468,7 +474,11 @@ describe("Cache invalidation and strict hashing", () => {
       sig: "synthetic",
       edges: [],
     };
-    await fsp.writeFile(path.join(root, ".codegraph-cache", "index-v1", "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+    await fsp.writeFile(
+      path.join(root, ".codegraph-cache", "index-v1", "manifest.json"),
+      JSON.stringify(manifest, null, 2),
+      "utf8",
+    );
 
     try {
       const incremental = await buildProjectIndexIncremental(root, {
@@ -564,18 +574,24 @@ describe("Cache invalidation and strict hashing", () => {
 
     const first = await buildProjectIndex(root);
     expect(
-      first.graph.edges.some((edge) => edge.from === normalize(main) && edge.to.type === "file" && edge.to.path === normalize(depPath)),
+      first.graph.edges.some(
+        (edge) => edge.from === normalize(main) && edge.to.type === "file" && edge.to.path === normalize(depPath),
+      ),
     ).toBe(true);
 
     await fsp.unlink(depPath);
 
     const rebuilt = await buildProjectIndex(root);
     expect(
-      rebuilt.graph.edges.some((edge) => edge.from === normalize(main) && edge.to.type === "file" && edge.to.path === normalize(depPath)),
+      rebuilt.graph.edges.some(
+        (edge) => edge.from === normalize(main) && edge.to.type === "file" && edge.to.path === normalize(depPath),
+      ),
     ).toBe(false);
     const mainModule = rebuilt.byFile.get(normalize(main));
     expect(mainModule).toBeDefined();
-    expect(mainModule?.imports.some((imp) => typeof imp.resolved === "string" && imp.resolved === normalize(depPath))).toBe(false);
+    expect(
+      mainModule?.imports.some((imp) => typeof imp.resolved === "string" && imp.resolved === normalize(depPath)),
+    ).toBe(false);
   });
 
   it("writes a string config hash after incremental updates and reuses it", async () => {
@@ -643,9 +659,15 @@ describe("Cache invalidation and strict hashing", () => {
       await loadNearestTsconfigFor(sourceFile);
       await loadWorkspaceConfig(root);
 
-      const tsconfigReads = readSpy.mock.calls.filter(([filePath]) => normalize(String(filePath)) === normalize(tsconfigPath));
-      const rootPackageReads = readSpy.mock.calls.filter(([filePath]) => normalize(String(filePath)) === normalize(packageJsonPath));
-      const sharedManifestReads = readSpy.mock.calls.filter(([filePath]) => normalize(String(filePath)) === normalize(sharedManifestPath));
+      const tsconfigReads = readSpy.mock.calls.filter(
+        ([filePath]) => normalize(String(filePath)) === normalize(tsconfigPath),
+      );
+      const rootPackageReads = readSpy.mock.calls.filter(
+        ([filePath]) => normalize(String(filePath)) === normalize(packageJsonPath),
+      );
+      const sharedManifestReads = readSpy.mock.calls.filter(
+        ([filePath]) => normalize(String(filePath)) === normalize(sharedManifestPath),
+      );
       expect(tsconfigReads).toHaveLength(1);
       expect(rootPackageReads).toHaveLength(3);
       expect(sharedManifestReads).toHaveLength(1);

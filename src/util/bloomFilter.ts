@@ -13,7 +13,10 @@ import crypto from "node:crypto";
  * @param falsePositiveRate - Target false positive rate (default: 0.01 = 1%)
  * @returns Optimal size in bits and hash count
  */
-export function calculateOptimalBloomParams(expectedItems: number, falsePositiveRate = 0.01): { size: number; hashCount: number } {
+export function calculateOptimalBloomParams(
+  expectedItems: number,
+  falsePositiveRate = 0.01,
+): { size: number; hashCount: number } {
   // Ensure reasonable bounds
   const n = Math.max(1, expectedItems);
   const p = Math.max(0.0001, Math.min(0.5, falsePositiveRate));

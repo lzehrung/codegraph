@@ -16,7 +16,12 @@ describe("Namespace member references (AST-based)", () => {
     await fsp.writeFile(mod, "export const member = 1;\nexport const other = 2;\n", "utf8");
     await fsp.writeFile(
       main,
-      ["import * as ns from './mod';", "const a = ns.member;", "const b = ns\n  .member;", "const c = ns\n\t.\n  member;"].join("\n"),
+      [
+        "import * as ns from './mod';",
+        "const a = ns.member;",
+        "const b = ns\n  .member;",
+        "const c = ns\n\t.\n  member;",
+      ].join("\n"),
       "utf8",
     );
     const index = await buildProjectIndex(root);

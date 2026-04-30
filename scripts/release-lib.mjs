@@ -191,7 +191,11 @@ export function computePublishExecutionSteps(publishPlan) {
 
 export function sanitizeJsFallbackPackageManifest(pkg) {
   const normalized = { ...pkg };
-  if (normalized.dependencies && typeof normalized.dependencies === "object" && !Array.isArray(normalized.dependencies)) {
+  if (
+    normalized.dependencies &&
+    typeof normalized.dependencies === "object" &&
+    !Array.isArray(normalized.dependencies)
+  ) {
     const dependencies = { ...normalized.dependencies };
     delete dependencies["@lzehrung/codegraph"];
     normalized.dependencies = dependencies;

@@ -18,11 +18,17 @@ describe("Impact: options and explain payloads", () => {
     const file = Array.from(index.byFile.keys()).find((f) => f.endsWith("/utils.ts"))!;
     const mod = index.byFile.get(file)!;
 
-    const exportedNames = new Set(mod.exports.filter((e: any) => e.type === "local").map((e: any) => e.target.localName));
+    const exportedNames = new Set(
+      mod.exports.filter((e: any) => e.type === "local").map((e: any) => e.target.localName),
+    );
     const internal = mod.locals.find((l) => !exportedNames.has(l.localName)) || mod.locals[0]!;
     const diffText = makeDiffForAbsPath(file, Math.max(internal.range.start.line + 1, internal.range.start.line));
 
-    const reportAll = await analyzeImpactFromDiff(getSamplePath("typescript"), index, { provider: "raw", diffText, scope: "all" });
+    const reportAll = await analyzeImpactFromDiff(getSamplePath("typescript"), index, {
+      provider: "raw",
+      diffText,
+      scope: "all",
+    });
     const reportImported = await analyzeImpactFromDiff(getSamplePath("typescript"), index, {
       provider: "raw",
       diffText,
@@ -49,7 +55,11 @@ describe("Impact: options and explain payloads", () => {
       diffText,
       membersOnly: false,
     });
-    const membersOnly = await analyzeImpactFromDiff(getSamplePath("typescript"), index, { provider: "raw", diffText, membersOnly: true });
+    const membersOnly = await analyzeImpactFromDiff(getSamplePath("typescript"), index, {
+      provider: "raw",
+      diffText,
+      membersOnly: true,
+    });
 
     expect(membersOnly.impacted.every((i) => (i.depth ?? 0) === 0)).toBe(true);
     const hasTransitive = withTransitive.impacted.some((i) => (i.depth ?? 0) > 0);

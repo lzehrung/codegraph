@@ -305,7 +305,9 @@ export class LazyProjectIndex {
 export function createSymbolLoader(file: FileId, source: string, imports: ImportBinding[]): () => Promise<SymbolDef[]> {
   return async () => {
     const parsed = await parseFile(file);
-    const module = collectLocalsAndExportsFromSource(file, source, parsed.sup, parsed.lang, imports, { tree: parsed.tree });
+    const module = collectLocalsAndExportsFromSource(file, source, parsed.sup, parsed.lang, imports, {
+      tree: parsed.tree,
+    });
     return module.locals;
   };
 }

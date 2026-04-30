@@ -18,7 +18,13 @@ export {
   clearImportResolutionCaches,
   clearResolutionCaches,
 } from "./util.js";
-export type { ProjectFileDiscoveryOptions, ProjectFileInfo, ProjectFileKind, ProjectFileRole, ProjectFileType } from "./util.js";
+export type {
+  ProjectFileDiscoveryOptions,
+  ProjectFileInfo,
+  ProjectFileKind,
+  ProjectFileRole,
+  ProjectFileType,
+} from "./util.js";
 export {
   collectGraph,
   graphToDOT,
@@ -151,7 +157,13 @@ export {
   filterErrorsBySeverity,
   summarizePartialResult,
 } from "./util/partialResults.js";
-export { LazyArray, LazyProjectIndex, createSymbolLoader, type LazyModuleIndex, type LazyLoadOptions } from "./util/lazySymbols.js";
+export {
+  LazyArray,
+  LazyProjectIndex,
+  createSymbolLoader,
+  type LazyModuleIndex,
+  type LazyLoadOptions,
+} from "./util/lazySymbols.js";
 export {
   computeSymbolHash,
   symbolIdentifier,

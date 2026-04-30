@@ -9,7 +9,12 @@ import { getDiff } from "./providers/base.js";
 import { locateChangedSymbolsWithLines } from "./map.js";
 import { analyzeImpact } from "./analyzer.js";
 import { discoverProjectFiles, type ProjectFileInfo } from "../util.js";
-import { createImpactIgnoreMatcher, normalizeImpactDiffFiles, normalizeImpactFilePath, toImpactReportFilePath } from "./path.js";
+import {
+  createImpactIgnoreMatcher,
+  normalizeImpactDiffFiles,
+  normalizeImpactFilePath,
+  toImpactReportFilePath,
+} from "./path.js";
 
 export type ImpactStreamChunk =
   | { type: "projectFiles"; files: ProjectFileInfo[] }

@@ -93,19 +93,25 @@ index 1111111..2222222 100644
 
     const missingImport = suggestions.find(
       (suggestion) =>
-        suggestion.kind === "missingImport" && suggestion.symbol === "anotherHelper" && suggestion.relatedFile === "helpers.ts",
+        suggestion.kind === "missingImport" &&
+        suggestion.symbol === "anotherHelper" &&
+        suggestion.relatedFile === "helpers.ts",
     );
     expect(missingImport).toBeDefined();
     expect(missingImport?.confidence).toBe("high");
 
     const missingExport = suggestions.find(
       (suggestion) =>
-        suggestion.kind === "missingExport" && suggestion.symbol === "missingExport" && suggestion.relatedFile === "helpers.ts",
+        suggestion.kind === "missingExport" &&
+        suggestion.symbol === "missingExport" &&
+        suggestion.relatedFile === "helpers.ts",
     );
     expect(missingExport).toBeDefined();
     expect(missingExport?.confidence).toBe("medium");
 
-    const sharedUtilImport = suggestions.find((suggestion) => suggestion.kind === "missingImport" && suggestion.symbol === "sharedUtil");
+    const sharedUtilImport = suggestions.find(
+      (suggestion) => suggestion.kind === "missingImport" && suggestion.symbol === "sharedUtil",
+    );
     expect(sharedUtilImport).toBeDefined();
     expect(sharedUtilImport?.confidence).toBe("low");
 
@@ -267,7 +273,10 @@ index 1111111..2222222 100644
     });
 
     const breaking = (report.suggestions ?? []).find(
-      (entry) => entry.kind === "breakingChange" && entry.symbol === "helperFunction" && entry.details?.includes("signature changed"),
+      (entry) =>
+        entry.kind === "breakingChange" &&
+        entry.symbol === "helperFunction" &&
+        entry.details?.includes("signature changed"),
     );
     expect(breaking).toBeDefined();
     expect(breaking?.confidence).toBe("high");
@@ -335,7 +344,10 @@ index 1111111..2222222 100644
     });
 
     const signatureBreaking = (report.suggestions ?? []).find(
-      (entry) => entry.kind === "breakingChange" && entry.symbol === "helperFunction" && entry.details?.includes("signature changed"),
+      (entry) =>
+        entry.kind === "breakingChange" &&
+        entry.symbol === "helperFunction" &&
+        entry.details?.includes("signature changed"),
     );
     expect(signatureBreaking).toBeUndefined();
   });
@@ -385,7 +397,10 @@ index 1111111..2222222 100644
     });
 
     const signatureBreaking = (report.suggestions ?? []).find(
-      (entry) => entry.kind === "breakingChange" && entry.symbol === "helperFunction" && entry.details?.includes("signature changed"),
+      (entry) =>
+        entry.kind === "breakingChange" &&
+        entry.symbol === "helperFunction" &&
+        entry.details?.includes("signature changed"),
     );
     expect(signatureBreaking).toBeUndefined();
   });
@@ -412,7 +427,10 @@ index 1111111..2222222 100644
     });
 
     const breaking = (report.suggestions ?? []).find(
-      (entry) => entry.kind === "breakingChange" && entry.symbol === "helperFunction" && entry.details?.includes("removed or renamed"),
+      (entry) =>
+        entry.kind === "breakingChange" &&
+        entry.symbol === "helperFunction" &&
+        entry.details?.includes("removed or renamed"),
     );
     expect(breaking).toBeDefined();
     expect(breaking?.confidence).toBe("medium");
@@ -441,7 +459,10 @@ index 1111111..2222222 100644
     });
 
     const renameForFirst = (report.suggestions ?? []).find(
-      (entry) => entry.kind === "breakingChange" && entry.symbol === "helperFunction" && entry.details?.includes("totallyDifferentName"),
+      (entry) =>
+        entry.kind === "breakingChange" &&
+        entry.symbol === "helperFunction" &&
+        entry.details?.includes("totallyDifferentName"),
     );
     expect(renameForFirst).toBeUndefined();
   });
@@ -518,7 +539,9 @@ index 3333333..4444444 100644
         testCoverageSuggestions: true,
       });
 
-      const alphaSuggestion = (report.suggestions ?? []).find((entry) => entry.kind === "untestedChange" && entry.symbol === "alpha");
+      const alphaSuggestion = (report.suggestions ?? []).find(
+        (entry) => entry.kind === "untestedChange" && entry.symbol === "alpha",
+      );
       expect(alphaSuggestion).toBeDefined();
       expect(alphaSuggestion?.details?.includes("b.test.ts")).toBe(false);
     } finally {
@@ -547,7 +570,9 @@ index 1111111..2222222 100644
         lcovPaths: [lcovPath],
       });
 
-      const untested = (report.suggestions ?? []).find((entry) => entry.kind === "untestedChange" && entry.symbol === "helperFunction");
+      const untested = (report.suggestions ?? []).find(
+        (entry) => entry.kind === "untestedChange" && entry.symbol === "helperFunction",
+      );
       expect(untested).toBeDefined();
       expect(untested?.confidence).toBe("high");
       expect(untested?.details?.includes("Coverage currently exercises 0/")).toBe(true);
@@ -682,7 +707,9 @@ index 1111111..2222222 100644
         testCoverageSuggestions: true,
         coveragePaths: [coveragePath],
       });
-      const untested = (report.suggestions ?? []).find((entry) => entry.kind === "untestedChange" && entry.symbol === "helperFunction");
+      const untested = (report.suggestions ?? []).find(
+        (entry) => entry.kind === "untestedChange" && entry.symbol === "helperFunction",
+      );
       expect(untested?.details?.includes("Coverage currently exercises 0/")).toBe(true);
     } finally {
       await fsp.rm(coveragePath, { force: true });
@@ -735,7 +762,9 @@ index 1111111..2222222 100644
       testCoverageSuggestions: true,
       testCommandTemplate: "pnpm vitest {files}",
     });
-    const untested = (report.suggestions ?? []).find((entry) => entry.kind === "untestedChange" && entry.symbol === "helperFunction");
+    const untested = (report.suggestions ?? []).find(
+      (entry) => entry.kind === "untestedChange" && entry.symbol === "helperFunction",
+    );
     expect(untested?.confidence).toBe("high");
     expect(untested?.details?.includes("Suggested command: pnpm vitest")).toBe(true);
   });
@@ -765,7 +794,9 @@ index 1111111..2222222 100644
       verifyReferences: false,
     });
 
-    const untested = (report.suggestions ?? []).find((entry) => entry.kind === "untestedChange" && entry.symbol === "helper_function");
+    const untested = (report.suggestions ?? []).find(
+      (entry) => entry.kind === "untestedChange" && entry.symbol === "helper_function",
+    );
     expect(untested).toBeDefined();
   });
 
@@ -804,7 +835,9 @@ index 1111111..2222222 100644
       verifyReferences: false,
     });
 
-    const untested = (report.suggestions ?? []).find((entry) => entry.kind === "untestedChange" && entry.symbol === "helper_function");
+    const untested = (report.suggestions ?? []).find(
+      (entry) => entry.kind === "untestedChange" && entry.symbol === "helper_function",
+    );
     expect(untested).toBeUndefined();
   });
 
@@ -823,7 +856,9 @@ index 1111111..2222222 100644
       testCoverageSuggestions: true,
       testCommandTemplate: "pytest -q",
     });
-    const untested = (report.suggestions ?? []).find((entry) => entry.kind === "untestedChange" && entry.symbol === "helperFunction");
+    const untested = (report.suggestions ?? []).find(
+      (entry) => entry.kind === "untestedChange" && entry.symbol === "helperFunction",
+    );
     expect(untested?.details?.includes("Suggested command: pytest -q")).toBe(true);
   });
 
@@ -873,7 +908,9 @@ index 1111111..2222222 100644
         lcovPaths: [lcovPath],
         coveragePaths: [jsonPath],
       });
-      const untested = (report.suggestions ?? []).find((entry) => entry.kind === "untestedChange" && entry.symbol === "helperFunction");
+      const untested = (report.suggestions ?? []).find(
+        (entry) => entry.kind === "untestedChange" && entry.symbol === "helperFunction",
+      );
       expect(untested?.details?.includes("Coverage currently exercises")).toBe(true);
       expect(untested?.confidence === "low" || untested?.confidence === "medium").toBe(true);
     } finally {

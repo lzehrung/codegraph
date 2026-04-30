@@ -7,7 +7,11 @@ export function normalizeImpactFilePath(projectRoot: string, filePath: string): 
   return normalizePath(resolveFilePathFromRoot(projectRoot, filePath));
 }
 
-export function assertImpactFilePathWithinRoot(projectRoot: string, filePath: string, label: string = "Impact file"): string {
+export function assertImpactFilePathWithinRoot(
+  projectRoot: string,
+  filePath: string,
+  label: string = "Impact file",
+): string {
   const normalized = normalizeImpactFilePath(projectRoot, filePath);
   if (!isFilePathWithinRoot(projectRoot, normalized)) {
     throw new Error(`${label} is outside project root: ${normalized} (root: ${normalizePath(projectRoot)})`);
@@ -32,7 +36,10 @@ export function toImpactReportFilePath(projectRoot: string, filePath: string): s
   return toProjectRelativePath(projectRoot, filePath) ?? normalizePath(filePath);
 }
 
-export function createImpactIgnoreMatcher(projectRoot: string, ignoreGlobs: readonly string[]): (filePath: string) => boolean {
+export function createImpactIgnoreMatcher(
+  projectRoot: string,
+  ignoreGlobs: readonly string[],
+): (filePath: string) => boolean {
   if (ignoreGlobs.length === 0) {
     return () => false;
   }

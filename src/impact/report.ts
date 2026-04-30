@@ -425,7 +425,9 @@ function buildCompactReport(
           kind: suggestion.kind,
           ...(suggestion.range ? { range: suggestion.range } : {}),
           ...(suggestion.symbol ? { symbol: suggestion.symbol } : {}),
-          ...(suggestion.relatedFile !== undefined ? { relatedFile: fileIndex.get(displayFile(suggestion.relatedFile))! } : {}),
+          ...(suggestion.relatedFile !== undefined
+            ? { relatedFile: fileIndex.get(displayFile(suggestion.relatedFile))! }
+            : {}),
           ...(suggestion.details ? { details: suggestion.details } : {}),
           confidence: suggestion.confidence,
         }))
@@ -764,7 +766,11 @@ function buildClusters(
   return clusters;
 }
 
-function buildSurfaceArea(index: ProjectIndex, diffFiles: FileChange[], impactedItems: ImpactItem[]): ImpactSurfaceArea {
+function buildSurfaceArea(
+  index: ProjectIndex,
+  diffFiles: FileChange[],
+  impactedItems: ImpactItem[],
+): ImpactSurfaceArea {
   const fanIn = new Map<FileId, number>();
   const fanOut = new Map<FileId, number>();
 

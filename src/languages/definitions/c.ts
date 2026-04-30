@@ -29,7 +29,8 @@ const isWithin = (node: SyntaxNodeLike, ancestor: SyntaxNodeLike | null): boolea
   return false;
 };
 
-const isInField = (node: SyntaxNodeLike, parent: SyntaxNodeLike, field: string): boolean => isWithin(node, parent.childForFieldName(field));
+const isInField = (node: SyntaxNodeLike, parent: SyntaxNodeLike, field: string): boolean =>
+  isWithin(node, parent.childForFieldName(field));
 
 const findAncestor = (node: SyntaxNodeLike, types: Set<string>): SyntaxNodeLike | null => {
   let current: SyntaxNodeLike | null = node.parent;
@@ -127,7 +128,14 @@ export const C_DEF: LanguageDefinition = {
         captureId: "macro",
       },
     ],
-    splitPoints: ["if_statement", "for_statement", "while_statement", "do_statement", "switch_statement", "case_statement"],
+    splitPoints: [
+      "if_statement",
+      "for_statement",
+      "while_statement",
+      "do_statement",
+      "switch_statement",
+      "case_statement",
+    ],
     comments: ["comment"],
   },
   graph: {
@@ -175,7 +183,8 @@ export const C_DEF: LanguageDefinition = {
   classifyDefinition: (node) => {
     const parent = node.parent;
     if (!parent) return "variable";
-    if (parent.type === "struct_specifier" || parent.type === "union_specifier" || parent.type === "enum_specifier") return "class";
+    if (parent.type === "struct_specifier" || parent.type === "union_specifier" || parent.type === "enum_specifier")
+      return "class";
     if (parent.type === "type_definition" && isInField(node, parent, "declarator")) return "type";
     const container = findAncestor(node, containerTypes);
     if (container?.type === "function_definition") return "function";

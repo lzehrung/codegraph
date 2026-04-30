@@ -2,7 +2,13 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { buildProjectIndexFromFiles, findReferences, goToDefinition, listSymbols, type ProjectIndex } from "../src/index.js";
+import {
+  buildProjectIndexFromFiles,
+  findReferences,
+  goToDefinition,
+  listSymbols,
+  type ProjectIndex,
+} from "../src/index.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
@@ -51,7 +57,10 @@ function normalizeGraphEdges(index: ProjectIndex): string[] {
     .sort();
 }
 
-function normalizeSymbols(index: ProjectIndex, expectations: SymbolExpectation[] | undefined): Record<string, string[]> {
+function normalizeSymbols(
+  index: ProjectIndex,
+  expectations: SymbolExpectation[] | undefined,
+): Record<string, string[]> {
   if (!expectations) {
     return {};
   }
@@ -174,7 +183,12 @@ async function createTypeScriptNormalizationCase(): Promise<SemanticExpectation>
 
   await fsp.writeFile(
     moduleFile,
-    ["class InternalClass {}", "export class ExportedClass {}", "const assigned = InternalClass;", "export = assigned;"].join("\n"),
+    [
+      "class InternalClass {}",
+      "export class ExportedClass {}",
+      "const assigned = InternalClass;",
+      "export = assigned;",
+    ].join("\n"),
     "utf8",
   );
   await fsp.writeFile(

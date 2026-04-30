@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
 import type { ToolContext } from "@opencode-ai/plugin/tool";
-import { definition, graph, impact, impact_stream, overview, references, grep } from "../packages/codegraph-opencode-plugin/src/index.js";
+import {
+  definition,
+  graph,
+  impact,
+  impact_stream,
+  overview,
+  references,
+  grep,
+} from "../packages/codegraph-opencode-plugin/src/index.js";
 
 type ToolOutput = {
   status: "ok" | "error";

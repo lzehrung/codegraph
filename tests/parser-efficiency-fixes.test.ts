@@ -86,7 +86,10 @@ describe("signatureChanged hint accuracy", () => {
       const file = path.join(root, "lib.ts");
       const consumer = path.join(root, "app.ts");
       // Write the POST-diff (new) file: body changed, params unchanged.
-      await fsp.writeFile(file, ["export function compute(x: number): number {", "  return x * 3;", "}"].join("\n") + "\n");
+      await fsp.writeFile(
+        file,
+        ["export function compute(x: number): number {", "  return x * 3;", "}"].join("\n") + "\n",
+      );
       await fsp.writeFile(consumer, 'import { compute } from "./lib"; console.log(compute(5));\n');
       const index = await buildProjectIndex(root);
 
@@ -301,7 +304,10 @@ describe("method_definition in isDeclarationName", () => {
         path.join(root, "lib.js"),
         ["export class Calculator {", "  add(a, b) {", "    return a + b;", "  }", "}"].join("\n") + "\n",
       );
-      await fsp.writeFile(path.join(root, "app.js"), 'import { Calculator } from "./lib.js"; new Calculator().add(1, 2);\n');
+      await fsp.writeFile(
+        path.join(root, "app.js"),
+        'import { Calculator } from "./lib.js"; new Calculator().add(1, 2);\n',
+      );
 
       const index = await buildProjectIndex(root);
       const { locateChangedSymbols } = await import("../src/impact/map.js");
@@ -311,7 +317,9 @@ describe("method_definition in isDeclarationName", () => {
       expect(mod).toBeDefined();
 
       // Simulate changing line 3 (inside the method body)
-      const changed = await locateChangedSymbols(index, libFile, [{ oldStart: 3, newStart: 3, lines: ["+    // body edit"] }]);
+      const changed = await locateChangedSymbols(index, libFile, [
+        { oldStart: 3, newStart: 3, lines: ["+    // body edit"] },
+      ]);
 
       // The change should be attributed to the Calculator class (since methods
       // aren't tracked as separate locals, the search climbs to the class)
@@ -326,7 +334,10 @@ describe("method_definition in isDeclarationName", () => {
         path.join(root, "service.ts"),
         ["export class UserService {", "  fetchUser(id: number) {", "    return { id };", "  }", "}"].join("\n") + "\n",
       );
-      await fsp.writeFile(path.join(root, "main.ts"), 'import { UserService } from "./service"; new UserService().fetchUser(1);\n');
+      await fsp.writeFile(
+        path.join(root, "main.ts"),
+        'import { UserService } from "./service"; new UserService().fetchUser(1);\n',
+      );
 
       const index = await buildProjectIndex(root);
       const { locateChangedSymbols } = await import("../src/impact/map.js");
@@ -334,7 +345,9 @@ describe("method_definition in isDeclarationName", () => {
       const svcFile = path.join(root, "service.ts").replace(/\\/g, "/");
 
       // Simulate changing line 3 (inside method body)
-      const changed = await locateChangedSymbols(index, svcFile, [{ oldStart: 3, newStart: 3, lines: ["+    // body edit"] }]);
+      const changed = await locateChangedSymbols(index, svcFile, [
+        { oldStart: 3, newStart: 3, lines: ["+    // body edit"] },
+      ]);
 
       // Should be attributed to UserService (method not a separate local in TS)
       expect(changed.some((s) => s.name === "UserService")).toBe(true);
@@ -360,7 +373,9 @@ describe("TypeScript declare module augmentation", () => {
 
       // There should be an edge from react-augment.d.ts to the external 'react' package
       const augmentFile = path.join(root, "react-augment.d.ts").replace(/\\/g, "/");
-      const edges = index.graph.edges.filter((e: Edge) => e.from === augmentFile && e.to.type === "external" && e.to.name === "react");
+      const edges = index.graph.edges.filter(
+        (e: Edge) => e.from === augmentFile && e.to.type === "external" && e.to.name === "react",
+      );
       expect(edges.length).toBeGreaterThan(0);
       // Ambient module augmentations are purely type-level dependencies
       expect(edges.every((edge) => edge.typeOnly === true)).toBe(true);
@@ -397,7 +412,9 @@ describe("appendUniqueSpecifiers deduplication", () => {
       const htmlFile = path.join(root, "index.html").replace(/\\/g, "/");
       const appFile = path.join(root, "app.js").replace(/\\/g, "/");
 
-      const edgesFromHtml = index.graph.edges.filter((e: Edge) => e.from === htmlFile && e.to.type === "file" && e.to.path === appFile);
+      const edgesFromHtml = index.graph.edges.filter(
+        (e: Edge) => e.from === htmlFile && e.to.type === "file" && e.to.path === appFile,
+      );
 
       // Both extraction paths discovered ./app.js but it should appear once
       expect(edgesFromHtml.length).toBe(1);

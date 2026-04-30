@@ -18,7 +18,11 @@ describe("go.work multi-module import resolution", () => {
     await fsp.mkdir(path.join(appDir, "cmd"), { recursive: true });
     await fsp.mkdir(path.join(libDir, "pkg", "greet"), { recursive: true });
 
-    await fsp.writeFile(path.join(root, "go.work"), ["go 1.22", "", "use (", "  ./app", "  ./lib", ")", ""].join("\n"), "utf8");
+    await fsp.writeFile(
+      path.join(root, "go.work"),
+      ["go 1.22", "", "use (", "  ./app", "  ./lib", ")", ""].join("\n"),
+      "utf8",
+    );
 
     await fsp.writeFile(path.join(appDir, "go.mod"), ["module example.com/app", "", "go 1.22", ""].join("\n"), "utf8");
 

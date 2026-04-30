@@ -20,7 +20,10 @@ describe("Monorepo workspace support", () => {
 
   it("creates graph edges from pkg-b to pkg-a via workspace resolution", async () => {
     const root = path.join(process.cwd(), "tests", "samples", "monorepo");
-    const files = [path.join(root, "packages", "pkg-a", "src", "index.ts"), path.join(root, "packages", "pkg-b", "src", "index.js")];
+    const files = [
+      path.join(root, "packages", "pkg-a", "src", "index.ts"),
+      path.join(root, "packages", "pkg-b", "src", "index.js"),
+    ];
     const graph = await collectGraph(root, files);
     // Assert we have an edge for the raw specifier from pkg-b to @acme/pkg-a
     const hasEdgeByRaw = graph.edges.some(
@@ -31,10 +34,15 @@ describe("Monorepo workspace support", () => {
 
   it("treats unknown packages as external while resolving workspace packages", async () => {
     const root = path.join(process.cwd(), "tests", "samples", "monorepo");
-    const files = [path.join(root, "packages", "pkg-a", "src", "index.ts"), path.join(root, "packages", "pkg-b", "src", "index.js")];
+    const files = [
+      path.join(root, "packages", "pkg-a", "src", "index.ts"),
+      path.join(root, "packages", "pkg-b", "src", "index.js"),
+    ];
     const graph = await collectGraph(root, files);
     const hasPkgA = graph.edges.some((e) => e.raw === "@acme/pkg-a" && e.to.type === "file");
-    const hasExternal = graph.edges.some((e) => e.raw === "not-a-package" && e.to.type === "external" && e.to.name === "not-a-package");
+    const hasExternal = graph.edges.some(
+      (e) => e.raw === "not-a-package" && e.to.type === "external" && e.to.name === "not-a-package",
+    );
     expect(hasPkgA).toBe(true);
     expect(hasExternal).toBe(true);
   });

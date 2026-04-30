@@ -11,7 +11,10 @@ const DEFAULT_TEST_PATTERNS: readonly RegExp[] = [
   /(^|\/)[^/]*[-_.](test|spec)\.[^./]+$/i,
 ];
 
-export function compileTestPatterns(patterns: string[] | undefined, onInvalidPattern?: (pattern: string, error: Error) => void): RegExp[] {
+export function compileTestPatterns(
+  patterns: string[] | undefined,
+  onInvalidPattern?: (pattern: string, error: Error) => void,
+): RegExp[] {
   const out = [...DEFAULT_TEST_PATTERNS];
   for (const pattern of patterns ?? []) {
     try {
@@ -68,7 +71,9 @@ export function createIndexTestFileMatcher(
   projectRootOverride?: string,
   referenceFiles: readonly FileId[] = [],
 ): (file: FileId) => boolean {
-  const projectRoot = projectRootOverride ? normalizePath(projectRootOverride) : inferIndexProjectRoot(index, referenceFiles);
+  const projectRoot = projectRootOverride
+    ? normalizePath(projectRootOverride)
+    : inferIndexProjectRoot(index, referenceFiles);
 
   return (file: FileId): boolean => {
     const normalized = normalizePath(file);

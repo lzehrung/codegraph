@@ -6,7 +6,12 @@
 import path from "node:path";
 import type { ProjectIndex, BuildOptions, GoToResult, Reference, SymbolDef } from "./indexer.js";
 import { buildProjectIndex, buildProjectIndexIncremental, findReferences, goToDefinition } from "./indexer.js";
-import { analyzeImpactFromDiff, type ImpactOptions, type ImpactReport, type CompactImpactReport } from "./impact/index.js";
+import {
+  analyzeImpactFromDiff,
+  type ImpactOptions,
+  type ImpactReport,
+  type CompactImpactReport,
+} from "./impact/index.js";
 import { analyzeImpactStreaming, type ImpactStreamChunk } from "./impact/streaming.js";
 import { getSessionPreset, mergePreset, type PresetName } from "./presets.js";
 import { assertFilePathWithinRoot } from "./util.js";
@@ -84,7 +89,9 @@ function normalizeBuildOptions(options?: BuildOptions): Record<string, unknown> 
 function resolveSessionIdentity(options: SessionOptions): SessionIdentity {
   if (options.preset) {
     const presetOpts = getSessionPreset(options.preset, options.root);
-    const buildOptions = options.buildOptions ? mergePreset(presetOpts.buildOptions ?? {}, options.buildOptions) : presetOpts.buildOptions;
+    const buildOptions = options.buildOptions
+      ? mergePreset(presetOpts.buildOptions ?? {}, options.buildOptions)
+      : presetOpts.buildOptions;
     const normalizedBuildOptions = normalizeBuildOptions(buildOptions);
     return {
       root: path.resolve(options.root),
@@ -119,7 +126,11 @@ type SessionFindReferencesResult =
 
 type SessionGoToDefinitionResult = GoToResult | SessionInputError;
 
-function resolveSessionFileInput(root: string, file: string, label: string): { status: "ok"; file: string } | SessionInputError {
+function resolveSessionFileInput(
+  root: string,
+  file: string,
+  label: string,
+): { status: "ok"; file: string } | SessionInputError {
   try {
     return {
       status: "ok",
@@ -184,7 +195,9 @@ export class CodeReviewSession implements ICodeReviewSession {
     this.root = identity.root;
     if (options.preset) {
       const presetBuildOptions = getSessionPreset(options.preset, options.root).buildOptions;
-      this.buildOptions = options.buildOptions ? mergePreset(presetBuildOptions ?? {}, options.buildOptions) : presetBuildOptions;
+      this.buildOptions = options.buildOptions
+        ? mergePreset(presetBuildOptions ?? {}, options.buildOptions)
+        : presetBuildOptions;
     } else {
       this.buildOptions = options.buildOptions;
     }
@@ -433,7 +446,11 @@ export class SessionManager {
     }
   >();
 
-  private createSessionConfigurationError(sessionId: string, existing: CodeReviewSession, options: SessionOptions): Error {
+  private createSessionConfigurationError(
+    sessionId: string,
+    existing: CodeReviewSession,
+    options: SessionOptions,
+  ): Error {
     return new Error(
       `Session "${sessionId}" already exists for a different configuration (existing root: ${existing.getRoot()}, requested root: ${path.resolve(options.root)}). Use a different session id or dispose the existing session first.`,
     );
@@ -448,7 +465,10 @@ export class SessionManager {
     return existing;
   }
 
-  private getPendingCompatibleSession(sessionId: string, options: SessionOptions): Promise<CodeReviewSession> | undefined {
+  private getPendingCompatibleSession(
+    sessionId: string,
+    options: SessionOptions,
+  ): Promise<CodeReviewSession> | undefined {
     const pending = this.pendingSessions.get(sessionId);
     if (!pending) return undefined;
     const requestedFingerprint = sessionIdentityFingerprint(resolveSessionIdentity(options));

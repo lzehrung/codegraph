@@ -7,7 +7,15 @@ import type { JsLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/ty
 import type { Range } from "../types.js";
 import type { ImportBinding } from "./types.js";
 
-export type BindingKind = "local" | "param" | "function" | "class" | "type" | "importDefault" | "importNamed" | "namespace";
+export type BindingKind =
+  | "local"
+  | "param"
+  | "function"
+  | "class"
+  | "type"
+  | "importDefault"
+  | "importNamed"
+  | "namespace";
 
 export type Binding = {
   name: string;

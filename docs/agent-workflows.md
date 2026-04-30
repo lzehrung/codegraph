@@ -223,7 +223,13 @@ const neighbors = querySymbolNeighbors(symbolGraph, {
 These wrappers are designed to be imported directly into agent runtimes:
 
 ```ts
-import { tool_getFileOverview, tool_findSymbol, tool_impactJSON, tool_getGraph, tool_goToDefinition } from "@lzehrung/codegraph";
+import {
+  tool_getFileOverview,
+  tool_findSymbol,
+  tool_impactJSON,
+  tool_getGraph,
+  tool_goToDefinition,
+} from "@lzehrung/codegraph";
 
 const overview = await tool_getFileOverview(process.cwd(), "src/utils.ts");
 const matches = await tool_findSymbol(process.cwd(), "collectGraph");
@@ -284,7 +290,9 @@ const apiRoutes = impact.impacted.filter(
   (item) => item.file.includes("routes") || item.file.includes("controllers") || item.file.includes("api"),
 );
 
-const breakingChanges = impact.changedSymbols.filter((symbol) => symbol.exported && symbol.explain?.hints?.includes("signatureChanged"));
+const breakingChanges = impact.changedSymbols.filter(
+  (symbol) => symbol.exported && symbol.explain?.hints?.includes("signatureChanged"),
+);
 
 console.log(`API routes impacted: ${apiRoutes.length}`);
 console.log(`Breaking changes: ${breakingChanges.length}`);
@@ -342,7 +350,12 @@ console.log(`Medium-priority tests to check: ${mediumPriorityTests.length}`);
 ```ts
 import { textGrep } from "@lzehrung/codegraph";
 
-const securityPatterns = ["exec\\(|eval\\(|spawn\\(", "password|secret|key.*=", "sql.*\\+|\\$\\{.*\\}", "innerHTML|outerHTML"];
+const securityPatterns = [
+  "exec\\(|eval\\(|spawn\\(",
+  "password|secret|key.*=",
+  "sql.*\\+|\\$\\{.*\\}",
+  "innerHTML|outerHTML",
+];
 
 const securityFindings: Array<{ file: string; pattern: string; line: number }> = [];
 
@@ -391,7 +404,11 @@ if (configChanges.length > 0) {
 
 ```ts
 const perfHotspots = impact.impacted.filter(
-  (item) => item.file.includes("query") || item.file.includes("cache") || item.file.includes("index") || item.file.includes("perf"),
+  (item) =>
+    item.file.includes("query") ||
+    item.file.includes("cache") ||
+    item.file.includes("index") ||
+    item.file.includes("perf"),
 );
 
 if (perfHotspots.length > 0) {

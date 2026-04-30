@@ -78,21 +78,32 @@ nativeDescribe("native query ownership parity", () => {
       {
         config: LANG_CONFIGS.javascript,
         filePath: "sample.js",
-        source: ["function alpha(input) {", "  if (!input) return 0;", "  return input + 1;", "}", "", "const beta = () => alpha(2);"].join(
-          "\n",
-        ),
+        source: [
+          "function alpha(input) {",
+          "  if (!input) return 0;",
+          "  return input + 1;",
+          "}",
+          "",
+          "const beta = () => alpha(2);",
+        ].join("\n"),
       },
       {
         config: LANG_CONFIGS.typescript,
         filePath: "sample.ts",
-        source: ["export namespace Tools {", "  export function build(value: number): number {", "    return value + 1;", "  }", "}"].join(
-          "\n",
-        ),
+        source: [
+          "export namespace Tools {",
+          "  export function build(value: number): number {",
+          "    return value + 1;",
+          "  }",
+          "}",
+        ].join("\n"),
       },
       {
         config: LANG_CONFIGS.python,
         filePath: "sample.py",
-        source: ["def classify(value):", "    if value > 0:", '        return "positive"', '    return "zero"'].join("\n"),
+        source: ["def classify(value):", "    if value > 0:", '        return "positive"', '    return "zero"'].join(
+          "\n",
+        ),
       },
     ];
 

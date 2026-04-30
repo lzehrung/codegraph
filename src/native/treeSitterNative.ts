@@ -102,7 +102,10 @@ type NativeBinding = {
 };
 
 const require = createRequire(import.meta.url);
-const localNativePackageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../packages/codegraph-native");
+const localNativePackageRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../packages/codegraph-native",
+);
 
 let bindingState:
   | { loaded: true; binding: NativeBinding; supportedLanguageIds: Set<string> }
@@ -126,7 +129,9 @@ function normalizeNativeRuntimeMode(mode?: NativeRuntimeMode): NativeRuntimeMode
   return mode ?? "auto";
 }
 
-function loadBinding(): { loaded: true; binding: NativeBinding; supportedLanguageIds: Set<string> } | { loaded: false; error?: unknown } {
+function loadBinding():
+  | { loaded: true; binding: NativeBinding; supportedLanguageIds: Set<string> }
+  | { loaded: false; error?: unknown } {
   if (bindingState) return bindingState;
   const loaded = loadNativeBinding<NativeBinding>({
     packageName: "@lzehrung/codegraph-native",
@@ -163,7 +168,11 @@ function resolveNativeBindingState(mode?: NativeRuntimeMode, env: NodeJS.Process
   return loadBinding();
 }
 
-export function normalizeNativeQueryForSupport(support: LanguageSupport, kind: NativeCompatibilityQueryKind, queryText: string): string {
+export function normalizeNativeQueryForSupport(
+  support: LanguageSupport,
+  kind: NativeCompatibilityQueryKind,
+  queryText: string,
+): string {
   return support.native?.normalizeQuery?.(kind, queryText) ?? queryText;
 }
 
@@ -174,7 +183,10 @@ export function normalizeNativeQueryForSupport(support: LanguageSupport, kind: N
  */
 const normalizedQueryCache = new Map<string, Map<NativeQueryKind, { text: string; wasModified: boolean }>>();
 
-function getOrComputeNormalizedEntry(support: LanguageSupport, kind: NativeQueryKind): { text: string; wasModified: boolean } {
+function getOrComputeNormalizedEntry(
+  support: LanguageSupport,
+  kind: NativeQueryKind,
+): { text: string; wasModified: boolean } {
   let byKind = normalizedQueryCache.get(support.id);
   if (!byKind) {
     byKind = new Map();
@@ -254,11 +266,17 @@ export function getNativeTreeSitterSupportedLanguageIds(mode?: NativeRuntimeMode
   return state.loaded ? Array.from(state.supportedLanguageIds).sort() : [];
 }
 
-export function runNativeLanguageQueries(source: string, support: LanguageSupport, mode?: NativeRuntimeMode): NativeQueryResults | null {
+export function runNativeLanguageQueries(
+  source: string,
+  support: LanguageSupport,
+  mode?: NativeRuntimeMode,
+): NativeQueryResults | null {
   return getNativeQueryExecution(source, support, mode).results;
 }
 
-type NativeBindingState = { loaded: true; binding: NativeBinding; supportedLanguageIds: Set<string> } | { loaded: false; error?: unknown };
+type NativeBindingState =
+  | { loaded: true; binding: NativeBinding; supportedLanguageIds: Set<string> }
+  | { loaded: false; error?: unknown };
 
 const NATIVE_REQUIRED_ERROR_PREFIX = "native tree-sitter required by explicit option but unavailable";
 
@@ -365,7 +383,11 @@ export function isNativeBindingLoadedForLanguage(languageId: string, mode?: Nati
  * Falls back to the full execution path if the compact entrypoint is not
  * available in the native binding.
  */
-export function getCompactImportsExecution(source: string, support: LanguageSupport, mode?: NativeRuntimeMode): CompactImportsExecution {
+export function getCompactImportsExecution(
+  source: string,
+  support: LanguageSupport,
+  mode?: NativeRuntimeMode,
+): CompactImportsExecution {
   const state = resolveNativeBindingState(mode);
   throwIfNativeRequiredUnavailable(mode, state);
   if (!state.loaded) {

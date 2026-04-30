@@ -247,7 +247,11 @@ async function runChildBenchmark(fixture, workload, temperature, mode) {
     child.on("error", reject);
     child.on("close", (code) => {
       if (code !== 0) {
-        reject(new Error(`Benchmark child failed for ${fixture}/${workload}/${temperature}/${mode}: ${stderrChunks.join("").trim()}`));
+        reject(
+          new Error(
+            `Benchmark child failed for ${fixture}/${workload}/${temperature}/${mode}: ${stderrChunks.join("").trim()}`,
+          ),
+        );
         return;
       }
       try {
@@ -315,7 +319,8 @@ function formatSummary(results, { includeWorkers = false } = {}) {
           if (!summary) continue;
           const backend = summary.backend;
           const backendSummary = backend ? `${backend.filesUsed}/${backend.filesFellBack}` : "n/a";
-          const vsJs = mode !== "js" && jsSummary ? formatSpeedup(summary.averageElapsedMs, jsSummary.averageElapsedMs) : "";
+          const vsJs =
+            mode !== "js" && jsSummary ? formatSpeedup(summary.averageElapsedMs, jsSummary.averageElapsedMs) : "";
           const cols = [
             result.fixture.padEnd(12),
             workload.padEnd(8),
@@ -333,7 +338,9 @@ function formatSummary(results, { includeWorkers = false } = {}) {
           ];
           if (includeWorkers) {
             const vsNative =
-              mode === "workers" && nativeSummary ? formatSpeedup(summary.averageElapsedMs, nativeSummary.averageElapsedMs) : "";
+              mode === "workers" && nativeSummary
+                ? formatSpeedup(summary.averageElapsedMs, nativeSummary.averageElapsedMs)
+                : "";
             cols.push(vsNative.padStart(14));
           }
           lines.push(cols.join(" "));

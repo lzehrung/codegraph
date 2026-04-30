@@ -34,7 +34,9 @@ describe("native query normalization", () => {
     expect(support).toBeDefined();
     const normalized = normalizeNativeQueryForSupport(support!, "exports", support!.queries.exports);
     expect(normalized).not.toContain("@ts_export_assign");
-    expect(normalized).toContain("(export_statement declaration: (class_declaration name: (type_identifier) @name)) @stmt");
+    expect(normalized).toContain(
+      "(export_statement declaration: (class_declaration name: (type_identifier) @name)) @stmt",
+    );
     expect(getNativeQueryMetadataForSupport(support!)).toEqual({
       normalizedQueryKinds: ["exports"],
       skippedQueryKinds: [],
@@ -44,7 +46,11 @@ describe("native query normalization", () => {
   it("normalizes tsx class identifier queries for native compatibility", () => {
     const support = supportById("tsx");
     expect(support).toBeDefined();
-    const normalized = normalizeNativeQueryForSupport(support!, "locals", "(class_declaration name: (type_identifier) @name)");
+    const normalized = normalizeNativeQueryForSupport(
+      support!,
+      "locals",
+      "(class_declaration name: (type_identifier) @name)",
+    );
     expect(normalized).toContain("(class_declaration name: (type_identifier) @name)");
     expect(getNativeQueryMetadataForSupport(support!)).toEqual({
       normalizedQueryKinds: ["exports"],
@@ -80,7 +86,11 @@ describe("native query normalization", () => {
       ),
     ).toContain("(import (qualified_identifier) @from (identifier) @alias) @stmt");
     expect(
-      normalizeNativeQueryForSupport(support!, "importBindings", "(import_header (identifier) @from (wildcard_import) @wild) @stmt"),
+      normalizeNativeQueryForSupport(
+        support!,
+        "importBindings",
+        "(import_header (identifier) @from (wildcard_import) @wild) @stmt",
+      ),
     ).toContain('(import (qualified_identifier) @from "*" @wild) @stmt');
     expect(getNativeQueryMetadataForSupport(support!)).toEqual({
       normalizedQueryKinds: ["imports", "exports", "locals", "importBindings"],

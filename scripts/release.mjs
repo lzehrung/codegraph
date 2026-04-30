@@ -34,7 +34,10 @@ const originalRootPackageJson = `${JSON.stringify(
   2,
 )}\n`;
 const originalNativePackageJson = `${JSON.stringify(
-  recoverNativePackageManifestForResume(currentNativePackage, readJsonFromString(readGitFile("packages/codegraph-native/package.json"))),
+  recoverNativePackageManifestForResume(
+    currentNativePackage,
+    readJsonFromString(readGitFile("packages/codegraph-native/package.json")),
+  ),
   null,
   2,
 )}\n`;
@@ -186,7 +189,10 @@ function writePublishReadyRootPackage(versionPlan) {
     return;
   }
   const sourceManifest = JSON.parse(originalRootPackageJson);
-  writeJson(rootPackagePath, sanitizePublishedRootPackageManifest(restoreRootPackageManifest(sourceManifest, intendedVersion)));
+  writeJson(
+    rootPackagePath,
+    sanitizePublishedRootPackageManifest(restoreRootPackageManifest(sourceManifest, intendedVersion)),
+  );
 }
 
 function restoreRootPackage(versionPlan) {
@@ -221,7 +227,12 @@ function getBaselineTagForPackage(packageName) {
 }
 
 function packageExistsInRegistry(packageName, version) {
-  const result = runOutput("npm", ["view", `${packageName}@${version}`, "version", "--registry=https://npm.pkg.github.com"]);
+  const result = runOutput("npm", [
+    "view",
+    `${packageName}@${version}`,
+    "version",
+    "--registry=https://npm.pkg.github.com",
+  ]);
   return result.status === 0 && result.stdout === version;
 }
 

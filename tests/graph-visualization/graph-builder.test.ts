@@ -185,7 +185,10 @@ describe("buildGraph -- edge cases", () => {
   });
 
   it("handles empty compact payload", () => {
-    const graph = buildGraph({ files: [], fileEdges: [], symbols: [], symbolEdges: [] }, { showExternal: false, includeSymbols: false });
+    const graph = buildGraph(
+      { files: [], fileEdges: [], symbols: [], symbolEdges: [] },
+      { showExternal: false, includeSymbols: false },
+    );
     expect(graph.order).toBe(0);
     expect(graph.size).toBe(0);
   });

@@ -14,7 +14,11 @@ describe("Graph output styles", () => {
     const util = path.join(root, "util.ts");
     const main = path.join(root, "main.ts");
     await fsp.writeFile(util, "export type T = { n: number };\nexport const f = () => 1;\n", "utf8");
-    await fsp.writeFile(main, 'import type { T } from "./util";\nimport { f } from "./util";\nconst x: T = { n: f() };\n', "utf8");
+    await fsp.writeFile(
+      main,
+      'import type { T } from "./util";\nimport { f } from "./util";\nconst x: T = { n: f() };\n',
+      "utf8",
+    );
     const files = [util, main].map((f) => f.replace(/\\/g, "/"));
     const g = await collectGraph(root, files);
     const mer = graphToMermaid(g);

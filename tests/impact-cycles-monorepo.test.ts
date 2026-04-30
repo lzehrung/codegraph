@@ -69,7 +69,11 @@ index 1111111..2222222 100644
       }),
       "utf8",
     );
-    await fsp.writeFile(path.join(root, "packages", "shared", "package.json"), JSON.stringify({ name: "@repo/shared" }), "utf8");
+    await fsp.writeFile(
+      path.join(root, "packages", "shared", "package.json"),
+      JSON.stringify({ name: "@repo/shared" }),
+      "utf8",
+    );
 
     await fsp.writeFile(path.join(root, "packages", "app", "main.ts"), 'export const app = "app";\n', "utf8");
     await fsp.writeFile(path.join(root, "packages", "shared", "lib.py"), "def helper():\n    return 'ok'\n", "utf8");

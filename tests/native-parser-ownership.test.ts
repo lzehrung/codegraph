@@ -63,7 +63,9 @@ nativeDescribe("native parser ownership", () => {
 
   it("keeps representative source-language navigation on the native runtime when the JS fallback package is unavailable", async () => {
     const parseSpy = vi.fn(() => {
-      throw new Error("JS Tree-sitter fallback is unavailable for grammar loading. Install @lzehrung/codegraph-js-fallback to enable it");
+      throw new Error(
+        "JS Tree-sitter fallback is unavailable for grammar loading. Install @lzehrung/codegraph-js-fallback to enable it",
+      );
     });
     const querySpy = vi.fn(() => {
       throw new Error(
@@ -215,7 +217,9 @@ nativeDescribe("native parser ownership", () => {
       });
 
       if (testCase.symbolFile && testCase.symbolNames) {
-        const seen = new Set(listSymbols(index, { file: normalizeFile(testCase.symbolFile) }).map((symbol) => symbol.name));
+        const seen = new Set(
+          listSymbols(index, { file: normalizeFile(testCase.symbolFile) }).map((symbol) => symbol.name),
+        );
         for (const name of testCase.symbolNames) {
           expect(seen.has(name)).toBe(true);
         }
@@ -242,7 +246,9 @@ nativeDescribe("native parser ownership", () => {
 
   it("builds detailed TypeScript symbol edges without loading the JS fallback package", async () => {
     const parseSpy = vi.fn(() => {
-      throw new Error("JS Tree-sitter fallback is unavailable for grammar loading. Install @lzehrung/codegraph-js-fallback to enable it");
+      throw new Error(
+        "JS Tree-sitter fallback is unavailable for grammar loading. Install @lzehrung/codegraph-js-fallback to enable it",
+      );
     });
     const querySpy = vi.fn(() => {
       throw new Error(

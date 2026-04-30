@@ -35,7 +35,10 @@ describe("AngularJS framework characterization", () => {
     );
 
     expect(
-      graph.edges.some((edge) => edge.from === controllerFile && edge.to.type === "file" && normalizePath(edge.to.path) === serviceFile),
+      graph.edges.some(
+        (edge) =>
+          edge.from === controllerFile && edge.to.type === "file" && normalizePath(edge.to.path) === serviceFile,
+      ),
     ).toBe(true);
 
     const nodes = Array.from(detailed.nodes.values()).map((node) => ({
@@ -43,15 +46,23 @@ describe("AngularJS framework characterization", () => {
       file: normalizePath(node.file),
     }));
     const refreshDef = nodes.find((node) => node.file === controllerFile && node.name === "refresh");
-    const importedUserService = nodes.find((node) => node.file === controllerFile && node.name === "userService" && node.kind === "import");
+    const importedUserService = nodes.find(
+      (node) => node.file === controllerFile && node.name === "userService" && node.kind === "import",
+    );
     const serviceDef = nodes.find((node) => node.file === serviceFile && node.name === "userService");
 
     expect(refreshDef).toBeDefined();
     expect(importedUserService).toBeDefined();
     expect(serviceDef).toBeDefined();
-    expect(detailed.edges.some((edge) => edge.from === refreshDef?.id && edge.to === serviceDef?.id && edge.label === "uses")).toBe(true);
     expect(
-      detailed.edges.some((edge) => edge.from === importedUserService?.id && edge.to === serviceDef?.id && edge.label === "userService"),
+      detailed.edges.some(
+        (edge) => edge.from === refreshDef?.id && edge.to === serviceDef?.id && edge.label === "uses",
+      ),
+    ).toBe(true);
+    expect(
+      detailed.edges.some(
+        (edge) => edge.from === importedUserService?.id && edge.to === serviceDef?.id && edge.label === "userService",
+      ),
     ).toBe(true);
   });
 
@@ -77,8 +88,16 @@ describe("AngularJS framework characterization", () => {
           edge.raw === "userService",
       ),
     ).toBe(true);
-    expect(graph.edges.some((edge) => edge.from === controllerFile && edge.to.type === "external" && edge.to.name === "$scope")).toBe(true);
-    expect(graph.edges.some((edge) => edge.from === controllerFile && edge.to.type === "external" && edge.to.name === "$state")).toBe(true);
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === controllerFile && edge.to.type === "external" && edge.to.name === "$scope",
+      ),
+    ).toBe(true);
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === controllerFile && edge.to.type === "external" && edge.to.name === "$state",
+      ),
+    ).toBe(true);
     expect(
       graph.edges.some(
         (edge) =>
@@ -111,9 +130,13 @@ describe("AngularJS framework characterization", () => {
     const root = await mkTmpDir("cg-angularjs-guard-");
     await fsp.writeFile(
       path.join(root, "page-config.js"),
-      ["export const page = createPage({", "  controller: 'UserCtrl',", "  templateUrl: './user-card.template.html',", "});", ""].join(
-        "\n",
-      ),
+      [
+        "export const page = createPage({",
+        "  controller: 'UserCtrl',",
+        "  templateUrl: './user-card.template.html',",
+        "});",
+        "",
+      ].join("\n"),
       "utf8",
     );
     await fsp.writeFile(path.join(root, "user.controller.js"), "export function UserCtrl() {}\n", "utf8");
@@ -126,10 +149,14 @@ describe("AngularJS framework characterization", () => {
     const templateFile = normalizePath(path.join(root, "user-card.template.html"));
 
     expect(
-      graph.edges.some((edge) => edge.from === configFile && edge.to.type === "file" && normalizePath(edge.to.path) === controllerFile),
+      graph.edges.some(
+        (edge) => edge.from === configFile && edge.to.type === "file" && normalizePath(edge.to.path) === controllerFile,
+      ),
     ).toBe(false);
     expect(
-      graph.edges.some((edge) => edge.from === configFile && edge.to.type === "file" && normalizePath(edge.to.path) === templateFile),
+      graph.edges.some(
+        (edge) => edge.from === configFile && edge.to.type === "file" && normalizePath(edge.to.path) === templateFile,
+      ),
     ).toBe(false);
   });
 });

@@ -2,7 +2,13 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { buildProjectIndex, buildSymbolGraphDetailed, parseSymbolQuery, querySymbols, querySymbolNeighbors } from "../src/index.js";
+import {
+  buildProjectIndex,
+  buildSymbolGraphDetailed,
+  parseSymbolQuery,
+  querySymbols,
+  querySymbolNeighbors,
+} from "../src/index.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));

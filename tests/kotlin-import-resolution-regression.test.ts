@@ -2,7 +2,13 @@ import os from "node:os";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { buildProjectIndex, clearResolutionCaches, collectGraph, collectImportsForFile, parseFile } from "../src/index.js";
+import {
+  buildProjectIndex,
+  clearResolutionCaches,
+  collectGraph,
+  collectImportsForFile,
+  parseFile,
+} from "../src/index.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -20,13 +26,21 @@ describe("Kotlin import resolution regression", () => {
 
     await fsp.mkdir(sourceDir, { recursive: true });
     await fsp.mkdir(generatedDir, { recursive: true });
-    await fsp.writeFile(sourceHelperFile, ["package demo.pkg", "class Helper", "fun helperFunction(): Int = 1"].join("\n"), "utf8");
+    await fsp.writeFile(
+      sourceHelperFile,
+      ["package demo.pkg", "class Helper", "fun helperFunction(): Int = 1"].join("\n"),
+      "utf8",
+    );
     await fsp.writeFile(
       sourceServiceFile,
       ["package demo.pkg", "class Service", "fun serviceFunction(): Int = helperFunction()"].join("\n"),
       "utf8",
     );
-    await fsp.writeFile(ignoredHelperFile, ["package demo.pkg", "class Helper", "fun helperFunction(): Int = 999"].join("\n"), "utf8");
+    await fsp.writeFile(
+      ignoredHelperFile,
+      ["package demo.pkg", "class Helper", "fun helperFunction(): Int = 999"].join("\n"),
+      "utf8",
+    );
 
     for (let index = 0; index < 250; index += 1) {
       await fsp.writeFile(
@@ -98,7 +112,11 @@ describe("Kotlin import resolution regression", () => {
 
     await fsp.mkdir(pkgDir, { recursive: true });
     await fsp.mkdir(generatedDir, { recursive: true });
-    await fsp.writeFile(alphaFile, ["package demo.pkg", "class Alpha", "fun helperFunction(): Int = 1"].join("\n"), "utf8");
+    await fsp.writeFile(
+      alphaFile,
+      ["package demo.pkg", "class Alpha", "fun helperFunction(): Int = 1"].join("\n"),
+      "utf8",
+    );
     await fsp.writeFile(betaFile, ["package demo.pkg", "typealias Alias = Alpha"].join("\n"), "utf8");
     await fsp.writeFile(ignoredFile, ["package demo.pkg", "class Generated"].join("\n"), "utf8");
     await fsp.writeFile(
@@ -108,7 +126,11 @@ describe("Kotlin import resolution regression", () => {
     );
 
     clearResolutionCaches();
-    const graph = await collectGraph(root, [mainFile.replace(/\\/g, "/"), alphaFile.replace(/\\/g, "/"), betaFile.replace(/\\/g, "/")]);
+    const graph = await collectGraph(root, [
+      mainFile.replace(/\\/g, "/"),
+      alphaFile.replace(/\\/g, "/"),
+      betaFile.replace(/\\/g, "/"),
+    ]);
 
     const fileEdges = graph.edges
       .filter((edge) => edge.from === mainFile.replace(/\\/g, "/"))

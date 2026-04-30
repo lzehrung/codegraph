@@ -108,7 +108,10 @@ export async function parseFile(file: string): Promise<ParsedFileContext> {
   return parsePreparedFileContext(await prepareFileForIndexing(file));
 }
 
-export async function ensureParsedContext(file: string, parsedEntry?: ParsedFileCacheEntry): Promise<ParsedFileContext> {
+export async function ensureParsedContext(
+  file: string,
+  parsedEntry?: ParsedFileCacheEntry,
+): Promise<ParsedFileContext> {
   if (parsedEntry?.sup) {
     return {
       source: parsedEntry.source,

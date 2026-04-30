@@ -121,11 +121,16 @@ describe("Impact Analyzer Edge Cases", () => {
         const index = await buildProjectIndexFromFiles(root, [libFile, consumerFile], {
           cache: "memory",
         });
-        const impacted = await analyzeImpact(index, [], [{ path: libFile.replace(/\\/g, "/"), kind: "modified", hunks: [] }], {
-          fileLevelFallback: true,
-          fileLevelFallbackPaths: [libFile.replace(/\\/g, "/")],
-          ignoreGlobs: ["consumer.ts"],
-        });
+        const impacted = await analyzeImpact(
+          index,
+          [],
+          [{ path: libFile.replace(/\\/g, "/"), kind: "modified", hunks: [] }],
+          {
+            fileLevelFallback: true,
+            fileLevelFallbackPaths: [libFile.replace(/\\/g, "/")],
+            ignoreGlobs: ["consumer.ts"],
+          },
+        );
 
         expect(impacted).toHaveLength(0);
       } finally {
@@ -202,7 +207,9 @@ describe("Impact Analyzer Edge Cases", () => {
       };
 
       const impacted = new Map();
-      await seedTransitiveFromFiles(index, impacted, [{ path: featureFile, kind: "deleted", hunks: [] }], { includeTests: false });
+      await seedTransitiveFromFiles(index, impacted, [{ path: featureFile, kind: "deleted", hunks: [] }], {
+        includeTests: false,
+      });
 
       expect(Array.from(impacted.values()).some((item) => item.file.endsWith("latest.ts"))).toBe(true);
     });
@@ -253,17 +260,26 @@ describe("Impact Analyzer Edge Cases", () => {
       };
 
       const impactedWithoutPattern = new Map();
-      await seedTransitiveFromFiles(index, impactedWithoutPattern, [{ path: featureFile, kind: "deleted", hunks: [] }], {
-        includeTests: false,
-      });
-      expect(Array.from(impactedWithoutPattern.values()).some((item) => item.file.endsWith("feature.case.ts"))).toBe(true);
+      await seedTransitiveFromFiles(
+        index,
+        impactedWithoutPattern,
+        [{ path: featureFile, kind: "deleted", hunks: [] }],
+        {
+          includeTests: false,
+        },
+      );
+      expect(Array.from(impactedWithoutPattern.values()).some((item) => item.file.endsWith("feature.case.ts"))).toBe(
+        true,
+      );
 
       const impactedWithPattern = new Map();
       await seedTransitiveFromFiles(index, impactedWithPattern, [{ path: featureFile, kind: "deleted", hunks: [] }], {
         includeTests: false,
         testPatterns: ["case\\.ts$"],
       });
-      expect(Array.from(impactedWithPattern.values()).some((item) => item.file.endsWith("feature.case.ts"))).toBe(false);
+      expect(Array.from(impactedWithPattern.values()).some((item) => item.file.endsWith("feature.case.ts"))).toBe(
+        false,
+      );
     });
   });
 
@@ -499,7 +515,14 @@ describe("Impact Analyzer Edge Cases", () => {
       };
 
       const fallbackResult = calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndex);
-      const explicitFanInResult = calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndex, new Map([["user.ts", 2]]));
+      const explicitFanInResult = calculateSeverity(
+        changedSymbol,
+        ref,
+        ["directRef"],
+        0,
+        mockIndex,
+        new Map([["user.ts", 2]]),
+      );
 
       expect(fallbackResult.explain.fanIn).toBe(2);
       expect(fallbackResult).toEqual(explicitFanInResult);

@@ -113,7 +113,10 @@ function aliasMatchesImport(alias: string, rawSpecifier: string): boolean {
   return rawSpecifier === alias;
 }
 
-function collectTsconfigBlastRadius(index: ProjectIndex, aliases: string[]): { aliases: string[]; importers: string[] } {
+function collectTsconfigBlastRadius(
+  index: ProjectIndex,
+  aliases: string[],
+): { aliases: string[]; importers: string[] } {
   if (aliases.length === 0) {
     return { aliases: [], importers: [] };
   }
@@ -173,7 +176,9 @@ function classifyConfigImpact(
     const aliases = collectTsconfigPathAliases(change);
     const blastRadius = collectTsconfigBlastRadius(index, aliases);
     if (blastRadius.aliases.length > 0) {
-      const relImporters = blastRadius.importers.slice(0, 5).map((file) => path.relative(projectRoot, file).replace(/\\/g, "/"));
+      const relImporters = blastRadius.importers
+        .slice(0, 5)
+        .map((file) => path.relative(projectRoot, file).replace(/\\/g, "/"));
       const importerSummary =
         blastRadius.importers.length > 0
           ? `Likely impacted importer files: ${relImporters.join(", ")}${
@@ -186,7 +191,8 @@ function classifyConfigImpact(
       };
     }
     return {
-      details: "TypeScript/JavaScript compiler config changed; type-checking and module resolution can shift project-wide.",
+      details:
+        "TypeScript/JavaScript compiler config changed; type-checking and module resolution can shift project-wide.",
       confidence: "high",
     };
   }
@@ -236,7 +242,8 @@ function classifyConfigImpact(
 
   if (lowerPath.includes(".env")) {
     return {
-      details: "Environment configuration changed; runtime behavior may differ across services and deploy environments.",
+      details:
+        "Environment configuration changed; runtime behavior may differ across services and deploy environments.",
       confidence: "medium",
     };
   }
@@ -648,7 +655,9 @@ function parseExportSignature(line: string): ExportSignature | null {
     };
   }
 
-  const functionMatch = line.match(/^\s*export\s+(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)(?:\s*<[^>]+>)?\s*\(([^)]*)\)/);
+  const functionMatch = line.match(
+    /^\s*export\s+(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)(?:\s*<[^>]+>)?\s*\(([^)]*)\)/,
+  );
   if (functionMatch) {
     const name = functionMatch[1];
     if (!name) return null;
@@ -658,7 +667,9 @@ function parseExportSignature(line: string): ExportSignature | null {
     };
   }
 
-  const constArrowMatch = line.match(/^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:<[^>]+>\s*)?\(([^)]*)\)\s*=>/);
+  const constArrowMatch = line.match(
+    /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:<[^>]+>\s*)?\(([^)]*)\)\s*=>/,
+  );
   if (constArrowMatch) {
     const name = constArrowMatch[1];
     if (!name) return null;
@@ -668,7 +679,9 @@ function parseExportSignature(line: string): ExportSignature | null {
     };
   }
 
-  const constArrowSingleParamMatch = line.match(/^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?([A-Za-z_$][\w$]*)\s*=>/);
+  const constArrowSingleParamMatch = line.match(
+    /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?([A-Za-z_$][\w$]*)\s*=>/,
+  );
   if (constArrowSingleParamMatch) {
     const name = constArrowSingleParamMatch[1];
     if (!name) return null;
@@ -966,7 +979,9 @@ export async function analyzeImpactFromDiff(
     diagnostics,
   });
 
-  const suggestions = options.verifyReferences ? await collectImpactSuggestions(index, projectRoot, normalizedChanges, options) : [];
+  const suggestions = options.verifyReferences
+    ? await collectImpactSuggestions(index, projectRoot, normalizedChanges, options)
+    : [];
 
   const configAndBreaking =
     options.configImpactRules || options.detectBreakingChanges

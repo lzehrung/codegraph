@@ -64,7 +64,11 @@ export class Semaphore {
  * Map over items with bounded concurrency using a semaphore.
  * Unlike basic mapLimit, this correctly handles nested async operations.
  */
-export async function mapLimitSemaphore<T, R>(items: T[], limit: number, fn: (item: T, semaphore: Semaphore) => Promise<R>): Promise<R[]> {
+export async function mapLimitSemaphore<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, semaphore: Semaphore) => Promise<R>,
+): Promise<R[]> {
   const semaphore = new Semaphore(limit);
   const results = await Promise.all(items.map((item) => semaphore.withPermit(() => fn(item, semaphore))));
   return results;

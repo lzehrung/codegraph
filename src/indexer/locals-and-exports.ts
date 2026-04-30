@@ -19,7 +19,12 @@ import type { LanguageSupport } from "../languages.js";
 import type { JsLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { ExportEntry, ImportBinding, ModuleIndex, SymbolDef } from "./types.js";
 import type { Range } from "../types.js";
-function appendJsLikeRegexFallbackExports(file: string, source: string, locals: SymbolDef[], exports: ExportEntry[]): void {
+function appendJsLikeRegexFallbackExports(
+  file: string,
+  source: string,
+  locals: SymbolDef[],
+  exports: ExportEntry[],
+): void {
   const maskedSource = maskJsLikeCommentsAndStrings(source);
   const reDecl = /\bexport\s+(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g;
   const reDefault = /\bexport\s+default\s+([A-Za-z_$][\w$]*)/g;
@@ -80,7 +85,9 @@ function appendJsLikeRegexFallbackExports(file: string, source: string, locals: 
       if (!entryMatch) continue;
       const srcName = entryMatch[1]!;
       const alias = entryMatch[2] ?? srcName;
-      if (!exports.some((entry) => entry.type === "reexport" && entry.exportedAs === alias && entry.fromModule === from)) {
+      if (
+        !exports.some((entry) => entry.type === "reexport" && entry.exportedAs === alias && entry.fromModule === from)
+      ) {
         exports.push({
           type: "reexport",
           exportedAs: alias,
@@ -98,7 +105,9 @@ function appendJsLikeRegexFallbackExports(file: string, source: string, locals: 
     if (
       !exports.some(
         (entry) =>
-          (entry.type === "reexport" || entry.type === "namespaceReexport") && entry.exportedAs === alias && entry.fromModule === from,
+          (entry.type === "reexport" || entry.type === "namespaceReexport") &&
+          entry.exportedAs === alias &&
+          entry.fromModule === from,
       )
     ) {
       exports.push({
@@ -248,7 +257,11 @@ export function collectLocalsAndExportsFromSource(
 
   const buildSymbolDef = (localName: string, kind: SymbolKind, range: Range, node?: SyntaxNodeLike): SymbolDef => {
     let lineSpan: number | undefined;
-    if (typeof range.start.line === "number" && typeof range.end.line === "number" && range.end.line >= range.start.line) {
+    if (
+      typeof range.start.line === "number" &&
+      typeof range.end.line === "number" &&
+      range.end.line >= range.start.line
+    ) {
       lineSpan = Math.max(1, range.end.line - range.start.line + 1);
     }
     let docstring: string | undefined;
@@ -331,7 +344,11 @@ export function collectLocalsAndExportsFromSource(
     locals.push(buildSymbolDef(localName, kind, range, node));
   };
 
-  const classifyLocalCapture = (capture: NativeCapture | { name: string }, range: Range, node?: SyntaxNodeLike): SymbolKind => {
+  const classifyLocalCapture = (
+    capture: NativeCapture | { name: string },
+    range: Range,
+    node?: SyntaxNodeLike,
+  ): SymbolKind => {
     if (node) return toKind(support.classifyDefinition(node));
     if ("name" in capture && capture.name === "tname") {
       return SymbolKind.TypeAlias;
@@ -351,7 +368,9 @@ export function collectLocalsAndExportsFromSource(
         for (const capture of match.captures) {
           if (capture.name !== "name" && capture.name !== "tname") continue;
           const nativeRange = rangeFromNativeCapture(capture);
-          const node = enrichmentTree?.rootNode.descendantForIndex(nativeRange.start.index ?? 0, nativeRange.end.index ?? 0) ?? undefined;
+          const node =
+            enrichmentTree?.rootNode.descendantForIndex(nativeRange.start.index ?? 0, nativeRange.end.index ?? 0) ??
+            undefined;
           pushLocal(capture.text, classifyLocalCapture(capture, nativeRange, node), nativeRange, node);
         }
       }
@@ -369,7 +388,13 @@ export function collectLocalsAndExportsFromSource(
     if (!jsTree || !support.queries.locals.trim()) return false;
     if (!QUERY_DRIVEN_LOCALS_LANGUAGES.has(support.id)) return false;
     try {
-      const matches = executeJsQueryAsNativeMatches(source, support, ensureResolvedLang(), support.queries.locals, jsTree);
+      const matches = executeJsQueryAsNativeMatches(
+        source,
+        support,
+        ensureResolvedLang(),
+        support.queries.locals,
+        jsTree,
+      );
       for (const match of matches) {
         for (const cap of match.captures) {
           if (cap.name !== "name" && cap.name !== "tname") continue;
@@ -434,7 +459,10 @@ export function collectLocalsAndExportsFromSource(
   const pythonAllExports = new Set<string>();
   let hasPythonAll = false;
 
-  const appendExportsFromMatches = (matches: NativeQueryResults["exports"], treeForEnrichment?: SyntaxTreeLike): void => {
+  const appendExportsFromMatches = (
+    matches: NativeQueryResults["exports"],
+    treeForEnrichment?: SyntaxTreeLike,
+  ): void => {
     const nodeForCapture = (capture: NativeCapture | undefined): SyntaxNodeLike | undefined => {
       if (!capture || !treeForEnrichment) return undefined;
       const range = rangeFromNativeCapture(capture);
@@ -459,7 +487,12 @@ export function collectLocalsAndExportsFromSource(
             const name = unquote(item.text);
             pythonAllExports.add(name);
             const local = mergedLocals.find((def) => def.localName === name);
-            if (local && !exports.some((entry) => entry.type !== "exportStar" && "exportedAs" in entry && entry.exportedAs === name)) {
+            if (
+              local &&
+              !exports.some(
+                (entry) => entry.type !== "exportStar" && "exportedAs" in entry && entry.exportedAs === name,
+              )
+            ) {
               exports.push({
                 type: "local",
                 exportedAs: name,
@@ -476,7 +509,12 @@ export function collectLocalsAndExportsFromSource(
                 const name = submatch[1]!;
                 pythonAllExports.add(name);
                 const local = mergedLocals.find((def) => def.localName === name);
-                if (local && !exports.some((entry) => entry.type !== "exportStar" && "exportedAs" in entry && entry.exportedAs === name)) {
+                if (
+                  local &&
+                  !exports.some(
+                    (entry) => entry.type !== "exportStar" && "exportedAs" in entry && entry.exportedAs === name,
+                  )
+                ) {
                   exports.push({
                     type: "local",
                     exportedAs: name,
@@ -567,13 +605,20 @@ export function collectLocalsAndExportsFromSource(
       }
       if (map["anon_default"]) {
         const defaultNode = nodeForCapture(map["anon_default"]);
-        const sym = buildSymbolDef("__default_export__", SymbolKind.Default, rangeFromNativeCapture(map["anon_default"]), defaultNode);
+        const sym = buildSymbolDef(
+          "__default_export__",
+          SymbolKind.Default,
+          rangeFromNativeCapture(map["anon_default"]),
+          defaultNode,
+        );
         locals.push(sym);
         exports.push({ type: "local", exportedAs: "default", target: sym });
         continue;
       }
       const tsExportAssignMatch =
-        support.id === "ts" || support.id === "tsx" ? stmtText.match(/^\s*export\s*=\s*([A-Za-z_$][\w$]*)\s*;?\s*$/) : null;
+        support.id === "ts" || support.id === "tsx"
+          ? stmtText.match(/^\s*export\s*=\s*([A-Za-z_$][\w$]*)\s*;?\s*$/)
+          : null;
       if (tsExportAssignMatch) {
         const ident = tsExportAssignMatch[1]!;
         const local = locals.find((def) => def.localName === ident);
@@ -660,7 +705,8 @@ export function collectLocalsAndExportsFromSource(
       usedNativeExports = false;
     }
   }
-  const jsExportTree = !usedNativeExports && !isNativeBindingLoadedForLanguage(support.id, opts?.nativeMode) ? ensureJsQueryTree() : null;
+  const jsExportTree =
+    !usedNativeExports && !isNativeBindingLoadedForLanguage(support.id, opts?.nativeMode) ? ensureJsQueryTree() : null;
   if (support.queries.exports.trim() && jsExportTree && !usedNativeExports) {
     try {
       appendExportsFromMatches(
@@ -707,7 +753,10 @@ export function collectLocalsAndExportsFromSource(
     exports.push(...filtered);
   }
 
-  if ((support.id === "ts" || support.id === "js") && !exports.some((e) => e.type === "local" && e.exportedAs === "default")) {
+  if (
+    (support.id === "ts" || support.id === "js") &&
+    !exports.some((e) => e.type === "local" && e.exportedAs === "default")
+  ) {
     const defFn = source.match(/\bexport\s+default\s+function\s+([A-Za-z_$][\w$]*)/);
     const defCls = source.match(/\bexport\s+default\s+class\s+([A-Za-z_$][\w$]*)/);
     const defIdent = source.match(/\bexport\s+default\s+([A-Za-z_$][\w$]*)\b/);

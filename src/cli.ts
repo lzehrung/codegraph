@@ -63,7 +63,12 @@ import type {
   ReviewDepth,
   ImpactOptions,
 } from "./index.js";
-import { assertFilePathWithinRoot, normalizePath, resolveFilePathFromRoot, type ProjectFileDiscoveryOptions } from "./util.js";
+import {
+  assertFilePathWithinRoot,
+  normalizePath,
+  resolveFilePathFromRoot,
+  type ProjectFileDiscoveryOptions,
+} from "./util.js";
 
 function toJSON(obj: unknown): string {
   return JSON.stringify(obj, null, 2);
@@ -321,7 +326,9 @@ function normalizePathForDisplay(filePath: string): string {
   return filePath.replace(/\\/g, "/");
 }
 
-type CliProjectFileInput = { status: "ok"; file: string } | { status: "error"; reason: "outside_project_root"; error: string };
+type CliProjectFileInput =
+  | { status: "ok"; file: string }
+  | { status: "error"; reason: "outside_project_root"; error: string };
 
 function resolveCliProjectFile(projectRoot: string, fileArg: string, label: string): CliProjectFileInput {
   try {
@@ -338,7 +345,10 @@ function resolveCliProjectFile(projectRoot: string, fileArg: string, label: stri
   }
 }
 
-function writeCliProjectFileError(result: Extract<CliProjectFileInput, { status: "error" }>, output: "json" | "text" = "json"): void {
+function writeCliProjectFileError(
+  result: Extract<CliProjectFileInput, { status: "error" }>,
+  output: "json" | "text" = "json",
+): void {
   if (output === "json") {
     writeJSONLine(result);
     return;
@@ -406,7 +416,8 @@ function isCommandAvailableOnPath(command: string): boolean {
   const pathValue = process.env.PATH;
   if (!pathValue) return false;
   const pathEntries = pathValue.split(path.delimiter).filter(Boolean);
-  const executableNames = process.platform === "win32" ? [command, `${command}.cmd`, `${command}.exe`, `${command}.bat`] : [command];
+  const executableNames =
+    process.platform === "win32" ? [command, `${command}.cmd`, `${command}.exe`, `${command}.bat`] : [command];
   return pathEntries.some((entry) => executableNames.some((name) => pathExists(path.join(entry, name))));
 }
 
@@ -424,7 +435,9 @@ async function copyDirectoryRecursive(sourceDir: string, targetDir: string, over
       continue;
     }
     if (!overwrite && pathExists(targetPath)) {
-      throw new Error(`Target file already exists: ${normalizePathForDisplay(targetPath)}. Re-run with --force to overwrite.`);
+      throw new Error(
+        `Target file already exists: ${normalizePathForDisplay(targetPath)}. Re-run with --force to overwrite.`,
+      );
     }
     await fsp.copyFile(sourcePath, targetPath);
   }
@@ -638,7 +651,8 @@ function buildRecommendedInspectCommands(
   hasUnresolvedImports: boolean,
 ): string[] {
   const rootFlag = `--root "${normalizePathForDisplay(projectRoot)}"`;
-  const targetSuffix = includeRoots.length > 0 ? ` ${includeRoots.map((root) => `"${normalizePathForDisplay(root)}"`).join(" ")}` : "";
+  const targetSuffix =
+    includeRoots.length > 0 ? ` ${includeRoots.map((root) => `"${normalizePathForDisplay(root)}"`).join(" ")}` : "";
   const commands = [
     `codegraph hotspots ${rootFlag}${targetSuffix} --limit 20 --json`,
     `codegraph graph ${rootFlag}${targetSuffix} --json --symbols-detailed --compact-json`,
@@ -732,7 +746,12 @@ async function buildInspectReport(
         size: cycle.files.length,
       })),
     },
-    recommendedCommands: buildRecommendedInspectCommands(projectRoot, includeRoots, cycles.length > 0, unresolved.length > 0),
+    recommendedCommands: buildRecommendedInspectCommands(
+      projectRoot,
+      includeRoots,
+      cycles.length > 0,
+      unresolved.length > 0,
+    ),
   };
 }
 
@@ -821,7 +840,10 @@ function compactGraphWithSymbols(fgraph: Graph, sgraph: SymbolGraph, stable = fa
 
   const fileEdges: CompactFileEdge[] = fgraph.edges.map((e) => ({
     from: fileIndex.get(e.from)!,
-    to: e.to?.type === "file" ? { type: "file" as const, path: fileIndex.get(e.to.path)! } : { type: "external" as const, name: e.to.name },
+    to:
+      e.to?.type === "file"
+        ? { type: "file" as const, path: fileIndex.get(e.to.path)! }
+        : { type: "external" as const, name: e.to.name },
     raw: e.raw,
     ...(e.typeOnly !== undefined ? { typeOnly: e.typeOnly } : {}),
   }));
@@ -968,7 +990,16 @@ function stabilizeSymbolGraph(graph: SymbolGraph): SymbolGraph {
   return { nodes: new Map(nodeEntries), edges };
 }
 
-const SYMBOL_NODE_KINDS: SymbolNodeKind[] = ["function", "class", "variable", "interface", "type", "default", "import", "namespaceImport"];
+const SYMBOL_NODE_KINDS: SymbolNodeKind[] = [
+  "function",
+  "class",
+  "variable",
+  "interface",
+  "type",
+  "default",
+  "import",
+  "namespaceImport",
+];
 
 function symbolNodeKindFromString(kind?: string): SymbolNodeKind {
   return kind && SYMBOL_NODE_KINDS.includes(kind as SymbolNodeKind) ? (kind as SymbolNodeKind) : "variable";
@@ -1273,7 +1304,10 @@ Examples:
     resolutionHints: parsed.options.get("--resolution-hint") ?? [],
   };
   const hasGraphOverrides =
-    graphFlags.fast || graphFlags.resolveNodeModules || graphFlags.dynamicImportHeuristics || graphFlags.resolutionHints.length > 0;
+    graphFlags.fast ||
+    graphFlags.resolveNodeModules ||
+    graphFlags.dynamicImportHeuristics ||
+    graphFlags.resolutionHints.length > 0;
   const buildGraphOptions = () => ({
     fast: graphFlags.fast,
     resolveNodeModules: graphFlags.resolveNodeModules,
@@ -1474,7 +1508,9 @@ Examples:
       writeStderrLine('Usage: sql --db <sqlite path> --query "SELECT ..."');
       process.exit(1);
     }
-    const dbPath = path.isAbsolute(dbOpt) ? normalizePath(dbOpt) : normalizePath(resolveFilePathFromRoot(process.cwd(), dbOpt));
+    const dbPath = path.isAbsolute(dbOpt)
+      ? normalizePath(dbOpt)
+      : normalizePath(resolveFilePathFromRoot(process.cwd(), dbOpt));
     const result = await queryGraphSqliteRaw(dbPath, queryText);
     writeJSONLine(result);
     return;
@@ -1810,7 +1846,9 @@ Examples:
         writeStderrLine(`Cache (${cache.mode}): ${cache.hits} hits, ${cache.misses} misses`);
       }
       if (fileStats) {
-        writeStderrLine(`Files: ${fileStats.parsed ?? 0} parsed, ${fileStats.cached ?? 0} cached, ${fileStats.total} total`);
+        writeStderrLine(
+          `Files: ${fileStats.parsed ?? 0} parsed, ${fileStats.cached ?? 0} cached, ${fileStats.total} total`,
+        );
       }
     }
     if (commandReport) {
@@ -2288,7 +2326,8 @@ Examples:
   if (cmd === "cycles") {
     const json = hasFlag("--json");
     const sortModeRaw = getOpt("--sort") ?? "priority";
-    const sortMode = sortModeRaw === "priority" || sortModeRaw === "size" || sortModeRaw === "fanin" ? sortModeRaw : null;
+    const sortMode =
+      sortModeRaw === "priority" || sortModeRaw === "size" || sortModeRaw === "fanin" ? sortModeRaw : null;
     if (!sortMode) {
       writeStderrLine("Invalid --sort value. Use one of: priority, size, fanin.");
       process.exit(2);
@@ -2443,7 +2482,9 @@ Examples:
       writeStderrLine("Options:");
       writeStderrLine("  --min-tokens N    Minimum tokens per chunk (default: 150)");
       writeStderrLine("  --max-tokens N    Maximum tokens per chunk (default: 400)");
-      writeStderrLine("  --language LANG   Language override (javascript, typescript, tsx, python, php, vue, svelte, json, yaml, text)");
+      writeStderrLine(
+        "  --language LANG   Language override (javascript, typescript, tsx, python, php, vue, svelte, json, yaml, text)",
+      );
       writeStderrLine("  --text            Force text chunking mode");
       process.exit(2);
     }

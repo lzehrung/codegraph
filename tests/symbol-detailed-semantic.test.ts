@@ -87,7 +87,9 @@ export class Square extends BaseShape implements IShape {
     expect(ifaceDef).toBeDefined();
 
     const extendsEdge = sg.edges.find((e) => e.from === squareDef?.id && e.to === baseDef?.id && e.label === "extends");
-    const implementsEdge = sg.edges.find((e) => e.from === squareDef?.id && e.to === ifaceDef?.id && e.label === "implements");
+    const implementsEdge = sg.edges.find(
+      (e) => e.from === squareDef?.id && e.to === ifaceDef?.id && e.label === "implements",
+    );
     expect(extendsEdge).toBeDefined();
     expect(implementsEdge).toBeDefined();
   });
@@ -177,9 +179,13 @@ class Thing {}
     expect(thingDef).toBeDefined();
 
     const extendsEdge = sg.edges.find((e) => e.from === appDef?.id && e.to === baseDef?.id && e.label === "extends");
-    const implementsEdge = sg.edges.find((e) => e.from === appDef?.id && e.to === serviceDef?.id && e.label === "implements");
+    const implementsEdge = sg.edges.find(
+      (e) => e.from === appDef?.id && e.to === serviceDef?.id && e.label === "implements",
+    );
     const callsEdge = sg.edges.find((e) => e.from === runDef?.id && e.to === helperDef?.id && e.label === "calls");
-    const instantiatesEdge = sg.edges.find((e) => e.from === runDef?.id && e.to === thingDef?.id && e.label === "instantiates");
+    const instantiatesEdge = sg.edges.find(
+      (e) => e.from === runDef?.id && e.to === thingDef?.id && e.label === "instantiates",
+    );
     expect(extendsEdge).toBeDefined();
     expect(implementsEdge).toBeDefined();
     expect(callsEdge).toBeDefined();
@@ -221,9 +227,13 @@ public class Widget {}
     expect(widgetDef).toBeDefined();
 
     const extendsEdge = sg.edges.find((e) => e.from === appDef?.id && e.to === baseDef?.id && e.label === "extends");
-    const implementsEdge = sg.edges.find((e) => e.from === appDef?.id && e.to === serviceDef?.id && e.label === "implements");
+    const implementsEdge = sg.edges.find(
+      (e) => e.from === appDef?.id && e.to === serviceDef?.id && e.label === "implements",
+    );
     const callsEdge = sg.edges.find((e) => e.from === runDef?.id && e.to === helperDef?.id && e.label === "calls");
-    const instantiatesEdge = sg.edges.find((e) => e.from === runDef?.id && e.to === widgetDef?.id && e.label === "instantiates");
+    const instantiatesEdge = sg.edges.find(
+      (e) => e.from === runDef?.id && e.to === widgetDef?.id && e.label === "instantiates",
+    );
     expect(extendsEdge).toBeDefined();
     expect(implementsEdge).toBeDefined();
     expect(callsEdge).toBeDefined();
@@ -264,7 +274,9 @@ func run() {
     expect(widgetDef).toBeDefined();
 
     const callsEdge = sg.edges.find((e) => e.from === runDef?.id && e.to === helperDef?.id && e.label === "calls");
-    const instantiatesEdge = sg.edges.find((e) => e.from === runDef?.id && e.to === widgetDef?.id && e.label === "instantiates");
+    const instantiatesEdge = sg.edges.find(
+      (e) => e.from === runDef?.id && e.to === widgetDef?.id && e.label === "instantiates",
+    );
     expect(callsEdge).toBeDefined();
     expect(instantiatesEdge).toBeDefined();
   });
@@ -307,9 +319,13 @@ impl IService for App {
     expect(helperDef).toBeDefined();
     expect(thingDef).toBeDefined();
 
-    const implementsEdge = sg.edges.find((e) => e.from === appDef?.id && e.to === serviceDef?.id && e.label === "implements");
+    const implementsEdge = sg.edges.find(
+      (e) => e.from === appDef?.id && e.to === serviceDef?.id && e.label === "implements",
+    );
     const callsEdge = sg.edges.find((e) => e.from === runDef?.id && e.to === helperDef?.id && e.label === "calls");
-    const instantiatesEdge = sg.edges.find((e) => e.from === runDef?.id && e.to === thingDef?.id && e.label === "instantiates");
+    const instantiatesEdge = sg.edges.find(
+      (e) => e.from === runDef?.id && e.to === thingDef?.id && e.label === "instantiates",
+    );
     expect(implementsEdge).toBeDefined();
     expect(callsEdge).toBeDefined();
     expect(instantiatesEdge).toBeDefined();
@@ -350,7 +366,9 @@ end
     expect(widgetDef).toBeDefined();
 
     const callsEdge = sg.edges.find((e) => e.from === runDef?.id && e.to === helperDef?.id && e.label === "calls");
-    const instantiatesEdge = sg.edges.find((e) => e.from === runDef?.id && e.to === widgetDef?.id && e.label === "instantiates");
+    const instantiatesEdge = sg.edges.find(
+      (e) => e.from === runDef?.id && e.to === widgetDef?.id && e.label === "instantiates",
+    );
     expect(callsEdge).toBeDefined();
     expect(instantiatesEdge).toBeDefined();
   });
@@ -420,7 +438,9 @@ export function run() {
     expect(widgetDef).toBeDefined();
     expect(runDef).toBeDefined();
 
-    const instantiatesEdge = sg.edges.find((e) => e.from === runDef?.id && e.to === widgetDef?.id && e.label === "instantiates");
+    const instantiatesEdge = sg.edges.find(
+      (e) => e.from === runDef?.id && e.to === widgetDef?.id && e.label === "instantiates",
+    );
     expect(instantiatesEdge).toBeDefined();
   });
 

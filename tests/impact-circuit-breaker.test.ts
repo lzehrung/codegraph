@@ -127,7 +127,10 @@ describe("Impact Circuit Breaker & Warning Propagation", () => {
       head: "B",
     });
 
-    setupMocks(" 1 file changed, 1 insertion(+), 1 deletion(-)", "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n");
+    setupMocks(
+      " 1 file changed, 1 insertion(+), 1 deletion(-)",
+      "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n",
+    );
     const second = await analyzeImpactFromDiff(".", index, {
       provider: "git",
       base: "A",

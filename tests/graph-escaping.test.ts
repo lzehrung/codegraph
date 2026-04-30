@@ -60,7 +60,9 @@ describe("Graph escaping", () => {
         edges: [],
       };
       const sg: SymbolGraph = {
-        nodes: new Map([["s1", { id: "s1", name: 'sym-"quoted"', file: 'file-"quoted".ts', kind: "class", visibility: "public" }]]),
+        nodes: new Map([
+          ["s1", { id: "s1", name: 'sym-"quoted"', file: 'file-"quoted".ts', kind: "class", visibility: "public" }],
+        ]),
         edges: [],
       };
       const dot = graphToDOTSymbolsWithFiles(sg, fg);
@@ -74,7 +76,9 @@ describe("Graph escaping", () => {
         edges: [],
       };
       const sg: SymbolGraph = {
-        nodes: new Map([["s1", { id: "s1", name: 'sym-"quoted"', file: 'file-"quoted".ts', kind: "class", visibility: "public" }]]),
+        nodes: new Map([
+          ["s1", { id: "s1", name: 'sym-"quoted"', file: 'file-"quoted".ts', kind: "class", visibility: "public" }],
+        ]),
         edges: [],
       };
       const mer = graphToMermaidSymbolsWithFiles(sg, fg);

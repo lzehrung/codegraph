@@ -5,7 +5,12 @@ import {
   getNativeQueryMetadataForSupport,
   isNativeTreeSitterAvailable,
 } from "./treeSitterNative.js";
-import type { BackendReport, BuildReport, NativeBackendFallbackReason, NativeBackendLanguageReport } from "../indexer/types.js";
+import type {
+  BackendReport,
+  BuildReport,
+  NativeBackendFallbackReason,
+  NativeBackendLanguageReport,
+} from "../indexer/types.js";
 import { stringifyUnknown } from "../util.js";
 
 export type NativeBackendOutcome = {
@@ -59,7 +64,10 @@ export function initNativeBackendReport(report: BuildReport | undefined): Backen
   return report.backend;
 }
 
-function getOrCreateNativeLanguageReport(backend: BackendReport, support: LanguageSupport): NativeBackendLanguageReport {
+function getOrCreateNativeLanguageReport(
+  backend: BackendReport,
+  support: LanguageSupport,
+): NativeBackendLanguageReport {
   const existing = backend.native.byLanguage[support.id];
   if (existing) {
     return existing;

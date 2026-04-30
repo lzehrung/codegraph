@@ -3,7 +3,10 @@ import { loadTypeScriptGrammars } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
 function normalizeTypeScriptNativeQuery(kind: string, query: string): string {
-  let normalized = query.replace(/\(class_declaration name: \(identifier\) @/g, "(class_declaration name: (type_identifier) @");
+  let normalized = query.replace(
+    /\(class_declaration name: \(identifier\) @/g,
+    "(class_declaration name: (type_identifier) @",
+  );
   if (kind !== "exports") {
     return normalized;
   }
@@ -233,7 +236,11 @@ export const TSX_DEF: LanguageDefinition = {
   grammar: () => loadTypeScriptGrammars().tsx,
   structure: {
     ...BASE_STRUCTURE,
-    blocks: [...BASE_STRUCTURE.blocks, { type: "jsx_element", captureId: "jsx" }, { type: "jsx_self_closing_element", captureId: "jsx" }],
+    blocks: [
+      ...BASE_STRUCTURE.blocks,
+      { type: "jsx_element", captureId: "jsx" },
+      { type: "jsx_self_closing_element", captureId: "jsx" },
+    ],
   },
   graph: BASE_GRAPH,
   ...BASE_HELPERS,

@@ -122,9 +122,13 @@ describe("build-native-if-available", () => {
 
     expect(exitCode).toBe(0);
     expect(rmSyncImpl).toHaveBeenCalledTimes(2);
-    expect(rmSyncImpl).toHaveBeenNthCalledWith(1, "E:\\git repos\\codegraph\\packages\\codegraph-native\\index.win32-x64-msvc.node", {
-      force: true,
-    });
+    expect(rmSyncImpl).toHaveBeenNthCalledWith(
+      1,
+      "E:\\git repos\\codegraph\\packages\\codegraph-native\\index.win32-x64-msvc.node",
+      {
+        force: true,
+      },
+    );
     expect(rmSyncImpl).toHaveBeenNthCalledWith(
       2,
       "E:\\git repos\\codegraph\\packages\\codegraph-native\\npm\\win32-x64-msvc\\index.win32-x64-msvc.node",
