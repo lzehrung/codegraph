@@ -44,6 +44,23 @@ describe('Python namespace packages (PEP 420)', () => {
     }
   });
 
+  it('stores slash-normalized namespace import targets for Python package imports', async () => {
+    await ensureFixture(root);
+    const index = await buildProjectIndex(root);
+    const appMain = path.join(root, 'app', 'main.py').replace(/\\/g, '/');
+    const mainModule = index.byFile.get(appMain);
+    const submodImport = mainModule?.imports.find(
+      (entry) => entry.kind === 'namespace' && entry.localNS === 'submod' && entry.from === 'pkg_ns',
+    );
+
+    expect(submodImport).toBeDefined();
+    if (submodImport?.kind === 'namespace') {
+      expect(typeof submodImport.resolved).toBe('string');
+      expect(submodImport.resolved).toContain('/pkg_ns/submod');
+      expect(submodImport.resolved).not.toContain('\\');
+    }
+  });
+
   it('findReferences of do_work finds usages in main.py', async () => {
     await ensureFixture(root);
     const index = await buildProjectIndex(root);
@@ -70,5 +87,4 @@ describe('Python namespace packages (PEP 420)', () => {
     expect(edgesFromCommented.length).toBe(0);
   });
 });
-
 
