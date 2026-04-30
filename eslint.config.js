@@ -1,4 +1,5 @@
 import js from "@eslint/js";
+import stylistic from "@stylistic/eslint-plugin";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
@@ -9,6 +10,9 @@ export default tseslint.config(
   ...tseslint.configs.recommendedTypeChecked,
   {
     files: ["src/**/*.ts", "tests/**/*.ts"],
+    plugins: {
+      "@stylistic": stylistic,
+    },
     languageOptions: {
       parserOptions: {
         project: ["./tsconfig.eslint.json"],
@@ -26,6 +30,7 @@ export default tseslint.config(
           ignoreRegExpLiterals: true,
         },
       ],
+      "no-nested-ternary": "error",
       "no-useless-escape": "off",
       "prefer-const": "off",
       "@typescript-eslint/no-explicit-any": "error",

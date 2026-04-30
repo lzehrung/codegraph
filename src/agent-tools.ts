@@ -323,9 +323,17 @@ function listSymbolsForOverview(
   const symbols = listSymbols(index, { file, includeImports: false });
   const mod = index.byFile.get(file);
   const imports =
-    mod?.imports.map((entry) => ({
-      name: entry.kind === "namespace" ? entry.localNS : entry.kind === "star" ? entry.from : entry.local,
-    })) ?? [];
+    mod?.imports.map((entry) => {
+      let name: string;
+      if (entry.kind === "namespace") {
+        name = entry.localNS;
+      } else if (entry.kind === "star") {
+        name = entry.from;
+      } else {
+        name = entry.local;
+      }
+      return { name };
+    }) ?? [];
   return {
     imports,
     definitions: symbols,

@@ -514,8 +514,7 @@ const recordGraphSnapshot = (
     symbolEdges: number;
   },
 ) => {
-  const snapshotStmt = db.prepare(
-    `INSERT INTO graph_snapshots (
+  const snapshotStmt = db.prepare(`INSERT INTO graph_snapshots (
       created_at,
       mode,
       changed_files,
@@ -524,8 +523,7 @@ const recordGraphSnapshot = (
       file_edges,
       symbol_nodes,
       symbol_edges
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
-  );
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`);
   const result = snapshotStmt.run([
     Date.now(),
     options.mode,

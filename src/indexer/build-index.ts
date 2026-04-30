@@ -705,9 +705,13 @@ async function buildIndexFromFileListShared(
         if (edge.to.type === "file") graph.nodes.add(edge.to.path);
       }
     }
-    appendUniqueGraphEdges(
-      await collectWorkspaceManifestDependencyEdges(projectRoot, opts?.discovery, new Set(normalizedFiles), opts?.logLevel),
+    const workspaceManifestEdges = await collectWorkspaceManifestDependencyEdges(
+      projectRoot,
+      opts?.discovery,
+      new Set(normalizedFiles),
+      opts?.logLevel,
     );
+    appendUniqueGraphEdges(workspaceManifestEdges);
     if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
     for (const jsonPath of jsonDependencies) {
       ensureJsonModule(modules, jsonPath);
@@ -1027,9 +1031,8 @@ export async function buildProjectIndexIncremental(projectRoot: string, opts?: I
         ensureJsonModule(modules, jsonPath);
       }
       expandStarImports(modules);
-      const cachedGraphEntries = new Map<string, ManifestFileEntry>(
-        Object.entries(trackedEntries).filter(([file]) => !deletedTrackedFiles.has(file)),
-      );
+      const retainedTrackedEntries = Object.entries(trackedEntries).filter(([file]) => !deletedTrackedFiles.has(file));
+      const cachedGraphEntries = new Map<string, ManifestFileEntry>(retainedTrackedEntries);
       const manifestEntries = new Map<string, ManifestFileEntry>(cachedGraphEntries);
       const baseGraph: Graph | undefined = cachedGraphEntries.size > 0 ? { nodes: new Set<string>(), edges: [] } : undefined;
       if (baseGraph) {

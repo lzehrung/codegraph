@@ -134,7 +134,12 @@ function parsePhpImportClause(rawClause: string, importType: PhpImportType): Par
 
     for (const member of members) {
       const typedMemberMatch = member.match(/^(function|const)\s+(.+)$/);
-      const memberType = typedMemberMatch?.[1] === "function" ? "function" : typedMemberMatch?.[1] === "const" ? "const" : importType;
+      let memberType = importType;
+      if (typedMemberMatch?.[1] === "function") {
+        memberType = "function";
+      } else if (typedMemberMatch?.[1] === "const") {
+        memberType = "const";
+      }
       const body = (typedMemberMatch?.[2] ?? member).trim();
       const aliasMatch = body.match(/^(.*?)\s+as\s+([A-Za-z_][\w]*)$/i);
       const fullPath = `${prefix}${(aliasMatch?.[1] ?? body).trim()}`;
@@ -190,7 +195,12 @@ export function parsePhpImportStatement(stmtText: string, fromFile?: string): Pa
   const results: ParsedPhpImportStatement[] = [];
   for (const clause of clauses) {
     const typedClauseMatch = clause.match(/^(function|const)\s+(.+)$/is);
-    const importType = typedClauseMatch?.[1] === "function" ? "function" : typedClauseMatch?.[1] === "const" ? "const" : "class";
+    let importType: "class" | "function" | "const" = "class";
+    if (typedClauseMatch?.[1] === "function") {
+      importType = "function";
+    } else if (typedClauseMatch?.[1] === "const") {
+      importType = "const";
+    }
     const body = (typedClauseMatch?.[2] ?? clause).trim();
     results.push(...parsePhpImportClause(body, importType));
   }

@@ -559,7 +559,12 @@ export async function collectImportsForFile(
     return imports;
   }
 
-  const key = resolvedSup.id === "python" ? "py" : resolvedSup.id === "js" ? "js" : "ts";
+  let key: "py" | "js" | "ts" = "ts";
+  if (resolvedSup.id === "python") {
+    key = "py";
+  } else if (resolvedSup.id === "js") {
+    key = "js";
+  }
   const tsCfg = resolvedSup.id === "ts" || resolvedSup.id === "tsx" ? await loadNearestTsconfigFor(file, opts?.logLevel) : undefined;
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
 

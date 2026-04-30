@@ -250,9 +250,9 @@ function normalizeSpecifierBase(fromFile: string, spec: string): string {
 function buildDeletedImportCandidates(fromFile: string, spec: string, targetFile: string): Set<string> {
   const normalizedSpec = spec.replace(/\\/g, "/");
   const basePath = normalizeSpecifierBase(fromFile, normalizedSpec);
-  return new Set(
-    listResolutionCandidates(basePath, deletedImportResolutionExtensions(targetFile)).map((candidate) => normalizePath(candidate)),
-  );
+  const resolutionExtensions = deletedImportResolutionExtensions(targetFile);
+  const candidates = listResolutionCandidates(basePath, resolutionExtensions).map((candidate) => normalizePath(candidate));
+  return new Set(candidates);
 }
 
 function matchesDeletedImportTarget(fromFile: string, spec: string, resolved: string | undefined, deletedFile: string): boolean {
@@ -270,11 +270,11 @@ function getImportResolvedPath(entry: Pick<ImportBinding, "resolved">): string |
 }
 
 function buildDeletedAliasCandidates(candidate: string, targetFile: string): Set<string> {
-  return new Set(
-    listResolutionCandidates(normalizePath(candidate), deletedImportResolutionExtensions(targetFile)).map((resolvedCandidate) =>
-      normalizePath(resolvedCandidate),
-    ),
-  );
+  const normalizedCandidate = normalizePath(candidate);
+  const resolutionExtensions = deletedImportResolutionExtensions(targetFile);
+  const resolutionCandidates = listResolutionCandidates(normalizedCandidate, resolutionExtensions);
+  const resolvedCandidates = resolutionCandidates.map((resolvedCandidate) => normalizePath(resolvedCandidate));
+  return new Set(resolvedCandidates);
 }
 
 function deletedImportResolutionExtensions(targetFile: string): string[] {

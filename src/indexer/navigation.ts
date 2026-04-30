@@ -202,7 +202,13 @@ function getPhpQualifiedReference(node: SyntaxNodeLike | null, source: string): 
   return null;
 }
 
-function normalizePhpQualifiedReference(rawName: string, source: string, tree: SyntaxTreeLike, node: SyntaxNodeLike | null): string | null {
+// prettier-ignore
+function normalizePhpQualifiedReference(
+  rawName: string,
+  source: string,
+  tree: SyntaxTreeLike,
+  node: SyntaxNodeLike | null,
+): string | null {
   const trimmed = rawName.trim().replace(/^\\+/, "");
   if (!trimmed) return null;
   if (!trimmed.startsWith("namespace\\")) {
@@ -570,8 +576,12 @@ export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Pro
       if (typeof resolvedTarget === "string") {
         const exportedName = normalizedQualifiedReference.split("\\").filter(Boolean).pop() ?? null;
         if (exportedName) {
-          const preferredKind =
-            phpImportType === "function" ? SymbolKind.Function : phpImportType === "class" ? SymbolKind.Class : undefined;
+          let preferredKind: SymbolKind | undefined;
+          if (phpImportType === "function") {
+            preferredKind = SymbolKind.Function;
+          } else if (phpImportType === "class") {
+            preferredKind = SymbolKind.Class;
+          }
           const hit = resolveExport(index, resolvedTarget, exportedName, {
             ...(preferredKind ? { preferredKind } : {}),
           });
@@ -619,17 +629,18 @@ export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Pro
       while (currentScope) {
         const binding = currentScope.map.get(bindingName);
         if (binding && binding.def) {
+          let kind = SymbolKind.Variable;
+          if (binding.kind === "function") {
+            kind = SymbolKind.Function;
+          } else if (binding.kind === "class") {
+            kind = SymbolKind.Class;
+          } else if (binding.kind === "type") {
+            kind = SymbolKind.TypeAlias;
+          }
           return {
             file,
             localName: binding.name,
-            kind:
-              binding.kind === "function"
-                ? SymbolKind.Function
-                : binding.kind === "class"
-                  ? SymbolKind.Class
-                  : binding.kind === "type"
-                    ? SymbolKind.TypeAlias
-                    : SymbolKind.Variable,
+            kind,
             range: binding.def,
           };
         }
@@ -751,16 +762,16 @@ export function resolveImported(index: ProjectIndex, imp: ImportBinding, exporte
   const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
   if (!targetFile) return null;
 
-  const preferredKind =
-    imp.kind === "named"
-      ? imp.phpImportType === "function"
-        ? SymbolKind.Function
-        : imp.phpImportType === "class"
-          ? SymbolKind.Class
-          : imp.phpImportType === "const"
-            ? SymbolKind.Variable
-            : undefined
-      : undefined;
+  let preferredKind: SymbolKind | undefined;
+  if (imp.kind === "named") {
+    if (imp.phpImportType === "function") {
+      preferredKind = SymbolKind.Function;
+    } else if (imp.phpImportType === "class") {
+      preferredKind = SymbolKind.Class;
+    } else if (imp.phpImportType === "const") {
+      preferredKind = SymbolKind.Variable;
+    }
+  }
 
   const hit = resolveExport(index, targetFile, exportedName, {
     ...(preferredKind ? { preferredKind } : {}),
@@ -1123,7 +1134,12 @@ export async function findReferences(
             pushRef({ file: fileId, range, via: { import: imp } });
           }
         } else {
-          const exported = imp.kind === "named" ? imp.imported : imp.kind === "default" ? "default" : exportedName;
+          let exported = exportedName;
+          if (imp.kind === "named") {
+            exported = imp.imported;
+          } else if (imp.kind === "default") {
+            exported = "default";
+          }
           const hit = resolveExport(index, targetFile, exported);
           const matchesDef = hit?.kind === "resolved" ? sameDef(hit.def, def) : targetFile === definitionFile;
           if (!matchesDef) continue;
@@ -1196,8 +1212,16 @@ export async function collectNamespaceMemberRefs(file: string, ns: string, membe
   const tree = parsed.tree;
   const ranges: Range[] = [];
   const isRuby = sup.id === "ruby";
-  const memberExpressionType =
-    sup.nodeTypes.memberExpression ?? (sup.id === "python" ? "attribute" : sup.id === "ruby" ? "call" : "member_expression");
+  let memberExpressionType = sup.nodeTypes.memberExpression;
+  if (!memberExpressionType) {
+    if (sup.id === "python") {
+      memberExpressionType = "attribute";
+    } else if (sup.id === "ruby") {
+      memberExpressionType = "call";
+    } else {
+      memberExpressionType = "member_expression";
+    }
+  }
   const isPropertyIdentifier = (nodeType: string): boolean =>
     (sup.nodeTypes.propertyIdentifier ?? ["property_identifier"]).includes(nodeType) ||
     nodeType === "field_identifier" ||

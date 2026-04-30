@@ -182,11 +182,12 @@ export class CodeReviewSession implements ICodeReviewSession {
   constructor(options: SessionOptions) {
     const identity = resolveSessionIdentity(options);
     this.root = identity.root;
-    this.buildOptions = options.preset
-      ? options.buildOptions
-        ? mergePreset(getSessionPreset(options.preset, options.root).buildOptions ?? {}, options.buildOptions)
-        : getSessionPreset(options.preset, options.root).buildOptions
-      : options.buildOptions;
+    if (options.preset) {
+      const presetBuildOptions = getSessionPreset(options.preset, options.root).buildOptions;
+      this.buildOptions = options.buildOptions ? mergePreset(presetBuildOptions ?? {}, options.buildOptions) : presetBuildOptions;
+    } else {
+      this.buildOptions = options.buildOptions;
+    }
     this.timeout = identity.timeout;
     this.incremental = identity.incremental;
     this.identityFingerprint = sessionIdentityFingerprint(identity);

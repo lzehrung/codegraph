@@ -269,14 +269,12 @@ export async function analyzeImpact(
             // directRef reason to importAlias when a weaker ref is processed later.
             const existingReason = existing?.explain?.reason;
             const newReason = severityResult.explain.reason;
-            const bestReason =
-              existingReason === undefined
-                ? newReason
-                : newReason === undefined
-                  ? existingReason
-                  : REASON_PRIORITY[existingReason] >= REASON_PRIORITY[newReason]
-                    ? existingReason
-                    : newReason;
+            let bestReason = existingReason;
+            if (bestReason === undefined) {
+              bestReason = newReason;
+            } else if (newReason !== undefined && REASON_PRIORITY[newReason] > REASON_PRIORITY[bestReason]) {
+              bestReason = newReason;
+            }
 
             const impactItem: ImpactItem = {
               file: ref.file,

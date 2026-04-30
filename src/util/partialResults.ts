@@ -268,9 +268,15 @@ export function combinePartialResults<T>(results: PartialResult<T>[], combine: (
 
   const combined = combine(allData);
   const coverage = totalAttempted > 0 ? totalSucceeded / totalAttempted : 0;
+  let status: PartialResult<unknown>["status"] = "failed";
+  if (coverage === 1) {
+    status = "complete";
+  } else if (coverage > 0) {
+    status = "partial";
+  }
 
   return {
-    status: coverage === 1 ? "complete" : coverage > 0 ? "partial" : "failed",
+    status,
     data: combined,
     errors: allErrors,
     coverage,
@@ -337,7 +343,12 @@ function getResultCounts<T>(result: PartialResult<T>): {
 
   const attempted = 1;
   const coverage = Math.max(0, Math.min(1, result.coverage));
-  const succeeded = result.status === "complete" ? 1 : result.status === "failed" ? 0 : coverage;
+  let succeeded = coverage;
+  if (result.status === "complete") {
+    succeeded = 1;
+  } else if (result.status === "failed") {
+    succeeded = 0;
+  }
   const failed = attempted - succeeded;
 
   return { attempted, succeeded, failed };

@@ -1083,9 +1083,9 @@ export function toProjectRelativePath(projectRoot: string, filePath: string): st
     return null;
   }
   if (path.win32.isAbsolute(normalizedRoot) && path.win32.isAbsolute(normalizedFile)) {
-    return normalizePath(
-      path.win32.relative(normalizeWindowsComparablePath(normalizedRoot), normalizeWindowsComparablePath(normalizedFile)),
-    );
+    const comparableRoot = normalizeWindowsComparablePath(normalizedRoot);
+    const comparableFile = normalizeWindowsComparablePath(normalizedFile);
+    return normalizePath(path.win32.relative(comparableRoot, comparableFile));
   }
   return normalizePath(path.relative(normalizedRoot, normalizedFile));
 }
@@ -1128,14 +1128,12 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
       const spec = m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? m[6];
       if (!spec) continue;
       const text = m[0] ?? "";
-      const typeOnly =
-        m[1] !== undefined
-          ? /\bimport\s+type\b/.test(text)
-          : m[2] !== undefined
-            ? /\bimport\s+type\b/.test(text)
-            : m[3] !== undefined
-              ? /\bexport\s+type\b/.test(text)
-              : false;
+      let typeOnly = false;
+      if (m[1] !== undefined || m[2] !== undefined) {
+        typeOnly = /\bimport\s+type\b/.test(text);
+      } else if (m[3] !== undefined) {
+        typeOnly = /\bexport\s+type\b/.test(text);
+      }
       push(spec, typeOnly);
     }
   } catch {
@@ -3109,11 +3107,12 @@ export async function resolveSpecifier(
 
   const isRelativeOrAbsolute = spec.startsWith(".") || spec.startsWith("/") || isWindowsAbsolutePath;
   if (isRelativeOrAbsolute) {
-    const base = isWindowsAbsolutePath
-      ? spec
-      : spec.startsWith("/")
-        ? path.join(projectRoot, spec)
-        : path.resolve(path.dirname(fromFile), spec);
+    let base = path.resolve(path.dirname(fromFile), spec);
+    if (isWindowsAbsolutePath) {
+      base = spec;
+    } else if (spec.startsWith("/")) {
+      base = path.join(projectRoot, spec);
+    }
     const hit = await findFirstExistingResolutionCandidate(base, resolutionExtensions);
     if (hit) {
       resolveSpecifierCache.set(cacheKey, hit);

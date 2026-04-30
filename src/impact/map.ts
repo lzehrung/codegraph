@@ -492,9 +492,9 @@ function findSymbolHandleForNode(
 
   // Exact declaration name node
   if (classification?.type === "definition" && isDefinitionNameNode(node, sup, source)) {
-    const local = mod.locals.find(
-      (l) => l.range.start.line === node.startPosition?.row + 1 && l.range.start.column === node.startPosition?.column + 1,
-    );
+    const definitionLine = node.startPosition?.row + 1;
+    const definitionColumn = node.startPosition?.column + 1;
+    const local = mod.locals.find((l) => l.range.start.line === definitionLine && l.range.start.column === definitionColumn);
     if (local) {
       return symbolHandleFromLocal(file, local);
     }
@@ -510,9 +510,9 @@ function findSymbolHandleForNode(
   // continues climbing to a tracked ancestor.
   const nameNode = findDeclarationNameInAncestors(node, sup, trackedPositions);
   if (nameNode) {
-    const local = mod.locals.find(
-      (l) => l.range.start.line === nameNode.startPosition?.row + 1 && l.range.start.column === nameNode.startPosition?.column + 1,
-    );
+    const ancestorLine = nameNode.startPosition?.row + 1;
+    const ancestorColumn = nameNode.startPosition?.column + 1;
+    const local = mod.locals.find((l) => l.range.start.line === ancestorLine && l.range.start.column === ancestorColumn);
     return local ? symbolHandleFromLocal(file, local) : null;
   }
 

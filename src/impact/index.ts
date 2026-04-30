@@ -419,7 +419,14 @@ async function collectUntestedChangeSuggestions(
     const hasPnpm = index.graph.nodes.has(path.resolve(projectRoot, "pnpm-lock.yaml").replace(/\\/g, "/"));
     const hasYarn = index.graph.nodes.has(path.resolve(projectRoot, "yarn.lock").replace(/\\/g, "/"));
     const hasPackage = index.graph.nodes.has(path.resolve(projectRoot, "package.json").replace(/\\/g, "/"));
-    const runner = hasPnpm ? "pnpm" : hasYarn ? "yarn" : hasPackage ? "npm run" : "npm run";
+    let runner = "npm run";
+    if (hasPnpm) {
+      runner = "pnpm";
+    } else if (hasYarn) {
+      runner = "yarn";
+    } else if (hasPackage) {
+      runner = "npm run";
+    }
     if (candidateNames.length === 0) {
       return runner === "npm run" ? "npm run test" : `${runner} test`;
     }

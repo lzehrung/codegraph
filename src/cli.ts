@@ -488,15 +488,24 @@ function buildIndexedArtifactReport(indexPath: string): IndexedArtifactReport {
     type === "diskCache" && stats && !stats.isDirectory() && path.basename(resolvedPath) === "manifest.json"
       ? path.dirname(resolvedPath)
       : resolvedPath;
-  const details =
-    stats && type === "diskCache"
-      ? {
-          manifestPresent: pathExists(path.join(diskCacheDir, "manifest.json")),
-          sqlitePresent: pathExists(path.join(diskCacheDir, "index-cache.sqlite")),
-        }
-      : stats
-        ? { sizeBytes: stats.size, isDirectory: stats.isDirectory() }
-        : undefined;
+  let details:
+    | {
+        manifestPresent: boolean;
+        sqlitePresent: boolean;
+      }
+    | {
+        sizeBytes: number;
+        isDirectory: boolean;
+      }
+    | undefined;
+  if (stats && type === "diskCache") {
+    details = {
+      manifestPresent: pathExists(path.join(diskCacheDir, "manifest.json")),
+      sqlitePresent: pathExists(path.join(diskCacheDir, "index-cache.sqlite")),
+    };
+  } else if (stats) {
+    details = { sizeBytes: stats.size, isDirectory: stats.isDirectory() };
+  }
   return {
     type,
     path: normalizePathForDisplay(resolvedPath),
@@ -1370,16 +1379,17 @@ Examples:
     process.exit(2);
   }
 
-  const includeRoots =
-    cmd === "graph" || cmd === "index" || cmd === "hotspots" || cmd === "inspect"
-      ? rootOpt
-        ? // If the user explicitly sets --root, treat all remaining positionals as include roots.
-          parsed.positionals
-        : // Otherwise, a single positional arg is treated as the project root (back-compat).
-          parsed.positionals.length > 1
-          ? parsed.positionals
-          : []
-      : [];
+  const supportsIncludeRoots = cmd === "graph" || cmd === "index" || cmd === "hotspots" || cmd === "inspect";
+  let includeRoots: string[] = [];
+  if (supportsIncludeRoots) {
+    if (rootOpt) {
+      // If the user explicitly sets --root, treat all remaining positionals as include roots.
+      includeRoots = parsed.positionals;
+    } else if (parsed.positionals.length > 1) {
+      // Otherwise, a single positional arg is treated as the project root (back-compat).
+      includeRoots = parsed.positionals;
+    }
+  }
   const includeRootsAbs = includeRoots.map((r) => normalizePath(resolveFilePathFromRoot(projectRootFs, r)));
 
   const isUnderIncludeRoots = (filePath: string): boolean => {
@@ -1524,23 +1534,31 @@ Examples:
     const cache = parseCacheModeOption(getOpt("--cache"));
     const cacheStrict = hasFlag("--cache-strict");
     const stable = hasFlag("--stable");
-    const format = hasFlag("--mermaid") ? "mermaid" : hasFlag("--dot") ? "dot" : "json";
+    let format: "mermaid" | "dot" | "json" = "json";
+    if (hasFlag("--mermaid")) {
+      format = "mermaid";
+    } else if (hasFlag("--dot")) {
+      format = "dot";
+    }
     const fast = graphFlags.fast;
     const resolveNodeModules = graphFlags.resolveNodeModules;
     const dynamicImportHeuristics = graphFlags.dynamicImportHeuristics;
     const resolutionHints = graphFlags.resolutionHints;
-    const compact = defaultGraphMode ? true : hasFlag("--compact-json");
-    const outputFile = outputArg
-      ? normalizePath(resolveFilePathFromRoot(process.cwd(), outputArg))
-      : defaultGraphMode && !stdoutMode
-        ? path.resolve(process.cwd(), "codegraph.json").replace(/\\/g, "/")
-        : undefined;
+    const compact = defaultGraphMode || hasFlag("--compact-json");
+    let outputFile: string | undefined;
+    if (outputArg) {
+      outputFile = normalizePath(resolveFilePathFromRoot(process.cwd(), outputArg));
+    } else if (defaultGraphMode && !stdoutMode) {
+      outputFile = path.resolve(process.cwd(), "codegraph.json").replace(/\\/g, "/");
+    }
     const sqliteFile = sqliteArg ? normalizePath(resolveFilePathFromRoot(process.cwd(), sqliteArg)) : undefined;
-    stderrFilePath = stderrArg
-      ? normalizePath(resolveFilePathFromRoot(process.cwd(), stderrArg))
-      : defaultGraphMode
-        ? path.resolve(process.cwd(), "codegraph.err").replace(/\\/g, "/")
-        : undefined;
+    if (stderrArg) {
+      stderrFilePath = normalizePath(resolveFilePathFromRoot(process.cwd(), stderrArg));
+    } else if (defaultGraphMode) {
+      stderrFilePath = path.resolve(process.cwd(), "codegraph.err").replace(/\\/g, "/");
+    } else {
+      stderrFilePath = undefined;
+    }
 
     const finalizeReport = async () => {
       if (!commandReport) return;

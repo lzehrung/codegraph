@@ -356,12 +356,12 @@ export function createFallbackImportExtractionHandler(
       event.reason === "fast" || event.reason === "js-fallback-unavailable" || shouldAvoidJsFallbackForLanguage(event.language)
         ? "debug"
         : "warn";
-    const message =
-      event.reason === "js-fallback-unavailable"
-        ? `JS fallback unavailable for ${event.language} query recovery; using regex import extraction.`
-        : shouldAvoidJsFallbackForLanguage(event.language)
-          ? `Native import recovery degraded for ${event.language}; using native-owned fallback extraction.`
-          : "Regex fallback import extraction";
+    let message = "Regex fallback import extraction";
+    if (event.reason === "js-fallback-unavailable") {
+      message = `JS fallback unavailable for ${event.language} query recovery; using regex import extraction.`;
+    } else if (shouldAvoidJsFallbackForLanguage(event.language)) {
+      message = `Native import recovery degraded for ${event.language}; using native-owned fallback extraction.`;
+    }
     logWithLevel(opts?.logLevel, severity, message, {
       language: event.language,
       reason: event.reason,
