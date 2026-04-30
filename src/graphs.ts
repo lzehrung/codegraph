@@ -61,6 +61,12 @@ import {
 } from "./graphs/queries.js";
 import { dotLabel, graphToDOT, graphToMermaid, mermaidLabel } from "./graphs/render.js";
 import {
+  graphToDOTSymbols,
+  graphToDOTSymbolsWithFiles,
+  graphToMermaidSymbols,
+  graphToMermaidSymbolsWithFiles,
+} from "./graphs/symbol-render.js";
+import {
   collectModuleSpecifiersFromSource,
   type CollectModuleSpecifiersOptions,
   type FallbackImportExtractionEvent,
@@ -79,7 +85,8 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "./languages/types.js";
 
 export { collectModuleSpecifiersFromSource };
 export { astGrep, findCycles, findDetailedCycles, getDependencies, getHotspots, getReverseDependencies };
-export { getShortestPath, getUnresolvedImports, graphToDOT, graphToMermaid, sortDetailedCycles, textGrep };
+export { getShortestPath, getUnresolvedImports, graphToDOT, graphToDOTSymbols, graphToDOTSymbolsWithFiles };
+export { graphToMermaid, graphToMermaidSymbols, graphToMermaidSymbolsWithFiles, sortDetailedCycles, textGrep };
 export type { AstGrepHit, CycleInternalEdge, CycleSortMode, DependencyNode, DetailedCycle, HotspotEntry };
 export type { CollectModuleSpecifiersOptions, FallbackImportExtractionEvent, FallbackImportExtractionReason };
 export type { HotspotOptions, TextGrepHit };
@@ -1369,223 +1376,4 @@ export async function buildSymbolGraphDetailed(
   }
 
   return { nodes, edges };
-}
-
-export function graphToMermaidSymbols(sg: SymbolGraph, projectRoot?: string): string {
-  const idOf = new Map<string, string>();
-  const labels = new Map<string, string>();
-  let i = 0;
-  const toDisp = (node: SymbolNode) => {
-    const rel = projectRoot ? path.relative(projectRoot, node.file).replace(/\\/g, "/") : node.file;
-    const base = path.basename(rel);
-    if (node.kind === "import") return `${base}:${node.name} (import)`;
-    if (node.kind === "namespaceImport") return `${base}:${node.name} (namespace)`;
-    return `${base}:${node.name}`;
-  };
-  for (const [id, n] of sg.nodes) {
-    const nid = `n${i++}`;
-    idOf.set(id, nid);
-    labels.set(nid, toDisp(n));
-  }
-  const declared = new Set<string>();
-  const lines: string[] = ["flowchart LR"];
-  for (const [id, label] of labels) {
-    if (declared.has(id)) continue;
-    declared.add(id);
-    lines.push(`${id}["${mermaidLabel(label)}"]`);
-  }
-  for (const e of sg.edges) {
-    const fromId = idOf.get(e.from)!;
-    const toId = idOf.get(e.to)!;
-    if (e.label) lines.push(`${fromId} -- "${mermaidLabel(e.label)}" --> ${toId}`);
-    else lines.push(`${fromId} --> ${toId}`);
-  }
-  return lines.join("\n");
-}
-
-export function graphToDOTSymbols(sg: SymbolGraph, projectRoot?: string): string {
-  const idOf = new Map<string, string>();
-  const labels = new Map<string, string>();
-  let i = 0;
-  const toDisp = (node: SymbolNode) => {
-    const rel = projectRoot ? path.relative(projectRoot, node.file).replace(/\\/g, "/") : node.file;
-    const base = path.basename(rel);
-    if (node.kind === "import") return `${base}:${node.name} (import)`;
-    if (node.kind === "namespaceImport") return `${base}:${node.name} (namespace)`;
-    return `${base}:${node.name}`;
-  };
-  for (const [id, n] of sg.nodes) {
-    const nid = `n${i++}`;
-    idOf.set(id, nid);
-    labels.set(nid, toDisp(n));
-  }
-  const lines: string[] = [];
-  lines.push("digraph G {");
-  lines.push("  rankdir=LR;");
-  lines.push('  node [shape=box, fontsize=10, fontname="Arial"];\n');
-  for (const [id, label] of labels) {
-    lines.push(`  ${id} [label="${dotLabel(label)}"];`);
-  }
-  for (const e of sg.edges) {
-    const fromId = idOf.get(e.from)!;
-    const toId = idOf.get(e.to)!;
-    const attrs: string[] = [];
-    if (e.label) attrs.push(`label="${dotLabel(e.label)}"`);
-    lines.push(`  ${fromId} -> ${toId}${attrs.length ? " [" + attrs.join(",") + "]" : ""};`);
-  }
-  lines.push("}");
-  return lines.join("\n");
-}
-
-export function graphToMermaidSymbolsWithFiles(sg: SymbolGraph, fg: Graph, projectRoot?: string): string {
-  const fileIdOf = new Map<string, string>();
-  const fileNodeMeta = new Map<string, { label: string; external: boolean }>();
-  let fi = 0;
-  const fileLabel = (file: string) => (projectRoot ? path.relative(projectRoot, file).replace(/\\/g, "/") : file);
-  const ensureFile = (file: string) => {
-    if (!fileIdOf.has(file)) {
-      const id = `f${fi++}`;
-      fileIdOf.set(file, id);
-      fileNodeMeta.set(id, { label: fileLabel(file), external: false });
-    }
-  };
-  const ensureExternal = (name: string) => {
-    if (!fileIdOf.has(name)) {
-      const id = `f${fi++}`;
-      fileIdOf.set(name, id);
-      fileNodeMeta.set(id, { label: name, external: true });
-    }
-  };
-  for (const f of fg.nodes) ensureFile(f);
-  for (const e of fg.edges) {
-    ensureFile(e.from);
-    if (e.to.type === "file") ensureFile(e.to.path);
-    else ensureExternal(e.to.name);
-  }
-
-  const symIdOf = new Map<string, string>();
-  const symLabels = new Map<string, string>();
-  let si = 0;
-  const symDisp = (node: SymbolNode) => {
-    const base = path.basename(node.file);
-    if (node.kind === "import") return `${base}:${node.name} (import)`;
-    if (node.kind === "namespaceImport") return `${base}:${node.name} (namespace)`;
-    return `${base}:${node.name}`;
-  };
-  for (const [id, n] of sg.nodes) {
-    const sid = `s${si++}`;
-    symIdOf.set(id, sid);
-    symLabels.set(sid, symDisp(n));
-  }
-
-  const declared = new Set<string>();
-  const lines: string[] = ["flowchart LR"];
-
-  for (const [id, meta] of fileNodeMeta) {
-    if (declared.has(id)) continue;
-    declared.add(id);
-    lines.push(meta.external ? `${id}(["${mermaidLabel(meta.label)}"])` : `${id}["${mermaidLabel(meta.label)}"]`);
-  }
-  for (const [id, label] of symLabels) {
-    if (declared.has(id)) continue;
-    declared.add(id);
-    lines.push(`${id}["${mermaidLabel(label)}"]`);
-  }
-
-  for (const e of fg.edges) {
-    const fromId = fileIdOf.get(e.from)!;
-    const targetKey = e.to.type === "file" ? e.to.path : e.to.name;
-    const toId = fileIdOf.get(targetKey)!;
-    lines.push(`${fromId} --> ${toId}`);
-  }
-
-  for (const [sidKey, sid] of symIdOf) {
-    const node = sg.nodes.get(sidKey)!;
-    const fid = fileIdOf.get(node.file);
-    if (fid) lines.push(`${fid} --> ${sid}`);
-  }
-
-  for (const e of sg.edges) {
-    const fromId = symIdOf.get(e.from)!;
-    const toId = symIdOf.get(e.to)!;
-    if (e.label) lines.push(`${fromId} -- "${mermaidLabel(e.label)}" --> ${toId}`);
-    else lines.push(`${fromId} --> ${toId}`);
-  }
-
-  return lines.join("\n");
-}
-
-export function graphToDOTSymbolsWithFiles(sg: SymbolGraph, fg: Graph, projectRoot?: string): string {
-  const fileIdOf = new Map<string, string>();
-  const fileNodeMeta = new Map<string, { label: string; external: boolean }>();
-  let fi = 0;
-  const fileLabel = (file: string) => (projectRoot ? path.relative(projectRoot, file).replace(/\\/g, "/") : file);
-  const ensureFile = (file: string) => {
-    if (!fileIdOf.has(file)) {
-      const id = `f${fi++}`;
-      fileIdOf.set(file, id);
-      fileNodeMeta.set(id, { label: fileLabel(file), external: false });
-    }
-  };
-  const ensureExternal = (name: string) => {
-    if (!fileIdOf.has(name)) {
-      const id = `f${fi++}`;
-      fileIdOf.set(name, id);
-      fileNodeMeta.set(id, { label: name, external: true });
-    }
-  };
-  for (const f of fg.nodes) ensureFile(f);
-  for (const e of fg.edges) {
-    ensureFile(e.from);
-    if (e.to.type === "file") ensureFile(e.to.path);
-    else ensureExternal(e.to.name);
-  }
-
-  const symIdOf = new Map<string, string>();
-  const symLabels = new Map<string, string>();
-  let si = 0;
-  const symDisp = (node: SymbolNode) => {
-    const base = path.basename(node.file);
-    if (node.kind === "import") return `${base}:${node.name} (import)`;
-    if (node.kind === "namespaceImport") return `${base}:${node.name} (namespace)`;
-    return `${base}:${node.name}`;
-  };
-  for (const [id, n] of sg.nodes) {
-    const sid = `s${si++}`;
-    symIdOf.set(id, sid);
-    symLabels.set(sid, symDisp(n));
-  }
-
-  const lines: string[] = [];
-  lines.push("digraph G {");
-  lines.push("  rankdir=LR;");
-  lines.push('  node [shape=box, fontsize=10, fontname="Arial"];\n');
-  for (const [id, meta] of fileNodeMeta) {
-    lines.push(
-      `  ${id} [label="${dotLabel(meta.label)}", ${meta.external ? "shape=ellipse, style=dashed" : "shape=box"}];`,
-    );
-  }
-  for (const [id, label] of symLabels) {
-    lines.push(`  ${id} [label="${dotLabel(label)}"];`);
-  }
-  for (const e of fg.edges) {
-    const fromId = fileIdOf.get(e.from)!;
-    const targetKey = e.to.type === "file" ? e.to.path : e.to.name;
-    const toId = fileIdOf.get(targetKey)!;
-    lines.push(`  ${fromId} -> ${toId};`);
-  }
-  for (const [sidKey, sid] of symIdOf) {
-    const node = sg.nodes.get(sidKey)!;
-    const fid = fileIdOf.get(node.file);
-    if (fid) lines.push(`  ${fid} -> ${sid};`);
-  }
-  for (const e of sg.edges) {
-    const fromId = symIdOf.get(e.from)!;
-    const toId = symIdOf.get(e.to)!;
-    const attrs: string[] = [];
-    if (e.label) attrs.push(`label="${dotLabel(e.label)}"`);
-    lines.push(`  ${fromId} -> ${toId}${attrs.length ? " [" + attrs.join(",") + "]" : ""};`);
-  }
-  lines.push("}");
-  return lines.join("\n");
 }
