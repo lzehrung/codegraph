@@ -15,9 +15,7 @@ import {
 import { prepareParserInput } from "../src/languages/filePrep.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
 
-const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable()
-  ? describe
-  : describe.skip;
+const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 
 function normalizeFile(file: string): string {
   return path.resolve(file).replace(/\\/g, "/");
@@ -27,10 +25,7 @@ function simplifyModule(index: ModuleIndex): unknown {
   return {
     imports: index.imports.map((entry) => ({
       ...entry,
-      resolved:
-        typeof entry.resolved === "string"
-          ? normalizeFile(entry.resolved)
-          : entry.resolved,
+      resolved: typeof entry.resolved === "string" ? normalizeFile(entry.resolved) : entry.resolved,
     })),
     locals: index.locals.map((local) => ({
       localName: local.localName,
@@ -83,13 +78,7 @@ async function makeTempProject(): Promise<{
 
   await fsp.writeFile(
     betaFile,
-    [
-      "export const betaValue = 1;",
-      "export function betaHelper() {",
-      "  return betaValue;",
-      "}",
-      "",
-    ].join("\n"),
+    ["export const betaValue = 1;", "export function betaHelper() {", "  return betaValue;", "}", ""].join("\n"),
     "utf8",
   );
 
@@ -130,22 +119,16 @@ async function computeJsOnlyModule(file: string, projectRoot: string): Promise<u
 function mockNativeFailureForFile(file: string) {
   const normalizedFile = normalizeFile(file);
   const original = nativeRuntime.getNativeQueryExecution;
-  return vi
-    .spyOn(nativeRuntime, "getNativeQueryExecution")
-    .mockImplementation((source, support) => {
-      if (
-        support.id === "ts" &&
-        source.includes("export function alphaValue") &&
-        normalizedFile.endsWith("/alpha.ts")
-      ) {
-        return {
-          results: null,
-          fallbackReason: "queryFailure",
-          error: "forced native query failure",
-        };
-      }
-      return original(source, support);
-    });
+  return vi.spyOn(nativeRuntime, "getNativeQueryExecution").mockImplementation((source, support) => {
+    if (support.id === "ts" && source.includes("export function alphaValue") && normalizedFile.endsWith("/alpha.ts")) {
+      return {
+        results: null,
+        fallbackReason: "queryFailure",
+        error: "forced native query failure",
+      };
+    }
+    return original(source, support);
+  });
 }
 
 afterEach(() => {

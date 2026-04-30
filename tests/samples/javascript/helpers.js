@@ -17,5 +17,5 @@ export class HelperInterface {
 module.exports = {
   helperFunction,
   anotherHelper,
-  HelperInterface
+  HelperInterface,
 };

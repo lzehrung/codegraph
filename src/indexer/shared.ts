@@ -23,10 +23,7 @@ export function parseGoImportAlias(stmtText: string): string | null {
 }
 
 export function edgeKey(edge: Edge): string {
-  const toKey =
-    edge.to.type === "file"
-      ? `file:${edge.to.path}`
-      : `external:${edge.to.name}`;
+  const toKey = edge.to.type === "file" ? `file:${edge.to.path}` : `external:${edge.to.name}`;
   const typeOnly = edge.typeOnly ? "1" : "0";
   return `${edge.from}|${toKey}|${edge.raw}|${typeOnly}`;
 }

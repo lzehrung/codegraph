@@ -26,7 +26,7 @@ export type UtilityType = {
 };
 
 // Re-export from another module
-export { helperFunction as reExportedHelper } from './helpers';
+export { helperFunction as reExportedHelper } from "./helpers";
 
 // Default export
 export default function defaultExport(): string {

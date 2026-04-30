@@ -28,10 +28,7 @@ const GRAPH_FUNCTION_NAME_QUERY = `
   ]
 `;
 
-const isWithin = (
-  node: SyntaxNodeLike,
-  ancestor: SyntaxNodeLike | null,
-): boolean => {
+const isWithin = (node: SyntaxNodeLike, ancestor: SyntaxNodeLike | null): boolean => {
   let current: SyntaxNodeLike | null = node;
   while (current) {
     if (ancestor && current.id === ancestor.id) return true;
@@ -40,16 +37,10 @@ const isWithin = (
   return false;
 };
 
-const isInField = (
-  node: SyntaxNodeLike,
-  parent: SyntaxNodeLike,
-  field: string,
-): boolean => isWithin(node, parent.childForFieldName(field));
+const isInField = (node: SyntaxNodeLike, parent: SyntaxNodeLike, field: string): boolean =>
+  isWithin(node, parent.childForFieldName(field));
 
-const findAncestor = (
-  node: SyntaxNodeLike,
-  types: Set<string>,
-): SyntaxNodeLike | null => {
+const findAncestor = (node: SyntaxNodeLike, types: Set<string>): SyntaxNodeLike | null => {
   let current: SyntaxNodeLike | null = node.parent;
   while (current) {
     if (types.has(current.type)) return current;
@@ -69,12 +60,9 @@ const containerTypes = new Set([
 
 const paramListTypes = new Set(["parameter_declaration", "parameter_list"]);
 
-const isInParameterList = (node: SyntaxNodeLike): boolean =>
-  !!findAncestor(node, paramListTypes);
+const isInParameterList = (node: SyntaxNodeLike): boolean => !!findAncestor(node, paramListTypes);
 
-const resolveDeclaratorRoot = (
-  ancestor: SyntaxNodeLike,
-): SyntaxNodeLike | null => {
+const resolveDeclaratorRoot = (ancestor: SyntaxNodeLike): SyntaxNodeLike | null => {
   let declaratorNode = ancestor.childForFieldName("declarator");
   if (!declaratorNode) return null;
   if (declaratorNode.type === "init_declarator") {
@@ -88,10 +76,7 @@ const resolveDeclaratorRoot = (
   return declaratorNode;
 };
 
-const isInAncestorDeclarator = (
-  node: SyntaxNodeLike,
-  ancestorTypes: Set<string>,
-): boolean => {
+const isInAncestorDeclarator = (node: SyntaxNodeLike, ancestorTypes: Set<string>): boolean => {
   const ancestor = findAncestor(node, ancestorTypes);
   if (!ancestor) return false;
   const declaratorNode = resolveDeclaratorRoot(ancestor);
@@ -111,18 +96,7 @@ const isFunctionDeclarator = (node: SyntaxNodeLike): boolean => {
 
 export const CPP_DEF: LanguageDefinition = {
   id: "cpp",
-  extensions: [
-    ".cc",
-    ".cpp",
-    ".cxx",
-    ".c++",
-    ".hpp",
-    ".hh",
-    ".hxx",
-    ".ipp",
-    ".tpp",
-    ".inl",
-  ],
+  extensions: [".cc", ".cpp", ".cxx", ".c++", ".hpp", ".hh", ".hxx", ".ipp", ".tpp", ".inl"],
   grammar: () => loadTreeSitterLanguage("tree-sitter-cpp"),
   structure: {
     blocks: [
@@ -213,12 +187,7 @@ export const CPP_DEF: LanguageDefinition = {
     `,
   },
   nodeTypes: {
-    identifier: [
-      "identifier",
-      "field_identifier",
-      "type_identifier",
-      "namespace_identifier",
-    ],
+    identifier: ["identifier", "field_identifier", "type_identifier", "namespace_identifier"],
     propertyIdentifier: ["field_identifier", "identifier"],
     memberExpression: "field_expression",
   },
@@ -234,33 +203,24 @@ export const CPP_DEF: LanguageDefinition = {
       return "class";
     if (
       parent.type === "alias_declaration" ||
-      (parent.type === "type_definition" &&
-        isInField(node, parent, "declarator"))
+      (parent.type === "type_definition" && isInField(node, parent, "declarator"))
     )
       return "type";
     const container = findAncestor(node, containerTypes);
     if (container?.type === "function_definition") return "function";
-    if (container?.type === "declaration" && isFunctionDeclarator(node))
-      return "function";
+    if (container?.type === "declaration" && isFunctionDeclarator(node)) return "function";
     return "variable";
   },
   isDeclarationName: (node) => {
     const parent = node.parent;
     if (!parent) return false;
     if (
-      (parent.type === "class_specifier" ||
-        parent.type === "struct_specifier" ||
-        parent.type === "enum_specifier") &&
+      (parent.type === "class_specifier" || parent.type === "struct_specifier" || parent.type === "enum_specifier") &&
       isInField(node, parent, "name")
     )
       return true;
-    if (
-      parent.type === "namespace_definition" &&
-      isInField(node, parent, "name")
-    )
-      return true;
-    if (parent.type === "alias_declaration" && isInField(node, parent, "name"))
-      return true;
+    if (parent.type === "namespace_definition" && isInField(node, parent, "name")) return true;
+    if (parent.type === "alias_declaration" && isInField(node, parent, "name")) return true;
     if (
       isInAncestorDeclarator(node, new Set(["parameter_declaration"])) ||
       isInAncestorDeclarator(node, new Set(["field_declaration"])) ||
@@ -268,28 +228,18 @@ export const CPP_DEF: LanguageDefinition = {
       isInAncestorDeclarator(node, new Set(["type_definition"]))
     )
       return true;
-    if (
-      isInAncestorDeclarator(node, new Set(["function_definition"])) &&
-      !isInParameterList(node)
-    )
-      return true;
-    if (
-      isInAncestorDeclarator(node, new Set(["declaration"])) &&
-      !isInParameterList(node)
-    )
-      return true;
+    if (isInAncestorDeclarator(node, new Set(["function_definition"])) && !isInParameterList(node)) return true;
+    if (isInAncestorDeclarator(node, new Set(["declaration"])) && !isInParameterList(node)) return true;
     if (
       parent.type === "qualified_identifier" &&
       parent.parent?.type === "using_declaration" &&
       isInField(node, parent, "name")
     )
       return true;
-    if (parent.type === "enumerator" && isInField(node, parent, "name"))
-      return true;
+    if (parent.type === "enumerator" && isInField(node, parent, "name")) return true;
     return false;
   },
-  createsFunctionScope: (node) =>
-    node.type === "function_definition" || node.type === "lambda_expression",
+  createsFunctionScope: (node) => node.type === "function_definition" || node.type === "lambda_expression",
   createsBlockScope: (node) => node.type === "compound_statement",
   supportsCrossModuleSymbols: true,
 };

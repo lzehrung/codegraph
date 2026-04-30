@@ -110,19 +110,10 @@ import { buildProjectIndex, goToDefinition } from "@lzehrung/codegraph";
 const root = process.cwd();
 const index = await buildProjectIndex(root);
 
-const file =
-  `${root}/tests/samples/monorepo/packages/pkg-b/src/index.js`.replace(
-    /\\/g,
-    "/",
-  );
+const file = `${root}/tests/samples/monorepo/packages/pkg-b/src/index.js`.replace(/\\/g, "/");
 const res = await goToDefinition(index, { file, line: 21, column: 18 });
 if (res.status === "ok") {
-  console.log(
-    "Def:",
-    res.definition.file,
-    res.definition.localName,
-    res.definition.range,
-  );
+  console.log("Def:", res.definition.file, res.definition.localName, res.definition.range);
 }
 ```
 
@@ -135,9 +126,7 @@ const refs = await findReferences(index, { file, line: 21, column: 18 });
 if (refs.status === "ok") {
   console.log(
     "Refs:",
-    refs.references.map(
-      (ref) => `${ref.file}:${ref.range.start.line}:${ref.range.start.column}`,
-    ),
+    refs.references.map((ref) => `${ref.file}:${ref.range.start.line}:${ref.range.start.column}`),
   );
 }
 ```
@@ -163,11 +152,7 @@ const incremental = await buildProjectIndexIncremental(root, {
 `listProjectFiles` defaults to source files plus common project manifests and lockfiles across supported languages, for example `package.json`, `requirements.txt`, `pyproject.toml`, and `Cargo.toml`.
 
 ```ts
-import {
-  listProjectFiles,
-  discoverProjectFiles,
-  collectGraph,
-} from "@lzehrung/codegraph";
+import { listProjectFiles, discoverProjectFiles, collectGraph } from "@lzehrung/codegraph";
 
 const root = process.cwd();
 const files = await listProjectFiles(root);
@@ -179,9 +164,7 @@ const includeIgnoredFiles = await listProjectFiles(root, undefined, {
   useGitignore: false,
 });
 
-const manifests = files.filter((file) =>
-  /(?:package\.json|pyproject\.toml|Cargo\.toml)$/.test(file),
-);
+const manifests = files.filter((file) => /(?:package\.json|pyproject\.toml|Cargo\.toml)$/.test(file));
 console.log(manifests);
 
 const projectFiles = await discoverProjectFiles(root);
@@ -190,8 +173,7 @@ console.log(named);
 
 const graph = await collectGraph(root, files);
 for (const edge of graph.edges) {
-  const target =
-    edge.to.type === "file" ? edge.to.path : edge.to.name;
+  const target = edge.to.type === "file" ? edge.to.path : edge.to.name;
   console.log(`${edge.from} -> ${target} (${edge.raw})`);
 }
 ```
@@ -199,23 +181,14 @@ for (const edge of graph.edges) {
 Build an index from an explicit multi-root file list:
 
 ```ts
-import {
-  listProjectFiles,
-  buildProjectIndexFromFiles,
-} from "@lzehrung/codegraph";
+import { listProjectFiles, buildProjectIndexFromFiles } from "@lzehrung/codegraph";
 
 const root = process.cwd();
 const tsRoot = `${root}/tests/samples/typescript`;
 const jsRoot = `${root}/tests/samples/javascript`;
-const files = [
-  ...(await listProjectFiles(tsRoot)),
-  ...(await listProjectFiles(jsRoot)),
-];
+const files = [...(await listProjectFiles(tsRoot)), ...(await listProjectFiles(jsRoot))];
 
-const index = await buildProjectIndexFromFiles(
-  root,
-  Array.from(new Set(files)),
-);
+const index = await buildProjectIndexFromFiles(root, Array.from(new Set(files)));
 console.log({ files: index.byFile.size, edges: index.graph.edges.length });
 ```
 
@@ -254,20 +227,11 @@ A handle is either:
 - `${file}::${alias}::import` for an import alias
 
 ```ts
-import {
-  buildProjectIndex,
-  listSymbols,
-  goToDefinitionById,
-  findReferencesById,
-} from "@lzehrung/codegraph";
+import { buildProjectIndex, listSymbols, goToDefinitionById, findReferencesById } from "@lzehrung/codegraph";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
-const file =
-  `${root}/tests/samples/monorepo/packages/pkg-b/src/index.js`.replace(
-    /\\/g,
-    "/",
-  );
+const file = `${root}/tests/samples/monorepo/packages/pkg-b/src/index.js`.replace(/\\/g, "/");
 const items = listSymbols(index, { file, includeImports: true });
 const handle = items.find((item) => item.name === "aHelper")?.id;
 
@@ -300,9 +264,7 @@ if (report.warning) {
 console.log(`Changed symbols: ${report.changedSymbols.length}`);
 console.log(`Impacted files: ${report.impacted.length}`);
 for (const item of report.impacted.slice(0, 5)) {
-  console.log(
-    `${item.file}: ${item.symbols.join(", ")} (${(item.severity * 100).toFixed(1)}% severity)`,
-  );
+  console.log(`${item.file}: ${item.symbols.join(", ")} (${(item.severity * 100).toFixed(1)}% severity)`);
 }
 ```
 

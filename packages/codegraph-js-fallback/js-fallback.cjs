@@ -61,9 +61,7 @@ function loadBindingFromPackage(packageName) {
   const nodeGypBuild = packageRequire("node-gyp-build");
   const binding = nodeGypBuild(packageRoot);
   try {
-    const nodeTypes = packageRequire(
-      path.join(packageRoot, "src", "node-types.json"),
-    );
+    const nodeTypes = packageRequire(path.join(packageRoot, "src", "node-types.json"));
     if (isObject(binding)) {
       binding.nodeTypeInfo = nodeTypes;
     }

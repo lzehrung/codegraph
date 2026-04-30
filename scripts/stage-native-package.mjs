@@ -43,9 +43,7 @@ if (!fs.existsSync(sourceFile)) {
 
 const targetDir = path.join(nativeRoot, "npm", suffix);
 if (!fs.existsSync(targetDir)) {
-  console.error(
-    `Target package directory not found: ${targetDir}. Run \`npm run native:create-npm-dirs\` first.`,
-  );
+  console.error(`Target package directory not found: ${targetDir}. Run \`npm run native:create-npm-dirs\` first.`);
   process.exit(1);
 }
 

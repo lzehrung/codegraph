@@ -1,15 +1,7 @@
-import {
-  isJsSyntaxTree,
-  parseWithJsLanguage,
-  type JsSyntaxTree,
-} from "../jsFallback.js";
+import { isJsSyntaxTree, parseWithJsLanguage, type JsSyntaxTree } from "../jsFallback.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
-import {
-  capturesByName,
-  capturesNamed,
-  rangeFromNativeCapture,
-} from "../native/queryResults.js";
+import { capturesByName, capturesNamed, rangeFromNativeCapture } from "../native/queryResults.js";
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
 import {
   executeJsQueryAsNativeMatches,
@@ -19,27 +11,13 @@ import {
   type NativeQueryResults,
   type NativeRuntimeMode,
 } from "../native/treeSitterNative.js";
-import {
-  maskJsLikeCommentsAndStrings,
-  sliceText,
-  toRange,
-  unquote,
-} from "../util.js";
+import { maskJsLikeCommentsAndStrings, sliceText, toRange, unquote } from "../util.js";
 import { buildScopeIndexFromSource } from "./scope.js";
 import { QUERY_DRIVEN_LOCALS_LANGUAGES } from "./shared.js";
 import { SymbolKind } from "./types.js";
 import type { LanguageSupport } from "../languages.js";
-import type {
-  JsLanguage,
-  SyntaxNodeLike,
-  SyntaxTreeLike,
-} from "../languages/types.js";
-import type {
-  ExportEntry,
-  ImportBinding,
-  ModuleIndex,
-  SymbolDef,
-} from "./types.js";
+import type { JsLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import type { ExportEntry, ImportBinding, ModuleIndex, SymbolDef } from "./types.js";
 import type { Range } from "../types.js";
 function appendJsLikeRegexFallbackExports(
   file: string,
@@ -48,16 +26,13 @@ function appendJsLikeRegexFallbackExports(
   exports: ExportEntry[],
 ): void {
   const maskedSource = maskJsLikeCommentsAndStrings(source);
-  const reDecl =
-    /\bexport\s+(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g;
+  const reDecl = /\bexport\s+(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g;
   const reDefault = /\bexport\s+default\s+([A-Za-z_$][\w$]*)/g;
   const reExportAssign = /\bexport\s*=\s*([A-Za-z_$][\w$]*)/g;
   const reReexport = /\bexport\s*\{\s*([^}]+)\}\s*from\s*("|')([^"']*)\2/g;
-  const reReexportNs =
-    /\bexport\s*\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*("|')([^"']*)\2/g;
+  const reReexportNs = /\bexport\s*\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*("|')([^"']*)\2/g;
   const reStar = /\bexport\s*\*\s*from\s*("|')([^"']*)\1/g;
-  const reCjsFn =
-    /(?:^|[;\n\r])\s*(?:exports|module\.exports)\.([A-Za-z_$][\w$]*)\s*=\s*(function\b|\([^)]*\)\s*=>)/g;
+  const reCjsFn = /(?:^|[;\n\r])\s*(?:exports|module\.exports)\.([A-Za-z_$][\w$]*)\s*=\s*(function\b|\([^)]*\)\s*=>)/g;
   const reCjsObjFn = /([A-Za-z_$][\w$]*)\s*:\s*(function\b|\([^)]*\)\s*=>)/g;
   const moduleExportsObject = /module\.exports\s*=\s*\{([^}]*)\}/s;
   let match: RegExpExecArray | null;
@@ -106,19 +81,12 @@ function appendJsLikeRegexFallbackExports(
     const from = source.slice(match.index, reReexport.lastIndex).match(/from\s*("|')([^"']+)\1/)?.[2];
     if (!from) continue;
     for (const spec of list) {
-      const entryMatch = spec.match(
-        /^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/,
-      );
+      const entryMatch = spec.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
       if (!entryMatch) continue;
       const srcName = entryMatch[1]!;
       const alias = entryMatch[2] ?? srcName;
       if (
-        !exports.some(
-          (entry) =>
-            entry.type === "reexport" &&
-            entry.exportedAs === alias &&
-            entry.fromModule === from,
-        )
+        !exports.some((entry) => entry.type === "reexport" && entry.exportedAs === alias && entry.fromModule === from)
       ) {
         exports.push({
           type: "reexport",
@@ -192,8 +160,7 @@ function appendJsLikeRegexFallbackExports(
     const exportedAs = objectMatch[1]!;
     let local = locals.find((def) => def.localName === exportedAs);
     if (!local) {
-      const idx =
-        moduleExportsObjMatch.index + moduleExportsObjMatch[0].indexOf(exportedAs);
+      const idx = moduleExportsObjMatch.index + moduleExportsObjMatch[0].indexOf(exportedAs);
       const pos = { line: 1, column: 1, index: idx };
       local = {
         file,
@@ -226,22 +193,15 @@ export function collectLocalsAndExportsFromSource(
     return { file, exports: [], imports, locals: [] };
   }
 
-  const normalizeDocstringLine = (line: string) =>
-    line.replace(/^\s*(?:\/\/\/?\s?|#\s?)/, "").replace(/^\s*\*\s?/, "");
+  const normalizeDocstringLine = (line: string) => line.replace(/^\s*(?:\/\/\/?\s?|#\s?)/, "").replace(/^\s*\*\s?/, "");
 
   const _sourceLines = source.split(/\r?\n/);
 
-  const extractLeadingDocstring = (
-    node: SyntaxNodeLike | null,
-  ): string | undefined => {
+  const extractLeadingDocstring = (node: SyntaxNodeLike | null): string | undefined => {
     if (!node) return undefined;
     // If we're looking at an identifier, look at its parent (the declaration)
     let target = node;
-    if (
-      target.type === "identifier" ||
-      target.type === "type_identifier" ||
-      target.type === "property_identifier"
-    ) {
+    if (target.type === "identifier" || target.type === "type_identifier" || target.type === "property_identifier") {
       if (target.parent) target = target.parent;
     }
     // Handle variable declarators - climb to declaration statement
@@ -256,12 +216,7 @@ export function collectLocalsAndExportsFromSource(
     const comments: string[] = [];
     let prev = target.previousNamedSibling;
     // Walk backwards through comments
-    while (
-      prev &&
-      (prev.type === "comment" ||
-        prev.type === "line_comment" ||
-        prev.type === "block_comment")
-    ) {
+    while (prev && (prev.type === "comment" || prev.type === "line_comment" || prev.type === "block_comment")) {
       const text = sliceText(prev, source);
       // Clean up comment syntax
       const clean = text
@@ -283,24 +238,13 @@ export function collectLocalsAndExportsFromSource(
     return matches ? matches.length : 0;
   };
 
-  const estimateComplexity = (
-    range: Range,
-    languageId: string,
-  ): number | undefined => {
+  const estimateComplexity = (range: Range, languageId: string): number | undefined => {
     const startIdx = range.start.index;
     const endIdx = range.end.index;
-    if (startIdx === undefined || endIdx === undefined || endIdx <= startIdx)
-      return undefined;
+    if (startIdx === undefined || endIdx === undefined || endIdx <= startIdx) return undefined;
     const snippet = source.slice(startIdx, endIdx);
     if (!snippet.trim()) return undefined;
-    const keywordPatterns = [
-      /\bif\b/g,
-      /\bfor\b/g,
-      /\bwhile\b/g,
-      /\bcase\b/g,
-      /\bcatch\b/g,
-      /\belse\s+if\b/g,
-    ];
+    const keywordPatterns = [/\bif\b/g, /\bfor\b/g, /\bwhile\b/g, /\bcase\b/g, /\bcatch\b/g, /\belse\s+if\b/g];
     if (languageId === "python") {
       keywordPatterns.push(/\belif\b/g, /\bexcept\b/g);
     }
@@ -311,12 +255,7 @@ export function collectLocalsAndExportsFromSource(
     return 1 + count;
   };
 
-  const buildSymbolDef = (
-    localName: string,
-    kind: SymbolKind,
-    range: Range,
-    node?: SyntaxNodeLike,
-  ): SymbolDef => {
+  const buildSymbolDef = (localName: string, kind: SymbolKind, range: Range, node?: SyntaxNodeLike): SymbolDef => {
     let lineSpan: number | undefined;
     if (
       typeof range.start.line === "number" &&
@@ -329,11 +268,8 @@ export function collectLocalsAndExportsFromSource(
     if (node) {
       docstring = extractLeadingDocstring(node);
     }
-    const shouldEstimateComplexity =
-      kind === SymbolKind.Function || kind === SymbolKind.Class;
-    const complexity = shouldEstimateComplexity
-      ? estimateComplexity(range, support.id)
-      : undefined;
+    const shouldEstimateComplexity = kind === SymbolKind.Function || kind === SymbolKind.Class;
+    const complexity = shouldEstimateComplexity ? estimateComplexity(range, support.id) : undefined;
     const base: SymbolDef = {
       file,
       localName,
@@ -365,11 +301,7 @@ export function collectLocalsAndExportsFromSource(
     if (tree || treeAttempted) return tree;
     treeAttempted = true;
     try {
-      const nativeTreeExecution = getNativeSyntaxTreeExecution(
-        source,
-        support,
-        opts?.nativeMode,
-      );
+      const nativeTreeExecution = getNativeSyntaxTreeExecution(source, support, opts?.nativeMode);
       if (nativeTreeExecution.tree) {
         tree = new ProjectedSyntaxTree(source, nativeTreeExecution.tree);
         return tree;
@@ -405,12 +337,7 @@ export function collectLocalsAndExportsFromSource(
     return SymbolKind.Variable;
   };
 
-  const pushLocal = (
-    localName: string,
-    kind: SymbolKind,
-    range: Range,
-    node?: SyntaxNodeLike,
-  ) => {
+  const pushLocal = (localName: string, kind: SymbolKind, range: Range, node?: SyntaxNodeLike) => {
     const key = `${localName}:${range.start.index ?? 0}:${range.end.index ?? 0}`;
     if (seenLocals.has(key)) return;
     seenLocals.add(key);
@@ -442,16 +369,9 @@ export function collectLocalsAndExportsFromSource(
           if (capture.name !== "name" && capture.name !== "tname") continue;
           const nativeRange = rangeFromNativeCapture(capture);
           const node =
-            enrichmentTree?.rootNode.descendantForIndex(
-              nativeRange.start.index ?? 0,
-              nativeRange.end.index ?? 0,
-            ) ?? undefined;
-          pushLocal(
-            capture.text,
-            classifyLocalCapture(capture, nativeRange, node),
-            nativeRange,
-            node,
-          );
+            enrichmentTree?.rootNode.descendantForIndex(nativeRange.start.index ?? 0, nativeRange.end.index ?? 0) ??
+            undefined;
+          pushLocal(capture.text, classifyLocalCapture(capture, nativeRange, node), nativeRange, node);
         }
       }
       return true;
@@ -479,27 +399,13 @@ export function collectLocalsAndExportsFromSource(
         for (const cap of match.captures) {
           if (cap.name !== "name" && cap.name !== "tname") continue;
           const range = rangeFromNativeCapture(cap);
-          const node =
-            jsTree.rootNode.descendantForIndex(
-              range.start.index ?? 0,
-              range.end.index ?? 0,
-            ) ?? undefined;
-          pushLocal(
-            cap.text,
-            classifyLocalCapture(cap, range, node),
-            range,
-            node,
-          );
+          const node = jsTree.rootNode.descendantForIndex(range.start.index ?? 0, range.end.index ?? 0) ?? undefined;
+          pushLocal(cap.text, classifyLocalCapture(cap, range, node), range, node);
         }
       }
       return true;
     } catch (error) {
-      logWithLevel(
-        opts?.logLevel,
-        "warn",
-        `Warning: Query error in locals for ${support.id}:`,
-        error,
-      );
+      logWithLevel(opts?.logLevel, "warn", `Warning: Query error in locals for ${support.id}:`, error);
       return false;
     }
   };
@@ -509,14 +415,7 @@ export function collectLocalsAndExportsFromSource(
   if (!usedQueryLocals) {
     const scopeTree = ensureTree();
     if (scopeTree) {
-      const scopeIdx = buildScopeIndexFromSource(
-        file,
-        source,
-        support,
-        lang,
-        imports,
-        { tree: scopeTree },
-      );
+      const scopeIdx = buildScopeIndexFromSource(file, source, support, lang, imports, { tree: scopeTree });
       for (const b of scopeIdx.all) {
         if (!b.def) continue;
         let kind: SymbolKind = SymbolKind.Variable;
@@ -528,9 +427,7 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
-  const mergeTypeScriptNamespaceDeclarations = (
-    items: SymbolDef[],
-  ): SymbolDef[] => {
+  const mergeTypeScriptNamespaceDeclarations = (items: SymbolDef[]): SymbolDef[] => {
     if (support.id !== "ts" && support.id !== "tsx") return items;
     const byName = new Map<string, SymbolDef[]>();
     for (const item of items) {
@@ -566,17 +463,10 @@ export function collectLocalsAndExportsFromSource(
     matches: NativeQueryResults["exports"],
     treeForEnrichment?: SyntaxTreeLike,
   ): void => {
-    const nodeForCapture = (
-      capture: NativeCapture | undefined,
-    ): SyntaxNodeLike | undefined => {
+    const nodeForCapture = (capture: NativeCapture | undefined): SyntaxNodeLike | undefined => {
       if (!capture || !treeForEnrichment) return undefined;
       const range = rangeFromNativeCapture(capture);
-      return (
-        treeForEnrichment.rootNode.descendantForIndex(
-          range.start.index ?? 0,
-          range.end.index ?? 0,
-        ) ?? undefined
-      );
+      return treeForEnrichment.rootNode.descendantForIndex(range.start.index ?? 0, range.end.index ?? 0) ?? undefined;
     };
 
     for (const match of matches) {
@@ -588,9 +478,7 @@ export function collectLocalsAndExportsFromSource(
         const leftText = map["left"]?.text ?? "";
         const methodText = map["method"]?.text ?? "";
         const isAllAssignment = leftText === "__all__";
-        const isAllMethod =
-          leftText === "__all__" &&
-          (methodText === "extend" || methodText === "append");
+        const isAllMethod = leftText === "__all__" && (methodText === "extend" || methodText === "append");
 
         if (isAllAssignment || isAllMethod) {
           hasPythonAll = true;
@@ -602,10 +490,7 @@ export function collectLocalsAndExportsFromSource(
             if (
               local &&
               !exports.some(
-                (entry) =>
-                  entry.type !== "exportStar" &&
-                  "exportedAs" in entry &&
-                  entry.exportedAs === name,
+                (entry) => entry.type !== "exportStar" && "exportedAs" in entry && entry.exportedAs === name,
               )
             ) {
               exports.push({
@@ -623,16 +508,11 @@ export function collectLocalsAndExportsFromSource(
               for (let submatch; (submatch = strRe.exec(assignmentText)); ) {
                 const name = submatch[1]!;
                 pythonAllExports.add(name);
-                const local = mergedLocals.find(
-                  (def) => def.localName === name,
-                );
+                const local = mergedLocals.find((def) => def.localName === name);
                 if (
                   local &&
                   !exports.some(
-                    (entry) =>
-                      entry.type !== "exportStar" &&
-                      "exportedAs" in entry &&
-                      entry.exportedAs === name,
+                    (entry) => entry.type !== "exportStar" && "exportedAs" in entry && entry.exportedAs === name,
                   )
                 ) {
                   exports.push({
@@ -706,12 +586,7 @@ export function collectLocalsAndExportsFromSource(
       if (map["cjs_export_name"] && map["cjs_fn"]) {
         const exportedAs = map["cjs_export_name"].text;
         const fnNode = nodeForCapture(map["cjs_fn"]);
-        const sym = buildSymbolDef(
-          exportedAs,
-          SymbolKind.Function,
-          rangeFromNativeCapture(map["cjs_fn"]),
-          fnNode,
-        );
+        const sym = buildSymbolDef(exportedAs, SymbolKind.Function, rangeFromNativeCapture(map["cjs_fn"]), fnNode);
         locals.push(sym);
         exports.push({ type: "local", exportedAs, target: sym });
         continue;
@@ -810,17 +685,9 @@ export function collectLocalsAndExportsFromSource(
   if (support.queries.exports.trim() && nativeQueries) {
     try {
       appendExportsFromMatches(nativeQueries.exports);
-      if (
-        !exports.some(
-          (entry) => entry.type === "local" && entry.exportedAs === "default",
-        )
-      ) {
-        const mDefFn = source.match(
-          /\bexport\s+default\s+function\s+([A-Za-z_$][\w$]*)/,
-        );
-        const mDefCls = source.match(
-          /\bexport\s+default\s+class\s+([A-Za-z_$][\w$]*)/,
-        );
+      if (!exports.some((entry) => entry.type === "local" && entry.exportedAs === "default")) {
+        const mDefFn = source.match(/\bexport\s+default\s+function\s+([A-Za-z_$][\w$]*)/);
+        const mDefCls = source.match(/\bexport\s+default\s+class\s+([A-Za-z_$][\w$]*)/);
         const name = mDefFn?.[1] ?? mDefCls?.[1];
         if (name) {
           const local = locals.find((def) => def.localName === name);
@@ -839,31 +706,16 @@ export function collectLocalsAndExportsFromSource(
     }
   }
   const jsExportTree =
-    !usedNativeExports &&
-    !isNativeBindingLoadedForLanguage(support.id, opts?.nativeMode)
-      ? ensureJsQueryTree()
-      : null;
+    !usedNativeExports && !isNativeBindingLoadedForLanguage(support.id, opts?.nativeMode) ? ensureJsQueryTree() : null;
   if (support.queries.exports.trim() && jsExportTree && !usedNativeExports) {
     try {
       appendExportsFromMatches(
-        executeJsQueryAsNativeMatches(
-          source,
-          support,
-          ensureResolvedLang(),
-          support.queries.exports,
-          jsExportTree,
-        ),
+        executeJsQueryAsNativeMatches(source, support, ensureResolvedLang(), support.queries.exports, jsExportTree),
         jsExportTree,
       );
-      if (
-        !exports.some((e) => e.type === "local" && e.exportedAs === "default")
-      ) {
-        const mDefFn = source.match(
-          /\bexport\s+default\s+function\s+([A-Za-z_$][\w$]*)/,
-        );
-        const mDefCls = source.match(
-          /\bexport\s+default\s+class\s+([A-Za-z_$][\w$]*)/,
-        );
+      if (!exports.some((e) => e.type === "local" && e.exportedAs === "default")) {
+        const mDefFn = source.match(/\bexport\s+default\s+function\s+([A-Za-z_$][\w$]*)/);
+        const mDefCls = source.match(/\bexport\s+default\s+class\s+([A-Za-z_$][\w$]*)/);
         const name = mDefFn?.[1] ?? mDefCls?.[1];
         if (name) {
           const local = locals.find((d) => d.localName === name);
@@ -905,12 +757,8 @@ export function collectLocalsAndExportsFromSource(
     (support.id === "ts" || support.id === "js") &&
     !exports.some((e) => e.type === "local" && e.exportedAs === "default")
   ) {
-    const defFn = source.match(
-      /\bexport\s+default\s+function\s+([A-Za-z_$][\w$]*)/,
-    );
-    const defCls = source.match(
-      /\bexport\s+default\s+class\s+([A-Za-z_$][\w$]*)/,
-    );
+    const defFn = source.match(/\bexport\s+default\s+function\s+([A-Za-z_$][\w$]*)/);
+    const defCls = source.match(/\bexport\s+default\s+class\s+([A-Za-z_$][\w$]*)/);
     const defIdent = source.match(/\bexport\s+default\s+([A-Za-z_$][\w$]*)\b/);
     const name = defFn?.[1] ?? defCls?.[1] ?? defIdent?.[1];
     if (name) {
@@ -926,4 +774,3 @@ export function collectLocalsAndExportsFromSource(
 
   return { file, exports, imports, locals };
 }
-

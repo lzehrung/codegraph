@@ -27,19 +27,19 @@ describe("chunking integration examples", () => {
     });
 
     // Filter chunks by type for different processing needs
-    const functionChunks = chunks.filter(c => c.type === "function");
-    const commentChunks = chunks.filter(c => c.type === "comment");
+    const functionChunks = chunks.filter((c) => c.type === "function");
+    const commentChunks = chunks.filter((c) => c.type === "comment");
 
     // Verify we captured the key functions
-    expect(functionChunks.some(c => c.name === "validateEmail")).toBe(true);
-    expect(functionChunks.some(c => c.name === "processUsers")).toBe(true);
+    expect(functionChunks.some((c) => c.name === "validateEmail")).toBe(true);
+    expect(functionChunks.some((c) => c.name === "processUsers")).toBe(true);
 
     // Check we captured the JSDoc comment
     expect(commentChunks.length).toBeGreaterThan(0);
     expect(commentChunks[0]?.text).toContain("Utility functions");
 
     // Simulate feeding chunks to an embedding client
-    const embeddingInputs = chunks.map(chunk => ({
+    const embeddingInputs = chunks.map((chunk) => ({
       id: chunk.id,
       content: chunk.text,
       metadata: {
@@ -72,14 +72,14 @@ describe("chunking integration examples", () => {
 
     // JSON should typically be chunked into manageable pieces
     expect(chunks.length).toBeGreaterThan(0);
-    expect(chunks.every(c => c.tokenCount <= 150)).toBe(true);
+    expect(chunks.every((c) => c.tokenCount <= 150)).toBe(true);
 
     // Verify metadata
     expect(chunks[0]?.languageId).toBe("json");
     expect(chunks[0]?.filePath).toBe(configPath);
 
     // Simulate processing for configuration analysis
-    const configInsights = chunks.map(chunk => ({
+    const configInsights = chunks.map((chunk) => ({
       content: chunk.text,
       // Could extract JSON keys/values for analysis
       tokenCount: chunk.tokenCount,
@@ -102,21 +102,21 @@ describe("chunking integration examples", () => {
     });
 
     // Should have captured the processUsers function
-    const processUsersChunks = chunks.filter(c => c.name === "processUsers");
+    const processUsersChunks = chunks.filter((c) => c.name === "processUsers");
     expect(processUsersChunks.length).toBeGreaterThan(0);
 
     // All chunks should respect token limits
-    expect(chunks.every(c => c.tokenCount <= 30)).toBe(true);
+    expect(chunks.every((c) => c.tokenCount <= 30)).toBe(true);
 
     // Simulate chunk processing pipeline
-    const processedChunks = chunks.map(chunk => ({
+    const processedChunks = chunks.map((chunk) => ({
       ...chunk,
       // Add processing metadata
       processed: true,
       embedding: `embedding_for_${chunk.id}`,
     }));
 
-    expect(processedChunks.every(c => c.processed)).toBe(true);
+    expect(processedChunks.every((c) => c.processed)).toBe(true);
   });
 
   it("provides agent-friendly chunk metadata for decision making", async () => {
@@ -131,12 +131,9 @@ describe("chunking integration examples", () => {
       maxTokens: 100,
     });
 
-
     // Demonstrate filtering for different agent needs
-    const functionChunks = chunks.filter(c => c.type === "function" && c.name);
-    const structuralChunks = chunks.filter(c =>
-      ["class", "function", "method", "interface"].includes(c.type)
-    );
+    const functionChunks = chunks.filter((c) => c.type === "function" && c.name);
+    const structuralChunks = chunks.filter((c) => ["class", "function", "method", "interface"].includes(c.type));
 
     // Agent could prioritize functions for API understanding
     expect(functionChunks.length).toBeGreaterThan(0);
@@ -146,7 +143,7 @@ describe("chunking integration examples", () => {
 
     // Demonstrate chunk prioritization by type and size
     const prioritized = chunks
-      .filter(c => c.type !== "misc") // Skip filler chunks
+      .filter((c) => c.type !== "misc") // Skip filler chunks
       .sort((a, b) => {
         // Prioritize functions/methods, then by size
         const typeOrder = { function: 0, method: 1, class: 2 };

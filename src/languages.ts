@@ -1,11 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type {
-  LanguageDefinition,
-  JsLanguage,
-  NativeCompatibility,
-  SyntaxNodeLike,
-} from "./languages/types.js";
+import type { LanguageDefinition, JsLanguage, NativeCompatibility, SyntaxNodeLike } from "./languages/types.js";
 import { getAllLanguages, getLanguageById } from "./languages/registry.js";
 import "./languages/all.js";
 
@@ -74,8 +69,7 @@ export const CPP_SUPPORT = adaptDefinition(getLanguageById("cpp")!);
 export const KOTLIN_SUPPORT = adaptDefinition(getLanguageById("kotlin")!);
 export const SWIFT_SUPPORT = adaptDefinition(getLanguageById("swift")!);
 
-export const LANGUAGE_SUPPORTS: LanguageSupport[] =
-  getAllLanguages().map(adaptDefinition);
+export const LANGUAGE_SUPPORTS: LanguageSupport[] = getAllLanguages().map(adaptDefinition);
 
 export function supportForFile(filename: string): LanguageSupport | undefined {
   const ext = path.extname(filename).toLowerCase();
@@ -97,8 +91,7 @@ export function supportById(id: string): LanguageSupport | undefined {
 }
 
 const HEADER_SAMPLE_SIZE = 8000;
-const CPP_HEADER_HINT =
-  /\b(class|namespace|template|typename|constexpr|operator|using\s+namespace)\b|::/;
+const CPP_HEADER_HINT = /\b(class|namespace|template|typename|constexpr|operator|using\s+namespace)\b|::/;
 
 function readFileSample(filePath: string): string | null {
   try {

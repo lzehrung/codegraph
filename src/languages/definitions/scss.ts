@@ -54,9 +54,7 @@ export const SCSS_DEF: LanguageDefinition = {
   },
   native: {
     normalizeQuery: (_kind, query) =>
-      SCSS_SYMBOL_QUERY_PATTERNS.some((pattern) => query.includes(pattern))
-        ? ""
-        : query,
+      SCSS_SYMBOL_QUERY_PATTERNS.some((pattern) => query.includes(pattern)) ? "" : query,
     notes: ["skips unsupported SCSS symbol queries in the native runtime"],
   },
 };

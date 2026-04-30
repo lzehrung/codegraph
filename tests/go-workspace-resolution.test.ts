@@ -24,38 +24,19 @@ describe("go.work multi-module import resolution", () => {
       "utf8",
     );
 
-    await fsp.writeFile(
-      path.join(appDir, "go.mod"),
-      ["module example.com/app", "", "go 1.22", ""].join("\n"),
-      "utf8",
-    );
+    await fsp.writeFile(path.join(appDir, "go.mod"), ["module example.com/app", "", "go 1.22", ""].join("\n"), "utf8");
 
-    await fsp.writeFile(
-      path.join(libDir, "go.mod"),
-      ["module example.com/lib", "", "go 1.22", ""].join("\n"),
-      "utf8",
-    );
+    await fsp.writeFile(path.join(libDir, "go.mod"), ["module example.com/lib", "", "go 1.22", ""].join("\n"), "utf8");
 
     const mainFile = path.join(appDir, "cmd", "main.go");
     await fsp.writeFile(
       mainFile,
-      [
-        "package main",
-        "",
-        'import "example.com/lib/pkg/greet"',
-        "",
-        "func main() { greet.Hello() }",
-        "",
-      ].join("\n"),
+      ["package main", "", 'import "example.com/lib/pkg/greet"', "", "func main() { greet.Hello() }", ""].join("\n"),
       "utf8",
     );
 
     const greetFile = path.join(libDir, "pkg", "greet", "greet.go");
-    await fsp.writeFile(
-      greetFile,
-      ["package greet", "", "func Hello() {}", ""].join("\n"),
-      "utf8",
-    );
+    await fsp.writeFile(greetFile, ["package greet", "", "func Hello() {}", ""].join("\n"), "utf8");
 
     const resolved = await resolveGoImportPath(root, mainFile, "example.com/lib/pkg/greet");
     expect(resolved).toBe(greetFile);

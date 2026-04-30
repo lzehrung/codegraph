@@ -100,19 +100,10 @@ export const PYTHON_DEF: LanguageDefinition = {
   },
   isDeclarationName: (node) => {
     const t = node.parent?.type;
-    return (
-      !!t &&
-      [
-        "function_definition",
-        "class_definition",
-        "assignment",
-        "aliased_import",
-      ].includes(t)
-    );
+    return !!t && ["function_definition", "class_definition", "assignment", "aliased_import"].includes(t);
   },
   createsBlockScope: (n) => n.type === "module" || n.type === "block",
-  createsFunctionScope: (n) =>
-    n.type === "function_definition" || n.type === "lambda",
+  createsFunctionScope: (n) => n.type === "function_definition" || n.type === "lambda",
   supportsCrossModuleSymbols: true,
 };
 registerLanguage(PYTHON_DEF);

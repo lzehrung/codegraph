@@ -259,12 +259,12 @@ It accepts result-producing statements such as `SELECT` and `PRAGMA` and rejects
   "summary": {
     "filesChanged": 3,
     "symbolsChanged": 12,
-    "candidateTests": 5
+    "candidateTests": 5,
   },
   "riskSummary": {
     "level": "medium",
     "score": 60,
-    "signals": ["exported-symbols-changed"]
+    "signals": ["exported-symbols-changed"],
   },
   "reviewTasks": [
     {
@@ -272,33 +272,33 @@ It accepts result-producing statements such as `SELECT` and `PRAGMA` and rejects
       "title": "Review changed symbols",
       "description": "Scan the changed symbols and confirm behavioral changes align with intent.",
       "priority": "medium",
-      "reason": "baseline-review"
-    }
+      "reason": "baseline-review",
+    },
   ],
   "changedFiles": [
     {
       "file": "src/foo.ts",
-      "status": "updated"
-    }
+      "status": "updated",
+    },
   ],
   "graphDelta": [
     {
       "from": "src/foo.ts",
       "to": { "type": "file", "path": "src/bar.ts" },
-      "raw": "./bar"
-    }
+      "raw": "./bar",
+    },
   ],
   "candidateTests": [
     {
       "file": "tests/foo.test.ts",
       "confidence": "high",
-      "reason": "importsChanged"
-    }
+      "reason": "importsChanged",
+    },
   ],
   "diagnostics": {
     "missingFiles": [],
-    "symbolMappingParseFailures": []
-  }
+    "symbolMappingParseFailures": [],
+  },
 }
 ```
 

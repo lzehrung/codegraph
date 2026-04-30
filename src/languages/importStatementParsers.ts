@@ -19,9 +19,7 @@ export type ParsedRustImportStatement =
       from: string;
     };
 
-export function parseRustImportStatement(
-  stmtText: string,
-): ParsedRustImportStatement | null {
+export function parseRustImportStatement(stmtText: string): ParsedRustImportStatement | null {
   const trimmed = stmtText.trim();
 
   const modMatch = trimmed.match(/^mod\s+([A-Za-z_][\w]*)\s*;?$/);
@@ -34,9 +32,7 @@ export function parseRustImportStatement(
     };
   }
 
-  const externMatch = trimmed.match(
-    /^extern\s+crate\s+([A-Za-z_][\w]*)(?:\s+as\s+([A-Za-z_][\w]*))?\s*;?$/,
-  );
+  const externMatch = trimmed.match(/^extern\s+crate\s+([A-Za-z_][\w]*)(?:\s+as\s+([A-Za-z_][\w]*))?\s*;?$/);
   if (externMatch?.[1]) {
     return {
       kind: "module",
@@ -126,10 +122,7 @@ function splitTopLevelCommaList(input: string): string[] {
   return items;
 }
 
-function parsePhpImportClause(
-  rawClause: string,
-  importType: PhpImportType,
-): ParsedPhpImportStatement[] {
+function parsePhpImportClause(rawClause: string, importType: PhpImportType): ParsedPhpImportStatement[] {
   const clause = rawClause.trim().replace(/;$/, "");
   if (!clause) return [];
 
@@ -141,12 +134,12 @@ function parsePhpImportClause(
 
     for (const member of members) {
       const typedMemberMatch = member.match(/^(function|const)\s+(.+)$/);
-      const memberType =
-        typedMemberMatch?.[1] === "function"
-          ? "function"
-          : typedMemberMatch?.[1] === "const"
-            ? "const"
-            : importType;
+      let memberType = importType;
+      if (typedMemberMatch?.[1] === "function") {
+        memberType = "function";
+      } else if (typedMemberMatch?.[1] === "const") {
+        memberType = "const";
+      }
       const body = (typedMemberMatch?.[2] ?? member).trim();
       const aliasMatch = body.match(/^(.*?)\s+as\s+([A-Za-z_][\w]*)$/i);
       const fullPath = `${prefix}${(aliasMatch?.[1] ?? body).trim()}`;
@@ -181,16 +174,11 @@ function parsePhpImportClause(
   ];
 }
 
-export function parsePhpImportStatement(
-  stmtText: string,
-  fromFile?: string,
-): ParsedPhpImportStatement[] {
+export function parsePhpImportStatement(stmtText: string, fromFile?: string): ParsedPhpImportStatement[] {
   const trimmed = stmtText.trim();
   if (!trimmed) return [];
 
-  const includeMatch = trimmed.match(
-    /^(?:require_once|include_once|require|include)\s*(?<expr>.+?)\s*;?$/is,
-  );
+  const includeMatch = trimmed.match(/^(?:require_once|include_once|require|include)\s*(?<expr>.+?)\s*;?$/is);
   const includeExpr = includeMatch?.groups?.expr?.trim();
   if (includeExpr) {
     const includePath = resolvePhpIncludePath(includeExpr, fromFile);
@@ -207,12 +195,12 @@ export function parsePhpImportStatement(
   const results: ParsedPhpImportStatement[] = [];
   for (const clause of clauses) {
     const typedClauseMatch = clause.match(/^(function|const)\s+(.+)$/is);
-    const importType =
-      typedClauseMatch?.[1] === "function"
-        ? "function"
-        : typedClauseMatch?.[1] === "const"
-          ? "const"
-          : "class";
+    let importType: "class" | "function" | "const" = "class";
+    if (typedClauseMatch?.[1] === "function") {
+      importType = "function";
+    } else if (typedClauseMatch?.[1] === "const") {
+      importType = "const";
+    }
     const body = (typedClauseMatch?.[2] ?? clause).trim();
     results.push(...parsePhpImportClause(body, importType));
   }
@@ -288,10 +276,7 @@ function parsePhpStringLiteral(token: string): string | null {
   if (quote === "'") {
     return body.replace(/\\\\/g, "\\").replace(/\\'/g, "'");
   }
-  return body
-    .replace(/\\\\/g, "\\")
-    .replace(/\\"/g, '"')
-    .replace(/\\'/g, "'");
+  return body.replace(/\\\\/g, "\\").replace(/\\"/g, '"').replace(/\\'/g, "'");
 }
 
 function evaluatePhpIncludeToken(token: string, fromFile?: string): string | null {
@@ -348,10 +333,7 @@ function resolvePhpIncludePath(expr: string, fromFile?: string): string | null {
   const normalizedPath = path.normalize(combined);
   if (!isAbsoluteFilePath(normalizedPath)) {
     const relativePath = normalizedPath.replace(/\\/g, "/");
-    if (
-      relativePath.startsWith("./") ||
-      relativePath.startsWith("../")
-    ) {
+    if (relativePath.startsWith("./") || relativePath.startsWith("../")) {
       return relativePath;
     }
     return `./${relativePath}`;
@@ -359,19 +341,9 @@ function resolvePhpIncludePath(expr: string, fromFile?: string): string | null {
 
   const relativePath =
     path.win32.isAbsolute(fromFile) && path.win32.isAbsolute(normalizedPath)
-    ? normalizePath(
-        path.win32.relative(
-          normalizePath(path.win32.dirname(fromFile)),
-          normalizePath(normalizedPath),
-        ),
-      )
-    : path
-        .relative(path.dirname(fromFile), normalizedPath)
-        .replace(/\\/g, "/");
-  if (
-    relativePath.startsWith(".") ||
-    relativePath.startsWith("/")
-  ) {
+      ? normalizePath(path.win32.relative(normalizePath(path.win32.dirname(fromFile)), normalizePath(normalizedPath)))
+      : path.relative(path.dirname(fromFile), normalizedPath).replace(/\\/g, "/");
+  if (relativePath.startsWith(".") || relativePath.startsWith("/")) {
     return relativePath;
   }
   return `./${relativePath}`;
@@ -389,14 +361,8 @@ export type ParsedKotlinImportStatement =
       from: string;
     };
 
-export function parseKotlinImportStatement(
-  stmtText: string,
-): ParsedKotlinImportStatement | null {
-  const match = stmtText
-    .trim()
-    .match(
-      /^\s*import\s+([A-Za-z_][\w.]*(?:\.\*)?)(?:\s+as\s+([A-Za-z_][\w]*))?\s*$/m,
-    );
+export function parseKotlinImportStatement(stmtText: string): ParsedKotlinImportStatement | null {
+  const match = stmtText.trim().match(/^\s*import\s+([A-Za-z_][\w.]*(?:\.\*)?)(?:\s+as\s+([A-Za-z_][\w]*))?\s*$/m);
   const rawSpec = match?.[1];
   if (!rawSpec) return null;
   if (rawSpec.endsWith(".*")) {
@@ -430,12 +396,8 @@ export type ParsedJavaImportStatement =
       isStatic: boolean;
     };
 
-export function parseJavaImportStatement(
-  stmtText: string,
-): ParsedJavaImportStatement | null {
-  const match = stmtText
-    .trim()
-    .match(/^\s*import\s+(static\s+)?([A-Za-z_][\w.]*(?:\.\*)?)\s*;?\s*$/);
+export function parseJavaImportStatement(stmtText: string): ParsedJavaImportStatement | null {
+  const match = stmtText.trim().match(/^\s*import\s+(static\s+)?([A-Za-z_][\w.]*(?:\.\*)?)\s*;?\s*$/);
   const rawSpec = match?.[2];
   if (!rawSpec) return null;
   const isStatic = !!match?.[1];
@@ -458,14 +420,10 @@ export function parseJavaImportStatement(
   };
 }
 
-export function parseCsharpUsingDirective(
-  stmtText: string,
-): ParsedCsharpUsingDirective | null {
+export function parseCsharpUsingDirective(stmtText: string): ParsedCsharpUsingDirective | null {
   const trimmed = stmtText.trim();
 
-  const aliasMatch = trimmed.match(
-    /^(?:global\s+)?using\s+([A-Za-z_][\w]*)\s*=\s*([A-Za-z_][\w.]*)\s*;?$/,
-  );
+  const aliasMatch = trimmed.match(/^(?:global\s+)?using\s+([A-Za-z_][\w]*)\s*=\s*([A-Za-z_][\w.]*)\s*;?$/);
   if (aliasMatch?.[1] && aliasMatch[2]) {
     return {
       from: aliasMatch[2],
@@ -474,9 +432,7 @@ export function parseCsharpUsingDirective(
     };
   }
 
-  const staticMatch = trimmed.match(
-    /^(?:global\s+)?using\s+static\s+([A-Za-z_][\w.]*)\s*;?$/,
-  );
+  const staticMatch = trimmed.match(/^(?:global\s+)?using\s+static\s+([A-Za-z_][\w.]*)\s*;?$/);
   if (staticMatch?.[1]) {
     return {
       from: staticMatch[1],
@@ -484,9 +440,7 @@ export function parseCsharpUsingDirective(
     };
   }
 
-  const plainMatch = trimmed.match(
-    /^(?:global\s+)?using\s+([A-Za-z_][\w.]*)\s*;?$/,
-  );
+  const plainMatch = trimmed.match(/^(?:global\s+)?using\s+([A-Za-z_][\w.]*)\s*;?$/);
   if (!plainMatch?.[1]) return null;
   return {
     from: plainMatch[1],

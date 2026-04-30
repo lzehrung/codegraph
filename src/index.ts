@@ -192,20 +192,10 @@ export {
   type GraphQueryResult,
   type RawSqlResult,
 } from "./sqlite.js";
-export {
-  chunkFile,
-  type Chunk,
-  type ChunkFileOptions,
-} from "./chunking/chunkFile.js";
-export {
-  chunkTextFile,
-  type TextChunkOptions,
-} from "./chunking/chunkTextFile.js";
+export { chunkFile, type Chunk, type ChunkFileOptions } from "./chunking/chunkFile.js";
+export { chunkTextFile, type TextChunkOptions } from "./chunking/chunkTextFile.js";
 export { chunkSFCFile, type ChunkSFCOptions } from "./chunking/chunkSFC.js";
-export {
-  LANG_CONFIGS,
-  type LanguageConfig,
-} from "./bootstrap/treeSitterLanguages.js";
+export { LANG_CONFIGS, type LanguageConfig } from "./bootstrap/treeSitterLanguages.js";
 export {
   buildReviewReport,
   type ReviewDepth,

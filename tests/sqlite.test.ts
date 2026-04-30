@@ -60,10 +60,7 @@ export function run() { helper(); new Widget(); }
     expect(tables).toContain("graph_snapshot_files");
     expect(tables).toContain("graph_metadata");
 
-    const indexes = dbQuery(
-      db,
-      "SELECT name FROM sqlite_master WHERE type='index';",
-    );
+    const indexes = dbQuery(db, "SELECT name FROM sqlite_master WHERE type='index';");
     expect(indexes).toContain("idx_symbols_name");
     expect(indexes).toContain("idx_symbols_name_kind");
     expect(indexes).toContain("idx_symbols_file_kind");
@@ -75,16 +72,10 @@ export function run() { helper(); new Widget(); }
     expect(indexes).toContain("idx_file_edges_from");
     expect(indexes).toContain("idx_graph_snapshots_created_at");
 
-    const symbols = dbQuery(
-      db,
-      "SELECT name FROM symbols WHERE name = 'Widget';",
-    );
+    const symbols = dbQuery(db, "SELECT name FROM symbols WHERE name = 'Widget';");
     expect(symbols).toEqual(["Widget"]);
 
-    const calls = dbQuery(
-      db,
-      "SELECT label FROM symbol_edges WHERE label = 'calls';",
-    );
+    const calls = dbQuery(db, "SELECT label FROM symbol_edges WHERE label = 'calls';");
     expect(calls.length).toBeGreaterThan(0);
     db.close();
   });
@@ -200,10 +191,7 @@ export function run() { helper(); new Widget(); }
     expect(columns).toContain("visibility");
     const tables = dbQuery(db, "SELECT name FROM sqlite_master WHERE type='table';");
     expect(tables).toContain("graph_snapshots");
-    const schemaVersion = dbQuery(
-      db,
-      "SELECT value FROM graph_metadata WHERE key = 'schema_version';",
-    );
+    const schemaVersion = dbQuery(db, "SELECT value FROM graph_metadata WHERE key = 'schema_version';");
     expect(schemaVersion[0]).toBe("2");
     db.close();
   });
@@ -247,18 +235,9 @@ export function run() { return new NewWidget(); }
     const BetterSqlite3 = loadBetterSqlite3();
     const db = new BetterSqlite3(dbPath);
 
-    const oldSymbols = dbQuery(
-      db,
-      "SELECT name FROM symbols WHERE name = 'OldWidget';",
-    );
-    const newSymbols = dbQuery(
-      db,
-      "SELECT name FROM symbols WHERE name = 'NewWidget';",
-    );
-    const helperSymbols = dbQuery(
-      db,
-      "SELECT name FROM symbols WHERE name = 'helper';",
-    );
+    const oldSymbols = dbQuery(db, "SELECT name FROM symbols WHERE name = 'OldWidget';");
+    const newSymbols = dbQuery(db, "SELECT name FROM symbols WHERE name = 'NewWidget';");
+    const helperSymbols = dbQuery(db, "SELECT name FROM symbols WHERE name = 'helper';");
     expect(oldSymbols).toEqual([]);
     expect(newSymbols).toEqual(["NewWidget"]);
     expect(helperSymbols).toEqual(["helper"]);
@@ -307,27 +286,16 @@ export const run = () => helper();
     });
 
     const utilPath = path.join(root, "util.ts").replace(/\\/g, "/");
-    const utilFiles = await queryGraphSqliteRaw(
-      dbPath,
-      "SELECT path FROM files WHERE path = ?;",
-      [utilPath],
-    );
-    const utilEdges = await queryGraphSqliteRaw(
-      dbPath,
-      "SELECT to_path FROM file_edges WHERE to_path = ?;",
-      [utilPath],
-    );
-    const utilSymbols = await queryGraphSqliteRaw(
-      dbPath,
-      "SELECT id FROM symbols WHERE file = ?;",
-      [utilPath],
-    );
+    const utilFiles = await queryGraphSqliteRaw(dbPath, "SELECT path FROM files WHERE path = ?;", [utilPath]);
+    const utilEdges = await queryGraphSqliteRaw(dbPath, "SELECT to_path FROM file_edges WHERE to_path = ?;", [
+      utilPath,
+    ]);
+    const utilSymbols = await queryGraphSqliteRaw(dbPath, "SELECT id FROM symbols WHERE file = ?;", [utilPath]);
 
     expect(utilFiles.rows).toEqual([]);
     expect(utilEdges.rows).toEqual([]);
     expect(utilSymbols.rows).toEqual([]);
   });
-
 
   it("removes deleted files and stale edges during incremental updates", async () => {
     const root = await mkTmpDir("dg-sqlite-delete-");
@@ -377,19 +345,12 @@ export const run = () => helper();
     const db = new BetterSqlite3(dbPath);
     const utilFiles = dbQuery(
       db,
-      `SELECT path FROM files WHERE path = '${path
-        .join(root, "util.ts")
-        .replace(/\\/g, "/")}';`,
+      `SELECT path FROM files WHERE path = '${path.join(root, "util.ts").replace(/\\/g, "/")}';`,
     );
-    const utilSymbols = dbQuery(
-      db,
-      "SELECT name FROM symbols WHERE name = 'helper';",
-    );
+    const utilSymbols = dbQuery(db, "SELECT name FROM symbols WHERE name = 'helper';");
     const staleEdges = dbQuery(
       db,
-      `SELECT to_path FROM file_edges WHERE to_path = '${path
-        .join(root, "util.ts")
-        .replace(/\\/g, "/")}';`,
+      `SELECT to_path FROM file_edges WHERE to_path = '${path.join(root, "util.ts").replace(/\\/g, "/")}';`,
     );
 
     expect(utilFiles).toEqual([]);
@@ -445,10 +406,7 @@ export const run = () => helper();
     );
     expect(rows.rows).toEqual([]);
 
-    const remainingFile = await queryGraphSqliteRaw(
-      dbPath,
-      "SELECT path FROM files ORDER BY path;",
-    );
+    const remainingFile = await queryGraphSqliteRaw(dbPath, "SELECT path FROM files ORDER BY path;");
     expect(remainingFile.rows).toEqual([[mainPath.replace(/\\/g, "/")]]);
   });
 
@@ -496,7 +454,6 @@ export const value = lodash;
     expect(externalRows.rows).toEqual([]);
   });
 
-
   it("records temporal snapshots for full and incremental updates", async () => {
     const root = await mkTmpDir("dg-sqlite-snapshots-");
     await fsp.writeFile(
@@ -523,8 +480,12 @@ export const run = () => helper();
     });
 
     await fsp.unlink(path.join(root, "util.ts"));
-    await fsp.writeFile(path.join(root, "main.ts"), `export const run = () => 2;
-`, "utf8");
+    await fsp.writeFile(
+      path.join(root, "main.ts"),
+      `export const run = () => 2;
+`,
+      "utf8",
+    );
     const nextIndex = await buildProjectIndex(root);
     const nextSgraph = await buildSymbolGraphDetailed(nextIndex);
     await updateGraphSqlite({
@@ -538,15 +499,9 @@ export const run = () => helper();
 
     const BetterSqlite3 = loadBetterSqlite3();
     const db = new BetterSqlite3(dbPath);
-    const snapshotModes = dbQuery(
-      db,
-      "SELECT mode FROM graph_snapshots ORDER BY id ASC;",
-    );
+    const snapshotModes = dbQuery(db, "SELECT mode FROM graph_snapshots ORDER BY id ASC;");
     expect(snapshotModes).toEqual(["full", "incremental"]);
-    const snapshotFiles = dbQuery(
-      db,
-      "SELECT change_kind FROM graph_snapshot_files ORDER BY rowid ASC;",
-    );
+    const snapshotFiles = dbQuery(db, "SELECT change_kind FROM graph_snapshot_files ORDER BY rowid ASC;");
     expect(snapshotFiles).toContain("changed");
     expect(snapshotFiles).toContain("deleted");
     db.close();
@@ -579,43 +534,27 @@ export interface UserRepository {}
       outputPath: dbPath,
     });
 
-    const called = await queryGraphSqlite(
-      dbPath,
-      "What are the most called methods in the codebase?",
-    );
+    const called = await queryGraphSqlite(dbPath, "What are the most called methods in the codebase?");
     expect(called.kind).toBe("mostCalledMethods");
     expect(called.results.length).toBeGreaterThan(0);
 
-    const chain = await queryGraphSqlite(
-      dbPath,
-      "Show me the dependency chain for the AuthService class",
-    );
+    const chain = await queryGraphSqlite(dbPath, "Show me the dependency chain for the AuthService class");
     expect(chain.kind).toBe("dependencyChain");
     if (chain.kind === "dependencyChain") {
-      expect(chain.results.some((entry) => entry.endsWith("/repo.ts"))).toBe(
-        true,
-      );
+      expect(chain.results.some((entry) => entry.endsWith("/repo.ts"))).toBe(true);
     }
 
-    const controllers = await queryGraphSqlite(
-      dbPath,
-      "Which controllers have the most endpoints?",
-    );
+    const controllers = await queryGraphSqlite(dbPath, "Which controllers have the most endpoints?");
     expect(controllers.kind).toBe("controllersMostEndpoints");
     if (controllers.kind === "controllersMostEndpoints") {
-      const userController = controllers.results.find(
-        (row) => row.name === "UserController",
-      );
+      const userController = controllers.results.find((row) => row.name === "UserController");
       expect(userController).toBeDefined();
       if (userController) {
         expect(userController.count).toBeGreaterThanOrEqual(2);
       }
     }
 
-    const impls = await queryGraphSqlite(
-      dbPath,
-      "Find all classes that implement the UserRepository interface",
-    );
+    const impls = await queryGraphSqlite(dbPath, "Find all classes that implement the UserRepository interface");
     expect(impls.kind).toBe("classesImplementing");
     if (impls.kind === "classesImplementing") {
       expect(impls.results.some((row) => row.name === "RepoImpl")).toBe(true);
@@ -631,10 +570,7 @@ export interface UserRepository {}
       expect(affected.results.some((row) => row.name === "runAuth")).toBe(true);
     }
 
-    const complexity = await queryGraphSqlite(
-      dbPath,
-      "Which classes have the highest complexity in the codebase?",
-    );
+    const complexity = await queryGraphSqlite(dbPath, "Which classes have the highest complexity in the codebase?");
     expect(complexity.kind).toBe("highestComplexityClasses");
     expect(complexity.results.length).toBeGreaterThan(0);
   });
@@ -664,10 +600,7 @@ export class Service {}
       outputPath: dbPath,
     });
 
-    const chain = await queryGraphSqlite(
-      dbPath,
-      "Show me the dependency chain for the Service class",
-    );
+    const chain = await queryGraphSqlite(dbPath, "Show me the dependency chain for the Service class");
     expect(chain.kind).toBe("dependencyChain");
     if (chain.kind === "dependencyChain") {
       expect(chain.results).toEqual([path.join(root, "a.ts").replace(/\\/g, "/")]);
@@ -719,9 +652,7 @@ export function helper() { return 1; }
       outputPath: dbPath,
     });
 
-    await expect(
-      queryGraphSqliteRaw(dbPath, "SELECT * FROM missing_table;"),
-    ).rejects.toThrow();
+    await expect(queryGraphSqliteRaw(dbPath, "SELECT * FROM missing_table;")).rejects.toThrow();
 
     await expect(fsp.rm(dbPath, { force: true })).resolves.toBeUndefined();
   });
@@ -744,14 +675,11 @@ export function helper() { return 1; }
       outputPath: dbPath,
     });
 
-    await expect(
-      queryGraphSqliteRaw(dbPath, "DELETE FROM symbols RETURNING name;"),
-    ).rejects.toThrow(/read-only result-producing statements/);
-
-    const remaining = await queryGraphSqliteRaw(
-      dbPath,
-      "SELECT COUNT(*) FROM symbols;",
+    await expect(queryGraphSqliteRaw(dbPath, "DELETE FROM symbols RETURNING name;")).rejects.toThrow(
+      /read-only result-producing statements/,
     );
+
+    const remaining = await queryGraphSqliteRaw(dbPath, "SELECT COUNT(*) FROM symbols;");
     expect(remaining.rows).toEqual([[1]]);
   });
 });

@@ -43,12 +43,8 @@ describe("Agent query helpers", () => {
       ...n,
       file: normalizePath(n.file),
     }));
-    const addDef = nodes.find(
-      (n) => n.file.endsWith("/main.ts") && n.name === "add",
-    );
-    const callDef = nodes.find(
-      (n) => n.file.endsWith("/main.ts") && n.name === "call",
-    );
+    const addDef = nodes.find((n) => n.file.endsWith("/main.ts") && n.name === "add");
+    const callDef = nodes.find((n) => n.file.endsWith("/main.ts") && n.name === "call");
     expect(addDef).toBeDefined();
     expect(callDef).toBeDefined();
 

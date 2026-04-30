@@ -21,16 +21,8 @@ import type {
   ImpactDiagnostics,
 } from "./types.js";
 import { buildSymbolGraphDetailed, findDetailedCycles } from "../graphs.js";
-import {
-  discoverProjectFiles,
-  normalizePath,
-  resolveFilePathFromRoot,
-} from "../util.js";
-import {
-  createGraphFileResolver,
-  normalizeImpactFileChange,
-  toImpactReportFilePath,
-} from "./path.js";
+import { discoverProjectFiles, normalizePath, resolveFilePathFromRoot } from "../util.js";
+import { createGraphFileResolver, normalizeImpactFileChange, toImpactReportFilePath } from "./path.js";
 
 export async function buildImpactReport(
   projectRoot: string,
@@ -42,21 +34,13 @@ export async function buildImpactReport(
   options: Partial<ImpactOptions> & { warning?: string | undefined } = {},
   diagnostics?: ImpactDiagnostics,
 ): Promise<ImpactReport | CompactImpactReport> {
-  const normalizedDiffFiles = diffFiles.map((change) =>
-    normalizeImpactFileChange(projectRoot, change),
-  );
-  const displayFile = (file: FileId): FileId =>
-    toImpactReportFilePath(projectRoot, file);
+  const normalizedDiffFiles = diffFiles.map((change) => normalizeImpactFileChange(projectRoot, change));
+  const displayFile = (file: FileId): FileId => toImpactReportFilePath(projectRoot, file);
   const exportSummary = buildExportSummary(changedSymbols);
   const reexportChains = buildReexportChains(index, changedSymbols);
   const topImpacts = buildTopImpacts(impactedItems);
-  const surfaceArea = buildSurfaceArea(
-    index,
-    normalizedDiffFiles,
-    impactedItems,
-  );
-  const projectFiles =
-    index.projectFiles ?? (await discoverProjectFiles(projectRoot));
+  const surfaceArea = buildSurfaceArea(index, normalizedDiffFiles, impactedItems);
+  const projectFiles = index.projectFiles ?? (await discoverProjectFiles(projectRoot));
   const newFileRangeForHunk = (hunk: FileChange["hunks"][number]) => {
     let newLine = hunk.newStart;
     let lastNewLine = newLine - 1;
@@ -131,11 +115,7 @@ export async function buildImpactReport(
       const fromIndex = symbolIdToIndex.get(edge.from);
       const toIndex = symbolIdToIndex.get(edge.to);
 
-      if (
-        fromIndex !== undefined &&
-        toIndex !== undefined &&
-        fromIndex !== toIndex
-      ) {
+      if (fromIndex !== undefined && toIndex !== undefined && fromIndex !== toIndex) {
         symbolEdges.push({
           from: fromIndex,
           to: toIndex,
@@ -149,12 +129,7 @@ export async function buildImpactReport(
     file: normalizePath(fileChange.path),
   }));
   const clusters = buildClusters(changedFileEntries, impactedItems, fileEdges);
-  const cycles = buildImpactCycles(
-    index,
-    changedFileEntries,
-    impactedItems,
-    symbolCoupling,
-  );
+  const cycles = buildImpactCycles(index, changedFileEntries, impactedItems, symbolCoupling);
 
   // Check if compact format is requested
   if (options.compact) {
@@ -195,9 +170,7 @@ export async function buildImpactReport(
           suggestions: suggestions.map((suggestion) => ({
             ...suggestion,
             file: displayFile(suggestion.file),
-            ...(suggestion.relatedFile
-              ? { relatedFile: displayFile(suggestion.relatedFile) }
-              : {}),
+            ...(suggestion.relatedFile ? { relatedFile: displayFile(suggestion.relatedFile) } : {}),
           })),
         }
       : {}),
@@ -215,9 +188,7 @@ export async function buildImpactReport(
             chains: reexportChains.chains.map((entry) => ({
               ...entry,
               file: displayFile(entry.file),
-              paths: entry.paths.map((pathChain) =>
-                pathChain.map((file) => displayFile(file)),
-              ),
+              paths: entry.paths.map((pathChain) => pathChain.map((file) => displayFile(file))),
             })),
           },
         }
@@ -283,16 +254,12 @@ function buildImpactCycles(
 ): ImpactCycle[] {
   const canonicalizeFile = createGraphFileResolver(index.graph.nodes);
 
-  const changedSet = new Set(
-    changedFiles.map((entry) => canonicalizeFile(entry.file)),
-  );
+  const changedSet = new Set(changedFiles.map((entry) => canonicalizeFile(entry.file)));
   const impactedSet = new Set(impactedItems.map((entry) => entry.file));
   const out: ImpactCycle[] = [];
   for (const cycle of findDetailedCycles(index.graph, { symbolCoupling })) {
     const touchesChangedFile = cycle.files.some((file) => changedSet.has(file));
-    const touchesImpactedFile = cycle.files.some((file) =>
-      impactedSet.has(file),
-    );
+    const touchesImpactedFile = cycle.files.some((file) => impactedSet.has(file));
     if (!touchesChangedFile && !touchesImpactedFile) continue;
     out.push({
       files: cycle.files,
@@ -479,9 +446,7 @@ function buildCompactReport(
         chains: reexportChains.chains.map((entry) => ({
           symbol: entry.symbol,
           file: fileIndex.get(displayFile(entry.file))!,
-          paths: entry.paths.map((pathChain) =>
-            pathChain.map((file) => fileIndex.get(displayFile(file))!),
-          ),
+          paths: entry.paths.map((pathChain) => pathChain.map((file) => fileIndex.get(displayFile(file))!)),
         })),
       }
     : undefined;
@@ -493,9 +458,7 @@ function buildCompactReport(
           symbols: item.symbols,
           reasons: item.reasons,
           severity: item.severity,
-          ...(item.confidence !== undefined
-            ? { confidence: item.confidence }
-            : {}),
+          ...(item.confidence !== undefined ? { confidence: item.confidence } : {}),
           ...(item.depth !== undefined ? { depth: item.depth } : {}),
           ...(item.typeOnly !== undefined ? { typeOnly: item.typeOnly } : {}),
           ...(item.explain ? { explain: item.explain } : {}),
@@ -598,19 +561,12 @@ function buildReexportChains(
   const reexportsBySource = new Map<FileId, ReexportEdge[]>();
   for (const [file, mod] of index.byFile) {
     for (const entry of mod.exports) {
-      if (
-        entry.type !== "reexport" &&
-        entry.type !== "exportStar" &&
-        entry.type !== "namespaceReexport"
-      ) {
+      if (entry.type !== "reexport" && entry.type !== "exportStar" && entry.type !== "namespaceReexport") {
         continue;
       }
       let resolvedSourcePath = entry.fromModule;
       if (entry.fromModule.startsWith(".")) {
-        resolvedSourcePath = resolveFilePathFromRoot(
-          path.dirname(file),
-          entry.fromModule,
-        );
+        resolvedSourcePath = resolveFilePathFromRoot(path.dirname(file), entry.fromModule);
       }
       const sourceFile = normalizePath(resolvedSourcePath);
       const edges = reexportsBySource.get(sourceFile) ?? [];
@@ -687,9 +643,7 @@ function buildReexportChains(
 
 const TOP_IMPACTS_LIMIT = 10;
 
-function buildExportSummary(
-  changedSymbols: ChangedSymbol[],
-): ExportSummaryEntry[] {
+function buildExportSummary(changedSymbols: ChangedSymbol[]): ExportSummaryEntry[] {
   const byFile = new Map<FileId, Set<string>>();
   for (const symbol of changedSymbols) {
     if (!symbol.exported) continue;
@@ -725,10 +679,7 @@ function buildClusters(
 ): ImpactCluster[] {
   const changedFilesSet = new Set(changedFiles.map((file) => file.file));
   const impactedFilesSet = new Set(impactedItems.map((item) => item.file));
-  const candidateFiles = new Set<FileId>([
-    ...changedFilesSet,
-    ...impactedFilesSet,
-  ]);
+  const candidateFiles = new Set<FileId>([...changedFilesSet, ...impactedFilesSet]);
 
   if (candidateFiles.size === 0) {
     return [];
@@ -753,9 +704,7 @@ function buildClusters(
     severityByFile.set(item.file, current + item.severity);
   }
 
-  const orderedFiles = Array.from(candidateFiles).sort((a, b) =>
-    a.localeCompare(b),
-  );
+  const orderedFiles = Array.from(candidateFiles).sort((a, b) => a.localeCompare(b));
   const visited = new Set<FileId>();
   const clusters: ImpactCluster[] = [];
 
@@ -783,9 +732,7 @@ function buildClusters(
     }
 
     componentFiles.sort((a, b) => a.localeCompare(b));
-    const componentChanged = componentFiles.filter((componentFile) =>
-      changedFilesSet.has(componentFile),
-    );
+    const componentChanged = componentFiles.filter((componentFile) => changedFilesSet.has(componentFile));
 
     let totalSeverity = 0;
     for (const componentFile of componentFiles) {
@@ -842,12 +789,8 @@ function buildSurfaceArea(
     }
   }
 
-  const changedFiles = new Set(
-    diffFiles.map((fileChange) => normalizePath(fileChange.path)),
-  );
-  const impactedFiles = new Set(
-    impactedItems.map((item) => normalizePath(item.file)),
-  );
+  const changedFiles = new Set(diffFiles.map((fileChange) => normalizePath(fileChange.path)));
+  const impactedFiles = new Set(impactedItems.map((item) => normalizePath(item.file)));
 
   const files = Array.from(index.graph.nodes).map((file) => {
     const normalizedFile = normalizePath(file);

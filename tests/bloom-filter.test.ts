@@ -1,9 +1,5 @@
 import { describe, test, expect } from "vitest";
-import {
-  BloomFilter,
-  buildBloomFilterFromSource,
-  BloomFilterCache,
-} from "../src/util/bloomFilter.js";
+import { BloomFilter, buildBloomFilterFromSource, BloomFilterCache } from "../src/util/bloomFilter.js";
 
 describe("BloomFilter", () => {
   test("should detect items that were added", () => {
@@ -40,11 +36,7 @@ describe("BloomFilter", () => {
     const buffer = filter.toBuffer();
     const metadata = filter.getMetadata();
 
-    const restored = BloomFilter.fromBuffer(
-      buffer,
-      metadata.size,
-      metadata.hashCount,
-    );
+    const restored = BloomFilter.fromBuffer(buffer, metadata.size, metadata.hashCount);
 
     expect(restored.mightContain("hello")).toBe(true);
     expect(restored.mightContain("world")).toBe(true);

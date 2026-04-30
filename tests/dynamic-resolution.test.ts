@@ -25,11 +25,9 @@ describe("Dynamic resolution heuristics", () => {
     await fsp.writeFile(mainPath, source, "utf8");
     await fsp.writeFile(utilPath, "module.exports = {};", "utf8");
 
-    const graph = await collectGraph(
-      root,
-      [normalizeFile(mainPath), normalizeFile(utilPath)],
-      { dynamicImportHeuristics: true },
-    );
+    const graph = await collectGraph(root, [normalizeFile(mainPath), normalizeFile(utilPath)], {
+      dynamicImportHeuristics: true,
+    });
 
     const hasEdge = graph.edges.some(
       (edge) =>
@@ -47,18 +45,12 @@ describe("Dynamic resolution heuristics", () => {
     const mainPath = path.join(root, "src", "main.ts");
     const buttonPath = path.join(root, "src", "components", "button.ts");
     await fsp.mkdir(path.dirname(buttonPath), { recursive: true });
-    await fsp.writeFile(
-      mainPath,
-      `import Button from "components/button";\nconsole.log(Button);\n`,
-      "utf8",
-    );
+    await fsp.writeFile(mainPath, `import Button from "components/button";\nconsole.log(Button);\n`, "utf8");
     await fsp.writeFile(buttonPath, "export default function Button() {}", "utf8");
 
-    const graph = await collectGraph(
-      root,
-      [normalizeFile(mainPath), normalizeFile(buttonPath)],
-      { resolutionHints: ["src"] },
-    );
+    const graph = await collectGraph(root, [normalizeFile(mainPath), normalizeFile(buttonPath)], {
+      resolutionHints: ["src"],
+    });
 
     const hasEdge = graph.edges.some(
       (edge) =>

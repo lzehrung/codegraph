@@ -1,15 +1,9 @@
 import { describe, expect, it } from "vitest";
-import {
-  isJsFallbackAvailable,
-  parseWithJsLanguage,
-} from "../src/jsFallback.js";
+import { isJsFallbackAvailable, parseWithJsLanguage } from "../src/jsFallback.js";
 
 import { TS_SUPPORT, languageForFile, supportById } from "../src/languages.js";
 import { buildScopeIndexFromSource } from "../src/indexer.js";
-import {
-  getNativeSyntaxTreeExecution,
-  isNativeTreeSitterAvailable,
-} from "../src/native/treeSitterNative.js";
+import { getNativeSyntaxTreeExecution, isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 import { ProjectedSyntaxTree } from "../src/native/projectedTree.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
@@ -20,11 +14,7 @@ nativeDescribe("native parse tree projection", () => {
     const support = supportById("ts");
     expect(support).toBeDefined();
 
-    const source = [
-      "export function greet(name: string) {",
-      "  return name.toUpperCase();",
-      "}",
-    ].join("\n");
+    const source = ["export function greet(name: string) {", "  return name.toUpperCase();", "}"].join("\n");
 
     const execution = getNativeSyntaxTreeExecution(source, support!);
     expect(execution.tree).not.toBeNull();
@@ -48,10 +38,7 @@ nativeDescribe("native parse tree projection", () => {
     const support = supportById("python");
     expect(support).toBeDefined();
 
-    const source = [
-      "def greet(name):",
-      "    return name.upper()",
-    ].join("\n");
+    const source = ["def greet(name):", "    return name.upper()"].join("\n");
 
     const execution = getNativeSyntaxTreeExecution(source, support!);
     expect(execution.tree).not.toBeNull();
@@ -63,10 +50,7 @@ nativeDescribe("native parse tree projection", () => {
     );
     expect(byIndex.text).toBe("name");
 
-    const byPosition = tree.rootNode.descendantForPosition(
-      { row: 1, column: 11 },
-      { row: 1, column: 15 },
-    );
+    const byPosition = tree.rootNode.descendantForPosition({ row: 1, column: 11 }, { row: 1, column: 15 });
     expect(byPosition.text).toBe("name");
   });
 

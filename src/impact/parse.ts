@@ -62,9 +62,7 @@ export function parseUnifiedDiff(diffText: string): Diff {
   return { files };
 }
 
-export async function parseUnifiedDiffStreaming(
-  stream: Readable,
-): Promise<Diff> {
+export async function parseUnifiedDiffStreaming(stream: Readable): Promise<Diff> {
   const rl = readline.createInterface({
     input: stream,
     terminal: false,
@@ -118,20 +116,17 @@ function decodeGitPath(rawPath: string): string {
   }
 
   const inner = trimmed.slice(1, -1);
-  const decoded = inner.replace(
-    /\\(\\|"|n|r|t|[0-7]{1,3})/g,
-    (match, token: string) => {
-      if (token === "\\") return "\\";
-      if (token === '"') return '"';
-      if (token === "n") return "\n";
-      if (token === "r") return "\r";
-      if (token === "t") return "\t";
-      if (/^[0-7]{1,3}$/.test(token)) {
-        return String.fromCharCode(parseInt(token, 8));
-      }
-      return match;
-    },
-  );
+  const decoded = inner.replace(/\\(\\|"|n|r|t|[0-7]{1,3})/g, (match, token: string) => {
+    if (token === "\\") return "\\";
+    if (token === '"') return '"';
+    if (token === "n") return "\n";
+    if (token === "r") return "\r";
+    if (token === "t") return "\t";
+    if (/^[0-7]{1,3}$/.test(token)) {
+      return String.fromCharCode(parseInt(token, 8));
+    }
+    return match;
+  });
   return decoded;
 }
 

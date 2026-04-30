@@ -1,23 +1,23 @@
-import { describe, it, expect } from 'vitest';
-import path from 'node:path';
-import os from 'node:os';
-import fs from 'node:fs';
-import fsp from 'node:fs/promises';
-import { createRequire } from 'node:module';
-import { buildProjectIndex } from '../src/index.js';
+import { describe, it, expect } from "vitest";
+import path from "node:path";
+import os from "node:os";
+import fs from "node:fs";
+import fsp from "node:fs/promises";
+import { createRequire } from "node:module";
+import { buildProjectIndex } from "../src/index.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
-describe('Incremental cache modes', () => {
-  const normalize = (p: string) => p.replace(/\\/g, '/');
+describe("Incremental cache modes", () => {
+  const normalize = (p: string) => p.replace(/\\/g, "/");
   const diskCacheDbPathFor = (projectRoot: string): string =>
-    path.join(projectRoot, '.codegraph-cache', 'index-v1', 'index-cache.sqlite');
+    path.join(projectRoot, ".codegraph-cache", "index-v1", "index-cache.sqlite");
 
   const loadBetterSqlite3 = () => {
     const require = createRequire(import.meta.url);
-    return require('better-sqlite3') as typeof import('better-sqlite3');
+    return require("better-sqlite3") as typeof import("better-sqlite3");
   };
 
   const readDiskCacheRow = (
@@ -28,11 +28,7 @@ describe('Incremental cache modes', () => {
     const BetterSqlite3 = loadBetterSqlite3();
     const db = new BetterSqlite3(dbPath, { readonly: true });
     try {
-      const row = db
-        .prepare(
-          'SELECT sig, version, payload, updated_at FROM module_cache WHERE file = ?',
-        )
-        .get(file) as
+      const row = db.prepare("SELECT sig, version, payload, updated_at FROM module_cache WHERE file = ?").get(file) as
         | { sig: string; version: number; payload: string; updated_at: number }
         | undefined;
       return row ?? null;
@@ -41,14 +37,14 @@ describe('Incremental cache modes', () => {
     }
   };
 
-  it('memory cache avoids recomputation on second run', async () => {
-    const root = await mkTmpDir('dg-cache-mem-');
+  it("memory cache avoids recomputation on second run", async () => {
+    const root = await mkTmpDir("dg-cache-mem-");
     const util = `export function a(){return 1}`;
-    const utilPath = path.join(root, 'util.ts');
-    await fsp.writeFile(utilPath, util, 'utf8');
+    const utilPath = path.join(root, "util.ts");
+    await fsp.writeFile(utilPath, util, "utf8");
 
-    const first = await buildProjectIndex(root, { threads: 4, cache: 'memory' });
-    const second = await buildProjectIndex(root, { threads: 4, cache: 'memory' });
+    const first = await buildProjectIndex(root, { threads: 4, cache: "memory" });
+    const second = await buildProjectIndex(root, { threads: 4, cache: "memory" });
 
     expect(first.byFile.size).toBeGreaterThan(0);
     expect(second.byFile.size).toBe(first.byFile.size);
@@ -66,13 +62,13 @@ describe('Incremental cache modes', () => {
     expect(fs.existsSync(dbPath)).toBe(false);
   });
 
-  it('disk cache persists across runs in the same directory', async () => {
-    const root = await mkTmpDir('dg-cache-disk-');
+  it("disk cache persists across runs in the same directory", async () => {
+    const root = await mkTmpDir("dg-cache-disk-");
     const util = `export function a(){return 1}`;
-    const utilPath = path.join(root, 'util.ts');
-    await fsp.writeFile(utilPath, util, 'utf8');
+    const utilPath = path.join(root, "util.ts");
+    await fsp.writeFile(utilPath, util, "utf8");
 
-    const first = await buildProjectIndex(root, { threads: 2, cache: 'disk' });
+    const first = await buildProjectIndex(root, { threads: 2, cache: "disk" });
     const fileId = normalize(path.resolve(utilPath));
     const dbPath = diskCacheDbPathFor(root);
     expect(first.byFile.size).toBeGreaterThan(0);
@@ -81,19 +77,18 @@ describe('Incremental cache modes', () => {
     const row = readDiskCacheRow(root, fileId);
     expect(row).not.toBeNull();
     expect(row?.version).toBe(1);
-    expect(typeof row?.sig).toBe('string');
-    const payload = JSON.parse(row?.payload ?? 'null') as unknown;
-    expect(typeof payload).toBe('object');
+    expect(typeof row?.sig).toBe("string");
+    const payload = JSON.parse(row?.payload ?? "null") as unknown;
+    expect(typeof payload).toBe("object");
     expect(payload).not.toBeNull();
-    if (payload && typeof payload === 'object' && 'file' in payload) {
-      expect(typeof payload.file).toBe('string');
+    if (payload && typeof payload === "object" && "file" in payload) {
+      expect(typeof payload.file).toBe("string");
     }
 
     // Build again; should hit disk cache file
-    const second = await buildProjectIndex(root, { threads: 2, cache: 'disk' });
+    const second = await buildProjectIndex(root, { threads: 2, cache: "disk" });
     expect(second.byFile.size).toBe(first.byFile.size);
     expect(fs.existsSync(dbPath)).toBe(true);
     expect(second.byFile.get(fileId)?.file).toBe(fileId);
   });
 });
-

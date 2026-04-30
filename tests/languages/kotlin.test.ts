@@ -51,11 +51,7 @@ const definition: LanguageTestDefinition = {
       },
       {
         file: "utils/MoreTypes.kt",
-        includes: [
-          { name: "UtilityAlias" },
-          { name: "UtilityFactory" },
-          { name: "CompanionCarrier" },
-        ],
+        includes: [{ name: "UtilityAlias" }, { name: "UtilityFactory" }, { name: "CompanionCarrier" }],
       },
       {
         file: "Objects.kt",

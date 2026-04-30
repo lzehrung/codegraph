@@ -50,16 +50,11 @@ export function parseSFC(source: string): SFCBlock[] {
     const contentEnd = close;
 
     const attrs = parseAttributes(attrsText);
-    const type =
-      tagName === "template" || tagName === "script" || tagName === "style"
-        ? tagName
-        : "custom";
+    const type = tagName === "template" || tagName === "script" || tagName === "style" ? tagName : "custom";
     const content = source.slice(contentStart, contentEnd);
     const startLine = lineForOffset(lineIndex, contentStart);
     const endLine =
-      contentStart === contentEnd
-        ? startLine
-        : lineForOffset(lineIndex, Math.max(contentStart, contentEnd - 1));
+      contentStart === contentEnd ? startLine : lineForOffset(lineIndex, Math.max(contentStart, contentEnd - 1));
 
     blocks.push({
       type: type,
@@ -78,16 +73,11 @@ export function parseSFC(source: string): SFCBlock[] {
   return blocks;
 }
 
-export function buildSvelteTemplateBlocks(
-  source: string,
-  blocks: SFCBlock[],
-): SFCBlock[] {
+export function buildSvelteTemplateBlocks(source: string, blocks: SFCBlock[]): SFCBlock[] {
   if (!source) return [];
   const lineIndex = buildLineIndex(source);
   const gaps: Range[] = [];
-  const occupied = blocks
-    .map((b) => ({ start: b.blockStart, end: b.blockEnd }))
-    .sort((a, b) => a.start - b.start);
+  const occupied = blocks.map((b) => ({ start: b.blockStart, end: b.blockEnd })).sort((a, b) => a.start - b.start);
   let cursor = 0;
   for (const range of occupied) {
     if (range.start > cursor) gaps.push({ start: cursor, end: range.start });
@@ -146,10 +136,7 @@ export function prepareSFCScriptSource(
   };
 }
 
-export function inferScriptLanguage(
-  blocks: SFCBlock[],
-  fallback: "js" | "ts" | "tsx" = "js",
-): "js" | "ts" | "tsx" {
+export function inferScriptLanguage(blocks: SFCBlock[], fallback: "js" | "ts" | "tsx" = "js"): "js" | "ts" | "tsx" {
   for (const block of blocks) {
     const lang = normalizeLang(block.attrs.lang);
     if (lang === "ts" || lang === "tsx") return lang;
@@ -161,11 +148,8 @@ export function scriptLanguageIdForBlock(block: SFCBlock): "js" | "ts" | "tsx" {
   return inferScriptLanguage([block]);
 }
 
-export function styleLanguageKey(
-  block: SFCBlock,
-): "css" | "scss" | "less" | null {
-  const raw =
-    normalizeLang(block.attrs.lang) ?? normalizeLang(block.attrs.type);
+export function styleLanguageKey(block: SFCBlock): "css" | "scss" | "less" | null {
+  const raw = normalizeLang(block.attrs.lang) ?? normalizeLang(block.attrs.type);
   if (!raw) return "css";
   if (raw === "scss" || raw === "less" || raw === "css") return raw;
   if (raw === "sass") return "scss";
@@ -176,20 +160,14 @@ export function templateLanguageKey(framework: SFCFramework): "html" | null {
   return framework === "vue" ? "html" : null;
 }
 
-function normalizeLang(
-  value: string | boolean | undefined,
-): string | undefined {
+function normalizeLang(value: string | boolean | undefined): string | undefined {
   if (typeof value === "string") {
     return value.trim().toLowerCase();
   }
   return undefined;
 }
 
-function findClosingTag(
-  lowerSource: string,
-  tag: string,
-  fromIndex: number,
-): number {
+function findClosingTag(lowerSource: string, tag: string, fromIndex: number): number {
   const closeExpr = `</${tag}>`;
   return lowerSource.indexOf(closeExpr, fromIndex);
 }

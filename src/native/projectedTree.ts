@@ -1,8 +1,4 @@
-import type {
-  NativePoint,
-  NativeSyntaxNode,
-  NativeSyntaxTree,
-} from "./treeSitterNative.js";
+import type { NativePoint, NativeSyntaxNode, NativeSyntaxTree } from "./treeSitterNative.js";
 
 export type ProjectedPosition = {
   row: number;
@@ -109,37 +105,23 @@ export class ProjectedSyntaxNode {
   }
 
   childForFieldName(fieldName: string): ProjectedSyntaxNode | null {
-    const childIndex = this.raw.childFieldNames.findIndex(
-      (name) => name === fieldName,
-    );
+    const childIndex = this.raw.childFieldNames.findIndex((name) => name === fieldName);
     if (childIndex < 0) return null;
     return this.child(childIndex);
   }
 
-  descendantForIndex(
-    startIndex: number,
-    endIndex: number,
-  ): ProjectedSyntaxNode {
+  descendantForIndex(startIndex: number, endIndex: number): ProjectedSyntaxNode {
     for (const child of this.namedChildren) {
-      if (
-        child.startIndex <= startIndex &&
-        child.endIndex >= endIndex
-      ) {
+      if (child.startIndex <= startIndex && child.endIndex >= endIndex) {
         return child.descendantForIndex(startIndex, endIndex);
       }
     }
     return this;
   }
 
-  descendantForPosition(
-    start: ProjectedPosition,
-    end: ProjectedPosition,
-  ): ProjectedSyntaxNode {
+  descendantForPosition(start: ProjectedPosition, end: ProjectedPosition): ProjectedSyntaxNode {
     for (const child of this.namedChildren) {
-      if (
-        comparePosition(child.startPosition, start) <= 0 &&
-        comparePosition(child.endPosition, end) >= 0
-      ) {
+      if (comparePosition(child.startPosition, start) <= 0 && comparePosition(child.endPosition, end) >= 0) {
         return child.descendantForPosition(start, end);
       }
     }

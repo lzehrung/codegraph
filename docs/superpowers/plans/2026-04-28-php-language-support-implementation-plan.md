@@ -13,6 +13,7 @@
 ### Task 1: Wire PHP Into Discovery, Registration, And Runtime Loading
 
 **Files:**
+
 - Modify: `src/util.ts`
 - Modify: `src/languages/all.ts`
 - Modify: `src/languages.ts`
@@ -39,6 +40,7 @@
 ### Task 2: Add The PHP Language Definition And Chunking Contract
 
 **Files:**
+
 - Create: `src/languages/definitions/php.ts`
 - Test: `tests/languages/php.test.ts`
 - Create: `tests/languages/samples/php.sample.php`
@@ -58,6 +60,7 @@
 ### Task 3: Implement PHP Graphing, Import Bindings, And Local Symbols
 
 **Files:**
+
 - Modify: `src/graphs.ts`
 - Modify: `src/indexer.ts`
 - Modify: `src/util.ts`
@@ -76,6 +79,7 @@
 ### Task 4: Implement Composer-Aware Static Resolution
 
 **Files:**
+
 - Modify: `src/util.ts`
 - Modify: `src/graphs.ts`
 - Modify: `src/indexer.ts`
@@ -98,6 +102,7 @@
 ### Task 5: Add Shared Semantic Coverage And Runtime Parity
 
 **Files:**
+
 - Modify: `tests/goto.test.ts`
 - Modify: `tests/references.test.ts`
 - Modify: `tests/native-semantic-parity.test.ts`
@@ -117,6 +122,7 @@
 ### Task 6: Update Docs, Scenarios, And The New-Language Checklist
 
 **Files:**
+
 - Modify: `docs/language-parity.md`
 - Modify: `docs/scenario-catalog.md`
 - Modify: `README.md`
@@ -132,6 +138,7 @@
 ### Task 7: Final Verification
 
 **Files:**
+
 - Verify all changed files above
 
 - [ ] Run targeted focused suites for PHP language, Composer resolution, shared goto/refs, native parity, and docs-sensitive metadata

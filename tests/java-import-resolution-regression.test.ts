@@ -27,22 +27,12 @@ describe("Java import resolution regression", () => {
     await fsp.mkdir(targetDir, { recursive: true });
     await fsp.writeFile(
       sourcePackageFile,
-      [
-        "package pkg;",
-        "public class PackageTypes {",
-        "  public static final int VALUE = 1;",
-        "}",
-      ].join("\n"),
+      ["package pkg;", "public class PackageTypes {", "  public static final int VALUE = 1;", "}"].join("\n"),
       "utf8",
     );
     await fsp.writeFile(
       ignoredPackageFile,
-      [
-        "package pkg;",
-        "public class PackageTypes {",
-        "  public static final int VALUE = 999;",
-        "}",
-      ].join("\n"),
+      ["package pkg;", "public class PackageTypes {", "  public static final int VALUE = 999;", "}"].join("\n"),
       "utf8",
     );
 
@@ -127,20 +117,12 @@ describe("Java import resolution regression", () => {
       ["package pkg;", "public interface Beta {", "  void serve();", "}"].join("\n"),
       "utf8",
     );
-    await fsp.writeFile(
-      ignoredFile,
-      ["package pkg;", "public class Generated {}"].join("\n"),
-      "utf8",
-    );
+    await fsp.writeFile(ignoredFile, ["package pkg;", "public class Generated {}"].join("\n"), "utf8");
     await fsp.writeFile(
       mainFile,
-      [
-        "import pkg.*;",
-        "public class Main {",
-        "  Alpha alpha = new Alpha();",
-        "  Beta beta = () -> {};",
-        "}",
-      ].join("\n"),
+      ["import pkg.*;", "public class Main {", "  Alpha alpha = new Alpha();", "  Beta beta = () -> {};", "}"].join(
+        "\n",
+      ),
       "utf8",
     );
 

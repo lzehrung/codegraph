@@ -20,8 +20,7 @@ export function compileTestPatterns(
     try {
       out.push(new RegExp(pattern));
     } catch (error) {
-      const normalized =
-        error instanceof Error ? error : new Error(String(error));
+      const normalized = error instanceof Error ? error : new Error(String(error));
       onInvalidPattern?.(pattern, normalized);
     }
   }
@@ -34,9 +33,7 @@ export function isTestFilePath(file: FileId, patterns: RegExp[]): boolean {
 }
 
 function inferCommonProjectRoot(files: readonly FileId[]): string | null {
-  const directories = Array.from(files, (file) =>
-    path.posix.dirname(normalizePath(file)),
-  );
+  const directories = Array.from(files, (file) => path.posix.dirname(normalizePath(file)));
   if (directories.length === 0) {
     return null;
   }
@@ -59,21 +56,13 @@ function inferCommonProjectRoot(files: readonly FileId[]): string | null {
   return sharedSegments.join("/");
 }
 
-function inferIndexProjectRoot(
-  index: ProjectIndex,
-  referenceFiles: readonly FileId[] = [],
-): string | null {
-  const projectRoot =
-    index.projectRoot ??
-    index.projectFiles?.find((entry) => entry.projectRoot)?.projectRoot;
+function inferIndexProjectRoot(index: ProjectIndex, referenceFiles: readonly FileId[] = []): string | null {
+  const projectRoot = index.projectRoot ?? index.projectFiles?.find((entry) => entry.projectRoot)?.projectRoot;
   if (projectRoot) {
     return normalizePath(projectRoot);
   }
 
-  return inferCommonProjectRoot([
-    ...index.byFile.keys(),
-    ...referenceFiles,
-  ]);
+  return inferCommonProjectRoot([...index.byFile.keys(), ...referenceFiles]);
 }
 
 export function createIndexTestFileMatcher(
@@ -88,11 +77,7 @@ export function createIndexTestFileMatcher(
 
   return (file: FileId): boolean => {
     const normalized = normalizePath(file);
-    const relativePath =
-      projectRoot ? toProjectRelativePath(projectRoot, normalized) : null;
-    return isTestFilePath(
-      relativePath ?? normalized,
-      patterns,
-    );
+    const relativePath = projectRoot ? toProjectRelativePath(projectRoot, normalized) : null;
+    return isTestFilePath(relativePath ?? normalized, patterns);
   };
 }

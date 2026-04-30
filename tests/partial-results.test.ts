@@ -198,15 +198,9 @@ describe("Partial Results", () => {
 
   describe("combinePartialResults", () => {
     test("should combine successful results", () => {
-      const results = [
-        success([1, 2]),
-        success([3, 4]),
-        success([5, 6]),
-      ];
+      const results = [success([1, 2]), success([3, 4]), success([5, 6])];
 
-      const combined = combinePartialResults(results, (arrays) =>
-        arrays.flat(),
-      );
+      const combined = combinePartialResults(results, (arrays) => arrays.flat());
 
       expect(combined.status).toBe("complete");
       expect(combined.data).toEqual([1, 2, 3, 4, 5, 6]);
@@ -225,9 +219,7 @@ describe("Partial Results", () => {
         success([4, 5]),
       ];
 
-      const combined = combinePartialResults(results, (arrays) =>
-        arrays.flat(),
-      );
+      const combined = combinePartialResults(results, (arrays) => arrays.flat());
 
       expect(combined.status).toBe("partial");
       expect(combined.data).toEqual([1, 2, 3, 4, 5]);
@@ -241,9 +233,7 @@ describe("Partial Results", () => {
         partial([2], [], { attempted: 2, succeeded: 1, failed: 1 }),
       ];
 
-      const combined = combinePartialResults(results, (arrays) =>
-        arrays.flat(),
-      );
+      const combined = combinePartialResults(results, (arrays) => arrays.flat());
 
       expect(combined.metadata?.attempted).toBe(3);
       expect(combined.metadata?.succeeded).toBe(2);
@@ -277,9 +267,7 @@ describe("Partial Results", () => {
         failed: 1,
       });
 
-      const mapped = mapPartialResult(result, (nums) =>
-        nums.map((n) => String(n)),
-      );
+      const mapped = mapPartialResult(result, (nums) => nums.map((n) => String(n)));
 
       expect(mapped.data).toEqual(["1", "2"]);
       expect(mapped.errors).toEqual(errors);
@@ -289,30 +277,34 @@ describe("Partial Results", () => {
 
   describe("filterErrorsBySeverity", () => {
     test("should filter errors by severity", () => {
-      const result = partial([], [
+      const result = partial(
+        [],
+        [
+          {
+            target: "a",
+            message: "error1",
+            severity: "error" as const,
+            retryable: false,
+          },
+          {
+            target: "b",
+            message: "warning1",
+            severity: "warning" as const,
+            retryable: true,
+          },
+          {
+            target: "c",
+            message: "error2",
+            severity: "error" as const,
+            retryable: false,
+          },
+        ],
         {
-          target: "a",
-          message: "error1",
-          severity: "error" as const,
-          retryable: false,
+          attempted: 3,
+          succeeded: 0,
+          failed: 3,
         },
-        {
-          target: "b",
-          message: "warning1",
-          severity: "warning" as const,
-          retryable: true,
-        },
-        {
-          target: "c",
-          message: "error2",
-          severity: "error" as const,
-          retryable: false,
-        },
-      ], {
-        attempted: 3,
-        succeeded: 0,
-        failed: 3,
-      });
+      );
 
       const errors = filterErrorsBySeverity(result, "error");
       const warnings = filterErrorsBySeverity(result, "warning");

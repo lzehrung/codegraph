@@ -1,7 +1,7 @@
-import { helperFunction, UtilityClass, CONSTANT_VALUE } from './utils.js';
-import * as utils from './utils.js';
-import { helperFunction as helperAlias } from './utils.js';
-import defaultExport from './utils.js';
+import { helperFunction, UtilityClass, CONSTANT_VALUE } from "./utils.js";
+import * as utils from "./utils.js";
+import { helperFunction as helperAlias } from "./utils.js";
+import defaultExport from "./utils.js";
 
 // Namespace import usage
 const utilsResult = utils.helperFunction();
@@ -22,7 +22,7 @@ const defaultResult = defaultExport();
 console.log(CONSTANT_VALUE);
 
 // CommonJS require (mixed module system)
-const { helperFunction: requireHelper } = require('./helpers.js');
+const { helperFunction: requireHelper } = require("./helpers.js");
 
 export function main() {
   console.log(result);
@@ -35,6 +35,6 @@ export function main() {
 
 // Dynamic import
 async function loadModule() {
-  const module = await import('./helpers.js');
+  const module = await import("./helpers.js");
   return module.anotherHelper();
 }
