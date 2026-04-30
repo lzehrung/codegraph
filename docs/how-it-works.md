@@ -79,6 +79,7 @@ Language adapters expose:
 ### 2. Indexing
 
 - TypeScript owns the shared indexing pipeline, resolution logic, and output shapes.
+- `src/indexer.ts` stays as the stable public facade while the implementation is split across focused modules under `src/indexer/` for parsing, imports, symbols, navigation, and build orchestration.
 - The parser and query hot path stays on Tree-sitter for every supported language.
 - When available, the addon inside `@lzehrung/codegraph-native` runs those Tree-sitter parses and queries natively, then returns plain capture data to TypeScript.
 

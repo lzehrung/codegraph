@@ -10,7 +10,7 @@ import type {
   BuildReport,
   NativeBackendFallbackReason,
   NativeBackendLanguageReport,
-} from "../indexer.js";
+} from "../indexer/types.js";
 import { stringifyUnknown } from "../util.js";
 
 export type NativeBackendOutcome = {
