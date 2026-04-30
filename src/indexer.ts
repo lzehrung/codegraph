@@ -94,6 +94,15 @@ import {
   resolveImported,
 } from "./indexer/navigation.js";
 import {
+  defFromSymbolId,
+  findReferencesById,
+  getApiSurface,
+  goToDefinitionById,
+  listSymbols,
+  resolveSymbolId,
+  symbolId,
+} from "./indexer/symbols.js";
+import {
   extractEnclosingBlock,
   extractLineContext,
   rangeContains,
@@ -215,6 +224,15 @@ export {
   resolveExport,
   resolveImported,
 } from "./indexer/navigation.js";
+export {
+  defFromSymbolId,
+  findReferencesById,
+  getApiSurface,
+  goToDefinitionById,
+  listSymbols,
+  resolveSymbolId,
+  symbolId,
+} from "./indexer/symbols.js";
 
 type IndexedFileGraphContext = {
   source: string;
@@ -607,107 +625,6 @@ function workerResultToPrepared(
   };
 }
 
-// ---------------- Symbol handles (agent-friendly) ----------------
-export function symbolId(def: SymbolDef): SymbolHandle {
-  const idx = def?.range?.start?.index ?? 0;
-  return `${def.file}::${def.localName}::${idx}`;
-}
-
-export function defFromSymbolId(
-  index: ProjectIndex,
-  id: SymbolHandle,
-): SymbolDef | null {
-  if (!id) return null;
-  const parts = id.split("::");
-  if (parts.length < 3) return null;
-  const rawFile = parts[0]!;
-  const localName = parts[1]!;
-  const startStr = parts[2]!;
-  const file = rawFile.replace(/\\/g, "/");
-  const startIndex = Number(startStr);
-  const mod = index.byFile.get(file);
-  if (!mod) return null;
-  const exact = mod.locals.find(
-    (d) =>
-      d.localName === localName && (d.range?.start?.index ?? 0) === startIndex,
-  );
-  if (exact) return exact;
-  const byName = mod.locals.find((d) => d.localName === localName);
-  return byName ?? null;
-}
-
-export function resolveSymbolId(
-  index: ProjectIndex,
-  id: SymbolHandle,
-): SymbolDef | null {
-  if (!id) return null;
-  const parts = id.split("::");
-  if (parts.length === 3 && parts[2] === "import") {
-    const rawFile = parts[0]!;
-    const alias = parts[1]!;
-    const file = rawFile.replace(/\\/g, "/");
-    const mod = index.byFile.get(file);
-    if (!mod) return null;
-
-    // Prefer named, then default, then namespace
-    const named = mod.imports.find(
-      (i): i is ImportBinding & { kind: "named" } =>
-        i.kind === "named" && i.local === alias,
-    );
-    if (named) {
-      const res = resolveImported(index, named, named.imported);
-      if (res && !("namespace" in res)) return res;
-      const target =
-        typeof named.resolved === "string" ? named.resolved : undefined;
-      if (target) {
-        const hit = resolveExport(index, target, named.imported);
-        if (hit?.kind === "resolved") return hit.def;
-      }
-    }
-
-    const deflt = mod.imports.find(
-      (i): i is ImportBinding & { kind: "default" } =>
-        i.kind === "default" && i.local === alias,
-    );
-    if (deflt) {
-      const res = resolveImported(index, deflt, "default");
-      if (res && !("namespace" in res)) return res;
-      const target =
-        typeof deflt.resolved === "string" ? deflt.resolved : undefined;
-      if (target) {
-        const hit = resolveExport(index, target, "default");
-        if (hit?.kind === "resolved") return hit.def;
-        const tmod = index.byFile.get(target);
-        const first = tmod?.exports.find(
-          (e): e is ExportEntry & { type: "local" } => e.type === "local",
-        );
-        if (first) return first.target;
-      }
-    }
-
-    const ns = mod.imports.find(
-      (i) => i.kind === "namespace" && i.localNS === alias,
-    );
-    if (ns) {
-      const target = typeof ns.resolved === "string" ? ns.resolved : undefined;
-      if (target) {
-        const tmod = index.byFile.get(target);
-        const first = tmod?.exports.find(
-          (e): e is ExportEntry & { type: "local" } => e.type === "local",
-        );
-        if (first) return first.target;
-        const firstLocal = tmod?.locals?.[0];
-        if (firstLocal) return firstLocal;
-      }
-    }
-
-    return null;
-  }
-
-  // Otherwise treat as direct definition handle
-  return defFromSymbolId(index, id);
-}
-
 function isJsonFile(filePath: string): boolean {
   return filePath.toLowerCase().endsWith(".json");
 }
@@ -812,288 +729,6 @@ function expandStarImports(modules: Map<FileId, ModuleIndex>): void {
       }
     }
   }
-}
-
-export function goToDefinitionById(
-  index: ProjectIndex,
-  id: SymbolHandle,
-): GoToResult {
-  const def = resolveSymbolId(index, id);
-  if (def) return { status: "ok", definition: def };
-  return { status: "not_found", reason: "No matching definition for handle" };
-}
-
-export async function findReferencesById(
-  index: ProjectIndex,
-  id: SymbolHandle,
-) {
-  const def = resolveSymbolId(index, id);
-  if (!def)
-    return {
-      status: "not_found",
-      reason: "No matching definition for handle",
-    } as const;
-  return await findReferences(index, { def });
-}
-
-export function listSymbols(
-  index: ProjectIndex,
-  opts?: { file?: FileId; includeImports?: boolean },
-): SymbolListItem[] {
-  const out: SymbolListItem[] = [];
-  const files = opts?.file
-    ? [opts.file.replace(/\\/g, "/")]
-    : Array.from(index.byFile.keys());
-
-  for (const f of files) {
-    const mod = index.byFile.get(f);
-    if (!mod) continue;
-    for (const def of mod.locals) {
-      out.push({
-        id: symbolId(def),
-        file: f,
-        name: def.localName,
-        kind: def.kind,
-        range: def.range,
-        ...(def.docstring ? { docstring: def.docstring } : {}),
-      });
-    }
-    if (opts?.includeImports) {
-      for (const imp of mod.imports) {
-        if (imp.kind === "named")
-          out.push({
-            id: `${f}::${imp.local}::import`,
-            file: f,
-            name: imp.local,
-            kind: "import",
-          });
-        else if (imp.kind === "default")
-          out.push({
-            id: `${f}::${imp.local}::import`,
-            file: f,
-            name: imp.local,
-            kind: "import",
-          });
-        else if (imp.kind === "namespace")
-          out.push({
-            id: `${f}::${imp.localNS}::import`,
-            file: f,
-            name: imp.localNS,
-            kind: "namespaceImport",
-          });
-      }
-    }
-  }
-
-  return out;
-}
-
-function appendJsLikeRegexFallbackExports(
-  file: string,
-  source: string,
-  locals: SymbolDef[],
-  exports: ExportEntry[],
-): void {
-  const maskedSource = maskJsLikeCommentsAndStrings(source);
-  const reDecl =
-    /\bexport\s+(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g;
-  const reDefault = /\bexport\s+default\s+([A-Za-z_$][\w$]*)/g;
-  const reExportAssign = /\bexport\s*=\s*([A-Za-z_$][\w$]*)/g;
-  const reReexport = /\bexport\s*\{\s*([^}]+)\}\s*from\s*("|')([^"']*)\2/g;
-  const reReexportNs =
-    /\bexport\s*\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*("|')([^"']*)\2/g;
-  const reStar = /\bexport\s*\*\s*from\s*("|')([^"']*)\1/g;
-  const reCjsFn =
-    /(?:^|[;\n\r])\s*(?:exports|module\.exports)\.([A-Za-z_$][\w$]*)\s*=\s*(function\b|\([^)]*\)\s*=>)/g;
-  const reCjsObjFn = /([A-Za-z_$][\w$]*)\s*:\s*(function\b|\([^)]*\)\s*=>)/g;
-  const moduleExportsObject = /module\.exports\s*=\s*\{([^}]*)\}/s;
-  let match: RegExpExecArray | null;
-
-  while ((match = reDecl.exec(maskedSource))) {
-    const name = match[1]!;
-    if (!exports.some((entry) => entry.type === "local" && entry.exportedAs === name)) {
-      const local = locals.find((def) => def.localName === name);
-      if (local) exports.push({ type: "local", exportedAs: name, target: local });
-    }
-  }
-
-  while ((match = reDefault.exec(maskedSource))) {
-    const name = match[1]!;
-    if (!exports.some((entry) => entry.type === "local" && entry.exportedAs === "default")) {
-      const local = locals.find((def) => def.localName === name);
-      if (local) {
-        exports.push({
-          type: "local",
-          exportedAs: "default",
-          target: { ...local, kind: SymbolKind.Default },
-        });
-      }
-    }
-  }
-
-  while ((match = reExportAssign.exec(maskedSource))) {
-    const name = match[1]!;
-    if (!exports.some((entry) => entry.type === "local" && entry.exportedAs === "default")) {
-      const local = locals.find((def) => def.localName === name);
-      if (local) {
-        exports.push({
-          type: "local",
-          exportedAs: "default",
-          target: { ...local, kind: SymbolKind.Default },
-        });
-      }
-    }
-  }
-
-  while ((match = reReexport.exec(maskedSource))) {
-    const list = match[1]!
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-    const from = source.slice(match.index, reReexport.lastIndex).match(/from\s*("|')([^"']+)\1/)?.[2];
-    if (!from) continue;
-    for (const spec of list) {
-      const entryMatch = spec.match(
-        /^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/,
-      );
-      if (!entryMatch) continue;
-      const srcName = entryMatch[1]!;
-      const alias = entryMatch[2] ?? srcName;
-      if (
-        !exports.some(
-          (entry) =>
-            entry.type === "reexport" &&
-            entry.exportedAs === alias &&
-            entry.fromModule === from,
-        )
-      ) {
-        exports.push({
-          type: "reexport",
-          exportedAs: alias,
-          fromModule: from,
-          sourceSpecifier: srcName,
-        });
-      }
-    }
-  }
-
-  while ((match = reReexportNs.exec(maskedSource))) {
-    const alias = match[1]!;
-    const from = source.slice(match.index, reReexportNs.lastIndex).match(/from\s*("|')([^"']+)\1/)?.[2];
-    if (!from) continue;
-    if (
-      !exports.some(
-        (entry) =>
-          (entry.type === "reexport" || entry.type === "namespaceReexport") &&
-          entry.exportedAs === alias &&
-          entry.fromModule === from,
-      )
-    ) {
-      exports.push({
-        type: "namespaceReexport",
-        exportedAs: alias,
-        fromModule: from,
-      });
-    }
-  }
-
-  while ((match = reStar.exec(maskedSource))) {
-    const from = source.slice(match.index, reStar.lastIndex).match(/("|')([^"']+)\1/)?.[2];
-    if (!from) continue;
-    if (!exports.some((entry) => entry.type === "exportStar" && entry.fromModule === from)) {
-      exports.push({
-        type: "exportStar",
-        fromModule: from,
-        sourceSpecifier: from,
-      });
-    }
-  }
-
-  while ((match = reCjsFn.exec(maskedSource))) {
-    const exportedAs = match[1]!;
-    let local = locals.find((def) => def.localName === exportedAs);
-    if (!local) {
-      const idx = match.index + match[0].indexOf(exportedAs);
-      const pos = { line: 1, column: 1, index: idx };
-      local = {
-        file,
-        localName: exportedAs,
-        kind: SymbolKind.Function,
-        range: { start: pos, end: pos },
-      };
-      locals.push(local);
-    }
-    if (!exports.some((entry) => entry.type === "local" && entry.exportedAs === exportedAs)) {
-      exports.push({ type: "local", exportedAs, target: local });
-    }
-  }
-
-  const moduleExportsObjMatch = moduleExportsObject.exec(maskedSource);
-  if (!moduleExportsObjMatch || moduleExportsObjMatch.index === undefined) {
-    return;
-  }
-
-  const objContent = moduleExportsObjMatch[1]!;
-  let objectMatch: RegExpExecArray | null;
-  while ((objectMatch = reCjsObjFn.exec(objContent))) {
-    const exportedAs = objectMatch[1]!;
-    let local = locals.find((def) => def.localName === exportedAs);
-    if (!local) {
-      const idx =
-        moduleExportsObjMatch.index + moduleExportsObjMatch[0].indexOf(exportedAs);
-      const pos = { line: 1, column: 1, index: idx };
-      local = {
-        file,
-        localName: exportedAs,
-        kind: SymbolKind.Function,
-        range: { start: pos, end: pos },
-      };
-      locals.push(local);
-    }
-    if (!exports.some((entry) => entry.type === "local" && entry.exportedAs === exportedAs)) {
-      exports.push({ type: "local", exportedAs, target: local });
-    }
-  }
-}
-
-export function getApiSurface(index: ProjectIndex): ApiSurface {
-  const out: ApiSurface = [];
-  for (const [file, mod] of index.byFile) {
-    const exports = mod.exports.map((e) => {
-      if (e.type === "local") {
-        return {
-          name: e.target.localName,
-          kind: e.target.kind,
-          exportedAs: e.exportedAs,
-        };
-      } else if (e.type === "reexport") {
-        return {
-          name: e.sourceSpecifier,
-          kind: "reexport",
-          exportedAs: e.exportedAs,
-          target: { file: e.fromModule, name: e.sourceSpecifier },
-        };
-      } else if (e.type === "namespaceReexport") {
-        return {
-          name: "*",
-          kind: "namespaceReexport",
-          exportedAs: e.exportedAs,
-          target: { file: e.fromModule, name: "*" },
-        };
-      } else {
-        return {
-          name: "*",
-          kind: "exportStar",
-          exportedAs: "*",
-          target: { file: e.fromModule, name: "*" },
-        };
-      }
-    });
-    if (exports.length > 0) {
-      out.push({ file, exports });
-    }
-  }
-  return out;
 }
 
 // ---------------- Incremental cache (memory/disk) ----------------
