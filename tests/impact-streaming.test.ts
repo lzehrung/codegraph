@@ -2,11 +2,7 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import {
-  analyzeImpactFromDiff,
-  analyzeImpactStreaming,
-  type ImpactStreamChunk,
-} from "../src/impact/index.js";
+import { analyzeImpactFromDiff, analyzeImpactStreaming, type ImpactStreamChunk } from "../src/impact/index.js";
 import { buildProjectIndex } from "../src/index.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -68,11 +64,7 @@ index 1234567..abcdef0 100644
 
   it("emits error chunk when diff provider fails", async () => {
     const root = await mkTmpDir("dg-stream-error-");
-    await fsp.writeFile(
-      path.join(root, "index.ts"),
-      "export const a = 1;\n",
-      "utf8",
-    );
+    await fsp.writeFile(path.join(root, "index.ts"), "export const a = 1;\n", "utf8");
     const index = await buildProjectIndex(root);
 
     try {
@@ -102,11 +94,7 @@ export const run = () => setup();
 `,
       "utf8",
     );
-    await fsp.writeFile(
-      path.join(root, "setup.ts"),
-      "export const setup = () => 1;\n",
-      "utf8",
-    );
+    await fsp.writeFile(path.join(root, "setup.ts"), "export const setup = () => 1;\n", "utf8");
     const index = await buildProjectIndex(root);
 
     try {
@@ -131,9 +119,7 @@ rename to setup-renamed.ts
         }
       }
 
-      expect(impactedFiles.some((file) => file.endsWith("consumer.ts"))).toBe(
-        true,
-      );
+      expect(impactedFiles.some((file) => file.endsWith("consumer.ts"))).toBe(true);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -162,9 +148,7 @@ index 1234567..abcdef0 100644
 `;
 
       const changedSymbols: string[] = [];
-      let completeSummary:
-        | { totalChanged: number; totalImpacted: number }
-        | undefined;
+      let completeSummary: { totalChanged: number; totalImpacted: number } | undefined;
 
       for await (const chunk of analyzeImpactStreaming(root, index, {
         provider: "raw",
@@ -266,9 +250,7 @@ index 1234567..abcdef0 100644
       }
 
       expect(impactItems.some((item) => item.partial)).toBe(true);
-      expect(
-        impactItems.some((item) => item.file.endsWith("consumer.ts")),
-      ).toBe(true);
+      expect(impactItems.some((item) => item.file.endsWith("consumer.ts"))).toBe(true);
       const firstImpactIndex = chunkTypes.indexOf("impactItem");
       const completeIndex = chunkTypes.lastIndexOf("complete");
       expect(firstImpactIndex).toBeGreaterThan(-1);

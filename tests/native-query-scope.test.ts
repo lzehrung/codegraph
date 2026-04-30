@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isJsFallbackAvailable } from "../src/jsFallback.js";
 import { supportById } from "../src/languages.js";
-import {
-  collectModuleSpecifiersFromSource,
-  type FallbackImportExtractionEvent,
-} from "../src/graphs.js";
+import { collectModuleSpecifiersFromSource, type FallbackImportExtractionEvent } from "../src/graphs.js";
 import {
   getCompactImportsExecution,
   getNativeQueryExecutionForState,
@@ -62,12 +59,7 @@ describe("native query scope", () => {
     expect(support).toBeDefined();
     const { executedKinds, state } = createScopeSpy();
 
-    const result = getNativeQueryExecutionForState(
-      "import { foo } from './bar';",
-      support,
-      state,
-      "imports",
-    );
+    const result = getNativeQueryExecutionForState("import { foo } from './bar';", support, state, "imports");
 
     expect(result.results).not.toBeNull();
     expect(executedKinds).toEqual(["imports"]);
@@ -97,11 +89,7 @@ describe("native query scope", () => {
     expect(support).toBeDefined();
     const { executedKinds, state } = createScopeSpy();
 
-    getNativeQueryExecutionForState(
-      "export const value = 1;",
-      support,
-      state,
-    );
+    getNativeQueryExecutionForState("export const value = 1;", support, state);
 
     expect(executedKinds).toContain("imports");
     expect(executedKinds).toContain("exports");
@@ -114,12 +102,7 @@ describe("native query scope", () => {
     expect(support).toBeDefined();
     const { executedKinds, state } = createScopeSpy();
 
-    getNativeQueryExecutionForState(
-      "import os\n",
-      support,
-      state,
-      "imports",
-    );
+    getNativeQueryExecutionForState("import os\n", support, state, "imports");
 
     expect(executedKinds).toEqual(["imports"]);
   });
@@ -129,12 +112,7 @@ describe("native query scope", () => {
     expect(support).toBeDefined();
     const { executedKinds, state } = createScopeSpy();
 
-    getNativeQueryExecutionForState(
-      'package main\nimport "fmt"\n',
-      support,
-      state,
-      "imports",
-    );
+    getNativeQueryExecutionForState('package main\nimport "fmt"\n', support, state, "imports");
 
     expect(executedKinds).toEqual(["imports"]);
   });
@@ -197,34 +175,25 @@ describe("authoritative empty native results", () => {
       importBindings: [],
     };
     // Source that has no import keyword at all
-    const specs = collectModuleSpecifiersFromSource(
-      support,
-      undefined,
-      "export const value = 42;\n",
-      { nativeQueries: emptyNativeResults },
-    );
+    const specs = collectModuleSpecifiersFromSource(support, undefined, "export const value = 42;\n", {
+      nativeQueries: emptyNativeResults,
+    });
     expect(specs).toEqual([]);
   });
 
   it("still falls through to JS fallback when native queries are absent", () => {
     const support = supportById("ts")!;
     // Without nativeQueries, should use JS path and find the import
-    const specs = collectModuleSpecifiersFromSource(
-      support,
-      undefined,
-      "import { foo } from './bar';\n",
-    );
+    const specs = collectModuleSpecifiersFromSource(support, undefined, "import { foo } from './bar';\n");
     expect(specs.length).toBeGreaterThan(0);
     expect(specs[0]!.spec).toBe("./bar");
   });
 
   it("uses regex recovery for TypeScript when JS fallback is unavailable", () => {
     const support = supportById("ts")!;
-    const executeSpy = vi
-      .spyOn(jsFallback, "executeJsQueryAsNativeMatches")
-      .mockImplementation(() => {
-        throw new Error("JS fallback should not be used for TypeScript import recovery");
-      });
+    const executeSpy = vi.spyOn(jsFallback, "executeJsQueryAsNativeMatches").mockImplementation(() => {
+      throw new Error("JS fallback should not be used for TypeScript import recovery");
+    });
     const fallbackEvents: FallbackImportExtractionEvent[] = [];
 
     const specs = collectModuleSpecifiersFromSource(
@@ -251,11 +220,9 @@ describe("authoritative empty native results", () => {
 
   it("recovers HTML specifiers without warning when JS query fallback fails", () => {
     const support = supportById("html")!;
-    const executeSpy = vi
-      .spyOn(jsFallback, "executeJsQueryAsNativeMatches")
-      .mockImplementation(() => {
-        throw new Error("HTML JS query fallback should not be required");
-      });
+    const executeSpy = vi.spyOn(jsFallback, "executeJsQueryAsNativeMatches").mockImplementation(() => {
+      throw new Error("HTML JS query fallback should not be required");
+    });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     try {
@@ -284,10 +251,7 @@ describe("authoritative empty native results", () => {
 nativeDescribe("compact imports execution", () => {
   it("returns compact results with name and text only", () => {
     const support = supportById("ts")!;
-    const execution = getCompactImportsExecution(
-      "import { foo } from './bar';\nexport const x = 1;",
-      support,
-    );
+    const execution = getCompactImportsExecution("import { foo } from './bar';\nexport const x = 1;", support);
     expect(execution.results).not.toBeNull();
     expect(execution.results!.imports.length).toBeGreaterThan(0);
     const firstCapture = execution.results!.imports[0]!.captures[0]!;
@@ -304,12 +268,7 @@ nativeDescribe("compact imports execution", () => {
     const source = "import { foo } from './bar';\nimport { baz } from './qux';\n";
 
     // Full native path
-    const fullExecution = getNativeQueryExecutionForState(
-      source,
-      support,
-      undefined,
-      "imports",
-    );
+    const fullExecution = getNativeQueryExecutionForState(source, support, undefined, "imports");
     const fullSpecs = collectModuleSpecifiersFromSource(support, undefined, source, {
       nativeQueries: fullExecution.results,
     });
@@ -325,30 +284,18 @@ nativeDescribe("compact imports execution", () => {
 
   it("returns null results when native is unavailable", () => {
     const support = supportById("ts")!;
-    const execution = getCompactImportsExecution(
-      "import { foo } from './bar';",
-      support,
-      "off",
-    );
+    const execution = getCompactImportsExecution("import { foo } from './bar';", support, "off");
     expect(execution.results).toBeNull();
     expect(execution.fallbackReason).toBe("unavailable");
   });
 
   it("falls back to regex extraction for Python when compact native imports are empty", () => {
     const support = supportById("python")!;
-    const specs = collectModuleSpecifiersFromSource(
-      support,
-      undefined,
-      "import os\nfrom pkg import value\n",
-      {
-        compactNativeImports: { imports: [] },
-      },
-    );
+    const specs = collectModuleSpecifiersFromSource(support, undefined, "import os\nfrom pkg import value\n", {
+      compactNativeImports: { imports: [] },
+    });
 
-    expect(specs).toEqual([
-      { spec: "os" },
-      { spec: "pkg" },
-    ]);
+    expect(specs).toEqual([{ spec: "os" }, { spec: "pkg" }]);
   });
 });
 
@@ -369,20 +316,15 @@ jsFallbackDescribe("native import fallback contract by language", () => {
 
     for (const testCase of cases) {
       const support = supportById(testCase.supportId)!;
-      const specs = collectModuleSpecifiersFromSource(
-        support,
-        support.language(testCase.fileName),
-        testCase.source,
-        {
-          nativeQueries: {
-            imports: [],
-            exports: [],
-            locals: [],
-            importBindings: [],
-          },
-          file: testCase.fileName,
+      const specs = collectModuleSpecifiersFromSource(support, support.language(testCase.fileName), testCase.source, {
+        nativeQueries: {
+          imports: [],
+          exports: [],
+          locals: [],
+          importBindings: [],
         },
-      );
+        file: testCase.fileName,
+      });
 
       expect(specs).toEqual([]);
     }
@@ -426,12 +368,9 @@ jsFallbackDescribe("native import fallback contract by language", () => {
 
     for (const testCase of cases) {
       const support = supportById(testCase.supportId)!;
-      const specs = collectModuleSpecifiersFromSource(
-        support,
-        support.language(testCase.fileName),
-        testCase.source,
-        { file: testCase.fileName },
-      );
+      const specs = collectModuleSpecifiersFromSource(support, support.language(testCase.fileName), testCase.source, {
+        file: testCase.fileName,
+      });
 
       expect(specs).toEqual(testCase.expected);
     }

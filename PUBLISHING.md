@@ -27,6 +27,7 @@ npm run publish:resume
 `release:*` detects changed packages, bumps only those packages, refreshes the lockfile, runs tests/builds, commits, creates package-scoped tags, and pushes.
 
 `publish:*` does the same work and also publishes:
+
 - staged native target packages when `@lzehrung/codegraph-native` is selected
 - the `@lzehrung/codegraph-native` meta package when it changed
 - the `@lzehrung/codegraph-js-fallback` package when it changed

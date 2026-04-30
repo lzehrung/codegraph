@@ -14,39 +14,22 @@ describe("cross-platform path normalization", () => {
 
     expect(isAbsoluteFilePath(windowsDrivePath)).toBe(true);
     expect(isAbsoluteFilePath(windowsBackslashPath)).toBe(true);
-    expect(resolveFilePathFromRoot("/workspace/codegraph", windowsDrivePath)).toBe(
-      windowsDrivePath,
-    );
-    expect(
-      resolveFilePathFromRoot("/workspace/codegraph", windowsBackslashPath),
-    ).toBe(windowsBackslashPath);
+    expect(resolveFilePathFromRoot("/workspace/codegraph", windowsDrivePath)).toBe(windowsDrivePath);
+    expect(resolveFilePathFromRoot("/workspace/codegraph", windowsBackslashPath)).toBe(windowsBackslashPath);
   });
 
   it("normalizes impact paths without re-rooting Windows-style absolute inputs", () => {
-    expect(
-      normalizeImpactFilePath("/workspace/codegraph", "C:/repo/src/main.ts"),
-    ).toBe("C:/repo/src/main.ts");
-    expect(
-      normalizeImpactFilePath(
-        "/workspace/codegraph",
-        String.raw`C:\repo\src\main.ts`,
-      ),
-    ).toBe("C:/repo/src/main.ts");
+    expect(normalizeImpactFilePath("/workspace/codegraph", "C:/repo/src/main.ts")).toBe("C:/repo/src/main.ts");
+    expect(normalizeImpactFilePath("/workspace/codegraph", String.raw`C:\repo\src\main.ts`)).toBe(
+      "C:/repo/src/main.ts",
+    );
   });
 
   it("does not treat Windows-style absolute paths as inside a POSIX project root", () => {
-    expect(
-      isFilePathWithinRoot("/workspace/codegraph", "src/main.ts"),
-    ).toBe(true);
-    expect(
-      toProjectRelativePath("/workspace/codegraph", "src/main.ts"),
-    ).toBe("src/main.ts");
-    expect(
-      isFilePathWithinRoot("/workspace/codegraph", "C:/repo/src/main.ts"),
-    ).toBe(false);
-    expect(
-      toProjectRelativePath("/workspace/codegraph", "C:/repo/src/main.ts"),
-    ).toBeNull();
+    expect(isFilePathWithinRoot("/workspace/codegraph", "src/main.ts")).toBe(true);
+    expect(toProjectRelativePath("/workspace/codegraph", "src/main.ts")).toBe("src/main.ts");
+    expect(isFilePathWithinRoot("/workspace/codegraph", "C:/repo/src/main.ts")).toBe(false);
+    expect(toProjectRelativePath("/workspace/codegraph", "C:/repo/src/main.ts")).toBeNull();
   });
 
   it("accepts Windows drive-letter case differences within the same root", () => {

@@ -55,10 +55,7 @@ export declare function loadTypeScriptGrammars(): {
   typescript: JsLanguage;
   tsx: JsLanguage;
 };
-export declare function parseWithJsLanguage(
-  source: string,
-  language: JsLanguage,
-): JsSyntaxTree;
+export declare function parseWithJsLanguage(source: string, language: JsLanguage): JsSyntaxTree;
 export declare function executeJsQueryAsNativeMatches(
   source: string,
   language: JsLanguage,

@@ -3,10 +3,7 @@ import type { ProjectIndex } from "../indexer.js";
 import { buildSymbolGraphDetailed } from "../graphs.js";
 import type { SymbolEdge } from "../graphs.js";
 import { createGraphFileResolver } from "./path.js";
-import {
-  compileTestPatterns,
-  createIndexTestFileMatcher,
-} from "./testPatterns.js";
+import { compileTestPatterns, createIndexTestFileMatcher } from "./testPatterns.js";
 
 export interface CandidateTestFile {
   file: FileId;
@@ -43,11 +40,7 @@ export async function collectImpactContext(
   hops: number = 2,
 ): Promise<ImpactContext> {
   const fileSubgraph = collectFileSubgraph(index, impactedFiles, hops);
-  const symbolNeighbors = await collectSymbolNeighbors(
-    index,
-    changedSymbolIds,
-    hops,
-  );
+  const symbolNeighbors = await collectSymbolNeighbors(index, changedSymbolIds, hops);
 
   // Collect files that contain symbol neighbors
   const neighborFiles = new Set<FileId>();
@@ -161,10 +154,7 @@ async function collectSymbolNeighbors(
     membersOnly: false,
   });
 
-  const symbolIdToInfo = new Map<
-    string,
-    { file: FileId; name: string; kind: string }
-  >();
+  const symbolIdToInfo = new Map<string, { file: FileId; name: string; kind: string }>();
   for (const [symbolId, node] of symbolGraph.nodes) {
     symbolIdToInfo.set(symbolId, {
       file: node.file,
@@ -263,12 +253,7 @@ export function listCandidateTestFiles(
   const resolvedChangedFiles = changedFiles.map((file) => resolveGraphFile(file));
   // Default test patterns (can be extended by caller)
   const allPatterns = compileTestPatterns(testPatterns);
-  const isIndexTestFile = createIndexTestFileMatcher(
-    index,
-    allPatterns,
-    projectRoot,
-    resolvedChangedFiles,
-  );
+  const isIndexTestFile = createIndexTestFileMatcher(index, allPatterns, projectRoot, resolvedChangedFiles);
 
   // Build reverse dependency map: file -> files that depend on it
   const reverseDeps = new Map<FileId, FileId[]>();

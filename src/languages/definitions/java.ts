@@ -29,13 +29,7 @@ export const JAVA_DEF: LanguageDefinition = {
         captureId: "method",
       },
     ],
-    splitPoints: [
-      "if_statement",
-      "for_statement",
-      "while_statement",
-      "try_statement",
-      "switch_expression",
-    ],
+    splitPoints: ["if_statement", "for_statement", "while_statement", "try_statement", "switch_expression"],
     comments: ["line_comment", "block_comment"],
   },
   graph: {
@@ -63,38 +57,16 @@ export const JAVA_DEF: LanguageDefinition = {
     memberExpression: "field_access",
   },
   supportsCrossModuleSymbols: true,
-  createsFunctionScope: (node) =>
-    node.type === "method_declaration" ||
-    node.type === "constructor_declaration",
+  createsFunctionScope: (node) => node.type === "method_declaration" || node.type === "constructor_declaration",
   createsBlockScope: (node) => node.type === "block",
   isDeclarationName: (node) => {
     const p = node.parent;
     if (!p) return false;
-    if (
-      p.type === "class_declaration" &&
-      p.childForFieldName("name")?.id === node.id
-    )
-      return true;
-    if (
-      p.type === "interface_declaration" &&
-      p.childForFieldName("name")?.id === node.id
-    )
-      return true;
-    if (
-      p.type === "method_declaration" &&
-      p.childForFieldName("name")?.id === node.id
-    )
-      return true;
-    if (
-      p.type === "variable_declarator" &&
-      p.childForFieldName("name")?.id === node.id
-    )
-      return true;
-    if (
-      p.type === "formal_parameter" &&
-      p.childForFieldName("name")?.id === node.id
-    )
-      return true;
+    if (p.type === "class_declaration" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "interface_declaration" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "method_declaration" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "variable_declarator" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "formal_parameter" && p.childForFieldName("name")?.id === node.id) return true;
     return false;
   },
 };

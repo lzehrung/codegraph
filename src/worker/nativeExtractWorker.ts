@@ -3,10 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type {
-  NativeQueryResults,
-  CompactQueryResults,
-} from "../native/treeSitterNative.js";
+import type { NativeQueryResults, CompactQueryResults } from "../native/treeSitterNative.js";
 import { loadNativeBinding } from "../native/bindingLoader.js";
 
 export type NativeExtractTask = {
@@ -39,11 +36,7 @@ type NativeBinding = {
     localsQuery: string,
     importBindingsQuery: string,
   ) => NativeQueryResults;
-  runImportsQueryCompact?: (
-    source: string,
-    languageId: string,
-    importsQuery: string,
-  ) => CompactQueryResults;
+  runImportsQueryCompact?: (source: string, languageId: string, importsQuery: string) => CompactQueryResults;
   supportedLanguageIds: () => string[];
 };
 
@@ -72,18 +65,13 @@ function ensureBinding(): void {
   }
   loadError =
     "native addon not available in worker" +
-    (loaded.error
-      ? `: ${loaded.error instanceof Error ? loaded.error.message : String(loaded.error)}`
-      : "");
+    (loaded.error ? `: ${loaded.error instanceof Error ? loaded.error.message : String(loaded.error)}` : "");
 }
 
-export default async function runExtraction(
-  task: NativeExtractTask,
-): Promise<NativeExtractResult> {
+export default async function runExtraction(task: NativeExtractTask): Promise<NativeExtractResult> {
   ensureBinding();
 
-  const source =
-    task.source ?? (await fsp.readFile(task.filePath, "utf8"));
+  const source = task.source ?? (await fsp.readFile(task.filePath, "utf8"));
 
   if (!binding || !supportedIds) {
     return {
@@ -110,11 +98,7 @@ export default async function runExtraction(
 
   try {
     if (task.compact && binding.runImportsQueryCompact) {
-      const compactResults = binding.runImportsQueryCompact(
-        source,
-        task.languageId,
-        task.importsQuery,
-      );
+      const compactResults = binding.runImportsQueryCompact(source, task.languageId, task.importsQuery);
       return {
         filePath: task.filePath,
         languageId: task.languageId,

@@ -27,18 +27,12 @@ export function b(): number { return 1; }
       file: normalizePath(n.file),
     }));
 
-    const aDef = nodes.find(
-      (n) => n.file.endsWith("/main.ts") && n.name === "a",
-    );
-    const bDef = nodes.find(
-      (n) => n.file.endsWith("/main.ts") && n.name === "b",
-    );
+    const aDef = nodes.find((n) => n.file.endsWith("/main.ts") && n.name === "a");
+    const bDef = nodes.find((n) => n.file.endsWith("/main.ts") && n.name === "b");
     expect(aDef).toBeDefined();
     expect(bDef).toBeDefined();
 
-    const edge = sg.edges.find(
-      (e) => e.from === aDef?.id && e.to === bDef?.id && e.label === "calls",
-    );
+    const edge = sg.edges.find((e) => e.from === aDef?.id && e.to === bDef?.id && e.label === "calls");
     expect(edge).toBeDefined();
   });
 
@@ -56,21 +50,12 @@ export function b(): number { return 1; }
       file: normalizePath(n.file),
     }));
 
-    const helperDef = nodes.find(
-      (n) => n.file.endsWith("/util.ts") && n.name === "helper",
-    );
-    const usesDef = nodes.find(
-      (n) => n.file.endsWith("/main.ts") && n.name === "uses",
-    );
+    const helperDef = nodes.find((n) => n.file.endsWith("/util.ts") && n.name === "helper");
+    const usesDef = nodes.find((n) => n.file.endsWith("/main.ts") && n.name === "uses");
     expect(helperDef).toBeDefined();
     expect(usesDef).toBeDefined();
 
-    const edge = sg.edges.find(
-      (e) =>
-        e.from === usesDef?.id &&
-        e.to === helperDef?.id &&
-        e.label === "calls",
-    );
+    const edge = sg.edges.find((e) => e.from === usesDef?.id && e.to === helperDef?.id && e.label === "calls");
     expect(edge).toBeDefined();
   });
 
@@ -94,30 +79,16 @@ export class Square extends BaseShape implements IShape {
       file: normalizePath(n.file),
     }));
 
-    const baseDef = nodes.find(
-      (n) => n.file.endsWith("/main.ts") && n.name === "BaseShape",
-    );
-    const squareDef = nodes.find(
-      (n) => n.file.endsWith("/main.ts") && n.name === "Square",
-    );
-    const ifaceDef = nodes.find(
-      (n) => n.file.endsWith("/types.ts") && n.name === "IShape",
-    );
+    const baseDef = nodes.find((n) => n.file.endsWith("/main.ts") && n.name === "BaseShape");
+    const squareDef = nodes.find((n) => n.file.endsWith("/main.ts") && n.name === "Square");
+    const ifaceDef = nodes.find((n) => n.file.endsWith("/types.ts") && n.name === "IShape");
     expect(baseDef).toBeDefined();
     expect(squareDef).toBeDefined();
     expect(ifaceDef).toBeDefined();
 
-    const extendsEdge = sg.edges.find(
-      (e) =>
-        e.from === squareDef?.id &&
-        e.to === baseDef?.id &&
-        e.label === "extends",
-    );
+    const extendsEdge = sg.edges.find((e) => e.from === squareDef?.id && e.to === baseDef?.id && e.label === "extends");
     const implementsEdge = sg.edges.find(
-      (e) =>
-        e.from === squareDef?.id &&
-        e.to === ifaceDef?.id &&
-        e.label === "implements",
+      (e) => e.from === squareDef?.id && e.to === ifaceDef?.id && e.label === "implements",
     );
     expect(extendsEdge).toBeDefined();
     expect(implementsEdge).toBeDefined();
@@ -138,21 +109,12 @@ export function make() { return new Widget(); }
       file: normalizePath(n.file),
     }));
 
-    const widgetDef = nodes.find(
-      (n) => n.file.endsWith("/main.ts") && n.name === "Widget",
-    );
-    const makeDef = nodes.find(
-      (n) => n.file.endsWith("/main.ts") && n.name === "make",
-    );
+    const widgetDef = nodes.find((n) => n.file.endsWith("/main.ts") && n.name === "Widget");
+    const makeDef = nodes.find((n) => n.file.endsWith("/main.ts") && n.name === "make");
     expect(widgetDef).toBeDefined();
     expect(makeDef).toBeDefined();
 
-    const edge = sg.edges.find(
-      (e) =>
-        e.from === makeDef?.id &&
-        e.to === widgetDef?.id &&
-        e.label === "instantiates",
-    );
+    const edge = sg.edges.find((e) => e.from === makeDef?.id && e.to === widgetDef?.id && e.label === "instantiates");
     expect(edge).toBeDefined();
   });
 
@@ -173,21 +135,12 @@ export function make() { return new Lib.Gizmo(); }
       file: normalizePath(n.file),
     }));
 
-    const gizmoDef = nodes.find(
-      (n) => n.file.endsWith("/lib.ts") && n.name === "Gizmo",
-    );
-    const makeDef = nodes.find(
-      (n) => n.file.endsWith("/main.ts") && n.name === "make",
-    );
+    const gizmoDef = nodes.find((n) => n.file.endsWith("/lib.ts") && n.name === "Gizmo");
+    const makeDef = nodes.find((n) => n.file.endsWith("/main.ts") && n.name === "make");
     expect(gizmoDef).toBeDefined();
     expect(makeDef).toBeDefined();
 
-    const edge = sg.edges.find(
-      (e) =>
-        e.from === makeDef?.id &&
-        e.to === gizmoDef?.id &&
-        e.label === "instantiates",
-    );
+    const edge = sg.edges.find((e) => e.from === makeDef?.id && e.to === gizmoDef?.id && e.label === "instantiates");
     expect(edge).toBeDefined();
   });
 });
@@ -212,24 +165,12 @@ class Thing {}
       file: normalizePath(n.file),
     }));
 
-    const appDef = nodes.find(
-      (n) => n.file.endsWith("/App.java") && n.name === "App",
-    );
-    const baseDef = nodes.find(
-      (n) => n.file.endsWith("/App.java") && n.name === "Base",
-    );
-    const serviceDef = nodes.find(
-      (n) => n.file.endsWith("/App.java") && n.name === "Service",
-    );
-    const helperDef = nodes.find(
-      (n) => n.file.endsWith("/App.java") && n.name === "helper",
-    );
-    const runDef = nodes.find(
-      (n) => n.file.endsWith("/App.java") && n.name === "run",
-    );
-    const thingDef = nodes.find(
-      (n) => n.file.endsWith("/App.java") && n.name === "Thing",
-    );
+    const appDef = nodes.find((n) => n.file.endsWith("/App.java") && n.name === "App");
+    const baseDef = nodes.find((n) => n.file.endsWith("/App.java") && n.name === "Base");
+    const serviceDef = nodes.find((n) => n.file.endsWith("/App.java") && n.name === "Service");
+    const helperDef = nodes.find((n) => n.file.endsWith("/App.java") && n.name === "helper");
+    const runDef = nodes.find((n) => n.file.endsWith("/App.java") && n.name === "run");
+    const thingDef = nodes.find((n) => n.file.endsWith("/App.java") && n.name === "Thing");
     expect(appDef).toBeDefined();
     expect(baseDef).toBeDefined();
     expect(serviceDef).toBeDefined();
@@ -237,29 +178,13 @@ class Thing {}
     expect(runDef).toBeDefined();
     expect(thingDef).toBeDefined();
 
-    const extendsEdge = sg.edges.find(
-      (e) =>
-        e.from === appDef?.id &&
-        e.to === baseDef?.id &&
-        e.label === "extends",
-    );
+    const extendsEdge = sg.edges.find((e) => e.from === appDef?.id && e.to === baseDef?.id && e.label === "extends");
     const implementsEdge = sg.edges.find(
-      (e) =>
-        e.from === appDef?.id &&
-        e.to === serviceDef?.id &&
-        e.label === "implements",
+      (e) => e.from === appDef?.id && e.to === serviceDef?.id && e.label === "implements",
     );
-    const callsEdge = sg.edges.find(
-      (e) =>
-        e.from === runDef?.id &&
-        e.to === helperDef?.id &&
-        e.label === "calls",
-    );
+    const callsEdge = sg.edges.find((e) => e.from === runDef?.id && e.to === helperDef?.id && e.label === "calls");
     const instantiatesEdge = sg.edges.find(
-      (e) =>
-        e.from === runDef?.id &&
-        e.to === thingDef?.id &&
-        e.label === "instantiates",
+      (e) => e.from === runDef?.id && e.to === thingDef?.id && e.label === "instantiates",
     );
     expect(extendsEdge).toBeDefined();
     expect(implementsEdge).toBeDefined();
@@ -288,24 +213,12 @@ public class Widget {}
       file: normalizePath(n.file),
     }));
 
-    const appDef = nodes.find(
-      (n) => n.file.endsWith("/App.cs") && n.name === "App",
-    );
-    const baseDef = nodes.find(
-      (n) => n.file.endsWith("/App.cs") && n.name === "Base",
-    );
-    const serviceDef = nodes.find(
-      (n) => n.file.endsWith("/App.cs") && n.name === "IService",
-    );
-    const helperDef = nodes.find(
-      (n) => n.file.endsWith("/App.cs") && n.name === "Helper",
-    );
-    const runDef = nodes.find(
-      (n) => n.file.endsWith("/App.cs") && n.name === "Run",
-    );
-    const widgetDef = nodes.find(
-      (n) => n.file.endsWith("/App.cs") && n.name === "Widget",
-    );
+    const appDef = nodes.find((n) => n.file.endsWith("/App.cs") && n.name === "App");
+    const baseDef = nodes.find((n) => n.file.endsWith("/App.cs") && n.name === "Base");
+    const serviceDef = nodes.find((n) => n.file.endsWith("/App.cs") && n.name === "IService");
+    const helperDef = nodes.find((n) => n.file.endsWith("/App.cs") && n.name === "Helper");
+    const runDef = nodes.find((n) => n.file.endsWith("/App.cs") && n.name === "Run");
+    const widgetDef = nodes.find((n) => n.file.endsWith("/App.cs") && n.name === "Widget");
     expect(appDef).toBeDefined();
     expect(baseDef).toBeDefined();
     expect(serviceDef).toBeDefined();
@@ -313,29 +226,13 @@ public class Widget {}
     expect(runDef).toBeDefined();
     expect(widgetDef).toBeDefined();
 
-    const extendsEdge = sg.edges.find(
-      (e) =>
-        e.from === appDef?.id &&
-        e.to === baseDef?.id &&
-        e.label === "extends",
-    );
+    const extendsEdge = sg.edges.find((e) => e.from === appDef?.id && e.to === baseDef?.id && e.label === "extends");
     const implementsEdge = sg.edges.find(
-      (e) =>
-        e.from === appDef?.id &&
-        e.to === serviceDef?.id &&
-        e.label === "implements",
+      (e) => e.from === appDef?.id && e.to === serviceDef?.id && e.label === "implements",
     );
-    const callsEdge = sg.edges.find(
-      (e) =>
-        e.from === runDef?.id &&
-        e.to === helperDef?.id &&
-        e.label === "calls",
-    );
+    const callsEdge = sg.edges.find((e) => e.from === runDef?.id && e.to === helperDef?.id && e.label === "calls");
     const instantiatesEdge = sg.edges.find(
-      (e) =>
-        e.from === runDef?.id &&
-        e.to === widgetDef?.id &&
-        e.label === "instantiates",
+      (e) => e.from === runDef?.id && e.to === widgetDef?.id && e.label === "instantiates",
     );
     expect(extendsEdge).toBeDefined();
     expect(implementsEdge).toBeDefined();
@@ -369,30 +266,16 @@ func run() {
       file: normalizePath(n.file),
     }));
 
-    const runDef = nodes.find(
-      (n) => n.file.endsWith("/main.go") && n.name === "run",
-    );
-    const helperDef = nodes.find(
-      (n) => n.file.endsWith("/main.go") && n.name === "helper",
-    );
-    const widgetDef = nodes.find(
-      (n) => n.file.endsWith("/main.go") && n.name === "Widget",
-    );
+    const runDef = nodes.find((n) => n.file.endsWith("/main.go") && n.name === "run");
+    const helperDef = nodes.find((n) => n.file.endsWith("/main.go") && n.name === "helper");
+    const widgetDef = nodes.find((n) => n.file.endsWith("/main.go") && n.name === "Widget");
     expect(runDef).toBeDefined();
     expect(helperDef).toBeDefined();
     expect(widgetDef).toBeDefined();
 
-    const callsEdge = sg.edges.find(
-      (e) =>
-        e.from === runDef?.id &&
-        e.to === helperDef?.id &&
-        e.label === "calls",
-    );
+    const callsEdge = sg.edges.find((e) => e.from === runDef?.id && e.to === helperDef?.id && e.label === "calls");
     const instantiatesEdge = sg.edges.find(
-      (e) =>
-        e.from === runDef?.id &&
-        e.to === widgetDef?.id &&
-        e.label === "instantiates",
+      (e) => e.from === runDef?.id && e.to === widgetDef?.id && e.label === "instantiates",
     );
     expect(callsEdge).toBeDefined();
     expect(instantiatesEdge).toBeDefined();
@@ -425,21 +308,11 @@ impl IService for App {
       file: normalizePath(n.file),
     }));
 
-    const appDef = nodes.find(
-      (n) => n.file.endsWith("/main.rs") && n.name === "App",
-    );
-    const serviceDef = nodes.find(
-      (n) => n.file.endsWith("/main.rs") && n.name === "IService",
-    );
-    const runDef = nodes.find(
-      (n) => n.file.endsWith("/main.rs") && n.name === "run",
-    );
-    const helperDef = nodes.find(
-      (n) => n.file.endsWith("/main.rs") && n.name === "helper",
-    );
-    const thingDef = nodes.find(
-      (n) => n.file.endsWith("/main.rs") && n.name === "Thing",
-    );
+    const appDef = nodes.find((n) => n.file.endsWith("/main.rs") && n.name === "App");
+    const serviceDef = nodes.find((n) => n.file.endsWith("/main.rs") && n.name === "IService");
+    const runDef = nodes.find((n) => n.file.endsWith("/main.rs") && n.name === "run");
+    const helperDef = nodes.find((n) => n.file.endsWith("/main.rs") && n.name === "helper");
+    const thingDef = nodes.find((n) => n.file.endsWith("/main.rs") && n.name === "Thing");
     expect(appDef).toBeDefined();
     expect(serviceDef).toBeDefined();
     expect(runDef).toBeDefined();
@@ -447,22 +320,11 @@ impl IService for App {
     expect(thingDef).toBeDefined();
 
     const implementsEdge = sg.edges.find(
-      (e) =>
-        e.from === appDef?.id &&
-        e.to === serviceDef?.id &&
-        e.label === "implements",
+      (e) => e.from === appDef?.id && e.to === serviceDef?.id && e.label === "implements",
     );
-    const callsEdge = sg.edges.find(
-      (e) =>
-        e.from === runDef?.id &&
-        e.to === helperDef?.id &&
-        e.label === "calls",
-    );
+    const callsEdge = sg.edges.find((e) => e.from === runDef?.id && e.to === helperDef?.id && e.label === "calls");
     const instantiatesEdge = sg.edges.find(
-      (e) =>
-        e.from === runDef?.id &&
-        e.to === thingDef?.id &&
-        e.label === "instantiates",
+      (e) => e.from === runDef?.id && e.to === thingDef?.id && e.label === "instantiates",
     );
     expect(implementsEdge).toBeDefined();
     expect(callsEdge).toBeDefined();
@@ -496,30 +358,16 @@ end
       file: normalizePath(n.file),
     }));
 
-    const runDef = nodes.find(
-      (n) => n.file.endsWith("/main.rb") && n.name === "run",
-    );
-    const helperDef = nodes.find(
-      (n) => n.file.endsWith("/main.rb") && n.name === "helper",
-    );
-    const widgetDef = nodes.find(
-      (n) => n.file.endsWith("/main.rb") && n.name === "Widget",
-    );
+    const runDef = nodes.find((n) => n.file.endsWith("/main.rb") && n.name === "run");
+    const helperDef = nodes.find((n) => n.file.endsWith("/main.rb") && n.name === "helper");
+    const widgetDef = nodes.find((n) => n.file.endsWith("/main.rb") && n.name === "Widget");
     expect(runDef).toBeDefined();
     expect(helperDef).toBeDefined();
     expect(widgetDef).toBeDefined();
 
-    const callsEdge = sg.edges.find(
-      (e) =>
-        e.from === runDef?.id &&
-        e.to === helperDef?.id &&
-        e.label === "calls",
-    );
+    const callsEdge = sg.edges.find((e) => e.from === runDef?.id && e.to === helperDef?.id && e.label === "calls");
     const instantiatesEdge = sg.edges.find(
-      (e) =>
-        e.from === runDef?.id &&
-        e.to === widgetDef?.id &&
-        e.label === "instantiates",
+      (e) => e.from === runDef?.id && e.to === widgetDef?.id && e.label === "instantiates",
     );
     expect(callsEdge).toBeDefined();
     expect(instantiatesEdge).toBeDefined();
@@ -551,31 +399,15 @@ def run():
       file: normalizePath(n.file),
     }));
 
-    const firstDef = nodes.find(
-      (n) => n.file.endsWith("/main.py") && n.name === "first",
-    );
-    const secondDef = nodes.find(
-      (n) => n.file.endsWith("/main.py") && n.name === "second",
-    );
-    const runDef = nodes.find(
-      (n) => n.file.endsWith("/main.py") && n.name === "run",
-    );
+    const firstDef = nodes.find((n) => n.file.endsWith("/main.py") && n.name === "first");
+    const secondDef = nodes.find((n) => n.file.endsWith("/main.py") && n.name === "second");
+    const runDef = nodes.find((n) => n.file.endsWith("/main.py") && n.name === "run");
     expect(firstDef).toBeDefined();
     expect(secondDef).toBeDefined();
     expect(runDef).toBeDefined();
 
-    const firstEdge = sg.edges.find(
-      (e) =>
-        e.from === runDef?.id &&
-        e.to === firstDef?.id &&
-        e.label === "decorates",
-    );
-    const secondEdge = sg.edges.find(
-      (e) =>
-        e.from === runDef?.id &&
-        e.to === secondDef?.id &&
-        e.label === "decorates",
-    );
+    const firstEdge = sg.edges.find((e) => e.from === runDef?.id && e.to === firstDef?.id && e.label === "decorates");
+    const secondEdge = sg.edges.find((e) => e.from === runDef?.id && e.to === secondDef?.id && e.label === "decorates");
     expect(firstEdge).toBeDefined();
     expect(secondEdge).toBeDefined();
   });
@@ -601,20 +433,13 @@ export function run() {
       file: normalizePath(n.file),
     }));
 
-    const widgetDef = nodes.find(
-      (n) => n.file.endsWith("/Component.vue") && n.name === "Widget",
-    );
-    const runDef = nodes.find(
-      (n) => n.file.endsWith("/Component.vue") && n.name === "run",
-    );
+    const widgetDef = nodes.find((n) => n.file.endsWith("/Component.vue") && n.name === "Widget");
+    const runDef = nodes.find((n) => n.file.endsWith("/Component.vue") && n.name === "run");
     expect(widgetDef).toBeDefined();
     expect(runDef).toBeDefined();
 
     const instantiatesEdge = sg.edges.find(
-      (e) =>
-        e.from === runDef?.id &&
-        e.to === widgetDef?.id &&
-        e.label === "instantiates",
+      (e) => e.from === runDef?.id && e.to === widgetDef?.id && e.label === "instantiates",
     );
     expect(instantiatesEdge).toBeDefined();
   });
@@ -638,21 +463,12 @@ export function run() {
       file: normalizePath(n.file),
     }));
 
-    const helperDef = nodes.find(
-      (n) => n.file.endsWith("/Component.svelte") && n.name === "helper",
-    );
-    const runDef = nodes.find(
-      (n) => n.file.endsWith("/Component.svelte") && n.name === "run",
-    );
+    const helperDef = nodes.find((n) => n.file.endsWith("/Component.svelte") && n.name === "helper");
+    const runDef = nodes.find((n) => n.file.endsWith("/Component.svelte") && n.name === "run");
     expect(helperDef).toBeDefined();
     expect(runDef).toBeDefined();
 
-    const callsEdge = sg.edges.find(
-      (e) =>
-        e.from === runDef?.id &&
-        e.to === helperDef?.id &&
-        e.label === "calls",
-    );
+    const callsEdge = sg.edges.find((e) => e.from === runDef?.id && e.to === helperDef?.id && e.label === "calls");
     expect(callsEdge).toBeDefined();
   });
 });

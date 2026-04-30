@@ -15,10 +15,7 @@ export function symbolId(def: SymbolDef): SymbolHandle {
   return `${def.file}::${def.localName}::${index}`;
 }
 
-export function defFromSymbolId(
-  index: ProjectIndex,
-  id: SymbolHandle,
-): SymbolDef | null {
+export function defFromSymbolId(index: ProjectIndex, id: SymbolHandle): SymbolDef | null {
   if (!id) return null;
   const parts = id.split("::");
   if (parts.length < 3) return null;
@@ -29,19 +26,13 @@ export function defFromSymbolId(
   const startIndex = Number(startStr);
   const mod = index.byFile.get(file);
   if (!mod) return null;
-  const exact = mod.locals.find(
-    (def) =>
-      def.localName === localName && (def.range?.start?.index ?? 0) === startIndex,
-  );
+  const exact = mod.locals.find((def) => def.localName === localName && (def.range?.start?.index ?? 0) === startIndex);
   if (exact) return exact;
   const byName = mod.locals.find((def) => def.localName === localName);
   return byName ?? null;
 }
 
-export function resolveSymbolId(
-  index: ProjectIndex,
-  id: SymbolHandle,
-): SymbolDef | null {
+export function resolveSymbolId(index: ProjectIndex, id: SymbolHandle): SymbolDef | null {
   if (!id) return null;
   const parts = id.split("::");
   if (parts.length === 3 && parts[2] === "import") {
@@ -52,14 +43,12 @@ export function resolveSymbolId(
     if (!mod) return null;
 
     const named = mod.imports.find(
-      (imp): imp is ImportBinding & { kind: "named" } =>
-        imp.kind === "named" && imp.local === alias,
+      (imp): imp is ImportBinding & { kind: "named" } => imp.kind === "named" && imp.local === alias,
     );
     if (named) {
       const result = resolveImported(index, named, named.imported);
       if (result && !("namespace" in result)) return result;
-      const target =
-        typeof named.resolved === "string" ? named.resolved : undefined;
+      const target = typeof named.resolved === "string" ? named.resolved : undefined;
       if (target) {
         const hit = resolveExport(index, target, named.imported);
         if (hit?.kind === "resolved") return hit.def;
@@ -67,41 +56,30 @@ export function resolveSymbolId(
     }
 
     const defaultImport = mod.imports.find(
-      (imp): imp is ImportBinding & { kind: "default" } =>
-        imp.kind === "default" && imp.local === alias,
+      (imp): imp is ImportBinding & { kind: "default" } => imp.kind === "default" && imp.local === alias,
     );
     if (defaultImport) {
       const result = resolveImported(index, defaultImport, "default");
       if (result && !("namespace" in result)) return result;
-      const target =
-        typeof defaultImport.resolved === "string"
-          ? defaultImport.resolved
-          : undefined;
+      const target = typeof defaultImport.resolved === "string" ? defaultImport.resolved : undefined;
       if (target) {
         const hit = resolveExport(index, target, "default");
         if (hit?.kind === "resolved") return hit.def;
         const targetModule = index.byFile.get(target);
         const first = targetModule?.exports.find(
-          (entry): entry is ExportEntry & { type: "local" } =>
-            entry.type === "local",
+          (entry): entry is ExportEntry & { type: "local" } => entry.type === "local",
         );
         if (first) return first.target;
       }
     }
 
-    const namespaceImport = mod.imports.find(
-      (imp) => imp.kind === "namespace" && imp.localNS === alias,
-    );
+    const namespaceImport = mod.imports.find((imp) => imp.kind === "namespace" && imp.localNS === alias);
     if (namespaceImport) {
-      const target =
-        typeof namespaceImport.resolved === "string"
-          ? namespaceImport.resolved
-          : undefined;
+      const target = typeof namespaceImport.resolved === "string" ? namespaceImport.resolved : undefined;
       if (target) {
         const targetModule = index.byFile.get(target);
         const first = targetModule?.exports.find(
-          (entry): entry is ExportEntry & { type: "local" } =>
-            entry.type === "local",
+          (entry): entry is ExportEntry & { type: "local" } => entry.type === "local",
         );
         if (first) return first.target;
         const firstLocal = targetModule?.locals?.[0];
@@ -115,19 +93,13 @@ export function resolveSymbolId(
   return defFromSymbolId(index, id);
 }
 
-export function goToDefinitionById(
-  index: ProjectIndex,
-  id: SymbolHandle,
-): GoToResult {
+export function goToDefinitionById(index: ProjectIndex, id: SymbolHandle): GoToResult {
   const def = resolveSymbolId(index, id);
   if (def) return { status: "ok", definition: def };
   return { status: "not_found", reason: "No matching definition for handle" };
 }
 
-export async function findReferencesById(
-  index: ProjectIndex,
-  id: SymbolHandle,
-) {
+export async function findReferencesById(index: ProjectIndex, id: SymbolHandle) {
   const def = resolveSymbolId(index, id);
   if (!def) {
     return {
@@ -138,14 +110,9 @@ export async function findReferencesById(
   return await findReferences(index, { def });
 }
 
-export function listSymbols(
-  index: ProjectIndex,
-  opts?: { file?: string; includeImports?: boolean },
-): SymbolListItem[] {
+export function listSymbols(index: ProjectIndex, opts?: { file?: string; includeImports?: boolean }): SymbolListItem[] {
   const out: SymbolListItem[] = [];
-  const files = opts?.file
-    ? [opts.file.replace(/\\/g, "/")]
-    : Array.from(index.byFile.keys());
+  const files = opts?.file ? [opts.file.replace(/\\/g, "/")] : Array.from(index.byFile.keys());
 
   for (const file of files) {
     const mod = index.byFile.get(file);

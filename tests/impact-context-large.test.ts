@@ -34,7 +34,7 @@ const buildMockGraph = (size = 500): MockSymbolGraph => {
       id: `sym-${i}`,
       file: `/src/file-${i}.ts`,
       name: `symbol${i}`,
-      kind: i % 2 === 0 ? "function" : "class"
+      kind: i % 2 === 0 ? "function" : "class",
     });
   }
 
@@ -58,7 +58,7 @@ vi.mock("../src/graphs.js", () => {
   const graph = buildMockGraph(600);
   cachedMockGraph = graph;
   return {
-    buildSymbolGraphDetailed: vi.fn(async () => graph)
+    buildSymbolGraphDetailed: vi.fn(async () => graph),
   };
 });
 
@@ -69,11 +69,7 @@ beforeAll(async () => {
   collectImpactContext = module.collectImpactContext;
 });
 
-const computeExpectedNeighbors = (
-  graph: MockSymbolGraph,
-  changedSymbolIds: string[],
-  hops: number
-): NeighborInfo[] => {
+const computeExpectedNeighbors = (graph: MockSymbolGraph, changedSymbolIds: string[], hops: number): NeighborInfo[] => {
   const adjacencyFrom = new Map<string, MockSymbolEdge[]>();
   const adjacencyTo = new Map<string, MockSymbolEdge[]>();
   for (const edge of graph.edges) {
@@ -105,7 +101,7 @@ const computeExpectedNeighbors = (
             relationship: "uses",
             file: node.file,
             name: node.name,
-            kind: node.kind
+            kind: node.kind,
           });
         }
       }
@@ -121,7 +117,7 @@ const computeExpectedNeighbors = (
             relationship: "usedBy",
             file: node.file,
             name: node.name,
-            kind: node.kind
+            kind: node.kind,
           });
         }
       }
@@ -146,7 +142,7 @@ describe("Impact context BFS adjacency optimization", () => {
       graph: { nodes: new Set<string>(), edges: [] },
       modules: new Map<string, ModuleIndex>(),
       byFile: new Map<string, ModuleIndex>(),
-      exportCache: new Map()
+      exportCache: new Map(),
     };
 
     const context = await collectImpactContext(index, [], changedSymbolIds, hops);

@@ -1,9 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export type NativeBindingLoadResult<T> =
-  | { binding: T; error?: undefined }
-  | { binding: null; error?: unknown };
+export type NativeBindingLoadResult<T> = { binding: T; error?: undefined } | { binding: null; error?: unknown };
 
 type BindingLoaderOptions = {
   packageName: string;
@@ -20,27 +18,20 @@ function normalizePathForComparison(filePath: string): string {
 function isWithinDirectory(filePath: string, directoryPath: string): boolean {
   const normalizedFile = normalizePathForComparison(filePath);
   const normalizedDir = normalizePathForComparison(directoryPath);
-  return (
-    normalizedFile === normalizedDir ||
-    normalizedFile.startsWith(`${normalizedDir}${path.sep}`)
-  );
+  return normalizedFile === normalizedDir || normalizedFile.startsWith(`${normalizedDir}${path.sep}`);
 }
 
 export function findLocalNativeBinary(packageRoot: string): string | null {
   try {
     const entries = fs.readdirSync(packageRoot, { withFileTypes: true });
-    const binary = entries.find(
-      (entry) => entry.isFile() && entry.name.endsWith(".node"),
-    );
+    const binary = entries.find((entry) => entry.isFile() && entry.name.endsWith(".node"));
     return binary ? path.join(packageRoot, binary.name) : null;
   } catch {
     return null;
   }
 }
 
-export function loadNativeBinding<T>(
-  options: BindingLoaderOptions,
-): NativeBindingLoadResult<T> {
+export function loadNativeBinding<T>(options: BindingLoaderOptions): NativeBindingLoadResult<T> {
   const localBinary = findLocalNativeBinary(options.localPackageRoot);
   let lastError: unknown;
 
@@ -68,11 +59,7 @@ export function loadNativeBinding<T>(
   if (packageEntry && isWithinDirectory(packageEntry, options.localPackageRoot)) {
     return {
       binding: null,
-      error:
-        lastError ??
-        new Error(
-          "local workspace native addon is not built; run `npm run build:native`",
-        ),
+      error: lastError ?? new Error("local workspace native addon is not built; run `npm run build:native`"),
     };
   }
 

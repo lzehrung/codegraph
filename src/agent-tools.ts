@@ -130,9 +130,7 @@ export async function tool_getFileOverview(
     const { absPath, relativeFile } = resolvedFile;
     const mod = index.byFile.get(absPath);
     if (!mod) {
-      const reason = (await fileExists(absPath))
-        ? "file_not_indexed"
-        : "file_not_found";
+      const reason = (await fileExists(absPath)) ? "file_not_indexed" : "file_not_found";
       return {
         status: "not_found",
         file: relativeFile,
@@ -147,8 +145,7 @@ export async function tool_getFileOverview(
     const symbols = listSymbolsForOverview(index, absPath);
 
     const lines: string[] = [`# Overview of ${relativeFile}`];
-    const hasSymbols =
-      symbols.imports.length > 0 || symbols.definitions.length > 0;
+    const hasSymbols = symbols.imports.length > 0 || symbols.definitions.length > 0;
 
     if (symbols.imports.length > 0) {
       lines.push("\n## Imports");
@@ -158,9 +155,7 @@ export async function tool_getFileOverview(
 
     if (symbols.definitions.length > 0) {
       lines.push("\n## Definitions");
-      symbols.definitions.sort(
-        (a, b) => (a.range?.start.line ?? 0) - (b.range?.start.line ?? 0),
-      );
+      symbols.definitions.sort((a, b) => (a.range?.start.line ?? 0) - (b.range?.start.line ?? 0));
 
       for (const def of symbols.definitions) {
         const lineInfo = def.range ? `(line ${def.range.start.line})` : "";
@@ -326,21 +321,27 @@ function resolveToolFileInput(
   };
 }
 
-function listSymbolsForOverview(index: ProjectIndex, file: string): {
+function listSymbolsForOverview(
+  index: ProjectIndex,
+  file: string,
+): {
   imports: Array<{ name: string }>;
   definitions: ReturnType<typeof listSymbols>;
 } {
   const symbols = listSymbols(index, { file, includeImports: false });
   const mod = index.byFile.get(file);
   const imports =
-    mod?.imports.map((entry) => ({
-      name:
-        entry.kind === "namespace"
-          ? entry.localNS
-          : entry.kind === "star"
-            ? entry.from
-            : entry.local,
-    })) ?? [];
+    mod?.imports.map((entry) => {
+      let name: string;
+      if (entry.kind === "namespace") {
+        name = entry.localNS;
+      } else if (entry.kind === "star") {
+        name = entry.from;
+      } else {
+        name = entry.local;
+      }
+      return { name };
+    }) ?? [];
   return {
     imports,
     definitions: symbols,
@@ -355,14 +356,9 @@ function normalizeToolModuleRef(root: string, filePath: string): string {
   return normalizeToolFileOutput(root, filePath);
 }
 
-function normalizeToolImportBinding(
-  root: string,
-  binding: ImportBinding,
-): ImportBinding {
+function normalizeToolImportBinding(root: string, binding: ImportBinding): ImportBinding {
   const resolved =
-    typeof binding.resolved === "string"
-      ? normalizeToolFileOutput(root, binding.resolved)
-      : binding.resolved;
+    typeof binding.resolved === "string" ? normalizeToolFileOutput(root, binding.resolved) : binding.resolved;
   if (resolved === binding.resolved || resolved === undefined) {
     return binding;
   }
@@ -526,9 +522,7 @@ export async function tool_findReferences(
     return {
       ...result,
       definition: normalizeToolDefinition(root, result.definition),
-      references: result.references.map((reference) =>
-        normalizeToolReference(root, reference),
-      ),
+      references: result.references.map((reference) => normalizeToolReference(root, reference)),
     };
   } catch (error) {
     return { status: "error", error: String(error) };

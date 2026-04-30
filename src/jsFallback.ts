@@ -74,10 +74,7 @@ const require = createRequire(import.meta.url);
 function existingLocalJsFallbackCandidates(): string[] {
   const roots = [
     path.resolve(process.cwd(), "packages/codegraph-js-fallback"),
-    path.resolve(
-      path.dirname(fileURLToPath(import.meta.url)),
-      "../packages/codegraph-js-fallback",
-    ),
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../packages/codegraph-js-fallback"),
   ];
   const candidates: string[] = [];
   for (const packageRoot of roots) {
@@ -88,20 +85,12 @@ function existingLocalJsFallbackCandidates(): string[] {
   return candidates;
 }
 
-let jsFallbackState:
-  | { loaded: true; module: JsFallbackModule }
-  | { loaded: false; error?: unknown }
-  | undefined;
+let jsFallbackState: { loaded: true; module: JsFallbackModule } | { loaded: false; error?: unknown } | undefined;
 
-function loadJsFallbackModule():
-  | { loaded: true; module: JsFallbackModule }
-  | { loaded: false; error?: unknown } {
+function loadJsFallbackModule(): { loaded: true; module: JsFallbackModule } | { loaded: false; error?: unknown } {
   if (jsFallbackState) return jsFallbackState;
 
-  const candidates = [
-    "@lzehrung/codegraph-js-fallback",
-    ...existingLocalJsFallbackCandidates(),
-  ] as const;
+  const candidates = ["@lzehrung/codegraph-js-fallback", ...existingLocalJsFallbackCandidates()] as const;
   let lastError: unknown;
 
   for (const candidate of candidates) {
@@ -122,10 +111,7 @@ function requireJsFallback(feature: string): JsFallbackModule {
   const state = loadJsFallbackModule();
   if (state.loaded) return state.module;
 
-  const suffix =
-    state.error instanceof Error && state.error.message
-      ? ` (${state.error.message})`
-      : "";
+  const suffix = state.error instanceof Error && state.error.message ? ` (${state.error.message})` : "";
   throw new Error(
     `JS Tree-sitter fallback is unavailable for ${feature}. Install @lzehrung/codegraph-js-fallback to enable it${suffix}`,
   );
@@ -140,44 +126,26 @@ export function isJsFallbackAvailable(): boolean {
 }
 
 export function isJsFallbackUnavailableError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    error.message.includes("JS Tree-sitter fallback is unavailable")
-  );
+  return error instanceof Error && error.message.includes("JS Tree-sitter fallback is unavailable");
 }
 
 export function loadTreeSitterLanguage(packageName: string): JsLanguage {
-  return requireJsFallback("grammar loading").loadTreeSitterLanguage(
-    packageName,
-  );
+  return requireJsFallback("grammar loading").loadTreeSitterLanguage(packageName);
 }
 
 export function loadTypeScriptGrammars(): {
   typescript: JsLanguage;
   tsx: JsLanguage;
 } {
-  return requireJsFallback(
-    "TypeScript grammar loading",
-  ).loadTypeScriptGrammars();
+  return requireJsFallback("TypeScript grammar loading").loadTypeScriptGrammars();
 }
 
-export function parseWithJsLanguage(
-  source: string,
-  language: JsLanguage,
-): JsSyntaxTree {
-  return requireJsFallback("JS syntax-tree parsing").parseWithJsLanguage(
-    source,
-    language,
-  );
+export function parseWithJsLanguage(source: string, language: JsLanguage): JsSyntaxTree {
+  return requireJsFallback("JS syntax-tree parsing").parseWithJsLanguage(source, language);
 }
 
 export function isJsSyntaxTree(tree: unknown): tree is JsSyntaxTree {
-  return (
-    typeof tree === "object" &&
-    tree !== null &&
-    "rootNode" in tree &&
-    "walk" in tree
-  );
+  return typeof tree === "object" && tree !== null && "rootNode" in tree && "walk" in tree;
 }
 
 export function executeJsQueryAsNativeMatches(
@@ -186,10 +154,5 @@ export function executeJsQueryAsNativeMatches(
   queryText: string,
   tree?: JsSyntaxTree,
 ): JsNativeMatch[] {
-  return requireJsFallback("JS query execution").executeJsQueryAsNativeMatches(
-    source,
-    language,
-    queryText,
-    tree,
-  );
+  return requireJsFallback("JS query execution").executeJsQueryAsNativeMatches(source, language, queryText, tree);
 }

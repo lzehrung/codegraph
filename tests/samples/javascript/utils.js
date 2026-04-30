@@ -19,7 +19,7 @@ export class UtilityClass {
 export const CONSTANT_VALUE = "constant";
 
 // Re-export from another module
-export { helperFunction as reExportedHelper } from './helpers.js';
+export { helperFunction as reExportedHelper } from "./helpers.js";
 
 // Default export
 export default function defaultExport() {
@@ -30,5 +30,5 @@ export default function defaultExport() {
 module.exports = {
   helperFunction,
   UtilityClass,
-  CONSTANT_VALUE
+  CONSTANT_VALUE,
 };

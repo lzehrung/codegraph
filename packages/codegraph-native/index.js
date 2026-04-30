@@ -13,10 +13,7 @@ function isMusl() {
   const report = process.report?.getReport();
   if (report?.header?.glibcVersionRuntime) return false;
   try {
-    return childProcess
-      .execSync("ldd --version", { encoding: "utf8" })
-      .toLowerCase()
-      .includes("musl");
+    return childProcess.execSync("ldd --version", { encoding: "utf8" }).toLowerCase().includes("musl");
   } catch {
     return true;
   }

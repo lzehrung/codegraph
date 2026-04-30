@@ -29,13 +29,7 @@ export const RUST_DEF: LanguageDefinition = {
         captureId: "module",
       },
     ],
-    splitPoints: [
-      "if_expression",
-      "for_expression",
-      "while_expression",
-      "loop_expression",
-      "match_expression",
-    ],
+    splitPoints: ["if_expression", "for_expression", "while_expression", "loop_expression", "match_expression"],
     comments: ["line_comment", "block_comment"],
   },
   graph: {
@@ -84,31 +78,14 @@ export const RUST_DEF: LanguageDefinition = {
   isDeclarationName: (node) => {
     const p = node.parent;
     if (!p) return false;
-    if (
-      p.type === "function_item" &&
-      p.childForFieldName("name")?.id === node.id
-    )
-      return true;
-    if (p.type === "struct_item" && p.childForFieldName("name")?.id === node.id)
-      return true;
-    if (p.type === "trait_item" && p.childForFieldName("name")?.id === node.id)
-      return true;
-    if (p.type === "enum_item" && p.childForFieldName("name")?.id === node.id)
-      return true;
-    if (p.type === "const_item" && p.childForFieldName("name")?.id === node.id)
-      return true;
-    if (p.type === "static_item" && p.childForFieldName("name")?.id === node.id)
-      return true;
-    if (
-      p.type === "let_declaration" &&
-      p.childForFieldName("pattern")?.id === node.id
-    )
-      return true;
-    if (
-      p.type === "parameter" &&
-      p.childForFieldName("pattern")?.id === node.id
-    )
-      return true;
+    if (p.type === "function_item" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "struct_item" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "trait_item" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "enum_item" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "const_item" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "static_item" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "let_declaration" && p.childForFieldName("pattern")?.id === node.id) return true;
+    if (p.type === "parameter" && p.childForFieldName("pattern")?.id === node.id) return true;
     return false;
   },
 };

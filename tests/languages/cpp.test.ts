@@ -25,13 +25,7 @@ const definition: LanguageTestDefinition = {
     symbols: [
       {
         file: "advanced.hpp",
-        includes: [
-          { name: "demo" },
-          { name: "Mode" },
-          { name: "Count" },
-          { name: "Engine" },
-          { name: "combine" },
-        ],
+        includes: [{ name: "demo" }, { name: "Mode" }, { name: "Count" }, { name: "Engine" }, { name: "combine" }],
       },
       {
         file: "namespaces.hpp",

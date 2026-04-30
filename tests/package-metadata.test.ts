@@ -4,10 +4,7 @@ import { describe, expect, it } from "vitest";
 
 function readJson(relativePath: string): Record<string, unknown> {
   const absolutePath = path.resolve(process.cwd(), relativePath);
-  return JSON.parse(fs.readFileSync(absolutePath, "utf8")) as Record<
-    string,
-    unknown
-  >;
+  return JSON.parse(fs.readFileSync(absolutePath, "utf8")) as Record<string, unknown>;
 }
 
 function readText(relativePath: string): string {
@@ -19,9 +16,7 @@ function readStringRecord(value: unknown): Record<string, string> {
     return {};
   }
   return Object.fromEntries(
-    Object.entries(value).filter(
-      (entry): entry is [string, string] => typeof entry[1] === "string",
-    ),
+    Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
   );
 }
 
@@ -31,9 +26,7 @@ describe("package metadata", () => {
     const rootPackage = readJson("package.json");
     const nativePackage = readJson("packages/codegraph-native/package.json");
     const fallbackPackage = readJson("packages/codegraph-js-fallback/package.json");
-    const opencodePluginPackage = readJson(
-      "packages/codegraph-opencode-plugin/package.json",
-    );
+    const opencodePluginPackage = readJson("packages/codegraph-opencode-plugin/package.json");
 
     expect(fs.existsSync(licensePath)).toBe(true);
     expect(fs.readFileSync(licensePath, "utf8")).toContain("ISC License");
@@ -47,9 +40,7 @@ describe("package metadata", () => {
     const rootPackage = readJson("package.json");
     const nativePackage = readJson("packages/codegraph-native/package.json");
     const dependencies = readStringRecord(rootPackage.dependencies);
-    const optionalDependencies = readStringRecord(
-      rootPackage.optionalDependencies,
-    );
+    const optionalDependencies = readStringRecord(rootPackage.optionalDependencies);
 
     expect(dependencies["@lzehrung/codegraph-native"]).toBeUndefined();
     expect(optionalDependencies["@lzehrung/codegraph-native"]).toBe(
@@ -61,8 +52,7 @@ describe("package metadata", () => {
   it("ships both the packaged skill archive and the raw skill directory", () => {
     const rootPackage = readJson("package.json");
     const files =
-      Array.isArray(rootPackage.files) &&
-      rootPackage.files.every((entry) => typeof entry === "string")
+      Array.isArray(rootPackage.files) && rootPackage.files.every((entry) => typeof entry === "string")
         ? rootPackage.files
         : [];
 
@@ -86,8 +76,7 @@ describe("package metadata", () => {
 
   it("keeps the root package description aligned with the multi-language surface", () => {
     const rootPackage = readJson("package.json");
-    const description =
-      typeof rootPackage.description === "string" ? rootPackage.description : "";
+    const description = typeof rootPackage.description === "string" ? rootPackage.description : "";
     const normalizedDescription = description.toLowerCase();
 
     expect(normalizedDescription).toContain("multi-language");
@@ -105,8 +94,7 @@ describe("package metadata", () => {
   it("keeps all publishable workspaces under the packages directory", () => {
     const rootPackage = readJson("package.json");
     const workspaces =
-      Array.isArray(rootPackage.workspaces) &&
-      rootPackage.workspaces.every((entry) => typeof entry === "string")
+      Array.isArray(rootPackage.workspaces) && rootPackage.workspaces.every((entry) => typeof entry === "string")
         ? rootPackage.workspaces
         : [];
 
@@ -116,13 +104,9 @@ describe("package metadata", () => {
   it("keeps JS fallback grammars out of the native package", () => {
     const nativePackage = readJson("packages/codegraph-native/package.json");
     const dependencies = readStringRecord(nativePackage.dependencies);
-    const optionalDependencies = readStringRecord(
-      nativePackage.optionalDependencies,
-    );
+    const optionalDependencies = readStringRecord(nativePackage.optionalDependencies);
     const exportsField =
-      nativePackage.exports && typeof nativePackage.exports === "object"
-        ? nativePackage.exports
-        : {};
+      nativePackage.exports && typeof nativePackage.exports === "object" ? nativePackage.exports : {};
 
     expect(Object.keys(dependencies)).toEqual([]);
     expect(Object.keys(optionalDependencies)).toEqual([]);
@@ -171,9 +155,7 @@ describe("package metadata", () => {
     ];
 
     for (const relativePath of docs) {
-      const hasNonAscii = [...readText(relativePath)].some(
-        (character) => character.charCodeAt(0) > 0x7f,
-      );
+      const hasNonAscii = [...readText(relativePath)].some((character) => character.charCodeAt(0) > 0x7f);
       expect(hasNonAscii).toBe(false);
     }
   });

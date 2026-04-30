@@ -58,26 +58,16 @@ export const RUBY_DEF: LanguageDefinition = {
     memberExpression: "call",
   },
   supportsCrossModuleSymbols: true,
-  createsFunctionScope: (node) =>
-    node.type === "method" || node.type === "singleton_method",
-  createsBlockScope: (node) =>
-    node.type === "do_block" || node.type === "block",
+  createsFunctionScope: (node) => node.type === "method" || node.type === "singleton_method",
+  createsBlockScope: (node) => node.type === "do_block" || node.type === "block",
   isDeclarationName: (node) => {
     const p = node.parent;
     if (!p) return false;
-    if (p.type === "class" && p.childForFieldName("name")?.id === node.id)
-      return true;
-    if (p.type === "module" && p.childForFieldName("name")?.id === node.id)
-      return true;
-    if (p.type === "method" && p.childForFieldName("name")?.id === node.id)
-      return true;
-    if (
-      p.type === "singleton_method" &&
-      p.childForFieldName("name")?.id === node.id
-    )
-      return true;
-    if (p.type === "assignment" && p.childForFieldName("left")?.id === node.id)
-      return true;
+    if (p.type === "class" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "module" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "method" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "singleton_method" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "assignment" && p.childForFieldName("left")?.id === node.id) return true;
     return false;
   },
 };

@@ -6,11 +6,11 @@
 
 <script>
 export default {
-  name: 'Example',
+  name: "Example",
   props: {
-    msg: String
-  }
-}
+    msg: String,
+  },
+};
 </script>
 
 <style scoped>
@@ -18,4 +18,3 @@ export default {
   color: red;
 }
 </style>
-

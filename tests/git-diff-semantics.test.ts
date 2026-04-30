@@ -74,12 +74,12 @@ describe("git diff semantics", () => {
       git(root, ["add", "."]);
       git(root, ["commit", "-m", "base"]);
 
-      await expect(
-        listChangedFiles(root, { base: "definitely-not-a-ref", head: "HEAD" }),
-      ).rejects.toThrow(/definitely-not-a-ref/);
-      await expect(
-        getUnifiedDiff(root, { base: "definitely-not-a-ref", head: "HEAD" }),
-      ).rejects.toThrow(/definitely-not-a-ref/);
+      await expect(listChangedFiles(root, { base: "definitely-not-a-ref", head: "HEAD" })).rejects.toThrow(
+        /definitely-not-a-ref/,
+      );
+      await expect(getUnifiedDiff(root, { base: "definitely-not-a-ref", head: "HEAD" })).rejects.toThrow(
+        /definitely-not-a-ref/,
+      );
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

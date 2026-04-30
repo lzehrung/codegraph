@@ -16,9 +16,7 @@ function collectNewestMtimeMs(entryPath) {
 
   let newestMtimeMs = entryStat.mtimeMs;
   for (const child of fs.readdirSync(entryPath, { withFileTypes: true })) {
-    const childNewestMtimeMs = collectNewestMtimeMs(
-      path.join(entryPath, child.name),
-    );
+    const childNewestMtimeMs = collectNewestMtimeMs(path.join(entryPath, child.name));
     newestMtimeMs = Math.max(newestMtimeMs, childNewestMtimeMs);
   }
   return newestMtimeMs;
@@ -43,12 +41,8 @@ export function inspectDistForTests(rootDir) {
     };
   }
 
-  const oldestDistMtimeMs = Math.min(
-    ...requiredEntries.map((entry) => fs.statSync(entry).mtimeMs),
-  );
-  const newestInputMtimeMs = Math.max(
-    ...getFreshnessInputs(rootDir).map((entry) => collectNewestMtimeMs(entry)),
-  );
+  const oldestDistMtimeMs = Math.min(...requiredEntries.map((entry) => fs.statSync(entry).mtimeMs));
+  const newestInputMtimeMs = Math.max(...getFreshnessInputs(rootDir).map((entry) => collectNewestMtimeMs(entry)));
 
   if (newestInputMtimeMs > oldestDistMtimeMs) {
     return {

@@ -33,16 +33,8 @@ describe("pnpm-workspace.yaml parsing", () => {
     await fsp.mkdir(includedDir, { recursive: true });
     await fsp.mkdir(excludedDir, { recursive: true });
 
-    await fsp.writeFile(
-      path.join(includedDir, "package.json"),
-      JSON.stringify({ name: "included" }, null, 2),
-      "utf8",
-    );
-    await fsp.writeFile(
-      path.join(excludedDir, "package.json"),
-      JSON.stringify({ name: "excluded" }, null, 2),
-      "utf8",
-    );
+    await fsp.writeFile(path.join(includedDir, "package.json"), JSON.stringify({ name: "included" }, null, 2), "utf8");
+    await fsp.writeFile(path.join(excludedDir, "package.json"), JSON.stringify({ name: "excluded" }, null, 2), "utf8");
 
     const cfg = await loadWorkspaceConfig(root);
     expect(cfg).toBeDefined();
@@ -59,13 +51,9 @@ describe("pnpm-workspace.yaml parsing", () => {
       "utf8",
     );
 
-    const pnpmYaml = [
-      "packages:",
-      "  - 'packages/*'",
-      "  - 'packages/public-*'",
-      "  - '!packages/private-*'",
-      "",
-    ].join("\n");
+    const pnpmYaml = ["packages:", "  - 'packages/*'", "  - 'packages/public-*'", "  - '!packages/private-*'", ""].join(
+      "\n",
+    );
     await fsp.writeFile(path.join(root, "pnpm-workspace.yaml"), pnpmYaml, "utf8");
 
     const publicDir = path.join(root, "packages", "public-a");
@@ -75,11 +63,7 @@ describe("pnpm-workspace.yaml parsing", () => {
     await fsp.mkdir(privateExcludedDir, { recursive: true });
     await fsp.mkdir(publicOverlapDir, { recursive: true });
 
-    await fsp.writeFile(
-      path.join(publicDir, "package.json"),
-      JSON.stringify({ name: "public-a" }, null, 2),
-      "utf8",
-    );
+    await fsp.writeFile(path.join(publicDir, "package.json"), JSON.stringify({ name: "public-a" }, null, 2), "utf8");
     await fsp.writeFile(
       path.join(privateExcludedDir, "package.json"),
       JSON.stringify({ name: "private-secret" }, null, 2),
@@ -107,22 +91,12 @@ describe("pnpm-workspace.yaml parsing", () => {
       "utf8",
     );
 
-    const pnpmYaml = [
-      "packages:",
-      "  - 'packages/*'",
-      "onlyBuiltDependencies:",
-      "  - esbuild",
-      "",
-    ].join("\n");
+    const pnpmYaml = ["packages:", "  - 'packages/*'", "onlyBuiltDependencies:", "  - esbuild", ""].join("\n");
     await fsp.writeFile(path.join(root, "pnpm-workspace.yaml"), pnpmYaml, "utf8");
 
     const includedDir = path.join(root, "packages", "included");
     await fsp.mkdir(includedDir, { recursive: true });
-    await fsp.writeFile(
-      path.join(includedDir, "package.json"),
-      JSON.stringify({ name: "included" }, null, 2),
-      "utf8",
-    );
+    await fsp.writeFile(path.join(includedDir, "package.json"), JSON.stringify({ name: "included" }, null, 2), "utf8");
 
     const cfg = await loadWorkspaceConfig(root);
     expect(cfg).toBeDefined();

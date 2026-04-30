@@ -21,4 +21,3 @@ class Foo {
 function baz(y) {
   return y * 2;
 }
-

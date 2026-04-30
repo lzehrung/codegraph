@@ -81,10 +81,8 @@ export async function* analyzeImpactStreaming(
   options: ImpactOptions,
 ): AsyncGenerator<ImpactStreamChunk> {
   try {
-    const displayFile = (filePath: string): string =>
-      toImpactReportFilePath(projectRoot, filePath);
-    const projectFiles =
-      index.projectFiles ?? (await discoverProjectFiles(projectRoot));
+    const displayFile = (filePath: string): string => toImpactReportFilePath(projectRoot, filePath);
+    const projectFiles = index.projectFiles ?? (await discoverProjectFiles(projectRoot));
     yield { type: "projectFiles", files: projectFiles };
 
     // Step 1: Get diff
@@ -98,11 +96,7 @@ export async function* analyzeImpactStreaming(
     const diff = await getDiff(options);
     const { ignoreGlobs = [] } = options;
     const isIgnored = createImpactIgnoreMatcher(projectRoot, ignoreGlobs);
-    const normalizedDiff = normalizeImpactDiffFiles(
-      projectRoot,
-      diff.files,
-      isIgnored,
-    );
+    const normalizedDiff = normalizeImpactDiffFiles(projectRoot, diff.files, isIgnored);
 
     // Step 2: Map changed files to symbols
     yield {
@@ -116,18 +110,11 @@ export async function* analyzeImpactStreaming(
     const filesWithSymbols = new Set<string>();
     for (const fileChange of normalizedDiff.files) {
       const absPath = normalizeImpactFilePath(projectRoot, fileChange.path);
-      const mapped = await locateChangedSymbolsWithLines(
-        index,
-        absPath,
-        fileChange.hunks,
-      );
+      const mapped = await locateChangedSymbolsWithLines(index, absPath, fileChange.hunks);
       const symbols = mapped.changedSymbols;
 
       if (symbols.length > 0) filesWithSymbols.add(absPath);
-      const emittedSymbols =
-        options.scope === "imported"
-          ? symbols.filter((symbol) => symbol.exported)
-          : symbols;
+      const emittedSymbols = options.scope === "imported" ? symbols.filter((symbol) => symbol.exported) : symbols;
       for (const symbol of emittedSymbols) {
         yield {
           type: "changedSymbol",
@@ -151,10 +138,7 @@ export async function* analyzeImpactStreaming(
     const normalizedChanges = normalizedDiff.files;
     const fileLevelFallback = options.fileLevelFallback ?? true;
     const fileLevelFallbackPaths = normalizedChanges
-      .filter(
-        (change) =>
-          change.kind !== "deleted" && !filesWithSymbols.has(change.path),
-      )
+      .filter((change) => change.kind !== "deleted" && !filesWithSymbols.has(change.path))
       .map((change) => change.path);
     const impactQueue = createAsyncQueue<ImpactStreamChunk>();
     const emittedSignatures = new Set<string>();

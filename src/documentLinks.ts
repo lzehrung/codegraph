@@ -1,22 +1,9 @@
 import path from "node:path";
-import {
-  extractJsTsSpecifiers,
-  type ModuleSpecifier,
-} from "./util.js";
+import { extractJsTsSpecifiers, type ModuleSpecifier } from "./util.js";
 
-export const GRAPH_ONLY_LANGUAGE_IDS = new Set([
-  "markdown",
-  "mdx",
-  "astro",
-  "hbs",
-  "rst",
-  "adoc",
-]);
+export const GRAPH_ONLY_LANGUAGE_IDS = new Set(["markdown", "mdx", "astro", "hbs", "rst", "adoc"]);
 
-const GRAPH_ONLY_ALIAS_LANGUAGE_IDS = new Set([
-  "mdx",
-  "astro",
-]);
+const GRAPH_ONLY_ALIAS_LANGUAGE_IDS = new Set(["mdx", "astro"]);
 
 const DEFAULT_HTML_TAG_ATTRS: Record<string, string[]> = {
   script: ["src"],
@@ -30,8 +17,7 @@ const DEFAULT_HTML_TAG_ATTRS: Record<string, string[]> = {
   track: ["src"],
 };
 
-const HTML_TAG_RE =
-  /<(script|link|a|img|source|video|audio|iframe|track)\b([^>]*)>/gi;
+const HTML_TAG_RE = /<(script|link|a|img|source|video|audio|iframe|track)\b([^>]*)>/gi;
 
 const DOCUMENT_RELATIVE_EXTENSIONS = new Set([
   ".md",
@@ -77,15 +63,11 @@ export function isGraphOnlyLanguage(languageId: string): boolean {
   return GRAPH_ONLY_LANGUAGE_IDS.has(languageId);
 }
 
-export function graphOnlyLanguageSupportsImportAliases(
-  languageId: string,
-): boolean {
+export function graphOnlyLanguageSupportsImportAliases(languageId: string): boolean {
   return GRAPH_ONLY_ALIAS_LANGUAGE_IDS.has(languageId);
 }
 
-export function graphOnlySpecifierNeedsResolutionConfig(
-  specifier: string,
-): boolean {
+export function graphOnlySpecifierNeedsResolutionConfig(specifier: string): boolean {
   return !(
     specifier.startsWith("./") ||
     specifier.startsWith("../") ||
@@ -97,9 +79,7 @@ export function graphOnlySpecifierNeedsResolutionConfig(
   );
 }
 
-export function extractHtmlInlineScriptSpecifiers(
-  source: string,
-): ModuleSpecifier[] {
+export function extractHtmlInlineScriptSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
   const inlineScriptRe = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
   for (const match of source.matchAll(inlineScriptRe)) {
@@ -124,16 +104,9 @@ export function extractHtmlAttributeSpecifiers(
     const attrNames = tagAttrNames[tag] ?? [];
 
     for (const attrName of attrNames) {
-      const attrRe = new RegExp(
-        `(?:^|\\s)${attrName}\\s*=\\s*(?:"([^"]+)"|'([^']+)'|([^\\s"'=<>\\x60]+))`,
-        "i",
-      );
+      const attrRe = new RegExp(`(?:^|\\s)${attrName}\\s*=\\s*(?:"([^"]+)"|'([^']+)'|([^\\s"'=<>\\x60]+))`, "i");
       const attrMatch = attrs.match(attrRe);
-      const raw = (
-        attrMatch?.[1] ??
-        attrMatch?.[2] ??
-        attrMatch?.[3]
-      )?.trim();
+      const raw = (attrMatch?.[1] ?? attrMatch?.[2] ?? attrMatch?.[3])?.trim();
       if (!raw) continue;
       if (attrName === "srcset") {
         const candidates = raw
@@ -160,10 +133,7 @@ export function extractHtmlAttributeSpecifiers(
   return dedupeModuleSpecifiers(out);
 }
 
-export function extractGraphOnlyModuleSpecifiers(
-  languageId: string,
-  source: string,
-): ModuleSpecifier[] {
+export function extractGraphOnlyModuleSpecifiers(languageId: string, source: string): ModuleSpecifier[] {
   if (languageId === "markdown") {
     return extractMarkdownModuleSpecifiers(source);
   }
@@ -185,16 +155,12 @@ export function extractGraphOnlyModuleSpecifiers(
   return [];
 }
 
-export function extractMarkdownModuleSpecifiers(
-  source: string,
-): ModuleSpecifier[] {
+export function extractMarkdownModuleSpecifiers(source: string): ModuleSpecifier[] {
   const sanitized = stripMarkdownCode(source);
   return extractMarkdownModuleSpecifiersFromSanitized(sanitized);
 }
 
-function extractMarkdownModuleSpecifiersFromSanitized(
-  sanitized: string,
-): ModuleSpecifier[] {
+function extractMarkdownModuleSpecifiersFromSanitized(sanitized: string): ModuleSpecifier[] {
   const referenceDefs = collectMarkdownReferenceDefinitions(sanitized);
   const out: ModuleSpecifier[] = [];
 
@@ -246,26 +212,20 @@ export function extractMdxModuleSpecifiers(source: string): ModuleSpecifier[] {
   return dedupeModuleSpecifiers(out);
 }
 
-export function extractAstroModuleSpecifiers(
-  source: string,
-): ModuleSpecifier[] {
+export function extractAstroModuleSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
   out.push(...extractHtmlAttributeSpecifiers(source));
   out.push(...extractHtmlInlineScriptSpecifiers(source));
 
   const frontmatterMatch = source.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (frontmatterMatch?.[1]) {
-    out.push(
-      ...markResolutionKind(extractJsTsSpecifiers(frontmatterMatch[1]), "source"),
-    );
+    out.push(...markResolutionKind(extractJsTsSpecifiers(frontmatterMatch[1]), "source"));
   }
 
   return dedupeModuleSpecifiers(out);
 }
 
-export function extractHandlebarsModuleSpecifiers(
-  source: string,
-): ModuleSpecifier[] {
+export function extractHandlebarsModuleSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
   out.push(...extractHtmlAttributeSpecifiers(source));
 
@@ -282,9 +242,7 @@ export function extractHandlebarsModuleSpecifiers(
   return dedupeModuleSpecifiers(out);
 }
 
-export function extractRstModuleSpecifiers(
-  source: string,
-): ModuleSpecifier[] {
+export function extractRstModuleSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
   const namedTargets = collectRstTargetDefinitions(source);
 
@@ -322,9 +280,7 @@ export function extractRstModuleSpecifiers(
   return dedupeModuleSpecifiers(out);
 }
 
-export function extractAsciidocModuleSpecifiers(
-  source: string,
-): ModuleSpecifier[] {
+export function extractAsciidocModuleSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
 
   for (const match of source.matchAll(/\b(xref|link):([^\[\s]+)\[[^\]]*]/g)) {
@@ -332,24 +288,16 @@ export function extractAsciidocModuleSpecifiers(
     const rawSpecifier = match[2]?.trim();
     if (!rawSpecifier) continue;
     const fileLikeTarget =
-      directive === "xref"
-        ? isLikelyAsciidocXrefTarget(rawSpecifier)
-        : isLikelyAsciidocFileTarget(rawSpecifier);
+      directive === "xref" ? isLikelyAsciidocXrefTarget(rawSpecifier) : isLikelyAsciidocFileTarget(rawSpecifier);
     if (!fileLikeTarget) continue;
-    const ambiguousXrefTarget =
-      directive === "xref" &&
-      isAmbiguousAsciidocXrefTarget(rawSpecifier);
+    const ambiguousXrefTarget = directive === "xref" && isAmbiguousAsciidocXrefTarget(rawSpecifier);
     const normalized = normalizeLinkSpecifier(rawSpecifier, {
       preferRelative: true,
       resolutionKind: "document",
       forceRelative: true,
     });
     if (normalized) {
-      out.push(
-        ambiguousXrefTarget
-          ? { ...normalized, dropIfUnresolved: true }
-          : normalized,
-      );
+      out.push(ambiguousXrefTarget ? { ...normalized, dropIfUnresolved: true } : normalized);
     }
   }
 
@@ -397,12 +345,9 @@ function dedupeModuleSpecifiers(entries: ModuleSpecifier[]): ModuleSpecifier[] {
   return out;
 }
 
-function collectMarkdownReferenceDefinitions(
-  source: string,
-): Map<string, ModuleSpecifier> {
+function collectMarkdownReferenceDefinitions(source: string): Map<string, ModuleSpecifier> {
   const out = new Map<string, ModuleSpecifier>();
-  const definitionRe =
-    /^\s{0,3}\[([^\]]+)\]:\s*(<[^>\n]+>|[^ \t\n]+)(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*$/gm;
+  const definitionRe = /^\s{0,3}\[([^\]]+)\]:\s*(<[^>\n]+>|[^ \t\n]+)(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*$/gm;
 
   for (const match of source.matchAll(definitionRe)) {
     const label = normalizeReferenceLabel(match[1]);
@@ -418,9 +363,7 @@ function collectMarkdownReferenceDefinitions(
   return out;
 }
 
-function collectRstTargetDefinitions(
-  source: string,
-): Map<string, ModuleSpecifier> {
+function collectRstTargetDefinitions(source: string): Map<string, ModuleSpecifier> {
   const out = new Map<string, ModuleSpecifier>();
   const definitionRe = /^\s*\.\.\s+_([^:]+):\s*(\S+)\s*$/gm;
 
@@ -513,9 +456,7 @@ function extractMarkdownDestination(rawDestination: string): string {
     if (endIndex > 0) return trimmed.slice(0, endIndex + 1);
   }
   const whitespaceIndex = trimmed.search(/\s/);
-  return whitespaceIndex >= 0
-    ? trimmed.slice(0, whitespaceIndex)
-    : trimmed;
+  return whitespaceIndex >= 0 ? trimmed.slice(0, whitespaceIndex) : trimmed;
 }
 
 function normalizeLinkSpecifier(
@@ -569,10 +510,7 @@ function normalizeLinkSpecifier(
   };
 }
 
-function markResolutionKind(
-  entries: ModuleSpecifier[],
-  resolutionKind: "document" | "source",
-): ModuleSpecifier[] {
+function markResolutionKind(entries: ModuleSpecifier[], resolutionKind: "document" | "source"): ModuleSpecifier[] {
   return entries.map((entry) => ({
     ...entry,
     resolutionKind,
@@ -637,10 +575,7 @@ function findMarkdownLabelEnd(source: string, openIndex: number): number {
   return -1;
 }
 
-function parseMarkdownInlineLink(
-  source: string,
-  startIndex: number,
-): { destination: string; endIndex: number } | null {
+function parseMarkdownInlineLink(source: string, startIndex: number): { destination: string; endIndex: number } | null {
   let depth = 1;
   let destinationEnd = -1;
   let quote: '"' | "'" | null = null;
@@ -678,12 +613,7 @@ function parseMarkdownInlineLink(
     if (char === ")") {
       depth -= 1;
       if (depth !== 0) continue;
-      const destination = source
-        .slice(
-          startIndex,
-          destinationEnd >= 0 ? destinationEnd : index,
-        )
-        .trim();
+      const destination = source.slice(startIndex, destinationEnd >= 0 ? destinationEnd : index).trim();
       return destination ? { destination, endIndex: index } : null;
     }
 
@@ -709,20 +639,13 @@ function isLikelyMarkdownAutolinkTarget(candidate: string): boolean {
 function isLikelyAsciidocXrefTarget(rawSpecifier: string): boolean {
   if (isLikelyAsciidocFileTarget(rawSpecifier)) return true;
 
-  const withoutFragment = rawSpecifier
-    .trim()
-    .split("#", 1)[0]
-    ?.split("?", 1)[0]
-    ?.trim() ?? "";
+  const withoutFragment = rawSpecifier.trim().split("#", 1)[0]?.split("?", 1)[0]?.trim() ?? "";
   if (!withoutFragment) return false;
   return /^[A-Za-z0-9._-]+$/.test(withoutFragment);
 }
 
 function isAmbiguousAsciidocXrefTarget(rawSpecifier: string): boolean {
-  return (
-    isLikelyAsciidocXrefTarget(rawSpecifier) &&
-    !isLikelyAsciidocFileTarget(rawSpecifier)
-  );
+  return isLikelyAsciidocXrefTarget(rawSpecifier) && !isLikelyAsciidocFileTarget(rawSpecifier);
 }
 
 function isLikelyAsciidocFileTarget(rawSpecifier: string): boolean {
@@ -734,11 +657,7 @@ function isLikelyAsciidocFileTarget(rawSpecifier: string): boolean {
 
   const withoutFragment = trimmed.split("#", 1)[0]?.split("?", 1)[0]?.trim() ?? "";
   if (!withoutFragment) return false;
-  if (
-    withoutFragment.startsWith("./") ||
-    withoutFragment.startsWith("../") ||
-    withoutFragment.startsWith("/")
-  ) {
+  if (withoutFragment.startsWith("./") || withoutFragment.startsWith("../") || withoutFragment.startsWith("/")) {
     return true;
   }
   if (withoutFragment.includes("/") || withoutFragment.includes("\\")) {
@@ -762,10 +681,7 @@ function isObviouslyDynamicSpecifier(specifier: string): boolean {
 }
 
 function stripMarkdownCode(source: string): string {
-  let sanitized = source.replace(
-    /(^|\n)(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\2[^\n]*(?=\n|$)/g,
-    maskMatch,
-  );
+  let sanitized = source.replace(/(^|\n)(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\2[^\n]*(?=\n|$)/g, maskMatch);
   sanitized = sanitized.replace(/`[^`\n]*`/g, maskMatch);
   sanitized = sanitized.replace(/^(?: {4}|\t).*$/gm, maskMatch);
   return sanitized;

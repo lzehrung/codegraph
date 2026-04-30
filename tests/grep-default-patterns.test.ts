@@ -15,21 +15,11 @@ describe("grep default patterns", () => {
     const file = path.join(root, "src", "Main.kt");
 
     await fsp.mkdir(path.dirname(file), { recursive: true });
-    await fsp.writeFile(
-      file,
-      [
-        "package demo",
-        "fun helperFunction(): Int = 1",
-      ].join("\n"),
-      "utf8",
-    );
+    await fsp.writeFile(file, ["package demo", "fun helperFunction(): Int = 1"].join("\n"), "utf8");
 
     try {
       const textHits = await textGrep(root, "helperFunction");
-      const astHits = await astGrep(
-        root,
-        "(function_declaration (simple_identifier) @name)",
-      );
+      const astHits = await astGrep(root, "(function_declaration (simple_identifier) @name)");
 
       expect(textHits.some((hit) => hit.file === "src/Main.kt")).toBe(true);
       expect(astHits.some((hit) => hit.file === "src/Main.kt")).toBe(true);

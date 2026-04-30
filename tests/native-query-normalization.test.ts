@@ -1,21 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { supportById } from "../src/languages.js";
-import {
-  getNativeQueryMetadataForSupport,
-  normalizeNativeQueryForSupport,
-} from "../src/native/treeSitterNative.js";
+import { getNativeQueryMetadataForSupport, normalizeNativeQueryForSupport } from "../src/native/treeSitterNative.js";
 
 describe("native query normalization", () => {
   it("keeps queries unchanged for languages without native compatibility hooks", () => {
     const support = supportById("python");
     expect(support).toBeDefined();
-    expect(
-      normalizeNativeQueryForSupport(
-        support!,
-        "imports",
-        '(import_statement (dotted_name) @mod) @stmt',
-      ),
-    ).toBe('(import_statement (dotted_name) @mod) @stmt');
+    expect(normalizeNativeQueryForSupport(support!, "imports", "(import_statement (dotted_name) @mod) @stmt")).toBe(
+      "(import_statement (dotted_name) @mod) @stmt",
+    );
   });
 
   it("normalizes javascript function node queries", () => {
@@ -24,16 +17,12 @@ describe("native query normalization", () => {
     const normalized = normalizeNativeQueryForSupport(
       support!,
       "exports",
-      '(expression_statement (assignment_expression right: (function) @cjs_fn))',
+      "(expression_statement (assignment_expression right: (function) @cjs_fn))",
     );
     expect(normalized).toContain("(function_expression)");
-    expect(
-      normalizeNativeQueryForSupport(
-        support!,
-        "exports",
-        support!.queries.exports,
-      ),
-    ).toContain("(method_definition name: (property_identifier) @cjs_export_name) @cjs_fn");
+    expect(normalizeNativeQueryForSupport(support!, "exports", support!.queries.exports)).toContain(
+      "(method_definition name: (property_identifier) @cjs_export_name) @cjs_fn",
+    );
     expect(getNativeQueryMetadataForSupport(support!)).toEqual({
       normalizedQueryKinds: ["exports"],
       skippedQueryKinds: [],
@@ -43,11 +32,7 @@ describe("native query normalization", () => {
   it("normalizes typescript export queries for native compatibility", () => {
     const support = supportById("ts");
     expect(support).toBeDefined();
-    const normalized = normalizeNativeQueryForSupport(
-      support!,
-      "exports",
-      support!.queries.exports,
-    );
+    const normalized = normalizeNativeQueryForSupport(support!, "exports", support!.queries.exports);
     expect(normalized).not.toContain("@ts_export_assign");
     expect(normalized).toContain(
       "(export_statement declaration: (class_declaration name: (type_identifier) @name)) @stmt",
@@ -76,13 +61,7 @@ describe("native query normalization", () => {
   it("blanks unsupported scss symbol queries", () => {
     const support = supportById("scss");
     expect(support).toBeDefined();
-    expect(
-      normalizeNativeQueryForSupport(
-        support!,
-        "locals",
-        "(class_selector (class_name) @name)",
-      ),
-    ).toBe("");
+    expect(normalizeNativeQueryForSupport(support!, "locals", "(class_selector (class_name) @name)")).toBe("");
     expect(getNativeQueryMetadataForSupport(support!)).toEqual({
       normalizedQueryKinds: ["exports", "locals"],
       skippedQueryKinds: ["exports", "locals"],
@@ -92,11 +71,7 @@ describe("native query normalization", () => {
   it("normalizes kotlin import and identifier node names", () => {
     const support = supportById("kotlin");
     expect(support).toBeDefined();
-    const normalized = normalizeNativeQueryForSupport(
-      support!,
-      "imports",
-      "(import_header (simple_identifier) @from)",
-    );
+    const normalized = normalizeNativeQueryForSupport(support!, "imports", "(import_header (simple_identifier) @from)");
     expect(normalized).toContain("(import (qualified_identifier) @mod) @stmt");
   });
 

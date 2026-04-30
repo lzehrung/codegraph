@@ -9,11 +9,7 @@ import {
   supportById,
   type LanguageSupport,
 } from "../languages.js";
-import {
-  prepareSFCScriptSource,
-  detectSFCFramework,
-  type SFCFramework,
-} from "./sfc.js";
+import { prepareSFCScriptSource, detectSFCFramework, type SFCFramework } from "./sfc.js";
 
 interface ParserInput {
   source: string;
@@ -42,10 +38,7 @@ const SCRIPT_SUPPORT_MAP: Record<string, LanguageSupport> = {
   tsx: TSX_SUPPORT,
 };
 
-export async function prepareParserInput(
-  file: string,
-  opts?: { source?: string },
-): Promise<ParserInput> {
+export async function prepareParserInput(file: string, opts?: { source?: string }): Promise<ParserInput> {
   const prepared = await prepareSourceInput(file, opts);
   return {
     ...prepared,
@@ -53,10 +46,7 @@ export async function prepareParserInput(
   };
 }
 
-export async function prepareSourceInput(
-  file: string,
-  opts?: { source?: string },
-): Promise<SourceInput> {
+export async function prepareSourceInput(file: string, opts?: { source?: string }): Promise<SourceInput> {
   const framework = detectSFCFramework(file);
   if (framework) {
     const rawSource = opts?.source ?? (await fsp.readFile(file, "utf8"));
@@ -72,22 +62,13 @@ export async function prepareSourceInput(
   };
 }
 
-export function isUnsupportedParserInputError(
-  error: unknown,
-): error is UnsupportedParserInputError {
+export function isUnsupportedParserInputError(error: unknown): error is UnsupportedParserInputError {
   return error instanceof UnsupportedParserInputError;
 }
 
-function prepareSFCSourceInput(
-  source: string,
-  framework: SFCFramework,
-): SourceInput {
-  const { maskedSource, scriptLangId } = prepareSFCScriptSource(
-    source,
-    framework,
-  );
-  const sup =
-    SCRIPT_SUPPORT_MAP[scriptLangId] ?? supportById(scriptLangId) ?? JS_SUPPORT;
+function prepareSFCSourceInput(source: string, framework: SFCFramework): SourceInput {
+  const { maskedSource, scriptLangId } = prepareSFCScriptSource(source, framework);
+  const sup = SCRIPT_SUPPORT_MAP[scriptLangId] ?? supportById(scriptLangId) ?? JS_SUPPORT;
   return {
     source: maskedSource,
     sup,

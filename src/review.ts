@@ -20,20 +20,11 @@ import {
   symbolId,
 } from "./indexer.js";
 import type { GraphBuildOptions } from "./graphs.js";
-import {
-  locateChangedSymbolsWithLines,
-  mapChangedLinesToSymbols,
-} from "./impact/map.js";
+import { locateChangedSymbolsWithLines, mapChangedLinesToSymbols } from "./impact/map.js";
 import { parseUnifiedDiff } from "./impact/parse.js";
 import type { FileChange, Hunk } from "./impact/types.js";
-import {
-  listCandidateTestFiles,
-  type CandidateTestFile,
-} from "./impact/context.js";
-import {
-  compileTestPatterns,
-  createIndexTestFileMatcher,
-} from "./impact/testPatterns.js";
+import { listCandidateTestFiles, type CandidateTestFile } from "./impact/context.js";
+import { compileTestPatterns, createIndexTestFileMatcher } from "./impact/testPatterns.js";
 import {
   assertFilePathWithinRoot,
   normalizePath,
@@ -197,8 +188,7 @@ function applyReviewPresetOptions(opts: ReviewOptions): ReviewOptions {
   const mergedGraph = mergeGraphOptions(preset.graph, opts.graph);
   return {
     ...opts,
-    includeSymbolDetails:
-      opts.includeSymbolDetails ?? preset.includeSymbolDetails,
+    includeSymbolDetails: opts.includeSymbolDetails ?? preset.includeSymbolDetails,
     maxCallsites: opts.maxCallsites ?? preset.maxCallsites,
     maxCandidates: opts.maxCandidates ?? preset.maxCandidates,
     ...(mergedGraph ? { graph: mergedGraph } : {}),
@@ -247,9 +237,7 @@ function mergeCandidateTestEntries(
       merged.set(candidate.file, candidate);
       return;
     }
-    if (
-      confidenceRank(candidate.confidence) > confidenceRank(existing.confidence)
-    ) {
+    if (confidenceRank(candidate.confidence) > confidenceRank(existing.confidence)) {
       merged.set(candidate.file, candidate);
     }
   };
@@ -262,19 +250,14 @@ function normalizeSpecifierBase(fromFile: string, spec: string): string {
   return normalizePath(path.resolve(path.dirname(fromFile), spec));
 }
 
-function buildDeletedImportCandidates(
-  fromFile: string,
-  spec: string,
-  targetFile: string,
-): Set<string> {
+function buildDeletedImportCandidates(fromFile: string, spec: string, targetFile: string): Set<string> {
   const normalizedSpec = spec.replace(/\\/g, "/");
   const basePath = normalizeSpecifierBase(fromFile, normalizedSpec);
-  return new Set(
-    listResolutionCandidates(
-      basePath,
-      deletedImportResolutionExtensions(targetFile),
-    ).map((candidate) => normalizePath(candidate)),
+  const resolutionExtensions = deletedImportResolutionExtensions(targetFile);
+  const candidates = listResolutionCandidates(basePath, resolutionExtensions).map((candidate) =>
+    normalizePath(candidate),
   );
+  return new Set(candidates);
 }
 
 function matchesDeletedImportTarget(
@@ -289,27 +272,19 @@ function matchesDeletedImportTarget(
   if (!spec.startsWith(".")) {
     return false;
   }
-  return buildDeletedImportCandidates(fromFile, spec, deletedFile).has(
-    deletedFile,
-  );
+  return buildDeletedImportCandidates(fromFile, spec, deletedFile).has(deletedFile);
 }
 
-function getImportResolvedPath(
-  entry: Pick<ImportBinding, "resolved">,
-): string | undefined {
+function getImportResolvedPath(entry: Pick<ImportBinding, "resolved">): string | undefined {
   return typeof entry.resolved === "string" ? entry.resolved : undefined;
 }
 
-function buildDeletedAliasCandidates(
-  candidate: string,
-  targetFile: string,
-): Set<string> {
-  return new Set(
-    listResolutionCandidates(
-      normalizePath(candidate),
-      deletedImportResolutionExtensions(targetFile),
-    ).map((resolvedCandidate) => normalizePath(resolvedCandidate)),
-  );
+function buildDeletedAliasCandidates(candidate: string, targetFile: string): Set<string> {
+  const normalizedCandidate = normalizePath(candidate);
+  const resolutionExtensions = deletedImportResolutionExtensions(targetFile);
+  const resolutionCandidates = listResolutionCandidates(normalizedCandidate, resolutionExtensions);
+  const resolvedCandidates = resolutionCandidates.map((resolvedCandidate) => normalizePath(resolvedCandidate));
+  return new Set(resolvedCandidates);
 }
 
 function deletedImportResolutionExtensions(targetFile: string): string[] {
@@ -334,14 +309,13 @@ async function resolveDeletedAliasImportTarget(
     const matched = matchPath(
       spec,
       undefined,
-      (candidate) =>
-        buildDeletedAliasCandidates(candidate, deletedFile).has(deletedTarget),
+      (candidate) => buildDeletedAliasCandidates(candidate, deletedFile).has(deletedTarget),
       resolutionExtensions,
     );
     if (matched) {
-      const resolvedMatch = Array.from(
-        buildDeletedAliasCandidates(matched, deletedFile),
-      ).find((candidate) => candidate === deletedTarget);
+      const resolvedMatch = Array.from(buildDeletedAliasCandidates(matched, deletedFile)).find(
+        (candidate) => candidate === deletedTarget,
+      );
       if (resolvedMatch) {
         return resolvedMatch;
       }
@@ -352,11 +326,7 @@ async function resolveDeletedAliasImportTarget(
     return undefined;
   }
 
-  return listWorkspacePackageResolutionCandidates(
-    spec,
-    workspaceConfig,
-    resolutionExtensions,
-  )
+  return listWorkspacePackageResolutionCandidates(spec, workspaceConfig, resolutionExtensions)
     .map((candidate) => normalizePath(candidate))
     .find((candidate) => candidate === deletedTarget);
 }
@@ -369,20 +339,12 @@ async function listDirectDeletedFileTestImporters(
 ): Promise<CandidateTestFile[]> {
   if (deletedFiles.length === 0) return [];
 
-  const deletedFileSet = new Set(
-    deletedFiles.map((file) => normalizePath(file)),
-  );
+  const deletedFileSet = new Set(deletedFiles.map((file) => normalizePath(file)));
   const compiledPatterns = compileTestPatterns(testPatterns);
-  const isIndexTestFile = createIndexTestFileMatcher(
-    index,
-    compiledPatterns,
-    projectRoot,
-  );
+  const isIndexTestFile = createIndexTestFileMatcher(index, compiledPatterns, projectRoot);
   const candidates = new Map<FileId, CandidateTestFile>();
   const importsByFile = new Map<FileId, Array<{ spec: string; resolved?: string }>>();
-  const workspaceConfig = projectRoot
-    ? await loadWorkspaceConfig(projectRoot)
-    : undefined;
+  const workspaceConfig = projectRoot ? await loadWorkspaceConfig(projectRoot) : undefined;
 
   for (const edge of index.graph.edges) {
     let imports = importsByFile.get(edge.from);
@@ -411,27 +373,12 @@ async function listDirectDeletedFileTestImporters(
     }
     for (const entry of uniqueImports.values()) {
       for (const deletedFile of deletedFileSet) {
-        const resolvedImportPath = entry.resolved
-          ? normalizePath(entry.resolved)
-          : undefined;
+        const resolvedImportPath = entry.resolved ? normalizePath(entry.resolved) : undefined;
         const resolvedAliasTarget =
           resolvedImportPath === deletedFile
             ? resolvedImportPath
-            : await resolveDeletedAliasImportTarget(
-                projectRoot,
-                workspaceConfig,
-                mod.file,
-                entry.spec,
-                deletedFile,
-              );
-        if (
-          !matchesDeletedImportTarget(
-            mod.file,
-            entry.spec,
-            resolvedAliasTarget,
-            deletedFile,
-          )
-        ) {
+            : await resolveDeletedAliasImportTarget(projectRoot, workspaceConfig, mod.file, entry.spec, deletedFile);
+        if (!matchesDeletedImportTarget(mod.file, entry.spec, resolvedAliasTarget, deletedFile)) {
           continue;
         }
         candidates.set(mod.file, {
@@ -445,23 +392,15 @@ async function listDirectDeletedFileTestImporters(
 
   return Array.from(candidates.values());
 }
-async function readGitFileAtRevision(
-  projectRoot: string,
-  revision: string,
-  file: string,
-): Promise<string | null> {
+async function readGitFileAtRevision(projectRoot: string, revision: string, file: string): Promise<string | null> {
   const relativeFile = normalizePath(path.relative(projectRoot, file));
   if (!relativeFile || relativeFile.startsWith("..")) return null;
   try {
-    const { stdout } = await execFileAsync(
-      "git",
-      ["show", `${revision}:${relativeFile}`],
-      {
-        cwd: projectRoot,
-        encoding: "utf8",
-        maxBuffer: 16 * 1024 * 1024,
-      },
-    );
+    const { stdout } = await execFileAsync("git", ["show", `${revision}:${relativeFile}`], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+    });
     return stdout;
   } catch {
     return null;
@@ -484,9 +423,7 @@ async function buildDeletedFileSnapshots(
     const support = supportForFile(file);
     if (!support) continue;
     const source =
-      (opts.revision
-        ? await readGitFileAtRevision(projectRoot, opts.revision, file)
-        : null) ??
+      (opts.revision ? await readGitFileAtRevision(projectRoot, opts.revision, file) : null) ??
       reconstructDeletedSourceFromDiff(opts.diffChangesByFile?.get(file));
     if (source === null) continue;
     const normalizedFile = normalizePath(file);
@@ -495,13 +432,7 @@ async function buildDeletedFileSnapshots(
       sup: support,
       ...(opts.graphOptions ? { graphOptions: opts.graphOptions } : {}),
     });
-    const module = collectLocalsAndExportsFromSource(
-      normalizedFile,
-      source,
-      support,
-      undefined,
-      imports,
-    );
+    const module = collectLocalsAndExportsFromSource(normalizedFile, source, support, undefined, imports);
     snapshots.set(normalizedFile, {
       source,
       module,
@@ -511,9 +442,7 @@ async function buildDeletedFileSnapshots(
   return snapshots;
 }
 
-function reconstructDeletedSourceFromDiff(
-  change: FileChange | undefined,
-): string | null {
+function reconstructDeletedSourceFromDiff(change: FileChange | undefined): string | null {
   if (!change || change.kind !== "deleted" || change.hunks.length === 0) {
     return null;
   }
@@ -535,9 +464,7 @@ function reconstructDeletedSourceFromDiff(
 }
 
 function sortSymbols(symbols: SymbolDef[]): SymbolDef[] {
-  return symbols
-    .slice()
-    .sort((left, right) => symbolId(left).localeCompare(symbolId(right)));
+  return symbols.slice().sort((left, right) => symbolId(left).localeCompare(symbolId(right)));
 }
 
 function computeRiskSummary(input: {
@@ -594,8 +521,7 @@ function buildReviewTasks(input: {
     {
       id: "review-summary",
       title: "Review changed symbols",
-      description:
-        "Scan the changed symbols and confirm behavioral changes align with intent.",
+      description: "Scan the changed symbols and confirm behavioral changes align with intent.",
       priority: "medium",
       reason: "baseline-review",
     },
@@ -605,8 +531,7 @@ function buildReviewTasks(input: {
     tasks.push({
       id: "api-compat",
       title: "Verify API compatibility",
-      description:
-        "Check exported symbols for breaking changes, migration notes, and versioning implications.",
+      description: "Check exported symbols for breaking changes, migration notes, and versioning implications.",
       priority: "high",
       reason: "exported-symbols-changed",
     });
@@ -616,8 +541,7 @@ function buildReviewTasks(input: {
     tasks.push({
       id: "tests-missing",
       title: "Validate test coverage",
-      description:
-        "No candidate tests were detected. Confirm existing coverage or add targeted tests.",
+      description: "No candidate tests were detected. Confirm existing coverage or add targeted tests.",
       priority: "medium",
       reason: "no-candidate-tests",
     });
@@ -627,8 +551,7 @@ function buildReviewTasks(input: {
     tasks.push({
       id: "high-change-volume",
       title: "Assess change scope",
-      description:
-        "Large change set detected. Double-check impacted files and coordination needs.",
+      description: "Large change set detected. Double-check impacted files and coordination needs.",
       priority: "high",
       reason: "large-change-set",
     });
@@ -660,28 +583,18 @@ function buildReviewTasks(input: {
 }
 
 function hasDiagnostics(diagnostics: ReviewDiagnostics): boolean {
-  return (
-    diagnostics.missingFiles.length > 0 ||
-    diagnostics.symbolMappingParseFailures.length > 0
-  );
+  return diagnostics.missingFiles.length > 0 || diagnostics.symbolMappingParseFailures.length > 0;
 }
 
 function isExported(mod: { exports: ExportEntry[] }, handle: string): boolean {
-  return mod.exports.some(
-    (e) => e.type === "local" && symbolId(e.target) === handle,
-  );
+  return mod.exports.some((e) => e.type === "local" && symbolId(e.target) === handle);
 }
 
 function listReviewableExports(mod: ModuleIndex): ReviewableExportEntry[] {
-  return mod.exports.filter(
-    (entry): entry is ReviewableExportEntry => entry.type !== "local",
-  );
+  return mod.exports.filter((entry): entry is ReviewableExportEntry => entry.type !== "local");
 }
 
-function exportSummaryHandle(
-  file: string,
-  entry: ReviewableExportEntry,
-): string {
+function exportSummaryHandle(file: string, entry: ReviewableExportEntry): string {
   const exportedAs = entry.type === "exportStar" ? "*" : entry.exportedAs;
   return `${file}::export::${entry.type}::${exportedAs}::${entry.fromModule}`;
 }
@@ -698,11 +611,7 @@ function diffLineLooksExportLike(line: string): boolean {
   const prefix = line[0];
   if (prefix !== "+" && prefix !== "-") return false;
   const trimmed = line.slice(1).trimStart();
-  return (
-    trimmed.startsWith("export ") ||
-    trimmed.startsWith("module.exports") ||
-    trimmed.startsWith("exports.")
-  );
+  return trimmed.startsWith("export ") || trimmed.startsWith("module.exports") || trimmed.startsWith("exports.");
 }
 
 function shouldIncludeExportSummaries(
@@ -716,10 +625,7 @@ function shouldIncludeExportSummaries(
   return hunks.some((hunk) => hunk.lines.some(diffLineLooksExportLike));
 }
 
-function buildExportSummaries(
-  file: string,
-  mod: ModuleIndex,
-): ReviewSymbolSummary[] {
+function buildExportSummaries(file: string, mod: ModuleIndex): ReviewSymbolSummary[] {
   return listReviewableExports(mod).map((entry) => ({
     name: exportSummaryName(entry),
     kind: exportSummaryKind(entry),
@@ -728,16 +634,10 @@ function buildExportSummaries(
   }));
 }
 
-function resolveReviewSpecifierTarget(
-  fromFile: string,
-  spec: string,
-  knownDeletedFiles?: ReadonlySet<FileId>,
-): string {
+function resolveReviewSpecifierTarget(fromFile: string, spec: string, knownDeletedFiles?: ReadonlySet<FileId>): string {
   const normalizedSpec = spec.replace(/\\/g, "/");
   const basePath = normalizeSpecifierBase(fromFile, normalizedSpec);
-  const candidates = listResolutionCandidates(basePath).map((candidate) =>
-    normalizePath(candidate),
-  );
+  const candidates = listResolutionCandidates(basePath).map((candidate) => normalizePath(candidate));
   if (knownDeletedFiles) {
     for (const candidate of candidates) {
       if (knownDeletedFiles.has(candidate)) return candidate;
@@ -757,13 +657,7 @@ async function resolveDeletedSnapshotBareTarget(
   knownDeletedFiles: readonly FileId[],
 ): Promise<string | undefined> {
   for (const deletedFile of knownDeletedFiles) {
-    const resolved = await resolveDeletedAliasImportTarget(
-      projectRoot,
-      workspaceConfig,
-      fromFile,
-      spec,
-      deletedFile,
-    );
+    const resolved = await resolveDeletedAliasImportTarget(projectRoot, workspaceConfig, fromFile, spec, deletedFile);
     if (resolved === deletedFile) {
       return deletedFile;
     }
@@ -780,15 +674,7 @@ async function resolveDeletedSnapshotTarget(input: {
   knownDeletedFileSet: ReadonlySet<FileId>;
   resolved?: FileId | { external: string };
 }): Promise<{ type: "file"; path: string } | { type: "external"; name: string }> {
-  const {
-    projectRoot,
-    workspaceConfig,
-    fromFile,
-    spec,
-    knownDeletedFiles,
-    knownDeletedFileSet,
-    resolved,
-  } = input;
+  const { projectRoot, workspaceConfig, fromFile, spec, knownDeletedFiles, knownDeletedFileSet, resolved } = input;
 
   if (typeof resolved === "string") {
     const normalizedResolved = normalizePath(resolved);
@@ -827,10 +713,7 @@ async function resolveDeletedSnapshotTarget(input: {
 }
 
 function edgeKey(edge: Edge): string {
-  const toKey =
-    edge.to.type === "file"
-      ? `file:${edge.to.path}`
-      : `external:${edge.to.name}`;
+  const toKey = edge.to.type === "file" ? `file:${edge.to.path}` : `external:${edge.to.name}`;
   const typeOnly = edge.typeOnly ? "1" : "0";
   return `${edge.from}|${toKey}|${edge.raw}|${typeOnly}`;
 }
@@ -858,32 +741,17 @@ async function collectDeletedImporterEdges(
   if (deletedFiles.length === 0) return [];
   const deletedFileSet = new Set(deletedFiles.map((file) => normalizePath(file)));
   const edges = new Map<string, Edge>();
-  const workspaceConfig = projectRoot
-    ? await loadWorkspaceConfig(projectRoot)
-    : undefined;
+  const workspaceConfig = projectRoot ? await loadWorkspaceConfig(projectRoot) : undefined;
   for (const mod of index.byFile.values()) {
     for (const imp of mod.imports) {
       for (const deletedFile of deletedFileSet) {
         const resolvedImportPath = getImportResolvedPath(imp);
-        const normalizedResolvedImportPath = resolvedImportPath
-          ? normalizePath(resolvedImportPath)
-          : undefined;
+        const normalizedResolvedImportPath = resolvedImportPath ? normalizePath(resolvedImportPath) : undefined;
         const resolvedAliasTarget =
           normalizedResolvedImportPath === deletedFile
             ? normalizedResolvedImportPath
-            : await resolveDeletedAliasImportTarget(
-                projectRoot,
-                workspaceConfig,
-                mod.file,
-                imp.from,
-                deletedFile,
-              );
-        const matchesDeletedFile = matchesDeletedImportTarget(
-          mod.file,
-          imp.from,
-          resolvedAliasTarget,
-          deletedFile,
-        );
+            : await resolveDeletedAliasImportTarget(projectRoot, workspaceConfig, mod.file, imp.from, deletedFile);
+        const matchesDeletedFile = matchesDeletedImportTarget(mod.file, imp.from, resolvedAliasTarget, deletedFile);
         if (!matchesDeletedFile) continue;
         const edge: Edge = {
           from: mod.file,
@@ -905,9 +773,7 @@ async function collectDeletedSnapshotEdges(
   const edges = new Map<string, Edge>();
   const deletedSnapshotFiles = Array.from(deletedSnapshots.keys());
   const deletedSnapshotFileSet = new Set(deletedSnapshotFiles);
-  const workspaceConfig = projectRoot
-    ? await loadWorkspaceConfig(projectRoot)
-    : undefined;
+  const workspaceConfig = projectRoot ? await loadWorkspaceConfig(projectRoot) : undefined;
   for (const [file, snapshot] of deletedSnapshots.entries()) {
     for (const imp of snapshot.module.imports) {
       const to = await resolveDeletedSnapshotTarget({
@@ -955,28 +821,18 @@ function rangeSnippet(source: string, range: Range): string {
   if (typeof startLine === "number") {
     const lines = source.split(/\r?\n/);
     const safeStart = Math.max(1, startLine);
-    const safeEnd =
-      typeof endLine === "number" ? Math.max(safeStart, endLine) : safeStart;
+    const safeEnd = typeof endLine === "number" ? Math.max(safeStart, endLine) : safeStart;
     return lines.slice(safeStart - 1, safeEnd).join("\n");
   }
   const startIndex = range.start.index;
   const endIndex = range.end.index;
-  if (
-    typeof startIndex === "number" &&
-    typeof endIndex === "number" &&
-    endIndex >= startIndex
-  ) {
+  if (typeof startIndex === "number" && typeof endIndex === "number" && endIndex >= startIndex) {
     return source.slice(startIndex, endIndex);
   }
   return "";
 }
 
-function collectDiffSnippets(
-  source: string,
-  range: Range,
-  changedLines: Set<number>,
-  contextLines: number,
-): string[] {
+function collectDiffSnippets(source: string, range: Range, changedLines: Set<number>, contextLines: number): string[] {
   const startLine = range.start.line ?? 0;
   const endLine = range.end.line ?? startLine;
   if (startLine <= 0) return [];
@@ -1030,47 +886,33 @@ function sameRange(left: Range, right: Range): boolean {
     }
     return true;
   }
-  return (
-    left.start.line === right.start.line &&
-    left.start.column === right.start.column
-  );
+  return left.start.line === right.start.line && left.start.column === right.start.column;
 }
 
-async function runWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  worker: (item: T) => Promise<R>,
-): Promise<R[]> {
+async function runWithConcurrency<T, R>(items: T[], limit: number, worker: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = [];
   let nextIndex = 0;
   const safeLimit = Math.max(1, limit);
-  const runners = Array.from(
-    { length: Math.min(safeLimit, items.length) },
-    async () => {
-      while (true) {
-        const current = nextIndex;
-        nextIndex += 1;
-        if (current >= items.length) break;
-        const item = items[current]!;
-        results[current] = await worker(item);
-      }
-    },
-  );
+  const runners = Array.from({ length: Math.min(safeLimit, items.length) }, async () => {
+    while (true) {
+      const current = nextIndex;
+      nextIndex += 1;
+      if (current >= items.length) break;
+      const item = items[current]!;
+      results[current] = await worker(item);
+    }
+  });
   await Promise.all(runners);
   return results;
 }
 
 // Review entry point: programmatic review report builder.
-export async function buildReviewReport(
-  projectRoot: string,
-  opts: ReviewOptions = {},
-): Promise<ReviewReport> {
+export async function buildReviewReport(projectRoot: string, opts: ReviewOptions = {}): Promise<ReviewReport> {
   const appliedOptions = applyReviewPresetOptions(opts);
   const reviewReport = appliedOptions.report;
   const reviewTimings = reviewReport?.timings;
   const totalStart = performance.now();
-  const normalizeFile = (file: string, label: string) =>
-    assertFilePathWithinRoot(projectRoot, file, label);
+  const normalizeFile = (file: string, label: string) => assertFilePathWithinRoot(projectRoot, file, label);
 
   const changedFiles = new Set<string>();
   const explicitFiles = new Set<string>();
@@ -1103,8 +945,7 @@ export async function buildReviewReport(
   const diffStart = performance.now();
   const diffText =
     appliedOptions.diffText ??
-    ((appliedOptions.gitBase || appliedOptions.changedSince) &&
-    changedFiles.size > 0
+    ((appliedOptions.gitBase || appliedOptions.changedSince) && changedFiles.size > 0
       ? await getUnifiedDiff(projectRoot, {
           base: appliedOptions.gitBase,
           head: appliedOptions.gitHead,
@@ -1126,10 +967,7 @@ export async function buildReviewReport(
         path: absPath,
         ...(fileChange.oldPath
           ? {
-              oldPath: normalizeFile(
-                fileChange.oldPath,
-                "Review old diff file",
-              ),
+              oldPath: normalizeFile(fileChange.oldPath, "Review old diff file"),
             }
           : {}),
       };
@@ -1167,12 +1005,9 @@ export async function buildReviewReport(
       graphDelta: [],
       candidateTests: [],
     };
-    if (appliedOptions.gitBase !== undefined)
-      report.base = appliedOptions.gitBase;
-    if (appliedOptions.gitHead !== undefined)
-      report.head = appliedOptions.gitHead;
-    if (reviewTimings)
-      reviewTimings.totalMs = Math.round(performance.now() - totalStart);
+    if (appliedOptions.gitBase !== undefined) report.base = appliedOptions.gitBase;
+    if (appliedOptions.gitHead !== undefined) report.head = appliedOptions.gitHead;
+    if (reviewTimings) reviewTimings.totalMs = Math.round(performance.now() - totalStart);
     return report;
   }
 
@@ -1182,23 +1017,18 @@ export async function buildReviewReport(
     symbolMappingParseFailures: [],
   };
   const fastGraphRequested = appliedOptions.graph?.fast ?? false;
-  const graphOptions = appliedOptions.graph
-    ? { ...appliedOptions.graph, fast: fastGraphRequested }
-    : { fast: false };
+  const graphOptions = appliedOptions.graph ? { ...appliedOptions.graph, fast: fastGraphRequested } : { fast: false };
   const includeSymbolDetails = appliedOptions.includeSymbolDetails ?? false;
   const diffContextLines =
-    typeof appliedOptions.diffContextLines === "number" &&
-    appliedOptions.diffContextLines >= 0
+    typeof appliedOptions.diffContextLines === "number" && appliedOptions.diffContextLines >= 0
       ? appliedOptions.diffContextLines
       : 2;
   const maxCallsites =
-    typeof appliedOptions.maxCallsites === "number" &&
-    appliedOptions.maxCallsites >= 0
+    typeof appliedOptions.maxCallsites === "number" && appliedOptions.maxCallsites >= 0
       ? appliedOptions.maxCallsites
       : 5;
   const referenceConcurrency =
-    typeof appliedOptions.referenceConcurrency === "number" &&
-    appliedOptions.referenceConcurrency > 0
+    typeof appliedOptions.referenceConcurrency === "number" && appliedOptions.referenceConcurrency > 0
       ? appliedOptions.referenceConcurrency
       : 8;
   const sourceCache = new Map<string, string>();
@@ -1216,33 +1046,20 @@ export async function buildReviewReport(
       exists: await fileExists(file),
     })),
   );
-  const existenceByFile = new Map(
-    existenceChecks.map((entry) => [entry.file, entry.exists] as const),
-  );
-  const filesToIndex = existenceChecks
-    .filter((entry) => entry.exists)
-    .map((entry) => entry.file);
-  const hasUnavailableChangedFiles = existenceChecks.some(
-    (entry) => !entry.exists,
-  );
-  const deletedFiles = changedFileList.filter(
-    (file) => diffKindsByFile.get(file) === "deleted",
-  );
-  const deletedSnapshots = await buildDeletedFileSnapshots(
-    projectRoot,
-    deletedFiles,
-    {
-      ...(appliedOptions.gitBase ?? appliedOptions.changedSince
-        ? { revision: appliedOptions.gitBase ?? appliedOptions.changedSince }
-        : {}),
-      diffChangesByFile,
-      graphOptions,
-    },
-  );
+  const existenceByFile = new Map(existenceChecks.map((entry) => [entry.file, entry.exists] as const));
+  const filesToIndex = existenceChecks.filter((entry) => entry.exists).map((entry) => entry.file);
+  const hasUnavailableChangedFiles = existenceChecks.some((entry) => !entry.exists);
+  const deletedFiles = changedFileList.filter((file) => diffKindsByFile.get(file) === "deleted");
+  const deletedSnapshots = await buildDeletedFileSnapshots(projectRoot, deletedFiles, {
+    ...((appliedOptions.gitBase ?? appliedOptions.changedSince)
+      ? { revision: appliedOptions.gitBase ?? appliedOptions.changedSince }
+      : {}),
+    diffChangesByFile,
+    graphOptions,
+  });
 
   const indexStart = performance.now();
-  const indexReport =
-    reviewReport?.indexReport ?? (reviewReport ? { timings: {} } : undefined);
+  const indexReport = reviewReport?.indexReport ?? (reviewReport ? { timings: {} } : undefined);
   if (reviewReport && !reviewReport.indexReport && indexReport) {
     reviewReport.indexReport = indexReport;
   }
@@ -1265,9 +1082,7 @@ export async function buildReviewReport(
     mod: index.byFile.get(file),
     hunks: diffHunksByFile.get(file),
   }));
-  const includeDiffContext =
-    appliedOptions.includeDiffContext ??
-    (includeSymbolDetails && diffHunksByFile.size > 0);
+  const includeDiffContext = appliedOptions.includeDiffContext ?? (includeSymbolDetails && diffHunksByFile.size > 0);
 
   const fileEntries = await Promise.all(
     filesWithModules.map(async ({ file, mod, hunks }) => {
@@ -1294,12 +1109,9 @@ export async function buildReviewReport(
           parseFailed: false,
         };
       }
-      const { changedSymbols, changedLines, parseFailed } =
-        await locateChangedSymbolsWithLines(index, file, hunks);
+      const { changedSymbols, changedLines, parseFailed } = await locateChangedSymbolsWithLines(index, file, hunks);
       if (parseFailed) {
-        diagnostics.symbolMappingParseFailures.push(
-          relativePath(projectRoot, file),
-        );
+        diagnostics.symbolMappingParseFailures.push(relativePath(projectRoot, file));
       }
       const uniqueSymbols = new Map<string, SymbolDef>();
       for (const symbol of changedSymbols) {
@@ -1318,12 +1130,7 @@ export async function buildReviewReport(
         hunks,
         locals,
         handles,
-        diffLinesByHandle: await mapChangedLinesToSymbols(
-          index,
-          file,
-          hunks,
-          changedLines,
-        ),
+        diffLinesByHandle: await mapChangedLinesToSymbols(index, file, hunks, changedLines),
         parseFailed,
       };
     }),
@@ -1333,30 +1140,21 @@ export async function buildReviewReport(
   const referencesStart = performance.now();
   const referenceResults =
     includeSymbolDetails && maxCallsites > 0
-      ? await runWithConcurrency(
-          defsToResolve,
-          referenceConcurrency,
-          async (def) => {
-            const refs = await findReferences(
-              index,
-              { def },
-              {
-                maxReferences: maxCallsites + 1,
-              },
-            );
-            return { def, refs };
-          },
-        )
+      ? await runWithConcurrency(defsToResolve, referenceConcurrency, async (def) => {
+          const refs = await findReferences(
+            index,
+            { def },
+            {
+              maxReferences: maxCallsites + 1,
+            },
+          );
+          return { def, refs };
+        })
       : [];
   if (reviewTimings) {
-    reviewTimings.referencesMs = Math.round(
-      performance.now() - referencesStart,
-    );
+    reviewTimings.referencesMs = Math.round(performance.now() - referencesStart);
   }
-  const referencesByHandle = new Map<
-    string,
-    { def: SymbolDef; refs: Awaited<ReturnType<typeof findReferences>> }
-  >();
+  const referencesByHandle = new Map<string, { def: SymbolDef; refs: Awaited<ReturnType<typeof findReferences>> }>();
   for (const entry of referenceResults) {
     referencesByHandle.set(symbolId(entry.def), entry);
   }
@@ -1390,8 +1188,7 @@ export async function buildReviewReport(
       const refs = entry?.refs;
       if (refs?.status === "ok") {
         const candidates = refs.references.filter(
-          (ref) =>
-            !(ref.file === local.file && sameRange(ref.range, local.range)),
+          (ref) => !(ref.file === local.file && sameRange(ref.range, local.range)),
         );
         const limited = candidates.slice(0, maxCallsites).map((ref) => ({
           file: relativePath(projectRoot, ref.file),
@@ -1410,101 +1207,87 @@ export async function buildReviewReport(
   };
 
   const summariesWithHandles = await Promise.all(
-    fileEntries.map(
-      async ({ file, mod, hunks, locals, handles, diffLinesByHandle }) => {
-        const deletedSnapshot = deletedSnapshots.get(file);
-        if (!mod && deletedSnapshot) {
-          const deletedLocals = sortSymbols(deletedSnapshot.module.locals);
-          const localSymbols: ReviewSymbolSummary[] = includeSymbolDetails
-            ? deletedLocals.map((local) => {
-                const handle = symbolId(local);
-                const definitionSnippet = rangeSnippet(
-                  deletedSnapshot.source,
-                  local.range,
-                );
-                return {
-                  name: local.localName,
-                  kind: local.kind,
-                  handle,
-                  exported: isExported(deletedSnapshot.module, handle),
-                  ...(definitionSnippet ? { definitionSnippet } : {}),
-                };
-              })
-            : deletedLocals.map((local) => {
-                const handle = symbolId(local);
-                return {
-                  name: local.localName,
-                  kind: local.kind,
-                  handle,
-                  exported: isExported(deletedSnapshot.module, handle),
-                };
-              });
-          const exportSymbols = buildExportSummaries(file, deletedSnapshot.module);
-          const symbols = [...localSymbols, ...exportSymbols];
-          const handles = [
-            ...deletedLocals.map((local) => symbolId(local)),
-            ...exportSymbols.map((symbol) => symbol.handle),
-          ];
-          return {
-            summary: {
-              file: relativePath(projectRoot, file),
-              status: "deleted",
-              symbols,
-            } satisfies ReviewFileSummary,
-            handles,
-          };
-        }
-        if (!mod) {
-          const fileExistsOnDisk = existenceByFile.get(file) ?? false;
-          const isDeletedByDiff = diffKindsByFile.get(file) === "deleted";
-          const isMissingExplicitInput =
-            !fileExistsOnDisk && explicitFiles.has(file) && !isDeletedByDiff;
-          if (isMissingExplicitInput) {
-            diagnostics.missingFiles.push(relativePath(projectRoot, file));
-          }
-          return {
-            summary: {
-              file: relativePath(projectRoot, file),
-              status: isMissingExplicitInput ? "missing" : "deleted",
-              symbols: [],
-            } satisfies ReviewFileSummary,
-            handles: [] as string[],
-          };
-        }
+    fileEntries.map(async ({ file, mod, hunks, locals, handles, diffLinesByHandle }) => {
+      const deletedSnapshot = deletedSnapshots.get(file);
+      if (!mod && deletedSnapshot) {
+        const deletedLocals = sortSymbols(deletedSnapshot.module.locals);
         const localSymbols: ReviewSymbolSummary[] = includeSymbolDetails
-          ? await Promise.all(
-              locals.map((local) =>
-                buildSymbolSummary(local, mod, diffLinesByHandle),
-              ),
-            )
-          : locals.map((local) => {
+          ? deletedLocals.map((local) => {
+              const handle = symbolId(local);
+              const definitionSnippet = rangeSnippet(deletedSnapshot.source, local.range);
+              return {
+                name: local.localName,
+                kind: local.kind,
+                handle,
+                exported: isExported(deletedSnapshot.module, handle),
+                ...(definitionSnippet ? { definitionSnippet } : {}),
+              };
+            })
+          : deletedLocals.map((local) => {
               const handle = symbolId(local);
               return {
                 name: local.localName,
                 kind: local.kind,
                 handle,
-                exported: isExported(mod, handle),
+                exported: isExported(deletedSnapshot.module, handle),
               };
             });
-        const exportSymbols = shouldIncludeExportSummaries(mod, hunks, locals)
-          ? buildExportSummaries(file, mod)
-          : [];
+        const exportSymbols = buildExportSummaries(file, deletedSnapshot.module);
         const symbols = [...localSymbols, ...exportSymbols];
+        const handles = [
+          ...deletedLocals.map((local) => symbolId(local)),
+          ...exportSymbols.map((symbol) => symbol.handle),
+        ];
         return {
           summary: {
             file: relativePath(projectRoot, file),
-            status: "updated",
+            status: "deleted",
             symbols,
           } satisfies ReviewFileSummary,
-          handles: [...handles, ...exportSymbols.map((symbol) => symbol.handle)],
+          handles,
         };
-      },
-    ),
+      }
+      if (!mod) {
+        const fileExistsOnDisk = existenceByFile.get(file) ?? false;
+        const isDeletedByDiff = diffKindsByFile.get(file) === "deleted";
+        const isMissingExplicitInput = !fileExistsOnDisk && explicitFiles.has(file) && !isDeletedByDiff;
+        if (isMissingExplicitInput) {
+          diagnostics.missingFiles.push(relativePath(projectRoot, file));
+        }
+        return {
+          summary: {
+            file: relativePath(projectRoot, file),
+            status: isMissingExplicitInput ? "missing" : "deleted",
+            symbols: [],
+          } satisfies ReviewFileSummary,
+          handles: [] as string[],
+        };
+      }
+      const localSymbols: ReviewSymbolSummary[] = includeSymbolDetails
+        ? await Promise.all(locals.map((local) => buildSymbolSummary(local, mod, diffLinesByHandle)))
+        : locals.map((local) => {
+            const handle = symbolId(local);
+            return {
+              name: local.localName,
+              kind: local.kind,
+              handle,
+              exported: isExported(mod, handle),
+            };
+          });
+      const exportSymbols = shouldIncludeExportSummaries(mod, hunks, locals) ? buildExportSummaries(file, mod) : [];
+      const symbols = [...localSymbols, ...exportSymbols];
+      return {
+        summary: {
+          file: relativePath(projectRoot, file),
+          status: "updated",
+          symbols,
+        } satisfies ReviewFileSummary,
+        handles: [...handles, ...exportSymbols.map((symbol) => symbol.handle)],
+      };
+    }),
   );
   const summaries = summariesWithHandles.map((entry) => entry.summary);
-  const changedSymbolIds = summariesWithHandles.flatMap(
-    (entry) => entry.handles,
-  );
+  const changedSymbolIds = summariesWithHandles.flatMap((entry) => entry.handles);
   const exportedChangedCount = summaries.reduce((count, summary) => {
     const exportedInFile = summary.symbols.filter((symbol) => symbol.exported);
     return count + exportedInFile.length;
@@ -1515,18 +1298,11 @@ export async function buildReviewReport(
     const relativeEdge = toRelativeEdge(projectRoot, edge);
     graphEdges.set(edgeKey(relativeEdge), relativeEdge);
   }
-  for (const edge of await collectDeletedImporterEdges(
-    index,
-    deletedFiles,
-    projectRoot,
-  )) {
+  for (const edge of await collectDeletedImporterEdges(index, deletedFiles, projectRoot)) {
     const relativeEdge = toRelativeEdge(projectRoot, edge);
     graphEdges.set(edgeKey(relativeEdge), relativeEdge);
   }
-  for (const edge of await collectDeletedSnapshotEdges(
-    deletedSnapshots,
-    projectRoot,
-  )) {
+  for (const edge of await collectDeletedSnapshotEdges(deletedSnapshots, projectRoot)) {
     const relativeEdge = toRelativeEdge(projectRoot, edge);
     graphEdges.set(edgeKey(relativeEdge), relativeEdge);
   }
@@ -1536,25 +1312,17 @@ export async function buildReviewReport(
   const candidateTests = mergeCandidateTestEntries(
     listCandidateTestFiles(index, changedFileList, changedSymbolIds, {
       maxCandidates: appliedOptions.maxCandidates ?? 50,
-      ...(appliedOptions.testPatterns
-        ? { testPatterns: appliedOptions.testPatterns }
-        : {}),
+      ...(appliedOptions.testPatterns ? { testPatterns: appliedOptions.testPatterns } : {}),
       projectRoot,
     }),
-    await listDirectDeletedFileTestImporters(
-      index,
-      deletedFiles,
-      appliedOptions.testPatterns,
-      projectRoot,
-    ),
+    await listDirectDeletedFileTestImporters(index, deletedFiles, appliedOptions.testPatterns, projectRoot),
   )
     .map((candidate) => ({
       ...candidate,
       file: relativePath(projectRoot, candidate.file),
     }))
     .sort((left, right) => {
-      const confidenceCompare =
-        confidenceRank(right.confidence) - confidenceRank(left.confidence);
+      const confidenceCompare = confidenceRank(right.confidence) - confidenceRank(left.confidence);
       if (confidenceCompare !== 0) return confidenceCompare;
       const fileCompare = comparePaths(left.file, right.file);
       if (fileCompare !== 0) return fileCompare;
@@ -1565,8 +1333,7 @@ export async function buildReviewReport(
     reviewTimings.candidatesMs = Math.round(performance.now() - candidateStart);
   }
 
-  const projectFiles =
-    index.projectFiles ?? (await discoverProjectFiles(projectRoot));
+  const projectFiles = index.projectFiles ?? (await discoverProjectFiles(projectRoot));
   const report: ReviewReport = {
     schemaVersion: REVIEW_SCHEMA_VERSION,
     status: "ok",
@@ -1596,10 +1363,8 @@ export async function buildReviewReport(
     candidateTests,
     ...(hasDiagnostics(diagnostics) ? { diagnostics } : {}),
   };
-  if (appliedOptions.gitBase !== undefined)
-    report.base = appliedOptions.gitBase;
+  if (appliedOptions.gitBase !== undefined) report.base = appliedOptions.gitBase;
   report.head = appliedOptions.gitHead ?? "HEAD";
-  if (reviewTimings)
-    reviewTimings.totalMs = Math.round(performance.now() - totalStart);
+  if (reviewTimings) reviewTimings.totalMs = Math.round(performance.now() - totalStart);
   return report;
 }

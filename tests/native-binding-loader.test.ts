@@ -2,17 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import {
-  findLocalNativeBinary,
-  loadNativeBinding,
-} from "../src/native/bindingLoader.js";
+import { findLocalNativeBinary, loadNativeBinding } from "../src/native/bindingLoader.js";
 
 const tempDirs: string[] = [];
 
 afterAll(async () => {
-  await Promise.all(
-    tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
+  await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
 async function makeTempDir(): Promise<string> {
@@ -26,9 +21,7 @@ describe("native binding loader", () => {
     const dir = await makeTempDir();
     await fs.writeFile(path.join(dir, "index.win32-x64-msvc.node"), "");
 
-    expect(findLocalNativeBinary(dir)?.replace(/\\/g, "/")).toMatch(
-      /index\.win32-x64-msvc\.node$/,
-    );
+    expect(findLocalNativeBinary(dir)?.replace(/\\/g, "/")).toMatch(/index\.win32-x64-msvc\.node$/);
   });
 
   it("prefers a local workspace binary over the package entrypoint", async () => {

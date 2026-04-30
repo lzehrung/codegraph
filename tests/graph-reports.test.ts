@@ -1,17 +1,9 @@
 import { describe, it, expect } from "vitest";
-import {
-  getUnresolvedImports,
-  getHotspots,
-  getApiSurface,
-  SymbolKind,
-} from "../src/index.js";
+import { getUnresolvedImports, getHotspots, getApiSurface, SymbolKind } from "../src/index.js";
 
 describe("graph reports", () => {
   const root = "/root";
-  const nodes = new Set([
-    `${root}/a.ts`,
-    `${root}/b.ts`,
-  ]);
+  const nodes = new Set([`${root}/a.ts`, `${root}/b.ts`]);
   const edges = [
     { from: `${root}/a.ts`, to: { type: "file" as const, path: `${root}/b.ts` }, raw: "./b" },
     { from: `${root}/a.ts`, to: { type: "external" as const, name: "react" }, raw: "react" },
@@ -35,12 +27,7 @@ describe("graph reports", () => {
 
   it("should limit and filter hotspots by include roots", () => {
     const scopedGraph = {
-      nodes: new Set([
-        `${root}/src/a.ts`,
-        `${root}/src/b.ts`,
-        `${root}/src/c.ts`,
-        `${root}/tests/spec.ts`,
-      ]),
+      nodes: new Set([`${root}/src/a.ts`, `${root}/src/b.ts`, `${root}/src/c.ts`, `${root}/tests/spec.ts`]),
       edges: [
         {
           from: `${root}/src/a.ts`,
@@ -114,9 +101,16 @@ describe("graph reports", () => {
           `${root}/lib.ts`,
           {
             file: `${root}/lib.ts`,
-            exports: [{ type: "local", exportedAs: "base", target: { localName: "base", kind: SymbolKind.Variable, file: `${root}/lib.ts`, range: {} } }],
-            imports: [], locals: []
-          }
+            exports: [
+              {
+                type: "local",
+                exportedAs: "base",
+                target: { localName: "base", kind: SymbolKind.Variable, file: `${root}/lib.ts`, range: {} },
+              },
+            ],
+            imports: [],
+            locals: [],
+          },
         ],
         [
           `${root}/barrel.ts`,
@@ -124,17 +118,18 @@ describe("graph reports", () => {
             file: `${root}/barrel.ts`,
             exports: [
               { type: "reexport", exportedAs: "aliased", fromModule: `${root}/lib.ts`, sourceSpecifier: "base" },
-              { type: "exportStar", fromModule: `${root}/lib.ts` }
+              { type: "exportStar", fromModule: `${root}/lib.ts` },
             ],
-            imports: [], locals: []
-          }
-        ]
+            imports: [],
+            locals: [],
+          },
+        ],
       ]),
     };
     const api = getApiSurface(mockIndex);
-    const barrel = api.find(a => a.file === `${root}/barrel.ts`);
+    const barrel = api.find((a) => a.file === `${root}/barrel.ts`);
     expect(barrel).toBeDefined();
-    expect(barrel!.exports.some(e => e.exportedAs === "aliased" && e.kind === "reexport")).toBe(true);
-    expect(barrel!.exports.some(e => e.kind === "exportStar")).toBe(true);
+    expect(barrel!.exports.some((e) => e.exportedAs === "aliased" && e.kind === "reexport")).toBe(true);
+    expect(barrel!.exports.some((e) => e.kind === "exportStar")).toBe(true);
   });
 });

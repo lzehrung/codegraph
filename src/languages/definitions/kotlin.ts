@@ -96,23 +96,14 @@ export const KOTLIN_DEF: LanguageDefinition = {
     `,
   },
   nodeTypes: {
-    identifier: [
-      "identifier",
-      "interpolated_identifier",
-      "simple_identifier",
-      "type_identifier",
-    ],
+    identifier: ["identifier", "interpolated_identifier", "simple_identifier", "type_identifier"],
     propertyIdentifier: ["simple_identifier", "type_identifier"],
     memberExpression: "navigation_expression",
   },
   classifyDefinition: (node) => {
     const parent = node.parent;
     if (!parent) return "variable";
-    if (
-      parent.type === "class_declaration" ||
-      parent.type === "object_declaration"
-    )
-      return "class";
+    if (parent.type === "class_declaration" || parent.type === "object_declaration") return "class";
     if (parent.type === "function_declaration") return "function";
     if (parent.type === "type_alias") return "type";
     return "variable";
@@ -120,36 +111,19 @@ export const KOTLIN_DEF: LanguageDefinition = {
   isDeclarationName: (node) => {
     const parent = node.parent;
     if (!parent) return false;
-    if (parent.type === "class_declaration" && node.type === "type_identifier")
-      return true;
-    if (parent.type === "object_declaration" && node.type === "type_identifier")
-      return true;
-    if (
-      parent.type === "function_declaration" &&
-      node.type === "simple_identifier"
-    )
-      return true;
-    if (parent.type === "type_alias" && node.type === "type_identifier")
-      return true;
-    if (
-      parent.type === "variable_declaration" &&
-      node.type === "simple_identifier"
-    )
-      return true;
-    if (parent.type === "parameter" && node.type === "simple_identifier")
-      return true;
-    if (parent.type === "class_parameter" && node.type === "simple_identifier")
-      return true;
-    if (parent.type === "enum_entry" && node.type === "simple_identifier")
-      return true;
-    if (parent.type === "type_parameter" && node.type === "type_identifier")
-      return true;
+    if (parent.type === "class_declaration" && node.type === "type_identifier") return true;
+    if (parent.type === "object_declaration" && node.type === "type_identifier") return true;
+    if (parent.type === "function_declaration" && node.type === "simple_identifier") return true;
+    if (parent.type === "type_alias" && node.type === "type_identifier") return true;
+    if (parent.type === "variable_declaration" && node.type === "simple_identifier") return true;
+    if (parent.type === "parameter" && node.type === "simple_identifier") return true;
+    if (parent.type === "class_parameter" && node.type === "simple_identifier") return true;
+    if (parent.type === "enum_entry" && node.type === "simple_identifier") return true;
+    if (parent.type === "type_parameter" && node.type === "type_identifier") return true;
     return false;
   },
   createsFunctionScope: (node) =>
-    node.type === "function_declaration" ||
-    node.type === "anonymous_function" ||
-    node.type === "lambda_literal",
+    node.type === "function_declaration" || node.type === "anonymous_function" || node.type === "lambda_literal",
   createsBlockScope: (node) =>
     node.type === "function_body" ||
     node.type === "class_body" ||
@@ -160,9 +134,7 @@ export const KOTLIN_DEF: LanguageDefinition = {
   native: {
     normalizeQuery: normalizeKotlinNativeQuery,
     authoritativeKinds: ["imports", "importBindings", "exports", "locals"],
-    notes: [
-      "normalizes kotlin import and identifier node names for the native grammar",
-    ],
+    notes: ["normalizes kotlin import and identifier node names for the native grammar"],
   },
 };
 registerLanguage(KOTLIN_DEF);

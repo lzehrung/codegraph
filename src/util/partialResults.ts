@@ -74,10 +74,7 @@ function messageFromReason(reason: unknown): string {
 /**
  * Create a successful partial result
  */
-export function success<T>(
-  data: T,
-  metadata?: PartialResult<T>["metadata"],
-): PartialResult<T> {
+export function success<T>(data: T, metadata?: PartialResult<T>["metadata"]): PartialResult<T> {
   const result: PartialResult<T> = {
     status: "complete",
     data,
@@ -93,11 +90,7 @@ export function success<T>(
 /**
  * Create a partial result with some failures
  */
-export function partial<T>(
-  data: T,
-  errors: PartialError[],
-  metadata?: PartialResult<T>["metadata"],
-): PartialResult<T> {
+export function partial<T>(data: T, errors: PartialError[], metadata?: PartialResult<T>["metadata"]): PartialResult<T> {
   const attempted = metadata?.attempted ?? 1;
   const failed = metadata?.failed ?? errors.length;
   const succeeded = attempted - failed;
@@ -119,11 +112,7 @@ export function partial<T>(
 /**
  * Create a failed result
  */
-export function failed<T>(
-  emptyData: T,
-  error: Error | string,
-  target: string = "operation",
-): PartialResult<T> {
+export function failed<T>(emptyData: T, error: Error | string, target: string = "operation"): PartialResult<T> {
   const message = error instanceof Error ? error.message : error;
   const stack = error instanceof Error ? error.stack : undefined;
 
@@ -260,10 +249,7 @@ export async function withPartialResults<T, I>(
 /**
  * Combine multiple partial results
  */
-export function combinePartialResults<T>(
-  results: PartialResult<T>[],
-  combine: (data: T[]) => T,
-): PartialResult<T> {
+export function combinePartialResults<T>(results: PartialResult<T>[], combine: (data: T[]) => T): PartialResult<T> {
   const allErrors: PartialError[] = [];
   const allData: T[] = [];
   let totalAttempted = 0;
@@ -282,9 +268,15 @@ export function combinePartialResults<T>(
 
   const combined = combine(allData);
   const coverage = totalAttempted > 0 ? totalSucceeded / totalAttempted : 0;
+  let status: PartialResult<unknown>["status"] = "failed";
+  if (coverage === 1) {
+    status = "complete";
+  } else if (coverage > 0) {
+    status = "partial";
+  }
 
   return {
-    status: coverage === 1 ? "complete" : coverage > 0 ? "partial" : "failed",
+    status,
     data: combined,
     errors: allErrors,
     coverage,
@@ -299,10 +291,7 @@ export function combinePartialResults<T>(
 /**
  * Map a partial result to a new type
  */
-export function mapPartialResult<T, U>(
-  result: PartialResult<T>,
-  mapper: (data: T) => U,
-): PartialResult<U> {
+export function mapPartialResult<T, U>(result: PartialResult<T>, mapper: (data: T) => U): PartialResult<U> {
   return {
     ...result,
     data: mapper(result.data),
@@ -312,10 +301,7 @@ export function mapPartialResult<T, U>(
 /**
  * Filter errors by severity
  */
-export function filterErrorsBySeverity(
-  result: PartialResult<unknown>,
-  severity: "error" | "warning",
-): PartialError[] {
+export function filterErrorsBySeverity(result: PartialResult<unknown>, severity: "error" | "warning"): PartialError[] {
   return result.errors.filter((e) => e.severity === severity);
 }
 
@@ -357,12 +343,12 @@ function getResultCounts<T>(result: PartialResult<T>): {
 
   const attempted = 1;
   const coverage = Math.max(0, Math.min(1, result.coverage));
-  const succeeded =
-    result.status === "complete"
-      ? 1
-      : result.status === "failed"
-        ? 0
-        : coverage;
+  let succeeded = coverage;
+  if (result.status === "complete") {
+    succeeded = 1;
+  } else if (result.status === "failed") {
+    succeeded = 0;
+  }
   const failed = attempted - succeeded;
 
   return { attempted, succeeded, failed };

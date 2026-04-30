@@ -320,22 +320,22 @@ function runSwitch(val) {
       source,
       filePath: "switch.js",
       minTokens: 1,
-      maxTokens: 10, 
+      maxTokens: 10,
       tokenizer: tokenize,
     });
 
     const switchChunks = chunks.filter((c) => c.type === "function" && c.name === "runSwitch");
     // Should be split
     expect(switchChunks.length).toBeGreaterThan(1);
-    
+
     // Verify we didn't get weird chunks or lost code
-    const combined = switchChunks.map(c => c.text).join("\\n");
+    const combined = switchChunks.map((c) => c.text).join("\\n");
     expect(combined).toContain("case 1:");
     expect(combined).toContain("default:");
   });
 
   it("captures large object literals as data blocks", () => {
-     const source = `
+    const source = `
 const config = {
   endpoint: "https://api.example.com",
   retries: 5,
@@ -360,15 +360,15 @@ const config = {
     // After update, we expect 'data' or 'object'
     const dataChunk = chunks.find((c) => c.type === "data" || c.type === "object");
     if (dataChunk) {
-        expect(dataChunk).toBeDefined();
-        expect(dataChunk?.text).toContain("endpoint:");
+      expect(dataChunk).toBeDefined();
+      expect(dataChunk?.text).toContain("endpoint:");
     } else {
-        // If the test runs before the implementation, this might fail or we might accept 'module_var'
-        // But since we are adding tests for new behavior:
-        // We will assert loosely for now or expect failure until impl is done.
-        // Let's make it strict to verify the new feature.
-        const miscOrVar = chunks.find(c => c.type === 'module_var' || c.type === 'misc');
-        expect(miscOrVar).toBeDefined(); 
+      // If the test runs before the implementation, this might fail or we might accept 'module_var'
+      // But since we are adding tests for new behavior:
+      // We will assert loosely for now or expect failure until impl is done.
+      // Let's make it strict to verify the new feature.
+      const miscOrVar = chunks.find((c) => c.type === "module_var" || c.type === "misc");
+      expect(miscOrVar).toBeDefined();
     }
   });
 
@@ -394,12 +394,12 @@ function processItems(items) {
       maxTokens: 8, // Force split around the loop
       tokenizer: tokenize,
     });
-    
-    const fnChunks = chunks.filter(c => c.type === "function");
+
+    const fnChunks = chunks.filter((c) => c.type === "function");
     expect(fnChunks.length).toBeGreaterThan(1);
-    
+
     // One of the chunks should ideally contain the loop body or the loop itself
-    const loopChunk = fnChunks.find(c => c.text.includes("for (const item of items)"));
+    const loopChunk = fnChunks.find((c) => c.text.includes("for (const item of items)"));
     expect(loopChunk).toBeDefined();
   });
 });

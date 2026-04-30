@@ -18,18 +18,14 @@ index 1234567..abcdef0 100644
  }
 `;
 
-      const report = await analyzeImpactFromDiff(
-        process.cwd() + "/tests/samples/typescript",
-        index,
-        {
-          provider: "raw",
-          diffText
-        }
-      );
+      const report = await analyzeImpactFromDiff(process.cwd() + "/tests/samples/typescript", index, {
+        provider: "raw",
+        diffText,
+      });
 
       // Check that no impact items have refs field
       for (const item of report.impacted) {
-        if ('refs' in item) {
+        if ("refs" in item) {
           expect(item.refs).toBeUndefined();
         }
       }
@@ -51,20 +47,16 @@ index 1234567..abcdef0 100644
  }
 `;
 
-      const report = await analyzeImpactFromDiff(
-        process.cwd() + "/tests/samples/typescript",
-        index,
-        {
-          provider: "raw",
-          diffText,
-          refContext: "line",
-          refContextLines: 1
-        }
-      );
+      const report = await analyzeImpactFromDiff(process.cwd() + "/tests/samples/typescript", index, {
+        provider: "raw",
+        diffText,
+        refContext: "line",
+        refContextLines: 1,
+      });
 
       // Find items with refs (only present in regular reports, not compact)
       const itemsWithRefs = report.impacted.filter((item) => {
-        return 'refs' in item && Boolean(item.refs) && !!item.refs?.length;
+        return "refs" in item && Boolean(item.refs) && !!item.refs?.length;
       }) as Array<{ refs: NonNullable<any> }>;
       if (itemsWithRefs.length > 0) {
         for (const item of itemsWithRefs) {
@@ -96,19 +88,15 @@ index 1234567..abcdef0 100644
  }
 `;
 
-      const report = await analyzeImpactFromDiff(
-        process.cwd() + "/tests/samples/typescript",
-        index,
-        {
-          provider: "raw",
-          diffText,
-          refContext: "line",
-          refContextLines: 2 // More context lines
-        }
-      );
+      const report = await analyzeImpactFromDiff(process.cwd() + "/tests/samples/typescript", index, {
+        provider: "raw",
+        diffText,
+        refContext: "line",
+        refContextLines: 2, // More context lines
+      });
 
       const itemsWithRefs = report.impacted.filter((item) => {
-        return 'refs' in item && Boolean(item.refs) && !!item.refs?.length;
+        return "refs" in item && Boolean(item.refs) && !!item.refs?.length;
       }) as Array<{ refs: NonNullable<any> }>;
       if (itemsWithRefs.length > 0) {
         for (const item of itemsWithRefs) {
@@ -137,19 +125,15 @@ index 1234567..abcdef0 100644
  }
 `;
 
-      const report = await analyzeImpactFromDiff(
-        process.cwd() + "/tests/samples/typescript",
-        index,
-        {
-          provider: "raw",
-          diffText,
-          refContext: "block",
-          refBlockMaxLines: 10
-        }
-      );
+      const report = await analyzeImpactFromDiff(process.cwd() + "/tests/samples/typescript", index, {
+        provider: "raw",
+        diffText,
+        refContext: "block",
+        refBlockMaxLines: 10,
+      });
 
       const itemsWithRefs = report.impacted.filter((item) => {
-        return 'refs' in item && Boolean(item.refs) && !!item.refs?.length;
+        return "refs" in item && Boolean(item.refs) && !!item.refs?.length;
       }) as Array<{ refs: NonNullable<any> }>;
       if (itemsWithRefs.length > 0) {
         for (const item of itemsWithRefs) {
@@ -183,19 +167,15 @@ index 1234567..abcdef0 100644
  }
 `;
 
-      const report = await analyzeImpactFromDiff(
-        process.cwd() + "/tests/samples/typescript",
-        index,
-        {
-          provider: "raw",
-          diffText,
-          refContext: "block",
-          refBlockMaxLines: 5 // Small limit
-        }
-      );
+      const report = await analyzeImpactFromDiff(process.cwd() + "/tests/samples/typescript", index, {
+        provider: "raw",
+        diffText,
+        refContext: "block",
+        refBlockMaxLines: 5, // Small limit
+      });
 
       const itemsWithRefs = report.impacted.filter((item) => {
-        return 'refs' in item && Boolean(item.refs) && !!item.refs?.length;
+        return "refs" in item && Boolean(item.refs) && !!item.refs?.length;
       }) as Array<{ refs: NonNullable<any> }>;
       if (itemsWithRefs.length > 0) {
         for (const item of itemsWithRefs) {
@@ -223,19 +203,15 @@ index 1234567..abcdef0 100644
  }
 `;
 
-      const report = await analyzeImpactFromDiff(
-        process.cwd() + "/tests/samples/typescript",
-        index,
-        {
-          provider: "raw",
-          diffText,
-          refContext: "line",
-          maxRefs: 2 // Limit refs
-        }
-      );
+      const report = await analyzeImpactFromDiff(process.cwd() + "/tests/samples/typescript", index, {
+        provider: "raw",
+        diffText,
+        refContext: "line",
+        maxRefs: 2, // Limit refs
+      });
 
       for (const item of report.impacted) {
-        if ('refs' in item && item.refs) {
+        if ("refs" in item && item.refs) {
           expect(item.refs.length).toBeLessThanOrEqual(2);
         }
       }
@@ -257,16 +233,12 @@ index 1234567..abcdef0 100644
  }
 `;
 
-      const report = await analyzeImpactFromDiff(
-        process.cwd() + "/tests/samples/typescript",
-        index,
-        {
-          provider: "raw",
-          diffText,
-          refContext: "line",
-          compact: true
-        }
-      );
+      const report = await analyzeImpactFromDiff(process.cwd() + "/tests/samples/typescript", index, {
+        provider: "raw",
+        diffText,
+        refContext: "line",
+        compact: true,
+      });
 
       // Compact reports should not have refs field
       if (!("files" in report)) {
@@ -274,7 +246,7 @@ index 1234567..abcdef0 100644
       }
 
       for (const item of report.impacted) {
-        if ('refs' in item) {
+        if ("refs" in item) {
           expect(item.refs).toBeUndefined();
         }
       }

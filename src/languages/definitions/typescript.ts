@@ -10,10 +10,7 @@ function normalizeTypeScriptNativeQuery(kind: string, query: string): string {
   if (kind !== "exports") {
     return normalized;
   }
-  normalized = normalized.replace(
-    /^\s*\(export_assignment \(identifier\) @ts_export_assign\)\s*$/gm,
-    "",
-  );
+  normalized = normalized.replace(/^\s*\(export_assignment \(identifier\) @ts_export_assign\)\s*$/gm, "");
   return normalized;
 }
 
@@ -31,8 +28,7 @@ const BASE_STRUCTURE = {
     },
     {
       type: "method_definition",
-      nameQuery:
-        "name: (_) @chunk.name body: (statement_block) @chunk.block.method",
+      nameQuery: "name: (_) @chunk.name body: (statement_block) @chunk.block.method",
       captureId: "method",
     },
 
@@ -83,14 +79,12 @@ const BASE_STRUCTURE = {
     },
     {
       type: "internal_module",
-      nameQuery:
-        "name: (identifier) @chunk.name body: (statement_block) @chunk.block.namespace",
+      nameQuery: "name: (identifier) @chunk.name body: (statement_block) @chunk.block.namespace",
       captureId: "namespace",
     },
     {
       type: "module",
-      nameQuery:
-        "name: (identifier) @chunk.name body: (statement_block) @chunk.block.namespace",
+      nameQuery: "name: (identifier) @chunk.name body: (statement_block) @chunk.block.namespace",
       captureId: "namespace",
     },
 
@@ -210,8 +204,7 @@ const BASE_HELPERS = {
       ].includes(p)
     );
   },
-  createsBlockScope: (n: SyntaxNodeLike) =>
-    n.type === "program" || n.type === "block",
+  createsBlockScope: (n: SyntaxNodeLike) => n.type === "program" || n.type === "block",
   createsFunctionScope: (n: SyntaxNodeLike) =>
     n.type === "function_declaration" ||
     n.type === "function" ||
@@ -232,9 +225,7 @@ export const TYPESCRIPT_DEF: LanguageDefinition = {
   native: {
     normalizeQuery: normalizeTypeScriptNativeQuery,
     authoritativeKinds: ["exports"],
-    notes: [
-      "drops unsupported TypeScript export-assignment nodes while keeping native export results authoritative",
-    ],
+    notes: ["drops unsupported TypeScript export-assignment nodes while keeping native export results authoritative"],
   },
 };
 registerLanguage(TYPESCRIPT_DEF);
@@ -257,9 +248,7 @@ export const TSX_DEF: LanguageDefinition = {
   native: {
     normalizeQuery: normalizeTypeScriptNativeQuery,
     authoritativeKinds: ["exports"],
-    notes: [
-      "drops unsupported TypeScript export-assignment nodes while keeping native export results authoritative",
-    ],
+    notes: ["drops unsupported TypeScript export-assignment nodes while keeping native export results authoritative"],
   },
 };
 registerLanguage(TSX_DEF);

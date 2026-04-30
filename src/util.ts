@@ -19,10 +19,7 @@ interface NodeLike {
   endPosition: { row: number; column: number };
 }
 
-export function sliceText(
-  node: NodeLike | null | undefined,
-  src: string,
-): string {
+export function sliceText(node: NodeLike | null | undefined, src: string): string {
   if (!node || !src) return "";
   return src.slice(node.startIndex, node.endIndex);
 }
@@ -59,11 +56,7 @@ export function toRange(node: NodeLike | null | undefined): Range {
 export function stringifyUnknown(value: unknown): string {
   if (value instanceof Error) return value.message;
   if (typeof value === "string") return value;
-  if (
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint"
-  ) {
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
     return String(value);
   }
   if (value === null || value === undefined) {
@@ -196,10 +189,7 @@ function stripGitignoreTrailingSpaces(line: string): string {
   return line.slice(0, end);
 }
 
-function parseGitignoreRule(
-  baseDir: string,
-  rawLine: string,
-): GitignoreRule | null {
+function parseGitignoreRule(baseDir: string, rawLine: string): GitignoreRule | null {
   const trimmedLine = stripGitignoreTrailingSpaces(rawLine);
   if (!trimmedLine) return null;
   if (trimmedLine.startsWith("#")) return null;
@@ -218,13 +208,9 @@ function parseGitignoreRule(
   pattern = pattern.replace(/^\\([#!])/, "$1").replace(/\\/g, "/");
   if (!pattern) return null;
 
-  const anchored =
-    trimmedLine.startsWith("/") || (negated && trimmedLine.startsWith("!/"));
-  const baseMatcherPattern =
-    anchored || pattern.includes("/") ? pattern : `**/${pattern}`;
-  const matcherPattern = dirOnly
-    ? `${baseMatcherPattern}/**`
-    : [baseMatcherPattern, `${baseMatcherPattern}/**`];
+  const anchored = trimmedLine.startsWith("/") || (negated && trimmedLine.startsWith("!/"));
+  const baseMatcherPattern = anchored || pattern.includes("/") ? pattern : `**/${pattern}`;
+  const matcherPattern = dirOnly ? `${baseMatcherPattern}/**` : [baseMatcherPattern, `${baseMatcherPattern}/**`];
   const matches = picomatch(matcherPattern, { dot: true });
   return {
     baseDir: normalizePath(baseDir),
@@ -234,18 +220,14 @@ function parseGitignoreRule(
   };
 }
 
-async function loadGitignoreRules(
-  projectRoot: string,
-): Promise<GitignoreRule[]> {
+async function loadGitignoreRules(projectRoot: string): Promise<GitignoreRule[]> {
   const gitignoreFiles = await fg(["**/.gitignore"], {
     cwd: projectRoot,
     absolute: true,
     dot: true,
     ignore: DEFAULT_PROJECT_FILE_IGNORES,
   });
-  gitignoreFiles.sort((left, right) =>
-    normalizePath(left).localeCompare(normalizePath(right)),
-  );
+  gitignoreFiles.sort((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
   const rules: GitignoreRule[] = [];
   for (const gitignoreFile of gitignoreFiles) {
     if (isIgnoredByGitignore(gitignoreFile, rules)) {
@@ -279,15 +261,10 @@ function matchesDiscoveryGlob(
   return matcher(relativePath);
 }
 
-function isIgnoredByGitignore(
-  absolutePath: string,
-  rules: GitignoreRule[],
-): boolean {
+function isIgnoredByGitignore(absolutePath: string, rules: GitignoreRule[]): boolean {
   let ignored = false;
   for (const rule of rules) {
-    const relativePath = normalizePath(
-      path.relative(rule.baseDir, absolutePath),
-    );
+    const relativePath = normalizePath(path.relative(rule.baseDir, absolutePath));
     if (!relativePath || relativePath.startsWith("..")) {
       continue;
     }
@@ -301,18 +278,13 @@ function isIgnoredByGitignore(
   return ignored;
 }
 
-async function ensureDirectoryReadable(
-  directoryPath: string,
-  label: string,
-): Promise<string> {
+async function ensureDirectoryReadable(directoryPath: string, label: string): Promise<string> {
   const resolvedPath = path.resolve(directoryPath);
   let stats: fs.Stats;
   try {
     stats = await fsp.stat(resolvedPath);
   } catch (error) {
-    throw new Error(
-      `${label} does not exist or is not readable: ${resolvedPath} (${stringifyUnknown(error)})`,
-    );
+    throw new Error(`${label} does not exist or is not readable: ${resolvedPath} (${stringifyUnknown(error)})`);
   }
   if (!stats.isDirectory()) {
     throw new Error(`${label} is not a directory: ${resolvedPath}`);
@@ -330,21 +302,14 @@ export async function listProjectFiles(
     .map(normalizeGlobPattern)
     .filter(Boolean)
     .map((globPattern) => picomatch(globPattern, { dot: true }));
-  const userIgnoreGlobs = (options?.ignoreGlobs ?? [])
-    .map(normalizeGlobPattern)
-    .filter(Boolean);
+  const userIgnoreGlobs = (options?.ignoreGlobs ?? []).map(normalizeGlobPattern).filter(Boolean);
 
   try {
     const gitignoreRules =
       options?.useGitignore === false
         ? []
         : await loadGitignoreRules(
-            options?.gitignoreRoot
-              ? await ensureDirectoryReadable(
-                  options.gitignoreRoot,
-                  "Gitignore root",
-                )
-              : root,
+            options?.gitignoreRoot ? await ensureDirectoryReadable(options.gitignoreRoot, "Gitignore root") : root,
           );
     const files = await fg(patterns, {
       cwd: root,
@@ -355,33 +320,20 @@ export async function listProjectFiles(
     return files.map(normalizePath).filter((filePath) => {
       if (
         includeMatchers.length > 0 &&
-        !includeMatchers.some((matcher) =>
-          matchesDiscoveryGlob(filePath, root, matcher),
-        )
+        !includeMatchers.some((matcher) => matchesDiscoveryGlob(filePath, root, matcher))
       ) {
         return false;
       }
       return !isIgnoredByGitignore(filePath, gitignoreRules);
     });
   } catch (error) {
-    logWithLevel(
-      options?.logLevel,
-      "debug",
-      `listProjectFiles failed for ${root}: ${stringifyUnknown(error)}`,
-    );
-    throw new Error(
-      `Failed to list files in ${root}: ${stringifyUnknown(error)}`,
-    );
+    logWithLevel(options?.logLevel, "debug", `listProjectFiles failed for ${root}: ${stringifyUnknown(error)}`);
+    throw new Error(`Failed to list files in ${root}: ${stringifyUnknown(error)}`);
   }
 }
 
 export type ProjectFileKind = "file" | "dir";
-export type ProjectFileRole =
-  | "manifest"
-  | "lockfile"
-  | "config"
-  | "solution"
-  | "ide";
+export type ProjectFileRole = "manifest" | "lockfile" | "config" | "solution" | "ide";
 export type ProjectFileType =
   | "node"
   | "typescript"
@@ -472,19 +424,14 @@ function parseTomlName(raw: string, sections: string[]): string | null {
   return null;
 }
 
-function parseIniName(
-  raw: string,
-  section: string,
-  key: string,
-): string | null {
+function parseIniName(raw: string, section: string, key: string): string | null {
   const lines = raw.split(/\r?\n/);
   let currentSection = "";
   const targetSection = section.toLowerCase();
   const targetKey = key.toLowerCase();
   for (const rawLine of lines) {
     const trimmed = rawLine.trim();
-    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith(";"))
-      continue;
+    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith(";")) continue;
     const sectionMatch = trimmed.match(/^\[([^\]]+)\]\s*$/);
     if (sectionMatch) {
       currentSection = (sectionMatch[1] ?? "").trim().toLowerCase();
@@ -510,9 +457,7 @@ function parsePomName(raw: string): string | null {
   const withoutParent = raw.replace(/<parent>[\s\S]*?<\/parent>/gi, "");
   const nameMatch = withoutParent.match(/<name>\s*([^<]+)\s*<\/name>/i);
   if (nameMatch) return trimToNull(nameMatch[1]);
-  const artifactMatch = withoutParent.match(
-    /<artifactId>\s*([^<]+)\s*<\/artifactId>/i,
-  );
+  const artifactMatch = withoutParent.match(/<artifactId>\s*([^<]+)\s*<\/artifactId>/i);
   if (artifactMatch) return trimToNull(artifactMatch[1]);
   return null;
 }
@@ -530,9 +475,7 @@ function parseGradlePropertiesName(raw: string): string | null {
 function parseDotnetName(raw: string): string | null {
   const tags = ["AssemblyName", "PackageId", "RootNamespace"];
   for (const tag of tags) {
-    const match = raw.match(
-      new RegExp(`<${tag}>\\s*([^<]+)\\s*</${tag}>`, "i"),
-    );
+    const match = raw.match(new RegExp(`<${tag}>\\s*([^<]+)\\s*</${tag}>`, "i"));
     if (match) return trimToNull(match[1]);
   }
   return null;
@@ -714,12 +657,7 @@ const PROJECT_FILE_DEFINITIONS: ProjectFileDefinition[] = [
     type: "gradle",
     role: "manifest",
     kind: "file",
-    patterns: [
-      "build.gradle",
-      "build.gradle.kts",
-      "settings.gradle",
-      "settings.gradle.kts",
-    ],
+    patterns: ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"],
     parseName: parseGradleName,
     nameFromPath: "dir",
   },
@@ -757,11 +695,7 @@ const PROJECT_FILE_DEFINITIONS: ProjectFileDefinition[] = [
     type: "dotnet",
     role: "config",
     kind: "file",
-    patterns: [
-      "Directory.Build.props",
-      "Directory.Build.targets",
-      "global.json",
-    ],
+    patterns: ["Directory.Build.props", "Directory.Build.targets", "global.json"],
     nameFromPath: "dir",
   },
   {
@@ -799,11 +733,7 @@ const PROJECT_FILE_DEFINITIONS: ProjectFileDefinition[] = [
     type: "native",
     role: "config",
     kind: "file",
-    patterns: [
-      "CMakePresets.json",
-      "CMakeUserPresets.json",
-      "meson_options.txt",
-    ],
+    patterns: ["CMakePresets.json", "CMakeUserPresets.json", "meson_options.txt"],
     nameFromPath: "dir",
   },
   {
@@ -848,10 +778,7 @@ function toProjectGlob(pattern: string): string {
   return pattern.startsWith("**/") ? pattern : `**/${pattern}`;
 }
 
-async function buildProjectFileInfo(
-  def: ProjectFileDefinition,
-  filePath: string,
-): Promise<ProjectFileInfo> {
+async function buildProjectFileInfo(def: ProjectFileDefinition, filePath: string): Promise<ProjectFileInfo> {
   const normalizedPath = normalizePath(filePath);
   const projectRoot = normalizePath(path.dirname(filePath));
   let name: string | null = null;
@@ -886,9 +813,7 @@ export async function discoverProjectFiles(
 ): Promise<ProjectFileInfo[]> {
   const root = await ensureDirectoryReadable(projectRoot, "Project root");
   try {
-    const allPatterns = PROJECT_FILE_DEFINITIONS.flatMap((def) =>
-      def.patterns.map(toProjectGlob),
-    );
+    const allPatterns = PROJECT_FILE_DEFINITIONS.flatMap((def) => def.patterns.map(toProjectGlob));
     const matches = await fg(allPatterns, {
       cwd: root,
       absolute: true,
@@ -910,9 +835,7 @@ export async function discoverProjectFiles(
 
         const matchesPattern = def.patterns.some((p) => {
           if (p.includes("*") || p.includes("?")) {
-            const re = new RegExp(
-              "^" + p.replace(/\./g, "\\.").replace(/\*/g, ".*") + "$",
-            );
+            const re = new RegExp("^" + p.replace(/\./g, "\\.").replace(/\*/g, ".*") + "$");
             return re.test(fileName);
           }
           return p === fileName;
@@ -939,21 +862,12 @@ export async function discoverProjectFiles(
       return a.path.localeCompare(b.path);
     });
   } catch (error) {
-    logWithLevel(
-      options?.logLevel,
-      "debug",
-      `discoverProjectFiles failed for ${root}: ${stringifyUnknown(error)}`,
-    );
-    throw new Error(
-      `Failed to discover project files in ${root}: ${stringifyUnknown(error)}`,
-    );
+    logWithLevel(options?.logLevel, "debug", `discoverProjectFiles failed for ${root}: ${stringifyUnknown(error)}`);
+    throw new Error(`Failed to discover project files in ${root}: ${stringifyUnknown(error)}`);
   }
 }
 
-function transformJsLikeTrivia(
-  src: string,
-  options?: { maskStrings?: boolean; preserveLength?: boolean },
-): string {
+function transformJsLikeTrivia(src: string, options?: { maskStrings?: boolean; preserveLength?: boolean }): string {
   let out = "";
   let i = 0;
   let inSingle = false;
@@ -970,10 +884,7 @@ function transformJsLikeTrivia(
 
     if (inSingle || inDouble || inTemplate) {
       const isClosingQuote =
-        !escapeNext &&
-        ((inSingle && ch === "'") ||
-          (inDouble && ch === '"') ||
-          (inTemplate && ch === "`"));
+        !escapeNext && ((inSingle && ch === "'") || (inDouble && ch === '"') || (inTemplate && ch === "`"));
       if (maskStrings) {
         out += isClosingQuote ? ch : maskedChar(ch);
       } else {
@@ -1122,22 +1033,14 @@ export function normalizePath(p: string): string {
 }
 
 function normalizeWindowsComparablePath(filePath: string): string {
-  return normalizePath(filePath).replace(
-    /^([A-Za-z]):/,
-    (_, driveLetter: string) => `${driveLetter.toUpperCase()}:`,
-  );
+  return normalizePath(filePath).replace(/^([A-Za-z]):/, (_, driveLetter: string) => `${driveLetter.toUpperCase()}:`);
 }
 
 export function isAbsoluteFilePath(filePath: string): boolean {
-  return (
-    path.posix.isAbsolute(filePath) || path.win32.isAbsolute(filePath)
-  );
+  return path.posix.isAbsolute(filePath) || path.win32.isAbsolute(filePath);
 }
 
-export function resolveFilePathFromRoot(
-  projectRoot: string,
-  filePath: string,
-): string {
+export function resolveFilePathFromRoot(projectRoot: string, filePath: string): string {
   if (isAbsoluteFilePath(filePath)) {
     return filePath;
   }
@@ -1154,10 +1057,7 @@ function resolveComparableProjectRoot(projectRoot: string): string {
   return path.resolve(projectRoot);
 }
 
-function isRelativeToRoot(
-  normalizedRoot: string,
-  normalizedFile: string,
-): boolean {
+function isRelativeToRoot(normalizedRoot: string, normalizedFile: string): boolean {
   const comparableRoot = path.win32.isAbsolute(normalizedRoot)
     ? normalizeWindowsComparablePath(normalizedRoot)
     : normalizedRoot;
@@ -1165,83 +1065,46 @@ function isRelativeToRoot(
     ? normalizeWindowsComparablePath(normalizedFile)
     : normalizedFile;
 
-  if (
-    path.win32.isAbsolute(comparableRoot) &&
-    path.win32.isAbsolute(comparableFile)
-  ) {
+  if (path.win32.isAbsolute(comparableRoot) && path.win32.isAbsolute(comparableFile)) {
     if (comparableFile === comparableRoot) {
       return true;
     }
-    const relativePath = normalizePath(
-      path.win32.relative(comparableRoot, comparableFile),
-    );
-    return (
-      relativePath.length > 0 &&
-      !relativePath.startsWith("..") &&
-      !path.win32.isAbsolute(relativePath)
-    );
+    const relativePath = normalizePath(path.win32.relative(comparableRoot, comparableFile));
+    return relativePath.length > 0 && !relativePath.startsWith("..") && !path.win32.isAbsolute(relativePath);
   }
 
   if (comparableFile === comparableRoot) {
     return true;
   }
   const relativePath = path.relative(comparableRoot, comparableFile);
-  return (
-    relativePath.length > 0 &&
-    !relativePath.startsWith("..") &&
-    !path.isAbsolute(relativePath)
-  );
+  return relativePath.length > 0 && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
 }
 
-export function isFilePathWithinRoot(
-  projectRoot: string,
-  filePath: string,
-): boolean {
+export function isFilePathWithinRoot(projectRoot: string, filePath: string): boolean {
   const normalizedRoot = normalizePath(resolveComparableProjectRoot(projectRoot));
-  const normalizedFile = normalizePath(
-    resolveFilePathFromRoot(normalizedRoot, filePath),
-  );
+  const normalizedFile = normalizePath(resolveFilePathFromRoot(normalizedRoot, filePath));
   return isRelativeToRoot(normalizedRoot, normalizedFile);
 }
 
-export function assertFilePathWithinRoot(
-  projectRoot: string,
-  filePath: string,
-  label: string = "File",
-): string {
+export function assertFilePathWithinRoot(projectRoot: string, filePath: string, label: string = "File"): string {
   const normalizedRoot = normalizePath(resolveComparableProjectRoot(projectRoot));
-  const normalizedFile = normalizePath(
-    resolveFilePathFromRoot(normalizedRoot, filePath),
-  );
+  const normalizedFile = normalizePath(resolveFilePathFromRoot(normalizedRoot, filePath));
   if (!isFilePathWithinRoot(normalizedRoot, normalizedFile)) {
-    throw new Error(
-      `${label} is outside project root: ${normalizedFile} (root: ${normalizedRoot})`,
-    );
+    throw new Error(`${label} is outside project root: ${normalizedFile} (root: ${normalizedRoot})`);
   }
   return normalizedFile;
 }
 
-export function toProjectRelativePath(
-  projectRoot: string,
-  filePath: string,
-): string | null {
+export function toProjectRelativePath(projectRoot: string, filePath: string): string | null {
   const normalizedRoot = normalizePath(resolveComparableProjectRoot(projectRoot));
-  const normalizedFile = normalizePath(
-    resolveFilePathFromRoot(normalizedRoot, filePath),
-  );
+  const normalizedFile = normalizePath(resolveFilePathFromRoot(normalizedRoot, filePath));
   if (!isFilePathWithinRoot(normalizedRoot, normalizedFile)) {
     return null;
   }
-  if (
-    path.win32.isAbsolute(normalizedRoot) &&
-    path.win32.isAbsolute(normalizedFile)
-  ) {
-    return normalizePath(
-      path.win32.relative(
-        normalizeWindowsComparablePath(normalizedRoot),
-        normalizeWindowsComparablePath(normalizedFile),
-      ),
-    );
+  if (path.win32.isAbsolute(normalizedRoot) && path.win32.isAbsolute(normalizedFile)) {
+    const comparableRoot = normalizeWindowsComparablePath(normalizedRoot);
+    const comparableFile = normalizeWindowsComparablePath(normalizedFile);
+    return normalizePath(path.win32.relative(comparableRoot, comparableFile));
   }
   return normalizePath(path.relative(normalizedRoot, normalizedFile));
 }
@@ -1284,14 +1147,12 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
       const spec = m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? m[6];
       if (!spec) continue;
       const text = m[0] ?? "";
-      const typeOnly =
-        m[1] !== undefined
-          ? /\bimport\s+type\b/.test(text)
-          : m[2] !== undefined
-            ? /\bimport\s+type\b/.test(text)
-            : m[3] !== undefined
-              ? /\bexport\s+type\b/.test(text)
-              : false;
+      let typeOnly = false;
+      if (m[1] !== undefined || m[2] !== undefined) {
+        typeOnly = /\bimport\s+type\b/.test(text);
+      } else if (m[3] !== undefined) {
+        typeOnly = /\bexport\s+type\b/.test(text);
+      }
       push(spec, typeOnly);
     }
   } catch {
@@ -1301,9 +1162,7 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
 }
 
 type DynamicBase = "file" | "project";
-type ParsedDynamicToken =
-  | { kind: "base"; base: DynamicBase }
-  | { kind: "literal"; value: string };
+type ParsedDynamicToken = { kind: "base"; base: DynamicBase } | { kind: "literal"; value: string };
 
 function parseStringLiteralToken(token: string): string | null {
   const trimmed = token.trim();
@@ -1368,11 +1227,7 @@ function splitTopLevelArgs(text: string): string[] | null {
 
 function parseDynamicToken(token: string): ParsedDynamicToken | null {
   const compact = token.replace(/\s+/g, "");
-  if (
-    compact === "__dirname" ||
-    compact === "__filename" ||
-    compact === "import.meta.url"
-  ) {
+  if (compact === "__dirname" || compact === "__filename" || compact === "import.meta.url") {
     return { kind: "base", base: "file" };
   }
   if (compact === "process.cwd()") {
@@ -1425,21 +1280,14 @@ function parseNewUrlArg(argText: string): {
   return { base: baseToken.base, segments: [firstLiteral] };
 }
 
-function buildRelativeSpecifier(
-  fromFile: string,
-  targetPath: string,
-): string | null {
+function buildRelativeSpecifier(fromFile: string, targetPath: string): string | null {
   const fromDir = path.dirname(fromFile);
   const rel = normalizePath(path.relative(fromDir, targetPath));
   if (!rel) return null;
   return rel.startsWith(".") ? rel : `./${rel}`;
 }
 
-export function extractJsTsDynamicSpecifiers(
-  source: string,
-  fromFile: string,
-  projectRoot: string,
-): ModuleSpecifier[] {
+export function extractJsTsDynamicSpecifiers(source: string, fromFile: string, projectRoot: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
   try {
     const src = stripJsLikeComments(source);
@@ -1449,19 +1297,16 @@ export function extractJsTsDynamicSpecifiers(
       seen.add(spec);
       out.push({ spec, resolved: "heuristic", confidence: 0.7 });
     };
-    const pathCallRe =
-      /(?<!["'`])\b(?:require|import)\s*\(\s*(path\.(?:join|resolve)\s*\([^)]*\))\s*\)/g;
+    const pathCallRe = /(?<!["'`])\b(?:require|import)\s*\(\s*(path\.(?:join|resolve)\s*\([^)]*\))\s*\)/g;
     for (const match of src.matchAll(pathCallRe)) {
       const argText = match[1] ?? "";
       const parsed = parsePathCallArg(argText);
       if (!parsed) continue;
-      const baseDir =
-        parsed.base === "file" ? path.dirname(fromFile) : projectRoot;
+      const baseDir = parsed.base === "file" ? path.dirname(fromFile) : projectRoot;
       const targetPath = path.resolve(baseDir, ...parsed.segments);
       addSpec(buildRelativeSpecifier(fromFile, targetPath));
     }
-    const urlCallRe =
-      /(?<!["'`])\b(?:require|import)\s*\(\s*(new\s+URL\s*\([^)]*\))\s*\)/g;
+    const urlCallRe = /(?<!["'`])\b(?:require|import)\s*\(\s*(new\s+URL\s*\([^)]*\))\s*\)/g;
     for (const match of src.matchAll(urlCallRe)) {
       const argText = match[1] ?? "";
       const parsed = parseNewUrlArg(argText);
@@ -1482,8 +1327,7 @@ export function extractPythonSpecifiers(source: string): string[] {
     const cleaned = stripPythonCommentsAndStrings(source);
     const reImport = /^\s*import\s+([A-Za-z_][\w.]*)/gm;
     for (const m of cleaned.matchAll(reImport)) out.push(m[1]!);
-    const reFrom =
-      /^\s*from\s+(\.+(?:[A-Za-z_][\w.]*)?|[A-Za-z_][\w.]*)\s+import/gm;
+    const reFrom = /^\s*from\s+(\.+(?:[A-Za-z_][\w.]*)?|[A-Za-z_][\w.]*)\s+import/gm;
     for (const m of cleaned.matchAll(reFrom)) out.push(m[1]!);
   } catch {
     /* parse fallback: ignore */
@@ -1494,9 +1338,7 @@ export function extractPythonSpecifiers(source: string): string[] {
 type MatchPathFn = ReturnType<typeof createMatchPath>;
 const tsconfigCache = new Map<string, { matchPath?: MatchPathFn }>();
 
-async function findNearestTsconfig(
-  startFromFile: string,
-): Promise<string | null> {
+async function findNearestTsconfig(startFromFile: string): Promise<string | null> {
   let dir = path.dirname(startFromFile);
   while (true) {
     const cand = path.join(dir, "tsconfig.json");
@@ -1523,17 +1365,13 @@ interface TsconfigJson {
   extends?: string;
 }
 
-async function loadTsconfigConfig(
-  cfgPath: string,
-): Promise<{ baseUrl: string; paths: Record<string, string[]> }> {
+async function loadTsconfigConfig(cfgPath: string): Promise<{ baseUrl: string; paths: Record<string, string[]> }> {
   const raw = await fsp.readFile(cfgPath, "utf8");
   const json = parseJsonc<TsconfigJson>(raw);
   const cfgDir = path.dirname(cfgPath);
   const co = json.compilerOptions;
   const baseUrlRaw = co?.baseUrl ?? ".";
-  const baseUrl = path.isAbsolute(baseUrlRaw)
-    ? baseUrlRaw
-    : path.resolve(cfgDir, baseUrlRaw);
+  const baseUrl = path.isAbsolute(baseUrlRaw) ? baseUrlRaw : path.resolve(cfgDir, baseUrlRaw);
   const paths: Record<string, string[]> = co?.paths ?? {};
 
   if (json.extends) {
@@ -1568,10 +1406,7 @@ async function loadTsconfigConfig(
   return { baseUrl: baseUrl.replace(/\\/g, "/"), paths: normalizedPaths };
 }
 
-export async function loadNearestTsconfigFor(
-  file: string,
-  logLevel?: LogLevel,
-): Promise<{ matchPath?: MatchPathFn }> {
+export async function loadNearestTsconfigFor(file: string, logLevel?: LogLevel): Promise<{ matchPath?: MatchPathFn }> {
   const dir = path.dirname(file);
   if (tsconfigCache.has(dir)) return tsconfigCache.get(dir)!;
 
@@ -1588,12 +1423,7 @@ export async function loadNearestTsconfigFor(
     tsconfigCache.set(dir, val);
     return val;
   } catch (error) {
-    logWithLevel(
-      logLevel,
-      "warn",
-      `Warning: Failed to load tsconfig at ${cfgPath}:`,
-      error,
-    );
+    logWithLevel(logLevel, "warn", `Warning: Failed to load tsconfig at ${cfgPath}:`, error);
     const val = {};
     tsconfigCache.set(dir, val);
     return val;
@@ -1707,10 +1537,7 @@ function parsePnpmWorkspacePackages(rawYaml: string): string[] {
   // preserving values that are not enclosed in matching quotes.
   const unquoteMaybe = (value: string): string => {
     const t = value.trim();
-    if (
-      (t.startsWith("'") && t.endsWith("'")) ||
-      (t.startsWith('"') && t.endsWith('"'))
-    ) {
+    if ((t.startsWith("'") && t.endsWith("'")) || (t.startsWith('"') && t.endsWith('"'))) {
       return t.slice(1, -1);
     }
     return t;
@@ -1778,9 +1605,7 @@ type MinimalLernaJson = {
   packages?: string[];
 };
 
-export async function loadWorkspaceConfig(
-  projectRoot: string,
-): Promise<WorkspaceConfig | undefined> {
+export async function loadWorkspaceConfig(projectRoot: string): Promise<WorkspaceConfig | undefined> {
   const root = (await findWorkspaceRoot(projectRoot)) ?? projectRoot;
   if (workspaceCache.has(root)) return workspaceCache.get(root)!;
 
@@ -1878,11 +1703,7 @@ export async function resolveWorkspacePackage(
   const pkg = ws.packages.get(name);
   if (!pkg) return null;
   const baseDir = pkg.path;
-  for (const candidate of listWorkspacePackageResolutionCandidates(
-    spec,
-    ws,
-    resolutionExtensions,
-  )) {
+  for (const candidate of listWorkspacePackageResolutionCandidates(spec, ws, resolutionExtensions)) {
     if (await fileExists(candidate)) {
       return path.resolve(candidate);
     }
@@ -1942,10 +1763,7 @@ export const GRAPH_ONLY_RESOLUTION_EXTENSIONS = [
   ".asciidoc",
 ] as const;
 
-const GRAPH_ONLY_LANGUAGE_DOCUMENT_RESOLUTION_EXTENSIONS: Record<
-  string,
-  readonly string[]
-> = {
+const GRAPH_ONLY_LANGUAGE_DOCUMENT_RESOLUTION_EXTENSIONS: Record<string, readonly string[]> = {
   markdown: [".md", ".mdx"],
   mdx: [".mdx", ".md"],
   astro: [".astro"],
@@ -1954,18 +1772,12 @@ const GRAPH_ONLY_LANGUAGE_DOCUMENT_RESOLUTION_EXTENSIONS: Record<
   adoc: [".adoc", ".asciidoc"],
 };
 
-const GRAPH_ONLY_LANGUAGE_SOURCE_RESOLUTION_EXTENSIONS: Record<
-  string,
-  readonly string[]
-> = {
+const GRAPH_ONLY_LANGUAGE_SOURCE_RESOLUTION_EXTENSIONS: Record<string, readonly string[]> = {
   mdx: DEFAULT_RESOLUTION_EXTENSIONS,
   astro: [".astro", ...DEFAULT_RESOLUTION_EXTENSIONS],
 };
 
-const EXPLICIT_SPECIFIER_EXTENSION_FAMILIES: Record<
-  string,
-  readonly string[]
-> = {
+const EXPLICIT_SPECIFIER_EXTENSION_FAMILIES: Record<string, readonly string[]> = {
   ".ts": [".ts", ".tsx", ".js", ".jsx"],
   ".tsx": [".tsx", ".jsx", ".ts", ".js"],
   ".js": [".ts", ".tsx", ".js", ".jsx"],
@@ -1983,12 +1795,8 @@ export function getGraphOnlyResolutionExtensions(
   const normalizedLanguageId = languageId.toLowerCase();
   const preferredExtensions =
     resolutionKind === "source"
-      ? (GRAPH_ONLY_LANGUAGE_SOURCE_RESOLUTION_EXTENSIONS[
-          normalizedLanguageId
-        ] ?? DEFAULT_RESOLUTION_EXTENSIONS)
-      : (GRAPH_ONLY_LANGUAGE_DOCUMENT_RESOLUTION_EXTENSIONS[
-          normalizedLanguageId
-        ] ?? GRAPH_ONLY_RESOLUTION_EXTENSIONS);
+      ? (GRAPH_ONLY_LANGUAGE_SOURCE_RESOLUTION_EXTENSIONS[normalizedLanguageId] ?? DEFAULT_RESOLUTION_EXTENSIONS)
+      : (GRAPH_ONLY_LANGUAGE_DOCUMENT_RESOLUTION_EXTENSIONS[normalizedLanguageId] ?? GRAPH_ONLY_RESOLUTION_EXTENSIONS);
   const includeGraphOnlyFallbacks = resolutionKind === "document";
   return Array.from(
     new Set([
@@ -1999,20 +1807,12 @@ export function getGraphOnlyResolutionExtensions(
   );
 }
 
-function getResolutionExtensions(
-  resolutionExtensions?: readonly string[],
-): string[] {
-  const extensions =
-    resolutionExtensions === undefined
-      ? DEFAULT_RESOLUTION_EXTENSIONS
-      : resolutionExtensions;
+function getResolutionExtensions(resolutionExtensions?: readonly string[]): string[] {
+  const extensions = resolutionExtensions === undefined ? DEFAULT_RESOLUTION_EXTENSIONS : resolutionExtensions;
   return Array.from(new Set(extensions));
 }
 
-export function listResolutionCandidates(
-  base: string,
-  resolutionExtensions?: readonly string[],
-): string[] {
+export function listResolutionCandidates(base: string, resolutionExtensions?: readonly string[]): string[] {
   const extensions = getResolutionExtensions(resolutionExtensions);
   const baseExt = path.extname(base).toLowerCase();
   if (!baseExt) {
@@ -2025,13 +1825,10 @@ export function listResolutionCandidates(
     );
   }
 
-  const compatibleExtensions =
-    EXPLICIT_SPECIFIER_EXTENSION_FAMILIES[baseExt] ?? [baseExt];
+  const compatibleExtensions = EXPLICIT_SPECIFIER_EXTENSION_FAMILIES[baseExt] ?? [baseExt];
   const baseWithoutExt = base.slice(0, -baseExt.length);
   const candidates = compatibleExtensions
-    .filter(
-      (extension) => extension === baseExt || extensions.includes(extension),
-    )
+    .filter((extension) => extension === baseExt || extensions.includes(extension))
     .map((extension) => `${baseWithoutExt}${extension}`);
   return candidates.length > 0 ? Array.from(new Set(candidates)) : [base];
 }
@@ -2060,20 +1857,14 @@ export function listWorkspacePackageResolutionCandidates(
   const baseDir = pkg.path;
   const candidates: string[] = [];
   const pushRelativeCandidates = (rel: string): void => {
-    candidates.push(
-      ...listResolutionCandidates(path.resolve(baseDir, rel), resolutionExtensions),
-    );
+    candidates.push(...listResolutionCandidates(path.resolve(baseDir, rel), resolutionExtensions));
   };
   const pickExportTarget = (target: unknown): string | null => {
     if (!target) return null;
     if (typeof target === "string") return target;
     if (typeof target === "object" && target !== null) {
       const typedTarget = target as Record<string, unknown>;
-      const candidate =
-        typedTarget.import ??
-        typedTarget.default ??
-        typedTarget.require ??
-        typedTarget.module;
+      const candidate = typedTarget.import ?? typedTarget.default ?? typedTarget.require ?? typedTarget.module;
       if (typeof candidate === "string") return candidate;
     }
     return null;
@@ -2085,8 +1876,7 @@ export function listWorkspacePackageResolutionCandidates(
       pushRelativeCandidates(pkg.exports);
     } else if (typeof pkg.exports === "object") {
       const exportMap = pkg.exports as Record<string, unknown>;
-      const target =
-        exportMap[key] ?? (key === "." ? exportMap["."] : undefined);
+      const target = exportMap[key] ?? (key === "." ? exportMap["."] : undefined);
       const rel = pickExportTarget(target);
       if (rel) {
         pushRelativeCandidates(rel);
@@ -2102,9 +1892,7 @@ export function listWorkspacePackageResolutionCandidates(
   if (pkg.main) {
     pushRelativeCandidates(pkg.main);
   }
-  candidates.push(
-    ...listResolutionCandidates(path.join(baseDir, "index"), resolutionExtensions),
-  );
+  candidates.push(...listResolutionCandidates(path.join(baseDir, "index"), resolutionExtensions));
   return Array.from(new Set(candidates));
 }
 
@@ -2125,8 +1913,7 @@ export async function resolvePathLikeModule(
       if (await fileExists(p + e)) return path.resolve(p + e);
     }
     for (const e of exts) {
-      if (await fileExists(path.join(p, "index" + e)))
-        return path.resolve(path.join(p, "index" + e));
+      if (await fileExists(path.join(p, "index" + e))) return path.resolve(path.join(p, "index" + e));
     }
     if (await fileExists(p)) {
       const st = await fsp.stat(p);
@@ -2183,29 +1970,17 @@ type LanguageProjectSymbolIndex = {
 
 const kotlinImportResolutionCache = new Map<string, string | null>();
 const kotlinSymbolIndexCache = new Map<string, KotlinSymbolIndexEntry>();
-const kotlinProjectSymbolIndexCache = new Map<
-  string,
-  Promise<LanguageProjectSymbolIndex>
->();
+const kotlinProjectSymbolIndexCache = new Map<string, Promise<LanguageProjectSymbolIndex>>();
 const javaImportResolutionCache = new Map<string, string | null>();
 const javaSymbolIndexCache = new Map<string, JavaSymbolIndexEntry>();
-const javaProjectSymbolIndexCache = new Map<
-  string,
-  Promise<LanguageProjectSymbolIndex>
->();
+const javaProjectSymbolIndexCache = new Map<string, Promise<LanguageProjectSymbolIndex>>();
 const phpImportResolutionCache = new Map<string, string | null>();
 const phpSymbolIndexCache = new Map<string, PhpSymbolIndexEntry>();
-const phpProjectSymbolIndexCache = new Map<
-  string,
-  Promise<LanguageProjectSymbolIndex>
->();
+const phpProjectSymbolIndexCache = new Map<string, Promise<LanguageProjectSymbolIndex>>();
 const phpComposerConfigCache = new Map<string, Promise<PhpComposerConfig | null>>();
 const phpComposerAutoloadFileCache = new Map<string, Promise<Set<string>>>();
 
-async function listProjectLanguageFiles(
-  projectRoot: string,
-  patterns: string[],
-): Promise<string[]> {
+async function listProjectLanguageFiles(projectRoot: string, patterns: string[]): Promise<string[]> {
   return await listProjectFiles(projectRoot, patterns);
 }
 
@@ -2233,24 +2008,18 @@ function addProjectSymbolFile(
 
 function sortProjectSymbolIndex(index: LanguageProjectSymbolIndex): void {
   for (const [packageName, files] of index.filesByPackage) {
-    files.sort((left, right) =>
-      normalizePath(left).localeCompare(normalizePath(right)),
-    );
+    files.sort((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
     index.filesByPackage.set(packageName, files);
   }
   for (const symbolFiles of index.filesByPackageSymbol.values()) {
     for (const [symbolName, files] of symbolFiles) {
-      files.sort((left, right) =>
-        normalizePath(left).localeCompare(normalizePath(right)),
-      );
+      files.sort((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
       symbolFiles.set(symbolName, files);
     }
   }
 }
 
-async function buildProjectSymbolIndex<
-  TEntry extends { packageName: string | null; symbols: Set<string> },
->(
+async function buildProjectSymbolIndex<TEntry extends { packageName: string | null; symbols: Set<string> }>(
   projectRoot: string,
   patterns: string[],
   readIndexEntry: (filePath: string) => Promise<TEntry>,
@@ -2274,12 +2043,7 @@ async function buildProjectSymbolIndex<
 
   for (const indexEntry of indexEntries) {
     if (!indexEntry || indexEntry.entry.packageName === null) continue;
-    addProjectSymbolFile(
-      index,
-      indexEntry.entry.packageName,
-      indexEntry.filePath,
-      indexEntry.entry.symbols,
-    );
+    addProjectSymbolFile(index, indexEntry.entry.packageName, indexEntry.filePath, indexEntry.entry.symbols);
   }
 
   sortProjectSymbolIndex(index);
@@ -2301,33 +2065,19 @@ function getOrCreateProjectSymbolIndex(
   return pending;
 }
 
-async function getKotlinProjectSymbolIndex(
-  projectRoot: string,
-): Promise<LanguageProjectSymbolIndex> {
+async function getKotlinProjectSymbolIndex(projectRoot: string): Promise<LanguageProjectSymbolIndex> {
   return await getOrCreateProjectSymbolIndex(
     kotlinProjectSymbolIndexCache,
     projectRoot,
-    async () =>
-      await buildProjectSymbolIndex(
-        projectRoot,
-        ["**/*.kt", "**/*.kts"],
-        readKotlinSymbolIndex,
-      ),
+    async () => await buildProjectSymbolIndex(projectRoot, ["**/*.kt", "**/*.kts"], readKotlinSymbolIndex),
   );
 }
 
-async function getJavaProjectSymbolIndex(
-  projectRoot: string,
-): Promise<LanguageProjectSymbolIndex> {
+async function getJavaProjectSymbolIndex(projectRoot: string): Promise<LanguageProjectSymbolIndex> {
   return await getOrCreateProjectSymbolIndex(
     javaProjectSymbolIndexCache,
     projectRoot,
-    async () =>
-      await buildProjectSymbolIndex(
-        projectRoot,
-        ["**/*.java"],
-        readJavaSymbolIndex,
-      ),
+    async () => await buildProjectSymbolIndex(projectRoot, ["**/*.java"], readJavaSymbolIndex),
   );
 }
 
@@ -2350,45 +2100,34 @@ export async function resolveJvmPackageImportPaths(
   return packageCandidates.map((candidate) => path.resolve(candidate));
 }
 
-async function getPhpProjectSymbolIndex(
-  projectRoot: string,
-): Promise<LanguageProjectSymbolIndex> {
-  return await getOrCreateProjectSymbolIndex(
-    phpProjectSymbolIndexCache,
-    projectRoot,
-    async () => {
-      const files = await listProjectLanguageFiles(projectRoot, ["**/*.php"]);
-      const index: LanguageProjectSymbolIndex = {
-        files,
-        filesByPackage: new Map<string, string[]>(),
-        filesByPackageSymbol: new Map<string, Map<string, string[]>>(),
-      };
+async function getPhpProjectSymbolIndex(projectRoot: string): Promise<LanguageProjectSymbolIndex> {
+  return await getOrCreateProjectSymbolIndex(phpProjectSymbolIndexCache, projectRoot, async () => {
+    const files = await listProjectLanguageFiles(projectRoot, ["**/*.php"]);
+    const index: LanguageProjectSymbolIndex = {
+      files,
+      filesByPackage: new Map<string, string[]>(),
+      filesByPackageSymbol: new Map<string, Map<string, string[]>>(),
+    };
 
-      const indexEntries = await mapLimit(files, 8, async (filePath) => {
-        try {
-          const entry = await readPhpSymbolIndex(filePath);
-          return { filePath, entry };
-        } catch {
-          return null;
-        }
-      });
-
-      for (const indexEntry of indexEntries) {
-        if (!indexEntry) continue;
-        for (const packageEntry of indexEntry.entry.packageEntries) {
-          addProjectSymbolFile(
-            index,
-            packageEntry.packageName,
-            indexEntry.filePath,
-            packageEntry.symbols,
-          );
-        }
+    const indexEntries = await mapLimit(files, 8, async (filePath) => {
+      try {
+        const entry = await readPhpSymbolIndex(filePath);
+        return { filePath, entry };
+      } catch {
+        return null;
       }
+    });
 
-      sortProjectSymbolIndex(index);
-      return index;
-    },
-  );
+    for (const indexEntry of indexEntries) {
+      if (!indexEntry) continue;
+      for (const packageEntry of indexEntry.entry.packageEntries) {
+        addProjectSymbolFile(index, packageEntry.packageName, indexEntry.filePath, packageEntry.symbols);
+      }
+    }
+
+    sortProjectSymbolIndex(index);
+    return index;
+  });
 }
 
 function stripInlineComment(line: string): string {
@@ -2396,11 +2135,7 @@ function stripInlineComment(line: string): string {
   return idx === -1 ? line.trim() : line.slice(0, idx).trim();
 }
 
-async function findNearestFile(
-  startDir: string,
-  stopDir: string,
-  fileName: string,
-): Promise<string | null> {
+async function findNearestFile(startDir: string, stopDir: string, fileName: string): Promise<string | null> {
   let dir = path.resolve(startDir);
   const stop = path.resolve(stopDir);
   while (true) {
@@ -2431,9 +2166,7 @@ async function parseGoMod(moduleRoot: string): Promise<GoModuleInfo | null> {
         continue;
       }
     }
-    const replaceMatch = line.match(
-      /^replace\s+(\S+)(?:\s+v[^\s]+)?\s+=>\s+(\S+)/,
-    );
+    const replaceMatch = line.match(/^replace\s+(\S+)(?:\s+v[^\s]+)?\s+=>\s+(\S+)/);
     if (replaceMatch) {
       const from = unquote(replaceMatch[1] ?? "");
       const toRaw = unquote(replaceMatch[2] ?? "");
@@ -2494,12 +2227,7 @@ async function findGoPackageEntry(dirPath: string): Promise<string | null> {
     return null;
   }
   const goFiles = entries
-    .filter(
-      (entry) =>
-        entry.isFile() &&
-        entry.name.endsWith(".go") &&
-        !entry.name.endsWith("_test.go"),
-    )
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".go") && !entry.name.endsWith("_test.go"))
     .map((entry) => entry.name)
     .sort((a, b) => a.localeCompare(b));
   if (goFiles.length === 0) return null;
@@ -2511,14 +2239,10 @@ function isGoStdLib(spec: string): boolean {
   return base.length > 0 && !base.includes(".");
 }
 
-async function resolveGoModuleImport(
-  moduleInfo: GoModuleInfo,
-  spec: string,
-): Promise<string | null> {
+async function resolveGoModuleImport(moduleInfo: GoModuleInfo, spec: string): Promise<string | null> {
   const { modulePath, moduleRoot, replacements } = moduleInfo;
   if (spec === modulePath || spec.startsWith(`${modulePath}/`)) {
-    const subPath =
-      spec === modulePath ? "" : spec.slice(modulePath.length + 1);
+    const subPath = spec === modulePath ? "" : spec.slice(modulePath.length + 1);
     const targetDir = path.join(moduleRoot, subPath);
     const entry = await findGoPackageEntry(targetDir);
     if (entry) return entry;
@@ -2537,11 +2261,7 @@ async function resolveGoModuleImport(
   return null;
 }
 
-export async function resolveGoImportPath(
-  projectRoot: string,
-  fromFile: string,
-  spec: string,
-): Promise<string | null> {
+export async function resolveGoImportPath(projectRoot: string, fromFile: string, spec: string): Promise<string | null> {
   const startDir = path.dirname(fromFile);
   const goWorkPath = await findNearestFile(startDir, projectRoot, "go.work");
   const moduleInfos: GoModuleInfo[] = [];
@@ -2583,18 +2303,14 @@ export async function resolveGoImportPath(
   return null;
 }
 
-async function readKotlinSymbolIndex(
-  filePath: string,
-): Promise<KotlinSymbolIndexEntry> {
+async function readKotlinSymbolIndex(filePath: string): Promise<KotlinSymbolIndexEntry> {
   const cached = kotlinSymbolIndexCache.get(filePath);
   if (cached) return cached;
 
   const source = await fsp.readFile(filePath, "utf8");
-  const packageName =
-    source.match(/^\s*package\s+([A-Za-z_][\w.]*)/m)?.[1] ?? null;
+  const packageName = source.match(/^\s*package\s+([A-Za-z_][\w.]*)/m)?.[1] ?? null;
   const symbols = new Set<string>();
-  const declarationPattern =
-    /\b(?:class|object|fun|typealias|interface)\s+([A-Za-z_][\w]*)\b/g;
+  const declarationPattern = /\b(?:class|object|fun|typealias|interface)\s+([A-Za-z_][\w]*)\b/g;
   for (const match of source.matchAll(declarationPattern)) {
     const symbolName = match[1];
     if (symbolName) symbols.add(symbolName);
@@ -2605,10 +2321,7 @@ async function readKotlinSymbolIndex(
   return entry;
 }
 
-async function resolveKotlinImportPath(
-  projectRoot: string,
-  spec: string,
-): Promise<string | null> {
+async function resolveKotlinImportPath(projectRoot: string, spec: string): Promise<string | null> {
   const cacheKey = `${projectRoot}::${spec}`;
   const cached = kotlinImportResolutionCache.get(cacheKey);
   if (cached !== undefined) return cached;
@@ -2617,45 +2330,34 @@ async function resolveKotlinImportPath(
   const projectIndex = await getKotlinProjectSymbolIndex(projectRoot);
   if (parts.length < 2) {
     const packageCandidates = projectIndex.filesByPackage.get(spec) ?? [];
-    const resolved = packageCandidates[0]
-      ? path.resolve(packageCandidates[0])
-      : null;
+    const resolved = packageCandidates[0] ? path.resolve(packageCandidates[0]) : null;
     kotlinImportResolutionCache.set(cacheKey, resolved);
     return resolved;
   }
 
   const importedName = parts[parts.length - 1]!;
-  const packageName =
-    importedName === "*"
-      ? parts.slice(0, -1).join(".")
-      : parts.slice(0, -1).join(".");
+  const packageName = importedName === "*" ? parts.slice(0, -1).join(".") : parts.slice(0, -1).join(".");
   const packageCandidates = projectIndex.filesByPackage.get(packageName) ?? [];
 
   if (importedName === "*") {
-    const resolved = packageCandidates[0]
-      ? path.resolve(packageCandidates[0])
-      : null;
+    const resolved = packageCandidates[0] ? path.resolve(packageCandidates[0]) : null;
     kotlinImportResolutionCache.set(cacheKey, resolved);
     return resolved;
   }
 
-  const symbolFiles =
-    projectIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
+  const symbolFiles = projectIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
   const resolvedCandidate = symbolFiles[0] ?? packageCandidates[0] ?? null;
   const resolved = resolvedCandidate ? path.resolve(resolvedCandidate) : null;
   kotlinImportResolutionCache.set(cacheKey, resolved);
   return resolved;
 }
 
-async function readJavaSymbolIndex(
-  filePath: string,
-): Promise<JavaSymbolIndexEntry> {
+async function readJavaSymbolIndex(filePath: string): Promise<JavaSymbolIndexEntry> {
   const cached = javaSymbolIndexCache.get(filePath);
   if (cached) return cached;
 
   const source = await fsp.readFile(filePath, "utf8");
-  const packageName =
-    source.match(/^\s*package\s+([A-Za-z_][\w.]*)\s*;/m)?.[1] ?? null;
+  const packageName = source.match(/^\s*package\s+([A-Za-z_][\w.]*)\s*;/m)?.[1] ?? null;
   const symbols = new Set<string>();
   const declarationPattern = /\b(?:class|interface|enum)\s+([A-Za-z_][\w]*)\b/g;
   for (const match of source.matchAll(declarationPattern)) {
@@ -2668,9 +2370,7 @@ async function readJavaSymbolIndex(
   return entry;
 }
 
-async function readPhpSymbolIndex(
-  filePath: string,
-): Promise<PhpSymbolIndexEntry> {
+async function readPhpSymbolIndex(filePath: string): Promise<PhpSymbolIndexEntry> {
   const cached = phpSymbolIndexCache.get(filePath);
   if (cached) return cached;
 
@@ -2683,10 +2383,7 @@ async function readPhpSymbolIndex(
   };
   const symbols = new Set<string>();
   const kindsBySymbol = new Map<string, Set<PhpSymbolKind>>();
-  const addSymbol = (
-    symbolName: string,
-    symbolKind: PhpSymbolKind,
-  ): void => {
+  const addSymbol = (symbolName: string, symbolKind: PhpSymbolKind): void => {
     symbols.add(symbolName);
     const currentKinds = kindsBySymbol.get(symbolName) ?? new Set();
     currentKinds.add(symbolKind);
@@ -2717,9 +2414,7 @@ type PhpScannerToken =
   | { type: "brace_open" | "brace_close" | "paren_open" | "paren_close" }
   | { type: "semicolon" | "comma" | "backslash" | "ampersand" | "equals" };
 
-function extractPhpTopLevelPackageEntries(
-  source: string,
-): PhpPackageSymbolIndexEntry[] {
+function extractPhpTopLevelPackageEntries(source: string): PhpPackageSymbolIndexEntry[] {
   const packageEntries = new Map<string, PhpPackageSymbolIndexEntry>();
   const getPackageEntry = (packageName: string): PhpPackageSymbolIndexEntry => {
     const existing = packageEntries.get(packageName);
@@ -2732,11 +2427,7 @@ function extractPhpTopLevelPackageEntries(
     packageEntries.set(packageName, entry);
     return entry;
   };
-  const addSymbol = (
-    packageName: string,
-    symbolName: string,
-    symbolKind: PhpSymbolKind,
-  ): void => {
+  const addSymbol = (packageName: string, symbolName: string, symbolKind: PhpSymbolKind): void => {
     const entry = getPackageEntry(packageName);
     entry.symbols.add(symbolName);
     const symbolKinds = entry.kindsBySymbol.get(symbolName) ?? new Set();
@@ -2749,15 +2440,11 @@ function extractPhpTopLevelPackageEntries(
   const classLikeDepths: number[] = [];
   const functionLikeDepths: number[] = [];
   let activeNamespace = "";
-  let pendingBlock:
-    | { type: "class" | "function" }
-    | null = null;
+  let pendingBlock: { type: "class" | "function" } | null = null;
 
-  const inDeclarationBody = (): boolean =>
-    classLikeDepths.length > 0 || functionLikeDepths.length > 0;
+  const inDeclarationBody = (): boolean => classLikeDepths.length > 0 || functionLikeDepths.length > 0;
   const currentNamespace = (): string =>
-    namespaceBlockDepths[namespaceBlockDepths.length - 1]?.packageName ??
-    activeNamespace;
+    namespaceBlockDepths[namespaceBlockDepths.length - 1]?.packageName ?? activeNamespace;
 
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
@@ -2781,10 +2468,7 @@ function extractPhpTopLevelPackageEntries(
       if (functionLikeDepths[functionLikeDepths.length - 1] === braceDepth) {
         functionLikeDepths.pop();
       }
-      if (
-        namespaceBlockDepths[namespaceBlockDepths.length - 1]?.depth ===
-        braceDepth
-      ) {
+      if (namespaceBlockDepths[namespaceBlockDepths.length - 1]?.depth === braceDepth) {
         namespaceBlockDepths.pop();
       }
       braceDepth = Math.max(0, braceDepth - 1);
@@ -2834,10 +2518,7 @@ function extractPhpTopLevelPackageEntries(
     }
 
     if (
-      (token.value === "class" ||
-        token.value === "interface" ||
-        token.value === "trait" ||
-        token.value === "enum") &&
+      (token.value === "class" || token.value === "interface" || token.value === "trait" || token.value === "enum") &&
       !inDeclarationBody()
     ) {
       let lookahead = index + 1;
@@ -2849,10 +2530,7 @@ function extractPhpTopLevelPackageEntries(
           symbolName = nextToken.value;
           break;
         }
-        if (
-          nextToken.type === "brace_open" ||
-          nextToken.type === "semicolon"
-        ) {
+        if (nextToken.type === "brace_open" || nextToken.type === "semicolon") {
           break;
         }
         lookahead += 1;
@@ -2915,9 +2593,7 @@ function extractPhpTopLevelPackageEntries(
     });
   }
 
-  return Array.from(packageEntries.values()).sort((left, right) =>
-    left.packageName.localeCompare(right.packageName),
-  );
+  return Array.from(packageEntries.values()).sort((left, right) => left.packageName.localeCompare(right.packageName));
 }
 
 function tokenizePhpSource(source: string): PhpScannerToken[] {
@@ -2936,10 +2612,7 @@ function tokenizePhpSource(source: string): PhpScannerToken[] {
     }
     if (ch === "/" && next === "*") {
       index += 2;
-      while (
-        index < source.length - 1 &&
-        !(source[index] === "*" && source[index + 1] === "/")
-      ) {
+      while (index < source.length - 1 && !(source[index] === "*" && source[index + 1] === "/")) {
         index += 1;
       }
       index += 1;
@@ -2967,10 +2640,7 @@ function tokenizePhpSource(source: string): PhpScannerToken[] {
         }
         if (current === "/" && afterCurrent === "*") {
           index += 2;
-          while (
-            index < source.length - 1 &&
-            !(source[index] === "*" && source[index + 1] === "/")
-          ) {
+          while (index < source.length - 1 && !(source[index] === "*" && source[index + 1] === "/")) {
             index += 1;
           }
           index += 2;
@@ -3060,17 +2730,12 @@ function tokenizePhpSource(source: string): PhpScannerToken[] {
   return tokens;
 }
 
-function readComposerNamespaceDirs(
-  value: unknown,
-  composerDir: string,
-): Map<string, string[]> {
+function readComposerNamespaceDirs(value: unknown, composerDir: string): Map<string, string[]> {
   const result = new Map<string, string[]>();
   if (!value || typeof value !== "object") {
     return result;
   }
-  for (const [prefix, rawTarget] of Object.entries(
-    value as Record<string, unknown>,
-  )) {
+  for (const [prefix, rawTarget] of Object.entries(value as Record<string, unknown>)) {
     const targets = Array.isArray(rawTarget) ? rawTarget : [rawTarget];
     const dirs = targets
       .filter((target): target is string => typeof target === "string")
@@ -3082,9 +2747,7 @@ function readComposerNamespaceDirs(
   return result;
 }
 
-function mergeComposerNamespaceDirMaps(
-  ...maps: Map<string, string[]>[]
-): Map<string, string[]> {
+function mergeComposerNamespaceDirMaps(...maps: Map<string, string[]>[]): Map<string, string[]> {
   const merged = new Map<string, string[]>();
   for (const map of maps) {
     for (const [prefix, dirs] of map) {
@@ -3106,19 +2769,14 @@ function resolveComposerPath(entry: string, composerDir: string): string {
   return path.resolve(composerDir, entry);
 }
 
-function readComposerStringList(
-  value: unknown,
-  composerDir: string,
-): string[] {
+function readComposerStringList(value: unknown, composerDir: string): string[] {
   if (!Array.isArray(value)) return [];
   return value
     .filter((entry): entry is string => typeof entry === "string")
     .map((entry) => resolveComposerPath(entry, composerDir));
 }
 
-async function loadPhpComposerConfig(
-  composerPath: string,
-): Promise<PhpComposerConfig | null> {
+async function loadPhpComposerConfig(composerPath: string): Promise<PhpComposerConfig | null> {
   const cached = phpComposerConfigCache.get(composerPath);
   if (cached) return await cached;
 
@@ -3128,9 +2786,7 @@ async function loadPhpComposerConfig(
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       const composerDir = path.dirname(composerPath);
       const autoload =
-        parsed.autoload && typeof parsed.autoload === "object"
-          ? (parsed.autoload as Record<string, unknown>)
-          : {};
+        parsed.autoload && typeof parsed.autoload === "object" ? (parsed.autoload as Record<string, unknown>) : {};
       const autoloadDev =
         parsed["autoload-dev"] && typeof parsed["autoload-dev"] === "object"
           ? (parsed["autoload-dev"] as Record<string, unknown>)
@@ -3150,10 +2806,7 @@ async function loadPhpComposerConfig(
       ];
       const excludeFromClassmap = [
         ...readComposerStringList(autoload["exclude-from-classmap"], composerDir),
-        ...readComposerStringList(
-          autoloadDev["exclude-from-classmap"],
-          composerDir,
-        ),
+        ...readComposerStringList(autoloadDev["exclude-from-classmap"], composerDir),
       ];
       const files = [
         ...readComposerStringList(autoload["files"], composerDir),
@@ -3170,18 +2823,11 @@ async function loadPhpComposerConfig(
   return await pending;
 }
 
-function sortPhpComposerMappings(
-  mappings: Map<string, string[]>,
-): Array<[string, string[]]> {
-  return Array.from(mappings.entries()).sort(
-    (left, right) => right[0].length - left[0].length,
-  );
+function sortPhpComposerMappings(mappings: Map<string, string[]>): Array<[string, string[]]> {
+  return Array.from(mappings.entries()).sort((left, right) => right[0].length - left[0].length);
 }
 
-async function resolvePhpPsr4MappedPath(
-  spec: string,
-  mappings: Map<string, string[]>,
-): Promise<string | null> {
+async function resolvePhpPsr4MappedPath(spec: string, mappings: Map<string, string[]>): Promise<string | null> {
   const normalizedSpec = spec.replace(/^\\+/, "");
   const mappingEntries = sortPhpComposerMappings(mappings);
 
@@ -3190,9 +2836,7 @@ async function resolvePhpPsr4MappedPath(
     const suffix = normalizedSpec.slice(prefix.length).replace(/\\/g, "/");
     for (const dir of dirs) {
       const basePath = suffix ? path.join(dir, suffix) : dir;
-      const resolved = await findFirstExistingResolutionCandidate(basePath, [
-        ".php",
-      ]);
+      const resolved = await findFirstExistingResolutionCandidate(basePath, [".php"]);
       if (resolved) return resolved;
     }
   }
@@ -3200,10 +2844,7 @@ async function resolvePhpPsr4MappedPath(
   return null;
 }
 
-function buildPhpPsr0RelativePath(
-  spec: string,
-  prefix: string,
-): string | null {
+function buildPhpPsr0RelativePath(spec: string, prefix: string): string | null {
   if (!spec.startsWith(prefix)) return null;
   const suffix = spec.slice(prefix.length);
   const namespaceParts = suffix.split("\\");
@@ -3213,10 +2854,7 @@ function buildPhpPsr0RelativePath(
   return [namespacePath, classPath].filter(Boolean).join("/");
 }
 
-async function resolvePhpPsr0MappedPath(
-  spec: string,
-  mappings: Map<string, string[]>,
-): Promise<string | null> {
+async function resolvePhpPsr0MappedPath(spec: string, mappings: Map<string, string[]>): Promise<string | null> {
   const normalizedSpec = spec.replace(/^\\+/, "");
   const mappingEntries = sortPhpComposerMappings(mappings);
 
@@ -3225,9 +2863,7 @@ async function resolvePhpPsr0MappedPath(
     if (relativePath === null) continue;
     for (const dir of dirs) {
       const basePath = relativePath ? path.join(dir, relativePath) : dir;
-      const resolved = await findFirstExistingResolutionCandidate(basePath, [
-        ".php",
-      ]);
+      const resolved = await findFirstExistingResolutionCandidate(basePath, [".php"]);
       if (resolved) return resolved;
     }
   }
@@ -3243,10 +2879,7 @@ async function resolvePhpSymbolImportPath(
 ): Promise<string | null> {
   const normalizedSpec = spec.replace(/^\\+/, "");
   const projectIndex = await getPhpProjectSymbolIndex(projectRoot);
-  const pickCandidate = async (
-    candidates: string[],
-    symbolName?: string,
-  ): Promise<string | null> => {
+  const pickCandidate = async (candidates: string[], symbolName?: string): Promise<string | null> => {
     for (const candidate of candidates) {
       const resolvedCandidate = path.resolve(candidate);
       if (allowedFiles && !allowedFiles.has(resolvedCandidate)) {
@@ -3264,8 +2897,7 @@ async function resolvePhpSymbolImportPath(
     return null;
   };
 
-  const exactNamespaceFiles =
-    projectIndex.filesByPackage.get(normalizedSpec) ?? [];
+  const exactNamespaceFiles = projectIndex.filesByPackage.get(normalizedSpec) ?? [];
   const exactNamespaceHit = await pickCandidate(exactNamespaceFiles);
   if (exactNamespaceHit) {
     return exactNamespaceHit;
@@ -3273,8 +2905,7 @@ async function resolvePhpSymbolImportPath(
 
   const parts = normalizedSpec.split("\\").filter(Boolean);
   if (parts.length === 1) {
-    const globalFiles =
-      projectIndex.filesByPackageSymbol.get("")?.get(parts[0]!) ?? [];
+    const globalFiles = projectIndex.filesByPackageSymbol.get("")?.get(parts[0]!) ?? [];
     return await pickCandidate(globalFiles, parts[0]);
   }
 
@@ -3284,8 +2915,7 @@ async function resolvePhpSymbolImportPath(
 
   const importedName = parts[parts.length - 1]!;
   const packageName = parts.slice(0, -1).join("\\");
-  const symbolFiles =
-    projectIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
+  const symbolFiles = projectIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
   const symbolHit = await pickCandidate(symbolFiles, importedName);
   if (symbolHit) {
     return symbolHit;
@@ -3295,22 +2925,14 @@ async function resolvePhpSymbolImportPath(
   return await pickCandidate(packageFiles, importedName);
 }
 
-async function findPhpComposerPath(
-  projectRoot: string,
-  fromFile: string,
-): Promise<string | null> {
+async function findPhpComposerPath(projectRoot: string, fromFile: string): Promise<string | null> {
   return (
     (await findNearestFile(path.dirname(fromFile), projectRoot, "composer.json")) ??
-    ((await fileExists(path.join(projectRoot, "composer.json")))
-      ? path.join(projectRoot, "composer.json")
-      : null)
+    ((await fileExists(path.join(projectRoot, "composer.json"))) ? path.join(projectRoot, "composer.json") : null)
   );
 }
 
-export async function getPhpComposerImplicitFiles(
-  projectRoot: string,
-  fromFile: string,
-): Promise<string[]> {
+export async function getPhpComposerImplicitFiles(projectRoot: string, fromFile: string): Promise<string[]> {
   const composerPath = await findPhpComposerPath(projectRoot, fromFile);
   if (!composerPath) {
     return [];
@@ -3376,20 +2998,11 @@ async function getPhpComposerAutoloadFiles(
   return await pending;
 }
 
-function isPhpComposerClassmapExcluded(
-  filePath: string,
-  composerConfig: PhpComposerConfig,
-): boolean {
+function isPhpComposerClassmapExcluded(filePath: string, composerConfig: PhpComposerConfig): boolean {
   const normalizedFile = normalizePath(path.resolve(filePath));
   return composerConfig.excludeFromClassmap.some((entry) => {
-    const normalizedEntry = normalizePath(path.resolve(entry)).replace(
-      /\/+$/,
-      "",
-    );
-    return (
-      normalizedFile === normalizedEntry ||
-      normalizedFile.startsWith(`${normalizedEntry}/`)
-    );
+    const normalizedEntry = normalizePath(path.resolve(entry)).replace(/\/+$/, "");
+    return normalizedFile === normalizedEntry || normalizedFile.startsWith(`${normalizedEntry}/`);
   });
 }
 
@@ -3405,18 +3018,11 @@ async function resolvePhpImportPath(
 
   const normalizedSpec = spec.trim();
   const isPathLike =
-    normalizedSpec.startsWith(".") ||
-    normalizedSpec.startsWith("/") ||
-    /^[A-Za-z]:[\\/]/.test(normalizedSpec);
+    normalizedSpec.startsWith(".") || normalizedSpec.startsWith("/") || /^[A-Za-z]:[\\/]/.test(normalizedSpec);
   if (isPathLike) {
-    const resolved = await resolveSpecifier(
-      fromFile,
-      normalizedSpec,
-      projectRoot,
-      undefined,
-      undefined,
-      { resolutionExtensions: [".php"] },
-    );
+    const resolved = await resolveSpecifier(fromFile, normalizedSpec, projectRoot, undefined, undefined, {
+      resolutionExtensions: [".php"],
+    });
     const fileResolved = typeof resolved === "string" ? resolved : null;
     phpImportResolutionCache.set(cacheKey, fileResolved);
     return fileResolved;
@@ -3427,38 +3033,26 @@ async function resolvePhpImportPath(
     const composerConfig = await loadPhpComposerConfig(composerPath);
     if (composerConfig) {
       if (!preferredKind || preferredKind === "class") {
-        const psr4Resolved = await resolvePhpPsr4MappedPath(
-          normalizedSpec,
-          composerConfig.psr4,
-        );
+        const psr4Resolved = await resolvePhpPsr4MappedPath(normalizedSpec, composerConfig.psr4);
         if (psr4Resolved) {
           phpImportResolutionCache.set(cacheKey, psr4Resolved);
           return psr4Resolved;
         }
-        const psr0Resolved = await resolvePhpPsr0MappedPath(
-          normalizedSpec,
-          composerConfig.psr0,
-        );
+        const psr0Resolved = await resolvePhpPsr0MappedPath(normalizedSpec, composerConfig.psr0);
         if (psr0Resolved) {
           phpImportResolutionCache.set(cacheKey, psr0Resolved);
           return psr0Resolved;
         }
       }
 
-      const autoloadFiles = await getPhpComposerAutoloadFiles(
-        composerPath,
-        composerConfig,
-      );
+      const autoloadFiles = await getPhpComposerAutoloadFiles(composerPath, composerConfig);
       const symbolResolved = await resolvePhpSymbolImportPath(
         projectRoot,
         normalizedSpec,
         preferredKind,
         autoloadFiles,
       );
-      if (
-        symbolResolved &&
-        !isPhpComposerClassmapExcluded(symbolResolved, composerConfig)
-      ) {
+      if (symbolResolved && !isPhpComposerClassmapExcluded(symbolResolved, composerConfig)) {
         phpImportResolutionCache.set(cacheKey, symbolResolved);
         return symbolResolved;
       }
@@ -3468,29 +3062,18 @@ async function resolvePhpImportPath(
     }
   }
 
-  const symbolResolved = await resolvePhpSymbolImportPath(
-    projectRoot,
-    normalizedSpec,
-    preferredKind,
-  );
+  const symbolResolved = await resolvePhpSymbolImportPath(projectRoot, normalizedSpec, preferredKind);
   if (symbolResolved) {
     phpImportResolutionCache.set(cacheKey, symbolResolved);
     return symbolResolved;
   }
 
-  const pathLikeResolved = await resolvePathLikeModule(
-    projectRoot,
-    normalizedSpec.replace(/\\/g, "/"),
-    [".php"],
-  );
+  const pathLikeResolved = await resolvePathLikeModule(projectRoot, normalizedSpec.replace(/\\/g, "/"), [".php"]);
   phpImportResolutionCache.set(cacheKey, pathLikeResolved);
   return pathLikeResolved;
 }
 
-async function resolveJavaImportPath(
-  projectRoot: string,
-  spec: string,
-): Promise<string | null> {
+async function resolveJavaImportPath(projectRoot: string, spec: string): Promise<string | null> {
   const cacheKey = `${projectRoot}::${spec}`;
   const cached = javaImportResolutionCache.get(cacheKey);
   if (cached !== undefined) return cached;
@@ -3510,22 +3093,16 @@ async function resolveJavaImportPath(
   }
 
   const importedName = parts[parts.length - 1]!;
-  const packageName =
-    importedName === "*"
-      ? parts.slice(0, -1).join(".")
-      : parts.slice(0, -1).join(".");
+  const packageName = importedName === "*" ? parts.slice(0, -1).join(".") : parts.slice(0, -1).join(".");
 
   const packageCandidates = projectIndex.filesByPackage.get(packageName) ?? [];
   if (importedName === "*") {
-    const resolved = packageCandidates[0]
-      ? path.resolve(packageCandidates[0])
-      : null;
+    const resolved = packageCandidates[0] ? path.resolve(packageCandidates[0]) : null;
     javaImportResolutionCache.set(cacheKey, resolved);
     return resolved;
   }
 
-  const symbolFiles =
-    projectIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
+  const symbolFiles = projectIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
   const resolvedCandidate = symbolFiles[0] ?? packageCandidates[0] ?? null;
   const resolved = resolvedCandidate ? path.resolve(resolvedCandidate) : null;
   javaImportResolutionCache.set(cacheKey, resolved);
@@ -3558,28 +3135,14 @@ export async function resolveImportSpecifier(
     if (javaResolved) return javaResolved;
   }
   if (languageId === "php") {
-    const phpResolved = await resolvePhpImportPath(
-      projectRoot,
-      fromFile,
-      spec,
-      opts?.phpImportType,
-    );
+    const phpResolved = await resolvePhpImportPath(projectRoot, fromFile, spec, opts?.phpImportType);
     if (phpResolved) return phpResolved;
   }
 
-  return resolveSpecifier(
-    fromFile,
-    spec,
-    projectRoot,
-    opts?.matchPath,
-    opts?.workspaceConfig,
-    {
-      resolveNodeModules: !!opts?.resolveNodeModules,
-      ...(opts?.resolutionHints
-        ? { resolutionHints: opts.resolutionHints }
-        : {}),
-    },
-  );
+  return resolveSpecifier(fromFile, spec, projectRoot, opts?.matchPath, opts?.workspaceConfig, {
+    resolveNodeModules: !!opts?.resolveNodeModules,
+    ...(opts?.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+  });
 }
 
 export async function resolveSpecifier(
@@ -3596,13 +3159,9 @@ export async function resolveSpecifier(
 ): Promise<FileId | { external: string }> {
   const resolutionHints = normalizeResolutionHints(opts?.resolutionHints);
   const hintKey = resolutionHints.join("|");
-  const resolutionExtensions = getResolutionExtensions(
-    opts?.resolutionExtensions,
-  );
+  const resolutionExtensions = getResolutionExtensions(opts?.resolutionExtensions);
   const extensionKey = resolutionExtensions.join("|");
-  const cacheKey = `${fromFile}::${spec}::nm=${
-    opts?.resolveNodeModules ? 1 : 0
-  }::hints=${hintKey}::exts=${extensionKey}`;
+  const cacheKey = `${fromFile}::${spec}::nm=${opts?.resolveNodeModules ? 1 : 0}::hints=${hintKey}::exts=${extensionKey}`;
   const cached = resolveSpecifierCache.get(cacheKey);
   if (cached) return cached;
   const hasSchemePrefix = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(spec);
@@ -3613,18 +3172,15 @@ export async function resolveSpecifier(
     return ext;
   }
 
-  const isRelativeOrAbsolute =
-    spec.startsWith(".") || spec.startsWith("/") || isWindowsAbsolutePath;
+  const isRelativeOrAbsolute = spec.startsWith(".") || spec.startsWith("/") || isWindowsAbsolutePath;
   if (isRelativeOrAbsolute) {
-    const base = isWindowsAbsolutePath
-      ? spec
-      : spec.startsWith("/")
-        ? path.join(projectRoot, spec)
-        : path.resolve(path.dirname(fromFile), spec);
-    const hit = await findFirstExistingResolutionCandidate(
-      base,
-      resolutionExtensions,
-    );
+    let base = path.resolve(path.dirname(fromFile), spec);
+    if (isWindowsAbsolutePath) {
+      base = spec;
+    } else if (spec.startsWith("/")) {
+      base = path.join(projectRoot, spec);
+    }
+    const hit = await findFirstExistingResolutionCandidate(base, resolutionExtensions);
     if (hit) {
       resolveSpecifierCache.set(cacheKey, hit);
       return hit;
@@ -3681,45 +3237,24 @@ export async function resolveSpecifier(
   }
 
   if (!spec.startsWith(".") && !spec.startsWith("/")) {
-    const resolvedWs = await resolveWorkspacePackage(
-      spec,
-      workspaceConfig,
-      opts?.resolutionExtensions,
-    );
+    const resolvedWs = await resolveWorkspacePackage(spec, workspaceConfig, opts?.resolutionExtensions);
     if (resolvedWs) {
       resolveSpecifierCache.set(cacheKey, resolvedWs);
       return resolvedWs;
     }
     const fromExt = path.extname(fromFile).toLowerCase();
-    const prefersPathLikeFallback = [
-      ".go",
-      ".java",
-      ".cs",
-      ".rb",
-      ".rs",
-      ".swift",
-    ].includes(fromExt);
-    const shouldTryPathLikeFallback =
-      prefersPathLikeFallback || spec.includes("/") || spec.includes(".");
+    const prefersPathLikeFallback = [".go", ".java", ".cs", ".rb", ".rs", ".swift"].includes(fromExt);
+    const shouldTryPathLikeFallback = prefersPathLikeFallback || spec.includes("/") || spec.includes(".");
     if (shouldTryPathLikeFallback) {
       // Try path-like fallback for languages that often map package-like names to source paths.
-      const pathLike = await resolvePathLikeModule(
-        projectRoot,
-        spec,
-        opts?.resolutionExtensions,
-      );
+      const pathLike = await resolvePathLikeModule(projectRoot, spec, opts?.resolutionExtensions);
       if (pathLike) {
         resolveSpecifierCache.set(cacheKey, pathLike);
         return pathLike;
       }
     }
     if (opts?.resolveNodeModules) {
-      const nm = await resolveFromNodeModules(
-        spec,
-        fromFile,
-        projectRoot,
-        opts?.resolutionExtensions,
-      );
+      const nm = await resolveFromNodeModules(spec, fromFile, projectRoot, opts?.resolutionExtensions);
       if (nm) {
         resolveSpecifierCache.set(cacheKey, nm);
         return nm;
@@ -3728,14 +3263,9 @@ export async function resolveSpecifier(
   }
   if (resolutionHints.length > 0) {
     for (const hint of resolutionHints) {
-      const baseDir = path.isAbsolute(hint)
-        ? hint
-        : path.resolve(projectRoot, hint);
+      const baseDir = path.isAbsolute(hint) ? hint : path.resolve(projectRoot, hint);
       const base = path.resolve(baseDir, spec);
-      const hit = await findFirstExistingResolutionCandidate(
-        base,
-        resolutionExtensions,
-      );
+      const hit = await findFirstExistingResolutionCandidate(base, resolutionExtensions);
       if (hit) {
         resolveSpecifierCache.set(cacheKey, hit);
         return hit;
@@ -3757,25 +3287,16 @@ async function resolveFromNodeModules(
     // Walk up from the file directory to project root looking for node_modules
     let dir = path.dirname(fromFile);
     const parts = spec.split("/");
-    const packageName = spec.startsWith("@")
-      ? parts.slice(0, 2).join("/")
-      : parts[0]!;
-    const subpath = spec.startsWith("@")
-      ? parts.slice(2).join("/")
-      : parts.slice(1).join("/");
+    const packageName = spec.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0]!;
+    const subpath = spec.startsWith("@") ? parts.slice(2).join("/") : parts.slice(1).join("/");
     while (true) {
       const nmDir = path.join(dir, "node_modules", packageName);
       if (await fileExists(nmDir)) {
         const pkgPath = path.join(nmDir, "package.json");
         const pkg = await loadJSON<MinimalPackageJson>(pkgPath);
         const baseDir = nmDir;
-        const tryResolveRelative = async (
-          rel: string,
-        ): Promise<string | null> => {
-          return await findFirstExistingResolutionCandidate(
-            path.resolve(baseDir, rel),
-            resolutionExtensions,
-          );
+        const tryResolveRelative = async (rel: string): Promise<string | null> => {
+          return await findFirstExistingResolutionCandidate(path.resolve(baseDir, rel), resolutionExtensions);
         };
         // Exports map handling (simplified)
         const pickExportTarget = (target: unknown): string | null => {
@@ -3804,27 +3325,15 @@ async function resolveFromNodeModules(
           }
         }
         if (subpath) {
-          const hit = await findFirstExistingResolutionCandidate(
-            path.join(baseDir, subpath),
-            resolutionExtensions,
-          );
+          const hit = await findFirstExistingResolutionCandidate(path.join(baseDir, subpath), resolutionExtensions);
           if (hit) return hit;
         }
-        const mainField =
-          typeof pkg?.main === "string"
-            ? path.resolve(baseDir, pkg.main)
-            : null;
+        const mainField = typeof pkg?.main === "string" ? path.resolve(baseDir, pkg.main) : null;
         if (mainField) {
-          const mainHit = await findFirstExistingResolutionCandidate(
-            mainField,
-            resolutionExtensions,
-          );
+          const mainHit = await findFirstExistingResolutionCandidate(mainField, resolutionExtensions);
           if (mainHit) return mainHit;
         }
-        const indexHit = await findFirstExistingResolutionCandidate(
-          path.join(baseDir, "index"),
-          resolutionExtensions,
-        );
+        const indexHit = await findFirstExistingResolutionCandidate(path.join(baseDir, "index"), resolutionExtensions);
         if (indexHit) return indexHit;
         return baseDir;
       }
@@ -3853,14 +3362,10 @@ export async function getGitHead(projectRoot: string): Promise<string | null> {
 
 export async function isGitRepo(projectRoot: string): Promise<boolean> {
   try {
-    const { stdout } = await execFileAsync(
-      "git",
-      ["rev-parse", "--is-inside-work-tree"],
-      {
-        cwd: projectRoot,
-        env: process.env,
-      },
-    );
+    const { stdout } = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], {
+      cwd: projectRoot,
+      env: process.env,
+    });
     return stdout?.toString().trim() === "true";
   } catch {
     return false;
@@ -3903,25 +3408,15 @@ export async function getGitBlobHashes(
     new Set(
       files
         .map((file) => normalizePath(path.relative(projectRoot, file)))
-        .filter(
-          (rel) =>
-            rel &&
-            !rel.startsWith("..") &&
-            !path.isAbsolute(rel) &&
-            rel !== ".",
-        ),
+        .filter((rel) => rel && !rel.startsWith("..") && !path.isAbsolute(rel) && rel !== "."),
     ),
   );
   if (relFiles.length === 0) return new Map();
   try {
-    const { stdout: trackedStdout } = await execFileAsync(
-      "git",
-      ["ls-files", "-z", "--", ...relFiles],
-      {
-        cwd: projectRoot,
-        env: process.env,
-      },
-    );
+    const { stdout: trackedStdout } = await execFileAsync("git", ["ls-files", "-z", "--", ...relFiles], {
+      cwd: projectRoot,
+      env: process.env,
+    });
     const trackedRel = trackedStdout
       .toString()
       .split("\0")
@@ -3945,11 +3440,7 @@ export async function getGitBlobHashes(
       child.on("error", reject);
       child.on("close", (code) => {
         if (code !== 0) {
-          reject(
-            new Error(
-              `git hash-object failed (${code}): ${stderr || "unknown error"}`,
-            ),
-          );
+          reject(new Error(`git hash-object failed (${code}): ${stderr || "unknown error"}`));
           return;
         }
         resolve(
@@ -4033,12 +3524,7 @@ export async function getUnifiedDiff(
     head?: string | undefined;
   },
 ): Promise<string> {
-  const args = [
-    "diff",
-    "--unified=0",
-    "--no-color",
-    "--diff-filter=ACDMRTUXB",
-  ];
+  const args = ["diff", "--unified=0", "--no-color", "--diff-filter=ACDMRTUXB"];
   if (opts.base) {
     const head = opts.head ?? "HEAD";
     args.push(`${opts.base}..${head}`);
@@ -4059,11 +3545,7 @@ export async function getUnifiedDiff(
   }
 }
 
-function createGitDiffError(
-  projectRoot: string,
-  args: string[],
-  error: unknown,
-): Error {
+function createGitDiffError(projectRoot: string, args: string[], error: unknown): Error {
   let detail = stringifyUnknown(error);
   if (
     typeof error === "object" &&
@@ -4074,9 +3556,7 @@ function createGitDiffError(
   ) {
     detail = error.stderr.trim();
   }
-  return new Error(
-    `git ${args.join(" ")} failed in ${projectRoot}: ${detail}`,
-  );
+  return new Error(`git ${args.join(" ")} failed in ${projectRoot}: ${detail}`);
 }
 
 async function findPythonPackageAnchor(startDir: string): Promise<string> {
@@ -4111,9 +3591,7 @@ export async function resolvePythonModule(
   moduleName: string | null,
   importDotCount: number,
 ): Promise<FileId | { external: string }> {
-  const cacheKey = `${fromFile}::${".".repeat(importDotCount)}${
-    moduleName ?? ""
-  }`;
+  const cacheKey = `${fromFile}::${".".repeat(importDotCount)}${moduleName ?? ""}`;
   const cached = resolvePythonModuleCache.get(cacheKey);
   if (cached) return cached;
   const fromDir = path.dirname(fromFile);
@@ -4244,21 +3722,14 @@ export function clearResolutionCaches(): void {
 // ----------------- Caches -----------------
 const fileExistsCache = new Map<string, boolean>();
 const resolveSpecifierCache = new Map<string, FileId | { external: string }>();
-const resolvePythonModuleCache = new Map<
-  string,
-  FileId | { external: string }
->();
+const resolvePythonModuleCache = new Map<string, FileId | { external: string }>();
 
 /**
  * Map over items with bounded concurrency.
  * Uses a streaming approach to avoid creating all promises upfront,
  * preventing memory issues with large arrays and EMFILE errors.
  */
-export async function mapLimit<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
+export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   if (items.length === 0) return [];
 
   const results = new Array<R>(items.length);
@@ -4301,10 +3772,7 @@ export async function mapLimit<T, R>(
     rejectAll = reject;
     startNext();
     // Handle empty case or immediate completion
-    if (
-      !aborted &&
-      (items.length === 0 || (nextIndex >= items.length && activeCount === 0))
-    ) {
+    if (!aborted && (items.length === 0 || (nextIndex >= items.length && activeCount === 0))) {
       resolve(results);
     }
   });

@@ -37,16 +37,8 @@ describe("Bloom filter integration", () => {
     const fileA = path.join(root, "a.ts");
     const fileB = path.join(root, "b.ts");
 
-    await fsp.writeFile(
-      fileA,
-      "export function target() {\n  return 1;\n}\n",
-      "utf8",
-    );
-    await fsp.writeFile(
-      fileB,
-      "import { target as alias } from './a';\nexport const value = alias();\n",
-      "utf8",
-    );
+    await fsp.writeFile(fileA, "export function target() {\n  return 1;\n}\n", "utf8");
+    await fsp.writeFile(fileB, "import { target as alias } from './a';\nexport const value = alias();\n", "utf8");
 
     try {
       const index = await buildProjectIndex(root, {
@@ -72,16 +64,8 @@ describe("Bloom filter integration", () => {
     const fileA = path.join(root, "a.ts");
     const fileB = path.join(root, "b.ts");
 
-    await fsp.writeFile(
-      fileA,
-      "export const value = 123;\n",
-      "utf8",
-    );
-    await fsp.writeFile(
-      fileB,
-      "import { value } from './a';\nconsole.log(value);\n",
-      "utf8",
-    );
+    await fsp.writeFile(fileA, "export const value = 123;\n", "utf8");
+    await fsp.writeFile(fileB, "import { value } from './a';\nconsole.log(value);\n", "utf8");
 
     try {
       await buildProjectIndex(root, { cache: "disk", useBloomFilters: true });

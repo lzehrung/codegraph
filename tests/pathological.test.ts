@@ -1,12 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import path from "node:path";
-import {
-  buildProjectIndex,
-  collectGraph,
-  findCycles,
-  goToDefinition,
-  listProjectFiles,
-} from "../src/index.js";
+import { buildProjectIndex, collectGraph, findCycles, goToDefinition, listProjectFiles } from "../src/index.js";
 
 const SAMPLES_ROOT = path.resolve(__dirname, "samples/pathological");
 
@@ -25,9 +19,7 @@ describe("Pathological Test Cases", () => {
       expect(files.length).toBeGreaterThanOrEqual(5);
 
       // Check that level5Export is accessible from index.ts
-      const indexModule = index.byFile.get(
-        path.join(projectRoot, "index.ts").replace(/\\/g, "/"),
-      );
+      const indexModule = index.byFile.get(path.join(projectRoot, "index.ts").replace(/\\/g, "/"));
       expect(indexModule).toBeDefined();
 
       // Verify exports are tracked
@@ -95,9 +87,7 @@ describe("Pathological Test Cases", () => {
         });
 
         // Valid file should still be indexed
-        const validFile = [...index.byFile.keys()].find((f) =>
-          f.includes("valid.ts"),
-        );
+        const validFile = [...index.byFile.keys()].find((f) => f.includes("valid.ts"));
         expect(validFile).toBeDefined();
 
         if (validFile) {

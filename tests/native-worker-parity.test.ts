@@ -1,17 +1,10 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  buildProjectIndexFromFiles,
-  listProjectFiles,
-  type ProjectIndex,
-  type BuildReport,
-} from "../src/index.js";
+import { buildProjectIndexFromFiles, listProjectFiles, type ProjectIndex, type BuildReport } from "../src/index.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
 import * as nativeWorkerPool from "../src/worker/nativeWorkerPool.js";
 
-const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable()
-  ? describe
-  : describe.skip;
+const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples");
 
@@ -107,20 +100,14 @@ nativeDescribe("native worker parity", () => {
 
     const report: BuildReport = { timings: {} };
     // useNativeWorkers + native off: pool should not be created, results still valid
-    const index = await buildProjectIndexFromFiles(
-      path.join(sampleRoot, "typescript"),
-      files,
-      {
-        native: "off",
-        useNativeWorkers: true,
-        report,
-      },
-    );
+    const index = await buildProjectIndexFromFiles(path.join(sampleRoot, "typescript"), files, {
+      native: "off",
+      useNativeWorkers: true,
+      report,
+    });
     expect(index.byFile.size).toBeGreaterThan(0);
     // Pool should not have been enabled since native is off
-    expect(
-      report.workerPool === undefined || report.workerPool.enabled === false,
-    ).toBe(true);
+    expect(report.workerPool === undefined || report.workerPool.enabled === false).toBe(true);
   }, 15_000);
 
   it("records worker startup failures in the build report", async () => {
@@ -128,30 +115,22 @@ nativeDescribe("native worker parity", () => {
     expect(files.length).toBeGreaterThan(0);
 
     const report: BuildReport = { timings: {} };
-    const startupFailure = vi
-      .spyOn(nativeWorkerPool, "createNativeWorkerPool")
-      .mockImplementation(() => {
-        throw new Error("synthetic worker startup failure");
-      });
+    const startupFailure = vi.spyOn(nativeWorkerPool, "createNativeWorkerPool").mockImplementation(() => {
+      throw new Error("synthetic worker startup failure");
+    });
 
     try {
-      const index = await buildProjectIndexFromFiles(
-        path.join(sampleRoot, "typescript"),
-        files,
-        {
-          native: "on",
-          useNativeWorkers: true,
-          report,
-        },
-      );
+      const index = await buildProjectIndexFromFiles(path.join(sampleRoot, "typescript"), files, {
+        native: "on",
+        useNativeWorkers: true,
+        report,
+      });
 
       expect(index.byFile.size).toBeGreaterThan(0);
       expect(report.workerPool?.enabled).toBe(false);
       expect(report.workerPool?.threads).toBe(0);
       expect(report.workerPool?.tasksSubmitted).toBe(0);
-      expect(report.workerPool?.startupError).toContain(
-        "synthetic worker startup failure",
-      );
+      expect(report.workerPool?.startupError).toContain("synthetic worker startup failure");
     } finally {
       startupFailure.mockRestore();
     }

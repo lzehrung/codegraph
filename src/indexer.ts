@@ -60,10 +60,7 @@ import {
   type SymbolListItem,
   type WorkerPoolReport,
 } from "./indexer/types.js";
-import {
-  buildScopeIndexFromSource as buildScopeIndexFromSourceFromModule,
-  type ScopeIndex,
-} from "./indexer/scope.js";
+import { buildScopeIndexFromSource as buildScopeIndexFromSourceFromModule, type ScopeIndex } from "./indexer/scope.js";
 import type { LanguageSupport } from "./languages.js";
 import type { JsLanguage, SyntaxTreeLike } from "./languages/types.js";
 import type { NativeQueryResults, NativeRuntimeMode } from "./native/treeSitterNative.js";
@@ -140,14 +137,7 @@ export function collectLocalsAndExportsFromSource(
     logLevel?: import("./logging.js").LogLevel;
   },
 ): ModuleIndex {
-  return collectLocalsAndExportsFromLocalsModule(
-    file,
-    source,
-    support,
-    lang,
-    imports,
-    opts,
-  );
+  return collectLocalsAndExportsFromLocalsModule(file, source, support, lang, imports, opts);
 }
 
 export async function collectImportsForFile(
@@ -186,20 +176,10 @@ export function buildScopeIndexFromSource(
   imports: ImportBinding[] = [],
   opts?: { tree?: SyntaxTreeLike; nativeMode?: NativeRuntimeMode },
 ): ScopeIndex {
-  return buildScopeIndexFromSourceFromModule(
-    file,
-    source,
-    support,
-    lang,
-    imports,
-    opts,
-  );
+  return buildScopeIndexFromSourceFromModule(file, source, support, lang, imports, opts);
 }
 
-export async function __buildSymbolGraphDetailedCompat(
-  index: ProjectIndex,
-): Promise<SymbolGraph> {
+export async function __buildSymbolGraphDetailedCompat(index: ProjectIndex): Promise<SymbolGraph> {
   const { buildSymbolGraphDetailed } = await import("./index.js");
   return await buildSymbolGraphDetailed(index);
 }
-

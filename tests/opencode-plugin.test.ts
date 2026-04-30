@@ -19,15 +19,9 @@ type ToolOutput = {
   error?: string;
 };
 
-const parseToolOutput = (value: string): ToolOutput =>
-  JSON.parse(value) as ToolOutput;
+const parseToolOutput = (value: string): ToolOutput => JSON.parse(value) as ToolOutput;
 
-const samplePath = path.resolve(
-  process.cwd(),
-  "tests",
-  "samples",
-  "typescript",
-);
+const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
 
 const metadataEvents: Array<{ chunk: unknown }> = [];
 
@@ -61,10 +55,7 @@ describe("OpenCode plugin tools", () => {
 
   it("definition returns a definition result", async () => {
     const mainFile = path.join(samplePath, "main.ts");
-    const output = await definition.execute(
-      { file: mainFile, line: 7, column: 25 },
-      context,
-    );
+    const output = await definition.execute({ file: mainFile, line: 7, column: 25 }, context);
     const parsed = parseToolOutput(output);
     expect(parsed.status).toBe("ok");
 
@@ -76,10 +67,7 @@ describe("OpenCode plugin tools", () => {
 
   it("references returns at least one reference", async () => {
     const utilsFile = path.join(samplePath, "utils.ts");
-    const output = await references.execute(
-      { file: utilsFile, line: 1, column: 17 },
-      context,
-    );
+    const output = await references.execute({ file: utilsFile, line: 1, column: 17 }, context);
     const parsed = parseToolOutput(output);
     expect(parsed.status).toBe("ok");
 
@@ -90,10 +78,7 @@ describe("OpenCode plugin tools", () => {
   });
 
   it("overview returns a summary string", async () => {
-    const output = await overview.execute(
-      { file: path.join(samplePath, "main.ts") },
-      context,
-    );
+    const output = await overview.execute({ file: path.join(samplePath, "main.ts") }, context);
     const parsed = parseToolOutput(output);
     expect(parsed.status).toBe("ok");
     expect(typeof parsed.result).toBe("string");
@@ -120,10 +105,7 @@ describe("OpenCode plugin tools", () => {
 
   it("impact_stream emits metadata chunks and returns a summary", async () => {
     metadataEvents.length = 0;
-    const output = await impact_stream.execute(
-      { base: "HEAD~1", head: "HEAD" },
-      context,
-    );
+    const output = await impact_stream.execute({ base: "HEAD~1", head: "HEAD" }, context);
     const parsed = parseToolOutput(output);
     expect(parsed.status).toBe("ok");
     expect(metadataEvents.length).toBeGreaterThan(0);

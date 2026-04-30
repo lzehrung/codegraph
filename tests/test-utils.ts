@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeAll } from 'vitest';
-import path from 'node:path';
+import { describe, it, expect, beforeAll } from "vitest";
+import path from "node:path";
 import {
   buildProjectIndex,
   buildProjectIndexFromFiles,
@@ -9,32 +9,32 @@ import {
   listSymbols,
   ProjectIndex,
   SymbolListItem,
-} from '../src/index.js';
+} from "../src/index.js";
 
 export type SampleLanguage =
-  | 'typescript'
-  | 'tsx'
-  | 'python'
-  | 'php'
-  | 'javascript'
-  | 'c'
-  | 'cpp'
-  | 'go'
-  | 'java'
-  | 'csharp'
-  | 'kotlin'
-  | 'ruby'
-  | 'rust'
-  | 'swift'
-  | 'html'
-  | 'css'
-  | 'scss'
-  | 'less'
-  | 'vue'
-  | 'svelte';
+  | "typescript"
+  | "tsx"
+  | "python"
+  | "php"
+  | "javascript"
+  | "c"
+  | "cpp"
+  | "go"
+  | "java"
+  | "csharp"
+  | "kotlin"
+  | "ruby"
+  | "rust"
+  | "swift"
+  | "html"
+  | "css"
+  | "scss"
+  | "less"
+  | "vue"
+  | "svelte";
 
 export function getSamplePath(language: SampleLanguage): string {
-  return path.resolve(process.cwd(), 'tests', 'samples', language);
+  return path.resolve(process.cwd(), "tests", "samples", language);
 }
 
 export async function createTestIndex(language: SampleLanguage): Promise<ProjectIndex> {
@@ -46,18 +46,11 @@ export async function createTestIndexFromPath(samplePath: string): Promise<Proje
   return await buildProjectIndex(samplePath);
 }
 
-export async function createTestIndexFromFiles(
-  samplePath: string,
-  files: string[]
-): Promise<ProjectIndex> {
+export async function createTestIndexFromFiles(samplePath: string, files: string[]): Promise<ProjectIndex> {
   return await buildProjectIndexFromFiles(samplePath, files);
 }
 
-export function findSymbolsByName(
-  index: ProjectIndex,
-  name: string,
-  file?: string
-): SymbolListItem[] {
+export function findSymbolsByName(index: ProjectIndex, name: string, file?: string): SymbolListItem[] {
   const opts = file ? { file } : undefined;
   return listSymbols(index, opts).filter((symbol) => symbol.name === name);
 }
@@ -75,7 +68,7 @@ export async function testGoToDefinition(
 
   expect(result.status).toBe(expectedStatus);
   if (expectedStatus === "ok" && expectedFile && expectedLine) {
-    if (result.status === 'ok') {
+    if (result.status === "ok") {
       expect(result.definition.file).toBe(expectedFile);
       expect(result.definition.range.start.line).toBe(expectedLine);
     }
@@ -95,7 +88,7 @@ export async function testFindReferences(
   const result = await findReferences(index, { file, line, column });
 
   expect(result.status).toBe(expectedStatus);
-  if (result.status === 'ok') {
+  if (result.status === "ok") {
     expect(result.references.length).toBeGreaterThanOrEqual(expectedCount);
   }
 

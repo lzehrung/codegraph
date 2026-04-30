@@ -1,16 +1,9 @@
 import { parseWithJsLanguage } from "../jsFallback.js";
 import { sliceText, toRange } from "../util.js";
-import {
-  getNativeSyntaxTreeExecution,
-  type NativeRuntimeMode,
-} from "../native/treeSitterNative.js";
+import { getNativeSyntaxTreeExecution, type NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
 import type { LanguageSupport } from "../languages.js";
-import type {
-  JsLanguage,
-  SyntaxNodeLike,
-  SyntaxTreeLike,
-} from "../languages/types.js";
+import type { JsLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import type { ImportBinding } from "./types.js";
 
@@ -56,11 +49,7 @@ export function buildScopeIndexFromSource(
 ): ScopeIndex {
   let tree = opts?.tree ?? null;
   if (!tree) {
-    const nativeTreeExecution = getNativeSyntaxTreeExecution(
-      source,
-      support,
-      opts?.nativeMode,
-    );
+    const nativeTreeExecution = getNativeSyntaxTreeExecution(source, support, opts?.nativeMode);
     if (nativeTreeExecution.tree) {
       tree = new ProjectedSyntaxTree(source, nativeTreeExecution.tree);
     }
@@ -106,17 +95,9 @@ export function buildScopeIndexFromSource(
     }
   }
 
-  const idSet = new Set([
-    ...support.nodeTypes.identifier,
-    ...(support.nodeTypes.shorthandPropertyIdentifier ?? []),
-  ]);
+  const idSet = new Set([...support.nodeTypes.identifier, ...(support.nodeTypes.shorthandPropertyIdentifier ?? [])]);
   const customDeclLanguages = new Set(["c", "cpp", "kotlin", "swift"]);
-  const paramParentTypes = new Set([
-    "parameter_declaration",
-    "parameter",
-    "class_parameter",
-    "lambda_parameters",
-  ]);
+  const paramParentTypes = new Set(["parameter_declaration", "parameter", "class_parameter", "lambda_parameters"]);
 
   const toBindingKind = (kind: string): BindingKind => {
     if (kind === "function") return "function";
@@ -251,11 +232,7 @@ export function buildScopeIndexFromSource(
       node.type === "static_item"
     ) {
       for (const child of node.namedChildren) {
-        if (
-          child.type === "variable_declarator" ||
-          child.type === "var_spec" ||
-          child.type === "const_spec"
-        ) {
+        if (child.type === "variable_declarator" || child.type === "var_spec" || child.type === "const_spec") {
           const name = child.childForFieldName("name");
           if (name) addDecl(name, "local");
         } else if (
@@ -263,26 +240,15 @@ export function buildScopeIndexFromSource(
           (node.type === "assignment" || node.type === "short_var_declaration")
         ) {
           addDecl(child, "local");
-        } else if (
-          node.type === "let_declaration" ||
-          node.type === "const_item" ||
-          node.type === "static_item"
-        ) {
-          const pattern =
-            node.childForFieldName("pattern") || node.childForFieldName("name");
+        } else if (node.type === "let_declaration" || node.type === "const_item" || node.type === "static_item") {
+          const pattern = node.childForFieldName("pattern") || node.childForFieldName("name");
           if (pattern && pattern.type === "identifier") addDecl(pattern, "local");
         }
       }
     }
 
-    if (
-      customDeclLanguages.has(support.id) &&
-      idSet.has(node.type) &&
-      support.isDeclarationName(node)
-    ) {
-      const kind = isParamNode(node)
-        ? "param"
-        : toBindingKind(support.classifyDefinition(node));
+    if (customDeclLanguages.has(support.id) && idSet.has(node.type) && support.isDeclarationName(node)) {
+      const kind = isParamNode(node) ? "param" : toBindingKind(support.classifyDefinition(node));
       addDecl(node, kind);
     }
 
@@ -311,9 +277,7 @@ export function buildScopeIndexFromSource(
             type === "module" ||
             type === "struct_item" ||
             type === "mod_item") &&
-          (child.type === "identifier" ||
-            child.type === "type_identifier" ||
-            child.type === "parameters")
+          (child.type === "identifier" || child.type === "type_identifier" || child.type === "parameters")
         ) {
           continue;
         }

@@ -15,20 +15,12 @@ describe("document link graph extraction", () => {
 
     expect(
       graph.edges.some(
-        (edge) =>
-          edge.from === indexFile &&
-          edge.to.type === "external" &&
-          edge.to.name === "#local-section",
+        (edge) => edge.from === indexFile && edge.to.type === "external" && edge.to.name === "#local-section",
       ),
     ).toBe(false);
 
     expect(
-      graph.edges.some(
-        (edge) =>
-          edge.from === indexFile &&
-          edge.to.type === "file" &&
-          edge.to.path === imageFile,
-      ),
+      graph.edges.some((edge) => edge.from === indexFile && edge.to.type === "file" && edge.to.path === imageFile),
     ).toBe(false);
 
     expect(
@@ -48,19 +40,12 @@ describe("document link graph extraction", () => {
 
     await fsp.writeFile(
       indexFile,
-      [
-        "[Guide](./guide.md)",
-        "<a href=\"./guide.md\">Guide</a>",
-        "[Guide Again](./guide.md)",
-      ].join("\n"),
+      ["[Guide](./guide.md)", '<a href="./guide.md">Guide</a>', "[Guide Again](./guide.md)"].join("\n"),
       "utf8",
     );
     await fsp.writeFile(guideFile, "# Guide\n", "utf8");
 
-    const graph = await collectGraph(root, [
-      indexFile.replace(/\\/g, "/"),
-      guideFile.replace(/\\/g, "/"),
-    ]);
+    const graph = await collectGraph(root, [indexFile.replace(/\\/g, "/"), guideFile.replace(/\\/g, "/")]);
 
     const edges = graph.edges.filter(
       (edge) =>
@@ -81,11 +66,8 @@ describe("document link graph extraction", () => {
 
     expect(
       graph.edges.some(
-        (edge) =>
-          edge.from === pageFile &&
-          edge.to.type === "external" &&
-          edge.to.name.includes("dynamicPath"),
-        ),
+        (edge) => edge.from === pageFile && edge.to.type === "external" && edge.to.name.includes("dynamicPath"),
+      ),
     ).toBe(false);
   });
 
@@ -97,10 +79,7 @@ describe("document link graph extraction", () => {
     await fsp.writeFile(indexFile, "[Guide](./guide(v2).md)\n", "utf8");
     await fsp.writeFile(guideFile, "# Guide\n", "utf8");
 
-    const graph = await collectGraph(root, [
-      indexFile.replace(/\\/g, "/"),
-      guideFile.replace(/\\/g, "/"),
-    ]);
+    const graph = await collectGraph(root, [indexFile.replace(/\\/g, "/"), guideFile.replace(/\\/g, "/")]);
 
     expect(
       graph.edges.some(
@@ -117,11 +96,7 @@ describe("document link graph extraction", () => {
     const pageFile = path.join(root, "page.mdx");
     const guideFile = path.join(root, "guide.md");
 
-    await fsp.writeFile(
-      pageFile,
-      ["<Guide />", "<br>", "<./guide.md>"].join("\n"),
-      "utf8",
-    );
+    await fsp.writeFile(pageFile, ["<Guide />", "<br>", "<./guide.md>"].join("\n"), "utf8");
     await fsp.writeFile(guideFile, "# Guide\n", "utf8");
 
     const normalizedPage = pageFile.replace(/\\/g, "/");
@@ -130,10 +105,7 @@ describe("document link graph extraction", () => {
 
     expect(
       graph.edges.some(
-        (edge) =>
-          edge.from === normalizedPage &&
-          edge.to.type === "file" &&
-          edge.to.path === normalizedGuide,
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedGuide,
       ),
     ).toBe(true);
 
@@ -152,11 +124,7 @@ describe("document link graph extraction", () => {
     const pageFile = path.join(root, "page.md");
     const guideFile = path.join(root, "guide.md");
 
-    await fsp.writeFile(
-      pageFile,
-      ["<user@example.com>", "<./guide.md>"].join("\n"),
-      "utf8",
-    );
+    await fsp.writeFile(pageFile, ["<user@example.com>", "<./guide.md>"].join("\n"), "utf8");
     await fsp.writeFile(guideFile, "# Guide\n", "utf8");
 
     const normalizedPage = pageFile.replace(/\\/g, "/");
@@ -165,19 +133,13 @@ describe("document link graph extraction", () => {
 
     expect(
       graph.edges.some(
-        (edge) =>
-          edge.from === normalizedPage &&
-          edge.to.type === "file" &&
-          edge.to.path === normalizedGuide,
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedGuide,
       ),
     ).toBe(true);
 
     expect(
       graph.edges.some(
-        (edge) =>
-          edge.from === normalizedPage &&
-          edge.to.type === "external" &&
-          edge.to.name === "user@example.com",
+        (edge) => edge.from === normalizedPage && edge.to.type === "external" && edge.to.name === "user@example.com",
       ),
     ).toBe(false);
   });
@@ -197,28 +159,20 @@ describe("document link graph extraction", () => {
 
     expect(
       graph.edges.some(
-        (edge) =>
-          edge.from === normalizedPage &&
-          edge.to.type === "external" &&
-          edge.to.name === "example.com/docs",
+        (edge) => edge.from === normalizedPage && edge.to.type === "external" && edge.to.name === "example.com/docs",
       ),
     ).toBe(true);
 
     expect(
       graph.edges.some(
         (edge) =>
-          edge.from === normalizedPage &&
-          edge.to.type === "file" &&
-          edge.to.path === normalizedShadowedLocalPath,
+          edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedShadowedLocalPath,
       ),
     ).toBe(false);
 
     expect(
       graph.edges.some(
-        (edge) =>
-          edge.from === normalizedPage &&
-          edge.to.type === "external" &&
-          edge.to.name === "./example.com/docs",
+        (edge) => edge.from === normalizedPage && edge.to.type === "external" && edge.to.name === "./example.com/docs",
       ),
     ).toBe(false);
   });
@@ -237,10 +191,7 @@ describe("document link graph extraction", () => {
 
     expect(
       graph.edges.some(
-        (edge) =>
-          edge.from === normalizedPage &&
-          edge.to.type === "file" &&
-          edge.to.path === normalizedGuide,
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedGuide,
       ),
     ).toBe(false);
   });
@@ -252,11 +203,7 @@ describe("document link graph extraction", () => {
 
     await fsp.writeFile(
       indexFile,
-      [
-        "xref:guide.asciidoc[Guide]",
-        "<<local-anchor,See below>>",
-        "xref:local-anchor[]",
-      ].join("\n"),
+      ["xref:guide.asciidoc[Guide]", "<<local-anchor,See below>>", "xref:local-anchor[]"].join("\n"),
       "utf8",
     );
     await fsp.writeFile(guideFile, "= Guide\n", "utf8");
@@ -267,28 +214,19 @@ describe("document link graph extraction", () => {
 
     expect(
       graph.edges.some(
-        (edge) =>
-          edge.from === normalizedIndex &&
-          edge.to.type === "file" &&
-          edge.to.path === normalizedGuide,
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedGuide,
       ),
     ).toBe(true);
 
     expect(
       graph.edges.some(
-        (edge) =>
-          edge.from === normalizedIndex &&
-          edge.to.type === "external" &&
-          edge.to.name === "local-anchor",
+        (edge) => edge.from === normalizedIndex && edge.to.type === "external" && edge.to.name === "local-anchor",
       ),
     ).toBe(false);
 
     expect(
       graph.edges.some(
-        (edge) =>
-          edge.from === normalizedIndex &&
-          edge.to.type === "file" &&
-          edge.to.path.endsWith("/local-anchor"),
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path.endsWith("/local-anchor"),
       ),
     ).toBe(false);
   });
@@ -311,27 +249,17 @@ describe("document link graph extraction", () => {
     const normalizedPage = pageFile.replace(/\\/g, "/");
     const normalizedGuide = guideFile.replace(/\\/g, "/");
     const normalizedPartial = partialFile.replace(/\\/g, "/");
-    const graph = await collectGraph(root, [
-      normalizedPage,
-      normalizedGuide,
-      normalizedPartial,
-    ]);
+    const graph = await collectGraph(root, [normalizedPage, normalizedGuide, normalizedPartial]);
 
     expect(
       graph.edges.some(
-        (edge) =>
-          edge.from === normalizedPage &&
-          edge.to.type === "file" &&
-          edge.to.path === normalizedGuide,
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedGuide,
       ),
     ).toBe(true);
 
     expect(
       graph.edges.some(
-        (edge) =>
-          edge.from === normalizedPage &&
-          edge.to.type === "file" &&
-          edge.to.path === normalizedPartial,
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedPartial,
       ),
     ).toBe(true);
   });
@@ -343,7 +271,7 @@ describe("document link graph extraction", () => {
 
     await fsp.writeFile(
       pageFile,
-      ['<a href={dynamicPath}>Dynamic</a>', '<a href="./guide.md">Guide</a>'].join("\n"),
+      ["<a href={dynamicPath}>Dynamic</a>", '<a href="./guide.md">Guide</a>'].join("\n"),
       "utf8",
     );
     await fsp.writeFile(guideFile, "# Guide\n", "utf8");
@@ -354,10 +282,7 @@ describe("document link graph extraction", () => {
 
     expect(
       graph.edges.some(
-        (edge) =>
-          edge.from === normalizedPage &&
-          edge.to.type === "file" &&
-          edge.to.path === normalizedGuide,
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedGuide,
       ),
     ).toBe(true);
 
@@ -378,10 +303,7 @@ describe("document link graph extraction", () => {
 
     await fsp.writeFile(
       pageFile,
-      [
-        '<a href={dynamicPath}>Dynamic</a>',
-        '<a href="./guide.md">Guide</a>',
-      ].join("\n"),
+      ["<a href={dynamicPath}>Dynamic</a>", '<a href="./guide.md">Guide</a>'].join("\n"),
       "utf8",
     );
     await fsp.writeFile(guideFile, "# Guide\n", "utf8");
@@ -392,10 +314,7 @@ describe("document link graph extraction", () => {
 
     expect(
       graph.edges.some(
-        (edge) =>
-          edge.from === normalizedPage &&
-          edge.to.type === "file" &&
-          edge.to.path === normalizedGuide,
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedGuide,
       ),
     ).toBe(true);
 

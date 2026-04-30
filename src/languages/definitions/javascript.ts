@@ -36,8 +36,7 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
       },
       {
         type: "method_definition",
-        nameQuery:
-          "name: (_) @chunk.name body: (statement_block) @chunk.block.method",
+        nameQuery: "name: (_) @chunk.name body: (statement_block) @chunk.block.method",
         captureId: "method",
       },
 
@@ -228,14 +227,9 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
     normalizeQuery: (_kind, query) =>
       query
         .replace(/\(function\)/g, "(function_expression)")
-        .replace(
-          JS_OBJECT_METHOD_EXPORT_PATTERN,
-          JS_OBJECT_METHOD_EXPORT_NATIVE_PATTERN,
-        ),
+        .replace(JS_OBJECT_METHOD_EXPORT_PATTERN, JS_OBJECT_METHOD_EXPORT_NATIVE_PATTERN),
     authoritativeKinds: ["exports"],
-    notes: [
-      "normalizes function node compatibility for native javascript grammar",
-    ],
+    notes: ["normalizes function node compatibility for native javascript grammar"],
   },
 };
 registerLanguage(JAVASCRIPT_DEF);

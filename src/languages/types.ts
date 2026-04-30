@@ -25,18 +25,11 @@ export interface SyntaxNodeLike {
 export interface SyntaxTreeLike {
   rootNode: SyntaxNodeLike & {
     descendantForIndex(startIndex: number, endIndex: number): SyntaxNodeLike;
-    descendantForPosition(
-      start: SyntaxPositionLike,
-      end: SyntaxPositionLike,
-    ): SyntaxNodeLike;
+    descendantForPosition(start: SyntaxPositionLike, end: SyntaxPositionLike): SyntaxNodeLike;
   };
 }
 
-export type NativeQueryKind =
-  | "imports"
-  | "exports"
-  | "locals"
-  | "importBindings";
+export type NativeQueryKind = "imports" | "exports" | "locals" | "importBindings";
 
 export type NativeCompatibilityQueryKind = NativeQueryKind | "adHoc";
 

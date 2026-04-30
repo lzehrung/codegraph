@@ -24,20 +24,10 @@ export interface ChunkSFCOptions {
 }
 
 export function chunkSFCFile(opts: ChunkSFCOptions): Chunk[] {
-  const {
-    source,
-    filePath,
-    framework,
-    minTokens = 150,
-    maxTokens = 400,
-    tokenizer,
-    logLevel,
-  } = opts;
+  const { source, filePath, framework, minTokens = 150, maxTokens = 400, tokenizer, logLevel } = opts;
   const baseBlocks = parseSFC(source);
   const blocks =
-    framework === "svelte"
-      ? [...baseBlocks, ...buildSvelteTemplateBlocks(source, baseBlocks)]
-      : baseBlocks;
+    framework === "svelte" ? [...baseBlocks, ...buildSvelteTemplateBlocks(source, baseBlocks)] : baseBlocks;
 
   if (blocks.length === 0) {
     return chunkTextFile({
@@ -53,8 +43,7 @@ export function chunkSFCFile(opts: ChunkSFCOptions): Chunk[] {
   const sortedBlocks = blocks.sort((a, b) => a.startLine - b.startLine);
   const chunks: Chunk[] = [];
   let chunkCounter = 0;
-  const makeChunkId = () =>
-    `${framework}:${filePath ?? "unknown"}:${chunkCounter++}`;
+  const makeChunkId = () => `${framework}:${filePath ?? "unknown"}:${chunkCounter++}`;
 
   for (const block of sortedBlocks) {
     const blockChunks = chunkBlock({
@@ -76,9 +65,7 @@ export function chunkSFCFile(opts: ChunkSFCOptions): Chunk[] {
     }
   }
 
-  return chunks.sort(
-    (a, b) => a.startLine - b.startLine || a.endLine - b.endLine,
-  );
+  return chunks.sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);
 }
 
 function chunkBlock(opts: {
@@ -90,15 +77,7 @@ function chunkBlock(opts: {
   tokenizer?: ((text: string) => number) | undefined;
   logLevel?: LogLevel;
 }): Chunk[] {
-  const {
-    block,
-    framework,
-    filePath,
-    minTokens,
-    maxTokens,
-    tokenizer,
-    logLevel,
-  } = opts;
+  const { block, framework, filePath, minTokens, maxTokens, tokenizer, logLevel } = opts;
 
   if (!block.content.trim()) {
     return [];
@@ -137,10 +116,7 @@ function chunkBlock(opts: {
   });
 }
 
-function selectLanguageKey(
-  block: SFCBlock,
-  framework: SFCFramework,
-): string | null {
+function selectLanguageKey(block: SFCBlock, framework: SFCFramework): string | null {
   if (block.type === "script") {
     const langId = scriptLanguageIdForBlock(block);
     if (langId === "ts") return "typescript";
