@@ -12,7 +12,6 @@ on:
           - patch
           - minor
           - major
-          - resume
 
 permissions:
   contents: write
@@ -47,6 +46,32 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Refuse reruns on an already-tagged release commit
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import { execFileSync } from "node:child_process";
+          import { hasTagForPackageVersion } from "./scripts/release-lib.mjs";
+
+          const version = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
+          const tagOutput = execFileSync("git", ["tag", "--points-at", "HEAD"], { encoding: "utf8" }).trim();
+          const tagNames = tagOutput ? tagOutput.split("\n").filter(Boolean) : [];
+
+          if (!hasTagForPackageVersion("@lzehrung/codegraph", version, tagNames)) {
+            process.exit(0);
+          }
+
+          console.error(
+            [
+              `HEAD already carries the root release tag for version ${version}.`,
+              "This workflow runs from a fresh runner and cannot resume a partially completed publish.",
+              "Recover the release locally with publish:resume if needed, or trigger a new release from a new commit.",
+            ].join(" "),
+          );
+          process.exit(1);
+          NODE
 
       - name: Install dependencies
         run: npm ci
