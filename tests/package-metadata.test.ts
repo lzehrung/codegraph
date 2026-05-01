@@ -55,15 +55,15 @@ describe("package metadata", () => {
     expect(optionalDependencies["@lzehrung/codegraph-native"]).not.toBeUndefined();
   });
 
-  it("ships both the packaged skill archive and the raw skill directory", () => {
+  it("ships the raw bundled skill directory without a stale archive copy", () => {
     const rootPackage = readJson("package.json");
     const files =
       Array.isArray(rootPackage.files) && rootPackage.files.every((entry) => typeof entry === "string")
         ? rootPackage.files
         : [];
 
-    expect(files).toContain("codegraph.skill");
     expect(files).toContain("codegraph-skill");
+    expect(files).not.toContain("codegraph.skill");
   });
 
   it("keeps the published CLI bin path normalized for npm", () => {

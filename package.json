@@ -16,7 +16,6 @@
   },
   "files": [
     "dist",
-    "codegraph.skill",
     "codegraph-skill"
   ],
   "scripts": {
