@@ -40,8 +40,6 @@ npm run publish:patch -- --package js-fallback
 npm run release:minor -- --package @lzehrung/codegraph-native
 ```
 
-The GitHub Release workflow does not publish packages again. It rebuilds, verifies, packs the root tarball, and uploads that tarball asset to the GitHub Release.
-
 ## Package Roles
 
 - `@lzehrung/codegraph`
