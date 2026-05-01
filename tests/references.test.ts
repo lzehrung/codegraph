@@ -32,6 +32,8 @@ describe("Find References", () => {
       expect(result.status).toBe("ok");
       if (result.status === "ok") {
         expect(result.references.length).toBeGreaterThanOrEqual(1);
+        expect(result.provenance?.resolution).toBe("exact");
+        expect(result.provenance?.confidence).toBe("high");
 
         // Should include the definition itself
         const definitionRef = result.references.find((ref) => ref.file === utilsFile && ref.range.start.line === 1);

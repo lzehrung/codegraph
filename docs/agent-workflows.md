@@ -227,26 +227,36 @@ import {
   tool_getFileOverview,
   tool_findSymbol,
   tool_impactJSON,
-  tool_getGraph,
+  tool_getDependencies,
+  tool_getReverseDependencies,
+  tool_getHotspots,
   tool_goToDefinition,
+  tool_findReferences,
 } from "@lzehrung/codegraph";
 
 const overview = await tool_getFileOverview(process.cwd(), "src/utils.ts");
 const matches = await tool_findSymbol(process.cwd(), "collectGraph");
+const deps = await tool_getDependencies(process.cwd(), "src/main.ts", { depth: 2, limit: 20 });
+const reverseDeps = await tool_getReverseDependencies(process.cwd(), "src/index.ts", { depth: 2, limit: 20 });
+const hotspots = await tool_getHotspots(process.cwd(), { limit: 20 });
 const impact = await tool_impactJSON(process.cwd(), {
   provider: "git",
   base: "main",
   head: "feature-branch",
 });
-const graph = await tool_getGraph(process.cwd(), { native: "off" });
 const definition = await tool_goToDefinition(process.cwd(), "src/main.ts", 10, 5, undefined, { native: "on" });
+const references = await tool_findReferences(process.cwd(), "src/main.ts", 10, 5);
 ```
 
 Wrapper notes:
 
 - Import only from `@lzehrung/codegraph`.
-- Tool wrappers accept the same native runtime control through trailing runtime options.
+- Native runtime control is not passed uniformly across all wrappers: `tool_goToDefinition` and `tool_findReferences` accept trailing runtime options, while `tool_findSymbol`, `tool_getDependencies`, `tool_getReverseDependencies`, and `tool_getHotspots` take `native` inside their options object.
 - `tool_getFileOverview` returns structured `ok`, `not_found`, and `error` variants so agents can distinguish missing files from invalid inputs cleanly.
+- `tool_findSymbol` returns stable `id` handles plus `range`, `exported`, `exactMatch`, and `matchKind`.
+- `tool_goToDefinition` and `tool_findReferences` include additive `provenance` metadata when resolution is not just a local binding lookup.
+- Prefer `tool_getDependencies`, `tool_getReverseDependencies`, and `tool_getHotspots` before `tool_getGraph` when the agent only needs a bounded graph slice.
+- Impact wrappers return `schemaVersion` and `format: "full" | "compact"` so downstream prompts can branch on payload shape directly.
 
 ## Review bundles for agents
 

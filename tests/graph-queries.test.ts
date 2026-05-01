@@ -34,6 +34,42 @@ describe("graph queries", () => {
     expect(rdeps.some((d) => d.file === `${root}/c.ts` && d.depth === 2)).toBe(true);
   });
 
+  it("should bound dependency traversal results when a limit is provided", () => {
+    const deps = getDependencies(graph, `${root}/a.ts`, { limit: 1 });
+    expect(deps).toEqual([{ file: `${root}/b.ts`, depth: 1 }]);
+  });
+
+  it("should return no dependency results when the limit is zero", () => {
+    const deps = getDependencies(graph, `${root}/a.ts`, { limit: 0 });
+    expect(deps).toEqual([]);
+  });
+
+  it("should bound reverse dependency traversal results when a limit is provided", () => {
+    const rdeps = getReverseDependencies(graph, `${root}/b.ts`, { limit: 2 });
+    expect(rdeps.length).toBe(2);
+    expect(rdeps.some((d) => d.file === `${root}/a.ts` && d.depth === 1)).toBe(true);
+    expect(rdeps.some((d) => d.file === `${root}/d.ts` && d.depth === 1)).toBe(true);
+  });
+
+  it("should return no reverse dependency results when the limit is zero", () => {
+    const rdeps = getReverseDependencies(graph, `${root}/b.ts`, { limit: 0 });
+    expect(rdeps).toEqual([]);
+  });
+
+  it("should ignore non-finite dependency limits", () => {
+    const depsWithNaN = getDependencies(graph, `${root}/a.ts`, { limit: Number.NaN });
+    const depsWithInfinity = getDependencies(graph, `${root}/a.ts`, { limit: Number.POSITIVE_INFINITY });
+    expect(depsWithNaN).toEqual(getDependencies(graph, `${root}/a.ts`));
+    expect(depsWithInfinity).toEqual(getDependencies(graph, `${root}/a.ts`));
+  });
+
+  it("should ignore non-finite reverse dependency limits", () => {
+    const rdepsWithNaN = getReverseDependencies(graph, `${root}/b.ts`, { limit: Number.NaN });
+    const rdepsWithInfinity = getReverseDependencies(graph, `${root}/b.ts`, { limit: Number.POSITIVE_INFINITY });
+    expect(rdepsWithNaN).toEqual(getReverseDependencies(graph, `${root}/b.ts`));
+    expect(rdepsWithInfinity).toEqual(getReverseDependencies(graph, `${root}/b.ts`));
+  });
+
   it("should find shortest path", () => {
     const p = getShortestPath(graph, `${root}/d.ts`, `${root}/c.ts`);
     expect(p).toEqual([`${root}/d.ts`, `${root}/b.ts`, `${root}/c.ts`]);

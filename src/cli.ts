@@ -1104,6 +1104,8 @@ function ensureImpactReport(report: ImpactReport | CompactImpactReport): ImpactR
     label: edge.label,
   }));
   const result: ImpactReport = {
+    schemaVersion: report.schemaVersion,
+    format: "full",
     changedFiles,
     changedSymbols,
     impacted,

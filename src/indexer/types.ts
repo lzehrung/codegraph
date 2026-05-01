@@ -288,6 +288,12 @@ export type ApiSurface = Array<{
 
 export type GoToRequest = { file: FileId; line: number; column: number };
 
+export type ResolutionProvenance = {
+  backend?: "native" | "js-fallback" | "graph-only" | "heuristic";
+  resolution?: "exact" | "import" | "import-star" | "namespace" | "reexport" | "php-qualified" | "member-access";
+  confidence?: "high" | "medium" | "low";
+};
+
 export type GoToResult =
   | {
       status: "ok";
@@ -296,6 +302,7 @@ export type GoToResult =
         importedFrom?: string | undefined;
         exportedName?: string | undefined;
       };
+      provenance?: ResolutionProvenance;
     }
   | { status: "not_found"; reason: string };
 
@@ -305,3 +312,12 @@ export type Reference = {
   context?: string;
   via?: { import?: ImportBinding; namespaceMember?: string };
 };
+
+export type FindReferencesResult =
+  | {
+      status: "ok";
+      definition: SymbolDef;
+      references: Reference[];
+      provenance?: ResolutionProvenance;
+    }
+  | { status: "not_found"; reason: string };

@@ -16,6 +16,8 @@ describe("Go to Definition", () => {
       if (result.status === "ok") {
         expect(result.definition.file).toBe(utilsFile);
         expect(result.definition.range.start.line).toBe(1); // helperFunction definition
+        expect(result.provenance?.resolution).toBe("namespace");
+        expect(result.provenance?.confidence).toBe("medium");
       }
     });
 

@@ -1,4 +1,5 @@
 import type { FileId, Graph } from "../types.js";
+import { getFiniteNonNegativeLimit } from "./limits.js";
 
 export type DependencyNode = { file: FileId; depth: number };
 
@@ -22,8 +23,17 @@ export type DetailedCycle = {
 
 export type CycleSortMode = "priority" | "size" | "fanin";
 
-export function getDependencies(graph: Graph, startFile: FileId, opts: { depth?: number } = {}): DependencyNode[] {
+export function getDependencies(
+  graph: Graph,
+  startFile: FileId,
+  opts: { depth?: number; limit?: number } = {},
+): DependencyNode[] {
   const maxDepth = opts.depth ?? Number.POSITIVE_INFINITY;
+  const finiteLimit = getFiniteNonNegativeLimit(opts.limit);
+  const maxResults = finiteLimit ?? Number.POSITIVE_INFINITY;
+  if (maxResults === 0) {
+    return [];
+  }
   const out: DependencyNode[] = [];
   const visited = new Set<string>();
   const queue: Array<{ file: string; depth: number }> = [{ file: startFile, depth: 0 }];
@@ -32,7 +42,12 @@ export function getDependencies(graph: Graph, startFile: FileId, opts: { depth?:
   let index = 0;
   while (index < queue.length) {
     const { file, depth } = queue[index++]!;
-    if (depth > 0) out.push({ file, depth });
+    if (depth > 0) {
+      out.push({ file, depth });
+      if (out.length >= maxResults) {
+        break;
+      }
+    }
     if (depth >= maxDepth) continue;
 
     for (const edge of graph.edges) {
@@ -48,9 +63,14 @@ export function getDependencies(graph: Graph, startFile: FileId, opts: { depth?:
 export function getReverseDependencies(
   graph: Graph,
   targetFile: FileId,
-  opts: { depth?: number } = {},
+  opts: { depth?: number; limit?: number } = {},
 ): DependencyNode[] {
   const maxDepth = opts.depth ?? Number.POSITIVE_INFINITY;
+  const finiteLimit = getFiniteNonNegativeLimit(opts.limit);
+  const maxResults = finiteLimit ?? Number.POSITIVE_INFINITY;
+  if (maxResults === 0) {
+    return [];
+  }
   const out: DependencyNode[] = [];
   const visited = new Set<string>();
   const queue: Array<{ file: string; depth: number }> = [{ file: targetFile, depth: 0 }];
@@ -59,7 +79,12 @@ export function getReverseDependencies(
   let index = 0;
   while (index < queue.length) {
     const { file, depth } = queue[index++]!;
-    if (depth > 0) out.push({ file, depth });
+    if (depth > 0) {
+      out.push({ file, depth });
+      if (out.length >= maxResults) {
+        break;
+      }
+    }
     if (depth >= maxDepth) continue;
 
     for (const edge of graph.edges) {
