@@ -236,7 +236,6 @@ export async function tool_findSymbol(
     const matches = allSymbols
       .filter((s) => s.name.toLowerCase().includes(q))
       .map((symbol) => {
-        const exported = isExportedSymbol(index, symbol);
         const exactMatch = symbol.name.toLowerCase() === q;
         const matchKind: ToolSymbolMatch["matchKind"] = exactMatch ? "exact" : "substring";
         return {
@@ -246,9 +245,9 @@ export async function tool_findSymbol(
           file: toProjectRelativePath(root, symbol.file) ?? normalizePath(symbol.file),
           ...(symbol.range ? { range: symbol.range } : {}),
           line: symbol.range?.start.line ?? 0,
-          exported,
           exactMatch,
           matchKind,
+          symbol,
         };
       });
 
@@ -261,9 +260,27 @@ export async function tool_findSymbol(
       return a.line - b.line;
     });
 
+    const exportedDefinitionsByFile = new Map<string, Set<string>>();
+    const limitedMatches = matches.slice(0, options.maxResults ?? 20).map((match) => {
+      const exportedDefinitions =
+        exportedDefinitionsByFile.get(match.symbol.file) ?? getExportedDefinitionsForFile(index, match.symbol.file);
+      exportedDefinitionsByFile.set(match.symbol.file, exportedDefinitions);
+      return {
+        id: match.id,
+        name: match.name,
+        kind: match.kind,
+        file: match.file,
+        ...(match.range ? { range: match.range } : {}),
+        line: match.line,
+        exported: isExportedSymbolDefinition(exportedDefinitions, match.symbol),
+        exactMatch: match.exactMatch,
+        matchKind: match.matchKind,
+      };
+    });
+
     return {
       status: "ok",
-      matches: matches.slice(0, options.maxResults ?? 20),
+      matches: limitedMatches,
     };
   } catch (error) {
     return {
@@ -530,16 +547,10 @@ function listSymbolsForOverview(
 } {
   const symbols = listSymbols(index, { file, includeImports: false });
   const mod = index.byFile.get(file);
-  const exportedDefinitions = new Set(
-    mod?.exports
-      .filter((entry) => entry.type === "local")
-      .map((entry) => makeSymbolIdentity(entry.target.file, entry.target.localName, entry.target.range.start.index)) ??
-      [],
-  );
   return {
     imports: mod?.imports ?? [],
     definitions: symbols,
-    exportedDefinitions,
+    exportedDefinitions: getExportedDefinitionsForFile(index, file),
   };
 }
 
@@ -843,16 +854,12 @@ function isExportedSymbolDefinition(exportedDefinitions: Set<string>, symbol: Sy
   return exportedDefinitions.has(makeSymbolIdentity(symbol.file, symbol.name, symbol.range?.start.index));
 }
 
-function isExportedSymbol(index: ProjectIndex, symbol: SymbolListItem): boolean {
-  const mod = index.byFile.get(symbol.file);
-  if (!mod) {
-    return false;
-  }
-  return mod.exports.some(
-    (entry) =>
-      entry.type === "local" &&
-      entry.target.localName === symbol.name &&
-      entry.target.file === symbol.file &&
-      (entry.target.range.start.index ?? 0) === (symbol.range?.start.index ?? 0),
+function getExportedDefinitionsForFile(index: ProjectIndex, file: string): Set<string> {
+  const mod = index.byFile.get(file);
+  return new Set(
+    mod?.exports
+      .filter((entry) => entry.type === "local")
+      .map((entry) => makeSymbolIdentity(entry.target.file, entry.target.localName, entry.target.range.start.index)) ??
+      [],
   );
 }

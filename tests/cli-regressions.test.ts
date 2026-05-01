@@ -721,7 +721,7 @@ describe("CLI flows", () => {
   });
 
   it("impact CLI full JSON payload includes explicit schema metadata", async () => {
-    const root = await mkTmpDir("dg-impact-compact-");
+    const root = await mkTmpDir("dg-impact-full-");
     await fsp.writeFile(path.join(root, "main.ts"), "export function helper() { return 1; }\n", "utf8");
     const diffText = `diff --git a/main.ts b/main.ts
 index 1111111..2222222 100644

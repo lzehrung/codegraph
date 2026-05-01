@@ -251,7 +251,7 @@ const references = await tool_findReferences(process.cwd(), "src/main.ts", 10, 5
 Wrapper notes:
 
 - Import only from `@lzehrung/codegraph`.
-- Tool wrappers accept the same native runtime control through trailing runtime options.
+- Native runtime control is not passed uniformly across all wrappers: `tool_goToDefinition` and `tool_findReferences` accept trailing runtime options, while `tool_findSymbol`, `tool_getDependencies`, `tool_getReverseDependencies`, and `tool_getHotspots` take `native` inside their options object.
 - `tool_getFileOverview` returns structured `ok`, `not_found`, and `error` variants so agents can distinguish missing files from invalid inputs cleanly.
 - `tool_findSymbol` returns stable `id` handles plus `range`, `exported`, `exactMatch`, and `matchKind`.
 - `tool_goToDefinition` and `tool_findReferences` include additive `provenance` metadata when resolution is not just a local binding lookup.

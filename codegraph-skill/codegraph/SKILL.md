@@ -144,10 +144,11 @@ const workerIndex = await buildProjectIndex(root, { useNativeWorkers: true });
 
 There is no separate native import. Use `native: "auto" | "on" | "off"` in public API calls to control native usage explicitly. `native: "on"` fails if the native addon cannot be loaded. `native: "off"` means the opt-in JS fallback path and requires `@lzehrung/codegraph-js-fallback`.
 
-Agent-tool wrappers accept the same control as a trailing runtime option, for example:
+Agent-tool wrappers support the same native runtime modes, but not all wrappers take runtime control in the same position:
 
 ```ts
 import {
+  tool_findSymbol,
   tool_getDependencies,
   tool_getReverseDependencies,
   tool_getHotspots,
@@ -156,11 +157,12 @@ import {
   tool_impactJSON,
 } from "@lzehrung/codegraph";
 
+const matches = await tool_findSymbol(root, "collectGraph", { maxResults: 10, native: "auto" });
 const deps = await tool_getDependencies(root, "src/main.ts", { depth: 2, limit: 20, native: "off" });
-const reverseDeps = await tool_getReverseDependencies(root, "src/index.ts", { depth: 2, limit: 20 });
-const hotspots = await tool_getHotspots(root, { limit: 20 });
+const reverseDeps = await tool_getReverseDependencies(root, "src/index.ts", { depth: 2, limit: 20, native: "auto" });
+const hotspots = await tool_getHotspots(root, { limit: 20, native: "auto" });
 const definition = await tool_goToDefinition(root, "src/main.ts", 10, 5, undefined, { native: "on" });
-const references = await tool_findReferences(root, "src/main.ts", 10, 5);
+const references = await tool_findReferences(root, "src/main.ts", 10, 5, undefined, { native: "auto" });
 const impact = await tool_impactJSON(root, { provider: "git", base: "main", head: "HEAD", compact: true });
 ```
 
