@@ -2,6 +2,7 @@ import {
   buildProjectIndex,
   analyzeImpactFromDiff,
   listSymbols,
+  symbolId,
   type SymbolListItem,
   listProjectFiles,
   collectGraph,
@@ -263,7 +264,7 @@ export async function tool_findSymbol(
     const exportedDefinitionsByFile = new Map<string, Set<string>>();
     const limitedMatches = matches.slice(0, options.maxResults ?? 20).map((match) => {
       const exportedDefinitions =
-        exportedDefinitionsByFile.get(match.symbol.file) ?? getExportedDefinitionsForFile(index, match.symbol.file);
+        exportedDefinitionsByFile.get(match.symbol.file) ?? getExportedSymbolIdsForFile(index, match.symbol.file);
       exportedDefinitionsByFile.set(match.symbol.file, exportedDefinitions);
       return {
         id: match.id,
@@ -550,7 +551,7 @@ function listSymbolsForOverview(
   return {
     imports: mod?.imports ?? [],
     definitions: symbols,
-    exportedDefinitions: getExportedDefinitionsForFile(index, file),
+    exportedDefinitions: getExportedSymbolIdsForFile(index, file),
   };
 }
 
@@ -846,20 +847,11 @@ export async function tool_findReferences(
   }
 }
 
-function makeSymbolIdentity(file: string, localName: string, startIndex?: number): string {
-  return `${file}::${localName}::${startIndex ?? 0}`;
-}
-
 function isExportedSymbolDefinition(exportedDefinitions: Set<string>, symbol: SymbolListItem): boolean {
-  return exportedDefinitions.has(makeSymbolIdentity(symbol.file, symbol.name, symbol.range?.start.index));
+  return exportedDefinitions.has(symbol.id);
 }
 
-function getExportedDefinitionsForFile(index: ProjectIndex, file: string): Set<string> {
+function getExportedSymbolIdsForFile(index: ProjectIndex, file: string): Set<string> {
   const mod = index.byFile.get(file);
-  return new Set(
-    mod?.exports
-      .filter((entry) => entry.type === "local")
-      .map((entry) => makeSymbolIdentity(entry.target.file, entry.target.localName, entry.target.range.start.index)) ??
-      [],
-  );
+  return new Set(mod?.exports.filter((entry) => entry.type === "local").map((entry) => symbolId(entry.target)) ?? []);
 }

@@ -1,6 +1,8 @@
 import type { GoToResult, ProjectIndex, ResolutionProvenance, SymbolDef } from "./types.js";
 
 type GoToVia = Extract<GoToResult, { status: "ok" }>["via"];
+type ResolutionKind = NonNullable<ResolutionProvenance["resolution"]>;
+type ResolutionConfidence = NonNullable<ResolutionProvenance["confidence"]>;
 
 function getNavigationBackend(index: ProjectIndex): ResolutionProvenance["backend"] | undefined {
   if (index.nativeMode === "on") {
@@ -14,8 +16,8 @@ function getNavigationBackend(index: ProjectIndex): ResolutionProvenance["backen
 
 export function createNavigationProvenance(
   index: ProjectIndex,
-  resolution: ResolutionProvenance["resolution"],
-  confidence: ResolutionProvenance["confidence"],
+  resolution: ResolutionKind,
+  confidence: ResolutionConfidence,
 ): ResolutionProvenance {
   const backend = getNavigationBackend(index);
   return {
@@ -30,8 +32,8 @@ export function okGoToResult(
   definition: SymbolDef,
   options: {
     via?: GoToVia;
-    resolution: ResolutionProvenance["resolution"];
-    confidence: ResolutionProvenance["confidence"];
+    resolution: ResolutionKind;
+    confidence: ResolutionConfidence;
   },
 ): GoToResult {
   return {
