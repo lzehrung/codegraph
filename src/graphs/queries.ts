@@ -29,6 +29,9 @@ export function getDependencies(
 ): DependencyNode[] {
   const maxDepth = opts.depth ?? Number.POSITIVE_INFINITY;
   const maxResults = opts.limit !== undefined ? Math.max(0, Math.floor(opts.limit)) : Number.POSITIVE_INFINITY;
+  if (maxResults === 0) {
+    return [];
+  }
   const out: DependencyNode[] = [];
   const visited = new Set<string>();
   const queue: Array<{ file: string; depth: number }> = [{ file: startFile, depth: 0 }];
@@ -62,6 +65,9 @@ export function getReverseDependencies(
 ): DependencyNode[] {
   const maxDepth = opts.depth ?? Number.POSITIVE_INFINITY;
   const maxResults = opts.limit !== undefined ? Math.max(0, Math.floor(opts.limit)) : Number.POSITIVE_INFINITY;
+  if (maxResults === 0) {
+    return [];
+  }
   const out: DependencyNode[] = [];
   const visited = new Set<string>();
   const queue: Array<{ file: string; depth: number }> = [{ file: targetFile, depth: 0 }];
