@@ -44,9 +44,10 @@ npm run release:minor -- --package @lzehrung/codegraph-native
 
 Use the `release-root` GitHub Actions workflow when you want GitHub to cut a root package release end-to-end.
 
-- Trigger it manually with `release_type=patch|minor|major|resume`.
+- Trigger it manually with `release_type=patch|minor|major`.
 - The workflow runs `npm run publish:<release_type> -- --package root`.
 - On success it creates or updates the matching `vX.Y.Z` GitHub Release and uploads the root `.tgz` asset.
+- The workflow refuses reruns from a commit that is already tagged for the current root version. A fresh Actions runner cannot reconstruct the dirty local resume state that `publish:resume` expects.
 
 This workflow is intentionally root-only for now. Native releases still need a real multi-platform artifact flow before they should move to GitHub Actions.
 

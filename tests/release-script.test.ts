@@ -5,6 +5,7 @@ import {
   computePublishExecutionSteps,
   detectChangedReleasePackages,
   getReleasePackage,
+  hasTagForPackageVersion,
   isAllowedResumePath,
   parseGitStatusPaths,
   recoverNativePackageManifestForResume,
@@ -128,6 +129,12 @@ describe("release script helpers", () => {
       "v1.8.44",
       "@lzehrung/codegraph@1.8.44",
     ]);
+  });
+
+  it("detects when the current version is already tagged for a root release", () => {
+    expect(hasTagForPackageVersion("@lzehrung/codegraph", "1.8.44", ["v1.8.44"])).toBe(true);
+    expect(hasTagForPackageVersion("@lzehrung/codegraph", "1.8.44", ["@lzehrung/codegraph@1.8.44"])).toBe(true);
+    expect(hasTagForPackageVersion("@lzehrung/codegraph", "1.8.44", ["v1.8.45"])).toBe(false);
   });
 
   it("keeps non-root releases package-scoped only", () => {
