@@ -1,4 +1,5 @@
 import type { FileId, Graph } from "../types.js";
+import { getFiniteNonNegativeLimit } from "./limits.js";
 
 export type DependencyNode = { file: FileId; depth: number };
 
@@ -21,13 +22,6 @@ export type DetailedCycle = {
 };
 
 export type CycleSortMode = "priority" | "size" | "fanin";
-
-function getFiniteNonNegativeLimit(limit: number | undefined): number | undefined {
-  if (typeof limit !== "number" || !Number.isFinite(limit)) {
-    return undefined;
-  }
-  return Math.max(0, Math.floor(limit));
-}
 
 export function getDependencies(
   graph: Graph,

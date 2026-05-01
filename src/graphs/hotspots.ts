@@ -1,4 +1,5 @@
 import type { FileId, Graph } from "../types.js";
+import { getFiniteNonNegativeLimit } from "./limits.js";
 
 export type HotspotEntry = {
   file: FileId;
@@ -11,13 +12,6 @@ export type HotspotOptions = {
   limit?: number;
   includeRoots?: string[];
 };
-
-function getFiniteNonNegativeLimit(limit: number | undefined): number | undefined {
-  if (typeof limit !== "number" || !Number.isFinite(limit)) {
-    return undefined;
-  }
-  return Math.max(0, Math.floor(limit));
-}
 
 function normalizeHotspotPath(filePath: string): string {
   return filePath.replace(/\\/g, "/");
