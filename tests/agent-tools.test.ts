@@ -6,6 +6,9 @@ import * as codegraph from "../src/index.js";
 import {
   tool_listProjectFiles,
   tool_getGraph,
+  tool_getDependencies,
+  tool_getReverseDependencies,
+  tool_getHotspots,
   tool_getFileOverview,
   tool_goToDefinition,
   tool_findReferences,
@@ -47,6 +50,39 @@ describe("Agent Tools", () => {
     expect(result.status).toBe("ok");
     expect(result.graph).toBeDefined();
     expect(result.graph!.nodes.length).toBeGreaterThan(0);
+  });
+
+  it("tool_getDependencies returns bounded normalized dependencies", async () => {
+    const result = await tool_getDependencies(samplePath, "main.ts", { depth: 1, limit: 5 });
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.file).toBe("main.ts");
+      expect(result.dependencies.some((entry) => entry.file === "utils.ts" && entry.depth === 1)).toBe(true);
+      expect(result.dependencies.every((entry) => !path.isAbsolute(entry.file))).toBe(true);
+      expect(result.truncated).toBe(false);
+    }
+  });
+
+  it("tool_getReverseDependencies returns bounded normalized dependents", async () => {
+    const result = await tool_getReverseDependencies(samplePath, "utils.ts", { depth: 1, limit: 5 });
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.file).toBe("utils.ts");
+      expect(result.dependents.some((entry) => entry.file === "main.ts" && entry.depth === 1)).toBe(true);
+      expect(result.dependents.every((entry) => !path.isAbsolute(entry.file))).toBe(true);
+      expect(result.truncated).toBe(false);
+    }
+  });
+
+  it("tool_getHotspots returns ranked bounded hotspots", async () => {
+    const result = await tool_getHotspots(samplePath, { limit: 3 });
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.hotspots.length).toBeLessThanOrEqual(3);
+      expect(result.hotspots.every((entry) => !path.isAbsolute(entry.file))).toBe(true);
+      expect(result.hotspots.every((entry) => typeof entry.score === "number")).toBe(true);
+      expect(result.hotspots.some((entry) => entry.file === "utils.ts")).toBe(true);
+    }
   });
 
   it("tool_getFileOverview returns structured overviews", async () => {

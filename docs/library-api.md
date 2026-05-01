@@ -304,6 +304,34 @@ if (overview.status === "ok") {
 }
 ```
 
+For bounded graph exploration, prefer the smaller wrappers before requesting the full file graph:
+
+```ts
+import {
+  tool_findSymbol,
+  tool_getDependencies,
+  tool_getReverseDependencies,
+  tool_getHotspots,
+  tool_goToDefinition,
+  tool_findReferences,
+  tool_impactJSON,
+} from "@lzehrung/codegraph";
+
+const symbolHits = await tool_findSymbol(process.cwd(), "collectGraph");
+const deps = await tool_getDependencies(process.cwd(), "src/agent-tools.ts", { depth: 2, limit: 20 });
+const reverseDeps = await tool_getReverseDependencies(process.cwd(), "src/index.ts", { depth: 2, limit: 20 });
+const hotspots = await tool_getHotspots(process.cwd(), { limit: 20 });
+const definition = await tool_goToDefinition(process.cwd(), "src/main.ts", 10, 5);
+const references = await tool_findReferences(process.cwd(), "src/main.ts", 10, 5);
+const impact = await tool_impactJSON(process.cwd(), { provider: "git", base: "main", head: "HEAD" });
+```
+
+Useful wrapper details:
+
+- `tool_findSymbol()` returns stable `id` handles plus `range`, `exported`, `exactMatch`, and `matchKind`.
+- `tool_goToDefinition()` and `tool_findReferences()` surface additive `provenance` metadata when the resolver used imports, namespaces, or other non-local paths.
+- Impact wrappers now include `schemaVersion` and `format: "full" | "compact"` so downstream agents do not have to infer payload shape.
+
 ## Related docs
 
 - [docs/installation.md](./installation.md)

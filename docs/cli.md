@@ -174,7 +174,7 @@ codegraph review --base origin/main --head HEAD --review-depth standard > review
 codegraph graph-delta --git-base origin/main --git-head HEAD > graph-delta.json
 ```
 
-Impact JSON responses can include `exportSummary`, `reexportChains`, `topImpacts`, `surfaceArea`, and `clusters` when applicable. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
+Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` so downstream tools can branch on payload shape without inferring it from missing fields. Impact JSON can also include `exportSummary`, `reexportChains`, `topImpacts`, `surfaceArea`, and `clusters` when applicable. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
 
 ### Doctor and skill commands
 

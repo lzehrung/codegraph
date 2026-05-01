@@ -147,17 +147,29 @@ There is no separate native import. Use `native: "auto" | "on" | "off"` in publi
 Agent-tool wrappers accept the same control as a trailing runtime option, for example:
 
 ```ts
-import { tool_getGraph, tool_goToDefinition } from "@lzehrung/codegraph";
+import {
+  tool_getDependencies,
+  tool_getReverseDependencies,
+  tool_getHotspots,
+  tool_goToDefinition,
+  tool_findReferences,
+  tool_impactJSON,
+} from "@lzehrung/codegraph";
 
-const graph = await tool_getGraph(root, { native: "off" });
+const deps = await tool_getDependencies(root, "src/main.ts", { depth: 2, limit: 20, native: "off" });
+const reverseDeps = await tool_getReverseDependencies(root, "src/index.ts", { depth: 2, limit: 20 });
+const hotspots = await tool_getHotspots(root, { limit: 20 });
 const definition = await tool_goToDefinition(root, "src/main.ts", 10, 5, undefined, { native: "on" });
+const references = await tool_findReferences(root, "src/main.ts", 10, 5);
+const impact = await tool_impactJSON(root, { provider: "git", base: "main", head: "HEAD", compact: true });
 ```
 
 ## Best Practices
 
-- If you are asked to understand an unfamiliar repo, run `codegraph doctor`, then `codegraph inspect ./src --limit 20`, then use the returned recommended commands to narrow the next graph/query pass.
+- If you are asked to understand an unfamiliar repo, run `codegraph doctor`, then `codegraph inspect ./src --limit 20`, then prefer bounded graph queries such as `deps`, `rdeps`, or `hotspots` before requesting a full graph dump.
 - If you are asked to assess architectural risk in a subdirectory, run `codegraph hotspots <dir> --limit 20 --json` and `codegraph cycles <dir> --sort priority --json`.
 - Use `--include-glob`, `--ignore-glob`, and `--no-gitignore` to control which files are scanned. Use `--resolve-node-modules` only when you want JS/TS bare imports resolved into `node_modules`; it does not change scan roots.
-- Use `--json` when you need machine-readable output.
+- Use `--json` when you need machine-readable output. Impact JSON now includes `schemaVersion` and `format`, and review JSON includes `schemaVersion`.
+- For agent follow-up reasoning, prefer structured outputs first: `inspect`, `deps`, `rdeps`, `hotspots`, `goto`, `refs`, and JSON impact/review payloads.
 - Use `--fast-graph` for first-pass exploration on large repos, then rerun without it when accuracy matters.
 - Prefer `refs` over plain text search when you want semantic usages.

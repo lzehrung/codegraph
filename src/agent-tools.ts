@@ -4,6 +4,9 @@ import {
   listSymbols,
   listProjectFiles,
   collectGraph,
+  getDependencies,
+  getReverseDependencies,
+  getHotspots,
   goToDefinition,
   findReferences,
   symbolId,
@@ -83,6 +86,18 @@ export type ToolSymbolMatch = {
   exported: boolean;
   exactMatch: boolean;
   matchKind: "exact" | "substring";
+};
+
+export type ToolDependencyEntry = {
+  file: string;
+  depth: number;
+};
+
+export type ToolHotspotEntry = {
+  file: string;
+  fanIn: number;
+  fanOut: number;
+  score: number;
 };
 
 /**
@@ -312,6 +327,173 @@ export async function tool_getGraph(
   }
 }
 
+export async function tool_getDependencies(
+  root: string,
+  filePath: string,
+  options: {
+    depth?: number;
+    limit?: number;
+    index?: ProjectIndex;
+    native?: NativeRuntimeMode;
+  } = {},
+): Promise<
+  | {
+      status: "ok";
+      file: string;
+      dependencies: ToolDependencyEntry[];
+      truncated: boolean;
+    }
+  | {
+      status: "not_found";
+      file: string;
+      reason: "file_not_found" | "file_not_indexed";
+      error: string;
+    }
+  | {
+      status: "error";
+      error: string;
+      reason?: "outside_project_root";
+    }
+> {
+  try {
+    const resolvedFile = resolveToolFileInput(root, filePath);
+    if (resolvedFile.status === "error") {
+      return resolvedFile;
+    }
+
+    const index =
+      options.index ??
+      (await buildProjectIndex(root, {
+        logLevel: "error",
+        ...(options.native ? { native: options.native } : {}),
+      }));
+    const missing = getToolMissingFileResult(index, resolvedFile.absPath, resolvedFile.relativeFile);
+    if (missing) {
+      return missing;
+    }
+
+    const dependencies = getDependencies(index.graph, resolvedFile.absPath, {
+      ...(options.depth !== undefined ? { depth: options.depth } : {}),
+    });
+    const limit = options.limit ?? 20;
+    const limited = dependencies.slice(0, limit).map((entry) => ({
+      file: normalizeToolFileOutput(root, entry.file),
+      depth: entry.depth,
+    }));
+
+    return {
+      status: "ok",
+      file: resolvedFile.relativeFile,
+      dependencies: limited,
+      truncated: dependencies.length > limited.length,
+    };
+  } catch (error) {
+    return { status: "error", error: String(error) };
+  }
+}
+
+export async function tool_getReverseDependencies(
+  root: string,
+  filePath: string,
+  options: {
+    depth?: number;
+    limit?: number;
+    index?: ProjectIndex;
+    native?: NativeRuntimeMode;
+  } = {},
+): Promise<
+  | {
+      status: "ok";
+      file: string;
+      dependents: ToolDependencyEntry[];
+      truncated: boolean;
+    }
+  | {
+      status: "not_found";
+      file: string;
+      reason: "file_not_found" | "file_not_indexed";
+      error: string;
+    }
+  | {
+      status: "error";
+      error: string;
+      reason?: "outside_project_root";
+    }
+> {
+  try {
+    const resolvedFile = resolveToolFileInput(root, filePath);
+    if (resolvedFile.status === "error") {
+      return resolvedFile;
+    }
+
+    const index =
+      options.index ??
+      (await buildProjectIndex(root, {
+        logLevel: "error",
+        ...(options.native ? { native: options.native } : {}),
+      }));
+    const missing = getToolMissingFileResult(index, resolvedFile.absPath, resolvedFile.relativeFile);
+    if (missing) {
+      return missing;
+    }
+
+    const dependents = getReverseDependencies(index.graph, resolvedFile.absPath, {
+      ...(options.depth !== undefined ? { depth: options.depth } : {}),
+    });
+    const limit = options.limit ?? 20;
+    const limited = dependents.slice(0, limit).map((entry) => ({
+      file: normalizeToolFileOutput(root, entry.file),
+      depth: entry.depth,
+    }));
+
+    return {
+      status: "ok",
+      file: resolvedFile.relativeFile,
+      dependents: limited,
+      truncated: dependents.length > limited.length,
+    };
+  } catch (error) {
+    return { status: "error", error: String(error) };
+  }
+}
+
+export async function tool_getHotspots(
+  root: string,
+  options: {
+    limit?: number;
+    includeRoots?: string[];
+    index?: ProjectIndex;
+    native?: NativeRuntimeMode;
+  } = {},
+): Promise<{ status: "ok" | "error"; hotspots?: ToolHotspotEntry[]; error?: string }> {
+  try {
+    const index =
+      options.index ??
+      (await buildProjectIndex(root, {
+        logLevel: "error",
+        ...(options.native ? { native: options.native } : {}),
+      }));
+
+    const includeRoots = (options.includeRoots ?? []).map((entry) => normalizePathArg(root, entry));
+    const hotspots = getHotspots(index.graph, {
+      ...(options.limit !== undefined ? { limit: options.limit } : {}),
+      ...(includeRoots.length > 0 ? { includeRoots } : {}),
+    }).map((entry) => ({
+      file: normalizeToolFileOutput(root, entry.file),
+      fanIn: entry.fanIn,
+      fanOut: entry.fanOut,
+      score: entry.score,
+    }));
+
+    return {
+      status: "ok",
+      hotspots,
+    };
+  } catch (error) {
+    return { status: "error", error: String(error) };
+  }
+}
+
 function normalizePathArg(root: string, file: string): string {
   return normalizePath(resolveFilePathFromRoot(root, file));
 }
@@ -445,6 +627,29 @@ function getToolImportDisplayName(entry: ImportBinding): string {
 
 function normalizeToolFileOutput(root: string, filePath: string): string {
   return toProjectRelativePath(root, filePath) ?? normalizePath(filePath);
+}
+
+function getToolMissingFileResult(
+  index: ProjectIndex,
+  absPath: string,
+  relativeFile: string,
+):
+  | {
+      status: "not_found";
+      file: string;
+      reason: "file_not_found" | "file_not_indexed";
+      error: string;
+    }
+  | undefined {
+  if (index.byFile.has(absPath)) {
+    return undefined;
+  }
+  return {
+    status: "not_found",
+    file: relativeFile,
+    reason: "file_not_found",
+    error: `File was not found under the project root: ${relativeFile}`,
+  };
 }
 
 function normalizeToolModuleRef(root: string, filePath: string): string {

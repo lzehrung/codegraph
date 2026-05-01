@@ -182,6 +182,9 @@ export {
   tool_findSymbol,
   tool_listProjectFiles,
   tool_getGraph,
+  tool_getDependencies,
+  tool_getReverseDependencies,
+  tool_getHotspots,
   tool_goToDefinition,
   tool_findReferences,
   type ToolFileOverview,
@@ -189,6 +192,8 @@ export {
   type ToolFileOverviewDefinition,
   type ToolFileOverviewResult,
   type ToolSymbolMatch,
+  type ToolDependencyEntry,
+  type ToolHotspotEntry,
 } from "./agent-tools.js";
 export {
   writeGraphSqlite,
