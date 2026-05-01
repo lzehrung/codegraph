@@ -330,6 +330,7 @@ Useful wrapper details:
 
 - `tool_findSymbol()` returns stable `id` handles plus `range`, `exported`, `exactMatch`, and `matchKind`.
 - `tool_goToDefinition()` and `tool_findReferences()` surface additive `provenance` metadata when the resolver used imports, namespaces, or other non-local paths.
+- `tool_getDependencies()` and `tool_getReverseDependencies()` clamp non-positive `limit` values to empty bounded results instead of returning malformed slices.
 - Impact wrappers now include `schemaVersion` and `format: "full" | "compact"` so downstream agents do not have to infer payload shape.
 
 ## Related docs

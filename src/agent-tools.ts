@@ -2,6 +2,7 @@ import {
   buildProjectIndex,
   analyzeImpactFromDiff,
   listSymbols,
+  type SymbolListItem,
   listProjectFiles,
   collectGraph,
   getDependencies,
@@ -245,7 +246,7 @@ export async function tool_findSymbol(
     const matches = allSymbols
       .filter((s) => s.name.toLowerCase().includes(q))
       .map((symbol) => {
-        const exported = isSymbolExported(index, symbol.file, symbol.name);
+        const exported = isExportedSymbol(index, symbol);
         const exactMatch = symbol.name.toLowerCase() === q;
         const matchKind: ToolSymbolMatch["matchKind"] = exactMatch ? "exact" : "substring";
         return {
@@ -375,7 +376,7 @@ export async function tool_getDependencies(
     const dependencies = getDependencies(index.graph, resolvedFile.absPath, {
       ...(options.depth !== undefined ? { depth: options.depth } : {}),
     });
-    const limit = options.limit ?? 20;
+    const limit = options.limit !== undefined ? Math.max(0, Math.floor(options.limit)) : 20;
     const limited = dependencies.slice(0, limit).map((entry) => ({
       file: normalizeToolFileOutput(root, entry.file),
       depth: entry.depth,
@@ -440,7 +441,7 @@ export async function tool_getReverseDependencies(
     const dependents = getReverseDependencies(index.graph, resolvedFile.absPath, {
       ...(options.depth !== undefined ? { depth: options.depth } : {}),
     });
-    const limit = options.limit ?? 20;
+    const limit = options.limit !== undefined ? Math.max(0, Math.floor(options.limit)) : 20;
     const limited = dependents.slice(0, limit).map((entry) => ({
       file: normalizeToolFileOutput(root, entry.file),
       depth: entry.depth,
@@ -533,17 +534,20 @@ function listSymbolsForOverview(
 ): {
   imports: ImportBinding[];
   definitions: ReturnType<typeof listSymbols>;
-  exportedNames: Set<string>;
+  exportedDefinitions: Set<string>;
 } {
   const symbols = listSymbols(index, { file, includeImports: false });
   const mod = index.byFile.get(file);
-  const exportedNames = new Set(
-    mod?.exports.filter((entry) => entry.type === "local").map((entry) => entry.target.localName) ?? [],
+  const exportedDefinitions = new Set(
+    mod?.exports
+      .filter((entry) => entry.type === "local")
+      .map((entry) => makeSymbolIdentity(entry.target.file, entry.target.localName, entry.target.range.start.index)) ??
+      [],
   );
   return {
     imports: mod?.imports ?? [],
     definitions: symbols,
-    exportedNames,
+    exportedDefinitions,
   };
 }
 
@@ -552,7 +556,7 @@ function buildToolFileOverview(
   symbols: {
     imports: ImportBinding[];
     definitions: ReturnType<typeof listSymbols>;
-    exportedNames: Set<string>;
+    exportedDefinitions: Set<string>;
   },
 ): ToolFileOverview {
   const imports = symbols.imports.map((entry) => ({
@@ -569,7 +573,7 @@ function buildToolFileOverview(
       name: def.name,
       kind: String(def.kind),
       ...(def.range ? { line: def.range.start.line } : {}),
-      exported: symbols.exportedNames.has(def.name),
+      exported: isExportedSymbolDefinition(symbols.exportedDefinitions, def),
       ...(def.docstring ? { docstring: def.docstring } : {}),
     }));
 
@@ -839,10 +843,24 @@ export async function tool_findReferences(
   }
 }
 
-function isSymbolExported(index: ProjectIndex, file: string, localName: string): boolean {
-  const mod = index.byFile.get(file);
+function makeSymbolIdentity(file: string, localName: string, startIndex?: number): string {
+  return `${file}::${localName}::${startIndex ?? 0}`;
+}
+
+function isExportedSymbolDefinition(exportedDefinitions: Set<string>, symbol: SymbolListItem): boolean {
+  return exportedDefinitions.has(makeSymbolIdentity(symbol.file, symbol.name, symbol.range?.start.index));
+}
+
+function isExportedSymbol(index: ProjectIndex, symbol: SymbolListItem): boolean {
+  const mod = index.byFile.get(symbol.file);
   if (!mod) {
     return false;
   }
-  return mod.exports.some((entry) => entry.type === "local" && entry.target.localName === localName);
+  return mod.exports.some(
+    (entry) =>
+      entry.type === "local" &&
+      entry.target.localName === symbol.name &&
+      entry.target.file === symbol.file &&
+      (entry.target.range.start.index ?? 0) === (symbol.range?.start.index ?? 0),
+  );
 }

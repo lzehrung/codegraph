@@ -77,6 +77,25 @@ describe("Agent Tools", () => {
     }
   });
 
+  it("tool_getDependencies clamps non-positive limits to empty bounded results", async () => {
+    const dependenciesResult = await tool_getDependencies(samplePath, "main.ts", { depth: 1, limit: -1 });
+    expect(dependenciesResult.status).toBe("ok");
+    if (dependenciesResult.status === "ok") {
+      expect(dependenciesResult.dependencies).toEqual([]);
+      expect(dependenciesResult.truncated).toBe(true);
+    }
+
+    const reverseDependenciesResult = await tool_getReverseDependencies(samplePath, "utils.ts", {
+      depth: 1,
+      limit: -1,
+    });
+    expect(reverseDependenciesResult.status).toBe("ok");
+    if (reverseDependenciesResult.status === "ok") {
+      expect(reverseDependenciesResult.dependents).toEqual([]);
+      expect(reverseDependenciesResult.truncated).toBe(true);
+    }
+  });
+
   it("tool_getReverseDependencies returns bounded normalized dependents", async () => {
     const result = await tool_getReverseDependencies(samplePath, "utils.ts", { depth: 1, limit: 5 });
     expect(result.status).toBe("ok");
@@ -129,6 +148,33 @@ describe("Agent Tools", () => {
       expect(result.overview.imports).toEqual([]);
       expect(result.overview.definitions).toEqual([]);
       expect(result.renderedOverview).toContain("No symbols found.");
+    }
+  });
+
+  it("tool_getFileOverview and tool_findSymbol keep shadowed locals distinct from exported definitions", async () => {
+    const root = await mkTmpDir("dg-agent-shadowed-exports-");
+    await fsp.writeFile(
+      path.join(root, "main.ts"),
+      "export const value = 1;\nfunction demo() { const value = 2; return value; }\n",
+      "utf8",
+    );
+
+    const overview = await tool_getFileOverview(root, "main.ts");
+    expect(overview.status).toBe("ok");
+    if (overview.status === "ok") {
+      const exportedValue = overview.overview.definitions.find((entry) => entry.name === "value" && entry.line === 1);
+      const shadowedValue = overview.overview.definitions.find((entry) => entry.name === "value" && entry.line === 2);
+      expect(exportedValue?.exported).toBe(true);
+      expect(shadowedValue?.exported).toBe(false);
+    }
+
+    const symbols = await tool_findSymbol(root, "value");
+    expect(symbols.status).toBe("ok");
+    if (symbols.status === "ok") {
+      const exportedValue = symbols.matches.find((entry) => entry.name === "value" && entry.line === 1);
+      const shadowedValue = symbols.matches.find((entry) => entry.name === "value" && entry.line === 2);
+      expect(exportedValue?.exported).toBe(true);
+      expect(shadowedValue?.exported).toBe(false);
     }
   });
 
