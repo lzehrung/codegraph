@@ -46,8 +46,8 @@ describe("Review report", () => {
     expect(report.riskSummary.level).toBeDefined();
     expect(report.reviewTasks.length).toBeGreaterThan(0);
     expect(report.changedFiles.length).toBe(1);
-    expect(report.changedFiles[0]?.symbols.some((s) => s.name === "a")).toBe(true);
     expect(Array.isArray(report.changedFiles[0]?.symbols)).toBe(true);
+    expect(report.changedFiles[0]?.symbols?.some((s) => s.name === "a")).toBe(true);
     expect(Array.isArray(report.candidateTests)).toBe(true);
     expect(report.diagnostics?.missingFiles ?? []).toEqual([]);
   });
