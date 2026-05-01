@@ -13,6 +13,7 @@
     "js-fallback.cjs",
     "js-fallback.d.ts"
   ],
+  "license": "MIT",
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
   },
