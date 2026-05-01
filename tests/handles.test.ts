@@ -8,6 +8,7 @@ import {
   findReferencesById,
   symbolId,
   defFromSymbolId,
+  tool_findSymbol,
 } from "../src/index.js";
 
 const norm = (p: string) => p.replace(/\\/g, "/");
@@ -80,6 +81,26 @@ describe("Agent-friendly symbol handles", () => {
       expect(refs.references.length).toBeGreaterThan(0);
       // All references should exist in files of the monorepo sample
       expect(refs.references.every((r) => norm(r.file).includes(norm(root)))).toBe(true);
+    }
+  });
+
+  it("tool_findSymbol exposes stable handles that round-trip through goToDefinitionById", async () => {
+    const index = await buildProjectIndex(root);
+    const result = await tool_findSymbol(root, "aHelper", { index });
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") {
+      return;
+    }
+
+    const exactMatch = result.matches.find((match) => match.name === "aHelper" && match.exactMatch);
+    expect(exactMatch).toBeDefined();
+    expect(typeof exactMatch?.id).toBe("string");
+
+    const definition = await goToDefinitionById(index, exactMatch!.id);
+    expect(definition.status).toBe("ok");
+    if (definition.status === "ok") {
+      expect(norm(definition.definition.file)).toBe(pkga);
+      expect(definition.definition.localName).toBe("aHelper");
     }
   });
 });

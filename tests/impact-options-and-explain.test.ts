@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createTestIndex, getSamplePath } from "./test-utils.js";
 import { analyzeImpactFromDiff } from "../src/impact/index.js";
+import type { ExportEntry } from "../src/index.js";
 
 function makeDiffForAbsPath(abs: string, start: number) {
   return `diff --git a/${abs} b/${abs}
@@ -18,9 +19,9 @@ describe("Impact: options and explain payloads", () => {
     const file = Array.from(index.byFile.keys()).find((f) => f.endsWith("/utils.ts"))!;
     const mod = index.byFile.get(file)!;
 
-    const exportedNames = new Set(
-      mod.exports.filter((e: any) => e.type === "local").map((e: any) => e.target.localName),
-    );
+    const isLocalExport = (entry: ExportEntry): entry is Extract<ExportEntry, { type: "local" }> =>
+      entry.type === "local";
+    const exportedNames = new Set(mod.exports.filter(isLocalExport).map((entry) => entry.target.localName));
     const internal = mod.locals.find((l) => !exportedNames.has(l.localName)) || mod.locals[0]!;
     const diffText = makeDiffForAbsPath(file, Math.max(internal.range.start.line + 1, internal.range.start.line));
 
@@ -80,5 +81,40 @@ describe("Impact: options and explain payloads", () => {
         expect(Object.prototype.hasOwnProperty.call(item.explain, "depth")).toBe(true);
       }
     }
+  });
+
+  it("full impact reports carry schemaVersion and an explicit full-format discriminator", async () => {
+    const index = await createTestIndex("typescript");
+    const file = Array.from(index.byFile.keys()).find((entry) => entry.endsWith("/utils.ts"))!;
+    const mod = index.byFile.get(file)!;
+    const target = mod.locals[0]!;
+    const diffText = makeDiffForAbsPath(file, Math.max(target.range.start.line + 1, target.range.start.line));
+
+    const report = await analyzeImpactFromDiff(getSamplePath("typescript"), index, { provider: "raw", diffText });
+
+    expect(report.schemaVersion).toBe(1);
+    expect(report.format).toBe("full");
+    expect(report.changedFiles.length).toBeGreaterThan(0);
+    expect(Array.isArray(report.impacted)).toBe(true);
+  });
+
+  it("compact impact reports carry schemaVersion and an explicit compact-format discriminator", async () => {
+    const index = await createTestIndex("typescript");
+    const file = Array.from(index.byFile.keys()).find((entry) => entry.endsWith("/utils.ts"))!;
+    const mod = index.byFile.get(file)!;
+    const target = mod.locals[0]!;
+    const diffText = makeDiffForAbsPath(file, Math.max(target.range.start.line + 1, target.range.start.line));
+
+    const report = await analyzeImpactFromDiff(getSamplePath("typescript"), index, {
+      provider: "raw",
+      diffText,
+      compact: true,
+    });
+
+    expect("files" in report).toBe(true);
+    expect(report.changedFiles.length).toBeGreaterThan(0);
+    expect(typeof report.changedFiles[0]?.file).toBe("number");
+    expect(report.schemaVersion).toBe(1);
+    expect(report.format).toBe("compact");
   });
 });

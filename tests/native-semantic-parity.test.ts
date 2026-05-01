@@ -76,7 +76,15 @@ function normalizeSymbols(
 async function normalizeGoto(
   index: ProjectIndex,
   request: SemanticExpectation["goto"],
-): Promise<{ status: "ok"; file: string; line: number } | { status: "not_found" }> {
+): Promise<
+  | {
+      status: "ok";
+      file: string;
+      line: number;
+      provenance?: { resolution?: string; confidence?: string; backend?: string };
+    }
+  | { status: "not_found" }
+> {
   const result = await goToDefinition(index, {
     file: normalizeFile(request.file),
     line: request.line,
@@ -89,13 +97,21 @@ async function normalizeGoto(
     status: "ok",
     file: normalizeFile(result.definition.file),
     line: result.definition.range.start.line,
+    ...(result.provenance ? { provenance: result.provenance } : {}),
   };
 }
 
 async function normalizeReferences(
   index: ProjectIndex,
   request: SemanticExpectation["references"],
-): Promise<{ status: "ok"; refs: string[] } | { status: "not_found" }> {
+): Promise<
+  | {
+      status: "ok";
+      refs: string[];
+      provenance?: { resolution?: string; confidence?: string; backend?: string };
+    }
+  | { status: "not_found" }
+> {
   const result = await findReferences(index, {
     file: normalizeFile(request.file),
     line: request.line,
@@ -107,6 +123,7 @@ async function normalizeReferences(
   return {
     status: "ok",
     refs: result.references.map((reference) => `${normalizeFile(reference.file)}:${reference.range.start.line}`).sort(),
+    ...(result.provenance ? { provenance: result.provenance } : {}),
   };
 }
 

@@ -1,4 +1,5 @@
 import type { FileId, Graph } from "../types.js";
+import { getFiniteNonNegativeLimit } from "./limits.js";
 
 export type HotspotEntry = {
   file: FileId;
@@ -56,7 +57,7 @@ export function getHotspots(graph: Graph, options?: HotspotOptions): HotspotEntr
   const fanIn = new Map<string, number>();
   const fanOut = new Map<string, number>();
   const normalizedRoots = normalizeHotspotRoots(options?.includeRoots ?? []);
-  const limit = options?.limit !== undefined ? Math.max(0, Math.floor(options.limit)) : undefined;
+  const limit = getFiniteNonNegativeLimit(options?.limit);
   const scopedNodes = new Set<string>();
 
   for (const node of graph.nodes) {

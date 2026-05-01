@@ -2,6 +2,7 @@ import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { sliceText } from "../util.js";
 import { ensureParsedContext } from "./parse-context.js";
+import { okGoToResult } from "./navigation-provenance.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
 import type { GoToResult, ModuleIndex, ProjectIndex, ResolvedExport, SymbolDef } from "./types.js";
 
@@ -233,21 +234,21 @@ export async function resolveMemberAccessDefinition(params: {
   const chain = await resolveExpression(memberNode);
   if (chain && prop && node.id === prop.id) {
     if (chain.kind === "resolved") {
-      return {
-        status: "ok",
-        definition: chain.def,
+      return okGoToResult(index, chain.def, {
         via: { exportedName: sliceText(prop, source) },
-      };
+        resolution: "member-access",
+        confidence: "medium",
+      });
     }
     if (chain.kind === "namespace") {
       const targetMod = index.byFile.get(chain.file);
       const first = targetMod?.exports.find((entry) => entry.type === "local");
       if (first) {
-        return {
-          status: "ok",
-          definition: first.target,
+        return okGoToResult(index, first.target, {
           via: { exportedName: first.exportedAs },
-        };
+          resolution: "namespace",
+          confidence: "medium",
+        });
       }
     }
   }
@@ -290,11 +291,11 @@ export async function resolveMemberAccessDefinition(params: {
           });
 
           if (memberDef) {
-            return {
-              status: "ok",
-              definition: memberDef,
+            return okGoToResult(index, memberDef, {
               via: { exportedName: member },
-            };
+              resolution: "member-access",
+              confidence: "medium",
+            });
           }
         }
       }

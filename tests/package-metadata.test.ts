@@ -26,19 +26,16 @@ describe("package metadata", () => {
     const rootPackage = readJson("package.json");
     const nativePackage = readJson("packages/codegraph-native/package.json");
     const fallbackPackage = readJson("packages/codegraph-js-fallback/package.json");
-    const opencodePluginPackage = readJson("packages/codegraph-opencode-plugin/package.json");
 
     expect(fs.existsSync(licensePath)).toBe(true);
     expect(fs.readFileSync(licensePath, "utf8")).toContain("ISC License");
     expect(rootPackage.license).toBe("ISC");
     expect(nativePackage.license).toBeUndefined();
     expect(fallbackPackage.license).toBeUndefined();
-    expect(opencodePluginPackage.license).toBeUndefined();
   });
 
   it("keeps the native package optional at the root package boundary", () => {
     const rootPackage = readJson("package.json");
-    const nativePackage = readJson("packages/codegraph-native/package.json");
     const dependencies = readStringRecord(rootPackage.dependencies);
     const optionalDependencies = readStringRecord(rootPackage.optionalDependencies);
 
@@ -86,6 +83,16 @@ describe("package metadata", () => {
 
     expect(scripts.lint).toBe("npx eslint ./src");
     expect(scripts["lint:fix"]).toBe("npx eslint ./src --fix");
+  });
+
+  it("does not keep removed plugin-only workspace dependencies in the root package", () => {
+    const rootPackage = readJson("package.json");
+    const dependencies = readStringRecord(rootPackage.dependencies);
+    const devDependencies = readStringRecord(rootPackage.devDependencies);
+
+    expect(dependencies["@opencode-ai/plugin"]).toBeUndefined();
+    expect(devDependencies["@opencode-ai/plugin"]).toBeUndefined();
+    expect(fs.existsSync(path.resolve(process.cwd(), "packages/codegraph-opencode-plugin"))).toBe(false);
   });
 
   it("keeps all publishable workspaces under the packages directory", () => {

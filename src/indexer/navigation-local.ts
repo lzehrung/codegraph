@@ -1,6 +1,7 @@
 import type { LanguageSupport } from "../languages.js";
 import type { JsLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId } from "../types.js";
+import { okGoToResult } from "./navigation-provenance.js";
 import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
 import { SymbolKind, type GoToResult, type ModuleIndex, type ProjectIndex, type SymbolDef } from "./types.js";
@@ -117,21 +118,21 @@ export function resolveNamedDefinition(
 ): GoToResult | null {
   const hit = resolveExport(index, file, name);
   if (hit?.kind === "resolved") {
-    return {
-      status: "ok",
-      definition: hit.def,
+    return okGoToResult(index, hit.def, {
       via: { exportedName: name },
-    };
+      resolution: "exact",
+      confidence: "high",
+    });
   }
   if (hit?.kind === "namespace") {
     const targetMod = index.byFile.get(hit.file);
     const firstExport = targetMod?.exports.find((entry) => entry.type === "local");
     if (firstExport) {
-      return {
-        status: "ok",
-        definition: firstExport.target,
+      return okGoToResult(index, firstExport.target, {
         via: { exportedName: name },
-      };
+        resolution: "namespace",
+        confidence: "medium",
+      });
     }
   }
 
@@ -139,52 +140,52 @@ export function resolveNamedDefinition(
     if (imp.kind === "default" && imp.local === name) {
       const result = resolveImported(index, imp, "default");
       if (result && !("namespace" in result)) {
-        return {
-          status: "ok",
-          definition: result,
+        return okGoToResult(index, result, {
           via: {
             ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
             exportedName: "default",
           },
-        };
+          resolution: "import",
+          confidence: "high",
+        });
       }
     } else if (imp.kind === "named" && imp.local === name) {
       const result = resolveImported(index, imp, imp.imported);
       if (result && !("namespace" in result)) {
-        return {
-          status: "ok",
-          definition: result,
+        return okGoToResult(index, result, {
           via: {
             ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
             exportedName: imp.imported,
           },
-        };
+          resolution: "import",
+          confidence: "high",
+        });
       }
     } else if (imp.kind === "star") {
       const result = resolveImported(index, imp, name);
       if (result && !("namespace" in result)) {
-        return {
-          status: "ok",
-          definition: result,
+        return okGoToResult(index, result, {
           via: {
             ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
             exportedName: name,
           },
-        };
+          resolution: "import-star",
+          confidence: "medium",
+        });
       }
     } else if (imp.kind === "namespace" && imp.localNS === name) {
       const targetFile = typeof imp.resolved === "string" ? imp.resolved.replace(/\\/g, "/") : undefined;
       const targetMod = targetFile ? index.byFile.get(targetFile) : undefined;
       const firstExport = targetMod?.exports.find((entry) => entry.type === "local");
       if (firstExport) {
-        return {
-          status: "ok",
-          definition: firstExport.target,
+        return okGoToResult(index, firstExport.target, {
           via: {
             ...(toModuleRef(imp.resolved) ? { importedFrom: toModuleRef(imp.resolved) } : {}),
             exportedName: firstExport.exportedAs,
           },
-        };
+          resolution: "namespace",
+          confidence: "medium",
+        });
       }
     }
   }
