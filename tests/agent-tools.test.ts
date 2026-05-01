@@ -118,6 +118,14 @@ describe("Agent Tools", () => {
     }
   });
 
+  it("tool_getHotspots ignores non-finite limits", async () => {
+    const baseline = await tool_getHotspots(samplePath);
+    const withNaN = await tool_getHotspots(samplePath, { limit: Number.NaN });
+    const withInfinity = await tool_getHotspots(samplePath, { limit: Number.POSITIVE_INFINITY });
+    expect(baseline).toEqual(withNaN);
+    expect(baseline).toEqual(withInfinity);
+  });
+
   it("tool_getFileOverview returns structured overviews", async () => {
     const result = await tool_getFileOverview(samplePath, "main.ts");
     expect(result.status).toBe("ok");

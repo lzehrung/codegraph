@@ -12,6 +12,13 @@ export type HotspotOptions = {
   includeRoots?: string[];
 };
 
+function getFiniteNonNegativeLimit(limit: number | undefined): number | undefined {
+  if (typeof limit !== "number" || !Number.isFinite(limit)) {
+    return undefined;
+  }
+  return Math.max(0, Math.floor(limit));
+}
+
 function normalizeHotspotPath(filePath: string): string {
   return filePath.replace(/\\/g, "/");
 }
@@ -56,7 +63,7 @@ export function getHotspots(graph: Graph, options?: HotspotOptions): HotspotEntr
   const fanIn = new Map<string, number>();
   const fanOut = new Map<string, number>();
   const normalizedRoots = normalizeHotspotRoots(options?.includeRoots ?? []);
-  const limit = options?.limit !== undefined ? Math.max(0, Math.floor(options.limit)) : undefined;
+  const limit = getFiniteNonNegativeLimit(options?.limit);
   const scopedNodes = new Set<string>();
 
   for (const node of graph.nodes) {

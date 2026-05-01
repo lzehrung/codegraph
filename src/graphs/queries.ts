@@ -22,13 +22,21 @@ export type DetailedCycle = {
 
 export type CycleSortMode = "priority" | "size" | "fanin";
 
+function getFiniteNonNegativeLimit(limit: number | undefined): number | undefined {
+  if (typeof limit !== "number" || !Number.isFinite(limit)) {
+    return undefined;
+  }
+  return Math.max(0, Math.floor(limit));
+}
+
 export function getDependencies(
   graph: Graph,
   startFile: FileId,
   opts: { depth?: number; limit?: number } = {},
 ): DependencyNode[] {
   const maxDepth = opts.depth ?? Number.POSITIVE_INFINITY;
-  const maxResults = opts.limit !== undefined ? Math.max(0, Math.floor(opts.limit)) : Number.POSITIVE_INFINITY;
+  const finiteLimit = getFiniteNonNegativeLimit(opts.limit);
+  const maxResults = finiteLimit ?? Number.POSITIVE_INFINITY;
   if (maxResults === 0) {
     return [];
   }
@@ -64,7 +72,8 @@ export function getReverseDependencies(
   opts: { depth?: number; limit?: number } = {},
 ): DependencyNode[] {
   const maxDepth = opts.depth ?? Number.POSITIVE_INFINITY;
-  const maxResults = opts.limit !== undefined ? Math.max(0, Math.floor(opts.limit)) : Number.POSITIVE_INFINITY;
+  const finiteLimit = getFiniteNonNegativeLimit(opts.limit);
+  const maxResults = finiteLimit ?? Number.POSITIVE_INFINITY;
   if (maxResults === 0) {
     return [];
   }

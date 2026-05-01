@@ -56,6 +56,20 @@ describe("graph queries", () => {
     expect(rdeps).toEqual([]);
   });
 
+  it("should ignore non-finite dependency limits", () => {
+    const depsWithNaN = getDependencies(graph, `${root}/a.ts`, { limit: Number.NaN });
+    const depsWithInfinity = getDependencies(graph, `${root}/a.ts`, { limit: Number.POSITIVE_INFINITY });
+    expect(depsWithNaN).toEqual(getDependencies(graph, `${root}/a.ts`));
+    expect(depsWithInfinity).toEqual(getDependencies(graph, `${root}/a.ts`));
+  });
+
+  it("should ignore non-finite reverse dependency limits", () => {
+    const rdepsWithNaN = getReverseDependencies(graph, `${root}/b.ts`, { limit: Number.NaN });
+    const rdepsWithInfinity = getReverseDependencies(graph, `${root}/b.ts`, { limit: Number.POSITIVE_INFINITY });
+    expect(rdepsWithNaN).toEqual(getReverseDependencies(graph, `${root}/b.ts`));
+    expect(rdepsWithInfinity).toEqual(getReverseDependencies(graph, `${root}/b.ts`));
+  });
+
   it("should find shortest path", () => {
     const p = getShortestPath(graph, `${root}/d.ts`, `${root}/c.ts`);
     expect(p).toEqual([`${root}/d.ts`, `${root}/b.ts`, `${root}/c.ts`]);

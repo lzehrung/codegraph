@@ -486,8 +486,12 @@ export async function tool_getHotspots(
       }));
 
     const includeRoots = (options.includeRoots ?? []).map((entry) => normalizePathArg(root, entry));
+    const limit =
+      options.limit !== undefined && Number.isFinite(options.limit)
+        ? Math.max(0, Math.floor(options.limit))
+        : undefined;
     const hotspots = getHotspots(index.graph, {
-      ...(options.limit !== undefined ? { limit: options.limit } : {}),
+      ...(limit !== undefined ? { limit } : {}),
       ...(includeRoots.length > 0 ? { includeRoots } : {}),
     }).map((entry) => ({
       file: normalizeToolFileOutput(root, entry.file),

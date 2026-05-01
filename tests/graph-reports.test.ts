@@ -68,6 +68,11 @@ describe("graph reports", () => {
     ]);
   });
 
+  it("should ignore non-finite hotspot limits", () => {
+    expect(getHotspots(graph, { limit: Number.NaN })).toEqual(getHotspots(graph));
+    expect(getHotspots(graph, { limit: Number.POSITIVE_INFINITY })).toEqual(getHotspots(graph));
+  });
+
   it("should get API surface", () => {
     const mockIndex = {
       byFile: new Map([
