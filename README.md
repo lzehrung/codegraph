@@ -163,7 +163,7 @@ npm install @lzehrung/codegraph
 npm install https://github.com/lzehrung/codegraph/releases/download/vVERSION/lzehrung-codegraph-VERSION.tgz
 ```
 
-Important runtime note: the root tarball does not bundle the native addon or the optional JS fallback grammars. For source-language parsing after a tarball install, you still need either the scoped native package path or the separate `@lzehrung/codegraph-js-fallback` package.
+Important runtime note: the root tarball does not bundle the native addon or the optional JS fallback grammars. For source-language parsing after a tarball install, you still need either the scoped native package path or the separate `@lzehrung/codegraph-js-fallback` package, and both runtime packages still require the `@lzehrung` GitHub Packages registry configuration.
 
 ## FAQ
 

@@ -21,6 +21,7 @@ Codegraph is a lightweight multi-language code analysis tool that builds depende
 - For source checkouts, `npm run build` always rebuilds `dist/` and attempts the local native addon when Cargo is available, but it falls back to the JavaScript build output with a warning if the native workspace build is unavailable or fails. Use `npm run build:native` when you want a native-only rebuild or a hard failure if Rust is missing.
 - Install the optional fallback package only when you explicitly need JS Tree-sitter fallback:
   `npm install @lzehrung/codegraph-js-fallback --legacy-peer-deps`
+- That fallback package is also published to the `@lzehrung` GitHub Packages registry, so tarball installs still need the same scoped registry configuration before the fallback package can be added.
 - Native-only installs do not need the JS fallback package for normal supported source-language graph extraction, symbol indexing, chunking, or AST grep. If query recovery degrades, Codegraph reports that once per language/reason in diagnostics and stays on native-owned recovery paths where supported.
 - Global default override: `CODEGRAPH_DISABLE_NATIVE=1`
 - Explicit CLI/library/tool `native` options take precedence over `CODEGRAPH_DISABLE_NATIVE`

@@ -71,9 +71,10 @@ describe("package metadata", () => {
     const nativePackage = readJson("packages/codegraph-native/package.json");
     const dependencies = readStringRecord(rootPackage.dependencies);
     const optionalDependencies = readStringRecord(rootPackage.optionalDependencies);
+    const nativeVersion = typeof nativePackage.version === "string" ? nativePackage.version : "";
 
     expect(dependencies["@lzehrung/codegraph-native"]).toBeUndefined();
-    expect(optionalDependencies["@lzehrung/codegraph-native"]).toBe(`^${nativePackage.version}`);
+    expect(optionalDependencies["@lzehrung/codegraph-native"]).toBe(`^${nativeVersion}`);
   });
 
   it("ships the raw bundled skill directory without a stale archive copy", () => {
@@ -114,8 +115,8 @@ describe("package metadata", () => {
     const rootPackage = readJson("package.json");
     const scripts = readStringRecord(rootPackage.scripts);
 
-    expect(scripts.lint).toBe("npx eslint ./src");
-    expect(scripts["lint:fix"]).toBe("npx eslint ./src --fix");
+    expect(scripts.lint).toBe('npx eslint "src/**/*.ts" "tests/**/*.test.ts"');
+    expect(scripts["lint:fix"]).toBe('npx eslint "src/**/*.ts" "tests/**/*.test.ts" --fix');
   });
 
   it("does not keep removed plugin-only workspace dependencies in the root package", () => {
@@ -176,6 +177,19 @@ describe("package metadata", () => {
     expect(readme).toContain("./docs/agent-workflows.md");
     expect(readme).toContain("./docs/how-it-works.md");
     expect(readme).toContain("./PUBLISHING.md");
+  });
+
+  it("keeps fallback install guidance aligned with the scoped registry requirement", () => {
+    const readme = readText("README.md");
+    const installationDoc = readText("docs/installation.md");
+    const skillDoc = readText("codegraph-skill/codegraph/SKILL.md");
+
+    expect(readme).toContain("@lzehrung:registry");
+    expect(readme).toContain("@lzehrung/codegraph-js-fallback");
+    expect(installationDoc).toContain("@lzehrung:registry");
+    expect(installationDoc).toContain("@lzehrung/codegraph-js-fallback");
+    expect(skillDoc).toContain("@lzehrung:registry");
+    expect(skillDoc).toContain("@lzehrung/codegraph-js-fallback");
   });
 
   it("keeps public-facing docs ASCII-clean", () => {
