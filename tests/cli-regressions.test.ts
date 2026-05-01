@@ -713,7 +713,43 @@ describe("CLI flows", () => {
     const report = JSON.parse(stdout);
 
     expect(report.changedFiles.length).toBeGreaterThanOrEqual(2);
-    expect(report.changedFiles.some((entry: any) => entry.file === "rust/main.rs")).toBe(true);
-    expect(report.changedFiles.some((entry: any) => entry.file === "java/main.java")).toBe(true);
+    expect(
+      report.changedFiles.some((entry: { file: string }) => entry.file === "rust/main.rs"),
+    ).toBe(true);
+    expect(
+      report.changedFiles.some((entry: { file: string }) => entry.file === "java/main.java"),
+    ).toBe(true);
+    expect(report.schemaVersion).toBeUndefined();
+    expect(report.format).toBeUndefined();
+    expect(Array.isArray(report.impacted)).toBe(true);
+  });
+
+  it("impact CLI full JSON payload currently omits explicit format metadata", async () => {
+    const root = await mkTmpDir("dg-impact-compact-");
+    await fsp.writeFile(path.join(root, "main.ts"), "export function helper() { return 1; }\n", "utf8");
+    const diffText = `diff --git a/main.ts b/main.ts
+index 1111111..2222222 100644
+--- a/main.ts
++++ b/main.ts
+@@ -1 +1 @@
+-export function helper() { return 0; }
++export function helper() { return 1; }
+`;
+
+    const stdout = await runCliCommand(["impact", root, "--provider", "raw"], diffText);
+    const report = JSON.parse(stdout) as {
+      changedFiles: Array<{ file: string }>;
+      changedSymbols: Array<{ file: string; name: string }>;
+      impacted: Array<{ file: string }>;
+      schemaVersion?: number;
+      format?: string;
+    };
+
+    expect(report.changedFiles.length).toBeGreaterThan(0);
+    expect(typeof report.changedFiles[0]?.file).toBe("string");
+    expect(Array.isArray(report.changedSymbols)).toBe(true);
+    expect(Array.isArray(report.impacted)).toBe(true);
+    expect(report.schemaVersion).toBeUndefined();
+    expect(report.format).toBeUndefined();
   });
 });

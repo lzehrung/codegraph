@@ -10,6 +10,7 @@ import {
   tool_goToDefinition,
   tool_findReferences,
   tool_findSymbol,
+  tool_impactFromDiffText,
 } from "../src/agent-tools.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -54,7 +55,10 @@ describe("Agent Tools", () => {
     if (result.status === "ok") {
       expect(result.file).toBe("main.ts");
       expect(result.hasSymbols).toBe(true);
+      expect(typeof result.overview).toBe("string");
       expect(result.overview).toContain("# Overview of main.ts");
+      expect(result.overview).toContain("## Imports");
+      expect(result.overview).toContain("## Definitions");
     }
   });
 
@@ -113,6 +117,7 @@ describe("Agent Tools", () => {
       expect(result.definition.range.start.line).toBe(1);
       expect(path.isAbsolute(result.definition.file)).toBe(false);
       expect(path.isAbsolute(result.via?.importedFrom ?? "")).toBe(false);
+      expect(typeof result.via?.exportedName).toBe("string");
     }
   });
 
@@ -127,6 +132,7 @@ describe("Agent Tools", () => {
       expect(result.references.every((reference) => !path.isAbsolute(reference.file))).toBe(true);
       const firstImportReference = result.references.find((reference) => reference.via?.import);
       expect(firstImportReference?.via?.import?.resolved).toBe("utils.ts");
+      expect(result.references.every((reference) => typeof reference.range.start.line === "number")).toBe(true);
     }
   });
 
@@ -174,6 +180,38 @@ describe("Agent Tools", () => {
     if (result.status === "ok") {
       expect(result.matches.length).toBeGreaterThan(0);
       expect(result.matches.some((match) => match.name === "helperFunction")).toBe(true);
+      const firstMatch = result.matches[0];
+      expect(firstMatch?.name).toBe("helperFunction");
+      expect(firstMatch?.kind).toBe("function");
+      expect(["helpers.ts", "utils.ts"]).toContain(firstMatch?.file);
+      expect(typeof firstMatch?.line).toBe("number");
+      expect(path.isAbsolute(firstMatch?.file ?? "")).toBe(false);
+    }
+  });
+
+  it("tool_impactFromDiffText returns full impact reports for agents", async () => {
+    const diffText = `diff --git a/utils.ts b/utils.ts
+index 1111111..2222222 100644
+--- a/utils.ts
++++ b/utils.ts
+@@ -1,3 +1,3 @@
+-export function helperFunction() {
++export function helperFunction() {
+   return "Hello from helper";
+ }
+`;
+
+    const result = await tool_impactFromDiffText(samplePath, diffText);
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.report).toBeDefined();
+      expect("changedFiles" in result.report!).toBe(true);
+      expect("changedSymbols" in result.report!).toBe(true);
+      expect("impacted" in result.report!).toBe(true);
+      expect("surfaceArea" in result.report!).toBe(true);
+      expect("graph" in result.report!).toBe(true);
+      expect("schemaVersion" in result.report!).toBe(false);
+      expect("format" in result.report!).toBe(false);
     }
   });
 
