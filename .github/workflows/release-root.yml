@@ -1,0 +1,87 @@
+name: release-root
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: Release type for the root package
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+          - resume
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-root
+  cancel-in-progress: false
+
+jobs:
+  release-root:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          registry-url: https://npm.pkg.github.com
+          scope: "@lzehrung"
+
+      - name: Configure git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Publish root release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npm run publish:${{ inputs.release_type }} -- --package root
+
+      - name: Read root release version
+        id: root_version
+        shell: bash
+        run: |
+          version=$(node -p "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')).version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Pack root tarball
+        id: pack
+        shell: bash
+        run: |
+          tarball=$(npm pack --ignore-scripts --json | jq -r '.[0].filename')
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          tag="${{ steps.root_version.outputs.tag }}"
+          tarball="${{ steps.pack.outputs.tarball }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$tarball" --clobber
+          else
+            gh release create "$tag" "$tarball" --title "$tag" --generate-notes
+          fi

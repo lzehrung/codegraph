@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -20,20 +21,39 @@ function readStringRecord(value: unknown): Record<string, string> {
   );
 }
 
+function readNativeArtifactPackages(baseDir: string): Record<string, unknown>[] {
+  const nativeArtifactsDir = path.resolve(baseDir, "packages/codegraph-native/npm");
+  if (!fs.existsSync(nativeArtifactsDir)) {
+    return [];
+  }
+  return fs
+    .readdirSync(nativeArtifactsDir, {
+      withFileTypes: true,
+    })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) =>
+      JSON.parse(
+        fs.readFileSync(path.join(nativeArtifactsDir, entry.name, "package.json"), "utf8"),
+      ) as Record<string, unknown>,
+    );
+}
+
 describe("package metadata", () => {
+  it("treats a missing native artifact staging directory as no staged artifact packages", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-package-metadata-"));
+    fs.mkdirSync(path.join(tempDir, "packages", "codegraph-native"), {
+      recursive: true,
+    });
+
+    expect(readNativeArtifactPackages(tempDir)).toEqual([]);
+  });
+
   it("keeps the declared MIT license text and package metadata aligned", () => {
     const licensePath = path.resolve(process.cwd(), "LICENSE");
     const rootPackage = readJson("package.json");
     const nativePackage = readJson("packages/codegraph-native/package.json");
     const fallbackPackage = readJson("packages/codegraph-js-fallback/package.json");
-    const nativeArtifactPackages = fs
-      .readdirSync(path.resolve(process.cwd(), "packages/codegraph-native/npm"), {
-        withFileTypes: true,
-      })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) =>
-        readJson(`packages/codegraph-native/npm/${entry.name}/package.json`),
-      );
+    const nativeArtifactPackages = readNativeArtifactPackages(process.cwd());
 
     expect(fs.existsSync(licensePath)).toBe(true);
     expect(fs.readFileSync(licensePath, "utf8")).toContain("MIT License");
@@ -48,11 +68,12 @@ describe("package metadata", () => {
 
   it("keeps the native package optional at the root package boundary", () => {
     const rootPackage = readJson("package.json");
+    const nativePackage = readJson("packages/codegraph-native/package.json");
     const dependencies = readStringRecord(rootPackage.dependencies);
     const optionalDependencies = readStringRecord(rootPackage.optionalDependencies);
 
     expect(dependencies["@lzehrung/codegraph-native"]).toBeUndefined();
-    expect(optionalDependencies["@lzehrung/codegraph-native"]).not.toBeUndefined();
+    expect(optionalDependencies["@lzehrung/codegraph-native"]).toBe(`^${nativePackage.version}`);
   });
 
   it("ships the raw bundled skill directory without a stale archive copy", () => {
