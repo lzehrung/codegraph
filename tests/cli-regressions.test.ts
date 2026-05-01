@@ -400,6 +400,7 @@ describe("CLI regressions", () => {
     const stdout = await runCliCommand(["skill", "doctor", "--target", tmpDir]);
     const report = JSON.parse(stdout) as {
       bundledSkillDir: string | null;
+      bundledArchivePath?: string | null;
       installTargetDir: string;
       installedSkill: {
         targetDirExists: boolean;
@@ -409,6 +410,7 @@ describe("CLI regressions", () => {
     };
 
     expect(report.bundledSkillDir).toContain("codegraph-skill/codegraph");
+    expect(report.bundledArchivePath).toBeUndefined();
     expect(normalize(report.installTargetDir)).toBe(normalize(tmpDir));
     expect(report.installedSkill.targetDirExists).toBe(true);
     expect(report.installedSkill.skillFilePresent).toBe(false);
