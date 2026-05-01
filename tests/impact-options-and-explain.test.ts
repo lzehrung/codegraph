@@ -82,7 +82,7 @@ describe("Impact: options and explain payloads", () => {
     }
   });
 
-  it("full impact reports currently do not carry schemaVersion or format discriminants", async () => {
+  it("full impact reports carry schemaVersion and an explicit full-format discriminator", async () => {
     const index = await createTestIndex("typescript");
     const file = Array.from(index.byFile.keys()).find((entry) => entry.endsWith("/utils.ts"))!;
     const mod = index.byFile.get(file)!;
@@ -91,13 +91,13 @@ describe("Impact: options and explain payloads", () => {
 
     const report = await analyzeImpactFromDiff(getSamplePath("typescript"), index, { provider: "raw", diffText });
 
-    expect("schemaVersion" in report).toBe(false);
-    expect("format" in report).toBe(false);
+    expect(report.schemaVersion).toBe(1);
+    expect(report.format).toBe("full");
     expect(report.changedFiles.length).toBeGreaterThan(0);
     expect(Array.isArray(report.impacted)).toBe(true);
   });
 
-  it("compact impact reports currently rely on indexed arrays without an explicit format discriminator", async () => {
+  it("compact impact reports carry schemaVersion and an explicit compact-format discriminator", async () => {
     const index = await createTestIndex("typescript");
     const file = Array.from(index.byFile.keys()).find((entry) => entry.endsWith("/utils.ts"))!;
     const mod = index.byFile.get(file)!;
@@ -113,7 +113,7 @@ describe("Impact: options and explain payloads", () => {
     expect("files" in report).toBe(true);
     expect(report.changedFiles.length).toBeGreaterThan(0);
     expect(typeof report.changedFiles[0]?.file).toBe("number");
-    expect("schemaVersion" in report).toBe(false);
-    expect("format" in report).toBe(false);
+    expect(report.schemaVersion).toBe(1);
+    expect(report.format).toBe("compact");
   });
 });

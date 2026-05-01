@@ -12,8 +12,10 @@ import {
   type CompactImpactReport,
   type Edge,
   type ImportBinding,
+  type Range,
   type ProjectIndex,
   type Reference,
+  type ResolutionProvenance,
   type NativeRuntimeMode,
   type SymbolDef,
 } from "./index.js";
@@ -70,6 +72,18 @@ export type ToolFileOverviewResult =
       error: string;
       reason?: "outside_project_root";
     };
+
+export type ToolSymbolMatch = {
+  id: string;
+  name: string;
+  kind: string;
+  file: string;
+  range?: Range;
+  line: number;
+  exported: boolean;
+  exactMatch: boolean;
+  matchKind: "exact" | "substring";
+};
 
 /**
  * Agent-friendly tool wrapper for PR impact analysis.
@@ -200,7 +214,7 @@ export async function tool_findSymbol(
   } = {},
 ): Promise<{
   status: "ok" | "error";
-  matches?: Array<{ name: string; kind: string; file: string; line: number }>;
+  matches?: ToolSymbolMatch[];
   error?: string;
 }> {
   try {
@@ -215,20 +229,30 @@ export async function tool_findSymbol(
 
     const matches = allSymbols
       .filter((s) => s.name.toLowerCase().includes(q))
-      .map((s) => ({
-        name: s.name,
-        kind: s.kind,
-        file: toProjectRelativePath(root, s.file) ?? normalizePath(s.file),
-        line: s.range?.start.line ?? 0,
-      }));
+      .map((symbol) => {
+        const exported = isSymbolExported(index, symbol.file, symbol.name);
+        const exactMatch = symbol.name.toLowerCase() === q;
+        const matchKind: ToolSymbolMatch["matchKind"] = exactMatch ? "exact" : "substring";
+        return {
+          id: symbol.id,
+          name: symbol.name,
+          kind: String(symbol.kind),
+          file: toProjectRelativePath(root, symbol.file) ?? normalizePath(symbol.file),
+          ...(symbol.range ? { range: symbol.range } : {}),
+          line: symbol.range?.start.line ?? 0,
+          exported,
+          exactMatch,
+          matchKind,
+        };
+      });
 
-    // Sort by exact match then name
     matches.sort((a, b) => {
-      const aExact = a.name.toLowerCase() === q;
-      const bExact = b.name.toLowerCase() === q;
-      if (aExact && !bExact) return -1;
-      if (!aExact && bExact) return 1;
-      return a.name.localeCompare(b.name);
+      if (a.exactMatch !== b.exactMatch) return a.exactMatch ? -1 : 1;
+      const byName = a.name.localeCompare(b.name);
+      if (byName !== 0) return byName;
+      const byFile = a.file.localeCompare(b.file);
+      if (byFile !== 0) return byFile;
+      return a.line - b.line;
     });
 
     return {
@@ -517,6 +541,7 @@ export async function tool_goToDefinition(
     importedFrom?: string;
     exportedName?: string;
   };
+  provenance?: ResolutionProvenance;
   error?: string;
   reason?: string;
 }> {
@@ -546,6 +571,7 @@ export async function tool_goToDefinition(
       ...rest,
       definition: normalizeToolDefinition(root, definition),
       ...(via ? { via: normalizeToolGoToVia(root, via) } : {}),
+      ...(result.provenance ? { provenance: result.provenance } : {}),
     };
   } catch (error) {
     return { status: "error", error: String(error) };
@@ -566,6 +592,7 @@ export async function tool_findReferences(
   status: "ok" | "error" | "not_found";
   definition?: SymbolDef;
   references?: Reference[];
+  provenance?: ResolutionProvenance;
   error?: string;
   reason?: string;
 }> {
@@ -594,8 +621,17 @@ export async function tool_findReferences(
       ...result,
       definition: normalizeToolDefinition(root, result.definition),
       references: result.references.map((reference) => normalizeToolReference(root, reference)),
+      ...(result.provenance ? { provenance: result.provenance } : {}),
     };
   } catch (error) {
     return { status: "error", error: String(error) };
   }
+}
+
+function isSymbolExported(index: ProjectIndex, file: string, localName: string): boolean {
+  const mod = index.byFile.get(file);
+  if (!mod) {
+    return false;
+  }
+  return mod.exports.some((entry) => entry.type === "local" && entry.target.localName === localName);
 }

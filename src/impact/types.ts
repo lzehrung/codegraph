@@ -196,8 +196,12 @@ export type ImpactDiagnostics = {
   fallbackSeededDependents: number;
 };
 
+export const IMPACT_SCHEMA_VERSION = 1;
+
 // Main impact report
 export type ImpactReport = {
+  schemaVersion: number;
+  format: "full";
   projectFiles?: ProjectFileInfo[];
   changedFiles: Array<{
     file: FileId;
@@ -224,6 +228,8 @@ export type ImpactReport = {
 
 // Compact impact report with indexed arrays
 export type CompactImpactReport = {
+  schemaVersion: number;
+  format: "compact";
   projectFiles?: ProjectFileInfo[];
   files: FileId[]; // file index -> file path
   changedFiles: Array<{

@@ -123,6 +123,8 @@ describe("Agent Tools", () => {
       expect(path.isAbsolute(result.definition.file)).toBe(false);
       expect(path.isAbsolute(result.via?.importedFrom ?? "")).toBe(false);
       expect(typeof result.via?.exportedName).toBe("string");
+      expect(result.provenance?.resolution).toBe("namespace");
+      expect(result.provenance?.confidence).toBe("medium");
     }
   });
 
@@ -138,6 +140,8 @@ describe("Agent Tools", () => {
       const firstImportReference = result.references.find((reference) => reference.via?.import);
       expect(firstImportReference?.via?.import?.resolved).toBe("utils.ts");
       expect(result.references.every((reference) => typeof reference.range.start.line === "number")).toBe(true);
+      expect(result.provenance?.resolution).toBe("exact");
+      expect(result.provenance?.confidence).toBe("high");
     }
   });
 
@@ -191,6 +195,11 @@ describe("Agent Tools", () => {
       expect(["helpers.ts", "utils.ts"]).toContain(firstMatch?.file);
       expect(typeof firstMatch?.line).toBe("number");
       expect(path.isAbsolute(firstMatch?.file ?? "")).toBe(false);
+      expect(typeof firstMatch?.id).toBe("string");
+      expect(firstMatch?.range?.start.line).toBe(firstMatch?.line);
+      expect(typeof firstMatch?.exported).toBe("boolean");
+      expect(firstMatch?.exactMatch).toBe(true);
+      expect(firstMatch?.matchKind).toBe("exact");
     }
   });
 
@@ -215,8 +224,30 @@ index 1111111..2222222 100644
       expect("impacted" in result.report!).toBe(true);
       expect("surfaceArea" in result.report!).toBe(true);
       expect("graph" in result.report!).toBe(true);
-      expect("schemaVersion" in result.report!).toBe(false);
-      expect("format" in result.report!).toBe(false);
+      expect(result.report?.schemaVersion).toBe(1);
+      expect(result.report?.format).toBe("full");
+    }
+  });
+
+  it("tool_impactFromDiffText returns compact impact reports with explicit format metadata", async () => {
+    const diffText = `diff --git a/utils.ts b/utils.ts
+index 1111111..2222222 100644
+--- a/utils.ts
++++ b/utils.ts
+@@ -1,3 +1,3 @@
+-export function helperFunction() {
++export function helperFunction() {
+   return "Hello from helper";
+ }
+`;
+
+    const result = await tool_impactFromDiffText(samplePath, diffText, { compact: true });
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.report).toBeDefined();
+      expect(result.report?.schemaVersion).toBe(1);
+      expect(result.report?.format).toBe("compact");
+      expect("files" in result.report!).toBe(true);
     }
   });
 

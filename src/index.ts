@@ -72,6 +72,7 @@ export {
   type ModuleIndex,
   type ProjectIndex,
   type ResolvedExport,
+  type ResolutionProvenance,
   type BuildReport,
   type BuildOptions,
   type CacheReport,
@@ -85,6 +86,7 @@ export {
   type BackendReport,
   type WorkerPoolReport,
   type GraphDeltaReport,
+  type FindReferencesResult,
   type Reference,
   parseFile,
   collectLocalsAndExportsFromSource,
@@ -121,6 +123,7 @@ export {
   type ImpactReason,
   type ImpactReport,
   type CompactImpactReport,
+  IMPACT_SCHEMA_VERSION,
   type ImpactOptions,
   type DiffProviderOptions,
   type ImpactContext,
@@ -185,6 +188,7 @@ export {
   type ToolFileOverviewImport,
   type ToolFileOverviewDefinition,
   type ToolFileOverviewResult,
+  type ToolSymbolMatch,
 } from "./agent-tools.js";
 export {
   writeGraphSqlite,

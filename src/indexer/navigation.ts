@@ -8,6 +8,7 @@ import {
   getOrBuildScopeIndex,
   resolveNamedDefinition,
 } from "./navigation-local.js";
+import { createNavigationProvenance, okGoToResult } from "./navigation-provenance.js";
 import {
   getPhpQualifiedReference,
   inferPhpQualifiedReferenceImportType,
@@ -27,10 +28,12 @@ import { type ScopeIndex } from "./scope.js";
 import { type FileId, type Range } from "../types.js";
 import { resolveImportSpecifier, sliceText, toRange } from "../util.js";
 import {
+  type FindReferencesResult,
   type GoToRequest,
   type GoToResult,
   type ProjectIndex,
   type Reference,
+  type ResolutionProvenance,
   type SymbolDef,
   SymbolKind,
 } from "./types.js";
@@ -120,11 +123,11 @@ export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Pro
             ...(preferredKind ? { preferredKind } : {}),
           });
           if (hit?.kind === "resolved") {
-            return {
-              status: "ok",
-              definition: hit.def,
+            return okGoToResult(index, hit.def, {
               via: { importedFrom: resolvedTarget, exportedName },
-            };
+              resolution: "php-qualified",
+              confidence: "high",
+            });
           }
         }
       }
@@ -135,7 +138,10 @@ export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Pro
     const scopeIndex = getOrBuildScopeIndex(index, file, source, sup, lang, mod, tree);
     const local = findClosestBinding(scopeIndex, file, name, node);
     if (local) {
-      return { status: "ok", definition: local };
+      return okGoToResult(index, local, {
+        resolution: "exact",
+        confidence: "high",
+      });
     }
 
     if (sup.supportsCrossModuleSymbols) {
@@ -161,10 +167,12 @@ export async function findReferences(
     blockMaxLines?: number;
     maxReferences?: number;
   },
-): Promise<{ status: "ok"; definition: SymbolDef; references: Reference[] } | { status: "not_found"; reason: string }> {
+): Promise<FindReferencesResult> {
   let def: SymbolDef | null = null;
+  let provenance: ResolutionProvenance | undefined;
   if ("def" in req) {
     def = req.def;
+    provenance = createNavigationProvenance(index, "exact", "high");
   } else {
     const module = index.byFile.get(req.file);
     const localAtPosition = module?.locals.find((local) =>
@@ -175,9 +183,13 @@ export async function findReferences(
     );
     if (localAtPosition) {
       def = localAtPosition;
+      provenance = createNavigationProvenance(index, "exact", "high");
     } else {
       const gotoResult = await goToDefinition(index, req);
-      if (gotoResult.status === "ok") def = gotoResult.definition;
+      if (gotoResult.status === "ok") {
+        def = gotoResult.definition;
+        provenance = gotoResult.provenance;
+      }
     }
   }
   if (!def) {
@@ -379,7 +391,12 @@ export async function findReferences(
     }
   }
 
-  return { status: "ok", definition: def, references: refs };
+  return {
+    status: "ok",
+    definition: def,
+    references: refs,
+    ...(provenance ? { provenance } : {}),
+  };
 }
 
 export async function collectNamespaceMemberRefs(file: string, ns: string, member: string): Promise<Range[]> {

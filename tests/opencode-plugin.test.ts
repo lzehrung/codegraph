@@ -77,11 +77,12 @@ describe("OpenCode plugin tools", () => {
     expect(referencesResult.references?.length).toBeGreaterThan(0);
   });
 
-  it("overview returns a summary string", async () => {
+  it("overview returns a structured summary string derived from the agent overview contract", async () => {
     const output = await overview.execute({ file: path.join(samplePath, "main.ts") }, context);
     const parsed = parseToolOutput(output);
     expect(parsed.status).toBe("ok");
     expect(typeof parsed.result).toBe("string");
+    expect(parsed.result).toContain("# Overview of");
   });
 
   it("graph can return mermaid output", async () => {
@@ -98,9 +99,11 @@ describe("OpenCode plugin tools", () => {
     expect(parsed.status).toBe("ok");
 
     const impactResult = parsed.result as {
-      report?: { summary?: { changedFiles?: number } };
+      report?: { schemaVersion?: number; format?: string };
     };
     expect(impactResult.report).toBeDefined();
+    expect(impactResult.report?.schemaVersion).toBe(1);
+    expect(impactResult.report?.format).toBe("full");
   });
 
   it("impact_stream emits metadata chunks and returns a summary", async () => {

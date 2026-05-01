@@ -719,12 +719,12 @@ describe("CLI flows", () => {
     expect(
       report.changedFiles.some((entry: { file: string }) => entry.file === "java/main.java"),
     ).toBe(true);
-    expect(report.schemaVersion).toBeUndefined();
-    expect(report.format).toBeUndefined();
+    expect(report.schemaVersion).toBe(1);
+    expect(report.format).toBe("full");
     expect(Array.isArray(report.impacted)).toBe(true);
   });
 
-  it("impact CLI full JSON payload currently omits explicit format metadata", async () => {
+  it("impact CLI full JSON payload includes explicit schema metadata", async () => {
     const root = await mkTmpDir("dg-impact-compact-");
     await fsp.writeFile(path.join(root, "main.ts"), "export function helper() { return 1; }\n", "utf8");
     const diffText = `diff --git a/main.ts b/main.ts
@@ -749,7 +749,7 @@ index 1111111..2222222 100644
     expect(typeof report.changedFiles[0]?.file).toBe("string");
     expect(Array.isArray(report.changedSymbols)).toBe(true);
     expect(Array.isArray(report.impacted)).toBe(true);
-    expect(report.schemaVersion).toBeUndefined();
-    expect(report.format).toBeUndefined();
+    expect(report.schemaVersion).toBe(1);
+    expect(report.format).toBe("full");
   });
 });

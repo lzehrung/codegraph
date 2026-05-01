@@ -20,6 +20,7 @@ import type {
   ImpactCycle,
   ImpactDiagnostics,
 } from "./types.js";
+import { IMPACT_SCHEMA_VERSION } from "./types.js";
 import { buildSymbolGraphDetailed, findDetailedCycles } from "../graphs.js";
 import { discoverProjectFiles, normalizePath, resolveFilePathFromRoot } from "../util.js";
 import { createGraphFileResolver, normalizeImpactFileChange, toImpactReportFilePath } from "./path.js";
@@ -155,6 +156,8 @@ export async function buildImpactReport(
   }
 
   const report: ImpactReport = {
+    schemaVersion: IMPACT_SCHEMA_VERSION,
+    format: "full",
     projectFiles,
     changedFiles,
     changedSymbols: changedSymbols.map((symbol) => ({
@@ -523,6 +526,8 @@ function buildCompactReport(
   });
 
   return {
+    schemaVersion: IMPACT_SCHEMA_VERSION,
+    format: "compact",
     ...(projectFiles ? { projectFiles } : {}),
     files: filesArray,
     changedFiles: compactChangedFiles,
