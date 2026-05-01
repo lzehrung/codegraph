@@ -538,9 +538,7 @@ function listSymbolsForOverview(
   const symbols = listSymbols(index, { file, includeImports: false });
   const mod = index.byFile.get(file);
   const exportedNames = new Set(
-    mod?.exports
-      .filter((entry) => entry.type === "local")
-      .map((entry) => entry.target.localName) ?? [],
+    mod?.exports.filter((entry) => entry.type === "local").map((entry) => entry.target.localName) ?? [],
   );
   return {
     imports: mod?.imports ?? [],

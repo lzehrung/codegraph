@@ -19,7 +19,8 @@ describe("Impact: options and explain payloads", () => {
     const file = Array.from(index.byFile.keys()).find((f) => f.endsWith("/utils.ts"))!;
     const mod = index.byFile.get(file)!;
 
-    const isLocalExport = (entry: ModuleExport): entry is Extract<ModuleExport, { type: "local" }> => entry.type === "local";
+    const isLocalExport = (entry: ModuleExport): entry is Extract<ModuleExport, { type: "local" }> =>
+      entry.type === "local";
     const exportedNames = new Set(mod.exports.filter(isLocalExport).map((entry) => entry.target.localName));
     const internal = mod.locals.find((l) => !exportedNames.has(l.localName)) || mod.locals[0]!;
     const diffText = makeDiffForAbsPath(file, Math.max(internal.range.start.line + 1, internal.range.start.line));

@@ -713,12 +713,8 @@ describe("CLI flows", () => {
     const report = JSON.parse(stdout);
 
     expect(report.changedFiles.length).toBeGreaterThanOrEqual(2);
-    expect(
-      report.changedFiles.some((entry: { file: string }) => entry.file === "rust/main.rs"),
-    ).toBe(true);
-    expect(
-      report.changedFiles.some((entry: { file: string }) => entry.file === "java/main.java"),
-    ).toBe(true);
+    expect(report.changedFiles.some((entry: { file: string }) => entry.file === "rust/main.rs")).toBe(true);
+    expect(report.changedFiles.some((entry: { file: string }) => entry.file === "java/main.java")).toBe(true);
     expect(report.schemaVersion).toBe(1);
     expect(report.format).toBe("full");
     expect(Array.isArray(report.impacted)).toBe(true);
