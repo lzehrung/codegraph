@@ -64,7 +64,7 @@ Each release attaches a pre-built `.tgz` that `npm install` can consume by URL w
 Important: the tarball alone does not bundle the native addon or the optional JS fallback grammars. To analyze source languages after a tarball install, you still need one of these:
 
 - Configure the `@lzehrung` registry so the optional `@lzehrung/codegraph-native` package can resolve for your platform.
-- Install the separate `@lzehrung/codegraph-js-fallback` package explicitly if you want the non-native Tree-sitter path.
+- Configure the `@lzehrung` registry and install the separate `@lzehrung/codegraph-js-fallback` package explicitly if you want the non-native Tree-sitter path.
 
 Without one of those extra runtime packages, the CLI and library still install, but source-language parsing features will report the native addon as unavailable.
 
