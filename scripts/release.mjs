@@ -150,7 +150,7 @@ function readCurrentPackageVersions() {
 }
 
 function normalizeManagedManifests(versionPlan) {
-  const rootPackage = JSON.parse(originalRootPackageJson);
+  let rootPackage = JSON.parse(originalRootPackageJson);
   const nativePackage = JSON.parse(originalNativePackageJson);
   const jsFallbackPackage = sanitizeJsFallbackPackageManifest(readJson(jsFallbackPackagePath));
 
@@ -166,6 +166,9 @@ function normalizeManagedManifests(versionPlan) {
   }
   if (jsFallbackVersion) {
     jsFallbackPackage.version = jsFallbackVersion;
+  }
+  if (rootVersion) {
+    rootPackage = restoreRootPackageManifest(rootPackage, rootVersion, nativePackage.version);
   }
 
   writeJson(rootPackagePath, rootPackage);
@@ -191,7 +194,9 @@ function writePublishReadyRootPackage(versionPlan) {
   const sourceManifest = JSON.parse(originalRootPackageJson);
   writeJson(
     rootPackagePath,
-    sanitizePublishedRootPackageManifest(restoreRootPackageManifest(sourceManifest, intendedVersion)),
+    sanitizePublishedRootPackageManifest(
+      restoreRootPackageManifest(sourceManifest, intendedVersion, readJson(nativePackagePath).version),
+    ),
   );
 }
 
@@ -202,7 +207,7 @@ function restoreRootPackage(versionPlan) {
     return;
   }
   const sourceManifest = JSON.parse(originalRootPackageJson);
-  writeJson(rootPackagePath, restoreRootPackageManifest(sourceManifest, intendedVersion));
+  writeJson(rootPackagePath, restoreRootPackageManifest(sourceManifest, intendedVersion, readJson(nativePackagePath).version));
 }
 
 function doesLocalTagExist(tagName) {
