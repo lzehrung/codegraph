@@ -9,7 +9,6 @@ export const releasePackages = [
     ownedFiles: new Set([
       "package.json",
       "README.md",
-      "codegraph.skill",
       "scripts/release-lib.mjs",
       "scripts/release.mjs",
       "tests/release-script.test.ts",

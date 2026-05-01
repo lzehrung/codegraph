@@ -252,7 +252,6 @@ const CLI_VALUE_OPTIONS = new Set<string>([
 type SkillDoctorReport = {
   packageRoot: string;
   bundledSkillDir: string | null;
-  bundledArchivePath: string | null;
   defaultTargetDir: string;
   requestedTargetDir?: string;
   installTargetDir: string;
@@ -399,11 +398,6 @@ function getBundledSkillDir(packageRoot: string): string | null {
   return pathExists(path.join(candidate, "SKILL.md")) ? candidate : null;
 }
 
-function getBundledSkillArchivePath(packageRoot: string): string | null {
-  const archivePath = path.join(packageRoot, "codegraph.skill");
-  return pathExists(archivePath) ? archivePath : null;
-}
-
 function getDefaultSkillTargetDir(): string {
   const codexHome = process.env.CODEX_HOME?.trim();
   if (codexHome) {
@@ -446,7 +440,6 @@ async function copyDirectoryRecursive(sourceDir: string, targetDir: string, over
 function buildSkillDoctorReport(requestedTargetDir?: string): SkillDoctorReport {
   const packageRoot = getCodegraphPackageRoot();
   const bundledSkillDir = getBundledSkillDir(packageRoot);
-  const bundledArchivePath = getBundledSkillArchivePath(packageRoot);
   const defaultTargetDir = getDefaultSkillTargetDir();
   const installTargetDir = requestedTargetDir ? path.resolve(requestedTargetDir) : defaultTargetDir;
   const skillFilePath = path.join(installTargetDir, "SKILL.md");
@@ -454,7 +447,6 @@ function buildSkillDoctorReport(requestedTargetDir?: string): SkillDoctorReport 
   return {
     packageRoot: normalizePathForDisplay(packageRoot),
     bundledSkillDir: bundledSkillDir ? normalizePathForDisplay(bundledSkillDir) : null,
-    bundledArchivePath: bundledArchivePath ? normalizePathForDisplay(bundledArchivePath) : null,
     defaultTargetDir: normalizePathForDisplay(defaultTargetDir),
     ...(requestedTargetDir
       ? {
@@ -1369,15 +1361,6 @@ Examples:
       const packageRoot = getCodegraphPackageRoot();
       const bundledSkillDir = getBundledSkillDir(packageRoot);
       if (!bundledSkillDir) {
-        const archivePath = getBundledSkillArchivePath(packageRoot);
-        if (archivePath) {
-          writeJSONLine({
-            packageRoot: normalizePathForDisplay(packageRoot),
-            bundledSkillDir: null,
-            bundledArchivePath: normalizePathForDisplay(archivePath),
-          });
-          return;
-        }
         throw new Error("Bundled codegraph skill assets were not found.");
       }
       writeStdoutLine(normalizePathForDisplay(bundledSkillDir));
@@ -1393,12 +1376,7 @@ Examples:
       const packageRoot = getCodegraphPackageRoot();
       const bundledSkillDir = getBundledSkillDir(packageRoot);
       if (!bundledSkillDir) {
-        const archivePath = getBundledSkillArchivePath(packageRoot);
-        throw new Error(
-          archivePath
-            ? `Bundled archive found at ${normalizePathForDisplay(archivePath)}, but raw skill files are unavailable in this package build. Upgrade to a build that ships codegraph-skill/.`
-            : "Bundled codegraph skill assets were not found.",
-        );
+        throw new Error("Bundled codegraph skill assets were not found.");
       }
       const targetDir = targetOpt ? path.resolve(targetOpt) : getDefaultSkillTargetDir();
       await copyDirectoryRecursive(bundledSkillDir, targetDir, overwrite);
