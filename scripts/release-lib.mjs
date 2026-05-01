@@ -164,6 +164,11 @@ export function tagNamesForPackageVersion(packageName, version) {
   return [`v${version}`, packageScopedTag];
 }
 
+export function hasTagForPackageVersion(packageName, version, tagNames) {
+  const expectedTags = new Set(tagNamesForPackageVersion(packageName, version));
+  return tagNames.some((tagName) => expectedTags.has(tagName));
+}
+
 export function computePublishPlan({ shouldPublish, selectedPackageNames, publishedPackageNames }) {
   const publishByPackage = Object.fromEntries(
     selectedPackageNames.map((packageName) => [packageName, shouldPublish && !publishedPackageNames.has(packageName)]),
