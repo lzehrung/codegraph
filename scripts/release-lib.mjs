@@ -210,11 +210,38 @@ export function sanitizePublishedRootPackageManifest(pkg) {
   return normalized;
 }
 
-export function restoreRootPackageManifest(pkg, version) {
+function normalizeNativeDependencyVersion(version) {
+  return version.replace(/^[~^]/, "");
+}
+
+function syncRootNativeOptionalDependency(pkg, nativeVersion) {
+  if (!nativeVersion) {
+    return pkg;
+  }
+  const optionalDependencies =
+    pkg.optionalDependencies &&
+    typeof pkg.optionalDependencies === "object" &&
+    !Array.isArray(pkg.optionalDependencies)
+      ? { ...pkg.optionalDependencies }
+      : null;
+  if (!optionalDependencies || typeof optionalDependencies["@lzehrung/codegraph-native"] !== "string") {
+    return pkg;
+  }
+  optionalDependencies["@lzehrung/codegraph-native"] = `^${normalizeNativeDependencyVersion(nativeVersion)}`;
   return {
     ...pkg,
-    version,
+    optionalDependencies,
   };
+}
+
+export function restoreRootPackageManifest(pkg, version, nativeVersion) {
+  return syncRootNativeOptionalDependency(
+    {
+      ...pkg,
+      version,
+    },
+    nativeVersion,
+  );
 }
 
 export function recoverRootPackageManifestForResume(currentPkg, sourcePkg) {
@@ -222,7 +249,14 @@ export function recoverRootPackageManifestForResume(currentPkg, sourcePkg) {
   if (hasSourceOnlyFields) {
     return currentPkg;
   }
-  return restoreRootPackageManifest(sourcePkg, currentPkg.version);
+  const nativeDependencyVersion =
+    currentPkg.optionalDependencies &&
+    typeof currentPkg.optionalDependencies === "object" &&
+    !Array.isArray(currentPkg.optionalDependencies) &&
+    typeof currentPkg.optionalDependencies["@lzehrung/codegraph-native"] === "string"
+      ? currentPkg.optionalDependencies["@lzehrung/codegraph-native"]
+      : undefined;
+  return restoreRootPackageManifest(sourcePkg, currentPkg.version, nativeDependencyVersion);
 }
 
 export function recoverNativePackageManifestForResume(currentPkg, sourcePkg) {

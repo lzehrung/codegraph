@@ -187,16 +187,23 @@ describe("release script helpers", () => {
         {
           name: "@lzehrung/codegraph",
           version: "1.8.43",
+          optionalDependencies: {
+            "@lzehrung/codegraph-native": "^1.8.43",
+          },
           workspaces: ["packages/*"],
           scripts: {
             "publish:patch": "node ./scripts/release.mjs patch --publish",
           },
         },
         "1.8.44",
+        "1.8.48",
       ),
     ).toEqual({
       name: "@lzehrung/codegraph",
       version: "1.8.44",
+      optionalDependencies: {
+        "@lzehrung/codegraph-native": "^1.8.48",
+      },
       workspaces: ["packages/*"],
       scripts: {
         "publish:patch": "node ./scripts/release.mjs patch --publish",
@@ -210,6 +217,9 @@ describe("release script helpers", () => {
         {
           name: "@lzehrung/codegraph",
           version: "1.8.46",
+          optionalDependencies: {
+            "@lzehrung/codegraph-native": "^1.8.48",
+          },
           dependencies: {
             "better-sqlite3": "^12.5.0",
           },
@@ -217,6 +227,9 @@ describe("release script helpers", () => {
         {
           name: "@lzehrung/codegraph",
           version: "1.8.45",
+          optionalDependencies: {
+            "@lzehrung/codegraph-native": "^1.8.45",
+          },
           scripts: {
             "publish:resume": "node ./scripts/release.mjs resume --publish",
           },
@@ -232,6 +245,9 @@ describe("release script helpers", () => {
     ).toEqual({
       name: "@lzehrung/codegraph",
       version: "1.8.46",
+      optionalDependencies: {
+        "@lzehrung/codegraph-native": "^1.8.48",
+      },
       scripts: {
         "publish:resume": "node ./scripts/release.mjs resume --publish",
       },
