@@ -55,10 +55,13 @@ describe("Agent Tools", () => {
     if (result.status === "ok") {
       expect(result.file).toBe("main.ts");
       expect(result.hasSymbols).toBe(true);
-      expect(typeof result.overview).toBe("string");
-      expect(result.overview).toContain("# Overview of main.ts");
-      expect(result.overview).toContain("## Imports");
-      expect(result.overview).toContain("## Definitions");
+      expect(Array.isArray(result.overview.imports)).toBe(true);
+      expect(Array.isArray(result.overview.definitions)).toBe(true);
+      expect(result.overview.imports.length).toBeGreaterThan(0);
+      expect(result.overview.imports.some((entry) => entry.from === "./utils")).toBe(true);
+      expect(result.overview.definitions.some((entry) => entry.name === "main")).toBe(true);
+      expect(typeof result.renderedOverview).toBe("string");
+      expect(result.renderedOverview).toContain("# Overview of main.ts");
     }
   });
 
@@ -71,7 +74,9 @@ describe("Agent Tools", () => {
     if (result.status === "ok") {
       expect(result.file).toBe("empty.ts");
       expect(result.hasSymbols).toBe(false);
-      expect(result.overview).toContain("No symbols found.");
+      expect(result.overview.imports).toEqual([]);
+      expect(result.overview.definitions).toEqual([]);
+      expect(result.renderedOverview).toContain("No symbols found.");
     }
   });
 

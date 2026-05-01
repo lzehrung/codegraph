@@ -181,6 +181,10 @@ export {
   tool_getGraph,
   tool_goToDefinition,
   tool_findReferences,
+  type ToolFileOverview,
+  type ToolFileOverviewImport,
+  type ToolFileOverviewDefinition,
+  type ToolFileOverviewResult,
 } from "./agent-tools.js";
 export {
   writeGraphSqlite,

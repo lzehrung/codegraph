@@ -6,6 +6,7 @@ import {
   collectGraph,
   goToDefinition,
   findReferences,
+  symbolId,
   type ImpactOptions,
   type ImpactReport,
   type CompactImpactReport,
@@ -28,12 +29,35 @@ type ToolRuntimeOptions = {
   native?: NativeRuntimeMode;
 };
 
-type ToolFileOverviewResult =
+export type ToolFileOverviewImport = {
+  name: string;
+  kind: ImportBinding["kind"];
+  from: string;
+  resolved?: string;
+};
+
+export type ToolFileOverviewDefinition = {
+  id: string;
+  name: string;
+  kind: string;
+  line?: number;
+  exported: boolean;
+  docstring?: string;
+};
+
+export type ToolFileOverview = {
+  imports: ToolFileOverviewImport[];
+  definitions: ToolFileOverviewDefinition[];
+  summary?: string;
+};
+
+export type ToolFileOverviewResult =
   | {
       status: "ok";
       file: string;
-      overview: string;
+      overview: ToolFileOverview;
       hasSymbols: boolean;
+      renderedOverview?: string;
     }
   | {
       status: "not_found";
@@ -109,8 +133,8 @@ export async function tool_impactFromDiffText(
 }
 
 /**
- * Generates a high-level markdown overview of a file's structure.
- * Useful for agents to quickly understand a file without reading the raw code.
+ * Generates a structured overview of a file's imports and definitions.
+ * The rendered markdown summary is kept only as a convenience field.
  */
 export async function tool_getFileOverview(
   root: string,
@@ -143,41 +167,17 @@ export async function tool_getFileOverview(
     }
 
     const symbols = listSymbolsForOverview(index, absPath);
+    const overview = buildToolFileOverview(symbols);
+    const renderedOverview = renderToolFileOverview(relativeFile, overview);
 
-    const lines: string[] = [`# Overview of ${relativeFile}`];
-    const hasSymbols = symbols.imports.length > 0 || symbols.definitions.length > 0;
-
-    if (symbols.imports.length > 0) {
-      lines.push("\n## Imports");
-      const uniqueImports = Array.from(new Set(symbols.imports.map((i) => i.name)));
-      lines.push(`Imported symbols: ${uniqueImports.sort().join(", ")}`);
-    }
-
-    if (symbols.definitions.length > 0) {
-      lines.push("\n## Definitions");
-      symbols.definitions.sort((a, b) => (a.range?.start.line ?? 0) - (b.range?.start.line ?? 0));
-
-      for (const def of symbols.definitions) {
-        const lineInfo = def.range ? `(line ${def.range.start.line})` : "";
-        lines.push(`### ${def.kind} \`${def.name}\` ${lineInfo}`);
-        if (def.docstring) {
-          lines.push(`> ${def.docstring.split("\n")[0]}...`);
-        }
-      }
-    } else {
-      lines.push("\n## Definitions");
-      lines.push("No definitions found.");
-    }
-
-    if (!hasSymbols) {
-      lines.push("\nNo symbols found.");
-    }
+    const hasSymbols = overview.imports.length > 0 || overview.definitions.length > 0;
 
     return {
       status: "ok",
       file: relativeFile,
-      overview: lines.join("\n"),
+      overview,
       hasSymbols,
+      renderedOverview,
     };
   } catch (error) {
     return {
@@ -325,27 +325,98 @@ function listSymbolsForOverview(
   index: ProjectIndex,
   file: string,
 ): {
-  imports: Array<{ name: string }>;
+  imports: ImportBinding[];
   definitions: ReturnType<typeof listSymbols>;
+  exportedNames: Set<string>;
 } {
   const symbols = listSymbols(index, { file, includeImports: false });
   const mod = index.byFile.get(file);
-  const imports =
-    mod?.imports.map((entry) => {
-      let name: string;
-      if (entry.kind === "namespace") {
-        name = entry.localNS;
-      } else if (entry.kind === "star") {
-        name = entry.from;
-      } else {
-        name = entry.local;
-      }
-      return { name };
-    }) ?? [];
+  const exportedNames = new Set(
+    mod?.exports
+      .filter((entry) => entry.type === "local")
+      .map((entry) => entry.target.localName) ?? [],
+  );
+  return {
+    imports: mod?.imports ?? [],
+    definitions: symbols,
+    exportedNames,
+  };
+}
+
+function buildToolFileOverview(symbols: {
+  imports: ImportBinding[];
+  definitions: ReturnType<typeof listSymbols>;
+  exportedNames: Set<string>;
+}): ToolFileOverview {
+  const imports = symbols.imports.map((entry) => ({
+    name: getToolImportDisplayName(entry),
+    kind: entry.kind,
+    from: entry.from,
+    ...(typeof entry.resolved === "string" ? { resolved: entry.resolved } : {}),
+  }));
+
+  const definitions = [...symbols.definitions]
+    .sort((left, right) => (left.range?.start.line ?? 0) - (right.range?.start.line ?? 0))
+    .map((def) => ({
+      id: def.id,
+      name: def.name,
+      kind: String(def.kind),
+      ...(def.range ? { line: def.range.start.line } : {}),
+      exported: symbols.exportedNames.has(def.name),
+      ...(def.docstring ? { docstring: def.docstring } : {}),
+    }));
+
+  let summary: string | undefined;
+  if (imports.length > 0 || definitions.length > 0) {
+    summary = `${imports.length} imports, ${definitions.length} definitions`;
+  }
+
   return {
     imports,
-    definitions: symbols,
+    definitions,
+    ...(summary ? { summary } : {}),
   };
+}
+
+function renderToolFileOverview(file: string, overview: ToolFileOverview): string {
+  const lines: string[] = [`# Overview of ${file}`];
+
+  if (overview.summary) {
+    lines.push("", overview.summary);
+  }
+
+  lines.push("", "## Imports");
+  if (overview.imports.length === 0) {
+    lines.push("No imports found.");
+  } else {
+    const uniqueImports = Array.from(new Set(overview.imports.map((entry) => entry.name)));
+    lines.push(`Imported symbols: ${uniqueImports.sort().join(", ")}`);
+  }
+
+  lines.push("", "## Definitions");
+  if (overview.definitions.length === 0) {
+    lines.push("No definitions found.");
+  } else {
+    for (const def of overview.definitions) {
+      const lineInfo = def.line !== undefined ? `(line ${def.line})` : "";
+      lines.push(`### ${def.kind} \`${def.name}\` ${lineInfo}`.trim());
+      if (def.docstring) {
+        lines.push(`> ${def.docstring.split("\n")[0]}...`);
+      }
+    }
+  }
+
+  if (overview.imports.length === 0 && overview.definitions.length === 0) {
+    lines.push("", "No symbols found.");
+  }
+
+  return lines.join("\n");
+}
+
+function getToolImportDisplayName(entry: ImportBinding): string {
+  if (entry.kind === "namespace") return entry.localNS;
+  if (entry.kind === "star") return entry.from;
+  return entry.local;
 }
 
 function normalizeToolFileOutput(root: string, filePath: string): string {

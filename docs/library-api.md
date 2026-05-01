@@ -288,6 +288,22 @@ const reportWithBlockContext = await analyzeImpactFromDiff(root, index, {
 });
 ```
 
+## Agent tool wrappers
+
+The library also exports agent-oriented wrappers with explicit status discriminants.
+
+`tool_getFileOverview()` is structured-first. Its `ok` result exposes `overview.imports` and `overview.definitions` directly for agent consumption, while `renderedOverview` remains an optional convenience string for logging or debugging.
+
+```ts
+import { tool_getFileOverview } from "@lzehrung/codegraph";
+
+const overview = await tool_getFileOverview(process.cwd(), "src/main.ts");
+if (overview.status === "ok") {
+  console.log(overview.overview.imports);
+  console.log(overview.overview.definitions);
+}
+```
+
 ## Related docs
 
 - [docs/installation.md](./installation.md)
