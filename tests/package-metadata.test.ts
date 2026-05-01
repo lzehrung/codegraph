@@ -21,17 +21,29 @@ function readStringRecord(value: unknown): Record<string, string> {
 }
 
 describe("package metadata", () => {
-  it("keeps the declared ISC license text and package metadata aligned", () => {
+  it("keeps the declared MIT license text and package metadata aligned", () => {
     const licensePath = path.resolve(process.cwd(), "LICENSE");
     const rootPackage = readJson("package.json");
     const nativePackage = readJson("packages/codegraph-native/package.json");
     const fallbackPackage = readJson("packages/codegraph-js-fallback/package.json");
+    const nativeArtifactPackages = fs
+      .readdirSync(path.resolve(process.cwd(), "packages/codegraph-native/npm"), {
+        withFileTypes: true,
+      })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) =>
+        readJson(`packages/codegraph-native/npm/${entry.name}/package.json`),
+      );
 
     expect(fs.existsSync(licensePath)).toBe(true);
-    expect(fs.readFileSync(licensePath, "utf8")).toContain("ISC License");
-    expect(rootPackage.license).toBe("ISC");
-    expect(nativePackage.license).toBeUndefined();
-    expect(fallbackPackage.license).toBeUndefined();
+    expect(fs.readFileSync(licensePath, "utf8")).toContain("MIT License");
+    expect(rootPackage.license).toBe("MIT");
+    expect(nativePackage.license).toBe("MIT");
+    expect(fallbackPackage.license).toBe("MIT");
+
+    for (const artifactPackage of nativeArtifactPackages) {
+      expect(artifactPackage.license).toBe("MIT");
+    }
   });
 
   it("keeps the native package optional at the root package boundary", () => {
