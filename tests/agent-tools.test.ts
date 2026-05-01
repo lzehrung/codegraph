@@ -63,6 +63,20 @@ describe("Agent Tools", () => {
     }
   });
 
+  it("tool_getDependencies distinguishes existing but unindexed files", async () => {
+    const root = await mkTmpDir("dg-agent-deps-unindexed-");
+    await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
+    await fsp.writeFile(path.join(root, "notes.txt"), "plain text\n", "utf8");
+
+    const result = await tool_getDependencies(root, "notes.txt");
+    expect(result.status).toBe("not_found");
+    if (result.status === "not_found") {
+      expect(result.file).toBe("notes.txt");
+      expect(result.reason).toBe("file_not_indexed");
+      expect(result.error).toContain("not indexed");
+    }
+  });
+
   it("tool_getReverseDependencies returns bounded normalized dependents", async () => {
     const result = await tool_getReverseDependencies(samplePath, "utils.ts", { depth: 1, limit: 5 });
     expect(result.status).toBe("ok");
@@ -95,6 +109,8 @@ describe("Agent Tools", () => {
       expect(Array.isArray(result.overview.definitions)).toBe(true);
       expect(result.overview.imports.length).toBeGreaterThan(0);
       expect(result.overview.imports.some((entry) => entry.from === "./utils")).toBe(true);
+      expect(result.overview.imports.every((entry) => !entry.resolved || !path.isAbsolute(entry.resolved))).toBe(true);
+      expect(result.overview.imports.some((entry) => entry.resolved === "utils.ts")).toBe(true);
       expect(result.overview.definitions.some((entry) => entry.name === "main")).toBe(true);
       expect(typeof result.renderedOverview).toBe("string");
       expect(result.renderedOverview).toContain("# Overview of main.ts");

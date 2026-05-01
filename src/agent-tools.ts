@@ -196,7 +196,7 @@ export async function tool_getFileOverview(
     }
 
     const symbols = listSymbolsForOverview(index, absPath);
-    const overview = buildToolFileOverview(symbols);
+    const overview = buildToolFileOverview(root, symbols);
     const renderedOverview = renderToolFileOverview(relativeFile, overview);
 
     const hasSymbols = overview.imports.length > 0 || overview.definitions.length > 0;
@@ -367,7 +367,7 @@ export async function tool_getDependencies(
         logLevel: "error",
         ...(options.native ? { native: options.native } : {}),
       }));
-    const missing = getToolMissingFileResult(index, resolvedFile.absPath, resolvedFile.relativeFile);
+    const missing = await getToolMissingFileResult(index, resolvedFile.absPath, resolvedFile.relativeFile);
     if (missing) {
       return missing;
     }
@@ -432,7 +432,7 @@ export async function tool_getReverseDependencies(
         logLevel: "error",
         ...(options.native ? { native: options.native } : {}),
       }));
-    const missing = getToolMissingFileResult(index, resolvedFile.absPath, resolvedFile.relativeFile);
+    const missing = await getToolMissingFileResult(index, resolvedFile.absPath, resolvedFile.relativeFile);
     if (missing) {
       return missing;
     }
@@ -547,16 +547,19 @@ function listSymbolsForOverview(
   };
 }
 
-function buildToolFileOverview(symbols: {
-  imports: ImportBinding[];
-  definitions: ReturnType<typeof listSymbols>;
-  exportedNames: Set<string>;
-}): ToolFileOverview {
+function buildToolFileOverview(
+  root: string,
+  symbols: {
+    imports: ImportBinding[];
+    definitions: ReturnType<typeof listSymbols>;
+    exportedNames: Set<string>;
+  },
+): ToolFileOverview {
   const imports = symbols.imports.map((entry) => ({
     name: getToolImportDisplayName(entry),
     kind: entry.kind,
     from: entry.from,
-    ...(typeof entry.resolved === "string" ? { resolved: entry.resolved } : {}),
+    ...(typeof entry.resolved === "string" ? { resolved: normalizeToolFileOutput(root, entry.resolved) } : {}),
   }));
 
   const definitions = [...symbols.definitions]
@@ -627,26 +630,31 @@ function normalizeToolFileOutput(root: string, filePath: string): string {
   return toProjectRelativePath(root, filePath) ?? normalizePath(filePath);
 }
 
-function getToolMissingFileResult(
+async function getToolMissingFileResult(
   index: ProjectIndex,
   absPath: string,
   relativeFile: string,
-):
+): Promise<
   | {
       status: "not_found";
       file: string;
       reason: "file_not_found" | "file_not_indexed";
       error: string;
     }
-  | undefined {
+  | undefined
+> {
   if (index.byFile.has(absPath)) {
     return undefined;
   }
+  const reason = (await fileExists(absPath)) ? "file_not_indexed" : "file_not_found";
   return {
     status: "not_found",
     file: relativeFile,
-    reason: "file_not_found",
-    error: `File was not found under the project root: ${relativeFile}`,
+    reason,
+    error:
+      reason === "file_not_found"
+        ? `File was not found under the project root: ${relativeFile}`
+        : `File is not indexed: ${relativeFile}`,
   };
 }
 
