@@ -10,7 +10,6 @@ import {
   getHotspots,
   goToDefinition,
   findReferences,
-  symbolId,
   type ImpactOptions,
   type ImpactReport,
   type CompactImpactReport,
@@ -182,18 +181,9 @@ export async function tool_getFileOverview(
       ...(runtimeOptions.native ? { native: runtimeOptions.native } : {}),
     });
     const { absPath, relativeFile } = resolvedFile;
-    const mod = index.byFile.get(absPath);
-    if (!mod) {
-      const reason = (await fileExists(absPath)) ? "file_not_indexed" : "file_not_found";
-      return {
-        status: "not_found",
-        file: relativeFile,
-        reason,
-        error:
-          reason === "file_not_found"
-            ? `File was not found under the project root: ${relativeFile}`
-            : `File is not indexed: ${relativeFile}`,
-      };
+    const missing = await getToolMissingFileResult(index, absPath, relativeFile);
+    if (missing) {
+      return missing;
     }
 
     const symbols = listSymbolsForOverview(index, absPath);
@@ -373,10 +363,11 @@ export async function tool_getDependencies(
       return missing;
     }
 
+    const limit = options.limit !== undefined ? Math.max(0, Math.floor(options.limit)) : 20;
     const dependencies = getDependencies(index.graph, resolvedFile.absPath, {
       ...(options.depth !== undefined ? { depth: options.depth } : {}),
+      limit: limit + 1,
     });
-    const limit = options.limit !== undefined ? Math.max(0, Math.floor(options.limit)) : 20;
     const limited = dependencies.slice(0, limit).map((entry) => ({
       file: normalizeToolFileOutput(root, entry.file),
       depth: entry.depth,
@@ -438,10 +429,11 @@ export async function tool_getReverseDependencies(
       return missing;
     }
 
+    const limit = options.limit !== undefined ? Math.max(0, Math.floor(options.limit)) : 20;
     const dependents = getReverseDependencies(index.graph, resolvedFile.absPath, {
       ...(options.depth !== undefined ? { depth: options.depth } : {}),
+      limit: limit + 1,
     });
-    const limit = options.limit !== undefined ? Math.max(0, Math.floor(options.limit)) : 20;
     const limited = dependents.slice(0, limit).map((entry) => ({
       file: normalizeToolFileOutput(root, entry.file),
       depth: entry.depth,

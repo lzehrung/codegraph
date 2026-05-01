@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createTestIndex, getSamplePath } from "./test-utils.js";
 import { analyzeImpactFromDiff } from "../src/impact/index.js";
-import type { ModuleExport } from "../src/index.js";
+import type { ExportEntry } from "../src/index.js";
 
 function makeDiffForAbsPath(abs: string, start: number) {
   return `diff --git a/${abs} b/${abs}
@@ -19,7 +19,7 @@ describe("Impact: options and explain payloads", () => {
     const file = Array.from(index.byFile.keys()).find((f) => f.endsWith("/utils.ts"))!;
     const mod = index.byFile.get(file)!;
 
-    const isLocalExport = (entry: ModuleExport): entry is Extract<ModuleExport, { type: "local" }> =>
+    const isLocalExport = (entry: ExportEntry): entry is Extract<ExportEntry, { type: "local" }> =>
       entry.type === "local";
     const exportedNames = new Set(mod.exports.filter(isLocalExport).map((entry) => entry.target.localName));
     const internal = mod.locals.find((l) => !exportedNames.has(l.localName)) || mod.locals[0]!;

@@ -34,6 +34,18 @@ describe("graph queries", () => {
     expect(rdeps.some((d) => d.file === `${root}/c.ts` && d.depth === 2)).toBe(true);
   });
 
+  it("should bound dependency traversal results when a limit is provided", () => {
+    const deps = getDependencies(graph, `${root}/a.ts`, { limit: 1 });
+    expect(deps).toEqual([{ file: `${root}/b.ts`, depth: 1 }]);
+  });
+
+  it("should bound reverse dependency traversal results when a limit is provided", () => {
+    const rdeps = getReverseDependencies(graph, `${root}/b.ts`, { limit: 2 });
+    expect(rdeps.length).toBe(2);
+    expect(rdeps.some((d) => d.file === `${root}/a.ts` && d.depth === 1)).toBe(true);
+    expect(rdeps.some((d) => d.file === `${root}/d.ts` && d.depth === 1)).toBe(true);
+  });
+
   it("should find shortest path", () => {
     const p = getShortestPath(graph, `${root}/d.ts`, `${root}/c.ts`);
     expect(p).toEqual([`${root}/d.ts`, `${root}/b.ts`, `${root}/c.ts`]);
