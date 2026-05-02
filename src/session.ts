@@ -634,6 +634,7 @@ export class SessionManager {
       existing?: CodeReviewSession;
       session: CodeReviewSession;
     }> = [];
+    const warmupPromises: Promise<CodeReviewSession>[] = [];
     try {
       for (const { id, options } of sessions) {
         const requestedFingerprint = sessionIdentityFingerprint(resolveSessionIdentity(options));
@@ -648,7 +649,7 @@ export class SessionManager {
 
         const pending = this.getPendingCompatibleSession(id, options);
         if (pending) {
-          await pending;
+          warmupPromises.push(pending);
           continue;
         }
 
@@ -658,8 +659,9 @@ export class SessionManager {
         }
         const session = new CodeReviewSession(options);
         replacementSessions.push(existing ? { id, existing, session } : { id, session });
-        await this.trackSession(id, options, session, true, () => {});
+        warmupPromises.push(this.trackSession(id, options, session, true, () => {}));
       }
+      await Promise.all(warmupPromises);
     } catch (error) {
       for (const replacement of replacementSessions) {
         const pending = this.pendingSessions.get(replacement.id);

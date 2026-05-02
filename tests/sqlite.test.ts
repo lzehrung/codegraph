@@ -682,4 +682,13 @@ export function helper() { return 1; }
     const remaining = await queryGraphSqliteRaw(dbPath, "SELECT COUNT(*) FROM symbols;");
     expect(remaining.rows).toEqual([[1]]);
   });
+
+  it("fails fast when high-level SQLite queries target a missing database", async () => {
+    const root = await mkTmpDir("dg-sqlite-missing-");
+    const missingDir = path.join(root, "nested");
+    const dbPath = path.join(missingDir, "graph.sqlite");
+
+    await expect(queryGraphSqlite(dbPath, "What are the most called methods in the codebase?")).rejects.toThrow();
+    await expect(fsp.access(dbPath)).rejects.toThrow();
+  });
 });
