@@ -939,6 +939,17 @@ export async function collectImportsForFile(
                 typeOnly,
               });
             }
+          } else if (resolvedSup.id === "zig") {
+            const alias = caps["alias"]?.text;
+            if (alias) {
+              imports.push({
+                kind: "namespace",
+                localNS: alias,
+                from,
+                resolved,
+                typeOnly,
+              });
+            }
           } else if (resolvedSup.id === "c" || resolvedSup.id === "cpp") {
             imports.push({ kind: "star", from, resolved, typeOnly });
           }
@@ -1258,6 +1269,17 @@ export async function collectImportsForFile(
                 kind: "named",
                 local: last,
                 imported: last,
+                from: fromValue,
+                resolved,
+                typeOnly,
+              });
+            }
+          } else if (resolvedSup.id === "zig") {
+            const alias = caps["alias"]?.text;
+            if (alias) {
+              imports.push({
+                kind: "namespace",
+                localNS: alias,
                 from: fromValue,
                 resolved,
                 typeOnly,

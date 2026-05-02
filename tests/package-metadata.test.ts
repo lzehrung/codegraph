@@ -205,6 +205,7 @@ describe("package metadata", () => {
     expect(dependencies["tree-sitter-php"]).toBeDefined();
     expect(dependencies["tree-sitter-typescript"]).toBeDefined();
     expect(dependencies["tree-sitter-vue"]).toBeDefined();
+    expect(dependencies["@tree-sitter-grammars/tree-sitter-zig"]).toBeDefined();
   });
 
   it("does not publish local file dependencies in the JS fallback package", () => {
