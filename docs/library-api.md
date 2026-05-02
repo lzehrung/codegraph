@@ -145,7 +145,7 @@ const incremental = await buildProjectIndexIncremental(root, {
 
 `buildProjectIndexIncremental` loads the cached manifest, reuses unchanged modules and edges, and reparses only the files reported as changed by Git flags or an explicit `files` list.
 
-`changedSince` follows `git diff <rev>` semantics, while `gitBase` and `gitHead` use an explicit `<base>..<head>` range.
+`changedSince` follows `git diff <rev>` semantics, while `gitBase` and `gitHead` use an explicit `<base>..<head>` range for normal revisions. `gitHead` also accepts `WORKTREE` for staged and unstaged tracked-file changes, or `STAGED`/`INDEX` for the current index.
 
 ## Project file discovery and graph building
 
@@ -328,7 +328,7 @@ const reverseDeps = await tool_getReverseDependencies(root, "src/index.ts", { de
 const hotspots = await tool_getHotspots(root, { limit: 20, index });
 const definition = await tool_goToDefinition(root, "src/main.ts", 10, 5, index);
 const references = await tool_findReferences(root, "src/main.ts", 10, 5, index);
-const impact = await tool_impactJSON(root, { provider: "git", base: "main", head: "HEAD" }, { index });
+const impact = await tool_impactJSON(root, { provider: "git", base: "HEAD", head: "WORKTREE" }, { index });
 ```
 
 Useful wrapper details:

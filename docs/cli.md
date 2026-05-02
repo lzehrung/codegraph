@@ -129,6 +129,12 @@ codegraph hotspots ./src --limit 20
 # Analyze PR impact from git history
 codegraph impact --provider git --base main --head HEAD
 
+# Analyze current staged and unstaged worktree changes against HEAD
+codegraph impact --provider git --base HEAD --head WORKTREE
+
+# Analyze the current index against HEAD
+codegraph impact --provider git --base HEAD --head STAGED
+
 # Analyze GitHub PR impact
 codegraph impact --provider github --repo owner/name --pr 123
 
@@ -174,6 +180,8 @@ codegraph review --base origin/main --head HEAD --review-depth standard > review
 codegraph graph-delta --git-base origin/main --git-head HEAD > graph-delta.json
 ```
 
+For git-provider impact, `--head` accepts normal revisions plus worktree sentinels. Use `WORKTREE` to compare the base revision against the current working tree, including staged and unstaged tracked-file changes. Use `STAGED` or `INDEX` to compare the base revision against the current index; with `--base HEAD`, that is staged changes only. Untracked files are not included until they are staged or otherwise tracked by Git.
+
 Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` so downstream tools can branch on payload shape without inferring it from missing fields. Impact JSON can also include `exportSummary`, `reexportChains`, `topImpacts`, `surfaceArea`, and `clusters` when applicable. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
 
 ### Doctor and skill commands
@@ -204,6 +212,8 @@ codegraph skill doctor
 Use `--changed-since <ref>` or `--git-base <ref> [--git-head <ref>]` with `graph` and `index` to limit processing to the files reported by `git diff`.
 
 The CLI pipes that file list into `buildProjectIndexFromFiles`, so unchanged files are skipped entirely when you are reviewing a PR.
+
+`--git-head` accepts normal revisions plus the same worktree sentinels used by git-provider impact: `WORKTREE` compares the base revision to staged and unstaged tracked-file changes, while `STAGED` and `INDEX` compare the base revision to the current index.
 
 ## SQLite schema and raw SQL
 

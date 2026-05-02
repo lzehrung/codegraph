@@ -21,6 +21,22 @@ function readStringRecord(value: unknown): Record<string, string> {
   );
 }
 
+function readFrontmatter(source: string): string {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(source);
+  return match?.[1] ?? "";
+}
+
+function frontmatterHasUnsafePlainColon(line: string): boolean {
+  const separatorIndex = line.indexOf(":");
+  if (separatorIndex < 0) {
+    return false;
+  }
+
+  const value = line.slice(separatorIndex + 1).trim();
+  const quotedValue = value.startsWith('"') || value.startsWith("'");
+  return !quotedValue && value.includes(": ");
+}
+
 function readNativeArtifactPackages(baseDir: string): Record<string, unknown>[] {
   const nativeArtifactsDir = path.resolve(baseDir, "packages/codegraph-native/npm");
   if (!fs.existsSync(nativeArtifactsDir)) {
@@ -86,6 +102,14 @@ describe("package metadata", () => {
 
     expect(files).toContain("codegraph-skill");
     expect(files).not.toContain("codegraph.skill");
+  });
+
+  it("keeps bundled skill frontmatter safe for Codex YAML parsing", () => {
+    const skillDoc = readText("codegraph-skill/codegraph/SKILL.md");
+    const frontmatter = readFrontmatter(skillDoc);
+
+    expect(frontmatter).toContain('description: "Use for codebase navigation and repo impact analysis:');
+    expect(frontmatter.split(/\r?\n/).filter(frontmatterHasUnsafePlainColon)).toEqual([]);
   });
 
   it("keeps the published CLI bin path normalized for npm", () => {

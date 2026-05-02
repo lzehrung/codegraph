@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fsp from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { textGrep } from "../src/index.js";
 import packageJson from "../package.json" with { type: "json" };
@@ -705,6 +705,20 @@ async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
+function git(cwd: string, args: string[]): string {
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Codegraph Test",
+      GIT_AUTHOR_EMAIL: "codegraph@example.test",
+      GIT_COMMITTER_NAME: "Codegraph Test",
+      GIT_COMMITTER_EMAIL: "codegraph@example.test",
+    },
+  }).trim();
+}
+
 describe("CLI flows", () => {
   const sampleRoot = normalize(path.resolve(process.cwd(), "tests", "samples", "typescript"));
 
@@ -764,5 +778,51 @@ index 1111111..2222222 100644
     expect(Array.isArray(report.impacted)).toBe(true);
     expect(report.schemaVersion).toBe(1);
     expect(report.format).toBe("full");
+  });
+
+  it("impact CLI accepts WORKTREE as a git-provider head sentinel", async () => {
+    const root = await mkTmpDir("dg-impact-worktree-");
+    git(root, ["init", "--initial-branch=main"]);
+    git(root, ["config", "core.autocrlf", "false"]);
+    await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "initial"]);
+
+    await fsp.writeFile(path.join(root, "main.ts"), "export const value = 2;\n", "utf8");
+
+    const stdout = await runCliCommand(["impact", root, "--provider", "git", "--base", "HEAD", "--head", "WORKTREE"]);
+    const report = JSON.parse(stdout) as {
+      changedFiles: Array<{ file: string }>;
+      schemaVersion?: number;
+      format?: string;
+    };
+
+    expect(report.changedFiles.map((entry) => entry.file)).toEqual(["main.ts"]);
+    expect(report.schemaVersion).toBe(1);
+    expect(report.format).toBe("full");
+  });
+
+  it("review CLI accepts WORKTREE as a git head sentinel", async () => {
+    const root = await mkTmpDir("dg-review-worktree-");
+    git(root, ["init", "--initial-branch=main"]);
+    git(root, ["config", "core.autocrlf", "false"]);
+    await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 1; }\n", "utf8");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "initial"]);
+
+    await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 2; }\n", "utf8");
+
+    const stdout = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE"]);
+    const report = JSON.parse(stdout) as {
+      status?: string;
+      changedFiles: Array<{ file: string }>;
+      base?: string;
+      head?: string;
+    };
+
+    expect(report.status).toBe("ok");
+    expect(report.changedFiles.map((entry) => entry.file)).toEqual(["main.ts"]);
+    expect(report.base).toBe("HEAD");
+    expect(report.head).toBe("WORKTREE");
   });
 });

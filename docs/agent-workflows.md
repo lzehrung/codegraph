@@ -246,8 +246,8 @@ const reverseDeps = await tool_getReverseDependencies(root, "src/index.ts", { de
 const hotspots = await tool_getHotspots(root, { limit: 20, index });
 const impact = await tool_impactJSON(root, {
   provider: "git",
-  base: "main",
-  head: "feature-branch",
+  base: "HEAD",
+  head: "WORKTREE",
 }, { index });
 const definition = await tool_goToDefinition(root, "src/main.ts", 10, 5, index, { native: "on" });
 const references = await tool_findReferences(root, "src/main.ts", 10, 5, index);

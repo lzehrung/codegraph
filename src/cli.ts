@@ -1192,6 +1192,7 @@ function parseNativeRuntimeMode(value: string | undefined): NativeRuntimeMode {
 type ImpactOptionsBuilder = Partial<ImpactOptions> & {
   base?: string;
   head?: string;
+  cwd?: string;
   pr?: number;
   repo?: string;
   diffText?: string;
@@ -1273,6 +1274,7 @@ Examples:
   codegraph skill install --target ~/.codex/skills/codegraph --force
   codegraph skill doctor
   codegraph impact --provider git --base main --head HEAD
+  codegraph impact --provider git --base HEAD --head WORKTREE
   codegraph refs --file src/index.ts --line 42 --col 10
 `);
     process.exit(0);
@@ -2023,6 +2025,7 @@ Examples:
       }
       options.base = base;
       options.head = head;
+      options.cwd = projectRootFs;
     } else if (provider === "github") {
       const pr = getOpt("--pr");
       const repo = getOpt("--repo");
