@@ -2640,7 +2640,7 @@ Examples:
       writeStderrLine("  --min-tokens N    Minimum tokens per chunk (default: 150)");
       writeStderrLine("  --max-tokens N    Maximum tokens per chunk (default: 400)");
       writeStderrLine(
-        "  --language LANG   Language override (javascript, typescript, tsx, python, php, vue, svelte, json, yaml, text)",
+        "  --language LANG   Language override (javascript, typescript, tsx, python, php, zig, vue, svelte, json, yaml, text)",
       );
       writeStderrLine("  --text            Force text chunking mode");
       process.exit(2);
@@ -2682,7 +2682,7 @@ Examples:
       let chunks;
 
       const isSFC = languageId === "vue" || languageId === "svelte";
-      if (forceText || (!isSFC && !["javascript", "typescript", "tsx", "python", "php"].includes(languageId))) {
+      if (forceText || (!isSFC && !["javascript", "typescript", "tsx", "python", "php", "zig"].includes(languageId))) {
         // Use text chunking for non-code files or when forced
         chunks = chunkTextFile({
           source,
