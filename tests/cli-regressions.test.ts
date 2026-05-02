@@ -201,6 +201,18 @@ describe("CLI regressions", () => {
     expect(chunks.every((chunk) => normalize(chunk.filePath ?? "") === normalize(filePath))).toBe(true);
   });
 
+  it("chunk uses semantic chunking for source languages beyond the legacy allowlist", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-go-chunk-"));
+    const filePath = path.join(tmpDir, "main.go");
+    await fsp.writeFile(filePath, "package main\n\nfunc helper() string {\n\treturn \"ok\"\n}\n", "utf8");
+
+    const stdout = await runCliCommand(["chunk", filePath, "--min-tokens", "1", "--max-tokens", "50"]);
+    const chunks = JSON.parse(stdout) as Array<{ languageId?: string; type?: string; name?: string }>;
+
+    expect(chunks.some((chunk) => chunk.languageId === "go" && chunk.type === "function" && chunk.name === "helper"))
+      .toBe(true);
+  });
+
   it("graph honors .gitignore by default and --no-gitignore opts out", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-gitignore-"));
     const srcDir = path.join(tmpDir, "src");

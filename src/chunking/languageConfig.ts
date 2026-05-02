@@ -1,9 +1,6 @@
 import type { LanguageDefinition } from "../languages/types.js";
 import { generateChunkingQuery } from "../languages/queryGenerator.js";
 
-/** Supported programming languages for semantic chunking */
-export type SupportedLanguage = "javascript" | "typescript" | "tsx" | "python" | "php" | "zig";
-
 /**
  * Configuration for a specific language's chunking behavior.
  * Contains Tree-sitter parser, query, and capture group definitions.

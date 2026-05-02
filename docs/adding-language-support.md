@@ -13,10 +13,9 @@ Checklist for landing a new first-class source language without drifting from re
 - Add the language definition in `src/languages/definitions/<language>.ts`.
 - Register it from `src/languages/all.ts`.
 - Export support from `src/languages.ts` when the public support surface expects it.
-- Add chunking bootstrap registration in `src/bootstrap/treeSitterLanguages.ts`.
-- Extend `src/chunking/languageConfig.ts` if the language participates in semantic chunking.
+- Confirm `src/bootstrap/treeSitterLanguages.ts` derives the intended chunking config for the new language.
 - Add the file extension to discovery and resolution in `src/util.ts`.
-- Update CLI language validation and help in `src/cli.ts` when a command accepts a language override.
+- Update CLI help in `src/cli.ts` when a command accepts a language override and cannot derive it from the registered chunking configs.
 
 ## 3. Wire both runtime paths
 
