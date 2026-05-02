@@ -637,6 +637,10 @@ mod tests {
                 "func helper() {}",
                 "(function_declaration name: (simple_identifier) @name)",
             ),
+            "zig" => (
+                "pub fn helper() void {}",
+                "(function_declaration name: (identifier) @name)",
+            ),
             "ts" => (
                 "export const value = 1;",
                 "(lexical_declaration (variable_declarator name: (identifier) @name))",
