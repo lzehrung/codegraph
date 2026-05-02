@@ -744,7 +744,7 @@ export async function queryGraphSqlite(outputPath: string, queryText: string): P
   if (!parsed) {
     throw new Error("Unsupported query text.");
   }
-  return await withSqliteDatabase(outputPath, (db) => {
+  return await withReadOnlySqliteDatabase(outputPath, (db) => {
     switch (parsed.kind) {
       case "mostCalledMethods": {
         const rows = execRowsParams(

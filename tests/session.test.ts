@@ -806,6 +806,54 @@ describe("SessionManager", () => {
     }
   });
 
+  test("should warm multiple independent sessions in parallel", async () => {
+    const originalBuild = indexer.buildProjectIndexIncremental;
+    let releaseBuild: (() => void) | null = null;
+    const buildGate = new Promise<void>((resolve) => {
+      releaseBuild = resolve;
+    });
+    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      await buildGate;
+      return await originalBuild(...args);
+    });
+
+    try {
+      const rootA = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-parallel-a-"));
+      const rootB = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-parallel-b-"));
+      await fsp.writeFile(path.join(rootA, "a.ts"), "export const a = 1;\n", "utf8");
+      await fsp.writeFile(path.join(rootB, "b.ts"), "export const b = 1;\n", "utf8");
+
+      try {
+        const warmupPromise = manager.warmup([
+          {
+            id: "parallel-a",
+            options: { root: rootA, buildOptions: { cache: "memory" } },
+          },
+          {
+            id: "parallel-b",
+            options: { root: rootB, buildOptions: { cache: "memory" } },
+          },
+        ]);
+
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(buildSpy).toHaveBeenCalledTimes(2);
+
+        releaseBuild?.();
+        await warmupPromise;
+
+        expect(manager.getSession("parallel-a")?.getStatus()).toBe("ready");
+        expect(manager.getSession("parallel-b")?.getStatus()).toBe("ready");
+      } finally {
+        await fsp.rm(rootA, { recursive: true, force: true });
+        await fsp.rm(rootB, { recursive: true, force: true });
+      }
+    } finally {
+      buildSpy.mockRestore();
+    }
+  });
+
   test("should reject warmup collisions with existing sessions", async () => {
     const rootA = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-warm-a-"));
     const rootB = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-warm-b-"));
