@@ -201,7 +201,7 @@ Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` 
 # Print the installed CLI version
 codegraph version
 
-# Inspect backend and runtime state
+# Inspect package identity plus backend and runtime state
 codegraph doctor
 
 # Inspect one explicit graph or index artifact path
@@ -217,6 +217,8 @@ codegraph skill install --target ~/.codex/skills/codegraph --force
 # Inspect bundled skill paths and target health
 codegraph skill doctor
 ```
+
+`codegraph doctor` includes the installed package name, version, and package root so local tarball or source-checkout installs can confirm which build the `codegraph` command is actually running.
 
 ## Incremental git-scoped runs
 

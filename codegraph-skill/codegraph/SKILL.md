@@ -86,7 +86,7 @@ The CLI ships a bundled skill installer:
 - Install into an explicit target:
   Target must end with `/skills/codegraph`.
   `codegraph skill install --target ~/.codex/skills/codegraph --force`
-- Inspect backend/runtime state plus local graph/cache artifacts:
+- Inspect package identity, backend/runtime state, plus local graph/cache artifacts:
   `codegraph doctor`
 - Inspect packaged skill paths and target health:
   `codegraph skill doctor`

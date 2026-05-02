@@ -165,6 +165,8 @@ The full install details now live in [docs/installation.md](./docs/installation.
 
 See the [Quick start](#quick-start) section for the recommended first-run path.
 
+For a local global install from the source checkout, run `npm run build` first and then `npm install -g .`.
+
 ### Scoped registry install
 
 ```bash

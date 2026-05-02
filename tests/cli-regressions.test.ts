@@ -422,13 +422,17 @@ describe("CLI regressions", () => {
     expect(normalize(report.installedSkill.skillFilePath)).toBe(normalize(path.join(targetDir, "SKILL.md")));
   });
 
-  it("doctor reports only backend state when no artifact path is provided", async () => {
+  it("doctor reports package identity and backend state when no artifact path is provided", async () => {
     const stdout = await runCliCommand(["doctor"]);
     const report = JSON.parse(stdout) as {
+      package: { name: string; version: string; packageRoot: string };
       native: { available: boolean; supportedLanguageIds: string[] };
       indexArtifact?: unknown;
     };
 
+    expect(report.package.name).toBe(packageJson.name);
+    expect(report.package.version).toBe(packageJson.version);
+    expect(normalize(report.package.packageRoot).endsWith("/codegraph")).toBe(true);
     expect(typeof report.native.available).toBe("boolean");
     expect(Array.isArray(report.native.supportedLanguageIds)).toBe(true);
     expect(report.indexArtifact).toBeUndefined();
@@ -846,6 +850,8 @@ index 1111111..2222222 100644
     expect(stdout).toContain("Risk:");
     expect(stdout).toContain("Changed files:");
     expect(stdout).toContain("main.ts");
+    expect(stdout).toContain("Review tasks:");
+    expect(stdout).toContain("review-summary");
     expect(stdout).not.toContain('"projectFiles"');
   });
 

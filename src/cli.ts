@@ -271,6 +271,11 @@ type IndexedArtifactReport = {
 };
 
 type DoctorReport = {
+  package: {
+    name: string;
+    version: string;
+    packageRoot: string;
+  };
   native: {
     available: boolean;
     loadError?: string;
@@ -391,6 +396,21 @@ function getCodegraphVersion(): string {
     throw new Error("Unable to determine codegraph package version.");
   }
   return parsed.version;
+}
+
+function getCodegraphPackageIdentity(): DoctorReport["package"] {
+  const packageRoot = getCodegraphPackageRoot();
+  const packageJsonPath = path.join(packageRoot, "package.json");
+  const raw = fs.readFileSync(packageJsonPath, "utf8");
+  const parsed = JSON.parse(raw) as { name?: string; version?: string };
+  if (!parsed.name || !parsed.version) {
+    throw new Error("Unable to determine codegraph package identity.");
+  }
+  return {
+    name: parsed.name,
+    version: parsed.version,
+    packageRoot: normalizePathForDisplay(packageRoot),
+  };
 }
 
 function getBundledSkillDir(packageRoot: string): string | null {
@@ -539,6 +559,7 @@ function buildIndexedArtifactReport(indexPath: string): IndexedArtifactReport {
 function buildDoctorReport(indexPath?: string): DoctorReport {
   const loadError = getNativeTreeSitterLoadError();
   return {
+    package: getCodegraphPackageIdentity(),
     native: {
       available: isNativeTreeSitterAvailable(),
       ...(loadError ? { loadError: String(loadError) } : {}),
@@ -1227,6 +1248,19 @@ function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport
     const remainingCandidates = report.candidateTests.length - 10;
     if (remainingCandidates > 0) {
       lines.push(`- ... and ${remainingCandidates} more`);
+    }
+  }
+  lines.push("");
+  lines.push("Review tasks:");
+  if (report.reviewTasks.length === 0) {
+    lines.push("- none");
+  } else {
+    for (const task of report.reviewTasks.slice(0, 8)) {
+      lines.push(`- ${task.id}: ${task.priority} - ${task.title} (${task.reason})`);
+    }
+    const remainingTasks = report.reviewTasks.length - 8;
+    if (remainingTasks > 0) {
+      lines.push(`- ... and ${remainingTasks} more`);
     }
   }
   if (report.diagnostics) {

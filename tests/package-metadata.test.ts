@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 function readJson(relativePath: string): Record<string, unknown> {
@@ -141,6 +142,27 @@ describe("package metadata", () => {
 
     expect(scripts.lint).toBe('npx eslint "src/**/*.ts" "tests/**/*.test.ts"');
     expect(scripts["lint:fix"]).toBe('npx eslint "src/**/*.ts" "tests/**/*.test.ts" --fix');
+  });
+
+  it("routes prepare through the install-aware prepare script", () => {
+    const rootPackage = readJson("package.json");
+    const scripts = readStringRecord(rootPackage.scripts);
+
+    expect(scripts.prepare).toBe("node ./scripts/prepare-package.mjs");
+  });
+
+  it("lets global installs reuse an existing dist build without invoking workspace builds", () => {
+    const result = spawnSync(process.execPath, ["./scripts/prepare-package.mjs"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        npm_config_global: "true",
+      },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Skipping prepare build during global install");
   });
 
   it("does not keep removed plugin-only workspace dependencies in the root package", () => {
