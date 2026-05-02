@@ -333,6 +333,21 @@ describe("Agent Tools", () => {
     }
   });
 
+  it("tool_findSymbol clamps non-positive maxResults and ignores non-finite values", async () => {
+    const baseline = await tool_findSymbol(samplePath, "helperFunction");
+    const withNegative = await tool_findSymbol(samplePath, "helperFunction", { maxResults: -1 });
+    const withNaN = await tool_findSymbol(samplePath, "helperFunction", { maxResults: Number.NaN });
+    const withInfinity = await tool_findSymbol(samplePath, "helperFunction", { maxResults: Number.POSITIVE_INFINITY });
+
+    expect(withNegative.status).toBe("ok");
+    if (withNegative.status === "ok") {
+      expect(withNegative.matches).toEqual([]);
+    }
+
+    expect(withNaN).toEqual(baseline);
+    expect(withInfinity).toEqual(baseline);
+  });
+
   it("tool_impactFromDiffText returns full impact reports for agents", async () => {
     const diffText = `diff --git a/utils.ts b/utils.ts
 index 1111111..2222222 100644
