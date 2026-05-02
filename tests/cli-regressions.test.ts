@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fsp from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { textGrep } from "../src/index.js";
 import packageJson from "../package.json" with { type: "json" };
@@ -81,6 +81,15 @@ describe("CLI regressions", () => {
   it("version prints the package version", async () => {
     const stdout = await runCliCommand(["version"]);
     expect(stdout.trim()).toBe(packageJson.version);
+  });
+
+  it("version --json prints package identity", async () => {
+    const stdout = await runCliCommand(["version", "--json"]);
+    const report = JSON.parse(stdout) as { name?: string; version?: string; packageRoot?: string };
+
+    expect(report.name).toBe(packageJson.name);
+    expect(report.version).toBe(packageJson.version);
+    expect(report.packageRoot).toBe(normalize(process.cwd()));
   });
 
   it("--version prints the package version", async () => {
@@ -422,13 +431,17 @@ describe("CLI regressions", () => {
     expect(normalize(report.installedSkill.skillFilePath)).toBe(normalize(path.join(targetDir, "SKILL.md")));
   });
 
-  it("doctor reports only backend state when no artifact path is provided", async () => {
+  it("doctor reports package identity and backend state when no artifact path is provided", async () => {
     const stdout = await runCliCommand(["doctor"]);
     const report = JSON.parse(stdout) as {
+      package: { name: string; version: string; packageRoot: string };
       native: { available: boolean; supportedLanguageIds: string[] };
       indexArtifact?: unknown;
     };
 
+    expect(report.package.name).toBe(packageJson.name);
+    expect(report.package.version).toBe(packageJson.version);
+    expect(normalize(report.package.packageRoot)).toBe(normalize(process.cwd()));
     expect(typeof report.native.available).toBe("boolean");
     expect(Array.isArray(report.native.supportedLanguageIds)).toBe(true);
     expect(report.indexArtifact).toBeUndefined();
@@ -705,6 +718,20 @@ async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
+function git(cwd: string, args: string[]): string {
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Codegraph Test",
+      GIT_AUTHOR_EMAIL: "codegraph@example.test",
+      GIT_COMMITTER_NAME: "Codegraph Test",
+      GIT_COMMITTER_EMAIL: "codegraph@example.test",
+    },
+  }).trim();
+}
+
 describe("CLI flows", () => {
   const sampleRoot = normalize(path.resolve(process.cwd(), "tests", "samples", "typescript"));
 
@@ -764,5 +791,170 @@ index 1111111..2222222 100644
     expect(Array.isArray(report.impacted)).toBe(true);
     expect(report.schemaVersion).toBe(1);
     expect(report.format).toBe("full");
+  });
+
+  it("impact CLI accepts WORKTREE as a git-provider head sentinel", async () => {
+    const root = await mkTmpDir("dg-impact-worktree-");
+    git(root, ["init", "--initial-branch=main"]);
+    git(root, ["config", "core.autocrlf", "false"]);
+    await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "initial"]);
+
+    await fsp.writeFile(path.join(root, "main.ts"), "export const value = 2;\n", "utf8");
+
+    const stdout = await runCliCommand(["impact", root, "--provider", "git", "--base", "HEAD", "--head", "WORKTREE"]);
+    const report = JSON.parse(stdout) as {
+      changedFiles: Array<{ file: string }>;
+      schemaVersion?: number;
+      format?: string;
+    };
+
+    expect(report.changedFiles.map((entry) => entry.file)).toEqual(["main.ts"]);
+    expect(report.schemaVersion).toBe(1);
+    expect(report.format).toBe("full");
+  });
+
+  it("review CLI accepts WORKTREE as a git head sentinel", async () => {
+    const root = await mkTmpDir("dg-review-worktree-");
+    git(root, ["init", "--initial-branch=main"]);
+    git(root, ["config", "core.autocrlf", "false"]);
+    await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 1; }\n", "utf8");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "initial"]);
+
+    await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 2; }\n", "utf8");
+
+    const stdout = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE"]);
+    const report = JSON.parse(stdout) as {
+      status?: string;
+      changedFiles: Array<{ file: string }>;
+      base?: string;
+      head?: string;
+    };
+
+    expect(report.status).toBe("ok");
+    expect(report.changedFiles.map((entry) => entry.file)).toEqual(["main.ts"]);
+    expect(report.base).toBe("HEAD");
+    expect(report.head).toBe("WORKTREE");
+  });
+
+  it("review CLI prints a compact human summary with --summary", async () => {
+    const root = await mkTmpDir("dg-review-summary-");
+    git(root, ["init", "--initial-branch=main"]);
+    git(root, ["config", "core.autocrlf", "false"]);
+    await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 1; }\n", "utf8");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "initial"]);
+
+    await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 2; }\n", "utf8");
+
+    const stdout = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE", "--summary"]);
+
+    expect(stdout.startsWith("Review Summary")).toBe(true);
+    expect(stdout).toContain("Status: ok");
+    expect(stdout).toContain("Files changed: 1");
+    expect(stdout).toContain("Symbols changed:");
+    expect(stdout).toContain("Candidate tests:");
+    expect(stdout).toContain("Risk:");
+    expect(stdout).toContain("Changed files:");
+    expect(stdout).toContain("main.ts");
+    expect(stdout).toContain("Review tasks:");
+    expect(stdout).toContain("review-summary");
+    expect(stdout).not.toContain('"projectFiles"');
+  });
+
+  it("review summary groups candidate tests by confidence without listing low-confidence fallbacks", async () => {
+    const root = await mkTmpDir("dg-review-summary-candidates-");
+    const srcDir = path.join(root, "src");
+    const testsDir = path.join(root, "tests");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.mkdir(testsDir, { recursive: true });
+    await fsp.writeFile(path.join(srcDir, "feature.ts"), "export function value() { return 1; }\n", "utf8");
+    await fsp.writeFile(
+      path.join(testsDir, "feature.test.ts"),
+      "import { value } from '../src/feature';\nvalue();\n",
+      "utf8",
+    );
+    for (let index = 1; index <= 3; index++) {
+      await fsp.writeFile(path.join(testsDir, `pattern-${index}.test.ts`), `expect(${index}).toBe(${index});\n`, "utf8");
+    }
+    git(root, ["init", "--initial-branch=main"]);
+    git(root, ["config", "core.autocrlf", "false"]);
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "initial"]);
+
+    await fsp.writeFile(path.join(srcDir, "feature.ts"), "export function value() { return 2; }\n", "utf8");
+
+    const stdout = await runCliCommand([
+      "review",
+      "--root",
+      root,
+      "--base",
+      "HEAD",
+      "--head",
+      "WORKTREE",
+      "--summary",
+      "--max-tests",
+      "4",
+    ]);
+
+    expect(stdout).toContain("Candidate tests: 4 (high: 1, medium: 0, low: 3)");
+    expect(stdout).toContain("High-confidence tests:");
+    expect(stdout).toContain("- tests/feature.test.ts: importsChanged");
+    expect(stdout).toContain("Low-confidence pattern matches: 3 available as breadth hints in full JSON.");
+    expect(stdout).not.toContain("- tests/pattern-1.test.ts");
+  });
+
+  it("review summary condenses low-confidence-only test candidates", async () => {
+    const root = await mkTmpDir("dg-review-summary-low-only-");
+    const docsDir = path.join(root, "docs");
+    const testsDir = path.join(root, "tests");
+    await fsp.mkdir(docsDir, { recursive: true });
+    await fsp.mkdir(testsDir, { recursive: true });
+    await fsp.writeFile(path.join(docsDir, "guide.md"), "# Guide\n\nInitial text.\n", "utf8");
+    for (let index = 1; index <= 3; index++) {
+      await fsp.writeFile(path.join(testsDir, `pattern-${index}.test.ts`), `expect(${index}).toBe(${index});\n`, "utf8");
+    }
+    git(root, ["init", "--initial-branch=main"]);
+    git(root, ["config", "core.autocrlf", "false"]);
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "initial"]);
+
+    await fsp.writeFile(path.join(docsDir, "guide.md"), "# Guide\n\nUpdated text.\n", "utf8");
+
+    const stdout = await runCliCommand([
+      "review",
+      "--root",
+      root,
+      "--base",
+      "HEAD",
+      "--head",
+      "WORKTREE",
+      "--summary",
+      "--max-tests",
+      "3",
+    ]);
+
+    expect(stdout).toContain("Candidate tests: 3 (high: 0, medium: 0, low: 3)");
+    expect(stdout).toContain("No high- or medium-confidence test candidates found.");
+    expect(stdout).toContain("Low-confidence pattern matches: 3 available as breadth hints in full JSON.");
+    expect(stdout).not.toContain("- tests/pattern-1.test.ts");
+  });
+
+  it("review CLI treats --pretty as summary output", async () => {
+    const root = await mkTmpDir("dg-review-pretty-");
+    git(root, ["init", "--initial-branch=main"]);
+    git(root, ["config", "core.autocrlf", "false"]);
+    await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 1; }\n", "utf8");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "initial"]);
+
+    await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 2; }\n", "utf8");
+
+    const summary = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE", "--summary"]);
+    const pretty = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE", "--pretty"]);
+
+    expect(pretty).toBe(summary);
   });
 });

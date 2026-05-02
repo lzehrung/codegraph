@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { listChangedFiles, getUnifiedDiff } from "../src/util.js";
@@ -8,9 +9,17 @@ function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
+function makeGitTempDir(prefix: string): Promise<string> {
+  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
+}
+
+async function removeGitTempDir(root: string): Promise<void> {
+  await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+}
+
 describe("git diff semantics", () => {
   it("uses explicit base..head ranges", async () => {
-    const root = await fs.mkdtemp(path.join(process.cwd(), "tmp-git-range-"));
+    const root = await makeGitTempDir("codegraph-git-range-");
     try {
       git(root, ["init"]);
       git(root, ["config", "user.email", "tests@example.com"]);
@@ -33,12 +42,12 @@ describe("git diff semantics", () => {
       const diff = await getUnifiedDiff(root, { base, head });
       expect(diff).toContain("diff --git a/a.ts b/a.ts");
     } finally {
-      await fs.rm(root, { recursive: true, force: true });
+      await removeGitTempDir(root);
     }
   });
 
   it("uses changedSince as git diff <rev> against working tree/index", async () => {
-    const root = await fs.mkdtemp(path.join(process.cwd(), "tmp-git-since-"));
+    const root = await makeGitTempDir("codegraph-git-since-");
     try {
       git(root, ["init"]);
       git(root, ["config", "user.email", "tests@example.com"]);
@@ -58,12 +67,74 @@ describe("git diff semantics", () => {
       const diff = await getUnifiedDiff(root, { changedSince: base });
       expect(diff).toContain("+export const a = 3;");
     } finally {
-      await fs.rm(root, { recursive: true, force: true });
+      await removeGitTempDir(root);
+    }
+  });
+
+  it("supports WORKTREE as a base/head sentinel against the working tree", async () => {
+    const root = await makeGitTempDir("codegraph-git-worktree-");
+    try {
+      git(root, ["init"]);
+      git(root, ["config", "user.email", "tests@example.com"]);
+      git(root, ["config", "user.name", "Tests"]);
+
+      const modifiedFile = path.join(root, "a.ts");
+      const addedFile = path.join(root, "b.ts");
+      await fs.writeFile(modifiedFile, "export const a = 1;\n", "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+      const base = git(root, ["rev-parse", "HEAD"]);
+
+      await fs.writeFile(modifiedFile, "export const a = 2;\n", "utf8");
+      await fs.writeFile(addedFile, "export const b = 1;\n", "utf8");
+      git(root, ["add", "b.ts"]);
+
+      const changed = await listChangedFiles(root, { base, head: "WORKTREE" });
+      expect(changed.some((entry) => entry.endsWith("/a.ts"))).toBe(true);
+      expect(changed.some((entry) => entry.endsWith("/b.ts"))).toBe(true);
+
+      const diff = await getUnifiedDiff(root, { base, head: "WORKTREE" });
+      expect(diff).toContain("+export const a = 2;");
+      expect(diff).toContain("diff --git a/b.ts b/b.ts");
+    } finally {
+      await removeGitTempDir(root);
+    }
+  });
+
+  it("supports STAGED and INDEX as base/head sentinels against the current index", async () => {
+    const root = await makeGitTempDir("codegraph-git-index-");
+    try {
+      git(root, ["init"]);
+      git(root, ["config", "user.email", "tests@example.com"]);
+      git(root, ["config", "user.name", "Tests"]);
+
+      const unstagedFile = path.join(root, "a.ts");
+      const stagedFile = path.join(root, "b.ts");
+      await fs.writeFile(unstagedFile, "export const a = 1;\n", "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+      const base = git(root, ["rev-parse", "HEAD"]);
+
+      await fs.writeFile(unstagedFile, "export const a = 2;\n", "utf8");
+      await fs.writeFile(stagedFile, "export const b = 1;\n", "utf8");
+      git(root, ["add", "b.ts"]);
+
+      const stagedChanged = await listChangedFiles(root, { base, head: "STAGED" });
+      const indexChanged = await listChangedFiles(root, { base, head: "INDEX" });
+      expect(stagedChanged.some((entry) => entry.endsWith("/b.ts"))).toBe(true);
+      expect(stagedChanged.some((entry) => entry.endsWith("/a.ts"))).toBe(false);
+      expect(indexChanged).toEqual(stagedChanged);
+
+      const diff = await getUnifiedDiff(root, { base, head: "STAGED" });
+      expect(diff).toContain("diff --git a/b.ts b/b.ts");
+      expect(diff).not.toContain("+export const a = 2;");
+    } finally {
+      await removeGitTempDir(root);
     }
   });
 
   it("surfaces invalid git revisions instead of returning empty results", async () => {
-    const root = await fs.mkdtemp(path.join(process.cwd(), "tmp-git-invalid-"));
+    const root = await makeGitTempDir("codegraph-git-invalid-");
     try {
       git(root, ["init"]);
       git(root, ["config", "user.email", "tests@example.com"]);
@@ -81,7 +152,7 @@ describe("git diff semantics", () => {
         /definitely-not-a-ref/,
       );
     } finally {
-      await fs.rm(root, { recursive: true, force: true });
+      await removeGitTempDir(root);
     }
   });
 });

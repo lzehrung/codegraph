@@ -123,7 +123,8 @@ To inspect the packaged skill paths and target health, run `codegraph skill doct
 
 - Repo triage: run `codegraph inspect ./src --limit 20`, then follow with `codegraph hotspots ./src --limit 20` or `codegraph unresolved` to focus the next pass.
 - Symbol navigation: use `codegraph goto <file> <line> <column>` and `codegraph refs --file <file> --line <line> --col <column> --pretty` when a question is about definitions or semantic usages rather than matching strings.
-- PR review: run `codegraph review --base origin/main --head HEAD > review.json` for an agent-ready bundle, or `codegraph impact --base origin/main --head HEAD --pretty` for a shorter human-readable summary.
+- PR review: run `codegraph impact --base origin/main --head HEAD --pretty` for a ranked map, `codegraph review --base origin/main --head HEAD --summary` for a compact reviewer handoff with actionable candidate tests, or redirect plain `review` output when a downstream tool needs the full JSON bundle.
+- Worktree review: run `codegraph impact --base HEAD --head WORKTREE --pretty` for current staged and unstaged tracked-file changes, then `codegraph review --base HEAD --head WORKTREE --summary` for a compact handoff. Use `--head STAGED` to compare `HEAD` against the current index.
 - Visual graph exploration: run `codegraph graph --root . ./src --compact-json --output codegraph.json`, then open `docs/graph-visualization/` to inspect the graph in the browser viewer app.
 - Public API inspection: run `codegraph apisurface` to summarize exported symbols before refactors, reviews, or release checks.
 
@@ -163,6 +164,8 @@ The full install details now live in [docs/installation.md](./docs/installation.
 ### Source checkout
 
 See the [Quick start](#quick-start) section for the recommended first-run path.
+
+For a local global install from the source checkout, run `npm run build` first and then `npm install -g .`.
 
 ### Scoped registry install
 

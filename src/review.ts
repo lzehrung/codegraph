@@ -586,6 +586,10 @@ function hasDiagnostics(diagnostics: ReviewDiagnostics): boolean {
   return diagnostics.missingFiles.length > 0 || diagnostics.symbolMappingParseFailures.length > 0;
 }
 
+function isRiskRelevantSymbolMappingFile(file: string): boolean {
+  return supportForFile(file)?.supportsCrossModuleSymbols ?? false;
+}
+
 function isExported(mod: { exports: ExportEntry[] }, handle: string): boolean {
   return mod.exports.some((e) => e.type === "local" && symbolId(e.target) === handle);
 }
@@ -1292,6 +1296,9 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
     const exportedInFile = summary.symbols.filter((symbol) => symbol.exported);
     return count + exportedInFile.length;
   }, 0);
+  const riskRelevantParseFailures = diagnostics.symbolMappingParseFailures.filter((file) =>
+    isRiskRelevantSymbolMappingFile(path.join(projectRoot, file)),
+  ).length;
 
   const graphEdges = new Map<string, Edge>();
   for (const edge of index.graph.edges.filter((entry) => changedFiles.has(entry.from))) {
@@ -1348,7 +1355,7 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
       symbolsChanged: changedSymbolIds.length,
       exportedChanged: exportedChangedCount,
       missingFiles: diagnostics.missingFiles.length,
-      parseFailures: diagnostics.symbolMappingParseFailures.length,
+      parseFailures: riskRelevantParseFailures,
     }),
     reviewTasks: buildReviewTasks({
       filesChanged: summaries.length,
@@ -1356,7 +1363,7 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
       exportedChanged: exportedChangedCount,
       candidateTests: candidateTests.length,
       missingFiles: diagnostics.missingFiles.length,
-      parseFailures: diagnostics.symbolMappingParseFailures.length,
+      parseFailures: riskRelevantParseFailures,
     }),
     changedFiles: summaries,
     graphDelta,

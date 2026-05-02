@@ -1,6 +1,7 @@
 import type { Diff, DiffProviderOptions } from "../types.js";
 import { spawn } from "node:child_process";
 import { parseUnifiedDiff, parseUnifiedDiffStreaming } from "../parse.js";
+import { gitDiffArgs } from "../../util.js";
 
 export interface DiffProvider {
   getDiff(opts: DiffProviderOptions): Promise<Diff>;
@@ -67,7 +68,7 @@ class GitDiffProvider implements DiffProvider {
     // Circuit breaker: check diff size first
     let warning: string | undefined;
     try {
-      const statOutput = await runGitCommand(cwd, ["diff", "--shortstat", `${opts.base}..${opts.head}`], false);
+      const statOutput = await runGitCommand(cwd, gitDiffArgs(opts.base, opts.head, ["--shortstat"]), false);
       if (statOutput) {
         const insertionMatch = statOutput.match(/(\d+) insertion/);
         const deletionMatch = statOutput.match(/(\d+) deletion/);
@@ -82,7 +83,7 @@ class GitDiffProvider implements DiffProvider {
       // Ignore stat failures, proceed to full diff
     }
 
-    const args = ["diff", "--no-ext-diff", "--unified=0", `${opts.base}..${opts.head}`];
+    const args = gitDiffArgs(opts.base, opts.head, ["--no-ext-diff", "--unified=0"]);
 
     try {
       const child = spawn("git", args, { cwd });
