@@ -541,6 +541,29 @@ describe("Go to Definition", () => {
       await testGoToDefinition(index, usageFile, 4, 10, staticMembersFile, 6);
     });
   });
+
+  describe("Zig", () => {
+    it("should find definition of imported function member", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "zig");
+      const mainFile = path.join(samplePath, "main.zig").replace(/\\/g, "/");
+      const helpersFile = path.join(samplePath, "helpers.zig").replace(/\\/g, "/");
+      const mathFile = path.join(samplePath, "math.zig").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [mainFile, helpersFile, mathFile]);
+
+      await testGoToDefinition(index, mainFile, 5, 43, helpersFile, 1);
+    });
+
+    it("should find definition of imported type member", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "zig");
+      const mainFile = path.join(samplePath, "main.zig").replace(/\\/g, "/");
+      const helpersFile = path.join(samplePath, "helpers.zig").replace(/\\/g, "/");
+      const mathFile = path.join(samplePath, "math.zig").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [mainFile, helpersFile, mathFile]);
+
+      await testGoToDefinition(index, mainFile, 5, 23, mathFile, 1);
+    });
+  });
+
   describe("Java", () => {
     it("should find definition of imported static method", async () => {
       const index = await createTestIndex("java");

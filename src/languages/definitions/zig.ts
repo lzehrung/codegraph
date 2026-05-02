@@ -2,6 +2,15 @@ import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 
+const ZIG_TYPE_INITIALIZER_TYPES = new Set([
+  "builtin_type",
+  "struct_declaration",
+  "enum_declaration",
+  "union_declaration",
+  "opaque_declaration",
+  "error_set_declaration",
+]);
+
 export const ZIG_DEF: LanguageDefinition = {
   id: "zig",
   extensions: [".zig"],
@@ -34,9 +43,22 @@ export const ZIG_DEF: LanguageDefinition = {
   },
   nodeTypes: {
     identifier: ["identifier"],
-    memberExpression: "field_access",
+    memberExpression: "field_expression",
   },
   supportsCrossModuleSymbols: true,
+  classifyDefinition: (node) => {
+    const parent = node.parent;
+    if (!parent) return "variable";
+    if (parent.type === "function_declaration") return "function";
+    if (parent.type !== "variable_declaration") return "variable";
+
+    const declaredName = parent.namedChildren.find((child) => child.type === "identifier");
+    if (declaredName?.id !== node.id) return "variable";
+
+    const initializer = parent.namedChildren.find((child) => child.id !== node.id);
+    if (initializer && ZIG_TYPE_INITIALIZER_TYPES.has(initializer.type)) return "type";
+    return "variable";
+  },
   createsFunctionScope: (node) => node.type === "function_declaration",
   createsBlockScope: (node) => node.type === "block",
   isDeclarationName: (node) => {
