@@ -62,6 +62,7 @@ import type {
   ImpactItem,
   ReviewDepth,
   ImpactOptions,
+  CandidateTestFile,
 } from "./index.js";
 import {
   assertFilePathWithinRoot,
@@ -1212,12 +1213,15 @@ function formatImpactMermaid(report: ImpactReport, root: string): string {
 
 function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport>>): string {
   const lines: string[] = [];
+  const candidateCounts = countCandidateTestsByConfidence(report.candidateTests);
   lines.push("Review Summary");
   lines.push("==============");
   lines.push(`Status: ${report.status}`);
   lines.push(`Files changed: ${report.summary.filesChanged}`);
   lines.push(`Symbols changed: ${report.summary.symbolsChanged}`);
-  lines.push(`Candidate tests: ${report.summary.candidateTests}`);
+  lines.push(
+    `Candidate tests: ${report.summary.candidateTests} (high: ${candidateCounts.high}, medium: ${candidateCounts.medium}, low: ${candidateCounts.low})`,
+  );
   lines.push(`Risk: ${report.riskSummary.level} (${report.riskSummary.score})`);
   if (report.riskSummary.signals.length > 0) {
     lines.push(`Signals: ${report.riskSummary.signals.join(", ")}`);
@@ -1242,13 +1246,9 @@ function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport
   if (report.candidateTests.length === 0) {
     lines.push("- none");
   } else {
-    for (const candidate of report.candidateTests.slice(0, 10)) {
-      lines.push(`- ${candidate.file}: ${candidate.confidence} (${candidate.reason})`);
-    }
-    const remainingCandidates = report.candidateTests.length - 10;
-    if (remainingCandidates > 0) {
-      lines.push(`- ... and ${remainingCandidates} more`);
-    }
+    appendCandidateTestGroup(lines, "High-confidence tests:", report.candidateTests, "high");
+    appendCandidateTestGroup(lines, "Medium-confidence tests:", report.candidateTests, "medium");
+    appendCandidateTestGroup(lines, "Low-confidence pattern matches:", report.candidateTests, "low");
   }
   lines.push("");
   lines.push("Review tasks:");
@@ -1270,6 +1270,38 @@ function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport
     lines.push(`- symbol mapping parse failures: ${report.diagnostics.symbolMappingParseFailures.length}`);
   }
   return `${lines.join("\n")}\n`;
+}
+
+function countCandidateTestsByConfidence(
+  candidates: CandidateTestFile[],
+): Record<CandidateTestFile["confidence"], number> {
+  const counts: Record<CandidateTestFile["confidence"], number> = {
+    high: 0,
+    medium: 0,
+    low: 0,
+  };
+  for (const candidate of candidates) {
+    counts[candidate.confidence] += 1;
+  }
+  return counts;
+}
+
+function appendCandidateTestGroup(
+  lines: string[],
+  title: string,
+  candidates: CandidateTestFile[],
+  confidence: CandidateTestFile["confidence"],
+): void {
+  const matches = candidates.filter((candidate) => candidate.confidence === confidence);
+  if (matches.length === 0) return;
+  lines.push(title);
+  for (const candidate of matches.slice(0, 8)) {
+    lines.push(`- ${candidate.file}: ${candidate.reason}`);
+  }
+  const remaining = matches.length - 8;
+  if (remaining > 0) {
+    lines.push(`- ... and ${remaining} more`);
+  }
 }
 
 function parseReviewDepth(value: string): ReviewDepth | null {
@@ -1379,7 +1411,11 @@ Examples:
   }
 
   if (hasFlag("--version")) {
-    writeStdoutLine(getCodegraphVersion());
+    if (hasFlag("--json")) {
+      writeJSONLine(getCodegraphPackageIdentity());
+    } else {
+      writeStdoutLine(getCodegraphVersion());
+    }
     return;
   }
 
@@ -1460,7 +1496,11 @@ Examples:
   };
 
   if (cmd === "version") {
-    writeStdoutLine(getCodegraphVersion());
+    if (hasFlag("--json")) {
+      writeJSONLine(getCodegraphPackageIdentity());
+    } else {
+      writeStdoutLine(getCodegraphVersion());
+    }
     return;
   }
 

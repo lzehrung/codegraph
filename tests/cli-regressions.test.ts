@@ -83,6 +83,15 @@ describe("CLI regressions", () => {
     expect(stdout.trim()).toBe(packageJson.version);
   });
 
+  it("version --json prints package identity", async () => {
+    const stdout = await runCliCommand(["version", "--json"]);
+    const report = JSON.parse(stdout) as { name?: string; version?: string; packageRoot?: string };
+
+    expect(report.name).toBe(packageJson.name);
+    expect(report.version).toBe(packageJson.version);
+    expect(report.packageRoot).toBe(normalize(process.cwd()));
+  });
+
   it("--version prints the package version", async () => {
     const stdout = await runCliCommand(["--version"]);
     expect(stdout.trim()).toBe(packageJson.version);
@@ -853,6 +862,48 @@ index 1111111..2222222 100644
     expect(stdout).toContain("Review tasks:");
     expect(stdout).toContain("review-summary");
     expect(stdout).not.toContain('"projectFiles"');
+  });
+
+  it("review summary groups candidate tests by confidence", async () => {
+    const root = await mkTmpDir("dg-review-summary-candidates-");
+    const srcDir = path.join(root, "src");
+    const testsDir = path.join(root, "tests");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.mkdir(testsDir, { recursive: true });
+    await fsp.writeFile(path.join(srcDir, "feature.ts"), "export function value() { return 1; }\n", "utf8");
+    await fsp.writeFile(
+      path.join(testsDir, "feature.test.ts"),
+      "import { value } from '../src/feature';\nvalue();\n",
+      "utf8",
+    );
+    for (let index = 1; index <= 3; index++) {
+      await fsp.writeFile(path.join(testsDir, `pattern-${index}.test.ts`), `expect(${index}).toBe(${index});\n`, "utf8");
+    }
+    git(root, ["init", "--initial-branch=main"]);
+    git(root, ["config", "core.autocrlf", "false"]);
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "initial"]);
+
+    await fsp.writeFile(path.join(srcDir, "feature.ts"), "export function value() { return 2; }\n", "utf8");
+
+    const stdout = await runCliCommand([
+      "review",
+      "--root",
+      root,
+      "--base",
+      "HEAD",
+      "--head",
+      "WORKTREE",
+      "--summary",
+      "--max-tests",
+      "4",
+    ]);
+
+    expect(stdout).toContain("Candidate tests: 4 (high: 1, medium: 0, low: 3)");
+    expect(stdout).toContain("High-confidence tests:");
+    expect(stdout).toContain("- tests/feature.test.ts: importsChanged");
+    expect(stdout).toContain("Low-confidence pattern matches:");
+    expect(stdout).toContain("- tests/pattern-1.test.ts");
   });
 
   it("review CLI treats --pretty as summary output", async () => {

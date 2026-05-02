@@ -191,7 +191,7 @@ For git-provider impact, `--head` accepts normal revisions plus worktree sentine
 
 Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` so downstream tools can branch on payload shape without inferring it from missing fields. Use `--compact` or `--compact-json` for compact impact JSON. Impact JSON can also include `exportSummary`, `reexportChains`, `topImpacts`, `surfaceArea`, and `clusters` when applicable. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
 
-`codegraph review --summary` prints the changed-file count, changed-symbol count, graph delta, risk summary, review tasks, and suggested tests without emitting the full `projectFiles` and symbol-detail JSON payload. Use plain `review` output when a downstream tool needs the complete structured bundle.
+`codegraph review --summary` prints the changed-file count, changed-symbol count, risk summary, review tasks, and suggested tests without emitting the full `projectFiles` and symbol-detail JSON payload. Candidate tests are grouped by high, medium, and low confidence so broad pattern matches do not look equivalent to direct import coverage. Use plain `review` output when a downstream tool needs the complete structured bundle.
 
 `inspect` and `unresolved` exclude Node builtins such as `node:path` and `fs` from unresolved-import counts so the diagnostics stay focused on project and package resolution gaps.
 
@@ -200,6 +200,9 @@ Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` 
 ```bash
 # Print the installed CLI version
 codegraph version
+
+# Print package identity as JSON
+codegraph version --json
 
 # Inspect package identity plus backend and runtime state
 codegraph doctor
@@ -218,7 +221,7 @@ codegraph skill install --target ~/.codex/skills/codegraph --force
 codegraph skill doctor
 ```
 
-`codegraph doctor` includes the installed package name, version, and package root so local tarball or source-checkout installs can confirm which build the `codegraph` command is actually running.
+`codegraph version --json` and `codegraph doctor` include the installed package name, version, and package root so local tarball or source-checkout installs can confirm which build the `codegraph` command is actually running. `doctor` also reports backend/runtime state and optional artifact details.
 
 ## Incremental git-scoped runs
 
@@ -331,7 +334,7 @@ Important review-bundle details:
 - `schemaVersion` identifies the review JSON schema for CI validation and compatibility checks.
 - `riskSummary` and `reviewTasks` provide agent-ready review focus areas and likely risk hotspots.
 - `changedFiles[].status` distinguishes normal updates from real Git deletions and explicit missing input files.
-- `diagnostics.symbolMappingParseFailures` reports files where symbol-level diff mapping degraded.
+- `diagnostics.symbolMappingParseFailures` reports files where symbol-level diff mapping degraded. Source-language failures affect `symbol-mapping-degraded` risk; graph-first document files remain diagnostics without becoming high-priority source review tasks.
 - `diagnostics.missingFiles` reports explicit paths that were not present on disk.
 - `graph-delta` reports file-level edge additions and removals for changed files and is intended for lightweight CI artifacts.
 - `--include-symbol-details` attaches definition snippets and callsite ranges for changed symbols.
