@@ -6,6 +6,7 @@
  * repositories where only a subset of symbols are actually accessed.
  */
 
+import picomatch from "picomatch";
 import { supportForFile } from "../languages.js";
 import type { ImportBinding, ModuleIndex, SymbolDef } from "../indexer.js";
 import type { FileId } from "../types.js";
@@ -193,9 +194,20 @@ export type LazyLoadOptions = {
 export class LazyProjectIndex {
   private modules = new Map<FileId, LazyModuleIndex>();
   private maxCached: number;
+  private preloadStrategy: LazyLoadOptions["preloadStrategy"];
+  private preloadMatcher: ((file: string) => boolean) | null;
+  private loadedOrder: FileId[] = [];
 
   constructor(options?: LazyLoadOptions) {
-    this.maxCached = options?.maxCached ?? 100;
+    this.maxCached =
+      typeof options?.maxCached === "number" && Number.isFinite(options.maxCached)
+        ? Math.max(0, Math.floor(options.maxCached))
+        : 100;
+    this.preloadStrategy = options?.preloadStrategy ?? "none";
+    this.preloadMatcher =
+      options?.preloadPatterns && options.preloadPatterns.length > 0
+        ? picomatch(options.preloadPatterns, { dot: true })
+        : null;
   }
 
   /**
@@ -204,6 +216,11 @@ export class LazyProjectIndex {
   addModule(file: FileId, module: LazyModuleIndex): void {
     this.syncModuleLoadedFlag(module);
     this.modules.set(file, module);
+    if (module.loaded) {
+      this.markModuleLoaded(file);
+      this.enforceMaxCached(file);
+    }
+    this.autoPreloadModule(file, module);
   }
 
   /**
@@ -216,6 +233,8 @@ export class LazyProjectIndex {
     // Convert lazy module to regular module
     const locals = await lazy.locals.getAll();
     this.syncModuleLoadedFlag(lazy);
+    this.markModuleLoaded(file);
+    this.enforceMaxCached(file);
 
     return {
       file: lazy.file,
@@ -255,6 +274,12 @@ export class LazyProjectIndex {
       this.syncModuleLoadedFlag(mod);
       if (mod.loaded) count++;
     }
+    this.loadedOrder = this.loadedOrder.filter((file) => this.modules.get(file)?.loaded);
+    for (const [file, mod] of this.modules) {
+      if (mod.loaded && !this.loadedOrder.includes(file)) {
+        this.loadedOrder.push(file);
+      }
+    }
     return count;
   }
 
@@ -265,10 +290,7 @@ export class LazyProjectIndex {
     for (const file of files) {
       const mod = this.modules.get(file);
       if (mod && !this.isModuleLoaded(mod)) {
-        mod.locals.preload();
-        void mod.locals.getAll().then(() => {
-          this.syncModuleLoadedFlag(mod);
-        });
+        this.preloadModule(file, mod);
       }
     }
   }
@@ -281,6 +303,7 @@ export class LazyProjectIndex {
       if (!keepFiles.has(file) && this.isModuleLoaded(mod)) {
         mod.locals.unload();
         this.syncModuleLoadedFlag(mod);
+        this.removeLoadedFile(file);
       }
     }
   }
@@ -311,6 +334,67 @@ export class LazyProjectIndex {
 
   private syncModuleLoadedFlag(module: LazyModuleIndex): void {
     module.loaded = module.locals.isLoaded;
+  }
+
+  private autoPreloadModule(file: FileId, module: LazyModuleIndex): void {
+    if (module.loaded) {
+      return;
+    }
+    if (this.preloadStrategy === "all") {
+      this.preloadModule(file, module);
+      return;
+    }
+    if (this.preloadStrategy === "critical" && this.shouldPreloadFile(file)) {
+      this.preloadModule(file, module);
+    }
+  }
+
+  private preloadModule(file: FileId, module: LazyModuleIndex): void {
+    module.locals.preload();
+    void module.locals.getAll().then(() => {
+      this.syncModuleLoadedFlag(module);
+      this.markModuleLoaded(file);
+      this.enforceMaxCached(file);
+    });
+  }
+
+  private shouldPreloadFile(file: FileId): boolean {
+    if (!this.preloadMatcher) {
+      return false;
+    }
+    return this.preloadMatcher(file.replace(/\\/g, "/"));
+  }
+
+  private markModuleLoaded(file: FileId): void {
+    this.removeLoadedFile(file);
+    this.loadedOrder.push(file);
+  }
+
+  private removeLoadedFile(file: FileId): void {
+    const index = this.loadedOrder.indexOf(file);
+    if (index >= 0) {
+      this.loadedOrder.splice(index, 1);
+    }
+  }
+
+  private enforceMaxCached(pinnedFile?: FileId): void {
+    if (this.maxCached < 0) {
+      return;
+    }
+    while (this.loadedOrder.length > this.maxCached) {
+      const evictionIndex = this.loadedOrder.findIndex((file) => file !== pinnedFile);
+      const victimIndex = evictionIndex >= 0 ? evictionIndex : 0;
+      const [victim] = this.loadedOrder.splice(victimIndex, 1);
+      if (!victim) {
+        break;
+      }
+      const module = this.modules.get(victim);
+      if (!module) {
+        continue;
+      }
+      module.locals.unload();
+      this.syncModuleLoadedFlag(module);
+    }
   }
 }
 
