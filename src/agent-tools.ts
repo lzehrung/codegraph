@@ -30,8 +30,10 @@ import {
   resolveFilePathFromRoot,
   toProjectRelativePath,
 } from "./util.js";
+import { getFiniteNonNegativeLimit } from "./graphs/limits.js";
 
 type ToolRuntimeOptions = {
+  index?: ProjectIndex;
   native?: NativeRuntimeMode;
 };
 
@@ -115,12 +117,7 @@ export async function tool_impactJSON(
   error?: string;
 }> {
   try {
-    // Build the project index if not already available
-    // In a real agent scenario, you might want to cache this
-    const index = await buildProjectIndex(root, {
-      logLevel: "error",
-      ...(runtimeOptions.native ? { native: runtimeOptions.native } : {}),
-    });
+    const index = await getToolIndex(root, runtimeOptions);
 
     // Analyze the impact
     const report = await analyzeImpactFromDiff(root, index, options);
@@ -177,10 +174,7 @@ export async function tool_getFileOverview(
       return resolvedFile;
     }
 
-    const index = await buildProjectIndex(root, {
-      logLevel: "error",
-      ...(runtimeOptions.native ? { native: runtimeOptions.native } : {}),
-    });
+    const index = await getToolIndex(root, runtimeOptions);
     const { absPath, relativeFile } = resolvedFile;
     const missing = await getToolMissingFileResult(index, absPath, relativeFile);
     if (missing) {
@@ -320,15 +314,12 @@ export async function tool_getGraph(
   error?: string;
 }> {
   try {
-    const files = await listProjectFiles(root);
-    const g = await collectGraph(root, files, {
-      ...(runtimeOptions.native ? { native: runtimeOptions.native } : {}),
-    });
+    const graph = runtimeOptions.index?.graph ?? (await collectToolGraph(root, runtimeOptions));
     return {
       status: "ok",
       graph: normalizeToolGraph(root, {
-        nodes: [...g.nodes],
-        edges: g.edges,
+        nodes: [...graph.nodes],
+        edges: graph.edges,
       }),
     };
   } catch (error) {
@@ -370,18 +361,13 @@ export async function tool_getDependencies(
       return resolvedFile;
     }
 
-    const index =
-      options.index ??
-      (await buildProjectIndex(root, {
-        logLevel: "error",
-        ...(options.native ? { native: options.native } : {}),
-      }));
+    const index = await getToolIndex(root, options);
     const missing = await getToolMissingFileResult(index, resolvedFile.absPath, resolvedFile.relativeFile);
     if (missing) {
       return missing;
     }
 
-    const limit = options.limit !== undefined ? Math.max(0, Math.floor(options.limit)) : 20;
+    const limit = getToolLimit(options.limit) ?? 20;
     const dependencies = getDependencies(index.graph, resolvedFile.absPath, {
       ...(options.depth !== undefined ? { depth: options.depth } : {}),
       limit: limit + 1,
@@ -436,18 +422,13 @@ export async function tool_getReverseDependencies(
       return resolvedFile;
     }
 
-    const index =
-      options.index ??
-      (await buildProjectIndex(root, {
-        logLevel: "error",
-        ...(options.native ? { native: options.native } : {}),
-      }));
+    const index = await getToolIndex(root, options);
     const missing = await getToolMissingFileResult(index, resolvedFile.absPath, resolvedFile.relativeFile);
     if (missing) {
       return missing;
     }
 
-    const limit = options.limit !== undefined ? Math.max(0, Math.floor(options.limit)) : 20;
+    const limit = getToolLimit(options.limit) ?? 20;
     const dependents = getReverseDependencies(index.graph, resolvedFile.absPath, {
       ...(options.depth !== undefined ? { depth: options.depth } : {}),
       limit: limit + 1,
@@ -478,18 +459,10 @@ export async function tool_getHotspots(
   } = {},
 ): Promise<{ status: "ok" | "error"; hotspots?: ToolHotspotEntry[]; error?: string }> {
   try {
-    const index =
-      options.index ??
-      (await buildProjectIndex(root, {
-        logLevel: "error",
-        ...(options.native ? { native: options.native } : {}),
-      }));
+    const index = await getToolIndex(root, options);
 
     const includeRoots = (options.includeRoots ?? []).map((entry) => normalizePathArg(root, entry));
-    const limit =
-      options.limit !== undefined && Number.isFinite(options.limit)
-        ? Math.max(0, Math.floor(options.limit))
-        : undefined;
+    const limit = getToolLimit(options.limit);
     const hotspots = getHotspots(index.graph, {
       ...(limit !== undefined ? { limit } : {}),
       ...(includeRoots.length > 0 ? { includeRoots } : {}),
@@ -511,6 +484,30 @@ export async function tool_getHotspots(
 
 function normalizePathArg(root: string, file: string): string {
   return normalizePath(resolveFilePathFromRoot(root, file));
+}
+
+async function getToolIndex(root: string, options: ToolRuntimeOptions): Promise<ProjectIndex> {
+  return (
+    options.index ??
+    (await buildProjectIndex(root, {
+      logLevel: "error",
+      ...(options.native ? { native: options.native } : {}),
+    }))
+  );
+}
+
+async function collectToolGraph(
+  root: string,
+  options: ToolRuntimeOptions,
+): Promise<Awaited<ReturnType<typeof collectGraph>>> {
+  const files = await listProjectFiles(root);
+  return await collectGraph(root, files, {
+    ...(options.native ? { native: options.native } : {}),
+  });
+}
+
+function getToolLimit(limit: number | undefined): number | undefined {
+  return getFiniteNonNegativeLimit(limit);
 }
 
 function resolveToolFileInput(
@@ -776,10 +773,7 @@ export async function tool_goToDefinition(
 
     const idx =
       index ??
-      (await buildProjectIndex(root, {
-        logLevel: "error",
-        ...(runtimeOptions.native ? { native: runtimeOptions.native } : {}),
-      }));
+      (await getToolIndex(root, runtimeOptions));
 
     const result = await goToDefinition(idx, {
       file: resolvedFile.absPath,
@@ -827,10 +821,7 @@ export async function tool_findReferences(
 
     const idx =
       index ??
-      (await buildProjectIndex(root, {
-        logLevel: "error",
-        ...(runtimeOptions.native ? { native: runtimeOptions.native } : {}),
-      }));
+      (await getToolIndex(root, runtimeOptions));
 
     const result = await findReferences(idx, {
       file: resolvedFile.absPath,

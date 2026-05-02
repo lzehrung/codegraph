@@ -6,4 +6,13 @@ describe("mapLimit", () => {
     await expect(mapLimit([1, 2, 3], 0, async (value) => value * 2)).resolves.toEqual([2, 4, 6]);
     await expect(mapLimit([1, 2, 3], -5, async (value) => value * 3)).resolves.toEqual([3, 6, 9]);
   });
+
+  it("treats non-finite concurrency as single-threaded work instead of hanging", async () => {
+    await expect(mapLimit([1, 2, 3], Number.NaN, async (value) => value * 4)).resolves.toEqual([4, 8, 12]);
+    await expect(mapLimit([1, 2, 3], Number.POSITIVE_INFINITY, async (value) => value * 5)).resolves.toEqual([
+      5,
+      10,
+      15,
+    ]);
+  });
 });
