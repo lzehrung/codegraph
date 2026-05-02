@@ -1,15 +1,59 @@
 ---
 name: codegraph
-description: Static code analysis and dependency graph tool for deep codebase understanding, architecture mapping, go-to-definition, find-references, and PR impact analysis across many languages. Use to quickly map dependencies, find symbol usages, trace API boundaries, or understand PR impact.
+description: Use for codebase navigation and repo impact analysis: understand an unfamiliar repo, trace dependencies, answer where this is defined or used, find hotspots or cycles, inspect public APIs, and assess what a PR or diff could break.
 ---
 
 # Codegraph
 
-## Overview
+## When to use this skill
 
-Codegraph is a lightweight multi-language code analysis tool that builds dependency graphs, symbol indexes, go-to-definition maps, and PR impact reports. It uses one shared Tree-sitter model across supported source languages, plus graph-first text extraction for document and template formats like Markdown, MDX, Astro, Handlebars, reStructuredText, and AsciiDoc. Native runtime mode defaults to `auto`: Codegraph resolves parse/query work through `@lzehrung/codegraph-native`, using the native addon when available and the separate opt-in `@lzehrung/codegraph-js-fallback` package only when native is unavailable or explicitly disabled.
+Use Codegraph when the user asks structural questions about a repository and plain text search would be too shallow. Codegraph builds dependency graphs, symbol indexes, go-to-definition maps, find-references results, semantic chunks, and PR impact reports across many source languages plus graph-first document and template formats.
 
-## Installation Notes
+Strong triggers for this skill:
+
+- "Understand this repo", "map this codebase", "show me the architecture", or "where should I start?"
+- "What depends on this file?", "what imports this?", "what is the dependency path?", or "are there cycles?"
+- "Where is this symbol defined?", "where is this used?", or "find references to this function/class/type."
+- "What changed in this PR?", "what could this diff break?", or "which tests are likely relevant?"
+- "Find hotspots", "inspect the public API surface", or "chunk this file for agent context."
+
+Prefer Codegraph over `rg` when import edges, exported symbols, lexical scope, dependency direction, or PR impact matter. Use `rg` alongside Codegraph for raw text patterns, logs, configuration keys, or strings that are not code symbols.
+
+Do not use Codegraph as the only evidence source for secrets, literal strings, log text, generated artifacts, or runtime behavior. Pair it with text search, tests, or execution evidence for those questions.
+
+## First move for agents
+
+For an unfamiliar repo, start with a health check and a bounded summary. Use `./src` when it exists; otherwise use the product-code directory or `.` for a whole-repo pass.
+
+```bash
+codegraph doctor
+codegraph inspect ./src --limit 20
+```
+
+Then choose the narrowest follow-up command that answers the user:
+
+- Architecture summary: `codegraph inspect ./src --limit 20`
+- Hot files: `codegraph hotspots ./src --limit 20 --json`
+- Cycles: `codegraph cycles --sort priority --json`
+- Dependencies of one file: `codegraph deps <file>`
+- Reverse dependencies of one file: `codegraph rdeps <file>`
+- Dependency path between files: `codegraph path <from> <to>`
+- Go to definition: `codegraph goto <file> <line> <column>`
+- Find references: `codegraph refs --file <file> --line <line> --col <column> --pretty`
+- PR impact: `codegraph impact --provider git --base main --head HEAD`
+- Agent-ready PR bundle: `codegraph review --base origin/main --head HEAD`
+- Public API surface: `codegraph apisurface`
+- Semantic chunks for context packing: `codegraph chunk <file>`
+
+Use `--json` when the output will feed later reasoning, scripts, or another agent step.
+
+## Tool purpose
+
+Codegraph is a lightweight multi-language code analysis tool for fast repo understanding without requiring an editor, language server, or per-language setup. It uses one shared Tree-sitter model across supported source languages, plus graph-first text extraction for document and template formats like Markdown, MDX, Astro, Handlebars, reStructuredText, and AsciiDoc.
+
+Native runtime mode defaults to `auto`: Codegraph resolves parse/query work through `@lzehrung/codegraph-native`, using the native addon when available and the separate opt-in `@lzehrung/codegraph-js-fallback` package only when native is unavailable or explicitly disabled.
+
+## Installation and availability
 
 - Package name: `@lzehrung/codegraph`
 - CLI command: `codegraph`
@@ -17,18 +61,6 @@ Codegraph is a lightweight multi-language code analysis tool that builds depende
 - Optional JS fallback package: `@lzehrung/codegraph-js-fallback`
 - Registry: `@lzehrung` packages are published to GitHub Packages, not the public npm registry. Configure:
   `npm config set "@lzehrung:registry" "https://npm.pkg.github.com"`
-- Published installs of `@lzehrung/codegraph` depend on `@lzehrung/codegraph-native` as an optional dependency; that package resolves the matching native artifact automatically when one exists for the current platform.
-- For source checkouts, `npm run build` always rebuilds `dist/`. If Cargo is available, it also requires the local native addon build to succeed. If Cargo is unavailable, it completes with the JavaScript build output and a warning. Use `npm run build:native` when you want a native-only rebuild or a hard failure if Rust is missing.
-- Install the optional fallback package only when you explicitly need JS Tree-sitter fallback:
-  `npm install @lzehrung/codegraph-js-fallback --legacy-peer-deps`
-- That fallback package is also published to the `@lzehrung` GitHub Packages registry, so tarball installs still need the same scoped registry configuration before the fallback package can be added.
-- Native-only installs do not need the JS fallback package for normal supported source-language graph extraction, symbol indexing, chunking, or AST grep. If query recovery degrades, Codegraph reports that once per language/reason in diagnostics and stays on native-owned recovery paths where supported.
-- Global default override: `CODEGRAPH_DISABLE_NATIVE=1`
-- Explicit CLI/library/tool `native` options take precedence over `CODEGRAPH_DISABLE_NATIVE`
-
-## Command-Line Usage
-
-Assuming the tool is available as `codegraph`, use the following commands.
 
 If the CLI is missing, do not suggest the unscoped `codegraph` package. Use one of these exact installation paths instead:
 
@@ -45,7 +77,7 @@ If the CLI is missing, do not suggest the unscoped `codegraph` package. Use one 
 
 Avoid suggesting `npm install -g codegraph`, `npm install --save-dev codegraph`, or unscoped `npx codegraph` when the package is not already installed locally.
 
-The CLI also ships a bundled skill installer:
+The CLI ships a bundled skill installer:
 
 - Install into the default Codex-style target:
   `codegraph skill install`
@@ -57,17 +89,38 @@ The CLI also ships a bundled skill installer:
 - Inspect packaged skill paths and target health:
   `codegraph skill doctor`
 
-### 1. Dependency graphs
+Published installs of `@lzehrung/codegraph` depend on `@lzehrung/codegraph-native` as an optional dependency; that package resolves the matching native artifact automatically when one exists for the current platform.
 
-- First-pass repo summary and next-step suggestions:
-  `codegraph inspect ./src --limit 20`
+For source checkouts, `npm run build` always rebuilds `dist/`. If Cargo is available, it also requires the local native addon build to succeed. If Cargo is unavailable, it completes with the JavaScript build output and a warning. Use `npm run build:native` when you want a native-only rebuild or a hard failure if Rust is missing.
+
+Install the optional fallback package only when you explicitly need JS Tree-sitter fallback:
+
+```bash
+npm install @lzehrung/codegraph-js-fallback --legacy-peer-deps
+```
+
+That fallback package is also published to the `@lzehrung` GitHub Packages registry, so tarball installs still need the same scoped registry configuration before the fallback package can be added.
+
+Native-only installs do not need the JS fallback package for normal supported source-language graph extraction, symbol indexing, chunking, or AST grep. If query recovery degrades, Codegraph reports that once per language/reason in diagnostics and stays on native-owned recovery paths where supported.
+
+Runtime controls:
+
+- Global default override: `CODEGRAPH_DISABLE_NATIVE=1`
+- Explicit CLI/library/tool `native` options take precedence over `CODEGRAPH_DISABLE_NATIVE`
+- CLI examples: `codegraph graph --native off`, `codegraph index --native on --report`
+
+## Command recipes
+
+### Dependency graphs
+
 - Whole-repo graph:
   `codegraph graph ./`
 - Fast overview:
   `codegraph graph ./src --fast-graph`
 - Full AST-based graph:
   `codegraph graph ./src`
-- Graphs also include graph-first document/template edges for HTML, Astro, Handlebars, Markdown, MDX, reStructuredText, and AsciiDoc local links, plus MDX/Astro static imports.
+- Graph-first document/template edges:
+  HTML, Astro, Handlebars, Markdown, MDX, reStructuredText, and AsciiDoc local links, plus MDX/Astro static imports.
 - Narrow scan scope and exclude generated/tests while preserving `.gitignore`:
   `codegraph graph --root . ./src --include-glob "**/*.ts" --ignore-glob "**/*.spec.ts" --json`
 - Disable `.gitignore` filtering when ignored/generated files are intentionally in scope:
@@ -76,32 +129,25 @@ The CLI also ships a bundled skill installer:
   `codegraph graph ./src --mermaid`
 - Detailed symbol graph:
   `codegraph graph ./src --symbols-detailed --compact-json`
-- For monorepos, prefer explicit roots such as `./src ./packages/app ./packages/lib` when you want product code only; use `./` when you intentionally want the whole repo.
 - SQLite export:
   `codegraph graph --sqlite ./codegraph.sqlite`
 - Read-only SQL on exported SQLite:
   `codegraph sql --db ./codegraph.sqlite --query "SELECT name, file FROM symbols WHERE kind = 'function' LIMIT 5;"`
-  Accepts read-only result-producing statements such as `SELECT` and `PRAGMA`, and rejects mutating SQL.
-- Build/report diagnostics:
-  `codegraph graph --report`
-  `codegraph index --report`
-  `codegraph review --report --report-file review.report.json`
-  Graph, index, and review reports include `backend.native.byLanguage` so native usage and fallback are visible per language. Build reports also include `backend.parser` when syntax-tree backend degradation leaves files without parser context. Reports also include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Review JSON also reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, and distinguishes `changedFiles[].status` as `updated`, `deleted`, or `missing`.
-- Explicit native runtime control:
-  `codegraph graph --native off`
-  `codegraph index --native on --report`
-- Worker threads for parallel native extraction:
-  `codegraph index --workers --threads 8`
-  Uses Piscina worker pool to offload per-file Rust extraction across CPU cores. Only applies to `index` and build commands (not `graph`). Falls back silently if the native addon or Piscina is unavailable.
 
-### 2. Definitions and references
+For monorepos, prefer explicit roots such as `./src ./packages/app ./packages/lib` when you want product code only. Use `./` when you intentionally want the whole repo.
+
+The `sql` command accepts read-only result-producing statements such as `SELECT` and `PRAGMA`, and rejects mutating SQL.
+
+### Definitions and references
 
 - Go to definition:
-  `codegraph goto <file-path> <line> <column>`
+  `codegraph goto <file> <line> <column>`
 - Find references:
-  `codegraph refs <file-path> <line> <column> --pretty`
+  `codegraph refs --file <file> --line <line> --col <column> --pretty`
 
-### 3. PR and diff impact
+Prefer `refs` over plain text search when you want semantic usages rather than every matching string.
+
+### PR and diff impact
 
 - Git diff impact:
   `codegraph impact --provider git --base main --head HEAD`
@@ -111,8 +157,12 @@ The CLI also ships a bundled skill installer:
   `codegraph impact --base main --head HEAD --ignore-glob "**/package-lock.json" "**/dist/**"`
 - Include line context:
   `codegraph impact --base main --head HEAD --ref-context line`
+- Agent-ready review bundle:
+  `codegraph review --base origin/main --head HEAD`
 
-### 4. Architecture and metrics
+Review and impact commands are the best fit when the user asks what a change can break, what to test, or where a reviewer should focus.
+
+### Architecture and metrics
 
 - Start here when you need an architecture summary:
   `codegraph inspect ./src --limit 20`
@@ -131,7 +181,20 @@ The CLI also ships a bundled skill installer:
 - Semantic chunking:
   `codegraph chunk <file>`
 
-## Library Usage
+### Diagnostics and performance
+
+- Build/report diagnostics:
+  `codegraph graph --report`
+  `codegraph index --report`
+  `codegraph review --report --report-file review.report.json`
+- Worker threads for parallel native extraction:
+  `codegraph index --workers --threads 8`
+
+Graph, index, and review reports include `backend.native.byLanguage` so native usage and fallback are visible per language. Build reports also include `backend.parser` when syntax-tree backend degradation leaves files without parser context. Reports include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Review JSON also reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, and distinguishes `changedFiles[].status` as `updated`, `deleted`, or `missing`.
+
+Worker threads use a Piscina worker pool to offload per-file Rust extraction across CPU cores. This only applies to `index` and build commands, not `graph`, and falls back silently if the native addon or Piscina is unavailable.
+
+## Library usage
 
 Use the scoped package name:
 
@@ -168,12 +231,11 @@ const references = await tool_findReferences(root, "src/main.ts", 10, 5, undefin
 const impact = await tool_impactJSON(root, { provider: "git", base: "main", head: "HEAD", compact: true });
 ```
 
-## Best Practices
+## Best practices
 
-- If you are asked to understand an unfamiliar repo, run `codegraph doctor`, then `codegraph inspect ./src --limit 20`, then prefer bounded graph queries such as `deps`, `rdeps`, or `hotspots` before requesting a full graph dump.
-- If you are asked to assess architectural risk in a subdirectory, run `codegraph hotspots <dir> --limit 20 --json` and `codegraph cycles <dir> --sort priority --json`.
-- Use `--include-glob`, `--ignore-glob`, and `--no-gitignore` to control which files are scanned. Use `--resolve-node-modules` only when you want JS/TS bare imports resolved into `node_modules`; it does not change scan roots.
-- Use `--json` when you need machine-readable output. Impact JSON now includes `schemaVersion` and `format`, and review JSON includes `schemaVersion`.
-- For agent follow-up reasoning, prefer structured outputs first: `inspect`, `deps`, `rdeps`, `hotspots`, `goto`, `refs`, and JSON impact/review payloads.
+- Prefer bounded commands first: `inspect`, `deps`, `rdeps`, `hotspots`, `goto`, `refs`, and compact JSON impact/review payloads.
 - Use `--fast-graph` for first-pass exploration on large repos, then rerun without it when accuracy matters.
-- Prefer `refs` over plain text search when you want semantic usages.
+- Use `--include-glob`, `--ignore-glob`, and `--no-gitignore` to control which files are scanned.
+- Use `--resolve-node-modules` only when you want JS/TS bare imports resolved into `node_modules`; it does not change scan roots.
+- Use `--json` when you need machine-readable output. Impact JSON includes `schemaVersion` and `format`, and review JSON includes `schemaVersion`.
+- If you are assessing architectural risk in a subdirectory, run `codegraph hotspots <dir> --limit 20 --json`, then check repo-level cycles with `codegraph cycles --sort priority --json`.
