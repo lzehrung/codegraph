@@ -1,5 +1,8 @@
+import path from "node:path";
+import os from "node:os";
+import fsp from "node:fs/promises";
 import { describe, test, expect } from "vitest";
-import { LazyArray, LazyProjectIndex } from "../src/util/lazySymbols.js";
+import { LazyArray, LazyProjectIndex, createSymbolLoader } from "../src/util/lazySymbols.js";
 
 describe("LazyArray", () => {
   test("should not load data immediately", () => {
@@ -313,6 +316,38 @@ describe("LazyProjectIndex", () => {
     expect(load2Started).toBe(false);
   });
 
+  test("tracks actual loaded state after getModule and evicts loaded locals without manual flags", async () => {
+    const index = new LazyProjectIndex();
+
+    index.addModule("file1.ts", {
+      file: "file1.ts",
+      loaded: false,
+      imports: [],
+      exports: [],
+      locals: new LazyArray(async () => [
+        {
+          file: "file1.ts",
+          localName: "foo",
+          kind: 1,
+          range: {
+            start: { line: 1, column: 0, index: 0 },
+            end: { line: 1, column: 3, index: 3 },
+          },
+        },
+      ]),
+    });
+
+    await index.getModule("file1.ts");
+    expect(index.getLoadedCount()).toBe(1);
+
+    const shallow = index.getModuleShallow("file1.ts");
+    expect(shallow?.locals.isLoaded).toBe(true);
+
+    index.evict(new Set());
+    expect(index.getLoadedCount()).toBe(0);
+    expect(shallow?.locals.isLoaded).toBe(false);
+  });
+
   test("should get statistics", () => {
     const index = new LazyProjectIndex();
 
@@ -337,5 +372,21 @@ describe("LazyProjectIndex", () => {
     expect(stats.totalModules).toBe(2);
     expect(stats.loadedModules).toBe(1);
     expect(stats.memoryUsageMB).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("createSymbolLoader", () => {
+  test("keeps symbol extraction aligned to the captured source even if the file changes later", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-lazy-loader-"));
+    const file = path.join(root, "main.ts");
+    const initialSource = "export const alpha = 1;\n";
+    await fsp.writeFile(file, initialSource, "utf8");
+
+    const loader = createSymbolLoader(file, initialSource, []);
+
+    await fsp.writeFile(file, "export const beta = 2;\n", "utf8");
+
+    const locals = await loader();
+    expect(locals.map((entry) => entry.localName)).toEqual(["alpha"]);
   });
 });
