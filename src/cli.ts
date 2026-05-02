@@ -2664,6 +2664,7 @@ Examples:
           ".tsx": "tsx",
           ".py": "python",
           ".php": "php",
+          ".zig": "zig",
           ".json": "json",
           ".yaml": "yaml",
           ".yml": "yaml",
