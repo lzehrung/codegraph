@@ -88,6 +88,8 @@ npm install
 npm run build
 ```
 
+`npm run build` always rebuilds `dist/`. If Cargo is available, it also requires the local native workspace build to succeed; if Cargo is unavailable, it still completes with the JavaScript build output and a warning.
+
 Then run a few concrete first-pass commands:
 
 ```bash
@@ -190,6 +192,8 @@ The contributor baseline is:
 npm run build
 npm run test:ci
 ```
+
+If you are touching the native workspace directly, also run `npm run build:native` and `npm run test:native`.
 
 Use the root release scripts to cut independent releases for the packages that actually changed:
 
