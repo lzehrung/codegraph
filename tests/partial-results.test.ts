@@ -149,6 +149,38 @@ describe("Partial Results", () => {
       expect(result.errors).toHaveLength(1);
     });
 
+    test("does not start later items after the first failure when continueOnError is false", async () => {
+      const started: number[] = [];
+      const finished: number[] = [];
+
+      const result = await withPartialResults(
+        [1, 2, 3, 4],
+        async (n: number) => {
+          started.push(n);
+          if (n === 2) {
+            throw new Error("Failed on 2");
+          }
+          finished.push(n);
+          return n * 10;
+        },
+        {
+          continueOnError: false,
+          concurrency: 4,
+        },
+      );
+
+      expect(started).toEqual([1, 2]);
+      expect(finished).toEqual([1]);
+      expect(result.data).toEqual([10]);
+      expect(result.errors).toHaveLength(1);
+      expect(result.metadata).toEqual({
+        attempted: 2,
+        succeeded: 1,
+        failed: 1,
+        duration: result.metadata?.duration,
+      });
+    });
+
     test("should respect concurrency limit", async () => {
       const items = Array.from({ length: 20 }, (_, i) => i);
       let concurrent = 0;

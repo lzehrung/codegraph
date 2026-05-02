@@ -164,6 +164,43 @@ export async function withPartialResults<T, I>(
   let succeeded = 0;
   let failed = 0;
 
+  if (!continueOnError) {
+    for (const [index, item] of items.entries()) {
+      try {
+        const result = await operation(item);
+        results.push(result);
+        succeeded++;
+      } catch (error) {
+        failed++;
+        const partialError: PartialError = {
+          target: `${itemName}[${index}]`,
+          message: error instanceof Error ? error.message : String(error),
+          severity: "error",
+          retryable: true,
+        };
+        if (error instanceof Error && error.stack) {
+          partialError.stack = error.stack;
+        }
+        errors.push(partialError);
+        const duration = Date.now() - startTime;
+        return partial(results, errors, {
+          attempted: succeeded + failed,
+          succeeded,
+          failed,
+          duration,
+        });
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    return success(results, {
+      attempted: items.length,
+      succeeded,
+      failed: 0,
+      duration,
+    });
+  }
+
   // Process in batches with concurrency control
   for (let i = 0; i < items.length; i += concurrency) {
     const batch = items.slice(i, i + concurrency);
@@ -202,17 +239,6 @@ export async function withPartialResults<T, I>(
             error.stack = value.error.stack;
           }
           errors.push(error);
-
-          if (!continueOnError) {
-            // Stop processing
-            const duration = Date.now() - startTime;
-            return partial(results, errors, {
-              attempted: items.length,
-              succeeded,
-              failed,
-              duration,
-            });
-          }
         }
       } else {
         // Promise was rejected (shouldn't happen with allSettled, but handle anyway)
