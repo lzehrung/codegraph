@@ -40,9 +40,10 @@ Then choose the narrowest follow-up command that answers the user:
 - Dependency path between files: `codegraph path <from> <to>`
 - Go to definition: `codegraph goto <file> <line> <column>`
 - Find references: `codegraph refs --file <file> --line <line> --col <column> --pretty`
-- PR impact: `codegraph impact --provider git --base main --head HEAD`
-- Worktree impact: `codegraph impact --provider git --base HEAD --head WORKTREE`
-- Agent-ready PR bundle: `codegraph review --base origin/main --head HEAD`
+- PR impact: `codegraph impact --provider git --base main --head HEAD --pretty`
+- Worktree impact: `codegraph impact --provider git --base HEAD --head WORKTREE --pretty`
+- Compact review handoff: `codegraph review --base HEAD --head WORKTREE --summary`
+- Agent-ready full PR bundle: `codegraph review --base origin/main --head HEAD`
 - Public API surface: `codegraph apisurface`
 - Semantic chunks for context packing: `codegraph chunk <file>`
 
@@ -151,23 +152,27 @@ Prefer `refs` over plain text search when you want semantic usages rather than e
 ### PR and diff impact
 
 - Git diff impact:
-  `codegraph impact --provider git --base main --head HEAD`
+  `codegraph impact --provider git --base main --head HEAD --pretty`
 - Current worktree impact:
-  `codegraph impact --provider git --base HEAD --head WORKTREE`
+  `codegraph impact --provider git --base HEAD --head WORKTREE --pretty`
 - Current index impact:
-  `codegraph impact --provider git --base HEAD --head STAGED`
+  `codegraph impact --provider git --base HEAD --head STAGED --pretty`
+- Compact impact JSON:
+  `codegraph impact --provider git --base HEAD --head WORKTREE --compact-json`
 - Exported-only scope:
   `codegraph impact --base main --head HEAD --scope imported`
 - Ignore noisy files:
   `codegraph impact --base main --head HEAD --ignore-glob "**/package-lock.json" "**/dist/**"`
 - Include line context:
   `codegraph impact --base main --head HEAD --ref-context line`
-- Agent-ready review bundle:
+- Compact review handoff:
+  `codegraph review --base HEAD --head WORKTREE --summary`
+- Agent-ready full review bundle:
   `codegraph review --base origin/main --head HEAD`
-- Agent-ready current worktree bundle:
+- Agent-ready full current worktree bundle:
   `codegraph review --base HEAD --head WORKTREE`
 
-Review and impact commands are the best fit when the user asks what a change can break, what to test, or where a reviewer should focus.
+Prefer impact `--pretty` first when the user asks what a change can break, what to test, or where a reviewer should focus. Use `review --summary` for compact human handoffs, and use full review JSON only when a script or another agent needs `projectFiles`, `graphDelta`, or complete changed-symbol handles.
 
 For git-provider impact and git-scoped review/index/graph commands, `WORKTREE` compares the base revision to current staged and unstaged tracked-file changes. Use `STAGED` or `INDEX` to compare the base revision to the current index; with `--base HEAD`, that is staged changes only. Untracked files are outside Git diff output until they are staged or tracked.
 

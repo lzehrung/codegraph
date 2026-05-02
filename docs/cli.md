@@ -144,6 +144,9 @@ cat diff.txt | codegraph impact --provider raw
 # Pretty summary with severity scores
 codegraph impact --base main --head feature --pretty
 
+# Compact JSON using impact's graph-style alias
+codegraph impact --base main --head feature --compact-json
+
 # Limit analysis depth and reference count
 codegraph impact --base main --head feature --depth 2 --max-refs 1000
 
@@ -176,13 +179,21 @@ codegraph review --base origin/main --head HEAD > review.json
 codegraph review --base origin/main --head HEAD --include-symbol-details --max-callsites 5 > review.json
 codegraph review --base origin/main --head HEAD --review-depth standard > review.json
 
+# Compact human-readable review handoff
+codegraph review --base origin/main --head HEAD --summary
+codegraph review --base HEAD --head WORKTREE --summary
+
 # File-level graph delta between revisions
 codegraph graph-delta --git-base origin/main --git-head HEAD > graph-delta.json
 ```
 
 For git-provider impact, `--head` accepts normal revisions plus worktree sentinels. Use `WORKTREE` to compare the base revision against the current working tree, including staged and unstaged tracked-file changes. Use `STAGED` or `INDEX` to compare the base revision against the current index; with `--base HEAD`, that is staged changes only. Untracked files are not included until they are staged or otherwise tracked by Git.
 
-Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` so downstream tools can branch on payload shape without inferring it from missing fields. Impact JSON can also include `exportSummary`, `reexportChains`, `topImpacts`, `surfaceArea`, and `clusters` when applicable. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
+Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` so downstream tools can branch on payload shape without inferring it from missing fields. Use `--compact` or `--compact-json` for compact impact JSON. Impact JSON can also include `exportSummary`, `reexportChains`, `topImpacts`, `surfaceArea`, and `clusters` when applicable. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
+
+`codegraph review --summary` prints the changed-file count, changed-symbol count, graph delta, risk summary, review tasks, and suggested tests without emitting the full `projectFiles` and symbol-detail JSON payload. Use plain `review` output when a downstream tool needs the complete structured bundle.
+
+`inspect` and `unresolved` exclude Node builtins such as `node:path` and `fs` from unresolved-import counts so the diagnostics stay focused on project and package resolution gaps.
 
 ### Doctor and skill commands
 

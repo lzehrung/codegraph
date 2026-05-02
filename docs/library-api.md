@@ -331,6 +331,8 @@ const references = await tool_findReferences(root, "src/main.ts", 10, 5, index);
 const impact = await tool_impactJSON(root, { provider: "git", base: "HEAD", head: "WORKTREE" }, { index });
 ```
 
+Human-readable summaries such as `codegraph review --summary` and `codegraph impact --pretty` are CLI presentation modes. Library callers should use `buildReviewReport()` or `tool_impactJSON()` and format only the selected fields they need.
+
 Useful wrapper details:
 
 - Build a shared index once and pass it through when an agent will call several wrappers in one pass; otherwise each wrapper may rebuild the same project view.
