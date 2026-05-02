@@ -307,6 +307,7 @@ fn language_for_id(language_id: &str) -> Option<Language> {
         "ts" => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
         "tsx" => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
         "vue" => Some(arborium_vue::language().into()),
+        "zig" => Some(tree_sitter_zig::LANGUAGE.into()),
         _ => None,
     }
 }
@@ -380,6 +381,7 @@ pub fn supported_language_ids() -> Vec<String> {
         "ts",
         "tsx",
         "vue",
+        "zig",
     ]
     .into_iter()
     .map(str::to_string)
@@ -635,6 +637,10 @@ mod tests {
                 "func helper() {}",
                 "(function_declaration name: (simple_identifier) @name)",
             ),
+            "zig" => (
+                "pub fn helper() void {}",
+                "(function_declaration name: (identifier) @name)",
+            ),
             "ts" => (
                 "export const value = 1;",
                 "(lexical_declaration (variable_declarator name: (identifier) @name))",
@@ -673,6 +679,7 @@ mod tests {
             "ts",
             "tsx",
             "vue",
+            "zig",
         ]
         .into_iter()
         .collect()
@@ -681,7 +688,7 @@ mod tests {
     #[test]
     fn supported_language_ids_contains_expected_languages() {
         let supported = supported_language_ids();
-        for language_id in ["ts", "tsx", "js", "python", "php", "go", "rust", "vue", "svelte"] {
+        for language_id in ["ts", "tsx", "js", "python", "php", "go", "rust", "vue", "svelte", "zig"] {
             assert!(
                 supported.iter().any(|entry| entry == language_id),
                 "expected supported languages to include {language_id}",

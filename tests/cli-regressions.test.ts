@@ -188,6 +188,19 @@ describe("CLI regressions", () => {
     expect(isSorted(graph.nodes.map(normalize))).toBe(true);
   });
 
+  it("chunk detects Zig files by extension", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-zig-chunk-"));
+    const filePath = path.join(tmpDir, "main.zig");
+    await fsp.writeFile(filePath, "pub fn helper() void {}\n", "utf8");
+
+    const stdout = await runCliCommand(["chunk", filePath, "--min-tokens", "1", "--max-tokens", "50"]);
+    const chunks = JSON.parse(stdout) as Array<{ languageId?: string; filePath?: string }>;
+
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(chunks.every((chunk) => chunk.languageId === "zig")).toBe(true);
+    expect(chunks.every((chunk) => normalize(chunk.filePath ?? "") === normalize(filePath))).toBe(true);
+  });
+
   it("graph honors .gitignore by default and --no-gitignore opts out", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-gitignore-"));
     const srcDir = path.join(tmpDir, "src");

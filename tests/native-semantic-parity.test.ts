@@ -449,6 +449,16 @@ nativeDescribe("native semantic parity", () => {
         { file: "StaticMembers.swift", line: 6, column: 8, expectedStatus: "ok" },
       ),
       sampleExpectation(
+        "zig",
+        ["main.zig", "helpers.zig", "math.zig"],
+        [
+          { file: "helpers.zig", names: ["helper"] },
+          { file: "math.zig", names: ["Number"] },
+        ],
+        { file: "main.zig", line: 5, column: 43, expectedStatus: "ok" },
+        { file: "helpers.zig", line: 1, column: 8, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
         "c",
         ["main.c", "utils.h", "utils.c", "helpers.h", "helpers.c"],
         [{ file: "utils.h", names: ["helper_function", "Utility"] }],

@@ -727,6 +727,32 @@ describe("Find References", () => {
     });
   });
 
+  describe("Zig", () => {
+    it("should find references to imported function members", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "zig");
+      const mainFile = path.join(samplePath, "main.zig").replace(/\\/g, "/");
+      const helpersFile = path.join(samplePath, "helpers.zig").replace(/\\/g, "/");
+      const mathFile = path.join(samplePath, "math.zig").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [mainFile, helpersFile, mathFile]);
+
+      const result = await testFindReferences(index, helpersFile, 1, 8, 2);
+      expectReferenceAt(result, helpersFile, 1);
+      expectReferenceAt(result, mainFile, 5);
+    });
+
+    it("should find references to imported type members", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "zig");
+      const mainFile = path.join(samplePath, "main.zig").replace(/\\/g, "/");
+      const helpersFile = path.join(samplePath, "helpers.zig").replace(/\\/g, "/");
+      const mathFile = path.join(samplePath, "math.zig").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [mainFile, helpersFile, mathFile]);
+
+      const result = await testFindReferences(index, mathFile, 1, 11, 2);
+      expectReferenceAt(result, mathFile, 1);
+      expectReferenceAt(result, mainFile, 5);
+    });
+  });
+
   describe("C#", () => {
     it("should find all references to static method", async () => {
       const index = await createTestIndex("csharp");

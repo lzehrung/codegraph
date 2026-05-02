@@ -23,6 +23,7 @@ const idToConfigKey: Record<string, string> = {
   cpp: "cpp",
   kotlin: "kotlin",
   swift: "swift",
+  zig: "zig",
 };
 
 export const LANG_CONFIGS: Record<string, LanguageConfig> = {};

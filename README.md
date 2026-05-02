@@ -132,7 +132,7 @@ To inspect the packaged skill paths and target health, run `codegraph skill doct
 
 ### Source languages
 
-JavaScript, TypeScript, Python, PHP, Go, Java, C#, Ruby, Rust, Kotlin, Swift, C, and C++ all participate in the shared source-language indexing and navigation pipeline.
+JavaScript, TypeScript, Python, PHP, Go, Java, C#, Ruby, Rust, Kotlin, Swift, Zig, C, and C++ all participate in the shared source-language indexing and navigation pipeline.
 
 ### Graph-first formats
 

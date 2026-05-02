@@ -13,6 +13,7 @@ export const QUERY_DRIVEN_LOCALS_LANGUAGES = new Set([
   "rust",
   "kotlin",
   "swift",
+  "zig",
   "cpp",
 ]);
 
