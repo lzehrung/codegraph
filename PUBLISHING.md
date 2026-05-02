@@ -74,7 +74,7 @@ Use these when you need to inspect or customize the native publish flow manually
 npm run build
 ```
 
-`npm run build` attempts the native workspace build when Cargo is available. Use `npm run build:native` when you want to rebuild the native addon without rebuilding `dist/`, or when release/publish flows should fail fast if Rust is missing.
+`npm run build` rebuilds `dist/` and requires the native workspace build to succeed when Cargo is available. Use `npm run build:native` when you want to rebuild the native addon without rebuilding `dist/`, or when release/publish flows should fail fast if Rust is missing.
 
 2. Create the per-target npm package directories:
 

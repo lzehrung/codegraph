@@ -18,7 +18,7 @@ Codegraph is a lightweight multi-language code analysis tool that builds depende
 - Registry: `@lzehrung` packages are published to GitHub Packages, not the public npm registry. Configure:
   `npm config set "@lzehrung:registry" "https://npm.pkg.github.com"`
 - Published installs of `@lzehrung/codegraph` depend on `@lzehrung/codegraph-native` as an optional dependency; that package resolves the matching native artifact automatically when one exists for the current platform.
-- For source checkouts, `npm run build` always rebuilds `dist/` and attempts the local native addon when Cargo is available, but it falls back to the JavaScript build output with a warning if the native workspace build is unavailable or fails. Use `npm run build:native` when you want a native-only rebuild or a hard failure if Rust is missing.
+- For source checkouts, `npm run build` always rebuilds `dist/`. If Cargo is available, it also requires the local native addon build to succeed. If Cargo is unavailable, it completes with the JavaScript build output and a warning. Use `npm run build:native` when you want a native-only rebuild or a hard failure if Rust is missing.
 - Install the optional fallback package only when you explicitly need JS Tree-sitter fallback:
   `npm install @lzehrung/codegraph-js-fallback --legacy-peer-deps`
 - That fallback package is also published to the `@lzehrung` GitHub Packages registry, so tarball installs still need the same scoped registry configuration before the fallback package can be added.
@@ -50,6 +50,7 @@ The CLI also ships a bundled skill installer:
 - Install into the default Codex-style target:
   `codegraph skill install`
 - Install into an explicit target:
+  Target must end with `/skills/codegraph`.
   `codegraph skill install --target ~/.codex/skills/codegraph --force`
 - Inspect backend/runtime state plus local graph/cache artifacts:
   `codegraph doctor`

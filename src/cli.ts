@@ -437,6 +437,23 @@ async function copyDirectoryRecursive(sourceDir: string, targetDir: string, over
   }
 }
 
+function normalizePathSegmentForComparison(segment: string): string {
+  return process.platform === "win32" ? segment.toLowerCase() : segment;
+}
+
+function assertSafeSkillInstallTarget(targetDir: string): string {
+  const resolvedTarget = path.resolve(targetDir);
+  const targetName = normalizePathSegmentForComparison(path.basename(resolvedTarget));
+  const parentName = normalizePathSegmentForComparison(path.basename(path.dirname(resolvedTarget)));
+  if (targetName !== "codegraph" || parentName !== "skills") {
+    throw new Error(
+      `Skill install target directory must end with "${path.join("skills", "codegraph")}". ` +
+        `Received: ${normalizePathForDisplay(resolvedTarget)}`,
+    );
+  }
+  return resolvedTarget;
+}
+
 function buildSkillDoctorReport(requestedTargetDir?: string): SkillDoctorReport {
   const packageRoot = getCodegraphPackageRoot();
   const bundledSkillDir = getBundledSkillDir(packageRoot);
@@ -1378,7 +1395,7 @@ Examples:
       if (!bundledSkillDir) {
         throw new Error("Bundled codegraph skill assets were not found.");
       }
-      const targetDir = targetOpt ? path.resolve(targetOpt) : getDefaultSkillTargetDir();
+      const targetDir = assertSafeSkillInstallTarget(targetOpt ? targetOpt : getDefaultSkillTargetDir());
       await copyDirectoryRecursive(bundledSkillDir, targetDir, overwrite);
       writeJSONLine({
         installed: true,

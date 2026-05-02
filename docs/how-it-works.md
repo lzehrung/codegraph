@@ -37,7 +37,7 @@ Runtime behavior, performance characteristics, architecture, extension points, a
 
 ### Native Tree-sitter acceleration
 
-- `npm run build` attempts the local native workspace build when Cargo is available.
+- `npm run build` requires the local native workspace build to succeed when Cargo is available.
 - Use `npm run build:native` when you want native-only rebuilds or a hard failure if Rust is missing.
 - When the addon is present, Codegraph runs supported Tree-sitter parse and query work in Rust.
 - If native mode is `auto`, unavailable query recovery paths can degrade through the optional JS fallback package or native-owned final recovery paths.

@@ -192,6 +192,7 @@ codegraph doctor ./.codegraph-cache/index-v1
 codegraph skill install
 
 # Install the bundled skill into an explicit target directory
+# The target must end with /skills/codegraph
 codegraph skill install --target ~/.codex/skills/codegraph --force
 
 # Inspect bundled skill paths and target health
