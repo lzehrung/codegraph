@@ -224,6 +224,7 @@ These wrappers are designed to be imported directly into agent runtimes:
 
 ```ts
 import {
+  buildProjectIndex,
   tool_getFileOverview,
   tool_findSymbol,
   tool_impactJSON,
@@ -234,23 +235,26 @@ import {
   tool_findReferences,
 } from "@lzehrung/codegraph";
 
-const overview = await tool_getFileOverview(process.cwd(), "src/utils.ts");
-const matches = await tool_findSymbol(process.cwd(), "collectGraph");
-const deps = await tool_getDependencies(process.cwd(), "src/main.ts", { depth: 2, limit: 20 });
-const reverseDeps = await tool_getReverseDependencies(process.cwd(), "src/index.ts", { depth: 2, limit: 20 });
-const hotspots = await tool_getHotspots(process.cwd(), { limit: 20 });
-const impact = await tool_impactJSON(process.cwd(), {
+const root = process.cwd();
+const index = await buildProjectIndex(root);
+const overview = await tool_getFileOverview(root, "src/utils.ts", { index });
+const matches = await tool_findSymbol(root, "collectGraph", { index });
+const deps = await tool_getDependencies(root, "src/main.ts", { depth: 2, limit: 20, index });
+const reverseDeps = await tool_getReverseDependencies(root, "src/index.ts", { depth: 2, limit: 20, index });
+const hotspots = await tool_getHotspots(root, { limit: 20, index });
+const impact = await tool_impactJSON(root, {
   provider: "git",
   base: "main",
   head: "feature-branch",
-});
-const definition = await tool_goToDefinition(process.cwd(), "src/main.ts", 10, 5, undefined, { native: "on" });
-const references = await tool_findReferences(process.cwd(), "src/main.ts", 10, 5);
+}, { index });
+const definition = await tool_goToDefinition(root, "src/main.ts", 10, 5, index, { native: "on" });
+const references = await tool_findReferences(root, "src/main.ts", 10, 5, index);
 ```
 
 Wrapper notes:
 
 - Import only from `@lzehrung/codegraph`.
+- Build one shared index per agent pass when you will call multiple wrappers in sequence. `tool_getFileOverview()`, `tool_getGraph()`, and `tool_impactJSON()` now accept `index` through their runtime-options argument, while the bounded graph wrappers already accept it in their options object.
 - Native runtime control is not passed uniformly across all wrappers: `tool_goToDefinition` and `tool_findReferences` accept trailing runtime options, while `tool_findSymbol`, `tool_getDependencies`, `tool_getReverseDependencies`, and `tool_getHotspots` take `native` inside their options object.
 - `tool_getFileOverview` returns structured `ok`, `not_found`, and `error` variants so agents can distinguish missing files from invalid inputs cleanly.
 - `tool_findSymbol` returns stable `id` handles plus `range`, `exported`, `exactMatch`, and `matchKind`.

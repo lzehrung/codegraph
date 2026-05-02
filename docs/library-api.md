@@ -295,9 +295,11 @@ The library also exports agent-oriented wrappers with explicit status discrimina
 `tool_getFileOverview()` is structured-first. Its `ok` result exposes `overview.imports` and `overview.definitions` directly for agent consumption, while `renderedOverview` remains an optional convenience string for logging or debugging.
 
 ```ts
-import { tool_getFileOverview } from "@lzehrung/codegraph";
+import { buildProjectIndex, tool_getFileOverview } from "@lzehrung/codegraph";
 
-const overview = await tool_getFileOverview(process.cwd(), "src/main.ts");
+const root = process.cwd();
+const index = await buildProjectIndex(root);
+const overview = await tool_getFileOverview(root, "src/main.ts", { index });
 if (overview.status === "ok") {
   console.log(overview.overview.imports);
   console.log(overview.overview.definitions);
@@ -308,6 +310,7 @@ For bounded graph exploration, prefer the smaller wrappers before requesting the
 
 ```ts
 import {
+  buildProjectIndex,
   tool_findSymbol,
   tool_getDependencies,
   tool_getReverseDependencies,
@@ -317,20 +320,23 @@ import {
   tool_impactJSON,
 } from "@lzehrung/codegraph";
 
-const symbolHits = await tool_findSymbol(process.cwd(), "collectGraph");
-const deps = await tool_getDependencies(process.cwd(), "src/agent-tools.ts", { depth: 2, limit: 20 });
-const reverseDeps = await tool_getReverseDependencies(process.cwd(), "src/index.ts", { depth: 2, limit: 20 });
-const hotspots = await tool_getHotspots(process.cwd(), { limit: 20 });
-const definition = await tool_goToDefinition(process.cwd(), "src/main.ts", 10, 5);
-const references = await tool_findReferences(process.cwd(), "src/main.ts", 10, 5);
-const impact = await tool_impactJSON(process.cwd(), { provider: "git", base: "main", head: "HEAD" });
+const root = process.cwd();
+const index = await buildProjectIndex(root);
+const symbolHits = await tool_findSymbol(root, "collectGraph", { index });
+const deps = await tool_getDependencies(root, "src/agent-tools.ts", { depth: 2, limit: 20, index });
+const reverseDeps = await tool_getReverseDependencies(root, "src/index.ts", { depth: 2, limit: 20, index });
+const hotspots = await tool_getHotspots(root, { limit: 20, index });
+const definition = await tool_goToDefinition(root, "src/main.ts", 10, 5, index);
+const references = await tool_findReferences(root, "src/main.ts", 10, 5, index);
+const impact = await tool_impactJSON(root, { provider: "git", base: "main", head: "HEAD" }, { index });
 ```
 
 Useful wrapper details:
 
+- Build a shared index once and pass it through when an agent will call several wrappers in one pass; otherwise each wrapper may rebuild the same project view.
 - `tool_findSymbol()` returns stable `id` handles plus `range`, `exported`, `exactMatch`, and `matchKind`.
 - `tool_goToDefinition()` and `tool_findReferences()` surface additive `provenance` metadata when the resolver used imports, namespaces, or other non-local paths.
-- `tool_getDependencies()` and `tool_getReverseDependencies()` clamp non-positive `limit` values to empty bounded results instead of returning malformed slices.
+- `tool_getDependencies()`, `tool_getReverseDependencies()`, and `tool_getHotspots()` ignore non-finite `limit` values and clamp non-positive finite values to empty bounded results instead of returning malformed slices.
 - Impact wrappers now include `schemaVersion` and `format: "full" | "compact"` so downstream agents do not have to infer payload shape.
 
 ## Related docs
