@@ -1,9 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { getDiff } from "../src/impact/providers/base.js";
+
+const gitRepoRoots: string[] = [];
+
+afterEach(() => {
+  for (const root of gitRepoRoots.splice(0)) {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, {
@@ -27,6 +35,7 @@ function writeFile(root: string, relativePath: string, text: string): void {
 
 function createGitRepo(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-git-provider-"));
+  gitRepoRoots.push(root);
   git(root, ["init", "--initial-branch=main"]);
   git(root, ["config", "core.autocrlf", "false"]);
   return root;
