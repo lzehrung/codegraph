@@ -568,6 +568,45 @@ function manifestFilePath(projectRoot: string, opts?: BuildOptions): string {
   return path.join(cacheRoot(projectRoot, opts), "manifest.json");
 }
 
+function isTransientFileContentionError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "EBUSY" || code === "EPERM" || code === "ENOTEMPTY";
+}
+
+function manifestTempFilePath(manifestPath: string): string {
+  const dir = path.dirname(manifestPath);
+  const base = path.basename(manifestPath);
+  return path.join(dir, `.${base}.${process.pid}.${crypto.randomUUID()}.tmp`);
+}
+
+async function wait(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function writeManifestAtomically(manifestPath: string, payload: string): Promise<void> {
+  const retryDelays = [10, 25, 50, 100];
+  for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
+    const tempPath = manifestTempFilePath(manifestPath);
+    try {
+      await fsp.writeFile(tempPath, payload, "utf8");
+      await fsp.rename(tempPath, manifestPath);
+      return;
+    } catch (error) {
+      try {
+        await fsp.rm(tempPath, { force: true });
+      } catch {
+        // Cleanup is best-effort; the next attempt uses a fresh temp path.
+      }
+      const canRetry = attempt < retryDelays.length && isTransientFileContentionError(error);
+      if (!canRetry) throw error;
+      await wait(retryDelays[attempt]!);
+    }
+  }
+}
+
 export async function loadManifest(projectRoot: string, opts?: BuildOptions): Promise<IndexManifest | null> {
   try {
     const manifestPath = manifestFilePath(projectRoot, opts);
@@ -588,7 +627,7 @@ export async function writeManifest(
   try {
     const manifestPath = manifestFilePath(projectRoot, opts);
     await fsp.mkdir(path.dirname(manifestPath), { recursive: true });
-    await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+    await writeManifestAtomically(manifestPath, JSON.stringify(manifest, null, 2));
   } catch (error) {
     logWithLevel(opts?.logLevel, "warn", "Warning: Failed to write manifest:", error);
   }
