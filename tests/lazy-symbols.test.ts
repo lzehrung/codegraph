@@ -373,6 +373,83 @@ describe("LazyProjectIndex", () => {
     expect(stats.loadedModules).toBe(1);
     expect(stats.memoryUsageMB).toBeGreaterThanOrEqual(0);
   });
+
+  test("enforces maxCached by evicting the least recently loaded module", async () => {
+    const index = new LazyProjectIndex({ maxCached: 1 });
+
+    index.addModule("file1.ts", {
+      file: "file1.ts",
+      loaded: false,
+      imports: [],
+      exports: [],
+      locals: new LazyArray(async () => [{ file: "file1.ts", localName: "one", kind: 1 }]),
+    });
+    index.addModule("file2.ts", {
+      file: "file2.ts",
+      loaded: false,
+      imports: [],
+      exports: [],
+      locals: new LazyArray(async () => [{ file: "file2.ts", localName: "two", kind: 1 }]),
+    });
+
+    await index.getModule("file1.ts");
+    await index.getModule("file2.ts");
+
+    expect(index.getLoadedCount()).toBe(1);
+    expect(index.getModuleShallow("file1.ts")?.locals.isLoaded).toBe(false);
+    expect(index.getModuleShallow("file2.ts")?.locals.isLoaded).toBe(true);
+  });
+
+  test("preloadStrategy and preloadPatterns auto-preload matching modules only", async () => {
+    const index = new LazyProjectIndex({
+      preloadStrategy: "critical",
+      preloadPatterns: ["critical/**", "**/*.hot.ts"],
+    });
+
+    let criticalLoaded = false;
+    let regularLoaded = false;
+    let hotLoaded = false;
+
+    index.addModule("critical/entry.ts", {
+      file: "critical/entry.ts",
+      loaded: false,
+      imports: [],
+      exports: [],
+      locals: new LazyArray(async () => {
+        criticalLoaded = true;
+        return [];
+      }),
+    });
+    index.addModule("src/feature.ts", {
+      file: "src/feature.ts",
+      loaded: false,
+      imports: [],
+      exports: [],
+      locals: new LazyArray(async () => {
+        regularLoaded = true;
+        return [];
+      }),
+    });
+    index.addModule("src/alert.hot.ts", {
+      file: "src/alert.hot.ts",
+      loaded: false,
+      imports: [],
+      exports: [],
+      locals: new LazyArray(async () => {
+        hotLoaded = true;
+        return [];
+      }),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(criticalLoaded).toBe(true);
+    expect(hotLoaded).toBe(true);
+    expect(regularLoaded).toBe(false);
+    expect(index.getModuleShallow("critical/entry.ts")?.locals.isLoaded).toBe(true);
+    expect(index.getModuleShallow("src/feature.ts")?.locals.isLoaded).toBe(false);
+    expect(index.getModuleShallow("src/alert.hot.ts")?.locals.isLoaded).toBe(true);
+  });
 });
 
 describe("createSymbolLoader", () => {

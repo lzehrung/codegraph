@@ -256,7 +256,8 @@ export async function tool_findSymbol(
     });
 
     const exportedDefinitionsByFile = new Map<string, Set<string>>();
-    const limitedMatches = matches.slice(0, options.maxResults ?? 20).map((match) => {
+    const limit = getToolDefaultedLimit(options.maxResults, 20);
+    const limitedMatches = matches.slice(0, limit).map((match) => {
       const exportedDefinitions =
         exportedDefinitionsByFile.get(match.symbol.file) ?? getExportedSymbolIdsForFile(index, match.symbol.file);
       exportedDefinitionsByFile.set(match.symbol.file, exportedDefinitions);
@@ -508,6 +509,11 @@ async function collectToolGraph(
 
 function getToolLimit(limit: number | undefined): number | undefined {
   return getFiniteNonNegativeLimit(limit);
+}
+
+function getToolDefaultedLimit(limit: number | undefined, fallback: number): number {
+  const normalizedLimit = getFiniteNonNegativeLimit(limit);
+  return normalizedLimit ?? fallback;
 }
 
 function resolveToolFileInput(
