@@ -21,7 +21,7 @@ npm install
 npm run build
 ```
 
-`npm run build` always rebuilds `dist/` and attempts the local native workspace build when Cargo is available, but it falls back to the JavaScript build output with a warning if the native workspace build is unavailable or fails.
+`npm run build` always rebuilds `dist/`. If Cargo is available, it also requires the local native workspace build to succeed. If Cargo is unavailable, it still completes with the JavaScript build output and a warning.
 
 Use `npm run build:native` when you specifically want to rebuild the native addon and fail fast if Rust is not installed.
 

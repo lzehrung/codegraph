@@ -6,7 +6,7 @@ const SKIP_MESSAGE =
   "[codegraph] Skipping native workspace build because Cargo is unavailable. Install Rust or run a published package install if you need the native addon in this checkout.";
 
 function buildFailureMessage(detail) {
-  return "[codegraph] Native workspace build failed; continuing with the JavaScript build output. " + detail;
+  return "[codegraph] Native workspace build failed. " + detail;
 }
 
 function lockedArtifactMessage(filePath, error) {
@@ -143,16 +143,12 @@ export function runBuildNativeIfAvailable({
   }
 
   if (result.error) {
-    if (strict) {
-      logger.warn(buildFailureMessage(stringifyError(result.error)));
-      return 1;
-    }
     logger.warn(buildFailureMessage(stringifyError(result.error)));
-    return 0;
+    return 1;
   }
 
   const stderr = stderrText(result);
   const failureDetail = stderr || `Exited with status ${result.status ?? "unknown"}.`;
   logger.warn(buildFailureMessage(failureDetail));
-  return strict ? (result.status ?? 1) : 0;
+  return result.status ?? 1;
 }

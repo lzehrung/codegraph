@@ -30,7 +30,7 @@ describe("build-native-if-available", () => {
       logger: { warn },
     });
 
-    expect(exitCode).toBe(0);
+    expect(exitCode).toBe(2);
     expect(spawnSyncImpl).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("synthetic native build failure"));
   });
@@ -140,7 +140,10 @@ describe("build-native-if-available", () => {
 
   it("warns clearly when a Windows native artifact is locked during cleanup", () => {
     const warn = vi.fn();
-    const spawnSyncImpl = vi.fn().mockReturnValueOnce({ status: 0 }).mockReturnValueOnce({ status: 0 });
+    const spawnSyncImpl = vi.fn().mockReturnValueOnce({ status: 0 }).mockReturnValueOnce({
+      status: 1,
+      stderr: "copy artifact failed",
+    });
     const readdirSyncImpl = vi.fn((target: string) => {
       if (target.endsWith("packages\\codegraph-native")) {
         return [{ name: "index.win32-x64-msvc.node", isDirectory: () => false }];
@@ -162,8 +165,9 @@ describe("build-native-if-available", () => {
       rmSyncImpl,
     });
 
-    expect(exitCode).toBe(0);
+    expect(exitCode).toBe(1);
     expect(spawnSyncImpl).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("A packaged native addon appears to be in use"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("copy artifact failed"));
   });
 });

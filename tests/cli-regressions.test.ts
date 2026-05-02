@@ -59,6 +59,10 @@ function isSorted(xs: string[]): boolean {
   return true;
 }
 
+function skillInstallTarget(rootDir: string): string {
+  return path.join(rootDir, "skills", "codegraph");
+}
+
 describe("CLI regressions", () => {
   const samplesRoot = normalize(path.resolve(process.cwd(), "tests", "samples"));
   const tsRoot = normalize(path.resolve(samplesRoot, "typescript"));
@@ -397,7 +401,8 @@ describe("CLI regressions", () => {
 
   it("skill doctor reports the requested target and current install status", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-doctor-"));
-    const stdout = await runCliCommand(["skill", "doctor", "--target", tmpDir]);
+    const targetDir = skillInstallTarget(tmpDir);
+    const stdout = await runCliCommand(["skill", "doctor", "--target", targetDir]);
     const report = JSON.parse(stdout) as {
       bundledSkillDir: string | null;
       bundledArchivePath?: string | null;
@@ -411,10 +416,10 @@ describe("CLI regressions", () => {
 
     expect(report.bundledSkillDir).toContain("codegraph-skill/codegraph");
     expect(report.bundledArchivePath).toBeUndefined();
-    expect(normalize(report.installTargetDir)).toBe(normalize(tmpDir));
-    expect(report.installedSkill.targetDirExists).toBe(true);
+    expect(normalize(report.installTargetDir)).toBe(normalize(targetDir));
+    expect(report.installedSkill.targetDirExists).toBe(false);
     expect(report.installedSkill.skillFilePresent).toBe(false);
-    expect(normalize(report.installedSkill.skillFilePath)).toBe(normalize(path.join(tmpDir, "SKILL.md")));
+    expect(normalize(report.installedSkill.skillFilePath)).toBe(normalize(path.join(targetDir, "SKILL.md")));
   });
 
   it("doctor reports only backend state when no artifact path is provided", async () => {
@@ -553,7 +558,8 @@ describe("CLI regressions", () => {
 
   it("skill install copies the bundled skill into the target directory", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-install-"));
-    const stdout = await runCliCommand(["skill", "install", "--target", tmpDir]);
+    const targetDir = skillInstallTarget(tmpDir);
+    const stdout = await runCliCommand(["skill", "install", "--target", targetDir]);
     const result = JSON.parse(stdout) as {
       installed: boolean;
       skillFilePath: string;
@@ -561,21 +567,30 @@ describe("CLI regressions", () => {
     };
 
     expect(result.installed).toBe(true);
-    expect(normalize(result.targetDir)).toBe(normalize(tmpDir));
-    const installedSkill = await fsp.readFile(path.join(tmpDir, "SKILL.md"), "utf8");
+    expect(normalize(result.targetDir)).toBe(normalize(targetDir));
+    const installedSkill = await fsp.readFile(path.join(targetDir, "SKILL.md"), "utf8");
     expect(installedSkill).toContain("name: codegraph");
-    expect(normalize(result.skillFilePath)).toBe(normalize(path.join(tmpDir, "SKILL.md")));
+    expect(normalize(result.skillFilePath)).toBe(normalize(path.join(targetDir, "SKILL.md")));
   });
 
   it("skill install --force replaces stale files in the target directory", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-force-"));
-    await fsp.writeFile(path.join(tmpDir, "stale.txt"), "old\n", "utf8");
+    const targetDir = skillInstallTarget(tmpDir);
+    await fsp.mkdir(targetDir, { recursive: true });
+    await fsp.writeFile(path.join(targetDir, "stale.txt"), "old\n", "utf8");
 
-    await runCliCommand(["skill", "install", "--target", tmpDir, "--force"]);
+    await runCliCommand(["skill", "install", "--target", targetDir, "--force"]);
 
-    await expect(fsp.stat(path.join(tmpDir, "stale.txt"))).rejects.toThrow();
-    const installedSkill = await fsp.readFile(path.join(tmpDir, "SKILL.md"), "utf8");
+    await expect(fsp.stat(path.join(targetDir, "stale.txt"))).rejects.toThrow();
+    const installedSkill = await fsp.readFile(path.join(targetDir, "SKILL.md"), "utf8");
     expect(installedSkill).toContain("name: codegraph");
+  });
+
+  it("skill install rejects unsafe target directories", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-unsafe-"));
+    await expect(runCliCommand(["skill", "install", "--target", tmpDir, "--force"])).rejects.toThrow(
+      /target directory must end with/i,
+    );
   });
 
   it("grep supports plain-text regex mode via --pattern (and --glob)", async () => {
