@@ -732,6 +732,12 @@ function git(cwd: string, args: string[]): string {
   }).trim();
 }
 
+function initGitRepo(root: string): void {
+  git(root, ["init"]);
+  git(root, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+  git(root, ["config", "core.autocrlf", "false"]);
+}
+
 describe("CLI flows", () => {
   const sampleRoot = normalize(path.resolve(process.cwd(), "tests", "samples", "typescript"));
 
@@ -795,8 +801,7 @@ index 1111111..2222222 100644
 
   it("impact CLI accepts WORKTREE as a git-provider head sentinel", async () => {
     const root = await mkTmpDir("dg-impact-worktree-");
-    git(root, ["init", "--initial-branch=main"]);
-    git(root, ["config", "core.autocrlf", "false"]);
+    initGitRepo(root);
     await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "initial"]);
@@ -817,8 +822,7 @@ index 1111111..2222222 100644
 
   it("review CLI accepts WORKTREE as a git head sentinel", async () => {
     const root = await mkTmpDir("dg-review-worktree-");
-    git(root, ["init", "--initial-branch=main"]);
-    git(root, ["config", "core.autocrlf", "false"]);
+    initGitRepo(root);
     await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 1; }\n", "utf8");
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "initial"]);
@@ -841,8 +845,7 @@ index 1111111..2222222 100644
 
   it("review CLI prints a compact human summary with --summary", async () => {
     const root = await mkTmpDir("dg-review-summary-");
-    git(root, ["init", "--initial-branch=main"]);
-    git(root, ["config", "core.autocrlf", "false"]);
+    initGitRepo(root);
     await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 1; }\n", "utf8");
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "initial"]);
@@ -879,8 +882,7 @@ index 1111111..2222222 100644
     for (let index = 1; index <= 3; index++) {
       await fsp.writeFile(path.join(testsDir, `pattern-${index}.test.ts`), `expect(${index}).toBe(${index});\n`, "utf8");
     }
-    git(root, ["init", "--initial-branch=main"]);
-    git(root, ["config", "core.autocrlf", "false"]);
+    initGitRepo(root);
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "initial"]);
 
@@ -916,8 +918,7 @@ index 1111111..2222222 100644
     for (let index = 1; index <= 3; index++) {
       await fsp.writeFile(path.join(testsDir, `pattern-${index}.test.ts`), `expect(${index}).toBe(${index});\n`, "utf8");
     }
-    git(root, ["init", "--initial-branch=main"]);
-    git(root, ["config", "core.autocrlf", "false"]);
+    initGitRepo(root);
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "initial"]);
 
@@ -944,8 +945,7 @@ index 1111111..2222222 100644
 
   it("review CLI treats --pretty as summary output", async () => {
     const root = await mkTmpDir("dg-review-pretty-");
-    git(root, ["init", "--initial-branch=main"]);
-    git(root, ["config", "core.autocrlf", "false"]);
+    initGitRepo(root);
     await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 1; }\n", "utf8");
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "initial"]);

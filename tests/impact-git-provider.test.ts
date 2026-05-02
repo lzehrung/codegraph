@@ -36,7 +36,8 @@ function writeFile(root: string, relativePath: string, text: string): void {
 function createGitRepo(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-git-provider-"));
   gitRepoRoots.push(root);
-  git(root, ["init", "--initial-branch=main"]);
+  git(root, ["init"]);
+  git(root, ["symbolic-ref", "HEAD", "refs/heads/main"]);
   git(root, ["config", "core.autocrlf", "false"]);
   return root;
 }
