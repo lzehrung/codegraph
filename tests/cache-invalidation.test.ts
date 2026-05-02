@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { buildProjectIndex, buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
 import * as indexer from "../src/indexer.js";
+import { writeManifest, type IndexManifest } from "../src/indexer/build-cache.js";
 import { collectGraph } from "../src/graphs.js";
 import {
   getGitBlobHash,
@@ -57,6 +58,15 @@ async function readManifest(root: string) {
   return JSON.parse(raw);
 }
 
+function createManifest(root: string): IndexManifest {
+  return {
+    version: 1,
+    projectRoot: normalize(path.resolve(root)),
+    updatedAt: Date.now(),
+    files: {},
+  };
+}
+
 function runGit(root: string, args: string[]): string {
   const result = spawnSync("git", args, {
     cwd: root,
@@ -71,6 +81,30 @@ function runGit(root: string, args: string[]): string {
 }
 
 describe("Cache invalidation and strict hashing", () => {
+  it("retries transient manifest write contention without warning after recovery", async () => {
+    const root = await mkTmpDir("dg-manifest-retry-");
+    const transientError = Object.assign(new Error("resource busy or locked"), {
+      code: "EBUSY",
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const writeSpy = vi.spyOn(fsp, "writeFile").mockImplementationOnce(async () => {
+      throw transientError;
+    });
+
+    try {
+      await writeManifest(root, { logLevel: "warn" }, createManifest(root));
+
+      expect(writeSpy).toHaveBeenCalledTimes(2);
+      expect(warnSpy).not.toHaveBeenCalled();
+      const manifest = await readManifest(root);
+      expect(manifest.version).toBe(1);
+      expect(manifest.projectRoot).toBe(normalize(path.resolve(root)));
+    } finally {
+      writeSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
   it("disk cache invalidates when content hash changes even if mtime is restored", async () => {
     const root = await mkTmpDir("dg-cache-inv-");
     const utilPath = path.join(root, "util.ts");
