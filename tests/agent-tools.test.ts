@@ -13,6 +13,7 @@ import {
   tool_goToDefinition,
   tool_findReferences,
   tool_findSymbol,
+  tool_impactJSON,
   tool_impactFromDiffText,
 } from "../src/agent-tools.js";
 
@@ -94,6 +95,29 @@ describe("Agent Tools", () => {
       expect(reverseDependenciesResult.dependents).toEqual([]);
       expect(reverseDependenciesResult.truncated).toBe(true);
     }
+  });
+
+  it("tool_getDependencies and tool_getReverseDependencies ignore non-finite limits", async () => {
+    const baselineDependencies = await tool_getDependencies(samplePath, "main.ts", { depth: 1 });
+    const nanDependencies = await tool_getDependencies(samplePath, "main.ts", { depth: 1, limit: Number.NaN });
+    const infiniteDependencies = await tool_getDependencies(samplePath, "main.ts", {
+      depth: 1,
+      limit: Number.POSITIVE_INFINITY,
+    });
+    expect(nanDependencies).toEqual(baselineDependencies);
+    expect(infiniteDependencies).toEqual(baselineDependencies);
+
+    const baselineDependents = await tool_getReverseDependencies(samplePath, "utils.ts", { depth: 1 });
+    const nanDependents = await tool_getReverseDependencies(samplePath, "utils.ts", {
+      depth: 1,
+      limit: Number.NaN,
+    });
+    const infiniteDependents = await tool_getReverseDependencies(samplePath, "utils.ts", {
+      depth: 1,
+      limit: Number.POSITIVE_INFINITY,
+    });
+    expect(nanDependents).toEqual(baselineDependents);
+    expect(infiniteDependents).toEqual(baselineDependents);
   });
 
   it("tool_getReverseDependencies returns bounded normalized dependents", async () => {
@@ -332,6 +356,46 @@ index 1111111..2222222 100644
       expect("graph" in result.report!).toBe(true);
       expect(result.report?.schemaVersion).toBe(1);
       expect(result.report?.format).toBe("full");
+    }
+  });
+
+  it("reuses a shared index across agent tool wrappers without rebuilding", async () => {
+    const diffText = `diff --git a/utils.ts b/utils.ts
+index 1111111..2222222 100644
+--- a/utils.ts
++++ b/utils.ts
+@@ -1,3 +1,3 @@
+-export function helperFunction() {
++export function helperFunction() {
+   return "Hello from helper";
+ }`;
+    const buildSpy = vi.spyOn(codegraph, "buildProjectIndex");
+    try {
+      const index = await codegraph.buildProjectIndex(samplePath);
+      expect(buildSpy).toHaveBeenCalledTimes(1);
+
+      const overview = await tool_getFileOverview(samplePath, "main.ts", { index });
+      const matches = await tool_findSymbol(samplePath, "helperFunction", { index });
+      const deps = await tool_getDependencies(samplePath, "main.ts", { depth: 1, index });
+      const reverseDeps = await tool_getReverseDependencies(samplePath, "utils.ts", { depth: 1, index });
+      const hotspots = await tool_getHotspots(samplePath, { limit: 5, index });
+      const graph = await tool_getGraph(samplePath, { index });
+      const impact = await tool_impactJSON(samplePath, { provider: "raw", diffText }, { index });
+      const definition = await tool_goToDefinition(samplePath, "main.ts", 7, 25, index);
+      const references = await tool_findReferences(samplePath, "utils.ts", 1, 17, index);
+
+      expect(overview.status).toBe("ok");
+      expect(matches.status).toBe("ok");
+      expect(deps.status).toBe("ok");
+      expect(reverseDeps.status).toBe("ok");
+      expect(hotspots.status).toBe("ok");
+      expect(graph.status).toBe("ok");
+      expect(impact.status).toBe("ok");
+      expect(definition.status).toBe("ok");
+      expect(references.status).toBe("ok");
+      expect(buildSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      buildSpy.mockRestore();
     }
   });
 

@@ -3731,7 +3731,7 @@ const resolvePythonModuleCache = new Map<string, FileId | { external: string }>(
  */
 export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   if (items.length === 0) return [];
-  const safeLimit = Math.max(1, Math.floor(limit));
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : 1;
 
   const results = new Array<R>(items.length);
   let nextIndex = 0;
