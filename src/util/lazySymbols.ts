@@ -6,9 +6,11 @@
  * repositories where only a subset of symbols are actually accessed.
  */
 
+import { supportForFile } from "../languages.js";
 import type { ImportBinding, ModuleIndex, SymbolDef } from "../indexer.js";
 import type { FileId } from "../types.js";
-import { parseFile, collectLocalsAndExportsFromSource } from "../indexer.js";
+import { collectLocalsAndExportsFromSource } from "../indexer.js";
+import { parsePreparedFileContext } from "../indexer/parse-context.js";
 
 /**
  * Lazy-loadable module index
@@ -190,7 +192,6 @@ export type LazyLoadOptions = {
  */
 export class LazyProjectIndex {
   private modules = new Map<FileId, LazyModuleIndex>();
-  private loadedCount = 0;
   private maxCached: number;
 
   constructor(options?: LazyLoadOptions) {
@@ -201,6 +202,7 @@ export class LazyProjectIndex {
    * Add a module with lazy-loaded symbols
    */
   addModule(file: FileId, module: LazyModuleIndex): void {
+    this.syncModuleLoadedFlag(module);
     this.modules.set(file, module);
   }
 
@@ -213,6 +215,7 @@ export class LazyProjectIndex {
 
     // Convert lazy module to regular module
     const locals = await lazy.locals.getAll();
+    this.syncModuleLoadedFlag(lazy);
 
     return {
       file: lazy.file,
@@ -249,6 +252,7 @@ export class LazyProjectIndex {
   getLoadedCount(): number {
     let count = 0;
     for (const mod of this.modules.values()) {
+      this.syncModuleLoadedFlag(mod);
       if (mod.loaded) count++;
     }
     return count;
@@ -260,8 +264,11 @@ export class LazyProjectIndex {
   preload(files: FileId[]): void {
     for (const file of files) {
       const mod = this.modules.get(file);
-      if (mod && !mod.loaded) {
+      if (mod && !this.isModuleLoaded(mod)) {
         mod.locals.preload();
+        void mod.locals.getAll().then(() => {
+          this.syncModuleLoadedFlag(mod);
+        });
       }
     }
   }
@@ -271,9 +278,9 @@ export class LazyProjectIndex {
    */
   evict(keepFiles: Set<FileId>): void {
     for (const [file, mod] of this.modules) {
-      if (!keepFiles.has(file) && mod.loaded) {
+      if (!keepFiles.has(file) && this.isModuleLoaded(mod)) {
         mod.locals.unload();
-        this.loadedCount--;
+        this.syncModuleLoadedFlag(mod);
       }
     }
   }
@@ -297,17 +304,34 @@ export class LazyProjectIndex {
       memoryUsageMB: Math.round(estimatedMemoryMB * 100) / 100,
     };
   }
+
+  private isModuleLoaded(module: LazyModuleIndex): boolean {
+    return module.locals.isLoaded || module.loaded;
+  }
+
+  private syncModuleLoadedFlag(module: LazyModuleIndex): void {
+    module.loaded = module.locals.isLoaded;
+  }
 }
 
 /**
  * Create a lazy loader for a file's symbols
  */
 export function createSymbolLoader(file: FileId, source: string, imports: ImportBinding[]): () => Promise<SymbolDef[]> {
-  return async () => {
-    const parsed = await parseFile(file);
+  return () => {
+    const sup = supportForFile(file);
+    if (!sup) {
+      throw new Error(`Unsupported file extension: ${file}`);
+    }
+    const parsed = parsePreparedFileContext({
+      file,
+      source,
+      sup,
+      nativeQueries: null,
+    });
     const module = collectLocalsAndExportsFromSource(file, source, parsed.sup, parsed.lang, imports, {
       tree: parsed.tree,
     });
-    return module.locals;
+    return Promise.resolve(module.locals);
   };
 }
