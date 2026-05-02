@@ -25,7 +25,7 @@
     "format": "prettier --write . --ignore-unknown",
     "lint": "npx eslint \"src/**/*.ts\" \"tests/**/*.test.ts\"",
     "lint:fix": "npx eslint \"src/**/*.ts\" \"tests/**/*.test.ts\" --fix",
-    "prepare": "npm run build",
+    "prepare": "node ./scripts/prepare-package.mjs",
     "test": "node ./scripts/ensure-dist-for-tests.mjs && vitest",
     "test:all": "npm run test:native && npm run test:ci",
     "test:ci": "node ./scripts/ensure-dist-for-tests.mjs && vitest run",

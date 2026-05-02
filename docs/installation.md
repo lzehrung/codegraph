@@ -25,6 +25,15 @@ npm run build
 
 Use `npm run build:native` when you specifically want to rebuild the native addon and fail fast if Rust is not installed.
 
+To install the current source checkout globally for local testing, build first, then install from the checkout:
+
+```bash
+npm run build
+npm install -g .
+```
+
+The `prepare` script reuses an existing `dist/` build during global installs because npm does not allow workspace builds in global package lifecycle scripts. If `dist/cli.js` is missing, run `npm run build` before `npm install -g .`.
+
 ## Option 2: Install from the `@lzehrung` registry
 
 Configure the scoped registry if you have not already:

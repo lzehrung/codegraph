@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 function readJson(relativePath: string): Record<string, unknown> {
@@ -19,6 +20,22 @@ function readStringRecord(value: unknown): Record<string, string> {
   return Object.fromEntries(
     Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
   );
+}
+
+function readFrontmatter(source: string): string {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(source);
+  return match?.[1] ?? "";
+}
+
+function frontmatterHasUnsafePlainColon(line: string): boolean {
+  const separatorIndex = line.indexOf(":");
+  if (separatorIndex < 0) {
+    return false;
+  }
+
+  const value = line.slice(separatorIndex + 1).trim();
+  const quotedValue = value.startsWith('"') || value.startsWith("'");
+  return !quotedValue && value.includes(": ");
 }
 
 function readNativeArtifactPackages(baseDir: string): Record<string, unknown>[] {
@@ -88,6 +105,14 @@ describe("package metadata", () => {
     expect(files).not.toContain("codegraph.skill");
   });
 
+  it("keeps bundled skill frontmatter safe for Codex YAML parsing", () => {
+    const skillDoc = readText("codegraph-skill/codegraph/SKILL.md");
+    const frontmatter = readFrontmatter(skillDoc);
+
+    expect(frontmatter).toContain('description: "Use for codebase navigation and repo impact analysis:');
+    expect(frontmatter.split(/\r?\n/).filter(frontmatterHasUnsafePlainColon)).toEqual([]);
+  });
+
   it("keeps the published CLI bin path normalized for npm", () => {
     const rootPackage = readJson("package.json");
     const bin = readStringRecord(rootPackage.bin);
@@ -117,6 +142,27 @@ describe("package metadata", () => {
 
     expect(scripts.lint).toBe('npx eslint "src/**/*.ts" "tests/**/*.test.ts"');
     expect(scripts["lint:fix"]).toBe('npx eslint "src/**/*.ts" "tests/**/*.test.ts" --fix');
+  });
+
+  it("routes prepare through the install-aware prepare script", () => {
+    const rootPackage = readJson("package.json");
+    const scripts = readStringRecord(rootPackage.scripts);
+
+    expect(scripts.prepare).toBe("node ./scripts/prepare-package.mjs");
+  });
+
+  it("lets global installs reuse an existing dist build without invoking workspace builds", () => {
+    const result = spawnSync(process.execPath, ["./scripts/prepare-package.mjs"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        npm_config_global: "true",
+      },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Skipping prepare build during global install");
   });
 
   it("does not keep removed plugin-only workspace dependencies in the root package", () => {

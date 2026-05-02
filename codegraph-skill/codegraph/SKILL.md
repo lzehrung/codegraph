@@ -1,6 +1,6 @@
 ---
 name: codegraph
-description: Use for codebase navigation and repo impact analysis: understand an unfamiliar repo, trace dependencies, answer where this is defined or used, find hotspots or cycles, inspect public APIs, and assess what a PR or diff could break.
+description: "Use for codebase navigation and repo impact analysis: understand an unfamiliar repo, trace dependencies, answer where this is defined or used, find hotspots or cycles, inspect public APIs, and assess what a PR or diff could break."
 ---
 
 # Codegraph
@@ -40,8 +40,10 @@ Then choose the narrowest follow-up command that answers the user:
 - Dependency path between files: `codegraph path <from> <to>`
 - Go to definition: `codegraph goto <file> <line> <column>`
 - Find references: `codegraph refs --file <file> --line <line> --col <column> --pretty`
-- PR impact: `codegraph impact --provider git --base main --head HEAD`
-- Agent-ready PR bundle: `codegraph review --base origin/main --head HEAD`
+- PR impact: `codegraph impact --provider git --base main --head HEAD --pretty`
+- Worktree impact: `codegraph impact --provider git --base HEAD --head WORKTREE --pretty`
+- Compact review handoff: `codegraph review --base HEAD --head WORKTREE --summary`
+- Agent-ready full PR bundle: `codegraph review --base origin/main --head HEAD`
 - Public API surface: `codegraph apisurface`
 - Semantic chunks for context packing: `codegraph chunk <file>`
 
@@ -70,10 +72,6 @@ If the CLI is missing, do not suggest the unscoped `codegraph` package. Use one 
 - Repo-local install:
   `npm config set "@lzehrung:registry" "https://npm.pkg.github.com"`
   `npm install --save-dev @lzehrung/codegraph`
-- Source checkout of this repo:
-  `npm install`
-  `npm run build`
-  `node ./dist/cli.js graph --root . --json`
 
 Avoid suggesting `npm install -g codegraph`, `npm install --save-dev codegraph`, or unscoped `npx codegraph` when the package is not already installed locally.
 
@@ -84,14 +82,12 @@ The CLI ships a bundled skill installer:
 - Install into an explicit target:
   Target must end with `/skills/codegraph`.
   `codegraph skill install --target ~/.codex/skills/codegraph --force`
-- Inspect backend/runtime state plus local graph/cache artifacts:
+- Inspect package identity, backend/runtime state, plus local graph/cache artifacts:
   `codegraph doctor`
 - Inspect packaged skill paths and target health:
   `codegraph skill doctor`
 
 Published installs of `@lzehrung/codegraph` depend on `@lzehrung/codegraph-native` as an optional dependency; that package resolves the matching native artifact automatically when one exists for the current platform.
-
-For source checkouts, `npm run build` always rebuilds `dist/`. If Cargo is available, it also requires the local native addon build to succeed. If Cargo is unavailable, it completes with the JavaScript build output and a warning. Use `npm run build:native` when you want a native-only rebuild or a hard failure if Rust is missing.
 
 Install the optional fallback package only when you explicitly need JS Tree-sitter fallback:
 
@@ -150,17 +146,29 @@ Prefer `refs` over plain text search when you want semantic usages rather than e
 ### PR and diff impact
 
 - Git diff impact:
-  `codegraph impact --provider git --base main --head HEAD`
+  `codegraph impact --provider git --base main --head HEAD --pretty`
+- Current worktree impact:
+  `codegraph impact --provider git --base HEAD --head WORKTREE --pretty`
+- Current index impact:
+  `codegraph impact --provider git --base HEAD --head STAGED --pretty`
+- Compact impact JSON:
+  `codegraph impact --provider git --base HEAD --head WORKTREE --compact-json`
 - Exported-only scope:
   `codegraph impact --base main --head HEAD --scope imported`
 - Ignore noisy files:
   `codegraph impact --base main --head HEAD --ignore-glob "**/package-lock.json" "**/dist/**"`
 - Include line context:
   `codegraph impact --base main --head HEAD --ref-context line`
-- Agent-ready review bundle:
+- Compact review handoff:
+  `codegraph review --base HEAD --head WORKTREE --summary`
+- Agent-ready full review bundle:
   `codegraph review --base origin/main --head HEAD`
+- Agent-ready full current worktree bundle:
+  `codegraph review --base HEAD --head WORKTREE`
 
-Review and impact commands are the best fit when the user asks what a change can break, what to test, or where a reviewer should focus.
+Prefer impact `--pretty` first when the user asks what a change can break, what to test, or where a reviewer should focus. Use `review --summary` for compact human handoffs, and use full review JSON only when a script or another agent needs `projectFiles`, `graphDelta`, complete changed-symbol handles, or low-confidence fallback test candidates. In summary output, treat high-confidence candidate tests as first regression targets and medium-confidence tests as likely file-level coverage; low-confidence pattern matches are breadth hints only.
+
+For git-provider impact and git-scoped review/index/graph commands, `WORKTREE` compares the base revision to current staged and unstaged tracked-file changes. Use `STAGED` or `INDEX` to compare the base revision to the current index; with `--base HEAD`, that is staged changes only. Untracked files are outside Git diff output until they are staged or tracked.
 
 ### Architecture and metrics
 
@@ -191,6 +199,8 @@ Review and impact commands are the best fit when the user asks what a change can
   `codegraph index --workers --threads 8`
 
 Graph, index, and review reports include `backend.native.byLanguage` so native usage and fallback are visible per language. Build reports also include `backend.parser` when syntax-tree backend degradation leaves files without parser context. Reports include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Review JSON also reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, and distinguishes `changedFiles[].status` as `updated`, `deleted`, or `missing`.
+
+`codegraph version --json` and `codegraph doctor` report package name, version, and package root. Use them when you need to confirm which installed package the `codegraph` command is running.
 
 Worker threads use a Piscina worker pool to offload per-file Rust extraction across CPU cores. This only applies to `index` and build commands, not `graph`, and falls back silently if the native addon or Piscina is unavailable.
 

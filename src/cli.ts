@@ -62,6 +62,7 @@ import type {
   ImpactItem,
   ReviewDepth,
   ImpactOptions,
+  CandidateTestFile,
 } from "./index.js";
 import {
   assertFilePathWithinRoot,
@@ -271,6 +272,11 @@ type IndexedArtifactReport = {
 };
 
 type DoctorReport = {
+  package: {
+    name: string;
+    version: string;
+    packageRoot: string;
+  };
   native: {
     available: boolean;
     loadError?: string;
@@ -391,6 +397,21 @@ function getCodegraphVersion(): string {
     throw new Error("Unable to determine codegraph package version.");
   }
   return parsed.version;
+}
+
+function getCodegraphPackageIdentity(): DoctorReport["package"] {
+  const packageRoot = getCodegraphPackageRoot();
+  const packageJsonPath = path.join(packageRoot, "package.json");
+  const raw = fs.readFileSync(packageJsonPath, "utf8");
+  const parsed = JSON.parse(raw) as { name?: string; version?: string };
+  if (!parsed.name || !parsed.version) {
+    throw new Error("Unable to determine codegraph package identity.");
+  }
+  return {
+    name: parsed.name,
+    version: parsed.version,
+    packageRoot: normalizePathForDisplay(packageRoot),
+  };
 }
 
 function getBundledSkillDir(packageRoot: string): string | null {
@@ -539,6 +560,7 @@ function buildIndexedArtifactReport(indexPath: string): IndexedArtifactReport {
 function buildDoctorReport(indexPath?: string): DoctorReport {
   const loadError = getNativeTreeSitterLoadError();
   return {
+    package: getCodegraphPackageIdentity(),
     native: {
       available: isNativeTreeSitterAvailable(),
       ...(loadError ? { loadError: String(loadError) } : {}),
@@ -1134,6 +1156,21 @@ function ensureImpactReport(report: ImpactReport | CompactImpactReport): ImpactR
   return result;
 }
 
+const IMPACT_REASON_LABELS: Record<ImpactItem["reasons"][number], string> = {
+  directRef: "reason: direct reference",
+  namespaceMember: "reason: namespace member",
+  importAlias: "reason: import alias",
+  transitive: "reason: transitive dependency",
+  exportChain: "reason: export chain",
+  fileLevelChange: "reason: file-level change",
+};
+
+function formatImpactReasonLabel(item: Pick<ImpactItem, "reasons" | "explain">): string {
+  const primaryReason = item.explain?.reason ?? item.reasons[0];
+  if (!primaryReason) return "reason: impact";
+  return IMPACT_REASON_LABELS[primaryReason];
+}
+
 function formatImpactMermaid(report: ImpactReport, root: string): string {
   const fileGraph: Graph = { nodes: new Set<string>(), edges: [] };
   const ensureFileNode = (file: string) => fileGraph.nodes.add(file);
@@ -1174,6 +1211,109 @@ function formatImpactMermaid(report: ImpactReport, root: string): string {
   return graphToMermaidSymbolsWithFiles(symbolGraph, fileGraph, root);
 }
 
+function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport>>): string {
+  const lines: string[] = [];
+  const candidateCounts = countCandidateTestsByConfidence(report.candidateTests);
+  lines.push("Review Summary");
+  lines.push("==============");
+  lines.push(`Status: ${report.status}`);
+  lines.push(`Files changed: ${report.summary.filesChanged}`);
+  lines.push(`Symbols changed: ${report.summary.symbolsChanged}`);
+  lines.push(
+    `Candidate tests: ${report.summary.candidateTests} (high: ${candidateCounts.high}, medium: ${candidateCounts.medium}, low: ${candidateCounts.low})`,
+  );
+  lines.push(`Risk: ${report.riskSummary.level} (${report.riskSummary.score})`);
+  if (report.riskSummary.signals.length > 0) {
+    lines.push(`Signals: ${report.riskSummary.signals.join(", ")}`);
+  }
+  lines.push("");
+  lines.push("Changed files:");
+  if (report.changedFiles.length === 0) {
+    lines.push("- none");
+  } else {
+    for (const file of report.changedFiles.slice(0, 20)) {
+      const symbolNames = file.symbols.slice(0, 5).map((symbol) => symbol.name);
+      const symbolSummary = symbolNames.length > 0 ? ` (${symbolNames.join(", ")})` : "";
+      lines.push(`- ${file.file}: ${file.status}${symbolSummary}`);
+    }
+    const remainingFiles = report.changedFiles.length - 20;
+    if (remainingFiles > 0) {
+      lines.push(`- ... and ${remainingFiles} more`);
+    }
+  }
+  lines.push("");
+  lines.push("Candidate tests:");
+  if (report.candidateTests.length === 0) {
+    lines.push("- none");
+  } else {
+    const listedCandidates =
+      appendCandidateTestGroup(lines, "High-confidence tests:", report.candidateTests, "high") +
+      appendCandidateTestGroup(lines, "Medium-confidence tests:", report.candidateTests, "medium");
+    if (listedCandidates === 0) {
+      lines.push("No high- or medium-confidence test candidates found.");
+    }
+    appendLowConfidenceCandidateSummary(lines, candidateCounts.low);
+  }
+  lines.push("");
+  lines.push("Review tasks:");
+  if (report.reviewTasks.length === 0) {
+    lines.push("- none");
+  } else {
+    for (const task of report.reviewTasks.slice(0, 8)) {
+      lines.push(`- ${task.id}: ${task.priority} - ${task.title} (${task.reason})`);
+    }
+    const remainingTasks = report.reviewTasks.length - 8;
+    if (remainingTasks > 0) {
+      lines.push(`- ... and ${remainingTasks} more`);
+    }
+  }
+  if (report.diagnostics) {
+    lines.push("");
+    lines.push("Diagnostics:");
+    lines.push(`- missing files: ${report.diagnostics.missingFiles.length}`);
+    lines.push(`- symbol mapping parse failures: ${report.diagnostics.symbolMappingParseFailures.length}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function countCandidateTestsByConfidence(
+  candidates: CandidateTestFile[],
+): Record<CandidateTestFile["confidence"], number> {
+  const counts: Record<CandidateTestFile["confidence"], number> = {
+    high: 0,
+    medium: 0,
+    low: 0,
+  };
+  for (const candidate of candidates) {
+    counts[candidate.confidence] += 1;
+  }
+  return counts;
+}
+
+function appendCandidateTestGroup(
+  lines: string[],
+  title: string,
+  candidates: CandidateTestFile[],
+  confidence: CandidateTestFile["confidence"],
+): number {
+  const matches = candidates.filter((candidate) => candidate.confidence === confidence);
+  if (matches.length === 0) return 0;
+  lines.push(title);
+  for (const candidate of matches.slice(0, 8)) {
+    lines.push(`- ${candidate.file}: ${candidate.reason}`);
+  }
+  const remaining = matches.length - 8;
+  if (remaining > 0) {
+    lines.push(`- ... and ${remaining} more`);
+  }
+  return matches.length;
+}
+
+function appendLowConfidenceCandidateSummary(lines: string[], lowConfidenceCount: number): void {
+  if (lowConfidenceCount === 0) return;
+  lines.push(`Low-confidence pattern matches: ${lowConfidenceCount} available as breadth hints in full JSON.`);
+}
+
 function parseReviewDepth(value: string): ReviewDepth | null {
   if (value === "minimal" || value === "standard" || value === "deep") {
     return value;
@@ -1192,6 +1332,7 @@ function parseNativeRuntimeMode(value: string | undefined): NativeRuntimeMode {
 type ImpactOptionsBuilder = Partial<ImpactOptions> & {
   base?: string;
   head?: string;
+  cwd?: string;
   pr?: number;
   repo?: string;
   diffText?: string;
@@ -1273,13 +1414,18 @@ Examples:
   codegraph skill install --target ~/.codex/skills/codegraph --force
   codegraph skill doctor
   codegraph impact --provider git --base main --head HEAD
+  codegraph impact --provider git --base HEAD --head WORKTREE
   codegraph refs --file src/index.ts --line 42 --col 10
 `);
     process.exit(0);
   }
 
   if (hasFlag("--version")) {
-    writeStdoutLine(getCodegraphVersion());
+    if (hasFlag("--json")) {
+      writeJSONLine(getCodegraphPackageIdentity());
+    } else {
+      writeStdoutLine(getCodegraphVersion());
+    }
     return;
   }
 
@@ -1360,7 +1506,11 @@ Examples:
   };
 
   if (cmd === "version") {
-    writeStdoutLine(getCodegraphVersion());
+    if (hasFlag("--json")) {
+      writeJSONLine(getCodegraphPackageIdentity());
+    } else {
+      writeStdoutLine(getCodegraphVersion());
+    }
     return;
   }
 
@@ -2023,6 +2173,7 @@ Examples:
       }
       options.base = base;
       options.head = head;
+      options.cwd = projectRootFs;
     } else if (provider === "github") {
       const pr = getOpt("--pr");
       const repo = getOpt("--repo");
@@ -2057,6 +2208,8 @@ Examples:
 
     const cacheStrict = hasFlag("--cache-strict");
     if (cacheStrict) options.cacheStrict = true;
+
+    if (hasFlag("--compact") || hasFlag("--compact-json")) options.compact = true;
 
     const maxRefs = getOpt("--max-refs");
     if (maxRefs) options.maxRefs = Number(maxRefs);
@@ -2153,7 +2306,10 @@ Examples:
         writeStdoutLine(`Impacted items: ${impactReport.impacted.length}`);
         writeStdoutLine(``);
         for (const item of impactReport.impacted.slice(0, 10)) {
-          writeStdoutLine(`${item.file}: ${item.symbols.join(", ")} (severity: ${(item.severity * 100).toFixed(1)}%)`);
+          const reasonLabel = formatImpactReasonLabel(item);
+          writeStdoutLine(
+            `${item.file}: ${item.symbols.join(", ")} (${reasonLabel}, severity: ${(item.severity * 100).toFixed(1)}%)`,
+          );
           if ("refs" in item && item.refs && item.refs.length > 0) {
             const contextsToShow = item.refs.slice(0, 2);
             for (const ref of contextsToShow) {
@@ -2235,7 +2391,11 @@ Examples:
       reviewOpts.report = reviewReport;
     }
     const report = await buildReviewReport(projectRootFs, reviewOpts);
-    writeJSONLine(report);
+    if (hasFlag("--summary") || hasFlag("--pretty")) {
+      writeStdoutLine(formatReviewSummary(report).trimEnd());
+    } else {
+      writeJSONLine(report);
+    }
     if (commandReport) {
       commandReport.timings.commandMs = Math.round(performance.now() - commandStart);
       commandReport.timings.totalMs = commandReport.timings.commandMs;
