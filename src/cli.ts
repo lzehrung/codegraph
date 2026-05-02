@@ -1134,6 +1134,21 @@ function ensureImpactReport(report: ImpactReport | CompactImpactReport): ImpactR
   return result;
 }
 
+const IMPACT_REASON_LABELS: Record<ImpactItem["reasons"][number], string> = {
+  directRef: "reason: direct reference",
+  namespaceMember: "reason: namespace member",
+  importAlias: "reason: import alias",
+  transitive: "reason: transitive dependency",
+  exportChain: "reason: export chain",
+  fileLevelChange: "reason: file-level change",
+};
+
+function formatImpactReasonLabel(item: Pick<ImpactItem, "reasons" | "explain">): string {
+  const primaryReason = item.explain?.reason ?? item.reasons[0];
+  if (!primaryReason) return "reason: impact";
+  return IMPACT_REASON_LABELS[primaryReason];
+}
+
 function formatImpactMermaid(report: ImpactReport, root: string): string {
   const fileGraph: Graph = { nodes: new Set<string>(), edges: [] };
   const ensureFileNode = (file: string) => fileGraph.nodes.add(file);
@@ -1172,6 +1187,55 @@ function formatImpactMermaid(report: ImpactReport, root: string): string {
   }
 
   return graphToMermaidSymbolsWithFiles(symbolGraph, fileGraph, root);
+}
+
+function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport>>): string {
+  const lines: string[] = [];
+  lines.push("Review Summary");
+  lines.push("==============");
+  lines.push(`Status: ${report.status}`);
+  lines.push(`Files changed: ${report.summary.filesChanged}`);
+  lines.push(`Symbols changed: ${report.summary.symbolsChanged}`);
+  lines.push(`Candidate tests: ${report.summary.candidateTests}`);
+  lines.push(`Risk: ${report.riskSummary.level} (${report.riskSummary.score})`);
+  if (report.riskSummary.signals.length > 0) {
+    lines.push(`Signals: ${report.riskSummary.signals.join(", ")}`);
+  }
+  lines.push("");
+  lines.push("Changed files:");
+  if (report.changedFiles.length === 0) {
+    lines.push("- none");
+  } else {
+    for (const file of report.changedFiles.slice(0, 20)) {
+      const symbolNames = file.symbols.slice(0, 5).map((symbol) => symbol.name);
+      const symbolSummary = symbolNames.length > 0 ? ` (${symbolNames.join(", ")})` : "";
+      lines.push(`- ${file.file}: ${file.status}${symbolSummary}`);
+    }
+    const remainingFiles = report.changedFiles.length - 20;
+    if (remainingFiles > 0) {
+      lines.push(`- ... and ${remainingFiles} more`);
+    }
+  }
+  lines.push("");
+  lines.push("Candidate tests:");
+  if (report.candidateTests.length === 0) {
+    lines.push("- none");
+  } else {
+    for (const candidate of report.candidateTests.slice(0, 10)) {
+      lines.push(`- ${candidate.file}: ${candidate.confidence} (${candidate.reason})`);
+    }
+    const remainingCandidates = report.candidateTests.length - 10;
+    if (remainingCandidates > 0) {
+      lines.push(`- ... and ${remainingCandidates} more`);
+    }
+  }
+  if (report.diagnostics) {
+    lines.push("");
+    lines.push("Diagnostics:");
+    lines.push(`- missing files: ${report.diagnostics.missingFiles.length}`);
+    lines.push(`- symbol mapping parse failures: ${report.diagnostics.symbolMappingParseFailures.length}`);
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 function parseReviewDepth(value: string): ReviewDepth | null {
@@ -2061,6 +2125,8 @@ Examples:
     const cacheStrict = hasFlag("--cache-strict");
     if (cacheStrict) options.cacheStrict = true;
 
+    if (hasFlag("--compact") || hasFlag("--compact-json")) options.compact = true;
+
     const maxRefs = getOpt("--max-refs");
     if (maxRefs) options.maxRefs = Number(maxRefs);
 
@@ -2156,7 +2222,10 @@ Examples:
         writeStdoutLine(`Impacted items: ${impactReport.impacted.length}`);
         writeStdoutLine(``);
         for (const item of impactReport.impacted.slice(0, 10)) {
-          writeStdoutLine(`${item.file}: ${item.symbols.join(", ")} (severity: ${(item.severity * 100).toFixed(1)}%)`);
+          const reasonLabel = formatImpactReasonLabel(item);
+          writeStdoutLine(
+            `${item.file}: ${item.symbols.join(", ")} (${reasonLabel}, severity: ${(item.severity * 100).toFixed(1)}%)`,
+          );
           if ("refs" in item && item.refs && item.refs.length > 0) {
             const contextsToShow = item.refs.slice(0, 2);
             for (const ref of contextsToShow) {
@@ -2238,7 +2307,11 @@ Examples:
       reviewOpts.report = reviewReport;
     }
     const report = await buildReviewReport(projectRootFs, reviewOpts);
-    writeJSONLine(report);
+    if (hasFlag("--summary") || hasFlag("--pretty")) {
+      writeStdoutLine(formatReviewSummary(report).trimEnd());
+    } else {
+      writeJSONLine(report);
+    }
     if (commandReport) {
       commandReport.timings.commandMs = Math.round(performance.now() - commandStart);
       commandReport.timings.totalMs = commandReport.timings.commandMs;

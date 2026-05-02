@@ -825,4 +825,43 @@ index 1111111..2222222 100644
     expect(report.base).toBe("HEAD");
     expect(report.head).toBe("WORKTREE");
   });
+
+  it("review CLI prints a compact human summary with --summary", async () => {
+    const root = await mkTmpDir("dg-review-summary-");
+    git(root, ["init", "--initial-branch=main"]);
+    git(root, ["config", "core.autocrlf", "false"]);
+    await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 1; }\n", "utf8");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "initial"]);
+
+    await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 2; }\n", "utf8");
+
+    const stdout = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE", "--summary"]);
+
+    expect(stdout.startsWith("Review Summary")).toBe(true);
+    expect(stdout).toContain("Status: ok");
+    expect(stdout).toContain("Files changed: 1");
+    expect(stdout).toContain("Symbols changed:");
+    expect(stdout).toContain("Candidate tests:");
+    expect(stdout).toContain("Risk:");
+    expect(stdout).toContain("Changed files:");
+    expect(stdout).toContain("main.ts");
+    expect(stdout).not.toContain('"projectFiles"');
+  });
+
+  it("review CLI treats --pretty as summary output", async () => {
+    const root = await mkTmpDir("dg-review-pretty-");
+    git(root, ["init", "--initial-branch=main"]);
+    git(root, ["config", "core.autocrlf", "false"]);
+    await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 1; }\n", "utf8");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "initial"]);
+
+    await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 2; }\n", "utf8");
+
+    const summary = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE", "--summary"]);
+    const pretty = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE", "--pretty"]);
+
+    expect(pretty).toBe(summary);
+  });
 });
