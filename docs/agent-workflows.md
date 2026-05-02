@@ -246,8 +246,8 @@ const reverseDeps = await tool_getReverseDependencies(root, "src/index.ts", { de
 const hotspots = await tool_getHotspots(root, { limit: 20, index });
 const impact = await tool_impactJSON(root, {
   provider: "git",
-  base: "main",
-  head: "feature-branch",
+  base: "HEAD",
+  head: "WORKTREE",
 }, { index });
 const definition = await tool_goToDefinition(root, "src/main.ts", 10, 5, index, { native: "on" });
 const references = await tool_findReferences(root, "src/main.ts", 10, 5, index);
@@ -273,6 +273,17 @@ codegraph review --base origin/main --head HEAD > review.json
 codegraph review --base origin/main --head HEAD --include-symbol-details --max-callsites 5 > review.json
 codegraph review --base origin/main --head HEAD --review-depth standard > review.json
 ```
+
+For current local edits, start with a ranked human map, then hand off the compact review summary:
+
+```bash
+codegraph impact --base HEAD --head WORKTREE --pretty
+codegraph review --base HEAD --head WORKTREE --summary
+```
+
+Use `--head STAGED` instead of `WORKTREE` when the review should cover only the index. Keep the full JSON review bundle for scripts or agent steps that need `projectFiles`, `graphDelta`, or detailed symbol handles.
+
+In summary mode, high-confidence direct import matches are the first regression targets and medium matches are likely file-level coverage. Low-confidence pattern matches are summarized as breadth hints; use the full JSON bundle only when you need to inspect those fallback candidates.
 
 These bundles highlight:
 

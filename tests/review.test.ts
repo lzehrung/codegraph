@@ -1116,6 +1116,43 @@ describe("Review report", () => {
     }
   });
 
+  it("does not escalate symbol mapping degradation for document-only files", async () => {
+    const root = await mkTmpDir("dg-review-doc-parse-failure-");
+    const filePath = path.join(root, "README.md");
+    await fsp.writeFile(filePath, `# Guide\n\nInitial text.\n`, "utf8");
+
+    await buildProjectIndex(root);
+
+    const locateSpy = vi.spyOn(impactMap, "locateChangedSymbolsWithLines").mockResolvedValue({
+      changedSymbols: [],
+      changedLines: new Set<number>(),
+      parseFailed: true,
+    });
+
+    try {
+      const report = await buildReviewReport(root, {
+        files: [filePath],
+        diffText: [
+          "diff --git a/README.md b/README.md",
+          "index 1234567..abcdef0 100644",
+          "--- a/README.md",
+          "+++ b/README.md",
+          "@@ -1,3 +1,3 @@",
+          " # Guide",
+          "-Initial text.",
+          "+Updated text.",
+          "",
+        ].join("\n"),
+      });
+
+      expect(report.diagnostics?.symbolMappingParseFailures).toEqual(["README.md"]);
+      expect(report.riskSummary.signals).not.toContain("symbol-mapping-degraded");
+      expect(report.reviewTasks.some((task) => task.reason === "symbol-mapping-degraded")).toBe(false);
+    } finally {
+      locateSpy.mockRestore();
+    }
+  });
+
   it("returns candidate tests after warming the manifest cache", async () => {
     const root = await mkTmpDir("dg-review-candidates-");
     const srcDir = path.join(root, "src");

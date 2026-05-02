@@ -18,6 +18,21 @@ describe("graph reports", () => {
     expect(unresolved[0].importers.length).toBe(2);
   });
 
+  it("does not count Node builtins as unresolved imports", () => {
+    const graphWithBuiltins = {
+      nodes,
+      edges: [
+        ...edges,
+        { from: `${root}/a.ts`, to: { type: "external" as const, name: "node:path" }, raw: "node:path" },
+        { from: `${root}/b.ts`, to: { type: "external" as const, name: "fs" }, raw: "node:fs" },
+      ],
+    };
+
+    const unresolved = getUnresolvedImports(graphWithBuiltins);
+
+    expect(unresolved.map((entry) => entry.name)).toEqual(["react"]);
+  });
+
   it("should get hotspots", () => {
     const hotspots = getHotspots(graph);
     expect(hotspots.length).toBe(2);

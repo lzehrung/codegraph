@@ -84,6 +84,23 @@ describe("impact CLI output", () => {
     expect(stdout).toContain("Changed symbols:");
   });
 
+  it("prints reason labels in pretty impact output", async () => {
+    const stdout = await runImpactCli(["impact", sampleRoot, "--provider", "raw", "--pretty"]);
+
+    expect(stdout).toContain("Impact Analysis Report");
+    expect(stdout).toContain("Changed files: 1");
+    expect(stdout).toMatch(/utils\.ts: .*reason:/);
+  });
+
+  it("accepts --compact-json as an alias for compact impact JSON", async () => {
+    const stdout = await runImpactCli(["impact", sampleRoot, "--provider", "raw", "--compact-json"]);
+    const report = JSON.parse(stdout) as { schemaVersion?: number; format?: string; files?: string[] };
+
+    expect(report.schemaVersion).toBe(1);
+    expect(report.format).toBe("compact");
+    expect(Array.isArray(report.files)).toBe(true);
+  });
+
   it("renders Mermaid output and honors graph/cache flags", async () => {
     const stdout = await runImpactCli([
       "impact",

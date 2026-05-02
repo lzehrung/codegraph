@@ -1,5 +1,6 @@
 import type { FileId, Graph } from "../types.js";
 import { getFiniteNonNegativeLimit } from "./limits.js";
+import { builtinModules } from "node:module";
 
 export type DependencyNode = { file: FileId; depth: number };
 
@@ -22,6 +23,15 @@ export type DetailedCycle = {
 };
 
 export type CycleSortMode = "priority" | "size" | "fanin";
+
+const NODE_BUILTIN_MODULES = new Set<string>([
+  ...builtinModules,
+  ...builtinModules.filter((name) => !name.startsWith("node:")).map((name) => `node:${name}`),
+]);
+
+function isNodeBuiltinSpecifier(specifier: string): boolean {
+  return NODE_BUILTIN_MODULES.has(specifier);
+}
 
 export function getDependencies(
   graph: Graph,
@@ -280,6 +290,7 @@ export function getUnresolvedImports(graph: Graph): Array<{
   const unresolved = new Map<string, Array<{ file: FileId; raw: string }>>();
   for (const edge of graph.edges) {
     if (edge.to.type !== "external") continue;
+    if (isNodeBuiltinSpecifier(edge.to.name) || isNodeBuiltinSpecifier(edge.raw)) continue;
     const importers = unresolved.get(edge.to.name) ?? [];
     importers.push({ file: edge.from, raw: edge.raw });
     unresolved.set(edge.to.name, importers);

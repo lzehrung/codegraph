@@ -11,6 +11,25 @@ import { logWithLevel, type LogLevel } from "./logging.js";
 
 const execFileAsync = promisify(execFile);
 
+export function isGitWorktreeSentinel(value: string): boolean {
+  return value.toUpperCase() === "WORKTREE";
+}
+
+export function isGitIndexSentinel(value: string): boolean {
+  const normalized = value.toUpperCase();
+  return normalized === "INDEX" || normalized === "STAGED";
+}
+
+export function gitDiffArgs(base: string, head: string, extraArgs: string[] = []): string[] {
+  if (isGitWorktreeSentinel(head)) {
+    return ["diff", ...extraArgs, base];
+  }
+  if (isGitIndexSentinel(head)) {
+    return ["diff", "--cached", ...extraArgs, base];
+  }
+  return ["diff", ...extraArgs, `${base}..${head}`];
+}
+
 /** Node-like interface for AST nodes with position info */
 interface NodeLike {
   startIndex: number;
@@ -3471,6 +3490,7 @@ export async function getGitBlobHashes(
 /**
  * List files changed in Git.
  * - base/head: compares commits in the explicit range `${base}..${head ?? "HEAD"}`.
+ *   WORKTREE compares base to the working tree, and STAGED/INDEX compares base to the index.
  * - changedSince: runs `git diff <rev>` (that revision vs current working tree/index).
  */
 export async function listChangedFiles(
@@ -3481,10 +3501,10 @@ export async function listChangedFiles(
     head?: string | undefined;
   },
 ): Promise<string[]> {
-  const args = ["diff", "--name-only", "--diff-filter=ACDMRTUXB"];
+  let args = ["diff", "--name-only", "--diff-filter=ACDMRTUXB"];
   if (opts.base) {
     const head = opts.head ?? "HEAD";
-    args.push(`${opts.base}..${head}`);
+    args = gitDiffArgs(opts.base, head, ["--name-only", "--diff-filter=ACDMRTUXB"]);
   } else if (opts.changedSince) {
     args.push(opts.changedSince);
   } else {
@@ -3514,6 +3534,7 @@ export async function listChangedFiles(
 /**
  * Get unified diff text from Git.
  * - base/head: compares commits in the explicit range `${base}..${head ?? "HEAD"}`.
+ *   WORKTREE compares base to the working tree, and STAGED/INDEX compares base to the index.
  * - changedSince: runs `git diff <rev>` (that revision vs current working tree/index).
  */
 export async function getUnifiedDiff(
@@ -3524,10 +3545,10 @@ export async function getUnifiedDiff(
     head?: string | undefined;
   },
 ): Promise<string> {
-  const args = ["diff", "--unified=0", "--no-color", "--diff-filter=ACDMRTUXB"];
+  let args = ["diff", "--unified=0", "--no-color", "--diff-filter=ACDMRTUXB"];
   if (opts.base) {
     const head = opts.head ?? "HEAD";
-    args.push(`${opts.base}..${head}`);
+    args = gitDiffArgs(opts.base, head, ["--unified=0", "--no-color", "--diff-filter=ACDMRTUXB"]);
   } else if (opts.changedSince) {
     args.push(opts.changedSince);
   } else {

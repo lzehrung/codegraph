@@ -129,6 +129,12 @@ codegraph hotspots ./src --limit 20
 # Analyze PR impact from git history
 codegraph impact --provider git --base main --head HEAD
 
+# Analyze current staged and unstaged worktree changes against HEAD
+codegraph impact --provider git --base HEAD --head WORKTREE
+
+# Analyze the current index against HEAD
+codegraph impact --provider git --base HEAD --head STAGED
+
 # Analyze GitHub PR impact
 codegraph impact --provider github --repo owner/name --pr 123
 
@@ -137,6 +143,9 @@ cat diff.txt | codegraph impact --provider raw
 
 # Pretty summary with severity scores
 codegraph impact --base main --head feature --pretty
+
+# Compact JSON using impact's graph-style alias
+codegraph impact --base main --head feature --compact-json
 
 # Limit analysis depth and reference count
 codegraph impact --base main --head feature --depth 2 --max-refs 1000
@@ -170,11 +179,21 @@ codegraph review --base origin/main --head HEAD > review.json
 codegraph review --base origin/main --head HEAD --include-symbol-details --max-callsites 5 > review.json
 codegraph review --base origin/main --head HEAD --review-depth standard > review.json
 
+# Compact human-readable review handoff
+codegraph review --base origin/main --head HEAD --summary
+codegraph review --base HEAD --head WORKTREE --summary
+
 # File-level graph delta between revisions
 codegraph graph-delta --git-base origin/main --git-head HEAD > graph-delta.json
 ```
 
-Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` so downstream tools can branch on payload shape without inferring it from missing fields. Impact JSON can also include `exportSummary`, `reexportChains`, `topImpacts`, `surfaceArea`, and `clusters` when applicable. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
+For git-provider impact, `--head` accepts normal revisions plus worktree sentinels. Use `WORKTREE` to compare the base revision against the current working tree, including staged and unstaged tracked-file changes. Use `STAGED` or `INDEX` to compare the base revision against the current index; with `--base HEAD`, that is staged changes only. Untracked files are not included until they are staged or otherwise tracked by Git.
+
+Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` so downstream tools can branch on payload shape without inferring it from missing fields. Use `--compact` or `--compact-json` for compact impact JSON. Impact JSON can also include `exportSummary`, `reexportChains`, `topImpacts`, `surfaceArea`, and `clusters` when applicable. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
+
+`codegraph review --summary` prints the changed-file count, changed-symbol count, risk summary, review tasks, and suggested tests without emitting the full `projectFiles` and symbol-detail JSON payload. High- and medium-confidence candidate tests are listed directly; low-confidence pattern matches are summarized as breadth hints and remain available in the full JSON bundle. Use plain `review` output when a downstream tool needs the complete structured bundle.
+
+`inspect` and `unresolved` exclude Node builtins such as `node:path` and `fs` from unresolved-import counts so the diagnostics stay focused on project and package resolution gaps.
 
 ### Doctor and skill commands
 
@@ -182,7 +201,10 @@ Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` 
 # Print the installed CLI version
 codegraph version
 
-# Inspect backend and runtime state
+# Print package identity as JSON
+codegraph version --json
+
+# Inspect package identity plus backend and runtime state
 codegraph doctor
 
 # Inspect one explicit graph or index artifact path
@@ -199,11 +221,15 @@ codegraph skill install --target ~/.codex/skills/codegraph --force
 codegraph skill doctor
 ```
 
+`codegraph version --json` and `codegraph doctor` include the installed package name, version, and package root so local tarball or source-checkout installs can confirm which build the `codegraph` command is actually running. `doctor` also reports backend/runtime state and optional artifact details.
+
 ## Incremental git-scoped runs
 
 Use `--changed-since <ref>` or `--git-base <ref> [--git-head <ref>]` with `graph` and `index` to limit processing to the files reported by `git diff`.
 
 The CLI pipes that file list into `buildProjectIndexFromFiles`, so unchanged files are skipped entirely when you are reviewing a PR.
+
+`--git-head` accepts normal revisions plus the same worktree sentinels used by git-provider impact: `WORKTREE` compares the base revision to staged and unstaged tracked-file changes, while `STAGED` and `INDEX` compare the base revision to the current index.
 
 ## SQLite schema and raw SQL
 
@@ -308,7 +334,7 @@ Important review-bundle details:
 - `schemaVersion` identifies the review JSON schema for CI validation and compatibility checks.
 - `riskSummary` and `reviewTasks` provide agent-ready review focus areas and likely risk hotspots.
 - `changedFiles[].status` distinguishes normal updates from real Git deletions and explicit missing input files.
-- `diagnostics.symbolMappingParseFailures` reports files where symbol-level diff mapping degraded.
+- `diagnostics.symbolMappingParseFailures` reports files where symbol-level diff mapping degraded. Source-language failures affect `symbol-mapping-degraded` risk; graph-first document files remain diagnostics without becoming high-priority source review tasks.
 - `diagnostics.missingFiles` reports explicit paths that were not present on disk.
 - `graph-delta` reports file-level edge additions and removals for changed files and is intended for lightweight CI artifacts.
 - `--include-symbol-details` attaches definition snippets and callsite ranges for changed symbols.
