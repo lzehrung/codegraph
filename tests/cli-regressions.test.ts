@@ -864,7 +864,7 @@ index 1111111..2222222 100644
     expect(stdout).not.toContain('"projectFiles"');
   });
 
-  it("review summary groups candidate tests by confidence", async () => {
+  it("review summary groups candidate tests by confidence without listing low-confidence fallbacks", async () => {
     const root = await mkTmpDir("dg-review-summary-candidates-");
     const srcDir = path.join(root, "src");
     const testsDir = path.join(root, "tests");
@@ -902,8 +902,44 @@ index 1111111..2222222 100644
     expect(stdout).toContain("Candidate tests: 4 (high: 1, medium: 0, low: 3)");
     expect(stdout).toContain("High-confidence tests:");
     expect(stdout).toContain("- tests/feature.test.ts: importsChanged");
-    expect(stdout).toContain("Low-confidence pattern matches:");
-    expect(stdout).toContain("- tests/pattern-1.test.ts");
+    expect(stdout).toContain("Low-confidence pattern matches: 3 available as breadth hints in full JSON.");
+    expect(stdout).not.toContain("- tests/pattern-1.test.ts");
+  });
+
+  it("review summary condenses low-confidence-only test candidates", async () => {
+    const root = await mkTmpDir("dg-review-summary-low-only-");
+    const docsDir = path.join(root, "docs");
+    const testsDir = path.join(root, "tests");
+    await fsp.mkdir(docsDir, { recursive: true });
+    await fsp.mkdir(testsDir, { recursive: true });
+    await fsp.writeFile(path.join(docsDir, "guide.md"), "# Guide\n\nInitial text.\n", "utf8");
+    for (let index = 1; index <= 3; index++) {
+      await fsp.writeFile(path.join(testsDir, `pattern-${index}.test.ts`), `expect(${index}).toBe(${index});\n`, "utf8");
+    }
+    git(root, ["init", "--initial-branch=main"]);
+    git(root, ["config", "core.autocrlf", "false"]);
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "initial"]);
+
+    await fsp.writeFile(path.join(docsDir, "guide.md"), "# Guide\n\nUpdated text.\n", "utf8");
+
+    const stdout = await runCliCommand([
+      "review",
+      "--root",
+      root,
+      "--base",
+      "HEAD",
+      "--head",
+      "WORKTREE",
+      "--summary",
+      "--max-tests",
+      "3",
+    ]);
+
+    expect(stdout).toContain("Candidate tests: 3 (high: 0, medium: 0, low: 3)");
+    expect(stdout).toContain("No high- or medium-confidence test candidates found.");
+    expect(stdout).toContain("Low-confidence pattern matches: 3 available as breadth hints in full JSON.");
+    expect(stdout).not.toContain("- tests/pattern-1.test.ts");
   });
 
   it("review CLI treats --pretty as summary output", async () => {

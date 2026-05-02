@@ -1246,9 +1246,13 @@ function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport
   if (report.candidateTests.length === 0) {
     lines.push("- none");
   } else {
-    appendCandidateTestGroup(lines, "High-confidence tests:", report.candidateTests, "high");
-    appendCandidateTestGroup(lines, "Medium-confidence tests:", report.candidateTests, "medium");
-    appendCandidateTestGroup(lines, "Low-confidence pattern matches:", report.candidateTests, "low");
+    const listedCandidates =
+      appendCandidateTestGroup(lines, "High-confidence tests:", report.candidateTests, "high") +
+      appendCandidateTestGroup(lines, "Medium-confidence tests:", report.candidateTests, "medium");
+    if (listedCandidates === 0) {
+      lines.push("No high- or medium-confidence test candidates found.");
+    }
+    appendLowConfidenceCandidateSummary(lines, candidateCounts.low);
   }
   lines.push("");
   lines.push("Review tasks:");
@@ -1291,9 +1295,9 @@ function appendCandidateTestGroup(
   title: string,
   candidates: CandidateTestFile[],
   confidence: CandidateTestFile["confidence"],
-): void {
+): number {
   const matches = candidates.filter((candidate) => candidate.confidence === confidence);
-  if (matches.length === 0) return;
+  if (matches.length === 0) return 0;
   lines.push(title);
   for (const candidate of matches.slice(0, 8)) {
     lines.push(`- ${candidate.file}: ${candidate.reason}`);
@@ -1302,6 +1306,12 @@ function appendCandidateTestGroup(
   if (remaining > 0) {
     lines.push(`- ... and ${remaining} more`);
   }
+  return matches.length;
+}
+
+function appendLowConfidenceCandidateSummary(lines: string[], lowConfidenceCount: number): void {
+  if (lowConfidenceCount === 0) return;
+  lines.push(`Low-confidence pattern matches: ${lowConfidenceCount} available as breadth hints in full JSON.`);
 }
 
 function parseReviewDepth(value: string): ReviewDepth | null {

@@ -166,7 +166,7 @@ Prefer `refs` over plain text search when you want semantic usages rather than e
 - Agent-ready full current worktree bundle:
   `codegraph review --base HEAD --head WORKTREE`
 
-Prefer impact `--pretty` first when the user asks what a change can break, what to test, or where a reviewer should focus. Use `review --summary` for compact human handoffs, and use full review JSON only when a script or another agent needs `projectFiles`, `graphDelta`, or complete changed-symbol handles. In summary output, treat high-confidence candidate tests as first regression targets, medium-confidence tests as likely file-level coverage, and low-confidence pattern matches as breadth hints.
+Prefer impact `--pretty` first when the user asks what a change can break, what to test, or where a reviewer should focus. Use `review --summary` for compact human handoffs, and use full review JSON only when a script or another agent needs `projectFiles`, `graphDelta`, complete changed-symbol handles, or low-confidence fallback test candidates. In summary output, treat high-confidence candidate tests as first regression targets and medium-confidence tests as likely file-level coverage; low-confidence pattern matches are breadth hints only.
 
 For git-provider impact and git-scoped review/index/graph commands, `WORKTREE` compares the base revision to current staged and unstaged tracked-file changes. Use `STAGED` or `INDEX` to compare the base revision to the current index; with `--base HEAD`, that is staged changes only. Untracked files are outside Git diff output until they are staged or tracked.
 

@@ -283,7 +283,7 @@ codegraph review --base HEAD --head WORKTREE --summary
 
 Use `--head STAGED` instead of `WORKTREE` when the review should cover only the index. Keep the full JSON review bundle for scripts or agent steps that need `projectFiles`, `graphDelta`, or detailed symbol handles.
 
-In summary mode, candidate tests are grouped by confidence. Treat high-confidence direct import matches as the first regression targets, medium matches as likely file-level coverage, and low-confidence pattern matches as breadth hints rather than proof of coverage.
+In summary mode, high-confidence direct import matches are the first regression targets and medium matches are likely file-level coverage. Low-confidence pattern matches are summarized as breadth hints; use the full JSON bundle only when you need to inspect those fallback candidates.
 
 These bundles highlight:
 

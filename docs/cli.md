@@ -191,7 +191,7 @@ For git-provider impact, `--head` accepts normal revisions plus worktree sentine
 
 Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` so downstream tools can branch on payload shape without inferring it from missing fields. Use `--compact` or `--compact-json` for compact impact JSON. Impact JSON can also include `exportSummary`, `reexportChains`, `topImpacts`, `surfaceArea`, and `clusters` when applicable. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
 
-`codegraph review --summary` prints the changed-file count, changed-symbol count, risk summary, review tasks, and suggested tests without emitting the full `projectFiles` and symbol-detail JSON payload. Candidate tests are grouped by high, medium, and low confidence so broad pattern matches do not look equivalent to direct import coverage. Use plain `review` output when a downstream tool needs the complete structured bundle.
+`codegraph review --summary` prints the changed-file count, changed-symbol count, risk summary, review tasks, and suggested tests without emitting the full `projectFiles` and symbol-detail JSON payload. High- and medium-confidence candidate tests are listed directly; low-confidence pattern matches are summarized as breadth hints and remain available in the full JSON bundle. Use plain `review` output when a downstream tool needs the complete structured bundle.
 
 `inspect` and `unresolved` exclude Node builtins such as `node:path` and `fs` from unresolved-import counts so the diagnostics stay focused on project and package resolution gaps.
 
