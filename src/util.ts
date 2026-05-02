@@ -3731,6 +3731,7 @@ const resolvePythonModuleCache = new Map<string, FileId | { external: string }>(
  */
 export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   if (items.length === 0) return [];
+  const safeLimit = Math.max(1, Math.floor(limit));
 
   const results = new Array<R>(items.length);
   let nextIndex = 0;
@@ -3741,7 +3742,7 @@ export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) =>
 
   const startNext = (): void => {
     if (aborted) return;
-    while (activeCount < limit && nextIndex < items.length) {
+    while (activeCount < safeLimit && nextIndex < items.length) {
       if (aborted) return;
       const index = nextIndex++;
       const item = items[index]!;
