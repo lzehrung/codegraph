@@ -25,15 +25,6 @@ Do not use Codegraph as the only evidence source for secrets, literal strings, l
 
 For an unfamiliar repo, start with a health check and a bounded summary. Use `./src` when it exists; otherwise use the product-code directory or `.` for a whole-repo pass.
 
-When the current repo is the Codegraph source checkout, use the freshly built local CLI so you do not accidentally exercise an older global install:
-
-```bash
-node ./dist/cli.js doctor
-node ./dist/cli.js inspect ./src --limit 20
-```
-
-For other repos with Codegraph installed, use:
-
 ```bash
 codegraph doctor
 codegraph inspect ./src --limit 20
