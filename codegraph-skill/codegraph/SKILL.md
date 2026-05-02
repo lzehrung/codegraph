@@ -188,6 +188,7 @@ For git-provider impact and git-scoped review/index/graph commands, `WORKTREE` c
   `codegraph hotspots ./src --limit 20`
 - Semantic chunking:
   `codegraph chunk <file>`
+  Uses semantic Tree-sitter chunks for registered source and stylesheet languages, block-aware chunks for Vue and Svelte single-file components, and text chunks for JSON, YAML, or unsupported extensions.
 
 ### Diagnostics and performance
 

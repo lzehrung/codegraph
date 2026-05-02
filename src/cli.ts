@@ -100,6 +100,25 @@ function writeError(error: unknown) {
   writeStderrLine(String(error));
 }
 
+const chunkLanguageAliases: Record<string, string> = {
+  js: "javascript",
+  ts: "typescript",
+};
+
+const chunkTextLanguageByExtension: Record<string, string> = {
+  ".json": "json",
+  ".yaml": "yaml",
+  ".yml": "yaml",
+};
+
+const chunkLanguageHelp = Array.from(
+  new Set([...Object.keys(LANG_CONFIGS).sort(), "vue", "svelte", "json", "yaml", "text"]),
+).join(", ");
+
+function normalizeChunkLanguageId(languageId: string): string {
+  return chunkLanguageAliases[languageId] ?? languageId;
+}
+
 function formatNativeBackendStatus(report: BuildReport | undefined): string | undefined {
   const native = report?.backend?.native;
   if (!native) return undefined;
@@ -2639,9 +2658,7 @@ Examples:
       writeStderrLine("Options:");
       writeStderrLine("  --min-tokens N    Minimum tokens per chunk (default: 150)");
       writeStderrLine("  --max-tokens N    Maximum tokens per chunk (default: 400)");
-      writeStderrLine(
-        "  --language LANG   Language override (javascript, typescript, tsx, python, php, zig, vue, svelte, json, yaml, text)",
-      );
+      writeStderrLine(`  --language LANG   Language override (${chunkLanguageHelp})`);
       writeStderrLine("  --text            Force text chunking mode");
       process.exit(2);
     }
@@ -2653,25 +2670,10 @@ Examples:
       // Detect language from extension if not specified
       let languageId = getOpt("--language");
       if (!languageId) {
-        const extMap: Record<string, string> = {
-          ".js": "javascript",
-          ".jsx": "javascript",
-          ".mjs": "javascript",
-          ".cjs": "javascript",
-          ".ts": "typescript",
-          ".mts": "typescript",
-          ".cts": "typescript",
-          ".tsx": "tsx",
-          ".py": "python",
-          ".php": "php",
-          ".zig": "zig",
-          ".json": "json",
-          ".yaml": "yaml",
-          ".yml": "yaml",
-          ".vue": "vue",
-          ".svelte": "svelte",
-        };
-        languageId = extMap[ext] || "text";
+        const support = supportForFile(filePath);
+        languageId = support ? normalizeChunkLanguageId(support.id) : chunkTextLanguageByExtension[ext] || "text";
+      } else {
+        languageId = normalizeChunkLanguageId(languageId);
       }
 
       const forceText = hasFlag("--text");
@@ -2683,7 +2685,7 @@ Examples:
       let chunks;
 
       const isSFC = languageId === "vue" || languageId === "svelte";
-      if (forceText || (!isSFC && !["javascript", "typescript", "tsx", "python", "php", "zig"].includes(languageId))) {
+      if (forceText || (!isSFC && !LANG_CONFIGS[languageId])) {
         // Use text chunking for non-code files or when forced
         chunks = chunkTextFile({
           source,
