@@ -9,6 +9,7 @@ It is built for agent and human workflows that need repo structure fast without 
 - [Why Codegraph](#why-codegraph)
 - [Features](#features)
 - [Quick start](#quick-start)
+- [Agent setup](#agent-setup)
 - [Common workflows](#common-workflows)
 - [Supported languages](#supported-languages)
 - [Documentation](#documentation)
@@ -108,9 +109,20 @@ node ./dist/cli.js apisurface
 
 If you install the published CLI instead of using a source checkout, replace `node ./dist/cli.js` with `codegraph`.
 
+## Agent setup
+
+Using Codex or another skill-aware agent? Install the bundled skill so repo navigation, semantic references, dependency tracing, and PR impact questions route to Codegraph automatically:
+
+```bash
+codegraph skill install
+```
+
+To inspect the packaged skill paths and target health, run `codegraph skill doctor`.
+
 ## Common workflows
 
 - Repo triage: run `codegraph inspect ./src --limit 20`, then follow with `codegraph hotspots ./src --limit 20` or `codegraph unresolved` to focus the next pass.
+- Symbol navigation: use `codegraph goto <file> <line> <column>` and `codegraph refs --file <file> --line <line> --col <column> --pretty` when a question is about definitions or semantic usages rather than matching strings.
 - PR review: run `codegraph review --base origin/main --head HEAD > review.json` for an agent-ready bundle, or `codegraph impact --base origin/main --head HEAD --pretty` for a shorter human-readable summary.
 - Visual graph exploration: run `codegraph graph --root . ./src --compact-json --output codegraph.json`, then open `docs/graph-visualization/` to inspect the graph in the browser viewer app.
 - Public API inspection: run `codegraph apisurface` to summarize exported symbols before refactors, reviews, or release checks.

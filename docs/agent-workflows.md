@@ -2,6 +2,8 @@
 
 Guidance for sessions, streaming queries, tool wrappers, and review-oriented agent loops.
 
+Use Codegraph for structural repo questions: architecture, dependency direction, symbol definitions, semantic references, hotspots, cycles, public API surface, and PR impact. Use plain text search alongside it for raw strings, logs, config keys, and non-symbol patterns.
+
 ## Start here
 
 For an unfamiliar repo, the shortest useful loop is:
