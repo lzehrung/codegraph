@@ -26,7 +26,7 @@ export type CycleSortMode = "priority" | "size" | "fanin";
 
 const NODE_BUILTIN_MODULES = new Set<string>([
   ...builtinModules,
-  ...builtinModules.map((name) => `node:${name}`),
+  ...builtinModules.filter((name) => !name.startsWith("node:")).map((name) => `node:${name}`),
 ]);
 
 function isNodeBuiltinSpecifier(specifier: string): boolean {

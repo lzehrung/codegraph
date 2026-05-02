@@ -441,7 +441,7 @@ describe("CLI regressions", () => {
 
     expect(report.package.name).toBe(packageJson.name);
     expect(report.package.version).toBe(packageJson.version);
-    expect(normalize(report.package.packageRoot).endsWith("/codegraph")).toBe(true);
+    expect(normalize(report.package.packageRoot)).toBe(normalize(process.cwd()));
     expect(typeof report.native.available).toBe("boolean");
     expect(Array.isArray(report.native.supportedLanguageIds)).toBe(true);
     expect(report.indexArtifact).toBeUndefined();
