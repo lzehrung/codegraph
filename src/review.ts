@@ -19,7 +19,7 @@ import {
   type SymbolDef,
   symbolId,
 } from "./indexer.js";
-import type { GraphBuildOptions } from "./graphs.js";
+import type { GraphBuildOptions } from "./graphs/types.js";
 import { locateChangedSymbolsWithLines, mapChangedLinesToSymbols } from "./impact/map.js";
 import { parseUnifiedDiff } from "./impact/parse.js";
 import type { FileChange, Hunk } from "./impact/types.js";

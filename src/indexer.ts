@@ -1,4 +1,7 @@
-import type { SymbolGraph, GraphBuildOptions, FallbackImportExtractionEvent } from "./graphs.js";
+import type { FallbackImportExtractionEvent } from "./graphs/specifiers.js";
+import { buildSymbolGraphDetailed } from "./graphs/symbol-graph-detailed.js";
+import type { SymbolGraph } from "./graphs/symbol-graph.js";
+import type { GraphBuildOptions } from "./graphs/types.js";
 import {
   ensureParsedContext as ensureParsedContextFromModule,
   parseFile as parseFileFromModule,
@@ -184,6 +187,5 @@ export function buildScopeIndexFromSource(
 }
 
 export async function __buildSymbolGraphDetailedCompat(index: ProjectIndex): Promise<SymbolGraph> {
-  const { buildSymbolGraphDetailed } = await import("./index.js");
   return await buildSymbolGraphDetailed(index);
 }

@@ -10,9 +10,14 @@
 
 import type { BuildOptions } from "./indexer.js";
 import type { ImpactOptions } from "./impact/types.js";
-import type { SessionOptions } from "./session.js";
 
 export type PresetName = "code-review" | "ci-fast" | "development" | "production";
+
+export type SessionPresetOptions = {
+  buildOptions?: BuildOptions;
+  timeout?: number;
+  incremental?: boolean;
+};
 
 /**
  * Build option presets
@@ -139,7 +144,7 @@ export const IMPACT_PRESETS: Record<PresetName, Partial<ImpactOptions>> = {
 /**
  * Session presets
  */
-export const SESSION_PRESETS: Record<PresetName, Omit<SessionOptions, "root">> = {
+export const SESSION_PRESETS: Record<PresetName, SessionPresetOptions> = {
   "code-review": {
     buildOptions: BUILD_PRESETS["code-review"],
     timeout: 30 * 60 * 1000, // 30 minutes
@@ -182,7 +187,7 @@ export function getImpactPreset(preset: PresetName): Partial<ImpactOptions> {
 /**
  * Get session options for a preset
  */
-export function getSessionPreset(preset: PresetName, root: string): SessionOptions {
+export function getSessionPreset(preset: PresetName, root: string): SessionPresetOptions & { root: string } {
   return {
     root,
     ...SESSION_PRESETS[preset],

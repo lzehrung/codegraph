@@ -34,8 +34,26 @@ const NODE_BUILTIN_MODULES = new Set<string>([
   ...builtinModules.filter((name) => !name.startsWith("node:")).map((name) => `node:${name}`),
 ]);
 
+const DOCUMENT_ONLY_CYCLE_EXTENSIONS = new Set([
+  ".md",
+  ".mdx",
+  ".rst",
+  ".adoc",
+  ".asciidoc",
+]);
+
 function isNodeBuiltinSpecifier(specifier: string): boolean {
   return NODE_BUILTIN_MODULES.has(specifier);
+}
+
+function isDocumentOnlyCycleFile(file: string): boolean {
+  const normalized = file.toLowerCase().split(/[?#]/, 1)[0] ?? "";
+  for (const extension of DOCUMENT_ONLY_CYCLE_EXTENSIONS) {
+    if (normalized.endsWith(extension)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function getDependencies(
@@ -225,6 +243,9 @@ export function findDetailedCycles(
   const cycleDetails: DetailedCycle[] = [];
   for (const component of stronglyConnectedComponents) {
     const files = component.map((index) => nodes[index]!);
+    if (files.every(isDocumentOnlyCycleFile)) {
+      continue;
+    }
     const componentFiles = new Set(files);
     const internalEdges: CycleInternalEdge[] = [];
     const entryEdges: CycleInternalEdge[] = [];

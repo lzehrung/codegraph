@@ -1,10 +1,14 @@
-import type { FallbackImportExtractionReason, GraphBuildOptions } from "../graphs.js";
+import type { FallbackImportExtractionReason } from "../graphs/specifiers.js";
+import type { GraphBuildOptions } from "../graphs/types.js";
 import type { LogLevel } from "../logging.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
-import type { ScopeIndex } from "./scope.js";
+import type { ScopeIndex } from "./scope-types.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import type { Edge, FileId, Graph, Range } from "../types.js";
 import type { ProjectFileDiscoveryOptions, ProjectFileInfo } from "../util.js";
+import type { ImportBinding } from "./import-types.js";
+
+export type { ImportBinding } from "./import-types.js";
 
 export enum SymbolKind {
   Function = "function",
@@ -48,49 +52,6 @@ export type ExportEntry =
       moduleSpecifier?: string;
       sourceSpecifier: string;
       typeOnly?: boolean;
-    };
-
-export type ImportBinding =
-  | {
-      kind: "default";
-      local: string;
-      from: string;
-      resolved?: FileId | { external: string };
-      typeOnly?: boolean;
-      mechanism?: "es" | "cjs" | "python" | "php";
-      resolvedType?: "heuristic" | "precise";
-      confidence?: number;
-    }
-  | {
-      kind: "named";
-      local: string;
-      imported: string;
-      from: string;
-      phpImportType?: "class" | "function" | "const";
-      resolved?: FileId | { external: string };
-      typeOnly?: boolean;
-      mechanism?: "es" | "cjs" | "python" | "php";
-      resolvedType?: "heuristic" | "precise";
-      confidence?: number;
-    }
-  | {
-      kind: "namespace";
-      localNS: string;
-      from: string;
-      resolved?: FileId | { external: string };
-      typeOnly?: boolean;
-      mechanism?: "es" | "cjs" | "python" | "php";
-      resolvedType?: "heuristic" | "precise";
-      confidence?: number;
-    }
-  | {
-      kind: "star";
-      from: string;
-      resolved?: FileId | { external: string };
-      typeOnly?: boolean;
-      mechanism?: "es" | "cjs" | "python" | "php";
-      resolvedType?: "heuristic" | "precise";
-      confidence?: number;
     };
 
 export type ModuleIndex = {

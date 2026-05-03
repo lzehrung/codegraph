@@ -1,4 +1,4 @@
-import type { ProjectIndex } from "../index.js";
+import type { ProjectIndex } from "../indexer/types.js";
 import type { FileId } from "../types.js";
 
 export type SymbolNodeKind =
