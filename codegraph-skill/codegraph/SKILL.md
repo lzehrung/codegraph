@@ -246,6 +246,8 @@ const references = await tool_findReferences(root, "src/main.ts", 10, 5, undefin
 const impact = await tool_impactJSON(root, { provider: "git", base: "main", head: "HEAD", compact: true });
 ```
 
+When integrating Codegraph into another TypeScript program, do not treat CLI prose as the contract. Use `buildReviewReport()`, `analyzeImpactFromDiff()`, or `analyzeImpactStreaming()` and preserve structured fields until the final prompt or UI rendering step.
+
 ## Best practices
 
 - Prefer bounded commands first: `inspect`, `deps`, `rdeps`, `hotspots`, `goto`, `refs`, and compact JSON impact/review payloads.

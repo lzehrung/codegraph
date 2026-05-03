@@ -4,17 +4,19 @@
  */
 
 import type { ProjectIndex } from "../indexer.js";
-import type { ImpactOptions, ChangedSymbol, ImpactItem } from "./types.js";
+import type { ImpactOptions, ChangedSymbol, FileChange, ImpactItem, ImpactStreamSummaryReport } from "./types.js";
 import { getDiff } from "./providers/base.js";
-import { locateChangedSymbolsWithLines } from "./map.js";
 import { analyzeImpact } from "./analyzer.js";
 import { discoverProjectFiles, type ProjectFileInfo } from "../util.js";
+import { buildImpactReport } from "./report.js";
 import {
-  createImpactIgnoreMatcher,
-  normalizeImpactDiffFiles,
-  normalizeImpactFilePath,
-  toImpactReportFilePath,
-} from "./path.js";
+  applyChangedFileSymbolMapping,
+  createImpactDiagnostics,
+  listFileLevelFallbackPaths,
+  mapChangedFileSymbols,
+} from "./collect.js";
+import { createImpactIgnoreMatcher, normalizeImpactDiffFiles, toImpactReportFilePath } from "./path.js";
+import { collectImpactReportSuggestions } from "./report-suggestions.js";
 
 export type ImpactStreamChunk =
   | { type: "projectFiles"; files: ProjectFileInfo[] }
@@ -24,6 +26,7 @@ export type ImpactStreamChunk =
   | {
       type: "complete";
       summary: { totalChanged: number; totalImpacted: number };
+      report: ImpactStreamSummaryReport;
     }
   | { type: "error"; error: string };
 
@@ -72,8 +75,13 @@ function createAsyncQueue<T>(): AsyncQueue<T> {
 }
 
 /**
- * Stream impact analysis results as they're discovered
- * This is much better for agent UX as they can start reasoning immediately
+ * Stream impact analysis results as they are discovered.
+ *
+ * Consumers receive progress, `changedSymbol`, and `impactItem` chunks before
+ * the final `complete` chunk. `complete.report` is the structured integration
+ * payload for function callers and includes the same key extras as the batch
+ * impact report, including suggestions, export summaries, re-export chains,
+ * graph edges, cycles, diagnostics, and schema metadata.
  */
 export async function* analyzeImpactStreaming(
   projectRoot: string,
@@ -97,6 +105,7 @@ export async function* analyzeImpactStreaming(
     const { ignoreGlobs = [] } = options;
     const isIgnored = createImpactIgnoreMatcher(projectRoot, ignoreGlobs);
     const normalizedDiff = normalizeImpactDiffFiles(projectRoot, diff.files, isIgnored);
+    const diagnostics = createImpactDiagnostics(diff.files.length, normalizedDiff.ignoredCount);
 
     // Step 2: Map changed files to symbols
     yield {
@@ -106,16 +115,13 @@ export async function* analyzeImpactStreaming(
       total: 4,
     };
 
-    let changedSymbols: ChangedSymbol[] = [];
+    const changedSymbols: ChangedSymbol[] = [];
     const filesWithSymbols = new Set<string>();
-    for (const fileChange of normalizedDiff.files) {
-      const absPath = normalizeImpactFilePath(projectRoot, fileChange.path);
-      const mapped = await locateChangedSymbolsWithLines(index, absPath, fileChange.hunks);
-      const symbols = mapped.changedSymbols;
-
-      if (symbols.length > 0) filesWithSymbols.add(absPath);
-      const emittedSymbols = options.scope === "imported" ? symbols.filter((symbol) => symbol.exported) : symbols;
-      for (const symbol of emittedSymbols) {
+    for (let idx = 0; idx < normalizedDiff.files.length; idx += 1) {
+      const fileChange = normalizedDiff.files[idx]!;
+      const mapped = await mapChangedFileSymbols(index, fileChange, idx);
+      const symbols = applyChangedFileSymbolMapping(mapped, options, diagnostics, filesWithSymbols);
+      for (const symbol of symbols) {
         yield {
           type: "changedSymbol",
           symbol: {
@@ -137,9 +143,7 @@ export async function* analyzeImpactStreaming(
 
     const normalizedChanges = normalizedDiff.files;
     const fileLevelFallback = options.fileLevelFallback ?? true;
-    const fileLevelFallbackPaths = normalizedChanges
-      .filter((change) => change.kind !== "deleted" && !filesWithSymbols.has(change.path))
-      .map((change) => change.path);
+    const fileLevelFallbackPaths = listFileLevelFallbackPaths(normalizedChanges, filesWithSymbols);
     const impactQueue = createAsyncQueue<ImpactStreamChunk>();
     const emittedSignatures = new Set<string>();
     let impactedItems: ImpactItem[] = [];
@@ -164,6 +168,7 @@ export async function* analyzeImpactStreaming(
       projectRoot,
       fileLevelFallback,
       fileLevelFallbackPaths,
+      diagnostics,
       onImpactItem: (item, phase) => {
         queueImpactItem(item, phase === "partial");
       },
@@ -200,12 +205,55 @@ export async function* analyzeImpactStreaming(
       total: 4,
     };
 
+    const suggestions = await collectImpactReportSuggestions(
+      projectRoot,
+      index,
+      options,
+      normalizedChanges,
+      changedSymbols,
+    );
+    const fullReport = await buildImpactReport(
+      projectRoot,
+      index,
+      normalizedChanges,
+      changedSymbols,
+      impactedItems,
+      suggestions,
+      { ...options, compact: false, warning: diff.warning },
+      diagnostics,
+    );
+    if (fullReport.format !== "full") {
+      yield {
+        type: "error",
+        error: "Expected full impact report while building streaming summary",
+      };
+      return;
+    }
+    const report: ImpactStreamSummaryReport = {
+      schemaVersion: fullReport.schemaVersion,
+      format: "stream-summary",
+      changedFiles: fullReport.changedFiles,
+      changedSymbols: fullReport.changedSymbols,
+      impacted: fullReport.impacted,
+      ...(fullReport.suggestions ? { suggestions: fullReport.suggestions } : {}),
+      ...(fullReport.exportSummary ? { exportSummary: fullReport.exportSummary } : {}),
+      ...(fullReport.reexportChains ? { reexportChains: fullReport.reexportChains } : {}),
+      topImpacts: fullReport.topImpacts ?? [],
+      surfaceArea: fullReport.surfaceArea,
+      clusters: fullReport.clusters,
+      cycles: fullReport.cycles ?? [],
+      graph: fullReport.graph,
+      diagnostics: fullReport.diagnostics ?? diagnostics,
+      ...(fullReport.warning ? { warning: fullReport.warning } : {}),
+    };
+
     yield {
       type: "complete",
       summary: {
-        totalChanged: changedSymbols.length,
-        totalImpacted: impactedItems.length,
+        totalChanged: report.changedSymbols.length,
+        totalImpacted: report.impacted.length,
       },
+      report,
     };
   } catch (error) {
     yield {

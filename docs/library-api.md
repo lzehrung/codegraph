@@ -331,7 +331,17 @@ const references = await tool_findReferences(root, "src/main.ts", 10, 5, index);
 const impact = await tool_impactJSON(root, { provider: "git", base: "HEAD", head: "WORKTREE" }, { index });
 ```
 
-Human-readable summaries such as `codegraph review --summary` and `codegraph impact --pretty` are CLI presentation modes. Library callers should use `buildReviewReport()` or `tool_impactJSON()` and format only the selected fields they need.
+### Programmatic review and impact output
+
+Use the exported TypeScript APIs when another program is composing deterministic review packets, file packs, or model prompts. CLI `--pretty` and `--summary` output is optimized for humans reading a terminal; it is not the stable integration contract.
+
+- `buildReviewReport()` returns a review bundle with `schemaVersion`, changed files, changed symbols, `graphDelta`, candidate tests, `riskSummary`, `reviewTasks`, and diagnostics.
+- `analyzeImpactFromDiff()` returns the full or compact impact report shape for batch consumers.
+- `analyzeImpactStreaming()` emits progress and incremental chunks, then a final `complete.report` summary with the same key structured fields needed by pack builders: changed files, changed symbols, impacted items, suggestions, export summaries, re-export chains, top impacts, surface area, clusters, cycles, graph edges, diagnostics, and warning text.
+
+Review-pack builders should preserve symbol handles, diff snippets, callsites, diagnostics, candidate-test confidence, impact reasons, and graph edge metadata. Render prose only at the final UI or prompt boundary.
+
+Human-readable summaries such as `codegraph review --summary` and `codegraph impact --pretty` are CLI presentation modes. Library callers should use `buildReviewReport()`, `analyzeImpactFromDiff()`, `analyzeImpactStreaming()`, or `tool_impactJSON()` and format only the selected fields they need.
 
 Useful wrapper details:
 

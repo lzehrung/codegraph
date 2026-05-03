@@ -63,6 +63,13 @@ export type ModuleIndex = {
 
 export type ResolvedExport = { kind: "resolved"; def: SymbolDef } | { kind: "namespace"; file: FileId };
 
+/**
+ * In-memory structural model for one project snapshot.
+ *
+ * Build this once with `buildProjectIndex()` or an incremental variant, then
+ * reuse it across graph, navigation, review, impact, and agent-tool calls that
+ * should agree on the same repo state.
+ */
 export type ProjectIndex = {
   graph: Graph;
   modules: Map<FileId, ModuleIndex>;
@@ -76,6 +83,13 @@ export type ProjectIndex = {
   projectFiles?: ProjectFileInfo[];
 };
 
+/**
+ * Options for full index construction.
+ *
+ * For deterministic agent packs, the most common choices are `native: "auto"`,
+ * optional `discovery` globs, and a `report` object when the caller wants
+ * timings/backend diagnostics alongside the resulting index.
+ */
 export type BuildOptions = {
   onProgress?: ((progress: import("../types.js").ProgressUpdate) => void) | undefined;
   threads?: number;
@@ -97,6 +111,12 @@ export type BuildOptions = {
   discovery?: ProjectFileDiscoveryOptions;
 };
 
+/**
+ * Options for manifest-backed incremental indexing.
+ *
+ * `gitHead` accepts normal revisions plus the `WORKTREE`, `STAGED`, and `INDEX`
+ * sentinels used by review agents analyzing uncommitted changes.
+ */
 export type IncrementalBuildOptions = BuildOptions & {
   files?: string[];
   changedSince?: string;
@@ -226,8 +246,10 @@ export type GraphDeltaReport = {
   removed: Edge[];
 };
 
+/** Stable symbol handle suitable for storing in review packets and resolving later. */
 export type SymbolHandle = string;
 
+/** Lightweight symbol listing item returned by `listSymbols()`. */
 export type SymbolListItem = {
   id: SymbolHandle;
   file: FileId;
@@ -237,6 +259,7 @@ export type SymbolListItem = {
   docstring?: string;
 };
 
+/** Export-oriented view of the indexed public API surface. */
 export type ApiSurface = Array<{
   file: FileId;
   exports: Array<{
