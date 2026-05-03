@@ -224,9 +224,7 @@ function syncRootNativeOptionalDependency(pkg, nativeVersion) {
     return pkg;
   }
   const optionalDependencies =
-    pkg.optionalDependencies &&
-    typeof pkg.optionalDependencies === "object" &&
-    !Array.isArray(pkg.optionalDependencies)
+    pkg.optionalDependencies && typeof pkg.optionalDependencies === "object" && !Array.isArray(pkg.optionalDependencies)
       ? { ...pkg.optionalDependencies }
       : null;
   if (!optionalDependencies || typeof optionalDependencies["@lzehrung/codegraph-native"] !== "string") {
@@ -266,6 +264,22 @@ export function recoverRootPackageManifestForResume(currentPkg, sourcePkg) {
 
 export function recoverNativePackageManifestForResume(currentPkg, sourcePkg) {
   return restoreNativePackageManifest(sourcePkg, currentPkg.version);
+}
+
+export function prepareNativePackageManifestForPublish(sourcePkg, version, generatedPkg) {
+  const generatedOptionalDependencies =
+    generatedPkg.optionalDependencies &&
+    typeof generatedPkg.optionalDependencies === "object" &&
+    !Array.isArray(generatedPkg.optionalDependencies)
+      ? Object.fromEntries(
+          Object.entries(generatedPkg.optionalDependencies).sort(([left], [right]) => left.localeCompare(right)),
+        )
+      : {};
+  return {
+    ...sourcePkg,
+    version,
+    optionalDependencies: generatedOptionalDependencies,
+  };
 }
 
 export function restoreNativePackageManifest(pkg, version) {

@@ -762,7 +762,7 @@ async function buildInspectReport(
     ...(progressHandler ? { progressHandler } : {}),
   });
   const hotspots = getHotspots(graph, { limit });
-  const unresolved = getUnresolvedImports(graph);
+  const unresolved = getUnresolvedImports(graph, { projectRoot });
   const cycles = sortDetailedCycles(findDetailedCycles(graph), "priority");
   const loadError = getNativeTreeSitterLoadError(nativeMode);
   return {
@@ -2557,7 +2557,7 @@ Examples:
       await listProjectFilesForScan(projectRootFs),
       hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined,
     );
-    const unresolved = getUnresolvedImports(graph);
+    const unresolved = getUnresolvedImports(graph, { projectRoot: projectRootFs });
 
     if (json) {
       writeJSONLine(unresolved);

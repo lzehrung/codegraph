@@ -9,6 +9,7 @@ import {
   getReleasePackage,
   isAllowedResumePath,
   parseGitStatusPaths,
+  prepareNativePackageManifestForPublish,
   recoverNativePackageManifestForResume,
   recoverRootPackageManifestForResume,
   releasePackages,
@@ -200,6 +201,19 @@ function writePublishReadyRootPackage(versionPlan) {
   );
 }
 
+function writePublishReadyNativePackage(versionPlan) {
+  const intendedVersion = versionPlan.get("native");
+  if (!intendedVersion) {
+    return;
+  }
+  const sourceManifest = JSON.parse(originalNativePackageJson);
+  const generatedManifest = readJson(nativePackagePath);
+  writeJson(
+    nativePackagePath,
+    prepareNativePackageManifestForPublish(sourceManifest, intendedVersion, generatedManifest),
+  );
+}
+
 function restoreRootPackage(versionPlan) {
   const intendedVersion = versionPlan.get("root");
   if (!intendedVersion) {
@@ -207,7 +221,10 @@ function restoreRootPackage(versionPlan) {
     return;
   }
   const sourceManifest = JSON.parse(originalRootPackageJson);
-  writeJson(rootPackagePath, restoreRootPackageManifest(sourceManifest, intendedVersion, readJson(nativePackagePath).version));
+  writeJson(
+    rootPackagePath,
+    restoreRootPackageManifest(sourceManifest, intendedVersion, readJson(nativePackagePath).version),
+  );
 }
 
 function doesLocalTagExist(tagName) {
@@ -414,6 +431,7 @@ if (shouldPublish) {
         continue;
       }
       if (step === "publishNativeMeta") {
+        writePublishReadyNativePackage(versionPlan);
         run("npm", ["run", "publish:native:meta"]);
         continue;
       }

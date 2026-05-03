@@ -184,6 +184,9 @@ For git-provider impact and git-scoped review/index/graph commands, `WORKTREE` c
   `codegraph cycles --sort priority`
 - Public API surface:
   `codegraph apisurface`
+- Unresolved project imports:
+  `codegraph unresolved`
+  Excludes known runtime/package externals: supported-language standard libraries, URL imports, and dependencies declared in nearby `package.json`, `requirements.txt`, `pyproject.toml`, `composer.json`, `Cargo.toml`, `go.mod`, or `build.zig.zon` manifests.
 - Hotspots:
   `codegraph hotspots ./src --limit 20`
 - Semantic chunking:

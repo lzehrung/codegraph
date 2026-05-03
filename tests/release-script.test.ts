@@ -10,6 +10,7 @@ import {
   parseGitStatusPaths,
   recoverNativePackageManifestForResume,
   recoverRootPackageManifestForResume,
+  prepareNativePackageManifestForPublish,
   restoreRootPackageManifest,
   restoreNativePackageManifest,
   sanitizeJsFallbackPackageManifest,
@@ -293,6 +294,41 @@ describe("release script helpers", () => {
       files: ["index.js", "index.d.ts"],
       napi: {
         packageName: "@lzehrung/codegraph-native",
+      },
+    });
+  });
+
+  it("keeps generated native platform dependencies in the publish manifest", () => {
+    expect(
+      prepareNativePackageManifestForPublish(
+        {
+          name: "@lzehrung/codegraph-native",
+          version: "1.8.49",
+          files: ["index.js", "index.d.ts"],
+          napi: {
+            packageName: "@lzehrung/codegraph-native",
+          },
+        },
+        "1.8.50",
+        {
+          name: "@lzehrung/codegraph-native",
+          version: "1.8.50",
+          optionalDependencies: {
+            "@lzehrung/codegraph-native-win32-x64-msvc": "1.8.50",
+            "@lzehrung/codegraph-native-linux-x64-gnu": "1.8.50",
+          },
+        },
+      ),
+    ).toEqual({
+      name: "@lzehrung/codegraph-native",
+      version: "1.8.50",
+      files: ["index.js", "index.d.ts"],
+      napi: {
+        packageName: "@lzehrung/codegraph-native",
+      },
+      optionalDependencies: {
+        "@lzehrung/codegraph-native-linux-x64-gnu": "1.8.50",
+        "@lzehrung/codegraph-native-win32-x64-msvc": "1.8.50",
       },
     });
   });

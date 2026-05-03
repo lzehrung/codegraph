@@ -1,6 +1,7 @@
 import type { FileId, Graph } from "../types.js";
 import { getFiniteNonNegativeLimit } from "./limits.js";
 import { builtinModules } from "node:module";
+import { classifyExternalSpecifier, type ExternalSpecifierClassificationOptions } from "./external-classifier.js";
 
 export type DependencyNode = { file: FileId; depth: number };
 
@@ -283,7 +284,12 @@ export function findDetailedCycles(
   return sortDetailedCycles(cycleDetails, "priority");
 }
 
-export function getUnresolvedImports(graph: Graph): Array<{
+export type UnresolvedImportOptions = ExternalSpecifierClassificationOptions;
+
+export function getUnresolvedImports(
+  graph: Graph,
+  opts: UnresolvedImportOptions = {},
+): Array<{
   name: string;
   importers: Array<{ file: FileId; raw: string }>;
 }> {
@@ -291,6 +297,13 @@ export function getUnresolvedImports(graph: Graph): Array<{
   for (const edge of graph.edges) {
     if (edge.to.type !== "external") continue;
     if (isNodeBuiltinSpecifier(edge.to.name) || isNodeBuiltinSpecifier(edge.raw)) continue;
+    const classification = classifyExternalSpecifier({
+      raw: edge.raw,
+      externalName: edge.to.name,
+      importerFile: edge.from,
+      options: opts,
+    });
+    if (classification.status !== "unresolved") continue;
     const importers = unresolved.get(edge.to.name) ?? [];
     importers.push({ file: edge.from, raw: edge.raw });
     unresolved.set(edge.to.name, importers);
