@@ -1,7 +1,8 @@
-import type { FallbackImportExtractionReason, GraphBuildOptions } from "../graphs.js";
+import type { FallbackImportExtractionReason } from "../graphs/specifiers.js";
+import type { GraphBuildOptions } from "../graphs/types.js";
 import type { LogLevel } from "../logging.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
-import type { ScopeIndex } from "./scope.js";
+import type { ScopeIndex } from "./scope-types.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import type { Edge, FileId, Graph, Range } from "../types.js";
 import type { ProjectFileDiscoveryOptions, ProjectFileInfo } from "../util.js";

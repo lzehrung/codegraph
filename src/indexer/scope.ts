@@ -6,38 +6,9 @@ import type { LanguageSupport } from "../languages.js";
 import type { JsLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import type { ImportBinding } from "./types.js";
+import type { Binding, BindingKind, Scope, ScopeIndex } from "./scope-types.js";
 
-export type BindingKind =
-  | "local"
-  | "param"
-  | "function"
-  | "class"
-  | "type"
-  | "importDefault"
-  | "importNamed"
-  | "namespace";
-
-export type Binding = {
-  name: string;
-  kind: BindingKind;
-  def?: Range;
-  node?: SyntaxNodeLike;
-  occurrences: Range[];
-  import?: ImportBinding;
-};
-
-export type Scope = {
-  kind: "module" | "function" | "block";
-  map: Map<string, Binding>;
-  node: SyntaxNodeLike;
-  parent: Scope | undefined;
-};
-
-export type ScopeIndex = {
-  bindings: Map<string, Binding[]>;
-  all: Binding[];
-  allScopes: Scope[];
-};
+export type { Binding, BindingKind, Scope, ScopeIndex };
 
 export function buildScopeIndexFromSource(
   file: string,

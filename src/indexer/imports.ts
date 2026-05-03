@@ -31,8 +31,8 @@ import { logWithLevel, type LogLevel } from "../logging.js";
 import {
   type FallbackImportExtractionEvent,
   type FallbackImportExtractionReason,
-  type GraphBuildOptions,
-} from "../graphs.js";
+} from "../graphs/specifiers.js";
+import type { GraphBuildOptions } from "../graphs/types.js";
 import {
   extractGraphOnlyModuleSpecifiers,
   graphOnlyLanguageSupportsImportAliases,

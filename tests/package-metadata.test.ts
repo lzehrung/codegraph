@@ -13,6 +13,25 @@ function readText(relativePath: string): string {
   return fs.readFileSync(path.resolve(process.cwd(), relativePath), "utf8");
 }
 
+function listFilesRecursive(relativePath: string, extension: string): string[] {
+  const root = path.resolve(process.cwd(), relativePath);
+  const files: string[] = [];
+  const visit = (directory: string) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const absolutePath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(absolutePath);
+        continue;
+      }
+      if (entry.isFile() && absolutePath.endsWith(extension)) {
+        files.push(path.relative(process.cwd(), absolutePath).replace(/\\/g, "/"));
+      }
+    }
+  };
+  visit(root);
+  return files.sort();
+}
+
 function readStringRecord(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object") {
     return {};
@@ -142,6 +161,19 @@ describe("package metadata", () => {
 
     expect(scripts.lint).toBe('npx eslint "src/**/*.ts" "tests/**/*.test.ts"');
     expect(scripts["lint:fix"]).toBe('npx eslint "src/**/*.ts" "tests/**/*.test.ts" --fix');
+  });
+
+  it("keeps implementation modules from importing through the public barrel", () => {
+    const barrelImportPattern =
+      /\b(?:import|export)\s+(?:type\s+)?(?:[\s\S]*?\s+from\s+)?["'](?:\.\/|\.\.\/)index\.js["']|import\(["'](?:\.\/|\.\.\/)index\.js["']\)/;
+    const offenders = listFilesRecursive("src", ".ts").filter((relativePath) => {
+      if (relativePath === "src/index.ts") {
+        return false;
+      }
+      return barrelImportPattern.test(readText(relativePath));
+    });
+
+    expect(offenders).toEqual([]);
   });
 
   it("routes prepare through the install-aware prepare script", () => {

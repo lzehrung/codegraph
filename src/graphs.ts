@@ -83,7 +83,8 @@ import {
   type SymbolVisibility,
 } from "./graphs/symbol-graph.js";
 import { buildSymbolGraphDetailed } from "./graphs/symbol-graph-detailed.js";
-import { type BuildReport, type ProjectIndex } from "./index.js";
+import type { GraphBuildOptions, GraphCacheEntry } from "./graphs/types.js";
+import type { BuildReport, ProjectIndex } from "./indexer/types.js";
 import type { ParsedFileContext } from "./indexer/parse-context.js";
 import type { SyntaxTreeLike } from "./languages/types.js";
 
@@ -96,22 +97,7 @@ export type { AstGrepHit, CycleInternalEdge, CycleSortMode, DependencyNode, Deta
 export type { CollectModuleSpecifiersOptions, FallbackImportExtractionEvent, FallbackImportExtractionReason };
 export type { HotspotOptions, TextGrepHit };
 export type { SymbolEdge, SymbolGraph, SymbolNode, SymbolNodeKind, SymbolVisibility };
-
-export type GraphBuildOptions = {
-  fast?: boolean;
-  fastRegexDisabledLanguages?: string[];
-  resolveNodeModules?: boolean;
-  dynamicImportHeuristics?: boolean;
-  resolutionHints?: string[];
-  native?: NativeRuntimeMode;
-  logLevel?: LogLevel;
-};
-
-export type GraphCacheEntry = {
-  sig: string;
-  gitSig?: string;
-  edges: Edge[];
-};
+export type { GraphBuildOptions, GraphCacheEntry };
 
 const cloneEdge = (edge: Edge): Edge => ({
   ...edge,
