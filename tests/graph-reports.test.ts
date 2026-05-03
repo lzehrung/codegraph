@@ -403,29 +403,35 @@ describe("graph reports", () => {
 
   it("bounds external classifier caches across many roots", () => {
     resetExternalClassifierCaches();
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cg-unresolved-cache-bound-"));
 
-    for (let index = 0; index < 700; index++) {
-      const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cg-unresolved-cache-bound-"));
-      fs.writeFileSync(
-        path.join(projectRoot, "package.json"),
-        JSON.stringify({ dependencies: { [`package-${index}`]: "^1.0.0" } }),
-        "utf8",
-      );
-      const srcFile = path.join(projectRoot, "app.ts");
-      getUnresolvedImports(
-        {
-          nodes: new Set([srcFile]),
-          edges: [
-            { from: srcFile, to: { type: "external" as const, name: `package-${index}` }, raw: `package-${index}` },
-          ],
-        },
-        { projectRoot },
-      );
+    try {
+      for (let index = 0; index < 700; index++) {
+        const projectRoot = path.join(tempRoot, `project-${index}`);
+        fs.mkdirSync(projectRoot);
+        fs.writeFileSync(
+          path.join(projectRoot, "package.json"),
+          JSON.stringify({ dependencies: { [`package-${index}`]: "^1.0.0" } }),
+          "utf8",
+        );
+        const srcFile = path.join(projectRoot, "app.ts");
+        getUnresolvedImports(
+          {
+            nodes: new Set([srcFile]),
+            edges: [
+              { from: srcFile, to: { type: "external" as const, name: `package-${index}` }, raw: `package-${index}` },
+            ],
+          },
+          { projectRoot },
+        );
+      }
+
+      const stats = getExternalClassifierCacheStats();
+      expect(stats.dependencyManifests).toBeLessThanOrEqual(512);
+      expect(stats.declaredPackageContexts).toBeLessThanOrEqual(512);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
-
-    const stats = getExternalClassifierCacheStats();
-    expect(stats.dependencyManifests).toBeLessThanOrEqual(512);
-    expect(stats.declaredPackageContexts).toBeLessThanOrEqual(512);
   });
 
   it("does not count supported-language stdlib and URL externals as unresolved imports", () => {

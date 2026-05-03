@@ -453,6 +453,7 @@ function addGemspecDependencies(filePath: string, declaredPackages: Set<string>)
   const raw = readText(filePath);
   if (raw === null) return false;
   for (const dependency of raw.matchAll(/add(?:_runtime)?_dependency|add_development_dependency/g)) {
+    if (dependency.index === undefined) continue;
     const afterMatch = raw.slice(dependency.index);
     const packageName = afterMatch.match(/["']([^"']+)["']/)?.[1];
     if (packageName) declaredPackages.add(packageName);
