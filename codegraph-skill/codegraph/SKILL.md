@@ -186,7 +186,7 @@ For git-provider impact and git-scoped review/index/graph commands, `WORKTREE` c
   `codegraph apisurface`
 - Unresolved project imports:
   `codegraph unresolved`
-  Excludes known runtime/package externals: supported-language standard libraries, URL imports, and dependencies declared in nearby `package.json`, `requirements.txt`, `pyproject.toml`, `composer.json`, `Cargo.toml`, `go.mod`, or `build.zig.zon` manifests.
+  Excludes known runtime/package externals: supported-language standard libraries, URL imports, and dependencies declared in nearby manifests such as `package.json`, Python, PHP, Rust, Go, Zig, Ruby, Java/Kotlin, .NET, C/C++, and Swift package manifests.
 - Hotspots:
   `codegraph hotspots ./src --limit 20`
 - Semantic chunking:

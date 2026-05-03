@@ -195,7 +195,7 @@ Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` 
 
 `codegraph review --summary` prints the changed-file count, changed-symbol count, risk summary, review tasks, and suggested tests without emitting the full `projectFiles` and symbol-detail JSON payload. High- and medium-confidence candidate tests are listed directly; low-confidence pattern matches are summarized as breadth hints and remain available in the full JSON bundle. Use plain `review` output when a downstream tool needs the complete structured bundle.
 
-`inspect` and `unresolved` exclude known runtime and package externals from unresolved-import counts so diagnostics stay focused on project resolution gaps. This includes Node builtins such as `node:path` and `fs`, supported-language standard library imports, URL imports, and dependencies declared in nearby manifests such as `package.json`, `requirements.txt`, `pyproject.toml`, `composer.json`, `Cargo.toml`, `go.mod`, and `build.zig.zon`.
+`inspect` and `unresolved` exclude known runtime and package externals from unresolved-import counts so diagnostics stay focused on project resolution gaps. This includes Node builtins such as `node:path` and `fs`, supported-language standard library imports, URL imports, and dependencies declared in nearby manifests such as `package.json`, `requirements.txt`, `requirements.in`, `pyproject.toml`, `setup.cfg`, `Pipfile`, `composer.json`, `Cargo.toml`, `go.mod`, `build.zig.zon`, `Gemfile`, `*.gemspec`, `pom.xml`, `build.gradle`, `build.gradle.kts`, `*.csproj`, `*.fsproj`, `*.vbproj`, `vcpkg.json`, and `Package.swift`.
 
 ### Doctor and skill commands
 

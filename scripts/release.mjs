@@ -421,7 +421,6 @@ if (shouldPublish) {
   if (publishPlan.publishNativeTargets) {
     run("npm", ["run", "native:create-npm-dirs"]);
     run("npm", ["run", "native:stage-local"]);
-    run("npm", ["run", "native:sync-meta"]);
   }
   try {
     normalizeManagedManifests(versionPlan);
@@ -430,8 +429,12 @@ if (shouldPublish) {
         run("npm", ["run", "publish:native:targets"]);
         continue;
       }
-      if (step === "publishNativeMeta") {
+      if (step === "prepareNativeMeta") {
+        run("npm", ["run", "native:sync-meta"]);
         writePublishReadyNativePackage(versionPlan);
+        continue;
+      }
+      if (step === "publishNativeMeta") {
         run("npm", ["run", "publish:native:meta"]);
         continue;
       }

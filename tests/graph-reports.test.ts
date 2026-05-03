@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getUnresolvedImports, getHotspots, getApiSurface, SymbolKind } from "../src/index.js";
+import { getExternalClassifierCacheStats, resetExternalClassifierCaches } from "../src/graphs/external-classifier.js";
 
 describe("graph reports", () => {
   const root = "/root";
@@ -94,12 +95,81 @@ describe("graph reports", () => {
     expect(unresolved.map((entry) => entry.name)).toEqual(["missing-package"]);
   });
 
-  it("does not count declared Python, PHP, Rust, Go, and Zig dependencies as unresolved imports", () => {
+  it("does not read dependency manifests beyond the nearest project manifest boundary", () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cg-unresolved-boundary-"));
+    const childRoot = path.join(repoRoot, "child");
+    const projectRoot = path.join(childRoot, "src");
+    fs.mkdirSync(projectRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          "parent-only-package": "^1.0.0",
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(childRoot, "package.json"), JSON.stringify({ name: "child" }), "utf8");
+    const srcFile = path.join(projectRoot, "app.ts");
+    const graphWithParentOnlyPackage = {
+      nodes: new Set([srcFile]),
+      edges: [
+        { from: srcFile, to: { type: "external" as const, name: "parent-only-package" }, raw: "parent-only-package" },
+      ],
+    };
+
+    const unresolved = getUnresolvedImports(graphWithParentOnlyPackage, { projectRoot });
+
+    expect(unresolved.map((entry) => entry.name)).toEqual(["parent-only-package"]);
+  });
+
+  it("does not read dependency manifests outside the nearest git boundary", () => {
+    const outerRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cg-unresolved-git-boundary-"));
+    const repoRoot = path.join(outerRoot, "repo");
+    const projectRoot = path.join(repoRoot, "src");
+    fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+    fs.mkdirSync(projectRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(outerRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          "outside-git-package": "^1.0.0",
+        },
+      }),
+      "utf8",
+    );
+    const srcFile = path.join(projectRoot, "app.ts");
+    const graphWithOuterPackage = {
+      nodes: new Set([srcFile]),
+      edges: [
+        { from: srcFile, to: { type: "external" as const, name: "outside-git-package" }, raw: "outside-git-package" },
+      ],
+    };
+
+    const unresolved = getUnresolvedImports(graphWithOuterPackage, { projectRoot });
+
+    expect(unresolved.map((entry) => entry.name)).toEqual(["outside-git-package"]);
+  });
+
+  it("does not count declared supported-language package dependencies as unresolved imports", () => {
     const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cg-unresolved-multi-manifest-"));
     fs.writeFileSync(path.join(projectRoot, "requirements.txt"), "requests>=2\nclick==8.1.7\n", "utf8");
+    fs.writeFileSync(path.join(projectRoot, "requirements.in"), "rich>=13\n", "utf8");
     fs.writeFileSync(
       path.join(projectRoot, "pyproject.toml"),
-      ["[project]", 'dependencies = ["httpx>=0.28"]'].join("\n"),
+      [
+        "[project]",
+        'dependencies = ["httpx>=0.28"]',
+        "[tool.poetry.dependencies]",
+        'python = "^3.11"',
+        'pydantic = "^2.0"',
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(projectRoot, "setup.cfg"), "[options]\ninstall_requires =\n    attrs>=23\n", "utf8");
+    fs.writeFileSync(
+      path.join(projectRoot, "Pipfile"),
+      ["[packages]", 'pendulum = "*"', "[dev-packages]", 'pytest = "*"'].join("\n"),
       "utf8",
     );
     fs.writeFileSync(
@@ -149,8 +219,60 @@ describe("graph reports", () => {
         "        .known_dep = .{",
         '            .url = "https://example.com/known_dep.tar.gz",',
         "        },",
+        '        ."foo-bar" = .{',
+        '            .url = "https://example.com/foo-bar.tar.gz",',
+        "        },",
         "    },",
         "}",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(projectRoot, "Gemfile"),
+      ['source "https://rubygems.org"', 'gem "rails"', "gem 'sidekiq'"].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(projectRoot, "sample.gemspec"),
+      [
+        "Gem::Specification.new do |spec|",
+        '  spec.add_dependency "rack"',
+        "  spec.add_development_dependency 'rspec'",
+        "end",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(projectRoot, "pom.xml"),
+      [
+        "<project><dependencies><dependency>",
+        "<groupId>org.slf4j</groupId>",
+        "<artifactId>slf4j-api</artifactId>",
+        "</dependency></dependencies></project>",
+      ].join(""),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(projectRoot, "build.gradle"),
+      ["dependencies {", '  implementation "com.google.guava:guava:33.0.0-jre"', "}"].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(projectRoot, "App.csproj"),
+      '<Project><ItemGroup><PackageReference Include="Newtonsoft.Json" Version="13.0.3" /></ItemGroup></Project>',
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(projectRoot, "vcpkg.json"),
+      JSON.stringify({ dependencies: ["fmt", { name: "boost-filesystem" }] }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(projectRoot, "Package.swift"),
+      [
+        "let package = Package(",
+        '  dependencies: [.package(name: "Alamofire", url: "https://example.com/alamofire.git", from: "5.0.0")]',
+        ")",
       ].join("\n"),
       "utf8",
     );
@@ -159,12 +281,35 @@ describe("graph reports", () => {
     const rustFile = path.join(projectRoot, "lib.rs");
     const goFile = path.join(projectRoot, "main.go");
     const zigFile = path.join(projectRoot, "main.zig");
+    const rubyFile = path.join(projectRoot, "main.rb");
+    const javaFile = path.join(projectRoot, "Main.java");
+    const kotlinFile = path.join(projectRoot, "Main.kt");
+    const csharpFile = path.join(projectRoot, "Program.cs");
+    const cppFile = path.join(projectRoot, "main.cpp");
+    const swiftFile = path.join(projectRoot, "main.swift");
     const graphWithManifests = {
-      nodes: new Set([pythonFile, phpFile, rustFile, goFile, zigFile]),
+      nodes: new Set([
+        pythonFile,
+        phpFile,
+        rustFile,
+        goFile,
+        zigFile,
+        rubyFile,
+        javaFile,
+        kotlinFile,
+        csharpFile,
+        cppFile,
+        swiftFile,
+      ]),
       edges: [
         { from: pythonFile, to: { type: "external" as const, name: "requests" }, raw: "requests" },
         { from: pythonFile, to: { type: "external" as const, name: "click" }, raw: "click" },
+        { from: pythonFile, to: { type: "external" as const, name: "rich" }, raw: "rich" },
         { from: pythonFile, to: { type: "external" as const, name: "httpx" }, raw: "httpx" },
+        { from: pythonFile, to: { type: "external" as const, name: "pydantic" }, raw: "pydantic" },
+        { from: pythonFile, to: { type: "external" as const, name: "attrs" }, raw: "attrs" },
+        { from: pythonFile, to: { type: "external" as const, name: "pendulum" }, raw: "pendulum" },
+        { from: pythonFile, to: { type: "external" as const, name: "pytest" }, raw: "pytest" },
         { from: phpFile, to: { type: "external" as const, name: "vendor/pkg" }, raw: "vendor/pkg" },
         { from: phpFile, to: { type: "external" as const, name: "vendor/dev-tool" }, raw: "vendor/dev-tool" },
         { from: rustFile, to: { type: "external" as const, name: "serde_json" }, raw: "serde_json" },
@@ -186,6 +331,25 @@ describe("graph reports", () => {
           raw: "example.com/local/module/internal",
         },
         { from: zigFile, to: { type: "external" as const, name: "known_dep" }, raw: "known_dep" },
+        { from: zigFile, to: { type: "external" as const, name: "foo-bar" }, raw: "foo-bar" },
+        { from: rubyFile, to: { type: "external" as const, name: "rails" }, raw: "rails" },
+        { from: rubyFile, to: { type: "external" as const, name: "sidekiq" }, raw: "sidekiq" },
+        { from: rubyFile, to: { type: "external" as const, name: "rack" }, raw: "rack" },
+        { from: rubyFile, to: { type: "external" as const, name: "rspec" }, raw: "rspec" },
+        { from: javaFile, to: { type: "external" as const, name: "org.slf4j.Logger" }, raw: "org.slf4j.Logger" },
+        {
+          from: kotlinFile,
+          to: { type: "external" as const, name: "com.google.guava.collect" },
+          raw: "com.google.guava.collect",
+        },
+        { from: csharpFile, to: { type: "external" as const, name: "Newtonsoft.Json" }, raw: "Newtonsoft.Json" },
+        { from: cppFile, to: { type: "external" as const, name: "fmt/core.h" }, raw: "fmt/core.h" },
+        {
+          from: cppFile,
+          to: { type: "external" as const, name: "boost-filesystem/path.hpp" },
+          raw: "boost-filesystem/path.hpp",
+        },
+        { from: swiftFile, to: { type: "external" as const, name: "Alamofire" }, raw: "Alamofire" },
         { from: pythonFile, to: { type: "external" as const, name: "missing_python" }, raw: "missing_python" },
         { from: phpFile, to: { type: "external" as const, name: "missing/php" }, raw: "missing/php" },
         { from: rustFile, to: { type: "external" as const, name: "missing_crate" }, raw: "missing_crate" },
@@ -195,6 +359,10 @@ describe("graph reports", () => {
           raw: "example.com/missing/pkg",
         },
         { from: zigFile, to: { type: "external" as const, name: "missing_zig" }, raw: "missing_zig" },
+        { from: rubyFile, to: { type: "external" as const, name: "missing_gem" }, raw: "missing_gem" },
+        { from: javaFile, to: { type: "external" as const, name: "org.missing.Type" }, raw: "org.missing.Type" },
+        { from: csharpFile, to: { type: "external" as const, name: "Missing.Package" }, raw: "Missing.Package" },
+        { from: swiftFile, to: { type: "external" as const, name: "MissingSwift" }, raw: "MissingSwift" },
       ],
     };
 
@@ -206,7 +374,58 @@ describe("graph reports", () => {
       "missing_crate",
       "example.com/missing/pkg",
       "missing_zig",
+      "missing_gem",
+      "org.missing.Type",
+      "Missing.Package",
+      "MissingSwift",
     ]);
+  });
+
+  it("resets external classifier caches between long-lived analysis runs", () => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cg-unresolved-cache-reset-"));
+    fs.writeFileSync(
+      path.join(projectRoot, "package.json"),
+      JSON.stringify({ dependencies: { react: "^19.0.0" } }),
+      "utf8",
+    );
+    const srcFile = path.join(projectRoot, "app.ts");
+    const graphWithReact = {
+      nodes: new Set([srcFile]),
+      edges: [{ from: srcFile, to: { type: "external" as const, name: "react" }, raw: "react" }],
+    };
+
+    expect(getUnresolvedImports(graphWithReact, { projectRoot })).toEqual([]);
+    fs.writeFileSync(path.join(projectRoot, "package.json"), JSON.stringify({ dependencies: {} }), "utf8");
+    resetExternalClassifierCaches();
+
+    expect(getUnresolvedImports(graphWithReact, { projectRoot }).map((entry) => entry.name)).toEqual(["react"]);
+  });
+
+  it("bounds external classifier caches across many roots", () => {
+    resetExternalClassifierCaches();
+
+    for (let index = 0; index < 700; index++) {
+      const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cg-unresolved-cache-bound-"));
+      fs.writeFileSync(
+        path.join(projectRoot, "package.json"),
+        JSON.stringify({ dependencies: { [`package-${index}`]: "^1.0.0" } }),
+        "utf8",
+      );
+      const srcFile = path.join(projectRoot, "app.ts");
+      getUnresolvedImports(
+        {
+          nodes: new Set([srcFile]),
+          edges: [
+            { from: srcFile, to: { type: "external" as const, name: `package-${index}` }, raw: `package-${index}` },
+          ],
+        },
+        { projectRoot },
+      );
+    }
+
+    const stats = getExternalClassifierCacheStats();
+    expect(stats.dependencyManifests).toBeLessThanOrEqual(512);
+    expect(stats.declaredPackageContexts).toBeLessThanOrEqual(512);
   });
 
   it("does not count supported-language stdlib and URL externals as unresolved imports", () => {
@@ -215,6 +434,8 @@ describe("graph reports", () => {
       nodes: new Set([
         path.join(projectRoot, "main.py"),
         path.join(projectRoot, "main.go"),
+        path.join(projectRoot, "main.rb"),
+        path.join(projectRoot, "main.zig"),
         path.join(projectRoot, "lib.rs"),
         path.join(projectRoot, "Main.java"),
         path.join(projectRoot, "Main.kt"),
@@ -227,6 +448,8 @@ describe("graph reports", () => {
       edges: [
         { from: path.join(projectRoot, "main.py"), to: { type: "external" as const, name: "pathlib" }, raw: "pathlib" },
         { from: path.join(projectRoot, "main.go"), to: { type: "external" as const, name: "fmt" }, raw: "fmt" },
+        { from: path.join(projectRoot, "main.rb"), to: { type: "external" as const, name: "json" }, raw: "json" },
+        { from: path.join(projectRoot, "main.zig"), to: { type: "external" as const, name: "std" }, raw: "std" },
         {
           from: path.join(projectRoot, "lib.rs"),
           to: { type: "external" as const, name: "std::collections" },

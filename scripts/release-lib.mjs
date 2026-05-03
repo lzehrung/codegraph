@@ -182,7 +182,7 @@ export function computePublishPlan({ shouldPublish, selectedPackageNames, publis
 export function computePublishExecutionSteps(publishPlan) {
   const steps = [];
   if (publishPlan.publishByPackage["@lzehrung/codegraph-native"]) {
-    steps.push("publishNativeTargets", "publishNativeMeta");
+    steps.push("publishNativeTargets", "prepareNativeMeta", "publishNativeMeta");
   }
   if (publishPlan.publishByPackage["@lzehrung/codegraph-js-fallback"]) {
     steps.push("publishJsFallback");
@@ -274,7 +274,10 @@ export function prepareNativePackageManifestForPublish(sourcePkg, version, gener
       ? Object.fromEntries(
           Object.entries(generatedPkg.optionalDependencies).sort(([left], [right]) => left.localeCompare(right)),
         )
-      : {};
+      : null;
+  if (!generatedOptionalDependencies || Object.keys(generatedOptionalDependencies).length === 0) {
+    throw new Error("Missing generated native platform optionalDependencies for native meta publish.");
+  }
   return {
     ...sourcePkg,
     version,

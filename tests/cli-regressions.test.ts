@@ -592,6 +592,27 @@ describe("CLI regressions", () => {
     );
   });
 
+  it("unresolved filters declared dependencies for scoped roots", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-unresolved-scoped-"));
+    const srcDir = path.join(tmpDir, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ dependencies: { react: "^19.0.0" } }),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(srcDir, "a.ts"),
+      "import React from 'react';\nimport missing from 'missing-package';\nexport { React, missing };\n",
+      "utf8",
+    );
+
+    const stdout = await runCliCommand(["unresolved", "--root", srcDir, "--json"]);
+    const unresolved = JSON.parse(stdout) as Array<{ name: string }>;
+
+    expect(unresolved.map((entry) => entry.name)).toEqual(["missing-package"]);
+  });
+
   it("hotspots rejects invalid --limit values", async () => {
     await expect(runCliCommand(["hotspots", "--root", tsRoot, "--limit", "0"])).rejects.toThrow(
       /Invalid --limit value "0"/i,
