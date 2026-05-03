@@ -244,11 +244,15 @@ const matches = await tool_findSymbol(root, "collectGraph", { index });
 const deps = await tool_getDependencies(root, "src/main.ts", { depth: 2, limit: 20, index });
 const reverseDeps = await tool_getReverseDependencies(root, "src/index.ts", { depth: 2, limit: 20, index });
 const hotspots = await tool_getHotspots(root, { limit: 20, index });
-const impact = await tool_impactJSON(root, {
-  provider: "git",
-  base: "HEAD",
-  head: "WORKTREE",
-}, { index });
+const impact = await tool_impactJSON(
+  root,
+  {
+    provider: "git",
+    base: "HEAD",
+    head: "WORKTREE",
+  },
+  { index },
+);
 const definition = await tool_goToDefinition(root, "src/main.ts", 10, 5, index, { native: "on" });
 const references = await tool_findReferences(root, "src/main.ts", 10, 5, index);
 ```

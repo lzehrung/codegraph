@@ -34,13 +34,7 @@ const NODE_BUILTIN_MODULES = new Set<string>([
   ...builtinModules.filter((name) => !name.startsWith("node:")).map((name) => `node:${name}`),
 ]);
 
-const DOCUMENT_ONLY_CYCLE_EXTENSIONS = new Set([
-  ".md",
-  ".mdx",
-  ".rst",
-  ".adoc",
-  ".asciidoc",
-]);
+const DOCUMENT_ONLY_CYCLE_EXTENSIONS = new Set([".md", ".mdx", ".rst", ".adoc", ".asciidoc"]);
 
 function isNodeBuiltinSpecifier(specifier: string): boolean {
   return NODE_BUILTIN_MODULES.has(specifier);

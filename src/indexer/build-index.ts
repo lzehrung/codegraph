@@ -20,10 +20,7 @@ import {
   type ProjectFileInfo,
 } from "../util.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
-import {
-  collectGraph,
-  collectEdgesForFile,
-} from "../graphs.js";
+import { collectGraph, collectEdgesForFile } from "../graphs.js";
 import type { FallbackImportExtractionEvent } from "../graphs/specifiers.js";
 import type { GraphCacheEntry, GraphBuildOptions } from "../graphs/types.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";

@@ -67,10 +67,12 @@ function readNativeArtifactPackages(baseDir: string): Record<string, unknown>[] 
       withFileTypes: true,
     })
     .filter((entry) => entry.isDirectory())
-    .map((entry) =>
-      JSON.parse(
-        fs.readFileSync(path.join(nativeArtifactsDir, entry.name, "package.json"), "utf8"),
-      ) as Record<string, unknown>,
+    .map(
+      (entry) =>
+        JSON.parse(fs.readFileSync(path.join(nativeArtifactsDir, entry.name, "package.json"), "utf8")) as Record<
+          string,
+          unknown
+        >,
     );
 }
 
