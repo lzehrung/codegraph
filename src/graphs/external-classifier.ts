@@ -186,6 +186,7 @@ export function getExternalClassifierCacheStats(): ExternalClassifierCacheStats 
 }
 
 function directoryExists(directory: string): boolean {
+  if (!fs.existsSync(directory)) return false;
   try {
     return fs.statSync(directory).isDirectory();
   } catch {
@@ -194,15 +195,11 @@ function directoryExists(directory: string): boolean {
 }
 
 function pathExists(filePath: string): boolean {
-  try {
-    fs.lstatSync(filePath);
-    return true;
-  } catch {
-    return false;
-  }
+  return fs.existsSync(filePath);
 }
 
 function readText(filePath: string): string | null {
+  if (!pathExists(filePath)) return null;
   try {
     return fs.readFileSync(filePath, "utf8");
   } catch {
@@ -530,6 +527,7 @@ function addSwiftPackageDependencies(filePath: string, declaredPackages: Set<str
 }
 
 function addGemspecs(directory: string, declaredPackages: Set<string>): boolean {
+  if (!directoryExists(directory)) return false;
   let found = false;
   try {
     for (const dirent of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -543,6 +541,7 @@ function addGemspecs(directory: string, declaredPackages: Set<string>): boolean 
 }
 
 function addDotnetProjectFiles(directory: string, declaredPackages: Set<string>): boolean {
+  if (!directoryExists(directory)) return false;
   let found = false;
   try {
     for (const dirent of fs.readdirSync(directory, { withFileTypes: true })) {
