@@ -202,10 +202,14 @@ export type ImpactStreamSummaryReport = {
   changedFiles: ImpactReport["changedFiles"];
   changedSymbols: ChangedSymbol[];
   impacted: ImpactItem[];
+  suggestions?: ImpactReport["suggestions"];
+  exportSummary?: ImpactReport["exportSummary"];
+  reexportChains?: ImpactReport["reexportChains"];
   topImpacts: ImpactTopItem[];
   surfaceArea: ImpactSurfaceArea;
   clusters: ImpactCluster[];
   cycles: ImpactCycle[];
+  graph: ImpactReport["graph"];
   diagnostics: ImpactDiagnostics;
   warning?: string | undefined;
 };

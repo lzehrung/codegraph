@@ -4,22 +4,19 @@
  */
 
 import type { ProjectIndex } from "../indexer.js";
-import type {
-  ImpactOptions,
-  ChangedSymbol,
-  ImpactItem,
-  ImpactStreamSummaryReport,
-} from "./types.js";
+import type { ImpactOptions, ChangedSymbol, FileChange, ImpactItem, ImpactStreamSummaryReport } from "./types.js";
 import { getDiff } from "./providers/base.js";
 import { analyzeImpact } from "./analyzer.js";
 import { discoverProjectFiles, type ProjectFileInfo } from "../util.js";
 import { buildImpactReport } from "./report.js";
-import { collectChangedSymbols, createImpactDiagnostics, listFileLevelFallbackPaths } from "./collect.js";
 import {
-  createImpactIgnoreMatcher,
-  normalizeImpactDiffFiles,
-  toImpactReportFilePath,
-} from "./path.js";
+  applyChangedFileSymbolMapping,
+  createImpactDiagnostics,
+  listFileLevelFallbackPaths,
+  mapChangedFileSymbols,
+} from "./collect.js";
+import { createImpactIgnoreMatcher, normalizeImpactDiffFiles, toImpactReportFilePath } from "./path.js";
+import { collectImpactReportSuggestions } from "./report-suggestions.js";
 
 export type ImpactStreamChunk =
   | { type: "projectFiles"; files: ProjectFileInfo[] }
@@ -113,15 +110,22 @@ export async function* analyzeImpactStreaming(
       total: 4,
     };
 
-    const { changedSymbols, filesWithSymbols } = await collectChangedSymbols(index, normalizedDiff.files, options, diagnostics);
-    for (const symbol of changedSymbols) {
-      yield {
-        type: "changedSymbol",
-        symbol: {
-          ...symbol,
-          file: displayFile(symbol.file),
-        },
-      };
+    const changedSymbols: ChangedSymbol[] = [];
+    const filesWithSymbols = new Set<string>();
+    for (let idx = 0; idx < normalizedDiff.files.length; idx += 1) {
+      const fileChange = normalizedDiff.files[idx]!;
+      const mapped = await mapChangedFileSymbols(index, fileChange, idx);
+      const symbols = applyChangedFileSymbolMapping(mapped, options, diagnostics, filesWithSymbols);
+      for (const symbol of symbols) {
+        yield {
+          type: "changedSymbol",
+          symbol: {
+            ...symbol,
+            file: displayFile(symbol.file),
+          },
+        };
+        changedSymbols.push(symbol);
+      }
     }
 
     // Step 3: Analyze impact (stream results)
@@ -196,13 +200,20 @@ export async function* analyzeImpactStreaming(
       total: 4,
     };
 
+    const suggestions = await collectImpactReportSuggestions(
+      projectRoot,
+      index,
+      options,
+      normalizedChanges,
+      changedSymbols,
+    );
     const fullReport = await buildImpactReport(
       projectRoot,
       index,
       normalizedChanges,
       changedSymbols,
       impactedItems,
-      [],
+      suggestions,
       { ...options, compact: false, warning: diff.warning },
       diagnostics,
     );
@@ -219,10 +230,14 @@ export async function* analyzeImpactStreaming(
       changedFiles: fullReport.changedFiles,
       changedSymbols: fullReport.changedSymbols,
       impacted: fullReport.impacted,
+      ...(fullReport.suggestions ? { suggestions: fullReport.suggestions } : {}),
+      ...(fullReport.exportSummary ? { exportSummary: fullReport.exportSummary } : {}),
+      ...(fullReport.reexportChains ? { reexportChains: fullReport.reexportChains } : {}),
       topImpacts: fullReport.topImpacts ?? [],
       surfaceArea: fullReport.surfaceArea,
       clusters: fullReport.clusters,
       cycles: fullReport.cycles ?? [],
+      graph: fullReport.graph,
       diagnostics: fullReport.diagnostics ?? diagnostics,
       ...(fullReport.warning ? { warning: fullReport.warning } : {}),
     };

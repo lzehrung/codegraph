@@ -137,6 +137,43 @@ index 1234567..abcdef0 100644
     }
   });
 
+  it("keeps streaming final extras aligned with batch impact reports", async () => {
+    const root = path.resolve(process.cwd(), "tests", "samples", "impact-suggestions");
+    const index = await buildProjectIndex(root);
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,3 @@
+ export function helperFunction(): string {
+-  return "helper";
++  return "helper-updated";
+ }
+`;
+    const options = {
+      provider: "raw" as const,
+      diffText,
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    };
+
+    const batch = await analyzeImpactFromDiff(root, index, options);
+    expect(batch.format).toBe("full");
+
+    let streamed: ImpactStreamSummaryReport | undefined;
+    for await (const chunk of analyzeImpactStreaming(root, index, options)) {
+      if (chunk.type === "complete") streamed = chunk.report;
+    }
+
+    expect(streamed).toBeDefined();
+    if (batch.format === "full" && streamed) {
+      expect(streamed.suggestions).toEqual(batch.suggestions);
+      expect(streamed.exportSummary).toEqual(batch.exportSummary);
+      expect(streamed.reexportChains).toEqual(batch.reexportChains);
+      expect(streamed.graph).toEqual(batch.graph);
+    }
+  });
+
   it("emits error chunk when diff provider fails", async () => {
     const root = await mkTmpDir("dg-stream-error-");
     await fsp.writeFile(path.join(root, "index.ts"), "export const a = 1;\n", "utf8");

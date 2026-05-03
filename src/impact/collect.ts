@@ -19,6 +19,14 @@ export type ChangedSymbolCollection = {
   filesWithSymbols: ReadonlySet<string>;
 };
 
+export type ChangedFileSymbolMapping = {
+  idx: number;
+  path: string;
+  kind: FileChange["kind"];
+  symbols: ChangedSymbol[];
+  parseFailed: boolean;
+};
+
 export function createImpactDiagnostics(changedFilesTotal: number, changedFilesIgnored: number): ImpactDiagnostics {
   return {
     changedFilesTotal,
@@ -43,37 +51,48 @@ export async function collectChangedSymbols(
   const changedByFile = await mapLimit(
     normalizedChanges.map((fileChange, idx) => ({ fileChange, idx })),
     8,
-    async ({ fileChange, idx }) => {
-      const mapped = await locateChangedSymbolsWithLines(index, fileChange.path, fileChange.hunks);
-      return {
-        idx,
-        path: fileChange.path,
-        kind: fileChange.kind,
-        symbols: mapped.changedSymbols,
-        parseFailed: mapped.parseFailed,
-      };
-    },
+    async ({ fileChange, idx }) => await mapChangedFileSymbols(index, fileChange, idx),
   );
 
   changedByFile.sort((a, b) => a.idx - b.idx);
   let changedSymbols: ChangedSymbol[] = [];
   const filesWithSymbols = new Set<string>();
   for (const entry of changedByFile) {
-    if (entry.symbols.length > 0) filesWithSymbols.add(entry.path);
-    if (entry.symbols.length === 0) {
-      diagnostics.changedFilesWithoutSymbols += 1;
-      if (entry.parseFailed && entry.kind !== "deleted") {
-        diagnostics.symbolMappingParseFailures += 1;
-      }
-    }
-    changedSymbols.push(...entry.symbols);
-  }
-
-  if (options.scope === "imported") {
-    changedSymbols = changedSymbols.filter((symbol) => symbol.exported);
+    changedSymbols.push(...applyChangedFileSymbolMapping(entry, options, diagnostics, filesWithSymbols));
   }
 
   return { changedSymbols, filesWithSymbols };
+}
+
+export async function mapChangedFileSymbols(
+  index: ProjectIndex,
+  fileChange: FileChange,
+  idx: number,
+): Promise<ChangedFileSymbolMapping> {
+  const mapped = await locateChangedSymbolsWithLines(index, fileChange.path, fileChange.hunks);
+  return {
+    idx,
+    path: fileChange.path,
+    kind: fileChange.kind,
+    symbols: mapped.changedSymbols,
+    parseFailed: mapped.parseFailed,
+  };
+}
+
+export function applyChangedFileSymbolMapping(
+  entry: ChangedFileSymbolMapping,
+  options: Pick<ImpactOptions, "scope">,
+  diagnostics: ImpactDiagnostics,
+  filesWithSymbols: Set<string>,
+): ChangedSymbol[] {
+  if (entry.symbols.length > 0) filesWithSymbols.add(entry.path);
+  if (entry.symbols.length === 0) {
+    diagnostics.changedFilesWithoutSymbols += 1;
+    if (entry.parseFailed && entry.kind !== "deleted") {
+      diagnostics.symbolMappingParseFailures += 1;
+    }
+  }
+  return options.scope === "imported" ? entry.symbols.filter((symbol) => symbol.exported) : entry.symbols;
 }
 
 export function listFileLevelFallbackPaths(normalizedChanges: FileChange[], filesWithSymbols: ReadonlySet<string>) {
@@ -94,7 +113,12 @@ export async function collectImpactAnalysis(
   const diagnostics = createImpactDiagnostics(diff.files.length, normalizedDiff.ignoredCount);
 
   const normalizedChanges = normalizedDiff.files;
-  const { changedSymbols, filesWithSymbols } = await collectChangedSymbols(index, normalizedChanges, options, diagnostics);
+  const { changedSymbols, filesWithSymbols } = await collectChangedSymbols(
+    index,
+    normalizedChanges,
+    options,
+    diagnostics,
+  );
 
   const fileLevelFallback = options.fileLevelFallback ?? true;
   const fileLevelFallbackPaths = listFileLevelFallbackPaths(normalizedChanges, filesWithSymbols);
