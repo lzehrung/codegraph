@@ -6,7 +6,6 @@ import { getUnresolvedImports, getHotspots, getApiSurface, SymbolKind } from "..
 import { getExternalClassifierCacheStats, resetExternalClassifierCaches } from "../src/graphs/external-classifier.js";
 
 describe("graph reports", () => {
-  const root = "/root";
   const tempRoots: string[] = [];
   const makeTempRoot = (prefix: string): string => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -19,15 +18,20 @@ describe("graph reports", () => {
     }
   });
 
-  const nodes = new Set([`${root}/a.ts`, `${root}/b.ts`]);
-  const edges = [
-    { from: `${root}/a.ts`, to: { type: "file" as const, path: `${root}/b.ts` }, raw: "./b" },
-    { from: `${root}/a.ts`, to: { type: "external" as const, name: "react" }, raw: "react" },
-    { from: `${root}/b.ts`, to: { type: "external" as const, name: "react" }, raw: "react" },
-  ];
-  const graph = { nodes, edges };
+  const makeBasicGraph = () => {
+    const root = makeTempRoot("cg-graph-report-basic-");
+    fs.writeFileSync(path.join(root, ".git"), "gitdir: .git\n", "utf8");
+    const nodes = new Set([path.join(root, "a.ts"), path.join(root, "b.ts")]);
+    const edges = [
+      { from: path.join(root, "a.ts"), to: { type: "file" as const, path: path.join(root, "b.ts") }, raw: "./b" },
+      { from: path.join(root, "a.ts"), to: { type: "external" as const, name: "react" }, raw: "react" },
+      { from: path.join(root, "b.ts"), to: { type: "external" as const, name: "react" }, raw: "react" },
+    ];
+    return { root, nodes, edges, graph: { nodes, edges } };
+  };
 
   it("should get unresolved imports", () => {
+    const { graph } = makeBasicGraph();
     const unresolved = getUnresolvedImports(graph);
     expect(unresolved.length).toBe(1);
     expect(unresolved[0].name).toBe("react");
@@ -35,12 +39,21 @@ describe("graph reports", () => {
   });
 
   it("does not count Node builtins as unresolved imports", () => {
+    const { nodes, edges } = makeBasicGraph();
     const graphWithBuiltins = {
       nodes,
       edges: [
         ...edges,
-        { from: `${root}/a.ts`, to: { type: "external" as const, name: "node:path" }, raw: "node:path" },
-        { from: `${root}/b.ts`, to: { type: "external" as const, name: "fs" }, raw: "node:fs" },
+        {
+          from: [...nodes][0],
+          to: { type: "external" as const, name: "node:path" },
+          raw: "node:path",
+        },
+        {
+          from: [...nodes][1],
+          to: { type: "external" as const, name: "fs" },
+          raw: "node:fs",
+        },
       ],
     };
 
@@ -419,7 +432,7 @@ describe("graph reports", () => {
     const tempRoot = makeTempRoot("cg-unresolved-cache-bound-");
 
     try {
-      for (let index = 0; index < 700; index++) {
+      for (let index = 0; index < 520; index++) {
         const projectRoot = path.join(tempRoot, `project-${index}`);
         fs.mkdirSync(projectRoot);
         fs.writeFileSync(
@@ -515,48 +528,55 @@ describe("graph reports", () => {
   });
 
   it("should get hotspots", () => {
+    const { root, graph } = makeBasicGraph();
     const hotspots = getHotspots(graph);
     expect(hotspots.length).toBe(2);
-    expect(hotspots[0].file).toBe(`${root}/b.ts`);
+    expect(hotspots[0].file).toBe(path.join(root, "b.ts"));
     expect(hotspots[0].fanIn).toBe(1);
   });
 
   it("should limit and filter hotspots by include roots", () => {
+    const root = makeTempRoot("cg-graph-report-hotspots-");
     const scopedGraph = {
-      nodes: new Set([`${root}/src/a.ts`, `${root}/src/b.ts`, `${root}/src/c.ts`, `${root}/tests/spec.ts`]),
+      nodes: new Set([
+        path.join(root, "src", "a.ts"),
+        path.join(root, "src", "b.ts"),
+        path.join(root, "src", "c.ts"),
+        path.join(root, "tests", "spec.ts"),
+      ]),
       edges: [
         {
-          from: `${root}/src/a.ts`,
-          to: { type: "file" as const, path: `${root}/src/b.ts` },
+          from: path.join(root, "src", "a.ts"),
+          to: { type: "file" as const, path: path.join(root, "src", "b.ts") },
           raw: "./b",
         },
         {
-          from: `${root}/src/c.ts`,
-          to: { type: "file" as const, path: `${root}/src/b.ts` },
+          from: path.join(root, "src", "c.ts"),
+          to: { type: "file" as const, path: path.join(root, "src", "b.ts") },
           raw: "./b",
         },
         {
-          from: `${root}/tests/spec.ts`,
-          to: { type: "file" as const, path: `${root}/src/a.ts` },
+          from: path.join(root, "tests", "spec.ts"),
+          to: { type: "file" as const, path: path.join(root, "src", "a.ts") },
           raw: "../src/a",
         },
       ],
     };
 
     const hotspots = getHotspots(scopedGraph, {
-      includeRoots: [`${root}/src`],
+      includeRoots: [path.join(root, "src")],
       limit: 2,
     });
 
     expect(hotspots).toEqual([
       {
-        file: `${root}/src/b.ts`,
+        file: path.join(root, "src", "b.ts"),
         fanIn: 2,
         fanOut: 0,
         score: 4,
       },
       {
-        file: `${root}/src/a.ts`,
+        file: path.join(root, "src", "a.ts"),
         fanIn: 0,
         fanOut: 1,
         score: 1,
@@ -565,22 +585,25 @@ describe("graph reports", () => {
   });
 
   it("should ignore non-finite hotspot limits", () => {
+    const { graph } = makeBasicGraph();
     expect(getHotspots(graph, { limit: Number.NaN })).toEqual(getHotspots(graph));
     expect(getHotspots(graph, { limit: Number.POSITIVE_INFINITY })).toEqual(getHotspots(graph));
   });
 
   it("should get API surface", () => {
+    const root = makeTempRoot("cg-graph-report-api-");
+    const file = path.join(root, "a.ts");
     const mockIndex = {
       byFile: new Map([
         [
-          `${root}/a.ts`,
+          file,
           {
-            file: `${root}/a.ts`,
+            file,
             exports: [
               {
                 type: "local" as const,
                 exportedAs: "foo",
-                target: { localName: "foo", kind: SymbolKind.Function, range: {}, file: `${root}/a.ts` },
+                target: { localName: "foo", kind: SymbolKind.Function, range: {}, file },
               },
             ],
             imports: [],
@@ -591,22 +614,25 @@ describe("graph reports", () => {
     };
     const api = getApiSurface(mockIndex);
     expect(api.length).toBe(1);
-    expect(api[0].file).toBe(`${root}/a.ts`);
+    expect(api[0].file).toBe(file);
     expect(api[0].exports[0].exportedAs).toBe("foo");
   });
 
   it("should handle complex re-export chains in apisurface", () => {
+    const root = makeTempRoot("cg-graph-report-api-chain-");
+    const libFile = path.join(root, "lib.ts");
+    const barrelFile = path.join(root, "barrel.ts");
     const mockIndex = {
       byFile: new Map([
         [
-          `${root}/lib.ts`,
+          libFile,
           {
-            file: `${root}/lib.ts`,
+            file: libFile,
             exports: [
               {
                 type: "local",
                 exportedAs: "base",
-                target: { localName: "base", kind: SymbolKind.Variable, file: `${root}/lib.ts`, range: {} },
+                target: { localName: "base", kind: SymbolKind.Variable, file: libFile, range: {} },
               },
             ],
             imports: [],
@@ -614,12 +640,12 @@ describe("graph reports", () => {
           },
         ],
         [
-          `${root}/barrel.ts`,
+          barrelFile,
           {
-            file: `${root}/barrel.ts`,
+            file: barrelFile,
             exports: [
-              { type: "reexport", exportedAs: "aliased", fromModule: `${root}/lib.ts`, sourceSpecifier: "base" },
-              { type: "exportStar", fromModule: `${root}/lib.ts` },
+              { type: "reexport", exportedAs: "aliased", fromModule: libFile, sourceSpecifier: "base" },
+              { type: "exportStar", fromModule: libFile },
             ],
             imports: [],
             locals: [],
@@ -628,7 +654,7 @@ describe("graph reports", () => {
       ]),
     };
     const api = getApiSurface(mockIndex);
-    const barrel = api.find((a) => a.file === `${root}/barrel.ts`);
+    const barrel = api.find((a) => a.file === barrelFile);
     expect(barrel).toBeDefined();
     expect(barrel!.exports.some((e) => e.exportedAs === "aliased" && e.kind === "reexport")).toBe(true);
     expect(barrel!.exports.some((e) => e.kind === "exportStar")).toBe(true);

@@ -185,14 +185,6 @@ export function getExternalClassifierCacheStats(): ExternalClassifierCacheStats 
   };
 }
 
-function fileExists(filePath: string): boolean {
-  try {
-    return fs.statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
-}
-
 function directoryExists(directory: string): boolean {
   try {
     return fs.statSync(directory).isDirectory();
