@@ -12,6 +12,7 @@ import {
   resolvePythonModule,
   resolveJvmPackageImportPaths,
   getPhpComposerImplicitFiles,
+  extractJsTsDynamicSpecifiers,
 } from "./util.js";
 import { logWithLevel, type LogLevel } from "./logging.js";
 import {
@@ -19,7 +20,6 @@ import {
   graphOnlySpecifierNeedsResolutionConfig,
   isGraphOnlyLanguage,
 } from "./documentLinks.js";
-import { extractJsTsDynamicSpecifiers } from "./util.js";
 import {
   getCompactImportsExecution,
   type NativeRuntimeMode,

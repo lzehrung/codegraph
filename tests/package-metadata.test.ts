@@ -165,7 +165,9 @@ describe("package metadata", () => {
 
   it("keeps implementation modules from importing through the public barrel", () => {
     const barrelImportPattern =
-      /\b(?:import|export)\s+(?:type\s+)?(?:[\s\S]*?\s+from\s+)?["'](?:\.\/|\.\.\/)index\.js["']|import\(["'](?:\.\/|\.\.\/)index\.js["']\)/;
+      /\b(?:import|export)\s+(?:type\s+)?(?:[\s\S]*?\s+from\s+)?["'](?:\.\/|(?:\.\.\/)+)index\.js["']|import\(["'](?:\.\/|(?:\.\.\/)+)index\.js["']\)/;
+    expect(barrelImportPattern.test('import { value } from "../../index.js";')).toBe(true);
+    expect(barrelImportPattern.test('import { value } from "./impact/index.js";')).toBe(false);
     const offenders = listFilesRecursive("src", ".ts").filter((relativePath) => {
       if (relativePath === "src/index.ts") {
         return false;
