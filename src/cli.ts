@@ -6,16 +6,18 @@ import { performance } from "node:perf_hooks";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import {
-  listProjectFiles,
-  listChangedFiles,
-  collectGraph,
   buildProjectIndex,
   buildProjectIndexFromFiles,
   buildProjectIndexIncremental,
-  buildReviewReport,
   buildGraphDelta,
   goToDefinition,
   findReferences,
+  getApiSurface,
+} from "./indexer.js";
+import type { BuildOptions, BuildReport } from "./indexer/types.js";
+import { buildReviewReport, type ReviewBuildReport, type ReviewDepth } from "./review.js";
+import {
+  collectGraph,
   graphToMermaid,
   graphToDOT,
   astGrep,
@@ -26,7 +28,6 @@ import {
   graphToDOTSymbols,
   graphToMermaidSymbolsWithFiles,
   graphToDOTSymbolsWithFiles,
-  analyzeImpactFromDiff,
   getDependencies,
   getReverseDependencies,
   getShortestPath,
@@ -34,38 +35,34 @@ import {
   sortDetailedCycles,
   getUnresolvedImports,
   getHotspots,
-  getApiSurface,
+  type GraphBuildOptions,
+  type SymbolGraph,
+  type SymbolNodeKind,
+} from "./graphs.js";
+import { analyzeImpactFromDiff } from "./impact/index.js";
+import type { CompactImpactReport, ImpactItem, ImpactOptions, ImpactReport, ChangedSymbol } from "./impact/types.js";
+import type { CandidateTestFile } from "./impact/context.js";
+import {
   writeGraphSqlite,
   updateGraphSqlite,
   queryGraphSqliteRaw,
-  chunkFile,
-  chunkTextFile,
-  chunkSFCFile,
-  LANG_CONFIGS,
+} from "./sqlite.js";
+import { chunkFile } from "./chunking/chunkFile.js";
+import { chunkTextFile } from "./chunking/chunkTextFile.js";
+import { chunkSFCFile } from "./chunking/chunkSFC.js";
+import { LANG_CONFIGS } from "./bootstrap/treeSitterLanguages.js";
+import {
   isNativeTreeSitterAvailable,
   getNativeTreeSitterLoadError,
   getNativeTreeSitterSupportedLanguageIds,
-  supportForFile,
-} from "./index.js";
-import type {
-  BuildReport,
-  BuildOptions,
-  GraphBuildOptions,
-  NativeRuntimeMode,
-  ReviewBuildReport,
-  Graph,
-  SymbolGraph,
-  SymbolNodeKind,
-  ImpactReport,
-  CompactImpactReport,
-  ChangedSymbol,
-  ImpactItem,
-  ReviewDepth,
-  ImpactOptions,
-  CandidateTestFile,
-} from "./index.js";
+  type NativeRuntimeMode,
+} from "./native/treeSitterNative.js";
+import { supportForFile } from "./languages.js";
+import type { Graph } from "./types.js";
 import {
   assertFilePathWithinRoot,
+  listChangedFiles,
+  listProjectFiles,
   normalizePath,
   resolveFilePathFromRoot,
   type ProjectFileDiscoveryOptions,

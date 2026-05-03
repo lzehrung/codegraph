@@ -1,31 +1,32 @@
 import {
   buildProjectIndex,
-  analyzeImpactFromDiff,
   listSymbols,
   symbolId,
-  type SymbolListItem,
-  listProjectFiles,
+  goToDefinition,
+  findReferences,
+} from "./indexer.js";
+import type {
+  ImportBinding,
+  ProjectIndex,
+  Reference,
+  ResolutionProvenance,
+  SymbolDef,
+  SymbolListItem,
+} from "./indexer/types.js";
+import { analyzeImpactFromDiff } from "./impact/index.js";
+import type { CompactImpactReport, ImpactOptions, ImpactReport } from "./impact/types.js";
+import type { Edge, Range } from "./types.js";
+import {
   collectGraph,
   getDependencies,
   getReverseDependencies,
   getHotspots,
-  goToDefinition,
-  findReferences,
-  type ImpactOptions,
-  type ImpactReport,
-  type CompactImpactReport,
-  type Edge,
-  type ImportBinding,
-  type Range,
-  type ProjectIndex,
-  type Reference,
-  type ResolutionProvenance,
-  type NativeRuntimeMode,
-  type SymbolDef,
-} from "./index.js";
+} from "./graphs.js";
+import type { NativeRuntimeMode } from "./native/treeSitterNative.js";
 import {
   fileExists,
   isFilePathWithinRoot,
+  listProjectFiles,
   normalizePath,
   resolveFilePathFromRoot,
   toProjectRelativePath,

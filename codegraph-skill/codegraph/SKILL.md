@@ -182,6 +182,7 @@ For git-provider impact and git-scoped review/index/graph commands, `WORKTREE` c
   `codegraph path <from> <to>`
 - Cycles:
   `codegraph cycles --sort priority`
+  Reports source dependency cycles; document-only link loops remain graph edges but are filtered from cycle warnings.
 - Public API surface:
   `codegraph apisurface`
 - Unresolved project imports:
@@ -253,3 +254,4 @@ const impact = await tool_impactJSON(root, { provider: "git", base: "main", head
 - Use `--resolve-node-modules` only when you want JS/TS bare imports resolved into `node_modules`; it does not change scan roots.
 - Use `--json` when you need machine-readable output. Impact JSON includes `schemaVersion` and `format`, and review JSON includes `schemaVersion`.
 - If you are assessing architectural risk in a subdirectory, run `codegraph hotspots <dir> --limit 20 --json`, then check repo-level cycles with `codegraph cycles --sort priority --json`.
+- Do not treat Markdown or other document-only link loops as code cycles; `cycles` filters those to avoid noisy architecture warnings.

@@ -125,6 +125,8 @@ codegraph unresolved
 codegraph hotspots ./src --limit 20
 ```
 
+Cycle detection reports source dependency cycles. Document-only link loops, such as Markdown files linking to each other, remain in the graph for navigation but are not reported as dependency cycles.
+
 ### Impact, review, and graph delta
 
 ```bash

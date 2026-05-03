@@ -101,6 +101,31 @@ describe("graph queries", () => {
     expect(cycles[0]).toEqual([selfLoopFile]);
   });
 
+  it("does not report document-only link cycles as dependency cycles", () => {
+    const docGraph = {
+      nodes: new Set([`${root}/docs/a.md`, `${root}/docs/b.md`]),
+      edges: [
+        { from: `${root}/docs/a.md`, to: { type: "file" as const, path: `${root}/docs/b.md` }, raw: "./b.md" },
+        { from: `${root}/docs/b.md`, to: { type: "file" as const, path: `${root}/docs/a.md` }, raw: "./a.md" },
+      ],
+    };
+
+    expect(findCycles(docGraph)).toEqual([]);
+    expect(findDetailedCycles(docGraph)).toEqual([]);
+  });
+
+  it("still reports cycles that cross from documents into source files", () => {
+    const mixedGraph = {
+      nodes: new Set([`${root}/docs/a.md`, `${root}/src/a.ts`]),
+      edges: [
+        { from: `${root}/docs/a.md`, to: { type: "file" as const, path: `${root}/src/a.ts` }, raw: "../src/a.ts" },
+        { from: `${root}/src/a.ts`, to: { type: "file" as const, path: `${root}/docs/a.md` }, raw: "../docs/a.md" },
+      ],
+    };
+
+    expect(findCycles(mixedGraph)).toHaveLength(1);
+  });
+
   it("should provide detailed cycle metadata with entry edges and priority", () => {
     const details = findDetailedCycles(graph);
     expect(details.length).toBe(1);

@@ -8,7 +8,8 @@ import { supportForFile } from "../languages.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { shouldAvoidJsFallbackForLanguage } from "../native/treeSitterNative.js";
 import { buildBloomFilterFromSource } from "../util/bloomFilter.js";
-import type { FallbackImportExtractionEvent, GraphCacheEntry, GraphBuildOptions } from "../graphs.js";
+import type { FallbackImportExtractionEvent } from "../graphs/specifiers.js";
+import type { GraphCacheEntry, GraphBuildOptions } from "../graphs/types.js";
 import type { Edge } from "../types.js";
 import {
   DEFAULT_PROJECT_MANIFESTS,

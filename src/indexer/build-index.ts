@@ -23,10 +23,9 @@ import { logWithLevel, type LogLevel } from "../logging.js";
 import {
   collectGraph,
   collectEdgesForFile,
-  type FallbackImportExtractionEvent,
-  type GraphCacheEntry,
-  type GraphBuildOptions,
 } from "../graphs.js";
+import type { FallbackImportExtractionEvent } from "../graphs/specifiers.js";
+import type { GraphCacheEntry, GraphBuildOptions } from "../graphs/types.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
 import {
   attemptParsePreparedFileContext,
