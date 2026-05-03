@@ -320,6 +320,29 @@ describe("package metadata", () => {
     }
   });
 
+  it("scopes streaming summary mode to the streaming API type", () => {
+    const impactTypes = readText("src/impact/types.ts");
+    const streamingSource = readText("src/impact/streaming.ts");
+    const impactOptionsStart = impactTypes.indexOf("export type ImpactOptions =");
+    const impactOptionsEnd = impactTypes.indexOf("};", impactOptionsStart);
+
+    expect(impactOptionsStart).toBeGreaterThan(-1);
+    expect(impactOptionsEnd).toBeGreaterThan(impactOptionsStart);
+    expect(impactTypes.slice(impactOptionsStart, impactOptionsEnd)).not.toContain("streamSummary");
+    expect(streamingSource).toContain("export type ImpactStreamingOptions");
+    expect(streamingSource).toContain('streamSummary?: "full" | "light"');
+  });
+
+  it("keeps streaming and batch impact format discriminators distinct in docs", () => {
+    const libraryApi = readText("docs/library-api.md");
+    const agentWorkflows = readText("docs/agent-workflows.md");
+
+    expect(libraryApi).toContain('batch impact wrappers include `schemaVersion` and `format: "full" | "compact"`');
+    expect(libraryApi).toContain('streaming `complete.report` uses `format: "stream-summary"`');
+    expect(agentWorkflows).toContain('Batch impact wrappers return `format: "full" | "compact"`');
+    expect(agentWorkflows).toContain('streaming `complete.report` uses `format: "stream-summary"`');
+  });
+
   it("keeps fallback install guidance aligned with the scoped registry requirement", () => {
     const readme = readText("README.md");
     const installationDoc = readText("docs/installation.md");

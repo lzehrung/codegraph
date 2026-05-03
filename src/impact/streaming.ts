@@ -37,6 +37,18 @@ export type ImpactStreamChunk =
     }
   | { type: "error"; error: string };
 
+/**
+ * Options for streaming impact analysis.
+ *
+ * `streamSummary` is scoped to streaming callers so batch APIs do not accept a
+ * no-op light mode. Use `"full"` for the default terminal report, or `"light"`
+ * to skip suggestions, export summaries, re-export chains, graph metadata,
+ * cycles, clusters, and surface area in the final `complete.report`.
+ */
+export type ImpactStreamingOptions = ImpactOptions & {
+  streamSummary?: "full" | "light";
+};
+
 type AsyncQueue<T> = {
   push: (value: T) => void;
   close: () => void;
@@ -128,7 +140,7 @@ function buildLightStreamSummaryReport(
 export async function* analyzeImpactStreaming(
   projectRoot: string,
   index: ProjectIndex,
-  options: ImpactOptions,
+  options: ImpactStreamingOptions,
 ): AsyncGenerator<ImpactStreamChunk> {
   try {
     const displayFile = (filePath: string): string => toImpactReportFilePath(projectRoot, filePath);
@@ -294,7 +306,7 @@ export async function* analyzeImpactStreaming(
 async function buildFullStreamSummaryReport(
   projectRoot: string,
   index: ProjectIndex,
-  options: ImpactOptions,
+  options: ImpactStreamingOptions,
   normalizedChanges: FileChange[],
   changedSymbols: ChangedSymbol[],
   impactedItems: ImpactItem[],

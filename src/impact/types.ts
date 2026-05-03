@@ -421,12 +421,6 @@ export type ImpactOptions = DiffProviderOptions & {
   testPatterns?: string[];
   /** Return compact report with indexed arrays instead of repeated strings */
   compact?: boolean;
-  /**
-   * Streaming only: build the default full terminal summary, or a light summary
-   * that skips suggestions, export summaries, re-export chains, graph metadata,
-   * cycles, clusters, and surface area.
-   */
-  streamSummary?: "full" | "light";
   /** File patterns to ignore in impact analysis */
   ignoreGlobs?: string[];
   /** Include context snippets for references */
