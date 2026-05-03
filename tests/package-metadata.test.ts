@@ -334,13 +334,19 @@ describe("package metadata", () => {
   });
 
   it("keeps streaming and batch impact format discriminators distinct in docs", () => {
+    const readme = readText("README.md");
     const libraryApi = readText("docs/library-api.md");
     const agentWorkflows = readText("docs/agent-workflows.md");
+    const streamingSource = readText("src/impact/streaming.ts");
 
+    expect(readme).toContain("ranked top impacts");
     expect(libraryApi).toContain('batch impact wrappers include `schemaVersion` and `format: "full" | "compact"`');
+    expect(libraryApi).toContain("ranked top impacts");
     expect(libraryApi).toContain('streaming `complete.report` uses `format: "stream-summary"`');
-    expect(agentWorkflows).toContain('Batch impact wrappers return `format: "full" | "compact"`');
+    expect(agentWorkflows).toContain('Batch impact wrappers return `schemaVersion` and `format: "full" | "compact"`');
+    expect(agentWorkflows).toContain("ranked top impacts");
     expect(agentWorkflows).toContain('streaming `complete.report` uses `format: "stream-summary"`');
+    expect(streamingSource).toContain("ranked top impacts");
   });
 
   it("keeps fallback install guidance aligned with the scoped registry requirement", () => {

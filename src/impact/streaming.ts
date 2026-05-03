@@ -42,8 +42,9 @@ export type ImpactStreamChunk =
  *
  * `streamSummary` is scoped to streaming callers so batch APIs do not accept a
  * no-op light mode. Use `"full"` for the default terminal report, or `"light"`
- * to skip suggestions, export summaries, re-export chains, graph metadata,
- * cycles, clusters, and surface area in the final `complete.report`.
+ * to skip suggestions, export summaries, re-export chains, ranked top impacts,
+ * graph metadata, cycles, clusters, and surface area in the final
+ * `complete.report`.
  */
 export type ImpactStreamingOptions = ImpactOptions & {
   streamSummary?: "full" | "light";
