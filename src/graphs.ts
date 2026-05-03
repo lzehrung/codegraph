@@ -23,22 +23,11 @@ export { buildSymbolGraph } from "./graphs/symbol-graph.js";
 export { buildSymbolGraphDetailed } from "./graphs/symbol-graph-detailed.js";
 export type { AstGrepHit, TextGrepHit } from "./graphs/grep.js";
 export type { HotspotEntry, HotspotOptions } from "./graphs/hotspots.js";
-export type {
-  CycleInternalEdge,
-  CycleSortMode,
-  DependencyNode,
-  DetailedCycle,
-} from "./graphs/queries.js";
+export type { CycleInternalEdge, CycleSortMode, DependencyNode, DetailedCycle } from "./graphs/queries.js";
 export type {
   CollectModuleSpecifiersOptions,
   FallbackImportExtractionEvent,
   FallbackImportExtractionReason,
 } from "./graphs/specifiers.js";
-export type {
-  SymbolEdge,
-  SymbolGraph,
-  SymbolNode,
-  SymbolNodeKind,
-  SymbolVisibility,
-} from "./graphs/symbol-graph.js";
+export type { SymbolEdge, SymbolGraph, SymbolNode, SymbolNodeKind, SymbolVisibility } from "./graphs/symbol-graph.js";
 export type { GraphBuildOptions, GraphCacheEntry } from "./graphs/types.js";

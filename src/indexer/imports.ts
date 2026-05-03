@@ -28,10 +28,7 @@ import {
   unquote,
 } from "../util.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
-import {
-  type FallbackImportExtractionEvent,
-  type FallbackImportExtractionReason,
-} from "../graphs/specifiers.js";
+import { type FallbackImportExtractionEvent, type FallbackImportExtractionReason } from "../graphs/specifiers.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import {
   extractGraphOnlyModuleSpecifiers,

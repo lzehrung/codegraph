@@ -1,10 +1,4 @@
-import {
-  buildProjectIndex,
-  listSymbols,
-  symbolId,
-  goToDefinition,
-  findReferences,
-} from "./indexer.js";
+import { buildProjectIndex, listSymbols, symbolId, goToDefinition, findReferences } from "./indexer.js";
 import type {
   ImportBinding,
   ProjectIndex,
@@ -16,12 +10,7 @@ import type {
 import { analyzeImpactFromDiff } from "./impact/index.js";
 import type { CompactImpactReport, ImpactOptions, ImpactReport } from "./impact/types.js";
 import type { Edge, Range } from "./types.js";
-import {
-  collectGraph,
-  getDependencies,
-  getReverseDependencies,
-  getHotspots,
-} from "./graphs.js";
+import { collectGraph, getDependencies, getReverseDependencies, getHotspots } from "./graphs.js";
 import type { NativeRuntimeMode } from "./native/treeSitterNative.js";
 import {
   fileExists,
@@ -778,9 +767,7 @@ export async function tool_goToDefinition(
       return resolvedFile;
     }
 
-    const idx =
-      index ??
-      (await getToolIndex(root, runtimeOptions));
+    const idx = index ?? (await getToolIndex(root, runtimeOptions));
 
     const result = await goToDefinition(idx, {
       file: resolvedFile.absPath,
@@ -826,9 +813,7 @@ export async function tool_findReferences(
       return resolvedFile;
     }
 
-    const idx =
-      index ??
-      (await getToolIndex(root, runtimeOptions));
+    const idx = index ?? (await getToolIndex(root, runtimeOptions));
 
     const result = await findReferences(idx, {
       file: resolvedFile.absPath,

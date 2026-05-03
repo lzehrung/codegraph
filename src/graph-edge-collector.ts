@@ -27,10 +27,7 @@ import {
   type NativeQueryResults,
 } from "./native/treeSitterNative.js";
 import { recordNativeExecutionOutcome } from "./native/nativeBackendReport.js";
-import {
-  collectModuleSpecifiersFromSource,
-  type FallbackImportExtractionEvent,
-} from "./graphs/specifiers.js";
+import { collectModuleSpecifiersFromSource, type FallbackImportExtractionEvent } from "./graphs/specifiers.js";
 import type { GraphCacheEntry } from "./graphs/types.js";
 import type { BuildReport } from "./indexer/types.js";
 import type { SyntaxTreeLike } from "./languages/types.js";
@@ -290,4 +287,3 @@ export async function collectEdgesForFile(
   emitCacheEntry(edges);
   return edges;
 }
-

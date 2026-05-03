@@ -5,7 +5,13 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
 import { getNativeSyntaxTreeExecution } from "../native/treeSitterNative.js";
-import { SymbolKind, type ImportBinding, type ProjectIndex, type ResolvedExport, type SymbolDef } from "../indexer/types.js";
+import {
+  SymbolKind,
+  type ImportBinding,
+  type ProjectIndex,
+  type ResolvedExport,
+  type SymbolDef,
+} from "../indexer/types.js";
 import type { FileId } from "../types.js";
 import { sliceText, unquote } from "../util.js";
 import { buildSymbolGraph, defNodeId, nodeForDef, type SymbolGraph } from "./symbol-graph.js";

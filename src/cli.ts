@@ -42,11 +42,7 @@ import {
 import { analyzeImpactFromDiff } from "./impact/index.js";
 import type { CompactImpactReport, ImpactItem, ImpactOptions, ImpactReport, ChangedSymbol } from "./impact/types.js";
 import type { CandidateTestFile } from "./impact/context.js";
-import {
-  writeGraphSqlite,
-  updateGraphSqlite,
-  queryGraphSqliteRaw,
-} from "./sqlite.js";
+import { writeGraphSqlite, updateGraphSqlite, queryGraphSqliteRaw } from "./sqlite.js";
 import { chunkFile } from "./chunking/chunkFile.js";
 import { chunkTextFile } from "./chunking/chunkTextFile.js";
 import { chunkSFCFile } from "./chunking/chunkSFC.js";
