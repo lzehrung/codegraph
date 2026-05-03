@@ -1,5 +1,6 @@
 import type { SyntaxNodeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
+import type { ImportBinding } from "./import-types.js";
 
 export type BindingKind =
   | "local"
@@ -11,11 +12,7 @@ export type BindingKind =
   | "importNamed"
   | "namespace";
 
-export type ScopeImportBinding =
-  | { kind: "default"; local: string }
-  | { kind: "named"; local: string; imported: string }
-  | { kind: "namespace"; localNS: string }
-  | { kind: "star"; from: string };
+export type ScopeImportBinding = ImportBinding;
 
 export type Binding = {
   name: string;
