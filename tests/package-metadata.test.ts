@@ -13,6 +13,15 @@ function readText(relativePath: string): string {
   return fs.readFileSync(path.resolve(process.cwd(), relativePath), "utf8");
 }
 
+function declarationHasOwnJsDoc(declarationText: string, symbol: string): boolean {
+  const declarationMatch = new RegExp(`export declare function ${symbol}\\b`).exec(declarationText);
+  if (!declarationMatch) {
+    return false;
+  }
+  const beforeDeclaration = declarationText.slice(0, declarationMatch.index).trimEnd();
+  return /\/\*\*[\s\S]*\*\/$/.test(beforeDeclaration);
+}
+
 function listFilesRecursive(relativePath: string, extension: string): string[] {
   const root = path.resolve(process.cwd(), relativePath);
   const files: string[] = [];
@@ -295,25 +304,19 @@ describe("package metadata", () => {
   });
 
   it("keeps public API boundary JSDoc available for generated declarations", () => {
-    const sourceFiles = [
-      "src/indexer/build-index.ts",
-      "src/review.ts",
-      "src/impact/index.ts",
-      "src/impact/streaming.ts",
-      "src/agent-tools.ts",
+    const declarationChecks = [
+      { file: "dist/indexer/build-index.d.ts", symbol: "buildProjectIndex" },
+      { file: "dist/indexer/build-index.d.ts", symbol: "buildProjectIndexIncremental" },
+      { file: "dist/review.d.ts", symbol: "buildReviewReport" },
+      { file: "dist/impact/index.d.ts", symbol: "analyzeImpactFromDiff" },
+      { file: "dist/impact/streaming.d.ts", symbol: "analyzeImpactStreaming" },
+      { file: "dist/agent-tools.d.ts", symbol: "tool_impactJSON" },
+      { file: "dist/agent-tools.d.ts", symbol: "tool_getFileOverview" },
     ];
-    const source = sourceFiles.map((relativePath) => readText(relativePath)).join("\n");
 
-    for (const symbol of [
-      "buildProjectIndex",
-      "buildProjectIndexIncremental",
-      "buildReviewReport",
-      "analyzeImpactFromDiff",
-      "analyzeImpactStreaming",
-      "tool_impactJSON",
-      "tool_getFileOverview",
-    ]) {
-      expect(source).toMatch(new RegExp(`/\\*\\*[\\s\\S]*?\\*/\\s*export (?:async )?(?:function\\*? )?${symbol}\\b`));
+    for (const check of declarationChecks) {
+      const declarationText = readText(check.file);
+      expect(declarationHasOwnJsDoc(declarationText, check.symbol), `${check.file}:${check.symbol}`).toBe(true);
     }
   });
 

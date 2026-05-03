@@ -102,6 +102,79 @@ index 1234567..abcdef0 100644
     }
   });
 
+  it("keeps completion progress after terminal summary construction", async () => {
+    const root = path.resolve(process.cwd(), "tests", "samples", "typescript");
+    const index = await buildProjectIndex(root);
+    const diffText = `diff --git a/utils.ts b/utils.ts
+index 1234567..abcdef0 100644
+--- a/utils.ts
++++ b/utils.ts
+@@ -1,3 +1,3 @@
+ export function helperFunction(): string {
+-  return "Hello from utils";
++  return "Hello from updated utils";
+ }
+`;
+
+    const chunks: ImpactStreamChunk[] = [];
+    for await (const chunk of analyzeImpactStreaming(root, index, { provider: "raw", diffText })) {
+      chunks.push(chunk);
+    }
+
+    const progress = chunks.filter((chunk) => chunk.type === "progress");
+    expect(progress.map((chunk) => `${chunk.current}/${chunk.total}:${chunk.message}`)).toContain(
+      "3/4:Building summary",
+    );
+    expect(chunks[chunks.length - 2]).toMatchObject({
+      type: "progress",
+      message: "Analysis complete",
+      current: 4,
+      total: 4,
+    });
+    expect(chunks[chunks.length - 1]?.type).toBe("complete");
+  });
+
+  it("can emit a light terminal report for incremental-only streaming consumers", async () => {
+    const root = path.resolve(process.cwd(), "tests", "samples", "typescript");
+    const index = await buildProjectIndex(root);
+    const diffText = `diff --git a/utils.ts b/utils.ts
+index 1234567..abcdef0 100644
+--- a/utils.ts
++++ b/utils.ts
+@@ -1,3 +1,3 @@
+ export function helperFunction(): string {
+-  return "Hello from utils";
++  return "Hello from updated utils";
+ }
+`;
+
+    let complete: Extract<ImpactStreamChunk, { type: "complete" }> | undefined;
+    for await (const chunk of analyzeImpactStreaming(root, index, {
+      provider: "raw",
+      diffText,
+      streamSummary: "light",
+    })) {
+      if (chunk.type === "complete") complete = chunk;
+    }
+
+    expect(complete).toBeDefined();
+    if (complete) {
+      expect(complete.report.changedFiles.length).toBeGreaterThan(0);
+      expect(complete.report.changedSymbols.length).toBeGreaterThan(0);
+      expect(complete.report.impacted.length).toBeGreaterThan(0);
+      expect(complete.summary.totalChanged).toBe(complete.report.changedSymbols.length);
+      expect(complete.summary.totalImpacted).toBe(complete.report.impacted.length);
+      expect(complete.report.suggestions).toBeUndefined();
+      expect(complete.report.exportSummary).toBeUndefined();
+      expect(complete.report.reexportChains).toBeUndefined();
+      expect(complete.report.topImpacts).toEqual([]);
+      expect(complete.report.surfaceArea).toEqual({ files: [], topFanIn: [], topFanOut: [] });
+      expect(complete.report.clusters).toEqual([]);
+      expect(complete.report.cycles).toEqual([]);
+      expect(complete.report.graph).toEqual({ fileEdges: [], symbolEdges: [] });
+    }
+  });
+
   it("keeps streaming final summary aligned with batch impact reports", async () => {
     const root = path.resolve(process.cwd(), "tests", "samples", "typescript");
     const index = await buildProjectIndex(root);

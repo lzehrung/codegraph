@@ -201,7 +201,9 @@ export type ImpactDiagnostics = {
  *
  * This is the function-call integration contract for streaming consumers. It is
  * intentionally close to the full batch impact report, while intermediate chunks
- * remain optimized for progressive agent work.
+ * remain optimized for progressive agent work. When `streamSummary: "light"`
+ * is used, expensive terminal-only fields are present as empty arrays/graphs so
+ * consumers keep a stable shape without paying for the full summary pass.
  */
 export type ImpactStreamSummaryReport = {
   schemaVersion: number;
@@ -417,6 +419,11 @@ export type ImpactOptions = DiffProviderOptions & {
   testPatterns?: string[];
   /** Return compact report with indexed arrays instead of repeated strings */
   compact?: boolean;
+  /**
+   * Streaming only: build the default full terminal summary, or a light summary
+   * that skips suggestions, graph metadata, cycles, clusters, and surface area.
+   */
+  streamSummary?: "full" | "light";
   /** File patterns to ignore in impact analysis */
   ignoreGlobs?: string[];
   /** Include context snippets for references */
