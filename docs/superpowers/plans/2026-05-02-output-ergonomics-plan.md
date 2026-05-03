@@ -58,6 +58,7 @@
 ### Task 1: Add CLI Regression Tests For Current Review Summary Need
 
 **Files:**
+
 - Modify: `tests/cli-regressions.test.ts`
 - Reference: `src/cli.ts`
 
@@ -112,6 +113,7 @@ Expected: commit succeeds only if the team is using red/green commits. If not, k
 ### Task 2: Add CLI Regression Tests For Impact Pretty Reasons And Compact Alias
 
 **Files:**
+
 - Modify: `tests/impact-cli.test.ts`
 - Reference: `src/cli.ts`
 - Reference: `src/impact/report.ts`
@@ -162,6 +164,7 @@ Expected: FAIL because `--compact-json` is not yet accepted and pretty output do
 ### Task 3: Add Review Summary Formatter
 
 **Files:**
+
 - Modify: `src/cli.ts`
 - Test: `tests/cli-regressions.test.ts`
 
@@ -271,6 +274,7 @@ Expected: Commit contains only review summary implementation and tests.
 ### Task 4: Add Impact Reason Labels To Pretty Output
 
 **Files:**
+
 - Modify: `src/cli.ts`
 - Test: `tests/impact-cli.test.ts`
 
@@ -324,6 +328,7 @@ Expected: PASS, including the reason-label test.
 ### Task 5: Add `--compact-json` Alias For Impact
 
 **Files:**
+
 - Modify: `src/cli.ts`
 - Test: `tests/impact-cli.test.ts`
 - Docs: `docs/cli.md`
@@ -350,6 +355,7 @@ In `docs/cli.md`, under impact examples, add:
 
 ```md
 # Compact impact JSON with indexed file arrays
+
 codegraph impact --base main --head HEAD --compact-json
 ```
 
@@ -387,6 +393,7 @@ Expected: Commit contains reason labels, compact alias, and docs.
 ### Task 6: Classify Node Builtins Outside Unresolved Import Triage
 
 **Files:**
+
 - Modify: `src/graphs.ts` or the file containing `getUnresolvedImports`
 - Test: nearest existing unresolved/inspect test file
 - Docs: `docs/cli.md`
@@ -432,10 +439,7 @@ Add a small helper in the unresolved implementation module:
 ```ts
 import { builtinModules } from "node:module";
 
-const NODE_BUILTIN_MODULES = new Set([
-  ...builtinModules,
-  ...builtinModules.map((name) => `node:${name}`),
-]);
+const NODE_BUILTIN_MODULES = new Set([...builtinModules, ...builtinModules.map((name) => `node:${name}`)]);
 
 function isNodeBuiltinSpecifier(specifier: string): boolean {
   return NODE_BUILTIN_MODULES.has(specifier);
@@ -490,6 +494,7 @@ Expected: Commit contains builtin filtering, tests, and docs.
 ### Task 7: Update Canonical Docs And Skill Guidance
 
 **Files:**
+
 - Modify: `README.md`
 - Modify: `docs/agent-workflows.md`
 - Modify: `docs/library-api.md`
@@ -575,6 +580,7 @@ Expected: Commit contains docs and skill updates only.
 ### Task 8: Run Real Output Smoke Checks
 
 **Files:**
+
 - No code edits expected.
 
 - [ ] **Step 1: Build**
@@ -596,6 +602,7 @@ node .\dist\cli.js impact --provider git --base HEAD --head WORKTREE --pretty --
 ```
 
 Expected:
+
 - Starts with `Impact Analysis Report`.
 - Shows changed file/symbol/impact counts.
 - Top impacted entries include reason labels.
@@ -610,6 +617,7 @@ node .\dist\cli.js review --base HEAD --head WORKTREE --summary
 ```
 
 Expected:
+
 - Starts with `Review Summary`.
 - Shows files changed, symbols changed, candidate tests, risk.
 - Lists changed files before any project-file metadata.
@@ -624,6 +632,7 @@ node .\dist\cli.js inspect .\src --limit 8
 ```
 
 Expected:
+
 - Hotspots still appear.
 - `unresolved.top` does not include Node builtins such as `node:path`.
 - Recommended commands remain valid.
@@ -637,6 +646,7 @@ node .\dist\cli.js impact --provider git --base HEAD --head WORKTREE --compact-j
 ```
 
 Expected:
+
 - JSON parses.
 - `format` is `"compact"`.
 - File arrays use compact indexed form.
@@ -644,6 +654,7 @@ Expected:
 ### Task 9: Run Full Verification
 
 **Files:**
+
 - No code edits expected.
 
 - [ ] **Step 1: Run lint**
@@ -689,6 +700,7 @@ Expected: no output and exit code 0.
 ### Task 10: Final Self-Review
 
 **Files:**
+
 - Review changed files only.
 
 - [ ] **Step 1: Inspect final diff stat**
@@ -710,6 +722,7 @@ rg -n "review --base HEAD --head WORKTREE --summary|impact --base HEAD --head WO
 ```
 
 Expected:
+
 - README, CLI docs, agent workflow docs, and skill mention the new recommended commands.
 - `compact-json` is documented for impact.
 - Node builtin unresolved behavior is documented once in CLI reference.
@@ -723,6 +736,7 @@ git status --short
 ```
 
 Expected:
+
 - Only intentional files are modified.
 - Ignore unrelated user/workspace files such as `.idea/` unless the user explicitly asks to manage them.
 

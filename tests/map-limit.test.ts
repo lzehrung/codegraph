@@ -10,9 +10,7 @@ describe("mapLimit", () => {
   it("treats non-finite concurrency as single-threaded work instead of hanging", async () => {
     await expect(mapLimit([1, 2, 3], Number.NaN, async (value) => value * 4)).resolves.toEqual([4, 8, 12]);
     await expect(mapLimit([1, 2, 3], Number.POSITIVE_INFINITY, async (value) => value * 5)).resolves.toEqual([
-      5,
-      10,
-      15,
+      5, 10, 15,
     ]);
   });
 });
