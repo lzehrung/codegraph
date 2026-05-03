@@ -196,9 +196,39 @@ export type ImpactDiagnostics = {
   fallbackSeededDependents: number;
 };
 
+/**
+ * Final structured payload emitted by `analyzeImpactStreaming()`.
+ *
+ * This is the function-call integration contract for streaming consumers. It is
+ * intentionally close to the full batch impact report, while intermediate chunks
+ * remain optimized for progressive agent work.
+ */
+export type ImpactStreamSummaryReport = {
+  schemaVersion: number;
+  format: "stream-summary";
+  changedFiles: ImpactReport["changedFiles"];
+  changedSymbols: ChangedSymbol[];
+  impacted: ImpactItem[];
+  suggestions?: ImpactReport["suggestions"];
+  exportSummary?: ImpactReport["exportSummary"];
+  reexportChains?: ImpactReport["reexportChains"];
+  topImpacts: ImpactTopItem[];
+  surfaceArea: ImpactSurfaceArea;
+  clusters: ImpactCluster[];
+  cycles: ImpactCycle[];
+  graph: ImpactReport["graph"];
+  diagnostics: ImpactDiagnostics;
+  warning?: string | undefined;
+};
+
 export const IMPACT_SCHEMA_VERSION = 1;
 
-// Main impact report
+/**
+ * Full impact report returned by `analyzeImpactFromDiff()` when `compact` is not set.
+ *
+ * Use this shape for deterministic review packs when repeated path strings are
+ * acceptable and direct readability is more important than payload size.
+ */
 export type ImpactReport = {
   schemaVersion: number;
   format: "full";
@@ -226,7 +256,12 @@ export type ImpactReport = {
   warning?: string | undefined;
 };
 
-// Compact impact report with indexed arrays
+/**
+ * Compact impact report returned when `compact` is enabled.
+ *
+ * This shape deduplicates file paths through indexed arrays. Use it for larger
+ * payloads or storage boundaries where consumers can resolve indices reliably.
+ */
 export type CompactImpactReport = {
   schemaVersion: number;
   format: "compact";
@@ -365,7 +400,13 @@ export const DEFAULT_SEVERITY_WEIGHTS: SeverityWeights = {
   transitive: 0.4,
 };
 
-// Analysis options
+/**
+ * Options for batch and streaming impact analysis.
+ *
+ * The diff provider selects the changed files. Agent-oriented callers usually
+ * start with `provider: "git"` or `provider: "raw"`, reuse a shared index, and
+ * enable only the optional suggestion/context fields they plan to preserve.
+ */
 export type ImpactOptions = DiffProviderOptions & {
   scope?: "all" | "imported";
   maxRefs?: number;

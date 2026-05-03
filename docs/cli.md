@@ -364,6 +364,8 @@ npx tsx src/cli.ts goto <file> <line> <column>
 
 ## Output formats
 
+`--pretty` and `--summary` are presentation modes. They are intentionally compact and may omit low-confidence or verbose context that remains available in structured JSON and TypeScript return values. Integrators that compose deterministic review packs should use the exported TypeScript functions or JSON output.
+
 Plain `graph` output is a file dependency graph only:
 
 ```json

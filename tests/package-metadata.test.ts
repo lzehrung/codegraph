@@ -281,6 +281,42 @@ describe("package metadata", () => {
     expect(readme).toContain("./PUBLISHING.md");
   });
 
+  it("keeps copied README consumers oriented to the library API surface", () => {
+    const readme = readText("README.md");
+
+    expect(readme).toContain("## Using as a library");
+    expect(readme).toContain("buildProjectIndex");
+    expect(readme).toContain("buildReviewReport");
+    expect(readme).toContain("analyzeImpactFromDiff");
+    expect(readme).toContain("analyzeImpactStreaming");
+    expect(readme).toContain("tool_impactJSON");
+    expect(readme).toContain("structured fields");
+    expect(readme).toContain("./docs/library-api.md");
+  });
+
+  it("keeps public API boundary JSDoc available for generated declarations", () => {
+    const sourceFiles = [
+      "src/indexer/build-index.ts",
+      "src/review.ts",
+      "src/impact/index.ts",
+      "src/impact/streaming.ts",
+      "src/agent-tools.ts",
+    ];
+    const source = sourceFiles.map((relativePath) => readText(relativePath)).join("\n");
+
+    for (const symbol of [
+      "buildProjectIndex",
+      "buildProjectIndexIncremental",
+      "buildReviewReport",
+      "analyzeImpactFromDiff",
+      "analyzeImpactStreaming",
+      "tool_impactJSON",
+      "tool_getFileOverview",
+    ]) {
+      expect(source).toMatch(new RegExp(`/\\*\\*[\\s\\S]*?\\*/\\s*export (?:async )?(?:function\\*? )?${symbol}\\b`));
+    }
+  });
+
   it("keeps fallback install guidance aligned with the scoped registry requirement", () => {
     const readme = readText("README.md");
     const installationDoc = readText("docs/installation.md");
