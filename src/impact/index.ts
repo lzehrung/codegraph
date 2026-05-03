@@ -7,6 +7,15 @@ import { collectImpactReportSuggestions } from "./report-suggestions.js";
 export * from "./types.js";
 export { analyzeImpactStreaming, type ImpactStreamChunk } from "./streaming.js";
 export { collectImpactReportSuggestions } from "./report-suggestions.js";
+
+/**
+ * Analyze a diff against an existing project index and return a structured impact report.
+ *
+ * Use this batch API when the caller can wait for the complete result. The full
+ * report includes changed files, changed symbols, impacted items, optional
+ * suggestions, export summaries, re-export chains, graph edges, cycles,
+ * diagnostics, and stable schema metadata for downstream pack builders.
+ */
 export async function analyzeImpactFromDiff(
   projectRoot: string,
   index: ProjectIndex,

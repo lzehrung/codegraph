@@ -65,6 +65,13 @@ type ReviewSymbolSummary = {
   callsites?: ReviewSymbolCallsite[];
 };
 
+/**
+ * Structured review bundle for downstream review agents.
+ *
+ * This is the programmatic counterpart to CLI review output. It keeps risk,
+ * tasks, changed symbols, graph deltas, candidate tests, diagnostics, and
+ * snippets as data so callers can build deterministic file packs or prompts.
+ */
 export type ReviewReport = {
   schemaVersion: number;
   status: "ok" | "no_changes";
@@ -84,6 +91,13 @@ export type ReviewReport = {
   diagnostics?: ReviewDiagnostics;
 };
 
+/**
+ * Options for `buildReviewReport()`.
+ *
+ * Most review agents use a git range (`gitBase`/`gitHead`) or `diffText`, choose
+ * a `reviewDepth`, and preserve the returned structured fields instead of
+ * re-parsing terminal summaries.
+ */
 export type ReviewOptions = IncrementalBuildOptions & {
   reviewDepth?: ReviewDepth;
   maxCandidates?: number;
@@ -910,7 +924,14 @@ async function runWithConcurrency<T, R>(items: T[], limit: number, worker: (item
   return results;
 }
 
-// Review entry point: programmatic review report builder.
+/**
+ * Build the structured review report used by programmatic review agents.
+ *
+ * The report keeps changed files, changed symbols, graph deltas, candidate tests,
+ * risk signals, review tasks, diagnostics, and optional snippets as data instead
+ * of terminal prose. Prefer this API over CLI summary output when composing
+ * deterministic model context or review file packs.
+ */
 export async function buildReviewReport(projectRoot: string, opts: ReviewOptions = {}): Promise<ReviewReport> {
   const appliedOptions = applyReviewPresetOptions(opts);
   const reviewReport = appliedOptions.report;

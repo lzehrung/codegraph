@@ -75,8 +75,13 @@ function createAsyncQueue<T>(): AsyncQueue<T> {
 }
 
 /**
- * Stream impact analysis results as they're discovered
- * This is much better for agent UX as they can start reasoning immediately
+ * Stream impact analysis results as they are discovered.
+ *
+ * Consumers receive progress, `changedSymbol`, and `impactItem` chunks before
+ * the final `complete` chunk. `complete.report` is the structured integration
+ * payload for function callers and includes the same key extras as the batch
+ * impact report, including suggestions, export summaries, re-export chains,
+ * graph edges, cycles, diagnostics, and schema metadata.
  */
 export async function* analyzeImpactStreaming(
   projectRoot: string,

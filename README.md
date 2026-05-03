@@ -10,6 +10,7 @@ It is built for agent and human workflows that need repo structure fast without 
 - [Features](#features)
 - [Quick start](#quick-start)
 - [Agent setup](#agent-setup)
+- [Using as a library](#using-as-a-library)
 - [Common workflows](#common-workflows)
 - [Supported languages](#supported-languages)
 - [Documentation](#documentation)
@@ -118,6 +119,50 @@ codegraph skill install
 ```
 
 To inspect the packaged skill paths and target health, run `codegraph skill doctor`.
+
+## Using as a library
+
+Use the TypeScript API when another program needs deterministic file packs, review packets, or model prompts. CLI `--pretty` and `--summary` output is for humans; library callers should keep structured fields until the final UI or prompt boundary.
+
+```ts
+import {
+  buildProjectIndex,
+  buildReviewReport,
+  analyzeImpactFromDiff,
+  analyzeImpactStreaming,
+  tool_impactJSON,
+} from "@lzehrung/codegraph";
+
+const root = process.cwd();
+const index = await buildProjectIndex(root, { native: "auto" });
+
+const review = await buildReviewReport(root, {
+  gitBase: "origin/main",
+  gitHead: "HEAD",
+  reviewDepth: "standard",
+});
+
+const impact = await analyzeImpactFromDiff(root, index, {
+  provider: "git",
+  base: "origin/main",
+  head: "HEAD",
+  detectBreakingChanges: true,
+});
+
+for await (const chunk of analyzeImpactStreaming(root, index, {
+  provider: "git",
+  base: "origin/main",
+  head: "HEAD",
+})) {
+  if (chunk.type === "complete") {
+    console.log(chunk.report.changedSymbols, chunk.report.impacted);
+  }
+}
+
+const wrapped = await tool_impactJSON(root, { provider: "git", base: "HEAD", head: "WORKTREE" }, { index });
+```
+
+Good downstream packs preserve structured fields such as symbol handles, ranges, diff snippets, callsites, graph edges, candidate-test confidence, impact reasons, diagnostics, and `schemaVersion`/`format`. Use [docs/library-api.md](./docs/library-api.md) for the full API reference and [docs/agent-workflows.md](./docs/agent-workflows.md) for session and streaming recipes.
 
 ## Common workflows
 
