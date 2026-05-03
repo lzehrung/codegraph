@@ -176,6 +176,25 @@ describe("package metadata", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("keeps the graph public module as a lightweight facade", () => {
+    const graphFacade = readText("src/graphs.ts");
+
+    expect(graphFacade).not.toContain("export async function collectGraph");
+    expect(graphFacade).not.toContain("export async function collectEdgesForFile");
+    expect(graphFacade.split(/\r?\n/).length).toBeLessThanOrEqual(130);
+  });
+
+  it("keeps graph assembly separate from per-file edge collection", () => {
+    const graphBuilder = readText("src/graph-builder.ts");
+    const edgeCollector = readText("src/graph-edge-collector.ts");
+
+    expect(graphBuilder).toContain('from "./graph-edge-collector.js"');
+    expect(graphBuilder).toContain("export async function collectGraph");
+    expect(graphBuilder).not.toContain("export async function collectEdgesForFile");
+    expect(edgeCollector).toContain("export async function collectEdgesForFile");
+    expect(edgeCollector).not.toContain("export async function collectGraph");
+  });
+
   it("routes prepare through the install-aware prepare script", () => {
     const rootPackage = readJson("package.json");
     const scripts = readStringRecord(rootPackage.scripts);
