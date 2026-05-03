@@ -182,7 +182,7 @@ export function computePublishPlan({ shouldPublish, selectedPackageNames, publis
 export function computePublishExecutionSteps(publishPlan) {
   const steps = [];
   if (publishPlan.publishByPackage["@lzehrung/codegraph-native"]) {
-    steps.push("publishNativeTargets", "publishNativeMeta");
+    steps.push("publishNativeTargets", "prepareNativeMeta", "publishNativeMeta");
   }
   if (publishPlan.publishByPackage["@lzehrung/codegraph-js-fallback"]) {
     steps.push("publishJsFallback");
@@ -224,9 +224,7 @@ function syncRootNativeOptionalDependency(pkg, nativeVersion) {
     return pkg;
   }
   const optionalDependencies =
-    pkg.optionalDependencies &&
-    typeof pkg.optionalDependencies === "object" &&
-    !Array.isArray(pkg.optionalDependencies)
+    pkg.optionalDependencies && typeof pkg.optionalDependencies === "object" && !Array.isArray(pkg.optionalDependencies)
       ? { ...pkg.optionalDependencies }
       : null;
   if (!optionalDependencies || typeof optionalDependencies["@lzehrung/codegraph-native"] !== "string") {
@@ -266,6 +264,25 @@ export function recoverRootPackageManifestForResume(currentPkg, sourcePkg) {
 
 export function recoverNativePackageManifestForResume(currentPkg, sourcePkg) {
   return restoreNativePackageManifest(sourcePkg, currentPkg.version);
+}
+
+export function prepareNativePackageManifestForPublish(sourcePkg, version, generatedPkg) {
+  const generatedOptionalDependencies =
+    generatedPkg.optionalDependencies &&
+    typeof generatedPkg.optionalDependencies === "object" &&
+    !Array.isArray(generatedPkg.optionalDependencies)
+      ? Object.fromEntries(
+          Object.entries(generatedPkg.optionalDependencies).sort(([left], [right]) => left.localeCompare(right)),
+        )
+      : null;
+  if (!generatedOptionalDependencies || Object.keys(generatedOptionalDependencies).length === 0) {
+    throw new Error("Missing generated native platform optionalDependencies for native meta publish.");
+  }
+  return {
+    ...sourcePkg,
+    version,
+    optionalDependencies: generatedOptionalDependencies,
+  };
 }
 
 export function restoreNativePackageManifest(pkg, version) {

@@ -3,6 +3,7 @@ import { buildProjectIndex, analyzeImpactFromDiff } from "../src/index.js";
 import type { CompactImpactReport, ImpactReport } from "../src/impact/types.js";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 describe("impact signature hint", () => {
@@ -14,8 +15,7 @@ describe("impact signature hint", () => {
   };
 
   it("should identify signature changes using AST", async () => {
-    const root = path.resolve("temp-impact-signature-test");
-    if (!fs.existsSync(root)) fs.mkdirSync(root);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-impact-signature-"));
 
     try {
       const file = path.join(root, "test.ts").replace(/\\/g, "/");
@@ -46,7 +46,7 @@ describe("impact signature hint", () => {
       expect(impact).toBeDefined();
       expect(impact?.explain?.hints).toContain("signatureChanged");
     } finally {
-      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });
