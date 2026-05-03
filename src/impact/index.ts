@@ -8,16 +8,13 @@ import type {
   ChangedSymbol,
   FileChange,
   ImpactSuggestion,
-  ImpactDiagnostics,
 } from "./types.js";
-import { getDiff } from "./providers/base.js";
-import { locateChangedSymbolsWithLines } from "./map.js";
-import { analyzeImpact } from "./analyzer.js";
+import { collectImpactAnalysis } from "./collect.js";
 import { buildImpactReport } from "./report.js";
 import { collectImpactSuggestions } from "./suggestions.js";
 import { listCandidateTestFiles } from "./context.js";
 import { mapLimit, resolveFilePathFromRoot } from "../util.js";
-import { createImpactIgnoreMatcher, normalizeImpactDiffFiles, normalizeImpactFilePath } from "./path.js";
+import { normalizeImpactFilePath } from "./path.js";
 import { compileTestPatterns, createIndexTestFileMatcher } from "./testPatterns.js";
 
 export * from "./types.js";
@@ -900,99 +897,22 @@ export async function analyzeImpactFromDiff(
   index: ProjectIndex,
   options: ImpactOptions,
 ): Promise<ImpactReport | CompactImpactReport> {
-  // Get the diff
-  const diff = await getDiff(options);
-
-  const { ignoreGlobs = [] } = options;
-  const isIgnored = createImpactIgnoreMatcher(projectRoot, ignoreGlobs);
-  const normalizedDiff = normalizeImpactDiffFiles(projectRoot, diff.files, isIgnored);
-  const diagnostics: ImpactDiagnostics = {
-    changedFilesTotal: diff.files.length,
-    changedFilesIgnored: normalizedDiff.ignoredCount,
-    changedFilesWithoutSymbols: 0,
-    symbolMappingParseFailures: 0,
-    refsScanned: 0,
-    refsFilteredTests: 0,
-    refsFilteredIgnored: 0,
-    refsDroppedByMaxRefs: 0,
-    fallbackSeededFiles: 0,
-    fallbackSeededDependents: 0,
-  };
-
-  // Map all changed files to changed symbols
-  const normalizedChanges = normalizedDiff.files;
-  const changedByFile = await mapLimit(
-    normalizedChanges.map((fileChange, idx) => ({ fileChange, idx })),
-    8,
-    async ({ fileChange, idx }) => {
-      const mapped = await locateChangedSymbolsWithLines(index, fileChange.path, fileChange.hunks);
-      return {
-        idx,
-        path: fileChange.path,
-        kind: fileChange.kind,
-        symbols: mapped.changedSymbols,
-        parseFailed: mapped.parseFailed,
-      };
-    },
-  );
-
-  changedByFile.sort((a, b) => a.idx - b.idx);
-  let changedSymbols: ChangedSymbol[] = [];
-  const filesWithSymbols = new Set<string>();
-  for (const entry of changedByFile) {
-    if (entry.symbols.length > 0) filesWithSymbols.add(entry.path);
-    if (entry.symbols.length === 0) {
-      diagnostics.changedFilesWithoutSymbols += 1;
-      if (entry.parseFailed && entry.kind !== "deleted") {
-        diagnostics.symbolMappingParseFailures += 1;
-      }
-    }
-    changedSymbols.push(...entry.symbols);
-  }
-
-  // Honor scope option: only consider exported symbols if scope=imported
-  if (options.scope === "imported") {
-    changedSymbols = changedSymbols.filter((s) => s.exported);
-  }
-
-  const fileLevelFallback = options.fileLevelFallback ?? true;
-  const fileLevelFallbackPaths = normalizedChanges
-    .filter((change) => change.kind !== "deleted" && !filesWithSymbols.has(change.path))
-    .map((change) => change.path);
-
-  let fanInByFile: Map<string, number> | undefined;
-  if (options.testCoverageSuggestions) {
-    fanInByFile = new Map<string, number>();
-    for (const edge of index.graph.edges) {
-      if (edge.to.type !== "file") continue;
-      const current = fanInByFile.get(edge.to.path) ?? 0;
-      fanInByFile.set(edge.to.path, current + 1);
-    }
-  }
-
-  // Analyze impact
-  const impactedItems = await analyzeImpact(index, changedSymbols, normalizedChanges, {
-    ...options,
-    projectRoot,
-    fileLevelFallback,
-    fileLevelFallbackPaths,
-    diagnostics,
-  });
+  const analysis = await collectImpactAnalysis(projectRoot, index, options);
 
   const suggestions = options.verifyReferences
-    ? await collectImpactSuggestions(index, projectRoot, normalizedChanges, options)
+    ? await collectImpactSuggestions(index, projectRoot, analysis.normalizedChanges, options)
     : [];
 
   const configAndBreaking =
     options.configImpactRules || options.detectBreakingChanges
-      ? collectConfigAndBreakingSuggestions(index, projectRoot, normalizedChanges, changedSymbols, {
+      ? collectConfigAndBreakingSuggestions(index, projectRoot, analysis.normalizedChanges, analysis.changedSymbols, {
           configImpactRules: !!options.configImpactRules,
           detectBreakingChanges: !!options.detectBreakingChanges,
         })
       : [];
 
   const coverageSuggestions = options.testCoverageSuggestions
-    ? await collectUntestedChangeSuggestions(index, changedSymbols, projectRoot, fanInByFile, {
+    ? await collectUntestedChangeSuggestions(index, analysis.changedSymbols, projectRoot, undefined, {
         ...(options.lcovPaths ? { lcovPaths: options.lcovPaths } : {}),
         ...(options.coveragePaths ? { coveragePaths: options.coveragePaths } : {}),
         ...(options.testCommandTemplate ? { testCommandTemplate: options.testCommandTemplate } : {}),
@@ -1006,12 +926,12 @@ export async function analyzeImpactFromDiff(
   return await buildImpactReport(
     projectRoot,
     index,
-    normalizedChanges,
-    changedSymbols,
-    impactedItems,
+    analysis.normalizedChanges,
+    analysis.changedSymbols,
+    analysis.impactedItems,
     mergedSuggestions,
-    { ...options, warning: diff.warning },
-    diagnostics,
+    { ...options, warning: analysis.warning },
+    analysis.diagnostics,
   );
 }
 

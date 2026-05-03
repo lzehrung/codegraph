@@ -4,15 +4,20 @@
  */
 
 import type { ProjectIndex } from "../indexer.js";
-import type { ImpactOptions, ChangedSymbol, ImpactItem } from "./types.js";
+import type {
+  ImpactOptions,
+  ChangedSymbol,
+  ImpactItem,
+  ImpactStreamSummaryReport,
+} from "./types.js";
 import { getDiff } from "./providers/base.js";
-import { locateChangedSymbolsWithLines } from "./map.js";
 import { analyzeImpact } from "./analyzer.js";
 import { discoverProjectFiles, type ProjectFileInfo } from "../util.js";
+import { buildImpactReport } from "./report.js";
+import { collectChangedSymbols, createImpactDiagnostics, listFileLevelFallbackPaths } from "./collect.js";
 import {
   createImpactIgnoreMatcher,
   normalizeImpactDiffFiles,
-  normalizeImpactFilePath,
   toImpactReportFilePath,
 } from "./path.js";
 
@@ -24,6 +29,7 @@ export type ImpactStreamChunk =
   | {
       type: "complete";
       summary: { totalChanged: number; totalImpacted: number };
+      report: ImpactStreamSummaryReport;
     }
   | { type: "error"; error: string };
 
@@ -97,6 +103,7 @@ export async function* analyzeImpactStreaming(
     const { ignoreGlobs = [] } = options;
     const isIgnored = createImpactIgnoreMatcher(projectRoot, ignoreGlobs);
     const normalizedDiff = normalizeImpactDiffFiles(projectRoot, diff.files, isIgnored);
+    const diagnostics = createImpactDiagnostics(diff.files.length, normalizedDiff.ignoredCount);
 
     // Step 2: Map changed files to symbols
     yield {
@@ -106,25 +113,15 @@ export async function* analyzeImpactStreaming(
       total: 4,
     };
 
-    let changedSymbols: ChangedSymbol[] = [];
-    const filesWithSymbols = new Set<string>();
-    for (const fileChange of normalizedDiff.files) {
-      const absPath = normalizeImpactFilePath(projectRoot, fileChange.path);
-      const mapped = await locateChangedSymbolsWithLines(index, absPath, fileChange.hunks);
-      const symbols = mapped.changedSymbols;
-
-      if (symbols.length > 0) filesWithSymbols.add(absPath);
-      const emittedSymbols = options.scope === "imported" ? symbols.filter((symbol) => symbol.exported) : symbols;
-      for (const symbol of emittedSymbols) {
-        yield {
-          type: "changedSymbol",
-          symbol: {
-            ...symbol,
-            file: displayFile(symbol.file),
-          },
-        };
-        changedSymbols.push(symbol);
-      }
+    const { changedSymbols, filesWithSymbols } = await collectChangedSymbols(index, normalizedDiff.files, options, diagnostics);
+    for (const symbol of changedSymbols) {
+      yield {
+        type: "changedSymbol",
+        symbol: {
+          ...symbol,
+          file: displayFile(symbol.file),
+        },
+      };
     }
 
     // Step 3: Analyze impact (stream results)
@@ -137,9 +134,7 @@ export async function* analyzeImpactStreaming(
 
     const normalizedChanges = normalizedDiff.files;
     const fileLevelFallback = options.fileLevelFallback ?? true;
-    const fileLevelFallbackPaths = normalizedChanges
-      .filter((change) => change.kind !== "deleted" && !filesWithSymbols.has(change.path))
-      .map((change) => change.path);
+    const fileLevelFallbackPaths = listFileLevelFallbackPaths(normalizedChanges, filesWithSymbols);
     const impactQueue = createAsyncQueue<ImpactStreamChunk>();
     const emittedSignatures = new Set<string>();
     let impactedItems: ImpactItem[] = [];
@@ -164,6 +159,7 @@ export async function* analyzeImpactStreaming(
       projectRoot,
       fileLevelFallback,
       fileLevelFallbackPaths,
+      diagnostics,
       onImpactItem: (item, phase) => {
         queueImpactItem(item, phase === "partial");
       },
@@ -200,12 +196,44 @@ export async function* analyzeImpactStreaming(
       total: 4,
     };
 
+    const fullReport = await buildImpactReport(
+      projectRoot,
+      index,
+      normalizedChanges,
+      changedSymbols,
+      impactedItems,
+      [],
+      { ...options, compact: false, warning: diff.warning },
+      diagnostics,
+    );
+    if (fullReport.format !== "full") {
+      yield {
+        type: "error",
+        error: "Expected full impact report while building streaming summary",
+      };
+      return;
+    }
+    const report: ImpactStreamSummaryReport = {
+      schemaVersion: fullReport.schemaVersion,
+      format: "stream-summary",
+      changedFiles: fullReport.changedFiles,
+      changedSymbols: fullReport.changedSymbols,
+      impacted: fullReport.impacted,
+      topImpacts: fullReport.topImpacts ?? [],
+      surfaceArea: fullReport.surfaceArea,
+      clusters: fullReport.clusters,
+      cycles: fullReport.cycles ?? [],
+      diagnostics: fullReport.diagnostics ?? diagnostics,
+      ...(fullReport.warning ? { warning: fullReport.warning } : {}),
+    };
+
     yield {
       type: "complete",
       summary: {
-        totalChanged: changedSymbols.length,
-        totalImpacted: impactedItems.length,
+        totalChanged: report.changedSymbols.length,
+        totalImpacted: report.impacted.length,
       },
+      report,
     };
   } catch (error) {
     yield {

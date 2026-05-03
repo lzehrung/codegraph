@@ -148,7 +148,7 @@ For the full capability matrix, limitations, and fixture coverage, see [docs/lan
 
 - [docs/installation.md](./docs/installation.md): source checkout, scoped registry, release tarball, native runtime modes, and JS fallback details
 - [docs/cli.md](./docs/cli.md): command reference, output formats, SQLite schema, review bundles, and graph viewer usage
-- [docs/library-api.md](./docs/library-api.md): semantic chunking, indexing, graph APIs, read-only SQL, and impact examples from code
+- [docs/library-api.md](./docs/library-api.md): semantic chunking, indexing, graph APIs, read-only SQL, impact examples, and programmatic review output
 - [docs/agent-workflows.md](./docs/agent-workflows.md): sessions, streaming, tool wrappers, review bundles, and agent-oriented review recipes
 - [docs/how-it-works.md](./docs/how-it-works.md): performance, caching, native runtime behavior, architecture, and testing guidance
 - [docs/language-parity.md](./docs/language-parity.md): per-language capability matrix

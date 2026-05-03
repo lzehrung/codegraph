@@ -196,6 +196,20 @@ export type ImpactDiagnostics = {
   fallbackSeededDependents: number;
 };
 
+export type ImpactStreamSummaryReport = {
+  schemaVersion: number;
+  format: "stream-summary";
+  changedFiles: ImpactReport["changedFiles"];
+  changedSymbols: ChangedSymbol[];
+  impacted: ImpactItem[];
+  topImpacts: ImpactTopItem[];
+  surfaceArea: ImpactSurfaceArea;
+  clusters: ImpactCluster[];
+  cycles: ImpactCycle[];
+  diagnostics: ImpactDiagnostics;
+  warning?: string | undefined;
+};
+
 export const IMPACT_SCHEMA_VERSION = 1;
 
 // Main impact report
