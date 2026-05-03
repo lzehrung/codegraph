@@ -22,6 +22,29 @@ function declarationHasOwnJsDoc(declarationText: string, symbol: string): boolea
   return /\/\*\*[\s\S]*\*\/$/.test(beforeDeclaration);
 }
 
+function extractExportedTypeDeclaration(source: string, typeName: string): string {
+  const declarationStart = source.indexOf(`export type ${typeName} =`);
+  expect(declarationStart).toBeGreaterThan(-1);
+
+  let depth = 0;
+  for (let index = declarationStart; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "{") {
+      depth += 1;
+      continue;
+    }
+    if (character === "}") {
+      depth -= 1;
+      continue;
+    }
+    if (character === ";" && depth === 0) {
+      return source.slice(declarationStart, index + 1);
+    }
+  }
+
+  throw new Error(`Could not find complete declaration for ${typeName}`);
+}
+
 function listFilesRecursive(relativePath: string, extension: string): string[] {
   const root = path.resolve(process.cwd(), relativePath);
   const files: string[] = [];
@@ -323,14 +346,19 @@ describe("package metadata", () => {
   it("scopes streaming summary mode to the streaming API type", () => {
     const impactTypes = readText("src/impact/types.ts");
     const streamingSource = readText("src/impact/streaming.ts");
-    const impactOptionsStart = impactTypes.indexOf("export type ImpactOptions =");
-    const impactOptionsEnd = impactTypes.indexOf("};", impactOptionsStart);
+    const streamingDeclaration = extractExportedTypeDeclaration(streamingSource, "ImpactStreamingOptions");
+    const impactOptionsDeclaration = extractExportedTypeDeclaration(impactTypes, "ImpactOptions");
+    const rootDeclaration = readText("dist/index.d.ts");
+    const impactDeclaration = readText("dist/impact/index.d.ts");
+    const streamingDeclarationSurface = readText("dist/impact/streaming.d.ts");
 
-    expect(impactOptionsStart).toBeGreaterThan(-1);
-    expect(impactOptionsEnd).toBeGreaterThan(impactOptionsStart);
-    expect(impactTypes.slice(impactOptionsStart, impactOptionsEnd)).not.toContain("streamSummary");
-    expect(streamingSource).toContain("export type ImpactStreamingOptions");
-    expect(streamingSource).toContain('streamSummary?: "full" | "light"');
+    expect(impactOptionsDeclaration).not.toContain("streamSummary");
+    expect(streamingDeclaration).toContain('streamSummary?: "full" | "light"');
+    expect(streamingDeclaration).toContain("ImpactStreamingOptionsBase<ImpactOptions>");
+    expect(streamingSource).toContain('Omit<Options, "compact">');
+    expect(rootDeclaration).toContain("type ImpactStreamingOptions");
+    expect(impactDeclaration).toContain("type ImpactStreamingOptions");
+    expect(streamingDeclarationSurface).toContain('Omit<Options, "compact">');
   });
 
   it("keeps streaming and batch impact format discriminators distinct in docs", () => {
