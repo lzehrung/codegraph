@@ -10,6 +10,7 @@ import {
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import type { ImportBinding } from "../src/index.js";
 
 describe("scope index quality", () => {
   it("should not duplicate bindings in root scope", () => {
@@ -181,5 +182,28 @@ def foo(x):
     // Occurrence at line 4 (return x) should be paramX
     expect(paramX!.occurrences.some((o) => o.start.line === 4)).toBe(true);
     expect(globalX!.occurrences.some((o) => o.start.line === 4)).toBe(false);
+  });
+
+  it("exposes full import binding metadata on scope import bindings", () => {
+    const source = `
+      import { value as localValue } from "./dep";
+      console.log(localValue);
+    `;
+    const file = "test.ts";
+    const imports: ImportBinding[] = [
+      {
+        kind: "named",
+        local: "localValue",
+        imported: "value",
+        from: "./dep",
+        resolved: "dep.ts",
+        typeOnly: false,
+      },
+    ];
+    const scopeIndex = buildScopeIndexFromSource(file, source, TS_SUPPORT, undefined, imports);
+    const binding = scopeIndex.bindings.get("localValue")?.[0];
+
+    expect(binding?.import?.from).toBe("./dep");
+    expect(binding?.import?.resolved).toBe("dep.ts");
   });
 });
