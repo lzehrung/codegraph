@@ -15,7 +15,7 @@ import {
 import { getDiff } from "./providers/base.js";
 import { analyzeImpact } from "./analyzer.js";
 import { discoverProjectFiles, type ProjectFileInfo } from "../util.js";
-import { buildImpactReport } from "./report.js";
+import { buildImpactReport, newFileRangeForHunk } from "./report.js";
 import {
   applyChangedFileSymbolMapping,
   createImpactDiagnostics,
@@ -79,18 +79,6 @@ function createAsyncQueue<T>(): AsyncQueue<T> {
       });
     },
   };
-}
-
-function newFileRangeForHunk(hunk: FileChange["hunks"][number]): { start: number; end: number } {
-  let newLine = hunk.newStart;
-  let lastNewLine = newLine - 1;
-  for (const line of hunk.lines) {
-    if (line.startsWith(" ") || line.startsWith("+")) {
-      lastNewLine = newLine;
-      newLine += 1;
-    }
-  }
-  return { start: hunk.newStart, end: Math.max(hunk.newStart, lastNewLine) };
 }
 
 function buildLightStreamSummaryReport(

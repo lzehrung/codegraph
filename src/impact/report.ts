@@ -25,6 +25,18 @@ import { buildSymbolGraphDetailed, findDetailedCycles } from "../graphs.js";
 import { discoverProjectFiles, normalizePath, resolveFilePathFromRoot } from "../util.js";
 import { createGraphFileResolver, normalizeImpactFileChange, toImpactReportFilePath } from "./path.js";
 
+export function newFileRangeForHunk(hunk: FileChange["hunks"][number]): { start: number; end: number } {
+  let newLine = hunk.newStart;
+  let lastNewLine = newLine - 1;
+  for (const line of hunk.lines) {
+    if (line.startsWith(" ") || line.startsWith("+")) {
+      lastNewLine = newLine;
+      newLine += 1;
+    }
+  }
+  return { start: hunk.newStart, end: Math.max(hunk.newStart, lastNewLine) };
+}
+
 export async function buildImpactReport(
   projectRoot: string,
   index: ProjectIndex,
@@ -42,18 +54,6 @@ export async function buildImpactReport(
   const topImpacts = buildTopImpacts(impactedItems);
   const surfaceArea = buildSurfaceArea(index, normalizedDiffFiles, impactedItems);
   const projectFiles = index.projectFiles ?? (await discoverProjectFiles(projectRoot));
-  const newFileRangeForHunk = (hunk: FileChange["hunks"][number]) => {
-    let newLine = hunk.newStart;
-    let lastNewLine = newLine - 1;
-    for (const line of hunk.lines) {
-      if (line.startsWith(" ") || line.startsWith("+")) {
-        lastNewLine = newLine;
-        newLine++;
-      }
-    }
-    const end = Math.max(hunk.newStart, lastNewLine);
-    return { start: hunk.newStart, end };
-  };
 
   // Build changedFiles summary
   const changedFiles = normalizedDiffFiles.map((fileChange) => ({

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import {
   analyzeImpactFromDiff,
   analyzeImpactStreaming,
@@ -12,6 +13,20 @@ import { buildProjectIndex } from "../src/index.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
+}
+
+function git(root: string, args: string[]): string {
+  return execFileSync("git", args, {
+    cwd: root,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Codegraph Test",
+      GIT_AUTHOR_EMAIL: "codegraph@example.test",
+      GIT_COMMITTER_NAME: "Codegraph Test",
+      GIT_COMMITTER_EMAIL: "codegraph@example.test",
+    },
+  }).trim();
 }
 
 describe("Impact streaming", () => {
@@ -172,6 +187,38 @@ index 1234567..abcdef0 100644
       expect(complete.report.clusters).toEqual([]);
       expect(complete.report.cycles).toEqual([]);
       expect(complete.report.graph).toEqual({ fileEdges: [], symbolEdges: [] });
+    }
+  });
+
+  it("preserves diff provider warnings in light terminal reports", async () => {
+    const root = await mkTmpDir("dg-stream-warning-");
+
+    try {
+      git(root, ["init"]);
+      git(root, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+      git(root, ["config", "core.autocrlf", "false"]);
+      await fsp.writeFile(path.join(root, "README.md"), "initial\n", "utf8");
+      git(root, ["add", "README.md"]);
+      git(root, ["commit", "-m", "initial"]);
+
+      const index = await buildProjectIndex(root);
+      const largeChange = Array.from({ length: 50001 }, (_value, line) => `line ${line}`).join("\n");
+      await fsp.writeFile(path.join(root, "README.md"), `${largeChange}\n`, "utf8");
+
+      let complete: Extract<ImpactStreamChunk, { type: "complete" }> | undefined;
+      for await (const chunk of analyzeImpactStreaming(root, index, {
+        provider: "git",
+        cwd: root,
+        base: "HEAD",
+        head: "WORKTREE",
+        streamSummary: "light",
+      })) {
+        if (chunk.type === "complete") complete = chunk;
+      }
+
+      expect(complete?.report.warning).toContain("Large diff detected");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
     }
   });
 
