@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +7,18 @@ import { getExternalClassifierCacheStats, resetExternalClassifierCaches } from "
 
 describe("graph reports", () => {
   const root = "/root";
+  const tempRoots: string[] = [];
+  const makeTempRoot = (prefix: string): string => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    tempRoots.push(tempRoot);
+    return tempRoot;
+  };
+  afterEach(() => {
+    for (const tempRoot of tempRoots.splice(0)) {
+      fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
   const nodes = new Set([`${root}/a.ts`, `${root}/b.ts`]);
   const edges = [
     { from: `${root}/a.ts`, to: { type: "file" as const, path: `${root}/b.ts` }, raw: "./b" },
@@ -38,7 +50,7 @@ describe("graph reports", () => {
   });
 
   it("does not count declared JS package dependencies as unresolved imports", () => {
-    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cg-unresolved-js-"));
+    const projectRoot = makeTempRoot("cg-unresolved-js-");
     fs.writeFileSync(
       path.join(projectRoot, "package.json"),
       JSON.stringify({
@@ -69,7 +81,7 @@ describe("graph reports", () => {
   });
 
   it("uses package metadata above a scoped project root", () => {
-    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cg-unresolved-scoped-root-"));
+    const repoRoot = makeTempRoot("cg-unresolved-scoped-root-");
     const projectRoot = path.join(repoRoot, "src");
     fs.mkdirSync(projectRoot);
     fs.writeFileSync(
@@ -96,7 +108,7 @@ describe("graph reports", () => {
   });
 
   it("does not read dependency manifests beyond the nearest project manifest boundary", () => {
-    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cg-unresolved-boundary-"));
+    const repoRoot = makeTempRoot("cg-unresolved-boundary-");
     const childRoot = path.join(repoRoot, "child");
     const projectRoot = path.join(childRoot, "src");
     fs.mkdirSync(projectRoot, { recursive: true });
@@ -124,10 +136,11 @@ describe("graph reports", () => {
   });
 
   it("does not read dependency manifests outside the nearest git boundary", () => {
-    const outerRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cg-unresolved-git-boundary-"));
+    const outerRoot = makeTempRoot("cg-unresolved-git-boundary-");
     const repoRoot = path.join(outerRoot, "repo");
     const projectRoot = path.join(repoRoot, "src");
-    fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+    fs.mkdirSync(repoRoot, { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, ".git"), "gitdir: ../.git/worktrees/repo\n", "utf8");
     fs.mkdirSync(projectRoot, { recursive: true });
     fs.writeFileSync(
       path.join(outerRoot, "package.json"),
@@ -152,7 +165,7 @@ describe("graph reports", () => {
   });
 
   it("does not count declared supported-language package dependencies as unresolved imports", () => {
-    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cg-unresolved-multi-manifest-"));
+    const projectRoot = makeTempRoot("cg-unresolved-multi-manifest-");
     fs.writeFileSync(path.join(projectRoot, "requirements.txt"), "requests>=2\nclick==8.1.7\n", "utf8");
     fs.writeFileSync(path.join(projectRoot, "requirements.in"), "rich>=13\n", "utf8");
     fs.writeFileSync(
@@ -382,7 +395,7 @@ describe("graph reports", () => {
   });
 
   it("resets external classifier caches between long-lived analysis runs", () => {
-    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cg-unresolved-cache-reset-"));
+    const projectRoot = makeTempRoot("cg-unresolved-cache-reset-");
     fs.writeFileSync(
       path.join(projectRoot, "package.json"),
       JSON.stringify({ dependencies: { react: "^19.0.0" } }),
@@ -403,7 +416,7 @@ describe("graph reports", () => {
 
   it("bounds external classifier caches across many roots", () => {
     resetExternalClassifierCaches();
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cg-unresolved-cache-bound-"));
+    const tempRoot = makeTempRoot("cg-unresolved-cache-bound-");
 
     try {
       for (let index = 0; index < 700; index++) {
@@ -435,7 +448,7 @@ describe("graph reports", () => {
   });
 
   it("does not count supported-language stdlib and URL externals as unresolved imports", () => {
-    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cg-unresolved-stdlib-"));
+    const projectRoot = makeTempRoot("cg-unresolved-stdlib-");
     const graphWithStdlib = {
       nodes: new Set([
         path.join(projectRoot, "main.py"),

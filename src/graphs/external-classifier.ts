@@ -201,6 +201,15 @@ function directoryExists(directory: string): boolean {
   }
 }
 
+function pathExists(filePath: string): boolean {
+  try {
+    fs.lstatSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function readText(filePath: string): string | null {
   try {
     return fs.readFileSync(filePath, "utf8");
@@ -595,7 +604,7 @@ function parentDirectory(directory: string): string | null {
 function nearestVcsAncestor(startDirectory: string): string | null {
   let current: string | null = path.resolve(startDirectory);
   while (current) {
-    if (directoryExists(path.join(current, ".git"))) return current;
+    if (pathExists(path.join(current, ".git"))) return current;
     current = parentDirectory(current);
   }
   return null;
