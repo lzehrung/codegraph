@@ -789,6 +789,14 @@ async function buildIndexFromFileListShared(
   }
 }
 
+/**
+ * Build a complete project index for a repo root.
+ *
+ * The returned index contains the file dependency graph, per-file module indexes,
+ * symbol definitions, imports, exports, and project-file metadata. Build it once
+ * and pass it to navigation, review, impact, or agent-tool APIs when composing
+ * deterministic packets from the same repo snapshot.
+ */
 export async function buildProjectIndex(projectRoot: string, opts?: BuildOptions): Promise<ProjectIndex> {
   try {
     const files = await listProjectFiles(projectRoot, undefined, {
@@ -806,6 +814,13 @@ export async function buildProjectIndex(projectRoot: string, opts?: BuildOptions
   }
 }
 
+/**
+ * Build a project index from an explicit file list.
+ *
+ * Use this when a caller already has a scoped manifest, sparse checkout, or
+ * deterministic pack boundary and does not want Codegraph to discover every file
+ * under the project root.
+ */
 export async function buildProjectIndexFromFiles(
   projectRoot: string,
   inputFiles: string[],
@@ -823,6 +838,13 @@ export async function buildProjectIndexFromFiles(
   }
 }
 
+/**
+ * Build or refresh a project index using the on-disk manifest when available.
+ *
+ * Incremental options can target explicit files, `changedSince`, or a
+ * `gitBase`/`gitHead` range. `gitHead` accepts `WORKTREE`, `STAGED`, and `INDEX`
+ * sentinels for review-agent workflows that analyze uncommitted changes.
+ */
 export async function buildProjectIndexIncremental(
   projectRoot: string,
   opts?: IncrementalBuildOptions,

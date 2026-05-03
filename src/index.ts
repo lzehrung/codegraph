@@ -123,6 +123,7 @@ export {
   type ImpactReason,
   type ImpactReport,
   type CompactImpactReport,
+  type ImpactStreamSummaryReport,
   IMPACT_SCHEMA_VERSION,
   type ImpactOptions,
   type DiffProviderOptions,

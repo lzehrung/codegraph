@@ -95,7 +95,10 @@ export type ToolHotspotEntry = {
 
 /**
  * Agent-friendly tool wrapper for PR impact analysis.
- * Returns JSON-serializable impact report for LLM consumption.
+ *
+ * Returns a JSON-serializable impact report envelope with an explicit `status`.
+ * Pass a shared `index` through `runtimeOptions` when a review agent is making
+ * several calls over the same repo snapshot.
  */
 export async function tool_impactJSON(
   root: string,
@@ -151,7 +154,10 @@ export async function tool_impactFromDiffText(
 
 /**
  * Generates a structured overview of a file's imports and definitions.
- * The rendered markdown summary is kept only as a convenience field.
+ *
+ * Prefer `overview.imports` and `overview.definitions` for deterministic agent
+ * packets. `renderedOverview` is a convenience string for logs or debugging, not
+ * the stable integration contract.
  */
 export async function tool_getFileOverview(
   root: string,
