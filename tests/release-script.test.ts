@@ -10,6 +10,7 @@ import {
   parseGitStatusPaths,
   recoverNativePackageManifestForResume,
   recoverRootPackageManifestForResume,
+  prepareNativePackageManifestForPublish,
   restoreRootPackageManifest,
   restoreNativePackageManifest,
   sanitizeJsFallbackPackageManifest,
@@ -105,7 +106,14 @@ describe("release script helpers", () => {
         },
         publishNativeTargets: true,
       }),
-    ).toEqual(["publishNativeTargets", "publishNativeMeta", "publishJsFallback", "prepareRootManifest", "publishRoot"]);
+    ).toEqual([
+      "publishNativeTargets",
+      "prepareNativeMeta",
+      "publishNativeMeta",
+      "publishJsFallback",
+      "prepareRootManifest",
+      "publishRoot",
+    ]);
   });
 
   it("selects the latest package-scoped tag by version", () => {
@@ -295,6 +303,58 @@ describe("release script helpers", () => {
         packageName: "@lzehrung/codegraph-native",
       },
     });
+  });
+
+  it("keeps generated native platform dependencies in the publish manifest", () => {
+    expect(
+      prepareNativePackageManifestForPublish(
+        {
+          name: "@lzehrung/codegraph-native",
+          version: "1.8.49",
+          files: ["index.js", "index.d.ts"],
+          napi: {
+            packageName: "@lzehrung/codegraph-native",
+          },
+        },
+        "1.8.50",
+        {
+          name: "@lzehrung/codegraph-native",
+          version: "1.8.50",
+          optionalDependencies: {
+            "@lzehrung/codegraph-native-win32-x64-msvc": "1.8.50",
+            "@lzehrung/codegraph-native-linux-x64-gnu": "1.8.50",
+          },
+        },
+      ),
+    ).toEqual({
+      name: "@lzehrung/codegraph-native",
+      version: "1.8.50",
+      files: ["index.js", "index.d.ts"],
+      napi: {
+        packageName: "@lzehrung/codegraph-native",
+      },
+      optionalDependencies: {
+        "@lzehrung/codegraph-native-linux-x64-gnu": "1.8.50",
+        "@lzehrung/codegraph-native-win32-x64-msvc": "1.8.50",
+      },
+    });
+  });
+
+  it("rejects native publish manifests without generated platform dependencies", () => {
+    expect(() =>
+      prepareNativePackageManifestForPublish(
+        {
+          name: "@lzehrung/codegraph-native",
+          version: "1.8.49",
+          files: ["index.js", "index.d.ts"],
+        },
+        "1.8.50",
+        {
+          name: "@lzehrung/codegraph-native",
+          version: "1.8.50",
+        },
+      ),
+    ).toThrow(/generated native platform optionalDependencies/i);
   });
 
   it("restores the native source manifest shape while keeping the selected version", () => {

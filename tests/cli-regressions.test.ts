@@ -204,13 +204,14 @@ describe("CLI regressions", () => {
   it("chunk uses semantic chunking for source languages beyond the legacy allowlist", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-go-chunk-"));
     const filePath = path.join(tmpDir, "main.go");
-    await fsp.writeFile(filePath, "package main\n\nfunc helper() string {\n\treturn \"ok\"\n}\n", "utf8");
+    await fsp.writeFile(filePath, 'package main\n\nfunc helper() string {\n\treturn "ok"\n}\n', "utf8");
 
     const stdout = await runCliCommand(["chunk", filePath, "--min-tokens", "1", "--max-tokens", "50"]);
     const chunks = JSON.parse(stdout) as Array<{ languageId?: string; type?: string; name?: string }>;
 
-    expect(chunks.some((chunk) => chunk.languageId === "go" && chunk.type === "function" && chunk.name === "helper"))
-      .toBe(true);
+    expect(
+      chunks.some((chunk) => chunk.languageId === "go" && chunk.type === "function" && chunk.name === "helper"),
+    ).toBe(true);
   });
 
   it("graph honors .gitignore by default and --no-gitignore opts out", async () => {
@@ -539,7 +540,16 @@ describe("CLI regressions", () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-inspect-"));
     const srcDir = path.join(tmpDir, "src");
     await fsp.mkdir(srcDir, { recursive: true });
-    await fsp.writeFile(path.join(srcDir, "a.ts"), "import { b } from './b';\nexport const a = b;\n", "utf8");
+    await fsp.writeFile(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ dependencies: { react: "^19.0.0" } }),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(srcDir, "a.ts"),
+      "import { b } from './b';\nimport React from 'react';\nexport const a = b;\nexport { React };\n",
+      "utf8",
+    );
     await fsp.writeFile(path.join(srcDir, "b.ts"), "export const b = 1;\n", "utf8");
 
     const stdout = await runCliCommand(["inspect", "--root", tmpDir, srcDir, "--limit", "1"]);
@@ -580,6 +590,31 @@ describe("CLI regressions", () => {
     expect(report.recommendedCommands).toContain(
       `codegraph doctor "${normalize(path.join(tmpDir, ".codegraph-cache", "index-v1"))}"`,
     );
+  });
+
+  it("unresolved filters declared dependencies for scoped roots", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-unresolved-scoped-"));
+    try {
+      const srcDir = path.join(tmpDir, "src");
+      await fsp.mkdir(srcDir, { recursive: true });
+      await fsp.writeFile(
+        path.join(tmpDir, "package.json"),
+        JSON.stringify({ dependencies: { react: "^19.0.0" } }),
+        "utf8",
+      );
+      await fsp.writeFile(
+        path.join(srcDir, "a.ts"),
+        "import React from 'react';\nimport missing from 'missing-package';\nexport { React, missing };\n",
+        "utf8",
+      );
+
+      const stdout = await runCliCommand(["unresolved", "--root", srcDir, "--json"]);
+      const unresolved = JSON.parse(stdout) as Array<{ name: string }>;
+
+      expect(unresolved.map((entry) => entry.name)).toEqual(["missing-package"]);
+    } finally {
+      await fsp.rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   });
 
   it("hotspots rejects invalid --limit values", async () => {
@@ -905,7 +940,11 @@ index 1111111..2222222 100644
       "utf8",
     );
     for (let index = 1; index <= 3; index++) {
-      await fsp.writeFile(path.join(testsDir, `pattern-${index}.test.ts`), `expect(${index}).toBe(${index});\n`, "utf8");
+      await fsp.writeFile(
+        path.join(testsDir, `pattern-${index}.test.ts`),
+        `expect(${index}).toBe(${index});\n`,
+        "utf8",
+      );
     }
     initGitRepo(root);
     git(root, ["add", "."]);
@@ -941,7 +980,11 @@ index 1111111..2222222 100644
     await fsp.mkdir(testsDir, { recursive: true });
     await fsp.writeFile(path.join(docsDir, "guide.md"), "# Guide\n\nInitial text.\n", "utf8");
     for (let index = 1; index <= 3; index++) {
-      await fsp.writeFile(path.join(testsDir, `pattern-${index}.test.ts`), `expect(${index}).toBe(${index});\n`, "utf8");
+      await fsp.writeFile(
+        path.join(testsDir, `pattern-${index}.test.ts`),
+        `expect(${index}).toBe(${index});\n`,
+        "utf8",
+      );
     }
     initGitRepo(root);
     git(root, ["add", "."]);
@@ -977,7 +1020,16 @@ index 1111111..2222222 100644
 
     await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 2; }\n", "utf8");
 
-    const summary = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE", "--summary"]);
+    const summary = await runCliCommand([
+      "review",
+      "--root",
+      root,
+      "--base",
+      "HEAD",
+      "--head",
+      "WORKTREE",
+      "--summary",
+    ]);
     const pretty = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE", "--pretty"]);
 
     expect(pretty).toBe(summary);

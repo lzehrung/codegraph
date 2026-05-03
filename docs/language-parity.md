@@ -69,3 +69,5 @@ Status key:
 - Swift: `Package.swift`, `Package.resolved`, `*.xcodeproj`, `*.xcworkspace`. Name extraction: Yes for `Package.swift`.
 - C and C++: `CMakeLists.txt`, `CMakePresets.json`, `CMakeUserPresets.json`, `Makefile`, `makefile`, `GNUmakefile`, `configure.ac`, `configure.in`, `meson.build`, `meson_options.txt`, `conanfile.txt`, `conanfile.py`, `vcpkg.json`. Name extraction: Yes for `vcpkg.json`, Partial for directory fallback cases.
 - IDE: `.idea`. Name extraction: Partial via directory fallback.
+
+`inspect` and `unresolved` also use supported-language dependency manifests to suppress declared third-party packages from unresolved-import diagnostics. Manifest traversal is bounded to the nearest project manifest boundary so scoped scans stay deterministic and do not inherit unrelated parent directories.
