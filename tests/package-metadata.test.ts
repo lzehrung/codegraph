@@ -22,6 +22,15 @@ function declarationHasOwnJsDoc(declarationText: string, symbol: string): boolea
   return /\/\*\*[\s\S]*\*\/$/.test(beforeDeclaration);
 }
 
+function typeDeclarationHasOwnJsDoc(declarationText: string, symbol: string): boolean {
+  const declarationMatch = new RegExp(`export type ${symbol}\\b`).exec(declarationText);
+  if (!declarationMatch) {
+    return false;
+  }
+  const beforeDeclaration = declarationText.slice(0, declarationMatch.index).trimEnd();
+  return /\/\*\*[\s\S]*\*\/$/.test(beforeDeclaration);
+}
+
 function extractExportedTypeDeclaration(source: string, typeName: string): string {
   const declarationStart = source.indexOf(`export type ${typeName} =`);
   expect(declarationStart).toBeGreaterThan(-1);
@@ -380,21 +389,34 @@ describe("package metadata", () => {
     const impactOptionsDeclaration = extractExportedTypeDeclaration(impactTypes, "ImpactOptions");
     const rootDeclaration = readText("dist/index.d.ts");
     const impactDeclaration = readText("dist/impact/index.d.ts");
+    const streamingDistDeclaration = readText("dist/impact/streaming.d.ts");
+    const sessionDeclaration = readText("dist/session.d.ts");
 
     expect(impactOptionsDeclaration).not.toContain("streamSummary");
     expect(streamingDeclaration).toContain('streamSummary?: "full" | "light"');
+    expect(streamingDeclaration).toContain("ImpactOptions");
+    expect(streamingSource).toContain("type PublicImpactStreamingOptions<Options> = Options extends unknown");
+    expect(streamingSource).toContain("Omit<Options");
     expect(rootDeclaration).toContain("type ImpactStreamingOptions");
     expect(impactDeclaration).toContain("type ImpactStreamingOptions");
+    expect(typeDeclarationHasOwnJsDoc(streamingDistDeclaration, "ImpactStreamingOptions")).toBe(true);
+    expect(sessionDeclaration).toContain("analyzeImpactStream(options: ImpactStreamingOptions)");
     expectTypeScriptSurfaceCheck(`
+import type { ICodeReviewSession } from "../dist/index.js";
 import type { ImpactStreamingOptions as RootImpactStreamingOptions } from "../dist/index.js";
 import type { ImpactStreamingOptions as NestedImpactStreamingOptions } from "../dist/impact/index.js";
 
 const rootRaw: RootImpactStreamingOptions = { provider: "raw", diffText: "" };
 const rootLight: RootImpactStreamingOptions = { provider: "raw", diffText: "", streamSummary: "light" };
 const nestedGit: NestedImpactStreamingOptions = { provider: "git", base: "HEAD", head: "WORKTREE" };
-
-// @ts-expect-error compact is batch-only and is not accepted by streaming options.
+const commonImpactOption: RootImpactStreamingOptions = { provider: "raw", diffText: "", severityWeights: { directRef: 10 } };
 const compactStreaming: RootImpactStreamingOptions = { provider: "raw", diffText: "", compact: true };
+const sessionStreaming: Parameters<ICodeReviewSession["analyzeImpactStream"]>[0] = {
+  provider: "raw",
+  diffText: "",
+  streamSummary: "light",
+};
+
 // @ts-expect-error streamSummary only accepts the documented modes.
 const misspelledSummary: NestedImpactStreamingOptions = { provider: "raw", diffText: "", streamSummary: "lite" };
 // @ts-expect-error diagnostics are internal analysis state, not caller options.
@@ -407,7 +429,9 @@ const onImpactItemStreaming: RootImpactStreamingOptions = { provider: "raw", dif
 void rootRaw;
 void rootLight;
 void nestedGit;
+void commonImpactOption;
 void compactStreaming;
+void sessionStreaming;
 void misspelledSummary;
 void diagnosticsStreaming;
 void fallbackPathsStreaming;

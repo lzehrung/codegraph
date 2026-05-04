@@ -172,6 +172,9 @@ index 1234567..abcdef0 100644
  }
 `;
 
+    const batch = await analyzeImpactFromDiff(root, index, { provider: "raw", diffText });
+    expect(batch.format).toBe("full");
+
     let complete: Extract<ImpactStreamChunk, { type: "complete" }> | undefined;
     for await (const chunk of analyzeImpactStreaming(root, index, {
       provider: "raw",
@@ -182,10 +185,11 @@ index 1234567..abcdef0 100644
     }
 
     expect(complete).toBeDefined();
-    if (complete) {
-      expect(complete.report.changedFiles.length).toBeGreaterThan(0);
-      expect(complete.report.changedSymbols.length).toBeGreaterThan(0);
-      expect(complete.report.impacted.length).toBeGreaterThan(0);
+    if (batch.format === "full" && complete) {
+      expect(complete.report.changedFiles).toEqual(batch.changedFiles);
+      expect(complete.report.changedSymbols).toEqual(batch.changedSymbols);
+      expect(complete.report.impacted).toEqual(batch.impacted);
+      expect(complete.report.diagnostics).toEqual(batch.diagnostics);
       expect(complete.summary.totalChanged).toBe(complete.report.changedSymbols.length);
       expect(complete.summary.totalImpacted).toBe(complete.report.impacted.length);
       expect(complete.report.suggestions).toBeUndefined();

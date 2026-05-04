@@ -6,7 +6,6 @@
 import type { ProjectIndex } from "../indexer.js";
 import {
   IMPACT_SCHEMA_VERSION,
-  type DiffProviderOptions,
   type ImpactOptions,
   type ChangedSymbol,
   type FileChange,
@@ -38,6 +37,10 @@ export type ImpactStreamChunk =
     }
   | { type: "error"; error: string };
 
+type PublicImpactStreamingOptions<Options> = Options extends unknown
+  ? Omit<Options, "compact" | "diagnostics" | "fileLevelFallbackPaths" | "onImpactItem">
+  : never;
+
 /**
  * Options for streaming impact analysis.
  *
@@ -48,34 +51,20 @@ export type ImpactStreamChunk =
  * suggestions, export summaries, re-export chains, ranked top impacts, graph
  * metadata, cycles, clusters, and surface area in the final `complete.report`.
  */
-type ImpactStreamingAnalysisOptions = Pick<
-  ImpactOptions,
-  | "scope"
-  | "maxRefs"
-  | "depth"
-  | "includeTests"
-  | "membersOnly"
-  | "testPatterns"
-  | "ignoreGlobs"
-  | "refContext"
-  | "refContextLines"
-  | "refBlockMaxLines"
-  | "verifyReferences"
-  | "maxSuggestions"
-  | "configImpactRules"
-  | "detectBreakingChanges"
-  | "testCoverageSuggestions"
-  | "lcovPaths"
-  | "coveragePaths"
-  | "testCommandTemplate"
-  | "severityWeights"
-  | "fileLevelFallback"
->;
+export type ImpactStreamingOptions = PublicImpactStreamingOptions<ImpactOptions> & {
+  /**
+   * Deprecated compatibility field for callers that forward shared batch
+   * options. Streaming ignores this and always returns `format:
+   * "stream-summary"`.
+   */
+  compact?: NonNullable<ImpactOptions["compact"]>;
+  streamSummary?: "full" | "light";
+};
 
-export type ImpactStreamingOptions = DiffProviderOptions &
-  ImpactStreamingAnalysisOptions & {
-    streamSummary?: "full" | "light";
-  };
+function toImpactOptions(options: ImpactStreamingOptions): ImpactOptions {
+  const { streamSummary: _streamSummary, ...impactOptions } = options;
+  return impactOptions;
+}
 
 function validateImpactStreamingOptions(options: ImpactStreamingOptions): "full" | "light" {
   const streamSummary = options.streamSummary ?? "full";
@@ -180,6 +169,7 @@ export async function* analyzeImpactStreaming(
 ): AsyncGenerator<ImpactStreamChunk> {
   try {
     const streamSummary = validateImpactStreamingOptions(options);
+    const impactOptions = toImpactOptions(options);
     const displayFile = (filePath: string): string => toImpactReportFilePath(projectRoot, filePath);
     const projectFiles = index.projectFiles ?? (await discoverProjectFiles(projectRoot));
     yield { type: "projectFiles", files: projectFiles };
@@ -192,8 +182,8 @@ export async function* analyzeImpactStreaming(
       total: 4,
     };
 
-    const diff = await getDiff(options);
-    const { ignoreGlobs = [] } = options;
+    const diff = await getDiff(impactOptions);
+    const { ignoreGlobs = [] } = impactOptions;
     const isIgnored = createImpactIgnoreMatcher(projectRoot, ignoreGlobs);
     const normalizedDiff = normalizeImpactDiffFiles(projectRoot, diff.files, isIgnored);
     const diagnostics = createImpactDiagnostics(diff.files.length, normalizedDiff.ignoredCount);
@@ -211,7 +201,7 @@ export async function* analyzeImpactStreaming(
     for (let idx = 0; idx < normalizedDiff.files.length; idx += 1) {
       const fileChange = normalizedDiff.files[idx]!;
       const mapped = await mapChangedFileSymbols(index, fileChange, idx);
-      const symbols = applyChangedFileSymbolMapping(mapped, options, diagnostics, filesWithSymbols);
+      const symbols = applyChangedFileSymbolMapping(mapped, impactOptions, diagnostics, filesWithSymbols);
       for (const symbol of symbols) {
         yield {
           type: "changedSymbol",
@@ -233,7 +223,7 @@ export async function* analyzeImpactStreaming(
     };
 
     const normalizedChanges = normalizedDiff.files;
-    const fileLevelFallback = options.fileLevelFallback ?? true;
+    const fileLevelFallback = impactOptions.fileLevelFallback ?? true;
     const fileLevelFallbackPaths = listFileLevelFallbackPaths(normalizedChanges, filesWithSymbols);
     const impactQueue = createAsyncQueue<ImpactStreamChunk>();
     const emittedSignatures = new Set<string>();
@@ -255,7 +245,7 @@ export async function* analyzeImpactStreaming(
     };
 
     void analyzeImpact(index, changedSymbols, normalizedChanges, {
-      ...options,
+      ...impactOptions,
       projectRoot,
       fileLevelFallback,
       fileLevelFallbackPaths,
@@ -308,7 +298,7 @@ export async function* analyzeImpactStreaming(
         : await buildFullStreamSummaryReport(
             projectRoot,
             index,
-            options,
+            impactOptions,
             normalizedChanges,
             changedSymbols,
             impactedItems,
@@ -342,7 +332,7 @@ export async function* analyzeImpactStreaming(
 async function buildFullStreamSummaryReport(
   projectRoot: string,
   index: ProjectIndex,
-  options: ImpactStreamingOptions,
+  options: ImpactOptions,
   normalizedChanges: FileChange[],
   changedSymbols: ChangedSymbol[],
   impactedItems: ImpactItem[],
