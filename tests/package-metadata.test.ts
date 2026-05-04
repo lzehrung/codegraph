@@ -63,10 +63,7 @@ function expectTypeScriptSurfaceCheck(source: string): void {
   const fixtureDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-codegraph-ts-surface-"));
   const fixturePath = path.join(fixtureDir, "impact-streaming-options.check.ts");
   const rootDistSpecifier = moduleSpecifier(fixtureDir, path.resolve(process.cwd(), "dist/index.js"));
-  const impactDistSpecifier = moduleSpecifier(fixtureDir, path.resolve(process.cwd(), "dist/impact/index.js"));
-  const fixtureSource = source
-    .replaceAll("../dist/index.js", rootDistSpecifier)
-    .replaceAll("../dist/impact/index.js", impactDistSpecifier);
+  const fixtureSource = source.replaceAll("../dist/index.js", rootDistSpecifier);
   fs.writeFileSync(fixturePath, fixtureSource, "utf8");
 
   try {
@@ -83,6 +80,7 @@ function expectTypeScriptSurfaceCheck(source: string): void {
         "--moduleResolution",
         "NodeNext",
         "--strict",
+        "--exactOptionalPropertyTypes",
         "--skipLibCheck",
         fixturePath,
       ],
@@ -413,11 +411,10 @@ describe("package metadata", () => {
     expectTypeScriptSurfaceCheck(`
 import type { ICodeReviewSession } from "../dist/index.js";
 import type { ImpactStreamingOptions as RootImpactStreamingOptions } from "../dist/index.js";
-import type { ImpactStreamingOptions as NestedImpactStreamingOptions } from "../dist/impact/index.js";
 
 const rootRaw: RootImpactStreamingOptions = { provider: "raw", diffText: "" };
 const rootLight: RootImpactStreamingOptions = { provider: "raw", diffText: "", streamSummary: "light" };
-const nestedGit: NestedImpactStreamingOptions = { provider: "git", base: "HEAD", head: "WORKTREE" };
+const rootGit: RootImpactStreamingOptions = { provider: "git", base: "HEAD", head: "WORKTREE" };
 const commonImpactOption: RootImpactStreamingOptions = { provider: "raw", diffText: "", severityWeights: { directRef: 10 } };
 const compactStreaming: RootImpactStreamingOptions = { provider: "raw", diffText: "", compact: true };
 const sessionStreaming: Parameters<ICodeReviewSession["analyzeImpactStream"]>[0] = {
@@ -427,7 +424,7 @@ const sessionStreaming: Parameters<ICodeReviewSession["analyzeImpactStream"]>[0]
 };
 
 // @ts-expect-error streamSummary only accepts the documented modes.
-const misspelledSummary: NestedImpactStreamingOptions = { provider: "raw", diffText: "", streamSummary: "lite" };
+const misspelledSummary: RootImpactStreamingOptions = { provider: "raw", diffText: "", streamSummary: "lite" };
 // @ts-expect-error diagnostics are internal analysis state, not caller options.
 const diagnosticsStreaming: RootImpactStreamingOptions = { provider: "raw", diffText: "", diagnostics: undefined };
 // @ts-expect-error fileLevelFallbackPaths are internal analysis state, not caller options.
@@ -437,7 +434,7 @@ const onImpactItemStreaming: RootImpactStreamingOptions = { provider: "raw", dif
 
 void rootRaw;
 void rootLight;
-void nestedGit;
+void rootGit;
 void commonImpactOption;
 void compactStreaming;
 void sessionStreaming;
