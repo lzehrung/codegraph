@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import {
   analyzeImpactFromDiff,
   analyzeImpactStreaming,
@@ -12,6 +13,29 @@ import { buildProjectIndex } from "../src/index.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
+}
+
+function git(root: string, args: string[]): string {
+  return execFileSync("git", args, {
+    cwd: root,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Codegraph Test",
+      GIT_AUTHOR_EMAIL: "codegraph@example.test",
+      GIT_COMMITTER_NAME: "Codegraph Test",
+      GIT_COMMITTER_EMAIL: "codegraph@example.test",
+    },
+  }).trim();
+}
+
+async function firstStreamError(stream: AsyncGenerator<ImpactStreamChunk>): Promise<string | undefined> {
+  for await (const chunk of stream) {
+    if (chunk.type === "error") {
+      return chunk.error;
+    }
+  }
+  return undefined;
 }
 
 describe("Impact streaming", () => {
@@ -99,6 +123,160 @@ index 1234567..abcdef0 100644
       expect(Array.isArray(complete.report.topImpacts)).toBe(true);
       expect(Array.isArray(complete.report.surfaceArea.files)).toBe(true);
       expect(Array.isArray(complete.report.clusters)).toBe(true);
+    }
+  });
+
+  it("keeps completion progress after terminal summary construction", async () => {
+    const root = path.resolve(process.cwd(), "tests", "samples", "typescript");
+    const index = await buildProjectIndex(root);
+    const diffText = `diff --git a/utils.ts b/utils.ts
+index 1234567..abcdef0 100644
+--- a/utils.ts
++++ b/utils.ts
+@@ -1,3 +1,3 @@
+ export function helperFunction(): string {
+-  return "Hello from utils";
++  return "Hello from updated utils";
+ }
+`;
+
+    const chunks: ImpactStreamChunk[] = [];
+    for await (const chunk of analyzeImpactStreaming(root, index, { provider: "raw", diffText })) {
+      chunks.push(chunk);
+    }
+
+    const progress = chunks.filter((chunk) => chunk.type === "progress");
+    expect(progress.map((chunk) => `${chunk.current}/${chunk.total}:${chunk.message}`)).toContain(
+      "3/4:Building summary",
+    );
+    expect(chunks[chunks.length - 2]).toMatchObject({
+      type: "progress",
+      message: "Analysis complete",
+      current: 4,
+      total: 4,
+    });
+    expect(chunks[chunks.length - 1]?.type).toBe("complete");
+  });
+
+  it("can emit a light terminal report for incremental-only streaming consumers", async () => {
+    const root = path.resolve(process.cwd(), "tests", "samples", "typescript");
+    const index = await buildProjectIndex(root);
+    const diffText = `diff --git a/utils.ts b/utils.ts
+index 1234567..abcdef0 100644
+--- a/utils.ts
++++ b/utils.ts
+@@ -1,3 +1,3 @@
+ export function helperFunction(): string {
+-  return "Hello from utils";
++  return "Hello from updated utils";
+ }
+`;
+
+    const batch = await analyzeImpactFromDiff(root, index, { provider: "raw", diffText });
+    expect(batch.format).toBe("full");
+
+    let complete: Extract<ImpactStreamChunk, { type: "complete" }> | undefined;
+    for await (const chunk of analyzeImpactStreaming(root, index, {
+      provider: "raw",
+      diffText,
+      streamSummary: "light",
+    })) {
+      if (chunk.type === "complete") complete = chunk;
+    }
+
+    expect(complete).toBeDefined();
+    if (batch.format === "full" && complete) {
+      expect(complete.report.changedFiles).toEqual(batch.changedFiles);
+      expect(complete.report.changedSymbols).toEqual(batch.changedSymbols);
+      expect(complete.report.impacted).toEqual(batch.impacted);
+      expect(complete.report.diagnostics).toEqual(batch.diagnostics);
+      expect(complete.summary.totalChanged).toBe(complete.report.changedSymbols.length);
+      expect(complete.summary.totalImpacted).toBe(complete.report.impacted.length);
+      expect(complete.report.suggestions).toBeUndefined();
+      expect(complete.report.exportSummary).toBeUndefined();
+      expect(complete.report.reexportChains).toBeUndefined();
+      expect(complete.report.topImpacts).toEqual([]);
+      expect(complete.report.surfaceArea).toEqual({ files: [], topFanIn: [], topFanOut: [] });
+      expect(complete.report.clusters).toEqual([]);
+      expect(complete.report.cycles).toEqual([]);
+      expect(complete.report.graph).toEqual({ fileEdges: [], symbolEdges: [] });
+    }
+  });
+
+  it("ignores runtime compact forwarding but rejects invalid stream summary modes", async () => {
+    const root = path.resolve(process.cwd(), "tests", "samples", "typescript");
+    const index = await buildProjectIndex(root);
+    const diffText = `diff --git a/utils.ts b/utils.ts
+index 1234567..abcdef0 100644
+--- a/utils.ts
++++ b/utils.ts
+@@ -1,3 +1,3 @@
+ export function helperFunction(): string {
+-  return "Hello from utils";
++  return "Hello from updated utils";
+ }
+`;
+    const compactOptions = {
+      provider: "raw" as const,
+      diffText,
+      compact: true,
+    };
+    const compactUndefinedOptions = {
+      provider: "raw" as const,
+      diffText,
+      compact: undefined,
+    };
+    const misspelledSummaryOptions = {
+      provider: "raw",
+      diffText,
+      streamSummary: "lite",
+    };
+    const misspelledSummaryStream = Reflect.apply(analyzeImpactStreaming, undefined, [
+      root,
+      index,
+      misspelledSummaryOptions,
+    ]) as AsyncGenerator<ImpactStreamChunk>;
+
+    await expect(
+      firstStreamError(Reflect.apply(analyzeImpactStreaming, undefined, [root, index, compactOptions])),
+    ).resolves.toBeUndefined();
+    await expect(
+      firstStreamError(Reflect.apply(analyzeImpactStreaming, undefined, [root, index, compactUndefinedOptions])),
+    ).resolves.toBeUndefined();
+    await expect(firstStreamError(misspelledSummaryStream)).resolves.toContain(
+      'streamSummary must be "full" or "light"',
+    );
+  });
+
+  it("preserves diff provider warnings in light terminal reports", async () => {
+    const root = await mkTmpDir("dg-stream-warning-");
+
+    try {
+      git(root, ["init"]);
+      git(root, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+      git(root, ["config", "core.autocrlf", "false"]);
+      await fsp.writeFile(path.join(root, "README.md"), "initial\n", "utf8");
+      git(root, ["add", "README.md"]);
+      git(root, ["commit", "-m", "initial"]);
+
+      const index = await buildProjectIndex(root);
+      const largeChange = Array.from({ length: 50001 }, (_value, line) => `line ${line}`).join("\n");
+      await fsp.writeFile(path.join(root, "README.md"), `${largeChange}\n`, "utf8");
+
+      let complete: Extract<ImpactStreamChunk, { type: "complete" }> | undefined;
+      for await (const chunk of analyzeImpactStreaming(root, index, {
+        provider: "git",
+        cwd: root,
+        base: "HEAD",
+        head: "WORKTREE",
+        streamSummary: "light",
+      })) {
+        if (chunk.type === "complete") complete = chunk;
+      }
+
+      expect(complete?.report.warning).toContain("Large diff detected");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
     }
   });
 
