@@ -75,10 +75,16 @@ If the CLI is missing, do not suggest the unscoped `codegraph` package. Use one 
 
 Avoid suggesting `npm install -g codegraph`, `npm install --save-dev codegraph`, or unscoped `npx codegraph` when the package is not already installed locally.
 
-The CLI ships a bundled skill installer:
+The CLI ships a bundled skill installer. The parent agent `skills` directory must already exist before installation:
 
-- Install into the default Codex-style target:
-  `codegraph skill install`
+- Install into the universal skills directory:
+  `codegraph skill install --agent agents`
+- Install into a known agent target:
+  `codegraph skill install --agent codex`
+  `codegraph skill install --agent claude`
+  `codegraph skill install --agent cursor`
+  `codegraph skill install --agent gemini`
+  `codegraph skill install --agent opencode`
 - Install into an explicit target:
   Target must end with `/skills/codegraph`.
   `codegraph skill install --target ~/.codex/skills/codegraph --force`

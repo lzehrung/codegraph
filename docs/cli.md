@@ -214,18 +214,35 @@ codegraph doctor
 # Inspect one explicit graph or index artifact path
 codegraph doctor ./.codegraph-cache/index-v1
 
-# Install the bundled Codex-style skill into the default skill directory
-codegraph skill install
+# Install the bundled skill into a known agent location.
+# The parent skills directory must already exist.
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
+codegraph skill install --agent codex
+
+mkdir -p ~/.claude/skills
+codegraph skill install --agent claude
+
+mkdir -p ~/.agents/skills
+codegraph skill install --agent agents
+
+mkdir -p ~/.cursor/skills
+codegraph skill install --agent cursor
+
+mkdir -p ~/.gemini/skills
+codegraph skill install --agent gemini
+
+mkdir -p ~/.config/opencode/skills
+codegraph skill install --agent opencode
 
 # Install the bundled skill into an explicit target directory
-# The target must end with /skills/codegraph
+# The target must end with /skills/codegraph, and the parent skills directory must already exist.
 codegraph skill install --target ~/.codex/skills/codegraph --force
 
 # Inspect bundled skill paths and target health
 codegraph skill doctor
 ```
 
-`codegraph version --json` and `codegraph doctor` include the installed package name, version, and package root so local tarball or source-checkout installs can confirm which build the `codegraph` command is actually running. `doctor` also reports backend/runtime state and optional artifact details.
+`codegraph skill install --agent <name>` supports `agents`, `codex`, `claude`, `cursor`, `gemini`, and `opencode`. On PowerShell, use `New-Item -ItemType Directory -Force <path>` instead of `mkdir -p <path>`. Cursor CLI now supports native skills directories too, so `.cursor/skills/codegraph` works alongside the universal `~/.agents/skills/codegraph` location. `codegraph version --json` and `codegraph doctor` include the installed package name, version, and package root so local tarball or source-checkout installs can confirm which build the `codegraph` command is actually running. `doctor` also reports backend/runtime state and optional artifact details.
 
 ## Incremental git-scoped runs
 
