@@ -51,6 +51,38 @@ describe("CodeReviewSession", () => {
     expect(typedSession.analyzeImpactStream).toBeTypeOf("function");
   });
 
+  test("should pass streaming summary mode through session impact streaming", async () => {
+    const session = await createCodeReviewSession({
+      root: sampleRoot,
+      buildOptions: { cache: "memory", useBloomFilters: true },
+    });
+    const diffText = `diff --git a/utils.ts b/utils.ts
+index 1234567..abcdef0 100644
+--- a/utils.ts
++++ b/utils.ts
+@@ -1,3 +1,3 @@
+ export function helperFunction(): string {
+-  return "Hello from utils";
++  return "Hello from updated utils";
+ }
+`;
+
+    let completeReport: { suggestions?: unknown; topImpacts: unknown[] } | undefined;
+    for await (const chunk of session.analyzeImpactStream({
+      provider: "raw",
+      diffText,
+      streamSummary: "light",
+    })) {
+      if (chunk.type === "complete") {
+        completeReport = chunk.report;
+      }
+    }
+
+    expect(completeReport).toBeDefined();
+    expect(completeReport?.suggestions).toBeUndefined();
+    expect(completeReport?.topImpacts).toEqual([]);
+  });
+
   test("should find references using cached index", async () => {
     const session = await createCodeReviewSession({
       root: sampleRoot,

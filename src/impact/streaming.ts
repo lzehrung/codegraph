@@ -4,11 +4,18 @@
  */
 
 import type { ProjectIndex } from "../indexer.js";
-import type { ImpactOptions, ChangedSymbol, FileChange, ImpactItem, ImpactStreamSummaryReport } from "./types.js";
+import {
+  IMPACT_SCHEMA_VERSION,
+  type ImpactOptions,
+  type ChangedSymbol,
+  type FileChange,
+  type ImpactItem,
+  type ImpactStreamSummaryReport,
+} from "./types.js";
 import { getDiff } from "./providers/base.js";
 import { analyzeImpact } from "./analyzer.js";
 import { discoverProjectFiles, type ProjectFileInfo } from "../util.js";
-import { buildImpactReport } from "./report.js";
+import { buildImpactReport, newFileRangeForHunk } from "./report.js";
 import {
   applyChangedFileSymbolMapping,
   createImpactDiagnostics,
@@ -29,6 +36,45 @@ export type ImpactStreamChunk =
       report: ImpactStreamSummaryReport;
     }
   | { type: "error"; error: string };
+
+type PublicImpactStreamingOptions<Options> = Options extends unknown
+  ? Omit<Options, "compact" | "diagnostics" | "fileLevelFallbackPaths" | "onImpactItem">
+  : never;
+
+/**
+ * Options for streaming impact analysis.
+ *
+ * `streamSummary` is scoped to streaming callers so batch APIs do not accept a
+ * no-op light mode. Streaming always emits the `stream-summary` report shape,
+ * and accepts `compact` only as an ignored compatibility field for callers that
+ * forward shared batch options. Use `"full"` for the default terminal report,
+ * or `"light"` to skip suggestions, export summaries, re-export chains, ranked
+ * top impacts, graph metadata, cycles, clusters, and surface area in the final
+ * `complete.report`.
+ */
+export type ImpactStreamingOptions = PublicImpactStreamingOptions<ImpactOptions> & {
+  /**
+   * Compatibility field for callers that forward shared batch options.
+   *
+   * @deprecated Streaming ignores this and always returns `format:
+   * "stream-summary"`. Omit it for streaming calls.
+   */
+  compact?: NonNullable<ImpactOptions["compact"]>;
+  streamSummary?: "full" | "light";
+};
+
+function toImpactOptions(options: ImpactStreamingOptions): ImpactOptions {
+  const { streamSummary: _streamSummary, ...impactOptions } = options;
+  return impactOptions;
+}
+
+function validateImpactStreamingOptions(options: ImpactStreamingOptions): "full" | "light" {
+  const streamSummary = options.streamSummary ?? "full";
+  if (streamSummary !== "full" && streamSummary !== "light") {
+    throw new Error('streamSummary must be "full" or "light"');
+  }
+  return streamSummary;
+}
 
 type AsyncQueue<T> = {
   push: (value: T) => void;
@@ -74,21 +120,58 @@ function createAsyncQueue<T>(): AsyncQueue<T> {
   };
 }
 
+function buildLightStreamSummaryReport(
+  normalizedChanges: FileChange[],
+  changedSymbols: ChangedSymbol[],
+  impactedItems: ImpactItem[],
+  diagnostics: ImpactStreamSummaryReport["diagnostics"],
+  warning: string | undefined,
+  displayFile: (filePath: string) => string,
+): ImpactStreamSummaryReport {
+  return {
+    schemaVersion: IMPACT_SCHEMA_VERSION,
+    format: "stream-summary",
+    changedFiles: normalizedChanges.map((change) => ({
+      file: displayFile(change.path),
+      hunks: change.hunks.map((hunk) => newFileRangeForHunk(hunk)),
+    })),
+    changedSymbols: changedSymbols.map((symbol) => ({
+      ...symbol,
+      file: displayFile(symbol.file),
+    })),
+    impacted: impactedItems.map((item) => ({
+      ...item,
+      file: displayFile(item.file),
+    })),
+    topImpacts: [],
+    surfaceArea: { files: [], topFanIn: [], topFanOut: [] },
+    clusters: [],
+    cycles: [],
+    graph: { fileEdges: [], symbolEdges: [] },
+    diagnostics,
+    ...(warning ? { warning } : {}),
+  };
+}
+
 /**
  * Stream impact analysis results as they are discovered.
  *
  * Consumers receive progress, `changedSymbol`, and `impactItem` chunks before
  * the final `complete` chunk. `complete.report` is the structured integration
- * payload for function callers and includes the same key extras as the batch
- * impact report, including suggestions, export summaries, re-export chains,
- * graph edges, cycles, diagnostics, and schema metadata.
+ * payload for function callers. By default it includes the same key extras as
+ * the batch impact report, including suggestions, export summaries, re-export
+ * chains, graph edges, cycles, diagnostics, and schema metadata. Use
+ * `streamSummary: "light"` when a caller only needs the progressive chunks and
+ * a cheap terminal count/detail summary.
  */
 export async function* analyzeImpactStreaming(
   projectRoot: string,
   index: ProjectIndex,
-  options: ImpactOptions,
+  options: ImpactStreamingOptions,
 ): AsyncGenerator<ImpactStreamChunk> {
   try {
+    const streamSummary = validateImpactStreamingOptions(options);
+    const impactOptions = toImpactOptions(options);
     const displayFile = (filePath: string): string => toImpactReportFilePath(projectRoot, filePath);
     const projectFiles = index.projectFiles ?? (await discoverProjectFiles(projectRoot));
     yield { type: "projectFiles", files: projectFiles };
@@ -101,8 +184,8 @@ export async function* analyzeImpactStreaming(
       total: 4,
     };
 
-    const diff = await getDiff(options);
-    const { ignoreGlobs = [] } = options;
+    const diff = await getDiff(impactOptions);
+    const { ignoreGlobs = [] } = impactOptions;
     const isIgnored = createImpactIgnoreMatcher(projectRoot, ignoreGlobs);
     const normalizedDiff = normalizeImpactDiffFiles(projectRoot, diff.files, isIgnored);
     const diagnostics = createImpactDiagnostics(diff.files.length, normalizedDiff.ignoredCount);
@@ -120,7 +203,7 @@ export async function* analyzeImpactStreaming(
     for (let idx = 0; idx < normalizedDiff.files.length; idx += 1) {
       const fileChange = normalizedDiff.files[idx]!;
       const mapped = await mapChangedFileSymbols(index, fileChange, idx);
-      const symbols = applyChangedFileSymbolMapping(mapped, options, diagnostics, filesWithSymbols);
+      const symbols = applyChangedFileSymbolMapping(mapped, impactOptions, diagnostics, filesWithSymbols);
       for (const symbol of symbols) {
         yield {
           type: "changedSymbol",
@@ -142,7 +225,7 @@ export async function* analyzeImpactStreaming(
     };
 
     const normalizedChanges = normalizedDiff.files;
-    const fileLevelFallback = options.fileLevelFallback ?? true;
+    const fileLevelFallback = impactOptions.fileLevelFallback ?? true;
     const fileLevelFallbackPaths = listFileLevelFallbackPaths(normalizedChanges, filesWithSymbols);
     const impactQueue = createAsyncQueue<ImpactStreamChunk>();
     const emittedSignatures = new Set<string>();
@@ -164,7 +247,7 @@ export async function* analyzeImpactStreaming(
     };
 
     void analyzeImpact(index, changedSymbols, normalizedChanges, {
-      ...options,
+      ...impactOptions,
       projectRoot,
       fileLevelFallback,
       fileLevelFallbackPaths,
@@ -197,54 +280,39 @@ export async function* analyzeImpactStreaming(
       return;
     }
 
-    // Step 4: Complete
+    yield {
+      type: "progress",
+      message: "Building summary",
+      current: 3,
+      total: 4,
+    };
+
+    const report =
+      streamSummary === "light"
+        ? buildLightStreamSummaryReport(
+            normalizedChanges,
+            changedSymbols,
+            impactedItems,
+            diagnostics,
+            diff.warning,
+            displayFile,
+          )
+        : await buildFullStreamSummaryReport(
+            projectRoot,
+            index,
+            impactOptions,
+            normalizedChanges,
+            changedSymbols,
+            impactedItems,
+            diagnostics,
+            diff.warning,
+          );
+
     yield {
       type: "progress",
       message: "Analysis complete",
       current: 4,
       total: 4,
-    };
-
-    const suggestions = await collectImpactReportSuggestions(
-      projectRoot,
-      index,
-      options,
-      normalizedChanges,
-      changedSymbols,
-    );
-    const fullReport = await buildImpactReport(
-      projectRoot,
-      index,
-      normalizedChanges,
-      changedSymbols,
-      impactedItems,
-      suggestions,
-      { ...options, compact: false, warning: diff.warning },
-      diagnostics,
-    );
-    if (fullReport.format !== "full") {
-      yield {
-        type: "error",
-        error: "Expected full impact report while building streaming summary",
-      };
-      return;
-    }
-    const report: ImpactStreamSummaryReport = {
-      schemaVersion: fullReport.schemaVersion,
-      format: "stream-summary",
-      changedFiles: fullReport.changedFiles,
-      changedSymbols: fullReport.changedSymbols,
-      impacted: fullReport.impacted,
-      ...(fullReport.suggestions ? { suggestions: fullReport.suggestions } : {}),
-      ...(fullReport.exportSummary ? { exportSummary: fullReport.exportSummary } : {}),
-      ...(fullReport.reexportChains ? { reexportChains: fullReport.reexportChains } : {}),
-      topImpacts: fullReport.topImpacts ?? [],
-      surfaceArea: fullReport.surfaceArea,
-      clusters: fullReport.clusters,
-      cycles: fullReport.cycles ?? [],
-      graph: fullReport.graph,
-      diagnostics: fullReport.diagnostics ?? diagnostics,
-      ...(fullReport.warning ? { warning: fullReport.warning } : {}),
     };
 
     yield {
@@ -261,4 +329,53 @@ export async function* analyzeImpactStreaming(
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+async function buildFullStreamSummaryReport(
+  projectRoot: string,
+  index: ProjectIndex,
+  options: ImpactOptions,
+  normalizedChanges: FileChange[],
+  changedSymbols: ChangedSymbol[],
+  impactedItems: ImpactItem[],
+  diagnostics: ImpactStreamSummaryReport["diagnostics"],
+  warning: string | undefined,
+): Promise<ImpactStreamSummaryReport> {
+  const suggestions = await collectImpactReportSuggestions(
+    projectRoot,
+    index,
+    options,
+    normalizedChanges,
+    changedSymbols,
+  );
+  const fullReport = await buildImpactReport(
+    projectRoot,
+    index,
+    normalizedChanges,
+    changedSymbols,
+    impactedItems,
+    suggestions,
+    { ...options, compact: false, warning },
+    diagnostics,
+  );
+  if (fullReport.format !== "full") {
+    throw new Error("Expected full impact report while building streaming summary");
+  }
+  return {
+    schemaVersion: fullReport.schemaVersion,
+    format: "stream-summary",
+    changedFiles: fullReport.changedFiles,
+    changedSymbols: fullReport.changedSymbols,
+    impacted: fullReport.impacted,
+    ...(fullReport.suggestions ? { suggestions: fullReport.suggestions } : {}),
+    ...(fullReport.exportSummary ? { exportSummary: fullReport.exportSummary } : {}),
+    ...(fullReport.reexportChains ? { reexportChains: fullReport.reexportChains } : {}),
+    topImpacts: fullReport.topImpacts ?? [],
+    surfaceArea: fullReport.surfaceArea,
+    clusters: fullReport.clusters,
+    cycles: fullReport.cycles ?? [],
+    graph: fullReport.graph,
+    diagnostics: fullReport.diagnostics ?? diagnostics,
+    ...(fullReport.warning ? { warning: fullReport.warning } : {}),
+  };
 }

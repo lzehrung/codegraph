@@ -13,6 +13,86 @@ function readText(relativePath: string): string {
   return fs.readFileSync(path.resolve(process.cwd(), relativePath), "utf8");
 }
 
+function declarationHasOwnJsDoc(declarationText: string, symbol: string): boolean {
+  const declarationMatch = new RegExp(`export declare function ${symbol}\\b`).exec(declarationText);
+  if (!declarationMatch) {
+    return false;
+  }
+  const beforeDeclaration = declarationText.slice(0, declarationMatch.index).trimEnd();
+  return /\/\*\*[\s\S]*\*\/$/.test(beforeDeclaration);
+}
+
+function typeDeclarationHasOwnJsDoc(declarationText: string, symbol: string): boolean {
+  const declarationMatch = new RegExp(`export type ${symbol}\\b`).exec(declarationText);
+  if (!declarationMatch) {
+    return false;
+  }
+  const beforeDeclaration = declarationText.slice(0, declarationMatch.index).trimEnd();
+  return /\/\*\*[\s\S]*\*\/$/.test(beforeDeclaration);
+}
+
+function extractExportedTypeDeclaration(source: string, typeName: string): string {
+  const declarationStart = source.indexOf(`export type ${typeName} =`);
+  expect(declarationStart).toBeGreaterThan(-1);
+
+  let depth = 0;
+  for (let index = declarationStart; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "{") {
+      depth += 1;
+      continue;
+    }
+    if (character === "}") {
+      depth -= 1;
+      continue;
+    }
+    if (character === ";" && depth === 0) {
+      return source.slice(declarationStart, index + 1);
+    }
+  }
+
+  throw new Error(`Could not find complete declaration for ${typeName}`);
+}
+
+function moduleSpecifier(fromDirectory: string, toFile: string): string {
+  const relativePath = path.relative(fromDirectory, toFile).replaceAll(path.sep, "/");
+  return relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
+}
+
+function expectTypeScriptSurfaceCheck(source: string): void {
+  const fixtureDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-codegraph-ts-surface-"));
+  const fixturePath = path.join(fixtureDir, "impact-streaming-options.check.ts");
+  const rootDistSpecifier = moduleSpecifier(fixtureDir, path.resolve(process.cwd(), "dist/index.js"));
+  const fixtureSource = source.replaceAll("../dist/index.js", rootDistSpecifier);
+  fs.writeFileSync(fixturePath, fixtureSource, "utf8");
+
+  try {
+    const tscPath = path.resolve(process.cwd(), "node_modules/typescript/bin/tsc");
+    const result = spawnSync(
+      process.execPath,
+      [
+        tscPath,
+        "--noEmit",
+        "--target",
+        "ES2022",
+        "--module",
+        "NodeNext",
+        "--moduleResolution",
+        "NodeNext",
+        "--strict",
+        "--exactOptionalPropertyTypes",
+        "--skipLibCheck",
+        fixturePath,
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  } finally {
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+  }
+}
+
 function listFilesRecursive(relativePath: string, extension: string): string[] {
   const root = path.resolve(process.cwd(), relativePath);
   const files: string[] = [];
@@ -295,26 +375,91 @@ describe("package metadata", () => {
   });
 
   it("keeps public API boundary JSDoc available for generated declarations", () => {
-    const sourceFiles = [
-      "src/indexer/build-index.ts",
-      "src/review.ts",
-      "src/impact/index.ts",
-      "src/impact/streaming.ts",
-      "src/agent-tools.ts",
+    const declarationChecks = [
+      { file: "dist/indexer/build-index.d.ts", symbol: "buildProjectIndex" },
+      { file: "dist/indexer/build-index.d.ts", symbol: "buildProjectIndexIncremental" },
+      { file: "dist/review.d.ts", symbol: "buildReviewReport" },
+      { file: "dist/impact/index.d.ts", symbol: "analyzeImpactFromDiff" },
+      { file: "dist/impact/streaming.d.ts", symbol: "analyzeImpactStreaming" },
+      { file: "dist/agent-tools.d.ts", symbol: "tool_impactJSON" },
+      { file: "dist/agent-tools.d.ts", symbol: "tool_getFileOverview" },
     ];
-    const source = sourceFiles.map((relativePath) => readText(relativePath)).join("\n");
 
-    for (const symbol of [
-      "buildProjectIndex",
-      "buildProjectIndexIncremental",
-      "buildReviewReport",
-      "analyzeImpactFromDiff",
-      "analyzeImpactStreaming",
-      "tool_impactJSON",
-      "tool_getFileOverview",
-    ]) {
-      expect(source).toMatch(new RegExp(`/\\*\\*[\\s\\S]*?\\*/\\s*export (?:async )?(?:function\\*? )?${symbol}\\b`));
+    for (const check of declarationChecks) {
+      const declarationText = readText(check.file);
+      expect(declarationHasOwnJsDoc(declarationText, check.symbol), `${check.file}:${check.symbol}`).toBe(true);
     }
+  });
+
+  it("scopes streaming summary mode to the streaming API type", () => {
+    const impactTypes = readText("src/impact/types.ts");
+    const streamingSource = readText("src/impact/streaming.ts");
+    const streamingDeclaration = extractExportedTypeDeclaration(streamingSource, "ImpactStreamingOptions");
+    const impactOptionsDeclaration = extractExportedTypeDeclaration(impactTypes, "ImpactOptions");
+    const rootDeclaration = readText("dist/index.d.ts");
+    const impactDeclaration = readText("dist/impact/index.d.ts");
+    const streamingDistDeclaration = readText("dist/impact/streaming.d.ts");
+    const sessionDeclaration = readText("dist/session.d.ts");
+
+    expect(impactOptionsDeclaration).not.toContain("streamSummary");
+    expect(streamingDeclaration).toContain('streamSummary?: "full" | "light"');
+    expect(streamingDeclaration).toContain("ImpactOptions");
+    expect(rootDeclaration).toContain("type ImpactStreamingOptions");
+    expect(impactDeclaration).toContain("type ImpactStreamingOptions");
+    expect(typeDeclarationHasOwnJsDoc(streamingDistDeclaration, "ImpactStreamingOptions")).toBe(true);
+    expect(streamingDistDeclaration).toContain("@deprecated Streaming ignores this");
+    expect(sessionDeclaration).toContain("analyzeImpactStream(options: ImpactStreamingOptions)");
+    expectTypeScriptSurfaceCheck(`
+import type { ICodeReviewSession } from "../dist/index.js";
+import type { ImpactStreamingOptions as RootImpactStreamingOptions } from "../dist/index.js";
+
+const rootRaw: RootImpactStreamingOptions = { provider: "raw", diffText: "" };
+const rootLight: RootImpactStreamingOptions = { provider: "raw", diffText: "", streamSummary: "light" };
+const rootGit: RootImpactStreamingOptions = { provider: "git", base: "HEAD", head: "WORKTREE" };
+const commonImpactOption: RootImpactStreamingOptions = { provider: "raw", diffText: "", severityWeights: { directRef: 10 } };
+const compactStreaming: RootImpactStreamingOptions = { provider: "raw", diffText: "", compact: true };
+const sessionStreaming: Parameters<ICodeReviewSession["analyzeImpactStream"]>[0] = {
+  provider: "raw",
+  diffText: "",
+  streamSummary: "light",
+};
+
+// @ts-expect-error streamSummary only accepts the documented modes.
+const misspelledSummary: RootImpactStreamingOptions = { provider: "raw", diffText: "", streamSummary: "lite" };
+// @ts-expect-error diagnostics are internal analysis state, not caller options.
+const diagnosticsStreaming: RootImpactStreamingOptions = { provider: "raw", diffText: "", diagnostics: undefined };
+// @ts-expect-error fileLevelFallbackPaths are internal analysis state, not caller options.
+const fallbackPathsStreaming: RootImpactStreamingOptions = { provider: "raw", diffText: "", fileLevelFallbackPaths: [] };
+// @ts-expect-error onImpactItem is owned by analyzeImpactStreaming for progressive chunks.
+const onImpactItemStreaming: RootImpactStreamingOptions = { provider: "raw", diffText: "", onImpactItem: () => {} };
+
+void rootRaw;
+void rootLight;
+void rootGit;
+void commonImpactOption;
+void compactStreaming;
+void sessionStreaming;
+void misspelledSummary;
+void diagnosticsStreaming;
+void fallbackPathsStreaming;
+void onImpactItemStreaming;
+`);
+  });
+
+  it("keeps streaming and batch impact format discriminators distinct in docs", () => {
+    const readme = readText("README.md");
+    const libraryApi = readText("docs/library-api.md");
+    const agentWorkflows = readText("docs/agent-workflows.md");
+    const streamingSource = readText("src/impact/streaming.ts");
+
+    expect(readme).toContain("ranked top impacts");
+    expect(libraryApi).toContain('batch impact wrappers include `schemaVersion` and `format: "full" | "compact"`');
+    expect(libraryApi).toContain("ranked top impacts");
+    expect(libraryApi).toContain('streaming `complete.report` uses `format: "stream-summary"`');
+    expect(agentWorkflows).toContain('Batch impact wrappers return `schemaVersion` and `format: "full" | "compact"`');
+    expect(agentWorkflows).toContain("ranked top impacts");
+    expect(agentWorkflows).toContain('streaming `complete.report` uses `format: "stream-summary"`');
+    expect(streamingSource).toContain("top impacts");
   });
 
   it("keeps fallback install guidance aligned with the scoped registry requirement", () => {

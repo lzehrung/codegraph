@@ -337,7 +337,7 @@ Use the exported TypeScript APIs when another program is composing deterministic
 
 - `buildReviewReport()` returns a review bundle with `schemaVersion`, changed files, changed symbols, `graphDelta`, candidate tests, `riskSummary`, `reviewTasks`, and diagnostics.
 - `analyzeImpactFromDiff()` returns the full or compact impact report shape for batch consumers.
-- `analyzeImpactStreaming()` emits progress and incremental chunks, then a final `complete.report` summary with the same key structured fields needed by pack builders: changed files, changed symbols, impacted items, suggestions, export summaries, re-export chains, top impacts, surface area, clusters, cycles, graph edges, diagnostics, and warning text.
+- `analyzeImpactStreaming()` emits progress and incremental chunks, then a final `complete.report` summary. Streaming always returns `format: "stream-summary"`; forwarded `compact` is accepted only for compatibility and is ignored. By default this includes the same key structured fields needed by pack builders: changed files, changed symbols, impacted items, suggestions, export summaries, re-export chains, ranked top impacts, surface area, clusters, cycles, graph edges, diagnostics, and warning text. Set `streamSummary: "light"` when an incremental-only caller wants changed/impacted details and stable terminal counts without paying for terminal suggestions, export summaries, re-export chains, ranked top impacts, graph metadata, cycles, clusters, or surface-area analysis.
 
 Review-pack builders should preserve symbol handles, diff snippets, callsites, diagnostics, candidate-test confidence, impact reasons, and graph edge metadata. Render prose only at the final UI or prompt boundary.
 
@@ -349,7 +349,7 @@ Useful wrapper details:
 - `tool_findSymbol()` returns stable `id` handles plus `range`, `exported`, `exactMatch`, and `matchKind`.
 - `tool_goToDefinition()` and `tool_findReferences()` surface additive `provenance` metadata when the resolver used imports, namespaces, or other non-local paths.
 - `tool_getDependencies()`, `tool_getReverseDependencies()`, and `tool_getHotspots()` ignore non-finite `limit` values and clamp non-positive finite values to empty bounded results instead of returning malformed slices.
-- Impact wrappers now include `schemaVersion` and `format: "full" | "compact"` so downstream agents do not have to infer payload shape.
+- The batch impact wrappers include `schemaVersion` and `format: "full" | "compact"` so downstream agents do not have to infer payload shape; streaming `complete.report` uses `format: "stream-summary"`.
 
 ## Related docs
 
