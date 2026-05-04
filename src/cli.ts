@@ -549,7 +549,7 @@ function buildSkillDoctorReport(requestedTargetDir?: string, requestedAgent?: st
   const packageRoot = getCodegraphPackageRoot();
   const bundledSkillDir = getBundledSkillDir(packageRoot);
   const resolvedTarget = resolveSkillInstallTarget(requestedTargetDir, requestedAgent);
-  const defaultTargetDir = getDefaultSkillTargetDir();
+  const defaultTargetDir = getSkillTargetDirForAgent(resolvedTarget.agent ?? "codex");
   const installTargetDir = resolvedTarget.targetDir;
   const skillFilePath = path.join(installTargetDir, "SKILL.md");
   const targetDirExists = pathExists(installTargetDir);

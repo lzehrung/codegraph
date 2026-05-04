@@ -726,6 +726,44 @@ describe("CLI regressions", () => {
     expect(normalize(payload.skillFilePath)).toBe(normalize(path.join(targetDir, "SKILL.md")));
   });
 
+  it("skill install supports all agent defaults", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-matrix-"));
+    const env = {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+      CODEX_HOME: "",
+    };
+    const cases = [
+      { agent: "agents", targetDir: path.join(tmpDir, ".agents", "skills", "codegraph") },
+      { agent: "claude", targetDir: path.join(tmpDir, ".claude", "skills", "codegraph") },
+      { agent: "codex", targetDir: path.join(tmpDir, ".codex", "skills", "codegraph") },
+      { agent: "cursor", targetDir: path.join(tmpDir, ".cursor", "skills", "codegraph") },
+      { agent: "gemini", targetDir: path.join(tmpDir, ".gemini", "skills", "codegraph") },
+      { agent: "opencode", targetDir: path.join(tmpDir, ".config", "opencode", "skills", "codegraph") },
+    ] as const;
+
+    for (const entry of cases) {
+      await fsp.mkdir(path.dirname(entry.targetDir), { recursive: true });
+      const result = await runCliCommandDetailed(
+        ["skill", "install", "--agent", entry.agent],
+        undefined,
+        process.cwd(),
+        env,
+      );
+      const payload = JSON.parse(result.stdout) as {
+        agent: string;
+        installed: boolean;
+        skillFilePath: string;
+        targetDir: string;
+      };
+
+      expect(payload.agent).toBe(entry.agent);
+      expect(payload.installed).toBe(true);
+      expect(normalize(payload.targetDir)).toBe(normalize(entry.targetDir));
+      expect(normalize(payload.skillFilePath)).toBe(normalize(path.join(entry.targetDir, "SKILL.md")));
+    }
+  });
+
   it("skill install copies the bundled skill into the Cursor skills directory", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-cursor-"));
     const skillsDir = path.join(tmpDir, ".cursor", "skills");
@@ -744,6 +782,44 @@ describe("CLI regressions", () => {
     expect(normalize(payload.skillFilePath)).toBe(normalize(path.join(targetDir, "SKILL.md")));
     const skill = await fsp.readFile(path.join(targetDir, "SKILL.md"), "utf8");
     expect(skill).toContain("name: codegraph");
+  });
+
+  it("skill doctor reports agent-specific default targets", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-doctor-agent-"));
+    const env = {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+      CODEX_HOME: "",
+    };
+    const cases = [
+      { agent: "agents", targetDir: path.join(tmpDir, ".agents", "skills", "codegraph") },
+      { agent: "claude", targetDir: path.join(tmpDir, ".claude", "skills", "codegraph") },
+      { agent: "codex", targetDir: path.join(tmpDir, ".codex", "skills", "codegraph") },
+      { agent: "cursor", targetDir: path.join(tmpDir, ".cursor", "skills", "codegraph") },
+      { agent: "gemini", targetDir: path.join(tmpDir, ".gemini", "skills", "codegraph") },
+      { agent: "opencode", targetDir: path.join(tmpDir, ".config", "opencode", "skills", "codegraph") },
+    ] as const;
+
+    for (const entry of cases) {
+      await fsp.mkdir(path.dirname(entry.targetDir), { recursive: true });
+      const result = await runCliCommandDetailed(
+        ["skill", "doctor", "--agent", entry.agent],
+        undefined,
+        process.cwd(),
+        env,
+      );
+      const report = JSON.parse(result.stdout) as {
+        agent?: string;
+        defaultTargetDir: string;
+        installTargetDir: string;
+        requestedTargetDir?: string;
+      };
+
+      expect(report.agent).toBe(entry.agent);
+      expect(normalize(report.defaultTargetDir)).toBe(normalize(entry.targetDir));
+      expect(normalize(report.installTargetDir)).toBe(normalize(entry.targetDir));
+      expect(report.requestedTargetDir).toBeUndefined();
+    }
   });
 
   it("skill install --force replaces stale files in the target directory", async () => {
