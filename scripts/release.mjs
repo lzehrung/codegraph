@@ -401,7 +401,7 @@ const versionPlan = planVersions(selectedPackages, currentVersions, {
 });
 
 normalizeManagedManifests(versionPlan);
-run("npm", ["install", "--legacy-peer-deps"]);
+run("npm", ["install"]);
 normalizeManagedManifests(versionPlan);
 run("npm", ["run", "test:ci"]);
 run("npm", ["run", "build"]);
