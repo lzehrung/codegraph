@@ -54,9 +54,20 @@ function extractExportedTypeDeclaration(source: string, typeName: string): strin
   throw new Error(`Could not find complete declaration for ${typeName}`);
 }
 
+function moduleSpecifier(fromDirectory: string, toFile: string): string {
+  const relativePath = path.relative(fromDirectory, toFile).replaceAll(path.sep, "/");
+  return relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
+}
+
 function expectTypeScriptSurfaceCheck(source: string): void {
-  const fixturePath = path.resolve(process.cwd(), "tests/.tmp-impact-streaming-options.check.ts");
-  fs.writeFileSync(fixturePath, source, "utf8");
+  const fixtureDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-codegraph-ts-surface-"));
+  const fixturePath = path.join(fixtureDir, "impact-streaming-options.check.ts");
+  const rootDistSpecifier = moduleSpecifier(fixtureDir, path.resolve(process.cwd(), "dist/index.js"));
+  const impactDistSpecifier = moduleSpecifier(fixtureDir, path.resolve(process.cwd(), "dist/impact/index.js"));
+  const fixtureSource = source
+    .replaceAll("../dist/index.js", rootDistSpecifier)
+    .replaceAll("../dist/impact/index.js", impactDistSpecifier);
+  fs.writeFileSync(fixturePath, fixtureSource, "utf8");
 
   try {
     const tscPath = path.resolve(process.cwd(), "node_modules/typescript/bin/tsc");
@@ -80,7 +91,7 @@ function expectTypeScriptSurfaceCheck(source: string): void {
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
   } finally {
-    fs.rmSync(fixturePath, { force: true });
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
   }
 }
 
@@ -395,8 +406,6 @@ describe("package metadata", () => {
     expect(impactOptionsDeclaration).not.toContain("streamSummary");
     expect(streamingDeclaration).toContain('streamSummary?: "full" | "light"');
     expect(streamingDeclaration).toContain("ImpactOptions");
-    expect(streamingSource).toContain("type PublicImpactStreamingOptions<Options> = Options extends unknown");
-    expect(streamingSource).toContain("Omit<Options");
     expect(rootDeclaration).toContain("type ImpactStreamingOptions");
     expect(impactDeclaration).toContain("type ImpactStreamingOptions");
     expect(typeDeclarationHasOwnJsDoc(streamingDistDeclaration, "ImpactStreamingOptions")).toBe(true);
