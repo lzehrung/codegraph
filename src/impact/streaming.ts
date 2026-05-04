@@ -46,16 +46,18 @@ type PublicImpactStreamingOptions<Options> = Options extends unknown
  *
  * `streamSummary` is scoped to streaming callers so batch APIs do not accept a
  * no-op light mode. Streaming always emits the `stream-summary` report shape,
- * so batch-only `compact` output is intentionally not part of this typed
- * surface. Use `"full"` for the default terminal report, or `"light"` to skip
- * suggestions, export summaries, re-export chains, ranked top impacts, graph
- * metadata, cycles, clusters, and surface area in the final `complete.report`.
+ * and accepts `compact` only as an ignored compatibility field for callers that
+ * forward shared batch options. Use `"full"` for the default terminal report,
+ * or `"light"` to skip suggestions, export summaries, re-export chains, ranked
+ * top impacts, graph metadata, cycles, clusters, and surface area in the final
+ * `complete.report`.
  */
 export type ImpactStreamingOptions = PublicImpactStreamingOptions<ImpactOptions> & {
   /**
-   * Deprecated compatibility field for callers that forward shared batch
-   * options. Streaming ignores this and always returns `format:
-   * "stream-summary"`.
+   * Compatibility field for callers that forward shared batch options.
+   *
+   * @deprecated Streaming ignores this and always returns `format:
+   * "stream-summary"`. Omit it for streaming calls.
    */
   compact?: NonNullable<ImpactOptions["compact"]>;
   streamSummary?: "full" | "light";

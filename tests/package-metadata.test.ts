@@ -407,6 +407,7 @@ describe("package metadata", () => {
     expect(rootDeclaration).toContain("type ImpactStreamingOptions");
     expect(impactDeclaration).toContain("type ImpactStreamingOptions");
     expect(typeDeclarationHasOwnJsDoc(streamingDistDeclaration, "ImpactStreamingOptions")).toBe(true);
+    expect(streamingDistDeclaration).toContain("@deprecated Streaming ignores this");
     expect(sessionDeclaration).toContain("analyzeImpactStream(options: ImpactStreamingOptions)");
     expectTypeScriptSurfaceCheck(`
 import type { ICodeReviewSession } from "../dist/index.js";
@@ -458,7 +459,7 @@ void onImpactItemStreaming;
     expect(agentWorkflows).toContain('Batch impact wrappers return `schemaVersion` and `format: "full" | "compact"`');
     expect(agentWorkflows).toContain("ranked top impacts");
     expect(agentWorkflows).toContain('streaming `complete.report` uses `format: "stream-summary"`');
-    expect(streamingSource).toContain("ranked top impacts");
+    expect(streamingSource).toContain("top impacts");
   });
 
   it("keeps fallback install guidance aligned with the scoped registry requirement", () => {

@@ -204,8 +204,9 @@ export type ImpactDiagnostics = {
  * remain optimized for progressive agent work. When `streamSummary: "light"`
  * is used, optional terminal-only fields such as suggestions, export summaries,
  * and re-export chains are omitted, while ranked top impacts and
- * graph/cycle/cluster/surface-area fields use empty arrays so consumers keep a
- * stable required-field shape without paying for the full summary pass.
+ * cycle/cluster arrays are empty. `graph` and `surfaceArea` remain objects with
+ * nested empty arrays so consumers keep a stable required-field shape without
+ * paying for the full summary pass.
  */
 export type ImpactStreamSummaryReport = {
   schemaVersion: number;
