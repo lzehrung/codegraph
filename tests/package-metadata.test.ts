@@ -45,6 +45,36 @@ function extractExportedTypeDeclaration(source: string, typeName: string): strin
   throw new Error(`Could not find complete declaration for ${typeName}`);
 }
 
+function expectTypeScriptSurfaceCheck(source: string): void {
+  const fixturePath = path.resolve(process.cwd(), "tests/.tmp-impact-streaming-options.check.ts");
+  fs.writeFileSync(fixturePath, source, "utf8");
+
+  try {
+    const tscPath = path.resolve(process.cwd(), "node_modules/typescript/bin/tsc");
+    const result = spawnSync(
+      process.execPath,
+      [
+        tscPath,
+        "--noEmit",
+        "--target",
+        "ES2022",
+        "--module",
+        "NodeNext",
+        "--moduleResolution",
+        "NodeNext",
+        "--strict",
+        "--skipLibCheck",
+        fixturePath,
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  } finally {
+    fs.rmSync(fixturePath, { force: true });
+  }
+}
+
 function listFilesRecursive(relativePath: string, extension: string): string[] {
   const root = path.resolve(process.cwd(), relativePath);
   const files: string[] = [];
@@ -350,15 +380,30 @@ describe("package metadata", () => {
     const impactOptionsDeclaration = extractExportedTypeDeclaration(impactTypes, "ImpactOptions");
     const rootDeclaration = readText("dist/index.d.ts");
     const impactDeclaration = readText("dist/impact/index.d.ts");
-    const streamingDeclarationSurface = readText("dist/impact/streaming.d.ts");
 
     expect(impactOptionsDeclaration).not.toContain("streamSummary");
     expect(streamingDeclaration).toContain('streamSummary?: "full" | "light"');
-    expect(streamingDeclaration).toContain("ImpactStreamingOptionsBase<ImpactOptions>");
-    expect(streamingSource).toContain('Omit<Options, "compact">');
     expect(rootDeclaration).toContain("type ImpactStreamingOptions");
     expect(impactDeclaration).toContain("type ImpactStreamingOptions");
-    expect(streamingDeclarationSurface).toContain('Omit<Options, "compact">');
+    expectTypeScriptSurfaceCheck(`
+import type { ImpactStreamingOptions as RootImpactStreamingOptions } from "../dist/index.js";
+import type { ImpactStreamingOptions as NestedImpactStreamingOptions } from "../dist/impact/index.js";
+
+const rootRaw: RootImpactStreamingOptions = { provider: "raw", diffText: "" };
+const rootLight: RootImpactStreamingOptions = { provider: "raw", diffText: "", streamSummary: "light" };
+const nestedGit: NestedImpactStreamingOptions = { provider: "git", base: "HEAD", head: "WORKTREE" };
+
+// @ts-expect-error compact is batch-only and is not accepted by streaming options.
+const compactStreaming: RootImpactStreamingOptions = { provider: "raw", diffText: "", compact: true };
+// @ts-expect-error streamSummary only accepts the documented modes.
+const misspelledSummary: NestedImpactStreamingOptions = { provider: "raw", diffText: "", streamSummary: "lite" };
+
+void rootRaw;
+void rootLight;
+void nestedGit;
+void compactStreaming;
+void misspelledSummary;
+`);
   });
 
   it("keeps streaming and batch impact format discriminators distinct in docs", () => {

@@ -53,6 +53,20 @@ export type ImpactStreamingOptions = ImpactStreamingOptionsBase<ImpactOptions> &
   streamSummary?: "full" | "light";
 };
 
+function validateImpactStreamingOptions(options: ImpactStreamingOptions): "full" | "light" {
+  if ("compact" in options) {
+    throw new Error(
+      'analyzeImpactStreaming does not accept compact; streaming always returns format: "stream-summary"',
+    );
+  }
+
+  const streamSummary = options.streamSummary ?? "full";
+  if (streamSummary !== "full" && streamSummary !== "light") {
+    throw new Error('streamSummary must be "full" or "light"');
+  }
+  return streamSummary;
+}
+
 type AsyncQueue<T> = {
   push: (value: T) => void;
   close: () => void;
@@ -147,6 +161,7 @@ export async function* analyzeImpactStreaming(
   options: ImpactStreamingOptions,
 ): AsyncGenerator<ImpactStreamChunk> {
   try {
+    const streamSummary = validateImpactStreamingOptions(options);
     const displayFile = (filePath: string): string => toImpactReportFilePath(projectRoot, filePath);
     const projectFiles = index.projectFiles ?? (await discoverProjectFiles(projectRoot));
     yield { type: "projectFiles", files: projectFiles };
@@ -262,7 +277,6 @@ export async function* analyzeImpactStreaming(
       total: 4,
     };
 
-    const streamSummary = options.streamSummary ?? "full";
     const report =
       streamSummary === "light"
         ? buildLightStreamSummaryReport(

@@ -29,6 +29,15 @@ function git(root: string, args: string[]): string {
   }).trim();
 }
 
+async function firstStreamError(stream: AsyncGenerator<ImpactStreamChunk>): Promise<string | undefined> {
+  for await (const chunk of stream) {
+    if (chunk.type === "error") {
+      return chunk.error;
+    }
+  }
+  return undefined;
+}
+
 describe("Impact streaming", () => {
   it("matches analyzeImpactFromDiff results", async () => {
     const root = path.resolve(process.cwd(), "tests", "samples", "typescript");
@@ -188,6 +197,43 @@ index 1234567..abcdef0 100644
       expect(complete.report.cycles).toEqual([]);
       expect(complete.report.graph).toEqual({ fileEdges: [], symbolEdges: [] });
     }
+  });
+
+  it("rejects runtime-only streaming options outside the public contract", async () => {
+    const root = path.resolve(process.cwd(), "tests", "samples", "typescript");
+    const index = await buildProjectIndex(root);
+    const diffText = `diff --git a/utils.ts b/utils.ts
+index 1234567..abcdef0 100644
+--- a/utils.ts
++++ b/utils.ts
+@@ -1,3 +1,3 @@
+ export function helperFunction(): string {
+-  return "Hello from utils";
++  return "Hello from updated utils";
+ }
+`;
+    const compactOptions = {
+      provider: "raw" as const,
+      diffText,
+      compact: true,
+    };
+    const misspelledSummaryOptions = {
+      provider: "raw",
+      diffText,
+      streamSummary: "lite",
+    };
+    const misspelledSummaryStream = Reflect.apply(analyzeImpactStreaming, undefined, [
+      root,
+      index,
+      misspelledSummaryOptions,
+    ]) as AsyncGenerator<ImpactStreamChunk>;
+
+    await expect(firstStreamError(analyzeImpactStreaming(root, index, compactOptions))).resolves.toContain(
+      "does not accept compact",
+    );
+    await expect(firstStreamError(misspelledSummaryStream)).resolves.toContain(
+      'streamSummary must be "full" or "light"',
+    );
   });
 
   it("preserves diff provider warnings in light terminal reports", async () => {
