@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
 import {
   bumpVersion,
   computePublishPlan,
@@ -22,6 +23,13 @@ import {
 } from "../scripts/release-lib.mjs";
 
 describe("release script helpers", () => {
+  it("keeps release lockfile generation compatible with CI npm ci", () => {
+    const releaseScript = fs.readFileSync("scripts/release.mjs", "utf8");
+
+    expect(releaseScript).toContain('run("npm", ["install"])');
+    expect(releaseScript).not.toContain("--legacy-peer-deps");
+  });
+
   it("bumps semantic versions by release type", () => {
     expect(bumpVersion("1.8.37", "patch")).toBe("1.8.38");
     expect(bumpVersion("1.8.37", "minor")).toBe("1.9.0");
