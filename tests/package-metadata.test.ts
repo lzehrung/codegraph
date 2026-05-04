@@ -397,12 +397,21 @@ const nestedGit: NestedImpactStreamingOptions = { provider: "git", base: "HEAD",
 const compactStreaming: RootImpactStreamingOptions = { provider: "raw", diffText: "", compact: true };
 // @ts-expect-error streamSummary only accepts the documented modes.
 const misspelledSummary: NestedImpactStreamingOptions = { provider: "raw", diffText: "", streamSummary: "lite" };
+// @ts-expect-error diagnostics are internal analysis state, not caller options.
+const diagnosticsStreaming: RootImpactStreamingOptions = { provider: "raw", diffText: "", diagnostics: undefined };
+// @ts-expect-error fileLevelFallbackPaths are internal analysis state, not caller options.
+const fallbackPathsStreaming: RootImpactStreamingOptions = { provider: "raw", diffText: "", fileLevelFallbackPaths: [] };
+// @ts-expect-error onImpactItem is owned by analyzeImpactStreaming for progressive chunks.
+const onImpactItemStreaming: RootImpactStreamingOptions = { provider: "raw", diffText: "", onImpactItem: () => {} };
 
 void rootRaw;
 void rootLight;
 void nestedGit;
 void compactStreaming;
 void misspelledSummary;
+void diagnosticsStreaming;
+void fallbackPathsStreaming;
+void onImpactItemStreaming;
 `);
   });
 

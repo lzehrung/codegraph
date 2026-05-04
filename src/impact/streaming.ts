@@ -6,6 +6,7 @@
 import type { ProjectIndex } from "../indexer.js";
 import {
   IMPACT_SCHEMA_VERSION,
+  type DiffProviderOptions,
   type ImpactOptions,
   type ChangedSymbol,
   type FileChange,
@@ -42,24 +43,41 @@ export type ImpactStreamChunk =
  *
  * `streamSummary` is scoped to streaming callers so batch APIs do not accept a
  * no-op light mode. Streaming always emits the `stream-summary` report shape,
- * so batch-only `compact` output is intentionally not accepted here. Use
- * `"full"` for the default terminal report, or `"light"` to skip suggestions,
- * export summaries, re-export chains, ranked top impacts, graph metadata,
- * cycles, clusters, and surface area in the final `complete.report`.
+ * so batch-only `compact` output is intentionally not part of this typed
+ * surface. Use `"full"` for the default terminal report, or `"light"` to skip
+ * suggestions, export summaries, re-export chains, ranked top impacts, graph
+ * metadata, cycles, clusters, and surface area in the final `complete.report`.
  */
-type ImpactStreamingOptionsBase<Options> = Options extends unknown ? Omit<Options, "compact"> : never;
+type ImpactStreamingAnalysisOptions = Pick<
+  ImpactOptions,
+  | "scope"
+  | "maxRefs"
+  | "depth"
+  | "includeTests"
+  | "membersOnly"
+  | "testPatterns"
+  | "ignoreGlobs"
+  | "refContext"
+  | "refContextLines"
+  | "refBlockMaxLines"
+  | "verifyReferences"
+  | "maxSuggestions"
+  | "configImpactRules"
+  | "detectBreakingChanges"
+  | "testCoverageSuggestions"
+  | "lcovPaths"
+  | "coveragePaths"
+  | "testCommandTemplate"
+  | "severityWeights"
+  | "fileLevelFallback"
+>;
 
-export type ImpactStreamingOptions = ImpactStreamingOptionsBase<ImpactOptions> & {
-  streamSummary?: "full" | "light";
-};
+export type ImpactStreamingOptions = DiffProviderOptions &
+  ImpactStreamingAnalysisOptions & {
+    streamSummary?: "full" | "light";
+  };
 
 function validateImpactStreamingOptions(options: ImpactStreamingOptions): "full" | "light" {
-  if ("compact" in options) {
-    throw new Error(
-      'analyzeImpactStreaming does not accept compact; streaming always returns format: "stream-summary"',
-    );
-  }
-
   const streamSummary = options.streamSummary ?? "full";
   if (streamSummary !== "full" && streamSummary !== "light") {
     throw new Error('streamSummary must be "full" or "light"');

@@ -199,7 +199,7 @@ index 1234567..abcdef0 100644
     }
   });
 
-  it("rejects runtime-only streaming options outside the public contract", async () => {
+  it("ignores runtime compact forwarding but rejects invalid stream summary modes", async () => {
     const root = path.resolve(process.cwd(), "tests", "samples", "typescript");
     const index = await buildProjectIndex(root);
     const diffText = `diff --git a/utils.ts b/utils.ts
@@ -217,6 +217,11 @@ index 1234567..abcdef0 100644
       diffText,
       compact: true,
     };
+    const compactUndefinedOptions = {
+      provider: "raw" as const,
+      diffText,
+      compact: undefined,
+    };
     const misspelledSummaryOptions = {
       provider: "raw",
       diffText,
@@ -228,9 +233,12 @@ index 1234567..abcdef0 100644
       misspelledSummaryOptions,
     ]) as AsyncGenerator<ImpactStreamChunk>;
 
-    await expect(firstStreamError(analyzeImpactStreaming(root, index, compactOptions))).resolves.toContain(
-      "does not accept compact",
-    );
+    await expect(
+      firstStreamError(Reflect.apply(analyzeImpactStreaming, undefined, [root, index, compactOptions])),
+    ).resolves.toBeUndefined();
+    await expect(
+      firstStreamError(Reflect.apply(analyzeImpactStreaming, undefined, [root, index, compactUndefinedOptions])),
+    ).resolves.toBeUndefined();
     await expect(firstStreamError(misspelledSummaryStream)).resolves.toContain(
       'streamSummary must be "full" or "light"',
     );
