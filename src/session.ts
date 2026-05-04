@@ -11,6 +11,7 @@ import {
   type ImpactOptions,
   type ImpactReport,
   type CompactImpactReport,
+  type ImpactStreamingOptions,
 } from "./impact/index.js";
 import { analyzeImpactStreaming, type ImpactStreamChunk } from "./impact/streaming.js";
 import { getSessionPreset, mergePreset, type PresetName } from "./presets.js";
@@ -161,7 +162,7 @@ export interface ICodeReviewSession {
   getStatus(): SessionStatus;
   analyzeImpact(options: ImpactOptions): Promise<ImpactReport | CompactImpactReport>;
   findReferences(params: { file: string; line: number; column: number }): Promise<SessionFindReferencesResult>;
-  analyzeImpactStream(options: ImpactOptions): AsyncGenerator<ImpactStreamChunk>;
+  analyzeImpactStream(options: ImpactStreamingOptions): AsyncGenerator<ImpactStreamChunk>;
   goToDefinition(params: { file: string; line: number; column: number }): Promise<SessionGoToDefinitionResult>;
   refresh(): Promise<void>;
   dispose(): void;
@@ -332,7 +333,7 @@ export class CodeReviewSession implements ICodeReviewSession {
    * Stream impact analysis results
    * Better for agents as they can start processing immediately
    */
-  async *analyzeImpactStream(options: ImpactOptions): AsyncGenerator<ImpactStreamChunk> {
+  async *analyzeImpactStream(options: ImpactStreamingOptions): AsyncGenerator<ImpactStreamChunk> {
     const index = this.getIndex();
     requireSessionImpactProvider(options);
     yield* analyzeImpactStreaming(this.root, index, options);

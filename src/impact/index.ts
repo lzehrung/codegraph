@@ -5,7 +5,7 @@ import { buildImpactReport } from "./report.js";
 import { collectImpactReportSuggestions } from "./report-suggestions.js";
 
 export * from "./types.js";
-export { analyzeImpactStreaming, type ImpactStreamChunk } from "./streaming.js";
+export { analyzeImpactStreaming, type ImpactStreamChunk, type ImpactStreamingOptions } from "./streaming.js";
 export { collectImpactReportSuggestions } from "./report-suggestions.js";
 
 /**

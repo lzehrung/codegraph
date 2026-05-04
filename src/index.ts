@@ -126,6 +126,7 @@ export {
   type ImpactStreamSummaryReport,
   IMPACT_SCHEMA_VERSION,
   type ImpactOptions,
+  type ImpactStreamingOptions,
   type DiffProviderOptions,
   type ImpactContext,
   type CandidateTestFile,
