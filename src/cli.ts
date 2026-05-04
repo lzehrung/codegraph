@@ -258,13 +258,17 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--lcov",
   "--coverage-report",
   "--test-command-template",
+  "--agent",
   "--target",
   "--limit",
 ]);
 
+type SkillInstallAgent = "agents" | "claude" | "codex" | "cursor" | "gemini" | "opencode";
+
 type SkillDoctorReport = {
   packageRoot: string;
   bundledSkillDir: string | null;
+  agent?: SkillInstallAgent;
   defaultTargetDir: string;
   requestedTargetDir?: string;
   installTargetDir: string;
@@ -432,11 +436,43 @@ function getBundledSkillDir(packageRoot: string): string | null {
 }
 
 function getDefaultSkillTargetDir(): string {
+  return getSkillTargetDirForAgent("codex");
+}
+
+function getSkillTargetDirForAgent(agent: SkillInstallAgent): string {
+  const homeDir = os.homedir();
+  if (agent === "agents") {
+    return path.join(homeDir, ".agents", "skills", "codegraph");
+  }
+  if (agent === "claude") {
+    return path.join(homeDir, ".claude", "skills", "codegraph");
+  }
+  if (agent === "cursor") {
+    return path.join(homeDir, ".cursor", "skills", "codegraph");
+  }
+  if (agent === "gemini") {
+    return path.join(homeDir, ".gemini", "skills", "codegraph");
+  }
+  if (agent === "opencode") {
+    return path.join(homeDir, ".config", "opencode", "skills", "codegraph");
+  }
   const codexHome = process.env.CODEX_HOME?.trim();
   if (codexHome) {
     return path.join(codexHome, "skills", "codegraph");
   }
-  return path.join(os.homedir(), ".codex", "skills", "codegraph");
+  return path.join(homeDir, ".codex", "skills", "codegraph");
+}
+
+function parseSkillInstallAgent(value: string | undefined): SkillInstallAgent | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "agents" || normalized === "universal") return "agents";
+  if (normalized === "claude" || normalized === "claude-code") return "claude";
+  if (normalized === "codex") return "codex";
+  if (normalized === "cursor" || normalized === "cursor-cli") return "cursor";
+  if (normalized === "gemini" || normalized === "gemini-cli") return "gemini";
+  if (normalized === "opencode" || normalized === "open-code") return "opencode";
+  throw new Error(`Invalid --agent value "${value}". Expected agents, claude, codex, cursor, gemini, or opencode.`);
 }
 
 function isCommandAvailableOnPath(command: string): boolean {
@@ -487,20 +523,48 @@ function assertSafeSkillInstallTarget(targetDir: string): string {
   return resolvedTarget;
 }
 
-function buildSkillDoctorReport(requestedTargetDir?: string): SkillDoctorReport {
+function assertSkillInstallParentExists(targetDir: string): void {
+  const parentDir = path.dirname(targetDir);
+  if (!pathExists(parentDir)) {
+    throw new Error(
+      `Skill install target parent directory does not exist: ${normalizePathForDisplay(parentDir)}. ` +
+        "Create the agent skills directory first, then rerun the install command.",
+    );
+  }
+}
+
+function resolveSkillInstallTarget(requestedTargetDir: string | undefined, requestedAgent: string | undefined) {
+  const agent = parseSkillInstallAgent(requestedAgent);
+  if (requestedTargetDir && agent) {
+    throw new Error("Use either --target or --agent for skill install, not both.");
+  }
+  const targetDir = requestedTargetDir ? requestedTargetDir : getSkillTargetDirForAgent(agent ?? "codex");
+  return {
+    agent,
+    targetDir: assertSafeSkillInstallTarget(targetDir),
+  };
+}
+
+function buildSkillDoctorReport(requestedTargetDir?: string, requestedAgent?: string): SkillDoctorReport {
   const packageRoot = getCodegraphPackageRoot();
   const bundledSkillDir = getBundledSkillDir(packageRoot);
-  const defaultTargetDir = getDefaultSkillTargetDir();
-  const installTargetDir = requestedTargetDir ? path.resolve(requestedTargetDir) : defaultTargetDir;
+  const resolvedTarget = resolveSkillInstallTarget(requestedTargetDir, requestedAgent);
+  const defaultTargetDir = getSkillTargetDirForAgent(resolvedTarget.agent ?? "codex");
+  const installTargetDir = resolvedTarget.targetDir;
   const skillFilePath = path.join(installTargetDir, "SKILL.md");
   const targetDirExists = pathExists(installTargetDir);
   return {
     packageRoot: normalizePathForDisplay(packageRoot),
     bundledSkillDir: bundledSkillDir ? normalizePathForDisplay(bundledSkillDir) : null,
+    ...(resolvedTarget.agent
+      ? {
+          agent: resolvedTarget.agent,
+        }
+      : {}),
     defaultTargetDir: normalizePathForDisplay(defaultTargetDir),
     ...(requestedTargetDir
       ? {
-          requestedTargetDir: normalizePathForDisplay(path.resolve(requestedTargetDir)),
+          requestedTargetDir: normalizePathForDisplay(resolvedTarget.targetDir),
         }
       : {}),
     installTargetDir: normalizePathForDisplay(installTargetDir),
@@ -1422,7 +1486,12 @@ Examples:
   codegraph doctor
   codegraph inspect ./src --limit 20
   codegraph graph --root . ./src --include-glob "**/*.ts" --ignore-glob "**/*.spec.ts"
-  codegraph skill install
+  codegraph skill install --agent agents
+  codegraph skill install --agent codex
+  codegraph skill install --agent claude
+  codegraph skill install --agent cursor
+  codegraph skill install --agent gemini
+  codegraph skill install --agent opencode
   codegraph skill install --target ~/.codex/skills/codegraph --force
   codegraph skill doctor
   codegraph impact --provider git --base main --head HEAD
@@ -1533,6 +1602,7 @@ Examples:
 
   if (cmd === "skill") {
     const subcommand = parsed.positionals[0] ?? "doctor";
+    const agentOpt = getOpt("--agent");
     const targetOpt = getOpt("--target");
     const overwrite = hasFlag("--force");
 
@@ -1547,7 +1617,7 @@ Examples:
     }
 
     if (subcommand === "doctor") {
-      writeJSONLine(buildSkillDoctorReport(targetOpt));
+      writeJSONLine(buildSkillDoctorReport(targetOpt, agentOpt));
       return;
     }
 
@@ -1557,9 +1627,16 @@ Examples:
       if (!bundledSkillDir) {
         throw new Error("Bundled codegraph skill assets were not found.");
       }
-      const targetDir = assertSafeSkillInstallTarget(targetOpt ? targetOpt : getDefaultSkillTargetDir());
+      const resolvedTarget = resolveSkillInstallTarget(targetOpt, agentOpt);
+      const targetDir = resolvedTarget.targetDir;
+      assertSkillInstallParentExists(targetDir);
       await copyDirectoryRecursive(bundledSkillDir, targetDir, overwrite);
       writeJSONLine({
+        ...(resolvedTarget.agent
+          ? {
+              agent: resolvedTarget.agent,
+            }
+          : {}),
         installed: true,
         targetDir: normalizePathForDisplay(targetDir),
         skillFilePath: normalizePathForDisplay(path.join(targetDir, "SKILL.md")),
@@ -1568,7 +1645,7 @@ Examples:
       return;
     }
 
-    writeStderrLine("Usage: codegraph skill <install|print-path|doctor> [--target <dir>] [--force]");
+    writeStderrLine("Usage: codegraph skill <install|print-path|doctor> [--agent <name> | --target <dir>] [--force]");
     process.exit(2);
   }
 

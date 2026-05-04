@@ -19,10 +19,12 @@ async function runCliCommandDetailed(
   args: string[],
   input?: string,
   cwd = process.cwd(),
+  env: NodeJS.ProcessEnv = {},
 ): Promise<{ stdout: string; stderr: string }> {
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [tsxCliPath, sourceCliPath, ...args], {
       cwd,
+      env: { ...process.env, ...env },
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -632,6 +634,7 @@ describe("CLI regressions", () => {
   it("skill install copies the bundled skill into the target directory", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-install-"));
     const targetDir = skillInstallTarget(tmpDir);
+    await fsp.mkdir(path.dirname(targetDir), { recursive: true });
     const stdout = await runCliCommand(["skill", "install", "--target", targetDir]);
     const result = JSON.parse(stdout) as {
       installed: boolean;
@@ -644,6 +647,179 @@ describe("CLI regressions", () => {
     const installedSkill = await fsp.readFile(path.join(targetDir, "SKILL.md"), "utf8");
     expect(installedSkill).toContain("name: codegraph");
     expect(normalize(result.skillFilePath)).toBe(normalize(path.join(targetDir, "SKILL.md")));
+  });
+
+  it("skill install rejects explicit targets when the parent skills directory is missing", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-parent-"));
+    const targetDir = skillInstallTarget(tmpDir);
+
+    await expect(runCliCommand(["skill", "install", "--target", targetDir])).rejects.toThrow(
+      /target parent directory does not exist/i,
+    );
+  });
+
+  it("skill install uses safe agent defaults and requires the agent skills directory to exist", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-agent-"));
+    const skillsDir = path.join(tmpDir, ".claude", "skills");
+    const targetDir = path.join(skillsDir, "codegraph");
+    const env = {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+      CODEX_HOME: "",
+    };
+
+    await expect(
+      runCliCommandDetailed(["skill", "install", "--agent", "claude"], undefined, process.cwd(), env),
+    ).rejects.toThrow(/target parent directory does not exist/i);
+
+    await fsp.mkdir(skillsDir, { recursive: true });
+    const result = await runCliCommandDetailed(
+      ["skill", "install", "--agent", "claude"],
+      undefined,
+      process.cwd(),
+      env,
+    );
+    const payload = JSON.parse(result.stdout) as {
+      agent: string;
+      installed: boolean;
+      skillFilePath: string;
+      targetDir: string;
+    };
+
+    expect(payload.agent).toBe("claude");
+    expect(payload.installed).toBe(true);
+    expect(normalize(payload.targetDir)).toBe(normalize(targetDir));
+    expect(normalize(payload.skillFilePath)).toBe(normalize(path.join(targetDir, "SKILL.md")));
+  });
+
+  it("skill install uses the universal agents skills directory when requested", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-agents-"));
+    const skillsDir = path.join(tmpDir, ".agents", "skills");
+    const targetDir = path.join(skillsDir, "codegraph");
+    const env = {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+      CODEX_HOME: "",
+    };
+
+    await expect(
+      runCliCommandDetailed(["skill", "install", "--agent", "agents"], undefined, process.cwd(), env),
+    ).rejects.toThrow(/target parent directory does not exist/i);
+
+    await fsp.mkdir(skillsDir, { recursive: true });
+    const result = await runCliCommandDetailed(
+      ["skill", "install", "--agent", "agents"],
+      undefined,
+      process.cwd(),
+      env,
+    );
+    const payload = JSON.parse(result.stdout) as {
+      agent: string;
+      installed: boolean;
+      skillFilePath: string;
+      targetDir: string;
+    };
+
+    expect(payload.agent).toBe("agents");
+    expect(payload.installed).toBe(true);
+    expect(normalize(payload.targetDir)).toBe(normalize(targetDir));
+    expect(normalize(payload.skillFilePath)).toBe(normalize(path.join(targetDir, "SKILL.md")));
+  });
+
+  it("skill install supports all agent defaults", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-matrix-"));
+    const env = {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+      CODEX_HOME: "",
+    };
+    const cases = [
+      { agent: "agents", targetDir: path.join(tmpDir, ".agents", "skills", "codegraph") },
+      { agent: "claude", targetDir: path.join(tmpDir, ".claude", "skills", "codegraph") },
+      { agent: "codex", targetDir: path.join(tmpDir, ".codex", "skills", "codegraph") },
+      { agent: "cursor", targetDir: path.join(tmpDir, ".cursor", "skills", "codegraph") },
+      { agent: "gemini", targetDir: path.join(tmpDir, ".gemini", "skills", "codegraph") },
+      { agent: "opencode", targetDir: path.join(tmpDir, ".config", "opencode", "skills", "codegraph") },
+    ] as const;
+
+    for (const entry of cases) {
+      await fsp.mkdir(path.dirname(entry.targetDir), { recursive: true });
+      const result = await runCliCommandDetailed(
+        ["skill", "install", "--agent", entry.agent],
+        undefined,
+        process.cwd(),
+        env,
+      );
+      const payload = JSON.parse(result.stdout) as {
+        agent: string;
+        installed: boolean;
+        skillFilePath: string;
+        targetDir: string;
+      };
+
+      expect(payload.agent).toBe(entry.agent);
+      expect(payload.installed).toBe(true);
+      expect(normalize(payload.targetDir)).toBe(normalize(entry.targetDir));
+      expect(normalize(payload.skillFilePath)).toBe(normalize(path.join(entry.targetDir, "SKILL.md")));
+    }
+  });
+
+  it("skill install copies the bundled skill into the Cursor skills directory", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-cursor-"));
+    const skillsDir = path.join(tmpDir, ".cursor", "skills");
+    const targetDir = path.join(skillsDir, "codegraph");
+
+    await fsp.mkdir(skillsDir, { recursive: true });
+    const result = await runCliCommandDetailed(["skill", "install", "--target", targetDir], undefined, tmpDir);
+    const payload = JSON.parse(result.stdout) as {
+      installed: boolean;
+      skillFilePath: string;
+      targetDir: string;
+    };
+
+    expect(payload.installed).toBe(true);
+    expect(normalize(payload.targetDir)).toBe(normalize(targetDir));
+    expect(normalize(payload.skillFilePath)).toBe(normalize(path.join(targetDir, "SKILL.md")));
+    const skill = await fsp.readFile(path.join(targetDir, "SKILL.md"), "utf8");
+    expect(skill).toContain("name: codegraph");
+  });
+
+  it("skill doctor reports agent-specific default targets", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-doctor-agent-"));
+    const env = {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+      CODEX_HOME: "",
+    };
+    const cases = [
+      { agent: "agents", targetDir: path.join(tmpDir, ".agents", "skills", "codegraph") },
+      { agent: "claude", targetDir: path.join(tmpDir, ".claude", "skills", "codegraph") },
+      { agent: "codex", targetDir: path.join(tmpDir, ".codex", "skills", "codegraph") },
+      { agent: "cursor", targetDir: path.join(tmpDir, ".cursor", "skills", "codegraph") },
+      { agent: "gemini", targetDir: path.join(tmpDir, ".gemini", "skills", "codegraph") },
+      { agent: "opencode", targetDir: path.join(tmpDir, ".config", "opencode", "skills", "codegraph") },
+    ] as const;
+
+    for (const entry of cases) {
+      await fsp.mkdir(path.dirname(entry.targetDir), { recursive: true });
+      const result = await runCliCommandDetailed(
+        ["skill", "doctor", "--agent", entry.agent],
+        undefined,
+        process.cwd(),
+        env,
+      );
+      const report = JSON.parse(result.stdout) as {
+        agent?: string;
+        defaultTargetDir: string;
+        installTargetDir: string;
+        requestedTargetDir?: string;
+      };
+
+      expect(report.agent).toBe(entry.agent);
+      expect(normalize(report.defaultTargetDir)).toBe(normalize(entry.targetDir));
+      expect(normalize(report.installTargetDir)).toBe(normalize(entry.targetDir));
+      expect(report.requestedTargetDir).toBeUndefined();
+    }
   });
 
   it("skill install --force replaces stale files in the target directory", async () => {

@@ -112,13 +112,37 @@ If you install the published CLI instead of using a source checkout, replace `no
 
 ## Agent setup
 
-Using Codex or another skill-aware agent? Install the bundled skill so repo navigation, semantic references, dependency tracing, and PR impact questions route to Codegraph automatically:
+Using a skill-aware agent? Install the bundled skill so repo navigation, semantic references, dependency tracing, and PR impact questions route to Codegraph automatically. The installer uses safe per-agent defaults and refuses to create a missing parent skills directory, so create the agent's `skills` folder first:
 
 ```bash
-codegraph skill install
+# Codex CLI: ${CODEX_HOME:-~/.codex}/skills/codegraph
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
+codegraph skill install --agent codex
+
+# Claude Code: ~/.claude/skills/codegraph
+mkdir -p ~/.claude/skills
+codegraph skill install --agent claude
+
+# Universal agent skills: ~/.agents/skills/codegraph
+mkdir -p ~/.agents/skills
+codegraph skill install --agent agents
+
+# Cursor CLI: ~/.cursor/skills/codegraph
+mkdir -p ~/.cursor/skills
+codegraph skill install --agent cursor
+
+# Gemini CLI: ~/.gemini/skills/codegraph
+mkdir -p ~/.gemini/skills
+codegraph skill install --agent gemini
+
+# OpenCode: ~/.config/opencode/skills/codegraph
+mkdir -p ~/.config/opencode/skills
+codegraph skill install --agent opencode
 ```
 
-To inspect the packaged skill paths and target health, run `codegraph skill doctor`.
+For a custom location, use `codegraph skill install --target <path>/skills/codegraph`; the target must end with `skills/codegraph` and the parent `skills` directory must already exist. Cursor CLI now supports native skills directories too, so `.cursor/skills/codegraph` works alongside the universal `~/.agents/skills/codegraph` location. To inspect the packaged skill paths and target health, run `codegraph skill doctor`.
+
+On PowerShell, use `New-Item -ItemType Directory -Force <path>` instead of `mkdir -p <path>`.
 
 ## Using as a library
 
