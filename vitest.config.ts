@@ -12,6 +12,11 @@ export default defineConfig({
     include: ["tests/**/*.test.ts"],
     includeSource: ["src/**/*.{ts,tsx,js,jsx}"],
     exclude: ["node_modules", "dist"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "html", "lcov"],
+      reportsDirectory: "./coverage/js",
+    },
   },
   resolve: {
     alias: {
