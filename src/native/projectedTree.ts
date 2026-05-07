@@ -8,7 +8,7 @@ export type ProjectedPosition = {
 export class ProjectedSyntaxTree {
   readonly source: string;
   private readonly nodesById: Map<number, ProjectedSyntaxNode>;
-  private readonly byteToStringIndex: number[];
+  private readonly byteToStringIndex: Uint32Array;
   private readonly lineStartBytes: number[];
   readonly rootNode: ProjectedSyntaxNode;
 
@@ -157,12 +157,12 @@ function comparePosition(left: ProjectedPosition, right: ProjectedPosition): num
 }
 
 type SourceByteMap = {
-  byteToStringIndex: number[];
+  byteToStringIndex: Uint32Array;
   lineStartBytes: number[];
 };
 
 function buildSourceByteMap(source: string): SourceByteMap {
-  const byteToStringIndex: number[] = [0];
+  const byteToStringIndex = new Uint32Array(Buffer.byteLength(source, "utf8") + 1);
   const lineStartBytes: number[] = [0];
   let byteOffset = 0;
   let stringIndex = 0;
@@ -171,9 +171,8 @@ function buildSourceByteMap(source: string): SourceByteMap {
     const codePoint = source.codePointAt(stringIndex);
     if (codePoint === undefined) break;
 
-    const char = String.fromCodePoint(codePoint);
-    const charStringLength = char.length;
-    const charByteLength = Buffer.byteLength(char, "utf8");
+    const charStringLength = codePoint > 0xffff ? 2 : 1;
+    const charByteLength = utf8ByteLengthForCodePoint(codePoint);
 
     for (let offset = 1; offset < charByteLength; offset += 1) {
       byteToStringIndex[byteOffset + offset] = stringIndex;
@@ -183,11 +182,24 @@ function buildSourceByteMap(source: string): SourceByteMap {
     stringIndex += charStringLength;
     byteToStringIndex[byteOffset] = stringIndex;
 
-    if (char === "\n") {
+    if (codePoint === 10) {
       lineStartBytes.push(byteOffset);
     }
   }
 
   byteToStringIndex[byteOffset] = source.length;
   return { byteToStringIndex, lineStartBytes };
+}
+
+function utf8ByteLengthForCodePoint(codePoint: number): number {
+  if (codePoint <= 0x7f) {
+    return 1;
+  }
+  if (codePoint <= 0x7ff) {
+    return 2;
+  }
+  if (codePoint <= 0xffff) {
+    return 3;
+  }
+  return 4;
 }

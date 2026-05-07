@@ -59,7 +59,7 @@ nativeDescribe("native parse tree projection", () => {
     expect(support).toBeDefined();
 
     const source = ["// unicode marker: -> => ...", "function afterUnicode() {", "  return 1;", "}"].join("\n");
-    const unicodeSource = source.replace("-> => ...", "\u2192 \u2014 ok");
+    const unicodeSource = source.replace("-> => ...", "\u2192 \u2014 \u{1f680} ok");
 
     const execution = getNativeSyntaxTreeExecution(unicodeSource, support!);
     expect(execution.tree).not.toBeNull();

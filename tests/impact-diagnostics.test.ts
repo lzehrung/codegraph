@@ -64,8 +64,9 @@ index 1111111..0000000 100644
     const missingMarkdownFile = path.join(root, "context-budgeting.md");
     const index = {
       graph: { nodes: new Set<string>(), edges: [] },
+      modules: new Map(),
       byFile: new Map(),
-      symbols: new Map(),
+      exportCache: new Map(),
       scopeCache: new Map(),
       projectRoot: root,
       projectFiles: [],
@@ -100,7 +101,7 @@ index 1111111..2222222 100644
     try {
       const sourceFile = path.join(root, "feature.ts");
       const source = [
-        "// unicode marker: \u2192 \u2014 ok",
+        "// unicode marker: \u2192 \u2014 \u{1f680} ok",
         "export function afterUnicode() {",
         "  return 1;",
         "}",
