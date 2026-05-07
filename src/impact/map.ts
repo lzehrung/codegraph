@@ -48,13 +48,13 @@ export async function locateChangedSymbolsWithLines(
   // Find AST nodes that overlap with changed lines
   const changedNodes = findNodesInLines(tree, changedLines);
 
-  // Precise byte ranges of changed content — used by computeSignatureChanged to
+  // Precise byte ranges of changed content, used by computeSignatureChanged to
   // avoid false positives on single-line declarations where params and body share
   // the same line number.
   const changedByteRanges = computeChangedByteRanges(source, hunks);
 
   // Accumulate per-symbol info, deduplicating across multiple overlapping nodes.
-  // Key: SymbolHandle  →  { symbolDef, typeOnly, lines changed within symbol range }
+  // Key: SymbolHandle -> { symbolDef, typeOnly, lines changed within symbol range }
   type SymbolEntry = {
     symbolDef: SymbolDef;
     typeOnly: boolean;
@@ -447,7 +447,7 @@ function computeChangedByteRanges(source: string, hunks: FileChange["hunks"]): B
           if (source.length > 0) {
             ranges.push({ start: source.length - 1, end: source.length });
           }
-          // else: empty source — no sentinel needed
+          // else: empty source, no sentinel needed
         } else {
           ranges.push({ start: cursor, end: cursor + 1 });
         }
@@ -487,7 +487,7 @@ function computeSignatureChanged(
   const params = declNode.childForFieldName("parameters") || declNode.childForFieldName("params");
   if (!params) return false;
   // Note: namedChildCount === 0 is intentionally NOT checked here.
-  // A signature edit that removes ALL parameters (e.g. f(a) → f()) should
+  // A signature edit that removes ALL parameters (e.g. f(a) -> f()) should
   // still be detected: the params node exists and its byte range overlaps the
   // changed content even though it ends up empty.
   const paramsStart = params.startIndex;

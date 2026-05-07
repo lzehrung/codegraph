@@ -54,6 +54,24 @@ nativeDescribe("native parse tree projection", () => {
     expect(byPosition.text).toBe("name");
   });
 
+  it("projects UTF-8 byte offsets to JavaScript string indices", () => {
+    const support = supportById("ts");
+    expect(support).toBeDefined();
+
+    const source = ["// unicode marker: -> => ...", "function afterUnicode() {", "  return 1;", "}"].join("\n");
+    const unicodeSource = source.replace("-> => ...", "\u2192 \u2014 ok");
+
+    const execution = getNativeSyntaxTreeExecution(unicodeSource, support!);
+    expect(execution.tree).not.toBeNull();
+
+    const tree = new ProjectedSyntaxTree(unicodeSource, execution.tree!);
+    const declaration = tree.rootNode.namedChildren.find((node) => node.type === "function_declaration");
+    const nameNode = declaration?.childForFieldName("name") ?? null;
+
+    expect(nameNode?.text).toBe("afterUnicode");
+    expect(nameNode?.startIndex).toBe(unicodeSource.indexOf("afterUnicode"));
+  });
+
   jsFallbackIt("builds the same TypeScript scope bindings as the JS tree walker", () => {
     const source = [
       "const top = 1;",
