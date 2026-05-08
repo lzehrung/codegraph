@@ -146,7 +146,7 @@ function extractCssUrlSpecifiers(source: string): ModuleSpecifier[] {
   for (const match of source.matchAll(re)) {
     const spec = (match[1] ?? match[2] ?? match[3] ?? "").trim();
     if (!spec || spec.startsWith("#")) continue;
-    out.push({ spec });
+    out.push({ spec, resolutionKind: "document" });
   }
   return out;
 }

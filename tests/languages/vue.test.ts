@@ -43,6 +43,10 @@ const definition: LanguageTestDefinition = {
         to: { type: "file", path: "Child.vue" },
       },
       {
+        from: "App.vue",
+        to: { type: "file", path: "logic.ts" },
+      },
+      {
         from: "TsScript.vue",
         to: { type: "file", path: "Child.vue" },
       },

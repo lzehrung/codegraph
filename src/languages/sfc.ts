@@ -117,9 +117,10 @@ export function prepareSFCScriptSource(
   const blocks = parseSFC(source);
   const scriptBlocks = blocks.filter((b) => b.type === "script");
   const scriptLangId = inferScriptLanguage(scriptBlocks);
+  const externalScriptImports = extractExternalScriptImports(scriptBlocks);
   if (scriptBlocks.length === 0) {
     return {
-      maskedSource: preserveLineStructure(source),
+      maskedSource: appendSyntheticImports(preserveLineStructure(source), externalScriptImports),
       scriptLangId,
       hasScript: false,
     };
@@ -130,7 +131,7 @@ export function prepareSFCScriptSource(
   }));
   const maskedSource = maskOutsideRanges(source, keepRanges);
   return {
-    maskedSource,
+    maskedSource: appendSyntheticImports(maskedSource, externalScriptImports),
     scriptLangId,
     hasScript: true,
   };
@@ -165,6 +166,30 @@ function normalizeLang(value: string | boolean | undefined): string | undefined 
     return value.trim().toLowerCase();
   }
   return undefined;
+}
+
+function normalizeSrc(value: string | boolean | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function extractExternalScriptImports(blocks: SFCBlock[]): string[] {
+  const imports: string[] = [];
+  const seen = new Set<string>();
+  for (const block of blocks) {
+    const src = normalizeSrc(block.attrs.src);
+    if (!src || seen.has(src)) continue;
+    seen.add(src);
+    imports.push(src);
+  }
+  return imports;
+}
+
+function appendSyntheticImports(source: string, imports: string[]): string {
+  if (imports.length === 0) return source;
+  const syntheticSource = imports.map((specifier) => `import ${JSON.stringify(specifier)};`).join("\n");
+  return `${source}\n${syntheticSource}`;
 }
 
 function findClosingTag(lowerSource: string, tag: string, fromIndex: number): number {

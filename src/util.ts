@@ -1864,6 +1864,16 @@ async function findFirstExistingResolutionCandidate(
   return null;
 }
 
+async function findFirstExistingScssPartialCandidate(base: string): Promise<string | null> {
+  const basename = path.basename(base);
+  if (!basename || basename.startsWith("_")) return null;
+  const baseExt = path.extname(base).toLowerCase();
+  if (baseExt && baseExt !== ".scss") return null;
+  const partialBasename = baseExt ? `_${basename}` : `_${basename}.scss`;
+  const partialPath = path.join(path.dirname(base), partialBasename);
+  return (await fileExists(partialPath)) ? path.resolve(partialPath) : null;
+}
+
 export function listWorkspacePackageResolutionCandidates(
   spec: string,
   ws: WorkspaceConfig | undefined,
@@ -3174,13 +3184,14 @@ export async function resolveSpecifier(
     resolveNodeModules?: boolean;
     resolutionHints?: string[];
     resolutionExtensions?: readonly string[];
+    allowScssPartialResolution?: boolean;
   },
 ): Promise<FileId | { external: string }> {
   const resolutionHints = normalizeResolutionHints(opts?.resolutionHints);
   const hintKey = resolutionHints.join("|");
   const resolutionExtensions = getResolutionExtensions(opts?.resolutionExtensions);
   const extensionKey = resolutionExtensions.join("|");
-  const cacheKey = `${fromFile}::${spec}::nm=${opts?.resolveNodeModules ? 1 : 0}::hints=${hintKey}::exts=${extensionKey}`;
+  const cacheKey = `${fromFile}::${spec}::nm=${opts?.resolveNodeModules ? 1 : 0}::scssPartial=${opts?.allowScssPartialResolution ? 1 : 0}::hints=${hintKey}::exts=${extensionKey}`;
   const cached = resolveSpecifierCache.get(cacheKey);
   if (cached) return cached;
   const hasSchemePrefix = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(spec);
@@ -3203,6 +3214,13 @@ export async function resolveSpecifier(
     if (hit) {
       resolveSpecifierCache.set(cacheKey, hit);
       return hit;
+    }
+    if (opts?.allowScssPartialResolution && path.extname(fromFile).toLowerCase() === ".scss") {
+      const partialHit = await findFirstExistingScssPartialCandidate(base);
+      if (partialHit) {
+        resolveSpecifierCache.set(cacheKey, partialHit);
+        return partialHit;
+      }
     }
     const ext = { external: spec } as const;
     resolveSpecifierCache.set(cacheKey, ext);

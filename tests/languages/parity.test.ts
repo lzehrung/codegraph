@@ -502,8 +502,9 @@ const definitions: LanguageTestDefinition[] = [
     parity: {
       sampleDir: "scss",
       dependencyGraph: [
-        { from: "main.scss", to: { type: "external", name: "./variables" } },
-        { from: "main.scss", to: { type: "external", name: "./mixins" } },
+        { from: "main.scss", to: { type: "file", path: "_variables.scss" } },
+        { from: "main.scss", to: { type: "file", path: "_mixins.scss" } },
+        { from: "main.scss", to: { type: "file", path: "_tokens.scss" } },
         { from: "main.scss", to: { type: "external", name: "./missing" } },
       ],
       goToDefinition: [

@@ -26,15 +26,15 @@ Status key:
 | HTML             | Yes              | No                | No               | No              | Yes      | No              | Yes               | Yes          | Yes                 |
 | Astro            | Yes              | No                | No               | No              | No       | No              | Yes               | No           | No                  |
 | Handlebars       | Yes              | No                | No               | No              | No       | No              | Yes               | No           | No                  |
-| CSS              | No               | No                | No               | No              | Yes      | No              | Yes               | Yes          | Yes                 |
+| CSS              | Yes              | No                | No               | No              | Yes      | No              | Yes               | Yes          | Yes                 |
 | SCSS             | Yes              | No                | No               | No              | Yes      | No              | Yes               | Yes          | Yes                 |
-| Less             | No               | No                | No               | No              | Yes      | No              | Yes               | Yes          | Yes                 |
+| Less             | Yes              | No                | No               | No              | Yes      | No              | Yes               | Yes          | Yes                 |
 | Markdown         | Yes              | No                | No               | No              | No       | No              | Yes               | No           | No                  |
 | MDX              | Yes              | No                | No               | No              | No       | No              | Yes               | No           | No                  |
 | reStructuredText | Yes              | No                | No               | No              | No       | No              | Yes               | No           | No                  |
 | AsciiDoc         | Yes              | No                | No               | No              | No       | No              | Yes               | No           | No                  |
-| Vue              | No               | No                | No               | No              | Yes      | Yes             | Yes               | Yes          | Yes                 |
-| Svelte           | No               | No                | No               | No              | Yes      | Yes             | Yes               | Yes          | Yes                 |
+| Vue              | Yes              | No                | No               | No              | Yes      | Yes             | Yes               | Yes          | Yes                 |
+| Svelte           | Yes              | No                | No               | No              | Yes      | Yes             | Yes               | Yes          | Yes                 |
 
 Notes:
 
