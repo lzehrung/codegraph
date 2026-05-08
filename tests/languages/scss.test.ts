@@ -57,6 +57,32 @@ const definition: LanguageTestDefinition = {
         from: "forward.scss",
         to: { type: "file", path: "_mixins.scss" },
       },
+      {
+        from: "extensionless-forward.scss",
+        to: { type: "file", path: "_tokens.scss" },
+      },
+      {
+        from: "extensionless-import.scss",
+        to: { type: "file", path: "_tokens.scss" },
+      },
+    ],
+    absentDependencyGraph: [
+      {
+        from: "extensionless-forward.scss",
+        to: { type: "file", path: "_tokens.ts" },
+      },
+      {
+        from: "extensionless-import.scss",
+        to: { type: "file", path: "_tokens.ts" },
+      },
+      {
+        from: "main.scss",
+        to: { type: "file", path: "_icons.scss" },
+      },
+      {
+        from: "main.scss",
+        to: { type: "file", path: "_tokens.ts" },
+      },
     ],
   },
 };
