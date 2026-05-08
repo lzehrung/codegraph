@@ -1,0 +1,5 @@
+@use "./tokens.SCSS";
+
+.uppercase-extension {
+  color: tokens.$primary;
+}

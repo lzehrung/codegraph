@@ -3,6 +3,7 @@ node_modules/
 dist/
 coverage/
 .codegraph-cache/
+codegraph.json
 target/
 release/
 packages/codegraph-native/*.node

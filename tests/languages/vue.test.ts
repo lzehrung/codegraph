@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import { chunkSFCFile } from "../../src/chunking/chunkSFC.js";
+import { collectGraph } from "../../src/index.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -43,6 +44,10 @@ const definition: LanguageTestDefinition = {
         to: { type: "file", path: "Child.vue" },
       },
       {
+        from: "App.vue",
+        to: { type: "file", path: "logic.ts" },
+      },
+      {
         from: "TsScript.vue",
         to: { type: "file", path: "Child.vue" },
       },
@@ -50,8 +55,57 @@ const definition: LanguageTestDefinition = {
         from: "TsScript.vue",
         to: { type: "file", path: "logic.ts" },
       },
+      {
+        from: "ExternalScripts.vue",
+        to: { type: "file", path: "logic.ts" },
+      },
+      {
+        from: "ExternalScripts.vue",
+        to: { type: "file", path: "extra.ts" },
+      },
+      {
+        from: "ExternalScripts.vue",
+        to: { type: "external", name: "https://cdn.example/vue-helper.js" },
+      },
+      {
+        from: "ExternalScripts.vue",
+        to: { type: "external", name: "./missing.ts" },
+      },
+    ],
+    absentDependencyGraph: [
+      {
+        from: "ExternalScripts.vue",
+        to: { type: "external", name: "" },
+      },
+      {
+        from: "ExternalScripts.vue",
+        to: { type: "file", path: "missing.ts" },
+      },
     ],
   },
 };
 
 runLanguageTests(definition);
+
+it("deduplicates and filters Vue external script src dependencies", async () => {
+  const sampleDir = path.resolve(process.cwd(), "tests", "samples", "vue");
+  const sourceFile = path.join(sampleDir, "ExternalScripts.vue").replace(/\\/g, "/");
+  const logicFile = path.join(sampleDir, "logic.ts").replace(/\\/g, "/");
+  const extraFile = path.join(sampleDir, "extra.ts").replace(/\\/g, "/");
+  const graph = await collectGraph(sampleDir, [sourceFile, logicFile, extraFile]);
+
+  expect(graph.edges.filter((edge) => edge.from === sourceFile && edge.to.type === "file" && edge.to.path === logicFile))
+    .toHaveLength(1);
+  expect(graph.edges.filter((edge) => edge.from === sourceFile && edge.to.type === "file" && edge.to.path === extraFile))
+    .toHaveLength(1);
+  expect(
+    graph.edges.filter(
+      (edge) => edge.from === sourceFile && edge.to.type === "external" && edge.to.name === "https://cdn.example/vue-helper.js",
+    ),
+  ).toHaveLength(1);
+  expect(
+    graph.edges.filter((edge) => edge.from === sourceFile && edge.to.type === "external" && edge.to.name === "./missing.ts"),
+  ).toHaveLength(1);
+  expect(graph.edges.some((edge) => edge.from === sourceFile && edge.to.type === "external" && edge.to.name === ""))
+    .toBe(false);
+});

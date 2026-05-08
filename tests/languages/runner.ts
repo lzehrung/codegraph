@@ -67,6 +67,15 @@ export function runLanguageTests(def: LanguageTestDefinition) {
             addFile(expectation.to.path);
           }
         }
+        for (const expectation of def.parity?.absentDependencyGraph ?? []) {
+          addFile(expectation.from);
+          if (expectation.to.type === "file") {
+            const targetFile = resolveSamplePath(expectation.to.path);
+            if (fs.existsSync(targetFile)) {
+              files.add(targetFile);
+            }
+          }
+        }
         for (const expectation of def.parity?.symbols ?? []) {
           addFile(expectation.file);
         }
@@ -105,6 +114,15 @@ export function runLanguageTests(def: LanguageTestDefinition) {
           for (const expectation of def.parity?.dependencyGraph ?? []) {
             const found = graph.edges.some((edge) => matchEdge(edge, expectation));
             expect(found).toBe(true);
+          }
+        });
+      }
+
+      if (def.parity.absentDependencyGraph) {
+        it("does not build unsupported dependency graph edges", () => {
+          for (const expectation of def.parity?.absentDependencyGraph ?? []) {
+            const found = graph.edges.some((edge) => matchEdge(edge, expectation));
+            expect(found).toBe(false);
           }
         });
       }
