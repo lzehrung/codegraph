@@ -122,7 +122,7 @@ Runtime controls:
 - Full AST-based graph:
   `codegraph graph ./src`
 - Graph-first document/template edges:
-  HTML, Astro, Handlebars, Markdown, MDX, reStructuredText, and AsciiDoc local links, plus MDX/Astro static imports.
+  HTML, Astro, Handlebars, Markdown, MDX, reStructuredText, and AsciiDoc local links, plus MDX/Astro static imports, Vue/Svelte script imports including external `script src`, and stylesheet imports for CSS, SCSS, and Less.
 - Narrow scan scope and exclude generated/tests while preserving `.gitignore`:
   `codegraph graph --root . ./src --include-glob "**/*.ts" --ignore-glob "**/*.spec.ts" --json`
 - Disable `.gitignore` filtering when ignored/generated files are intentionally in scope:

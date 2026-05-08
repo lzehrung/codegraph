@@ -537,7 +537,17 @@ nativeDescribe("native semantic parity", () => {
       ),
       sampleExpectation(
         "scss",
-        ["main.scss", "use-partials.scss", "_variables.scss", "_mixins.scss"],
+        [
+          "main.scss",
+          "use-partials.scss",
+          "extensionless-forward.scss",
+          "extensionless-import.scss",
+          "_variables.scss",
+          "_mixins.scss",
+          "_tokens.scss",
+          "_tokens.ts",
+          "_icons.scss",
+        ],
         undefined,
         { file: "_variables.scss", line: 3, column: 2, expectedStatus: "not_found" },
         { file: "_variables.scss", line: 3, column: 2, expectedStatus: "not_found" },
@@ -551,7 +561,7 @@ nativeDescribe("native semantic parity", () => {
       ),
       sampleExpectation(
         "vue",
-        ["App.vue", "Child.vue", "logic.ts"],
+        ["App.vue", "ExternalScripts.vue", "Child.vue", "logic.ts", "extra.ts"],
         undefined,
         { file: "App.vue", line: 2, column: 17, expectedStatus: "not_found" },
         { file: "App.vue", line: 2, column: 17, expectedStatus: "not_found" },
@@ -565,7 +575,7 @@ nativeDescribe("native semantic parity", () => {
       ),
       sampleExpectation(
         "svelte",
-        ["App.svelte", "Widget.svelte", "logic.ts"],
+        ["App.svelte", "ExternalScripts.svelte", "Widget.svelte", "logic.ts", "extra.ts"],
         undefined,
         { file: "App.svelte", line: 2, column: 17, expectedStatus: "not_found" },
         { file: "App.svelte", line: 2, column: 17, expectedStatus: "not_found" },
