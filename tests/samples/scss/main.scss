@@ -1,8 +1,10 @@
 @use "./variables";
 @use "./mixins";
+@use "./tokens";
 @use "./missing";
 
 .container {
   color: variables.$primary-color;
   @include mixins.center;
+  background-image: url("./icons");
 }

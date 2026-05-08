@@ -57,6 +57,7 @@ export interface ReferencesExpectation {
 export interface LanguageParityDefinition {
   sampleDir: string; // tests/samples/<sampleDir>/
   dependencyGraph?: DependencyGraphExpectation[];
+  absentDependencyGraph?: DependencyGraphExpectation[];
   symbols?: SymbolExpectation[];
   goToDefinition?: GoToDefinitionExpectation[];
   references?: ReferencesExpectation[];

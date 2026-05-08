@@ -218,6 +218,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | ------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- | ---------- |
 | `@use` partials     | `tests/samples/scss/use-partials.scss` | Dependency graph includes edges to `_variables.scss` and `_mixins.scss` for `@use`.                                                      | https://github.com/tree-sitter/tree-sitter-scss | 2026-01-22 |
 | `@forward` partials | `tests/samples/scss/forward.scss`      | Native and JS graph/specifier extraction stay aligned for `@forward` and `@use as` fixtures while semantic navigation stays `not_found`. | Internal regression fixture                     | 2026-03-23 |
+| Extensionless and explicit-extension partials | `tests/samples/scss/main.scss`, `tests/samples/scss/extensionless-forward.scss`, `tests/samples/scss/extensionless-import.scss`, `tests/samples/scss/uppercase-extension-import.scss` | Relative `@use`, `@forward`, and `@import` extensionless specifiers, plus explicit `.scss` specifiers with non-canonical extension casing, resolve to SCSS partials; missing partials, `url(...)` assets, and same-basename non-stylesheet files stay external. | Internal regression fixture                  | 2026-05-08 |
 
 ## Svelte
 
@@ -226,6 +227,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Inline script imports     | `tests/samples/svelte/inline-script.svelte`    | Dependency graph includes edge to `logic.ts` for inline script imports.                                                                         | https://github.com/tree-sitter/tree-sitter-svelte | 2026-01-22 |
 | Reactive script imports   | `tests/samples/svelte/reactive.svelte`         | Native and JS Tree-sitter keep module-specifier extraction aligned for reactive Svelte script blocks.                                           | Internal regression fixture                       | 2026-03-22 |
 | TypeScript script imports | `tests/samples/svelte/TypeScriptWidget.svelte` | Graph/specifier extraction stays aligned for Svelte TypeScript script blocks and component imports while semantic navigation stays `not_found`. | Internal regression fixture                       | 2026-03-23 |
+| External script `src` imports | `tests/samples/svelte/App.svelte`, `tests/samples/svelte/ExternalScripts.svelte` | Dependency graph includes external `<script src="./logic.ts">` edges, deduplicates repeated `src`, ignores empty `src`, and preserves remote URL externals without claiming template semantic navigation. | Internal regression fixture                       | 2026-05-08 |
 
 ## TypeScript
 
@@ -248,6 +250,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Inline script imports           | `tests/samples/vue/inline-script.vue` | Dependency graph includes edge to `logic.ts` for inline script imports.                                                                              | https://github.com/tree-sitter/tree-sitter-vue | 2026-01-22 |
 | `script setup` imports          | `tests/samples/vue/script-setup.vue`  | Native and JS Tree-sitter keep module-specifier extraction aligned for Vue `script setup` blocks.                                                    | Internal regression fixture                    | 2026-03-22 |
 | TypeScript script-block imports | `tests/samples/vue/TsScript.vue`      | Graph/specifier extraction stays aligned for Vue TypeScript script blocks and sibling component imports while semantic navigation stays `not_found`. | Internal regression fixture                    | 2026-03-23 |
+| External script `src` imports   | `tests/samples/vue/App.vue`, `tests/samples/vue/ExternalScripts.vue` | Dependency graph includes external `<script src="./logic.ts">` edges, deduplicates repeated `src`, ignores empty `src`, and preserves remote URL externals without claiming template semantic navigation. | Internal regression fixture                    | 2026-05-08 |
 
 ## Swift
 

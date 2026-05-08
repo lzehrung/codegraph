@@ -11,4 +11,4 @@
   color: #333;
 }
 </style>
-<script src="./missing.ts"></script>
+<script src="./logic.ts"></script>
