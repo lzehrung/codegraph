@@ -65,6 +65,10 @@ const definition: LanguageTestDefinition = {
         from: "extensionless-import.scss",
         to: { type: "file", path: "_tokens.scss" },
       },
+      {
+        from: "uppercase-extension-import.scss",
+        to: { type: "file", path: "_tokens.scss" },
+      },
     ],
     absentDependencyGraph: [
       {

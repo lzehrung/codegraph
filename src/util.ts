@@ -1867,9 +1867,11 @@ async function findFirstExistingResolutionCandidate(
 async function findFirstExistingScssPartialCandidate(base: string): Promise<string | null> {
   const basename = path.basename(base);
   if (!basename || basename.startsWith("_")) return null;
-  const baseExt = path.extname(base).toLowerCase();
+  const originalExt = path.extname(base);
+  const baseExt = originalExt.toLowerCase();
   if (baseExt && baseExt !== ".scss") return null;
-  const partialBasename = baseExt ? `_${basename}` : `_${basename}.scss`;
+  const partialStem = baseExt ? path.basename(base, originalExt) : basename;
+  const partialBasename = `_${partialStem}.scss`;
   const partialPath = path.join(path.dirname(base), partialBasename);
   return (await fileExists(partialPath)) ? path.resolve(partialPath) : null;
 }

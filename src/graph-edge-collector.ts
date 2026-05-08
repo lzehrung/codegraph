@@ -215,7 +215,6 @@ export async function collectEdgesForFile(
           resolveNodeModules: !!opts.resolveNodeModules,
           ...(resolutionExtensions ? { resolutionExtensions } : {}),
           ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
-          ...(sup.id === "scss" && resolutionKind !== "document" ? { allowScssPartialResolution: true } : {}),
         });
         to =
           typeof res2 === "string"
