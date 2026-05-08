@@ -67,6 +67,10 @@ const definition: LanguageTestDefinition = {
         from: "ExternalScripts.vue",
         to: { type: "external", name: "https://cdn.example/vue-helper.js" },
       },
+      {
+        from: "ExternalScripts.vue",
+        to: { type: "external", name: "./missing.ts" },
+      },
     ],
     absentDependencyGraph: [
       {
@@ -98,6 +102,9 @@ it("deduplicates and filters Vue external script src dependencies", async () => 
     graph.edges.filter(
       (edge) => edge.from === sourceFile && edge.to.type === "external" && edge.to.name === "https://cdn.example/vue-helper.js",
     ),
+  ).toHaveLength(1);
+  expect(
+    graph.edges.filter((edge) => edge.from === sourceFile && edge.to.type === "external" && edge.to.name === "./missing.ts"),
   ).toHaveLength(1);
   expect(graph.edges.some((edge) => edge.from === sourceFile && edge.to.type === "external" && edge.to.name === ""))
     .toBe(false);

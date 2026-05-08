@@ -67,6 +67,10 @@ const definition: LanguageTestDefinition = {
         from: "ExternalScripts.svelte",
         to: { type: "external", name: "https://cdn.example/svelte-helper.js" },
       },
+      {
+        from: "ExternalScripts.svelte",
+        to: { type: "external", name: "./missing.ts" },
+      },
     ],
     absentDependencyGraph: [
       {
@@ -99,6 +103,9 @@ it("deduplicates and filters Svelte external script src dependencies", async () 
       (edge) =>
         edge.from === sourceFile && edge.to.type === "external" && edge.to.name === "https://cdn.example/svelte-helper.js",
     ),
+  ).toHaveLength(1);
+  expect(
+    graph.edges.filter((edge) => edge.from === sourceFile && edge.to.type === "external" && edge.to.name === "./missing.ts"),
   ).toHaveLength(1);
   expect(graph.edges.some((edge) => edge.from === sourceFile && edge.to.type === "external" && edge.to.name === ""))
     .toBe(false);
