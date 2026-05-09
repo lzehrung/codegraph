@@ -47,9 +47,11 @@ describe("source module structure", () => {
     const expectedModules = [
       "src/cli/chunk.ts",
       "src/cli/doctor.ts",
+      "src/cli/graphDelta.ts",
       "src/cli/help.ts",
       "src/cli/packageInfo.ts",
       "src/cli/skill.ts",
+      "src/cli/sql.ts",
     ];
 
     for (const relativePath of expectedModules) {

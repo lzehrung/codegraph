@@ -5,8 +5,10 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { handleChunkCommand } from "../src/cli/chunk.js";
 import { buildDoctorReport } from "../src/cli/doctor.js";
+import { handleGraphDeltaCommand } from "../src/cli/graphDelta.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/cli/packageInfo.js";
 import { handleSkillCommand } from "../src/cli/skill.js";
+import { handleSqlCommand } from "../src/cli/sql.js";
 import { runCli } from "../src/cli.js";
 
 function readJsonRecord(value: unknown): Record<string, unknown> {
@@ -88,6 +90,73 @@ describe("CLI command modules", () => {
       expect(report.native.supportedLanguageIds.length).toBeGreaterThan(0);
       expect(report.indexArtifact?.type).toBe("jsonGraph");
       expect(report.indexArtifact?.exists).toBeTruthy();
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("runs SQL queries through the extracted sql command handler", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-sql-module-"));
+    const dbPath = path.join(tempDir, "graph.sqlite");
+    await fsp.writeFile(path.join(tempDir, "main.ts"), "export function helper() { return 1; }\n", "utf8");
+    await captureCli(["graph", "--root", tempDir, "--sqlite", dbPath]);
+    const jsonLines: unknown[] = [];
+
+    try {
+      await handleSqlCommand({
+        getOpt: (name) => {
+          if (name === "--db") return dbPath;
+          if (name === "--query") return "SELECT name FROM symbols WHERE kind = 'function';";
+          return undefined;
+        },
+        cwd: () => process.cwd(),
+        writeJSONLine: (value) => jsonLines.push(value),
+        writeStderrLine: () => {
+          throw new Error("unexpected stderr");
+        },
+        exit: (code) => {
+          throw new Error(`unexpected exit ${code}`);
+        },
+      });
+
+      const result = readJsonRecord(jsonLines[0]);
+      expect(result.columns).toEqual(["name"]);
+      expect(result.rows).toEqual([["helper"]]);
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("writes graph delta output through the extracted graph-delta command handler", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-delta-module-"));
+    const outputPath = path.join(tempDir, "delta.json");
+    const sourcePath = path.join(tempDir, "main.ts");
+    await fsp.writeFile(sourcePath, "import { helper } from './helper';\nhelper();\n", "utf8");
+    await fsp.writeFile(path.join(tempDir, "helper.ts"), "export function helper() { return 1; }\n", "utf8");
+
+    try {
+      await handleGraphDeltaCommand({
+        projectRootFs: tempDir,
+        files: [sourcePath],
+        getOpt: (name) => {
+          if (name === "--output") return outputPath;
+          return undefined;
+        },
+        hasFlag: () => false,
+        cwd: () => process.cwd(),
+        nativeMode: "auto",
+        workerOpts: {},
+        graphOptions: undefined,
+        gitBase: undefined,
+        gitHead: undefined,
+        changedSince: undefined,
+        writeJSONLine: () => {
+          throw new Error("unexpected json stdout");
+        },
+      });
+
+      const report = readJsonRecord(JSON.parse(await fsp.readFile(outputPath, "utf8")));
+      expect(report.changedFiles).toEqual(["main.ts"]);
     } finally {
       await fsp.rm(tempDir, { recursive: true, force: true });
     }

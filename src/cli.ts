@@ -8,7 +8,6 @@ import {
   buildProjectIndex,
   buildProjectIndexFromFiles,
   buildProjectIndexIncremental,
-  buildGraphDelta,
   goToDefinition,
   findReferences,
   getApiSurface,
@@ -41,7 +40,7 @@ import {
 import { analyzeImpactFromDiff } from "./impact/index.js";
 import type { CompactImpactReport, ImpactItem, ImpactOptions, ImpactReport, ChangedSymbol } from "./impact/types.js";
 import type { CandidateTestFile } from "./impact/context.js";
-import { writeGraphSqlite, updateGraphSqlite, queryGraphSqliteRaw } from "./sqlite.js";
+import { writeGraphSqlite, updateGraphSqlite } from "./sqlite.js";
 import {
   isNativeTreeSitterAvailable,
   getNativeTreeSitterLoadError,
@@ -51,9 +50,11 @@ import {
 import { supportForFile } from "./languages.js";
 import { handleChunkCommand } from "./cli/chunk.js";
 import { buildDoctorReport } from "./cli/doctor.js";
+import { handleGraphDeltaCommand } from "./cli/graphDelta.js";
 import { CLI_HELP_TEXT } from "./cli/help.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
 import { handleSkillCommand } from "./cli/skill.js";
+import { handleSqlCommand } from "./cli/sql.js";
 import type { Graph } from "./types.js";
 import {
   assertFilePathWithinRoot,
@@ -1336,49 +1337,32 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   };
 
   if (cmd === "sql") {
-    const dbOpt = getOpt("--db") ?? getOpt("--sqlite");
-    const queryText = getOpt("--query");
-    if (!dbOpt || !queryText) {
-      writeStderrLine('Usage: sql --db <sqlite path> --query "SELECT ..."');
-      exitCli(1);
-    }
-    const dbPath = path.isAbsolute(dbOpt)
-      ? normalizePath(dbOpt)
-      : normalizePath(resolveFilePathFromRoot(getCwd(), dbOpt));
-    const result = await queryGraphSqliteRaw(dbPath, queryText);
-    writeJSONLine(result);
+    await handleSqlCommand({
+      getOpt,
+      cwd: getCwd,
+      writeJSONLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
     return;
   }
 
   if (cmd === "graph-delta") {
     const files = await resolveFiles();
-    const threads = Number(getOpt("--threads") ?? 0);
-    const cache = parseCacheModeOption(getOpt("--cache"));
-    const cacheStrict = hasFlag("--cache-strict");
-    const cacheVerify = hasFlag("--cache-verify");
-    const incrementalStrict = hasFlag("--incremental-strict");
-    const outputArg = getOpt("--output");
-    const graphOptions = hasGraphOverrides ? buildGraphOptions() : undefined;
-    const delta = await buildGraphDelta(projectRootFs, {
-      threads,
-      ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
-      ...workerOpts,
-      ...(cache !== undefined ? { cache } : {}),
-      cacheStrict,
-      cacheVerify,
-      incrementalStrict,
+    await handleGraphDeltaCommand({
+      projectRootFs,
       files,
-      ...(gitBase ? { gitBase } : {}),
-      ...(gitHead ? { gitHead } : {}),
-      ...(changedSince ? { changedSince } : {}),
-      ...(graphOptions ? { graph: graphOptions } : {}),
+      getOpt,
+      hasFlag,
+      cwd: getCwd,
+      nativeMode,
+      workerOpts,
+      graphOptions: hasGraphOverrides ? buildGraphOptions() : undefined,
+      gitBase,
+      gitHead,
+      changedSince,
+      writeJSONLine,
     });
-    const outputFile = outputArg ? normalizePath(resolveFilePathFromRoot(getCwd(), outputArg)) : undefined;
-    if (outputFile) {
-      await fsp.writeFile(outputFile, `${toJSON(delta)}\n`, "utf8");
-    } else {
-      writeJSONLine(delta);
-    }
     return;
   }
 
