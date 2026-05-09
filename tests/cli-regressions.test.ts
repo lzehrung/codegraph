@@ -213,6 +213,30 @@ describe("CLI regressions", () => {
     expect(result.stdout.trim()).toBe("");
   });
 
+  it("direct graph failures append errors to the configured stderr file", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-stderr-file-"));
+    await fsp.writeFile(path.join(tmpDir, "main.ts"), "export const value = 1;\n", "utf8");
+    const stderrPath = path.join(tmpDir, "codegraph.err");
+    const outputPath = path.join(tmpDir, "missing", "codegraph.json");
+
+    try {
+      await expect(
+        runCliCommandDetailed(
+          ["graph", "--root", tmpDir, "--output", outputPath, "--stderr-file", stderrPath],
+          undefined,
+          tmpDir,
+          { CODEGRAPH_FORCE_SPAWN: "1" },
+        ),
+      ).rejects.toThrow("codegraph CLI failed");
+
+      const stderrLog = await fsp.readFile(stderrPath, "utf8");
+      expect(stderrLog).toContain("ENOENT");
+      expect(stderrLog).toContain("missing");
+    } finally {
+      await fsp.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("graph --stable produces sorted deterministic JSON", async () => {
     const args = ["graph", "--stdout", "--stable", tsRoot];
     const out1 = await runCliCommand(args);

@@ -101,6 +101,13 @@ function getCliContext(): CliContext {
   return cliContextStorage.getStore() ?? defaultCliContext;
 }
 
+function createCliContext(runtime: Partial<CliRuntime> = {}): CliContext {
+  return {
+    runtime: { ...createDefaultCliRuntime(), ...runtime },
+    stderrFilePath: undefined,
+  };
+}
+
 function getCwd(): string {
   return getCliContext().runtime.cwd();
 }
@@ -2334,16 +2341,18 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 }
 
 export async function runCli(rawArgs: string[] = process.argv.slice(2), runtime: Partial<CliRuntime> = {}): Promise<void> {
-  const context: CliContext = {
-    runtime: { ...createDefaultCliRuntime(), ...runtime },
-    stderrFilePath: undefined,
-  };
+  const context = createCliContext(runtime);
   await cliContextStorage.run(context, async () => await runCliWithActiveRuntime(rawArgs));
 }
 
 if (isDirectCliExecution(import.meta.url)) {
-  runCli().catch((e) => {
-    writeError(e);
-    exitCli(1);
+  const context = createCliContext();
+  void cliContextStorage.run(context, async () => {
+    try {
+      await runCliWithActiveRuntime(process.argv.slice(2));
+    } catch (error) {
+      writeError(error);
+      exitCli(1);
+    }
   });
 }

@@ -198,9 +198,9 @@ export async function loadWorkspaceConfig(projectRoot: string): Promise<Workspac
       rootPkg.workspaces !== null &&
       "packages" in rootPkg.workspaces
     ) {
-      const packages = (rootPkg.workspaces as { packages?: unknown }).packages;
-      if (Array.isArray(packages)) {
-        for (const g of packages) addWorkspaceGlob(workspaceGlobs, g);
+      const workspacePackagePatterns = (rootPkg.workspaces as { packages?: unknown }).packages;
+      if (Array.isArray(workspacePackagePatterns)) {
+        for (const g of workspacePackagePatterns) addWorkspaceGlob(workspaceGlobs, g);
       }
     }
   }
