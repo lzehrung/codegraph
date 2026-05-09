@@ -51,6 +51,7 @@ import {
 import { supportForFile } from "./languages.js";
 import { handleChunkCommand } from "./cli/chunk.js";
 import { buildDoctorReport } from "./cli/doctor.js";
+import { CLI_HELP_TEXT } from "./cli/help.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
 import { handleSkillCommand } from "./cli/skill.js";
 import type { Graph } from "./types.js";
@@ -66,15 +67,42 @@ import {
 function toJSON(obj: unknown): string {
   return JSON.stringify(obj, null, 2);
 }
+
+export type CliRuntime = {
+  stdout: (chunk: string) => void;
+  stderr: (chunk: string) => void;
+  exit: (code: number) => never;
+  cwd: () => string;
+};
+
+function createDefaultCliRuntime(): CliRuntime {
+  return {
+    stdout: (chunk) => process.stdout.write(chunk),
+    stderr: (chunk) => process.stderr.write(chunk),
+    exit: (code) => process.exit(code),
+    cwd: () => process.cwd(),
+  };
+}
+
+let activeCliRuntime = createDefaultCliRuntime();
 let stderrFilePath: string | undefined;
+
+function getCwd(): string {
+  return activeCliRuntime.cwd();
+}
+
+function exitCli(code: number): never {
+  return activeCliRuntime.exit(code);
+}
+
 function writeStdoutLine(message: string) {
-  process.stdout.write(`${message}\n`);
+  activeCliRuntime.stdout(`${message}\n`);
 }
 function writeJSONLine(value: unknown) {
   writeStdoutLine(toJSON(value));
 }
 function writeStderrLine(message: string) {
-  process.stderr.write(`${message}\n`);
+  activeCliRuntime.stderr(`${message}\n`);
   try {
     if (stderrFilePath)
       fs.appendFileSync(stderrFilePath, `${message}\n`, {
@@ -595,7 +623,7 @@ function parseCliArgs(tokens: string[]): ParsedCliArgs {
 async function writeCommandReport(report: CommandReport, reportFile: string | undefined) {
   const payload = JSON.stringify(report, null, 2);
   if (reportFile) {
-    const resolved = normalizePath(resolveFilePathFromRoot(process.cwd(), reportFile));
+    const resolved = normalizePath(resolveFilePathFromRoot(getCwd(), reportFile));
     await fsp.writeFile(resolved, `${payload}\n`, "utf8");
   } else {
     writeStderrLine(payload);
@@ -1090,8 +1118,7 @@ type ImpactOptionsBuilder = Partial<ImpactOptions> & {
   cacheStrict?: boolean;
 };
 
-async function main() {
-  const rawArgs = process.argv.slice(2);
+async function runCliWithActiveRuntime(rawArgs: string[]) {
   const cmd = rawArgs[0] && !rawArgs[0].startsWith("-") ? rawArgs[0] : "graph";
   const argTokens = rawArgs[0] && !rawArgs[0].startsWith("-") ? rawArgs.slice(1) : rawArgs;
 
@@ -1104,74 +1131,8 @@ async function main() {
 
   // Handle help flag
   if (hasFlag("--help") || hasFlag("-h")) {
-    writeStdoutLine(`codegraph - Code analysis and dependency graph tool
-
-Usage: codegraph <command> [options] [path]
-
-Commands:
-  graph         Build dependency graph (default)
-  doctor        Inspect backend/runtime state and local graph artifacts
-  inspect       Summarize repo structure and recommend next commands
-  skill         Install or inspect the bundled agent skill
-  version       Print the installed codegraph version
-  impact        Analyze PR impact
-  review        Generate code review report
-  goto          Go to definition
-  refs          Find references
-  chunk         Chunk file for embeddings
-  deps          List dependencies
-  rdeps         List reverse dependencies
-  cycles        Detect dependency cycles (use --sort priority|size|fanin)
-  hotspots      Find high-complexity files
-
-Graph Options:
-  --fast-graph              Skip AST parsing, use regex for imports.
-                            5-10x faster but may miss dynamic imports,
-                            re-exports, and complex patterns. Best for
-                            quick overviews of large codebases.
-    --resolve-node-modules    Include node_modules in resolution
-    --dynamic-import-heuristics  Attempt to resolve dynamic imports
-    --resolution-hint <hint>  Custom resolution hint (e.g., tsconfig:path)
-    --include-glob <glob>     Restrict discovered files to extra glob(s), relative to each scan root
-    --ignore-glob <glob>      Exclude extra discovered files by glob, relative to each scan root
-    --no-gitignore            Do not apply .gitignore files during file discovery
-
-  Build Options:
-    --threads N               Number of worker threads (default: auto)
-    --native <mode>           Native runtime mode: auto, on, off
-    --workers                 Use Piscina worker threads for native extraction
-    --cache <mode>            Cache mode: disk, memory, off
-    --limit N                 Result limit for hotspots/inspect summaries
-  --cache-strict            Use content hashes instead of mtime
-  --progress                Show progress tracking during indexing
-
-Output Options:
-  --json                    Output as JSON (default)
-  --mermaid                 Output as Mermaid diagram
-  --dot                     Output as DOT graph
-  --sqlite <path>           Write to SQLite database
-  --output <path>           Write to file instead of stdout
-
-Examples:
-  codegraph graph ./src
-  codegraph graph --fast-graph --mermaid ./src
-  codegraph version
-  codegraph doctor
-  codegraph inspect ./src --limit 20
-  codegraph graph --root . ./src --include-glob "**/*.ts" --ignore-glob "**/*.spec.ts"
-  codegraph skill install --agent agents
-  codegraph skill install --agent codex
-  codegraph skill install --agent claude
-  codegraph skill install --agent cursor
-  codegraph skill install --agent gemini
-  codegraph skill install --agent opencode
-  codegraph skill install --target ~/.codex/skills/codegraph --force
-  codegraph skill doctor
-  codegraph impact --provider git --base main --head HEAD
-  codegraph impact --provider git --base HEAD --head WORKTREE
-  codegraph refs --file src/index.ts --line 42 --col 10
-`);
-    process.exit(0);
+    writeStdoutLine(CLI_HELP_TEXT.trimEnd());
+    exitCli(0);
   }
 
   if (hasFlag("--version")) {
@@ -1232,7 +1193,7 @@ Examples:
   const gitHead = getOpt("--git-head");
 
   const rootOpt = getOpt("--root");
-  const resolveAbs = (p: string) => resolveFilePathFromRoot(process.cwd(), p);
+  const resolveAbs = (p: string) => resolveFilePathFromRoot(getCwd(), p);
 
   const defaultProjectRoot =
     (cmd === "graph" ||
@@ -1247,7 +1208,7 @@ Examples:
     fs.existsSync(resolveAbs(parsed.positionals[0]!)) &&
     fs.statSync(resolveAbs(parsed.positionals[0]!)).isDirectory()
       ? resolveAbs(parsed.positionals[0]!)
-      : process.cwd();
+      : getCwd();
 
   const projectRootFs = rootOpt ? resolveAbs(rootOpt) : defaultProjectRoot;
   const projectRootAbs = projectRootFs.replace(/\\/g, "/");
@@ -1281,7 +1242,7 @@ Examples:
       writeJSONLine,
       writeStdoutLine,
       writeStderrLine,
-      exit: (code) => process.exit(code),
+      exit: exitCli,
     });
     return;
   }
@@ -1379,11 +1340,11 @@ Examples:
     const queryText = getOpt("--query");
     if (!dbOpt || !queryText) {
       writeStderrLine('Usage: sql --db <sqlite path> --query "SELECT ..."');
-      process.exit(1);
+      exitCli(1);
     }
     const dbPath = path.isAbsolute(dbOpt)
       ? normalizePath(dbOpt)
-      : normalizePath(resolveFilePathFromRoot(process.cwd(), dbOpt));
+      : normalizePath(resolveFilePathFromRoot(getCwd(), dbOpt));
     const result = await queryGraphSqliteRaw(dbPath, queryText);
     writeJSONLine(result);
     return;
@@ -1412,7 +1373,7 @@ Examples:
       ...(changedSince ? { changedSince } : {}),
       ...(graphOptions ? { graph: graphOptions } : {}),
     });
-    const outputFile = outputArg ? normalizePath(resolveFilePathFromRoot(process.cwd(), outputArg)) : undefined;
+    const outputFile = outputArg ? normalizePath(resolveFilePathFromRoot(getCwd(), outputArg)) : undefined;
     if (outputFile) {
       await fsp.writeFile(outputFile, `${toJSON(delta)}\n`, "utf8");
     } else {
@@ -1456,15 +1417,15 @@ Examples:
     const compact = defaultGraphMode || hasFlag("--compact-json");
     let outputFile: string | undefined;
     if (outputArg) {
-      outputFile = normalizePath(resolveFilePathFromRoot(process.cwd(), outputArg));
+      outputFile = normalizePath(resolveFilePathFromRoot(getCwd(), outputArg));
     } else if (defaultGraphMode && !stdoutMode) {
-      outputFile = path.resolve(process.cwd(), "codegraph.json").replace(/\\/g, "/");
+      outputFile = path.resolve(getCwd(), "codegraph.json").replace(/\\/g, "/");
     }
-    const sqliteFile = sqliteArg ? normalizePath(resolveFilePathFromRoot(process.cwd(), sqliteArg)) : undefined;
+    const sqliteFile = sqliteArg ? normalizePath(resolveFilePathFromRoot(getCwd(), sqliteArg)) : undefined;
     if (stderrArg) {
-      stderrFilePath = normalizePath(resolveFilePathFromRoot(process.cwd(), stderrArg));
+      stderrFilePath = normalizePath(resolveFilePathFromRoot(getCwd(), stderrArg));
     } else if (defaultGraphMode) {
-      stderrFilePath = path.resolve(process.cwd(), "codegraph.err").replace(/\\/g, "/");
+      stderrFilePath = path.resolve(getCwd(), "codegraph.err").replace(/\\/g, "/");
     } else {
       stderrFilePath = undefined;
     }
@@ -1736,7 +1697,7 @@ Examples:
     const [fileArg] = parsed.positionals;
     if (!fileArg) {
       writeStderrLine("Usage: dumpmod <file>");
-      process.exit(2);
+      exitCli(2);
     }
     const resolvedFile = resolveCliProjectFile(projectRootFs, fileArg, "File");
     if (resolvedFile.status === "error") {
@@ -1788,7 +1749,7 @@ Examples:
     const [fileArg, lineArg, colArg] = parsed.positionals;
     if (!fileArg || !lineArg || !colArg) {
       writeStderrLine("Usage: goto <file> <line> <column>");
-      process.exit(2);
+      exitCli(2);
     }
     const resolvedFile = resolveCliProjectFile(projectRootFs, fileArg, "File");
     if (resolvedFile.status === "error") {
@@ -1815,7 +1776,7 @@ Examples:
     const colArg = getOpt("--col") ?? getOpt("--column");
     if (!fileArg || !lineArg || !colArg) {
       writeStderrLine("Usage: refs --file <file> --line <line> --col <column>");
-      process.exit(2);
+      exitCli(2);
     }
     const line = Number(lineArg);
     const column = Number(colArg);
@@ -1859,7 +1820,7 @@ Examples:
       writeStderrLine(
         "Usage: grep [--root <dir>] (--query '<treesitter query>' | --pattern '<regex>') [--glob '<glob>'] [--ignore-case] [--max-hits N]",
       );
-      process.exit(2);
+      exitCli(2);
     }
 
     if (querySource) {
@@ -2061,7 +2022,7 @@ Examples:
       }
     } catch (error) {
       writeStderrLine(`Impact analysis failed: ${error instanceof Error ? error.message : String(error)}`);
-      process.exit(1);
+      exitCli(1);
     }
     return;
   }
@@ -2077,7 +2038,7 @@ Examples:
     const reviewDepth = reviewDepthRaw !== undefined ? parseReviewDepth(reviewDepthRaw) : null;
     if (reviewDepthRaw !== undefined && !reviewDepth) {
       writeStderrLine(`Invalid --review-depth value "${reviewDepthRaw}". Expected minimal|standard|deep.`);
-      process.exit(2);
+      exitCli(2);
     }
     const threadsRaw = getOpt("--threads");
     const threads = threadsRaw !== undefined ? Number(threadsRaw) : undefined;
@@ -2134,7 +2095,7 @@ Examples:
     const [fileArg] = parsed.positionals;
     if (!fileArg) {
       writeStderrLine(`Usage: ${cmd} <file> [--depth N] [--json]`);
-      process.exit(2);
+      exitCli(2);
     }
     const depthRaw = getOpt("--depth");
     const depth = depthRaw !== undefined ? Number(depthRaw) : undefined;
@@ -2172,7 +2133,7 @@ Examples:
     const [fromArg, toArg] = parsed.positionals;
     if (!fromArg || !toArg) {
       writeStderrLine("Usage: path <from-file> <to-file> [--json]");
-      process.exit(2);
+      exitCli(2);
     }
     const json = hasFlag("--json");
     const resolvedFrom = resolveCliProjectFile(projectRootFs, fromArg, "From file");
@@ -2213,7 +2174,7 @@ Examples:
       sortModeRaw === "priority" || sortModeRaw === "size" || sortModeRaw === "fanin" ? sortModeRaw : null;
     if (!sortMode) {
       writeStderrLine("Invalid --sort value. Use one of: priority, size, fanin.");
-      process.exit(2);
+      exitCli(2);
     }
 
     const graph = await collectGraph(
@@ -2365,18 +2326,30 @@ Examples:
       hasFlag,
       writeJSONLine,
       writeStderrLine,
-      exit: (code) => process.exit(code),
+      exit: exitCli,
     });
     return;
   }
 
   writeStderrLine(`Unknown command: ${cmd}`);
-  process.exit(1);
+  exitCli(1);
+}
+
+export async function runCli(rawArgs: string[] = process.argv.slice(2), runtime: Partial<CliRuntime> = {}): Promise<void> {
+  const previousRuntime = activeCliRuntime;
+  const previousStderrFilePath = stderrFilePath;
+  activeCliRuntime = { ...createDefaultCliRuntime(), ...runtime };
+  try {
+    await runCliWithActiveRuntime(rawArgs);
+  } finally {
+    activeCliRuntime = previousRuntime;
+    stderrFilePath = previousStderrFilePath;
+  }
 }
 
 if (isDirectCliExecution(import.meta.url)) {
-  main().catch((e) => {
+  runCli().catch((e) => {
     writeError(e);
-    process.exit(1);
+    exitCli(1);
   });
 }

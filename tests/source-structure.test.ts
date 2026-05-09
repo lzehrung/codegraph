@@ -44,7 +44,13 @@ describe("source module structure", () => {
   });
 
   test("keeps standalone CLI commands in command modules", () => {
-    const expectedModules = ["src/cli/chunk.ts", "src/cli/doctor.ts", "src/cli/packageInfo.ts", "src/cli/skill.ts"];
+    const expectedModules = [
+      "src/cli/chunk.ts",
+      "src/cli/doctor.ts",
+      "src/cli/help.ts",
+      "src/cli/packageInfo.ts",
+      "src/cli/skill.ts",
+    ];
 
     for (const relativePath of expectedModules) {
       expect(fs.existsSync(path.join(repoRoot, relativePath)), relativePath).toBeTruthy();

@@ -7,11 +7,38 @@ import { handleChunkCommand } from "../src/cli/chunk.js";
 import { buildDoctorReport } from "../src/cli/doctor.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/cli/packageInfo.js";
 import { handleSkillCommand } from "../src/cli/skill.js";
+import { runCli } from "../src/cli.js";
 
 function readJsonRecord(value: unknown): Record<string, unknown> {
   expect(value).toBeTypeOf("object");
   expect(value).not.toBeNull();
   return value as Record<string, unknown>;
+}
+
+async function captureCli(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number | undefined }> {
+  let stdout = "";
+  let stderr = "";
+  let exitCode: number | undefined;
+
+  await runCli(args, {
+    stdout: (chunk) => {
+      stdout += chunk;
+    },
+    stderr: (chunk) => {
+      stderr += chunk;
+    },
+    exit: (code) => {
+      exitCode = code;
+      throw new Error(`cli exit ${code}`);
+    },
+  }).catch((error: unknown) => {
+    if (error instanceof Error && exitCode !== undefined && error.message === `cli exit ${exitCode}`) {
+      return;
+    }
+    throw error;
+  });
+
+  return { stdout, stderr, exitCode };
 }
 
 describe("CLI command modules", () => {
@@ -21,6 +48,32 @@ describe("CLI command modules", () => {
     expect(identity.name).toBe("@lzehrung/codegraph");
     expect(getCodegraphVersion()).toBe(identity.version);
     expect(fs.existsSync(path.join(identity.packageRoot, "package.json"))).toBeTruthy();
+  });
+
+  test("runs version command in process without exiting", async () => {
+    const result = await captureCli(["version"]);
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(result.stdout.trim()).toBe(getCodegraphVersion());
+  });
+
+  test("runs doctor command in process with captured JSON output", async () => {
+    const result = await captureCli(["doctor"]);
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stderr).toBe("");
+    const report = readJsonRecord(JSON.parse(result.stdout));
+    expect(report.package).toMatchObject({ name: "@lzehrung/codegraph" });
+    expect(report.native).toBeTypeOf("object");
+  });
+
+  test("captures CLI usage exits in process", async () => {
+    const result = await captureCli(["missing-command"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Unknown command: missing-command");
   });
 
   test("builds doctor reports for explicit index artifact paths", async () => {
