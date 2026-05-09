@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -85,28 +86,41 @@ function createDefaultCliRuntime(): CliRuntime {
   };
 }
 
-let activeCliRuntime = createDefaultCliRuntime();
-let stderrFilePath: string | undefined;
+type CliContext = {
+  runtime: CliRuntime;
+  stderrFilePath: string | undefined;
+};
+
+const defaultCliContext: CliContext = {
+  runtime: createDefaultCliRuntime(),
+  stderrFilePath: undefined,
+};
+const cliContextStorage = new AsyncLocalStorage<CliContext>();
+
+function getCliContext(): CliContext {
+  return cliContextStorage.getStore() ?? defaultCliContext;
+}
 
 function getCwd(): string {
-  return activeCliRuntime.cwd();
+  return getCliContext().runtime.cwd();
 }
 
 function exitCli(code: number): never {
-  return activeCliRuntime.exit(code);
+  return getCliContext().runtime.exit(code);
 }
 
 function writeStdoutLine(message: string) {
-  activeCliRuntime.stdout(`${message}\n`);
+  getCliContext().runtime.stdout(`${message}\n`);
 }
 function writeJSONLine(value: unknown) {
   writeStdoutLine(toJSON(value));
 }
 function writeStderrLine(message: string) {
-  activeCliRuntime.stderr(`${message}\n`);
+  const context = getCliContext();
+  context.runtime.stderr(`${message}\n`);
   try {
-    if (stderrFilePath)
-      fs.appendFileSync(stderrFilePath, `${message}\n`, {
+    if (context.stderrFilePath)
+      fs.appendFileSync(context.stderrFilePath, `${message}\n`, {
         encoding: "utf8",
       });
   } catch {
@@ -1159,12 +1173,12 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 
     if (shouldUpdate) {
       if (process.stderr.isTTY) {
-        activeCliRuntime.stderr(`\r[Progress] ${update.current}/${update.total} files processed...`);
+        getCliContext().runtime.stderr(`\r[Progress] ${update.current}/${update.total} files processed...`);
         if (isComplete) {
-          activeCliRuntime.stderr("\n");
+          getCliContext().runtime.stderr("\n");
         }
       } else if (update.current === 1 || isComplete || update.current % 100 === 0) {
-        activeCliRuntime.stderr(`[Progress] ${update.current}/${update.total} files processed.\n`);
+        getCliContext().runtime.stderr(`[Progress] ${update.current}/${update.total} files processed.\n`);
       }
       lastProgressUpdate = now;
     }
@@ -1407,11 +1421,11 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     }
     const sqliteFile = sqliteArg ? normalizePath(resolveFilePathFromRoot(getCwd(), sqliteArg)) : undefined;
     if (stderrArg) {
-      stderrFilePath = normalizePath(resolveFilePathFromRoot(getCwd(), stderrArg));
+      getCliContext().stderrFilePath = normalizePath(resolveFilePathFromRoot(getCwd(), stderrArg));
     } else if (defaultGraphMode) {
-      stderrFilePath = path.resolve(getCwd(), "codegraph.err").replace(/\\/g, "/");
+      getCliContext().stderrFilePath = path.resolve(getCwd(), "codegraph.err").replace(/\\/g, "/");
     } else {
-      stderrFilePath = undefined;
+      getCliContext().stderrFilePath = undefined;
     }
 
     const finalizeReport = async () => {
@@ -2320,15 +2334,11 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 }
 
 export async function runCli(rawArgs: string[] = process.argv.slice(2), runtime: Partial<CliRuntime> = {}): Promise<void> {
-  const previousRuntime = activeCliRuntime;
-  const previousStderrFilePath = stderrFilePath;
-  activeCliRuntime = { ...createDefaultCliRuntime(), ...runtime };
-  try {
-    await runCliWithActiveRuntime(rawArgs);
-  } finally {
-    activeCliRuntime = previousRuntime;
-    stderrFilePath = previousStderrFilePath;
-  }
+  const context: CliContext = {
+    runtime: { ...createDefaultCliRuntime(), ...runtime },
+    stderrFilePath: undefined,
+  };
+  await cliContextStorage.run(context, async () => await runCliWithActiveRuntime(rawArgs));
 }
 
 if (isDirectCliExecution(import.meta.url)) {

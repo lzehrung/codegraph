@@ -4,7 +4,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
-import { listWorkspacePackageResolutionCandidates } from "./resolution.js";
+import { listResolutionCandidates } from "./resolutionCandidates.js";
 
 export async function fileExists(p: string): Promise<boolean> {
   // Simple in-memory cache to avoid repeated fs lookups
@@ -267,6 +267,57 @@ export function resolvePackageSubpath(spec: string): {
   const name = parts[0]!;
   const sub = parts.slice(1).join("/");
   return { name, subpath: sub || undefined };
+}
+
+export function listWorkspacePackageResolutionCandidates(
+  spec: string,
+  ws: WorkspaceConfig | undefined,
+  resolutionExtensions?: readonly string[],
+): string[] {
+  if (!ws) return [];
+  const { name, subpath } = resolvePackageSubpath(spec);
+  const pkg = ws.packages.get(name);
+  if (!pkg) return [];
+  const baseDir = pkg.path;
+  const candidates: string[] = [];
+  const pushRelativeCandidates = (rel: string): void => {
+    candidates.push(...listResolutionCandidates(path.resolve(baseDir, rel), resolutionExtensions));
+  };
+  const pickExportTarget = (target: unknown): string | null => {
+    if (!target) return null;
+    if (typeof target === "string") return target;
+    if (typeof target === "object" && target !== null) {
+      const typedTarget = target as Record<string, unknown>;
+      const candidate = typedTarget.import ?? typedTarget.default ?? typedTarget.require ?? typedTarget.module;
+      if (typeof candidate === "string") return candidate;
+    }
+    return null;
+  };
+
+  if (pkg.exports) {
+    const key = subpath ? `./${subpath}` : ".";
+    if (typeof pkg.exports === "string" && key === ".") {
+      pushRelativeCandidates(pkg.exports);
+    } else if (typeof pkg.exports === "object") {
+      const exportMap = pkg.exports as Record<string, unknown>;
+      const target = exportMap[key] ?? (key === "." ? exportMap["."] : undefined);
+      const rel = pickExportTarget(target);
+      if (rel) {
+        pushRelativeCandidates(rel);
+      }
+    }
+  }
+
+  if (subpath) {
+    pushRelativeCandidates(subpath);
+    return Array.from(new Set(candidates));
+  }
+
+  if (pkg.main) {
+    pushRelativeCandidates(pkg.main);
+  }
+  candidates.push(...listResolutionCandidates(path.join(baseDir, "index"), resolutionExtensions));
+  return Array.from(new Set(candidates));
 }
 
 export async function resolveWorkspacePackage(

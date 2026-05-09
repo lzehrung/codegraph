@@ -78,6 +78,42 @@ describe("CLI command modules", () => {
     expect(result.stderr).toContain("Unknown command: missing-command");
   });
 
+  test("keeps overlapping in-process CLI runs isolated by runtime context", async () => {
+    const firstRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-runcli-first-"));
+    const secondRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-runcli-second-"));
+    await fsp.writeFile(path.join(firstRoot, "first.ts"), "export const first = 1;\n", "utf8");
+    await fsp.writeFile(path.join(secondRoot, "second.ts"), "export const second = 2;\n", "utf8");
+
+    try {
+      await Promise.all([
+        runCli(["graph"], {
+          cwd: () => firstRoot,
+          stdout: () => {
+            throw new Error("unexpected first stdout");
+          },
+        }),
+        runCli(["graph"], {
+          cwd: () => secondRoot,
+          stdout: () => {
+            throw new Error("unexpected second stdout");
+          },
+        }),
+      ]);
+
+      const firstGraph = readJsonRecord(JSON.parse(await fsp.readFile(path.join(firstRoot, "codegraph.json"), "utf8")));
+      const secondGraph = readJsonRecord(JSON.parse(await fsp.readFile(path.join(secondRoot, "codegraph.json"), "utf8")));
+      expect(JSON.stringify(firstGraph)).toContain("first.ts");
+      expect(JSON.stringify(firstGraph)).not.toContain("second.ts");
+      expect(JSON.stringify(secondGraph)).toContain("second.ts");
+      expect(JSON.stringify(secondGraph)).not.toContain("first.ts");
+    } finally {
+      await Promise.all([
+        fsp.rm(firstRoot, { recursive: true, force: true }),
+        fsp.rm(secondRoot, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
   test("builds doctor reports for explicit index artifact paths", async () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-doctor-module-"));
     const artifactPath = path.join(tempDir, "codegraph.json");

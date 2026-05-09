@@ -18,6 +18,7 @@ describe("source module structure", () => {
       "src/util/paths.ts",
       "src/util/projectFiles.ts",
       "src/util/resolution.ts",
+      "src/util/resolutionCandidates.ts",
       "src/util/specifiers.ts",
       "src/util/workspace.ts",
     ];
@@ -26,6 +27,8 @@ describe("source module structure", () => {
       expect(fs.existsSync(path.join(repoRoot, relativePath)), relativePath).toBeTruthy();
     }
     expect(sourceLineCount("src/util.ts")).toBeLessThanOrEqual(80);
+    expect(fs.readFileSync(path.join(repoRoot, "src/util/workspace.ts"), "utf8")).not.toContain("./resolution.js");
+    expect(fs.readFileSync(path.join(repoRoot, "src/util/resolutionCandidates.ts"), "utf8")).not.toContain("./workspace.js");
   });
 
   test("keeps the native crate split by runtime concern", () => {

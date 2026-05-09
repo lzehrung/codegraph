@@ -6,7 +6,7 @@ export { DEFAULT_PROJECT_FILE_IGNORES, DEFAULT_PROJECT_MANIFESTS, DEFAULT_PROJEC
 export type { ProjectFileDiscoveryOptions, ProjectFileInfo, ProjectFileKind, ProjectFileRole, ProjectFileType } from "./util/projectFiles.js";
 export { extractJsTsDynamicSpecifiers, extractJsTsSpecifiers, extractPythonSpecifiers } from "./util/specifiers.js";
 export type { ModuleSpecifier } from "./util/specifiers.js";
-export { fileExists, loadJSON, loadWorkspaceConfig, resolvePackageSubpath, resolveWorkspacePackage } from "./util/workspace.js";
+export { fileExists, listWorkspacePackageResolutionCandidates, loadJSON, loadWorkspaceConfig, resolvePackageSubpath, resolveWorkspacePackage } from "./util/workspace.js";
 export type { WorkspaceConfig, WorkspacePackageInfo } from "./util/workspace.js";
-export { GRAPH_ONLY_RESOLUTION_EXTENSIONS, clearImportResolutionCaches, clearResolutionCaches, getGraphOnlyResolutionExtensions, getPhpComposerImplicitFiles, listResolutionCandidates, listWorkspacePackageResolutionCandidates, loadNearestTsconfigFor, mapLimit, resolveGoImportPath, resolveImportSpecifier, resolvePathLikeModule, resolvePythonModule, resolveSpecifier, resolveJvmPackageImportPaths } from "./util/resolution.js";
+export { GRAPH_ONLY_RESOLUTION_EXTENSIONS, clearImportResolutionCaches, clearResolutionCaches, getGraphOnlyResolutionExtensions, getPhpComposerImplicitFiles, listResolutionCandidates, loadNearestTsconfigFor, mapLimit, resolveGoImportPath, resolveImportSpecifier, resolvePathLikeModule, resolvePythonModule, resolveSpecifier, resolveJvmPackageImportPaths } from "./util/resolution.js";
 export type { FileId, MatchPathFn } from "./util/resolution.js";
