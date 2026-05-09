@@ -1,6 +1,6 @@
 import path from "node:path";
 
-const DEFAULT_RESOLUTION_EXTENSIONS = [
+export const DEFAULT_RESOLUTION_EXTENSIONS = [
   ".ts",
   ".tsx",
   ".js",

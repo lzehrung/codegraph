@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import { buildProjectIndex, clearImportResolutionCaches, collectGraph, goToDefinition } from "../src/index.js";
-import { resolveSpecifier } from "../src/util.js";
+import { loadWorkspaceConfig, resolveSpecifier, resolveWorkspacePackage } from "../src/util.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -140,6 +140,28 @@ describe("Import Resolution", () => {
     expect(helperImport!.resolved).toBe(utilsFile);
   });
 
+  it("resolves directory imports to index files instead of directory paths", async () => {
+    const root = await mkTmpDir("dg-resolve-directory-index-");
+    const mainFile = path.join(root, "main.ts");
+    const indexFile = path.join(root, "foo", "index.ts");
+
+    await fsp.mkdir(path.dirname(indexFile), { recursive: true });
+    await fsp.writeFile(indexFile, "export const value = 1;\n", "utf8");
+    await fsp.writeFile(mainFile, 'import { value } from "./foo";\nexport const doubled = value * 2;\n', "utf8");
+
+    const resolved = await resolveSpecifier(mainFile, "./foo", root);
+
+    expect(resolved).toBe(indexFile);
+
+    const normalizedMain = mainFile.replace(/\\/g, "/");
+    const normalizedIndex = indexFile.replace(/\\/g, "/");
+    const projectIndex = await buildProjectIndex(root);
+    const mainModule = projectIndex.byFile.get(normalizedMain);
+    const fooImport = mainModule?.imports[0];
+
+    expect(fooImport?.resolved).toBe(normalizedIndex);
+  });
+
   it("should mark as external when neither .js nor .ts file exists", async () => {
     const root = await mkTmpDir("dg-resolve-external-");
 
@@ -156,6 +178,35 @@ describe("Import Resolution", () => {
     const helperImport = mainModule!.imports[0];
     expect(typeof helperImport!.resolved).toBe("object");
     expect(helperImport!.resolved.external).toBe("./nonexistent.js");
+  });
+
+  it("does not resolve workspace packages to package directories without an entry file", async () => {
+    const root = await mkTmpDir("dg-resolve-workspace-no-entry-");
+    const packageDir = path.join(root, "packages", "no-entry");
+    const appFile = path.join(root, "app.ts");
+
+    await fsp.mkdir(packageDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ private: true, workspaces: ["packages/*"] }, null, 2),
+      "utf8",
+    );
+    await fsp.writeFile(path.join(packageDir, "package.json"), JSON.stringify({ name: "@scope/no-entry" }, null, 2), "utf8");
+    await fsp.writeFile(appFile, 'import value from "@scope/no-entry";\nexport const result = value;\n', "utf8");
+
+    const workspaceConfig = await loadWorkspaceConfig(root);
+
+    await expect(resolveWorkspacePackage("@scope/no-entry", workspaceConfig)).resolves.toBeNull();
+
+    const resolved = await resolveSpecifier(appFile, "@scope/no-entry", root, undefined, workspaceConfig);
+
+    expect(typeof resolved).toBe("object");
+    if (typeof resolved !== "string") {
+      expect(resolved.external).toBe("@scope/no-entry");
+    }
+
+    const projectIndex = await buildProjectIndex(root);
+    expect(projectIndex.byFile.has(packageDir.replace(/\\/g, "/"))).toBe(false);
   });
 
   it("should handle detailed symbol graph with .js imports to .ts files", async () => {

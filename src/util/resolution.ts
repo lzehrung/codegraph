@@ -7,10 +7,11 @@ import { stringifyUnknown, unquote } from "./ast.js";
 import { parseJsonc } from "./comments.js";
 import { normalizePath, normalizeResolutionHints } from "./paths.js";
 import { listProjectFiles } from "./projectFiles.js";
-import { listResolutionCandidates } from "./resolutionCandidates.js";
+import { DEFAULT_RESOLUTION_EXTENSIONS, listResolutionCandidates } from "./resolutionCandidates.js";
 import {
   clearWorkspaceCaches,
   clearFileExistsCache,
+  directoryExists,
   fileExists,
   loadJSON,
   loadWorkspaceConfig,
@@ -124,45 +125,6 @@ const resolveSpecifierCache = new Map<string, FileId | { external: string }>();
 const resolvePythonModuleCache = new Map<string, FileId | { external: string }>();
 
 export type FileId = string;
-
-const DEFAULT_RESOLUTION_EXTENSIONS = [
-  ".ts",
-  ".tsx",
-  ".js",
-  ".jsx",
-  ".mts",
-  ".cts",
-  ".mjs",
-  ".cjs",
-  ".json",
-  ".css",
-  ".scss",
-  ".less",
-  ".php",
-  ".html",
-  ".vue",
-  ".svelte",
-  ".go",
-  ".java",
-  ".cs",
-  ".rb",
-  ".rs",
-  ".c",
-  ".h",
-  ".cc",
-  ".cpp",
-  ".cxx",
-  ".c++",
-  ".hpp",
-  ".hh",
-  ".hxx",
-  ".ipp",
-  ".tpp",
-  ".inl",
-  ".kt",
-  ".kts",
-  ".swift",
-] as const;
 
 export const GRAPH_ONLY_RESOLUTION_EXTENSIONS = [
   ".md",
@@ -1640,7 +1602,7 @@ async function resolveFromNodeModules(
     const subpath = spec.startsWith("@") ? parts.slice(2).join("/") : parts.slice(1).join("/");
     while (true) {
       const nmDir = path.join(dir, "node_modules", packageName);
-      if (await fileExists(nmDir)) {
+      if (await directoryExists(nmDir)) {
         const pkgPath = path.join(nmDir, "package.json");
         const pkg = await loadJSON<MinimalPackageJson>(pkgPath);
         const baseDir = nmDir;

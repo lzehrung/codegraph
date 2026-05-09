@@ -1,21 +1,35 @@
 const fileExistsCache = new Map<string, boolean>();
+const directoryExistsCache = new Map<string, boolean>();
 
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import { listResolutionCandidates } from "./resolutionCandidates.js";
 
 export async function fileExists(p: string): Promise<boolean> {
-  // Simple in-memory cache to avoid repeated fs lookups
   const cached = fileExistsCache.get(p);
   if (cached !== undefined) return cached;
   try {
-    await fsp.access(p, fs.constants.R_OK);
-    fileExistsCache.set(p, true);
-    return true;
+    const stat = await fsp.stat(p);
+    const exists = stat.isFile();
+    fileExistsCache.set(p, exists);
+    return exists;
   } catch {
     fileExistsCache.set(p, false);
+    return false;
+  }
+}
+
+export async function directoryExists(p: string): Promise<boolean> {
+  const cached = directoryExistsCache.get(p);
+  if (cached !== undefined) return cached;
+  try {
+    const stat = await fsp.stat(p);
+    const exists = stat.isDirectory();
+    directoryExistsCache.set(p, exists);
+    return exists;
+  } catch {
+    directoryExistsCache.set(p, false);
     return false;
   }
 }
@@ -329,20 +343,21 @@ export async function resolveWorkspacePackage(
   const { name, subpath } = resolvePackageSubpath(spec);
   const pkg = ws.packages.get(name);
   if (!pkg) return null;
-  const baseDir = pkg.path;
   for (const candidate of listWorkspacePackageResolutionCandidates(spec, ws, resolutionExtensions)) {
     if (await fileExists(candidate)) {
       return path.resolve(candidate);
     }
   }
-  return baseDir;
+  return null;
 }
 
 export function clearWorkspaceCaches(): void {
   fileExistsCache.clear();
+  directoryExistsCache.clear();
   workspaceCache.clear();
 }
 
 export function clearFileExistsCache(): void {
   fileExistsCache.clear();
+  directoryExistsCache.clear();
 }
