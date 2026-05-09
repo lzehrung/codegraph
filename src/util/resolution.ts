@@ -156,6 +156,14 @@ function getResolutionExtensions(resolutionExtensions?: readonly string[]): stri
   return Array.from(new Set(extensions));
 }
 
+function fileExistsSync(p: string): boolean {
+  try {
+    return fs.statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
 export function getGraphOnlyResolutionExtensions(
   languageId: string,
   resolutionKind: "document" | "source" = "document",
@@ -1465,7 +1473,17 @@ export async function resolveSpecifier(
   const hintKey = resolutionHints.join("|");
   const resolutionExtensions = getResolutionExtensions(opts?.resolutionExtensions);
   const extensionKey = resolutionExtensions.join("|");
-  const cacheKey = `${fromFile}::${spec}::nm=${opts?.resolveNodeModules ? 1 : 0}::scssPartial=${opts?.allowScssPartialResolution ? 1 : 0}::hints=${hintKey}::exts=${extensionKey}`;
+  const workspaceKey = workspaceConfig ? normalizePath(workspaceConfig.rootDir) : "";
+  const cacheKey = [
+    normalizePath(projectRoot),
+    fromFile,
+    spec,
+    `workspace=${workspaceKey}`,
+    `nm=${opts?.resolveNodeModules ? 1 : 0}`,
+    `scssPartial=${opts?.allowScssPartialResolution ? 1 : 0}`,
+    `hints=${hintKey}`,
+    `exts=${extensionKey}`,
+  ].join("::");
   const cached = resolveSpecifierCache.get(cacheKey);
   if (cached) return cached;
   const hasSchemePrefix = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(spec);
@@ -1506,44 +1524,31 @@ export async function resolveSpecifier(
       spec,
       undefined,
       (candidate: string) => {
-        try {
-          fs.accessSync(candidate, fs.constants.R_OK);
-          return true;
-        } catch {
-          return false;
-        }
+        return fileExistsSync(candidate);
       },
       resolutionExtensions,
     );
     if (m) {
       const cand = path.resolve(m);
       const hasExt = !!path.extname(cand);
-      if (hasExt) {
+      if (hasExt && fileExistsSync(cand)) {
         resolveSpecifierCache.set(cacheKey, cand);
         return cand;
       }
       for (const e of resolutionExtensions) {
         const pth = cand + e;
-        try {
-          fs.accessSync(pth, fs.constants.R_OK);
+        if (fileExistsSync(pth)) {
           resolveSpecifierCache.set(cacheKey, pth);
           return pth;
-        } catch {
-          /* file not found: try next */
         }
       }
       for (const e of resolutionExtensions) {
         const pth = path.join(cand, "index" + e);
-        try {
-          fs.accessSync(pth, fs.constants.R_OK);
+        if (fileExistsSync(pth)) {
           resolveSpecifierCache.set(cacheKey, pth);
           return pth;
-        } catch {
-          /* file not found: try next */
         }
       }
-      resolveSpecifierCache.set(cacheKey, cand);
-      return cand;
     }
   }
 
@@ -1646,7 +1651,7 @@ async function resolveFromNodeModules(
         }
         const indexHit = await findFirstExistingResolutionCandidate(path.join(baseDir, "index"), resolutionExtensions);
         if (indexHit) return indexHit;
-        return baseDir;
+        return null;
       }
       const parent = path.dirname(dir);
       if (parent === dir) break;

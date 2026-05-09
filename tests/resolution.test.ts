@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import { buildProjectIndex, clearImportResolutionCaches, collectGraph, goToDefinition } from "../src/index.js";
-import { loadWorkspaceConfig, resolveSpecifier, resolveWorkspacePackage } from "../src/util.js";
+import { loadNearestTsconfigFor, loadWorkspaceConfig, resolveSpecifier, resolveWorkspacePackage } from "../src/util.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -207,6 +207,74 @@ describe("Import Resolution", () => {
 
     const projectIndex = await buildProjectIndex(root);
     expect(projectIndex.byFile.has(packageDir.replace(/\\/g, "/"))).toBe(false);
+  });
+
+  it("keys root-relative import resolution by project root", async () => {
+    const rootA = await mkTmpDir("dg-resolve-cache-root-a-");
+    const rootB = await mkTmpDir("dg-resolve-cache-root-b-");
+    const fromFile = path.join(await mkTmpDir("dg-resolve-cache-from-"), "main.ts");
+    const targetA = path.join(rootA, "target.ts");
+    const targetB = path.join(rootB, "target.ts");
+
+    clearImportResolutionCaches();
+    await fsp.writeFile(targetA, "export const value = 'a';\n", "utf8");
+    await fsp.writeFile(targetB, "export const value = 'b';\n", "utf8");
+
+    await expect(resolveSpecifier(fromFile, "/target", rootA)).resolves.toBe(targetA);
+    await expect(resolveSpecifier(fromFile, "/target", rootB)).resolves.toBe(targetB);
+  });
+
+  it("does not resolve tsconfig path aliases to directories without entry files", async () => {
+    const root = await mkTmpDir("dg-resolve-tsconfig-directory-");
+    const appFile = path.join(root, "src", "app.ts");
+    const packageDir = path.join(root, "src", "pkg");
+
+    await fsp.mkdir(packageDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify(
+        {
+          compilerOptions: {
+            baseUrl: ".",
+            paths: {
+              "@pkg": ["src/pkg"],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fsp.writeFile(appFile, 'import value from "@pkg";\nexport const result = value;\n', "utf8");
+
+    const { matchPath } = await loadNearestTsconfigFor(appFile);
+
+    expect(matchPath).toBeDefined();
+
+    const resolved = await resolveSpecifier(appFile, "@pkg", root, matchPath);
+
+    expect(typeof resolved).toBe("object");
+    if (typeof resolved !== "string") {
+      expect(resolved.external).toBe("@pkg");
+    }
+  });
+
+  it("does not resolve node_modules packages to package directories without entry files", async () => {
+    const root = await mkTmpDir("dg-resolve-node-modules-no-entry-");
+    const appFile = path.join(root, "app.ts");
+    const packageDir = path.join(root, "node_modules", "no-entry");
+
+    await fsp.mkdir(packageDir, { recursive: true });
+    await fsp.writeFile(path.join(packageDir, "package.json"), JSON.stringify({ name: "no-entry" }, null, 2), "utf8");
+    await fsp.writeFile(appFile, 'import value from "no-entry";\nexport const result = value;\n', "utf8");
+
+    const resolved = await resolveSpecifier(appFile, "no-entry", root, undefined, undefined, { resolveNodeModules: true });
+
+    expect(typeof resolved).toBe("object");
+    if (typeof resolved !== "string") {
+      expect(resolved.external).toBe("no-entry");
+    }
   });
 
   it("should handle detailed symbol graph with .js imports to .ts files", async () => {
