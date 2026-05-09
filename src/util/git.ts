@@ -55,7 +55,8 @@ export async function getGitBlobHash(
   opts?: { gitAvailable?: boolean },
 ): Promise<string | null> {
   try {
-    if (opts?.gitAvailable === false) return null;
+    const gitAvailable = opts?.gitAvailable ?? true;
+    if (!gitAvailable) return null;
     const relPath = normalizePath(path.relative(projectRoot, file));
     if (!relPath || relPath.startsWith("..") || path.isAbsolute(relPath)) {
       return null;
@@ -80,7 +81,8 @@ export async function getGitBlobHashes(
   files: string[],
   opts?: { gitAvailable?: boolean },
 ): Promise<Map<string, string>> {
-  if (opts?.gitAvailable === false) return new Map();
+  const gitAvailable = opts?.gitAvailable ?? true;
+  if (!gitAvailable) return new Map();
   const relFiles = Array.from(
     new Set(
       files

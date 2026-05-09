@@ -236,8 +236,9 @@ export async function listProjectFiles(
   const userIgnoreGlobs = (options?.ignoreGlobs ?? []).map(normalizeGlobPattern).filter(Boolean);
 
   try {
+    const useGitignore = options?.useGitignore ?? true;
     const gitignoreRules =
-      options?.useGitignore === false
+      !useGitignore
         ? []
         : await loadGitignoreRules(
             options?.gitignoreRoot ? await ensureDirectoryReadable(options.gitignoreRoot, "Gitignore root") : root,
