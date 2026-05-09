@@ -300,6 +300,9 @@ describe("package metadata", () => {
     expect(scripts["coverage:setup:native"]).toBe("rustup component add llvm-tools-preview && cargo install cargo-llvm-cov --locked");
     expect(devDependencies["@vitest/coverage-v8"]).toBeDefined();
     expect(vitestConfig).toContain("provider: \"v8\"");
+    expect(vitestConfig).toContain("include: [\"src/**/*.{ts,tsx}\"]");
+    expect(vitestConfig).toContain("\"src/indexer/import-types.ts\"");
+    expect(vitestConfig).not.toContain("\"src/impact/types.ts\"");
     expect(vitestConfig).toContain("reporter: [\"text\", \"html\", \"lcov\"]");
     expect(vitestConfig).toContain("reportsDirectory: \"./coverage/js\"");
     expect(coverageScript).toContain("cargo llvm-cov");

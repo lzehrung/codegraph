@@ -1159,12 +1159,12 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 
     if (shouldUpdate) {
       if (process.stderr.isTTY) {
-        process.stderr.write(`\r[Progress] ${update.current}/${update.total} files processed...`);
+        activeCliRuntime.stderr(`\r[Progress] ${update.current}/${update.total} files processed...`);
         if (isComplete) {
-          process.stderr.write("\n");
+          activeCliRuntime.stderr("\n");
         }
       } else if (update.current === 1 || isComplete || update.current % 100 === 0) {
-        console.error(`[Progress] ${update.current}/${update.total} files processed.`);
+        activeCliRuntime.stderr(`[Progress] ${update.current}/${update.total} files processed.\n`);
       }
       lastProgressUpdate = now;
     }

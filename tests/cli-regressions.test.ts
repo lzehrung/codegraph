@@ -5,6 +5,7 @@ import fsp from "node:fs/promises";
 import { execFileSync, spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { textGrep } from "../src/index.js";
+import { runCli } from "../src/cli.js";
 import packageJson from "../package.json" with { type: "json" };
 
 const tsxCliPath = path.resolve(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
@@ -21,6 +22,9 @@ async function runCliCommandDetailed(
   cwd = process.cwd(),
   env: NodeJS.ProcessEnv = {},
 ): Promise<{ stdout: string; stderr: string }> {
+  if (input === undefined && Object.keys(env).length === 0) {
+    return await runCliInProcess(args, cwd);
+  }
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [tsxCliPath, sourceCliPath, ...args], {
       cwd,
@@ -48,6 +52,35 @@ async function runCliCommandDetailed(
       resolve({ stdout, stderr });
     });
   });
+}
+
+async function runCliInProcess(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
+  let stdout = "";
+  let stderr = "";
+  let exitCode: number | undefined;
+
+  try {
+    await runCli(args, {
+      cwd: () => cwd,
+      stdout: (chunk) => {
+        stdout += chunk;
+      },
+      stderr: (chunk) => {
+        stderr += chunk;
+      },
+      exit: (code) => {
+        exitCode = code;
+        throw new Error(`codegraph CLI exited ${code}`);
+      },
+    });
+  } catch (error) {
+    if (exitCode !== undefined) {
+      throw new Error(`codegraph CLI failed (${exitCode}). stderr:\n${stderr}`);
+    }
+    throw error;
+  }
+
+  return { stdout, stderr };
 }
 
 function normalize(p: string): string {
