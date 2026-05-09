@@ -27,4 +27,19 @@ describe("source module structure", () => {
     }
     expect(sourceLineCount("src/util.ts")).toBeLessThanOrEqual(80);
   });
+
+  test("keeps the native crate split by runtime concern", () => {
+    const expectedModules = [
+      "packages/codegraph-native/src/languages.rs",
+      "packages/codegraph-native/src/parser_pool.rs",
+      "packages/codegraph-native/src/projection.rs",
+      "packages/codegraph-native/src/query.rs",
+      "packages/codegraph-native/src/types.rs",
+    ];
+
+    for (const relativePath of expectedModules) {
+      expect(fs.existsSync(path.join(repoRoot, relativePath)), relativePath).toBeTruthy();
+    }
+    expect(sourceLineCount("packages/codegraph-native/src/lib.rs")).toBeLessThanOrEqual(280);
+  });
 });
