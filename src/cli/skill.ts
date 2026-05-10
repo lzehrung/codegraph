@@ -1,8 +1,7 @@
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { getCodegraphPackageRoot, normalizePathForDisplay, pathExists } from "./packageInfo.js";
 
 type SkillInstallAgent = "agents" | "claude" | "codex" | "cursor" | "gemini" | "opencode";
 
@@ -20,38 +19,6 @@ type SkillDoctorReport = {
     skillFilePath: string;
   };
 };
-
-
-function normalizePathForDisplay(filePath: string): string {
-  return filePath.replace(/\\/g, "/");
-}
-
-function pathExists(filePath: string): boolean {
-  try {
-    fs.accessSync(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function findPackageRoot(startDir: string): string {
-  let current = path.resolve(startDir);
-  while (true) {
-    if (pathExists(path.join(current, "package.json"))) {
-      return current;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      throw new Error("Unable to locate package root from current CLI path.");
-    }
-    current = parent;
-  }
-}
-
-function getCodegraphPackageRoot(): string {
-  return findPackageRoot(path.dirname(fileURLToPath(import.meta.url)));
-}
 
 function getBundledSkillDir(packageRoot: string): string | null {
   const candidate = path.join(packageRoot, "codegraph-skill", "codegraph");

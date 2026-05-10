@@ -36,8 +36,8 @@ Graph Options:
     --workers                 Use Piscina worker threads for native extraction
     --cache <mode>            Cache mode: disk, memory, off
     --limit N                 Result limit for hotspots/inspect summaries
-  --cache-strict            Use content hashes instead of mtime
-  --progress                Show progress tracking during indexing
+    --cache-strict            Use content hashes instead of mtime
+    --progress                Show progress tracking during indexing
 
 Output Options:
   --json                    Output as JSON (default)

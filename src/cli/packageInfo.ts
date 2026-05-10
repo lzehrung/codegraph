@@ -2,11 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-function normalizePathForDisplay(filePath: string): string {
+export function normalizePathForDisplay(filePath: string): string {
   return filePath.replace(/\\/g, "/");
 }
 
-function pathExists(filePath: string): boolean {
+export function pathExists(filePath: string): boolean {
   try {
     fs.accessSync(filePath);
     return true;
@@ -15,7 +15,7 @@ function pathExists(filePath: string): boolean {
   }
 }
 
-function findPackageRoot(startDir: string): string {
+export function findPackageRoot(startDir: string): string {
   let current = path.resolve(startDir);
   while (true) {
     if (pathExists(path.join(current, "package.json"))) {

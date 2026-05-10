@@ -5,7 +5,12 @@ import {
   getNativeTreeSitterLoadError,
   getNativeTreeSitterSupportedLanguageIds,
 } from "../native/treeSitterNative.js";
-import { getCodegraphPackageIdentity, type CodegraphPackageIdentity } from "./packageInfo.js";
+import {
+  getCodegraphPackageIdentity,
+  normalizePathForDisplay,
+  pathExists,
+  type CodegraphPackageIdentity,
+} from "./packageInfo.js";
 
 type IndexedArtifactReport = {
   type: "jsonGraph" | "sqliteGraph" | "diskCache" | "unknown";
@@ -23,19 +28,6 @@ export type DoctorReport = {
   };
   indexArtifact?: IndexedArtifactReport;
 };
-
-function normalizePathForDisplay(filePath: string): string {
-  return filePath.replace(/\\/g, "/");
-}
-
-function pathExists(filePath: string): boolean {
-  try {
-    fs.accessSync(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function statIfExists(filePath: string): fs.Stats | null {
   try {

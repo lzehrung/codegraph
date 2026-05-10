@@ -6,6 +6,7 @@ import { describe, expect, test } from "vitest";
 import { handleChunkCommand } from "../src/cli/chunk.js";
 import { buildDoctorReport } from "../src/cli/doctor.js";
 import { handleGraphDeltaCommand } from "../src/cli/graphDelta.js";
+import { CLI_HELP_TEXT } from "../src/cli/help.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/cli/packageInfo.js";
 import { handleSkillCommand } from "../src/cli/skill.js";
 import { handleSqlCommand } from "../src/cli/sql.js";
@@ -58,6 +59,14 @@ describe("CLI command modules", () => {
     expect(result.exitCode).toBeUndefined();
     expect(result.stderr).toBe("");
     expect(result.stdout.trim()).toBe(getCodegraphVersion());
+  });
+
+  test("keeps build option help entries consistently indented", () => {
+    const cacheStrictLine = CLI_HELP_TEXT.split("\n").find((line) => line.includes("--cache-strict"));
+    const progressLine = CLI_HELP_TEXT.split("\n").find((line) => line.includes("--progress"));
+
+    expect(cacheStrictLine?.startsWith("    --cache-strict")).toBe(true);
+    expect(progressLine?.startsWith("    --progress")).toBe(true);
   });
 
   test("runs doctor command in process with captured JSON output", async () => {
