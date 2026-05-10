@@ -24,7 +24,8 @@ export function generateChunkingQuery(def: LanguageDefinition): string {
         query += ` ${block.nameQuery}`;
       }
 
-      if (block.isBlock !== false) {
+      const isBlockCapture = block.isBlock ?? true;
+      if (isBlockCapture) {
         query += `) @chunk.block.${block.captureId || block.type}`;
       } else {
         query += `)`;

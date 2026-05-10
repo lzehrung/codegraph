@@ -14,6 +14,14 @@ export default defineConfig({
     exclude: ["node_modules", "dist"],
     coverage: {
       provider: "v8",
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: [
+        "src/types.ts",
+        "src/languages/types.ts",
+        "src/graphs/types.ts",
+        "src/indexer/import-types.ts",
+        "src/indexer/scope-types.ts",
+      ],
       reporter: ["text", "html", "lcov"],
       reportsDirectory: "./coverage/js",
     },

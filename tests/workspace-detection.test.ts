@@ -23,6 +23,27 @@ async function mkTmpMonorepo(): Promise<string> {
 }
 
 describe("Workspace detection modes", () => {
+  it("detects workspace root from a relative subdirectory start path", async () => {
+    const root = await mkTmpMonorepo();
+    const nestedDir = path.join(root, "packages", "pkg-b");
+    const previousCwd = process.cwd();
+    const { clearWorkspaceCaches, loadWorkspaceConfig, resolveWorkspacePackage } = await import("../src/util/workspace.js");
+    try {
+      process.chdir(nestedDir);
+      clearWorkspaceCaches();
+
+      const workspaceConfig = await loadWorkspaceConfig(".");
+      expect(workspaceConfig?.rootDir).toBe(root);
+      expect(workspaceConfig?.packages.has("@acme/pkg-a")).toBe(true);
+      await expect(resolveWorkspacePackage("@acme/pkg-a", workspaceConfig)).resolves.toBe(
+        path.join(root, "packages", "pkg-a", "src", "index.ts"),
+      );
+    } finally {
+      process.chdir(previousCwd);
+      clearWorkspaceCaches();
+    }
+  });
+
   it("package.json workspaces preferred when multiple configs present", async () => {
     const root = await mkTmpMonorepo();
     // add pnpm-workspace.yaml and lerna.json alongside existing package.json workspaces
