@@ -12,6 +12,7 @@ import type { CompactImpactReport, ImpactOptions, ImpactReport } from "./impact/
 import type { Edge, Range } from "./types.js";
 import { collectGraph, getDependencies, getReverseDependencies, getHotspots } from "./graphs.js";
 import type { NativeRuntimeMode } from "./native/treeSitterNative.js";
+import { extractFunction } from "./refactor/extract.js";
 import { moveSymbol } from "./refactor/move.js";
 import { renameSymbol } from "./refactor/rename.js";
 import type { RefactorResult, TextEdit } from "./refactor/types.js";
@@ -351,6 +352,41 @@ export async function tool_refactorMove(
     const index = await getToolIndex(root, options);
     const targetFile = normalizePathArg(root, options.toFile);
     const result = await moveSymbol(index, options.symbol, targetFile);
+    return {
+      ...result,
+      diff: renderRefactorDiff(root, result.edits),
+    };
+  } catch (error) {
+    return {
+      status: "error",
+      edits: [],
+      warnings: [],
+      reason: error instanceof Error ? error.message : String(error),
+      diff: "",
+    };
+  }
+}
+
+export async function tool_refactorExtract(
+  root: string,
+  options: {
+    file: string;
+    range: { startLine: number; endLine: number };
+    to: string;
+    index?: ProjectIndex;
+    native?: NativeRuntimeMode;
+  },
+): Promise<ToolRefactorRenameResult> {
+  try {
+    const index = await getToolIndex(root, options);
+    const file = normalizePathArg(root, options.file);
+    const result = await extractFunction(index, {
+      file,
+      range: {
+        start: { line: options.range.startLine, column: 1 },
+        end: { line: options.range.endLine, column: 1 },
+      },
+    }, { newName: options.to });
     return {
       ...result,
       diff: renderRefactorDiff(root, result.edits),

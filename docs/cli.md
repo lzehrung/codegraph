@@ -86,6 +86,9 @@ codegraph refactor rename --symbol <handle> --to newName --apply
 # Move a TypeScript/JavaScript top-level declaration and rewrite named importers
 codegraph refactor move --symbol <handle> --to-file src/target.ts --json
 
+# Extract contiguous TypeScript/JavaScript statements into a top-level helper
+codegraph refactor extract --file src/main.ts --range 10:14 --to helper --json
+
 # Chunk a file for LLM processing
 codegraph chunk src/utils.js
 
@@ -116,6 +119,8 @@ codegraph grep --pattern 'eval\(' --ignore-case
 `refactor rename` accepts definition handles from `list-symbols` and returns deterministic text edits by default. Add `--apply` to write the edits to disk, and `--git` with `--apply` to skip files with uncommitted changes.
 
 `refactor move` supports TypeScript and JavaScript top-level declarations in v1. It moves the trivia-aware declaration text, creates the target file when needed, and rewrites named ES importers that Codegraph can resolve.
+
+`refactor extract` supports contiguous TypeScript and JavaScript statement ranges inside one function body. v1 rejects early `return` regions and emits edits only; apply them with `--apply` after reviewing the JSON or diff.
 
 ### Dependency analysis and diagnostics
 

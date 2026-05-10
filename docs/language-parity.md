@@ -54,12 +54,12 @@ Notes:
 
 | Language   | Rename | Move | Extract |
 | ---------- | ------ | ---- | ------- |
-| TypeScript | Partial | Partial | No      |
-| TSX        | Partial | Partial | No      |
-| JavaScript | Partial | Partial | No      |
-| JSX        | Partial | Partial | No      |
+| TypeScript | Partial | Partial | Partial |
+| TSX        | Partial | Partial | Partial |
+| JavaScript | Partial | Partial | Partial |
+| JSX        | Partial | Partial | Partial |
 
-`rename` support is bounded by the existing `findReferences` resolver. `move` support is currently limited to top-level TypeScript and JavaScript declarations with named ES importers; other languages and unsafe shapes return `unsupported`.
+`rename` support is bounded by the existing `findReferences` resolver. `move` support is currently limited to top-level TypeScript and JavaScript declarations with named ES importers. `extract` support is currently limited to contiguous statement ranges inside one TypeScript or JavaScript function body. Other languages and unsafe shapes return `unsupported`.
 
 ## Project file discovery coverage
 

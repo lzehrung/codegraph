@@ -137,6 +137,7 @@ Runtime controls:
 - Preview semantic rename edits from a stable symbol handle:
   `codegraph refactor rename --symbol <handle> --to newName --json`
   `codegraph refactor move --symbol <handle> --to-file src/target.ts --json`
+  `codegraph refactor extract --file src/main.ts --range 10:14 --to helper --json`
   Add `--apply` only after reviewing the returned edits.
 - SQLite export:
   `codegraph graph --sqlite ./codegraph.sqlite`
@@ -156,7 +157,7 @@ The `sql` command accepts read-only result-producing statements such as `SELECT`
 
 Prefer `refs` over plain text search when you want semantic usages rather than every matching string.
 
-Use `refactor rename` for conservative semantic renames. Use `refactor move` for TypeScript and JavaScript top-level declarations when named ES importers should be rewritten with the declaration. Both accept definition handles from `list-symbols`, return deterministic edits by default, and reject unsupported shapes instead of guessing.
+Use `refactor rename` for conservative semantic renames. Use `refactor move` for TypeScript and JavaScript top-level declarations when named ES importers should be rewritten with the declaration. Use `refactor extract` for contiguous TypeScript and JavaScript statement ranges inside one function body. These commands return deterministic edits by default and reject unsupported shapes instead of guessing.
 
 ### PR and diff impact
 

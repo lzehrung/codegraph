@@ -17,7 +17,7 @@ Then use the recommended commands from `inspect` to narrow the next graph, navig
 
 For the raw CLI command reference, see [docs/cli.md](./cli.md).
 
-When an agent needs a safe semantic refactor, get a stable handle with `codegraph list-symbols`, preview edits with `codegraph refactor rename --symbol <handle> --to <name> --json` or `codegraph refactor move --symbol <handle> --to-file <path> --json`, and only add `--apply` after reviewing the edit set.
+When an agent needs a safe semantic refactor, get a stable handle with `codegraph list-symbols`, preview edits with `codegraph refactor rename --symbol <handle> --to <name> --json`, `codegraph refactor move --symbol <handle> --to-file <path> --json`, or `codegraph refactor extract --file <path> --range <start:end> --to <name> --json`, and only add `--apply` after reviewing the edit set.
 
 ## Session management
 

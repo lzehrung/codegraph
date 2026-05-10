@@ -16,6 +16,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Scenario                        | Sample                         | Expected behavior                                                                                                    | Source                   | Date added |
 | ------------------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------- | ------------------------ | ---------- |
 | TypeScript top-level move edits | `tests/refactor/move.test.ts`  | Moving an exported function carries leading docs, creates the target file when needed, and rewrites named importers. | Internal regression test | 2026-05-10 |
+| TypeScript statement extraction | `tests/refactor/extract.test.ts` | Extracting a contiguous function-body region emits a top-level helper plus a call-site replacement.                 | Internal regression test | 2026-05-10 |
 
 ## Native Tree-sitter parity
 

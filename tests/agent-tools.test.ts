@@ -13,6 +13,7 @@ import {
   tool_goToDefinition,
   tool_findReferences,
   tool_findSymbol,
+  tool_refactorExtract,
   tool_refactorMove,
   tool_refactorRename,
   tool_impactJSON,
@@ -393,6 +394,23 @@ describe("Agent Tools", () => {
     expect(result.status).toBe("ok");
     expect(result.edits.length).toBeGreaterThanOrEqual(3);
     expect(result.diff).toContain("target.ts");
+  });
+
+  it("tool_refactorExtract returns canonical extract edits", async () => {
+    const root = await mkTmpDir("dg-agent-refactor-extract-");
+    await fsp.writeFile(path.join(root, "main.ts"), "export function run(name: string) {\n  console.log(name);\n}\n", "utf8");
+    const index = await codegraph.buildProjectIndex(root);
+
+    const result = await tool_refactorExtract(root, {
+      file: "main.ts",
+      range: { startLine: 2, endLine: 3 },
+      to: "emitName",
+      index,
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.edits.length).toBe(2);
+    expect(result.diff).toContain("emitName");
   });
 
   it("tool_findSymbol clamps non-positive maxResults and ignores non-finite values", async () => {

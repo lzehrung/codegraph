@@ -129,6 +129,7 @@ export {
 
 /** Refactor edit primitives and APIs. */
 export { applyEdits } from "./refactor/applyEdits.js";
+export { extractFunction, type ExtractOptions } from "./refactor/extract.js";
 export { moveSymbol, type MoveOptions } from "./refactor/move.js";
 export { renameSymbol, type RenameOptions } from "./refactor/rename.js";
 export type {
@@ -232,6 +233,7 @@ export {
   tool_getHotspots,
   tool_goToDefinition,
   tool_findReferences,
+  tool_refactorExtract,
   tool_refactorMove,
   tool_refactorRename,
   type ToolFileOverview,

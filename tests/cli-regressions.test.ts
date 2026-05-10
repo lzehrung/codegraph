@@ -714,6 +714,30 @@ describe("CLI regressions", () => {
     expect(result.edits.some((edit) => edit.newText.includes("./target"))).toBe(true);
   });
 
+  it("refactor extract emits JSON edits", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-refactor-extract-"));
+    await fsp.writeFile(path.join(tmpDir, "main.ts"), "export function run(name: string) {\n  console.log(name);\n}\n", "utf8");
+
+    const stdout = await runCliCommand([
+      "refactor",
+      "extract",
+      "--root",
+      tmpDir,
+      "--file",
+      "main.ts",
+      "--range",
+      "2:3",
+      "--to",
+      "emitName",
+      "--json",
+    ]);
+    const result = JSON.parse(stdout) as { status: string; edits: Array<{ newText: string }> };
+
+    expect(result.status).toBe("ok");
+    expect(result.edits.some((edit) => edit.newText.includes("function emitName"))).toBe(true);
+    expect(result.edits.some((edit) => edit.newText.includes("emitName(name);"))).toBe(true);
+  });
+
   it("unresolved filters declared dependencies for scoped roots", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-unresolved-scoped-"));
     try {

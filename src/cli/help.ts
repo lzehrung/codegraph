@@ -70,4 +70,5 @@ Examples:
   codegraph list-symbols --trivia leading-doc
   codegraph refactor rename --symbol <handle> --to newName --json
   codegraph refactor move --symbol <handle> --to-file src/target.ts --json
+  codegraph refactor extract --file src/main.ts --range 10:14 --to helper --json
 `;

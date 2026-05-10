@@ -297,7 +297,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--limit",
   "--trivia",
   "--symbol",
-  "--to", "--to-file",
+  "--to", "--to-file", "--range",
 ]);
 
 type IndexCacheMetadata = {
