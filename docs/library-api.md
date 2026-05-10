@@ -244,6 +244,27 @@ if (handle) {
 
 Pass `trivia: "leading-doc"` or `trivia: "leading-all"` to `listSymbols()` when a caller needs ranges that include attached docs or docs plus decorators/attributes. The cached symbol definition is not mutated; the expanded range is derived for that call.
 
+## Refactor edits
+
+Use stable definition handles with `renameSymbol()` to build deterministic edits without writing files. Use `applyEdits()` as a separate step when the caller is ready to modify the worktree.
+
+```ts
+import { applyEdits, buildProjectIndex, listSymbols, renameSymbol } from "@lzehrung/codegraph";
+
+const root = process.cwd();
+const index = await buildProjectIndex(root);
+const handle = listSymbols(index).find((item) => item.name === "greet")?.id;
+
+if (handle) {
+  const result = await renameSymbol(index, handle, "salute");
+  if (result.status === "ok") {
+    await applyEdits(result.edits, { useGit: true });
+  }
+}
+```
+
+`renameSymbol()` currently supports semantic definition renames and rejects import-alias handles. The returned edit list includes declaration, reference, and simple named-import specifier edits when those locations can be resolved safely.
+
 ## Impact analysis from code
 
 ```ts
@@ -319,6 +340,7 @@ import {
   tool_getHotspots,
   tool_goToDefinition,
   tool_findReferences,
+  tool_refactorRename,
   tool_impactJSON,
 } from "@lzehrung/codegraph";
 
@@ -330,6 +352,7 @@ const reverseDeps = await tool_getReverseDependencies(root, "src/index.ts", { de
 const hotspots = await tool_getHotspots(root, { limit: 20, index });
 const definition = await tool_goToDefinition(root, "src/main.ts", 10, 5, index);
 const references = await tool_findReferences(root, "src/main.ts", 10, 5, index);
+const rename = await tool_refactorRename(root, { symbol: "src/main.ts::greet::10", to: "salute", index });
 const impact = await tool_impactJSON(root, { provider: "git", base: "HEAD", head: "WORKTREE" }, { index });
 ```
 
@@ -350,6 +373,7 @@ Useful wrapper details:
 - Build a shared index once and pass it through when an agent will call several wrappers in one pass; otherwise each wrapper may rebuild the same project view.
 - `tool_findSymbol()` returns stable `id` handles plus `range`, `exported`, `exactMatch`, and `matchKind`.
 - `tool_findSymbol()` and `tool_getFileOverview()` accept `trivia: "leading-doc" | "leading-all"` when agents need selection ranges that include attached documentation or attributes.
+- `tool_refactorRename()` returns the same canonical edits as `renameSymbol()` plus a compact `diff` string for agent logs. It does not write files.
 - `tool_goToDefinition()` and `tool_findReferences()` surface additive `provenance` metadata when the resolver used imports, namespaces, or other non-local paths.
 - `tool_getDependencies()`, `tool_getReverseDependencies()`, and `tool_getHotspots()` ignore non-finite `limit` values and clamp non-positive finite values to empty bounded results instead of returning malformed slices.
 - The batch impact wrappers include `schemaVersion` and `format: "full" | "compact"` so downstream agents do not have to infer payload shape; streaming `complete.report` uses `format: "stream-summary"`.

@@ -59,6 +59,7 @@ import { parseCacheModeOption } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
 import { handleSkillCommand } from "./cli/skill.js";
 import { handleSqlCommand } from "./cli/sql.js";
+import { handleRefactorCommand } from "./cli/refactor.js";
 import type { Graph } from "./types.js";
 import {
   assertFilePathWithinRoot,
@@ -295,6 +296,8 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--target",
   "--limit",
   "--trivia",
+  "--symbol",
+  "--to",
 ]);
 
 type IndexCacheMetadata = {
@@ -1273,7 +1276,11 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   const supportsIncludeRoots =
-    cmd === "graph" || cmd === "index" || cmd === "list-symbols" || cmd === "hotspots" || cmd === "inspect";
+    cmd === "graph" ||
+    cmd === "index" ||
+    cmd === "list-symbols" ||
+    cmd === "hotspots" ||
+    cmd === "inspect";
   let includeRoots: string[] = [];
   if (supportsIncludeRoots) {
     if (rootOpt) {
@@ -1409,6 +1416,15 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       file: path.relative(projectRootFs, symbol.file).replace(/\\/g, "/") || symbol.file,
     }));
     writeJSONLine({ symbols });
+    return;
+  }
+
+  if (cmd === "refactor") {
+    const files = await resolveFiles();
+    await handleRefactorCommand({
+      projectRootFs, positionals: parsed.positionals, files, discovery: discoveryOptions, nativeMode, workerOpts,
+      progressHandler, getOpt, hasFlag, writeJSONLine, writeStdoutLine,
+    });
     return;
   }
 

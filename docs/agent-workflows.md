@@ -17,6 +17,8 @@ Then use the recommended commands from `inspect` to narrow the next graph, navig
 
 For the raw CLI command reference, see [docs/cli.md](./cli.md).
 
+When an agent needs a safe semantic rename, get a stable handle with `codegraph list-symbols`, preview edits with `codegraph refactor rename --symbol <handle> --to <name> --json`, and only add `--apply` after reviewing the edit set.
+
 ## Session management
 
 For agents performing code reviews or making multiple queries, use sessions to maintain warm caches:

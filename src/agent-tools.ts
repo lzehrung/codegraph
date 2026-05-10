@@ -12,6 +12,8 @@ import type { CompactImpactReport, ImpactOptions, ImpactReport } from "./impact/
 import type { Edge, Range } from "./types.js";
 import { collectGraph, getDependencies, getReverseDependencies, getHotspots } from "./graphs.js";
 import type { NativeRuntimeMode } from "./native/treeSitterNative.js";
+import { renameSymbol } from "./refactor/rename.js";
+import type { RefactorResult, TextEdit } from "./refactor/types.js";
 import type { TriviaMode } from "./refactor/types.js";
 import {
   fileExists,
@@ -101,6 +103,10 @@ export type ToolHotspotEntry = {
   fanIn: number;
   fanOut: number;
   score: number;
+};
+
+export type ToolRefactorRenameResult = RefactorResult & {
+  diff: string;
 };
 
 /**
@@ -294,6 +300,39 @@ export async function tool_findSymbol(
     return {
       status: "error",
       error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Builds canonical text edits for a semantic symbol rename.
+ *
+ * The tool does not write files. Apply returned edits with the library
+ * `applyEdits()` helper or the CLI `refactor rename --apply` flow.
+ */
+export async function tool_refactorRename(
+  root: string,
+  options: {
+    symbol: string;
+    to: string;
+    index?: ProjectIndex;
+    native?: NativeRuntimeMode;
+  },
+): Promise<ToolRefactorRenameResult> {
+  try {
+    const index = await getToolIndex(root, options);
+    const result = await renameSymbol(index, options.symbol, options.to);
+    return {
+      ...result,
+      diff: renderRefactorDiff(root, result.edits),
+    };
+  } catch (error) {
+    return {
+      status: "error",
+      edits: [],
+      warnings: [],
+      reason: error instanceof Error ? error.message : String(error),
+      diff: "",
     };
   }
 }
@@ -539,6 +578,15 @@ function getToolLimit(limit: number | undefined): number | undefined {
 function getToolDefaultedLimit(limit: number | undefined, fallback: number): number {
   const normalizedLimit = getFiniteNonNegativeLimit(limit);
   return normalizedLimit ?? fallback;
+}
+
+function renderRefactorDiff(root: string, edits: TextEdit[]): string {
+  return edits
+    .map((edit) => {
+      const file = normalizeToolFileOutput(root, edit.file);
+      return `${file}:${edit.start}-${edit.end} -> ${JSON.stringify(edit.newText)}`;
+    })
+    .join("\n");
 }
 
 function resolveToolFileInput(

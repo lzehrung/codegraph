@@ -134,6 +134,9 @@ Runtime controls:
 - List symbol handles with trivia-expanded ranges:
   `codegraph list-symbols --trivia leading-doc`
   `codegraph list-symbols --trivia leading-all --include-imports`
+- Preview semantic rename edits from a stable symbol handle:
+  `codegraph refactor rename --symbol <handle> --to newName --json`
+  Add `--apply` only after reviewing the returned edits.
 - SQLite export:
   `codegraph graph --sqlite ./codegraph.sqlite`
 - Read-only SQL on exported SQLite:
@@ -151,6 +154,8 @@ The `sql` command accepts read-only result-producing statements such as `SELECT`
   `codegraph refs --file <file> --line <line> --col <column> --pretty`
 
 Prefer `refs` over plain text search when you want semantic usages rather than every matching string.
+
+Use `refactor rename` for conservative semantic renames. It accepts definition handles from `list-symbols`, returns deterministic edits by default, and rejects unsupported import-alias handles instead of guessing.
 
 ### PR and diff impact
 

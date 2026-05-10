@@ -132,6 +132,7 @@ export {
 } from "./indexer/symbols.js";
 
 export { getSymbolRange } from "./refactor/trivia.js";
+export { renameSymbol, type RenameOptions } from "./refactor/rename.js";
 
 export function collectLocalsAndExportsFromSource(
   file: string,

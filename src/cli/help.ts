@@ -13,6 +13,7 @@ Commands:
   goto          Go to definition
   refs          Find references
   list-symbols  List symbol handles and ranges
+  refactor      Build or apply semantic refactor edits
   chunk         Chunk file for embeddings
   deps          List dependencies
   rdeps         List reverse dependencies
@@ -67,4 +68,5 @@ Examples:
   codegraph impact --provider git --base HEAD --head WORKTREE
   codegraph refs --file src/index.ts --line 42 --col 10
   codegraph list-symbols --trivia leading-doc
+  codegraph refactor rename --symbol <handle> --to newName --json
 `;

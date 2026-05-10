@@ -79,6 +79,10 @@ codegraph index --workers --threads 8 --cache disk
 codegraph list-symbols --trivia leading-doc
 codegraph list-symbols --trivia leading-all --include-imports
 
+# Build semantic rename edits from a stable symbol handle
+codegraph refactor rename --symbol <handle> --to newName --json
+codegraph refactor rename --symbol <handle> --to newName --apply
+
 # Chunk a file for LLM processing
 codegraph chunk src/utils.js
 
@@ -105,6 +109,8 @@ codegraph grep --pattern 'eval\(' --ignore-case
 `chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions. Use `--text` to force text chunking.
 
 `list-symbols --trivia exclude|leading-doc|leading-all` keeps the default bare symbol ranges unless requested. `leading-doc` expands ranges to attached leading comment docs, while `leading-all` also includes supported decorators or attributes.
+
+`refactor rename` accepts definition handles from `list-symbols` and returns deterministic text edits by default. Add `--apply` to write the edits to disk, and `--git` with `--apply` to skip files with uncommitted changes.
 
 ### Dependency analysis and diagnostics
 

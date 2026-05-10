@@ -54,6 +54,7 @@ describe("source module structure", () => {
       "src/cli/graphDelta.ts",
       "src/cli/help.ts",
       "src/cli/packageInfo.ts",
+      "src/cli/refactor.ts",
       "src/cli/skill.ts",
       "src/cli/sql.ts",
     ];

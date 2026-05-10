@@ -129,6 +129,7 @@ export {
 
 /** Refactor edit primitives and APIs. */
 export { applyEdits } from "./refactor/applyEdits.js";
+export { renameSymbol, type RenameOptions } from "./refactor/rename.js";
 export type {
   ApplyEditsOptions,
   ApplyEditsResult,
@@ -230,6 +231,7 @@ export {
   tool_getHotspots,
   tool_goToDefinition,
   tool_findReferences,
+  tool_refactorRename,
   type ToolFileOverview,
   type ToolFileOverviewImport,
   type ToolFileOverviewDefinition,
@@ -237,6 +239,7 @@ export {
   type ToolSymbolMatch,
   type ToolDependencyEntry,
   type ToolHotspotEntry,
+  type ToolRefactorRenameResult,
 } from "./agent-tools.js";
 
 /** SQLite graph persistence and query helpers. */

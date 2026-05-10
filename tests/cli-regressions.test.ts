@@ -663,6 +663,25 @@ describe("CLI regressions", () => {
     expect(payload.symbols.find((symbol) => symbol.name === "documented")?.range?.start.line).toBe(1);
   });
 
+  it("refactor rename emits JSON edits", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-refactor-rename-"));
+    await fsp.writeFile(path.join(tmpDir, "utils.ts"), "export function greet() { return 'hi'; }\n", "utf8");
+    await fsp.writeFile(path.join(tmpDir, "main.ts"), "import { greet } from './utils';\ngreet();\n", "utf8");
+
+    const symbols = JSON.parse(await runCliCommand(["list-symbols", "--root", tmpDir])) as {
+      symbols: Array<{ id: string; name: string }>;
+    };
+    const handle = symbols.symbols.find((symbol) => symbol.name === "greet")?.id;
+    expect(handle).toBeDefined();
+    if (!handle) return;
+
+    const stdout = await runCliCommand(["refactor", "rename", "--root", tmpDir, "--symbol", handle, "--to", "salute", "--json"]);
+    const result = JSON.parse(stdout) as { status: string; edits: Array<{ newText: string }> };
+
+    expect(result.status).toBe("ok");
+    expect(result.edits.filter((edit) => edit.newText === "salute").length).toBeGreaterThanOrEqual(3);
+  });
+
   it("unresolved filters declared dependencies for scoped roots", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-unresolved-scoped-"));
     try {
