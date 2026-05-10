@@ -1,6 +1,6 @@
 # codegraph
 
-Codegraph is a small multi-language code analysis library and CLI for understanding repos quickly. It builds dependency graphs, symbol indexes, go-to-definition results, find-references results, semantic chunks, and PR review and impact artifacts across source languages plus graph-first document and template formats.
+Codegraph is a small multi-language code analysis library and CLI for understanding repos quickly. It builds dependency graphs, symbol indexes, go-to-definition results, find-references results, semantic chunks, and PR review and impact artifacts across source languages plus graph-first document, stylesheet, and template formats.
 
 It is built for agent and human workflows that need repo structure fast without standing up a full editor or LSP stack.
 
@@ -65,7 +65,7 @@ Real `inspect ./src --limit 10` output against this repo looks like:
 
 ## Features
 
-- Multi-language dependency graphs, including imports, re-exports, `require()`, dynamic imports, workspace resolution, and graph-first document and template links.
+- Multi-language dependency graphs, including imports, re-exports, `require()`, dynamic imports, workspace resolution, document links, stylesheet imports, and SFC script dependencies.
 - Per-file symbol indexes with locals, exports, docstrings, line spans, and lightweight complexity metadata.
 - Cross-file go-to-definition and find-references support across the shared source-language pipeline.
 - Semantic chunking for code and text files, including Vue and Svelte single-file component block splitting.
@@ -205,11 +205,11 @@ JavaScript, TypeScript, Python, PHP, Go, Java, C#, Ruby, Rust, Kotlin, Swift, Zi
 
 ### Graph-first formats
 
-HTML, Astro, Handlebars, Markdown, MDX, reStructuredText, AsciiDoc, CSS, SCSS, and Less participate in graph or chunking workflows with narrower capability claims than the full source-language pipeline.
+HTML, Astro, Handlebars, Markdown, MDX, reStructuredText, AsciiDoc, CSS, SCSS, and Less participate in graph or chunking workflows with narrower capability claims than the full source-language pipeline. CSS-family graphing covers stylesheet imports; SCSS also resolves Sass partials, including extensionless and explicit `.scss` specifiers.
 
 ### Single-file components
 
-Vue and Svelte script blocks are parsed with the JS and TS pipeline for dependency graphs and chunking, while semantic navigation remains intentionally narrower.
+Vue and Svelte script blocks are parsed with the JS and TS pipeline for dependency graphs and chunking, including external `<script src="...">` dependencies. Semantic navigation remains intentionally narrower.
 
 For the full capability matrix, limitations, and fixture coverage, see [docs/language-parity.md](./docs/language-parity.md) and [docs/scenario-catalog.md](./docs/scenario-catalog.md).
 
@@ -253,20 +253,20 @@ Important runtime note: the root tarball does not bundle the native addon or the
 
 ## FAQ
 
-**Can I drop this into a mixed repo with multiple Node or Python projects?**  
-Yes. Codegraph walks the tree, ignores the usual generated directories by default, builds a single repo-wide graph, and marks unknown modules as external.
+**Can I drop this into a mixed repo?**
+Yes. Codegraph walks the tree, ignores usual generated directories, builds one repo-wide graph, and marks unresolved third-party modules as external. It also detects common project files for Node, Python, Rust, Go, Ruby, Java/Kotlin, .NET, PHP, Swift, C/C++, Nx, and Turborepo so inspection and review output can point at likely project boundaries.
 
-**Does it follow re-exports for definition jumps?**  
-Yes, for the shared source-language pipeline. In JS and TS, `resolveExport` recursively follows `export * from` and `export { name } from`.
+**Does it follow re-exports for definition jumps?**
+Yes, when the language extractor records the re-export. Covered examples include JS/TS `export * from`, `export { name } from`, namespace re-exports, and Rust re-export modules. Go, Java, and Kotlin use language-specific package export rules rather than JS-style barrels.
 
-**How accurate is find-references?**  
-It uses a lexical scope index and recorded bindings rather than heavy type-checking. That makes it resilient for common patterns and useful in agent loops, while still intentionally lighter than a full editor stack.
+**How accurate is find-references?**
+It answers: after this name resolves to this definition, where do recorded imports, aliases, local bindings, and common member uses point back to it? It does not run each language's compiler or type checker, so dynamic dispatch, reflection, generated code, and macro-expanded references can be missed.
 
-**Does it support CommonJS destructuring?**  
+**Does it support CommonJS destructuring?**
 Yes. Both `const { helperFunction } = require("./module")` and aliased destructuring patterns are supported.
 
-**Does it work with monorepos?**  
-Yes. It detects npm, yarn, pnpm, and lerna workspace layouts and resolves package-relative imports accordingly.
+**Does it work with monorepos?**
+Yes, with two layers. Node workspace package imports resolve through `package.json` workspaces, `pnpm-workspace.yaml`, and `lerna.json`; pnpm exclude globs are honored. Broader monorepo and project metadata such as `nx.json`, `turbo.json`, `go.work`, `Cargo.toml`, `composer.json`, Maven/Gradle files, .NET projects, Swift packages, and C/C++ build files are detected for project discovery, inspection, and review risk signals.
 
 ## Contributing and releases
 

@@ -419,7 +419,7 @@ async function fileStatSignature(
 ): Promise<{ sig: string; contentHash?: string }> {
   try {
     const stat = await fsp.stat(file);
-    const useStrict = strict !== false;
+    const useStrict = strict ?? true;
     const shouldHash = useStrict || !!opts?.includeContentHash;
     const contentHash = shouldHash ? await fileContentHash(file) : undefined;
     if (!useStrict) {
@@ -678,7 +678,7 @@ function normalizeDiscoveryOptions(discovery?: ProjectFileDiscoveryOptions): Man
   const ignoreGlobs = Array.from(
     new Set((discovery.ignoreGlobs ?? []).map((glob) => glob.trim()).filter(Boolean)),
   ).sort();
-  const useGitignore = discovery.useGitignore !== false;
+  const useGitignore = discovery.useGitignore ?? true;
   if (includeGlobs.length === 0 && ignoreGlobs.length === 0 && useGitignore) {
     return undefined;
   }

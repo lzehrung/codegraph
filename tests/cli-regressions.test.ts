@@ -5,6 +5,7 @@ import fsp from "node:fs/promises";
 import { execFileSync, spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { textGrep } from "../src/index.js";
+import { runCli } from "../src/cli.js";
 import packageJson from "../package.json" with { type: "json" };
 
 const tsxCliPath = path.resolve(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
@@ -21,6 +22,9 @@ async function runCliCommandDetailed(
   cwd = process.cwd(),
   env: NodeJS.ProcessEnv = {},
 ): Promise<{ stdout: string; stderr: string }> {
+  if (input === undefined && Object.keys(env).length === 0) {
+    return await runCliInProcess(args, cwd);
+  }
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [tsxCliPath, sourceCliPath, ...args], {
       cwd,
@@ -48,6 +52,35 @@ async function runCliCommandDetailed(
       resolve({ stdout, stderr });
     });
   });
+}
+
+async function runCliInProcess(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
+  let stdout = "";
+  let stderr = "";
+  let exitCode: number | undefined;
+
+  try {
+    await runCli(args, {
+      cwd: () => cwd,
+      stdout: (chunk) => {
+        stdout += chunk;
+      },
+      stderr: (chunk) => {
+        stderr += chunk;
+      },
+      exit: (code) => {
+        exitCode = code;
+        throw new Error(`codegraph CLI exited ${code}`);
+      },
+    });
+  } catch (error) {
+    if (exitCode !== undefined) {
+      throw new Error(`codegraph CLI failed (${exitCode}). stderr:\n${stderr}`);
+    }
+    throw error;
+  }
+
+  return { stdout, stderr };
 }
 
 function normalize(p: string): string {
@@ -178,6 +211,30 @@ describe("CLI regressions", () => {
     expect(result.stderr).toContain("Backend:");
     expect(result.stderr).toContain("files processed");
     expect(result.stdout.trim()).toBe("");
+  });
+
+  it("direct graph failures append errors to the configured stderr file", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-stderr-file-"));
+    await fsp.writeFile(path.join(tmpDir, "main.ts"), "export const value = 1;\n", "utf8");
+    const stderrPath = path.join(tmpDir, "codegraph.err");
+    const outputPath = path.join(tmpDir, "missing", "codegraph.json");
+
+    try {
+      await expect(
+        runCliCommandDetailed(
+          ["graph", "--root", tmpDir, "--output", outputPath, "--stderr-file", stderrPath],
+          undefined,
+          tmpDir,
+          { CODEGRAPH_FORCE_SPAWN: "1" },
+        ),
+      ).rejects.toThrow("codegraph CLI failed");
+
+      const stderrLog = await fsp.readFile(stderrPath, "utf8");
+      expect(stderrLog).toContain("ENOENT");
+      expect(stderrLog).toContain("missing");
+    } finally {
+      await fsp.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("graph --stable produces sorted deterministic JSON", async () => {

@@ -27,6 +27,7 @@ type ToolRuntimeOptions = {
   native?: NativeRuntimeMode;
 };
 
+/** Import entry rendered for agent tool responses. */
 export type ToolFileOverviewImport = {
   name: string;
   kind: ImportBinding["kind"];
@@ -34,6 +35,7 @@ export type ToolFileOverviewImport = {
   resolved?: string;
 };
 
+/** Definition entry rendered for agent tool file overviews. */
 export type ToolFileOverviewDefinition = {
   id: string;
   name: string;
@@ -43,12 +45,14 @@ export type ToolFileOverviewDefinition = {
   docstring?: string;
 };
 
+/** Structured imports and definitions for one indexed source file. */
 export type ToolFileOverview = {
   imports: ToolFileOverviewImport[];
   definitions: ToolFileOverviewDefinition[];
   summary?: string;
 };
 
+/** Result envelope returned by `tool_getFileOverview`. */
 export type ToolFileOverviewResult =
   | {
       status: "ok";
@@ -69,6 +73,7 @@ export type ToolFileOverviewResult =
       reason?: "outside_project_root";
     };
 
+/** Symbol search match with project-relative file output. */
 export type ToolSymbolMatch = {
   id: string;
   name: string;
@@ -81,11 +86,13 @@ export type ToolSymbolMatch = {
   matchKind: "exact" | "substring";
 };
 
+/** Dependency or dependent file entry returned by graph traversal tools. */
 export type ToolDependencyEntry = {
   file: string;
   depth: number;
 };
 
+/** File-level hotspot metrics returned by `tool_getHotspots`. */
 export type ToolHotspotEntry = {
   file: string;
   fanIn: number;
@@ -199,7 +206,9 @@ export async function tool_getFileOverview(
 }
 
 /**
- * Searches for symbols by name across the project.
+ * Searches indexed definitions by case-insensitive substring.
+ *
+ * Pass a cached `index` when making several calls against the same snapshot.
  */
 export async function tool_findSymbol(
   root: string,
@@ -284,6 +293,8 @@ export async function tool_findSymbol(
 
 /**
  * Lists all files in the project that codegraph can analyze.
+ *
+ * Results are project-relative when the file is under `root`.
  */
 export async function tool_listProjectFiles(
   root: string,
@@ -301,6 +312,8 @@ export async function tool_listProjectFiles(
 
 /**
  * Gets the dependency graph for the project.
+ *
+ * Returns project-relative node and edge paths for agent-safe display.
  */
 export async function tool_getGraph(
   root: string,
@@ -324,6 +337,9 @@ export async function tool_getGraph(
   }
 }
 
+/**
+ * Lists files imported by, required by, or otherwise depended on by a file.
+ */
 export async function tool_getDependencies(
   root: string,
   filePath: string,
@@ -385,6 +401,9 @@ export async function tool_getDependencies(
   }
 }
 
+/**
+ * Lists files that depend on the requested file.
+ */
 export async function tool_getReverseDependencies(
   root: string,
   filePath: string,
@@ -446,6 +465,9 @@ export async function tool_getReverseDependencies(
   }
 }
 
+/**
+ * Lists high fan-in/fan-out files, optionally scoped to include roots.
+ */
 export async function tool_getHotspots(
   root: string,
   options: {

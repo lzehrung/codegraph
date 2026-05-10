@@ -1,15 +1,14 @@
 #!/usr/bin/env node
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { performance } from "node:perf_hooks";
-import os from "node:os";
 import { fileURLToPath } from "node:url";
 import {
   buildProjectIndex,
   buildProjectIndexFromFiles,
   buildProjectIndexIncremental,
-  buildGraphDelta,
   goToDefinition,
   findReferences,
   getApiSurface,
@@ -42,11 +41,7 @@ import {
 import { analyzeImpactFromDiff } from "./impact/index.js";
 import type { CompactImpactReport, ImpactItem, ImpactOptions, ImpactReport, ChangedSymbol } from "./impact/types.js";
 import type { CandidateTestFile } from "./impact/context.js";
-import { writeGraphSqlite, updateGraphSqlite, queryGraphSqliteRaw } from "./sqlite.js";
-import { chunkFile } from "./chunking/chunkFile.js";
-import { chunkTextFile } from "./chunking/chunkTextFile.js";
-import { chunkSFCFile } from "./chunking/chunkSFC.js";
-import { LANG_CONFIGS } from "./bootstrap/treeSitterLanguages.js";
+import { writeGraphSqlite, updateGraphSqlite } from "./sqlite.js";
 import {
   isNativeTreeSitterAvailable,
   getNativeTreeSitterLoadError,
@@ -54,6 +49,14 @@ import {
   type NativeRuntimeMode,
 } from "./native/treeSitterNative.js";
 import { supportForFile } from "./languages.js";
+import { handleChunkCommand } from "./cli/chunk.js";
+import { buildDoctorReport } from "./cli/doctor.js";
+import { handleGraphDeltaCommand } from "./cli/graphDelta.js";
+import { CLI_HELP_TEXT } from "./cli/help.js";
+import { parseCacheModeOption } from "./cli/options.js";
+import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
+import { handleSkillCommand } from "./cli/skill.js";
+import { handleSqlCommand } from "./cli/sql.js";
 import type { Graph } from "./types.js";
 import {
   assertFilePathWithinRoot,
@@ -67,18 +70,65 @@ import {
 function toJSON(obj: unknown): string {
   return JSON.stringify(obj, null, 2);
 }
-let stderrFilePath: string | undefined;
+
+export type CliRuntime = {
+  stdout: (chunk: string) => void;
+  stderr: (chunk: string) => void;
+  exit: (code: number) => never;
+  cwd: () => string;
+};
+
+function createDefaultCliRuntime(): CliRuntime {
+  return {
+    stdout: (chunk) => process.stdout.write(chunk),
+    stderr: (chunk) => process.stderr.write(chunk),
+    exit: (code) => process.exit(code),
+    cwd: () => process.cwd(),
+  };
+}
+
+type CliContext = {
+  runtime: CliRuntime;
+  stderrFilePath: string | undefined;
+};
+
+const defaultCliContext: CliContext = {
+  runtime: createDefaultCliRuntime(),
+  stderrFilePath: undefined,
+};
+const cliContextStorage = new AsyncLocalStorage<CliContext>();
+
+function getCliContext(): CliContext {
+  return cliContextStorage.getStore() ?? defaultCliContext;
+}
+
+function createCliContext(runtime: Partial<CliRuntime> = {}): CliContext {
+  return {
+    runtime: { ...createDefaultCliRuntime(), ...runtime },
+    stderrFilePath: undefined,
+  };
+}
+
+function getCwd(): string {
+  return getCliContext().runtime.cwd();
+}
+
+function exitCli(code: number): never {
+  return getCliContext().runtime.exit(code);
+}
+
 function writeStdoutLine(message: string) {
-  process.stdout.write(`${message}\n`);
+  getCliContext().runtime.stdout(`${message}\n`);
 }
 function writeJSONLine(value: unknown) {
   writeStdoutLine(toJSON(value));
 }
 function writeStderrLine(message: string) {
-  process.stderr.write(`${message}\n`);
+  const context = getCliContext();
+  context.runtime.stderr(`${message}\n`);
   try {
-    if (stderrFilePath)
-      fs.appendFileSync(stderrFilePath, `${message}\n`, {
+    if (context.stderrFilePath)
+      fs.appendFileSync(context.stderrFilePath, `${message}\n`, {
         encoding: "utf8",
       });
   } catch {
@@ -91,25 +141,6 @@ function writeError(error: unknown) {
     return;
   }
   writeStderrLine(String(error));
-}
-
-const chunkLanguageAliases: Record<string, string> = {
-  js: "javascript",
-  ts: "typescript",
-};
-
-const chunkTextLanguageByExtension: Record<string, string> = {
-  ".json": "json",
-  ".yaml": "yaml",
-  ".yml": "yaml",
-};
-
-const chunkLanguageHelp = Array.from(
-  new Set([...Object.keys(LANG_CONFIGS).sort(), "vue", "svelte", "json", "yaml", "text"]),
-).join(", ");
-
-function normalizeChunkLanguageId(languageId: string): string {
-  return chunkLanguageAliases[languageId] ?? languageId;
 }
 
 function formatNativeBackendStatus(report: BuildReport | undefined): string | undefined {
@@ -263,44 +294,6 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--limit",
 ]);
 
-type SkillInstallAgent = "agents" | "claude" | "codex" | "cursor" | "gemini" | "opencode";
-
-type SkillDoctorReport = {
-  packageRoot: string;
-  bundledSkillDir: string | null;
-  agent?: SkillInstallAgent;
-  defaultTargetDir: string;
-  requestedTargetDir?: string;
-  installTargetDir: string;
-  cliAvailableOnPath: boolean;
-  installedSkill: {
-    targetDirExists: boolean;
-    skillFilePresent: boolean;
-    skillFilePath: string;
-  };
-};
-
-type IndexedArtifactReport = {
-  type: "jsonGraph" | "sqliteGraph" | "diskCache" | "unknown";
-  path: string;
-  exists: boolean;
-  details?: Record<string, string | number | boolean>;
-};
-
-type DoctorReport = {
-  package: {
-    name: string;
-    version: string;
-    packageRoot: string;
-  };
-  native: {
-    available: boolean;
-    loadError?: string;
-    supportedLanguageIds: string[];
-  };
-  indexArtifact?: IndexedArtifactReport;
-};
-
 type IndexCacheMetadata = {
   manifestPath: string;
   updatedAt?: number;
@@ -377,275 +370,6 @@ function writeCliProjectFileError(
   writeStdoutLine(`error: ${result.reason}: ${result.error}`);
 }
 
-function pathExists(filePath: string): boolean {
-  try {
-    fs.accessSync(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function findPackageRoot(startDir: string): string {
-  let current = path.resolve(startDir);
-  while (true) {
-    if (pathExists(path.join(current, "package.json"))) {
-      return current;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      throw new Error("Unable to locate package root from current CLI path.");
-    }
-    current = parent;
-  }
-}
-
-function getCodegraphPackageRoot(): string {
-  return findPackageRoot(path.dirname(fileURLToPath(import.meta.url)));
-}
-
-function getCodegraphVersion(): string {
-  const packageRoot = getCodegraphPackageRoot();
-  const packageJsonPath = path.join(packageRoot, "package.json");
-  const raw = fs.readFileSync(packageJsonPath, "utf8");
-  const parsed = JSON.parse(raw) as { version?: string };
-  if (!parsed.version) {
-    throw new Error("Unable to determine codegraph package version.");
-  }
-  return parsed.version;
-}
-
-function getCodegraphPackageIdentity(): DoctorReport["package"] {
-  const packageRoot = getCodegraphPackageRoot();
-  const packageJsonPath = path.join(packageRoot, "package.json");
-  const raw = fs.readFileSync(packageJsonPath, "utf8");
-  const parsed = JSON.parse(raw) as { name?: string; version?: string };
-  if (!parsed.name || !parsed.version) {
-    throw new Error("Unable to determine codegraph package identity.");
-  }
-  return {
-    name: parsed.name,
-    version: parsed.version,
-    packageRoot: normalizePathForDisplay(packageRoot),
-  };
-}
-
-function getBundledSkillDir(packageRoot: string): string | null {
-  const candidate = path.join(packageRoot, "codegraph-skill", "codegraph");
-  return pathExists(path.join(candidate, "SKILL.md")) ? candidate : null;
-}
-
-function getDefaultSkillTargetDir(): string {
-  return getSkillTargetDirForAgent("codex");
-}
-
-function getSkillTargetDirForAgent(agent: SkillInstallAgent): string {
-  const homeDir = os.homedir();
-  if (agent === "agents") {
-    return path.join(homeDir, ".agents", "skills", "codegraph");
-  }
-  if (agent === "claude") {
-    return path.join(homeDir, ".claude", "skills", "codegraph");
-  }
-  if (agent === "cursor") {
-    return path.join(homeDir, ".cursor", "skills", "codegraph");
-  }
-  if (agent === "gemini") {
-    return path.join(homeDir, ".gemini", "skills", "codegraph");
-  }
-  if (agent === "opencode") {
-    return path.join(homeDir, ".config", "opencode", "skills", "codegraph");
-  }
-  const codexHome = process.env.CODEX_HOME?.trim();
-  if (codexHome) {
-    return path.join(codexHome, "skills", "codegraph");
-  }
-  return path.join(homeDir, ".codex", "skills", "codegraph");
-}
-
-function parseSkillInstallAgent(value: string | undefined): SkillInstallAgent | undefined {
-  if (!value) return undefined;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "agents" || normalized === "universal") return "agents";
-  if (normalized === "claude" || normalized === "claude-code") return "claude";
-  if (normalized === "codex") return "codex";
-  if (normalized === "cursor" || normalized === "cursor-cli") return "cursor";
-  if (normalized === "gemini" || normalized === "gemini-cli") return "gemini";
-  if (normalized === "opencode" || normalized === "open-code") return "opencode";
-  throw new Error(`Invalid --agent value "${value}". Expected agents, claude, codex, cursor, gemini, or opencode.`);
-}
-
-function isCommandAvailableOnPath(command: string): boolean {
-  const pathValue = process.env.PATH;
-  if (!pathValue) return false;
-  const pathEntries = pathValue.split(path.delimiter).filter(Boolean);
-  const executableNames =
-    process.platform === "win32" ? [command, `${command}.cmd`, `${command}.exe`, `${command}.bat`] : [command];
-  return pathEntries.some((entry) => executableNames.some((name) => pathExists(path.join(entry, name))));
-}
-
-async function copyDirectoryRecursive(sourceDir: string, targetDir: string, overwrite: boolean): Promise<void> {
-  if (overwrite && pathExists(targetDir)) {
-    await fsp.rm(targetDir, { recursive: true, force: true });
-  }
-  await fsp.mkdir(targetDir, { recursive: true });
-  const entries = await fsp.readdir(sourceDir, { withFileTypes: true });
-  for (const entry of entries) {
-    const sourcePath = path.join(sourceDir, entry.name);
-    const targetPath = path.join(targetDir, entry.name);
-    if (entry.isDirectory()) {
-      await copyDirectoryRecursive(sourcePath, targetPath, overwrite);
-      continue;
-    }
-    if (!overwrite && pathExists(targetPath)) {
-      throw new Error(
-        `Target file already exists: ${normalizePathForDisplay(targetPath)}. Re-run with --force to overwrite.`,
-      );
-    }
-    await fsp.copyFile(sourcePath, targetPath);
-  }
-}
-
-function normalizePathSegmentForComparison(segment: string): string {
-  return process.platform === "win32" ? segment.toLowerCase() : segment;
-}
-
-function assertSafeSkillInstallTarget(targetDir: string): string {
-  const resolvedTarget = path.resolve(targetDir);
-  const targetName = normalizePathSegmentForComparison(path.basename(resolvedTarget));
-  const parentName = normalizePathSegmentForComparison(path.basename(path.dirname(resolvedTarget)));
-  if (targetName !== "codegraph" || parentName !== "skills") {
-    throw new Error(
-      `Skill install target directory must end with "${path.join("skills", "codegraph")}". ` +
-        `Received: ${normalizePathForDisplay(resolvedTarget)}`,
-    );
-  }
-  return resolvedTarget;
-}
-
-function assertSkillInstallParentExists(targetDir: string): void {
-  const parentDir = path.dirname(targetDir);
-  if (!pathExists(parentDir)) {
-    throw new Error(
-      `Skill install target parent directory does not exist: ${normalizePathForDisplay(parentDir)}. ` +
-        "Create the agent skills directory first, then rerun the install command.",
-    );
-  }
-}
-
-function resolveSkillInstallTarget(requestedTargetDir: string | undefined, requestedAgent: string | undefined) {
-  const agent = parseSkillInstallAgent(requestedAgent);
-  if (requestedTargetDir && agent) {
-    throw new Error("Use either --target or --agent for skill install, not both.");
-  }
-  const targetDir = requestedTargetDir ? requestedTargetDir : getSkillTargetDirForAgent(agent ?? "codex");
-  return {
-    agent,
-    targetDir: assertSafeSkillInstallTarget(targetDir),
-  };
-}
-
-function buildSkillDoctorReport(requestedTargetDir?: string, requestedAgent?: string): SkillDoctorReport {
-  const packageRoot = getCodegraphPackageRoot();
-  const bundledSkillDir = getBundledSkillDir(packageRoot);
-  const resolvedTarget = resolveSkillInstallTarget(requestedTargetDir, requestedAgent);
-  const defaultTargetDir = getSkillTargetDirForAgent(resolvedTarget.agent ?? "codex");
-  const installTargetDir = resolvedTarget.targetDir;
-  const skillFilePath = path.join(installTargetDir, "SKILL.md");
-  const targetDirExists = pathExists(installTargetDir);
-  return {
-    packageRoot: normalizePathForDisplay(packageRoot),
-    bundledSkillDir: bundledSkillDir ? normalizePathForDisplay(bundledSkillDir) : null,
-    ...(resolvedTarget.agent
-      ? {
-          agent: resolvedTarget.agent,
-        }
-      : {}),
-    defaultTargetDir: normalizePathForDisplay(defaultTargetDir),
-    ...(requestedTargetDir
-      ? {
-          requestedTargetDir: normalizePathForDisplay(resolvedTarget.targetDir),
-        }
-      : {}),
-    installTargetDir: normalizePathForDisplay(installTargetDir),
-    cliAvailableOnPath: isCommandAvailableOnPath("codegraph"),
-    installedSkill: {
-      targetDirExists,
-      skillFilePresent: pathExists(skillFilePath),
-      skillFilePath: normalizePathForDisplay(skillFilePath),
-    },
-  };
-}
-
-function statIfExists(filePath: string): fs.Stats | null {
-  try {
-    return fs.statSync(filePath);
-  } catch {
-    return null;
-  }
-}
-
-function detectIndexedArtifactType(filePath: string): IndexedArtifactReport["type"] {
-  const normalized = normalizePathForDisplay(filePath).toLowerCase();
-  if (normalized.endsWith("/codegraph.json") || normalized.endsWith(".json")) {
-    return "jsonGraph";
-  }
-  if (normalized.endsWith("/graph.sqlite") || normalized.endsWith(".sqlite")) {
-    return "sqliteGraph";
-  }
-  if (normalized.endsWith("/.codegraph-cache") || normalized.includes("/.codegraph-cache/")) {
-    return "diskCache";
-  }
-  return "unknown";
-}
-
-function buildIndexedArtifactReport(indexPath: string): IndexedArtifactReport {
-  const resolvedPath = path.resolve(indexPath);
-  const stats = statIfExists(resolvedPath);
-  const type = detectIndexedArtifactType(resolvedPath);
-  const diskCacheDir =
-    type === "diskCache" && stats && !stats.isDirectory() && path.basename(resolvedPath) === "manifest.json"
-      ? path.dirname(resolvedPath)
-      : resolvedPath;
-  let details:
-    | {
-        manifestPresent: boolean;
-        sqlitePresent: boolean;
-      }
-    | {
-        sizeBytes: number;
-        isDirectory: boolean;
-      }
-    | undefined;
-  if (stats && type === "diskCache") {
-    details = {
-      manifestPresent: pathExists(path.join(diskCacheDir, "manifest.json")),
-      sqlitePresent: pathExists(path.join(diskCacheDir, "index-cache.sqlite")),
-    };
-  } else if (stats) {
-    details = { sizeBytes: stats.size, isDirectory: stats.isDirectory() };
-  }
-  return {
-    type,
-    path: normalizePathForDisplay(resolvedPath),
-    exists: !!stats,
-    ...(details ? { details } : {}),
-  };
-}
-
-function buildDoctorReport(indexPath?: string): DoctorReport {
-  const loadError = getNativeTreeSitterLoadError();
-  return {
-    package: getCodegraphPackageIdentity(),
-    native: {
-      available: isNativeTreeSitterAvailable(),
-      ...(loadError ? { loadError: String(loadError) } : {}),
-      supportedLanguageIds: getNativeTreeSitterSupportedLanguageIds(),
-    },
-    ...(indexPath ? { indexArtifact: buildIndexedArtifactReport(indexPath) } : {}),
-  };
-}
-
 function parsePositiveIntegerOption(rawValue: string | undefined, optionName: string, defaultValue: number): number {
   if (rawValue === undefined) {
     return defaultValue;
@@ -655,16 +379,6 @@ function parsePositiveIntegerOption(rawValue: string | undefined, optionName: st
     throw new Error(`Invalid ${optionName} value "${rawValue}". Expected a positive integer.`);
   }
   return parsedValue;
-}
-
-function parseCacheModeOption(rawValue: string | undefined): "off" | "memory" | "disk" | undefined {
-  if (rawValue === undefined) {
-    return undefined;
-  }
-  if (rawValue === "off" || rawValue === "memory" || rawValue === "disk") {
-    return rawValue;
-  }
-  throw new Error(`Invalid --cache value "${rawValue}". Expected one of: off, memory, disk.`);
 }
 
 function defaultCacheIndexPath(projectRoot: string): string {
@@ -922,7 +636,7 @@ function parseCliArgs(tokens: string[]): ParsedCliArgs {
 async function writeCommandReport(report: CommandReport, reportFile: string | undefined) {
   const payload = JSON.stringify(report, null, 2);
   if (reportFile) {
-    const resolved = normalizePath(resolveFilePathFromRoot(process.cwd(), reportFile));
+    const resolved = normalizePath(resolveFilePathFromRoot(getCwd(), reportFile));
     await fsp.writeFile(resolved, `${payload}\n`, "utf8");
   } else {
     writeStderrLine(payload);
@@ -1417,8 +1131,7 @@ type ImpactOptionsBuilder = Partial<ImpactOptions> & {
   cacheStrict?: boolean;
 };
 
-async function main() {
-  const rawArgs = process.argv.slice(2);
+async function runCliWithActiveRuntime(rawArgs: string[]) {
   const cmd = rawArgs[0] && !rawArgs[0].startsWith("-") ? rawArgs[0] : "graph";
   const argTokens = rawArgs[0] && !rawArgs[0].startsWith("-") ? rawArgs.slice(1) : rawArgs;
 
@@ -1431,74 +1144,8 @@ async function main() {
 
   // Handle help flag
   if (hasFlag("--help") || hasFlag("-h")) {
-    writeStdoutLine(`codegraph - Code analysis and dependency graph tool
-
-Usage: codegraph <command> [options] [path]
-
-Commands:
-  graph         Build dependency graph (default)
-  doctor        Inspect backend/runtime state and local graph artifacts
-  inspect       Summarize repo structure and recommend next commands
-  skill         Install or inspect the bundled agent skill
-  version       Print the installed codegraph version
-  impact        Analyze PR impact
-  review        Generate code review report
-  goto          Go to definition
-  refs          Find references
-  chunk         Chunk file for embeddings
-  deps          List dependencies
-  rdeps         List reverse dependencies
-  cycles        Detect dependency cycles (use --sort priority|size|fanin)
-  hotspots      Find high-complexity files
-
-Graph Options:
-  --fast-graph              Skip AST parsing, use regex for imports.
-                            5-10x faster but may miss dynamic imports,
-                            re-exports, and complex patterns. Best for
-                            quick overviews of large codebases.
-    --resolve-node-modules    Include node_modules in resolution
-    --dynamic-import-heuristics  Attempt to resolve dynamic imports
-    --resolution-hint <hint>  Custom resolution hint (e.g., tsconfig:path)
-    --include-glob <glob>     Restrict discovered files to extra glob(s), relative to each scan root
-    --ignore-glob <glob>      Exclude extra discovered files by glob, relative to each scan root
-    --no-gitignore            Do not apply .gitignore files during file discovery
-
-  Build Options:
-    --threads N               Number of worker threads (default: auto)
-    --native <mode>           Native runtime mode: auto, on, off
-    --workers                 Use Piscina worker threads for native extraction
-    --cache <mode>            Cache mode: disk, memory, off
-    --limit N                 Result limit for hotspots/inspect summaries
-  --cache-strict            Use content hashes instead of mtime
-  --progress                Show progress tracking during indexing
-
-Output Options:
-  --json                    Output as JSON (default)
-  --mermaid                 Output as Mermaid diagram
-  --dot                     Output as DOT graph
-  --sqlite <path>           Write to SQLite database
-  --output <path>           Write to file instead of stdout
-
-Examples:
-  codegraph graph ./src
-  codegraph graph --fast-graph --mermaid ./src
-  codegraph version
-  codegraph doctor
-  codegraph inspect ./src --limit 20
-  codegraph graph --root . ./src --include-glob "**/*.ts" --ignore-glob "**/*.spec.ts"
-  codegraph skill install --agent agents
-  codegraph skill install --agent codex
-  codegraph skill install --agent claude
-  codegraph skill install --agent cursor
-  codegraph skill install --agent gemini
-  codegraph skill install --agent opencode
-  codegraph skill install --target ~/.codex/skills/codegraph --force
-  codegraph skill doctor
-  codegraph impact --provider git --base main --head HEAD
-  codegraph impact --provider git --base HEAD --head WORKTREE
-  codegraph refs --file src/index.ts --line 42 --col 10
-`);
-    process.exit(0);
+    writeStdoutLine(CLI_HELP_TEXT.trimEnd());
+    exitCli(0);
   }
 
   if (hasFlag("--version")) {
@@ -1524,12 +1171,12 @@ Examples:
 
     if (shouldUpdate) {
       if (process.stderr.isTTY) {
-        process.stderr.write(`\r[Progress] ${update.current}/${update.total} files processed...`);
+        getCliContext().runtime.stderr(`\r[Progress] ${update.current}/${update.total} files processed...`);
         if (isComplete) {
-          process.stderr.write("\n");
+          getCliContext().runtime.stderr("\n");
         }
       } else if (update.current === 1 || isComplete || update.current % 100 === 0) {
-        console.error(`[Progress] ${update.current}/${update.total} files processed.`);
+        getCliContext().runtime.stderr(`[Progress] ${update.current}/${update.total} files processed.\n`);
       }
       lastProgressUpdate = now;
     }
@@ -1559,7 +1206,7 @@ Examples:
   const gitHead = getOpt("--git-head");
 
   const rootOpt = getOpt("--root");
-  const resolveAbs = (p: string) => resolveFilePathFromRoot(process.cwd(), p);
+  const resolveAbs = (p: string) => resolveFilePathFromRoot(getCwd(), p);
 
   const defaultProjectRoot =
     (cmd === "graph" ||
@@ -1574,7 +1221,7 @@ Examples:
     fs.existsSync(resolveAbs(parsed.positionals[0]!)) &&
     fs.statSync(resolveAbs(parsed.positionals[0]!)).isDirectory()
       ? resolveAbs(parsed.positionals[0]!)
-      : process.cwd();
+      : getCwd();
 
   const projectRootFs = rootOpt ? resolveAbs(rootOpt) : defaultProjectRoot;
   const projectRootAbs = projectRootFs.replace(/\\/g, "/");
@@ -1601,52 +1248,16 @@ Examples:
   }
 
   if (cmd === "skill") {
-    const subcommand = parsed.positionals[0] ?? "doctor";
-    const agentOpt = getOpt("--agent");
-    const targetOpt = getOpt("--target");
-    const overwrite = hasFlag("--force");
-
-    if (subcommand === "print-path") {
-      const packageRoot = getCodegraphPackageRoot();
-      const bundledSkillDir = getBundledSkillDir(packageRoot);
-      if (!bundledSkillDir) {
-        throw new Error("Bundled codegraph skill assets were not found.");
-      }
-      writeStdoutLine(normalizePathForDisplay(bundledSkillDir));
-      return;
-    }
-
-    if (subcommand === "doctor") {
-      writeJSONLine(buildSkillDoctorReport(targetOpt, agentOpt));
-      return;
-    }
-
-    if (subcommand === "install") {
-      const packageRoot = getCodegraphPackageRoot();
-      const bundledSkillDir = getBundledSkillDir(packageRoot);
-      if (!bundledSkillDir) {
-        throw new Error("Bundled codegraph skill assets were not found.");
-      }
-      const resolvedTarget = resolveSkillInstallTarget(targetOpt, agentOpt);
-      const targetDir = resolvedTarget.targetDir;
-      assertSkillInstallParentExists(targetDir);
-      await copyDirectoryRecursive(bundledSkillDir, targetDir, overwrite);
-      writeJSONLine({
-        ...(resolvedTarget.agent
-          ? {
-              agent: resolvedTarget.agent,
-            }
-          : {}),
-        installed: true,
-        targetDir: normalizePathForDisplay(targetDir),
-        skillFilePath: normalizePathForDisplay(path.join(targetDir, "SKILL.md")),
-        sourceDir: normalizePathForDisplay(bundledSkillDir),
-      });
-      return;
-    }
-
-    writeStderrLine("Usage: codegraph skill <install|print-path|doctor> [--agent <name> | --target <dir>] [--force]");
-    process.exit(2);
+    await handleSkillCommand({
+      positionals: parsed.positionals,
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
   }
 
   const supportsIncludeRoots = cmd === "graph" || cmd === "index" || cmd === "hotspots" || cmd === "inspect";
@@ -1738,49 +1349,32 @@ Examples:
   };
 
   if (cmd === "sql") {
-    const dbOpt = getOpt("--db") ?? getOpt("--sqlite");
-    const queryText = getOpt("--query");
-    if (!dbOpt || !queryText) {
-      writeStderrLine('Usage: sql --db <sqlite path> --query "SELECT ..."');
-      process.exit(1);
-    }
-    const dbPath = path.isAbsolute(dbOpt)
-      ? normalizePath(dbOpt)
-      : normalizePath(resolveFilePathFromRoot(process.cwd(), dbOpt));
-    const result = await queryGraphSqliteRaw(dbPath, queryText);
-    writeJSONLine(result);
+    await handleSqlCommand({
+      getOpt,
+      cwd: getCwd,
+      writeJSONLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
     return;
   }
 
   if (cmd === "graph-delta") {
     const files = await resolveFiles();
-    const threads = Number(getOpt("--threads") ?? 0);
-    const cache = parseCacheModeOption(getOpt("--cache"));
-    const cacheStrict = hasFlag("--cache-strict");
-    const cacheVerify = hasFlag("--cache-verify");
-    const incrementalStrict = hasFlag("--incremental-strict");
-    const outputArg = getOpt("--output");
-    const graphOptions = hasGraphOverrides ? buildGraphOptions() : undefined;
-    const delta = await buildGraphDelta(projectRootFs, {
-      threads,
-      ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
-      ...workerOpts,
-      ...(cache !== undefined ? { cache } : {}),
-      cacheStrict,
-      cacheVerify,
-      incrementalStrict,
+    await handleGraphDeltaCommand({
+      projectRootFs,
       files,
-      ...(gitBase ? { gitBase } : {}),
-      ...(gitHead ? { gitHead } : {}),
-      ...(changedSince ? { changedSince } : {}),
-      ...(graphOptions ? { graph: graphOptions } : {}),
+      getOpt,
+      hasFlag,
+      cwd: getCwd,
+      nativeMode,
+      workerOpts,
+      graphOptions: hasGraphOverrides ? buildGraphOptions() : undefined,
+      gitBase,
+      gitHead,
+      changedSince,
+      writeJSONLine,
     });
-    const outputFile = outputArg ? normalizePath(resolveFilePathFromRoot(process.cwd(), outputArg)) : undefined;
-    if (outputFile) {
-      await fsp.writeFile(outputFile, `${toJSON(delta)}\n`, "utf8");
-    } else {
-      writeJSONLine(delta);
-    }
     return;
   }
 
@@ -1819,17 +1413,17 @@ Examples:
     const compact = defaultGraphMode || hasFlag("--compact-json");
     let outputFile: string | undefined;
     if (outputArg) {
-      outputFile = normalizePath(resolveFilePathFromRoot(process.cwd(), outputArg));
+      outputFile = normalizePath(resolveFilePathFromRoot(getCwd(), outputArg));
     } else if (defaultGraphMode && !stdoutMode) {
-      outputFile = path.resolve(process.cwd(), "codegraph.json").replace(/\\/g, "/");
+      outputFile = path.resolve(getCwd(), "codegraph.json").replace(/\\/g, "/");
     }
-    const sqliteFile = sqliteArg ? normalizePath(resolveFilePathFromRoot(process.cwd(), sqliteArg)) : undefined;
+    const sqliteFile = sqliteArg ? normalizePath(resolveFilePathFromRoot(getCwd(), sqliteArg)) : undefined;
     if (stderrArg) {
-      stderrFilePath = normalizePath(resolveFilePathFromRoot(process.cwd(), stderrArg));
+      getCliContext().stderrFilePath = normalizePath(resolveFilePathFromRoot(getCwd(), stderrArg));
     } else if (defaultGraphMode) {
-      stderrFilePath = path.resolve(process.cwd(), "codegraph.err").replace(/\\/g, "/");
+      getCliContext().stderrFilePath = path.resolve(getCwd(), "codegraph.err").replace(/\\/g, "/");
     } else {
-      stderrFilePath = undefined;
+      getCliContext().stderrFilePath = undefined;
     }
 
     const finalizeReport = async () => {
@@ -2099,7 +1693,7 @@ Examples:
     const [fileArg] = parsed.positionals;
     if (!fileArg) {
       writeStderrLine("Usage: dumpmod <file>");
-      process.exit(2);
+      exitCli(2);
     }
     const resolvedFile = resolveCliProjectFile(projectRootFs, fileArg, "File");
     if (resolvedFile.status === "error") {
@@ -2151,7 +1745,7 @@ Examples:
     const [fileArg, lineArg, colArg] = parsed.positionals;
     if (!fileArg || !lineArg || !colArg) {
       writeStderrLine("Usage: goto <file> <line> <column>");
-      process.exit(2);
+      exitCli(2);
     }
     const resolvedFile = resolveCliProjectFile(projectRootFs, fileArg, "File");
     if (resolvedFile.status === "error") {
@@ -2178,7 +1772,7 @@ Examples:
     const colArg = getOpt("--col") ?? getOpt("--column");
     if (!fileArg || !lineArg || !colArg) {
       writeStderrLine("Usage: refs --file <file> --line <line> --col <column>");
-      process.exit(2);
+      exitCli(2);
     }
     const line = Number(lineArg);
     const column = Number(colArg);
@@ -2222,7 +1816,7 @@ Examples:
       writeStderrLine(
         "Usage: grep [--root <dir>] (--query '<treesitter query>' | --pattern '<regex>') [--glob '<glob>'] [--ignore-case] [--max-hits N]",
       );
-      process.exit(2);
+      exitCli(2);
     }
 
     if (querySource) {
@@ -2424,7 +2018,7 @@ Examples:
       }
     } catch (error) {
       writeStderrLine(`Impact analysis failed: ${error instanceof Error ? error.message : String(error)}`);
-      process.exit(1);
+      exitCli(1);
     }
     return;
   }
@@ -2440,7 +2034,7 @@ Examples:
     const reviewDepth = reviewDepthRaw !== undefined ? parseReviewDepth(reviewDepthRaw) : null;
     if (reviewDepthRaw !== undefined && !reviewDepth) {
       writeStderrLine(`Invalid --review-depth value "${reviewDepthRaw}". Expected minimal|standard|deep.`);
-      process.exit(2);
+      exitCli(2);
     }
     const threadsRaw = getOpt("--threads");
     const threads = threadsRaw !== undefined ? Number(threadsRaw) : undefined;
@@ -2497,7 +2091,7 @@ Examples:
     const [fileArg] = parsed.positionals;
     if (!fileArg) {
       writeStderrLine(`Usage: ${cmd} <file> [--depth N] [--json]`);
-      process.exit(2);
+      exitCli(2);
     }
     const depthRaw = getOpt("--depth");
     const depth = depthRaw !== undefined ? Number(depthRaw) : undefined;
@@ -2535,7 +2129,7 @@ Examples:
     const [fromArg, toArg] = parsed.positionals;
     if (!fromArg || !toArg) {
       writeStderrLine("Usage: path <from-file> <to-file> [--json]");
-      process.exit(2);
+      exitCli(2);
     }
     const json = hasFlag("--json");
     const resolvedFrom = resolveCliProjectFile(projectRootFs, fromArg, "From file");
@@ -2576,7 +2170,7 @@ Examples:
       sortModeRaw === "priority" || sortModeRaw === "size" || sortModeRaw === "fanin" ? sortModeRaw : null;
     if (!sortMode) {
       writeStderrLine("Invalid --sort value. Use one of: priority, size, fanin.");
-      process.exit(2);
+      exitCli(2);
     }
 
     const graph = await collectGraph(
@@ -2722,87 +2316,35 @@ Examples:
   }
 
   if (cmd === "chunk") {
-    const filePath = parsed.positionals[0];
-    if (!filePath) {
-      writeStderrLine("Usage: chunk <file-path> [options]");
-      writeStderrLine("Options:");
-      writeStderrLine("  --min-tokens N    Minimum tokens per chunk (default: 150)");
-      writeStderrLine("  --max-tokens N    Maximum tokens per chunk (default: 400)");
-      writeStderrLine(`  --language LANG   Language override (${chunkLanguageHelp})`);
-      writeStderrLine("  --text            Force text chunking mode");
-      process.exit(2);
-    }
-
-    try {
-      const source = await fsp.readFile(filePath, "utf8");
-      const ext = path.extname(filePath).toLowerCase();
-
-      // Detect language from extension if not specified
-      let languageId = getOpt("--language");
-      if (!languageId) {
-        const support = supportForFile(filePath);
-        languageId = support ? normalizeChunkLanguageId(support.id) : chunkTextLanguageByExtension[ext] || "text";
-      } else {
-        languageId = normalizeChunkLanguageId(languageId);
-      }
-
-      const forceText = hasFlag("--text");
-      const minTokensRaw = getOpt("--min-tokens");
-      const maxTokensRaw = getOpt("--max-tokens");
-      const minTokens = minTokensRaw !== undefined ? Number(minTokensRaw) : 150;
-      const maxTokens = maxTokensRaw !== undefined ? Number(maxTokensRaw) : 400;
-
-      let chunks;
-
-      const isSFC = languageId === "vue" || languageId === "svelte";
-      if (forceText || (!isSFC && !LANG_CONFIGS[languageId])) {
-        // Use text chunking for non-code files or when forced
-        chunks = chunkTextFile({
-          source,
-          filePath,
-          languageId,
-          minTokens,
-          maxTokens,
-        });
-      } else if (isSFC) {
-        chunks = chunkSFCFile({
-          source,
-          filePath,
-          framework: languageId as "vue" | "svelte",
-          minTokens,
-          maxTokens,
-        });
-      } else {
-        // Use semantic chunking for code files
-        const langConfig = LANG_CONFIGS[languageId];
-        if (!langConfig) {
-          writeStderrLine(`Unsupported language: ${languageId}`);
-          process.exit(1);
-        }
-        chunks = chunkFile({
-          language: langConfig,
-          source,
-          filePath,
-          minTokens,
-          maxTokens,
-        });
-      }
-
-      writeJSONLine(chunks);
-    } catch (error) {
-      writeStderrLine(`Chunking failed: ${error instanceof Error ? error.message : String(error)}`);
-      process.exit(1);
-    }
+    await handleChunkCommand({
+      positionals: parsed.positionals,
+      getOpt,
+      hasFlag,
+      cwd: getCwd,
+      writeJSONLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
     return;
   }
 
   writeStderrLine(`Unknown command: ${cmd}`);
-  process.exit(1);
+  exitCli(1);
+}
+
+export async function runCli(rawArgs: string[] = process.argv.slice(2), runtime: Partial<CliRuntime> = {}): Promise<void> {
+  const context = createCliContext(runtime);
+  await cliContextStorage.run(context, async () => await runCliWithActiveRuntime(rawArgs));
 }
 
 if (isDirectCliExecution(import.meta.url)) {
-  main().catch((e) => {
-    writeError(e);
-    process.exit(1);
+  const context = createCliContext();
+  void cliContextStorage.run(context, async () => {
+    try {
+      await runCliWithActiveRuntime(process.argv.slice(2));
+    } catch (error) {
+      writeError(error);
+      exitCli(1);
+    }
   });
 }
