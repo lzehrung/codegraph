@@ -126,6 +126,17 @@ export {
   type ApiSurface,
 } from "./indexer.js";
 
+/** Refactor edit primitives and APIs. */
+export { applyEdits } from "./refactor/applyEdits.js";
+export type {
+  ApplyEditsOptions,
+  ApplyEditsResult,
+  RefactorResult,
+  SymbolRangeOptions,
+  TextEdit,
+  TriviaMode,
+} from "./refactor/types.js";
+
 /** Diff impact analysis and review-context helper APIs. */
 export {
   analyzeImpactFromDiff,
