@@ -261,14 +261,17 @@ export function extractJsTsDynamicSpecifiers(source: string, fromFile: string, p
   const out: ModuleSpecifier[] = [];
   try {
     const src = stripJsLikeComments(source);
+    const stringMask = buildStringLiteralMask(src);
     const seen = new Set<string>();
     const addSpec = (spec: string | null) => {
       if (!spec || seen.has(spec)) return;
       seen.add(spec);
       out.push({ spec, resolved: "heuristic", confidence: 0.7 });
     };
-    const pathCallRe = /(?<!["'`])\b(?:require|import)\s*\(\s*(path\.(?:join|resolve)\s*\([^)]*\))\s*\)/g;
+    const pathCallRe = /(?<!["'`])\b(?:require|import)\s*\(\s*(path\.(?:join|resolve)\s*\((?:[^()]|\([^()]*\))*\))\s*\)/g;
     for (const match of src.matchAll(pathCallRe)) {
+      const start = match.index ?? 0;
+      if (stringMask?.[start]) continue;
       const argText = match[1] ?? "";
       const parsed = parsePathCallArg(argText);
       if (!parsed) continue;
@@ -278,6 +281,8 @@ export function extractJsTsDynamicSpecifiers(source: string, fromFile: string, p
     }
     const urlCallRe = /(?<!["'`])\b(?:require|import)\s*\(\s*(new\s+URL\s*\([^)]*\))\s*\)/g;
     for (const match of src.matchAll(urlCallRe)) {
+      const start = match.index ?? 0;
+      if (stringMask?.[start]) continue;
       const argText = match[1] ?? "";
       const parsed = parseNewUrlArg(argText);
       if (!parsed) continue;

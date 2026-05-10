@@ -65,20 +65,13 @@ impl QueryCache {
         language: &Language,
         query_text: &str,
     ) -> Result<&Query> {
-        // Fast path: check with &str keys (no allocation on cache hits).
-        if let Some(by_text) = self.entries.get(language_id) {
-            if by_text.contains_key(query_text) {
-                return Ok(self.entries[language_id].get(query_text).unwrap());
-            }
+        let by_text = self.entries.entry(language_id.to_string()).or_default();
+        if !by_text.contains_key(query_text) {
+            let query = Query::new(language, query_text)
+                .map_err(|e| napi::Error::from_reason(format!("Failed to compile query: {e}")))?;
+            by_text.insert(query_text.to_string(), query);
         }
-        // Slow path: compile and insert (allocates key strings).
-        let query = Query::new(language, query_text)
-            .map_err(|e| napi::Error::from_reason(format!("Failed to compile query: {e}")))?;
-        self.entries
-            .entry(language_id.to_string())
-            .or_default()
-            .insert(query_text.to_string(), query);
-        Ok(self.entries[language_id].get(query_text).unwrap())
+        Ok(by_text.get(query_text).unwrap())
     }
 }
 
