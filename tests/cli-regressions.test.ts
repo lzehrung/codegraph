@@ -651,6 +651,18 @@ describe("CLI regressions", () => {
     );
   });
 
+  it("list-symbols supports trivia-expanded ranges", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-list-symbols-trivia-"));
+    await fsp.writeFile(path.join(tmpDir, "main.ts"), "/** Documented. */\nexport function documented() {}\n", "utf8");
+
+    const stdout = await runCliCommand(["list-symbols", "--root", tmpDir, "--trivia", "leading-doc"]);
+    const payload = JSON.parse(stdout) as {
+      symbols: Array<{ name: string; range?: { start: { line: number } } }>;
+    };
+
+    expect(payload.symbols.find((symbol) => symbol.name === "documented")?.range?.start.line).toBe(1);
+  });
+
   it("unresolved filters declared dependencies for scoped roots", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-unresolved-scoped-"));
     try {

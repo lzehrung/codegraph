@@ -168,6 +168,20 @@ describe("Agent Tools", () => {
     }
   });
 
+  it("tool_getFileOverview surfaces trivia-expanded ranges", async () => {
+    const root = await mkTmpDir("dg-agent-trivia-overview-");
+    await fsp.writeFile(path.join(root, "main.ts"), "/** Documented. */\nexport function documented() {}\n", "utf8");
+
+    const result = await tool_getFileOverview(root, "main.ts", { trivia: "leading-doc" });
+
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      const documented = result.overview.definitions.find((entry) => entry.name === "documented");
+      expect(documented?.range?.start.line).toBe(1);
+      expect(documented?.line).toBe(1);
+    }
+  });
+
   it("tool_getFileOverview distinguishes files with no symbols", async () => {
     const root = await mkTmpDir("dg-agent-overview-");
     await fsp.writeFile(path.join(root, "empty.ts"), "\n", "utf8");
@@ -330,6 +344,19 @@ describe("Agent Tools", () => {
       expect(typeof firstMatch?.exported).toBe("boolean");
       expect(firstMatch?.exactMatch).toBe(true);
       expect(firstMatch?.matchKind).toBe("exact");
+    }
+  });
+
+  it("tool_findSymbol accepts trivia-expanded ranges", async () => {
+    const root = await mkTmpDir("dg-agent-trivia-symbol-");
+    await fsp.writeFile(path.join(root, "main.ts"), "/** Documented. */\nexport function documented() {}\n", "utf8");
+
+    const result = await tool_findSymbol(root, "documented", { trivia: "leading-doc" });
+
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.matches[0]?.range?.start.line).toBe(1);
+      expect(result.matches[0]?.line).toBe(1);
     }
   });
 

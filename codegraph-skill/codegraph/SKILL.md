@@ -131,6 +131,9 @@ Runtime controls:
   `codegraph graph ./src --mermaid`
 - Detailed symbol graph:
   `codegraph graph ./src --symbols-detailed --compact-json`
+- List symbol handles with trivia-expanded ranges:
+  `codegraph list-symbols --trivia leading-doc`
+  `codegraph list-symbols --trivia leading-all --include-imports`
 - SQLite export:
   `codegraph graph --sqlite ./codegraph.sqlite`
 - Read-only SQL on exported SQLite:
@@ -243,7 +246,7 @@ import {
   tool_impactJSON,
 } from "@lzehrung/codegraph";
 
-const matches = await tool_findSymbol(root, "collectGraph", { maxResults: 10, native: "auto" });
+const matches = await tool_findSymbol(root, "collectGraph", { maxResults: 10, native: "auto", trivia: "leading-doc" });
 const deps = await tool_getDependencies(root, "src/main.ts", { depth: 2, limit: 20, native: "off" });
 const reverseDeps = await tool_getReverseDependencies(root, "src/index.ts", { depth: 2, limit: 20, native: "auto" });
 const hotspots = await tool_getHotspots(root, { limit: 20, native: "auto" });
@@ -253,6 +256,8 @@ const impact = await tool_impactJSON(root, { provider: "git", base: "main", head
 ```
 
 When integrating Codegraph into another TypeScript program, do not treat CLI prose as the contract. Use `buildReviewReport()`, `analyzeImpactFromDiff()`, or `analyzeImpactStreaming()` and preserve structured fields until the final prompt or UI rendering step.
+
+Use `trivia: "leading-doc"` when agents need ranges that select declarations with attached documentation. Use `trivia: "leading-all"` when decorators or attributes should be included too.
 
 ## Best practices
 

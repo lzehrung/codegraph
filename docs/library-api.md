@@ -242,6 +242,8 @@ if (handle) {
 }
 ```
 
+Pass `trivia: "leading-doc"` or `trivia: "leading-all"` to `listSymbols()` when a caller needs ranges that include attached docs or docs plus decorators/attributes. The cached symbol definition is not mutated; the expanded range is derived for that call.
+
 ## Impact analysis from code
 
 ```ts
@@ -347,6 +349,7 @@ Useful wrapper details:
 
 - Build a shared index once and pass it through when an agent will call several wrappers in one pass; otherwise each wrapper may rebuild the same project view.
 - `tool_findSymbol()` returns stable `id` handles plus `range`, `exported`, `exactMatch`, and `matchKind`.
+- `tool_findSymbol()` and `tool_getFileOverview()` accept `trivia: "leading-doc" | "leading-all"` when agents need selection ranges that include attached documentation or attributes.
 - `tool_goToDefinition()` and `tool_findReferences()` surface additive `provenance` metadata when the resolver used imports, namespaces, or other non-local paths.
 - `tool_getDependencies()`, `tool_getReverseDependencies()`, and `tool_getHotspots()` ignore non-finite `limit` values and clamp non-positive finite values to empty bounded results instead of returning malformed slices.
 - The batch impact wrappers include `schemaVersion` and `format: "full" | "compact"` so downstream agents do not have to infer payload shape; streaming `complete.report` uses `format: "stream-summary"`.

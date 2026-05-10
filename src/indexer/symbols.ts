@@ -9,6 +9,8 @@ import type {
   SymbolListItem,
 } from "./types.js";
 import { findReferences, resolveExport, resolveImported } from "./navigation.js";
+import { getSymbolRange } from "../refactor/trivia.js";
+import type { TriviaMode } from "../refactor/types.js";
 
 export function symbolId(def: SymbolDef): SymbolHandle {
   const index = def?.range?.start?.index ?? 0;
@@ -110,7 +112,10 @@ export async function findReferencesById(index: ProjectIndex, id: SymbolHandle) 
   return await findReferences(index, { def });
 }
 
-export function listSymbols(index: ProjectIndex, opts?: { file?: string; includeImports?: boolean }): SymbolListItem[] {
+export function listSymbols(
+  index: ProjectIndex,
+  opts?: { file?: string; includeImports?: boolean; trivia?: TriviaMode },
+): SymbolListItem[] {
   const out: SymbolListItem[] = [];
   const files = opts?.file ? [opts.file.replace(/\\/g, "/")] : Array.from(index.byFile.keys());
 
@@ -123,7 +128,9 @@ export function listSymbols(index: ProjectIndex, opts?: { file?: string; include
         file,
         name: def.localName,
         kind: def.kind,
-        range: def.range,
+        range: getSymbolRange(index, def, {
+          ...(opts?.trivia ? { trivia: opts.trivia } : {}),
+        }),
         ...(def.docstring ? { docstring: def.docstring } : {}),
       });
     }

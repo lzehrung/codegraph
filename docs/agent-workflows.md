@@ -241,6 +241,7 @@ const root = process.cwd();
 const index = await buildProjectIndex(root);
 const overview = await tool_getFileOverview(root, "src/utils.ts", { index });
 const matches = await tool_findSymbol(root, "collectGraph", { index });
+const documentedMatches = await tool_findSymbol(root, "collectGraph", { index, trivia: "leading-doc" });
 const deps = await tool_getDependencies(root, "src/main.ts", { depth: 2, limit: 20, index });
 const reverseDeps = await tool_getReverseDependencies(root, "src/index.ts", { depth: 2, limit: 20, index });
 const hotspots = await tool_getHotspots(root, { limit: 20, index });
@@ -266,6 +267,7 @@ Wrapper notes:
 - Native runtime control is not passed uniformly across all wrappers: `tool_goToDefinition` and `tool_findReferences` accept trailing runtime options, while `tool_findSymbol`, `tool_getDependencies`, `tool_getReverseDependencies`, and `tool_getHotspots` take `native` inside their options object.
 - `tool_getFileOverview` returns structured `ok`, `not_found`, and `error` variants so agents can distinguish missing files from invalid inputs cleanly.
 - `tool_findSymbol` returns stable `id` handles plus `range`, `exported`, `exactMatch`, and `matchKind`.
+- Use `trivia: "leading-doc"` or `trivia: "leading-all"` with `tool_findSymbol` or `tool_getFileOverview` when an agent needs a range that selects attached docs or decorators with the declaration.
 - `tool_goToDefinition` and `tool_findReferences` include additive `provenance` metadata when resolution is not just a local binding lookup.
 - Prefer `tool_getDependencies`, `tool_getReverseDependencies`, and `tool_getHotspots` before `tool_getGraph` when the agent only needs a bounded graph slice.
 - Batch impact wrappers return `schemaVersion` and `format: "full" | "compact"` so downstream prompts can branch on payload shape directly; streaming `complete.report` uses `format: "stream-summary"`.

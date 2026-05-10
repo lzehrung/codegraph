@@ -12,6 +12,7 @@ Commands:
   review        Generate code review report
   goto          Go to definition
   refs          Find references
+  list-symbols  List symbol handles and ranges
   chunk         Chunk file for embeddings
   deps          List dependencies
   rdeps         List reverse dependencies
@@ -38,6 +39,7 @@ Graph Options:
     --limit N                 Result limit for hotspots/inspect summaries
     --cache-strict            Use content hashes instead of mtime
     --progress                Show progress tracking during indexing
+    --trivia <mode>           Symbol range mode: exclude, leading-doc, leading-all
 
 Output Options:
   --json                    Output as JSON (default)
@@ -64,4 +66,5 @@ Examples:
   codegraph impact --provider git --base main --head HEAD
   codegraph impact --provider git --base HEAD --head WORKTREE
   codegraph refs --file src/index.ts --line 42 --col 10
+  codegraph list-symbols --trivia leading-doc
 `;

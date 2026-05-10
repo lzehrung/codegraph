@@ -120,6 +120,7 @@ export {
   resolveSymbolId,
   goToDefinitionById,
   findReferencesById,
+  getSymbolRange,
   type SymbolListItem,
   listSymbols,
   getApiSurface,

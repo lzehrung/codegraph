@@ -67,6 +67,7 @@ Real `inspect ./src --limit 10` output against this repo looks like:
 
 - Multi-language dependency graphs, including imports, re-exports, `require()`, dynamic imports, workspace resolution, document links, stylesheet imports, and SFC script dependencies.
 - Per-file symbol indexes with locals, exports, docstrings, line spans, and lightweight complexity metadata.
+- Optional trivia-aware symbol ranges for selecting declarations with attached docs and decorators.
 - Cross-file go-to-definition and find-references support across the shared source-language pipeline.
 - Semantic chunking for code and text files, including Vue and Svelte single-file component block splitting.
 - AST grep, public API summaries, unresolved import reports, hotspot analysis, cycle detection, and shortest dependency paths.

@@ -12,8 +12,10 @@ import {
   goToDefinition,
   findReferences,
   getApiSurface,
+  listSymbols,
 } from "./indexer.js";
 import type { BuildOptions, BuildReport } from "./indexer/types.js";
+import type { TriviaMode } from "./refactor/types.js";
 import { buildReviewReport, type ReviewBuildReport, type ReviewDepth } from "./review.js";
 import {
   collectGraph,
@@ -292,6 +294,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--agent",
   "--target",
   "--limit",
+  "--trivia",
 ]);
 
 type IndexCacheMetadata = {
@@ -1119,6 +1122,14 @@ function parseNativeRuntimeMode(value: string | undefined): NativeRuntimeMode {
   throw new Error(`Invalid --native value "${value}". Expected auto|on|off.`);
 }
 
+function parseTriviaMode(value: string | undefined): TriviaMode {
+  if (value === undefined) return "exclude";
+  if (value === "exclude" || value === "leading-doc" || value === "leading-all") {
+    return value;
+  }
+  throw new Error(`Invalid --trivia value "${value}". Expected exclude|leading-doc|leading-all.`);
+}
+
 type ImpactOptionsBuilder = Partial<ImpactOptions> & {
   base?: string;
   head?: string;
@@ -1212,6 +1223,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     (cmd === "graph" ||
       cmd === "graph-delta" ||
       cmd === "index" ||
+      cmd === "list-symbols" ||
       cmd === "grep" ||
       cmd === "hotspots" ||
       cmd === "inspect" ||
@@ -1260,7 +1272,8 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return;
   }
 
-  const supportsIncludeRoots = cmd === "graph" || cmd === "index" || cmd === "hotspots" || cmd === "inspect";
+  const supportsIncludeRoots =
+    cmd === "graph" || cmd === "index" || cmd === "list-symbols" || cmd === "hotspots" || cmd === "inspect";
   let includeRoots: string[] = [];
   if (supportsIncludeRoots) {
     if (rootOpt) {
@@ -1375,6 +1388,27 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       changedSince,
       writeJSONLine,
     });
+    return;
+  }
+
+  if (cmd === "list-symbols") {
+    const files = await resolveFiles();
+    const trivia = parseTriviaMode(getOpt("--trivia"));
+    const index = await buildProjectIndexFromFiles(projectRootFs, files, {
+      onProgress: progressHandler,
+      discovery: discoveryOptions,
+      keepParsed: trivia !== "exclude",
+      ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+      ...workerOpts,
+    });
+    const symbols = listSymbols(index, {
+      includeImports: hasFlag("--include-imports"),
+      trivia,
+    }).map((symbol) => ({
+      ...symbol,
+      file: path.relative(projectRootFs, symbol.file).replace(/\\/g, "/") || symbol.file,
+    }));
+    writeJSONLine({ symbols });
     return;
   }
 

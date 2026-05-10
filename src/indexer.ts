@@ -131,6 +131,8 @@ export {
   symbolId,
 } from "./indexer/symbols.js";
 
+export { getSymbolRange } from "./refactor/trivia.js";
+
 export function collectLocalsAndExportsFromSource(
   file: string,
   source: string,

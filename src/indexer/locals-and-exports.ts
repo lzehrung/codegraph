@@ -15,6 +15,7 @@ import { maskJsLikeCommentsAndStrings, sliceText, toRange, unquote } from "../ut
 import { buildScopeIndexFromSource } from "./scope.js";
 import { QUERY_DRIVEN_LOCALS_LANGUAGES } from "./shared.js";
 import { SymbolKind } from "./types.js";
+import { getDeclarationAnchor } from "../refactor/trivia.js";
 import type { LanguageSupport } from "../languages.js";
 import type { JsLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { ExportEntry, ImportBinding, ModuleIndex, SymbolDef } from "./types.js";
@@ -198,20 +199,8 @@ export function collectLocalsAndExportsFromSource(
   const _sourceLines = source.split(/\r?\n/);
 
   const extractLeadingDocstring = (node: SyntaxNodeLike | null): string | undefined => {
-    if (!node) return undefined;
-    // If we're looking at an identifier, look at its parent (the declaration)
-    let target = node;
-    if (target.type === "identifier" || target.type === "type_identifier" || target.type === "property_identifier") {
-      if (target.parent) target = target.parent;
-    }
-    // Handle variable declarators - climb to declaration statement
-    if (target.type === "variable_declarator" && target.parent) {
-      target = target.parent;
-    }
-    // Handle export statements wrapping the declaration
-    if (target.parent && target.parent.type === "export_statement") {
-      target = target.parent;
-    }
+    const target = getDeclarationAnchor(node);
+    if (!target) return undefined;
 
     const comments: string[] = [];
     let prev = target.previousNamedSibling;

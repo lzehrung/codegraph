@@ -12,6 +12,7 @@ import type { CompactImpactReport, ImpactOptions, ImpactReport } from "./impact/
 import type { Edge, Range } from "./types.js";
 import { collectGraph, getDependencies, getReverseDependencies, getHotspots } from "./graphs.js";
 import type { NativeRuntimeMode } from "./native/treeSitterNative.js";
+import type { TriviaMode } from "./refactor/types.js";
 import {
   fileExists,
   isFilePathWithinRoot,
@@ -25,6 +26,7 @@ import { getFiniteNonNegativeLimit } from "./graphs/limits.js";
 type ToolRuntimeOptions = {
   index?: ProjectIndex;
   native?: NativeRuntimeMode;
+  trivia?: TriviaMode;
 };
 
 /** Import entry rendered for agent tool responses. */
@@ -40,6 +42,7 @@ export type ToolFileOverviewDefinition = {
   id: string;
   name: string;
   kind: string;
+  range?: Range;
   line?: number;
   exported: boolean;
   docstring?: string;
@@ -184,7 +187,7 @@ export async function tool_getFileOverview(
       return missing;
     }
 
-    const symbols = listSymbolsForOverview(index, absPath);
+    const symbols = listSymbolsForOverview(index, absPath, runtimeOptions.trivia);
     const overview = buildToolFileOverview(root, symbols);
     const renderedOverview = renderToolFileOverview(relativeFile, overview);
 
@@ -217,6 +220,7 @@ export async function tool_findSymbol(
     maxResults?: number;
     index?: ProjectIndex;
     native?: NativeRuntimeMode;
+    trivia?: TriviaMode;
   } = {},
 ): Promise<{
   status: "ok" | "error";
@@ -230,7 +234,10 @@ export async function tool_findSymbol(
         logLevel: "error",
         ...(options.native ? { native: options.native } : {}),
       }));
-    const allSymbols = listSymbols(index, { includeImports: false });
+    const allSymbols = listSymbols(index, {
+      includeImports: false,
+      ...(options.trivia ? { trivia: options.trivia } : {}),
+    });
     const q = query.toLowerCase();
 
     const matches = allSymbols
@@ -566,12 +573,17 @@ function resolveToolFileInput(
 function listSymbolsForOverview(
   index: ProjectIndex,
   file: string,
+  trivia?: TriviaMode,
 ): {
   imports: ImportBinding[];
   definitions: ReturnType<typeof listSymbols>;
   exportedDefinitions: Set<string>;
 } {
-  const symbols = listSymbols(index, { file, includeImports: false });
+  const symbols = listSymbols(index, {
+    file,
+    includeImports: false,
+    ...(trivia ? { trivia } : {}),
+  });
   const mod = index.byFile.get(file);
   return {
     imports: mod?.imports ?? [],
@@ -601,6 +613,7 @@ function buildToolFileOverview(
       id: def.id,
       name: def.name,
       kind: String(def.kind),
+      ...(def.range ? { range: def.range } : {}),
       ...(def.range ? { line: def.range.start.line } : {}),
       exported: isExportedSymbolDefinition(symbols.exportedDefinitions, def),
       ...(def.docstring ? { docstring: def.docstring } : {}),
