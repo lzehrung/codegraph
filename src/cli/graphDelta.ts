@@ -3,6 +3,7 @@ import { buildGraphDelta, type IncrementalBuildOptions } from "../indexer.js";
 import type { GraphBuildOptions } from "../graphs.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { normalizePath, resolveFilePathFromRoot } from "../util.js";
+import { parseCacheModeOption } from "./options.js";
 
 export type GraphDeltaCommandContext = {
   projectRootFs: string;
@@ -21,7 +22,7 @@ export type GraphDeltaCommandContext = {
 
 export async function handleGraphDeltaCommand(context: GraphDeltaCommandContext): Promise<void> {
   const threads = Number(context.getOpt("--threads") ?? 0);
-  const cache = parseCacheMode(context.getOpt("--cache"));
+  const cache = parseCacheModeOption(context.getOpt("--cache"));
   const cacheStrict = context.hasFlag("--cache-strict");
   const cacheVerify = context.hasFlag("--cache-verify");
   const incrementalStrict = context.hasFlag("--incremental-strict");
@@ -48,10 +49,4 @@ export async function handleGraphDeltaCommand(context: GraphDeltaCommandContext)
   } else {
     context.writeJSONLine(delta);
   }
-}
-
-function parseCacheMode(value: string | undefined): "disk" | "memory" | "off" | undefined {
-  if (value === undefined) return undefined;
-  if (value === "disk" || value === "memory" || value === "off") return value;
-  throw new Error(`Invalid --cache value "${value}". Expected disk|memory|off.`);
 }

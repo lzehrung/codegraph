@@ -340,7 +340,7 @@ export async function resolveWorkspacePackage(
   resolutionExtensions?: readonly string[],
 ): Promise<string | null> {
   if (!ws) return null;
-  const { name, subpath } = resolvePackageSubpath(spec);
+  const { name } = resolvePackageSubpath(spec);
   const pkg = ws.packages.get(name);
   if (!pkg) return null;
   for (const candidate of listWorkspacePackageResolutionCandidates(spec, ws, resolutionExtensions)) {

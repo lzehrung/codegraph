@@ -53,6 +53,7 @@ import { handleChunkCommand } from "./cli/chunk.js";
 import { buildDoctorReport } from "./cli/doctor.js";
 import { handleGraphDeltaCommand } from "./cli/graphDelta.js";
 import { CLI_HELP_TEXT } from "./cli/help.js";
+import { parseCacheModeOption } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
 import { handleSkillCommand } from "./cli/skill.js";
 import { handleSqlCommand } from "./cli/sql.js";
@@ -378,16 +379,6 @@ function parsePositiveIntegerOption(rawValue: string | undefined, optionName: st
     throw new Error(`Invalid ${optionName} value "${rawValue}". Expected a positive integer.`);
   }
   return parsedValue;
-}
-
-function parseCacheModeOption(rawValue: string | undefined): "off" | "memory" | "disk" | undefined {
-  if (rawValue === undefined) {
-    return undefined;
-  }
-  if (rawValue === "off" || rawValue === "memory" || rawValue === "disk") {
-    return rawValue;
-  }
-  throw new Error(`Invalid --cache value "${rawValue}". Expected one of: off, memory, disk.`);
 }
 
 function defaultCacheIndexPath(projectRoot: string): string {

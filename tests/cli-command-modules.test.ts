@@ -211,6 +211,27 @@ describe("CLI command modules", () => {
     }
   });
 
+  test("uses shared cache-mode validation in the extracted graph-delta command handler", async () => {
+    await expect(
+      handleGraphDeltaCommand({
+        projectRootFs: process.cwd(),
+        files: [],
+        getOpt: (name) => (name === "--cache" ? "banana" : undefined),
+        hasFlag: () => false,
+        cwd: () => process.cwd(),
+        nativeMode: "auto",
+        workerOpts: {},
+        graphOptions: undefined,
+        gitBase: undefined,
+        gitHead: undefined,
+        changedSince: undefined,
+        writeJSONLine: () => {
+          throw new Error("unexpected json stdout");
+        },
+      }),
+    ).rejects.toThrow('Invalid --cache value "banana". Expected one of: off, memory, disk.');
+  });
+
   test("chunks files through the extracted chunk command handler", async () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-chunk-module-"));
     const filePath = path.join(tempDir, "sample.ts");
