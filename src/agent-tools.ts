@@ -107,7 +107,7 @@ export type ToolHotspotEntry = {
   score: number;
 };
 
-export type ToolRefactorRenameResult = RefactorResult & {
+export type ToolRefactorResult = RefactorResult & {
   diff: string;
 };
 
@@ -236,12 +236,7 @@ export async function tool_findSymbol(
   error?: string;
 }> {
   try {
-    const index =
-      options.index ??
-      (await buildProjectIndex(root, {
-        logLevel: "error",
-        ...(options.native ? { native: options.native } : {}),
-      }));
+    const index = await getToolIndex(root, options);
     const allSymbols = listSymbols(index, {
       includeImports: false,
       ...(options.trivia ? { trivia: options.trivia } : {}),
@@ -320,7 +315,7 @@ export async function tool_refactorRename(
     index?: ProjectIndex;
     native?: NativeRuntimeMode;
   },
-): Promise<ToolRefactorRenameResult> {
+): Promise<ToolRefactorResult> {
   try {
     const index = await getToolIndex(root, options);
     const result = await renameSymbol(index, options.symbol, options.to);
@@ -347,7 +342,7 @@ export async function tool_refactorMove(
     index?: ProjectIndex;
     native?: NativeRuntimeMode;
   },
-): Promise<ToolRefactorRenameResult> {
+): Promise<ToolRefactorResult> {
   try {
     const index = await getToolIndex(root, options);
     const targetFile = normalizePathArg(root, options.toFile);
@@ -376,7 +371,7 @@ export async function tool_refactorExtract(
     index?: ProjectIndex;
     native?: NativeRuntimeMode;
   },
-): Promise<ToolRefactorRenameResult> {
+): Promise<ToolRefactorResult> {
   try {
     const index = await getToolIndex(root, options);
     const file = normalizePathArg(root, options.file);
@@ -617,10 +612,12 @@ function normalizePathArg(root: string, file: string): string {
 }
 
 async function getToolIndex(root: string, options: ToolRuntimeOptions): Promise<ProjectIndex> {
+  const needsTriviaRanges = options.trivia !== undefined && options.trivia !== "exclude";
   return (
     options.index ??
     (await buildProjectIndex(root, {
       logLevel: "error",
+      ...(needsTriviaRanges ? { keepParsed: needsTriviaRanges } : {}),
       ...(options.native ? { native: options.native } : {}),
     }))
   );

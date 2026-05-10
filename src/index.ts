@@ -243,7 +243,7 @@ export {
   type ToolSymbolMatch,
   type ToolDependencyEntry,
   type ToolHotspotEntry,
-  type ToolRefactorRenameResult,
+  type ToolRefactorResult,
 } from "./agent-tools.js";
 
 /** SQLite graph persistence and query helpers. */

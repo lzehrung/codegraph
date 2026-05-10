@@ -7,8 +7,6 @@ import { isValidIdentifier } from "./identifier.js";
 
 export interface ExtractOptions {
   newName: string;
-  intoFile?: FileId;
-  preserveAsync?: boolean;
 }
 
 function lineStarts(source: string): number[] {
@@ -48,7 +46,8 @@ type FunctionEnvelope = {
 };
 
 function findFunctionEnvelope(source: string, regionStart: number, regionEnd: number): FunctionEnvelope | null {
-  const pattern = /function\s+[A-Za-z_$][A-Za-z0-9_$]*\s*\((?<params>[^)]*)\)\s*\{/g;
+  const pattern =
+    /(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+[A-Za-z_$][A-Za-z0-9_$]*\s*\((?<params>[^)]*)\)\s*\{/g;
   let found: FunctionEnvelope | null = null;
   for (let match: RegExpExecArray | null = pattern.exec(source); match; match = pattern.exec(source)) {
     const bodyStart = match.index + match[0].length;

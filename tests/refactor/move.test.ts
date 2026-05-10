@@ -67,4 +67,27 @@ describe("moveSymbol", () => {
       },
     );
   });
+
+  test("separates appended declarations from target files without trailing newlines", async () => {
+    await withProject(
+      {
+        "src/source.ts": "export function greet() { return 'hi'; }\n",
+        "src/target.ts": "export const existing = 1;",
+      },
+      async (root, files) => {
+        const index = await buildProjectIndexFromFiles(root, Object.values(files), { keepParsed: true });
+        const handle = listSymbols(index, { file: files["src/source.ts"] }).find((symbol) => symbol.name === "greet")?.id;
+        expect(handle).toBeDefined();
+        if (!handle) return;
+
+        const result = await moveSymbol(index, handle, files["src/target.ts"]!);
+
+        expect(result.status).toBe("ok");
+        await applyEdits(result.edits);
+        await expect(readFile(files["src/target.ts"]!, "utf8")).resolves.toBe(
+          "export const existing = 1;\nexport function greet() { return 'hi'; }\n",
+        );
+      },
+    );
+  });
 });

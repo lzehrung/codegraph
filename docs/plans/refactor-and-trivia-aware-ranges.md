@@ -447,10 +447,6 @@ to file B. Update imports/exports so the world still compiles.
 ```ts
 export interface MoveOptions {
   trivia?: TriviaMode;          // default "leading-all"
-  createTargetFile?: boolean;   // default true
-  exportFromTarget?: boolean;   // default true — `export` keyword in target
-  leaveSourceShim?: boolean;    // default false — `export { x } from "./target"` in source
-  importStyle?: "named" | "default" | "preserve"; // default "preserve"
 }
 
 export async function moveSymbol(
@@ -478,23 +474,11 @@ export async function moveSymbol(
       Trim a trailing blank line if present so we don't leave a double
       blank.
 - [ ] Emit an insertion `TextEdit` for the target file:
-  - If file does not exist and `createTargetFile`, insertion at offset 0.
-  - Else, append after the last import-statement block (compute via
-    `mod.imports`'s last range; fall back to offset 0).
+  - If file does not exist, insertion at offset 0.
+  - Else, append at EOF.
   - Prefix `body` with `\n` if needed.
-- [ ] **Export shape in the target.** If the source declaration was
-      `export …`, preserve the `export` keyword in the moved text. If
-      it wasn't exported, but `exportFromTarget` is true, wrap or
-      prepend `export` per the language. Per-language wrap rules live
-      in `src/refactor/exportShape.ts`:
-  - TS/JS: prepend `export `.
-  - Python: nothing — module-level names are exported by name; ensure
-    `__all__` updates if present.
-  - Go: capitalize first letter? **No** — that's a rename, not a move.
-    Reject move when crossing package boundaries with an unexported name.
-  - Rust: prepend `pub`.
-  - Java/C#/Kotlin/Swift: requires class context — `move` between
-    top-level files is `unsupported` for these in v1.
+- [ ] **Export shape in the target.** Preserve the declaration text as
+      moved. v1 does not add or remove export modifiers.
 - [ ] **Import rewriting in every file referencing the symbol:**
   - For each module that imports from the original file, change the
     specifier to point at `targetFile`. **Before adding a new helper,**
@@ -506,11 +490,6 @@ export async function moveSymbol(
   - For files that referenced the symbol but did not import it (same
     file as the declaration), add a new import at the top of the
     surviving source file pointing at the target.
-- [ ] **Optional source-shim** (`leaveSourceShim: true`) emits
-      `export { x } from "<target>"` in the original file. Useful for
-      staged migrations where some importers live outside the indexed
-      workspace and rewriting them is impossible. Default off because
-      shims accumulate.
 - [ ] Reject as `unsupported` when:
   - The symbol participates in an export-star chain we can't statically
     follow (`getApiSurface` returns `exportStar` upstream).
@@ -526,7 +505,8 @@ export async function moveSymbol(
   - Move an exported function across two files, with three importers,
     one of which imports two unrelated names → expect import split.
   - Move with leading JSDoc → docs travel.
-  - Move into a brand-new file with `createTargetFile: true`.
+  - Move into a brand-new file.
+  - Move into a target file without a trailing newline.
   - Reject move with `export *` chain.
   - Per-language coverage matching `docs/language-parity.md` —
     add an entry to `docs/scenario-catalog.md` (`AGENTS.md:12`).
@@ -551,10 +531,6 @@ file via Phase 3 composition).
 ```ts
 export interface ExtractOptions {
   newName: string;
-  /** When set, after extracting also move into this file. */
-  intoFile?: FileId;
-  /** Preserve `async` if any awaited expressions in region. Default true. */
-  preserveAsync?: boolean;
 }
 
 export async function extractFunction(
@@ -598,8 +574,6 @@ export async function extractFunction(
     Per language, use `def`, `function`, `const … = (…) =>`, etc. The
     existing language definitions hold enough metadata to choose
     syntax; one helper per language in `src/refactor/extract-emit/`.
-- [ ] If `intoFile` set, run `moveSymbol` on the freshly created
-      function as a follow-up step in the same `RefactorResult`.
 
 ## 4.3 Tests
 
@@ -627,11 +601,12 @@ have.
 - [ ] CLI subcommands in `src/cli.ts` (also surface help text in
       `src/cli/help.ts`):
   - `codegraph refactor rename (--symbol <handle> | --at <file>:<line>:<col>) --to <name> [--apply] [--json] [--git]`
-  - `codegraph refactor move   (--symbol <handle> | --at <file>:<line>:<col>) --to-file <path> [--leave-shim] [--apply] [--json] [--git]`
-  - `codegraph refactor extract --file <path> --range <startLine:endLine> --to <name> [--into-file <path>] [--apply] [--json] [--git]`
+  - `codegraph refactor move   (--symbol <handle> | --at <file>:<line>:<col>) --to-file <path> [--apply] [--json] [--git]`
+  - `codegraph refactor extract --file <path> --range <startLine:endLine> --to <name> [--apply] [--json] [--git]`
   - All three share the canonical `RefactorResult` JSON shape.
-  Default output: unified diff to stdout. With `--apply`, write files
-  and report `{ written: [...], conflicts: [...] }`.
+  Default output: JSON edits. With `--text`, print a compact edit summary.
+  With `--apply`, write files
+  and report `{ writes: [...], conflicts: [...], skipped: [...] }`.
 - [ ] JSON-tool wrappers in `src/agent-tools.ts`:
   - `tool_refactorRename`, `tool_refactorMove`, `tool_refactorExtract`.
   Each returns `{ status, edits, warnings, diff }` with the same

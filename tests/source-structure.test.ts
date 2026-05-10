@@ -64,4 +64,20 @@ describe("source module structure", () => {
     }
     expect(sourceLineCount("src/cli.ts")).toBeLessThanOrEqual(2400);
   });
+
+  test("keeps refactor public surfaces aligned with implemented behavior", () => {
+    const extractSource = fs.readFileSync(path.join(repoRoot, "src/refactor/extract.ts"), "utf8");
+    const moveSource = fs.readFileSync(path.join(repoRoot, "src/refactor/move.ts"), "utf8");
+    const agentSource = fs.readFileSync(path.join(repoRoot, "src/agent-tools.ts"), "utf8");
+
+    expect(extractSource).not.toContain("intoFile");
+    expect(extractSource).not.toContain("preserveAsync");
+    expect(moveSource).not.toContain("createTargetFile");
+    expect(moveSource).not.toContain("exportFromTarget");
+    expect(moveSource).not.toContain("leaveSourceShim");
+    expect(moveSource).not.toContain("importStyle");
+    expect(agentSource).toContain("type ToolRefactorResult");
+    expect(agentSource).not.toContain("ToolRefactorRenameResult");
+    expect(agentSource).toContain("keepParsed: needsTriviaRanges");
+  });
 });

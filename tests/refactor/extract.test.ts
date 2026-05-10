@@ -38,6 +38,8 @@ describe("extractFunction", () => {
         expect(source).toContain("function emitGreeting(name)");
         expect(source).toContain("emitGreeting(name);");
         expect(source).toContain("const greeting = `hi ${name}`;");
+        expect(source).toContain("export function run(name: string)");
+        expect(source).not.toContain("export function emitGreeting");
       },
     );
   });

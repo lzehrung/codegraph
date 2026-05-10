@@ -8,10 +8,6 @@ import type { RefactorResult, TextEdit, TriviaMode } from "./types.js";
 
 export interface MoveOptions {
   trivia?: TriviaMode;
-  createTargetFile?: boolean;
-  exportFromTarget?: boolean;
-  leaveSourceShim?: boolean;
-  importStyle?: "named" | "default" | "preserve";
 }
 
 function rangeToDeleteEdit(file: string, start: number, end: number, source: string): TextEdit {
@@ -24,11 +20,13 @@ function rangeToDeleteEdit(file: string, start: number, end: number, source: str
   return { file, start, end: deleteEnd, newText: "" };
 }
 
-function insertionPointForTarget(targetFile: string): number {
+function readTargetInsertion(targetFile: string, body: string): { offset: number; text: string } {
   try {
-    return fs.readFileSync(targetFile, "utf8").length;
+    const source = fs.readFileSync(targetFile, "utf8");
+    const prefix = source.length > 0 && !source.endsWith("\n") ? "\n" : "";
+    return { offset: source.length, text: `${prefix}${body}\n` };
   } catch {
-    return 0;
+    return { offset: 0, text: `${body}\n` };
   }
 }
 
@@ -144,13 +142,14 @@ export function moveSymbol(
   }
 
   const body = source.slice(start, end).trimEnd();
+  const insertion = readTargetInsertion(normalizedTarget, body);
   const edits: TextEdit[] = [
     rangeToDeleteEdit(def.file, start, end, source),
     {
       file: normalizedTarget,
-      start: insertionPointForTarget(normalizedTarget),
-      end: insertionPointForTarget(normalizedTarget),
-      newText: `${body}\n`,
+      start: insertion.offset,
+      end: insertion.offset,
+      newText: insertion.text,
     },
   ];
 
