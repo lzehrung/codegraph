@@ -15,28 +15,83 @@ export type ModuleSpecifier = {
 
 function buildStringLiteralMask(source: string): boolean[] {
   const mask = new Array<boolean>(source.length).fill(false);
-  let quote: "'" | '"' | "`" | null = null;
   for (let i = 0; i < source.length; i++) {
     const ch = source[i]!;
-    if (quote) {
-      mask[i] = true;
-      if (ch === "\\") {
-        const nextIndex = i + 1;
-        if (nextIndex < source.length) {
-          mask[nextIndex] = true;
-          i = nextIndex;
-        }
-        continue;
-      }
-      if (ch === quote) quote = null;
+    if (ch === "'" || ch === `"`) {
+      i = maskQuotedString(source, mask, i, ch) - 1;
       continue;
     }
-    if (ch === "'" || ch === `"` || ch === "`") {
-      quote = ch;
-      mask[i] = true;
+    if (ch === "`") {
+      i = maskTemplateLiteral(source, mask, i) - 1;
     }
   }
   return mask;
+}
+
+function maskQuotedString(source: string, mask: boolean[], start: number, quote: "'" | `"`): number {
+  for (let i = start; i < source.length; i++) {
+    const ch = source[i]!;
+    mask[i] = true;
+    if (ch === "\\") {
+      const nextIndex = i + 1;
+      if (nextIndex < source.length) {
+        mask[nextIndex] = true;
+        i = nextIndex;
+      }
+      continue;
+    }
+    if (i > start && ch === quote) return i + 1;
+  }
+  return source.length;
+}
+
+function maskTemplateLiteral(source: string, mask: boolean[], start: number): number {
+  mask[start] = true;
+  for (let i = start + 1; i < source.length; i++) {
+    const ch = source[i]!;
+    mask[i] = true;
+    if (ch === "\\") {
+      const nextIndex = i + 1;
+      if (nextIndex < source.length) {
+        mask[nextIndex] = true;
+        i = nextIndex;
+      }
+      continue;
+    }
+    if (ch === "`") return i + 1;
+    if (ch === "$" && source[i + 1] === "{") {
+      mask[i + 1] = true;
+      i = scanTemplateExpression(source, mask, i + 2) - 1;
+    }
+  }
+  return source.length;
+}
+
+function scanTemplateExpression(source: string, mask: boolean[], start: number): number {
+  let depth = 1;
+  for (let i = start; i < source.length; i++) {
+    const ch = source[i]!;
+    if (ch === "'" || ch === `"`) {
+      i = maskQuotedString(source, mask, i, ch) - 1;
+      continue;
+    }
+    if (ch === "`") {
+      i = maskTemplateLiteral(source, mask, i) - 1;
+      continue;
+    }
+    if (ch === "{") {
+      depth += 1;
+      continue;
+    }
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        mask[i] = true;
+        return i + 1;
+      }
+    }
+  }
+  return source.length;
 }
 
 export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {

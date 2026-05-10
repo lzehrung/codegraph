@@ -97,6 +97,20 @@ describe("Import extraction fallback reporting", () => {
     expect(specs.map((entry) => entry.spec)).toEqual(["./real", "./dynamic"]);
   });
 
+  it("extracts import calls inside template literal interpolations", () => {
+    const source = [
+      "const dynamic = `load ${import('./dep')}`;",
+      'const required = `load ${require("./req")}`;',
+      'const nestedString = `skip ${"import(\'./not-real\')"}`;',
+      'const nestedTemplate = `skip ${`require("./also-not-real")`}`;',
+      "const literalText = `skip import('./literal-only')`;",
+    ].join("\n");
+
+    const specs = extractJsTsSpecifiers(source);
+
+    expect(specs.map((entry) => entry.spec)).toEqual(["./dep", "./req"]);
+  });
+
   it("reports native backend availability and usage", async () => {
     const root = await mkTmpDir("cg-native-report-");
     const main = path.join(root, "main.ts");
