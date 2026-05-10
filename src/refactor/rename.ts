@@ -14,10 +14,16 @@ function editKey(file: string, range: Range): string {
   return `${file}:${range.start.index ?? 0}:${range.end.index ?? 0}`;
 }
 
-function rangeToEdit(file: string, range: Range, newText: string): TextEdit | null {
+function rangeToEdit(file: string, range: Range, oldText: string, newText: string): TextEdit | null {
   const start = range.start.index;
   const end = range.end.index;
   if (start === undefined || end === undefined || end < start) return null;
+  try {
+    const source = fs.readFileSync(file, "utf8");
+    if (source.slice(start, end) !== oldText) return null;
+  } catch {
+    return null;
+  }
   return {
     file,
     start,
@@ -125,7 +131,7 @@ export async function renameSymbol(
 
   const edits: TextEdit[] = [];
   const seen = new Set<string>();
-  const declarationEdit = rangeToEdit(def.file, def.range, newName);
+  const declarationEdit = rangeToEdit(def.file, def.range, def.localName, newName);
   if (declarationEdit) {
     edits.push(declarationEdit);
     seen.add(editKey(def.file, def.range));
@@ -134,7 +140,7 @@ export async function renameSymbol(
   for (const reference of references.references) {
     const key = editKey(reference.file, reference.range);
     if (seen.has(key)) continue;
-    const edit = rangeToEdit(reference.file, reference.range, newName);
+    const edit = rangeToEdit(reference.file, reference.range, def.localName, newName);
     if (!edit) continue;
     edits.push(edit);
     seen.add(key);
