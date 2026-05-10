@@ -35,7 +35,7 @@ export async function directoryExists(p: string): Promise<boolean> {
 }
 
 async function findWorkspaceRoot(startDir: string): Promise<string | null> {
-  let dir = startDir;
+  let dir = path.resolve(startDir);
   while (true) {
     const pkgJson = path.join(dir, "package.json");
     const pnpmYaml = path.join(dir, "pnpm-workspace.yaml");
@@ -196,7 +196,7 @@ type MinimalLernaJson = {
 };
 
 export async function loadWorkspaceConfig(projectRoot: string): Promise<WorkspaceConfig | undefined> {
-  const root = (await findWorkspaceRoot(projectRoot)) ?? projectRoot;
+  const root = (await findWorkspaceRoot(projectRoot)) ?? path.resolve(projectRoot);
   if (workspaceCache.has(root)) return workspaceCache.get(root)!;
 
   const packages = new Map<string, WorkspacePackageInfo>();
