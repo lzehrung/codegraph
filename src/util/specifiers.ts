@@ -13,10 +13,37 @@ export type ModuleSpecifier = {
   confidence?: number;
 };
 
+function buildStringLiteralMask(source: string): boolean[] {
+  const mask = new Array<boolean>(source.length).fill(false);
+  let quote: "'" | '"' | "`" | null = null;
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i]!;
+    if (quote) {
+      mask[i] = true;
+      if (ch === "\\") {
+        const nextIndex = i + 1;
+        if (nextIndex < source.length) {
+          mask[nextIndex] = true;
+          i = nextIndex;
+        }
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === `"` || ch === "`") {
+      quote = ch;
+      mask[i] = true;
+    }
+  }
+  return mask;
+}
+
 export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
   try {
     const src = stripJsLikeComments(source);
+    const stringMask = buildStringLiteralMask(src);
     const push = (spec: string, typeOnly?: boolean) => {
       if (spec) out.push({ spec, ...(typeOnly ? { typeOnly: true } : {}) });
     };
@@ -25,6 +52,8 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
       /^\s*import\s+[^\n;]*?\s+from\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|\bexport\s+[^\n;]*?\s+from\s+["']([^"']+)["']|\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\brequire\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\bimport\(\s*["']([^"']+)["']\s*\)/gm;
 
     for (const m of src.matchAll(combined)) {
+      const start = m.index ?? 0;
+      if (stringMask[start]) continue;
       const spec = m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? m[6];
       if (!spec) continue;
       const text = m[0] ?? "";

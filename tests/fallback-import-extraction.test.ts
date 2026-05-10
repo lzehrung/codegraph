@@ -83,6 +83,20 @@ describe("Import extraction fallback reporting", () => {
     expect(specs[0]?.typeOnly).toBe(true);
   });
 
+  it("ignores import and require examples inside string literals", () => {
+    const source = [
+      'const loggedRequire = "call require(\\"./not-real\\") in docs";',
+      "const loggedImport = 'call import(\"./also-not-real\") in docs';",
+      "const loggedExport = `export { thing } from \"./template-doc\"`;",
+      "const actual = require('./real')",
+      "const dynamic = import('./dynamic')",
+    ].join("\n");
+
+    const specs = extractJsTsSpecifiers(source);
+
+    expect(specs.map((entry) => entry.spec)).toEqual(["./real", "./dynamic"]);
+  });
+
   it("reports native backend availability and usage", async () => {
     const root = await mkTmpDir("cg-native-report-");
     const main = path.join(root, "main.ts");
