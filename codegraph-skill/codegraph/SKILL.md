@@ -159,7 +159,7 @@ The `sql` command accepts read-only result-producing statements such as `SELECT`
 
 Prefer `refs` over plain text search when you want semantic usages rather than every matching string.
 
-Use `refactor rename` for conservative semantic renames. Use `refactor move` for TypeScript and JavaScript top-level declarations when named ES importers should be rewritten with the declaration. For rename and move, pass either `--symbol <handle>` from `list-symbols` or `--at <file>:<line>:<column>` when cursor location is easier. Use `refactor extract` for inclusive contiguous TypeScript and JavaScript statement line ranges inside one function body. These commands return deterministic edits by default and reject unsupported shapes instead of guessing.
+Use `refactor rename` for conservative semantic renames. Use `refactor move` for TypeScript and JavaScript top-level declarations when named ES importers should be rewritten with the declaration. For rename and move, pass either `--symbol <handle>` from `list-symbols` or `--at <file>:<line>:<column>` when cursor location is easier. Use `refactor extract` for inclusive contiguous TypeScript and JavaScript statement line ranges inside one function body. These commands return deterministic edits by default and reject unsupported shapes instead of guessing; `--text` prints status, reason, and warnings for unsupported or error results.
 
 ### PR and diff impact
 

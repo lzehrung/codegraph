@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
@@ -67,6 +68,46 @@ describe("applyEdits", () => {
       await applyEdits([edit(file, 5, 5, "middle\n")]);
 
       await expect(readFile(file, "utf8")).resolves.toBe("one\r\nmiddle\r\ntwo\r\n");
+    });
+  });
+
+  test("stages newly created files relative to the requested git root", async () => {
+    await withTempDir(async (dir) => {
+      execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+      const file = path.join(dir, "src", "created.ts");
+      const previousCwd = process.cwd();
+      process.chdir(tmpdir());
+      try {
+        const result = await applyEdits([edit(file, 0, 0, "export const created = 1;\n")], {
+          useGit: true,
+          gitCwd: dir,
+        });
+
+        expect(result.writes).toEqual([file]);
+        expect(result.warnings).toEqual([]);
+        const status = execFileSync("git", ["status", "--short"], { cwd: dir, encoding: "utf8" });
+        expect(status).toContain("A  src/created.ts");
+      } finally {
+        process.chdir(previousCwd);
+      }
+    });
+  });
+
+  test("keeps successful writes when git staging fails and reports a warning", async () => {
+    await withTempDir(async (dir) => {
+      const nonRepo = path.join(dir, "not-a-repo");
+      const file = path.join(dir, "created.ts");
+      await mkdir(nonRepo, { recursive: true });
+
+      const result = await applyEdits([edit(file, 0, 0, "export const created = 1;\n")], {
+        useGit: true,
+        gitCwd: nonRepo,
+      });
+
+      await expect(readFile(file, "utf8")).resolves.toBe("export const created = 1;\n");
+      expect(result.writes).toEqual([file]);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toContain("git add failed");
     });
   });
 });

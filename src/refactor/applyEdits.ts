@@ -67,9 +67,29 @@ async function writeAtomically(file: string, text: string): Promise<void> {
   await rename(tempFile, file);
 }
 
-async function trackWithGit(file: string, existed: boolean, useGit: boolean | undefined): Promise<void> {
-  if (!useGit || existed) return;
-  await execFileAsync("git", ["add", "--", file]);
+function gitPath(file: string, gitCwd: string | undefined): string {
+  if (!gitCwd) return file;
+  const relative = path.relative(gitCwd, file);
+  const insideGitCwd = relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+  if (insideGitCwd) {
+    return relative;
+  }
+  return file;
+}
+
+function errorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/\s+/g, " ").trim();
+}
+
+async function trackWithGit(file: string, existed: boolean, opts: ApplyEditsOptions | undefined): Promise<string | undefined> {
+  if (!opts?.useGit || existed) return undefined;
+  try {
+    await execFileAsync("git", ["add", "--", gitPath(file, opts.gitCwd)], { cwd: opts.gitCwd });
+    return undefined;
+  } catch (error) {
+    return `git add failed for ${file}: ${errorMessage(error)}`;
+  }
 }
 
 export async function applyEdits(edits: TextEdit[], opts?: ApplyEditsOptions): Promise<ApplyEditsResult> {
@@ -85,6 +105,7 @@ export async function applyEdits(edits: TextEdit[], opts?: ApplyEditsOptions): P
     conflicts: [],
     skipped: [],
     previews: {},
+    warnings: [],
   };
   const plans: FilePlan[] = [];
 
@@ -112,7 +133,8 @@ export async function applyEdits(edits: TextEdit[], opts?: ApplyEditsOptions): P
 
   for (const plan of plans) {
     await writeAtomically(plan.file, plan.text);
-    await trackWithGit(plan.file, plan.existed, opts?.useGit);
+    const warning = await trackWithGit(plan.file, plan.existed, opts);
+    if (warning) result.warnings.push(warning);
     result.writes.push(plan.file);
   }
 

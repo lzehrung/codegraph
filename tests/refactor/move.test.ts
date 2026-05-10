@@ -57,6 +57,34 @@ describe("moveSymbol", () => {
     );
   });
 
+  test("preserves explicit import extensions when rewriting importers", async () => {
+    await withProject(
+      {
+        "src/source.ts": "export function greet() { return 'hi'; }\nexport const other = 1;\n",
+        "src/main.ts": "import { greet, other } from './source.js';\nconsole.log(greet(), other);\n",
+      },
+      async (root, files) => {
+        const index = await buildProjectIndexFromFiles(root, Object.values(files), { keepParsed: true });
+        const handle = listSymbols(index, { file: files["src/source.ts"] }).find(
+          (symbol) => symbol.name === "greet",
+        )?.id;
+        expect(handle).toBeDefined();
+        if (!handle) return;
+
+        const result = await moveSymbol(index, handle, path.join(root, "src/target.ts").replace(/\\/g, "/"));
+
+        expect(result.status).toBe("ok");
+        await applyEdits(result.edits);
+        await expect(readFile(files["src/main.ts"]!, "utf8")).resolves.toContain(
+          "import { greet } from './target.js';",
+        );
+        await expect(readFile(files["src/main.ts"]!, "utf8")).resolves.toContain(
+          "import { other } from './source.js';",
+        );
+      },
+    );
+  });
+
   test("adds an import when a moved declaration is still used by source-file siblings", async () => {
     await withProject(
       {

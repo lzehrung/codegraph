@@ -35,11 +35,18 @@ function readTargetInsertion(targetFile: string, body: string): { offset: number
   }
 }
 
-function relativeSpecifier(fromFile: string, toFile: string): string {
+function explicitSpecifierExtension(specifier: string | undefined): string {
+  if (!specifier) return "";
+  return path.posix.extname(specifier);
+}
+
+function relativeSpecifier(fromFile: string, toFile: string, originalSpecifier?: string): string {
   const fromDir = path.dirname(fromFile);
   const parsed = path.parse(toFile);
-  const targetWithoutExtension = path.join(parsed.dir, parsed.name);
-  let relative = path.relative(fromDir, targetWithoutExtension).replace(/\\/g, "/");
+  const targetExtension = explicitSpecifierExtension(originalSpecifier);
+  const targetName = targetExtension ? `${parsed.name}${targetExtension}` : parsed.name;
+  const targetPath = path.join(parsed.dir, targetName);
+  let relative = path.relative(fromDir, targetPath).replace(/\\/g, "/");
   if (!relative.startsWith(".")) {
     relative = `./${relative}`;
   }
@@ -85,7 +92,7 @@ function importEditForSpecifier(modFile: string, from: string, name: string, tar
     if (moved.length === 0) continue;
     const remaining = parts.filter((part) => !moved.includes(part));
     const quote = match.groups?.["quote"] ?? "'";
-    const targetSpecifier = relativeSpecifier(modFile, targetFile);
+    const targetSpecifier = relativeSpecifier(modFile, targetFile, from);
     const replacement =
       remaining.length > 0
         ? `import { ${remaining.join(", ")} } from ${quote}${from}${quote};\nimport { ${moved.join(", ")} } from ${quote}${targetSpecifier}${quote};`

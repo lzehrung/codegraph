@@ -770,6 +770,31 @@ describe("CLI regressions", () => {
     expect(result.edits.some((edit) => edit.newText.includes("function greet"))).toBe(true);
   });
 
+  it("refactor apply text mode reports git staging warnings", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-refactor-git-warning-"));
+    const srcDir = path.join(tmpDir, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(path.join(srcDir, "source.ts"), "export function greet() { return 'hi'; }\n", "utf8");
+
+    const stdout = await runCliCommand([
+      "refactor",
+      "move",
+      "--root",
+      tmpDir,
+      "--at",
+      "src/source.ts:1:17",
+      "--to-file",
+      "src/target.ts",
+      "--apply",
+      "--git",
+      "--text",
+    ]);
+
+    expect(stdout).toContain("Warnings:");
+    expect(stdout).toContain("git add failed");
+    await expect(fsp.readFile(path.join(srcDir, "target.ts"), "utf8")).resolves.toContain("function greet");
+  });
+
   it("refactor extract emits JSON edits", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-refactor-extract-"));
     await fsp.writeFile(
@@ -796,6 +821,29 @@ describe("CLI regressions", () => {
     expect(result.status).toBe("ok");
     expect(result.edits.some((edit) => edit.newText.includes("function emitName"))).toBe(true);
     expect(result.edits.some((edit) => edit.newText.includes("emitName(name);"))).toBe(true);
+  });
+
+  it("refactor text mode explains unsupported results with no edits", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-refactor-text-"));
+    await fsp.writeFile(path.join(tmpDir, "main.ts"), "export const value = 1;\n", "utf8");
+
+    const stdout = await runCliCommand([
+      "refactor",
+      "extract",
+      "--root",
+      tmpDir,
+      "--file",
+      "main.ts",
+      "--range",
+      "1:1",
+      "--to",
+      "extractValue",
+      "--text",
+    ]);
+
+    expect(stdout).toContain("Status: unsupported");
+    expect(stdout).toContain("Reason:");
+    expect(stdout.trim().length).toBeGreaterThan(0);
   });
 
   it("refactor extract treats CLI line ranges as inclusive", async () => {

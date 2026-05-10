@@ -265,7 +265,8 @@ const handle = listSymbols(index).find((item) => item.name === "greet")?.id;
 if (handle) {
   const result = await renameSymbol(index, handle, "salute");
   if (result.status === "ok") {
-    await applyEdits(result.edits, { useGit: true });
+    const applied = await applyEdits(result.edits, { useGit: true, gitCwd: root });
+    for (const warning of applied.warnings) console.warn(warning);
   }
 }
 ```

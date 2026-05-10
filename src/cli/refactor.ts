@@ -6,7 +6,7 @@ import { applyEdits } from "../refactor/applyEdits.js";
 import { extractFunction } from "../refactor/extract.js";
 import { moveSymbol } from "../refactor/move.js";
 import { renameSymbol } from "../refactor/rename.js";
-import type { RefactorResult, TextEdit } from "../refactor/types.js";
+import type { ApplyEditsResult, RefactorResult, TextEdit } from "../refactor/types.js";
 import type { ProjectFileDiscoveryOptions } from "../util.js";
 
 export type RefactorCommandContext = {
@@ -67,25 +67,54 @@ function renderRefactorEdits(projectRoot: string, edits: TextEdit[]): string {
     .join("\n");
 }
 
+function renderRefactorResult(projectRoot: string, result: RefactorResult): string {
+  if (result.status === "ok") {
+    return renderRefactorEdits(projectRoot, result.edits);
+  }
+
+  const lines = [`Status: ${result.status}`];
+  if (result.reason) {
+    lines.push(`Reason: ${result.reason}`);
+  }
+  if (result.warnings.length > 0) {
+    lines.push("Warnings:");
+    lines.push(...result.warnings.map((warning) => `- ${warning}`));
+  }
+  const edits = renderRefactorEdits(projectRoot, result.edits);
+  if (edits) {
+    lines.push("Edits:", edits);
+  }
+  return lines.join("\n");
+}
+
+function renderAppliedRefactorResult(projectRoot: string, result: RefactorResult, applied: ApplyEditsResult): string {
+  const lines = [renderRefactorEdits(projectRoot, result.edits)].filter((line) => line.length > 0);
+  if (applied.warnings.length > 0) {
+    lines.push("Warnings:");
+    lines.push(...applied.warnings.map((warning) => `- ${warning}`));
+  }
+  return lines.join("\n");
+}
+
 async function writeRefactorResult(
   context: RefactorCommandContext,
   result: RefactorResult,
   options: { json: boolean; apply: boolean; useGit: boolean },
 ): Promise<void> {
   if (options.apply && result.status === "ok") {
-    const applied = await applyEdits(result.edits, { useGit: options.useGit });
+    const applied = await applyEdits(result.edits, { useGit: options.useGit, gitCwd: context.projectRootFs });
     if (options.json) {
       context.writeJSONLine({ ...result, applied });
       return;
     }
-    context.writeStdoutLine(renderRefactorEdits(context.projectRootFs, result.edits));
+    context.writeStdoutLine(renderAppliedRefactorResult(context.projectRootFs, result, applied));
     return;
   }
   if (options.json) {
     context.writeJSONLine(result);
     return;
   }
-  context.writeStdoutLine(renderRefactorEdits(context.projectRootFs, result.edits));
+  context.writeStdoutLine(renderRefactorResult(context.projectRootFs, result));
 }
 
 export async function handleRefactorCommand(context: RefactorCommandContext): Promise<void> {

@@ -24,6 +24,7 @@ export interface RefactorResult {
 export interface ApplyEditsOptions {
   dryRun?: boolean;
   useGit?: boolean;
+  gitCwd?: string;
 }
 
 export interface ApplyEditsResult {
@@ -31,4 +32,5 @@ export interface ApplyEditsResult {
   conflicts: string[];
   skipped: string[];
   previews: Record<string, string>;
+  warnings: string[];
 }
