@@ -111,6 +111,17 @@ export type ToolRefactorResult = RefactorResult & {
   diff: string;
 };
 
+type ToolSymbolLocation = {
+  file: string;
+  line: number;
+  column: number;
+};
+
+type ToolSymbolTarget = {
+  symbol?: string;
+  at?: ToolSymbolLocation;
+};
+
 /**
  * Agent-friendly tool wrapper for PR impact analysis.
  *
@@ -309,8 +320,7 @@ export async function tool_findSymbol(
  */
 export async function tool_refactorRename(
   root: string,
-  options: {
-    symbol: string;
+  options: ToolSymbolTarget & {
     to: string;
     index?: ProjectIndex;
     native?: NativeRuntimeMode;
@@ -318,7 +328,8 @@ export async function tool_refactorRename(
 ): Promise<ToolRefactorResult> {
   try {
     const index = await getToolIndex(root, options);
-    const result = await renameSymbol(index, options.symbol, options.to);
+    const symbol = await resolveToolRefactorSymbol(root, index, options);
+    const result = await renameSymbol(index, symbol, options.to);
     return {
       ...result,
       diff: renderRefactorDiff(root, result.edits),
@@ -336,8 +347,7 @@ export async function tool_refactorRename(
 
 export async function tool_refactorMove(
   root: string,
-  options: {
-    symbol: string;
+  options: ToolSymbolTarget & {
     toFile: string;
     index?: ProjectIndex;
     native?: NativeRuntimeMode;
@@ -346,7 +356,8 @@ export async function tool_refactorMove(
   try {
     const index = await getToolIndex(root, options);
     const targetFile = normalizePathArg(root, options.toFile);
-    const result = await moveSymbol(index, options.symbol, targetFile);
+    const symbol = await resolveToolRefactorSymbol(root, index, options);
+    const result = await moveSymbol(index, symbol, targetFile);
     return {
       ...result,
       diff: renderRefactorDiff(root, result.edits),
@@ -375,13 +386,17 @@ export async function tool_refactorExtract(
   try {
     const index = await getToolIndex(root, options);
     const file = normalizePathArg(root, options.file);
-    const result = await extractFunction(index, {
-      file,
-      range: {
-        start: { line: options.range.startLine, column: 1 },
-        end: { line: options.range.endLine, column: 1 },
+    const result = await extractFunction(
+      index,
+      {
+        file,
+        range: {
+          start: { line: options.range.startLine, column: 1 },
+          end: { line: options.range.endLine + 1, column: 1 },
+        },
       },
-    }, { newName: options.to });
+      { newName: options.to },
+    );
     return {
       ...result,
       diff: renderRefactorDiff(root, result.edits),
@@ -640,6 +655,25 @@ function getToolLimit(limit: number | undefined): number | undefined {
 function getToolDefaultedLimit(limit: number | undefined, fallback: number): number {
   const normalizedLimit = getFiniteNonNegativeLimit(limit);
   return normalizedLimit ?? fallback;
+}
+
+async function resolveToolRefactorSymbol(root: string, index: ProjectIndex, target: ToolSymbolTarget): Promise<string> {
+  if (target.symbol && target.at) {
+    throw new Error("Pass either symbol or at, not both.");
+  }
+  if (target.symbol) return target.symbol;
+  if (!target.at) {
+    throw new Error("Missing symbol or at.");
+  }
+  const file = normalizePathArg(root, target.at.file);
+  if (!isFilePathWithinRoot(root, file)) {
+    throw new Error(`File is outside project root: ${normalizePath(target.at.file)}`);
+  }
+  const result = await goToDefinition(index, { file, line: target.at.line, column: target.at.column });
+  if (result.status !== "ok") {
+    throw new Error(`Could not resolve location: ${result.reason}`);
+  }
+  return symbolId(result.definition);
 }
 
 function renderRefactorDiff(root: string, edits: TextEdit[]): string {

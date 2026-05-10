@@ -4,7 +4,10 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { applyEdits, buildProjectIndexFromFiles, listSymbols, renameSymbol } from "../../src/index.js";
 
-async function withProject<T>(files: Record<string, string>, fn: (root: string, files: Record<string, string>) => Promise<T>): Promise<T> {
+async function withProject<T>(
+  files: Record<string, string>,
+  fn: (root: string, files: Record<string, string>) => Promise<T>,
+): Promise<T> {
   const root = await mkdtemp(path.join(tmpdir(), "codegraph-rename-"));
   try {
     const absolute: Record<string, string> = {};
@@ -40,6 +43,29 @@ describe("renameSymbol", () => {
         await expect(readFile(files["utils.ts"]!, "utf8")).resolves.toContain("function salute()");
         await expect(readFile(files["main.ts"]!, "utf8")).resolves.toContain("import { salute }");
         await expect(readFile(files["main.ts"]!, "utf8")).resolves.toContain("salute());");
+      },
+    );
+  });
+
+  test("renames exported declarations without breaking aliased named importers", async () => {
+    await withProject(
+      {
+        "utils.ts": "export function greet() { return 'hi'; }\n",
+        "main.ts": "import { greet as localGreet } from './utils';\nconsole.log(localGreet());\n",
+      },
+      async (root, files) => {
+        const index = await buildProjectIndexFromFiles(root, Object.values(files), { keepParsed: true });
+        const handle = listSymbols(index, { file: files["utils.ts"] }).find((symbol) => symbol.name === "greet")?.id;
+        expect(handle).toBeDefined();
+        if (!handle) return;
+
+        const result = await renameSymbol(index, handle, "salute");
+
+        expect(result.status).toBe("ok");
+        await applyEdits(result.edits);
+        await expect(readFile(files["utils.ts"]!, "utf8")).resolves.toContain("function salute()");
+        await expect(readFile(files["main.ts"]!, "utf8")).resolves.toContain("import { salute as localGreet }");
+        await expect(readFile(files["main.ts"]!, "utf8")).resolves.toContain("localGreet());");
       },
     );
   });

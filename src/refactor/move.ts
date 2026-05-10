@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveSymbolId } from "../indexer/symbols.js";
+import { findReferencesById, resolveSymbolId } from "../indexer/symbols.js";
 import type { ProjectIndex, SymbolHandle } from "../indexer/types.js";
 import type { FileId } from "../types.js";
 import { getSymbolRange } from "./trivia.js";
@@ -10,13 +10,18 @@ export interface MoveOptions {
   trivia?: TriviaMode;
 }
 
-function rangeToDeleteEdit(file: string, start: number, end: number, source: string): TextEdit {
+function deleteEndForRange(end: number, source: string): number {
   let deleteEnd = end;
   if (source.slice(deleteEnd, deleteEnd + 2) === "\r\n") {
     deleteEnd += 2;
   } else if (source[deleteEnd] === "\n") {
     deleteEnd += 1;
   }
+  return deleteEnd;
+}
+
+function rangeToDeleteEdit(file: string, start: number, end: number, source: string): TextEdit {
+  const deleteEnd = deleteEndForRange(end, source);
   return { file, start, end: deleteEnd, newText: "" };
 }
 
@@ -105,7 +110,16 @@ function targetHasCollision(index: ProjectIndex, targetFile: string, name: strin
   return mod.locals.some((local) => local.localName === name);
 }
 
-export function moveSymbol(
+function importInsertionOffset(source: string): number {
+  const importBlock = /^(?:\s*import\b[^\n]*(?:\r?\n|$))+/u.exec(source);
+  return importBlock ? importBlock[0].length : 0;
+}
+
+function importFromMovedTarget(sourceFile: string, name: string, targetFile: string): string {
+  return `import { ${name} } from '${relativeSpecifier(sourceFile, targetFile)}';\n`;
+}
+
+export async function moveSymbol(
   index: ProjectIndex,
   id: SymbolHandle,
   targetFile: FileId,
@@ -113,38 +127,55 @@ export function moveSymbol(
 ): Promise<RefactorResult> {
   const def = resolveSymbolId(index, id);
   if (!def) {
-    return Promise.resolve({ status: "error", edits: [], warnings: [], reason: "unknown handle" });
+    return { status: "error", edits: [], warnings: [], reason: "unknown handle" };
   }
   const normalizedTarget = path.resolve(targetFile).replace(/\\/g, "/");
   if (def.file === normalizedTarget) {
-    return Promise.resolve({ status: "unsupported", edits: [], warnings: [], reason: "symbol is already in target file" });
+    return { status: "unsupported", edits: [], warnings: [], reason: "symbol is already in target file" };
   }
   if (targetHasCollision(index, normalizedTarget, def.localName)) {
-    return Promise.resolve({ status: "unsupported", edits: [], warnings: [], reason: `target already declares ${def.localName}` });
+    return { status: "unsupported", edits: [], warnings: [], reason: `target already declares ${def.localName}` };
   }
 
   let source: string;
   try {
     source = fs.readFileSync(def.file, "utf8");
   } catch (error) {
-    return Promise.resolve({
+    return {
       status: "error",
       edits: [],
       warnings: [],
       reason: error instanceof Error ? error.message : String(error),
-    });
+    };
   }
   const fullRange = getSymbolRange(index, def, { trivia: opts.trivia ?? "leading-all" });
   const start = fullRange.start.index;
   const end = fullRange.end.index;
   if (start === undefined || end === undefined || end < start) {
-    return Promise.resolve({ status: "error", edits: [], warnings: [], reason: "symbol range does not include byte offsets" });
+    return { status: "error", edits: [], warnings: [], reason: "symbol range does not include byte offsets" };
   }
 
   const body = source.slice(start, end).trimEnd();
   const insertion = readTargetInsertion(normalizedTarget, body);
+  const deleteEnd = deleteEndForRange(end, source);
+  const references = await findReferencesById(index, id);
+  if (references.status !== "ok") {
+    return { status: "error", edits: [], warnings: [], reason: references.reason };
+  }
+  const sourceKeepsReference = references.references.some((reference) => {
+    const referenceStart = reference.range.start.index;
+    return (
+      reference.file === def.file &&
+      referenceStart !== undefined &&
+      (referenceStart < start || deleteEnd <= referenceStart)
+    );
+  });
+  const importText = sourceKeepsReference ? importFromMovedTarget(def.file, def.localName, normalizedTarget) : "";
+  const sourceImportOffset = importInsertionOffset(source);
+  const deleteEditNewText =
+    importText && start <= sourceImportOffset && sourceImportOffset <= deleteEnd ? importText : "";
   const edits: TextEdit[] = [
-    rangeToDeleteEdit(def.file, start, end, source),
+    { ...rangeToDeleteEdit(def.file, start, end, source), newText: deleteEditNewText },
     {
       file: normalizedTarget,
       start: insertion.offset,
@@ -152,6 +183,9 @@ export function moveSymbol(
       newText: insertion.text,
     },
   ];
+  if (importText && deleteEditNewText.length === 0) {
+    edits.push({ file: def.file, start: sourceImportOffset, end: sourceImportOffset, newText: importText });
+  }
 
   for (const mod of index.byFile.values()) {
     const sourceSpecifiers = new Set(
@@ -165,5 +199,5 @@ export function moveSymbol(
     }
   }
 
-  return Promise.resolve({ status: "ok", edits, warnings: [] });
+  return { status: "ok", edits, warnings: [] };
 }

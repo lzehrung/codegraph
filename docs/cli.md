@@ -82,9 +82,11 @@ codegraph list-symbols --trivia leading-all --include-imports
 # Build semantic rename edits from a stable symbol handle
 codegraph refactor rename --symbol <handle> --to newName --json
 codegraph refactor rename --symbol <handle> --to newName --apply
+codegraph refactor rename --at src/main.ts:42:10 --to newName --json
 
 # Move a TypeScript/JavaScript top-level declaration and rewrite named importers
 codegraph refactor move --symbol <handle> --to-file src/target.ts --json
+codegraph refactor move --at src/main.ts:42:10 --to-file src/target.ts --json
 
 # Extract contiguous TypeScript/JavaScript statements into a top-level helper
 codegraph refactor extract --file src/main.ts --range 10:14 --to helper --json
@@ -116,11 +118,11 @@ codegraph grep --pattern 'eval\(' --ignore-case
 
 `list-symbols --trivia exclude|leading-doc|leading-all` keeps the default bare symbol ranges unless requested. `leading-doc` expands ranges to attached leading comment docs, while `leading-all` also includes supported decorators or attributes.
 
-`refactor rename` accepts definition handles from `list-symbols` and returns deterministic text edits by default. Add `--apply` to write the edits to disk. When a refactor creates new files, `--git` with `--apply` stages those new files.
+`refactor rename` accepts definition handles from `list-symbols` or `--at <file>:<line>:<column>` locations resolved through go-to-definition. It returns deterministic text edits by default. Add `--apply` to write the edits to disk. When a refactor creates new files, `--git` with `--apply` stages those new files.
 
-`refactor move` supports TypeScript and JavaScript top-level declarations in v1. It moves the trivia-aware declaration text, creates the target file when needed, and rewrites named ES importers that Codegraph can resolve.
+`refactor move` supports TypeScript and JavaScript top-level declarations in v1. It accepts `--symbol` or `--at`, moves the trivia-aware declaration text, creates the target file when needed, and rewrites named ES importers that Codegraph can resolve.
 
-`refactor extract` supports contiguous TypeScript and JavaScript statement ranges inside one function body. v1 rejects early `return` regions and emits edits only; apply them with `--apply` after reviewing the JSON or diff.
+`refactor extract` supports inclusive contiguous TypeScript and JavaScript statement line ranges inside one function body. v1 rejects early `return`, unsupported control-flow, context-sensitive bindings, and selected declarations used after the range. It emits edits only; apply them with `--apply` after reviewing the JSON or diff.
 
 ### Dependency analysis and diagnostics
 

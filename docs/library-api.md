@@ -249,7 +249,14 @@ Pass `trivia: "leading-doc"` or `trivia: "leading-all"` to `listSymbols()` when 
 Use stable definition handles with `renameSymbol()` to build deterministic edits without writing files. Use `applyEdits()` as a separate step when the caller is ready to modify the worktree.
 
 ```ts
-import { applyEdits, buildProjectIndex, extractFunction, listSymbols, moveSymbol, renameSymbol } from "@lzehrung/codegraph";
+import {
+  applyEdits,
+  buildProjectIndex,
+  extractFunction,
+  listSymbols,
+  moveSymbol,
+  renameSymbol,
+} from "@lzehrung/codegraph";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
@@ -263,11 +270,11 @@ if (handle) {
 }
 ```
 
-`renameSymbol()` currently supports semantic definition renames and rejects import-alias handles. The returned edit list includes declaration, reference, and simple named-import specifier edits when those locations can be resolved safely.
+`renameSymbol()` currently supports semantic definition renames and rejects import-alias handles. The returned edit list includes declaration, reference, and named-import specifier edits, including aliased specifiers, when those locations can be resolved safely.
 
-`moveSymbol(index, handle, targetFile)` moves TypeScript and JavaScript top-level declarations with leading trivia and rewrites named ES importers. Unsupported languages or unsafe target collisions return `{ status: "unsupported" }`.
+`moveSymbol(index, handle, targetFile)` moves TypeScript and JavaScript top-level declarations with leading trivia, rewrites named ES importers, and imports the moved declaration back into the source file when remaining siblings still reference it. Unsupported languages or unsafe target collisions return `{ status: "unsupported" }`.
 
-`extractFunction(index, { file, range }, { newName })` extracts contiguous TypeScript and JavaScript statement ranges inside one function body. v1 rejects early `return` regions and other unsupported control flow.
+`extractFunction(index, { file, range }, { newName })` extracts contiguous TypeScript and JavaScript statement ranges inside one function body. Library ranges follow the normal half-open `Range` contract; CLI and agent tool `startLine:endLine` ranges are inclusive. v1 rejects early `return`, unsupported control flow, context-sensitive bindings, and selected declarations used after the range.
 
 ## Impact analysis from code
 
@@ -358,7 +365,12 @@ const reverseDeps = await tool_getReverseDependencies(root, "src/index.ts", { de
 const hotspots = await tool_getHotspots(root, { limit: 20, index });
 const definition = await tool_goToDefinition(root, "src/main.ts", 10, 5, index);
 const references = await tool_findReferences(root, "src/main.ts", 10, 5, index);
-const extract = await tool_refactorExtract(root, { file: "src/main.ts", range: { startLine: 10, endLine: 14 }, to: "helper", index });
+const extract = await tool_refactorExtract(root, {
+  file: "src/main.ts",
+  range: { startLine: 10, endLine: 14 },
+  to: "helper",
+  index,
+});
 const move = await tool_refactorMove(root, { symbol: "src/main.ts::greet::10", toFile: "src/target.ts", index });
 const rename = await tool_refactorRename(root, { symbol: "src/main.ts::greet::10", to: "salute", index });
 const impact = await tool_impactJSON(root, { provider: "git", base: "HEAD", head: "WORKTREE" }, { index });

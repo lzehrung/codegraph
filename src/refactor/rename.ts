@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { supportForFile } from "../languages.js";
 import { findReferencesById, resolveSymbolId } from "../indexer/symbols.js";
 import { isValidIdentifier } from "./identifier.js";
-import type { ProjectIndex, SymbolHandle } from "../indexer/types.js";
+import type { ImportBinding, ProjectIndex, SymbolHandle } from "../indexer/types.js";
 import type { Range } from "../types.js";
 import type { RefactorResult, TextEdit } from "./types.js";
 
@@ -41,16 +41,32 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function collectNamedImportEdits(index: ProjectIndex, oldName: string, targetFile: string, newName: string): TextEdit[] {
+function specifierNames(specifier: string): { imported: string; local: string } {
+  const [importedRaw, localRaw] = specifier.split(/\s+as\s+/);
+  const imported = (importedRaw ?? "").trim();
+  return {
+    imported,
+    local: (localRaw ?? imported).trim(),
+  };
+}
+
+function isTargetNamedImport(
+  binding: ImportBinding,
+  oldName: string,
+  targetFile: string,
+): binding is Extract<ImportBinding, { kind: "named" }> {
+  return binding.kind === "named" && binding.imported === oldName && binding.resolved === targetFile;
+}
+
+function collectNamedImportEdits(
+  index: ProjectIndex,
+  oldName: string,
+  targetFile: string,
+  newName: string,
+): TextEdit[] {
   const edits: TextEdit[] = [];
   for (const mod of index.byFile.values()) {
-    const namedImports = mod.imports.filter(
-      (binding) =>
-        binding.kind === "named" &&
-        binding.imported === oldName &&
-        binding.local === oldName &&
-        binding.resolved === targetFile,
-    );
+    const namedImports = mod.imports.filter((binding) => isTargetNamedImport(binding, oldName, targetFile));
     if (namedImports.length === 0) continue;
     let source: string;
     try {
@@ -67,12 +83,22 @@ function collectNamedImportEdits(index: ProjectIndex, oldName: string, targetFil
         const specifiers = match.groups?.["specifiers"];
         if (!specifiers) continue;
         const specifierOffset = match.index + match[0].indexOf(specifiers);
-        const nameMatch = new RegExp(`\\b${escapeRegExp(oldName)}\\b`).exec(specifiers);
-        if (!nameMatch?.index && nameMatch?.index !== 0) continue;
-        const start = specifierOffset + nameMatch.index;
-        const end = start + oldName.length;
-        edits.push({ file: mod.file, start, end, newText: newName });
-        break;
+        const specifierPattern = /[^,]+/g;
+        for (
+          let specifierMatch: RegExpExecArray | null = specifierPattern.exec(specifiers);
+          specifierMatch;
+          specifierMatch = specifierPattern.exec(specifiers)
+        ) {
+          const specifier = specifierMatch[0];
+          const names = specifierNames(specifier);
+          if (names.imported !== oldName || names.local !== binding.local) continue;
+          const importedOffset = specifier.search(new RegExp(`\\b${escapeRegExp(oldName)}\\b`));
+          if (importedOffset < 0) continue;
+          const start = specifierOffset + specifierMatch.index + importedOffset;
+          const end = start + oldName.length;
+          edits.push({ file: mod.file, start, end, newText: newName });
+          break;
+        }
       }
     }
   }

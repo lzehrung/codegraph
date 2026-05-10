@@ -1,5 +1,5 @@
 import path from "node:path";
-import { buildProjectIndexFromFiles } from "../indexer.js";
+import { buildProjectIndexFromFiles, goToDefinition, symbolId } from "../indexer.js";
 import type { BuildOptions } from "../indexer/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { applyEdits } from "../refactor/applyEdits.js";
@@ -34,6 +34,28 @@ function parseLineRange(raw: string): { startLine: number; endLine: number } {
     throw new Error(`Invalid --range value "${raw}". Expected startLine:endLine.`);
   }
   return { startLine, endLine };
+}
+
+function parseSymbolLocation(raw: string): { file: string; line: number; column: number } {
+  const columnSeparator = raw.lastIndexOf(":");
+  const lineSeparator = columnSeparator > 0 ? raw.lastIndexOf(":", columnSeparator - 1) : -1;
+  if (lineSeparator < 0 || columnSeparator < 0) {
+    throw new Error(`Invalid --at value "${raw}". Expected file:line:column.`);
+  }
+  const file = raw.slice(0, lineSeparator);
+  const line = Number(raw.slice(lineSeparator + 1, columnSeparator));
+  const column = Number(raw.slice(columnSeparator + 1));
+  if (!file || !Number.isInteger(line) || !Number.isInteger(column) || line < 1 || column < 1) {
+    throw new Error(`Invalid --at value "${raw}". Expected file:line:column.`);
+  }
+  return { file, line, column };
+}
+
+function inclusiveLineRange(
+  startLine: number,
+  endLine: number,
+): { start: { line: number; column: number }; end: { line: number; column: number } } {
+  return { start: { line: startLine, column: 1 }, end: { line: endLine + 1, column: 1 } };
 }
 
 function renderRefactorEdits(projectRoot: string, edits: TextEdit[]): string {
@@ -73,8 +95,12 @@ export async function handleRefactorCommand(context: RefactorCommandContext): Pr
   }
 
   const symbol = context.getOpt("--symbol");
-  if (operation !== "extract" && !symbol) {
-    throw new Error(`Missing --symbol for refactor ${operation}.`);
+  const at = context.getOpt("--at");
+  if (operation !== "extract" && !symbol && !at) {
+    throw new Error(`Missing --symbol or --at for refactor ${operation}.`);
+  }
+  if (operation !== "extract" && symbol && at) {
+    throw new Error(`Pass either --symbol or --at for refactor ${operation}, not both.`);
   }
 
   const indexOptions: BuildOptions = {
@@ -100,20 +126,47 @@ async function runRefactorOperation(
   symbol: string | undefined,
 ): Promise<RefactorResult> {
   if (operation === "rename") {
-    return await renameSymbol(index, symbol!, requireOption(context, "--to", "refactor rename"));
+    return await renameSymbol(
+      index,
+      await resolveRefactorSymbol(context, index, symbol, "refactor rename"),
+      requireOption(context, "--to", "refactor rename"),
+    );
   }
   if (operation === "move") {
-    return await moveSymbol(index, symbol!, path.resolve(context.projectRootFs, requireOption(context, "--to-file", "refactor move")));
+    return await moveSymbol(
+      index,
+      await resolveRefactorSymbol(context, index, symbol, "refactor move"),
+      path.resolve(context.projectRootFs, requireOption(context, "--to-file", "refactor move")),
+    );
   }
   const range = parseLineRange(requireOption(context, "--range", "refactor extract"));
   return await extractFunction(
     index,
     {
       file: path.resolve(context.projectRootFs, requireOption(context, "--file", "refactor extract")),
-      range: { start: { line: range.startLine, column: 1 }, end: { line: range.endLine, column: 1 } },
+      range: inclusiveLineRange(range.startLine, range.endLine),
     },
     { newName: requireOption(context, "--to", "refactor extract") },
   );
+}
+
+async function resolveRefactorSymbol(
+  context: RefactorCommandContext,
+  index: Awaited<ReturnType<typeof buildProjectIndexFromFiles>>,
+  symbol: string | undefined,
+  operation: string,
+): Promise<string> {
+  if (symbol) return symbol;
+  const location = parseSymbolLocation(requireOption(context, "--at", operation));
+  const result = await goToDefinition(index, {
+    file: path.resolve(context.projectRootFs, location.file).replace(/\\/g, "/"),
+    line: location.line,
+    column: location.column,
+  });
+  if (result.status !== "ok") {
+    throw new Error(`Could not resolve --at for ${operation}: ${result.reason}`);
+  }
+  return symbolId(result.definition);
 }
 
 function requireOption(context: RefactorCommandContext, name: string, operation: string): string {

@@ -85,9 +85,66 @@ function parseParams(params: string): string[] {
     .filter((param) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(param));
 }
 
-function collectInputs(selected: string, params: string[]): string[] {
+function collectDeclaredNames(source: string): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+
+  const addName = (name: string | undefined): void => {
+    if (!name || seen.has(name)) return;
+    seen.add(name);
+    names.push(name);
+  };
+
+  const variableStatementPattern = /\b(?:const|let|var)\s+(?<declarations>[^;\n]+)/g;
+  for (
+    let match: RegExpExecArray | null = variableStatementPattern.exec(source);
+    match;
+    match = variableStatementPattern.exec(source)
+  ) {
+    const declarations = match.groups?.["declarations"] ?? "";
+    for (const declaration of declarations.split(",")) {
+      addName(/^\s*(?<name>[A-Za-z_$][A-Za-z0-9_$]*)/.exec(declaration)?.groups?.["name"]);
+    }
+  }
+
+  const namedDeclarationPattern =
+    /\bfunction\s+(?<fn>[A-Za-z_$][A-Za-z0-9_$]*)|\bclass\s+(?<className>[A-Za-z_$][A-Za-z0-9_$]*)/g;
+  for (
+    let match: RegExpExecArray | null = namedDeclarationPattern.exec(source);
+    match;
+    match = namedDeclarationPattern.exec(source)
+  ) {
+    addName(match.groups?.["fn"] ?? match.groups?.["className"]);
+  }
+  return names;
+}
+
+function hasIdentifier(source: string, name: string): boolean {
+  return new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(source);
+}
+
+function collectInputs(selected: string, params: string[], precedingSource: string): string[] {
   const identifiers = new Set(selected.match(/\b[A-Za-z_$][A-Za-z0-9_$]*\b/g) ?? []);
-  return params.filter((param) => identifiers.has(param));
+  const inputs: string[] = [];
+  const seen = new Set<string>();
+  for (const name of [...params, ...collectDeclaredNames(precedingSource)]) {
+    if (!identifiers.has(name) || seen.has(name)) continue;
+    seen.add(name);
+    inputs.push(name);
+  }
+  return inputs;
+}
+
+function findDeclarationsUsedAfter(selected: string, followingSource: string): string[] {
+  return collectDeclaredNames(selected).filter((name) => hasIdentifier(followingSource, name));
+}
+
+function unsupportedControlFlowReason(selected: string): string | null {
+  if (/\breturn\b/.test(selected)) return "regions with return statements are unsupported";
+  if (/\b(?:break|continue|yield|await)\b|\b(?:this|arguments|super)\b|new\.target/.test(selected)) {
+    return "regions with unsupported control flow or context-sensitive bindings are unsupported";
+  }
+  return null;
 }
 
 function leadingIndent(text: string): string {
@@ -107,7 +164,12 @@ export function extractFunction(
   const support = supportForFile(region.file);
   const languageId = support?.id ?? "ts";
   if (languageId !== "ts" && languageId !== "tsx" && languageId !== "js" && languageId !== "jsx") {
-    return Promise.resolve({ status: "unsupported", edits: [], warnings: [], reason: `${languageId} extract is not supported` });
+    return Promise.resolve({
+      status: "unsupported",
+      edits: [],
+      warnings: [],
+      reason: `${languageId} extract is not supported`,
+    });
   }
   const identifier = isValidIdentifier(languageId, opts.newName);
   if (!identifier.ok) {
@@ -128,18 +190,38 @@ export function extractFunction(
 
   const offsets = rangeOffsets(source, region.range);
   if (!offsets) {
-    return Promise.resolve({ status: "error", edits: [], warnings: [], reason: "region range does not resolve to offsets" });
+    return Promise.resolve({
+      status: "error",
+      edits: [],
+      warnings: [],
+      reason: "region range does not resolve to offsets",
+    });
   }
   const selected = source.slice(offsets.start, offsets.end);
-  if (/\breturn\b/.test(selected)) {
-    return Promise.resolve({ status: "unsupported", edits: [], warnings: [], reason: "regions with return statements are unsupported" });
+  const controlFlowReason = unsupportedControlFlowReason(selected);
+  if (controlFlowReason) {
+    return Promise.resolve({ status: "unsupported", edits: [], warnings: [], reason: controlFlowReason });
   }
   const envelope = findFunctionEnvelope(source, offsets.start, offsets.end);
   if (!envelope) {
-    return Promise.resolve({ status: "unsupported", edits: [], warnings: [], reason: "region must be inside one function body" });
+    return Promise.resolve({
+      status: "unsupported",
+      edits: [],
+      warnings: [],
+      reason: "region must be inside one function body",
+    });
+  }
+  const declarationsUsedAfter = findDeclarationsUsedAfter(selected, source.slice(offsets.end, envelope.bodyEnd));
+  if (declarationsUsedAfter.length > 0) {
+    return Promise.resolve({
+      status: "unsupported",
+      edits: [],
+      warnings: [],
+      reason: `selected declarations are used after the region: ${declarationsUsedAfter.join(", ")}`,
+    });
   }
 
-  const inputs = collectInputs(selected, envelope.params);
+  const inputs = collectInputs(selected, envelope.params, source.slice(envelope.bodyStart, offsets.start));
   const helper = `function ${opts.newName}(${inputs.join(", ")}) {\n${normalizeExtractedBody(selected)}\n}\n\n`;
   const call = `${leadingIndent(selected)}${opts.newName}(${inputs.join(", ")});\n`;
   const edits: TextEdit[] = [

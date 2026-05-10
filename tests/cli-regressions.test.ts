@@ -675,7 +675,39 @@ describe("CLI regressions", () => {
     expect(handle).toBeDefined();
     if (!handle) return;
 
-    const stdout = await runCliCommand(["refactor", "rename", "--root", tmpDir, "--symbol", handle, "--to", "salute", "--json"]);
+    const stdout = await runCliCommand([
+      "refactor",
+      "rename",
+      "--root",
+      tmpDir,
+      "--symbol",
+      handle,
+      "--to",
+      "salute",
+      "--json",
+    ]);
+    const result = JSON.parse(stdout) as { status: string; edits: Array<{ newText: string }> };
+
+    expect(result.status).toBe("ok");
+    expect(result.edits.filter((edit) => edit.newText === "salute").length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("refactor rename accepts a source location instead of a symbol handle", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-refactor-rename-at-"));
+    await fsp.writeFile(path.join(tmpDir, "utils.ts"), "export function greet() { return 'hi'; }\n", "utf8");
+    await fsp.writeFile(path.join(tmpDir, "main.ts"), "import { greet } from './utils';\ngreet();\n", "utf8");
+
+    const stdout = await runCliCommand([
+      "refactor",
+      "rename",
+      "--root",
+      tmpDir,
+      "--at",
+      "main.ts:2:1",
+      "--to",
+      "salute",
+      "--json",
+    ]);
     const result = JSON.parse(stdout) as { status: string; edits: Array<{ newText: string }> };
 
     expect(result.status).toBe("ok");
@@ -714,9 +746,65 @@ describe("CLI regressions", () => {
     expect(result.edits.some((edit) => edit.newText.includes("./target"))).toBe(true);
   });
 
+  it("refactor move accepts a source location instead of a symbol handle", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-refactor-move-at-"));
+    const srcDir = path.join(tmpDir, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(path.join(srcDir, "source.ts"), "export function greet() { return 'hi'; }\n", "utf8");
+
+    const stdout = await runCliCommand([
+      "refactor",
+      "move",
+      "--root",
+      tmpDir,
+      "--at",
+      "src/source.ts:1:17",
+      "--to-file",
+      "src/target.ts",
+      "--json",
+    ]);
+    const result = JSON.parse(stdout) as { status: string; edits: Array<{ file: string; newText: string }> };
+
+    expect(result.status).toBe("ok");
+    expect(result.edits.some((edit) => edit.file.endsWith("target.ts"))).toBe(true);
+    expect(result.edits.some((edit) => edit.newText.includes("function greet"))).toBe(true);
+  });
+
   it("refactor extract emits JSON edits", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-refactor-extract-"));
-    await fsp.writeFile(path.join(tmpDir, "main.ts"), "export function run(name: string) {\n  console.log(name);\n}\n", "utf8");
+    await fsp.writeFile(
+      path.join(tmpDir, "main.ts"),
+      "export function run(name: string) {\n  console.log(name);\n}\n",
+      "utf8",
+    );
+
+    const stdout = await runCliCommand([
+      "refactor",
+      "extract",
+      "--root",
+      tmpDir,
+      "--file",
+      "main.ts",
+      "--range",
+      "2:2",
+      "--to",
+      "emitName",
+      "--json",
+    ]);
+    const result = JSON.parse(stdout) as { status: string; edits: Array<{ newText: string }> };
+
+    expect(result.status).toBe("ok");
+    expect(result.edits.some((edit) => edit.newText.includes("function emitName"))).toBe(true);
+    expect(result.edits.some((edit) => edit.newText.includes("emitName(name);"))).toBe(true);
+  });
+
+  it("refactor extract treats CLI line ranges as inclusive", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-refactor-extract-inclusive-"));
+    await fsp.writeFile(
+      path.join(tmpDir, "main.ts"),
+      "export function run(name: string) {\n  const greeting = `hi ${name}`;\n  console.log(greeting);\n}\n",
+      "utf8",
+    );
 
     const stdout = await runCliCommand([
       "refactor",
@@ -728,14 +816,15 @@ describe("CLI regressions", () => {
       "--range",
       "2:3",
       "--to",
-      "emitName",
+      "emitGreeting",
       "--json",
     ]);
     const result = JSON.parse(stdout) as { status: string; edits: Array<{ newText: string }> };
 
     expect(result.status).toBe("ok");
-    expect(result.edits.some((edit) => edit.newText.includes("function emitName"))).toBe(true);
-    expect(result.edits.some((edit) => edit.newText.includes("emitName(name);"))).toBe(true);
+    expect(result.edits.some((edit) => edit.newText.includes("const greeting = `hi ${name}`"))).toBe(true);
+    expect(result.edits.some((edit) => edit.newText.includes("console.log(greeting);"))).toBe(true);
+    expect(result.edits.some((edit) => edit.newText.includes("emitGreeting(name);"))).toBe(true);
   });
 
   it("unresolved filters declared dependencies for scoped roots", async () => {
