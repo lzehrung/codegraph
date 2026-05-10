@@ -29,14 +29,15 @@ export type ChunkCommandContext = {
   positionals: string[];
   getOpt: (name: string) => string | undefined;
   hasFlag: (name: string) => boolean;
+  cwd: () => string;
   writeJSONLine: (value: unknown) => void;
   writeStderrLine: (message: string) => void;
   exit: (code: number) => never;
 };
 
 export async function handleChunkCommand(context: ChunkCommandContext): Promise<void> {
-  const filePath = context.positionals[0];
-  if (!filePath) {
+  const inputFilePath = context.positionals[0];
+  if (!inputFilePath) {
     context.writeStderrLine("Usage: chunk <file-path> [options]");
     context.writeStderrLine("Options:");
     context.writeStderrLine("  --min-tokens N    Minimum tokens per chunk (default: 150)");
@@ -47,6 +48,7 @@ export async function handleChunkCommand(context: ChunkCommandContext): Promise<
   }
 
   try {
+    const filePath = path.resolve(context.cwd(), inputFilePath);
     const source = await fsp.readFile(filePath, "utf8");
     const ext = path.extname(filePath).toLowerCase();
 

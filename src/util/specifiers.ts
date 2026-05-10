@@ -13,8 +13,9 @@ export type ModuleSpecifier = {
   confidence?: number;
 };
 
-function buildStringLiteralMask(source: string): boolean[] {
-  const mask = new Array<boolean>(source.length).fill(false);
+function buildStringLiteralMask(source: string): Uint8Array | undefined {
+  if (!hasStringLiteralDelimiter(source)) return undefined;
+  const mask = new Uint8Array(source.length);
   for (let i = 0; i < source.length; i++) {
     const ch = source[i]!;
     if (ch === "'" || ch === `"`) {
@@ -28,14 +29,18 @@ function buildStringLiteralMask(source: string): boolean[] {
   return mask;
 }
 
-function maskQuotedString(source: string, mask: boolean[], start: number, quote: "'" | `"`): number {
+function hasStringLiteralDelimiter(source: string): boolean {
+  return source.includes("'") || source.includes(`"`) || source.includes("`");
+}
+
+function maskQuotedString(source: string, mask: Uint8Array, start: number, quote: "'" | `"`): number {
   for (let i = start; i < source.length; i++) {
     const ch = source[i]!;
-    mask[i] = true;
+    mask[i] = 1;
     if (ch === "\\") {
       const nextIndex = i + 1;
       if (nextIndex < source.length) {
-        mask[nextIndex] = true;
+        mask[nextIndex] = 1;
         i = nextIndex;
       }
       continue;
@@ -45,29 +50,29 @@ function maskQuotedString(source: string, mask: boolean[], start: number, quote:
   return source.length;
 }
 
-function maskTemplateLiteral(source: string, mask: boolean[], start: number): number {
-  mask[start] = true;
+function maskTemplateLiteral(source: string, mask: Uint8Array, start: number): number {
+  mask[start] = 1;
   for (let i = start + 1; i < source.length; i++) {
     const ch = source[i]!;
-    mask[i] = true;
+    mask[i] = 1;
     if (ch === "\\") {
       const nextIndex = i + 1;
       if (nextIndex < source.length) {
-        mask[nextIndex] = true;
+        mask[nextIndex] = 1;
         i = nextIndex;
       }
       continue;
     }
     if (ch === "`") return i + 1;
     if (ch === "$" && source[i + 1] === "{") {
-      mask[i + 1] = true;
+      mask[i + 1] = 1;
       i = scanTemplateExpression(source, mask, i + 2) - 1;
     }
   }
   return source.length;
 }
 
-function scanTemplateExpression(source: string, mask: boolean[], start: number): number {
+function scanTemplateExpression(source: string, mask: Uint8Array, start: number): number {
   let depth = 1;
   for (let i = start; i < source.length; i++) {
     const ch = source[i]!;
@@ -86,7 +91,7 @@ function scanTemplateExpression(source: string, mask: boolean[], start: number):
     if (ch === "}") {
       depth -= 1;
       if (depth === 0) {
-        mask[i] = true;
+        mask[i] = 1;
         return i + 1;
       }
     }
@@ -108,7 +113,7 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
 
     for (const m of src.matchAll(combined)) {
       const start = m.index ?? 0;
-      if (stringMask[start]) continue;
+      if (stringMask?.[start]) continue;
       const spec = m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? m[6];
       if (!spec) continue;
       const text = m[0] ?? "";

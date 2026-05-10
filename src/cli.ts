@@ -2329,6 +2329,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       positionals: parsed.positionals,
       getOpt,
       hasFlag,
+      cwd: getCwd,
       writeJSONLine,
       writeStderrLine,
       exit: exitCli,

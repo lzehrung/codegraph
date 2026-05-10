@@ -18,12 +18,16 @@ function readJsonRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-async function captureCli(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number | undefined }> {
+async function captureCli(
+  args: string[],
+  cwd = process.cwd(),
+): Promise<{ stdout: string; stderr: string; exitCode: number | undefined }> {
   let stdout = "";
   let stderr = "";
   let exitCode: number | undefined;
 
   await runCli(args, {
+    cwd: () => cwd,
     stdout: (chunk) => {
       stdout += chunk;
     },
@@ -219,6 +223,7 @@ describe("CLI command modules", () => {
         positionals: [filePath],
         getOpt: () => undefined,
         hasFlag: () => false,
+        cwd: () => process.cwd(),
         writeJSONLine: (value) => jsonLines.push(value),
         writeStderrLine: (message) => stderrLines.push(message),
         exit: (code) => {
@@ -229,6 +234,24 @@ describe("CLI command modules", () => {
       expect(stderrLines).toEqual([]);
       expect(Array.isArray(jsonLines[0])).toBeTruthy();
       const chunks = jsonLines[0] as Array<Record<string, unknown>>;
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunks[0]?.filePath).toBe(filePath);
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("runs chunk relative paths against the injected runtime cwd", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-chunk-cwd-"));
+    const filePath = path.join(tempDir, "sample.ts");
+    await fsp.writeFile(filePath, "export function beta() {\n  return 2;\n}\n", "utf8");
+
+    try {
+      const result = await captureCli(["chunk", "sample.ts", "--min-tokens", "1", "--max-tokens", "50"], tempDir);
+
+      expect(result.exitCode).toBeUndefined();
+      expect(result.stderr).toBe("");
+      const chunks = JSON.parse(result.stdout) as Array<Record<string, unknown>>;
       expect(chunks.length).toBeGreaterThan(0);
       expect(chunks[0]?.filePath).toBe(filePath);
     } finally {
