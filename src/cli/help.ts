@@ -19,16 +19,16 @@ Commands:
   hotspots      Find high-complexity files
 
 Graph Options:
-  --fast-graph              Skip AST parsing, use regex for imports.
-                            5-10x faster but may miss dynamic imports,
-                            re-exports, and complex patterns. Best for
-                            quick overviews of large codebases.
-    --resolve-node-modules    Include node_modules in resolution
-    --dynamic-import-heuristics  Attempt to resolve dynamic imports
-    --resolution-hint <hint>  Custom resolution hint (e.g., tsconfig:path)
-    --include-glob <glob>     Restrict discovered files to extra glob(s), relative to each scan root
-    --ignore-glob <glob>      Exclude extra discovered files by glob, relative to each scan root
-    --no-gitignore            Do not apply .gitignore files during file discovery
+  --fast-graph                Skip AST parsing, use regex for imports.
+                              5-10x faster but may miss dynamic imports,
+                              re-exports, and complex patterns. Best for
+                              quick overviews of large codebases.
+  --resolve-node-modules      Include node_modules in resolution
+  --dynamic-import-heuristics Attempt to resolve dynamic imports
+  --resolution-hint <hint>    Custom resolution hint (e.g., tsconfig:path)
+  --include-glob <glob>       Restrict discovered files to extra glob(s), relative to each scan root
+  --ignore-glob <glob>        Exclude extra discovered files by glob, relative to each scan root
+  --no-gitignore              Do not apply .gitignore files during file discovery
 
   Build Options:
     --threads N               Number of worker threads (default: auto)
