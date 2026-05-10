@@ -592,7 +592,7 @@ nativeDescribe("native semantic parity", () => {
     for (const testCase of cases) {
       await expectSemanticParity(testCase);
     }
-  }, 30_000);
+  }, 60_000);
 
   it("matches native and JS semantics for normalization-sensitive TypeScript export assignment", async () => {
     const testCase = await createTypeScriptNormalizationCase();

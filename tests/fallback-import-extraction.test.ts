@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import { buildProjectIndexFromFiles, collectGraph, type BuildReport } from "../src/index.js";
-import { extractJsTsSpecifiers, stripJsLikeComments } from "../src/util.js";
+import { extractJsTsDynamicSpecifiers, extractJsTsSpecifiers, stripJsLikeComments } from "../src/util.js";
 import {
   getNativeTreeSitterSupportedLanguageIds,
   isNativeTreeSitterAvailable,
@@ -81,6 +81,48 @@ describe("Import extraction fallback reporting", () => {
       "./dyn",
     ]);
     expect(specs[0]?.typeOnly).toBe(true);
+  });
+
+  it("ignores import and require examples inside string literals", () => {
+    const source = [
+      'const loggedRequire = "call require(\\"./not-real\\") in docs";',
+      "const loggedImport = 'call import(\"./also-not-real\") in docs';",
+      "const loggedExport = `export { thing } from \"./template-doc\"`;",
+      "const actual = require('./real')",
+      "const dynamic = import('./dynamic')",
+    ].join("\n");
+
+    const specs = extractJsTsSpecifiers(source);
+
+    expect(specs.map((entry) => entry.spec)).toEqual(["./real", "./dynamic"]);
+  });
+
+  it("extracts import calls inside template literal interpolations", () => {
+    const source = [
+      "const dynamic = `load ${import('./dep')}`;",
+      'const required = `load ${require("./req")}`;',
+      'const nestedString = `skip ${"import(\'./not-real\')"}`;',
+      'const nestedTemplate = `skip ${`require("./also-not-real")`}`;',
+      "const literalText = `skip import('./literal-only')`;",
+    ].join("\n");
+
+    const specs = extractJsTsSpecifiers(source);
+
+    expect(specs.map((entry) => entry.spec)).toEqual(["./dep", "./req"]);
+  });
+
+  it("ignores dynamic import heuristic examples inside string literals", () => {
+    const source = [
+      'const loggedPath = "call import(path.join(process.cwd(), \\"src/inside-string\\")) in docs";',
+      "const loggedUrl = `call require(new URL('./inside-template', import.meta.url)) in docs`;",
+      "const actual = import(path.join(process.cwd(), 'src/actual'));",
+    ].join("\n");
+    const fromFile = path.join(process.cwd(), "src", "main.ts");
+    const projectRoot = process.cwd();
+
+    const specs = extractJsTsDynamicSpecifiers(source, fromFile, projectRoot);
+
+    expect(specs.map((entry) => entry.spec)).toEqual(["./actual"]);
   });
 
   it("reports native backend availability and usage", async () => {

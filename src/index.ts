@@ -1,4 +1,7 @@
+/** Language registry helpers and support metadata. */
 export * from "./languages.js";
+
+/** Shared path, discovery, resolution, workspace, and git utilities. */
 export {
   sliceText,
   unquote,
@@ -18,6 +21,8 @@ export {
   clearImportResolutionCaches,
   clearResolutionCaches,
 } from "./util.js";
+
+/** Project file discovery option and result shapes. */
 export type {
   ProjectFileDiscoveryOptions,
   ProjectFileInfo,
@@ -25,6 +30,8 @@ export type {
   ProjectFileRole,
   ProjectFileType,
 } from "./util.js";
+
+/** File and symbol graph builders, renderers, and traversal helpers. */
 export {
   collectGraph,
   graphToDOT,
@@ -53,6 +60,8 @@ export {
   type CycleInternalEdge,
   type CycleSortMode,
 } from "./graphs.js";
+
+/** Symbol query parser and graph-neighborhood query helpers. */
 export {
   parseSymbolQuery,
   querySymbols,
@@ -61,8 +70,14 @@ export {
   type NeighborQuery,
   type NeighborResult,
 } from "./query.js";
+
+/** RDF-style graph triple projection helpers. */
 export { graphToTriples, type Triple, type TripleNode } from "./triples.js";
+
+/** Core graph primitives shared across index, graph, and tool APIs. */
 export type { Pos, Range, FileId, EdgeTo, Edge, Graph } from "./types.js";
+
+/** Project indexing, navigation, reference search, and API-surface analysis. */
 export {
   SymbolKind,
   type SymbolDef,
@@ -110,6 +125,8 @@ export {
   getApiSurface,
   type ApiSurface,
 } from "./indexer.js";
+
+/** Diff impact analysis and review-context helper APIs. */
 export {
   analyzeImpactFromDiff,
   analyzeImpactStreaming,
@@ -132,6 +149,8 @@ export {
   type CandidateTestFile,
   type ImpactStreamChunk,
 } from "./impact/index.js";
+
+/** Stateful code-review sessions for repeated agent navigation calls. */
 export {
   CodeReviewSession,
   SessionManager,
@@ -140,6 +159,8 @@ export {
   type SessionOptions,
   type SessionStatus,
 } from "./session.js";
+
+/** Preset helpers for build, impact, and session defaults. */
 export {
   getBuildPreset,
   getImpactPreset,
@@ -150,6 +171,8 @@ export {
   SESSION_PRESETS,
   type PresetName,
 } from "./presets.js";
+
+/** Partial-result helpers for returning usable data with recoverable errors. */
 export {
   type PartialResult,
   type PartialError,
@@ -162,6 +185,8 @@ export {
   filterErrorsBySeverity,
   summarizePartialResult,
 } from "./util/partialResults.js";
+
+/** Lazy project-index wrappers for deferred symbol materialization. */
 export {
   LazyArray,
   LazyProjectIndex,
@@ -169,6 +194,8 @@ export {
   type LazyModuleIndex,
   type LazyLoadOptions,
 } from "./util/lazySymbols.js";
+
+/** Stable symbol hashing helpers used by manifests and change detection. */
 export {
   computeSymbolHash,
   symbolIdentifier,
@@ -177,6 +204,8 @@ export {
   type SymbolHash,
   type SymbolManifestEntry,
 } from "./util/symbolHash.js";
+
+/** Agent-oriented JSON tool wrappers around the core codegraph APIs. */
 export {
   tool_impactJSON,
   tool_impactFromDiffText,
@@ -197,6 +226,8 @@ export {
   type ToolDependencyEntry,
   type ToolHotspotEntry,
 } from "./agent-tools.js";
+
+/** SQLite graph persistence and query helpers. */
 export {
   writeGraphSqlite,
   updateGraphSqlite,
@@ -207,10 +238,16 @@ export {
   type GraphQueryResult,
   type RawSqlResult,
 } from "./sqlite.js";
+
+/** Source and text chunking helpers. */
 export { chunkFile, type Chunk, type ChunkFileOptions } from "./chunking/chunkFile.js";
 export { chunkTextFile, type TextChunkOptions } from "./chunking/chunkTextFile.js";
 export { chunkSFCFile, type ChunkSFCOptions } from "./chunking/chunkSFC.js";
+
+/** Tree-sitter language configuration registry. */
 export { LANG_CONFIGS, type LanguageConfig } from "./bootstrap/treeSitterLanguages.js";
+
+/** Review report generation and review result types. */
 export {
   buildReviewReport,
   type ReviewDepth,
@@ -223,6 +260,8 @@ export {
   type ReviewBuildReport,
   type ReviewTimingReport,
 } from "./review.js";
+
+/** Native Tree-sitter runtime availability and language support helpers. */
 export {
   type NativeRuntimeMode,
   type NativeQueryScope,
