@@ -3,6 +3,7 @@ import { buildProjectIndexFromFiles } from "../indexer.js";
 import type { BuildOptions } from "../indexer/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { applyEdits } from "../refactor/applyEdits.js";
+import { moveSymbol } from "../refactor/move.js";
 import { renameSymbol } from "../refactor/rename.js";
 import type { RefactorResult, TextEdit } from "../refactor/types.js";
 import type { ProjectFileDiscoveryOptions } from "../util.js";
@@ -53,17 +54,13 @@ async function writeRefactorResult(
 
 export async function handleRefactorCommand(context: RefactorCommandContext): Promise<void> {
   const operation = context.positionals[0];
-  if (operation !== "rename") {
-    throw new Error("Unsupported refactor operation. Expected: rename.");
+  if (operation !== "rename" && operation !== "move") {
+    throw new Error("Unsupported refactor operation. Expected: rename or move.");
   }
 
   const symbol = context.getOpt("--symbol");
-  const to = context.getOpt("--to");
   if (!symbol) {
-    throw new Error("Missing --symbol for refactor rename.");
-  }
-  if (!to) {
-    throw new Error("Missing --to for refactor rename.");
+    throw new Error(`Missing --symbol for refactor ${operation}.`);
   }
 
   const indexOptions: BuildOptions = {
@@ -74,10 +71,21 @@ export async function handleRefactorCommand(context: RefactorCommandContext): Pr
     ...context.workerOpts,
   };
   const index = await buildProjectIndexFromFiles(context.projectRootFs, context.files, indexOptions);
-  const result = await renameSymbol(index, symbol, to);
+  const result =
+    operation === "rename"
+      ? await renameSymbol(index, symbol, requireOption(context, "--to", "refactor rename"))
+      : await moveSymbol(index, symbol, path.resolve(context.projectRootFs, requireOption(context, "--to-file", "refactor move")));
   await writeRefactorResult(context, result, {
     json: context.hasFlag("--json") || !context.hasFlag("--text"),
     apply: context.hasFlag("--apply"),
     useGit: context.hasFlag("--git"),
   });
+}
+
+function requireOption(context: RefactorCommandContext, name: string, operation: string): string {
+  const value = context.getOpt(name);
+  if (!value) {
+    throw new Error(`Missing ${name} for ${operation}.`);
+  }
+  return value;
 }

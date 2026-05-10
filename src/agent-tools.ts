@@ -12,6 +12,7 @@ import type { CompactImpactReport, ImpactOptions, ImpactReport } from "./impact/
 import type { Edge, Range } from "./types.js";
 import { collectGraph, getDependencies, getReverseDependencies, getHotspots } from "./graphs.js";
 import type { NativeRuntimeMode } from "./native/treeSitterNative.js";
+import { moveSymbol } from "./refactor/move.js";
 import { renameSymbol } from "./refactor/rename.js";
 import type { RefactorResult, TextEdit } from "./refactor/types.js";
 import type { TriviaMode } from "./refactor/types.js";
@@ -322,6 +323,34 @@ export async function tool_refactorRename(
   try {
     const index = await getToolIndex(root, options);
     const result = await renameSymbol(index, options.symbol, options.to);
+    return {
+      ...result,
+      diff: renderRefactorDiff(root, result.edits),
+    };
+  } catch (error) {
+    return {
+      status: "error",
+      edits: [],
+      warnings: [],
+      reason: error instanceof Error ? error.message : String(error),
+      diff: "",
+    };
+  }
+}
+
+export async function tool_refactorMove(
+  root: string,
+  options: {
+    symbol: string;
+    toFile: string;
+    index?: ProjectIndex;
+    native?: NativeRuntimeMode;
+  },
+): Promise<ToolRefactorRenameResult> {
+  try {
+    const index = await getToolIndex(root, options);
+    const targetFile = normalizePathArg(root, options.toFile);
+    const result = await moveSymbol(index, options.symbol, targetFile);
     return {
       ...result,
       diff: renderRefactorDiff(root, result.edits),

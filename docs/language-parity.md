@@ -50,6 +50,17 @@ Notes:
 - One deeper semantic shape remains intentionally limited and is covered by explicit regression tests instead of an optimistic support claim: macro-expanded or otherwise non-local C typedef reference recovery beyond the current direct declaration use-site coverage.
 - Another intentionally limited semantic shape is C# alias-only `using Alias = Namespace.Type;` navigation without a companion namespace import. Graph extraction is covered, but alias-only member navigation is not claimed yet.
 
+## Refactor operation support
+
+| Language   | Rename | Move | Extract |
+| ---------- | ------ | ---- | ------- |
+| TypeScript | Partial | Partial | No      |
+| TSX        | Partial | Partial | No      |
+| JavaScript | Partial | Partial | No      |
+| JSX        | Partial | Partial | No      |
+
+`rename` support is bounded by the existing `findReferences` resolver. `move` support is currently limited to top-level TypeScript and JavaScript declarations with named ES importers; other languages and unsafe shapes return `unsupported`.
+
 ## Project file discovery coverage
 
 Status key:

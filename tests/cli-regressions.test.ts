@@ -682,6 +682,38 @@ describe("CLI regressions", () => {
     expect(result.edits.filter((edit) => edit.newText === "salute").length).toBeGreaterThanOrEqual(3);
   });
 
+  it("refactor move emits JSON edits", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-refactor-move-"));
+    const srcDir = path.join(tmpDir, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(path.join(srcDir, "source.ts"), "export function greet() { return 'hi'; }\n", "utf8");
+    await fsp.writeFile(path.join(srcDir, "main.ts"), "import { greet } from './source';\ngreet();\n", "utf8");
+
+    const symbols = JSON.parse(await runCliCommand(["list-symbols", "--root", tmpDir])) as {
+      symbols: Array<{ id: string; name: string }>;
+    };
+    const handle = symbols.symbols.find((symbol) => symbol.name === "greet")?.id;
+    expect(handle).toBeDefined();
+    if (!handle) return;
+
+    const stdout = await runCliCommand([
+      "refactor",
+      "move",
+      "--root",
+      tmpDir,
+      "--symbol",
+      handle,
+      "--to-file",
+      "src/target.ts",
+      "--json",
+    ]);
+    const result = JSON.parse(stdout) as { status: string; edits: Array<{ file: string; newText: string }> };
+
+    expect(result.status).toBe("ok");
+    expect(result.edits.some((edit) => edit.file.endsWith("target.ts"))).toBe(true);
+    expect(result.edits.some((edit) => edit.newText.includes("./target"))).toBe(true);
+  });
+
   it("unresolved filters declared dependencies for scoped roots", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-unresolved-scoped-"));
     try {

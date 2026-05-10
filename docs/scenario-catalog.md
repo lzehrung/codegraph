@@ -11,6 +11,12 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Impact diagnostics counters            | `tests/impact-diagnostics.test.ts`                                                  | Impact report includes diagnostics counters (`refsScanned`, filtering counters, fallback counters, symbol mapping counters).                                                               | Internal regression test | 2026-03-06 |
 | External package filtering             | `tests/graph-reports.test.ts`, `tests/cli-regressions.test.ts`                      | `inspect` and `unresolved` suppress supported-language standard libraries, URL imports, and dependency-manifest packages while bounding manifest traversal to the scoped project boundary. | Internal regression test | 2026-05-02 |
 
+## Refactor operations
+
+| Scenario                        | Sample                         | Expected behavior                                                                                                    | Source                   | Date added |
+| ------------------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------- | ------------------------ | ---------- |
+| TypeScript top-level move edits | `tests/refactor/move.test.ts`  | Moving an exported function carries leading docs, creates the target file when needed, and rewrites named importers. | Internal regression test | 2026-05-10 |
+
 ## Native Tree-sitter parity
 
 | Scenario                                           | Sample                                                                                                                                                              | Expected behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Source                   | Date added |

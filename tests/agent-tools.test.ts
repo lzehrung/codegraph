@@ -13,6 +13,7 @@ import {
   tool_goToDefinition,
   tool_findReferences,
   tool_findSymbol,
+  tool_refactorMove,
   tool_refactorRename,
   tool_impactJSON,
   tool_impactFromDiffText,
@@ -375,6 +376,23 @@ describe("Agent Tools", () => {
     expect(result.status).toBe("ok");
     expect(result.edits.length).toBeGreaterThanOrEqual(3);
     expect(result.diff).toContain("salute");
+  });
+
+  it("tool_refactorMove returns canonical move edits", async () => {
+    const root = await mkTmpDir("dg-agent-refactor-move-");
+    await fsp.mkdir(path.join(root, "src"), { recursive: true });
+    await fsp.writeFile(path.join(root, "src", "source.ts"), "export function greet() { return 'hi'; }\n", "utf8");
+    await fsp.writeFile(path.join(root, "src", "main.ts"), "import { greet } from './source';\ngreet();\n", "utf8");
+    const index = await codegraph.buildProjectIndex(root);
+    const handle = codegraph.listSymbols(index).find((symbol) => symbol.name === "greet")?.id;
+    expect(handle).toBeDefined();
+    if (!handle) return;
+
+    const result = await tool_refactorMove(root, { symbol: handle, toFile: "src/target.ts", index });
+
+    expect(result.status).toBe("ok");
+    expect(result.edits.length).toBeGreaterThanOrEqual(3);
+    expect(result.diff).toContain("target.ts");
   });
 
   it("tool_findSymbol clamps non-positive maxResults and ignores non-finite values", async () => {

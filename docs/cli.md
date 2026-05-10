@@ -83,6 +83,9 @@ codegraph list-symbols --trivia leading-all --include-imports
 codegraph refactor rename --symbol <handle> --to newName --json
 codegraph refactor rename --symbol <handle> --to newName --apply
 
+# Move a TypeScript/JavaScript top-level declaration and rewrite named importers
+codegraph refactor move --symbol <handle> --to-file src/target.ts --json
+
 # Chunk a file for LLM processing
 codegraph chunk src/utils.js
 
@@ -111,6 +114,8 @@ codegraph grep --pattern 'eval\(' --ignore-case
 `list-symbols --trivia exclude|leading-doc|leading-all` keeps the default bare symbol ranges unless requested. `leading-doc` expands ranges to attached leading comment docs, while `leading-all` also includes supported decorators or attributes.
 
 `refactor rename` accepts definition handles from `list-symbols` and returns deterministic text edits by default. Add `--apply` to write the edits to disk, and `--git` with `--apply` to skip files with uncommitted changes.
+
+`refactor move` supports TypeScript and JavaScript top-level declarations in v1. It moves the trivia-aware declaration text, creates the target file when needed, and rewrites named ES importers that Codegraph can resolve.
 
 ### Dependency analysis and diagnostics
 

@@ -69,4 +69,5 @@ Examples:
   codegraph refs --file src/index.ts --line 42 --col 10
   codegraph list-symbols --trivia leading-doc
   codegraph refactor rename --symbol <handle> --to newName --json
+  codegraph refactor move --symbol <handle> --to-file src/target.ts --json
 `;
