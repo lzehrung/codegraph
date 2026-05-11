@@ -4,21 +4,21 @@ Usage: codegraph <command> [options] [path]
 
 Commands:
   graph         Build dependency graph (default)
-  doctor        Inspect backend/runtime state and local graph artifacts
   inspect       Summarize repo structure and recommend next commands
-  skill         Install or inspect the bundled agent skill
-  version       Print the installed codegraph version
   impact        Analyze PR impact
   review        Generate code review report
   goto          Go to definition
   refs          Find references
   list-symbols  List symbol handles and ranges
   refactor      Build or apply semantic refactor edits
-  chunk         Chunk file for embeddings
   deps          List dependencies
   rdeps         List reverse dependencies
   cycles        Detect dependency cycles (use --sort priority|size|fanin)
   hotspots      Find high-complexity files
+  chunk         Chunk file for embeddings
+  doctor        Inspect backend/runtime state and local graph artifacts
+  skill         Install or inspect the bundled agent skill
+  version       Print the installed codegraph version
 
 Graph Options:
   --fast-graph                Skip AST parsing, use regex for imports.
@@ -32,15 +32,15 @@ Graph Options:
   --ignore-glob <glob>        Exclude extra discovered files by glob, relative to each scan root
   --no-gitignore              Do not apply .gitignore files during file discovery
 
-  Build Options:
-    --threads N               Number of worker threads (default: auto)
-    --native <mode>           Native runtime mode: auto, on, off
-    --workers                 Use Piscina worker threads for native extraction
-    --cache <mode>            Cache mode: disk, memory, off
-    --limit N                 Result limit for hotspots/inspect summaries
-    --cache-strict            Use content hashes instead of mtime
-    --progress                Show progress tracking during indexing
-    --trivia <mode>           Symbol range mode: exclude, leading-doc, leading-all
+Build Options:
+  --threads N               Number of worker threads (default: auto)
+  --native <mode>           Native runtime mode: auto, on, off
+  --workers                 Use Piscina worker threads for native extraction
+  --cache <mode>            Cache mode: disk, memory, off
+  --limit N                 Result limit for hotspots/inspect summaries
+  --cache-strict            Use content hashes instead of mtime
+  --progress                Show progress tracking during indexing
+  --trivia <mode>           Symbol range mode: exclude, leading-doc, leading-all
 
 Output Options:
   --json                    Output as JSON (default)

@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   resolveFilePathFromRoot,
+  assertFilePathWithinRoot,
   isAbsoluteFilePath,
   isFilePathWithinRoot,
+  normalizePath,
+  normalizeResolutionHints,
   toProjectRelativePath,
 } from "../src/util.js";
 import { normalizeImpactFilePath } from "../src/impact/path.js";
@@ -47,5 +50,33 @@ describe("cross-platform path normalization", () => {
     expect(resolveFilePathFromRoot(root, file)).toBe("C:\\Repo\\src\\main.ts");
     expect(isFilePathWithinRoot(root, file)).toBe(true);
     expect(toProjectRelativePath(root, file)).toBe("src/main.ts");
+  });
+
+  it("normalizes backslashes without changing already-normalized paths", () => {
+    expect(normalizePath(String.raw`src\feature\main.ts`)).toBe("src/feature/main.ts");
+    expect(normalizePath("src/feature/main.ts")).toBe("src/feature/main.ts");
+  });
+
+  it("asserts project-root containment with label-specific errors", () => {
+    const root = "C:/workspace/codegraph";
+
+    expect(assertFilePathWithinRoot(root, "src/main.ts", "Input")).toBe("C:/workspace/codegraph/src/main.ts");
+    expect(() => assertFilePathWithinRoot(root, "../outside.ts", "Input")).toThrow(
+      "Input is outside project root",
+    );
+  });
+
+  it("normalizes resolution hints by trimming, slash-normalizing, and deduping", () => {
+    const hints = normalizeResolutionHints([
+      "  src\\index.ts  ",
+      "",
+      "src/index.ts",
+      "packages\\core",
+      "packages/core",
+      "  tests/main.test.ts",
+    ]);
+
+    expect(hints).toEqual(["src/index.ts", "packages/core", "tests/main.test.ts"]);
+    expect(normalizeResolutionHints()).toEqual([]);
   });
 });
