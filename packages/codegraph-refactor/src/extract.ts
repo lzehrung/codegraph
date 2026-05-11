@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { supportForFile } from "@lzehrung/codegraph";
+import { maskJsLikeCommentsAndStrings, supportForFile } from "@lzehrung/codegraph";
 import type { FileId, ProjectIndex, Range } from "@lzehrung/codegraph";
 import type { RefactorResult, TextEdit } from "./types.js";
 import { isValidIdentifier } from "./identifier.js";
@@ -45,12 +45,13 @@ type FunctionEnvelope = {
 };
 
 function findFunctionEnvelope(source: string, regionStart: number, regionEnd: number): FunctionEnvelope | null {
+  const braceSource = maskJsLikeCommentsAndStrings(source);
   const pattern =
     /(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+[A-Za-z_$][A-Za-z0-9_$]*\s*\((?<params>[^)]*)\)\s*\{/g;
   let found: FunctionEnvelope | null = null;
   for (let match: RegExpExecArray | null = pattern.exec(source); match; match = pattern.exec(source)) {
     const bodyStart = match.index + match[0].length;
-    const bodyEnd = findMatchingBrace(source, bodyStart - 1);
+    const bodyEnd = findMatchingBrace(braceSource, bodyStart - 1);
     if (bodyEnd === null) continue;
     if (bodyStart <= regionStart && regionEnd <= bodyEnd) {
       found = {

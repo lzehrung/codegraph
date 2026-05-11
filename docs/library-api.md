@@ -10,6 +10,8 @@ Import graph, indexing, navigation, review, CLI-wrapper, and session APIs from `
 
 The library defaults to `native: "auto"`, which uses the native Tree-sitter path when `@lzehrung/codegraph-native` is installed for the current platform and falls back automatically otherwise.
 
+Shared source helpers such as `stripJsLikeComments()` and `maskJsLikeCommentsAndStrings()` are exported for integrations that need length-preserving scans over JavaScript-like code.
+
 Override that per call with `native: "on"` or `native: "off"`.
 
 - `native: "on"` requires the native addon and raises an error if it cannot be loaded.

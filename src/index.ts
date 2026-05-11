@@ -8,6 +8,7 @@ export {
   toRange,
   listProjectFiles,
   discoverProjectFiles,
+  maskJsLikeCommentsAndStrings,
   stripJsLikeComments,
   stripPythonCommentsAndStrings,
   loadNearestTsconfigFor,

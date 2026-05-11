@@ -63,6 +63,23 @@ describe("extractFunction", () => {
     );
   });
 
+  test("ignores braces inside strings and comments when locating the containing function", async () => {
+    await withFile(
+      "export function run(name: string) {\n  const pattern = \"}\";\n  // { ignored\n  console.log(name, pattern);\n}\n",
+      async (root, file) => {
+        const index = await buildProjectIndexFromFiles(root, [file], { keepParsed: true });
+
+        const result = await extractFunction(index, { file, range: lineRange(4, 5) }, { newName: "emitPattern" });
+
+        expect(result.status).toBe("ok");
+        await applyEdits(result.edits);
+        const source = await readFile(file, "utf8");
+        expect(source).toContain("function emitPattern(name, pattern)");
+        expect(source).toContain("emitPattern(name, pattern);");
+      },
+    );
+  });
+
   test("rejects extracted declarations used after the selected range", async () => {
     await withFile(
       "export function run(name: string) {\n  const greeting = `hi ${name}`;\n  console.log(greeting);\n}\n",
