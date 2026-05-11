@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { findReferencesById, resolveSymbolId } from "../indexer/symbols.js";
 import type { ProjectIndex, SymbolHandle } from "../indexer/types.js";
+import { supportForFile } from "../languages.js";
 import type { FileId } from "../types.js";
 import { getSymbolRange } from "./trivia.js";
 import type { RefactorResult, TextEdit, TriviaMode } from "./types.js";
@@ -126,6 +127,11 @@ function importFromMovedTarget(sourceFile: string, name: string, targetFile: str
   return `import { ${name} } from '${relativeSpecifier(sourceFile, targetFile)}';\n`;
 }
 
+function isMoveSupportedFile(file: string): boolean {
+  const languageId = supportForFile(file)?.id;
+  return languageId === "ts" || languageId === "tsx" || languageId === "js" || languageId === "jsx";
+}
+
 export async function moveSymbol(
   index: ProjectIndex,
   id: SymbolHandle,
@@ -139,6 +145,14 @@ export async function moveSymbol(
   const normalizedTarget = path.resolve(targetFile).replace(/\\/g, "/");
   if (def.file === normalizedTarget) {
     return { status: "unsupported", edits: [], warnings: [], reason: "symbol is already in target file" };
+  }
+  if (!isMoveSupportedFile(def.file) || !isMoveSupportedFile(normalizedTarget)) {
+    return {
+      status: "unsupported",
+      edits: [],
+      warnings: [],
+      reason: "move is only supported for TypeScript and JavaScript files",
+    };
   }
   if (targetHasCollision(index, normalizedTarget, def.localName)) {
     return { status: "unsupported", edits: [], warnings: [], reason: `target already declares ${def.localName}` };

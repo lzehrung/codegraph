@@ -133,6 +133,29 @@ describe("moveSymbol", () => {
     );
   });
 
+  test("rejects unsupported source languages without emitting edits", async () => {
+    await withProject(
+      {
+        "src/source.py": "def greet():\n    return 'hi'\n\n\ndef run():\n    return greet()\n",
+        "src/target.py": "",
+      },
+      async (root, files) => {
+        const index = await buildProjectIndexFromFiles(root, Object.values(files), { keepParsed: true });
+        const handle = listSymbols(index, { file: files["src/source.py"] }).find(
+          (symbol) => symbol.name === "greet",
+        )?.id;
+        expect(handle).toBeDefined();
+        if (!handle) return;
+
+        const result = await moveSymbol(index, handle, files["src/target.py"]!);
+
+        expect(result.status).toBe("unsupported");
+        expect(result.reason).toContain("move is only supported");
+        expect(result.edits).toEqual([]);
+      },
+    );
+  });
+
   test("separates appended declarations from target files without trailing newlines", async () => {
     await withProject(
       {

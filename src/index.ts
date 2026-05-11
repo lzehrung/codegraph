@@ -131,7 +131,7 @@ export {
 export { applyEdits } from "./refactor/applyEdits.js";
 export { extractFunction, type ExtractOptions } from "./refactor/extract.js";
 export { moveSymbol, type MoveOptions } from "./refactor/move.js";
-export { renameSymbol, type RenameOptions } from "./refactor/rename.js";
+export { renameSymbol } from "./refactor/rename.js";
 export type {
   ApplyEditsOptions,
   ApplyEditsResult,

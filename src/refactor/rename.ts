@@ -6,10 +6,6 @@ import type { ImportBinding, ProjectIndex, SymbolHandle } from "../indexer/types
 import type { Range } from "../types.js";
 import type { RefactorResult, TextEdit } from "./types.js";
 
-export interface RenameOptions {
-  includeStringMatches?: boolean;
-}
-
 function editKey(file: string, range: Range): string {
   return `${file}:${range.start.index ?? 0}:${range.end.index ?? 0}`;
 }
@@ -109,7 +105,6 @@ export async function renameSymbol(
   index: ProjectIndex,
   id: SymbolHandle,
   newName: string,
-  _opts: RenameOptions = {},
 ): Promise<RefactorResult> {
   if (isImportHandle(id)) {
     return {
