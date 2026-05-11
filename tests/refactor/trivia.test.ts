@@ -132,4 +132,34 @@ describe("trivia-aware symbol ranges", () => {
 
     expect(range.start.line).toBe(3);
   });
+
+  test("disk trivia parsing uses SFC script preprocessing", async () => {
+    await withTempProject(
+      {
+        "Widget.vue": [
+          "<template>",
+          "  <p>ignored</p>",
+          "</template>",
+          "<script lang=\"ts\">",
+          "/** Builds the widget. */",
+          "export function buildWidget() {",
+          "  return 1;",
+          "}",
+          "</script>",
+          "",
+        ].join("\n"),
+      },
+      async (root, files) => {
+        const index = await buildProjectIndexFromFiles(root, files, { native: "off" });
+        const def = index.byFile.get(files[0]!)?.locals.find((item) => item.localName === "buildWidget");
+        expect(def).toBeDefined();
+        if (!def) return;
+
+        const expanded = getSymbolRange(index, def, { trivia: "leading-doc", source: "disk" });
+
+        expect(expanded.start.line).toBe(5);
+        expect(expanded.end.line).toBe(8);
+      },
+    );
+  });
 });

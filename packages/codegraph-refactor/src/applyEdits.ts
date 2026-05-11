@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { ApplyEditsOptions, ApplyEditsResult, TextEdit } from "./types.js";
@@ -41,6 +41,18 @@ function applyFileEdits(source: string, edits: TextEdit[]): string {
   return next;
 }
 
+function isTransientFileContentionError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = "code" in error ? error.code : undefined;
+  return code === "EBUSY" || code === "EPERM" || code === "ENOTEMPTY";
+}
+
+async function wait(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 async function readUtf8File(file: string): Promise<{ status: "ok"; source: string } | { status: "missing" } | { status: "binary" }> {
   try {
     const buffer = await readFile(file);
@@ -63,9 +75,24 @@ async function readUtf8File(file: string): Promise<{ status: "ok"; source: strin
 
 async function writeAtomically(file: string, text: string): Promise<void> {
   await mkdir(path.dirname(file), { recursive: true });
-  const tempFile = path.join(path.dirname(file), `.${path.basename(file)}.${randomUUID()}.tmp`);
-  await writeFile(tempFile, text, "utf8");
-  await rename(tempFile, file);
+  const retryDelays = [10, 25, 50, 100];
+  for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
+    const tempFile = path.join(path.dirname(file), `.${path.basename(file)}.${randomUUID()}.tmp`);
+    try {
+      await writeFile(tempFile, text, "utf8");
+      await rename(tempFile, file);
+      return;
+    } catch (error) {
+      try {
+        await rm(tempFile, { force: true });
+      } catch {
+        // Cleanup is best-effort; retry attempts use fresh temp paths.
+      }
+      const canRetry = attempt < retryDelays.length && isTransientFileContentionError(error);
+      if (!canRetry) throw error;
+      await wait(retryDelays[attempt]!);
+    }
+  }
 }
 
 function gitPath(file: string, gitCwd: string | undefined): string {

@@ -1,5 +1,5 @@
 import { parseWithJsLanguage } from "../jsFallback.js";
-import { prepareSourceInput } from "../languages/filePrep.js";
+import { prepareSourceInput, prepareSourceInputFromSource } from "../languages/filePrep.js";
 import {
   getNativeQueryExecution,
   getNativeSyntaxTreeExecution,
@@ -91,12 +91,30 @@ export function parsePreparedFileContext(context: PreparedFileContext): ParsedFi
 
 export async function prepareFileForIndexing(file: string, native?: NativeRuntimeMode): Promise<PreparedFileContext> {
   const prep = await prepareSourceInput(file);
-  const nativeExecution = getNativeQueryExecution(prep.source, prep.sup, native);
+  return prepareFileForIndexingFromPreparedSource(file, prep.source, prep.sup, native);
+}
+
+export function prepareFileForIndexingFromSource(
+  file: string,
+  source: string,
+  native?: NativeRuntimeMode,
+): PreparedFileContext {
+  const prep = prepareSourceInputFromSource(file, source);
+  return prepareFileForIndexingFromPreparedSource(file, prep.source, prep.sup, native);
+}
+
+function prepareFileForIndexingFromPreparedSource(
+  file: string,
+  source: string,
+  sup: LanguageSupport,
+  native?: NativeRuntimeMode,
+): PreparedFileContext {
+  const nativeExecution = getNativeQueryExecution(source, sup, native);
 
   return {
     file,
-    source: prep.source,
-    sup: prep.sup,
+    source,
+    sup,
     ...(native ? { nativeMode: native } : {}),
     nativeQueries: nativeExecution.results,
     ...(nativeExecution.fallbackReason ? { nativeFallbackReason: nativeExecution.fallbackReason } : {}),

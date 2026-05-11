@@ -47,17 +47,23 @@ export async function prepareParserInput(file: string, opts?: { source?: string 
 }
 
 export async function prepareSourceInput(file: string, opts?: { source?: string }): Promise<SourceInput> {
+  if (opts?.source !== undefined) return prepareSourceInputFromSource(file, opts.source);
+  const framework = detectSFCFramework(file);
+  if (!framework && !supportForFile(file)) throw new UnsupportedParserInputError(file);
+  const rawSource = await fsp.readFile(file, "utf8");
+  return prepareSourceInputFromSource(file, rawSource);
+}
+
+export function prepareSourceInputFromSource(file: string, source: string): SourceInput {
   const framework = detectSFCFramework(file);
   if (framework) {
-    const rawSource = opts?.source ?? (await fsp.readFile(file, "utf8"));
-    return prepareSFCSourceInput(rawSource, framework);
+    return prepareSFCSourceInput(source, framework);
   }
 
   const sup = supportForFile(file);
   if (!sup) throw new UnsupportedParserInputError(file);
-  const rawSource = opts?.source ?? (await fsp.readFile(file, "utf8"));
   return {
-    source: rawSource,
+    source,
     sup,
   };
 }

@@ -1,8 +1,7 @@
 import fs from "node:fs";
-import { parseWithJsLanguage } from "../jsFallback.js";
-import { supportForFile } from "../languages.js";
 import { toRange } from "../util.js";
 import { getDeclarationAnchor } from "./declaration-anchor.js";
+import { attemptParsePreparedFileContext, prepareFileForIndexingFromSource } from "./parse-context.js";
 import { isLeadingTriviaNode, isLeadingTriviaTransparentNode } from "./symbol-range-trivia.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
@@ -68,12 +67,12 @@ function parseTreeForDef(
     return { source: cached.source, tree: cached.tree, languageId: cached.sup.id };
   }
 
-  const support = supportForFile(def.file);
-  if (!support) return null;
   try {
     const source = fs.readFileSync(def.file, "utf8");
-    const tree = parseWithJsLanguage(source, support.language(def.file));
-    return { source, tree, languageId: support.id };
+    const prepared = prepareFileForIndexingFromSource(def.file, source, index.nativeMode);
+    const parsed = attemptParsePreparedFileContext(prepared).parsed;
+    if (!parsed) return null;
+    return { source: parsed.source, tree: parsed.tree, languageId: parsed.sup.id };
   } catch {
     return null;
   }
