@@ -11,7 +11,6 @@ import {
   buildProjectIndexIncremental,
   goToDefinition,
   findReferences,
-  getApiSurface,
 } from "./indexer.js";
 import type { BuildOptions, BuildReport } from "./indexer/types.js";
 import { buildReviewReport, type ReviewBuildReport, type ReviewDepth } from "./review.js";
@@ -27,9 +26,6 @@ import {
   graphToDOTSymbols,
   graphToMermaidSymbolsWithFiles,
   graphToDOTSymbolsWithFiles,
-  getDependencies,
-  getReverseDependencies,
-  getShortestPath,
   findDetailedCycles,
   sortDetailedCycles,
   getUnresolvedImports,
@@ -52,6 +48,7 @@ import { supportForFile } from "./languages.js";
 import { handleChunkCommand } from "./cli/chunk.js";
 import { buildDoctorReport } from "./cli/doctor.js";
 import { handleGraphDeltaCommand } from "./cli/graphDelta.js";
+import { handleGraphQueryCommand } from "./cli/graphQueries.js";
 import { CLI_HELP_TEXT } from "./cli/help.js";
 import { parseCacheModeOption } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
@@ -2088,158 +2085,38 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "deps" || cmd === "rdeps") {
-    const [fileArg] = parsed.positionals;
-    if (!fileArg) {
-      writeStderrLine(`Usage: ${cmd} <file> [--depth N] [--json]`);
-      exitCli(2);
-    }
-    const depthRaw = getOpt("--depth");
-    const depth = depthRaw !== undefined ? Number(depthRaw) : undefined;
-    const json = hasFlag("--json");
-    const resolvedFile = resolveCliProjectFile(projectRootFs, fileArg, "File");
-    if (resolvedFile.status === "error") {
-      writeCliProjectFileError(resolvedFile, json ? "json" : "text");
-      return;
-    }
-    const file = resolvedFile.file;
-
-    const graph = await collectGraph(
+    await handleGraphQueryCommand({
+      command: cmd,
+      positionals: parsed.positionals,
       projectRootFs,
-      await listProjectFilesForScan(projectRootFs),
-      hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined,
-    );
-    const results =
-      cmd === "deps"
-        ? getDependencies(graph, file, depth !== undefined ? { depth } : {})
-        : getReverseDependencies(graph, file, depth !== undefined ? { depth } : {});
-
-    if (json) {
-      writeJSONLine(results);
-    } else {
-      writeStdoutLine(`${cmd === "deps" ? "Dependencies" : "Reverse dependencies"} for ${fileArg}:`);
-      for (const res of results) {
-        const rel = path.relative(projectRootFs, res.file);
-        writeStdoutLine(`${"  ".repeat(res.depth)} ${rel} (depth ${res.depth})`);
-      }
-    }
+      projectRootAbs,
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
+      listProjectFilesForScan: async () => await listProjectFilesForScan(projectRootFs),
+      ...(hasGraphOverrides || nativeMode !== "auto" ? { graphOptions: buildGraphOptions() } : {}),
+    });
     return;
   }
 
-  if (cmd === "path") {
-    const [fromArg, toArg] = parsed.positionals;
-    if (!fromArg || !toArg) {
-      writeStderrLine("Usage: path <from-file> <to-file> [--json]");
-      exitCli(2);
-    }
-    const json = hasFlag("--json");
-    const resolvedFrom = resolveCliProjectFile(projectRootFs, fromArg, "From file");
-    if (resolvedFrom.status === "error") {
-      writeCliProjectFileError(resolvedFrom, json ? "json" : "text");
-      return;
-    }
-    const resolvedTo = resolveCliProjectFile(projectRootFs, toArg, "To file");
-    if (resolvedTo.status === "error") {
-      writeCliProjectFileError(resolvedTo, json ? "json" : "text");
-      return;
-    }
-    const from = resolvedFrom.file;
-    const to = resolvedTo.file;
-
-    const graph = await collectGraph(
+  if (cmd === "path" || cmd === "cycles" || cmd === "unresolved") {
+    await handleGraphQueryCommand({
+      command: cmd,
+      positionals: parsed.positionals,
       projectRootFs,
-      await listProjectFilesForScan(projectRootFs),
-      hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined,
-    );
-    const pathResult = getShortestPath(graph, from, to);
-
-    if (json) {
-      writeJSONLine(pathResult);
-    } else if (pathResult) {
-      writeStdoutLine(`Path from ${fromArg} to ${toArg}:`);
-      writeStdoutLine(pathResult.map((p) => path.relative(projectRootFs, p)).join(" -> "));
-    } else {
-      writeStdoutLine(`No path found from ${fromArg} to ${toArg}`);
-    }
-    return;
-  }
-
-  if (cmd === "cycles") {
-    const json = hasFlag("--json");
-    const sortModeRaw = getOpt("--sort") ?? "priority";
-    const sortMode =
-      sortModeRaw === "priority" || sortModeRaw === "size" || sortModeRaw === "fanin" ? sortModeRaw : null;
-    if (!sortMode) {
-      writeStderrLine("Invalid --sort value. Use one of: priority, size, fanin.");
-      exitCli(2);
-    }
-
-    const graph = await collectGraph(
-      projectRootFs,
-      await listProjectFilesForScan(projectRootFs),
-      hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined,
-    );
-    const cycleDetails = sortDetailedCycles(findDetailedCycles(graph), sortMode);
-
-    if (json) {
-      writeJSONLine(cycleDetails);
-    } else {
-      if (cycleDetails.length === 0) {
-        writeStdoutLine("No dependency cycles found.");
-      } else {
-        writeStdoutLine(`Found ${cycleDetails.length} dependency cycles (sorted by ${sortMode}):`);
-        for (let i = 0; i < cycleDetails.length; i++) {
-          const cycle = cycleDetails[i]!;
-          writeStdoutLine(`Cycle ${i + 1} (priority=${cycle.priorityScore}):`);
-          writeStdoutLine(`  ${cycle.files.map((p) => path.relative(projectRootFs, p)).join(" -> ")} -> ...`);
-          if (cycle.entryEdges.length > 0) {
-            writeStdoutLine("  Incoming edges:");
-            for (const edge of cycle.entryEdges) {
-              writeStdoutLine(
-                `    ${path.relative(projectRootFs, edge.from)} -> ${path.relative(projectRootFs, edge.to)} (import ${edge.raw})`,
-              );
-            }
-          }
-          if (cycle.internalEdges.length > 0) {
-            writeStdoutLine("  Internal cycle edges:");
-            for (const edge of cycle.internalEdges) {
-              writeStdoutLine(
-                `    ${path.relative(projectRootFs, edge.from)} -> ${path.relative(projectRootFs, edge.to)} (import ${edge.raw})`,
-              );
-            }
-          }
-          writeStdoutLine(`  Hint: ${cycle.remediationHint}`);
-        }
-      }
-    }
-    return;
-  }
-
-  if (cmd === "unresolved") {
-    const json = hasFlag("--json");
-    const graph = await collectGraph(
-      projectRootFs,
-      await listProjectFilesForScan(projectRootFs),
-      hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined,
-    );
-    const unresolved = getUnresolvedImports(graph, { projectRoot: projectRootFs });
-
-    if (json) {
-      writeJSONLine(unresolved);
-    } else {
-      if (unresolved.length === 0) {
-        writeStdoutLine("No unresolved external imports found.");
-      } else {
-        writeStdoutLine(`Found ${unresolved.length} unresolved external imports:`);
-        for (const item of unresolved) {
-          writeStdoutLine(`- ${item.name} (imported by ${item.importers.length} files)`);
-          if (hasFlag("--verbose")) {
-            for (const imp of item.importers) {
-              writeStdoutLine(`    ${path.relative(projectRootFs, imp.file)} (as "${imp.raw}")`);
-            }
-          }
-        }
-      }
-    }
+      projectRootAbs,
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
+      listProjectFilesForScan: async () => await listProjectFilesForScan(projectRootFs),
+      ...(hasGraphOverrides || nativeMode !== "auto" ? { graphOptions: buildGraphOptions() } : {}),
+    });
     return;
   }
 
@@ -2292,26 +2169,25 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "apisurface") {
-    const json = hasFlag("--json");
-    const index = await buildProjectIndex(projectRootFs, {
-      onProgress: progressHandler,
-      discovery: discoveryOptions,
-      ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
-      ...workerOpts,
+    await handleGraphQueryCommand({
+      command: cmd,
+      positionals: parsed.positionals,
+      projectRootFs,
+      projectRootAbs,
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
+      listProjectFilesForScan: async () => await listProjectFilesForScan(projectRootFs),
+      indexOptions: {
+        onProgress: progressHandler,
+        discovery: discoveryOptions,
+        ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+        ...workerOpts,
+      },
     });
-    const apiSurface = getApiSurface(index);
-
-    if (json) {
-      writeJSONLine(apiSurface);
-    } else {
-      writeStdoutLine(`API Surface for ${projectRootAbs}:`);
-      for (const item of apiSurface) {
-        writeStdoutLine(`  ${path.relative(projectRootFs, item.file)}:`);
-        for (const exp of item.exports) {
-          writeStdoutLine(`    - ${exp.exportedAs} (${exp.kind})`);
-        }
-      }
-    }
     return;
   }
 

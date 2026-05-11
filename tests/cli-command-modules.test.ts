@@ -6,6 +6,7 @@ import { describe, expect, test } from "vitest";
 import { handleChunkCommand } from "../src/cli/chunk.js";
 import { buildDoctorReport } from "../src/cli/doctor.js";
 import { handleGraphDeltaCommand } from "../src/cli/graphDelta.js";
+import { handleGraphQueryCommand } from "../src/cli/graphQueries.js";
 import { CLI_HELP_TEXT } from "../src/cli/help.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/cli/packageInfo.js";
 import { handleSkillCommand } from "../src/cli/skill.js";
@@ -176,6 +177,58 @@ describe("CLI command modules", () => {
     }
   });
 
+  test("prints SQL usage and exits when required options are missing", async () => {
+    const stderrLines: string[] = [];
+
+    await expect(
+      handleSqlCommand({
+        getOpt: () => undefined,
+        cwd: () => process.cwd(),
+        writeJSONLine: () => {
+          throw new Error("unexpected json output");
+        },
+        writeStderrLine: (message) => stderrLines.push(message),
+        exit: (code) => {
+          throw new Error(`sql exit ${code}`);
+        },
+      }),
+    ).rejects.toThrow("sql exit 1");
+
+    expect(stderrLines).toEqual(['Usage: sql --db <sqlite path> --query "SELECT ..."']);
+  });
+
+  test("resolves relative SQL database paths against the injected runtime cwd", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-sql-relative-"));
+    const dbPath = path.join(tempDir, "graph.sqlite");
+    await fsp.writeFile(path.join(tempDir, "main.ts"), "export const answer = 42;\n", "utf8");
+    await captureCli(["graph", "--root", tempDir, "--sqlite", dbPath]);
+    const jsonLines: unknown[] = [];
+
+    try {
+      await handleSqlCommand({
+        getOpt: (name) => {
+          if (name === "--sqlite") return "graph.sqlite";
+          if (name === "--query") return "SELECT path FROM files ORDER BY path;";
+          return undefined;
+        },
+        cwd: () => tempDir,
+        writeJSONLine: (value) => jsonLines.push(value),
+        writeStderrLine: () => {
+          throw new Error("unexpected stderr");
+        },
+        exit: (code) => {
+          throw new Error(`unexpected exit ${code}`);
+        },
+      });
+
+      const result = readJsonRecord(jsonLines[0]);
+      expect(result.columns).toEqual(["path"]);
+      expect(JSON.stringify(result.rows)).toContain("main.ts");
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("writes graph delta output through the extracted graph-delta command handler", async () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-delta-module-"));
     const outputPath = path.join(tempDir, "delta.json");
@@ -278,6 +331,79 @@ describe("CLI command modules", () => {
     } finally {
       await fsp.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  test("runs graph exploration commands through the main CLI dispatcher", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-explore-"));
+    await fsp.writeFile(path.join(tempDir, "util.ts"), "export function helper() { return 1; }\n", "utf8");
+    await fsp.writeFile(
+      path.join(tempDir, "main.ts"),
+      "import { helper } from './util';\nimport missing from 'missing-pkg';\nexport function run() { return helper() + missing; }\n",
+      "utf8",
+    );
+
+    try {
+      const deps = await captureCli(["deps", "main.ts", "--root", tempDir, "--json"]);
+      const rdeps = await captureCli(["rdeps", "util.ts", "--root", tempDir]);
+      const graphPath = await captureCli(["path", "main.ts", "util.ts", "--root", tempDir]);
+      const cycles = await captureCli(["cycles", "--root", tempDir]);
+      const unresolved = await captureCli(["unresolved", "--root", tempDir, "--verbose"]);
+      const apiSurface = await captureCli(["apisurface", "--root", tempDir]);
+
+      expect(JSON.stringify(JSON.parse(deps.stdout))).toContain("util.ts");
+      expect(rdeps.stdout).toContain("Reverse dependencies for util.ts:");
+      expect(graphPath.stdout).toContain("main.ts");
+      expect(graphPath.stdout).toContain("util.ts");
+      expect(cycles.stdout).toContain("No dependency cycles found.");
+      expect(unresolved.stdout).toContain("missing-pkg");
+      expect(unresolved.stdout).toContain('as "missing-pkg"');
+      expect(apiSurface.stdout).toContain("API Surface");
+      expect(apiSurface.stdout).toContain("run");
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("runs extracted graph query command handlers with injected graph dependencies", async () => {
+    const projectRoot = path.join(os.tmpdir(), "codegraph-graph-query-handler").replace(/\\/g, "/");
+    const mainPath = `${projectRoot}/main.ts`;
+    const utilPath = `${projectRoot}/util.ts`;
+    const stdoutLines: string[] = [];
+    const jsonLines: unknown[] = [];
+    const stderrLines: string[] = [];
+
+    await handleGraphQueryCommand({
+      command: "deps",
+      positionals: ["main.ts"],
+      projectRootFs: projectRoot,
+      projectRootAbs: projectRoot,
+      getOpt: () => undefined,
+      hasFlag: (name) => name === "--json",
+      writeJSONLine: (value) => jsonLines.push(value),
+      writeStdoutLine: (message) => stdoutLines.push(message),
+      writeStderrLine: (message) => stderrLines.push(message),
+      exit: (code) => {
+        throw new Error(`unexpected exit ${code}`);
+      },
+      listProjectFilesForScan: async () => [mainPath, utilPath],
+      collectGraph: async () => ({
+        nodes: new Set([mainPath, utilPath]),
+        edges: [
+          {
+            from: mainPath,
+            to: { type: "file", path: utilPath },
+            raw: "./util",
+          },
+        ],
+      }),
+      buildProjectIndex: async () => {
+        throw new Error("unexpected index build");
+      },
+    });
+
+    expect(jsonLines).toEqual([[{ file: utilPath, depth: 1 }]]);
+    expect(stdoutLines).toEqual([]);
+    expect(stderrLines).toEqual([]);
   });
 
   test("defaults the extracted skill command to doctor output", async () => {
