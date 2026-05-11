@@ -63,6 +63,24 @@ describe("extractFunction", () => {
     );
   });
 
+  test("ignores identifiers and control-flow words inside strings and comments", async () => {
+    await withFile(
+      "export function run(name: string) {\n  const prefix = 'hi';\n  console.log('prefix return'); // name\n}\n",
+      async (root, file) => {
+        const index = await buildProjectIndexFromFiles(root, [file], { keepParsed: true });
+
+        const result = await extractFunction(index, { file, range: lineRange(3, 4) }, { newName: "emitLiteral" });
+
+        expect(result.status).toBe("ok");
+        await applyEdits(result.edits);
+        const source = await readFile(file, "utf8");
+        expect(source).toContain("function emitLiteral()");
+        expect(source).toContain("emitLiteral();");
+        expect(source).not.toContain("function emitLiteral(name, prefix)");
+      },
+    );
+  });
+
   test("ignores braces inside strings and comments when locating the containing function", async () => {
     await withFile(
       "export function run(name: string) {\n  const pattern = \"}\";\n  // { ignored\n  console.log(name, pattern);\n}\n",
@@ -91,6 +109,23 @@ describe("extractFunction", () => {
         expect(result.status).toBe("unsupported");
         expect(result.reason).toContain("used after");
         expect(result.edits).toEqual([]);
+      },
+    );
+  });
+
+  test("does not treat following comments as uses of extracted declarations", async () => {
+    await withFile(
+      "export function run(name: string) {\n  const greeting = `hi ${name}`;\n  // greeting is already logged above\n}\n",
+      async (root, file) => {
+        const index = await buildProjectIndexFromFiles(root, [file], { keepParsed: true });
+
+        const result = await extractFunction(index, { file, range: lineRange(2, 3) }, { newName: "makeGreeting" });
+
+        expect(result.status).toBe("ok");
+        await applyEdits(result.edits);
+        const source = await readFile(file, "utf8");
+        expect(source).toContain("function makeGreeting(name)");
+        expect(source).toContain("makeGreeting(name);");
       },
     );
   });

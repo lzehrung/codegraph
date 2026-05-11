@@ -78,6 +78,136 @@ function findMatchingBrace(source: string, openBrace: number): number | null {
   return null;
 }
 
+function maskCodeForIdentifierScan(source: string): string {
+  let output = "";
+  let index = 0;
+  const maskedChar = (char: string) => (char === "\n" || char === "\r" ? char : " ");
+
+  function maskQuotedString(quote: "'" | `"`): void {
+    output += " ";
+    index += 1;
+    let escapeNext = false;
+    while (index < source.length) {
+      const char = source[index]!;
+      output += maskedChar(char);
+      index += 1;
+      if (escapeNext) {
+        escapeNext = false;
+      } else if (char === "\\") {
+        escapeNext = true;
+      } else if (char === quote) {
+        return;
+      }
+    }
+  }
+
+  function maskLineComment(): void {
+    output += "  ";
+    index += 2;
+    while (index < source.length && source[index] !== "\n") {
+      output += " ";
+      index += 1;
+    }
+  }
+
+  function maskBlockComment(): void {
+    output += "  ";
+    index += 2;
+    while (index < source.length) {
+      const char = source[index]!;
+      const next = source[index + 1] ?? "";
+      if (char === "*" && next === "/") {
+        output += "  ";
+        index += 2;
+        return;
+      }
+      output += maskedChar(char);
+      index += 1;
+    }
+  }
+
+  function maskTemplateLiteral(): void {
+    output += " ";
+    index += 1;
+    let escapeNext = false;
+    while (index < source.length) {
+      const char = source[index]!;
+      const next = source[index + 1] ?? "";
+      if (escapeNext) {
+        output += maskedChar(char);
+        escapeNext = false;
+        index += 1;
+      } else if (char === "\\") {
+        output += " ";
+        escapeNext = true;
+        index += 1;
+      } else if (char === "`") {
+        output += " ";
+        index += 1;
+        return;
+      } else if (char === "$" && next === "{") {
+        output += "  ";
+        index += 2;
+        copyTemplateExpression();
+      } else {
+        output += maskedChar(char);
+        index += 1;
+      }
+    }
+  }
+
+  function copyTemplateExpression(): void {
+    let depth = 1;
+    while (index < source.length && depth > 0) {
+      const char = source[index]!;
+      const next = source[index + 1] ?? "";
+      if (char === "/" && next === "/") {
+        maskLineComment();
+      } else if (char === "/" && next === "*") {
+        maskBlockComment();
+      } else if (char === "'") {
+        maskQuotedString("'");
+      } else if (char === '"') {
+        maskQuotedString('"');
+      } else if (char === "`") {
+        maskTemplateLiteral();
+      } else if (char === "{") {
+        depth += 1;
+        output += char;
+        index += 1;
+      } else if (char === "}") {
+        depth -= 1;
+        output += depth === 0 ? " " : char;
+        index += 1;
+      } else {
+        output += char;
+        index += 1;
+      }
+    }
+  }
+
+  while (index < source.length) {
+    const char = source[index]!;
+    const next = source[index + 1] ?? "";
+    if (char === "/" && next === "/") {
+      maskLineComment();
+    } else if (char === "/" && next === "*") {
+      maskBlockComment();
+    } else if (char === "'") {
+      maskQuotedString("'");
+    } else if (char === '"') {
+      maskQuotedString('"');
+    } else if (char === "`") {
+      maskTemplateLiteral();
+    } else {
+      output += char;
+      index += 1;
+    }
+  }
+
+  return output;
+}
+
 function parseParams(params: string): string[] {
   return params
     .split(",")
@@ -88,6 +218,7 @@ function parseParams(params: string): string[] {
 function collectDeclaredNames(source: string): string[] {
   const names: string[] = [];
   const seen = new Set<string>();
+  const maskedSource = maskCodeForIdentifierScan(source);
 
   const addName = (name: string | undefined): void => {
     if (!name || seen.has(name)) return;
@@ -97,9 +228,9 @@ function collectDeclaredNames(source: string): string[] {
 
   const variableStatementPattern = /\b(?:const|let|var)\s+(?<declarations>[^;\n]+)/g;
   for (
-    let match: RegExpExecArray | null = variableStatementPattern.exec(source);
+    let match: RegExpExecArray | null = variableStatementPattern.exec(maskedSource);
     match;
-    match = variableStatementPattern.exec(source)
+    match = variableStatementPattern.exec(maskedSource)
   ) {
     const declarations = match.groups?.["declarations"] ?? "";
     for (const declaration of declarations.split(",")) {
@@ -110,9 +241,9 @@ function collectDeclaredNames(source: string): string[] {
   const namedDeclarationPattern =
     /\bfunction\s+(?<fn>[A-Za-z_$][A-Za-z0-9_$]*)|\bclass\s+(?<className>[A-Za-z_$][A-Za-z0-9_$]*)/g;
   for (
-    let match: RegExpExecArray | null = namedDeclarationPattern.exec(source);
+    let match: RegExpExecArray | null = namedDeclarationPattern.exec(maskedSource);
     match;
-    match = namedDeclarationPattern.exec(source)
+    match = namedDeclarationPattern.exec(maskedSource)
   ) {
     addName(match.groups?.["fn"] ?? match.groups?.["className"]);
   }
@@ -120,11 +251,13 @@ function collectDeclaredNames(source: string): string[] {
 }
 
 function hasIdentifier(source: string, name: string): boolean {
-  return new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(source);
+  return new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(
+    maskCodeForIdentifierScan(source),
+  );
 }
 
 function collectInputs(selected: string, params: string[], precedingSource: string): string[] {
-  const identifiers = new Set(selected.match(/\b[A-Za-z_$][A-Za-z0-9_$]*\b/g) ?? []);
+  const identifiers = new Set(maskCodeForIdentifierScan(selected).match(/\b[A-Za-z_$][A-Za-z0-9_$]*\b/g) ?? []);
   const inputs: string[] = [];
   const seen = new Set<string>();
   for (const name of [...params, ...collectDeclaredNames(precedingSource)]) {
@@ -140,8 +273,9 @@ function findDeclarationsUsedAfter(selected: string, followingSource: string): s
 }
 
 function unsupportedControlFlowReason(selected: string): string | null {
-  if (/\breturn\b/.test(selected)) return "regions with return statements are unsupported";
-  if (/\b(?:break|continue|yield|await)\b|\b(?:this|arguments|super)\b|new\.target/.test(selected)) {
+  const maskedSelected = maskCodeForIdentifierScan(selected);
+  if (/\breturn\b/.test(maskedSelected)) return "regions with return statements are unsupported";
+  if (/\b(?:break|continue|yield|await)\b|\b(?:this|arguments|super)\b|new\.target/.test(maskedSelected)) {
     return "regions with unsupported control flow or context-sensitive bindings are unsupported";
   }
   return null;
