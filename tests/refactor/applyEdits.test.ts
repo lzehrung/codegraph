@@ -61,6 +61,20 @@ describe("applyEdits", () => {
     });
   });
 
+  test("treats same-start insertions and replacements as conflicts", async () => {
+    await withTempDir(async (dir) => {
+      const file = path.join(dir, "sample.ts");
+      await writeFile(file, "abcdef\n", "utf8");
+
+      const result = await applyEdits([edit(file, 3, 3, "X"), edit(file, 3, 6, "Y")]);
+
+      await expect(readFile(file, "utf8")).resolves.toBe("abcdef\n");
+      expect(result.writes).toEqual([]);
+      expect(result.conflicts).toEqual([file]);
+      expect(result.skipped).toEqual([]);
+    });
+  });
+
   test("dryRun previews post-edit text without writing", async () => {
     await withTempDir(async (dir) => {
       const file = path.join(dir, "sample.ts");

@@ -115,6 +115,35 @@ describe("moveSymbol", () => {
     );
   });
 
+  test("rewrites inline type-only importers when moving exported types", async () => {
+    await withProject(
+      {
+        "src/source.ts": "export interface User { name: string }\nexport const marker = 1;\n",
+        "src/main.ts": "import { marker, type User } from './source';\nconst user: User = { name: 'Ada' };\n",
+        "src/target.ts": "",
+      },
+      async (root, files) => {
+        const index = await buildProjectIndexFromFiles(root, Object.values(files), { keepParsed: true });
+        const handle = listSymbols(index, { file: files["src/source.ts"] }).find(
+          (symbol) => symbol.name === "User",
+        )?.id;
+        expect(handle).toBeDefined();
+        if (!handle) return;
+
+        const result = await moveSymbol(index, handle, files["src/target.ts"]!);
+
+        expect(result.status).toBe("ok");
+        await applyEdits(result.edits);
+        await expect(readFile(files["src/main.ts"]!, "utf8")).resolves.toContain(
+          "import { marker } from './source';",
+        );
+        await expect(readFile(files["src/main.ts"]!, "utf8")).resolves.toContain(
+          "import { type User } from './target';",
+        );
+      },
+    );
+  });
+
   test("adds an import when a moved declaration is still used by source-file siblings", async () => {
     await withProject(
       {

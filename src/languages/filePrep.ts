@@ -22,6 +22,11 @@ interface SourceInput {
   sup: LanguageSupport;
 }
 
+interface SourceInputDetection {
+  framework?: SFCFramework;
+  sup?: LanguageSupport;
+}
+
 export class UnsupportedParserInputError extends Error {
   readonly file: string;
 
@@ -49,18 +54,23 @@ export async function prepareParserInput(file: string, opts?: { source?: string 
 export async function prepareSourceInput(file: string, opts?: { source?: string }): Promise<SourceInput> {
   if (opts?.source !== undefined) return prepareSourceInputFromSource(file, opts.source);
   const framework = detectSFCFramework(file);
-  if (!framework && !supportForFile(file)) throw new UnsupportedParserInputError(file);
+  const sup = framework ? undefined : supportForFile(file);
+  if (!framework && !sup) throw new UnsupportedParserInputError(file);
   const rawSource = await fsp.readFile(file, "utf8");
-  return prepareSourceInputFromSource(file, rawSource);
+  return prepareSourceInputFromSource(file, rawSource, { ...(framework ? { framework } : {}), ...(sup ? { sup } : {}) });
 }
 
-export function prepareSourceInputFromSource(file: string, source: string): SourceInput {
-  const framework = detectSFCFramework(file);
+export function prepareSourceInputFromSource(
+  file: string,
+  source: string,
+  detection?: SourceInputDetection,
+): SourceInput {
+  const framework = detection?.framework ?? detectSFCFramework(file);
   if (framework) {
     return prepareSFCSourceInput(source, framework);
   }
 
-  const sup = supportForFile(file);
+  const sup = detection?.sup ?? supportForFile(file);
   if (!sup) throw new UnsupportedParserInputError(file);
   return {
     source,

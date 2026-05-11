@@ -122,14 +122,16 @@ export function listSymbols(
     const mod = index.byFile.get(file);
     if (!mod) continue;
     for (const def of mod.locals) {
+      const range =
+        opts?.trivia && opts.trivia !== "exclude"
+          ? getSymbolRange(index, def, { trivia: opts.trivia })
+          : def.range;
       out.push({
         id: symbolId(def),
         file,
         name: def.localName,
         kind: def.kind,
-        range: getSymbolRange(index, def, {
-          ...(opts?.trivia ? { trivia: opts.trivia } : {}),
-        }),
+        range,
         ...(def.docstring ? { docstring: def.docstring } : {}),
       });
     }

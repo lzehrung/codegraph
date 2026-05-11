@@ -60,11 +60,15 @@ function splitSpecifiers(specifiers: string): string[] {
 
 function specifierNames(specifier: string): { imported: string; local: string } {
   const [importedRaw, localRaw] = specifier.split(/\s+as\s+/);
-  const imported = (importedRaw ?? "").trim();
+  const imported = normalizeImportedSpecifierName(importedRaw ?? "");
   return {
     imported,
     local: (localRaw ?? imported).trim(),
   };
+}
+
+function normalizeImportedSpecifierName(name: string): string {
+  return name.trim().replace(/^type\s+/, "");
 }
 
 function importEditForSpecifier(modFile: string, from: string, name: string, targetFile: string): TextEdit | null {
