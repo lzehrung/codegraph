@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import type { NativeQueryResults, CompactQueryResults } from "../native/treeSitterNative.js";
 import { loadNativeBinding } from "../native/bindingLoader.js";
+import type { NativeBindingLoadResult } from "../native/bindingLoader.js";
 
 export type NativeExtractTask = {
   filePath: string;
@@ -46,92 +47,112 @@ const localNativePackageRoot = path.resolve(
   "../../packages/codegraph-native",
 );
 
-let binding: NativeBinding | null = null;
-let supportedIds: Set<string> | null = null;
-let loadError: string | undefined;
+type NativeExtractorDeps = {
+  loadBinding: () => NativeBindingLoadResult<NativeBinding>;
+  readFile: (filePath: string, encoding: BufferEncoding) => Promise<string>;
+};
 
-function ensureBinding(): void {
-  if (binding || loadError) return;
-  const loaded = loadNativeBinding<NativeBinding>({
+export type NativeExtractor = (task: NativeExtractTask) => Promise<NativeExtractResult>;
+
+function loadProductionBinding(): NativeBindingLoadResult<NativeBinding> {
+  return loadNativeBinding<NativeBinding>({
     packageName: "@lzehrung/codegraph-native",
     localPackageRoot: localNativePackageRoot,
     requireFn: require,
     resolveFn: require.resolve,
   });
-  if (loaded.binding) {
-    binding = loaded.binding;
-    supportedIds = new Set(binding.supportedLanguageIds());
-    return;
-  }
-  loadError =
-    "native addon not available in worker" +
-    (loaded.error ? `: ${loaded.error instanceof Error ? loaded.error.message : String(loaded.error)}` : "");
 }
 
-export default async function runExtraction(task: NativeExtractTask): Promise<NativeExtractResult> {
-  ensureBinding();
+export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtractor {
+  let binding: NativeBinding | null = null;
+  let supportedIds: Set<string> | null = null;
+  let loadError: string | undefined;
 
-  const source = task.source ?? (await fsp.readFile(task.filePath, "utf8"));
-
-  if (!binding || !supportedIds) {
-    return {
-      filePath: task.filePath,
-      languageId: task.languageId,
-      source,
-      nativeResults: null,
-      compactResults: null,
-      fallbackReason: "unavailable",
-      ...(loadError ? { error: loadError } : {}),
-    };
+  function ensureBinding(): void {
+    if (binding || loadError) return;
+    const loaded = deps.loadBinding();
+    if (loaded.binding) {
+      binding = loaded.binding;
+      supportedIds = new Set(binding.supportedLanguageIds());
+      return;
+    }
+    loadError =
+      "native addon not available in worker" +
+      (loaded.error ? `: ${loaded.error instanceof Error ? loaded.error.message : String(loaded.error)}` : "");
   }
 
-  if (!supportedIds.has(task.languageId)) {
-    return {
-      filePath: task.filePath,
-      languageId: task.languageId,
-      source,
-      nativeResults: null,
-      compactResults: null,
-      fallbackReason: "unsupportedLanguage",
-    };
-  }
+  return async function runExtraction(task: NativeExtractTask): Promise<NativeExtractResult> {
+    ensureBinding();
 
-  try {
-    if (task.compact && binding.runImportsQueryCompact) {
-      const compactResults = binding.runImportsQueryCompact(source, task.languageId, task.importsQuery);
+    const source = task.source ?? (await deps.readFile(task.filePath, "utf8"));
+
+    if (!binding || !supportedIds) {
       return {
         filePath: task.filePath,
         languageId: task.languageId,
         source,
         nativeResults: null,
-        compactResults,
+        compactResults: null,
+        fallbackReason: "unavailable",
+        ...(loadError ? { error: loadError } : {}),
       };
     }
 
-    const nativeResults = binding.runLanguageQueries(
-      source,
-      task.languageId,
-      task.importsQuery,
-      task.exportsQuery,
-      task.localsQuery,
-      task.importBindingsQuery,
-    );
-    return {
-      filePath: task.filePath,
-      languageId: task.languageId,
-      source,
-      nativeResults,
-      compactResults: null,
-    };
-  } catch (err) {
-    return {
-      filePath: task.filePath,
-      languageId: task.languageId,
-      source,
-      nativeResults: null,
-      compactResults: null,
-      fallbackReason: "queryFailure",
-      error: err instanceof Error ? err.message : String(err),
-    };
-  }
+    if (!supportedIds.has(task.languageId)) {
+      return {
+        filePath: task.filePath,
+        languageId: task.languageId,
+        source,
+        nativeResults: null,
+        compactResults: null,
+        fallbackReason: "unsupportedLanguage",
+      };
+    }
+
+    try {
+      if (task.compact && binding.runImportsQueryCompact) {
+        const compactResults = binding.runImportsQueryCompact(source, task.languageId, task.importsQuery);
+        return {
+          filePath: task.filePath,
+          languageId: task.languageId,
+          source,
+          nativeResults: null,
+          compactResults,
+        };
+      }
+
+      const nativeResults = binding.runLanguageQueries(
+        source,
+        task.languageId,
+        task.importsQuery,
+        task.exportsQuery,
+        task.localsQuery,
+        task.importBindingsQuery,
+      );
+      return {
+        filePath: task.filePath,
+        languageId: task.languageId,
+        source,
+        nativeResults,
+        compactResults: null,
+      };
+    } catch (err) {
+      return {
+        filePath: task.filePath,
+        languageId: task.languageId,
+        source,
+        nativeResults: null,
+        compactResults: null,
+        fallbackReason: "queryFailure",
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  };
 }
+
+const runExtraction = createNativeExtractor({
+  loadBinding: loadProductionBinding,
+  readFile: fsp.readFile,
+});
+
+export default runExtraction;
