@@ -14,6 +14,7 @@ import {
   prepareNativePackageManifestForPublish,
   restoreRootPackageManifest,
   restoreNativePackageManifest,
+  sanitizeRefactorPackageManifest,
   sanitizeJsFallbackPackageManifest,
   sanitizePublishedRootPackageManifest,
   selectLatestLegacyTag,
@@ -41,6 +42,7 @@ describe("release script helpers", () => {
     expect(isAllowedResumePath("scripts/release-lib.mjs")).toBe(true);
     expect(isAllowedResumePath("scripts/release.mjs")).toBe(true);
     expect(isAllowedResumePath("tests/release-script.test.ts")).toBe(true);
+    expect(isAllowedResumePath("packages/codegraph-refactor/package.json")).toBe(true);
     expect(isAllowedResumePath("packages/codegraph-js-fallback/package.json")).toBe(true);
     expect(isAllowedResumePath("src/indexer.ts")).toBe(false);
   });
@@ -61,10 +63,11 @@ describe("release script helpers", () => {
       detectChangedReleasePackages([
         "src/index.ts",
         "packages/codegraph-native/Cargo.toml",
+        "packages/codegraph-refactor/src/index.ts",
         "packages/codegraph-js-fallback/package.json",
         "docs/scenario-catalog.md",
       ]),
-    ).toEqual(["root", "native", "js-fallback"]);
+    ).toEqual(["root", "native", "refactor", "js-fallback"]);
   });
 
   it("treats release packaging scripts as root package changes", () => {
@@ -109,6 +112,7 @@ describe("release script helpers", () => {
       computePublishExecutionSteps({
         publishByPackage: {
           "@lzehrung/codegraph-native": true,
+          "@lzehrung/codegraph-refactor": true,
           "@lzehrung/codegraph-js-fallback": true,
           "@lzehrung/codegraph": true,
         },
@@ -118,6 +122,7 @@ describe("release script helpers", () => {
       "publishNativeTargets",
       "prepareNativeMeta",
       "publishNativeMeta",
+      "publishRefactor",
       "publishJsFallback",
       "prepareRootManifest",
       "publishRoot",
@@ -174,6 +179,28 @@ describe("release script helpers", () => {
       version: "1.8.44",
       dependencies: {
         "tree-sitter": "^0.25.0",
+      },
+    });
+  });
+
+  it("sanitizes the refactor package manifest for publishing", () => {
+    expect(
+      sanitizeRefactorPackageManifest({
+        name: "@lzehrung/codegraph-refactor",
+        version: "1.8.65",
+        peerDependencies: {
+          "@lzehrung/codegraph": "^1.8.65",
+        },
+        devDependencies: {
+          "@lzehrung/codegraph": "file:../..",
+          typescript: "^5.9.3",
+        },
+      }),
+    ).toEqual({
+      name: "@lzehrung/codegraph-refactor",
+      version: "1.8.65",
+      peerDependencies: {
+        "@lzehrung/codegraph": "^1.8.65",
       },
     });
   });

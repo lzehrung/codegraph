@@ -50,6 +50,14 @@ npm install @lzehrung/codegraph
 
 That is the simplest published path for the native Tree-sitter runtime. `@lzehrung/codegraph` depends on `@lzehrung/codegraph-native` optionally, and that package resolves the matching native artifact automatically when a published binary exists for the current platform.
 
+If your SDK integration emits source edits directly, install the opt-in refactor package alongside the core package:
+
+```bash
+npm install @lzehrung/codegraph @lzehrung/codegraph-refactor
+```
+
+The CLI refactor commands still ship with `@lzehrung/codegraph`; `@lzehrung/codegraph-refactor` is the direct-code import surface for edit-focused agents and editors.
+
 If you explicitly want the JS Tree-sitter fallback path as well, install the separate opt-in package:
 
 ```bash
@@ -70,12 +78,14 @@ Replace `VERSION` with the desired release version, for example `1.8.53`.
 
 Each release attaches a pre-built `.tgz` that `npm install` can consume by URL with no registry configuration needed for the root package itself.
 
-Important: the tarball alone does not bundle the native addon or the optional JS fallback grammars. To analyze source languages after a tarball install, you still need one of these:
+Important: the tarball alone does not bundle the native addon, the optional JS fallback grammars, or the companion refactor package. To analyze source languages after a tarball install, you still need one of these:
 
 - Configure the `@lzehrung` registry so the optional `@lzehrung/codegraph-native` package can resolve for your platform.
 - Configure the `@lzehrung` registry and install the separate `@lzehrung/codegraph-js-fallback` package explicitly if you want the non-native Tree-sitter path.
 
 Without one of those extra runtime packages, the CLI and library still install, but source-language parsing features will report the native addon as unavailable.
+
+Install `@lzehrung/codegraph-refactor` from the scoped registry when direct SDK refactor imports are needed with a tarball-based core install.
 
 ## Native runtime modes
 
@@ -93,6 +103,7 @@ Explicit CLI, library, and tool `native` options take precedence over `CODEGRAPH
 
 - `@lzehrung/codegraph`: main library and CLI
 - `@lzehrung/codegraph-native`: optional native runtime package that resolves the matching binary artifact
+- `@lzehrung/codegraph-refactor`: opt-in direct-code refactor/edit helpers that peer-depend on the main package
 - `@lzehrung/codegraph-js-fallback`: separate opt-in JS Tree-sitter runtime and grammar bundle
 
 Native-only installs do not need the JS fallback package for normal supported source-language graph extraction, symbol indexing, chunking, or AST grep. If query recovery degrades in `auto` mode, Codegraph reports that once in diagnostics and uses the native-owned final recovery path where supported.

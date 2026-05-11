@@ -262,7 +262,7 @@ const references = await tool_findReferences(root, "src/main.ts", 10, 5, index);
 
 Wrapper notes:
 
-- Import only from `@lzehrung/codegraph`.
+- Import graph, navigation, review, session, and tool-wrapper APIs from `@lzehrung/codegraph`. Import direct edit builders such as `renameSymbol()`, `moveSymbol()`, `extractFunction()`, and `applyEdits()` from `@lzehrung/codegraph-refactor` when an agent or editor integration intentionally emits source edits.
 - When the agent runtime calls Codegraph as a TypeScript library, prefer structured fields over rendered CLI text. A deterministic review agent should usually call `buildReviewReport()` for changed-file and task metadata, then `analyzeImpactFromDiff()` or `analyzeImpactStreaming()` for impact and graph context. Use CLI output only when the agent is operating through a shell tool.
 - For streaming review packs, keep the default `streamSummary: "full"` when the final pack needs suggestions, export summaries, re-export chains, ranked top impacts, graph edges, cycles, clusters, and surface area. Streaming always returns `format: "stream-summary"`; forwarded `compact` is accepted only for compatibility and is ignored. Use `streamSummary: "light"` when the agent only needs progressive chunks plus final changed/impacted counts and details.
 - Build one shared index per agent pass when you will call multiple wrappers in sequence. `tool_getFileOverview()`, `tool_getGraph()`, and `tool_impactJSON()` now accept `index` through their runtime-options argument, while the bounded graph wrappers already accept it in their options object.

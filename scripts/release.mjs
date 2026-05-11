@@ -15,6 +15,7 @@ import {
   releasePackages,
   restoreRootPackageManifest,
   restoreNativePackageManifest,
+  sanitizeRefactorPackageManifest,
   sanitizePublishedRootPackageManifest,
   sanitizeJsFallbackPackageManifest,
   selectLatestLegacyTag,
@@ -26,9 +27,11 @@ import {
 const rootDir = process.cwd();
 const rootPackagePath = path.join(rootDir, "package.json");
 const nativePackagePath = path.join(rootDir, "packages", "codegraph-native", "package.json");
+const refactorPackagePath = path.join(rootDir, "packages", "codegraph-refactor", "package.json");
 const jsFallbackPackagePath = path.join(rootDir, "packages", "codegraph-js-fallback", "package.json");
 const currentRootPackage = readJson(rootPackagePath);
 const currentNativePackage = readJson(nativePackagePath);
+const originalRefactorPackageJson = `${JSON.stringify(readJson(refactorPackagePath), null, 2)}\n`;
 const originalRootPackageJson = `${JSON.stringify(
   recoverRootPackageManifestForResume(currentRootPackage, readJsonFromString(readGitFile("package.json"))),
   null,
@@ -153,10 +156,12 @@ function readCurrentPackageVersions() {
 function normalizeManagedManifests(versionPlan) {
   let rootPackage = JSON.parse(originalRootPackageJson);
   const nativePackage = JSON.parse(originalNativePackageJson);
+  const refactorPackage = JSON.parse(originalRefactorPackageJson);
   const jsFallbackPackage = sanitizeJsFallbackPackageManifest(readJson(jsFallbackPackagePath));
 
   const rootVersion = versionPlan.get("root");
   const nativeVersion = versionPlan.get("native");
+  const refactorVersion = versionPlan.get("refactor");
   const jsFallbackVersion = versionPlan.get("js-fallback");
 
   if (rootVersion) {
@@ -164,6 +169,9 @@ function normalizeManagedManifests(versionPlan) {
   }
   if (nativeVersion) {
     nativePackage.version = nativeVersion;
+  }
+  if (refactorVersion) {
+    refactorPackage.version = refactorVersion;
   }
   if (jsFallbackVersion) {
     jsFallbackPackage.version = jsFallbackVersion;
@@ -174,6 +182,7 @@ function normalizeManagedManifests(versionPlan) {
 
   writeJson(rootPackagePath, rootPackage);
   writeJson(nativePackagePath, nativePackage);
+  writeJson(refactorPackagePath, refactorPackage);
   writeJson(jsFallbackPackagePath, jsFallbackPackage);
 }
 
@@ -214,6 +223,16 @@ function writePublishReadyNativePackage(versionPlan) {
   );
 }
 
+function writePublishReadyRefactorPackage(versionPlan) {
+  const intendedVersion = versionPlan.get("refactor");
+  if (!intendedVersion) {
+    return;
+  }
+  const sourceManifest = JSON.parse(originalRefactorPackageJson);
+  sourceManifest.version = intendedVersion;
+  writeJson(refactorPackagePath, sanitizeRefactorPackageManifest(sourceManifest));
+}
+
 function restoreRootPackage(versionPlan) {
   const intendedVersion = versionPlan.get("root");
   if (!intendedVersion) {
@@ -225,6 +244,17 @@ function restoreRootPackage(versionPlan) {
     rootPackagePath,
     restoreRootPackageManifest(sourceManifest, intendedVersion, readJson(nativePackagePath).version),
   );
+}
+
+function restoreRefactorPackage(versionPlan) {
+  const intendedVersion = versionPlan.get("refactor");
+  if (!intendedVersion) {
+    fs.writeFileSync(refactorPackagePath, originalRefactorPackageJson);
+    return;
+  }
+  const sourceManifest = JSON.parse(originalRefactorPackageJson);
+  sourceManifest.version = intendedVersion;
+  writeJson(refactorPackagePath, sourceManifest);
 }
 
 function doesLocalTagExist(tagName) {
@@ -320,6 +350,7 @@ function commitAndTag(selectedPackages, versionPlan) {
     "package.json",
     "package-lock.json",
     "packages/codegraph-native/package.json",
+    "packages/codegraph-refactor/package.json",
     "packages/codegraph-js-fallback/package.json",
   ]);
   const commitNeeded =
@@ -372,7 +403,7 @@ const shouldResume = releaseType === "resume";
 
 if (!shouldResume && !validReleaseTypes.has(releaseType)) {
   console.error(
-    "Usage: node ./scripts/release.mjs <patch|minor|major|resume> [--publish] [--package <root|native|js-fallback|package-name>]",
+    "Usage: node ./scripts/release.mjs <patch|minor|major|resume> [--publish] [--package <root|native|refactor|js-fallback|package-name>]",
   );
   process.exit(1);
 }
@@ -438,6 +469,11 @@ if (shouldPublish) {
         run("npm", ["run", "publish:native:meta"]);
         continue;
       }
+      if (step === "publishRefactor") {
+        writePublishReadyRefactorPackage(versionPlan);
+        run("npm", ["publish", "--workspace=@lzehrung/codegraph-refactor"]);
+        continue;
+      }
       if (step === "publishJsFallback") {
         run("npm", ["publish", "--workspace=@lzehrung/codegraph-js-fallback"]);
         continue;
@@ -453,6 +489,7 @@ if (shouldPublish) {
   } finally {
     restoreRootPackage(versionPlan);
     restoreNativePackage(versionPlan);
+    restoreRefactorPackage(versionPlan);
   }
 }
 

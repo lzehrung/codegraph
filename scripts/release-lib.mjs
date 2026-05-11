@@ -24,6 +24,14 @@ export const releasePackages = [
     ownedPrefixes: ["packages/codegraph-native/"],
   },
   {
+    id: "refactor",
+    name: "@lzehrung/codegraph-refactor",
+    manifestPath: "packages/codegraph-refactor/package.json",
+    publishWorkspace: "@lzehrung/codegraph-refactor",
+    ownedFiles: new Set([]),
+    ownedPrefixes: ["packages/codegraph-refactor/"],
+  },
+  {
     id: "js-fallback",
     name: "@lzehrung/codegraph-js-fallback",
     manifestPath: "packages/codegraph-js-fallback/package.json",
@@ -184,6 +192,9 @@ export function computePublishExecutionSteps(publishPlan) {
   if (publishPlan.publishByPackage["@lzehrung/codegraph-native"]) {
     steps.push("publishNativeTargets", "prepareNativeMeta", "publishNativeMeta");
   }
+  if (publishPlan.publishByPackage["@lzehrung/codegraph-refactor"]) {
+    steps.push("publishRefactor");
+  }
   if (publishPlan.publishByPackage["@lzehrung/codegraph-js-fallback"]) {
     steps.push("publishJsFallback");
   }
@@ -204,6 +215,12 @@ export function sanitizeJsFallbackPackageManifest(pkg) {
     delete dependencies["@lzehrung/codegraph"];
     normalized.dependencies = dependencies;
   }
+  return normalized;
+}
+
+export function sanitizeRefactorPackageManifest(pkg) {
+  const normalized = { ...pkg };
+  delete normalized.devDependencies;
   return normalized;
 }
 

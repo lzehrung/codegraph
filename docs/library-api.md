@@ -6,7 +6,7 @@ For sessions, streaming workflows, tool wrappers, and review-oriented recipes, s
 
 ## Runtime model
 
-Import only from `@lzehrung/codegraph` and call the API directly.
+Import graph, indexing, navigation, review, CLI-wrapper, and session APIs from `@lzehrung/codegraph` and call them directly. Import direct refactor/edit helpers from `@lzehrung/codegraph-refactor` when your SDK integration intentionally emits source edits.
 
 The library defaults to `native: "auto"`, which uses the native Tree-sitter path when `@lzehrung/codegraph-native` is installed for the current platform and falls back automatically otherwise.
 
@@ -246,17 +246,16 @@ Pass `trivia: "leading-doc"` or `trivia: "leading-all"` to `listSymbols()` when 
 
 ## Refactor edits
 
-Use stable definition handles with `renameSymbol()` to build deterministic edits without writing files. Use `applyEdits()` as a separate step when the caller is ready to modify the worktree.
+Use stable definition handles with `renameSymbol()` to build deterministic edits without writing files. Use `applyEdits()` as a separate step when the caller is ready to modify the worktree. New direct-code integrations should import these helpers from `@lzehrung/codegraph-refactor`; the root package keeps compatibility exports for existing callers.
 
 ```ts
+import { buildProjectIndex, listSymbols } from "@lzehrung/codegraph";
 import {
   applyEdits,
-  buildProjectIndex,
   extractFunction,
-  listSymbols,
   moveSymbol,
   renameSymbol,
-} from "@lzehrung/codegraph";
+} from "@lzehrung/codegraph-refactor";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);

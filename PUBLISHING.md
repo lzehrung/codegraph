@@ -1,12 +1,13 @@
 # Publishing Guide
 
-Codegraph publishes as three standalone packages:
+Codegraph publishes as four standalone packages:
 
 - `@lzehrung/codegraph`: the main JS package and CLI
 - `@lzehrung/codegraph-native`: the optional native Tree-sitter meta package plus per-platform binary packages
+- `@lzehrung/codegraph-refactor`: the opt-in direct-code refactor/edit helper package
 - `@lzehrung/codegraph-js-fallback`: the opt-in JS Tree-sitter fallback package
 
-The main package depends on the native package optionally, so installs still succeed when no matching native binary exists. The JS fallback package is standalone and is only published when its own package changes.
+The main package depends on the native package optionally, so installs still succeed when no matching native binary exists. The refactor package peer-depends on the main package and is only published when its own package changes. The JS fallback package is standalone and is only published when its own package changes.
 
 ## Fast Path
 
@@ -30,6 +31,7 @@ npm run publish:resume
 
 - staged native target packages when `@lzehrung/codegraph-native` is selected
 - the `@lzehrung/codegraph-native` meta package when it changed
+- the `@lzehrung/codegraph-refactor` package when it changed
 - the `@lzehrung/codegraph-js-fallback` package when it changed
 - the root `@lzehrung/codegraph` package when it changed
 
@@ -37,6 +39,7 @@ You can force a package-scoped release with `--package`:
 
 ```powershell
 npm run publish:patch -- --package js-fallback
+npm run publish:patch -- --package refactor
 npm run release:minor -- --package @lzehrung/codegraph-native
 ```
 
@@ -60,6 +63,9 @@ This workflow is intentionally root-only for now. Native releases still need a r
 - `@lzehrung/codegraph-native`
   - Publishes the meta package.
   - Resolves and loads the correct per-platform binary package.
+- `@lzehrung/codegraph-refactor`
+  - Publishes `dist/` for direct SDK edit/refactor imports.
+  - Peer-depends on `@lzehrung/codegraph`.
 - `@lzehrung/codegraph-js-fallback`
   - Publishes the opt-in JS fallback runtime and Tree-sitter grammars.
   - Does not depend on the root package through a local `file:` dependency.
@@ -114,7 +120,13 @@ npm run publish:native:meta
 npm publish
 ```
 
-8. Publish the fallback package when it changed:
+8. Publish the refactor package when it changed:
+
+```powershell
+npm publish --workspace=@lzehrung/codegraph-refactor
+```
+
+9. Publish the fallback package when it changed:
 
 ```powershell
 npm publish --workspace=@lzehrung/codegraph-js-fallback
@@ -123,6 +135,6 @@ npm publish --workspace=@lzehrung/codegraph-js-fallback
 ## Release Notes
 
 - Root releases create both `v1.8.44` and `@lzehrung/codegraph@1.8.44`; workspace package releases keep package-scoped tags like `@lzehrung/codegraph-native@1.8.44`.
-- `@lzehrung/codegraph`, `@lzehrung/codegraph-native`, and `@lzehrung/codegraph-js-fallback` version independently.
+- `@lzehrung/codegraph`, `@lzehrung/codegraph-native`, `@lzehrung/codegraph-refactor`, and `@lzehrung/codegraph-js-fallback` version independently.
 - `src/native/treeSitterNative.ts` prefers the installed `@lzehrung/codegraph-native` package and falls back to the local workspace package for development.
 - If a native binary or query is unavailable at runtime, Codegraph automatically uses the JS Tree-sitter implementation.

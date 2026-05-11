@@ -241,8 +241,12 @@ describe("package metadata", () => {
     const rootPackage = readJson("package.json");
     const scripts = readStringRecord(rootPackage.scripts);
 
-    expect(scripts.lint).toBe('npx eslint "src/**/*.ts" "tests/**/*.test.ts"');
-    expect(scripts["lint:fix"]).toBe('npx eslint "src/**/*.ts" "tests/**/*.test.ts" --fix');
+    expect(scripts.lint).toBe(
+      'npx eslint "src/**/*.ts" "packages/codegraph-refactor/src/**/*.ts" "tests/**/*.test.ts"',
+    );
+    expect(scripts["lint:fix"]).toBe(
+      'npx eslint "src/**/*.ts" "packages/codegraph-refactor/src/**/*.ts" "tests/**/*.test.ts" --fix',
+    );
   });
 
   it("keeps implementation modules from importing through the public barrel", () => {

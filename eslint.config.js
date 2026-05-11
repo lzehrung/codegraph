@@ -9,7 +9,7 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {
-    files: ["src/**/*.ts", "tests/**/*.ts"],
+    files: ["src/**/*.ts", "packages/codegraph-refactor/src/**/*.ts", "tests/**/*.ts"],
     plugins: {
       "@stylistic": stylistic,
     },

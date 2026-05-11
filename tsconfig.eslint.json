@@ -1,5 +1,5 @@
 {
   "extends": "./tsconfig.json",
-  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "include": ["src/**/*.ts", "packages/codegraph-refactor/src/**/*.ts", "tests/**/*.ts"],
   "exclude": ["node_modules", "dist", "docs"]
 }

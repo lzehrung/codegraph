@@ -245,13 +245,19 @@ npm config set "@lzehrung:registry" "https://npm.pkg.github.com"
 npm install @lzehrung/codegraph
 ```
 
+For SDK callers that want only the edit/refactor helpers as an explicit opt-in surface, install the companion package alongside the core package:
+
+```bash
+npm install @lzehrung/codegraph @lzehrung/codegraph-refactor
+```
+
 ### Release tarball install
 
 ```bash
 npm install https://github.com/lzehrung/codegraph/releases/download/vVERSION/lzehrung-codegraph-VERSION.tgz
 ```
 
-Important runtime note: the root tarball does not bundle the native addon or the optional JS fallback grammars. For source-language parsing after a tarball install, you still need either the scoped native package path or the separate `@lzehrung/codegraph-js-fallback` package, and both runtime packages still require the `@lzehrung` GitHub Packages registry configuration.
+Important runtime note: the root tarball does not bundle the native addon, the optional JS fallback grammars, or the companion refactor package. For source-language parsing after a tarball install, you still need either the scoped native package path or the separate `@lzehrung/codegraph-js-fallback` package, and both runtime packages still require the `@lzehrung` GitHub Packages registry configuration. For direct SDK refactor imports, install `@lzehrung/codegraph-refactor` from the scoped registry.
 
 ## FAQ
 
@@ -295,7 +301,7 @@ npm run publish:major
 npm run publish:resume
 ```
 
-Use `--package root`, `--package native`, `--package js-fallback`, or a full package name when you need to force a specific package.
+Use `--package root`, `--package native`, `--package refactor`, `--package js-fallback`, or a full package name when you need to force a specific package.
 
 For GitHub-driven root releases, use the manual `release-root` Actions workflow with `patch`, `minor`, or `major`. It publishes the root package, then creates or updates the matching `vX.Y.Z` GitHub Release with the packed root tarball asset. The workflow refuses reruns on an already-tagged release commit because fresh Actions runners cannot reconstruct the local `publish:resume` state.
 

@@ -1,0 +1,31 @@
+{
+  "name": "@lzehrung/codegraph-refactor",
+  "version": "1.8.65",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\"",
+    "build": "npm run clean && tsc -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "@lzehrung/codegraph": "^1.8.65"
+  },
+  "devDependencies": {
+    "@lzehrung/codegraph": "file:../.."
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  }
+}
