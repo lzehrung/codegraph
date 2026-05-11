@@ -143,6 +143,36 @@ describe("extractFunction", () => {
     );
   });
 
+  test("rejects destructured function parameters used by the selected range", async () => {
+    await withFile(
+      "export function run({ name }: { name: string }) {\n  console.log(name);\n}\n",
+      async (root, file) => {
+        const index = await buildProjectIndexFromFiles(root, [file], { keepParsed: true });
+
+        const result = await extractFunction(index, { file, range: lineRange(2, 3) }, { newName: "emitName" });
+
+        expect(result.status).toBe("unsupported");
+        expect(result.reason).toContain("non-simple bindings");
+        expect(result.edits).toEqual([]);
+      },
+    );
+  });
+
+  test("rejects destructured local declarations before the selected range", async () => {
+    await withFile(
+      "export function run(input: { name: string }) {\n  const { name } = input;\n  console.log(name);\n}\n",
+      async (root, file) => {
+        const index = await buildProjectIndexFromFiles(root, [file], { keepParsed: true });
+
+        const result = await extractFunction(index, { file, range: lineRange(3, 4) }, { newName: "emitName" });
+
+        expect(result.status).toBe("unsupported");
+        expect(result.reason).toContain("non-simple bindings");
+        expect(result.edits).toEqual([]);
+      },
+    );
+  });
+
   test("does not treat following comments as uses of extracted declarations", async () => {
     await withFile(
       "export function run(name: string) {\n  const greeting = `hi ${name}`;\n  // greeting is already logged above\n}\n",

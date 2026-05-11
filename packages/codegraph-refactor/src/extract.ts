@@ -45,7 +45,10 @@ type FunctionEnvelope = {
   bodyStart: number;
   bodyEnd: number;
   params: string[];
+  hasNonSimpleParams: boolean;
 };
+
+type ParsedParams = { status: "ok"; names: string[] } | { status: "unsupported" };
 
 function findFunctionEnvelope(source: string, regionStart: number, regionEnd: number): FunctionEnvelope | null {
   const braceSource = maskJsLikeCommentsAndStrings(source);
@@ -57,11 +60,13 @@ function findFunctionEnvelope(source: string, regionStart: number, regionEnd: nu
     const bodyEnd = findMatchingBrace(braceSource, bodyStart - 1);
     if (bodyEnd === null) continue;
     if (bodyStart <= regionStart && regionEnd <= bodyEnd) {
+      const params = parseParams(match.groups?.["params"] ?? "");
       found = {
         start: match.index,
         bodyStart,
         bodyEnd,
-        params: parseParams(match.groups?.["params"] ?? ""),
+        params: params.status === "ok" ? params.names : [],
+        hasNonSimpleParams: params.status === "unsupported",
       };
     }
   }
@@ -211,11 +216,39 @@ function maskCodeForIdentifierScan(source: string): string {
   return output;
 }
 
-function parseParams(params: string): string[] {
-  return params
-    .split(",")
-    .map((param) => param.trim().split(/[:=]/)[0]?.trim() ?? "")
-    .filter((param) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(param));
+function splitTopLevelCommas(source: string): string[] {
+  const parts: string[] = [];
+  let start = 0;
+  let depth = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === "{" || char === "[" || char === "(") depth += 1;
+    if (char === "}" || char === "]" || char === ")") depth = Math.max(depth - 1, 0);
+    if (char === "," && depth === 0) {
+      parts.push(source.slice(start, index));
+      start = index + 1;
+    }
+  }
+  parts.push(source.slice(start));
+  return parts;
+}
+
+function simpleBindingName(binding: string): string | null {
+  const withoutDefault = binding.split("=")[0] ?? "";
+  const withoutType = withoutDefault.split(":")[0] ?? "";
+  const candidate = withoutType.trim().replace(/^\.\.\./, "");
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(candidate) ? candidate : null;
+}
+
+function parseParams(params: string): ParsedParams {
+  const names: string[] = [];
+  for (const param of splitTopLevelCommas(params)) {
+    if (!param.trim()) continue;
+    const name = simpleBindingName(param);
+    if (!name) return { status: "unsupported" };
+    names.push(name);
+  }
+  return { status: "ok", names };
 }
 
 function collectDeclaredNames(source: string): string[] {
@@ -236,8 +269,8 @@ function collectDeclaredNames(source: string): string[] {
     match = variableStatementPattern.exec(maskedSource)
   ) {
     const declarations = match.groups?.["declarations"] ?? "";
-    for (const declaration of declarations.split(",")) {
-      addName(/^\s*(?<name>[A-Za-z_$][A-Za-z0-9_$]*)/.exec(declaration)?.groups?.["name"]);
+    for (const declaration of splitTopLevelCommas(declarations)) {
+      addName(simpleBindingName(declaration) ?? undefined);
     }
   }
 
@@ -251,6 +284,23 @@ function collectDeclaredNames(source: string): string[] {
     addName(match.groups?.["fn"] ?? match.groups?.["className"]);
   }
   return names;
+}
+
+function hasNonSimpleVariableDeclarator(source: string): boolean {
+  const maskedSource = maskCodeForIdentifierScan(source);
+  const variableStatementPattern = /\b(?:const|let|var)\s+(?<declarations>[^;\n]+)/g;
+  for (
+    let match: RegExpExecArray | null = variableStatementPattern.exec(maskedSource);
+    match;
+    match = variableStatementPattern.exec(maskedSource)
+  ) {
+    const declarations = match.groups?.["declarations"] ?? "";
+    for (const declaration of splitTopLevelCommas(declarations)) {
+      if (!declaration.trim()) continue;
+      if (!simpleBindingName(declaration)) return true;
+    }
+  }
+  return false;
 }
 
 function hasIdentifier(source: string, name: string): boolean {
@@ -346,6 +396,18 @@ export function extractFunction(
       edits: [],
       warnings: [],
       reason: "region must be inside one function body",
+    });
+  }
+  if (
+    envelope.hasNonSimpleParams ||
+    hasNonSimpleVariableDeclarator(source.slice(envelope.bodyStart, offsets.start)) ||
+    hasNonSimpleVariableDeclarator(selected)
+  ) {
+    return Promise.resolve({
+      status: "unsupported",
+      edits: [],
+      warnings: [],
+      reason: "regions that depend on non-simple bindings are unsupported",
     });
   }
   const declarationsUsedAfter = findDeclarationsUsedAfter(selected, source.slice(offsets.end, envelope.bodyEnd));

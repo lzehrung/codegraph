@@ -22,7 +22,8 @@ function hasOverlap(edits: TextEdit[]): boolean {
   for (let index = 1; index < ascending.length; index += 1) {
     const previous = ascending[index - 1]!;
     const current = ascending[index]!;
-    if (current.start < previous.end) {
+    const identicalSpan = current.start === previous.start && current.end === previous.end;
+    if (identicalSpan || current.start < previous.end) {
       return true;
     }
   }
