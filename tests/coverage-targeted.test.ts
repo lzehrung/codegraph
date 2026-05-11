@@ -240,6 +240,8 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
     };
 
     expect(parseGoImportAlias('import alias "github.com/acme/pkg"')).toBe("alias");
+    expect(parseGoImportAlias('import\talias "github.com/acme/pkg"')).toBe("alias");
+    expect(parseGoImportAlias('import   alias "github.com/acme/pkg"')).toBe("alias");
     expect(parseGoImportAlias('import . "github.com/acme/pkg"')).toBe(".");
     expect(parseGoImportAlias('import "fmt"')).toBeNull();
     expect(edgeKey(externalEdge)).toBe("C:/repo/src/main.ts|external:react|react|1");

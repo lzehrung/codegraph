@@ -3,12 +3,12 @@ export const CLI_HELP_TEXT = `codegraph - Code analysis and dependency graph too
 Usage: codegraph <command> [options] [path]
 
 Commands:
-  graph         Build dependency graph (default)  
-  inspect       Summarize repo structure and recommend next commands  
+  graph         Build dependency graph (default)
+  inspect       Summarize repo structure and recommend next commands
   impact        Analyze PR impact
   review        Generate code review report
   goto          Go to definition
-  refs          Find references  
+  refs          Find references
   deps          List dependencies
   rdeps         List reverse dependencies
   cycles        Detect dependency cycles (use --sort priority|size|fanin)
