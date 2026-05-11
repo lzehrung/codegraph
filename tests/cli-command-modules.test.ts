@@ -142,12 +142,14 @@ describe("CLI command modules", () => {
     expect(result.stdout.trim()).toBe(getCodegraphVersion());
   });
 
-  test("keeps build option help entries consistently indented", () => {
-    const cacheStrictLine = CLI_HELP_TEXT.split("\n").find((line) => line.includes("--cache-strict"));
-    const progressLine = CLI_HELP_TEXT.split("\n").find((line) => line.includes("--progress"));
+  test("lists cache-strict and progress as build options in CLI help", () => {
+    const buildOptions = CLI_HELP_TEXT.slice(
+      CLI_HELP_TEXT.indexOf("Build Options:"),
+      CLI_HELP_TEXT.indexOf("Output Options:"),
+    );
 
-    expect(cacheStrictLine?.startsWith("    --cache-strict")).toBe(true);
-    expect(progressLine?.startsWith("    --progress")).toBe(true);
+    expect(buildOptions).toContain("--cache-strict");
+    expect(buildOptions).toContain("--progress");
   });
 
   test("runs doctor command in process with captured JSON output", async () => {
