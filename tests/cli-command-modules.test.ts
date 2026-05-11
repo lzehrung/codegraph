@@ -20,6 +20,11 @@ function readJsonRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function readJsonArray(value: unknown): unknown[] {
+  expect(Array.isArray(value)).toBeTruthy();
+  return value as unknown[];
+}
+
 function createChunkContext(overrides: Partial<ChunkCommandContext>): ChunkCommandContext {
   return {
     positionals: [],
@@ -435,7 +440,7 @@ describe("CLI command modules", () => {
         }),
       );
 
-      const chunks = jsonLines[0] as Array<Record<string, unknown>>;
+      const chunks = readJsonArray(jsonLines[0]).map(readJsonRecord);
       expect(chunks.length).toBeGreaterThan(0);
       expect(chunks[0]?.languageId).toBe("json");
       expect(chunks[0]?.filePath).toBe(filePath);
@@ -633,9 +638,10 @@ describe("CLI command modules", () => {
       }),
     );
 
-    expect(jsonLines).toHaveLength(1);
-    expect(JSON.stringify(jsonLines[0])).toContain("missing-pkg");
-    expect(JSON.stringify(jsonLines[0])).toContain("main.ts");
+    const unresolved = readJsonArray(jsonLines[0]).map(readJsonRecord);
+    expect(unresolved).toHaveLength(1);
+    expect(unresolved[0]?.name).toBe("missing-pkg");
+    expect(JSON.stringify(unresolved[0]?.importers)).toContain("main.ts");
   });
 
   test("defaults the extracted skill command to doctor output", async () => {

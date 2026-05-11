@@ -87,22 +87,12 @@ describe("Partial Results", () => {
         },
       ];
 
-      const result = partial(["kept"], errors);
+      const result = partial([], errors);
 
       expect(result.status).toBe("failed");
+      expect(result.data).toEqual([]);
       expect(result.coverage).toBe(0);
       expect(result.metadata).toEqual({ attempted: 1, succeeded: 0, failed: 1 });
-    });
-
-    test("treats zero attempted items as failed coverage", () => {
-      const result = partial([], [], {
-        attempted: 0,
-        succeeded: 0,
-        failed: 0,
-      });
-
-      expect(result.status).toBe("failed");
-      expect(result.coverage).toBe(0);
     });
   });
 

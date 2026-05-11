@@ -295,7 +295,7 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
     ]);
   });
 
-  it("returns source and fallback details when native extraction is unavailable or unsupported", async () => {
+  it("returns source and fallback details from the production native extractor fallback", async () => {
     const result = await runNativeExtraction({
       filePath: "virtual.ts",
       languageId: "definitely-not-a-supported-language",
@@ -312,6 +312,56 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
     expect(result.nativeResults).toBeNull();
     expect(result.compactResults).toBeNull();
     expect(["unavailable", "unsupportedLanguage"]).toContain(result.fallbackReason);
+  });
+
+  it("distinguishes deterministic unavailable and unsupported native extraction fallbacks", async () => {
+    const unavailableExtractor = createNativeExtractor({
+      loadBinding: () => ({ binding: null, error: new Error("native missing") }),
+      readFile: async () => "from disk",
+    });
+    const unsupportedExtractor = createNativeExtractor({
+      loadBinding: () => ({
+        binding: {
+          supportedLanguageIds: () => ["ts"],
+          runLanguageQueries: () => {
+            throw new Error("unexpected query");
+          },
+        },
+      }),
+      readFile: async () => "from disk",
+    });
+
+    const unavailable = await unavailableExtractor({
+      filePath: "virtual.ts",
+      languageId: "ts",
+      importsQuery: "",
+      exportsQuery: "",
+      localsQuery: "",
+      importBindingsQuery: "",
+    });
+    const unsupported = await unsupportedExtractor({
+      filePath: "virtual.go",
+      languageId: "go",
+      source: "package main\n",
+      importsQuery: "",
+      exportsQuery: "",
+      localsQuery: "",
+      importBindingsQuery: "",
+    });
+
+    expect(unavailable).toMatchObject({
+      source: "from disk",
+      fallbackReason: "unavailable",
+      nativeResults: null,
+      compactResults: null,
+    });
+    expect(unavailable.error).toContain("native missing");
+    expect(unsupported).toMatchObject({
+      source: "package main\n",
+      fallbackReason: "unsupportedLanguage",
+      nativeResults: null,
+      compactResults: null,
+    });
   });
 
   it("creates injectable native extractors for success compact and failure paths", async () => {
