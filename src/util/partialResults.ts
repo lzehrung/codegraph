@@ -60,6 +60,7 @@ export type PartialError = {
 
 function messageFromReason(reason: unknown): string {
   if (reason instanceof Error) return reason.message;
+  if (typeof reason === "string") return reason;
   if (
     typeof reason === "object" &&
     reason !== null &&
@@ -213,7 +214,7 @@ export async function withPartialResults<T, I>(
         } catch (error) {
           return {
             success: false as const,
-            error: error as Error,
+            error,
             item,
             index: i + idx,
           };
@@ -231,11 +232,11 @@ export async function withPartialResults<T, I>(
           failed++;
           const error: PartialError = {
             target: `${itemName}[${value.index}]`,
-            message: value.error.message,
+            message: messageFromReason(value.error),
             severity: "error",
             retryable: true,
           };
-          if (value.error.stack) {
+          if (value.error instanceof Error && value.error.stack) {
             error.stack = value.error.stack;
           }
           errors.push(error);

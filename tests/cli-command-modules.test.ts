@@ -3,19 +3,96 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
-import { handleChunkCommand } from "../src/cli/chunk.js";
+import { handleChunkCommand, type ChunkCommandContext } from "../src/cli/chunk.js";
 import { buildDoctorReport } from "../src/cli/doctor.js";
 import { handleGraphDeltaCommand } from "../src/cli/graphDelta.js";
+import { handleGraphQueryCommand, type GraphQueryCommandContext } from "../src/cli/graphQueries.js";
 import { CLI_HELP_TEXT } from "../src/cli/help.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/cli/packageInfo.js";
-import { handleSkillCommand } from "../src/cli/skill.js";
+import { handleSkillCommand, type SkillCommandContext } from "../src/cli/skill.js";
 import { handleSqlCommand } from "../src/cli/sql.js";
 import { runCli } from "../src/cli.js";
+import type { Graph } from "../src/types.js";
 
 function readJsonRecord(value: unknown): Record<string, unknown> {
   expect(value).toBeTypeOf("object");
   expect(value).not.toBeNull();
   return value as Record<string, unknown>;
+}
+
+function readJsonArray(value: unknown): unknown[] {
+  expect(Array.isArray(value)).toBeTruthy();
+  return value as unknown[];
+}
+
+function createChunkContext(overrides: Partial<ChunkCommandContext>): ChunkCommandContext {
+  return {
+    positionals: [],
+    getOpt: () => undefined,
+    hasFlag: () => false,
+    cwd: () => process.cwd(),
+    writeJSONLine: () => {
+      throw new Error("unexpected json output");
+    },
+    writeStderrLine: () => {
+      throw new Error("unexpected stderr");
+    },
+    exit: (code) => {
+      throw new Error(`chunk exit ${code}`);
+    },
+    ...overrides,
+  };
+}
+
+function createGraphQueryContext(overrides: Partial<GraphQueryCommandContext>): GraphQueryCommandContext {
+  const projectRoot = path.join(os.tmpdir(), "codegraph-graph-query-context").replace(/\\/g, "/");
+  return {
+    command: "deps",
+    positionals: [],
+    projectRootFs: projectRoot,
+    projectRootAbs: projectRoot,
+    getOpt: () => undefined,
+    hasFlag: () => false,
+    writeJSONLine: () => {
+      throw new Error("unexpected json output");
+    },
+    writeStdoutLine: () => {
+      throw new Error("unexpected stdout");
+    },
+    writeStderrLine: () => {
+      throw new Error("unexpected stderr");
+    },
+    exit: (code) => {
+      throw new Error(`graph query exit ${code}`);
+    },
+    listProjectFilesForScan: async () => [],
+    collectGraph: async () => ({ nodes: new Set(), edges: [] }),
+    buildProjectIndex: async () => {
+      throw new Error("unexpected index build");
+    },
+    ...overrides,
+  };
+}
+
+function createSkillContext(overrides: Partial<SkillCommandContext>): SkillCommandContext {
+  return {
+    positionals: [],
+    getOpt: () => undefined,
+    hasFlag: () => false,
+    writeJSONLine: () => {
+      throw new Error("unexpected json output");
+    },
+    writeStdoutLine: () => {
+      throw new Error("unexpected stdout");
+    },
+    writeStderrLine: () => {
+      throw new Error("unexpected stderr");
+    },
+    exit: (code) => {
+      throw new Error(`skill exit ${code}`);
+    },
+    ...overrides,
+  };
 }
 
 async function captureCli(
@@ -65,12 +142,14 @@ describe("CLI command modules", () => {
     expect(result.stdout.trim()).toBe(getCodegraphVersion());
   });
 
-  test("keeps build option help entries consistently indented", () => {
-    const cacheStrictLine = CLI_HELP_TEXT.split("\n").find((line) => line.includes("--cache-strict"));
-    const progressLine = CLI_HELP_TEXT.split("\n").find((line) => line.includes("--progress"));
+  test("lists cache-strict and progress as build options in CLI help", () => {
+    const buildOptions = CLI_HELP_TEXT.slice(
+      CLI_HELP_TEXT.indexOf("Build Options:"),
+      CLI_HELP_TEXT.indexOf("Output Options:"),
+    );
 
-    expect(cacheStrictLine?.startsWith("    --cache-strict")).toBe(true);
-    expect(progressLine?.startsWith("    --progress")).toBe(true);
+    expect(buildOptions).toContain("--cache-strict");
+    expect(buildOptions).toContain("--progress");
   });
 
   test("runs doctor command in process with captured JSON output", async () => {
@@ -171,6 +250,58 @@ describe("CLI command modules", () => {
       const result = readJsonRecord(jsonLines[0]);
       expect(result.columns).toEqual(["name"]);
       expect(result.rows).toEqual([["helper"]]);
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("prints SQL usage and exits when required options are missing", async () => {
+    const stderrLines: string[] = [];
+
+    await expect(
+      handleSqlCommand({
+        getOpt: () => undefined,
+        cwd: () => process.cwd(),
+        writeJSONLine: () => {
+          throw new Error("unexpected json output");
+        },
+        writeStderrLine: (message) => stderrLines.push(message),
+        exit: (code) => {
+          throw new Error(`sql exit ${code}`);
+        },
+      }),
+    ).rejects.toThrow("sql exit 1");
+
+    expect(stderrLines).toEqual(['Usage: sql --db <sqlite path> --query "SELECT ..."']);
+  });
+
+  test("resolves relative SQL database paths against the injected runtime cwd", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-sql-relative-"));
+    const dbPath = path.join(tempDir, "graph.sqlite");
+    await fsp.writeFile(path.join(tempDir, "main.ts"), "export const answer = 42;\n", "utf8");
+    await captureCli(["graph", "--root", tempDir, "--sqlite", dbPath]);
+    const jsonLines: unknown[] = [];
+
+    try {
+      await handleSqlCommand({
+        getOpt: (name) => {
+          if (name === "--sqlite") return "graph.sqlite";
+          if (name === "--query") return "SELECT path FROM files ORDER BY path;";
+          return undefined;
+        },
+        cwd: () => tempDir,
+        writeJSONLine: (value) => jsonLines.push(value),
+        writeStderrLine: () => {
+          throw new Error("unexpected stderr");
+        },
+        exit: (code) => {
+          throw new Error(`unexpected exit ${code}`);
+        },
+      });
+
+      const result = readJsonRecord(jsonLines[0]);
+      expect(result.columns).toEqual(["path"]);
+      expect(JSON.stringify(result.rows)).toContain("main.ts");
     } finally {
       await fsp.rm(tempDir, { recursive: true, force: true });
     }
@@ -280,6 +411,271 @@ describe("CLI command modules", () => {
     }
   });
 
+  test("prints chunk usage and exits when no input file is provided", async () => {
+    const stderrLines: string[] = [];
+
+    await expect(
+      handleChunkCommand(
+        createChunkContext({
+          writeStderrLine: (message) => stderrLines.push(message),
+        }),
+      ),
+    ).rejects.toThrow("chunk exit 2");
+
+    expect(stderrLines).toContain("Usage: chunk <file-path> [options]");
+    expect(stderrLines).toContain("  --text            Force text chunking mode");
+  });
+
+  test("forces text chunking with inferred data-file language ids", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-chunk-text-"));
+    const filePath = path.join(tempDir, "sample.json");
+    await fsp.writeFile(filePath, '{"name":"codegraph","enabled":true}\n', "utf8");
+    const jsonLines: unknown[] = [];
+
+    try {
+      await handleChunkCommand(
+        createChunkContext({
+          positionals: ["sample.json"],
+          cwd: () => tempDir,
+          hasFlag: (name) => name === "--text",
+          writeJSONLine: (value) => jsonLines.push(value),
+        }),
+      );
+
+      const chunks = readJsonArray(jsonLines[0]).map(readJsonRecord);
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunks[0]?.languageId).toBe("json");
+      expect(chunks[0]?.filePath).toBe(filePath);
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("reports chunk read failures through the command handler", async () => {
+    const stderrLines: string[] = [];
+
+    await expect(
+      handleChunkCommand(
+        createChunkContext({
+          positionals: ["missing.ts"],
+          cwd: () => path.join(os.tmpdir(), "codegraph-missing-chunk-root"),
+          writeStderrLine: (message) => stderrLines.push(message),
+        }),
+      ),
+    ).rejects.toThrow("chunk exit 1");
+
+    expect(stderrLines[0]).toContain("Chunking failed:");
+    expect(stderrLines[0]).toContain("missing.ts");
+  });
+
+  test("runs graph exploration commands through the main CLI dispatcher", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-explore-"));
+    await fsp.writeFile(path.join(tempDir, "util.ts"), "export function helper() { return 1; }\n", "utf8");
+    await fsp.writeFile(
+      path.join(tempDir, "main.ts"),
+      "import { helper } from './util';\nimport missing from 'missing-pkg';\nexport function run() { return helper() + missing; }\n",
+      "utf8",
+    );
+
+    try {
+      const deps = await captureCli(["deps", "main.ts", "--root", tempDir, "--json"]);
+      const rdeps = await captureCli(["rdeps", "util.ts", "--root", tempDir]);
+      const graphPath = await captureCli(["path", "main.ts", "util.ts", "--root", tempDir]);
+      const cycles = await captureCli(["cycles", "--root", tempDir]);
+      const unresolved = await captureCli(["unresolved", "--root", tempDir, "--verbose"]);
+      const apiSurface = await captureCli(["apisurface", "--root", tempDir]);
+
+      expect(JSON.stringify(JSON.parse(deps.stdout))).toContain("util.ts");
+      expect(rdeps.stdout).toContain("Reverse dependencies for util.ts:");
+      expect(graphPath.stdout).toContain("main.ts");
+      expect(graphPath.stdout).toContain("util.ts");
+      expect(cycles.stdout).toContain("No dependency cycles found.");
+      expect(unresolved.stdout).toContain("missing-pkg");
+      expect(unresolved.stdout).toContain('as "missing-pkg"');
+      expect(apiSurface.stdout).toContain("API Surface");
+      expect(apiSurface.stdout).toContain("run");
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("runs extracted graph query command handlers with injected graph dependencies", async () => {
+    const projectRoot = path.join(os.tmpdir(), "codegraph-graph-query-handler").replace(/\\/g, "/");
+    const mainPath = `${projectRoot}/main.ts`;
+    const utilPath = `${projectRoot}/util.ts`;
+    const stdoutLines: string[] = [];
+    const jsonLines: unknown[] = [];
+    const stderrLines: string[] = [];
+
+    await handleGraphQueryCommand({
+      command: "deps",
+      positionals: ["main.ts"],
+      projectRootFs: projectRoot,
+      projectRootAbs: projectRoot,
+      getOpt: () => undefined,
+      hasFlag: (name) => name === "--json",
+      writeJSONLine: (value) => jsonLines.push(value),
+      writeStdoutLine: (message) => stdoutLines.push(message),
+      writeStderrLine: (message) => stderrLines.push(message),
+      exit: (code) => {
+        throw new Error(`unexpected exit ${code}`);
+      },
+      listProjectFilesForScan: async () => [mainPath, utilPath],
+      collectGraph: async () => ({
+        nodes: new Set([mainPath, utilPath]),
+        edges: [
+          {
+            from: mainPath,
+            to: { type: "file", path: utilPath },
+            raw: "./util",
+          },
+        ],
+      }),
+      buildProjectIndex: async () => {
+        throw new Error("unexpected index build");
+      },
+    });
+
+    expect(jsonLines).toEqual([[{ file: utilPath, depth: 1 }]]);
+    expect(stdoutLines).toEqual([]);
+    expect(stderrLines).toEqual([]);
+  });
+
+  test("prints graph query usage for missing file arguments", async () => {
+    const stderrLines: string[] = [];
+
+    await expect(
+      handleGraphQueryCommand(
+        createGraphQueryContext({
+          command: "deps",
+          writeStderrLine: (message) => stderrLines.push(message),
+        }),
+      ),
+    ).rejects.toThrow("graph query exit 2");
+
+    expect(stderrLines).toEqual(["Usage: deps <file> [--depth N] [--json]"]);
+  });
+
+  test("rejects invalid graph query depth values before scanning the graph", async () => {
+    const projectRoot = path.join(os.tmpdir(), "codegraph-query-depth").replace(/\\/g, "/");
+    const invalidDepths = ["foo", "-1", "1.5"];
+
+    for (const invalidDepth of invalidDepths) {
+      const stderrLines: string[] = [];
+      let scanned = false;
+
+      await expect(
+        handleGraphQueryCommand(
+          createGraphQueryContext({
+            command: "deps",
+            positionals: ["main.ts"],
+            projectRootFs: projectRoot,
+            projectRootAbs: projectRoot,
+            getOpt: (name) => (name === "--depth" ? invalidDepth : undefined),
+            writeStderrLine: (message) => stderrLines.push(message),
+            collectGraph: async () => {
+              scanned = true;
+              return { nodes: new Set(), edges: [] };
+            },
+          }),
+        ),
+      ).rejects.toThrow("graph query exit 2");
+
+      expect(stderrLines).toEqual([`Invalid --depth value "${invalidDepth}". Expected a non-negative integer.`]);
+      expect(scanned).toBe(false);
+    }
+  });
+
+  test("writes text errors for graph query files outside the project root", async () => {
+    const projectRoot = path.join(os.tmpdir(), "codegraph-query-root").replace(/\\/g, "/");
+    const stdoutLines: string[] = [];
+
+    await handleGraphQueryCommand(
+      createGraphQueryContext({
+        command: "rdeps",
+        positionals: ["../outside.ts"],
+        projectRootFs: projectRoot,
+        projectRootAbs: projectRoot,
+        writeStdoutLine: (message) => stdoutLines.push(message),
+      }),
+    );
+
+    expect(stdoutLines).toHaveLength(1);
+    expect(stdoutLines[0]).toContain("error: outside_project_root:");
+    expect(stdoutLines[0]).toContain("outside.ts");
+  });
+
+  test("writes null JSON when no graph path exists", async () => {
+    const projectRoot = path.join(os.tmpdir(), "codegraph-query-path").replace(/\\/g, "/");
+    const fromPath = `${projectRoot}/from.ts`;
+    const toPath = `${projectRoot}/to.ts`;
+    const jsonLines: unknown[] = [];
+
+    await handleGraphQueryCommand(
+      createGraphQueryContext({
+        command: "path",
+        positionals: ["from.ts", "to.ts"],
+        projectRootFs: projectRoot,
+        projectRootAbs: projectRoot,
+        hasFlag: (name) => name === "--json",
+        writeJSONLine: (value) => jsonLines.push(value),
+        collectGraph: async (): Promise<Graph> => ({
+          nodes: new Set([fromPath, toPath]),
+          edges: [],
+        }),
+      }),
+    );
+
+    expect(jsonLines).toEqual([null]);
+  });
+
+  test("rejects invalid cycle sort modes before scanning the graph", async () => {
+    const stderrLines: string[] = [];
+
+    await expect(
+      handleGraphQueryCommand(
+        createGraphQueryContext({
+          command: "cycles",
+          getOpt: (name) => (name === "--sort" ? "recent" : undefined),
+          writeStderrLine: (message) => stderrLines.push(message),
+        }),
+      ),
+    ).rejects.toThrow("graph query exit 2");
+
+    expect(stderrLines).toEqual(["Invalid --sort value. Use one of: priority, size, fanin."]);
+  });
+
+  test("writes unresolved imports as JSON through the graph query handler", async () => {
+    const projectRoot = path.join(os.tmpdir(), "codegraph-query-unresolved").replace(/\\/g, "/");
+    const mainPath = `${projectRoot}/main.ts`;
+    const jsonLines: unknown[] = [];
+
+    await handleGraphQueryCommand(
+      createGraphQueryContext({
+        command: "unresolved",
+        projectRootFs: projectRoot,
+        projectRootAbs: projectRoot,
+        hasFlag: (name) => name === "--json",
+        writeJSONLine: (value) => jsonLines.push(value),
+        collectGraph: async (): Promise<Graph> => ({
+          nodes: new Set([mainPath]),
+          edges: [
+            {
+              from: mainPath,
+              to: { type: "external", name: "missing-pkg" },
+              raw: "missing-pkg",
+            },
+          ],
+        }),
+      }),
+    );
+
+    const unresolved = readJsonArray(jsonLines[0]).map(readJsonRecord);
+    expect(unresolved).toHaveLength(1);
+    expect(unresolved[0]?.name).toBe("missing-pkg");
+    expect(JSON.stringify(unresolved[0]?.importers)).toContain("main.ts");
+  });
+
   test("defaults the extracted skill command to doctor output", async () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-skill-module-"));
     const targetDir = path.join(tempDir, "skills", "codegraph");
@@ -309,6 +705,68 @@ describe("CLI command modules", () => {
         targetDirExists: false,
         skillFilePresent: false,
       });
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("prints the bundled skill path through the extracted skill command", async () => {
+    const stdoutLines: string[] = [];
+
+    await handleSkillCommand(
+      createSkillContext({
+        positionals: ["print-path"],
+        writeStdoutLine: (message) => stdoutLines.push(message),
+      }),
+    );
+
+    expect(stdoutLines).toHaveLength(1);
+    expect(stdoutLines[0]).toContain("codegraph-skill/codegraph");
+  });
+
+  test("prints skill usage for unknown subcommands", async () => {
+    const stderrLines: string[] = [];
+
+    await expect(
+      handleSkillCommand(
+        createSkillContext({
+          positionals: ["remove"],
+          writeStderrLine: (message) => stderrLines.push(message),
+        }),
+      ),
+    ).rejects.toThrow("skill exit 2");
+
+    expect(stderrLines).toEqual([
+      "Usage: codegraph skill <install|print-path|doctor> [--agent <name> | --target <dir>] [--force]",
+    ]);
+  });
+
+  test("rejects invalid skill agents and conflicting install targets", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-skill-invalid-"));
+    const targetDir = path.join(tempDir, "skills", "codegraph");
+
+    try {
+      await expect(
+        handleSkillCommand(
+          createSkillContext({
+            positionals: ["doctor"],
+            getOpt: (name) => (name === "--agent" ? "unknown-agent" : undefined),
+          }),
+        ),
+      ).rejects.toThrow('Invalid --agent value "unknown-agent"');
+
+      await expect(
+        handleSkillCommand(
+          createSkillContext({
+            positionals: ["install"],
+            getOpt: (name) => {
+              if (name === "--agent") return "codex";
+              if (name === "--target") return targetDir;
+              return undefined;
+            },
+          }),
+        ),
+      ).rejects.toThrow("Use either --target or --agent for skill install, not both.");
     } finally {
       await fsp.rm(tempDir, { recursive: true, force: true });
     }

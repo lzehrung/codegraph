@@ -131,7 +131,7 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
   return out;
 }
 
-type DynamicBase = "file" | "project";
+type DynamicBase = "fileDir" | "filePath" | "project";
 type ParsedDynamicToken = { kind: "base"; base: DynamicBase } | { kind: "literal"; value: string };
 
 function parseStringLiteralToken(token: string): string | null {
@@ -197,8 +197,11 @@ function splitTopLevelArgs(text: string): string[] | null {
 
 function parseDynamicToken(token: string): ParsedDynamicToken | null {
   const compact = token.replace(/\s+/g, "");
-  if (compact === "__dirname" || compact === "__filename" || compact === "import.meta.url") {
-    return { kind: "base", base: "file" };
+  if (compact === "__dirname") {
+    return { kind: "base", base: "fileDir" };
+  }
+  if (compact === "__filename" || compact === "import.meta.url") {
+    return { kind: "base", base: "filePath" };
   }
   if (compact === "process.cwd()") {
     return { kind: "base", base: "project" };
@@ -246,7 +249,7 @@ function parseNewUrlArg(argText: string): {
   if (!firstLiteral) return null;
   const baseToken = parseDynamicToken(args[1] ?? "");
   if (!baseToken || baseToken.kind !== "base") return null;
-  if (baseToken.base !== "file") return null;
+  if (baseToken.base !== "filePath") return null;
   return { base: baseToken.base, segments: [firstLiteral] };
 }
 
@@ -275,8 +278,13 @@ export function extractJsTsDynamicSpecifiers(source: string, fromFile: string, p
       const argText = match[1] ?? "";
       const parsed = parsePathCallArg(argText);
       if (!parsed) continue;
-      const baseDir = parsed.base === "file" ? path.dirname(fromFile) : projectRoot;
-      const targetPath = path.resolve(baseDir, ...parsed.segments);
+      let basePath = projectRoot;
+      if (parsed.base === "fileDir") {
+        basePath = path.dirname(fromFile);
+      } else if (parsed.base === "filePath") {
+        basePath = fromFile;
+      }
+      const targetPath = path.resolve(basePath, ...parsed.segments);
       addSpec(buildRelativeSpecifier(fromFile, targetPath));
     }
     const urlCallRe = /(?<!["'`])\b(?:require|import)\s*\(\s*(new\s+URL\s*\([^)]*\))\s*\)/g;
