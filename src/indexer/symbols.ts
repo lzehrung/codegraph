@@ -9,8 +9,7 @@ import type {
   SymbolListItem,
 } from "./types.js";
 import { findReferences, resolveExport, resolveImported } from "./navigation.js";
-import { getSymbolRange } from "../refactor/trivia.js";
-import type { TriviaMode } from "../refactor/types.js";
+import { getSymbolRange, type TriviaMode } from "./symbol-ranges.js";
 
 export function symbolId(def: SymbolDef): SymbolHandle {
   const index = def?.range?.start?.index ?? 0;

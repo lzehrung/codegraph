@@ -34,7 +34,8 @@ function applyFileEdits(source: string, edits: TextEdit[]): string {
   let next = source;
   const descending = [...edits].sort((left, right) => right.start - left.start);
   for (const edit of descending) {
-    const replacement = eol === "\n" ? edit.newText : edit.newText.replace(/\n/g, eol);
+    const normalizedNewText = edit.newText.replace(/\r\n?/g, "\n");
+    const replacement = eol === "\n" ? normalizedNewText : normalizedNewText.replace(/\n/g, eol);
     next = `${next.slice(0, edit.start)}${replacement}${next.slice(edit.end)}`;
   }
   return next;

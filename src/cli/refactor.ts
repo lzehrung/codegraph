@@ -3,7 +3,8 @@ import { buildProjectIndexFromFiles, goToDefinition, symbolId } from "../indexer
 import type { BuildOptions, ProjectIndex } from "../indexer/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { FileId, Range } from "../types.js";
-import type { TriviaMode } from "../refactor/types.js";
+import type { TriviaMode } from "../indexer/symbol-ranges.js";
+import { assertFilePathWithinRoot } from "../util.js";
 import type { ProjectFileDiscoveryOptions } from "../util.js";
 
 type TextEdit = {
@@ -48,6 +49,8 @@ type RefactorPackage = {
   ) => Promise<RefactorResult>;
 };
 
+const REFACTOR_PACKAGE_NAME = "@lzehrung/codegraph-refactor";
+
 export type RefactorCommandContext = {
   projectRootFs: string;
   positionals: string[];
@@ -62,9 +65,27 @@ export type RefactorCommandContext = {
   writeStdoutLine: (message: string) => void;
 };
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isRefactorPackage(value: unknown): value is RefactorPackage {
+  if (!isObjectRecord(value)) return false;
+  return (
+    typeof value["applyEdits"] === "function" &&
+    typeof value["renameSymbol"] === "function" &&
+    typeof value["moveSymbol"] === "function" &&
+    typeof value["extractFunction"] === "function"
+  );
+}
+
 async function loadRefactorPackage(): Promise<RefactorPackage> {
   try {
-    return await import("@lzehrung/codegraph-refactor");
+    const loaded: unknown = await import(REFACTOR_PACKAGE_NAME);
+    if (!isRefactorPackage(loaded)) {
+      throw new Error("package did not expose expected refactor functions");
+    }
+    return loaded;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Install @lzehrung/codegraph-refactor to use codegraph refactor commands. ${message}`);
@@ -104,6 +125,10 @@ function inclusiveLineRange(
   endLine: number,
 ): { start: { line: number; column: number }; end: { line: number; column: number } } {
   return { start: { line: startLine, column: 1 }, end: { line: endLine + 1, column: 1 } };
+}
+
+function resolveRefactorFileWithinRoot(context: RefactorCommandContext, file: string, label: string): string {
+  return assertFilePathWithinRoot(context.projectRootFs, path.resolve(context.projectRootFs, file), label);
 }
 
 function renderRefactorEdits(projectRoot: string, edits: TextEdit[]): string {
@@ -215,14 +240,14 @@ async function runRefactorOperation(
     return await moveSymbol(
       index,
       await resolveRefactorSymbol(context, index, symbol, "refactor move"),
-      path.resolve(context.projectRootFs, requireOption(context, "--to-file", "refactor move")),
+      resolveRefactorFileWithinRoot(context, requireOption(context, "--to-file", "refactor move"), "Target file"),
     );
   }
   const range = parseLineRange(requireOption(context, "--range", "refactor extract"));
   return await extractFunction(
     index,
     {
-      file: path.resolve(context.projectRootFs, requireOption(context, "--file", "refactor extract")),
+      file: resolveRefactorFileWithinRoot(context, requireOption(context, "--file", "refactor extract"), "File"),
       range: inclusiveLineRange(range.startLine, range.endLine),
     },
     { newName: requireOption(context, "--to", "refactor extract") },

@@ -12,7 +12,7 @@ import type { CompactImpactReport, ImpactOptions, ImpactReport } from "./impact/
 import type { Edge, FileId, Range } from "./types.js";
 import { collectGraph, getDependencies, getReverseDependencies, getHotspots } from "./graphs.js";
 import type { NativeRuntimeMode } from "./native/treeSitterNative.js";
-import type { TriviaMode } from "./refactor/types.js";
+import type { TriviaMode } from "./indexer/symbol-ranges.js";
 import {
   fileExists,
   isFilePathWithinRoot,
@@ -53,9 +53,28 @@ type RefactorPackage = {
   ) => Promise<RefactorResult>;
 };
 
+const REFACTOR_PACKAGE_NAME = "@lzehrung/codegraph-refactor";
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isRefactorPackage(value: unknown): value is RefactorPackage {
+  if (!isObjectRecord(value)) return false;
+  return (
+    typeof value["renameSymbol"] === "function" &&
+    typeof value["moveSymbol"] === "function" &&
+    typeof value["extractFunction"] === "function"
+  );
+}
+
 async function loadRefactorPackage(): Promise<RefactorPackage> {
   try {
-    return await import("@lzehrung/codegraph-refactor");
+    const loaded: unknown = await import(REFACTOR_PACKAGE_NAME);
+    if (!isRefactorPackage(loaded)) {
+      throw new Error("package did not expose expected refactor functions");
+    }
+    return loaded;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Install @lzehrung/codegraph-refactor to use refactor agent tools. ${message}`);
@@ -392,7 +411,7 @@ export async function tool_refactorMove(
   try {
     const { moveSymbol } = await loadRefactorPackage();
     const index = await getToolIndex(root, options);
-    const targetFile = normalizePathArg(root, options.toFile);
+    const targetFile = normalizePathArgWithinRoot(root, options.toFile, "Target file");
     const symbol = await resolveToolRefactorSymbol(root, index, options);
     const result = await moveSymbol(index, symbol, targetFile);
     return {
@@ -423,7 +442,7 @@ export async function tool_refactorExtract(
   try {
     const { extractFunction } = await loadRefactorPackage();
     const index = await getToolIndex(root, options);
-    const file = normalizePathArg(root, options.file);
+    const file = normalizePathArgWithinRoot(root, options.file, "File");
     const result = await extractFunction(
       index,
       {
@@ -662,6 +681,14 @@ export async function tool_getHotspots(
 
 function normalizePathArg(root: string, file: string): string {
   return normalizePath(resolveFilePathFromRoot(root, file));
+}
+
+function normalizePathArgWithinRoot(root: string, file: string, label: string): string {
+  const normalized = normalizePathArg(root, file);
+  if (!isFilePathWithinRoot(root, normalized)) {
+    throw new Error(`${label} is outside project root: ${normalizePath(file)}`);
+  }
+  return normalized;
 }
 
 async function getToolIndex(root: string, options: ToolRuntimeOptions): Promise<ProjectIndex> {

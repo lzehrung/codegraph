@@ -1,5 +1,4 @@
-export type TriviaMode = "exclude" | "leading-doc" | "leading-all";
-
-export interface SymbolRangeOptions {
-  trivia?: TriviaMode;
-}
+export type {
+  SymbolRangeOptions,
+  TriviaMode,
+} from "../indexer/symbol-ranges.js";

@@ -13,9 +13,9 @@ import {
 } from "../native/treeSitterNative.js";
 import { maskJsLikeCommentsAndStrings, sliceText, toRange, unquote } from "../util.js";
 import { buildScopeIndexFromSource } from "./scope.js";
+import { getDeclarationAnchor } from "./declaration-anchor.js";
 import { QUERY_DRIVEN_LOCALS_LANGUAGES } from "./shared.js";
 import { SymbolKind } from "./types.js";
-import { getDeclarationAnchor } from "../refactor/trivia.js";
 import type { LanguageSupport } from "../languages.js";
 import type { JsLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { ExportEntry, ImportBinding, ModuleIndex, SymbolDef } from "./types.js";

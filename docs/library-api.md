@@ -242,7 +242,7 @@ if (handle) {
 }
 ```
 
-Pass `trivia: "leading-doc"` or `trivia: "leading-all"` to `listSymbols()` when a caller needs ranges that include attached docs or docs plus decorators/attributes. The cached symbol definition is not mutated; the expanded range is derived for that call.
+Pass `trivia: "leading-doc"` or `trivia: "leading-all"` to `listSymbols()` when a caller needs ranges that include attached docs or docs plus decorators/attributes. The cached symbol definition is not mutated; the expanded range is derived for that call. Direct `getSymbolRange()` callers that are about to emit edits against disk can pass `source: "disk"` to avoid using a stale cached parse.
 
 ## Refactor edits
 

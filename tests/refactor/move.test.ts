@@ -111,6 +111,31 @@ describe("moveSymbol", () => {
     );
   });
 
+  test("moves current disk trivia instead of stale cached trivia", async () => {
+    await withProject(
+      {
+        "src/source.ts": "/** old */\nexport function greet() { return 'hi'; }\n",
+        "src/target.ts": "",
+      },
+      async (root, files) => {
+        const index = await buildProjectIndexFromFiles(root, Object.values(files), { keepParsed: true });
+        const handle = listSymbols(index, { file: files["src/source.ts"] }).find(
+          (symbol) => symbol.name === "greet",
+        )?.id;
+        expect(handle).toBeDefined();
+        if (!handle) return;
+        await writeFile(files["src/source.ts"]!, "/** new */\nexport function greet() { return 'hi'; }\n", "utf8");
+
+        const result = await moveSymbol(index, handle, files["src/target.ts"]!);
+
+        expect(result.status).toBe("ok");
+        await applyEdits(result.edits);
+        await expect(readFile(files["src/target.ts"]!, "utf8")).resolves.toContain("/** new */");
+        await expect(readFile(files["src/target.ts"]!, "utf8")).resolves.not.toContain("/** old */");
+      },
+    );
+  });
+
   test("rejects target binding collisions", async () => {
     await withProject(
       {

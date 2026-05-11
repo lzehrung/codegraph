@@ -430,6 +430,22 @@ describe("Agent Tools", () => {
     expect(result.diff).toContain("target.ts");
   });
 
+  it("tool_refactorMove rejects target files outside the project root", async () => {
+    const root = await mkTmpDir("dg-agent-refactor-move-outside-");
+    await fsp.mkdir(path.join(root, "src"), { recursive: true });
+    await fsp.writeFile(path.join(root, "src", "source.ts"), "export function greet() { return 'hi'; }\n", "utf8");
+    const index = await codegraph.buildProjectIndex(root);
+    const handle = codegraph.listSymbols(index).find((symbol) => symbol.name === "greet")?.id;
+    expect(handle).toBeDefined();
+    if (!handle) return;
+
+    const result = await tool_refactorMove(root, { symbol: handle, toFile: "../target.ts", index });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toContain("outside project root");
+    expect(result.edits).toEqual([]);
+  });
+
   it("tool_refactorExtract returns canonical extract edits", async () => {
     const root = await mkTmpDir("dg-agent-refactor-extract-");
     await fsp.writeFile(
@@ -449,6 +465,25 @@ describe("Agent Tools", () => {
     expect(result.status).toBe("ok");
     expect(result.edits.length).toBe(2);
     expect(result.diff).toContain("emitName");
+  });
+
+  it("tool_refactorExtract rejects source files outside the project root", async () => {
+    const root = await mkTmpDir("dg-agent-refactor-extract-outside-");
+    const outside = await mkTmpDir("dg-agent-refactor-outside-file-");
+    await fsp.writeFile(path.join(root, "main.ts"), "export function run() {}\n", "utf8");
+    await fsp.writeFile(path.join(outside, "outside.ts"), "export function run() {\n  console.log('x');\n}\n", "utf8");
+    const index = await codegraph.buildProjectIndex(root);
+
+    const result = await tool_refactorExtract(root, {
+      file: path.join(outside, "outside.ts"),
+      range: { startLine: 2, endLine: 2 },
+      to: "emit",
+      index,
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toContain("outside project root");
+    expect(result.edits).toEqual([]);
   });
 
   it("tool_findSymbol clamps non-positive maxResults and ignores non-finite values", async () => {

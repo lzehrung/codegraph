@@ -22,6 +22,9 @@ describe("source module structure", () => {
       "src/util/resolutionCandidates.ts",
       "src/util/specifiers.ts",
       "src/util/workspace.ts",
+      "src/indexer/declaration-anchor.ts",
+      "src/indexer/symbol-range-trivia.ts",
+      "src/indexer/symbol-ranges.ts",
     ];
 
     for (const relativePath of expectedModules) {
@@ -30,6 +33,12 @@ describe("source module structure", () => {
     expect(sourceLineCount("src/util.ts")).toBeLessThanOrEqual(80);
     expect(fs.readFileSync(path.join(repoRoot, "src/util/workspace.ts"), "utf8")).not.toContain("./resolution.js");
     expect(fs.readFileSync(path.join(repoRoot, "src/util/resolutionCandidates.ts"), "utf8")).not.toContain("./workspace.js");
+    expect(fs.readFileSync(path.join(repoRoot, "src/indexer/locals-and-exports.ts"), "utf8")).not.toContain(
+      "../refactor/trivia.js",
+    );
+    expect(fs.readFileSync(path.join(repoRoot, "src/indexer/symbols.ts"), "utf8")).not.toContain(
+      "../refactor/trivia.js",
+    );
   });
 
   test("keeps the native crate split by runtime concern", () => {
@@ -82,6 +91,10 @@ describe("source module structure", () => {
     expect(moveSource).not.toContain("importStyle");
     expect(agentSource).toContain("type ToolRefactorResult");
     expect(agentSource).not.toContain("ToolRefactorRenameResult");
+    expect(agentSource).not.toContain('import("@lzehrung/codegraph-refactor")');
+    expect(fs.readFileSync(path.join(repoRoot, "src/cli/refactor.ts"), "utf8")).not.toContain(
+      'import("@lzehrung/codegraph-refactor")',
+    );
     expect(agentSource).toContain("keepParsed: needsTriviaRanges");
     expect(planSource).toContain("Status: historical implementation plan");
     expect(planSource).toContain("Current behavior is documented");

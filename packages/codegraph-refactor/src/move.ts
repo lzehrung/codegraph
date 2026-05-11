@@ -166,7 +166,7 @@ export async function moveSymbol(
       reason: error instanceof Error ? error.message : String(error),
     };
   }
-  const fullRange = getSymbolRange(index, def, { trivia: opts.trivia ?? "leading-all" });
+  const fullRange = getSymbolRange(index, def, { trivia: opts.trivia ?? "leading-all", source: "disk" });
   const start = fullRange.start.index;
   const end = fullRange.end.index;
   if (start === undefined || end === undefined || end < start) {

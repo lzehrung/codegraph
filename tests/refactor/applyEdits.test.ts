@@ -71,6 +71,17 @@ describe("applyEdits", () => {
     });
   });
 
+  test("normalizes CRLF inserted text before adapting to the target file EOL", async () => {
+    await withTempDir(async (dir) => {
+      const file = path.join(dir, "sample.ts");
+      await writeFile(file, "one\r\nfour\r\n", "utf8");
+
+      await applyEdits([edit(file, 5, 5, "two\r\nthree\r\n")]);
+
+      await expect(readFile(file, "utf8")).resolves.toBe("one\r\ntwo\r\nthree\r\nfour\r\n");
+    });
+  });
+
   test("stages newly created files relative to the requested git root", async () => {
     await withTempDir(async (dir) => {
       execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });

@@ -71,5 +71,5 @@ Examples:
   codegraph refactor rename --symbol <handle> --to newName --json
   codegraph refactor rename --at src/main.ts:42:10 --to newName --json
   codegraph refactor move --at src/main.ts:42:10 --to-file src/target.ts --json
-  codegraph refactor extract --file src/main.ts --range 10:14 --to helper --json
+  codegraph refactor extract --file src/main.ts --range 10:14 --to helper --json  # inclusive lines
 `;

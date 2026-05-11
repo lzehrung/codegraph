@@ -1,4 +1,4 @@
-import type { TriviaMode } from "./types.js";
+import type { TriviaMode } from "./symbol-ranges.js";
 
 const commentNodeTypes = new Set(["comment", "line_comment", "block_comment"]);
 

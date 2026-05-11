@@ -746,6 +746,34 @@ describe("CLI regressions", () => {
     expect(result.edits.some((edit) => edit.newText.includes("./target"))).toBe(true);
   });
 
+  it("refactor move rejects target files outside the project root", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-refactor-move-outside-"));
+    const srcDir = path.join(tmpDir, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(path.join(srcDir, "source.ts"), "export function greet() { return 'hi'; }\n", "utf8");
+
+    const symbols = JSON.parse(await runCliCommand(["list-symbols", "--root", tmpDir])) as {
+      symbols: Array<{ id: string; name: string }>;
+    };
+    const handle = symbols.symbols.find((symbol) => symbol.name === "greet")?.id;
+    expect(handle).toBeDefined();
+    if (!handle) return;
+
+    await expect(
+      runCliCommand([
+        "refactor",
+        "move",
+        "--root",
+        tmpDir,
+        "--symbol",
+        handle,
+        "--to-file",
+        "../outside.ts",
+        "--json",
+      ]),
+    ).rejects.toThrow("Target file is outside project root");
+  });
+
   it("refactor move accepts a source location instead of a symbol handle", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-refactor-move-at-"));
     const srcDir = path.join(tmpDir, "src");
@@ -821,6 +849,27 @@ describe("CLI regressions", () => {
     expect(result.status).toBe("ok");
     expect(result.edits.some((edit) => edit.newText.includes("function emitName"))).toBe(true);
     expect(result.edits.some((edit) => edit.newText.includes("emitName(name);"))).toBe(true);
+  });
+
+  it("refactor extract rejects source files outside the project root", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-refactor-extract-outside-"));
+    await fsp.writeFile(path.join(tmpDir, "main.ts"), "export function run() {\n  return 1;\n}\n", "utf8");
+
+    await expect(
+      runCliCommand([
+        "refactor",
+        "extract",
+        "--root",
+        tmpDir,
+        "--file",
+        "../outside.ts",
+        "--range",
+        "1:1",
+        "--to",
+        "helper",
+        "--json",
+      ]),
+    ).rejects.toThrow("File is outside project root");
   });
 
   it("refactor text mode explains unsupported results with no edits", async () => {

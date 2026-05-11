@@ -15,7 +15,7 @@ import {
   listSymbols,
 } from "./indexer.js";
 import type { BuildOptions, BuildReport } from "./indexer/types.js";
-import type { TriviaMode } from "./refactor/types.js";
+import type { TriviaMode } from "./indexer/symbol-ranges.js";
 import { buildReviewReport, type ReviewBuildReport, type ReviewDepth } from "./review.js";
 import {
   collectGraph,

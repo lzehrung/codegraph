@@ -131,7 +131,7 @@ export {
 export type {
   SymbolRangeOptions,
   TriviaMode,
-} from "./refactor/types.js";
+} from "./indexer/symbol-ranges.js";
 
 /** Diff impact analysis and review-context helper APIs. */
 export {
