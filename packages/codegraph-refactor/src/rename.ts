@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { findReferencesById, maskJsLikeCommentsAndStrings, resolveSymbolId, supportForFile } from "@lzehrung/codegraph";
+import { findReferencesById, resolveSymbolId, supportForFile } from "@lzehrung/codegraph";
 import { isValidIdentifier } from "./identifier.js";
 import type { ProjectIndex, Range, SymbolHandle } from "@lzehrung/codegraph";
 import type { RefactorResult, TextEdit } from "./types.js";
@@ -42,20 +42,6 @@ function specifierNames(specifier: string): { imported: string; local: string } 
     imported,
     local: (localRaw ?? imported).trim(),
   };
-}
-
-function collectIdentifierEdits(file: string, source: string, oldName: string, newName: string): TextEdit[] {
-  const edits: TextEdit[] = [];
-  const maskedSource = maskJsLikeCommentsAndStrings(source);
-  const identifierPattern = new RegExp(`\\b${escapeRegExp(oldName)}\\b`, "g");
-  for (
-    let match: RegExpExecArray | null = identifierPattern.exec(maskedSource);
-    match;
-    match = identifierPattern.exec(maskedSource)
-  ) {
-    edits.push({ file, start: match.index, end: match.index + oldName.length, newText: newName });
-  }
-  return edits;
 }
 
 function collectNamedImportEdits(
@@ -103,9 +89,6 @@ function collectNamedImportEdits(
           const start = specifierOffset + specifierMatch.index + importedOffset;
           const end = start + oldName.length;
           edits.push({ file: mod.file, start, end, newText: newName });
-          if (names.local === oldName) {
-            edits.push(...collectIdentifierEdits(mod.file, source, oldName, newName));
-          }
           break;
         }
       }

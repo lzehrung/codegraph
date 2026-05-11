@@ -47,6 +47,12 @@ function isTransientFileContentionError(error: unknown): boolean {
   return code === "EBUSY" || code === "EPERM" || code === "ENOTEMPTY";
 }
 
+function isDestinationExistsError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = "code" in error ? error.code : undefined;
+  return code === "EEXIST";
+}
+
 async function wait(ms: number): Promise<void> {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
@@ -73,6 +79,16 @@ async function readUtf8File(file: string): Promise<{ status: "ok"; source: strin
   }
 }
 
+async function replaceFile(tempFile: string, file: string): Promise<void> {
+  try {
+    await rename(tempFile, file);
+  } catch (error) {
+    if (!isDestinationExistsError(error)) throw error;
+    await rm(file, { force: true });
+    await rename(tempFile, file);
+  }
+}
+
 async function writeAtomically(file: string, text: string): Promise<void> {
   await mkdir(path.dirname(file), { recursive: true });
   const retryDelays = [10, 25, 50, 100];
@@ -80,7 +96,7 @@ async function writeAtomically(file: string, text: string): Promise<void> {
     const tempFile = path.join(path.dirname(file), `.${path.basename(file)}.${randomUUID()}.tmp`);
     try {
       await writeFile(tempFile, text, "utf8");
-      await rename(tempFile, file);
+      await replaceFile(tempFile, file);
       return;
     } catch (error) {
       try {

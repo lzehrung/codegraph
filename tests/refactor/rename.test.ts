@@ -97,6 +97,43 @@ describe("renameSymbol", () => {
     );
   });
 
+  test("does not rename unrelated matching identifiers in importer files", async () => {
+    await withProject(
+      {
+        "types.ts": "export interface User { name: string }\n",
+        "main.ts": [
+          "import type { User } from './types';",
+          "const user: User = { name: 'Ada' };",
+          "const holder = { User: 1 };",
+          "const UserValue = holder.User;",
+          "console.log(user, UserValue);",
+          "",
+        ].join("\n"),
+      },
+      async (root, files) => {
+        const index = await buildProjectIndexFromFiles(root, Object.values(files), { keepParsed: true });
+        const handle = listSymbols(index, { file: files["types.ts"] }).find((symbol) => symbol.name === "User")?.id;
+        expect(handle).toBeDefined();
+        if (!handle) return;
+
+        const result = await renameSymbol(index, handle, "Person");
+
+        expect(result.status).toBe("ok");
+        await applyEdits(result.edits);
+        await expect(readFile(files["main.ts"]!, "utf8")).resolves.toBe(
+          [
+            "import type { Person } from './types';",
+            "const user: Person = { name: 'Ada' };",
+            "const holder = { User: 1 };",
+            "const UserValue = holder.User;",
+            "console.log(user, UserValue);",
+            "",
+          ].join("\n"),
+        );
+      },
+    );
+  });
+
   test("rejects invalid identifiers", async () => {
     await withProject({ "utils.ts": "export function greet() { return 'hi'; }\n" }, async (root, files) => {
       const index = await buildProjectIndexFromFiles(root, Object.values(files), { keepParsed: true });
