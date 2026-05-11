@@ -24,5 +24,5 @@ export function isLeadingTriviaNode(languageId: string, nodeType: string, mode: 
 
 export function isLeadingTriviaTransparentNode(languageId: string, nodeType: string): boolean {
   if (commentNodeTypes.has(nodeType)) return true;
-  return Object.values(leadingAllNodeTypes).some((nodeTypes) => nodeTypes.has(nodeType));
+  return leadingAllNodeTypes[languageId]?.has(nodeType) ?? false;
 }

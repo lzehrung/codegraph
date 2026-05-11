@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { buildProjectIndexFromFiles, getSymbolRange, listSymbols, type TriviaMode } from "../../src/index.js";
+import { computeLeadingTriviaRange } from "../../src/indexer/symbol-ranges.js";
+import type { SyntaxNodeLike } from "../../src/languages/types.js";
 
 async function withTempProject<T>(files: Record<string, string>, fn: (root: string, files: string[]) => Promise<T>): Promise<T> {
   const root = await mkdtemp(path.join(tmpdir(), "codegraph-trivia-"));
@@ -24,6 +26,22 @@ async function rangeStartLine(source: string, symbol: string, trivia: TriviaMode
     const index = await buildProjectIndexFromFiles(root, files, { native: "off", keepParsed: true });
     return listSymbols(index, { file: files[0], trivia }).find((item) => item.name === symbol)?.range?.start.line;
   });
+}
+
+function fakeNode(type: string, startIndex: number, endIndex: number, startLine: number): SyntaxNodeLike {
+  return {
+    type,
+    startIndex,
+    endIndex,
+    startPosition: { row: startLine - 1, column: 0 },
+    endPosition: { row: startLine - 1, column: endIndex - startIndex },
+    namedChildren: [],
+    previousNamedSibling: null,
+    parent: null,
+    text: "",
+    child: () => null,
+    childForFieldName: () => null,
+  };
 }
 
 describe("trivia-aware symbol ranges", () => {
@@ -100,5 +118,18 @@ describe("trivia-aware symbol ranges", () => {
         expect(symbol?.range?.start.line).toBe(1);
       },
     );
+  });
+
+  test("transparent leading trivia nodes are scoped to the current language", () => {
+    const source = "/** docs */\n[Attr]\nexport function run() {}\n";
+    const doc = fakeNode("comment", 0, 11, 1);
+    const attributeList = fakeNode("attribute_list", 11, 18, 2);
+    const functionNode = fakeNode("function_declaration", 18, source.length, 3);
+    attributeList.previousNamedSibling = doc;
+    functionNode.previousNamedSibling = attributeList;
+
+    const range = computeLeadingTriviaRange(functionNode, source, "ts", "leading-doc");
+
+    expect(range.start.line).toBe(3);
   });
 });

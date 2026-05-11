@@ -86,6 +86,23 @@ describe("renameSymbol", () => {
     });
   });
 
+  test("rejects TypeScript reserved words", async () => {
+    await withProject({ "utils.ts": "export function greet() { return 'hi'; }\n" }, async (root, files) => {
+      const index = await buildProjectIndexFromFiles(root, Object.values(files), { keepParsed: true });
+      const handle = listSymbols(index, { file: files["utils.ts"] }).find((symbol) => symbol.name === "greet")?.id;
+      expect(handle).toBeDefined();
+      if (!handle) return;
+
+      for (const reservedWord of ["for", "switch", "new"]) {
+        const result = await renameSymbol(index, handle, reservedWord);
+
+        expect(result.status).toBe("unsupported");
+        expect(result.reason).toContain("reserved word");
+        expect(result.edits).toEqual([]);
+      }
+    });
+  });
+
   test("rejects import alias handles", async () => {
     await withProject(
       {
