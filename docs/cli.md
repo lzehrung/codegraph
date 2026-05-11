@@ -122,6 +122,8 @@ codegraph grep --pattern 'eval\(' --ignore-case
 
 `refactor rename` accepts definition handles from `list-symbols` or `--at <file>:<line>:<column>` locations resolved through go-to-definition. It returns deterministic text edits by default. Add `--apply` to write the edits to disk. When a refactor creates new files, `--git` with `--apply` stages those new files. Text output reports unsupported or error results with status, reason, and warnings.
 
+Refactor commands always build a full-project index, even when global changed-file flags such as `--git-base`, `--git-head`, or `--changed-since` are present. Rename, move, and extract need complete reference/import context to avoid partial edit sets.
+
 `refactor move` supports TypeScript and JavaScript top-level declarations in v1. It accepts `--symbol` or `--at`, moves the trivia-aware declaration text, creates the target file when needed, and rewrites named ES importers that Codegraph can resolve.
 
 `refactor extract` supports inclusive contiguous TypeScript and JavaScript statement line ranges inside one function body. v1 rejects early `return`, unsupported control-flow, context-sensitive bindings, and selected declarations used after the range. It emits edits only; apply them with `--apply` after reviewing the JSON or diff.

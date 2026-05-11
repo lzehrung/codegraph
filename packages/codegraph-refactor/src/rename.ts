@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import { findReferencesById, resolveSymbolId, supportForFile } from "@lzehrung/codegraph";
+import { findReferencesById, maskJsLikeCommentsAndStrings, resolveSymbolId, supportForFile } from "@lzehrung/codegraph";
 import { isValidIdentifier } from "./identifier.js";
-import type { ImportBinding, ProjectIndex, Range, SymbolHandle } from "@lzehrung/codegraph";
+import type { ProjectIndex, Range, SymbolHandle } from "@lzehrung/codegraph";
 import type { RefactorResult, TextEdit } from "./types.js";
 
 function editKey(file: string, range: Range): string {
@@ -44,12 +44,18 @@ function specifierNames(specifier: string): { imported: string; local: string } 
   };
 }
 
-function isTargetNamedImport(
-  binding: ImportBinding,
-  oldName: string,
-  targetFile: string,
-): binding is Extract<ImportBinding, { kind: "named" }> {
-  return binding.kind === "named" && binding.imported === oldName && binding.resolved === targetFile;
+function collectIdentifierEdits(file: string, source: string, oldName: string, newName: string): TextEdit[] {
+  const edits: TextEdit[] = [];
+  const maskedSource = maskJsLikeCommentsAndStrings(source);
+  const identifierPattern = new RegExp(`\\b${escapeRegExp(oldName)}\\b`, "g");
+  for (
+    let match: RegExpExecArray | null = identifierPattern.exec(maskedSource);
+    match;
+    match = identifierPattern.exec(maskedSource)
+  ) {
+    edits.push({ file, start: match.index, end: match.index + oldName.length, newText: newName });
+  }
+  return edits;
 }
 
 function collectNamedImportEdits(
@@ -60,17 +66,23 @@ function collectNamedImportEdits(
 ): TextEdit[] {
   const edits: TextEdit[] = [];
   for (const mod of index.byFile.values()) {
-    const namedImports = mod.imports.filter((binding) => isTargetNamedImport(binding, oldName, targetFile));
-    if (namedImports.length === 0) continue;
+    const sourceSpecifiers = Array.from(
+      new Set(
+        mod.imports
+          .filter((binding) => binding.resolved === targetFile)
+          .map((binding) => binding.from),
+      ),
+    );
+    if (sourceSpecifiers.length === 0) continue;
     let source: string;
     try {
       source = fs.readFileSync(mod.file, "utf8");
     } catch {
       continue;
     }
-    for (const binding of namedImports) {
+    for (const from of sourceSpecifiers) {
       const importPattern = new RegExp(
-        `import\\s*\\{(?<specifiers>[^}]+)\\}\\s*from\\s*["']${escapeRegExp(binding.from)}["']`,
+        `import\\s+(?:type\\s+)?\\{(?<specifiers>[^}]+)\\}\\s*from\\s*["']${escapeRegExp(from)}["']`,
         "g",
       );
       for (let match: RegExpExecArray | null = importPattern.exec(source); match; match = importPattern.exec(source)) {
@@ -85,12 +97,15 @@ function collectNamedImportEdits(
         ) {
           const specifier = specifierMatch[0];
           const names = specifierNames(specifier);
-          if (names.imported !== oldName || names.local !== binding.local) continue;
+          if (names.imported !== oldName) continue;
           const importedOffset = specifier.search(new RegExp(`\\b${escapeRegExp(oldName)}\\b`));
           if (importedOffset < 0) continue;
           const start = specifierOffset + specifierMatch.index + importedOffset;
           const end = start + oldName.length;
           edits.push({ file: mod.file, start, end, newText: newName });
+          if (names.local === oldName) {
+            edits.push(...collectIdentifierEdits(mod.file, source, oldName, newName));
+          }
           break;
         }
       }

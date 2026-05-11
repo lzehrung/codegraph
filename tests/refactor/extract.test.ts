@@ -98,6 +98,36 @@ describe("extractFunction", () => {
     );
   });
 
+  test("ignores function declarations inside comments when locating the containing function", async () => {
+    await withFile(
+      "// function fake() {\n//   console.log('not code');\n// }\nexport function run(name: string) {\n  console.log(name);\n}\n",
+      async (root, file) => {
+        const index = await buildProjectIndexFromFiles(root, [file], { keepParsed: true });
+
+        const result = await extractFunction(index, { file, range: lineRange(5, 6) }, { newName: "emitName" });
+
+        expect(result.status).toBe("ok");
+        await applyEdits(result.edits);
+        const source = await readFile(file, "utf8");
+        expect(source).toContain("// function fake()");
+        expect(source).toContain("function emitName(name)");
+        expect(source.indexOf("function emitName(name)")).toBeLessThan(source.indexOf("export function run"));
+        expect(source.indexOf("function emitName(name)")).toBeGreaterThan(source.indexOf("// }"));
+      },
+    );
+  });
+
+  test("resolves line ranges ending at EOF without a trailing newline", async () => {
+    await withFile("export const value = 1;", async (root, file) => {
+      const index = await buildProjectIndexFromFiles(root, [file], { keepParsed: true });
+
+      const result = await extractFunction(index, { file, range: lineRange(1, 2) }, { newName: "readValue" });
+
+      expect(result.status).toBe("unsupported");
+      expect(result.reason).not.toContain("range does not resolve");
+    });
+  });
+
   test("rejects extracted declarations used after the selected range", async () => {
     await withFile(
       "export function run(name: string) {\n  const greeting = `hi ${name}`;\n  console.log(greeting);\n}\n",

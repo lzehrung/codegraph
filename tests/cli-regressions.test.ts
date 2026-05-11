@@ -714,6 +714,37 @@ describe("CLI regressions", () => {
     expect(result.edits.filter((edit) => edit.newText === "salute").length).toBeGreaterThanOrEqual(3);
   });
 
+  it("refactor rename indexes the full project when changed-file flags are present", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-refactor-full-index-"));
+    await fsp.writeFile(path.join(tmpDir, "utils.ts"), "export function greet() { return 'hi'; }\n", "utf8");
+    await fsp.writeFile(path.join(tmpDir, "main.ts"), "import { greet } from './utils';\ngreet();\n", "utf8");
+    execFileSync("git", ["init"], { cwd: tmpDir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: tmpDir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.name", "Test User"], { cwd: tmpDir, stdio: "ignore" });
+    execFileSync("git", ["add", "."], { cwd: tmpDir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "initial"], { cwd: tmpDir, stdio: "ignore" });
+    await fsp.writeFile(path.join(tmpDir, "main.ts"), "import { greet } from './utils';\ngreet();\n// changed\n", "utf8");
+
+    const stdout = await runCliCommand([
+      "refactor",
+      "rename",
+      "--root",
+      tmpDir,
+      "--git-base",
+      "HEAD",
+      "--at",
+      "main.ts:2:1",
+      "--to",
+      "salute",
+      "--json",
+    ]);
+    const result = JSON.parse(stdout) as { status: string; edits: Array<{ file: string; newText: string }> };
+
+    expect(result.status).toBe("ok");
+    expect(result.edits.some((edit) => edit.file.endsWith("utils.ts") && edit.newText === "salute")).toBe(true);
+    expect(result.edits.some((edit) => edit.file.endsWith("main.ts") && edit.newText === "salute")).toBe(true);
+  });
+
   it("refactor move emits JSON edits", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-refactor-move-"));
     const srcDir = path.join(tmpDir, "src");

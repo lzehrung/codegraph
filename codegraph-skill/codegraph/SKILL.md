@@ -161,6 +161,8 @@ Prefer `refs` over plain text search when you want semantic usages rather than e
 
 Use `refactor rename` for conservative semantic renames when `@lzehrung/codegraph-refactor` is installed with the CLI. Use `refactor move` for TypeScript and JavaScript top-level declarations when named ES importers should be rewritten with the declaration. For rename and move, pass either `--symbol <handle>` from `list-symbols` or `--at <file>:<line>:<column>` when cursor location is easier. Use `refactor extract` for inclusive contiguous TypeScript and JavaScript statement line ranges inside one function body. These commands return deterministic edits by default and reject unsupported shapes instead of guessing; `--text` prints status, reason, and warnings for unsupported or error results.
 
+Refactor commands intentionally build a full-project index, even when global changed-file flags are present. Do not expect `--git-base`, `--git-head`, or `--changed-since` to narrow rename/move/extract reference discovery.
+
 ### PR and diff impact
 
 - Git diff impact:

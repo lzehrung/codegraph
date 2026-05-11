@@ -14,6 +14,10 @@ export interface SymbolRangeOptions {
   source?: "cache" | "disk";
 }
 
+type ParsedSymbolRangeSource = { source: string; tree: SyntaxTreeLike; languageId: string };
+
+const parsedSourceCache = new WeakMap<ProjectIndex, Map<string, ParsedSymbolRangeSource | null>>();
+
 function hasBlankLineBetween(source: string, leftEnd: number, rightStart: number): boolean {
   return /\r?\n[ \t]*\r?\n/.test(source.slice(leftEnd, rightStart));
 }
@@ -61,19 +65,34 @@ function parseTreeForDef(
   index: ProjectIndex,
   def: SymbolDef,
   sourceMode: "cache" | "disk",
-): { source: string; tree: SyntaxTreeLike; languageId: string } | null {
+): ParsedSymbolRangeSource | null {
   const cached = sourceMode === "cache" ? index.parsed?.get(def.file) : undefined;
   if (cached?.sup && cached.tree) {
     return { source: cached.source, tree: cached.tree, languageId: cached.sup.id };
+  }
+
+  const memo = sourceMode === "cache" ? parsedSourceCache.get(index) : undefined;
+  if (memo?.has(def.file)) {
+    return memo.get(def.file) ?? null;
   }
 
   try {
     const source = fs.readFileSync(def.file, "utf8");
     const prepared = prepareFileForIndexingFromSource(def.file, source, index.nativeMode);
     const parsed = attemptParsePreparedFileContext(prepared).parsed;
-    if (!parsed) return null;
-    return { source: parsed.source, tree: parsed.tree, languageId: parsed.sup.id };
+    const result = parsed ? { source: parsed.source, tree: parsed.tree, languageId: parsed.sup.id } : null;
+    if (sourceMode === "cache") {
+      const nextMemo = memo ?? new Map<string, ParsedSymbolRangeSource | null>();
+      nextMemo.set(def.file, result);
+      parsedSourceCache.set(index, nextMemo);
+    }
+    return result;
   } catch {
+    if (sourceMode === "cache") {
+      const nextMemo = memo ?? new Map<string, ParsedSymbolRangeSource | null>();
+      nextMemo.set(def.file, null);
+      parsedSourceCache.set(index, nextMemo);
+    }
     return null;
   }
 }

@@ -15,6 +15,9 @@ function lineStarts(source: string): number[] {
       starts.push(index + 1);
     }
   }
+  if (starts[starts.length - 1] !== source.length) {
+    starts.push(source.length);
+  }
   return starts;
 }
 
@@ -49,7 +52,7 @@ function findFunctionEnvelope(source: string, regionStart: number, regionEnd: nu
   const pattern =
     /(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+[A-Za-z_$][A-Za-z0-9_$]*\s*\((?<params>[^)]*)\)\s*\{/g;
   let found: FunctionEnvelope | null = null;
-  for (let match: RegExpExecArray | null = pattern.exec(source); match; match = pattern.exec(source)) {
+  for (let match: RegExpExecArray | null = pattern.exec(braceSource); match; match = pattern.exec(braceSource)) {
     const bodyStart = match.index + match[0].length;
     const bodyEnd = findMatchingBrace(braceSource, bodyStart - 1);
     if (bodyEnd === null) continue;

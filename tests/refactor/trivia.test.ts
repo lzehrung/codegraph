@@ -1,7 +1,8 @@
+import fs from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { buildProjectIndexFromFiles, getSymbolRange, listSymbols, type TriviaMode } from "../../src/index.js";
 import { computeLeadingTriviaRange } from "../../src/indexer/symbol-ranges.js";
 import type { SyntaxNodeLike } from "../../src/languages/types.js";
@@ -159,6 +160,31 @@ describe("trivia-aware symbol ranges", () => {
 
         expect(expanded.start.line).toBe(5);
         expect(expanded.end.line).toBe(8);
+      },
+    );
+  });
+
+  test("cache-mode trivia parsing reparses each file at most once when parsed trees are absent", async () => {
+    await withTempProject(
+      {
+        "sample.ts": [
+          "/** One. */",
+          "export function one() {}",
+          "/** Two. */",
+          "export function two() {}",
+          "",
+        ].join("\n"),
+      },
+      async (root, files) => {
+        const index = await buildProjectIndexFromFiles(root, files, { native: "off" });
+        const readFileSync = vi.spyOn(fs, "readFileSync");
+
+        const symbols = listSymbols(index, { file: files[0], trivia: "leading-doc" });
+
+        expect(symbols.find((symbol) => symbol.name === "one")?.range?.start.line).toBe(1);
+        expect(symbols.find((symbol) => symbol.name === "two")?.range?.start.line).toBe(3);
+        expect(readFileSync.mock.calls.filter((call) => call[0] === files[0]).length).toBe(1);
+        readFileSync.mockRestore();
       },
     );
   });

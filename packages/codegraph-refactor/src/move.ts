@@ -76,7 +76,7 @@ function importEditForSpecifier(modFile: string, from: string, name: string, tar
   }
 
   const importPattern = new RegExp(
-    `import\\s*\\{(?<specifiers>[^}]+)\\}\\s*from\\s*(?<quote>["'])${escapeRegExp(from)}\\k<quote>;?`,
+    `import\\s+(?<typeKeyword>type\\s+)?\\{(?<specifiers>[^}]+)\\}\\s*from\\s*(?<quote>["'])${escapeRegExp(from)}\\k<quote>;?`,
     "g",
   );
   for (let match: RegExpExecArray | null = importPattern.exec(source); match; match = importPattern.exec(source)) {
@@ -90,11 +90,12 @@ function importEditForSpecifier(modFile: string, from: string, name: string, tar
     if (moved.length === 0) continue;
     const remaining = parts.filter((part) => !moved.includes(part));
     const quote = match.groups?.["quote"] ?? "'";
+    const importPrefix = match.groups?.["typeKeyword"] ? "import type" : "import";
     const targetSpecifier = relativeSpecifier(modFile, targetFile, from);
     const replacement =
       remaining.length > 0
-        ? `import { ${remaining.join(", ")} } from ${quote}${from}${quote};\nimport { ${moved.join(", ")} } from ${quote}${targetSpecifier}${quote};`
-        : `import { ${moved.join(", ")} } from ${quote}${targetSpecifier}${quote};`;
+        ? `${importPrefix} { ${remaining.join(", ")} } from ${quote}${from}${quote};\n${importPrefix} { ${moved.join(", ")} } from ${quote}${targetSpecifier}${quote};`
+        : `${importPrefix} { ${moved.join(", ")} } from ${quote}${targetSpecifier}${quote};`;
     return {
       file: modFile,
       start: match.index,
@@ -208,7 +209,7 @@ export async function moveSymbol(
   for (const mod of index.byFile.values()) {
     const sourceSpecifiers = new Set(
       mod.imports
-        .filter((binding) => binding.kind === "named" && binding.resolved === def.file)
+        .filter((binding) => binding.resolved === def.file)
         .map((binding) => binding.from),
     );
     for (const from of sourceSpecifiers) {

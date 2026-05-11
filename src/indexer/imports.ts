@@ -608,9 +608,11 @@ export async function collectImportsForFile(
     const typeOnlyImport = /\bimport\s+type\b/;
     const reFrom = /^\s*import\s+([^\n;]*?)\s+from\s+(["'])(?<m>[^"']+)\2/gm;
     for (const m of src.matchAll(reFrom)) {
-      const clause = m[1]!.trim();
+      const rawClause = m[1]!.trim();
+      const inlineTypeOnly = /^type\b/.test(rawClause);
+      const clause = inlineTypeOnly ? rawClause.replace(/^type\b\s*/, "") : rawClause;
       const mod = m.groups?.m as string;
-      const typeOnly = typeOnlyImport.test(m[0]);
+      const typeOnly = typeOnlyImport.test(m[0]) || inlineTypeOnly;
       const resolved = await resolveFrom(mod);
       const ns = clause.match(/^\*\s+as\s+([A-Za-z_$][\w$]*)$/);
       if (ns) {
