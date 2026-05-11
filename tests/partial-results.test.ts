@@ -76,6 +76,24 @@ describe("Partial Results", () => {
       expect(result.status).toBe("failed");
       expect(result.coverage).toBe(0);
     });
+
+    test("uses fallback metadata when none is provided", () => {
+      const errors = [
+        {
+          target: "file.ts",
+          message: "Parse error",
+          severity: "error" as const,
+          retryable: true,
+        },
+      ];
+
+      const result = partial([], errors);
+
+      expect(result.status).toBe("failed");
+      expect(result.data).toEqual([]);
+      expect(result.coverage).toBe(0);
+      expect(result.metadata).toEqual({ attempted: 1, succeeded: 0, failed: 1 });
+    });
   });
 
   describe("failed", () => {
@@ -226,6 +244,27 @@ describe("Partial Results", () => {
 
       expect(result.metadata?.duration).toBeGreaterThan(0);
     });
+
+    test("preserves non-Error rejection messages when continuing after failures", async () => {
+      const result = await withPartialResults(
+        [1, 2],
+        async (n: number) => {
+          if (n === 2) {
+            throw "plain failure";
+          }
+          return n;
+        },
+        {
+          continueOnError: true,
+        },
+      );
+
+      expect(result.status).toBe("partial");
+      expect(result.data).toEqual([1]);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]?.message).toBe("plain failure");
+      expect(result.errors[0]?.stack).toBeUndefined();
+    });
   });
 
   describe("combinePartialResults", () => {
@@ -270,6 +309,21 @@ describe("Partial Results", () => {
       expect(combined.metadata?.attempted).toBe(3);
       expect(combined.metadata?.succeeded).toBe(2);
       expect(combined.metadata?.failed).toBe(1);
+    });
+
+    test("falls back to status and clamped coverage when result metadata is absent", () => {
+      const results = [
+        { ...success([1]), metadata: undefined },
+        { ...partial([2], []), coverage: 2, metadata: undefined },
+        { ...failed<number[]>([], "broken"), coverage: -1, metadata: undefined },
+      ];
+
+      const combined = combinePartialResults(results, (arrays) => arrays.flat());
+
+      expect(combined.status).toBe("partial");
+      expect(combined.data).toEqual([1, 2]);
+      expect(combined.coverage).toBeCloseTo(2 / 3);
+      expect(combined.metadata).toEqual({ attempted: 3, succeeded: 2, failed: 1 });
     });
   });
 

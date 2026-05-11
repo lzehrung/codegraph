@@ -125,6 +125,38 @@ describe("Import extraction fallback reporting", () => {
     expect(specs.map((entry) => entry.spec)).toEqual(["./actual"]);
   });
 
+  it("extracts file-relative dynamic specifiers from path and URL helpers", () => {
+    const projectRoot = path.join(process.cwd(), "fixture-root");
+    const fromFile = path.join(projectRoot, "src", "loaders", "main.ts");
+    const source = [
+      "const fromDirname = require(path.join(__dirname, '..', 'shared'));",
+      'const fromImportMeta = import(new URL("./asset.json", import.meta.url));',
+      'const fromFilename = require(path.resolve(__filename, "..", "sibling"));',
+      "const duplicate = import(path.join(__dirname, '..', 'shared'));",
+    ].join("\n");
+
+    const specs = extractJsTsDynamicSpecifiers(source, fromFile, projectRoot);
+
+    expect(specs.map((entry) => entry.spec)).toEqual(["../shared", "./sibling", "./asset.json"]);
+    expect(specs.every((entry) => entry.resolved === "heuristic")).toBeTruthy();
+  });
+
+  it("ignores dynamic specifier helpers that require runtime evaluation", () => {
+    const projectRoot = process.cwd();
+    const fromFile = path.join(projectRoot, "src", "main.ts");
+    const source = [
+      "const computed = import(path.join(process.cwd(), `src/${name}`));",
+      "const missingBase = require(path.join('src', 'dep'));",
+      "const mixedBase = require(path.join(process.cwd(), __dirname, 'dep'));",
+      "const brokenArgs = import(path.join(process.cwd(), ['src'));",
+      "const unsupportedUrlBase = require(new URL('./dep', process.cwd()));",
+    ].join("\n");
+
+    const specs = extractJsTsDynamicSpecifiers(source, fromFile, projectRoot);
+
+    expect(specs).toEqual([]);
+  });
+
   it("reports native backend availability and usage", async () => {
     const root = await mkTmpDir("cg-native-report-");
     const main = path.join(root, "main.ts");

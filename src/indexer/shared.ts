@@ -19,7 +19,8 @@ export const QUERY_DRIVEN_LOCALS_LANGUAGES = new Set([
 
 export function parseGoImportAlias(stmtText: string): string | null {
   const trimmed = stmtText.trim();
-  const match = trimmed.match(/^(?:import\s+)?([._A-Za-z][\w]*)\s+["'`]/);
+  const importBody = trimmed.replace(/^import\s+/, "");
+  const match = importBody.match(/^([._A-Za-z][\w]*)\s+["'`]/);
   return match?.[1] ?? null;
 }
 
