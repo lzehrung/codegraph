@@ -556,6 +556,36 @@ describe("CLI command modules", () => {
     expect(stderrLines).toEqual(["Usage: deps <file> [--depth N] [--json]"]);
   });
 
+  test("rejects invalid graph query depth values before scanning the graph", async () => {
+    const projectRoot = path.join(os.tmpdir(), "codegraph-query-depth").replace(/\\/g, "/");
+    const invalidDepths = ["foo", "-1", "1.5"];
+
+    for (const invalidDepth of invalidDepths) {
+      const stderrLines: string[] = [];
+      let scanned = false;
+
+      await expect(
+        handleGraphQueryCommand(
+          createGraphQueryContext({
+            command: "deps",
+            positionals: ["main.ts"],
+            projectRootFs: projectRoot,
+            projectRootAbs: projectRoot,
+            getOpt: (name) => (name === "--depth" ? invalidDepth : undefined),
+            writeStderrLine: (message) => stderrLines.push(message),
+            collectGraph: async () => {
+              scanned = true;
+              return { nodes: new Set(), edges: [] };
+            },
+          }),
+        ),
+      ).rejects.toThrow("graph query exit 2");
+
+      expect(stderrLines).toEqual([`Invalid --depth value "${invalidDepth}". Expected a non-negative integer.`]);
+      expect(scanned).toBe(false);
+    }
+  });
+
   test("writes text errors for graph query files outside the project root", async () => {
     const projectRoot = path.join(os.tmpdir(), "codegraph-query-root").replace(/\\/g, "/");
     const stdoutLines: string[] = [];

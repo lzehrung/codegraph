@@ -83,6 +83,10 @@ async function handleDepsCommand(context: GraphQueryCommandContext): Promise<voi
   }
   const depthRaw = context.getOpt("--depth");
   const depth = depthRaw !== undefined ? Number(depthRaw) : undefined;
+  if (depth !== undefined && (!Number.isInteger(depth) || depth < 0)) {
+    context.writeStderrLine(`Invalid --depth value "${depthRaw}". Expected a non-negative integer.`);
+    context.exit(2);
+  }
   const json = context.hasFlag("--json");
   const resolvedFile = resolveCliProjectFile(context.projectRootFs, fileArg, "File");
   if (resolvedFile.status === "error") {
