@@ -136,10 +136,18 @@ describe("detailed symbol graph in native-only installs", () => {
     const depFile = path.join(root, "dep.ts");
     await fsp.writeFile(
       entryFile,
-      ["import value, { helper as alias } from './dep';", "export { helper } from './dep';", ""].join("\n"),
+      [
+        "import value, { helper as alias, type HelperType } from './dep';",
+        "export { helper } from './dep';",
+        "",
+      ].join("\n"),
       "utf8",
     );
-    await fsp.writeFile(depFile, ["export default 1;", "export const helper = 2;", ""].join("\n"), "utf8");
+    await fsp.writeFile(
+      depFile,
+      ["export default 1;", "export const helper = 2;", "export type HelperType = number;", ""].join("\n"),
+      "utf8",
+    );
 
     const parseSpy = vi.fn(() => {
       throw new Error(
@@ -189,6 +197,14 @@ describe("detailed symbol graph in native-only installs", () => {
         from: "./dep",
         resolved: normalizePath(depFile),
         typeOnly: false,
+      },
+      {
+        kind: "named",
+        local: "HelperType",
+        imported: "HelperType",
+        from: "./dep",
+        resolved: normalizePath(depFile),
+        typeOnly: true,
       },
     ]);
     expect(parseSpy).not.toHaveBeenCalled();

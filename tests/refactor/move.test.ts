@@ -140,6 +140,36 @@ describe("moveSymbol", () => {
     );
   });
 
+  test("uses explicit import extensions when adding source-file sibling imports", async () => {
+    await withProject(
+      {
+        "src/helper.ts": "export const helper = 1;\n",
+        "src/source.ts":
+          "import { helper } from './helper.js';\n\nexport function greet() { return helper; }\n\nexport function run() {\n  return greet();\n}\n",
+        "src/target.ts": "",
+      },
+      async (root, files) => {
+        const index = await buildProjectIndexFromFiles(root, Object.values(files), { keepParsed: true });
+        const handle = listSymbols(index, { file: files["src/source.ts"] }).find(
+          (symbol) => symbol.name === "greet",
+        )?.id;
+        expect(handle).toBeDefined();
+        if (!handle) return;
+
+        const result = await moveSymbol(index, handle, files["src/target.ts"]!);
+
+        expect(result.status).toBe("ok");
+        await applyEdits(result.edits);
+        await expect(readFile(files["src/source.ts"]!, "utf8")).resolves.toContain(
+          "import { greet } from './target.js';",
+        );
+        await expect(readFile(files["src/source.ts"]!, "utf8")).resolves.toContain(
+          "import { helper } from './helper.js';",
+        );
+      },
+    );
+  });
+
   test("moves current disk trivia instead of stale cached trivia", async () => {
     await withProject(
       {

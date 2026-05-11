@@ -121,8 +121,22 @@ function importInsertionOffset(source: string): number {
   return importBlock ? importBlock[0].length : 0;
 }
 
-function importFromMovedTarget(sourceFile: string, name: string, targetFile: string): string {
-  return `import { ${name} } from '${relativeSpecifier(sourceFile, targetFile)}';\n`;
+function firstExplicitRelativeSpecifier(source: string): string | undefined {
+  const importPattern = /^\s*(?:import|export)\b[^\r\n]*\bfrom\s*["'](?<specifier>\.{1,2}\/[^"']+)["']/gm;
+  for (
+    let match: RegExpExecArray | null = importPattern.exec(source);
+    match;
+    match = importPattern.exec(source)
+  ) {
+    const specifier = match.groups?.["specifier"];
+    if (explicitSpecifierExtension(specifier)) return specifier;
+  }
+  return undefined;
+}
+
+function importFromMovedTarget(sourceFile: string, source: string, name: string, targetFile: string): string {
+  const specifierStyle = firstExplicitRelativeSpecifier(source);
+  return `import { ${name} } from '${relativeSpecifier(sourceFile, targetFile, specifierStyle)}';\n`;
 }
 
 function isMoveSupportedFile(file: string): boolean {
@@ -189,7 +203,7 @@ export async function moveSymbol(
       (referenceStart < start || deleteEnd <= referenceStart)
     );
   });
-  const importText = sourceKeepsReference ? importFromMovedTarget(def.file, def.localName, normalizedTarget) : "";
+  const importText = sourceKeepsReference ? importFromMovedTarget(def.file, source, def.localName, normalizedTarget) : "";
   const sourceImportOffset = importInsertionOffset(source);
   const deleteEditNewText =
     importText && start <= sourceImportOffset && sourceImportOffset <= deleteEnd ? importText : "";

@@ -643,7 +643,9 @@ export async function collectImportsForFile(
           .map((s) => s.trim())
           .filter(Boolean);
         for (const spec of names) {
-          const nm = spec.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+          const inlineSpecifierTypeOnly = /^type\b/.test(spec);
+          const normalizedSpec = inlineSpecifierTypeOnly ? spec.replace(/^type\b\s*/, "") : spec;
+          const nm = normalizedSpec.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
           if (!nm) continue;
           const imported = nm[1]!;
           const local = nm[2] ?? imported;
@@ -653,7 +655,7 @@ export async function collectImportsForFile(
             imported,
             from: mod,
             resolved,
-            typeOnly,
+            typeOnly: typeOnly || inlineSpecifierTypeOnly,
           });
         }
       }
