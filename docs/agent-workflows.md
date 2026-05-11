@@ -17,7 +17,7 @@ Then use the recommended commands from `inspect` to narrow the next graph, navig
 
 For the raw CLI command reference, see [docs/cli.md](./cli.md).
 
-When an agent needs a safe semantic refactor, get a stable handle with `codegraph list-symbols` or use `--at <file>:<line>:<column>` when cursor location is easier. Preview edits with `codegraph refactor rename --symbol <handle> --to <name> --json`, `codegraph refactor move --at src/main.ts:42:10 --to-file <path> --json`, or `codegraph refactor extract --file <path> --range <inclusive-start:inclusive-end> --to <name> --json`, and only add `--apply` after reviewing the edit set.
+When an agent needs a safe semantic refactor, install `@lzehrung/codegraph-refactor` with the CLI, get a stable handle with `codegraph list-symbols` or use `--at <file>:<line>:<column>` when cursor location is easier. Preview edits with `codegraph refactor rename --symbol <handle> --to <name> --json`, `codegraph refactor move --at src/main.ts:42:10 --to-file <path> --json`, or `codegraph refactor extract --file <path> --range <inclusive-start:inclusive-end> --to <name> --json`, and only add `--apply` after reviewing the edit set.
 
 ## Session management
 

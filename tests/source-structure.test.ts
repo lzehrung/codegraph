@@ -66,9 +66,9 @@ describe("source module structure", () => {
   });
 
   test("keeps refactor public surfaces aligned with implemented behavior", () => {
-    const extractSource = fs.readFileSync(path.join(repoRoot, "src/refactor/extract.ts"), "utf8");
-    const moveSource = fs.readFileSync(path.join(repoRoot, "src/refactor/move.ts"), "utf8");
-    const renameSource = fs.readFileSync(path.join(repoRoot, "src/refactor/rename.ts"), "utf8");
+    const extractSource = fs.readFileSync(path.join(repoRoot, "packages/codegraph-refactor/src/extract.ts"), "utf8");
+    const moveSource = fs.readFileSync(path.join(repoRoot, "packages/codegraph-refactor/src/move.ts"), "utf8");
+    const renameSource = fs.readFileSync(path.join(repoRoot, "packages/codegraph-refactor/src/rename.ts"), "utf8");
     const agentSource = fs.readFileSync(path.join(repoRoot, "src/agent-tools.ts"), "utf8");
     const planSource = fs.readFileSync(path.join(repoRoot, "docs/plans/refactor-and-trivia-aware-ranges.md"), "utf8");
 

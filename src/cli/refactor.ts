@@ -1,13 +1,52 @@
 import path from "node:path";
 import { buildProjectIndexFromFiles, goToDefinition, symbolId } from "../indexer.js";
-import type { BuildOptions } from "../indexer/types.js";
+import type { BuildOptions, ProjectIndex } from "../indexer/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
-import { applyEdits } from "../refactor/applyEdits.js";
-import { extractFunction } from "../refactor/extract.js";
-import { moveSymbol } from "../refactor/move.js";
-import { renameSymbol } from "../refactor/rename.js";
-import type { ApplyEditsResult, RefactorResult, TextEdit } from "../refactor/types.js";
+import type { FileId, Range } from "../types.js";
+import type { TriviaMode } from "../refactor/types.js";
 import type { ProjectFileDiscoveryOptions } from "../util.js";
+
+type TextEdit = {
+  file: FileId;
+  start: number;
+  end: number;
+  newText: string;
+  display?: Range;
+};
+
+type RefactorResult = {
+  status: "ok" | "unsupported" | "error";
+  edits: TextEdit[];
+  warnings: string[];
+  reason?: string;
+};
+
+type ApplyEditsResult = {
+  writes: string[];
+  conflicts: string[];
+  skipped: string[];
+  previews: Record<string, string>;
+  warnings: string[];
+};
+
+type RefactorPackage = {
+  applyEdits: (
+    edits: TextEdit[],
+    options?: { dryRun?: boolean; useGit?: boolean; gitCwd?: string },
+  ) => Promise<ApplyEditsResult>;
+  renameSymbol: (index: ProjectIndex, id: string, newName: string) => Promise<RefactorResult>;
+  moveSymbol: (
+    index: ProjectIndex,
+    id: string,
+    targetFile: FileId,
+    options?: { trivia?: TriviaMode },
+  ) => Promise<RefactorResult>;
+  extractFunction: (
+    index: ProjectIndex,
+    region: { file: FileId; range: Range },
+    options: { newName: string },
+  ) => Promise<RefactorResult>;
+};
 
 export type RefactorCommandContext = {
   projectRootFs: string;
@@ -22,6 +61,15 @@ export type RefactorCommandContext = {
   writeJSONLine: (value: unknown) => void;
   writeStdoutLine: (message: string) => void;
 };
+
+async function loadRefactorPackage(): Promise<RefactorPackage> {
+  try {
+    return await import("@lzehrung/codegraph-refactor");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Install @lzehrung/codegraph-refactor to use codegraph refactor commands. ${message}`);
+  }
+}
 
 function parseLineRange(raw: string): { startLine: number; endLine: number } {
   const match = /^(\d+):(\d+)$/.exec(raw);
@@ -102,6 +150,7 @@ async function writeRefactorResult(
   options: { json: boolean; apply: boolean; useGit: boolean },
 ): Promise<void> {
   if (options.apply && result.status === "ok") {
+    const { applyEdits } = await loadRefactorPackage();
     const applied = await applyEdits(result.edits, { useGit: options.useGit, gitCwd: context.projectRootFs });
     if (options.json) {
       context.writeJSONLine({ ...result, applied });
@@ -154,6 +203,7 @@ async function runRefactorOperation(
   operation: "rename" | "move" | "extract",
   symbol: string | undefined,
 ): Promise<RefactorResult> {
+  const { extractFunction, moveSymbol, renameSymbol } = await loadRefactorPackage();
   if (operation === "rename") {
     return await renameSymbol(
       index,

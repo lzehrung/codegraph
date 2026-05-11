@@ -246,7 +246,7 @@ Pass `trivia: "leading-doc"` or `trivia: "leading-all"` to `listSymbols()` when 
 
 ## Refactor edits
 
-Use stable definition handles with `renameSymbol()` to build deterministic edits without writing files. Use `applyEdits()` as a separate step when the caller is ready to modify the worktree. New direct-code integrations should import these helpers from `@lzehrung/codegraph-refactor`; the root package keeps compatibility exports for existing callers.
+Use stable definition handles with `renameSymbol()` to build deterministic edits without writing files. Use `applyEdits()` as a separate step when the caller is ready to modify the worktree. Direct-code integrations import these helpers from `@lzehrung/codegraph-refactor`.
 
 ```ts
 import { buildProjectIndex, listSymbols } from "@lzehrung/codegraph";
@@ -393,9 +393,9 @@ Useful wrapper details:
 - Build a shared index once and pass it through when an agent will call several wrappers in one pass; otherwise each wrapper may rebuild the same project view.
 - `tool_findSymbol()` returns stable `id` handles plus `range`, `exported`, `exactMatch`, and `matchKind`.
 - `tool_findSymbol()` and `tool_getFileOverview()` accept `trivia: "leading-doc" | "leading-all"` when agents need selection ranges that include attached documentation or attributes.
-- `tool_refactorExtract()` returns canonical extract edits plus a compact `diff` string. It does not write files.
-- `tool_refactorMove()` returns canonical move edits plus a compact `diff` string. It does not write files.
-- `tool_refactorRename()` returns the same canonical edits as `renameSymbol()` plus a compact `diff` string for agent logs. It does not write files.
+- `tool_refactorExtract()` requires `@lzehrung/codegraph-refactor` at runtime, then returns canonical extract edits plus a compact `diff` string. It does not write files.
+- `tool_refactorMove()` requires `@lzehrung/codegraph-refactor` at runtime, then returns canonical move edits plus a compact `diff` string. It does not write files.
+- `tool_refactorRename()` requires `@lzehrung/codegraph-refactor` at runtime, then returns the same canonical edits as `renameSymbol()` plus a compact `diff` string for agent logs. It does not write files.
 - `tool_goToDefinition()` and `tool_findReferences()` surface additive `provenance` metadata when the resolver used imports, namespaces, or other non-local paths.
 - `tool_getDependencies()`, `tool_getReverseDependencies()`, and `tool_getHotspots()` ignore non-finite `limit` values and clamp non-positive finite values to empty bounded results instead of returning malformed slices.
 - The batch impact wrappers include `schemaVersion` and `format: "full" | "compact"` so downstream agents do not have to infer payload shape; streaming `complete.report` uses `format: "stream-summary"`.

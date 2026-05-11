@@ -118,6 +118,8 @@ codegraph grep --pattern 'eval\(' --ignore-case
 
 `list-symbols --trivia exclude|leading-doc|leading-all` keeps the default bare symbol ranges unless requested. `leading-doc` expands ranges to attached leading comment docs, while `leading-all` also includes supported decorators or attributes.
 
+`refactor` commands require the companion `@lzehrung/codegraph-refactor` package to be installed alongside the CLI package.
+
 `refactor rename` accepts definition handles from `list-symbols` or `--at <file>:<line>:<column>` locations resolved through go-to-definition. It returns deterministic text edits by default. Add `--apply` to write the edits to disk. When a refactor creates new files, `--git` with `--apply` stages those new files. Text output reports unsupported or error results with status, reason, and warnings.
 
 `refactor move` supports TypeScript and JavaScript top-level declarations in v1. It accepts `--symbol` or `--at`, moves the trivia-aware declaration text, creates the target file when needed, and rewrites named ES importers that Codegraph can resolve.

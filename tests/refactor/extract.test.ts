@@ -2,7 +2,8 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
-import { applyEdits, buildProjectIndexFromFiles, extractFunction } from "../../src/index.js";
+import { buildProjectIndexFromFiles } from "../../src/index.js";
+import { applyEdits, extractFunction } from "@lzehrung/codegraph-refactor";
 import type { Range } from "../../src/types.js";
 
 async function withFile<T>(source: string, fn: (root: string, file: string) => Promise<T>): Promise<T> {

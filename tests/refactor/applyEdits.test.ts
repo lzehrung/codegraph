@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
-import { applyEdits, type TextEdit } from "../../src/index.js";
+import { applyEdits, type TextEdit } from "@lzehrung/codegraph-refactor";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(path.join(tmpdir(), "codegraph-refactor-"));

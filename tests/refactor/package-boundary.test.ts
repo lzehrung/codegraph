@@ -35,4 +35,34 @@ describe("refactor package boundary", () => {
     expect(entrypoint).toContain("extractFunction");
     expect(entrypoint).toContain("getSymbolRange");
   });
+
+  test("keeps edit operation implementations in the refactor workspace", () => {
+    const workspaceSources = [
+      "applyEdits.ts",
+      "extract.ts",
+      "identifier.ts",
+      "move.ts",
+      "rename.ts",
+      "types.ts",
+    ];
+    for (const sourceFile of workspaceSources) {
+      expect(fs.existsSync(path.join(packageRoot, "src", sourceFile))).toBe(true);
+    }
+
+    const coreImplementationFiles = [
+      "applyEdits.ts",
+      "extract.ts",
+      "identifier.ts",
+      "move.ts",
+      "rename.ts",
+    ];
+    for (const sourceFile of coreImplementationFiles) {
+      expect(fs.existsSync(path.join(repoRoot, "src/refactor", sourceFile))).toBe(false);
+    }
+
+    const entrypoint = fs.readFileSync(path.join(packageRoot, "src/index.ts"), "utf8");
+    expect(entrypoint).toContain('from "./applyEdits.js"');
+    expect(entrypoint).toContain('from "./rename.js"');
+    expect(entrypoint).not.toContain('applyEdits,\n  extractFunction,\n  getSymbolRange,\n  moveSymbol,\n  renameSymbol,\n} from "@lzehrung/codegraph"');
+  });
 });

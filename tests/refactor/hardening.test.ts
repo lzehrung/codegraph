@@ -2,7 +2,8 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
-import { applyEdits, buildProjectIndexFromFiles, listSymbols, moveSymbol, renameSymbol } from "../../src/index.js";
+import { buildProjectIndexFromFiles, listSymbols } from "../../src/index.js";
+import { applyEdits, moveSymbol, renameSymbol } from "@lzehrung/codegraph-refactor";
 
 async function withProject<T>(files: Record<string, string>, fn: (root: string, files: Record<string, string>) => Promise<T>): Promise<T> {
   const root = await mkdtemp(path.join(tmpdir(), "codegraph-refactor-hardening-"));

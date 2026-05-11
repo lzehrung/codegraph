@@ -9,13 +9,9 @@ import type {
 } from "./indexer/types.js";
 import { analyzeImpactFromDiff } from "./impact/index.js";
 import type { CompactImpactReport, ImpactOptions, ImpactReport } from "./impact/types.js";
-import type { Edge, Range } from "./types.js";
+import type { Edge, FileId, Range } from "./types.js";
 import { collectGraph, getDependencies, getReverseDependencies, getHotspots } from "./graphs.js";
 import type { NativeRuntimeMode } from "./native/treeSitterNative.js";
-import { extractFunction } from "./refactor/extract.js";
-import { moveSymbol } from "./refactor/move.js";
-import { renameSymbol } from "./refactor/rename.js";
-import type { RefactorResult, TextEdit } from "./refactor/types.js";
 import type { TriviaMode } from "./refactor/types.js";
 import {
   fileExists,
@@ -26,6 +22,45 @@ import {
   toProjectRelativePath,
 } from "./util.js";
 import { getFiniteNonNegativeLimit } from "./graphs/limits.js";
+
+type TextEdit = {
+  file: FileId;
+  start: number;
+  end: number;
+  newText: string;
+  display?: Range;
+};
+
+type RefactorResult = {
+  status: "ok" | "unsupported" | "error";
+  edits: TextEdit[];
+  warnings: string[];
+  reason?: string;
+};
+
+type RefactorPackage = {
+  renameSymbol: (index: ProjectIndex, id: string, newName: string) => Promise<RefactorResult>;
+  moveSymbol: (
+    index: ProjectIndex,
+    id: string,
+    targetFile: FileId,
+    options?: { trivia?: TriviaMode },
+  ) => Promise<RefactorResult>;
+  extractFunction: (
+    index: ProjectIndex,
+    region: { file: FileId; range: Range },
+    options: { newName: string },
+  ) => Promise<RefactorResult>;
+};
+
+async function loadRefactorPackage(): Promise<RefactorPackage> {
+  try {
+    return await import("@lzehrung/codegraph-refactor");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Install @lzehrung/codegraph-refactor to use refactor agent tools. ${message}`);
+  }
+}
 
 type ToolRuntimeOptions = {
   index?: ProjectIndex;
@@ -327,6 +362,7 @@ export async function tool_refactorRename(
   },
 ): Promise<ToolRefactorResult> {
   try {
+    const { renameSymbol } = await loadRefactorPackage();
     const index = await getToolIndex(root, options);
     const symbol = await resolveToolRefactorSymbol(root, index, options);
     const result = await renameSymbol(index, symbol, options.to);
@@ -354,6 +390,7 @@ export async function tool_refactorMove(
   },
 ): Promise<ToolRefactorResult> {
   try {
+    const { moveSymbol } = await loadRefactorPackage();
     const index = await getToolIndex(root, options);
     const targetFile = normalizePathArg(root, options.toFile);
     const symbol = await resolveToolRefactorSymbol(root, index, options);
@@ -384,6 +421,7 @@ export async function tool_refactorExtract(
   },
 ): Promise<ToolRefactorResult> {
   try {
+    const { extractFunction } = await loadRefactorPackage();
     const index = await getToolIndex(root, options);
     const file = normalizePathArg(root, options.file);
     const result = await extractFunction(

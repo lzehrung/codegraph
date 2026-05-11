@@ -132,9 +132,6 @@ export {
 } from "./indexer/symbols.js";
 
 export { getSymbolRange } from "./refactor/trivia.js";
-export { extractFunction, type ExtractOptions } from "./refactor/extract.js";
-export { moveSymbol, type MoveOptions } from "./refactor/move.js";
-export { renameSymbol } from "./refactor/rename.js";
 
 export function collectLocalsAndExportsFromSource(
   file: string,

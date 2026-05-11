@@ -127,17 +127,9 @@ export {
   type ApiSurface,
 } from "./indexer.js";
 
-/** Refactor edit primitives and APIs. */
-export { applyEdits } from "./refactor/applyEdits.js";
-export { extractFunction, type ExtractOptions } from "./refactor/extract.js";
-export { moveSymbol, type MoveOptions } from "./refactor/move.js";
-export { renameSymbol } from "./refactor/rename.js";
+/** Trivia-aware symbol range APIs. */
 export type {
-  ApplyEditsOptions,
-  ApplyEditsResult,
-  RefactorResult,
   SymbolRangeOptions,
-  TextEdit,
   TriviaMode,
 } from "./refactor/types.js";
 

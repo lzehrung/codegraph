@@ -245,7 +245,7 @@ npm config set "@lzehrung:registry" "https://npm.pkg.github.com"
 npm install @lzehrung/codegraph
 ```
 
-For SDK callers that want only the edit/refactor helpers as an explicit opt-in surface, install the companion package alongside the core package:
+For CLI or SDK callers that want edit/refactor helpers as an explicit opt-in surface, install the companion package alongside the core package:
 
 ```bash
 npm install @lzehrung/codegraph @lzehrung/codegraph-refactor

@@ -1,10 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { findReferencesById, resolveSymbolId } from "../indexer/symbols.js";
-import type { ProjectIndex, SymbolHandle } from "../indexer/types.js";
-import { supportForFile } from "../languages.js";
-import type { FileId } from "../types.js";
-import { getSymbolRange } from "./trivia.js";
+import { findReferencesById, getSymbolRange, resolveSymbolId, supportForFile } from "@lzehrung/codegraph";
+import type { FileId, ProjectIndex, SymbolHandle } from "@lzehrung/codegraph";
 import type { RefactorResult, TextEdit, TriviaMode } from "./types.js";
 
 export interface MoveOptions {

@@ -56,7 +56,7 @@ If your SDK integration emits source edits directly, install the opt-in refactor
 npm install @lzehrung/codegraph @lzehrung/codegraph-refactor
 ```
 
-The CLI refactor commands still ship with `@lzehrung/codegraph`; `@lzehrung/codegraph-refactor` is the direct-code import surface for edit-focused agents and editors.
+The CLI refactor command surface is in `@lzehrung/codegraph`, but edit execution loads `@lzehrung/codegraph-refactor`. Install the companion package when agents or editors will call `codegraph refactor ...` or import direct edit builders.
 
 If you explicitly want the JS Tree-sitter fallback path as well, install the separate opt-in package:
 

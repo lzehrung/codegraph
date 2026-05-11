@@ -1,7 +1,6 @@
 import fs from "node:fs";
-import { supportForFile } from "../languages.js";
-import type { ProjectIndex } from "../indexer/types.js";
-import type { FileId, Range } from "../types.js";
+import { supportForFile } from "@lzehrung/codegraph";
+import type { FileId, ProjectIndex, Range } from "@lzehrung/codegraph";
 import type { RefactorResult, TextEdit } from "./types.js";
 import { isValidIdentifier } from "./identifier.js";
 

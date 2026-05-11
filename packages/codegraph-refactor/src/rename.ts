@@ -1,9 +1,7 @@
 import fs from "node:fs";
-import { supportForFile } from "../languages.js";
-import { findReferencesById, resolveSymbolId } from "../indexer/symbols.js";
+import { findReferencesById, resolveSymbolId, supportForFile } from "@lzehrung/codegraph";
 import { isValidIdentifier } from "./identifier.js";
-import type { ImportBinding, ProjectIndex, SymbolHandle } from "../indexer/types.js";
-import type { Range } from "../types.js";
+import type { ImportBinding, ProjectIndex, Range, SymbolHandle } from "@lzehrung/codegraph";
 import type { RefactorResult, TextEdit } from "./types.js";
 
 function editKey(file: string, range: Range): string {
