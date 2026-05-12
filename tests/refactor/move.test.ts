@@ -136,6 +136,28 @@ describe("moveSymbol", () => {
     );
   });
 
+  test("rejects target files outside the indexed project root", async () => {
+    await withProject(
+      {
+        "src/source.ts": "export function greet() { return 'hi'; }\n",
+      },
+      async (root, files) => {
+        const index = await buildProjectIndexFromFiles(root, Object.values(files), { keepParsed: true });
+        const handle = listSymbols(index, { file: files["src/source.ts"] }).find(
+          (symbol) => symbol.name === "greet",
+        )?.id;
+        expect(handle).toBeDefined();
+        if (!handle) return;
+
+        const result = await moveSymbol(index, handle, "../outside.ts");
+
+        expect(result.status).toBe("unsupported");
+        expect(result.reason).toContain("outside project root");
+        expect(result.edits).toEqual([]);
+      },
+    );
+  });
+
   test("rejects existing target files that were not indexed", async () => {
     await withProject(
       {
@@ -273,8 +295,16 @@ describe("moveSymbol", () => {
     await withProject(
       {
         "src/helper.ts": "export const helper = 1;\n",
-        "src/source.ts":
-          "import { helper } from './helper.js';\n\nexport function greet() { return helper; }\n\nexport function run() {\n  return greet();\n}\n",
+        "src/source.ts": [
+          "import { helper } from './helper.js';",
+          "",
+          "export function greet() { return helper; }",
+          "",
+          "export function run() {",
+          "  return greet();",
+          "}",
+          "",
+        ].join("\n"),
         "src/target.ts": "",
       },
       async (root, files) => {

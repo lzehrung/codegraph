@@ -145,6 +145,47 @@ describe("extractFunction", () => {
     });
   });
 
+  test("resolves relative region files from the indexed project root", async () => {
+    await withFile("export function run() {\n  console.log('hi');\n}\n", async (root, file) => {
+      const index = await buildProjectIndexFromFiles(root, [file], { keepParsed: true });
+
+      const result = await extractFunction(index, { file: "main.ts", range: lineRange(2, 3) }, { newName: "emitHi" });
+
+      expect(result.status).toBe("ok");
+      expect(result.edits.every((edit) => edit.file === file)).toBe(true);
+    });
+  });
+
+  test("rejects region files outside the indexed project root", async () => {
+    await withFile("export function run() {\n  console.log('hi');\n}\n", async (root, file) => {
+      const index = await buildProjectIndexFromFiles(root, [file], { keepParsed: true });
+
+      const result = await extractFunction(
+        index,
+        { file: "../outside.ts", range: lineRange(1, 2) },
+        { newName: "emitHi" },
+      );
+
+      expect(result.status).toBe("unsupported");
+      expect(result.reason).toContain("outside project root");
+      expect(result.edits).toEqual([]);
+    });
+  });
+
+  test("rejects existing region files that were not indexed", async () => {
+    await withFile("export function run() {\n  console.log('hi');\n}\n", async (root, file) => {
+      const unindexedFile = path.join(root, "other.ts").replace(/\\/g, "/");
+      await writeFile(unindexedFile, "export function run() {\n  console.log('other');\n}\n", "utf8");
+      const index = await buildProjectIndexFromFiles(root, [file], { keepParsed: true });
+
+      const result = await extractFunction(index, { file: unindexedFile, range: lineRange(2, 3) }, { newName: "emitHi" });
+
+      expect(result.status).toBe("unsupported");
+      expect(result.reason).toContain("not indexed");
+      expect(result.edits).toEqual([]);
+    });
+  });
+
   test("rejects extracted declarations used after the selected range", async () => {
     await withFile(
       "export function run(name: string) {\n  const greeting = `hi ${name}`;\n  console.log(greeting);\n}\n",

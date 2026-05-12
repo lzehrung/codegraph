@@ -1,12 +1,17 @@
 import fs from "node:fs";
 import { maskJsLikeCommentsAndStrings, supportForFile } from "@lzehrung/codegraph";
 import type { FileId, ProjectIndex, Range } from "@lzehrung/codegraph";
+import { isWithinProjectRoot, normalizeProjectFile } from "./pathBoundary.js";
 import type { RefactorResult, TextEdit } from "./types.js";
 import { isValidIdentifier } from "./identifier.js";
 
 export interface ExtractOptions {
   newName: string;
 }
+
+type NormalizedRegionFile =
+  | { status: "ok"; file: FileId }
+  | { status: "unsupported"; reason: string };
 
 function lineStarts(source: string): number[] {
   const starts = [0];
@@ -354,12 +359,28 @@ function normalizeExtractedBody(selected: string): string {
   return lines.map((line) => (line.startsWith("  ") ? line : `  ${line.trimStart()}`)).join("\n");
 }
 
+function normalizeRegionFile(index: ProjectIndex, file: FileId): NormalizedRegionFile {
+  const normalizedFile = normalizeProjectFile(index.projectRoot, file);
+  if (index.projectRoot && !isWithinProjectRoot(index.projectRoot, normalizedFile)) {
+    return { status: "unsupported", reason: "region file is outside project root" };
+  }
+  if (!index.byFile.has(normalizedFile)) {
+    return { status: "unsupported", reason: "region file was not indexed" };
+  }
+  return { status: "ok", file: normalizedFile };
+}
+
 export function extractFunction(
-  _index: ProjectIndex,
+  index: ProjectIndex,
   region: { file: FileId; range: Range },
   opts: ExtractOptions,
 ): Promise<RefactorResult> {
-  const support = supportForFile(region.file);
+  const normalizedRegion = normalizeRegionFile(index, region.file);
+  if (normalizedRegion.status !== "ok") {
+    return Promise.resolve({ status: "unsupported", edits: [], warnings: [], reason: normalizedRegion.reason });
+  }
+  const file = normalizedRegion.file;
+  const support = supportForFile(file);
   const languageId = support?.id ?? "ts";
   if (languageId !== "ts" && languageId !== "tsx" && languageId !== "js" && languageId !== "jsx") {
     return Promise.resolve({
@@ -376,7 +397,7 @@ export function extractFunction(
 
   let source: string;
   try {
-    source = fs.readFileSync(region.file, "utf8");
+    source = fs.readFileSync(file, "utf8");
   } catch (error) {
     return Promise.resolve({
       status: "error",
@@ -437,8 +458,8 @@ export function extractFunction(
   const helper = `function ${opts.newName}(${helperParams}) {\n${normalizeExtractedBody(selected)}\n}\n\n`;
   const call = `${leadingIndent(selected)}${opts.newName}(${callArgs});\n`;
   const edits: TextEdit[] = [
-    { file: region.file, start: envelope.start, end: envelope.start, newText: helper },
-    { file: region.file, start: offsets.start, end: offsets.end, newText: call },
+    { file, start: envelope.start, end: envelope.start, newText: helper },
+    { file, start: offsets.start, end: offsets.end, newText: call },
   ];
   return Promise.resolve({ status: "ok", edits, warnings: [] });
 }

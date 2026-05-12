@@ -1,7 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { findReferencesById, getSymbolRange, resolveSymbolId, supportForFile } from "@lzehrung/codegraph";
+import {
+  findReferencesById,
+  getSymbolRange,
+  resolveSymbolId,
+  supportForFile,
+} from "@lzehrung/codegraph";
 import type { FileId, ImportBinding, ProjectIndex, SymbolHandle } from "@lzehrung/codegraph";
+import { isWithinProjectRoot, normalizeProjectFile } from "./pathBoundary.js";
 import type { RefactorResult, TextEdit, TriviaMode } from "./types.js";
 
 export interface MoveOptions {
@@ -99,7 +105,10 @@ function importEditsForSpecifier(modFile: string, from: string, name: string, ta
     const targetSpecifier = relativeSpecifier(modFile, targetFile, from);
     const replacement =
       remaining.length > 0
-        ? `${importPrefix} { ${remaining.join(", ")} } from ${quote}${from}${quote};\n${importPrefix} { ${moved.join(", ")} } from ${quote}${targetSpecifier}${quote};`
+        ? [
+            `${importPrefix} { ${remaining.join(", ")} } from ${quote}${from}${quote};`,
+            `${importPrefix} { ${moved.join(", ")} } from ${quote}${targetSpecifier}${quote};`,
+          ].join("\n")
         : `${importPrefix} { ${moved.join(", ")} } from ${quote}${targetSpecifier}${quote};`;
     edits.push({
       file: modFile,
@@ -192,10 +201,12 @@ function isMoveSupportedFile(file: string): boolean {
 }
 
 function normalizeTargetFile(index: ProjectIndex, targetFile: FileId): string {
-  const target = targetFile.replace(/\\/g, "/");
-  const isAbsolute = path.isAbsolute(target) || path.posix.isAbsolute(target);
-  const base = index.projectRoot ?? process.cwd();
-  return path.resolve(isAbsolute ? target : path.join(base, target)).replace(/\\/g, "/");
+  return normalizeProjectFile(index.projectRoot, targetFile);
+}
+
+function targetBoundaryReason(index: ProjectIndex, targetFile: string): string | null {
+  if (!index.projectRoot || isWithinProjectRoot(index.projectRoot, targetFile)) return null;
+  return "target file is outside project root";
 }
 
 export async function moveSymbol(
@@ -209,6 +220,10 @@ export async function moveSymbol(
     return { status: "error", edits: [], warnings: [], reason: "unknown handle" };
   }
   const normalizedTarget = normalizeTargetFile(index, targetFile);
+  const boundaryReason = targetBoundaryReason(index, normalizedTarget);
+  if (boundaryReason) {
+    return { status: "unsupported", edits: [], warnings: [], reason: boundaryReason };
+  }
   if (def.file === normalizedTarget) {
     return { status: "unsupported", edits: [], warnings: [], reason: "symbol is already in target file" };
   }
