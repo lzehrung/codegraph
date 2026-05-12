@@ -30,6 +30,14 @@ function hasOverlap(edits: TextEdit[]): boolean {
   return false;
 }
 
+function hasInvalidOffsets(edits: TextEdit[], sourceLength: number): boolean {
+  return edits.some((edit) => {
+    const validStart = Number.isInteger(edit.start) && edit.start >= 0 && edit.start <= sourceLength;
+    const validEnd = Number.isInteger(edit.end) && edit.end >= edit.start && edit.end <= sourceLength;
+    return !validStart || !validEnd;
+  });
+}
+
 function applyFileEdits(source: string, edits: TextEdit[]): string {
   const eol = detectEol(source);
   let next = source;
@@ -167,6 +175,11 @@ export async function applyEdits(edits: TextEdit[], opts?: ApplyEditsOptions): P
     }
 
     const source = readResult.status === "missing" ? "" : readResult.source;
+    if (hasInvalidOffsets(fileEdits, source.length)) {
+      result.conflicts.push(file);
+      continue;
+    }
+
     const text = applyFileEdits(source, fileEdits);
     result.previews[file] = text;
     plans.push({ file, text, existed: readResult.status === "ok" });

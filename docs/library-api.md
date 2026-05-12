@@ -276,7 +276,7 @@ if (handle) {
 
 `moveSymbol(index, handle, targetFile)` moves TypeScript and JavaScript top-level declarations with leading trivia, carries imports used by the moved declaration into the target file, rewrites named ES importers, and imports the moved declaration back into the source file when remaining siblings still reference it. Unsupported languages or unsafe target collisions return `{ status: "unsupported" }`.
 
-`extractFunction(index, { file, range }, { newName })` extracts contiguous TypeScript and JavaScript statement ranges inside one function body. Library ranges follow the normal half-open `Range` contract; CLI and agent tool `startLine:endLine` ranges are inclusive. v1 preserves simple TypeScript parameter annotations in generated helpers and rejects early `return`, unsupported control flow, context-sensitive bindings, and selected declarations used after the range.
+`extractFunction(index, { file, range }, { newName })` extracts contiguous TypeScript and JavaScript statement ranges inside one named function declaration body. Library ranges follow the normal half-open `Range` contract; CLI and agent tool `startLine:endLine` ranges are inclusive. v1 does not extract from methods, arrows, or function expressions. It preserves simple TypeScript parameter annotations in generated helpers and rejects early `return`, unsupported control flow, context-sensitive bindings, and selected declarations used after the range.
 
 ## Impact analysis from code
 

@@ -156,6 +156,30 @@ describe("extractFunction", () => {
     });
   });
 
+  test("rejects arrow function bodies explicitly in v1", async () => {
+    await withFile("export const run = (name: string) => {\n  console.log(name);\n};\n", async (root, file) => {
+      const index = await buildProjectIndexFromFiles(root, [file], { keepParsed: true });
+
+      const result = await extractFunction(index, { file, range: lineRange(2, 3) }, { newName: "emitName" });
+
+      expect(result.status).toBe("unsupported");
+      expect(result.reason).toContain("named function declaration");
+      expect(result.edits).toEqual([]);
+    });
+  });
+
+  test("rejects method bodies explicitly in v1", async () => {
+    await withFile("export class Runner {\n  run(name: string) {\n    console.log(name);\n  }\n}\n", async (root, file) => {
+      const index = await buildProjectIndexFromFiles(root, [file], { keepParsed: true });
+
+      const result = await extractFunction(index, { file, range: lineRange(3, 4) }, { newName: "emitName" });
+
+      expect(result.status).toBe("unsupported");
+      expect(result.reason).toContain("named function declaration");
+      expect(result.edits).toEqual([]);
+    });
+  });
+
   test("rejects region files outside the indexed project root", async () => {
     await withFile("export function run() {\n  console.log('hi');\n}\n", async (root, file) => {
       const index = await buildProjectIndexFromFiles(root, [file], { keepParsed: true });

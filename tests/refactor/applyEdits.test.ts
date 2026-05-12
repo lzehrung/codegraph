@@ -75,6 +75,51 @@ describe("applyEdits", () => {
     });
   });
 
+  test("treats negative edit offsets as conflicts without writing", async () => {
+    await withTempDir(async (dir) => {
+      const file = path.join(dir, "sample.ts");
+      await writeFile(file, "abcdef\n", "utf8");
+
+      const result = await applyEdits([edit(file, -1, 2, "X")]);
+
+      await expect(readFile(file, "utf8")).resolves.toBe("abcdef\n");
+      expect(result.writes).toEqual([]);
+      expect(result.conflicts).toEqual([file]);
+      expect(result.skipped).toEqual([]);
+      expect(result.previews[file]).toBeUndefined();
+    });
+  });
+
+  test("treats out-of-bounds edit offsets as conflicts without writing", async () => {
+    await withTempDir(async (dir) => {
+      const file = path.join(dir, "sample.ts");
+      await writeFile(file, "abcdef\n", "utf8");
+
+      const result = await applyEdits([edit(file, 2, 99, "X")]);
+
+      await expect(readFile(file, "utf8")).resolves.toBe("abcdef\n");
+      expect(result.writes).toEqual([]);
+      expect(result.conflicts).toEqual([file]);
+      expect(result.skipped).toEqual([]);
+      expect(result.previews[file]).toBeUndefined();
+    });
+  });
+
+  test("treats reversed edit offsets as conflicts without writing", async () => {
+    await withTempDir(async (dir) => {
+      const file = path.join(dir, "sample.ts");
+      await writeFile(file, "abcdef\n", "utf8");
+
+      const result = await applyEdits([edit(file, 5, 3, "X")]);
+
+      await expect(readFile(file, "utf8")).resolves.toBe("abcdef\n");
+      expect(result.writes).toEqual([]);
+      expect(result.conflicts).toEqual([file]);
+      expect(result.skipped).toEqual([]);
+      expect(result.previews[file]).toBeUndefined();
+    });
+  });
+
   test("dryRun previews post-edit text without writing", async () => {
     await withTempDir(async (dir) => {
       const file = path.join(dir, "sample.ts");

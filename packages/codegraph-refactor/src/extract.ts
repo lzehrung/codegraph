@@ -427,7 +427,7 @@ export function extractFunction(
       status: "unsupported",
       edits: [],
       warnings: [],
-      reason: "region must be inside one function body",
+      reason: "region must be inside one named function declaration body",
     });
   }
   if (

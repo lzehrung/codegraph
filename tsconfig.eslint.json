@@ -1,5 +1,12 @@
 {
   "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@lzehrung/codegraph": ["./src/index.ts"],
+      "@lzehrung/codegraph-refactor": ["./packages/codegraph-refactor/src/index.ts"]
+    }
+  },
   "include": ["src/**/*.ts", "packages/codegraph-refactor/src/**/*.ts", "tests/**/*.ts"],
   "exclude": ["node_modules", "dist", "docs"]
 }

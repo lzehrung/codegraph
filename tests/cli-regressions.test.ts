@@ -872,6 +872,9 @@ describe("CLI regressions", () => {
 
     expect(stdout).toContain("Warnings:");
     expect(stdout).toContain("git add failed");
+    expect(stdout).toContain("Writes:");
+    expect(stdout).toContain("src/source.ts");
+    expect(stdout).toContain("src/target.ts");
     await expect(fsp.readFile(path.join(srcDir, "target.ts"), "utf8")).resolves.toContain("function greet");
   });
 

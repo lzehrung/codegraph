@@ -140,6 +140,16 @@ function renderRefactorEdits(projectRoot: string, edits: TextEdit[]): string {
     .join("\n");
 }
 
+function relativeDisplayPath(projectRoot: string, file: string): string {
+  return path.relative(projectRoot, file).replace(/\\/g, "/") || file;
+}
+
+function pushPathSection(lines: string[], label: string, projectRoot: string, files: string[]): void {
+  if (files.length === 0) return;
+  lines.push(`${label}:`);
+  lines.push(...files.map((file) => `- ${relativeDisplayPath(projectRoot, file)}`));
+}
+
 function renderRefactorResult(projectRoot: string, result: RefactorResult): string {
   if (result.status === "ok") {
     return renderRefactorEdits(projectRoot, result.edits);
@@ -162,9 +172,13 @@ function renderRefactorResult(projectRoot: string, result: RefactorResult): stri
 
 function renderAppliedRefactorResult(projectRoot: string, result: RefactorResult, applied: ApplyEditsResult): string {
   const lines = [renderRefactorEdits(projectRoot, result.edits)].filter((line) => line.length > 0);
-  if (applied.warnings.length > 0) {
+  pushPathSection(lines, "Writes", projectRoot, applied.writes);
+  pushPathSection(lines, "Conflicts", projectRoot, applied.conflicts);
+  pushPathSection(lines, "Skipped", projectRoot, applied.skipped);
+  const warnings = [...result.warnings, ...applied.warnings];
+  if (warnings.length > 0) {
     lines.push("Warnings:");
-    lines.push(...applied.warnings.map((warning) => `- ${warning}`));
+    lines.push(...warnings.map((warning) => `- ${warning}`));
   }
   return lines.join("\n");
 }
