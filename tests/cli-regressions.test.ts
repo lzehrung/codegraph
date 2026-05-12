@@ -113,6 +113,23 @@ describe("CLI regressions", () => {
     }
   });
 
+  it("graph JSON can include isolated SQL artifacts", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-sql-"));
+    await fsp.mkdir(path.join(root, "db"), { recursive: true });
+    await fsp.writeFile(path.join(root, "db", "schema.sql"), "CREATE TABLE users (id integer);\n", "utf8");
+
+    const stdout = await runCliCommand(["graph", "--stdout", "--root", root, "--sql-artifacts", "--json"]);
+    const graph = JSON.parse(stdout) as {
+      edges: unknown[];
+      sqlArtifacts?: { nodes: Array<{ kind: string; name?: string }> };
+    };
+
+    expect(graph.edges).toEqual([]);
+    expect(graph.sqlArtifacts?.nodes).toContainEqual(
+      expect.objectContaining({ kind: "sql_table_candidate", name: "users" }),
+    );
+  });
+
   it("version prints the package version", async () => {
     const stdout = await runCliCommand(["version"]);
     expect(stdout.trim()).toBe(packageJson.version);

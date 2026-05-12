@@ -3,6 +3,19 @@ import path from "node:path";
 import { createTestIndex, createTestIndexFromFiles, testGoToDefinition } from "./test-utils.js";
 
 describe("Go to Definition", () => {
+  describe("SQL", () => {
+    it("does not treat SQL object names as source navigation targets", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
+      const schemaFile = path.join(samplePath, "001_create_users.sql").replace(/\\/g, "/");
+      const appFile = path.join(samplePath, "app.ts").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [schemaFile, appFile]);
+
+      const result = await testGoToDefinition(index, schemaFile, 1, 16, undefined, undefined, "not_found");
+
+      expect(result.status).toBe("not_found");
+    });
+  });
+
   describe("TypeScript", () => {
     it("should find definition of imported function", async () => {
       const index = await createTestIndex("typescript");

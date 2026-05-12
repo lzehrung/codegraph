@@ -54,6 +54,7 @@ import { parseCacheModeOption } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
 import { handleSkillCommand } from "./cli/skill.js";
 import { handleSqlCommand } from "./cli/sql.js";
+import { buildSqlArtifactGraphFromFiles } from "./sql/index.js";
 import type { Graph } from "./types.js";
 import {
   assertFilePathWithinRoot,
@@ -1408,6 +1409,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     const dynamicImportHeuristics = graphFlags.dynamicImportHeuristics;
     const resolutionHints = graphFlags.resolutionHints;
     const compact = defaultGraphMode || hasFlag("--compact-json");
+    const includeSqlArtifacts = hasFlag("--sql-artifacts");
     let outputFile: string | undefined;
     if (outputArg) {
       outputFile = normalizePath(resolveFilePathFromRoot(getCwd(), outputArg));
@@ -1603,7 +1605,17 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     const graphOut = stable ? stabilizeGraph(graph) : graph;
     if (format === "mermaid") await writeOut(graphToMermaid(graphOut));
     else if (format === "dot") await writeOut(graphToDOT(graphOut));
-    else await writeOut(toJSON({ nodes: [...graphOut.nodes], edges: graphOut.edges }));
+    else {
+      const sqlFiles = includeSqlArtifacts ? files.filter((file) => path.extname(file).toLowerCase() === ".sql") : [];
+      const sqlArtifacts = sqlFiles.length > 0 ? await buildSqlArtifactGraphFromFiles(sqlFiles) : undefined;
+      await writeOut(
+        toJSON({
+          nodes: [...graphOut.nodes],
+          edges: graphOut.edges,
+          ...(sqlArtifacts ? { sqlArtifacts } : {}),
+        }),
+      );
+    }
     await finalizeReport();
     return;
   }

@@ -93,6 +93,7 @@ describe("project file discovery", () => {
       path.join(tempDir, "c", "utils.h"),
       path.join(tempDir, "cpp", "main.cpp"),
       path.join(tempDir, "cpp", "types.hpp"),
+      path.join(tempDir, "db", "schema.sql"),
     ];
 
     await Promise.all(
