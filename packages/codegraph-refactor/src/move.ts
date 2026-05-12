@@ -71,14 +71,15 @@ function normalizeImportedSpecifierName(name: string): string {
   return name.trim().replace(/^type\s+/, "");
 }
 
-function importEditForSpecifier(modFile: string, from: string, name: string, targetFile: string): TextEdit | null {
+function importEditsForSpecifier(modFile: string, from: string, name: string, targetFile: string): TextEdit[] {
   let source: string;
   try {
     source = fs.readFileSync(modFile, "utf8");
   } catch {
-    return null;
+    return [];
   }
 
+  const edits: TextEdit[] = [];
   const importPattern = new RegExp(
     `import\\s+(?<typeKeyword>type\\s+)?\\{(?<specifiers>[^}]+)\\}\\s*from\\s*(?<quote>["'])${escapeRegExp(from)}\\k<quote>;?`,
     "g",
@@ -100,14 +101,14 @@ function importEditForSpecifier(modFile: string, from: string, name: string, tar
       remaining.length > 0
         ? `${importPrefix} { ${remaining.join(", ")} } from ${quote}${from}${quote};\n${importPrefix} { ${moved.join(", ")} } from ${quote}${targetSpecifier}${quote};`
         : `${importPrefix} { ${moved.join(", ")} } from ${quote}${targetSpecifier}${quote};`;
-    return {
+    edits.push({
       file: modFile,
       start: match.index,
       end: match.index + match[0].length,
       newText: replacement,
-    };
+    });
   }
-  return null;
+  return edits;
 }
 
 function escapeRegExp(value: string): string {
@@ -231,8 +232,7 @@ export async function moveSymbol(
         .map((binding) => binding.from),
     );
     for (const from of sourceSpecifiers) {
-      const edit = importEditForSpecifier(mod.file, from, def.localName, normalizedTarget);
-      if (edit) edits.push(edit);
+      edits.push(...importEditsForSpecifier(mod.file, from, def.localName, normalizedTarget));
     }
   }
 

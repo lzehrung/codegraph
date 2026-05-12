@@ -262,8 +262,9 @@ async function resolveRefactorSymbol(
 ): Promise<string> {
   if (symbol) return symbol;
   const location = parseSymbolLocation(requireOption(context, "--at", operation));
+  const locationFile = resolveRefactorFileWithinRoot(context, location.file, "Location file");
   const result = await goToDefinition(index, {
-    file: path.resolve(context.projectRootFs, location.file).replace(/\\/g, "/"),
+    file: locationFile,
     line: location.line,
     column: location.column,
   });

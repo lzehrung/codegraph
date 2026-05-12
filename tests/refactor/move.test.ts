@@ -86,6 +86,34 @@ describe("moveSymbol", () => {
     );
   });
 
+  test("rewrites every matching import declaration in an importer", async () => {
+    await withProject(
+      {
+        "src/source.ts": "export function greet() { return 'hi'; }\n",
+        "src/main.ts":
+          "import { greet } from './source';\nimport { greet as greetAgain } from './source';\nconsole.log(greet(), greetAgain());\n",
+        "src/target.ts": "",
+      },
+      async (root, files) => {
+        const index = await buildProjectIndexFromFiles(root, Object.values(files), { keepParsed: true });
+        const handle = listSymbols(index, { file: files["src/source.ts"] }).find(
+          (symbol) => symbol.name === "greet",
+        )?.id;
+        expect(handle).toBeDefined();
+        if (!handle) return;
+
+        const result = await moveSymbol(index, handle, files["src/target.ts"]!);
+
+        expect(result.status).toBe("ok");
+        await applyEdits(result.edits);
+        const importer = await readFile(files["src/main.ts"]!, "utf8");
+        expect(importer).toContain("import { greet } from './target';");
+        expect(importer).toContain("import { greet as greetAgain } from './target';");
+        expect(importer).not.toContain("./source");
+      },
+    );
+  });
+
   test("rewrites type-only importers when moving exported types", async () => {
     await withProject(
       {

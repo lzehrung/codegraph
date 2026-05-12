@@ -805,6 +805,27 @@ describe("CLI regressions", () => {
     ).rejects.toThrow("Target file is outside project root");
   });
 
+  it("refactor move rejects --at files outside the project root", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-refactor-at-outside-"));
+    const srcDir = path.join(tmpDir, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(path.join(srcDir, "source.ts"), "export function greet() { return 'hi'; }\n", "utf8");
+
+    await expect(
+      runCliCommand([
+        "refactor",
+        "move",
+        "--root",
+        tmpDir,
+        "--at",
+        "../outside.ts:1:1",
+        "--to-file",
+        "src/target.ts",
+        "--json",
+      ]),
+    ).rejects.toThrow("Location file is outside project root");
+  });
+
   it("refactor move accepts a source location instead of a symbol handle", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-refactor-move-at-"));
     const srcDir = path.join(tmpDir, "src");
