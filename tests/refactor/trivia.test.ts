@@ -7,7 +7,10 @@ import { buildProjectIndexFromFiles, getSymbolRange, listSymbols, type TriviaMod
 import { computeLeadingTriviaRange } from "../../src/indexer/symbol-ranges.js";
 import type { SyntaxNodeLike } from "../../src/languages/types.js";
 
-async function withTempProject<T>(files: Record<string, string>, fn: (root: string, files: string[]) => Promise<T>): Promise<T> {
+async function withTempProject<T>(
+  files: Record<string, string>,
+  fn: (root: string, files: string[]) => Promise<T>,
+): Promise<T> {
   const root = await mkdtemp(path.join(tmpdir(), "codegraph-trivia-"));
   try {
     const absoluteFiles: string[] = [];

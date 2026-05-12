@@ -1420,8 +1420,17 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   if (cmd === "refactor") {
     const files = await resolveFilesFromRoots();
     await handleRefactorCommand({
-      projectRootFs, positionals: parsed.positionals, files, discovery: discoveryOptions, nativeMode, workerOpts,
-      progressHandler, getOpt, hasFlag, writeJSONLine, writeStdoutLine,
+      projectRootFs,
+      positionals: parsed.positionals,
+      files,
+      discovery: discoveryOptions,
+      nativeMode,
+      workerOpts,
+      progressHandler,
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStdoutLine,
     });
     return;
   }

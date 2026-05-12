@@ -57,7 +57,10 @@ export async function prepareSourceInput(file: string, opts?: { source?: string 
   const sup = framework ? undefined : supportForFile(file);
   if (!framework && !sup) throw new UnsupportedParserInputError(file);
   const rawSource = await fsp.readFile(file, "utf8");
-  return prepareSourceInputFromSource(file, rawSource, { ...(framework ? { framework } : {}), ...(sup ? { sup } : {}) });
+  return prepareSourceInputFromSource(file, rawSource, {
+    ...(framework ? { framework } : {}),
+    ...(sup ? { sup } : {}),
+  });
 }
 
 export function prepareSourceInputFromSource(

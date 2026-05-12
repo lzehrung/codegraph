@@ -5,7 +5,10 @@ import { describe, expect, test } from "vitest";
 import { buildProjectIndexFromFiles, listSymbols } from "../../src/index.js";
 import { applyEdits, moveSymbol, renameSymbol } from "@lzehrung/codegraph-refactor";
 
-async function withProject<T>(files: Record<string, string>, fn: (root: string, files: Record<string, string>) => Promise<T>): Promise<T> {
+async function withProject<T>(
+  files: Record<string, string>,
+  fn: (root: string, files: Record<string, string>) => Promise<T>,
+): Promise<T> {
   const root = await mkdtemp(path.join(tmpdir(), "codegraph-refactor-hardening-"));
   try {
     const absolute: Record<string, string> = {};
