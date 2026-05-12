@@ -114,6 +114,51 @@ describe("moveSymbol", () => {
     );
   });
 
+  test("resolves relative target files from the indexed project root", async () => {
+    await withProject(
+      {
+        "src/source.ts": "export function greet() { return 'hi'; }\n",
+        "src/target.ts": "",
+      },
+      async (root, files) => {
+        const index = await buildProjectIndexFromFiles(root, Object.values(files), { keepParsed: true });
+        const handle = listSymbols(index, { file: files["src/source.ts"] }).find(
+          (symbol) => symbol.name === "greet",
+        )?.id;
+        expect(handle).toBeDefined();
+        if (!handle) return;
+
+        const result = await moveSymbol(index, handle, "src/target.ts");
+
+        expect(result.status).toBe("ok");
+        expect(result.edits.some((edit) => edit.file === files["src/target.ts"])).toBe(true);
+      },
+    );
+  });
+
+  test("rejects existing target files that were not indexed", async () => {
+    await withProject(
+      {
+        "src/source.ts": "export function greet() { return 'hi'; }\n",
+        "src/target.ts": "export function greet() { return 'existing'; }\n",
+      },
+      async (root, files) => {
+        const index = await buildProjectIndexFromFiles(root, [files["src/source.ts"]!], { keepParsed: true });
+        const handle = listSymbols(index, { file: files["src/source.ts"] }).find(
+          (symbol) => symbol.name === "greet",
+        )?.id;
+        expect(handle).toBeDefined();
+        if (!handle) return;
+
+        const result = await moveSymbol(index, handle, files["src/target.ts"]!);
+
+        expect(result.status).toBe("unsupported");
+        expect(result.reason).toContain("not indexed");
+        expect(result.edits).toEqual([]);
+      },
+    );
+  });
+
   test("rewrites type-only importers when moving exported types", async () => {
     await withProject(
       {

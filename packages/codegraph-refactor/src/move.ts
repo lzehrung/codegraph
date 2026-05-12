@@ -149,6 +149,13 @@ function isMoveSupportedFile(file: string): boolean {
   return languageId === "ts" || languageId === "tsx" || languageId === "js" || languageId === "jsx";
 }
 
+function normalizeTargetFile(index: ProjectIndex, targetFile: FileId): string {
+  const target = targetFile.replace(/\\/g, "/");
+  const isAbsolute = path.isAbsolute(target) || path.posix.isAbsolute(target);
+  const base = index.projectRoot ?? process.cwd();
+  return path.resolve(isAbsolute ? target : path.join(base, target)).replace(/\\/g, "/");
+}
+
 export async function moveSymbol(
   index: ProjectIndex,
   id: SymbolHandle,
@@ -159,7 +166,7 @@ export async function moveSymbol(
   if (!def) {
     return { status: "error", edits: [], warnings: [], reason: "unknown handle" };
   }
-  const normalizedTarget = path.resolve(targetFile).replace(/\\/g, "/");
+  const normalizedTarget = normalizeTargetFile(index, targetFile);
   if (def.file === normalizedTarget) {
     return { status: "unsupported", edits: [], warnings: [], reason: "symbol is already in target file" };
   }
@@ -170,6 +177,9 @@ export async function moveSymbol(
       warnings: [],
       reason: "move is only supported for TypeScript and JavaScript files",
     };
+  }
+  if (fs.existsSync(normalizedTarget) && !index.byFile.has(normalizedTarget)) {
+    return { status: "unsupported", edits: [], warnings: [], reason: "target file exists but was not indexed" };
   }
   if (targetHasCollision(index, normalizedTarget, def.localName)) {
     return { status: "unsupported", edits: [], warnings: [], reason: `target already declares ${def.localName}` };
