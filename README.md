@@ -71,7 +71,7 @@ Real `inspect ./src --limit 10` output against this repo looks like:
 - Semantic chunking for code and text files, including Vue and Svelte single-file component block splitting.
 - AST grep, public API summaries, unresolved import reports, hotspot analysis, cycle detection, and shortest dependency paths.
 - PR impact analysis and review bundles that map diffs to changed symbols, impacted code, likely tests, and graph deltas.
-- SQL artifact facts for `.sql` files, kept separate from source-language dependency resolution and current-schema claims.
+- SQL language support for `.sql` files, including statement chunks, object symbols, SQL-to-SQL graph edges, SQL navigation, and statement facts.
 - SQLite export plus read-only SQL access for downstream tools and agent workflows.
 - A browser graph viewer app for interactive exploration of generated graph JSON artifacts.
 - Native Tree-sitter acceleration by default when a compatible artifact is available, with an opt-in JS fallback path when you need it.
@@ -208,9 +208,9 @@ JavaScript, TypeScript, Python, PHP, Go, Java, C#, Ruby, Rust, Kotlin, Swift, Zi
 
 HTML, Astro, Handlebars, Markdown, MDX, reStructuredText, AsciiDoc, CSS, SCSS, and Less participate in graph or chunking workflows with narrower capability claims than the full source-language pipeline. CSS-family graphing covers stylesheet imports; SCSS also resolves Sass partials, including extensionless and explicit `.scss` specifiers.
 
-### SQL artifacts
+### SQL
 
-SQL files are handled as artifact facts rather than normal source-language dependencies. Codegraph discovers `.sql` files, chunks statements, extracts statement facts and object candidates, and can surface those facts in review context when SQL files or changed SQL literals justify it. It does not infer a current schema from migrations, fixtures, dumps, or seeds, and SQL object names are not go-to-definition or find-references targets.
+SQL files participate in normal repository indexing. Codegraph discovers every `.sql` file by default, chunks SQL statements, extracts table/view/index/routine symbols, adds SQL-to-SQL object edges, and supports go-to-definition and find-references within SQL files. SQL is still intentionally scoped to SQL semantics: Codegraph does not infer a current schema from migrations, fixtures, dumps, or seeds, and it does not globally link arbitrary application-code strings to SQL objects.
 
 ### Single-file components
 

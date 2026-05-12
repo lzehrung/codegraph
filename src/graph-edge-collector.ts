@@ -31,6 +31,7 @@ import { collectModuleSpecifiersFromSource, type FallbackImportExtractionEvent }
 import type { GraphCacheEntry } from "./graphs/types.js";
 import type { BuildReport } from "./indexer/types.js";
 import type { SyntaxTreeLike } from "./languages/types.js";
+import { collectSqlEdgesForFile } from "./sql/sourceGraph.js";
 
 const cloneEdge = (edge: Edge): Edge => ({
   ...edge,
@@ -61,12 +62,14 @@ export async function collectEdgesForFile(
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
     report?: BuildReport;
     logLevel?: LogLevel;
+    allFiles?: readonly string[];
   },
 ): Promise<Edge[]> {
   const normalizedFile = file.replace(/\\/g, "/");
   const sigEntry = opts.fileSignature;
   const sig = sigEntry?.sig;
   const gitSig = sigEntry?.gitSig;
+  const sqlFile = path.extname(normalizedFile).toLowerCase() === ".sql";
 
   const emitCacheEntry = (edges: Edge[]) => {
     if (!sig || !opts.onFileEdges) return;
@@ -77,7 +80,7 @@ export async function collectEdgesForFile(
     });
   };
 
-  const cached = sig || gitSig ? opts.cachedFileEdges : undefined;
+  const cached = !sqlFile && (sig || gitSig) ? opts.cachedFileEdges : undefined;
   const matchesGitSig = !!gitSig && !!cached?.gitSig && cached.gitSig === gitSig;
   const matchesSig = !!sig && !!cached && cached.sig === sig;
 
@@ -111,6 +114,13 @@ export async function collectEdgesForFile(
         ...(compactExecution.error ? { error: compactExecution.error } : {}),
       });
     }
+  }
+
+  if (sup.id === "sql") {
+    const allFiles = opts.allFiles ?? [normalizedFile];
+    const sqlEdges = await collectSqlEdgesForFile(normalizedFile, allFiles);
+    emitCacheEntry(sqlEdges);
+    return sqlEdges;
   }
 
   const fast = !!opts.fast;

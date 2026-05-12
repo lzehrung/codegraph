@@ -24,9 +24,21 @@ describe("SQL artifact graph", () => {
     expect(graph.edges.some((edge) => edge.kind === "sql_statement_reads")).toBe(true);
   });
 
-  it("keeps SQL artifact edges out of the source dependency graph", async () => {
+  it("adds SQL-to-SQL object edges to the source dependency graph without linking app code", async () => {
     const sourceGraph = await collectGraph(fixtureRoot, [...sqlFiles, path.join(fixtureRoot, "app.ts")]);
+    const createUsers = path.join(fixtureRoot, "001_create_users.sql").replace(/\\/g, "/");
+    const report = path.join(fixtureRoot, "report.sql").replace(/\\/g, "/");
+    const app = path.join(fixtureRoot, "app.ts").replace(/\\/g, "/");
 
-    expect(sourceGraph.edges).toEqual([]);
+    expect(sourceGraph.edges).toContainEqual(
+      expect.objectContaining({
+        from: report,
+        raw: "sql:reads_from:users",
+        to: { type: "file", path: createUsers },
+      }),
+    );
+    expect(sourceGraph.edges.some((edge) => edge.from === app || (edge.to.type === "file" && edge.to.path === app))).toBe(
+      false,
+    );
   });
 });

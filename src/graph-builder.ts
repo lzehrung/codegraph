@@ -97,6 +97,7 @@ export async function collectGraph(
         ...(opts?.onFileEdges ? { onFileEdges: opts.onFileEdges } : {}),
         ...(opts?.onFallbackImportExtraction ? { onFallbackImportExtraction: opts.onFallbackImportExtraction } : {}),
         ...(opts?.report ? { report: opts.report } : {}),
+        allFiles: normalizedFiles,
       });
       addEdgeTargetsToGraph(edges);
       return edges;

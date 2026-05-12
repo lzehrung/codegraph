@@ -4,15 +4,15 @@ import { createTestIndex, createTestIndexFromFiles, testGoToDefinition } from ".
 
 describe("Go to Definition", () => {
   describe("SQL", () => {
-    it("does not treat SQL object names as source navigation targets", async () => {
+    it("resolves SQL object references to SQL definitions", async () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
       const schemaFile = path.join(samplePath, "001_create_users.sql").replace(/\\/g, "/");
-      const appFile = path.join(samplePath, "app.ts").replace(/\\/g, "/");
-      const index = await createTestIndexFromFiles(samplePath, [schemaFile, appFile]);
+      const reportFile = path.join(samplePath, "report.sql").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [schemaFile, reportFile]);
 
-      const result = await testGoToDefinition(index, schemaFile, 1, 16, undefined, undefined, "not_found");
+      const result = await testGoToDefinition(index, reportFile, 1, 25, schemaFile, 1);
 
-      expect(result.status).toBe("not_found");
+      expect(result.status).toBe("ok");
     });
   });
 

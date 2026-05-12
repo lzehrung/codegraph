@@ -88,6 +88,7 @@ import {
 } from "./types.js";
 import { isJsFallbackUnavailableError, isJsSyntaxTree } from "../jsFallback.js";
 import { isUnsupportedParserInputError } from "../languages/filePrep.js";
+import { buildSqlModuleIndex } from "../sql/sourceGraph.js";
 
 type IndexedFileGraphContext = {
   source: string;
@@ -382,14 +383,19 @@ async function buildIndexedModuleForFile(args: {
     ...(args.onFallbackImportExtraction ? { onFallbackImportExtraction: args.onFallbackImportExtraction } : {}),
   });
   collectJsonDependencies(imports, args.jsonDependencies);
-  const mod = lacksParserContext
-    ? { ...createEmptyModuleIndex(args.file), imports }
-    : collectLocalsAndExportsFromSource(args.file, source, sup, resolvedLang, imports, {
-        ...(tree ? { tree } : {}),
-        ...(nativeQueries !== undefined ? { nativeQueries } : {}),
-        ...(args.opts?.native ? { nativeMode: args.opts.native } : {}),
-        ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
-      });
+  let mod: ModuleIndex;
+  if (sup.id === "sql") {
+    mod = buildSqlModuleIndex(args.file, source);
+  } else if (lacksParserContext) {
+    mod = { ...createEmptyModuleIndex(args.file), imports };
+  } else {
+    mod = collectLocalsAndExportsFromSource(args.file, source, sup, resolvedLang, imports, {
+      ...(tree ? { tree } : {}),
+      ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+      ...(args.opts?.native ? { nativeMode: args.opts.native } : {}),
+      ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
+    });
+  }
   mod.imports = imports;
   await resolveCrossModuleSymbolExports(
     args.file,
@@ -631,6 +637,7 @@ async function buildIndexFromFileListShared(
             ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
             ...(onFileEdges ? { onFileEdges } : {}),
             ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
+            allFiles: normalizedFiles,
           });
           if (bloomFilterCache) {
             const filter = await buildBloomFilterForFile(file);
@@ -679,6 +686,7 @@ async function buildIndexFromFileListShared(
           ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
           ...(onFileEdges ? { onFileEdges } : {}),
           ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
+          allFiles: normalizedFiles,
         });
         return [file, mod ?? createEmptyModuleIndex(file), edges] as const;
       } catch (error) {

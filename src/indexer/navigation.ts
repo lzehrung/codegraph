@@ -37,6 +37,7 @@ import {
   type SymbolDef,
   SymbolKind,
 } from "./types.js";
+import { findSqlReferences, goToSqlDefinition } from "../sql/navigation.js";
 
 export { resolveExport, resolveImported } from "./navigation-resolve.js";
 
@@ -48,6 +49,8 @@ export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Pro
   const parsedEntry = index.parsed?.get(file);
   const context = await ensureParsedContext(file, parsedEntry);
   const sup = context.sup;
+  const sqlResult = await goToSqlDefinition(index, req);
+  if (sqlResult) return sqlResult;
   const lang = context.lang;
   const source = context.source;
   const tree = context.tree;
@@ -195,6 +198,9 @@ export async function findReferences(
   if (!def) {
     return { status: "not_found", reason: "Could not resolve definition" };
   }
+
+  const sqlReferences = await findSqlReferences(index, def);
+  if (sqlReferences) return sqlReferences;
 
   const definitionFile = def.file;
   const parsedDef = index.parsed?.get(definitionFile);

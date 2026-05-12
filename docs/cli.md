@@ -49,7 +49,7 @@ codegraph graph ./src --mermaid
 # Detailed symbol graph
 codegraph graph ./src --symbols-detailed --compact-json
 
-# Include isolated SQL artifact facts in JSON graph output
+# Include detailed SQL statement facts in JSON graph output
 codegraph graph --root . --sql-artifacts --json
 
 # SQLite export
@@ -408,7 +408,7 @@ Plain `graph` output is a file dependency graph only:
 }
 ```
 
-With `--sql-artifacts`, JSON graph output also includes an isolated `sqlArtifacts` payload with SQL nodes, SQL edges, and statement facts. SQL artifact nodes use `sql_statement_fact` and `sql_schema_candidate` truth tiers; they do not assert a current schema and are not used by `deps`, `rdeps`, `goto`, or `refs`.
+SQL files are part of normal graph output: `.sql` files are discovered by default, SQL-to-SQL object references appear as file edges, and SQL object symbols work with `goto` and `refs` inside SQL files. With `--sql-artifacts`, JSON graph output also includes detailed SQL statement facts and object-candidate metadata. SQL artifact nodes use `sql_statement_fact` and `sql_schema_candidate` truth tiers; they do not assert a current schema and do not globally link application-code strings to SQL objects.
 
 Format notes:
 

@@ -51,7 +51,7 @@ Use `--json` when the output will feed later reasoning, scripts, or another agen
 
 ## Tool purpose
 
-Codegraph is a lightweight multi-language code analysis tool for fast repo understanding without requiring an editor, language server, or per-language setup. It uses one shared Tree-sitter model across supported source languages including Zig, plus graph-first text extraction for document and template formats like Markdown, MDX, Astro, Handlebars, reStructuredText, and AsciiDoc. SQL is handled as isolated artifact facts and object candidates, not as normal source-language dependency edges or current-schema claims.
+Codegraph is a lightweight multi-language code analysis tool for fast repo understanding without requiring an editor, language server, or per-language setup. It uses one shared Tree-sitter model across supported source languages including Zig and SQL, plus graph-first text extraction for document and template formats like Markdown, MDX, Astro, Handlebars, reStructuredText, and AsciiDoc. SQL uses SQL-specific object symbols and SQL-to-SQL graph edges without claiming a current schema or globally linking application-code strings to SQL objects.
 
 Native runtime mode defaults to `auto`: Codegraph resolves parse/query work through `@lzehrung/codegraph-native`, using the native addon when available and the separate opt-in `@lzehrung/codegraph-js-fallback` package only when native is unavailable or explicitly disabled.
 
@@ -123,8 +123,8 @@ Runtime controls:
   `codegraph graph ./src`
 - Graph-first document/template edges:
   HTML, Astro, Handlebars, Markdown, MDX, reStructuredText, and AsciiDoc local links, plus MDX/Astro static imports, Vue/Svelte script imports including external `script src`, and stylesheet imports for CSS, SCSS, and Less.
-- SQL artifact support:
-  `.sql` files are discovered, chunked into statements, and projected into SQL statement facts and object candidates. SQL facts can appear in review context when SQL files or changed SQL literals are relevant, but SQL object names do not participate in normal source dependency resolution, go-to-definition, or find-references.
+- SQL support:
+  `.sql` files are discovered by default, chunked into statements, indexed as SQL object symbols, and linked through SQL-to-SQL object edges. SQL facts can appear in review context when SQL files or changed SQL literals are relevant, but application-code strings are not globally treated as SQL dependencies.
 - Narrow scan scope and exclude generated/tests while preserving `.gitignore`:
   `codegraph graph --root . ./src --include-glob "**/*.ts" --ignore-glob "**/*.spec.ts" --json`
 - Disable `.gitignore` filtering when ignored/generated files are intentionally in scope:

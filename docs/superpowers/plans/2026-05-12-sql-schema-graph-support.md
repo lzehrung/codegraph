@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add useful SQL extraction for PR review without letting stale migrations or historical SQL poison the main code dependency graph.
+**Goal:** Add useful SQL language support and PR review context without letting stale migrations, historical SQL, or arbitrary application-code strings create false application dependencies.
 
-**Architecture:** Treat SQL as an isolated artifact graph in v1. Extract file-local statement facts and object mentions, keep every fact tied to source provenance, and bridge SQL to code only through explicit high-confidence evidence or PR-triggered review context.
+**Architecture:** Treat SQL as a normal discovered repository language with SQL-specific semantics. Extract file-local statement facts and object mentions, index SQL object symbols, create SQL-to-SQL graph edges, keep every fact tied to source provenance, and bridge SQL to application code only through explicit high-confidence evidence or PR-triggered review context.
 
 **Tech Stack:** TypeScript, Tree-sitter SQL through the JS fallback runtime, optional native Tree-sitter SQL if the Rust crate is compatible, Vitest, existing Codegraph graph/index/review APIs.
 
@@ -16,9 +16,9 @@ SQL support has a different truth model from normal source languages. A reposito
 
 The v1 goal is therefore deliberately narrower than "current schema reconstruction":
 
-- Extract true statement-level facts from `.sql` files.
-- Keep SQL symbols in a SQL namespace.
-- Keep SQL graph edges out of source-language dependency resolution by default.
+- Extract true statement-level facts from every discovered `.sql` file.
+- Keep SQL symbols in a SQL namespace while exposing them through normal symbol, go-to-definition, and find-references APIs.
+- Include SQL-to-SQL object edges in the normal graph while keeping application-code string literals out of global SQL dependency resolution by default.
 - Use SQL facts in PR review only when the changed files or explicit code evidence make them relevant.
 - Defer current-schema reconstruction until we can identify trusted schema snapshots or ordered migration streams.
 
@@ -26,7 +26,7 @@ Follow [docs/adding-language-support.md](../../adding-language-support.md), [doc
 
 ## Revised Support Surface
 
-Add SQL as a graph-first artifact language.
+Add SQL as a supported repository language with graph-first statement facts.
 
 Initial claims:
 
@@ -34,13 +34,13 @@ Initial claims:
 - Parser: Tree-sitter SQL where available.
 - Chunking: statement-level chunks plus larger DDL/routine blocks.
 - SQL facts: `CREATE TABLE`, `CREATE VIEW`, `CREATE INDEX`, `ALTER TABLE`, `DROP`, `INSERT`, `UPDATE`, `DELETE`, `SELECT`, `JOIN`, routines, triggers, constraints, and foreign keys where syntax is recognized.
-- SQL graph: isolated SQL nodes and edges with source file, line range, statement kind, and extraction confidence.
+- SQL graph: SQL object nodes and edges with source file, line range, statement kind, and extraction confidence.
 - Current schema: no default claim.
 - Go-to definition: no initial support.
 - References: no initial support through existing source-reference APIs.
 - PR impact: SQL facts are review context when SQL files changed, SQL literals changed, or an explicit mapping connects code to SQL.
 
-Do not add table names from `.sql` files to the normal source dependency graph. Do not treat every historical table mention as an application dependency.
+Do add table names from `.sql` files to SQL symbol/navigation support and SQL-to-SQL graph edges. Do not treat every historical SQL object mention as a current schema assertion or application-code dependency.
 
 ## Namespace And Truth Model
 
@@ -78,7 +78,7 @@ Create:
 - `src/sql/types.ts`: SQL fact, object, edge, namespace, and review trigger types.
 - `src/sql/extractFacts.ts`: AST-to-fact extraction from one SQL file.
 - `src/sql/classifySqlFile.ts`: lightweight file role tagging for review filtering, not schema truth.
-- `src/sql/graph.ts`: SQL artifact graph projection.
+- `src/sql/graph.ts`: SQL fact/candidate graph projection.
 - `src/sql/review.ts`: PR review bridge rules.
 - `src/sql/index.ts`: internal SQL exports.
 - `tests/languages/sql.test.ts`: SQL parser/chunk behavior.
@@ -92,7 +92,7 @@ Modify:
 - `src/languages/all.ts`: register SQL definition.
 - `src/languages.ts`: expose SQL support metadata.
 - `src/util/projectFiles.ts`: include `.sql` in default discovery.
-- `src/graphs.ts`: include isolated SQL artifact graph output without feeding source-language dependency resolution.
+- `src/graphs.ts`: include SQL-to-SQL graph edges in normal graph output and detailed SQL fact output when requested.
 - `src/index.ts`: export SQL artifact types only if they are part of public API.
 - `src/cli.ts`: expose SQL graph output if needed through existing graph/report commands.
 - `packages/codegraph-js-fallback/package.json`: add `tree-sitter-sql`.
@@ -103,8 +103,8 @@ Modify:
 - `tests/references.test.ts`: negative SQL source-navigation tests.
 - `tests/native-tree-sitter.test.ts`: native SQL smoke only if native SQL is wired.
 - `tests/native-parser-ownership.test.ts`: native SQL ownership only if native SQL is wired.
-- `docs/language-parity.md`: SQL as isolated graph-first artifact support.
-- `docs/scenario-catalog.md`: SQL artifact and PR review scenarios.
+- `docs/language-parity.md`: SQL language support with SQL-specific graph semantics.
+- `docs/scenario-catalog.md`: SQL language and PR review scenarios.
 - `README.md`: supported file/language summary.
 - `docs/cli.md`: CLI output contract if commands change.
 - `docs/library-api.md`: public API if SQL facts are exported.
@@ -220,7 +220,7 @@ Add SQL graph edge kinds:
 - `sql_statement_references`
 - `sql_candidate_mentions`
 
-All SQL graph nodes must carry SQL namespace metadata. Source-language dependency graph builders must ignore these nodes unless a caller explicitly asks for SQL artifact data.
+All SQL fact/candidate graph nodes must carry SQL namespace metadata. Normal graph builders should include SQL-to-SQL object edges but must not create application-code edges from arbitrary SQL-looking strings.
 
 ## Cross-Language Bridge Rules
 
@@ -252,9 +252,9 @@ Files:
 
 Changes:
 
-- [ ] Add SQL as an isolated graph-first artifact language.
+- [ ] Add SQL as a graph-first repository language.
 - [ ] State that v1 extracts statement facts, not a current schema.
-- [ ] State that SQL symbols do not participate in source-language dependency resolution by default.
+- [ ] State that SQL symbols participate in SQL navigation while application-code string literals do not become SQL dependencies by default.
 - [ ] Add scenarios for changed migration review context, stale migration isolation, seed/fixture filtering, query file extraction, and SQL literal bridge rules.
 
 Verification:
@@ -377,14 +377,14 @@ Changes:
 
 - [ ] Add SQL graph nodes and edges in a SQL namespace.
 - [ ] Group repeated object mentions into `sql_*_candidate` nodes, not current schema nodes.
-- [ ] Ensure source-language dependency graph functions do not traverse SQL candidate edges unless explicitly requested.
+- [ ] Ensure graph functions include SQL-to-SQL object edges without traversing SQL candidate edges as application-code dependencies.
 - [ ] Include provenance on every SQL edge.
 
 Tests:
 
 - A `users` table mentioned in two old migrations becomes a SQL candidate, not a source dependency.
 - Query and migration facts are visible in SQL artifact graph output.
-- Existing source-language dependency graph output is unchanged for a fixture repo that also contains stale SQL.
+- Existing application-code dependency output is unchanged for a fixture repo that also contains stale SQL.
 
 Command:
 
@@ -484,9 +484,9 @@ Files:
 
 Changes:
 
-- [ ] Add negative tests proving SQL objects do not become source-language go-to targets.
-- [ ] Add negative tests proving stale SQL does not create source references.
-- [ ] Document any intentional SQL artifact lookup command separately from source navigation.
+- [ ] Add tests proving SQL objects are normal SQL go-to targets.
+- [ ] Add tests proving stale SQL does not create application-code references.
+- [ ] Document SQL navigation as part of normal source navigation with SQL-specific limits.
 
 Command:
 
@@ -539,7 +539,7 @@ Add `sql_current_schema` only after a separate plan proves:
 
 - `.sql` files are discovered by default.
 - SQL facts preserve source file provenance, statement line ranges, file role, object names, and fact kind.
-- SQL nodes live in a SQL namespace and do not participate in source-language dependency graph resolution by default.
+- SQL nodes live in a SQL namespace, participate in SQL-to-SQL graph resolution, and do not create application-code dependencies by default.
 - Stale migrations and fixture SQL do not create application impact in a code-only PR.
 - SQL review context appears when SQL files are touched or explicit bridge evidence exists.
 - Docs describe SQL as artifact/fact support, not current-schema support.

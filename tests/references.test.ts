@@ -21,15 +21,19 @@ function expectReferenceAt(result: Awaited<ReturnType<typeof testFindReferences>
 
 describe("Find References", () => {
   describe("SQL", () => {
-    it("does not treat stale SQL object names as source references", async () => {
+    it("finds SQL object references across SQL files", async () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
       const schemaFile = path.join(samplePath, "001_create_users.sql").replace(/\\/g, "/");
-      const appFile = path.join(samplePath, "app.ts").replace(/\\/g, "/");
-      const index = await createTestIndexFromFiles(samplePath, [schemaFile, appFile]);
+      const alterFile = path.join(samplePath, "002_alter_users.sql").replace(/\\/g, "/");
+      const reportFile = path.join(samplePath, "report.sql").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [schemaFile, alterFile, reportFile]);
 
-      const result = await testFindReferences(index, schemaFile, 1, 16, 0, "not_found");
+      const result = await testFindReferences(index, schemaFile, 1, 16, 3);
 
-      expect(result.status).toBe("not_found");
+      expect(result.status).toBe("ok");
+      expectReferenceAt(result, schemaFile, 1);
+      expectReferenceAt(result, alterFile, 1);
+      expectReferenceAt(result, reportFile, 1);
     });
   });
 
