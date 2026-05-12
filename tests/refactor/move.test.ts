@@ -264,6 +264,54 @@ describe("moveSymbol", () => {
     );
   });
 
+  test("adds source-file sibling imports after complete multiline import declarations", async () => {
+    await withProject(
+      {
+        "src/helper.ts": "export function helper() { return 'helper'; }\n",
+        "src/source.ts": [
+          "import {",
+          "  helper,",
+          "} from './helper';",
+          "",
+          "export function greet() { return 'hi'; }",
+          "",
+          "export function run() {",
+          "  return `${helper()} ${greet()}`;",
+          "}",
+          "",
+        ].join("\n"),
+        "src/target.ts": "",
+      },
+      async (root, files) => {
+        const index = await buildProjectIndexFromFiles(root, Object.values(files), { keepParsed: true });
+        const handle = listSymbols(index, { file: files["src/source.ts"] }).find(
+          (symbol) => symbol.name === "greet",
+        )?.id;
+        expect(handle).toBeDefined();
+        if (!handle) return;
+
+        const result = await moveSymbol(index, handle, files["src/target.ts"]!);
+
+        expect(result.status).toBe("ok");
+        await applyEdits(result.edits);
+        await expect(readFile(files["src/source.ts"]!, "utf8")).resolves.toBe(
+          [
+            "import {",
+            "  helper,",
+            "} from './helper';",
+            "import { greet } from './target';",
+            "",
+            "",
+            "export function run() {",
+            "  return `${helper()} ${greet()}`;",
+            "}",
+            "",
+          ].join("\n"),
+        );
+      },
+    );
+  });
+
   test("adds imports for dependencies used by the moved declaration", async () => {
     await withProject(
       {
@@ -286,6 +334,50 @@ describe("moveSymbol", () => {
         await applyEdits(result.edits);
         await expect(readFile(files["src/target.ts"]!, "utf8")).resolves.toBe(
           "import { helper } from './helper';\n\nexport function greet(name: string) {\n  return helper(name);\n}\n",
+        );
+      },
+    );
+  });
+
+  test("detects moved dependencies in template expressions but ignores comments", async () => {
+    await withProject(
+      {
+        "src/format.ts": "export function format(name: string) { return name.toUpperCase(); }\n",
+        "src/helper.ts": "export function helper(name: string) { return name.toLowerCase(); }\n",
+        "src/source.ts": [
+          "import { format } from './format';",
+          "import { helper } from './helper';",
+          "",
+          "export function greet(name: string) {",
+          "  // helper(name) is only an example in a comment.",
+          "  return `hi ${format(name)}`;",
+          "}",
+          "",
+        ].join("\n"),
+        "src/target.ts": "",
+      },
+      async (root, files) => {
+        const index = await buildProjectIndexFromFiles(root, Object.values(files), { keepParsed: true });
+        const handle = listSymbols(index, { file: files["src/source.ts"] }).find(
+          (symbol) => symbol.name === "greet",
+        )?.id;
+        expect(handle).toBeDefined();
+        if (!handle) return;
+
+        const result = await moveSymbol(index, handle, files["src/target.ts"]!);
+
+        expect(result.status).toBe("ok");
+        await applyEdits(result.edits);
+        await expect(readFile(files["src/target.ts"]!, "utf8")).resolves.toBe(
+          [
+            "import { format } from './format';",
+            "",
+            "export function greet(name: string) {",
+            "  // helper(name) is only an example in a comment.",
+            "  return `hi ${format(name)}`;",
+            "}",
+            "",
+          ].join("\n"),
         );
       },
     );

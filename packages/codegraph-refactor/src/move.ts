@@ -131,8 +131,79 @@ function targetHasCollision(index: ProjectIndex, targetFile: string, name: strin
 }
 
 function importInsertionOffset(source: string): number {
-  const importBlock = /^(?:\s*import\b[^\n]*(?:\r?\n|$))+/u.exec(source);
-  return importBlock ? importBlock[0].length : 0;
+  let offset = 0;
+  while (offset < source.length) {
+    const importStart = skipWhitespace(source, offset);
+    const importEnd = importDeclarationEndAt(source, importStart);
+    if (importEnd === null) return offset;
+    offset = importEnd;
+  }
+  return offset;
+}
+
+function skipWhitespace(source: string, offset: number): number {
+  let index = offset;
+  while (index < source.length && /\s/u.test(source[index]!)) {
+    index += 1;
+  }
+  return index;
+}
+
+function importDeclarationEndAt(source: string, offset: number): number | null {
+  if (!source.startsWith("import", offset)) return null;
+  const afterKeyword = offset + "import".length;
+  if (isIdentifierPart(source[afterKeyword])) return null;
+  const nextToken = skipInlineWhitespace(source, afterKeyword);
+  if (source[nextToken] === "(") return null;
+
+  let braceDepth = 0;
+  for (let index = afterKeyword; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === "'" || char === '"') {
+      index = quotedLiteralEnd(source, index, char);
+      continue;
+    }
+    if (char === "{") {
+      braceDepth += 1;
+      continue;
+    }
+    if (char === "}") {
+      braceDepth = Math.max(braceDepth - 1, 0);
+      continue;
+    }
+    if (char === ";") return endOfStatementLine(source, index + 1);
+    if (braceDepth === 0 && char === "\n") return index + 1;
+  }
+  return source.length;
+}
+
+function endOfStatementLine(source: string, offset: number): number {
+  if (source.slice(offset, offset + 2) === "\r\n") return offset + 2;
+  if (source[offset] === "\n") return offset + 1;
+  return offset;
+}
+
+function isIdentifierPart(char: string | undefined): boolean {
+  return char !== undefined && /[A-Za-z0-9_$]/u.test(char);
+}
+
+function skipInlineWhitespace(source: string, offset: number): number {
+  let index = offset;
+  while (source[index] === " " || source[index] === "\t") {
+    index += 1;
+  }
+  return index;
+}
+
+function quotedLiteralEnd(source: string, offset: number, quote: string): number {
+  for (let index = offset + 1; index < source.length; index += 1) {
+    if (source[index] === "\\") {
+      index += 1;
+      continue;
+    }
+    if (source[index] === quote) return index;
+  }
+  return source.length - 1;
 }
 
 function firstExplicitRelativeSpecifier(source: string): string | undefined {
@@ -181,7 +252,7 @@ function bindingImportText(binding: ImportBinding, targetFile: string): string |
 function dependencyImportsForMovedBody(index: ProjectIndex, sourceFile: string, targetFile: string, body: string): string {
   const mod = index.byFile.get(sourceFile);
   if (!mod) return "";
-  const maskedBody = body.replace(/(['"`])(?:\\.|(?!\1)[\s\S])*\1/g, "");
+  const maskedBody = maskInactiveCode(body);
   const imports: string[] = [];
   const seen = new Set<string>();
   for (const binding of mod.imports) {
@@ -193,6 +264,109 @@ function dependencyImportsForMovedBody(index: ProjectIndex, sourceFile: string, 
     imports.push(text);
   }
   return imports.join("");
+}
+
+function maskInactiveCode(source: string): string {
+  const chars = source.split("");
+
+  function maskChar(index: number): void {
+    if (chars[index] !== "\n" && chars[index] !== "\r") chars[index] = " ";
+  }
+
+  function maskRange(start: number, end: number): void {
+    for (let index = start; index < end; index += 1) {
+      maskChar(index);
+    }
+  }
+
+  function skipLineComment(start: number, end: number): number {
+    let index = start;
+    while (index < end && source[index] !== "\n") {
+      index += 1;
+    }
+    maskRange(start, index);
+    return index;
+  }
+
+  function skipBlockComment(start: number, end: number): number {
+    let index = start + 2;
+    while (index < end && !(source[index] === "*" && source[index + 1] === "/")) {
+      index += 1;
+    }
+    const commentEnd = index < end ? index + 2 : end;
+    maskRange(start, commentEnd);
+    return commentEnd;
+  }
+
+  function skipQuoted(start: number, end: number, quote: string): number {
+    let index = start + 1;
+    maskChar(start);
+    while (index < end) {
+      maskChar(index);
+      if (source[index] === "\\") {
+        index += 1;
+        if (index < end) maskChar(index);
+      } else if (source[index] === quote) {
+        return index + 1;
+      }
+      index += 1;
+    }
+    return index;
+  }
+
+  function scanTemplate(start: number, end: number): number {
+    let index = start + 1;
+    maskChar(start);
+    while (index < end) {
+      if (source[index] === "\\") {
+        maskChar(index);
+        index += 1;
+        if (index < end) maskChar(index);
+      } else if (source[index] === "`") {
+        maskChar(index);
+        return index + 1;
+      } else if (source[index] === "$" && source[index + 1] === "{") {
+        index = scanCode(index + 2, end, "}");
+      } else {
+        maskChar(index);
+      }
+      index += 1;
+    }
+    return index;
+  }
+
+  function scanCode(start: number, end: number, stopChar: string | null): number {
+    let braceDepth = 0;
+    let index = start;
+    while (index < end) {
+      const char = source[index];
+      const next = source[index + 1];
+      if (stopChar && char === "}" && braceDepth === 0) return index;
+      if (char === "/" && next === "/") {
+        index = skipLineComment(index, end);
+        continue;
+      }
+      if (char === "/" && next === "*") {
+        index = skipBlockComment(index, end);
+        continue;
+      }
+      if (char === "'" || char === '"') {
+        index = skipQuoted(index, end, char);
+        continue;
+      }
+      if (char === "`") {
+        index = scanTemplate(index, end);
+        continue;
+      }
+      if (stopChar && char === "{") braceDepth += 1;
+      if (stopChar && char === "}" && braceDepth > 0) braceDepth -= 1;
+      index += 1;
+    }
+    return index;
+  }
+
+  scanCode(0, source.length, null);
+  return chars.join("");
 }
 
 function isMoveSupportedFile(file: string): boolean {
