@@ -31,6 +31,23 @@ function isImportHandle(id: SymbolHandle): boolean {
   return id.split("::")[2] === "import";
 }
 
+function sameRange(left: Range, right: Range): boolean {
+  return (
+    left.start.index === right.start.index &&
+    left.end.index === right.end.index &&
+    left.start.line === right.start.line &&
+    left.start.column === right.start.column &&
+    left.end.line === right.end.line &&
+    left.end.column === right.end.column
+  );
+}
+
+function hasDeclaringFileCollision(index: ProjectIndex, def: NonNullable<ReturnType<typeof resolveSymbolId>>, newName: string): boolean {
+  const mod = index.byFile.get(def.file);
+  if (!mod) return false;
+  return mod.locals.some((local) => local.localName === newName && !sameRange(local.range, def.range));
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -138,6 +155,14 @@ export async function renameSymbol(
 
   if (def.localName === newName) {
     return { status: "ok", edits: [], warnings: [] };
+  }
+  if (hasDeclaringFileCollision(index, def, newName)) {
+    return {
+      status: "unsupported",
+      edits: [],
+      warnings: [],
+      reason: `declaring file already declares ${newName}`,
+    };
   }
 
   const references = await findReferencesById(index, id);

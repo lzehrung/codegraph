@@ -36,11 +36,28 @@ describe("extractFunction", () => {
         expect(result.status).toBe("ok");
         await applyEdits(result.edits);
         const source = await readFile(file, "utf8");
-        expect(source).toContain("function emitGreeting(name)");
+        expect(source).toContain("function emitGreeting(name: string)");
         expect(source).toContain("emitGreeting(name);");
         expect(source).toContain("const greeting = `hi ${name}`;");
         expect(source).toContain("export function run(name: string)");
         expect(source).not.toContain("export function emitGreeting");
+      },
+    );
+  });
+
+  test("preserves simple TypeScript parameter annotations in extracted helpers", async () => {
+    await withFile(
+      "export function run(name: string, count?: number) {\n  console.log(name, count);\n}\n",
+      async (root, file) => {
+        const index = await buildProjectIndexFromFiles(root, [file], { keepParsed: true });
+
+        const result = await extractFunction(index, { file, range: lineRange(2, 3) }, { newName: "emitName" });
+
+        expect(result.status).toBe("ok");
+        await applyEdits(result.edits);
+        const source = await readFile(file, "utf8");
+        expect(source).toContain("function emitName(name: string, count?: number)");
+        expect(source).toContain("emitName(name, count);");
       },
     );
   });
@@ -56,7 +73,7 @@ describe("extractFunction", () => {
         expect(result.status).toBe("ok");
         await applyEdits(result.edits);
         const source = await readFile(file, "utf8");
-        expect(source).toContain("function emitGreeting(name, prefix)");
+        expect(source).toContain("function emitGreeting(name: string, prefix)");
         expect(source).toContain("emitGreeting(name, prefix);");
         expect(source).toContain("console.log(prefix, name);");
       },
@@ -92,7 +109,7 @@ describe("extractFunction", () => {
         expect(result.status).toBe("ok");
         await applyEdits(result.edits);
         const source = await readFile(file, "utf8");
-        expect(source).toContain("function emitPattern(name, pattern)");
+        expect(source).toContain("function emitPattern(name: string, pattern)");
         expect(source).toContain("emitPattern(name, pattern);");
       },
     );
@@ -110,9 +127,9 @@ describe("extractFunction", () => {
         await applyEdits(result.edits);
         const source = await readFile(file, "utf8");
         expect(source).toContain("// function fake()");
-        expect(source).toContain("function emitName(name)");
-        expect(source.indexOf("function emitName(name)")).toBeLessThan(source.indexOf("export function run"));
-        expect(source.indexOf("function emitName(name)")).toBeGreaterThan(source.indexOf("// }"));
+        expect(source).toContain("function emitName(name: string)");
+        expect(source.indexOf("function emitName(name: string)")).toBeLessThan(source.indexOf("export function run"));
+        expect(source.indexOf("function emitName(name: string)")).toBeGreaterThan(source.indexOf("// }"));
       },
     );
   });
@@ -184,7 +201,7 @@ describe("extractFunction", () => {
         expect(result.status).toBe("ok");
         await applyEdits(result.edits);
         const source = await readFile(file, "utf8");
-        expect(source).toContain("function makeGreeting(name)");
+        expect(source).toContain("function makeGreeting(name: string)");
         expect(source).toContain("makeGreeting(name);");
       },
     );

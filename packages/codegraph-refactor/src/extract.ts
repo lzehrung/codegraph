@@ -44,11 +44,13 @@ type FunctionEnvelope = {
   start: number;
   bodyStart: number;
   bodyEnd: number;
-  params: string[];
+  params: SimpleBinding[];
   hasNonSimpleParams: boolean;
 };
 
-type ParsedParams = { status: "ok"; names: string[] } | { status: "unsupported" };
+type SimpleBinding = { name: string; declaration: string };
+
+type ParsedParams = { status: "ok"; bindings: SimpleBinding[] } | { status: "unsupported" };
 
 function findFunctionEnvelope(source: string, regionStart: number, regionEnd: number): FunctionEnvelope | null {
   const braceSource = maskJsLikeCommentsAndStrings(source);
@@ -65,7 +67,7 @@ function findFunctionEnvelope(source: string, regionStart: number, regionEnd: nu
         start: match.index,
         bodyStart,
         bodyEnd,
-        params: params.status === "ok" ? params.names : [],
+        params: params.status === "ok" ? params.bindings : [],
         hasNonSimpleParams: params.status === "unsupported",
       };
     }
@@ -233,22 +235,27 @@ function splitTopLevelCommas(source: string): string[] {
   return parts;
 }
 
-function simpleBindingName(binding: string): string | null {
+function simpleBinding(binding: string): SimpleBinding | null {
   const withoutDefault = binding.split("=")[0] ?? "";
   const withoutType = withoutDefault.split(":")[0] ?? "";
-  const candidate = withoutType.trim().replace(/^\.\.\./, "");
-  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(candidate) ? candidate : null;
+  const candidate = withoutType.trim().replace(/^\.\.\./, "").replace(/\?$/u, "");
+  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(candidate)) return null;
+  return { name: candidate, declaration: withoutDefault.trim() };
+}
+
+function simpleBindingName(binding: string): string | null {
+  return simpleBinding(binding)?.name ?? null;
 }
 
 function parseParams(params: string): ParsedParams {
-  const names: string[] = [];
+  const bindings: SimpleBinding[] = [];
   for (const param of splitTopLevelCommas(params)) {
     if (!param.trim()) continue;
-    const name = simpleBindingName(param);
-    if (!name) return { status: "unsupported" };
-    names.push(name);
+    const binding = simpleBinding(param);
+    if (!binding) return { status: "unsupported" };
+    bindings.push(binding);
   }
-  return { status: "ok", names };
+  return { status: "ok", bindings };
 }
 
 function collectDeclaredNames(source: string): string[] {
@@ -309,14 +316,18 @@ function hasIdentifier(source: string, name: string): boolean {
   );
 }
 
-function collectInputs(selected: string, params: string[], precedingSource: string): string[] {
+function collectInputs(selected: string, params: SimpleBinding[], precedingSource: string): SimpleBinding[] {
   const identifiers = new Set(maskCodeForIdentifierScan(selected).match(/\b[A-Za-z_$][A-Za-z0-9_$]*\b/g) ?? []);
-  const inputs: string[] = [];
+  const inputs: SimpleBinding[] = [];
   const seen = new Set<string>();
-  for (const name of [...params, ...collectDeclaredNames(precedingSource)]) {
-    if (!identifiers.has(name) || seen.has(name)) continue;
-    seen.add(name);
-    inputs.push(name);
+  const candidates = [
+    ...params,
+    ...collectDeclaredNames(precedingSource).map((name) => ({ name, declaration: name })),
+  ];
+  for (const binding of candidates) {
+    if (!identifiers.has(binding.name) || seen.has(binding.name)) continue;
+    seen.add(binding.name);
+    inputs.push(binding);
   }
   return inputs;
 }
@@ -421,8 +432,10 @@ export function extractFunction(
   }
 
   const inputs = collectInputs(selected, envelope.params, source.slice(envelope.bodyStart, offsets.start));
-  const helper = `function ${opts.newName}(${inputs.join(", ")}) {\n${normalizeExtractedBody(selected)}\n}\n\n`;
-  const call = `${leadingIndent(selected)}${opts.newName}(${inputs.join(", ")});\n`;
+  const helperParams = inputs.map((input) => input.declaration).join(", ");
+  const callArgs = inputs.map((input) => input.name).join(", ");
+  const helper = `function ${opts.newName}(${helperParams}) {\n${normalizeExtractedBody(selected)}\n}\n\n`;
+  const call = `${leadingIndent(selected)}${opts.newName}(${callArgs});\n`;
   const edits: TextEdit[] = [
     { file: region.file, start: envelope.start, end: envelope.start, newText: helper },
     { file: region.file, start: offsets.start, end: offsets.end, newText: call },

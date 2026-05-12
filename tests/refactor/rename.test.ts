@@ -159,6 +159,26 @@ describe("renameSymbol", () => {
     );
   });
 
+  test("rejects obvious target-name collisions in the declaring file", async () => {
+    await withProject(
+      {
+        "utils.ts": "export function greet() { return 'hi'; }\nexport function salute() { return 'hello'; }\n",
+      },
+      async (root, files) => {
+        const index = await buildProjectIndexFromFiles(root, Object.values(files), { keepParsed: true });
+        const handle = listSymbols(index, { file: files["utils.ts"] }).find((symbol) => symbol.name === "greet")?.id;
+        expect(handle).toBeDefined();
+        if (!handle) return;
+
+        const result = await renameSymbol(index, handle, "salute");
+
+        expect(result.status).toBe("unsupported");
+        expect(result.reason).toContain("already declares salute");
+        expect(result.edits).toEqual([]);
+      },
+    );
+  });
+
   test("rejects invalid identifiers", async () => {
     await withProject({ "utils.ts": "export function greet() { return 'hi'; }\n" }, async (root, files) => {
       const index = await buildProjectIndexFromFiles(root, Object.values(files), { keepParsed: true });

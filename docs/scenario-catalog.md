@@ -17,6 +17,9 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | ------------------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------- | ------------------------ | ---------- |
 | TypeScript top-level move edits | `tests/refactor/move.test.ts`  | Moving an exported function carries leading docs, creates the target file when needed, and rewrites named importers. | Internal regression test | 2026-05-10 |
 | TypeScript statement extraction | `tests/refactor/extract.test.ts` | Extracting a contiguous function-body region emits a top-level helper plus a call-site replacement.                 | Internal regression test | 2026-05-10 |
+| Moved declaration dependencies  | `tests/refactor/move.test.ts`  | Moving a declaration carries imports used by the moved body into the target file.                                  | Internal regression test | 2026-05-11 |
+| Typed TypeScript extraction     | `tests/refactor/extract.test.ts` | Extracted helpers preserve simple TypeScript parameter annotations.                                                | Internal regression test | 2026-05-11 |
+| Rename collision rejection      | `tests/refactor/rename.test.ts` | Renaming to an existing declaration name in the declaring file returns `unsupported` with no edits.                | Internal regression test | 2026-05-11 |
 
 ## Native Tree-sitter parity
 

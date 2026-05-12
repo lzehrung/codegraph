@@ -242,6 +242,33 @@ describe("moveSymbol", () => {
     );
   });
 
+  test("adds imports for dependencies used by the moved declaration", async () => {
+    await withProject(
+      {
+        "src/helper.ts": "export function helper(name: string) { return name.toUpperCase(); }\n",
+        "src/source.ts":
+          "import { helper } from './helper';\n\nexport function greet(name: string) {\n  return helper(name);\n}\n",
+        "src/target.ts": "",
+      },
+      async (root, files) => {
+        const index = await buildProjectIndexFromFiles(root, Object.values(files), { keepParsed: true });
+        const handle = listSymbols(index, { file: files["src/source.ts"] }).find(
+          (symbol) => symbol.name === "greet",
+        )?.id;
+        expect(handle).toBeDefined();
+        if (!handle) return;
+
+        const result = await moveSymbol(index, handle, files["src/target.ts"]!);
+
+        expect(result.status).toBe("ok");
+        await applyEdits(result.edits);
+        await expect(readFile(files["src/target.ts"]!, "utf8")).resolves.toBe(
+          "import { helper } from './helper';\n\nexport function greet(name: string) {\n  return helper(name);\n}\n",
+        );
+      },
+    );
+  });
+
   test("uses explicit import extensions when adding source-file sibling imports", async () => {
     await withProject(
       {

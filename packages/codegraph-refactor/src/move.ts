@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { findReferencesById, getSymbolRange, resolveSymbolId, supportForFile } from "@lzehrung/codegraph";
-import type { FileId, ProjectIndex, SymbolHandle } from "@lzehrung/codegraph";
+import type { FileId, ImportBinding, ProjectIndex, SymbolHandle } from "@lzehrung/codegraph";
 import type { RefactorResult, TextEdit, TriviaMode } from "./types.js";
 
 export interface MoveOptions {
@@ -23,13 +23,13 @@ function rangeToDeleteEdit(file: string, start: number, end: number, source: str
   return { file, start, end: deleteEnd, newText: "" };
 }
 
-function readTargetInsertion(targetFile: string, body: string): { offset: number; text: string } {
+function readTargetInsertion(targetFile: string, body: string): { offset: number; text: string; source: string } {
   try {
     const source = fs.readFileSync(targetFile, "utf8");
     const prefix = source.length > 0 && !source.endsWith("\n") ? "\n" : "";
-    return { offset: source.length, text: `${prefix}${body}\n` };
+    return { offset: source.length, text: `${prefix}${body}\n`, source };
   } catch {
-    return { offset: 0, text: `${body}\n` };
+    return { offset: 0, text: `${body}\n`, source: "" };
   }
 }
 
@@ -144,6 +144,48 @@ function importFromMovedTarget(sourceFile: string, source: string, name: string,
   return `import { ${name} } from '${relativeSpecifier(sourceFile, targetFile, specifierStyle)}';\n`;
 }
 
+function bindingLocalName(binding: ImportBinding): string | undefined {
+  if (binding.kind === "namespace") return binding.localNS;
+  if (binding.kind === "star") return undefined;
+  return binding.local;
+}
+
+function bindingImportText(binding: ImportBinding, targetFile: string): string | undefined {
+  const local = bindingLocalName(binding);
+  if (!local || typeof binding.resolved !== "string") return undefined;
+  const specifier = relativeSpecifier(targetFile, binding.resolved, binding.from);
+  const quote = "'";
+  if (binding.kind === "default") {
+    const importKeyword = binding.typeOnly ? "import type" : "import";
+    return `${importKeyword} ${binding.local} from ${quote}${specifier}${quote};\n`;
+  }
+  if (binding.kind === "namespace") {
+    const importKeyword = binding.typeOnly ? "import type" : "import";
+    return `${importKeyword} * as ${binding.localNS} from ${quote}${specifier}${quote};\n`;
+  }
+  if (binding.kind === "star") return undefined;
+  const importKeyword = binding.typeOnly ? "import type" : "import";
+  const specifierText = binding.imported === binding.local ? binding.imported : `${binding.imported} as ${binding.local}`;
+  return `${importKeyword} { ${specifierText} } from ${quote}${specifier}${quote};\n`;
+}
+
+function dependencyImportsForMovedBody(index: ProjectIndex, sourceFile: string, targetFile: string, body: string): string {
+  const mod = index.byFile.get(sourceFile);
+  if (!mod) return "";
+  const maskedBody = body.replace(/(['"`])(?:\\.|(?!\1)[\s\S])*\1/g, "");
+  const imports: string[] = [];
+  const seen = new Set<string>();
+  for (const binding of mod.imports) {
+    const local = bindingLocalName(binding);
+    if (!local || !new RegExp(`\\b${escapeRegExp(local)}\\b`).test(maskedBody)) continue;
+    const text = bindingImportText(binding, targetFile);
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    imports.push(text);
+  }
+  return imports.join("");
+}
+
 function isMoveSupportedFile(file: string): boolean {
   const languageId = supportForFile(file)?.id;
   return languageId === "ts" || languageId === "tsx" || languageId === "js" || languageId === "jsx";
@@ -205,6 +247,7 @@ export async function moveSymbol(
 
   const body = source.slice(start, end).trimEnd();
   const insertion = readTargetInsertion(normalizedTarget, body);
+  const dependencyImports = dependencyImportsForMovedBody(index, def.file, normalizedTarget, body);
   const deleteEnd = deleteEndForRange(end, source);
   const references = await findReferencesById(index, id);
   if (references.status !== "ok") {
@@ -222,15 +265,28 @@ export async function moveSymbol(
   const sourceImportOffset = importInsertionOffset(source);
   const deleteEditNewText =
     importText && start <= sourceImportOffset && sourceImportOffset <= deleteEnd ? importText : "";
+  const targetImportOffset = importInsertionOffset(insertion.source);
+  const targetInsertionText =
+    dependencyImports && insertion.offset === targetImportOffset
+      ? `${dependencyImports}\n${insertion.text}`
+      : insertion.text;
   const edits: TextEdit[] = [
     { ...rangeToDeleteEdit(def.file, start, end, source), newText: deleteEditNewText },
-    {
-      file: normalizedTarget,
-      start: insertion.offset,
-      end: insertion.offset,
-      newText: insertion.text,
-    },
   ];
+  if (dependencyImports && insertion.offset !== targetImportOffset) {
+    edits.push({
+      file: normalizedTarget,
+      start: targetImportOffset,
+      end: targetImportOffset,
+      newText: `${dependencyImports}\n`,
+    });
+  }
+  edits.push({
+    file: normalizedTarget,
+    start: insertion.offset,
+    end: insertion.offset,
+    newText: targetInsertionText,
+  });
   if (importText && deleteEditNewText.length === 0) {
     edits.push({ file: def.file, start: sourceImportOffset, end: sourceImportOffset, newText: importText });
   }
