@@ -48,6 +48,19 @@ describe("Find References", () => {
       expectReferenceAt(result, schemaFile, 1);
       expectReferenceAt(result, reportFile, 1);
     });
+
+    it("finds unqualified SQL references to schema-qualified definitions", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
+      const schemaFile = path.join(samplePath, "qualified_schema.sql").replace(/\\/g, "/");
+      const reportFile = path.join(samplePath, "report.sql").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [schemaFile, reportFile]);
+
+      const result = await testFindReferences(index, schemaFile, 1, 22, 2);
+
+      expect(result.status).toBe("ok");
+      expectReferenceAt(result, schemaFile, 1);
+      expectReferenceAt(result, reportFile, 1);
+    });
   });
 
   describe("TypeScript", () => {

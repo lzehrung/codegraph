@@ -307,11 +307,28 @@ function maskStringsAndComments(statement: string): string {
   return out;
 }
 
-function objectAt(text: string, index: number): string | null {
-  OBJECT_NAME_RE.lastIndex = index;
-  const match = OBJECT_NAME_RE.exec(text);
-  if (!match) return null;
-  return normalizeSqlObjectName(match[0]);
+const SQL_OBJECT_MODIFIERS = new Set(["only"]);
+
+function skipWhitespace(text: string, index: number): number {
+  let nextIndex = index;
+  while (nextIndex < text.length && /\s/.test(text[nextIndex] ?? "")) {
+    nextIndex += 1;
+  }
+  return nextIndex;
+}
+
+function objectAt(text: string, index: number, skipModifiers = SQL_OBJECT_MODIFIERS): string | null {
+  let cursor = skipWhitespace(text, index);
+  while (cursor < text.length) {
+    OBJECT_NAME_RE.lastIndex = cursor;
+    const match = OBJECT_NAME_RE.exec(text);
+    if (!match) return null;
+    const name = normalizeSqlObjectName(match[0]);
+    if (!name) return null;
+    if (!skipModifiers.has(name.toLowerCase())) return name;
+    cursor = skipWhitespace(text, match.index + match[0].length);
+  }
+  return null;
 }
 
 function findObjectAfter(text: string, pattern: RegExp): string | null {

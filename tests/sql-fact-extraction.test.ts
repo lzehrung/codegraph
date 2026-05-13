@@ -145,4 +145,42 @@ describe("SQL fact extraction", () => {
       }),
     ]);
   });
+
+  it("handles PostgreSQL ONLY table modifiers as syntax instead of object names", () => {
+    const filePath = path.join(fixtureRoot, "migrations", "20240510120100_only.sql");
+    const facts = extractSqlFactsFromSource(
+      filePath,
+      [
+        "ALTER TABLE ONLY public.users ADD COLUMN updated_at timestamptz;",
+        "CREATE INDEX users_email_idx ON ONLY public.users (email);",
+        "SELECT id FROM ONLY public.users;",
+        "UPDATE ONLY public.users SET email = lower(email);",
+        "DELETE FROM ONLY public.users WHERE id < 0;",
+      ].join("\n"),
+    );
+
+    expect(facts).toEqual([
+      expect.objectContaining({
+        kind: "alters_table",
+        objectName: "public.users",
+      }),
+      expect.objectContaining({
+        kind: "defines_index",
+        objectName: "users_email_idx",
+        relatedObjectName: "public.users",
+      }),
+      expect.objectContaining({
+        kind: "reads_from",
+        objectName: "public.users",
+      }),
+      expect.objectContaining({
+        kind: "writes_to",
+        objectName: "public.users",
+      }),
+      expect.objectContaining({
+        kind: "writes_to",
+        objectName: "public.users",
+      }),
+    ]);
+  });
 });

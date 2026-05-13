@@ -77,17 +77,21 @@ export async function findSqlReferences(
 ): Promise<FindReferencesResult | null> {
   if (!isSqlFile(definition.file)) return null;
   const objectName = definition.localName;
-  const normalizedName = objectName.toLowerCase();
+  const targetNames = new Set([objectName.toLowerCase(), sqlObjectBaseName(objectName).toLowerCase()]);
   const references: Reference[] = [];
   const seen = new Set<string>();
   for (const file of sqlFiles(index)) {
     const source = await sourceForFile(file, index);
     const facts = extractSqlFactsFromSource(file, source);
     for (const fact of facts) {
-      const names = [fact.objectName, fact.relatedObjectName]
-        .filter((name): name is string => !!name)
-        .map((name) => name.toLowerCase());
-      if (!names.includes(normalizedName)) continue;
+      const names = new Set<string>();
+      for (const name of [fact.objectName, fact.relatedObjectName]) {
+        if (!name) continue;
+        names.add(name.toLowerCase());
+        names.add(sqlObjectBaseName(name).toLowerCase());
+      }
+      const matchesDefinition = Array.from(names).some((name) => targetNames.has(name));
+      if (!matchesDefinition) continue;
       const range = rangeForLine(fact.startLine);
       const key = `${file}:${range.start.line}:${range.start.column}`;
       if (seen.has(key)) continue;
