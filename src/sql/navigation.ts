@@ -247,7 +247,8 @@ function sqlAliasMapForStatement(statementText: string): Map<string, string> {
 
 function unambiguousSqlPrefixDefinitionName(lookup: SqlDefinitionLookup, objectName: string): string | null {
   const matches = sqlDefinitionMatches(lookup, objectName);
-  if (matches.exact.length > 0) return matches.exact[0]?.localName ?? null;
+  if (matches.exact.length === 1) return matches.exact[0]?.localName ?? null;
+  if (matches.exact.length > 1) return null;
   if (matches.basename.length === 1) return matches.basename[0]?.localName ?? null;
   return null;
 }
