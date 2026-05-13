@@ -160,4 +160,45 @@ describe("SQL review context", () => {
       await rmTmpDir(root);
     }
   });
+
+  it("does not treat a bare update phrase as a SQL literal hint", async () => {
+    const root = await mkTmpDir();
+    try {
+      await writeFile(path.join(root, "db", "schema.sql"), "CREATE TABLE users (id integer);\n");
+      const code = await writeFile(path.join(root, "src", "app.ts"), 'export const label = "update x";\n');
+      const originalReadFile = fs.readFile.bind(fs);
+      const readSpy = vi.spyOn(fs, "readFile").mockImplementation(originalReadFile);
+
+      const context = await collectSqlReviewContext(root, { changedFiles: [code] });
+
+      expect(context).toBeUndefined();
+      expect(readSpy.mock.calls.some((call) => String(call[0]).endsWith(".sql"))).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+      await rmTmpDir(root);
+    }
+  });
+
+  it("surfaces SQL candidates for changed code update literals", async () => {
+    const root = await mkTmpDir();
+    try {
+      const schema = await writeFile(path.join(root, "db", "schema.sql"), "CREATE TABLE users (id integer);\n");
+      const code = await writeFile(
+        path.join(root, "src", "userRepo.ts"),
+        "export const query = `UPDATE users SET id = ? WHERE id = ?`;\n",
+      );
+
+      const context = await collectSqlReviewContext(root, { changedFiles: [code] });
+
+      expect(context?.entries).toEqual([
+        expect.objectContaining({
+          reason: "changed_sql_literal",
+          objectName: "users",
+          fact: expect.objectContaining({ filePath: schema.replace(/\\/g, "/"), kind: "defines_table" }),
+        }),
+      ]);
+    } finally {
+      await rmTmpDir(root);
+    }
+  });
 });

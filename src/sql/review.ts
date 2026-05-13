@@ -19,8 +19,22 @@ export type SqlReviewContextOptions = {
   changedFiles: readonly string[];
 };
 
-const SQL_LITERAL_HINT =
-  /\b(select|with\s+[A-Za-z_][A-Za-z0-9_$]*\s+as|insert\s+into|update\s+(?:only\s+)?[A-Za-z_"`[]|delete\s+from|create\s+(?:temporary\s+|temp\s+|unlogged\s+)*(?:table|view|index)|alter\s+table|drop\s+(?:table|view|index))\b/i;
+const SQL_IDENTIFIER_HINT = '(?:[A-Za-z_][A-Za-z0-9_$]*|"[^"\\r\\n]+"|`[^`\\r\\n]+`|\\[[^\\]\\r\\n]+\\])';
+const SQL_OBJECT_NAME_HINT = `${SQL_IDENTIFIER_HINT}(?:\\s*\\.\\s*${SQL_IDENTIFIER_HINT})*`;
+const SQL_OBJECT_TERMINATOR_HINT = "(?=\\s|\\(|;|$)";
+const SQL_LITERAL_HINT = new RegExp(
+  [
+    "\\bselect\\b",
+    "\\bwith\\s+[A-Za-z_][A-Za-z0-9_$]*\\s+as\\b",
+    `\\binsert\\s+into\\s+${SQL_OBJECT_NAME_HINT}${SQL_OBJECT_TERMINATOR_HINT}`,
+    `\\bupdate\\s+(?:only\\s+)?${SQL_OBJECT_NAME_HINT}\\s+set\\b`,
+    `\\bdelete\\s+from\\s+${SQL_OBJECT_NAME_HINT}${SQL_OBJECT_TERMINATOR_HINT}`,
+    "\\bcreate\\s+(?:temporary\\s+|temp\\s+|unlogged\\s+)*(?:table|view|index)\\b",
+    "\\balter\\s+table\\b",
+    "\\bdrop\\s+(?:table|view|index)\\b",
+  ].join("|"),
+  "i",
+);
 
 function isSqlFile(filePath: string): boolean {
   return path.extname(filePath).toLowerCase() === ".sql";
