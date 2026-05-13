@@ -49,6 +49,25 @@ describe("Find References", () => {
       expectReferenceAt(result, reportFile, 1);
     });
 
+    it("finds schema-qualified SQL references to unqualified definitions", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-qualified-to-unqualified-refs-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(schemaFile, "CREATE TABLE users (id integer);\n", "utf8");
+        await fsp.writeFile(reportFile, "SELECT id FROM public.users;\n", "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const result = await testFindReferences(index, schemaFile, 1, 16, 2);
+
+        expect(result.status).toBe("ok");
+        expectReferenceAt(result, schemaFile, 1);
+        expectReferenceAt(result, reportFile, 1);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("finds unqualified SQL references to schema-qualified definitions", async () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
       const schemaFile = path.join(samplePath, "qualified_schema.sql").replace(/\\/g, "/");

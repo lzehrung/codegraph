@@ -69,15 +69,18 @@ function buildSqlDefinitionLookup(index: ProjectIndex): SqlDefinitionLookup {
 
 function sqlDefinitionsFromLookup(lookup: SqlDefinitionLookup, objectName: string): SymbolDef[] {
   const normalizedName = objectName.toLowerCase();
+  const basenameKey = sqlObjectBaseName(objectName).toLowerCase();
   const exactDefinitions = lookup.exact.get(normalizedName) ?? [];
-  const basenameDefinitions = lookup.basename.get(normalizedName) ?? [];
-  return exactDefinitions.length > 0 ? exactDefinitions : basenameDefinitions;
+  const basenameDefinitions = lookup.basename.get(basenameKey) ?? [];
+  if (exactDefinitions.length > 0) return exactDefinitions;
+  return basenameDefinitions.length === 1 ? basenameDefinitions : [];
 }
 
 function sqlDefinitionMatches(lookup: SqlDefinitionLookup, objectName: string): { exact: SymbolDef[]; basename: SymbolDef[] } {
   const normalizedName = objectName.toLowerCase();
+  const basenameKey = sqlObjectBaseName(objectName).toLowerCase();
   const exact = lookup.exact.get(normalizedName) ?? [];
-  const basename = lookup.basename.get(normalizedName) ?? [];
+  const basename = lookup.basename.get(basenameKey) ?? [];
   return { exact, basename };
 }
 

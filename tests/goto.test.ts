@@ -28,6 +28,24 @@ describe("Go to Definition", () => {
       expect(result.status).toBe("ok");
     });
 
+    it("resolves schema-qualified SQL references to unqualified definitions", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-qualified-to-unqualified-goto-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(schemaFile, "CREATE TABLE users (id integer);\n", "utf8");
+        const query = "SELECT id FROM public.users;\n";
+        await fsp.writeFile(reportFile, query, "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const result = await testGoToDefinition(index, reportFile, 1, query.indexOf("public.users") + 1, schemaFile, 1);
+
+        expect(result.status).toBe("ok");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("resolves alias-qualified and table-qualified SQL object references", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-qualified-goto-"));
       try {
