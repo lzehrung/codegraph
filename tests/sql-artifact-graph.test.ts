@@ -139,6 +139,52 @@ describe("SQL artifact graph", () => {
     }
   });
 
+  it("emits heuristic SQL edges for basename fallback matches", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-fallback-edge-"));
+    try {
+      const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+      const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+      await fsp.writeFile(schemaFile, "CREATE TABLE users (id integer);\n", "utf8");
+      await fsp.writeFile(reportFile, "SELECT id FROM public.users;\n", "utf8");
+
+      const sourceGraph = await collectGraph(root, [schemaFile, reportFile]);
+
+      expect(sourceGraph.edges).toContainEqual(
+        expect.objectContaining({
+          from: reportFile,
+          raw: "sql:reads_from:public.users",
+          to: { type: "file", path: schemaFile },
+          resolved: "heuristic",
+          confidence: 0.7,
+        }),
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not guess ambiguous SQL edges from unqualified references to schema-qualified definitions", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-ambiguous-unqualified-edge-"));
+    try {
+      const publicSchemaFile = path.join(root, "public_schema.sql").replace(/\\/g, "/");
+      const archiveSchemaFile = path.join(root, "archive_schema.sql").replace(/\\/g, "/");
+      const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+      await fsp.writeFile(publicSchemaFile, "CREATE TABLE public.users (id integer);\n", "utf8");
+      await fsp.writeFile(archiveSchemaFile, "CREATE TABLE archive.users (id integer);\n", "utf8");
+      await fsp.writeFile(reportFile, "SELECT id FROM users;\n", "utf8");
+
+      const sourceGraph = await collectGraph(root, [publicSchemaFile, archiveSchemaFile, reportFile]);
+
+      expect(
+        sourceGraph.edges.some(
+          (edge) => edge.from === reportFile && edge.raw === "sql:reads_from:users" && edge.to.type === "file",
+        ),
+      ).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not emit SQL dependency self-edges inside a single SQL file", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-self-edge-"));
     try {

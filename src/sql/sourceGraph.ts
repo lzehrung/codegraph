@@ -27,7 +27,14 @@ const SQL_REFERENCE_KINDS = new Set<SqlFactKind>([
 
 export type SqlFactCache = {
   factsByFile: Map<string, SqlStatementFact[]>;
-  definitionsByName: Map<string, SqlStatementFact[]>;
+  definitionsByExactName: Map<string, SqlStatementFact[]>;
+  definitionsByBaseName: Map<string, SqlStatementFact[]>;
+};
+
+type SqlDefinitionCandidateMatch = {
+  candidates: SqlStatementFact[];
+  resolved: "heuristic" | "precise";
+  confidence: number;
 };
 
 function isSqlFile(filePath: string): boolean {
@@ -65,28 +72,79 @@ function referenceObjectNames(fact: SqlStatementFact): string[] {
   return Array.from(new Set(names));
 }
 
-function definitionKeys(name: string): string[] {
-  const normalized = name.toLowerCase();
-  const baseName = sqlObjectBaseName(name).toLowerCase();
-  return normalized === baseName ? [normalized] : [normalized, baseName];
+function pushDefinition(lookup: Map<string, SqlStatementFact[]>, key: string, fact: SqlStatementFact): void {
+  const existing = lookup.get(key);
+  if (existing) existing.push(fact);
+  else lookup.set(key, [fact]);
 }
 
-function sqlDefinitionCandidates(cache: SqlFactCache, objectName: string): SqlStatementFact[] {
-  const [exactKey, ...fallbackKeys] = definitionKeys(objectName);
-  if (!exactKey) return [];
-  const exactCandidates = cache.definitionsByName.get(exactKey) ?? [];
-  if (exactCandidates.length > 0) return exactCandidates;
-  const candidates: SqlStatementFact[] = [];
+function uniqueFacts(candidates: readonly SqlStatementFact[]): SqlStatementFact[] {
+  const unique: SqlStatementFact[] = [];
   const seen = new Set<string>();
-  for (const key of fallbackKeys) {
-    for (const candidate of cache.definitionsByName.get(key) ?? []) {
-      const seenKey = `${candidate.filePath}:${candidate.startLine}:${candidate.kind}:${candidate.objectName ?? ""}`;
-      if (seen.has(seenKey)) continue;
-      seen.add(seenKey);
-      candidates.push(candidate);
-    }
+  for (const candidate of candidates) {
+    const seenKey = `${candidate.filePath}:${candidate.startLine}:${candidate.kind}:${candidate.objectName ?? ""}`;
+    if (seen.has(seenKey)) continue;
+    seen.add(seenKey);
+    unique.push(candidate);
   }
-  return candidates;
+  return unique;
+}
+
+function sqlDefinitionCandidates(cache: SqlFactCache, objectName: string): SqlDefinitionCandidateMatch {
+  const normalized = objectName.toLowerCase();
+  const baseName = sqlObjectBaseName(objectName).toLowerCase();
+  const exactCandidates = uniqueFacts(cache.definitionsByExactName.get(normalized) ?? []);
+  if (exactCandidates.length > 0) {
+    return {
+      candidates: exactCandidates,
+      resolved: exactCandidates.length === 1 ? "precise" : "heuristic",
+      confidence: exactCandidates.length === 1 ? 1 : 0.8,
+    };
+  }
+  if (normalized === baseName) return { candidates: [], resolved: "heuristic", confidence: 0.7 };
+
+  const basenameCandidates = uniqueFacts(cache.definitionsByBaseName.get(baseName) ?? []);
+  if (basenameCandidates.length !== 1) return { candidates: [], resolved: "heuristic", confidence: 0.7 };
+  return {
+    candidates: basenameCandidates,
+    resolved: "heuristic",
+    confidence: 0.7,
+  };
+}
+
+function definitionKeys(name: string): { exact: string; base: string } {
+  const exact = name.toLowerCase();
+  return { exact, base: sqlObjectBaseName(name).toLowerCase() };
+}
+
+function addDefinition(
+  definitionsByExactName: Map<string, SqlStatementFact[]>,
+  definitionsByBaseName: Map<string, SqlStatementFact[]>,
+  fact: SqlStatementFact,
+): void {
+  if (!fact.objectName) return;
+  const keys = definitionKeys(fact.objectName);
+  pushDefinition(definitionsByExactName, keys.exact, fact);
+  pushDefinition(definitionsByBaseName, keys.base, fact);
+}
+
+function sqlEdgesForCandidates(
+  normalizedFile: string,
+  fact: SqlStatementFact,
+  objectName: string,
+  match: SqlDefinitionCandidateMatch,
+): Edge[] {
+  const candidates: SqlStatementFact[] = [];
+  for (const candidate of match.candidates) {
+    if (candidate.filePath !== normalizedFile) candidates.push(candidate);
+  }
+  return candidates.map((candidate) => ({
+    from: normalizedFile,
+    to: { type: "file", path: candidate.filePath },
+    raw: `sql:${fact.kind}:${objectName}`,
+    resolved: match.resolved,
+    confidence: match.confidence,
+  }));
 }
 
 export function buildSqlModuleIndex(filePath: string, source: string): ModuleIndex {
@@ -130,20 +188,17 @@ export async function buildSqlFactCache(allFiles: readonly string[]): Promise<Sq
   );
   const factGroups = await Promise.all(sqlFiles.map(async (file) => [file, await readSqlFacts(file)] as const));
   const factsByFile = new Map<string, SqlStatementFact[]>();
-  const definitions = new Map<string, SqlStatementFact[]>();
+  const definitionsByExactName = new Map<string, SqlStatementFact[]>();
+  const definitionsByBaseName = new Map<string, SqlStatementFact[]>();
 
   for (const [file, facts] of factGroups) {
     factsByFile.set(file, facts);
     for (const fact of facts) {
       if (!isDefinitionFact(fact) || !fact.objectName) continue;
-      for (const key of definitionKeys(fact.objectName)) {
-        const existing = definitions.get(key);
-        if (existing) existing.push(fact);
-        else definitions.set(key, [fact]);
-      }
+      addDefinition(definitionsByExactName, definitionsByBaseName, fact);
     }
   }
-  return { factsByFile, definitionsByName: definitions };
+  return { factsByFile, definitionsByExactName, definitionsByBaseName };
 }
 
 export async function collectSqlEdgesForFile(
@@ -159,17 +214,9 @@ export async function collectSqlEdgesForFile(
   const seen = new Set<string>();
   for (const fact of currentFacts) {
     for (const objectName of referenceObjectNames(fact)) {
-      const candidates = sqlDefinitionCandidates(cache, objectName);
-      for (const candidate of candidates) {
-        if (candidate.filePath === normalizedFile) continue;
-        const targetPath = candidate.filePath;
-        const edge: Edge = {
-          from: normalizedFile,
-          to: { type: "file", path: targetPath },
-          raw: `sql:${fact.kind}:${objectName}`,
-          resolved: "precise",
-          confidence: 1,
-        };
+      const match = sqlDefinitionCandidates(cache, objectName);
+      for (const edge of sqlEdgesForCandidates(normalizedFile, fact, objectName, match)) {
+        const targetPath = edge.to.type === "file" ? edge.to.path : "";
         const key = `${edge.from}:${targetPath}:${edge.raw}`;
         if (seen.has(key)) continue;
         seen.add(key);

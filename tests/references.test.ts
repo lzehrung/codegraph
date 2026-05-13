@@ -106,6 +106,37 @@ describe("Find References", () => {
       }
     });
 
+    it("reports SQL qualified-reference columns from indented statement starts", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-indented-ref-columns-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(schemaFile, "CREATE TABLE schema1.table1 (id integer primary key);\n", "utf8");
+        const query = "  SELECT schema1.table1.id FROM schema1.table1;\n";
+        await fsp.writeFile(reportFile, query, "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const result = await testFindReferences(index, schemaFile, 1, 22, 2);
+
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.references).toContainEqual(
+            expect.objectContaining({
+              file: reportFile,
+              range: expect.objectContaining({
+                start: expect.objectContaining({
+                  line: 1,
+                  column: query.indexOf("schema1.table1.id") + 1,
+                }),
+              }),
+            }),
+          );
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("does not include ambiguous table-qualified basename references", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-ambiguous-basename-refs-"));
       try {

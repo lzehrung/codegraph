@@ -16,6 +16,7 @@ import type { SqlStatementFact } from "./types.js";
 type SqlStatementNavigationSlice = {
   text: string;
   startLine: number;
+  startColumn: number;
   endLine: number;
 };
 
@@ -130,6 +131,7 @@ function sqlStatementSlices(facts: readonly SqlStatementFact[]): SqlStatementNav
     slices.push({
       text: fact.statementText,
       startLine: fact.startLine,
+      startColumn: fact.startColumn,
       endLine: fact.endLine,
     });
   }
@@ -276,6 +278,7 @@ function statementLineForOffset(statement: SqlStatementNavigationSlice, offset: 
 function statementColumnForOffset(statement: SqlStatementNavigationSlice, offset: number): number {
   const beforeToken = statement.text.slice(0, offset);
   const lastLineStart = Math.max(beforeToken.lastIndexOf("\n"), beforeToken.lastIndexOf("\r"));
+  if (lastLineStart < 0) return statement.startColumn + offset;
   return offset - lastLineStart;
 }
 
