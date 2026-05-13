@@ -36,8 +36,8 @@ function isSqlFile(filePath: string): boolean {
 
 function rangeForFact(fact: SqlStatementFact): Range {
   return {
-    start: { line: fact.startLine, column: 1 },
-    end: { line: fact.endLine, column: 1 },
+    start: { line: fact.startLine, column: fact.startColumn, index: fact.startIndex },
+    end: { line: fact.endLine, column: fact.endColumn, index: fact.endIndex },
   };
 }
 

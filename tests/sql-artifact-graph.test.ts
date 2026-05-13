@@ -6,6 +6,7 @@ import { collectGraph } from "../src/index.js";
 import { buildSqlArtifactGraphFromFiles } from "../src/sql/index.js";
 import { buildSqlFactCache, buildSqlModuleIndex, collectSqlEdgesForFile } from "../src/sql/sourceGraph.js";
 import { SymbolKind } from "../src/indexer/types.js";
+import { computeFileSymbolHashes } from "../src/util/symbolHash.js";
 
 const fixtureRoot = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
 const sqlFiles = ["001_create_users.sql", "002_alter_users.sql", "report.sql"].map((file) =>
@@ -166,6 +167,31 @@ describe("SQL artifact graph", () => {
       expect.objectContaining({ kind: SymbolKind.Table }),
     ]);
     expect(moduleIndex.locals.some((local) => local.kind === SymbolKind.Constraint)).toBe(false);
+  });
+
+  it("hashes SQL symbols from statement ranges instead of whole files", () => {
+    const beforeSource = "CREATE TABLE users (id integer);\nCREATE TABLE accounts (id integer);\n";
+    const afterSource = "CREATE TABLE users (id integer);\nCREATE TABLE accounts (id integer, active boolean);\n";
+    const beforeIndex = buildSqlModuleIndex("schema.sql", beforeSource);
+    const afterIndex = buildSqlModuleIndex("schema.sql", afterSource);
+
+    const firstStatementEnd = beforeSource.indexOf(";");
+    const usersSymbol = beforeIndex.locals.find((local) => local.localName === "users");
+    expect(usersSymbol?.range).toMatchObject({
+      start: { line: 1, column: 1, index: 0 },
+      end: { line: 1, column: firstStatementEnd + 1, index: firstStatementEnd },
+    });
+
+    const beforeHashes = computeFileSymbolHashes(beforeIndex.locals, beforeIndex.exports, beforeSource);
+    const afterHashes = computeFileSymbolHashes(afterIndex.locals, afterIndex.exports, afterSource);
+    const hashById = new Map(beforeHashes.map((hash) => [hash.id, hash.hash]));
+
+    expect(afterHashes.find((hash) => hash.id.startsWith("users::table::"))?.hash).toBe(
+      hashById.get("users::table::0"),
+    );
+    expect(afterHashes.find((hash) => hash.id.startsWith("accounts::table::"))?.hash).not.toBe(
+      hashById.get("accounts::table::33"),
+    );
   });
 
   it("includes related SQL objects in artifact graph candidate mentions", async () => {

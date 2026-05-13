@@ -68,13 +68,13 @@ it("reports SQL definition lines from each statement's actual start", async () =
     expect(symbols).toContainEqual(
       expect.objectContaining({
         name: "accounts",
-        range: expect.objectContaining({ start: { line: 1, column: 1 } }),
+        range: expect.objectContaining({ start: expect.objectContaining({ line: 1, column: 1 }) }),
       }),
     );
     expect(symbols).toContainEqual(
       expect.objectContaining({
         name: "users",
-        range: expect.objectContaining({ start: { line: 2, column: 1 } }),
+        range: expect.objectContaining({ start: expect.objectContaining({ line: 2, column: 1 }) }),
       }),
     );
   } finally {

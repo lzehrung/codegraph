@@ -11,7 +11,11 @@ type SqlFactDraft = {
 type SqlStatementSlice = {
   text: string;
   startLine: number;
+  startColumn: number;
+  startIndex: number;
   endLine: number;
+  endColumn: number;
+  endIndex: number;
 };
 
 const IDENTIFIER_PART = String.raw`(?:"(?:""|[^"])+"|` + "`[^`]+`" + String.raw`|\[[^\]]+\]|[A-Za-z_][\w$]*)`;
@@ -37,10 +41,70 @@ const SQL_KEYWORDS = new Set([
   "returning",
 ]);
 
+function lineStartsFor(source: string): number[] {
+  const lineStarts = [0];
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === "\n") lineStarts.push(index + 1);
+  }
+  return lineStarts;
+}
+
+function positionAt(lineStarts: readonly number[], sourceLength: number, index: number): { line: number; column: number } {
+  const boundedIndex = Math.max(0, Math.min(index, sourceLength));
+  let low = 0;
+  let high = lineStarts.length - 1;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const lineStart = lineStarts[mid] ?? 0;
+    if (lineStart <= boundedIndex) {
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  const lineIndex = Math.max(0, high);
+  return {
+    line: lineIndex + 1,
+    column: boundedIndex - (lineStarts[lineIndex] ?? 0) + 1,
+  };
+}
+
+function statementSlice(
+  source: string,
+  lineStarts: readonly number[],
+  start: number,
+  end: number,
+): SqlStatementSlice | null {
+  let startIndex = start;
+  while (startIndex < end && /\s/.test(source[startIndex] ?? "")) {
+    startIndex += 1;
+  }
+
+  let endIndex = end;
+  while (endIndex > startIndex && /\s/.test(source[endIndex - 1] ?? "")) {
+    endIndex -= 1;
+  }
+
+  const text = source.slice(startIndex, endIndex);
+  if (!text) return null;
+
+  const startPosition = positionAt(lineStarts, source.length, startIndex);
+  const endPosition = positionAt(lineStarts, source.length, endIndex);
+  return {
+    text,
+    startLine: startPosition.line,
+    startColumn: startPosition.column,
+    startIndex,
+    endLine: endPosition.line,
+    endColumn: endPosition.column,
+    endIndex,
+  };
+}
+
 function splitSqlStatements(source: string): SqlStatementSlice[] {
   const statements: SqlStatementSlice[] = [];
+  const lineStarts = lineStartsFor(source);
   let start = 0;
-  let startLine = 1;
   let line = 1;
   let i = 0;
   let lookingForStatementStart = true;
@@ -52,13 +116,10 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
   let blockComment = false;
   let dollarQuote: string | null = null;
 
-  const pushStatement = (end: number, endLine: number): void => {
-    const text = source.slice(start, end).trim();
-    if (text) {
-      statements.push({ text, startLine, endLine });
-    }
+  const pushStatement = (end: number): void => {
+    const statement = statementSlice(source, lineStarts, start, end);
+    if (statement) statements.push(statement);
     start = end + 1;
-    startLine = line;
     lookingForStatementStart = true;
   };
 
@@ -71,7 +132,6 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
       if (lineComment) lineComment = false;
       if (lookingForStatementStart) {
         start = i + 1;
-        startLine = line;
       }
       i += 1;
       continue;
@@ -88,7 +148,6 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
         i += 2;
         if (lookingForStatementStart) {
           start = i;
-          startLine = line;
         }
         continue;
       }
@@ -99,7 +158,6 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
     if (lookingForStatementStart) {
       if (/\s/.test(char)) {
         start = i + 1;
-        startLine = line;
         i += 1;
         continue;
       }
@@ -114,7 +172,6 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
         continue;
       }
       start = i;
-      startLine = line;
       lookingForStatementStart = false;
     }
 
@@ -199,13 +256,13 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
       }
     }
     if (char === ";") {
-      pushStatement(i, line);
+      pushStatement(i);
     }
     i += 1;
   }
 
-  const tail = source.slice(start).trim();
-  if (tail) statements.push({ text: tail, startLine, endLine: line });
+  const tail = statementSlice(source, lineStarts, start, source.length);
+  if (tail) statements.push(tail);
   return statements;
 }
 
@@ -619,7 +676,11 @@ function toFact(
     id: `${normalizedFile}:${statement.startLine}:${draft.kind}:${objectPart}:${index}`,
     filePath: normalizedFile,
     startLine: statement.startLine,
+    startColumn: statement.startColumn,
+    startIndex: statement.startIndex,
     endLine: statement.endLine,
+    endColumn: statement.endColumn,
+    endIndex: statement.endIndex,
     role,
     kind: draft.kind,
     objectName: draft.objectName,

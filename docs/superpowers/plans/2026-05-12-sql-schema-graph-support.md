@@ -188,7 +188,11 @@ export interface SqlStatementFact {
   readonly id: string;
   readonly filePath: string;
   readonly startLine: number;
+  readonly startColumn: number;
+  readonly startIndex: number;
   readonly endLine: number;
+  readonly endColumn: number;
+  readonly endIndex: number;
   readonly role: SqlFileRole;
   readonly kind: SqlFactKind;
   readonly objectName: string | null;

@@ -238,7 +238,7 @@ const sqlContext = await collectSqlReviewContext(process.cwd(), {
 });
 ```
 
-`SqlStatementFact` records the source file, statement line range, file role, fact kind, object name, related object name, statement text, and truth tier. Review context uses explicit bridge reasons such as `changed_sql_file` and `changed_sql_literal`.
+`SqlStatementFact` records the source file, statement line/column/index range, file role, fact kind, object name, related object name, statement text, and truth tier. Review context uses explicit bridge reasons such as `changed_sql_file` and `changed_sql_literal`.
 
 ## Stable symbol handles
 
