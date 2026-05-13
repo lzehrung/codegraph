@@ -307,7 +307,7 @@ export function maskSqlStringsAndComments(statement: string): string {
   return out;
 }
 
-const SQL_OBJECT_MODIFIERS = new Set(["only"]);
+const SQL_OBJECT_MODIFIERS = new Set(["lateral", "only"]);
 
 function skipWhitespace(text: string, index: number): number {
   let nextIndex = index;

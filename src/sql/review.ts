@@ -19,7 +19,8 @@ export type SqlReviewContextOptions = {
   changedFiles: readonly string[];
 };
 
-const SQL_LITERAL_HINT = /\b(select|with|insert\s+into|update|delete\s+from|from|join)\b/i;
+const SQL_LITERAL_HINT =
+  /\b(select|with|insert\s+into|update\s+(?:only\s+)?[A-Za-z_"`[]|delete\s+from|create\s+(?:temporary\s+|temp\s+|unlogged\s+)*(?:table|view|index)|alter\s+table|drop\s+(?:table|view|index))\b/i;
 
 function isSqlFile(filePath: string): boolean {
   return path.extname(filePath).toLowerCase() === ".sql";

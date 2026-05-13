@@ -301,6 +301,19 @@ describe("SQL fact extraction", () => {
     expect(objectNames).not.toContain("public.defaults");
   });
 
+  it("handles LATERAL source modifiers as syntax instead of object names", () => {
+    const filePath = path.join(fixtureRoot, "reports", "lateral.sql");
+    const facts = extractSqlFactsFromSource(
+      filePath,
+      "SELECT * FROM public.users u JOIN LATERAL jsonb_each_text(u.settings) setting ON true;",
+    );
+
+    const objectNames = facts.map((fact) => fact.objectName);
+    expect(objectNames).toContain("public.users");
+    expect(objectNames).toContain("jsonb_each_text");
+    expect(objectNames).not.toContain("LATERAL");
+  });
+
   it("records CTE body table reads without treating CTE aliases as schema objects", () => {
     const filePath = path.join(fixtureRoot, "reports", "cte.sql");
     const facts = extractSqlFactsFromSource(
