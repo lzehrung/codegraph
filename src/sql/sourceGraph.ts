@@ -77,7 +77,6 @@ function symbolKindForFact(fact: SqlStatementFact): SymbolKind {
   if (fact.kind === "defines_table") return SymbolKind.Table;
   if (fact.kind === "defines_view") return SymbolKind.View;
   if (fact.kind === "defines_index") return SymbolKind.Index;
-  if (fact.kind === "defines_constraint") return SymbolKind.Constraint;
   if (fact.kind === "defines_routine") return SymbolKind.Routine;
   return SymbolKind.Variable;
 }

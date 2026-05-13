@@ -17,14 +17,15 @@ export type SqlReviewContext = {
 
 export type SqlReviewContextOptions = {
   changedFiles: readonly string[];
+  projectFiles?: readonly string[];
 };
 
 const SQL_IDENTIFIER_HINT = '(?:[A-Za-z_][A-Za-z0-9_$]*|"[^"\\r\\n]+"|`[^`\\r\\n]+`|\\[[^\\]\\r\\n]+\\])';
 const SQL_OBJECT_NAME_HINT = `${SQL_IDENTIFIER_HINT}(?:\\s*\\.\\s*${SQL_IDENTIFIER_HINT})*`;
-const SQL_OBJECT_TERMINATOR_HINT = "(?=\\s|\\(|;|$)";
+const SQL_OBJECT_TERMINATOR_HINT = "(?=\\s|\\(|\\)|,|;|['\"`]|$)";
 const SQL_LITERAL_HINT = new RegExp(
   [
-    "\\bselect\\b",
+    `\\bselect\\b[\\s\\S]{0,1000}?\\bfrom\\s+${SQL_OBJECT_NAME_HINT}${SQL_OBJECT_TERMINATOR_HINT}`,
     "\\bwith\\s+[A-Za-z_][A-Za-z0-9_$]*\\s+as\\b",
     `\\binsert\\s+into\\s+${SQL_OBJECT_NAME_HINT}${SQL_OBJECT_TERMINATOR_HINT}`,
     `\\bupdate\\s+(?:only\\s+)?${SQL_OBJECT_NAME_HINT}\\s+set\\b`,
@@ -62,10 +63,11 @@ async function collectSqlFacts(
   projectRoot: string,
   changedFiles: readonly string[],
   includeDiscoveredSqlFiles: boolean,
+  projectFiles: readonly string[] | undefined,
 ): Promise<SqlStatementFact[]> {
   const allSqlFiles = new Set<string>();
   if (includeDiscoveredSqlFiles) {
-    const discovered = await listProjectFiles(projectRoot);
+    const discovered = projectFiles ?? (await listProjectFiles(projectRoot));
     for (const file of discovered) {
       if (isSqlFile(file)) allSqlFiles.add(normalizePath(file));
     }
@@ -149,7 +151,7 @@ export async function collectSqlReviewContext(
   const changedSqlLiteralSources = await collectChangedSqlLiteralSources(changedFiles);
   if (changedSqlFiles.size === 0 && changedSqlLiteralSources.length === 0) return undefined;
 
-  const facts = await collectSqlFacts(projectRoot, changedFiles, changedSqlLiteralSources.length > 0);
+  const facts = await collectSqlFacts(projectRoot, changedFiles, changedSqlLiteralSources.length > 0, options.projectFiles);
   if (facts.length === 0) return undefined;
 
   const literalObjects = collectChangedSqlLiteralObjects(changedSqlLiteralSources, facts);

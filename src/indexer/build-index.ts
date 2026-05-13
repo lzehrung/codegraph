@@ -88,7 +88,12 @@ import {
 } from "./types.js";
 import { isJsFallbackUnavailableError, isJsSyntaxTree } from "../jsFallback.js";
 import { isUnsupportedParserInputError } from "../languages/filePrep.js";
-import { buildSqlFactCache, buildSqlModuleIndex, sqlCorpusSignature } from "../sql/sourceGraph.js";
+import {
+  buildSqlFactCache,
+  buildSqlModuleIndex,
+  sqlCorpusSignature,
+  type SqlFactCache,
+} from "../sql/sourceGraph.js";
 
 type IndexedFileGraphContext = {
   source: string;
@@ -548,9 +553,6 @@ async function buildIndexFromFileListShared(
   initManifestReport(report, useManifest, false);
   initNativeBackendReport(report);
   const normalizedFiles = Array.from(new Set(normalizeIndexedFileInputs(projectRoot, rawFiles ?? [], "Index file")));
-  const sqlFactCache = normalizedFiles.some((file) => path.extname(file).toLowerCase() === ".sql")
-    ? await buildSqlFactCache(normalizedFiles)
-    : undefined;
   if (normalizedFiles.length === 0 && helperOpts?.warnNoFilesMessage) {
     logWithLevel(opts?.logLevel, "warn", helperOpts.warnNoFilesMessage);
   }
@@ -602,6 +604,21 @@ async function buildIndexFromFileListShared(
     fileSignatures.set(file, sigInfo);
   }
   const sqlCorpusSig = sqlCorpusSignature(sqlFiles, fileSignatures);
+  let sqlFactCachePromise: Promise<SqlFactCache> | undefined;
+  const getSqlFactCache = (): Promise<SqlFactCache> => {
+    sqlFactCachePromise ??= buildSqlFactCache(normalizedFiles);
+    return sqlFactCachePromise;
+  };
+  const shouldProvideSqlFactCache = (
+    file: string,
+    sigInfo: FileSignature,
+    cachedEdgesEntry: ManifestFileEntry | undefined,
+  ): boolean => {
+    if (path.extname(file).toLowerCase() !== ".sql") return false;
+    if (!cachedEdgesEntry || !sqlCorpusSig || cachedEdgesEntry.sqlCorpusSig !== sqlCorpusSig) return true;
+    const matchesGitSig = !!sigInfo.gitSig && !!cachedEdgesEntry.gitSig && cachedEdgesEntry.gitSig === sigInfo.gitSig;
+    return !(matchesGitSig || cachedEdgesEntry.sig === sigInfo.sig);
+  };
   const jsonDependencies = new Set<string>();
   const workerSetup = await setupWorkerPool(opts);
   try {
@@ -645,6 +662,9 @@ async function buildIndexFromFileListShared(
           !!cachedEdgesEntry &&
           ((cachedEdgesEntry.gitSig && cachedEdgesEntry.gitSig === sigInfo.gitSig) ||
             cachedEdgesEntry.sig === sigInfo.sig);
+        const sqlFactCache = shouldProvideSqlFactCache(file, sigInfo, cachedEdgesEntry)
+          ? await getSqlFactCache()
+          : undefined;
         let edges: Edge[] = [];
         if (mod && edgesCached) {
           edges = await collectEdgesForFile(file, projectRoot, workspaceConfig, {

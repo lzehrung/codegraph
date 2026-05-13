@@ -218,6 +218,38 @@ describe("Cache invalidation and strict hashing", () => {
     );
   });
 
+  it("reuses cached SQL edges without rereading the SQL corpus", async () => {
+    const root = await mkTmpDir("dg-sql-edge-cache-no-read-");
+    const schemaPath = path.join(root, "schema.sql");
+    const reportPath = path.join(root, "report.sql");
+    await fsp.writeFile(schemaPath, "CREATE TABLE users (id integer);\n", "utf8");
+    await fsp.writeFile(reportPath, "SELECT id FROM users;\n", "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk", useBloomFilters: false });
+
+    const originalReadFile = fsp.readFile.bind(fsp);
+    const readSpy = vi.spyOn(fsp, "readFile").mockImplementation(originalReadFile);
+    try {
+      const rebuilt = await buildProjectIndex(root, { threads: 2, cache: "disk", useBloomFilters: false });
+      const reportFile = normalize(path.resolve(reportPath));
+      const schemaFile = normalize(path.resolve(schemaPath));
+
+      expect(rebuilt.graph.edges).toContainEqual(
+        expect.objectContaining({
+          from: reportFile,
+          raw: "sql:reads_from:users",
+          to: { type: "file", path: schemaFile },
+        }),
+      );
+      const sqlReads = readSpy.mock.calls
+        .map((call) => String(call[0]).replace(/\\/g, "/"))
+        .filter((file) => file.endsWith(".sql"));
+      expect(sqlReads.length).toBeLessThanOrEqual(2);
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
   it("stores git signatures for tracked files and reuses cached edges by git hash", async () => {
     const root = await mkTmpDir("dg-git-sig-");
     runGit(root, ["init"]);

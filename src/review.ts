@@ -1364,7 +1364,17 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
   }
 
   const projectFiles = index.projectFiles ?? (await discoverProjectFiles(projectRoot));
-  const sqlContext = await collectSqlReviewContext(projectRoot, { changedFiles: changedFileList });
+  const indexedFiles = Array.from(index.byFile.keys());
+  const normalizedChangedFiles = new Set(changedFileList.map(normalizePath));
+  const indexedFilesCoverMoreThanReviewSet = indexedFiles.some((file) => !normalizedChangedFiles.has(normalizePath(file)));
+  const sqlContextProjectFiles =
+    indexedFilesCoverMoreThanReviewSet && indexedFiles.some((file) => path.extname(file).toLowerCase() === ".sql")
+    ? indexedFiles
+    : undefined;
+  const sqlContext = await collectSqlReviewContext(projectRoot, {
+    changedFiles: changedFileList,
+    ...(sqlContextProjectFiles ? { projectFiles: sqlContextProjectFiles } : {}),
+  });
   const report: ReviewReport = {
     schemaVersion: REVIEW_SCHEMA_VERSION,
     status: "ok",
