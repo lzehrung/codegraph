@@ -219,7 +219,7 @@ console.log(result.columns, result.rows);
 
 ## SQL artifact facts
 
-SQL source files participate in normal project indexing through SQL-specific symbols, SQL-to-SQL object edges, and SQL navigation. These APIs expose the lower-level statement facts and candidate graph. They do not infer a current schema, and application-code string literals are bridged to SQL only through explicit review-context rules.
+SQL source files participate in normal project indexing through SQL-specific symbols, SQL-to-SQL object edges, and SQL navigation. These APIs expose the lower-level statement facts and candidate graph for common DDL/DML definitions, reads, writes, constraints, CTEs, renames, truncates, and merges. They do not infer a current schema, and application-code string literals are bridged to SQL only through explicit review-context rules.
 
 ```ts
 import {

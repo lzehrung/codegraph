@@ -45,6 +45,58 @@ describe("SQL artifact graph", () => {
     );
   });
 
+  it("adds SQL-to-SQL edges for read dependencies inside write statements", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-dml-graph-"));
+    try {
+      const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+      const pipelineFile = path.join(root, "pipeline.sql").replace(/\\/g, "/");
+      await fsp.writeFile(
+        schemaFile,
+        [
+          "CREATE TABLE public.users (id integer, organization_id integer);",
+          "CREATE TABLE public.organizations (id integer, name text);",
+          "CREATE TABLE public.audit_users (id integer);",
+        ].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(
+        pipelineFile,
+        [
+          "INSERT INTO public.audit_users SELECT id FROM public.users;",
+          "UPDATE public.users SET organization_name = o.name FROM public.organizations o WHERE o.id = organization_id;",
+          "DELETE FROM public.audit_users USING public.users WHERE audit_users.id = users.id;",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const sourceGraph = await collectGraph(root, [schemaFile, pipelineFile]);
+
+      expect(sourceGraph.edges).toContainEqual(
+        expect.objectContaining({
+          from: pipelineFile,
+          raw: "sql:reads_from:public.users",
+          to: { type: "file", path: schemaFile },
+        }),
+      );
+      expect(sourceGraph.edges).toContainEqual(
+        expect.objectContaining({
+          from: pipelineFile,
+          raw: "sql:reads_from:public.organizations",
+          to: { type: "file", path: schemaFile },
+        }),
+      );
+      expect(sourceGraph.edges).toContainEqual(
+        expect.objectContaining({
+          from: pipelineFile,
+          raw: "sql:writes_to:public.audit_users",
+          to: { type: "file", path: schemaFile },
+        }),
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("reuses SQL facts across per-file edge collection", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-cache-"));
     const files: string[] = [];

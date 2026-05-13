@@ -183,4 +183,193 @@ describe("SQL fact extraction", () => {
       }),
     ]);
   });
+
+  it("extracts all read dependencies from multi-source queries and write statements", () => {
+    const filePath = path.join(fixtureRoot, "reports", "data_flow.sql");
+    const facts = extractSqlFactsFromSource(
+      filePath,
+      [
+        "CREATE TABLE public.active_users AS SELECT id FROM public.users WHERE active = true;",
+        "INSERT INTO public.audit_users SELECT id FROM public.active_users;",
+        "UPDATE public.users SET organization_name = o.name FROM public.organizations o WHERE o.id = organization_id;",
+        "DELETE FROM public.audit_users USING public.users WHERE audit_users.id = users.id;",
+        "SELECT u.id, o.name FROM public.users u, public.organizations o WHERE o.id = u.organization_id;",
+      ].join("\n"),
+    );
+
+    expect(facts).toEqual([
+      expect.objectContaining({
+        kind: "defines_table",
+        objectName: "public.active_users",
+      }),
+      expect.objectContaining({
+        kind: "reads_from",
+        objectName: "public.users",
+      }),
+      expect.objectContaining({
+        kind: "writes_to",
+        objectName: "public.audit_users",
+      }),
+      expect.objectContaining({
+        kind: "reads_from",
+        objectName: "public.active_users",
+      }),
+      expect.objectContaining({
+        kind: "writes_to",
+        objectName: "public.users",
+      }),
+      expect.objectContaining({
+        kind: "reads_from",
+        objectName: "public.organizations",
+      }),
+      expect.objectContaining({
+        kind: "writes_to",
+        objectName: "public.audit_users",
+      }),
+      expect.objectContaining({
+        kind: "reads_from",
+        objectName: "public.users",
+      }),
+      expect.objectContaining({
+        kind: "reads_from",
+        objectName: "public.users",
+      }),
+      expect.objectContaining({
+        kind: "reads_from",
+        objectName: "public.organizations",
+      }),
+    ]);
+  });
+
+  it("extracts rename, truncate, and merge statements", () => {
+    const filePath = path.join(fixtureRoot, "migrations", "20240510120200_more_dml.sql");
+    const facts = extractSqlFactsFromSource(
+      filePath,
+      [
+        "ALTER TABLE public.users RENAME TO account_users;",
+        "TRUNCATE TABLE ONLY public.audit_users RESTART IDENTITY;",
+        "MERGE INTO public.users USING public.stage_users ON users.id = stage_users.id WHEN MATCHED THEN UPDATE SET active = true;",
+      ].join("\n"),
+    );
+
+    expect(facts).toEqual([
+      expect.objectContaining({
+        kind: "renames_object",
+        objectName: "public.users",
+        relatedObjectName: "account_users",
+      }),
+      expect.objectContaining({
+        kind: "writes_to",
+        objectName: "public.audit_users",
+      }),
+      expect.objectContaining({
+        kind: "writes_to",
+        objectName: "public.users",
+      }),
+      expect.objectContaining({
+        kind: "reads_from",
+        objectName: "public.stage_users",
+      }),
+    ]);
+  });
+
+  it("does not treat expression-level FROM keywords as table reads", () => {
+    const filePath = path.join(fixtureRoot, "reports", "expression_from.sql");
+    const facts = extractSqlFactsFromSource(
+      filePath,
+      "SELECT EXTRACT(EPOCH FROM created_at) AS created_epoch FROM public.users;",
+    );
+
+    expect(facts).toEqual([
+      expect.objectContaining({
+        kind: "reads_from",
+        objectName: "public.users",
+      }),
+    ]);
+  });
+
+  it("does not split table-valued function arguments as FROM objects", () => {
+    const filePath = path.join(fixtureRoot, "reports", "function_from.sql");
+    const facts = extractSqlFactsFromSource(
+      filePath,
+      "SELECT * FROM public.users u, jsonb_each_text(u.settings, public.defaults) setting;",
+    );
+
+    const objectNames = facts.map((fact) => fact.objectName);
+    expect(objectNames).toContain("public.users");
+    expect(objectNames).toContain("jsonb_each_text");
+    expect(objectNames).not.toContain("public.defaults");
+  });
+
+  it("records CTE body table reads without treating CTE aliases as schema objects", () => {
+    const filePath = path.join(fixtureRoot, "reports", "cte.sql");
+    const facts = extractSqlFactsFromSource(
+      filePath,
+      [
+        "WITH recent_users AS (",
+        "  SELECT id, organization_id FROM public.users WHERE created_at > now() - interval '7 days'",
+        ")",
+        "SELECT recent_users.id, organizations.name",
+        "FROM recent_users",
+        "JOIN public.organizations organizations ON organizations.id = recent_users.organization_id;",
+      ].join("\n"),
+    );
+
+    expect(facts).toEqual([
+      expect.objectContaining({
+        kind: "reads_from",
+        objectName: "public.users",
+      }),
+      expect.objectContaining({
+        kind: "joins",
+        objectName: "public.organizations",
+        relatedObjectName: null,
+      }),
+    ]);
+  });
+
+  it("extracts referenced objects from ALTER TABLE constraints", () => {
+    const filePath = path.join(fixtureRoot, "migrations", "20240510120300_fk.sql");
+    const facts = extractSqlFactsFromSource(
+      filePath,
+      [
+        "ALTER TABLE public.orders",
+        "  ADD CONSTRAINT orders_user_id_fkey",
+        "  FOREIGN KEY (user_id) REFERENCES public.users(id);",
+      ].join("\n"),
+    );
+
+    expect(facts).toEqual([
+      expect.objectContaining({
+        kind: "alters_table",
+        objectName: "public.orders",
+      }),
+      expect.objectContaining({
+        kind: "defines_constraint",
+        objectName: "public.orders",
+        relatedObjectName: "public.users",
+      }),
+    ]);
+  });
+
+  it("extracts PostgreSQL drop modifiers for indexes and materialized views", () => {
+    const filePath = path.join(fixtureRoot, "migrations", "20240510120400_drop.sql");
+    const facts = extractSqlFactsFromSource(
+      filePath,
+      ["DROP INDEX CONCURRENTLY IF EXISTS public.users_email_idx;", "DROP MATERIALIZED VIEW IF EXISTS public.active_users;"].join(
+        "\n",
+      ),
+    );
+
+    expect(facts).toEqual([
+      expect.objectContaining({
+        kind: "drops_object",
+        objectName: "public.users_email_idx",
+      }),
+      expect.objectContaining({
+        kind: "drops_object",
+        objectName: "public.active_users",
+      }),
+    ]);
+  });
 });

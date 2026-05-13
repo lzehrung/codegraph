@@ -365,15 +365,112 @@ export function sqlObjectBaseName(name: string): string {
   return parts.at(-1) ?? name;
 }
 
-function collectObjectsAfterKeywords(text: string, keywords: readonly string[]): string[] {
+function parenDepthAt(text: string, index: number): number {
+  let depth = 0;
+  for (let cursor = 0; cursor < index; cursor += 1) {
+    const char = text[cursor];
+    if (char === "(") depth += 1;
+    if (char === ")") depth = Math.max(0, depth - 1);
+  }
+  return depth;
+}
+
+function collectObjectsAfterKeywords(
+  text: string,
+  keywords: readonly string[],
+  opts?: { topLevelOnly?: boolean },
+): string[] {
   const names: string[] = [];
   const keywordPattern = keywords.map((keyword) => keyword.replace(/\s+/g, String.raw`\s+`)).join("|");
   const re = new RegExp(String.raw`\b(?:${keywordPattern})\s+`, "gi");
   for (const match of text.matchAll(re)) {
+    if (opts?.topLevelOnly && parenDepthAt(text, match.index ?? 0) > 0) continue;
     const name = objectAt(text, (match.index ?? 0) + match[0].length);
     if (name && !SQL_KEYWORDS.has(name.toLowerCase())) names.push(name);
   }
   return Array.from(new Set(names));
+}
+
+function clauseEndIndex(text: string, start: number): number {
+  const rest = text.slice(start);
+  const boundary = rest.search(
+    /\b(?:where|group\s+by|order\s+by|having|limit|offset|returning|union|intersect|except|inner\s+join|left\s+join|right\s+join|full\s+join|cross\s+join|join)\b/i,
+  );
+  return boundary < 0 ? text.length : start + boundary;
+}
+
+function splitTopLevelCommaSeparated(text: string): string[] {
+  const parts: string[] = [];
+  let start = 0;
+  let depth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "(") depth += 1;
+    if (char === ")") depth = Math.max(0, depth - 1);
+    if (char === "," && depth === 0) {
+      parts.push(text.slice(start, index));
+      start = index + 1;
+    }
+  }
+  parts.push(text.slice(start));
+  return parts;
+}
+
+function collectCommaSeparatedObjectsAfterKeywords(text: string, keywords: readonly string[]): string[] {
+  const names: string[] = [];
+  const keywordPattern = keywords.map((keyword) => keyword.replace(/\s+/g, String.raw`\s+`)).join("|");
+  const re = new RegExp(String.raw`\b(?:${keywordPattern})\s+`, "gi");
+  for (const match of text.matchAll(re)) {
+    if (parenDepthAt(text, match.index ?? 0) > 0) continue;
+    const start = (match.index ?? 0) + match[0].length;
+    const clause = text.slice(start, clauseEndIndex(text, start));
+    for (const part of splitTopLevelCommaSeparated(clause)) {
+      const name = objectAt(part, 0);
+      if (name && !SQL_KEYWORDS.has(name.toLowerCase())) names.push(name);
+    }
+  }
+  return Array.from(new Set(names));
+}
+
+function findMatchingParen(text: string, openIndex: number): number {
+  let depth = 0;
+  for (let index = openIndex; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "(") depth += 1;
+    if (char === ")") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+function cteNameKeys(name: string): string[] {
+  const normalized = name.toLowerCase();
+  const baseName = sqlObjectBaseName(name).toLowerCase();
+  return normalized === baseName ? [normalized] : [normalized, baseName];
+}
+
+function collectCteReads(text: string): { names: Set<string>; facts: SqlFactDraft[] } {
+  const names = new Set<string>();
+  const facts: SqlFactDraft[] = [];
+  const ctePattern = new RegExp(
+    String.raw`(?:\bwith\s+(?:recursive\s+)?|,\s*)(${OBJECT_NAME})(?:\s*\([^)]*\))?\s+as\s*\(`,
+    "gi",
+  );
+
+  for (const match of text.matchAll(ctePattern)) {
+    if (parenDepthAt(text, match.index ?? 0) > 0) continue;
+    const name = normalizeSqlObjectName(match[1]);
+    if (!name) continue;
+    for (const key of cteNameKeys(name)) names.add(key);
+    const bodyStart = (match.index ?? 0) + match[0].length;
+    const bodyEnd = findMatchingParen(text, bodyStart - 1);
+    if (bodyEnd < 0) continue;
+    facts.push(...extractReadFacts(text.slice(bodyStart, bodyEnd)));
+  }
+
+  return { names, facts };
 }
 
 function createDefinitionFact(text: string): SqlFactDraft | null {
@@ -409,15 +506,30 @@ function extractCreateTableConstraintFacts(text: string, tableName: string | nul
 }
 
 function extractReadFacts(text: string): SqlFactDraft[] {
-  const fromObjects = collectObjectsAfterKeywords(text, ["from"]);
-  const joinObjects = collectObjectsAfterKeywords(text, ["join", "inner join", "left join", "right join", "full join", "cross join"]);
+  const cteReads = collectCteReads(text);
+  const isCteName = (name: string): boolean => cteNameKeys(name).some((key) => cteReads.names.has(key));
+  const fromObjects = collectCommaSeparatedObjectsAfterKeywords(text, ["from", "using"]).filter(
+    (name) => !isCteName(name),
+  );
+  const joinObjects = collectObjectsAfterKeywords(
+    text,
+    ["join", "inner join", "left join", "right join", "full join", "cross join"],
+    { topLevelOnly: true },
+  ).filter((name) => !isCteName(name));
   const primaryRead = fromObjects[0] ?? null;
-  const facts: SqlFactDraft[] = [];
-  if (primaryRead) facts.push({ kind: "reads_from", objectName: primaryRead, relatedObjectName: null });
+  const facts: SqlFactDraft[] = [...cteReads.facts];
+  for (const fromName of fromObjects) {
+    facts.push({ kind: "reads_from", objectName: fromName, relatedObjectName: null });
+  }
   for (const joinName of joinObjects) {
     facts.push({ kind: "joins", objectName: joinName, relatedObjectName: primaryRead });
   }
   return facts;
+}
+
+function withoutSelfRead(readFacts: SqlFactDraft[], objectName: string | null): SqlFactDraft[] {
+  if (!objectName) return readFacts;
+  return readFacts.filter((fact) => fact.objectName !== objectName);
 }
 
 function extractStatementFactDrafts(statementText: string): SqlFactDraft[] {
@@ -426,24 +538,67 @@ function extractStatementFactDrafts(statementText: string): SqlFactDraft[] {
   if (definitionFact) {
     const constraintFacts =
       definitionFact.kind === "defines_table" ? extractCreateTableConstraintFacts(text, definitionFact.objectName) : [];
-    const readFacts = definitionFact.kind === "defines_view" ? extractReadFacts(text) : [];
+    const readFacts =
+      definitionFact.kind === "defines_view" || /\bas\s+select\b/i.test(text)
+        ? withoutSelfRead(extractReadFacts(text), definitionFact.objectName)
+        : [];
     return [definitionFact, ...constraintFacts, ...readFacts];
   }
 
-  const alterName = findObjectAfter(text, /\balter\s+table\s+(?:if\s+exists\s+)?/i);
-  if (alterName) return [{ kind: "alters_table", objectName: alterName, relatedObjectName: null }];
+  const renameSourceName = findObjectAfter(text, /\balter\s+table\s+(?:if\s+exists\s+)?/i);
+  const renameTargetName = findObjectAfter(text, /\brename\s+to\s+/i);
+  if (renameSourceName && renameTargetName) {
+    return [{ kind: "renames_object", objectName: renameSourceName, relatedObjectName: renameTargetName }];
+  }
 
-  const dropName = findObjectAfter(text, /\bdrop\s+(?:table|view|index|function|procedure|trigger)\s+(?:if\s+exists\s+)?/i);
+  const truncateName = findObjectAfter(text, /\btruncate\s+(?:table\s+)?(?:if\s+exists\s+)?/i);
+  if (truncateName) return [{ kind: "writes_to", objectName: truncateName, relatedObjectName: null }];
+
+  const mergeName = findObjectAfter(text, /\bmerge\s+into\s+/i);
+  if (mergeName) {
+    return [
+      { kind: "writes_to", objectName: mergeName, relatedObjectName: null },
+      ...withoutSelfRead(extractReadFacts(text), mergeName),
+    ];
+  }
+
+  const alterName = findObjectAfter(text, /\balter\s+table\s+(?:if\s+exists\s+)?/i);
+  if (alterName) {
+    return [
+      { kind: "alters_table", objectName: alterName, relatedObjectName: null },
+      ...extractCreateTableConstraintFacts(text, alterName),
+    ];
+  }
+
+  const dropName = findObjectAfter(
+    text,
+    /\bdrop\s+(?:(?:materialized\s+)?view|table|function|procedure|trigger)\s+(?:if\s+exists\s+)?|\bdrop\s+index\s+(?:concurrently\s+)?(?:if\s+exists\s+)?/i,
+  );
   if (dropName) return [{ kind: "drops_object", objectName: dropName, relatedObjectName: null }];
 
   const insertName = findObjectAfter(text, /\binsert\s+into\s+/i);
-  if (insertName) return [{ kind: "writes_to", objectName: insertName, relatedObjectName: null }];
+  if (insertName) {
+    return [
+      { kind: "writes_to", objectName: insertName, relatedObjectName: null },
+      ...withoutSelfRead(extractReadFacts(text), insertName),
+    ];
+  }
 
   const updateName = findObjectAfter(text, /\bupdate\s+/i);
-  if (updateName) return [{ kind: "writes_to", objectName: updateName, relatedObjectName: null }];
+  if (updateName) {
+    return [
+      { kind: "writes_to", objectName: updateName, relatedObjectName: null },
+      ...withoutSelfRead(extractReadFacts(text), updateName),
+    ];
+  }
 
   const deleteName = findObjectAfter(text, /\bdelete\s+from\s+/i);
-  if (deleteName) return [{ kind: "writes_to", objectName: deleteName, relatedObjectName: null }];
+  if (deleteName) {
+    return [
+      { kind: "writes_to", objectName: deleteName, relatedObjectName: null },
+      ...withoutSelfRead(extractReadFacts(text), deleteName),
+    ];
+  }
 
   const readFacts = extractReadFacts(text);
   if (readFacts.length > 0) return readFacts;
