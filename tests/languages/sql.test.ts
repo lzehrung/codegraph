@@ -52,6 +52,36 @@ it("indexes SQL object definitions as language symbols", async () => {
   );
 });
 
+it("reports SQL definition lines from each statement's actual start", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-statement-lines-"));
+  try {
+    const schemaFile = path.join(root, "multi_statement_schema.sql").replace(/\\/g, "/");
+    await fsp.writeFile(
+      schemaFile,
+      ["CREATE TABLE accounts (id integer);", "CREATE TABLE users (id integer);", "SELECT id FROM users;"].join("\n"),
+      "utf8",
+    );
+
+    const index = await buildProjectIndexFromFiles(root, [schemaFile]);
+    const symbols = listSymbols(index, { file: schemaFile });
+
+    expect(symbols).toContainEqual(
+      expect.objectContaining({
+        name: "accounts",
+        range: expect.objectContaining({ start: { line: 1, column: 1 } }),
+      }),
+    );
+    expect(symbols).toContainEqual(
+      expect.objectContaining({
+        name: "users",
+        range: expect.objectContaining({ start: { line: 2, column: 1 } }),
+      }),
+    );
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+});
+
 it("includes discovered SQL files in the normal repository index", async () => {
   const samplePath = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
   const schemaFile = path.join(samplePath, "001_create_users.sql").replace(/\\/g, "/");

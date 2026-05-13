@@ -71,4 +71,78 @@ describe("SQL artifact graph", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("recomputes unchanged SQL query edges when changed SQL definitions add targets", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-incremental-add-"));
+    try {
+      const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+      const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+      const files = [schemaFile, reportFile];
+      await fsp.writeFile(schemaFile, "CREATE TABLE accounts (id integer);\n", "utf8");
+      await fsp.writeFile(reportFile, "SELECT id FROM users;\n", "utf8");
+
+      const initialGraph = await collectGraph(root, files, { allFiles: files });
+      expect(
+        initialGraph.edges.some(
+          (edge) => edge.from === reportFile && edge.raw === "sql:reads_from:users" && edge.to.type === "file",
+        ),
+      ).toBe(false);
+
+      await fsp.writeFile(schemaFile, "CREATE TABLE users (id integer);\n", "utf8");
+      const incrementalGraph = await collectGraph(root, [schemaFile], {
+        allFiles: files,
+        baseGraph: initialGraph,
+        replaceFiles: new Set([schemaFile]),
+      });
+
+      expect(incrementalGraph.edges).toContainEqual(
+        expect.objectContaining({
+          from: reportFile,
+          raw: "sql:reads_from:users",
+          to: { type: "file", path: schemaFile },
+        }),
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("removes unchanged SQL query edges when changed SQL definitions drop targets", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-incremental-remove-"));
+    try {
+      const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+      const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+      const files = [schemaFile, reportFile];
+      await fsp.writeFile(schemaFile, "CREATE TABLE users (id integer);\n", "utf8");
+      await fsp.writeFile(reportFile, "SELECT id FROM users;\n", "utf8");
+
+      const initialGraph = await collectGraph(root, files, { allFiles: files });
+      expect(initialGraph.edges).toContainEqual(
+        expect.objectContaining({
+          from: reportFile,
+          raw: "sql:reads_from:users",
+          to: { type: "file", path: schemaFile },
+        }),
+      );
+
+      await fsp.writeFile(schemaFile, "CREATE TABLE accounts (id integer);\n", "utf8");
+      const incrementalGraph = await collectGraph(root, [schemaFile], {
+        allFiles: files,
+        baseGraph: initialGraph,
+        replaceFiles: new Set([schemaFile]),
+      });
+
+      expect(
+        incrementalGraph.edges.some(
+          (edge) =>
+            edge.from === reportFile &&
+            edge.raw === "sql:reads_from:users" &&
+            edge.to.type === "file" &&
+            edge.to.path === schemaFile,
+        ),
+      ).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

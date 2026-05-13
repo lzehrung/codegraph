@@ -43,6 +43,7 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
   let startLine = 1;
   let line = 1;
   let i = 0;
+  let lookingForStatementStart = true;
   let singleQuoted = false;
   let doubleQuoted = false;
   let backtickQuoted = false;
@@ -58,6 +59,7 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
     }
     start = end + 1;
     startLine = line;
+    lookingForStatementStart = true;
   };
 
   while (i < source.length) {
@@ -67,6 +69,10 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
     if (char === "\n") {
       line += 1;
       if (lineComment) lineComment = false;
+      if (lookingForStatementStart) {
+        start = i + 1;
+        startLine = line;
+      }
       i += 1;
       continue;
     }
@@ -80,10 +86,36 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
       if (char === "*" && next === "/") {
         blockComment = false;
         i += 2;
+        if (lookingForStatementStart) {
+          start = i;
+          startLine = line;
+        }
         continue;
       }
       i += 1;
       continue;
+    }
+
+    if (lookingForStatementStart) {
+      if (/\s/.test(char)) {
+        start = i + 1;
+        startLine = line;
+        i += 1;
+        continue;
+      }
+      if (char === "-" && next === "-") {
+        lineComment = true;
+        i += 2;
+        continue;
+      }
+      if (char === "/" && next === "*") {
+        blockComment = true;
+        i += 2;
+        continue;
+      }
+      start = i;
+      startLine = line;
+      lookingForStatementStart = false;
     }
 
     if (dollarQuote) {

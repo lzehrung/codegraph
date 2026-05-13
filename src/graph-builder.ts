@@ -14,6 +14,10 @@ import type { ParsedFileContext } from "./indexer/parse-context.js";
 import { collectEdgesForFile } from "./graph-edge-collector.js";
 import { buildSqlFactCache } from "./sql/sourceGraph.js";
 
+function isSqlFile(file: string): boolean {
+  return path.extname(file).toLowerCase() === ".sql";
+}
+
 export async function collectGraph(
   projectRoot: string,
   files: string[],
@@ -41,23 +45,31 @@ export async function collectGraph(
   const normalizedFiles = files.map(normalizePath);
   const normalizedAllFiles = (opts?.allFiles ?? files).map(normalizePath);
   const hasExplicitReplace = !!opts?.replaceFiles;
-  const replaceSet = hasExplicitReplace
+  const requestedReplaceSet = hasExplicitReplace
     ? new Set(Array.from(opts.replaceFiles ?? [], (file) => normalizePath(file)))
     : new Set<string>(normalizedFiles);
+  const sqlFiles = Array.from(new Set(normalizedAllFiles.filter(isSqlFile))).sort((left, right) =>
+    left.localeCompare(right),
+  );
+  const sqlFactsMayHaveChanged = normalizedFiles.some(isSqlFile) || Array.from(requestedReplaceSet).some(isSqlFile);
+  const filesToCollect = sqlFactsMayHaveChanged
+    ? Array.from(new Set([...normalizedFiles, ...sqlFiles]))
+    : normalizedFiles;
+  const replaceSet = sqlFactsMayHaveChanged
+    ? new Set([...Array.from(requestedReplaceSet), ...sqlFiles])
+    : requestedReplaceSet;
   const baseGraph = opts?.baseGraph;
   const graph: Graph = baseGraph
     ? {
         nodes: new Set(baseGraph.nodes),
         edges: baseGraph.edges.filter((edge) => !replaceSet.has(edge.from)),
       }
-    : { nodes: new Set(normalizedFiles), edges: [] };
-  for (const file of normalizedFiles) graph.nodes.add(file);
+    : { nodes: new Set(filesToCollect), edges: [] };
+  for (const file of filesToCollect) graph.nodes.add(file);
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
   const resolutionHints = normalizeResolutionHints(opts?.resolutionHints);
   initNativeBackendReport(opts?.report);
-  const sqlFactCache = normalizedAllFiles.some((file) => path.extname(file).toLowerCase() === ".sql")
-    ? await buildSqlFactCache(normalizedAllFiles)
-    : undefined;
+  const sqlFactCache = sqlFiles.length > 0 ? await buildSqlFactCache(normalizedAllFiles) : undefined;
 
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 32, 128));
 
@@ -85,7 +97,7 @@ export async function collectGraph(
     addEdgeTargetsToGraph(graph.edges);
   }
 
-  const filePromises = await mapLimit(files, conc, async (file) => {
+  const filePromises = await mapLimit(filesToCollect, conc, async (file) => {
     try {
       const normalizedFile = file.replace(/\\/g, "/");
       const sigEntry = opts?.fileSignatures?.get(normalizedFile);
@@ -122,7 +134,7 @@ export async function collectGraph(
 
   const allEdges = filePromises;
   const newEdges = allEdges.flat();
-  const angularJsEdges = await collectAngularJsFrameworkEdges(projectRoot, files, workspaceConfig, opts?.parsed);
+  const angularJsEdges = await collectAngularJsFrameworkEdges(projectRoot, filesToCollect, workspaceConfig, opts?.parsed);
   addEdgeTargetsToGraph(angularJsEdges);
   graph.edges = mergeUniqueEdges(graph.edges, newEdges, angularJsEdges);
   return graph;

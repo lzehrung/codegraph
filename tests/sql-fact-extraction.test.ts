@@ -108,4 +108,41 @@ describe("SQL fact extraction", () => {
       }),
     ]);
   });
+
+  it("tracks statement starts after separators, comments, blank lines, and string semicolons", () => {
+    const filePath = path.join(fixtureRoot, "schema.sql");
+    const facts = extractSqlFactsFromSource(
+      filePath,
+      [
+        "CREATE TABLE accounts (id integer);",
+        "",
+        "-- report table",
+        "/* audit metadata",
+        "   kept with migration */",
+        "CREATE TABLE users (id integer);",
+        "SELECT 'literal; not a statement boundary' AS value FROM users;",
+      ].join("\n"),
+    );
+
+    expect(facts).toEqual([
+      expect.objectContaining({
+        kind: "defines_table",
+        objectName: "accounts",
+        startLine: 1,
+        endLine: 1,
+      }),
+      expect.objectContaining({
+        kind: "defines_table",
+        objectName: "users",
+        startLine: 6,
+        endLine: 6,
+      }),
+      expect.objectContaining({
+        kind: "reads_from",
+        objectName: "users",
+        startLine: 7,
+        endLine: 7,
+      }),
+    ]);
+  });
 });
