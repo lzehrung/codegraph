@@ -164,6 +164,30 @@ describe("SQL artifact graph", () => {
     }
   });
 
+  it("links unqualified SQL references to a single schema-qualified object definition", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-unqualified-qualified-edge-"));
+    try {
+      const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+      const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+      await fsp.writeFile(schemaFile, "CREATE TABLE public.users (id integer);\n", "utf8");
+      await fsp.writeFile(reportFile, "SELECT id FROM users;\n", "utf8");
+
+      const sourceGraph = await collectGraph(root, [schemaFile, reportFile]);
+
+      expect(sourceGraph.edges).toContainEqual(
+        expect.objectContaining({
+          from: reportFile,
+          raw: "sql:reads_from:users",
+          to: { type: "file", path: schemaFile },
+          resolved: "heuristic",
+          confidence: 0.7,
+        }),
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not guess ambiguous SQL edges from unqualified references to schema-qualified definitions", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-ambiguous-unqualified-edge-"));
     try {
@@ -179,6 +203,44 @@ describe("SQL artifact graph", () => {
       expect(
         sourceGraph.edges.some(
           (edge) => edge.from === reportFile && edge.raw === "sql:reads_from:users" && edge.to.type === "file",
+        ),
+      ).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not emit duplicate join edges for the primary FROM object", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-join-primary-edge-"));
+    try {
+      const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+      const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+      await fsp.writeFile(
+        schemaFile,
+        ["CREATE TABLE users (id integer);", "CREATE TABLE organizations (id integer);"].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(reportFile, "SELECT * FROM users JOIN organizations ON organizations.id = users.id;\n", "utf8");
+
+      const sourceGraph = await collectGraph(root, [schemaFile, reportFile]);
+
+      expect(sourceGraph.edges).toContainEqual(
+        expect.objectContaining({
+          from: reportFile,
+          raw: "sql:reads_from:users",
+          to: { type: "file", path: schemaFile },
+        }),
+      );
+      expect(sourceGraph.edges).toContainEqual(
+        expect.objectContaining({
+          from: reportFile,
+          raw: "sql:joins:organizations",
+          to: { type: "file", path: schemaFile },
+        }),
+      );
+      expect(
+        sourceGraph.edges.some(
+          (edge) => edge.from === reportFile && edge.raw === "sql:joins:users" && edge.to.type === "file",
         ),
       ).toBe(false);
     } finally {

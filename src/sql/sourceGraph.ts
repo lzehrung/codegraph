@@ -91,7 +91,7 @@ function referenceObjectNames(fact: SqlStatementFact): string[] {
   if (SQL_REFERENCE_KINDS.has(fact.kind) && fact.objectName) {
     names.push(fact.objectName);
   }
-  if (fact.kind !== "renames_object" && fact.relatedObjectName) {
+  if (fact.kind !== "renames_object" && fact.kind !== "joins" && fact.relatedObjectName) {
     names.push(fact.relatedObjectName);
   }
   return Array.from(new Set(names));
@@ -126,8 +126,6 @@ function sqlDefinitionCandidates(cache: SqlFactCache, objectName: string): SqlDe
       confidence: exactCandidates.length === 1 ? 1 : 0.8,
     };
   }
-  if (normalized === baseName) return { candidates: [], resolved: "heuristic", confidence: 0.7 };
-
   const basenameCandidates = uniqueFacts(cache.definitionsByBaseName.get(baseName) ?? []);
   if (basenameCandidates.length !== 1) return { candidates: [], resolved: "heuristic", confidence: 0.7 };
   return {
