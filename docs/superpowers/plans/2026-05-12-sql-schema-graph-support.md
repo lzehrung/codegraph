@@ -6,7 +6,7 @@
 
 **Architecture:** Treat SQL as a normal discovered repository language with SQL-specific semantics. Extract file-local statement facts and object mentions, index SQL object symbols, create SQL-to-SQL graph edges, keep every fact tied to source provenance, and bridge SQL to application code only through explicit high-confidence evidence or PR-triggered review context.
 
-**Tech Stack:** TypeScript, Tree-sitter SQL through the JS fallback runtime, optional native Tree-sitter SQL if the Rust crate is compatible, Vitest, existing Codegraph graph/index/review APIs.
+**Tech Stack:** TypeScript, native Tree-sitter SQL through `tree-sitter-sequel`, optional JS fallback grammar support, text-based SQL statement facts for native-only/package installs, Vitest, existing Codegraph graph/index/review APIs.
 
 ---
 
@@ -294,7 +294,7 @@ Changes:
 - [ ] Add Tree-sitter SQL fallback dependency.
 - [ ] Add SQL language definition with statement chunk boundaries.
 - [ ] Add native SQL only if a parser-load test proves the Rust crate works with the native runtime.
-- [ ] If native SQL is blocked, document fallback-only SQL support in parity docs.
+- [ ] Document native SQL support and native-only coverage in parity docs.
 
 Tests:
 

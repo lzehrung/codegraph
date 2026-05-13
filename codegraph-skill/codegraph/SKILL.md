@@ -124,7 +124,7 @@ Runtime controls:
 - Graph-first document/template edges:
   HTML, Astro, Handlebars, Markdown, MDX, reStructuredText, and AsciiDoc local links, plus MDX/Astro static imports, Vue/Svelte script imports including external `script src`, and stylesheet imports for CSS, SCSS, and Less.
 - SQL support:
-  `.sql` files are discovered by default, chunked into statements, indexed as SQL object symbols, and linked through SQL-to-SQL object edges. SQL facts can appear in review context when SQL files or changed SQL literals are relevant, but application-code strings are not globally treated as SQL dependencies.
+  `.sql` files are discovered by default, chunked into statements, indexed as SQL object symbols, and linked through SQL-to-SQL object edges. SQL indexing, graphing, and navigation work in native-only installs without the optional JS fallback package. SQL facts can appear in review context when SQL files or changed SQL literals are relevant, but application-code strings are not globally treated as SQL dependencies.
 - Narrow scan scope and exclude generated/tests while preserving `.gitignore`:
   `codegraph graph --root . ./src --include-glob "**/*.ts" --ignore-glob "**/*.spec.ts" --json`
 - Disable `.gitignore` filtering when ignored/generated files are intentionally in scope:

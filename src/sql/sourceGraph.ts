@@ -5,7 +5,7 @@ import type { ModuleIndex, SymbolDef } from "../indexer/types.js";
 import { SymbolKind } from "../indexer/types.js";
 import type { Edge, Range } from "../types.js";
 import { normalizePath } from "../util/paths.js";
-import { extractSqlFactsFromSource } from "./extractFacts.js";
+import { extractSqlFactsFromSource, sqlObjectBaseName } from "./extractFacts.js";
 import type { SqlFactKind, SqlStatementFact } from "./types.js";
 
 const SQL_DEFINITION_KINDS = new Set<SqlFactKind>([
@@ -25,6 +25,11 @@ const SQL_REFERENCE_KINDS = new Set<SqlFactKind>([
   "references_object",
   "renames_object",
 ]);
+
+export type SqlFactCache = {
+  factsByFile: Map<string, SqlStatementFact[]>;
+  definitionsByName: Map<string, SqlStatementFact[]>;
+};
 
 function isSqlFile(filePath: string): boolean {
   return path.extname(filePath).toLowerCase() === ".sql";
@@ -59,6 +64,12 @@ function referenceObjectNames(fact: SqlStatementFact): string[] {
     names.push(fact.relatedObjectName);
   }
   return Array.from(new Set(names));
+}
+
+function definitionKeys(name: string): string[] {
+  const normalized = name.toLowerCase();
+  const baseName = sqlObjectBaseName(name).toLowerCase();
+  return normalized === baseName ? [normalized] : [normalized, baseName];
 }
 
 export function buildSqlModuleIndex(filePath: string, source: string): ModuleIndex {
@@ -96,33 +107,42 @@ async function readSqlFacts(filePath: string): Promise<SqlStatementFact[]> {
   return extractSqlFactsFromSource(filePath, await fsp.readFile(filePath, "utf8"));
 }
 
-function definitionKey(name: string): string {
-  return name.toLowerCase();
-}
-
-export async function collectSqlEdgesForFile(filePath: string, allFiles: readonly string[]): Promise<Edge[]> {
-  const normalizedFile = normalizePath(filePath);
-  if (!isSqlFile(normalizedFile)) return [];
-  const sqlFiles = Array.from(new Set(allFiles.map(normalizePath).filter(isSqlFile)));
+export async function buildSqlFactCache(allFiles: readonly string[]): Promise<SqlFactCache> {
+  const sqlFiles = Array.from(new Set(allFiles.map(normalizePath).filter(isSqlFile))).sort((left, right) =>
+    left.localeCompare(right),
+  );
   const factGroups = await Promise.all(sqlFiles.map(async (file) => [file, await readSqlFacts(file)] as const));
+  const factsByFile = new Map<string, SqlStatementFact[]>();
   const definitions = new Map<string, SqlStatementFact[]>();
 
-  for (const [, facts] of factGroups) {
+  for (const [file, facts] of factGroups) {
+    factsByFile.set(file, facts);
     for (const fact of facts) {
       if (!isDefinitionFact(fact) || !fact.objectName) continue;
-      const key = definitionKey(fact.objectName);
-      const existing = definitions.get(key);
-      if (existing) existing.push(fact);
-      else definitions.set(key, [fact]);
+      for (const key of definitionKeys(fact.objectName)) {
+        const existing = definitions.get(key);
+        if (existing) existing.push(fact);
+        else definitions.set(key, [fact]);
+      }
     }
   }
+  return { factsByFile, definitionsByName: definitions };
+}
 
-  const currentFacts = factGroups.find(([file]) => file === normalizedFile)?.[1] ?? [];
+export async function collectSqlEdgesForFile(
+  filePath: string,
+  allFiles: readonly string[],
+  factCache?: SqlFactCache,
+): Promise<Edge[]> {
+  const normalizedFile = normalizePath(filePath);
+  if (!isSqlFile(normalizedFile)) return [];
+  const cache = factCache ?? (await buildSqlFactCache(allFiles));
+  const currentFacts = cache.factsByFile.get(normalizedFile) ?? [];
   const edges: Edge[] = [];
   const seen = new Set<string>();
   for (const fact of currentFacts) {
     for (const objectName of referenceObjectNames(fact)) {
-      const candidates = definitions.get(definitionKey(objectName)) ?? [];
+      const candidates = cache.definitionsByName.get(objectName.toLowerCase()) ?? [];
       for (const candidate of candidates) {
         if (candidate.filePath === normalizedFile && candidate.startLine === fact.startLine) continue;
         const targetPath = candidate.filePath;

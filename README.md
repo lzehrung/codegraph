@@ -210,7 +210,7 @@ HTML, Astro, Handlebars, Markdown, MDX, reStructuredText, AsciiDoc, CSS, SCSS, a
 
 ### SQL
 
-SQL files participate in normal repository indexing. Codegraph discovers every `.sql` file by default, chunks SQL statements, extracts table/view/index/routine symbols, adds SQL-to-SQL object edges, and supports go-to-definition and find-references within SQL files. SQL is still intentionally scoped to SQL semantics: Codegraph does not infer a current schema from migrations, fixtures, dumps, or seeds, and it does not globally link arbitrary application-code strings to SQL objects.
+SQL files participate in normal repository indexing. Codegraph discovers every `.sql` file by default, chunks SQL statements, extracts table/view/index/routine symbols, adds SQL-to-SQL object edges, and supports go-to-definition and find-references within SQL files. SQL indexing, graphing, and navigation work in native-only installs without the optional JS fallback package. SQL is still intentionally scoped to SQL semantics: Codegraph does not infer a current schema from migrations, fixtures, dumps, or seeds, and it does not globally link arbitrary application-code strings to SQL objects.
 
 ### Single-file components
 

@@ -14,6 +14,17 @@ describe("Go to Definition", () => {
 
       expect(result.status).toBe("ok");
     });
+
+    it("resolves schema-qualified SQL object references", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
+      const schemaFile = path.join(samplePath, "qualified_schema.sql").replace(/\\/g, "/");
+      const reportFile = path.join(samplePath, "qualified_report.sql").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [schemaFile, reportFile]);
+
+      const result = await testGoToDefinition(index, reportFile, 1, 25, schemaFile, 1);
+
+      expect(result.status).toBe("ok");
+    });
   });
 
   describe("TypeScript", () => {

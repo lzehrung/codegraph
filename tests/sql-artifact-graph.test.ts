@@ -1,7 +1,10 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import os from "node:os";
+import fsp from "node:fs/promises";
+import { describe, expect, it, vi } from "vitest";
 import { collectGraph } from "../src/index.js";
 import { buildSqlArtifactGraphFromFiles } from "../src/sql/index.js";
+import { buildSqlFactCache, collectSqlEdgesForFile } from "../src/sql/sourceGraph.js";
 
 const fixtureRoot = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
 const sqlFiles = ["001_create_users.sql", "002_alter_users.sql", "report.sql"].map((file) =>
@@ -40,5 +43,32 @@ describe("SQL artifact graph", () => {
     expect(sourceGraph.edges.some((edge) => edge.from === app || (edge.to.type === "file" && edge.to.path === app))).toBe(
       false,
     );
+  });
+
+  it("reuses SQL facts across per-file edge collection", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-cache-"));
+    const files: string[] = [];
+    try {
+      for (let index = 0; index < 12; index += 1) {
+        const file = path.join(root, `migration_${index}.sql`).replace(/\\/g, "/");
+        const source =
+          index === 0
+            ? "CREATE TABLE users (id integer);\n"
+            : `SELECT id FROM users WHERE id = ${index};\n`;
+        await fsp.writeFile(file, source, "utf8");
+        files.push(file);
+      }
+
+      const originalReadFile = fsp.readFile.bind(fsp);
+      const readSpy = vi.spyOn(fsp, "readFile").mockImplementation(originalReadFile);
+      const cache = await buildSqlFactCache(files);
+      await Promise.all(files.map(async (file) => collectSqlEdgesForFile(file, files, cache)));
+
+      const sqlReads = readSpy.mock.calls.filter((call) => String(call[0]).endsWith(".sql"));
+      expect(sqlReads).toHaveLength(files.length);
+    } finally {
+      vi.restoreAllMocks();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });

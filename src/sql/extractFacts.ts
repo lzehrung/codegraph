@@ -1,6 +1,3 @@
-import { parseWithJsLanguage } from "../jsFallback.js";
-import { supportById } from "../languages.js";
-import type { SyntaxNodeLike } from "../languages/types.js";
 import { normalizePath } from "../util/paths.js";
 import { classifySqlFile } from "./classifySqlFile.js";
 import type { SqlFactKind, SqlFileRole, SqlStatementFact } from "./types.js";
@@ -11,206 +8,428 @@ type SqlFactDraft = {
   relatedObjectName: string | null;
 };
 
-const DEFINE_TYPES = new Set(["create_table", "create_view", "create_materialized_view"]);
-const ROUTINE_TYPES = new Set(["create_function", "create_trigger"]);
-const DROP_TYPES = new Set(["drop_table", "drop_view", "drop_index", "drop_function"]);
+type SqlStatementSlice = {
+  text: string;
+  startLine: number;
+  endLine: number;
+};
 
-function walk(node: SyntaxNodeLike, visit: (node: SyntaxNodeLike) => void): void {
-  visit(node);
-  for (const child of node.namedChildren) {
-    walk(child, visit);
+const IDENTIFIER_PART = String.raw`(?:"(?:""|[^"])+"|` + "`[^`]+`" + String.raw`|\[[^\]]+\]|[A-Za-z_][\w$]*)`;
+const OBJECT_NAME = String.raw`${IDENTIFIER_PART}(?:\s*\.\s*${IDENTIFIER_PART}){0,2}`;
+const OBJECT_NAME_RE = new RegExp(OBJECT_NAME, "iy");
+const SQL_KEYWORDS = new Set([
+  "select",
+  "from",
+  "where",
+  "join",
+  "inner",
+  "left",
+  "right",
+  "full",
+  "cross",
+  "on",
+  "group",
+  "order",
+  "limit",
+  "offset",
+  "values",
+  "set",
+  "returning",
+]);
+
+function splitSqlStatements(source: string): SqlStatementSlice[] {
+  const statements: SqlStatementSlice[] = [];
+  let start = 0;
+  let startLine = 1;
+  let line = 1;
+  let i = 0;
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let backtickQuoted = false;
+  let bracketQuoted = false;
+  let lineComment = false;
+  let blockComment = false;
+  let dollarQuote: string | null = null;
+
+  const pushStatement = (end: number, endLine: number): void => {
+    const text = source.slice(start, end).trim();
+    if (text) {
+      statements.push({ text, startLine, endLine });
+    }
+    start = end + 1;
+    startLine = line;
+  };
+
+  while (i < source.length) {
+    const char = source[i] ?? "";
+    const next = source[i + 1] ?? "";
+
+    if (char === "\n") {
+      line += 1;
+      if (lineComment) lineComment = false;
+      i += 1;
+      continue;
+    }
+
+    if (lineComment) {
+      i += 1;
+      continue;
+    }
+
+    if (blockComment) {
+      if (char === "*" && next === "/") {
+        blockComment = false;
+        i += 2;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (dollarQuote) {
+      if (source.startsWith(dollarQuote, i)) {
+        i += dollarQuote.length;
+        dollarQuote = null;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (singleQuoted) {
+      if (char === "'" && next === "'") {
+        i += 2;
+        continue;
+      }
+      if (char === "'") singleQuoted = false;
+      i += 1;
+      continue;
+    }
+
+    if (doubleQuoted) {
+      if (char === '"' && next === '"') {
+        i += 2;
+        continue;
+      }
+      if (char === '"') doubleQuoted = false;
+      i += 1;
+      continue;
+    }
+
+    if (backtickQuoted) {
+      if (char === "`") backtickQuoted = false;
+      i += 1;
+      continue;
+    }
+
+    if (bracketQuoted) {
+      if (char === "]") bracketQuoted = false;
+      i += 1;
+      continue;
+    }
+
+    if (char === "-" && next === "-") {
+      lineComment = true;
+      i += 2;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      blockComment = true;
+      i += 2;
+      continue;
+    }
+    if (char === "'") {
+      singleQuoted = true;
+      i += 1;
+      continue;
+    }
+    if (char === '"') {
+      doubleQuoted = true;
+      i += 1;
+      continue;
+    }
+    if (char === "`") {
+      backtickQuoted = true;
+      i += 1;
+      continue;
+    }
+    if (char === "[") {
+      bracketQuoted = true;
+      i += 1;
+      continue;
+    }
+    if (char === "$") {
+      const tagMatch = source.slice(i).match(/^\$[A-Za-z_][\w$]*\$|^\$\$/);
+      if (tagMatch?.[0]) {
+        dollarQuote = tagMatch[0];
+        i += dollarQuote.length;
+        continue;
+      }
+    }
+    if (char === ";") {
+      pushStatement(i, line);
+    }
+    i += 1;
   }
+
+  const tail = source.slice(start).trim();
+  if (tail) statements.push({ text: tail, startLine, endLine: line });
+  return statements;
 }
 
-function findFirstDescendant(node: SyntaxNodeLike, type: string): SyntaxNodeLike | null {
-  let found: SyntaxNodeLike | null = null;
-  walk(node, (candidate) => {
-    if (found) return;
-    if (candidate.type === type) found = candidate;
-  });
-  return found;
+function maskStringsAndComments(statement: string): string {
+  let out = "";
+  let i = 0;
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let backtickQuoted = false;
+  let bracketQuoted = false;
+  let lineComment = false;
+  let blockComment = false;
+  let dollarQuote: string | null = null;
+
+  while (i < statement.length) {
+    const char = statement[i] ?? "";
+    const next = statement[i + 1] ?? "";
+
+    if (char === "\n") {
+      lineComment = false;
+      out += "\n";
+      i += 1;
+      continue;
+    }
+
+    if (lineComment || blockComment || dollarQuote || singleQuoted) {
+      if (blockComment && char === "*" && next === "/") {
+        blockComment = false;
+        out += "  ";
+        i += 2;
+        continue;
+      }
+      if (dollarQuote && statement.startsWith(dollarQuote, i)) {
+        out += " ".repeat(dollarQuote.length);
+        i += dollarQuote.length;
+        dollarQuote = null;
+        continue;
+      }
+      if (singleQuoted && char === "'" && next === "'") {
+        out += "  ";
+        i += 2;
+        continue;
+      }
+      if (singleQuoted && char === "'") {
+        singleQuoted = false;
+      }
+      out += char === "\n" ? "\n" : " ";
+      i += 1;
+      continue;
+    }
+
+    if (doubleQuoted || backtickQuoted || bracketQuoted) {
+      out += char;
+      if (doubleQuoted && char === '"' && next === '"') {
+        out += next;
+        i += 2;
+        continue;
+      }
+      if (doubleQuoted && char === '"') doubleQuoted = false;
+      if (backtickQuoted && char === "`") backtickQuoted = false;
+      if (bracketQuoted && char === "]") bracketQuoted = false;
+      i += 1;
+      continue;
+    }
+
+    if (char === "-" && next === "-") {
+      lineComment = true;
+      out += "  ";
+      i += 2;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      blockComment = true;
+      out += "  ";
+      i += 2;
+      continue;
+    }
+    if (char === "'") {
+      singleQuoted = true;
+      out += " ";
+      i += 1;
+      continue;
+    }
+    if (char === '"') doubleQuoted = true;
+    if (char === "`") backtickQuoted = true;
+    if (char === "[") bracketQuoted = true;
+    if (char === "$") {
+      const tagMatch = statement.slice(i).match(/^\$[A-Za-z_][\w$]*\$|^\$\$/);
+      if (tagMatch?.[0]) {
+        dollarQuote = tagMatch[0];
+        out += " ".repeat(dollarQuote.length);
+        i += dollarQuote.length;
+        continue;
+      }
+    }
+    out += char;
+    i += 1;
+  }
+  return out;
 }
 
-function directChildOfType(node: SyntaxNodeLike, type: string): SyntaxNodeLike | null {
-  return node.namedChildren.find((child) => child.type === type) ?? null;
+function objectAt(text: string, index: number): string | null {
+  OBJECT_NAME_RE.lastIndex = index;
+  const match = OBJECT_NAME_RE.exec(text);
+  if (!match) return null;
+  return normalizeSqlObjectName(match[0]);
 }
 
-function normalizeObjectName(raw: string | undefined): string | null {
+function findObjectAfter(text: string, pattern: RegExp): string | null {
+  const match = pattern.exec(text);
+  if (!match?.[0]) return null;
+  return objectAt(text, match.index + match[0].length);
+}
+
+function normalizeSqlIdentifierPart(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return trimmed.slice(1, -1).replace(/""/g, '"');
+  }
+  if (trimmed.startsWith("`") && trimmed.endsWith("`")) {
+    return trimmed.slice(1, -1);
+  }
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+export function normalizeSqlObjectName(raw: string | undefined): string | null {
   const trimmed = raw?.trim();
   if (!trimmed) return null;
-  const unquoted = trimmed.replace(/^[`"[]|[`"\]]$/g, "");
-  return unquoted || null;
+  const parts = trimmed.match(new RegExp(IDENTIFIER_PART, "g")) ?? [];
+  const normalizedParts = parts.map(normalizeSqlIdentifierPart).filter(Boolean);
+  if (normalizedParts.length === 0) return null;
+  return normalizedParts.join(".");
 }
 
-function firstObjectReference(node: SyntaxNodeLike): string | null {
-  return normalizeObjectName(findFirstDescendant(node, "object_reference")?.text);
+export function sqlObjectBaseName(name: string): string {
+  const parts = name.split(".").filter(Boolean);
+  return parts.at(-1) ?? name;
 }
 
-function firstIdentifier(node: SyntaxNodeLike): string | null {
-  return normalizeObjectName(findFirstDescendant(node, "identifier")?.text);
-}
-
-function collectObjectReferences(node: SyntaxNodeLike): string[] {
-  const refs: string[] = [];
-  walk(node, (candidate) => {
-    if (candidate.type !== "object_reference") return;
-    const name = normalizeObjectName(candidate.text);
-    if (name) refs.push(name);
-  });
-  return refs;
-}
-
-function collectRelationObjects(node: SyntaxNodeLike): string[] {
+function collectObjectsAfterKeywords(text: string, keywords: readonly string[]): string[] {
   const names: string[] = [];
-  walk(node, (candidate) => {
-    if (candidate.type !== "relation") return;
-    const name = firstObjectReference(candidate);
-    if (name) names.push(name);
-  });
-  return names;
+  const keywordPattern = keywords.map((keyword) => keyword.replace(/\s+/g, String.raw`\s+`)).join("|");
+  const re = new RegExp(String.raw`\b(?:${keywordPattern})\s+`, "gi");
+  for (const match of text.matchAll(re)) {
+    const name = objectAt(text, (match.index ?? 0) + match[0].length);
+    if (name && !SQL_KEYWORDS.has(name.toLowerCase())) names.push(name);
+  }
+  return Array.from(new Set(names));
 }
 
-function collectJoinObjects(node: SyntaxNodeLike): string[] {
-  const names: string[] = [];
-  walk(node, (candidate) => {
-    if (candidate.type !== "join") return;
-    const relation = directChildOfType(candidate, "relation");
-    const name = relation ? firstObjectReference(relation) : null;
-    if (name) names.push(name);
-  });
-  return names;
-}
+function createDefinitionFact(text: string): SqlFactDraft | null {
+  const tableName = findObjectAfter(text, /\bcreate\s+(?:(?:temporary|temp|unlogged|global\s+temporary|local\s+temporary)\s+)*table\s+(?:if\s+not\s+exists\s+)?/i);
+  if (tableName) return { kind: "defines_table", objectName: tableName, relatedObjectName: null };
 
-function unique(values: readonly string[]): string[] {
-  return Array.from(new Set(values));
-}
+  const viewName = findObjectAfter(text, /\bcreate\s+(?:or\s+replace\s+)?(?:materialized\s+)?view\s+(?:if\s+not\s+exists\s+)?/i);
+  if (viewName) return { kind: "defines_view", objectName: viewName, relatedObjectName: null };
 
-function statementPrimaryNode(statement: SyntaxNodeLike): SyntaxNodeLike | null {
-  return statement.namedChildren.find((child) => child.type !== "comment") ?? null;
-}
-
-function createDefinitionFact(primary: SyntaxNodeLike): SqlFactDraft | null {
-  if (primary.type === "create_index") {
+  const indexName = findObjectAfter(text, /\bcreate\s+(?:unique\s+)?index\s+(?:concurrently\s+)?(?:if\s+not\s+exists\s+)?/i);
+  if (indexName) {
     return {
       kind: "defines_index",
-      objectName: firstIdentifier(primary),
-      relatedObjectName: firstObjectReference(primary),
+      objectName: indexName,
+      relatedObjectName: findObjectAfter(text, /\bon\s+/i),
     };
   }
-  if (ROUTINE_TYPES.has(primary.type)) {
-    return {
-      kind: "defines_routine",
-      objectName: firstObjectReference(primary) ?? firstIdentifier(primary),
-      relatedObjectName: null,
-    };
-  }
-  if (DEFINE_TYPES.has(primary.type)) {
-    return {
-      kind: primary.type === "create_table" ? "defines_table" : "defines_view",
-      objectName: firstObjectReference(primary),
-      relatedObjectName: null,
-    };
-  }
+
+  const routineName = findObjectAfter(text, /\bcreate\s+(?:or\s+replace\s+)?(?:function|procedure|trigger)\s+/i);
+  if (routineName) return { kind: "defines_routine", objectName: routineName, relatedObjectName: null };
+
   return null;
 }
 
-function extractCreateTableConstraintFacts(primary: SyntaxNodeLike, tableName: string | null): SqlFactDraft[] {
-  if (primary.type !== "create_table" || !tableName) return [];
-  const refs = unique(collectObjectReferences(primary).filter((name) => name !== tableName));
-  return refs.map((relatedObjectName) => ({
+function extractCreateTableConstraintFacts(text: string, tableName: string | null): SqlFactDraft[] {
+  if (!tableName) return [];
+  const references = collectObjectsAfterKeywords(text, ["references"]).filter((name) => name !== tableName);
+  return references.map((relatedObjectName) => ({
     kind: "defines_constraint",
     objectName: tableName,
     relatedObjectName,
   }));
 }
 
-function extractReadFacts(primary: SyntaxNodeLike): SqlFactDraft[] {
-  const fromNode = directChildOfType(primary, "from") ?? findFirstDescendant(primary, "from");
-  if (!fromNode) return [];
-  const relations = unique(collectRelationObjects(fromNode));
-  const joins = new Set(collectJoinObjects(fromNode));
-  const primaryRead = relations.find((name) => !joins.has(name)) ?? relations[0] ?? null;
+function extractReadFacts(text: string): SqlFactDraft[] {
+  const fromObjects = collectObjectsAfterKeywords(text, ["from"]);
+  const joinObjects = collectObjectsAfterKeywords(text, ["join", "inner join", "left join", "right join", "full join", "cross join"]);
+  const primaryRead = fromObjects[0] ?? null;
   const facts: SqlFactDraft[] = [];
-  if (primaryRead) {
-    facts.push({
-      kind: "reads_from",
-      objectName: primaryRead,
-      relatedObjectName: null,
-    });
-  }
-  for (const joinName of unique(Array.from(joins))) {
-    facts.push({
-      kind: "joins",
-      objectName: joinName,
-      relatedObjectName: primaryRead,
-    });
+  if (primaryRead) facts.push({ kind: "reads_from", objectName: primaryRead, relatedObjectName: null });
+  for (const joinName of joinObjects) {
+    facts.push({ kind: "joins", objectName: joinName, relatedObjectName: primaryRead });
   }
   return facts;
 }
 
-function extractStatementFactDrafts(statement: SyntaxNodeLike): SqlFactDraft[] {
-  const primary = statementPrimaryNode(statement);
-  if (!primary) return [];
-
-  const definitionFact = createDefinitionFact(primary);
+function extractStatementFactDrafts(statementText: string): SqlFactDraft[] {
+  const text = maskStringsAndComments(statementText);
+  const definitionFact = createDefinitionFact(text);
   if (definitionFact) {
-    const tableConstraints = extractCreateTableConstraintFacts(primary, definitionFact.objectName);
-    const readFacts = primary.type === "create_view" || primary.type === "create_materialized_view" ? extractReadFacts(primary) : [];
-    return [definitionFact, ...tableConstraints, ...readFacts];
+    const constraintFacts =
+      definitionFact.kind === "defines_table" ? extractCreateTableConstraintFacts(text, definitionFact.objectName) : [];
+    const readFacts = definitionFact.kind === "defines_view" ? extractReadFacts(text) : [];
+    return [definitionFact, ...constraintFacts, ...readFacts];
   }
-  if (primary.type === "alter_table") {
-    return [{ kind: "alters_table", objectName: firstObjectReference(primary), relatedObjectName: null }];
-  }
-  if (DROP_TYPES.has(primary.type)) {
-    return [{ kind: "drops_object", objectName: firstObjectReference(primary), relatedObjectName: null }];
-  }
-  if (primary.type === "insert" || primary.type === "update") {
-    return [{ kind: "writes_to", objectName: firstObjectReference(primary), relatedObjectName: null }];
-  }
-  if (primary.type === "delete") {
-    const fromNode = directChildOfType(statement, "from") ?? findFirstDescendant(statement, "from");
-    return [{ kind: "writes_to", objectName: fromNode ? firstObjectReference(fromNode) : null, relatedObjectName: null }];
-  }
-  if (primary.type === "select" || primary.type === "create_query") {
-    return extractReadFacts(statement);
-  }
+
+  const alterName = findObjectAfter(text, /\balter\s+table\s+(?:if\s+exists\s+)?/i);
+  if (alterName) return [{ kind: "alters_table", objectName: alterName, relatedObjectName: null }];
+
+  const dropName = findObjectAfter(text, /\bdrop\s+(?:table|view|index|function|procedure|trigger)\s+(?:if\s+exists\s+)?/i);
+  if (dropName) return [{ kind: "drops_object", objectName: dropName, relatedObjectName: null }];
+
+  const insertName = findObjectAfter(text, /\binsert\s+into\s+/i);
+  if (insertName) return [{ kind: "writes_to", objectName: insertName, relatedObjectName: null }];
+
+  const updateName = findObjectAfter(text, /\bupdate\s+/i);
+  if (updateName) return [{ kind: "writes_to", objectName: updateName, relatedObjectName: null }];
+
+  const deleteName = findObjectAfter(text, /\bdelete\s+from\s+/i);
+  if (deleteName) return [{ kind: "writes_to", objectName: deleteName, relatedObjectName: null }];
+
+  const readFacts = extractReadFacts(text);
+  if (readFacts.length > 0) return readFacts;
+
   return [];
 }
 
 function toFact(
   filePath: string,
   role: SqlFileRole,
-  statement: SyntaxNodeLike,
+  statement: SqlStatementSlice,
   draft: SqlFactDraft,
   index: number,
 ): SqlStatementFact {
   const normalizedFile = normalizePath(filePath);
   const objectPart = draft.objectName ?? "statement";
   return {
-    id: `${normalizedFile}:${statement.startPosition.row + 1}:${draft.kind}:${objectPart}:${index}`,
+    id: `${normalizedFile}:${statement.startLine}:${draft.kind}:${objectPart}:${index}`,
     filePath: normalizedFile,
-    startLine: statement.startPosition.row + 1,
-    endLine: statement.endPosition.row + 1,
+    startLine: statement.startLine,
+    endLine: statement.endLine,
     role,
     kind: draft.kind,
     objectName: draft.objectName,
     relatedObjectName: draft.relatedObjectName,
-    statementText: statement.text.trim(),
+    statementText: statement.text,
     truthTier: "sql_statement_fact",
   };
 }
 
 export function extractSqlFactsFromSource(filePath: string, source: string): SqlStatementFact[] {
-  const support = supportById("sql");
-  if (!support) {
-    throw new Error("SQL language support is not registered");
-  }
   const role = classifySqlFile(filePath, source);
-  const language = support.language(filePath);
-  const tree = parseWithJsLanguage(source, language);
   const facts: SqlStatementFact[] = [];
-  for (const statement of tree.rootNode.namedChildren.filter((child) => child.type === "statement")) {
-    const drafts = extractStatementFactDrafts(statement);
+  for (const statement of splitSqlStatements(source)) {
+    const drafts = extractStatementFactDrafts(statement.text);
     const resolvedDrafts =
       drafts.length > 0
         ? drafts

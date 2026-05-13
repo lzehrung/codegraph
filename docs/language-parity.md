@@ -35,7 +35,7 @@ Status key:
 | AsciiDoc         | Yes              | No                | No               | No              | No       | No              | Yes               | No           | No                  |
 | Vue              | Yes              | No                | No               | No              | Yes      | Yes             | Yes               | Yes          | Yes                 |
 | Svelte           | Yes              | No                | No               | No              | Yes      | Yes             | Yes               | Yes          | Yes                 |
-| SQL              | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Partial           | No           | No                  |
+| SQL              | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Partial           | Yes          | Yes                 |
 
 Notes:
 
@@ -48,7 +48,7 @@ Notes:
 - `HTML`, `CSS`, `Less`, `Vue`, and `Svelte` are graph/chunking-focused today. Their unsupported navigation and symbol features are covered by explicit `not_found` parity tests.
 - `Markdown` and `MDX` are graph-first today. They use shared text extraction for document links and MDX static imports, and they intentionally do not claim semantic chunking, navigation, references, or native-addon parity yet.
 - `Astro`, `Handlebars`, `reStructuredText`, and `AsciiDoc` are also graph-first today. They use shared text extraction for local links and format-specific include/import syntax, and they intentionally do not claim semantic chunking, navigation, references, or native-addon parity yet.
-- `SQL` is supported as a repository language with SQL-specific semantics. Codegraph discovers `.sql` files by default, chunks statements, extracts table/view/index/routine symbols, creates SQL-to-SQL object edges, and supports go-to-definition and find-references inside SQL files. It does not infer a current schema from migrations, seeds, dumps, or fixtures, and it does not globally link application-code string literals to SQL objects; those literals only surface SQL facts through explicit review-context bridge rules. SQL parsing currently uses the opt-in JS fallback package; native SQL support is intentionally unclaimed until the native grammar is wired and covered.
+- `SQL` is supported as a repository language with SQL-specific semantics. Codegraph discovers `.sql` files by default, chunks statements, extracts table/view/index/routine symbols, creates SQL-to-SQL object edges, and supports go-to-definition and find-references inside SQL files. It does not infer a current schema from migrations, seeds, dumps, or fixtures, and it does not globally link application-code string literals to SQL objects; those literals only surface SQL facts through explicit review-context bridge rules. SQL is covered in native-only parser ownership tests and does not require the JS fallback package for indexing, graphing, or SQL navigation.
 - One deeper semantic shape remains intentionally limited and is covered by explicit regression tests instead of an optimistic support claim: macro-expanded or otherwise non-local C typedef reference recovery beyond the current direct declaration use-site coverage.
 - Another intentionally limited semantic shape is C# alias-only `using Alias = Namespace.Type;` navigation without a companion namespace import. Graph extraction is covered, but alias-only member navigation is not claimed yet.
 

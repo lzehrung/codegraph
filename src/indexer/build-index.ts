@@ -88,7 +88,7 @@ import {
 } from "./types.js";
 import { isJsFallbackUnavailableError, isJsSyntaxTree } from "../jsFallback.js";
 import { isUnsupportedParserInputError } from "../languages/filePrep.js";
-import { buildSqlModuleIndex } from "../sql/sourceGraph.js";
+import { buildSqlFactCache, buildSqlModuleIndex } from "../sql/sourceGraph.js";
 
 type IndexedFileGraphContext = {
   source: string;
@@ -348,7 +348,7 @@ async function buildIndexedModuleForFile(args: {
   let tree: SyntaxTreeLike | undefined;
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
 
-  if (!nativeQueries && !graphOnlyLanguage) {
+  if (!nativeQueries && !graphOnlyLanguage && sup.id !== "sql") {
     const parseAttempt = attemptParsePreparedFileContext(prepared);
     const parsed = parseAttempt.parsed;
     if (parsed) {
@@ -372,16 +372,19 @@ async function buildIndexedModuleForFile(args: {
     args.bloomFilterCache.set(args.file, filter);
   }
 
-  const imports = await collectImportsForFile(args.file, args.projectRoot, {
-    source,
-    ...(tree && isJsSyntaxTree(tree) ? { tree } : {}),
-    sup,
-    ...(resolvedLang ? { lang: resolvedLang } : {}),
-    ...(nativeQueries !== undefined ? { nativeQueries } : {}),
-    graphOptions: args.graphOptions,
-    ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
-    ...(args.onFallbackImportExtraction ? { onFallbackImportExtraction: args.onFallbackImportExtraction } : {}),
-  });
+  const imports =
+    sup.id === "sql"
+      ? []
+      : await collectImportsForFile(args.file, args.projectRoot, {
+          source,
+          ...(tree && isJsSyntaxTree(tree) ? { tree } : {}),
+          sup,
+          ...(resolvedLang ? { lang: resolvedLang } : {}),
+          ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+          graphOptions: args.graphOptions,
+          ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
+          ...(args.onFallbackImportExtraction ? { onFallbackImportExtraction: args.onFallbackImportExtraction } : {}),
+        });
   collectJsonDependencies(imports, args.jsonDependencies);
   let mod: ModuleIndex;
   if (sup.id === "sql") {
@@ -545,6 +548,9 @@ async function buildIndexFromFileListShared(
   initManifestReport(report, useManifest, false);
   initNativeBackendReport(report);
   const normalizedFiles = Array.from(new Set(normalizeIndexedFileInputs(projectRoot, rawFiles ?? [], "Index file")));
+  const sqlFactCache = normalizedFiles.some((file) => path.extname(file).toLowerCase() === ".sql")
+    ? await buildSqlFactCache(normalizedFiles)
+    : undefined;
   if (normalizedFiles.length === 0 && helperOpts?.warnNoFilesMessage) {
     logWithLevel(opts?.logLevel, "warn", helperOpts.warnNoFilesMessage);
   }
@@ -638,6 +644,7 @@ async function buildIndexFromFileListShared(
             ...(onFileEdges ? { onFileEdges } : {}),
             ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
             allFiles: normalizedFiles,
+            ...(sqlFactCache ? { sqlFactCache } : {}),
           });
           if (bloomFilterCache) {
             const filter = await buildBloomFilterForFile(file);
@@ -687,6 +694,7 @@ async function buildIndexFromFileListShared(
           ...(onFileEdges ? { onFileEdges } : {}),
           ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
           allFiles: normalizedFiles,
+          ...(sqlFactCache ? { sqlFactCache } : {}),
         });
         return [file, mod ?? createEmptyModuleIndex(file), edges] as const;
       } catch (error) {
@@ -1127,6 +1135,7 @@ export async function buildProjectIndexIncremental(
               ...(opts?.native ? { native: opts.native } : {}),
               ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
               ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
+              allFiles: Array.from(allFiles),
               fileSignatures,
               cachedFileEdges: cachedGraphEntries,
               ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),

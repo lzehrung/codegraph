@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { isUnsupportedParserInputError } from "./languages/filePrep.js";
 import type { Edge, Graph } from "./types.js";
 import { loadWorkspaceConfig, normalizeResolutionHints, mapLimit } from "./util.js";
@@ -10,6 +12,7 @@ import type { GraphCacheEntry } from "./graphs/types.js";
 import type { BuildReport } from "./indexer/types.js";
 import type { ParsedFileContext } from "./indexer/parse-context.js";
 import { collectEdgesForFile } from "./graph-edge-collector.js";
+import { buildSqlFactCache } from "./sql/sourceGraph.js";
 
 export async function collectGraph(
   projectRoot: string,
@@ -31,10 +34,12 @@ export async function collectGraph(
     baseGraph?: Graph;
     replaceFiles?: Set<string>;
     logLevel?: LogLevel;
+    allFiles?: string[];
   },
 ): Promise<Graph> {
   const normalizePath = (file: string) => file.replace(/\\/g, "/");
   const normalizedFiles = files.map(normalizePath);
+  const normalizedAllFiles = (opts?.allFiles ?? files).map(normalizePath);
   const hasExplicitReplace = !!opts?.replaceFiles;
   const replaceSet = hasExplicitReplace
     ? new Set(Array.from(opts.replaceFiles ?? [], (file) => normalizePath(file)))
@@ -50,6 +55,9 @@ export async function collectGraph(
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
   const resolutionHints = normalizeResolutionHints(opts?.resolutionHints);
   initNativeBackendReport(opts?.report);
+  const sqlFactCache = normalizedAllFiles.some((file) => path.extname(file).toLowerCase() === ".sql")
+    ? await buildSqlFactCache(normalizedAllFiles)
+    : undefined;
 
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 32, 128));
 
@@ -97,7 +105,8 @@ export async function collectGraph(
         ...(opts?.onFileEdges ? { onFileEdges: opts.onFileEdges } : {}),
         ...(opts?.onFallbackImportExtraction ? { onFallbackImportExtraction: opts.onFallbackImportExtraction } : {}),
         ...(opts?.report ? { report: opts.report } : {}),
-        allFiles: normalizedFiles,
+        allFiles: normalizedAllFiles,
+        ...(sqlFactCache ? { sqlFactCache } : {}),
       });
       addEdgeTargetsToGraph(edges);
       return edges;

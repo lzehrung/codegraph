@@ -5,7 +5,7 @@ import { createNavigationProvenance, okGoToResult } from "../indexer/navigation-
 import type { FindReferencesResult, GoToRequest, GoToResult, ProjectIndex, Reference, SymbolDef } from "../indexer/types.js";
 import type { Range } from "../types.js";
 import { normalizePath } from "../util/paths.js";
-import { extractSqlFactsFromSource } from "./extractFacts.js";
+import { extractSqlFactsFromSource, normalizeSqlObjectName, sqlObjectBaseName } from "./extractFacts.js";
 
 function isSqlFile(filePath: string): boolean {
   return path.extname(filePath).toLowerCase() === ".sql";
@@ -24,26 +24,29 @@ function sqlFiles(index: ProjectIndex): string[] {
 
 function sqlDefinitions(index: ProjectIndex, objectName: string): SymbolDef[] {
   const normalizedName = objectName.toLowerCase();
-  const definitions: SymbolDef[] = [];
+  const exactDefinitions: SymbolDef[] = [];
+  const basenameDefinitions: SymbolDef[] = [];
   for (const file of sqlFiles(index)) {
     const module = index.byFile.get(file);
     if (!module) continue;
     for (const local of module.locals) {
-      if (local.localName.toLowerCase() === normalizedName) definitions.push(local);
+      const localName = local.localName.toLowerCase();
+      if (localName === normalizedName) exactDefinitions.push(local);
+      if (sqlObjectBaseName(local.localName).toLowerCase() === normalizedName) basenameDefinitions.push(local);
     }
   }
-  return definitions;
+  return exactDefinitions.length > 0 ? exactDefinitions : basenameDefinitions;
 }
 
 function wordAtPosition(source: string, line: number, column: number): string | null {
   const lineText = source.split(/\r?\n/)[line - 1];
   if (!lineText) return null;
   const zeroBasedColumn = Math.max(0, column - 1);
-  const tokenRe = /[A-Za-z_][A-Za-z0-9_$]*/g;
+  const tokenRe = /(?:"(?:""|[^"])+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_$]*)(?:\s*\.\s*(?:"(?:""|[^"])+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_$]*))*/g;
   for (const match of lineText.matchAll(tokenRe)) {
     const start = match.index ?? 0;
     const end = start + match[0].length;
-    if (zeroBasedColumn >= start && zeroBasedColumn <= end) return match[0];
+    if (zeroBasedColumn >= start && zeroBasedColumn <= end) return normalizeSqlObjectName(match[0]);
   }
   return null;
 }

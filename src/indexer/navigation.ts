@@ -46,11 +46,12 @@ export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Pro
   const mod = index.byFile.get(file);
   if (!mod) return { status: "not_found", reason: "File not indexed" };
 
+  const sqlResult = await goToSqlDefinition(index, req);
+  if (sqlResult) return sqlResult;
+
   const parsedEntry = index.parsed?.get(file);
   const context = await ensureParsedContext(file, parsedEntry);
   const sup = context.sup;
-  const sqlResult = await goToSqlDefinition(index, req);
-  if (sqlResult) return sqlResult;
   const lang = context.lang;
   const source = context.source;
   const tree = context.tree;

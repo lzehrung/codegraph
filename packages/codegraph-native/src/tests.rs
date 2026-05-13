@@ -89,6 +89,10 @@ use tree_sitter::Parser;
                 "@import \"base.css\";",
                 "(import_statement (string_value) @mod) @stmt",
             ),
+            "sql" => (
+                "CREATE TABLE users (id integer);",
+                "(statement) @stmt",
+            ),
             "svelte" => (
                 "<script src=\"./dep.js\"></script>",
                 "(script_element (start_tag (attribute (attribute_name) @attr (#eq? @attr \"src\") (quoted_attribute_value (attribute_value) @mod)))) @stmt",
@@ -134,6 +138,7 @@ use tree_sitter::Parser;
             "ruby",
             "rust",
             "scss",
+            "sql",
             "svelte",
             "swift",
             "ts",

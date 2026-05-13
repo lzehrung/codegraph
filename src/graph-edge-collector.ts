@@ -31,7 +31,7 @@ import { collectModuleSpecifiersFromSource, type FallbackImportExtractionEvent }
 import type { GraphCacheEntry } from "./graphs/types.js";
 import type { BuildReport } from "./indexer/types.js";
 import type { SyntaxTreeLike } from "./languages/types.js";
-import { collectSqlEdgesForFile } from "./sql/sourceGraph.js";
+import { collectSqlEdgesForFile, type SqlFactCache } from "./sql/sourceGraph.js";
 
 const cloneEdge = (edge: Edge): Edge => ({
   ...edge,
@@ -63,6 +63,7 @@ export async function collectEdgesForFile(
     report?: BuildReport;
     logLevel?: LogLevel;
     allFiles?: readonly string[];
+    sqlFactCache?: SqlFactCache;
   },
 ): Promise<Edge[]> {
   const normalizedFile = file.replace(/\\/g, "/");
@@ -118,7 +119,7 @@ export async function collectEdgesForFile(
 
   if (sup.id === "sql") {
     const allFiles = opts.allFiles ?? [normalizedFile];
-    const sqlEdges = await collectSqlEdgesForFile(normalizedFile, allFiles);
+    const sqlEdges = await collectSqlEdgesForFile(normalizedFile, allFiles, opts.sqlFactCache);
     emitCacheEntry(sqlEdges);
     return sqlEdges;
   }
