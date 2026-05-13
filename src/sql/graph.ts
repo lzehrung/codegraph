@@ -66,8 +66,15 @@ function candidateKindForFact(fact: SqlStatementFact): SqlArtifactNodeKind {
   if (fact.kind === "defines_table" || fact.kind === "alters_table") return "sql_table_candidate";
   if (fact.kind === "defines_view") return "sql_view_candidate";
   if (fact.kind === "defines_index") return "sql_index_candidate";
-  if (fact.kind === "defines_constraint") return "sql_constraint_candidate";
+  if (fact.kind === "defines_constraint") return "sql_table_candidate";
   if (fact.kind === "defines_routine") return "sql_routine_candidate";
+  return "sql_object_candidate";
+}
+
+function relatedCandidateKindForFact(fact: SqlStatementFact): SqlArtifactNodeKind {
+  if (fact.kind === "defines_constraint" || fact.kind === "defines_index" || fact.kind === "joins") {
+    return "sql_table_candidate";
+  }
   return "sql_object_candidate";
 }
 
@@ -88,6 +95,12 @@ function edgeKindForFact(kind: SqlFactKind): SqlArtifactEdgeKind {
   return "sql_statement_references";
 }
 
+function relatedEdgeKindForFact(kind: SqlFactKind): SqlArtifactEdgeKind {
+  if (kind === "joins") return "sql_statement_reads";
+  if (kind === "renames_object") return "sql_statement_alters";
+  return "sql_statement_references";
+}
+
 function provenance(fact: SqlStatementFact): SqlArtifactEdge["provenance"] {
   return {
     filePath: fact.filePath,
@@ -100,6 +113,39 @@ function provenance(fact: SqlStatementFact): SqlArtifactEdge["provenance"] {
 function addNode(nodes: Map<string, SqlArtifactNode>, node: SqlArtifactNode): void {
   if (nodes.has(node.id)) return;
   nodes.set(node.id, node);
+}
+
+function addCandidateMention(
+  nodes: Map<string, SqlArtifactNode>,
+  edges: SqlArtifactEdge[],
+  statementId: string,
+  fact: SqlStatementFact,
+  name: string,
+  candidateKind: SqlArtifactNodeKind,
+  edgeKind: SqlArtifactEdgeKind,
+): void {
+  const candidateId = candidateNodeId(candidateKind, name);
+  addNode(nodes, {
+    id: candidateId,
+    kind: candidateKind,
+    namespace: "sql",
+    name,
+    truthTier: "sql_schema_candidate",
+  });
+  edges.push({
+    from: statementId,
+    to: candidateId,
+    kind: edgeKind,
+    namespace: "sql",
+    provenance: provenance(fact),
+  });
+  edges.push({
+    from: candidateId,
+    to: statementId,
+    kind: "sql_candidate_mentions",
+    namespace: "sql",
+    provenance: provenance(fact),
+  });
 }
 
 function sortNodes(left: SqlArtifactNode, right: SqlArtifactNode): number {
@@ -144,30 +190,28 @@ export function projectSqlFactsToGraph(facts: readonly SqlStatementFact[]): SqlA
       provenance: provenance(fact),
     });
 
-    if (!fact.objectName) continue;
-    const candidateKind = candidateKindForFact(fact);
-    const candidateId = candidateNodeId(candidateKind, fact.objectName);
-    addNode(nodes, {
-      id: candidateId,
-      kind: candidateKind,
-      namespace: "sql",
-      name: fact.objectName,
-      truthTier: "sql_schema_candidate",
-    });
-    edges.push({
-      from: statementId,
-      to: candidateId,
-      kind: edgeKindForFact(fact.kind),
-      namespace: "sql",
-      provenance: provenance(fact),
-    });
-    edges.push({
-      from: candidateId,
-      to: statementId,
-      kind: "sql_candidate_mentions",
-      namespace: "sql",
-      provenance: provenance(fact),
-    });
+    if (fact.objectName) {
+      addCandidateMention(
+        nodes,
+        edges,
+        statementId,
+        fact,
+        fact.objectName,
+        candidateKindForFact(fact),
+        edgeKindForFact(fact.kind),
+      );
+    }
+    if (fact.relatedObjectName && fact.relatedObjectName.toLowerCase() !== fact.objectName?.toLowerCase()) {
+      addCandidateMention(
+        nodes,
+        edges,
+        statementId,
+        fact,
+        fact.relatedObjectName,
+        relatedCandidateKindForFact(fact),
+        relatedEdgeKindForFact(fact.kind),
+      );
+    }
   }
 
   return {

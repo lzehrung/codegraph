@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildReviewReport } from "../src/index.js";
+import { collectSqlReviewContext } from "../src/sql/index.js";
 
 async function mkTmpDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "cg-sql-review-"));
@@ -81,5 +82,22 @@ describe("SQL review context", () => {
 
     expect(report.sqlContext?.entries ?? []).toEqual([]);
     expect(report.graphDelta).toEqual([]);
+  });
+
+  it("skips the SQL corpus when changed code has no SQL-like text", async () => {
+    const root = await mkTmpDir();
+    await writeFile(path.join(root, "db", "schema.sql"), "CREATE TABLE users (id integer);\n");
+    const code = await writeFile(path.join(root, "src", "app.ts"), "export const count = 1;\n");
+    const originalReadFile = fs.readFile.bind(fs);
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation(originalReadFile);
+
+    try {
+      const context = await collectSqlReviewContext(root, { changedFiles: [code] });
+
+      expect(context).toBeUndefined();
+      expect(readSpy.mock.calls.some((call) => String(call[0]).endsWith(".sql"))).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });

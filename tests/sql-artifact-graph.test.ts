@@ -4,7 +4,8 @@ import fsp from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { collectGraph } from "../src/index.js";
 import { buildSqlArtifactGraphFromFiles } from "../src/sql/index.js";
-import { buildSqlFactCache, collectSqlEdgesForFile } from "../src/sql/sourceGraph.js";
+import { buildSqlFactCache, buildSqlModuleIndex, collectSqlEdgesForFile } from "../src/sql/sourceGraph.js";
+import { SymbolKind } from "../src/indexer/types.js";
 
 const fixtureRoot = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
 const sqlFiles = ["001_create_users.sql", "002_alter_users.sql", "report.sql"].map((file) =>
@@ -132,6 +133,75 @@ describe("SQL artifact graph", () => {
             edge.to.path === schemaFile,
         ),
       ).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not emit SQL dependency self-edges inside a single SQL file", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-self-edge-"));
+    try {
+      const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+      await fsp.writeFile(schemaFile, "CREATE TABLE users (id integer);\nSELECT id FROM users;\n", "utf8");
+
+      const sourceGraph = await collectGraph(root, [schemaFile]);
+
+      expect(
+        sourceGraph.edges.some(
+          (edge) => edge.from === schemaFile && edge.to.type === "file" && edge.to.path === schemaFile,
+        ),
+      ).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not index foreign-key constraint facts as duplicate table-named SQL definitions", () => {
+    const moduleIndex = buildSqlModuleIndex(
+      "schema.sql",
+      "CREATE TABLE users (id integer, organization_id integer REFERENCES organizations(id));\n",
+    );
+
+    expect(moduleIndex.locals.filter((local) => local.localName === "users")).toEqual([
+      expect.objectContaining({ kind: SymbolKind.Table }),
+    ]);
+    expect(moduleIndex.locals.some((local) => local.kind === SymbolKind.Constraint)).toBe(false);
+  });
+
+  it("includes related SQL objects in artifact graph candidate mentions", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-related-artifacts-"));
+    try {
+      const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+      await fsp.writeFile(
+        schemaFile,
+        [
+          "CREATE TABLE organizations (id integer primary key);",
+          "CREATE TABLE users (id integer, organization_id integer REFERENCES organizations(id));",
+          "CREATE INDEX idx_users_org ON users (organization_id);",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const graph = await buildSqlArtifactGraphFromFiles([schemaFile]);
+
+      expect(graph.nodes).toContainEqual(
+        expect.objectContaining({
+          kind: "sql_table_candidate",
+          name: "organizations",
+        }),
+      );
+      expect(graph.edges).toContainEqual(
+        expect.objectContaining({
+          kind: "sql_statement_references",
+          to: "sql:candidate:sql_table_candidate:organizations",
+        }),
+      );
+      expect(graph.edges).toContainEqual(
+        expect.objectContaining({
+          kind: "sql_statement_references",
+          to: "sql:candidate:sql_table_candidate:users",
+        }),
+      );
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

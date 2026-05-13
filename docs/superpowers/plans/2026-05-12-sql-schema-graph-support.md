@@ -237,7 +237,7 @@ Add SQL graph node kinds:
 - `sql_table_candidate`
 - `sql_view_candidate`
 - `sql_index_candidate`
-- `sql_constraint_candidate`
+- `sql_constraint_candidate` for future named-constraint extraction; current foreign-key facts reference table candidates instead of inventing constraint names
 - `sql_routine_candidate`
 
 Add SQL graph edge kinds:

@@ -2,7 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { listProjectFiles } from "../util/projectFiles.js";
 import { normalizePath } from "../util/paths.js";
-import { extractSqlFactsFromSource } from "./extractFacts.js";
+import { extractSqlFactsFromSource, sqlObjectBaseName } from "./extractFacts.js";
 import type { SqlBridgeReason, SqlStatementFact } from "./types.js";
 
 export type SqlReviewContextEntry = {
@@ -25,14 +25,6 @@ function isSqlFile(filePath: string): boolean {
   return path.extname(filePath).toLowerCase() === ".sql";
 }
 
-function objectNamePattern(name: string): RegExp {
-  return new RegExp(`(^|[^A-Za-z0-9_])${escapeRegExp(name)}([^A-Za-z0-9_]|$)`, "i");
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function entryKey(entry: SqlReviewContextEntry): string {
   return `${entry.reason}:${entry.fact.id}:${entry.objectName ?? ""}`;
 }
@@ -51,9 +43,18 @@ async function readExistingFile(filePath: string): Promise<string | null> {
   }
 }
 
-async function collectSqlFacts(projectRoot: string, changedFiles: readonly string[]): Promise<SqlStatementFact[]> {
-  const discovered = await listProjectFiles(projectRoot);
-  const allSqlFiles = new Set(discovered.filter(isSqlFile).map(normalizePath));
+async function collectSqlFacts(
+  projectRoot: string,
+  changedFiles: readonly string[],
+  includeDiscoveredSqlFiles: boolean,
+): Promise<SqlStatementFact[]> {
+  const allSqlFiles = new Set<string>();
+  if (includeDiscoveredSqlFiles) {
+    const discovered = await listProjectFiles(projectRoot);
+    for (const file of discovered) {
+      if (isSqlFile(file)) allSqlFiles.add(normalizePath(file));
+    }
+  }
   for (const changedFile of changedFiles) {
     const normalized = normalizePath(changedFile);
     if (isSqlFile(normalized)) allSqlFiles.add(normalized);
@@ -68,19 +69,54 @@ async function collectSqlFacts(projectRoot: string, changedFiles: readonly strin
   return factGroups.flat();
 }
 
-async function collectChangedSqlLiteralObjects(
-  changedFiles: readonly string[],
-  facts: readonly SqlStatementFact[],
-): Promise<Set<string>> {
-  const objectNames = new Set(facts.map((fact) => fact.objectName).filter((name): name is string => !!name));
-  const matched = new Set<string>();
+async function collectChangedSqlLiteralSources(changedFiles: readonly string[]): Promise<string[]> {
+  const sources: string[] = [];
   for (const changedFile of changedFiles) {
     if (isSqlFile(changedFile)) continue;
     const source = await readExistingFile(changedFile);
     if (!source || !SQL_LITERAL_HINT.test(source)) continue;
-    for (const objectName of objectNames) {
-      if (objectNamePattern(objectName).test(source)) {
-        matched.add(objectName.toLowerCase());
+    sources.push(source);
+  }
+  return sources;
+}
+
+function objectLookupKeys(name: string): string[] {
+  const normalized = name.toLowerCase();
+  const baseName = sqlObjectBaseName(name).toLowerCase();
+  return normalized === baseName ? [normalized] : [normalized, baseName];
+}
+
+function changedSourceObjectMentions(source: string): Set<string> {
+  const mentions = new Set<string>();
+  const objectRe = /[A-Za-z_][A-Za-z0-9_$]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_$]*)*/g;
+  for (const match of source.matchAll(objectRe)) {
+    const normalized = match[0].replace(/\s*\.\s*/g, ".").toLowerCase();
+    mentions.add(normalized);
+    mentions.add(sqlObjectBaseName(normalized).toLowerCase());
+  }
+  return mentions;
+}
+
+function collectChangedSqlLiteralObjects(
+  changedSqlLiteralSources: readonly string[],
+  facts: readonly SqlStatementFact[],
+): Set<string> {
+  const objectNamesByKey = new Map<string, Set<string>>();
+  for (const fact of facts) {
+    if (!fact.objectName) continue;
+    const canonicalName = fact.objectName.toLowerCase();
+    for (const key of objectLookupKeys(fact.objectName)) {
+      const existing = objectNamesByKey.get(key);
+      if (existing) existing.add(canonicalName);
+      else objectNamesByKey.set(key, new Set([canonicalName]));
+    }
+  }
+
+  const matched = new Set<string>();
+  for (const source of changedSqlLiteralSources) {
+    for (const mention of changedSourceObjectMentions(source)) {
+      for (const objectName of objectNamesByKey.get(mention) ?? []) {
+        matched.add(objectName);
       }
     }
   }
@@ -95,10 +131,13 @@ export async function collectSqlReviewContext(
   if (changedFiles.length === 0) return undefined;
 
   const changedSqlFiles = new Set(changedFiles.filter(isSqlFile));
-  const facts = await collectSqlFacts(projectRoot, changedFiles);
+  const changedSqlLiteralSources = await collectChangedSqlLiteralSources(changedFiles);
+  if (changedSqlFiles.size === 0 && changedSqlLiteralSources.length === 0) return undefined;
+
+  const facts = await collectSqlFacts(projectRoot, changedFiles, changedSqlLiteralSources.length > 0);
   if (facts.length === 0) return undefined;
 
-  const literalObjects = await collectChangedSqlLiteralObjects(changedFiles, facts);
+  const literalObjects = collectChangedSqlLiteralObjects(changedSqlLiteralSources, facts);
   const entries = new Map<string, SqlReviewContextEntry>();
   const addEntry = (entry: SqlReviewContextEntry): void => {
     entries.set(entryKey(entry), entry);

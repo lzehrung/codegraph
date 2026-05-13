@@ -12,7 +12,6 @@ const SQL_DEFINITION_KINDS = new Set<SqlFactKind>([
   "defines_table",
   "defines_view",
   "defines_index",
-  "defines_constraint",
   "defines_routine",
 ]);
 
@@ -162,7 +161,7 @@ export async function collectSqlEdgesForFile(
     for (const objectName of referenceObjectNames(fact)) {
       const candidates = sqlDefinitionCandidates(cache, objectName);
       for (const candidate of candidates) {
-        if (candidate.filePath === normalizedFile && candidate.startLine === fact.startLine) continue;
+        if (candidate.filePath === normalizedFile) continue;
         const targetPath = candidate.filePath;
         const edge: Edge = {
           from: normalizedFile,
