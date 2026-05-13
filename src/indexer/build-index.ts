@@ -88,7 +88,7 @@ import {
 } from "./types.js";
 import { isJsFallbackUnavailableError, isJsSyntaxTree } from "../jsFallback.js";
 import { isUnsupportedParserInputError } from "../languages/filePrep.js";
-import { buildSqlFactCache, buildSqlModuleIndex } from "../sql/sourceGraph.js";
+import { buildSqlFactCache, buildSqlModuleIndex, sqlCorpusSignature } from "../sql/sourceGraph.js";
 
 type IndexedFileGraphContext = {
   source: string;
@@ -588,8 +588,21 @@ async function buildIndexFromFileListShared(
   const gitSigMap = useGitSignatures
     ? await getGitBlobHashes(projectRoot, normalizedFiles, { gitAvailable })
     : new Map<string, string>();
-  const jsonDependencies = new Set<string>();
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
+  const sqlFiles = normalizedFiles
+    .filter((file) => path.extname(file).toLowerCase() === ".sql")
+    .sort((left, right) => left.localeCompare(right));
+  const sqlFileSignatureEntries = await mapLimit(sqlFiles, conc, async (file) => {
+    const sigInfo = await fileSignature(file, opts?.cacheStrict, gitSigMap.get(file), {
+      forceContentHash: cacheEnabled,
+    });
+    return [file, sigInfo] as const;
+  });
+  for (const [file, sigInfo] of sqlFileSignatureEntries) {
+    fileSignatures.set(file, sigInfo);
+  }
+  const sqlCorpusSig = sqlCorpusSignature(sqlFiles, fileSignatures);
+  const jsonDependencies = new Set<string>();
   const workerSetup = await setupWorkerPool(opts);
   try {
     const useBloomFilters = opts?.useBloomFilters ?? true;
@@ -606,6 +619,7 @@ async function buildIndexFromFileListShared(
           manifestEntries.set(file, {
             sig: entry.sig,
             ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
+            ...(entry.sqlCorpusSig ? { sqlCorpusSig: entry.sqlCorpusSig } : {}),
             edges: entry.edges,
           });
         }
@@ -614,10 +628,13 @@ async function buildIndexFromFileListShared(
     const totalFiles = normalizedFiles.length;
     const fileResults = await mapLimit(normalizedFiles, conc, async (file) => {
       try {
-        const sigInfo = await fileSignature(file, opts?.cacheStrict, gitSigMap.get(file), {
-          forceContentHash: cacheEnabled,
-        });
-        fileSignatures.set(file, sigInfo);
+        let sigInfo = fileSignatures.get(file);
+        if (!sigInfo) {
+          sigInfo = await fileSignature(file, opts?.cacheStrict, gitSigMap.get(file), {
+            forceContentHash: cacheEnabled,
+          });
+          fileSignatures.set(file, sigInfo);
+        }
         const cacheSig = cacheEnabled ? await cacheSignatureForFile(file, sigInfo) : sigInfo.cacheSig;
         let mod: ModuleIndex | null = cacheEnabled ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
         if (mod && fileReport) {
@@ -640,6 +657,7 @@ async function buildIndexFromFileListShared(
             ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
             ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
             fileSignature: sigInfo,
+            ...(sqlCorpusSig ? { sqlCorpusSig } : {}),
             ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
             ...(onFileEdges ? { onFileEdges } : {}),
             ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
@@ -690,6 +708,7 @@ async function buildIndexFromFileListShared(
           ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
           ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
           fileSignature: sigInfo,
+          ...(sqlCorpusSig ? { sqlCorpusSig } : {}),
           ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
           ...(onFileEdges ? { onFileEdges } : {}),
           ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
@@ -1146,6 +1165,7 @@ export async function buildProjectIndexIncremental(
                 manifestEntries.set(file, {
                   sig: entry.sig,
                   ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
+                  ...(entry.sqlCorpusSig ? { sqlCorpusSig: entry.sqlCorpusSig } : {}),
                   edges: entry.edges,
                 });
               },

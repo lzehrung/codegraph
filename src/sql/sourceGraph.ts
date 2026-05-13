@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
@@ -31,6 +32,12 @@ export type SqlFactCache = {
   definitionsByBaseName: Map<string, SqlStatementFact[]>;
 };
 
+export type SqlFileSignature = {
+  sig: string;
+  gitSig?: string;
+  cacheSig?: string;
+};
+
 type SqlDefinitionCandidateMatch = {
   candidates: SqlStatementFact[];
   resolved: "heuristic" | "precise";
@@ -39,6 +46,24 @@ type SqlDefinitionCandidateMatch = {
 
 function isSqlFile(filePath: string): boolean {
   return path.extname(filePath).toLowerCase() === ".sql";
+}
+
+export function sqlCorpusSignature(
+  sqlFiles: readonly string[],
+  fileSignatures: Map<string, SqlFileSignature> | undefined,
+): string | undefined {
+  if (sqlFiles.length === 0 || !fileSignatures) return undefined;
+  const hash = crypto.createHash("sha1");
+  hash.update("sql-corpus-v1\0");
+  for (const file of sqlFiles) {
+    const signature = fileSignatures.get(file);
+    if (!signature) return undefined;
+    hash.update(file);
+    hash.update("\0");
+    hash.update(signature.cacheSig ?? signature.gitSig ?? signature.sig);
+    hash.update("\0");
+  }
+  return hash.digest("hex");
 }
 
 function rangeForFact(fact: SqlStatementFact): Range {

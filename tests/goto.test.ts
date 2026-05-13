@@ -285,6 +285,34 @@ describe("Go to Definition", () => {
         await fsp.rm(root, { recursive: true, force: true });
       }
     });
+
+    it("does not guess SQL definitions for duplicate exact object names", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-ambiguous-exact-goto-"));
+      try {
+        const schemaAFile = path.join(root, "schema_a.sql").replace(/\\/g, "/");
+        const schemaBFile = path.join(root, "schema_b.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(schemaAFile, "CREATE TABLE schema1.table1 (id integer);\n", "utf8");
+        await fsp.writeFile(schemaBFile, "CREATE TABLE schema1.table1 (id integer);\n", "utf8");
+        const query = "SELECT id FROM schema1.table1;";
+        await fsp.writeFile(reportFile, query, "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaAFile, schemaBFile, reportFile]);
+
+        const result = await testGoToDefinition(
+          index,
+          reportFile,
+          1,
+          query.indexOf("schema1.table1") + 1,
+          undefined,
+          undefined,
+          "not_found",
+        );
+
+        expect(result.status).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("TypeScript", () => {

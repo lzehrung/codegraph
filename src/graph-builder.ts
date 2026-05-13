@@ -1,5 +1,4 @@
 import path from "node:path";
-import crypto from "node:crypto";
 
 import { isUnsupportedParserInputError } from "./languages/filePrep.js";
 import type { Edge, Graph } from "./types.js";
@@ -13,30 +12,12 @@ import type { GraphCacheEntry } from "./graphs/types.js";
 import type { BuildReport } from "./indexer/types.js";
 import type { ParsedFileContext } from "./indexer/parse-context.js";
 import { collectEdgesForFile } from "./graph-edge-collector.js";
-import { buildSqlFactCache } from "./sql/sourceGraph.js";
+import { buildSqlFactCache, sqlCorpusSignature } from "./sql/sourceGraph.js";
 
 type GraphFileSignature = { sig: string; gitSig?: string; cacheSig?: string };
 
 function isSqlFile(file: string): boolean {
   return path.extname(file).toLowerCase() === ".sql";
-}
-
-function sqlCorpusSignature(
-  sqlFiles: readonly string[],
-  fileSignatures: Map<string, GraphFileSignature> | undefined,
-): string | undefined {
-  if (sqlFiles.length === 0 || !fileSignatures) return undefined;
-  const hash = crypto.createHash("sha1");
-  hash.update("sql-corpus-v1\0");
-  for (const file of sqlFiles) {
-    const signature = fileSignatures.get(file);
-    if (!signature) return undefined;
-    hash.update(file);
-    hash.update("\0");
-    hash.update(signature.cacheSig ?? signature.gitSig ?? signature.sig);
-    hash.update("\0");
-  }
-  return hash.digest("hex");
 }
 
 function canReuseSqlEdgeCache(

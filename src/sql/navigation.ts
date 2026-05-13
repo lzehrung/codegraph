@@ -76,6 +76,14 @@ function sqlDefinitionsFromLookup(lookup: SqlDefinitionLookup, objectName: strin
   return basenameDefinitions.length === 1 ? basenameDefinitions : [];
 }
 
+function preferredSqlDefinition(definitions: SymbolDef[], currentFile: string): SymbolDef | null {
+  const currentFileDefinitions = definitions.filter((definition) => definition.file === currentFile);
+  if (currentFileDefinitions.length === 1) return currentFileDefinitions[0] ?? null;
+  if (currentFileDefinitions.length > 1) return null;
+  if (definitions.length === 1) return definitions[0] ?? null;
+  return null;
+}
+
 function sqlDefinitionMatches(lookup: SqlDefinitionLookup, objectName: string): { exact: SymbolDef[]; basename: SymbolDef[] } {
   const normalizedName = objectName.toLowerCase();
   const basenameKey = sqlObjectBaseName(objectName).toLowerCase();
@@ -349,7 +357,7 @@ export async function goToSqlDefinition(index: ProjectIndex, req: GoToRequest): 
   const resolvedName = resolveQualifiedSqlName(lookup, name, statement?.text ?? null);
   if (!resolvedName) return { status: "not_found", reason: "No matching SQL object definition" };
   const definitions = sqlDefinitionsFromLookup(lookup, resolvedName);
-  const preferred = definitions.find((definition) => definition.file === normalizePath(req.file)) ?? definitions[0];
+  const preferred = preferredSqlDefinition(definitions, normalizePath(req.file));
   if (!preferred) return { status: "not_found", reason: "No matching SQL object definition" };
   return okGoToResult(index, preferred, {
     resolution: "exact",
