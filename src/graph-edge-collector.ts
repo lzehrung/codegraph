@@ -57,6 +57,7 @@ export async function collectEdgesForFile(
     resolutionHints?: string[];
     native?: NativeRuntimeMode;
     fileSignature?: { sig: string; gitSig?: string; cacheSig?: string };
+    sqlCorpusSig?: string;
     cachedFileEdges?: GraphCacheEntry;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
@@ -77,11 +78,14 @@ export async function collectEdgesForFile(
     opts.onFileEdges(normalizedFile, {
       sig,
       ...(gitSig ? { gitSig } : {}),
+      ...(sqlFile && opts.sqlCorpusSig ? { sqlCorpusSig: opts.sqlCorpusSig } : {}),
       edges: edges.map(cloneEdge),
     });
   };
 
-  const cached = !sqlFile && (sig || gitSig) ? opts.cachedFileEdges : undefined;
+  const sqlCacheIsValid = sqlFile && !!opts.sqlCorpusSig && opts.cachedFileEdges?.sqlCorpusSig === opts.sqlCorpusSig;
+  const canReadCache = !sqlFile || sqlCacheIsValid;
+  const cached = canReadCache && (sig || gitSig) ? opts.cachedFileEdges : undefined;
   const matchesGitSig = !!gitSig && !!cached?.gitSig && cached.gitSig === gitSig;
   const matchesSig = !!sig && !!cached && cached.sig === sig;
 

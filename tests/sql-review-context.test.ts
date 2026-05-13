@@ -142,4 +142,22 @@ describe("SQL review context", () => {
       await rmTmpDir(root);
     }
   });
+
+  it("does not treat a bare with token as a SQL literal hint", async () => {
+    const root = await mkTmpDir();
+    try {
+      await writeFile(path.join(root, "db", "schema.sql"), "CREATE TABLE users (id integer);\n");
+      const code = await writeFile(path.join(root, "src", "app.ts"), 'export const label = "created with care";\n');
+      const originalReadFile = fs.readFile.bind(fs);
+      const readSpy = vi.spyOn(fs, "readFile").mockImplementation(originalReadFile);
+
+      const context = await collectSqlReviewContext(root, { changedFiles: [code] });
+
+      expect(context).toBeUndefined();
+      expect(readSpy.mock.calls.some((call) => String(call[0]).endsWith(".sql"))).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+      await rmTmpDir(root);
+    }
+  });
 });

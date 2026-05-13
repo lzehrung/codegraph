@@ -20,7 +20,7 @@ export type SqlReviewContextOptions = {
 };
 
 const SQL_LITERAL_HINT =
-  /\b(select|with|insert\s+into|update\s+(?:only\s+)?[A-Za-z_"`[]|delete\s+from|create\s+(?:temporary\s+|temp\s+|unlogged\s+)*(?:table|view|index)|alter\s+table|drop\s+(?:table|view|index))\b/i;
+  /\b(select|with\s+[A-Za-z_][A-Za-z0-9_$]*\s+as|insert\s+into|update\s+(?:only\s+)?[A-Za-z_"`[]|delete\s+from|create\s+(?:temporary\s+|temp\s+|unlogged\s+)*(?:table|view|index)|alter\s+table|drop\s+(?:table|view|index))\b/i;
 
 function isSqlFile(filePath: string): boolean {
   return path.extname(filePath).toLowerCase() === ".sql";

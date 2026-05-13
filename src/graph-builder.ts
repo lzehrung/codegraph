@@ -1,4 +1,5 @@
 import path from "node:path";
+import crypto from "node:crypto";
 
 import { isUnsupportedParserInputError } from "./languages/filePrep.js";
 import type { Edge, Graph } from "./types.js";
@@ -14,8 +15,42 @@ import type { ParsedFileContext } from "./indexer/parse-context.js";
 import { collectEdgesForFile } from "./graph-edge-collector.js";
 import { buildSqlFactCache } from "./sql/sourceGraph.js";
 
+type GraphFileSignature = { sig: string; gitSig?: string; cacheSig?: string };
+
 function isSqlFile(file: string): boolean {
   return path.extname(file).toLowerCase() === ".sql";
+}
+
+function sqlCorpusSignature(
+  sqlFiles: readonly string[],
+  fileSignatures: Map<string, GraphFileSignature> | undefined,
+): string | undefined {
+  if (sqlFiles.length === 0 || !fileSignatures) return undefined;
+  const hash = crypto.createHash("sha1");
+  hash.update("sql-corpus-v1\0");
+  for (const file of sqlFiles) {
+    const signature = fileSignatures.get(file);
+    if (!signature) return undefined;
+    hash.update(file);
+    hash.update("\0");
+    hash.update(signature.cacheSig ?? signature.gitSig ?? signature.sig);
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
+
+function canReuseSqlEdgeCache(
+  file: string,
+  sqlCorpusSig: string | undefined,
+  fileSignatures: Map<string, GraphFileSignature> | undefined,
+  cachedFileEdges: Map<string, GraphCacheEntry> | undefined,
+): boolean {
+  if (!sqlCorpusSig || !fileSignatures || !cachedFileEdges) return false;
+  const signature = fileSignatures.get(file);
+  const cached = cachedFileEdges.get(file);
+  if (!signature || !cached || cached.sqlCorpusSig !== sqlCorpusSig) return false;
+  const matchesGitSig = !!signature.gitSig && !!cached.gitSig && cached.gitSig === signature.gitSig;
+  return matchesGitSig || cached.sig === signature.sig;
 }
 
 export async function collectGraph(
@@ -30,7 +65,7 @@ export async function collectGraph(
     dynamicImportHeuristics?: boolean;
     resolutionHints?: string[];
     native?: NativeRuntimeMode;
-    fileSignatures?: Map<string, { sig: string; gitSig?: string; cacheSig?: string }>;
+    fileSignatures?: Map<string, GraphFileSignature>;
     cachedFileEdges?: Map<string, GraphCacheEntry>;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
@@ -69,7 +104,15 @@ export async function collectGraph(
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
   const resolutionHints = normalizeResolutionHints(opts?.resolutionHints);
   initNativeBackendReport(opts?.report);
-  const sqlFactCache = sqlFiles.length > 0 ? await buildSqlFactCache(normalizedAllFiles) : undefined;
+  const sqlCorpusSig = sqlCorpusSignature(sqlFiles, opts?.fileSignatures);
+  const sqlFactCacheNeeded =
+    sqlFiles.length > 0 &&
+    filesToCollect.some((file) => {
+      if (!isSqlFile(file)) return false;
+      const shouldReplace = hasExplicitReplace && replaceSet.has(file);
+      return shouldReplace || !canReuseSqlEdgeCache(file, sqlCorpusSig, opts?.fileSignatures, opts?.cachedFileEdges);
+    });
+  const sqlFactCache = sqlFactCacheNeeded ? await buildSqlFactCache(normalizedAllFiles) : undefined;
 
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 32, 128));
 
@@ -113,6 +156,7 @@ export async function collectGraph(
         resolutionHints,
         ...(opts?.native ? { native: opts.native } : {}),
         ...(sigEntry ? { fileSignature: sigEntry } : {}),
+        ...(sqlCorpusSig ? { sqlCorpusSig } : {}),
         ...(cachedFileEdges ? { cachedFileEdges } : {}),
         ...(opts?.onFileEdges ? { onFileEdges: opts.onFileEdges } : {}),
         ...(opts?.onFallbackImportExtraction ? { onFallbackImportExtraction: opts.onFallbackImportExtraction } : {}),

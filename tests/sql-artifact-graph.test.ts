@@ -7,6 +7,7 @@ import { buildSqlArtifactGraphFromFiles } from "../src/sql/index.js";
 import { buildSqlFactCache, buildSqlModuleIndex, collectSqlEdgesForFile } from "../src/sql/sourceGraph.js";
 import { SymbolKind } from "../src/indexer/types.js";
 import { computeFileSymbolHashes } from "../src/util/symbolHash.js";
+import type { GraphCacheEntry } from "../src/graphs/types.js";
 
 const fixtureRoot = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
 const sqlFiles = ["001_create_users.sql", "002_alter_users.sql", "report.sql"].map((file) =>
@@ -302,6 +303,112 @@ describe("SQL artifact graph", () => {
       expect(sqlReads).toHaveLength(files.length);
     } finally {
       vi.restoreAllMocks();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses SQL edge cache entries when the SQL corpus signature is unchanged", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-edge-cache-reuse-"));
+    try {
+      const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+      const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+      const files = [schemaFile, reportFile];
+      await fsp.writeFile(schemaFile, "CREATE TABLE users (id integer);\n", "utf8");
+      await fsp.writeFile(reportFile, "SELECT id FROM users;\n", "utf8");
+      const fileSignatures = new Map([
+        [schemaFile, { sig: "schema-v1", cacheSig: "schema-v1" }],
+        [reportFile, { sig: "report-v1", cacheSig: "report-v1" }],
+      ]);
+      const cachedEntries = new Map<string, GraphCacheEntry>();
+      await collectGraph(root, files, {
+        allFiles: files,
+        fileSignatures,
+        onFileEdges: (file, entry) => cachedEntries.set(file, entry),
+      });
+      const reportEntry = cachedEntries.get(reportFile);
+      expect(reportEntry?.sqlCorpusSig).toEqual(expect.any(String));
+      expect(reportEntry?.edges).toContainEqual(
+        expect.objectContaining({
+          from: reportFile,
+          raw: "sql:reads_from:users",
+          to: { type: "file", path: schemaFile },
+        }),
+      );
+      const cachedReportEntry = reportEntry
+        ? {
+            ...reportEntry,
+            edges: reportEntry.edges.map((edge) =>
+              edge.raw === "sql:reads_from:users" ? { ...edge, raw: "sql:cached:reads_from:users" } : edge,
+            ),
+          }
+        : undefined;
+      const cachedFileEdges =
+        cachedReportEntry === undefined
+          ? cachedEntries
+          : new Map([...cachedEntries, [reportFile, cachedReportEntry]]);
+      const originalReadFile = fsp.readFile.bind(fsp);
+      const readSpy = vi.spyOn(fsp, "readFile").mockImplementation(originalReadFile);
+
+      const cachedGraph = await collectGraph(root, files, {
+        allFiles: files,
+        fileSignatures,
+        cachedFileEdges,
+      });
+
+      expect(cachedGraph.edges).toContainEqual(
+        expect.objectContaining({
+          from: reportFile,
+          raw: "sql:cached:reads_from:users",
+          to: { type: "file", path: schemaFile },
+        }),
+      );
+      expect(readSpy.mock.calls.filter((call) => String(call[0]).endsWith(".sql"))).toHaveLength(0);
+    } finally {
+      vi.restoreAllMocks();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects stale SQL edge cache entries when another SQL file changes", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-edge-cache-invalidate-"));
+    try {
+      const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+      const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+      const files = [schemaFile, reportFile];
+      await fsp.writeFile(schemaFile, "CREATE TABLE users (id integer);\n", "utf8");
+      await fsp.writeFile(reportFile, "SELECT id FROM users;\n", "utf8");
+      const initialSignatures = new Map([
+        [schemaFile, { sig: "schema-v1", cacheSig: "schema-v1" }],
+        [reportFile, { sig: "report-v1", cacheSig: "report-v1" }],
+      ]);
+      const cachedEntries = new Map<string, GraphCacheEntry>();
+      await collectGraph(root, files, {
+        allFiles: files,
+        fileSignatures: initialSignatures,
+        onFileEdges: (file, entry) => cachedEntries.set(file, entry),
+      });
+
+      await fsp.writeFile(schemaFile, "CREATE TABLE accounts (id integer);\n", "utf8");
+      const changedSignatures = new Map([
+        [schemaFile, { sig: "schema-v2", cacheSig: "schema-v2" }],
+        [reportFile, { sig: "report-v1", cacheSig: "report-v1" }],
+      ]);
+      const graph = await collectGraph(root, files, {
+        allFiles: files,
+        fileSignatures: changedSignatures,
+        cachedFileEdges: cachedEntries,
+      });
+
+      expect(
+        graph.edges.some(
+          (edge) =>
+            edge.from === reportFile &&
+            edge.raw === "sql:reads_from:users" &&
+            edge.to.type === "file" &&
+            edge.to.path === schemaFile,
+        ),
+      ).toBe(false);
+    } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
