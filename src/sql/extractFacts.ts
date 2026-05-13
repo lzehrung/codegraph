@@ -209,7 +209,7 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
   return statements;
 }
 
-function maskStringsAndComments(statement: string): string {
+export function maskSqlStringsAndComments(statement: string): string {
   let out = "";
   let i = 0;
   let singleQuoted = false;
@@ -533,7 +533,7 @@ function withoutSelfRead(readFacts: SqlFactDraft[], objectName: string | null): 
 }
 
 function extractStatementFactDrafts(statementText: string): SqlFactDraft[] {
-  const text = maskStringsAndComments(statementText);
+  const text = maskSqlStringsAndComments(statementText);
   const definitionFact = createDefinitionFact(text);
   if (definitionFact) {
     const constraintFacts =

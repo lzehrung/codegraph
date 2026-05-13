@@ -232,7 +232,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Stale migration isolation      | `tests/sql-artifact-graph.test.ts`, `tests/samples/sql/graph/*`         | Repeated object mentions become SQL object candidates, not current schema claims or application-code dependency edges.                                           | Internal regression test | 2026-05-12 |
 | Seed, fixture, and dump filters | `tests/sql-review-context.test.ts`, `tests/samples/sql/review/*`        | Seed, fixture, and dump SQL remains visible as SQL facts when changed directly but does not create application impact in code-only PRs.                         | Internal regression test | 2026-05-12 |
 | Changed SQL literal bridge     | `tests/sql-review-context.test.ts`                                      | A changed code SQL literal can surface matching SQL object candidates as review context without enabling global string matching from code to SQL.                | Internal regression test | 2026-05-12 |
-| SQL navigation                 | `tests/goto.test.ts`, `tests/references.test.ts`                        | SQL object names support go-to-definition and find-references across SQL files while application-code strings stay out of global SQL navigation.                 | Internal regression test | 2026-05-12 |
+| SQL navigation                 | `tests/goto.test.ts`, `tests/references.test.ts`                        | SQL object names support go-to-definition and find-references across SQL files, including schema-qualified names and object-level alias/table-qualified references, while application-code strings stay out of global SQL navigation and column definitions remain unclaimed. | Internal regression test | 2026-05-13 |
 
 ## Svelte
 

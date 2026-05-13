@@ -42,6 +42,38 @@ Initial claims:
 
 Do add table names from `.sql` files to SQL symbol/navigation support and SQL-to-SQL graph edges. Do not treat every historical SQL object mention as a current schema assertion or application-code dependency.
 
+## Follow-On Practical SQL Navigation Support
+
+Add practical semantic navigation for alias-qualified and table-qualified SQL object references without claiming full column-level schema reconstruction.
+
+Scope:
+
+- Resolve table aliases declared in a statement's `FROM`, `JOIN`, and `USING` clauses.
+- When the cursor is on `alias.column`, resolve the alias back to its source SQL object and navigate to that object's table/view definition.
+- When the cursor is on `schema.table.column`, resolve the longest known object prefix, such as `schema.table`, and navigate to that object definition.
+- When the cursor is on `table.column`, resolve `table` by exact object name first and basename second, using the existing SQL object lookup behavior.
+- Include alias-qualified and table-qualified object references in SQL reference results at the statement level.
+
+Non-goals:
+
+- Do not infer a current database schema from migrations, seeds, fixtures, dumps, or unordered SQL history.
+- Do not claim that `alias.column` resolves to a specific column declaration.
+- Do not model CTE output columns, view output columns, generated columns, or dialect-specific type details in this phase.
+- Do not create application-code dependencies from SQL-looking strings.
+
+Example target behavior:
+
+```sql
+SELECT *
+FROM schema1.table1 t1
+JOIN schema2.table2 t2 ON t2.table1_id = t1.id;
+```
+
+- Go-to-definition on `t1.id` resolves to the definition of `schema1.table1`.
+- Go-to-definition on `t2.table1_id` resolves to the definition of `schema2.table2`.
+- Go-to-definition on `schema1.table1.id` resolves to the definition of `schema1.table1`.
+- Find-references for `schema1.table1` includes statements that refer to it through `schema1.table1`, `table1`, or an in-statement alias such as `t1`.
+
 ## Namespace And Truth Model
 
 Use three SQL truth tiers.
@@ -523,6 +555,56 @@ git add README.md docs/language-parity.md docs/scenario-catalog.md docs/cli.md d
 git commit -m "docs: finalize SQL artifact support"
 ```
 
+### Task 9: Add Practical SQL Qualified Navigation
+
+Files:
+
+- `src/sql/extractFacts.ts`
+- `src/sql/navigation.ts`
+- `src/sql/types.ts`
+- `tests/sql-fact-extraction.test.ts`
+- `tests/goto.test.ts`
+- `tests/references.test.ts`
+- `docs/language-parity.md`
+- `docs/scenario-catalog.md`
+- `README.md`
+- `codegraph-skill/codegraph/SKILL.md`
+
+Changes:
+
+- [ ] Add an internal statement alias model that records source object aliases from `FROM`, `JOIN`, and `USING` clauses.
+- [ ] Teach SQL go-to-definition to resolve `alias.column` through the statement alias map to the aliased table/view object.
+- [ ] Teach SQL go-to-definition to resolve `schema.table.column` and `table.column` by longest known SQL object prefix.
+- [ ] Teach SQL references to include statements that mention a target object through an alias-qualified use inside the same statement.
+- [ ] Keep reference ranges statement-level unless a narrower range is already available from the existing SQL navigation helpers.
+- [ ] Document this as object-level practical SQL navigation, not column-definition navigation.
+
+Tests:
+
+- `schema1.table1 t1 JOIN schema2.table2 t2` resolves go-to-definition on `t1.id` to `schema1.table1`.
+- The same query resolves go-to-definition on `t2.table1_id` to `schema2.table2`.
+- `schema1.table1.id` resolves by longest known prefix to `schema1.table1`.
+- `table1.id` resolves by basename only when that matches the existing SQL object lookup behavior.
+- Find-references for `schema1.table1` includes statements that refer to it through `schema1.table1`, `table1`, and in-statement alias `t1`.
+- Ambiguous aliases and unresolved table prefixes return `not_found` instead of guessing.
+- CTE aliases continue to resolve as statement-local query aliases, not schema object definitions.
+
+Commands:
+
+```bash
+npx vitest run tests/sql-fact-extraction.test.ts tests/goto.test.ts tests/references.test.ts
+npm run lint
+npm run build
+npm run test:ci
+```
+
+Commit:
+
+```bash
+git add src/sql tests/sql-fact-extraction.test.ts tests/goto.test.ts tests/references.test.ts docs/language-parity.md docs/scenario-catalog.md README.md codegraph-skill/codegraph/SKILL.md
+git commit -m "feat: add practical SQL qualified navigation"
+```
+
 ## Deferred Phase: Current Schema Reconstruction
 
 Do not include this in v1 implementation.
@@ -544,6 +626,7 @@ Add `sql_current_schema` only after a separate plan proves:
 - SQL review context appears when SQL files are touched or explicit bridge evidence exists.
 - Docs describe SQL as artifact/fact support, not current-schema support.
 - Tests cover stale migration isolation, seed/fixture filtering, changed SQL files, changed SQL literals, and navigation boundaries.
+- Practical SQL qualified navigation resolves alias-qualified and table-qualified object references to table/view definitions without claiming column-definition semantics.
 
 ## Risks
 
@@ -551,6 +634,7 @@ Add `sql_current_schema` only after a separate plan proves:
 - Native Rust grammar compatibility may lag npm support. Mitigation: make native SQL a tested capability, not an assumption.
 - SQL object candidates may look like current schema. Mitigation: naming, docs, and tests must use "candidate" and "statement fact" language.
 - Review context can become noisy. Mitigation: bridge SQL into review only when changed files or explicit mappings justify it.
+- Alias-qualified SQL navigation can over-resolve if aliases are parsed outside their statement scope. Mitigation: build aliases per statement, prefer exact object names, and return `not_found` for ambiguous or unresolved prefixes.
 
 ## References
 
