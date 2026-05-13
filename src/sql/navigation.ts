@@ -111,7 +111,7 @@ function wordAtPosition(source: string, line: number, column: number): string | 
   for (const match of lineText.matchAll(SQL_DOTTED_TOKEN_RE)) {
     const start = match.index ?? 0;
     const end = start + match[0].length;
-    if (zeroBasedColumn >= start && zeroBasedColumn <= end) return normalizeSqlObjectName(match[0]);
+    if (zeroBasedColumn >= start && zeroBasedColumn < end) return normalizeSqlObjectName(match[0]);
   }
   return null;
 }

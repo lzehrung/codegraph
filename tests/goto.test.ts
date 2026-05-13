@@ -212,6 +212,33 @@ describe("Go to Definition", () => {
         await fsp.rm(root, { recursive: true, force: true });
       }
     });
+
+    it("does not resolve SQL objects when the cursor is immediately after the token", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-token-boundary-goto-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(schemaFile, "CREATE TABLE users (id integer);\n", "utf8");
+        const query = "SELECT id FROM users;";
+        await fsp.writeFile(reportFile, query, "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const semicolonColumn = query.indexOf(";") + 1;
+        const result = await testGoToDefinition(
+          index,
+          reportFile,
+          1,
+          semicolonColumn,
+          undefined,
+          undefined,
+          "not_found",
+        );
+
+        expect(result.status).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("TypeScript", () => {

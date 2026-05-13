@@ -97,6 +97,46 @@ describe("SQL artifact graph", () => {
     }
   });
 
+  it("links schema-qualified SQL references to unqualified object definitions", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-qualified-edge-"));
+    try {
+      const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+      const publicSchemaFile = path.join(root, "public_schema.sql").replace(/\\/g, "/");
+      const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+      await fsp.writeFile(schemaFile, "CREATE TABLE users (id integer);\nCREATE TABLE accounts (id integer);\n", "utf8");
+      await fsp.writeFile(publicSchemaFile, "CREATE TABLE public.accounts (id integer);\n", "utf8");
+      await fsp.writeFile(reportFile, "SELECT id FROM public.users;\nSELECT id FROM public.accounts;\n", "utf8");
+
+      const sourceGraph = await collectGraph(root, [schemaFile, publicSchemaFile, reportFile]);
+
+      expect(sourceGraph.edges).toContainEqual(
+        expect.objectContaining({
+          from: reportFile,
+          raw: "sql:reads_from:public.users",
+          to: { type: "file", path: schemaFile },
+        }),
+      );
+      expect(sourceGraph.edges).toContainEqual(
+        expect.objectContaining({
+          from: reportFile,
+          raw: "sql:reads_from:public.accounts",
+          to: { type: "file", path: publicSchemaFile },
+        }),
+      );
+      expect(
+        sourceGraph.edges.some(
+          (edge) =>
+            edge.from === reportFile &&
+            edge.raw === "sql:reads_from:public.accounts" &&
+            edge.to.type === "file" &&
+            edge.to.path === schemaFile,
+        ),
+      ).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("reuses SQL facts across per-file edge collection", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-cache-"));
     const files: string[] = [];

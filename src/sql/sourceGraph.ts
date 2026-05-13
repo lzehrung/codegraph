@@ -72,6 +72,24 @@ function definitionKeys(name: string): string[] {
   return normalized === baseName ? [normalized] : [normalized, baseName];
 }
 
+function sqlDefinitionCandidates(cache: SqlFactCache, objectName: string): SqlStatementFact[] {
+  const [exactKey, ...fallbackKeys] = definitionKeys(objectName);
+  if (!exactKey) return [];
+  const exactCandidates = cache.definitionsByName.get(exactKey) ?? [];
+  if (exactCandidates.length > 0) return exactCandidates;
+  const candidates: SqlStatementFact[] = [];
+  const seen = new Set<string>();
+  for (const key of fallbackKeys) {
+    for (const candidate of cache.definitionsByName.get(key) ?? []) {
+      const seenKey = `${candidate.filePath}:${candidate.startLine}:${candidate.kind}:${candidate.objectName ?? ""}`;
+      if (seen.has(seenKey)) continue;
+      seen.add(seenKey);
+      candidates.push(candidate);
+    }
+  }
+  return candidates;
+}
+
 export function buildSqlModuleIndex(filePath: string, source: string): ModuleIndex {
   const normalizedFile = normalizePath(filePath);
   const facts = extractSqlFactsFromSource(normalizedFile, source);
@@ -142,7 +160,7 @@ export async function collectSqlEdgesForFile(
   const seen = new Set<string>();
   for (const fact of currentFacts) {
     for (const objectName of referenceObjectNames(fact)) {
-      const candidates = cache.definitionsByName.get(objectName.toLowerCase()) ?? [];
+      const candidates = sqlDefinitionCandidates(cache, objectName);
       for (const candidate of candidates) {
         if (candidate.filePath === normalizedFile && candidate.startLine === fact.startLine) continue;
         const targetPath = candidate.filePath;
