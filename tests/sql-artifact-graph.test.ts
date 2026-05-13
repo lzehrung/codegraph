@@ -204,6 +204,39 @@ describe("SQL artifact graph", () => {
     }
   });
 
+  it("links SQL rename statements to the source definition without targeting the new name", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-rename-edge-"));
+    try {
+      const oldSchemaFile = path.join(root, "old_schema.sql").replace(/\\/g, "/");
+      const unrelatedNewSchemaFile = path.join(root, "unrelated_new_schema.sql").replace(/\\/g, "/");
+      const migrationFile = path.join(root, "migration.sql").replace(/\\/g, "/");
+      await fsp.writeFile(oldSchemaFile, "CREATE TABLE old_users (id integer);\n", "utf8");
+      await fsp.writeFile(unrelatedNewSchemaFile, "CREATE TABLE users (id integer);\n", "utf8");
+      await fsp.writeFile(migrationFile, "ALTER TABLE old_users RENAME TO users;\n", "utf8");
+
+      const sourceGraph = await collectGraph(root, [oldSchemaFile, unrelatedNewSchemaFile, migrationFile]);
+
+      expect(sourceGraph.edges).toContainEqual(
+        expect.objectContaining({
+          from: migrationFile,
+          raw: "sql:renames_object:old_users",
+          to: { type: "file", path: oldSchemaFile },
+        }),
+      );
+      expect(
+        sourceGraph.edges.some(
+          (edge) =>
+            edge.from === migrationFile &&
+            edge.raw === "sql:renames_object:users" &&
+            edge.to.type === "file" &&
+            edge.to.path === unrelatedNewSchemaFile,
+        ),
+      ).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not index foreign-key constraint facts as duplicate table-named SQL definitions", () => {
     const moduleIndex = buildSqlModuleIndex(
       "schema.sql",

@@ -66,7 +66,7 @@ function referenceObjectNames(fact: SqlStatementFact): string[] {
   if (SQL_REFERENCE_KINDS.has(fact.kind) && fact.objectName) {
     names.push(fact.objectName);
   }
-  if (fact.relatedObjectName) {
+  if (fact.kind !== "renames_object" && fact.relatedObjectName) {
     names.push(fact.relatedObjectName);
   }
   return Array.from(new Set(names));
