@@ -4,7 +4,7 @@ import { getHotspots, type SymbolNode } from "../graphs.js";
 import { writeGraphSqlite } from "../sqlite.js";
 import { normalizePath, toProjectRelativePath } from "../util.js";
 import { createAgentSession } from "./session.js";
-import type { AgentProjectSnapshot } from "./session.js";
+import type { AgentProjectSnapshot, AgentSession } from "./session.js";
 
 export type CodegraphArtifactBuildRequest = {
   root: string;
@@ -50,15 +50,24 @@ export async function buildCodegraphArtifact(
 ): Promise<CodegraphArtifactBuildResult> {
   const root = path.resolve(request.root);
   const outDir = path.resolve(root, request.outDir ?? DEFAULT_OUT_DIR);
-  await validateOutputDirectory(outDir, request.force ?? false);
-
-  const selected = normalizeArtifactSelection(request);
   const session = createAgentSession({
     root,
     discovery: {
       ignoreGlobs: outputIgnoreGlobs(root, outDir),
     },
   });
+  return await buildCodegraphArtifactWithSession(session, request);
+}
+
+export async function buildCodegraphArtifactWithSession(
+  session: AgentSession,
+  request: CodegraphArtifactBuildRequest,
+): Promise<CodegraphArtifactBuildResult> {
+  const root = path.resolve(request.root);
+  const outDir = path.resolve(root, request.outDir ?? DEFAULT_OUT_DIR);
+  await validateOutputDirectory(outDir, request.force ?? false);
+
+  const selected = normalizeArtifactSelection(request);
   const snapshot = await session.loadProject();
   await fs.mkdir(outDir, { recursive: true });
   const artifacts: Record<string, string> = {};

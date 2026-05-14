@@ -2,7 +2,29 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
 import { createCodegraphMcpHandlers } from "../src/mcp/server.js";
+
+function countingSession(session: AgentSession): { session: AgentSession; loads: () => number } {
+  let cached: Promise<AgentProjectSnapshot> | undefined;
+  let loadCount = 0;
+  return {
+    session: {
+      loadProject: async () => {
+        if (!cached) {
+          loadCount += 1;
+          cached = session.loadProject();
+        }
+        return await cached;
+      },
+      invalidate: () => {
+        cached = undefined;
+        session.invalidate();
+      },
+    },
+    loads: () => loadCount,
+  };
+}
 
 describe("codegraph MCP handlers", () => {
   it("reuses one session across search, get_symbol, refs, and query_sqlite handlers", async () => {
@@ -66,5 +88,23 @@ describe("codegraph MCP handlers", () => {
       const handlers = createCodegraphMcpHandlers({ root });
       await handlers.get_file({ file: path.resolve(root, "..", "outside.ts") });
     })()).rejects.toThrow(/outside project root/);
+  });
+
+  it("reuses one session snapshot across search and refs follow-up calls", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
+    await fs.writeFile(
+      path.join(root, "api.ts"),
+      "import { validateUser } from './auth';\nexport const ok = validateUser(1);\n",
+    );
+    const counted = countingSession(createAgentSession({ root }));
+    const handlers = createCodegraphMcpHandlers({ root, session: counted.session });
+
+    const search = await handlers.search({ query: "validate user", limit: 5 });
+    const first = search.results[0];
+    expect(first?.handle).toBeTruthy();
+    await handlers.refs({ handle: first!.handle });
+
+    expect(counted.loads()).toBe(1);
   });
 });

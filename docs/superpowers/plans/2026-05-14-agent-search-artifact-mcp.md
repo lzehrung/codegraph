@@ -911,7 +911,7 @@ git commit -m "feat: add MCP server"
 - Modify: `codegraph-skill/codegraph/SKILL.md`
 - Test: existing feature tests from Tasks 1-5
 
-- [ ] **Step 1: Run self-review against Graphify gap**
+- [x] **Step 1: Run self-review against Graphify gap**
 
 Check these claims manually:
 
@@ -921,7 +921,7 @@ Check these claims manually:
 - MCP tools reuse the same service layer and support stable handles.
 - SQL extraction is not described as a remaining gap.
 
-- [ ] **Step 2: Run performance guard tests**
+- [x] **Step 2: Run performance guard tests**
 
 Add assertions to the existing tests rather than introducing synthetic benchmarks:
 
@@ -931,7 +931,7 @@ Add assertions to the existing tests rather than introducing synthetic benchmark
 
 Use Vitest spies only around Codegraph-owned functions. Do not mock away indexing, graph collection, SQL facts, or CLI behavior in the primary business-logic tests.
 
-- [ ] **Step 3: Verify public docs are concise and accurate**
+- [x] **Step 3: Verify public docs are concise and accurate**
 
 Docs must say:
 
@@ -941,7 +941,7 @@ Docs must say:
 - SQL is supported as language input, but current-schema reconstruction is not claimed.
 - SQLite query tools are read-only.
 
-- [ ] **Step 4: Full verification**
+- [x] **Step 4: Full verification**
 
 Run:
 
@@ -954,7 +954,7 @@ git diff --check
 
 Expected: PASS.
 
-- [ ] **Step 5: Final commit**
+- [x] **Step 5: Final commit**
 
 Commit any review/doc/performance fixes:
 

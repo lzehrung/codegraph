@@ -2,7 +2,29 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildCodegraphArtifact } from "../src/agent/artifact.js";
+import { buildCodegraphArtifact, buildCodegraphArtifactWithSession } from "../src/agent/artifact.js";
+import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
+
+function countingSession(session: AgentSession): { session: AgentSession; loads: () => number } {
+  let cached: Promise<AgentProjectSnapshot> | undefined;
+  let loadCount = 0;
+  return {
+    session: {
+      loadProject: async () => {
+        if (!cached) {
+          loadCount += 1;
+          cached = session.loadProject();
+        }
+        return await cached;
+      },
+      invalidate: () => {
+        cached = undefined;
+        session.invalidate();
+      },
+    },
+    loads: () => loadCount,
+  };
+}
 
 describe("artifact build", () => {
   it("writes sqlite, graph JSON, optional report, questions, and manifest from real project logic", async () => {
@@ -67,5 +89,24 @@ describe("artifact build", () => {
 
     const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { files: string[] };
     expect(graph.files.some((file) => file.includes("codegraph-out"))).toBe(false);
+  });
+
+  it("reuses one project snapshot for all selected artifact outputs", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-session-"));
+    const outDir = path.join(root, "codegraph-out");
+    await fs.writeFile(path.join(root, "users.sql"), "CREATE TABLE public.users (id int primary key);\n");
+    await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
+    const counted = countingSession(createAgentSession({ root }));
+
+    await buildCodegraphArtifactWithSession(counted.session, {
+      root,
+      outDir,
+      sqlite: true,
+      graphJson: true,
+      report: true,
+      questions: true,
+    });
+
+    expect(counted.loads()).toBe(1);
   });
 });

@@ -235,7 +235,7 @@ export type {
 } from "./agent/explain.js";
 
 /** Agent-ready artifact bundle builder for SQLite, graph JSON, reports, questions, and manifests. */
-export { buildCodegraphArtifact } from "./agent/artifact.js";
+export { buildCodegraphArtifact, buildCodegraphArtifactWithSession } from "./agent/artifact.js";
 export type { CodegraphArtifactBuildRequest, CodegraphArtifactBuildResult } from "./agent/artifact.js";
 
 /** MCP server and typed handler helpers for agent graph navigation. */

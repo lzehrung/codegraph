@@ -21,11 +21,13 @@ import { buildReviewReport, type ReviewDepth, type ReviewReport } from "../revie
 import { queryGraphSqliteRaw, type RawSqlResult } from "../sqlite.js";
 import { assertFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util.js";
 import { createAgentSession } from "../agent/session.js";
+import type { AgentSession } from "../agent/session.js";
 
 export type CodegraphMcpServerOptions = {
   root: string;
   artifactPath?: string;
   readOnly?: boolean;
+  session?: AgentSession;
 };
 
 export type CodegraphMcpHandlers = {
@@ -78,7 +80,7 @@ const DEFAULT_FILE_BYTES = 80_000;
 
 export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): CodegraphMcpHandlers {
   const root = path.resolve(options.root);
-  const session = createAgentSession({ root });
+  const session = options.session ?? createAgentSession({ root });
   let sqlitePath = options.artifactPath ? resolveArtifactSqlitePath(root, options.artifactPath) : undefined;
 
   const resolveFile = (file: string): string => assertFilePathWithinRoot(root, file, "File");

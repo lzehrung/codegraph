@@ -6,7 +6,7 @@ This report compares the current `codegraph` checkout against `safishamsi/graphi
 
 ## Sources Reviewed
 
-- Codegraph local checkout: `4f5147e`, package version `1.8.67`.
+- Codegraph local checkout: current `gap-plans` branch, package version `1.8.67`.
 - Graphify upstream checkout: `safishamsi/graphify@5f9ea2b`, package version `0.7.16`.
 - Graphify README and docs: [README](https://github.com/safishamsi/graphify/blob/5f9ea2b/README.md), [how it works](https://github.com/safishamsi/graphify/blob/5f9ea2b/docs/how-it-works.md), [architecture](https://github.com/safishamsi/graphify/blob/5f9ea2b/ARCHITECTURE.md), [pyproject](https://github.com/safishamsi/graphify/blob/5f9ea2b/pyproject.toml).
 - Codegraph docs: [README](README.md), [CLI reference](docs/cli.md), [language parity](docs/language-parity.md), [how it works](docs/how-it-works.md).
@@ -18,14 +18,7 @@ Graphify has a broader product surface than Codegraph: one-command report genera
 
 Codegraph is stronger as a deterministic code-intelligence engine. It has deeper code semantics, explicit language parity docs, symbol navigation, references, PR impact analysis, review bundles, SQLite export, a native Tree-sitter runtime, and a typed library API. Codegraph is already closer to a reliable code-review/navigation substrate than Graphify.
 
-The highest-ROI path is not to copy Graphify's implementation. It is to keep Codegraph as the structural code engine and add Graphify-like workflow surfaces around it:
-
-1. A lightweight vectorless graph search layer built from Codegraph's existing graph, symbol, text, and SQLite artifacts.
-2. A first-class optional RAG/search layer backed by `@lzehrung/rag-search-core` for semantic/vector recall when needed.
-3. A generated markdown report artifact.
-4. MCP tools over graph/index/search/RAG artifacts.
-5. Tiered language expansion with explicit parity claims.
-6. Optional watch/update/global/team artifact workflows.
+The highest-ROI path is not to copy Graphify's implementation. It is to keep Codegraph as the structural code engine and continue layering Graphify-like workflow surfaces around it. Codegraph now has the deterministic baseline pieces that were previously gaps: `codegraph search`, `codegraph explain`, `codegraph artifact build`, and `codegraph mcp serve`. The remaining high-value work is optional semantic RAG, watch/update/global artifact workflows, and tiered language expansion with explicit parity claims.
 
 ## Important Correction: Graphify Is Not Vector RAG
 
@@ -56,14 +49,16 @@ This would not replace `@lzehrung/rag-search-core`. It should be the zero-setup 
 - Use vectorless graph search when the question names a file, symbol, package, API, architectural area, dependency path, changed symbol, or test target.
 - Use full RAG when the question is phrased in fuzzy natural language, relies on semantic similarity, spans prose/design docs, or needs recall from content that is not structurally connected in the graph.
 
-### Proposed Vectorless Search Shape
+### Implemented Vectorless Search Shape
 
-Add a deterministic search surface that can run from an in-memory project index or persisted SQLite artifact:
+Codegraph now has a deterministic search surface over an in-memory project session:
 
 - `codegraph search "<query>" --json`
-- `codegraph search "<query>" --mode graph|symbol|text|hybrid`
+- `codegraph search "<query>" --mode graph|symbol|text|hybrid|path|sql`
 - `codegraph search "<query>" --from <file-or-symbol> --depth 2`
-- `codegraph explain "<symbol-or-file>"`
+- `codegraph explain "<symbol-or-file-or-sql-object-or-handle>"`
+- `codegraph artifact build --root . --out codegraph-out --json`
+- `codegraph mcp serve --root . --stdio`
 - `codegraph path <from> <to>` stays as the precise shortest-path command, but `search` can discover likely endpoints first.
 
 The default `hybrid` mode should not mean vector/BM25 hybrid. It should mean deterministic fusion of:
@@ -119,12 +114,12 @@ The limitation is equally important: vectorless search will miss synonym-heavy o
 | Area | Codegraph today | Graphify today | Assessment |
 | --- | --- | --- | --- |
 | Core purpose | Deterministic multi-language code analysis, navigation, PR impact, review artifacts. See [README features](README.md#features). | Folder-to-knowledge-graph product with code, docs, media, reports, query, and agent install hooks. | Different center of gravity. Codegraph is deeper for code; Graphify is broader for knowledge artifacts. |
-| RAG/search | Codegraph has AST/text `grep`, symbol and graph query APIs, graph commands, SQLite export, and read-only SQLite queries. It lacks one unified ranked search workflow. Full vector/BM25 RAG exists through sibling `code-navigation` using `@lzehrung/rag-search-core`. | Graph traversal over extracted nodes/edges; explicitly no embeddings/vector DB. | Codegraph has stronger raw ingredients; Graphify has the simpler packaged query UX. |
+| RAG/search | Codegraph has AST/text `grep`, symbol and graph query APIs, graph commands, SQLite export, read-only SQLite queries, and unified deterministic `search`/`explain` workflows. Full vector/BM25 RAG exists through sibling `code-navigation` using `@lzehrung/rag-search-core`. | Graph traversal over extracted nodes/edges; explicitly no embeddings/vector DB. | Codegraph now has the stronger deterministic query baseline; optional full RAG remains separate. |
 | Language breadth | First-class source pipeline for JS/TS, Python, PHP, Go, Java, C#, Ruby, Rust, Kotlin, Swift, Zig, C, C++; graph-first docs/templates/styles. See [language parity](docs/language-parity.md). | Claims 25 code languages and has many file extensions in `CODE_EXTENSIONS`; dispatch includes Scala, Lua, PowerShell, Elixir, Objective-C, Julia, Dart, Verilog, Fortran, Pascal/Delphi, SQL, Markdown, and more. See [pyproject dependencies](https://github.com/safishamsi/graphify/blob/5f9ea2b/pyproject.toml#L17-L64), [detect.py extensions](https://github.com/safishamsi/graphify/blob/5f9ea2b/graphify/detect.py#L27-L32), and [extract dispatch](https://github.com/safishamsi/graphify/blob/5f9ea2b/graphify/extract.py#L5446-L5507). | Graphify is wider. Codegraph is more explicit and test-backed about capability tiers. |
 | Code semantics | Symbols, imports, exports, goto, refs, chunking, graph, cycles, hotspots, unresolved imports, PR impact. See [README](README.md#features) and [CLI reference](docs/cli.md). | Tree-sitter extracts classes, functions, imports, call graphs, comments; many languages use shared or custom extractors. See [how-it-works](https://github.com/safishamsi/graphify/blob/5f9ea2b/docs/how-it-works.md#L6-L9). | Codegraph has the stronger code-navigation and review contract. |
 | PR/diff review | First-class `impact` and `review` commands with changed symbols, impacted files, likely tests, risk, graph deltas, coverage hints. See [CLI impact/review](docs/cli.md#impact-review-and-graph-delta). | No comparable PR impact surface found. | Codegraph is clearly ahead. |
-| Reports | `inspect`, graph exports, SQLite, graph viewer, review summaries, but no single repo report artifact by default. | `GRAPH_REPORT.md`, graph JSON, HTML, wiki, SVG, callflow HTML, questions, confidence summaries. | High-ROI gap for Codegraph. |
-| MCP | Not first-class in this repo. | MCP server exposes graph query tools. README names `query_graph`, `get_node`, `get_neighbors`, `shortest_path`. See [README](https://github.com/safishamsi/graphify/blob/5f9ea2b/README.md#L234-L242). | High-ROI gap for Codegraph. |
+| Reports | `inspect`, graph exports, SQLite, graph viewer, review summaries, and `artifact build` output with `CODEGRAPH_REPORT.md`, `questions.json`, `manifest.json`, graph JSON, and SQLite. | `GRAPH_REPORT.md`, graph JSON, HTML, wiki, SVG, callflow HTML, questions, confidence summaries. | Codegraph covers the deterministic artifact/report baseline; Graphify still has broader presentation formats. |
+| MCP | `codegraph mcp serve` exposes `search`, `get_file`, `get_symbol`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, `query_sqlite`, and opt-in `artifact_build`. | MCP server exposes graph query tools. README names `query_graph`, `get_node`, `get_neighbors`, `shortest_path`. See [README](https://github.com/safishamsi/graphify/blob/5f9ea2b/README.md#L234-L242). | Codegraph now has a stronger code-navigation MCP surface with read-only defaults and stable handles. |
 | Persistent graph DB | SQLite export plus read-only SQL access. See [README feature](README.md#features). | NetworkX node-link JSON, global graph JSON, optional Neo4j extra, docs for Docker SQLite MCP. | Codegraph's SQLite artifact is stronger for deterministic tooling, but Graphify has better workflow packaging. |
 | Docs/media ingestion | Graph-first Markdown/MDX/RST/AsciiDoc/local links and template/style imports. Narrow by design. | Docs, PDFs, images, Office, Google Workspace, video/audio, URLs/YouTube. Code local; non-code uses assistant/model APIs. See [README](https://github.com/safishamsi/graphify/blob/5f9ea2b/README.md#L147-L154) and [how-it-works](https://github.com/safishamsi/graphify/blob/5f9ea2b/docs/how-it-works.md#L10-L23). | Graphify is ahead on corpus breadth. Codegraph should route this through optional RAG/content adapters, not core AST code. |
 | Confidence/provenance | Deterministic diagnostics, parser/native reports, parity tests, changed symbol confidence, candidate-test confidence. | Edges tagged `EXTRACTED`, `INFERRED`, `AMBIGUOUS`. See [README](https://github.com/safishamsi/graphify/blob/5f9ea2b/README.md#L130-L132). | Graphify's confidence tags are simple and useful. Codegraph can adopt a related provenance vocabulary for generated report/query outputs without weakening deterministic surfaces. |
@@ -177,33 +172,30 @@ Graphify has explicit commands for keeping artifacts fresh and registering a pro
 
 ## High-ROI Recommendations
 
-### Recommendation 1: Add vectorless graph search first
+### Completed Baseline: Vectorless graph search, artifacts, and MCP
 
-This is the highest-ROI near-term gap because it combines Graphify's queryability with Codegraph's stronger deterministic artifacts, without introducing vector database or embedding-provider complexity.
+Codegraph has implemented the deterministic baseline that combines Graphify's queryability with Codegraph's stronger structural artifacts, without introducing vector database or embedding-provider complexity.
 
-Proposed shape:
+Implemented shape:
 
-- `codegraph search "<query>" --json` returns ranked files, symbols, chunks, and graph neighborhoods.
-- `codegraph explain "<file-or-symbol>"` returns a compact architecture packet for one node.
-- `codegraph search "<query>" --mode graph|symbol|text|hybrid` gives callers control over recall style.
-- `codegraph search "<query>" --from <file-or-symbol> --depth 2` starts from a known anchor and expands through graph edges.
+- `codegraph search "<query>" --json` returns ranked files, symbols, chunks, SQL objects, and graph neighborhoods.
+- `codegraph explain "<file-or-symbol-sql-object-or-handle>"` returns a compact architecture packet.
+- `codegraph artifact build --root . --out codegraph-out --json` writes SQLite, graph JSON, report, questions, and manifest outputs.
+- `codegraph mcp serve --root . --stdio` exposes search, inspection, navigation, dependency, impact/review, read-only SQLite, and opt-in artifact tools.
 
-Implementation direction:
+Implementation notes:
 
-- Build a shared search library over `ProjectIndex`, dependency graph data, symbol graph data, chunking, and optional SQLite artifacts.
-- Return structured, explainable results with rank reasons and follow-up command suggestions.
-- Keep the first version local-only, deterministic, and free of new services.
-- Use this same library for CLI, MCP, and report suggested-question workflows.
+- Search/explain/artifact/MCP share `createAgentSession()` and reuse one in-process project snapshot for multi-step agent flows.
+- Results include stable handles, rank reasons, evidence, neighbors, and follow-up command suggestions.
+- The baseline is local-only, deterministic, vectorless, and free of new services.
+- SQL participates as language support: `.sql` discovery, statement chunks, SQL object symbols, SQL-to-SQL graph edges, SQL navigation, SQL review context, and native-only operation. Current-schema reconstruction remains out of scope.
 
-Acceptance criteria:
+Remaining near-term refinements:
 
-- Works after `buildProjectIndex()` without requiring a persisted artifact.
-- Also works from a SQLite export when available.
-- Includes exact/fuzzy path and symbol matching, graph-neighborhood expansion, and chunk/text snippets.
-- Documents that this is deterministic graph search, not vector or embedding search.
-- Updates [README](README.md), [docs/cli.md](docs/cli.md), [docs/library-api.md](docs/library-api.md), and [codegraph-skill/codegraph/SKILL.md](codegraph-skill/codegraph/SKILL.md).
+- More SQLite-backed search modes if a caller wants to search only an existing artifact without loading a source checkout.
+- More presentation formats around artifact reports if needed.
 
-### Recommendation 2: Add an optional Codegraph RAG/search layer backed by rag-search-core
+### Recommendation 1: Add an optional Codegraph RAG/search layer backed by rag-search-core
 
 This remains high ROI, but it should build on the deterministic search tier instead of being the only answer to queryability.
 
@@ -228,43 +220,7 @@ Acceptance criteria:
 - It documents vector/BM25/KG behavior accurately and does not call it "GraphRAG" unless KG fusion is enabled.
 - It updates [README](README.md), [docs/cli.md](docs/cli.md), [docs/library-api.md](docs/library-api.md), and [codegraph-skill/codegraph/SKILL.md](codegraph-skill/codegraph/SKILL.md).
 
-### Recommendation 3: Generate `CODEGRAPH_REPORT.md`
-
-Graphify's report artifact is simple but effective. Codegraph should ship a deterministic equivalent.
-
-Proposed content:
-
-- Repo summary: files by language, native/runtime diagnostics, unresolved imports, cycles.
-- Hotspots and public API surface.
-- Top dependency clusters and boundary concerns.
-- Suggested follow-up commands.
-- If a git range is provided: changed symbols, impacted files, candidate tests, risk summary.
-- If RAG is enabled: top retrievable domains and query examples.
-
-This should be deterministic and cheap. It can optionally include model-generated commentary later, but the first version should avoid LLM dependency.
-
-### Recommendation 4: Add an MCP server over Codegraph artifacts
-
-Graphify's MCP server is a good idea, but Codegraph can expose stronger tools:
-
-- `inspect_repo`
-- `query_graph`
-- `get_node`
-- `get_neighbors`
-- `shortest_path`
-- `goto_definition`
-- `find_references`
-- `search_symbols`
-- `search_rag`
-- `impact`
-- `candidate_tests`
-- `sql_readonly`
-
-The server should prefer existing SQLite/index artifacts when present, and build lazily only when requested. It should keep read-only guarantees for SQL and file access.
-
-SQL is no longer listed as a Graphify gap. Codegraph now treats `.sql` files as part of language support, including schema objects, graph edges, navigation, references, SQLite persistence, and documented parity/scenario coverage. Remaining SQL work should be tracked as accuracy or semantic-navigation improvements, not as missing extraction.
-
-### Recommendation 5: Expand language support in tiers
+### Recommendation 2: Expand language support in tiers
 
 Graphify's language breadth is attractive, but Codegraph should not collapse "file detected" into "semantic parity."
 
@@ -276,7 +232,7 @@ Recommended tiering:
 
 This preserves Codegraph's stronger correctness posture while closing the perceived language gap.
 
-### Recommendation 6: Add artifact update/watch/global workflows
+### Recommendation 3: Add artifact update/watch/global workflows
 
 Proposed shape:
 
@@ -287,7 +243,7 @@ Proposed shape:
 
 This should be a workflow layer over existing graph/index/RAG commands, not a new storage model.
 
-### Recommendation 7: Use confidence/provenance labels in generated outputs
+### Recommendation 4: Use confidence/provenance labels in generated outputs
 
 Graphify's `EXTRACTED` / `INFERRED` / `AMBIGUOUS` vocabulary is useful for humans. Codegraph should adopt a compatible but stricter model for report and MCP output:
 
@@ -306,33 +262,15 @@ This keeps deterministic Codegraph outputs honest while making generated reports
 - Building a new vector store or bespoke RAG engine. The local `@lzehrung/rag-search-core` package already provides this.
 - Making Codegraph's core depend on media/PDF/office/video parsing. Keep this optional and adapter-driven.
 
-## Suggested Implementation Plan
+## Suggested Next Plan
 
-### Phase 1: Vectorless graph search
-
-Add `codegraph search` and `codegraph explain` over existing index, graph, chunking, and optional SQLite artifacts.
-
-Why first: it captures the most intriguing part of Graphify's query UX while staying deterministic and low complexity. It also becomes the shared search layer for report and MCP workflows.
-
-### Phase 2: Report artifact
-
-Add `codegraph report <roots...> --output CODEGRAPH_REPORT.md` using only existing deterministic data.
-
-Why second: low dependency risk, high product visibility, and it exercises how Codegraph should present provenance, hotspots, cycles, unresolved imports, API surface, suggested commands, and vectorless search results.
-
-### Phase 3: MCP server
-
-Add `codegraph serve --stdio --artifact <path>` with graph/index/SQLite-backed tools. Start read-only.
-
-Why third: it turns existing Codegraph precision into agent-accessible repeated tools, matching one of Graphify's strongest workflow ideas.
-
-### Phase 4: RAG integration
+### Phase 1: RAG integration
 
 Add an optional RAG package or command group using `@lzehrung/rag-search-core` and Codegraph chunks/triples.
 
 Why fourth: high upside, but it needs careful package-boundary and dependency decisions so Codegraph's lightweight deterministic core stays clean.
 
-### Phase 5: Language tiers
+### Phase 2: Language tiers
 
 Broaden language support in documented tiers.
 
@@ -342,4 +280,4 @@ Why fifth: these expand competitive surface area but should follow the establish
 
 Graphify is ahead on packaging the graph as a user-facing and agent-facing artifact. Codegraph is ahead on deterministic code semantics, review workflows, native runtime integration, and compatibility with a real hybrid RAG library.
 
-The best move is to use Graphify as product inspiration, not as architecture to clone. The refined priority is to build vectorless graph search first, then layer report and MCP workflows on top of it, and then add optional full RAG for questions that need semantic/vector recall. Codegraph should add unified search, report, MCP, artifact, RAG, and tiered language workflows while preserving its current strength: accurate, test-backed code intelligence that downstream agents can trust.
+The best move is to use Graphify as product inspiration, not as architecture to clone. Codegraph now has the unified search, report/artifact, and MCP baseline while preserving its current strength: accurate, test-backed code intelligence that downstream agents can trust. The refined priority is optional full RAG for questions that need semantic/vector recall, followed by watch/update workflows and tiered language expansion.

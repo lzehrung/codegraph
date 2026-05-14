@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { searchCodegraph } from "../src/agent/search.js";
+import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
+import { searchCodegraph, searchCodegraphWithSession } from "../src/agent/search.js";
 
 async function mkRepo(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-search-"));
@@ -29,6 +30,27 @@ async function mkRepo(): Promise<string> {
     "CREATE TABLE public.users (id int primary key, email text);\nCREATE VIEW active_users AS SELECT id FROM public.users;\n",
   );
   return root;
+}
+
+function countingSession(session: AgentSession): { session: AgentSession; loads: () => number } {
+  let cached: Promise<AgentProjectSnapshot> | undefined;
+  let loadCount = 0;
+  return {
+    session: {
+      loadProject: async () => {
+        if (!cached) {
+          loadCount += 1;
+          cached = session.loadProject();
+        }
+        return await cached;
+      },
+      invalidate: () => {
+        cached = undefined;
+        session.invalidate();
+      },
+    },
+    loads: () => loadCount,
+  };
 }
 
 describe("agent search", () => {
@@ -86,5 +108,14 @@ describe("agent search", () => {
     const response = await searchCodegraph({ root, query: "zzzz-unmatched-domain", limit: 5 });
 
     expect(response.results).toEqual([]);
+  });
+
+  it("loads one project snapshot for a search call", async () => {
+    const root = await mkRepo();
+    const counted = countingSession(createAgentSession({ root }));
+
+    await searchCodegraphWithSession(counted.session, { root, query: "validate user", mode: "hybrid", limit: 5 });
+
+    expect(counted.loads()).toBe(1);
   });
 });

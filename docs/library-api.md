@@ -66,7 +66,7 @@ const artifact = await buildCodegraphArtifact({
 console.log(artifact.manifestPath, artifact.artifacts);
 ```
 
-`createAgentSession()` keeps one in-process project snapshot warm for repeated search/explain/MCP calls. `createCodegraphMcpHandlers()` exposes the same primitives without starting stdio, which is useful for tests or host applications:
+`createAgentSession()` keeps one in-process project snapshot warm for repeated search, explain, artifact, and MCP calls. Use `buildCodegraphArtifactWithSession()` when a host already has a session and wants SQLite, graph JSON, report, questions, and manifest outputs from the same snapshot. `createCodegraphMcpHandlers()` exposes the same primitives without starting stdio, which is useful for tests or host applications:
 
 ```ts
 import { createCodegraphMcpHandlers } from "@lzehrung/codegraph";
