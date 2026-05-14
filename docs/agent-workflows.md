@@ -12,6 +12,7 @@ For an unfamiliar repo, the shortest useful loop is:
 codegraph doctor
 codegraph inspect ./src --limit 20
 codegraph search "auth user" --json
+codegraph explain src/auth.ts --json
 ```
 
 Then use the recommended commands from `inspect`, or the stable handles and follow-up commands from `search`, to narrow the next graph, navigation, or impact pass.
@@ -26,9 +27,10 @@ Use `search` when an agent needs a compact starting point before calling `goto`,
 codegraph search "validate user" --json
 codegraph search "public users" --mode sql --json
 codegraph search "handle login" --mode graph --from src/auth.ts --depth 1 --json
+codegraph explain "<handle-from-search>" --json
 ```
 
-Results include `handle`, `rankReasons`, `evidence`, `neighbors`, and `followUps`. The command is deterministic and does not require embeddings or prebuilt artifacts.
+Search results include `handle`, `rankReasons`, `evidence`, `neighbors`, and `followUps`. `explain` accepts those handles plus file paths, symbol names, and SQL object names, then returns bounded symbols, dependencies, reverse dependencies, references, snippets, SQL facts, and follow-ups. Both commands are deterministic and do not require embeddings or prebuilt artifacts.
 
 ## Session management
 

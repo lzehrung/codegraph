@@ -220,6 +220,20 @@ export type {
   AgentSearchResultKind,
 } from "./agent/search.js";
 
+/** Agent-facing explanation packets for files, symbols, SQL objects, and review context. */
+export { explainCodegraphTarget, explainCodegraphTargetWithSession, formatAgentExplanation } from "./agent/explain.js";
+export type {
+  AgentExplainTarget,
+  AgentExplanation,
+  AgentExplanationChangedContext,
+  AgentExplanationDependency,
+  AgentExplanationReference,
+  AgentExplanationSnippet,
+  AgentExplanationSqlObject,
+  AgentExplanationSymbol,
+  AgentExplanationTarget,
+} from "./agent/explain.js";
+
 /** Agent-oriented JSON tool wrappers around the core codegraph APIs. */
 export {
   tool_impactJSON,

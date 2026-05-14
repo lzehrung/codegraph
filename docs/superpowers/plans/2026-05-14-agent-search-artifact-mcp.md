@@ -443,7 +443,7 @@ git commit -m "feat: add agent search"
 - Modify: `src/index.ts`
 - Modify: `tests/cli-regressions.test.ts`
 
-- [ ] **Step 1: Write failing explain tests**
+- [x] **Step 1: Write failing explain tests**
 
 Add `tests/agent-explain.test.ts`:
 
@@ -485,13 +485,13 @@ describe("agent explain", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing tests**
+- [x] **Step 2: Run the failing tests**
 
 Run: `npx vitest run tests/agent-explain.test.ts`
 
 Expected: FAIL because `explainCodegraphTarget` does not exist.
 
-- [ ] **Step 3: Implement explain packets**
+- [x] **Step 3: Implement explain packets**
 
 Create `src/agent/explain.ts`.
 
@@ -510,7 +510,7 @@ The public function signature must be:
 export async function explainCodegraphTarget(request: AgentExplainTarget): Promise<AgentExplanation>;
 ```
 
-- [ ] **Step 4: Add CLI command and tests**
+- [x] **Step 4: Add CLI command and tests**
 
 Add `codegraph explain <file|symbol|sql-object> [--root <path>] [--changed-context --base <rev> --head <rev>] [--json]`.
 
@@ -531,7 +531,7 @@ it("explain returns compact architecture context", async () => {
 });
 ```
 
-- [ ] **Step 5: Update exports, help, docs, and skill**
+- [x] **Step 5: Update exports, help, docs, and skill**
 
 Export from `src/index.ts`:
 
@@ -542,7 +542,7 @@ export type { AgentExplanation, AgentExplainTarget } from "./agent/explain.js";
 
 Update `src/cli/help.ts`, `docs/cli.md`, `docs/library-api.md`, `docs/agent-workflows.md`, `README.md`, and `codegraph-skill/codegraph/SKILL.md`.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 Run:
 

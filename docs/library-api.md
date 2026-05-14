@@ -27,7 +27,7 @@ const jsOnlyIndex = await buildProjectIndex(process.cwd(), { native: "off" });
 `searchCodegraph()` builds a project snapshot and returns deterministic, agent-ready anchors across files, symbols, chunks, SQL objects, and optional graph neighborhoods.
 
 ```ts
-import { searchCodegraph } from "@lzehrung/codegraph";
+import { explainCodegraphTarget, searchCodegraph } from "@lzehrung/codegraph";
 
 const response = await searchCodegraph({
   root: process.cwd(),
@@ -41,6 +41,19 @@ console.log(first?.handle, first?.rankReasons, first?.followUps);
 ```
 
 Use `mode: "sql"` for SQL objects, or pass `from` plus `depth` with `mode: "graph"` to boost matches near a file, symbol handle, SQL handle, or symbol name.
+
+`explainCodegraphTarget()` resolves a file path, symbol name, SQL object name, or search handle into a bounded packet for follow-up agent work:
+
+```ts
+const explanation = await explainCodegraphTarget({
+  root: process.cwd(),
+  target: first?.handle ?? "src/auth.ts",
+  maxDependencies: 10,
+  maxSnippets: 5,
+});
+
+console.log(explanation.summary, explanation.followUps);
+```
 
 ## Semantic chunking
 

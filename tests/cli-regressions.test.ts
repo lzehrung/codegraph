@@ -992,6 +992,35 @@ describe("CLI regressions", () => {
     expect(response.results[0]?.rankReasons.length).toBeGreaterThan(0);
     expect(response.results[0]?.followUps.some((cmd) => cmd.includes("codegraph refs"))).toBeTruthy();
   });
+
+  it("explain returns compact architecture context", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-explain-"));
+    await fsp.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
+    await fsp.writeFile(
+      path.join(root, "api.ts"),
+      "import { validateUser } from './auth';\nexport const ok = validateUser(1);\n",
+    );
+
+    const stdout = await runCliCommand(["explain", "auth.ts", "--root", root, "--json"]);
+    const response = JSON.parse(stdout) as {
+      target: { file: string };
+      symbols: Array<{ name: string }>;
+      reverseDependencies: Array<{ file: string }>;
+    };
+
+    expect(response.target.file).toBe("auth.ts");
+    expect(response.symbols.some((symbol) => symbol.name === "validateUser")).toBeTruthy();
+    expect(response.reverseDependencies.some((entry) => entry.file === "api.ts")).toBeTruthy();
+  });
+
+  it("explain requires a complete changed-context range", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-explain-range-"));
+    await fsp.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n");
+
+    await expect(runCliCommandDetailed(["explain", "auth.ts", "--root", root, "--changed-context"])).rejects.toThrow(
+      /--changed-context requires --base and --head/,
+    );
+  });
 });
 
 describe("textGrep API", () => {

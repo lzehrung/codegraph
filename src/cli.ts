@@ -54,6 +54,7 @@ import { parseCacheModeOption } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
 import { handleSkillCommand } from "./cli/skill.js";
 import { handleSqlCommand } from "./cli/sql.js";
+import { explainCodegraphTarget, formatAgentExplanation } from "./agent/explain.js";
 import { formatAgentSearchResponse, searchCodegraph, type AgentSearchMode } from "./agent/search.js";
 import { buildSqlArtifactGraphFromFiles } from "./sql/index.js";
 import type { Graph } from "./types.js";
@@ -293,6 +294,8 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--limit",
   "--mode",
   "--from",
+  "--max-dependencies",
+  "--max-snippets",
 ]);
 
 type IndexCacheMetadata = {
@@ -1400,6 +1403,43 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       writeJSONLine(response);
     } else {
       writeStdoutLine(formatAgentSearchResponse(response));
+    }
+    return;
+  }
+
+  if (cmd === "explain") {
+    const target = parsed.positionals.join(" ").trim();
+    if (!target) {
+      writeStderrLine(
+        'Usage: explain <file|symbol|sql-object> [--root <path>] [--changed-context --base <rev> --head <rev>] [--json]',
+      );
+      exitCli(2);
+    }
+
+    const maxDependenciesRaw = getOpt("--max-dependencies");
+    const maxSnippetsRaw = getOpt("--max-snippets");
+    const base = getOpt("--base");
+    const head = getOpt("--head");
+    if (hasFlag("--changed-context") && (base === undefined || head === undefined)) {
+      writeStderrLine("--changed-context requires --base and --head.");
+      exitCli(2);
+    }
+    const response = await explainCodegraphTarget({
+      root: projectRootFs,
+      target,
+      includeChangedContext: hasFlag("--changed-context"),
+      ...(base !== undefined ? { base } : {}),
+      ...(head !== undefined ? { head } : {}),
+      ...(maxDependenciesRaw !== undefined
+        ? { maxDependencies: parsePositiveIntegerOption(maxDependenciesRaw, "--max-dependencies", 20) }
+        : {}),
+      ...(maxSnippetsRaw !== undefined ? { maxSnippets: parsePositiveIntegerOption(maxSnippetsRaw, "--max-snippets", 8) } : {}),
+    });
+
+    if (hasFlag("--json")) {
+      writeJSONLine(response);
+    } else {
+      writeStdoutLine(formatAgentExplanation(response));
     }
     return;
   }

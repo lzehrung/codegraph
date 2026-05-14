@@ -6,6 +6,7 @@ Commands:
   graph         Build dependency graph (default)
   inspect       Summarize repo structure and recommend next commands
   search        Ranked agent search across files, symbols, chunks, SQL, and graph context
+  explain       Explain a file, symbol, SQL object, or search handle
   impact        Analyze PR impact
   review        Generate code review report
   goto          Go to definition
@@ -55,6 +56,7 @@ Examples:
   codegraph doctor
   codegraph inspect ./src --limit 20
   codegraph search "auth user" --json
+  codegraph explain src/auth.ts --json
   codegraph graph --root . ./src --include-glob "**/*.ts" --ignore-glob "**/*.spec.ts"
   codegraph skill install --agent agents
   codegraph skill install --agent codex
