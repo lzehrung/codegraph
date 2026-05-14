@@ -110,6 +110,29 @@ describe("project file discovery", () => {
     }
   });
 
+  it("filters discovered files whose realpath escapes the project root", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-root-"));
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-outside-"));
+    const outsideFile = path.join(outsideDir, "secret.ts");
+    const linkedFile = path.join(tempDir, "linked-secret.ts");
+    await createFile(path.join(tempDir, "src", "main.ts"), "export const main = 1;\n");
+    await createFile(outsideFile, "export const secret = 1;\n");
+
+    try {
+      await fs.symlink(outsideFile, linkedFile, "file");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const discovered = await listProjectFiles(tempDir, ["**/*.ts"], { ignoreGlobs: [] });
+    const discoveredSet = new Set(discovered.map(normalize));
+
+    expect(discoveredSet.has(normalize(path.join(tempDir, "src", "main.ts")))).toBe(true);
+    expect(discoveredSet.has(normalize(linkedFile))).toBe(false);
+    expect(discoveredSet.has(normalize(outsideFile))).toBe(false);
+  });
+
   it("extracts project names from common manifests", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-meta-"));
     const nodeDir = path.join(tempDir, "node");
@@ -433,3 +456,11 @@ describe("project file discovery", () => {
     expect(discovered.map(normalize)).toContain(normalize(appFile));
   });
 });
+
+function isSymlinkUnavailable(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "EPERM" || error.code === "EACCES" || error.code === "ENOTSUP")
+  );
+}

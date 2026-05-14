@@ -6,6 +6,7 @@ import picomatch from "picomatch";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { stringifyUnknown } from "./ast.js";
 import { isFilePathWithinRoot, normalizePath } from "./paths.js";
+import { mapLimitSemaphore } from "./semaphore.js";
 
 export const DEFAULT_PROJECT_FILE_IGNORES = [
   "**/node_modules/**",
@@ -85,6 +86,8 @@ export const DEFAULT_PROJECT_PATTERNS = [
   "**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs,py,php,vue,svelte,astro,hbs,handlebars,md,mdx,rst,adoc,asciidoc,go,java,cs,rb,rs,html,htm,css,scss,less,kt,kts,swift,zig,c,h,cc,cpp,cxx,c++,hpp,hh,hxx,ipp,tpp,inl,sql}",
   ...DEFAULT_PROJECT_MANIFESTS.map((name) => `**/${name}`),
 ];
+
+const REALPATH_FILTER_CONCURRENCY = 64;
 
 export type ProjectFileDiscoveryOptions = {
   includeGlobs?: string[];
@@ -239,12 +242,11 @@ export async function listProjectFiles(
   try {
     const useGitignore = options?.useGitignore ?? true;
     const realRoot = await fsp.realpath(root);
-    const gitignoreRules =
-      !useGitignore
-        ? []
-        : await loadGitignoreRules(
-            options?.gitignoreRoot ? await ensureDirectoryReadable(options.gitignoreRoot, "Gitignore root") : root,
-          );
+    const gitignoreRules = !useGitignore
+      ? []
+      : await loadGitignoreRules(
+          options?.gitignoreRoot ? await ensureDirectoryReadable(options.gitignoreRoot, "Gitignore root") : root,
+        );
     const files = await fg(patterns, {
       cwd: root,
       absolute: true,
@@ -269,18 +271,15 @@ export async function listProjectFiles(
 }
 
 async function filterRealPathsWithinRoot(paths: string[], realRoot: string): Promise<string[]> {
-  const filtered: string[] = [];
-  for (const filePath of paths) {
+  const filtered = await mapLimitSemaphore(paths, REALPATH_FILTER_CONCURRENCY, async (filePath) => {
     try {
       const realPath = await fsp.realpath(filePath);
-      if (isFilePathWithinRoot(realRoot, realPath)) {
-        filtered.push(filePath);
-      }
+      return isFilePathWithinRoot(realRoot, realPath) ? filePath : null;
     } catch {
-      continue;
+      return null;
     }
-  }
-  return filtered;
+  });
+  return filtered.filter((filePath): filePath is string => filePath !== null);
 }
 
 export type ProjectFileKind = "file" | "dir";
@@ -433,14 +432,14 @@ function parseDotnetName(raw: string): string | null {
 }
 
 function stripInlineComment(line: string): string {
-  let quote: "'" | "\"" | null = null;
+  let quote: "'" | '"' | null = null;
   for (let i = 0; i < line.length; i += 1) {
     const ch = line[i];
     if (quote) {
       if (ch === quote) quote = null;
       continue;
     }
-    if (ch === "'" || ch === "\"") {
+    if (ch === "'" || ch === '"') {
       quote = ch;
       continue;
     }

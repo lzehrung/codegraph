@@ -284,7 +284,37 @@ describe("codegraph MCP handlers", () => {
     };
     expect(graph.graph.files.some((file) => file.includes("/out/") || file.endsWith("/out/old.ts"))).toBe(false);
   });
+
+  it("accepts artifact paths and output directories through a symlinked root realpath", async () => {
+    const realRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-real-artifact-root-"));
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-artifact-link-parent-"));
+    const linkedRoot = path.join(parent, "repo-link");
+    try {
+      await fs.symlink(realRoot, linkedRoot, "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    await fs.writeFile(path.join(linkedRoot, "auth.ts"), "export const ok = 1;\n");
+    const realOutDir = path.join(realRoot, "out");
+    const buildHandlers = createCodegraphMcpHandlers({ root: linkedRoot, readOnly: false });
+
+    await buildHandlers.artifact_build({ outDir: realOutDir, sqlite: true, force: true });
+
+    const readHandlers = createCodegraphMcpHandlers({
+      root: linkedRoot,
+      artifactPath: path.join(realOutDir, "codegraph.sqlite"),
+    });
+    const result = await readHandlers.query_sqlite({ query: "select path from files order by path", limit: 1 });
+
+    expect(normalizeSqlitePath(result.rows[0]?.[0])).toMatch(/auth\.ts$/);
+  });
 });
+
+function normalizeSqlitePath(value: unknown): string {
+  return typeof value === "string" ? value.replace(/\\/g, "/") : "";
+}
 
 function isSymlinkUnavailable(error: unknown): boolean {
   return (

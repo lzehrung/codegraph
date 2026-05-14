@@ -95,7 +95,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
   const readOnly = options.readOnly ?? true;
   const session = options.session ?? createAgentSession({ root });
   const realRoot = fs.realpath(root);
-  let sqlitePath = options.artifactPath ? resolveArtifactSqlitePath(root, options.artifactPath) : undefined;
+  let sqlitePath = options.artifactPath ? resolveArtifactSqlitePathCandidate(root, options.artifactPath) : undefined;
 
   const resolveFile = (file: string): string => assertFilePathWithinRoot(root, file, "File");
   const relative = (file: string): string => toProjectRelativePath(root, file) ?? normalizePath(path.resolve(file));
@@ -232,7 +232,11 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
       if (!sqlitePath) {
         throw new Error("No SQLite artifact is available. Run artifact_build first or pass artifactPath.");
       }
-      const realSqlitePath = await assertExistingRealPathWithinRoot(await realRoot, sqlitePath, "SQLite artifact");
+      const realSqlitePath = await assertExistingArtifactRealPathWithinRoot(
+        await realRoot,
+        sqlitePath,
+        "SQLite artifact",
+      );
       const result = await queryGraphSqliteRaw(realSqlitePath, request.query, request.params ?? [], {
         maxRows: normalizeSqliteRowLimit(request.limit),
       });
@@ -351,13 +355,13 @@ function toToolResult(value: unknown): CallToolResult {
   };
 }
 
-function resolveArtifactSqlitePath(root: string, artifactPath: string): string {
+function resolveArtifactSqlitePathCandidate(root: string, artifactPath: string): string {
   const resolved = path.isAbsolute(artifactPath) ? artifactPath : path.resolve(root, artifactPath);
   const sqlitePath =
     resolved.toLowerCase().endsWith(".sqlite") || resolved.toLowerCase().endsWith(".db")
       ? resolved
       : path.join(resolved, "codegraph.sqlite");
-  return assertFilePathWithinRoot(root, sqlitePath, "SQLite artifact");
+  return normalizePath(sqlitePath);
 }
 
 const searchSchema = z.object({
@@ -673,13 +677,30 @@ async function assertExistingRealPathWithinRoot(realRoot: string, filePath: stri
   return normalizePath(realPath);
 }
 
+async function assertExistingArtifactRealPathWithinRoot(
+  realRoot: string,
+  filePath: string,
+  label: string,
+): Promise<string> {
+  const existingPath = await nearestExistingPath(filePath);
+  const realExistingPath = await fs.realpath(existingPath);
+  const relativeSuffix = path.relative(existingPath, filePath);
+  const realTargetPath = path.resolve(realExistingPath, relativeSuffix);
+  if (!isFilePathWithinRoot(realRoot, realTargetPath)) {
+    throw new Error(
+      `${label} is outside project root: ${normalizePath(realTargetPath)} (root: ${normalizePath(realRoot)})`,
+    );
+  }
+  return normalizePath(await fs.realpath(filePath));
+}
+
 async function assertWritableDirectoryRealPathWithinRoot(
   realRoot: string,
   root: string,
   requestedPath: string,
   label: string,
 ): Promise<string> {
-  const lexicalPath = assertFilePathWithinRoot(root, requestedPath, label);
+  const lexicalPath = path.isAbsolute(requestedPath) ? requestedPath : path.resolve(root, requestedPath);
   const existingPath = await nearestExistingPath(lexicalPath);
   const realExistingPath = await fs.realpath(existingPath);
   const relativeSuffix = path.relative(existingPath, lexicalPath);

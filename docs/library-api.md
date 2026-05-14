@@ -58,6 +58,8 @@ const explanation = await explainCodegraphTarget({
 console.log(explanation.summary, explanation.followUps);
 ```
 
+Reference and snippet omission counts are lower bounds once the bounded navigation scan reaches the requested cap. This keeps small packets cheap for symbols with many references while still signaling that more context exists.
+
 `buildCodegraphArtifact()` writes the same core artifacts agents usually need for offline navigation. Artifact contents exclude the output directory itself when it is inside the repo; hosts that write through a resolved path while indexing through a symlinked root can pass `filterOutDir` with the lexical project-relative output path:
 
 ```ts
@@ -290,11 +292,7 @@ console.log(result.columns, result.rows);
 SQL source files participate in normal project indexing through SQL-specific symbols, SQL-to-SQL object edges, and SQL navigation. SQL-to-SQL edges are precise for exact object-name matches, heuristic for unambiguous qualified-to-basename fallback matches, and skipped for ambiguous basename guesses. Navigation is object-level: alias-qualified and table-qualified column uses can resolve to table/view definitions, but not to specific column declarations. These APIs expose the lower-level statement facts and candidate graph for common DDL/DML definitions, reads, writes, constraints, CTEs, renames, truncates, and merges. They do not infer a current schema, and application-code string literals are bridged to SQL only through explicit review-context rules.
 
 ```ts
-import {
-  extractSqlFactsFromSource,
-  projectSqlFactsToGraph,
-  collectSqlReviewContext,
-} from "@lzehrung/codegraph";
+import { extractSqlFactsFromSource, projectSqlFactsToGraph, collectSqlReviewContext } from "@lzehrung/codegraph";
 
 const filePath = `${process.cwd()}/db/schema.sql`;
 const source = "CREATE TABLE users (id integer);";
