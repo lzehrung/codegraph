@@ -13,6 +13,7 @@ codegraph doctor
 codegraph inspect ./src --limit 20
 codegraph search "auth user" --json
 codegraph explain src/auth.ts --json
+codegraph artifact build --root . --out codegraph-out --json
 ```
 
 Then use the recommended commands from `inspect`, or the stable handles and follow-up commands from `search`, to narrow the next graph, navigation, or impact pass.
@@ -31,6 +32,8 @@ codegraph explain "<handle-from-search>" --json
 ```
 
 Search results include `handle`, `rankReasons`, `evidence`, `neighbors`, and `followUps`. `explain` accepts those handles plus file paths, symbol names, and SQL object names, then returns bounded symbols, dependencies, reverse dependencies, references, snippets, SQL facts, and follow-ups. Both commands are deterministic and do not require embeddings or prebuilt artifacts.
+
+Use `artifact build` when the agent needs a durable handoff directory. The default bundle writes SQLite, full graph JSON with symbols, a concise Markdown report, suggested questions, and a manifest.
 
 ## Session management
 

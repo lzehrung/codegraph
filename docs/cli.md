@@ -88,6 +88,10 @@ codegraph explain src/auth.ts --json
 codegraph explain validateUser --json
 codegraph explain public.users --json
 
+# Build an agent-ready artifact bundle
+codegraph artifact build --root . --out codegraph-out --json
+codegraph artifact build --root . --out codegraph-out --sqlite --graph-json --report --questions --force --json
+
 # Chunk a file for LLM processing
 codegraph chunk src/utils.js
 
@@ -111,7 +115,7 @@ codegraph grep --query '(function_declaration name: (identifier) @name)'
 codegraph grep --pattern 'eval\(' --ignore-case
 ```
 
-`search` is deterministic and vectorless. It returns ranked results with stable handles, rank reasons, evidence, graph neighbors, and follow-up commands. `explain` resolves file paths, symbol names, SQL object names, and search handles into bounded packets with symbols, dependencies, reverse dependencies, references, snippets, SQL object facts, and follow-ups. `chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions. Use `--text` to force text chunking.
+`search` is deterministic and vectorless. It returns ranked results with stable handles, rank reasons, evidence, graph neighbors, and follow-up commands. `explain` resolves file paths, symbol names, SQL object names, and search handles into bounded packets with symbols, dependencies, reverse dependencies, references, snippets, SQL object facts, and follow-ups. `artifact build` writes `codegraph.sqlite`, `graph.json`, `CODEGRAPH_REPORT.md`, `questions.json`, and `manifest.json` by default; use artifact flags to select a subset, and `--force` for a non-empty output directory. `chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions. Use `--text` to force text chunking.
 
 ### Dependency analysis and diagnostics
 

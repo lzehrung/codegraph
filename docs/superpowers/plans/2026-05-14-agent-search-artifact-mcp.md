@@ -572,7 +572,7 @@ git commit -m "feat: add agent explain"
 - Modify: `src/index.ts`
 - Modify: `tests/cli-regressions.test.ts`
 
-- [ ] **Step 1: Write failing artifact tests**
+- [x] **Step 1: Write failing artifact tests**
 
 Add `tests/artifact-build.test.ts`:
 
@@ -613,13 +613,13 @@ describe("artifact build", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run: `npx vitest run tests/artifact-build.test.ts`
 
 Expected: FAIL because `buildCodegraphArtifact` does not exist.
 
-- [ ] **Step 3: Implement artifact build**
+- [x] **Step 3: Implement artifact build**
 
 Create `src/agent/artifact.ts`.
 
@@ -665,7 +665,7 @@ export type CodegraphArtifactBuildResult = {
 export async function buildCodegraphArtifact(request: CodegraphArtifactBuildRequest): Promise<CodegraphArtifactBuildResult>;
 ```
 
-- [ ] **Step 4: Add CLI command and tests**
+- [x] **Step 4: Add CLI command and tests**
 
 Add:
 
@@ -697,7 +697,7 @@ it("artifact build writes an agent-ready artifact bundle", async () => {
 });
 ```
 
-- [ ] **Step 5: Update exports, help, docs, and skill**
+- [x] **Step 5: Update exports, help, docs, and skill**
 
 Export from `src/index.ts`:
 
@@ -708,7 +708,7 @@ export type { CodegraphArtifactBuildRequest, CodegraphArtifactBuildResult } from
 
 Update `src/cli/help.ts`, `docs/cli.md`, `docs/library-api.md`, `docs/agent-workflows.md`, `README.md`, and `codegraph-skill/codegraph/SKILL.md`.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 Run:
 

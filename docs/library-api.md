@@ -27,7 +27,7 @@ const jsOnlyIndex = await buildProjectIndex(process.cwd(), { native: "off" });
 `searchCodegraph()` builds a project snapshot and returns deterministic, agent-ready anchors across files, symbols, chunks, SQL objects, and optional graph neighborhoods.
 
 ```ts
-import { explainCodegraphTarget, searchCodegraph } from "@lzehrung/codegraph";
+import { buildCodegraphArtifact, explainCodegraphTarget, searchCodegraph } from "@lzehrung/codegraph";
 
 const response = await searchCodegraph({
   root: process.cwd(),
@@ -53,6 +53,17 @@ const explanation = await explainCodegraphTarget({
 });
 
 console.log(explanation.summary, explanation.followUps);
+```
+
+`buildCodegraphArtifact()` writes the same core artifacts agents usually need for offline navigation:
+
+```ts
+const artifact = await buildCodegraphArtifact({
+  root: process.cwd(),
+  outDir: "codegraph-out",
+});
+
+console.log(artifact.manifestPath, artifact.artifacts);
 ```
 
 ## Semantic chunking

@@ -54,6 +54,7 @@ import { parseCacheModeOption } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
 import { handleSkillCommand } from "./cli/skill.js";
 import { handleSqlCommand } from "./cli/sql.js";
+import { buildCodegraphArtifact } from "./agent/artifact.js";
 import { explainCodegraphTarget, formatAgentExplanation } from "./agent/explain.js";
 import { formatAgentSearchResponse, searchCodegraph, type AgentSearchMode } from "./agent/search.js";
 import { buildSqlArtifactGraphFromFiles } from "./sql/index.js";
@@ -246,6 +247,7 @@ type ParsedCliArgs = {
 const CLI_VALUE_OPTIONS = new Set<string>([
   "--root",
   "--output",
+  "--out",
   "--stderr-file",
   "--threads",
   "--native",
@@ -1440,6 +1442,40 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       writeJSONLine(response);
     } else {
       writeStdoutLine(formatAgentExplanation(response));
+    }
+    return;
+  }
+
+  if (cmd === "artifact") {
+    const artifactCommand = parsed.positionals[0];
+    if (artifactCommand !== "build") {
+      writeStderrLine(
+        "Usage: artifact build [--root <path>] [--out <dir>] [--sqlite] [--graph-json] [--report] [--questions] [--force] [--json]",
+      );
+      exitCli(2);
+    }
+
+    const outDir = getOpt("--out") ?? getOpt("--output");
+    const hasArtifactSelection =
+      hasFlag("--sqlite") || hasFlag("--graph-json") || hasFlag("--report") || hasFlag("--questions");
+    const result = await buildCodegraphArtifact({
+      root: projectRootFs,
+      ...(outDir !== undefined ? { outDir } : {}),
+      force: hasFlag("--force"),
+      ...(hasArtifactSelection
+        ? {
+            sqlite: hasFlag("--sqlite"),
+            graphJson: hasFlag("--graph-json"),
+            report: hasFlag("--report"),
+            questions: hasFlag("--questions"),
+          }
+        : {}),
+    });
+
+    if (hasFlag("--json")) {
+      writeJSONLine(result);
+    } else {
+      writeStdoutLine(result.manifestPath);
     }
     return;
   }

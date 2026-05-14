@@ -68,7 +68,7 @@ Real `inspect ./src --limit 10` output against this repo looks like:
 - Multi-language dependency graphs, including imports, re-exports, `require()`, dynamic imports, workspace resolution, document links, stylesheet imports, and SFC script dependencies.
 - Per-file symbol indexes with locals, exports, docstrings, line spans, and lightweight complexity metadata.
 - Cross-file go-to-definition and find-references support across the shared source-language pipeline.
-- Deterministic agent search and explanation packets across files, symbols, chunks, SQL objects, and graph neighborhoods with stable follow-up handles.
+- Deterministic agent search, explanation packets, and artifact bundles across files, symbols, chunks, SQL objects, and graph neighborhoods with stable follow-up handles.
 - Semantic chunking for code and text files, including Vue and Svelte single-file component block splitting.
 - AST grep, public API summaries, unresolved import reports, hotspot analysis, cycle detection, and shortest dependency paths.
 - PR impact analysis and review bundles that map diffs to changed symbols, impacted code, likely tests, and graph deltas.
@@ -223,7 +223,7 @@ For the full capability matrix, limitations, and fixture coverage, see [docs/lan
 
 - [docs/installation.md](./docs/installation.md): source checkout, scoped registry, release tarball, native runtime modes, and JS fallback details
 - [docs/cli.md](./docs/cli.md): command reference, output formats, SQLite schema, review bundles, and graph viewer usage
-- [docs/library-api.md](./docs/library-api.md): agent search/explain, semantic chunking, indexing, graph APIs, read-only SQL, impact examples, and programmatic review output
+- [docs/library-api.md](./docs/library-api.md): agent search/explain/artifacts, semantic chunking, indexing, graph APIs, read-only SQL, impact examples, and programmatic review output
 - [docs/agent-workflows.md](./docs/agent-workflows.md): search anchors, sessions, streaming, tool wrappers, review bundles, and agent-oriented review recipes
 - [docs/how-it-works.md](./docs/how-it-works.md): performance, caching, native runtime behavior, architecture, and testing guidance
 - [docs/language-parity.md](./docs/language-parity.md): per-language capability matrix

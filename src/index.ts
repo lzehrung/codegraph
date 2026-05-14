@@ -234,6 +234,10 @@ export type {
   AgentExplanationTarget,
 } from "./agent/explain.js";
 
+/** Agent-ready artifact bundle builder for SQLite, graph JSON, reports, questions, and manifests. */
+export { buildCodegraphArtifact } from "./agent/artifact.js";
+export type { CodegraphArtifactBuildRequest, CodegraphArtifactBuildResult } from "./agent/artifact.js";
+
 /** Agent-oriented JSON tool wrappers around the core codegraph APIs. */
 export {
   tool_impactJSON,

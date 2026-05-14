@@ -36,6 +36,7 @@ Then choose the narrowest follow-up command that answers the user:
 - Hot files: `codegraph hotspots ./src --limit 20 --json`
 - Ranked search anchors: `codegraph search "auth user" --json`
 - Explain an anchor: `codegraph explain <file|symbol|sql-object|search-handle> --json`
+- Durable artifact bundle: `codegraph artifact build --root . --out codegraph-out --json`
 - SQL search anchors: `codegraph search "public users" --mode sql --json`
 - Cycles: `codegraph cycles --sort priority --json`
 - Dependencies of one file: `codegraph deps <file>`
@@ -50,7 +51,7 @@ Then choose the narrowest follow-up command that answers the user:
 - Public API surface: `codegraph apisurface`
 - Semantic chunks for context packing: `codegraph chunk <file>`
 
-Use `--json` when the output will feed later reasoning, scripts, or another agent step. `search` is deterministic and returns stable handles, evidence, neighbors, and follow-up commands. `explain` accepts those handles plus file paths, symbol names, and SQL object names, then returns bounded symbols, dependencies, reverse dependencies, references, snippets, SQL facts, and next commands.
+Use `--json` when the output will feed later reasoning, scripts, or another agent step. `search` is deterministic and returns stable handles, evidence, neighbors, and follow-up commands. `explain` accepts those handles plus file paths, symbol names, and SQL object names, then returns bounded symbols, dependencies, reverse dependencies, references, snippets, SQL facts, and next commands. `artifact build` writes a durable SQLite, graph JSON, report, questions, and manifest bundle for handoff.
 
 ## Tool purpose
 

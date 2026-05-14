@@ -3,7 +3,7 @@ import type { ProjectIndex } from "../indexer/types.js";
 import { buildSymbolGraphDetailed, collectGraph } from "../graphs.js";
 import type { SymbolGraph } from "../graphs.js";
 import type { Graph } from "../types.js";
-import { listProjectFiles } from "../util.js";
+import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util.js";
 
 export type AgentProjectSnapshot = {
   root: string;
@@ -15,6 +15,7 @@ export type AgentProjectSnapshot = {
 
 export type AgentSessionOptions = {
   root: string;
+  discovery?: ProjectFileDiscoveryOptions;
 };
 
 export type AgentSession = {
@@ -29,8 +30,11 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     if (cached) return cached;
 
     cached = (async () => {
-      const files = await listProjectFiles(options.root);
-      const index = await buildProjectIndex(options.root, { keepParsed: true });
+      const files = await listProjectFiles(options.root, undefined, options.discovery);
+      const index = await buildProjectIndex(options.root, {
+        keepParsed: true,
+        ...(options.discovery ? { discovery: options.discovery } : {}),
+      });
       const fileGraph = await collectGraph(options.root, files, { allFiles: files });
       const symbolGraph = await buildSymbolGraphDetailed(index);
 

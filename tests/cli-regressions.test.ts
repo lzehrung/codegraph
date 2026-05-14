@@ -1021,6 +1021,19 @@ describe("CLI regressions", () => {
       /--changed-context requires --base and --head/,
     );
   });
+
+  it("artifact build writes an agent-ready artifact bundle", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-artifact-"));
+    const outDir = path.join(root, "out");
+    await fsp.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
+
+    const stdout = await runCliCommand(["artifact", "build", "--root", root, "--out", outDir, "--json"]);
+    const result = JSON.parse(stdout) as { manifestPath: string; artifacts: Record<string, string> };
+
+    expect(result.manifestPath.endsWith("manifest.json")).toBeTruthy();
+    expect(result.artifacts.sqlite).toBe("codegraph.sqlite");
+    expect(await fsp.stat(path.join(outDir, "manifest.json"))).toBeTruthy();
+  });
 });
 
 describe("textGrep API", () => {
