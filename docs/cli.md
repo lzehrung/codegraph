@@ -92,6 +92,11 @@ codegraph explain public.users --json
 codegraph artifact build --root . --out codegraph-out --json
 codegraph artifact build --root . --out codegraph-out --sqlite --graph-json --report --questions --force --json
 
+# Serve MCP tools over the same search, navigation, artifact, and review layer
+codegraph mcp serve --root . --stdio
+codegraph mcp serve --root . --artifact codegraph-out --stdio
+codegraph mcp serve --root . --stdio --allow-build
+
 # Chunk a file for LLM processing
 codegraph chunk src/utils.js
 
@@ -115,7 +120,7 @@ codegraph grep --query '(function_declaration name: (identifier) @name)'
 codegraph grep --pattern 'eval\(' --ignore-case
 ```
 
-`search` is deterministic and vectorless. It returns ranked results with stable handles, rank reasons, evidence, graph neighbors, and follow-up commands. `explain` resolves file paths, symbol names, SQL object names, and search handles into bounded packets with symbols, dependencies, reverse dependencies, references, snippets, SQL object facts, and follow-ups. `artifact build` writes `codegraph.sqlite`, `graph.json`, `CODEGRAPH_REPORT.md`, `questions.json`, and `manifest.json` by default; use artifact flags to select a subset, and `--force` for a non-empty output directory. `chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions. Use `--text` to force text chunking.
+`search` is deterministic and vectorless. It returns ranked results with stable handles, rank reasons, evidence, graph neighbors, and follow-up commands. `explain` resolves file paths, symbol names, SQL object names, and search handles into bounded packets with symbols, dependencies, reverse dependencies, references, snippets, SQL object facts, and follow-ups. `artifact build` writes `codegraph.sqlite`, `graph.json`, `CODEGRAPH_REPORT.md`, `questions.json`, and `manifest.json` by default; use artifact flags to select a subset, and `--force` for a non-empty output directory. `mcp serve` exposes `search`, `get_file`, `get_symbol`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, `query_sqlite`, and `artifact_build` over stdio. MCP file and artifact paths are confined to `--root`; tools are read-only by default, and `--allow-build` enables artifact output only. `chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions. Use `--text` to force text chunking.
 
 ### Dependency analysis and diagnostics
 

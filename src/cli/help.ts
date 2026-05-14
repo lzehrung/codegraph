@@ -59,6 +59,7 @@ Examples:
   codegraph search "auth user" --json
   codegraph explain src/auth.ts --json
   codegraph artifact build --root . --out codegraph-out --json
+  codegraph mcp serve --root . --stdio
   codegraph graph --root . ./src --include-glob "**/*.ts" --ignore-glob "**/*.spec.ts"
   codegraph skill install --agent agents
   codegraph skill install --agent codex
@@ -71,4 +72,27 @@ Examples:
   codegraph impact --provider git --base main --head HEAD
   codegraph impact --provider git --base HEAD --head WORKTREE
   codegraph refs --file src/index.ts --line 42 --col 10
+`;
+
+export const MCP_SERVE_HELP_TEXT = `codegraph mcp serve - MCP server for agent graph navigation
+
+Usage: codegraph mcp serve [--root <path>] [--artifact <path>] [--stdio] [--allow-build]
+
+Tools:
+  search          Deterministic ranked search with stable handles
+  get_file        Bounded project file reads inside the root
+  get_symbol      Resolve a search/explain handle
+  goto            Go to definition by file position
+  refs            Find references by handle or file position
+  deps            List dependencies
+  rdeps           List reverse dependencies
+  path            Find shortest dependency path
+  impact          Build compact impact context for a git range
+  review          Build review context for a git range
+  query_sqlite    Read-only SQLite artifact query
+  artifact_build  Build artifacts only with --allow-build
+
+Defaults:
+  Transport defaults to stdio.
+  Tools are read-only unless --allow-build is passed.
 `;

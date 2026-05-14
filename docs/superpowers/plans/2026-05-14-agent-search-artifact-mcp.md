@@ -740,7 +740,7 @@ git commit -m "feat: add artifact build"
 - Modify: `src/index.ts`
 - Modify: `tests/cli-regressions.test.ts`
 
-- [ ] **Step 1: Decide dependency boundary**
+- [x] **Step 1: Decide dependency boundary**
 
 Use `@modelcontextprotocol/sdk` only if the repo does not already expose an MCP helper. Add it as a normal runtime dependency because the published CLI command needs it.
 
@@ -752,7 +752,7 @@ npm install @modelcontextprotocol/sdk
 
 Expected: `package.json` and `package-lock.json` are updated. Do not hand-edit lockfile dependency entries.
 
-- [ ] **Step 2: Write failing MCP handler tests**
+- [x] **Step 2: Write failing MCP handler tests**
 
 Add `tests/mcp-server.test.ts`:
 
@@ -794,13 +794,13 @@ describe("codegraph MCP handlers", () => {
 });
 ```
 
-- [ ] **Step 3: Run the failing tests**
+- [x] **Step 3: Run the failing tests**
 
 Run: `npx vitest run tests/mcp-server.test.ts`
 
 Expected: FAIL because `src/mcp/server.ts` does not exist.
 
-- [ ] **Step 4: Implement MCP handlers independent of transport**
+- [x] **Step 4: Implement MCP handlers independent of transport**
 
 Create `src/mcp/server.ts`.
 
@@ -840,7 +840,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
 export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Promise<void>;
 ```
 
-- [ ] **Step 5: Add CLI command**
+- [x] **Step 5: Add CLI command**
 
 Add:
 
@@ -855,7 +855,7 @@ CLI behavior:
 - Never expose arbitrary shell execution.
 - Use stable handles returned by `search` and `explain` for follow-up tools.
 
-- [ ] **Step 6: Add CLI smoke test**
+- [x] **Step 6: Add CLI smoke test**
 
 Append to `tests/cli-regressions.test.ts`:
 
@@ -869,7 +869,7 @@ it("mcp serve help documents read-only agent tools", async () => {
 });
 ```
 
-- [ ] **Step 7: Update exports, help, docs, and skill**
+- [x] **Step 7: Update exports, help, docs, and skill**
 
 Export from `src/index.ts`:
 
@@ -880,7 +880,7 @@ export type { CodegraphMcpServerOptions } from "./mcp/server.js";
 
 Update `src/cli/help.ts`, `docs/cli.md`, `docs/library-api.md`, `docs/agent-workflows.md`, `README.md`, and `codegraph-skill/codegraph/SKILL.md`.
 
-- [ ] **Step 8: Verify and commit**
+- [x] **Step 8: Verify and commit**
 
 Run:
 

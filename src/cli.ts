@@ -49,7 +49,7 @@ import { handleChunkCommand } from "./cli/chunk.js";
 import { buildDoctorReport } from "./cli/doctor.js";
 import { handleGraphDeltaCommand } from "./cli/graphDelta.js";
 import { handleGraphQueryCommand } from "./cli/graphQueries.js";
-import { CLI_HELP_TEXT } from "./cli/help.js";
+import { CLI_HELP_TEXT, MCP_SERVE_HELP_TEXT } from "./cli/help.js";
 import { parseCacheModeOption } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
 import { handleSkillCommand } from "./cli/skill.js";
@@ -57,6 +57,7 @@ import { handleSqlCommand } from "./cli/sql.js";
 import { buildCodegraphArtifact } from "./agent/artifact.js";
 import { explainCodegraphTarget, formatAgentExplanation } from "./agent/explain.js";
 import { formatAgentSearchResponse, searchCodegraph, type AgentSearchMode } from "./agent/search.js";
+import { serveCodegraphMcp } from "./mcp/server.js";
 import { buildSqlArtifactGraphFromFiles } from "./sql/index.js";
 import type { Graph } from "./types.js";
 import {
@@ -298,6 +299,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--from",
   "--max-dependencies",
   "--max-snippets",
+  "--artifact",
 ]);
 
 type IndexCacheMetadata = {
@@ -1163,6 +1165,11 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return v && v.length > 0 ? v[v.length - 1] : undefined;
   };
 
+  if ((hasFlag("--help") || hasFlag("-h")) && cmd === "mcp" && parsed.positionals[0] === "serve") {
+    writeStdoutLine(MCP_SERVE_HELP_TEXT.trimEnd());
+    return;
+  }
+
   // Handle help flag
   if (hasFlag("--help") || hasFlag("-h")) {
     writeStdoutLine(CLI_HELP_TEXT.trimEnd());
@@ -1477,6 +1484,22 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     } else {
       writeStdoutLine(result.manifestPath);
     }
+    return;
+  }
+
+  if (cmd === "mcp") {
+    const mcpCommand = parsed.positionals[0];
+    if (mcpCommand !== "serve") {
+      writeStderrLine("Usage: mcp serve [--root <path>] [--artifact <path>] [--stdio] [--allow-build]");
+      exitCli(2);
+    }
+
+    const artifactPath = getOpt("--artifact");
+    await serveCodegraphMcp({
+      root: projectRootFs,
+      readOnly: !hasFlag("--allow-build"),
+      ...(artifactPath !== undefined ? { artifactPath } : {}),
+    });
     return;
   }
 

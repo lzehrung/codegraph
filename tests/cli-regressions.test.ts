@@ -1344,4 +1344,12 @@ index 1111111..2222222 100644
 
     expect(pretty).toBe(summary);
   });
+
+  it("mcp serve help documents read-only agent tools", async () => {
+    const stdout = await runCliCommand(["mcp", "serve", "--help"]);
+
+    expect(stdout).toContain("search");
+    expect(stdout).toContain("query_sqlite");
+    expect(stdout).toContain("read-only");
+  });
 });

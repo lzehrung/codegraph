@@ -1,6 +1,6 @@
 # Library API
 
-Programmatic APIs for indexing, graph building, chunking, SQL artifact facts, read-only SQLite inspection, and impact analysis.
+Programmatic APIs for indexing, graph building, agent search/explain/artifacts, MCP handlers, chunking, SQL artifact facts, read-only SQLite inspection, and impact analysis.
 
 For sessions, streaming workflows, tool wrappers, and review-oriented recipes, see [docs/agent-workflows.md](./agent-workflows.md).
 
@@ -65,6 +65,25 @@ const artifact = await buildCodegraphArtifact({
 
 console.log(artifact.manifestPath, artifact.artifacts);
 ```
+
+`createAgentSession()` keeps one in-process project snapshot warm for repeated search/explain/MCP calls. `createCodegraphMcpHandlers()` exposes the same primitives without starting stdio, which is useful for tests or host applications:
+
+```ts
+import { createCodegraphMcpHandlers } from "@lzehrung/codegraph";
+
+const handlers = createCodegraphMcpHandlers({
+  root: process.cwd(),
+  artifactPath: "codegraph-out",
+  readOnly: true,
+});
+
+const search = await handlers.search({ query: "auth user", limit: 5 });
+const refs = await handlers.refs({ handle: search.results[0]!.handle });
+const rows = await handlers.query_sqlite({ query: "select path from files limit 5" });
+console.log(refs.references, rows.rows);
+```
+
+`serveCodegraphMcp()` starts the stdio server used by `codegraph mcp serve`. MCP is an agent ergonomics and cache layer over the same analysis engine, not a separate indexer. `query_sqlite` is read-only; `artifact_build` is disabled when `readOnly` is set.
 
 ## Semantic chunking
 

@@ -14,6 +14,7 @@ codegraph inspect ./src --limit 20
 codegraph search "auth user" --json
 codegraph explain src/auth.ts --json
 codegraph artifact build --root . --out codegraph-out --json
+codegraph mcp serve --root . --stdio
 ```
 
 Then use the recommended commands from `inspect`, or the stable handles and follow-up commands from `search`, to narrow the next graph, navigation, or impact pass.
@@ -34,6 +35,12 @@ codegraph explain "<handle-from-search>" --json
 Search results include `handle`, `rankReasons`, `evidence`, `neighbors`, and `followUps`. `explain` accepts those handles plus file paths, symbol names, and SQL object names, then returns bounded symbols, dependencies, reverse dependencies, references, snippets, SQL facts, and follow-ups. Both commands are deterministic and do not require embeddings or prebuilt artifacts.
 
 Use `artifact build` when the agent needs a durable handoff directory. The default bundle writes SQLite, full graph JSON with symbols, a concise Markdown report, suggested questions, and a manifest.
+
+## MCP server
+
+Use `codegraph mcp serve --root . --stdio` when an agent can call MCP tools directly. MCP reuses one in-process Codegraph session and exposes the same deterministic primitives as compact tools: `search`, `get_file`, `get_symbol`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, `query_sqlite`, and `artifact_build`.
+
+MCP is an ergonomics and performance layer, not a separate analysis engine. It gives agents stable handles from `search` and `explain`, avoids rebuilding the project for each follow-up call, and returns bounded snippets/resources. File and artifact paths are confined to the project root. Tools are read-only by default; `query_sqlite` rejects mutating SQL, and `artifact_build` is available only when the server is started with `--allow-build`.
 
 ## Session management
 

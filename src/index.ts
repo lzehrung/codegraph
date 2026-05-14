@@ -238,6 +238,10 @@ export type {
 export { buildCodegraphArtifact } from "./agent/artifact.js";
 export type { CodegraphArtifactBuildRequest, CodegraphArtifactBuildResult } from "./agent/artifact.js";
 
+/** MCP server and typed handler helpers for agent graph navigation. */
+export { createCodegraphMcpHandlers, serveCodegraphMcp } from "./mcp/server.js";
+export type { CodegraphMcpHandlers, CodegraphMcpServerOptions } from "./mcp/server.js";
+
 /** Agent-oriented JSON tool wrappers around the core codegraph APIs. */
 export {
   tool_impactJSON,
