@@ -205,6 +205,10 @@ export {
   type SymbolManifestEntry,
 } from "./util/symbolHash.js";
 
+/** Agent project snapshots and cached service-layer helpers. */
+export { createAgentSession } from "./agent/session.js";
+export type { AgentProjectSnapshot, AgentSession, AgentSessionOptions } from "./agent/session.js";
+
 /** Agent-oriented JSON tool wrappers around the core codegraph APIs. */
 export {
   tool_impactJSON,

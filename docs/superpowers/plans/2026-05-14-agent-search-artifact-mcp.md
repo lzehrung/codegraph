@@ -139,7 +139,7 @@ export type AgentExplanation = {
 - Test: `tests/agent-session.test.ts`
 - Modify: `src/index.ts`
 
-- [ ] **Step 1: Write the failing session cache test**
+- [x] **Step 1: Write the failing session cache test**
 
 Add `tests/agent-session.test.ts`:
 
@@ -174,13 +174,13 @@ describe("agent session", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run: `npx vitest run tests/agent-session.test.ts`
 
 Expected: FAIL because `src/agent/session.ts` does not exist.
 
-- [ ] **Step 3: Implement the session**
+- [x] **Step 3: Implement the session**
 
 Create `src/agent/session.ts` with:
 
@@ -241,7 +241,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
 
 Use the exact current exported type names from `src/indexer/types.ts`, `src/graphs.ts`, and `src/types.ts`. Do not use `any`.
 
-- [ ] **Step 4: Export the session API**
+- [x] **Step 4: Export the session API**
 
 Modify `src/index.ts`:
 
@@ -250,7 +250,7 @@ export { createAgentSession } from "./agent/session.js";
 export type { AgentProjectSnapshot, AgentSession, AgentSessionOptions } from "./agent/session.js";
 ```
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run:
 
