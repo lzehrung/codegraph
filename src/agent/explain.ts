@@ -62,7 +62,8 @@ export type AgentExplanationChangedContext = {
   symbolsChanged: number;
   risk: string;
   changedFiles: string[];
-  reviewTasks: Array<{ id: string; title: string; priority: string }>;
+  reviewTasks: Array<{ id: string; reason: string; summary: string; priority: string }>;
+  candidateTests: Array<{ file: string; confidence: string; reason: string }>;
 };
 
 export type AgentExplanation = {
@@ -574,8 +575,14 @@ async function collectChangedContext(request: AgentExplainTarget): Promise<Agent
     changedFiles: report.changedFiles.map((entry) => entry.file).slice(0, 20),
     reviewTasks: report.reviewTasks.slice(0, 5).map((task) => ({
       id: task.id,
-      title: task.title,
+      reason: task.reason,
+      summary: task.description,
       priority: task.priority,
+    })),
+    candidateTests: report.candidateTests.slice(0, 10).map((candidate) => ({
+      file: candidate.file,
+      confidence: candidate.confidence,
+      reason: candidate.reason,
     })),
   };
 }

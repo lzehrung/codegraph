@@ -68,7 +68,7 @@ export async function buildCodegraphArtifactWithSession(
   await validateOutputDirectory(outDir, request.force ?? false);
 
   const selected = normalizeArtifactSelection(request);
-  const snapshot = await session.loadProject();
+  const snapshot = filterSnapshotForOutputDirectory(await session.loadProject(), outDir);
   await fs.mkdir(outDir, { recursive: true });
   const artifacts: Record<string, string> = {};
 
@@ -201,6 +201,48 @@ function buildGraphJson(snapshot: AgentProjectSnapshot): {
       if (toDelta !== 0) return toDelta;
       return (left.label ?? "").localeCompare(right.label ?? "");
     }),
+  };
+}
+
+function filterSnapshotForOutputDirectory(snapshot: AgentProjectSnapshot, outDir: string): AgentProjectSnapshot {
+  const relativeOutDir = toProjectRelativePath(snapshot.root, outDir);
+  if (!relativeOutDir) return snapshot;
+  const outputPrefix = `${relativeOutDir.replace(/\/+$/, "")}/`;
+  const isOutputFile = (file: string): boolean => {
+    const relative = toProjectRelativePath(snapshot.root, file);
+    return relative === relativeOutDir || (relative?.startsWith(outputPrefix) ?? false);
+  };
+
+  const files = snapshot.files.filter((file) => !isOutputFile(file));
+  const fileGraph = {
+    nodes: new Set([...snapshot.fileGraph.nodes].filter((file) => !isOutputFile(file))),
+    edges: snapshot.fileGraph.edges.filter((edge) => {
+      if (isOutputFile(edge.from)) return false;
+      return edge.to.type !== "file" || !isOutputFile(edge.to.path);
+    }),
+  };
+  const symbols = new Map(
+    [...snapshot.symbolGraph.nodes.entries()].filter(([, node]) => !isOutputFile(node.file)),
+  );
+  const symbolGraph = {
+    nodes: symbols,
+    edges: snapshot.symbolGraph.edges.filter((edge) => symbols.has(edge.from) && symbols.has(edge.to)),
+  };
+  const byFile = new Map([...snapshot.index.byFile.entries()].filter(([file]) => !isOutputFile(file)));
+  const modules = new Map([...snapshot.index.modules.entries()].filter(([file]) => !isOutputFile(file)));
+  const index = {
+    ...snapshot.index,
+    graph: fileGraph,
+    byFile,
+    modules,
+  };
+
+  return {
+    ...snapshot,
+    files,
+    index,
+    fileGraph,
+    symbolGraph,
   };
 }
 

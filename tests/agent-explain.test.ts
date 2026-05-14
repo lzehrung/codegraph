@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { explainCodegraphTarget } from "../src/agent/explain.js";
 
@@ -60,4 +61,39 @@ describe("agent explain", () => {
     expect(explanation.reverseDependencies.length).toBeLessThanOrEqual(1);
     expect(explanation.snippets.length).toBeLessThanOrEqual(1);
   });
+
+  it("includes compact review tasks and candidate tests in changed context", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(path.join(root, "auth.test.ts"), "import { validateUser } from './auth';\nvalidateUser(1);\n");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@example.com"]);
+    runGit(root, ["config", "user.name", "Test User"]);
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+    await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id >= 0; }\n");
+
+    const explanation = await explainCodegraphTarget({
+      root,
+      target: "validateUser",
+      includeChangedContext: true,
+      base: "HEAD",
+      head: "WORKTREE",
+    });
+
+    const reviewTask = explanation.changedContext?.reviewTasks[0];
+    expect(typeof reviewTask?.id).toBe("string");
+    expect(typeof reviewTask?.reason).toBe("string");
+    expect(typeof reviewTask?.summary).toBe("string");
+    expect(explanation.changedContext?.candidateTests).toContainEqual(
+      expect.objectContaining({
+        file: "auth.test.ts",
+      }),
+    );
+    const candidate = explanation.changedContext?.candidateTests.find((entry) => entry.file === "auth.test.ts");
+    expect(typeof candidate?.confidence).toBe("string");
+  });
 });
+
+function runGit(cwd: string, args: string[]): string {
+  return execFileSync("git", args, { cwd, encoding: "utf8" });
+}

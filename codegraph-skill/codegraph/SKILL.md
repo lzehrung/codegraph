@@ -52,7 +52,7 @@ Then choose the narrowest follow-up command that answers the user:
 - Public API surface: `codegraph apisurface`
 - Semantic chunks for context packing: `codegraph chunk <file>`
 
-Use `--json` when the output will feed later reasoning, scripts, or another agent step. `search` is deterministic and returns stable handles, evidence, neighbors, and follow-up commands. `explain` accepts those handles plus file paths, symbol names, and SQL object names, then returns bounded symbols, dependencies, reverse dependencies, references, snippets, SQL facts, and next commands. `artifact build` writes a durable SQLite, graph JSON, report, questions, and manifest bundle for handoff. `mcp serve` exposes the same primitives as read-only MCP tools by default; use `--allow-build` only when an agent may write artifact output.
+Use `--json` when the output will feed later reasoning, scripts, or another agent step. `search` is deterministic and returns stable handles, evidence, neighbors, and follow-up commands. `explain` accepts those handles plus file paths, symbol names, and SQL object names, then returns bounded symbols, dependencies, reverse dependencies, references, snippets, SQL facts, changed-context review tasks/candidate tests, and next commands. `artifact build` writes a durable SQLite, graph JSON, report, questions, and manifest bundle for handoff while excluding its own in-repo output directory. `mcp serve` exposes the same primitives as read-only MCP tools by default; file/artifact paths are confined after realpath resolution, SQLite query results are row-bounded, and `--allow-build` is required before an agent may write artifact output.
 
 ## Tool purpose
 

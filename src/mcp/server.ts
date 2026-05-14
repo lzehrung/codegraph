@@ -9,7 +9,7 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { buildCodegraphArtifact } from "../agent/artifact.js";
+import { buildCodegraphArtifactWithSession } from "../agent/artifact.js";
 import type { CodegraphArtifactBuildResult } from "../agent/artifact.js";
 import { explainCodegraphTargetWithSession } from "../agent/explain.js";
 import type { AgentExplanation, AgentExplanationReference } from "../agent/explain.js";
@@ -19,7 +19,7 @@ import { getDependencies, getReverseDependencies, getShortestPath } from "../gra
 import { findReferences, goToDefinition } from "../indexer.js";
 import { buildReviewReport, type ReviewDepth, type ReviewReport } from "../review.js";
 import { queryGraphSqliteRaw, type RawSqlResult } from "../sqlite.js";
-import { assertFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util.js";
+import { assertFilePathWithinRoot, isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util.js";
 import { createAgentSession } from "../agent/session.js";
 import type { AgentSession } from "../agent/session.js";
 
@@ -65,6 +65,7 @@ export type CodegraphMcpHandlers = {
   query_sqlite: (request: {
     query: string;
     params?: Array<string | number | null> | undefined;
+    limit?: number | undefined;
   }) => Promise<RawSqlResult>;
   artifact_build: (request: {
     outDir?: string | undefined;
@@ -77,11 +78,14 @@ export type CodegraphMcpHandlers = {
 };
 
 const DEFAULT_FILE_BYTES = 80_000;
+const DEFAULT_SQLITE_ROW_LIMIT = 100;
+const MAX_SQLITE_ROW_LIMIT = 500;
 
 export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): CodegraphMcpHandlers {
   const root = path.resolve(options.root);
   const readOnly = options.readOnly ?? true;
   const session = options.session ?? createAgentSession({ root });
+  const realRoot = fs.realpath(root);
   let sqlitePath = options.artifactPath ? resolveArtifactSqlitePath(root, options.artifactPath) : undefined;
 
   const resolveFile = (file: string): string => assertFilePathWithinRoot(root, file, "File");
@@ -104,8 +108,9 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
 
     get_file: async (request) => {
       const file = resolveFile(request.file);
+      const realFile = await assertExistingRealPathWithinRoot(await realRoot, file, "File");
       const maxBytes = boundedLimit(request.maxBytes, DEFAULT_FILE_BYTES);
-      const buffer = await fs.readFile(file);
+      const buffer = await fs.readFile(realFile);
       const slice = buffer.subarray(0, maxBytes);
       return {
         file: relative(file),
@@ -210,15 +215,21 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
       if (!sqlitePath) {
         throw new Error("No SQLite artifact is available. Run artifact_build first or pass artifactPath.");
       }
-      return await queryGraphSqliteRaw(sqlitePath, request.query, request.params ?? []);
+      const realSqlitePath = await assertExistingRealPathWithinRoot(await realRoot, sqlitePath, "SQLite artifact");
+      return await queryGraphSqliteRaw(realSqlitePath, request.query, request.params ?? [], {
+        maxRows: normalizeSqliteRowLimit(request.limit),
+      });
     },
 
     artifact_build: async (request) => {
       if (readOnly) {
         throw new Error("artifact_build is disabled in read-only MCP mode.");
       }
-      const outDir = request.outDir !== undefined ? assertFilePathWithinRoot(root, request.outDir, "Artifact output directory") : undefined;
-      const result = await buildCodegraphArtifact({
+      const outDir =
+        request.outDir !== undefined
+          ? await assertWritableDirectoryRealPathWithinRoot(await realRoot, root, request.outDir, "Artifact output directory")
+          : undefined;
+      const result = await buildCodegraphArtifactWithSession(session, {
         root,
         ...(outDir !== undefined ? { outDir } : {}),
         ...(request.sqlite !== undefined ? { sqlite: request.sqlite } : {}),
@@ -378,6 +389,7 @@ const reviewSchema = z.object({
 const querySqliteSchema = z.object({
   query: z.string(),
   params: z.array(z.union([z.string(), z.number(), z.null()])).optional(),
+  limit: z.number().int().nonnegative().optional(),
 });
 
 const artifactBuildSchema = z.object({
@@ -478,6 +490,7 @@ const MCP_TOOLS: Tool[] = [
           type: "array",
           items: { oneOf: [{ type: "string" }, { type: "number" }, { type: "null" }] },
         },
+        limit: numberProperty,
       },
       ["query"],
     ),
@@ -495,3 +508,51 @@ const MCP_TOOLS: Tool[] = [
     }),
   },
 ];
+
+function normalizeSqliteRowLimit(limit: number | undefined): number {
+  if (typeof limit !== "number" || !Number.isFinite(limit)) return DEFAULT_SQLITE_ROW_LIMIT;
+  return Math.min(MAX_SQLITE_ROW_LIMIT, Math.max(0, Math.floor(limit)));
+}
+
+async function assertExistingRealPathWithinRoot(realRoot: string, filePath: string, label: string): Promise<string> {
+  const realPath = await fs.realpath(filePath);
+  if (!isFilePathWithinRoot(realRoot, realPath)) {
+    throw new Error(`${label} is outside project root: ${normalizePath(realPath)} (root: ${normalizePath(realRoot)})`);
+  }
+  return normalizePath(realPath);
+}
+
+async function assertWritableDirectoryRealPathWithinRoot(
+  realRoot: string,
+  root: string,
+  requestedPath: string,
+  label: string,
+): Promise<string> {
+  const lexicalPath = assertFilePathWithinRoot(root, requestedPath, label);
+  const existingPath = await nearestExistingPath(lexicalPath);
+  const realExistingPath = await fs.realpath(existingPath);
+  const relativeSuffix = path.relative(existingPath, lexicalPath);
+  const realTargetPath = path.resolve(realExistingPath, relativeSuffix);
+  if (!isFilePathWithinRoot(realRoot, realTargetPath)) {
+    throw new Error(`${label} is outside project root: ${normalizePath(realTargetPath)} (root: ${normalizePath(realRoot)})`);
+  }
+  return normalizePath(realTargetPath);
+}
+
+async function nearestExistingPath(filePath: string): Promise<string> {
+  let current = filePath;
+  while (current !== path.dirname(current)) {
+    try {
+      await fs.stat(current);
+      return current;
+    } catch (error) {
+      if (!isMissingPathError(error)) throw error;
+      current = path.dirname(current);
+    }
+  }
+  return current;
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
+}

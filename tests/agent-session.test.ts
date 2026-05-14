@@ -24,5 +24,6 @@ describe("agent session", () => {
     expect(first.files.some((file) => file.endsWith("schema.sql"))).toBeTruthy();
     expect(first.symbolGraph.nodes.size).toBeGreaterThan(0);
     expect(first.fileGraph.nodes.size).toBeGreaterThan(0);
+    expect(first.fileGraph).toBe(first.index.graph);
   });
 });

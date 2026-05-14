@@ -54,6 +54,8 @@ export type GraphQueryResult =
 export type RawSqlResult = {
   columns: string[];
   rows: Array<Array<unknown>>;
+  rowLimit?: number;
+  truncated?: boolean;
 };
 
 const loadBetterSqlite3 = () => {
@@ -916,11 +918,30 @@ export async function queryGraphSqliteRaw(
   outputPath: string,
   sql: string,
   params: Array<string | number | null> = [],
+  options?: { maxRows?: number | undefined },
 ): Promise<RawSqlResult> {
   return await withReadOnlySqliteDatabase(outputPath, (db) => {
     const stmt = db.prepare(sql);
     assertReadOnlyQueryStatement(stmt);
     const columns = stmt.columns().map((col) => col.name);
+    const rowLimit = options?.maxRows;
+    if (rowLimit !== undefined) {
+      const rows: Array<Array<unknown>> = [];
+      let truncated = false;
+      for (const row of stmt.raw().iterate(params) as Iterable<Array<unknown>>) {
+        if (rows.length >= rowLimit) {
+          truncated = true;
+          break;
+        }
+        rows.push(row);
+      }
+      return {
+        columns,
+        rows,
+        rowLimit,
+        truncated,
+      };
+    }
     const rows = stmt.raw().all(params) as Array<Array<unknown>>;
     return { columns, rows };
   });

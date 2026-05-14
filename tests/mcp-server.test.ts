@@ -58,6 +58,21 @@ describe("codegraph MCP handlers", () => {
     await expect(handlers.query_sqlite({ query: "DELETE FROM symbols RETURNING name;" })).rejects.toThrow(/read-only/i);
   });
 
+  it("bounds query_sqlite rows for MCP responses", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-limit-"));
+    await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
+    await fs.writeFile(path.join(root, "two.ts"), "export const two = 2;\n");
+
+    const handlers = createCodegraphMcpHandlers({ root, readOnly: false });
+    await handlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true });
+
+    const result = await handlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;", limit: 1 });
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.truncated).toBeTruthy();
+    expect(result.rowLimit).toBe(1);
+  });
+
   it("disables artifact builds by default and in explicit read-only mode", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-readonly-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
@@ -92,6 +107,40 @@ describe("codegraph MCP handlers", () => {
     })()).rejects.toThrow(/outside project root/);
   });
 
+  it("rejects get_file paths that escape through a directory link", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-file-link-"));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-outside-"));
+    await fs.writeFile(path.join(outside, "secret.txt"), "outside\n");
+    const linkPath = path.join(root, "linked");
+    try {
+      await fs.symlink(outside, linkPath, "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const handlers = createCodegraphMcpHandlers({ root });
+
+    await expect(handlers.get_file({ file: path.join("linked", "secret.txt") })).rejects.toThrow(/outside project root/);
+  });
+
+  it("rejects artifact output directories that escape through a directory link", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-artifact-link-"));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-artifact-outside-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n");
+    const linkPath = path.join(root, "linked-out");
+    try {
+      await fs.symlink(outside, linkPath, "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const handlers = createCodegraphMcpHandlers({ root, readOnly: false });
+
+    await expect(handlers.artifact_build({ outDir: linkPath, sqlite: true, force: true })).rejects.toThrow(/outside project root/);
+  });
+
   it("reuses one session snapshot across search and refs follow-up calls", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
@@ -109,4 +158,41 @@ describe("codegraph MCP handlers", () => {
 
     expect(counted.loads()).toBe(1);
   });
+
+  it("uses the MCP session snapshot when artifact_build is enabled", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-artifact-session-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
+    const counted = countingSession(createAgentSession({ root }));
+    const handlers = createCodegraphMcpHandlers({ root, readOnly: false, session: counted.session });
+
+    await handlers.search({ query: "validate user", limit: 5 });
+    await fs.writeFile(path.join(root, "late.ts"), "export const late = 1;\n");
+    await handlers.artifact_build({ outDir: path.join(root, "out"), graphJson: true });
+
+    const graph = JSON.parse(await fs.readFile(path.join(root, "out", "graph.json"), "utf8")) as { files: string[] };
+    expect(graph.files.some((file) => file.endsWith("late.ts"))).toBe(false);
+    expect(counted.loads()).toBe(1);
+  });
+
+  it("omits stale files from an in-repo artifact output directory", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-artifact-ignore-"));
+    const outDir = path.join(root, "out");
+    await fs.mkdir(outDir);
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n");
+    await fs.writeFile(path.join(outDir, "old.ts"), "export const stale = true;\n");
+    const handlers = createCodegraphMcpHandlers({ root, readOnly: false });
+
+    await handlers.artifact_build({ outDir, graphJson: true, force: true });
+
+    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { files: string[] };
+    expect(graph.files.some((file) => file.includes("/out/") || file.endsWith("/out/old.ts"))).toBe(false);
+  });
 });
+
+function isSymlinkUnavailable(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "EPERM" || error.code === "EACCES" || error.code === "ENOTSUP")
+  );
+}

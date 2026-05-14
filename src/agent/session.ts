@@ -1,6 +1,6 @@
 import { buildProjectIndex } from "../indexer.js";
 import type { ProjectIndex } from "../indexer/types.js";
-import { buildSymbolGraphDetailed, collectGraph } from "../graphs.js";
+import { buildSymbolGraphDetailed } from "../graphs.js";
 import type { SymbolGraph } from "../graphs.js";
 import type { Graph } from "../types.js";
 import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util.js";
@@ -35,7 +35,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         keepParsed: true,
         ...(options.discovery ? { discovery: options.discovery } : {}),
       });
-      const fileGraph = await collectGraph(options.root, files, { allFiles: files });
+      const fileGraph = index.graph;
       const symbolGraph = await buildSymbolGraphDetailed(index);
 
       return {

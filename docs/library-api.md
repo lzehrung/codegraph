@@ -42,7 +42,7 @@ console.log(first?.handle, first?.rankReasons, first?.followUps);
 
 Use `mode: "sql"` for SQL objects, or pass `from` plus `depth` with `mode: "graph"` to boost matches near a file, symbol handle, SQL handle, or symbol name.
 
-`explainCodegraphTarget()` resolves a file path, symbol name, SQL object name, or search handle into a bounded packet for follow-up agent work:
+`explainCodegraphTarget()` resolves a file path, symbol name, SQL object name, or search handle into a bounded packet for follow-up agent work. With changed context enabled, the packet includes compact review tasks and candidate tests:
 
 ```ts
 const explanation = await explainCodegraphTarget({
@@ -55,7 +55,7 @@ const explanation = await explainCodegraphTarget({
 console.log(explanation.summary, explanation.followUps);
 ```
 
-`buildCodegraphArtifact()` writes the same core artifacts agents usually need for offline navigation:
+`buildCodegraphArtifact()` writes the same core artifacts agents usually need for offline navigation. Artifact contents exclude the output directory itself when it is inside the repo:
 
 ```ts
 const artifact = await buildCodegraphArtifact({
@@ -79,11 +79,11 @@ const handlers = createCodegraphMcpHandlers({
 
 const search = await handlers.search({ query: "auth user", limit: 5 });
 const refs = await handlers.refs({ handle: search.results[0]!.handle });
-const rows = await handlers.query_sqlite({ query: "select path from files limit 5" });
+const rows = await handlers.query_sqlite({ query: "select path from files", limit: 5 });
 console.log(refs.references, rows.rows);
 ```
 
-`serveCodegraphMcp()` starts the stdio server used by `codegraph mcp serve`. MCP is an agent ergonomics and cache layer over the same analysis engine, not a separate indexer. `query_sqlite` is read-only; `artifact_build` is disabled by default and requires `readOnly: false` or CLI `--allow-build`.
+`serveCodegraphMcp()` starts the stdio server used by `codegraph mcp serve`. MCP is an agent ergonomics and cache layer over the same analysis engine, not a separate indexer. MCP file and artifact paths are confined after realpath resolution. `query_sqlite` is read-only and row-bounded; `artifact_build` is disabled by default and requires `readOnly: false` or CLI `--allow-build`.
 
 ## Semantic chunking
 
@@ -278,7 +278,7 @@ const result = await queryGraphSqliteRaw(
 console.log(result.columns, result.rows);
 ```
 
-`queryGraphSqliteRaw()` is intentionally read-only. It accepts result-producing statements such as `SELECT` and `PRAGMA` and rejects mutating SQL.
+`queryGraphSqliteRaw()` is intentionally read-only. It accepts result-producing statements such as `SELECT` and `PRAGMA` and rejects mutating SQL. Pass `{ maxRows }` to bound raw result rows.
 
 ## SQL artifact facts
 
