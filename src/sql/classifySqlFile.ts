@@ -24,20 +24,19 @@ export function classifySqlFile(filePath: string, source: string): SqlFileRole {
   const dumpLike = /\b(copy\s+\w+\s+from|load\s+data|pg_dump|mysqldump)\b/i;
   const queryLike = /\b(select|with|update|delete|insert\s+into)\b/i;
   const schemaLike = new Set(["schema.sql", "structure.sql", "init.sql", "database.sql"]);
-
-  if (schemaLike.has(basename) || createTables >= 2) return "schema_snapshot";
-  if (hasPathSegment(normalized, ["dump", "dumps", "backup", "backups"]) || dumpLike.test(source)) return "dump";
-  if (hasPathSegment(normalized, ["seed", "seeds"])) return "seed";
-  if (hasPathSegment(normalized, ["fixture", "fixtures", "testdata"])) return "fixture";
-  if (
+  const migrationLike =
     hasPathSegment(normalized, ["migration", "migrations"]) ||
     normalized.includes("/db/migrate/") ||
     normalized.includes("/schema/migrations/") ||
     normalized.includes("/database/migrations/") ||
     normalized.includes("/alembic/versions/") ||
-    MIGRATION_NAME_RE.test(basename) ||
-    ddlMigrationVerb.test(source)
-  ) {
+    MIGRATION_NAME_RE.test(basename);
+
+  if (schemaLike.has(basename) || (createTables >= 2 && !migrationLike)) return "schema_snapshot";
+  if (hasPathSegment(normalized, ["dump", "dumps", "backup", "backups"]) || dumpLike.test(source)) return "dump";
+  if (hasPathSegment(normalized, ["seed", "seeds"])) return "seed";
+  if (hasPathSegment(normalized, ["fixture", "fixtures", "testdata"])) return "fixture";
+  if (migrationLike || ddlMigrationVerb.test(source)) {
     return "migration";
   }
   if (hasPathSegment(normalized, ["routine", "routines", "functions", "procedures"])) return "routine";

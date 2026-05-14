@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { listProjectFiles } from "../util/projectFiles.js";
 import { normalizePath } from "../util/paths.js";
+import { mapLimit } from "../util/resolution.js";
 import { extractSqlFactsFromSource, sqlObjectBaseName } from "./extractFacts.js";
 import type { SqlBridgeReason, SqlStatementFact } from "./types.js";
 
@@ -23,6 +24,7 @@ export type SqlReviewContextOptions = {
 const SQL_IDENTIFIER_HINT = '(?:[A-Za-z_][A-Za-z0-9_$]*|"[^"\\r\\n]+"|`[^`\\r\\n]+`|\\[[^\\]\\r\\n]+\\])';
 const SQL_OBJECT_NAME_HINT = `${SQL_IDENTIFIER_HINT}(?:\\s*\\.\\s*${SQL_IDENTIFIER_HINT})*`;
 const SQL_OBJECT_TERMINATOR_HINT = "(?=\\s|\\(|\\)|,|;|['\"`]|$)";
+const SQL_FACT_READ_CONCURRENCY = 32;
 const SQL_LITERAL_HINT = new RegExp(
   [
     `\\bselect\\b[\\s\\S]{0,1000}?\\bfrom\\s+${SQL_OBJECT_NAME_HINT}${SQL_OBJECT_TERMINATOR_HINT}`,
@@ -77,11 +79,13 @@ async function collectSqlFacts(
     if (isSqlFile(normalized)) allSqlFiles.add(normalized);
   }
 
-  const factGroups = await Promise.all(
-    Array.from(allSqlFiles).map(async (filePath) => {
+  const factGroups = await mapLimit(
+    Array.from(allSqlFiles),
+    SQL_FACT_READ_CONCURRENCY,
+    async (filePath) => {
       const source = await readExistingFile(filePath);
       return source === null ? [] : extractSqlFactsFromSource(filePath, source);
-    }),
+    },
   );
   return factGroups.flat();
 }

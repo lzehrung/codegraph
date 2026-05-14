@@ -66,6 +66,26 @@ describe("SQL fact extraction", () => {
     ]);
   });
 
+  it("classifies multi-table files under migrations as migrations", () => {
+    const filePath = path.join(fixtureRoot, "migrations", "20240510120500_multi.sql");
+    const source = ["CREATE TABLE users (id integer);", "CREATE TABLE organizations (id integer);"].join("\n");
+    const facts = extractSqlFactsFromSource(filePath, source);
+
+    expect(classifySqlFile(filePath, source)).toBe("migration");
+    expect(facts).toEqual([
+      expect.objectContaining({
+        kind: "defines_table",
+        objectName: "users",
+        role: "migration",
+      }),
+      expect.objectContaining({
+        kind: "defines_table",
+        objectName: "organizations",
+        role: "migration",
+      }),
+    ]);
+  });
+
   it("classifies seeds, queries, and dumps while preserving facts", async () => {
     const seedFacts = extractSqlFactsFromSource(
       path.join(fixtureRoot, "seeds", "users.sql"),

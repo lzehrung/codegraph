@@ -6,8 +6,11 @@ import type { ModuleIndex, SymbolDef } from "../indexer/types.js";
 import { SymbolKind } from "../indexer/types.js";
 import type { Edge, Range } from "../types.js";
 import { normalizePath } from "../util/paths.js";
+import { mapLimit } from "../util/resolution.js";
 import { extractSqlFactsFromSource, sqlObjectBaseName } from "./extractFacts.js";
 import type { SqlFactKind, SqlStatementFact } from "./types.js";
+
+const SQL_FACT_READ_CONCURRENCY = 32;
 
 const SQL_DEFINITION_KINDS = new Set<SqlFactKind>([
   "defines_table",
@@ -208,7 +211,11 @@ export async function buildSqlFactCache(allFiles: readonly string[]): Promise<Sq
   const sqlFiles = Array.from(new Set(allFiles.map(normalizePath).filter(isSqlFile))).sort((left, right) =>
     left.localeCompare(right),
   );
-  const factGroups = await Promise.all(sqlFiles.map(async (file) => [file, await readSqlFacts(file)] as const));
+  const factGroups = await mapLimit(
+    sqlFiles,
+    SQL_FACT_READ_CONCURRENCY,
+    async (file) => [file, await readSqlFacts(file)] as const,
+  );
   const factsByFile = new Map<string, SqlStatementFact[]>();
   const definitionsByExactName = new Map<string, SqlStatementFact[]>();
   const definitionsByBaseName = new Map<string, SqlStatementFact[]>();

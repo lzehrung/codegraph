@@ -246,6 +246,46 @@ describe("SQL review context", () => {
     }
   });
 
+  it("bounds concurrent SQL fact reads when matching changed code literals", async () => {
+    const root = await mkTmpDir();
+    try {
+      for (let index = 0; index < 40; index += 1) {
+        await writeFile(path.join(root, "db", `schema_${index}.sql`), `CREATE TABLE table_${index} (id integer);\n`);
+      }
+      const code = await writeFile(path.join(root, "src", "repo.ts"), "export const query = `SELECT * FROM table_1`;\n");
+      const originalReadFile = fs.readFile.bind(fs);
+      let activeSqlReads = 0;
+      let maxActiveSqlReads = 0;
+      const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
+        const isSqlRead = String(filePath).endsWith(".sql");
+        if (isSqlRead) {
+          activeSqlReads += 1;
+          maxActiveSqlReads = Math.max(maxActiveSqlReads, activeSqlReads);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        try {
+          return await originalReadFile(filePath, options);
+        } finally {
+          if (isSqlRead) activeSqlReads -= 1;
+        }
+      });
+
+      const context = await collectSqlReviewContext(root, { changedFiles: [code] });
+
+      expect(readSpy).toHaveBeenCalled();
+      expect(context?.entries).toContainEqual(
+        expect.objectContaining({
+          reason: "changed_sql_literal",
+          objectName: "table_1",
+        }),
+      );
+      expect(maxActiveSqlReads).toBeLessThanOrEqual(32);
+    } finally {
+      vi.restoreAllMocks();
+      await rmTmpDir(root);
+    }
+  });
+
   it("surfaces SQL candidates for changed code update literals", async () => {
     const root = await mkTmpDir();
     try {

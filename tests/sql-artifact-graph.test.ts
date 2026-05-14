@@ -402,6 +402,43 @@ describe("SQL artifact graph", () => {
     }
   });
 
+  it("bounds concurrent SQL fact reads when building the corpus cache", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-cache-concurrency-"));
+    const files: string[] = [];
+    try {
+      for (let index = 0; index < 40; index += 1) {
+        const file = path.join(root, `schema_${index}.sql`).replace(/\\/g, "/");
+        await fsp.writeFile(file, `CREATE TABLE table_${index} (id integer);\n`, "utf8");
+        files.push(file);
+      }
+
+      const originalReadFile = fsp.readFile.bind(fsp);
+      let activeSqlReads = 0;
+      let maxActiveSqlReads = 0;
+      const readSpy = vi.spyOn(fsp, "readFile").mockImplementation(async (filePath, options) => {
+        const isSqlRead = String(filePath).endsWith(".sql");
+        if (isSqlRead) {
+          activeSqlReads += 1;
+          maxActiveSqlReads = Math.max(maxActiveSqlReads, activeSqlReads);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        try {
+          return await originalReadFile(filePath, options);
+        } finally {
+          if (isSqlRead) activeSqlReads -= 1;
+        }
+      });
+
+      await buildSqlFactCache(files);
+
+      expect(readSpy).toHaveBeenCalled();
+      expect(maxActiveSqlReads).toBeLessThanOrEqual(32);
+    } finally {
+      vi.restoreAllMocks();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("reuses SQL edge cache entries when the SQL corpus signature is unchanged", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-edge-cache-reuse-"));
     try {
