@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { findReferences } from "../indexer.js";
 import type { Reference, SymbolDef } from "../indexer/types.js";
@@ -5,9 +6,21 @@ import { getDependencies, getHotspots, getReverseDependencies } from "../graphs.
 import { defNodeId } from "../graphs/symbol-graph.js";
 import type { SymbolNode } from "../graphs.js";
 import { buildReviewReport } from "../review.js";
+import { extractSqlFactsFromSource, sqlObjectBaseName } from "../sql/extractFacts.js";
+import type { SqlStatementFact } from "../sql/types.js";
 import type { Range } from "../types.js";
 import { normalizePath, toProjectRelativePath } from "../util.js";
-import { formatAgentSqlHandle, formatAgentSymbolHandle, parseAgentSqlHandle, parseAgentSymbolHandle } from "./handles.js";
+import { mapLimit } from "../util/resolution.js";
+import {
+  formatAgentFileHandle,
+  formatAgentSqlHandle,
+  formatAgentSymbolHandle,
+  parseAgentChunkHandle,
+  parseAgentFileHandle,
+  parseAgentGraphHandle,
+  parseAgentSqlHandle,
+  parseAgentSymbolHandle,
+} from "./handles.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
 
 export type AgentExplainTarget = {
@@ -17,6 +30,8 @@ export type AgentExplainTarget = {
   base?: string;
   head?: string;
   maxDependencies?: number;
+  maxReferences?: number;
+  maxRelatedSqlObjects?: number;
   maxSnippets?: number;
   maxSymbols?: number;
 };
@@ -56,6 +71,7 @@ export type AgentExplanationSqlObject = {
   name: string;
   kind: string;
   file: string;
+  relation: string;
   range?: Range;
 };
 
@@ -84,6 +100,8 @@ export type AgentExplanation = {
   limits: {
     symbols: number;
     dependencies: number;
+    references: number;
+    relatedSqlObjects: number;
     snippets: number;
   };
   omittedCounts: {
@@ -119,6 +137,7 @@ const DEFAULT_MAX_SYMBOLS = 50;
 const MAX_DEPENDENCIES = 100;
 const MAX_SNIPPETS = 50;
 const MAX_SYMBOLS = 200;
+const SQL_FACT_READ_CONCURRENCY = 32;
 
 export async function explainCodegraphTarget(request: AgentExplainTarget): Promise<AgentExplanation> {
   const session = createAgentSession({ root: request.root });
@@ -172,7 +191,10 @@ function buildSymbolLookup(snapshot: AgentProjectSnapshot): SymbolLookup {
 }
 
 function resolveTarget(snapshot: AgentProjectSnapshot, lookup: SymbolLookup, target: string): ResolvedExplainTarget {
-  const fileTarget = target.startsWith("file:") ? target.slice("file:".length) : target;
+  const fileHandle = parseAgentFileHandle(target);
+  const chunkHandle = parseAgentChunkHandle(target);
+  const graphHandle = parseAgentGraphHandle(target);
+  const fileTarget = fileHandle?.file ?? chunkHandle?.file ?? graphHandle?.file ?? target;
   const file = resolveFileCandidate(snapshot, fileTarget);
   if (file) return { kind: "file", file };
 
@@ -324,6 +346,11 @@ async function buildExplanation(
   request: AgentExplainTarget,
 ): Promise<AgentExplanation> {
   const maxDependencies = normalizeLimit(request.maxDependencies, DEFAULT_MAX_DEPENDENCIES);
+  const maxReferences = normalizeLimit(request.maxReferences ?? request.maxDependencies, DEFAULT_MAX_DEPENDENCIES);
+  const maxRelatedSqlObjects = normalizeLimit(
+    request.maxRelatedSqlObjects ?? request.maxDependencies,
+    DEFAULT_MAX_DEPENDENCIES,
+  );
   const maxSnippets = normalizeLimit(request.maxSnippets, DEFAULT_MAX_SNIPPETS, MAX_SNIPPETS);
   const maxSymbols = normalizeLimit(request.maxSymbols, DEFAULT_MAX_SYMBOLS, MAX_SYMBOLS);
 
@@ -341,9 +368,9 @@ async function buildExplanation(
   const dependencies = collectDependencies(snapshot, file, maxDependencies, "forward");
   const reverseDependencies = collectDependencies(snapshot, file, maxDependencies, "reverse");
   const hotspots = collectTargetHotspots(snapshot, file);
-  const references = resolved.kind === "file" ? emptyBoundedList<AgentExplanationReference>() : await collectReferences(snapshot, resolved.def, maxDependencies);
+  const references = resolved.kind === "file" ? emptyBoundedList<AgentExplanationReference>() : await collectReferences(snapshot, resolved.def, maxReferences);
   const snippets = resolved.kind === "file" ? emptyBoundedList<AgentExplanationSnippet>() : await collectSnippets(snapshot, resolved, maxSnippets);
-  const relatedSqlObjects = collectRelatedSqlObjects(snapshot, lookup, resolved, file, maxDependencies);
+  const relatedSqlObjects = await collectRelatedSqlObjects(snapshot, lookup, resolved, file, maxRelatedSqlObjects);
   const followUps = collectFollowUps(snapshot, resolved, symbols, relFile);
   const changedContext = await collectChangedContext(request);
 
@@ -371,6 +398,8 @@ async function buildExplanation(
     limits: {
       symbols: maxSymbols,
       dependencies: maxDependencies,
+      references: maxReferences,
+      relatedSqlObjects: maxRelatedSqlObjects,
       snippets: maxSnippets,
     },
     omittedCounts: {
@@ -402,6 +431,8 @@ function emptyExplanation(snapshot: AgentProjectSnapshot, target: AgentExplanati
     limits: {
       symbols: DEFAULT_MAX_SYMBOLS,
       dependencies: DEFAULT_MAX_DEPENDENCIES,
+      references: DEFAULT_MAX_DEPENDENCIES,
+      relatedSqlObjects: DEFAULT_MAX_DEPENDENCIES,
       snippets: DEFAULT_MAX_SNIPPETS,
     },
     omittedCounts: {
@@ -425,7 +456,7 @@ function explainTarget(
       kind: "file",
       label: relFile,
       file: relFile,
-      handle: `file:${relFile}`,
+      handle: formatAgentFileHandle({ file: relFile }),
     };
   }
 
@@ -575,38 +606,230 @@ function snippetFromReference(snapshot: AgentProjectSnapshot, reference: Referen
   };
 }
 
-function collectRelatedSqlObjects(
+async function collectRelatedSqlObjects(
   snapshot: AgentProjectSnapshot,
   lookup: SymbolLookup,
   resolved: Exclude<ResolvedExplainTarget, { kind: "not_found" }>,
   file: string,
   limit: number,
-): BoundedList<AgentExplanationSqlObject> {
+): Promise<BoundedList<AgentExplanationSqlObject>> {
   if (resolved.kind !== "sql_object" && !isSqlFile(file)) return emptyBoundedList();
 
+  const sqlObjects = collectSqlObjectNodes(snapshot, lookup);
   const targetName = resolved.kind === "sql_object" ? (resolved.node?.name ?? resolved.def.localName) : undefined;
-  const matches = [...snapshot.symbolGraph.nodes.values()]
-    .filter((node) => isSqlObjectNode(node))
-    .filter((node) => normalizePath(node.file) === normalizePath(file) || node.name === targetName)
-    .map((node) => {
-      const def = lookup.defById.get(node.id);
-      return {
-        name: node.name,
-        kind: node.kind,
-        file: relativeFile(snapshot.root, node.file),
-        ...(def ? { range: def.range } : {}),
-      };
-    })
-    .sort((left, right) => {
-      const fileDelta = left.file.localeCompare(right.file);
-      if (fileDelta !== 0) return fileDelta;
-      return left.name.localeCompare(right.name);
-    });
+  const related = new Map<string, AgentExplanationSqlObject>();
+  const addRelated = (object: SqlObjectNodeInfo, relation: string): void => {
+    const entry: AgentExplanationSqlObject = {
+      name: object.name,
+      kind: object.kind,
+      file: relativeFile(snapshot.root, object.file),
+      relation,
+      ...(object.def ? { range: object.def.range } : {}),
+    };
+    related.set(`${entry.relation}:${entry.file}:${entry.name}`, entry);
+  };
+
+  const normalizedFile = normalizePath(file);
+  if (!targetName) {
+    for (const object of sqlObjects) {
+      if (normalizePath(object.file) === normalizedFile) addRelated(object, "same_file");
+    }
+  } else {
+    for (const object of sqlObjects) {
+      if (normalizePath(object.file) === normalizedFile && !sqlObjectNamesEquivalent(object.name, targetName)) {
+        addRelated(object, "same_file");
+      }
+    }
+    addRelatedSqlObjectsFromFileEdges(snapshot, sqlObjects, normalizedFile, targetName, addRelated);
+    await addRelatedSqlObjectsFromFacts(snapshot, sqlObjects, targetName, addRelated);
+  }
+
+  const matches = [...related.values()].sort((left, right) => {
+    const relationDelta = sqlRelationRank(left.relation) - sqlRelationRank(right.relation);
+    if (relationDelta !== 0) return relationDelta;
+    const fileDelta = left.file.localeCompare(right.file);
+    if (fileDelta !== 0) return fileDelta;
+    return left.name.localeCompare(right.name);
+  });
   const items = matches.slice(0, limit);
   return {
     items,
     omitted: Math.max(0, matches.length - items.length),
   };
+}
+
+type SqlObjectNodeInfo = {
+  id: string;
+  name: string;
+  kind: string;
+  file: string;
+  def?: SymbolDef;
+};
+
+function collectSqlObjectNodes(snapshot: AgentProjectSnapshot, lookup: SymbolLookup): SqlObjectNodeInfo[] {
+  return [...snapshot.symbolGraph.nodes.values()]
+    .filter((node) => isSqlObjectNode(node))
+    .map((node) => {
+      const base = {
+        id: node.id,
+        name: node.name,
+        kind: node.kind,
+        file: normalizePath(node.file),
+      };
+      const def = lookup.defById.get(node.id);
+      return def ? { ...base, def } : base;
+    });
+}
+
+function sqlObjectNamesEquivalent(candidate: string, target: string): boolean {
+  const normalizedCandidate = candidate.toLowerCase();
+  const normalizedTarget = target.toLowerCase();
+  if (normalizedCandidate === normalizedTarget) return true;
+  if (candidate.includes(".") && target.includes(".")) return false;
+  return sqlObjectBaseName(candidate).toLowerCase() === sqlObjectBaseName(target).toLowerCase();
+}
+
+function findSqlObjectsByReferenceName(sqlObjects: readonly SqlObjectNodeInfo[], objectName: string): SqlObjectNodeInfo[] {
+  const normalizedName = objectName.toLowerCase();
+  const exact = sqlObjects.filter((candidate) => candidate.name.toLowerCase() === normalizedName);
+  if (exact.length > 0) return exact;
+  const baseName = sqlObjectBaseName(objectName).toLowerCase();
+  const basenameMatches = sqlObjects.filter((candidate) => sqlObjectBaseName(candidate.name).toLowerCase() === baseName);
+  return basenameMatches.length === 1 ? basenameMatches : [];
+}
+
+function referenceTargetsSqlName(
+  sqlObjects: readonly SqlObjectNodeInfo[],
+  referenceName: string,
+  targetName: string,
+): boolean {
+  return findSqlObjectsByReferenceName(sqlObjects, referenceName).some((candidate) =>
+    sqlObjectNamesEquivalent(candidate.name, targetName),
+  );
+}
+
+function addRelatedSqlObjectsFromFileEdges(
+  snapshot: AgentProjectSnapshot,
+  sqlObjects: SqlObjectNodeInfo[],
+  targetFile: string,
+  targetName: string,
+  addRelated: (object: SqlObjectNodeInfo, relation: string) => void,
+): void {
+  for (const edge of snapshot.fileGraph.edges) {
+    const relation = parseSqlEdgeRelation(edge.raw);
+    if (!relation) continue;
+    if (normalizePath(edge.from) === targetFile) {
+      for (const object of findSqlObjectsByReferenceName(sqlObjects, relation.objectName)) {
+        addRelated(object, `outgoing:${relation.kind}`);
+      }
+    }
+    if (edge.to.type !== "file" || normalizePath(edge.to.path) !== targetFile || !referenceTargetsSqlName(sqlObjects, relation.objectName, targetName)) {
+      continue;
+    }
+    for (const object of sqlObjects.filter((candidate) => normalizePath(candidate.file) === normalizePath(edge.from))) {
+      addRelated(object, `incoming:${relation.kind}`);
+    }
+  }
+}
+
+async function addRelatedSqlObjectsFromFacts(
+  snapshot: AgentProjectSnapshot,
+  sqlObjects: SqlObjectNodeInfo[],
+  targetName: string,
+  addRelated: (object: SqlObjectNodeInfo, relation: string) => void,
+): Promise<void> {
+  const factsByFile = await collectSqlFacts(snapshot);
+  for (const facts of factsByFile.values()) {
+    for (const statementFacts of sqlStatementFactGroups(facts)) {
+      const definitions = statementFacts.filter(isSqlDefinitionFact);
+      const references = statementFacts.filter(isSqlReferenceFact);
+      const statementDefinesTarget = definitions.some((fact) =>
+        fact.objectName !== null && sqlObjectNamesEquivalent(fact.objectName, targetName),
+      );
+      const referencesToTarget = references.filter((fact) =>
+        fact.objectName !== null && referenceTargetsSqlName(sqlObjects, fact.objectName, targetName),
+      );
+
+      if (statementDefinesTarget) {
+        for (const reference of references) {
+          if (!reference.objectName) continue;
+          for (const object of findSqlObjectsByReferenceName(sqlObjects, reference.objectName)) {
+            addRelated(object, `outgoing:${reference.kind}`);
+          }
+        }
+      }
+
+      for (const reference of referencesToTarget) {
+        for (const definition of definitions) {
+          if (!definition.objectName) continue;
+          for (const object of findSqlObjectsByReferenceName(sqlObjects, definition.objectName)) {
+            addRelated(object, `incoming:${reference.kind}`);
+          }
+        }
+      }
+    }
+  }
+}
+
+function parseSqlEdgeRelation(raw: string): { kind: string; objectName: string } | null {
+  if (!raw.startsWith("sql:")) return null;
+  const parts = raw.split(":");
+  if (parts.length < 3) return null;
+  const kind = parts[1];
+  const objectName = parts.slice(2).join(":");
+  if (!kind || !objectName) return null;
+  return {
+    kind,
+    objectName,
+  };
+}
+
+async function collectSqlFacts(snapshot: AgentProjectSnapshot): Promise<Map<string, SqlStatementFact[]>> {
+  const sqlFiles = snapshot.files.filter(isSqlFile).sort((left, right) => left.localeCompare(right));
+  const entries = await mapLimit(sqlFiles, SQL_FACT_READ_CONCURRENCY, async (file) => {
+    const facts = extractSqlFactsFromSource(file, await fs.readFile(file, "utf8"));
+    return [file, facts] as const;
+  });
+  return new Map(entries);
+}
+
+function sqlStatementFactGroups(facts: readonly SqlStatementFact[]): SqlStatementFact[][] {
+  const groups = new Map<string, SqlStatementFact[]>();
+  for (const fact of facts) {
+    const key = `${fact.filePath}:${fact.startLine}:${fact.endLine}:${fact.statementText}`;
+    const group = groups.get(key);
+    if (group) group.push(fact);
+    else groups.set(key, [fact]);
+  }
+  return [...groups.values()];
+}
+
+function isSqlDefinitionFact(fact: SqlStatementFact): boolean {
+  return (
+    fact.kind === "defines_table" ||
+    fact.kind === "defines_view" ||
+    fact.kind === "defines_index" ||
+    fact.kind === "defines_routine"
+  );
+}
+
+function isSqlReferenceFact(fact: SqlStatementFact): boolean {
+  return (
+    fact.kind === "alters_table" ||
+    fact.kind === "drops_object" ||
+    fact.kind === "reads_from" ||
+    fact.kind === "writes_to" ||
+    fact.kind === "joins" ||
+    fact.kind === "references_object" ||
+    fact.kind === "renames_object"
+  );
+}
+
+function sqlRelationRank(relation: string): number {
+  if (relation.startsWith("incoming:")) return 0;
+  if (relation.startsWith("outgoing:")) return 1;
+  if (relation === "same_file") return 2;
+  return 3;
 }
 
 function emptyBoundedList<T>(): BoundedList<T> {
@@ -661,7 +884,7 @@ function buildSummary(
   if (resolved.kind === "sql_object") {
     return [
       `${resolved.node?.name ?? resolved.def.localName} is a SQL object defined in ${relFile}.`,
-      `Codegraph reports extracted SQL facts and object references from indexed .sql files only.`,
+      `Codegraph reports extracted SQL relation facts from indexed .sql files only.`,
       `${relatedSqlObjects.length} related SQL object(s), ${references.length} reference(s).`,
     ];
   }

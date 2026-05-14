@@ -44,6 +44,7 @@ type ArtifactQuestion = {
   id: string;
   question: string;
   command: string;
+  handle?: string;
 };
 
 type PortableGraphBody = {
@@ -419,7 +420,8 @@ function buildQuestions(snapshot: AgentProjectSnapshot): ArtifactQuestion[] {
     questions.push({
       id: `refs:${symbol.file}:${symbol.name}`,
       question: `Where is ${symbol.name} referenced?`,
-      command: `codegraph explain ${quoteArg(symbol.name)} --json`,
+      command: `codegraph explain ${quoteArg(symbol.handle)} --json`,
+      handle: symbol.handle,
     });
   }
 
@@ -428,21 +430,29 @@ function buildQuestions(snapshot: AgentProjectSnapshot): ArtifactQuestion[] {
     questions.push({
       id: `sql:${object.name}`,
       question: `What SQL objects are related to ${object.name}?`,
-      command: `codegraph explain ${quoteArg(object.name)} --json`,
+      command: `codegraph explain ${quoteArg(object.handle)} --json`,
+      handle: object.handle,
     });
   }
 
   return questions.sort((left, right) => left.id.localeCompare(right.id));
 }
 
-function collectExportedSymbols(snapshot: AgentProjectSnapshot): Array<{ name: string; file: string }> {
-  const exported: Array<{ name: string; file: string }> = [];
+function collectExportedSymbols(snapshot: AgentProjectSnapshot): Array<{ name: string; file: string; handle: string }> {
+  const exported: Array<{ name: string; file: string; handle: string }> = [];
   for (const moduleIndex of snapshot.index.byFile.values()) {
     for (const exportEntry of moduleIndex.exports) {
       if (exportEntry.type !== "local") continue;
+      const file = relativeFile(snapshot.root, exportEntry.target.file);
       exported.push({
         name: exportEntry.exportedAs,
-        file: relativeFile(snapshot.root, exportEntry.target.file),
+        file,
+        handle: formatAgentSymbolHandle({
+          file,
+          name: exportEntry.target.localName,
+          line: exportEntry.target.range.start.line,
+          column: exportEntry.target.range.start.column,
+        }),
       });
     }
   }
@@ -453,14 +463,19 @@ function collectExportedSymbols(snapshot: AgentProjectSnapshot): Array<{ name: s
   });
 }
 
-function collectSqlObjects(snapshot: AgentProjectSnapshot): Array<{ name: string; kind: string; file: string }> {
+function collectSqlObjects(snapshot: AgentProjectSnapshot): Array<{ name: string; kind: string; file: string; handle: string }> {
   return [...snapshot.symbolGraph.nodes.values()]
     .filter((node) => node.kind === "table" || node.kind === "view" || node.kind === "index" || node.kind === "routine")
-    .map((node) => ({
-      name: node.name,
-      kind: node.kind,
-      file: relativeFile(snapshot.root, node.file),
-    }))
+    .map((node) => {
+      const file = relativeFile(snapshot.root, node.file);
+      const def = snapshot.index.byFile.get(node.file)?.locals.find((local) => defNodeId(local) === node.id);
+      return {
+        name: node.name,
+        kind: node.kind,
+        file,
+        handle: formatAgentSqlHandle({ name: node.name, file, line: def?.range.start.line ?? 0 }),
+      };
+    })
     .sort((left, right) => {
       const fileDelta = left.file.localeCompare(right.file);
       if (fileDelta !== 0) return fileDelta;

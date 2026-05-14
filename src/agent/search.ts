@@ -8,7 +8,18 @@ import type { Range } from "../types.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
 import type { SymbolNode } from "../graphs.js";
 import { normalizePath, toProjectRelativePath } from "../util.js";
-import { formatAgentSqlHandle, formatAgentSymbolHandle, parseAgentSqlHandle, parseAgentSymbolHandle } from "./handles.js";
+import {
+  formatAgentChunkHandle,
+  formatAgentFileHandle,
+  formatAgentGraphHandle,
+  formatAgentSqlHandle,
+  formatAgentSymbolHandle,
+  parseAgentChunkHandle,
+  parseAgentFileHandle,
+  parseAgentGraphHandle,
+  parseAgentSqlHandle,
+  parseAgentSymbolHandle,
+} from "./handles.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
 
 export type AgentSearchMode = "hybrid" | "symbol" | "path" | "text" | "graph" | "sql";
@@ -63,6 +74,11 @@ export type AgentSearchResponse = {
     evidencePerResult: number;
     neighborsPerResult: number;
     followUpsPerResult: number;
+  };
+  resultCount: number;
+  totalCandidates: number;
+  omittedCounts: {
+    results: number;
   };
   results: AgentSearchResult[];
 };
@@ -155,9 +171,10 @@ async function searchSnapshot(snapshot: AgentProjectSnapshot, request: AgentSear
     applyGraphNeighborhood(snapshot, resultMap, tokens, request.from, normalizeDepth(request.depth));
   }
 
-  const results = [...resultMap.values()]
+  const candidates = [...resultMap.values()]
     .filter((result) => result.score > 0)
-    .sort(compareResults)
+    .sort(compareResults);
+  const results = candidates
     .slice(0, limit)
     .map(finalizeResult);
 
@@ -172,6 +189,11 @@ async function searchSnapshot(snapshot: AgentProjectSnapshot, request: AgentSear
       evidencePerResult: MAX_EVIDENCE_PER_RESULT,
       neighborsPerResult: MAX_NEIGHBORS_PER_RESULT,
       followUpsPerResult: MAX_FOLLOWUPS_PER_RESULT,
+    },
+    resultCount: results.length,
+    totalCandidates: candidates.length,
+    omittedCounts: {
+      results: Math.max(0, candidates.length - results.length),
     },
     results,
   };
@@ -326,7 +348,7 @@ function addPathResults(
     if (pathMatch.score <= 0) continue;
 
     const result = upsertResult(resultMap, {
-      handle: `file:${relFile}`,
+      handle: formatAgentFileHandle({ file: relFile }),
       kind: "file",
       label: relFile,
       file: relFile,
@@ -355,7 +377,7 @@ async function addTextResults(
       if (match.score <= 0) continue;
 
       const relFile = relativeFile(snapshot.root, file);
-      const handle = `chunk:${relFile}:${chunk.startLine}`;
+      const handle = formatAgentChunkHandle({ file: relFile, line: chunk.startLine });
       const result = upsertResult(resultMap, {
         handle,
         kind: "chunk",
@@ -402,7 +424,7 @@ function applyGraphNeighborhood(
     const fileMatch = matchTokenScore(relFile, tokens);
     if (fileMatch.score > 0) {
       const graphResult = upsertResult(resultMap, {
-        handle: `graph:${relFile}`,
+        handle: formatAgentGraphHandle({ file: relFile }),
         kind: "graph_node",
         label: relFile,
         file: relFile,
@@ -437,9 +459,9 @@ function resolveAnchorFiles(snapshot: AgentProjectSnapshot, from: string): Set<s
   const directFile = resolveFileCandidate(snapshot, from);
   if (directFile) anchor.add(directFile);
 
-  const handleTarget = from.startsWith("file:") ? from.slice("file:".length) : undefined;
-  if (handleTarget) {
-    const handleFile = resolveFileCandidate(snapshot, handleTarget);
+  const fileLikeHandle = parseAgentFileHandle(from) ?? parseAgentChunkHandle(from) ?? parseAgentGraphHandle(from);
+  if (fileLikeHandle) {
+    const handleFile = resolveFileCandidate(snapshot, fileLikeHandle.file);
     if (handleFile) anchor.add(handleFile);
   }
 

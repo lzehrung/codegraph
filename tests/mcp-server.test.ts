@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
-import { createCodegraphMcpHandlers } from "../src/mcp/server.js";
+import { createCodegraphMcpHandlers, listCodegraphMcpTools } from "../src/mcp/server.js";
 
 function countingSession(session: AgentSession): { session: AgentSession; loads: () => number } {
   let cached: Promise<AgentProjectSnapshot> | undefined;
@@ -46,6 +46,39 @@ describe("codegraph MCP handlers", () => {
 
     const refs = await handlers.refs({ handle: first!.handle });
     expect(refs.references.some((ref) => ref.file === "api.ts")).toBeTruthy();
+  });
+
+  it("bounds refs by handle with the refs limit", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-refs-limit-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
+    await fs.writeFile(
+      path.join(root, "api.ts"),
+      "import { validateUser } from './auth';\nexport const ok = validateUser(1);\n",
+    );
+    await fs.writeFile(
+      path.join(root, "other.ts"),
+      "import { validateUser } from './auth';\nexport const ok = validateUser(2);\n",
+    );
+
+    const handlers = createCodegraphMcpHandlers({ root });
+    const search = await handlers.search({ query: "validate user", limit: 5 });
+    const first = search.results[0];
+    expect(first?.handle).toBeTruthy();
+
+    const refs = await handlers.refs({ handle: first!.handle, limit: 1 });
+    expect(refs.references).toHaveLength(1);
+  });
+
+  it("advertises refs as either handle or file position input", () => {
+    const refsTool = listCodegraphMcpTools().find((tool) => tool.name === "refs");
+    expect(refsTool?.inputSchema).toEqual(
+      expect.objectContaining({
+        oneOf: [
+          { required: ["handle"] },
+          { required: ["file", "line", "column"] },
+        ],
+      }),
+    );
   });
 
   it("keeps query_sqlite read-only", async () => {

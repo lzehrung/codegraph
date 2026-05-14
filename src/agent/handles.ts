@@ -11,6 +11,15 @@ export type AgentSqlHandle = {
   line: number;
 };
 
+export type AgentFileHandle = {
+  file: string;
+};
+
+export type AgentChunkHandle = {
+  file: string;
+  line: number;
+};
+
 export function formatAgentSymbolHandle(handle: AgentSymbolHandle): string {
   return [
     "symbol",
@@ -36,6 +45,46 @@ export function parseAgentSymbolHandle(handle: string): AgentSymbolHandle | null
     line,
     column,
   };
+}
+
+export function formatAgentFileHandle(handle: AgentFileHandle): string {
+  return ["file", encodeURIComponent(handle.file)].join(":");
+}
+
+export function parseAgentFileHandle(handle: string): AgentFileHandle | null {
+  if (!handle.startsWith("file:")) return null;
+  const encodedFile = handle.slice("file:".length);
+  const file = decodeHandlePart(encodedFile) ?? encodedFile;
+  if (!file) return null;
+  return { file };
+}
+
+export function formatAgentChunkHandle(handle: AgentChunkHandle): string {
+  return ["chunk", encodeURIComponent(handle.file), String(handle.line)].join(":");
+}
+
+export function parseAgentChunkHandle(handle: string): AgentChunkHandle | null {
+  if (!handle.startsWith("chunk:")) return null;
+  const remainder = handle.slice("chunk:".length);
+  const separator = remainder.lastIndexOf(":");
+  if (separator < 0) return null;
+  const encodedFile = remainder.slice(0, separator);
+  const line = Number(remainder.slice(separator + 1));
+  const file = decodeHandlePart(encodedFile) ?? encodedFile;
+  if (!file || !Number.isFinite(line)) return null;
+  return { file, line };
+}
+
+export function formatAgentGraphHandle(handle: AgentFileHandle): string {
+  return ["graph", encodeURIComponent(handle.file)].join(":");
+}
+
+export function parseAgentGraphHandle(handle: string): AgentFileHandle | null {
+  if (!handle.startsWith("graph:")) return null;
+  const encodedFile = handle.slice("graph:".length);
+  const file = decodeHandlePart(encodedFile) ?? encodedFile;
+  if (!file) return null;
+  return { file };
 }
 
 export function formatAgentSqlHandle(handle: AgentSqlHandle): string {

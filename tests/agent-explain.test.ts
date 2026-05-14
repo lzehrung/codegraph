@@ -8,7 +8,10 @@ import { searchCodegraph } from "../src/agent/search.js";
 
 async function mkRepo(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-explain-"));
-  await fs.writeFile(path.join(root, "users.sql"), "CREATE TABLE public.users (id int primary key);\n");
+  await fs.writeFile(
+    path.join(root, "users.sql"),
+    "CREATE TABLE public.users (id int primary key);\nCREATE VIEW active_users AS SELECT id FROM public.users;\n",
+  );
   await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
   await fs.writeFile(
     path.join(root, "api.ts"),
@@ -54,13 +57,53 @@ describe("agent explain", () => {
     expect(explanation.target.handle).toBe(handle);
   });
 
+  it("resolves chunk and graph handles returned by search to file explanations", async () => {
+    const root = await mkRepo();
+    const textSearch = await searchCodegraph({ root, query: "return id", mode: "text", limit: 5 });
+    const chunkResult = textSearch.results.find((result) => result.kind === "chunk");
+    expect(chunkResult?.handle).toBeDefined();
+
+    const chunkExplanation = await explainCodegraphTarget({ root, target: chunkResult?.handle ?? "" });
+    expect(chunkExplanation.target.kind).toBe("file");
+    expect(chunkExplanation.target.file).toBe(chunkResult?.file);
+
+    const graphSearch = await searchCodegraph({ root, query: "api", mode: "graph", from: "auth.ts", depth: 1, limit: 5 });
+    const graphHandle = graphSearch.results.find((result) => result.kind === "graph_node")?.handle;
+    expect(graphHandle).toBeDefined();
+
+    const graphExplanation = await explainCodegraphTarget({ root, target: graphHandle ?? "" });
+    expect(graphExplanation.target.kind).toBe("file");
+    expect(graphExplanation.target.file).toBe("api.ts");
+  });
+
   it("explains SQL objects without claiming current-schema reconstruction", async () => {
     const root = await mkRepo();
     const explanation = await explainCodegraphTarget({ root, target: "public.users" });
 
     expect(explanation.target.kind).toBe("sql_object");
-    expect(explanation.relatedSqlObjects.some((entry) => entry.name === "public.users")).toBeTruthy();
+    expect(explanation.relatedSqlObjects).toContainEqual(
+      expect.objectContaining({
+        name: "active_users",
+        relation: "incoming:reads_from",
+      }),
+    );
     expect(explanation.summary.join(" ")).not.toContain("current schema");
+  });
+
+  it("does not infer SQL relations from ambiguous unqualified object names", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-explain-sql-ambiguous-"));
+    await fs.writeFile(path.join(root, "public.sql"), "CREATE TABLE public.users (id int primary key);\n");
+    await fs.writeFile(path.join(root, "private.sql"), "CREATE TABLE private.users (id int primary key);\n");
+    await fs.writeFile(path.join(root, "view.sql"), "CREATE VIEW active_users AS SELECT id FROM users;\n");
+
+    const explanation = await explainCodegraphTarget({ root, target: "public.users" });
+
+    expect(explanation.relatedSqlObjects).not.toContainEqual(
+      expect.objectContaining({
+        name: "active_users",
+        relation: "incoming:reads_from",
+      }),
+    );
   });
 
   it("bounds dependency and snippet output", async () => {
@@ -75,7 +118,10 @@ describe("agent explain", () => {
     });
 
     expect(explanation.reverseDependencies.length).toBeLessThanOrEqual(1);
+    expect(explanation.references.length).toBeLessThanOrEqual(1);
     expect(explanation.snippets.length).toBeLessThanOrEqual(1);
+    expect(explanation.limits.references).toBe(1);
+    expect(explanation.limits.relatedSqlObjects).toBe(1);
   });
 
   it("bounds file symbols and reports omitted counts", async () => {

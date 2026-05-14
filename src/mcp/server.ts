@@ -143,7 +143,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
         const explanation = await explainCodegraphTargetWithSession(session, {
           root,
           target: request.handle,
-          maxDependencies: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
+          maxReferences: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
         });
         return { references: explanation.references };
       }
@@ -371,6 +371,13 @@ const refsSchema = z.object({
   line: z.number().int().positive().optional(),
   column: z.number().int().nonnegative().optional(),
   limit: z.number().int().nonnegative().optional(),
+}).refine((request) => {
+  const hasHandle = request.handle !== undefined;
+  const hasAnyPosition = request.file !== undefined || request.line !== undefined || request.column !== undefined;
+  const hasCompletePosition = request.file !== undefined && request.line !== undefined && request.column !== undefined;
+  return hasHandle ? !hasAnyPosition : hasCompletePosition;
+}, {
+  message: "refs requires either handle or file, line, and column.",
 });
 
 const fileGraphSchema = z.object({
@@ -455,13 +462,20 @@ const MCP_TOOLS: Tool[] = [
   {
     name: "refs",
     description: "Find references by stable handle or file position.",
-    inputSchema: objectSchema({
-      handle: stringProperty,
-      file: stringProperty,
-      line: { type: "integer", minimum: 1 },
-      column: { type: "integer", minimum: 0 },
-      limit: { type: "integer", minimum: 0, maximum: MAX_MCP_COLLECTION_LIMIT, default: DEFAULT_MCP_COLLECTION_LIMIT },
-    }),
+    inputSchema: {
+      type: "object",
+      properties: {
+        handle: stringProperty,
+        file: stringProperty,
+        line: { type: "integer", minimum: 1 },
+        column: { type: "integer", minimum: 0 },
+        limit: { type: "integer", minimum: 0, maximum: MAX_MCP_COLLECTION_LIMIT, default: DEFAULT_MCP_COLLECTION_LIMIT },
+      },
+      oneOf: [
+        { required: ["handle"] },
+        { required: ["file", "line", "column"] },
+      ],
+    },
   },
   {
     name: "deps",
@@ -533,6 +547,10 @@ const MCP_TOOLS: Tool[] = [
     }),
   },
 ];
+
+export function listCodegraphMcpTools(): Tool[] {
+  return MCP_TOOLS.map((tool) => ({ ...tool }));
+}
 
 function normalizeSqliteRowLimit(limit: number | undefined): number {
   if (typeof limit !== "number" || !Number.isFinite(limit)) return DEFAULT_SQLITE_ROW_LIMIT;

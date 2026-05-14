@@ -57,6 +57,9 @@ describe("artifact build", () => {
       artifacts: Record<string, string>;
       sql: { supported: boolean; limitation: string };
     };
+    const questions = JSON.parse(await fs.readFile(path.join(outDir, "questions.json"), "utf8")) as {
+      questions: Array<{ id: string; command: string; handle?: string }>;
+    };
     const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as {
       schemaVersion: number;
       format: string;
@@ -72,6 +75,11 @@ describe("artifact build", () => {
     expect(graph.format).toBe("codegraph.graph-json");
     expect(graph.files).toEqual(graph.graph.files);
     expect(graph.graph.files.some((file) => file.includes(root.replace(/\\/g, "/")))).toBe(false);
+    expect(questions.questions.some((question) => question.command.includes("codegraph explain symbol:"))).toBeTruthy();
+    expect(questions.questions.some((question) => question.command.includes("codegraph explain sql:"))).toBeTruthy();
+    expect(
+      questions.questions.every((question) => question.handle === undefined || question.command.includes(question.handle)),
+    ).toBeTruthy();
   });
 
   it("refuses to overwrite a non-empty output directory unless force is set and removes stale known artifacts", async () => {

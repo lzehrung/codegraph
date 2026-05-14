@@ -239,7 +239,7 @@ export { buildCodegraphArtifact, buildCodegraphArtifactWithSession } from "./age
 export type { CodegraphArtifactBuildRequest, CodegraphArtifactBuildResult } from "./agent/artifact.js";
 
 /** MCP server and typed handler helpers for agent graph navigation. */
-export { createCodegraphMcpHandlers, serveCodegraphMcp } from "./mcp/server.js";
+export { createCodegraphMcpHandlers, listCodegraphMcpTools, serveCodegraphMcp } from "./mcp/server.js";
 export type { CodegraphMcpHandlers, CodegraphMcpServerOptions } from "./mcp/server.js";
 
 /** Agent-oriented JSON tool wrappers around the core codegraph APIs. */

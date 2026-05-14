@@ -24,7 +24,7 @@ const jsOnlyIndex = await buildProjectIndex(process.cwd(), { native: "off" });
 
 ## Agent search
 
-`searchCodegraph()` builds a project snapshot and returns deterministic, agent-ready anchors across files, symbols, chunks, SQL objects, and optional graph neighborhoods. Handles are project-relative; large result packets include `limits` and `omittedCounts`.
+`searchCodegraph()` builds a project snapshot and returns deterministic, agent-ready anchors across files, symbols, chunks, SQL objects, and optional graph neighborhoods. Handles are project-relative and explainable; large result packets include `resultCount`, `totalCandidates`, `limits`, and `omittedCounts`.
 
 ```ts
 import { buildCodegraphArtifact, explainCodegraphTarget, searchCodegraph } from "@lzehrung/codegraph";
@@ -40,9 +40,9 @@ const first = response.results[0];
 console.log(first?.handle, first?.rankReasons, first?.omittedCounts, first?.followUps);
 ```
 
-Use `mode: "sql"` for SQL objects, or pass `from` plus `depth` with `mode: "graph"` to boost matches near a file, symbol handle, SQL handle, or symbol name.
+Use `mode: "sql"` for SQL objects, or pass `from` plus `depth` with `mode: "graph"` to boost matches near a file path, file/chunk/graph handle, symbol handle, SQL handle, or symbol name.
 
-`explainCodegraphTarget()` resolves a file path, symbol name, SQL object name, or search handle into a bounded packet for follow-up agent work. With changed context enabled, the packet includes compact review tasks and candidate tests:
+`explainCodegraphTarget()` resolves a file path, symbol name, SQL object name, or search handle into a bounded packet for follow-up agent work. SQL related objects include a `relation` such as `incoming:reads_from`, `outgoing:writes_to`, or `same_file`. With changed context enabled, the packet includes compact review tasks and candidate tests:
 
 ```ts
 const explanation = await explainCodegraphTarget({
@@ -50,6 +50,8 @@ const explanation = await explainCodegraphTarget({
   target: first?.handle ?? "src/auth.ts",
   maxSymbols: 25,
   maxDependencies: 10,
+  maxReferences: 10,
+  maxRelatedSqlObjects: 10,
   maxSnippets: 5,
 });
 
@@ -67,7 +69,7 @@ const artifact = await buildCodegraphArtifact({
 console.log(artifact.manifestPath, artifact.artifacts);
 ```
 
-The `graph.json` artifact is self-describing (`schemaVersion: 1`, `format: "codegraph.graph-json"`) and uses project-relative file paths and portable symbol handles. With `force: true`, stale known Codegraph artifact files are removed before the selected outputs are written; unrelated files in the directory are preserved.
+The `graph.json` artifact is self-describing (`schemaVersion: 1`, `format: "codegraph.graph-json"`) and uses project-relative file paths and portable symbol handles. `questions.json` uses the same stable handles for follow-up commands. With `force: true`, stale known Codegraph artifact files are removed before the selected outputs are written; unrelated files in the directory are preserved.
 
 `createAgentSession()` keeps one in-process project snapshot warm for repeated search, explain, artifact, and MCP calls. Use `buildCodegraphArtifactWithSession()` when a host already has a session and wants SQLite, graph JSON, report, questions, and manifest outputs from the same snapshot. `createCodegraphMcpHandlers()` exposes the same primitives without starting stdio, which is useful for tests or host applications:
 

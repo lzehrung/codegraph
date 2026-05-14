@@ -90,11 +90,15 @@ describe("agent search", () => {
 
   it("boosts matches reachable from a graph anchor", async () => {
     const root = await mkRepo();
+    const anchorSearch = await searchCodegraph({ root, query: "auth", mode: "path", limit: 5 });
+    const authHandle = anchorSearch.results.find((result) => result.file === "src/auth.ts")?.handle;
+    expect(authHandle).toBeDefined();
+
     const response = await searchCodegraph({
       root,
       query: "handle login",
       mode: "graph",
-      from: "src/auth.ts",
+      from: authHandle ?? "",
       depth: 1,
       limit: 5,
     });
@@ -137,6 +141,9 @@ describe("agent search", () => {
     const validateResult = response.results.find((result) => result.label === "validateUser");
 
     expect(response.results.length).toBeLessThanOrEqual(100);
+    expect(response.resultCount).toBe(response.results.length);
+    expect(response.totalCandidates).toBeGreaterThan(response.resultCount);
+    expect(response.omittedCounts.results).toBeGreaterThan(0);
     expect(response.limits.results).toBe(100);
     expect(validateResult?.neighbors.length).toBeLessThanOrEqual(response.limits.neighborsPerResult);
     expect(validateResult?.omittedCounts.neighbors).toBeGreaterThan(0);
