@@ -239,6 +239,25 @@ export {
   type RawSqlResult,
 } from "./sqlite.js";
 
+/** SQL artifact facts, graph projection, and review-context helpers. */
+export {
+  classifySqlFile,
+  extractSqlFactsFromSource,
+  buildSqlArtifactGraphFromFiles,
+  projectSqlFactsToGraph,
+  collectSqlReviewContext,
+  type SqlArtifactEdge,
+  type SqlArtifactGraph,
+  type SqlArtifactNode,
+  type SqlBridgeReason,
+  type SqlFactKind,
+  type SqlFileRole,
+  type SqlReviewContext,
+  type SqlReviewContextEntry,
+  type SqlStatementFact,
+  type SqlTruthTier,
+} from "./sql/index.js";
+
 /** Source and text chunking helpers. */
 export { chunkFile, type Chunk, type ChunkFileOptions } from "./chunking/chunkFile.js";
 export { chunkTextFile, type TextChunkOptions } from "./chunking/chunkTextFile.js";

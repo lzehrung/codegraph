@@ -88,6 +88,12 @@ import {
 } from "./types.js";
 import { isJsFallbackUnavailableError, isJsSyntaxTree } from "../jsFallback.js";
 import { isUnsupportedParserInputError } from "../languages/filePrep.js";
+import {
+  buildSqlFactCache,
+  buildSqlModuleIndex,
+  sqlCorpusSignature,
+  type SqlFactCache,
+} from "../sql/sourceGraph.js";
 
 type IndexedFileGraphContext = {
   source: string;
@@ -347,7 +353,7 @@ async function buildIndexedModuleForFile(args: {
   let tree: SyntaxTreeLike | undefined;
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
 
-  if (!nativeQueries && !graphOnlyLanguage) {
+  if (!nativeQueries && !graphOnlyLanguage && sup.id !== "sql") {
     const parseAttempt = attemptParsePreparedFileContext(prepared);
     const parsed = parseAttempt.parsed;
     if (parsed) {
@@ -371,25 +377,33 @@ async function buildIndexedModuleForFile(args: {
     args.bloomFilterCache.set(args.file, filter);
   }
 
-  const imports = await collectImportsForFile(args.file, args.projectRoot, {
-    source,
-    ...(tree && isJsSyntaxTree(tree) ? { tree } : {}),
-    sup,
-    ...(resolvedLang ? { lang: resolvedLang } : {}),
-    ...(nativeQueries !== undefined ? { nativeQueries } : {}),
-    graphOptions: args.graphOptions,
-    ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
-    ...(args.onFallbackImportExtraction ? { onFallbackImportExtraction: args.onFallbackImportExtraction } : {}),
-  });
+  const imports =
+    sup.id === "sql"
+      ? []
+      : await collectImportsForFile(args.file, args.projectRoot, {
+          source,
+          ...(tree && isJsSyntaxTree(tree) ? { tree } : {}),
+          sup,
+          ...(resolvedLang ? { lang: resolvedLang } : {}),
+          ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+          graphOptions: args.graphOptions,
+          ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
+          ...(args.onFallbackImportExtraction ? { onFallbackImportExtraction: args.onFallbackImportExtraction } : {}),
+        });
   collectJsonDependencies(imports, args.jsonDependencies);
-  const mod = lacksParserContext
-    ? { ...createEmptyModuleIndex(args.file), imports }
-    : collectLocalsAndExportsFromSource(args.file, source, sup, resolvedLang, imports, {
-        ...(tree ? { tree } : {}),
-        ...(nativeQueries !== undefined ? { nativeQueries } : {}),
-        ...(args.opts?.native ? { nativeMode: args.opts.native } : {}),
-        ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
-      });
+  let mod: ModuleIndex;
+  if (sup.id === "sql") {
+    mod = buildSqlModuleIndex(args.file, source);
+  } else if (lacksParserContext) {
+    mod = { ...createEmptyModuleIndex(args.file), imports };
+  } else {
+    mod = collectLocalsAndExportsFromSource(args.file, source, sup, resolvedLang, imports, {
+      ...(tree ? { tree } : {}),
+      ...(nativeQueries !== undefined ? { nativeQueries } : {}),
+      ...(args.opts?.native ? { nativeMode: args.opts.native } : {}),
+      ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
+    });
+  }
   mod.imports = imports;
   await resolveCrossModuleSymbolExports(
     args.file,
@@ -576,8 +590,36 @@ async function buildIndexFromFileListShared(
   const gitSigMap = useGitSignatures
     ? await getGitBlobHashes(projectRoot, normalizedFiles, { gitAvailable })
     : new Map<string, string>();
-  const jsonDependencies = new Set<string>();
   const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
+  const sqlFiles = normalizedFiles
+    .filter((file) => path.extname(file).toLowerCase() === ".sql")
+    .sort((left, right) => left.localeCompare(right));
+  const sqlFileSignatureEntries = await mapLimit(sqlFiles, conc, async (file) => {
+    const sigInfo = await fileSignature(file, opts?.cacheStrict, gitSigMap.get(file), {
+      forceContentHash: cacheEnabled,
+    });
+    return [file, sigInfo] as const;
+  });
+  for (const [file, sigInfo] of sqlFileSignatureEntries) {
+    fileSignatures.set(file, sigInfo);
+  }
+  const sqlCorpusSig = sqlCorpusSignature(sqlFiles, fileSignatures);
+  let sqlFactCachePromise: Promise<SqlFactCache> | undefined;
+  const getSqlFactCache = (): Promise<SqlFactCache> => {
+    sqlFactCachePromise ??= buildSqlFactCache(normalizedFiles);
+    return sqlFactCachePromise;
+  };
+  const shouldProvideSqlFactCache = (
+    file: string,
+    sigInfo: FileSignature,
+    cachedEdgesEntry: ManifestFileEntry | undefined,
+  ): boolean => {
+    if (path.extname(file).toLowerCase() !== ".sql") return false;
+    if (!cachedEdgesEntry || !sqlCorpusSig || cachedEdgesEntry.sqlCorpusSig !== sqlCorpusSig) return true;
+    const matchesGitSig = !!sigInfo.gitSig && !!cachedEdgesEntry.gitSig && cachedEdgesEntry.gitSig === sigInfo.gitSig;
+    return !(matchesGitSig || cachedEdgesEntry.sig === sigInfo.sig);
+  };
+  const jsonDependencies = new Set<string>();
   const workerSetup = await setupWorkerPool(opts);
   try {
     const useBloomFilters = opts?.useBloomFilters ?? true;
@@ -594,6 +636,7 @@ async function buildIndexFromFileListShared(
           manifestEntries.set(file, {
             sig: entry.sig,
             ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
+            ...(entry.sqlCorpusSig ? { sqlCorpusSig: entry.sqlCorpusSig } : {}),
             edges: entry.edges,
           });
         }
@@ -602,10 +645,13 @@ async function buildIndexFromFileListShared(
     const totalFiles = normalizedFiles.length;
     const fileResults = await mapLimit(normalizedFiles, conc, async (file) => {
       try {
-        const sigInfo = await fileSignature(file, opts?.cacheStrict, gitSigMap.get(file), {
-          forceContentHash: cacheEnabled,
-        });
-        fileSignatures.set(file, sigInfo);
+        let sigInfo = fileSignatures.get(file);
+        if (!sigInfo) {
+          sigInfo = await fileSignature(file, opts?.cacheStrict, gitSigMap.get(file), {
+            forceContentHash: cacheEnabled,
+          });
+          fileSignatures.set(file, sigInfo);
+        }
         const cacheSig = cacheEnabled ? await cacheSignatureForFile(file, sigInfo) : sigInfo.cacheSig;
         let mod: ModuleIndex | null = cacheEnabled ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
         if (mod && fileReport) {
@@ -616,6 +662,9 @@ async function buildIndexFromFileListShared(
           !!cachedEdgesEntry &&
           ((cachedEdgesEntry.gitSig && cachedEdgesEntry.gitSig === sigInfo.gitSig) ||
             cachedEdgesEntry.sig === sigInfo.sig);
+        const sqlFactCache = shouldProvideSqlFactCache(file, sigInfo, cachedEdgesEntry)
+          ? await getSqlFactCache()
+          : undefined;
         let edges: Edge[] = [];
         if (mod && edgesCached) {
           edges = await collectEdgesForFile(file, projectRoot, workspaceConfig, {
@@ -628,9 +677,12 @@ async function buildIndexFromFileListShared(
             ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
             ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
             fileSignature: sigInfo,
+            ...(sqlCorpusSig ? { sqlCorpusSig } : {}),
             ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
             ...(onFileEdges ? { onFileEdges } : {}),
             ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
+            allFiles: normalizedFiles,
+            ...(sqlFactCache ? { sqlFactCache } : {}),
           });
           if (bloomFilterCache) {
             const filter = await buildBloomFilterForFile(file);
@@ -676,9 +728,12 @@ async function buildIndexFromFileListShared(
           ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
           ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
           fileSignature: sigInfo,
+          ...(sqlCorpusSig ? { sqlCorpusSig } : {}),
           ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
           ...(onFileEdges ? { onFileEdges } : {}),
           ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
+          allFiles: normalizedFiles,
+          ...(sqlFactCache ? { sqlFactCache } : {}),
         });
         return [file, mod ?? createEmptyModuleIndex(file), edges] as const;
       } catch (error) {
@@ -1119,6 +1174,7 @@ export async function buildProjectIndexIncremental(
               ...(opts?.native ? { native: opts.native } : {}),
               ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
               ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
+              allFiles: Array.from(allFiles),
               fileSignatures,
               cachedFileEdges: cachedGraphEntries,
               ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
@@ -1129,6 +1185,7 @@ export async function buildProjectIndexIncremental(
                 manifestEntries.set(file, {
                   sig: entry.sig,
                   ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
+                  ...(entry.sqlCorpusSig ? { sqlCorpusSig: entry.sqlCorpusSig } : {}),
                   edges: entry.edges,
                 });
               },

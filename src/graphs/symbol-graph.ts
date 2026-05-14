@@ -8,6 +8,11 @@ export type SymbolNodeKind =
   | "interface"
   | "type"
   | "default"
+  | "table"
+  | "view"
+  | "index"
+  | "constraint"
+  | "routine"
   | "import"
   | "namespaceImport";
 
@@ -38,6 +43,11 @@ function normalizeSymbolNodeKind(kind: string): SymbolNodeKind {
   if (kind === "interface") return "interface";
   if (kind === "type") return "type";
   if (kind === "default") return "default";
+  if (kind === "table") return "table";
+  if (kind === "view") return "view";
+  if (kind === "index") return "index";
+  if (kind === "constraint") return "constraint";
+  if (kind === "routine") return "routine";
   if (kind === "import") return "import";
   if (kind === "namespaceImport") return "namespaceImport";
   return "variable";

@@ -1,6 +1,6 @@
 # Library API
 
-Programmatic APIs for indexing, graph building, chunking, read-only SQL inspection, and impact analysis.
+Programmatic APIs for indexing, graph building, chunking, SQL artifact facts, read-only SQLite inspection, and impact analysis.
 
 For sessions, streaming workflows, tool wrappers, and review-oriented recipes, see [docs/agent-workflows.md](./agent-workflows.md).
 
@@ -217,6 +217,29 @@ console.log(result.columns, result.rows);
 
 `queryGraphSqliteRaw()` is intentionally read-only. It accepts result-producing statements such as `SELECT` and `PRAGMA` and rejects mutating SQL.
 
+## SQL artifact facts
+
+SQL source files participate in normal project indexing through SQL-specific symbols, SQL-to-SQL object edges, and SQL navigation. SQL-to-SQL edges are precise for exact object-name matches, heuristic for unambiguous qualified-to-basename fallback matches, and skipped for ambiguous basename guesses. Navigation is object-level: alias-qualified and table-qualified column uses can resolve to table/view definitions, but not to specific column declarations. These APIs expose the lower-level statement facts and candidate graph for common DDL/DML definitions, reads, writes, constraints, CTEs, renames, truncates, and merges. They do not infer a current schema, and application-code string literals are bridged to SQL only through explicit review-context rules.
+
+```ts
+import {
+  extractSqlFactsFromSource,
+  projectSqlFactsToGraph,
+  collectSqlReviewContext,
+} from "@lzehrung/codegraph";
+
+const filePath = `${process.cwd()}/db/schema.sql`;
+const source = "CREATE TABLE users (id integer);";
+const facts = extractSqlFactsFromSource(filePath, source);
+const sqlGraph = projectSqlFactsToGraph(facts);
+
+const sqlContext = await collectSqlReviewContext(process.cwd(), {
+  changedFiles: [filePath],
+});
+```
+
+`SqlStatementFact` records the source file, statement line/column/index range, file role, fact kind, object name, related object name, statement text, and truth tier. Review context uses explicit bridge reasons such as `changed_sql_file` and `changed_sql_literal`.
+
 ## Stable symbol handles
 
 Use stable handles instead of cursor positions.
@@ -335,7 +358,7 @@ const impact = await tool_impactJSON(root, { provider: "git", base: "HEAD", head
 
 Use the exported TypeScript APIs when another program is composing deterministic review packets, file packs, or model prompts. CLI `--pretty` and `--summary` output is optimized for humans reading a terminal; it is not the stable integration contract.
 
-- `buildReviewReport()` returns a review bundle with `schemaVersion`, changed files, changed symbols, `graphDelta`, candidate tests, `riskSummary`, `reviewTasks`, and diagnostics.
+- `buildReviewReport()` returns a review bundle with `schemaVersion`, changed files, changed symbols, `graphDelta`, candidate tests, `riskSummary`, `reviewTasks`, optional `sqlContext`, and diagnostics.
 - `analyzeImpactFromDiff()` returns the full or compact impact report shape for batch consumers.
 - `analyzeImpactStreaming()` emits progress and incremental chunks, then a final `complete.report` summary. Streaming always returns `format: "stream-summary"`; forwarded `compact` is accepted only for compatibility and is ignored. By default this includes the same key structured fields needed by pack builders: changed files, changed symbols, impacted items, suggestions, export summaries, re-export chains, ranked top impacts, surface area, clusters, cycles, graph edges, diagnostics, and warning text. Set `streamSummary: "light"` when an incremental-only caller wants changed/impacted details and stable terminal counts without paying for terminal suggestions, export summaries, re-export chains, ranked top impacts, graph metadata, cycles, clusters, or surface-area analysis.
 

@@ -17,6 +17,11 @@ export enum SymbolKind {
   Interface = "interface",
   TypeAlias = "type",
   Default = "default",
+  Table = "table",
+  View = "view",
+  Index = "index",
+  Constraint = "constraint",
+  Routine = "routine",
 }
 
 export type SymbolDef = {
