@@ -74,8 +74,16 @@ describe("codegraph MCP handlers", () => {
     expect(refsTool?.inputSchema).toEqual(
       expect.objectContaining({
         oneOf: [
-          { required: ["handle"] },
-          { required: ["file", "line", "column"] },
+          expect.objectContaining({
+            required: ["handle"],
+            not: expect.objectContaining({
+              anyOf: [{ required: ["file"] }, { required: ["line"] }, { required: ["column"] }],
+            }),
+          }),
+          expect.objectContaining({
+            required: ["file", "line", "column"],
+            not: { required: ["handle"] },
+          }),
         ],
       }),
     );
@@ -126,33 +134,41 @@ describe("codegraph MCP handlers", () => {
     await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
 
     const defaultHandlers = createCodegraphMcpHandlers({ root });
-    await expect(defaultHandlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true })).rejects.toThrow(/read-only/i);
+    await expect(defaultHandlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true })).rejects.toThrow(
+      /read-only/i,
+    );
 
     const readOnlyHandlers = createCodegraphMcpHandlers({ root, readOnly: true });
-    await expect(readOnlyHandlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true })).rejects.toThrow(/read-only/i);
+    await expect(readOnlyHandlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true })).rejects.toThrow(
+      /read-only/i,
+    );
   });
 
   it("rejects artifact paths outside the root", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-artifact-root-"));
     const outside = path.resolve(root, "..", "outside.sqlite");
 
-    await expect((async () => {
-      const handlers = createCodegraphMcpHandlers({ root, artifactPath: outside });
-      await handlers.query_sqlite({ query: "select 1" });
-    })()).rejects.toThrow(/outside project root/);
+    await expect(
+      (async () => {
+        const handlers = createCodegraphMcpHandlers({ root, artifactPath: outside });
+        await handlers.query_sqlite({ query: "select 1" });
+      })(),
+    ).rejects.toThrow(/outside project root/);
 
     const handlers = createCodegraphMcpHandlers({ root, readOnly: false });
-    await expect(handlers.artifact_build({ outDir: path.resolve(root, "..", "outside"), sqlite: true })).rejects.toThrow(
-      /outside project root/,
-    );
+    await expect(
+      handlers.artifact_build({ outDir: path.resolve(root, "..", "outside"), sqlite: true }),
+    ).rejects.toThrow(/outside project root/);
   });
 
   it("rejects get_file paths outside the root", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-file-"));
-    await expect((async () => {
-      const handlers = createCodegraphMcpHandlers({ root });
-      await handlers.get_file({ file: path.resolve(root, "..", "outside.ts") });
-    })()).rejects.toThrow(/outside project root/);
+    await expect(
+      (async () => {
+        const handlers = createCodegraphMcpHandlers({ root });
+        await handlers.get_file({ file: path.resolve(root, "..", "outside.ts") });
+      })(),
+    ).rejects.toThrow(/outside project root/);
   });
 
   it("rejects get_file paths that escape through a directory link", async () => {
@@ -169,7 +185,9 @@ describe("codegraph MCP handlers", () => {
 
     const handlers = createCodegraphMcpHandlers({ root });
 
-    await expect(handlers.get_file({ file: path.join("linked", "secret.txt") })).rejects.toThrow(/outside project root/);
+    await expect(handlers.get_file({ file: path.join("linked", "secret.txt") })).rejects.toThrow(
+      /outside project root/,
+    );
   });
 
   it("rejects artifact output directories that escape through a directory link", async () => {
@@ -186,7 +204,9 @@ describe("codegraph MCP handlers", () => {
 
     const handlers = createCodegraphMcpHandlers({ root, readOnly: false });
 
-    await expect(handlers.artifact_build({ outDir: linkPath, sqlite: true, force: true })).rejects.toThrow(/outside project root/);
+    await expect(handlers.artifact_build({ outDir: linkPath, sqlite: true, force: true })).rejects.toThrow(
+      /outside project root/,
+    );
   });
 
   it("reuses one session snapshot across search and refs follow-up calls", async () => {
@@ -217,7 +237,9 @@ describe("codegraph MCP handlers", () => {
     await fs.writeFile(path.join(root, "late.ts"), "export const late = 1;\n");
     await handlers.artifact_build({ outDir: path.join(root, "out"), graphJson: true });
 
-    const graph = JSON.parse(await fs.readFile(path.join(root, "out", "graph.json"), "utf8")) as { graph: { files: string[] } };
+    const graph = JSON.parse(await fs.readFile(path.join(root, "out", "graph.json"), "utf8")) as {
+      graph: { files: string[] };
+    };
     expect(graph.graph.files.some((file) => file.endsWith("late.ts"))).toBe(false);
     expect(counted.loads()).toBe(1);
   });
@@ -232,7 +254,9 @@ describe("codegraph MCP handlers", () => {
 
     await handlers.artifact_build({ outDir, graphJson: true, force: true });
 
-    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { graph: { files: string[] } };
+    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as {
+      graph: { files: string[] };
+    };
     expect(graph.graph.files.some((file) => file.includes("/out/") || file.endsWith("/out/old.ts"))).toBe(false);
   });
 
@@ -255,7 +279,9 @@ describe("codegraph MCP handlers", () => {
 
     await handlers.artifact_build({ outDir, graphJson: true, force: true });
 
-    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { graph: { files: string[] } };
+    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as {
+      graph: { files: string[] };
+    };
     expect(graph.graph.files.some((file) => file.includes("/out/") || file.endsWith("/out/old.ts"))).toBe(false);
   });
 });

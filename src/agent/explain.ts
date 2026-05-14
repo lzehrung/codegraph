@@ -125,6 +125,11 @@ type BoundedList<T> = {
   omitted: number;
 };
 
+type ReferenceContext = {
+  references: BoundedList<AgentExplanationReference>;
+  snippets: BoundedList<AgentExplanationSnippet>;
+};
+
 type ResolvedExplainTarget =
   | { kind: "file"; file: string }
   | { kind: "symbol"; def: SymbolDef; node?: SymbolNode }
@@ -160,7 +165,12 @@ export function formatAgentExplanation(explanation: AgentExplanation): string {
     ...explanation.summary.map((entry) => `- ${entry}`),
   ];
   if (explanation.symbols.length > 0) {
-    lines.push(`symbols: ${explanation.symbols.map((symbol) => symbol.name).slice(0, 8).join(", ")}`);
+    lines.push(
+      `symbols: ${explanation.symbols
+        .map((symbol) => symbol.name)
+        .slice(0, 8)
+        .join(", ")}`,
+    );
   }
   if (explanation.dependencies.length > 0) {
     lines.push(`deps: ${explanation.dependencies.map((entry) => entry.file).join(", ")}`);
@@ -251,7 +261,9 @@ function resolveSymbolHandle(
 
 function resolveFileCandidate(snapshot: AgentProjectSnapshot, candidate: string): string | null {
   const normalizedFiles = new Map(snapshot.files.map((file) => [normalizePath(file), normalizePath(file)]));
-  const absoluteCandidate = path.isAbsolute(candidate) ? normalizePath(candidate) : normalizePath(path.resolve(snapshot.root, candidate));
+  const absoluteCandidate = path.isAbsolute(candidate)
+    ? normalizePath(candidate)
+    : normalizePath(path.resolve(snapshot.root, candidate));
   return normalizedFiles.get(absoluteCandidate) ?? null;
 }
 
@@ -312,7 +324,10 @@ function findSqlObjectByName(
   return def ? { kind: "sql_object", def, node } : null;
 }
 
-function symbolTarget(def: SymbolDef, node: SymbolNode | undefined): Extract<ResolvedExplainTarget, { kind: "symbol" }> {
+function symbolTarget(
+  def: SymbolDef,
+  node: SymbolNode | undefined,
+): Extract<ResolvedExplainTarget, { kind: "symbol" }> {
   return {
     kind: "symbol",
     def,
@@ -368,8 +383,12 @@ async function buildExplanation(
   const dependencies = collectDependencies(snapshot, file, maxDependencies, "forward");
   const reverseDependencies = collectDependencies(snapshot, file, maxDependencies, "reverse");
   const hotspots = collectTargetHotspots(snapshot, file);
-  const references = resolved.kind === "file" ? emptyBoundedList<AgentExplanationReference>() : await collectReferences(snapshot, resolved.def, maxReferences);
-  const snippets = resolved.kind === "file" ? emptyBoundedList<AgentExplanationSnippet>() : await collectSnippets(snapshot, resolved, maxSnippets);
+  const referenceContext =
+    resolved.kind === "file"
+      ? emptyReferenceContext()
+      : await collectReferenceContext(snapshot, resolved.def, maxReferences, maxSnippets);
+  const references = referenceContext.references;
+  const snippets = referenceContext.snippets;
   const relatedSqlObjects = await collectRelatedSqlObjects(snapshot, lookup, resolved, file, maxRelatedSqlObjects);
   const followUps = collectFollowUps(snapshot, resolved, symbols, relFile);
   const changedContext = await collectChangedContext(request);
@@ -515,8 +534,8 @@ function collectDependencies(
   const startFile = normalizePath(file);
   const dependencies =
     direction === "forward"
-      ? getDependencies(snapshot.fileGraph, startFile, { depth: 1, limit: limit + 1 })
-      : getReverseDependencies(snapshot.fileGraph, startFile, { depth: 1, limit: limit + 1 });
+      ? getDependencies(snapshot.fileGraph, startFile, { depth: 1 })
+      : getReverseDependencies(snapshot.fileGraph, startFile, { depth: 1 });
   const items = dependencies
     .map((dependency) => ({
       file: relativeFile(snapshot.root, dependency.file),
@@ -551,14 +570,16 @@ function collectTargetHotspots(
     }));
 }
 
-async function collectReferences(
+async function collectReferenceContext(
   snapshot: AgentProjectSnapshot,
   def: SymbolDef,
-  limit: number,
-): Promise<BoundedList<AgentExplanationReference>> {
-  const result = await findReferences(snapshot.index, { def }, { maxReferences: limit + 1 });
-  if (result.status !== "ok") return emptyBoundedList();
-  const items = result.references
+  referenceLimit: number,
+  snippetLimit: number,
+): Promise<ReferenceContext> {
+  const result = await findReferences(snapshot.index, { def }, { context: "line" });
+  if (result.status !== "ok") return emptyReferenceContext();
+
+  const references = result.references
     .map((reference) => ({
       file: relativeFile(snapshot.root, reference.file),
       range: reference.range,
@@ -567,34 +588,28 @@ async function collectReferences(
       const fileDelta = left.file.localeCompare(right.file);
       if (fileDelta !== 0) return fileDelta;
       return left.range.start.line - right.range.start.line;
-    })
-    .slice(0, limit);
-  return {
-    items,
-    omitted: Math.max(0, result.references.length - items.length),
-  };
-}
+    });
+  const referenceItems = references.slice(0, referenceLimit);
 
-async function collectSnippets(
-  snapshot: AgentProjectSnapshot,
-  resolved: Exclude<ResolvedExplainTarget, { kind: "not_found" | "file" }>,
-  limit: number,
-): Promise<BoundedList<AgentExplanationSnippet>> {
-  const result = await findReferences(snapshot.index, { def: resolved.def }, { context: "line", maxReferences: limit + 1 });
-  if (result.status !== "ok") return emptyBoundedList();
   const referencesWithContext = result.references.filter((reference) => reference.context !== undefined);
-  const items = referencesWithContext
-    .filter((reference) => reference.context !== undefined)
+  const snippets = referencesWithContext
     .map((reference) => snippetFromReference(snapshot, reference))
     .sort((left, right) => {
       const fileDelta = left.file.localeCompare(right.file);
       if (fileDelta !== 0) return fileDelta;
       return left.line - right.line;
-    })
-    .slice(0, limit);
+    });
+  const snippetItems = snippets.slice(0, snippetLimit);
+
   return {
-    items,
-    omitted: Math.max(0, referencesWithContext.length - items.length),
+    references: {
+      items: referenceItems,
+      omitted: Math.max(0, references.length - referenceItems.length),
+    },
+    snippets: {
+      items: snippetItems,
+      omitted: Math.max(0, snippets.length - snippetItems.length),
+    },
   };
 }
 
@@ -689,12 +704,17 @@ function sqlObjectNamesEquivalent(candidate: string, target: string): boolean {
   return sqlObjectBaseName(candidate).toLowerCase() === sqlObjectBaseName(target).toLowerCase();
 }
 
-function findSqlObjectsByReferenceName(sqlObjects: readonly SqlObjectNodeInfo[], objectName: string): SqlObjectNodeInfo[] {
+function findSqlObjectsByReferenceName(
+  sqlObjects: readonly SqlObjectNodeInfo[],
+  objectName: string,
+): SqlObjectNodeInfo[] {
   const normalizedName = objectName.toLowerCase();
   const exact = sqlObjects.filter((candidate) => candidate.name.toLowerCase() === normalizedName);
   if (exact.length > 0) return exact;
   const baseName = sqlObjectBaseName(objectName).toLowerCase();
-  const basenameMatches = sqlObjects.filter((candidate) => sqlObjectBaseName(candidate.name).toLowerCase() === baseName);
+  const basenameMatches = sqlObjects.filter(
+    (candidate) => sqlObjectBaseName(candidate.name).toLowerCase() === baseName,
+  );
   return basenameMatches.length === 1 ? basenameMatches : [];
 }
 
@@ -723,7 +743,11 @@ function addRelatedSqlObjectsFromFileEdges(
         addRelated(object, `outgoing:${relation.kind}`);
       }
     }
-    if (edge.to.type !== "file" || normalizePath(edge.to.path) !== targetFile || !referenceTargetsSqlName(sqlObjects, relation.objectName, targetName)) {
+    if (
+      edge.to.type !== "file" ||
+      normalizePath(edge.to.path) !== targetFile ||
+      !referenceTargetsSqlName(sqlObjects, relation.objectName, targetName)
+    ) {
       continue;
     }
     for (const object of sqlObjects.filter((candidate) => normalizePath(candidate.file) === normalizePath(edge.from))) {
@@ -743,11 +767,11 @@ async function addRelatedSqlObjectsFromFacts(
     for (const statementFacts of sqlStatementFactGroups(facts)) {
       const definitions = statementFacts.filter(isSqlDefinitionFact);
       const references = statementFacts.filter(isSqlReferenceFact);
-      const statementDefinesTarget = definitions.some((fact) =>
-        fact.objectName !== null && sqlObjectNamesEquivalent(fact.objectName, targetName),
+      const statementDefinesTarget = definitions.some(
+        (fact) => fact.objectName !== null && sqlObjectNamesEquivalent(fact.objectName, targetName),
       );
-      const referencesToTarget = references.filter((fact) =>
-        fact.objectName !== null && referenceTargetsSqlName(sqlObjects, fact.objectName, targetName),
+      const referencesToTarget = references.filter(
+        (fact) => fact.objectName !== null && referenceTargetsSqlName(sqlObjects, fact.objectName, targetName),
       );
 
       if (statementDefinesTarget) {
@@ -839,6 +863,13 @@ function emptyBoundedList<T>(): BoundedList<T> {
   };
 }
 
+function emptyReferenceContext(): ReferenceContext {
+  return {
+    references: emptyBoundedList(),
+    snippets: emptyBoundedList(),
+  };
+}
+
 function collectFollowUps(
   snapshot: AgentProjectSnapshot,
   resolved: Exclude<ResolvedExplainTarget, { kind: "not_found" }>,
@@ -858,11 +889,15 @@ function collectFollowUps(
       );
     }
   } else {
-    followUps.add(`codegraph goto ${quoteArg(relFile)} ${resolved.def.range.start.line} ${resolved.def.range.start.column}`);
+    followUps.add(
+      `codegraph goto ${quoteArg(relFile)} ${resolved.def.range.start.line} ${resolved.def.range.start.column}`,
+    );
     followUps.add(
       `codegraph refs --file ${quoteArg(relFile)} --line ${resolved.def.range.start.line} --col ${resolved.def.range.start.column} --pretty`,
     );
-    followUps.add(`codegraph search ${quoteArg(resolved.node?.name ?? resolved.def.localName)} --from ${quoteArg(relFile)} --json`);
+    followUps.add(
+      `codegraph search ${quoteArg(resolved.node?.name ?? resolved.def.localName)} --from ${quoteArg(relFile)} --json`,
+    );
   }
 
   if (isSqlFile(path.resolve(snapshot.root, relFile))) {

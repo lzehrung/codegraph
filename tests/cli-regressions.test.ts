@@ -977,7 +977,10 @@ describe("CLI regressions", () => {
 
   it("search returns ranked agent-ready results", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-search-"));
-    await fsp.writeFile(path.join(root, "auth.ts"), "export function validateUser(token: string) { return token.length > 0; }\n");
+    await fsp.writeFile(
+      path.join(root, "auth.ts"),
+      "export function validateUser(token: string) { return token.length > 0; }\n",
+    );
     await fsp.writeFile(
       path.join(root, "main.ts"),
       "import { validateUser } from './auth';\nexport const ok = validateUser('token');\n",
@@ -1011,6 +1014,22 @@ describe("CLI regressions", () => {
     expect(response.target.file).toBe("auth.ts");
     expect(response.symbols.some((symbol) => symbol.name === "validateUser")).toBeTruthy();
     expect(response.reverseDependencies.some((entry) => entry.file === "api.ts")).toBeTruthy();
+  });
+
+  it("explain accepts space-separated --max-symbols values", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-explain-symbol-limit-"));
+    await fsp.writeFile(path.join(root, "many.ts"), "export const one = 1;\nexport const two = 2;\n");
+
+    const stdout = await runCliCommand(["explain", "many.ts", "--root", root, "--max-symbols", "1", "--json"]);
+    const response = JSON.parse(stdout) as {
+      target: { file: string };
+      symbols: Array<{ name: string }>;
+      limits: { symbols: number };
+    };
+
+    expect(response.target.file).toBe("many.ts");
+    expect(response.symbols).toHaveLength(1);
+    expect(response.limits.symbols).toBe(1);
   });
 
   it("explain requires a complete changed-context range", async () => {

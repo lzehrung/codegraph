@@ -299,6 +299,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--from",
   "--max-dependencies",
   "--max-snippets",
+  "--max-symbols",
   "--artifact",
 ]);
 
@@ -1420,7 +1421,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     const target = parsed.positionals.join(" ").trim();
     if (!target) {
       writeStderrLine(
-        'Usage: explain <file|symbol|sql-object> [--root <path>] [--max-symbols <n>] [--changed-context --base <rev> --head <rev>] [--json]',
+        "Usage: explain <file|symbol|sql-object> [--root <path>] [--max-symbols <n>] [--changed-context --base <rev> --head <rev>] [--json]",
       );
       exitCli(2);
     }
@@ -1443,8 +1444,12 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       ...(maxDependenciesRaw !== undefined
         ? { maxDependencies: parsePositiveIntegerOption(maxDependenciesRaw, "--max-dependencies", 20) }
         : {}),
-      ...(maxSnippetsRaw !== undefined ? { maxSnippets: parsePositiveIntegerOption(maxSnippetsRaw, "--max-snippets", 8) } : {}),
-      ...(maxSymbolsRaw !== undefined ? { maxSymbols: parsePositiveIntegerOption(maxSymbolsRaw, "--max-symbols", 50) } : {}),
+      ...(maxSnippetsRaw !== undefined
+        ? { maxSnippets: parsePositiveIntegerOption(maxSnippetsRaw, "--max-snippets", 8) }
+        : {}),
+      ...(maxSymbolsRaw !== undefined
+        ? { maxSymbols: parsePositiveIntegerOption(maxSymbolsRaw, "--max-symbols", 50) }
+        : {}),
     });
 
     if (hasFlag("--json")) {
@@ -2368,7 +2373,10 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   exitCli(1);
 }
 
-export async function runCli(rawArgs: string[] = process.argv.slice(2), runtime: Partial<CliRuntime> = {}): Promise<void> {
+export async function runCli(
+  rawArgs: string[] = process.argv.slice(2),
+  runtime: Partial<CliRuntime> = {},
+): Promise<void> {
   const context = createCliContext(runtime);
   await cliContextStorage.run(context, async () => await runCliWithActiveRuntime(rawArgs));
 }

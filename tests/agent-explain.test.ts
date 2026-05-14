@@ -38,7 +38,9 @@ describe("agent explain", () => {
 
     expect(explanation.target.kind).toBe("symbol");
     expect(explanation.references.some((reference) => reference.file === "api.ts")).toBeTruthy();
-    expect(explanation.snippets.some((snippet) => snippet.file === "api.ts" && snippet.text.includes("validateUser"))).toBeTruthy();
+    expect(
+      explanation.snippets.some((snippet) => snippet.file === "api.ts" && snippet.text.includes("validateUser")),
+    ).toBeTruthy();
     expect(explanation.followUps.some((cmd) => cmd.includes("codegraph goto auth.ts"))).toBeTruthy();
   });
 
@@ -67,7 +69,14 @@ describe("agent explain", () => {
     expect(chunkExplanation.target.kind).toBe("file");
     expect(chunkExplanation.target.file).toBe(chunkResult?.file);
 
-    const graphSearch = await searchCodegraph({ root, query: "api", mode: "graph", from: "auth.ts", depth: 1, limit: 5 });
+    const graphSearch = await searchCodegraph({
+      root,
+      query: "api",
+      mode: "graph",
+      from: "auth.ts",
+      depth: 1,
+      limit: 5,
+    });
     const graphHandle = graphSearch.results.find((result) => result.kind === "graph_node")?.handle;
     expect(graphHandle).toBeDefined();
 
@@ -108,7 +117,10 @@ describe("agent explain", () => {
 
   it("bounds dependency and snippet output", async () => {
     const root = await mkRepo();
-    await fs.writeFile(path.join(root, "other.ts"), "import { validateUser } from './auth';\nexport const ok = validateUser(2);\n");
+    await fs.writeFile(
+      path.join(root, "other.ts"),
+      "import { validateUser } from './auth';\nexport const ok = validateUser(2);\n",
+    );
 
     const explanation = await explainCodegraphTarget({
       root,
@@ -122,6 +134,9 @@ describe("agent explain", () => {
     expect(explanation.snippets.length).toBeLessThanOrEqual(1);
     expect(explanation.limits.references).toBe(1);
     expect(explanation.limits.relatedSqlObjects).toBe(1);
+    expect(explanation.omittedCounts.reverseDependencies).toBe(1);
+    expect(explanation.omittedCounts.references).toBe(2);
+    expect(explanation.omittedCounts.snippets).toBe(2);
   });
 
   it("bounds file symbols and reports omitted counts", async () => {

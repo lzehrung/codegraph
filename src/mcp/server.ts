@@ -43,7 +43,11 @@ export type CodegraphMcpHandlers = {
     maxBytes?: number | undefined;
   }) => Promise<{ file: string; text: string; truncated: boolean }>;
   get_symbol: (request: { handle: string }) => Promise<AgentExplanation["target"]>;
-  goto: (request: { file: string; line: number; column: number }) => Promise<Awaited<ReturnType<typeof goToDefinition>>>;
+  goto: (request: {
+    file: string;
+    line: number;
+    column: number;
+  }) => Promise<Awaited<ReturnType<typeof goToDefinition>>>;
   refs: (
     request:
       | { handle: string; limit?: number | undefined }
@@ -176,10 +180,12 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
         ...(request.depth !== undefined ? { depth: request.depth } : {}),
         limit: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
       };
-      const dependencies = getDependencies(snapshot.fileGraph, resolveFile(request.file), queryOptions).map((dependency) => ({
-        file: relative(dependency.file),
-        depth: dependency.depth,
-      }));
+      const dependencies = getDependencies(snapshot.fileGraph, resolveFile(request.file), queryOptions).map(
+        (dependency) => ({
+          file: relative(dependency.file),
+          depth: dependency.depth,
+        }),
+      );
       return { dependencies };
     },
 
@@ -189,7 +195,11 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
         ...(request.depth !== undefined ? { depth: request.depth } : {}),
         limit: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
       };
-      const reverseDependencies = getReverseDependencies(snapshot.fileGraph, resolveFile(request.file), queryOptions).map((dependency) => ({
+      const reverseDependencies = getReverseDependencies(
+        snapshot.fileGraph,
+        resolveFile(request.file),
+        queryOptions,
+      ).map((dependency) => ({
         file: relative(dependency.file),
         depth: dependency.depth,
       }));
@@ -235,7 +245,12 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
       }
       const outDir =
         request.outDir !== undefined
-          ? await assertWritableDirectoryRealPathWithinRoot(await realRoot, root, request.outDir, "Artifact output directory")
+          ? await assertWritableDirectoryRealPathWithinRoot(
+              await realRoot,
+              root,
+              request.outDir,
+              "Artifact output directory",
+            )
           : undefined;
       const result = await buildCodegraphArtifactWithSession(session, {
         root,
@@ -303,7 +318,10 @@ async function callMcpTool(handlers: CodegraphMcpHandlers, name: string, input: 
   }
 }
 
-async function callRefsTool(handlers: CodegraphMcpHandlers, input: unknown): Promise<{ references: AgentExplanationReference[] }> {
+async function callRefsTool(
+  handlers: CodegraphMcpHandlers,
+  input: unknown,
+): Promise<{ references: AgentExplanationReference[] }> {
   const request = refsSchema.parse(input);
   if (request.handle !== undefined) {
     return await handlers.refs({
@@ -365,20 +383,26 @@ const navigationSchema = z.object({
   column: z.number().int().nonnegative(),
 });
 
-const refsSchema = z.object({
-  handle: z.string().optional(),
-  file: z.string().optional(),
-  line: z.number().int().positive().optional(),
-  column: z.number().int().nonnegative().optional(),
-  limit: z.number().int().nonnegative().optional(),
-}).refine((request) => {
-  const hasHandle = request.handle !== undefined;
-  const hasAnyPosition = request.file !== undefined || request.line !== undefined || request.column !== undefined;
-  const hasCompletePosition = request.file !== undefined && request.line !== undefined && request.column !== undefined;
-  return hasHandle ? !hasAnyPosition : hasCompletePosition;
-}, {
-  message: "refs requires either handle or file, line, and column.",
-});
+const refsSchema = z
+  .object({
+    handle: z.string().optional(),
+    file: z.string().optional(),
+    line: z.number().int().positive().optional(),
+    column: z.number().int().nonnegative().optional(),
+    limit: z.number().int().nonnegative().optional(),
+  })
+  .refine(
+    (request) => {
+      const hasHandle = request.handle !== undefined;
+      const hasAnyPosition = request.file !== undefined || request.line !== undefined || request.column !== undefined;
+      const hasCompletePosition =
+        request.file !== undefined && request.line !== undefined && request.column !== undefined;
+      return hasHandle ? !hasAnyPosition : hasCompletePosition;
+    },
+    {
+      message: "refs requires either handle or file, line, and column.",
+    },
+  );
 
 const fileGraphSchema = z.object({
   file: z.string(),
@@ -418,9 +442,7 @@ const artifactBuildSchema = z.object({
 });
 
 function objectSchema(properties: Record<string, object>, required: string[] = []): Tool["inputSchema"] {
-  return required.length > 0
-    ? { type: "object", properties, required }
-    : { type: "object", properties };
+  return required.length > 0 ? { type: "object", properties, required } : { type: "object", properties };
 }
 
 const stringProperty = { type: "string" };
@@ -444,7 +466,10 @@ const MCP_TOOLS: Tool[] = [
   {
     name: "get_file",
     description: "Read a bounded project file by relative path.",
-    inputSchema: objectSchema({ file: stringProperty, maxBytes: { type: "integer", minimum: 1, maximum: MAX_FILE_BYTES } }, ["file"]),
+    inputSchema: objectSchema(
+      { file: stringProperty, maxBytes: { type: "integer", minimum: 1, maximum: MAX_FILE_BYTES } },
+      ["file"],
+    ),
   },
   {
     name: "get_symbol",
@@ -469,11 +494,24 @@ const MCP_TOOLS: Tool[] = [
         file: stringProperty,
         line: { type: "integer", minimum: 1 },
         column: { type: "integer", minimum: 0 },
-        limit: { type: "integer", minimum: 0, maximum: MAX_MCP_COLLECTION_LIMIT, default: DEFAULT_MCP_COLLECTION_LIMIT },
+        limit: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_MCP_COLLECTION_LIMIT,
+          default: DEFAULT_MCP_COLLECTION_LIMIT,
+        },
       },
       oneOf: [
-        { required: ["handle"] },
-        { required: ["file", "line", "column"] },
+        {
+          required: ["handle"],
+          not: {
+            anyOf: [{ required: ["file"] }, { required: ["line"] }, { required: ["column"] }],
+          },
+        },
+        {
+          required: ["file", "line", "column"],
+          not: { required: ["handle"] },
+        },
       ],
     },
   },
@@ -484,7 +522,12 @@ const MCP_TOOLS: Tool[] = [
       {
         file: stringProperty,
         depth: { type: "integer", minimum: 0, default: 1 },
-        limit: { type: "integer", minimum: 0, maximum: MAX_MCP_COLLECTION_LIMIT, default: DEFAULT_MCP_COLLECTION_LIMIT },
+        limit: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_MCP_COLLECTION_LIMIT,
+          default: DEFAULT_MCP_COLLECTION_LIMIT,
+        },
       },
       ["file"],
     ),
@@ -496,7 +539,12 @@ const MCP_TOOLS: Tool[] = [
       {
         file: stringProperty,
         depth: { type: "integer", minimum: 0, default: 1 },
-        limit: { type: "integer", minimum: 0, maximum: MAX_MCP_COLLECTION_LIMIT, default: DEFAULT_MCP_COLLECTION_LIMIT },
+        limit: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_MCP_COLLECTION_LIMIT,
+          default: DEFAULT_MCP_COLLECTION_LIMIT,
+        },
       },
       ["file"],
     ),
@@ -515,7 +563,11 @@ const MCP_TOOLS: Tool[] = [
     name: "review",
     description: "Build review context for a git range.",
     inputSchema: objectSchema(
-      { base: stringProperty, head: stringProperty, reviewDepth: { type: "string", enum: ["minimal", "standard", "deep"] } },
+      {
+        base: stringProperty,
+        head: stringProperty,
+        reviewDepth: { type: "string", enum: ["minimal", "standard", "deep"] },
+      },
       ["base", "head"],
     ),
   },
@@ -633,7 +685,9 @@ async function assertWritableDirectoryRealPathWithinRoot(
   const relativeSuffix = path.relative(existingPath, lexicalPath);
   const realTargetPath = path.resolve(realExistingPath, relativeSuffix);
   if (!isFilePathWithinRoot(realRoot, realTargetPath)) {
-    throw new Error(`${label} is outside project root: ${normalizePath(realTargetPath)} (root: ${normalizePath(realRoot)})`);
+    throw new Error(
+      `${label} is outside project root: ${normalizePath(realTargetPath)} (root: ${normalizePath(realRoot)})`,
+    );
   }
   return normalizePath(realTargetPath);
 }
