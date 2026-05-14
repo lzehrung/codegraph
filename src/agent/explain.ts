@@ -739,11 +739,6 @@ function addRelatedSqlObjectsFromFileEdges(
   for (const edge of snapshot.fileGraph.edges) {
     const relation = parseSqlEdgeRelation(edge.raw);
     if (!relation) continue;
-    if (normalizePath(edge.from) === targetFile) {
-      for (const object of findSqlObjectsByReferenceName(sqlObjects, relation.objectName)) {
-        addRelated(object, `outgoing:${relation.kind}`);
-      }
-    }
     if (
       edge.to.type !== "file" ||
       normalizePath(edge.to.path) !== targetFile ||

@@ -116,15 +116,13 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
       }),
 
     get_file: async (request) => {
-      const file = resolveFile(request.file);
-      const realFile = await assertExistingRealPathWithinRoot(await realRoot, file, "File");
+      const resolvedFile = await resolveReadableFile(await realRoot, root, request.file);
       const maxBytes = boundedLimit(request.maxBytes, DEFAULT_FILE_BYTES, MAX_FILE_BYTES);
-      const buffer = await fs.readFile(realFile);
-      const slice = buffer.subarray(0, maxBytes);
+      const read = await readFilePrefix(resolvedFile.realPath, maxBytes);
       return {
-        file: relative(file),
-        text: slice.toString("utf8"),
-        truncated: buffer.length > maxBytes,
+        file: resolvedFile.displayPath,
+        text: read.text,
+        truncated: read.truncated,
       };
     },
 
@@ -232,7 +230,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
       if (!sqlitePath) {
         throw new Error("No SQLite artifact is available. Run artifact_build first or pass artifactPath.");
       }
-      const realSqlitePath = await assertExistingArtifactRealPathWithinRoot(
+      const realSqlitePath = await assertRealPathCandidateWithinRoot(
         await realRoot,
         sqlitePath,
         "SQLite artifact",
@@ -669,15 +667,35 @@ function truncateUtf8(value: string, maxBytes: number): string {
   return `${output}...[truncated]`;
 }
 
-async function assertExistingRealPathWithinRoot(realRoot: string, filePath: string, label: string): Promise<string> {
-  const realPath = await fs.realpath(filePath);
-  if (!isFilePathWithinRoot(realRoot, realPath)) {
-    throw new Error(`${label} is outside project root: ${normalizePath(realPath)} (root: ${normalizePath(realRoot)})`);
-  }
-  return normalizePath(realPath);
+async function resolveReadableFile(
+  realRoot: string,
+  root: string,
+  filePath: string,
+): Promise<{ realPath: string; displayPath: string }> {
+  const candidatePath = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(root, filePath);
+  const realPath = await assertRealPathCandidateWithinRoot(realRoot, candidatePath, "File");
+  const displayPath =
+    toProjectRelativePath(root, candidatePath) ?? toProjectRelativePath(realRoot, realPath) ?? normalizePath(realPath);
+  return { realPath, displayPath };
 }
 
-async function assertExistingArtifactRealPathWithinRoot(
+async function readFilePrefix(filePath: string, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
+  const handle = await fs.open(filePath, "r");
+  try {
+    const readLimit = maxBytes + 1;
+    const buffer = Buffer.alloc(readLimit);
+    const { bytesRead } = await handle.read(buffer, 0, readLimit, 0);
+    const outputBytes = Math.min(bytesRead, maxBytes);
+    return {
+      text: buffer.subarray(0, outputBytes).toString("utf8"),
+      truncated: bytesRead > maxBytes,
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+async function assertRealPathCandidateWithinRoot(
   realRoot: string,
   filePath: string,
   label: string,

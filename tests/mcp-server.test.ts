@@ -190,6 +190,42 @@ describe("codegraph MCP handlers", () => {
     );
   });
 
+  it("bounds get_file reads before returning content", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-file-bound-"));
+    await fs.writeFile(path.join(root, "large.txt"), "abcdef", "utf8");
+    const handlers = createCodegraphMcpHandlers({ root });
+
+    const result = await handlers.get_file({ file: "large.txt", maxBytes: 5 });
+
+    expect(result).toEqual({
+      file: "large.txt",
+      text: "abcde",
+      truncated: true,
+    });
+  });
+
+  it("accepts get_file paths through a symlinked root realpath", async () => {
+    const realRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-real-file-root-"));
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-file-link-parent-"));
+    const linkedRoot = path.join(parent, "repo-link");
+    try {
+      await fs.symlink(realRoot, linkedRoot, "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const realFile = path.join(realRoot, "auth.ts");
+    await fs.writeFile(realFile, "export const ok = 1;\n", "utf8");
+    const handlers = createCodegraphMcpHandlers({ root: linkedRoot });
+
+    const result = await handlers.get_file({ file: realFile });
+
+    expect(result.file).toBe("auth.ts");
+    expect(result.text).toContain("export const ok");
+    expect(result.truncated).toBe(false);
+  });
+
   it("rejects artifact output directories that escape through a directory link", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-artifact-link-"));
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-artifact-outside-"));
