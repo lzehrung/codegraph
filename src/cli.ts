@@ -600,7 +600,7 @@ async function buildInspectReport(
   };
 }
 
-function parseCliArgs(tokens: string[]): ParsedCliArgs {
+function parseCliArgs(command: string, tokens: string[]): ParsedCliArgs {
   const positionals: string[] = [];
   const flags = new Set<string>();
   const options = new Map<string, string[]>();
@@ -627,7 +627,7 @@ function parseCliArgs(tokens: string[]): ParsedCliArgs {
         continue;
       }
       const key = t;
-      if (CLI_VALUE_OPTIONS.has(key)) {
+      if (isCliValueOption(command, key, positionals)) {
         const next = tokens[i + 1];
         if (next === undefined) throw new Error(`Missing value for ${key} option`);
         pushOpt(key, next);
@@ -655,6 +655,11 @@ function parseCliArgs(tokens: string[]): ParsedCliArgs {
   }
 
   return { positionals, flags, options };
+}
+
+function isCliValueOption(command: string, key: string, positionals: readonly string[]): boolean {
+  if (command === "artifact" && key === "--sqlite" && positionals[0] === "build") return false;
+  return CLI_VALUE_OPTIONS.has(key);
 }
 
 async function writeCommandReport(report: CommandReport, reportFile: string | undefined) {
@@ -1159,7 +1164,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   const cmd = rawArgs[0] && !rawArgs[0].startsWith("-") ? rawArgs[0] : "graph";
   const argTokens = rawArgs[0] && !rawArgs[0].startsWith("-") ? rawArgs.slice(1) : rawArgs;
 
-  const parsed = parseCliArgs(argTokens);
+  const parsed = parseCliArgs(cmd, argTokens);
   const hasFlag = (name: string) => parsed.flags.has(name);
   const getOpt = (name: string) => {
     const v = parsed.options.get(name);

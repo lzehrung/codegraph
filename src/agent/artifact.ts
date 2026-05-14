@@ -3,7 +3,7 @@ import path from "node:path";
 import { getHotspots, type SymbolNode } from "../graphs.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
 import { writeGraphSqlite } from "../sqlite.js";
-import { normalizePath, toProjectRelativePath } from "../util.js";
+import { isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util.js";
 import { formatAgentSqlHandle, formatAgentSymbolHandle } from "./handles.js";
 import { createAgentSession } from "./session.js";
 import type { AgentProjectSnapshot, AgentSession } from "./session.js";
@@ -98,7 +98,7 @@ export async function buildCodegraphArtifactWithSession(
 
   const selected = normalizeArtifactSelection(request);
   const filterOutDir = path.resolve(root, request.filterOutDir ?? request.outDir ?? DEFAULT_OUT_DIR);
-  const snapshot = filterSnapshotForOutputDirectory(await session.loadProject(), filterOutDir);
+  const snapshot = await filterSnapshotForOutputDirectory(await session.loadProject(), filterOutDir);
   await fs.mkdir(outDir, { recursive: true });
   if (request.force) {
     await removeKnownArtifacts(outDir);
@@ -322,13 +322,16 @@ function buildPortableSymbolIdMap(snapshot: AgentProjectSnapshot): Map<string, s
   return byId;
 }
 
-function filterSnapshotForOutputDirectory(snapshot: AgentProjectSnapshot, outDir: string): AgentProjectSnapshot {
-  const relativeOutDir = toProjectRelativePath(snapshot.root, outDir);
-  if (!relativeOutDir) return snapshot;
-  const outputPrefix = `${relativeOutDir.replace(/\/+$/, "")}/`;
+async function filterSnapshotForOutputDirectory(
+  snapshot: AgentProjectSnapshot,
+  outDir: string,
+): Promise<AgentProjectSnapshot> {
+  const outputDirs = await collectRelativeOutputDirectories(snapshot.root, outDir);
+  if (outputDirs.length === 0) return snapshot;
   const isOutputFile = (file: string): boolean => {
     const relative = toProjectRelativePath(snapshot.root, file);
-    return relative === relativeOutDir || (relative?.startsWith(outputPrefix) ?? false);
+    if (!relative) return false;
+    return outputDirs.some((outputDir) => relative === outputDir.relative || relative.startsWith(outputDir.prefix));
   };
 
   const files = snapshot.files.filter((file) => !isOutputFile(file));
@@ -362,6 +365,34 @@ function filterSnapshotForOutputDirectory(snapshot: AgentProjectSnapshot, outDir
     fileGraph,
     symbolGraph,
   };
+}
+
+async function collectRelativeOutputDirectories(
+  root: string,
+  outDir: string,
+): Promise<Array<{ relative: string; prefix: string }>> {
+  const filters: Array<{ relative: string; prefix: string }> = [];
+  const seen = new Set<string>();
+  const addRelative = (relative: string | null): void => {
+    if (!relative) return;
+    const normalized = relative.replace(/\/+$/, "");
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    filters.push({ relative: normalized, prefix: `${normalized}/` });
+  };
+
+  addRelative(toProjectRelativePath(root, outDir));
+
+  try {
+    const [realRoot, realOutDir] = await Promise.all([fs.realpath(root), fs.realpath(outDir)]);
+    if (isFilePathWithinRoot(realRoot, realOutDir)) {
+      addRelative(normalizePath(path.relative(realRoot, realOutDir)));
+    }
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+  }
+
+  return filters;
 }
 
 function buildReport(snapshot: AgentProjectSnapshot): string {

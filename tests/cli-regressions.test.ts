@@ -1053,6 +1053,34 @@ describe("CLI regressions", () => {
     expect(result.artifacts.sqlite).toBe("codegraph.sqlite");
     expect(await fsp.stat(path.join(outDir, "manifest.json"))).toBeTruthy();
   });
+
+  it("artifact build treats --sqlite as a boolean artifact selector", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-artifact-sqlite-"));
+    const outDir = path.join(root, "out");
+    await fsp.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
+
+    const stdout = await runCliCommand([
+      "artifact",
+      "build",
+      "--root",
+      root,
+      "--out",
+      outDir,
+      "--sqlite",
+      "--graph-json",
+      "--json",
+    ]);
+    const result = JSON.parse(stdout) as { artifacts: Record<string, string | undefined> };
+
+    expect(result.artifacts).toEqual({
+      sqlite: "codegraph.sqlite",
+      graphJson: "graph.json",
+    });
+    expect(await fsp.stat(path.join(outDir, "codegraph.sqlite"))).toBeTruthy();
+    expect(await fsp.stat(path.join(outDir, "graph.json"))).toBeTruthy();
+    await expect(fsp.stat(path.join(outDir, "CODEGRAPH_REPORT.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fsp.stat(path.join(outDir, "questions.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
 });
 
 describe("textGrep API", () => {

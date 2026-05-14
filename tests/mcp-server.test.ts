@@ -298,17 +298,26 @@ describe("codegraph MCP handlers", () => {
 
     await fs.writeFile(path.join(linkedRoot, "auth.ts"), "export const ok = 1;\n");
     const realOutDir = path.join(realRoot, "out");
+    await fs.mkdir(realOutDir);
+    await fs.writeFile(path.join(realOutDir, "old.ts"), "export const stale = true;\n");
     const buildHandlers = createCodegraphMcpHandlers({ root: linkedRoot, readOnly: false });
 
-    await buildHandlers.artifact_build({ outDir: realOutDir, sqlite: true, force: true });
+    await buildHandlers.artifact_build({ outDir: realOutDir, sqlite: true, graphJson: true, force: true });
+
+    const graph = JSON.parse(await fs.readFile(path.join(realOutDir, "graph.json"), "utf8")) as {
+      graph: { files: string[] };
+    };
+    expect(graph.graph.files.some((file) => file.includes("/out/") || file.endsWith("/out/old.ts"))).toBe(false);
 
     const readHandlers = createCodegraphMcpHandlers({
       root: linkedRoot,
       artifactPath: path.join(realOutDir, "codegraph.sqlite"),
     });
-    const result = await readHandlers.query_sqlite({ query: "select path from files order by path", limit: 1 });
+    const result = await readHandlers.query_sqlite({ query: "select path from files order by path" });
+    const paths = result.rows.map((row) => normalizeSqlitePath(row[0]));
 
-    expect(normalizeSqlitePath(result.rows[0]?.[0])).toMatch(/auth\.ts$/);
+    expect(paths.some((file) => file.endsWith("auth.ts"))).toBeTruthy();
+    expect(paths.some((file) => file.includes("/out/") || file.endsWith("/out/old.ts"))).toBe(false);
   });
 });
 
