@@ -83,7 +83,7 @@ const rows = await handlers.query_sqlite({ query: "select path from files limit 
 console.log(refs.references, rows.rows);
 ```
 
-`serveCodegraphMcp()` starts the stdio server used by `codegraph mcp serve`. MCP is an agent ergonomics and cache layer over the same analysis engine, not a separate indexer. `query_sqlite` is read-only; `artifact_build` is disabled when `readOnly` is set.
+`serveCodegraphMcp()` starts the stdio server used by `codegraph mcp serve`. MCP is an agent ergonomics and cache layer over the same analysis engine, not a separate indexer. `query_sqlite` is read-only; `artifact_build` is disabled by default and requires `readOnly: false` or CLI `--allow-build`.
 
 ## Semantic chunking
 

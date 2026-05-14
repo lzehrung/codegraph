@@ -80,6 +80,7 @@ const DEFAULT_FILE_BYTES = 80_000;
 
 export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): CodegraphMcpHandlers {
   const root = path.resolve(options.root);
+  const readOnly = options.readOnly ?? true;
   const session = options.session ?? createAgentSession({ root });
   let sqlitePath = options.artifactPath ? resolveArtifactSqlitePath(root, options.artifactPath) : undefined;
 
@@ -213,7 +214,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
     },
 
     artifact_build: async (request) => {
-      if (options.readOnly) {
+      if (readOnly) {
         throw new Error("artifact_build is disabled in read-only MCP mode.");
       }
       const outDir = request.outDir !== undefined ? assertFilePathWithinRoot(root, request.outDir, "Artifact output directory") : undefined;

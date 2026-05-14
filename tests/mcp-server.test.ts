@@ -52,19 +52,21 @@ describe("codegraph MCP handlers", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
 
-    const handlers = createCodegraphMcpHandlers({ root });
+    const handlers = createCodegraphMcpHandlers({ root, readOnly: false });
     await handlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true, graphJson: true });
 
     await expect(handlers.query_sqlite({ query: "DELETE FROM symbols RETURNING name;" })).rejects.toThrow(/read-only/i);
   });
 
-  it("disables artifact builds in read-only mode", async () => {
+  it("disables artifact builds by default and in explicit read-only mode", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-readonly-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
 
-    const handlers = createCodegraphMcpHandlers({ root, readOnly: true });
+    const defaultHandlers = createCodegraphMcpHandlers({ root });
+    await expect(defaultHandlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true })).rejects.toThrow(/read-only/i);
 
-    await expect(handlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true })).rejects.toThrow(/read-only/i);
+    const readOnlyHandlers = createCodegraphMcpHandlers({ root, readOnly: true });
+    await expect(readOnlyHandlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true })).rejects.toThrow(/read-only/i);
   });
 
   it("rejects artifact paths outside the root", async () => {
@@ -76,7 +78,7 @@ describe("codegraph MCP handlers", () => {
       await handlers.query_sqlite({ query: "select 1" });
     })()).rejects.toThrow(/outside project root/);
 
-    const handlers = createCodegraphMcpHandlers({ root });
+    const handlers = createCodegraphMcpHandlers({ root, readOnly: false });
     await expect(handlers.artifact_build({ outDir: path.resolve(root, "..", "outside"), sqlite: true })).rejects.toThrow(
       /outside project root/,
     );
