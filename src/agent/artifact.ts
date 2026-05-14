@@ -9,6 +9,7 @@ import type { AgentProjectSnapshot, AgentSession } from "./session.js";
 export type CodegraphArtifactBuildRequest = {
   root: string;
   outDir?: string;
+  filterOutDir?: string;
   sqlite?: boolean;
   graphJson?: boolean;
   report?: boolean;
@@ -68,7 +69,8 @@ export async function buildCodegraphArtifactWithSession(
   await validateOutputDirectory(outDir, request.force ?? false);
 
   const selected = normalizeArtifactSelection(request);
-  const snapshot = filterSnapshotForOutputDirectory(await session.loadProject(), outDir);
+  const filterOutDir = path.resolve(root, request.filterOutDir ?? request.outDir ?? DEFAULT_OUT_DIR);
+  const snapshot = filterSnapshotForOutputDirectory(await session.loadProject(), filterOutDir);
   await fs.mkdir(outDir, { recursive: true });
   const artifacts: Record<string, string> = {};
 

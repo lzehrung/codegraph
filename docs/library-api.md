@@ -55,7 +55,7 @@ const explanation = await explainCodegraphTarget({
 console.log(explanation.summary, explanation.followUps);
 ```
 
-`buildCodegraphArtifact()` writes the same core artifacts agents usually need for offline navigation. Artifact contents exclude the output directory itself when it is inside the repo:
+`buildCodegraphArtifact()` writes the same core artifacts agents usually need for offline navigation. Artifact contents exclude the output directory itself when it is inside the repo; hosts that write through a resolved path while indexing through a symlinked root can pass `filterOutDir` with the lexical project-relative output path:
 
 ```ts
 const artifact = await buildCodegraphArtifact({

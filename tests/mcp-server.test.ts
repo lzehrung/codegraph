@@ -187,6 +187,29 @@ describe("codegraph MCP handlers", () => {
     const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { files: string[] };
     expect(graph.files.some((file) => file.includes("/out/") || file.endsWith("/out/old.ts"))).toBe(false);
   });
+
+  it("omits stale output files when the MCP root is a directory link", async () => {
+    const realRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-real-root-"));
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-root-link-parent-"));
+    const linkedRoot = path.join(parent, "repo-link");
+    try {
+      await fs.symlink(realRoot, linkedRoot, "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const outDir = path.join(linkedRoot, "out");
+    await fs.mkdir(outDir);
+    await fs.writeFile(path.join(linkedRoot, "auth.ts"), "export const ok = 1;\n");
+    await fs.writeFile(path.join(outDir, "old.ts"), "export const stale = true;\n");
+    const handlers = createCodegraphMcpHandlers({ root: linkedRoot, readOnly: false });
+
+    await handlers.artifact_build({ outDir, graphJson: true, force: true });
+
+    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { files: string[] };
+    expect(graph.files.some((file) => file.includes("/out/") || file.endsWith("/out/old.ts"))).toBe(false);
+  });
 });
 
 function isSymlinkUnavailable(error: unknown): boolean {

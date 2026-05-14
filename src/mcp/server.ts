@@ -232,6 +232,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
       const result = await buildCodegraphArtifactWithSession(session, {
         root,
         ...(outDir !== undefined ? { outDir } : {}),
+        ...(request.outDir !== undefined ? { filterOutDir: request.outDir } : {}),
         ...(request.sqlite !== undefined ? { sqlite: request.sqlite } : {}),
         ...(request.graphJson !== undefined ? { graphJson: request.graphJson } : {}),
         ...(request.report !== undefined ? { report: request.report } : {}),
