@@ -5,6 +5,7 @@ Usage: codegraph <command> [options] [path]
 Commands:
   graph         Build dependency graph (default)
   inspect       Summarize repo structure and recommend next commands
+  search        Ranked agent search across files, symbols, chunks, SQL, and graph context
   impact        Analyze PR impact
   review        Generate code review report
   goto          Go to definition
@@ -53,6 +54,7 @@ Examples:
   codegraph version
   codegraph doctor
   codegraph inspect ./src --limit 20
+  codegraph search "auth user" --json
   codegraph graph --root . ./src --include-glob "**/*.ts" --ignore-glob "**/*.spec.ts"
   codegraph skill install --agent agents
   codegraph skill install --agent codex

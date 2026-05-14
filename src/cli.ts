@@ -54,6 +54,7 @@ import { parseCacheModeOption } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
 import { handleSkillCommand } from "./cli/skill.js";
 import { handleSqlCommand } from "./cli/sql.js";
+import { formatAgentSearchResponse, searchCodegraph, type AgentSearchMode } from "./agent/search.js";
 import { buildSqlArtifactGraphFromFiles } from "./sql/index.js";
 import type { Graph } from "./types.js";
 import {
@@ -290,6 +291,8 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--agent",
   "--target",
   "--limit",
+  "--mode",
+  "--from",
 ]);
 
 type IndexCacheMetadata = {
@@ -377,6 +380,21 @@ function parsePositiveIntegerOption(rawValue: string | undefined, optionName: st
     throw new Error(`Invalid ${optionName} value "${rawValue}". Expected a positive integer.`);
   }
   return parsedValue;
+}
+
+function parseAgentSearchMode(rawValue: string | undefined): AgentSearchMode {
+  if (rawValue === undefined) return "hybrid";
+  if (
+    rawValue === "hybrid" ||
+    rawValue === "symbol" ||
+    rawValue === "path" ||
+    rawValue === "text" ||
+    rawValue === "graph" ||
+    rawValue === "sql"
+  ) {
+    return rawValue;
+  }
+  throw new Error(`Invalid --mode value "${rawValue}". Expected hybrid, symbol, path, text, graph, or sql.`);
 }
 
 function defaultCacheIndexPath(projectRoot: string): string {
@@ -1354,6 +1372,35 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       writeStderrLine,
       exit: exitCli,
     });
+    return;
+  }
+
+  if (cmd === "search") {
+    const query = parsed.positionals.join(" ").trim();
+    if (!query) {
+      writeStderrLine(
+        'Usage: search "<query>" [--root <path>] [--mode hybrid|symbol|path|text|graph|sql] [--limit <n>] [--json]',
+      );
+      exitCli(2);
+    }
+
+    const from = getOpt("--from");
+    const depthRaw = getOpt("--depth");
+    const response = await searchCodegraph({
+      root: projectRootFs,
+      query,
+      mode: parseAgentSearchMode(getOpt("--mode")),
+      limit: parsePositiveIntegerOption(getOpt("--limit"), "--limit", 20),
+      includeSnippets: !hasFlag("--no-snippets"),
+      ...(from !== undefined ? { from } : {}),
+      ...(depthRaw !== undefined ? { depth: parsePositiveIntegerOption(depthRaw, "--depth", 1) } : {}),
+    });
+
+    if (hasFlag("--json")) {
+      writeJSONLine(response);
+    } else {
+      writeStdoutLine(formatAgentSearchResponse(response));
+    }
     return;
   }
 

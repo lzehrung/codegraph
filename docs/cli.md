@@ -78,6 +78,11 @@ codegraph index --threads 8 --cache disk
 # Enable worker threads for parallel native extraction
 codegraph index --workers --threads 8 --cache disk
 
+# Search for agent-ready anchors across symbols, paths, chunks, SQL objects, and graph context
+codegraph search "validate user" --json
+codegraph search "public users" --mode sql --json
+codegraph search "handle login" --from src/auth.ts --mode graph --depth 1 --json
+
 # Chunk a file for LLM processing
 codegraph chunk src/utils.js
 
@@ -101,7 +106,7 @@ codegraph grep --query '(function_declaration name: (identifier) @name)'
 codegraph grep --pattern 'eval\(' --ignore-case
 ```
 
-`chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions. Use `--text` to force text chunking.
+`search` is deterministic and vectorless. It returns ranked results with stable handles, rank reasons, evidence, graph neighbors, and follow-up commands. `chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions. Use `--text` to force text chunking.
 
 ### Dependency analysis and diagnostics
 

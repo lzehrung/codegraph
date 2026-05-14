@@ -974,6 +974,24 @@ describe("CLI regressions", () => {
       runCliCommand(["grep", "--root", tsRoot, "--query", "(identifier) @id", "--pattern", "foo"]),
     ).rejects.toThrow(/Usage: grep/i);
   });
+
+  it("search returns ranked agent-ready results", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-search-"));
+    await fsp.writeFile(path.join(root, "auth.ts"), "export function validateUser(token: string) { return token.length > 0; }\n");
+    await fsp.writeFile(
+      path.join(root, "main.ts"),
+      "import { validateUser } from './auth';\nexport const ok = validateUser('token');\n",
+    );
+
+    const stdout = await runCliCommand(["search", "validate user", "--root", root, "--json"]);
+    const response = JSON.parse(stdout) as {
+      results: Array<{ label: string; rankReasons: string[]; followUps: string[] }>;
+    };
+
+    expect(response.results[0]?.label).toContain("validateUser");
+    expect(response.results[0]?.rankReasons.length).toBeGreaterThan(0);
+    expect(response.results[0]?.followUps.some((cmd) => cmd.includes("codegraph refs"))).toBeTruthy();
+  });
 });
 
 describe("textGrep API", () => {

@@ -279,7 +279,7 @@ git commit -m "feat: add agent project session"
 - Modify: `src/index.ts`
 - Modify: `tests/cli-regressions.test.ts`
 
-- [ ] **Step 1: Write failing library tests**
+- [x] **Step 1: Write failing library tests**
 
 Add `tests/agent-search.test.ts`:
 
@@ -321,13 +321,13 @@ describe("agent search", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing tests**
+- [x] **Step 2: Run the failing tests**
 
 Run: `npx vitest run tests/agent-search.test.ts`
 
 Expected: FAIL because `searchCodegraph` does not exist.
 
-- [ ] **Step 3: Implement deterministic search**
+- [x] **Step 3: Implement deterministic search**
 
 Create `src/agent/search.ts` using the shared types above.
 
@@ -350,7 +350,7 @@ The public function signature must be:
 export async function searchCodegraph(request: AgentSearchRequest): Promise<AgentSearchResponse>;
 ```
 
-- [ ] **Step 4: Add CLI command**
+- [x] **Step 4: Add CLI command**
 
 Modify `src/cli.ts` command dispatch:
 
@@ -376,7 +376,7 @@ if (cmd === "search") {
 
 Implement the command with the same option parsing style used by neighboring commands in `src/cli.ts`. The required behavior is exactly the usage string, request fields, JSON output, and text output described above.
 
-- [ ] **Step 5: Add CLI regression coverage**
+- [x] **Step 5: Add CLI regression coverage**
 
 Append to `tests/cli-regressions.test.ts`:
 
@@ -395,7 +395,7 @@ it("search returns ranked agent-ready results", async () => {
 });
 ```
 
-- [ ] **Step 6: Update exports, help, docs, and skill**
+- [x] **Step 6: Update exports, help, docs, and skill**
 
 Export from `src/index.ts`:
 
@@ -413,7 +413,7 @@ export type {
 
 Update `src/cli/help.ts`, `docs/cli.md`, `docs/library-api.md`, `docs/agent-workflows.md`, `README.md`, and `codegraph-skill/codegraph/SKILL.md` with concise examples.
 
-- [ ] **Step 7: Verify and commit**
+- [x] **Step 7: Verify and commit**
 
 Run:
 

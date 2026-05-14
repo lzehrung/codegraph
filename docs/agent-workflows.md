@@ -11,11 +11,24 @@ For an unfamiliar repo, the shortest useful loop is:
 ```bash
 codegraph doctor
 codegraph inspect ./src --limit 20
+codegraph search "auth user" --json
 ```
 
-Then use the recommended commands from `inspect` to narrow the next graph, navigation, or impact pass.
+Then use the recommended commands from `inspect`, or the stable handles and follow-up commands from `search`, to narrow the next graph, navigation, or impact pass.
 
 For the raw CLI command reference, see [docs/cli.md](./cli.md).
+
+## Search anchors
+
+Use `search` when an agent needs a compact starting point before calling `goto`, `refs`, `deps`, `rdeps`, `chunk`, or later explanation tooling:
+
+```bash
+codegraph search "validate user" --json
+codegraph search "public users" --mode sql --json
+codegraph search "handle login" --mode graph --from src/auth.ts --depth 1 --json
+```
+
+Results include `handle`, `rankReasons`, `evidence`, `neighbors`, and `followUps`. The command is deterministic and does not require embeddings or prebuilt artifacts.
 
 ## Session management
 

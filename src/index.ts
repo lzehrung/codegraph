@@ -209,6 +209,17 @@ export {
 export { createAgentSession } from "./agent/session.js";
 export type { AgentProjectSnapshot, AgentSession, AgentSessionOptions } from "./agent/session.js";
 
+/** Agent-facing deterministic search over symbols, files, chunks, SQL objects, and graph neighborhoods. */
+export { formatAgentSearchResponse, searchCodegraph, searchCodegraphWithSession } from "./agent/search.js";
+export type {
+  AgentSearchEvidence,
+  AgentSearchMode,
+  AgentSearchRequest,
+  AgentSearchResponse,
+  AgentSearchResult,
+  AgentSearchResultKind,
+} from "./agent/search.js";
+
 /** Agent-oriented JSON tool wrappers around the core codegraph APIs. */
 export {
   tool_impactJSON,

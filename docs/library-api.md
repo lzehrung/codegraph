@@ -22,6 +22,26 @@ const index = await buildProjectIndex(process.cwd(), { native: "auto" });
 const jsOnlyIndex = await buildProjectIndex(process.cwd(), { native: "off" });
 ```
 
+## Agent search
+
+`searchCodegraph()` builds a project snapshot and returns deterministic, agent-ready anchors across files, symbols, chunks, SQL objects, and optional graph neighborhoods.
+
+```ts
+import { searchCodegraph } from "@lzehrung/codegraph";
+
+const response = await searchCodegraph({
+  root: process.cwd(),
+  query: "validate user",
+  mode: "hybrid",
+  limit: 10,
+});
+
+const first = response.results[0];
+console.log(first?.handle, first?.rankReasons, first?.followUps);
+```
+
+Use `mode: "sql"` for SQL objects, or pass `from` plus `depth` with `mode: "graph"` to boost matches near a file, symbol handle, SQL handle, or symbol name.
+
 ## Semantic chunking
 
 The library provides semantic code chunking utilities for preparing codebases for LLM processing and vector embeddings. It uses Tree-sitter to split code into meaningful units while respecting token budgets.
