@@ -89,7 +89,7 @@ Tools:
   path            Find shortest dependency path
   impact          Build compact impact context for a git range
   review          Build review context for a git range
-  query_sqlite    Read-only SQLite artifact query
+  query_sqlite    Read-only row- and byte-bounded SQLite artifact query
   artifact_build  Build artifacts only with --allow-build
 
 Defaults:

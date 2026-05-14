@@ -4,6 +4,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { explainCodegraphTarget } from "../src/agent/explain.js";
+import { searchCodegraph } from "../src/agent/search.js";
 
 async function mkRepo(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-explain-"));
@@ -38,6 +39,21 @@ describe("agent explain", () => {
     expect(explanation.followUps.some((cmd) => cmd.includes("codegraph goto auth.ts"))).toBeTruthy();
   });
 
+  it("resolves portable symbol handles returned by search", async () => {
+    const root = await mkRepo();
+    const search = await searchCodegraph({ root, query: "validate user", mode: "symbol", limit: 5 });
+    const handle = search.results.find((result) => result.label === "validateUser")?.handle;
+
+    expect(handle).toBeDefined();
+    expect(handle).not.toContain(root.replace(/\\/g, "/"));
+
+    const explanation = await explainCodegraphTarget({ root, target: handle ?? "" });
+
+    expect(explanation.target.kind).toBe("symbol");
+    expect(explanation.target.label).toBe("validateUser");
+    expect(explanation.target.handle).toBe(handle);
+  });
+
   it("explains SQL objects without claiming current-schema reconstruction", async () => {
     const root = await mkRepo();
     const explanation = await explainCodegraphTarget({ root, target: "public.users" });
@@ -60,6 +76,20 @@ describe("agent explain", () => {
 
     expect(explanation.reverseDependencies.length).toBeLessThanOrEqual(1);
     expect(explanation.snippets.length).toBeLessThanOrEqual(1);
+  });
+
+  it("bounds file symbols and reports omitted counts", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(
+      path.join(root, "many.ts"),
+      Array.from({ length: 80 }, (_, index) => `export const symbol${index} = ${index};`).join("\n"),
+    );
+
+    const explanation = await explainCodegraphTarget({ root, target: "many.ts", maxSymbols: 12 });
+
+    expect(explanation.symbols).toHaveLength(12);
+    expect(explanation.limits.symbols).toBe(12);
+    expect(explanation.omittedCounts.symbols).toBeGreaterThan(0);
   });
 
   it("includes compact review tasks and candidate tests in changed context", async () => {

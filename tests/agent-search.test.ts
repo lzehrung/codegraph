@@ -61,6 +61,7 @@ describe("agent search", () => {
     expect(response.schemaVersion).toBe(1);
     expect(response.results[0]?.label).toContain("validateUser");
     expect(response.results[0]?.rankReasons.length).toBeGreaterThan(0);
+    expect(response.results[0]?.handle).not.toContain(root.replace(/\\/g, "/"));
     expect(response.results[0]?.evidence.some((entry) => entry.source === "symbol")).toBeTruthy();
     expect(response.results[0]?.neighbors.some((entry) => entry.file?.endsWith("src/api.ts"))).toBeTruthy();
     expect(response.results[0]?.followUps.some((cmd) => cmd.includes("codegraph refs"))).toBeTruthy();
@@ -73,6 +74,7 @@ describe("agent search", () => {
 
     expect(response.results.some((result) => result.kind === "sql_object" && result.label.includes("public.users"))).toBeTruthy();
     expect(response.results.every((result) => result.score > 0)).toBeTruthy();
+    expect(response.results.every((result) => !result.handle.includes(root.replace(/\\/g, "/")))).toBeTruthy();
   });
 
   it("returns deterministic ordering for equal path matches", async () => {
@@ -118,4 +120,51 @@ describe("agent search", () => {
 
     expect(counted.loads()).toBe(1);
   });
+
+  it("caps result count and per-result packet arrays with omission counts", async () => {
+    const root = await mkRepo();
+    for (let i = 0; i < 30; i += 1) {
+      await fs.writeFile(
+        path.join(root, "src", `consumer-${i}.ts`),
+        `import { validateUser } from './auth';\nexport const consumer${i} = validateUser(${i});\n`,
+      );
+    }
+    for (let i = 0; i < 120; i += 1) {
+      await fs.writeFile(path.join(root, "src", `account-${i}.ts`), `export const account${i} = ${i};\n`);
+    }
+
+    const response = await searchCodegraph({ root, query: "account validate user", mode: "hybrid", limit: 500 });
+    const validateResult = response.results.find((result) => result.label === "validateUser");
+
+    expect(response.results.length).toBeLessThanOrEqual(100);
+    expect(response.limits.results).toBe(100);
+    expect(validateResult?.neighbors.length).toBeLessThanOrEqual(response.limits.neighborsPerResult);
+    expect(validateResult?.omittedCounts.neighbors).toBeGreaterThan(0);
+    expect(validateResult?.evidence.length).toBeLessThanOrEqual(response.limits.evidencePerResult);
+    expect(validateResult?.followUps.length).toBeLessThanOrEqual(response.limits.followUpsPerResult);
+  });
+
+  it("does not discover files that escape the root through a directory link", async () => {
+    const root = await mkRepo();
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-search-outside-"));
+    await fs.writeFile(path.join(outside, "secret.ts"), "export const outsideSecretNeedle = true;\n");
+    try {
+      await fs.symlink(outside, path.join(root, "linked"), "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const response = await searchCodegraph({ root, query: "outside secret needle", mode: "text", limit: 10 });
+
+    expect(response.results).toEqual([]);
+  });
 });
+
+function isSymlinkUnavailable(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "EPERM" || error.code === "EACCES" || error.code === "ENOTSUP")
+  );
+}

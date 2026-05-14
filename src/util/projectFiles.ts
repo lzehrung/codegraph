@@ -5,7 +5,7 @@ import fg from "fast-glob";
 import picomatch from "picomatch";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { stringifyUnknown } from "./ast.js";
-import { normalizePath } from "./paths.js";
+import { isFilePathWithinRoot, normalizePath } from "./paths.js";
 
 export const DEFAULT_PROJECT_FILE_IGNORES = [
   "**/node_modules/**",
@@ -156,6 +156,7 @@ async function loadGitignoreRules(projectRoot: string): Promise<GitignoreRule[]>
     cwd: projectRoot,
     absolute: true,
     dot: true,
+    followSymbolicLinks: false,
     ignore: DEFAULT_PROJECT_FILE_IGNORES,
   });
   gitignoreFiles.sort((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
@@ -237,6 +238,7 @@ export async function listProjectFiles(
 
   try {
     const useGitignore = options?.useGitignore ?? true;
+    const realRoot = await fsp.realpath(root);
     const gitignoreRules =
       !useGitignore
         ? []
@@ -247,9 +249,11 @@ export async function listProjectFiles(
       cwd: root,
       absolute: true,
       dot: true,
+      followSymbolicLinks: false,
       ignore: [...DEFAULT_PROJECT_FILE_IGNORES, ...userIgnoreGlobs],
     });
-    return files.map(normalizePath).filter((filePath) => {
+    const rootSafeFiles = await filterRealPathsWithinRoot(files, realRoot);
+    return rootSafeFiles.map(normalizePath).filter((filePath) => {
       if (
         includeMatchers.length > 0 &&
         !includeMatchers.some((matcher) => matchesDiscoveryGlob(filePath, root, matcher))
@@ -262,6 +266,21 @@ export async function listProjectFiles(
     logWithLevel(options?.logLevel, "debug", `listProjectFiles failed for ${root}: ${stringifyUnknown(error)}`);
     throw new Error(`Failed to list files in ${root}: ${stringifyUnknown(error)}`);
   }
+}
+
+async function filterRealPathsWithinRoot(paths: string[], realRoot: string): Promise<string[]> {
+  const filtered: string[] = [];
+  for (const filePath of paths) {
+    try {
+      const realPath = await fsp.realpath(filePath);
+      if (isFilePathWithinRoot(realRoot, realPath)) {
+        filtered.push(filePath);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return filtered;
 }
 
 export type ProjectFileKind = "file" | "dir";
@@ -762,20 +781,26 @@ export async function discoverProjectFiles(
 ): Promise<ProjectFileInfo[]> {
   const root = await ensureDirectoryReadable(projectRoot, "Project root");
   try {
+    const realRoot = await fsp.realpath(root);
     const allPatterns = PROJECT_FILE_DEFINITIONS.flatMap((def) => def.patterns.map(toProjectGlob));
     const matches = await fg(allPatterns, {
       cwd: root,
       absolute: true,
       dot: true,
+      followSymbolicLinks: false,
       ignore: DEFAULT_PROJECT_FILE_IGNORES,
       markDirectories: true,
       onlyFiles: false,
     });
+    const rootSafeMatches = await filterRealPathsWithinRoot(
+      matches.map((match) => (match.endsWith("/") ? match.slice(0, -1) : match)),
+      realRoot,
+    );
 
     const entries: ProjectFileInfo[] = [];
-    const matchTasks = matches.map(async (match) => {
-      const isDir = match.endsWith("/");
-      const cleanMatch = isDir ? match.slice(0, -1) : match;
+    const matchTasks = rootSafeMatches.map(async (cleanMatch) => {
+      const stats = await fsp.stat(cleanMatch);
+      const isDir = stats.isDirectory();
       const fileName = path.basename(cleanMatch);
 
       for (const def of PROJECT_FILE_DEFINITIONS) {

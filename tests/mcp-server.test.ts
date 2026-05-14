@@ -73,6 +73,21 @@ describe("codegraph MCP handlers", () => {
     expect(result.rowLimit).toBe(1);
   });
 
+  it("bounds query_sqlite bytes for MCP responses", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-bytes-"));
+    await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
+
+    const handlers = createCodegraphMcpHandlers({ root, readOnly: false });
+    await handlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true });
+
+    const result = await handlers.query_sqlite({ query: "SELECT hex(randomblob(300000)) AS big;" });
+
+    expect(result.byteLimit).toBe(200000);
+    expect(result.truncated).toBeTruthy();
+    expect(result.rows).toHaveLength(1);
+    expect(String(result.rows[0]?.[0]).length).toBeLessThan(9000);
+  });
+
   it("disables artifact builds by default and in explicit read-only mode", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-readonly-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
@@ -169,8 +184,8 @@ describe("codegraph MCP handlers", () => {
     await fs.writeFile(path.join(root, "late.ts"), "export const late = 1;\n");
     await handlers.artifact_build({ outDir: path.join(root, "out"), graphJson: true });
 
-    const graph = JSON.parse(await fs.readFile(path.join(root, "out", "graph.json"), "utf8")) as { files: string[] };
-    expect(graph.files.some((file) => file.endsWith("late.ts"))).toBe(false);
+    const graph = JSON.parse(await fs.readFile(path.join(root, "out", "graph.json"), "utf8")) as { graph: { files: string[] } };
+    expect(graph.graph.files.some((file) => file.endsWith("late.ts"))).toBe(false);
     expect(counted.loads()).toBe(1);
   });
 
@@ -184,8 +199,8 @@ describe("codegraph MCP handlers", () => {
 
     await handlers.artifact_build({ outDir, graphJson: true, force: true });
 
-    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { files: string[] };
-    expect(graph.files.some((file) => file.includes("/out/") || file.endsWith("/out/old.ts"))).toBe(false);
+    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { graph: { files: string[] } };
+    expect(graph.graph.files.some((file) => file.includes("/out/") || file.endsWith("/out/old.ts"))).toBe(false);
   });
 
   it("omits stale output files when the MCP root is a directory link", async () => {
@@ -207,8 +222,8 @@ describe("codegraph MCP handlers", () => {
 
     await handlers.artifact_build({ outDir, graphJson: true, force: true });
 
-    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { files: string[] };
-    expect(graph.files.some((file) => file.includes("/out/") || file.endsWith("/out/old.ts"))).toBe(false);
+    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { graph: { files: string[] } };
+    expect(graph.graph.files.some((file) => file.includes("/out/") || file.endsWith("/out/old.ts"))).toBe(false);
   });
 });
 

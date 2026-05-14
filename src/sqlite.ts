@@ -55,6 +55,8 @@ export type RawSqlResult = {
   columns: string[];
   rows: Array<Array<unknown>>;
   rowLimit?: number;
+  byteLimit?: number;
+  bytes?: number;
   truncated?: boolean;
 };
 

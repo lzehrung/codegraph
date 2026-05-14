@@ -32,15 +32,15 @@ codegraph search "handle login" --mode graph --from src/auth.ts --depth 1 --json
 codegraph explain "<handle-from-search>" --json
 ```
 
-Search results include `handle`, `rankReasons`, `evidence`, `neighbors`, and `followUps`. `explain` accepts those handles plus file paths, symbol names, and SQL object names, then returns bounded symbols, dependencies, reverse dependencies, references, snippets, SQL facts, optional changed-context review tasks/candidate tests, and follow-ups. Both commands are deterministic and do not require embeddings or prebuilt artifacts.
+Search results include project-relative `handle`, `rankReasons`, `evidence`, `neighbors`, `followUps`, `limits`, and `omittedCounts`. `explain` accepts those handles plus file paths, symbol names, and SQL object names, then returns bounded symbols, dependencies, reverse dependencies, references, snippets, SQL facts, optional changed-context review tasks/candidate tests, limits, omission counts, and follow-ups. Both commands are deterministic and do not require embeddings or prebuilt artifacts.
 
-Use `artifact build` when the agent needs a durable handoff directory. The default bundle writes SQLite, full graph JSON with symbols, a concise Markdown report, suggested questions, and a manifest. In-repo artifact output directories are excluded from the emitted artifacts so stale handoff files do not feed back into the graph.
+Use `artifact build` when the agent needs a durable handoff directory. The default bundle writes SQLite, self-describing project-relative graph JSON with symbols, a concise Markdown report, suggested questions, and a manifest. In-repo artifact output directories and linked outside-root files are excluded from the emitted artifacts so stale handoff files do not feed back into the graph. With `--force`, Codegraph removes stale known artifact files while preserving unrelated operator files.
 
 ## MCP server
 
 Use `codegraph mcp serve --root . --stdio` when an agent can call MCP tools directly. MCP reuses one in-process Codegraph session and exposes the same deterministic primitives as compact tools: `search`, `get_file`, `get_symbol`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, `query_sqlite`, and `artifact_build`.
 
-MCP is an ergonomics and performance layer, not a separate analysis engine. It gives agents stable handles from `search` and `explain`, avoids rebuilding the project for each follow-up call, and returns bounded snippets/resources. File and artifact paths are confined to the project root after realpath resolution. Tools are read-only by default; `query_sqlite` rejects mutating SQL and caps returned rows, and `artifact_build` is available only when the server is started with `--allow-build`.
+MCP is an ergonomics and performance layer, not a separate analysis engine. It gives agents stable handles from `search` and `explain`, avoids rebuilding the project for each follow-up call, and returns bounded snippets/resources. File and artifact paths are confined to the project root after realpath resolution. Tools are read-only by default; `query_sqlite` rejects mutating SQL and caps returned rows and bytes, and `artifact_build` is available only when the server is started with `--allow-build`.
 
 ## Session management
 

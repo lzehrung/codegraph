@@ -1,4 +1,4 @@
-import { buildProjectIndex } from "../indexer.js";
+import { buildProjectIndexFromFiles } from "../indexer.js";
 import type { ProjectIndex } from "../indexer/types.js";
 import { buildSymbolGraphDetailed } from "../graphs.js";
 import type { SymbolGraph } from "../graphs.js";
@@ -31,7 +31,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
 
     cached = (async () => {
       const files = await listProjectFiles(options.root, undefined, options.discovery);
-      const index = await buildProjectIndex(options.root, {
+      const index = await buildProjectIndexFromFiles(options.root, files, {
         keepParsed: true,
         ...(options.discovery ? { discovery: options.discovery } : {}),
       });

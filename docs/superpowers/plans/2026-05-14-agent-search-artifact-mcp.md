@@ -57,15 +57,12 @@ export type AgentSearchRequest = {
   depth?: number;
   limit?: number;
   includeSnippets?: boolean;
-  includeChangedContext?: boolean;
-  base?: string;
-  head?: string;
 };
 
 export type AgentSearchResultKind = "file" | "symbol" | "chunk" | "sql_object" | "graph_node";
 
 export type AgentSearchEvidence = {
-  source: "path" | "symbol" | "chunk" | "graph" | "sql" | "review";
+  source: "path" | "symbol" | "chunk" | "graph" | "sql";
   label: string;
   file?: string;
   line?: number;
@@ -86,6 +83,12 @@ export type AgentSearchResult = {
   evidence: AgentSearchEvidence[];
   neighbors: Array<{ relation: string; target: string; file?: string }>;
   followUps: string[];
+  omittedCounts: {
+    rankReasons: number;
+    evidence: number;
+    neighbors: number;
+    followUps: number;
+  };
 };
 
 export type AgentSearchResponse = {
@@ -93,6 +96,13 @@ export type AgentSearchResponse = {
   query: string;
   mode: AgentSearchMode;
   root: string;
+  limits: {
+    results: number;
+    rankReasonsPerResult: number;
+    evidencePerResult: number;
+    neighborsPerResult: number;
+    followUpsPerResult: number;
+  };
   results: AgentSearchResult[];
 };
 ```
@@ -108,6 +118,7 @@ export type AgentExplainTarget = {
   includeChangedContext?: boolean;
   maxDependencies?: number;
   maxSnippets?: number;
+  maxSymbols?: number;
 };
 
 export type AgentExplanation = {
@@ -129,6 +140,15 @@ export type AgentExplanation = {
     candidateTests: Array<{ file: string; confidence: string; reason: string }>;
   };
   followUps: string[];
+  limits: { symbols: number; dependencies: number; snippets: number };
+  omittedCounts: {
+    symbols: number;
+    dependencies: number;
+    reverseDependencies: number;
+    references: number;
+    relatedSqlObjects: number;
+    snippets: number;
+  };
 };
 ```
 
@@ -601,7 +621,7 @@ describe("artifact build", () => {
 
     const manifest = JSON.parse(await fs.readFile(artifact.manifestPath, "utf8")) as {
       schemaVersion: number;
-      artifacts: Record<string, string>;
+      artifacts: Partial<Record<"sqlite" | "graphJson" | "report" | "questions", string>>;
       sql: { supported: boolean; limitation: string };
     };
 
@@ -633,7 +653,7 @@ Implementation requirements:
   - `questions.json`
   - `manifest.json`
 - Use existing `writeGraphSqlite` for SQLite output.
-- Use the existing graph JSON shape emitted by the current `graph --json` path; do not invent a second graph schema unless the manifest clearly identifies it.
+- Write self-describing project-relative graph JSON (`schemaVersion: 1`, `format: "codegraph.graph-json"`), preserving top-level graph arrays for simple consumers and mirroring them under `graph`.
 - Generate `CODEGRAPH_REPORT.md` deterministically from existing graph/index/search/explain data.
 - Generate suggested questions from deterministic templates, such as:
   - "Which files depend on <hotspot>?"
@@ -652,6 +672,7 @@ export type CodegraphArtifactBuildRequest = {
   report?: boolean;
   questions?: boolean;
   force?: boolean;
+  filterOutDir?: string;
 };
 
 export type CodegraphArtifactBuildResult = {
@@ -659,7 +680,12 @@ export type CodegraphArtifactBuildResult = {
   root: string;
   outDir: string;
   manifestPath: string;
-  artifacts: Record<string, string>;
+  artifacts: {
+    sqlite?: string;
+    graphJson?: string;
+    report?: string;
+    questions?: string;
+  };
 };
 
 export async function buildCodegraphArtifact(request: CodegraphArtifactBuildRequest): Promise<CodegraphArtifactBuildResult>;
@@ -677,7 +703,7 @@ CLI behavior:
 
 - `--sqlite`, `--json`, `--report`, and `--questions` enable artifacts.
 - If no artifact flags are provided, default to SQLite, graph JSON, questions, and report.
-- Refuse to overwrite a non-empty output directory unless `--force` is passed.
+- Refuse to overwrite a non-empty output directory unless `--force` is passed. With `--force`, remove stale known Codegraph artifacts and preserve unrelated files.
 - Print the manifest path in text mode and the full result in JSON mode.
 
 Append CLI regression:
@@ -689,7 +715,10 @@ it("artifact build writes an agent-ready artifact bundle", async () => {
   await fsp.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
 
   const stdout = await runCliCommand(["artifact", "build", "--root", root, "--out", outDir, "--json"]);
-  const result = JSON.parse(stdout) as { manifestPath: string; artifacts: Record<string, string> };
+  const result = JSON.parse(stdout) as {
+    manifestPath: string;
+    artifacts: Partial<Record<"sqlite" | "graphJson" | "report" | "questions", string>>;
+  };
 
   expect(result.manifestPath.endsWith("manifest.json")).toBeTruthy();
   expect(result.artifacts.sqlite).toBe("codegraph.sqlite");

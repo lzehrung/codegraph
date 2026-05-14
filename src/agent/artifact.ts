@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getHotspots, type SymbolNode } from "../graphs.js";
+import { defNodeId } from "../graphs/symbol-graph.js";
 import { writeGraphSqlite } from "../sqlite.js";
 import { normalizePath, toProjectRelativePath } from "../util.js";
+import { formatAgentSqlHandle, formatAgentSymbolHandle } from "./handles.js";
 import { createAgentSession } from "./session.js";
 import type { AgentProjectSnapshot, AgentSession } from "./session.js";
 
@@ -22,7 +24,12 @@ export type CodegraphArtifactBuildResult = {
   root: string;
   outDir: string;
   manifestPath: string;
-  artifacts: Record<string, string>;
+  artifacts: {
+    sqlite?: string;
+    graphJson?: string;
+    report?: string;
+    questions?: string;
+  };
 };
 
 type ArtifactManifest = CodegraphArtifactBuildResult & {
@@ -37,6 +44,26 @@ type ArtifactQuestion = {
   id: string;
   question: string;
   command: string;
+};
+
+type PortableGraphBody = {
+  files: string[];
+  fileEdges: Array<{
+    from: string;
+    to: { type: "file"; path: string } | { type: "external"; name: string };
+    raw: string;
+    typeOnly?: boolean;
+    resolved?: "heuristic" | "precise";
+    confidence?: number;
+  }>;
+  symbols: Array<SymbolNode & { file: string }>;
+  symbolEdges: AgentProjectSnapshot["symbolGraph"]["edges"];
+};
+
+type PortableGraphJson = PortableGraphBody & {
+  schemaVersion: 1;
+  format: "codegraph.graph-json";
+  graph: PortableGraphBody;
 };
 
 const DEFAULT_OUT_DIR = "codegraph-out";
@@ -72,7 +99,10 @@ export async function buildCodegraphArtifactWithSession(
   const filterOutDir = path.resolve(root, request.filterOutDir ?? request.outDir ?? DEFAULT_OUT_DIR);
   const snapshot = filterSnapshotForOutputDirectory(await session.loadProject(), filterOutDir);
   await fs.mkdir(outDir, { recursive: true });
-  const artifacts: Record<string, string> = {};
+  if (request.force) {
+    await removeKnownArtifacts(outDir);
+  }
+  const artifacts: CodegraphArtifactBuildResult["artifacts"] = {};
 
   if (selected.sqlite) {
     const outputPath = path.join(outDir, SQLITE_FILE);
@@ -116,7 +146,7 @@ export async function buildCodegraphArtifactWithSession(
       supported: true,
       limitation: "SQL support does not perform current-schema reconstruction.",
     },
-    graphJsonSchema: "codegraph graph --json --symbols-detailed full",
+    graphJsonSchema: "codegraph.graph-json",
   };
   await writeJson(manifestPath, manifest);
 
@@ -157,6 +187,19 @@ async function validateOutputDirectory(outDir: string, force: boolean): Promise<
   }
 }
 
+async function removeKnownArtifacts(outDir: string): Promise<void> {
+  await Promise.all(
+    [SQLITE_FILE, GRAPH_JSON_FILE, REPORT_FILE, QUESTIONS_FILE, MANIFEST_FILE].map(async (fileName) => {
+      try {
+        await fs.rm(path.join(outDir, fileName), { force: true });
+      } catch (error) {
+        if (isNodeError(error) && error.code === "ENOENT") return;
+        throw error;
+      }
+    }),
+  );
+}
+
 async function readDirectoryIfPresent(outDir: string): Promise<string[]> {
   try {
     return await fs.readdir(outDir);
@@ -177,33 +220,105 @@ function outputIgnoreGlobs(root: string, outDir: string): string[] {
 }
 
 function buildGraphJson(snapshot: AgentProjectSnapshot): {
-  files: string[];
-  fileEdges: AgentProjectSnapshot["fileGraph"]["edges"];
-  symbols: SymbolNode[];
-  symbolEdges: AgentProjectSnapshot["symbolGraph"]["edges"];
+  schemaVersion: 1;
+  format: "codegraph.graph-json";
+  files: PortableGraphJson["files"];
+  fileEdges: PortableGraphJson["fileEdges"];
+  symbols: PortableGraphJson["symbols"];
+  symbolEdges: PortableGraphJson["symbolEdges"];
+  graph: PortableGraphJson["graph"];
 } {
-  return {
-    files: [...snapshot.fileGraph.nodes].sort(),
-    fileEdges: [...snapshot.fileGraph.edges].sort((left, right) => {
-      const fromDelta = left.from.localeCompare(right.from);
-      if (fromDelta !== 0) return fromDelta;
-      const leftTo = left.to.type === "file" ? left.to.path : left.to.name;
-      const rightTo = right.to.type === "file" ? right.to.path : right.to.name;
-      return leftTo.localeCompare(rightTo);
-    }),
-    symbols: [...snapshot.symbolGraph.nodes.values()].sort((left, right) => {
-      const fileDelta = left.file.localeCompare(right.file);
-      if (fileDelta !== 0) return fileDelta;
-      return left.name.localeCompare(right.name);
-    }),
-    symbolEdges: [...snapshot.symbolGraph.edges].sort((left, right) => {
-      const fromDelta = left.from.localeCompare(right.from);
-      if (fromDelta !== 0) return fromDelta;
-      const toDelta = left.to.localeCompare(right.to);
-      if (toDelta !== 0) return toDelta;
-      return (left.label ?? "").localeCompare(right.label ?? "");
-    }),
+  const symbolIds = buildPortableSymbolIdMap(snapshot);
+  const portableSymbolId = (id: string): string => symbolIds.get(id) ?? id;
+  const graph: PortableGraphBody = {
+    files: [...snapshot.fileGraph.nodes].map((file) => relativeFile(snapshot.root, file)).sort(),
+    fileEdges: [...snapshot.fileGraph.edges]
+      .map((edge) => ({
+        ...edge,
+        from: relativeFile(snapshot.root, edge.from),
+        to:
+          edge.to.type === "file"
+            ? { type: "file" as const, path: relativeFile(snapshot.root, edge.to.path) }
+            : { type: "external" as const, name: edge.to.name },
+      }))
+      .sort((left, right) => {
+        const fromDelta = left.from.localeCompare(right.from);
+        if (fromDelta !== 0) return fromDelta;
+        const leftTo = left.to.type === "file" ? left.to.path : left.to.name;
+        const rightTo = right.to.type === "file" ? right.to.path : right.to.name;
+        return leftTo.localeCompare(rightTo);
+      }),
+    symbols: [...snapshot.symbolGraph.nodes.values()]
+      .map((node) => ({
+        ...node,
+        id: portableSymbolId(node.id),
+        file: relativeFile(snapshot.root, node.file),
+      }))
+      .sort((left, right) => {
+        const fileDelta = left.file.localeCompare(right.file);
+        if (fileDelta !== 0) return fileDelta;
+        return left.name.localeCompare(right.name);
+      }),
+    symbolEdges: [...snapshot.symbolGraph.edges]
+      .map((edge) => ({
+        ...edge,
+        from: portableSymbolId(edge.from),
+        to: portableSymbolId(edge.to),
+      }))
+      .sort((left, right) => {
+        const fromDelta = left.from.localeCompare(right.from);
+        if (fromDelta !== 0) return fromDelta;
+        const toDelta = left.to.localeCompare(right.to);
+        if (toDelta !== 0) return toDelta;
+        return (left.label ?? "").localeCompare(right.label ?? "");
+      }),
   };
+  return {
+    schemaVersion: 1,
+    format: "codegraph.graph-json",
+    files: graph.files,
+    fileEdges: graph.fileEdges,
+    symbols: graph.symbols,
+    symbolEdges: graph.symbolEdges,
+    graph,
+  };
+}
+
+function buildPortableSymbolIdMap(snapshot: AgentProjectSnapshot): Map<string, string> {
+  const byId = new Map<string, string>();
+  for (const moduleIndex of snapshot.index.byFile.values()) {
+    for (const local of moduleIndex.locals) {
+      const relFile = relativeFile(snapshot.root, local.file);
+      const id = defNodeId(local);
+      const isSqlObject = local.file.toLowerCase().endsWith(".sql");
+      byId.set(
+        id,
+        isSqlObject
+          ? formatAgentSqlHandle({ name: local.localName, file: relFile, line: local.range.start.line })
+          : formatAgentSymbolHandle({
+              file: relFile,
+              name: local.localName,
+              line: local.range.start.line,
+              column: local.range.start.column,
+            }),
+      );
+    }
+  }
+
+  for (const node of snapshot.symbolGraph.nodes.values()) {
+    if (byId.has(node.id)) continue;
+    const relFile = relativeFile(snapshot.root, node.file);
+    byId.set(
+      node.id,
+      formatAgentSymbolHandle({
+        file: relFile,
+        name: node.name,
+        line: 0,
+        column: 0,
+      }),
+    );
+  }
+  return byId;
 }
 
 function filterSnapshotForOutputDirectory(snapshot: AgentProjectSnapshot, outDir: string): AgentProjectSnapshot {

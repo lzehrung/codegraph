@@ -1420,13 +1420,14 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     const target = parsed.positionals.join(" ").trim();
     if (!target) {
       writeStderrLine(
-        'Usage: explain <file|symbol|sql-object> [--root <path>] [--changed-context --base <rev> --head <rev>] [--json]',
+        'Usage: explain <file|symbol|sql-object> [--root <path>] [--max-symbols <n>] [--changed-context --base <rev> --head <rev>] [--json]',
       );
       exitCli(2);
     }
 
     const maxDependenciesRaw = getOpt("--max-dependencies");
     const maxSnippetsRaw = getOpt("--max-snippets");
+    const maxSymbolsRaw = getOpt("--max-symbols");
     const base = getOpt("--base");
     const head = getOpt("--head");
     if (hasFlag("--changed-context") && (base === undefined || head === undefined)) {
@@ -1443,6 +1444,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
         ? { maxDependencies: parsePositiveIntegerOption(maxDependenciesRaw, "--max-dependencies", 20) }
         : {}),
       ...(maxSnippetsRaw !== undefined ? { maxSnippets: parsePositiveIntegerOption(maxSnippetsRaw, "--max-snippets", 8) } : {}),
+      ...(maxSymbolsRaw !== undefined ? { maxSymbols: parsePositiveIntegerOption(maxSymbolsRaw, "--max-symbols", 50) } : {}),
     });
 
     if (hasFlag("--json")) {

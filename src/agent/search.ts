@@ -8,6 +8,7 @@ import type { Range } from "../types.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
 import type { SymbolNode } from "../graphs.js";
 import { normalizePath, toProjectRelativePath } from "../util.js";
+import { formatAgentSqlHandle, formatAgentSymbolHandle, parseAgentSqlHandle, parseAgentSymbolHandle } from "./handles.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
 
 export type AgentSearchMode = "hybrid" | "symbol" | "path" | "text" | "graph" | "sql";
@@ -20,15 +21,12 @@ export type AgentSearchRequest = {
   depth?: number;
   limit?: number;
   includeSnippets?: boolean;
-  includeChangedContext?: boolean;
-  base?: string;
-  head?: string;
 };
 
 export type AgentSearchResultKind = "file" | "symbol" | "chunk" | "sql_object" | "graph_node";
 
 export type AgentSearchEvidence = {
-  source: "path" | "symbol" | "chunk" | "graph" | "sql" | "review";
+  source: "path" | "symbol" | "chunk" | "graph" | "sql";
   label: string;
   file?: string;
   line?: number;
@@ -46,6 +44,12 @@ export type AgentSearchResult = {
   evidence: AgentSearchEvidence[];
   neighbors: Array<{ relation: string; target: string; file?: string }>;
   followUps: string[];
+  omittedCounts: {
+    rankReasons: number;
+    evidence: number;
+    neighbors: number;
+    followUps: number;
+  };
 };
 
 export type AgentSearchResponse = {
@@ -53,10 +57,17 @@ export type AgentSearchResponse = {
   query: string;
   mode: AgentSearchMode;
   root: string;
+  limits: {
+    results: number;
+    rankReasonsPerResult: number;
+    evidencePerResult: number;
+    neighborsPerResult: number;
+    followUpsPerResult: number;
+  };
   results: AgentSearchResult[];
 };
 
-type MutableSearchResult = Omit<AgentSearchResult, "rankReasons" | "evidence" | "neighbors" | "followUps"> & {
+type MutableSearchResult = Omit<AgentSearchResult, "rankReasons" | "evidence" | "neighbors" | "followUps" | "omittedCounts"> & {
   rankReasons: Set<string>;
   evidence: AgentSearchEvidence[];
   neighbors: Map<string, { relation: string; target: string; file?: string }>;
@@ -83,8 +94,13 @@ type ReachableFile = {
 };
 
 const DEFAULT_LIMIT = 20;
+const MAX_RESULTS = 100;
 const MAX_TEXT_BYTES = 300_000;
 const MAX_GRAPH_DEPTH = 5;
+const MAX_RANK_REASONS_PER_RESULT = 6;
+const MAX_EVIDENCE_PER_RESULT = 5;
+const MAX_NEIGHBORS_PER_RESULT = 12;
+const MAX_FOLLOWUPS_PER_RESULT = 8;
 const CHUNK_LANGUAGE_ALIASES: Record<string, string> = {
   js: "javascript",
   ts: "typescript",
@@ -150,13 +166,20 @@ async function searchSnapshot(snapshot: AgentProjectSnapshot, request: AgentSear
     query: request.query,
     mode,
     root: snapshot.root,
+    limits: {
+      results: limit,
+      rankReasonsPerResult: MAX_RANK_REASONS_PER_RESULT,
+      evidencePerResult: MAX_EVIDENCE_PER_RESULT,
+      neighborsPerResult: MAX_NEIGHBORS_PER_RESULT,
+      followUpsPerResult: MAX_FOLLOWUPS_PER_RESULT,
+    },
     results,
   };
 }
 
 function normalizeLimit(limit: number | undefined): number {
   if (typeof limit !== "number" || !Number.isFinite(limit)) return DEFAULT_LIMIT;
-  return Math.max(0, Math.floor(limit));
+  return Math.min(MAX_RESULTS, Math.max(0, Math.floor(limit)));
 }
 
 function normalizeDepth(depth: number | undefined): number {
@@ -253,8 +276,13 @@ function addSymbolResults(
     const def = lookup.defById.get(node.id);
     const relFile = relativeFile(snapshot.root, node.file);
     const handle = sqlObject
-      ? `sql:${node.name}:${relFile}:${def?.range.start.line ?? 0}`
-      : `symbol:${node.id}`;
+      ? formatAgentSqlHandle({ name: node.name, file: relFile, line: def?.range.start.line ?? 0 })
+      : formatAgentSymbolHandle({
+          file: relFile,
+          name: node.name,
+          line: def?.range.start.line ?? 0,
+          column: def?.range.start.column ?? 0,
+        });
     const result = upsertResult(resultMap, {
       handle,
       kind: sqlObject ? "sql_object" : "symbol",
@@ -416,15 +444,20 @@ function resolveAnchorFiles(snapshot: AgentProjectSnapshot, from: string): Set<s
   }
 
   if (from.startsWith("symbol:")) {
-    const symbol = snapshot.symbolGraph.nodes.get(from.slice("symbol:".length));
-    if (symbol) anchor.add(normalizePath(symbol.file));
+    const symbolHandle = parseAgentSymbolHandle(from);
+    const symbolFile = symbolHandle ? resolveFileCandidate(snapshot, symbolHandle.file) : null;
+    if (symbolFile) {
+      anchor.add(symbolFile);
+    } else {
+      const symbol = snapshot.symbolGraph.nodes.get(from.slice("symbol:".length));
+      if (symbol) anchor.add(normalizePath(symbol.file));
+    }
   }
 
   if (from.startsWith("sql:")) {
-    const sqlHandleParts = from.split(":");
-    const sqlFile = sqlHandleParts.length >= 4 ? sqlHandleParts.slice(2, -1).join(":") : undefined;
-    if (sqlFile) {
-      const file = resolveFileCandidate(snapshot, sqlFile);
+    const sqlHandle = parseAgentSqlHandle(from);
+    if (sqlHandle) {
+      const file = resolveFileCandidate(snapshot, sqlHandle.file);
       if (file) anchor.add(file);
     }
   }
@@ -643,11 +676,18 @@ function compareResults(left: MutableSearchResult, right: MutableSearchResult): 
 }
 
 function finalizeResult(result: MutableSearchResult): AgentSearchResult {
+  const rankReasons = [...result.rankReasons].sort();
+  const evidence = result.evidence.sort((left, right) => {
+    const sourceDelta = left.source.localeCompare(right.source);
+    if (sourceDelta !== 0) return sourceDelta;
+    return left.label.localeCompare(right.label);
+  });
   const neighbors = [...result.neighbors.values()].sort((left, right) => {
     const relationDelta = left.relation.localeCompare(right.relation);
     if (relationDelta !== 0) return relationDelta;
     return left.target.localeCompare(right.target);
   });
+  const followUps = [...result.followUps].sort();
 
   return {
     handle: result.handle,
@@ -656,14 +696,16 @@ function finalizeResult(result: MutableSearchResult): AgentSearchResult {
     file: result.file,
     ...(result.range ? { range: result.range } : {}),
     score: Number(result.score.toFixed(3)),
-    rankReasons: [...result.rankReasons].sort(),
-    evidence: result.evidence.sort((left, right) => {
-      const sourceDelta = left.source.localeCompare(right.source);
-      if (sourceDelta !== 0) return sourceDelta;
-      return left.label.localeCompare(right.label);
-    }),
-    neighbors,
-    followUps: [...result.followUps].sort(),
+    rankReasons: rankReasons.slice(0, MAX_RANK_REASONS_PER_RESULT),
+    evidence: evidence.slice(0, MAX_EVIDENCE_PER_RESULT),
+    neighbors: neighbors.slice(0, MAX_NEIGHBORS_PER_RESULT),
+    followUps: followUps.slice(0, MAX_FOLLOWUPS_PER_RESULT),
+    omittedCounts: {
+      rankReasons: Math.max(0, rankReasons.length - MAX_RANK_REASONS_PER_RESULT),
+      evidence: Math.max(0, evidence.length - MAX_EVIDENCE_PER_RESULT),
+      neighbors: Math.max(0, neighbors.length - MAX_NEIGHBORS_PER_RESULT),
+      followUps: Math.max(0, followUps.length - MAX_FOLLOWUPS_PER_RESULT),
+    },
   };
 }
 

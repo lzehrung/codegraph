@@ -24,7 +24,7 @@ const jsOnlyIndex = await buildProjectIndex(process.cwd(), { native: "off" });
 
 ## Agent search
 
-`searchCodegraph()` builds a project snapshot and returns deterministic, agent-ready anchors across files, symbols, chunks, SQL objects, and optional graph neighborhoods.
+`searchCodegraph()` builds a project snapshot and returns deterministic, agent-ready anchors across files, symbols, chunks, SQL objects, and optional graph neighborhoods. Handles are project-relative; large result packets include `limits` and `omittedCounts`.
 
 ```ts
 import { buildCodegraphArtifact, explainCodegraphTarget, searchCodegraph } from "@lzehrung/codegraph";
@@ -37,7 +37,7 @@ const response = await searchCodegraph({
 });
 
 const first = response.results[0];
-console.log(first?.handle, first?.rankReasons, first?.followUps);
+console.log(first?.handle, first?.rankReasons, first?.omittedCounts, first?.followUps);
 ```
 
 Use `mode: "sql"` for SQL objects, or pass `from` plus `depth` with `mode: "graph"` to boost matches near a file, symbol handle, SQL handle, or symbol name.
@@ -48,6 +48,7 @@ Use `mode: "sql"` for SQL objects, or pass `from` plus `depth` with `mode: "grap
 const explanation = await explainCodegraphTarget({
   root: process.cwd(),
   target: first?.handle ?? "src/auth.ts",
+  maxSymbols: 25,
   maxDependencies: 10,
   maxSnippets: 5,
 });
@@ -66,6 +67,8 @@ const artifact = await buildCodegraphArtifact({
 console.log(artifact.manifestPath, artifact.artifacts);
 ```
 
+The `graph.json` artifact is self-describing (`schemaVersion: 1`, `format: "codegraph.graph-json"`) and uses project-relative file paths and portable symbol handles. With `force: true`, stale known Codegraph artifact files are removed before the selected outputs are written; unrelated files in the directory are preserved.
+
 `createAgentSession()` keeps one in-process project snapshot warm for repeated search, explain, artifact, and MCP calls. Use `buildCodegraphArtifactWithSession()` when a host already has a session and wants SQLite, graph JSON, report, questions, and manifest outputs from the same snapshot. `createCodegraphMcpHandlers()` exposes the same primitives without starting stdio, which is useful for tests or host applications:
 
 ```ts
@@ -83,7 +86,7 @@ const rows = await handlers.query_sqlite({ query: "select path from files", limi
 console.log(refs.references, rows.rows);
 ```
 
-`serveCodegraphMcp()` starts the stdio server used by `codegraph mcp serve`. MCP is an agent ergonomics and cache layer over the same analysis engine, not a separate indexer. MCP file and artifact paths are confined after realpath resolution. `query_sqlite` is read-only and row-bounded; `artifact_build` is disabled by default and requires `readOnly: false` or CLI `--allow-build`.
+`serveCodegraphMcp()` starts the stdio server used by `codegraph mcp serve`. MCP is an agent ergonomics and cache layer over the same analysis engine, not a separate indexer. MCP file and artifact paths are confined after realpath resolution. `query_sqlite` is read-only and row- and byte-bounded; `artifact_build` is disabled by default and requires `readOnly: false` or CLI `--allow-build`.
 
 ## Semantic chunking
 

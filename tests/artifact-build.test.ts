@@ -57,14 +57,24 @@ describe("artifact build", () => {
       artifacts: Record<string, string>;
       sql: { supported: boolean; limitation: string };
     };
+    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as {
+      schemaVersion: number;
+      format: string;
+      files: string[];
+      graph: { files: string[] };
+    };
 
     expect(manifest.schemaVersion).toBe(1);
     expect(manifest.artifacts.sqlite).toBe("codegraph.sqlite");
     expect(manifest.sql.supported).toBeTruthy();
     expect(manifest.sql.limitation).toContain("current-schema reconstruction");
+    expect(graph.schemaVersion).toBe(1);
+    expect(graph.format).toBe("codegraph.graph-json");
+    expect(graph.files).toEqual(graph.graph.files);
+    expect(graph.graph.files.some((file) => file.includes(root.replace(/\\/g, "/")))).toBe(false);
   });
 
-  it("refuses to overwrite a non-empty output directory unless force is set", async () => {
+  it("refuses to overwrite a non-empty output directory unless force is set and removes stale known artifacts", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-existing-"));
     const outDir = path.join(root, "codegraph-out");
     await fs.mkdir(outDir);
@@ -76,6 +86,12 @@ describe("artifact build", () => {
     const artifact = await buildCodegraphArtifact({ root, outDir, force: true, questions: true });
     expect(artifact.artifacts.questions).toBe("questions.json");
     expect(await fs.readFile(path.join(outDir, "keep.txt"), "utf8")).toBe("operator data\n");
+
+    await buildCodegraphArtifact({ root, outDir, force: true, sqlite: true });
+
+    await expect(fs.stat(path.join(outDir, "questions.json"))).rejects.toThrow();
+    expect(await fs.readFile(path.join(outDir, "keep.txt"), "utf8")).toBe("operator data\n");
+    expect(await fs.stat(path.join(outDir, "codegraph.sqlite"))).toBeTruthy();
   });
 
   it("does not index stale files from an in-repo output directory", async () => {
@@ -87,8 +103,8 @@ describe("artifact build", () => {
 
     await buildCodegraphArtifact({ root, outDir, force: true, graphJson: true });
 
-    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { files: string[] };
-    expect(graph.files.some((file) => file.includes("codegraph-out"))).toBe(false);
+    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { graph: { files: string[] } };
+    expect(graph.graph.files.some((file) => file.includes("codegraph-out"))).toBe(false);
   });
 
   it("reuses one project snapshot for all selected artifact outputs", async () => {
@@ -109,4 +125,31 @@ describe("artifact build", () => {
 
     expect(counted.loads()).toBe(1);
   });
+
+  it("does not include files that escape the root through a directory link", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-linked-root-"));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-linked-outside-"));
+    const outDir = path.join(root, "codegraph-out");
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n");
+    await fs.writeFile(path.join(outside, "secret.ts"), "export const outsideSecretNeedle = true;\n");
+    try {
+      await fs.symlink(outside, path.join(root, "linked"), "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    await buildCodegraphArtifact({ root, outDir, graphJson: true });
+
+    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { graph: { files: string[] } };
+    expect(graph.graph.files.some((file) => file.includes("linked") || file.includes("secret.ts"))).toBe(false);
+  });
 });
+
+function isSymlinkUnavailable(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "EPERM" || error.code === "EACCES" || error.code === "ENOTSUP")
+  );
+}

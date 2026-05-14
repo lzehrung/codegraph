@@ -78,8 +78,13 @@ export type CodegraphMcpHandlers = {
 };
 
 const DEFAULT_FILE_BYTES = 80_000;
+const MAX_FILE_BYTES = 500_000;
 const DEFAULT_SQLITE_ROW_LIMIT = 100;
 const MAX_SQLITE_ROW_LIMIT = 500;
+const DEFAULT_SQLITE_BYTE_LIMIT = 200_000;
+const MAX_SQLITE_CELL_BYTES = 8_000;
+const DEFAULT_MCP_COLLECTION_LIMIT = 100;
+const MAX_MCP_COLLECTION_LIMIT = 500;
 
 export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): CodegraphMcpHandlers {
   const root = path.resolve(options.root);
@@ -90,9 +95,9 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
 
   const resolveFile = (file: string): string => assertFilePathWithinRoot(root, file, "File");
   const relative = (file: string): string => toProjectRelativePath(root, file) ?? normalizePath(path.resolve(file));
-  const boundedLimit = (limit: number | undefined, fallback: number): number => {
+  const boundedLimit = (limit: number | undefined, fallback: number, max: number): number => {
     if (typeof limit !== "number" || !Number.isFinite(limit)) return fallback;
-    return Math.max(0, Math.floor(limit));
+    return Math.min(max, Math.max(0, Math.floor(limit)));
   };
 
   return {
@@ -109,7 +114,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
     get_file: async (request) => {
       const file = resolveFile(request.file);
       const realFile = await assertExistingRealPathWithinRoot(await realRoot, file, "File");
-      const maxBytes = boundedLimit(request.maxBytes, DEFAULT_FILE_BYTES);
+      const maxBytes = boundedLimit(request.maxBytes, DEFAULT_FILE_BYTES, MAX_FILE_BYTES);
       const buffer = await fs.readFile(realFile);
       const slice = buffer.subarray(0, maxBytes);
       return {
@@ -138,13 +143,15 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
         const explanation = await explainCodegraphTargetWithSession(session, {
           root,
           target: request.handle,
-          ...(request.limit !== undefined ? { maxDependencies: request.limit } : {}),
+          maxDependencies: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
         });
         return { references: explanation.references };
       }
 
       const snapshot = await session.loadProject();
-      const referenceOptions = request.limit !== undefined ? { maxReferences: request.limit } : undefined;
+      const referenceOptions = {
+        maxReferences: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
+      };
       const result = await findReferences(
         snapshot.index,
         {
@@ -167,7 +174,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
       const snapshot = await session.loadProject();
       const queryOptions = {
         ...(request.depth !== undefined ? { depth: request.depth } : {}),
-        ...(request.limit !== undefined ? { limit: request.limit } : {}),
+        limit: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
       };
       const dependencies = getDependencies(snapshot.fileGraph, resolveFile(request.file), queryOptions).map((dependency) => ({
         file: relative(dependency.file),
@@ -180,7 +187,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
       const snapshot = await session.loadProject();
       const queryOptions = {
         ...(request.depth !== undefined ? { depth: request.depth } : {}),
-        ...(request.limit !== undefined ? { limit: request.limit } : {}),
+        limit: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
       };
       const reverseDependencies = getReverseDependencies(snapshot.fileGraph, resolveFile(request.file), queryOptions).map((dependency) => ({
         file: relative(dependency.file),
@@ -216,9 +223,10 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
         throw new Error("No SQLite artifact is available. Run artifact_build first or pass artifactPath.");
       }
       const realSqlitePath = await assertExistingRealPathWithinRoot(await realRoot, sqlitePath, "SQLite artifact");
-      return await queryGraphSqliteRaw(realSqlitePath, request.query, request.params ?? [], {
+      const result = await queryGraphSqliteRaw(realSqlitePath, request.query, request.params ?? [], {
         maxRows: normalizeSqliteRowLimit(request.limit),
       });
+      return boundRawSqlResult(result, DEFAULT_SQLITE_BYTE_LIMIT);
     },
 
     artifact_build: async (request) => {
@@ -409,7 +417,6 @@ function objectSchema(properties: Record<string, object>, required: string[] = [
 }
 
 const stringProperty = { type: "string" };
-const numberProperty = { type: "number" };
 const booleanProperty = { type: "boolean" };
 
 const MCP_TOOLS: Tool[] = [
@@ -421,8 +428,8 @@ const MCP_TOOLS: Tool[] = [
         query: stringProperty,
         mode: { type: "string", enum: ["hybrid", "symbol", "path", "text", "graph", "sql"] },
         from: stringProperty,
-        depth: numberProperty,
-        limit: numberProperty,
+        depth: { type: "integer", minimum: 0, default: 1, description: "Graph neighborhood depth." },
+        limit: { type: "integer", minimum: 0, maximum: 100, default: 20 },
       },
       ["query"],
     ),
@@ -430,7 +437,7 @@ const MCP_TOOLS: Tool[] = [
   {
     name: "get_file",
     description: "Read a bounded project file by relative path.",
-    inputSchema: objectSchema({ file: stringProperty, maxBytes: numberProperty }, ["file"]),
+    inputSchema: objectSchema({ file: stringProperty, maxBytes: { type: "integer", minimum: 1, maximum: MAX_FILE_BYTES } }, ["file"]),
   },
   {
     name: "get_symbol",
@@ -440,7 +447,10 @@ const MCP_TOOLS: Tool[] = [
   {
     name: "goto",
     description: "Resolve the definition at a file position.",
-    inputSchema: objectSchema({ file: stringProperty, line: numberProperty, column: numberProperty }, ["file", "line", "column"]),
+    inputSchema: objectSchema(
+      { file: stringProperty, line: { type: "integer", minimum: 1 }, column: { type: "integer", minimum: 0 } },
+      ["file", "line", "column"],
+    ),
   },
   {
     name: "refs",
@@ -448,20 +458,34 @@ const MCP_TOOLS: Tool[] = [
     inputSchema: objectSchema({
       handle: stringProperty,
       file: stringProperty,
-      line: numberProperty,
-      column: numberProperty,
-      limit: numberProperty,
+      line: { type: "integer", minimum: 1 },
+      column: { type: "integer", minimum: 0 },
+      limit: { type: "integer", minimum: 0, maximum: MAX_MCP_COLLECTION_LIMIT, default: DEFAULT_MCP_COLLECTION_LIMIT },
     }),
   },
   {
     name: "deps",
     description: "List file dependencies.",
-    inputSchema: objectSchema({ file: stringProperty, depth: numberProperty, limit: numberProperty }, ["file"]),
+    inputSchema: objectSchema(
+      {
+        file: stringProperty,
+        depth: { type: "integer", minimum: 0, default: 1 },
+        limit: { type: "integer", minimum: 0, maximum: MAX_MCP_COLLECTION_LIMIT, default: DEFAULT_MCP_COLLECTION_LIMIT },
+      },
+      ["file"],
+    ),
   },
   {
     name: "rdeps",
     description: "List reverse file dependencies.",
-    inputSchema: objectSchema({ file: stringProperty, depth: numberProperty, limit: numberProperty }, ["file"]),
+    inputSchema: objectSchema(
+      {
+        file: stringProperty,
+        depth: { type: "integer", minimum: 0, default: 1 },
+        limit: { type: "integer", minimum: 0, maximum: MAX_MCP_COLLECTION_LIMIT, default: DEFAULT_MCP_COLLECTION_LIMIT },
+      },
+      ["file"],
+    ),
   },
   {
     name: "path",
@@ -491,7 +515,7 @@ const MCP_TOOLS: Tool[] = [
           type: "array",
           items: { oneOf: [{ type: "string" }, { type: "number" }, { type: "null" }] },
         },
-        limit: numberProperty,
+        limit: { type: "integer", minimum: 0, maximum: MAX_SQLITE_ROW_LIMIT, default: DEFAULT_SQLITE_ROW_LIMIT },
       },
       ["query"],
     ),
@@ -513,6 +537,62 @@ const MCP_TOOLS: Tool[] = [
 function normalizeSqliteRowLimit(limit: number | undefined): number {
   if (typeof limit !== "number" || !Number.isFinite(limit)) return DEFAULT_SQLITE_ROW_LIMIT;
   return Math.min(MAX_SQLITE_ROW_LIMIT, Math.max(0, Math.floor(limit)));
+}
+
+function boundRawSqlResult(result: RawSqlResult, byteLimit: number): RawSqlResult {
+  const rows: Array<Array<unknown>> = [];
+  let bytes = Buffer.byteLength(JSON.stringify({ columns: result.columns, rows: [] }), "utf8");
+  let truncated = result.truncated ?? false;
+
+  for (const rawRow of result.rows) {
+    if (rowContainsTruncatedValue(rawRow)) {
+      truncated = true;
+    }
+    const row = rawRow.map(normalizeSqliteValue);
+    const rowBytes = Buffer.byteLength(JSON.stringify(row), "utf8");
+    if (bytes + rowBytes > byteLimit) {
+      truncated = true;
+      break;
+    }
+    rows.push(row);
+    bytes += rowBytes;
+  }
+
+  return {
+    ...result,
+    rows,
+    byteLimit,
+    bytes,
+    truncated,
+  };
+}
+
+function rowContainsTruncatedValue(row: Array<unknown>): boolean {
+  return row.some(
+    (value) =>
+      (typeof value === "string" && Buffer.byteLength(value, "utf8") > MAX_SQLITE_CELL_BYTES) ||
+      value instanceof Uint8Array,
+  );
+}
+
+function normalizeSqliteValue(value: unknown): unknown {
+  if (typeof value === "string") return truncateUtf8(value, MAX_SQLITE_CELL_BYTES);
+  if (typeof value === "bigint") return value.toString();
+  if (value instanceof Uint8Array) return `<${value.byteLength} bytes>`;
+  return value;
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) return value;
+  let output = "";
+  let bytes = 0;
+  for (const char of value) {
+    const charBytes = Buffer.byteLength(char, "utf8");
+    if (bytes + charBytes > maxBytes) break;
+    output += char;
+    bytes += charBytes;
+  }
+  return `${output}...[truncated]`;
 }
 
 async function assertExistingRealPathWithinRoot(realRoot: string, filePath: string, label: string): Promise<string> {
