@@ -52,10 +52,14 @@ function readModuleCacheUpdatedAt(root: string, file: string): number | null {
   }
 }
 
-async function readManifest(root: string) {
+function manifestPathFor(root: string): string {
+  return path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
+}
+
+async function readManifest(root: string): Promise<IndexManifest> {
   const mf = path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
   const raw = await fsp.readFile(mf, "utf8");
-  return JSON.parse(raw);
+  return JSON.parse(raw) as IndexManifest;
 }
 
 function createManifest(root: string): IndexManifest {
@@ -182,6 +186,68 @@ describe("Cache invalidation and strict hashing", () => {
     });
     const manifest = await readManifest(root);
     expect(manifest.graphOptions.fast).toBe(true);
+  });
+
+  it("persists SQL corpus signatures so disk graph cache reuses SQL edges", async () => {
+    const root = await mkTmpDir("dg-sql-edge-cache-manifest-");
+    const schemaPath = path.join(root, "schema.sql");
+    const reportPath = path.join(root, "report.sql");
+    await fsp.writeFile(schemaPath, "CREATE TABLE users (id integer);\n", "utf8");
+    await fsp.writeFile(reportPath, "SELECT id FROM users;\n", "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    const reportFile = normalize(path.resolve(reportPath));
+    const schemaFile = normalize(path.resolve(schemaPath));
+    const manifest = await readManifest(root);
+    const reportEntry = manifest.files[reportFile];
+    expect(reportEntry?.sqlCorpusSig).toEqual(expect.any(String));
+    if (!reportEntry) throw new Error("missing SQL report manifest entry");
+    reportEntry.edges = reportEntry.edges.map((edge) =>
+      edge.raw === "sql:reads_from:users" ? { ...edge, raw: "sql:cached:reads_from:users" } : edge,
+    );
+    await fsp.writeFile(manifestPathFor(root), JSON.stringify(manifest, null, 2), "utf8");
+
+    const rebuilt = await buildProjectIndex(root, { threads: 2, cache: "disk" });
+
+    expect(rebuilt.graph.edges).toContainEqual(
+      expect.objectContaining({
+        from: reportFile,
+        raw: "sql:cached:reads_from:users",
+        to: { type: "file", path: schemaFile },
+      }),
+    );
+  });
+
+  it("reuses cached SQL edges without rereading the SQL corpus", async () => {
+    const root = await mkTmpDir("dg-sql-edge-cache-no-read-");
+    const schemaPath = path.join(root, "schema.sql");
+    const reportPath = path.join(root, "report.sql");
+    await fsp.writeFile(schemaPath, "CREATE TABLE users (id integer);\n", "utf8");
+    await fsp.writeFile(reportPath, "SELECT id FROM users;\n", "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk", useBloomFilters: false });
+
+    const originalReadFile = fsp.readFile.bind(fsp);
+    const readSpy = vi.spyOn(fsp, "readFile").mockImplementation(originalReadFile);
+    try {
+      const rebuilt = await buildProjectIndex(root, { threads: 2, cache: "disk", useBloomFilters: false });
+      const reportFile = normalize(path.resolve(reportPath));
+      const schemaFile = normalize(path.resolve(schemaPath));
+
+      expect(rebuilt.graph.edges).toContainEqual(
+        expect.objectContaining({
+          from: reportFile,
+          raw: "sql:reads_from:users",
+          to: { type: "file", path: schemaFile },
+        }),
+      );
+      const sqlReads = readSpy.mock.calls
+        .map((call) => String(call[0]).replace(/\\/g, "/"))
+        .filter((file) => file.endsWith(".sql"));
+      expect(sqlReads.length).toBeLessThanOrEqual(2);
+    } finally {
+      readSpy.mockRestore();
+    }
   });
 
   it("stores git signatures for tracked files and reuses cached edges by git hash", async () => {

@@ -41,6 +41,7 @@ import {
   type WorkspaceConfig,
 } from "./util.js";
 import { supportForFile } from "./languages.js";
+import { collectSqlReviewContext, type SqlReviewContext } from "./sql/review.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -88,6 +89,7 @@ export type ReviewReport = {
   changedFiles: ReviewFileSummary[];
   graphDelta: Edge[];
   candidateTests: CandidateTestFile[];
+  sqlContext?: SqlReviewContext;
   diagnostics?: ReviewDiagnostics;
 };
 
@@ -1362,6 +1364,17 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
   }
 
   const projectFiles = index.projectFiles ?? (await discoverProjectFiles(projectRoot));
+  const indexedFiles = Array.from(index.byFile.keys());
+  const normalizedChangedFiles = new Set(changedFileList.map(normalizePath));
+  const indexedFilesCoverMoreThanReviewSet = indexedFiles.some((file) => !normalizedChangedFiles.has(normalizePath(file)));
+  const sqlContextProjectFiles =
+    indexedFilesCoverMoreThanReviewSet && indexedFiles.some((file) => path.extname(file).toLowerCase() === ".sql")
+    ? indexedFiles
+    : undefined;
+  const sqlContext = await collectSqlReviewContext(projectRoot, {
+    changedFiles: changedFileList,
+    ...(sqlContextProjectFiles ? { projectFiles: sqlContextProjectFiles } : {}),
+  });
   const report: ReviewReport = {
     schemaVersion: REVIEW_SCHEMA_VERSION,
     status: "ok",
@@ -1389,6 +1402,7 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
     changedFiles: summaries,
     graphDelta,
     candidateTests,
+    ...(sqlContext ? { sqlContext } : {}),
     ...(hasDiagnostics(diagnostics) ? { diagnostics } : {}),
   };
   if (appliedOptions.gitBase !== undefined) report.base = appliedOptions.gitBase;

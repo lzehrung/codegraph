@@ -14,5 +14,6 @@ export type GraphBuildOptions = {
 export type GraphCacheEntry = {
   sig: string;
   gitSig?: string;
+  sqlCorpusSig?: string;
   edges: Edge[];
 };

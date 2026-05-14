@@ -208,6 +208,14 @@ nativeDescribe("native parser ownership", () => {
         "namespaced.rb",
         ["Outer", "Inner", "Tool"],
       ),
+      sampleCase(
+        "sql/graph",
+        ["001_create_users.sql", "report.sql"],
+        { file: "report.sql", line: 1, column: 25, expectedStatus: "ok" },
+        { file: "001_create_users.sql", line: 1, column: 16, expectedStatus: "ok" },
+        "001_create_users.sql",
+        ["users"],
+      ),
     ];
 
     for (const testCase of cases) {

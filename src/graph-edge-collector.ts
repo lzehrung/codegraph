@@ -31,6 +31,7 @@ import { collectModuleSpecifiersFromSource, type FallbackImportExtractionEvent }
 import type { GraphCacheEntry } from "./graphs/types.js";
 import type { BuildReport } from "./indexer/types.js";
 import type { SyntaxTreeLike } from "./languages/types.js";
+import { collectSqlEdgesForFile, type SqlFactCache } from "./sql/sourceGraph.js";
 
 const cloneEdge = (edge: Edge): Edge => ({
   ...edge,
@@ -56,28 +57,35 @@ export async function collectEdgesForFile(
     resolutionHints?: string[];
     native?: NativeRuntimeMode;
     fileSignature?: { sig: string; gitSig?: string; cacheSig?: string };
+    sqlCorpusSig?: string;
     cachedFileEdges?: GraphCacheEntry;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
     report?: BuildReport;
     logLevel?: LogLevel;
+    allFiles?: readonly string[];
+    sqlFactCache?: SqlFactCache;
   },
 ): Promise<Edge[]> {
   const normalizedFile = file.replace(/\\/g, "/");
   const sigEntry = opts.fileSignature;
   const sig = sigEntry?.sig;
   const gitSig = sigEntry?.gitSig;
+  const sqlFile = path.extname(normalizedFile).toLowerCase() === ".sql";
 
   const emitCacheEntry = (edges: Edge[]) => {
     if (!sig || !opts.onFileEdges) return;
     opts.onFileEdges(normalizedFile, {
       sig,
       ...(gitSig ? { gitSig } : {}),
+      ...(sqlFile && opts.sqlCorpusSig ? { sqlCorpusSig: opts.sqlCorpusSig } : {}),
       edges: edges.map(cloneEdge),
     });
   };
 
-  const cached = sig || gitSig ? opts.cachedFileEdges : undefined;
+  const sqlCacheIsValid = sqlFile && !!opts.sqlCorpusSig && opts.cachedFileEdges?.sqlCorpusSig === opts.sqlCorpusSig;
+  const canReadCache = !sqlFile || sqlCacheIsValid;
+  const cached = canReadCache && (sig || gitSig) ? opts.cachedFileEdges : undefined;
   const matchesGitSig = !!gitSig && !!cached?.gitSig && cached.gitSig === gitSig;
   const matchesSig = !!sig && !!cached && cached.sig === sig;
 
@@ -111,6 +119,13 @@ export async function collectEdgesForFile(
         ...(compactExecution.error ? { error: compactExecution.error } : {}),
       });
     }
+  }
+
+  if (sup.id === "sql") {
+    const allFiles = opts.allFiles ?? [normalizedFile];
+    const sqlEdges = await collectSqlEdgesForFile(normalizedFile, allFiles, opts.sqlFactCache);
+    emitCacheEntry(sqlEdges);
+    return sqlEdges;
   }
 
   const fast = !!opts.fast;

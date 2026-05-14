@@ -44,6 +44,7 @@ Output Options:
   --mermaid                 Output as Mermaid diagram
   --dot                     Output as DOT graph
   --sqlite <path>           Write to SQLite database
+  --sql-artifacts           Include isolated SQL artifact facts in JSON graph output
   --output <path>           Write to file instead of stdout
 
 Examples:

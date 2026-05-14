@@ -20,6 +20,222 @@ function expectReferenceAt(result: Awaited<ReturnType<typeof testFindReferences>
 }
 
 describe("Find References", () => {
+  describe("SQL", () => {
+    it("finds SQL object references across SQL files", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
+      const schemaFile = path.join(samplePath, "001_create_users.sql").replace(/\\/g, "/");
+      const alterFile = path.join(samplePath, "002_alter_users.sql").replace(/\\/g, "/");
+      const reportFile = path.join(samplePath, "report.sql").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [schemaFile, alterFile, reportFile]);
+
+      const result = await testFindReferences(index, schemaFile, 1, 16, 3);
+
+      expect(result.status).toBe("ok");
+      expectReferenceAt(result, schemaFile, 1);
+      expectReferenceAt(result, alterFile, 1);
+      expectReferenceAt(result, reportFile, 1);
+    });
+
+    it("finds schema-qualified SQL object references", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
+      const schemaFile = path.join(samplePath, "qualified_schema.sql").replace(/\\/g, "/");
+      const reportFile = path.join(samplePath, "qualified_report.sql").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [schemaFile, reportFile]);
+
+      const result = await testFindReferences(index, schemaFile, 1, 22, 2);
+
+      expect(result.status).toBe("ok");
+      expectReferenceAt(result, schemaFile, 1);
+      expectReferenceAt(result, reportFile, 1);
+    });
+
+    it("finds schema-qualified SQL references to unqualified definitions", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-qualified-to-unqualified-refs-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(schemaFile, "CREATE TABLE users (id integer);\n", "utf8");
+        await fsp.writeFile(reportFile, "SELECT id FROM public.users;\n", "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const result = await testFindReferences(index, schemaFile, 1, 16, 2);
+
+        expect(result.status).toBe("ok");
+        expectReferenceAt(result, schemaFile, 1);
+        expectReferenceAt(result, reportFile, 1);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("finds unqualified SQL references to schema-qualified definitions", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
+      const schemaFile = path.join(samplePath, "qualified_schema.sql").replace(/\\/g, "/");
+      const reportFile = path.join(samplePath, "report.sql").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [schemaFile, reportFile]);
+
+      const result = await testFindReferences(index, schemaFile, 1, 22, 2);
+
+      expect(result.status).toBe("ok");
+      expectReferenceAt(result, schemaFile, 1);
+      expectReferenceAt(result, reportFile, 1);
+    });
+
+    it("finds alias-qualified and table-qualified SQL object references", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-qualified-refs-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(
+          schemaFile,
+          [
+            "CREATE TABLE schema1.table1 (id integer primary key);",
+            "CREATE TABLE schema2.table2 (table1_id integer not null);",
+          ].join("\n"),
+          "utf8",
+        );
+        const queryLines = [
+          "SELECT *",
+          "FROM schema1.table1 t1",
+          "JOIN schema2.table2 t2 ON t2.table1_id = t1.id;",
+          "SELECT schema1.table1.id FROM schema1.table1;",
+          "SELECT table1.id FROM schema1.table1;",
+        ];
+        await fsp.writeFile(
+          reportFile,
+          queryLines.join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const table1Result = await testFindReferences(index, schemaFile, 1, 22, 2);
+        const table2Result = await testFindReferences(index, schemaFile, 2, 22, 2);
+        const aliasResult = await testFindReferences(index, reportFile, 3, queryLines[2].indexOf("t1.id") + 1, 2);
+
+        expect(table1Result.status).toBe("ok");
+        expect(table2Result.status).toBe("ok");
+        expectReferenceAt(table1Result, reportFile, 3);
+        expectReferenceAt(table1Result, reportFile, 4);
+        expectReferenceAt(table1Result, reportFile, 5);
+        expectReferenceAt(table2Result, reportFile, 3);
+        expectReferenceAt(aliasResult, schemaFile, 1);
+        expectReferenceAt(aliasResult, reportFile, 3);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("reports SQL qualified-reference columns from indented statement starts", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-indented-ref-columns-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(schemaFile, "CREATE TABLE schema1.table1 (id integer primary key);\n", "utf8");
+        const query = "  SELECT schema1.table1.id FROM schema1.table1;\n";
+        await fsp.writeFile(reportFile, query, "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const result = await testFindReferences(index, schemaFile, 1, 22, 2);
+
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.references).toContainEqual(
+            expect.objectContaining({
+              file: reportFile,
+              range: expect.objectContaining({
+                start: expect.objectContaining({
+                  line: 1,
+                  column: query.indexOf("schema1.table1.id") + 1,
+                }),
+              }),
+            }),
+          );
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not include ambiguous table-qualified basename references", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-ambiguous-basename-refs-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(
+          schemaFile,
+          ["CREATE TABLE schema1.table1 (id integer);", "CREATE TABLE schema2.table1 (id integer);"].join("\n"),
+          "utf8",
+        );
+        await fsp.writeFile(reportFile, "SELECT table1.id;\n", "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const schema1Result = await testFindReferences(index, schemaFile, 1, 22, 1);
+        const schema2Result = await testFindReferences(index, schemaFile, 2, 22, 1);
+
+        expect(schema1Result.status).toBe("ok");
+        expect(schema2Result.status).toBe("ok");
+        if (schema1Result.status === "ok") {
+          expect(schema1Result.references.some((reference) => reference.file === reportFile)).toBe(false);
+        }
+        if (schema2Result.status === "ok") {
+          expect(schema2Result.references.some((reference) => reference.file === reportFile)).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not include CTE-qualified column references as schema object references", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-cte-qualified-refs-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(
+          schemaFile,
+          ["CREATE TABLE schema1.table1 (id integer);", "CREATE TABLE recent_users (id integer);"].join("\n"),
+          "utf8",
+        );
+        await fsp.writeFile(
+          reportFile,
+          ["WITH recent_users AS (SELECT id FROM schema1.table1)", "SELECT recent_users.id FROM recent_users;"].join(
+            "\n",
+          ),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const result = await testFindReferences(index, schemaFile, 2, 15, 1);
+
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.references.some((reference) => reference.file === reportFile)).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not include dotted SQL object text inside string literals as references", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-string-literal-refs-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(schemaFile, "CREATE TABLE schema1.table1 (id integer);\n", "utf8");
+        await fsp.writeFile(reportFile, "SELECT 'schema1.table1.id';\n", "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const result = await testFindReferences(index, schemaFile, 1, 22, 1);
+
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.references.some((reference) => reference.file === reportFile)).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe("TypeScript", () => {
     it("should find all references to exported function", async () => {
       const index = await createTestIndex("typescript");

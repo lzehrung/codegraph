@@ -51,7 +51,7 @@ Use `--json` when the output will feed later reasoning, scripts, or another agen
 
 ## Tool purpose
 
-Codegraph is a lightweight multi-language code analysis tool for fast repo understanding without requiring an editor, language server, or per-language setup. It uses one shared Tree-sitter model across supported source languages including Zig, plus graph-first text extraction for document and template formats like Markdown, MDX, Astro, Handlebars, reStructuredText, and AsciiDoc.
+Codegraph is a lightweight multi-language code analysis tool for fast repo understanding without requiring an editor, language server, or per-language setup. It uses one shared Tree-sitter model across supported source languages including Zig and SQL, plus graph-first text extraction for document and template formats like Markdown, MDX, Astro, Handlebars, reStructuredText, and AsciiDoc. SQL uses SQL-specific object symbols and SQL-to-SQL graph edges without claiming a current schema or globally linking application-code strings to SQL objects.
 
 Native runtime mode defaults to `auto`: Codegraph resolves parse/query work through `@lzehrung/codegraph-native`, using the native addon when available and the separate opt-in `@lzehrung/codegraph-js-fallback` package only when native is unavailable or explicitly disabled.
 
@@ -123,6 +123,8 @@ Runtime controls:
   `codegraph graph ./src`
 - Graph-first document/template edges:
   HTML, Astro, Handlebars, Markdown, MDX, reStructuredText, and AsciiDoc local links, plus MDX/Astro static imports, Vue/Svelte script imports including external `script src`, and stylesheet imports for CSS, SCSS, and Less.
+- SQL support:
+  `.sql` files are discovered by default, chunked into statements, indexed as SQL object symbols, and linked through SQL-to-SQL object edges from common DDL/DML and CTE read/write facts. SQL-to-SQL edges are precise for exact object-name matches, heuristic for unambiguous qualified-to-basename fallback matches, and skipped for ambiguous basename guesses. SQL `goto` and `refs` resolve object names plus object-level alias/table-qualified uses like `t.id` or `schema.table.id` to table/view definitions, but do not claim column-definition resolution. SQL indexing, graphing, and navigation work in native-only installs without the optional JS fallback package. SQL facts can appear in review context when SQL files or changed SQL literals are relevant, but application-code strings are not globally treated as SQL dependencies.
 - Narrow scan scope and exclude generated/tests while preserving `.gitignore`:
   `codegraph graph --root . ./src --include-glob "**/*.ts" --ignore-glob "**/*.spec.ts" --json`
 - Disable `.gitignore` filtering when ignored/generated files are intentionally in scope:
@@ -131,6 +133,8 @@ Runtime controls:
   `codegraph graph ./src --mermaid`
 - Detailed symbol graph:
   `codegraph graph ./src --symbols-detailed --compact-json`
+- SQL artifact facts in JSON graph output:
+  `codegraph graph --root . --sql-artifacts --json`
 - SQLite export:
   `codegraph graph --sqlite ./codegraph.sqlite`
 - Read-only SQL on exported SQLite:
@@ -209,7 +213,7 @@ For git-provider impact and git-scoped review/index/graph commands, `WORKTREE` c
 - Worker threads for parallel native extraction:
   `codegraph index --workers --threads 8`
 
-Graph, index, and review reports include `backend.native.byLanguage` so native usage and fallback are visible per language. Build reports also include `backend.parser` when syntax-tree backend degradation leaves files without parser context. Reports include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Review JSON also reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, and distinguishes `changedFiles[].status` as `updated`, `deleted`, or `missing`.
+Graph, index, and review reports include `backend.native.byLanguage` so native usage and fallback are visible per language. Build reports also include `backend.parser` when syntax-tree backend degradation leaves files without parser context. Reports include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Review JSON also reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, distinguishes `changedFiles[].status` as `updated`, `deleted`, or `missing`, and includes `sqlContext` when changed SQL files or changed SQL literals make SQL artifact facts relevant.
 
 `codegraph version --json` and `codegraph doctor` report package name, version, and package root. Use them when you need to confirm which installed package the `codegraph` command is running.
 

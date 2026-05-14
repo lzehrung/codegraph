@@ -1,8 +1,320 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
+import os from "node:os";
+import fsp from "node:fs/promises";
 import { createTestIndex, createTestIndexFromFiles, testGoToDefinition } from "./test-utils.js";
 
 describe("Go to Definition", () => {
+  describe("SQL", () => {
+    it("resolves SQL object references to SQL definitions", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
+      const schemaFile = path.join(samplePath, "001_create_users.sql").replace(/\\/g, "/");
+      const reportFile = path.join(samplePath, "report.sql").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [schemaFile, reportFile]);
+
+      const result = await testGoToDefinition(index, reportFile, 1, 25, schemaFile, 1);
+
+      expect(result.status).toBe("ok");
+    });
+
+    it("resolves schema-qualified SQL object references", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
+      const schemaFile = path.join(samplePath, "qualified_schema.sql").replace(/\\/g, "/");
+      const reportFile = path.join(samplePath, "qualified_report.sql").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [schemaFile, reportFile]);
+
+      const result = await testGoToDefinition(index, reportFile, 1, 25, schemaFile, 1);
+
+      expect(result.status).toBe("ok");
+    });
+
+    it("resolves schema-qualified SQL references to unqualified definitions", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-qualified-to-unqualified-goto-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(schemaFile, "CREATE TABLE users (id integer);\n", "utf8");
+        const query = "SELECT id FROM public.users;\n";
+        await fsp.writeFile(reportFile, query, "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const result = await testGoToDefinition(index, reportFile, 1, query.indexOf("public.users") + 1, schemaFile, 1);
+
+        expect(result.status).toBe("ok");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves alias-qualified and table-qualified SQL object references", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-qualified-goto-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(
+          schemaFile,
+          [
+            "CREATE TABLE schema1.table1 (id integer primary key);",
+            "CREATE TABLE schema2.table2 (table1_id integer not null);",
+          ].join("\n"),
+          "utf8",
+        );
+        const queryLines = [
+          "SELECT *",
+          "FROM schema1.table1 t1",
+          "JOIN schema2.table2 t2 ON t2.table1_id = t1.id;",
+          "SELECT schema1.table1.id FROM schema1.table1;",
+          "SELECT table1.id FROM schema1.table1;",
+        ];
+        await fsp.writeFile(reportFile, queryLines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const t2Column = queryLines[2].indexOf("t2.table1_id") + 1;
+        const t1Column = queryLines[2].indexOf("t1.id") + 1;
+        const qualifiedColumn = queryLines[3].indexOf("schema1.table1.id") + 1;
+        const basenameColumn = queryLines[4].indexOf("table1.id") + 1;
+
+        await testGoToDefinition(index, reportFile, 3, t2Column, schemaFile, 2);
+        await testGoToDefinition(index, reportFile, 3, t1Column, schemaFile, 1);
+        await testGoToDefinition(index, reportFile, 4, qualifiedColumn, schemaFile, 1);
+        await testGoToDefinition(index, reportFile, 5, basenameColumn, schemaFile, 1);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not guess SQL definitions for unresolved statement aliases", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-unresolved-alias-goto-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(schemaFile, "CREATE TABLE schema1.table1 (id integer primary key);\n", "utf8");
+        const query = "SELECT missing_alias.id FROM schema1.table1 t1;";
+        await fsp.writeFile(reportFile, query, "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const result = await testGoToDefinition(
+          index,
+          reportFile,
+          1,
+          query.indexOf("missing_alias.id") + 1,
+          undefined,
+          undefined,
+          "not_found",
+        );
+
+        expect(result.status).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not guess SQL definitions for ambiguous table-qualified basenames", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-ambiguous-basename-goto-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(
+          schemaFile,
+          ["CREATE TABLE schema1.table1 (id integer);", "CREATE TABLE schema2.table1 (id integer);"].join("\n"),
+          "utf8",
+        );
+        const query = "SELECT table1.id FROM schema1.table1;";
+        await fsp.writeFile(reportFile, query, "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const result = await testGoToDefinition(
+          index,
+          reportFile,
+          1,
+          query.indexOf("table1.id") + 1,
+          undefined,
+          undefined,
+          "not_found",
+        );
+
+        expect(result.status).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not resolve CTE aliases as schema object definitions", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-cte-alias-goto-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(
+          schemaFile,
+          ["CREATE TABLE schema1.table1 (id integer);", "CREATE TABLE recent_users (id integer);"].join("\n"),
+          "utf8",
+        );
+        const queryLines = [
+          "WITH recent_users AS (SELECT id FROM schema1.table1)",
+          "SELECT ru.id FROM recent_users ru;",
+        ];
+        await fsp.writeFile(reportFile, queryLines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const result = await testGoToDefinition(
+          index,
+          reportFile,
+          2,
+          queryLines[1].indexOf("ru.id") + 1,
+          undefined,
+          undefined,
+          "not_found",
+        );
+
+        expect(result.status).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not resolve CTE-qualified columns as schema object definitions", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-cte-name-goto-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(
+          schemaFile,
+          ["CREATE TABLE schema1.table1 (id integer);", "CREATE TABLE recent_users (id integer);"].join("\n"),
+          "utf8",
+        );
+        const queryLines = [
+          "WITH recent_users AS (SELECT id FROM schema1.table1)",
+          "SELECT recent_users.id FROM recent_users;",
+        ];
+        await fsp.writeFile(reportFile, queryLines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const result = await testGoToDefinition(
+          index,
+          reportFile,
+          2,
+          queryLines[1].indexOf("recent_users.id") + 1,
+          undefined,
+          undefined,
+          "not_found",
+        );
+
+        expect(result.status).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not resolve dotted SQL object text inside string literals", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-string-literal-goto-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(schemaFile, "CREATE TABLE schema1.table1 (id integer);\n", "utf8");
+        const query = "SELECT 'schema1.table1.id' FROM schema1.table1;";
+        await fsp.writeFile(reportFile, query, "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const result = await testGoToDefinition(
+          index,
+          reportFile,
+          1,
+          query.indexOf("schema1.table1.id") + 1,
+          undefined,
+          undefined,
+          "not_found",
+        );
+
+        expect(result.status).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not resolve SQL objects when the cursor is immediately after the token", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-token-boundary-goto-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(schemaFile, "CREATE TABLE users (id integer);\n", "utf8");
+        const query = "SELECT id FROM users;";
+        await fsp.writeFile(reportFile, query, "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const semicolonColumn = query.indexOf(";") + 1;
+        const result = await testGoToDefinition(
+          index,
+          reportFile,
+          1,
+          semicolonColumn,
+          undefined,
+          undefined,
+          "not_found",
+        );
+
+        expect(result.status).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not guess SQL definitions for duplicate exact qualified prefixes", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-ambiguous-exact-prefix-goto-"));
+      try {
+        const schemaAFile = path.join(root, "schema_a.sql").replace(/\\/g, "/");
+        const schemaBFile = path.join(root, "schema_b.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(schemaAFile, "CREATE TABLE schema1.table1 (id integer);\n", "utf8");
+        await fsp.writeFile(schemaBFile, "CREATE TABLE schema1.table1 (id integer);\n", "utf8");
+        const query = "SELECT schema1.table1.id FROM schema1.table1;";
+        await fsp.writeFile(reportFile, query, "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaAFile, schemaBFile, reportFile]);
+
+        const result = await testGoToDefinition(
+          index,
+          reportFile,
+          1,
+          query.indexOf("schema1.table1.id") + 1,
+          undefined,
+          undefined,
+          "not_found",
+        );
+
+        expect(result.status).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not guess SQL definitions for duplicate exact object names", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-ambiguous-exact-goto-"));
+      try {
+        const schemaAFile = path.join(root, "schema_a.sql").replace(/\\/g, "/");
+        const schemaBFile = path.join(root, "schema_b.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        await fsp.writeFile(schemaAFile, "CREATE TABLE schema1.table1 (id integer);\n", "utf8");
+        await fsp.writeFile(schemaBFile, "CREATE TABLE schema1.table1 (id integer);\n", "utf8");
+        const query = "SELECT id FROM schema1.table1;";
+        await fsp.writeFile(reportFile, query, "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaAFile, schemaBFile, reportFile]);
+
+        const result = await testGoToDefinition(
+          index,
+          reportFile,
+          1,
+          query.indexOf("schema1.table1") + 1,
+          undefined,
+          undefined,
+          "not_found",
+        );
+
+        expect(result.status).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe("TypeScript", () => {
     it("should find definition of imported function", async () => {
       const index = await createTestIndex("typescript");

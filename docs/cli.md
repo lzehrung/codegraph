@@ -49,6 +49,9 @@ codegraph graph ./src --mermaid
 # Detailed symbol graph
 codegraph graph ./src --symbols-detailed --compact-json
 
+# Include detailed SQL statement facts in JSON graph output
+codegraph graph --root . --sql-artifacts --json
+
 # SQLite export
 codegraph graph --sqlite ./codegraph.sqlite
 
@@ -58,7 +61,7 @@ codegraph index --report
 codegraph review --report --report-file review.report.json
 ```
 
-Graph, index, and review reports include `backend.native.byLanguage` so native usage and fallback remain visible per language. Build reports also include `backend.parser` when syntax-tree backend degradation leaves files without parser context. Reports also include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Review JSON reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, and `changedFiles[].status` as `updated`, `deleted`, or `missing`.
+Graph, index, and review reports include `backend.native.byLanguage` so native usage and fallback remain visible per language. Build reports also include `backend.parser` when syntax-tree backend degradation leaves files without parser context. Reports also include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Review JSON reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, `changedFiles[].status` as `updated`, `deleted`, or `missing`, and `sqlContext` when changed SQL files or changed SQL literals make SQL artifact facts relevant.
 
 ### Symbols, navigation, grep, and chunking
 
@@ -196,6 +199,8 @@ For git-provider impact, `--head` accepts normal revisions plus worktree sentine
 Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` so downstream tools can branch on payload shape without inferring it from missing fields. Use `--compact` or `--compact-json` for compact impact JSON. Impact JSON can also include `exportSummary`, `reexportChains`, `topImpacts`, `surfaceArea`, and `clusters` when applicable. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
 
 `codegraph review --summary` prints the changed-file count, changed-symbol count, risk summary, review tasks, and suggested tests without emitting the full `projectFiles` and symbol-detail JSON payload. High- and medium-confidence candidate tests are listed directly; low-confidence pattern matches are summarized as breadth hints and remain available in the full JSON bundle. Use plain `review` output when a downstream tool needs the complete structured bundle.
+
+SQL review context is emitted only as `sqlContext.entries[]` in structured review JSON. Entries carry a `reason` such as `changed_sql_file` or `changed_sql_literal`, the matched `objectName`, and the original SQL statement fact. They are review hints, not source dependency edges.
 
 `inspect` and `unresolved` exclude known runtime and package externals from unresolved-import counts so diagnostics stay focused on project resolution gaps. This includes Node builtins such as `node:path` and `fs`, supported-language standard library imports, URL imports, and dependencies declared in nearby manifests such as `package.json`, `requirements.txt`, `requirements.in`, `pyproject.toml`, `setup.cfg`, `Pipfile`, `composer.json`, `Cargo.toml`, `go.mod`, `build.zig.zon`, `Gemfile`, `*.gemspec`, `pom.xml`, `build.gradle`, `build.gradle.kts`, `*.csproj`, `*.fsproj`, `*.vbproj`, `vcpkg.json`, and `Package.swift`.
 
@@ -402,6 +407,8 @@ Plain `graph` output is a file dependency graph only:
   ]
 }
 ```
+
+SQL files are part of normal graph output: `.sql` files are discovered by default, SQL-to-SQL object references appear as file edges, and SQL object symbols work with `goto` and `refs` inside SQL files. SQL-to-SQL edges are precise for exact object-name matches, heuristic for unambiguous qualified-to-basename fallback matches, and skipped for ambiguous basename guesses. SQL `goto` and `refs` resolve schema-qualified names plus object-level alias/table-qualified references such as `t.id` or `schema.table.id` to table/view definitions, not to column declarations. With `--sql-artifacts`, JSON graph output also includes detailed SQL statement facts and object-candidate metadata. SQL artifact nodes use `sql_statement_fact` and `sql_schema_candidate` truth tiers; they do not assert a current schema and do not globally link application-code strings to SQL objects.
 
 Format notes:
 
