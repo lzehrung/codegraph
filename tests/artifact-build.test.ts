@@ -102,6 +102,23 @@ describe("artifact build", () => {
     expect(await fs.stat(path.join(outDir, "codegraph.sqlite"))).toBeTruthy();
   });
 
+  it("preserves unrecognized reserved-name files when force is set and refuses conflicting writes", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-reserved-"));
+    const outDir = path.join(root, "codegraph-out");
+    const operatorGraph = "{\"operator\":true}\n";
+    await fs.mkdir(outDir);
+    await fs.writeFile(path.join(outDir, "graph.json"), operatorGraph);
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n");
+
+    await buildCodegraphArtifact({ root, outDir, force: true, questions: true });
+
+    expect(await fs.readFile(path.join(outDir, "graph.json"), "utf8")).toBe(operatorGraph);
+    await expect(buildCodegraphArtifact({ root, outDir, force: true, graphJson: true })).rejects.toThrow(
+      /Refusing to overwrite unrecognized file/,
+    );
+    expect(await fs.readFile(path.join(outDir, "graph.json"), "utf8")).toBe(operatorGraph);
+  });
+
   it("shell-quotes generated suggested question commands for handle metacharacters", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-quote-"));
     const outDir = path.join(root, "codegraph-out");

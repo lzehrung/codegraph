@@ -74,6 +74,7 @@ const GRAPH_JSON_FILE = "graph.json";
 const REPORT_FILE = "CODEGRAPH_REPORT.md";
 const QUESTIONS_FILE = "questions.json";
 const MANIFEST_FILE = "manifest.json";
+const RESERVED_ARTIFACT_FILES = new Set([SQLITE_FILE, GRAPH_JSON_FILE, REPORT_FILE, QUESTIONS_FILE, MANIFEST_FILE]);
 
 export async function buildCodegraphArtifact(
   request: CodegraphArtifactBuildRequest,
@@ -102,7 +103,7 @@ export async function buildCodegraphArtifactWithSession(
   const snapshot = await filterSnapshotForOutputDirectory(await session.loadProject(), filterOutDir);
   await fs.mkdir(outDir, { recursive: true });
   if (request.force) {
-    await removeKnownArtifacts(outDir);
+    await prepareForcedOutputDirectory(outDir, selected);
   }
   const artifacts: CodegraphArtifactBuildResult["artifacts"] = {};
 
@@ -129,6 +130,7 @@ export async function buildCodegraphArtifactWithSession(
   if (selected.questions) {
     await writeJson(path.join(outDir, QUESTIONS_FILE), {
       schemaVersion: 1,
+      format: "codegraph.questions",
       questions: buildQuestions(snapshot),
     });
     artifacts.questions = QUESTIONS_FILE;
@@ -189,17 +191,138 @@ async function validateOutputDirectory(outDir: string, force: boolean): Promise<
   }
 }
 
-async function removeKnownArtifacts(outDir: string): Promise<void> {
-  await Promise.all(
-    [SQLITE_FILE, GRAPH_JSON_FILE, REPORT_FILE, QUESTIONS_FILE, MANIFEST_FILE].map(async (fileName) => {
-      try {
-        await fs.rm(path.join(outDir, fileName), { force: true });
-      } catch (error) {
-        if (isNodeError(error) && error.code === "ENOENT") return;
-        throw error;
+async function prepareForcedOutputDirectory(
+  outDir: string,
+  selected: { sqlite: boolean; graphJson: boolean; report: boolean; questions: boolean },
+): Promise<void> {
+  const cleanup = new Set<string>();
+  const manifest = await readCodegraphManifest(outDir);
+  if (manifest) {
+    cleanup.add(MANIFEST_FILE);
+    for (const artifactFile of Object.values(manifest.artifacts)) {
+      if (RESERVED_ARTIFACT_FILES.has(artifactFile)) {
+        cleanup.add(artifactFile);
       }
-    }),
-  );
+    }
+  }
+
+  for (const fileName of RESERVED_ARTIFACT_FILES) {
+    if (cleanup.has(fileName)) continue;
+    const filePath = path.join(outDir, fileName);
+    if ((await fileExists(filePath)) && (await isRecognizedCodegraphArtifact(filePath, fileName))) {
+      cleanup.add(fileName);
+    }
+  }
+
+  for (const fileName of selectedArtifactFileNames(selected)) {
+    if (cleanup.has(fileName)) continue;
+    const filePath = path.join(outDir, fileName);
+    if (!(await fileExists(filePath))) continue;
+    if (!(await isRecognizedCodegraphArtifact(filePath, fileName))) {
+      throw new Error(`Refusing to overwrite unrecognized file in artifact output directory: ${filePath}`);
+    }
+    cleanup.add(fileName);
+  }
+
+  await Promise.all([...cleanup].map(async (fileName) => await removeFileIfPresent(path.join(outDir, fileName))));
+}
+
+function selectedArtifactFileNames(selected: {
+  sqlite: boolean;
+  graphJson: boolean;
+  report: boolean;
+  questions: boolean;
+}): string[] {
+  const fileNames = [MANIFEST_FILE];
+  if (selected.sqlite) fileNames.push(SQLITE_FILE);
+  if (selected.graphJson) fileNames.push(GRAPH_JSON_FILE);
+  if (selected.report) fileNames.push(REPORT_FILE);
+  if (selected.questions) fileNames.push(QUESTIONS_FILE);
+  return fileNames;
+}
+
+async function removeFileIfPresent(filePath: string): Promise<void> {
+  try {
+    await fs.rm(filePath, { force: true });
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return;
+    throw error;
+  }
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(filePath);
+    return stat.isFile();
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function readCodegraphManifest(outDir: string): Promise<ArtifactManifest | undefined> {
+  const value = await readJsonIfPresent(path.join(outDir, MANIFEST_FILE));
+  if (!isRecord(value)) return undefined;
+  if (value.schemaVersion !== 1 || value.graphJsonSchema !== "codegraph.graph-json") return undefined;
+  if (!isRecord(value.artifacts)) return undefined;
+  const artifacts: CodegraphArtifactBuildResult["artifacts"] = {};
+  for (const [key, artifactFile] of Object.entries(value.artifacts)) {
+    if (typeof artifactFile !== "string") continue;
+    if (key === "sqlite") artifacts.sqlite = artifactFile;
+    if (key === "graphJson") artifacts.graphJson = artifactFile;
+    if (key === "report") artifacts.report = artifactFile;
+    if (key === "questions") artifacts.questions = artifactFile;
+  }
+  return {
+    schemaVersion: 1,
+    root: typeof value.root === "string" ? value.root : "",
+    outDir: typeof value.outDir === "string" ? value.outDir : outDir,
+    manifestPath: typeof value.manifestPath === "string" ? value.manifestPath : path.join(outDir, MANIFEST_FILE),
+    artifacts,
+    sql: {
+      supported: true,
+      limitation: "",
+    },
+    graphJsonSchema: "codegraph.graph-json",
+  };
+}
+
+async function isRecognizedCodegraphArtifact(filePath: string, fileName: string): Promise<boolean> {
+  if (fileName === MANIFEST_FILE) {
+    return (await readCodegraphManifest(path.dirname(filePath))) !== undefined;
+  }
+  if (fileName === GRAPH_JSON_FILE) {
+    const value = await readJsonIfPresent(filePath);
+    return isRecord(value) && value.format === "codegraph.graph-json";
+  }
+  if (fileName === QUESTIONS_FILE) {
+    const value = await readJsonIfPresent(filePath);
+    return isRecord(value) && value.format === "codegraph.questions";
+  }
+  if (fileName === REPORT_FILE) {
+    try {
+      const text = await fs.readFile(filePath, "utf8");
+      return text.startsWith("# Codegraph Report\n");
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") return false;
+      throw error;
+    }
+  }
+  return false;
+}
+
+async function readJsonIfPresent(filePath: string): Promise<unknown> {
+  try {
+    return JSON.parse(await fs.readFile(filePath, "utf8"));
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return undefined;
+    if (error instanceof SyntaxError) return undefined;
+    throw error;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function readDirectoryIfPresent(outDir: string): Promise<string[]> {
