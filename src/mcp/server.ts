@@ -1,13 +1,24 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server as HttpServer,
+  type ServerResponse,
+} from "node:http";
+import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   CallToolRequestSchema,
+  isInitializeRequest,
   ListToolsRequestSchema,
   type CallToolResult,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { z } from "zod";
 import { buildCodegraphArtifactWithSession } from "../agent/artifact.js";
 import type { CodegraphArtifactBuildResult } from "../agent/artifact.js";
@@ -28,6 +39,20 @@ export type CodegraphMcpServerOptions = {
   artifactPath?: string;
   readOnly?: boolean;
   session?: AgentSession;
+  host?: string;
+  port?: number;
+  onHttpListen?: ((info: CodegraphMcpHttpServerInfo) => void) | undefined;
+};
+
+export type CodegraphMcpHttpServerInfo = {
+  host: string;
+  port: number;
+  url: string;
+};
+
+export type CodegraphMcpHttpServer = CodegraphMcpHttpServerInfo & {
+  server: HttpServer;
+  close: () => Promise<void>;
 };
 
 export type CodegraphMcpHandlers = {
@@ -89,6 +114,8 @@ const DEFAULT_SQLITE_BYTE_LIMIT = 200_000;
 const MAX_SQLITE_CELL_BYTES = 8_000;
 const DEFAULT_MCP_COLLECTION_LIMIT = 100;
 const MAX_MCP_COLLECTION_LIMIT = 500;
+const MCP_HTTP_PATH = "/mcp";
+const MAX_MCP_HTTP_BODY_BYTES = 1_000_000;
 
 export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): CodegraphMcpHandlers {
   const root = path.resolve(options.root);
@@ -280,12 +307,13 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
   };
 }
 
-export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Promise<void> {
+function createCodegraphMcpProtocolServer(handlers: CodegraphMcpHandlers): McpServer {
   const server = new McpServer({
     name: "codegraph",
     version: "1.0.0",
+  }, {
+    capabilities: { tools: {} },
   });
-  const handlers = createCodegraphMcpHandlers(options);
 
   server.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: MCP_TOOLS }));
   server.server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
@@ -293,7 +321,337 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
     return toToolResult(result);
   });
 
+  return server;
+}
+
+export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Promise<void> {
+  const port = options.port;
+  if (port !== undefined) {
+    const started = await startCodegraphMcpHttpServer({ ...options, port });
+    options.onHttpListen?.({
+      host: started.host,
+      port: started.port,
+      url: started.url,
+    });
+    await waitForHttpServerClose(started.server);
+    return;
+  }
+
+  const handlers = createCodegraphMcpHandlers(options);
+  const server = createCodegraphMcpProtocolServer(handlers);
   await server.connect(new StdioServerTransport());
+}
+
+export async function startCodegraphMcpHttpServer(
+  options: CodegraphMcpServerOptions & { port: number },
+): Promise<CodegraphMcpHttpServer> {
+  const host = options.host ?? "127.0.0.1";
+  const handlers = createCodegraphMcpHandlers(options);
+  const sessions = new Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>();
+  let allowedHostHeaders = new Set<string>();
+
+  const server = createServer((request, response) => {
+    void handleMcpHttpRequest(request, response, handlers, sessions, () => allowedHostHeaders);
+  });
+
+  server.on("close", () => {
+    for (const [sessionId, session] of sessions) {
+      sessions.delete(sessionId);
+      void closeMcpSession(session);
+    }
+  });
+
+  await listenOnHttpServer(server, options.port, host);
+  const address = server.address();
+  const actualPort = getHttpServerPort(address);
+  const urlHost = formatHostForUrl(host);
+  const url = `http://${urlHost}:${actualPort}${MCP_HTTP_PATH}`;
+  allowedHostHeaders = buildAllowedHostHeaders(host, actualPort);
+
+  return {
+    server,
+    host,
+    port: actualPort,
+    url,
+    close: async () => {
+      for (const [sessionId, session] of sessions) {
+        sessions.delete(sessionId);
+        await closeMcpSession(session);
+      }
+      await closeHttpServer(server);
+    },
+  };
+}
+
+async function handleMcpHttpRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  handlers: CodegraphMcpHandlers,
+  sessions: Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>,
+  getAllowedHostHeaders: () => Set<string>,
+): Promise<void> {
+  const requestPath = getRequestPath(request);
+  if (requestPath !== MCP_HTTP_PATH) {
+    writeJsonResponse(response, 404, { error: "Not found" });
+    return;
+  }
+
+  if (!isAllowedHostHeader(request, getAllowedHostHeaders())) {
+    writeJsonRpcError(response, 403, "Forbidden host header");
+    return;
+  }
+
+  try {
+    if (request.method === "POST") {
+      const parsedBody = await readJsonRequestBody(request, MAX_MCP_HTTP_BODY_BYTES);
+      if (parsedBody.status === "too_large") {
+        writeJsonRpcError(response, 413, "MCP request body is too large");
+        return;
+      }
+      if (parsedBody.status === "invalid_json") {
+        writeJsonRpcError(response, 400, "Invalid JSON request body");
+        return;
+      }
+      await handleMcpHttpPost(request, response, parsedBody.body, handlers, sessions);
+      return;
+    }
+
+    if (request.method === "GET" || request.method === "DELETE") {
+      await handleExistingMcpSessionRequest(request, response, sessions);
+      return;
+    }
+
+    writeJsonRpcError(response, 405, "Method not allowed");
+  } catch {
+    if (!response.headersSent) {
+      writeJsonRpcError(response, 500, "Internal server error", -32603);
+    }
+  }
+}
+
+async function handleMcpHttpPost(
+  request: IncomingMessage,
+  response: ServerResponse,
+  body: unknown,
+  handlers: CodegraphMcpHandlers,
+  sessions: Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>,
+): Promise<void> {
+  const sessionId = getHeaderValue(request.headers["mcp-session-id"]);
+  if (sessionId !== undefined) {
+    const session = sessions.get(sessionId);
+    if (!session) {
+      writeJsonRpcError(response, 400, "Bad Request: No valid session ID provided");
+      return;
+    }
+    await session.transport.handleRequest(request, response, body);
+    return;
+  }
+
+  if (!isInitializeRequest(body)) {
+    writeJsonRpcError(response, 400, "Bad Request: No valid session ID provided");
+    return;
+  }
+
+  const protocolServer = createCodegraphMcpProtocolServer(handlers);
+  let initializedSessionId: string | undefined;
+  let transport: StreamableHTTPServerTransport | undefined;
+  transport = new StreamableHTTPServerTransport({
+    enableJsonResponse: true,
+    sessionIdGenerator: () => randomUUID(),
+    onsessioninitialized: (newSessionId) => {
+      if (transport !== undefined) {
+        initializedSessionId = newSessionId;
+        sessions.set(newSessionId, { server: protocolServer, transport });
+      }
+    },
+    onsessionclosed: (closedSessionId) => {
+      const session = sessions.get(closedSessionId);
+      if (session) {
+        sessions.delete(closedSessionId);
+        void closeMcpSession(session);
+      }
+    },
+  });
+
+  // The SDK class implements Transport, but its declarations widen optional callbacks under exactOptionalPropertyTypes.
+  try {
+    await protocolServer.connect(transport as Transport);
+    await transport.handleRequest(request, response, body);
+  } catch (error) {
+    if (initializedSessionId !== undefined) {
+      sessions.delete(initializedSessionId);
+    }
+    await closeMcpSession({ server: protocolServer, transport });
+    throw error;
+  }
+}
+
+async function handleExistingMcpSessionRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  sessions: Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>,
+): Promise<void> {
+  const sessionId = getHeaderValue(request.headers["mcp-session-id"]);
+  if (sessionId === undefined) {
+    writeJsonRpcError(response, 400, "Invalid or missing session ID");
+    return;
+  }
+  const session = sessions.get(sessionId);
+  if (!session) {
+    writeJsonRpcError(response, 400, "Invalid or missing session ID");
+    return;
+  }
+  await session.transport.handleRequest(request, response);
+}
+
+async function closeMcpSession(session: {
+  server: McpServer;
+  transport: StreamableHTTPServerTransport;
+}): Promise<void> {
+  await Promise.allSettled([session.transport.close(), session.server.close()]);
+}
+
+function getRequestPath(request: IncomingMessage): string {
+  const rawUrl = request.url ?? "/";
+  return new URL(rawUrl, "http://127.0.0.1").pathname;
+}
+
+type ParsedJsonBody =
+  | { status: "ok"; body: unknown }
+  | { status: "too_large" }
+  | { status: "invalid_json" };
+
+async function readJsonRequestBody(request: IncomingMessage, maxBytes: number): Promise<ParsedJsonBody> {
+  const contentLength = getContentLength(request);
+  if (contentLength !== undefined && contentLength > maxBytes) {
+    request.resume();
+    return { status: "too_large" };
+  }
+
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of request) {
+    const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    bytes += buffer.byteLength;
+    if (bytes > maxBytes) {
+      return { status: "too_large" };
+    }
+    chunks.push(buffer);
+  }
+
+  const rawBody = Buffer.concat(chunks).toString("utf8");
+  try {
+    const body: unknown = rawBody.length > 0 ? JSON.parse(rawBody) : null;
+    return { status: "ok", body };
+  } catch {
+    return { status: "invalid_json" };
+  }
+}
+
+function getHeaderValue(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return value;
+}
+
+function getContentLength(request: IncomingMessage): number | undefined {
+  const contentLength = getHeaderValue(request.headers["content-length"]);
+  if (contentLength === undefined) return undefined;
+  const parsedLength = Number(contentLength);
+  if (!Number.isFinite(parsedLength) || parsedLength < 0) return undefined;
+  return parsedLength;
+}
+
+function isAllowedHostHeader(request: IncomingMessage, allowedHostHeaders: Set<string>): boolean {
+  const host = getHeaderValue(request.headers.host);
+  if (host === undefined) return false;
+  return allowedHostHeaders.has(host.toLowerCase());
+}
+
+function buildAllowedHostHeaders(host: string, port: number): Set<string> {
+  const allowed = new Set<string>();
+  allowed.add(formatHostHeader(host, port).toLowerCase());
+  if (host === "127.0.0.1") {
+    allowed.add(`localhost:${port}`);
+  }
+  if (host === "::1" || host === "[::1]") {
+    allowed.add(`[::1]:${port}`);
+    allowed.add(`localhost:${port}`);
+  }
+  return allowed;
+}
+
+function formatHostForUrl(host: string): string {
+  if (host.includes(":") && !host.startsWith("[")) {
+    return `[${host}]`;
+  }
+  return host;
+}
+
+function formatHostHeader(host: string, port: number): string {
+  return `${formatHostForUrl(host)}:${port}`;
+}
+
+function writeJsonRpcError(
+  response: ServerResponse,
+  statusCode: number,
+  message: string,
+  code = -32000,
+): void {
+  writeJsonResponse(response, statusCode, {
+    jsonrpc: "2.0",
+    error: { code, message },
+    id: null,
+  });
+}
+
+function writeJsonResponse(response: ServerResponse, statusCode: number, body: unknown): void {
+  response.writeHead(statusCode, { "content-type": "application/json" });
+  response.end(JSON.stringify(body));
+}
+
+async function listenOnHttpServer(server: HttpServer, port: number, host: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, host);
+  });
+}
+
+function getHttpServerPort(address: string | AddressInfo | null): number {
+  if (address === null || typeof address === "string") {
+    throw new Error("HTTP server did not expose a TCP port.");
+  }
+  return address.port;
+}
+
+async function closeHttpServer(server: HttpServer): Promise<void> {
+  if (!server.listening) return;
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+async function waitForHttpServerClose(server: HttpServer): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("close", resolve);
+    server.once("error", reject);
+  });
 }
 
 async function callMcpTool(handlers: CodegraphMcpHandlers, name: string, input: unknown): Promise<unknown> {

@@ -53,6 +53,7 @@ describe("source module structure", () => {
       "src/cli/doctor.ts",
       "src/cli/graphDelta.ts",
       "src/cli/help.ts",
+      "src/cli/mcp.ts",
       "src/cli/packageInfo.ts",
       "src/cli/skill.ts",
       "src/cli/sql.ts",

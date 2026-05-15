@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
-import { createCodegraphMcpHandlers, listCodegraphMcpTools } from "../src/mcp/server.js";
+import { createCodegraphMcpHandlers, listCodegraphMcpTools, startCodegraphMcpHttpServer } from "../src/mcp/server.js";
 
 function countingSession(session: AgentSession): { session: AgentSession; loads: () => number } {
   let cached: Promise<AgentProjectSnapshot> | undefined;
@@ -26,7 +27,187 @@ function countingSession(session: AgentSession): { session: AgentSession; loads:
   };
 }
 
+type JsonRpcObject = {
+  jsonrpc?: unknown;
+  id?: unknown;
+  result?: unknown;
+  error?: unknown;
+};
+
+function readObject(value: unknown): Record<string, unknown> {
+  expect(value).toBeTypeOf("object");
+  expect(value).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+async function postMcpJson(
+  url: string,
+  body: Record<string, unknown>,
+  sessionId?: string,
+): Promise<{ response: Response; payload: JsonRpcObject }> {
+  const headers: Record<string, string> = {
+    accept: "application/json, text/event-stream",
+    "content-type": "application/json",
+  };
+  if (sessionId !== undefined) {
+    headers["mcp-session-id"] = sessionId;
+  }
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+  const payload = (await response.json()) as unknown;
+  return { response, payload: readObject(payload) };
+}
+
+async function postRawHttpJson(
+  url: string,
+  body: Record<string, unknown>,
+  headers: Record<string, string>,
+): Promise<{ status: number; payload: unknown }> {
+  const endpoint = new URL(url);
+  const rawBody = JSON.stringify(body);
+  return await new Promise((resolve, reject) => {
+    const request = httpRequest(
+      {
+        hostname: endpoint.hostname,
+        port: endpoint.port,
+        path: endpoint.pathname,
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "content-length": String(Buffer.byteLength(rawBody)),
+          ...headers,
+        },
+      },
+      (response) => {
+        let responseBody = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => {
+          responseBody += chunk;
+        });
+        response.on("end", () => {
+          try {
+            const payload: unknown = JSON.parse(responseBody);
+            resolve({ status: response.statusCode ?? 0, payload });
+          } catch (error) {
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        });
+      },
+    );
+    request.on("error", (error) => reject(error));
+    request.end(rawBody);
+  });
+}
+
 describe("codegraph MCP handlers", () => {
+  it("serves real MCP tool listing over a specified local HTTP port", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "127.0.0.1",
+      port: 0,
+    });
+
+    try {
+      expect(httpServer.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
+
+      const initialize = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-test", version: "1.0.0" },
+        },
+      });
+      expect(initialize.response.status).toBe(200);
+      const sessionId = initialize.response.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+      const initializeResult = readObject(initialize.payload.result);
+      const serverInfo = readObject(initializeResult.serverInfo);
+      expect(serverInfo.name).toBe("codegraph");
+
+      const toolsList = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/list",
+          params: {},
+        },
+        sessionId ?? undefined,
+      );
+      expect(toolsList.response.status).toBe(200);
+      const toolsResult = readObject(toolsList.payload.result);
+      const tools = toolsResult.tools;
+      expect(Array.isArray(tools)).toBeTruthy();
+      const toolNames = (tools as Array<{ name?: unknown }>).map((tool) => tool.name);
+      expect(toolNames).toContain("search");
+      expect(toolNames).toContain("query_sqlite");
+    } finally {
+      await httpServer.close();
+    }
+  });
+
+  it("rejects HTTP MCP requests with an unexpected host header", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-host-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "127.0.0.1",
+      port: 0,
+    });
+
+    try {
+      const response = await postRawHttpJson(
+        httpServer.url,
+        { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
+        { host: "evil.example" },
+      );
+      const payload = readObject(response.payload);
+      const error = readObject(payload.error);
+
+      expect(response.status).toBe(403);
+      expect(error.message).toBe("Forbidden host header");
+    } finally {
+      await httpServer.close();
+    }
+  });
+
+  it("rejects oversized HTTP MCP request bodies before parsing", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-large-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "127.0.0.1",
+      port: 0,
+    });
+
+    try {
+      const response = await fetch(httpServer.url, {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", padding: "x".repeat(1_000_000) }),
+      });
+      const payload = readObject((await response.json()) as unknown);
+      const error = readObject(payload.error);
+
+      expect(response.status).toBe(413);
+      expect(error.message).toBe("MCP request body is too large");
+    } finally {
+      await httpServer.close();
+    }
+  });
+
   it("reuses one session across search, get_symbol, refs, and query_sqlite handlers", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");

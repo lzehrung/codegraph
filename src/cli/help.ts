@@ -76,7 +76,7 @@ Examples:
 
 export const MCP_SERVE_HELP_TEXT = `codegraph mcp serve - MCP server for agent graph navigation
 
-Usage: codegraph mcp serve [--root <path>] [--artifact <path>] [--stdio] [--allow-build]
+Usage: codegraph mcp serve [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--allow-build]
 
 Tools:
   search          Deterministic ranked search with stable handles
@@ -94,5 +94,6 @@ Tools:
 
 Defaults:
   Transport defaults to stdio.
+  HTTP transport binds to 127.0.0.1 unless --host is passed and serves /mcp.
   Tools are read-only unless --allow-build is passed.
 `;
