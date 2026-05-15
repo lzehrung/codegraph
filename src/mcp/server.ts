@@ -1050,6 +1050,13 @@ function assertMcpSqliteQueryResourceBounded(sql: string): void {
       throw new Error(`MCP query_sqlite rejected unsupported SQLite function ${functionName}.`);
     }
   }
+  const quotedFunctionPattern = /(?:"((?:[^"]|"")*)"|`((?:[^`]|``)*)`|\[([^\]]*)\])\s*\(/g;
+  for (const match of searchableSql.matchAll(quotedFunctionPattern)) {
+    const functionName = (match[1] ?? match[2] ?? match[3] ?? "").replace(/""|``/g, (escaped) => escaped[0] ?? "");
+    if (DISALLOWED_MCP_SQLITE_FUNCTIONS.has(functionName)) {
+      throw new Error(`MCP query_sqlite rejected unsupported SQLite function ${functionName}.`);
+    }
+  }
 }
 
 function stripSqlCommentsAndLiterals(sql: string): string {
@@ -1075,13 +1082,12 @@ function stripSqlCommentsAndLiterals(sql: string): string {
       index = Math.min(sql.length, index + 2);
       continue;
     }
-    if (char === "'" || char === "\"" || char === "`") {
-      const quote = char;
+    if (char === "'") {
       output += " ";
       index += 1;
       while (index < sql.length) {
-        if (sql[index] === quote) {
-          if (sql[index + 1] === quote) {
+        if (sql[index] === "'") {
+          if (sql[index + 1] === "'") {
             output += "  ";
             index += 2;
             continue;
@@ -1092,16 +1098,6 @@ function stripSqlCommentsAndLiterals(sql: string): string {
         output += " ";
         index += 1;
       }
-      continue;
-    }
-    if (char === "[") {
-      output += " ";
-      index += 1;
-      while (index < sql.length && sql[index] !== "]") {
-        output += " ";
-        index += 1;
-      }
-      index = Math.min(sql.length, index + 1);
       continue;
     }
     output += char;

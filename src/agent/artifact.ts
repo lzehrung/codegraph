@@ -7,6 +7,7 @@ import { isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../u
 import { formatAgentSqlHandle, formatAgentSymbolHandle } from "./handles.js";
 import { createAgentSession } from "./session.js";
 import type { AgentProjectSnapshot, AgentSession } from "./session.js";
+import { quoteShellArg } from "./shell.js";
 
 export type CodegraphArtifactBuildRequest = {
   root: string;
@@ -442,7 +443,7 @@ function buildQuestions(snapshot: AgentProjectSnapshot): ArtifactQuestion[] {
     questions.push({
       id: `rdeps:${file}`,
       question: `Which files depend on ${file}?`,
-      command: `codegraph rdeps ${quoteArg(file)} --json`,
+      command: `codegraph rdeps ${quoteShellArg(file)} --json`,
     });
   }
 
@@ -451,7 +452,7 @@ function buildQuestions(snapshot: AgentProjectSnapshot): ArtifactQuestion[] {
     questions.push({
       id: `refs:${symbol.file}:${symbol.name}`,
       question: `Where is ${symbol.name} referenced?`,
-      command: `codegraph explain ${quoteArg(symbol.handle)} --json`,
+      command: `codegraph explain ${quoteShellArg(symbol.handle)} --json`,
       handle: symbol.handle,
     });
   }
@@ -461,7 +462,7 @@ function buildQuestions(snapshot: AgentProjectSnapshot): ArtifactQuestion[] {
     questions.push({
       id: `sql:${object.name}`,
       question: `What SQL objects are related to ${object.name}?`,
-      command: `codegraph explain ${quoteArg(object.handle)} --json`,
+      command: `codegraph explain ${quoteShellArg(object.handle)} --json`,
       handle: object.handle,
     });
   }
@@ -516,11 +517,6 @@ function collectSqlObjects(snapshot: AgentProjectSnapshot): Array<{ name: string
 
 async function writeJson(filePath: string, value: unknown): Promise<void> {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-function quoteArg(value: string): string {
-  if (/^[A-Za-z0-9_./:@-]+$/.test(value)) return value;
-  return JSON.stringify(value);
 }
 
 function relativeFile(root: string, file: string): string {

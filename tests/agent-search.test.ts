@@ -112,6 +112,17 @@ describe("agent search", () => {
     expect(response.results.some((result) => result.file.endsWith("src/auth.ts"))).toBeTruthy();
   });
 
+  it("shell-quotes generated follow-up commands for path metacharacters", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(path.join(root, "src", "cost$center.ts"), "export const costCenter = 1;\n");
+
+    const response = await searchCodegraph({ root, query: "cost center", mode: "path", limit: 5 });
+    const result = response.results.find((entry) => entry.file === "src/cost$center.ts");
+
+    expect(result?.followUps).toContain("codegraph chunk 'src/cost$center.ts'");
+    expect(result?.followUps).not.toContain('codegraph chunk "src/cost$center.ts"');
+  });
+
   it("includes SQL object results from .sql language support", async () => {
     const root = await mkRepo();
     const response = await searchCodegraph({ root, query: "public users", mode: "sql", limit: 5 });

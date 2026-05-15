@@ -388,6 +388,27 @@ describe("codegraph MCP handlers", () => {
     );
   });
 
+  it("rejects quoted synthetic large SQLite payload functions before execution", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-quoted-large-function-"));
+    await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
+
+    const handlers = createCodegraphMcpHandlers({ root, readOnly: false });
+    await handlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true });
+
+    await expect(handlers.query_sqlite({ query: 'SELECT "randomblob"(300000) AS big;' })).rejects.toThrow(
+      /unsupported SQLite function randomblob/i,
+    );
+    await expect(handlers.query_sqlite({ query: "SELECT `randomblob`(300000) AS big;" })).rejects.toThrow(
+      /unsupported SQLite function randomblob/i,
+    );
+    await expect(handlers.query_sqlite({ query: "SELECT [randomblob](300000) AS big;" })).rejects.toThrow(
+      /unsupported SQLite function randomblob/i,
+    );
+    await expect(handlers.query_sqlite({ query: "SELECT 'randomblob(300000)' AS text;" })).resolves.toEqual(
+      expect.objectContaining({ rows: [["randomblob(300000)"]] }),
+    );
+  });
+
   it("disables artifact builds by default and in explicit read-only mode", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-readonly-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");

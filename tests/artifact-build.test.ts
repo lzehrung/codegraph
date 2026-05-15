@@ -102,6 +102,25 @@ describe("artifact build", () => {
     expect(await fs.stat(path.join(outDir, "codegraph.sqlite"))).toBeTruthy();
   });
 
+  it("shell-quotes generated suggested question commands for handle metacharacters", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-quote-"));
+    const outDir = path.join(root, "codegraph-out");
+    await fs.writeFile(path.join(root, "cost$center.ts"), "export const costCenter = 1;\n");
+    await fs.writeFile(path.join(root, "api.ts"), "import { costCenter } from './cost$center';\nexport const value = costCenter;\n");
+
+    await buildCodegraphArtifact({ root, outDir, questions: true });
+
+    const questions = JSON.parse(await fs.readFile(path.join(outDir, "questions.json"), "utf8")) as {
+      questions: Array<{ command: string; handle?: string }>;
+    };
+    const question = questions.questions.find((entry) => entry.command.includes("cost$center.ts"));
+
+    expect(question).toBeDefined();
+    expect(question?.command).toContain("'cost$center.ts'");
+    expect(question?.command).toContain("cost$center.ts");
+    expect(question?.command).not.toContain('"cost$center.ts"');
+  });
+
   it("does not index stale files from an in-repo output directory", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-ignore-out-"));
     const outDir = path.join(root, "codegraph-out");

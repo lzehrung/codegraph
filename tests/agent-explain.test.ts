@@ -44,6 +44,16 @@ describe("agent explain", () => {
     expect(explanation.followUps.some((cmd) => cmd.includes("codegraph goto auth.ts"))).toBeTruthy();
   });
 
+  it("shell-quotes generated follow-up commands for path metacharacters", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(path.join(root, "cost$center.ts"), "export const costCenter = 1;\n");
+
+    const explanation = await explainCodegraphTarget({ root, target: "cost$center.ts" });
+
+    expect(explanation.followUps).toContain("codegraph chunk 'cost$center.ts'");
+    expect(explanation.followUps).not.toContain('codegraph chunk "cost$center.ts"');
+  });
+
   it("resolves portable symbol handles returned by search", async () => {
     const root = await mkRepo();
     const search = await searchCodegraph({ root, query: "validate user", mode: "symbol", limit: 5 });

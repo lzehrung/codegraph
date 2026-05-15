@@ -21,6 +21,7 @@ import {
   parseAgentSymbolHandle,
 } from "./handles.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
+import { quoteShellArg } from "./shell.js";
 
 export type AgentSearchMode = "hybrid" | "symbol" | "path" | "text" | "graph" | "sql";
 
@@ -702,23 +703,18 @@ function addFileNeighbors(snapshot: AgentProjectSnapshot, result: MutableSearchR
 }
 
 function addSymbolFollowUps(result: MutableSearchResult, relFile: string, def: SymbolDef | undefined): void {
-  result.followUps.add(`codegraph explain ${quoteArg(result.handle)}`);
+  result.followUps.add(`codegraph explain ${quoteShellArg(result.handle)}`);
   if (def) {
-    result.followUps.add(`codegraph goto ${quoteArg(relFile)} ${def.range.start.line} ${def.range.start.column}`);
-    result.followUps.add(`codegraph refs --file ${quoteArg(relFile)} --line ${def.range.start.line} --col ${def.range.start.column} --pretty`);
+    result.followUps.add(`codegraph goto ${quoteShellArg(relFile)} ${def.range.start.line} ${def.range.start.column}`);
+    result.followUps.add(`codegraph refs --file ${quoteShellArg(relFile)} --line ${def.range.start.line} --col ${def.range.start.column} --pretty`);
   }
   addFileFollowUps(result, relFile);
 }
 
 function addFileFollowUps(result: MutableSearchResult, relFile: string): void {
-  result.followUps.add(`codegraph deps ${quoteArg(relFile)} --json`);
-  result.followUps.add(`codegraph rdeps ${quoteArg(relFile)} --json`);
-  result.followUps.add(`codegraph chunk ${quoteArg(relFile)}`);
-}
-
-function quoteArg(value: string): string {
-  if (/^[A-Za-z0-9_./:@-]+$/.test(value)) return value;
-  return JSON.stringify(value);
+  result.followUps.add(`codegraph deps ${quoteShellArg(relFile)} --json`);
+  result.followUps.add(`codegraph rdeps ${quoteShellArg(relFile)} --json`);
+  result.followUps.add(`codegraph chunk ${quoteShellArg(relFile)}`);
 }
 
 function compareResults(left: MutableSearchResult, right: MutableSearchResult): number {

@@ -22,6 +22,7 @@ import {
   parseAgentSymbolHandle,
 } from "./handles.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
+import { quoteShellArg } from "./shell.js";
 
 export type AgentExplainTarget = {
   root: string;
@@ -458,7 +459,7 @@ function emptyExplanation(snapshot: AgentProjectSnapshot, target: AgentExplanati
     relatedSqlObjects: [],
     snippets: [],
     hotspots: [],
-    followUps: [`codegraph search ${quoteArg(target.label)} --json`],
+    followUps: [`codegraph search ${quoteShellArg(target.label)} --json`],
     limits: {
       symbols: DEFAULT_MAX_SYMBOLS,
       dependencies: DEFAULT_MAX_DEPENDENCIES,
@@ -848,31 +849,31 @@ function collectFollowUps(
   relFile: string,
 ): string[] {
   const followUps = new Set<string>([
-    `codegraph deps ${quoteArg(relFile)} --json`,
-    `codegraph rdeps ${quoteArg(relFile)} --json`,
-    `codegraph chunk ${quoteArg(relFile)}`,
+    `codegraph deps ${quoteShellArg(relFile)} --json`,
+    `codegraph rdeps ${quoteShellArg(relFile)} --json`,
+    `codegraph chunk ${quoteShellArg(relFile)}`,
   ]);
 
   if (resolved.kind === "file") {
     for (const symbol of symbols.slice(0, 5)) {
       followUps.add(
-        `codegraph refs --file ${quoteArg(relFile)} --line ${symbol.range.start.line} --col ${symbol.range.start.column} --pretty`,
+        `codegraph refs --file ${quoteShellArg(relFile)} --line ${symbol.range.start.line} --col ${symbol.range.start.column} --pretty`,
       );
     }
   } else {
     followUps.add(
-      `codegraph goto ${quoteArg(relFile)} ${resolved.def.range.start.line} ${resolved.def.range.start.column}`,
+      `codegraph goto ${quoteShellArg(relFile)} ${resolved.def.range.start.line} ${resolved.def.range.start.column}`,
     );
     followUps.add(
-      `codegraph refs --file ${quoteArg(relFile)} --line ${resolved.def.range.start.line} --col ${resolved.def.range.start.column} --pretty`,
+      `codegraph refs --file ${quoteShellArg(relFile)} --line ${resolved.def.range.start.line} --col ${resolved.def.range.start.column} --pretty`,
     );
     followUps.add(
-      `codegraph search ${quoteArg(resolved.node?.name ?? resolved.def.localName)} --from ${quoteArg(relFile)} --json`,
+      `codegraph search ${quoteShellArg(resolved.node?.name ?? resolved.def.localName)} --from ${quoteShellArg(relFile)} --json`,
     );
   }
 
   if (isSqlFile(path.resolve(snapshot.root, relFile))) {
-    followUps.add(`codegraph search ${quoteArg(relFile)} --mode sql --json`);
+    followUps.add(`codegraph search ${quoteShellArg(relFile)} --mode sql --json`);
   }
 
   return [...followUps].sort();
@@ -948,11 +949,6 @@ function isSqlObjectNode(node: SymbolNode): boolean {
 
 function isSqlFile(file: string): boolean {
   return file.toLowerCase().endsWith(".sql");
-}
-
-function quoteArg(value: string): string {
-  if (/^[A-Za-z0-9_./:@-]+$/.test(value)) return value;
-  return JSON.stringify(value);
 }
 
 function relativeFile(root: string, file: string): string {
