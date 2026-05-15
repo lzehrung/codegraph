@@ -152,6 +152,13 @@ describe("CLI command modules", () => {
     expect(buildOptions).toContain("--progress");
   });
 
+  test("lists MCP as a top-level command in CLI help", () => {
+    const commands = CLI_HELP_TEXT.slice(CLI_HELP_TEXT.indexOf("Commands:"), CLI_HELP_TEXT.indexOf("Graph Options:"));
+
+    expect(commands).toContain("  mcp");
+    expect(commands).toContain("Serve MCP tools for agent graph navigation");
+  });
+
   test("documents HTTP host and port options in MCP serve help", () => {
     expect(MCP_SERVE_HELP_TEXT).toContain("--port <number>");
     expect(MCP_SERVE_HELP_TEXT).toContain("--host <host>");

@@ -8,6 +8,7 @@ Commands:
   search        Ranked agent search across files, symbols, chunks, SQL, and graph context
   explain       Explain a file, symbol, SQL object, or search handle
   artifact      Build an agent-ready SQLite/graph/report/question bundle
+  mcp           Serve MCP tools for agent graph navigation
   impact        Analyze PR impact
   review        Generate code review report
   goto          Go to definition
