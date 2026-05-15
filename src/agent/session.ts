@@ -29,7 +29,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   const loadProject = async (): Promise<AgentProjectSnapshot> => {
     if (cached) return cached;
 
-    cached = (async () => {
+    const loadPromise = (async () => {
       const files = await listProjectFiles(options.root, undefined, options.discovery);
       const index = await buildProjectIndexFromFiles(options.root, files, {
         keepParsed: true,
@@ -46,8 +46,12 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         symbolGraph,
       };
     })();
+    cached = loadPromise;
+    loadPromise.catch(() => {
+      if (cached === loadPromise) cached = undefined;
+    });
 
-    return cached;
+    return loadPromise;
   };
 
   return {

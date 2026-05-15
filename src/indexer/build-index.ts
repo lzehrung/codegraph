@@ -1306,7 +1306,7 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
       });
     } catch (error) {
       if (!isMissingGitRevisionError(error)) throw error;
-      manifestDiffFiles = Object.keys(trackedEntries).filter((file) => fs.existsSync(file));
+      manifestDiffFiles = Object.keys(trackedEntries);
       logWithLevel(
         opts?.logLevel,
         "warn",
@@ -1320,13 +1320,13 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
     ...manifestDiffFiles.filter((file) => fs.existsSync(file)),
     ...gitFiles.filter((file) => fs.existsSync(file)),
   ]);
-  if (allFiles.size === 0) {
-    return { changedFiles: [], added: [], removed: [] };
-  }
   const changedFiles = new Set<string>();
   explicitFiles.forEach((file) => changedFiles.add(file));
   manifestDiffFiles.forEach((file) => changedFiles.add(file));
   gitFiles.forEach((file) => changedFiles.add(file));
+  if (allFiles.size === 0 && changedFiles.size === 0) {
+    return { changedFiles: [], added: [], removed: [] };
+  }
   if (manifest && graphOptionsEqual(manifest.graphOptions, graphOptions)) {
     const gitSigMap = gitAvailable
       ? await getGitBlobHashes(projectRoot, Array.from(allFiles), { gitAvailable })

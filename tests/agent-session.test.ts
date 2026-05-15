@@ -26,4 +26,18 @@ describe("agent session", () => {
     expect(first.fileGraph.nodes.size).toBeGreaterThan(0);
     expect(first.fileGraph).toBe(first.index.graph);
   });
+
+  it("does not cache failed project loads", async () => {
+    const root = path.join(os.tmpdir(), `cg-agent-session-retry-${Date.now()}`);
+    const session = createAgentSession({ root });
+
+    await expect(session.loadProject()).rejects.toThrow(/Project root does not exist or is not readable:/);
+
+    await fs.mkdir(root);
+    await fs.writeFile(path.join(root, "index.ts"), "export const value = 1;\n");
+
+    const snapshot = await session.loadProject();
+
+    expect(snapshot.files.some((file) => file.endsWith("index.ts"))).toBe(true);
+  });
 });
