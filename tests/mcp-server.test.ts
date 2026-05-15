@@ -302,12 +302,24 @@ describe("codegraph MCP handlers", () => {
     const handlers = createCodegraphMcpHandlers({ root, readOnly: false });
     await handlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true });
 
-    const result = await handlers.query_sqlite({ query: "SELECT hex(randomblob(300000)) AS big;" });
+    const result = await handlers.query_sqlite({ query: "SELECT ? AS big;", params: ["x".repeat(300000)] });
 
     expect(result.byteLimit).toBe(200000);
     expect(result.truncated).toBeTruthy();
     expect(result.rows).toHaveLength(1);
     expect(String(result.rows[0]?.[0]).length).toBeLessThan(9000);
+  });
+
+  it("rejects synthetic large SQLite payload functions before execution", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-large-function-"));
+    await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
+
+    const handlers = createCodegraphMcpHandlers({ root, readOnly: false });
+    await handlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true });
+
+    await expect(handlers.query_sqlite({ query: "SELECT hex(randomblob(300000)) AS big;" })).rejects.toThrow(
+      /unsupported SQLite function/i,
+    );
   });
 
   it("disables artifact builds by default and in explicit read-only mode", async () => {

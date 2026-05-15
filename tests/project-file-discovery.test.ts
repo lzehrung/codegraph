@@ -158,6 +158,54 @@ describe("project file discovery", () => {
     expect(discoveredSet.has(normalize(path.join(linkedOutside, "secret.ts")))).toBe(false);
   });
 
+  it("applies root-relative ignore globs to safe symlink directory crawls", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-ignore-"));
+    const packageDir = path.join(tempDir, "packages", "core");
+    const linkedPackage = path.join(tempDir, "linked-core");
+    await createFile(path.join(packageDir, "src", "index.ts"), "export const core = 1;\n");
+
+    try {
+      await fs.symlink(packageDir, linkedPackage, "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const discovered = await listProjectFiles(tempDir, ["**/*.ts"], {
+      ignoreGlobs: ["linked-core/src/**"],
+      useGitignore: false,
+    });
+    const discoveredSet = new Set(discovered.map(normalize));
+
+    expect(discoveredSet.has(normalize(path.join(packageDir, "src", "index.ts")))).toBe(true);
+    expect(discoveredSet.has(normalize(path.join(linkedPackage, "src", "index.ts")))).toBe(false);
+  });
+
+  it("discovers project metadata through safe symlink directories", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-manifest-"));
+    const packageDir = path.join(tempDir, "packages", "core");
+    const linkedPackage = path.join(tempDir, "linked-core");
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-manifest-outside-"));
+    const linkedOutside = path.join(tempDir, "linked-outside");
+    await createFile(path.join(packageDir, "package.json"), JSON.stringify({ name: "core" }, null, 2));
+    await createFile(path.join(outsideDir, "package.json"), JSON.stringify({ name: "outside" }, null, 2));
+
+    try {
+      await fs.symlink(packageDir, linkedPackage, "junction");
+      await fs.symlink(outsideDir, linkedOutside, "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const discovered = await discoverProjectFiles(tempDir);
+    const discoveredPaths = new Set(discovered.map((entry) => normalize(entry.path)));
+
+    expect(discoveredPaths.has(normalize(path.join(packageDir, "package.json")))).toBe(true);
+    expect(discoveredPaths.has(normalize(path.join(linkedPackage, "package.json")))).toBe(true);
+    expect(discoveredPaths.has(normalize(path.join(linkedOutside, "package.json")))).toBe(false);
+  });
+
   it("extracts project names from common manifests", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-meta-"));
     const nodeDir = path.join(tempDir, "node");

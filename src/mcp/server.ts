@@ -116,6 +116,18 @@ const DEFAULT_MCP_COLLECTION_LIMIT = 100;
 const MAX_MCP_COLLECTION_LIMIT = 500;
 const MCP_HTTP_PATH = "/mcp";
 const MAX_MCP_HTTP_BODY_BYTES = 1_000_000;
+const DISALLOWED_MCP_SQLITE_FUNCTIONS = new Set([
+  "format",
+  "group_concat",
+  "hex",
+  "json_group_array",
+  "json_group_object",
+  "printf",
+  "quote",
+  "randomblob",
+  "string_agg",
+  "zeroblob",
+]);
 
 export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): CodegraphMcpHandlers {
   const root = path.resolve(options.root);
@@ -269,6 +281,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
         sqlitePath,
         "SQLite artifact",
       );
+      assertMcpSqliteQueryResourceBounded(request.query);
       const result = await queryGraphSqliteRaw(realSqlitePath, request.query, request.params ?? [], {
         maxRows: normalizeSqliteRowLimit(request.limit),
       });
@@ -940,7 +953,7 @@ const MCP_TOOLS: Tool[] = [
   },
   {
     name: "query_sqlite",
-    description: "Run a read-only SQL query against the graph SQLite artifact.",
+    description: "Run a bounded read-only SQL query against the graph SQLite artifact.",
     inputSchema: objectSchema(
       {
         query: stringProperty,
@@ -974,6 +987,78 @@ export function listCodegraphMcpTools(): Tool[] {
 function normalizeSqliteRowLimit(limit: number | undefined): number {
   if (typeof limit !== "number" || !Number.isFinite(limit)) return DEFAULT_SQLITE_ROW_LIMIT;
   return Math.min(MAX_SQLITE_ROW_LIMIT, Math.max(0, Math.floor(limit)));
+}
+
+function assertMcpSqliteQueryResourceBounded(sql: string): void {
+  const searchableSql = stripSqlCommentsAndLiterals(sql).toLowerCase();
+  if (/\bwith\s+recursive\b/.test(searchableSql)) {
+    throw new Error("MCP query_sqlite does not support recursive SQLite queries.");
+  }
+  const functionPattern = /\b([a-z_][a-z0-9_]*)\s*\(/gi;
+  for (const match of searchableSql.matchAll(functionPattern)) {
+    const functionName = match[1];
+    if (functionName !== undefined && DISALLOWED_MCP_SQLITE_FUNCTIONS.has(functionName)) {
+      throw new Error(`MCP query_sqlite rejected unsupported SQLite function ${functionName}.`);
+    }
+  }
+}
+
+function stripSqlCommentsAndLiterals(sql: string): string {
+  let output = "";
+  let index = 0;
+  while (index < sql.length) {
+    const char = sql[index];
+    const next = sql[index + 1];
+    if (char === "-" && next === "-") {
+      index += 2;
+      while (index < sql.length && sql[index] !== "\n") {
+        output += " ";
+        index += 1;
+      }
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      index += 2;
+      while (index < sql.length && !(sql[index] === "*" && sql[index + 1] === "/")) {
+        output += " ";
+        index += 1;
+      }
+      index = Math.min(sql.length, index + 2);
+      continue;
+    }
+    if (char === "'" || char === "\"" || char === "`") {
+      const quote = char;
+      output += " ";
+      index += 1;
+      while (index < sql.length) {
+        if (sql[index] === quote) {
+          if (sql[index + 1] === quote) {
+            output += "  ";
+            index += 2;
+            continue;
+          }
+          index += 1;
+          break;
+        }
+        output += " ";
+        index += 1;
+      }
+      continue;
+    }
+    if (char === "[") {
+      output += " ";
+      index += 1;
+      while (index < sql.length && sql[index] !== "]") {
+        output += " ";
+        index += 1;
+      }
+      index = Math.min(sql.length, index + 1);
+      continue;
+    }
+    output += char;
+    index += 1;
+  }
+  return output;
 }
 
 function boundRawSqlResult(result: RawSqlResult, byteLimit: number): RawSqlResult {

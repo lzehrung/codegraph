@@ -111,6 +111,11 @@ type FastGlobEntry = {
   };
 };
 
+type SafeSymlinkDirectoryCrawlOptions = {
+  onlyFiles?: boolean;
+  markDirectories?: boolean;
+};
+
 function normalizeGlobPattern(globPattern: string): string {
   return globPattern.trim().replace(/\\/g, "/");
 }
@@ -261,7 +266,7 @@ export async function listProjectFiles(
       followSymbolicLinks: false,
       ignore: [...DEFAULT_PROJECT_FILE_IGNORES, ...userIgnoreGlobs],
     });
-    const linkedFiles = await listFilesFromSafeSymlinkDirectories(root, realRoot, patterns, [
+    const linkedFiles = await listEntriesFromSafeSymlinkDirectories(root, realRoot, patterns, [
       ...DEFAULT_PROJECT_FILE_IGNORES,
       ...userIgnoreGlobs,
     ]);
@@ -281,12 +286,17 @@ export async function listProjectFiles(
   }
 }
 
-async function listFilesFromSafeSymlinkDirectories(
+async function listEntriesFromSafeSymlinkDirectories(
   root: string,
   realRoot: string,
   patterns: string[],
   ignore: string[],
+  options: SafeSymlinkDirectoryCrawlOptions = {},
 ): Promise<string[]> {
+  const rootRelativeIgnoreMatchers = ignore
+    .map(normalizeGlobPattern)
+    .filter(Boolean)
+    .map((globPattern) => picomatch(globPattern, { dot: true }));
   const entries = (await fg(["**/*"], {
     cwd: root,
     absolute: true,
@@ -317,12 +327,17 @@ async function listFilesFromSafeSymlinkDirectories(
     safeSymlinkDirectories,
     REALPATH_FILTER_CONCURRENCY,
     async (directory) =>
-      await fg(patterns, {
+      (await fg(patterns, {
         cwd: directory,
         absolute: true,
         dot: true,
         followSymbolicLinks: false,
         ignore,
+        ...(options.onlyFiles !== undefined ? { onlyFiles: options.onlyFiles } : {}),
+        ...(options.markDirectories !== undefined ? { markDirectories: options.markDirectories } : {}),
+      })).filter((filePath) => {
+        const cleanPath = filePath.endsWith("/") ? filePath.slice(0, -1) : filePath;
+        return !rootRelativeIgnoreMatchers.some((matcher) => matchesDiscoveryGlob(cleanPath, root, matcher));
       }),
   );
   for (const files of filesByDirectory) {
@@ -854,8 +869,15 @@ export async function discoverProjectFiles(
       markDirectories: true,
       onlyFiles: false,
     });
+    const linkedMatches = await listEntriesFromSafeSymlinkDirectories(
+      root,
+      realRoot,
+      allPatterns,
+      DEFAULT_PROJECT_FILE_IGNORES,
+      { markDirectories: true, onlyFiles: false },
+    );
     const rootSafeMatches = await filterRealPathsWithinRoot(
-      matches.map((match) => (match.endsWith("/") ? match.slice(0, -1) : match)),
+      [...matches, ...linkedMatches].map((match) => (match.endsWith("/") ? match.slice(0, -1) : match)),
       realRoot,
     );
 
