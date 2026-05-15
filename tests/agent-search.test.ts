@@ -4,6 +4,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
 import { searchCodegraph, searchCodegraphWithSession } from "../src/agent/search.js";
+import type { SymbolEdge, SymbolGraph, SymbolNode } from "../src/graphs.js";
+import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../src/indexer/types.js";
+import type { Graph, Range } from "../src/types.js";
 
 async function mkRepo(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-search-"));
@@ -50,6 +53,47 @@ function countingSession(session: AgentSession): { session: AgentSession; loads:
       },
     },
     loads: () => loadCount,
+  };
+}
+
+function oneLineRange(index: number): Range {
+  return {
+    start: { line: 1, column: 1, index },
+    end: { line: 1, column: 10, index: index + 9 },
+  };
+}
+
+function symbolDef(file: string, name: string, index: number): SymbolDef {
+  return {
+    file,
+    localName: name,
+    kind: SymbolKind.Function,
+    range: oneLineRange(index),
+  };
+}
+
+function symbolNode(def: SymbolDef): SymbolNode {
+  return {
+    id: `${def.file}::${def.localName}::${def.range.start.index ?? 0}`,
+    file: def.file,
+    name: def.localName,
+    kind: "function",
+  };
+}
+
+function moduleIndex(file: string, locals: SymbolDef[]): ModuleIndex {
+  return {
+    file,
+    locals,
+    imports: [],
+    exports: locals.map((local) => ({ type: "local", exportedAs: local.localName, target: local })),
+  };
+}
+
+function snapshotSession(snapshot: AgentProjectSnapshot): AgentSession {
+  return {
+    loadProject: async () => snapshot,
+    invalidate: () => undefined,
   };
 }
 
@@ -123,6 +167,64 @@ describe("agent search", () => {
     await searchCodegraphWithSession(counted.session, { root, query: "validate user", mode: "hybrid", limit: 5 });
 
     expect(counted.loads()).toBe(1);
+  });
+
+  it("indexes symbol neighbors once per search instead of scanning edges per match", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-search-neighbors-"));
+    const firstFile = path.join(root, "first.ts");
+    const secondFile = path.join(root, "second.ts");
+    const first = symbolDef(firstFile, "fooFirst", 0);
+    const second = symbolDef(secondFile, "fooSecond", 0);
+    const firstModule = moduleIndex(firstFile, [first]);
+    const secondModule = moduleIndex(secondFile, [second]);
+    const fileGraph: Graph = { nodes: new Set([firstFile, secondFile]), edges: [] };
+    const byFile = new Map([
+      [firstFile, firstModule],
+      [secondFile, secondModule],
+    ]);
+    const index: ProjectIndex = {
+      graph: fileGraph,
+      modules: byFile,
+      byFile,
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+    const firstNode = symbolNode(first);
+    const secondNode = symbolNode(second);
+    const edges: SymbolEdge[] = [{ from: firstNode.id, to: secondNode.id, label: "calls" }];
+    const edgeStorage = [...edges];
+    let edgeIterations = 0;
+    Object.defineProperty(edges, Symbol.iterator, {
+      value: function* iterateEdges(): IterableIterator<SymbolEdge> {
+        edgeIterations += 1;
+        yield* edgeStorage;
+      },
+    });
+    const symbolGraph: SymbolGraph = {
+      nodes: new Map([
+        [firstNode.id, firstNode],
+        [secondNode.id, secondNode],
+      ]),
+      edges,
+    };
+
+    const response = await searchCodegraphWithSession(
+      snapshotSession({
+        root,
+        files: [firstFile, secondFile],
+        index,
+        fileGraph,
+        symbolGraph,
+      }),
+      { root, query: "foo", mode: "symbol", limit: 10 },
+    );
+
+    expect(response.results).toHaveLength(2);
+    const everyResultHasCallNeighbor = response.results.every((result) =>
+      result.neighbors.some((neighbor) => neighbor.relation === "calls"),
+    );
+    expect(everyResultHasCallNeighbor).toBe(true);
+    expect(edgeIterations).toBe(1);
   });
 
   it("caps result count and per-result packet arrays with omission counts", async () => {

@@ -95,6 +95,12 @@ type SymbolDefLookup = {
   exportedIds: Set<string>;
 };
 
+type SymbolNeighbor = {
+  key: string;
+  relation: string;
+  target: SymbolNode;
+};
+
 type SearchResultBase = {
   handle: string;
   kind: AgentSearchResultKind;
@@ -157,7 +163,7 @@ async function searchSnapshot(snapshot: AgentProjectSnapshot, request: AgentSear
   if (tokens.length > 0) {
     const symbolLookup = buildSymbolLookup(snapshot);
     if (mode === "hybrid" || mode === "symbol" || mode === "sql" || mode === "graph") {
-      addSymbolResults(snapshot, resultMap, symbolLookup, tokens, mode);
+      addSymbolResults(snapshot, resultMap, symbolLookup, buildSymbolNeighborIndex(snapshot), tokens, mode);
     }
     if (mode === "hybrid" || mode === "path" || mode === "graph") {
       addPathResults(snapshot, resultMap, tokens);
@@ -281,6 +287,7 @@ function addSymbolResults(
   snapshot: AgentProjectSnapshot,
   resultMap: Map<string, MutableSearchResult>,
   lookup: SymbolDefLookup,
+  neighborsBySymbolId: Map<string, SymbolNeighbor[]>,
   tokens: string[],
   mode: AgentSearchMode,
 ): void {
@@ -328,7 +335,7 @@ function addSymbolResults(
     if (docMatch.matched.length > 0) {
       addReason(result, `docstring token match: ${docMatch.matched.join(", ")}`);
     }
-    addSymbolNeighbors(snapshot, result, node);
+    addSymbolNeighbors(snapshot, result, neighborsBySymbolId.get(node.id) ?? []);
     addSymbolFollowUps(result, relFile, def);
   }
 }
@@ -630,18 +637,38 @@ function addEvidence(result: MutableSearchResult, evidence: AgentSearchEvidence)
   result.evidence.push(evidence);
 }
 
-function addSymbolNeighbors(snapshot: AgentProjectSnapshot, result: MutableSearchResult, node: SymbolNode): void {
+function buildSymbolNeighborIndex(snapshot: AgentProjectSnapshot): Map<string, SymbolNeighbor[]> {
+  const neighborsBySymbolId = new Map<string, SymbolNeighbor[]>();
+  const addNeighbor = (sourceId: string, neighbor: SymbolNeighbor): void => {
+    const neighbors = neighborsBySymbolId.get(sourceId);
+    if (neighbors) {
+      neighbors.push(neighbor);
+      return;
+    }
+    neighborsBySymbolId.set(sourceId, [neighbor]);
+  };
+
   for (const edge of snapshot.symbolGraph.edges) {
-    if (edge.from !== node.id && edge.to !== node.id) continue;
-    const direction = edge.from === node.id ? "uses" : "referenced_by";
-    const targetId = edge.from === node.id ? edge.to : edge.from;
-    const target = snapshot.symbolGraph.nodes.get(targetId);
-    if (!target) continue;
-    const relFile = relativeFile(snapshot.root, target.file);
-    const key = `${direction}:${target.id}`;
+    const from = snapshot.symbolGraph.nodes.get(edge.from);
+    const to = snapshot.symbolGraph.nodes.get(edge.to);
+    if (!from || !to) continue;
+    addNeighbor(from.id, { key: "uses", relation: edge.label ?? "uses", target: to });
+    addNeighbor(to.id, { key: "referenced_by", relation: edge.label ?? "referenced_by", target: from });
+  }
+  return neighborsBySymbolId;
+}
+
+function addSymbolNeighbors(
+  snapshot: AgentProjectSnapshot,
+  result: MutableSearchResult,
+  neighbors: readonly SymbolNeighbor[],
+): void {
+  for (const neighbor of neighbors) {
+    const relFile = relativeFile(snapshot.root, neighbor.target.file);
+    const key = `${neighbor.key}:${neighbor.target.id}`;
     result.neighbors.set(key, {
-      relation: edge.label ?? direction,
-      target: target.name,
+      relation: neighbor.relation,
+      target: neighbor.target.name,
       file: relFile,
     });
   }

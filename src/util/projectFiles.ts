@@ -116,6 +116,11 @@ type SafeSymlinkDirectoryCrawlOptions = {
   markDirectories?: boolean;
 };
 
+type RootSafePath = {
+  path: string;
+  realPath: string;
+};
+
 function normalizeGlobPattern(globPattern: string): string {
   return globPattern.trim().replace(/\\/g, "/");
 }
@@ -270,16 +275,19 @@ export async function listProjectFiles(
       ...DEFAULT_PROJECT_FILE_IGNORES,
       ...userIgnoreGlobs,
     ]);
-    const rootSafeFiles = await filterRealPathsWithinRoot([...files, ...linkedFiles], realRoot);
-    return rootSafeFiles.map(normalizePath).filter((filePath) => {
-      if (
-        includeMatchers.length > 0 &&
-        !includeMatchers.some((matcher) => matchesDiscoveryGlob(filePath, root, matcher))
-      ) {
-        return false;
-      }
-      return !isIgnoredByGitignore(filePath, gitignoreRules);
-    });
+    const rootSafeFiles = await filterRealPathsWithinRootEntries([...files, ...linkedFiles], realRoot);
+    return rootSafeFiles
+      .map(({ path: filePath, realPath }) => ({ filePath: normalizePath(filePath), realPath }))
+      .filter(({ filePath, realPath }) => {
+        if (
+          includeMatchers.length > 0 &&
+          !includeMatchers.some((matcher) => matchesDiscoveryGlob(filePath, root, matcher))
+        ) {
+          return false;
+        }
+        return !isIgnoredByGitignore(filePath, gitignoreRules) && !isIgnoredByGitignore(realPath, gitignoreRules);
+      })
+      .map(({ filePath }) => filePath);
   } catch (error) {
     logWithLevel(options?.logLevel, "debug", `listProjectFiles failed for ${root}: ${stringifyUnknown(error)}`);
     throw new Error(`Failed to list files in ${root}: ${stringifyUnknown(error)}`);
@@ -348,16 +356,21 @@ async function listEntriesFromSafeSymlinkDirectories(
   return [...filesByPath.values()];
 }
 
-async function filterRealPathsWithinRoot(paths: string[], realRoot: string): Promise<string[]> {
+async function filterRealPathsWithinRootEntries(paths: string[], realRoot: string): Promise<RootSafePath[]> {
   const filtered = await mapLimitSemaphore(paths, REALPATH_FILTER_CONCURRENCY, async (filePath) => {
     try {
       const realPath = await fsp.realpath(filePath);
-      return isFilePathWithinRoot(realRoot, realPath) ? filePath : null;
+      return isFilePathWithinRoot(realRoot, realPath) ? { path: filePath, realPath } : null;
     } catch {
       return null;
     }
   });
-  return filtered.filter((filePath): filePath is string => filePath !== null);
+  return filtered.filter((entry): entry is RootSafePath => entry !== null);
+}
+
+async function filterRealPathsWithinRoot(paths: string[], realRoot: string): Promise<string[]> {
+  const entries = await filterRealPathsWithinRootEntries(paths, realRoot);
+  return entries.map((entry) => entry.path);
 }
 
 export type ProjectFileKind = "file" | "dir";
