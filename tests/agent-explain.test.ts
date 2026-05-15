@@ -144,6 +144,36 @@ describe("agent explain", () => {
     );
   });
 
+  it("does not attribute unrelated same-file SQL incoming relations to a target object", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-explain-sql-incoming-"));
+    await fs.writeFile(path.join(root, "schema.sql"), "CREATE TABLE public.users (id int primary key);\n", "utf8");
+    await fs.writeFile(path.join(root, "audit.sql"), "CREATE TABLE public.audit_log (user_id int);\n", "utf8");
+    await fs.writeFile(
+      path.join(root, "views.sql"),
+      [
+        "CREATE VIEW active_users AS SELECT id FROM public.users;",
+        "CREATE VIEW audit_users AS SELECT user_id FROM public.audit_log;",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const explanation = await explainCodegraphTarget({ root, target: "public.users", maxRelatedSqlObjects: 20 });
+
+    expect(explanation.relatedSqlObjects).toContainEqual(
+      expect.objectContaining({
+        name: "active_users",
+        relation: "incoming:reads_from",
+      }),
+    );
+    expect(explanation.relatedSqlObjects).not.toContainEqual(
+      expect.objectContaining({
+        name: "audit_users",
+        relation: "incoming:reads_from",
+      }),
+    );
+  });
+
   it("bounds dependency and snippet output", async () => {
     const root = await mkRepo();
     await fs.writeFile(

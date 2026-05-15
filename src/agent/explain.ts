@@ -656,7 +656,6 @@ async function collectRelatedSqlObjects(
         addRelated(object, "same_file");
       }
     }
-    addRelatedSqlObjectsFromFileEdges(snapshot, sqlObjects, normalizedFile, targetName, addRelated);
     await addRelatedSqlObjectsFromFacts(snapshot, sqlObjects, targetName, addRelated);
   }
 
@@ -729,29 +728,6 @@ function referenceTargetsSqlName(
   );
 }
 
-function addRelatedSqlObjectsFromFileEdges(
-  snapshot: AgentProjectSnapshot,
-  sqlObjects: SqlObjectNodeInfo[],
-  targetFile: string,
-  targetName: string,
-  addRelated: (object: SqlObjectNodeInfo, relation: string) => void,
-): void {
-  for (const edge of snapshot.fileGraph.edges) {
-    const relation = parseSqlEdgeRelation(edge.raw);
-    if (!relation) continue;
-    if (
-      edge.to.type !== "file" ||
-      normalizePath(edge.to.path) !== targetFile ||
-      !referenceTargetsSqlName(sqlObjects, relation.objectName, targetName)
-    ) {
-      continue;
-    }
-    for (const object of sqlObjects.filter((candidate) => normalizePath(candidate.file) === normalizePath(edge.from))) {
-      addRelated(object, `incoming:${relation.kind}`);
-    }
-  }
-}
-
 async function addRelatedSqlObjectsFromFacts(
   snapshot: AgentProjectSnapshot,
   sqlObjects: SqlObjectNodeInfo[],
@@ -789,19 +765,6 @@ async function addRelatedSqlObjectsFromFacts(
       }
     }
   }
-}
-
-function parseSqlEdgeRelation(raw: string): { kind: string; objectName: string } | null {
-  if (!raw.startsWith("sql:")) return null;
-  const parts = raw.split(":");
-  if (parts.length < 3) return null;
-  const kind = parts[1];
-  const objectName = parts.slice(2).join(":");
-  if (!kind || !objectName) return null;
-  return {
-    kind,
-    objectName,
-  };
 }
 
 async function collectSqlFacts(snapshot: AgentProjectSnapshot): Promise<Map<string, SqlStatementFact[]>> {
