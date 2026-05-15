@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getHotspots, type SymbolNode } from "../graphs.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
-import { writeGraphSqlite } from "../sqlite.js";
+import { queryGraphSqliteRaw, writeGraphSqlite } from "../sqlite.js";
 import { isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util.js";
 import { formatAgentSqlHandle, formatAgentSymbolHandle } from "./handles.js";
 import { createAgentSession } from "./session.js";
@@ -308,7 +308,52 @@ async function isRecognizedCodegraphArtifact(filePath: string, fileName: string)
       throw error;
     }
   }
+  if (fileName === SQLITE_FILE) {
+    return await isRecognizedCodegraphSqlite(filePath);
+  }
   return false;
+}
+
+async function isRecognizedCodegraphSqlite(filePath: string): Promise<boolean> {
+  try {
+    const header = await readSqliteHeader(filePath);
+    if (!header.equals(Buffer.from("SQLite format 3\0", "ascii"))) return false;
+    const metadata = await queryGraphSqliteRaw(
+      filePath,
+      "SELECT value FROM graph_metadata WHERE key = 'schema_version' LIMIT 1;",
+    );
+    const schemaVersion = metadata.rows[0]?.[0];
+    if (typeof schemaVersion !== "string" || !/^\d+$/.test(schemaVersion)) return false;
+
+    const tables = await queryGraphSqliteRaw(
+      filePath,
+      [
+        "SELECT name FROM sqlite_master",
+        "WHERE type = 'table'",
+        "AND name IN ('files', 'file_edges', 'symbols', 'symbol_edges', 'graph_metadata')",
+        "ORDER BY name;",
+      ].join(" "),
+    );
+    const tableNames = new Set(
+      tables.rows.map((row) => row[0]).filter((value): value is string => typeof value === "string"),
+    );
+    return ["files", "file_edges", "graph_metadata", "symbol_edges", "symbols"].every((tableName) =>
+      tableNames.has(tableName),
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function readSqliteHeader(filePath: string): Promise<Buffer> {
+  const handle = await fs.open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(16);
+    await handle.read(buffer, 0, buffer.length, 0);
+    return buffer;
+  } finally {
+    await handle.close();
+  }
 }
 
 async function readJsonIfPresent(filePath: string): Promise<unknown> {

@@ -205,6 +205,19 @@ async function loadGitignoreRules(projectRoot: string): Promise<GitignoreRule[]>
   return rules;
 }
 
+async function loadGitignoreRulesForRootAliases(projectRoot: string): Promise<GitignoreRule[]> {
+  const roots = [projectRoot];
+  const realRoot = await fsp.realpath(projectRoot);
+  if (normalizePath(realRoot) !== normalizePath(projectRoot)) {
+    roots.push(realRoot);
+  }
+  const rules: GitignoreRule[] = [];
+  for (const root of roots) {
+    rules.push(...(await loadGitignoreRules(root)));
+  }
+  return rules;
+}
+
 function matchesDiscoveryGlob(
   absolutePath: string,
   projectRoot: string,
@@ -265,7 +278,7 @@ export async function listProjectFiles(
     const realRoot = await fsp.realpath(root);
     const gitignoreRules = !useGitignore
       ? []
-      : await loadGitignoreRules(
+      : await loadGitignoreRulesForRootAliases(
           options?.gitignoreRoot ? await ensureDirectoryReadable(options.gitignoreRoot, "Gitignore root") : root,
         );
     const files = await fg(patterns, {

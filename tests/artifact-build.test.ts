@@ -102,6 +102,20 @@ describe("artifact build", () => {
     expect(await fs.stat(path.join(outDir, "codegraph.sqlite"))).toBeTruthy();
   });
 
+  it("recovers a standalone stale Codegraph SQLite artifact without a manifest", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-stale-sqlite-"));
+    const outDir = path.join(root, "codegraph-out");
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n");
+
+    await buildCodegraphArtifact({ root, outDir, sqlite: true });
+    await fs.rm(path.join(outDir, "manifest.json"));
+
+    await expect(buildCodegraphArtifact({ root, outDir, force: true, sqlite: true })).resolves.toMatchObject({
+      artifacts: { sqlite: "codegraph.sqlite" },
+    });
+    await expect(fs.stat(path.join(outDir, "codegraph.sqlite"))).resolves.toBeTruthy();
+  });
+
   it("preserves unrecognized reserved-name files when force is set and refuses conflicting writes", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-reserved-"));
     const outDir = path.join(root, "codegraph-out");

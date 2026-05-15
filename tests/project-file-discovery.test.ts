@@ -230,6 +230,31 @@ describe("project file discovery", () => {
     expect(discoveredSet.has(normalize(path.join(linkedPackage, "ignored.ts")))).toBe(false);
   });
 
+  it("applies gitignore rules to safe symlink targets when the project root is a symlink", async () => {
+    const realRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-real-root-gitignore-"));
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-root-link-parent-"));
+    const rootLink = path.join(parent, "repo-link");
+    const packageDir = path.join(realRoot, "packages", "core");
+    const linkedPackage = path.join(realRoot, "linked-core");
+    await createFile(path.join(realRoot, ".gitignore"), "packages/core/ignored.ts\n");
+    await createFile(path.join(packageDir, "kept.ts"), "export const kept = 1;\n");
+    await createFile(path.join(packageDir, "ignored.ts"), "export const ignored = 1;\n");
+
+    try {
+      await fs.symlink(realRoot, rootLink, "junction");
+      await fs.symlink(packageDir, linkedPackage, "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const discovered = await listProjectFiles(rootLink, ["**/*.ts"]);
+    const discoveredSet = new Set(discovered.map(normalize));
+
+    expect(discoveredSet.has(normalize(path.join(rootLink, "linked-core", "kept.ts")))).toBe(true);
+    expect(discoveredSet.has(normalize(path.join(rootLink, "linked-core", "ignored.ts")))).toBe(false);
+  });
+
   it("discovers project metadata through safe symlink directories", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-manifest-"));
     const packageDir = path.join(tempDir, "packages", "core");
