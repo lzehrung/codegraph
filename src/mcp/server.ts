@@ -7,6 +7,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -361,7 +362,7 @@ export async function startCodegraphMcpHttpServer(
   const host = options.host ?? "127.0.0.1";
   const handlers = createCodegraphMcpHandlers(options);
   const sessions = new Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>();
-  let allowedHostHeaders = new Set<string>();
+  let allowedHostHeaders = emptyAllowedHostHeaderRules();
 
   const server = createServer((request, response) => {
     void handleMcpHttpRequest(request, response, handlers, sessions, () => allowedHostHeaders);
@@ -401,7 +402,7 @@ async function handleMcpHttpRequest(
   response: ServerResponse,
   handlers: CodegraphMcpHandlers,
   sessions: Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>,
-  getAllowedHostHeaders: () => Set<string>,
+  getAllowedHostHeaders: () => AllowedHostHeaderRules,
 ): Promise<void> {
   const requestPath = getRequestPath(request);
   if (requestPath !== MCP_HTTP_PATH) {
@@ -534,6 +535,11 @@ type ParsedJsonBody =
   | { status: "too_large" }
   | { status: "invalid_json" };
 
+type AllowedHostHeaderRules = {
+  exact: Set<string>;
+  loopbackOnly: Set<string>;
+};
+
 async function readJsonRequestBody(request: IncomingMessage, maxBytes: number): Promise<ParsedJsonBody> {
   const contentLength = getContentLength(request);
   if (contentLength !== undefined && contentLength > maxBytes) {
@@ -576,23 +582,66 @@ function getContentLength(request: IncomingMessage): number | undefined {
   return parsedLength;
 }
 
-function isAllowedHostHeader(request: IncomingMessage, allowedHostHeaders: Set<string>): boolean {
-  const host = getHeaderValue(request.headers.host);
-  if (host === undefined) return false;
-  return allowedHostHeaders.has(host.toLowerCase());
+function emptyAllowedHostHeaderRules(): AllowedHostHeaderRules {
+  return {
+    exact: new Set(),
+    loopbackOnly: new Set(),
+  };
 }
 
-function buildAllowedHostHeaders(host: string, port: number): Set<string> {
-  const allowed = new Set<string>();
-  allowed.add(formatHostHeader(host, port).toLowerCase());
+function isAllowedHostHeader(request: IncomingMessage, allowedHostHeaders: AllowedHostHeaderRules): boolean {
+  const host = getHeaderValue(request.headers.host);
+  if (host === undefined) return false;
+  const normalizedHost = host.toLowerCase();
+  if (allowedHostHeaders.exact.has(normalizedHost)) return true;
+  return allowedHostHeaders.loopbackOnly.has(normalizedHost) && isLoopbackRemoteAddress(request.socket.remoteAddress);
+}
+
+function buildAllowedHostHeaders(host: string, port: number): AllowedHostHeaderRules {
+  const allowed = emptyAllowedHostHeaderRules();
+  allowed.exact.add(formatHostHeader(host, port).toLowerCase());
+  if (isWildcardBindHost(host)) {
+    allowed.loopbackOnly.add(`127.0.0.1:${port}`);
+    allowed.loopbackOnly.add(`localhost:${port}`);
+    allowed.loopbackOnly.add(`[::1]:${port}`);
+    for (const localHost of localInterfaceHostHeaders(port)) {
+      allowed.exact.add(localHost);
+    }
+  }
   if (host === "127.0.0.1") {
-    allowed.add(`localhost:${port}`);
+    allowed.exact.add(`localhost:${port}`);
   }
   if (host === "::1" || host === "[::1]") {
-    allowed.add(`[::1]:${port}`);
-    allowed.add(`localhost:${port}`);
+    allowed.exact.add(`[::1]:${port}`);
+    allowed.exact.add(`localhost:${port}`);
   }
   return allowed;
+}
+
+function isWildcardBindHost(host: string): boolean {
+  return host === "0.0.0.0" || host === "::" || host === "[::]";
+}
+
+function isLoopbackRemoteAddress(address: string | undefined): boolean {
+  if (address === undefined) return false;
+  const normalized = address.toLowerCase();
+  return normalized === "::1" || normalized === "::ffff:127.0.0.1" || normalized.startsWith("127.");
+}
+
+function localInterfaceHostHeaders(port: number): Set<string> {
+  const hosts = new Set<string>();
+  const hostname = os.hostname().trim().toLowerCase();
+  if (hostname) {
+    hosts.add(`${hostname}:${port}`);
+  }
+  for (const interfaces of Object.values(os.networkInterfaces())) {
+    for (const entry of interfaces ?? []) {
+      if (entry.internal) continue;
+      const address = entry.address.split("%")[0] ?? entry.address;
+      hosts.add(formatHostHeader(address, port).toLowerCase());
+    }
+  }
+  return hosts;
 }
 
 function formatHostForUrl(host: string): string {

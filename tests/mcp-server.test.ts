@@ -180,6 +180,72 @@ describe("codegraph MCP handlers", () => {
     }
   });
 
+  it("accepts loopback host headers when HTTP MCP binds to all IPv4 interfaces", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-wildcard-host-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "0.0.0.0",
+      port: 0,
+    });
+
+    try {
+      const endpoint = new URL(httpServer.url);
+      const loopbackUrl = `http://127.0.0.1:${endpoint.port}${endpoint.pathname}`;
+      const initializeRequest = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-test", version: "1.0.0" },
+        },
+      };
+      const response = await postRawHttpJson(
+        loopbackUrl,
+        {
+          ...initializeRequest,
+          id: 1,
+        },
+        {
+          accept: "application/json, text/event-stream",
+          host: `127.0.0.1:${endpoint.port}`,
+        },
+      );
+      const payload = readObject(response.payload);
+
+      expect(response.status).toBe(200);
+      expect(payload.result).toBeDefined();
+
+      const localhostResponse = await postRawHttpJson(
+        loopbackUrl,
+        {
+          ...initializeRequest,
+          id: 2,
+        },
+        {
+          accept: "application/json, text/event-stream",
+          host: `localhost:${endpoint.port}`,
+        },
+      );
+      const localhostPayload = readObject(localhostResponse.payload);
+      expect(localhostResponse.status).toBe(200);
+      expect(localhostPayload.result).toBeDefined();
+
+      const rejected = await postRawHttpJson(
+        loopbackUrl,
+        { jsonrpc: "2.0", id: 3, method: "tools/list", params: {} },
+        { host: "evil.example" },
+      );
+      const rejectedPayload = readObject(rejected.payload);
+      const rejectedError = readObject(rejectedPayload.error);
+      expect(rejected.status).toBe(403);
+      expect(rejectedError.message).toBe("Forbidden host header");
+    } finally {
+      await httpServer.close();
+    }
+  });
+
   it("rejects oversized HTTP MCP request bodies before parsing", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-large-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
