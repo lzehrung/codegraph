@@ -652,8 +652,13 @@ function buildSymbolNeighborIndex(snapshot: AgentProjectSnapshot): Map<string, S
     const from = snapshot.symbolGraph.nodes.get(edge.from);
     const to = snapshot.symbolGraph.nodes.get(edge.to);
     if (!from || !to) continue;
-    addNeighbor(from.id, { key: "uses", relation: edge.label ?? "uses", target: to });
-    addNeighbor(to.id, { key: "referenced_by", relation: edge.label ?? "referenced_by", target: from });
+    const forwardRelation = edge.label ?? "uses";
+    addNeighbor(from.id, { key: "uses", relation: forwardRelation, target: to });
+    addNeighbor(to.id, {
+      key: "referenced_by",
+      relation: `incoming:${forwardRelation}`,
+      target: from,
+    });
   }
   return neighborsBySymbolId;
 }

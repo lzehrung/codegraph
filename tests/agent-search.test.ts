@@ -220,10 +220,19 @@ describe("agent search", () => {
     );
 
     expect(response.results).toHaveLength(2);
-    const everyResultHasCallNeighbor = response.results.every((result) =>
-      result.neighbors.some((neighbor) => neighbor.relation === "calls"),
-    );
-    expect(everyResultHasCallNeighbor).toBe(true);
+    const firstResult = response.results.find((result) => result.label === "fooFirst");
+    const secondResult = response.results.find((result) => result.label === "fooSecond");
+    expect(firstResult?.neighbors).toContainEqual({
+      relation: "calls",
+      target: "fooSecond",
+      file: "second.ts",
+    });
+    expect(secondResult?.neighbors).toContainEqual({
+      relation: "incoming:calls",
+      target: "fooFirst",
+      file: "first.ts",
+    });
+    expect(secondResult?.neighbors.some((neighbor) => neighbor.relation === "calls")).toBe(false);
     expect(edgeIterations).toBe(1);
   });
 
