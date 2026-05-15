@@ -102,6 +102,11 @@ type SymbolNeighbor = {
   target: SymbolNode;
 };
 
+type FileNeighbor = {
+  relation: "imports" | "imported_by";
+  file: string;
+};
+
 type SearchResultBase = {
   handle: string;
   kind: AgentSearchResultKind;
@@ -160,6 +165,11 @@ async function searchSnapshot(snapshot: AgentProjectSnapshot, request: AgentSear
   const tokens = tokenizeQuery(request.query);
   const resultMap = new Map<string, MutableSearchResult>();
   const limit = normalizeLimit(request.limit);
+  let fileNeighborIndex: Map<string, FileNeighbor[]> | undefined;
+  const getFileNeighborIndex = (): Map<string, FileNeighbor[]> => {
+    fileNeighborIndex ??= buildFileNeighborIndex(snapshot);
+    return fileNeighborIndex;
+  };
 
   if (tokens.length > 0) {
     const symbolLookup = buildSymbolLookup(snapshot);
@@ -167,7 +177,7 @@ async function searchSnapshot(snapshot: AgentProjectSnapshot, request: AgentSear
       addSymbolResults(snapshot, resultMap, symbolLookup, buildSymbolNeighborIndex(snapshot), tokens, mode);
     }
     if (mode === "hybrid" || mode === "path" || mode === "graph") {
-      addPathResults(snapshot, resultMap, tokens);
+      addPathResults(snapshot, resultMap, getFileNeighborIndex(), tokens);
     }
     if (mode === "hybrid" || mode === "text") {
       await addTextResults(snapshot, resultMap, tokens, request.includeSnippets ?? true);
@@ -175,7 +185,7 @@ async function searchSnapshot(snapshot: AgentProjectSnapshot, request: AgentSear
   }
 
   if (request.from !== undefined && (mode === "hybrid" || mode === "graph")) {
-    applyGraphNeighborhood(snapshot, resultMap, tokens, request.from, normalizeDepth(request.depth));
+    applyGraphNeighborhood(snapshot, resultMap, getFileNeighborIndex(), tokens, request.from, normalizeDepth(request.depth));
   }
 
   const candidates = [...resultMap.values()]
@@ -348,6 +358,7 @@ function isSqlObjectNode(node: SymbolNode): boolean {
 function addPathResults(
   snapshot: AgentProjectSnapshot,
   resultMap: Map<string, MutableSearchResult>,
+  fileNeighborIndex: Map<string, FileNeighbor[]>,
   tokens: string[],
 ): void {
   for (const file of snapshot.files) {
@@ -364,7 +375,7 @@ function addPathResults(
     result.score += pathMatch.score * 2;
     addReason(result, `path token match: ${pathMatch.matched.join(", ")}`);
     addEvidence(result, { source: "path", label: relFile, file: relFile });
-    addFileNeighbors(snapshot, result, file);
+    addFileNeighbors(snapshot, result, fileNeighborIndex.get(normalizePath(file)) ?? []);
     addFileFollowUps(result, relFile);
   }
 }
@@ -418,6 +429,7 @@ function textCouldMatch(text: string, tokens: string[]): boolean {
 function applyGraphNeighborhood(
   snapshot: AgentProjectSnapshot,
   resultMap: Map<string, MutableSearchResult>,
+  fileNeighborIndex: Map<string, FileNeighbor[]>,
   tokens: string[],
   from: string,
   depth: number,
@@ -425,7 +437,7 @@ function applyGraphNeighborhood(
   const anchorFiles = resolveAnchorFiles(snapshot, from);
   if (anchorFiles.size === 0) return;
 
-  const reachable = collectReachableFiles(snapshot, anchorFiles, depth);
+  const reachable = collectReachableFiles(fileNeighborIndex, anchorFiles, depth);
   for (const entry of reachable.values()) {
     const relFile = relativeFile(snapshot.root, entry.file);
     const existingResults = [...resultMap.values()].filter((result) => result.file === relFile);
@@ -508,7 +520,7 @@ function resolveFileCandidate(snapshot: AgentProjectSnapshot, candidate: string)
 }
 
 function collectReachableFiles(
-  snapshot: AgentProjectSnapshot,
+  fileNeighborIndex: Map<string, FileNeighbor[]>,
   anchorFiles: Set<string>,
   depth: number,
 ): Map<string, ReachableFile> {
@@ -526,21 +538,12 @@ function collectReachableFiles(
     reachable.set(current.file, current);
     if (current.distance >= depth) continue;
 
-    for (const edge of snapshot.fileGraph.edges) {
-      if (normalizePath(edge.from) === current.file && edge.to.type === "file") {
-        queue.push({
-          file: normalizePath(edge.to.path),
-          distance: current.distance + 1,
-          relation: "imports",
-        });
-      }
-      if (edge.to.type === "file" && normalizePath(edge.to.path) === current.file) {
-        queue.push({
-          file: normalizePath(edge.from),
-          distance: current.distance + 1,
-          relation: "imported_by",
-        });
-      }
+    for (const neighbor of fileNeighborIndex.get(current.file) ?? []) {
+      queue.push({
+        file: neighbor.file,
+        distance: current.distance + 1,
+        relation: neighbor.relation,
+      });
     }
   }
 
@@ -664,6 +667,29 @@ function buildSymbolNeighborIndex(snapshot: AgentProjectSnapshot): Map<string, S
   return neighborsBySymbolId;
 }
 
+function buildFileNeighborIndex(snapshot: AgentProjectSnapshot): Map<string, FileNeighbor[]> {
+  const neighborsByFile = new Map<string, FileNeighbor[]>();
+  const addNeighbor = (file: string, neighbor: FileNeighbor): void => {
+    const normalizedFile = normalizePath(file);
+    const neighbors = neighborsByFile.get(normalizedFile);
+    if (neighbors) {
+      neighbors.push(neighbor);
+      return;
+    }
+    neighborsByFile.set(normalizedFile, [neighbor]);
+  };
+
+  for (const edge of snapshot.fileGraph.edges) {
+    if (edge.to.type !== "file") continue;
+    const from = normalizePath(edge.from);
+    const to = normalizePath(edge.to.path);
+    addNeighbor(from, { relation: "imports", file: to });
+    addNeighbor(to, { relation: "imported_by", file: from });
+  }
+
+  return neighborsByFile;
+}
+
 function addSymbolNeighbors(
   snapshot: AgentProjectSnapshot,
   result: MutableSearchResult,
@@ -680,25 +706,18 @@ function addSymbolNeighbors(
   }
 }
 
-function addFileNeighbors(snapshot: AgentProjectSnapshot, result: MutableSearchResult, file: string): void {
-  const normalized = normalizePath(file);
-  for (const edge of snapshot.fileGraph.edges) {
-    if (normalizePath(edge.from) === normalized && edge.to.type === "file") {
-      const relFile = relativeFile(snapshot.root, edge.to.path);
-      result.neighbors.set(`imports:${relFile}`, {
-        relation: "imports",
-        target: relFile,
-        file: relFile,
-      });
-    }
-    if (edge.to.type === "file" && normalizePath(edge.to.path) === normalized) {
-      const relFile = relativeFile(snapshot.root, edge.from);
-      result.neighbors.set(`imported_by:${relFile}`, {
-        relation: "imported_by",
-        target: relFile,
-        file: relFile,
-      });
-    }
+function addFileNeighbors(
+  snapshot: AgentProjectSnapshot,
+  result: MutableSearchResult,
+  neighbors: readonly FileNeighbor[],
+): void {
+  for (const neighbor of neighbors) {
+    const relFile = relativeFile(snapshot.root, neighbor.file);
+    result.neighbors.set(`${neighbor.relation}:${relFile}`, {
+      relation: neighbor.relation,
+      target: relFile,
+      file: relFile,
+    });
   }
 }
 

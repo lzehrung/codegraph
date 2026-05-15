@@ -1191,13 +1191,40 @@ async function readFilePrefix(filePath: string, maxBytes: number): Promise<{ tex
     const buffer = Buffer.alloc(readLimit);
     const { bytesRead } = await handle.read(buffer, 0, readLimit, 0);
     const outputBytes = Math.min(bytesRead, maxBytes);
+    const outputBuffer = trimToUtf8Boundary(buffer.subarray(0, outputBytes));
     return {
-      text: buffer.subarray(0, outputBytes).toString("utf8"),
+      text: outputBuffer.toString("utf8"),
       truncated: bytesRead > maxBytes,
     };
   } finally {
     await handle.close();
   }
+}
+
+function trimToUtf8Boundary(buffer: Buffer): Buffer {
+  if (buffer.length === 0) return buffer;
+  let leadIndex = buffer.length - 1;
+  while (leadIndex >= 0) {
+    const byte = buffer[leadIndex];
+    if (byte === undefined || (byte & 0xc0) !== 0x80) break;
+    leadIndex -= 1;
+  }
+  if (leadIndex < 0) return buffer.subarray(0, 0);
+  const leadByte = buffer[leadIndex];
+  if (leadByte === undefined) return buffer.subarray(0, 0);
+  const continuationBytes = buffer.length - leadIndex - 1;
+  const expectedContinuationBytes = expectedUtf8ContinuationBytes(leadByte);
+  if (expectedContinuationBytes === null) return buffer.subarray(0, leadIndex);
+  if (continuationBytes < expectedContinuationBytes) return buffer.subarray(0, leadIndex);
+  return buffer;
+}
+
+function expectedUtf8ContinuationBytes(byte: number): number | null {
+  if ((byte & 0x80) === 0) return 0;
+  if ((byte & 0xe0) === 0xc0) return 1;
+  if ((byte & 0xf0) === 0xe0) return 2;
+  if ((byte & 0xf8) === 0xf0) return 3;
+  return null;
 }
 
 async function assertRealPathCandidateWithinRoot(
@@ -1214,7 +1241,11 @@ async function assertRealPathCandidateWithinRoot(
       `${label} is outside project root: ${normalizePath(realTargetPath)} (root: ${normalizePath(realRoot)})`,
     );
   }
-  return normalizePath(await fs.realpath(filePath));
+  const finalRealPath = normalizePath(await fs.realpath(filePath));
+  if (!isFilePathWithinRoot(realRoot, finalRealPath)) {
+    throw new Error(`${label} is outside project root: ${finalRealPath} (root: ${normalizePath(realRoot)})`);
+  }
+  return finalRealPath;
 }
 
 async function assertWritableDirectoryRealPathWithinRoot(

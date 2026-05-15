@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
 import { createCodegraphMcpHandlers, listCodegraphMcpTools, startCodegraphMcpHttpServer } from "../src/mcp/server.js";
 
@@ -484,6 +484,20 @@ describe("codegraph MCP handlers", () => {
     });
   });
 
+  it("does not split multi-byte UTF-8 characters in bounded get_file reads", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-file-utf8-bound-"));
+    await fs.writeFile(path.join(root, "unicode.txt"), "abc😀def", "utf8");
+    const handlers = createCodegraphMcpHandlers({ root });
+
+    const result = await handlers.get_file({ file: "unicode.txt", maxBytes: 5 });
+
+    expect(result).toEqual({
+      file: "unicode.txt",
+      text: "abc",
+      truncated: true,
+    });
+  });
+
   it("accepts get_file paths through a symlinked root realpath", async () => {
     const realRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-real-file-root-"));
     const parent = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-file-link-parent-"));
@@ -504,6 +518,33 @@ describe("codegraph MCP handlers", () => {
     expect(result.file).toBe("auth.ts");
     expect(result.text).toContain("export const ok");
     expect(result.truncated).toBe(false);
+  });
+
+  it("rechecks final realpath confinement before reading MCP files", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-file-final-realpath-"));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-file-final-outside-"));
+    const insideFile = path.join(root, "auth.ts");
+    const outsideFile = path.join(outside, "auth.ts");
+    await fs.writeFile(insideFile, "export const ok = 1;\n", "utf8");
+    await fs.writeFile(outsideFile, "outside\n", "utf8");
+    const originalRealpath = fs.realpath.bind(fs);
+    const realpath = vi.spyOn(fs, "realpath");
+    let insideFileRealpathCalls = 0;
+    realpath.mockImplementation(async (candidate) => {
+      const resolved = path.resolve(String(candidate));
+      if (resolved === insideFile) {
+        insideFileRealpathCalls += 1;
+        return insideFileRealpathCalls === 1 ? insideFile : outsideFile;
+      }
+      return await originalRealpath(candidate);
+    });
+
+    try {
+      const handlers = createCodegraphMcpHandlers({ root });
+      await expect(handlers.get_file({ file: insideFile })).rejects.toThrow(/outside project root/);
+    } finally {
+      realpath.mockRestore();
+    }
   });
 
   it("accepts navigation and graph query paths through a symlinked root realpath", async () => {

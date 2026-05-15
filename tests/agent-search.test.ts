@@ -6,7 +6,7 @@ import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from
 import { searchCodegraph, searchCodegraphWithSession } from "../src/agent/search.js";
 import type { SymbolEdge, SymbolGraph, SymbolNode } from "../src/graphs.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../src/indexer/types.js";
-import type { Graph, Range } from "../src/types.js";
+import type { Edge, Graph, Range } from "../src/types.js";
 
 async function mkRepo(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-search-"));
@@ -244,6 +244,62 @@ describe("agent search", () => {
       file: "first.ts",
     });
     expect(secondResult?.neighbors.some((neighbor) => neighbor.relation === "calls")).toBe(false);
+    expect(edgeIterations).toBe(1);
+  });
+
+  it("indexes file neighbors once per graph search instead of scanning edges per match", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-search-file-neighbors-"));
+    const firstFile = path.join(root, "foo-a.ts");
+    const secondFile = path.join(root, "foo-b.ts");
+    const thirdFile = path.join(root, "foo-c.ts");
+    const fileEdges: Edge[] = [
+      { from: firstFile, to: { type: "file", path: secondFile }, raw: "./foo-b" },
+      { from: secondFile, to: { type: "file", path: thirdFile }, raw: "./foo-c" },
+    ];
+    const edgeStorage = [...fileEdges];
+    let edgeIterations = 0;
+    Object.defineProperty(fileEdges, Symbol.iterator, {
+      value: function* iterateEdges(): IterableIterator<Edge> {
+        edgeIterations += 1;
+        yield* edgeStorage;
+      },
+    });
+    const fileGraph: Graph = {
+      nodes: new Set([firstFile, secondFile, thirdFile]),
+      edges: fileEdges,
+    };
+    const index: ProjectIndex = {
+      graph: fileGraph,
+      modules: new Map(),
+      byFile: new Map(),
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+
+    const response = await searchCodegraphWithSession(
+      snapshotSession({
+        root,
+        files: [firstFile, secondFile, thirdFile],
+        index,
+        fileGraph,
+        symbolGraph: { nodes: new Map(), edges: [] },
+      }),
+      { root, query: "foo", mode: "graph", from: "foo-a.ts", depth: 2, limit: 10 },
+    );
+
+    expect(response.results.map((result) => result.file)).toContain("foo-c.ts");
+    expect(response.results.find((result) => result.file === "foo-a.ts")?.neighbors).toContainEqual({
+      relation: "imports",
+      target: "foo-b.ts",
+      file: "foo-b.ts",
+    });
+    expect(response.results.find((result) => result.file === "foo-c.ts")?.evidence).toContainEqual(
+      expect.objectContaining({
+        source: "graph",
+        label: "imports",
+        file: "foo-c.ts",
+      }),
+    );
     expect(edgeIterations).toBe(1);
   });
 
