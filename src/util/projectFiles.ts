@@ -125,6 +125,10 @@ function normalizeGlobPattern(globPattern: string): string {
   return globPattern.trim().replace(/\\/g, "/");
 }
 
+function isLocationIndependentGlob(globPattern: string): boolean {
+  return globPattern.startsWith("**/");
+}
+
 function stripGitignoreTrailingSpaces(line: string): string {
   let end = line.length;
   while (end > 0 && line[end - 1] === " ") {
@@ -305,6 +309,7 @@ async function listEntriesFromSafeSymlinkDirectories(
     .map(normalizeGlobPattern)
     .filter(Boolean)
     .map((globPattern) => picomatch(globPattern, { dot: true }));
+  const locationIndependentIgnores = ignore.map(normalizeGlobPattern).filter(isLocationIndependentGlob);
   const entries = (await fg(["**/*"], {
     cwd: root,
     absolute: true,
@@ -340,7 +345,7 @@ async function listEntriesFromSafeSymlinkDirectories(
         absolute: true,
         dot: true,
         followSymbolicLinks: false,
-        ignore,
+        ignore: locationIndependentIgnores,
         ...(options.onlyFiles !== undefined ? { onlyFiles: options.onlyFiles } : {}),
         ...(options.markDirectories !== undefined ? { markDirectories: options.markDirectories } : {}),
       })).filter((filePath) => {

@@ -181,6 +181,31 @@ describe("project file discovery", () => {
     expect(discoveredSet.has(normalize(path.join(linkedPackage, "src", "index.ts")))).toBe(false);
   });
 
+  it("does not apply project-root ignore globs relative to safe symlink directory targets", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-root-ignore-"));
+    const packageDir = path.join(tempDir, "packages", "core");
+    const linkedPackage = path.join(tempDir, "linked-core");
+    await createFile(path.join(tempDir, "src", "ignored.ts"), "export const ignored = 1;\n");
+    await createFile(path.join(packageDir, "src", "index.ts"), "export const core = 1;\n");
+
+    try {
+      await fs.symlink(packageDir, linkedPackage, "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const discovered = await listProjectFiles(tempDir, ["**/*.ts"], {
+      ignoreGlobs: ["src/**"],
+      useGitignore: false,
+    });
+    const discoveredSet = new Set(discovered.map(normalize));
+
+    expect(discoveredSet.has(normalize(path.join(tempDir, "src", "ignored.ts")))).toBe(false);
+    expect(discoveredSet.has(normalize(path.join(packageDir, "src", "index.ts")))).toBe(true);
+    expect(discoveredSet.has(normalize(path.join(linkedPackage, "src", "index.ts")))).toBe(true);
+  });
+
   it("applies gitignore rules to safe symlink directory targets by real path", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-gitignore-"));
     const packageDir = path.join(tempDir, "packages", "core");

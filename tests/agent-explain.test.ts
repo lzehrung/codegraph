@@ -115,6 +115,16 @@ describe("agent explain", () => {
     );
   });
 
+  it("does not resolve ambiguous unqualified SQL object targets by basename", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-explain-sql-target-ambiguous-"));
+    await fs.writeFile(path.join(root, "public.sql"), "CREATE TABLE public.users (id int primary key);\n");
+    await fs.writeFile(path.join(root, "private.sql"), "CREATE TABLE private.users (id int primary key);\n");
+
+    const explanation = await explainCodegraphTarget({ root, target: "users" });
+
+    expect(explanation.target.kind).toBe("not_found");
+  });
+
   it("does not attribute unrelated same-file SQL outgoing relations to a target object", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-explain-sql-target-"));
     await fs.writeFile(

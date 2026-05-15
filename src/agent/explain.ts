@@ -315,9 +315,21 @@ function findSqlObjectByName(
   lookup: SymbolLookup,
   name: string,
 ): Extract<ResolvedExplainTarget, { kind: "sql_object" }> | null {
-  const matches = [...snapshot.symbolGraph.nodes.values()]
-    .filter((node) => isSqlObjectNode(node) && (node.name === name || basename(node.name) === name))
+  const exactMatches = [...snapshot.symbolGraph.nodes.values()]
+    .filter((node) => isSqlObjectNode(node) && node.name === name)
     .sort(compareSymbolNodes);
+  const exactNode = exactMatches[0];
+  if (exactNode) {
+    const def = lookup.defById.get(exactNode.id);
+    return def ? { kind: "sql_object", def, node: exactNode } : null;
+  }
+
+  if (name.includes(".")) return null;
+
+  const matches = [...snapshot.symbolGraph.nodes.values()]
+    .filter((node) => isSqlObjectNode(node) && basename(node.name) === name)
+    .sort(compareSymbolNodes);
+  if (matches.length !== 1) return null;
   const node = matches[0];
   if (!node) return null;
   const def = lookup.defById.get(node.id);

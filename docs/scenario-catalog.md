@@ -234,6 +234,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Seed, fixture, and dump filters | `tests/sql-review-context.test.ts`, `tests/samples/sql/review/*`        | Seed, fixture, and dump SQL remains visible as SQL facts when changed directly but does not create application impact in code-only PRs.                         | Internal regression test | 2026-05-12 |
 | Changed SQL literal bridge     | `tests/sql-review-context.test.ts`                                      | A changed code SQL literal can surface matching SQL object candidates as review context without enabling global string matching from code to SQL.                | Internal regression test | 2026-05-12 |
 | SQL navigation                 | `tests/goto.test.ts`, `tests/references.test.ts`                        | SQL object names support go-to-definition and find-references across SQL files, including schema-qualified names and object-level alias/table-qualified references, while application-code strings stay out of global SQL navigation and column definitions remain unclaimed. | Internal regression test | 2026-05-13 |
+| SQL explain target disambiguation | `tests/agent-explain.test.ts`                                        | SQL explain targets resolve exact object names first and resolve unqualified basenames only when they are unique across schemas.                                | Internal regression test | 2026-05-15 |
 
 ## Svelte
 
