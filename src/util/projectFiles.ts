@@ -104,6 +104,13 @@ type GitignoreRule = {
   matches: (relativePath: string) => boolean;
 };
 
+type FastGlobEntry = {
+  path: string;
+  dirent: {
+    isSymbolicLink: () => boolean;
+  };
+};
+
 function normalizeGlobPattern(globPattern: string): string {
   return globPattern.trim().replace(/\\/g, "/");
 }
@@ -254,7 +261,11 @@ export async function listProjectFiles(
       followSymbolicLinks: false,
       ignore: [...DEFAULT_PROJECT_FILE_IGNORES, ...userIgnoreGlobs],
     });
-    const rootSafeFiles = await filterRealPathsWithinRoot(files, realRoot);
+    const linkedFiles = await listFilesFromSafeSymlinkDirectories(root, realRoot, patterns, [
+      ...DEFAULT_PROJECT_FILE_IGNORES,
+      ...userIgnoreGlobs,
+    ]);
+    const rootSafeFiles = await filterRealPathsWithinRoot([...files, ...linkedFiles], realRoot);
     return rootSafeFiles.map(normalizePath).filter((filePath) => {
       if (
         includeMatchers.length > 0 &&
@@ -268,6 +279,58 @@ export async function listProjectFiles(
     logWithLevel(options?.logLevel, "debug", `listProjectFiles failed for ${root}: ${stringifyUnknown(error)}`);
     throw new Error(`Failed to list files in ${root}: ${stringifyUnknown(error)}`);
   }
+}
+
+async function listFilesFromSafeSymlinkDirectories(
+  root: string,
+  realRoot: string,
+  patterns: string[],
+  ignore: string[],
+): Promise<string[]> {
+  const entries = (await fg(["**/*"], {
+    cwd: root,
+    absolute: true,
+    dot: true,
+    onlyFiles: false,
+    followSymbolicLinks: false,
+    objectMode: true,
+    ignore,
+  })) as FastGlobEntry[];
+  const symlinkDirectories = await mapLimitSemaphore(
+    entries.filter((entry) => entry.dirent.isSymbolicLink()).map((entry) => entry.path),
+    REALPATH_FILTER_CONCURRENCY,
+    async (linkPath) => {
+      try {
+        const [realPath, stats] = await Promise.all([fsp.realpath(linkPath), fsp.stat(linkPath)]);
+        if (!stats.isDirectory()) return null;
+        if (!isFilePathWithinRoot(realRoot, realPath)) return null;
+        if (normalizePath(realPath) === normalizePath(realRoot)) return null;
+        return linkPath;
+      } catch {
+        return null;
+      }
+    },
+  );
+  const safeSymlinkDirectories = symlinkDirectories.filter((entry): entry is string => entry !== null);
+  const filesByPath = new Map<string, string>();
+  const filesByDirectory = await mapLimitSemaphore(
+    safeSymlinkDirectories,
+    REALPATH_FILTER_CONCURRENCY,
+    async (directory) =>
+      await fg(patterns, {
+        cwd: directory,
+        absolute: true,
+        dot: true,
+        followSymbolicLinks: false,
+        ignore,
+      }),
+  );
+  for (const files of filesByDirectory) {
+    for (const file of files) {
+      filesByPath.set(normalizePath(file), file);
+    }
+  }
+  return [...filesByPath.values()];
 }
 
 async function filterRealPathsWithinRoot(paths: string[], realRoot: string): Promise<string[]> {

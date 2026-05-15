@@ -133,6 +133,31 @@ describe("project file discovery", () => {
     expect(discoveredSet.has(normalize(outsideFile))).toBe(false);
   });
 
+  it("traverses symlinked directories only when their realpath stays inside the project root", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-dir-root-"));
+    const packageDir = path.join(tempDir, "packages", "core");
+    const linkedPackage = path.join(tempDir, "linked-core");
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-dir-outside-"));
+    const linkedOutside = path.join(tempDir, "linked-outside");
+    await createFile(path.join(packageDir, "src", "index.ts"), "export const core = 1;\n");
+    await createFile(path.join(outsideDir, "secret.ts"), "export const secret = 1;\n");
+
+    try {
+      await fs.symlink(packageDir, linkedPackage, "junction");
+      await fs.symlink(outsideDir, linkedOutside, "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const discovered = await listProjectFiles(tempDir, ["**/*.ts"], { ignoreGlobs: [] });
+    const discoveredSet = new Set(discovered.map(normalize));
+
+    expect(discoveredSet.has(normalize(path.join(packageDir, "src", "index.ts")))).toBe(true);
+    expect(discoveredSet.has(normalize(path.join(linkedPackage, "src", "index.ts")))).toBe(true);
+    expect(discoveredSet.has(normalize(path.join(linkedOutside, "secret.ts")))).toBe(false);
+  });
+
   it("extracts project names from common manifests", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-meta-"));
     const nodeDir = path.join(tempDir, "node");

@@ -226,6 +226,42 @@ describe("codegraph MCP handlers", () => {
     expect(result.truncated).toBe(false);
   });
 
+  it("accepts navigation and graph query paths through a symlinked root realpath", async () => {
+    const realRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-real-nav-root-"));
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-nav-link-parent-"));
+    const linkedRoot = path.join(parent, "repo-link");
+    try {
+      await fs.symlink(realRoot, linkedRoot, "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const authPath = path.join(realRoot, "auth.ts");
+    const apiPath = path.join(realRoot, "api.ts");
+    const apiSource = "import { validateUser } from './auth';\nexport const ok = validateUser(1);\n";
+    await fs.writeFile(authPath, "export function validateUser(id: number) { return id > 0; }\n", "utf8");
+    await fs.writeFile(apiPath, apiSource, "utf8");
+    const handlers = createCodegraphMcpHandlers({ root: linkedRoot });
+
+    const goto = await handlers.goto({
+      file: apiPath,
+      line: 2,
+      column: apiSource.split("\n")[1]!.indexOf("validateUser"),
+    });
+    const refs = await handlers.refs({ file: authPath, line: 1, column: "export function ".length });
+    const deps = await handlers.deps({ file: apiPath });
+    const rdeps = await handlers.rdeps({ file: authPath });
+    const graphPath = await handlers.path({ from: apiPath, to: authPath });
+
+    expect(goto.status).toBe("ok");
+    if (goto.status === "ok") expect(normalizeSqlitePath(goto.definition.file)).toMatch(/auth\.ts$/);
+    expect(refs.references.some((reference) => reference.file === "api.ts")).toBeTruthy();
+    expect(deps.dependencies.some((dependency) => dependency.file === "auth.ts")).toBeTruthy();
+    expect(rdeps.reverseDependencies.some((dependency) => dependency.file === "api.ts")).toBeTruthy();
+    expect(graphPath.path).toEqual(["api.ts", "auth.ts"]);
+  });
+
   it("rejects artifact output directories that escape through a directory link", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-artifact-link-"));
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-artifact-outside-"));

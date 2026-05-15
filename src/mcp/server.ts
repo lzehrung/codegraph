@@ -97,7 +97,6 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
   const realRoot = fs.realpath(root);
   let sqlitePath = options.artifactPath ? resolveArtifactSqlitePathCandidate(root, options.artifactPath) : undefined;
 
-  const resolveFile = (file: string): string => assertFilePathWithinRoot(root, file, "File");
   const relative = (file: string): string => toProjectRelativePath(root, file) ?? normalizePath(path.resolve(file));
   const boundedLimit = (limit: number | undefined, fallback: number, max: number): number => {
     if (typeof limit !== "number" || !Number.isFinite(limit)) return fallback;
@@ -134,7 +133,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
     goto: async (request) => {
       const snapshot = await session.loadProject();
       return await goToDefinition(snapshot.index, {
-        file: resolveFile(request.file),
+        file: await resolveProjectFile(await realRoot, root, request.file),
         line: request.line,
         column: request.column,
       });
@@ -157,7 +156,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
       const result = await findReferences(
         snapshot.index,
         {
-          file: resolveFile(request.file),
+          file: await resolveProjectFile(await realRoot, root, request.file),
           line: request.line,
           column: request.column,
         },
@@ -178,7 +177,11 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
         ...(request.depth !== undefined ? { depth: request.depth } : {}),
         limit: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
       };
-      const dependencies = getDependencies(snapshot.fileGraph, resolveFile(request.file), queryOptions).map(
+      const dependencies = getDependencies(
+        snapshot.fileGraph,
+        await resolveProjectFile(await realRoot, root, request.file),
+        queryOptions,
+      ).map(
         (dependency) => ({
           file: relative(dependency.file),
           depth: dependency.depth,
@@ -195,7 +198,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
       };
       const reverseDependencies = getReverseDependencies(
         snapshot.fileGraph,
-        resolveFile(request.file),
+        await resolveProjectFile(await realRoot, root, request.file),
         queryOptions,
       ).map((dependency) => ({
         file: relative(dependency.file),
@@ -206,7 +209,11 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
 
     path: async (request) => {
       const snapshot = await session.loadProject();
-      const result = getShortestPath(snapshot.fileGraph, resolveFile(request.from), resolveFile(request.to));
+      const result = getShortestPath(
+        snapshot.fileGraph,
+        await resolveProjectFile(await realRoot, root, request.from),
+        await resolveProjectFile(await realRoot, root, request.to),
+      );
       return {
         path: result ? result.map(relative) : null,
       };
@@ -677,6 +684,16 @@ async function resolveReadableFile(
   const displayPath =
     toProjectRelativePath(root, candidatePath) ?? toProjectRelativePath(realRoot, realPath) ?? normalizePath(realPath);
   return { realPath, displayPath };
+}
+
+async function resolveProjectFile(realRoot: string, root: string, filePath: string): Promise<string> {
+  const candidatePath = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(root, filePath);
+  const realPath = await assertRealPathCandidateWithinRoot(realRoot, candidatePath, "File");
+  const lexicalRelativePath = toProjectRelativePath(root, candidatePath);
+  if (lexicalRelativePath) return normalizePath(candidatePath);
+  const realRelativePath = toProjectRelativePath(realRoot, realPath);
+  if (realRelativePath) return normalizePath(path.resolve(root, realRelativePath));
+  throw new Error(`File is outside project root: ${normalizePath(realPath)} (root: ${normalizePath(realRoot)})`);
 }
 
 async function readFilePrefix(filePath: string, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
