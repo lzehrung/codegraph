@@ -428,9 +428,9 @@ function computeChangedByteRanges(source: string, hunks: FileChange["hunks"]): B
           ranges.push({ start: lineStart, end: lineStart + newText.length });
         }
       }
-      // If more lines were deleted than added (including pure-deletion blocks where
-      // !added.length), emit a 1-byte sentinel at the deletion cursor in the
-      // new source.  Without this, removing a parameter line from a multiline
+      // If more lines were deleted than added, including pure-deletion blocks,
+      // emit a 1-byte sentinel at the deletion cursor in the new source.
+      // Without this, removing a parameter line from a multiline
       // signature would leave computeSignatureChanged with no byte range to overlap
       // against the params node and incorrectly return false.
       // When the deletion falls at EOF, newLine-1 can exceed lineStarts.length;
