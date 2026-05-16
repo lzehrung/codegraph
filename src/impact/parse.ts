@@ -1,4 +1,5 @@
 import { Readable } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import type { Diff, FileChange, Hunk } from "./types.js";
 
 type ParsedFileChange = FileChange & {
@@ -36,22 +37,16 @@ export function parseUnifiedDiff(diffText: string): Diff {
 
 export async function parseUnifiedDiffStreaming(stream: Readable): Promise<Diff> {
   const state = createParserState();
+  const decoder = new StringDecoder("utf8");
   let buffered = "";
 
   for await (const chunk of stream) {
-    buffered += decodeStreamChunk(chunk);
-
-    let lineStart = 0;
-    for (;;) {
-      const newlineIndex = buffered.indexOf("\n", lineStart);
-      if (newlineIndex < 0) break;
-      const lineEnd = newlineIndex > lineStart && buffered[newlineIndex - 1] === "\r" ? newlineIndex - 1 : newlineIndex;
-      parseDiffLine(state, buffered.slice(lineStart, lineEnd));
-      lineStart = newlineIndex + 1;
-    }
-
-    buffered = buffered.slice(lineStart);
+    buffered += decodeStreamChunk(decoder, chunk);
+    buffered = parseBufferedLines(state, buffered);
   }
+
+  buffered += decoder.end();
+  buffered = parseBufferedLines(state, buffered);
 
   if (buffered) {
     parseDiffLine(state, buffered.endsWith("\r") ? buffered.slice(0, -1) : buffered);
@@ -66,6 +61,19 @@ function createParserState(): DiffParserState {
     currentFile: null,
     currentHunk: null,
   };
+}
+
+function parseBufferedLines(state: DiffParserState, buffered: string): string {
+  let lineStart = 0;
+  for (;;) {
+    const newlineIndex = buffered.indexOf("\n", lineStart);
+    if (newlineIndex < 0) break;
+    const lineEnd = newlineIndex > lineStart && buffered[newlineIndex - 1] === "\r" ? newlineIndex - 1 : newlineIndex;
+    parseDiffLine(state, buffered.slice(lineStart, lineEnd));
+    lineStart = newlineIndex + 1;
+  }
+
+  return buffered.slice(lineStart);
 }
 
 function parseDiffLine(state: DiffParserState, line: string): void {
@@ -116,10 +124,10 @@ function finishCurrentFile(state: DiffParserState): void {
   state.currentHunk = null;
 }
 
-function decodeStreamChunk(chunk: unknown): string {
+function decodeStreamChunk(decoder: StringDecoder, chunk: unknown): string {
   if (typeof chunk === "string") return chunk;
-  if (Buffer.isBuffer(chunk)) return chunk.toString("utf8");
-  if (chunk instanceof Uint8Array) return Buffer.from(chunk).toString("utf8");
+  if (Buffer.isBuffer(chunk)) return decoder.write(chunk);
+  if (chunk instanceof Uint8Array) return decoder.write(Buffer.from(chunk));
   return String(chunk);
 }
 

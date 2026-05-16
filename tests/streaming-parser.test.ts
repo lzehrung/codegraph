@@ -122,6 +122,25 @@ ${hunkLines.join("\n")}
     expect(streamResult).toEqual(syncResult);
   });
 
+  it("should preserve UTF-8 characters split across buffer chunks", async () => {
+    const utf8Diff = `diff --git a/utf8.ts b/utf8.ts
+--- a/utf8.ts
++++ b/utf8.ts
+@@ -1,1 +1,1 @@
+-const label = "plain";
++const label = "caf\u00e9";
+`;
+    const bytes = Buffer.from(utf8Diff, "utf8");
+    const splitMarker = Buffer.from("\u00e9", "utf8");
+    const splitIndex = bytes.indexOf(splitMarker) + 1;
+    const stream = Readable.from([bytes.subarray(0, splitIndex), bytes.subarray(splitIndex)]);
+    const streamResult = await parseUnifiedDiffStreaming(stream);
+
+    expect(splitIndex).toBeGreaterThan(0);
+    expect(streamResult).toEqual(parseUnifiedDiff(utf8Diff));
+    expect(streamResult.files[0]?.hunks[0]?.lines).toContain('+const label = "caf\u00e9";');
+  });
+
   it("should propagate stream errors", async () => {
     const stream = new Readable({
       read() {

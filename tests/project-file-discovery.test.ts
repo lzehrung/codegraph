@@ -625,7 +625,30 @@ describe("project file discovery", () => {
         "**/node_modules/**",
         "src/generated/**",
       ]),
-    ).toEqual(["samples/**", "fixtures/**", "**/node_modules/**", "src/generated/**"]);
+    ).toEqual(["samples/**", "fixtures/**", "**/node_modules/**"]);
+  });
+
+  it("does not prune child-root files with out-of-scope project-root ignore globs", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-discovery-out-of-scope-ignore-"));
+    const testsDir = path.join(tempDir, "tests");
+    const keptFile = path.join(testsDir, "src", "generated", "fixture.ts");
+    const testFile = path.join(testsDir, "unit", "app.test.ts");
+
+    await createFile(keptFile, "export const fixture = 1;\n");
+    await createFile(testFile, "export const appTest = 1;\n");
+
+    const discovered = new Set(
+      (
+        await listProjectFiles(testsDir, undefined, {
+          globRoot: tempDir,
+          ignoreGlobs: ["src/generated/**"],
+          useGitignore: false,
+        })
+      ).map(normalize),
+    );
+
+    expect(discovered.has(normalize(keptFile))).toBe(true);
+    expect(discovered.has(normalize(testFile))).toBe(true);
   });
 
   it("does not validate gitignoreRoot when gitignore filtering is disabled", async () => {

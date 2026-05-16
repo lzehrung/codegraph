@@ -124,6 +124,10 @@ type RootSafePath = {
   realPath: string;
 };
 
+function isPresent(value: string | undefined): value is string {
+  return value !== undefined;
+}
+
 function normalizeGlobPattern(globPattern: string): string {
   return globPattern.trim().replace(/\\/g, "/");
 }
@@ -151,13 +155,14 @@ export function translateGlobRootIgnoreGlobsForScanRoot(
   return ignoreGlobs
     .map(normalizeGlobPattern)
     .filter(Boolean)
-    .map((globPattern) => {
+    .map((globPattern): string | undefined => {
       const rootRelativePattern = globPattern.startsWith("/") ? globPattern.slice(1) : globPattern;
       if (isLocationIndependentGlob(rootRelativePattern)) return rootRelativePattern;
       if (rootRelativePattern === relativeScanRoot || rootRelativePattern === `${relativeScanRoot}/**`) return "**";
       if (rootRelativePattern.startsWith(rootPrefix)) return rootRelativePattern.slice(rootPrefix.length) || "**";
-      return rootRelativePattern;
-    });
+      return undefined;
+    })
+    .filter(isPresent);
 }
 
 function stripGitignoreTrailingSpaces(line: string): string {
