@@ -188,6 +188,47 @@ describe("Cache invalidation and strict hashing", () => {
     expect(manifest.graphOptions.fast).toBe(true);
   });
 
+  it("falls back to a full incremental rebuild when the manifest commit no longer exists", async () => {
+    const root = await mkTmpDir("dg-stale-manifest-commit-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@example.com"]);
+    runGit(root, ["config", "user.name", "Test User"]);
+
+    const entry = path.join(root, "entry.ts");
+    await fsp.writeFile(entry, "export const value = 1;\n", "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+
+    await buildProjectIndex(root, { cache: "disk", logLevel: "silent" });
+
+    const manifestPath = manifestPathFor(root);
+    const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as IndexManifest;
+    await fsp.writeFile(
+      manifestPath,
+      JSON.stringify(
+        {
+          ...manifest,
+          lastCommit: "05a528dfce570141bfe11d066824d2bed9d72ce2",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const report: BuildReport = { timings: {} };
+    const index = await buildProjectIndexIncremental(root, {
+      cache: "disk",
+      logLevel: "silent",
+      report,
+    });
+
+    expect(index.byFile.has(normalize(entry))).toBe(true);
+    expect(report.manifest?.used).toBe(true);
+    expect(report.manifest?.reused).toBe(false);
+    expect(report.manifest?.reason).toBe("staleGitCommit");
+  });
+
   it("persists SQL corpus signatures so disk graph cache reuses SQL edges", async () => {
     const root = await mkTmpDir("dg-sql-edge-cache-manifest-");
     const schemaPath = path.join(root, "schema.sql");

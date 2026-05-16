@@ -7,7 +7,7 @@ import { handleChunkCommand, type ChunkCommandContext } from "../src/cli/chunk.j
 import { buildDoctorReport } from "../src/cli/doctor.js";
 import { handleGraphDeltaCommand } from "../src/cli/graphDelta.js";
 import { handleGraphQueryCommand, type GraphQueryCommandContext } from "../src/cli/graphQueries.js";
-import { CLI_HELP_TEXT } from "../src/cli/help.js";
+import { CLI_HELP_TEXT, MCP_SERVE_HELP_TEXT } from "../src/cli/help.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/cli/packageInfo.js";
 import { handleSkillCommand, type SkillCommandContext } from "../src/cli/skill.js";
 import { handleSqlCommand } from "../src/cli/sql.js";
@@ -150,6 +150,43 @@ describe("CLI command modules", () => {
 
     expect(buildOptions).toContain("--cache-strict");
     expect(buildOptions).toContain("--progress");
+  });
+
+  test("lists MCP as a top-level command in CLI help", () => {
+    const commands = CLI_HELP_TEXT.slice(CLI_HELP_TEXT.indexOf("Commands:"), CLI_HELP_TEXT.indexOf("Graph Options:"));
+
+    expect(commands).toContain("  mcp");
+    expect(commands).toContain("Serve MCP tools for agent graph navigation");
+  });
+
+  test("documents HTTP host and port options in MCP serve help", () => {
+    expect(MCP_SERVE_HELP_TEXT).toContain("--port <number>");
+    expect(MCP_SERVE_HELP_TEXT).toContain("--host <host>");
+    expect(MCP_SERVE_HELP_TEXT).toContain("--stdio");
+  });
+
+  test("rejects ambiguous MCP serve transport flags before starting a server", async () => {
+    const result = await captureCli(["mcp", "serve", "--stdio", "--port", "3000"]);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Choose either --stdio or --port");
+  });
+
+  test("rejects invalid MCP serve port values before starting a server", async () => {
+    const result = await captureCli(["mcp", "serve", "--port", "abc"]);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Invalid --port value");
+  });
+
+  test("rejects MCP serve host without HTTP transport", async () => {
+    const result = await captureCli(["mcp", "serve", "--host", "127.0.0.1"]);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("--host requires --port");
   });
 
   test("runs doctor command in process with captured JSON output", async () => {

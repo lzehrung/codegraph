@@ -46,12 +46,16 @@ import {
 } from "./native/treeSitterNative.js";
 import { supportForFile } from "./languages.js";
 import { handleChunkCommand } from "./cli/chunk.js";
+import { handleArtifactCommand } from "./cli/artifact.js";
 import { buildDoctorReport } from "./cli/doctor.js";
+import { handleExplainCommand } from "./cli/explain.js";
 import { handleGraphDeltaCommand } from "./cli/graphDelta.js";
 import { handleGraphQueryCommand } from "./cli/graphQueries.js";
-import { CLI_HELP_TEXT } from "./cli/help.js";
-import { parseCacheModeOption } from "./cli/options.js";
+import { CLI_HELP_TEXT, MCP_SERVE_HELP_TEXT } from "./cli/help.js";
+import { handleMcpServeCommand } from "./cli/mcp.js";
+import { parseCacheModeOption, parsePositiveIntegerOption } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
+import { handleSearchCommand } from "./cli/search.js";
 import { handleSkillCommand } from "./cli/skill.js";
 import { handleSqlCommand } from "./cli/sql.js";
 import { buildSqlArtifactGraphFromFiles } from "./sql/index.js";
@@ -244,6 +248,7 @@ type ParsedCliArgs = {
 const CLI_VALUE_OPTIONS = new Set<string>([
   "--root",
   "--output",
+  "--out",
   "--stderr-file",
   "--threads",
   "--native",
@@ -290,6 +295,14 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--agent",
   "--target",
   "--limit",
+  "--mode",
+  "--from",
+  "--max-dependencies",
+  "--max-snippets",
+  "--max-symbols",
+  "--artifact",
+  "--host",
+  "--port",
 ]);
 
 type IndexCacheMetadata = {
@@ -366,17 +379,6 @@ function writeCliProjectFileError(
     return;
   }
   writeStdoutLine(`error: ${result.reason}: ${result.error}`);
-}
-
-function parsePositiveIntegerOption(rawValue: string | undefined, optionName: string, defaultValue: number): number {
-  if (rawValue === undefined) {
-    return defaultValue;
-  }
-  const parsedValue = Number(rawValue);
-  if (!Number.isInteger(parsedValue) || parsedValue < 1) {
-    throw new Error(`Invalid ${optionName} value "${rawValue}". Expected a positive integer.`);
-  }
-  return parsedValue;
 }
 
 function defaultCacheIndexPath(projectRoot: string): string {
@@ -574,7 +576,7 @@ async function buildInspectReport(
   };
 }
 
-function parseCliArgs(tokens: string[]): ParsedCliArgs {
+function parseCliArgs(command: string, tokens: string[]): ParsedCliArgs {
   const positionals: string[] = [];
   const flags = new Set<string>();
   const options = new Map<string, string[]>();
@@ -601,7 +603,7 @@ function parseCliArgs(tokens: string[]): ParsedCliArgs {
         continue;
       }
       const key = t;
-      if (CLI_VALUE_OPTIONS.has(key)) {
+      if (isCliValueOption(command, key, positionals)) {
         const next = tokens[i + 1];
         if (next === undefined) throw new Error(`Missing value for ${key} option`);
         pushOpt(key, next);
@@ -629,6 +631,11 @@ function parseCliArgs(tokens: string[]): ParsedCliArgs {
   }
 
   return { positionals, flags, options };
+}
+
+function isCliValueOption(command: string, key: string, positionals: readonly string[]): boolean {
+  if (command === "artifact" && key === "--sqlite" && positionals[0] === "build") return false;
+  return CLI_VALUE_OPTIONS.has(key);
 }
 
 async function writeCommandReport(report: CommandReport, reportFile: string | undefined) {
@@ -1133,12 +1140,17 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   const cmd = rawArgs[0] && !rawArgs[0].startsWith("-") ? rawArgs[0] : "graph";
   const argTokens = rawArgs[0] && !rawArgs[0].startsWith("-") ? rawArgs.slice(1) : rawArgs;
 
-  const parsed = parseCliArgs(argTokens);
+  const parsed = parseCliArgs(cmd, argTokens);
   const hasFlag = (name: string) => parsed.flags.has(name);
   const getOpt = (name: string) => {
     const v = parsed.options.get(name);
     return v && v.length > 0 ? v[v.length - 1] : undefined;
   };
+
+  if ((hasFlag("--help") || hasFlag("-h")) && cmd === "mcp" && parsed.positionals[0] === "serve") {
+    writeStdoutLine(MCP_SERVE_HELP_TEXT.trimEnd());
+    return;
+  }
 
   // Handle help flag
   if (hasFlag("--help") || hasFlag("-h")) {
@@ -1351,6 +1363,60 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       getOpt,
       cwd: getCwd,
       writeJSONLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
+  }
+
+  if (cmd === "search") {
+    await handleSearchCommand({
+      positionals: parsed.positionals,
+      root: projectRootFs,
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
+  }
+
+  if (cmd === "explain") {
+    await handleExplainCommand({
+      positionals: parsed.positionals,
+      root: projectRootFs,
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
+  }
+
+  if (cmd === "artifact") {
+    await handleArtifactCommand({
+      positionals: parsed.positionals,
+      root: projectRootFs,
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
+  }
+
+  if (cmd === "mcp") {
+    await handleMcpServeCommand({
+      positionals: parsed.positionals,
+      root: projectRootFs,
+      getOpt,
+      hasFlag,
       writeStderrLine,
       exit: exitCli,
     });
@@ -2220,7 +2286,10 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   exitCli(1);
 }
 
-export async function runCli(rawArgs: string[] = process.argv.slice(2), runtime: Partial<CliRuntime> = {}): Promise<void> {
+export async function runCli(
+  rawArgs: string[] = process.argv.slice(2),
+  runtime: Partial<CliRuntime> = {},
+): Promise<void> {
   const context = createCliContext(runtime);
   await cliContextStorage.run(context, async () => await runCliWithActiveRuntime(rawArgs));
 }

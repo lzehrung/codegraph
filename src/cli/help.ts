@@ -5,6 +5,10 @@ Usage: codegraph <command> [options] [path]
 Commands:
   graph         Build dependency graph (default)
   inspect       Summarize repo structure and recommend next commands
+  search        Ranked agent search across files, symbols, chunks, SQL, and graph context
+  explain       Explain a file, symbol, SQL object, or search handle
+  artifact      Build an agent-ready SQLite/graph/report/question bundle
+  mcp           Serve MCP tools for agent graph navigation
   impact        Analyze PR impact
   review        Generate code review report
   goto          Go to definition
@@ -53,6 +57,10 @@ Examples:
   codegraph version
   codegraph doctor
   codegraph inspect ./src --limit 20
+  codegraph search "auth user" --json
+  codegraph explain src/auth.ts --json
+  codegraph artifact build --root . --out codegraph-out --json
+  codegraph mcp serve --root . --stdio
   codegraph graph --root . ./src --include-glob "**/*.ts" --ignore-glob "**/*.spec.ts"
   codegraph skill install --agent agents
   codegraph skill install --agent codex
@@ -65,4 +73,28 @@ Examples:
   codegraph impact --provider git --base main --head HEAD
   codegraph impact --provider git --base HEAD --head WORKTREE
   codegraph refs --file src/index.ts --line 42 --col 10
+`;
+
+export const MCP_SERVE_HELP_TEXT = `codegraph mcp serve - MCP server for agent graph navigation
+
+Usage: codegraph mcp serve [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--allow-build]
+
+Tools:
+  search          Deterministic ranked search with stable handles
+  get_file        Bounded project file reads inside the root
+  get_symbol      Resolve a search/explain handle
+  goto            Go to definition by file position
+  refs            Find references by handle or file position
+  deps            List dependencies
+  rdeps           List reverse dependencies
+  path            Find shortest dependency path
+  impact          Build compact impact context for a git range
+  review          Build review context for a git range
+  query_sqlite    Read-only row- and byte-bounded SQLite artifact query
+  artifact_build  Build artifacts only with --allow-build
+
+Defaults:
+  Transport defaults to stdio.
+  HTTP transport binds to 127.0.0.1 unless --host is passed and serves /mcp.
+  Tools are read-only unless --allow-build is passed.
 `;
