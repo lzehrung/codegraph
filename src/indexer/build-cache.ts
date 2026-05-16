@@ -17,6 +17,7 @@ import {
   getGitBlobHashes,
   isFilePathWithinRoot,
   listProjectFiles,
+  normalizePath,
   normalizeResolutionHints,
   stringifyUnknown,
   type ProjectFileDiscoveryOptions,
@@ -152,7 +153,7 @@ export function closeDiskCacheDatabase(projectRoot: string, opts?: BuildOptions)
   }
 }
 
-export const MANIFEST_VERSION = 1;
+export const MANIFEST_VERSION = 2;
 
 export type ManifestFileEntry = GraphCacheEntry;
 
@@ -165,6 +166,8 @@ type ManifestBuildOptions = {
   discovery?: {
     includeGlobs?: string[];
     ignoreGlobs?: string[];
+    globRoot?: string;
+    gitignoreRoot?: string;
     useGitignore: boolean;
   };
 };
@@ -670,13 +673,17 @@ function normalizeDiscoveryOptions(discovery?: ProjectFileDiscoveryOptions): Man
   const ignoreGlobs = Array.from(
     new Set((discovery.ignoreGlobs ?? []).map((glob) => glob.trim()).filter(Boolean)),
   ).sort();
+  const globRoot = discovery.globRoot ? normalizePath(path.resolve(discovery.globRoot)) : undefined;
+  const gitignoreRoot = discovery.gitignoreRoot ? normalizePath(path.resolve(discovery.gitignoreRoot)) : undefined;
   const useGitignore = discovery.useGitignore ?? true;
-  if (!includeGlobs.length && !ignoreGlobs.length && useGitignore) {
+  if (!includeGlobs.length && !ignoreGlobs.length && !globRoot && !gitignoreRoot && useGitignore) {
     return undefined;
   }
   return {
     ...(includeGlobs.length ? { includeGlobs } : {}),
     ...(ignoreGlobs.length ? { ignoreGlobs } : {}),
+    ...(globRoot ? { globRoot } : {}),
+    ...(gitignoreRoot ? { gitignoreRoot } : {}),
     useGitignore,
   };
 }
@@ -717,6 +724,8 @@ function normalizedDiscoveryOptionsEqual(
   const normalizedA = a ?? { useGitignore: true };
   const normalizedB = b ?? { useGitignore: true };
   if (normalizedA.useGitignore !== normalizedB.useGitignore) return false;
+  if (normalizedA.globRoot !== normalizedB.globRoot) return false;
+  if (normalizedA.gitignoreRoot !== normalizedB.gitignoreRoot) return false;
   const includeA = normalizedA.includeGlobs ?? [];
   const includeB = normalizedB.includeGlobs ?? [];
   if (includeA.length !== includeB.length) return false;

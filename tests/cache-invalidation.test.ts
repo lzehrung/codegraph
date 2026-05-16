@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { spawnSync } from "node:child_process";
 import { buildProjectIndex, buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
 import * as indexer from "../src/indexer.js";
-import { writeManifest, type IndexManifest } from "../src/indexer/build-cache.js";
+import { MANIFEST_VERSION, writeManifest, type IndexManifest } from "../src/indexer/build-cache.js";
 import { collectGraph } from "../src/graphs.js";
 import {
   getGitBlobHash,
@@ -58,7 +58,7 @@ async function readManifest(root: string): Promise<IndexManifest> {
 
 function createManifest(root: string): IndexManifest {
   return {
-    version: 1,
+    version: MANIFEST_VERSION,
     projectRoot: normalize(path.resolve(root)),
     updatedAt: Date.now(),
     files: {},
@@ -95,7 +95,7 @@ describe("Cache invalidation and strict hashing", () => {
       expect(writeSpy).toHaveBeenCalledTimes(2);
       expect(warnSpy).not.toHaveBeenCalled();
       const manifest = await readManifest(root);
-      expect(manifest.version).toBe(1);
+      expect(manifest.version).toBe(MANIFEST_VERSION);
       expect(manifest.projectRoot).toBe(normalize(path.resolve(root)));
     } finally {
       writeSpy.mockRestore();
@@ -180,6 +180,51 @@ describe("Cache invalidation and strict hashing", () => {
     });
     const manifest = await readManifest(root);
     expect(manifest.graphOptions.fast).toBe(true);
+  });
+
+  it("rebuilds incremental indexes when discovery globRoot changes", async () => {
+    const root = await mkTmpDir("dg-discovery-glob-root-cache-");
+    const testsRoot = path.join(root, "tests");
+    const unitPath = path.join(testsRoot, "unit", "app.test.ts");
+    const samplePath = path.join(testsRoot, "samples", "fixture.ts");
+    await fsp.mkdir(path.dirname(unitPath), { recursive: true });
+    await fsp.mkdir(path.dirname(samplePath), { recursive: true });
+    await fsp.writeFile(unitPath, "export const unit = 1;\n", "utf8");
+    await fsp.writeFile(samplePath, "export const fixture = 1;\n", "utf8");
+
+    const first = await buildProjectIndex(testsRoot, {
+      cache: "disk",
+      discovery: {
+        globRoot: root,
+        ignoreGlobs: ["tests/samples/**"],
+        useGitignore: false,
+      },
+      logLevel: "silent",
+    });
+    const normalizedUnitPath = normalize(unitPath);
+    const normalizedSamplePath = normalize(samplePath);
+    expect(first.byFile.has(normalizedUnitPath)).toBe(true);
+    expect(first.byFile.has(normalizedSamplePath)).toBe(false);
+
+    const manifestAfterFirstBuild = await readManifest(testsRoot);
+    expect(manifestAfterFirstBuild.buildOptions?.discovery?.globRoot).toBe(normalize(path.resolve(root)));
+
+    const report: BuildReport = { timings: {} };
+    const second = await buildProjectIndexIncremental(testsRoot, {
+      cache: "disk",
+      discovery: {
+        ignoreGlobs: ["tests/samples/**"],
+        useGitignore: false,
+      },
+      logLevel: "silent",
+      report,
+    });
+
+    expect(report.manifest?.used).toBe(true);
+    expect(report.manifest?.reused).toBe(false);
+    expect(report.manifest?.optionsMismatch).toContain("discovery");
+    expect(second.byFile.has(normalizedUnitPath)).toBe(true);
+    expect(second.byFile.has(normalizedSamplePath)).toBe(true);
   });
 
   it("falls back to a full incremental rebuild when the manifest commit no longer exists", async () => {

@@ -537,10 +537,15 @@ type ManifestMode = "off" | "read-only" | "read-write";
 type BuildIndexHelperOptions = {
   manifestMode?: ManifestMode;
   warnNoFilesMessage?: string;
+  ignoreExistingManifest?: boolean;
 };
 
-async function buildProjectIndexFromExport(projectRoot: string, opts?: BuildOptions): Promise<ProjectIndex> {
-  return buildProjectIndex(projectRoot, opts);
+async function buildProjectIndexFromExport(
+  projectRoot: string,
+  opts?: BuildOptions,
+  helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest">,
+): Promise<ProjectIndex> {
+  return buildProjectIndexWithManifestOptions(projectRoot, opts, helperOpts);
 }
 
 async function buildIndexFromFileListShared(
@@ -570,7 +575,7 @@ async function buildIndexFromFileListShared(
   const onFallbackImportExtraction = createFallbackImportExtractionHandler(report, opts);
   if (fileReport) fileReport.total = normalizedFiles.length;
   const manifestStart = performance.now();
-  const manifest = useManifest ? await loadManifest(projectRoot, opts) : null;
+  const manifest = useManifest && !helperOpts?.ignoreExistingManifest ? await loadManifest(projectRoot, opts) : null;
   const manifestFiles = sanitizeManifestEntriesForRoot(projectRoot, manifest?.files);
   if (timings && useManifest) {
     timings.manifestMs = Math.round(performance.now() - manifestStart);
@@ -854,6 +859,28 @@ async function buildIndexFromFileListShared(
   }
 }
 
+async function buildProjectIndexWithManifestOptions(
+  projectRoot: string,
+  opts?: BuildOptions,
+  helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest">,
+): Promise<ProjectIndex> {
+  try {
+    const files = await listProjectFiles(projectRoot, undefined, {
+      ...opts?.discovery,
+      ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+    });
+    return buildIndexFromFileListShared(projectRoot, files, opts, {
+      manifestMode: "read-write",
+      warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,
+      ...(helperOpts?.ignoreExistingManifest ? { ignoreExistingManifest: true } : {}),
+    });
+  } finally {
+    if ((opts?.cache ?? "off") === "disk") {
+      closeDiskCacheDatabase(projectRoot, opts);
+    }
+  }
+}
+
 /**
  * Build a complete project index for a repo root.
  *
@@ -863,20 +890,7 @@ async function buildIndexFromFileListShared(
  * deterministic packets from the same repo snapshot.
  */
 export async function buildProjectIndex(projectRoot: string, opts?: BuildOptions): Promise<ProjectIndex> {
-  try {
-    const files = await listProjectFiles(projectRoot, undefined, {
-      ...opts?.discovery,
-      ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-    });
-    return buildIndexFromFileListShared(projectRoot, files, opts, {
-      manifestMode: "read-write",
-      warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,
-    });
-  } finally {
-    if ((opts?.cache ?? "off") === "disk") {
-      closeDiskCacheDatabase(projectRoot, opts);
-    }
-  }
+  return buildProjectIndexWithManifestOptions(projectRoot, opts);
 }
 
 /**
@@ -948,12 +962,16 @@ export async function buildProjectIndexIncremental(
     const currentConfigHashResult = await computeConfigHash(projectRoot, opts?.logLevel);
     const currentConfigHash = recordConfigHashResult(manifestReport, currentConfigHashResult, opts?.logLevel);
     const configChanged = !!currentConfigHash && (!manifest?.configHash || currentConfigHash !== manifest.configHash);
-    if (!manifest || !graphOptionsEqual(manifest.graphOptions, graphOptions) || configChanged) {
+    const requiresFullRebuild = optionDiffs.includes("discovery");
+    if (!manifest || !graphOptionsEqual(manifest.graphOptions, graphOptions) || configChanged || requiresFullRebuild) {
       if (configChanged) {
         logWithLevel(opts?.logLevel, "warn", "Configuration changed, rebuilding index...");
       }
-      if (manifestReport && manifest) manifestReport.reason = "graphOptionsMismatch";
-      return await buildProjectIndexFromExport(projectRoot, opts);
+      if (manifestReport && manifest) {
+        manifestReport.reason = requiresFullRebuild ? "buildOptionsMismatch" : "graphOptionsMismatch";
+        manifestReport.reused = false;
+      }
+      return await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
     }
     const gitAvailable = await isGitRepo(projectRoot);
     const currentHead = gitAvailable ? await getGitHead(projectRoot) : null;
@@ -978,7 +996,7 @@ export async function buildProjectIndexIncremental(
           "warn",
           "Warning: Manifest commit is no longer available; rebuilding full index.",
         );
-        const rebuiltIndex = await buildProjectIndexFromExport(projectRoot, opts);
+        const rebuiltIndex = await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
         if (manifestReport) {
           manifestReport.reason = "staleGitCommit";
           manifestReport.reused = false;
@@ -999,7 +1017,7 @@ export async function buildProjectIndexIncremental(
           "warn",
           `Warning: Manifest verification failed (mismatches: ${mismatches}, missing: ${missing}). Rebuilding full index.`,
         );
-        return await buildProjectIndexFromExport(projectRoot, opts);
+        return await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
       }
     }
     const trackedEntries = sanitizeManifestEntriesForRoot(projectRoot, manifest.files);
