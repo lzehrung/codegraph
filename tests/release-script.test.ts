@@ -192,14 +192,14 @@ describe("release script helpers", () => {
           vitest: "^3.2.4",
         },
         dependencies: {
-          "better-sqlite3": "^12.5.0",
+          "fast-glob": "^3.3.3",
         },
       }),
     ).toEqual({
       name: "@lzehrung/codegraph",
       version: "1.8.44",
       dependencies: {
-        "better-sqlite3": "^12.5.0",
+        "fast-glob": "^3.3.3",
       },
     });
   });
@@ -244,7 +244,7 @@ describe("release script helpers", () => {
             "@lzehrung/codegraph-native": "^1.8.48",
           },
           dependencies: {
-            "better-sqlite3": "^12.5.0",
+            "fast-glob": "^3.3.3",
           },
         },
         {
@@ -261,7 +261,7 @@ describe("release script helpers", () => {
             vitest: "^3.2.4",
           },
           dependencies: {
-            "better-sqlite3": "^12.5.0",
+            "fast-glob": "^3.3.3",
           },
         },
       ),
@@ -279,7 +279,7 @@ describe("release script helpers", () => {
         vitest: "^3.2.4",
       },
       dependencies: {
-        "better-sqlite3": "^12.5.0",
+        "fast-glob": "^3.3.3",
       },
     });
   });
