@@ -103,6 +103,8 @@ The CLI ships a bundled skill installer. The parent agent `skills` directory mus
 
 Published installs of `@lzehrung/codegraph` depend on `@lzehrung/codegraph-native` as an optional dependency; that package resolves the matching native artifact automatically when one exists for the current platform.
 
+Codegraph requires Node.js 24.10 or newer.
+
 Install the optional fallback package only when you explicitly need JS Tree-sitter fallback:
 
 ```bash

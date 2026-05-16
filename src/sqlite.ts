@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createRequire } from "node:module";
 import type { Graph } from "./types.js";
 import type { SymbolGraph, SymbolNode } from "./graphs.js";
 import { parseGraphQuery } from "./query.js";
+import { isReadOnlySqliteError, SqliteDatabase, type SqliteStatement } from "./sqlite-driver.js";
 
 export type SqliteGraphOptions = {
   fileGraph: Graph;
@@ -60,14 +60,6 @@ export type RawSqlResult = {
   truncated?: boolean;
 };
 
-const loadBetterSqlite3 = () => {
-  const require = createRequire(import.meta.url);
-  return require("better-sqlite3") as typeof import("better-sqlite3");
-};
-
-type BetterSqliteDatabase = import("better-sqlite3").Database;
-type BetterSqliteStatement = import("better-sqlite3").Statement;
-
 const SQLITE_SCHEMA_VERSION = 2;
 
 const toSqliteText = (value: unknown): string => {
@@ -78,7 +70,7 @@ const toSqliteText = (value: unknown): string => {
   return "";
 };
 
-const hasColumn = (db: BetterSqliteDatabase, table: string, column: string): boolean => {
+const hasColumn = (db: SqliteDatabase, table: string, column: string): boolean => {
   const rows = db.prepare(`PRAGMA table_info(${table});`).raw().all();
   for (const row of rows) {
     if (!Array.isArray(row)) continue;
@@ -88,12 +80,12 @@ const hasColumn = (db: BetterSqliteDatabase, table: string, column: string): boo
   return false;
 };
 
-const ensureSymbolsVisibilityColumn = (db: BetterSqliteDatabase) => {
+const ensureSymbolsVisibilityColumn = (db: SqliteDatabase) => {
   if (hasColumn(db, "symbols", "visibility")) return;
   db.exec("ALTER TABLE symbols ADD COLUMN visibility TEXT;");
 };
 
-const ensureSchema = (db: BetterSqliteDatabase) => {
+const ensureSchema = (db: SqliteDatabase) => {
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
   db.pragma("temp_store = MEMORY");
@@ -282,7 +274,7 @@ const ensureSchema = (db: BetterSqliteDatabase) => {
   }
 };
 
-const execRows = (db: BetterSqliteDatabase, sql: string): Array<Array<unknown>> => {
+const execRows = (db: SqliteDatabase, sql: string): Array<Array<unknown>> => {
   const rows = db.prepare(sql).raw().all();
   const normalized: Array<Array<unknown>> = [];
   for (const row of rows) {
@@ -295,7 +287,7 @@ const execRows = (db: BetterSqliteDatabase, sql: string): Array<Array<unknown>> 
 };
 
 const execRowsParams = (
-  db: BetterSqliteDatabase,
+  db: SqliteDatabase,
   sql: string,
   params: Array<string | number | null>,
 ): Array<Array<unknown>> => {
@@ -310,7 +302,7 @@ const execRowsParams = (
   return normalized;
 };
 
-const loadFileEdges = (db: BetterSqliteDatabase, toType?: string) => {
+const loadFileEdges = (db: SqliteDatabase, toType?: string) => {
   const hasFilter = toType !== undefined;
   const sql = hasFilter
     ? "SELECT from_path, to_path FROM file_edges WHERE to_type = ?;"
@@ -411,7 +403,7 @@ const symbolGraphEdgesForSymbolIds = (symbolGraph: SymbolGraph, symbolIds: Set<s
   return edgeList;
 };
 
-const insertFiles = (db: BetterSqliteDatabase, files: Array<{ path: string; isExternal: boolean }>) => {
+const insertFiles = (db: SqliteDatabase, files: Array<{ path: string; isExternal: boolean }>) => {
   const stmt = db.prepare("INSERT OR REPLACE INTO files (path, is_external) VALUES (?, ?);");
   for (const file of files) {
     stmt.run([file.path, file.isExternal ? 1 : 0]);
@@ -436,7 +428,7 @@ const dedupeFileEntries = (
   }));
 };
 
-const insertSymbols = (db: BetterSqliteDatabase, nodes: SymbolNode[]) => {
+const insertSymbols = (db: SqliteDatabase, nodes: SymbolNode[]) => {
   const stmt = db.prepare(
     "INSERT OR REPLACE INTO symbols (id, file, name, kind, docstring, line_span, complexity, visibility) VALUES (?, ?, ?, ?, ?, ?, ?, ?);",
   );
@@ -454,7 +446,7 @@ const insertSymbols = (db: BetterSqliteDatabase, nodes: SymbolNode[]) => {
   }
 };
 
-const insertFileEdges = (db: BetterSqliteDatabase, edges: Graph["edges"]) => {
+const insertFileEdges = (db: SqliteDatabase, edges: Graph["edges"]) => {
   const stmt = db.prepare(
     "INSERT INTO file_edges (from_path, to_path, to_type, raw, type_only) VALUES (?, ?, ?, ?, ?);",
   );
@@ -464,14 +456,14 @@ const insertFileEdges = (db: BetterSqliteDatabase, edges: Graph["edges"]) => {
   }
 };
 
-const insertSymbolEdges = (db: BetterSqliteDatabase, edges: SymbolGraph["edges"]) => {
+const insertSymbolEdges = (db: SqliteDatabase, edges: SymbolGraph["edges"]) => {
   const stmt = db.prepare("INSERT INTO symbol_edges (from_id, to_id, label) VALUES (?, ?, ?);");
   for (const edge of edges) {
     stmt.run([edge.from, edge.to, edge.label ?? null]);
   }
 };
 
-const clearCurrentGraphState = (db: BetterSqliteDatabase) => {
+const clearCurrentGraphState = (db: SqliteDatabase) => {
   db.exec(`
     DELETE FROM symbol_edges;
     DELETE FROM file_edges;
@@ -480,7 +472,7 @@ const clearCurrentGraphState = (db: BetterSqliteDatabase) => {
   `);
 };
 
-const readSymbolIdsForFiles = (db: BetterSqliteDatabase, files: string[]): string[] => {
+const readSymbolIdsForFiles = (db: SqliteDatabase, files: string[]): string[] => {
   if (files.length === 0) return [];
   const placeholders = files.map(() => "?").join(", ");
   const sql = `SELECT id FROM symbols WHERE file IN (${placeholders});`;
@@ -493,7 +485,7 @@ const readSymbolIdsForFiles = (db: BetterSqliteDatabase, files: string[]): strin
     .filter((id): id is string => !!id);
 };
 
-const deleteBySymbolIds = (db: BetterSqliteDatabase, ids: string[]) => {
+const deleteBySymbolIds = (db: SqliteDatabase, ids: string[]) => {
   if (ids.length === 0) return;
   const placeholders = ids.map(() => "?").join(", ");
   db.prepare(`DELETE FROM symbol_edges WHERE from_id IN (${placeholders});`).run(ids);
@@ -501,26 +493,26 @@ const deleteBySymbolIds = (db: BetterSqliteDatabase, ids: string[]) => {
   db.prepare(`DELETE FROM symbols WHERE id IN (${placeholders});`).run(ids);
 };
 
-const deleteFileEdgesForFiles = (db: BetterSqliteDatabase, files: string[]) => {
+const deleteFileEdgesForFiles = (db: SqliteDatabase, files: string[]) => {
   if (files.length === 0) return;
   const placeholders = files.map(() => "?").join(", ");
   db.prepare(`DELETE FROM file_edges WHERE from_path IN (${placeholders});`).run(files);
 };
 
-const deleteFileEdgesToFiles = (db: BetterSqliteDatabase, files: string[]) => {
+const deleteFileEdgesToFiles = (db: SqliteDatabase, files: string[]) => {
   if (files.length === 0) return;
   const placeholders = files.map(() => "?").join(", ");
   db.prepare(`DELETE FROM file_edges WHERE to_type = 'file' AND to_path IN (${placeholders});`).run(files);
 };
 
-const deleteFilesByPath = (db: BetterSqliteDatabase, files: string[]) => {
+const deleteFilesByPath = (db: SqliteDatabase, files: string[]) => {
   if (files.length === 0) return;
   const placeholders = files.map(() => "?").join(", ");
   db.prepare(`DELETE FROM files WHERE path IN (${placeholders});`).run(files);
 };
 
 const recordGraphSnapshot = (
-  db: BetterSqliteDatabase,
+  db: SqliteDatabase,
   options: {
     mode: "full" | "incremental";
     changedFiles: string[];
@@ -577,17 +569,15 @@ const readOrCreateDb = async (outputPath: string, options?: { readonly?: boolean
   if (dir && !readonly) {
     await fs.mkdir(dir, { recursive: true });
   }
-  const BetterSqlite3 = loadBetterSqlite3();
-  const db = new BetterSqlite3(outputPath, {
+  const db = new SqliteDatabase(outputPath, {
     readonly,
-    fileMustExist: readonly,
   });
   return { db };
 };
 
 async function withSqliteDatabase<T>(
   outputPath: string,
-  callback: (db: BetterSqliteDatabase) => T | Promise<T>,
+  callback: (db: SqliteDatabase) => T | Promise<T>,
 ): Promise<T> {
   const { db } = await readOrCreateDb(outputPath);
   try {
@@ -600,7 +590,7 @@ async function withSqliteDatabase<T>(
 
 async function withReadOnlySqliteDatabase<T>(
   outputPath: string,
-  callback: (db: BetterSqliteDatabase) => T | Promise<T>,
+  callback: (db: SqliteDatabase) => T | Promise<T>,
 ): Promise<T> {
   const { db } = await readOrCreateDb(outputPath, { readonly: true });
   try {
@@ -610,14 +600,12 @@ async function withReadOnlySqliteDatabase<T>(
   }
 }
 
-function assertReadOnlyQueryStatement(stmt: BetterSqliteStatement): void {
-  if (stmt.reader && stmt.readonly) {
-    return;
-  }
+function assertReadOnlyQueryStatement(stmt: SqliteStatement): void {
+  if (stmt.columns().length > 0) return;
   throw new Error("Raw SQLite queries must be read-only result-producing statements such as SELECT or PRAGMA.");
 }
 
-const deleteUnreferencedExternalFiles = (db: BetterSqliteDatabase) => {
+const deleteUnreferencedExternalFiles = (db: SqliteDatabase) => {
   db.exec(`
     DELETE FROM files
     WHERE is_external = 1
@@ -923,28 +911,35 @@ export async function queryGraphSqliteRaw(
   options?: { maxRows?: number | undefined },
 ): Promise<RawSqlResult> {
   return await withReadOnlySqliteDatabase(outputPath, (db) => {
-    const stmt = db.prepare(sql);
-    assertReadOnlyQueryStatement(stmt);
-    const columns = stmt.columns().map((col) => col.name);
-    const rowLimit = options?.maxRows;
-    if (rowLimit !== undefined) {
-      const rows: Array<Array<unknown>> = [];
-      let truncated = false;
-      for (const row of stmt.raw().iterate(params) as Iterable<Array<unknown>>) {
-        if (rows.length >= rowLimit) {
-          truncated = true;
-          break;
+    try {
+      const stmt = db.prepare(sql);
+      assertReadOnlyQueryStatement(stmt);
+      const columns = stmt.columns().map((col) => col.name);
+      const rowLimit = options?.maxRows;
+      if (rowLimit !== undefined) {
+        const rows: Array<Array<unknown>> = [];
+        let truncated = false;
+        for (const row of stmt.raw().iterate(params) as Iterable<Array<unknown>>) {
+          if (rows.length >= rowLimit) {
+            truncated = true;
+            break;
+          }
+          rows.push(row);
         }
-        rows.push(row);
+        return {
+          columns,
+          rows,
+          rowLimit,
+          truncated,
+        };
       }
-      return {
-        columns,
-        rows,
-        rowLimit,
-        truncated,
-      };
+      const rows = stmt.raw().all(params) as Array<Array<unknown>>;
+      return { columns, rows };
+    } catch (error) {
+      if (isReadOnlySqliteError(error)) {
+        throw new Error("Raw SQLite queries must be read-only result-producing statements such as SELECT or PRAGMA.");
+      }
+      throw error;
     }
-    const rows = stmt.raw().all(params) as Array<Array<unknown>>;
-    return { columns, rows };
   });
 }

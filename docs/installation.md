@@ -4,7 +4,7 @@ Requirements and install paths for local source checkouts, published packages, r
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 24.10+
 - Published installs do not require Rust or a manual native setup step on supported targets.
 - Local source checkouts do not require Rust just to build `dist/`, but the native workspace addon only builds when Cargo is available.
 - If no compatible native artifact is available, install `@lzehrung/codegraph-js-fallback` to enable the opt-in JS Tree-sitter fallback path.
@@ -56,7 +56,7 @@ If you explicitly want the JS Tree-sitter fallback path as well, install the sep
 npm install @lzehrung/codegraph-js-fallback --legacy-peer-deps
 ```
 
-`--legacy-peer-deps` is currently needed because `tree-sitter-kotlin` still publishes stale peer metadata even though the fallback stack works with the newer shared `tree-sitter` runtime used here.
+`--legacy-peer-deps` is currently needed because some grammar packages still publish stale peer metadata even though the fallback stack works with the newer shared `tree-sitter` runtime used here.
 
 ## Option 3: Install from a release tarball
 
