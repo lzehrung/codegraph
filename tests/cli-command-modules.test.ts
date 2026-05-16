@@ -280,7 +280,10 @@ describe("CLI command modules", () => {
   });
 
   test("builds doctor reports for agent artifact bundle directories", async () => {
-    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-doctor-artifact-bundle-"));
+    const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-doctor-artifact-bundle-"));
+    const tempDir = path.join(tempRoot, "bundle");
+    await fsp.mkdir(tempDir);
+    await fsp.writeFile(path.join(tempRoot, "outside.sqlite"), "not in the bundle\n", "utf8");
     await fsp.writeFile(
       path.join(tempDir, "manifest.json"),
       JSON.stringify(
@@ -290,7 +293,7 @@ describe("CLI command modules", () => {
           outDir: tempDir,
           manifestPath: path.join(tempDir, "manifest.json"),
           artifacts: {
-            sqlite: "codegraph.sqlite",
+            sqlite: "../outside.sqlite",
             graphJson: "graph.json",
             report: "CODEGRAPH_REPORT.md",
             questions: "questions.json",
@@ -319,7 +322,7 @@ describe("CLI command modules", () => {
         questionsPresent: true,
       });
     } finally {
-      await fsp.rm(tempDir, { recursive: true, force: true });
+      await fsp.rm(tempRoot, { recursive: true, force: true });
     }
   });
 

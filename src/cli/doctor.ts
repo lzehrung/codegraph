@@ -125,7 +125,12 @@ function buildIndexedArtifactReport(indexPath: string): IndexedArtifactReport {
 }
 
 function artifactPresent(dirPath: string, fileName: string | undefined): boolean {
-  return typeof fileName === "string" && pathExists(path.join(dirPath, fileName));
+  if (typeof fileName !== "string" || fileName.trim() === "" || path.isAbsolute(fileName)) return false;
+  const artifactPath = path.resolve(dirPath, fileName);
+  const bundleRoot = path.resolve(dirPath);
+  const relativePath = path.relative(bundleRoot, artifactPath);
+  if (relativePath === "" || relativePath.startsWith("..") || path.isAbsolute(relativePath)) return false;
+  return pathExists(artifactPath);
 }
 
 export function buildDoctorReport(indexPath?: string): DoctorReport {

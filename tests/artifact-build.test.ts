@@ -176,21 +176,28 @@ describe("artifact build", () => {
     expect(question?.command).not.toContain('"cost$center.ts"');
   });
 
-  it("keeps generated suggested question ids unique for browser-script symbols", async () => {
-    const root = path.resolve(process.cwd(), "docs", "graph-visualization");
-    const outDir = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-question-ids-"));
+  it("keeps generated suggested question ids unique for aliased exports", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-question-ids-"));
+    const outDir = path.join(root, "codegraph-out");
+    await fs.writeFile(
+      path.join(root, "index.ts"),
+      "const impl = 1;\nexport { impl as a, impl as b, impl as c };\nexport const other = 2;\n",
+    );
+    await fs.writeFile(path.join(root, "consumer.ts"), "import { a } from './index';\nexport const value = a;\n");
 
     try {
       await buildCodegraphArtifact({ root, outDir, questions: true });
 
       const questions = JSON.parse(await fs.readFile(path.join(outDir, "questions.json"), "utf8")) as {
-        questions: Array<{ id: string }>;
+        questions: Array<{ id: string; handle?: string }>;
       };
       const ids = questions.questions.map((question) => question.id);
+      const handles = questions.questions.map((question) => question.handle).filter((handle) => handle !== undefined);
 
       expect(new Set(ids).size).toBe(ids.length);
+      expect(new Set(handles).size).toBe(handles.length);
     } finally {
-      await fs.rm(outDir, { recursive: true, force: true });
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 

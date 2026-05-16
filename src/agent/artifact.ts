@@ -622,8 +622,11 @@ function buildQuestions(snapshot: AgentProjectSnapshot): ArtifactQuestion[] {
     });
   }
 
-  const exportedSymbols = collectExportedSymbols(snapshot).slice(0, 3);
-  for (const symbol of exportedSymbols) {
+  const seenSymbolHandles = new Set<string>();
+  for (const symbol of collectExportedSymbols(snapshot)) {
+    if (seenSymbolHandles.has(symbol.handle)) continue;
+    if (seenSymbolHandles.size >= 3) break;
+    seenSymbolHandles.add(symbol.handle);
     const symbolLabel = symbol.localName === symbol.name ? symbol.name : `${symbol.name} (${symbol.localName})`;
     questions.push({
       id: `refs:${symbol.handle}`,
