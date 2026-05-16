@@ -1,4 +1,5 @@
 import { serveCodegraphMcp } from "../mcp/server.js";
+import { MCP_HELP_TEXT } from "./help.js";
 
 export type McpServeCommandContext = {
   positionals: string[];
@@ -21,9 +22,7 @@ function parsePortOption(rawValue: string | undefined): number | undefined {
 export async function handleMcpServeCommand(context: McpServeCommandContext): Promise<void> {
   const mcpCommand = context.positionals[0];
   if (mcpCommand !== "serve") {
-    context.writeStderrLine(
-      "Usage: mcp serve [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--allow-build]",
-    );
+    context.writeStderrLine(MCP_HELP_TEXT.trimEnd());
     context.exit(2);
   }
 

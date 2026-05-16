@@ -622,11 +622,15 @@ function buildQuestions(snapshot: AgentProjectSnapshot): ArtifactQuestion[] {
     });
   }
 
-  const exportedSymbols = collectExportedSymbols(snapshot).slice(0, 3);
-  for (const symbol of exportedSymbols) {
+  const seenSymbolHandles = new Set<string>();
+  for (const symbol of collectExportedSymbols(snapshot)) {
+    if (seenSymbolHandles.has(symbol.handle)) continue;
+    if (seenSymbolHandles.size >= 3) break;
+    seenSymbolHandles.add(symbol.handle);
+    const symbolLabel = symbol.localName === symbol.name ? symbol.name : `${symbol.name} (${symbol.localName})`;
     questions.push({
-      id: `refs:${symbol.file}:${symbol.name}`,
-      question: `Where is ${symbol.name} referenced?`,
+      id: `refs:${symbol.handle}`,
+      question: `Where is ${symbolLabel} referenced?`,
       command: `codegraph explain ${quoteShellArg(symbol.handle)} --json`,
       handle: symbol.handle,
     });
@@ -635,7 +639,7 @@ function buildQuestions(snapshot: AgentProjectSnapshot): ArtifactQuestion[] {
   const sqlObjects = collectSqlObjects(snapshot).slice(0, 3);
   for (const object of sqlObjects) {
     questions.push({
-      id: `sql:${object.name}`,
+      id: `sql:${object.handle}`,
       question: `What SQL objects are related to ${object.name}?`,
       command: `codegraph explain ${quoteShellArg(object.handle)} --json`,
       handle: object.handle,
@@ -645,14 +649,17 @@ function buildQuestions(snapshot: AgentProjectSnapshot): ArtifactQuestion[] {
   return questions.sort((left, right) => left.id.localeCompare(right.id));
 }
 
-function collectExportedSymbols(snapshot: AgentProjectSnapshot): Array<{ name: string; file: string; handle: string }> {
-  const exported: Array<{ name: string; file: string; handle: string }> = [];
+function collectExportedSymbols(
+  snapshot: AgentProjectSnapshot,
+): Array<{ name: string; localName: string; file: string; handle: string }> {
+  const exported: Array<{ name: string; localName: string; file: string; handle: string }> = [];
   for (const moduleIndex of snapshot.index.byFile.values()) {
     for (const exportEntry of moduleIndex.exports) {
       if (exportEntry.type !== "local") continue;
       const file = relativeFile(snapshot.root, exportEntry.target.file);
       exported.push({
         name: exportEntry.exportedAs,
+        localName: exportEntry.target.localName,
         file,
         handle: formatAgentSymbolHandle({
           file,
@@ -666,7 +673,9 @@ function collectExportedSymbols(snapshot: AgentProjectSnapshot): Array<{ name: s
   return exported.sort((left, right) => {
     const fileDelta = left.file.localeCompare(right.file);
     if (fileDelta !== 0) return fileDelta;
-    return left.name.localeCompare(right.name);
+    const nameDelta = left.name.localeCompare(right.name);
+    if (nameDelta !== 0) return nameDelta;
+    return left.localName.localeCompare(right.localName);
   });
 }
 

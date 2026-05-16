@@ -1,4 +1,5 @@
 import { buildCodegraphArtifact } from "../agent/artifact.js";
+import { ARTIFACT_HELP_TEXT } from "./help.js";
 
 export type ArtifactCommandContext = {
   positionals: string[];
@@ -14,9 +15,7 @@ export type ArtifactCommandContext = {
 export async function handleArtifactCommand(context: ArtifactCommandContext): Promise<void> {
   const artifactCommand = context.positionals[0];
   if (artifactCommand !== "build") {
-    context.writeStderrLine(
-      "Usage: artifact build [--root <path>] [--out <dir>] [--sqlite] [--graph-json] [--report] [--questions] [--force] [--json]",
-    );
+    context.writeStderrLine(ARTIFACT_HELP_TEXT.trimEnd());
     context.exit(2);
   }
 
