@@ -51,7 +51,7 @@ import { buildDoctorReport } from "./cli/doctor.js";
 import { handleExplainCommand } from "./cli/explain.js";
 import { handleGraphDeltaCommand } from "./cli/graphDelta.js";
 import { handleGraphQueryCommand } from "./cli/graphQueries.js";
-import { CLI_HELP_TEXT, MCP_SERVE_HELP_TEXT } from "./cli/help.js";
+import { CLI_HELP_TEXT, helpTextForCommand } from "./cli/help.js";
 import { handleMcpServeCommand } from "./cli/mcp.js";
 import { parseCacheModeOption, parsePositiveIntegerOption } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
@@ -1147,15 +1147,11 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return v && v.length > 0 ? v[v.length - 1] : undefined;
   };
 
-  if ((hasFlag("--help") || hasFlag("-h")) && cmd === "mcp" && parsed.positionals[0] === "serve") {
-    writeStdoutLine(MCP_SERVE_HELP_TEXT.trimEnd());
-    return;
-  }
-
   // Handle help flag
   if (hasFlag("--help") || hasFlag("-h")) {
-    writeStdoutLine(CLI_HELP_TEXT.trimEnd());
-    exitCli(0);
+    const commandHelp = helpTextForCommand(cmd, parsed.positionals);
+    writeStdoutLine((commandHelp ?? CLI_HELP_TEXT).trimEnd());
+    return;
   }
 
   if (hasFlag("--version")) {

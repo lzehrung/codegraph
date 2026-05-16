@@ -1,4 +1,5 @@
 import { explainCodegraphTarget, formatAgentExplanation } from "../agent/explain.js";
+import { EXPLAIN_HELP_TEXT } from "./help.js";
 import { parsePositiveIntegerOption } from "./options.js";
 
 export type ExplainCommandContext = {
@@ -15,9 +16,7 @@ export type ExplainCommandContext = {
 export async function handleExplainCommand(context: ExplainCommandContext): Promise<void> {
   const target = context.positionals.join(" ").trim();
   if (!target) {
-    context.writeStderrLine(
-      "Usage: explain <file|symbol|sql-object> [--root <path>] [--max-symbols <n>] [--changed-context --base <rev> --head <rev>] [--json]",
-    );
+    context.writeStderrLine(EXPLAIN_HELP_TEXT.trimEnd());
     context.exit(2);
   }
 

@@ -82,22 +82,26 @@ codegraph index --workers --threads 8 --cache disk
 codegraph search "validate user" --json
 codegraph search "public users" --mode sql --json
 codegraph search "handle login" --from src/auth.ts --mode graph --depth 1 --json
+codegraph search --help
 
 # Explain a file, symbol, SQL object, or search result handle
 codegraph explain src/auth.ts --json
 codegraph explain validateUser --json
 codegraph explain public.users --json
 codegraph explain src/large-file.ts --max-symbols 25 --json
+codegraph explain --help
 
 # Build an agent-ready artifact bundle
 codegraph artifact build --root . --out codegraph-out --json
 codegraph artifact build --root . --out codegraph-out --sqlite --graph-json --report --questions --force --json
+codegraph artifact --help
 
 # Serve MCP tools over the same search, navigation, artifact, and review layer
 codegraph mcp serve --root . --stdio
 codegraph mcp serve --root . --artifact codegraph-out --stdio
 codegraph mcp serve --root . --stdio --allow-build
 codegraph mcp serve --root . --port 7331
+codegraph mcp --help
 
 # Chunk a file for LLM processing
 codegraph chunk src/utils.js
@@ -122,7 +126,7 @@ codegraph grep --query '(function_declaration name: (identifier) @name)'
 codegraph grep --pattern 'eval\(' --ignore-case
 ```
 
-`search` is deterministic and vectorless. It returns ranked results with project-relative stable handles, rank reasons, evidence, graph neighbors, follow-up commands, result counts, per-packet limits, and omission counts. `explain` resolves file paths, symbol names, SQL object names, and search handles, including file/chunk/graph handles, into bounded packets with symbols, dependencies, reverse dependencies, references, snippets, SQL object relation facts, changed-context review tasks/candidate tests, explicit limits, omission counts, and follow-ups. Generated follow-up and suggested-question commands POSIX-shell-quote dynamic arguments when needed. SQL object names resolve by exact name first; unqualified basenames resolve only when unique, so handles or schema-qualified names are preferred. Reference and snippet omission counts are lower bounds after the bounded navigation scan reaches its cap. `artifact build` writes `codegraph.sqlite`, self-describing project-relative `graph.json`, `CODEGRAPH_REPORT.md`, `questions.json`, and `manifest.json` by default; suggested questions use stable handles. Use artifact flags to select a subset. `--force` permits non-empty output directories, removes recognizable stale Codegraph artifacts, preserves unrelated operator files, and refuses unrecognized reserved-name collisions. Artifact contents exclude their own output directory and linked outside-root files. `mcp serve` exposes `search`, `get_file`, `get_symbol`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, `query_sqlite`, and `artifact_build` over stdio by default or Streamable HTTP with `--port <number>`. HTTP serves `/mcp`, binds to `127.0.0.1` unless `--host <host>` is passed, validates the Host header, allows loopback Host headers for wildcard binds, and rejects oversized request bodies. MCP file and artifact paths are confined to `--root` after realpath resolution; tools are read-only by default, `query_sqlite` is row- and byte-bounded and rejects synthetic payload functions, and `--allow-build` enables artifact output only. `chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions. Use `--text` to force text chunking.
+`search`, `explain`, `artifact`, and `mcp` each support command-specific `--help` output so agents do not have to infer their options from the top-level help. `search` is deterministic and vectorless. It returns ranked results with project-relative stable handles, rank reasons, evidence, graph neighbors, follow-up commands, result counts, per-packet limits, and omission counts. `explain` resolves file paths, symbol names, SQL object names, and search handles, including file/chunk/graph handles, into bounded packets with symbols, dependencies, reverse dependencies, references, snippets, SQL object relation facts, changed-context review tasks/candidate tests, explicit limits, omission counts, and follow-ups. Generated follow-up and suggested-question commands POSIX-shell-quote dynamic arguments when needed. SQL object names resolve by exact name first; unqualified basenames resolve only when unique, so handles or schema-qualified names are preferred. Reference and snippet omission counts are lower bounds after the bounded navigation scan reaches its cap. `artifact build` writes `codegraph.sqlite`, self-describing project-relative `graph.json`, `CODEGRAPH_REPORT.md`, `questions.json`, and `manifest.json` by default; suggested questions use unique IDs backed by stable handles when a handle is available. Use artifact flags to select a subset. `--force` permits non-empty output directories, removes recognizable stale Codegraph artifacts, preserves unrelated operator files, and refuses unrecognized reserved-name collisions. Artifact contents exclude their own output directory and linked outside-root files. `mcp serve` exposes `search`, `get_file`, `get_symbol`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, `query_sqlite`, and `artifact_build` over stdio by default or Streamable HTTP with `--port <number>`. HTTP serves `/mcp`, binds to `127.0.0.1` unless `--host <host>` is passed, validates the Host header, allows loopback Host headers for wildcard binds, and rejects oversized request bodies. MCP file and artifact paths are confined to `--root` after realpath resolution; tools are read-only by default, `query_sqlite` is row- and byte-bounded and rejects synthetic payload functions, and `--allow-build` enables artifact output only. `chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions. Use `--text` to force text chunking.
 
 ### Dependency analysis and diagnostics
 
@@ -240,6 +244,10 @@ codegraph doctor
 # Inspect one explicit graph or index artifact path
 codegraph doctor ./.codegraph-cache/index-v1
 
+# Inspect an artifact bundle directory or one artifact file
+codegraph doctor ./codegraph-out
+codegraph doctor ./codegraph-out/codegraph.sqlite
+
 # Install the bundled skill into a known agent location.
 # The parent skills directory must already exist.
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
@@ -268,7 +276,7 @@ codegraph skill install --target ~/.codex/skills/codegraph --force
 codegraph skill doctor
 ```
 
-`codegraph skill install --agent <name>` supports `agents`, `codex`, `claude`, `cursor`, `gemini`, and `opencode`. On PowerShell, use `New-Item -ItemType Directory -Force <path>` instead of `mkdir -p <path>`. Cursor CLI now supports native skills directories too, so `.cursor/skills/codegraph` works alongside the universal `~/.agents/skills/codegraph` location. `codegraph version --json` and `codegraph doctor` include the installed package name, version, and package root so local tarball or source-checkout installs can confirm which build the `codegraph` command is actually running. `doctor` also reports backend/runtime state and optional artifact details.
+`codegraph skill install --agent <name>` supports `agents`, `codex`, `claude`, `cursor`, `gemini`, and `opencode`. On PowerShell, use `New-Item -ItemType Directory -Force <path>` instead of `mkdir -p <path>`. Cursor CLI now supports native skills directories too, so `.cursor/skills/codegraph` works alongside the universal `~/.agents/skills/codegraph` location. `codegraph version --json` and `codegraph doctor` include the installed package name, version, and package root so local tarball or source-checkout installs can confirm which build the `codegraph` command is actually running. `doctor` also reports backend/runtime state and optional artifact details, including `artifactBundle` details for directories with a Codegraph `manifest.json`.
 
 ## Incremental git-scoped runs
 
