@@ -22,7 +22,10 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm ci --ignore-scripts
+          node ./scripts/patch-tree-sitter-node24.mjs
+          npm rebuild
 
       - name: Lint
         run: npm run lint

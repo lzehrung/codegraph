@@ -74,7 +74,10 @@ jobs:
           NODE
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm ci --ignore-scripts
+          node ./scripts/patch-tree-sitter-node24.mjs
+          npm rebuild
 
       - name: Publish root release
         env:
