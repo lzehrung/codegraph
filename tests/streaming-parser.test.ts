@@ -113,6 +113,15 @@ ${hunkLines.join("\n")}
     expect(result.files).toHaveLength(6);
   });
 
+  it("should handle CRLF line endings split across buffer chunks", async () => {
+    const crlfDiff = sampleDiff.replace(/\n/g, "\r\n");
+    const syncResult = parseUnifiedDiff(crlfDiff);
+    const stream = Readable.from(Array.from(crlfDiff, (char) => Buffer.from(char)));
+    const streamResult = await parseUnifiedDiffStreaming(stream);
+
+    expect(streamResult).toEqual(syncResult);
+  });
+
   it("should propagate stream errors", async () => {
     const stream = new Readable({
       read() {
