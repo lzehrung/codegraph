@@ -176,6 +176,24 @@ describe("artifact build", () => {
     expect(question?.command).not.toContain('"cost$center.ts"');
   });
 
+  it("keeps generated suggested question ids unique for browser-script symbols", async () => {
+    const root = path.resolve(process.cwd(), "docs", "graph-visualization");
+    const outDir = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-question-ids-"));
+
+    try {
+      await buildCodegraphArtifact({ root, outDir, questions: true });
+
+      const questions = JSON.parse(await fs.readFile(path.join(outDir, "questions.json"), "utf8")) as {
+        questions: Array<{ id: string }>;
+      };
+      const ids = questions.questions.map((question) => question.id);
+
+      expect(new Set(ids).size).toBe(ids.length);
+    } finally {
+      await fs.rm(outDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not index stale files from an in-repo output directory", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-ignore-out-"));
     const outDir = path.join(root, "codegraph-out");
