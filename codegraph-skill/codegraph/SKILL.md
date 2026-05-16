@@ -34,6 +34,12 @@ Then choose the narrowest follow-up command that answers the user:
 
 - Architecture summary: `codegraph inspect ./src --limit 20`
 - Hot files: `codegraph hotspots ./src --limit 20 --json`
+- Ranked search anchors: `codegraph search "auth user" --json`
+- Explain an anchor: `codegraph explain <file|symbol|sql-object|search-handle> --json`
+- Explain a large file with a smaller packet: `codegraph explain <file> --max-symbols 25 --json`
+- Durable artifact bundle: `codegraph artifact build --root . --out codegraph-out --json`
+- MCP server for tool-capable agents: `codegraph mcp serve --root . --stdio` or `codegraph mcp serve --root . --port 7331`
+- SQL search anchors: `codegraph search "public users" --mode sql --json`
 - Cycles: `codegraph cycles --sort priority --json`
 - Dependencies of one file: `codegraph deps <file>`
 - Reverse dependencies of one file: `codegraph rdeps <file>`
@@ -47,7 +53,7 @@ Then choose the narrowest follow-up command that answers the user:
 - Public API surface: `codegraph apisurface`
 - Semantic chunks for context packing: `codegraph chunk <file>`
 
-Use `--json` when the output will feed later reasoning, scripts, or another agent step.
+Use `--json` when the output will feed later reasoning, scripts, or another agent step. `search` is deterministic and returns project-relative explainable handles, evidence, neighbors, follow-up commands, result counts, limits, and omission counts. `explain` accepts those handles plus file paths, symbol names, and SQL object names, then returns bounded symbols, dependencies, reverse dependencies, references, snippets, SQL relation facts, changed-context review tasks/candidate tests, explicit limits, omission counts, and next commands. Generated command strings POSIX-shell-quote dynamic arguments when needed. For SQL objects, use search handles or schema-qualified names when basenames may be ambiguous. Reference and snippet omission counts are lower bounds after bounded navigation hits its cap. `artifact build` writes a durable SQLite, self-describing project-relative graph JSON, report, questions with stable-handle commands, and manifest bundle for handoff while excluding its own in-repo output directory and linked outside-root files. With `--force`, recognizable stale artifact files are removed, unrelated operator files are preserved, and unrecognized reserved-name collisions are refused. `mcp serve` exposes the same primitives as read-only MCP tools by default over stdio, or over Streamable HTTP with `--port <number>` at `/mcp`; HTTP binds to `127.0.0.1` unless `--host <host>` is passed, validates Host headers, and allows loopback Host headers for wildcard binds. File/artifact paths are confined after realpath resolution, SQLite query results are row- and byte-bounded, synthetic payload functions are rejected, and `--allow-build` is required before an agent may write artifact output.
 
 ## Tool purpose
 

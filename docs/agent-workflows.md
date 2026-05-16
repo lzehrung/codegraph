@@ -11,11 +11,37 @@ For an unfamiliar repo, the shortest useful loop is:
 ```bash
 codegraph doctor
 codegraph inspect ./src --limit 20
+codegraph search "auth user" --json
+codegraph explain src/auth.ts --json
+codegraph artifact build --root . --out codegraph-out --json
+codegraph mcp serve --root . --stdio
+codegraph mcp serve --root . --port 7331
 ```
 
-Then use the recommended commands from `inspect` to narrow the next graph, navigation, or impact pass.
+Then use the recommended commands from `inspect`, or the stable handles and follow-up commands from `search`, to narrow the next graph, navigation, or impact pass.
 
 For the raw CLI command reference, see [docs/cli.md](./cli.md).
+
+## Search anchors
+
+Use `search` when an agent needs a compact starting point before calling `goto`, `refs`, `deps`, `rdeps`, `chunk`, or later explanation tooling:
+
+```bash
+codegraph search "validate user" --json
+codegraph search "public users" --mode sql --json
+codegraph search "handle login" --mode graph --from src/auth.ts --depth 1 --json
+codegraph explain "<handle-from-search>" --json
+```
+
+Search results include project-relative `handle`, `rankReasons`, `evidence`, `neighbors`, `followUps`, `resultCount`, `totalCandidates`, `limits`, and `omittedCounts`. `explain` accepts those handles plus file paths, symbol names, and SQL object names, then returns bounded symbols, dependencies, reverse dependencies, references, snippets, SQL relation facts, optional changed-context review tasks/candidate tests, explicit limits, omission counts, and follow-ups. Generated command strings POSIX-shell-quote dynamic arguments when needed. SQL object handles or schema-qualified names avoid ambiguous unqualified basenames. Reference and snippet omission counts are bounded lower bounds once navigation limits are reached, so small explain packets stay cheap on high-fan-in symbols. Both commands are deterministic and do not require embeddings or prebuilt artifacts.
+
+Use `artifact build` when the agent needs a durable handoff directory. The default bundle writes SQLite, self-describing project-relative graph JSON with symbols, a concise Markdown report, suggested questions, and a manifest. Suggested questions command stable handles, not ambiguous bare names. In-repo artifact output directories and linked outside-root files are excluded from the emitted artifacts so stale handoff files do not feed back into the graph. With `--force`, Codegraph removes recognizable stale artifact files while preserving unrelated operator files and refusing unrecognized reserved-name collisions.
+
+## MCP server
+
+Use `codegraph mcp serve --root . --stdio` when an agent can spawn a stdio MCP server, or `codegraph mcp serve --root . --port 7331` for Streamable HTTP at `/mcp`. HTTP binds to `127.0.0.1` by default; pass `--host <host>` only when the server must be reachable elsewhere. MCP reuses one in-process Codegraph session and exposes the same deterministic primitives as compact tools: `search`, `get_file`, `get_symbol`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, `query_sqlite`, and `artifact_build`.
+
+MCP is an ergonomics and performance layer, not a separate analysis engine. It gives agents stable handles from `search` and `explain`, avoids rebuilding the project for each follow-up call, and returns bounded snippets/resources. File and artifact paths are confined to the project root after realpath resolution. Tools are read-only by default; `query_sqlite` rejects mutating SQL, recursive queries, and synthetic payload functions while capping returned rows and bytes. `artifact_build` is available only when the server is started with `--allow-build`.
 
 ## Session management
 

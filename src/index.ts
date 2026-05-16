@@ -205,6 +205,43 @@ export {
   type SymbolManifestEntry,
 } from "./util/symbolHash.js";
 
+/** Agent project snapshots and cached service-layer helpers. */
+export { createAgentSession } from "./agent/session.js";
+export type { AgentProjectSnapshot, AgentSession, AgentSessionOptions } from "./agent/session.js";
+
+/** Agent-facing deterministic search over symbols, files, chunks, SQL objects, and graph neighborhoods. */
+export { formatAgentSearchResponse, searchCodegraph, searchCodegraphWithSession } from "./agent/search.js";
+export type {
+  AgentSearchEvidence,
+  AgentSearchMode,
+  AgentSearchRequest,
+  AgentSearchResponse,
+  AgentSearchResult,
+  AgentSearchResultKind,
+} from "./agent/search.js";
+
+/** Agent-facing explanation packets for files, symbols, SQL objects, and review context. */
+export { explainCodegraphTarget, explainCodegraphTargetWithSession, formatAgentExplanation } from "./agent/explain.js";
+export type {
+  AgentExplainTarget,
+  AgentExplanation,
+  AgentExplanationChangedContext,
+  AgentExplanationDependency,
+  AgentExplanationReference,
+  AgentExplanationSnippet,
+  AgentExplanationSqlObject,
+  AgentExplanationSymbol,
+  AgentExplanationTarget,
+} from "./agent/explain.js";
+
+/** Agent-ready artifact bundle builder for SQLite, graph JSON, reports, questions, and manifests. */
+export { buildCodegraphArtifact, buildCodegraphArtifactWithSession } from "./agent/artifact.js";
+export type { CodegraphArtifactBuildRequest, CodegraphArtifactBuildResult } from "./agent/artifact.js";
+
+/** MCP server and typed handler helpers for agent graph navigation. */
+export { createCodegraphMcpHandlers, listCodegraphMcpTools, serveCodegraphMcp } from "./mcp/server.js";
+export type { CodegraphMcpHandlers, CodegraphMcpServerOptions } from "./mcp/server.js";
+
 /** Agent-oriented JSON tool wrappers around the core codegraph APIs. */
 export {
   tool_impactJSON,

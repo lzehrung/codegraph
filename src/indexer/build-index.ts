@@ -159,6 +159,16 @@ function createEmptyModuleIndex(file: string): ModuleIndex {
   return { file, exports: [], imports: [], locals: [] };
 }
 
+function isMissingGitRevisionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("Invalid revision range") ||
+    message.includes("bad revision") ||
+    message.includes("unknown revision") ||
+    message.includes("ambiguous argument")
+  );
+}
+
 function isSFCFile(filePath: string): boolean {
   return filePath.endsWith(".vue") || filePath.endsWith(".svelte") || filePath.endsWith(".astro");
 }
@@ -950,12 +960,32 @@ export async function buildProjectIndexIncremental(
     const hasExplicitGitRange = !!opts?.gitBase || !!opts?.gitHead;
     const manifestCommitMismatch =
       !hasExplicitGitRange && !!manifest.lastCommit && !!currentHead && manifest.lastCommit !== currentHead;
-    const manifestDiffFiles = manifestCommitMismatch
-      ? await listChangedFiles(projectRoot, {
+    let manifestDiffFiles: string[] = [];
+    if (manifestCommitMismatch) {
+      try {
+        manifestDiffFiles = await listChangedFiles(projectRoot, {
           base: manifest.lastCommit,
           head: currentHead,
-        })
-      : [];
+        });
+      } catch (error) {
+        if (!isMissingGitRevisionError(error)) throw error;
+        if (manifestReport) {
+          manifestReport.reason = "staleGitCommit";
+          manifestReport.reused = false;
+        }
+        logWithLevel(
+          opts?.logLevel,
+          "warn",
+          "Warning: Manifest commit is no longer available; rebuilding full index.",
+        );
+        const rebuiltIndex = await buildProjectIndexFromExport(projectRoot, opts);
+        if (manifestReport) {
+          manifestReport.reason = "staleGitCommit";
+          manifestReport.reused = false;
+        }
+        return rebuiltIndex;
+      }
+    }
     if (manifestReport) manifestReport.reused = true;
     if (opts?.cacheVerify) {
       const { mismatches, missing } = await verifyManifestEntries(projectRoot, manifest, opts, gitAvailable);
@@ -1267,25 +1297,36 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
   const hasExplicitGitRange = !!opts?.gitBase || !!opts?.gitHead;
   const manifestCommitMismatch =
     !hasExplicitGitRange && !!manifest?.lastCommit && !!currentHead && manifest.lastCommit !== currentHead;
-  const manifestDiffFiles = manifestCommitMismatch
-    ? await listChangedFiles(projectRoot, {
+  let manifestDiffFiles: string[] = [];
+  if (manifestCommitMismatch) {
+    try {
+      manifestDiffFiles = await listChangedFiles(projectRoot, {
         base: manifest?.lastCommit,
         head: currentHead,
-      })
-    : [];
+      });
+    } catch (error) {
+      if (!isMissingGitRevisionError(error)) throw error;
+      manifestDiffFiles = Object.keys(trackedEntries);
+      logWithLevel(
+        opts?.logLevel,
+        "warn",
+        "Warning: Manifest commit is no longer available; using tracked manifest files for graph delta.",
+      );
+    }
+  }
   const allFiles = new Set<string>([
     ...trackedFiles,
     ...explicitFiles,
     ...manifestDiffFiles.filter((file) => fs.existsSync(file)),
     ...gitFiles.filter((file) => fs.existsSync(file)),
   ]);
-  if (allFiles.size === 0) {
-    return { changedFiles: [], added: [], removed: [] };
-  }
   const changedFiles = new Set<string>();
   explicitFiles.forEach((file) => changedFiles.add(file));
   manifestDiffFiles.forEach((file) => changedFiles.add(file));
   gitFiles.forEach((file) => changedFiles.add(file));
+  if (allFiles.size === 0 && changedFiles.size === 0) {
+    return { changedFiles: [], added: [], removed: [] };
+  }
   if (manifest && graphOptionsEqual(manifest.graphOptions, graphOptions)) {
     const gitSigMap = gitAvailable
       ? await getGitBlobHashes(projectRoot, Array.from(allFiles), { gitAvailable })
