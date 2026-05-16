@@ -50,11 +50,14 @@ describe("source module structure", () => {
   test("keeps standalone CLI commands in command modules", () => {
     const expectedModules = [
       "src/cli/chunk.ts",
+      "src/cli/artifact.ts",
       "src/cli/doctor.ts",
+      "src/cli/explain.ts",
       "src/cli/graphDelta.ts",
       "src/cli/help.ts",
       "src/cli/mcp.ts",
       "src/cli/packageInfo.ts",
+      "src/cli/search.ts",
       "src/cli/skill.ts",
       "src/cli/sql.ts",
     ];

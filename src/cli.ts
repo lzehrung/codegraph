@@ -46,18 +46,18 @@ import {
 } from "./native/treeSitterNative.js";
 import { supportForFile } from "./languages.js";
 import { handleChunkCommand } from "./cli/chunk.js";
+import { handleArtifactCommand } from "./cli/artifact.js";
 import { buildDoctorReport } from "./cli/doctor.js";
+import { handleExplainCommand } from "./cli/explain.js";
 import { handleGraphDeltaCommand } from "./cli/graphDelta.js";
 import { handleGraphQueryCommand } from "./cli/graphQueries.js";
 import { CLI_HELP_TEXT, MCP_SERVE_HELP_TEXT } from "./cli/help.js";
 import { handleMcpServeCommand } from "./cli/mcp.js";
-import { parseCacheModeOption } from "./cli/options.js";
+import { parseCacheModeOption, parsePositiveIntegerOption } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
+import { handleSearchCommand } from "./cli/search.js";
 import { handleSkillCommand } from "./cli/skill.js";
 import { handleSqlCommand } from "./cli/sql.js";
-import { buildCodegraphArtifact } from "./agent/artifact.js";
-import { explainCodegraphTarget, formatAgentExplanation } from "./agent/explain.js";
-import { formatAgentSearchResponse, searchCodegraph, type AgentSearchMode } from "./agent/search.js";
 import { buildSqlArtifactGraphFromFiles } from "./sql/index.js";
 import type { Graph } from "./types.js";
 import {
@@ -379,32 +379,6 @@ function writeCliProjectFileError(
     return;
   }
   writeStdoutLine(`error: ${result.reason}: ${result.error}`);
-}
-
-function parsePositiveIntegerOption(rawValue: string | undefined, optionName: string, defaultValue: number): number {
-  if (rawValue === undefined) {
-    return defaultValue;
-  }
-  const parsedValue = Number(rawValue);
-  if (!Number.isInteger(parsedValue) || parsedValue < 1) {
-    throw new Error(`Invalid ${optionName} value "${rawValue}". Expected a positive integer.`);
-  }
-  return parsedValue;
-}
-
-function parseAgentSearchMode(rawValue: string | undefined): AgentSearchMode {
-  if (rawValue === undefined) return "hybrid";
-  if (
-    rawValue === "hybrid" ||
-    rawValue === "symbol" ||
-    rawValue === "path" ||
-    rawValue === "text" ||
-    rawValue === "graph" ||
-    rawValue === "sql"
-  ) {
-    return rawValue;
-  }
-  throw new Error(`Invalid --mode value "${rawValue}". Expected hybrid, symbol, path, text, graph, or sql.`);
 }
 
 function defaultCacheIndexPath(projectRoot: string): string {
@@ -1396,108 +1370,44 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "search") {
-    const query = parsed.positionals.join(" ").trim();
-    if (!query) {
-      writeStderrLine(
-        'Usage: search "<query>" [--root <path>] [--mode hybrid|symbol|path|text|graph|sql] [--limit <n>] [--json]',
-      );
-      exitCli(2);
-    }
-
-    const from = getOpt("--from");
-    const depthRaw = getOpt("--depth");
-    const response = await searchCodegraph({
+    await handleSearchCommand({
+      positionals: parsed.positionals,
       root: projectRootFs,
-      query,
-      mode: parseAgentSearchMode(getOpt("--mode")),
-      limit: parsePositiveIntegerOption(getOpt("--limit"), "--limit", 20),
-      includeSnippets: !hasFlag("--no-snippets"),
-      ...(from !== undefined ? { from } : {}),
-      ...(depthRaw !== undefined ? { depth: parsePositiveIntegerOption(depthRaw, "--depth", 1) } : {}),
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
     });
-
-    if (hasFlag("--json")) {
-      writeJSONLine(response);
-    } else {
-      writeStdoutLine(formatAgentSearchResponse(response));
-    }
     return;
   }
 
   if (cmd === "explain") {
-    const target = parsed.positionals.join(" ").trim();
-    if (!target) {
-      writeStderrLine(
-        "Usage: explain <file|symbol|sql-object> [--root <path>] [--max-symbols <n>] [--changed-context --base <rev> --head <rev>] [--json]",
-      );
-      exitCli(2);
-    }
-
-    const maxDependenciesRaw = getOpt("--max-dependencies");
-    const maxSnippetsRaw = getOpt("--max-snippets");
-    const maxSymbolsRaw = getOpt("--max-symbols");
-    const base = getOpt("--base");
-    const head = getOpt("--head");
-    if (hasFlag("--changed-context") && (base === undefined || head === undefined)) {
-      writeStderrLine("--changed-context requires --base and --head.");
-      exitCli(2);
-    }
-    const response = await explainCodegraphTarget({
+    await handleExplainCommand({
+      positionals: parsed.positionals,
       root: projectRootFs,
-      target,
-      includeChangedContext: hasFlag("--changed-context"),
-      ...(base !== undefined ? { base } : {}),
-      ...(head !== undefined ? { head } : {}),
-      ...(maxDependenciesRaw !== undefined
-        ? { maxDependencies: parsePositiveIntegerOption(maxDependenciesRaw, "--max-dependencies", 20) }
-        : {}),
-      ...(maxSnippetsRaw !== undefined
-        ? { maxSnippets: parsePositiveIntegerOption(maxSnippetsRaw, "--max-snippets", 8) }
-        : {}),
-      ...(maxSymbolsRaw !== undefined
-        ? { maxSymbols: parsePositiveIntegerOption(maxSymbolsRaw, "--max-symbols", 50) }
-        : {}),
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
     });
-
-    if (hasFlag("--json")) {
-      writeJSONLine(response);
-    } else {
-      writeStdoutLine(formatAgentExplanation(response));
-    }
     return;
   }
 
   if (cmd === "artifact") {
-    const artifactCommand = parsed.positionals[0];
-    if (artifactCommand !== "build") {
-      writeStderrLine(
-        "Usage: artifact build [--root <path>] [--out <dir>] [--sqlite] [--graph-json] [--report] [--questions] [--force] [--json]",
-      );
-      exitCli(2);
-    }
-
-    const outDir = getOpt("--out") ?? getOpt("--output");
-    const hasArtifactSelection =
-      hasFlag("--sqlite") || hasFlag("--graph-json") || hasFlag("--report") || hasFlag("--questions");
-    const result = await buildCodegraphArtifact({
+    await handleArtifactCommand({
+      positionals: parsed.positionals,
       root: projectRootFs,
-      ...(outDir !== undefined ? { outDir } : {}),
-      force: hasFlag("--force"),
-      ...(hasArtifactSelection
-        ? {
-            sqlite: hasFlag("--sqlite"),
-            graphJson: hasFlag("--graph-json"),
-            report: hasFlag("--report"),
-            questions: hasFlag("--questions"),
-          }
-        : {}),
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
     });
-
-    if (hasFlag("--json")) {
-      writeJSONLine(result);
-    } else {
-      writeStdoutLine(result.manifestPath);
-    }
     return;
   }
 

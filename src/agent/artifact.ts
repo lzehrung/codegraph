@@ -456,6 +456,7 @@ function buildGraphJson(snapshot: AgentProjectSnapshot): {
 
 function buildPortableSymbolIdMap(snapshot: AgentProjectSnapshot): Map<string, string> {
   const byId = new Map<string, string>();
+  const graphNodeIds = new Set<string>();
   for (const moduleIndex of snapshot.index.byFile.values()) {
     for (const local of moduleIndex.locals) {
       const relFile = relativeFile(snapshot.root, local.file);
@@ -478,17 +479,23 @@ function buildPortableSymbolIdMap(snapshot: AgentProjectSnapshot): Map<string, s
   for (const node of snapshot.symbolGraph.nodes.values()) {
     if (byId.has(node.id)) continue;
     const relFile = relativeFile(snapshot.root, node.file);
-    byId.set(
-      node.id,
-      formatAgentSymbolHandle({
-        file: relFile,
-        name: node.name,
-        line: 0,
-        column: 0,
-      }),
-    );
+    byId.set(node.id, uniqueGraphSymbolId(graphNodeIds, relFile, node));
   }
   return byId;
+}
+
+function uniqueGraphSymbolId(seen: Set<string>, relFile: string, node: SymbolNode): string {
+  const base = ["graph-symbol", encodeURIComponent(relFile), encodeURIComponent(node.kind), encodeURIComponent(node.name)].join(
+    ":",
+  );
+  let candidate = base;
+  let suffix = 2;
+  while (seen.has(candidate)) {
+    candidate = `${base}:${suffix}`;
+    suffix += 1;
+  }
+  seen.add(candidate);
+  return candidate;
 }
 
 async function filterSnapshotForOutputDirectory(

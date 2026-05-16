@@ -73,8 +73,9 @@ function symbolDef(file: string, name: string, index: number): SymbolDef {
 }
 
 function symbolNode(def: SymbolDef): SymbolNode {
+  const file = def.file.replace(/\\/g, "/");
   return {
-    id: `${def.file}::${def.localName}::${def.range.start.index ?? 0}`,
+    id: `${file}::${def.localName}::${def.range.start.index ?? 0}`,
     file: def.file,
     name: def.localName,
     kind: "function",
@@ -245,6 +246,64 @@ describe("agent search", () => {
     });
     expect(secondResult?.neighbors.some((neighbor) => neighbor.relation === "calls")).toBe(false);
     expect(edgeIterations).toBe(1);
+  });
+
+  it("does not return symbol handles for graph-only import alias nodes", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-search-import-node-"));
+    const sourceFile = path.join(root, "source.ts");
+    const consumerFile = path.join(root, "consumer.ts");
+    const sourceDef = symbolDef(sourceFile, "sharedValue", 0);
+    const sourceModule = moduleIndex(sourceFile, [sourceDef]);
+    const consumerModule: ModuleIndex = {
+      file: consumerFile,
+      locals: [],
+      imports: [],
+      exports: [],
+    };
+    const fileGraph: Graph = {
+      nodes: new Set([sourceFile, consumerFile]),
+      edges: [],
+    };
+    const byFile = new Map([
+      [sourceFile, sourceModule],
+      [consumerFile, consumerModule],
+    ]);
+    const index: ProjectIndex = {
+      graph: fileGraph,
+      modules: byFile,
+      byFile,
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+    const sourceNode = symbolNode(sourceDef);
+    const importNode: SymbolNode = {
+      id: `${consumerFile}::sharedValue::import`,
+      file: consumerFile,
+      name: "sharedValue",
+      kind: "import",
+    };
+
+    const response = await searchCodegraphWithSession(
+      snapshotSession({
+        root,
+        files: [sourceFile, consumerFile],
+        index,
+        fileGraph,
+        symbolGraph: {
+          nodes: new Map([
+            [sourceNode.id, sourceNode],
+            [importNode.id, importNode],
+          ]),
+          edges: [{ from: importNode.id, to: sourceNode.id, label: "sharedValue" }],
+        },
+      }),
+      { root, query: "shared value", mode: "symbol", limit: 10 },
+    );
+
+    expect(response.results.map((result) => result.handle)).toContain("symbol:source.ts:sharedValue:1:1");
+    expect(response.results.some((result) => result.file === "consumer.ts" && result.handle.endsWith(":0:0"))).toBe(
+      false,
+    );
   });
 
   it("indexes file neighbors once per graph search instead of scanning edges per match", async () => {

@@ -314,21 +314,22 @@ function addSymbolResults(
     if (score <= 0) continue;
 
     const def = lookup.defById.get(node.id);
+    if (!def) continue;
     const relFile = relativeFile(snapshot.root, node.file);
     const handle = sqlObject
-      ? formatAgentSqlHandle({ name: node.name, file: relFile, line: def?.range.start.line ?? 0 })
+      ? formatAgentSqlHandle({ name: node.name, file: relFile, line: def.range.start.line })
       : formatAgentSymbolHandle({
           file: relFile,
           name: node.name,
-          line: def?.range.start.line ?? 0,
-          column: def?.range.start.column ?? 0,
+          line: def.range.start.line,
+          column: def.range.start.column,
         });
     const result = upsertResult(resultMap, {
       handle,
       kind: sqlObject ? "sql_object" : "symbol",
       label: node.name,
       file: relFile,
-      ...(def ? { range: def.range } : {}),
+      range: def.range,
     });
     result.score += score + (lookup.exportedIds.has(node.id) ? 5 : 0);
     if (nameMatch.matched.length > 0) {
@@ -337,7 +338,7 @@ function addSymbolResults(
         source: sqlObject ? "sql" : "symbol",
         label: node.name,
         file: relFile,
-        ...(def ? { line: def.range.start.line } : {}),
+        line: def.range.start.line,
       });
     }
     if (fileMatch.matched.length > 0) {

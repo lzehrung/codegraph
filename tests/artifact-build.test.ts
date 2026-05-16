@@ -82,6 +82,30 @@ describe("artifact build", () => {
     ).toBeTruthy();
   });
 
+  it("keeps graph-only symbol nodes as opaque graph IDs in portable graph JSON", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-graph-symbol-"));
+    const outDir = path.join(root, "codegraph-out");
+    await fs.writeFile(path.join(root, "source.ts"), "export const sharedValue = 1;\n");
+    await fs.writeFile(path.join(root, "consumer.ts"), "import { sharedValue } from './source';\nexport const value = sharedValue;\n");
+
+    await buildCodegraphArtifact({ root, outDir, graphJson: true });
+
+    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as {
+      graph: {
+        symbols: Array<{ id: string; file: string; kind: string; name: string }>;
+        symbolEdges: Array<{ from: string; to: string }>;
+      };
+    };
+    const importNode = graph.graph.symbols.find(
+      (symbol) => symbol.kind === "import" && symbol.name === "sharedValue" && symbol.file === "consumer.ts",
+    );
+
+    expect(importNode).toBeDefined();
+    expect(importNode?.id.startsWith("symbol:")).toBe(false);
+    expect(importNode?.id).not.toContain(root.replace(/\\/g, "/"));
+    expect(graph.graph.symbolEdges.some((edge) => edge.from === importNode?.id)).toBeTruthy();
+  });
+
   it("refuses to overwrite a non-empty output directory unless force is set and removes stale known artifacts", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-existing-"));
     const outDir = path.join(root, "codegraph-out");
