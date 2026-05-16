@@ -75,6 +75,60 @@ Examples:
   codegraph refs --file src/index.ts --line 42 --col 10
 `;
 
+export const SEARCH_HELP_TEXT = `codegraph search - Ranked agent search across project context
+
+Usage: codegraph search "<query>" [--root <path>] [--mode hybrid|symbol|path|text|graph|sql] [--limit <n>] [--from <file|handle>] [--depth <n>] [--no-snippets] [--json]
+
+Search Modes:
+  hybrid   Rank across files, symbols, chunks, SQL, and graph context
+  symbol   Prefer indexed symbols and stable symbol handles
+  path     Prefer file paths
+  text     Prefer text/snippet matches
+  graph    Prefer graph neighborhoods
+  sql      Prefer SQL object context
+
+Output:
+  Results include stable handles, rank reasons, evidence, graph neighbors, follow-up commands, limits, and omission counts.
+`;
+
+export const EXPLAIN_HELP_TEXT = `codegraph explain - Explain a file, symbol, SQL object, or search handle
+
+Usage: codegraph explain <file|symbol|sql-object|handle> [--root <path>] [--max-symbols <n>] [--max-dependencies <n>] [--max-snippets <n>] [--changed-context --base <rev> --head <rev>] [--json]
+
+Targets:
+  File paths, symbol names, SQL object names, and handles returned by codegraph search are accepted.
+
+Output:
+  Explanations include bounded symbols, dependencies, reverse dependencies, references, snippets, SQL facts, follow-up commands, limits, and omission counts.
+`;
+
+export const ARTIFACT_HELP_TEXT = `codegraph artifact - Build an agent-ready handoff bundle
+
+Usage: codegraph artifact build [--root <path>] [--out <dir>] [--sqlite] [--graph-json] [--report] [--questions] [--force] [--json]
+
+Artifacts:
+  codegraph.sqlite       Read-only SQLite graph artifact
+  graph.json             Portable graph JSON with stable project-relative handles
+  CODEGRAPH_REPORT.md    Concise report for humans and agents
+  questions.json         Suggested follow-up questions with runnable commands
+  manifest.json          Bundle manifest
+
+Defaults:
+  With no artifact selector flags, all artifacts are written.
+  --force removes recognizable stale artifact files while preserving unrelated operator files.
+`;
+
+export const MCP_HELP_TEXT = `codegraph mcp - Serve MCP tools for agent graph navigation
+
+Usage: codegraph mcp serve [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--allow-build]
+
+Transports:
+  --stdio          Serve MCP over stdio (default)
+  --port <number> Serve Streamable HTTP at /mcp
+
+Tools are read-only unless --allow-build is passed.
+`;
+
 export const MCP_SERVE_HELP_TEXT = `codegraph mcp serve - MCP server for agent graph navigation
 
 Usage: codegraph mcp serve [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--allow-build]
@@ -98,3 +152,13 @@ Defaults:
   HTTP transport binds to 127.0.0.1 unless --host is passed and serves /mcp.
   Tools are read-only unless --allow-build is passed.
 `;
+
+export function helpTextForCommand(command: string, positionals: readonly string[]): string | undefined {
+  if (command === "search") return SEARCH_HELP_TEXT;
+  if (command === "explain") return EXPLAIN_HELP_TEXT;
+  if (command === "artifact") return ARTIFACT_HELP_TEXT;
+  if (command === "mcp") {
+    return positionals[0] === "serve" ? MCP_SERVE_HELP_TEXT : MCP_HELP_TEXT;
+  }
+  return undefined;
+}

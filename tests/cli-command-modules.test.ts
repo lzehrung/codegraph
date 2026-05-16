@@ -165,6 +165,25 @@ describe("CLI command modules", () => {
     expect(MCP_SERVE_HELP_TEXT).toContain("--stdio");
   });
 
+  test("routes agent command help to command-specific usage text", async () => {
+    const cases = [
+      { args: ["search", "--help"], heading: "codegraph search", usage: 'Usage: codegraph search "<query>"' },
+      { args: ["explain", "--help"], heading: "codegraph explain", usage: "Usage: codegraph explain <file|symbol|sql-object|handle>" },
+      { args: ["artifact", "--help"], heading: "codegraph artifact", usage: "Usage: codegraph artifact build" },
+      { args: ["mcp", "--help"], heading: "codegraph mcp", usage: "Usage: codegraph mcp serve" },
+    ];
+
+    for (const entry of cases) {
+      const result = await captureCli(entry.args);
+
+      expect([undefined, 0]).toContain(result.exitCode);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain(entry.heading);
+      expect(result.stdout).toContain(entry.usage);
+      expect(result.stdout).not.toContain("Graph Options:");
+    }
+  });
+
   test("rejects ambiguous MCP serve transport flags before starting a server", async () => {
     const result = await captureCli(["mcp", "serve", "--stdio", "--port", "3000"]);
 
@@ -257,6 +276,53 @@ describe("CLI command modules", () => {
       expect(report.indexArtifact?.exists).toBeTruthy();
     } finally {
       await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("builds doctor reports for agent artifact bundle directories", async () => {
+    const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-doctor-artifact-bundle-"));
+    const tempDir = path.join(tempRoot, "bundle");
+    await fsp.mkdir(tempDir);
+    await fsp.writeFile(path.join(tempRoot, "outside.sqlite"), "not in the bundle\n", "utf8");
+    await fsp.writeFile(
+      path.join(tempDir, "manifest.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          root: tempDir,
+          outDir: tempDir,
+          manifestPath: path.join(tempDir, "manifest.json"),
+          artifacts: {
+            sqlite: "../outside.sqlite",
+            graphJson: "graph.json",
+            report: "CODEGRAPH_REPORT.md",
+            questions: "questions.json",
+          },
+          graphJsonSchema: "codegraph.graph-json",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fsp.writeFile(path.join(tempDir, "graph.json"), '{"format":"codegraph.graph-json"}\n', "utf8");
+    await fsp.writeFile(path.join(tempDir, "CODEGRAPH_REPORT.md"), "# Codegraph Report\n", "utf8");
+    await fsp.writeFile(path.join(tempDir, "questions.json"), '{"format":"codegraph.questions"}\n', "utf8");
+
+    try {
+      const report = buildDoctorReport(tempDir);
+
+      expect(report.indexArtifact?.type).toBe("artifactBundle");
+      expect(report.indexArtifact?.exists).toBeTruthy();
+      expect(report.indexArtifact?.details).toMatchObject({
+        manifestPresent: true,
+        sqlitePresent: false,
+        graphJsonPresent: true,
+        reportPresent: true,
+        questionsPresent: true,
+      });
+    } finally {
+      await fsp.rm(tempRoot, { recursive: true, force: true });
     }
   });
 

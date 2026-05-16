@@ -1,4 +1,5 @@
 import { formatAgentSearchResponse, searchCodegraph, type AgentSearchMode } from "../agent/search.js";
+import { SEARCH_HELP_TEXT } from "./help.js";
 import { parsePositiveIntegerOption } from "./options.js";
 
 export type SearchCommandContext = {
@@ -30,9 +31,7 @@ function parseAgentSearchMode(rawValue: string | undefined): AgentSearchMode {
 export async function handleSearchCommand(context: SearchCommandContext): Promise<void> {
   const query = context.positionals.join(" ").trim();
   if (!query) {
-    context.writeStderrLine(
-      'Usage: search "<query>" [--root <path>] [--mode hybrid|symbol|path|text|graph|sql] [--limit <n>] [--json]',
-    );
+    context.writeStderrLine(SEARCH_HELP_TEXT.trimEnd());
     context.exit(2);
   }
 
