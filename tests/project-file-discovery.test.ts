@@ -4,6 +4,7 @@ import os from "node:os";
 import fs from "node:fs/promises";
 import { buildProjectIndex, listProjectFiles, discoverProjectFiles } from "../src/index.js";
 import { DEFAULT_PROJECT_MANIFESTS } from "../src/util.js";
+import { translateGlobRootIgnoreGlobsForScanRoot } from "../src/util/projectFiles.js";
 
 const normalize = (value: string) => value.replace(/\\/g, "/");
 
@@ -611,6 +612,20 @@ describe("project file discovery", () => {
 
     expect(discovered.has(normalize(keptFile))).toBe(true);
     expect(discovered.has(normalize(ignoredFile))).toBe(false);
+  });
+
+  it("translates project-root ignore globs for child-root fast-glob pruning", () => {
+    const projectRoot = path.resolve("repo");
+    const testsRoot = path.join(projectRoot, "tests");
+
+    expect(
+      translateGlobRootIgnoreGlobsForScanRoot(testsRoot, projectRoot, [
+        "tests/samples/**",
+        "tests\\fixtures\\**",
+        "**/node_modules/**",
+        "src/generated/**",
+      ]),
+    ).toEqual(["samples/**", "fixtures/**", "**/node_modules/**", "src/generated/**"]);
   });
 
   it("does not validate gitignoreRoot when gitignore filtering is disabled", async () => {

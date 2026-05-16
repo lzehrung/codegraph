@@ -40,10 +40,11 @@ export function createImpactIgnoreMatcher(
   projectRoot: string,
   ignoreGlobs: readonly string[],
 ): (filePath: string) => boolean {
-  if (!ignoreGlobs.length) {
+  const normalizedIgnoreGlobs = ignoreGlobs.map((globPattern) => globPattern.trim().replace(/\\/g, "/")).filter(Boolean);
+  if (!normalizedIgnoreGlobs.length) {
     return () => false;
   }
-  const matchesGlob = pm([...ignoreGlobs]);
+  const matchesGlob = pm(normalizedIgnoreGlobs);
   return (filePath: string): boolean => {
     const normalizedFile = normalizePath(filePath);
     return matchesGlob(toImpactReportFilePath(projectRoot, normalizedFile)) || matchesGlob(normalizedFile);

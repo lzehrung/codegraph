@@ -188,7 +188,7 @@ describe("Review report", () => {
     await fsp.writeFile(path.join(sampleDir, "fixture.ts"), "export function fixture() { return 2; }\n", "utf8");
 
     const report = await buildReviewReport(root, {
-      discovery: { ignoreGlobs: ["tests/samples/**"] },
+      discovery: { ignoreGlobs: [" tests\\samples\\** "] },
       diffText: [
         "diff --git a/src/feature.ts b/src/feature.ts",
         "index 1234567..abcdef0 100644",
