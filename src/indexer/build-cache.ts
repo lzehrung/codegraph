@@ -3,11 +3,11 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import crypto from "node:crypto";
-import { createRequire } from "node:module";
 import { supportForFile } from "../languages.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { shouldAvoidJsFallbackForLanguage } from "../native/treeSitterNative.js";
 import { buildBloomFilterFromSource } from "../util/bloomFilter.js";
+import { SqliteDatabase } from "../sqlite-driver.js";
 import type { FallbackImportExtractionEvent } from "../graphs/specifiers.js";
 import type { GraphCacheEntry, GraphBuildOptions } from "../graphs/types.js";
 import type { Edge } from "../types.js";
@@ -38,8 +38,6 @@ type ModuleCacheEntry = {
   mod: ModuleIndex;
 };
 const memoryCache = new Map<string, ModuleCacheEntry>();
-
-type BetterSqliteDatabase = import("better-sqlite3").Database;
 
 type PackageJsonDependencyInfo = {
   name?: string;
@@ -105,12 +103,7 @@ export async function collectWorkspaceManifestDependencyEdges(
   return edges;
 }
 
-const loadBetterSqlite3 = (): typeof import("better-sqlite3") => {
-  const require = createRequire(import.meta.url);
-  return require("better-sqlite3") as typeof import("better-sqlite3");
-};
-
-const diskCacheDatabases = new Map<string, BetterSqliteDatabase>();
+const diskCacheDatabases = new Map<string, SqliteDatabase>();
 
 function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
   return opts?.cacheDir || path.join(projectRoot, ".codegraph-cache", "index-v1");
@@ -120,13 +113,12 @@ function diskCacheDatabasePath(projectRoot: string, opts?: BuildOptions): string
   return path.join(cacheRoot(projectRoot, opts), "index-cache.sqlite").replace(/\\/g, "/");
 }
 
-function getDiskCacheDatabase(projectRoot: string, opts?: BuildOptions): BetterSqliteDatabase {
+function getDiskCacheDatabase(projectRoot: string, opts?: BuildOptions): SqliteDatabase {
   const dbPath = diskCacheDatabasePath(projectRoot, opts);
   const existing = diskCacheDatabases.get(dbPath);
   if (existing) return existing;
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  const BetterSqlite3 = loadBetterSqlite3();
-  const db = new BetterSqlite3(dbPath);
+  const db = new SqliteDatabase(dbPath);
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
   db.exec(`

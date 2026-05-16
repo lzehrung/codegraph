@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import { createRequire } from "node:module";
+import { DatabaseSync } from "node:sqlite";
 import { buildProjectIndex } from "../src/index.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -15,18 +15,12 @@ describe("Incremental cache modes", () => {
   const diskCacheDbPathFor = (projectRoot: string): string =>
     path.join(projectRoot, ".codegraph-cache", "index-v1", "index-cache.sqlite");
 
-  const loadBetterSqlite3 = () => {
-    const require = createRequire(import.meta.url);
-    return require("better-sqlite3") as typeof import("better-sqlite3");
-  };
-
   const readDiskCacheRow = (
     projectRoot: string,
     file: string,
   ): { sig: string; version: number; payload: string; updated_at: number } | null => {
     const dbPath = diskCacheDbPathFor(projectRoot);
-    const BetterSqlite3 = loadBetterSqlite3();
-    const db = new BetterSqlite3(dbPath, { readonly: true });
+    const db = new DatabaseSync(dbPath, { readOnly: true });
     try {
       const row = db.prepare("SELECT sig, version, payload, updated_at FROM module_cache WHERE file = ?").get(file) as
         | { sig: string; version: number; payload: string; updated_at: number }

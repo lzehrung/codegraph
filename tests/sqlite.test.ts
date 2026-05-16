@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { createRequire } from "node:module";
+import { DatabaseSync } from "node:sqlite";
 import {
   buildProjectIndex,
   buildSymbolGraphDetailed,
@@ -17,15 +17,10 @@ async function mkTmpDir(prefix: string): Promise<string> {
   return dir;
 }
 
-const loadBetterSqlite3 = () => {
-  const require = createRequire(import.meta.url);
-  return require("better-sqlite3") as typeof import("better-sqlite3");
-};
-
-type BetterSqliteDatabase = import("better-sqlite3").Database;
-
-const dbQuery = (db: BetterSqliteDatabase, sql: string): string[] => {
-  const rows = db.prepare(sql).raw().all() as Array<Array<unknown>>;
+const dbQuery = (db: DatabaseSync, sql: string): string[] => {
+  const stmt = db.prepare(sql);
+  stmt.setReturnArrays(true);
+  const rows = stmt.all() as Array<Array<unknown>>;
   return rows.map((row) => String(row[0]));
 };
 
@@ -48,8 +43,7 @@ export function run() { helper(); new Widget(); }
       outputPath: dbPath,
     });
 
-    const BetterSqlite3 = loadBetterSqlite3();
-    const db = new BetterSqlite3(dbPath);
+    const db = new DatabaseSync(dbPath);
 
     const tables = dbQuery(db, "SELECT name FROM sqlite_master WHERE type='table';");
     expect(tables).toContain("files");
@@ -135,8 +129,7 @@ export function run() { helper(); new Widget(); }
 
     const dbPath = path.join(root, "graph.sqlite");
     {
-      const BetterSqlite3 = loadBetterSqlite3();
-      const db = new BetterSqlite3(dbPath);
+      const db = new DatabaseSync(dbPath);
       db.exec(`
         CREATE TABLE IF NOT EXISTS files (
           path TEXT PRIMARY KEY,
@@ -180,13 +173,11 @@ export function run() { helper(); new Widget(); }
       outputPath: dbPath,
     });
 
-    const BetterSqlite3 = loadBetterSqlite3();
-    const db = new BetterSqlite3(dbPath);
+    const db = new DatabaseSync(dbPath);
     const columns = db
       .prepare("PRAGMA table_info(symbols);")
-      .raw()
       .all()
-      .map((row) => (Array.isArray(row) && row[1] ? String(row[1]) : ""))
+      .map((row) => (typeof row.name === "string" ? row.name : ""))
       .filter(Boolean);
     expect(columns).toContain("visibility");
     const tables = dbQuery(db, "SELECT name FROM sqlite_master WHERE type='table';");
@@ -232,8 +223,7 @@ export function run() { return new NewWidget(); }
       changedFiles: [changedPath],
     });
 
-    const BetterSqlite3 = loadBetterSqlite3();
-    const db = new BetterSqlite3(dbPath);
+    const db = new DatabaseSync(dbPath);
 
     const oldSymbols = dbQuery(db, "SELECT name FROM symbols WHERE name = 'OldWidget';");
     const newSymbols = dbQuery(db, "SELECT name FROM symbols WHERE name = 'NewWidget';");
@@ -341,8 +331,7 @@ export const run = () => helper();
       fullGraphSync: true,
     });
 
-    const BetterSqlite3 = loadBetterSqlite3();
-    const db = new BetterSqlite3(dbPath);
+    const db = new DatabaseSync(dbPath);
     const utilFiles = dbQuery(
       db,
       `SELECT path FROM files WHERE path = '${path.join(root, "util.ts").replace(/\\/g, "/")}';`,
@@ -497,8 +486,7 @@ export const run = () => helper();
       fullGraphSync: true,
     });
 
-    const BetterSqlite3 = loadBetterSqlite3();
-    const db = new BetterSqlite3(dbPath);
+    const db = new DatabaseSync(dbPath);
     const snapshotModes = dbQuery(db, "SELECT mode FROM graph_snapshots ORDER BY id ASC;");
     expect(snapshotModes).toEqual(["full", "incremental"]);
     const snapshotFiles = dbQuery(db, "SELECT change_kind FROM graph_snapshot_files ORDER BY rowid ASC;");

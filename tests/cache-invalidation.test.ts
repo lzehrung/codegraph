@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import fs from "node:fs";
-import { createRequire } from "node:module";
+import { DatabaseSync } from "node:sqlite";
 import { spawnSync } from "node:child_process";
 import { buildProjectIndex, buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
 import * as indexer from "../src/indexer.js";
@@ -33,15 +33,9 @@ function diskCacheDbPathFor(root: string): string {
   return path.join(root, ".codegraph-cache", "index-v1", "index-cache.sqlite");
 }
 
-function loadBetterSqlite3() {
-  const require = createRequire(import.meta.url);
-  return require("better-sqlite3") as typeof import("better-sqlite3");
-}
-
 function readModuleCacheUpdatedAt(root: string, file: string): number | null {
   const dbPath = diskCacheDbPathFor(root);
-  const BetterSqlite3 = loadBetterSqlite3();
-  const db = new BetterSqlite3(dbPath, { readonly: true });
+  const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
     const row = db.prepare("SELECT updated_at FROM module_cache WHERE file = ?").get(file) as
       | { updated_at: number }
