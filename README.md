@@ -81,7 +81,7 @@ Sample graph output can be generated with `npm run graph:mermaid` or `npm run gr
 
 ## Quick start
 
-Requirements: Node.js 20+.
+Requirements: Node.js 24.10+.
 
 For contributors and first-time evaluation, start from a local source checkout:
 

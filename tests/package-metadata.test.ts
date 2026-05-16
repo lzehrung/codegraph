@@ -221,11 +221,11 @@ describe("package metadata", () => {
     expect(bin.codegraph).toBe("dist/cli.js");
   });
 
-  it("requires Node 20 or newer in package metadata", () => {
+  it("requires a Node runtime with built-in SQLite authorizers", () => {
     const rootPackage = readJson("package.json");
     const engines = readStringRecord(rootPackage.engines);
 
-    expect(engines.node).toBe(">=20");
+    expect(engines.node).toBe(">=24.10");
   });
 
   it("keeps the root package description aligned with the multi-language surface", () => {
@@ -336,6 +336,24 @@ describe("package metadata", () => {
     expect(fs.existsSync(path.resolve(process.cwd(), "packages/codegraph-opencode-plugin"))).toBe(false);
   });
 
+  it("keeps removed deprecated or redundant package edges out of manifests", () => {
+    const rootPackage = readJson("package.json");
+    const fallbackPackage = readJson("packages/codegraph-js-fallback/package.json");
+    const dependencies = readStringRecord(rootPackage.dependencies);
+    const devDependencies = readStringRecord(rootPackage.devDependencies);
+    const fallbackDependencies = readStringRecord(fallbackPackage.dependencies);
+
+    expect(dependencies["better-sqlite3"]).toBeUndefined();
+    expect(devDependencies["@types/better-sqlite3"]).toBeUndefined();
+    expect(devDependencies["@types/jsdom"]).toBeUndefined();
+    expect(devDependencies["@typescript-eslint/eslint-plugin"]).toBeUndefined();
+    expect(devDependencies["@typescript-eslint/parser"]).toBeUndefined();
+    expect(devDependencies["eslint-import-resolver-typescript"]).toBeUndefined();
+    expect(devDependencies["eslint-plugin-import"]).toBeUndefined();
+    expect(fallbackDependencies["tree-sitter-svelte"]).toBeUndefined();
+    expect(fallbackDependencies["@tree-sitter-grammars/tree-sitter-svelte"]).toBeDefined();
+  });
+
   it("keeps all publishable workspaces under the packages directory", () => {
     const rootPackage = readJson("package.json");
     const workspaces =
@@ -366,7 +384,9 @@ describe("package metadata", () => {
     expect(dependencies["tree-sitter-php"]).toBeDefined();
     expect(dependencies["tree-sitter-typescript"]).toBeDefined();
     expect(dependencies["tree-sitter-vue"]).toBeDefined();
+    expect(dependencies["@tree-sitter-grammars/tree-sitter-svelte"]).toBeDefined();
     expect(dependencies["@tree-sitter-grammars/tree-sitter-zig"]).toBeDefined();
+    expect(dependencies["tree-sitter-svelte"]).toBeUndefined();
   });
 
   it("does not publish local file dependencies in the JS fallback package", () => {
