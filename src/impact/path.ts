@@ -40,7 +40,7 @@ export function createImpactIgnoreMatcher(
   projectRoot: string,
   ignoreGlobs: readonly string[],
 ): (filePath: string) => boolean {
-  if (ignoreGlobs.length === 0) {
+  if (!ignoreGlobs.length) {
     return () => false;
   }
   const matchesGlob = pm([...ignoreGlobs]);

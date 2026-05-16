@@ -541,13 +541,13 @@ async function findGoPackageEntry(dirPath: string): Promise<string | null> {
     .filter((entry) => entry.isFile() && entry.name.endsWith(".go") && !entry.name.endsWith("_test.go"))
     .map((entry) => entry.name)
     .sort((a, b) => a.localeCompare(b));
-  if (goFiles.length === 0) return null;
+  if (!goFiles.length) return null;
   return path.join(dirPath, goFiles[0] ?? "");
 }
 
 function isGoStdLib(spec: string): boolean {
   const base = spec.split("/")[0] ?? "";
-  return base.length > 0 && !base.includes(".");
+  return !!base.length && !base.includes(".");
 }
 
 async function resolveGoModuleImport(moduleInfo: GoModuleInfo, spec: string): Promise<string | null> {
@@ -588,7 +588,7 @@ export async function resolveGoImportPath(projectRoot: string, fromFile: string,
     }
   }
 
-  if (moduleInfos.length === 0) {
+  if (!moduleInfos.length) {
     const goModPath = await findNearestFile(startDir, projectRoot, "go.mod");
     if (goModPath) {
       const moduleRoot = path.dirname(goModPath);
@@ -753,7 +753,7 @@ function extractPhpTopLevelPackageEntries(source: string): PhpPackageSymbolIndex
   let activeNamespace = "";
   let pendingBlock: { type: "class" | "function" } | null = null;
 
-  const inDeclarationBody = (): boolean => classLikeDepths.length > 0 || functionLikeDepths.length > 0;
+  const inDeclarationBody = (): boolean => !!(classLikeDepths.length || functionLikeDepths.length);
   const currentNamespace = (): string =>
     namespaceBlockDepths[namespaceBlockDepths.length - 1]?.packageName ?? activeNamespace;
 
@@ -1051,7 +1051,7 @@ function readComposerNamespaceDirs(value: unknown, composerDir: string): Map<str
     const dirs = targets
       .filter((target): target is string => typeof target === "string")
       .map((target) => resolveComposerPath(target, composerDir));
-    if (dirs.length > 0) {
+    if (dirs.length) {
       result.set(prefix, dirs);
     }
   }
@@ -1577,7 +1577,7 @@ export async function resolveSpecifier(
       }
     }
   }
-  if (resolutionHints.length > 0) {
+  if (resolutionHints.length) {
     for (const hint of resolutionHints) {
       const baseDir = path.isAbsolute(hint) ? hint : path.resolve(projectRoot, hint);
       const base = path.resolve(baseDir, spec);
@@ -1823,7 +1823,7 @@ export function clearResolutionCaches(): void {
 }
 
 export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  if (items.length === 0) return [];
+  if (!items.length) return [];
   const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : 1;
 
   const results = new Array<R>(items.length);

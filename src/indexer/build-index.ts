@@ -499,7 +499,7 @@ function expandStarImports(modules: Map<FileId, ModuleIndex>): void {
       if (!target) continue;
       const targetSupport = supportForFile(imp.resolved);
       const exportedSymbols =
-        target.exports.filter((entry) => entry.type === "local").length > 0
+        target.exports.filter((entry) => entry.type === "local").length
           ? target.exports
               .filter((entry): entry is Extract<typeof entry, { type: "local" }> => entry.type === "local")
               .map((entry) => entry.target)
@@ -563,7 +563,7 @@ async function buildIndexFromFileListShared(
   initManifestReport(report, useManifest, false);
   initNativeBackendReport(report);
   const normalizedFiles = Array.from(new Set(normalizeIndexedFileInputs(projectRoot, rawFiles ?? [], "Index file")));
-  if (normalizedFiles.length === 0 && helperOpts?.warnNoFilesMessage) {
+  if (!normalizedFiles.length && helperOpts?.warnNoFilesMessage) {
     logWithLevel(opts?.logLevel, "warn", helperOpts.warnNoFilesMessage);
   }
   const fileReport = initFileReport(report);
@@ -768,7 +768,7 @@ async function buildIndexFromFileListShared(
     if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
     const graphStart = performance.now();
     const appendUniqueGraphEdges = (edges: Edge[]) => {
-      if (edges.length === 0) return;
+      if (!edges.length) return;
       const seen = new Set(
         graph.edges.map(
           (edge) =>
@@ -935,14 +935,14 @@ export async function buildProjectIndexIncremental(
     if (manifestReport && !manifestUsed) manifestReport.reason = "missing";
     const optionDiffs = diffBuildOptions(manifest?.buildOptions, opts);
     const warningOptionDiffs = optionDiffs.filter((diff) => diff !== "cache");
-    if (warningOptionDiffs.length > 0) {
+    if (warningOptionDiffs.length) {
       logWithLevel(
         opts?.logLevel,
         "warn",
         `Warning: Manifest options differ from current build options: ${warningOptionDiffs.join(", ")}`,
       );
     }
-    if (manifestReport && optionDiffs.length > 0) {
+    if (manifestReport && optionDiffs.length) {
       manifestReport.optionsMismatch = optionDiffs;
     }
     const currentConfigHashResult = await computeConfigHash(projectRoot, opts?.logLevel);
@@ -1117,7 +1117,7 @@ export async function buildProjectIndexIncremental(
       }
       const changedList = Array.from(changedFiles);
       if (fileReport) fileReport.changed = changedList.length;
-      if (changedList.length > 0) {
+      if (changedList.length) {
         const parseStart = performance.now();
         let processedFiles = 0;
         const totalFiles = changedList.length;
@@ -1191,7 +1191,7 @@ export async function buildProjectIndexIncremental(
       const filesList = Array.from(changedFiles);
       const graphStart = performance.now();
       const graph =
-        filesList.length === 0 && baseGraph
+        !filesList.length && baseGraph
           ? { nodes: new Set(baseGraph.nodes), edges: [...baseGraph.edges] }
           : await collectGraph(projectRoot, filesList, {
               parsed: parsedMap,

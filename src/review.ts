@@ -354,7 +354,7 @@ async function listDirectDeletedFileTestImporters(
   testPatterns: string[] = [],
   projectRoot?: string,
 ): Promise<CandidateTestFile[]> {
-  if (deletedFiles.length === 0) return [];
+  if (!deletedFiles.length) return [];
 
   const deletedFileSet = new Set(deletedFiles.map((file) => normalizePath(file)));
   const compiledPatterns = compileTestPatterns(testPatterns);
@@ -434,7 +434,7 @@ async function buildDeletedFileSnapshots(
   },
 ): Promise<Map<FileId, DeletedFileSnapshot>> {
   const snapshots = new Map<FileId, DeletedFileSnapshot>();
-  if (deletedFiles.length === 0) return snapshots;
+  if (!deletedFiles.length) return snapshots;
 
   for (const file of deletedFiles) {
     const support = supportForFile(file);
@@ -460,7 +460,7 @@ async function buildDeletedFileSnapshots(
 }
 
 function reconstructDeletedSourceFromDiff(change: FileChange | undefined): string | null {
-  if (!change || change.kind !== "deleted" || change.hunks.length === 0) {
+  if (!change || change.kind !== "deleted" || !change.hunks.length) {
     return null;
   }
   const oldLines: string[] = [];
@@ -477,7 +477,7 @@ function reconstructDeletedSourceFromDiff(change: FileChange | undefined): strin
       oldLine += 1;
     }
   }
-  return oldLines.length > 0 ? oldLines.join("\n") : null;
+  return oldLines.length ? oldLines.join("\n") : null;
 }
 
 function sortSymbols(symbols: SymbolDef[]): SymbolDef[] {
@@ -600,7 +600,7 @@ function buildReviewTasks(input: {
 }
 
 function hasDiagnostics(diagnostics: ReviewDiagnostics): boolean {
-  return diagnostics.missingFiles.length > 0 || diagnostics.symbolMappingParseFailures.length > 0;
+  return !!(diagnostics.missingFiles.length || diagnostics.symbolMappingParseFailures.length);
 }
 
 function isRiskRelevantSymbolMappingFile(file: string): boolean {
@@ -640,9 +640,9 @@ function shouldIncludeExportSummaries(
   hunks: Hunk[] | undefined,
   locals: readonly SymbolDef[],
 ): boolean {
-  if (listReviewableExports(mod).length === 0) return false;
+  if (!listReviewableExports(mod).length) return false;
   if (!hunks) return true;
-  if (locals.length === 0) return true;
+  if (!locals.length) return true;
   return hunks.some((hunk) => hunk.lines.some(diffLineLooksExportLike));
 }
 
@@ -759,7 +759,7 @@ async function collectDeletedImporterEdges(
   deletedFiles: readonly string[],
   projectRoot?: string,
 ): Promise<Edge[]> {
-  if (deletedFiles.length === 0) return [];
+  if (!deletedFiles.length) return [];
   const deletedFileSet = new Set(deletedFiles.map((file) => normalizePath(file)));
   const edges = new Map<string, Edge>();
   const workspaceConfig = projectRoot ? await loadWorkspaceConfig(projectRoot) : undefined;
@@ -860,14 +860,14 @@ function collectDiffSnippets(source: string, range: Range, changedLines: Set<num
   const safeEnd = endLine >= startLine ? endLine : startLine;
 
   const sortedChangedLines = [...changedLines].sort((a, b) => a - b);
-  if (sortedChangedLines.length === 0) return [];
+  if (!sortedChangedLines.length) return [];
 
   const lines = source.split(/\r?\n/);
   const matching: number[] = [];
   for (const line of sortedChangedLines) {
     if (line >= startLine && line <= safeEnd) matching.push(line);
   }
-  const matchingLines = matching.length > 0 ? matching : sortedChangedLines;
+  const matchingLines = matching.length ? matching : sortedChangedLines;
 
   const snippets: string[] = [];
   let groupStart = matchingLines[0]!;
@@ -1230,14 +1230,14 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
           file: relativePath(projectRoot, ref.file),
           range: ref.range,
         }));
-        if (limited.length > 0) callsites = limited;
+        if (limited.length) callsites = limited;
       }
     }
 
     return {
       ...base,
       ...definitionSnippet,
-      ...(diffSnippets.length > 0 ? { diffSnippets } : {}),
+      ...(diffSnippets.length ? { diffSnippets } : {}),
       ...(callsites ? { callsites } : {}),
     };
   };

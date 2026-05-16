@@ -82,8 +82,8 @@ function getOrCreateNativeLanguageReport(
       unsupportedLanguage: 0,
       queryFailure: 0,
     },
-    ...(metadata.normalizedQueryKinds.length > 0 ? { normalizedQueryKinds: [...metadata.normalizedQueryKinds] } : {}),
-    ...(metadata.skippedQueryKinds.length > 0 ? { skippedQueryKinds: [...metadata.skippedQueryKinds] } : {}),
+    ...(metadata.normalizedQueryKinds.length ? { normalizedQueryKinds: [...metadata.normalizedQueryKinds] } : {}),
+    ...(metadata.skippedQueryKinds.length ? { skippedQueryKinds: [...metadata.skippedQueryKinds] } : {}),
   };
   backend.native.byLanguage[support.id] = created;
   return created;

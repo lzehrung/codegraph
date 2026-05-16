@@ -32,8 +32,8 @@ function uniq(values: readonly string[]): string[] {
 
 export function hasDiscoveryOptions(discovery: ProjectFileDiscoveryOptions): boolean {
   return (
-    (discovery.includeGlobs?.length ?? 0) > 0 ||
-    (discovery.ignoreGlobs?.length ?? 0) > 0 ||
+    !!discovery.includeGlobs?.length ||
+    !!discovery.ignoreGlobs?.length ||
     discovery.useGitignore !== undefined
   );
 }
@@ -49,8 +49,8 @@ export function mergeDiscoveryOptions(
   const gitignoreRoot = override?.gitignoreRoot ?? base?.gitignoreRoot;
   const logLevel = override?.logLevel ?? base?.logLevel;
   return {
-    ...(includeGlobs.length > 0 ? { includeGlobs } : {}),
-    ...(ignoreGlobs.length > 0 ? { ignoreGlobs } : {}),
+    ...(includeGlobs.length ? { includeGlobs } : {}),
+    ...(ignoreGlobs.length ? { ignoreGlobs } : {}),
     ...(useGitignore !== undefined ? { useGitignore } : {}),
     ...(globRoot !== undefined ? { globRoot } : {}),
     ...(gitignoreRoot !== undefined ? { gitignoreRoot } : {}),

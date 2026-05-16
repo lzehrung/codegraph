@@ -60,7 +60,7 @@ export async function collectWorkspaceManifestDependencyEdges(
   const scopedManifestPaths = allowedManifestFiles
     ? manifestPaths.filter((manifestPath) => allowedManifestFiles.has(manifestPath))
     : manifestPaths;
-  if (scopedManifestPaths.length === 0) return [];
+  if (!scopedManifestPaths.length) return [];
 
   const manifestByPackageName = new Map<string, string>();
   const parsedByPath = new Map<string, PackageJsonDependencyInfo>();
@@ -671,12 +671,12 @@ function normalizeDiscoveryOptions(discovery?: ProjectFileDiscoveryOptions): Man
     new Set((discovery.ignoreGlobs ?? []).map((glob) => glob.trim()).filter(Boolean)),
   ).sort();
   const useGitignore = discovery.useGitignore ?? true;
-  if (includeGlobs.length === 0 && ignoreGlobs.length === 0 && useGitignore) {
+  if (!includeGlobs.length && !ignoreGlobs.length && useGitignore) {
     return undefined;
   }
   return {
-    ...(includeGlobs.length > 0 ? { includeGlobs } : {}),
-    ...(ignoreGlobs.length > 0 ? { ignoreGlobs } : {}),
+    ...(includeGlobs.length ? { includeGlobs } : {}),
+    ...(ignoreGlobs.length ? { ignoreGlobs } : {}),
     useGitignore,
   };
 }
@@ -762,10 +762,10 @@ export function normalizeGraphOptions(opts?: GraphBuildOptions): GraphBuildOptio
   const fastRegexDisabledLanguages = normalizeLanguageList(opts?.fastRegexDisabledLanguages);
   return {
     fast: !!opts?.fast,
-    ...(fastRegexDisabledLanguages.length > 0 ? { fastRegexDisabledLanguages } : {}),
+    ...(fastRegexDisabledLanguages.length ? { fastRegexDisabledLanguages } : {}),
     resolveNodeModules: !!opts?.resolveNodeModules,
     dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
-    ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
+    ...(resolutionHints.length ? { resolutionHints } : {}),
   };
 }
 

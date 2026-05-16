@@ -73,5 +73,5 @@ export function listResolutionCandidates(base: string, resolutionExtensions?: re
   const candidates = compatibleExtensions
     .filter((extension) => extension === baseExt || extensions.includes(extension))
     .map((extension) => `${baseWithoutExt}${extension}`);
-  return candidates.length > 0 ? Array.from(new Set(candidates)) : [base];
+  return candidates.length ? Array.from(new Set(candidates)) : [base];
 }

@@ -96,7 +96,7 @@ describe("bench-native harness", () => {
       }
       // Clean up baselines dir if empty
       try {
-        if (fs.existsSync(baselinesDir) && fs.readdirSync(baselinesDir).length === 0) {
+        if (fs.existsSync(baselinesDir) && !fs.readdirSync(baselinesDir).length) {
           fs.rmdirSync(baselinesDir);
         }
       } catch {

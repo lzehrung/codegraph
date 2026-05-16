@@ -304,7 +304,7 @@ export async function listProjectFiles(
       .map(({ path: filePath, realPath }) => ({ filePath: normalizePath(filePath), realPath }))
       .filter(({ filePath, realPath }) => {
         if (
-          includeMatchers.length > 0 &&
+          includeMatchers.length &&
           !includeMatchers.some((matcher) => matchesDiscoveryGlob(filePath, globRoot, matcher))
         ) {
           return false;

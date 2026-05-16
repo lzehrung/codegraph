@@ -205,7 +205,7 @@ export class LazyProjectIndex {
         : 100;
     this.preloadStrategy = options?.preloadStrategy ?? "none";
     this.preloadMatcher =
-      options?.preloadPatterns && options.preloadPatterns.length > 0
+      options?.preloadPatterns?.length
         ? picomatch(options.preloadPatterns, { dot: true })
         : null;
   }

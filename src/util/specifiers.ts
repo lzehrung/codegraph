@@ -220,7 +220,7 @@ function parsePathCallArg(argText: string): {
   const match = argText.match(/^\s*path\.(?:join|resolve)\s*\(([\s\S]*)\)\s*$/);
   if (!match) return null;
   const args = splitTopLevelArgs(match[1] ?? "");
-  if (!args || args.length === 0) return null;
+  if (!args?.length) return null;
   let base: DynamicBase | null = null;
   const segments: string[] = [];
   for (const arg of args) {
@@ -233,7 +233,7 @@ function parsePathCallArg(argText: string): {
       segments.push(token.value);
     }
   }
-  if (!base || segments.length === 0) return null;
+  if (!base || !segments.length) return null;
   return { base, segments };
 }
 

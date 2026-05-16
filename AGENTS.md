@@ -4,6 +4,7 @@
 
 - Never use `any` or `as unknown as`
 - Never use `=== true`, `=== false`, etc. in boolean conditions; keep them as terse and simple as possible like `!condition`. Extract conditions to variables when the variable name adds clarity/insight into the reason for the condition.
+- In boolean condition contexts, use the shortest syntactically equivalent expression. Prefer `items.length` over `items.length > 0`, `!items.length` over `items.length === 0`, and `items?.length` over `items && items.length > 0`.
 - Always consider the impact of a change on tests or when more test cases are needed. Never make tests pass for the sake of passing; always exercise real behavior.
 - Always keep documentation updated and accurate while being minimal and concise.
 - Keep `README.md` as the landing page and docs index. Do not turn it back into the only canonical reference for every example and workflow.

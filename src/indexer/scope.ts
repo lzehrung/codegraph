@@ -167,7 +167,7 @@ export function buildScopeIndexFromSource(
         const params = node.childForFieldName("parameters");
         if (params) {
           const queue: SyntaxNodeLike[] = [params];
-          while (queue.length > 0) {
+          while (queue.length) {
             const current = queue.pop();
             if (!current) continue;
             if (current.type === "identifier") addDecl(current, "param");

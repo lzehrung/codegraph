@@ -155,7 +155,7 @@ export async function mapChangedLinesToSymbols(
     for (let line = startLine; line <= endLine; line++) {
       if (changedLines.has(line)) matchingLines.push(line);
     }
-    if (matchingLines.length === 0) continue;
+    if (!matchingLines.length) continue;
     const classification = classifyChangedNode(node, source, sup);
     const symbolHandle = findSymbolHandleForNode(index, file, node, sup, classification, source, trackedPositions);
     if (!symbolHandle) continue;
@@ -429,7 +429,7 @@ function computeChangedByteRanges(source: string, hunks: FileChange["hunks"]): B
         }
       }
       // If more lines were deleted than added (including pure-deletion blocks where
-      // added.length === 0), emit a 1-byte sentinel at the deletion cursor in the
+      // !added.length), emit a 1-byte sentinel at the deletion cursor in the
       // new source.  Without this, removing a parameter line from a multiline
       // signature would leave computeSignatureChanged with no byte range to overlap
       // against the params node and incorrectly return false.
@@ -444,7 +444,7 @@ function computeChangedByteRanges(source: string, hunks: FileChange["hunks"]): B
         // zero-length range (start === end) would never overlap anything.
         // At EOF, back up one byte when possible; skip if source is empty.
         if (cursor >= source.length) {
-          if (source.length > 0) {
+          if (source.length) {
             ranges.push({ start: source.length - 1, end: source.length });
           }
           // else: empty source, no sentinel needed
@@ -473,7 +473,7 @@ function computeSignatureChanged(
   symbolDef: SymbolDef,
   changedByteRanges: ReadonlyArray<ByteRange>,
 ): boolean {
-  if (changedByteRanges.length === 0) return false;
+  if (!changedByteRanges.length) return false;
   const pos = {
     row: symbolDef.range.start.line - 1,
     column: symbolDef.range.start.column - 1,

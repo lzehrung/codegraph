@@ -152,7 +152,7 @@ export async function collectImportsForFile(
     });
   };
   const normalizeGoImports = (): void => {
-    if (resolvedSup.id !== "go" || imports.length === 0) {
+    if (resolvedSup.id !== "go" || !imports.length) {
       return;
     }
     const aliasByFrom = new Map<string, string>();
@@ -200,7 +200,7 @@ export async function collectImportsForFile(
     imports.splice(0, imports.length, ...normalized);
   };
   const appendJavaTextImports = async (): Promise<void> => {
-    if (resolvedSup.id !== "java" || imports.length > 0) {
+    if (resolvedSup.id !== "java" || imports.length) {
       return;
     }
     const importPattern = /^\s*import\s+(static\s+)?([A-Za-z_][\w.]*(?:\.\*)?)\s*;/gm;
@@ -235,7 +235,7 @@ export async function collectImportsForFile(
     }
   };
   const appendKotlinTextImports = async (): Promise<void> => {
-    if (resolvedSup.id !== "kotlin" || imports.length > 0) {
+    if (resolvedSup.id !== "kotlin" || imports.length) {
       return;
     }
     const importPattern = /^\s*import\s+([A-Za-z_][\w.]*(?:\.\*)?)(?:\s+as\s+([A-Za-z_][\w]*))?\s*$/gm;
@@ -442,7 +442,7 @@ export async function collectImportsForFile(
 
     if (resolvedSup.id === "php") {
       const parsed = parsePhpImportStatement(normalizedStmt, file);
-      if (parsed.length === 0) return false;
+      if (!parsed.length) return false;
       if (handledStatementImports.has(normalizedStmt)) return true;
       handledStatementImports.add(normalizedStmt);
 
@@ -806,7 +806,7 @@ export async function collectImportsForFile(
           });
         }
 
-        if (!caps["def"] && !caps["ns"] && inames.length === 0 && patterns.length === 0) {
+        if (!caps["def"] && !caps["ns"] && !inames.length && !patterns.length) {
           if (resolvedSup.id === "java") {
             const parts = from.split(".");
             const last = parts[parts.length - 1];
@@ -957,7 +957,7 @@ export async function collectImportsForFile(
       // but only when the importBindings query was not modified by
       // normalization. Languages whose importBindings query is normalized
       // or blanked (e.g. Kotlin) may need the JS/text fallback.
-      if (imports.length > 0 || isNativeQueryAuthoritative(resolvedSup, "importBindings")) {
+      if (imports.length || isNativeQueryAuthoritative(resolvedSup, "importBindings")) {
         return imports;
       }
     } catch {
@@ -1104,7 +1104,7 @@ export async function collectImportsForFile(
         }
 
         // Heuristics for languages where we captured @from but no explicit bindings
-        if (fromValue && !caps["def"] && !caps["ns"] && inames.length === 0 && patterns.length === 0) {
+        if (fromValue && !caps["def"] && !caps["ns"] && !inames.length && !patterns.length) {
           if (resolvedSup.id === "java") {
             // import java.util.List; -> local "List"
             const parts = fromValue.split(".");
@@ -1133,7 +1133,7 @@ export async function collectImportsForFile(
               // For "using Alias = Type.Path;", try to grab the last part as the imported name
               let imported = alias;
               const fromParts = fromValue.split(".");
-              if (fromParts.length > 0) {
+              if (fromParts.length) {
                 const candidate = fromParts[fromParts.length - 1];
                 if (candidate) imported = candidate;
               }
@@ -1302,7 +1302,7 @@ export async function collectImportsForFile(
     }
     await finalizeLanguageSpecificImports();
     // Only run fallback when query path produced no results
-    if (!ranFallback && imports.length === 0) {
+    if (!ranFallback && !imports.length) {
       await runFallback();
       await finalizeLanguageSpecificImports();
     }

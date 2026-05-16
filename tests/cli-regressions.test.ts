@@ -22,7 +22,7 @@ async function runCliCommandDetailed(
   cwd = process.cwd(),
   env: NodeJS.ProcessEnv = {},
 ): Promise<{ stdout: string; stderr: string }> {
-  if (input === undefined && Object.keys(env).length === 0) {
+  if (input === undefined && !Object.keys(env).length) {
     return await runCliInProcess(args, cwd);
   }
   return await new Promise((resolve, reject) => {
@@ -1104,7 +1104,7 @@ describe("CLI regressions", () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-search-"));
     await fsp.writeFile(
       path.join(root, "auth.ts"),
-      "export function validateUser(token: string) { return token.length > 0; }\n",
+      "export function validateUser(token: string) { return !!token.length; }\n",
     );
     await fsp.writeFile(
       path.join(root, "main.ts"),

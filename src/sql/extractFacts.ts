@@ -413,7 +413,7 @@ export function normalizeSqlObjectName(raw: string | undefined): string | null {
   if (!trimmed) return null;
   const parts = trimmed.match(new RegExp(IDENTIFIER_PART, "g")) ?? [];
   const normalizedParts = parts.map(normalizeSqlIdentifierPart).filter(Boolean);
-  if (normalizedParts.length === 0) return null;
+  if (!normalizedParts.length) return null;
   return normalizedParts.join(".");
 }
 
@@ -658,7 +658,7 @@ function extractStatementFactDrafts(statementText: string): SqlFactDraft[] {
   }
 
   const readFacts = extractReadFacts(text);
-  if (readFacts.length > 0) return readFacts;
+  if (readFacts.length) return readFacts;
 
   return [];
 }
@@ -696,7 +696,7 @@ export function extractSqlFactsFromSource(filePath: string, source: string): Sql
   for (const statement of splitSqlStatements(source)) {
     const drafts = extractStatementFactDrafts(statement.text);
     const resolvedDrafts =
-      drafts.length > 0
+      drafts.length
         ? drafts
         : [{ kind: "unknown_statement", objectName: null, relatedObjectName: null } satisfies SqlFactDraft];
     for (const draft of resolvedDrafts) {

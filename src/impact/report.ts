@@ -89,7 +89,7 @@ export async function buildImpactReport(
   }
 
   // Add real symbol-to-symbol edges using detailed symbol graph
-  if (changedSymbols?.length > 0) {
+  if (changedSymbols?.length) {
     const detailedGraph = await buildSymbolGraphDetailed(index, {
       scope: "all",
       files: relevantFiles,
@@ -168,7 +168,7 @@ export async function buildImpactReport(
       ...item,
       file: displayFile(item.file),
     })),
-    ...(suggestions.length > 0
+    ...(suggestions.length
       ? {
           suggestions: suggestions.map((suggestion) => ({
             ...suggestion,
@@ -177,7 +177,7 @@ export async function buildImpactReport(
           })),
         }
       : {}),
-    ...(exportSummary.length > 0
+    ...(exportSummary.length
       ? {
           exportSummary: exportSummary.map((entry) => ({
             ...entry,
@@ -196,7 +196,7 @@ export async function buildImpactReport(
           },
         }
       : {}),
-    ...(topImpacts.length > 0
+    ...(topImpacts.length
       ? {
           topImpacts: topImpacts.map((item) => ({
             ...item,
@@ -217,7 +217,7 @@ export async function buildImpactReport(
       files: cluster.files.map((file) => displayFile(file)),
       changedFiles: cluster.changedFiles.map((file) => displayFile(file)),
     })),
-    ...(cycles.length > 0
+    ...(cycles.length
       ? {
           cycles: cycles.map((cycle) => ({
             ...cycle,
@@ -422,7 +422,7 @@ function buildCompactReport(
   });
 
   const compactSuggestions =
-    suggestions.length > 0
+    suggestions.length
       ? suggestions.map((suggestion) => ({
           file: fileIndex.get(displayFile(suggestion.file))!,
           kind: suggestion.kind,
@@ -437,7 +437,7 @@ function buildCompactReport(
       : undefined;
 
   const compactExportSummary =
-    exportSummary.length > 0
+    exportSummary.length
       ? exportSummary.map((entry) => ({
           file: fileIndex.get(displayFile(entry.file))!,
           symbols: entry.symbols,
@@ -455,7 +455,7 @@ function buildCompactReport(
     : undefined;
 
   const compactTopImpacts =
-    topImpacts.length > 0
+    topImpacts.length
       ? topImpacts.map((item) => ({
           file: fileIndex.get(displayFile(item.file))!,
           symbols: item.symbols,
@@ -488,7 +488,7 @@ function buildCompactReport(
   }));
 
   const compactCycles =
-    cycles.length > 0
+    cycles.length
       ? cycles.map((cycle) => ({
           files: cycle.files.map((file) => fileIndex.get(displayFile(file))!),
           entryEdges: cycle.entryEdges.map((edge) => ({
@@ -561,7 +561,7 @@ function buildReexportChains(
   maxDepth = REEXPORT_CHAIN_MAX_DEPTH,
 ): { chains: ReexportChainEntry[] } | undefined {
   const exportedSymbols = changedSymbols.filter((symbol) => symbol.exported);
-  if (exportedSymbols.length === 0) return undefined;
+  if (!exportedSymbols.length) return undefined;
 
   const reexportsBySource = new Map<FileId, ReexportEdge[]>();
   for (const [file, mod] of index.byFile) {
@@ -605,7 +605,7 @@ function buildReexportChains(
       },
     ];
 
-    while (stack.length > 0) {
+    while (stack.length) {
       const current = stack.pop()!;
       const edges = reexportsBySource.get(current.file) ?? [];
       for (const edge of edges) {

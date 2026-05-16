@@ -148,7 +148,7 @@ export async function searchCodegraphWithSession(
 }
 
 export function formatAgentSearchResponse(response: AgentSearchResponse): string {
-  if (response.results.length === 0) {
+  if (!response.results.length) {
     return `No matches for "${response.query}"`;
   }
   return response.results
@@ -171,7 +171,7 @@ async function searchSnapshot(snapshot: AgentProjectSnapshot, request: AgentSear
     return fileNeighborIndex;
   };
 
-  if (tokens.length > 0) {
+  if (tokens.length) {
     const symbolLookup = buildSymbolLookup(snapshot);
     if (mode === "hybrid" || mode === "symbol" || mode === "sql" || mode === "graph") {
       addSymbolResults(snapshot, resultMap, symbolLookup, buildSymbolNeighborIndex(snapshot), tokens, mode);
@@ -228,7 +228,7 @@ function normalizeDepth(depth: number | undefined): number {
 
 function tokenizeQuery(input: string): string[] {
   const normalized = normalizeSearchText(input);
-  const tokens = normalized.split(/\s+/).filter((token) => token.length > 0);
+  const tokens = normalized.split(/\s+/).filter((token) => token.length);
   return Array.from(new Set(tokens));
 }
 
@@ -332,7 +332,7 @@ function addSymbolResults(
       range: def.range,
     });
     result.score += score + (lookup.exportedIds.has(node.id) ? 5 : 0);
-    if (nameMatch.matched.length > 0) {
+    if (nameMatch.matched.length) {
       addReason(result, `${sqlObject ? "SQL object" : "symbol"} token match: ${nameMatch.matched.join(", ")}`);
       addEvidence(result, {
         source: sqlObject ? "sql" : "symbol",
@@ -341,10 +341,10 @@ function addSymbolResults(
         line: def.range.start.line,
       });
     }
-    if (fileMatch.matched.length > 0) {
+    if (fileMatch.matched.length) {
       addReason(result, `path token match: ${fileMatch.matched.join(", ")}`);
     }
-    if (docMatch.matched.length > 0) {
+    if (docMatch.matched.length) {
       addReason(result, `docstring token match: ${docMatch.matched.join(", ")}`);
     }
     addSymbolNeighbors(snapshot, result, neighborsBySymbolId.get(node.id) ?? []);
@@ -532,7 +532,7 @@ function collectReachableFiles(
     relation: "anchor",
   }));
 
-  while (queue.length > 0) {
+  while (queue.length) {
     const current = queue.shift()!;
     const existing = reachable.get(current.file);
     if (existing && existing.distance <= current.distance) continue;
@@ -574,7 +574,7 @@ function buildTextChunks(file: string, text: string): Array<{ name?: string; tex
         minTokens: 1,
         maxTokens: 120,
       });
-      if (chunks.length > 0) {
+      if (chunks.length) {
         return chunks.map((chunk) => ({
           ...(chunk.name ? { name: chunk.name } : {}),
           text: chunk.text,
