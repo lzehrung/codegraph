@@ -974,6 +974,113 @@ describe("CLI regressions", () => {
       runCliCommand(["grep", "--root", tsRoot, "--query", "(identifier) @id", "--pattern", "foo"]),
     ).rejects.toThrow(/Usage: grep/i);
   });
+
+  it("search returns ranked agent-ready results", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-search-"));
+    await fsp.writeFile(
+      path.join(root, "auth.ts"),
+      "export function validateUser(token: string) { return token.length > 0; }\n",
+    );
+    await fsp.writeFile(
+      path.join(root, "main.ts"),
+      "import { validateUser } from './auth';\nexport const ok = validateUser('token');\n",
+    );
+
+    const stdout = await runCliCommand(["search", "validate user", "--root", root, "--json"]);
+    const response = JSON.parse(stdout) as {
+      results: Array<{ label: string; rankReasons: string[]; followUps: string[] }>;
+    };
+
+    expect(response.results[0]?.label).toContain("validateUser");
+    expect(response.results[0]?.rankReasons.length).toBeGreaterThan(0);
+    expect(response.results[0]?.followUps.some((cmd) => cmd.includes("codegraph refs"))).toBeTruthy();
+  });
+
+  it("explain returns compact architecture context", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-explain-"));
+    await fsp.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
+    await fsp.writeFile(
+      path.join(root, "api.ts"),
+      "import { validateUser } from './auth';\nexport const ok = validateUser(1);\n",
+    );
+
+    const stdout = await runCliCommand(["explain", "auth.ts", "--root", root, "--json"]);
+    const response = JSON.parse(stdout) as {
+      target: { file: string };
+      symbols: Array<{ name: string }>;
+      reverseDependencies: Array<{ file: string }>;
+    };
+
+    expect(response.target.file).toBe("auth.ts");
+    expect(response.symbols.some((symbol) => symbol.name === "validateUser")).toBeTruthy();
+    expect(response.reverseDependencies.some((entry) => entry.file === "api.ts")).toBeTruthy();
+  });
+
+  it("explain accepts space-separated --max-symbols values", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-explain-symbol-limit-"));
+    await fsp.writeFile(path.join(root, "many.ts"), "export const one = 1;\nexport const two = 2;\n");
+
+    const stdout = await runCliCommand(["explain", "many.ts", "--root", root, "--max-symbols", "1", "--json"]);
+    const response = JSON.parse(stdout) as {
+      target: { file: string };
+      symbols: Array<{ name: string }>;
+      limits: { symbols: number };
+    };
+
+    expect(response.target.file).toBe("many.ts");
+    expect(response.symbols).toHaveLength(1);
+    expect(response.limits.symbols).toBe(1);
+  });
+
+  it("explain requires a complete changed-context range", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-explain-range-"));
+    await fsp.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n");
+
+    await expect(runCliCommandDetailed(["explain", "auth.ts", "--root", root, "--changed-context"])).rejects.toThrow(
+      /--changed-context requires --base and --head/,
+    );
+  });
+
+  it("artifact build writes an agent-ready artifact bundle", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-artifact-"));
+    const outDir = path.join(root, "out");
+    await fsp.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
+
+    const stdout = await runCliCommand(["artifact", "build", "--root", root, "--out", outDir, "--json"]);
+    const result = JSON.parse(stdout) as { manifestPath: string; artifacts: Record<string, string> };
+
+    expect(result.manifestPath.endsWith("manifest.json")).toBeTruthy();
+    expect(result.artifacts.sqlite).toBe("codegraph.sqlite");
+    expect(await fsp.stat(path.join(outDir, "manifest.json"))).toBeTruthy();
+  });
+
+  it("artifact build treats --sqlite as a boolean artifact selector", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-artifact-sqlite-"));
+    const outDir = path.join(root, "out");
+    await fsp.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
+
+    const stdout = await runCliCommand([
+      "artifact",
+      "build",
+      "--root",
+      root,
+      "--out",
+      outDir,
+      "--sqlite",
+      "--graph-json",
+      "--json",
+    ]);
+    const result = JSON.parse(stdout) as { artifacts: Record<string, string | undefined> };
+
+    expect(result.artifacts).toEqual({
+      sqlite: "codegraph.sqlite",
+      graphJson: "graph.json",
+    });
+    expect(await fsp.stat(path.join(outDir, "codegraph.sqlite"))).toBeTruthy();
+    expect(await fsp.stat(path.join(outDir, "graph.json"))).toBeTruthy();
+    await expect(fsp.stat(path.join(outDir, "CODEGRAPH_REPORT.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fsp.stat(path.join(outDir, "questions.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
 });
 
 describe("textGrep API", () => {
@@ -1283,5 +1390,13 @@ index 1111111..2222222 100644
     const pretty = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE", "--pretty"]);
 
     expect(pretty).toBe(summary);
+  });
+
+  it("mcp serve help documents read-only agent tools", async () => {
+    const stdout = await runCliCommand(["mcp", "serve", "--help"]);
+
+    expect(stdout).toContain("search");
+    expect(stdout).toContain("query_sqlite");
+    expect(stdout).toContain("read-only");
   });
 });

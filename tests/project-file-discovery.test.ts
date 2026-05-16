@@ -110,6 +110,176 @@ describe("project file discovery", () => {
     }
   });
 
+  it("filters discovered files whose realpath escapes the project root", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-root-"));
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-outside-"));
+    const outsideFile = path.join(outsideDir, "secret.ts");
+    const linkedFile = path.join(tempDir, "linked-secret.ts");
+    await createFile(path.join(tempDir, "src", "main.ts"), "export const main = 1;\n");
+    await createFile(outsideFile, "export const secret = 1;\n");
+
+    try {
+      await fs.symlink(outsideFile, linkedFile, "file");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const discovered = await listProjectFiles(tempDir, ["**/*.ts"], { ignoreGlobs: [] });
+    const discoveredSet = new Set(discovered.map(normalize));
+
+    expect(discoveredSet.has(normalize(path.join(tempDir, "src", "main.ts")))).toBe(true);
+    expect(discoveredSet.has(normalize(linkedFile))).toBe(false);
+    expect(discoveredSet.has(normalize(outsideFile))).toBe(false);
+  });
+
+  it("traverses symlinked directories only when their realpath stays inside the project root", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-dir-root-"));
+    const packageDir = path.join(tempDir, "packages", "core");
+    const linkedPackage = path.join(tempDir, "linked-core");
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-dir-outside-"));
+    const linkedOutside = path.join(tempDir, "linked-outside");
+    await createFile(path.join(packageDir, "src", "index.ts"), "export const core = 1;\n");
+    await createFile(path.join(outsideDir, "secret.ts"), "export const secret = 1;\n");
+
+    try {
+      await fs.symlink(packageDir, linkedPackage, "junction");
+      await fs.symlink(outsideDir, linkedOutside, "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const discovered = await listProjectFiles(tempDir, ["**/*.ts"], { ignoreGlobs: [] });
+    const discoveredSet = new Set(discovered.map(normalize));
+
+    expect(discoveredSet.has(normalize(path.join(packageDir, "src", "index.ts")))).toBe(true);
+    expect(discoveredSet.has(normalize(path.join(linkedPackage, "src", "index.ts")))).toBe(true);
+    expect(discoveredSet.has(normalize(path.join(linkedOutside, "secret.ts")))).toBe(false);
+  });
+
+  it("applies root-relative ignore globs to safe symlink directory crawls", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-ignore-"));
+    const packageDir = path.join(tempDir, "packages", "core");
+    const linkedPackage = path.join(tempDir, "linked-core");
+    await createFile(path.join(packageDir, "src", "index.ts"), "export const core = 1;\n");
+
+    try {
+      await fs.symlink(packageDir, linkedPackage, "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const discovered = await listProjectFiles(tempDir, ["**/*.ts"], {
+      ignoreGlobs: ["linked-core/src/**"],
+      useGitignore: false,
+    });
+    const discoveredSet = new Set(discovered.map(normalize));
+
+    expect(discoveredSet.has(normalize(path.join(packageDir, "src", "index.ts")))).toBe(true);
+    expect(discoveredSet.has(normalize(path.join(linkedPackage, "src", "index.ts")))).toBe(false);
+  });
+
+  it("does not apply project-root ignore globs relative to safe symlink directory targets", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-root-ignore-"));
+    const packageDir = path.join(tempDir, "packages", "core");
+    const linkedPackage = path.join(tempDir, "linked-core");
+    await createFile(path.join(tempDir, "src", "ignored.ts"), "export const ignored = 1;\n");
+    await createFile(path.join(packageDir, "src", "index.ts"), "export const core = 1;\n");
+
+    try {
+      await fs.symlink(packageDir, linkedPackage, "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const discovered = await listProjectFiles(tempDir, ["**/*.ts"], {
+      ignoreGlobs: ["src/**"],
+      useGitignore: false,
+    });
+    const discoveredSet = new Set(discovered.map(normalize));
+
+    expect(discoveredSet.has(normalize(path.join(tempDir, "src", "ignored.ts")))).toBe(false);
+    expect(discoveredSet.has(normalize(path.join(packageDir, "src", "index.ts")))).toBe(true);
+    expect(discoveredSet.has(normalize(path.join(linkedPackage, "src", "index.ts")))).toBe(true);
+  });
+
+  it("applies gitignore rules to safe symlink directory targets by real path", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-gitignore-"));
+    const packageDir = path.join(tempDir, "packages", "core");
+    const linkedPackage = path.join(tempDir, "linked-core");
+    await createFile(path.join(tempDir, ".gitignore"), "packages/core/ignored.ts\n");
+    await createFile(path.join(packageDir, "kept.ts"), "export const kept = 1;\n");
+    await createFile(path.join(packageDir, "ignored.ts"), "export const ignored = 1;\n");
+
+    try {
+      await fs.symlink(packageDir, linkedPackage, "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const discovered = await listProjectFiles(tempDir, ["**/*.ts"]);
+    const discoveredSet = new Set(discovered.map(normalize));
+
+    expect(discoveredSet.has(normalize(path.join(packageDir, "kept.ts")))).toBe(true);
+    expect(discoveredSet.has(normalize(path.join(linkedPackage, "kept.ts")))).toBe(true);
+    expect(discoveredSet.has(normalize(path.join(packageDir, "ignored.ts")))).toBe(false);
+    expect(discoveredSet.has(normalize(path.join(linkedPackage, "ignored.ts")))).toBe(false);
+  });
+
+  it("applies gitignore rules to safe symlink targets when the project root is a symlink", async () => {
+    const realRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-real-root-gitignore-"));
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-root-link-parent-"));
+    const rootLink = path.join(parent, "repo-link");
+    const packageDir = path.join(realRoot, "packages", "core");
+    const linkedPackage = path.join(realRoot, "linked-core");
+    await createFile(path.join(realRoot, ".gitignore"), "packages/core/ignored.ts\n");
+    await createFile(path.join(packageDir, "kept.ts"), "export const kept = 1;\n");
+    await createFile(path.join(packageDir, "ignored.ts"), "export const ignored = 1;\n");
+
+    try {
+      await fs.symlink(realRoot, rootLink, "junction");
+      await fs.symlink(packageDir, linkedPackage, "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const discovered = await listProjectFiles(rootLink, ["**/*.ts"]);
+    const discoveredSet = new Set(discovered.map(normalize));
+
+    expect(discoveredSet.has(normalize(path.join(rootLink, "linked-core", "kept.ts")))).toBe(true);
+    expect(discoveredSet.has(normalize(path.join(rootLink, "linked-core", "ignored.ts")))).toBe(false);
+  });
+
+  it("discovers project metadata through safe symlink directories", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-manifest-"));
+    const packageDir = path.join(tempDir, "packages", "core");
+    const linkedPackage = path.join(tempDir, "linked-core");
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-manifest-outside-"));
+    const linkedOutside = path.join(tempDir, "linked-outside");
+    await createFile(path.join(packageDir, "package.json"), JSON.stringify({ name: "core" }, null, 2));
+    await createFile(path.join(outsideDir, "package.json"), JSON.stringify({ name: "outside" }, null, 2));
+
+    try {
+      await fs.symlink(packageDir, linkedPackage, "junction");
+      await fs.symlink(outsideDir, linkedOutside, "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const discovered = await discoverProjectFiles(tempDir);
+    const discoveredPaths = new Set(discovered.map((entry) => normalize(entry.path)));
+
+    expect(discoveredPaths.has(normalize(path.join(packageDir, "package.json")))).toBe(true);
+    expect(discoveredPaths.has(normalize(path.join(linkedPackage, "package.json")))).toBe(true);
+    expect(discoveredPaths.has(normalize(path.join(linkedOutside, "package.json")))).toBe(false);
+  });
+
   it("extracts project names from common manifests", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-meta-"));
     const nodeDir = path.join(tempDir, "node");
@@ -433,3 +603,11 @@ describe("project file discovery", () => {
     expect(discovered.map(normalize)).toContain(normalize(appFile));
   });
 });
+
+function isSymlinkUnavailable(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "EPERM" || error.code === "EACCES" || error.code === "ENOTSUP")
+  );
+}

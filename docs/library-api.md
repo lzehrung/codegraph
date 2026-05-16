@@ -1,6 +1,6 @@
 # Library API
 
-Programmatic APIs for indexing, graph building, chunking, SQL artifact facts, read-only SQLite inspection, and impact analysis.
+Programmatic APIs for indexing, graph building, agent search/explain/artifacts, MCP handlers, chunking, SQL artifact facts, read-only SQLite inspection, and impact analysis.
 
 For sessions, streaming workflows, tool wrappers, and review-oriented recipes, see [docs/agent-workflows.md](./agent-workflows.md).
 
@@ -21,6 +21,76 @@ import { buildProjectIndex } from "@lzehrung/codegraph";
 const index = await buildProjectIndex(process.cwd(), { native: "auto" });
 const jsOnlyIndex = await buildProjectIndex(process.cwd(), { native: "off" });
 ```
+
+## Agent search
+
+`searchCodegraph()` builds a project snapshot and returns deterministic, agent-ready anchors across files, symbols, chunks, SQL objects, and optional graph neighborhoods. Handles are project-relative and explainable; large result packets include `resultCount`, `totalCandidates`, `limits`, and `omittedCounts`.
+
+```ts
+import { buildCodegraphArtifact, explainCodegraphTarget, searchCodegraph } from "@lzehrung/codegraph";
+
+const response = await searchCodegraph({
+  root: process.cwd(),
+  query: "validate user",
+  mode: "hybrid",
+  limit: 10,
+});
+
+const first = response.results[0];
+console.log(first?.handle, first?.rankReasons, first?.omittedCounts, first?.followUps);
+```
+
+Use `mode: "sql"` for SQL objects, or pass `from` plus `depth` with `mode: "graph"` to boost matches near a file path, file/chunk/graph handle, symbol handle, SQL handle, or symbol name.
+
+`explainCodegraphTarget()` resolves a file path, symbol name, SQL object name, or search handle into a bounded packet for follow-up agent work. SQL object names resolve by exact name first; unqualified basenames resolve only when unique. SQL related objects include a `relation` such as `incoming:reads_from`, `outgoing:writes_to`, or `same_file`. With changed context enabled, the packet includes compact review tasks and candidate tests:
+
+```ts
+const explanation = await explainCodegraphTarget({
+  root: process.cwd(),
+  target: first?.handle ?? "src/auth.ts",
+  maxSymbols: 25,
+  maxDependencies: 10,
+  maxReferences: 10,
+  maxRelatedSqlObjects: 10,
+  maxSnippets: 5,
+});
+
+console.log(explanation.summary, explanation.followUps);
+```
+
+Reference and snippet omission counts are lower bounds once the bounded navigation scan reaches the requested cap. This keeps small packets cheap for symbols with many references while still signaling that more context exists.
+
+`buildCodegraphArtifact()` writes the same core artifacts agents usually need for offline navigation. Artifact contents exclude the output directory itself when it is inside the repo; hosts that write through a resolved path while indexing through a symlinked root can pass `filterOutDir` with the lexical project-relative output path:
+
+```ts
+const artifact = await buildCodegraphArtifact({
+  root: process.cwd(),
+  outDir: "codegraph-out",
+});
+
+console.log(artifact.manifestPath, artifact.artifacts);
+```
+
+The `graph.json` artifact is self-describing (`schemaVersion: 1`, `format: "codegraph.graph-json"`) and uses project-relative file paths and portable symbol handles. `questions.json` uses the same stable handles for follow-up commands. With `force: true`, stale known Codegraph artifact files are removed before the selected outputs are written; unrelated files in the directory are preserved.
+
+`createAgentSession()` keeps one in-process project snapshot warm for repeated search, explain, artifact, and MCP calls. Use `buildCodegraphArtifactWithSession()` when a host already has a session and wants SQLite, graph JSON, report, questions, and manifest outputs from the same snapshot. `createCodegraphMcpHandlers()` exposes the same primitives without starting stdio, which is useful for tests or host applications:
+
+```ts
+import { createCodegraphMcpHandlers } from "@lzehrung/codegraph";
+
+const handlers = createCodegraphMcpHandlers({
+  root: process.cwd(),
+  artifactPath: "codegraph-out",
+  readOnly: true,
+});
+
+const search = await handlers.search({ query: "auth user", limit: 5 });
+const refs = await handlers.refs({ handle: search.results[0]!.handle });
+const rows = await handlers.query_sqlite({ query: "select path from files", limit: 5 });
+console.log(refs.references, rows.rows);
+```
+
+`serveCodegraphMcp()` starts the stdio server used by `codegraph mcp serve`. MCP is an agent ergonomics and cache layer over the same analysis engine, not a separate indexer. MCP file and artifact paths are confined after realpath resolution. `query_sqlite` is read-only and row- and byte-bounded; `artifact_build` is disabled by default and requires `readOnly: false` or CLI `--allow-build`.
 
 ## Semantic chunking
 
@@ -215,18 +285,14 @@ const result = await queryGraphSqliteRaw(
 console.log(result.columns, result.rows);
 ```
 
-`queryGraphSqliteRaw()` is intentionally read-only. It accepts result-producing statements such as `SELECT` and `PRAGMA` and rejects mutating SQL.
+`queryGraphSqliteRaw()` is intentionally read-only. It accepts result-producing statements such as `SELECT` and `PRAGMA` and rejects mutating SQL. Pass `{ maxRows }` to bound raw result rows.
 
 ## SQL artifact facts
 
 SQL source files participate in normal project indexing through SQL-specific symbols, SQL-to-SQL object edges, and SQL navigation. SQL-to-SQL edges are precise for exact object-name matches, heuristic for unambiguous qualified-to-basename fallback matches, and skipped for ambiguous basename guesses. Navigation is object-level: alias-qualified and table-qualified column uses can resolve to table/view definitions, but not to specific column declarations. These APIs expose the lower-level statement facts and candidate graph for common DDL/DML definitions, reads, writes, constraints, CTEs, renames, truncates, and merges. They do not infer a current schema, and application-code string literals are bridged to SQL only through explicit review-context rules.
 
 ```ts
-import {
-  extractSqlFactsFromSource,
-  projectSqlFactsToGraph,
-  collectSqlReviewContext,
-} from "@lzehrung/codegraph";
+import { extractSqlFactsFromSource, projectSqlFactsToGraph, collectSqlReviewContext } from "@lzehrung/codegraph";
 
 const filePath = `${process.cwd()}/db/schema.sql`;
 const source = "CREATE TABLE users (id integer);";
