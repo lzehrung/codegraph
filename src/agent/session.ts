@@ -4,6 +4,7 @@ import { buildSymbolGraphDetailed } from "../graphs.js";
 import type { SymbolGraph } from "../graphs.js";
 import type { Graph } from "../types.js";
 import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util.js";
+import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "../config.js";
 
 export type AgentProjectSnapshot = {
   root: string;
@@ -16,6 +17,7 @@ export type AgentProjectSnapshot = {
 export type AgentSessionOptions = {
   root: string;
   discovery?: ProjectFileDiscoveryOptions;
+  useConfig?: boolean;
 };
 
 export type AgentSession = {
@@ -30,10 +32,14 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     if (cached) return cached;
 
     const loadPromise = (async () => {
-      const files = await listProjectFiles(options.root, undefined, options.discovery);
+      const useConfig = options.useConfig ?? true;
+      const config = useConfig ? await loadCodegraphConfig(options.root) : {};
+      const discovery = mergeDiscoveryOptions(config.discovery, options.discovery);
+      const discoveryOptions = hasDiscoveryOptions(discovery) ? { ...discovery, globRoot: options.root } : undefined;
+      const files = await listProjectFiles(options.root, undefined, discoveryOptions);
       const index = await buildProjectIndexFromFiles(options.root, files, {
         keepParsed: true,
-        ...(options.discovery ? { discovery: options.discovery } : {}),
+        ...(discoveryOptions ? { discovery: discoveryOptions } : {}),
       });
       const fileGraph = index.graph;
       const symbolGraph = await buildSymbolGraphDetailed(index);

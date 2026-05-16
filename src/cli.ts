@@ -5,6 +5,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
+import picomatch from "picomatch";
 import {
   buildProjectIndex,
   buildProjectIndexFromFiles,
@@ -58,6 +59,7 @@ import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageI
 import { handleSearchCommand } from "./cli/search.js";
 import { handleSkillCommand } from "./cli/skill.js";
 import { handleSqlCommand } from "./cli/sql.js";
+import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "./config.js";
 import { buildSqlArtifactGraphFromFiles } from "./sql/index.js";
 import type { Graph } from "./types.js";
 import {
@@ -71,6 +73,51 @@ import {
 
 function toJSON(obj: unknown): string {
   return JSON.stringify(obj, null, 2);
+}
+
+function normalizeCliGlobPattern(globPattern: string): string {
+  return globPattern.trim().replace(/\\/g, "/");
+}
+
+function matchesCliDiscoveryGlob(
+  absolutePath: string,
+  scanRoot: string,
+  matcher: (relativePath: string) => boolean,
+): boolean {
+  const relativePath = normalizePath(path.relative(scanRoot, absolutePath));
+  if (!relativePath || relativePath.startsWith("..")) {
+    return false;
+  }
+  return matcher(relativePath);
+}
+
+function filterFilesByCliDiscoveryGlobs(
+  files: readonly string[],
+  scanRoot: string,
+  discovery: ProjectFileDiscoveryOptions,
+): string[] {
+  const includeMatchers = (discovery.includeGlobs ?? [])
+    .map(normalizeCliGlobPattern)
+    .filter(Boolean)
+    .map((globPattern) => picomatch(globPattern, { dot: true }));
+  const ignoreMatchers = (discovery.ignoreGlobs ?? [])
+    .map(normalizeCliGlobPattern)
+    .filter(Boolean)
+    .map((globPattern) => picomatch(globPattern, { dot: true }));
+
+  if (includeMatchers.length === 0 && ignoreMatchers.length === 0) {
+    return [...files];
+  }
+
+  return files.filter((filePath) => {
+    if (
+      includeMatchers.length > 0 &&
+      !includeMatchers.some((matcher) => matchesCliDiscoveryGlob(filePath, scanRoot, matcher))
+    ) {
+      return false;
+    }
+    return !ignoreMatchers.some((matcher) => matchesCliDiscoveryGlob(filePath, scanRoot, matcher));
+  });
 }
 
 export type CliRuntime = {
@@ -1233,10 +1280,16 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   const projectRootAbs = projectRootFs.replace(/\\/g, "/");
   const includeGlobs = parsed.options.get("--include-glob") ?? [];
   const scanIgnoreGlobs = parsed.options.get("--ignore-glob") ?? [];
-  const discoveryOptions: ProjectFileDiscoveryOptions = {
+  const cliGlobDiscoveryOptions: ProjectFileDiscoveryOptions = {
     ...(includeGlobs.length > 0 ? { includeGlobs } : {}),
     ...(scanIgnoreGlobs.length > 0 ? { ignoreGlobs: scanIgnoreGlobs } : {}),
+  };
+  const cliGitignoreDiscoveryOptions: ProjectFileDiscoveryOptions = {
     ...(hasFlag("--no-gitignore") ? { useGitignore: false } : {}),
+  };
+  const explicitDiscoveryOptions: ProjectFileDiscoveryOptions = {
+    ...cliGlobDiscoveryOptions,
+    ...cliGitignoreDiscoveryOptions,
   };
 
   if (cmd === "version") {
@@ -1266,6 +1319,40 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return;
   }
 
+  if (cmd === "sql") {
+    await handleSqlCommand({
+      getOpt,
+      cwd: getCwd,
+      writeJSONLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
+  }
+
+  if (cmd === "chunk") {
+    await handleChunkCommand({
+      positionals: parsed.positionals,
+      getOpt,
+      hasFlag,
+      cwd: getCwd,
+      writeJSONLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
+  }
+
+  const config = await loadCodegraphConfig(projectRootFs);
+  const configDiscoveryOptions = mergeDiscoveryOptions(config.discovery, cliGitignoreDiscoveryOptions);
+  const mergedDiscoveryOptions = mergeDiscoveryOptions(config.discovery, explicitDiscoveryOptions);
+  const discoveryOptions: ProjectFileDiscoveryOptions = hasDiscoveryOptions(mergedDiscoveryOptions)
+    ? { ...mergedDiscoveryOptions, globRoot: projectRootFs }
+    : {};
+  const includeRootDiscoveryOptions: ProjectFileDiscoveryOptions = hasDiscoveryOptions(configDiscoveryOptions)
+    ? { ...configDiscoveryOptions, globRoot: projectRootFs }
+    : {};
+
   const supportsIncludeRoots = cmd === "graph" || cmd === "index" || cmd === "hotspots" || cmd === "inspect";
   let includeRoots: string[] = [];
   if (supportsIncludeRoots) {
@@ -1290,18 +1377,28 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     const normalizedRoots = includeRootsAbs;
     const all: string[][] = await Promise.all(
       normalizedRoots.map(
-        async (r) =>
-          await listProjectFiles(r, undefined, {
-            ...discoveryOptions,
+        async (r) => {
+          const files = await listProjectFiles(r, undefined, {
+            ...includeRootDiscoveryOptions,
             gitignoreRoot: projectRootFs,
-          }),
+          });
+          return filterFilesByCliDiscoveryGlobs(files, r, cliGlobDiscoveryOptions);
+        },
       ),
     );
     return Array.from(new Set(all.flat()));
   };
 
-  const listProjectFilesForScan = async (scanRoot: string): Promise<string[]> =>
-    await listProjectFiles(scanRoot, undefined, discoveryOptions);
+  const listProjectFilesForScan = async (scanRoot: string): Promise<string[]> => {
+    if (scanRoot === projectRootFs) {
+      return await listProjectFiles(scanRoot, undefined, discoveryOptions);
+    }
+    const files = await listProjectFiles(scanRoot, undefined, {
+      ...includeRootDiscoveryOptions,
+      gitignoreRoot: projectRootFs,
+    });
+    return filterFilesByCliDiscoveryGlobs(files, scanRoot, cliGlobDiscoveryOptions);
+  };
 
   const resolveChangedFiles = async (): Promise<string[] | null> => {
     if (gitBase) {
@@ -1353,17 +1450,6 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     }
     return await resolveFilesFromRoots();
   };
-
-  if (cmd === "sql") {
-    await handleSqlCommand({
-      getOpt,
-      cwd: getCwd,
-      writeJSONLine,
-      writeStderrLine,
-      exit: exitCli,
-    });
-    return;
-  }
 
   if (cmd === "search") {
     await handleSearchCommand({
@@ -1986,8 +2072,9 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     const refBlockMaxLines = getOpt("--ref-block-max-lines");
     if (refBlockMaxLines) options.refBlockMaxLines = Number(refBlockMaxLines);
 
-    const ignoreGlobs = parsed.options.get("--ignore-glob");
-    if (ignoreGlobs) options.ignoreGlobs = ignoreGlobs;
+    if (discoveryOptions.ignoreGlobs && discoveryOptions.ignoreGlobs.length > 0) {
+      options.ignoreGlobs = discoveryOptions.ignoreGlobs;
+    }
 
     const verifyRefs = hasFlag("--verify-refs");
     if (verifyRefs) options.verifyReferences = true;
@@ -2261,19 +2348,6 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
         ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
         ...workerOpts,
       },
-    });
-    return;
-  }
-
-  if (cmd === "chunk") {
-    await handleChunkCommand({
-      positionals: parsed.positionals,
-      getOpt,
-      hasFlag,
-      cwd: getCwd,
-      writeJSONLine,
-      writeStderrLine,
-      exit: exitCli,
     });
     return;
   }

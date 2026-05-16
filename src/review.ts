@@ -22,6 +22,7 @@ import {
 import type { GraphBuildOptions } from "./graphs/types.js";
 import { locateChangedSymbolsWithLines, mapChangedLinesToSymbols } from "./impact/map.js";
 import { parseUnifiedDiff } from "./impact/parse.js";
+import { createImpactIgnoreMatcher } from "./impact/path.js";
 import type { FileChange, Hunk } from "./impact/types.js";
 import { listCandidateTestFiles, type CandidateTestFile } from "./impact/context.js";
 import { compileTestPatterns, createIndexTestFileMatcher } from "./impact/testPatterns.js";
@@ -940,6 +941,8 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
   const reviewTimings = reviewReport?.timings;
   const totalStart = performance.now();
   const normalizeFile = (file: string, label: string) => assertFilePathWithinRoot(projectRoot, file, label);
+  const discoveryIgnoreGlobs = appliedOptions.discovery?.ignoreGlobs ?? [];
+  const isIgnoredReviewFile = createImpactIgnoreMatcher(projectRoot, discoveryIgnoreGlobs);
 
   const changedFiles = new Set<string>();
   const explicitFiles = new Set<string>();
@@ -963,7 +966,9 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
       gitDiffOpts.changedSince = appliedOptions.changedSince;
     }
     const gitList = await listChangedFiles(projectRoot, gitDiffOpts);
-    for (const file of gitList) changedFiles.add(file);
+    for (const file of gitList) {
+      if (!isIgnoredReviewFile(file)) changedFiles.add(file);
+    }
   }
   if (reviewTimings) {
     reviewTimings.changesMs = Math.round(performance.now() - changesStart);
@@ -998,6 +1003,10 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
             }
           : {}),
       };
+      if (isIgnoredReviewFile(absPath)) {
+        changedFiles.delete(absPath);
+        continue;
+      }
       changedFiles.add(absPath);
       diffHunksByFile.set(absPath, normalizedChange.hunks);
       diffKindsByFile.set(absPath, normalizedChange.kind);

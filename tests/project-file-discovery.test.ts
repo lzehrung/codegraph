@@ -589,6 +589,30 @@ describe("project file discovery", () => {
     expect(discovered.has(normalize(jsFile))).toBe(false);
   });
 
+  it("evaluates include and ignore globs against globRoot when scanning a child root", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-discovery-glob-root-"));
+    const testsDir = path.join(tempDir, "tests");
+    const keptFile = path.join(testsDir, "unit", "app.test.ts");
+    const ignoredFile = path.join(testsDir, "samples", "fixture.ts");
+
+    await createFile(keptFile, "export const appTest = 1;\n");
+    await createFile(ignoredFile, "export const fixture = 1;\n");
+
+    const discovered = new Set(
+      (
+        await listProjectFiles(testsDir, undefined, {
+          globRoot: tempDir,
+          includeGlobs: ["tests/**/*.ts"],
+          ignoreGlobs: ["tests/samples/**"],
+          useGitignore: false,
+        })
+      ).map(normalize),
+    );
+
+    expect(discovered.has(normalize(keptFile))).toBe(true);
+    expect(discovered.has(normalize(ignoredFile))).toBe(false);
+  });
+
   it("does not validate gitignoreRoot when gitignore filtering is disabled", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-discovery-no-gitignore-root-"));
     const appFile = path.join(tempDir, "src", "app.ts");

@@ -178,6 +178,41 @@ describe("Review report", () => {
     expect(symbols.some((symbol) => symbol.name === "beta")).toBe(false);
   });
 
+  it("filters raw diff files with discovery ignoreGlobs", async () => {
+    const root = await mkTmpDir("dg-review-diff-ignore-");
+    const srcDir = path.join(root, "src");
+    const sampleDir = path.join(root, "tests", "samples");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.mkdir(sampleDir, { recursive: true });
+    await fsp.writeFile(path.join(srcDir, "feature.ts"), "export function feature() { return 2; }\n", "utf8");
+    await fsp.writeFile(path.join(sampleDir, "fixture.ts"), "export function fixture() { return 2; }\n", "utf8");
+
+    const report = await buildReviewReport(root, {
+      discovery: { ignoreGlobs: ["tests/samples/**"] },
+      diffText: [
+        "diff --git a/src/feature.ts b/src/feature.ts",
+        "index 1234567..abcdef0 100644",
+        "--- a/src/feature.ts",
+        "+++ b/src/feature.ts",
+        "@@ -1 +1 @@",
+        "-export function feature() { return 1; }",
+        "+export function feature() { return 2; }",
+        "diff --git a/tests/samples/fixture.ts b/tests/samples/fixture.ts",
+        "index 1234567..abcdef0 100644",
+        "--- a/tests/samples/fixture.ts",
+        "+++ b/tests/samples/fixture.ts",
+        "@@ -1 +1 @@",
+        "-export function fixture() { return 1; }",
+        "+export function fixture() { return 2; }",
+        "",
+      ].join("\n"),
+      includeSymbolDetails: true,
+    });
+
+    expect(report.status).toBe("ok");
+    expect(report.changedFiles.map((entry) => entry.file)).toEqual(["src/feature.ts"]);
+  });
+
   it("rejects raw diff files outside the project root", async () => {
     const root = await mkTmpDir("dg-review-diff-outside-");
     const outsideFile = path.resolve("README.md");

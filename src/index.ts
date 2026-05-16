@@ -1,6 +1,15 @@
 /** Language registry helpers and support metadata. */
 export * from "./languages.js";
 
+/** Project-local Codegraph config loading and discovery option merging. */
+export {
+  CODEGRAPH_CONFIG_FILE,
+  hasDiscoveryOptions,
+  loadCodegraphConfig,
+  mergeDiscoveryOptions,
+  type CodegraphConfig,
+} from "./config.js";
+
 /** Shared path, discovery, resolution, workspace, and git utilities. */
 export {
   sliceText,
