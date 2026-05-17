@@ -171,6 +171,8 @@ codegraph hotspots ./src --limit 20
 
 Cycle detection reports source dependency cycles. Document-only link loops, such as Markdown files linking to each other, remain in the graph for navigation but are not reported as dependency cycles.
 
+Dependency read commands keep the same output contracts while using the indexed graph path and derived adjacency maps internally when available. This makes repeated `deps`, `rdeps`, and `path` reads cheaper on warm manifest-backed projects.
+
 ### Impact, review, and graph delta
 
 ```bash
