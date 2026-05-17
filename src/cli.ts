@@ -52,7 +52,7 @@ import { buildDoctorReport } from "./cli/doctor.js";
 import { handleExplainCommand } from "./cli/explain.js";
 import { handleGraphDeltaCommand } from "./cli/graphDelta.js";
 import { handleGraphQueryCommand } from "./cli/graphQueries.js";
-import { CLI_HELP_TEXT, helpTextForCommand } from "./cli/help.js";
+import { CLI_HELP_TEXT, helpTextForCommand, isKnownCliCommand } from "./cli/help.js";
 import { handleMcpServeCommand } from "./cli/mcp.js";
 import { parseCacheModeOption, parsePositiveIntegerOption } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
@@ -1213,6 +1213,12 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     } else {
       writeStdoutLine(getCodegraphVersion());
     }
+    return;
+  }
+
+  if (!isKnownCliCommand(cmd)) {
+    writeStderrLine(`Unknown command: ${cmd}`);
+    exitCli(1);
     return;
   }
 

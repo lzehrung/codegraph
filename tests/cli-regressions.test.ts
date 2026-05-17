@@ -313,6 +313,15 @@ describe("CLI regressions", () => {
     expect(chunks.some((chunk) => chunk.languageId === "typescript" && chunk.name === "helper")).toBe(true);
   });
 
+  it("unknown commands do not parse project config from the current working directory", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-unknown-bad-config-"));
+    await fsp.writeFile(path.join(tmpDir, "codegraph.config.json"), "{ not valid json", "utf8");
+
+    await expect(runCliCommandDetailed(["not-a-codegraph-command"], undefined, tmpDir)).rejects.toThrow(
+      /Unknown command: not-a-codegraph-command/,
+    );
+  });
+
   it("graph honors .gitignore by default and --no-gitignore opts out", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-gitignore-"));
     const srcDir = path.join(tmpDir, "src");
