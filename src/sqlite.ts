@@ -302,26 +302,35 @@ const execRowsParams = (
   return normalized;
 };
 
-const loadFileEdges = (db: SqliteDatabase, toType?: string) => {
-  const hasFilter = toType !== undefined;
-  const sql = hasFilter
-    ? "SELECT from_path, to_path FROM file_edges WHERE to_type = ?;"
-    : "SELECT from_path, to_path, to_type FROM file_edges;";
-  const rows = hasFilter ? execRowsParams(db, sql, [toType]) : execRows(db, sql);
-  return rows.map((row) => ({
-    from: String(row[0]),
-    to: String(row[1]),
-    type: hasFilter ? String(toType) : String(row[2]),
-  }));
-};
+const loadDirectFileDependencies = (db: SqliteDatabase, fromPath: string): string[] =>
+  execRowsParams(
+    db,
+    `
+      SELECT to_path
+      FROM file_edges
+      WHERE to_type = ? AND from_path = ?
+      ORDER BY rowid;
+    `,
+    ["file", fromPath],
+  )
+    .map((row) => toSqliteText(row[0]))
+    .filter(Boolean);
 
-const bfsDependencies = (edges: Array<{ from: string; to: string }>, start: string) => {
-  const adj = new Map<string, string[]>();
-  for (const edge of edges) {
-    const list = adj.get(edge.from) ?? [];
-    list.push(edge.to);
-    adj.set(edge.from, list);
-  }
+const loadDirectFileDependents = (db: SqliteDatabase, toPath: string): string[] =>
+  execRowsParams(
+    db,
+    `
+      SELECT from_path
+      FROM file_edges
+      WHERE to_type = ? AND to_path = ?
+      ORDER BY rowid;
+    `,
+    ["file", toPath],
+  )
+    .map((row) => toSqliteText(row[0]))
+    .filter(Boolean);
+
+const bfsFileTraversal = (start: string, loadNeighbors: (file: string) => string[]): string[] => {
   const visited = new Set<string>();
   const queue: string[] = [start];
   let head = 0;
@@ -331,35 +340,7 @@ const bfsDependencies = (edges: Array<{ from: string; to: string }>, start: stri
     const current = queue[head];
     head += 1;
     if (!current) continue;
-    const neighbors = adj.get(current) ?? [];
-    for (const next of neighbors) {
-      if (visited.has(next)) continue;
-      visited.add(next);
-      result.push(next);
-      queue.push(next);
-    }
-  }
-  return result;
-};
-
-const bfsReverseDependencies = (edges: Array<{ from: string; to: string }>, start: string) => {
-  const adj = new Map<string, string[]>();
-  for (const edge of edges) {
-    const list = adj.get(edge.to) ?? [];
-    list.push(edge.from);
-    adj.set(edge.to, list);
-  }
-  const visited = new Set<string>();
-  const queue: string[] = [start];
-  let head = 0;
-  visited.add(start);
-  const result: string[] = [];
-  while (head < queue.length) {
-    const current = queue[head];
-    head += 1;
-    if (!current) continue;
-    const neighbors = adj.get(current) ?? [];
-    for (const next of neighbors) {
+    for (const next of loadNeighbors(current)) {
       if (visited.has(next)) continue;
       visited.add(next);
       result.push(next);
@@ -770,11 +751,9 @@ export async function queryGraphSqlite(outputPath: string, queryText: string): P
         if (!startFiles.length) {
           return { kind: parsed.kind, results: [] };
         }
-        const edges = loadFileEdges(db, "file").map((edge) => ({
-          from: edge.from,
-          to: edge.to,
-        }));
-        const chain = dedupePreservingOrder(startFiles.flatMap((startFile) => bfsDependencies(edges, startFile)));
+        const chain = dedupePreservingOrder(
+          startFiles.flatMap((startFile) => bfsFileTraversal(startFile, (file) => loadDirectFileDependencies(db, file))),
+        );
         return { kind: parsed.kind, results: chain };
       }
       case "controllersMostEndpoints": {
@@ -830,11 +809,7 @@ export async function queryGraphSqlite(outputPath: string, queryText: string): P
         };
       }
       case "affectedFunctionsForModule": {
-        const edges = loadFileEdges(db, "file").map((edge) => ({
-          from: edge.from,
-          to: edge.to,
-        }));
-        const reverseDeps = bfsReverseDependencies(edges, parsed.modulePath);
+        const reverseDeps = bfsFileTraversal(parsed.modulePath, (file) => loadDirectFileDependents(db, file));
         const impactedFiles = [parsed.modulePath, ...reverseDeps];
         if (!impactedFiles.length) {
           return { kind: parsed.kind, results: [] };

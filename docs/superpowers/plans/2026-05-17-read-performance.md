@@ -57,7 +57,7 @@
 
   Add or extend CLI tests so `deps`, `rdeps`, and `path` can be run after a warm index/manifest and still return the exact current JSON/text payloads. The test should prove the command path can consume `ProjectIndex.graph` rather than requiring raw `collectGraph`.
 
-- [ ] **Step 4: Add SQLite canned traversal regression tests**
+- [x] **Step 4: Add SQLite canned traversal regression tests**
 
   In `tests/sqlite.test.ts`, add tests for:
   - `queryGraphSqlite(..., "What is the dependency chain for class X?")`
@@ -213,19 +213,19 @@
 - Modify: `src/sqlite.ts`
 - Test: `tests/sqlite.test.ts`
 
-- [ ] **Step 1: Replace full edge loads for dependency chain**
+- [x] **Step 1: Replace full edge loads for dependency chain**
 
   Update the `dependencyChain` high-level query to walk `file_edges` through indexed `to_type = 'file'` lookups rather than calling `loadFileEdges(db, "file")` and traversing all edges in JS.
 
-- [ ] **Step 2: Replace full edge loads for affected functions**
+- [x] **Step 2: Replace full edge loads for affected functions**
 
   Update `affectedFunctionsForModule` to use indexed reverse traversal and then query functions for impacted files. Preserve result shape and ordering semantics where existing tests assert them.
 
-- [ ] **Step 3: Guard cycles and duplicate paths**
+- [x] **Step 3: Guard cycles and duplicate paths**
 
   Ensure traversal tracks visited files, handles cycles, dedupes results in existing order, and handles missing start modules.
 
-- [ ] **Step 4: Run focused SQLite tests**
+- [x] **Step 4: Run focused SQLite tests**
 
   Run:
   ```powershell
@@ -233,7 +233,7 @@
   ```
   Expected: all focused SQLite and MCP SQLite tests pass.
 
-- [ ] **Step 5: Run full verification and commit**
+- [x] **Step 5: Run full verification and commit**
 
   Run:
   ```powershell
