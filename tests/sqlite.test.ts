@@ -595,6 +595,105 @@ export class Service {}
     }
   });
 
+  it("walks sqlite canned file traversals through cycles without duplicate results", async () => {
+    const root = await mkTmpDir("dg-sqlite-cycle-traversal-");
+    await fsp.writeFile(
+      path.join(root, "a.ts"),
+      `import "./b";
+export class Service {}
+export function runA() { return 1; }
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "b.ts"),
+      `import "./c";
+export function runB() { return 1; }
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "c.ts"),
+      `import "./b";
+export function runC() { return 1; }
+`,
+      "utf8",
+    );
+
+    const index = await buildProjectIndex(root);
+    const sgraph = await buildSymbolGraphDetailed(index);
+    const dbPath = path.join(root, "graph.sqlite");
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+    });
+
+    const bPath = path.join(root, "b.ts").replace(/\\/g, "/");
+    const cPath = path.join(root, "c.ts").replace(/\\/g, "/");
+    const chain = await queryGraphSqlite(dbPath, "Show me the dependency chain for the Service class");
+    expect(chain.kind).toBe("dependencyChain");
+    if (chain.kind === "dependencyChain") {
+      expect(chain.results).toEqual([bPath, cPath]);
+    }
+
+    const affected = await queryGraphSqlite(dbPath, `What functions would be affected if I change this module ${cPath}`);
+    expect(affected.kind).toBe("affectedFunctionsForModule");
+    if (affected.kind === "affectedFunctionsForModule") {
+      const names = affected.results.map((row) => row.name);
+      expect(names).toEqual(["runA", "runB", "runC"]);
+    }
+  });
+
+  it("uses updated sqlite file edges for canned traversals after incremental updates", async () => {
+    const root = await mkTmpDir("dg-sqlite-incremental-traversal-");
+    const mainPath = path.join(root, "main.ts");
+    const utilPath = path.join(root, "util.ts");
+    await fsp.writeFile(
+      mainPath,
+      `import "./util";
+export class Service {}
+`,
+      "utf8",
+    );
+    await fsp.writeFile(
+      utilPath,
+      `export function helper() { return 1; }
+`,
+      "utf8",
+    );
+
+    let index = await buildProjectIndex(root);
+    let sgraph = await buildSymbolGraphDetailed(index);
+    const dbPath = path.join(root, "graph.sqlite");
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+    });
+
+    await fsp.writeFile(
+      mainPath,
+      `export class Service {}
+`,
+      "utf8",
+    );
+    index = await buildProjectIndex(root);
+    sgraph = await buildSymbolGraphDetailed(index);
+    await updateGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+      changedFiles: [mainPath.replace(/\\/g, "/")],
+    });
+
+    const chain = await queryGraphSqlite(dbPath, "Show me the dependency chain for the Service class");
+    expect(chain.kind).toBe("dependencyChain");
+    if (chain.kind === "dependencyChain") {
+      expect(chain.results).toEqual([]);
+    }
+  });
+
   it("executes raw SQL queries with column metadata", async () => {
     const root = await mkTmpDir("dg-sqlite-raw-");
     const main = `

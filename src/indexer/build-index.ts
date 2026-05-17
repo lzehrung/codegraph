@@ -21,6 +21,7 @@ import {
 } from "../util.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { collectGraph, collectEdgesForFile } from "../graphs.js";
+import { buildGraphAdjacency } from "../graphs/adjacency.js";
 import type { FallbackImportExtractionEvent } from "../graphs/specifiers.js";
 import type { GraphCacheEntry, GraphBuildOptions } from "../graphs/types.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
@@ -844,6 +845,7 @@ async function buildIndexFromFileListShared(
     }
     return {
       graph,
+      graphAdjacency: buildGraphAdjacency(graph),
       modules,
       byFile: modules,
       projectRoot: normalizedProjectRoot,
@@ -1071,6 +1073,7 @@ export async function buildProjectIndexIncremental(
       }
       return {
         graph: { nodes: new Set(), edges: [] },
+        graphAdjacency: buildGraphAdjacency({ nodes: new Set(), edges: [] }),
         modules: new Map(),
         byFile: new Map(),
         projectRoot: normalizedProjectRoot,
@@ -1276,6 +1279,7 @@ export async function buildProjectIndexIncremental(
       }
       return {
         graph,
+        graphAdjacency: buildGraphAdjacency(graph),
         modules,
         byFile: modules,
         projectRoot: normalizedProjectRoot,
