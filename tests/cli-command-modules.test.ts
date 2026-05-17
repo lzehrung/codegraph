@@ -12,6 +12,7 @@ import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/cli/pac
 import { handleSkillCommand, type SkillCommandContext } from "../src/cli/skill.js";
 import { handleSqlCommand } from "../src/cli/sql.js";
 import { runCli } from "../src/cli.js";
+import type { ProjectIndex } from "../src/indexer.js";
 import type { Graph } from "../src/types.js";
 
 function readJsonRecord(value: unknown): Record<string, unknown> {
@@ -642,6 +643,99 @@ describe("CLI command modules", () => {
     expect(jsonLines).toEqual([[{ file: utilPath, depth: 1 }]]);
     expect(stdoutLines).toEqual([]);
     expect(stderrLines).toEqual([]);
+  });
+
+  test("loads graph query commands through the project index when no graph collector is injected", async () => {
+    const projectRoot = path.join(os.tmpdir(), "codegraph-query-index").replace(/\\/g, "/");
+    const mainPath = `${projectRoot}/main.ts`;
+    const utilPath = `${projectRoot}/util.ts`;
+    let listedFiles = false;
+    let buildCount = 0;
+    const graph: Graph = {
+      nodes: new Set([mainPath, utilPath]),
+      edges: [
+        {
+          from: mainPath,
+          to: { type: "file", path: utilPath },
+          raw: "./util",
+        },
+      ],
+    };
+    let edgeIterations = 0;
+    const originalIterator = graph.edges[Symbol.iterator].bind(graph.edges);
+    graph.edges[Symbol.iterator] = function (): ArrayIterator<Graph["edges"][number]> {
+      edgeIterations += 1;
+      return originalIterator();
+    };
+    const projectIndex: ProjectIndex = {
+      graph,
+      graphAdjacency: {
+        forward: new Map([[mainPath, [utilPath]]]),
+        reverse: new Map([[utilPath, [mainPath]]]),
+      },
+      modules: new Map(),
+      byFile: new Map(),
+      projectRoot,
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+    const cases: Array<{
+      command: "deps" | "rdeps" | "path";
+      positionals: string[];
+      expected: unknown;
+    }> = [
+      {
+        command: "deps",
+        positionals: ["main.ts"],
+        expected: [{ file: utilPath, depth: 1 }],
+      },
+      {
+        command: "rdeps",
+        positionals: ["util.ts"],
+        expected: [{ file: mainPath, depth: 1 }],
+      },
+      {
+        command: "path",
+        positionals: ["main.ts", "util.ts"],
+        expected: [mainPath, utilPath],
+      },
+    ];
+
+    for (const entry of cases) {
+      const jsonLines: unknown[] = [];
+      await handleGraphQueryCommand({
+        command: entry.command,
+        positionals: entry.positionals,
+        projectRootFs: projectRoot,
+        projectRootAbs: projectRoot,
+        getOpt: () => undefined,
+        hasFlag: (name) => name === "--json",
+        writeJSONLine: (value) => jsonLines.push(value),
+        writeStdoutLine: () => {
+          throw new Error("unexpected stdout");
+        },
+        writeStderrLine: () => {
+          throw new Error("unexpected stderr");
+        },
+        exit: (code) => {
+          throw new Error(`unexpected exit ${code}`);
+        },
+        listProjectFilesForScan: async () => {
+          listedFiles = true;
+          return [mainPath, utilPath];
+        },
+        buildProjectIndex: async () => {
+          buildCount += 1;
+          return projectIndex;
+        },
+      });
+
+      expect(jsonLines).toEqual([entry.expected]);
+    }
+
+    expect(buildCount).toBe(cases.length);
+    expect(listedFiles).toBe(false);
+    expect(edgeIterations).toBe(0);
   });
 
   test("prints graph query usage for missing file arguments", async () => {

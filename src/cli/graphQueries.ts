@@ -6,8 +6,8 @@ import {
   type BuildOptions,
   type ProjectIndex,
 } from "../indexer.js";
+import type { GraphAdjacencyIndex } from "../graphs/adjacency.js";
 import {
-  collectGraph as defaultCollectGraph,
   findDetailedCycles,
   getDependencies,
   getReverseDependencies,
@@ -43,6 +43,11 @@ export type GraphQueryCommandContext = {
   buildProjectIndex?: (root: string, options?: BuildOptions) => Promise<ProjectIndex>;
 };
 
+type LoadedGraph = {
+  graph: Graph;
+  adjacency?: GraphAdjacencyIndex;
+};
+
 function resolveCliProjectFile(projectRoot: string, fileArg: string, label: string): CliProjectFileInput {
   try {
     return {
@@ -70,9 +75,17 @@ function writeCliProjectFileError(
   context.writeStdoutLine(`error: ${result.reason}: ${result.error}`);
 }
 
-async function loadGraph(context: GraphQueryCommandContext): Promise<Graph> {
-  const collectGraph = context.collectGraph ?? defaultCollectGraph;
-  return collectGraph(context.projectRootFs, await context.listProjectFilesForScan(), context.graphOptions);
+async function loadGraph(context: GraphQueryCommandContext): Promise<LoadedGraph> {
+  if (context.collectGraph) {
+    const graph = await context.collectGraph(context.projectRootFs, await context.listProjectFilesForScan(), context.graphOptions);
+    return { graph };
+  }
+  const buildProjectIndex = context.buildProjectIndex ?? defaultBuildProjectIndex;
+  const index = await buildProjectIndex(context.projectRootFs, context.indexOptions);
+  return {
+    graph: index.graph,
+    ...(index.graphAdjacency ? { adjacency: index.graphAdjacency } : {}),
+  };
 }
 
 async function handleDepsCommand(context: GraphQueryCommandContext): Promise<void> {
@@ -94,11 +107,17 @@ async function handleDepsCommand(context: GraphQueryCommandContext): Promise<voi
     return;
   }
 
-  const graph = await loadGraph(context);
+  const loaded = await loadGraph(context);
   const results =
     context.command === "deps"
-      ? getDependencies(graph, resolvedFile.file, depth !== undefined ? { depth } : {})
-      : getReverseDependencies(graph, resolvedFile.file, depth !== undefined ? { depth } : {});
+      ? getDependencies(loaded.graph, resolvedFile.file, {
+          ...(depth !== undefined ? { depth } : {}),
+          ...(loaded.adjacency ? { adjacency: loaded.adjacency } : {}),
+        })
+      : getReverseDependencies(loaded.graph, resolvedFile.file, {
+          ...(depth !== undefined ? { depth } : {}),
+          ...(loaded.adjacency ? { adjacency: loaded.adjacency } : {}),
+        });
 
   if (json) {
     context.writeJSONLine(results);
@@ -130,8 +149,10 @@ async function handlePathCommand(context: GraphQueryCommandContext): Promise<voi
     return;
   }
 
-  const graph = await loadGraph(context);
-  const pathResult = getShortestPath(graph, resolvedFrom.file, resolvedTo.file);
+  const loaded = await loadGraph(context);
+  const pathResult = getShortestPath(loaded.graph, resolvedFrom.file, resolvedTo.file, {
+    ...(loaded.adjacency ? { adjacency: loaded.adjacency } : {}),
+  });
 
   if (json) {
     context.writeJSONLine(pathResult);
@@ -152,7 +173,7 @@ async function handleCyclesCommand(context: GraphQueryCommandContext): Promise<v
     context.exit(2);
   }
 
-  const graph = await loadGraph(context);
+  const { graph } = await loadGraph(context);
   const cycleDetails = sortDetailedCycles(findDetailedCycles(graph), sortMode);
 
   if (json) {
@@ -192,7 +213,7 @@ async function handleCyclesCommand(context: GraphQueryCommandContext): Promise<v
 
 async function handleUnresolvedCommand(context: GraphQueryCommandContext): Promise<void> {
   const json = context.hasFlag("--json");
-  const graph = await loadGraph(context);
+  const { graph } = await loadGraph(context);
   const unresolved = getUnresolvedImports(graph, { projectRoot: context.projectRootFs });
 
   if (json) {

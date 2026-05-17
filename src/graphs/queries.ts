@@ -1,4 +1,10 @@
 import type { FileId, Graph } from "../types.js";
+import {
+  getForwardNeighbors,
+  getReverseNeighbors,
+  graphAdjacencyFor,
+  type GraphAdjacencyIndex,
+} from "./adjacency.js";
 import { getFiniteNonNegativeLimit } from "./limits.js";
 import { builtinModules } from "node:module";
 import {
@@ -53,7 +59,7 @@ function isDocumentOnlyCycleFile(file: string): boolean {
 export function getDependencies(
   graph: Graph,
   startFile: FileId,
-  opts: { depth?: number; limit?: number } = {},
+  opts: { depth?: number; limit?: number; adjacency?: GraphAdjacencyIndex } = {},
 ): DependencyNode[] {
   const maxDepth = opts.depth ?? Number.POSITIVE_INFINITY;
   const finiteLimit = getFiniteNonNegativeLimit(opts.limit);
@@ -64,6 +70,7 @@ export function getDependencies(
   const out: DependencyNode[] = [];
   const visited = new Set<string>();
   const queue: Array<{ file: string; depth: number }> = [{ file: startFile, depth: 0 }];
+  const adjacency = opts.adjacency ?? graphAdjacencyFor(graph);
   visited.add(startFile);
 
   let index = 0;
@@ -77,10 +84,10 @@ export function getDependencies(
     }
     if (depth >= maxDepth) continue;
 
-    for (const edge of graph.edges) {
-      if (edge.from === file && edge.to.type === "file" && !visited.has(edge.to.path)) {
-        visited.add(edge.to.path);
-        queue.push({ file: edge.to.path, depth: depth + 1 });
+    for (const neighbor of getForwardNeighbors(adjacency, file)) {
+      if (!visited.has(neighbor)) {
+        visited.add(neighbor);
+        queue.push({ file: neighbor, depth: depth + 1 });
       }
     }
   }
@@ -90,7 +97,7 @@ export function getDependencies(
 export function getReverseDependencies(
   graph: Graph,
   targetFile: FileId,
-  opts: { depth?: number; limit?: number } = {},
+  opts: { depth?: number; limit?: number; adjacency?: GraphAdjacencyIndex } = {},
 ): DependencyNode[] {
   const maxDepth = opts.depth ?? Number.POSITIVE_INFINITY;
   const finiteLimit = getFiniteNonNegativeLimit(opts.limit);
@@ -101,6 +108,7 @@ export function getReverseDependencies(
   const out: DependencyNode[] = [];
   const visited = new Set<string>();
   const queue: Array<{ file: string; depth: number }> = [{ file: targetFile, depth: 0 }];
+  const adjacency = opts.adjacency ?? graphAdjacencyFor(graph);
   visited.add(targetFile);
 
   let index = 0;
@@ -114,19 +122,25 @@ export function getReverseDependencies(
     }
     if (depth >= maxDepth) continue;
 
-    for (const edge of graph.edges) {
-      if (edge.to.type === "file" && edge.to.path === file && !visited.has(edge.from)) {
-        visited.add(edge.from);
-        queue.push({ file: edge.from, depth: depth + 1 });
+    for (const neighbor of getReverseNeighbors(adjacency, file)) {
+      if (!visited.has(neighbor)) {
+        visited.add(neighbor);
+        queue.push({ file: neighbor, depth: depth + 1 });
       }
     }
   }
   return out;
 }
 
-export function getShortestPath(graph: Graph, from: FileId, to: FileId): FileId[] | null {
+export function getShortestPath(
+  graph: Graph,
+  from: FileId,
+  to: FileId,
+  opts: { adjacency?: GraphAdjacencyIndex } = {},
+): FileId[] | null {
   const visited = new Map<string, string | null>();
   const queue: string[] = [from];
+  const adjacency = opts.adjacency ?? graphAdjacencyFor(graph);
   visited.set(from, null);
 
   let index = 0;
@@ -142,10 +156,10 @@ export function getShortestPath(graph: Graph, from: FileId, to: FileId): FileId[
       return path.reverse();
     }
 
-    for (const edge of graph.edges) {
-      if (edge.from === current && edge.to.type === "file" && !visited.has(edge.to.path)) {
-        visited.set(edge.to.path, current);
-        queue.push(edge.to.path);
+    for (const neighbor of getForwardNeighbors(adjacency, current)) {
+      if (!visited.has(neighbor)) {
+        visited.set(neighbor, current);
+        queue.push(neighbor);
       }
     }
   }

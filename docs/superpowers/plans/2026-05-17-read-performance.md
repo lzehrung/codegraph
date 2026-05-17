@@ -16,7 +16,7 @@
 - [ ] Do not change public output shapes for `deps`, `rdeps`, `path`, `cycles`, `unresolved`, `search`, `explain`, or raw SQLite queries.
 - [ ] Preserve accuracy before speed: every optimization must compare against the existing graph semantics.
 - [ ] Write regression tests before production changes for each behavior change.
-- [ ] Before every implementation commit, run `npm run build`, `npm run lint`, and `npm run test:ci`.
+- [x] Before every implementation commit, run `npm run build`, `npm run lint`, and `npm run test:ci`.
 - [ ] After each verified implementation commit, update this checklist and commit the checked-off plan changes.
 
 ## File Map
@@ -41,7 +41,7 @@
 - Modify: `tests/agent-search.test.ts` if agent search behavior coverage needs a fixture-level guard
 - Modify: `tests/agent-explain.test.ts` if explain behavior coverage needs a fixture-level guard
 
-- [ ] **Step 1: Add graph traversal regression tests**
+- [x] **Step 1: Add graph traversal regression tests**
 
   Add tests that build a graph with branching and cycles, then assert:
   - `getDependencies(graph, start, { depth })` returns the same files and depths as current behavior.
@@ -49,11 +49,11 @@
   - `getShortestPath(graph, from, to)` returns the same path as current behavior.
   - `findDetailedCycles(graph)` still ignores document-only cycles and reports code cycles.
 
-- [ ] **Step 2: Add a performance-shape guard for traversal**
+- [x] **Step 2: Add a performance-shape guard for traversal**
 
   Add a test graph where a naive implementation would scan all edges once per visited node. The test should use an instrumented graph edge iterable or helper-level instrumentation so it fails unless adjacency is built once and then reused for traversal.
 
-- [ ] **Step 3: Add CLI graph-query cache reuse regression**
+- [x] **Step 3: Add CLI graph-query cache reuse regression**
 
   Add or extend CLI tests so `deps`, `rdeps`, and `path` can be run after a warm index/manifest and still return the exact current JSON/text payloads. The test should prove the command path can consume `ProjectIndex.graph` rather than requiring raw `collectGraph`.
 
@@ -65,7 +65,7 @@
   - Cyclic file-edge graphs do not loop forever.
   - Deleted/touched-file incremental updates still affect traversal correctly.
 
-- [ ] **Step 5: Run focused tests and verify expected failures**
+- [x] **Step 5: Run focused tests and verify expected failures**
 
   Run:
   ```powershell
@@ -82,7 +82,7 @@
 - Modify: `src/indexer/build-index.ts`
 - Test: `tests/graph-queries.test.ts`
 
-- [ ] **Step 1: Implement adjacency helper module**
+- [x] **Step 1: Implement adjacency helper module**
 
   Create `GraphAdjacencyIndex` with:
   - `forward: Map<FileId, FileId[]>`
@@ -93,16 +93,16 @@
 
   The helper must include only `edge.to.type === "file"` edges and must preserve existing edge order.
 
-- [ ] **Step 2: Attach adjacency to `ProjectIndex`**
+- [x] **Step 2: Attach adjacency to `ProjectIndex`**
 
   Add an optional `graphAdjacency?: GraphAdjacencyIndex` to `ProjectIndex`.
   Populate it in all `ProjectIndex` return paths in `src/indexer/build-index.ts`, including empty-index returns and manifest-backed incremental returns.
 
-- [ ] **Step 3: Keep helper API narrow**
+- [x] **Step 3: Keep helper API narrow**
 
   Do not expose mutable adjacency maps through new public API unless needed internally. If exported from `src/graphs.ts`, export only the type and pure helper functions.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
   Run:
   ```powershell
@@ -120,7 +120,7 @@
 - Test: `tests/agent-search.test.ts`
 - Test: `tests/agent-explain.test.ts`
 
-- [ ] **Step 1: Update `getDependencies`**
+- [x] **Step 1: Update `getDependencies`**
 
   Use a built-once adjacency index for traversal. Preserve:
   - depth behavior
@@ -128,19 +128,19 @@
   - result order
   - start-file exclusion from results
 
-- [ ] **Step 2: Update `getReverseDependencies`**
+- [x] **Step 2: Update `getReverseDependencies`**
 
   Use reverse adjacency with the same behavior guarantees as `getDependencies`.
 
-- [ ] **Step 3: Update `getShortestPath`**
+- [x] **Step 3: Update `getShortestPath`**
 
   Use forward adjacency and preserve the first shortest path based on existing edge order.
 
-- [ ] **Step 4: Reuse adjacency in cycle detection where useful**
+- [x] **Step 4: Reuse adjacency in cycle detection where useful**
 
   Keep `findDetailedCycles` output stable. If reusing the helper makes the code simpler without changing ordering, do so; otherwise leave cycle logic unchanged.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
   Run:
   ```powershell
@@ -148,7 +148,7 @@
   ```
   Expected: all focused tests pass and traversal performance-shape tests prove adjacency is not rebuilt or edges are not rescanned per BFS step.
 
-- [ ] **Step 6: Run full verification and commit**
+- [x] **Step 6: Run full verification and commit**
 
   Run:
   ```powershell
@@ -171,19 +171,19 @@
 - Modify: `src/cli.ts` only if context wiring needs to pass index options
 - Test: `tests/cli-regressions.test.ts`
 
-- [ ] **Step 1: Change graph-query loading**
+- [x] **Step 1: Change graph-query loading**
 
   Replace raw `collectGraph(...)` loading for `deps`, `rdeps`, `path`, `cycles`, and `unresolved` with an index-backed loader where command options allow it. The loaded `ProjectIndex.graph` must be behaviorally identical to the previous graph for the same scan scope and graph flags.
 
-- [ ] **Step 2: Preserve dependency injection tests**
+- [x] **Step 2: Preserve dependency injection tests**
 
   `GraphQueryCommandContext` currently accepts injected `collectGraph` and `buildProjectIndex`. Keep testability by allowing injected graph/index loaders. Existing command-module tests should not need brittle filesystem fixtures.
 
-- [ ] **Step 3: Verify no output contract changes**
+- [x] **Step 3: Verify no output contract changes**
 
   Add JSON and text assertions for `deps`, `rdeps`, and `path`. Keep path formatting unchanged.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
   Run:
   ```powershell
@@ -191,7 +191,7 @@
   ```
   Expected: all focused CLI tests pass.
 
-- [ ] **Step 5: Run full verification and commit**
+- [x] **Step 5: Run full verification and commit**
 
   Run:
   ```powershell
@@ -333,4 +333,3 @@
   - Accuracy safeguards
   - Test and verification commands run
   - Notes that persistent SQLite schema was not changed
-
