@@ -165,7 +165,7 @@ export function formatAgentExplanation(explanation: AgentExplanation): string {
     `${explanation.target.kind}: ${explanation.target.label}`,
     ...explanation.summary.map((entry) => `- ${entry}`),
   ];
-  if (explanation.symbols.length > 0) {
+  if (explanation.symbols.length) {
     lines.push(
       `symbols: ${explanation.symbols
         .map((symbol) => symbol.name)
@@ -173,13 +173,13 @@ export function formatAgentExplanation(explanation: AgentExplanation): string {
         .join(", ")}`,
     );
   }
-  if (explanation.dependencies.length > 0) {
+  if (explanation.dependencies.length) {
     lines.push(`deps: ${explanation.dependencies.map((entry) => entry.file).join(", ")}`);
   }
-  if (explanation.reverseDependencies.length > 0) {
+  if (explanation.reverseDependencies.length) {
     lines.push(`rdeps: ${explanation.reverseDependencies.map((entry) => entry.file).join(", ")}`);
   }
-  if (explanation.followUps.length > 0) {
+  if (explanation.followUps.length) {
     lines.push("follow-ups:", ...explanation.followUps.slice(0, 8).map((command) => `  ${command}`));
   }
   return lines.join("\n");
@@ -723,7 +723,7 @@ function findSqlObjectsByReferenceName(
 ): SqlObjectNodeInfo[] {
   const normalizedName = objectName.toLowerCase();
   const exact = sqlObjects.filter((candidate) => candidate.name.toLowerCase() === normalizedName);
-  if (exact.length > 0) return exact;
+  if (exact.length) return exact;
   const baseName = sqlObjectBaseName(objectName).toLowerCase();
   const basenameMatches = sqlObjects.filter(
     (candidate) => sqlObjectBaseName(candidate.name).toLowerCase() === baseName,

@@ -16,7 +16,7 @@ export async function collectAngularJsFrameworkEdges(
   parsed?: Map<string, ParsedFileContext>,
 ): Promise<Edge[]> {
   const jsFiles = files.filter((file) => file.toLowerCase().endsWith(".js"));
-  if (jsFiles.length === 0) return [];
+  if (!jsFiles.length) return [];
 
   const contexts: AngularJsFileContext[] = [];
   for (const file of jsFiles) {

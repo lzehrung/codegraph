@@ -250,7 +250,7 @@ export async function findReferences(
 
   let candidateFiles = Array.from(index.byFile.keys()).filter((candidateFile) => candidateFile !== definitionFile);
   candidateFiles.sort((left, right) => left.localeCompare(right));
-  if (index.bloomFilters && exportedNames.length > 0) {
+  if (index.bloomFilters && exportedNames.length) {
     candidateFiles = candidateFiles.filter((candidateFile) => {
       const module = index.byFile.get(candidateFile);
       if (!module) return true;
@@ -258,7 +258,7 @@ export async function findReferences(
       if (!filter) return true;
 
       const aliases = getCandidateReferenceNames(module, definitionFile, exportedNameSet);
-      if (aliases.length === 0) {
+      if (!aliases.length) {
         return exportedNames.some((exportedName) => filter.mightContain(exportedName));
       }
       return aliases.some((alias) => filter.mightContain(alias));
@@ -347,7 +347,7 @@ export async function findReferences(
       }
     }
 
-    if (phpQualifiedNames.length > 0) {
+    if (phpQualifiedNames.length) {
       const remainingReferences = maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
       for (const candidateName of [...exportedNames, ...phpQualifiedNames]) {
         if (hasReachedMaxReferences()) break;

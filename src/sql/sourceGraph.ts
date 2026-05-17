@@ -55,7 +55,7 @@ export function sqlCorpusSignature(
   sqlFiles: readonly string[],
   fileSignatures: Map<string, SqlFileSignature> | undefined,
 ): string | undefined {
-  if (sqlFiles.length === 0 || !fileSignatures) return undefined;
+  if (!sqlFiles.length || !fileSignatures) return undefined;
   const hash = crypto.createHash("sha1");
   hash.update("sql-corpus-v1\0");
   for (const file of sqlFiles) {
@@ -121,7 +121,7 @@ function sqlDefinitionCandidates(cache: SqlFactCache, objectName: string): SqlDe
   const normalized = objectName.toLowerCase();
   const baseName = sqlObjectBaseName(objectName).toLowerCase();
   const exactCandidates = uniqueFacts(cache.definitionsByExactName.get(normalized) ?? []);
-  if (exactCandidates.length > 0) {
+  if (exactCandidates.length) {
     return {
       candidates: exactCandidates,
       resolved: exactCandidates.length === 1 ? "precise" : "heuristic",

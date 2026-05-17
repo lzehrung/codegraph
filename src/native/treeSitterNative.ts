@@ -241,7 +241,7 @@ export function getNativeQueryMetadataForSupport(support: LanguageSupport): {
     normalizedQueryKinds.push(kind);
     const originalQuery = support.queries[kind];
     const normalized = normalizeNativeQueryForSupport(support, kind, originalQuery);
-    if (originalQuery.trim().length > 0 && normalized.trim().length === 0) {
+    if (originalQuery.trim().length && !normalized.trim().length) {
       skippedQueryKinds.push(kind);
     }
   }

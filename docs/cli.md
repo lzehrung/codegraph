@@ -13,6 +13,22 @@ The CLI defaults to `--native auto`, which uses the native Tree-sitter path when
 - `--native on`: require native explicitly and fail if it is unavailable
 - `--native off`: force the opt-in JS Tree-sitter fallback path for comparison and debugging when `@lzehrung/codegraph-js-fallback` is installed
 
+## Project config
+
+Commands that scan a project read `codegraph.config.json` from `--root` when it exists. The current config surface is intentionally small:
+
+```json
+{
+  "discovery": {
+    "includeGlobs": ["src/**/*.ts"],
+    "ignoreGlobs": ["tests/samples/**"],
+    "useGitignore": true
+  }
+}
+```
+
+`discovery.includeGlobs` and `discovery.ignoreGlobs` are project-root-relative, even when a command scans child include roots. `discovery.ignoreGlobs` is useful for large fixture, generated, or vendored folders that should not be indexed for search, unresolved-import checks, graphing, impact, or review. CLI `--include-glob` and `--ignore-glob` values are added for a single run; with child include roots, CLI globs stay relative to each scanned root. `--no-gitignore` overrides `useGitignore`.
+
 ## Core commands
 
 ### Dependency graphs

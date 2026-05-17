@@ -160,7 +160,7 @@ async function handleCyclesCommand(context: GraphQueryCommandContext): Promise<v
     return;
   }
 
-  if (cycleDetails.length === 0) {
+  if (!cycleDetails.length) {
     context.writeStdoutLine("No dependency cycles found.");
     return;
   }
@@ -170,7 +170,7 @@ async function handleCyclesCommand(context: GraphQueryCommandContext): Promise<v
     const cycle = cycleDetails[i]!;
     context.writeStdoutLine(`Cycle ${i + 1} (priority=${cycle.priorityScore}):`);
     context.writeStdoutLine(`  ${cycle.files.map((entry) => path.relative(context.projectRootFs, entry)).join(" -> ")} -> ...`);
-    if (cycle.entryEdges.length > 0) {
+    if (cycle.entryEdges.length) {
       context.writeStdoutLine("  Incoming edges:");
       for (const edge of cycle.entryEdges) {
         context.writeStdoutLine(
@@ -178,7 +178,7 @@ async function handleCyclesCommand(context: GraphQueryCommandContext): Promise<v
         );
       }
     }
-    if (cycle.internalEdges.length > 0) {
+    if (cycle.internalEdges.length) {
       context.writeStdoutLine("  Internal cycle edges:");
       for (const edge of cycle.internalEdges) {
         context.writeStdoutLine(
@@ -200,7 +200,7 @@ async function handleUnresolvedCommand(context: GraphQueryCommandContext): Promi
     return;
   }
 
-  if (unresolved.length === 0) {
+  if (!unresolved.length) {
     context.writeStdoutLine("No unresolved external imports found.");
     return;
   }

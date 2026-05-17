@@ -7,7 +7,7 @@ export function generateChunkingQuery(def: LanguageDefinition): string {
   const parts: string[] = [];
 
   // 1. Comments
-  if (def.structure.comments.length > 0) {
+  if (def.structure.comments.length) {
     parts.push(`;; ----- Comments -----`);
     for (const type of def.structure.comments) {
       parts.push(`(${type}) @chunk.comment`);
@@ -16,7 +16,7 @@ export function generateChunkingQuery(def: LanguageDefinition): string {
   }
 
   // 2. Blocks (Classes, Functions, etc.)
-  if (def.structure.blocks.length > 0) {
+  if (def.structure.blocks.length) {
     parts.push(`;; ----- Blocks -----`);
     for (const block of def.structure.blocks) {
       let query = `(${block.type}`;
@@ -41,7 +41,7 @@ export function generateChunkingQuery(def: LanguageDefinition): string {
   }
 
   // 3. Split Points (Inner control flow)
-  if (def.structure.splitPoints.length > 0) {
+  if (def.structure.splitPoints.length) {
     parts.push(`;; ----- Split Points -----`);
     for (const type of def.structure.splitPoints) {
       parts.push(`(${type}) @chunk.block.inner`);

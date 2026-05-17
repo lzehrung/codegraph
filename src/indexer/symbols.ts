@@ -185,7 +185,7 @@ export function getApiSurface(index: ProjectIndex): ApiSurface {
         target: { file: entry.fromModule, name: "*" },
       };
     });
-    if (exports.length > 0) {
+    if (exports.length) {
       out.push({ file, exports });
     }
   }

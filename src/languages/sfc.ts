@@ -118,7 +118,7 @@ export function prepareSFCScriptSource(
   const scriptBlocks = blocks.filter((b) => b.type === "script");
   const scriptLangId = inferScriptLanguage(scriptBlocks);
   const externalScriptImports = extractExternalScriptImports(scriptBlocks);
-  if (scriptBlocks.length === 0) {
+  if (!scriptBlocks.length) {
     return {
       maskedSource: appendSyntheticImports(preserveLineStructure(source), externalScriptImports),
       scriptLangId,
@@ -187,7 +187,7 @@ function extractExternalScriptImports(blocks: SFCBlock[]): string[] {
 }
 
 function appendSyntheticImports(source: string, imports: string[]): string {
-  if (imports.length === 0) return source;
+  if (!imports.length) return source;
   const syntheticSource = imports.map((specifier) => `import ${JSON.stringify(specifier)};`).join("\n");
   return `${source}\n${syntheticSource}`;
 }
@@ -231,7 +231,7 @@ function lineForOffset(index: number[], offset: number): number {
 }
 
 function maskOutsideRanges(source: string, ranges: Range[]): string {
-  if (ranges.length === 0) return preserveLineStructure(source);
+  if (!ranges.length) return preserveLineStructure(source);
   const sorted = [...ranges].sort((a, b) => a.start - b.start);
   let current = sorted.shift()!;
   const chars = source.split("");

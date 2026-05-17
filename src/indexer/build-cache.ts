@@ -17,6 +17,7 @@ import {
   getGitBlobHashes,
   isFilePathWithinRoot,
   listProjectFiles,
+  normalizePath,
   normalizeResolutionHints,
   stringifyUnknown,
   type ProjectFileDiscoveryOptions,
@@ -60,7 +61,7 @@ export async function collectWorkspaceManifestDependencyEdges(
   const scopedManifestPaths = allowedManifestFiles
     ? manifestPaths.filter((manifestPath) => allowedManifestFiles.has(manifestPath))
     : manifestPaths;
-  if (scopedManifestPaths.length === 0) return [];
+  if (!scopedManifestPaths.length) return [];
 
   const manifestByPackageName = new Map<string, string>();
   const parsedByPath = new Map<string, PackageJsonDependencyInfo>();
@@ -152,7 +153,7 @@ export function closeDiskCacheDatabase(projectRoot: string, opts?: BuildOptions)
   }
 }
 
-export const MANIFEST_VERSION = 1;
+export const MANIFEST_VERSION = 2;
 
 export type ManifestFileEntry = GraphCacheEntry;
 
@@ -165,6 +166,8 @@ type ManifestBuildOptions = {
   discovery?: {
     includeGlobs?: string[];
     ignoreGlobs?: string[];
+    globRoot?: string;
+    gitignoreRoot?: string;
     useGitignore: boolean;
   };
 };
@@ -664,19 +667,24 @@ function normalizeManifestBuildOptions(opts?: ManifestBuildOptions): ManifestBui
 
 function normalizeDiscoveryOptions(discovery?: ProjectFileDiscoveryOptions): ManifestBuildOptions["discovery"] {
   if (!discovery) return undefined;
+  const normalizeGlob = (glob: string) => glob.trim().replace(/\\/g, "/");
   const includeGlobs = Array.from(
-    new Set((discovery.includeGlobs ?? []).map((glob) => glob.trim()).filter(Boolean)),
+    new Set((discovery.includeGlobs ?? []).map(normalizeGlob).filter(Boolean)),
   ).sort();
   const ignoreGlobs = Array.from(
-    new Set((discovery.ignoreGlobs ?? []).map((glob) => glob.trim()).filter(Boolean)),
+    new Set((discovery.ignoreGlobs ?? []).map(normalizeGlob).filter(Boolean)),
   ).sort();
+  const globRoot = discovery.globRoot ? normalizePath(path.resolve(discovery.globRoot)) : undefined;
+  const gitignoreRoot = discovery.gitignoreRoot ? normalizePath(path.resolve(discovery.gitignoreRoot)) : undefined;
   const useGitignore = discovery.useGitignore ?? true;
-  if (includeGlobs.length === 0 && ignoreGlobs.length === 0 && useGitignore) {
+  if (!includeGlobs.length && !ignoreGlobs.length && !globRoot && !gitignoreRoot && useGitignore) {
     return undefined;
   }
   return {
-    ...(includeGlobs.length > 0 ? { includeGlobs } : {}),
-    ...(ignoreGlobs.length > 0 ? { ignoreGlobs } : {}),
+    ...(includeGlobs.length ? { includeGlobs } : {}),
+    ...(ignoreGlobs.length ? { ignoreGlobs } : {}),
+    ...(globRoot ? { globRoot } : {}),
+    ...(gitignoreRoot ? { gitignoreRoot } : {}),
     useGitignore,
   };
 }
@@ -717,6 +725,8 @@ function normalizedDiscoveryOptionsEqual(
   const normalizedA = a ?? { useGitignore: true };
   const normalizedB = b ?? { useGitignore: true };
   if (normalizedA.useGitignore !== normalizedB.useGitignore) return false;
+  if (normalizedA.globRoot !== normalizedB.globRoot) return false;
+  if (normalizedA.gitignoreRoot !== normalizedB.gitignoreRoot) return false;
   const includeA = normalizedA.includeGlobs ?? [];
   const includeB = normalizedB.includeGlobs ?? [];
   if (includeA.length !== includeB.length) return false;
@@ -762,10 +772,10 @@ export function normalizeGraphOptions(opts?: GraphBuildOptions): GraphBuildOptio
   const fastRegexDisabledLanguages = normalizeLanguageList(opts?.fastRegexDisabledLanguages);
   return {
     fast: !!opts?.fast,
-    ...(fastRegexDisabledLanguages.length > 0 ? { fastRegexDisabledLanguages } : {}),
+    ...(fastRegexDisabledLanguages.length ? { fastRegexDisabledLanguages } : {}),
     resolveNodeModules: !!opts?.resolveNodeModules,
     dynamicImportHeuristics: !!opts?.dynamicImportHeuristics,
-    ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
+    ...(resolutionHints.length ? { resolutionHints } : {}),
   };
 }
 

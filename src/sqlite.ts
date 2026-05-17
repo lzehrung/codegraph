@@ -473,7 +473,7 @@ const clearCurrentGraphState = (db: SqliteDatabase) => {
 };
 
 const readSymbolIdsForFiles = (db: SqliteDatabase, files: string[]): string[] => {
-  if (files.length === 0) return [];
+  if (!files.length) return [];
   const placeholders = files.map(() => "?").join(", ");
   const sql = `SELECT id FROM symbols WHERE file IN (${placeholders});`;
   const values = execRowsParams(db, sql, files);
@@ -486,7 +486,7 @@ const readSymbolIdsForFiles = (db: SqliteDatabase, files: string[]): string[] =>
 };
 
 const deleteBySymbolIds = (db: SqliteDatabase, ids: string[]) => {
-  if (ids.length === 0) return;
+  if (!ids.length) return;
   const placeholders = ids.map(() => "?").join(", ");
   db.prepare(`DELETE FROM symbol_edges WHERE from_id IN (${placeholders});`).run(ids);
   db.prepare(`DELETE FROM symbol_edges WHERE to_id IN (${placeholders});`).run(ids);
@@ -494,19 +494,19 @@ const deleteBySymbolIds = (db: SqliteDatabase, ids: string[]) => {
 };
 
 const deleteFileEdgesForFiles = (db: SqliteDatabase, files: string[]) => {
-  if (files.length === 0) return;
+  if (!files.length) return;
   const placeholders = files.map(() => "?").join(", ");
   db.prepare(`DELETE FROM file_edges WHERE from_path IN (${placeholders});`).run(files);
 };
 
 const deleteFileEdgesToFiles = (db: SqliteDatabase, files: string[]) => {
-  if (files.length === 0) return;
+  if (!files.length) return;
   const placeholders = files.map(() => "?").join(", ");
   db.prepare(`DELETE FROM file_edges WHERE to_type = 'file' AND to_path IN (${placeholders});`).run(files);
 };
 
 const deleteFilesByPath = (db: SqliteDatabase, files: string[]) => {
-  if (files.length === 0) return;
+  if (!files.length) return;
   const placeholders = files.map(() => "?").join(", ");
   db.prepare(`DELETE FROM files WHERE path IN (${placeholders});`).run(files);
 };
@@ -554,7 +554,7 @@ const recordGraphSnapshot = (
       kind: "deleted" as const,
     })),
   ];
-  if (fileRows.length === 0) return;
+  if (!fileRows.length) return;
   const fileStmt = db.prepare(
     "INSERT INTO graph_snapshot_files (snapshot_id, file_path, change_kind) VALUES (?, ?, ?);",
   );
@@ -601,7 +601,7 @@ async function withReadOnlySqliteDatabase<T>(
 }
 
 function assertReadOnlyQueryStatement(stmt: SqliteStatement): void {
-  if (stmt.columns().length > 0) return;
+  if (stmt.columns().length) return;
   throw new Error("Raw SQLite queries must be read-only result-producing statements such as SELECT or PRAGMA.");
 }
 
@@ -690,7 +690,7 @@ export async function updateGraphSqlite(options: SqliteGraphUpdateOptions): Prom
         }
       }
 
-      if (fileEntries.length > 0) {
+      if (fileEntries.length) {
         insertFiles(db, dedupeFileEntries(fileEntries));
       }
 
@@ -698,19 +698,19 @@ export async function updateGraphSqlite(options: SqliteGraphUpdateOptions): Prom
       const changedSymbolNodes = [...changedSymbolIds]
         .map((id) => options.symbolGraph.nodes.get(id))
         .filter((node): node is SymbolNode => !!node);
-      if (changedSymbolNodes.length > 0) {
+      if (changedSymbolNodes.length) {
         insertSymbols(db, changedSymbolNodes);
       }
 
       const fileEdges = fileGraphEdgesForFiles(options.fileGraph, changedSet);
-      if (fileEdges.length > 0) {
+      if (fileEdges.length) {
         insertFileEdges(db, fileEdges);
       }
 
       const symbolEdges = options.fullGraphSync
         ? symbolGraphEdgesForSymbolIds(options.symbolGraph, changedSymbolIds)
         : symbolGraphEdgesForFiles(options.symbolGraph, changedSet);
-      if (symbolEdges.length > 0) {
+      if (symbolEdges.length) {
         insertSymbolEdges(db, symbolEdges);
       }
 
@@ -767,7 +767,7 @@ export async function queryGraphSqlite(outputPath: string, queryText: string): P
           "class",
         ]);
         const startFiles = rows.map((row) => toSqliteText(row[0])).filter(Boolean);
-        if (startFiles.length === 0) {
+        if (!startFiles.length) {
           return { kind: parsed.kind, results: [] };
         }
         const edges = loadFileEdges(db, "file").map((edge) => ({
@@ -836,7 +836,7 @@ export async function queryGraphSqlite(outputPath: string, queryText: string): P
         }));
         const reverseDeps = bfsReverseDependencies(edges, parsed.modulePath);
         const impactedFiles = [parsed.modulePath, ...reverseDeps];
-        if (impactedFiles.length === 0) {
+        if (!impactedFiles.length) {
           return { kind: parsed.kind, results: [] };
         }
         const placeholders = impactedFiles.map(() => "?").join(", ");

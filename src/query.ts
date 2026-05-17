@@ -44,7 +44,7 @@ export function parseSymbolQuery(input: string): SymbolQuery {
         .split(",")
         .map((k) => k.trim())
         .filter(Boolean) as SymbolNodeKind[];
-      if (kinds.length > 0) query.kinds = kinds;
+      if (kinds.length) query.kinds = kinds;
       continue;
     }
     if (key === "name") {
@@ -61,7 +61,7 @@ export function parseSymbolQuery(input: string): SymbolQuery {
     }
     residual.push(token);
   }
-  if (residual.length > 0) query.text = residual.join(" ");
+  if (residual.length) query.text = residual.join(" ");
   return query;
 }
 

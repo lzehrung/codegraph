@@ -239,7 +239,7 @@ export async function loadWorkspaceConfig(projectRoot: string): Promise<Workspac
   const include = Array.from(new Set(workspaceGlobs.include));
   const ignore = Array.from(new Set(workspaceGlobs.ignore));
 
-  if (include.length > 0) {
+  if (include.length) {
     const patterns = include.map(toPackageJsonGlob).filter(Boolean);
     const ignorePatterns = ignore.map(toPackageJsonGlob).filter(Boolean);
     const found = await fg(patterns, {

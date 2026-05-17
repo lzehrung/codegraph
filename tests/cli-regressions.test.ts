@@ -5,7 +5,7 @@ import fsp from "node:fs/promises";
 import { execFileSync, spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { textGrep } from "../src/index.js";
-import { runCli } from "../src/cli.js";
+import { isCliDiscoveryRelativePathInside, runCli } from "../src/cli.js";
 import packageJson from "../package.json" with { type: "json" };
 
 const tsxCliPath = path.resolve(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
@@ -22,7 +22,7 @@ async function runCliCommandDetailed(
   cwd = process.cwd(),
   env: NodeJS.ProcessEnv = {},
 ): Promise<{ stdout: string; stderr: string }> {
-  if (input === undefined && Object.keys(env).length === 0) {
+  if (input === undefined && !Object.keys(env).length) {
     return await runCliInProcess(args, cwd);
   }
   return await new Promise((resolve, reject) => {
@@ -101,6 +101,13 @@ function skillInstallTarget(rootDir: string): string {
 describe("CLI regressions", () => {
   const samplesRoot = normalize(path.resolve(process.cwd(), "tests", "samples"));
   const tsRoot = normalize(path.resolve(samplesRoot, "typescript"));
+
+  it("treats Windows cross-drive relative paths as outside CLI discovery roots", () => {
+    expect(isCliDiscoveryRelativePathInside("src/app.ts")).toBe(true);
+    expect(isCliDiscoveryRelativePathInside("../outside.ts")).toBe(false);
+    expect(isCliDiscoveryRelativePathInside("D:\\outside\\file.ts")).toBe(false);
+    expect(isCliDiscoveryRelativePathInside("D:/outside/file.ts")).toBe(false);
+  });
 
   it("graph --root + include root only scans include subtree", async () => {
     const stdout = await runCliCommand(["graph", "--stdout", "--root", samplesRoot, tsRoot]);
@@ -290,6 +297,31 @@ describe("CLI regressions", () => {
     ).toBe(true);
   });
 
+  it("chunk does not parse project config from the current working directory", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-chunk-bad-config-"));
+    const filePath = path.join(tmpDir, "main.ts");
+    await fsp.writeFile(path.join(tmpDir, "codegraph.config.json"), "{ not valid json", "utf8");
+    await fsp.writeFile(filePath, "export function helper() { return 1; }\n", "utf8");
+
+    const stdout = await runCliCommandDetailed(
+      ["chunk", filePath, "--min-tokens", "1", "--max-tokens", "50"],
+      undefined,
+      tmpDir,
+    );
+    const chunks = JSON.parse(stdout.stdout) as Array<{ languageId?: string; name?: string }>;
+
+    expect(chunks.some((chunk) => chunk.languageId === "typescript" && chunk.name === "helper")).toBe(true);
+  });
+
+  it("unknown commands do not parse project config from the current working directory", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-unknown-bad-config-"));
+    await fsp.writeFile(path.join(tmpDir, "codegraph.config.json"), "{ not valid json", "utf8");
+
+    await expect(runCliCommandDetailed(["not-a-codegraph-command"], undefined, tmpDir)).rejects.toThrow(
+      /Unknown command: not-a-codegraph-command/,
+    );
+  });
+
   it("graph honors .gitignore by default and --no-gitignore opts out", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-gitignore-"));
     const srcDir = path.join(tmpDir, "src");
@@ -341,6 +373,93 @@ describe("CLI regressions", () => {
     expect(nodes).toContain(normalize(appFile));
     expect(nodes).not.toContain(normalize(specFile));
     expect(nodes).not.toContain(normalize(jsFile));
+  });
+
+  it("graph applies codegraph.config.json discovery ignores", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-config-ignore-"));
+    const appFile = path.join(tmpDir, "src", "main.ts");
+    const sampleFile = path.join(tmpDir, "tests", "samples", "fixture.ts");
+    await fsp.mkdir(path.dirname(appFile), { recursive: true });
+    await fsp.mkdir(path.dirname(sampleFile), { recursive: true });
+    await fsp.writeFile(
+      path.join(tmpDir, "codegraph.config.json"),
+      JSON.stringify({ discovery: { ignoreGlobs: ["tests/samples/**"] } }),
+      "utf8",
+    );
+    await fsp.writeFile(appFile, "export const main = 1;\n", "utf8");
+    await fsp.writeFile(sampleFile, "export const fixture = 1;\n", "utf8");
+
+    const graph = JSON.parse(await runCliCommand(["graph", "--root", tmpDir, "--json"])) as { nodes: string[] };
+    const nodes = graph.nodes.map(normalize);
+
+    expect(nodes).toContain(normalize(appFile));
+    expect(nodes).not.toContain(normalize(sampleFile));
+  });
+
+  it("graph applies codegraph.config.json discovery ignores relative to --root for scoped include roots", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-config-scoped-ignore-"));
+    const testsDir = path.join(tmpDir, "tests");
+    const appFile = path.join(testsDir, "kept.test.ts");
+    const sampleFile = path.join(testsDir, "samples", "fixture.ts");
+    await fsp.mkdir(path.dirname(appFile), { recursive: true });
+    await fsp.mkdir(path.dirname(sampleFile), { recursive: true });
+    await fsp.writeFile(
+      path.join(tmpDir, "codegraph.config.json"),
+      JSON.stringify({ discovery: { ignoreGlobs: ["tests/samples/**"] } }),
+      "utf8",
+    );
+    await fsp.writeFile(appFile, "export const kept = 1;\n", "utf8");
+    await fsp.writeFile(sampleFile, "export const fixture = 1;\n", "utf8");
+
+    const graph = JSON.parse(await runCliCommand(["graph", "--root", tmpDir, testsDir, "--json"])) as {
+      nodes: string[];
+    };
+    const nodes = graph.nodes.map(normalize);
+
+    expect(nodes).toContain(normalize(appFile));
+    expect(nodes).not.toContain(normalize(sampleFile));
+  });
+
+  it("keeps CLI include globs relative to scoped include roots while config ignores stay root-relative", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-scoped-include-glob-"));
+    const testsDir = path.join(tmpDir, "tests");
+    const unitFile = path.join(testsDir, "unit", "kept.test.ts");
+    const generatedUnitFile = path.join(testsDir, "unit", "generated", "drop.test.ts");
+    const integrationFile = path.join(testsDir, "integration", "skipped.test.ts");
+    const sampleFile = path.join(testsDir, "samples", "fixture.ts");
+    await fsp.mkdir(path.dirname(unitFile), { recursive: true });
+    await fsp.mkdir(path.dirname(generatedUnitFile), { recursive: true });
+    await fsp.mkdir(path.dirname(integrationFile), { recursive: true });
+    await fsp.mkdir(path.dirname(sampleFile), { recursive: true });
+    await fsp.writeFile(
+      path.join(tmpDir, "codegraph.config.json"),
+      JSON.stringify({ discovery: { ignoreGlobs: ["tests/samples/**"] } }),
+      "utf8",
+    );
+    await fsp.writeFile(unitFile, "export const kept = 1;\n", "utf8");
+    await fsp.writeFile(generatedUnitFile, "export const generated = 1;\n", "utf8");
+    await fsp.writeFile(integrationFile, "export const skipped = 1;\n", "utf8");
+    await fsp.writeFile(sampleFile, "export const fixture = 1;\n", "utf8");
+
+    const graph = JSON.parse(
+      await runCliCommand([
+        "graph",
+        "--root",
+        tmpDir,
+        testsDir,
+        "--json",
+        "--include-glob",
+        "unit/**",
+        "--ignore-glob",
+        "unit/generated/**",
+      ]),
+    ) as { nodes: string[] };
+    const nodes = graph.nodes.map(normalize);
+
+    expect(nodes).toContain(normalize(unitFile));
+    expect(nodes).not.toContain(normalize(generatedUnitFile));
+    expect(nodes).not.toContain(normalize(integrationFile));
+    expect(nodes).not.toContain(normalize(sampleFile));
   });
 
   it("--resolve-node-modules does not make node_modules a direct scan root", async () => {
@@ -483,6 +602,28 @@ describe("CLI regressions", () => {
     expect(result.columns).toEqual(["name"]);
     const names = result.rows.map((row) => String(row[0]));
     expect(names).toContain("helper");
+  });
+
+  it("sql does not parse project config from the current working directory", async () => {
+    const projectDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-sql-db-"));
+    const cwdDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-sql-bad-config-"));
+    await fsp.writeFile(path.join(projectDir, "main.ts"), "export function helper() { return 1; }\n", "utf8");
+    await fsp.writeFile(path.join(cwdDir, "codegraph.config.json"), "{ not valid json", "utf8");
+    const dbPath = path.join(projectDir, "graph.sqlite");
+    await runCliCommand(["graph", "--root", projectDir, "--sqlite", dbPath]);
+
+    const stdout = await runCliCommandDetailed(
+      ["sql", "--db", dbPath, "--query", "SELECT COUNT(*) AS count FROM symbols;"],
+      undefined,
+      cwdDir,
+    );
+    const result = JSON.parse(stdout.stdout) as {
+      columns: string[];
+      rows: Array<Array<unknown>>;
+    };
+
+    expect(result.columns).toEqual(["count"]);
+    expect(result.rows).toEqual([[1]]);
   });
 
   it("sql rejects mutating statements and leaves the graph export intact", async () => {
@@ -979,7 +1120,7 @@ describe("CLI regressions", () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-search-"));
     await fsp.writeFile(
       path.join(root, "auth.ts"),
-      "export function validateUser(token: string) { return token.length > 0; }\n",
+      "export function validateUser(token: string) { return !!token.length; }\n",
     );
     await fsp.writeFile(
       path.join(root, "main.ts"),
@@ -1237,6 +1378,45 @@ index 1111111..2222222 100644
     expect(report.format).toBe("full");
   });
 
+  it("impact CLI applies codegraph.config.json discovery ignores to raw diff changed files", async () => {
+    const root = await mkTmpDir("dg-impact-config-ignore-");
+    await fsp.mkdir(path.join(root, "src"), { recursive: true });
+    await fsp.mkdir(path.join(root, "tests", "samples"), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "codegraph.config.json"),
+      JSON.stringify({ discovery: { ignoreGlobs: ["tests/samples/**"] } }),
+      "utf8",
+    );
+    await fsp.writeFile(path.join(root, "src", "main.ts"), "export const main = 1;\n", "utf8");
+    await fsp.writeFile(path.join(root, "tests", "samples", "fixture.ts"), "export const fixture = 1;\n", "utf8");
+    const diffText = [
+      "diff --git a/src/main.ts b/src/main.ts",
+      "index 1111111..2222222 100644",
+      "--- a/src/main.ts",
+      "+++ b/src/main.ts",
+      "@@ -1 +1 @@",
+      "-export const main = 0;",
+      "+export const main = 1;",
+      "diff --git a/tests/samples/fixture.ts b/tests/samples/fixture.ts",
+      "index 3333333..4444444 100644",
+      "--- a/tests/samples/fixture.ts",
+      "+++ b/tests/samples/fixture.ts",
+      "@@ -1 +1 @@",
+      "-export const fixture = 0;",
+      "+export const fixture = 1;",
+      "",
+    ].join("\n");
+
+    const stdout = await runCliCommand(["impact", root, "--provider", "raw"], diffText);
+    const report = JSON.parse(stdout) as {
+      changedFiles: Array<{ file: string }>;
+      diagnostics?: { changedFilesIgnored?: number };
+    };
+
+    expect(report.changedFiles.map((entry) => entry.file)).toEqual(["src/main.ts"]);
+    expect(report.diagnostics?.changedFilesIgnored).toBe(1);
+  });
+
   it("review CLI accepts WORKTREE as a git head sentinel", async () => {
     const root = await mkTmpDir("dg-review-worktree-");
     initGitRepo(root);
@@ -1258,6 +1438,42 @@ index 1111111..2222222 100644
     expect(report.changedFiles.map((entry) => entry.file)).toEqual(["main.ts"]);
     expect(report.base).toBe("HEAD");
     expect(report.head).toBe("WORKTREE");
+  });
+
+  it("review CLI applies codegraph.config.json discovery ignores to git changed files", async () => {
+    const root = await mkTmpDir("dg-review-config-ignore-");
+    initGitRepo(root);
+    await fsp.mkdir(path.join(root, "src"), { recursive: true });
+    await fsp.mkdir(path.join(root, "tests", "samples"), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "codegraph.config.json"),
+      JSON.stringify({ discovery: { ignoreGlobs: ["tests/samples/**"] } }),
+      "utf8",
+    );
+    await fsp.writeFile(path.join(root, "src", "main.ts"), "export function value() { return 1; }\n", "utf8");
+    await fsp.writeFile(
+      path.join(root, "tests", "samples", "fixture.ts"),
+      "export function fixture() { return 1; }\n",
+      "utf8",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "initial"]);
+
+    await fsp.writeFile(path.join(root, "src", "main.ts"), "export function value() { return 2; }\n", "utf8");
+    await fsp.writeFile(
+      path.join(root, "tests", "samples", "fixture.ts"),
+      "export function fixture() { return 2; }\n",
+      "utf8",
+    );
+
+    const stdout = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE"]);
+    const report = JSON.parse(stdout) as {
+      status?: string;
+      changedFiles: Array<{ file: string }>;
+    };
+
+    expect(report.status).toBe("ok");
+    expect(report.changedFiles.map((entry) => entry.file)).toEqual(["src/main.ts"]);
   });
 
   it("review CLI prints a compact human summary with --summary", async () => {

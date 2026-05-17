@@ -115,7 +115,7 @@ describe("build-native-if-available", () => {
       spawnSyncImpl,
       platform: "win32",
       logger: { warn },
-      cwd: "E:\\git repos\\codegraph",
+      cwd: "C:\\work repos\\codegraph",
       readdirSyncImpl,
       rmSyncImpl,
     });
@@ -124,14 +124,14 @@ describe("build-native-if-available", () => {
     expect(rmSyncImpl).toHaveBeenCalledTimes(2);
     expect(rmSyncImpl).toHaveBeenNthCalledWith(
       1,
-      "E:\\git repos\\codegraph\\packages\\codegraph-native\\index.win32-x64-msvc.node",
+      "C:\\work repos\\codegraph\\packages\\codegraph-native\\index.win32-x64-msvc.node",
       {
         force: true,
       },
     );
     expect(rmSyncImpl).toHaveBeenNthCalledWith(
       2,
-      "E:\\git repos\\codegraph\\packages\\codegraph-native\\npm\\win32-x64-msvc\\index.win32-x64-msvc.node",
+      "C:\\work repos\\codegraph\\packages\\codegraph-native\\npm\\win32-x64-msvc\\index.win32-x64-msvc.node",
       { force: true },
     );
     expect(spawnSyncImpl).toHaveBeenCalledTimes(2);
@@ -160,7 +160,7 @@ describe("build-native-if-available", () => {
       spawnSyncImpl,
       platform: "win32",
       logger: { warn },
-      cwd: "E:\\git repos\\codegraph",
+      cwd: "C:\\work\\codegraph",
       readdirSyncImpl,
       rmSyncImpl,
     });

@@ -29,7 +29,7 @@ export function chunkSFCFile(opts: ChunkSFCOptions): Chunk[] {
   const blocks =
     framework === "svelte" ? [...baseBlocks, ...buildSvelteTemplateBlocks(source, baseBlocks)] : baseBlocks;
 
-  if (blocks.length === 0) {
+  if (!blocks.length) {
     return chunkTextFile({
       source,
       filePath,

@@ -275,7 +275,7 @@ export function prepareNativePackageManifestForPublish(sourcePkg, version, gener
           Object.entries(generatedPkg.optionalDependencies).sort(([left], [right]) => left.localeCompare(right)),
         )
       : null;
-  if (!generatedOptionalDependencies || Object.keys(generatedOptionalDependencies).length === 0) {
+  if (!Object.keys(generatedOptionalDependencies ?? {}).length) {
     throw new Error("Missing generated native platform optionalDependencies for native meta publish.");
   }
   return {

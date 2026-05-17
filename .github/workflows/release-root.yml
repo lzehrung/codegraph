@@ -37,7 +37,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24.10.0
           cache: npm
           registry-url: https://npm.pkg.github.com
           scope: "@lzehrung"
@@ -74,7 +74,10 @@ jobs:
           NODE
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm ci --ignore-scripts
+          node ./scripts/patch-tree-sitter-node24.mjs
+          npm rebuild
 
       - name: Publish root release
         env:

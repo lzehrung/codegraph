@@ -94,10 +94,10 @@ export function runLanguageTests(def: LanguageTestDefinition) {
       beforeAll(async () => {
         const parityFiles = collectParityFiles();
         index =
-          parityFiles.length > 0
+          parityFiles.length
             ? await createTestIndexFromFiles(samplePath, parityFiles)
             : await createTestIndexFromPath(samplePath);
-        graph = parityFiles.length > 0 ? await collectGraph(samplePath, parityFiles) : index.graph;
+        graph = parityFiles.length ? await collectGraph(samplePath, parityFiles) : index.graph;
       });
 
       const matchEdge = (edge: Edge, expectation: DependencyGraphExpectation) => {

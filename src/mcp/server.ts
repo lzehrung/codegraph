@@ -560,7 +560,7 @@ async function readJsonRequestBody(request: IncomingMessage, maxBytes: number): 
 
   const rawBody = Buffer.concat(chunks).toString("utf8");
   try {
-    const body: unknown = rawBody.length > 0 ? JSON.parse(rawBody) : null;
+    const body: unknown = rawBody.length ? JSON.parse(rawBody) : null;
     return { status: "ok", body };
   } catch {
     return { status: "invalid_json" };
@@ -871,7 +871,7 @@ const artifactBuildSchema = z.object({
 });
 
 function objectSchema(properties: Record<string, object>, required: string[] = []): Tool["inputSchema"] {
-  return required.length > 0 ? { type: "object", properties, required } : { type: "object", properties };
+  return required.length ? { type: "object", properties, required } : { type: "object", properties };
 }
 
 const stringProperty = { type: "string" };
@@ -1202,7 +1202,7 @@ async function readFilePrefix(filePath: string, maxBytes: number): Promise<{ tex
 }
 
 function trimToUtf8Boundary(buffer: Buffer): Buffer {
-  if (buffer.length === 0) return buffer;
+  if (!buffer.length) return buffer;
   let leadIndex = buffer.length - 1;
   while (leadIndex >= 0) {
     const byte = buffer[leadIndex];

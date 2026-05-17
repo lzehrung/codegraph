@@ -101,7 +101,7 @@ function collectTsconfigBlastRadius(
   index: ProjectIndex,
   aliases: string[],
 ): { aliases: string[]; importers: string[] } {
-  if (aliases.length === 0) {
+  if (!aliases.length) {
     return { aliases: [], importers: [] };
   }
   const aliasSet = new Set(aliases);
@@ -159,12 +159,12 @@ function classifyConfigImpact(
   if (isTsconfig) {
     const aliases = collectTsconfigPathAliases(change);
     const blastRadius = collectTsconfigBlastRadius(index, aliases);
-    if (blastRadius.aliases.length > 0) {
+    if (blastRadius.aliases.length) {
       const relImporters = blastRadius.importers
         .slice(0, 5)
         .map((file) => path.relative(projectRoot, file).replace(/\\/g, "/"));
       const importerSummary =
-        blastRadius.importers.length > 0
+        blastRadius.importers.length
           ? `Likely impacted importer files: ${relImporters.join(", ")}${
               blastRadius.importers.length > relImporters.length ? ", ..." : ""
             }.`
@@ -197,7 +197,7 @@ function classifyConfigImpact(
     }
     if (lineSignals.includes("plugin")) signalParts.push("plugin execution order");
     if (lineSignals.includes("define")) signalParts.push("compile-time constants");
-    const detailsSuffix = signalParts.length > 0 ? ` Detected changes touch ${signalParts.join(", ")}.` : "";
+    const detailsSuffix = signalParts.length ? ` Detected changes touch ${signalParts.join(", ")}.` : "";
     return {
       details: `Build tool configuration changed (${path.basename(change.path)}); bundling and runtime artifact behavior may change.${detailsSuffix}`,
       confidence: "high",
@@ -213,7 +213,7 @@ function classifyConfigImpact(
       lineSignals.includes("cache") ||
       lineSignals.includes("outputs");
     const scopeSummary =
-      workspaceManifests.length > 0
+      workspaceManifests.length
         ? `${workspaceManifests.length} workspace package manifest(s) discovered.`
         : "Workspace package manifests were not discovered.";
     return {
@@ -325,7 +325,7 @@ function collectConfigAndBreakingSuggestions(
       const removedLines = removedLinesByFile.get(normalized);
       if (!removedLines || removedLines.size === 0) continue;
       const mod = index.byFile.get(normalized);
-      const hasExports = (mod?.exports.length ?? 0) > 0;
+      const hasExports = !!mod?.exports.length;
       const alreadyHasForFile = Array.from(breakingByKey.values()).some((entry) => entry.file === normalized);
       if (!hasExports || alreadyHasForFile) continue;
       upsertBreakingSuggestion({
@@ -402,7 +402,7 @@ async function collectUntestedChangeSuggestions(
     const template = options?.testCommandTemplate?.trim();
     if (template) {
       if (template.includes("{files}")) {
-        const fileArg = candidateNames.length > 0 ? candidateNames.join(" ") : "";
+        const fileArg = candidateNames.length ? candidateNames.join(" ") : "";
         return template.replace("{files}", fileArg).trim();
       }
       return template;
@@ -418,7 +418,7 @@ async function collectUntestedChangeSuggestions(
     } else if (hasPackage) {
       runner = "npm run";
     }
-    if (candidateNames.length === 0) {
+    if (!candidateNames.length) {
       return runner === "npm run" ? "npm run test" : `${runner} test`;
     }
     const target = candidateNames[0]!;
@@ -488,7 +488,7 @@ async function collectUntestedChangeSuggestions(
     const suggestedCommand = inferTestCommand(candidateNames);
 
     const details =
-      candidateNames.length > 0
+      candidateNames.length
         ? `Changed symbol has no discovered references in test files. ${coverageSummary} Candidate tests: ${candidateNames.join(", ")}. Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`
         : `Changed symbol has no discovered references in test files. ${coverageSummary} Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`;
 
@@ -741,7 +741,7 @@ function detectExportSignatureChanges(change: FileChange): SignatureChange[] {
       });
       continue;
     }
-    if (!matched && added.length > 0) {
+    if (!matched && added.length) {
       const candidates = addedByHunk.get(removedSig.hunkIndex) ?? [];
       const candidate = candidates.find((entry) => Math.abs(entry.line - removedSig.line) <= 3);
       const renameDetails = candidate
@@ -769,7 +769,7 @@ async function loadCoverageByFile(
 ): Promise<Map<string, FileCoverage>> {
   const coverage = new Map<string, FileCoverage>();
   const allPaths = [...(options?.lcovPaths ?? []), ...(options?.coveragePaths ?? [])];
-  if (allPaths.length === 0) return coverage;
+  if (!allPaths.length) return coverage;
 
   const ensureFileCoverage = (filePath: string): FileCoverage => {
     const existing = coverage.get(filePath);

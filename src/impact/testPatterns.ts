@@ -34,7 +34,7 @@ export function isTestFilePath(file: FileId, patterns: RegExp[]): boolean {
 
 function inferCommonProjectRoot(files: readonly FileId[]): string | null {
   const directories = Array.from(files, (file) => path.posix.dirname(normalizePath(file)));
-  if (directories.length === 0) {
+  if (!directories.length) {
     return null;
   }
 
@@ -50,7 +50,7 @@ function inferCommonProjectRoot(files: readonly FileId[]): string | null {
     sharedSegments.push(segment);
   }
 
-  if (sharedSegments.length === 0) {
+  if (!sharedSegments.length) {
     return null;
   }
   return sharedSegments.join("/");
