@@ -5,7 +5,7 @@ import fsp from "node:fs/promises";
 import { execFileSync, spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { textGrep } from "../src/index.js";
-import { runCli } from "../src/cli.js";
+import { isCliDiscoveryRelativePathInside, runCli } from "../src/cli.js";
 import packageJson from "../package.json" with { type: "json" };
 
 const tsxCliPath = path.resolve(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
@@ -101,6 +101,13 @@ function skillInstallTarget(rootDir: string): string {
 describe("CLI regressions", () => {
   const samplesRoot = normalize(path.resolve(process.cwd(), "tests", "samples"));
   const tsRoot = normalize(path.resolve(samplesRoot, "typescript"));
+
+  it("treats Windows cross-drive relative paths as outside CLI discovery roots", () => {
+    expect(isCliDiscoveryRelativePathInside("src/app.ts")).toBe(true);
+    expect(isCliDiscoveryRelativePathInside("../outside.ts")).toBe(false);
+    expect(isCliDiscoveryRelativePathInside("D:\\outside\\file.ts")).toBe(false);
+    expect(isCliDiscoveryRelativePathInside("D:/outside/file.ts")).toBe(false);
+  });
 
   it("graph --root + include root only scans include subtree", async () => {
     const stdout = await runCliCommand(["graph", "--stdout", "--root", samplesRoot, tsRoot]);

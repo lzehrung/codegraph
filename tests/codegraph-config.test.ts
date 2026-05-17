@@ -10,11 +10,7 @@ async function mkRepo(): Promise<string> {
   await fs.mkdir(path.join(root, "src"), { recursive: true });
   await fs.mkdir(path.join(root, "tests", "samples"), { recursive: true });
   await fs.writeFile(path.join(root, "src", "kept.ts"), "export const keptAlpha = true;\n", "utf8");
-  await fs.writeFile(
-    path.join(root, "tests", "samples", "ignored.ts"),
-    "export const ignoredZebra = true;\n",
-    "utf8",
-  );
+  await fs.writeFile(path.join(root, "tests", "samples", "ignored.ts"), "export const ignoredZebra = true;\n", "utf8");
   return root;
 }
 
@@ -58,6 +54,22 @@ describe("codegraph config", () => {
       gitignoreRoot: "repo-root",
       useGitignore: false,
     });
+  });
+
+  it("normalizes glob separators before de-duping merged discovery options", () => {
+    const merged = mergeDiscoveryOptions(
+      {
+        includeGlobs: ["src\\**\\*.ts", " src/**/*.ts "],
+        ignoreGlobs: ["tests\\samples\\**"],
+      },
+      {
+        includeGlobs: ["src/**/*.ts"],
+        ignoreGlobs: ["tests/samples/**", "dist\\**"],
+      },
+    );
+
+    expect(merged.includeGlobs).toEqual(["src/**/*.ts"]);
+    expect(merged.ignoreGlobs).toEqual(["tests/samples/**", "dist/**"]);
   });
 
   it("recognizes discovery root and logging options as meaningful options", () => {

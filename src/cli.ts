@@ -70,6 +70,7 @@ import {
   resolveFilePathFromRoot,
   type ProjectFileDiscoveryOptions,
 } from "./util.js";
+import { isRelativePathInside } from "./util/projectFiles.js";
 
 function toJSON(obj: unknown): string {
   return JSON.stringify(obj, null, 2);
@@ -79,16 +80,20 @@ function normalizeCliGlobPattern(globPattern: string): string {
   return globPattern.trim().replace(/\\/g, "/");
 }
 
+export function isCliDiscoveryRelativePathInside(relativePath: string): boolean {
+  return isRelativePathInside(relativePath);
+}
+
 function matchesCliDiscoveryGlob(
   absolutePath: string,
   scanRoot: string,
   matcher: (relativePath: string) => boolean,
 ): boolean {
-  const relativePath = normalizePath(path.relative(scanRoot, absolutePath));
-  if (!relativePath || relativePath.startsWith("..")) {
+  const relativePath = path.relative(scanRoot, absolutePath);
+  if (!isCliDiscoveryRelativePathInside(relativePath)) {
     return false;
   }
-  return matcher(relativePath);
+  return matcher(normalizePath(relativePath));
 }
 
 function filterFilesByCliDiscoveryGlobs(
@@ -519,8 +524,9 @@ function buildRecommendedInspectCommands(
   hasUnresolvedImports: boolean,
 ): string[] {
   const rootFlag = `--root "${normalizePathForDisplay(projectRoot)}"`;
-  const targetSuffix =
-    includeRoots.length ? ` ${includeRoots.map((root) => `"${normalizePathForDisplay(root)}"`).join(" ")}` : "";
+  const targetSuffix = includeRoots.length
+    ? ` ${includeRoots.map((root) => `"${normalizePathForDisplay(root)}"`).join(" ")}`
+    : "";
   const commands = [
     `codegraph hotspots ${rootFlag}${targetSuffix} --limit 20 --json`,
     `codegraph graph ${rootFlag}${targetSuffix} --json --symbols-detailed --compact-json`,
@@ -1376,15 +1382,13 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     if (!includeRootsAbs.length) return await listProjectFiles(projectRootFs, undefined, discoveryOptions);
     const normalizedRoots = includeRootsAbs;
     const all: string[][] = await Promise.all(
-      normalizedRoots.map(
-        async (r) => {
-          const files = await listProjectFiles(r, undefined, {
-            ...includeRootDiscoveryOptions,
-            gitignoreRoot: projectRootFs,
-          });
-          return filterFilesByCliDiscoveryGlobs(files, r, cliGlobDiscoveryOptions);
-        },
-      ),
+      normalizedRoots.map(async (r) => {
+        const files = await listProjectFiles(r, undefined, {
+          ...includeRootDiscoveryOptions,
+          gitignoreRoot: projectRootFs,
+        });
+        return filterFilesByCliDiscoveryGlobs(files, r, cliGlobDiscoveryOptions);
+      }),
     );
     return Array.from(new Set(all.flat()));
   };

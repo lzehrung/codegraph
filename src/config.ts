@@ -27,17 +27,17 @@ export type CodegraphConfig = {
 };
 
 function uniq(values: readonly string[]): string[] {
-  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+  return Array.from(new Set(values.map((value) => value.trim().replace(/\\/g, "/")).filter(Boolean)));
 }
 
 export function hasDiscoveryOptions(discovery: ProjectFileDiscoveryOptions): boolean {
   return Boolean(
     discovery.includeGlobs?.length ||
-      discovery.ignoreGlobs?.length ||
-      discovery.useGitignore !== undefined ||
-      discovery.globRoot ||
-      discovery.gitignoreRoot ||
-      discovery.logLevel,
+    discovery.ignoreGlobs?.length ||
+    discovery.useGitignore !== undefined ||
+    discovery.globRoot ||
+    discovery.gitignoreRoot ||
+    discovery.logLevel,
   );
 }
 
@@ -61,7 +61,9 @@ export function mergeDiscoveryOptions(
   };
 }
 
-function normalizeDiscoveryConfig(discovery: ParsedCodegraphConfig["discovery"]): ProjectFileDiscoveryOptions | undefined {
+function normalizeDiscoveryConfig(
+  discovery: ParsedCodegraphConfig["discovery"],
+): ProjectFileDiscoveryOptions | undefined {
   if (!discovery) return undefined;
   const normalized: ProjectFileDiscoveryOptions = {
     ...(discovery.includeGlobs !== undefined ? { includeGlobs: discovery.includeGlobs } : {}),
