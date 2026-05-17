@@ -113,16 +113,6 @@ function assertSafeSkillInstallTarget(targetDir: string): string {
   return resolvedTarget;
 }
 
-function assertSkillInstallParentExists(targetDir: string): void {
-  const parentDir = path.dirname(targetDir);
-  if (!pathExists(parentDir)) {
-    throw new Error(
-      `Skill install target parent directory does not exist: ${normalizePathForDisplay(parentDir)}. ` +
-        "Create the agent skills directory first, then rerun the install command.",
-    );
-  }
-}
-
 function resolveSkillInstallTarget(requestedTargetDir: string | undefined, requestedAgent: string | undefined) {
   const agent = parseSkillInstallAgent(requestedAgent);
   if (requestedTargetDir && agent) {
@@ -206,7 +196,6 @@ export async function handleSkillCommand(context: SkillCommandContext): Promise<
     }
     const resolvedTarget = resolveSkillInstallTarget(targetOpt, agentOpt);
     const targetDir = resolvedTarget.targetDir;
-    assertSkillInstallParentExists(targetDir);
     await copyDirectoryRecursive(bundledSkillDir, targetDir, overwrite);
     context.writeJSONLine({
       ...(resolvedTarget.agent
