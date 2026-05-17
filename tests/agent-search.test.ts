@@ -15,11 +15,11 @@ async function mkRepo(): Promise<string> {
     path.join(root, "src", "auth.ts"),
     [
       "export function validateUser(token: string) {",
-      "  return token.length > 0;",
+      "  return !!token.length;",
       "}",
       "",
       "export function revokeSession(sessionId: string) {",
-      "  return sessionId.length > 0;",
+      "  return !!sessionId.length;",
       "}",
       "",
     ].join("\n"),

@@ -75,6 +75,39 @@ Examples:
   codegraph refs --file src/index.ts --line 42 --col 10
 `;
 
+const knownCliCommands = new Set([
+  "apisurface",
+  "artifact",
+  "chunk",
+  "cycles",
+  "deps",
+  "doctor",
+  "dumpmod",
+  "explain",
+  "goto",
+  "graph",
+  "graph-delta",
+  "grep",
+  "hotspots",
+  "impact",
+  "index",
+  "inspect",
+  "mcp",
+  "path",
+  "rdeps",
+  "refs",
+  "review",
+  "search",
+  "skill",
+  "sql",
+  "unresolved",
+  "version",
+]);
+
+export function isKnownCliCommand(command: string): boolean {
+  return knownCliCommands.has(command);
+}
+
 export const SEARCH_HELP_TEXT = `codegraph search - Ranked agent search across project context
 
 Usage: codegraph search "<query>" [--root <path>] [--mode hybrid|symbol|path|text|graph|sql] [--limit <n>] [--from <file|handle>] [--depth <n>] [--no-snippets] [--json]

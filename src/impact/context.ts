@@ -146,7 +146,7 @@ async function collectSymbolNeighbors(
     relationship: "uses" | "usedBy";
   }> = [];
 
-  if (changedSymbolIds.length === 0) return neighbors;
+  if (!changedSymbolIds.length) return neighbors;
 
   const symbolGraph = await buildSymbolGraphDetailed(index, {
     scope: "all",
@@ -183,7 +183,7 @@ async function collectSymbolNeighbors(
 
   const visitedSymbols = new Set<string>(changedSymbolIds);
   let currentLevel = changedSymbolIds.slice();
-  for (let depth = 0; depth < hops && currentLevel.length > 0; depth++) {
+  for (let depth = 0; depth < hops && currentLevel.length; depth++) {
     const nextLevel: string[] = [];
 
     for (const symbolId of currentLevel) {

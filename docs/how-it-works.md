@@ -17,6 +17,12 @@ Runtime behavior, performance characteristics, architecture, extension points, a
 - If the output looks off, rerun without `--fast-graph`.
 - Programmatic callers can set `graph.fastRegexDisabledLanguages` to opt specific languages out of regex fast paths.
 
+### Scan scope
+
+- Keep large fixtures, generated trees, and vendored code out of default scans with `codegraph.config.json`.
+- `discovery.ignoreGlobs` reduces the file set before indexing, search text reads, unresolved-import checks, graphing, impact, and review work.
+- CLI `--include-glob` and `--ignore-glob` are additive one-off filters. `--no-gitignore` disables gitignore filtering for that command.
+
 ### Caching
 
 - Modes: `off` (default), `memory` (per-process), `disk` (persist across runs under `.codegraph-cache/index-v1`)

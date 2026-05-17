@@ -499,7 +499,7 @@ function expandStarImports(modules: Map<FileId, ModuleIndex>): void {
       if (!target) continue;
       const targetSupport = supportForFile(imp.resolved);
       const exportedSymbols =
-        target.exports.filter((entry) => entry.type === "local").length > 0
+        target.exports.filter((entry) => entry.type === "local").length
           ? target.exports
               .filter((entry): entry is Extract<typeof entry, { type: "local" }> => entry.type === "local")
               .map((entry) => entry.target)
@@ -537,10 +537,15 @@ type ManifestMode = "off" | "read-only" | "read-write";
 type BuildIndexHelperOptions = {
   manifestMode?: ManifestMode;
   warnNoFilesMessage?: string;
+  ignoreExistingManifest?: boolean;
 };
 
-async function buildProjectIndexFromExport(projectRoot: string, opts?: BuildOptions): Promise<ProjectIndex> {
-  return buildProjectIndex(projectRoot, opts);
+async function buildProjectIndexFromExport(
+  projectRoot: string,
+  opts?: BuildOptions,
+  helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest">,
+): Promise<ProjectIndex> {
+  return buildProjectIndexWithManifestOptions(projectRoot, opts, helperOpts);
 }
 
 async function buildIndexFromFileListShared(
@@ -563,14 +568,14 @@ async function buildIndexFromFileListShared(
   initManifestReport(report, useManifest, false);
   initNativeBackendReport(report);
   const normalizedFiles = Array.from(new Set(normalizeIndexedFileInputs(projectRoot, rawFiles ?? [], "Index file")));
-  if (normalizedFiles.length === 0 && helperOpts?.warnNoFilesMessage) {
+  if (!normalizedFiles.length && helperOpts?.warnNoFilesMessage) {
     logWithLevel(opts?.logLevel, "warn", helperOpts.warnNoFilesMessage);
   }
   const fileReport = initFileReport(report);
   const onFallbackImportExtraction = createFallbackImportExtractionHandler(report, opts);
   if (fileReport) fileReport.total = normalizedFiles.length;
   const manifestStart = performance.now();
-  const manifest = useManifest ? await loadManifest(projectRoot, opts) : null;
+  const manifest = useManifest && !helperOpts?.ignoreExistingManifest ? await loadManifest(projectRoot, opts) : null;
   const manifestFiles = sanitizeManifestEntriesForRoot(projectRoot, manifest?.files);
   if (timings && useManifest) {
     timings.manifestMs = Math.round(performance.now() - manifestStart);
@@ -768,7 +773,7 @@ async function buildIndexFromFileListShared(
     if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
     const graphStart = performance.now();
     const appendUniqueGraphEdges = (edges: Edge[]) => {
-      if (edges.length === 0) return;
+      if (!edges.length) return;
       const seen = new Set(
         graph.edges.map(
           (edge) =>
@@ -854,6 +859,28 @@ async function buildIndexFromFileListShared(
   }
 }
 
+async function buildProjectIndexWithManifestOptions(
+  projectRoot: string,
+  opts?: BuildOptions,
+  helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest">,
+): Promise<ProjectIndex> {
+  try {
+    const files = await listProjectFiles(projectRoot, undefined, {
+      ...opts?.discovery,
+      ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+    });
+    return buildIndexFromFileListShared(projectRoot, files, opts, {
+      manifestMode: "read-write",
+      warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,
+      ...(helperOpts?.ignoreExistingManifest ? { ignoreExistingManifest: true } : {}),
+    });
+  } finally {
+    if ((opts?.cache ?? "off") === "disk") {
+      closeDiskCacheDatabase(projectRoot, opts);
+    }
+  }
+}
+
 /**
  * Build a complete project index for a repo root.
  *
@@ -863,20 +890,7 @@ async function buildIndexFromFileListShared(
  * deterministic packets from the same repo snapshot.
  */
 export async function buildProjectIndex(projectRoot: string, opts?: BuildOptions): Promise<ProjectIndex> {
-  try {
-    const files = await listProjectFiles(projectRoot, undefined, {
-      ...opts?.discovery,
-      ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-    });
-    return buildIndexFromFileListShared(projectRoot, files, opts, {
-      manifestMode: "read-write",
-      warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,
-    });
-  } finally {
-    if ((opts?.cache ?? "off") === "disk") {
-      closeDiskCacheDatabase(projectRoot, opts);
-    }
-  }
+  return buildProjectIndexWithManifestOptions(projectRoot, opts);
 }
 
 /**
@@ -935,25 +949,29 @@ export async function buildProjectIndexIncremental(
     if (manifestReport && !manifestUsed) manifestReport.reason = "missing";
     const optionDiffs = diffBuildOptions(manifest?.buildOptions, opts);
     const warningOptionDiffs = optionDiffs.filter((diff) => diff !== "cache");
-    if (warningOptionDiffs.length > 0) {
+    if (warningOptionDiffs.length) {
       logWithLevel(
         opts?.logLevel,
         "warn",
         `Warning: Manifest options differ from current build options: ${warningOptionDiffs.join(", ")}`,
       );
     }
-    if (manifestReport && optionDiffs.length > 0) {
+    if (manifestReport && optionDiffs.length) {
       manifestReport.optionsMismatch = optionDiffs;
     }
     const currentConfigHashResult = await computeConfigHash(projectRoot, opts?.logLevel);
     const currentConfigHash = recordConfigHashResult(manifestReport, currentConfigHashResult, opts?.logLevel);
     const configChanged = !!currentConfigHash && (!manifest?.configHash || currentConfigHash !== manifest.configHash);
-    if (!manifest || !graphOptionsEqual(manifest.graphOptions, graphOptions) || configChanged) {
+    const requiresFullRebuild = optionDiffs.includes("discovery");
+    if (!manifest || !graphOptionsEqual(manifest.graphOptions, graphOptions) || configChanged || requiresFullRebuild) {
       if (configChanged) {
         logWithLevel(opts?.logLevel, "warn", "Configuration changed, rebuilding index...");
       }
-      if (manifestReport && manifest) manifestReport.reason = "graphOptionsMismatch";
-      return await buildProjectIndexFromExport(projectRoot, opts);
+      if (manifestReport && manifest) {
+        manifestReport.reason = requiresFullRebuild ? "buildOptionsMismatch" : "graphOptionsMismatch";
+        manifestReport.reused = false;
+      }
+      return await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
     }
     const gitAvailable = await isGitRepo(projectRoot);
     const currentHead = gitAvailable ? await getGitHead(projectRoot) : null;
@@ -978,7 +996,7 @@ export async function buildProjectIndexIncremental(
           "warn",
           "Warning: Manifest commit is no longer available; rebuilding full index.",
         );
-        const rebuiltIndex = await buildProjectIndexFromExport(projectRoot, opts);
+        const rebuiltIndex = await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
         if (manifestReport) {
           manifestReport.reason = "staleGitCommit";
           manifestReport.reused = false;
@@ -999,7 +1017,7 @@ export async function buildProjectIndexIncremental(
           "warn",
           `Warning: Manifest verification failed (mismatches: ${mismatches}, missing: ${missing}). Rebuilding full index.`,
         );
-        return await buildProjectIndexFromExport(projectRoot, opts);
+        return await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
       }
     }
     const trackedEntries = sanitizeManifestEntriesForRoot(projectRoot, manifest.files);
@@ -1117,7 +1135,7 @@ export async function buildProjectIndexIncremental(
       }
       const changedList = Array.from(changedFiles);
       if (fileReport) fileReport.changed = changedList.length;
-      if (changedList.length > 0) {
+      if (changedList.length) {
         const parseStart = performance.now();
         let processedFiles = 0;
         const totalFiles = changedList.length;
@@ -1191,7 +1209,7 @@ export async function buildProjectIndexIncremental(
       const filesList = Array.from(changedFiles);
       const graphStart = performance.now();
       const graph =
-        filesList.length === 0 && baseGraph
+        !filesList.length && baseGraph
           ? { nodes: new Set(baseGraph.nodes), edges: [...baseGraph.edges] }
           : await collectGraph(projectRoot, filesList, {
               parsed: parsedMap,

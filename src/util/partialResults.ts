@@ -256,7 +256,7 @@ export async function withPartialResults<T, I>(
 
   const duration = Date.now() - startTime;
 
-  if (errors.length === 0) {
+  if (!errors.length) {
     return success(results, {
       attempted: items.length,
       succeeded,

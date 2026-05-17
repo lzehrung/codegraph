@@ -143,7 +143,7 @@ export async function collectEdgesForFile(
 
   if ((sup.id === "ts" || sup.id === "js") && opts.dynamicImportHeuristics) {
     const dynamicSpecs = extractJsTsDynamicSpecifiers(src, normalizedFile, projectRoot);
-    if (dynamicSpecs.length > 0) {
+    if (dynamicSpecs.length) {
       const existing = new Set(specs.map((entry) => entry.spec));
       for (const entry of dynamicSpecs) {
         if (existing.has(entry.spec)) continue;
@@ -190,7 +190,7 @@ export async function collectEdgesForFile(
           : { type: "external", name: res.external };
     } else if (sup.id === "java" || sup.id === "kotlin") {
       const packageTargets = await resolveJvmPackageImportPaths(projectRoot, spec, sup.id);
-      if (packageTargets.length > 0) {
+      if (packageTargets.length) {
         return packageTargets.map((targetPath) => ({
           to: { type: "file", path: targetPath.replace(/\\/g, "/") } as EdgeTo,
           spec,

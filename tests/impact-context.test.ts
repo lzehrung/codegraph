@@ -20,7 +20,7 @@ describe("Impact Context Collection", () => {
       // Get a symbol ID for testing
       for (const file of impactedFiles) {
         const mod = index.byFile.get(file);
-        if (mod && mod.locals.length > 0) {
+        if (mod?.locals.length) {
           const symbolId = `${file}::${mod.locals[0].localName}::${mod.locals[0].range.start.index}`;
           changedSymbolIds.push(symbolId);
           break; // Just need one
@@ -78,7 +78,7 @@ describe("Impact Context Collection", () => {
 
       for (const file of files) {
         const mod = index.byFile.get(file);
-        if (mod && mod.exports.length > 0 && mod.imports.length > 0) {
+        if (mod?.exports.length && mod.imports.length) {
           testFile = file;
           // Find an exported symbol
           for (const exp of mod.exports) {
@@ -123,7 +123,7 @@ describe("Impact Context Collection", () => {
       // Get some symbol IDs
       for (const file of files.slice(0, 3)) {
         const mod = index.byFile.get(file);
-        if (mod && mod.locals.length > 0) {
+        if (mod?.locals.length) {
           const symbolId = `${file}::${mod.locals[0].localName}::${mod.locals[0].range.start.index}`;
           changedSymbolIds.push(symbolId);
         }
@@ -192,7 +192,7 @@ describe("Impact Context Collection", () => {
         if (changedSymbolIds.length >= 2) break;
       }
 
-      if (changedSymbolIds.length > 0) {
+      if (changedSymbolIds.length) {
         const candidates = listCandidateTestFiles(index, files.slice(0, 3), changedSymbolIds, { maxCandidates: 10 });
 
         // Check that candidates are properly sorted by confidence

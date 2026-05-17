@@ -434,7 +434,7 @@ index 1234567..abcdef0 100644
       // exportSummary should list every file that contains exported changed symbols.
       expect(summaryFiles).toEqual(exportedFiles);
 
-      if (exportedChanged.length > 0) {
+      if (exportedChanged.length) {
         const sample = exportedChanged[0]!;
         const exportEntry = exportSummary.find((entry) => entry.file === sample.file);
         // exportSummary should include the exported symbol name for the file.
@@ -445,7 +445,7 @@ index 1234567..abcdef0 100644
       // topImpacts is capped at 10 and should never exceed the impacted list.
       expect(topImpacts.length).toBeLessThanOrEqual(10);
       expect(topImpacts.length).toBeLessThanOrEqual(report.impacted.length);
-      if (report.impacted.length > 0) {
+      if (report.impacted.length) {
         // When there is impact data, topImpacts should include at least one item.
         expect(topImpacts.length).toBeGreaterThan(0);
       }
@@ -635,7 +635,7 @@ index 1234567..abcdef0 100644
         expect(changedEntry.changed).toBe(true);
       }
 
-      if (report.impacted.length > 0) {
+      if (report.impacted.length) {
         const impactedFile = report.impacted[0]?.file;
         const impactedEntry = report.surfaceArea.files.find((item) => item.file === impactedFile);
         expect(impactedEntry?.impacted).toBe(true);
@@ -727,7 +727,7 @@ index 1234567..0000000
 
       // Should have transitive impact from files that depend on the deleted file
       const transitiveItems = report.impacted.filter((item) => (item.depth ?? 0) > 0);
-      if (transitiveItems.length > 0) {
+      if (transitiveItems.length) {
         // If there are transitive items, they should have appropriate hints
         for (const item of transitiveItems) {
           expect(item.explain?.hints).toContain("fileDeleted");
@@ -762,7 +762,7 @@ index 1234567..abcdef0 100644
       expect(report).toBeDefined();
 
       // Check that symbolEdges exist and are properly indexed
-      if (report.graph.symbolEdges.length > 0) {
+      if (report.graph.symbolEdges.length) {
         for (const edge of report.graph.symbolEdges) {
           expect(typeof edge.from).toBe("number");
           expect(typeof edge.to).toBe("number");
@@ -792,7 +792,7 @@ index 1234567..abcdef0 100644
       const changedSymbolIds: string[] = [];
       for (const file of changedFiles) {
         const mod = index.byFile.get(file);
-        if (mod && mod.locals.length > 0) {
+        if (mod?.locals.length) {
           const symbolId = `${file}::${mod.locals[0].localName}::${mod.locals[0].range.start.index}`;
           changedSymbolIds.push(symbolId);
         }

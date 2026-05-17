@@ -5,6 +5,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
+import picomatch from "picomatch";
 import {
   buildProjectIndex,
   buildProjectIndexFromFiles,
@@ -51,13 +52,14 @@ import { buildDoctorReport } from "./cli/doctor.js";
 import { handleExplainCommand } from "./cli/explain.js";
 import { handleGraphDeltaCommand } from "./cli/graphDelta.js";
 import { handleGraphQueryCommand } from "./cli/graphQueries.js";
-import { CLI_HELP_TEXT, helpTextForCommand } from "./cli/help.js";
+import { CLI_HELP_TEXT, helpTextForCommand, isKnownCliCommand } from "./cli/help.js";
 import { handleMcpServeCommand } from "./cli/mcp.js";
 import { parseCacheModeOption, parsePositiveIntegerOption } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
 import { handleSearchCommand } from "./cli/search.js";
 import { handleSkillCommand } from "./cli/skill.js";
 import { handleSqlCommand } from "./cli/sql.js";
+import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "./config.js";
 import { buildSqlArtifactGraphFromFiles } from "./sql/index.js";
 import type { Graph } from "./types.js";
 import {
@@ -68,9 +70,59 @@ import {
   resolveFilePathFromRoot,
   type ProjectFileDiscoveryOptions,
 } from "./util.js";
+import { isRelativePathInside } from "./util/projectFiles.js";
 
 function toJSON(obj: unknown): string {
   return JSON.stringify(obj, null, 2);
+}
+
+function normalizeCliGlobPattern(globPattern: string): string {
+  return globPattern.trim().replace(/\\/g, "/");
+}
+
+export function isCliDiscoveryRelativePathInside(relativePath: string): boolean {
+  return isRelativePathInside(relativePath);
+}
+
+function matchesCliDiscoveryGlob(
+  absolutePath: string,
+  scanRoot: string,
+  matcher: (relativePath: string) => boolean,
+): boolean {
+  const relativePath = path.relative(scanRoot, absolutePath);
+  if (!isCliDiscoveryRelativePathInside(relativePath)) {
+    return false;
+  }
+  return matcher(normalizePath(relativePath));
+}
+
+function filterFilesByCliDiscoveryGlobs(
+  files: readonly string[],
+  scanRoot: string,
+  discovery: ProjectFileDiscoveryOptions,
+): string[] {
+  const includeMatchers = (discovery.includeGlobs ?? [])
+    .map(normalizeCliGlobPattern)
+    .filter(Boolean)
+    .map((globPattern) => picomatch(globPattern, { dot: true }));
+  const ignoreMatchers = (discovery.ignoreGlobs ?? [])
+    .map(normalizeCliGlobPattern)
+    .filter(Boolean)
+    .map((globPattern) => picomatch(globPattern, { dot: true }));
+
+  if (!includeMatchers.length && !ignoreMatchers.length) {
+    return [...files];
+  }
+
+  return files.filter((filePath) => {
+    if (
+      includeMatchers.length &&
+      !includeMatchers.some((matcher) => matchesCliDiscoveryGlob(filePath, scanRoot, matcher))
+    ) {
+      return false;
+    }
+    return !ignoreMatchers.some((matcher) => matchesCliDiscoveryGlob(filePath, scanRoot, matcher));
+  });
 }
 
 export type CliRuntime = {
@@ -176,9 +228,9 @@ function formatNativeBackendFallbackSummary(report: BuildReport | undefined): st
         .filter(([, count]) => count > 0)
         .map(([reason, count]) => `${reason}=${count}`)
         .join(",");
-      return reasonSummary.length > 0 ? `${languageId}(${reasonSummary})` : `${languageId}(${entry.filesFellBack})`;
+      return reasonSummary.length ? `${languageId}(${reasonSummary})` : `${languageId}(${entry.filesFellBack})`;
     });
-  if (parts.length === 0) return undefined;
+  if (!parts.length) return undefined;
   return `Native fallback summary: ${parts.join(", ")}`;
 }
 
@@ -188,7 +240,7 @@ function formatParserBackendSummary(report: BuildReport | undefined): string | u
   const parts = Object.entries(parser.byLanguage)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([languageId, count]) => `${languageId}(${count})`);
-  if (parts.length === 0) {
+  if (!parts.length) {
     return `Parser backend degradation: ${parser.total} file(s)`;
   }
   return `Parser backend degradation: ${parser.total} file(s) [${parts.join(", ")}]`;
@@ -472,8 +524,9 @@ function buildRecommendedInspectCommands(
   hasUnresolvedImports: boolean,
 ): string[] {
   const rootFlag = `--root "${normalizePathForDisplay(projectRoot)}"`;
-  const targetSuffix =
-    includeRoots.length > 0 ? ` ${includeRoots.map((root) => `"${normalizePathForDisplay(root)}"`).join(" ")}` : "";
+  const targetSuffix = includeRoots.length
+    ? ` ${includeRoots.map((root) => `"${normalizePathForDisplay(root)}"`).join(" ")}`
+    : "";
   const commands = [
     `codegraph hotspots ${rootFlag}${targetSuffix} --limit 20 --json`,
     `codegraph graph ${rootFlag}${targetSuffix} --json --symbols-detailed --compact-json`,
@@ -489,7 +542,7 @@ function buildRecommendedInspectCommands(
 }
 
 function restrictGraphToIncludeRoots(graph: Graph, includeRoots: string[]): Graph {
-  if (includeRoots.length === 0) {
+  if (!includeRoots.length) {
     return graph;
   }
   const normalizedRoots = includeRoots.map(normalizePathForDisplay);
@@ -570,8 +623,8 @@ async function buildInspectReport(
     recommendedCommands: buildRecommendedInspectCommands(
       projectRoot,
       includeRoots,
-      cycles.length > 0,
-      unresolved.length > 0,
+      !!cycles.length,
+      !!unresolved.length,
     ),
   };
 }
@@ -1018,17 +1071,17 @@ function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport
     `Candidate tests: ${report.summary.candidateTests} (high: ${candidateCounts.high}, medium: ${candidateCounts.medium}, low: ${candidateCounts.low})`,
   );
   lines.push(`Risk: ${report.riskSummary.level} (${report.riskSummary.score})`);
-  if (report.riskSummary.signals.length > 0) {
+  if (report.riskSummary.signals.length) {
     lines.push(`Signals: ${report.riskSummary.signals.join(", ")}`);
   }
   lines.push("");
   lines.push("Changed files:");
-  if (report.changedFiles.length === 0) {
+  if (!report.changedFiles.length) {
     lines.push("- none");
   } else {
     for (const file of report.changedFiles.slice(0, 20)) {
       const symbolNames = file.symbols.slice(0, 5).map((symbol) => symbol.name);
-      const symbolSummary = symbolNames.length > 0 ? ` (${symbolNames.join(", ")})` : "";
+      const symbolSummary = symbolNames.length ? ` (${symbolNames.join(", ")})` : "";
       lines.push(`- ${file.file}: ${file.status}${symbolSummary}`);
     }
     const remainingFiles = report.changedFiles.length - 20;
@@ -1038,7 +1091,7 @@ function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport
   }
   lines.push("");
   lines.push("Candidate tests:");
-  if (report.candidateTests.length === 0) {
+  if (!report.candidateTests.length) {
     lines.push("- none");
   } else {
     const listedCandidates =
@@ -1051,7 +1104,7 @@ function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport
   }
   lines.push("");
   lines.push("Review tasks:");
-  if (report.reviewTasks.length === 0) {
+  if (!report.reviewTasks.length) {
     lines.push("- none");
   } else {
     for (const task of report.reviewTasks.slice(0, 8)) {
@@ -1092,7 +1145,7 @@ function appendCandidateTestGroup(
   confidence: CandidateTestFile["confidence"],
 ): number {
   const matches = candidates.filter((candidate) => candidate.confidence === confidence);
-  if (matches.length === 0) return 0;
+  if (!matches.length) return 0;
   lines.push(title);
   for (const candidate of matches.slice(0, 8)) {
     lines.push(`- ${candidate.file}: ${candidate.reason}`);
@@ -1144,7 +1197,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   const hasFlag = (name: string) => parsed.flags.has(name);
   const getOpt = (name: string) => {
     const v = parsed.options.get(name);
-    return v && v.length > 0 ? v[v.length - 1] : undefined;
+    return v?.length ? v[v.length - 1] : undefined;
   };
 
   // Handle help flag
@@ -1160,6 +1213,12 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     } else {
       writeStdoutLine(getCodegraphVersion());
     }
+    return;
+  }
+
+  if (!isKnownCliCommand(cmd)) {
+    writeStderrLine(`Unknown command: ${cmd}`);
+    exitCli(1);
     return;
   }
 
@@ -1198,13 +1257,13 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     graphFlags.fast ||
     graphFlags.resolveNodeModules ||
     graphFlags.dynamicImportHeuristics ||
-    graphFlags.resolutionHints.length > 0;
+    !!graphFlags.resolutionHints.length;
   const buildGraphOptions = () => ({
     fast: graphFlags.fast,
     resolveNodeModules: graphFlags.resolveNodeModules,
     dynamicImportHeuristics: graphFlags.dynamicImportHeuristics,
     ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
-    ...(graphFlags.resolutionHints.length > 0 ? { resolutionHints: graphFlags.resolutionHints } : {}),
+    ...(graphFlags.resolutionHints.length ? { resolutionHints: graphFlags.resolutionHints } : {}),
   });
 
   const changedSince = getOpt("--changed-since");
@@ -1233,10 +1292,16 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   const projectRootAbs = projectRootFs.replace(/\\/g, "/");
   const includeGlobs = parsed.options.get("--include-glob") ?? [];
   const scanIgnoreGlobs = parsed.options.get("--ignore-glob") ?? [];
-  const discoveryOptions: ProjectFileDiscoveryOptions = {
-    ...(includeGlobs.length > 0 ? { includeGlobs } : {}),
-    ...(scanIgnoreGlobs.length > 0 ? { ignoreGlobs: scanIgnoreGlobs } : {}),
+  const cliGlobDiscoveryOptions: ProjectFileDiscoveryOptions = {
+    ...(includeGlobs.length ? { includeGlobs } : {}),
+    ...(scanIgnoreGlobs.length ? { ignoreGlobs: scanIgnoreGlobs } : {}),
+  };
+  const cliGitignoreDiscoveryOptions: ProjectFileDiscoveryOptions = {
     ...(hasFlag("--no-gitignore") ? { useGitignore: false } : {}),
+  };
+  const explicitDiscoveryOptions: ProjectFileDiscoveryOptions = {
+    ...cliGlobDiscoveryOptions,
+    ...cliGitignoreDiscoveryOptions,
   };
 
   if (cmd === "version") {
@@ -1266,6 +1331,40 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return;
   }
 
+  if (cmd === "sql") {
+    await handleSqlCommand({
+      getOpt,
+      cwd: getCwd,
+      writeJSONLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
+  }
+
+  if (cmd === "chunk") {
+    await handleChunkCommand({
+      positionals: parsed.positionals,
+      getOpt,
+      hasFlag,
+      cwd: getCwd,
+      writeJSONLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
+  }
+
+  const config = await loadCodegraphConfig(projectRootFs);
+  const configDiscoveryOptions = mergeDiscoveryOptions(config.discovery, cliGitignoreDiscoveryOptions);
+  const mergedDiscoveryOptions = mergeDiscoveryOptions(config.discovery, explicitDiscoveryOptions);
+  const discoveryOptions: ProjectFileDiscoveryOptions = hasDiscoveryOptions(mergedDiscoveryOptions)
+    ? { ...mergedDiscoveryOptions, globRoot: projectRootFs }
+    : {};
+  const includeRootDiscoveryOptions: ProjectFileDiscoveryOptions = hasDiscoveryOptions(configDiscoveryOptions)
+    ? { ...configDiscoveryOptions, globRoot: projectRootFs }
+    : {};
+
   const supportsIncludeRoots = cmd === "graph" || cmd === "index" || cmd === "hotspots" || cmd === "inspect";
   let includeRoots: string[] = [];
   if (supportsIncludeRoots) {
@@ -1280,28 +1379,36 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   const includeRootsAbs = includeRoots.map((r) => normalizePath(resolveFilePathFromRoot(projectRootFs, r)));
 
   const isUnderIncludeRoots = (filePath: string): boolean => {
-    if (includeRootsAbs.length === 0) return true;
+    if (!includeRootsAbs.length) return true;
     const f = filePath.replace(/\\/g, "/");
     return includeRootsAbs.some((root) => f === root || f.startsWith(`${root}/`));
   };
 
   const resolveFilesFromRoots = async (): Promise<string[]> => {
-    if (includeRootsAbs.length === 0) return await listProjectFiles(projectRootFs, undefined, discoveryOptions);
+    if (!includeRootsAbs.length) return await listProjectFiles(projectRootFs, undefined, discoveryOptions);
     const normalizedRoots = includeRootsAbs;
     const all: string[][] = await Promise.all(
-      normalizedRoots.map(
-        async (r) =>
-          await listProjectFiles(r, undefined, {
-            ...discoveryOptions,
-            gitignoreRoot: projectRootFs,
-          }),
-      ),
+      normalizedRoots.map(async (r) => {
+        const files = await listProjectFiles(r, undefined, {
+          ...includeRootDiscoveryOptions,
+          gitignoreRoot: projectRootFs,
+        });
+        return filterFilesByCliDiscoveryGlobs(files, r, cliGlobDiscoveryOptions);
+      }),
     );
     return Array.from(new Set(all.flat()));
   };
 
-  const listProjectFilesForScan = async (scanRoot: string): Promise<string[]> =>
-    await listProjectFiles(scanRoot, undefined, discoveryOptions);
+  const listProjectFilesForScan = async (scanRoot: string): Promise<string[]> => {
+    if (scanRoot === projectRootFs) {
+      return await listProjectFiles(scanRoot, undefined, discoveryOptions);
+    }
+    const files = await listProjectFiles(scanRoot, undefined, {
+      ...includeRootDiscoveryOptions,
+      gitignoreRoot: projectRootFs,
+    });
+    return filterFilesByCliDiscoveryGlobs(files, scanRoot, cliGlobDiscoveryOptions);
+  };
 
   const resolveChangedFiles = async (): Promise<string[] | null> => {
     if (gitBase) {
@@ -1339,31 +1446,20 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     const changedSet = await resolveChangedFilesWithDeletes();
     if (changedSet) {
       const { existingFiles, deletedFiles } = changedSet;
-      if (deletedFiles.length > 0) {
+      if (deletedFiles.length) {
         writeStderrLine(
           `Skipping ${deletedFiles.length} deleted file(s) from git diff: ${deletedFiles
             .map((file) => path.relative(projectRootFs, file) || file)
             .join(", ")}`,
         );
       }
-      if (existingFiles.length === 0) {
+      if (!existingFiles.length) {
         writeStderrLine("No changed files detected via git diff.");
       }
       return existingFiles;
     }
     return await resolveFilesFromRoots();
   };
-
-  if (cmd === "sql") {
-    await handleSqlCommand({
-      getOpt,
-      cwd: getCwd,
-      writeJSONLine,
-      writeStderrLine,
-      exit: exitCli,
-    });
-    return;
-  }
 
   if (cmd === "search") {
     await handleSearchCommand({
@@ -1511,7 +1607,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
         fast,
         resolveNodeModules,
         dynamicImportHeuristics,
-        ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
+        ...(resolutionHints.length ? { resolutionHints } : {}),
       };
       const sqliteCacheMode = cache ?? (changedSet ? "disk" : undefined);
       const index = changedSet
@@ -1589,7 +1685,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
           fast,
           resolveNodeModules,
           dynamicImportHeuristics,
-          ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
+          ...(resolutionHints.length ? { resolutionHints } : {}),
         },
         ...(indexReport ? { report: indexReport } : {}),
       });
@@ -1660,7 +1756,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       resolveNodeModules,
       dynamicImportHeuristics,
       ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
-      ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
+      ...(resolutionHints.length ? { resolutionHints } : {}),
       ...(indexReport ? { report: indexReport } : {}),
     });
     maybeWriteNativeBackendStatus(indexReport, showProgress);
@@ -1669,7 +1765,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     else if (format === "dot") await writeOut(graphToDOT(graphOut));
     else {
       const sqlFiles = includeSqlArtifacts ? files.filter((file) => path.extname(file).toLowerCase() === ".sql") : [];
-      const sqlArtifacts = sqlFiles.length > 0 ? await buildSqlArtifactGraphFromFiles(sqlFiles) : undefined;
+      const sqlArtifacts = sqlFiles.length ? await buildSqlArtifactGraphFromFiles(sqlFiles) : undefined;
       await writeOut(
         toJSON({
           nodes: [...graphOut.nodes],
@@ -1696,7 +1792,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     const cacheStrict = hasFlag("--cache-strict");
     const full = hasFlag("--json") || hasFlag("--full");
     const cacheVerify = hasFlag("--cache-verify");
-    const shouldWriteManifest = includeRootsAbs.length === 0 && !gitBase && !changedSince;
+    const shouldWriteManifest = !includeRootsAbs.length && !gitBase && !changedSince;
     const graphOptions = hasGraphOverrides ? buildGraphOptions() : undefined;
     const indexReport: BuildReport | undefined = reportEnabled || verbose ? { timings: {} } : undefined;
     if (commandReport && indexReport) {
@@ -1881,7 +1977,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     const querySource = getOpt("--query");
     const patternSource = getOpt("--pattern") ?? getOpt("--regex");
     const globs = parsed.options.get("--glob") ?? [];
-    const patterns = globs.length > 0 ? globs : undefined;
+    const patterns = globs.length ? globs : undefined;
 
     if ((querySource ? 1 : 0) + (patternSource ? 1 : 0) !== 1) {
       writeStderrLine(
@@ -1986,20 +2082,21 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     const refBlockMaxLines = getOpt("--ref-block-max-lines");
     if (refBlockMaxLines) options.refBlockMaxLines = Number(refBlockMaxLines);
 
-    const ignoreGlobs = parsed.options.get("--ignore-glob");
-    if (ignoreGlobs) options.ignoreGlobs = ignoreGlobs;
+    if (discoveryOptions.ignoreGlobs?.length) {
+      options.ignoreGlobs = discoveryOptions.ignoreGlobs;
+    }
 
     const verifyRefs = hasFlag("--verify-refs");
     if (verifyRefs) options.verifyReferences = true;
 
     const lcovPaths = parsed.options.get("--lcov");
-    if (lcovPaths && lcovPaths.length > 0) {
+    if (lcovPaths?.length) {
       options.lcovPaths = lcovPaths;
       options.testCoverageSuggestions = true;
     }
 
     const coveragePaths = parsed.options.get("--coverage-report");
-    if (coveragePaths && coveragePaths.length > 0) {
+    if (coveragePaths?.length) {
       options.coveragePaths = coveragePaths;
       options.testCoverageSuggestions = true;
     }
@@ -2035,7 +2132,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
           fast: fastGraph,
           resolveNodeModules,
           dynamicImportHeuristics,
-          ...(resolutionHints.length > 0 ? { resolutionHints } : {}),
+          ...(resolutionHints.length ? { resolutionHints } : {}),
         };
       }
       const index = await buildProjectIndex(projectRootFs, {
@@ -2064,7 +2161,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
           writeStdoutLine(
             `${item.file}: ${item.symbols.join(", ")} (${reasonLabel}, severity: ${(item.severity * 100).toFixed(1)}%)`,
           );
-          if ("refs" in item && item.refs && item.refs.length > 0) {
+          if ("refs" in item && item.refs?.length) {
             const contextsToShow = item.refs.slice(0, 2);
             for (const ref of contextsToShow) {
               writeStdoutLine(`  Reference at ${ref.range.start.line}:${ref.range.start.column}:`);
@@ -2261,19 +2358,6 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
         ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
         ...workerOpts,
       },
-    });
-    return;
-  }
-
-  if (cmd === "chunk") {
-    await handleChunkCommand({
-      positionals: parsed.positionals,
-      getOpt,
-      hasFlag,
-      cwd: getCwd,
-      writeJSONLine,
-      writeStderrLine,
-      exit: exitCli,
     });
     return;
   }

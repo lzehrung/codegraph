@@ -4,6 +4,7 @@ import os from "node:os";
 import fs from "node:fs/promises";
 import { buildProjectIndex, listProjectFiles, discoverProjectFiles } from "../src/index.js";
 import { DEFAULT_PROJECT_MANIFESTS } from "../src/util.js";
+import { isRelativePathInside, translateGlobRootIgnoreGlobsForScanRoot } from "../src/util/projectFiles.js";
 
 const normalize = (value: string) => value.replace(/\\/g, "/");
 
@@ -587,6 +588,76 @@ describe("project file discovery", () => {
     expect(discovered.has(normalize(ignoredFile))).toBe(true);
     expect(discovered.has(normalize(specFile))).toBe(false);
     expect(discovered.has(normalize(jsFile))).toBe(false);
+  });
+
+  it("evaluates include and ignore globs against globRoot when scanning a child root", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-discovery-glob-root-"));
+    const testsDir = path.join(tempDir, "tests");
+    const keptFile = path.join(testsDir, "unit", "app.test.ts");
+    const ignoredFile = path.join(testsDir, "samples", "fixture.ts");
+
+    await createFile(keptFile, "export const appTest = 1;\n");
+    await createFile(ignoredFile, "export const fixture = 1;\n");
+
+    const discovered = new Set(
+      (
+        await listProjectFiles(testsDir, undefined, {
+          globRoot: tempDir,
+          includeGlobs: ["tests/**/*.ts"],
+          ignoreGlobs: ["tests/samples/**"],
+          useGitignore: false,
+        })
+      ).map(normalize),
+    );
+
+    expect(discovered.has(normalize(keptFile))).toBe(true);
+    expect(discovered.has(normalize(ignoredFile))).toBe(false);
+  });
+
+  it("translates project-root ignore globs for child-root fast-glob pruning", () => {
+    const projectRoot = path.resolve("repo");
+    const testsRoot = path.join(projectRoot, "tests");
+
+    expect(
+      translateGlobRootIgnoreGlobsForScanRoot(testsRoot, projectRoot, [
+        "tests/samples/**",
+        "tests\\fixtures\\**",
+        "**/node_modules/**",
+        "src/generated/**",
+      ]),
+    ).toEqual(["samples/**", "fixtures/**", "**/node_modules/**"]);
+  });
+
+  it("does not prune child-root files with out-of-scope project-root ignore globs", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-discovery-out-of-scope-ignore-"));
+    const testsDir = path.join(tempDir, "tests");
+    const keptFile = path.join(testsDir, "src", "generated", "fixture.ts");
+    const testFile = path.join(testsDir, "unit", "app.test.ts");
+
+    await createFile(keptFile, "export const fixture = 1;\n");
+    await createFile(testFile, "export const appTest = 1;\n");
+
+    const discovered = new Set(
+      (
+        await listProjectFiles(testsDir, undefined, {
+          globRoot: tempDir,
+          ignoreGlobs: ["src/generated/**"],
+          useGitignore: false,
+        })
+      ).map(normalize),
+    );
+
+    expect(discovered.has(normalize(keptFile))).toBe(true);
+    expect(discovered.has(normalize(testFile))).toBe(true);
+  });
+
+  it("treats cross-drive relative paths as outside a glob root", () => {
+    expect([
+      isRelativePathInside("src/app.ts"),
+      isRelativePathInside("../outside.ts"),
+      isRelativePathInside("D:\\other\\fixture.ts"),
+      isRelativePathInside("D:/other/fixture.ts"),
+    ]).toEqual([true, false, false, false]);
   });
 
   it("does not validate gitignoreRoot when gitignore filtering is disabled", async () => {

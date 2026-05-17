@@ -149,14 +149,14 @@ export async function collectSqlReviewContext(
   options: SqlReviewContextOptions,
 ): Promise<SqlReviewContext | undefined> {
   const changedFiles = options.changedFiles.map(normalizePath);
-  if (changedFiles.length === 0) return undefined;
+  if (!changedFiles.length) return undefined;
 
   const changedSqlFiles = new Set(changedFiles.filter(isSqlFile));
   const changedSqlLiteralSources = await collectChangedSqlLiteralSources(changedFiles);
-  if (changedSqlFiles.size === 0 && changedSqlLiteralSources.length === 0) return undefined;
+  if (changedSqlFiles.size === 0 && !changedSqlLiteralSources.length) return undefined;
 
-  const facts = await collectSqlFacts(projectRoot, changedFiles, changedSqlLiteralSources.length > 0, options.projectFiles);
-  if (facts.length === 0) return undefined;
+  const facts = await collectSqlFacts(projectRoot, changedFiles, !!changedSqlLiteralSources.length, options.projectFiles);
+  if (!facts.length) return undefined;
 
   const literalObjects = collectChangedSqlLiteralObjects(changedSqlLiteralSources, facts);
   const entries = new Map<string, SqlReviewContextEntry>();
@@ -176,5 +176,5 @@ export async function collectSqlReviewContext(
   }
 
   const sortedEntries = Array.from(entries.values()).sort(sortEntries);
-  return sortedEntries.length > 0 ? { entries: sortedEntries } : undefined;
+  return sortedEntries.length ? { entries: sortedEntries } : undefined;
 }

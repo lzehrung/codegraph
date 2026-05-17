@@ -186,7 +186,7 @@ function normalizeArtifactSelection(request: CodegraphArtifactBuildRequest): {
 
 async function validateOutputDirectory(outDir: string, force: boolean): Promise<void> {
   const entries = await readDirectoryIfPresent(outDir);
-  if (entries.length > 0 && !force) {
+  if (entries.length && !force) {
     throw new Error(`Refusing to write into non-empty output directory: ${outDir}. Pass --force to overwrite artifacts.`);
   }
 }
@@ -503,7 +503,7 @@ async function filterSnapshotForOutputDirectory(
   outDir: string,
 ): Promise<AgentProjectSnapshot> {
   const outputDirs = await collectRelativeOutputDirectories(snapshot.root, outDir);
-  if (outputDirs.length === 0) return snapshot;
+  if (!outputDirs.length) return snapshot;
   const isOutputFile = (file: string): boolean => {
     const relative = toProjectRelativePath(snapshot.root, file);
     if (!relative) return false;
@@ -603,7 +603,7 @@ function formatHotspots(
   snapshot: AgentProjectSnapshot,
   hotspots: Array<{ file: string; fanIn: number; fanOut: number; score: number }>,
 ): string[] {
-  if (hotspots.length === 0) return ["- None"];
+  if (!hotspots.length) return ["- None"];
   return hotspots.map(
     (hotspot) =>
       `- ${relativeFile(snapshot.root, hotspot.file)} (fan-in ${hotspot.fanIn}, fan-out ${hotspot.fanOut}, score ${hotspot.score})`,

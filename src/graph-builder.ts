@@ -87,7 +87,7 @@ export async function collectGraph(
   initNativeBackendReport(opts?.report);
   const sqlCorpusSig = sqlCorpusSignature(sqlFiles, opts?.fileSignatures);
   const sqlFactCacheNeeded =
-    sqlFiles.length > 0 &&
+    !!sqlFiles.length &&
     filesToCollect.some((file) => {
       if (!isSqlFile(file)) return false;
       const shouldReplace = hasExplicitReplace && replaceSet.has(file);
@@ -117,7 +117,7 @@ export async function collectGraph(
     return merged;
   };
 
-  if (graph.edges.length > 0) {
+  if (graph.edges.length) {
     addEdgeTargetsToGraph(graph.edges);
   }
 

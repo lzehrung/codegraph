@@ -89,7 +89,7 @@ export async function collectImpactSuggestions(
       const exportCandidates = exportLookup.filesByExportName.get(candidate.name) ?? new Set<FileId>();
       const filteredCandidates = [...exportCandidates].filter((file) => file !== absoluteFile);
 
-      if (filteredCandidates.length > 0) {
+      if (filteredCandidates.length) {
         const relatedFile = selectBestCandidateFile(index, absoluteFile, filteredCandidates);
         const confidence = determineSuggestionConfidence({
           symbol: candidate.name,
@@ -270,7 +270,7 @@ function collectMissingExportSuggestions(
 }
 
 function selectBestCandidateFile(index: ProjectIndex, sourceFile: FileId, candidates: FileId[]): FileId {
-  if (candidates.length === 0) {
+  if (!candidates.length) {
     throw new Error("selectBestCandidateFile called with no candidates");
   }
   const directImports = new Set<FileId>();

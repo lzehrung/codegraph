@@ -633,7 +633,7 @@ function isLikelyMarkdownAutolinkTarget(candidate: string): boolean {
   if (/^[^\s/@]+@[^\s/@]+\.[^\s/@]+$/.test(candidate)) return false;
   if (/^[A-Za-z][A-Za-z0-9:_-]*\/?$/.test(candidate)) return false;
   if (candidate.includes("/") || candidate.includes("\\")) return true;
-  return path.extname(candidate).length > 0;
+  return !!path.extname(candidate).length;
 }
 
 function isLikelyAsciidocXrefTarget(rawSpecifier: string): boolean {
@@ -663,7 +663,7 @@ function isLikelyAsciidocFileTarget(rawSpecifier: string): boolean {
   if (withoutFragment.includes("/") || withoutFragment.includes("\\")) {
     return true;
   }
-  return path.extname(withoutFragment).length > 0;
+  return !!path.extname(withoutFragment).length;
 }
 
 function isObviouslyDynamicSpecifier(specifier: string): boolean {

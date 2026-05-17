@@ -85,8 +85,8 @@ export function applyChangedFileSymbolMapping(
   diagnostics: ImpactDiagnostics,
   filesWithSymbols: Set<string>,
 ): ChangedSymbol[] {
-  if (entry.symbols.length > 0) filesWithSymbols.add(entry.path);
-  if (entry.symbols.length === 0) {
+  if (entry.symbols.length) filesWithSymbols.add(entry.path);
+  if (!entry.symbols.length) {
     diagnostics.changedFilesWithoutSymbols += 1;
     if (entry.parseFailed && entry.kind !== "deleted") {
       diagnostics.symbolMappingParseFailures += 1;

@@ -557,7 +557,7 @@ describe("Impact Analyzer Edge Cases", () => {
 
       if (firstFile) {
         const mod = index.byFile.get(firstFile);
-        if (mod && mod.locals.length > 0) {
+        if (mod?.locals.length) {
           const local = mod.locals[0];
 
           const changedSymbols = [
@@ -609,7 +609,7 @@ describe("Impact Analyzer Edge Cases", () => {
 
       if (firstFile) {
         const mod = index.byFile.get(firstFile);
-        if (mod && mod.locals.length > 0) {
+        if (mod?.locals.length) {
           const local = mod.locals[0];
 
           const changedSymbols = [
@@ -640,7 +640,7 @@ describe("Impact Analyzer Edge Cases", () => {
 
       if (firstFile) {
         const mod = index.byFile.get(firstFile);
-        if (mod && mod.locals.length > 0) {
+        if (mod?.locals.length) {
           const local = mod.locals[0];
 
           const changedSymbols = [

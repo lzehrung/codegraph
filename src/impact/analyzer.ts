@@ -74,7 +74,7 @@ function normalizeSeverityWeights(weights: SeverityWeights): SeverityWeights {
     invalidEntries.push(`depthDecay=${String(weights.depthDecay)}`);
   }
 
-  if (invalidEntries.length > 0) {
+  if (invalidEntries.length) {
     throw new RangeError(`Invalid severity weights: ${invalidEntries.join(", ")}`);
   }
 
@@ -263,7 +263,7 @@ export async function analyzeImpact(
             const existingHints = existing?.explain?.hints ?? [];
             const newHints = severityResult.explain.hints ?? [];
             const mergedHints =
-              existingHints.length === 0 && newHints.length === 0
+              !existingHints.length && !newHints.length
                 ? undefined
                 : [...new Set([...existingHints, ...newHints])];
 
@@ -285,7 +285,7 @@ export async function analyzeImpact(
               reasons,
               severity: Math.max(existing?.severity ?? 0, severityResult.severity),
               depth: 0,
-              ...(refContext && existingRefs.length > 0 && { refs: existingRefs }),
+              ...(refContext && existingRefs.length ? { refs: existingRefs } : {}),
               explain: {
                 ...existing?.explain,
                 ...severityResult.explain,
@@ -368,12 +368,12 @@ export function seedTransitiveFromFiles(
       (fallbackPathSet.has(fileChange.path) ||
         fileChange.isBinary ||
         fileChange.modeChanged ||
-        fileChange.hunks.length === 0);
+        !fileChange.hunks.length);
 
     if (shouldSeedModifiedFallback) {
       if (impacted.has(fileChange.path)) continue;
       const dependents = getDependentFiles(index, fileChange.path, reverseDeps);
-      if (dependents.length > 0) {
+      if (dependents.length) {
         if (diagnostics) diagnostics.fallbackSeededFiles += 1;
       }
 
@@ -407,7 +407,7 @@ export function seedTransitiveFromFiles(
         }
       }
       const dependents = [...dependentSet];
-      if (dependents.length > 0) {
+      if (dependents.length) {
         if (diagnostics) diagnostics.fallbackSeededFiles += 1;
       }
 
@@ -608,7 +608,7 @@ export function calculateSeverity(
     hints.push("signatureChanged");
   }
 
-  if (hints.length > 0) {
+  if (hints.length) {
     explain.hints = hints;
   }
 

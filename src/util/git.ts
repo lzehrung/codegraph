@@ -90,7 +90,7 @@ export async function getGitBlobHashes(
         .filter((rel) => rel && !rel.startsWith("..") && !path.isAbsolute(rel) && rel !== "."),
     ),
   );
-  if (relFiles.length === 0) return new Map();
+  if (!relFiles.length) return new Map();
   try {
     const { stdout: trackedStdout } = await execFileAsync("git", ["ls-files", "-z", "--", ...relFiles], {
       cwd: projectRoot,
@@ -101,7 +101,7 @@ export async function getGitBlobHashes(
       .split("\0")
       .map((line) => line.trim())
       .filter(Boolean);
-    if (trackedRel.length === 0) return new Map();
+    if (!trackedRel.length) return new Map();
     const hashes = await new Promise<string[]>((resolve, reject) => {
       const child = spawn("git", ["hash-object", "--stdin-paths"], {
         cwd: projectRoot,

@@ -44,7 +44,7 @@ type SessionIdentity = {
 };
 
 function normalizeStringArray(values?: string[]): string[] | undefined {
-  if (!values || values.length === 0) return undefined;
+  if (!values?.length) return undefined;
   return [...values].sort();
 }
 

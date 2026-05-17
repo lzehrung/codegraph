@@ -72,7 +72,7 @@ function sqlDefinitionsFromLookup(lookup: SqlDefinitionLookup, objectName: strin
   const basenameKey = sqlObjectBaseName(objectName).toLowerCase();
   const exactDefinitions = lookup.exact.get(normalizedName) ?? [];
   const basenameDefinitions = lookup.basename.get(basenameKey) ?? [];
-  if (exactDefinitions.length > 0) return exactDefinitions;
+  if (exactDefinitions.length) return exactDefinitions;
   return basenameDefinitions.length === 1 ? basenameDefinitions : [];
 }
 
@@ -262,7 +262,7 @@ function unambiguousSqlPrefixDefinitionName(lookup: SqlDefinitionLookup, objectN
 }
 
 function resolveQualifiedSqlName(lookup: SqlDefinitionLookup, name: string, statementText: string | null): string | null {
-  if (sqlDefinitionsFromLookup(lookup, name).length > 0) return name;
+  if (sqlDefinitionsFromLookup(lookup, name).length) return name;
   const parts = sqlObjectNameParts(name);
   if (parts.length < 2) return name;
   const firstPart = parts[0];
@@ -271,7 +271,7 @@ function resolveQualifiedSqlName(lookup: SqlDefinitionLookup, name: string, stat
     const maskedStatementText = maskSqlStringsAndComments(statementText);
     if (cteNamesForStatement(maskedStatementText).has(firstPart.toLowerCase())) return null;
     const aliasTarget = sqlAliasMapForStatement(maskedStatementText).get(firstPart.toLowerCase());
-    if (aliasTarget && sqlDefinitionsFromLookup(lookup, aliasTarget).length > 0) return aliasTarget;
+    if (aliasTarget && sqlDefinitionsFromLookup(lookup, aliasTarget).length) return aliasTarget;
   }
   for (let partCount = parts.length - 1; partCount >= 1; partCount -= 1) {
     const candidate = parts.slice(0, partCount).join(".");
@@ -302,7 +302,7 @@ function matchesSqlDefinitionName(name: string, targetNames: ReadonlySet<string>
 
 function prefixMatchesSqlDefinition(lookup: SqlDefinitionLookup, prefix: string, targetNames: ReadonlySet<string>): boolean {
   const matches = sqlDefinitionMatches(lookup, prefix);
-  if (matches.exact.length > 0) {
+  if (matches.exact.length) {
     return matches.exact.some((definition) => matchesSqlDefinitionName(definition.localName, targetNames));
   }
   if (matches.basename.length !== 1) return false;

@@ -34,7 +34,7 @@ function compareHotspotEntries(a: HotspotEntry, b: HotspotEntry): number {
 }
 
 function isHotspotUnderRoots(filePath: string, normalizedRoots: string[]): boolean {
-  if (normalizedRoots.length === 0) {
+  if (!normalizedRoots.length) {
     return true;
   }
   const normalizedFile = normalizeHotspotPath(filePath);
