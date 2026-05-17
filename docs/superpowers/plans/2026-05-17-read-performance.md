@@ -12,12 +12,12 @@
 
 ## Safety Rules
 
-- [ ] Do not change persistent SQLite schema in this branch.
-- [ ] Do not change public output shapes for `deps`, `rdeps`, `path`, `cycles`, `unresolved`, `search`, `explain`, or raw SQLite queries.
-- [ ] Preserve accuracy before speed: every optimization must compare against the existing graph semantics.
-- [ ] Write regression tests before production changes for each behavior change.
+- [x] Do not change persistent SQLite schema in this branch.
+- [x] Do not change public output shapes for `deps`, `rdeps`, `path`, `cycles`, `unresolved`, `search`, `explain`, or raw SQLite queries.
+- [x] Preserve accuracy before speed: every optimization must compare against the existing graph semantics.
+- [x] Write regression tests before production changes for each behavior change.
 - [x] Before every implementation commit, run `npm run build`, `npm run lint`, and `npm run test:ci`.
-- [ ] After each verified implementation commit, update this checklist and commit the checked-off plan changes.
+- [x] After each verified implementation commit, update this checklist and commit the checked-off plan changes.
 
 ## File Map
 
@@ -297,7 +297,7 @@
   - unnecessary docs churn
   - TypeScript style issues, including no `any` and no `as unknown as`
 
-- [ ] **Step 2: Run behavior comparison commands**
+- [x] **Step 2: Run behavior comparison commands**
 
   Run representative commands before final push:
   ```powershell
@@ -315,7 +315,7 @@
 
   If review finds issues, add or update tests first, implement fixes, rerun full verification, update the checklist, and commit.
 
-- [ ] **Step 4: Repeat review/refine cycle**
+- [x] **Step 4: Repeat review/refine cycle**
 
   Repeat Steps 1-3 until review finds no real issues.
 
