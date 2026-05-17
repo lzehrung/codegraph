@@ -1,5 +1,5 @@
-import readline from "node:readline";
 import { Readable } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import type { Diff, FileChange, Hunk } from "./types.js";
 
 type ParsedFileChange = FileChange & {
@@ -18,95 +18,117 @@ type ParsedFileChange = FileChange & {
   _similarityIndex?: number;
 };
 
+type DiffParserState = {
+  files: FileChange[];
+  currentFile: ParsedFileChange | null;
+  currentHunk: Hunk | null;
+};
+
 export function parseUnifiedDiff(diffText: string): Diff {
-  const files: FileChange[] = [];
+  const state = createParserState();
   const lines = diffText.split(/\r?\n/);
 
-  let currentFile: ParsedFileChange | null = null;
-  let currentHunk: Hunk | null = null;
-
   for (const line of lines) {
-    if (line.startsWith("diff --git")) {
-      if (currentFile) {
-        if (currentHunk) currentFile.hunks.push(currentHunk);
-        finalizeFile(currentFile);
-        files.push(currentFile);
-      }
-      currentFile = initiateFile(line);
-      currentHunk = null;
-    } else if (currentFile) {
-      if (line.startsWith("@@")) {
-        if (currentHunk) {
-          currentFile.hunks.push(currentHunk);
-        }
-        currentHunk = initiateHunk(line);
-      } else if (currentHunk) {
-        if (!line.startsWith("\\")) {
-          const prefix = line[0];
-          if (prefix === "+" || prefix === "-" || prefix === " ") {
-            currentHunk.lines.push(line);
-          }
-        }
-      } else {
-        parseHeaderLine(currentFile, line);
-      }
-    }
+    parseDiffLine(state, line);
   }
 
-  if (currentFile) {
-    if (currentHunk) currentFile.hunks.push(currentHunk);
-    finalizeFile(currentFile);
-    files.push(currentFile);
-  }
-
-  return { files };
+  return finishParserState(state);
 }
 
 export async function parseUnifiedDiffStreaming(stream: Readable): Promise<Diff> {
-  const rl = readline.createInterface({
-    input: stream,
-    terminal: false,
-  });
+  const state = createParserState();
+  const decoder = new StringDecoder("utf8");
+  let buffered = "";
 
-  const files: FileChange[] = [];
-  let currentFile: ParsedFileChange | null = null;
-  let currentHunk: Hunk | null = null;
+  for await (const chunk of stream) {
+    buffered += decodeStreamChunk(decoder, chunk);
+    buffered = parseBufferedLines(state, buffered);
+  }
 
-  for await (const line of rl) {
-    if (line.startsWith("diff --git")) {
-      if (currentFile) {
-        if (currentHunk) currentFile.hunks.push(currentHunk);
-        finalizeFile(currentFile);
-        files.push(currentFile);
-      }
-      currentFile = initiateFile(line);
-      currentHunk = null;
-    } else if (currentFile) {
-      if (line.startsWith("@@")) {
-        if (currentHunk) {
-          currentFile.hunks.push(currentHunk);
-        }
-        currentHunk = initiateHunk(line);
-      } else if (currentHunk) {
-        if (!line.startsWith("\\")) {
-          const prefix = line[0];
-          if (prefix === "+" || prefix === "-" || prefix === " ") {
-            currentHunk.lines.push(line);
-          }
-        }
-      } else {
-        parseHeaderLine(currentFile, line);
+  buffered += decoder.end();
+  buffered = parseBufferedLines(state, buffered);
+
+  if (buffered) {
+    parseDiffLine(state, buffered.endsWith("\r") ? buffered.slice(0, -1) : buffered);
+  }
+
+  return finishParserState(state);
+}
+
+function createParserState(): DiffParserState {
+  return {
+    files: [],
+    currentFile: null,
+    currentHunk: null,
+  };
+}
+
+function parseBufferedLines(state: DiffParserState, buffered: string): string {
+  let lineStart = 0;
+  for (;;) {
+    const newlineIndex = buffered.indexOf("\n", lineStart);
+    if (newlineIndex < 0) break;
+    const lineEnd = newlineIndex > lineStart && buffered[newlineIndex - 1] === "\r" ? newlineIndex - 1 : newlineIndex;
+    parseDiffLine(state, buffered.slice(lineStart, lineEnd));
+    lineStart = newlineIndex + 1;
+  }
+
+  return buffered.slice(lineStart);
+}
+
+function parseDiffLine(state: DiffParserState, line: string): void {
+  if (line.startsWith("diff --git")) {
+    finishCurrentFile(state);
+    state.currentFile = initiateFile(line);
+    state.currentHunk = null;
+    return;
+  }
+
+  if (!state.currentFile) return;
+
+  if (line.startsWith("@@")) {
+    if (state.currentHunk) {
+      state.currentFile.hunks.push(state.currentHunk);
+    }
+    state.currentHunk = initiateHunk(line);
+    return;
+  }
+
+  if (state.currentHunk) {
+    if (!line.startsWith("\\")) {
+      const prefix = line[0];
+      if (prefix === "+" || prefix === "-" || prefix === " ") {
+        state.currentHunk.lines.push(line);
       }
     }
+    return;
   }
 
-  if (currentFile) {
-    if (currentHunk) currentFile.hunks.push(currentHunk);
-    finalizeFile(currentFile);
-    files.push(currentFile);
-  }
+  parseHeaderLine(state.currentFile, line);
+}
 
-  return { files };
+function finishParserState(state: DiffParserState): Diff {
+  finishCurrentFile(state);
+  return { files: state.files };
+}
+
+function finishCurrentFile(state: DiffParserState): void {
+  if (!state.currentFile) return;
+
+  if (state.currentHunk) {
+    state.currentFile.hunks.push(state.currentHunk);
+  }
+  finalizeFile(state.currentFile);
+  state.files.push(state.currentFile);
+  state.currentFile = null;
+  state.currentHunk = null;
+}
+
+function decodeStreamChunk(decoder: StringDecoder, chunk: unknown): string {
+  if (typeof chunk === "string") return chunk;
+  if (Buffer.isBuffer(chunk)) return decoder.write(chunk);
+  if (chunk instanceof Uint8Array) return decoder.write(Buffer.from(chunk));
+  return String(chunk);
 }
 
 function decodeGitPath(rawPath: string): string {

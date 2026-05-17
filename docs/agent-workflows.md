@@ -21,6 +21,8 @@ codegraph mcp serve --root . --port 7331
 
 Then use the recommended commands from `inspect`, or the stable handles and follow-up commands from `search`, to narrow the next graph, navigation, or impact pass.
 
+For durable repo-local scan scope, add `codegraph.config.json` at the project root. `discovery.ignoreGlobs` keeps large fixture, generated, or vendored folders out of agent search, MCP sessions, graphing, unresolved-import checks, impact, and review unless a command explicitly changes scan scope.
+
 For the raw CLI command reference, see [docs/cli.md](./cli.md).
 
 ## Search anchors

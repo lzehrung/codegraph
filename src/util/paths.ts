@@ -42,14 +42,14 @@ function isRelativeToRoot(normalizedRoot: string, normalizedFile: string): boole
       return true;
     }
     const relativePath = normalizePath(path.win32.relative(comparableRoot, comparableFile));
-    return relativePath.length > 0 && !relativePath.startsWith("..") && !path.win32.isAbsolute(relativePath);
+    return !!relativePath.length && !relativePath.startsWith("..") && !path.win32.isAbsolute(relativePath);
   }
 
   if (comparableFile === comparableRoot) {
     return true;
   }
   const relativePath = path.relative(comparableRoot, comparableFile);
-  return relativePath.length > 0 && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
+  return !!relativePath.length && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
 }
 
 export function isFilePathWithinRoot(projectRoot: string, filePath: string): boolean {

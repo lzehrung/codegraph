@@ -189,7 +189,7 @@ export async function buildSymbolGraphDetailed(
       const hasFuncOrClass = moduleEntry.locals.some(
         (local) => local.kind === SymbolKind.Function || local.kind === SymbolKind.Class,
       );
-      const isImportedOrImports = importedByOthers.has(normalizePath(file)) || moduleEntry.imports.length > 0;
+      const isImportedOrImports = importedByOthers.has(normalizePath(file)) || !!moduleEntry.imports.length;
       if (!(hasFuncOrClass && isImportedOrImports)) continue;
     }
     try {
@@ -441,7 +441,7 @@ export async function buildSymbolGraphDetailed(
         if (!current || !isIdentifierType(sup, current.type)) return false;
         const alias = sliceText(current, src);
         const targetFile = aliasToTargetModule.get(alias);
-        if (!targetFile || names.length === 0) return false;
+        if (!targetFile || !names.length) return false;
         const targetDef = resolveMemberPathFromModule(targetFile, names);
         if (targetDef && fromId) {
           const toId = defNodeId(targetDef);
@@ -584,7 +584,7 @@ export async function buildSymbolGraphDetailed(
             if (!current || !isIdentifierType(sup, current.type)) return;
             const alias = sliceText(current, src);
             const targetFile = aliasToTargetModule.get(alias);
-            if (!targetFile || names.length === 0) return;
+            if (!targetFile || !names.length) return;
             const targetDef = resolveMemberPathFromModule(targetFile, names);
             if (targetDef) {
               const toId = defNodeId(targetDef);

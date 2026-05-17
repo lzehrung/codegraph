@@ -22,6 +22,18 @@ const index = await buildProjectIndex(process.cwd(), { native: "auto" });
 const jsOnlyIndex = await buildProjectIndex(process.cwd(), { native: "off" });
 ```
 
+CLI commands and agent sessions read `codegraph.config.json` from the project root when it exists. Core indexing APIs keep discovery explicit, so pass `discovery` options directly when you want the same scan scope in custom code:
+
+```ts
+import { buildProjectIndex, loadCodegraphConfig } from "@lzehrung/codegraph";
+
+const root = process.cwd();
+const config = await loadCodegraphConfig(root);
+const index = await buildProjectIndex(root, {
+  ...(config.discovery ? { discovery: config.discovery } : {}),
+});
+```
+
 ## Agent search
 
 `searchCodegraph()` builds a project snapshot and returns deterministic, agent-ready anchors across files, symbols, chunks, SQL objects, and optional graph neighborhoods. Handles are project-relative and explainable; large result packets include `resultCount`, `totalCandidates`, `limits`, and `omittedCounts`.
@@ -220,6 +232,7 @@ const incremental = await buildProjectIndexIncremental(root, {
 ## Project file discovery and graph building
 
 `listProjectFiles` defaults to source files plus common project manifests and lockfiles across supported languages, for example `package.json`, `requirements.txt`, `pyproject.toml`, and `Cargo.toml`.
+When scanning a child directory with project-root-relative include or ignore globs, pass `globRoot`.
 
 ```ts
 import { listProjectFiles, discoverProjectFiles, collectGraph } from "@lzehrung/codegraph";
@@ -229,6 +242,10 @@ const files = await listProjectFiles(root);
 const tsFilesOnly = await listProjectFiles(root, undefined, {
   includeGlobs: ["src/**/*.ts"],
   ignoreGlobs: ["src/**/*.spec.ts"],
+});
+const scopedTests = await listProjectFiles(`${root}/tests`, undefined, {
+  globRoot: root,
+  ignoreGlobs: ["tests/samples/**"],
 });
 const includeIgnoredFiles = await listProjectFiles(root, undefined, {
   useGitignore: false,
@@ -256,7 +273,10 @@ import { listProjectFiles, buildProjectIndexFromFiles } from "@lzehrung/codegrap
 const root = process.cwd();
 const tsRoot = `${root}/tests/samples/typescript`;
 const jsRoot = `${root}/tests/samples/javascript`;
-const files = [...(await listProjectFiles(tsRoot)), ...(await listProjectFiles(jsRoot))];
+const files = [
+  ...(await listProjectFiles(tsRoot, undefined, { globRoot: root })),
+  ...(await listProjectFiles(jsRoot, undefined, { globRoot: root })),
+];
 
 const index = await buildProjectIndexFromFiles(root, Array.from(new Set(files)));
 console.log({ files: index.byFile.size, edges: index.graph.edges.length });

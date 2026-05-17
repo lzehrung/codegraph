@@ -33,7 +33,7 @@ export function getFreshnessInputs(rootDir) {
 export function inspectDistForTests(rootDir) {
   const requiredEntries = getRequiredDistEntries(rootDir);
   const missingEntries = requiredEntries.filter((entry) => !fs.existsSync(entry));
-  if (missingEntries.length > 0) {
+  if (missingEntries.length) {
     return {
       needsBuild: true,
       reason: "missing",

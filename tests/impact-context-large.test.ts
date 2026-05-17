@@ -86,7 +86,7 @@ const computeExpectedNeighbors = (graph: MockSymbolGraph, changedSymbolIds: stri
   let currentLevel = changedSymbolIds.slice();
   const neighbors: NeighborInfo[] = [];
 
-  for (let depth = 0; depth < hops && currentLevel.length > 0; depth++) {
+  for (let depth = 0; depth < hops && currentLevel.length; depth++) {
     const nextLevel: string[] = [];
 
     for (const symbolId of currentLevel) {

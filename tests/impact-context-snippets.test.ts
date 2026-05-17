@@ -58,7 +58,7 @@ index 1234567..abcdef0 100644
       const itemsWithRefs = report.impacted.filter((item) => {
         return "refs" in item && Boolean(item.refs) && !!item.refs?.length;
       }) as Array<{ refs: NonNullable<any> }>;
-      if (itemsWithRefs.length > 0) {
+      if (itemsWithRefs.length) {
         for (const item of itemsWithRefs) {
           expect(item.refs).toBeDefined();
           expect(Array.isArray(item.refs)).toBe(true);
@@ -98,7 +98,7 @@ index 1234567..abcdef0 100644
       const itemsWithRefs = report.impacted.filter((item) => {
         return "refs" in item && Boolean(item.refs) && !!item.refs?.length;
       }) as Array<{ refs: NonNullable<any> }>;
-      if (itemsWithRefs.length > 0) {
+      if (itemsWithRefs.length) {
         for (const item of itemsWithRefs) {
           for (const ref of item.refs) {
             // Should have at most 5 lines (2 before + target + 2 after)
@@ -135,7 +135,7 @@ index 1234567..abcdef0 100644
       const itemsWithRefs = report.impacted.filter((item) => {
         return "refs" in item && Boolean(item.refs) && !!item.refs?.length;
       }) as Array<{ refs: NonNullable<any> }>;
-      if (itemsWithRefs.length > 0) {
+      if (itemsWithRefs.length) {
         for (const item of itemsWithRefs) {
           expect(item.refs).toBeDefined();
 
@@ -177,7 +177,7 @@ index 1234567..abcdef0 100644
       const itemsWithRefs = report.impacted.filter((item) => {
         return "refs" in item && Boolean(item.refs) && !!item.refs?.length;
       }) as Array<{ refs: NonNullable<any> }>;
-      if (itemsWithRefs.length > 0) {
+      if (itemsWithRefs.length) {
         for (const item of itemsWithRefs) {
           for (const ref of item.refs) {
             const lines = ref.context!.split(/\r?\n/);

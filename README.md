@@ -44,21 +44,21 @@ Real `inspect ./src --limit 10` output against this repo looks like:
   },
   "hotspots": [
     {
-      "file": "E:/git repos/codegraph/src/languages/types.ts",
+      "file": "/workspace/codegraph/src/languages/types.ts",
       "fanIn": 35,
       "fanOut": 1,
       "score": 71
     },
     {
-      "file": "E:/git repos/codegraph/src/indexer.ts",
+      "file": "/workspace/codegraph/src/indexer.ts",
       "fanIn": 16,
       "fanOut": 27,
       "score": 59
     }
   ],
   "recommendedCommands": [
-    "codegraph hotspots --root \"E:/git repos/codegraph/src\" --limit 20 --json",
-    "codegraph graph --root \"E:/git repos/codegraph/src\" --json --symbols-detailed --compact-json"
+    "codegraph hotspots --root \"/workspace/codegraph/src\" --limit 20 --json",
+    "codegraph graph --root \"/workspace/codegraph/src\" --json --symbols-detailed --compact-json"
   ]
 }
 ```
@@ -78,6 +78,18 @@ Real `inspect ./src --limit 10` output against this repo looks like:
 - Native Tree-sitter acceleration by default when a compatible artifact is available, with an opt-in JS fallback path when you need it.
 
 Sample graph output can be generated with `npm run graph:mermaid` or `npm run graph:json`, and the repo also ships a browser viewer app in `docs/graph-visualization` for inspecting graph JSON interactively.
+
+This repo keeps test fixtures out of default Codegraph scans with `codegraph.config.json`:
+
+```json
+{
+  "discovery": {
+    "ignoreGlobs": ["tests/samples/**"]
+  }
+}
+```
+
+Use this pattern in other repos when large fixture, generated, or vendored trees should not participate in search, unresolved-import checks, graphing, indexing, inspect, impact, or review runs. Config globs are project-root-relative; CLI `--include-glob`, `--ignore-glob`, and `--no-gitignore` options remain available for one-off overrides relative to the active scan root.
 
 ## Quick start
 

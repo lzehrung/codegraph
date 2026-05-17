@@ -188,7 +188,7 @@ export function chunkFile(opts: ChunkFileOptions): Chunk[] {
 
     const innerInRange = innerBlocks.filter((ib) => ib.startByte > block.startByte && ib.endByte < block.endByte);
 
-    if (innerInRange.length === 0) {
+    if (!innerInRange.length) {
       splitLargeBlockSimple(block, source, tokenizer, maxTokens, makeChunkId, preliminaryChunks, language.id, filePath);
     } else {
       splitLargeBlockUsingInnerBlocks(
@@ -299,7 +299,7 @@ function splitLargeBlockSimple(
   let currentTokens = 0;
 
   const flush = () => {
-    if (currentLines.length === 0) return;
+    if (!currentLines.length) return;
     const chunkText = currentLines.join("\n");
     const tokenCount = tokenizer(chunkText);
     const endLine = currentStartLine + currentLines.length - 1;
@@ -321,7 +321,7 @@ function splitLargeBlockSimple(
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     const lineTokens = tokenizer(line);
-    if (currentTokens + lineTokens > maxTokens && currentLines.length > 0) {
+    if (currentTokens + lineTokens > maxTokens && currentLines.length) {
       flush();
       currentStartLine = block.startLine + i;
     }
@@ -366,7 +366,7 @@ function splitLargeBlockUsingInnerBlocks(
     segments.push({ startByte, endByte });
   }
 
-  if (segments.length === 0) {
+  if (!segments.length) {
     splitLargeBlockSimple(block, source, tokenizer, maxTokens, makeChunkId, out, languageId, filePath);
     return;
   }
@@ -436,7 +436,7 @@ function mergeSmallChunks(
   maxTokens: number,
   tokenizer: (text: string) => number,
 ): Chunk[] {
-  if (chunks.length === 0) return [];
+  if (!chunks.length) return [];
 
   const merged: Chunk[] = [];
   let i = 0;
@@ -480,7 +480,7 @@ function fillGapsWithMiscChunks(
   maxTokens: number,
   makeChunkId: () => string,
 ): Chunk[] {
-  if (chunks.length === 0) {
+  if (!chunks.length) {
     const tokens = tokenizer(source);
     if (tokens === 0) return [];
     return [

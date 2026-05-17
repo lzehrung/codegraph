@@ -42,7 +42,7 @@ export function chunkTextFile(opts: TextChunkOptions): Chunk[] {
   let currentStartLine = 1;
 
   const pushChunk = () => {
-    if (currentLines.length === 0) return;
+    if (!currentLines.length) return;
     const text = currentLines.join("\n");
     const tokenCount = tokenizer(text);
     if (tokenCount === 0) return;
@@ -64,7 +64,7 @@ export function chunkTextFile(opts: TextChunkOptions): Chunk[] {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     const lineTokens = tokenizer(line);
-    if (currentTokens + lineTokens > maxTokens && currentLines.length > 0) {
+    if (currentTokens + lineTokens > maxTokens && currentLines.length) {
       pushChunk();
       currentStartLine = i + 1;
     }

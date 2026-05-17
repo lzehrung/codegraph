@@ -56,7 +56,7 @@ export function parseRustImportStatement(stmtText: string): ParsedRustImportStat
   }
 
   const parts = rawPath.split("::").filter(Boolean);
-  if (parts.length === 0) return null;
+  if (!parts.length) return null;
   if (parts.length === 1) {
     const moduleName = parts[0];
     if (!moduleName) return null;
@@ -309,7 +309,7 @@ function evaluatePhpIncludeToken(token: string, fromFile?: string): string | nul
 function resolvePhpIncludePath(expr: string, fromFile?: string): string | null {
   const normalizedExpr = stripOuterParens(expr.trim().replace(/;$/, ""));
   const parts = splitPhpConcatenation(normalizedExpr);
-  if (parts.length === 0) {
+  if (!parts.length) {
     return null;
   }
 

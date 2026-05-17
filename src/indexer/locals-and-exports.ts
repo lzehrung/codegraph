@@ -230,7 +230,7 @@ export function collectLocalsAndExportsFromSource(
       comments.unshift(clean.trim());
       prev = prev.previousNamedSibling;
     }
-    return comments.length > 0 ? comments.join("\n").trim() : undefined;
+    return comments.length ? comments.join("\n").trim() : undefined;
   };
 
   const countMatches = (text: string, re: RegExp): number => {
@@ -503,7 +503,7 @@ export function collectLocalsAndExportsFromSource(
           if (isAllAssignment && map["stmt"]) {
             const assignmentText = map["stmt"].text;
             const hasTuple = /=\s*\(/.test(assignmentText);
-            if (items.length === 0 || hasTuple) {
+            if (!items.length || hasTuple) {
               const strRe = /["']([^"']+)["']/g;
               for (let submatch; (submatch = strRe.exec(assignmentText)); ) {
                 const name = submatch[1]!;

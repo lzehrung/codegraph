@@ -61,14 +61,14 @@ function parseArgs(argv) {
         .slice("--temperatures=".length)
         .split(",")
         .map((value) => value.trim())
-        .filter((value) => value.length > 0);
+        .filter((value) => value.length);
       continue;
     }
     if (arg === "--temperatures") {
       options.temperatures = (argv[index + 1] ?? "")
         .split(",")
         .map((value) => value.trim())
-        .filter((value) => value.length > 0);
+        .filter((value) => value.length);
       index += 1;
       continue;
     }
@@ -77,14 +77,14 @@ function parseArgs(argv) {
         .slice("--workloads=".length)
         .split(",")
         .map((value) => value.trim())
-        .filter((value) => value.length > 0);
+        .filter((value) => value.length);
       continue;
     }
     if (arg === "--workloads") {
       options.workloads = (argv[index + 1] ?? "")
         .split(",")
         .map((value) => value.trim())
-        .filter((value) => value.length > 0);
+        .filter((value) => value.length);
       index += 1;
       continue;
     }
@@ -129,14 +129,14 @@ function parseArgs(argv) {
         .slice("--fixtures=".length)
         .split(",")
         .map((value) => value.trim())
-        .filter((value) => value.length > 0);
+        .filter((value) => value.length);
       continue;
     }
     if (arg === "--fixtures") {
       options.fixtures = (argv[index + 1] ?? "")
         .split(",")
         .map((value) => value.trim())
-        .filter((value) => value.length > 0);
+        .filter((value) => value.length);
       index += 1;
       continue;
     }

@@ -100,13 +100,13 @@ function createAsyncQueue<T>(): AsyncQueue<T> {
     close() {
       if (closed) return;
       closed = true;
-      while (waiters.length > 0) {
+      while (waiters.length) {
         const waiter = waiters.shift();
         waiter?.({ value: undefined, done: true });
       }
     },
     async next(): Promise<IteratorResult<T>> {
-      if (values.length > 0) {
+      if (values.length) {
         const nextValue = values.shift()!;
         return { value: nextValue, done: false };
       }

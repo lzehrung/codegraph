@@ -131,7 +131,7 @@ function getDirtyPaths() {
 
 function ensureCleanWorktree() {
   const dirtyPaths = getDirtyPaths();
-  if (dirtyPaths.length > 0) {
+  if (dirtyPaths.length) {
     console.error("Release scripts require a clean git worktree.");
     process.exit(1);
   }
@@ -140,7 +140,7 @@ function ensureCleanWorktree() {
 function ensureResumableWorktree() {
   const dirtyPaths = getDirtyPaths();
   const unexpectedPaths = dirtyPaths.filter((filePath) => !isAllowedResumePath(filePath));
-  if (unexpectedPaths.length > 0) {
+  if (unexpectedPaths.length) {
     console.error(`Release resume only supports dirty version files. Unexpected paths: ${unexpectedPaths.join(", ")}`);
     process.exit(1);
   }
@@ -228,7 +228,7 @@ function restoreRootPackage(versionPlan) {
 }
 
 function doesLocalTagExist(tagName) {
-  return gitOutput(["tag", "--list", tagName]).length > 0;
+  return !!gitOutput(["tag", "--list", tagName]).length;
 }
 
 function listTags(pattern) {
@@ -275,7 +275,7 @@ function packageHasOwnedChanges(pkg) {
 }
 
 function resolveRequestedPackages(packageSelectors) {
-  if (packageSelectors.length === 0) {
+  if (!packageSelectors.length) {
     return [];
   }
   const selectedIds = new Set(packageSelectors.map((selector) => getReleasePackage(selector).id));
@@ -283,7 +283,7 @@ function resolveRequestedPackages(packageSelectors) {
 }
 
 function determineReleasePackages({ shouldResume, requestedPackages }) {
-  if (requestedPackages.length > 0) {
+  if (requestedPackages.length) {
     return requestedPackages;
   }
   if (shouldResume) {
@@ -390,7 +390,7 @@ const selectedPackages = determineReleasePackages({
   requestedPackages,
 });
 
-if (selectedPackages.length === 0) {
+if (!selectedPackages.length) {
   console.log("No publishable package changes detected.");
   process.exit(0);
 }

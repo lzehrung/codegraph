@@ -188,7 +188,7 @@ export async function tool_getFileOverview(
     const overview = buildToolFileOverview(root, symbols);
     const renderedOverview = renderToolFileOverview(relativeFile, overview);
 
-    const hasSymbols = overview.imports.length > 0 || overview.definitions.length > 0;
+    const hasSymbols = !!(overview.imports.length || overview.definitions.length);
 
     return {
       status: "ok",
@@ -484,7 +484,7 @@ export async function tool_getHotspots(
     const limit = getToolLimit(options.limit);
     const hotspots = getHotspots(index.graph, {
       ...(limit !== undefined ? { limit } : {}),
-      ...(includeRoots.length > 0 ? { includeRoots } : {}),
+      ...(includeRoots.length ? { includeRoots } : {}),
     }).map((entry) => ({
       file: normalizeToolFileOutput(root, entry.file),
       fanIn: entry.fanIn,
@@ -607,7 +607,7 @@ function buildToolFileOverview(
     }));
 
   let summary: string | undefined;
-  if (imports.length > 0 || definitions.length > 0) {
+  if (imports.length || definitions.length) {
     summary = `${imports.length} imports, ${definitions.length} definitions`;
   }
 
@@ -626,7 +626,7 @@ function renderToolFileOverview(file: string, overview: ToolFileOverview): strin
   }
 
   lines.push("", "## Imports");
-  if (overview.imports.length === 0) {
+  if (!overview.imports.length) {
     lines.push("No imports found.");
   } else {
     const uniqueImports = Array.from(new Set(overview.imports.map((entry) => entry.name)));
@@ -634,7 +634,7 @@ function renderToolFileOverview(file: string, overview: ToolFileOverview): strin
   }
 
   lines.push("", "## Definitions");
-  if (overview.definitions.length === 0) {
+  if (!overview.definitions.length) {
     lines.push("No definitions found.");
   } else {
     for (const def of overview.definitions) {
@@ -646,7 +646,7 @@ function renderToolFileOverview(file: string, overview: ToolFileOverview): strin
     }
   }
 
-  if (overview.imports.length === 0 && overview.definitions.length === 0) {
+  if (!overview.imports.length && !overview.definitions.length) {
     lines.push("", "No symbols found.");
   }
 

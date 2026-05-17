@@ -222,14 +222,14 @@ export function collectModuleSpecifiersFromSource(
         out.length = 0;
       }
     }
-    if ((queryFailed || out.length === 0) && shouldAttemptFallback) {
+    if ((queryFailed || !out.length) && shouldAttemptFallback) {
       const extracted = extractPythonSpecifiers(source);
-      if (extracted.length > 0) {
+      if (extracted.length) {
         reportFallback(queryFailed ? "query-error" : "query-empty");
         for (const spec of extracted) out.push({ spec });
       }
     }
-    if (out.length > 0 || resolvedNativeImports !== null || queryFailed) {
+    if (out.length || resolvedNativeImports !== null || queryFailed) {
       return normalizeModuleSpecifiers(out);
     }
   }
@@ -287,9 +287,9 @@ export function collectModuleSpecifiersFromSource(
       })();
     if (phpTree) {
       const qualifiedSpecifiers = extractPhpQualifiedSpecifiersFromTree(source, phpTree);
-      if (qualifiedSpecifiers.length > 0) out.push(...qualifiedSpecifiers);
+      if (qualifiedSpecifiers.length) out.push(...qualifiedSpecifiers);
     }
-    if (out.length > 0 || phpMatches !== null || queryFailed) {
+    if (out.length || phpMatches !== null || queryFailed) {
       return normalizeModuleSpecifiers(out);
     }
   }
@@ -350,7 +350,7 @@ export function collectModuleSpecifiersFromSource(
         const cssSeen = makeSeenSet(out);
         appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
       }
-      if (out.length > 0 || isNativeQueryAuthoritative(support, "imports")) {
+      if (out.length || isNativeQueryAuthoritative(support, "imports")) {
         return normalizeModuleSpecifiers(out);
       }
     } catch (error) {
@@ -370,10 +370,10 @@ export function collectModuleSpecifiersFromSource(
     if (!isJsFallbackAvailable()) {
       fallbackReasonOverride = "js-fallback-unavailable";
     }
-    if ((queryFailed || out.length === 0) && shouldAttemptFallback) {
+    if ((queryFailed || !out.length) && shouldAttemptFallback) {
       try {
         const extracted = extractJsTsSpecifiers(source);
-        if (extracted.length > 0) {
+        if (extracted.length) {
           reportFallback(fallbackReasonOverride ?? (queryFailed ? "query-error" : "query-empty"));
           out.push(...extracted);
         }
@@ -436,7 +436,7 @@ export function collectModuleSpecifiersFromSource(
       const cssSeen = makeSeenSet(out);
       appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
     }
-    if (out.length > 0) return normalizeModuleSpecifiers(out);
+    if (out.length) return normalizeModuleSpecifiers(out);
   } catch (error) {
     if (isJsFallbackUnavailableError(error)) {
       fallbackReasonOverride = "js-fallback-unavailable";
@@ -458,10 +458,10 @@ export function collectModuleSpecifiersFromSource(
     queryFailed = true;
   }
 
-  if (supportsRegexImportRecovery && (queryFailed || out.length === 0) && shouldAttemptFallback) {
+  if (supportsRegexImportRecovery && (queryFailed || !out.length) && shouldAttemptFallback) {
     try {
       const extracted = extractJsTsSpecifiers(source);
-      if (extracted.length > 0) {
+      if (extracted.length) {
         reportFallback(fallbackReasonOverride ?? (queryFailed ? "query-error" : "query-empty"));
         out.push(...extracted);
       }
@@ -470,10 +470,10 @@ export function collectModuleSpecifiersFromSource(
     }
   }
 
-  if (htmlLikeLanguage && (queryFailed || out.length === 0)) {
+  if (htmlLikeLanguage && (queryFailed || !out.length)) {
     const attributeSpecs = extractHtmlAttributeSpecifiers(source);
     const inlineSpecs = extractHtmlInlineScriptSpecifiers(source);
-    if (attributeSpecs.length > 0 || inlineSpecs.length > 0) {
+    if (attributeSpecs.length || inlineSpecs.length) {
       const fallbackSeen = makeSeenSet(out);
       appendUniqueSpecifiers(out, attributeSpecs, fallbackSeen);
       appendUniqueSpecifiers(out, inlineSpecs, fallbackSeen);
