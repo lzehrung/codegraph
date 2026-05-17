@@ -40,4 +40,33 @@ describe("agent session", () => {
 
     expect(snapshot.files.some((file) => file.endsWith("index.ts"))).toBe(true);
   });
+
+  it("preserves explicit discovery globRoot when loading a child root", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-session-child-root-"));
+    const testsRoot = path.join(root, "tests");
+    const keptFile = path.join(testsRoot, "unit", "app.test.ts");
+    const ignoredFile = path.join(testsRoot, "samples", "fixture.ts");
+
+    await fs.mkdir(path.dirname(keptFile), { recursive: true });
+    await fs.mkdir(path.dirname(ignoredFile), { recursive: true });
+    await fs.writeFile(keptFile, "export const kept = 1;\n", "utf8");
+    await fs.writeFile(ignoredFile, "export const ignored = 1;\n", "utf8");
+
+    const session = createAgentSession({
+      root: testsRoot,
+      useConfig: false,
+      discovery: {
+        globRoot: root,
+        includeGlobs: ["tests/**/*.ts"],
+        ignoreGlobs: ["tests/samples/**"],
+        useGitignore: false,
+      },
+    });
+
+    const snapshot = await session.loadProject();
+    const files = snapshot.files.map((file) => file.replace(/\\/g, "/"));
+
+    expect(files).toContain(keptFile.replace(/\\/g, "/"));
+    expect(files).not.toContain(ignoredFile.replace(/\\/g, "/"));
+  });
 });

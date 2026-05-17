@@ -35,7 +35,9 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
       const useConfig = options.useConfig ?? true;
       const config = useConfig ? await loadCodegraphConfig(options.root) : {};
       const discovery = mergeDiscoveryOptions(config.discovery, options.discovery);
-      const discoveryOptions = hasDiscoveryOptions(discovery) ? { ...discovery, globRoot: options.root } : undefined;
+      const discoveryOptions = hasDiscoveryOptions(discovery)
+        ? { ...discovery, globRoot: discovery.globRoot ?? options.root }
+        : undefined;
       const files = await listProjectFiles(options.root, undefined, discoveryOptions);
       const index = await buildProjectIndexFromFiles(options.root, files, {
         keepParsed: true,
