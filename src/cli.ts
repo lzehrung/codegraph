@@ -2255,7 +2255,16 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return;
   }
 
+  const buildGraphQueryIndexOptions = (graphOptions: GraphBuildOptions | undefined): BuildOptions => ({
+    onProgress: progressHandler,
+    discovery: discoveryOptions,
+    ...(graphOptions ? { graph: graphOptions } : {}),
+    ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+    ...workerOpts,
+  });
+
   if (cmd === "deps" || cmd === "rdeps") {
+    const graphOptions = hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined;
     await handleGraphQueryCommand({
       command: cmd,
       positionals: parsed.positionals,
@@ -2268,12 +2277,14 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       writeStderrLine,
       exit: exitCli,
       listProjectFilesForScan: async () => await listProjectFilesForScan(projectRootFs),
-      ...(hasGraphOverrides || nativeMode !== "auto" ? { graphOptions: buildGraphOptions() } : {}),
+      ...(graphOptions ? { graphOptions } : {}),
+      indexOptions: buildGraphQueryIndexOptions(graphOptions),
     });
     return;
   }
 
   if (cmd === "path" || cmd === "cycles" || cmd === "unresolved") {
+    const graphOptions = hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined;
     await handleGraphQueryCommand({
       command: cmd,
       positionals: parsed.positionals,
@@ -2286,7 +2297,8 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       writeStderrLine,
       exit: exitCli,
       listProjectFilesForScan: async () => await listProjectFilesForScan(projectRootFs),
-      ...(hasGraphOverrides || nativeMode !== "auto" ? { graphOptions: buildGraphOptions() } : {}),
+      ...(graphOptions ? { graphOptions } : {}),
+      indexOptions: buildGraphQueryIndexOptions(graphOptions),
     });
     return;
   }

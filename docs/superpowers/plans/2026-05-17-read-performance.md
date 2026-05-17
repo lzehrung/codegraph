@@ -287,7 +287,7 @@
 - Modify as required by review findings
 - Update: `docs/superpowers/plans/2026-05-17-read-performance.md`
 
-- [ ] **Step 1: Deep review changed files**
+- [x] **Step 1: Deep review changed files**
 
   Review branch diff against `origin/main` for:
   - accuracy regressions
@@ -311,7 +311,7 @@
   ```
   Expected: build/lint/test pass, commands return valid JSON, and no command errors.
 
-- [ ] **Step 3: Fix all real review findings**
+- [x] **Step 3: Fix all real review findings**
 
   If review finds issues, add or update tests first, implement fixes, rerun full verification, update the checklist, and commit.
 
