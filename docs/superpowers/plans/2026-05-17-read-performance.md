@@ -319,14 +319,14 @@
 
   Repeat Steps 1-3 until review finds no real issues.
 
-- [ ] **Step 5: Push branch**
+- [x] **Step 5: Push branch**
 
   Run:
   ```powershell
   git push -u origin readspeed
   ```
 
-- [ ] **Step 6: Open pull request**
+- [x] **Step 6: Open pull request**
 
   Use `gh pr create` if authenticated. The PR description must include:
   - Summary of performance changes
