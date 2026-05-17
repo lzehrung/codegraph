@@ -72,6 +72,29 @@ describe("codegraph config", () => {
     expect(merged.ignoreGlobs).toEqual(["tests/samples/**", "dist/**"]);
   });
 
+  it("normalizes discovery roots before merging and option detection", () => {
+    expect(hasDiscoveryOptions({ globRoot: " " })).toBe(false);
+    expect(hasDiscoveryOptions({ gitignoreRoot: "\t" })).toBe(false);
+    expect(hasDiscoveryOptions({ globRoot: " repo-root " })).toBe(true);
+
+    const merged = mergeDiscoveryOptions(
+      {
+        globRoot: " repo-root ",
+        gitignoreRoot: " git-root ",
+      },
+      {
+        globRoot: " ",
+        gitignoreRoot: "",
+      },
+    );
+
+    expect(merged).toEqual({
+      globRoot: "repo-root",
+      gitignoreRoot: "git-root",
+    });
+    expect(mergeDiscoveryOptions({ globRoot: "", gitignoreRoot: " " }, undefined)).toEqual({});
+  });
+
   it("recognizes discovery root and logging options as meaningful options", () => {
     expect(hasDiscoveryOptions({ globRoot: "repo-root" })).toBe(true);
     expect(hasDiscoveryOptions({ gitignoreRoot: "repo-root" })).toBe(true);

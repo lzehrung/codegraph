@@ -30,13 +30,18 @@ function uniq(values: readonly string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim().replace(/\\/g, "/")).filter(Boolean)));
 }
 
+function normalizeDiscoveryRoot(root: string | undefined): string | undefined {
+  const normalized = root?.trim();
+  return normalized ? normalized : undefined;
+}
+
 export function hasDiscoveryOptions(discovery: ProjectFileDiscoveryOptions): boolean {
   return Boolean(
     discovery.includeGlobs?.length ||
     discovery.ignoreGlobs?.length ||
     discovery.useGitignore !== undefined ||
-    discovery.globRoot ||
-    discovery.gitignoreRoot ||
+    normalizeDiscoveryRoot(discovery.globRoot) ||
+    normalizeDiscoveryRoot(discovery.gitignoreRoot) ||
     discovery.logLevel,
   );
 }
@@ -48,8 +53,8 @@ export function mergeDiscoveryOptions(
   const includeGlobs = uniq([...(base?.includeGlobs ?? []), ...(override?.includeGlobs ?? [])]);
   const ignoreGlobs = uniq([...(base?.ignoreGlobs ?? []), ...(override?.ignoreGlobs ?? [])]);
   const useGitignore = override?.useGitignore ?? base?.useGitignore;
-  const globRoot = override?.globRoot ?? base?.globRoot;
-  const gitignoreRoot = override?.gitignoreRoot ?? base?.gitignoreRoot;
+  const globRoot = normalizeDiscoveryRoot(override?.globRoot) ?? normalizeDiscoveryRoot(base?.globRoot);
+  const gitignoreRoot = normalizeDiscoveryRoot(override?.gitignoreRoot) ?? normalizeDiscoveryRoot(base?.gitignoreRoot);
   const logLevel = override?.logLevel ?? base?.logLevel;
   return {
     ...(includeGlobs.length ? { includeGlobs } : {}),
