@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { patchTreeSitterBindingGypSource } from "../scripts/patch-tree-sitter-node24-lib.mjs";
+import path from "node:path";
+import {
+  patchTreeSitterBindingGypSource,
+  resolveTreeSitterBindingGypPath,
+} from "../scripts/patch-tree-sitter-node24-lib.mjs";
 
 describe("tree-sitter Node 24 patcher", () => {
   it("patches binding.gyp despite CRLF line endings and whitespace drift", () => {
@@ -20,7 +24,7 @@ describe("tree-sitter Node 24 patcher", () => {
       '        "VCCLCompilerTool": { "AdditionalOptions": ["/std:c++17"] }',
       "      },",
       '      "conditions": [',
-      '        ["OS==\'linux\'", {',
+      "        [\"OS=='linux'\", {",
       '          "cflags_cc" : [',
       '            "-Wno-cast-function-type"',
       "          ]",
@@ -52,5 +56,31 @@ describe("tree-sitter Node 24 patcher", () => {
     const result = patchTreeSitterBindingGypSource(source);
 
     expect(result).toEqual({ source, changed: false });
+  });
+
+  it("resolves binding.gyp from the fallback workspace package resolution root", () => {
+    const repoRoot = path.resolve("repo");
+    const packageJsonPath = path.join(repoRoot, "node_modules", "tree-sitter", "package.json");
+    const bindingPath = path.join(path.dirname(packageJsonPath), "binding.gyp");
+
+    expect(
+      resolveTreeSitterBindingGypPath({
+        repoRoot,
+        resolvePackageJson: () => packageJsonPath,
+        existsSync: (candidatePath) => candidatePath === bindingPath,
+      }),
+    ).toBe(bindingPath);
+  });
+
+  it("returns null when tree-sitter is not installed", () => {
+    expect(
+      resolveTreeSitterBindingGypPath({
+        repoRoot: path.resolve("repo"),
+        resolvePackageJson: () => {
+          throw new Error("missing tree-sitter");
+        },
+        existsSync: () => false,
+      }),
+    ).toBeNull();
   });
 });

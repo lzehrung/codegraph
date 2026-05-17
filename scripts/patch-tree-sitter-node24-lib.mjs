@@ -1,5 +1,30 @@
+import { existsSync as fileExistsSync } from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
+
 const CXX_STD_VARIABLE =
   '"cxxstd%": "<!(node -p \\"parseInt(process.env.npm_config_target ?? process.versions.node) < 22 ? \'c++17\' : \'c++20\'\\")"';
+
+function resolveTreeSitterPackageJsonFromWorkspace(repoRoot) {
+  const workspacePackageJson = path.join(repoRoot, "packages", "codegraph-js-fallback", "package.json");
+  return createRequire(workspacePackageJson).resolve("tree-sitter/package.json");
+}
+
+export function resolveTreeSitterBindingGypPath({
+  repoRoot,
+  resolvePackageJson = resolveTreeSitterPackageJsonFromWorkspace,
+  existsSync = fileExistsSync,
+}) {
+  let packageJsonPath;
+  try {
+    packageJsonPath = resolvePackageJson(repoRoot);
+  } catch {
+    return null;
+  }
+
+  const bindingPath = path.join(path.dirname(packageJsonPath), "binding.gyp");
+  return existsSync(bindingPath) ? bindingPath : null;
+}
 
 function replaceRequired(source, label, pattern, replacement) {
   if (!pattern.test(source)) {

@@ -136,9 +136,16 @@ function isLocationIndependentGlob(globPattern: string): boolean {
   return globPattern.startsWith("**/");
 }
 
-function isRelativePathInside(relativePath: string): boolean {
+export function isRelativePathInside(relativePath: string): boolean {
   const normalized = normalizePath(relativePath);
-  return !!normalized && normalized !== ".." && !normalized.startsWith("../") && !path.isAbsolute(relativePath);
+  return (
+    !!normalized &&
+    normalized !== ".." &&
+    !normalized.startsWith("../") &&
+    !path.isAbsolute(relativePath) &&
+    !path.win32.isAbsolute(relativePath) &&
+    !path.posix.isAbsolute(relativePath)
+  );
 }
 
 export function translateGlobRootIgnoreGlobsForScanRoot(
@@ -259,24 +266,25 @@ function matchesDiscoveryGlob(
   projectRoot: string,
   matcher: (relativePath: string) => boolean,
 ): boolean {
-  const relativePath = normalizePath(path.relative(projectRoot, absolutePath));
-  if (!relativePath || relativePath.startsWith("..")) {
+  const relativePath = path.relative(projectRoot, absolutePath);
+  if (!isRelativePathInside(relativePath)) {
     return false;
   }
-  return matcher(relativePath);
+  return matcher(normalizePath(relativePath));
 }
 
 function isIgnoredByGitignore(absolutePath: string, rules: GitignoreRule[]): boolean {
   let ignored = false;
   for (const rule of rules) {
-    const relativePath = normalizePath(path.relative(rule.baseDir, absolutePath));
-    if (!relativePath || relativePath.startsWith("..")) {
+    const relativePath = path.relative(rule.baseDir, absolutePath);
+    if (!isRelativePathInside(relativePath)) {
       continue;
     }
-    if (rule.dirOnly && !relativePath.includes("/")) {
+    const normalizedRelativePath = normalizePath(relativePath);
+    if (rule.dirOnly && !normalizedRelativePath.includes("/")) {
       continue;
     }
-    if (rule.matches(relativePath)) {
+    if (rule.matches(normalizedRelativePath)) {
       ignored = !rule.negated;
     }
   }
@@ -330,13 +338,10 @@ export async function listProjectFiles(
       followSymbolicLinks: false,
       ignore: fastGlobIgnoreGlobs,
     });
-    const linkedFiles = await listEntriesFromSafeSymlinkDirectories(
-      root,
-      realRoot,
-      patterns,
-      fastGlobIgnoreGlobs,
-      { globRoot, filterIgnoreGlobs: [...DEFAULT_PROJECT_FILE_IGNORES, ...userIgnoreGlobs] },
-    );
+    const linkedFiles = await listEntriesFromSafeSymlinkDirectories(root, realRoot, patterns, fastGlobIgnoreGlobs, {
+      globRoot,
+      filterIgnoreGlobs: [...DEFAULT_PROJECT_FILE_IGNORES, ...userIgnoreGlobs],
+    });
     const rootSafeFiles = await filterRealPathsWithinRootEntries([...files, ...linkedFiles], realRoot);
     return rootSafeFiles
       .map(({ path: filePath, realPath }) => ({ filePath: normalizePath(filePath), realPath }))
@@ -403,15 +408,17 @@ async function listEntriesFromSafeSymlinkDirectories(
     safeSymlinkDirectories,
     REALPATH_FILTER_CONCURRENCY,
     async (directory) =>
-      (await fg(patterns, {
-        cwd: directory,
-        absolute: true,
-        dot: true,
-        followSymbolicLinks: false,
-        ignore: locationIndependentIgnores,
-        ...(options.onlyFiles !== undefined ? { onlyFiles: options.onlyFiles } : {}),
-        ...(options.markDirectories !== undefined ? { markDirectories: options.markDirectories } : {}),
-      })).filter((filePath) => {
+      (
+        await fg(patterns, {
+          cwd: directory,
+          absolute: true,
+          dot: true,
+          followSymbolicLinks: false,
+          ignore: locationIndependentIgnores,
+          ...(options.onlyFiles !== undefined ? { onlyFiles: options.onlyFiles } : {}),
+          ...(options.markDirectories !== undefined ? { markDirectories: options.markDirectories } : {}),
+        })
+      ).filter((filePath) => {
         const cleanPath = filePath.endsWith("/") ? filePath.slice(0, -1) : filePath;
         return !rootRelativeIgnoreMatchers.some((matcher) => matchesDiscoveryGlob(cleanPath, globRoot, matcher));
       }),

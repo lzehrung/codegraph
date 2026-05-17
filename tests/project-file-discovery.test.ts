@@ -4,7 +4,7 @@ import os from "node:os";
 import fs from "node:fs/promises";
 import { buildProjectIndex, listProjectFiles, discoverProjectFiles } from "../src/index.js";
 import { DEFAULT_PROJECT_MANIFESTS } from "../src/util.js";
-import { translateGlobRootIgnoreGlobsForScanRoot } from "../src/util/projectFiles.js";
+import { isRelativePathInside, translateGlobRootIgnoreGlobsForScanRoot } from "../src/util/projectFiles.js";
 
 const normalize = (value: string) => value.replace(/\\/g, "/");
 
@@ -649,6 +649,15 @@ describe("project file discovery", () => {
 
     expect(discovered.has(normalize(keptFile))).toBe(true);
     expect(discovered.has(normalize(testFile))).toBe(true);
+  });
+
+  it("treats cross-drive relative paths as outside a glob root", () => {
+    expect([
+      isRelativePathInside("src/app.ts"),
+      isRelativePathInside("../outside.ts"),
+      isRelativePathInside("D:\\other\\fixture.ts"),
+      isRelativePathInside("D:/other/fixture.ts"),
+    ]).toEqual([true, false, false, false]);
   });
 
   it("does not validate gitignoreRoot when gitignore filtering is disabled", async () => {

@@ -1,21 +1,14 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { patchTreeSitterBindingGypSource } from "./patch-tree-sitter-node24-lib.mjs";
+import { patchTreeSitterBindingGypSource, resolveTreeSitterBindingGypPath } from "./patch-tree-sitter-node24-lib.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const bindingPath = path.join(
-  repoRoot,
-  "packages",
-  "codegraph-js-fallback",
-  "node_modules",
-  "tree-sitter",
-  "binding.gyp",
-);
+const bindingPath = resolveTreeSitterBindingGypPath({ repoRoot });
 
-if (!existsSync(bindingPath)) {
-  console.error(`tree-sitter binding.gyp was not found at ${bindingPath}`);
-  process.exit(1);
+if (!bindingPath) {
+  console.log("[codegraph] tree-sitter binding.gyp was not found; skipping Node 24 patch.");
+  process.exit(0);
 }
 
 const original = readFileSync(bindingPath, "utf8");
