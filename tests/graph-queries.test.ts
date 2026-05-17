@@ -7,6 +7,7 @@ import {
   findDetailedCycles,
   sortDetailedCycles,
 } from "../src/index.js";
+import type { Edge, Graph } from "../src/types.js";
 
 describe("graph queries", () => {
   const root = "/root";
@@ -73,6 +74,43 @@ describe("graph queries", () => {
   it("should find shortest path", () => {
     const p = getShortestPath(graph, `${root}/d.ts`, `${root}/c.ts`);
     expect(p).toEqual([`${root}/d.ts`, `${root}/b.ts`, `${root}/c.ts`]);
+  });
+
+  it("builds traversal adjacency once per direct graph query", () => {
+    const perfRoot = `${root}/perf`;
+    const perfNodes = new Set<string>();
+    const perfEdges: Edge[] = [];
+    for (let i = 0; i <= 20; i++) {
+      perfNodes.add(`${perfRoot}/${i}.ts`);
+      if (i > 0) {
+        perfEdges.push({
+          from: `${perfRoot}/${i - 1}.ts`,
+          to: { type: "file", path: `${perfRoot}/${i}.ts` },
+          raw: `./${i}`,
+        });
+      }
+    }
+
+    let edgeIterations = 0;
+    const trackedEdges: Edge[] = [...perfEdges];
+    const originalIterator = trackedEdges[Symbol.iterator].bind(trackedEdges);
+    trackedEdges[Symbol.iterator] = function (): ArrayIterator<Edge> {
+      edgeIterations += 1;
+      return originalIterator();
+    };
+    const trackedGraph: Graph = { nodes: perfNodes, edges: trackedEdges };
+
+    expect(getDependencies(trackedGraph, `${perfRoot}/0.ts`, { limit: 5 })).toHaveLength(5);
+    expect(getReverseDependencies(trackedGraph, `${perfRoot}/5.ts`, { limit: 5 })).toHaveLength(5);
+    expect(getShortestPath(trackedGraph, `${perfRoot}/0.ts`, `${perfRoot}/5.ts`)).toEqual([
+      `${perfRoot}/0.ts`,
+      `${perfRoot}/1.ts`,
+      `${perfRoot}/2.ts`,
+      `${perfRoot}/3.ts`,
+      `${perfRoot}/4.ts`,
+      `${perfRoot}/5.ts`,
+    ]);
+    expect(edgeIterations).toBe(3);
   });
 
   it("should find cycles", () => {

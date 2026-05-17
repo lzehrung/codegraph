@@ -396,6 +396,26 @@ describe("CLI regressions", () => {
     expect(nodes).not.toContain(normalize(sampleFile));
   });
 
+  it("graph query commands apply codegraph.config.json discovery ignores", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-query-config-ignore-"));
+    const mainFile = path.join(tmpDir, "src", "main.ts");
+    const generatedFile = path.join(tmpDir, "src", "generated.ts");
+    await fsp.mkdir(path.dirname(mainFile), { recursive: true });
+    await fsp.writeFile(
+      path.join(tmpDir, "codegraph.config.json"),
+      JSON.stringify({ discovery: { ignoreGlobs: ["src/generated.ts"] } }),
+      "utf8",
+    );
+    await fsp.writeFile(mainFile, "export const main = 1;\n", "utf8");
+    await fsp.writeFile(generatedFile, "import missing from 'missing-pkg';\nexport const generated = missing;\n", "utf8");
+
+    const unresolved = JSON.parse(await runCliCommand(["unresolved", "--root", tmpDir, "--json"])) as Array<{
+      name: string;
+    }>;
+
+    expect(unresolved).toEqual([]);
+  });
+
   it("graph applies codegraph.config.json discovery ignores relative to --root for scoped include roots", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-config-scoped-ignore-"));
     const testsDir = path.join(tmpDir, "tests");

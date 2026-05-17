@@ -35,6 +35,13 @@ Runtime behavior, performance characteristics, architecture, extension points, a
 - `codegraph hotspots` and `codegraph inspect` reuse the disk index cache when the manifest is present and log the manifest path, timestamp, and last commit hash to stderr.
 - Remove the manifest, clear `.codegraph-cache/index-v1`, or rerun with different graph flags to force a full graph rebuild.
 
+### Read paths
+
+- `ProjectIndex` builds derived forward and reverse file-adjacency maps for common dependency reads.
+- `deps`, `rdeps`, and `path` use adjacency traversal instead of scanning every edge at each BFS step.
+- CLI graph queries use the indexed graph path when no direct graph collector is injected, so manifest-backed builds can serve repeated reads without changing command output.
+- High-level SQLite dependency-chain and affected-function questions walk `file_edges` through indexed neighbor lookups instead of loading all file edges into memory.
+
 ### Threads
 
 - Use `--threads` to increase concurrency.

@@ -1,4 +1,5 @@
 import type { FallbackImportExtractionReason } from "../graphs/specifiers.js";
+import type { GraphAdjacencyIndex } from "../graphs/adjacency.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import type { LogLevel } from "../logging.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
@@ -77,6 +78,7 @@ export type ResolvedExport = { kind: "resolved"; def: SymbolDef } | { kind: "nam
  */
 export type ProjectIndex = {
   graph: Graph;
+  graphAdjacency?: GraphAdjacencyIndex;
   modules: Map<FileId, ModuleIndex>;
   byFile: Map<FileId, ModuleIndex>;
   projectRoot?: string;
