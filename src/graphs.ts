@@ -1,11 +1,5 @@
 export { collectEdgesForFile } from "./graph-edge-collector.js";
 export { collectGraph } from "./graph-builder.js";
-export {
-  buildGraphAdjacency,
-  getForwardNeighbors,
-  getReverseNeighbors,
-  graphAdjacencyFor,
-} from "./graphs/adjacency.js";
 export { astGrep, textGrep } from "./graphs/grep.js";
 export { getHotspots } from "./graphs/hotspots.js";
 export {
@@ -28,7 +22,6 @@ export { collectModuleSpecifiersFromSource } from "./graphs/specifiers.js";
 export { buildSymbolGraph } from "./graphs/symbol-graph.js";
 export { buildSymbolGraphDetailed } from "./graphs/symbol-graph-detailed.js";
 export type { AstGrepHit, TextGrepHit } from "./graphs/grep.js";
-export type { GraphAdjacencyIndex } from "./graphs/adjacency.js";
 export type { HotspotEntry, HotspotOptions } from "./graphs/hotspots.js";
 export type { CycleInternalEdge, CycleSortMode, DependencyNode, DetailedCycle } from "./graphs/queries.js";
 export type {
