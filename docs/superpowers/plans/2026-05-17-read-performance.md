@@ -257,15 +257,15 @@
 - Modify: `codegraph-skill/codegraph/SKILL.md` only if command behavior or guidance changes
 - Test: documentation covered by full build/lint/test gates
 
-- [ ] **Step 1: Document read-performance model**
+- [x] **Step 1: Document read-performance model**
 
   Add concise documentation that common in-process reads use derived adjacency indexes and that CLI graph queries reuse manifest-backed index data when available.
 
-- [ ] **Step 2: Confirm no command-surface changes**
+- [x] **Step 2: Confirm no command-surface changes**
 
   If no CLI flags, output fields, or commands changed, do not update `codegraph-skill/codegraph/SKILL.md`. If wording about performance-sensitive usage changes, update it consistently with `docs/cli.md`.
 
-- [ ] **Step 3: Run full verification and commit**
+- [x] **Step 3: Run full verification and commit**
 
   Run:
   ```powershell
