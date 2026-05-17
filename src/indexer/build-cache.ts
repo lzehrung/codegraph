@@ -667,11 +667,12 @@ function normalizeManifestBuildOptions(opts?: ManifestBuildOptions): ManifestBui
 
 function normalizeDiscoveryOptions(discovery?: ProjectFileDiscoveryOptions): ManifestBuildOptions["discovery"] {
   if (!discovery) return undefined;
+  const normalizeGlob = (glob: string) => glob.trim().replace(/\\/g, "/");
   const includeGlobs = Array.from(
-    new Set((discovery.includeGlobs ?? []).map((glob) => glob.trim()).filter(Boolean)),
+    new Set((discovery.includeGlobs ?? []).map(normalizeGlob).filter(Boolean)),
   ).sort();
   const ignoreGlobs = Array.from(
-    new Set((discovery.ignoreGlobs ?? []).map((glob) => glob.trim()).filter(Boolean)),
+    new Set((discovery.ignoreGlobs ?? []).map(normalizeGlob).filter(Boolean)),
   ).sort();
   const globRoot = discovery.globRoot ? normalizePath(path.resolve(discovery.globRoot)) : undefined;
   const gitignoreRoot = discovery.gitignoreRoot ? normalizePath(path.resolve(discovery.gitignoreRoot)) : undefined;

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadCodegraphConfig, mergeDiscoveryOptions } from "../src/config.js";
+import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "../src/config.js";
 import { searchCodegraph } from "../src/agent/search.js";
 
 async function mkRepo(): Promise<string> {
@@ -58,6 +58,12 @@ describe("codegraph config", () => {
       gitignoreRoot: "repo-root",
       useGitignore: false,
     });
+  });
+
+  it("recognizes discovery root and logging options as meaningful options", () => {
+    expect(hasDiscoveryOptions({ globRoot: "repo-root" })).toBe(true);
+    expect(hasDiscoveryOptions({ gitignoreRoot: "repo-root" })).toBe(true);
+    expect(hasDiscoveryOptions({ logLevel: "silent" })).toBe(true);
   });
 
   it("search honors configured discovery ignores", async () => {

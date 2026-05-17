@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { spawnSync } from "node:child_process";
 import { buildProjectIndex, buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
 import * as indexer from "../src/indexer.js";
-import { MANIFEST_VERSION, writeManifest, type IndexManifest } from "../src/indexer/build-cache.js";
+import { MANIFEST_VERSION, summarizeBuildOptions, writeManifest, type IndexManifest } from "../src/indexer/build-cache.js";
 import { collectGraph } from "../src/graphs.js";
 import {
   getGitBlobHash,
@@ -225,6 +225,19 @@ describe("Cache invalidation and strict hashing", () => {
     expect(report.manifest?.optionsMismatch).toContain("discovery");
     expect(second.byFile.has(normalizedUnitPath)).toBe(true);
     expect(second.byFile.has(normalizedSamplePath)).toBe(true);
+  });
+
+  it("normalizes discovery glob separators before comparing manifest build options", () => {
+    const buildOptions = summarizeBuildOptions({
+      discovery: {
+        includeGlobs: ["src\\**\\*.ts"],
+        ignoreGlobs: [" tests\\samples\\** ", "tests/samples/**"],
+        useGitignore: false,
+      },
+    });
+
+    expect(buildOptions.discovery?.includeGlobs).toEqual(["src/**/*.ts"]);
+    expect(buildOptions.discovery?.ignoreGlobs).toEqual(["tests/samples/**"]);
   });
 
   it("falls back to a full incremental rebuild when the manifest commit no longer exists", async () => {

@@ -213,6 +213,45 @@ describe("Review report", () => {
     expect(report.changedFiles.map((entry) => entry.file)).toEqual(["src/feature.ts"]);
   });
 
+  it("filters child-root review files with discovery ignoreGlobs relative to globRoot", async () => {
+    const root = await mkTmpDir("dg-review-child-root-diff-ignore-");
+    const testsRoot = path.join(root, "tests");
+    const unitDir = path.join(testsRoot, "unit");
+    const sampleDir = path.join(testsRoot, "samples");
+    await fsp.mkdir(unitDir, { recursive: true });
+    await fsp.mkdir(sampleDir, { recursive: true });
+    await fsp.writeFile(path.join(unitDir, "app.test.ts"), "export function appTest() { return 2; }\n", "utf8");
+    await fsp.writeFile(path.join(sampleDir, "fixture.ts"), "export function fixture() { return 2; }\n", "utf8");
+
+    const report = await buildReviewReport(testsRoot, {
+      discovery: {
+        globRoot: root,
+        ignoreGlobs: ["tests/samples/**"],
+      },
+      diffText: [
+        "diff --git a/unit/app.test.ts b/unit/app.test.ts",
+        "index 1234567..abcdef0 100644",
+        "--- a/unit/app.test.ts",
+        "+++ b/unit/app.test.ts",
+        "@@ -1 +1 @@",
+        "-export function appTest() { return 1; }",
+        "+export function appTest() { return 2; }",
+        "diff --git a/samples/fixture.ts b/samples/fixture.ts",
+        "index 1234567..abcdef0 100644",
+        "--- a/samples/fixture.ts",
+        "+++ b/samples/fixture.ts",
+        "@@ -1 +1 @@",
+        "-export function fixture() { return 1; }",
+        "+export function fixture() { return 2; }",
+        "",
+      ].join("\n"),
+      includeSymbolDetails: true,
+    });
+
+    expect(report.status).toBe("ok");
+    expect(report.changedFiles.map((entry) => entry.file)).toEqual(["unit/app.test.ts"]);
+  });
+
   it("rejects raw diff files outside the project root", async () => {
     const root = await mkTmpDir("dg-review-diff-outside-");
     const outsideFile = path.resolve("README.md");

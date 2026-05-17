@@ -31,10 +31,13 @@ function uniq(values: readonly string[]): string[] {
 }
 
 export function hasDiscoveryOptions(discovery: ProjectFileDiscoveryOptions): boolean {
-  return (
-    !!discovery.includeGlobs?.length ||
-    !!discovery.ignoreGlobs?.length ||
-    discovery.useGitignore !== undefined
+  return Boolean(
+    discovery.includeGlobs?.length ||
+      discovery.ignoreGlobs?.length ||
+      discovery.useGitignore !== undefined ||
+      discovery.globRoot ||
+      discovery.gitignoreRoot ||
+      discovery.logLevel,
   );
 }
 

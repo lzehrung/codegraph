@@ -942,7 +942,8 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
   const totalStart = performance.now();
   const normalizeFile = (file: string, label: string) => assertFilePathWithinRoot(projectRoot, file, label);
   const discoveryIgnoreGlobs = appliedOptions.discovery?.ignoreGlobs ?? [];
-  const isIgnoredReviewFile = createImpactIgnoreMatcher(projectRoot, discoveryIgnoreGlobs);
+  const discoveryGlobRoot = appliedOptions.discovery?.globRoot ?? projectRoot;
+  const isIgnoredReviewFile = createImpactIgnoreMatcher(discoveryGlobRoot, discoveryIgnoreGlobs);
 
   const changedFiles = new Set<string>();
   const explicitFiles = new Set<string>();
