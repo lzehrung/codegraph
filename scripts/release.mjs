@@ -420,7 +420,7 @@ if (shouldPublish) {
   });
   if (publishPlan.publishNativeTargets) {
     run("npm", ["run", "native:create-npm-dirs"]);
-    run("npm", ["run", "native:stage-local"]);
+    run("node", ["./scripts/stage-native-package.mjs", "--if-missing"]);
   }
   try {
     normalizeManagedManifests(versionPlan);

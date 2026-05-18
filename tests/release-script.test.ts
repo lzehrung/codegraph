@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import {
+  assertCompleteNativeTargetArtifacts,
+  getSupportedNativeTargetPackageNames,
+} from "../scripts/native-targets-lib.mjs";
 import {
   bumpVersion,
   computePublishPlan,
@@ -22,11 +29,57 @@ import {
   tagNamesForPackageVersion,
 } from "../scripts/release-lib.mjs";
 
+const nativeSourcePackage = {
+  name: "@lzehrung/codegraph-native",
+  version: "1.8.49",
+  files: ["index.js", "index.d.ts"],
+  napi: {
+    packageName: "@lzehrung/codegraph-native",
+    targets: [
+      "x86_64-pc-windows-msvc",
+      "aarch64-pc-windows-msvc",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-musl",
+    ],
+  },
+};
+
+function supportedNativeOptionalDependencies(version: string): Record<string, string> {
+  return Object.fromEntries(getSupportedNativeTargetPackageNames(nativeSourcePackage).map((name) => [name, version]));
+}
+
+function readJsonFile(filePath: string): Record<string, unknown> {
+  return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+}
+
+function currentNativeTargetSuffix(): string | null {
+  if (process.platform === "win32") {
+    if (process.arch === "x64") return "win32-x64-msvc";
+    if (process.arch === "arm64") return "win32-arm64-msvc";
+  }
+  if (process.platform === "darwin") {
+    if (process.arch === "x64") return "darwin-x64";
+    if (process.arch === "arm64") return "darwin-arm64";
+  }
+  if (process.platform === "linux") {
+    const report = process.report?.getReport();
+    const abi = report?.header?.glibcVersionRuntime ? "gnu" : "musl";
+    if (process.arch === "x64") return `linux-x64-${abi}`;
+    if (process.arch === "arm64") return `linux-arm64-${abi}`;
+  }
+  return null;
+}
+
 describe("release script helpers", () => {
   it("keeps release lockfile generation compatible with CI npm ci", () => {
     const releaseScript = fs.readFileSync("scripts/release.mjs", "utf8");
 
     expect(releaseScript).toContain('run("npm", ["install"])');
+    expect(releaseScript).toContain('run("node", ["./scripts/stage-native-package.mjs", "--if-missing"])');
     expect(releaseScript).not.toContain("--legacy-peer-deps");
   });
 
@@ -36,10 +89,72 @@ describe("release script helpers", () => {
     expect(bumpVersion("1.8.37", "major")).toBe("2.0.0");
   });
 
+  it("updates only the native package version for pre-build release artifacts", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-native-version-"));
+    const nativePackageDir = path.join(tempDir, "packages", "codegraph-native");
+    const scriptPath = path.resolve(process.cwd(), "scripts/set-native-package-version.mjs");
+    fs.mkdirSync(nativePackageDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(nativePackageDir, "package.json"),
+      `${JSON.stringify({
+        name: "@lzehrung/codegraph-native",
+        version: "1.8.49",
+        files: ["index.js", "index.d.ts"],
+      })}\n`,
+    );
+
+    try {
+      const result = spawnSync(process.execPath, [scriptPath, "1.8.50"], {
+        cwd: tempDir,
+        encoding: "utf8",
+      });
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(readJsonFile(path.join(nativePackageDir, "package.json"))).toEqual({
+        name: "@lzehrung/codegraph-native",
+        version: "1.8.50",
+        files: ["index.js", "index.d.ts"],
+      });
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an existing staged native artifact when staging only missing targets", () => {
+    const suffix = currentNativeTargetSuffix();
+    expect(suffix).toBeTruthy();
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-native-stage-"));
+    const targetDir = path.join(tempDir, "packages", "codegraph-native", "npm", String(suffix));
+    const targetFile = path.join(targetDir, `index.${suffix}.node`);
+    const scriptPath = path.resolve(process.cwd(), "scripts/stage-native-package.mjs");
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.writeFileSync(targetFile, "downloaded artifact");
+
+    try {
+      const result = spawnSync(process.execPath, [scriptPath, "--if-missing"], {
+        cwd: tempDir,
+        encoding: "utf8",
+      });
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("Keeping existing staged native artifact");
+      expect(fs.readFileSync(targetFile, "utf8")).toBe("downloaded artifact");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("allows resume only for managed release files", () => {
     expect(isAllowedResumePath("package.json")).toBe(true);
+    expect(isAllowedResumePath("scripts/check-native-artifacts.mjs")).toBe(true);
+    expect(isAllowedResumePath("scripts/native-targets-lib.mjs")).toBe(true);
+    expect(isAllowedResumePath("scripts/publish-native-targets.mjs")).toBe(true);
     expect(isAllowedResumePath("scripts/release-lib.mjs")).toBe(true);
     expect(isAllowedResumePath("scripts/release.mjs")).toBe(true);
+    expect(isAllowedResumePath("scripts/set-native-package-version.mjs")).toBe(true);
+    expect(isAllowedResumePath("scripts/stage-native-package.mjs")).toBe(true);
+    expect(isAllowedResumePath("scripts/sync-native-meta.mjs")).toBe(true);
     expect(isAllowedResumePath("tests/release-script.test.ts")).toBe(true);
     expect(isAllowedResumePath("packages/codegraph-js-fallback/package.json")).toBe(true);
     expect(isAllowedResumePath("src/indexer.ts")).toBe(false);
@@ -70,6 +185,19 @@ describe("release script helpers", () => {
   it("treats release packaging scripts as root package changes", () => {
     expect(
       detectChangedReleasePackages(["scripts/release.mjs", "scripts/release-lib.mjs", "tests/release-script.test.ts"]),
+    ).toEqual(["root"]);
+  });
+
+  it("treats native packaging gates as root package changes", () => {
+    expect(
+      detectChangedReleasePackages([
+        "scripts/check-native-artifacts.mjs",
+        "scripts/native-targets-lib.mjs",
+        "scripts/publish-native-targets.mjs",
+        "scripts/set-native-package-version.mjs",
+        "scripts/stage-native-package.mjs",
+        "scripts/sync-native-meta.mjs",
+      ]),
     ).toEqual(["root"]);
   });
 
@@ -316,22 +444,12 @@ describe("release script helpers", () => {
   it("keeps generated native platform dependencies in the publish manifest", () => {
     expect(
       prepareNativePackageManifestForPublish(
-        {
-          name: "@lzehrung/codegraph-native",
-          version: "1.8.49",
-          files: ["index.js", "index.d.ts"],
-          napi: {
-            packageName: "@lzehrung/codegraph-native",
-          },
-        },
+        nativeSourcePackage,
         "1.8.50",
         {
           name: "@lzehrung/codegraph-native",
           version: "1.8.50",
-          optionalDependencies: {
-            "@lzehrung/codegraph-native-win32-x64-msvc": "1.8.50",
-            "@lzehrung/codegraph-native-linux-x64-gnu": "1.8.50",
-          },
+          optionalDependencies: supportedNativeOptionalDependencies("1.8.50"),
         },
       ),
     ).toEqual({
@@ -340,12 +458,41 @@ describe("release script helpers", () => {
       files: ["index.js", "index.d.ts"],
       napi: {
         packageName: "@lzehrung/codegraph-native",
+        targets: [
+          "x86_64-pc-windows-msvc",
+          "aarch64-pc-windows-msvc",
+          "x86_64-apple-darwin",
+          "aarch64-apple-darwin",
+          "x86_64-unknown-linux-gnu",
+          "aarch64-unknown-linux-gnu",
+          "x86_64-unknown-linux-musl",
+          "aarch64-unknown-linux-musl",
+        ],
       },
-      optionalDependencies: {
-        "@lzehrung/codegraph-native-linux-x64-gnu": "1.8.50",
-        "@lzehrung/codegraph-native-win32-x64-msvc": "1.8.50",
-      },
+      optionalDependencies: supportedNativeOptionalDependencies("1.8.50"),
     });
+  });
+
+  it("rejects native publish manifests with only one generated platform dependency", () => {
+    expect(() =>
+      prepareNativePackageManifestForPublish(nativeSourcePackage, "1.8.50", {
+        name: "@lzehrung/codegraph-native",
+        version: "1.8.50",
+        optionalDependencies: {
+          "@lzehrung/codegraph-native-win32-x64-msvc": "1.8.50",
+        },
+      }),
+    ).toThrow(/incomplete generated native platform optionalDependencies/i);
+  });
+
+  it("rejects native publish manifests with stale target dependency versions", () => {
+    expect(() =>
+      prepareNativePackageManifestForPublish(nativeSourcePackage, "1.8.50", {
+        name: "@lzehrung/codegraph-native",
+        version: "1.8.50",
+        optionalDependencies: supportedNativeOptionalDependencies("1.8.49"),
+      }),
+    ).toThrow(/wrong version/i);
   });
 
   it("rejects native publish manifests without generated platform dependencies", () => {
@@ -363,6 +510,29 @@ describe("release script helpers", () => {
         },
       ),
     ).toThrow(/generated native platform optionalDependencies/i);
+  });
+
+  it("requires staged native artifacts for every supported target", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-native-targets-"));
+    const nativeRoot = path.join(tempDir, "packages", "codegraph-native");
+    const windowsTargetDir = path.join(nativeRoot, "npm", "win32-x64-msvc");
+    fs.mkdirSync(windowsTargetDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(windowsTargetDir, "package.json"),
+      JSON.stringify({
+        name: "@lzehrung/codegraph-native-win32-x64-msvc",
+        main: "index.win32-x64-msvc.node",
+      }),
+    );
+    fs.writeFileSync(path.join(windowsTargetDir, "index.win32-x64-msvc.node"), "");
+
+    try {
+      expect(() => assertCompleteNativeTargetArtifacts(nativeRoot, nativeSourcePackage)).toThrow(
+        /Missing staged native artifacts for supported targets/i,
+      );
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("restores the native source manifest shape while keeping the selected version", () => {

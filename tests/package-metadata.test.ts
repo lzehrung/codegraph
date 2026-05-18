@@ -137,6 +137,20 @@ function frontmatterHasUnsafePlainColon(line: string): boolean {
   return !quotedValue && value.includes(": ");
 }
 
+function workflowRunCommands(workflow: string): string[] {
+  return workflow
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("run: "))
+    .map((line) => line.slice("run: ".length));
+}
+
+function commandOptionValue(command: string, optionName: string): string | undefined {
+  const parts = command.split(/\s+/);
+  const optionIndex = parts.indexOf(optionName);
+  return optionIndex >= 0 ? parts[optionIndex + 1] : undefined;
+}
+
 function readNativeArtifactPackages(baseDir: string): Record<string, unknown>[] {
   const nativeArtifactsDir = path.resolve(baseDir, "packages/codegraph-native/npm");
   if (!fs.existsSync(nativeArtifactsDir)) {
@@ -298,6 +312,8 @@ describe("package metadata", () => {
     expect(scripts["test:coverage:native"]).toBe("node ./scripts/coverage.mjs native");
     expect(scripts["test:coverage:all"]).toBe("node ./scripts/coverage.mjs all");
     expect(scripts["coverage:setup:native"]).toBe("rustup component add llvm-tools-preview && cargo install cargo-llvm-cov --locked");
+    expect(scripts["native:check-artifacts"]).toBe("node ./scripts/check-native-artifacts.mjs");
+    expect(scripts["native:stage-local"]).toBe("node ./scripts/stage-native-package.mjs");
     expect(devDependencies["@vitest/coverage-v8"]).toBeDefined();
     expect(vitestConfig).toContain("provider: \"v8\"");
     expect(vitestConfig).toContain("include: [\"src/**/*.{ts,tsx}\"]");
@@ -519,6 +535,53 @@ void onImpactItemStreaming;
     expect(installationDoc).toContain("@lzehrung/codegraph-js-fallback");
     expect(skillDoc).toContain("@lzehrung:registry");
     expect(skillDoc).toContain("@lzehrung/codegraph-js-fallback");
+  });
+
+  it("keeps the native release workflow building every supported target before publish", () => {
+    const workflow = readText(".github/workflows/release-native.yml");
+    const runCommands = workflowRunCommands(workflow);
+    const buildCommand = runCommands.find((command) => command.includes("cli.js build --platform"));
+    const artifactsCommand = runCommands.find((command) => command.includes("cli.js artifacts"));
+    const installIndex = workflow.indexOf("npm ci --ignore-scripts");
+    const publishInstallIndex = workflow.lastIndexOf("npm ci --ignore-scripts");
+    const publishPatchIndex = workflow.lastIndexOf("node ./scripts/patch-tree-sitter-node24.mjs");
+    const publishRebuildIndex = workflow.lastIndexOf("npm rebuild");
+    const rerunGuardIndex = workflow.indexOf("Refuse reruns on an already-tagged native release commit");
+    const versionIndex = workflow.indexOf("node ./scripts/set-native-package-version.mjs");
+    const createDirsIndex = workflow.indexOf("npm run native:create-npm-dirs");
+    const publishIndex = workflow.indexOf("npm run publish:${{ inputs.release_type }} -- --package native");
+    const nativePackage = readJson("packages/codegraph-native/package.json");
+    const targets =
+      nativePackage.napi &&
+      typeof nativePackage.napi === "object" &&
+      "targets" in nativePackage.napi &&
+      Array.isArray(nativePackage.napi.targets)
+        ? nativePackage.napi.targets
+        : [];
+
+    for (const target of targets) {
+      expect(workflow).toContain(String(target));
+    }
+    expect(buildCommand).toBeDefined();
+    expect(artifactsCommand).toBeDefined();
+    expect(commandOptionValue(buildCommand ?? "", "--output-dir")).toBe("./artifacts");
+    expect(commandOptionValue(artifactsCommand ?? "", "--output-dir")).toBe("./artifacts");
+    expect(commandOptionValue(artifactsCommand ?? "", "--npm-dir")).toBe("./npm");
+    expect(workflow).toContain("plan-native-release:");
+    expect(workflow).toContain("bumpVersion(nativePackage.version, \"${{ inputs.release_type }}\")");
+    expect(workflow).toContain("needs.plan-native-release.outputs.version");
+    expect(workflow).toContain('hasTagForPackageVersion("@lzehrung/codegraph-native", version, tagNames)');
+    expect(installIndex).toBeGreaterThan(-1);
+    expect(rerunGuardIndex).toBeGreaterThan(versionIndex);
+    expect(publishInstallIndex).toBeGreaterThan(rerunGuardIndex);
+    expect(publishPatchIndex).toBeGreaterThan(publishInstallIndex);
+    expect(publishRebuildIndex).toBeGreaterThan(publishPatchIndex);
+    expect(versionIndex).toBeGreaterThan(installIndex);
+    expect(createDirsIndex).toBeGreaterThan(versionIndex);
+    expect(workflow).not.toContain("native:stage-local");
+    expect(publishIndex).toBeGreaterThan(publishRebuildIndex);
+    expect(workflow).toContain("- build-native-artifacts");
+    expect(workflow).toContain("npm run publish:${{ inputs.release_type }} -- --package native");
   });
 
   it("keeps public-facing docs ASCII-clean", () => {
