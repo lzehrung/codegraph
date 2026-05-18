@@ -278,7 +278,7 @@ npm run build
 npm run test:ci
 ```
 
-If you are touching the native workspace directly, also run `npm run build:native` and `npm run test:native`.
+If you are touching the native workspace directly, also run `npm run build:native` and `npm run test:native`. Benchmark harness coverage lives behind `npm run test:bench`.
 
 Use the root release scripts to cut independent releases for the packages that actually changed:
 

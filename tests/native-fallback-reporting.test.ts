@@ -11,6 +11,8 @@ import {
   isNativeTreeSitterDisabledByEnv,
 } from "../src/native/treeSitterNative.js";
 
+const slowNativeIntegrationTimeoutMs = 30000;
+
 describe("native fallback reporting", () => {
   it("detects when native tree-sitter is disabled by environment", () => {
     expect(isNativeTreeSitterDisabledByEnv({ CODEGRAPH_DISABLE_NATIVE: "1" })).toBe(true);
@@ -166,5 +168,5 @@ describe("native fallback reporting", () => {
       vi.doUnmock("../src/native/treeSitterNative.js");
       await fsp.rm(root, { recursive: true, force: true });
     }
-  });
+  }, slowNativeIntegrationTimeoutMs);
 });

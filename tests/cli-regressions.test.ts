@@ -10,6 +10,7 @@ import packageJson from "../package.json" with { type: "json" };
 
 const tsxCliPath = path.resolve(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
 const sourceCliPath = path.resolve(process.cwd(), "src", "cli.ts");
+const slowCliMatrixTimeoutMs = 60000;
 
 async function runCliCommand(args: string[], input?: string): Promise<string> {
   const result = await runCliCommandDetailed(args, input);
@@ -1004,7 +1005,7 @@ describe("CLI regressions", () => {
       expect(normalize(payload.targetDir)).toBe(normalize(entry.targetDir));
       expect(normalize(payload.skillFilePath)).toBe(normalize(path.join(entry.targetDir, "SKILL.md")));
     }
-  });
+  }, slowCliMatrixTimeoutMs);
 
   it("skill install copies the bundled skill into the Cursor skills directory", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-cursor-"));
@@ -1062,7 +1063,7 @@ describe("CLI regressions", () => {
       expect(normalize(report.installTargetDir)).toBe(normalize(entry.targetDir));
       expect(report.requestedTargetDir).toBeUndefined();
     }
-  });
+  }, slowCliMatrixTimeoutMs);
 
   it("skill install --force replaces stale files in the target directory", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-force-"));

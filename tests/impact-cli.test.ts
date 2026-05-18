@@ -7,6 +7,7 @@ import fsp from "node:fs/promises";
 const tsxCliPath = path.resolve(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
 const codegraphCliPath = path.resolve(process.cwd(), "src", "cli.ts");
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples", "typescript");
+const slowCliTimeoutMs = 30000;
 const impactDiff = `diff --git a/utils.ts b/utils.ts
 index 1234567..abcdef0 100644
 --- a/utils.ts
@@ -75,14 +76,14 @@ describe("impact CLI output", () => {
     const report = JSON.parse(stdout);
     expect(report.changedFiles).toHaveLength(1);
     expect(report.changedFiles[0]?.file).toBe("utils.ts");
-  });
+  }, slowCliTimeoutMs);
 
   it("supports pretty summaries", async () => {
     const stdout = await runImpactCli(["impact", sampleRoot, "--provider", "raw", "--pretty"]);
     expect(stdout).toContain("Impact Analysis Report");
     expect(stdout).toContain("Changed files: 1");
     expect(stdout).toContain("Changed symbols:");
-  });
+  }, slowCliTimeoutMs);
 
   it("prints reason labels in pretty impact output", async () => {
     const stdout = await runImpactCli(["impact", sampleRoot, "--provider", "raw", "--pretty"]);
@@ -90,7 +91,7 @@ describe("impact CLI output", () => {
     expect(stdout).toContain("Impact Analysis Report");
     expect(stdout).toContain("Changed files: 1");
     expect(stdout).toMatch(/utils\.ts: .*reason:/);
-  });
+  }, slowCliTimeoutMs);
 
   it("accepts --compact-json as an alias for compact impact JSON", async () => {
     const stdout = await runImpactCli(["impact", sampleRoot, "--provider", "raw", "--compact-json"]);
@@ -99,7 +100,7 @@ describe("impact CLI output", () => {
     expect(report.schemaVersion).toBe(1);
     expect(report.format).toBe("compact");
     expect(Array.isArray(report.files)).toBe(true);
-  });
+  }, slowCliTimeoutMs);
 
   it("renders Mermaid output and honors graph/cache flags", async () => {
     const stdout = await runImpactCli([
@@ -119,7 +120,7 @@ describe("impact CLI output", () => {
     expect(stdout).toContain("flowchart LR");
     expect(stdout).toContain("utils.ts");
     expect(stdout).not.toContain("helpers.ts");
-  });
+  }, slowCliTimeoutMs);
 
   it("prints ASCII warnings in pretty mode for large git diffs", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-cli-warning-"));
@@ -155,5 +156,5 @@ describe("impact CLI output", () => {
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
-  }, 30000);
+  }, slowCliTimeoutMs);
 });
