@@ -27,28 +27,18 @@ Use Codegraph when you need fast structural answers about a repo without relying
 - Export graph data as JSON, Mermaid, DOT, or SQLite, then inspect it from scripts or the browser graph viewer app.
 - Keep one workflow across source languages, monorepos, and graph-first document and template formats instead of stitching together separate tools.
 
-Real `inspect ./src --limit 10` output against this repo looks like:
+`inspect` returns a bounded repo summary plus next commands:
 
 ```json
 {
   "backend": {
-    "native": {
-      "available": true
-    }
+    "native": { "available": true }
   },
   "files": {
     "total": 80,
-    "byLanguage": {
-      "ts": 80
-    }
+    "byLanguage": { "ts": 80 }
   },
   "hotspots": [
-    {
-      "file": "/workspace/codegraph/src/languages/types.ts",
-      "fanIn": 35,
-      "fanOut": 1,
-      "score": 71
-    },
     {
       "file": "/workspace/codegraph/src/indexer.ts",
       "fanIn": 16,
@@ -56,10 +46,7 @@ Real `inspect ./src --limit 10` output against this repo looks like:
       "score": 59
     }
   ],
-  "recommendedCommands": [
-    "codegraph hotspots --root \"/workspace/codegraph/src\" --limit 20 --json",
-    "codegraph graph --root \"/workspace/codegraph/src\" --json --symbols-detailed --compact-json"
-  ]
+  "recommendedCommands": ["codegraph hotspots --root \"/workspace/codegraph/src\" --limit 20 --json"]
 }
 ```
 
@@ -115,8 +102,12 @@ node ./dist/cli.js doctor
 # get a repo summary and next-step suggestions
 node ./dist/cli.js inspect ./src --limit 20
 
+# find and explain a concrete anchor
+node ./dist/cli.js search "graph json" --json
+node ./dist/cli.js explain src/cli.ts --json
+
 # build a graph for product code
-node ./dist/cli.js graph --root . ./src --json > codegraph.json
+node ./dist/cli.js graph --root . ./src --compact-json --output codegraph.json
 
 # inspect public API surface
 node ./dist/cli.js apisurface
@@ -200,7 +191,7 @@ Good downstream packs preserve structured fields such as symbol handles, ranges,
 - Symbol navigation: use `codegraph goto <file> <line> <column>` and `codegraph refs --file <file> --line <line> --col <column> --pretty` when a question is about definitions or semantic usages rather than matching strings.
 - PR review: run `codegraph impact --base origin/main --head HEAD --pretty` for a ranked map, `codegraph review --base origin/main --head HEAD --summary` for a compact reviewer handoff with actionable candidate tests, or redirect plain `review` output when a downstream tool needs the full JSON bundle.
 - Worktree review: run `codegraph impact --base HEAD --head WORKTREE --pretty` for current staged and unstaged tracked-file changes, then `codegraph review --base HEAD --head WORKTREE --summary` for a compact handoff. Use `--head STAGED` to compare `HEAD` against the current index.
-- Visual graph exploration: run `codegraph graph --root . ./src --compact-json --output codegraph.json`, then open `docs/graph-visualization/` to inspect the graph in the browser viewer app.
+- Visual graph exploration: run `codegraph graph --root . ./src --compact-json --output codegraph.json`, then open `docs/graph-visualization/`. Bare `codegraph graph` writes `codegraph.json`; add `--stdout` when piping.
 - Public API inspection: run `codegraph apisurface` to summarize exported symbols before refactors, reviews, or release checks.
 
 ## Supported languages
@@ -259,7 +250,7 @@ npm install @lzehrung/codegraph
 npm install https://github.com/lzehrung/codegraph/releases/download/vVERSION/lzehrung-codegraph-VERSION.tgz
 ```
 
-Important runtime note: the root tarball does not bundle the native addon or the optional JS fallback grammars. For source-language parsing after a tarball install, you still need either the scoped native package path or the separate `@lzehrung/codegraph-js-fallback` package, and both runtime packages still require the `@lzehrung` GitHub Packages registry configuration.
+Replace `VERSION` with the release you want. The root tarball does not bundle the native addon or optional JS fallback grammars; source-language parsing still needs the scoped native package path or `@lzehrung/codegraph-js-fallback`, both via the `@lzehrung` GitHub Packages registry.
 
 ## FAQ
 

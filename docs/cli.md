@@ -6,6 +6,8 @@ For a source checkout of this repo, replace `codegraph` with `node ./dist/cli.js
 
 If the CLI is not installed yet, use the install paths in [docs/installation.md](./installation.md). Do not use the unscoped `codegraph` package name.
 
+Bare `codegraph graph` writes `codegraph.json` and `codegraph.err` in the current directory. Use `--stdout`, `--output <path>`, or an explicit format flag such as `--json` when scripting.
+
 ## Runtime selection
 
 The CLI defaults to `--native auto`, which uses the native Tree-sitter path when a compatible native artifact is available and falls back automatically otherwise.
@@ -39,6 +41,9 @@ codegraph inspect ./src --limit 20
 
 # Whole-repo graph
 codegraph graph ./
+
+# Default graph output to stdout
+codegraph graph ./ --stdout
 
 # Fast graph-only overview
 codegraph graph ./src --fast-graph
@@ -429,7 +434,7 @@ npx tsx src/cli.ts goto <file> <line> <column>
 
 `--pretty` and `--summary` are presentation modes. They are intentionally compact and may omit low-confidence or verbose context that remains available in structured JSON and TypeScript return values. Integrators that compose deterministic review packs should use the exported TypeScript functions or JSON output.
 
-Plain `graph` output is a file dependency graph only:
+Plain `graph` output is a file dependency graph only. In default graph mode, output goes to `codegraph.json` unless `--stdout` or `--output <path>` is passed.
 
 ```json
 {

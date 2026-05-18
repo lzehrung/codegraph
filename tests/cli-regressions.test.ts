@@ -407,7 +407,11 @@ describe("CLI regressions", () => {
       "utf8",
     );
     await fsp.writeFile(mainFile, "export const main = 1;\n", "utf8");
-    await fsp.writeFile(generatedFile, "import missing from 'missing-pkg';\nexport const generated = missing;\n", "utf8");
+    await fsp.writeFile(
+      generatedFile,
+      "import missing from 'missing-pkg';\nexport const generated = missing;\n",
+      "utf8",
+    );
 
     const unresolved = JSON.parse(await runCliCommand(["unresolved", "--root", tmpDir, "--json"])) as Array<{
       name: string;
@@ -1521,6 +1525,56 @@ index 1111111..2222222 100644
     expect(stdout).toContain("Review tasks:");
     expect(stdout).toContain("review-summary");
     expect(stdout).not.toContain('"projectFiles"');
+  });
+
+  it("review CLI accepts space-separated --max-callsites values", async () => {
+    const root = await mkTmpDir("dg-review-cli-callsites-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const featureFile = path.join(srcDir, "feature.ts");
+    const consumerFile = path.join(srcDir, "consumer.ts");
+    await fsp.writeFile(
+      featureFile,
+      ["export function greet(name: string) {", "  return `hi ${name}`;", "}", ""].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      consumerFile,
+      ["import { greet } from './feature';", "", "export function run() {", "  return greet('world');", "}", ""].join(
+        "\n",
+      ),
+      "utf8",
+    );
+    initGitRepo(root);
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "initial"]);
+
+    await fsp.writeFile(
+      featureFile,
+      ["export function greet(name: string) {", "  return `hello ${name}`;", "}", ""].join("\n"),
+      "utf8",
+    );
+
+    const stdout = await runCliCommand([
+      "review",
+      "--root",
+      root,
+      "--base",
+      "HEAD",
+      "--head",
+      "WORKTREE",
+      "--include-symbol-details",
+      "--max-callsites",
+      "0",
+    ]);
+    const report = JSON.parse(stdout) as {
+      changedFiles: Array<{ file: string; symbols?: Array<{ name: string; callsites?: unknown[] }> }>;
+    };
+    const changedFile = report.changedFiles.find((entry) => entry.file === "src/feature.ts");
+    const greet = changedFile?.symbols?.find((symbol) => symbol.name === "greet");
+
+    expect(greet).toBeDefined();
+    expect(greet?.callsites).toBeUndefined();
   });
 
   it("review summary groups candidate tests by confidence without listing low-confidence fallbacks", async () => {
