@@ -79,6 +79,14 @@ describe("release script helpers", () => {
     const releaseScript = fs.readFileSync("scripts/release.mjs", "utf8");
 
     expect(releaseScript).toContain('run("npm", ["install"])');
+    expect(releaseScript).toContain('run("node", ["./scripts/patch-tree-sitter-node24.mjs"])');
+    expect(releaseScript).toContain('run("npm", ["rebuild"])');
+    expect(releaseScript.indexOf('run("node", ["./scripts/patch-tree-sitter-node24.mjs"])')).toBeGreaterThan(
+      releaseScript.indexOf('run("npm", ["install"])'),
+    );
+    expect(releaseScript.indexOf('run("npm", ["rebuild"])')).toBeGreaterThan(
+      releaseScript.indexOf('run("node", ["./scripts/patch-tree-sitter-node24.mjs"])'),
+    );
     expect(releaseScript).toContain('run("node", ["./scripts/stage-native-package.mjs", "--if-missing"])');
     expect(releaseScript).not.toContain("--legacy-peer-deps");
   });

@@ -105,6 +105,12 @@ function runOutput(command, args, options = {}) {
   };
 }
 
+function refreshDependencies() {
+  run("npm", ["install"]);
+  run("node", ["./scripts/patch-tree-sitter-node24.mjs"]);
+  run("npm", ["rebuild"]);
+}
+
 function gitOutput(args) {
   const result = spawnSync("git", args, {
     cwd: rootDir,
@@ -401,7 +407,7 @@ const versionPlan = planVersions(selectedPackages, currentVersions, {
 });
 
 normalizeManagedManifests(versionPlan);
-run("npm", ["install"]);
+refreshDependencies();
 normalizeManagedManifests(versionPlan);
 run("npm", ["run", "test:ci"]);
 run("npm", ["run", "build"]);
