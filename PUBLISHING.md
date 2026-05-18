@@ -24,7 +24,7 @@ npm run publish:major
 npm run publish:resume
 ```
 
-`release:*` detects changed packages, bumps only those packages, refreshes the lockfile, runs tests/builds, commits, creates package-scoped tags, and pushes.
+`release:*` detects changed packages, bumps only those packages, refreshes the lockfile, reapplies the Node 24 Tree-sitter patch, rebuilds native npm dependencies, runs tests/builds, commits, creates package-scoped tags, and pushes.
 
 `publish:*` does the same work and also publishes:
 
