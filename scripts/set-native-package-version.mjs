@@ -12,4 +12,3 @@ const nativePackagePath = path.join(process.cwd(), "packages", "codegraph-native
 const nativePackage = JSON.parse(fs.readFileSync(nativePackagePath, "utf8"));
 nativePackage.version = version;
 fs.writeFileSync(nativePackagePath, `${JSON.stringify(nativePackage, null, 2)}\n`);
-

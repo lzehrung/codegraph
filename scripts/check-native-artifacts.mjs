@@ -11,4 +11,3 @@ console.log(
     .map((targetPackage) => targetPackage.suffix)
     .join(", ")}`,
 );
-
