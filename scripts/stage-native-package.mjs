@@ -3,6 +3,7 @@ import path from "node:path";
 
 const rootDir = process.cwd();
 const nativeRoot = path.join(rootDir, "packages", "codegraph-native");
+const shouldSkipExistingTarget = process.argv.includes("--if-missing");
 
 function isMusl() {
   if (process.platform !== "linux") return false;
@@ -35,12 +36,6 @@ if (!suffix) {
   process.exit(1);
 }
 
-const sourceFile = path.join(nativeRoot, `index.${suffix}.node`);
-if (!fs.existsSync(sourceFile)) {
-  console.error(`Built native binary not found: ${sourceFile}`);
-  process.exit(1);
-}
-
 const targetDir = path.join(nativeRoot, "npm", suffix);
 if (!fs.existsSync(targetDir)) {
   console.error(`Target package directory not found: ${targetDir}. Run \`npm run native:create-npm-dirs\` first.`);
@@ -48,4 +43,15 @@ if (!fs.existsSync(targetDir)) {
 }
 
 const targetFile = path.join(targetDir, `index.${suffix}.node`);
+if (shouldSkipExistingTarget && fs.existsSync(targetFile)) {
+  console.log(`Keeping existing staged native artifact: ${targetFile}`);
+  process.exit(0);
+}
+
+const sourceFile = path.join(nativeRoot, `index.${suffix}.node`);
+if (!fs.existsSync(sourceFile)) {
+  console.error(`Built native binary not found: ${sourceFile}`);
+  process.exit(1);
+}
+
 fs.copyFileSync(sourceFile, targetFile);

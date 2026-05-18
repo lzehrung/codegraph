@@ -1,3 +1,5 @@
+import { getSupportedNativeTargetPackageNames } from "./native-targets-lib.mjs";
+
 export const validReleaseTypes = new Set(["patch", "minor", "major"]);
 
 export const releasePackages = [
@@ -8,9 +10,16 @@ export const releasePackages = [
     publishWorkspace: null,
     ownedFiles: new Set([
       "package.json",
+      ".github/workflows/release-native.yml",
       "README.md",
+      "scripts/check-native-artifacts.mjs",
+      "scripts/native-targets-lib.mjs",
       "scripts/release-lib.mjs",
       "scripts/release.mjs",
+      "scripts/set-native-package-version.mjs",
+      "scripts/stage-native-package.mjs",
+      "scripts/publish-native-targets.mjs",
+      "scripts/sync-native-meta.mjs",
       "tests/release-script.test.ts",
     ]),
     ownedPrefixes: ["src/", "codegraph-skill/"],
@@ -35,8 +44,14 @@ export const releasePackages = [
 
 export const managedReleasePaths = new Set([
   "package-lock.json",
+  "scripts/check-native-artifacts.mjs",
+  "scripts/native-targets-lib.mjs",
+  "scripts/publish-native-targets.mjs",
   "scripts/release-lib.mjs",
   "scripts/release.mjs",
+  "scripts/set-native-package-version.mjs",
+  "scripts/stage-native-package.mjs",
+  "scripts/sync-native-meta.mjs",
   "tests/release-script.test.ts",
   ...releasePackages.map((pkg) => pkg.manifestPath),
 ]);
@@ -277,6 +292,23 @@ export function prepareNativePackageManifestForPublish(sourcePkg, version, gener
       : null;
   if (!Object.keys(generatedOptionalDependencies ?? {}).length) {
     throw new Error("Missing generated native platform optionalDependencies for native meta publish.");
+  }
+  const expectedPackageNames = getSupportedNativeTargetPackageNames(sourcePkg);
+  const generatedPackageNames = Object.keys(generatedOptionalDependencies ?? {});
+  const missingPackageNames = expectedPackageNames.filter((packageName) => !generatedPackageNames.includes(packageName));
+  const unexpectedPackageNames = generatedPackageNames.filter((packageName) => !expectedPackageNames.includes(packageName));
+  const mismatchedVersionPackageNames = generatedPackageNames.filter(
+    (packageName) => generatedOptionalDependencies?.[packageName] !== version,
+  );
+  if (missingPackageNames.length || unexpectedPackageNames.length || mismatchedVersionPackageNames.length) {
+    const details = [
+      missingPackageNames.length ? `missing: ${missingPackageNames.join(", ")}` : "",
+      unexpectedPackageNames.length ? `unexpected: ${unexpectedPackageNames.join(", ")}` : "",
+      mismatchedVersionPackageNames.length ? `wrong version: ${mismatchedVersionPackageNames.join(", ")}` : "",
+    ]
+      .filter(Boolean)
+      .join("; ");
+    throw new Error(`Incomplete generated native platform optionalDependencies for native meta publish (${details}).`);
   }
   return {
     ...sourcePkg,

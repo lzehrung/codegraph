@@ -1,9 +1,10 @@
-import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { assertCompleteNativeTargetArtifacts, readJsonFile } from "./native-targets-lib.mjs";
 
 const rootDir = process.cwd();
-const npmDir = path.join(rootDir, "packages", "codegraph-native", "npm");
+const nativeRoot = path.join(rootDir, "packages", "codegraph-native");
+const nativePackagePath = path.join(nativeRoot, "package.json");
 
 function runPublish(packageDir) {
   const result = spawnSync("npm", ["publish", "."], {
@@ -16,16 +17,9 @@ function runPublish(packageDir) {
   }
 }
 
-if (!fs.existsSync(npmDir)) process.exit(0);
+const nativePackage = readJsonFile(nativePackagePath);
+const targetPackages = assertCompleteNativeTargetArtifacts(nativeRoot, nativePackage);
 
-const targetDirs = fs.readdirSync(npmDir, { withFileTypes: true });
-for (const dirent of targetDirs) {
-  if (!dirent.isDirectory()) continue;
-  const packageDir = path.join(npmDir, dirent.name);
-  const packagePath = path.join(packageDir, "package.json");
-  if (!fs.existsSync(packagePath)) continue;
-  const targetPackage = JSON.parse(fs.readFileSync(packagePath, "utf8"));
-  const mainFile = typeof targetPackage.main === "string" ? path.join(packageDir, targetPackage.main) : null;
-  if (!mainFile || !fs.existsSync(mainFile)) continue;
-  runPublish(packageDir);
+for (const targetPackage of targetPackages) {
+  runPublish(path.dirname(targetPackage.packagePath));
 }

@@ -40,7 +40,7 @@ npm run publish:patch -- --package js-fallback
 npm run release:minor -- --package @lzehrung/codegraph-native
 ```
 
-## GitHub Root Release Workflow
+## GitHub Release Workflows
 
 Use the `release-root` GitHub Actions workflow when you want GitHub to cut a root package release end-to-end.
 
@@ -49,7 +49,12 @@ Use the `release-root` GitHub Actions workflow when you want GitHub to cut a roo
 - On success it creates or updates the matching `vX.Y.Z` GitHub Release and uploads the root `.tgz` asset.
 - The workflow refuses reruns from a commit that is already tagged for the current root version. A fresh Actions runner cannot reconstruct the dirty local resume state that `publish:resume` expects.
 
-This workflow is intentionally root-only for now. Native releases still need a real multi-platform artifact flow before they should move to GitHub Actions.
+Use the `release-native` GitHub Actions workflow for native package releases.
+
+- Trigger it manually with `release_type=patch|minor|major`.
+- The workflow builds every target declared in `packages/codegraph-native/package.json` `napi.targets`.
+- It collects the per-target npm package artifacts, then runs `npm run publish:<release_type> -- --package native`.
+- The publish step still verifies that every supported target artifact is present before publishing target packages or the native meta package.
 
 ## Package Roles
 
@@ -82,39 +87,47 @@ npm run build
 npm run native:create-npm-dirs
 ```
 
-3. For a local single-platform release, stage the binary you just built:
+3. For a local smoke check, stage the binary you just built:
 
 ```powershell
 npm run native:stage-local
 ```
 
-For multi-platform releases, collect CI artifacts into `packages/codegraph-native/npm/<target>/` instead.
+This is not enough for a publish. For a native release, collect CI artifacts for every target in `packages/codegraph-native/npm/<target>/`.
 
-4. Sync the native meta package so its `optionalDependencies` only reference staged binaries:
+4. Verify that every supported target package has a staged binary:
+
+```powershell
+npm run native:check-artifacts
+```
+
+The supported target set is read from `packages/codegraph-native/package.json` `napi.targets`. Publishing now fails if any supported target is missing, so the native meta package cannot accidentally publish with only the platform that built the release.
+
+5. Sync the native meta package so its `optionalDependencies` reference every supported binary package:
 
 ```powershell
 npm run native:sync-meta
 ```
 
-5. Publish the staged per-platform binary packages:
+6. Publish the staged per-platform binary packages:
 
 ```powershell
 npm run publish:native:targets
 ```
 
-6. Publish the native meta package:
+7. Publish the native meta package:
 
 ```powershell
 npm run publish:native:meta
 ```
 
-7. Publish the root package:
+8. Publish the root package:
 
 ```powershell
 npm publish
 ```
 
-8. Publish the fallback package when it changed:
+9. Publish the fallback package when it changed:
 
 ```powershell
 npm publish --workspace=@lzehrung/codegraph-js-fallback
