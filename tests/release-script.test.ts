@@ -56,11 +56,30 @@ function readJsonFile(filePath: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
 }
 
+function currentNativeTargetSuffix(): string | null {
+  if (process.platform === "win32") {
+    if (process.arch === "x64") return "win32-x64-msvc";
+    if (process.arch === "arm64") return "win32-arm64-msvc";
+  }
+  if (process.platform === "darwin") {
+    if (process.arch === "x64") return "darwin-x64";
+    if (process.arch === "arm64") return "darwin-arm64";
+  }
+  if (process.platform === "linux") {
+    const report = process.report?.getReport();
+    const abi = report?.header?.glibcVersionRuntime ? "gnu" : "musl";
+    if (process.arch === "x64") return `linux-x64-${abi}`;
+    if (process.arch === "arm64") return `linux-arm64-${abi}`;
+  }
+  return null;
+}
+
 describe("release script helpers", () => {
   it("keeps release lockfile generation compatible with CI npm ci", () => {
     const releaseScript = fs.readFileSync("scripts/release.mjs", "utf8");
 
     expect(releaseScript).toContain('run("npm", ["install"])');
+    expect(releaseScript).toContain('run("node", ["./scripts/stage-native-package.mjs", "--if-missing"])');
     expect(releaseScript).not.toContain("--legacy-peer-deps");
   });
 
@@ -101,6 +120,31 @@ describe("release script helpers", () => {
     }
   });
 
+  it("keeps an existing staged native artifact when staging only missing targets", () => {
+    const suffix = currentNativeTargetSuffix();
+    expect(suffix).toBeTruthy();
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-native-stage-"));
+    const targetDir = path.join(tempDir, "packages", "codegraph-native", "npm", String(suffix));
+    const targetFile = path.join(targetDir, `index.${suffix}.node`);
+    const scriptPath = path.resolve(process.cwd(), "scripts/stage-native-package.mjs");
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.writeFileSync(targetFile, "downloaded artifact");
+
+    try {
+      const result = spawnSync(process.execPath, [scriptPath, "--if-missing"], {
+        cwd: tempDir,
+        encoding: "utf8",
+      });
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("Keeping existing staged native artifact");
+      expect(fs.readFileSync(targetFile, "utf8")).toBe("downloaded artifact");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("allows resume only for managed release files", () => {
     expect(isAllowedResumePath("package.json")).toBe(true);
     expect(isAllowedResumePath("scripts/check-native-artifacts.mjs")).toBe(true);
@@ -109,6 +153,7 @@ describe("release script helpers", () => {
     expect(isAllowedResumePath("scripts/release-lib.mjs")).toBe(true);
     expect(isAllowedResumePath("scripts/release.mjs")).toBe(true);
     expect(isAllowedResumePath("scripts/set-native-package-version.mjs")).toBe(true);
+    expect(isAllowedResumePath("scripts/stage-native-package.mjs")).toBe(true);
     expect(isAllowedResumePath("scripts/sync-native-meta.mjs")).toBe(true);
     expect(isAllowedResumePath("tests/release-script.test.ts")).toBe(true);
     expect(isAllowedResumePath("packages/codegraph-js-fallback/package.json")).toBe(true);
@@ -150,6 +195,7 @@ describe("release script helpers", () => {
         "scripts/native-targets-lib.mjs",
         "scripts/publish-native-targets.mjs",
         "scripts/set-native-package-version.mjs",
+        "scripts/stage-native-package.mjs",
         "scripts/sync-native-meta.mjs",
       ]),
     ).toEqual(["root"]);

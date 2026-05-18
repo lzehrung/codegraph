@@ -313,6 +313,7 @@ describe("package metadata", () => {
     expect(scripts["test:coverage:all"]).toBe("node ./scripts/coverage.mjs all");
     expect(scripts["coverage:setup:native"]).toBe("rustup component add llvm-tools-preview && cargo install cargo-llvm-cov --locked");
     expect(scripts["native:check-artifacts"]).toBe("node ./scripts/check-native-artifacts.mjs");
+    expect(scripts["native:stage-local"]).toBe("node ./scripts/stage-native-package.mjs");
     expect(devDependencies["@vitest/coverage-v8"]).toBeDefined();
     expect(vitestConfig).toContain("provider: \"v8\"");
     expect(vitestConfig).toContain("include: [\"src/**/*.{ts,tsx}\"]");
@@ -577,6 +578,7 @@ void onImpactItemStreaming;
     expect(publishRebuildIndex).toBeGreaterThan(publishPatchIndex);
     expect(versionIndex).toBeGreaterThan(installIndex);
     expect(createDirsIndex).toBeGreaterThan(versionIndex);
+    expect(workflow).not.toContain("native:stage-local");
     expect(publishIndex).toBeGreaterThan(publishRebuildIndex);
     expect(workflow).toContain("- build-native-artifacts");
     expect(workflow).toContain("npm run publish:${{ inputs.release_type }} -- --package native");
