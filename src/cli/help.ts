@@ -9,14 +9,21 @@ Commands:
   explain       Explain a file, symbol, SQL object, or search handle
   artifact      Build an agent-ready SQLite/graph/report/question bundle
   mcp           Serve MCP tools for agent graph navigation
+  index         Build the project symbol index
   impact        Analyze PR impact
   review        Generate code review report
   goto          Go to definition
   refs          Find references
   deps          List dependencies
   rdeps         List reverse dependencies
+  path          Find the shortest dependency path between files
   cycles        Detect dependency cycles (use --sort priority|size|fanin)
   hotspots      Find high-complexity files
+  unresolved    List unresolved project imports
+  apisurface    Summarize exported API symbols
+  grep          Run Tree-sitter query or text regex search
+  graph-delta   Report file-level graph changes
+  sql           Query a SQLite graph export read-only
   chunk         Chunk file for embeddings
   doctor        Inspect backend/runtime state and local graph artifacts
   skill         Install or inspect the bundled agent skill
@@ -40,7 +47,7 @@ Build Options:
   --workers                 Use Piscina worker threads for native extraction
   --cache <mode>            Cache mode: disk, memory, off
   --limit N                 Result limit for hotspots/inspect summaries
-  --cache-strict            Use content hashes instead of mtime
+  --cache-strict            Force strict content-hash cache validation
   --progress                Show progress tracking during indexing
 
 Output Options:
@@ -50,6 +57,7 @@ Output Options:
   --sqlite <path>           Write to SQLite database
   --sql-artifacts           Include isolated SQL artifact facts in JSON graph output
   --output <path>           Write to file instead of stdout
+  --stdout                  Write default graph output to stdout
 
 Examples:
   codegraph graph ./src

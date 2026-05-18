@@ -30,29 +30,27 @@ codegraph doctor
 codegraph inspect ./src --limit 20
 ```
 
-Then choose the narrowest follow-up command that answers the user:
+Then choose the narrowest follow-up command:
 
 - Architecture summary: `codegraph inspect ./src --limit 20`
 - Hot files: `codegraph hotspots ./src --limit 20 --json`
-- Ranked search anchors: `codegraph search "auth user" --json`
+- Search anchors: `codegraph search "auth user" --json`
 - Explain an anchor: `codegraph explain <file|symbol|sql-object|search-handle> --json`
-- Explain a large file with a smaller packet: `codegraph explain <file> --max-symbols 25 --json`
-- Durable artifact bundle: `codegraph artifact build --root . --out codegraph-out --json`
-- MCP server for tool-capable agents: `codegraph mcp serve --root . --stdio` or `codegraph mcp serve --root . --port 7331`
-- Command-specific CLI help: `codegraph search --help`, `codegraph explain --help`, `codegraph artifact --help`, `codegraph mcp --help`
-- SQL search anchors: `codegraph search "public users" --mode sql --json`
+- Smaller large-file packet: `codegraph explain <file> --max-symbols 25 --json`
+- Dependencies: `codegraph deps <file>`
+- Reverse dependencies: `codegraph rdeps <file>`
+- Dependency path: `codegraph path <from> <to>`
 - Cycles: `codegraph cycles --sort priority --json`
-- Dependencies of one file: `codegraph deps <file>`
-- Reverse dependencies of one file: `codegraph rdeps <file>`
-- Dependency path between files: `codegraph path <from> <to>`
 - Go to definition: `codegraph goto <file> <line> <column>`
 - Find references: `codegraph refs --file <file> --line <line> --col <column> --pretty`
 - PR impact: `codegraph impact --provider git --base main --head HEAD --pretty`
 - Worktree impact: `codegraph impact --provider git --base HEAD --head WORKTREE --pretty`
-- Compact review handoff: `codegraph review --base HEAD --head WORKTREE --summary`
-- Agent-ready full PR bundle: `codegraph review --base origin/main --head HEAD`
-- Public API surface: `codegraph apisurface`
-- Semantic chunks for context packing: `codegraph chunk <file>`
+- Review handoff: `codegraph review --base HEAD --head WORKTREE --summary`
+- Full review JSON: `codegraph review --base origin/main --head HEAD`
+- Public API: `codegraph apisurface`
+- Chunks: `codegraph chunk <file>`
+- Artifact bundle: `codegraph artifact build --root . --out codegraph-out --json`
+- MCP server: `codegraph mcp serve --root . --stdio` or `codegraph mcp serve --root . --port 7331`
 
 Use `--json` when the output will feed later reasoning, scripts, or another agent step. `search` is deterministic and returns project-relative explainable handles, evidence, neighbors, follow-up commands, result counts, limits, and omission counts. `explain` accepts those handles plus file paths, symbol names, and SQL object names, then returns bounded symbols, dependencies, reverse dependencies, references, snippets, SQL relation facts, changed-context review tasks/candidate tests, explicit limits, omission counts, and next commands. Generated command strings POSIX-shell-quote dynamic arguments when needed. For SQL objects, use search handles or schema-qualified names when basenames may be ambiguous. Reference and snippet omission counts are lower bounds after bounded navigation hits its cap. `artifact build` writes a durable SQLite, self-describing project-relative graph JSON, report, questions with unique stable-handle command IDs, and manifest bundle for handoff while excluding its own in-repo output directory and linked outside-root files. With `--force`, recognizable stale artifact files are removed, unrelated operator files are preserved, and unrecognized reserved-name collisions are refused. `codegraph doctor <artifact-dir>` recognizes manifest-backed artifact bundle directories and reports expected artifact presence. `mcp serve` exposes the same primitives as read-only MCP tools by default over stdio, or over Streamable HTTP with `--port <number>` at `/mcp`; HTTP binds to `127.0.0.1` unless `--host <host>` is passed, validates Host headers, and allows loopback Host headers for wildcard binds. File/artifact paths are confined after realpath resolution, SQLite query results are row- and byte-bounded, synthetic payload functions are rejected, and `--allow-build` is required before an agent may write artifact output.
 
@@ -129,6 +127,7 @@ Runtime controls:
 
 - Whole-repo graph:
   `codegraph graph ./`
+  Bare `graph` writes `codegraph.json`; add `--stdout` when piping.
 - Fast overview:
   `codegraph graph ./src --fast-graph`
 - Full AST-based graph:

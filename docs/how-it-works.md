@@ -27,7 +27,7 @@ Runtime behavior, performance characteristics, architecture, extension points, a
 
 - Modes: `off` (default), `memory` (per-process), `disk` (persist across runs under `.codegraph-cache/index-v1`)
 - Content-hash caching is the default: parsed-module cache keys use content SHA1 for reliability.
-- Set `cacheStrict: false` to use mtime and size for manifest signatures when you want faster, less reliable git-heavy rebuilds.
+- `cacheStrict` defaults to true. Set `cacheStrict: false` only when mtime and size checks are an acceptable speed tradeoff.
 - Per-file parsed caches are versioned; version mismatches trigger a rebuild of that file's cached outputs.
 - Bloom filters are built automatically during indexing for faster reference scanning. Disable them with `useBloomFilters: false` if needed.
 - `.codegraph-cache/index-v1/manifest.json` stores the last indexed commit, graph options, and per-file signatures plus resolved edges.
@@ -73,8 +73,8 @@ Runtime behavior, performance characteristics, architecture, extension points, a
 ### Troubleshooting
 
 - Missing JS or TS edges: disable `--fast-graph`.
-- Dynamic JS or TS specifiers or bare imports from custom roots: use `--dynamic-import-heuristics` and or `--resolution-hint <dir>` only when needed because they can introduce false positives.
-- Stale results: use `--cache-strict` or clear `.codegraph-cache`.
+- Dynamic JS or TS specifiers or bare imports from custom roots: use `--dynamic-import-heuristics` or `--resolution-hint <dir>` only when needed because they can introduce false positives.
+- Stale results after non-strict cache runs: rerun with default strict caching or clear `.codegraph-cache`.
 - Windows path separators are normalized to `/` where relevant.
 
 ## Architecture
