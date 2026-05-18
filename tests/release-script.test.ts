@@ -87,6 +87,12 @@ describe("release script helpers", () => {
     expect(releaseScript.indexOf('run("npm", ["rebuild"])')).toBeGreaterThan(
       releaseScript.indexOf('run("node", ["./scripts/patch-tree-sitter-node24.mjs"])'),
     );
+    expect(
+      releaseScript.indexOf('run("node", ["./scripts/build-native-if-available.mjs", "--strict"])'),
+    ).toBeGreaterThan(releaseScript.indexOf('run("npm", ["rebuild"])'));
+    expect(releaseScript.indexOf('run("npm", ["run", "test:ci"])')).toBeGreaterThan(
+      releaseScript.indexOf('run("node", ["./scripts/build-native-if-available.mjs", "--strict"])'),
+    );
     expect(releaseScript).toContain('run("node", ["./scripts/stage-native-package.mjs", "--if-missing"])');
     expect(releaseScript).not.toContain("--legacy-peer-deps");
   });

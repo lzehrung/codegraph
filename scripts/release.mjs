@@ -409,11 +409,9 @@ const versionPlan = planVersions(selectedPackages, currentVersions, {
 normalizeManagedManifests(versionPlan);
 refreshDependencies();
 normalizeManagedManifests(versionPlan);
+run("node", ["./scripts/build-native-if-available.mjs", "--strict"]);
 run("npm", ["run", "test:ci"]);
 run("npm", ["run", "build"]);
-if (selectedPackages.some((pkg) => pkg.id === "native")) {
-  run("node", ["./scripts/build-native-if-available.mjs", "--strict"]);
-}
 
 if (shouldPublish) {
   const publishedPackageNames = new Set(

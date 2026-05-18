@@ -10,6 +10,34 @@ type BindingLoaderOptions = {
   resolveFn?: ((specifier: string) => string) | undefined;
 };
 
+function isMuslRuntime(): boolean {
+  if (process.platform !== "linux") return false;
+  const report = process.report?.getReport();
+  const header = report && typeof report === "object" && "header" in report ? report.header : null;
+  const glibcVersionRuntime =
+    header && typeof header === "object" && "glibcVersionRuntime" in header ? header.glibcVersionRuntime : null;
+  if (typeof glibcVersionRuntime === "string" && glibcVersionRuntime) return false;
+  return true;
+}
+
+export function currentNativeTargetSuffix(): string | null {
+  const { platform, arch } = process;
+  if (platform === "win32") {
+    if (arch === "x64") return "win32-x64-msvc";
+    if (arch === "arm64") return "win32-arm64-msvc";
+  }
+  if (platform === "darwin") {
+    if (arch === "x64") return "darwin-x64";
+    if (arch === "arm64") return "darwin-arm64";
+  }
+  if (platform === "linux") {
+    const abi = isMuslRuntime() ? "musl" : "gnu";
+    if (arch === "x64") return `linux-x64-${abi}`;
+    if (arch === "arm64") return `linux-arm64-${abi}`;
+  }
+  return null;
+}
+
 function normalizePathForComparison(filePath: string): string {
   const resolved = path.resolve(filePath);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
@@ -22,9 +50,14 @@ function isWithinDirectory(filePath: string, directoryPath: string): boolean {
 }
 
 export function findLocalNativeBinary(packageRoot: string): string | null {
+  const suffix = currentNativeTargetSuffix();
+  if (!suffix) {
+    return null;
+  }
+  const expectedName = `index.${suffix}.node`;
   try {
     const entries = fs.readdirSync(packageRoot, { withFileTypes: true });
-    const binary = entries.find((entry) => entry.isFile() && entry.name.endsWith(".node"));
+    const binary = entries.find((entry) => entry.isFile() && entry.name === expectedName);
     return binary ? path.join(packageRoot, binary.name) : null;
   } catch {
     return null;
