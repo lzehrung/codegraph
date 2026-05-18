@@ -66,7 +66,7 @@ Download and install the root package tarball directly from a GitHub release:
 npm install https://github.com/lzehrung/codegraph/releases/download/vVERSION/lzehrung-codegraph-VERSION.tgz
 ```
 
-Replace `VERSION` with the desired release version, for example `1.8.53`.
+Replace `VERSION` with the desired release version from the GitHub release page.
 
 Each release attaches a pre-built `.tgz` that `npm install` can consume by URL with no registry configuration needed for the root package itself.
 

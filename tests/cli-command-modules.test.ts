@@ -160,6 +160,14 @@ describe("CLI command modules", () => {
     expect(commands).toContain("Serve MCP tools for agent graph navigation");
   });
 
+  test("lists all public top-level commands in CLI help", () => {
+    const commands = CLI_HELP_TEXT.slice(CLI_HELP_TEXT.indexOf("Commands:"), CLI_HELP_TEXT.indexOf("Graph Options:"));
+
+    for (const command of ["apisurface", "graph-delta", "grep", "index", "path", "sql", "unresolved"]) {
+      expect(commands).toContain(`  ${command}`);
+    }
+  });
+
   test("documents HTTP host and port options in MCP serve help", () => {
     expect(MCP_SERVE_HELP_TEXT).toContain("--port <number>");
     expect(MCP_SERVE_HELP_TEXT).toContain("--host <host>");
@@ -169,7 +177,11 @@ describe("CLI command modules", () => {
   test("routes agent command help to command-specific usage text", async () => {
     const cases = [
       { args: ["search", "--help"], heading: "codegraph search", usage: 'Usage: codegraph search "<query>"' },
-      { args: ["explain", "--help"], heading: "codegraph explain", usage: "Usage: codegraph explain <file|symbol|sql-object|handle>" },
+      {
+        args: ["explain", "--help"],
+        heading: "codegraph explain",
+        usage: "Usage: codegraph explain <file|symbol|sql-object|handle>",
+      },
       { args: ["artifact", "--help"], heading: "codegraph artifact", usage: "Usage: codegraph artifact build" },
       { args: ["mcp", "--help"], heading: "codegraph mcp", usage: "Usage: codegraph mcp serve" },
     ];
@@ -250,7 +262,9 @@ describe("CLI command modules", () => {
       ]);
 
       const firstGraph = readJsonRecord(JSON.parse(await fsp.readFile(path.join(firstRoot, "codegraph.json"), "utf8")));
-      const secondGraph = readJsonRecord(JSON.parse(await fsp.readFile(path.join(secondRoot, "codegraph.json"), "utf8")));
+      const secondGraph = readJsonRecord(
+        JSON.parse(await fsp.readFile(path.join(secondRoot, "codegraph.json"), "utf8")),
+      );
       expect(JSON.stringify(firstGraph)).toContain("first.ts");
       expect(JSON.stringify(firstGraph)).not.toContain("second.ts");
       expect(JSON.stringify(secondGraph)).toContain("second.ts");
@@ -598,6 +612,20 @@ describe("CLI command modules", () => {
       expect(unresolved.stdout).toContain('as "missing-pkg"');
       expect(apiSurface.stdout).toContain("API Surface");
       expect(apiSurface.stdout).toContain("run");
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("parses space-separated cycle sort values through the main CLI dispatcher", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-cycle-sort-"));
+    await fsp.writeFile(path.join(tempDir, "main.ts"), "export const value = 1;\n", "utf8");
+
+    try {
+      const result = await captureCli(["cycles", "--root", tempDir, "--sort", "recent", "--json"]);
+
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("Invalid --sort value");
     } finally {
       await fsp.rm(tempDir, { recursive: true, force: true });
     }
