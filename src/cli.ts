@@ -54,7 +54,7 @@ import { handleGraphDeltaCommand } from "./cli/graphDelta.js";
 import { handleGraphQueryCommand } from "./cli/graphQueries.js";
 import { CLI_HELP_TEXT, helpTextForCommand, isKnownCliCommand } from "./cli/help.js";
 import { handleMcpServeCommand } from "./cli/mcp.js";
-import { parseCacheModeOption, parsePositiveIntegerOption } from "./cli/options.js";
+import { isCliValueOption, parseCacheModeOption, parsePositiveIntegerOption } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
 import { handleSearchCommand } from "./cli/search.js";
 import { handleSkillCommand } from "./cli/skill.js";
@@ -296,68 +296,6 @@ type ParsedCliArgs = {
   flags: Set<string>;
   options: Map<string, string[]>;
 };
-
-const CLI_VALUE_OPTIONS = new Set<string>([
-  "--root",
-  "--output",
-  "--out",
-  "--stderr-file",
-  "--threads",
-  "--native",
-  "--cache",
-  "--changed-since",
-  "--git-base",
-  "--git-head",
-  "--symbols-detailed-scope",
-  "--symbols-detailed-max-edges",
-  "--sqlite",
-  "--db",
-  "--file",
-  "--line",
-  "--col",
-  "--column",
-  "--query",
-  "--pattern",
-  "--regex",
-  "--glob",
-  "--provider",
-  "--base",
-  "--head",
-  "--pr",
-  "--repo",
-  "--max-refs",
-  "--depth",
-  "--sort",
-  "--scope",
-  "--ref-context",
-  "--ref-context-lines",
-  "--ref-block-max-lines",
-  "--max-tests",
-  "--max-callsites",
-  "--language",
-  "--min-tokens",
-  "--max-tokens",
-  "--max-hits",
-  "--resolution-hint",
-  "--review-depth",
-  "--ignore-glob",
-  "--include-glob",
-  "--report-file",
-  "--lcov",
-  "--coverage-report",
-  "--test-command-template",
-  "--agent",
-  "--target",
-  "--limit",
-  "--mode",
-  "--from",
-  "--max-dependencies",
-  "--max-snippets",
-  "--max-symbols",
-  "--artifact",
-  "--host",
-  "--port",
-]);
 
 type IndexCacheMetadata = {
   manifestPath: string;
@@ -686,11 +624,6 @@ function parseCliArgs(command: string, tokens: string[]): ParsedCliArgs {
   }
 
   return { positionals, flags, options };
-}
-
-function isCliValueOption(command: string, key: string, positionals: readonly string[]): boolean {
-  if (command === "artifact" && key === "--sqlite" && positionals[0] === "build") return false;
-  return CLI_VALUE_OPTIONS.has(key);
 }
 
 async function writeCommandReport(report: CommandReport, reportFile: string | undefined) {
