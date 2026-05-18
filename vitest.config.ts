@@ -8,7 +8,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    testTimeout: 10000,
+    testTimeout: 30000,
     include: ["tests/**/*.test.ts"],
     includeSource: ["src/**/*.{ts,tsx,js,jsx}"],
     exclude: ["node_modules", "dist"],

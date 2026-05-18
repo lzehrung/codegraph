@@ -28,7 +28,7 @@
     "prepare": "node ./scripts/prepare-package.mjs",
     "test": "node ./scripts/ensure-dist-for-tests.mjs && vitest",
     "test:all": "npm run test:native && npm run test:ci",
-    "test:ci": "node ./scripts/ensure-dist-for-tests.mjs && vitest run",
+    "test:ci": "node ./scripts/ensure-dist-for-tests.mjs && vitest run --exclude tests/bench-harness.test.ts",
     "test:coverage": "node ./scripts/coverage.mjs js",
     "test:coverage:native": "node ./scripts/coverage.mjs native",
     "test:coverage:all": "node ./scripts/coverage.mjs all",

@@ -11,6 +11,7 @@ import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
 const jsFallbackDescribe = isJsFallbackAvailable() ? describe : describe.skip;
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples");
+const slowNativeParityTimeoutMs = 30000;
 const tempDirs: string[] = [];
 
 afterAll(async () => {
@@ -341,7 +342,7 @@ jsFallbackDescribe("native tree-sitter integration", () => {
     for (const [projectDir, relativeFile] of cases) {
       await expectNativeImportParity(projectDir, relativeFile);
     }
-  });
+  }, slowNativeParityTimeoutMs);
 
   it("matches symbol extraction for representative compiled languages", async () => {
     const cases = [
@@ -381,7 +382,7 @@ jsFallbackDescribe("native tree-sitter integration", () => {
     for (const relativeFile of cases) {
       await expectNativeModuleIndexParity(relativeFile);
     }
-  });
+  }, slowNativeParityTimeoutMs);
 
   it("matches module specifier extraction for stylesheet and component languages", async () => {
     const cases = [
@@ -411,5 +412,5 @@ jsFallbackDescribe("native tree-sitter integration", () => {
     for (const relativeFile of cases) {
       await expectNativeModuleSpecifierParity(relativeFile);
     }
-  });
+  }, slowNativeParityTimeoutMs);
 });

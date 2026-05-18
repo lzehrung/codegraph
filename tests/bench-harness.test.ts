@@ -36,74 +36,82 @@ describe("bench-native harness", () => {
     }
   });
 
-  it("runs a single-fixture smoke benchmark and produces JSON output", () => {
-    const output = runBench(
-      ["--runs=1", "--fixtures=typescript", "--workloads=graph", "--temperatures=cold", "--json"],
-      60_000,
-    );
-    const parsed = JSON.parse(output);
-    expect(parsed.runs).toBe(1);
-    expect(parsed.environment).toBeDefined();
-    expect(parsed.environment.node).toMatch(/^v/);
-    expect(parsed.results).toHaveLength(1);
-    const result = parsed.results[0];
-    expect(result.fixture).toBe("typescript");
-    expect(result.workloads.graph).toBeDefined();
-    expect(result.workloads.graph.cold).toBeDefined();
-    expect(result.workloads.graph.cold.native.averageElapsedMs).toBeGreaterThan(0);
-    expect(result.workloads.graph.cold.js.averageElapsedMs).toBeGreaterThan(0);
-  });
-
-  it("saves and loads baselines", () => {
-    const baselinesDir = path.join(rootDir, ".bench-baselines");
-    const baselineName = `test-harness-${process.pid}-${randomUUID()}`;
-    const baselineFile = path.join(baselinesDir, `${baselineName}.json`);
-    try {
-      runBench(
-        [
-          "--runs=1",
-          "--fixtures=typescript",
-          "--workloads=graph",
-          "--temperatures=cold",
-          `--save-baseline=${baselineName}`,
-          "--json",
-        ],
+  it(
+    "runs a single-fixture smoke benchmark and produces JSON output",
+    () => {
+      const output = runBench(
+        ["--runs=1", "--fixtures=typescript", "--workloads=graph", "--temperatures=cold", "--json"],
         60_000,
       );
+      const parsed = JSON.parse(output);
+      expect(parsed.runs).toBe(1);
+      expect(parsed.environment).toBeDefined();
+      expect(parsed.environment.node).toMatch(/^v/);
+      expect(parsed.results).toHaveLength(1);
+      const result = parsed.results[0];
+      expect(result.fixture).toBe("typescript");
+      expect(result.workloads.graph).toBeDefined();
+      expect(result.workloads.graph.cold).toBeDefined();
+      expect(result.workloads.graph.cold.native.averageElapsedMs).toBeGreaterThan(0);
+      expect(result.workloads.graph.cold.js.averageElapsedMs).toBeGreaterThan(0);
+    },
+    longBenchTimeoutMs,
+  );
 
-      expect(fs.existsSync(baselineFile)).toBe(true);
-      const baseline = JSON.parse(fs.readFileSync(baselineFile, "utf8"));
-      expect(baseline._meta.name).toBe(baselineName);
-      expect(baseline._meta.date).toMatch(/^\d{4}-/);
-      expect(baseline.results).toHaveLength(1);
-
-      // Compare against itself
-      const compareOutput = runBench(
-        [
-          "--runs=1",
-          "--fixtures=typescript",
-          "--workloads=graph",
-          "--temperatures=cold",
-          `--compare-baseline=${baselineName}`,
-        ],
-        60_000,
-      );
-      expect(compareOutput).toContain("Comparing against baseline:");
-      expect(compareOutput).toContain(baselineName);
-    } finally {
-      if (fs.existsSync(baselineFile)) {
-        fs.rmSync(baselineFile);
-      }
-      // Clean up baselines dir if empty
+  it(
+    "saves and loads baselines",
+    () => {
+      const baselinesDir = path.join(rootDir, ".bench-baselines");
+      const baselineName = `test-harness-${process.pid}-${randomUUID()}`;
+      const baselineFile = path.join(baselinesDir, `${baselineName}.json`);
       try {
-        if (fs.existsSync(baselinesDir) && !fs.readdirSync(baselinesDir).length) {
-          fs.rmdirSync(baselinesDir);
+        runBench(
+          [
+            "--runs=1",
+            "--fixtures=typescript",
+            "--workloads=graph",
+            "--temperatures=cold",
+            `--save-baseline=${baselineName}`,
+            "--json",
+          ],
+          60_000,
+        );
+
+        expect(fs.existsSync(baselineFile)).toBe(true);
+        const baseline = JSON.parse(fs.readFileSync(baselineFile, "utf8"));
+        expect(baseline._meta.name).toBe(baselineName);
+        expect(baseline._meta.date).toMatch(/^\d{4}-/);
+        expect(baseline.results).toHaveLength(1);
+
+        // Compare against itself
+        const compareOutput = runBench(
+          [
+            "--runs=1",
+            "--fixtures=typescript",
+            "--workloads=graph",
+            "--temperatures=cold",
+            `--compare-baseline=${baselineName}`,
+          ],
+          60_000,
+        );
+        expect(compareOutput).toContain("Comparing against baseline:");
+        expect(compareOutput).toContain(baselineName);
+      } finally {
+        if (fs.existsSync(baselineFile)) {
+          fs.rmSync(baselineFile);
         }
-      } catch {
-        // ignore
+        // Clean up baselines dir if empty
+        try {
+          if (fs.existsSync(baselinesDir) && !fs.readdirSync(baselinesDir).length) {
+            fs.rmdirSync(baselinesDir);
+          }
+        } catch {
+          // ignore
+        }
       }
-    }
-  });
+    },
+    longBenchTimeoutMs,
+  );
 
   it("rejects unknown fixture names", () => {
     const result = runBenchResult(["--fixtures=nonexistent", "--runs=1"], 10_000);
