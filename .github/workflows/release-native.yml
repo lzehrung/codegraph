@@ -1,0 +1,178 @@
+name: release-native
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: Release type for the native package
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-native
+  cancel-in-progress: false
+
+jobs:
+  plan-native-release:
+    name: Plan native release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute native release version
+        id: version
+        shell: bash
+        run: |
+          version=$(node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import { bumpVersion } from "./scripts/release-lib.mjs";
+
+          const nativePackage = JSON.parse(fs.readFileSync("packages/codegraph-native/package.json", "utf8"));
+          console.log(bumpVersion(nativePackage.version, "${{ inputs.release_type }}"));
+          NODE
+          )
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build-native-artifacts:
+    name: Build ${{ matrix.suffix }}
+    needs: plan-native-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rust-target: x86_64-pc-windows-msvc
+            suffix: win32-x64-msvc
+          - os: windows-latest
+            rust-target: aarch64-pc-windows-msvc
+            suffix: win32-arm64-msvc
+          - os: ubuntu-latest
+            rust-target: x86_64-unknown-linux-gnu
+            suffix: linux-x64-gnu
+          - os: ubuntu-24.04-arm
+            rust-target: aarch64-unknown-linux-gnu
+            suffix: linux-arm64-gnu
+          - os: ubuntu-latest
+            rust-target: x86_64-unknown-linux-musl
+            suffix: linux-x64-musl
+          - os: ubuntu-24.04-arm
+            rust-target: aarch64-unknown-linux-musl
+            suffix: linux-arm64-musl
+          - os: macos-13
+            rust-target: x86_64-apple-darwin
+            suffix: darwin-x64
+          - os: macos-14
+            rust-target: aarch64-apple-darwin
+            suffix: darwin-arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - name: Setup Linux musl tools
+        if: contains(matrix.rust-target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.10.0
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          npm ci --ignore-scripts
+          node ./scripts/patch-tree-sitter-node24.mjs
+          npm rebuild
+
+      - name: Apply native release version
+        run: node ./scripts/set-native-package-version.mjs ${{ needs.plan-native-release.outputs.version }}
+
+      - name: Create native package directories
+        run: npm run native:create-npm-dirs
+
+      - name: Build native target
+        run: node ./node_modules/@napi-rs/cli/dist/cli.js build --platform --release --cwd packages/codegraph-native --output-dir ./artifacts --no-js --dts index.d.ts --target ${{ matrix.rust-target }}
+
+      - name: Stage native target
+        run: node ./node_modules/@napi-rs/cli/dist/cli.js artifacts --cwd packages/codegraph-native --output-dir ./artifacts --npm-dir ./npm
+
+      - name: Pack native target artifact
+        shell: bash
+        run: |
+          mkdir -p native-artifacts
+          tar -czf "native-artifacts/${{ matrix.suffix }}.tgz" -C packages/codegraph-native/npm "${{ matrix.suffix }}"
+
+      - name: Upload native target artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.suffix }}
+          path: native-artifacts/${{ matrix.suffix }}.tgz
+          if-no-files-found: error
+
+  publish-native:
+    name: Publish native package
+    needs:
+      - plan-native-release
+      - build-native-artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.10.0
+          cache: npm
+          registry-url: https://npm.pkg.github.com
+          scope: "@lzehrung"
+
+      - name: Configure git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Download native artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: native-artifacts
+          merge-multiple: true
+
+      - name: Unpack native artifacts
+        shell: bash
+        run: |
+          mkdir -p packages/codegraph-native/npm
+          for archive in native-artifacts/*.tgz; do
+            tar -xzf "$archive" -C packages/codegraph-native/npm
+          done
+
+      - name: Publish native release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run publish:${{ inputs.release_type }} -- --package native

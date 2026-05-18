@@ -61,6 +61,7 @@
     "build:native": "npm run build --workspace=@lzehrung/codegraph-native",
     "native:create-npm-dirs": "npm run create-npm-dirs --workspace=@lzehrung/codegraph-native",
     "native:artifacts": "npm run artifacts --workspace=@lzehrung/codegraph-native",
+    "native:check-artifacts": "node ./scripts/check-native-artifacts.mjs",
     "native:stage-local": "node ./scripts/stage-native-package.mjs",
     "native:sync-meta": "node ./scripts/sync-native-meta.mjs",
     "publish:native:targets": "node ./scripts/publish-native-targets.mjs",
