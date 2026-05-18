@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { findLocalNativeBinary, loadNativeBinding } from "../src/native/bindingLoader.js";
+import { currentNativeTargetSuffix, findLocalNativeBinary, loadNativeBinding } from "../src/native/bindingLoader.js";
 
 const tempDirs: string[] = [];
 
@@ -17,11 +17,25 @@ async function makeTempDir(): Promise<string> {
 }
 
 describe("native binding loader", () => {
-  it("finds a local native binary inside the workspace package", async () => {
+  it("finds the current-platform local native binary inside the workspace package", async () => {
+    const dir = await makeTempDir();
+    const suffix = currentNativeTargetSuffix();
+    expect(suffix).toBeTruthy();
+    await fs.writeFile(path.join(dir, `index.${suffix}.node`), "");
+
+    expect(findLocalNativeBinary(dir)?.replace(/\\/g, "/")).toMatch(new RegExp(`index\\.${suffix}\\.node$`));
+  });
+
+  it("ignores stale local native binaries for other platforms", async () => {
     const dir = await makeTempDir();
     await fs.writeFile(path.join(dir, "index.win32-x64-msvc.node"), "");
 
-    expect(findLocalNativeBinary(dir)?.replace(/\\/g, "/")).toMatch(/index\.win32-x64-msvc\.node$/);
+    if (process.platform === "win32" && process.arch === "x64") {
+      expect(findLocalNativeBinary(dir)).not.toBeNull();
+      return;
+    }
+
+    expect(findLocalNativeBinary(dir)).toBeNull();
   });
 
   it("returns null when the local native package cannot be read or has no binary", async () => {
@@ -34,7 +48,9 @@ describe("native binding loader", () => {
 
   it("prefers a local workspace binary over the package entrypoint", async () => {
     const dir = await makeTempDir();
-    const binary = path.join(dir, "index.win32-x64-msvc.node");
+    const suffix = currentNativeTargetSuffix();
+    expect(suffix).toBeTruthy();
+    const binary = path.join(dir, `index.${suffix}.node`);
     await fs.writeFile(binary, "");
     const requireFn = vi.fn((specifier: string) => ({ specifier }));
 
@@ -66,7 +82,9 @@ describe("native binding loader", () => {
 
   it("preserves the local binary load error when the workspace package resolves locally", async () => {
     const dir = await makeTempDir();
-    const binary = path.join(dir, "index.win32-x64-msvc.node");
+    const suffix = currentNativeTargetSuffix();
+    expect(suffix).toBeTruthy();
+    const binary = path.join(dir, `index.${suffix}.node`);
     const localError = new Error("binary ABI mismatch");
     await fs.writeFile(binary, "");
 

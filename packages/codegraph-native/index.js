@@ -38,8 +38,11 @@ function platformPackageSuffix() {
 }
 
 function findLocalNativeBinary() {
+  const suffix = platformPackageSuffix();
+  if (!suffix) return null;
+  const expectedName = `index.${suffix}.node`;
   const files = fs.readdirSync(__dirname);
-  const binary = files.find((file) => file.endsWith(".node"));
+  const binary = files.find((file) => file === expectedName);
   return binary ? path.join(__dirname, binary) : null;
 }
 
