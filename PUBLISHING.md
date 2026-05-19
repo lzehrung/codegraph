@@ -33,6 +33,8 @@ npm run publish:resume
 - the `@lzehrung/codegraph-js-fallback` package when it changed
 - the root `@lzehrung/codegraph` package when it changed
 
+When a publish includes `@lzehrung/codegraph-native`, the script verifies the complete supported native target set before running the full test suite. A local WSL/macOS/Windows shell can only build its own target, so use the `release-native` GitHub Actions workflow or manually collect every target artifact before running a native publish locally.
+
 You can force a package-scoped release with `--package`:
 
 ```powershell

@@ -22,9 +22,11 @@ import {
   tagNamesForPackageVersion,
   validReleaseTypes,
 } from "./release-lib.mjs";
+import { assertCompleteNativeTargetArtifacts } from "./native-targets-lib.mjs";
 
 const rootDir = process.cwd();
 const rootPackagePath = path.join(rootDir, "package.json");
+const nativeRootPath = path.join(rootDir, "packages", "codegraph-native");
 const nativePackagePath = path.join(rootDir, "packages", "codegraph-native", "package.json");
 const jsFallbackPackagePath = path.join(rootDir, "packages", "codegraph-js-fallback", "package.json");
 const currentRootPackage = readJson(rootPackagePath);
@@ -264,6 +266,12 @@ function packageExistsInRegistry(packageName, version) {
   return result.status === 0 && result.stdout === version;
 }
 
+function prepareNativeTargetArtifactsForPublish() {
+  run("npm", ["run", "native:create-npm-dirs"]);
+  run("node", ["./scripts/stage-native-package.mjs", "--if-missing"]);
+  assertCompleteNativeTargetArtifacts(nativeRootPath, readJson(nativePackagePath));
+}
+
 function getChangedPathsSinceRef(refName) {
   if (!refName) {
     return [];
@@ -405,27 +413,29 @@ const versionPlan = planVersions(selectedPackages, currentVersions, {
   releaseType,
   shouldResume,
 });
+const publishPlan = shouldPublish
+  ? computePublishPlan({
+      shouldPublish,
+      selectedPackageNames: selectedPackages.map((pkg) => pkg.name),
+      publishedPackageNames: new Set(
+        selectedPackages
+          .filter((pkg) => packageExistsInRegistry(pkg.name, versionPlan.get(pkg.id)))
+          .map((pkg) => pkg.name),
+      ),
+    })
+  : null;
 
 normalizeManagedManifests(versionPlan);
 refreshDependencies();
 normalizeManagedManifests(versionPlan);
 run("node", ["./scripts/build-native-if-available.mjs", "--strict"]);
+if (publishPlan?.publishNativeTargets) {
+  prepareNativeTargetArtifactsForPublish();
+}
 run("npm", ["run", "test:ci"]);
 run("npm", ["run", "build"]);
 
-if (shouldPublish) {
-  const publishedPackageNames = new Set(
-    selectedPackages.filter((pkg) => packageExistsInRegistry(pkg.name, versionPlan.get(pkg.id))).map((pkg) => pkg.name),
-  );
-  const publishPlan = computePublishPlan({
-    shouldPublish,
-    selectedPackageNames: selectedPackages.map((pkg) => pkg.name),
-    publishedPackageNames,
-  });
-  if (publishPlan.publishNativeTargets) {
-    run("npm", ["run", "native:create-npm-dirs"]);
-    run("node", ["./scripts/stage-native-package.mjs", "--if-missing"]);
-  }
+if (publishPlan) {
   try {
     normalizeManagedManifests(versionPlan);
     for (const step of computePublishExecutionSteps(publishPlan)) {

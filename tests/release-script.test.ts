@@ -90,10 +90,14 @@ describe("release script helpers", () => {
     expect(
       releaseScript.indexOf('run("node", ["./scripts/build-native-if-available.mjs", "--strict"])'),
     ).toBeGreaterThan(releaseScript.indexOf('run("npm", ["rebuild"])'));
-    expect(releaseScript.indexOf('run("npm", ["run", "test:ci"])')).toBeGreaterThan(
+    expect(releaseScript).toContain('run("node", ["./scripts/stage-native-package.mjs", "--if-missing"])');
+    expect(releaseScript).toContain("assertCompleteNativeTargetArtifacts(nativeRootPath");
+    expect(releaseScript.indexOf("prepareNativeTargetArtifactsForPublish();")).toBeGreaterThan(
       releaseScript.indexOf('run("node", ["./scripts/build-native-if-available.mjs", "--strict"])'),
     );
-    expect(releaseScript).toContain('run("node", ["./scripts/stage-native-package.mjs", "--if-missing"])');
+    expect(releaseScript.indexOf('run("npm", ["run", "test:ci"])')).toBeGreaterThan(
+      releaseScript.indexOf("prepareNativeTargetArtifactsForPublish();"),
+    );
     expect(releaseScript).not.toContain("--legacy-peer-deps");
   });
 
