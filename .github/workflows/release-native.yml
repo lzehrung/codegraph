@@ -90,6 +90,13 @@ jobs:
         if: contains(matrix.rust-target, 'musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
+      - name: Configure Linux musl linker search path
+        if: contains(matrix.rust-target, 'musl')
+        shell: bash
+        run: |
+          host_triplet=$(gcc -dumpmachine)
+          echo "LIBRARY_PATH=/usr/lib/${host_triplet}:/lib/${host_triplet}:${LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
