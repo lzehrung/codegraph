@@ -183,6 +183,9 @@ function normalizeManagedManifests(versionPlan) {
   if (rootVersion) {
     rootPackage = restoreRootPackageManifest(rootPackage, rootVersion, nativePackage.version);
   }
+  if (!rootVersion && nativeVersion) {
+    rootPackage = restoreRootPackageManifest(rootPackage, rootPackage.version, nativePackage.version);
+  }
 
   writeJson(rootPackagePath, rootPackage);
   writeJson(nativePackagePath, nativePackage);
