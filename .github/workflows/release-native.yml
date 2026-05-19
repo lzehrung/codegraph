@@ -97,6 +97,7 @@ jobs:
           host_triplet=$(gcc -dumpmachine)
           test -e "/lib/${host_triplet}/libgcc_s.so.1" || test -e "/usr/lib/${host_triplet}/libgcc_s.so.1"
           echo "LIBRARY_PATH=/usr/lib/${host_triplet}:/lib/${host_triplet}:${LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=-C link-arg=-L/usr/lib/${host_triplet} -C link-arg=-L/lib/${host_triplet} ${RUSTFLAGS:-}" >> "$GITHUB_ENV"
 
       - name: Setup Node
         uses: actions/setup-node@v4

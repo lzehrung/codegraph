@@ -572,6 +572,7 @@ void onImpactItemStreaming;
     expect(workflow).toContain("musl-tools libgcc-s1");
     expect(workflow).toContain('test -e "/lib/${host_triplet}/libgcc_s.so.1"');
     expect(workflow).toContain("LIBRARY_PATH=/usr/lib/${host_triplet}:/lib/${host_triplet}:${LIBRARY_PATH:-}");
+    expect(workflow).toContain("RUSTFLAGS=-C link-arg=-L/usr/lib/${host_triplet}");
     expect(workflow).toContain("bumpVersion(nativePackage.version, \"${{ inputs.release_type }}\")");
     expect(workflow).toContain("needs.plan-native-release.outputs.version");
     expect(workflow).toContain('hasTagForPackageVersion("@lzehrung/codegraph-native", version, tagNames)');
