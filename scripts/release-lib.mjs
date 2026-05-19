@@ -112,6 +112,10 @@ export function isAllowedResumePath(filePath) {
   return managedReleasePaths.has(normalizeFilePath(filePath));
 }
 
+export function isNativeTargetArtifactPath(filePath) {
+  return normalizeFilePath(filePath).startsWith("packages/codegraph-native/npm/");
+}
+
 export function parseGitStatusPaths(statusOutput) {
   if (!statusOutput) {
     return [];
