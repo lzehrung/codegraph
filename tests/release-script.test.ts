@@ -15,6 +15,7 @@ import {
   getReleasePackage,
   hasTagForPackageVersion,
   isAllowedResumePath,
+  isNativeTargetArtifactPath,
   parseGitStatusPaths,
   recoverNativePackageManifestForResume,
   recoverRootPackageManifestForResume,
@@ -176,6 +177,15 @@ describe("release script helpers", () => {
     expect(isAllowedResumePath("tests/release-script.test.ts")).toBe(true);
     expect(isAllowedResumePath("packages/codegraph-js-fallback/package.json")).toBe(true);
     expect(isAllowedResumePath("src/indexer.ts")).toBe(false);
+  });
+
+  it("recognizes generated native target artifacts separately from managed release files", () => {
+    expect(isNativeTargetArtifactPath("packages/codegraph-native/npm/linux-x64-gnu/index.linux-x64-gnu.node")).toBe(
+      true,
+    );
+    expect(isNativeTargetArtifactPath("packages/codegraph-native/npm/win32-arm64-msvc/package.json")).toBe(true);
+    expect(isNativeTargetArtifactPath("packages/codegraph-native/package.json")).toBe(false);
+    expect(isNativeTargetArtifactPath("packages/codegraph-js-fallback/package.json")).toBe(false);
   });
 
   it("parses null-delimited git status output for modified and renamed paths", () => {

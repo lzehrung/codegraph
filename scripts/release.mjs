@@ -8,6 +8,7 @@ import {
   detectChangedReleasePackages,
   getReleasePackage,
   isAllowedResumePath,
+  isNativeTargetArtifactPath,
   parseGitStatusPaths,
   prepareNativePackageManifestForPublish,
   recoverNativePackageManifestForResume,
@@ -137,9 +138,12 @@ function getDirtyPaths() {
   return parseGitStatusPaths(result.stdout ?? "");
 }
 
-function ensureCleanWorktree() {
+function ensureCleanWorktree({ allowNativeTargetArtifacts = false } = {}) {
   const dirtyPaths = getDirtyPaths();
-  if (dirtyPaths.length) {
+  const unexpectedPaths = allowNativeTargetArtifacts
+    ? dirtyPaths.filter((filePath) => !isNativeTargetArtifactPath(filePath))
+    : dirtyPaths;
+  if (unexpectedPaths.length) {
     console.error("Release scripts require a clean git worktree.");
     process.exit(1);
   }
@@ -296,6 +300,13 @@ function resolveRequestedPackages(packageSelectors) {
   return releasePackages.filter((pkg) => selectedIds.has(pkg.id));
 }
 
+function shouldAllowNativeTargetArtifactsForCleanCheck({ shouldPublish, packageSelectors }) {
+  if (!shouldPublish) {
+    return false;
+  }
+  return packageSelectors.some((selector) => getReleasePackage(selector).id === "native");
+}
+
 function determineReleasePackages({ shouldResume, requestedPackages }) {
   if (requestedPackages.length) {
     return requestedPackages;
@@ -394,7 +405,9 @@ if (!shouldResume && !validReleaseTypes.has(releaseType)) {
 if (shouldResume) {
   ensureResumableWorktree();
 } else {
-  ensureCleanWorktree();
+  ensureCleanWorktree({
+    allowNativeTargetArtifacts: shouldAllowNativeTargetArtifactsForCleanCheck({ shouldPublish, packageSelectors }),
+  });
 }
 
 const requestedPackages = resolveRequestedPackages(packageSelectors);
