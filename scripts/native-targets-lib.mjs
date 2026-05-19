@@ -70,7 +70,7 @@ export function assertCompleteNativeTargetArtifacts(nativeRoot, nativePackage) {
     throw new Error(
       `Missing staged native artifacts for supported targets: ${missingTargets.join(
         ", ",
-      )}. Build or collect every native target before publishing @lzehrung/codegraph-native.`,
+      )}. Build or collect every native target before publishing @lzehrung/codegraph-native. Use the release-native GitHub Actions workflow when publishing from a local shell cannot produce every platform artifact.`,
     );
   }
   if (invalidPackageNames.length) {
