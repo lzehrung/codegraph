@@ -9,12 +9,25 @@ const nativePackagePath = path.join(nativeRoot, "package.json");
 function runPublish(packageDir) {
   const result = spawnSync("npm", ["publish", "."], {
     cwd: packageDir,
-    stdio: "inherit",
+    encoding: "utf8",
     shell: process.platform === "win32",
   });
+  process.stdout.write(result.stdout ?? "");
+  process.stderr.write(result.stderr ?? "");
+  if (isAlreadyPublishedError(result)) {
+    return;
+  }
   if (result.status !== 0) {
     process.exit(result.status ?? 1);
   }
+}
+
+function isAlreadyPublishedError(result) {
+  if (result.status === 0) {
+    return false;
+  }
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  return output.includes("previously published versions");
 }
 
 function packageVersionExists(packageName, version) {

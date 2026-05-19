@@ -97,6 +97,7 @@ describe("release script helpers", () => {
     expect(fs.readFileSync("scripts/publish-native-targets.mjs", "utf8")).toContain(
       "Skipping existing native target package",
     );
+    expect(fs.readFileSync("scripts/publish-native-targets.mjs", "utf8")).toContain("previously published versions");
     expect(releaseScript.indexOf("prepareNativeTargetArtifactsForPublish();")).toBeGreaterThan(
       releaseScript.indexOf('run("node", ["./scripts/build-native-if-available.mjs", "--strict"])'),
     );
