@@ -564,6 +564,7 @@ void onImpactItemStreaming;
     }
     expect(buildCommand).toBeDefined();
     expect(artifactsCommand).toBeDefined();
+    expect(workflow).toContain("macos-15-intel");
     expect(commandOptionValue(buildCommand ?? "", "--output-dir")).toBe("./artifacts");
     expect(commandOptionValue(artifactsCommand ?? "", "--output-dir")).toBe("./artifacts");
     expect(commandOptionValue(artifactsCommand ?? "", "--npm-dir")).toBe("./npm");
