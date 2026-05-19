@@ -549,6 +549,7 @@ void onImpactItemStreaming;
     const rerunGuardIndex = workflow.indexOf("Refuse reruns on an already-tagged native release commit");
     const versionIndex = workflow.indexOf("node ./scripts/set-native-package-version.mjs");
     const createDirsIndex = workflow.indexOf("npm run native:create-npm-dirs");
+    const cleanupArtifactsIndex = workflow.indexOf("rm -rf native-artifacts");
     const publishIndex = workflow.indexOf("npm run publish:${{ inputs.release_type }} -- --package native");
     const nativePackage = readJson("packages/codegraph-native/package.json");
     const targets =
@@ -584,7 +585,9 @@ void onImpactItemStreaming;
     expect(publishRebuildIndex).toBeGreaterThan(publishPatchIndex);
     expect(versionIndex).toBeGreaterThan(installIndex);
     expect(createDirsIndex).toBeGreaterThan(versionIndex);
+    expect(cleanupArtifactsIndex).toBeGreaterThan(createDirsIndex);
     expect(workflow).not.toContain("native:stage-local");
+    expect(publishIndex).toBeGreaterThan(cleanupArtifactsIndex);
     expect(publishIndex).toBeGreaterThan(publishRebuildIndex);
     expect(workflow).toContain("- build-native-artifacts");
     expect(workflow).toContain("npm run publish:${{ inputs.release_type }} -- --package native");

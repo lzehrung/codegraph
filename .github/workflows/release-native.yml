@@ -211,6 +211,7 @@ jobs:
           for archive in native-artifacts/*.tgz; do
             tar -xzf "$archive" -C packages/codegraph-native/npm
           done
+          rm -rf native-artifacts
 
       - name: Publish native release
         env:
