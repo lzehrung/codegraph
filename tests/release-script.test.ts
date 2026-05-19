@@ -94,6 +94,9 @@ describe("release script helpers", () => {
     expect(releaseScript).toContain('run("node", ["./scripts/stage-native-package.mjs", "--if-missing"])');
     expect(releaseScript).toContain("assertCompleteNativeTargetArtifacts(nativeRootPath");
     expect(releaseScript).toContain("if (!rootVersion && nativeVersion)");
+    expect(fs.readFileSync("scripts/publish-native-targets.mjs", "utf8")).toContain(
+      "Skipping existing native target package",
+    );
     expect(releaseScript.indexOf("prepareNativeTargetArtifactsForPublish();")).toBeGreaterThan(
       releaseScript.indexOf('run("node", ["./scripts/build-native-if-available.mjs", "--strict"])'),
     );
