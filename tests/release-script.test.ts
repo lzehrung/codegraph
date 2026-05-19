@@ -93,6 +93,7 @@ describe("release script helpers", () => {
     ).toBeGreaterThan(releaseScript.indexOf('run("npm", ["rebuild"])'));
     expect(releaseScript).toContain('run("node", ["./scripts/stage-native-package.mjs", "--if-missing"])');
     expect(releaseScript).toContain("assertCompleteNativeTargetArtifacts(nativeRootPath");
+    expect(releaseScript).toContain("if (!rootVersion && nativeVersion)");
     expect(releaseScript.indexOf("prepareNativeTargetArtifactsForPublish();")).toBeGreaterThan(
       releaseScript.indexOf('run("node", ["./scripts/build-native-if-available.mjs", "--strict"])'),
     );
