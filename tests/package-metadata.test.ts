@@ -568,6 +568,8 @@ void onImpactItemStreaming;
     expect(commandOptionValue(artifactsCommand ?? "", "--output-dir")).toBe("./artifacts");
     expect(commandOptionValue(artifactsCommand ?? "", "--npm-dir")).toBe("./npm");
     expect(workflow).toContain("plan-native-release:");
+    expect(workflow).toContain("Configure Linux musl linker search path");
+    expect(workflow).toContain("LIBRARY_PATH=/usr/lib/${host_triplet}:/lib/${host_triplet}:${LIBRARY_PATH:-}");
     expect(workflow).toContain("bumpVersion(nativePackage.version, \"${{ inputs.release_type }}\")");
     expect(workflow).toContain("needs.plan-native-release.outputs.version");
     expect(workflow).toContain('hasTagForPackageVersion("@lzehrung/codegraph-native", version, tagNames)');
