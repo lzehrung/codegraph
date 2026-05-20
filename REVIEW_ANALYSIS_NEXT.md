@@ -129,7 +129,7 @@ No dependency cycles were reported. The highest remaining concentration is in:
     - incremental changed-file planning
   - Add focused tests around cache strictness, changed/deleted files, worker usage, and report timings.
 
-- [ ] Improve PHP resolution maintainability and coverage.
+- [x] Improve PHP resolution maintainability and coverage.
   - Finding: PHP Composer parsing, token scanning, package symbol indexing, PSR-0/PSR-4 resolution, classmap exclusion, and implicit files are concentrated in `src/util/resolution.ts`.
   - Target: split into a PHP resolver module with fixtures for Composer `autoload`, `autoload-dev`, `files`, PSR-0, PSR-4, classmap, and `exclude-from-classmap`.
   - Add tests in `tests/languages/php.test.ts`, `tests/goto.test.ts`, and `tests/references.test.ts` for each Composer branch.
