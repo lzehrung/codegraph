@@ -1,8 +1,7 @@
-import path from "node:path";
 import { buildProjectIndex } from "../indexer/build-index.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
-import { assertFilePathWithinRoot } from "../util/paths.js";
+import { assertFilePathWithinRoot, toProjectDisplayPath } from "../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { parsePositiveIntegerOption } from "./options.js";
 
@@ -149,7 +148,7 @@ export async function handleRefsCommand(context: NavigationCommandContext): Prom
   }
   if (res.status === "ok") {
     for (const r of res.references) {
-      const rel = path.relative(context.projectRootFs, r.file);
+      const rel = toProjectDisplayPath(context.projectRootFs, r.file);
       const { line: refLine, column: refColumn } = r.range.start;
       context.writeStdoutLine(`${rel}:${refLine}:${refColumn}`);
     }

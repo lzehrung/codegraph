@@ -6,6 +6,7 @@ import {
   isFilePathWithinRoot,
   normalizePath,
   normalizeResolutionHints,
+  toProjectDisplayPath,
   toProjectRelativePath,
 } from "../src/util.js";
 import { normalizeImpactFilePath } from "../src/impact/path.js";
@@ -62,6 +63,12 @@ describe("cross-platform path normalization", () => {
   it("normalizes backslashes without changing already-normalized paths", () => {
     expect(normalizePath(String.raw`src\feature\main.ts`)).toBe("src/feature/main.ts");
     expect(normalizePath("src/feature/main.ts")).toBe("src/feature/main.ts");
+  });
+
+  it("formats project display paths as relative slash-normalized paths when possible", () => {
+    expect(toProjectDisplayPath("/workspace/codegraph", "/workspace/codegraph/src/main.ts")).toBe("src/main.ts");
+    expect(toProjectDisplayPath("/workspace/codegraph", "C:/repo/src/main.ts")).toBe("C:/repo/src/main.ts");
+    expect(toProjectDisplayPath(undefined, String.raw`src\main.ts`)).toBe("src/main.ts");
   });
 
   it("asserts project-root containment with label-specific errors", () => {

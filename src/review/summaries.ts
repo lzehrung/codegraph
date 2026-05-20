@@ -9,7 +9,7 @@ import { locateChangedSymbolsWithLines, mapChangedLinesToSymbols } from "../impa
 import type { Hunk } from "../impact/types.js";
 import type { FileId, Range } from "../types.js";
 import { mapLimit } from "../util/concurrency.js";
-import { normalizePath, toProjectRelativePath } from "../util/paths.js";
+import { toProjectDisplayPath } from "../util/paths.js";
 import type { ReviewDiagnostics, ReviewTimingReport } from "../review.js";
 import type { DeletedFileSnapshot } from "./deleted.js";
 import { isRiskRelevantSymbolMappingFile } from "./risk.js";
@@ -45,7 +45,7 @@ export type ReviewChangedFileSummaries = {
 type ReviewableExportEntry = Exclude<ExportEntry, { type: "local" }>;
 
 function relativePath(root: string, file: string): string {
-  return toProjectRelativePath(root, file) ?? normalizePath(file);
+  return toProjectDisplayPath(root, file);
 }
 
 function sortSymbols(symbols: SymbolDef[]): SymbolDef[] {

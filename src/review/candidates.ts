@@ -3,12 +3,12 @@ import { listCandidateTestFiles, type CandidateTestFile } from "../impact/contex
 import { type ProjectIndex } from "../indexer/types.js";
 import { REVIEW_DEFAULT_CANDIDATE_TEST_LIMIT } from "../presentation/bounds.js";
 import type { FileId } from "../types.js";
-import { normalizePath, toProjectRelativePath } from "../util/paths.js";
+import { toProjectDisplayPath } from "../util/paths.js";
 import type { ReviewOptions, ReviewTimingReport } from "../review.js";
 import { listDirectDeletedFileTestImporters } from "./deleted.js";
 
 function relativePath(root: string, file: string): string {
-  return toProjectRelativePath(root, file) ?? normalizePath(file);
+  return toProjectDisplayPath(root, file);
 }
 
 function comparePaths(left: string, right: string): number {

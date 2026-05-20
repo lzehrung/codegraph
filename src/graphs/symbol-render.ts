@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { Graph } from "../types.js";
+import { toProjectDisplayPath } from "../util/paths.js";
 import { dotLabel, mermaidLabel } from "./render.js";
 
 type SymbolNodeLike = {
@@ -21,7 +22,7 @@ type SymbolGraphLike = {
 };
 
 function symbolDisplayLabel(node: SymbolNodeLike, projectRoot?: string): string {
-  const relativeFile = projectRoot ? path.relative(projectRoot, node.file).replace(/\\/g, "/") : node.file;
+  const relativeFile = toProjectDisplayPath(projectRoot, node.file);
   const base = path.basename(relativeFile);
   if (node.kind === "import") return `${base}:${node.name} (import)`;
   if (node.kind === "namespaceImport") return `${base}:${node.name} (namespace)`;
@@ -84,7 +85,7 @@ export function graphToMermaidSymbolsWithFiles(sg: SymbolGraphLike, fg: Graph, p
   const fileIdOf = new Map<string, string>();
   const fileNodeMeta = new Map<string, { label: string; external: boolean }>();
   let fileIndex = 0;
-  const fileLabel = (file: string) => (projectRoot ? path.relative(projectRoot, file).replace(/\\/g, "/") : file);
+  const fileLabel = (file: string) => toProjectDisplayPath(projectRoot, file);
   const ensureFile = (file: string) => {
     if (!fileIdOf.has(file)) {
       const id = `f${fileIndex++}`;
@@ -151,7 +152,7 @@ export function graphToDOTSymbolsWithFiles(sg: SymbolGraphLike, fg: Graph, proje
   const fileIdOf = new Map<string, string>();
   const fileNodeMeta = new Map<string, { label: string; external: boolean }>();
   let fileIndex = 0;
-  const fileLabel = (file: string) => (projectRoot ? path.relative(projectRoot, file).replace(/\\/g, "/") : file);
+  const fileLabel = (file: string) => toProjectDisplayPath(projectRoot, file);
   const ensureFile = (file: string) => {
     if (!fileIdOf.has(file)) {
       const id = `f${fileIndex++}`;

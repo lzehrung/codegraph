@@ -1,5 +1,5 @@
 import path from "node:path";
-import { normalizePath, toProjectRelativePath } from "../util/paths.js";
+import { normalizePath, toProjectDisplayPath, toProjectRelativePath } from "../util/paths.js";
 import { quoteShellArg } from "./shell.js";
 
 export type AgentFileSnapshot = {
@@ -14,7 +14,7 @@ export function normalizeAgentFilePath(root: string, file: string): string {
 }
 
 export function normalizeAgentOutputPath(root: string, file: string): string {
-  return toProjectRelativePath(root, file) ?? normalizePath(file);
+  return toProjectDisplayPath(root, file);
 }
 
 export function resolveAgentSnapshotFile(snapshot: AgentFileSnapshot, candidate: string): string | null {

@@ -84,6 +84,11 @@ export function toProjectRelativePath(projectRoot: string, filePath: string): st
   return normalizePath(path.relative(normalizedRoot, normalizedFile));
 }
 
+export function toProjectDisplayPath(projectRoot: string | undefined, filePath: string): string {
+  if (!projectRoot) return normalizePath(filePath);
+  return toProjectRelativePath(projectRoot, filePath) ?? normalizePath(filePath);
+}
+
 export function normalizeResolutionHints(hints?: string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();

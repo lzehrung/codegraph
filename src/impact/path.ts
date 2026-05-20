@@ -1,7 +1,7 @@
 import type { FileId } from "../types.js";
 import type { FileChange } from "./types.js";
 import pm from "picomatch";
-import { isFilePathWithinRoot, normalizePath, resolveFilePathFromRoot, toProjectRelativePath } from "../util/paths.js";
+import { isFilePathWithinRoot, normalizePath, resolveFilePathFromRoot, toProjectDisplayPath } from "../util/paths.js";
 
 export function normalizeImpactFilePath(projectRoot: string, filePath: string): string {
   return normalizePath(resolveFilePathFromRoot(projectRoot, filePath));
@@ -33,7 +33,7 @@ export function normalizeImpactFileChange(projectRoot: string, change: FileChang
 }
 
 export function toImpactReportFilePath(projectRoot: string, filePath: string): string {
-  return toProjectRelativePath(projectRoot, filePath) ?? normalizePath(filePath);
+  return toProjectDisplayPath(projectRoot, filePath);
 }
 
 export function createImpactIgnoreMatcher(

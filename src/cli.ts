@@ -44,7 +44,7 @@ import { handleSqlCommand } from "./cli/sql.js";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "./config.js";
 import { listChangedFiles } from "./util/git.js";
 import { listProjectFiles, type ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
-import { normalizePath, resolveFilePathFromRoot } from "./util/paths.js";
+import { normalizePath, resolveFilePathFromRoot, toProjectDisplayPath } from "./util/paths.js";
 
 export { isCliDiscoveryRelativePathInside } from "./cli/context.js";
 
@@ -320,7 +320,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       if (deletedFiles.length) {
         writeStderrLine(
           `Skipping ${deletedFiles.length} deleted file(s) from git diff: ${deletedFiles
-            .map((file) => path.relative(projectRootFs, file) || file)
+            .map((file) => toProjectDisplayPath(projectRootFs, file) || file)
             .join(", ")}`,
         );
       }

@@ -23,7 +23,7 @@ import { getDependencies, getReverseDependencies, getShortestPath } from "../gra
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { buildReviewReport, type ReviewDepth, type ReviewReport } from "../review.js";
 import { queryGraphSqliteRaw, type RawSqlResult } from "../sqlite.js";
-import { normalizePath, toProjectRelativePath } from "../util/paths.js";
+import { toProjectDisplayPath } from "../util/paths.js";
 import { createAgentSession } from "../agent/session.js";
 import type { AgentSession } from "../agent/session.js";
 import {
@@ -149,7 +149,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
   const realRoot = fs.realpath(root);
   let sqlitePath = options.artifactPath ? resolveArtifactSqlitePathCandidate(root, options.artifactPath) : undefined;
 
-  const relative = (file: string): string => toProjectRelativePath(root, file) ?? normalizePath(path.resolve(file));
+  const relative = (file: string): string => toProjectDisplayPath(root, file);
   const boundedLimit = (limit: number | undefined, fallback: number, max: number): number => {
     if (typeof limit !== "number" || !Number.isFinite(limit)) return fallback;
     return Math.min(max, Math.max(0, Math.floor(limit)));

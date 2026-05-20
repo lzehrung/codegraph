@@ -24,6 +24,7 @@ export {
   normalizePath,
   normalizeResolutionHints,
   resolveFilePathFromRoot,
+  toProjectDisplayPath,
   toProjectRelativePath,
 } from "./util/paths.js";
 export {

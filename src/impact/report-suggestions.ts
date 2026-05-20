@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { SymbolKind, type ProjectIndex } from "../indexer/types.js";
 import { findReferences } from "../indexer/navigation.js";
-import { resolveFilePathFromRoot } from "../util/paths.js";
+import { resolveFilePathFromRoot, toProjectDisplayPath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { listCandidateTestFiles } from "./context.js";
 import { collectHunkLineText, collectRemovedLines } from "./hunks.js";
@@ -115,9 +115,7 @@ function classifyConfigImpact(
     const aliases = collectTsconfigPathAliases(change);
     const blastRadius = collectTsconfigBlastRadius(index, aliases);
     if (blastRadius.aliases.length) {
-      const relImporters = blastRadius.importers
-        .slice(0, 5)
-        .map((file) => path.relative(projectRoot, file).replace(/\\/g, "/"));
+      const relImporters = blastRadius.importers.slice(0, 5).map((file) => toProjectDisplayPath(projectRoot, file));
       const importerSummary = blastRadius.importers.length
         ? `Likely impacted importer files: ${relImporters.join(", ")}${
             blastRadius.importers.length > relImporters.length ? ", ..." : ""

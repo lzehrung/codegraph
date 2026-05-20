@@ -112,7 +112,7 @@ No dependency cycles were reported. The highest remaining concentration is in:
   - Target: named constants and a small presentation-bound helper for CLI summaries, review summaries, agent changed context, and impact pretty output.
   - Add tests that assert omission/truncation behavior and avoid silently changing output volume.
 
-- [ ] Consolidate relative path display helpers.
+- [x] Consolidate relative path display helpers.
   - Finding: many modules directly call `path.relative(...).replace(/\\/g, "/")` or local wrappers instead of `toProjectRelativePath` or a display helper.
   - Target: use one project-relative display helper for CLI, review, graph rendering, agent output, and index/cache reporting.
   - Add path-normalization regression coverage for POSIX, Windows-style absolute paths, and out-of-root paths.

@@ -14,6 +14,7 @@ import {
 } from "../native/treeSitterNative.js";
 import type { Graph } from "../types.js";
 import { supportForFile } from "../languages.js";
+import { toProjectDisplayPath } from "../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { parseCacheModeOption, parsePositiveIntegerOption } from "./options.js";
 
@@ -323,7 +324,7 @@ export async function handleHotspotsCommand(context: InspectCommandContext): Pro
   context.writeStdoutLine("Top hotspots (files with high fan-in/out):");
   for (const item of hotspots) {
     context.writeStdoutLine(
-      `- ${path.relative(context.projectRootFs, item.file)} (fan-in: ${item.fanIn}, fan-out: ${item.fanOut}, score: ${item.score.toFixed(1)})`,
+      `- ${toProjectDisplayPath(context.projectRootFs, item.file)} (fan-in: ${item.fanIn}, fan-out: ${item.fanOut}, score: ${item.score.toFixed(1)})`,
     );
   }
 }

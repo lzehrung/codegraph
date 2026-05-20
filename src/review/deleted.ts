@@ -16,7 +16,7 @@ import {
   loadWorkspaceConfig,
   type WorkspaceConfig,
 } from "../util/workspace.js";
-import { normalizePath, toProjectRelativePath } from "../util/paths.js";
+import { normalizePath, toProjectDisplayPath } from "../util/paths.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 
 const execFileAsync = promisify(execFile);
@@ -29,7 +29,7 @@ export type DeletedFileSnapshot = {
 type ReviewableExportEntry = Exclude<ExportEntry, { type: "local" }>;
 
 function relativePath(root: string, file: string): string {
-  return toProjectRelativePath(root, file) ?? normalizePath(file);
+  return toProjectDisplayPath(root, file);
 }
 
 function normalizeSpecifierBase(fromFile: string, spec: string): string {
