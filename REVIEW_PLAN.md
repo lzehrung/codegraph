@@ -128,7 +128,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Correctness opportunity: parser tests can cover manifest name extraction directly, instead of only through full project discovery.
   - Tests: project file discovery, workspace detection, language parity docs fixtures where project metadata affects external classification.
 
-- [ ] Split MCP server into tool registry, HTTP transport, file security, and SQL guard modules.
+- [x] Split MCP server into tool registry, HTTP transport, file security, and SQL guard modules.
   - `src/mcp/server.ts` is 1,286 lines and mixes MCP tool handlers, Streamable HTTP session handling, Host-header checks, JSON body parsing, file confinement, file-prefix reads, UTF-8 truncation, SQLite query guarding, and row/byte bounding.
   - Suggested fix: extract `mcp/tools.ts`, `mcp/http.ts`, `mcp/security.ts`, and `mcp/sqliteGuard.ts`, keeping `server.ts` as composition glue.
   - Reuse opportunity: UTF-8 truncation and path confinement are general utilities that could also support artifact/file-reading code paths.
