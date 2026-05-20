@@ -154,7 +154,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Correctness opportunity: `ensureSchema()` creates tables and patches columns in the same file as query execution; separating schema upgrades would make older on-disk database regression tests easier to maintain.
   - Tests: SQLite full write, incremental update/delete, schema migration from older fixtures, raw read-only guard behavior, artifact SQLite generation, and MCP SQLite query paths.
 
-- [ ] Extract impact report assembly into reusable compact/full report stages.
+- [x] Extract impact report assembly into reusable compact/full report stages.
   - `src/impact/report.ts` has a 265-line `buildCompactReport()` plus full-report assembly, re-export chain discovery, top impacts, clusters, cycles, and surface-area summaries in one module.
   - Suggested fix: introduce staged helpers for display-file normalization, file-index construction, compact serializers, graph summary sections, re-export chains, top impacts, clusters, and surface area. Share the precomputed file/symbol indexes between compact and full formats.
   - Performance opportunity: compact report construction repeatedly calls `displayFile()` and looks up file indexes across each section; a shared serializer context can avoid repeated normalization and make missing-index errors explicit.

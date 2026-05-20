@@ -5,7 +5,6 @@ import type {
   FileChange,
   ChangedSymbol,
   ImpactItem,
-  ImpactReason,
   ImpactReport,
   CompactImpactReport,
   ImpactOptions,
@@ -14,17 +13,16 @@ import type {
   ReexportChainEntry,
   ImpactTopItem,
   ImpactSurfaceArea,
-  CompactImpactSurfaceArea,
   ImpactCluster,
-  CompactImpactCluster,
   ImpactCycle,
   ImpactDiagnostics,
 } from "./types.js";
-import { IMPACT_SCHEMA_VERSION } from "./types.js";
 import { buildSymbolGraphDetailed, findDetailedCycles } from "../graphs.js";
 import { discoverProjectFiles, normalizePath, resolveFilePathFromRoot } from "../util.js";
 import { newFileRangeForHunk } from "./hunks.js";
 import { createGraphFileResolver, normalizeImpactFileChange, toImpactReportFilePath } from "./path.js";
+import { buildCompactImpactReport } from "./reportCompact.js";
+import { buildFullImpactReport } from "./reportFull.js";
 export { newFileRangeForHunk } from "./hunks.js";
 
 export async function buildImpactReport(
@@ -124,7 +122,7 @@ export async function buildImpactReport(
 
   // Check if compact format is requested
   if (options.compact) {
-    const report = buildCompactReport(
+    const report = buildCompactImpactReport({
       changedFiles,
       changedSymbols,
       impactedItems,
@@ -139,104 +137,30 @@ export async function buildImpactReport(
       symbolEdges,
       projectFiles,
       displayFile,
-    );
+    });
     if (options.warning) report.warning = options.warning;
     if (diagnostics) report.diagnostics = diagnostics;
     return report;
   }
 
-  const report: ImpactReport = {
-    schemaVersion: IMPACT_SCHEMA_VERSION,
-    format: "full",
+  return buildFullImpactReport({
     projectFiles,
     changedFiles,
-    changedSymbols: changedSymbols.map((symbol) => ({
-      ...symbol,
-      file: displayFile(symbol.file),
-    })),
-    impacted: impactedItems.map((item) => ({
-      ...item,
-      file: displayFile(item.file),
-    })),
-    ...(suggestions.length
-      ? {
-          suggestions: suggestions.map((suggestion) => ({
-            ...suggestion,
-            file: displayFile(suggestion.file),
-            ...(suggestion.relatedFile ? { relatedFile: displayFile(suggestion.relatedFile) } : {}),
-          })),
-        }
-      : {}),
-    ...(exportSummary.length
-      ? {
-          exportSummary: exportSummary.map((entry) => ({
-            ...entry,
-            file: displayFile(entry.file),
-          })),
-        }
-      : {}),
-    ...(reexportChains
-      ? {
-          reexportChains: {
-            chains: reexportChains.chains.map((entry) => ({
-              ...entry,
-              file: displayFile(entry.file),
-              paths: entry.paths.map((pathChain) => pathChain.map((file) => displayFile(file))),
-            })),
-          },
-        }
-      : {}),
-    ...(topImpacts.length
-      ? {
-          topImpacts: topImpacts.map((item) => ({
-            ...item,
-            file: displayFile(item.file),
-          })),
-        }
-      : {}),
-    surfaceArea: {
-      files: surfaceArea.files.map((item) => ({
-        ...item,
-        file: displayFile(item.file),
-      })),
-      topFanIn: surfaceArea.topFanIn.map((file) => displayFile(file)),
-      topFanOut: surfaceArea.topFanOut.map((file) => displayFile(file)),
-    },
-    clusters: clusters.map((cluster) => ({
-      ...cluster,
-      files: cluster.files.map((file) => displayFile(file)),
-      changedFiles: cluster.changedFiles.map((file) => displayFile(file)),
-    })),
-    ...(cycles.length
-      ? {
-          cycles: cycles.map((cycle) => ({
-            ...cycle,
-            files: cycle.files.map((file) => displayFile(file)),
-            entryEdges: cycle.entryEdges.map((edge) => ({
-              ...edge,
-              from: displayFile(edge.from),
-              to: displayFile(edge.to),
-            })),
-            internalEdges: cycle.internalEdges.map((edge) => ({
-              ...edge,
-              from: displayFile(edge.from),
-              to: displayFile(edge.to),
-            })),
-          })),
-        }
-      : {}),
-    graph: {
-      fileEdges: fileEdges.map((edge) => ({
-        ...edge,
-        from: displayFile(edge.from),
-        to: displayFile(edge.to),
-      })),
-      symbolEdges,
-    },
-  };
-  if (diagnostics) report.diagnostics = diagnostics;
-  if (options.warning) report.warning = options.warning;
-  return report;
+    changedSymbols,
+    impactedItems,
+    suggestions,
+    exportSummary,
+    reexportChains,
+    topImpacts,
+    surfaceArea,
+    clusters,
+    cycles,
+    fileEdges,
+    symbolEdges,
+    displayFile,
+    diagnostics,
+    warning: options.warning,
+  });
 }
 
 function buildImpactCycles(
@@ -269,272 +193,6 @@ function buildImpactCycles(
     });
   }
   return out;
-}
-
-function buildCompactReport(
-  changedFiles: Array<{
-    file: FileId;
-    hunks: Array<{ start: number; end: number }>;
-  }>,
-  changedSymbols: ChangedSymbol[],
-  impactedItems: ImpactItem[],
-  suggestions: ImpactSuggestion[],
-  exportSummary: ExportSummaryEntry[],
-  reexportChains: { chains: ReexportChainEntry[] } | undefined,
-  topImpacts: ImpactTopItem[],
-  surfaceArea: ImpactSurfaceArea,
-  clusters: ImpactCluster[],
-  cycles: ImpactCycle[],
-  fileEdges: Array<{
-    from: FileId;
-    to: FileId;
-    typeOnly?: boolean | undefined;
-  }>,
-  symbolEdges: Array<{ from: number; to: number; label: string }>,
-  projectFiles: ProjectIndex["projectFiles"],
-  displayFile: (file: FileId) => FileId,
-): CompactImpactReport {
-  // Collect all unique file paths
-  const allFiles = new Set<FileId>();
-
-  // Add files from changedFiles
-  for (const cf of changedFiles) {
-    allFiles.add(displayFile(cf.file));
-  }
-
-  // Add files from changedSymbols
-  for (const cs of changedSymbols) {
-    allFiles.add(displayFile(cs.file));
-  }
-
-  // Add files from impactedItems
-  for (const ii of impactedItems) {
-    allFiles.add(displayFile(ii.file));
-  }
-
-  // Add files from fileEdges
-  for (const fe of fileEdges) {
-    allFiles.add(displayFile(fe.from));
-    allFiles.add(displayFile(fe.to));
-  }
-
-  // Add files from surface area
-  for (const item of surfaceArea.files) {
-    allFiles.add(displayFile(item.file));
-  }
-  for (const file of surfaceArea.topFanIn) {
-    allFiles.add(displayFile(file));
-  }
-  for (const file of surfaceArea.topFanOut) {
-    allFiles.add(displayFile(file));
-  }
-
-  for (const cycle of cycles) {
-    for (const file of cycle.files) allFiles.add(displayFile(file));
-  }
-
-  // Add files from suggestions
-  for (const suggestion of suggestions) {
-    allFiles.add(displayFile(suggestion.file));
-    if (suggestion.relatedFile) allFiles.add(displayFile(suggestion.relatedFile));
-  }
-
-  if (reexportChains) {
-    for (const chain of reexportChains.chains) {
-      allFiles.add(displayFile(chain.file));
-      for (const pathChain of chain.paths) {
-        for (const file of pathChain) {
-          allFiles.add(displayFile(file));
-        }
-      }
-    }
-  }
-
-  const filesArray = Array.from(allFiles);
-  const fileIndex = new Map<FileId, number>();
-  for (let i = 0; i < filesArray.length; i++) {
-    fileIndex.set(filesArray[i]!, i);
-  }
-
-  // Convert to compact format
-  const compactChangedFiles = changedFiles.map((cf) => ({
-    file: fileIndex.get(displayFile(cf.file))!,
-    hunks: cf.hunks,
-  }));
-
-  const compactChangedSymbols = changedSymbols.map((cs) => {
-    const symbol: {
-      id: string;
-      file: number;
-      name: string;
-      kind: typeof cs.kind;
-      exported: boolean;
-      range: typeof cs.range;
-      typeOnly?: boolean;
-    } = {
-      id: cs.id,
-      file: fileIndex.get(displayFile(cs.file))!,
-      name: cs.name,
-      kind: cs.kind,
-      exported: cs.exported,
-      range: cs.range,
-    };
-
-    if (cs.typeOnly !== undefined) {
-      symbol.typeOnly = cs.typeOnly;
-    }
-
-    return symbol;
-  });
-
-  const compactImpacted = impactedItems.map((ii) => {
-    const item: {
-      file: number;
-      symbols: string[];
-      reasons: ImpactReason[];
-      severity: number;
-      confidence?: number;
-      depth?: number;
-      typeOnly?: boolean;
-      explain?: NonNullable<ImpactItem["explain"]>;
-    } = {
-      file: fileIndex.get(displayFile(ii.file))!,
-      symbols: ii.symbols,
-      reasons: ii.reasons,
-      severity: ii.severity,
-      ...(ii.confidence !== undefined ? { confidence: ii.confidence } : {}),
-      ...(ii.depth !== undefined ? { depth: ii.depth } : {}),
-      ...(ii.typeOnly !== undefined ? { typeOnly: ii.typeOnly } : {}),
-      ...(ii.explain !== undefined ? { explain: ii.explain } : {}),
-    };
-
-    return item;
-  });
-
-  const compactSuggestions =
-    suggestions.length
-      ? suggestions.map((suggestion) => ({
-          file: fileIndex.get(displayFile(suggestion.file))!,
-          kind: suggestion.kind,
-          ...(suggestion.range ? { range: suggestion.range } : {}),
-          ...(suggestion.symbol ? { symbol: suggestion.symbol } : {}),
-          ...(suggestion.relatedFile !== undefined
-            ? { relatedFile: fileIndex.get(displayFile(suggestion.relatedFile))! }
-            : {}),
-          ...(suggestion.details ? { details: suggestion.details } : {}),
-          confidence: suggestion.confidence,
-        }))
-      : undefined;
-
-  const compactExportSummary =
-    exportSummary.length
-      ? exportSummary.map((entry) => ({
-          file: fileIndex.get(displayFile(entry.file))!,
-          symbols: entry.symbols,
-        }))
-      : undefined;
-
-  const compactReexportChains = reexportChains
-    ? {
-        chains: reexportChains.chains.map((entry) => ({
-          symbol: entry.symbol,
-          file: fileIndex.get(displayFile(entry.file))!,
-          paths: entry.paths.map((pathChain) => pathChain.map((file) => fileIndex.get(displayFile(file))!)),
-        })),
-      }
-    : undefined;
-
-  const compactTopImpacts =
-    topImpacts.length
-      ? topImpacts.map((item) => ({
-          file: fileIndex.get(displayFile(item.file))!,
-          symbols: item.symbols,
-          reasons: item.reasons,
-          severity: item.severity,
-          ...(item.confidence !== undefined ? { confidence: item.confidence } : {}),
-          ...(item.depth !== undefined ? { depth: item.depth } : {}),
-          ...(item.typeOnly !== undefined ? { typeOnly: item.typeOnly } : {}),
-          ...(item.explain ? { explain: item.explain } : {}),
-        }))
-      : undefined;
-
-  const compactSurfaceArea: CompactImpactSurfaceArea = {
-    files: surfaceArea.files.map((item) => ({
-      file: fileIndex.get(displayFile(item.file))!,
-      fanIn: item.fanIn,
-      fanOut: item.fanOut,
-      changed: item.changed,
-      impacted: item.impacted,
-    })),
-    topFanIn: surfaceArea.topFanIn.map((file) => fileIndex.get(displayFile(file))!),
-    topFanOut: surfaceArea.topFanOut.map((file) => fileIndex.get(displayFile(file))!),
-  };
-
-  const compactClusters: CompactImpactCluster[] = clusters.map((cluster) => ({
-    id: cluster.id,
-    files: cluster.files.map((file) => fileIndex.get(displayFile(file))!),
-    changedFiles: cluster.changedFiles.map((file) => fileIndex.get(displayFile(file))!),
-    totalSeverity: cluster.totalSeverity,
-  }));
-
-  const compactCycles =
-    cycles.length
-      ? cycles.map((cycle) => ({
-          files: cycle.files.map((file) => fileIndex.get(displayFile(file))!),
-          entryEdges: cycle.entryEdges.map((edge) => ({
-            from: fileIndex.get(displayFile(edge.from))!,
-            to: fileIndex.get(displayFile(edge.to))!,
-            raw: edge.raw,
-            ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
-          })),
-          internalEdges: cycle.internalEdges.map((edge) => ({
-            from: fileIndex.get(displayFile(edge.from))!,
-            to: fileIndex.get(displayFile(edge.to))!,
-            raw: edge.raw,
-            ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
-          })),
-          fileCount: cycle.fileCount,
-          internalEdgeCount: cycle.internalEdgeCount,
-          fanInFromOutside: cycle.fanInFromOutside,
-          priorityScore: cycle.priorityScore,
-          remediationHint: cycle.remediationHint,
-          touchesChangedFile: cycle.touchesChangedFile,
-          touchesImpactedFile: cycle.touchesImpactedFile,
-          severity: cycle.severity,
-        }))
-      : undefined;
-
-  const compactFileEdges = fileEdges.map((fe) => {
-    const edge: { from: number; to: number; typeOnly?: boolean } = {
-      from: fileIndex.get(displayFile(fe.from))!,
-      to: fileIndex.get(displayFile(fe.to))!,
-    };
-    if (fe.typeOnly !== undefined) {
-      edge.typeOnly = fe.typeOnly;
-    }
-    return edge;
-  });
-
-  return {
-    schemaVersion: IMPACT_SCHEMA_VERSION,
-    format: "compact",
-    ...(projectFiles ? { projectFiles } : {}),
-    files: filesArray,
-    changedFiles: compactChangedFiles,
-    changedSymbols: compactChangedSymbols,
-    impacted: compactImpacted,
-    ...(compactSuggestions ? { suggestions: compactSuggestions } : {}),
-    ...(compactExportSummary ? { exportSummary: compactExportSummary } : {}),
-    ...(compactReexportChains ? { reexportChains: compactReexportChains } : {}),
-    ...(compactTopImpacts ? { topImpacts: compactTopImpacts } : {}),
-    surfaceArea: compactSurfaceArea,
-    clusters: compactClusters,
-    ...(compactCycles ? { cycles: compactCycles } : {}),
-    graph: {
-      fileEdges: compactFileEdges,
-      symbolEdges,
-    },
-  };
 }
 
 type ReexportEdge = {
