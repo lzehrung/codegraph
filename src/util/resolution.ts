@@ -3,7 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { createMatchPath } from "tsconfig-paths";
 import { logWithLevel, type LogLevel } from "../logging.js";
-import { stringifyUnknown, unquote } from "./ast.js";
+import { stringifyUnknown } from "./ast.js";
 import { parseJsonc } from "./comments.js";
 import { normalizePath, normalizeResolutionHints } from "./paths.js";
 import { listProjectFiles } from "./projectFiles.js";
@@ -19,6 +19,22 @@ import {
   type MinimalPackageJson,
   type WorkspaceConfig,
 } from "./workspace.js";
+import {
+  clearJvmResolutionCaches,
+  resolveJavaImportPath,
+  resolveKotlinImportPath,
+} from "./resolution/jvm.js";
+import { resolveGoImportPath } from "./resolution/go.js";
+import { findNearestFile, isDirectory } from "./resolution/files.js";
+export { resolveGoImportPath } from "./resolution/go.js";
+export { resolveJvmPackageImportPaths } from "./resolution/jvm.js";
+import {
+  addProjectSymbolFile,
+  getOrCreateProjectSymbolIndex,
+  listProjectLanguageFiles,
+  sortProjectSymbolIndex,
+  type LanguageProjectSymbolIndex,
+} from "./resolution/projectSymbols.js";
 
 export { listResolutionCandidates } from "./resolutionCandidates.js";
 
@@ -234,22 +250,6 @@ export async function resolvePathLikeModule(
   return null;
 }
 
-type GoModuleInfo = {
-  modulePath: string;
-  moduleRoot: string;
-  replacements: Map<string, string>;
-};
-
-type KotlinSymbolIndexEntry = {
-  packageName: string | null;
-  symbols: Set<string>;
-};
-
-type JavaSymbolIndexEntry = {
-  packageName: string | null;
-  symbols: Set<string>;
-};
-
 type PhpSymbolKind = "class" | "function" | "const";
 
 type PhpPackageSymbolIndexEntry = {
@@ -273,143 +273,11 @@ type PhpComposerConfig = {
   files: string[];
 };
 
-type LanguageProjectSymbolIndex = {
-  files: string[];
-  filesByPackage: Map<string, string[]>;
-  filesByPackageSymbol: Map<string, Map<string, string[]>>;
-};
-
-const kotlinImportResolutionCache = new Map<string, string | null>();
-const kotlinSymbolIndexCache = new Map<string, KotlinSymbolIndexEntry>();
-const kotlinProjectSymbolIndexCache = new Map<string, Promise<LanguageProjectSymbolIndex>>();
-const javaImportResolutionCache = new Map<string, string | null>();
-const javaSymbolIndexCache = new Map<string, JavaSymbolIndexEntry>();
-const javaProjectSymbolIndexCache = new Map<string, Promise<LanguageProjectSymbolIndex>>();
 const phpImportResolutionCache = new Map<string, string | null>();
 const phpSymbolIndexCache = new Map<string, PhpSymbolIndexEntry>();
 const phpProjectSymbolIndexCache = new Map<string, Promise<LanguageProjectSymbolIndex>>();
 const phpComposerConfigCache = new Map<string, Promise<PhpComposerConfig | null>>();
 const phpComposerAutoloadFileCache = new Map<string, Promise<Set<string>>>();
-
-async function listProjectLanguageFiles(projectRoot: string, patterns: string[]): Promise<string[]> {
-  return await listProjectFiles(projectRoot, patterns);
-}
-
-function addProjectSymbolFile(
-  index: LanguageProjectSymbolIndex,
-  packageName: string,
-  filePath: string,
-  symbols: Set<string>,
-): void {
-  const packageFiles = index.filesByPackage.get(packageName) ?? [];
-  packageFiles.push(filePath);
-  index.filesByPackage.set(packageName, packageFiles);
-
-  let symbolFiles = index.filesByPackageSymbol.get(packageName);
-  if (!symbolFiles) {
-    symbolFiles = new Map<string, string[]>();
-    index.filesByPackageSymbol.set(packageName, symbolFiles);
-  }
-  for (const symbolName of symbols) {
-    const files = symbolFiles.get(symbolName) ?? [];
-    files.push(filePath);
-    symbolFiles.set(symbolName, files);
-  }
-}
-
-function sortProjectSymbolIndex(index: LanguageProjectSymbolIndex): void {
-  for (const [packageName, files] of index.filesByPackage) {
-    files.sort((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
-    index.filesByPackage.set(packageName, files);
-  }
-  for (const symbolFiles of index.filesByPackageSymbol.values()) {
-    for (const [symbolName, files] of symbolFiles) {
-      files.sort((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
-      symbolFiles.set(symbolName, files);
-    }
-  }
-}
-
-async function buildProjectSymbolIndex<TEntry extends { packageName: string | null; symbols: Set<string> }>(
-  projectRoot: string,
-  patterns: string[],
-  readIndexEntry: (filePath: string) => Promise<TEntry>,
-): Promise<LanguageProjectSymbolIndex> {
-  const files = await listProjectLanguageFiles(projectRoot, patterns);
-  const index: LanguageProjectSymbolIndex = {
-    files,
-    filesByPackage: new Map<string, string[]>(),
-    filesByPackageSymbol: new Map<string, Map<string, string[]>>(),
-  };
-
-  const indexEntries = await mapLimit(files, 8, async (filePath) => {
-    try {
-      const entry = await readIndexEntry(filePath);
-      return { filePath, entry };
-    } catch {
-      // Ignore unreadable files and keep indexing the project.
-      return null;
-    }
-  });
-
-  for (const indexEntry of indexEntries) {
-    if (!indexEntry || indexEntry.entry.packageName === null) continue;
-    addProjectSymbolFile(index, indexEntry.entry.packageName, indexEntry.filePath, indexEntry.entry.symbols);
-  }
-
-  sortProjectSymbolIndex(index);
-  return index;
-}
-
-function getOrCreateProjectSymbolIndex(
-  cache: Map<string, Promise<LanguageProjectSymbolIndex>>,
-  projectRoot: string,
-  buildIndex: () => Promise<LanguageProjectSymbolIndex>,
-): Promise<LanguageProjectSymbolIndex> {
-  const cached = cache.get(projectRoot);
-  if (cached) return cached;
-  const pending = buildIndex().catch((error) => {
-    cache.delete(projectRoot);
-    throw error;
-  });
-  cache.set(projectRoot, pending);
-  return pending;
-}
-
-async function getKotlinProjectSymbolIndex(projectRoot: string): Promise<LanguageProjectSymbolIndex> {
-  return await getOrCreateProjectSymbolIndex(
-    kotlinProjectSymbolIndexCache,
-    projectRoot,
-    async () => await buildProjectSymbolIndex(projectRoot, ["**/*.kt", "**/*.kts"], readKotlinSymbolIndex),
-  );
-}
-
-async function getJavaProjectSymbolIndex(projectRoot: string): Promise<LanguageProjectSymbolIndex> {
-  return await getOrCreateProjectSymbolIndex(
-    javaProjectSymbolIndexCache,
-    projectRoot,
-    async () => await buildProjectSymbolIndex(projectRoot, ["**/*.java"], readJavaSymbolIndex),
-  );
-}
-
-async function getJvmProjectSymbolIndex(
-  projectRoot: string,
-  languageId: "java" | "kotlin",
-): Promise<LanguageProjectSymbolIndex> {
-  return languageId === "kotlin"
-    ? await getKotlinProjectSymbolIndex(projectRoot)
-    : await getJavaProjectSymbolIndex(projectRoot);
-}
-
-export async function resolveJvmPackageImportPaths(
-  projectRoot: string,
-  spec: string,
-  languageId: "java" | "kotlin",
-): Promise<string[]> {
-  const projectIndex = await getJvmProjectSymbolIndex(projectRoot, languageId);
-  const packageCandidates = projectIndex.filesByPackage.get(spec) ?? [];
-  return packageCandidates.map((candidate) => path.resolve(candidate));
-}
 
 async function getPhpProjectSymbolIndex(projectRoot: string): Promise<LanguageProjectSymbolIndex> {
   return await getOrCreateProjectSymbolIndex(phpProjectSymbolIndexCache, projectRoot, async () => {
@@ -439,246 +307,6 @@ async function getPhpProjectSymbolIndex(projectRoot: string): Promise<LanguagePr
     sortProjectSymbolIndex(index);
     return index;
   });
-}
-
-function stripInlineComment(line: string): string {
-  const idx = line.indexOf("//");
-  return idx === -1 ? line.trim() : line.slice(0, idx).trim();
-}
-
-async function findNearestFile(startDir: string, stopDir: string, fileName: string): Promise<string | null> {
-  let dir = path.resolve(startDir);
-  const stop = path.resolve(stopDir);
-  while (true) {
-    const candidate = path.join(dir, fileName);
-    if (await fileExists(candidate)) return candidate;
-    if (dir === stop) break;
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
-}
-
-async function parseGoMod(moduleRoot: string): Promise<GoModuleInfo | null> {
-  const modPath = path.join(moduleRoot, "go.mod");
-  if (!(await fileExists(modPath))) return null;
-  const raw = await fsp.readFile(modPath, "utf8");
-  const lines = raw.split(/\r?\n/);
-  let modulePath: string | null = null;
-  const replacements = new Map<string, string>();
-  for (const rawLine of lines) {
-    const line = stripInlineComment(rawLine);
-    if (!line) continue;
-    if (!modulePath) {
-      const moduleMatch = line.match(/^module\s+(.+)$/);
-      if (moduleMatch) {
-        modulePath = unquote(moduleMatch[1]?.trim() ?? "");
-        continue;
-      }
-    }
-    const replaceMatch = line.match(/^replace\s+(\S+)(?:\s+v[^\s]+)?\s+=>\s+(\S+)/);
-    if (replaceMatch) {
-      const from = unquote(replaceMatch[1] ?? "");
-      const toRaw = unquote(replaceMatch[2] ?? "");
-      if (!from || !toRaw) continue;
-      if (path.isAbsolute(toRaw) || toRaw.startsWith(".")) {
-        const toPath = path.resolve(moduleRoot, toRaw);
-        replacements.set(from, toPath);
-      }
-    }
-  }
-  if (!modulePath) return null;
-  return {
-    modulePath,
-    moduleRoot,
-    replacements,
-  };
-}
-
-async function parseGoWork(goWorkPath: string): Promise<string[]> {
-  const content = await fsp.readFile(goWorkPath, "utf8");
-  const lines = content.split(/\r?\n/);
-  const modules: string[] = [];
-  let inUseBlock = false;
-  for (const rawLine of lines) {
-    const line = stripInlineComment(rawLine);
-    if (!line) continue;
-    if (line.startsWith("use (")) {
-      inUseBlock = true;
-      continue;
-    }
-    if (inUseBlock) {
-      if (line.startsWith(")")) {
-        inUseBlock = false;
-        continue;
-      }
-      modules.push(unquote(line));
-      continue;
-    }
-    const match = line.match(/^use\s+(.+)$/);
-    if (match) {
-      modules.push(unquote(match[1] ?? ""));
-    }
-  }
-  return modules.filter(Boolean);
-}
-
-async function findGoPackageEntry(dirPath: string): Promise<string | null> {
-  try {
-    const stat = await fsp.stat(dirPath);
-    if (!stat.isDirectory()) return null;
-  } catch {
-    return null;
-  }
-  let entries: fs.Dirent[] = [];
-  try {
-    entries = await fsp.readdir(dirPath, { withFileTypes: true });
-  } catch {
-    return null;
-  }
-  const goFiles = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".go") && !entry.name.endsWith("_test.go"))
-    .map((entry) => entry.name)
-    .sort((a, b) => a.localeCompare(b));
-  if (!goFiles.length) return null;
-  return path.join(dirPath, goFiles[0] ?? "");
-}
-
-function isGoStdLib(spec: string): boolean {
-  const base = spec.split("/")[0] ?? "";
-  return !!base.length && !base.includes(".");
-}
-
-async function resolveGoModuleImport(moduleInfo: GoModuleInfo, spec: string): Promise<string | null> {
-  const { modulePath, moduleRoot, replacements } = moduleInfo;
-  if (spec === modulePath || spec.startsWith(`${modulePath}/`)) {
-    const subPath = spec === modulePath ? "" : spec.slice(modulePath.length + 1);
-    const targetDir = path.join(moduleRoot, subPath);
-    const entry = await findGoPackageEntry(targetDir);
-    if (entry) return entry;
-  }
-  for (const [from, toPath] of replacements.entries()) {
-    if (spec === from || spec.startsWith(`${from}/`)) {
-      const subPath = spec === from ? "" : spec.slice(from.length + 1);
-      const targetDir = path.join(toPath, subPath);
-      const entry = await findGoPackageEntry(targetDir);
-      if (entry) return entry;
-    }
-  }
-  const vendorDir = path.join(moduleRoot, "vendor", spec);
-  const vendored = await findGoPackageEntry(vendorDir);
-  if (vendored) return vendored;
-  return null;
-}
-
-export async function resolveGoImportPath(projectRoot: string, fromFile: string, spec: string): Promise<string | null> {
-  const startDir = path.dirname(fromFile);
-  const goWorkPath = await findNearestFile(startDir, projectRoot, "go.work");
-  const moduleInfos: GoModuleInfo[] = [];
-
-  if (goWorkPath) {
-    const workDir = path.dirname(goWorkPath);
-    const useDirs = await parseGoWork(goWorkPath);
-    for (const useDir of useDirs) {
-      if (!useDir) continue;
-      const moduleRoot = path.resolve(workDir, useDir);
-      const modInfo = await parseGoMod(moduleRoot);
-      if (modInfo) moduleInfos.push(modInfo);
-    }
-  }
-
-  if (!moduleInfos.length) {
-    const goModPath = await findNearestFile(startDir, projectRoot, "go.mod");
-    if (goModPath) {
-      const moduleRoot = path.dirname(goModPath);
-      const modInfo = await parseGoMod(moduleRoot);
-      if (modInfo) moduleInfos.push(modInfo);
-    }
-  }
-
-  for (const moduleInfo of moduleInfos) {
-    const resolved = await resolveGoModuleImport(moduleInfo, spec);
-    if (resolved) return resolved;
-  }
-
-  if (isGoStdLib(spec)) {
-    const goRoot = process.env.GOROOT;
-    if (goRoot) {
-      const stdlibDir = path.join(goRoot, "src", spec);
-      const entry = await findGoPackageEntry(stdlibDir);
-      if (entry) return entry;
-    }
-  }
-
-  return null;
-}
-
-async function readKotlinSymbolIndex(filePath: string): Promise<KotlinSymbolIndexEntry> {
-  const cached = kotlinSymbolIndexCache.get(filePath);
-  if (cached) return cached;
-
-  const source = await fsp.readFile(filePath, "utf8");
-  const packageName = source.match(/^\s*package\s+([A-Za-z_][\w.]*)/m)?.[1] ?? null;
-  const symbols = new Set<string>();
-  const declarationPattern = /\b(?:class|object|fun|typealias|interface)\s+([A-Za-z_][\w]*)\b/g;
-  for (const match of source.matchAll(declarationPattern)) {
-    const symbolName = match[1];
-    if (symbolName) symbols.add(symbolName);
-  }
-
-  const entry = { packageName, symbols };
-  kotlinSymbolIndexCache.set(filePath, entry);
-  return entry;
-}
-
-async function resolveKotlinImportPath(projectRoot: string, spec: string): Promise<string | null> {
-  const cacheKey = `${projectRoot}::${spec}`;
-  const cached = kotlinImportResolutionCache.get(cacheKey);
-  if (cached !== undefined) return cached;
-
-  const parts = spec.split(".").filter(Boolean);
-  const projectIndex = await getKotlinProjectSymbolIndex(projectRoot);
-  if (parts.length < 2) {
-    const packageCandidates = projectIndex.filesByPackage.get(spec) ?? [];
-    const resolved = packageCandidates[0] ? path.resolve(packageCandidates[0]) : null;
-    kotlinImportResolutionCache.set(cacheKey, resolved);
-    return resolved;
-  }
-
-  const importedName = parts[parts.length - 1]!;
-  const packageName = importedName === "*" ? parts.slice(0, -1).join(".") : parts.slice(0, -1).join(".");
-  const packageCandidates = projectIndex.filesByPackage.get(packageName) ?? [];
-
-  if (importedName === "*") {
-    const resolved = packageCandidates[0] ? path.resolve(packageCandidates[0]) : null;
-    kotlinImportResolutionCache.set(cacheKey, resolved);
-    return resolved;
-  }
-
-  const symbolFiles = projectIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
-  const resolvedCandidate = symbolFiles[0] ?? packageCandidates[0] ?? null;
-  const resolved = resolvedCandidate ? path.resolve(resolvedCandidate) : null;
-  kotlinImportResolutionCache.set(cacheKey, resolved);
-  return resolved;
-}
-
-async function readJavaSymbolIndex(filePath: string): Promise<JavaSymbolIndexEntry> {
-  const cached = javaSymbolIndexCache.get(filePath);
-  if (cached) return cached;
-
-  const source = await fsp.readFile(filePath, "utf8");
-  const packageName = source.match(/^\s*package\s+([A-Za-z_][\w.]*)\s*;/m)?.[1] ?? null;
-  const symbols = new Set<string>();
-  const declarationPattern = /\b(?:class|interface|enum)\s+([A-Za-z_][\w]*)\b/g;
-  for (const match of source.matchAll(declarationPattern)) {
-    const symbolName = match[1];
-    if (symbolName) symbols.add(symbolName);
-  }
-
-  const entry = { packageName, symbols };
-  javaSymbolIndexCache.set(filePath, entry);
-  return entry;
 }
 
 async function readPhpSymbolIndex(filePath: string): Promise<PhpSymbolIndexEntry> {
@@ -1384,42 +1012,6 @@ async function resolvePhpImportPath(
   return pathLikeResolved;
 }
 
-async function resolveJavaImportPath(projectRoot: string, spec: string): Promise<string | null> {
-  const cacheKey = `${projectRoot}::${spec}`;
-  const cached = javaImportResolutionCache.get(cacheKey);
-  if (cached !== undefined) return cached;
-
-  const parts = spec.split(".").filter(Boolean);
-  if (parts.length < 2) {
-    javaImportResolutionCache.set(cacheKey, null);
-    return null;
-  }
-
-  const projectIndex = await getJavaProjectSymbolIndex(projectRoot);
-  const exactPackageFiles = projectIndex.filesByPackage.get(spec) ?? [];
-  if (exactPackageFiles[0]) {
-    const resolved = path.resolve(exactPackageFiles[0]);
-    javaImportResolutionCache.set(cacheKey, resolved);
-    return resolved;
-  }
-
-  const importedName = parts[parts.length - 1]!;
-  const packageName = importedName === "*" ? parts.slice(0, -1).join(".") : parts.slice(0, -1).join(".");
-
-  const packageCandidates = projectIndex.filesByPackage.get(packageName) ?? [];
-  if (importedName === "*") {
-    const resolved = packageCandidates[0] ? path.resolve(packageCandidates[0]) : null;
-    javaImportResolutionCache.set(cacheKey, resolved);
-    return resolved;
-  }
-
-  const symbolFiles = projectIndex.filesByPackageSymbol.get(packageName)?.get(importedName) ?? [];
-  const resolvedCandidate = symbolFiles[0] ?? packageCandidates[0] ?? null;
-  const resolved = resolvedCandidate ? path.resolve(resolvedCandidate) : null;
-  javaImportResolutionCache.set(cacheKey, resolved);
-  return resolved;
-}
-
 export async function resolveImportSpecifier(
   projectRoot: string,
   fromFile: string,
@@ -1679,15 +1271,6 @@ async function findPythonPackageAnchor(startDir: string): Promise<string> {
   return topWithInit;
 }
 
-async function isDirectory(p: string): Promise<boolean> {
-  try {
-    const st = await fsp.stat(p);
-    return st.isDirectory();
-  } catch {
-    return false;
-  }
-}
-
 export async function resolvePythonModule(
   projectRoot: string,
   fromFile: string,
@@ -1803,12 +1386,7 @@ export function clearImportResolutionCaches(): void {
   resolveSpecifierCache.clear();
   resolvePythonModuleCache.clear();
   clearFileExistsCache();
-  kotlinImportResolutionCache.clear();
-  kotlinSymbolIndexCache.clear();
-  kotlinProjectSymbolIndexCache.clear();
-  javaImportResolutionCache.clear();
-  javaSymbolIndexCache.clear();
-  javaProjectSymbolIndexCache.clear();
+  clearJvmResolutionCaches();
   phpImportResolutionCache.clear();
   phpSymbolIndexCache.clear();
   phpProjectSymbolIndexCache.clear();

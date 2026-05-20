@@ -84,7 +84,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Performance opportunity: centralizing file signature and cached-edge reuse should make it easier to avoid recomputing graph edges or SQL fact caches when only module cache state changed.
   - Tests: cache modes, incremental strict, manifest option mismatch, deleted tracked files, SQL corpus signatures, worker pool parity, and parsed-cache reuse.
 
-- [ ] Split multi-language resolution into per-language modules and unify project symbol indexes.
+- [x] Split multi-language resolution into per-language modules and unify project symbol indexes.
   - `src/util/resolution.ts` is 1,872 lines and combines TS path config, generic specifier resolution, node_modules resolution, JVM package indexes, PHP composer/symbol scanning, Go module/workspace handling, and Python package resolution.
   - Suggested fix: move language-specific resolvers into `src/util/resolution/{go,jvm,php,python,node}.ts` and keep `resolveImportSpecifier()` as a small dispatcher. Share a generic project-symbol-index builder for Java, Kotlin, and PHP while keeping PHP's multi-namespace/kind metadata.
   - Correctness opportunity: PHP, Java, and Kotlin symbol indexers use regex/token scanners independent of native parsed symbols; consider reusing native/local export extraction where available so import resolution and indexed symbols stay aligned.
