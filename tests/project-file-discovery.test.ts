@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import { buildProjectIndex, listProjectFiles, discoverProjectFiles } from "../src/index.js";
 import { DEFAULT_PROJECT_MANIFESTS } from "../src/util.js";
 import { isRelativePathInside, translateGlobRootIgnoreGlobsForScanRoot } from "../src/util/projectFiles.js";
+import { parseDotnetName, parseGoModuleName, parsePomName, parseTomlName } from "../src/util/projectFiles/parsers.js";
 
 const normalize = (value: string) => value.replace(/\\/g, "/");
 
@@ -21,6 +22,18 @@ async function createFile(filePath: string, contents: string) {
 }
 
 describe("project file discovery", () => {
+  it("parses manifest names without full project traversal", () => {
+    expect(parseTomlName('[project]\nname = "py-app" # comment\n', ["project"])).toBe("py-app");
+    expect(parseTomlName("[package]\nname = 'rust-app'\n", ["package"])).toBe("rust-app");
+    expect(parseGoModuleName('module example.com/app # "commented"\n')).toBe("example.com/app");
+    expect(parsePomName("<project><parent><name>Parent</name></parent><artifactId>child</artifactId></project>")).toBe(
+      "child",
+    );
+    expect(parseDotnetName("<Project><PropertyGroup><PackageId>DotNet.App</PackageId></PropertyGroup></Project>")).toBe(
+      "DotNet.App",
+    );
+  });
+
   it("fails explicitly when the project root is invalid", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-missing-"));
     const missingRoot = path.join(tempDir, "missing-root");

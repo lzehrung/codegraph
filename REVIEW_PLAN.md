@@ -122,7 +122,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Correctness opportunity: adding a native capability such as syntax-tree parsing or compact queries should update one contract instead of relying on duplicated structural types.
   - Tests: native binding loader, native worker parity, native runtime mode, and native parser ownership tests.
 
-- [ ] Decompose project-file discovery parsers into manifest-specific helpers.
+- [x] Decompose project-file discovery parsers into manifest-specific helpers.
   - `src/util/projectFiles.ts` combines discovery traversal with many manifest-name parsers (`package.json`, TOML, INI, setup.py, Maven, Gradle, .NET, Go, Gem, Swift) and a long `PROJECT_FILE_DEFINITIONS` registry.
   - Suggested fix: move parser helpers and definitions into `src/util/projectFiles/definitions.ts` and `src/util/projectFiles/parsers.ts`, leaving traversal/path-safety logic in the main module.
   - Correctness opportunity: parser tests can cover manifest name extraction directly, instead of only through full project discovery.
