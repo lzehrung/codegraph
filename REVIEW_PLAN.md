@@ -172,7 +172,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Correctness opportunity: the same normalized option shapes drive manifest writes, manifest diffs, and graph-option equality; a single typed comparer would reduce false rebuilds and missed rebuilds when discovery or graph options change.
   - Tests: cache invalidation, cache strict/off modes, discovery option normalization, graph option equality, fallback extraction report aggregation, disk cache reuse, and manifest mismatch messages.
 
-- [ ] Decompose graph-only document link extraction and chunking by format.
+- [x] Decompose graph-only document link extraction and chunking by format.
   - `src/documentLinks.ts` is 692 lines and routes Markdown, MDX, Astro, Handlebars, reStructuredText, AsciiDoc, HTML attributes, inline scripts, link normalization, and Markdown parsing in one file. `src/chunking/chunkFile.ts` is another large format-sensitive flow for block extraction, splitting, merging, and gap filling.
   - Suggested fix: move document extractors into `documentLinks/{markdown,html,rst,asciidoc,sfc}.ts` behind a small dispatcher, and split chunking into match collection, block classification, large-block splitting, merge, and gap-fill helpers.
   - Correctness opportunity: document specifier normalization should match graph-only edge extraction, chunking, and source-style imports for mixed formats like MDX/Astro/SFC files.
