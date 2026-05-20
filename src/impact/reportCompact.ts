@@ -1,0 +1,298 @@
+import type { FileId } from "../types.js";
+import type { ProjectIndex } from "../indexer.js";
+import { IMPACT_SCHEMA_VERSION } from "./types.js";
+import type {
+  ChangedSymbol,
+  CompactImpactCluster,
+  CompactImpactReport,
+  CompactImpactSurfaceArea,
+  ExportSummaryEntry,
+  ImpactCluster,
+  ImpactCycle,
+  ImpactItem,
+  ImpactReason,
+  ImpactSuggestion,
+  ImpactSurfaceArea,
+  ImpactTopItem,
+  ReexportChainEntry,
+} from "./types.js";
+
+export type CompactImpactReportParts = {
+  changedFiles: Array<{
+    file: FileId;
+    hunks: Array<{ start: number; end: number }>;
+  }>;
+  changedSymbols: ChangedSymbol[];
+  impactedItems: ImpactItem[];
+  suggestions: ImpactSuggestion[];
+  exportSummary: ExportSummaryEntry[];
+  reexportChains: { chains: ReexportChainEntry[] } | undefined;
+  topImpacts: ImpactTopItem[];
+  surfaceArea: ImpactSurfaceArea;
+  clusters: ImpactCluster[];
+  cycles: ImpactCycle[];
+  fileEdges: Array<{
+    from: FileId;
+    to: FileId;
+    typeOnly?: boolean | undefined;
+  }>;
+  symbolEdges: Array<{ from: number; to: number; label: string }>;
+  projectFiles: ProjectIndex["projectFiles"];
+  displayFile: (file: FileId) => FileId;
+};
+
+export function buildCompactImpactReport(parts: CompactImpactReportParts): CompactImpactReport {
+  const context = buildCompactSerializerContext(parts);
+
+  return {
+    schemaVersion: IMPACT_SCHEMA_VERSION,
+    format: "compact",
+    ...(parts.projectFiles ? { projectFiles: parts.projectFiles } : {}),
+    files: context.files,
+    changedFiles: parts.changedFiles.map((fileChange) => ({
+      file: context.fileId(fileChange.file),
+      hunks: fileChange.hunks,
+    })),
+    changedSymbols: parts.changedSymbols.map((symbol) => compactChangedSymbol(symbol, context.fileId(symbol.file))),
+    impacted: parts.impactedItems.map((item) => compactImpactItem(item, context.fileId(item.file))),
+    ...buildCompactSuggestions(parts.suggestions, context.fileId),
+    ...buildCompactExportSummary(parts.exportSummary, context.fileId),
+    ...buildCompactReexportChains(parts.reexportChains, context.fileId),
+    ...buildCompactTopImpacts(parts.topImpacts, context.fileId),
+    surfaceArea: buildCompactSurfaceArea(parts.surfaceArea, context.fileId),
+    clusters: buildCompactClusters(parts.clusters, context.fileId),
+    ...buildCompactCycles(parts.cycles, context.fileId),
+    graph: {
+      fileEdges: parts.fileEdges.map((edge) => {
+        const compactEdge: { from: number; to: number; typeOnly?: boolean } = {
+          from: context.fileId(edge.from),
+          to: context.fileId(edge.to),
+        };
+        if (edge.typeOnly !== undefined) {
+          compactEdge.typeOnly = edge.typeOnly;
+        }
+        return compactEdge;
+      }),
+      symbolEdges: parts.symbolEdges,
+    },
+  };
+}
+
+type CompactSerializerContext = {
+  files: FileId[];
+  fileId: (file: FileId) => number;
+};
+
+function buildCompactSerializerContext(parts: CompactImpactReportParts): CompactSerializerContext {
+  const allFiles = new Set<FileId>();
+  const addFile = (file: FileId): void => {
+    allFiles.add(parts.displayFile(file));
+  };
+
+  for (const fileChange of parts.changedFiles) addFile(fileChange.file);
+  for (const symbol of parts.changedSymbols) addFile(symbol.file);
+  for (const item of parts.impactedItems) addFile(item.file);
+  for (const edge of parts.fileEdges) {
+    addFile(edge.from);
+    addFile(edge.to);
+  }
+  for (const item of parts.surfaceArea.files) addFile(item.file);
+  for (const file of parts.surfaceArea.topFanIn) addFile(file);
+  for (const file of parts.surfaceArea.topFanOut) addFile(file);
+  for (const cycle of parts.cycles) {
+    for (const file of cycle.files) addFile(file);
+  }
+  for (const suggestion of parts.suggestions) {
+    addFile(suggestion.file);
+    if (suggestion.relatedFile) addFile(suggestion.relatedFile);
+  }
+  if (parts.reexportChains) {
+    for (const chain of parts.reexportChains.chains) {
+      addFile(chain.file);
+      for (const pathChain of chain.paths) {
+        for (const file of pathChain) addFile(file);
+      }
+    }
+  }
+
+  const files = Array.from(allFiles);
+  const fileIndex = new Map<FileId, number>();
+  for (let i = 0; i < files.length; i++) {
+    fileIndex.set(files[i]!, i);
+  }
+  return {
+    files,
+    fileId: (file: FileId): number => {
+      const id = fileIndex.get(parts.displayFile(file));
+      if (id === undefined) {
+        throw new Error(`Missing file path in compact impact report index: ${file}`);
+      }
+      return id;
+    },
+  };
+}
+
+function compactChangedSymbol(symbol: ChangedSymbol, file: number): CompactImpactReport["changedSymbols"][number] {
+  const compact: CompactImpactReport["changedSymbols"][number] = {
+    id: symbol.id,
+    file,
+    name: symbol.name,
+    kind: symbol.kind,
+    exported: symbol.exported,
+    range: symbol.range,
+  };
+  if (symbol.typeOnly !== undefined) {
+    compact.typeOnly = symbol.typeOnly;
+  }
+  return compact;
+}
+
+function compactImpactItem(item: ImpactItem, file: number): CompactImpactReport["impacted"][number] {
+  const compact: {
+    file: number;
+    symbols: string[];
+    reasons: ImpactReason[];
+    severity: number;
+    confidence?: number;
+    depth?: number;
+    typeOnly?: boolean;
+    explain?: NonNullable<ImpactItem["explain"]>;
+  } = {
+    file,
+    symbols: item.symbols,
+    reasons: item.reasons,
+    severity: item.severity,
+    ...(item.confidence !== undefined ? { confidence: item.confidence } : {}),
+    ...(item.depth !== undefined ? { depth: item.depth } : {}),
+    ...(item.typeOnly !== undefined ? { typeOnly: item.typeOnly } : {}),
+    ...(item.explain !== undefined ? { explain: item.explain } : {}),
+  };
+  return compact;
+}
+
+function buildCompactSuggestions(
+  suggestions: ImpactSuggestion[],
+  fileId: (file: FileId) => number,
+): Pick<CompactImpactReport, "suggestions"> {
+  if (!suggestions.length) return {};
+  return {
+    suggestions: suggestions.map((suggestion) => ({
+      file: fileId(suggestion.file),
+      kind: suggestion.kind,
+      ...(suggestion.range ? { range: suggestion.range } : {}),
+      ...(suggestion.symbol ? { symbol: suggestion.symbol } : {}),
+      ...(suggestion.relatedFile !== undefined ? { relatedFile: fileId(suggestion.relatedFile) } : {}),
+      ...(suggestion.details ? { details: suggestion.details } : {}),
+      confidence: suggestion.confidence,
+    })),
+  };
+}
+
+function buildCompactExportSummary(
+  exportSummary: ExportSummaryEntry[],
+  fileId: (file: FileId) => number,
+): Pick<CompactImpactReport, "exportSummary"> {
+  if (!exportSummary.length) return {};
+  return {
+    exportSummary: exportSummary.map((entry) => ({
+      file: fileId(entry.file),
+      symbols: entry.symbols,
+    })),
+  };
+}
+
+function buildCompactReexportChains(
+  reexportChains: { chains: ReexportChainEntry[] } | undefined,
+  fileId: (file: FileId) => number,
+): Pick<CompactImpactReport, "reexportChains"> {
+  if (!reexportChains) return {};
+  return {
+    reexportChains: {
+      chains: reexportChains.chains.map((entry) => ({
+        symbol: entry.symbol,
+        file: fileId(entry.file),
+        paths: entry.paths.map((pathChain) => pathChain.map((file) => fileId(file))),
+      })),
+    },
+  };
+}
+
+function buildCompactTopImpacts(
+  topImpacts: ImpactTopItem[],
+  fileId: (file: FileId) => number,
+): Pick<CompactImpactReport, "topImpacts"> {
+  if (!topImpacts.length) return {};
+  return {
+    topImpacts: topImpacts.map((item) => ({
+      file: fileId(item.file),
+      symbols: item.symbols,
+      reasons: item.reasons,
+      severity: item.severity,
+      ...(item.confidence !== undefined ? { confidence: item.confidence } : {}),
+      ...(item.depth !== undefined ? { depth: item.depth } : {}),
+      ...(item.typeOnly !== undefined ? { typeOnly: item.typeOnly } : {}),
+      ...(item.explain ? { explain: item.explain } : {}),
+    })),
+  };
+}
+
+function buildCompactSurfaceArea(
+  surfaceArea: ImpactSurfaceArea,
+  fileId: (file: FileId) => number,
+): CompactImpactSurfaceArea {
+  return {
+    files: surfaceArea.files.map((item) => ({
+      file: fileId(item.file),
+      fanIn: item.fanIn,
+      fanOut: item.fanOut,
+      changed: item.changed,
+      impacted: item.impacted,
+    })),
+    topFanIn: surfaceArea.topFanIn.map((file) => fileId(file)),
+    topFanOut: surfaceArea.topFanOut.map((file) => fileId(file)),
+  };
+}
+
+function buildCompactClusters(
+  clusters: ImpactCluster[],
+  fileId: (file: FileId) => number,
+): CompactImpactCluster[] {
+  return clusters.map((cluster) => ({
+    id: cluster.id,
+    files: cluster.files.map((file) => fileId(file)),
+    changedFiles: cluster.changedFiles.map((file) => fileId(file)),
+    totalSeverity: cluster.totalSeverity,
+  }));
+}
+
+function buildCompactCycles(
+  cycles: ImpactCycle[],
+  fileId: (file: FileId) => number,
+): Pick<CompactImpactReport, "cycles"> {
+  if (!cycles.length) return {};
+  return {
+    cycles: cycles.map((cycle) => ({
+      files: cycle.files.map((file) => fileId(file)),
+      entryEdges: cycle.entryEdges.map((edge) => ({
+        from: fileId(edge.from),
+        to: fileId(edge.to),
+        raw: edge.raw,
+        ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
+      })),
+      internalEdges: cycle.internalEdges.map((edge) => ({
+        from: fileId(edge.from),
+        to: fileId(edge.to),
+        raw: edge.raw,
+        ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
+      })),
+      fileCount: cycle.fileCount,
+      internalEdgeCount: cycle.internalEdgeCount,
+      fanInFromOutside: cycle.fanInFromOutside,
+      priorityScore: cycle.priorityScore,
+      remediationHint: cycle.remediationHint,
+      touchesChangedFile: cycle.touchesChangedFile,
+      touchesImpactedFile: cycle.touchesImpactedFile,
+      severity: cycle.severity,
+    })),
+  };
+}

@@ -18,9 +18,9 @@ import {
   listProjectFiles,
   normalizePath,
   resolveFilePathFromRoot,
-  toProjectRelativePath,
 } from "./util.js";
-import { getFiniteNonNegativeLimit } from "./graphs/limits.js";
+import { boundAgentList, defaultAgentLimit, normalizeAgentLimit } from "./agent/bounds.js";
+import { normalizeAgentOutputPath } from "./agent/normalize.js";
 
 type ToolRuntimeOptions = {
   index?: ProjectIndex;
@@ -242,7 +242,7 @@ export async function tool_findSymbol(
           id: symbol.id,
           name: symbol.name,
           kind: String(symbol.kind),
-          file: toProjectRelativePath(root, symbol.file) ?? normalizePath(symbol.file),
+          file: normalizeToolFileOutput(root, symbol.file),
           ...(symbol.range ? { range: symbol.range } : {}),
           line: symbol.range?.start.line ?? 0,
           exactMatch,
@@ -261,8 +261,7 @@ export async function tool_findSymbol(
     });
 
     const exportedDefinitionsByFile = new Map<string, Set<string>>();
-    const limit = getToolDefaultedLimit(options.maxResults, 20);
-    const limitedMatches = matches.slice(0, limit).map((match) => {
+    const limitedMatches = boundAgentList(matches, getToolDefaultedLimit(options.maxResults, 20)).items.map((match) => {
       const exportedDefinitions =
         exportedDefinitionsByFile.get(match.symbol.file) ?? getExportedSymbolIdsForFile(index, match.symbol.file);
       exportedDefinitionsByFile.set(match.symbol.file, exportedDefinitions);
@@ -385,7 +384,7 @@ export async function tool_getDependencies(
       ...(options.depth !== undefined ? { depth: options.depth } : {}),
       limit: limit + 1,
     });
-    const limited = dependencies.slice(0, limit).map((entry) => ({
+    const limited = boundAgentList(dependencies, limit).items.map((entry) => ({
       file: normalizeToolFileOutput(root, entry.file),
       depth: entry.depth,
     }));
@@ -394,7 +393,7 @@ export async function tool_getDependencies(
       status: "ok",
       file: resolvedFile.relativeFile,
       dependencies: limited,
-      truncated: dependencies.length > limited.length,
+      truncated: dependencies.length !== limited.length,
     };
   } catch (error) {
     return { status: "error", error: String(error) };
@@ -449,7 +448,7 @@ export async function tool_getReverseDependencies(
       ...(options.depth !== undefined ? { depth: options.depth } : {}),
       limit: limit + 1,
     });
-    const limited = dependents.slice(0, limit).map((entry) => ({
+    const limited = boundAgentList(dependents, limit).items.map((entry) => ({
       file: normalizeToolFileOutput(root, entry.file),
       depth: entry.depth,
     }));
@@ -458,7 +457,7 @@ export async function tool_getReverseDependencies(
       status: "ok",
       file: resolvedFile.relativeFile,
       dependents: limited,
-      truncated: dependents.length > limited.length,
+      truncated: dependents.length !== limited.length,
     };
   } catch (error) {
     return { status: "error", error: String(error) };
@@ -526,12 +525,11 @@ async function collectToolGraph(
 }
 
 function getToolLimit(limit: number | undefined): number | undefined {
-  return getFiniteNonNegativeLimit(limit);
+  return normalizeAgentLimit(limit);
 }
 
 function getToolDefaultedLimit(limit: number | undefined, fallback: number): number {
-  const normalizedLimit = getFiniteNonNegativeLimit(limit);
-  return normalizedLimit ?? fallback;
+  return defaultAgentLimit(limit, fallback);
 }
 
 function resolveToolFileInput(
@@ -559,7 +557,7 @@ function resolveToolFileInput(
   return {
     status: "ok",
     absPath,
-    relativeFile: toProjectRelativePath(root, absPath) ?? normalizePath(filePath),
+    relativeFile: normalizeToolFileOutput(root, absPath),
   };
 }
 
@@ -660,7 +658,7 @@ function getToolImportDisplayName(entry: ImportBinding): string {
 }
 
 function normalizeToolFileOutput(root: string, filePath: string): string {
-  return toProjectRelativePath(root, filePath) ?? normalizePath(filePath);
+  return normalizeAgentOutputPath(root, filePath);
 }
 
 async function getToolMissingFileResult(

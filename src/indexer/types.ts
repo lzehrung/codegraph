@@ -2,7 +2,7 @@ import type { FallbackImportExtractionReason } from "../graphs/specifiers.js";
 import type { GraphAdjacencyIndex } from "../graphs/adjacency.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import type { LogLevel } from "../logging.js";
-import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
+import type { NativeFallbackReason, NativeRuntimeMode } from "../native/contracts.js";
 import type { ScopeIndex } from "./scope-types.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import type { Edge, FileId, Graph, Range } from "../types.js";
@@ -181,7 +181,7 @@ export type ManifestReport = {
   configHashError?: string;
 };
 
-export type NativeBackendFallbackReason = "unavailable" | "unsupportedLanguage" | "queryFailure";
+export type NativeBackendFallbackReason = NativeFallbackReason;
 
 export type NativeBackendLanguageReport = {
   filesSeen: number;

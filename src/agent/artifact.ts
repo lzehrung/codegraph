@@ -5,6 +5,7 @@ import { defNodeId } from "../graphs/symbol-graph.js";
 import { queryGraphSqliteRaw, writeGraphSqlite } from "../sqlite.js";
 import { isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util.js";
 import { formatAgentSqlHandle, formatAgentSymbolHandle } from "./handles.js";
+import { normalizeAgentFilePath } from "./normalize.js";
 import { createAgentSession } from "./session.js";
 import type { AgentProjectSnapshot, AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
@@ -704,5 +705,5 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
 }
 
 function relativeFile(root: string, file: string): string {
-  return toProjectRelativePath(root, file) ?? normalizePath(path.resolve(file));
+  return normalizeAgentFilePath(root, file);
 }

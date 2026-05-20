@@ -12,6 +12,7 @@ import {
   type NativeRuntimeMode,
 } from "../native/treeSitterNative.js";
 import { maskJsLikeCommentsAndStrings, sliceText, toRange, unquote } from "../util.js";
+import { bindingKindToSymbolKind } from "./declarations.js";
 import { buildScopeIndexFromSource } from "./scope.js";
 import { QUERY_DRIVEN_LOCALS_LANGUAGES } from "./shared.js";
 import { SymbolKind } from "./types.js";
@@ -418,10 +419,7 @@ export function collectLocalsAndExportsFromSource(
       const scopeIdx = buildScopeIndexFromSource(file, source, support, lang, imports, { tree: scopeTree });
       for (const b of scopeIdx.all) {
         if (!b.def) continue;
-        let kind: SymbolKind = SymbolKind.Variable;
-        if (b.kind === "function") kind = SymbolKind.Function;
-        else if (b.kind === "class") kind = SymbolKind.Class;
-        else if (b.kind === "type") kind = SymbolKind.TypeAlias;
+        const kind = bindingKindToSymbolKind(b.kind);
         pushLocal(b.name, kind, b.def, b.node);
       }
     }

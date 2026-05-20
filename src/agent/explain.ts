@@ -9,8 +9,14 @@ import { buildReviewReport } from "../review.js";
 import { extractSqlFactsFromSource, sqlObjectBaseName } from "../sql/extractFacts.js";
 import type { SqlStatementFact } from "../sql/types.js";
 import type { Range } from "../types.js";
-import { normalizePath, toProjectRelativePath } from "../util.js";
+import { normalizePath } from "../util.js";
 import { mapLimit } from "../util/resolution.js";
+import {
+  boundAgentList,
+  defaultAgentLimit,
+  emptyAgentBoundedList,
+  type BoundedAgentList,
+} from "./bounds.js";
 import {
   formatAgentFileHandle,
   formatAgentSqlHandle,
@@ -21,6 +27,11 @@ import {
   parseAgentSqlHandle,
   parseAgentSymbolHandle,
 } from "./handles.js";
+import {
+  collectDefinitionFollowUps,
+  collectFileFollowUps as collectCommonFileFollowUps,
+  normalizeAgentFilePath,
+} from "./normalize.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
 
@@ -121,14 +132,9 @@ type SymbolLookup = {
   exportedIds: Set<string>;
 };
 
-type BoundedList<T> = {
-  items: T[];
-  omitted: number;
-};
-
 type ReferenceContext = {
-  references: BoundedList<AgentExplanationReference>;
-  snippets: BoundedList<AgentExplanationSnippet>;
+  references: BoundedAgentList<AgentExplanationReference>;
+  snippets: BoundedAgentList<AgentExplanationSnippet>;
 };
 
 type ResolvedExplainTarget =
@@ -373,14 +379,19 @@ async function buildExplanation(
   resolved: ResolvedExplainTarget,
   request: AgentExplainTarget,
 ): Promise<AgentExplanation> {
-  const maxDependencies = normalizeLimit(request.maxDependencies, DEFAULT_MAX_DEPENDENCIES);
-  const maxReferences = normalizeLimit(request.maxReferences ?? request.maxDependencies, DEFAULT_MAX_DEPENDENCIES);
-  const maxRelatedSqlObjects = normalizeLimit(
+  const maxDependencies = defaultAgentLimit(request.maxDependencies, DEFAULT_MAX_DEPENDENCIES, MAX_DEPENDENCIES);
+  const maxReferences = defaultAgentLimit(
+    request.maxReferences ?? request.maxDependencies,
+    DEFAULT_MAX_DEPENDENCIES,
+    MAX_DEPENDENCIES,
+  );
+  const maxRelatedSqlObjects = defaultAgentLimit(
     request.maxRelatedSqlObjects ?? request.maxDependencies,
     DEFAULT_MAX_DEPENDENCIES,
+    MAX_DEPENDENCIES,
   );
-  const maxSnippets = normalizeLimit(request.maxSnippets, DEFAULT_MAX_SNIPPETS, MAX_SNIPPETS);
-  const maxSymbols = normalizeLimit(request.maxSymbols, DEFAULT_MAX_SYMBOLS, MAX_SYMBOLS);
+  const maxSnippets = defaultAgentLimit(request.maxSnippets, DEFAULT_MAX_SNIPPETS, MAX_SNIPPETS);
+  const maxSymbols = defaultAgentLimit(request.maxSymbols, DEFAULT_MAX_SYMBOLS, MAX_SYMBOLS);
 
   if (resolved.kind === "not_found") {
     return emptyExplanation(snapshot, {
@@ -392,7 +403,7 @@ async function buildExplanation(
   const file = resolved.kind === "file" ? resolved.file : normalizePath(resolved.def.file);
   const relFile = relativeFile(snapshot.root, file);
   const allSymbols = collectFileSymbols(snapshot, lookup, file);
-  const symbols = allSymbols.slice(0, maxSymbols);
+  const boundedSymbols = boundAgentList(allSymbols, maxSymbols);
   const dependencies = collectDependencies(snapshot, file, maxDependencies, "forward");
   const reverseDependencies = collectDependencies(snapshot, file, maxDependencies, "reverse");
   const hotspots = collectTargetHotspots(snapshot, file);
@@ -403,7 +414,7 @@ async function buildExplanation(
   const references = referenceContext.references;
   const snippets = referenceContext.snippets;
   const relatedSqlObjects = await collectRelatedSqlObjects(snapshot, lookup, resolved, file, maxRelatedSqlObjects);
-  const followUps = collectFollowUps(snapshot, resolved, symbols, relFile);
+  const followUps = collectFollowUps(snapshot, resolved, boundedSymbols.items, relFile);
   const changedContext = await collectChangedContext(request);
 
   return {
@@ -419,7 +430,7 @@ async function buildExplanation(
       references.items,
       relatedSqlObjects.items,
     ),
-    symbols,
+    symbols: boundedSymbols.items,
     dependencies: dependencies.items,
     reverseDependencies: reverseDependencies.items,
     references: references.items,
@@ -435,7 +446,7 @@ async function buildExplanation(
       snippets: maxSnippets,
     },
     omittedCounts: {
-      symbols: Math.max(0, allSymbols.length - symbols.length),
+      symbols: boundedSymbols.omitted,
       dependencies: dependencies.omitted,
       reverseDependencies: reverseDependencies.omitted,
       references: references.omitted,
@@ -543,23 +554,19 @@ function collectDependencies(
   file: string,
   limit: number,
   direction: "forward" | "reverse",
-): BoundedList<AgentExplanationDependency> {
+): BoundedAgentList<AgentExplanationDependency> {
   const startFile = normalizePath(file);
   const dependencies =
     direction === "forward"
       ? getDependencies(snapshot.fileGraph, startFile, { depth: 1 })
       : getReverseDependencies(snapshot.fileGraph, startFile, { depth: 1 });
-  const items = dependencies
+  const sortedDependencies = dependencies
     .map((dependency) => ({
       file: relativeFile(snapshot.root, dependency.file),
       depth: dependency.depth,
     }))
-    .sort(compareDependencies)
-    .slice(0, limit);
-  return {
-    items,
-    omitted: Math.max(0, dependencies.length - items.length),
-  };
+    .sort(compareDependencies);
+  return boundAgentList(sortedDependencies, limit);
 }
 
 function compareDependencies(left: AgentExplanationDependency, right: AgentExplanationDependency): number {
@@ -603,7 +610,7 @@ async function collectReferenceContext(
       if (fileDelta !== 0) return fileDelta;
       return left.range.start.line - right.range.start.line;
     });
-  const referenceItems = references.slice(0, referenceLimit);
+  const boundedReferences = boundAgentList(references, referenceLimit);
 
   const referencesWithContext = result.references.filter((reference) => reference.context !== undefined);
   const snippets = referencesWithContext
@@ -613,17 +620,11 @@ async function collectReferenceContext(
       if (fileDelta !== 0) return fileDelta;
       return left.line - right.line;
     });
-  const snippetItems = snippets.slice(0, snippetLimit);
+  const boundedSnippets = boundAgentList(snippets, snippetLimit);
 
   return {
-    references: {
-      items: referenceItems,
-      omitted: Math.max(0, references.length - referenceItems.length),
-    },
-    snippets: {
-      items: snippetItems,
-      omitted: Math.max(0, snippets.length - snippetItems.length),
-    },
+    references: boundedReferences,
+    snippets: boundedSnippets,
   };
 }
 
@@ -641,8 +642,8 @@ async function collectRelatedSqlObjects(
   resolved: Exclude<ResolvedExplainTarget, { kind: "not_found" }>,
   file: string,
   limit: number,
-): Promise<BoundedList<AgentExplanationSqlObject>> {
-  if (resolved.kind !== "sql_object" && !isSqlFile(file)) return emptyBoundedList();
+): Promise<BoundedAgentList<AgentExplanationSqlObject>> {
+  if (resolved.kind !== "sql_object" && !isSqlFile(file)) return emptyAgentBoundedList();
 
   const sqlObjects = collectSqlObjectNodes(snapshot, lookup);
   const targetName = resolved.kind === "sql_object" ? (resolved.node?.name ?? resolved.def.localName) : undefined;
@@ -679,11 +680,7 @@ async function collectRelatedSqlObjects(
     if (fileDelta !== 0) return fileDelta;
     return left.name.localeCompare(right.name);
   });
-  const items = matches.slice(0, limit);
-  return {
-    items,
-    omitted: Math.max(0, matches.length - items.length),
-  };
+  return boundAgentList(matches, limit);
 }
 
 type SqlObjectNodeInfo = {
@@ -828,17 +825,10 @@ function sqlRelationRank(relation: string): number {
   return 3;
 }
 
-function emptyBoundedList<T>(): BoundedList<T> {
-  return {
-    items: [],
-    omitted: 0,
-  };
-}
-
 function emptyReferenceContext(): ReferenceContext {
   return {
-    references: emptyBoundedList(),
-    snippets: emptyBoundedList(),
+    references: emptyAgentBoundedList(),
+    snippets: emptyAgentBoundedList(),
   };
 }
 
@@ -848,11 +838,7 @@ function collectFollowUps(
   symbols: AgentExplanationSymbol[],
   relFile: string,
 ): string[] {
-  const followUps = new Set<string>([
-    `codegraph deps ${quoteShellArg(relFile)} --json`,
-    `codegraph rdeps ${quoteShellArg(relFile)} --json`,
-    `codegraph chunk ${quoteShellArg(relFile)}`,
-  ]);
+  const followUps = new Set<string>(collectCommonFileFollowUps(relFile));
 
   if (resolved.kind === "file") {
     for (const symbol of symbols.slice(0, 5)) {
@@ -861,12 +847,13 @@ function collectFollowUps(
       );
     }
   } else {
-    followUps.add(
-      `codegraph goto ${quoteShellArg(relFile)} ${resolved.def.range.start.line} ${resolved.def.range.start.column}`,
-    );
-    followUps.add(
-      `codegraph refs --file ${quoteShellArg(relFile)} --line ${resolved.def.range.start.line} --col ${resolved.def.range.start.column} --pretty`,
-    );
+    for (const command of collectDefinitionFollowUps(
+      relFile,
+      resolved.def.range.start.line,
+      resolved.def.range.start.column,
+    )) {
+      followUps.add(command);
+    }
     followUps.add(
       `codegraph search ${quoteShellArg(resolved.node?.name ?? resolved.def.localName)} --from ${quoteShellArg(relFile)} --json`,
     );
@@ -938,11 +925,6 @@ async function collectChangedContext(request: AgentExplainTarget): Promise<Agent
   };
 }
 
-function normalizeLimit(limit: number | undefined, fallback: number, max = MAX_DEPENDENCIES): number {
-  if (typeof limit !== "number" || !Number.isFinite(limit)) return fallback;
-  return Math.min(max, Math.max(0, Math.floor(limit)));
-}
-
 function isSqlObjectNode(node: SymbolNode): boolean {
   return node.kind === "table" || node.kind === "view" || node.kind === "index" || node.kind === "routine";
 }
@@ -952,5 +934,5 @@ function isSqlFile(file: string): boolean {
 }
 
 function relativeFile(root: string, file: string): string {
-  return toProjectRelativePath(root, file) ?? normalizePath(path.resolve(file));
+  return normalizeAgentFilePath(root, file);
 }
