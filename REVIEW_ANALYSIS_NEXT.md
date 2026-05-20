@@ -119,7 +119,7 @@ No dependency cycles were reported. The highest remaining concentration is in:
 
 ### Performance And Accuracy
 
-- [ ] Review `buildProjectIndex` phase boundaries for cache/incremental complexity.
+- [x] Review `buildProjectIndex` phase boundaries for cache/incremental complexity.
   - Current shape: `src/indexer/build-index.ts` still handles worker setup, parsed cache retention, file signatures, manifest snapshots, graph finalization, and incremental entry points.
   - Target split:
     - worker setup/teardown

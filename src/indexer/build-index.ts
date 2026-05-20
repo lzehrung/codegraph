@@ -3,10 +3,9 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { supportForFile, type LanguageSupport } from "../languages.js";
 import { loadWorkspaceConfig, resolveWorkspacePackage } from "../util/workspace.js";
-import { listProjectFiles, discoverProjectFiles } from "../util/projectFiles.js";
+import { listProjectFiles } from "../util/projectFiles.js";
 import { getGitHead, isGitRepo, getGitBlobHashes, listChangedFiles } from "../util/git.js";
 import { clearImportResolutionCaches, resolveSpecifier } from "../util/resolution.js";
-import { stringifyUnknown } from "../util/ast.js";
 import { assertFilePathWithinRoot, normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
@@ -14,26 +13,15 @@ import { collectGraph } from "../graph-builder.js";
 import { collectEdgesForFile } from "../graph-edge-collector.js";
 import { buildGraphAdjacency } from "../graphs/adjacency.js";
 import type { FallbackImportExtractionEvent } from "../graphs/specifiers.js";
-import type { GraphCacheEntry, GraphBuildOptions } from "../graphs/types.js";
+import type { GraphBuildOptions, GraphCacheEntry } from "../graphs/types.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
-import {
-  attemptParsePreparedFileContext,
-  prepareFileForIndexing,
-  type ParsedFileContext,
-  type PreparedFileContext,
-} from "./parse-context.js";
+import { attemptParsePreparedFileContext, type ParsedFileContext } from "./parse-context.js";
 import { collectImportsForFile } from "./imports.js";
 import { collectLocalsAndExportsFromSource } from "./locals-and-exports.js";
 import { compareEdges, edgeKey, toRelativeEdge } from "./shared.js";
 import { buildBloomFilterFromSource } from "../util/bloomFilter.js";
-import { initNativeBackendReport, recordNativeExecutionOutcome } from "../native/nativeBackendReport.js";
-import {
-  getCachedNormalizedQuery,
-  isNativeRequiredUnavailableError,
-  isNativeTreeSitterAvailable,
-  type NativeRuntimeMode,
-} from "../native/treeSitterNative.js";
-import type { NativeExtractResult, NativeExtractTask } from "../worker/nativeExtractWorker.js";
+import { initNativeBackendReport } from "../native/nativeBackendReport.js";
+import { isNativeRequiredUnavailableError } from "../native/treeSitterNative.js";
 import type { JsLanguage, SyntaxTreeLike } from "../languages/types.js";
 import type { Edge, FileId, Graph } from "../types.js";
 import {
@@ -49,19 +37,15 @@ import {
   initFileReport,
   initManifestReport,
   loadManifest,
-  MANIFEST_VERSION,
   normalizeGraphOptions,
   normalizeIndexedFileInputs,
   recordConfigHashResult,
   recordFileFailure,
   sanitizeManifestEntriesForRoot,
-  summarizeBuildOptions,
   tryLoadFromCache,
   verifyManifestEntries,
-  writeManifest,
   writeToCache,
   type FileSignature,
-  type IndexManifest,
   type ManifestFileEntry,
 } from "./build-cache.js";
 import {
@@ -70,18 +54,31 @@ import {
   type GraphDeltaReport,
   type ImportBinding,
   type IncrementalBuildOptions,
-  type ManifestReport,
   type ModuleIndex,
   type NativeBackendFallbackReason,
   type ParserBackendDegradationReport,
   type ProjectIndex,
   type SymbolDef,
   SymbolKind,
-  type WorkerPoolReport,
 } from "./types.js";
 import { isJsFallbackUnavailableError, isJsSyntaxTree } from "../jsFallback.js";
 import { isUnsupportedParserInputError } from "../languages/filePrep.js";
 import { buildSqlFactCache, buildSqlModuleIndex, sqlCorpusSignature, type SqlFactCache } from "../sql/sourceGraph.js";
+import { finalizeProjectIndex } from "./finalize.js";
+import { toManifestFileEntry, writeIndexManifestSnapshot } from "./build-manifest.js";
+import {
+  prepareFileContextForBuild,
+  setupWorkerPool,
+  teardownWorkerPool,
+  type WorkerPoolSetupResult,
+} from "./build-workers.js";
+import {
+  buildIncrementalGitDiffOptions,
+  collectDeletedTrackedFileDependents,
+  isMissingGitRevisionError,
+  partitionTrackedManifestFiles,
+} from "./incremental-plan.js";
+import { parsedCacheMaxEntries, setParsedCacheEntry } from "./parsed-cache.js";
 
 type IndexedFileGraphContext = {
   source: string;
@@ -147,143 +144,6 @@ function createEmptyModuleIndex(file: string): ModuleIndex {
   return { file, exports: [], imports: [], locals: [] };
 }
 
-function isMissingGitRevisionError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return (
-    message.includes("Invalid revision range") ||
-    message.includes("bad revision") ||
-    message.includes("unknown revision") ||
-    message.includes("ambiguous argument")
-  );
-}
-
-function isSFCFile(filePath: string): boolean {
-  return filePath.endsWith(".vue") || filePath.endsWith(".svelte") || filePath.endsWith(".astro");
-}
-
-type WorkerPoolSetupResult = {
-  pool: import("piscina").Piscina | null;
-  report: WorkerPoolReport | undefined;
-  startTime: number;
-};
-
-function buildWorkerTask(filePath: string, sup: LanguageSupport): NativeExtractTask {
-  return {
-    filePath,
-    languageId: sup.id,
-    importsQuery: getCachedNormalizedQuery(sup, "imports"),
-    exportsQuery: getCachedNormalizedQuery(sup, "exports"),
-    localsQuery: getCachedNormalizedQuery(sup, "locals"),
-    importBindingsQuery: getCachedNormalizedQuery(sup, "importBindings"),
-  };
-}
-
-function workerResultToPrepared(
-  result: NativeExtractResult,
-  sup: LanguageSupport,
-  filePath: string,
-): PreparedFileContext {
-  return {
-    file: filePath,
-    source: result.source,
-    sup,
-    nativeQueries: result.nativeResults,
-    ...(result.fallbackReason ? { nativeFallbackReason: result.fallbackReason } : {}),
-    ...(result.error ? { nativeError: result.error } : {}),
-  };
-}
-
-async function setupWorkerPool(opts: BuildOptions | undefined): Promise<WorkerPoolSetupResult> {
-  const shouldUseWorkers =
-    !!opts?.useNativeWorkers && opts?.native !== "off" && isNativeTreeSitterAvailable(opts?.native);
-  const report: WorkerPoolReport | undefined = opts?.useNativeWorkers
-    ? {
-        enabled: shouldUseWorkers,
-        threads: 0,
-        tasksSubmitted: 0,
-        tasksFailed: 0,
-      }
-    : undefined;
-  let pool: import("piscina").Piscina | null = null;
-  if (shouldUseWorkers) {
-    try {
-      const { createNativeWorkerPool } = await import("../worker/nativeWorkerPool.js");
-      const createdPool = createNativeWorkerPool({
-        threads: opts.nativeThreads,
-      });
-      pool = createdPool;
-      if (report) {
-        report.threads = (createdPool.options as { maxThreads?: number }).maxThreads ?? 0;
-      }
-    } catch (error) {
-      pool = null;
-      if (report) {
-        report.enabled = false;
-        report.startupError = stringifyUnknown(error);
-      }
-    }
-  }
-  return { pool, report, startTime: pool ? performance.now() : 0 };
-}
-
-async function teardownWorkerPool(setup: WorkerPoolSetupResult, buildReport: BuildReport | undefined): Promise<void> {
-  if (setup.pool) {
-    if (setup.report) {
-      setup.report.wallClockMs = Math.round(performance.now() - setup.startTime);
-    }
-    try {
-      await setup.pool.destroy();
-    } catch {
-      // non-fatal
-    }
-    setup.pool = null;
-  }
-  if (buildReport && setup.report) {
-    buildReport.workerPool = setup.report;
-  }
-}
-
-async function prepareFileContextForBuild(
-  file: string,
-  support: LanguageSupport,
-  opts: BuildOptions | undefined,
-  workerSetup: WorkerPoolSetupResult,
-  report: BuildReport | undefined,
-): Promise<PreparedFileContext> {
-  let prepared: PreparedFileContext;
-  if (workerSetup.pool && !isSFCFile(file)) {
-    if (workerSetup.report) workerSetup.report.tasksSubmitted++;
-    try {
-      const workerResult: NativeExtractResult = await workerSetup.pool.run(buildWorkerTask(file, support));
-      prepared = workerResultToPrepared(workerResult, support, file);
-    } catch (error) {
-      if (isNativeRequiredUnavailableError(error)) throw error;
-      if (workerSetup.report) workerSetup.report.tasksFailed++;
-      if (workerSetup.report) {
-        workerSetup.report.errors ??= [];
-        if (workerSetup.report.errors.length < 20) {
-          workerSetup.report.errors.push({
-            file,
-            message: stringifyUnknown(error),
-          });
-        }
-      }
-      prepared = await prepareFileForIndexing(file, opts?.native);
-    }
-  } else {
-    prepared = await prepareFileForIndexing(file, opts?.native);
-  }
-  recordNativeExecutionOutcome(report, {
-    file,
-    support: prepared.sup,
-    languageId: prepared.sup.id,
-    results: prepared.nativeQueries,
-    ...(prepared.nativeFallbackReason ? { fallbackReason: prepared.nativeFallbackReason } : {}),
-    ...(prepared.nativeError ? { error: prepared.nativeError } : {}),
-  });
-  return prepared;
-}
-
 async function resolveCrossModuleSymbolExports(
   file: string,
   mod: ModuleIndex,
@@ -310,21 +170,6 @@ async function resolveCrossModuleSymbolExports(
     }
     const pkgResolved = await resolveWorkspacePackage(entry.fromModule, workspaceConfig);
     if (pkgResolved) entry.fromModule = pkgResolved;
-  }
-}
-
-function setParsedCacheEntry(
-  parsedMap: Map<string, ParsedFileContext>,
-  file: string,
-  entry: ParsedFileContext,
-  maxEntries: number,
-): void {
-  if (parsedMap.has(file)) parsedMap.delete(file);
-  parsedMap.set(file, entry);
-  while (parsedMap.size > maxEntries) {
-    const oldest = parsedMap.keys().next().value;
-    if (!oldest) break;
-    parsedMap.delete(oldest);
   }
 }
 
@@ -567,10 +412,6 @@ function buildConcurrency(opts: BuildOptions | undefined): number {
   return Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
 }
 
-function parsedCacheMaxEntries(opts: BuildOptions | undefined): number {
-  return Math.max(1, opts?.parsedCacheMaxEntries ?? 1024);
-}
-
 async function prepareFileSignatures(args: {
   files: string[];
   opts: BuildOptions | undefined;
@@ -585,96 +426,6 @@ async function prepareFileSignatures(args: {
     return [file, sigInfo] as const;
   });
   return new Map(entries);
-}
-
-function toManifestFileEntry(entry: GraphCacheEntry): ManifestFileEntry | undefined {
-  if (!entry.sig) return undefined;
-  return {
-    sig: entry.sig,
-    ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
-    ...(entry.sqlCorpusSig ? { sqlCorpusSig: entry.sqlCorpusSig } : {}),
-    edges: entry.edges,
-  };
-}
-
-async function writeIndexManifestSnapshot(args: {
-  projectRoot: string;
-  opts: BuildOptions | undefined;
-  graphOptions: GraphBuildOptions;
-  files: Map<string, ManifestFileEntry> | Record<string, ManifestFileEntry>;
-  timings: BuildReport["timings"] | undefined;
-  manifestReport: ManifestReport | undefined;
-  allowEmpty?: boolean;
-}): Promise<void> {
-  const files = args.files instanceof Map ? Object.fromEntries(args.files) : args.files;
-  if (!Object.keys(files).length && !args.allowEmpty) return;
-  const writeManifestStart = performance.now();
-  const lastCommit = await getGitHead(args.projectRoot);
-  const configHashResult = await computeConfigHash(args.projectRoot, args.opts?.logLevel);
-  const configHash = recordConfigHashResult(args.manifestReport, configHashResult, args.opts?.logLevel);
-  const manifestData: IndexManifest = {
-    version: MANIFEST_VERSION,
-    projectRoot: path.resolve(args.projectRoot).replace(/\\/g, "/"),
-    updatedAt: Date.now(),
-    ...(lastCommit ? { lastCommit } : {}),
-    ...(configHash ? { configHash } : {}),
-    graphOptions: args.graphOptions,
-    buildOptions: summarizeBuildOptions(args.opts),
-    files,
-  };
-  await writeManifest(args.projectRoot, args.opts, manifestData);
-  if (args.timings) {
-    args.timings.writeManifestMs = Math.round(performance.now() - writeManifestStart);
-  }
-}
-
-function retainedParsedCache(
-  parsedMap: Map<string, ParsedFileContext>,
-  opts: BuildOptions | undefined,
-): Map<string, ParsedFileContext> | undefined {
-  const keepParsed = opts?.keepParsed ?? false;
-  const maxParsedEntries = parsedCacheMaxEntries(opts);
-  if (!keepParsed) {
-    parsedMap.clear();
-    return undefined;
-  }
-  while (parsedMap.size > maxParsedEntries) {
-    const oldest = parsedMap.keys().next().value;
-    if (!oldest) break;
-    parsedMap.delete(oldest);
-  }
-  return parsedMap;
-}
-
-async function finalizeProjectIndex(args: {
-  projectRoot: string;
-  normalizedProjectRoot: string;
-  opts: BuildOptions | undefined;
-  timings: BuildReport["timings"] | undefined;
-  totalStart: number;
-  graph: Graph;
-  modules: Map<FileId, ModuleIndex>;
-  parsedMap: Map<string, ParsedFileContext>;
-  bloomFilterCache: import("../util/bloomFilter.js").BloomFilterCache | undefined;
-}): Promise<ProjectIndex> {
-  if (args.timings) args.timings.totalMs = Math.round(performance.now() - args.totalStart);
-  const projectFiles = await discoverProjectFiles(args.projectRoot, {
-    ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
-  });
-  const parsed = retainedParsedCache(args.parsedMap, args.opts);
-  return {
-    graph: args.graph,
-    graphAdjacency: buildGraphAdjacency(args.graph),
-    modules: args.modules,
-    byFile: args.modules,
-    projectRoot: args.normalizedProjectRoot,
-    ...(args.opts?.native ? { nativeMode: args.opts.native } : {}),
-    exportCache: new Map(),
-    scopeCache: new Map(),
-    ...(parsed ? { parsed } : {}),
-    ...(args.bloomFilterCache ? { bloomFilters: args.bloomFilterCache } : {}),
-    projectFiles,
-  };
 }
 
 async function buildProjectIndexFromExport(
@@ -1108,18 +859,12 @@ export async function buildProjectIndexIncremental(
       }
     }
     const trackedEntries = sanitizeManifestEntriesForRoot(projectRoot, manifest.files);
-    const trackedFileList = Object.keys(trackedEntries);
-    const trackedFiles = new Set(trackedFileList.filter((file) => fs.existsSync(file)));
-    const deletedTrackedFiles = new Set(trackedFileList.filter((file) => !fs.existsSync(file)));
+    const { trackedFiles, deletedTrackedFiles } = partitionTrackedManifestFiles(trackedEntries);
     const fileReport = initFileReport(report);
     if (fileReport) fileReport.total = trackedFiles.size;
     const explicitFiles = normalizeIndexedFileInputs(projectRoot, opts?.files ?? [], "Incremental file");
     const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
-    const gitOpts: { base?: string; head?: string; changedSince?: string } = {};
-    if (opts?.gitBase) gitOpts.base = opts.gitBase;
-    if (opts?.gitHead) gitOpts.head = opts.gitHead;
-    if (!opts?.gitBase && opts?.changedSince) gitOpts.changedSince = opts.changedSince;
-    const gitFiles = needsGitScan ? await listChangedFiles(projectRoot, gitOpts) : [];
+    const gitFiles = needsGitScan ? await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)) : [];
     const allFiles = new Set<string>([
       ...trackedFiles,
       ...explicitFiles.filter((file) => fs.existsSync(file)),
@@ -1128,15 +873,7 @@ export async function buildProjectIndexIncremental(
     ]);
     if (fileReport) fileReport.total = allFiles.size;
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
-    const dependentFilesOfDeletedTracked = new Set<string>();
-    if (deletedTrackedFiles.size > 0) {
-      for (const [file, entry] of Object.entries(trackedEntries)) {
-        if (deletedTrackedFiles.has(file)) continue;
-        if (entry.edges.some((edge) => edge.to.type === "file" && deletedTrackedFiles.has(edge.to.path))) {
-          dependentFilesOfDeletedTracked.add(file);
-        }
-      }
-    }
+    const dependentFilesOfDeletedTracked = collectDeletedTrackedFileDependents(trackedEntries, deletedTrackedFiles);
     if (allFiles.size === 0) {
       await writeIndexManifestSnapshot({
         projectRoot,
@@ -1355,12 +1092,8 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
     fs.existsSync(file),
   );
   const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
-  const gitOpts: { base?: string; head?: string; changedSince?: string } = {};
-  if (opts?.gitBase) gitOpts.base = opts.gitBase;
-  if (opts?.gitHead) gitOpts.head = opts.gitHead;
-  if (!opts?.gitBase && opts?.changedSince) gitOpts.changedSince = opts.changedSince;
-  const gitFiles = needsGitScan ? await listChangedFiles(projectRoot, gitOpts) : [];
-  const trackedFiles = new Set(Object.keys(trackedEntries).filter((file) => fs.existsSync(file)));
+  const gitFiles = needsGitScan ? await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)) : [];
+  const { trackedFiles } = partitionTrackedManifestFiles(trackedEntries);
   const gitAvailable = await isGitRepo(projectRoot);
   const currentHead = gitAvailable ? await getGitHead(projectRoot) : null;
   const hasExplicitGitRange = !!opts?.gitBase || !!opts?.gitHead;
