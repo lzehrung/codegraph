@@ -160,7 +160,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Performance opportunity: compact report construction repeatedly calls `displayFile()` and looks up file indexes across each section; a shared serializer context can avoid repeated normalization and make missing-index errors explicit.
   - Tests: compact/full impact reports, project file metadata, re-export chains, graph cycles, clusters, surface area summaries, top impacts, and schema-version compatibility.
 
-- [ ] Split impact analyzer into direct-reference, transitive, and severity calculators.
+- [x] Split impact analyzer into direct-reference, transitive, and severity calculators.
   - `src/impact/analyzer.ts` has a 221-line `analyzeImpact()` that handles option normalization, ignore/test matchers, bounded reference lookup, streaming emission, direct impact merging, file-level changes, and transitive propagation. The same module also owns severity scoring.
   - Suggested fix: extract `impact/direct.ts`, `impact/transitive.ts`, and `impact/severity.ts` around a shared `ImpactAnalysisContext` containing matchers, dependency stats, diagnostics, and emit hooks.
   - Correctness opportunity: include-test and ignore-glob policy is rebuilt across direct and transitive phases; one context would keep filtering and diagnostics consistent as new impact reasons are added.
