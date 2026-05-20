@@ -11,13 +11,13 @@ import {
   getGitBlobHashes,
   listChangedFiles,
   clearImportResolutionCaches,
-  mapLimit,
   stringifyUnknown,
   assertFilePathWithinRoot,
   normalizePath,
   resolveSpecifier,
   resolveWorkspacePackage,
 } from "../util.js";
+import { mapLimit } from "../util/concurrency.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { collectGraph, collectEdgesForFile } from "../graphs.js";
 import { buildGraphAdjacency } from "../graphs/adjacency.js";
@@ -89,12 +89,7 @@ import {
 } from "./types.js";
 import { isJsFallbackUnavailableError, isJsSyntaxTree } from "../jsFallback.js";
 import { isUnsupportedParserInputError } from "../languages/filePrep.js";
-import {
-  buildSqlFactCache,
-  buildSqlModuleIndex,
-  sqlCorpusSignature,
-  type SqlFactCache,
-} from "../sql/sourceGraph.js";
+import { buildSqlFactCache, buildSqlModuleIndex, sqlCorpusSignature, type SqlFactCache } from "../sql/sourceGraph.js";
 
 type IndexedFileGraphContext = {
   source: string;
@@ -504,12 +499,11 @@ function expandStarImports(modules: Map<FileId, ModuleIndex>): void {
       const target = modules.get(imp.resolved);
       if (!target) continue;
       const targetSupport = supportForFile(imp.resolved);
-      const exportedSymbols =
-        target.exports.filter((entry) => entry.type === "local").length
-          ? target.exports
-              .filter((entry): entry is Extract<typeof entry, { type: "local" }> => entry.type === "local")
-              .map((entry) => entry.target)
-          : target.locals.filter((local) => !local.localName.startsWith("_"));
+      const exportedSymbols = target.exports.filter((entry) => entry.type === "local").length
+        ? target.exports
+            .filter((entry): entry is Extract<typeof entry, { type: "local" }> => entry.type === "local")
+            .map((entry) => entry.target)
+        : target.locals.filter((local) => !local.localName.startsWith("_"));
       const seen = new Set<string>();
       for (const symbol of exportedSymbols) {
         if (!symbol.localName || seen.has(symbol.localName)) continue;
@@ -620,8 +614,7 @@ async function writeIndexManifestSnapshot(args: {
   manifestReport: ManifestReport | undefined;
   allowEmpty?: boolean;
 }): Promise<void> {
-  const files =
-    args.files instanceof Map ? Object.fromEntries(args.files) : args.files;
+  const files = args.files instanceof Map ? Object.fromEntries(args.files) : args.files;
   if (!Object.keys(files).length && !args.allowEmpty) return;
   const writeManifestStart = performance.now();
   const lastCommit = await getGitHead(args.projectRoot);
@@ -1044,15 +1037,8 @@ export async function buildProjectIndexIncremental(
   const graphOptions = normalizeGraphOptions(opts?.graph);
   const strictIncremental = opts?.incrementalStrict ?? false;
   if (strictIncremental && graphOptions.fast) graphOptions.fast = false;
-  const {
-    normalizedProjectRoot,
-    report,
-    timings,
-    totalStart,
-    cacheMode,
-    cacheEnabled,
-    onFallbackImportExtraction,
-  } = createIndexBuildRunState(projectRoot, opts, graphOptions);
+  const { normalizedProjectRoot, report, timings, totalStart, cacheMode, cacheEnabled, onFallbackImportExtraction } =
+    createIndexBuildRunState(projectRoot, opts, graphOptions);
   try {
     const manifestStart = performance.now();
     const manifest = await loadManifest(projectRoot, opts);
@@ -1104,11 +1090,7 @@ export async function buildProjectIndexIncremental(
           manifestReport.reason = "staleGitCommit";
           manifestReport.reused = false;
         }
-        logWithLevel(
-          opts?.logLevel,
-          "warn",
-          "Warning: Manifest commit is no longer available; rebuilding full index.",
-        );
+        logWithLevel(opts?.logLevel, "warn", "Warning: Manifest commit is no longer available; rebuilding full index.");
         const rebuiltIndex = await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
         if (manifestReport) {
           manifestReport.reason = "staleGitCommit";

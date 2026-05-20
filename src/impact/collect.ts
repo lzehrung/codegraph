@@ -1,5 +1,5 @@
 import type { ProjectIndex } from "../indexer.js";
-import { mapLimit } from "../util.js";
+import { mapLimit } from "../util/concurrency.js";
 import { analyzeImpact } from "./analyzer.js";
 import { locateChangedSymbolsWithLines } from "./map.js";
 import { createImpactIgnoreMatcher, normalizeImpactDiffFiles } from "./path.js";

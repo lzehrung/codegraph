@@ -12,7 +12,7 @@ import {
   type ProjectFileInfo,
 } from "./projectFiles/definitions.js";
 import { trimToNull } from "./projectFiles/parsers.js";
-import { mapLimitSemaphore } from "./semaphore.js";
+import { mapLimitSemaphore } from "./concurrency.js";
 
 export type {
   ProjectFileDefinition,

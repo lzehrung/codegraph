@@ -4,7 +4,7 @@ import { stringifyUnknown } from "../ast.js";
 import { normalizePath } from "../paths.js";
 import { listProjectFiles } from "../projectFiles.js";
 import { listResolutionCandidates } from "../resolutionCandidates.js";
-import { mapLimitSemaphore } from "../semaphore.js";
+import { mapLimitSemaphore } from "../concurrency.js";
 import { fileExists } from "../workspace.js";
 import { findNearestFile } from "./files.js";
 import {

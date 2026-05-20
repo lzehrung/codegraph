@@ -13,6 +13,7 @@ import {
 import { locateChangedSymbolsWithLines, mapChangedLinesToSymbols } from "../impact/map.js";
 import type { Hunk } from "../impact/types.js";
 import type { FileId, Range } from "../types.js";
+import { mapLimit } from "../util/concurrency.js";
 import { normalizePath, toProjectRelativePath } from "../util.js";
 import type { ReviewDiagnostics, ReviewTimingReport } from "../review.js";
 import type { DeletedFileSnapshot } from "./deleted.js";
@@ -178,23 +179,6 @@ function sameRange(left: Range, right: Range): boolean {
   return left.start.line === right.start.line && left.start.column === right.start.column;
 }
 
-async function runWithConcurrency<T, R>(items: T[], limit: number, worker: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = [];
-  let nextIndex = 0;
-  const safeLimit = Math.max(1, limit);
-  const runners = Array.from({ length: Math.min(safeLimit, items.length) }, async () => {
-    while (true) {
-      const current = nextIndex;
-      nextIndex += 1;
-      if (current >= items.length) break;
-      const item = items[current]!;
-      results[current] = await worker(item);
-    }
-  });
-  await Promise.all(runners);
-  return results;
-}
-
 export async function summarizeChangedFiles(input: {
   projectRoot: string;
   index: ProjectIndex;
@@ -301,7 +285,7 @@ export async function summarizeChangedFiles(input: {
   const referencesStart = performance.now();
   const referenceResults =
     includeSymbolDetails && maxCallsites > 0
-      ? await runWithConcurrency(defsToResolve, referenceConcurrency, async (def) => {
+      ? await mapLimit(defsToResolve, referenceConcurrency, async (def) => {
           const refs = await findReferences(
             index,
             { def },

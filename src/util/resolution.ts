@@ -22,6 +22,7 @@ export { resolveJvmPackageImportPaths } from "./resolution/jvm.js";
 export { getPhpComposerImplicitFiles } from "./resolution/php.js";
 export { resolvePythonModule } from "./resolution/python.js";
 export { loadNearestTsconfigFor, type MatchPathFn } from "./resolution/tsconfig.js";
+export { mapLimit } from "./concurrency.js";
 export { listResolutionCandidates } from "./resolutionCandidates.js";
 
 const resolveSpecifierCache = new Map<string, FileId | { external: string }>();
@@ -320,53 +321,4 @@ export function clearResolutionCaches(): void {
   clearImportResolutionCaches();
   clearTsconfigCache();
   clearWorkspaceCaches();
-}
-
-export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  if (!items.length) return [];
-  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : 1;
-
-  const results = new Array<R>(items.length);
-  let nextIndex = 0;
-  let activeCount = 0;
-  let resolveAll: (() => void) | null = null;
-  let rejectAll: ((err: unknown) => void) | null = null;
-  let aborted = false;
-
-  const startNext = (): void => {
-    if (aborted) return;
-    while (activeCount < safeLimit && nextIndex < items.length) {
-      if (aborted) return;
-      const index = nextIndex++;
-      const item = items[index]!;
-      activeCount++;
-
-      fn(item)
-        .then((result) => {
-          if (aborted) return;
-          results[index] = result;
-          activeCount--;
-          if (nextIndex < items.length) {
-            startNext();
-          } else if (activeCount === 0 && resolveAll) {
-            resolveAll();
-          }
-        })
-        .catch((err) => {
-          if (aborted) return;
-          aborted = true;
-          activeCount--;
-          if (rejectAll) rejectAll(err);
-        });
-    }
-  };
-
-  return new Promise<R[]>((resolve, reject) => {
-    resolveAll = () => resolve(results);
-    rejectAll = reject;
-    startNext();
-    if (!aborted && nextIndex >= items.length && activeCount === 0) {
-      resolve(results);
-    }
-  });
 }

@@ -84,7 +84,7 @@ No dependency cycles were reported. The highest remaining concentration is in:
     - Keep `src/util/resolution.ts` as a facade only.
   - Add tests for cache clearing and language-specific resolution parity after the split.
 
-- [ ] Move generic concurrency helpers out of resolution code and consolidate duplicates.
+- [x] Move generic concurrency helpers out of resolution code and consolidate duplicates.
   - Finding: `src/util/resolution.ts` exports `mapLimit`, `src/review.ts` has a local `runWithConcurrency`, and `src/util/semaphore.ts` has `mapLimitSemaphore`.
   - Target: a single `src/util/concurrency.ts` with documented behavior for order preservation, invalid limits, and rejection handling.
   - Update users in `graph-builder`, `indexer/build-index`, impact modules, SQL modules, review, and agent explain.

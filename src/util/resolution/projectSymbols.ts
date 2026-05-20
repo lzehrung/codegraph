@@ -1,6 +1,6 @@
 import { normalizePath } from "../paths.js";
 import { listProjectFiles } from "../projectFiles.js";
-import { mapLimitSemaphore } from "../semaphore.js";
+import { mapLimitSemaphore } from "../concurrency.js";
 
 export type LanguageProjectSymbolIndex = {
   files: string[];

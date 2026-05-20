@@ -10,13 +10,8 @@ import { extractSqlFactsFromSource, sqlObjectBaseName } from "../sql/extractFact
 import type { SqlStatementFact } from "../sql/types.js";
 import type { Range } from "../types.js";
 import { normalizePath } from "../util.js";
-import { mapLimit } from "../util/resolution.js";
-import {
-  boundAgentList,
-  defaultAgentLimit,
-  emptyAgentBoundedList,
-  type BoundedAgentList,
-} from "./bounds.js";
+import { mapLimit } from "../util/concurrency.js";
+import { boundAgentList, defaultAgentLimit, emptyAgentBoundedList, type BoundedAgentList } from "./bounds.js";
 import {
   formatAgentFileHandle,
   formatAgentSqlHandle,
