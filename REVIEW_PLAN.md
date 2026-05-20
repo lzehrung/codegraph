@@ -61,7 +61,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Suggested fix: extract a `CliCommandContext` builder, a `resolveCliScanPlan()` helper that returns files plus deleted/existing git state once, and move the remaining in-file command bodies into focused modules. Start with `graph`, `index`, `impact`, and `review` because they contain the most duplicated build/index/report plumbing.
   - Tests: CLI regression coverage for `graph --sqlite`, `graph --symbols-detailed`, `index --json`, `impact --pretty`, `review --summary`, and include-root/git-diff combinations.
 
-- [ ] Factor import extraction into language-specific extractors with a shared binding sink.
+- [x] Factor import extraction into language-specific extractors with a shared binding sink.
   - `src/indexer/imports.ts` still has a 1,018-line `collectImportsForFile()` orchestration block. It now shares implicit binding conversion, but graph-only handling, Python regex import extraction, statement overrides, native capture handling, and JS/CJS fallback remain coupled in one function.
   - Suggested fix: introduce an `ImportExtractionContext` with `resolveFrom()`, `pushBinding()`, fallback reporting, and source/language metadata; move Python, JS/CJS fallback, graph-only, and native statement override logic into separate modules under `src/indexer/imports/`.
   - Tests: import binding parity for TypeScript/JavaScript, Python multiline and alias forms, Java/Kotlin/C#/Go/Rust/PHP native and fallback paths, and graph-only module specifier behavior.
