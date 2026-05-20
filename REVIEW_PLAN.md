@@ -78,7 +78,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Correctness opportunity: make deleted/missing/ignored file status transitions explicit in one data structure instead of spreading them across changed-file sets, diff maps, and final summary branches.
   - Tests: raw diff, git `WORKTREE`, deleted files, missing explicit files, ignored diff files, include-symbol-details, SQL context, and candidate-test sorting.
 
-- [ ] Share full and incremental index-build state machines.
+- [x] Share full and incremental index-build state machines.
   - `src/indexer/build-index.ts` has two large overlapping flows: `buildIndexFromFileListShared()` at 303 lines and `buildProjectIndexIncremental()` at 371 lines. Both initialize reports, graph options, file signatures, worker pools, parsed caches, bloom filters, JSON dependency modules, graph adjacency, manifest writes, and final `ProjectIndex` assembly.
   - Suggested fix: extract reusable helpers for `IndexBuildRunState`, `prepareFileSignatures()`, `buildFileModules()`, `writeIndexManifest()`, `finalizeProjectIndex()`, and parsed-cache trimming. Keep full and incremental file-selection logic separate, but share execution and finalization.
   - Performance opportunity: centralizing file signature and cached-edge reuse should make it easier to avoid recomputing graph edges or SQL fact caches when only module cache state changed.

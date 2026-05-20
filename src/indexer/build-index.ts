@@ -17,7 +17,6 @@ import {
   normalizePath,
   resolveSpecifier,
   resolveWorkspacePackage,
-  type ProjectFileInfo,
 } from "../util.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { collectGraph, collectEdgesForFile } from "../graphs.js";
@@ -79,6 +78,7 @@ import {
   type GraphDeltaReport,
   type ImportBinding,
   type IncrementalBuildOptions,
+  type ManifestReport,
   type ModuleIndex,
   type NativeBackendFallbackReason,
   type ParserBackendDegradationReport,
@@ -546,6 +546,152 @@ type BuildIndexHelperOptions = {
   ignoreExistingManifest?: boolean;
 };
 
+type IndexBuildRunState = {
+  normalizedProjectRoot: string;
+  report: BuildReport | undefined;
+  timings: BuildReport["timings"] | undefined;
+  totalStart: number;
+  cacheMode: NonNullable<BuildOptions["cache"]>;
+  cacheEnabled: boolean;
+  graphOptions: GraphBuildOptions;
+  onFallbackImportExtraction: ((event: FallbackImportExtractionEvent) => void) | undefined;
+};
+
+function createIndexBuildRunState(
+  projectRoot: string,
+  opts: BuildOptions | undefined,
+  graphOptions = normalizeGraphOptions(opts?.graph),
+): IndexBuildRunState {
+  const report = opts?.report;
+  initNativeBackendReport(report);
+  const cacheMode = opts?.cache ?? "off";
+  return {
+    normalizedProjectRoot: normalizePath(projectRoot),
+    report,
+    timings: report?.timings,
+    totalStart: performance.now(),
+    cacheMode,
+    cacheEnabled: cacheMode !== "off",
+    graphOptions,
+    onFallbackImportExtraction: createFallbackImportExtractionHandler(report, opts),
+  };
+}
+
+function buildConcurrency(opts: BuildOptions | undefined): number {
+  return Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
+}
+
+function parsedCacheMaxEntries(opts: BuildOptions | undefined): number {
+  return Math.max(1, opts?.parsedCacheMaxEntries ?? 1024);
+}
+
+async function prepareFileSignatures(args: {
+  files: string[];
+  opts: BuildOptions | undefined;
+  gitSigMap: Map<string, string>;
+  cacheEnabled: boolean;
+  concurrency: number;
+}): Promise<Map<string, FileSignature>> {
+  const entries = await mapLimit(args.files, args.concurrency, async (file) => {
+    const sigInfo = await fileSignature(file, args.opts?.cacheStrict, args.gitSigMap.get(file), {
+      forceContentHash: args.cacheEnabled,
+    });
+    return [file, sigInfo] as const;
+  });
+  return new Map(entries);
+}
+
+function toManifestFileEntry(entry: GraphCacheEntry): ManifestFileEntry | undefined {
+  if (!entry.sig) return undefined;
+  return {
+    sig: entry.sig,
+    ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
+    ...(entry.sqlCorpusSig ? { sqlCorpusSig: entry.sqlCorpusSig } : {}),
+    edges: entry.edges,
+  };
+}
+
+async function writeIndexManifestSnapshot(args: {
+  projectRoot: string;
+  opts: BuildOptions | undefined;
+  graphOptions: GraphBuildOptions;
+  files: Map<string, ManifestFileEntry> | Record<string, ManifestFileEntry>;
+  timings: BuildReport["timings"] | undefined;
+  manifestReport: ManifestReport | undefined;
+  allowEmpty?: boolean;
+}): Promise<void> {
+  const files =
+    args.files instanceof Map ? Object.fromEntries(args.files) : args.files;
+  if (!Object.keys(files).length && !args.allowEmpty) return;
+  const writeManifestStart = performance.now();
+  const lastCommit = await getGitHead(args.projectRoot);
+  const configHashResult = await computeConfigHash(args.projectRoot, args.opts?.logLevel);
+  const configHash = recordConfigHashResult(args.manifestReport, configHashResult, args.opts?.logLevel);
+  const manifestData: IndexManifest = {
+    version: MANIFEST_VERSION,
+    projectRoot: path.resolve(args.projectRoot).replace(/\\/g, "/"),
+    updatedAt: Date.now(),
+    ...(lastCommit ? { lastCommit } : {}),
+    ...(configHash ? { configHash } : {}),
+    graphOptions: args.graphOptions,
+    buildOptions: summarizeBuildOptions(args.opts),
+    files,
+  };
+  await writeManifest(args.projectRoot, args.opts, manifestData);
+  if (args.timings) {
+    args.timings.writeManifestMs = Math.round(performance.now() - writeManifestStart);
+  }
+}
+
+function retainedParsedCache(
+  parsedMap: Map<string, ParsedFileContext>,
+  opts: BuildOptions | undefined,
+): Map<string, ParsedFileContext> | undefined {
+  const keepParsed = opts?.keepParsed ?? false;
+  const maxParsedEntries = parsedCacheMaxEntries(opts);
+  if (!keepParsed) {
+    parsedMap.clear();
+    return undefined;
+  }
+  while (parsedMap.size > maxParsedEntries) {
+    const oldest = parsedMap.keys().next().value;
+    if (!oldest) break;
+    parsedMap.delete(oldest);
+  }
+  return parsedMap;
+}
+
+async function finalizeProjectIndex(args: {
+  projectRoot: string;
+  normalizedProjectRoot: string;
+  opts: BuildOptions | undefined;
+  timings: BuildReport["timings"] | undefined;
+  totalStart: number;
+  graph: Graph;
+  modules: Map<FileId, ModuleIndex>;
+  parsedMap: Map<string, ParsedFileContext>;
+  bloomFilterCache: import("../util/bloomFilter.js").BloomFilterCache | undefined;
+}): Promise<ProjectIndex> {
+  if (args.timings) args.timings.totalMs = Math.round(performance.now() - args.totalStart);
+  const projectFiles = await discoverProjectFiles(args.projectRoot, {
+    ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
+  });
+  const parsed = retainedParsedCache(args.parsedMap, args.opts);
+  return {
+    graph: args.graph,
+    graphAdjacency: buildGraphAdjacency(args.graph),
+    modules: args.modules,
+    byFile: args.modules,
+    projectRoot: args.normalizedProjectRoot,
+    ...(args.opts?.native ? { nativeMode: args.opts.native } : {}),
+    exportCache: new Map(),
+    scopeCache: new Map(),
+    ...(parsed ? { parsed } : {}),
+    ...(args.bloomFilterCache ? { bloomFilters: args.bloomFilterCache } : {}),
+    projectFiles,
+  };
+}
+
 async function buildProjectIndexFromExport(
   projectRoot: string,
   opts?: BuildOptions,
@@ -561,24 +707,25 @@ async function buildIndexFromFileListShared(
   helperOpts?: BuildIndexHelperOptions,
 ): Promise<ProjectIndex> {
   clearImportResolutionCaches();
-  const normalizedProjectRoot = normalizePath(projectRoot);
-  const report = opts?.report;
-  const timings = report?.timings;
-  const totalStart = performance.now();
+  const {
+    normalizedProjectRoot,
+    report,
+    timings,
+    totalStart,
+    cacheMode,
+    cacheEnabled,
+    graphOptions,
+    onFallbackImportExtraction,
+  } = createIndexBuildRunState(projectRoot, opts);
   const manifestMode: ManifestMode = helperOpts?.manifestMode ?? "off";
   const useManifest = manifestMode !== "off";
   const shouldWriteManifest = manifestMode === "read-write";
-  const cacheMode = opts?.cache ?? "off";
-  const cacheEnabled = cacheMode !== "off";
-  const graphOptions = normalizeGraphOptions(opts?.graph);
   initManifestReport(report, useManifest, false);
-  initNativeBackendReport(report);
   const normalizedFiles = Array.from(new Set(normalizeIndexedFileInputs(projectRoot, rawFiles ?? [], "Index file")));
   if (!normalizedFiles.length && helperOpts?.warnNoFilesMessage) {
     logWithLevel(opts?.logLevel, "warn", helperOpts.warnNoFilesMessage);
   }
   const fileReport = initFileReport(report);
-  const onFallbackImportExtraction = createFallbackImportExtractionHandler(report, opts);
   if (fileReport) fileReport.total = normalizedFiles.length;
   const manifestStart = performance.now();
   const manifest = useManifest && !helperOpts?.ignoreExistingManifest ? await loadManifest(projectRoot, opts) : null;
@@ -605,25 +752,22 @@ async function buildIndexFromFileListShared(
   }
   const manifestEntries = shouldWriteManifest ? new Map<string, ManifestFileEntry>() : undefined;
   const modules = new Map<FileId, ModuleIndex>();
-  const fileSignatures = new Map<string, FileSignature>();
   const gitAvailable = await isGitRepo(projectRoot);
   const useGitSignatures = gitAvailable && (cacheMode !== "off" || opts?.cacheStrict);
   const gitSigMap = useGitSignatures
     ? await getGitBlobHashes(projectRoot, normalizedFiles, { gitAvailable })
     : new Map<string, string>();
-  const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
+  const conc = buildConcurrency(opts);
   const sqlFiles = normalizedFiles
     .filter((file) => path.extname(file).toLowerCase() === ".sql")
     .sort((left, right) => left.localeCompare(right));
-  const sqlFileSignatureEntries = await mapLimit(sqlFiles, conc, async (file) => {
-    const sigInfo = await fileSignature(file, opts?.cacheStrict, gitSigMap.get(file), {
-      forceContentHash: cacheEnabled,
-    });
-    return [file, sigInfo] as const;
+  const fileSignatures = await prepareFileSignatures({
+    files: sqlFiles,
+    opts,
+    gitSigMap,
+    cacheEnabled,
+    concurrency: conc,
   });
-  for (const [file, sigInfo] of sqlFileSignatureEntries) {
-    fileSignatures.set(file, sigInfo);
-  }
   const sqlCorpusSig = sqlCorpusSignature(sqlFiles, fileSignatures);
   let sqlFactCachePromise: Promise<SqlFactCache> | undefined;
   const getSqlFactCache = (): Promise<SqlFactCache> => {
@@ -653,13 +797,9 @@ async function buildIndexFromFileListShared(
     const graph: Graph = { nodes: new Set(normalizedFiles), edges: [] };
     const onFileEdges = manifestEntries
       ? (file: string, entry: GraphCacheEntry) => {
-          if (!entry?.sig) return;
-          manifestEntries.set(file, {
-            sig: entry.sig,
-            ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
-            ...(entry.sqlCorpusSig ? { sqlCorpusSig: entry.sqlCorpusSig } : {}),
-            edges: entry.edges,
-          });
+          const manifestEntry = toManifestFileEntry(entry);
+          if (!manifestEntry) return;
+          manifestEntries.set(file, manifestEntry);
         }
       : undefined;
     let processedFiles = 0;
@@ -726,7 +866,7 @@ async function buildIndexFromFileListShared(
             workspaceConfig,
             workerSetup,
             parsedMap,
-            parsedCacheMaxEntries: Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
+            parsedCacheMaxEntries: parsedCacheMaxEntries(opts),
             jsonDependencies,
             bloomFilterCache,
             onFallbackImportExtraction,
@@ -805,54 +945,27 @@ async function buildIndexFromFileListShared(
       ensureJsonModule(modules, jsonPath);
     }
     expandStarImports(modules);
-    if (manifestEntries && manifestEntries.size > 0) {
-      const writeManifestStart = performance.now();
-      const lastCommit = await getGitHead(projectRoot);
-      const configHashResult = await computeConfigHash(projectRoot, opts?.logLevel);
-      const configHash = recordConfigHashResult(report?.manifest, configHashResult, opts?.logLevel);
-      const manifestData: IndexManifest = {
-        version: MANIFEST_VERSION,
-        projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
-        updatedAt: Date.now(),
-        ...(lastCommit ? { lastCommit } : {}),
-        ...(configHash ? { configHash } : {}),
+    if (manifestEntries) {
+      await writeIndexManifestSnapshot({
+        projectRoot,
+        opts,
         graphOptions,
-        buildOptions: summarizeBuildOptions(opts),
-        files: Object.fromEntries(manifestEntries),
-      };
-      await writeManifest(projectRoot, opts, manifestData);
-      if (timings) {
-        timings.writeManifestMs = Math.round(performance.now() - writeManifestStart);
-      }
+        files: manifestEntries,
+        timings,
+        manifestReport: report?.manifest,
+      });
     }
-    if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
-    const projectFiles = await discoverProjectFiles(projectRoot, {
-      ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-    });
-    const keepParsed = opts?.keepParsed ?? false;
-    const maxParsedEntries = Math.max(1, opts?.parsedCacheMaxEntries ?? 1024);
-    if (!keepParsed) {
-      parsedMap.clear();
-    } else {
-      while (parsedMap.size > maxParsedEntries) {
-        const oldest = parsedMap.keys().next().value;
-        if (!oldest) break;
-        parsedMap.delete(oldest);
-      }
-    }
-    return {
+    return finalizeProjectIndex({
+      projectRoot,
+      normalizedProjectRoot,
+      opts,
+      timings,
+      totalStart,
       graph,
-      graphAdjacency: buildGraphAdjacency(graph),
       modules,
-      byFile: modules,
-      projectRoot: normalizedProjectRoot,
-      ...(opts?.native ? { nativeMode: opts.native } : {}),
-      exportCache: new Map(),
-      scopeCache: new Map(),
-      parsed: keepParsed ? parsedMap : undefined,
-      ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
-      projectFiles,
-    };
+      parsedMap,
+      bloomFilterCache,
+    });
   } finally {
     await teardownWorkerPool(workerSetup, report);
   }
@@ -928,21 +1041,22 @@ export async function buildProjectIndexIncremental(
   opts?: IncrementalBuildOptions,
 ): Promise<ProjectIndex> {
   clearImportResolutionCaches();
-  const normalizedProjectRoot = normalizePath(projectRoot);
-  const report = opts?.report;
-  initNativeBackendReport(report);
-  const timings = report?.timings;
-  const totalStart = performance.now();
-  const cacheMode = opts?.cache ?? "off";
-  const cacheEnabled = cacheMode !== "off";
+  const graphOptions = normalizeGraphOptions(opts?.graph);
+  const strictIncremental = opts?.incrementalStrict ?? false;
+  if (strictIncremental && graphOptions.fast) graphOptions.fast = false;
+  const {
+    normalizedProjectRoot,
+    report,
+    timings,
+    totalStart,
+    cacheMode,
+    cacheEnabled,
+    onFallbackImportExtraction,
+  } = createIndexBuildRunState(projectRoot, opts, graphOptions);
   try {
-    const onFallbackImportExtraction = createFallbackImportExtractionHandler(report, opts);
     const manifestStart = performance.now();
     const manifest = await loadManifest(projectRoot, opts);
     if (timings) timings.manifestMs = Math.round(performance.now() - manifestStart);
-    const graphOptions = normalizeGraphOptions(opts?.graph);
-    const strictIncremental = opts?.incrementalStrict ?? false;
-    if (strictIncremental && graphOptions.fast) graphOptions.fast = false;
     const manifestUsed = !!manifest;
     const manifestReport = initManifestReport(report, manifestUsed, false);
     if (manifestReport && !manifestUsed) manifestReport.reason = "missing";
@@ -1050,24 +1164,15 @@ export async function buildProjectIndexIncremental(
       }
     }
     if (allFiles.size === 0) {
-      const writeManifestStart = performance.now();
-      const lastCommit = await getGitHead(projectRoot);
-      const configHashResult = await computeConfigHash(projectRoot, opts?.logLevel);
-      const configHash = recordConfigHashResult(manifestReport, configHashResult, opts?.logLevel);
-      const manifestData: IndexManifest = {
-        version: MANIFEST_VERSION,
-        projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
-        updatedAt: Date.now(),
-        ...(lastCommit ? { lastCommit } : {}),
-        ...(configHash ? { configHash } : {}),
+      await writeIndexManifestSnapshot({
+        projectRoot,
+        opts,
         graphOptions,
-        buildOptions: summarizeBuildOptions(opts),
         files: {},
-      };
-      await writeManifest(projectRoot, opts, manifestData);
-      if (timings) {
-        timings.writeManifestMs = Math.round(performance.now() - writeManifestStart);
-      }
+        timings,
+        manifestReport,
+        allowEmpty: true,
+      });
       return {
         graph: { nodes: new Set(), edges: [] },
         graphAdjacency: buildGraphAdjacency({ nodes: new Set(), edges: [] }),
@@ -1080,14 +1185,20 @@ export async function buildProjectIndexIncremental(
         parsed: new Map(),
       };
     }
-    const conc = Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
+    const conc = buildConcurrency(opts);
     const workerSetup = await setupWorkerPool(opts);
     try {
-      const fileSignatures = new Map<string, FileSignature>();
       const useGitSignatures = gitAvailable;
       const gitSigMap = useGitSignatures
         ? await getGitBlobHashes(projectRoot, Array.from(allFiles), { gitAvailable })
         : new Map<string, string>();
+      const fileSignatures = await prepareFileSignatures({
+        files: Array.from(allFiles),
+        opts,
+        gitSigMap,
+        cacheEnabled,
+        concurrency: conc,
+      });
       const changedFiles = new Set<string>();
       const modules = new Map<FileId, ModuleIndex>();
       const parsedMap = new Map<string, ParsedFileContext>();
@@ -1105,10 +1216,8 @@ export async function buildProjectIndexIncremental(
       dependentFilesOfDeletedTracked.forEach(markAsChanged);
       if (fileReport) fileReport.changed = changedFiles.size;
       for (const file of allFiles) {
-        const sigInfo = await fileSignature(file, opts?.cacheStrict, gitSigMap.get(file), {
-          forceContentHash: cacheEnabled,
-        });
-        fileSignatures.set(file, sigInfo);
+        const sigInfo = fileSignatures.get(file);
+        if (!sigInfo) continue;
         const entry = trackedEntries[file];
         const hasMatchingGitSig = !!entry?.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
         const hasMatchingSig = entry?.sig === sigInfo.sig;
@@ -1154,7 +1263,7 @@ export async function buildProjectIndexIncremental(
               workspaceConfig,
               workerSetup,
               parsedMap,
-              parsedCacheMaxEntries: Math.max(1, opts?.parsedCacheMaxEntries ?? 1024),
+              parsedCacheMaxEntries: parsedCacheMaxEntries(opts),
               jsonDependencies,
               bloomFilterCache,
               onFallbackImportExtraction,
@@ -1229,64 +1338,31 @@ export async function buildProjectIndexIncremental(
               ...(baseGraph ? { baseGraph } : {}),
               replaceFiles: new Set<string>(changedFiles),
               onFileEdges: (file, entry) => {
-                if (!entry?.sig) return;
-                manifestEntries.set(file, {
-                  sig: entry.sig,
-                  ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
-                  ...(entry.sqlCorpusSig ? { sqlCorpusSig: entry.sqlCorpusSig } : {}),
-                  edges: entry.edges,
-                });
+                const manifestEntry = toManifestFileEntry(entry);
+                if (!manifestEntry) return;
+                manifestEntries.set(file, manifestEntry);
               },
             });
       if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
-      if (manifestEntries.size > 0) {
-        const writeManifestStart = performance.now();
-        const lastCommit = await getGitHead(projectRoot);
-        const configHashResult = await computeConfigHash(projectRoot, opts?.logLevel);
-        const configHash = recordConfigHashResult(manifestReport, configHashResult, opts?.logLevel);
-        const manifestData: IndexManifest = {
-          version: MANIFEST_VERSION,
-          projectRoot: path.resolve(projectRoot).replace(/\\/g, "/"),
-          updatedAt: Date.now(),
-          ...(lastCommit ? { lastCommit } : {}),
-          ...(configHash ? { configHash } : {}),
-          graphOptions,
-          buildOptions: summarizeBuildOptions(opts),
-          files: Object.fromEntries(manifestEntries),
-        };
-        await writeManifest(projectRoot, opts, manifestData);
-        if (timings) {
-          timings.writeManifestMs = Math.round(performance.now() - writeManifestStart);
-        }
-      }
-      if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
-      const projectFiles: ProjectFileInfo[] = await discoverProjectFiles(projectRoot, {
-        ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+      await writeIndexManifestSnapshot({
+        projectRoot,
+        opts,
+        graphOptions,
+        files: manifestEntries,
+        timings,
+        manifestReport,
       });
-      const keepParsed = opts?.keepParsed ?? false;
-      const maxParsedEntries = Math.max(1, opts?.parsedCacheMaxEntries ?? 1024);
-      if (!keepParsed) {
-        parsedMap.clear();
-      } else {
-        while (parsedMap.size > maxParsedEntries) {
-          const oldest = parsedMap.keys().next().value;
-          if (!oldest) break;
-          parsedMap.delete(oldest);
-        }
-      }
-      return {
+      return finalizeProjectIndex({
+        projectRoot,
+        normalizedProjectRoot,
+        opts,
+        timings,
+        totalStart,
         graph,
-        graphAdjacency: buildGraphAdjacency(graph),
         modules,
-        byFile: modules,
-        projectRoot: normalizedProjectRoot,
-        ...(opts?.native ? { nativeMode: opts.native } : {}),
-        exportCache: new Map(),
-        scopeCache: new Map(),
-        parsed: keepParsed ? parsedMap : undefined,
-        ...(bloomFilterCache ? { bloomFilters: bloomFilterCache } : {}),
-        projectFiles,
-      };
+        parsedMap,
+        bloomFilterCache,
+      });
     } finally {
       await teardownWorkerPool(workerSetup, report);
     }
