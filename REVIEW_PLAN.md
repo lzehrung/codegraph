@@ -66,7 +66,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Suggested fix: introduce an `ImportExtractionContext` with `resolveFrom()`, `pushBinding()`, fallback reporting, and source/language metadata; move Python, JS/CJS fallback, graph-only, and native statement override logic into separate modules under `src/indexer/imports/`.
   - Tests: import binding parity for TypeScript/JavaScript, Python multiline and alias forms, Java/Kotlin/C#/Go/Rust/PHP native and fallback paths, and graph-only module specifier behavior.
 
-- [ ] Decompose detailed symbol graph collection into reusable AST passes.
+- [x] Decompose detailed symbol graph collection into reusable AST passes.
   - `src/graphs/symbol-graph-detailed.ts` has a 690-line `buildSymbolGraphDetailed()` with nested walkers for definitions, aliases, member chains, calls, class inheritance, decorators, and Rust impls.
   - Suggested fix: build per-file indexes (`localsByName`, imported alias maps, namespace maps), extract small collectors for `uses/calls`, member chains, decorators, class inheritance, and Rust impls, and run one merged traversal per function body where possible.
   - Performance opportunity: current function-body processing walks the same subtree separately for alias uses, member uses, and calls; a merged visitor should reduce repeated AST traversal on large functions.
