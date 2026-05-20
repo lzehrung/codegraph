@@ -51,7 +51,7 @@ No dependency cycles were reported. The highest remaining concentration is in:
 
 ### Decomposition And Surface Area
 
-- [ ] Extract the remaining command handlers from `src/cli.ts`.
+- [x] Extract the remaining command handlers from `src/cli.ts`.
   - Current shape: `runCliWithActiveRuntime` still owns command context creation, root/discovery resolution, changed-file resolution, graph output, index output, `dumpmod`, `goto`, `refs`, `grep`, `inspect`, and `hotspots`.
   - Target split:
     - `src/cli/context.ts` for parsed args, runtime writers, root/discovery/include-root resolution, progress setup, and shared stdin/report helpers.
