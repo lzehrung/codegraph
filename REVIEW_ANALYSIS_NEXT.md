@@ -74,7 +74,7 @@ No dependency cycles were reported. The highest remaining concentration is in:
     - `src/review/report.ts` for final assembly.
   - Add focused tests around deleted-file cases, missing explicit files, review presets, candidate ordering, and diagnostics.
 
-- [ ] Split `src/util/resolution.ts` into language/domain-specific modules.
+- [x] Split `src/util/resolution.ts` into language/domain-specific modules.
   - Current shape: TS config paths, graph-only resolution, PHP Composer/class discovery, Python module resolution, Node package resolution, cache clearing, and generic `mapLimit` live together.
   - Target split:
     - `src/util/resolution/tsconfig.ts`
