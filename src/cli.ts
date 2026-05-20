@@ -14,7 +14,7 @@ import {
   findReferences,
 } from "./indexer.js";
 import type { BuildOptions, BuildReport } from "./indexer/types.js";
-import { buildReviewReport, type ReviewBuildReport, type ReviewDepth } from "./review.js";
+import type { ReviewBuildReport } from "./review.js";
 import {
   collectGraph,
   graphToMermaid,
@@ -33,11 +33,7 @@ import {
   getHotspots,
   type GraphBuildOptions,
   type SymbolGraph,
-  type SymbolNodeKind,
 } from "./graphs.js";
-import { analyzeImpactFromDiff } from "./impact/index.js";
-import type { CompactImpactReport, ImpactItem, ImpactOptions, ImpactReport, ChangedSymbol } from "./impact/types.js";
-import type { CandidateTestFile } from "./impact/context.js";
 import { writeGraphSqlite, updateGraphSqlite } from "./sqlite.js";
 import {
   isNativeTreeSitterAvailable,
@@ -53,9 +49,11 @@ import { handleExplainCommand } from "./cli/explain.js";
 import { handleGraphDeltaCommand } from "./cli/graphDelta.js";
 import { handleGraphQueryCommand } from "./cli/graphQueries.js";
 import { CLI_HELP_TEXT, helpTextForCommand, isKnownCliCommand } from "./cli/help.js";
+import { handleImpactCommand } from "./cli/impact.js";
 import { handleMcpServeCommand } from "./cli/mcp.js";
 import { isCliValueOption, parseCacheModeOption, parsePositiveIntegerOption } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
+import { handleReviewCommand } from "./cli/review.js";
 import { handleSearchCommand } from "./cli/search.js";
 import { handleSkillCommand } from "./cli/skill.js";
 import { handleSqlCommand } from "./cli/sql.js";
@@ -804,306 +802,6 @@ function stabilizeSymbolGraph(graph: SymbolGraph): SymbolGraph {
   return { nodes: new Map(nodeEntries), edges };
 }
 
-const SYMBOL_NODE_KINDS: SymbolNodeKind[] = [
-  "function",
-  "class",
-  "variable",
-  "interface",
-  "type",
-  "default",
-  "import",
-  "namespaceImport",
-];
-
-function symbolNodeKindFromString(kind?: string): SymbolNodeKind {
-  return kind && SYMBOL_NODE_KINDS.includes(kind as SymbolNodeKind) ? (kind as SymbolNodeKind) : "variable";
-}
-
-function ensureImpactReport(report: ImpactReport | CompactImpactReport): ImpactReport {
-  if (!("files" in report)) return report;
-  const files = report.files;
-  const resolveFilePath = (index: number): string => {
-    const file = files[index];
-    if (!file) {
-      throw new Error(`Missing file path for index ${index} in compact impact report`);
-    }
-    return file;
-  };
-  const resolveSurfaceArea = (surfaceArea: CompactImpactReport["surfaceArea"]) => ({
-    files: surfaceArea.files.map((item) => ({
-      file: resolveFilePath(item.file),
-      fanIn: item.fanIn,
-      fanOut: item.fanOut,
-      changed: item.changed,
-      impacted: item.impacted,
-    })),
-    topFanIn: surfaceArea.topFanIn.map((file) => resolveFilePath(file)),
-    topFanOut: surfaceArea.topFanOut.map((file) => resolveFilePath(file)),
-  });
-  const changedFiles = report.changedFiles.map((cf) => ({
-    file: resolveFilePath(cf.file),
-    hunks: cf.hunks,
-  }));
-  const changedSymbols = report.changedSymbols.map((cs) => {
-    const symbol: ChangedSymbol = {
-      id: cs.id,
-      file: resolveFilePath(cs.file),
-      name: cs.name,
-      kind: cs.kind,
-      exported: cs.exported,
-      range: cs.range,
-      ...(cs.typeOnly !== undefined ? { typeOnly: cs.typeOnly } : {}),
-    };
-    return symbol;
-  });
-  const impacted: ImpactItem[] = report.impacted.map((item) => {
-    const impact: ImpactItem = {
-      file: resolveFilePath(item.file),
-      symbols: item.symbols,
-      reasons: item.reasons,
-      severity: item.severity,
-    };
-    if (item.depth !== undefined) impact.depth = item.depth;
-    if (item.typeOnly !== undefined) impact.typeOnly = item.typeOnly;
-    if (item.explain !== undefined) impact.explain = item.explain;
-    const maybeRefs = "refs" in item ? (item as { refs?: ImpactItem["refs"] }).refs : undefined;
-    if (maybeRefs !== undefined) impact.refs = maybeRefs;
-    return impact;
-  });
-  const suggestions = report.suggestions?.map((suggestion) => ({
-    file: resolveFilePath(suggestion.file),
-    kind: suggestion.kind,
-    ...(suggestion.range ? { range: suggestion.range } : {}),
-    ...(suggestion.symbol ? { symbol: suggestion.symbol } : {}),
-    ...(suggestion.relatedFile !== undefined ? { relatedFile: resolveFilePath(suggestion.relatedFile) } : {}),
-    ...(suggestion.details ? { details: suggestion.details } : {}),
-    confidence: suggestion.confidence,
-  }));
-  const exportSummary = report.exportSummary?.map((entry) => ({
-    file: resolveFilePath(entry.file),
-    symbols: entry.symbols,
-  }));
-  const reexportChains = report.reexportChains
-    ? {
-        chains: report.reexportChains.chains.map((entry) => ({
-          symbol: entry.symbol,
-          file: resolveFilePath(entry.file),
-          paths: entry.paths.map((pathChain) => pathChain.map((file) => resolveFilePath(file))),
-        })),
-      }
-    : undefined;
-  const topImpacts = report.topImpacts?.map((item) => ({
-    file: resolveFilePath(item.file),
-    symbols: item.symbols,
-    reasons: item.reasons,
-    severity: item.severity,
-    ...(item.depth !== undefined ? { depth: item.depth } : {}),
-    ...(item.typeOnly !== undefined ? { typeOnly: item.typeOnly } : {}),
-    ...(item.explain ? { explain: item.explain } : {}),
-  }));
-  const clusters = report.clusters.map((cluster) => ({
-    id: cluster.id,
-    files: cluster.files.map((file) => resolveFilePath(file)),
-    changedFiles: cluster.changedFiles.map((file) => resolveFilePath(file)),
-    totalSeverity: cluster.totalSeverity,
-  }));
-  const fileEdges = report.graph.fileEdges.map((edge) => ({
-    from: resolveFilePath(edge.from),
-    to: resolveFilePath(edge.to),
-    ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
-  }));
-  const symbolEdges = report.graph.symbolEdges.map((edge) => ({
-    from: edge.from,
-    to: edge.to,
-    label: edge.label,
-  }));
-  const result: ImpactReport = {
-    schemaVersion: report.schemaVersion,
-    format: "full",
-    changedFiles,
-    changedSymbols,
-    impacted,
-    ...(suggestions ? { suggestions } : {}),
-    ...(exportSummary ? { exportSummary } : {}),
-    ...(reexportChains ? { reexportChains } : {}),
-    ...(topImpacts ? { topImpacts } : {}),
-    surfaceArea: resolveSurfaceArea(report.surfaceArea),
-    clusters,
-    graph: {
-      fileEdges,
-      symbolEdges,
-    },
-  };
-  if (report.projectFiles) result.projectFiles = report.projectFiles;
-  if (report.warning) result.warning = report.warning;
-  return result;
-}
-
-const IMPACT_REASON_LABELS: Record<ImpactItem["reasons"][number], string> = {
-  directRef: "reason: direct reference",
-  namespaceMember: "reason: namespace member",
-  importAlias: "reason: import alias",
-  transitive: "reason: transitive dependency",
-  exportChain: "reason: export chain",
-  fileLevelChange: "reason: file-level change",
-};
-
-function formatImpactReasonLabel(item: Pick<ImpactItem, "reasons" | "explain">): string {
-  const primaryReason = item.explain?.reason ?? item.reasons[0];
-  if (!primaryReason) return "reason: impact";
-  return IMPACT_REASON_LABELS[primaryReason];
-}
-
-function formatImpactMermaid(report: ImpactReport, root: string): string {
-  const fileGraph: Graph = { nodes: new Set<string>(), edges: [] };
-  const ensureFileNode = (file: string) => fileGraph.nodes.add(file);
-  for (const cf of report.changedFiles) ensureFileNode(cf.file);
-  for (const item of report.impacted) ensureFileNode(item.file);
-  for (const symbol of report.changedSymbols) ensureFileNode(symbol.file);
-  for (const edge of report.graph.fileEdges) {
-    ensureFileNode(edge.from);
-    ensureFileNode(edge.to);
-    fileGraph.edges.push({
-      from: edge.from,
-      to: { type: "file", path: edge.to },
-      raw: "",
-      ...(edge.typeOnly ? { typeOnly: edge.typeOnly } : {}),
-    });
-  }
-
-  const symbolGraph: SymbolGraph = { nodes: new Map(), edges: [] };
-  for (const sym of report.changedSymbols) {
-    symbolGraph.nodes.set(sym.id, {
-      id: sym.id,
-      file: sym.file,
-      name: sym.name,
-      kind: symbolNodeKindFromString(sym.kind),
-    });
-  }
-  for (const edge of report.graph.symbolEdges) {
-    const fromSym = report.changedSymbols[edge.from];
-    const toSym = report.changedSymbols[edge.to];
-    if (!fromSym || !toSym) continue;
-    symbolGraph.edges.push({
-      from: fromSym.id,
-      to: toSym.id,
-      ...(edge.label ? { label: edge.label } : {}),
-    });
-  }
-
-  return graphToMermaidSymbolsWithFiles(symbolGraph, fileGraph, root);
-}
-
-function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport>>): string {
-  const lines: string[] = [];
-  const candidateCounts = countCandidateTestsByConfidence(report.candidateTests);
-  lines.push("Review Summary");
-  lines.push("==============");
-  lines.push(`Status: ${report.status}`);
-  lines.push(`Files changed: ${report.summary.filesChanged}`);
-  lines.push(`Symbols changed: ${report.summary.symbolsChanged}`);
-  lines.push(
-    `Candidate tests: ${report.summary.candidateTests} (high: ${candidateCounts.high}, medium: ${candidateCounts.medium}, low: ${candidateCounts.low})`,
-  );
-  lines.push(`Risk: ${report.riskSummary.level} (${report.riskSummary.score})`);
-  if (report.riskSummary.signals.length) {
-    lines.push(`Signals: ${report.riskSummary.signals.join(", ")}`);
-  }
-  lines.push("");
-  lines.push("Changed files:");
-  if (!report.changedFiles.length) {
-    lines.push("- none");
-  } else {
-    for (const file of report.changedFiles.slice(0, 20)) {
-      const symbolNames = file.symbols.slice(0, 5).map((symbol) => symbol.name);
-      const symbolSummary = symbolNames.length ? ` (${symbolNames.join(", ")})` : "";
-      lines.push(`- ${file.file}: ${file.status}${symbolSummary}`);
-    }
-    const remainingFiles = report.changedFiles.length - 20;
-    if (remainingFiles > 0) {
-      lines.push(`- ... and ${remainingFiles} more`);
-    }
-  }
-  lines.push("");
-  lines.push("Candidate tests:");
-  if (!report.candidateTests.length) {
-    lines.push("- none");
-  } else {
-    const listedCandidates =
-      appendCandidateTestGroup(lines, "High-confidence tests:", report.candidateTests, "high") +
-      appendCandidateTestGroup(lines, "Medium-confidence tests:", report.candidateTests, "medium");
-    if (listedCandidates === 0) {
-      lines.push("No high- or medium-confidence test candidates found.");
-    }
-    appendLowConfidenceCandidateSummary(lines, candidateCounts.low);
-  }
-  lines.push("");
-  lines.push("Review tasks:");
-  if (!report.reviewTasks.length) {
-    lines.push("- none");
-  } else {
-    for (const task of report.reviewTasks.slice(0, 8)) {
-      lines.push(`- ${task.id}: ${task.priority} - ${task.title} (${task.reason})`);
-    }
-    const remainingTasks = report.reviewTasks.length - 8;
-    if (remainingTasks > 0) {
-      lines.push(`- ... and ${remainingTasks} more`);
-    }
-  }
-  if (report.diagnostics) {
-    lines.push("");
-    lines.push("Diagnostics:");
-    lines.push(`- missing files: ${report.diagnostics.missingFiles.length}`);
-    lines.push(`- symbol mapping parse failures: ${report.diagnostics.symbolMappingParseFailures.length}`);
-  }
-  return `${lines.join("\n")}\n`;
-}
-
-function countCandidateTestsByConfidence(
-  candidates: CandidateTestFile[],
-): Record<CandidateTestFile["confidence"], number> {
-  const counts: Record<CandidateTestFile["confidence"], number> = {
-    high: 0,
-    medium: 0,
-    low: 0,
-  };
-  for (const candidate of candidates) {
-    counts[candidate.confidence] += 1;
-  }
-  return counts;
-}
-
-function appendCandidateTestGroup(
-  lines: string[],
-  title: string,
-  candidates: CandidateTestFile[],
-  confidence: CandidateTestFile["confidence"],
-): number {
-  const matches = candidates.filter((candidate) => candidate.confidence === confidence);
-  if (!matches.length) return 0;
-  lines.push(title);
-  for (const candidate of matches.slice(0, 8)) {
-    lines.push(`- ${candidate.file}: ${candidate.reason}`);
-  }
-  const remaining = matches.length - 8;
-  if (remaining > 0) {
-    lines.push(`- ... and ${remaining} more`);
-  }
-  return matches.length;
-}
-
-function appendLowConfidenceCandidateSummary(lines: string[], lowConfidenceCount: number): void {
-  if (lowConfidenceCount === 0) return;
-  lines.push(`Low-confidence pattern matches: ${lowConfidenceCount} available as breadth hints in full JSON.`);
-}
-
-function parseReviewDepth(value: string): ReviewDepth | null {
-  if (value === "minimal" || value === "standard" || value === "deep") {
-    return value;
-  }
-  return null;
-}
-
 function parseNativeRuntimeMode(value: string | undefined): NativeRuntimeMode {
   if (value === undefined) return "auto";
   if (value === "auto" || value === "on" || value === "off") {
@@ -1111,18 +809,6 @@ function parseNativeRuntimeMode(value: string | undefined): NativeRuntimeMode {
   }
   throw new Error(`Invalid --native value "${value}". Expected auto|on|off.`);
 }
-
-type ImpactOptionsBuilder = Partial<ImpactOptions> & {
-  base?: string;
-  head?: string;
-  cwd?: string;
-  pr?: number;
-  repo?: string;
-  diffText?: string;
-  threads?: number;
-  cache?: string;
-  cacheStrict?: boolean;
-};
 
 async function runCliWithActiveRuntime(rawArgs: string[]) {
   const cmd = rawArgs[0] && !rawArgs[0].startsWith("-") ? rawArgs[0] : "graph";
@@ -1940,253 +1626,58 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "impact") {
-    const provider = getOpt("--provider") ?? "git";
-
-    if (provider !== "git" && provider !== "github" && provider !== "raw") {
-      throw new Error(`Unsupported provider: ${provider}`);
-    }
-
-    const options: ImpactOptionsBuilder = { provider };
-
-    if (provider === "git") {
-      const base = getOpt("--base");
-      const head = getOpt("--head");
-      if (!base || !head) {
-        throw new Error(
-          "Impact provider 'git' requires --base and --head. Example: codegraph impact --provider git --base main --head HEAD",
-        );
-      }
-      options.base = base;
-      options.head = head;
-      options.cwd = projectRootFs;
-    } else if (provider === "github") {
-      const pr = getOpt("--pr");
-      const repo = getOpt("--repo");
-      if (!pr || !repo) {
-        throw new Error(
-          "Impact provider 'github' requires --repo owner/name and --pr <number>. Example: codegraph impact --provider github --repo acme/app --pr 42",
-        );
-      }
-      options.pr = Number(pr);
-      if (!Number.isFinite(options.pr) || options.pr <= 0) {
-        throw new Error("Impact provider 'github' expects --pr as a positive integer.");
-      }
-      options.repo = repo;
-    } else if (provider === "raw") {
-      // For raw provider, diff text would come from stdin or file
-      // For now, assume stdin
-      const diffText = await new Promise<string>((resolve) => {
-        let data = "";
-        process.stdin.on("data", (chunk) => (data += chunk.toString()));
-        process.stdin.on("end", () => resolve(data));
-      });
-      options.diffText = diffText;
-    }
-
-    // Parse other options
-    const threadsRaw = getOpt("--threads");
-    const threads = threadsRaw ? Number(threadsRaw) : 0;
-    if (threadsRaw) options.threads = threads;
-
-    const cache = parseCacheModeOption(getOpt("--cache"));
-    if (cache !== undefined) options.cache = cache;
-
-    const cacheStrict = hasFlag("--cache-strict");
-    if (cacheStrict) options.cacheStrict = true;
-
-    if (hasFlag("--compact") || hasFlag("--compact-json")) options.compact = true;
-
-    const maxRefs = getOpt("--max-refs");
-    if (maxRefs) options.maxRefs = Number(maxRefs);
-
-    const depth = getOpt("--depth");
-    if (depth) options.depth = Number(depth);
-
-    const includeTests = hasFlag("--include-tests");
-    const membersOnly = hasFlag("--members-only");
-
-    const scope = getOpt("--scope");
-    if (scope === "all" || scope === "imported") options.scope = scope;
-
-    const refContext = getOpt("--ref-context");
-    if (refContext) options.refContext = refContext as "line" | "block";
-
-    const refContextLines = getOpt("--ref-context-lines");
-    if (refContextLines) options.refContextLines = Number(refContextLines);
-
-    const refBlockMaxLines = getOpt("--ref-block-max-lines");
-    if (refBlockMaxLines) options.refBlockMaxLines = Number(refBlockMaxLines);
-
-    if (discoveryOptions.ignoreGlobs?.length) {
-      options.ignoreGlobs = discoveryOptions.ignoreGlobs;
-    }
-
-    const verifyRefs = hasFlag("--verify-refs");
-    if (verifyRefs) options.verifyReferences = true;
-
-    const lcovPaths = parsed.options.get("--lcov");
-    if (lcovPaths?.length) {
-      options.lcovPaths = lcovPaths;
-      options.testCoverageSuggestions = true;
-    }
-
-    const coveragePaths = parsed.options.get("--coverage-report");
-    if (coveragePaths?.length) {
-      options.coveragePaths = coveragePaths;
-      options.testCoverageSuggestions = true;
-    }
-
-    const testCommandTemplate = getOpt("--test-command-template");
-    if (testCommandTemplate) {
-      options.testCommandTemplate = testCommandTemplate;
-      options.testCoverageSuggestions = true;
-    }
-
-    options.includeTests = includeTests;
-    options.membersOnly = membersOnly;
-
-    const fastGraph = graphFlags.fast;
-    const resolveNodeModules = graphFlags.resolveNodeModules;
-    const dynamicImportHeuristics = graphFlags.dynamicImportHeuristics;
-    const resolutionHints = graphFlags.resolutionHints;
-
-    const pretty = hasFlag("--pretty");
-    const mermaid = hasFlag("--mermaid");
-
-    try {
-      const cacheMode = cache === "off" || cache === "memory" || cache === "disk" ? cache : undefined;
-      const indexOpts: BuildOptions = {
-        threads,
-        ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
-        ...workerOpts,
-        ...(cacheMode !== undefined ? { cache: cacheMode } : {}),
-        ...(cacheStrict ? { cacheStrict: true } : {}),
-      };
-      if (hasGraphOverrides) {
-        indexOpts.graph = {
-          fast: fastGraph,
-          resolveNodeModules,
-          dynamicImportHeuristics,
-          ...(resolutionHints.length ? { resolutionHints } : {}),
-        };
-      }
-      const index = await buildProjectIndex(projectRootFs, {
-        ...indexOpts,
-        discovery: discoveryOptions,
-        onProgress: progressHandler,
-      });
-      const report = await analyzeImpactFromDiff(projectRootFs, index, options as ImpactOptions);
-      const impactReport = ensureImpactReport(report);
-
-      if (mermaid) {
-        writeStdoutLine(formatImpactMermaid(impactReport, projectRootFs));
-      } else if (pretty) {
-        writeStdoutLine(`Impact Analysis Report`);
-        writeStdoutLine(`======================`);
-        if (impactReport.warning) {
-          writeStdoutLine(`WARNING: ${impactReport.warning}`);
-          writeStdoutLine(``);
-        }
-        writeStdoutLine(`Changed files: ${impactReport.changedFiles.length}`);
-        writeStdoutLine(`Changed symbols: ${impactReport.changedSymbols.length}`);
-        writeStdoutLine(`Impacted items: ${impactReport.impacted.length}`);
-        writeStdoutLine(``);
-        for (const item of impactReport.impacted.slice(0, 10)) {
-          const reasonLabel = formatImpactReasonLabel(item);
-          writeStdoutLine(
-            `${item.file}: ${item.symbols.join(", ")} (${reasonLabel}, severity: ${(item.severity * 100).toFixed(1)}%)`,
-          );
-          if ("refs" in item && item.refs?.length) {
-            const contextsToShow = item.refs.slice(0, 2);
-            for (const ref of contextsToShow) {
-              writeStdoutLine(`  Reference at ${ref.range.start.line}:${ref.range.start.column}:`);
-              const contextLines = ref.context!.split("\n").slice(0, 5);
-              for (const line of contextLines) {
-                writeStdoutLine(`    ${line}`);
-              }
-              if (ref.context!.split("\n").length > 5) {
-                writeStdoutLine(`    ...`);
-              }
-            }
-            if (item.refs.length > 2) {
-              writeStdoutLine(`  ... and ${item.refs.length - 2} more references`);
-            }
+    await handleImpactCommand({
+      projectRootFs,
+      discoveryOptions,
+      getOpt,
+      hasFlag,
+      parsedOptions: parsed.options,
+      nativeMode,
+      workerOpts,
+      graphOptions: hasGraphOverrides
+        ? {
+            fast: graphFlags.fast,
+            resolveNodeModules: graphFlags.resolveNodeModules,
+            dynamicImportHeuristics: graphFlags.dynamicImportHeuristics,
+            ...(graphFlags.resolutionHints.length ? { resolutionHints: graphFlags.resolutionHints } : {}),
           }
-        }
-        if (impactReport.impacted.length > 10) {
-          writeStdoutLine(`... and ${impactReport.impacted.length - 10} more`);
-        }
-      } else {
-        writeJSONLine(report);
-      }
-    } catch (error) {
-      writeStderrLine(`Impact analysis failed: ${error instanceof Error ? error.message : String(error)}`);
-      exitCli(1);
-    }
+        : undefined,
+      progressHandler,
+      readStdin: async () =>
+        await new Promise<string>((resolve) => {
+          let data = "";
+          process.stdin.on("data", (chunk) => {
+            data += chunk.toString();
+          });
+          process.stdin.on("end", () => resolve(data));
+        }),
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
     return;
   }
 
   // Review entry point: CLI workflow for review reports.
   if (cmd === "review") {
     const commandReport: CommandReport | undefined = reportEnabled ? { command: "review", timings: {} } : undefined;
-    const commandStart = performance.now();
-    const base = getOpt("--base");
-    const head = getOpt("--head");
-    const changedSince = getOpt("--changed-since");
-    const reviewDepthRaw = getOpt("--review-depth");
-    const reviewDepth = reviewDepthRaw !== undefined ? parseReviewDepth(reviewDepthRaw) : null;
-    if (reviewDepthRaw !== undefined && !reviewDepth) {
-      writeStderrLine(`Invalid --review-depth value "${reviewDepthRaw}". Expected minimal|standard|deep.`);
-      exitCli(2);
-    }
-    const threadsRaw = getOpt("--threads");
-    const threads = threadsRaw !== undefined ? Number(threadsRaw) : undefined;
-    const cache = parseCacheModeOption(getOpt("--cache"));
-    const cacheStrict = hasFlag("--cache-strict");
-    const cacheVerify = hasFlag("--cache-verify");
-    const incrementalStrict = hasFlag("--incremental-strict");
-    const includeSymbolDetails = hasFlag("--include-symbol-details");
-    const maxCallsitesRaw = getOpt("--max-callsites");
-    const maxCallsites = maxCallsitesRaw !== undefined ? Number(maxCallsitesRaw) : undefined;
-    const maxTestsRaw = getOpt("--max-tests");
-    const maxTests = maxTestsRaw !== undefined ? Number(maxTestsRaw) : undefined;
-    const reviewOpts: Parameters<typeof buildReviewReport>[1] = {};
-    reviewOpts.discovery = discoveryOptions;
-    if (reviewDepth) reviewOpts.reviewDepth = reviewDepth;
-    if (base !== undefined) reviewOpts.gitBase = base;
-    if (head !== undefined) reviewOpts.gitHead = head;
-    if (changedSince !== undefined) reviewOpts.changedSince = changedSince;
-    if (threads !== undefined) reviewOpts.threads = threads;
-    if (cache === "off" || cache === "memory" || cache === "disk") {
-      reviewOpts.cache = cache;
-    }
-    if (nativeMode !== "auto") reviewOpts.native = nativeMode;
-    if (useNativeWorkers) reviewOpts.useNativeWorkers = true;
-    if (cacheStrict) reviewOpts.cacheStrict = true;
-    if (cacheVerify) reviewOpts.cacheVerify = true;
-    if (incrementalStrict) reviewOpts.incrementalStrict = true;
-    if (hasGraphOverrides) reviewOpts.graph = buildGraphOptions();
-    if (includeSymbolDetails) {
-      reviewOpts.includeSymbolDetails = includeSymbolDetails;
-    }
-    if (maxCallsites !== undefined) reviewOpts.maxCallsites = maxCallsites;
-    if (maxTests !== undefined) reviewOpts.maxCandidates = maxTests;
-    if (commandReport) {
-      const reviewReport: ReviewBuildReport = { timings: {} };
-      commandReport.review = reviewReport;
-      reviewOpts.report = reviewReport;
-    }
-    const report = await buildReviewReport(projectRootFs, reviewOpts);
-    if (hasFlag("--summary") || hasFlag("--pretty")) {
-      writeStdoutLine(formatReviewSummary(report).trimEnd());
-    } else {
-      writeJSONLine(report);
-    }
-    if (commandReport) {
-      commandReport.timings.commandMs = Math.round(performance.now() - commandStart);
-      commandReport.timings.totalMs = commandReport.timings.commandMs;
-      await writeCommandReport(commandReport, reportFile);
-    }
+    await handleReviewCommand({
+      projectRootFs,
+      discoveryOptions,
+      reportFile,
+      commandReport,
+      getOpt,
+      hasFlag,
+      nativeMode,
+      useNativeWorkers,
+      graphOptions: hasGraphOverrides ? buildGraphOptions() : undefined,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      writeCommandReport,
+      exit: exitCli,
+    });
     return;
   }
 

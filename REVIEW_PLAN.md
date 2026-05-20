@@ -56,7 +56,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
 
 ## Second-Pass Complexity Findings
 
-- [ ] Split the CLI dispatcher into shared command context plus focused command runners.
+- [x] Split the CLI dispatcher into shared command context plus focused command runners.
   - `src/cli.ts` has a 1,188-line `runCliWithActiveRuntime()` block that mixes argument parsing, discovery setup, graph/index/review command execution, output formatting, report writing, and repeated build-option assembly.
   - Suggested fix: extract a `CliCommandContext` builder, a `resolveCliScanPlan()` helper that returns files plus deleted/existing git state once, and move the remaining in-file command bodies into focused modules. Start with `graph`, `index`, `impact`, and `review` because they contain the most duplicated build/index/report plumbing.
   - Tests: CLI regression coverage for `graph --sqlite`, `graph --symbols-detailed`, `index --json`, `impact --pretty`, `review --summary`, and include-root/git-diff combinations.
