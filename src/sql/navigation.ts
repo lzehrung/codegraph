@@ -2,15 +2,25 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { createNavigationProvenance, okGoToResult } from "../indexer/navigation-provenance.js";
-import type { FindReferencesResult, GoToRequest, GoToResult, ProjectIndex, Reference, SymbolDef } from "../indexer/types.js";
+import type {
+  FindReferencesResult,
+  GoToRequest,
+  GoToResult,
+  ProjectIndex,
+  Reference,
+  SymbolDef,
+} from "../indexer/types.js";
 import type { Range } from "../types.js";
 import { normalizePath } from "../util/paths.js";
+import { extractSqlFactsFromSource } from "./extractFacts.js";
 import {
-  extractSqlFactsFromSource,
   maskSqlStringsAndComments,
   normalizeSqlObjectName,
+  SQL_IDENTIFIER_PART_PATTERN,
+  splitTopLevelCommaSeparated,
   sqlObjectBaseName,
-} from "./extractFacts.js";
+  sqlParenDepthAt,
+} from "./lex.js";
 import type { SqlStatementFact } from "./types.js";
 
 type SqlStatementNavigationSlice = {
@@ -44,7 +54,9 @@ function rangeForToken(line: number, column: number): Range {
 }
 
 function sqlFiles(index: ProjectIndex): string[] {
-  return Array.from(index.byFile.keys()).filter(isSqlFile).sort((left, right) => left.localeCompare(right));
+  return Array.from(index.byFile.keys())
+    .filter(isSqlFile)
+    .sort((left, right) => left.localeCompare(right));
 }
 
 function pushDefinition(lookup: Map<string, SymbolDef[]>, key: string, definition: SymbolDef): void {
@@ -84,7 +96,10 @@ function preferredSqlDefinition(definitions: SymbolDef[], currentFile: string): 
   return null;
 }
 
-function sqlDefinitionMatches(lookup: SqlDefinitionLookup, objectName: string): { exact: SymbolDef[]; basename: SymbolDef[] } {
+function sqlDefinitionMatches(
+  lookup: SqlDefinitionLookup,
+  objectName: string,
+): { exact: SymbolDef[]; basename: SymbolDef[] } {
   const normalizedName = objectName.toLowerCase();
   const basenameKey = sqlObjectBaseName(objectName).toLowerCase();
   const exact = lookup.exact.get(normalizedName) ?? [];
@@ -92,7 +107,7 @@ function sqlDefinitionMatches(lookup: SqlDefinitionLookup, objectName: string): 
   return { exact, basename };
 }
 
-const SQL_IDENTIFIER = String.raw`(?:"(?:""|[^"])+"|` + "`[^`]+`" + String.raw`|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_$]*)`;
+const SQL_IDENTIFIER = SQL_IDENTIFIER_PART_PATTERN;
 const SQL_DOTTED_TOKEN = String.raw`${SQL_IDENTIFIER}(?:\s*\.\s*${SQL_IDENTIFIER})*`;
 const SQL_DOTTED_TOKEN_RE = new RegExp(SQL_DOTTED_TOKEN, "g");
 const SQL_SOURCE_KEYWORDS = new Set([
@@ -129,7 +144,10 @@ function wordAtPosition(source: string, line: number, column: number): string | 
 }
 
 function sqlObjectNameParts(name: string): string[] {
-  return name.split(".").map((part) => part.trim()).filter(Boolean);
+  return name
+    .split(".")
+    .map((part) => part.trim())
+    .filter(Boolean);
 }
 
 function sqlStatementSlices(facts: readonly SqlStatementFact[]): SqlStatementNavigationSlice[] {
@@ -150,34 +168,9 @@ function sqlStatementSlices(facts: readonly SqlStatementFact[]): SqlStatementNav
 }
 
 function sqlStatementAtLine(facts: readonly SqlStatementFact[], line: number): SqlStatementNavigationSlice | null {
-  return sqlStatementSlices(facts).find((statement) => line >= statement.startLine && line <= statement.endLine) ?? null;
-}
-
-function parenDepthAt(text: string, index: number): number {
-  let depth = 0;
-  for (let cursor = 0; cursor < index; cursor += 1) {
-    const char = text[cursor];
-    if (char === "(") depth += 1;
-    if (char === ")") depth = Math.max(0, depth - 1);
-  }
-  return depth;
-}
-
-function splitTopLevelCommaSeparated(text: string): string[] {
-  const parts: string[] = [];
-  let start = 0;
-  let depth = 0;
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    if (char === "(") depth += 1;
-    if (char === ")") depth = Math.max(0, depth - 1);
-    if (char === "," && depth === 0) {
-      parts.push(text.slice(start, index));
-      start = index + 1;
-    }
-  }
-  parts.push(text.slice(start));
-  return parts;
+  return (
+    sqlStatementSlices(facts).find((statement) => line >= statement.startLine && line <= statement.endLine) ?? null
+  );
 }
 
 function sourceClauseEndIndex(text: string, start: number): number {
@@ -192,7 +185,7 @@ function cteNamesForStatement(text: string): Set<string> {
     "gi",
   );
   for (const match of text.matchAll(cteRe)) {
-    if (parenDepthAt(text, match.index ?? 0) > 0) continue;
+    if (sqlParenDepthAt(text, match.index ?? 0) > 0) continue;
     const name = normalizeSqlObjectName(match[1]);
     if (!name) continue;
     cteNames.add(name.toLowerCase());
@@ -238,7 +231,7 @@ function sqlAliasMapForStatement(statementText: string): Map<string, string> {
   const cteNames = cteNamesForStatement(statementText);
   const clauseRe = /\b(?:from|using|join|inner\s+join|left\s+join|right\s+join|full\s+join|cross\s+join)\s+/gi;
   for (const match of statementText.matchAll(clauseRe)) {
-    if (parenDepthAt(statementText, match.index ?? 0) > 0) continue;
+    if (sqlParenDepthAt(statementText, match.index ?? 0) > 0) continue;
     const start = (match.index ?? 0) + match[0].length;
     const clause = statementText.slice(start, sourceClauseEndIndex(statementText, start));
     for (const part of splitTopLevelCommaSeparated(clause)) {
@@ -261,7 +254,11 @@ function unambiguousSqlPrefixDefinitionName(lookup: SqlDefinitionLookup, objectN
   return null;
 }
 
-function resolveQualifiedSqlName(lookup: SqlDefinitionLookup, name: string, statementText: string | null): string | null {
+function resolveQualifiedSqlName(
+  lookup: SqlDefinitionLookup,
+  name: string,
+  statementText: string | null,
+): string | null {
   if (sqlDefinitionsFromLookup(lookup, name).length) return name;
   const parts = sqlObjectNameParts(name);
   if (parts.length < 2) return name;
@@ -300,7 +297,11 @@ function matchesSqlDefinitionName(name: string, targetNames: ReadonlySet<string>
   return targetNames.has(normalized) || targetNames.has(baseName);
 }
 
-function prefixMatchesSqlDefinition(lookup: SqlDefinitionLookup, prefix: string, targetNames: ReadonlySet<string>): boolean {
+function prefixMatchesSqlDefinition(
+  lookup: SqlDefinitionLookup,
+  prefix: string,
+  targetNames: ReadonlySet<string>,
+): boolean {
   const matches = sqlDefinitionMatches(lookup, prefix);
   if (matches.exact.length) {
     return matches.exact.some((definition) => matchesSqlDefinitionName(definition.localName, targetNames));

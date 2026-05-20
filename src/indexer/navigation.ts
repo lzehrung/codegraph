@@ -28,6 +28,12 @@ import { type ScopeIndex } from "./scope.js";
 import { type FileId, type Range } from "../types.js";
 import { resolveImportSpecifier, sliceText, toRange } from "../util.js";
 import {
+  getMemberAccessParts,
+  isMemberAccessNode,
+  isMemberObjectIdentifier,
+  isMemberReferencePropertyIdentifier,
+} from "../util/memberAccess.js";
+import {
   type FindReferencesResult,
   type GoToRequest,
   type GoToResult,
@@ -424,54 +430,11 @@ export async function collectNamespaceMemberRefs(
   const source = parsed.source;
   const tree = parsed.tree;
   const ranges: Range[] = [];
-  const isRuby = sup.id === "ruby";
-  let memberExpressionType = sup.nodeTypes.memberExpression;
-  if (!memberExpressionType) {
-    if (sup.id === "python") {
-      memberExpressionType = "attribute";
-    } else if (sup.id === "ruby") {
-      memberExpressionType = "call";
-    } else {
-      memberExpressionType = "member_expression";
-    }
-  }
-  const isPropertyIdentifier = (nodeType: string): boolean =>
-    (sup.nodeTypes.propertyIdentifier ?? ["property_identifier"]).includes(nodeType) ||
-    nodeType === "field_identifier" ||
-    nodeType === "type_identifier" ||
-    nodeType === "identifier" ||
-    nodeType === "constant";
-  const isObjectIdentifier = (nodeType: string): boolean =>
-    nodeType === "identifier" ||
-    nodeType === "type_identifier" ||
-    nodeType === "package_identifier" ||
-    nodeType === "constant" ||
-    nodeType === "namespace_identifier";
 
   const walk = (node: SyntaxNodeLike): void => {
-    if (
-      node.type === memberExpressionType ||
-      (sup.id === "go" && node.type === "qualified_type") ||
-      (isRuby && (node.type === "call" || node.type === "scope_resolution"))
-    ) {
-      let obj: SyntaxNodeLike | null = null;
-      let prop: SyntaxNodeLike | null = null;
-      if (isRuby) {
-        if (node.type === "scope_resolution") {
-          obj = node.childForFieldName("scope") ?? node.child(0);
-          prop = node.childForFieldName("name") ?? node.child(2);
-        } else {
-          obj = node.childForFieldName("receiver") ?? node.child(0);
-          prop = node.childForFieldName("method") ?? node.child(2);
-        }
-      } else if (sup.id === "go" && node.type === "qualified_type") {
-        obj = node.namedChildren[0] ?? node.child(0);
-        prop = node.namedChildren[1] ?? node.child(1);
-      } else {
-        obj = node.childForFieldName("object") ?? node.child(0);
-        prop = node.childForFieldName("property") ?? node.childForFieldName("attribute") ?? node.child(2);
-      }
-      if (obj && prop && isObjectIdentifier(obj.type) && isPropertyIdentifier(prop.type)) {
+    if (isMemberAccessNode(sup, node)) {
+      const { object: obj, property: prop } = getMemberAccessParts(sup, node);
+      if (obj && prop && isMemberObjectIdentifier(obj.type) && isMemberReferencePropertyIdentifier(sup, prop.type)) {
         const objectName = sliceText(obj, source);
         const propertyName = sliceText(prop, source);
         if (objectName === ns && propertyName === member) {

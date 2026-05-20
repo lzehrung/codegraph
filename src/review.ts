@@ -19,6 +19,7 @@ import {
   type SymbolDef,
   symbolId,
 } from "./indexer.js";
+import { isSymbolHandleExported } from "./indexer/declarations.js";
 import type { GraphBuildOptions } from "./graphs/types.js";
 import { locateChangedSymbolsWithLines, mapChangedLinesToSymbols } from "./impact/map.js";
 import { parseUnifiedDiff } from "./impact/parse.js";
@@ -608,7 +609,7 @@ function isRiskRelevantSymbolMappingFile(file: string): boolean {
 }
 
 function isExported(mod: { exports: ExportEntry[] }, handle: string): boolean {
-  return mod.exports.some((e) => e.type === "local" && symbolId(e.target) === handle);
+  return isSymbolHandleExported(mod.exports, handle);
 }
 
 function listReviewableExports(mod: ModuleIndex): ReviewableExportEntry[] {
@@ -927,19 +928,19 @@ async function runWithConcurrency<T, R>(items: T[], limit: number, worker: (item
   return results;
 }
 
-/**
- * Build the structured review report used by programmatic review agents.
- *
- * The report keeps changed files, changed symbols, graph deltas, candidate tests,
- * risk signals, review tasks, diagnostics, and optional snippets as data instead
- * of terminal prose. Prefer this API over CLI summary output when composing
- * deterministic model context or review file packs.
- */
-export async function buildReviewReport(projectRoot: string, opts: ReviewOptions = {}): Promise<ReviewReport> {
-  const appliedOptions = applyReviewPresetOptions(opts);
-  const reviewReport = appliedOptions.report;
-  const reviewTimings = reviewReport?.timings;
-  const totalStart = performance.now();
+type ReviewChangeCollection = {
+  changedFiles: Set<string>;
+  explicitFiles: Set<string>;
+  diffHunksByFile: Map<string, Hunk[]>;
+  diffKindsByFile: Map<string, string>;
+  diffChangesByFile: Map<string, FileChange>;
+};
+
+async function collectReviewChanges(
+  projectRoot: string,
+  appliedOptions: ReviewOptions,
+  reviewTimings?: ReviewTimingReport,
+): Promise<ReviewChangeCollection> {
   const normalizeFile = (file: string, label: string) => assertFilePathWithinRoot(projectRoot, file, label);
   const discoveryIgnoreGlobs = appliedOptions.discovery?.ignoreGlobs ?? [];
   const discoveryGlobRoot = appliedOptions.discovery?.globRoot ?? projectRoot;
@@ -976,9 +977,10 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
   }
 
   const diffStart = performance.now();
+  const shouldLoadGitDiff = (appliedOptions.gitBase || appliedOptions.changedSince) && changedFiles.size;
   const diffText =
     appliedOptions.diffText ??
-    ((appliedOptions.gitBase || appliedOptions.changedSince) && changedFiles.size > 0
+    (shouldLoadGitDiff
       ? await getUnifiedDiff(projectRoot, {
           base: appliedOptions.gitBase,
           head: appliedOptions.gitHead,
@@ -989,6 +991,7 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
   if (reviewTimings) {
     reviewTimings.diffMs = Math.round(performance.now() - diffStart);
   }
+
   const diffHunksByFile = new Map<string, Hunk[]>();
   const diffKindsByFile = new Map<string, string>();
   const diffChangesByFile = new Map<string, FileChange>();
@@ -1015,68 +1018,47 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
     }
   }
 
-  if (changedFiles.size === 0) {
-    const riskSummary = computeRiskSummary({
-      filesChanged: 0,
-      symbolsChanged: 0,
-      exportedChanged: 0,
-      missingFiles: 0,
-      parseFailures: 0,
-    });
-    const projectFiles = await discoverProjectFiles(projectRoot);
-    const report: ReviewReport = {
-      schemaVersion: REVIEW_SCHEMA_VERSION,
-      status: "no_changes",
-      projectFiles,
-      summary: { filesChanged: 0, symbolsChanged: 0, candidateTests: 0 },
-      riskSummary,
-      reviewTasks: buildReviewTasks({
-        filesChanged: 0,
-        symbolsChanged: 0,
-        exportedChanged: 0,
-        candidateTests: 0,
-        missingFiles: 0,
-        parseFailures: 0,
-      }),
-      changedFiles: [],
-      graphDelta: [],
-      candidateTests: [],
-    };
-    if (appliedOptions.gitBase !== undefined) report.base = appliedOptions.gitBase;
-    if (appliedOptions.gitHead !== undefined) report.head = appliedOptions.gitHead;
-    if (reviewTimings) reviewTimings.totalMs = Math.round(performance.now() - totalStart);
-    return report;
-  }
-
-  const changedFileList = Array.from(changedFiles).sort(comparePaths);
-  const diagnostics: ReviewDiagnostics = {
-    missingFiles: [],
-    symbolMappingParseFailures: [],
+  return {
+    changedFiles,
+    explicitFiles,
+    diffHunksByFile,
+    diffKindsByFile,
+    diffChangesByFile,
   };
+}
+
+type ReviewIndexStage = {
+  index: ProjectIndex;
+  existenceByFile: Map<string, boolean>;
+  deletedFiles: string[];
+  deletedSnapshots: Map<FileId, DeletedFileSnapshot>;
+  graphOptions: GraphBuildOptions;
+};
+
+async function buildReviewIndex(input: {
+  projectRoot: string;
+  appliedOptions: ReviewOptions;
+  changedFileList: string[];
+  diffKindsByFile: ReadonlyMap<string, string>;
+  diffChangesByFile: ReadonlyMap<string, FileChange>;
+  includeSymbolDetails: boolean;
+  maxCallsites: number;
+  reviewReport?: ReviewBuildReport;
+  reviewTimings?: ReviewTimingReport;
+}): Promise<ReviewIndexStage> {
+  const {
+    projectRoot,
+    appliedOptions,
+    changedFileList,
+    diffKindsByFile,
+    diffChangesByFile,
+    includeSymbolDetails,
+    maxCallsites,
+    reviewReport,
+    reviewTimings,
+  } = input;
   const fastGraphRequested = appliedOptions.graph?.fast ?? false;
   const graphOptions = appliedOptions.graph ? { ...appliedOptions.graph, fast: fastGraphRequested } : { fast: false };
-  const includeSymbolDetails = appliedOptions.includeSymbolDetails ?? false;
-  const diffContextLines =
-    typeof appliedOptions.diffContextLines === "number" && appliedOptions.diffContextLines >= 0
-      ? appliedOptions.diffContextLines
-      : 2;
-  const maxCallsites =
-    typeof appliedOptions.maxCallsites === "number" && appliedOptions.maxCallsites >= 0
-      ? appliedOptions.maxCallsites
-      : 5;
-  const referenceConcurrency =
-    typeof appliedOptions.referenceConcurrency === "number" && appliedOptions.referenceConcurrency > 0
-      ? appliedOptions.referenceConcurrency
-      : 8;
-  const sourceCache = new Map<string, string>();
-  const loadSource = async (file: string): Promise<string> => {
-    const cached = sourceCache.get(file);
-    if (cached !== undefined) return cached;
-    const parsed = index.parsed?.get(file);
-    const source = parsed?.source ?? (await fsp.readFile(file, "utf8"));
-    sourceCache.set(file, source);
-    return source;
-  };
   const existenceChecks = await Promise.all(
     changedFileList.map(async (file) => ({
       file,
@@ -1114,12 +1096,200 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
     reviewTimings.indexMs = Math.round(performance.now() - indexStart);
   }
 
+  return {
+    index,
+    existenceByFile,
+    deletedFiles,
+    deletedSnapshots,
+    graphOptions,
+  };
+}
+
+async function collectReviewGraphDelta(input: {
+  projectRoot: string;
+  index: ProjectIndex;
+  changedFiles: ReadonlySet<string>;
+  deletedFiles: readonly string[];
+  deletedSnapshots: ReadonlyMap<FileId, DeletedFileSnapshot>;
+}): Promise<Edge[]> {
+  const graphEdges = new Map<string, Edge>();
+  for (const edge of input.index.graph.edges.filter((entry) => input.changedFiles.has(entry.from))) {
+    const relativeEdge = toRelativeEdge(input.projectRoot, edge);
+    graphEdges.set(edgeKey(relativeEdge), relativeEdge);
+  }
+  for (const edge of await collectDeletedImporterEdges(input.index, input.deletedFiles, input.projectRoot)) {
+    const relativeEdge = toRelativeEdge(input.projectRoot, edge);
+    graphEdges.set(edgeKey(relativeEdge), relativeEdge);
+  }
+  for (const edge of await collectDeletedSnapshotEdges(input.deletedSnapshots, input.projectRoot)) {
+    const relativeEdge = toRelativeEdge(input.projectRoot, edge);
+    graphEdges.set(edgeKey(relativeEdge), relativeEdge);
+  }
+  return Array.from(graphEdges.values()).sort(compareEdges);
+}
+
+async function collectReviewCandidateTests(input: {
+  projectRoot: string;
+  index: ProjectIndex;
+  changedFileList: string[];
+  changedSymbolIds: string[];
+  deletedFiles: readonly string[];
+  appliedOptions: ReviewOptions;
+  reviewTimings?: ReviewTimingReport;
+}): Promise<CandidateTestFile[]> {
+  const candidateStart = performance.now();
+  const candidateTests = mergeCandidateTestEntries(
+    listCandidateTestFiles(input.index, input.changedFileList, input.changedSymbolIds, {
+      maxCandidates: input.appliedOptions.maxCandidates ?? 50,
+      ...(input.appliedOptions.testPatterns ? { testPatterns: input.appliedOptions.testPatterns } : {}),
+      projectRoot: input.projectRoot,
+    }),
+    await listDirectDeletedFileTestImporters(
+      input.index,
+      input.deletedFiles,
+      input.appliedOptions.testPatterns,
+      input.projectRoot,
+    ),
+  )
+    .map((candidate) => ({
+      ...candidate,
+      file: relativePath(input.projectRoot, candidate.file),
+    }))
+    .sort((left, right) => {
+      const confidenceCompare = confidenceRank(right.confidence) - confidenceRank(left.confidence);
+      if (confidenceCompare !== 0) return confidenceCompare;
+      const fileCompare = comparePaths(left.file, right.file);
+      if (fileCompare !== 0) return fileCompare;
+      return left.reason.localeCompare(right.reason);
+    })
+    .slice(0, input.appliedOptions.maxCandidates ?? 50);
+  if (input.reviewTimings) {
+    input.reviewTimings.candidatesMs = Math.round(performance.now() - candidateStart);
+  }
+  return candidateTests;
+}
+
+async function collectReviewSqlContext(input: {
+  projectRoot: string;
+  index: ProjectIndex;
+  changedFileList: string[];
+}): Promise<SqlReviewContext | undefined> {
+  const indexedFiles = Array.from(input.index.byFile.keys());
+  const normalizedChangedFiles = new Set(input.changedFileList.map(normalizePath));
+  const indexedFilesCoverMoreThanReviewSet = indexedFiles.some((file) => !normalizedChangedFiles.has(normalizePath(file)));
+  const sqlContextProjectFiles =
+    indexedFilesCoverMoreThanReviewSet && indexedFiles.some((file) => path.extname(file).toLowerCase() === ".sql")
+      ? indexedFiles
+      : undefined;
+  return await collectSqlReviewContext(input.projectRoot, {
+    changedFiles: input.changedFileList,
+    ...(sqlContextProjectFiles ? { projectFiles: sqlContextProjectFiles } : {}),
+  });
+}
+
+function assembleReviewReport(input: {
+  appliedOptions: ReviewOptions;
+  projectFiles: ProjectFileInfo[];
+  summaries: ReviewFileSummary[];
+  changedSymbolIds: string[];
+  candidateTests: CandidateTestFile[];
+  graphDelta: Edge[];
+  sqlContext?: SqlReviewContext;
+  diagnostics: ReviewDiagnostics;
+  riskRelevantParseFailures: number;
+  exportedChangedCount: number;
+}): ReviewReport {
+  const report: ReviewReport = {
+    schemaVersion: REVIEW_SCHEMA_VERSION,
+    status: "ok",
+    projectFiles: input.projectFiles,
+    summary: {
+      filesChanged: input.summaries.length,
+      symbolsChanged: input.changedSymbolIds.length,
+      candidateTests: input.candidateTests.length,
+    },
+    riskSummary: computeRiskSummary({
+      filesChanged: input.summaries.length,
+      symbolsChanged: input.changedSymbolIds.length,
+      exportedChanged: input.exportedChangedCount,
+      missingFiles: input.diagnostics.missingFiles.length,
+      parseFailures: input.riskRelevantParseFailures,
+    }),
+    reviewTasks: buildReviewTasks({
+      filesChanged: input.summaries.length,
+      symbolsChanged: input.changedSymbolIds.length,
+      exportedChanged: input.exportedChangedCount,
+      candidateTests: input.candidateTests.length,
+      missingFiles: input.diagnostics.missingFiles.length,
+      parseFailures: input.riskRelevantParseFailures,
+    }),
+    changedFiles: input.summaries,
+    graphDelta: input.graphDelta,
+    candidateTests: input.candidateTests,
+    ...(input.sqlContext ? { sqlContext: input.sqlContext } : {}),
+    ...(hasDiagnostics(input.diagnostics) ? { diagnostics: input.diagnostics } : {}),
+  };
+  if (input.appliedOptions.gitBase !== undefined) report.base = input.appliedOptions.gitBase;
+  report.head = input.appliedOptions.gitHead ?? "HEAD";
+  return report;
+}
+
+type ReviewChangedFileSummaries = {
+  summaries: ReviewFileSummary[];
+  changedSymbolIds: string[];
+  exportedChangedCount: number;
+  riskRelevantParseFailures: number;
+};
+
+async function summarizeChangedFiles(input: {
+  projectRoot: string;
+  index: ProjectIndex;
+  changedFileList: string[];
+  diffHunksByFile: ReadonlyMap<string, Hunk[]>;
+  diffKindsByFile: ReadonlyMap<string, string>;
+  explicitFiles: ReadonlySet<string>;
+  existenceByFile: ReadonlyMap<string, boolean>;
+  deletedSnapshots: ReadonlyMap<FileId, DeletedFileSnapshot>;
+  includeSymbolDetails: boolean;
+  includeDiffContext: boolean;
+  diffContextLines: number;
+  maxCallsites: number;
+  referenceConcurrency: number;
+  diagnostics: ReviewDiagnostics;
+  reviewTimings?: ReviewTimingReport;
+}): Promise<ReviewChangedFileSummaries> {
+  const {
+    projectRoot,
+    index,
+    changedFileList,
+    diffHunksByFile,
+    diffKindsByFile,
+    explicitFiles,
+    existenceByFile,
+    deletedSnapshots,
+    includeSymbolDetails,
+    includeDiffContext,
+    diffContextLines,
+    maxCallsites,
+    referenceConcurrency,
+    diagnostics,
+    reviewTimings,
+  } = input;
+  const sourceCache = new Map<string, string>();
+  const loadSource = async (file: string): Promise<string> => {
+    const cached = sourceCache.get(file);
+    if (cached !== undefined) return cached;
+    const parsed = index.parsed?.get(file);
+    const source = parsed?.source ?? (await fsp.readFile(file, "utf8"));
+    sourceCache.set(file, source);
+    return source;
+  };
+
   const filesWithModules = changedFileList.map((file) => ({
     file,
     mod: index.byFile.get(file),
     hunks: diffHunksByFile.get(file),
   }));
-  const includeDiffContext = appliedOptions.includeDiffContext ?? (includeSymbolDetails && diffHunksByFile.size > 0);
 
   const fileEntries = await Promise.all(
     filesWithModules.map(async ({ file, mod, hunks }) => {
@@ -1215,7 +1385,7 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
     const definitionSnippet = snippet ? { definitionSnippet: snippet } : {};
     const diffLines = diffLinesByHandle.get(handle) ?? new Set<number>();
     const diffSnippets =
-      includeDiffContext && diffLines.size > 0
+      includeDiffContext && diffLines.size
         ? collectDiffSnippets(source, local.range, diffLines, diffContextLines)
         : [];
 
@@ -1323,6 +1493,7 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
       };
     }),
   );
+
   const summaries = summariesWithHandles.map((entry) => entry.summary);
   const changedSymbolIds = summariesWithHandles.flatMap((entry) => entry.handles);
   const exportedChangedCount = summaries.reduce((count, summary) => {
@@ -1333,90 +1504,144 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
     isRiskRelevantSymbolMappingFile(path.join(projectRoot, file)),
   ).length;
 
-  const graphEdges = new Map<string, Edge>();
-  for (const edge of index.graph.edges.filter((entry) => changedFiles.has(entry.from))) {
-    const relativeEdge = toRelativeEdge(projectRoot, edge);
-    graphEdges.set(edgeKey(relativeEdge), relativeEdge);
-  }
-  for (const edge of await collectDeletedImporterEdges(index, deletedFiles, projectRoot)) {
-    const relativeEdge = toRelativeEdge(projectRoot, edge);
-    graphEdges.set(edgeKey(relativeEdge), relativeEdge);
-  }
-  for (const edge of await collectDeletedSnapshotEdges(deletedSnapshots, projectRoot)) {
-    const relativeEdge = toRelativeEdge(projectRoot, edge);
-    graphEdges.set(edgeKey(relativeEdge), relativeEdge);
-  }
-  const graphDelta = Array.from(graphEdges.values()).sort(compareEdges);
+  return {
+    summaries,
+    changedSymbolIds,
+    exportedChangedCount,
+    riskRelevantParseFailures,
+  };
+}
 
-  const candidateStart = performance.now();
-  const candidateTests = mergeCandidateTestEntries(
-    listCandidateTestFiles(index, changedFileList, changedSymbolIds, {
-      maxCandidates: appliedOptions.maxCandidates ?? 50,
-      ...(appliedOptions.testPatterns ? { testPatterns: appliedOptions.testPatterns } : {}),
-      projectRoot,
-    }),
-    await listDirectDeletedFileTestImporters(index, deletedFiles, appliedOptions.testPatterns, projectRoot),
-  )
-    .map((candidate) => ({
-      ...candidate,
-      file: relativePath(projectRoot, candidate.file),
-    }))
-    .sort((left, right) => {
-      const confidenceCompare = confidenceRank(right.confidence) - confidenceRank(left.confidence);
-      if (confidenceCompare !== 0) return confidenceCompare;
-      const fileCompare = comparePaths(left.file, right.file);
-      if (fileCompare !== 0) return fileCompare;
-      return left.reason.localeCompare(right.reason);
-    })
-    .slice(0, appliedOptions.maxCandidates ?? 50);
-  if (reviewTimings) {
-    reviewTimings.candidatesMs = Math.round(performance.now() - candidateStart);
+/**
+ * Build the structured review report used by programmatic review agents.
+ *
+ * The report keeps changed files, changed symbols, graph deltas, candidate tests,
+ * risk signals, review tasks, diagnostics, and optional snippets as data instead
+ * of terminal prose. Prefer this API over CLI summary output when composing
+ * deterministic model context or review file packs.
+ */
+export async function buildReviewReport(projectRoot: string, opts: ReviewOptions = {}): Promise<ReviewReport> {
+  const appliedOptions = applyReviewPresetOptions(opts);
+  const reviewReport = appliedOptions.report;
+  const reviewTimings = reviewReport?.timings;
+  const totalStart = performance.now();
+  const { changedFiles, explicitFiles, diffHunksByFile, diffKindsByFile, diffChangesByFile } =
+    await collectReviewChanges(projectRoot, appliedOptions, reviewTimings);
+
+  if (changedFiles.size === 0) {
+    const riskSummary = computeRiskSummary({
+      filesChanged: 0,
+      symbolsChanged: 0,
+      exportedChanged: 0,
+      missingFiles: 0,
+      parseFailures: 0,
+    });
+    const projectFiles = await discoverProjectFiles(projectRoot);
+    const report: ReviewReport = {
+      schemaVersion: REVIEW_SCHEMA_VERSION,
+      status: "no_changes",
+      projectFiles,
+      summary: { filesChanged: 0, symbolsChanged: 0, candidateTests: 0 },
+      riskSummary,
+      reviewTasks: buildReviewTasks({
+        filesChanged: 0,
+        symbolsChanged: 0,
+        exportedChanged: 0,
+        candidateTests: 0,
+        missingFiles: 0,
+        parseFailures: 0,
+      }),
+      changedFiles: [],
+      graphDelta: [],
+      candidateTests: [],
+    };
+    if (appliedOptions.gitBase !== undefined) report.base = appliedOptions.gitBase;
+    if (appliedOptions.gitHead !== undefined) report.head = appliedOptions.gitHead;
+    if (reviewTimings) reviewTimings.totalMs = Math.round(performance.now() - totalStart);
+    return report;
   }
+
+  const changedFileList = Array.from(changedFiles).sort(comparePaths);
+  const diagnostics: ReviewDiagnostics = {
+    missingFiles: [],
+    symbolMappingParseFailures: [],
+  };
+  const includeSymbolDetails = appliedOptions.includeSymbolDetails ?? false;
+  const diffContextLines =
+    typeof appliedOptions.diffContextLines === "number" && appliedOptions.diffContextLines >= 0
+      ? appliedOptions.diffContextLines
+      : 2;
+  const maxCallsites =
+    typeof appliedOptions.maxCallsites === "number" && appliedOptions.maxCallsites >= 0
+      ? appliedOptions.maxCallsites
+      : 5;
+  const referenceConcurrency =
+    typeof appliedOptions.referenceConcurrency === "number" && appliedOptions.referenceConcurrency > 0
+      ? appliedOptions.referenceConcurrency
+      : 8;
+  const { index, existenceByFile, deletedFiles, deletedSnapshots } = await buildReviewIndex({
+    projectRoot,
+    appliedOptions,
+    changedFileList,
+    diffKindsByFile,
+    diffChangesByFile,
+    includeSymbolDetails,
+    maxCallsites,
+    ...(reviewReport ? { reviewReport } : {}),
+    ...(reviewTimings ? { reviewTimings } : {}),
+  });
+  const includeDiffContext = appliedOptions.includeDiffContext ?? (includeSymbolDetails && diffHunksByFile.size > 0);
+
+  const { summaries, changedSymbolIds, exportedChangedCount, riskRelevantParseFailures } = await summarizeChangedFiles({
+    projectRoot,
+    index,
+    changedFileList,
+    diffHunksByFile,
+    diffKindsByFile,
+    explicitFiles,
+    existenceByFile,
+    deletedSnapshots,
+    includeSymbolDetails,
+    includeDiffContext,
+    diffContextLines,
+    maxCallsites,
+    referenceConcurrency,
+    diagnostics,
+    ...(reviewTimings ? { reviewTimings } : {}),
+  });
+
+  const graphDelta = await collectReviewGraphDelta({
+    projectRoot,
+    index,
+    changedFiles,
+    deletedFiles,
+    deletedSnapshots,
+  });
+
+  const candidateTests = await collectReviewCandidateTests({
+    projectRoot,
+    index,
+    changedFileList,
+    changedSymbolIds,
+    deletedFiles,
+    appliedOptions,
+    ...(reviewTimings ? { reviewTimings } : {}),
+  });
 
   const projectFiles = index.projectFiles ?? (await discoverProjectFiles(projectRoot));
-  const indexedFiles = Array.from(index.byFile.keys());
-  const normalizedChangedFiles = new Set(changedFileList.map(normalizePath));
-  const indexedFilesCoverMoreThanReviewSet = indexedFiles.some((file) => !normalizedChangedFiles.has(normalizePath(file)));
-  const sqlContextProjectFiles =
-    indexedFilesCoverMoreThanReviewSet && indexedFiles.some((file) => path.extname(file).toLowerCase() === ".sql")
-    ? indexedFiles
-    : undefined;
-  const sqlContext = await collectSqlReviewContext(projectRoot, {
-    changedFiles: changedFileList,
-    ...(sqlContextProjectFiles ? { projectFiles: sqlContextProjectFiles } : {}),
-  });
-  const report: ReviewReport = {
-    schemaVersion: REVIEW_SCHEMA_VERSION,
-    status: "ok",
+  const sqlContext = await collectReviewSqlContext({ projectRoot, index, changedFileList });
+  const report = assembleReviewReport({
+    appliedOptions,
     projectFiles,
-    summary: {
-      filesChanged: summaries.length,
-      symbolsChanged: changedSymbolIds.length,
-      candidateTests: candidateTests.length,
-    },
-    riskSummary: computeRiskSummary({
-      filesChanged: summaries.length,
-      symbolsChanged: changedSymbolIds.length,
-      exportedChanged: exportedChangedCount,
-      missingFiles: diagnostics.missingFiles.length,
-      parseFailures: riskRelevantParseFailures,
-    }),
-    reviewTasks: buildReviewTasks({
-      filesChanged: summaries.length,
-      symbolsChanged: changedSymbolIds.length,
-      exportedChanged: exportedChangedCount,
-      candidateTests: candidateTests.length,
-      missingFiles: diagnostics.missingFiles.length,
-      parseFailures: riskRelevantParseFailures,
-    }),
-    changedFiles: summaries,
-    graphDelta,
+    summaries,
+    changedSymbolIds,
     candidateTests,
+    graphDelta,
     ...(sqlContext ? { sqlContext } : {}),
-    ...(hasDiagnostics(diagnostics) ? { diagnostics } : {}),
-  };
-  if (appliedOptions.gitBase !== undefined) report.base = appliedOptions.gitBase;
-  report.head = appliedOptions.gitHead ?? "HEAD";
+    diagnostics,
+    riskRelevantParseFailures,
+    exportedChangedCount,
+  });
   if (reviewTimings) reviewTimings.totalMs = Math.round(performance.now() - totalStart);
   return report;
 }

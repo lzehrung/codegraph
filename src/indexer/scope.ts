@@ -2,6 +2,7 @@ import { parseWithJsLanguage } from "../jsFallback.js";
 import { sliceText, toRange } from "../util.js";
 import { getNativeSyntaxTreeExecution, type NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
+import { declarationKindToBindingKind } from "./declarations.js";
 import type { LanguageSupport } from "../languages.js";
 import type { JsLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
@@ -69,13 +70,6 @@ export function buildScopeIndexFromSource(
   const idSet = new Set([...support.nodeTypes.identifier, ...(support.nodeTypes.shorthandPropertyIdentifier ?? [])]);
   const customDeclLanguages = new Set(["c", "cpp", "kotlin", "swift"]);
   const paramParentTypes = new Set(["parameter_declaration", "parameter", "class_parameter", "lambda_parameters"]);
-
-  const toBindingKind = (kind: string): BindingKind => {
-    if (kind === "function") return "function";
-    if (kind === "class" || kind === "interface") return "class";
-    if (kind === "type") return "type";
-    return "local";
-  };
 
   const isParamNode = (node: SyntaxNodeLike): boolean => {
     let current: SyntaxNodeLike | null = node.parent;
@@ -219,7 +213,7 @@ export function buildScopeIndexFromSource(
     }
 
     if (customDeclLanguages.has(support.id) && idSet.has(node.type) && support.isDeclarationName(node)) {
-      const kind = isParamNode(node) ? "param" : toBindingKind(support.classifyDefinition(node));
+      const kind = isParamNode(node) ? "param" : declarationKindToBindingKind(support.classifyDefinition(node));
       addDecl(node, kind);
     }
 

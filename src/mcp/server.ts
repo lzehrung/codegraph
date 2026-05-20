@@ -1,13 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import {
-  createServer,
-  type IncomingMessage,
-  type Server as HttpServer,
-  type ServerResponse,
-} from "node:http";
-import type { AddressInfo } from "node:net";
-import os from "node:os";
+import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -17,7 +10,6 @@ import {
   isInitializeRequest,
   ListToolsRequestSchema,
   type CallToolResult,
-  type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { z } from "zod";
@@ -31,9 +23,49 @@ import { getDependencies, getReverseDependencies, getShortestPath } from "../gra
 import { findReferences, goToDefinition } from "../indexer.js";
 import { buildReviewReport, type ReviewDepth, type ReviewReport } from "../review.js";
 import { queryGraphSqliteRaw, type RawSqlResult } from "../sqlite.js";
-import { assertFilePathWithinRoot, isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util.js";
+import { normalizePath, toProjectRelativePath } from "../util.js";
 import { createAgentSession } from "../agent/session.js";
 import type { AgentSession } from "../agent/session.js";
+import {
+  assertMcpSqliteQueryResourceBounded,
+  boundRawSqlResult,
+  DEFAULT_SQLITE_BYTE_LIMIT,
+  normalizeSqliteRowLimit,
+} from "./sqliteGuard.js";
+import {
+  DEFAULT_FILE_BYTES,
+  DEFAULT_MCP_COLLECTION_LIMIT,
+  listCodegraphMcpTools,
+  MAX_FILE_BYTES,
+  MAX_MCP_COLLECTION_LIMIT,
+  MCP_TOOLS,
+} from "./tools.js";
+import {
+  buildAllowedHostHeaders,
+  closeHttpServer,
+  emptyAllowedHostHeaderRules,
+  formatHostForUrl,
+  getHeaderValue,
+  getHttpServerPort,
+  getRequestPath,
+  isAllowedHostHeader,
+  listenOnHttpServer,
+  readJsonRequestBody,
+  waitForHttpServerClose,
+  writeJsonResponse,
+  writeJsonRpcError,
+  type AllowedHostHeaderRules,
+} from "./http.js";
+
+export { listCodegraphMcpTools } from "./tools.js";
+import {
+  assertRealPathCandidateWithinRoot,
+  assertWritableDirectoryRealPathWithinRoot,
+  readFilePrefix,
+  resolveArtifactSqlitePathCandidate,
+  resolveProjectFile,
+  resolveReadableFile,
+} from "./security.js";
 
 export type CodegraphMcpServerOptions = {
   root: string;
@@ -107,28 +139,8 @@ export type CodegraphMcpHandlers = {
   }) => Promise<CodegraphArtifactBuildResult>;
 };
 
-const DEFAULT_FILE_BYTES = 80_000;
-const MAX_FILE_BYTES = 500_000;
-const DEFAULT_SQLITE_ROW_LIMIT = 100;
-const MAX_SQLITE_ROW_LIMIT = 500;
-const DEFAULT_SQLITE_BYTE_LIMIT = 200_000;
-const MAX_SQLITE_CELL_BYTES = 8_000;
-const DEFAULT_MCP_COLLECTION_LIMIT = 100;
-const MAX_MCP_COLLECTION_LIMIT = 500;
 const MCP_HTTP_PATH = "/mcp";
 const MAX_MCP_HTTP_BODY_BYTES = 1_000_000;
-const DISALLOWED_MCP_SQLITE_FUNCTIONS = new Set([
-  "format",
-  "group_concat",
-  "hex",
-  "json_group_array",
-  "json_group_object",
-  "printf",
-  "quote",
-  "randomblob",
-  "string_agg",
-  "zeroblob",
-]);
 
 export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): CodegraphMcpHandlers {
   const root = path.resolve(options.root);
@@ -221,12 +233,10 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
         snapshot.fileGraph,
         await resolveProjectFile(await realRoot, root, request.file),
         queryOptions,
-      ).map(
-        (dependency) => ({
-          file: relative(dependency.file),
-          depth: dependency.depth,
-        }),
-      );
+      ).map((dependency) => ({
+        file: relative(dependency.file),
+        depth: dependency.depth,
+      }));
       return { dependencies };
     },
 
@@ -277,11 +287,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
       if (!sqlitePath) {
         throw new Error("No SQLite artifact is available. Run artifact_build first or pass artifactPath.");
       }
-      const realSqlitePath = await assertRealPathCandidateWithinRoot(
-        await realRoot,
-        sqlitePath,
-        "SQLite artifact",
-      );
+      const realSqlitePath = await assertRealPathCandidateWithinRoot(await realRoot, sqlitePath, "SQLite artifact");
       assertMcpSqliteQueryResourceBounded(request.query);
       const result = await queryGraphSqliteRaw(realSqlitePath, request.query, request.params ?? [], {
         maxRows: normalizeSqliteRowLimit(request.limit),
@@ -322,12 +328,15 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
 }
 
 function createCodegraphMcpProtocolServer(handlers: CodegraphMcpHandlers): McpServer {
-  const server = new McpServer({
-    name: "codegraph",
-    version: "1.0.0",
-  }, {
-    capabilities: { tools: {} },
-  });
+  const server = new McpServer(
+    {
+      name: "codegraph",
+      version: "1.0.0",
+    },
+    {
+      capabilities: { tools: {} },
+    },
+  );
 
   server.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: MCP_TOOLS }));
   server.server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
@@ -525,197 +534,6 @@ async function closeMcpSession(session: {
   await Promise.allSettled([session.transport.close(), session.server.close()]);
 }
 
-function getRequestPath(request: IncomingMessage): string {
-  const rawUrl = request.url ?? "/";
-  return new URL(rawUrl, "http://127.0.0.1").pathname;
-}
-
-type ParsedJsonBody =
-  | { status: "ok"; body: unknown }
-  | { status: "too_large" }
-  | { status: "invalid_json" };
-
-type AllowedHostHeaderRules = {
-  exact: Set<string>;
-  loopbackOnly: Set<string>;
-};
-
-async function readJsonRequestBody(request: IncomingMessage, maxBytes: number): Promise<ParsedJsonBody> {
-  const contentLength = getContentLength(request);
-  if (contentLength !== undefined && contentLength > maxBytes) {
-    request.resume();
-    return { status: "too_large" };
-  }
-
-  const chunks: Buffer[] = [];
-  let bytes = 0;
-  for await (const chunk of request) {
-    const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-    bytes += buffer.byteLength;
-    if (bytes > maxBytes) {
-      return { status: "too_large" };
-    }
-    chunks.push(buffer);
-  }
-
-  const rawBody = Buffer.concat(chunks).toString("utf8");
-  try {
-    const body: unknown = rawBody.length ? JSON.parse(rawBody) : null;
-    return { status: "ok", body };
-  } catch {
-    return { status: "invalid_json" };
-  }
-}
-
-function getHeaderValue(value: string | string[] | undefined): string | undefined {
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-  return value;
-}
-
-function getContentLength(request: IncomingMessage): number | undefined {
-  const contentLength = getHeaderValue(request.headers["content-length"]);
-  if (contentLength === undefined) return undefined;
-  const parsedLength = Number(contentLength);
-  if (!Number.isFinite(parsedLength) || parsedLength < 0) return undefined;
-  return parsedLength;
-}
-
-function emptyAllowedHostHeaderRules(): AllowedHostHeaderRules {
-  return {
-    exact: new Set(),
-    loopbackOnly: new Set(),
-  };
-}
-
-function isAllowedHostHeader(request: IncomingMessage, allowedHostHeaders: AllowedHostHeaderRules): boolean {
-  const host = getHeaderValue(request.headers.host);
-  if (host === undefined) return false;
-  const normalizedHost = host.toLowerCase();
-  if (allowedHostHeaders.exact.has(normalizedHost)) return true;
-  return allowedHostHeaders.loopbackOnly.has(normalizedHost) && isLoopbackRemoteAddress(request.socket.remoteAddress);
-}
-
-function buildAllowedHostHeaders(host: string, port: number): AllowedHostHeaderRules {
-  const allowed = emptyAllowedHostHeaderRules();
-  allowed.exact.add(formatHostHeader(host, port).toLowerCase());
-  if (isWildcardBindHost(host)) {
-    allowed.loopbackOnly.add(`127.0.0.1:${port}`);
-    allowed.loopbackOnly.add(`localhost:${port}`);
-    allowed.loopbackOnly.add(`[::1]:${port}`);
-    for (const localHost of localInterfaceHostHeaders(port)) {
-      allowed.exact.add(localHost);
-    }
-  }
-  if (host === "127.0.0.1") {
-    allowed.exact.add(`localhost:${port}`);
-  }
-  if (host === "::1" || host === "[::1]") {
-    allowed.exact.add(`[::1]:${port}`);
-    allowed.exact.add(`localhost:${port}`);
-  }
-  return allowed;
-}
-
-function isWildcardBindHost(host: string): boolean {
-  return host === "0.0.0.0" || host === "::" || host === "[::]";
-}
-
-function isLoopbackRemoteAddress(address: string | undefined): boolean {
-  if (address === undefined) return false;
-  const normalized = address.toLowerCase();
-  return normalized === "::1" || normalized === "::ffff:127.0.0.1" || normalized.startsWith("127.");
-}
-
-function localInterfaceHostHeaders(port: number): Set<string> {
-  const hosts = new Set<string>();
-  const hostname = os.hostname().trim().toLowerCase();
-  if (hostname) {
-    hosts.add(`${hostname}:${port}`);
-  }
-  for (const interfaces of Object.values(os.networkInterfaces())) {
-    for (const entry of interfaces ?? []) {
-      if (entry.internal) continue;
-      const address = entry.address.split("%")[0] ?? entry.address;
-      hosts.add(formatHostHeader(address, port).toLowerCase());
-    }
-  }
-  return hosts;
-}
-
-function formatHostForUrl(host: string): string {
-  if (host.includes(":") && !host.startsWith("[")) {
-    return `[${host}]`;
-  }
-  return host;
-}
-
-function formatHostHeader(host: string, port: number): string {
-  return `${formatHostForUrl(host)}:${port}`;
-}
-
-function writeJsonRpcError(
-  response: ServerResponse,
-  statusCode: number,
-  message: string,
-  code = -32000,
-): void {
-  writeJsonResponse(response, statusCode, {
-    jsonrpc: "2.0",
-    error: { code, message },
-    id: null,
-  });
-}
-
-function writeJsonResponse(response: ServerResponse, statusCode: number, body: unknown): void {
-  response.writeHead(statusCode, { "content-type": "application/json" });
-  response.end(JSON.stringify(body));
-}
-
-async function listenOnHttpServer(server: HttpServer, port: number, host: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const onError = (error: Error) => {
-      server.off("listening", onListening);
-      reject(error);
-    };
-    const onListening = () => {
-      server.off("error", onError);
-      resolve();
-    };
-    server.once("error", onError);
-    server.once("listening", onListening);
-    server.listen(port, host);
-  });
-}
-
-function getHttpServerPort(address: string | AddressInfo | null): number {
-  if (address === null || typeof address === "string") {
-    throw new Error("HTTP server did not expose a TCP port.");
-  }
-  return address.port;
-}
-
-async function closeHttpServer(server: HttpServer): Promise<void> {
-  if (!server.listening) return;
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
-}
-
-async function waitForHttpServerClose(server: HttpServer): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("close", resolve);
-    server.once("error", reject);
-  });
-}
-
 async function callMcpTool(handlers: CodegraphMcpHandlers, name: string, input: unknown): Promise<unknown> {
   switch (name) {
     case "search":
@@ -778,15 +596,6 @@ function toToolResult(value: unknown): CallToolResult {
       },
     ],
   };
-}
-
-function resolveArtifactSqlitePathCandidate(root: string, artifactPath: string): string {
-  const resolved = path.isAbsolute(artifactPath) ? artifactPath : path.resolve(root, artifactPath);
-  const sqlitePath =
-    resolved.toLowerCase().endsWith(".sqlite") || resolved.toLowerCase().endsWith(".db")
-      ? resolved
-      : path.join(resolved, "codegraph.sqlite");
-  return normalizePath(sqlitePath);
 }
 
 const searchSchema = z.object({
@@ -869,418 +678,3 @@ const artifactBuildSchema = z.object({
   questions: z.boolean().optional(),
   force: z.boolean().optional(),
 });
-
-function objectSchema(properties: Record<string, object>, required: string[] = []): Tool["inputSchema"] {
-  return required.length ? { type: "object", properties, required } : { type: "object", properties };
-}
-
-const stringProperty = { type: "string" };
-const booleanProperty = { type: "boolean" };
-
-const MCP_TOOLS: Tool[] = [
-  {
-    name: "search",
-    description: "Deterministic ranked search across files, symbols, chunks, SQL objects, and graph context.",
-    inputSchema: objectSchema(
-      {
-        query: stringProperty,
-        mode: { type: "string", enum: ["hybrid", "symbol", "path", "text", "graph", "sql"] },
-        from: stringProperty,
-        depth: { type: "integer", minimum: 0, default: 1, description: "Graph neighborhood depth." },
-        limit: { type: "integer", minimum: 0, maximum: 100, default: 20 },
-      },
-      ["query"],
-    ),
-  },
-  {
-    name: "get_file",
-    description: "Read a bounded project file by relative path.",
-    inputSchema: objectSchema(
-      { file: stringProperty, maxBytes: { type: "integer", minimum: 1, maximum: MAX_FILE_BYTES } },
-      ["file"],
-    ),
-  },
-  {
-    name: "get_symbol",
-    description: "Resolve a stable search or explain handle.",
-    inputSchema: objectSchema({ handle: stringProperty }, ["handle"]),
-  },
-  {
-    name: "goto",
-    description: "Resolve the definition at a file position.",
-    inputSchema: objectSchema(
-      { file: stringProperty, line: { type: "integer", minimum: 1 }, column: { type: "integer", minimum: 0 } },
-      ["file", "line", "column"],
-    ),
-  },
-  {
-    name: "refs",
-    description: "Find references by stable handle or file position.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        handle: stringProperty,
-        file: stringProperty,
-        line: { type: "integer", minimum: 1 },
-        column: { type: "integer", minimum: 0 },
-        limit: {
-          type: "integer",
-          minimum: 0,
-          maximum: MAX_MCP_COLLECTION_LIMIT,
-          default: DEFAULT_MCP_COLLECTION_LIMIT,
-        },
-      },
-      oneOf: [
-        {
-          required: ["handle"],
-          not: {
-            anyOf: [{ required: ["file"] }, { required: ["line"] }, { required: ["column"] }],
-          },
-        },
-        {
-          required: ["file", "line", "column"],
-          not: { required: ["handle"] },
-        },
-      ],
-    },
-  },
-  {
-    name: "deps",
-    description: "List file dependencies.",
-    inputSchema: objectSchema(
-      {
-        file: stringProperty,
-        depth: { type: "integer", minimum: 0, default: 1 },
-        limit: {
-          type: "integer",
-          minimum: 0,
-          maximum: MAX_MCP_COLLECTION_LIMIT,
-          default: DEFAULT_MCP_COLLECTION_LIMIT,
-        },
-      },
-      ["file"],
-    ),
-  },
-  {
-    name: "rdeps",
-    description: "List reverse file dependencies.",
-    inputSchema: objectSchema(
-      {
-        file: stringProperty,
-        depth: { type: "integer", minimum: 0, default: 1 },
-        limit: {
-          type: "integer",
-          minimum: 0,
-          maximum: MAX_MCP_COLLECTION_LIMIT,
-          default: DEFAULT_MCP_COLLECTION_LIMIT,
-        },
-      },
-      ["file"],
-    ),
-  },
-  {
-    name: "path",
-    description: "Find the shortest dependency path between two files.",
-    inputSchema: objectSchema({ from: stringProperty, to: stringProperty }, ["from", "to"]),
-  },
-  {
-    name: "impact",
-    description: "Build compact impact context for a git range.",
-    inputSchema: objectSchema({ base: stringProperty, head: stringProperty }, ["base", "head"]),
-  },
-  {
-    name: "review",
-    description: "Build review context for a git range.",
-    inputSchema: objectSchema(
-      {
-        base: stringProperty,
-        head: stringProperty,
-        reviewDepth: { type: "string", enum: ["minimal", "standard", "deep"] },
-      },
-      ["base", "head"],
-    ),
-  },
-  {
-    name: "query_sqlite",
-    description: "Run a bounded read-only SQL query against the graph SQLite artifact.",
-    inputSchema: objectSchema(
-      {
-        query: stringProperty,
-        params: {
-          type: "array",
-          items: { oneOf: [{ type: "string" }, { type: "number" }, { type: "null" }] },
-        },
-        limit: { type: "integer", minimum: 0, maximum: MAX_SQLITE_ROW_LIMIT, default: DEFAULT_SQLITE_ROW_LIMIT },
-      },
-      ["query"],
-    ),
-  },
-  {
-    name: "artifact_build",
-    description: "Build Codegraph artifacts when write tools are explicitly enabled.",
-    inputSchema: objectSchema({
-      outDir: stringProperty,
-      sqlite: booleanProperty,
-      graphJson: booleanProperty,
-      report: booleanProperty,
-      questions: booleanProperty,
-      force: booleanProperty,
-    }),
-  },
-];
-
-export function listCodegraphMcpTools(): Tool[] {
-  return MCP_TOOLS.map((tool) => ({ ...tool }));
-}
-
-function normalizeSqliteRowLimit(limit: number | undefined): number {
-  if (typeof limit !== "number" || !Number.isFinite(limit)) return DEFAULT_SQLITE_ROW_LIMIT;
-  return Math.min(MAX_SQLITE_ROW_LIMIT, Math.max(0, Math.floor(limit)));
-}
-
-function assertMcpSqliteQueryResourceBounded(sql: string): void {
-  const searchableSql = stripSqlCommentsAndLiterals(sql).toLowerCase();
-  if (/\bwith\s+recursive\b/.test(searchableSql)) {
-    throw new Error("MCP query_sqlite does not support recursive SQLite queries.");
-  }
-  const functionPattern = /\b([a-z_][a-z0-9_]*)\s*\(/gi;
-  for (const match of searchableSql.matchAll(functionPattern)) {
-    const functionName = match[1];
-    if (functionName !== undefined && DISALLOWED_MCP_SQLITE_FUNCTIONS.has(functionName)) {
-      throw new Error(`MCP query_sqlite rejected unsupported SQLite function ${functionName}.`);
-    }
-  }
-  const quotedFunctionPattern = /(?:"((?:[^"]|"")*)"|`((?:[^`]|``)*)`|\[([^\]]*)\])\s*\(/g;
-  for (const match of searchableSql.matchAll(quotedFunctionPattern)) {
-    const functionName = (match[1] ?? match[2] ?? match[3] ?? "").replace(/""|``/g, (escaped) => escaped[0] ?? "");
-    if (DISALLOWED_MCP_SQLITE_FUNCTIONS.has(functionName)) {
-      throw new Error(`MCP query_sqlite rejected unsupported SQLite function ${functionName}.`);
-    }
-  }
-}
-
-function stripSqlCommentsAndLiterals(sql: string): string {
-  let output = "";
-  let index = 0;
-  while (index < sql.length) {
-    const char = sql[index];
-    const next = sql[index + 1];
-    if (char === "-" && next === "-") {
-      index += 2;
-      while (index < sql.length && sql[index] !== "\n") {
-        output += " ";
-        index += 1;
-      }
-      continue;
-    }
-    if (char === "/" && next === "*") {
-      index += 2;
-      while (index < sql.length && !(sql[index] === "*" && sql[index + 1] === "/")) {
-        output += " ";
-        index += 1;
-      }
-      index = Math.min(sql.length, index + 2);
-      continue;
-    }
-    if (char === "'") {
-      output += " ";
-      index += 1;
-      while (index < sql.length) {
-        if (sql[index] === "'") {
-          if (sql[index + 1] === "'") {
-            output += "  ";
-            index += 2;
-            continue;
-          }
-          index += 1;
-          break;
-        }
-        output += " ";
-        index += 1;
-      }
-      continue;
-    }
-    output += char;
-    index += 1;
-  }
-  return output;
-}
-
-function boundRawSqlResult(result: RawSqlResult, byteLimit: number): RawSqlResult {
-  const rows: Array<Array<unknown>> = [];
-  let bytes = Buffer.byteLength(JSON.stringify({ columns: result.columns, rows: [] }), "utf8");
-  let truncated = result.truncated ?? false;
-
-  for (const rawRow of result.rows) {
-    if (rowContainsTruncatedValue(rawRow)) {
-      truncated = true;
-    }
-    const row = rawRow.map(normalizeSqliteValue);
-    const rowBytes = Buffer.byteLength(JSON.stringify(row), "utf8");
-    if (bytes + rowBytes > byteLimit) {
-      truncated = true;
-      break;
-    }
-    rows.push(row);
-    bytes += rowBytes;
-  }
-
-  return {
-    ...result,
-    rows,
-    byteLimit,
-    bytes,
-    truncated,
-  };
-}
-
-function rowContainsTruncatedValue(row: Array<unknown>): boolean {
-  return row.some(
-    (value) =>
-      (typeof value === "string" && Buffer.byteLength(value, "utf8") > MAX_SQLITE_CELL_BYTES) ||
-      value instanceof Uint8Array,
-  );
-}
-
-function normalizeSqliteValue(value: unknown): unknown {
-  if (typeof value === "string") return truncateUtf8(value, MAX_SQLITE_CELL_BYTES);
-  if (typeof value === "bigint") return value.toString();
-  if (value instanceof Uint8Array) return `<${value.byteLength} bytes>`;
-  return value;
-}
-
-function truncateUtf8(value: string, maxBytes: number): string {
-  if (Buffer.byteLength(value, "utf8") <= maxBytes) return value;
-  let output = "";
-  let bytes = 0;
-  for (const char of value) {
-    const charBytes = Buffer.byteLength(char, "utf8");
-    if (bytes + charBytes > maxBytes) break;
-    output += char;
-    bytes += charBytes;
-  }
-  return `${output}...[truncated]`;
-}
-
-async function resolveReadableFile(
-  realRoot: string,
-  root: string,
-  filePath: string,
-): Promise<{ realPath: string; displayPath: string }> {
-  const candidatePath = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(root, filePath);
-  const realPath = await assertRealPathCandidateWithinRoot(realRoot, candidatePath, "File");
-  const displayPath =
-    toProjectRelativePath(root, candidatePath) ?? toProjectRelativePath(realRoot, realPath) ?? normalizePath(realPath);
-  return { realPath, displayPath };
-}
-
-async function resolveProjectFile(realRoot: string, root: string, filePath: string): Promise<string> {
-  const candidatePath = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(root, filePath);
-  const realPath = await assertRealPathCandidateWithinRoot(realRoot, candidatePath, "File");
-  const lexicalRelativePath = toProjectRelativePath(root, candidatePath);
-  if (lexicalRelativePath) return normalizePath(candidatePath);
-  const realRelativePath = toProjectRelativePath(realRoot, realPath);
-  if (realRelativePath) return normalizePath(path.resolve(root, realRelativePath));
-  throw new Error(`File is outside project root: ${normalizePath(realPath)} (root: ${normalizePath(realRoot)})`);
-}
-
-async function readFilePrefix(filePath: string, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
-  const handle = await fs.open(filePath, "r");
-  try {
-    const readLimit = maxBytes + 1;
-    const buffer = Buffer.alloc(readLimit);
-    const { bytesRead } = await handle.read(buffer, 0, readLimit, 0);
-    const outputBytes = Math.min(bytesRead, maxBytes);
-    const outputBuffer = trimToUtf8Boundary(buffer.subarray(0, outputBytes));
-    return {
-      text: outputBuffer.toString("utf8"),
-      truncated: bytesRead > maxBytes,
-    };
-  } finally {
-    await handle.close();
-  }
-}
-
-function trimToUtf8Boundary(buffer: Buffer): Buffer {
-  if (!buffer.length) return buffer;
-  let leadIndex = buffer.length - 1;
-  while (leadIndex >= 0) {
-    const byte = buffer[leadIndex];
-    if (byte === undefined || (byte & 0xc0) !== 0x80) break;
-    leadIndex -= 1;
-  }
-  if (leadIndex < 0) return buffer.subarray(0, 0);
-  const leadByte = buffer[leadIndex];
-  if (leadByte === undefined) return buffer.subarray(0, 0);
-  const continuationBytes = buffer.length - leadIndex - 1;
-  const expectedContinuationBytes = expectedUtf8ContinuationBytes(leadByte);
-  if (expectedContinuationBytes === null) return buffer.subarray(0, leadIndex);
-  if (continuationBytes < expectedContinuationBytes) return buffer.subarray(0, leadIndex);
-  return buffer;
-}
-
-function expectedUtf8ContinuationBytes(byte: number): number | null {
-  if ((byte & 0x80) === 0) return 0;
-  if ((byte & 0xe0) === 0xc0) return 1;
-  if ((byte & 0xf0) === 0xe0) return 2;
-  if ((byte & 0xf8) === 0xf0) return 3;
-  return null;
-}
-
-async function assertRealPathCandidateWithinRoot(
-  realRoot: string,
-  filePath: string,
-  label: string,
-): Promise<string> {
-  const existingPath = await nearestExistingPath(filePath);
-  const realExistingPath = await fs.realpath(existingPath);
-  const relativeSuffix = path.relative(existingPath, filePath);
-  const realTargetPath = path.resolve(realExistingPath, relativeSuffix);
-  if (!isFilePathWithinRoot(realRoot, realTargetPath)) {
-    throw new Error(
-      `${label} is outside project root: ${normalizePath(realTargetPath)} (root: ${normalizePath(realRoot)})`,
-    );
-  }
-  const finalRealPath = normalizePath(await fs.realpath(filePath));
-  if (!isFilePathWithinRoot(realRoot, finalRealPath)) {
-    throw new Error(`${label} is outside project root: ${finalRealPath} (root: ${normalizePath(realRoot)})`);
-  }
-  return finalRealPath;
-}
-
-async function assertWritableDirectoryRealPathWithinRoot(
-  realRoot: string,
-  root: string,
-  requestedPath: string,
-  label: string,
-): Promise<string> {
-  const lexicalPath = path.isAbsolute(requestedPath) ? requestedPath : path.resolve(root, requestedPath);
-  const existingPath = await nearestExistingPath(lexicalPath);
-  const realExistingPath = await fs.realpath(existingPath);
-  const relativeSuffix = path.relative(existingPath, lexicalPath);
-  const realTargetPath = path.resolve(realExistingPath, relativeSuffix);
-  if (!isFilePathWithinRoot(realRoot, realTargetPath)) {
-    throw new Error(
-      `${label} is outside project root: ${normalizePath(realTargetPath)} (root: ${normalizePath(realRoot)})`,
-    );
-  }
-  return normalizePath(realTargetPath);
-}
-
-async function nearestExistingPath(filePath: string): Promise<string> {
-  let current = filePath;
-  while (current !== path.dirname(current)) {
-    try {
-      await fs.stat(current);
-      return current;
-    } catch (error) {
-      if (!isMissingPathError(error)) throw error;
-      current = path.dirname(current);
-    }
-  }
-  return current;
-}
-
-function isMissingPathError(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
-}

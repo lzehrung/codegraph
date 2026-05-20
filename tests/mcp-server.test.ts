@@ -407,6 +407,9 @@ describe("codegraph MCP handlers", () => {
     await expect(handlers.query_sqlite({ query: "SELECT 'randomblob(300000)' AS text;" })).resolves.toEqual(
       expect.objectContaining({ rows: [["randomblob(300000)"]] }),
     );
+    await expect(
+      handlers.query_sqlite({ query: "SELECT 1 AS ok /* zeroblob(300000) */ -- randomblob(300000)" }),
+    ).resolves.toEqual(expect.objectContaining({ rows: [[1]] }));
   });
 
   it("disables artifact builds by default and in explicit read-only mode", async () => {
