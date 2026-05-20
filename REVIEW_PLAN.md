@@ -148,7 +148,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Correctness opportunity: compact imports, full language queries, ad-hoc queries, and syntax-tree parsing repeat fallback reason/error shaping; one result-normalization helper would keep native-required failures and unsupported-language behavior consistent.
   - Tests: native runtime mode, native query normalization, compact imports fallback, native parser ownership, native worker parity, and explicit native-required failure paths.
 
-- [ ] Decompose SQLite persistence into schema, write/update, and query modules.
+- [x] Decompose SQLite persistence into schema, write/update, and query modules.
   - `src/sqlite.ts` is 920 lines and combines schema creation/migration, insert/delete helpers, full writes, incremental updates, canned graph queries, raw read-only query validation, and snapshot metadata.
   - Suggested fix: split `sqlite/schema.ts`, `sqlite/write.ts`, `sqlite/update.ts`, `sqlite/query.ts`, and `sqlite/guards.ts`. Keep schema-version handling and migration helpers isolated so persistent storage changes have one upgrade path.
   - Correctness opportunity: `ensureSchema()` creates tables and patches columns in the same file as query execution; separating schema upgrades would make older on-disk database regression tests easier to maintain.
