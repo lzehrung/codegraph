@@ -92,7 +92,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
 
 ## Third-Pass Complexity Findings
 
-- [ ] Share declaration and export extraction infrastructure across locals, scope, and impact mapping.
+- [x] Share declaration and export extraction infrastructure across locals, scope, and impact mapping.
   - `src/indexer/locals-and-exports.ts` has a 598-line `collectLocalsAndExportsFromSource()` and `src/indexer/scope.ts` has a 263-line `buildScopeIndexFromSource()`; both classify declaration names, compute ranges, walk parameters, and interpret language-specific definition nodes. `src/impact/map.ts` also repeats declaration-name checks while locating changed symbols.
   - Suggested fix: introduce a shared declaration walker that emits normalized declaration events (`name`, `kind`, `range`, `node`, `scopeRole`) and let locals/export extraction, scope indexing, and impact mapping consume those events.
   - Correctness opportunity: this would keep language additions from updating locals but not scope, or scope but not impact symbol mapping.

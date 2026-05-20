@@ -1,6 +1,13 @@
 import type { FileId } from "../types.js";
 import type { ProjectIndex, SymbolDef, SymbolHandle } from "../indexer.js";
 import { ensureParsedContext } from "../indexer.js";
+import {
+  buildTrackedSymbolPositions,
+  findLocalByStartPosition,
+  findTrackedDeclarationNameInAncestors,
+  isProjectSymbolExported,
+  symbolHandleFromLocal,
+} from "../indexer/declarations.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
 import { supportForFile } from "../languages.js";
 import type { LanguageSupport } from "../languages.js";
@@ -9,11 +16,6 @@ import type { FileChange, ChangedSymbol } from "./types.js";
 import { collectChangedLines } from "./hunks.js";
 
 export { collectChangedLines } from "./hunks.js";
-
-function symbolHandleFromLocal(file: FileId, local: SymbolDef): string {
-  const index = local.range.start.index ?? 0;
-  return `${file}::${local.localName}::${index}`;
-}
 
 export async function locateChangedSymbols(
   index: ProjectIndex,
@@ -69,7 +71,7 @@ export async function locateChangedSymbolsWithLines(
 
   // Pre-build an O(1) position lookup so findDeclarationNameInAncestors does
   // not do an O(locals) scan for every candidate declaration name node.
-  const trackedPositions = mod ? buildTrackedPositions(mod.locals) : undefined;
+  const trackedPositions = mod ? buildTrackedSymbolPositions(mod.locals) : undefined;
 
   for (const node of changedNodes) {
     const classification = classifyChangedNode(node, source, sup);
@@ -112,7 +114,7 @@ export async function locateChangedSymbolsWithLines(
       file,
       name: entry.symbolDef.localName,
       kind: entry.symbolDef.kind,
-      exported: isExported(index, file, entry.symbolDef),
+      exported: isProjectSymbolExported(index, file, entry.symbolDef),
       range: entry.symbolDef.range,
       typeOnly: entry.typeOnly,
       changedLines: [...entry.lines].sort((a, b) => a - b),
@@ -146,7 +148,7 @@ export async function mapChangedLinesToSymbols(
   const changedLines = changedLinesOverride ?? collectChangedLines(hunks);
 
   const mod = index.byFile.get(file);
-  const trackedPositions = mod ? buildTrackedPositions(mod.locals) : undefined;
+  const trackedPositions = mod ? buildTrackedSymbolPositions(mod.locals) : undefined;
 
   const nodes = findNodesInLines(tree, changedLines);
   const linesByHandle = new Map<SymbolHandle, Set<number>>();
@@ -289,41 +291,6 @@ function isTypeOnlyDeclaration(node: SyntaxNodeLike, source: string): boolean {
     current = current.parent;
   }
   return false;
-}
-
-/** Build an O(1)-lookup set of tracked symbol positions ("line:col") from locals. */
-function buildTrackedPositions(locals: readonly SymbolDef[]): Set<string> {
-  const set = new Set<string>();
-  for (const l of locals) {
-    set.add(`${l.range.start.line}:${l.range.start.column}`);
-  }
-  return set;
-}
-
-function findDeclarationNameInAncestors(
-  node: SyntaxNodeLike,
-  sup: LanguageSupport,
-  trackedPositions?: ReadonlySet<string>,
-): SyntaxNodeLike | null {
-  let cur: SyntaxNodeLike | null = node;
-  while (cur) {
-    for (const ch of cur.namedChildren || []) {
-      if (sup.isDeclarationName?.(ch)) {
-        // If we have a tracked-position set, only stop at names that are
-        // actually in the index.  This prevents the search from halting at
-        // declaration names for symbols not tracked as separate locals (e.g.
-        // class method names) and allows climbing to a tracked ancestor instead.
-        if (trackedPositions) {
-          const line = (ch.startPosition?.row ?? 0) + 1;
-          const col = (ch.startPosition?.column ?? 0) + 1;
-          if (!trackedPositions.has(`${line}:${col}`)) continue;
-        }
-        return ch;
-      }
-    }
-    cur = cur.parent;
-  }
-  return null;
 }
 
 const SIGNATURE_DECL_TYPES = new Set([
@@ -491,9 +458,7 @@ function findSymbolHandleForNode(
   if (classification?.type === "definition" && isDefinitionNameNode(node, sup, source)) {
     const definitionLine = node.startPosition?.row + 1;
     const definitionColumn = node.startPosition?.column + 1;
-    const local = mod.locals.find(
-      (l) => l.range.start.line === definitionLine && l.range.start.column === definitionColumn,
-    );
+    const local = findLocalByStartPosition(mod.locals, definitionLine, definitionColumn);
     if (local) {
       return symbolHandleFromLocal(file, local);
     }
@@ -507,30 +472,15 @@ function findSymbolHandleForNode(
   // Pass trackedPositions (pre-built from mod.locals) so the search skips
   // untracked names (e.g., method names when methods are not in locals) and
   // continues climbing to a tracked ancestor.
-  const nameNode = findDeclarationNameInAncestors(node, sup, trackedPositions);
+  const nameNode = findTrackedDeclarationNameInAncestors(node, sup, trackedPositions);
   if (nameNode) {
     const ancestorLine = nameNode.startPosition?.row + 1;
     const ancestorColumn = nameNode.startPosition?.column + 1;
-    const local = mod.locals.find(
-      (l) => l.range.start.line === ancestorLine && l.range.start.column === ancestorColumn,
-    );
+    const local = findLocalByStartPosition(mod.locals, ancestorLine, ancestorColumn);
     return local ? symbolHandleFromLocal(file, local) : null;
   }
 
   return null;
-}
-
-function isExported(index: ProjectIndex, file: FileId, symbolDef: SymbolDef): boolean {
-  const mod = index.byFile.get(file);
-  if (!mod) return false;
-
-  const symbolIndex = symbolDef.range.start.index ?? 0;
-  return mod.exports.some(
-    (e) =>
-      e.type === "local" &&
-      e.target.localName === symbolDef.localName &&
-      (e.target.range.start.index ?? 0) === symbolIndex,
-  );
 }
 
 function isStyleDefinitionNode(node: SyntaxNodeLike, sup: LanguageSupport): boolean {

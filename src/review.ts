@@ -19,6 +19,7 @@ import {
   type SymbolDef,
   symbolId,
 } from "./indexer.js";
+import { isSymbolHandleExported } from "./indexer/declarations.js";
 import type { GraphBuildOptions } from "./graphs/types.js";
 import { locateChangedSymbolsWithLines, mapChangedLinesToSymbols } from "./impact/map.js";
 import { parseUnifiedDiff } from "./impact/parse.js";
@@ -608,7 +609,7 @@ function isRiskRelevantSymbolMappingFile(file: string): boolean {
 }
 
 function isExported(mod: { exports: ExportEntry[] }, handle: string): boolean {
-  return mod.exports.some((e) => e.type === "local" && symbolId(e.target) === handle);
+  return isSymbolHandleExported(mod.exports, handle);
 }
 
 function listReviewableExports(mod: ModuleIndex): ReviewableExportEntry[] {
