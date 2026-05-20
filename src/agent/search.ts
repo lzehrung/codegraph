@@ -6,6 +6,14 @@ import type { SymbolDef } from "../indexer/types.js";
 import type { Range } from "../types.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
 import { type SymbolNode } from "../graphs/symbol-graph.js";
+import {
+  AGENT_SEARCH_EVIDENCE_PER_RESULT_LIMIT,
+  AGENT_SEARCH_FOLLOWUPS_PER_RESULT_LIMIT,
+  AGENT_SEARCH_FORMAT_REASON_LIMIT,
+  AGENT_SEARCH_NEIGHBORS_PER_RESULT_LIMIT,
+  AGENT_SEARCH_RANK_REASONS_PER_RESULT_LIMIT,
+  AGENT_SEARCH_RESULT_LIMIT,
+} from "../presentation/bounds.js";
 import { normalizePath } from "../util/paths.js";
 import { boundAgentList, defaultAgentLimit } from "./bounds.js";
 import {
@@ -132,13 +140,8 @@ type ReachableFile = {
 };
 
 const DEFAULT_LIMIT = 20;
-const MAX_RESULTS = 100;
 const MAX_TEXT_BYTES = 300_000;
 const MAX_GRAPH_DEPTH = 5;
-const MAX_RANK_REASONS_PER_RESULT = 6;
-const MAX_EVIDENCE_PER_RESULT = 5;
-const MAX_NEIGHBORS_PER_RESULT = 12;
-const MAX_FOLLOWUPS_PER_RESULT = 8;
 const CHUNK_LANGUAGE_ALIASES: Record<string, string> = {
   js: "javascript",
   ts: "typescript",
@@ -166,7 +169,7 @@ export function formatAgentSearchResponse(response: AgentSearchResponse): string
       const location = result.range
         ? `${result.file}:${result.range.start.line}:${result.range.start.column}`
         : result.file;
-      const reasons = result.rankReasons.slice(0, 3).join("; ");
+      const reasons = result.rankReasons.slice(0, AGENT_SEARCH_FORMAT_REASON_LIMIT).join("; ");
       return `${index + 1}. ${result.label} [${result.kind}] ${location} score=${result.score}\n   ${reasons}`;
     })
     .join("\n");
@@ -179,7 +182,7 @@ async function searchSnapshot(
   const mode = request.mode ?? "hybrid";
   const tokens = tokenizeQuery(request.query);
   const resultMap = new Map<string, MutableSearchResult>();
-  const limit = defaultAgentLimit(request.limit, DEFAULT_LIMIT, MAX_RESULTS);
+  const limit = defaultAgentLimit(request.limit, DEFAULT_LIMIT, AGENT_SEARCH_RESULT_LIMIT);
   let fileNeighborIndex: Map<string, FileNeighbor[]> | undefined;
   const getFileNeighborIndex = (): Map<string, FileNeighbor[]> => {
     fileNeighborIndex ??= buildFileNeighborIndex(snapshot);
@@ -221,10 +224,10 @@ async function searchSnapshot(
     root: snapshot.root,
     limits: {
       results: limit,
-      rankReasonsPerResult: MAX_RANK_REASONS_PER_RESULT,
-      evidencePerResult: MAX_EVIDENCE_PER_RESULT,
-      neighborsPerResult: MAX_NEIGHBORS_PER_RESULT,
-      followUpsPerResult: MAX_FOLLOWUPS_PER_RESULT,
+      rankReasonsPerResult: AGENT_SEARCH_RANK_REASONS_PER_RESULT_LIMIT,
+      evidencePerResult: AGENT_SEARCH_EVIDENCE_PER_RESULT_LIMIT,
+      neighborsPerResult: AGENT_SEARCH_NEIGHBORS_PER_RESULT_LIMIT,
+      followUpsPerResult: AGENT_SEARCH_FOLLOWUPS_PER_RESULT_LIMIT,
     },
     resultCount: results.length,
     totalCandidates: candidates.length,
@@ -764,10 +767,10 @@ function finalizeResult(result: MutableSearchResult): AgentSearchResult {
     return left.target.localeCompare(right.target);
   });
   const followUps = [...result.followUps].sort();
-  const boundedRankReasons = boundAgentList(rankReasons, MAX_RANK_REASONS_PER_RESULT);
-  const boundedEvidence = boundAgentList(evidence, MAX_EVIDENCE_PER_RESULT);
-  const boundedNeighbors = boundAgentList(neighbors, MAX_NEIGHBORS_PER_RESULT);
-  const boundedFollowUps = boundAgentList(followUps, MAX_FOLLOWUPS_PER_RESULT);
+  const boundedRankReasons = boundAgentList(rankReasons, AGENT_SEARCH_RANK_REASONS_PER_RESULT_LIMIT);
+  const boundedEvidence = boundAgentList(evidence, AGENT_SEARCH_EVIDENCE_PER_RESULT_LIMIT);
+  const boundedNeighbors = boundAgentList(neighbors, AGENT_SEARCH_NEIGHBORS_PER_RESULT_LIMIT);
+  const boundedFollowUps = boundAgentList(followUps, AGENT_SEARCH_FOLLOWUPS_PER_RESULT_LIMIT);
 
   return {
     handle: result.handle,

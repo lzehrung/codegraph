@@ -5,6 +5,21 @@ import { getDependencies, getReverseDependencies } from "../graphs/queries.js";
 import { getHotspots } from "../graphs/hotspots.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
 import { type SymbolNode } from "../graphs/symbol-graph.js";
+import {
+  AGENT_EXPLAIN_CANDIDATE_TEST_LIMIT,
+  AGENT_EXPLAIN_CHANGED_FILE_LIMIT,
+  AGENT_EXPLAIN_DEFAULT_DEPENDENCY_LIMIT,
+  AGENT_EXPLAIN_DEFAULT_SNIPPET_LIMIT,
+  AGENT_EXPLAIN_DEFAULT_SYMBOL_LIMIT,
+  AGENT_EXPLAIN_FILE_SYMBOL_REF_LIMIT,
+  AGENT_EXPLAIN_FORMAT_FOLLOWUP_LIMIT,
+  AGENT_EXPLAIN_FORMAT_SYMBOL_LIMIT,
+  AGENT_EXPLAIN_MAX_DEPENDENCY_LIMIT,
+  AGENT_EXPLAIN_MAX_SNIPPET_LIMIT,
+  AGENT_EXPLAIN_MAX_SYMBOL_LIMIT,
+  AGENT_EXPLAIN_REVIEW_CONTEXT_CANDIDATE_LIMIT,
+  AGENT_EXPLAIN_REVIEW_TASK_LIMIT,
+} from "../presentation/bounds.js";
 import { buildReviewReport } from "../review.js";
 import { extractSqlFactsFromSource, sqlObjectBaseName } from "../sql/extractFacts.js";
 import type { SqlStatementFact } from "../sql/types.js";
@@ -141,12 +156,6 @@ type ResolvedExplainTarget =
   | { kind: "sql_object"; def: SymbolDef; node?: SymbolNode }
   | { kind: "not_found"; label: string };
 
-const DEFAULT_MAX_DEPENDENCIES = 20;
-const DEFAULT_MAX_SNIPPETS = 8;
-const DEFAULT_MAX_SYMBOLS = 50;
-const MAX_DEPENDENCIES = 100;
-const MAX_SNIPPETS = 50;
-const MAX_SYMBOLS = 200;
 const SQL_FACT_READ_CONCURRENCY = 32;
 
 export async function explainCodegraphTarget(request: AgentExplainTarget): Promise<AgentExplanation> {
@@ -173,7 +182,7 @@ export function formatAgentExplanation(explanation: AgentExplanation): string {
     lines.push(
       `symbols: ${explanation.symbols
         .map((symbol) => symbol.name)
-        .slice(0, 8)
+        .slice(0, AGENT_EXPLAIN_FORMAT_SYMBOL_LIMIT)
         .join(", ")}`,
     );
   }
@@ -184,7 +193,10 @@ export function formatAgentExplanation(explanation: AgentExplanation): string {
     lines.push(`rdeps: ${explanation.reverseDependencies.map((entry) => entry.file).join(", ")}`);
   }
   if (explanation.followUps.length) {
-    lines.push("follow-ups:", ...explanation.followUps.slice(0, 8).map((command) => `  ${command}`));
+    lines.push(
+      "follow-ups:",
+      ...explanation.followUps.slice(0, AGENT_EXPLAIN_FORMAT_FOLLOWUP_LIMIT).map((command) => `  ${command}`),
+    );
   }
   return lines.join("\n");
 }
@@ -369,19 +381,31 @@ async function buildExplanation(
   resolved: ResolvedExplainTarget,
   request: AgentExplainTarget,
 ): Promise<AgentExplanation> {
-  const maxDependencies = defaultAgentLimit(request.maxDependencies, DEFAULT_MAX_DEPENDENCIES, MAX_DEPENDENCIES);
+  const maxDependencies = defaultAgentLimit(
+    request.maxDependencies,
+    AGENT_EXPLAIN_DEFAULT_DEPENDENCY_LIMIT,
+    AGENT_EXPLAIN_MAX_DEPENDENCY_LIMIT,
+  );
   const maxReferences = defaultAgentLimit(
     request.maxReferences ?? request.maxDependencies,
-    DEFAULT_MAX_DEPENDENCIES,
-    MAX_DEPENDENCIES,
+    AGENT_EXPLAIN_DEFAULT_DEPENDENCY_LIMIT,
+    AGENT_EXPLAIN_MAX_DEPENDENCY_LIMIT,
   );
   const maxRelatedSqlObjects = defaultAgentLimit(
     request.maxRelatedSqlObjects ?? request.maxDependencies,
-    DEFAULT_MAX_DEPENDENCIES,
-    MAX_DEPENDENCIES,
+    AGENT_EXPLAIN_DEFAULT_DEPENDENCY_LIMIT,
+    AGENT_EXPLAIN_MAX_DEPENDENCY_LIMIT,
   );
-  const maxSnippets = defaultAgentLimit(request.maxSnippets, DEFAULT_MAX_SNIPPETS, MAX_SNIPPETS);
-  const maxSymbols = defaultAgentLimit(request.maxSymbols, DEFAULT_MAX_SYMBOLS, MAX_SYMBOLS);
+  const maxSnippets = defaultAgentLimit(
+    request.maxSnippets,
+    AGENT_EXPLAIN_DEFAULT_SNIPPET_LIMIT,
+    AGENT_EXPLAIN_MAX_SNIPPET_LIMIT,
+  );
+  const maxSymbols = defaultAgentLimit(
+    request.maxSymbols,
+    AGENT_EXPLAIN_DEFAULT_SYMBOL_LIMIT,
+    AGENT_EXPLAIN_MAX_SYMBOL_LIMIT,
+  );
 
   if (resolved.kind === "not_found") {
     return emptyExplanation(snapshot, {
@@ -462,11 +486,11 @@ function emptyExplanation(snapshot: AgentProjectSnapshot, target: AgentExplanati
     hotspots: [],
     followUps: [`codegraph search ${quoteShellArg(target.label)} --json`],
     limits: {
-      symbols: DEFAULT_MAX_SYMBOLS,
-      dependencies: DEFAULT_MAX_DEPENDENCIES,
-      references: DEFAULT_MAX_DEPENDENCIES,
-      relatedSqlObjects: DEFAULT_MAX_DEPENDENCIES,
-      snippets: DEFAULT_MAX_SNIPPETS,
+      symbols: AGENT_EXPLAIN_DEFAULT_SYMBOL_LIMIT,
+      dependencies: AGENT_EXPLAIN_DEFAULT_DEPENDENCY_LIMIT,
+      references: AGENT_EXPLAIN_DEFAULT_DEPENDENCY_LIMIT,
+      relatedSqlObjects: AGENT_EXPLAIN_DEFAULT_DEPENDENCY_LIMIT,
+      snippets: AGENT_EXPLAIN_DEFAULT_SNIPPET_LIMIT,
     },
     omittedCounts: {
       symbols: 0,
@@ -831,7 +855,7 @@ function collectFollowUps(
   const followUps = new Set<string>(collectCommonFileFollowUps(relFile));
 
   if (resolved.kind === "file") {
-    for (const symbol of symbols.slice(0, 5)) {
+    for (const symbol of symbols.slice(0, AGENT_EXPLAIN_FILE_SYMBOL_REF_LIMIT)) {
       followUps.add(
         `codegraph refs --file ${quoteShellArg(relFile)} --line ${symbol.range.start.line} --col ${symbol.range.start.column} --pretty`,
       );
@@ -894,20 +918,20 @@ async function collectChangedContext(request: AgentExplainTarget): Promise<Agent
     gitBase: request.base,
     gitHead: request.head,
     reviewDepth: "minimal",
-    maxCandidates: 5,
+    maxCandidates: AGENT_EXPLAIN_REVIEW_CONTEXT_CANDIDATE_LIMIT,
   });
   return {
     filesChanged: report.summary.filesChanged,
     symbolsChanged: report.summary.symbolsChanged,
     risk: report.riskSummary.level,
-    changedFiles: report.changedFiles.map((entry) => entry.file).slice(0, 20),
-    reviewTasks: report.reviewTasks.slice(0, 5).map((task) => ({
+    changedFiles: report.changedFiles.map((entry) => entry.file).slice(0, AGENT_EXPLAIN_CHANGED_FILE_LIMIT),
+    reviewTasks: report.reviewTasks.slice(0, AGENT_EXPLAIN_REVIEW_TASK_LIMIT).map((task) => ({
       id: task.id,
       reason: task.reason,
       summary: task.description,
       priority: task.priority,
     })),
-    candidateTests: report.candidateTests.slice(0, 10).map((candidate) => ({
+    candidateTests: report.candidateTests.slice(0, AGENT_EXPLAIN_CANDIDATE_TEST_LIMIT).map((candidate) => ({
       file: candidate.file,
       confidence: candidate.confidence,
       reason: candidate.reason,

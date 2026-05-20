@@ -1,7 +1,6 @@
-export type BoundedAgentList<T> = {
-  items: T[];
-  omitted: number;
-};
+import { boundList, countOmitted, emptyBoundedList, type BoundedList } from "../presentation/bounds.js";
+
+export type BoundedAgentList<T> = BoundedList<T>;
 
 export type AgentLimitOptions = {
   fallback?: number;
@@ -26,20 +25,11 @@ export function defaultAgentLimit(limit: number | undefined, fallback: number, m
 }
 
 export function boundAgentList<T>(items: readonly T[], limit: number): BoundedAgentList<T> {
-  const boundedItems = items.slice(0, limit);
-  return {
-    items: boundedItems,
-    omitted: countOmitted(items.length, boundedItems.length),
-  };
+  return boundList(items, limit);
 }
 
 export function emptyAgentBoundedList<T>(): BoundedAgentList<T> {
-  return {
-    items: [],
-    omitted: 0,
-  };
+  return emptyBoundedList();
 }
 
-export function countOmitted(total: number, visible: number): number {
-  return Math.max(0, total - visible);
-}
+export { countOmitted };

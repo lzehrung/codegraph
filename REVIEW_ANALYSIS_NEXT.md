@@ -107,7 +107,7 @@ No dependency cycles were reported. The highest remaining concentration is in:
   - Target: expand `src/agent/normalize.ts` or add `src/agent/targets.ts` for file resolution, SQL-object detection, handle resolution, and common follow-up construction.
   - Verify with `tests/agent-search.test.ts`, `tests/agent-explain.test.ts`, and `tests/artifact-build.test.ts`.
 
-- [ ] Centralize presentation bounds for CLI/review/agent output.
+- [x] Centralize presentation bounds for CLI/review/agent output.
   - Finding: bounded-output logic is partly shared for agent APIs, but CLI/review still have hard-coded slices such as changed files, review tasks, impact pretty refs, and candidate tests.
   - Target: named constants and a small presentation-bound helper for CLI summaries, review summaries, agent changed context, and impact pretty output.
   - Add tests that assert omission/truncation behavior and avoid silently changing output volume.
