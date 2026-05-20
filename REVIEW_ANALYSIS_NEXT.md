@@ -141,7 +141,7 @@ No dependency cycles were reported. The highest remaining concentration is in:
 
 ### Documentation
 
-- [ ] Document the intended CLI scoping model.
+- [x] Document the intended CLI scoping model.
   - Explain `--root`, positional include roots, config `ignoreGlobs`, `--include-glob`, `--ignore-glob`, gitignore handling, and cache reuse.
   - Update `docs/cli.md` and `codegraph-skill/codegraph/SKILL.md` if command behavior or examples change.
 
