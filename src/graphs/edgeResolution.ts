@@ -111,9 +111,9 @@ export async function resolveModuleSpecifierEdges(
       return packageTargets.map((targetPath) => withSpecifierMetadata(entry, edgeToResolvedFile(targetPath)));
     }
     to = await resolveImportSpecifierEdge(entry, context);
-  } else if (context.support.id === "go" || context.support.id === "php") {
+  } else if (context.support.id === "go" || context.support.id === "php" || context.support.id === "rust") {
     to = await resolveImportSpecifierEdge(entry, context);
-  } else if (["csharp", "ruby", "rust"].includes(context.support.id)) {
+  } else if (["csharp", "ruby"].includes(context.support.id)) {
     const { resolvePathLikeModule } = await import("../util/resolution.js");
     const pathLike = await resolvePathLikeModule(context.projectRoot, entry.spec);
     to = pathLike ? edgeToResolvedFile(pathLike) : await resolveGenericSpecifier(entry, context, resolutionExtensions);

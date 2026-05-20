@@ -1,4 +1,6 @@
 import { builtinModules } from "node:module";
+import { isGraphOnlyLanguage } from "../documentLinks.js";
+import { supportForFile } from "../languages.js";
 import type { FileId, Graph } from "../types.js";
 import {
   classifyExternalSpecifier,
@@ -15,7 +17,14 @@ function isNodeBuiltinSpecifier(specifier: string): boolean {
   return NODE_BUILTIN_MODULES.has(specifier);
 }
 
-export type UnresolvedImportOptions = ExternalSpecifierClassificationOptions;
+export type UnresolvedImportOptions = ExternalSpecifierClassificationOptions & {
+  includeGraphOnly?: boolean;
+};
+
+function isGraphOnlyImporter(file: FileId): boolean {
+  const support = supportForFile(file);
+  return support ? isGraphOnlyLanguage(support.id) : false;
+}
 
 export function getUnresolvedImports(
   graph: Graph,
@@ -28,6 +37,7 @@ export function getUnresolvedImports(
   const classificationCache = new Map<string, ExternalSpecifierClassification>();
   for (const edge of graph.edges) {
     if (edge.to.type !== "external") continue;
+    if (!opts.includeGraphOnly && isGraphOnlyImporter(edge.from)) continue;
     if (isNodeBuiltinSpecifier(edge.to.name) || isNodeBuiltinSpecifier(edge.raw)) continue;
     const classificationKey = `${edge.from}\0${edge.to.name}\0${edge.raw}\0${opts.projectRoot ?? ""}`;
     let classification = classificationCache.get(classificationKey);

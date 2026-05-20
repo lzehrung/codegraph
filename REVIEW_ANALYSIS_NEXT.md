@@ -134,7 +134,7 @@ No dependency cycles were reported. The highest remaining concentration is in:
   - Target: split into a PHP resolver module with fixtures for Composer `autoload`, `autoload-dev`, `files`, PSR-0, PSR-4, classmap, and `exclude-from-classmap`.
   - Add tests in `tests/languages/php.test.ts`, `tests/goto.test.ts`, and `tests/references.test.ts` for each Composer branch.
 
-- [ ] Review unresolved-import classification for non-source artifacts.
+- [x] Review unresolved-import classification for non-source artifacts.
   - Finding: whole-repo `unresolved` reports include script command names, `.cursor` plan links, graph-visualization DOM IDs, Rust crate-relative imports, and sample fixture imports.
   - Target: decide whether `unresolved` should be source-code-only by default, scope-aware by command, or classifier-aware for scripts/docs/test fixtures.
   - Add docs and tests for intentional unresolved behavior so users can trust the signal.

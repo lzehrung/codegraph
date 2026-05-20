@@ -16,11 +16,13 @@ import { resolveGoImportPath } from "./resolution/go.js";
 import { resolveFromNodeModules } from "./resolution/node.js";
 import { clearPhpResolutionCaches, getPhpComposerImplicitFiles, resolvePhpImportPath } from "./resolution/php.js";
 import { clearPythonResolutionCache, resolvePythonModule } from "./resolution/python.js";
+import { resolveRustImportPath } from "./resolution/rust.js";
 import { clearTsconfigCache, loadNearestTsconfigFor, type MatchPathFn } from "./resolution/tsconfig.js";
 export { resolveGoImportPath } from "./resolution/go.js";
 export { resolveJvmPackageImportPaths } from "./resolution/jvm.js";
 export { getPhpComposerImplicitFiles } from "./resolution/php.js";
 export { resolvePythonModule } from "./resolution/python.js";
+export { resolveRustImportPath } from "./resolution/rust.js";
 export { loadNearestTsconfigFor, type MatchPathFn } from "./resolution/tsconfig.js";
 export { mapLimit } from "./concurrency.js";
 export { listResolutionCandidates } from "./resolutionCandidates.js";
@@ -164,6 +166,10 @@ export async function resolveImportSpecifier(
   if (languageId === "php") {
     const phpResolved = await resolvePhpImportPath(projectRoot, fromFile, spec, opts?.phpImportType);
     if (phpResolved) return phpResolved;
+  }
+  if (languageId === "rust") {
+    const rustResolved = await resolveRustImportPath(projectRoot, fromFile, spec);
+    if (rustResolved) return rustResolved;
   }
 
   return resolveSpecifier(fromFile, spec, projectRoot, opts?.matchPath, opts?.workspaceConfig, {

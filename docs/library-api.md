@@ -296,6 +296,8 @@ for (const edge of graph.edges) {
 }
 ```
 
+`getUnresolvedImports(graph, { projectRoot })` reports unresolved source imports. It excludes graph-only document/template link edges by default; pass `{ includeGraphOnly: true }` when a custom caller intentionally wants those links included in the same report.
+
 Build an index from an explicit multi-root file list:
 
 ```ts
