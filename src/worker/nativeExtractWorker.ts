@@ -3,7 +3,12 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { NativeQueryResults, CompactQueryResults } from "../native/treeSitterNative.js";
+import type {
+  CompactQueryResults,
+  NativeBinding,
+  NativeFallbackReason,
+  NativeQueryResults,
+} from "../native/contracts.js";
 import { loadNativeBinding } from "../native/bindingLoader.js";
 import type { NativeBindingLoadResult } from "../native/bindingLoader.js";
 
@@ -24,21 +29,8 @@ export type NativeExtractResult = {
   source: string;
   nativeResults: NativeQueryResults | null;
   compactResults: CompactQueryResults | null;
-  fallbackReason?: "unavailable" | "unsupportedLanguage" | "queryFailure";
+  fallbackReason?: NativeFallbackReason;
   error?: string;
-};
-
-type NativeBinding = {
-  runLanguageQueries: (
-    source: string,
-    languageId: string,
-    importsQuery: string,
-    exportsQuery: string,
-    localsQuery: string,
-    importBindingsQuery: string,
-  ) => NativeQueryResults;
-  runImportsQueryCompact?: (source: string, languageId: string, importsQuery: string) => CompactQueryResults;
-  supportedLanguageIds: () => string[];
 };
 
 const require = createRequire(import.meta.url);

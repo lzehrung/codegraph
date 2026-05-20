@@ -116,7 +116,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Correctness opportunity: SQL parsing edge cases such as quoted strings, comments, nested expressions, and CTE clauses should not diverge between review facts and navigation.
   - Tests: SQL fact extraction, SQL navigation, SQL review context, and MCP `query_sqlite` resource-bound rejection tests.
 
-- [ ] Share native binding contracts between runtime and worker code.
+- [x] Share native binding contracts between runtime and worker code.
   - `NativeBinding` is declared separately in `src/native/treeSitterNative.ts` and `src/worker/nativeExtractWorker.ts`, with slightly different optional capabilities.
   - Suggested fix: move the binding interface and result/fallback reason contracts into a shared native module imported by both runtime and worker code.
   - Correctness opportunity: adding a native capability such as syntax-tree parsing or compact queries should update one contract instead of relying on duplicated structural types.
