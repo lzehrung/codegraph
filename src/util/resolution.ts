@@ -1,33 +1,28 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { createMatchPath } from "tsconfig-paths";
-import { logWithLevel, type LogLevel } from "../logging.js";
 import { stringifyUnknown } from "./ast.js";
-import { parseJsonc } from "./comments.js";
 import { normalizePath, normalizeResolutionHints } from "./paths.js";
 import { listProjectFiles } from "./projectFiles.js";
 import { DEFAULT_RESOLUTION_EXTENSIONS, listResolutionCandidates } from "./resolutionCandidates.js";
 import {
   clearWorkspaceCaches,
   clearFileExistsCache,
-  directoryExists,
   fileExists,
-  loadJSON,
   loadWorkspaceConfig,
   resolveWorkspacePackage,
-  type MinimalPackageJson,
   type WorkspaceConfig,
 } from "./workspace.js";
-import {
-  clearJvmResolutionCaches,
-  resolveJavaImportPath,
-  resolveKotlinImportPath,
-} from "./resolution/jvm.js";
+import { clearJvmResolutionCaches, resolveJavaImportPath, resolveKotlinImportPath } from "./resolution/jvm.js";
 import { resolveGoImportPath } from "./resolution/go.js";
-import { findNearestFile, isDirectory } from "./resolution/files.js";
+import { findNearestFile } from "./resolution/files.js";
+import { resolveFromNodeModules } from "./resolution/node.js";
+import { clearPythonResolutionCache, resolvePythonModule } from "./resolution/python.js";
+import { clearTsconfigCache, loadNearestTsconfigFor, type MatchPathFn } from "./resolution/tsconfig.js";
 export { resolveGoImportPath } from "./resolution/go.js";
 export { resolveJvmPackageImportPaths } from "./resolution/jvm.js";
+export { resolvePythonModule } from "./resolution/python.js";
+export { loadNearestTsconfigFor, type MatchPathFn } from "./resolution/tsconfig.js";
 import {
   addProjectSymbolFile,
   getOrCreateProjectSymbolIndex,
@@ -38,108 +33,7 @@ import {
 
 export { listResolutionCandidates } from "./resolutionCandidates.js";
 
-export type MatchPathFn = ReturnType<typeof createMatchPath>;
-const tsconfigCache = new Map<string, { matchPath?: MatchPathFn }>();
-
-async function findNearestTsconfig(startFromFile: string): Promise<string | null> {
-  let dir = path.dirname(startFromFile);
-  while (true) {
-    const cand = path.join(dir, "tsconfig.json");
-    try {
-      await fsp.access(cand, fs.constants.R_OK);
-      return cand;
-    } catch {
-      /* file not found: continue up */
-    }
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
-}
-
-interface TsconfigCompilerOptions {
-  baseUrl?: string;
-  paths?: Record<string, string[]>;
-}
-
-interface TsconfigJson {
-  compilerOptions?: TsconfigCompilerOptions;
-  extends?: string;
-}
-
-async function loadTsconfigConfig(cfgPath: string): Promise<{ baseUrl: string; paths: Record<string, string[]> }> {
-  const raw = await fsp.readFile(cfgPath, "utf8");
-  const json = parseJsonc<TsconfigJson>(raw);
-  const cfgDir = path.dirname(cfgPath);
-  const co = json.compilerOptions;
-  const baseUrlRaw = co?.baseUrl ?? ".";
-  const baseUrl = path.isAbsolute(baseUrlRaw) ? baseUrlRaw : path.resolve(cfgDir, baseUrlRaw);
-  const paths: Record<string, string[]> = co?.paths ?? {};
-
-  if (json.extends) {
-    const extendsPath = path.resolve(cfgDir, json.extends);
-    if (await fileExists(extendsPath)) {
-      const parent = await loadTsconfigConfig(extendsPath);
-      const mergedPaths: Record<string, string[]> = { ...parent.paths };
-
-      // Adjust parent paths to be relative to child baseUrl
-      for (const [key, patterns] of Object.entries(parent.paths)) {
-        mergedPaths[key] = patterns.map((p) => {
-          const abs = path.resolve(parent.baseUrl, p);
-          const rel = path.relative(baseUrl, abs).replace(/\\/g, "/");
-          return rel;
-        });
-      }
-
-      // Child paths overwrite parent paths for the same key
-      // and ensure they are also normalized
-      for (const [key, patterns] of Object.entries(paths)) {
-        mergedPaths[key] = patterns.map((p) => p.replace(/\\/g, "/"));
-      }
-      return { baseUrl: baseUrl.replace(/\\/g, "/"), paths: mergedPaths };
-    }
-  }
-
-  const normalizedPaths: Record<string, string[]> = {};
-  for (const [key, patterns] of Object.entries(paths)) {
-    normalizedPaths[key] = patterns.map((p) => p.replace(/\\/g, "/"));
-  }
-
-  return { baseUrl: baseUrl.replace(/\\/g, "/"), paths: normalizedPaths };
-}
-
-export async function loadNearestTsconfigFor(file: string, logLevel?: LogLevel): Promise<{ matchPath?: MatchPathFn }> {
-  const dir = path.dirname(file);
-  if (tsconfigCache.has(dir)) return tsconfigCache.get(dir)!;
-
-  const cfgPath = await findNearestTsconfig(file);
-  if (!cfgPath) {
-    tsconfigCache.set(dir, {});
-    return {};
-  }
-
-  try {
-    const { baseUrl, paths } = await loadTsconfigConfig(cfgPath);
-    const matchPath = createMatchPath(baseUrl, paths);
-    const val = { matchPath };
-    tsconfigCache.set(dir, val);
-    return val;
-  } catch (error) {
-    logWithLevel(logLevel, "warn", `Warning: Failed to load tsconfig at ${cfgPath}:`, error);
-    const val = {};
-    tsconfigCache.set(dir, val);
-    return val;
-  }
-}
-
-function clearTsconfigCache(): void {
-  tsconfigCache.clear();
-}
-
 const resolveSpecifierCache = new Map<string, FileId | { external: string }>();
-const resolvePythonModuleCache = new Map<string, FileId | { external: string }>();
-
 export type FileId = string;
 
 export const GRAPH_ONLY_RESOLUTION_EXTENSIONS = [
@@ -1185,206 +1079,9 @@ export async function resolveSpecifier(
   return ext;
 }
 
-async function resolveFromNodeModules(
-  spec: string,
-  fromFile: string,
-  _projectRoot: string,
-  resolutionExtensions?: readonly string[],
-): Promise<string | null> {
-  try {
-    // Walk up from the file directory to project root looking for node_modules
-    let dir = path.dirname(fromFile);
-    const parts = spec.split("/");
-    const packageName = spec.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0]!;
-    const subpath = spec.startsWith("@") ? parts.slice(2).join("/") : parts.slice(1).join("/");
-    while (true) {
-      const nmDir = path.join(dir, "node_modules", packageName);
-      if (await directoryExists(nmDir)) {
-        const pkgPath = path.join(nmDir, "package.json");
-        const pkg = await loadJSON<MinimalPackageJson>(pkgPath);
-        const baseDir = nmDir;
-        const tryResolveRelative = async (rel: string): Promise<string | null> => {
-          return await findFirstExistingResolutionCandidate(path.resolve(baseDir, rel), resolutionExtensions);
-        };
-        // Exports map handling (simplified)
-        const pickExportTarget = (target: unknown): string | null => {
-          if (!target) return null;
-          if (typeof target === "string") return target;
-          if (typeof target === "object" && target !== null) {
-            const t = target as Record<string, unknown>;
-            const cand = t.import ?? t.default ?? t.require ?? t.module;
-            if (typeof cand === "string") return cand;
-          }
-          return null;
-        };
-        if (pkg?.exports) {
-          const key = subpath ? `./${subpath}` : ".";
-          if (typeof pkg.exports === "string" && key === ".") {
-            const hit = await tryResolveRelative(pkg.exports);
-            if (hit) return hit;
-          } else if (typeof pkg.exports === "object" && pkg.exports !== null) {
-            const map = pkg.exports as Record<string, unknown>;
-            const target = map[key] ?? (key === "." ? map["."] : undefined);
-            const rel = pickExportTarget(target);
-            if (rel) {
-              const hit = await tryResolveRelative(rel);
-              if (hit) return hit;
-            }
-          }
-        }
-        if (subpath) {
-          const hit = await findFirstExistingResolutionCandidate(path.join(baseDir, subpath), resolutionExtensions);
-          if (hit) return hit;
-        }
-        const mainField = typeof pkg?.main === "string" ? path.resolve(baseDir, pkg.main) : null;
-        if (mainField) {
-          const mainHit = await findFirstExistingResolutionCandidate(mainField, resolutionExtensions);
-          if (mainHit) return mainHit;
-        }
-        const indexHit = await findFirstExistingResolutionCandidate(path.join(baseDir, "index"), resolutionExtensions);
-        if (indexHit) return indexHit;
-        return null;
-      }
-      const parent = path.dirname(dir);
-      if (parent === dir) break;
-      dir = parent;
-    }
-  } catch {
-    /* fs/access: ignore */
-  }
-  return null;
-}
-async function findPythonPackageAnchor(startDir: string): Promise<string> {
-  let dir = startDir;
-  let topWithInit = startDir;
-  while (true) {
-    try {
-      await fsp.access(path.join(dir, "__init__.py"), fs.constants.R_OK);
-      topWithInit = dir;
-    } catch {
-      /* no __init__.py: continue */
-    }
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return topWithInit;
-}
-
-export async function resolvePythonModule(
-  projectRoot: string,
-  fromFile: string,
-  moduleName: string | null,
-  importDotCount: number,
-): Promise<FileId | { external: string }> {
-  const cacheKey = `${fromFile}::${".".repeat(importDotCount)}${moduleName ?? ""}`;
-  const cached = resolvePythonModuleCache.get(cacheKey);
-  if (cached) return cached;
-  const fromDir = path.dirname(fromFile);
-
-  // If it's a relative import (dots > 0), start from current file's dir and walk up.
-  // importDotCount = 1 means same dir (.), 2 means parent (..), etc.
-  let startDir = fromDir;
-  if (importDotCount > 0) {
-    // 1 dot = current dir (0 steps up)
-    // 2 dots = parent dir (1 step up)
-    const stepsUp = Math.max(0, importDotCount - 1);
-    for (let i = 0; i < stepsUp; i++) {
-      startDir = path.dirname(startDir);
-    }
-  } else {
-    // Absolute import: start from project root or find anchor?
-    // Python sys.path usually includes current script dir, but for "absolute" imports
-    // in a project structure, we usually mean relative to project root or nearest site-packages.
-    // Here we try relative to project root first.
-    startDir = projectRoot;
-  }
-
-  const parts = (moduleName ? moduleName.split(".") : []).filter(Boolean);
-  const relPath = parts.length ? path.join(...parts) : "";
-
-  // Candidates relative to the resolved start directory
-  const candidates: string[] = [];
-  if (relPath) {
-    candidates.push(path.join(startDir, relPath + ".py"));
-    candidates.push(path.join(startDir, relPath, "__init__.py"));
-    candidates.push(path.join(startDir, relPath));
-  } else if (importDotCount > 0) {
-    // "from . import x" or "from .. import x" where moduleName is null
-    // This resolves to the package defined by __init__.py in startDir
-    candidates.push(path.join(startDir, "__init__.py"));
-  }
-
-  for (const c of candidates) {
-    try {
-      if (await isDirectory(c)) {
-        const res = normalizePath(path.resolve(c));
-        resolvePythonModuleCache.set(cacheKey, res);
-        return res;
-      }
-      await fsp.access(c, fs.constants.R_OK);
-      {
-        const res = normalizePath(path.resolve(c));
-        resolvePythonModuleCache.set(cacheKey, res);
-        return res;
-      }
-    } catch {
-      /* access failed: try next */
-    }
-  }
-
-  // If absolute import, also try finding anchor in case project root isn't the package root
-  if (importDotCount === 0 && moduleName) {
-    let anchor: string;
-    try {
-      anchor = await findPythonPackageAnchor(fromDir);
-    } catch {
-      anchor = projectRoot;
-    }
-
-    const parts = moduleName.split(".");
-    // Try relative to anchor parent (package structure)
-    const parentPath = path.join(path.dirname(anchor), ...parts);
-    // Try relative to anchor itself (script/root structure)
-    const anchorPath = path.join(anchor, ...parts);
-
-    const anchorCandidates = [
-      parentPath + ".py",
-      path.join(parentPath, "__init__.py"),
-      parentPath,
-      anchorPath + ".py",
-      path.join(anchorPath, "__init__.py"),
-      anchorPath,
-    ];
-    for (const c of anchorCandidates) {
-      try {
-        if (await isDirectory(c)) {
-          const res = normalizePath(path.resolve(c));
-          resolvePythonModuleCache.set(cacheKey, res);
-          return res;
-        }
-        await fsp.access(c, fs.constants.R_OK);
-        {
-          const res = normalizePath(path.resolve(c));
-          resolvePythonModuleCache.set(cacheKey, res);
-          return res;
-        }
-      } catch {
-        /* access failed: try next */
-      }
-    }
-  }
-
-  const ext = {
-    external: ".".repeat(importDotCount) + (moduleName ?? ""),
-  } as const;
-  resolvePythonModuleCache.set(cacheKey, ext);
-  return ext;
-}
-
 export function clearImportResolutionCaches(): void {
   resolveSpecifierCache.clear();
-  resolvePythonModuleCache.clear();
+  clearPythonResolutionCache();
   clearFileExistsCache();
   clearJvmResolutionCaches();
   phpImportResolutionCache.clear();
