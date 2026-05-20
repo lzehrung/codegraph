@@ -139,3 +139,53 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Suggested fix: introduce `src/agent/bounds.ts` and `src/agent/normalize.ts` for limit clamping, bounded-list metadata, relative path normalization, and common follow-up command shaping.
   - Correctness opportunity: agent search, explain, artifact questions, and tool wrappers should report omission counts and path shapes consistently.
   - Tests: agent search, agent explain, agent tools, artifact build, and package metadata API-surface tests.
+
+## Fourth-Pass Complexity Findings
+
+- [ ] Split native runtime orchestration from native query execution helpers.
+  - `src/native/treeSitterNative.ts` is a high fan-in hotspot and now owns binding loading, runtime-mode enforcement, normalized query caching, compact/full query execution, single-query execution, JS fallback bridging, and syntax-tree parsing.
+  - Suggested fix: extract native binding state/runtime-mode helpers, normalized query metadata, query execution wrappers, and JS fallback bridging into focused modules under `src/native/`. Keep the public runtime facade small and preserve existing exported entry points.
+  - Correctness opportunity: compact imports, full language queries, ad-hoc queries, and syntax-tree parsing repeat fallback reason/error shaping; one result-normalization helper would keep native-required failures and unsupported-language behavior consistent.
+  - Tests: native runtime mode, native query normalization, compact imports fallback, native parser ownership, native worker parity, and explicit native-required failure paths.
+
+- [ ] Decompose SQLite persistence into schema, write/update, and query modules.
+  - `src/sqlite.ts` is 920 lines and combines schema creation/migration, insert/delete helpers, full writes, incremental updates, canned graph queries, raw read-only query validation, and snapshot metadata.
+  - Suggested fix: split `sqlite/schema.ts`, `sqlite/write.ts`, `sqlite/update.ts`, `sqlite/query.ts`, and `sqlite/guards.ts`. Keep schema-version handling and migration helpers isolated so persistent storage changes have one upgrade path.
+  - Correctness opportunity: `ensureSchema()` creates tables and patches columns in the same file as query execution; separating schema upgrades would make older on-disk database regression tests easier to maintain.
+  - Tests: SQLite full write, incremental update/delete, schema migration from older fixtures, raw read-only guard behavior, artifact SQLite generation, and MCP SQLite query paths.
+
+- [ ] Extract impact report assembly into reusable compact/full report stages.
+  - `src/impact/report.ts` has a 265-line `buildCompactReport()` plus full-report assembly, re-export chain discovery, top impacts, clusters, cycles, and surface-area summaries in one module.
+  - Suggested fix: introduce staged helpers for display-file normalization, file-index construction, compact serializers, graph summary sections, re-export chains, top impacts, clusters, and surface area. Share the precomputed file/symbol indexes between compact and full formats.
+  - Performance opportunity: compact report construction repeatedly calls `displayFile()` and looks up file indexes across each section; a shared serializer context can avoid repeated normalization and make missing-index errors explicit.
+  - Tests: compact/full impact reports, project file metadata, re-export chains, graph cycles, clusters, surface area summaries, top impacts, and schema-version compatibility.
+
+- [ ] Split impact analyzer into direct-reference, transitive, and severity calculators.
+  - `src/impact/analyzer.ts` has a 221-line `analyzeImpact()` that handles option normalization, ignore/test matchers, bounded reference lookup, streaming emission, direct impact merging, file-level changes, and transitive propagation. The same module also owns severity scoring.
+  - Suggested fix: extract `impact/direct.ts`, `impact/transitive.ts`, and `impact/severity.ts` around a shared `ImpactAnalysisContext` containing matchers, dependency stats, diagnostics, and emit hooks.
+  - Correctness opportunity: include-test and ignore-glob policy is rebuilt across direct and transitive phases; one context would keep filtering and diagnostics consistent as new impact reasons are added.
+  - Tests: direct refs with `maxRefs`, ignored/test refs, file-level changes, transitive depth/type-only edges, diagnostics counters, streaming partial items, and severity weight overrides.
+
+- [ ] Centralize build-cache option normalization, manifest comparison, and reports.
+  - `src/indexer/build-cache.ts` is 807 lines and mixes workspace manifest edges, memory/disk module cache, file signatures, fallback extraction reports, manifest IO, build-option summaries, diffing, and graph-option equality.
+  - Suggested fix: split cache option normalization/equality into `indexer/build-cache/options.ts`, manifest IO/verification into `manifest.ts`, module cache read/write into `module-cache.ts`, and report shaping into `reports.ts`.
+  - Correctness opportunity: the same normalized option shapes drive manifest writes, manifest diffs, and graph-option equality; a single typed comparer would reduce false rebuilds and missed rebuilds when discovery or graph options change.
+  - Tests: cache invalidation, cache strict/off modes, discovery option normalization, graph option equality, fallback extraction report aggregation, disk cache reuse, and manifest mismatch messages.
+
+- [ ] Decompose graph-only document link extraction and chunking by format.
+  - `src/documentLinks.ts` is 692 lines and routes Markdown, MDX, Astro, Handlebars, reStructuredText, AsciiDoc, HTML attributes, inline scripts, link normalization, and Markdown parsing in one file. `src/chunking/chunkFile.ts` is another large format-sensitive flow for block extraction, splitting, merging, and gap filling.
+  - Suggested fix: move document extractors into `documentLinks/{markdown,html,rst,asciidoc,sfc}.ts` behind a small dispatcher, and split chunking into match collection, block classification, large-block splitting, merge, and gap-fill helpers.
+  - Correctness opportunity: document specifier normalization should match graph-only edge extraction, chunking, and source-style imports for mixed formats like MDX/Astro/SFC files.
+  - Tests: Markdown reference/inline links, MDX/Astro/Handlebars imports, RST toctrees/targets, AsciiDoc xref/include/link forms, HTML `srcset`/inline scripts, CSS-style URLs, and chunk splitting/merge behavior.
+
+- [ ] Split external dependency classification into manifest parsers, stdlib tables, and context lookup.
+  - `src/graphs/external-classifier.ts` is 743 lines and contains large stdlib tables, manifest parsers for many ecosystems, ancestor-boundary search, package-name matching, caches, and final external classification.
+  - Suggested fix: move ecosystem manifest readers into `graphs/external/manifests.ts`, stdlib/module tables into `stdlib.ts`, context/ancestor lookup into `context.ts`, and leave `classifyExternalSpecifier()` as a small coordinator.
+  - Correctness opportunity: manifest parsing overlaps with project-file discovery but uses separate parsing rules; extracting parser units makes it easier to align dependency detection with discovery fixtures and language parity claims.
+  - Tests: unresolved import classification for Node, Python, Ruby, Go, Rust, Zig, Java/Kotlin, .NET, C/C++, Swift, Composer, nested manifests, VCS boundaries, and cache reset/stats.
+
+- [ ] Separate graph query parsing and traversal execution from SQLite query dispatch.
+  - `src/query.ts`, `src/graphs/queries.ts`, `src/cli/graphQueries.ts`, and `src/sqlite.ts` each participate in graph-query parsing, graph traversal, result bounding, cycle detail construction, and canned SQL-backed query dispatch.
+  - Suggested fix: introduce a typed query AST/parser module and execution modules for in-memory graph queries and SQLite-backed canned queries. Reuse traversal helpers for neighbors, shortest paths, reverse dependencies, cycles, and unresolved imports.
+  - Performance opportunity: `querySymbolNeighbors()` builds incoming/outgoing maps per call and then scans all edges again to materialize results; reusable adjacency indexes would help interactive agents and CLI graph queries on large symbol graphs.
+  - Tests: text query parsing, symbol neighbor depth/direction/label filters, detailed cycle ordering/remediation hints, unresolved import classification, CLI graph query output, and SQLite canned query parity.
