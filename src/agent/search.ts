@@ -7,7 +7,8 @@ import type { SymbolDef } from "../indexer/types.js";
 import type { Range } from "../types.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
 import type { SymbolNode } from "../graphs.js";
-import { normalizePath, toProjectRelativePath } from "../util.js";
+import { normalizePath } from "../util.js";
+import { boundAgentList, defaultAgentLimit } from "./bounds.js";
 import {
   formatAgentChunkHandle,
   formatAgentFileHandle,
@@ -20,6 +21,11 @@ import {
   parseAgentSqlHandle,
   parseAgentSymbolHandle,
 } from "./handles.js";
+import {
+  collectDefinitionFollowUps,
+  collectFileFollowUps as collectCommonFileFollowUps,
+  normalizeAgentFilePath,
+} from "./normalize.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
 
@@ -164,7 +170,7 @@ async function searchSnapshot(snapshot: AgentProjectSnapshot, request: AgentSear
   const mode = request.mode ?? "hybrid";
   const tokens = tokenizeQuery(request.query);
   const resultMap = new Map<string, MutableSearchResult>();
-  const limit = normalizeLimit(request.limit);
+  const limit = defaultAgentLimit(request.limit, DEFAULT_LIMIT, MAX_RESULTS);
   let fileNeighborIndex: Map<string, FileNeighbor[]> | undefined;
   const getFileNeighborIndex = (): Map<string, FileNeighbor[]> => {
     fileNeighborIndex ??= buildFileNeighborIndex(snapshot);
@@ -191,9 +197,8 @@ async function searchSnapshot(snapshot: AgentProjectSnapshot, request: AgentSear
   const candidates = [...resultMap.values()]
     .filter((result) => result.score > 0)
     .sort(compareResults);
-  const results = candidates
-    .slice(0, limit)
-    .map(finalizeResult);
+  const boundedResults = boundAgentList(candidates, limit);
+  const results = boundedResults.items.map(finalizeResult);
 
   return {
     schemaVersion: 1,
@@ -210,15 +215,10 @@ async function searchSnapshot(snapshot: AgentProjectSnapshot, request: AgentSear
     resultCount: results.length,
     totalCandidates: candidates.length,
     omittedCounts: {
-      results: Math.max(0, candidates.length - results.length),
+      results: boundedResults.omitted,
     },
     results,
   };
-}
-
-function normalizeLimit(limit: number | undefined): number {
-  if (typeof limit !== "number" || !Number.isFinite(limit)) return DEFAULT_LIMIT;
-  return Math.min(MAX_RESULTS, Math.max(0, Math.floor(limit)));
 }
 
 function normalizeDepth(depth: number | undefined): number {
@@ -725,16 +725,17 @@ function addFileNeighbors(
 function addSymbolFollowUps(result: MutableSearchResult, relFile: string, def: SymbolDef | undefined): void {
   result.followUps.add(`codegraph explain ${quoteShellArg(result.handle)}`);
   if (def) {
-    result.followUps.add(`codegraph goto ${quoteShellArg(relFile)} ${def.range.start.line} ${def.range.start.column}`);
-    result.followUps.add(`codegraph refs --file ${quoteShellArg(relFile)} --line ${def.range.start.line} --col ${def.range.start.column} --pretty`);
+    for (const command of collectDefinitionFollowUps(relFile, def.range.start.line, def.range.start.column)) {
+      result.followUps.add(command);
+    }
   }
   addFileFollowUps(result, relFile);
 }
 
 function addFileFollowUps(result: MutableSearchResult, relFile: string): void {
-  result.followUps.add(`codegraph deps ${quoteShellArg(relFile)} --json`);
-  result.followUps.add(`codegraph rdeps ${quoteShellArg(relFile)} --json`);
-  result.followUps.add(`codegraph chunk ${quoteShellArg(relFile)}`);
+  for (const command of collectCommonFileFollowUps(relFile)) {
+    result.followUps.add(command);
+  }
 }
 
 function compareResults(left: MutableSearchResult, right: MutableSearchResult): number {
@@ -758,6 +759,10 @@ function finalizeResult(result: MutableSearchResult): AgentSearchResult {
     return left.target.localeCompare(right.target);
   });
   const followUps = [...result.followUps].sort();
+  const boundedRankReasons = boundAgentList(rankReasons, MAX_RANK_REASONS_PER_RESULT);
+  const boundedEvidence = boundAgentList(evidence, MAX_EVIDENCE_PER_RESULT);
+  const boundedNeighbors = boundAgentList(neighbors, MAX_NEIGHBORS_PER_RESULT);
+  const boundedFollowUps = boundAgentList(followUps, MAX_FOLLOWUPS_PER_RESULT);
 
   return {
     handle: result.handle,
@@ -766,19 +771,19 @@ function finalizeResult(result: MutableSearchResult): AgentSearchResult {
     file: result.file,
     ...(result.range ? { range: result.range } : {}),
     score: Number(result.score.toFixed(3)),
-    rankReasons: rankReasons.slice(0, MAX_RANK_REASONS_PER_RESULT),
-    evidence: evidence.slice(0, MAX_EVIDENCE_PER_RESULT),
-    neighbors: neighbors.slice(0, MAX_NEIGHBORS_PER_RESULT),
-    followUps: followUps.slice(0, MAX_FOLLOWUPS_PER_RESULT),
+    rankReasons: boundedRankReasons.items,
+    evidence: boundedEvidence.items,
+    neighbors: boundedNeighbors.items,
+    followUps: boundedFollowUps.items,
     omittedCounts: {
-      rankReasons: Math.max(0, rankReasons.length - MAX_RANK_REASONS_PER_RESULT),
-      evidence: Math.max(0, evidence.length - MAX_EVIDENCE_PER_RESULT),
-      neighbors: Math.max(0, neighbors.length - MAX_NEIGHBORS_PER_RESULT),
-      followUps: Math.max(0, followUps.length - MAX_FOLLOWUPS_PER_RESULT),
+      rankReasons: boundedRankReasons.omitted,
+      evidence: boundedEvidence.omitted,
+      neighbors: boundedNeighbors.omitted,
+      followUps: boundedFollowUps.omitted,
     },
   };
 }
 
 function relativeFile(root: string, file: string): string {
-  return toProjectRelativePath(root, file) ?? normalizePath(path.resolve(file));
+  return normalizeAgentFilePath(root, file);
 }

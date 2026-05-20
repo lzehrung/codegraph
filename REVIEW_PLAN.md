@@ -134,7 +134,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Reuse opportunity: UTF-8 truncation and path confinement are general utilities that could also support artifact/file-reading code paths.
   - Tests: MCP server tests for tool handlers, HTTP Host validation, request size limits, artifact path confinement, file reads, SQLite row/byte limits, and unsupported SQL functions.
 
-- [ ] Centralize agent limit normalization and bounded output shaping.
+- [x] Centralize agent limit normalization and bounded output shaping.
   - `src/agent/search.ts`, `src/agent/explain.ts`, and `src/agent-tools.ts` each normalize limits, bound results, and convert file/module references into agent-facing shapes. Handle formatting is shared, but bounded-list and output normalization policies are still scattered.
   - Suggested fix: introduce `src/agent/bounds.ts` and `src/agent/normalize.ts` for limit clamping, bounded-list metadata, relative path normalization, and common follow-up command shaping.
   - Correctness opportunity: agent search, explain, artifact questions, and tool wrappers should report omission counts and path shapes consistently.
