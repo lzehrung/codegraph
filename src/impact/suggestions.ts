@@ -4,6 +4,7 @@ import { goToDefinition, ensureParsedContext } from "../indexer.js";
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { normalizePath, resolveFilePathFromRoot, toProjectRelativePath } from "../util.js";
+import { collectChangedLines } from "./hunks.js";
 import type { FileChange, ImpactOptions, ImpactSuggestion, ImpactSuggestionConfidence } from "./types.js";
 
 type ReferenceCandidate = {
@@ -343,25 +344,6 @@ function isInImportOrExport(node: SyntaxNodeLike): boolean {
     current = current.parent;
   }
   return false;
-}
-
-function collectChangedLines(hunks: FileChange["hunks"]): Set<number> {
-  const changedLines = new Set<number>();
-  for (const hunk of hunks) {
-    let newLine = hunk.newStart;
-    for (const line of hunk.lines) {
-      if (line.startsWith(" ")) {
-        newLine++;
-      } else if (line.startsWith("+")) {
-        changedLines.add(newLine);
-        newLine++;
-      } else if (line.startsWith("-")) {
-        const mappedLine = newLine;
-        changedLines.add(mappedLine);
-      }
-    }
-  }
-  return changedLines;
 }
 
 function resolveFilePath(projectRoot: string, file: FileId): FileId {

@@ -6,6 +6,9 @@ import { supportForFile } from "../languages.js";
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileChange, ChangedSymbol } from "./types.js";
+import { collectChangedLines } from "./hunks.js";
+
+export { collectChangedLines } from "./hunks.js";
 
 function symbolHandleFromLocal(file: FileId, local: SymbolDef): string {
   const index = local.range.start.index ?? 0;
@@ -223,32 +226,6 @@ function findNodesInLines(tree: SyntaxTreeLike, changedLines: Set<number>): Synt
 
   walk(tree.rootNode);
   return nodes;
-}
-
-export function collectChangedLines(hunks: FileChange["hunks"]): Set<number> {
-  const changedLines = new Set<number>();
-  for (const hunk of hunks) {
-    let oldLine = hunk.oldStart;
-    let newLine = hunk.newStart;
-    let deletionStreak = 0;
-    for (const line of hunk.lines) {
-      if (line.startsWith(" ")) {
-        oldLine++;
-        newLine++;
-        deletionStreak = 0;
-      } else if (line.startsWith("+")) {
-        changedLines.add(newLine);
-        newLine++;
-        deletionStreak = 0;
-      } else if (line.startsWith("-")) {
-        const mappedLine = newLine > 0 ? newLine + deletionStreak : oldLine;
-        changedLines.add(mappedLine);
-        oldLine++;
-        deletionStreak += 1;
-      }
-    }
-  }
-  return changedLines;
 }
 
 type NodeClassification = {

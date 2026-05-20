@@ -153,6 +153,26 @@ function buildLightStreamSummaryReport(
   };
 }
 
+export function impactItemEmissionKey(item: ImpactItem, partial: boolean): string {
+  const symbols = item.symbols.slice().sort().join(",");
+  const reasons = item.reasons.slice().sort().join(",");
+  const refCount = item.refs?.length ?? 0;
+  const hintCount = item.explain?.hints?.length ?? 0;
+  return [
+    item.file,
+    partial ? "partial" : "final",
+    symbols,
+    reasons,
+    item.severity.toFixed(6),
+    String(item.depth ?? 0),
+    String(item.confidence ?? 0),
+    String(item.typeOnly ?? ""),
+    String(item.explain?.typeOnly ?? ""),
+    String(refCount),
+    String(hintCount),
+  ].join("|");
+}
+
 /**
  * Stream impact analysis results as they are discovered.
  *
@@ -232,8 +252,7 @@ export async function* analyzeImpactStreaming(
     let impactedItems: ImpactItem[] = [];
     let impactError: string | null = null;
     const queueImpactItem = (item: ImpactItem, partial: boolean) => {
-      const signature = JSON.stringify(item);
-      const key = `${item.file}::${partial ? "partial" : "final"}::${signature}`;
+      const key = impactItemEmissionKey(item, partial);
       if (emittedSignatures.has(key)) return;
       emittedSignatures.add(key);
       impactQueue.push({
