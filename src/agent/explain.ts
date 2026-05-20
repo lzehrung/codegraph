@@ -1,15 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { findReferences } from "../indexer.js";
+import { findReferences } from "../indexer/navigation.js";
 import type { Reference, SymbolDef } from "../indexer/types.js";
-import { getDependencies, getHotspots, getReverseDependencies } from "../graphs.js";
+import { getDependencies, getReverseDependencies } from "../graphs/queries.js";
+import { getHotspots } from "../graphs/hotspots.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
-import type { SymbolNode } from "../graphs.js";
+import { type SymbolNode } from "../graphs/symbol-graph.js";
 import { buildReviewReport } from "../review.js";
 import { extractSqlFactsFromSource, sqlObjectBaseName } from "../sql/extractFacts.js";
 import type { SqlStatementFact } from "../sql/types.js";
 import type { Range } from "../types.js";
-import { normalizePath } from "../util.js";
+import { normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { boundAgentList, defaultAgentLimit, emptyAgentBoundedList, type BoundedAgentList } from "./bounds.js";
 import {

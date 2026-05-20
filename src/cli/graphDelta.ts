@@ -1,8 +1,9 @@
 import fsp from "node:fs/promises";
-import { buildGraphDelta, type IncrementalBuildOptions } from "../indexer.js";
-import type { GraphBuildOptions } from "../graphs.js";
+import { buildGraphDelta } from "../indexer/build-index.js";
+import { type IncrementalBuildOptions } from "../indexer/types.js";
+import { type GraphBuildOptions } from "../graphs/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
-import { normalizePath, resolveFilePathFromRoot } from "../util.js";
+import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { parseCacheModeOption, parseNonNegativeIntegerOption } from "./options.js";
 
 export type GraphDeltaCommandContext = {

@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { SymbolKind, type ProjectIndex, findReferences } from "../indexer.js";
-import { resolveFilePathFromRoot } from "../util.js";
+import { SymbolKind, type ProjectIndex } from "../indexer/types.js";
+import { findReferences } from "../indexer/navigation.js";
+import { resolveFilePathFromRoot } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { listCandidateTestFiles } from "./context.js";
 import { collectHunkLineText, collectRemovedLines } from "./hunks.js";

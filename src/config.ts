@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import type { ProjectFileDiscoveryOptions } from "./util.js";
+import { type ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
 
 export const CODEGRAPH_CONFIG_FILE = "codegraph.config.json";
 

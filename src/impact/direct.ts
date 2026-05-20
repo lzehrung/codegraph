@@ -1,6 +1,6 @@
 import type { FileId } from "../types.js";
-import type { ProjectIndex, SymbolDef } from "../indexer.js";
-import { findReferences } from "../indexer.js";
+import { type ProjectIndex, type SymbolDef } from "../indexer/types.js";
+import { findReferences } from "../indexer/navigation.js";
 import { Semaphore } from "../util/concurrency.js";
 import type { ChangedSymbol, ImpactItem, ImpactOptions, ImpactReason } from "./types.js";
 import { calculateSeverity, selectStrongerImpactReason } from "./severity.js";

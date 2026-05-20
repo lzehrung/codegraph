@@ -19,11 +19,11 @@ import { explainCodegraphTargetWithSession } from "../agent/explain.js";
 import type { AgentExplanation, AgentExplanationReference } from "../agent/explain.js";
 import { searchCodegraphWithSession } from "../agent/search.js";
 import type { AgentSearchMode, AgentSearchResponse } from "../agent/search.js";
-import { getDependencies, getReverseDependencies, getShortestPath } from "../graphs.js";
-import { findReferences, goToDefinition } from "../indexer.js";
+import { getDependencies, getReverseDependencies, getShortestPath } from "../graphs/queries.js";
+import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { buildReviewReport, type ReviewDepth, type ReviewReport } from "../review.js";
 import { queryGraphSqliteRaw, type RawSqlResult } from "../sqlite.js";
-import { normalizePath, toProjectRelativePath } from "../util.js";
+import { normalizePath, toProjectRelativePath } from "../util/paths.js";
 import { createAgentSession } from "../agent/session.js";
 import type { AgentSession } from "../agent/session.js";
 import {

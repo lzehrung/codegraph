@@ -1,11 +1,8 @@
 import path from "node:path";
 
-import {
-  buildProjectIndex as defaultBuildProjectIndex,
-  getApiSurface,
-  type BuildOptions,
-  type ProjectIndex,
-} from "../indexer.js";
+import { buildProjectIndex as defaultBuildProjectIndex } from "../indexer/build-index.js";
+import { getApiSurface } from "../indexer/symbols.js";
+import { type BuildOptions, type ProjectIndex } from "../indexer/types.js";
 import type { GraphAdjacencyIndex } from "../graphs/adjacency.js";
 import {
   findDetailedCycles,
@@ -14,10 +11,10 @@ import {
   getShortestPath,
   getUnresolvedImports,
   sortDetailedCycles,
-  type GraphBuildOptions,
-} from "../graphs.js";
+} from "../graphs/queries.js";
+import { type GraphBuildOptions } from "../graphs/types.js";
 import type { Graph } from "../types.js";
-import { assertFilePathWithinRoot } from "../util.js";
+import { assertFilePathWithinRoot } from "../util/paths.js";
 import { parseOptionalNonNegativeIntegerOption } from "./options.js";
 
 export type GraphQueryCommand = "deps" | "rdeps" | "path" | "cycles" | "unresolved" | "apisurface";

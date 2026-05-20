@@ -5,25 +5,18 @@ import { promisify } from "node:util";
 import type { CandidateTestFile } from "../impact/context.js";
 import { compileTestPatterns, createIndexTestFileMatcher } from "../impact/testPatterns.js";
 import type { FileChange } from "../impact/types.js";
-import {
-  collectImportsForFile,
-  collectLocalsAndExportsFromSource,
-  type ExportEntry,
-  type ImportBinding,
-  type ModuleIndex,
-  type ProjectIndex,
-} from "../indexer.js";
+import { collectImportsForFile } from "../indexer/imports.js";
+import { collectLocalsAndExportsFromSource } from "../indexer/locals-and-exports.js";
+import { type ExportEntry, type ImportBinding, type ModuleIndex, type ProjectIndex } from "../indexer/types.js";
 import { supportForFile } from "../languages.js";
 import type { Edge, FileId } from "../types.js";
+import { listResolutionCandidates, loadNearestTsconfigFor } from "../util/resolution.js";
 import {
-  listResolutionCandidates,
   listWorkspacePackageResolutionCandidates,
-  loadNearestTsconfigFor,
   loadWorkspaceConfig,
-  normalizePath,
-  toProjectRelativePath,
   type WorkspaceConfig,
-} from "../util.js";
+} from "../util/workspace.js";
+import { normalizePath, toProjectRelativePath } from "../util/paths.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 
 const execFileAsync = promisify(execFile);

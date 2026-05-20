@@ -3,7 +3,7 @@ import path from "node:path";
 import { prepareSourceInput } from "../languages/filePrep.js";
 import { logWithLevel } from "../logging.js";
 import { getUnifiedQueryExecution } from "../native/treeSitterNative.js";
-import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util.js";
+import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 
 export type AstGrepHit = {
   file: string;

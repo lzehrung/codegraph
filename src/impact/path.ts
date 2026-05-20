@@ -1,7 +1,7 @@
 import type { FileId } from "../types.js";
 import type { FileChange } from "./types.js";
 import pm from "picomatch";
-import { isFilePathWithinRoot, normalizePath, resolveFilePathFromRoot, toProjectRelativePath } from "../util.js";
+import { isFilePathWithinRoot, normalizePath, resolveFilePathFromRoot, toProjectRelativePath } from "../util/paths.js";
 
 export function normalizeImpactFilePath(projectRoot: string, filePath: string): string {
   return normalizePath(resolveFilePathFromRoot(projectRoot, filePath));
@@ -40,7 +40,9 @@ export function createImpactIgnoreMatcher(
   projectRoot: string,
   ignoreGlobs: readonly string[],
 ): (filePath: string) => boolean {
-  const normalizedIgnoreGlobs = ignoreGlobs.map((globPattern) => globPattern.trim().replace(/\\/g, "/")).filter(Boolean);
+  const normalizedIgnoreGlobs = ignoreGlobs
+    .map((globPattern) => globPattern.trim().replace(/\\/g, "/"))
+    .filter(Boolean);
   if (!normalizedIgnoreGlobs.length) {
     return () => false;
   }

@@ -1,4 +1,4 @@
-import type { ProjectIndex } from "../indexer.js";
+import { type ProjectIndex } from "../indexer/types.js";
 import { mapLimit } from "../util/concurrency.js";
 import { analyzeImpact } from "./analyzer.js";
 import { locateChangedSymbolsWithLines } from "./map.js";

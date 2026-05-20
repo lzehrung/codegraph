@@ -2,24 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { supportForFile, type LanguageSupport } from "../languages.js";
-import {
-  loadWorkspaceConfig,
-  listProjectFiles,
-  discoverProjectFiles,
-  getGitHead,
-  isGitRepo,
-  getGitBlobHashes,
-  listChangedFiles,
-  clearImportResolutionCaches,
-  stringifyUnknown,
-  assertFilePathWithinRoot,
-  normalizePath,
-  resolveSpecifier,
-  resolveWorkspacePackage,
-} from "../util.js";
+import { loadWorkspaceConfig, resolveWorkspacePackage } from "../util/workspace.js";
+import { listProjectFiles, discoverProjectFiles } from "../util/projectFiles.js";
+import { getGitHead, isGitRepo, getGitBlobHashes, listChangedFiles } from "../util/git.js";
+import { clearImportResolutionCaches, resolveSpecifier } from "../util/resolution.js";
+import { stringifyUnknown } from "../util/ast.js";
+import { assertFilePathWithinRoot, normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
-import { collectGraph, collectEdgesForFile } from "../graphs.js";
+import { collectGraph } from "../graph-builder.js";
+import { collectEdgesForFile } from "../graph-edge-collector.js";
 import { buildGraphAdjacency } from "../graphs/adjacency.js";
 import type { FallbackImportExtractionEvent } from "../graphs/specifiers.js";
 import type { GraphCacheEntry, GraphBuildOptions } from "../graphs/types.js";
@@ -303,7 +295,7 @@ async function resolveCrossModuleSymbolExports(
 ): Promise<void> {
   if (!support.supportsCrossModuleSymbols) return;
   if (support.id !== "ts" && support.id !== "js") return;
-  const { matchPath } = await import("../util.js").then((mod) => mod.loadNearestTsconfigFor(file, logLevel));
+  const { matchPath } = await import("../util/resolution.js").then((mod) => mod.loadNearestTsconfigFor(file, logLevel));
   for (const entry of mod.exports) {
     if (entry.type !== "reexport" && entry.type !== "exportStar" && entry.type !== "namespaceReexport") {
       continue;

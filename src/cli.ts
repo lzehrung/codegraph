@@ -3,7 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { BuildOptions } from "./indexer/types.js";
-import { type GraphBuildOptions } from "./graphs.js";
+import { type GraphBuildOptions } from "./graphs/types.js";
 import { type NativeRuntimeMode } from "./native/treeSitterNative.js";
 import { handleChunkCommand } from "./cli/chunk.js";
 import {
@@ -42,13 +42,9 @@ import { handleSearchCommand } from "./cli/search.js";
 import { handleSkillCommand } from "./cli/skill.js";
 import { handleSqlCommand } from "./cli/sql.js";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "./config.js";
-import {
-  listChangedFiles,
-  listProjectFiles,
-  normalizePath,
-  resolveFilePathFromRoot,
-  type ProjectFileDiscoveryOptions,
-} from "./util.js";
+import { listChangedFiles } from "./util/git.js";
+import { listProjectFiles, type ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
+import { normalizePath, resolveFilePathFromRoot } from "./util/paths.js";
 
 export { isCliDiscoveryRelativePathInside } from "./cli/context.js";
 

@@ -2,19 +2,14 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isSymbolHandleExported } from "../indexer/declarations.js";
-import {
-  findReferences,
-  type ExportEntry,
-  type ModuleIndex,
-  type ProjectIndex,
-  type SymbolDef,
-  symbolId,
-} from "../indexer.js";
+import { findReferences } from "../indexer/navigation.js";
+import { type ExportEntry, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../indexer/types.js";
+import { symbolId } from "../indexer/symbols.js";
 import { locateChangedSymbolsWithLines, mapChangedLinesToSymbols } from "../impact/map.js";
 import type { Hunk } from "../impact/types.js";
 import type { FileId, Range } from "../types.js";
 import { mapLimit } from "../util/concurrency.js";
-import { normalizePath, toProjectRelativePath } from "../util.js";
+import { normalizePath, toProjectRelativePath } from "../util/paths.js";
 import type { ReviewDiagnostics, ReviewTimingReport } from "../review.js";
 import type { DeletedFileSnapshot } from "./deleted.js";
 import { isRiskRelevantSymbolMappingFile } from "./risk.js";

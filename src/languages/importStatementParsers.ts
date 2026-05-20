@@ -1,5 +1,5 @@
 import path from "node:path";
-import { isAbsoluteFilePath, normalizePath } from "../util.js";
+import { isAbsoluteFilePath, normalizePath } from "../util/paths.js";
 
 export type ParsedRustImportStatement =
   | {

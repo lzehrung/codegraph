@@ -1,4 +1,4 @@
-import { sliceText } from "../util.js";
+import { sliceText } from "../util/ast.js";
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";

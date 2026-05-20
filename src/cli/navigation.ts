@@ -1,7 +1,9 @@
 import path from "node:path";
-import { buildProjectIndex, findReferences, goToDefinition } from "../indexer.js";
+import { buildProjectIndex } from "../indexer/build-index.js";
+import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
-import { assertFilePathWithinRoot, type ProjectFileDiscoveryOptions } from "../util.js";
+import { assertFilePathWithinRoot } from "../util/paths.js";
+import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { parsePositiveIntegerOption } from "./options.js";
 
 type CliProjectFileInput =

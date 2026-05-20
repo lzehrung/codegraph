@@ -32,7 +32,8 @@ import {
   extractHtmlInlineScriptSpecifiers,
   isGraphOnlyLanguage,
 } from "../documentLinks.js";
-import { sliceText, unquote, extractJsTsSpecifiers, extractPythonSpecifiers, type ModuleSpecifier } from "../util.js";
+import { sliceText, unquote } from "../util/ast.js";
+import { extractJsTsSpecifiers, extractPythonSpecifiers, type ModuleSpecifier } from "../util/specifiers.js";
 
 export type FallbackImportExtractionReason = "fast" | "js-fallback-unavailable" | "query-error" | "query-empty";
 

@@ -1,6 +1,6 @@
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
-import { sliceText, unquote } from "../util.js";
+import { sliceText, unquote } from "./ast.js";
 
 export type MemberAccessParts = {
   object: SyntaxNodeLike | null;

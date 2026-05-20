@@ -1,5 +1,5 @@
-import { astGrep, textGrep } from "../graphs.js";
-import type { ProjectFileDiscoveryOptions } from "../util.js";
+import { astGrep, textGrep } from "../graphs/grep.js";
+import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { parseOptionalPositiveIntegerOption } from "./options.js";
 
 export type GrepCommandContext = {

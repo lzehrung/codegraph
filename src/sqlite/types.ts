@@ -1,5 +1,5 @@
 import type { Graph } from "../types.js";
-import type { SymbolGraph } from "../graphs.js";
+import { type SymbolGraph } from "../graphs/symbol-graph.js";
 
 export type SqliteGraphOptions = {
   fileGraph: Graph;

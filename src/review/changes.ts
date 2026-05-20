@@ -3,7 +3,8 @@ import { createImpactIgnoreMatcher } from "../impact/path.js";
 import { parseUnifiedDiff } from "../impact/parse.js";
 import type { FileChange, Hunk } from "../impact/types.js";
 import type { ReviewOptions, ReviewTimingReport } from "../review.js";
-import { assertFilePathWithinRoot, getUnifiedDiff, listChangedFiles } from "../util.js";
+import { assertFilePathWithinRoot } from "../util/paths.js";
+import { getUnifiedDiff, listChangedFiles } from "../util/git.js";
 
 export type ReviewChangeCollection = {
   changedFiles: Set<string>;

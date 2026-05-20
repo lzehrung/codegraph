@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, vi } from "vitest";
 import type { ICodeReviewSession } from "../src/index.js";
 import { CodeReviewSession, SessionManager, createCodeReviewSession } from "../src/session.js";
-import * as indexer from "../src/indexer.js";
+import * as indexerBuild from "../src/indexer/build-index.js";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
@@ -194,7 +194,7 @@ index 1234567..abcdef0 100644
     });
 
     const buildSpy = vi
-      .spyOn(indexer, "buildProjectIndexIncremental")
+      .spyOn(indexerBuild, "buildProjectIndexIncremental")
       .mockRejectedValue(new Error("synthetic refresh failure"));
 
     try {
@@ -259,12 +259,12 @@ index 1234567..abcdef0 100644
   });
 
   test("should keep a disposed session expired when init completes later", async () => {
-    const originalBuild = indexer.buildProjectIndexIncremental;
+    const originalBuild = indexerBuild.buildProjectIndexIncremental;
     let releaseBuild: (() => void) | null = null;
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
-    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
       await buildGate;
       return await originalBuild(...args);
     });
@@ -292,12 +292,12 @@ index 1234567..abcdef0 100644
       root: sampleRoot,
       buildOptions: { cache: "memory", useBloomFilters: true },
     });
-    const originalBuild = indexer.buildProjectIndexIncremental;
+    const originalBuild = indexerBuild.buildProjectIndexIncremental;
     let releaseBuild: (() => void) | null = null;
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
-    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
       await buildGate;
       return await originalBuild(...args);
     });
@@ -387,7 +387,7 @@ describe("SessionManager", () => {
   });
 
   test("should share one initialization across concurrent same-id creation", async () => {
-    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental");
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
 
     try {
       const [sessionA, sessionB] = await Promise.all([
@@ -411,12 +411,12 @@ describe("SessionManager", () => {
   });
 
   test("should not repopulate a session disposed during initialization", async () => {
-    const originalBuild = indexer.buildProjectIndexIncremental;
+    const originalBuild = indexerBuild.buildProjectIndexIncremental;
     let releaseBuild: (() => void) | null = null;
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
-    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
       await buildGate;
       return await originalBuild(...args);
     });
@@ -440,12 +440,12 @@ describe("SessionManager", () => {
   });
 
   test("should allow immediate recreation after disposing a pending session", async () => {
-    const originalBuild = indexer.buildProjectIndexIncremental;
+    const originalBuild = indexerBuild.buildProjectIndexIncremental;
     let releaseBuild: (() => void) | null = null;
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
-    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
       await buildGate;
       return await originalBuild(...args);
     });
@@ -476,12 +476,12 @@ describe("SessionManager", () => {
   });
 
   test("should allow immediate recreation after disposeAll cancels a pending session", async () => {
-    const originalBuild = indexer.buildProjectIndexIncremental;
+    const originalBuild = indexerBuild.buildProjectIndexIncremental;
     let releaseBuild: (() => void) | null = null;
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
-    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
       await buildGate;
       return await originalBuild(...args);
     });
@@ -537,7 +537,7 @@ describe("SessionManager", () => {
     expect(session.getStatus()).toBe("expired");
 
     const buildSpy = vi
-      .spyOn(indexer, "buildProjectIndexIncremental")
+      .spyOn(indexerBuild, "buildProjectIndexIncremental")
       .mockRejectedValue(new Error("synthetic reinit failure"));
 
     try {
@@ -767,12 +767,12 @@ describe("SessionManager", () => {
   });
 
   test("should not repopulate sessions when warmup is disposed mid-initialization", async () => {
-    const originalBuild = indexer.buildProjectIndexIncremental;
+    const originalBuild = indexerBuild.buildProjectIndexIncremental;
     let releaseBuild: (() => void) | null = null;
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
-    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
       await buildGate;
       return await originalBuild(...args);
     });
@@ -801,12 +801,12 @@ describe("SessionManager", () => {
   });
 
   test("should share warmup work with concurrent getOrCreateSession", async () => {
-    const originalBuild = indexer.buildProjectIndexIncremental;
+    const originalBuild = indexerBuild.buildProjectIndexIncremental;
     let releaseBuild: (() => void) | null = null;
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
-    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
       await buildGate;
       return await originalBuild(...args);
     });
@@ -839,12 +839,12 @@ describe("SessionManager", () => {
   });
 
   test("should warm multiple independent sessions in parallel", async () => {
-    const originalBuild = indexer.buildProjectIndexIncremental;
+    const originalBuild = indexerBuild.buildProjectIndexIncremental;
     let releaseBuild: (() => void) | null = null;
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
-    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
       await buildGate;
       return await originalBuild(...args);
     });

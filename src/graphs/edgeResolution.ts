@@ -9,9 +9,9 @@ import {
   resolvePythonModule,
   resolveSpecifier,
   type MatchPathFn,
-  type ModuleSpecifier,
-  type WorkspaceConfig,
-} from "../util.js";
+} from "../util/resolution.js";
+import { type ModuleSpecifier } from "../util/specifiers.js";
+import { type WorkspaceConfig } from "../util/workspace.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
 
 type ResolvedSpecifierEdge = {
@@ -114,7 +114,7 @@ export async function resolveModuleSpecifierEdges(
   } else if (context.support.id === "go" || context.support.id === "php") {
     to = await resolveImportSpecifierEdge(entry, context);
   } else if (["csharp", "ruby", "rust"].includes(context.support.id)) {
-    const { resolvePathLikeModule } = await import("../util.js");
+    const { resolvePathLikeModule } = await import("../util/resolution.js");
     const pathLike = await resolvePathLikeModule(context.projectRoot, entry.spec);
     to = pathLike ? edgeToResolvedFile(pathLike) : await resolveGenericSpecifier(entry, context, resolutionExtensions);
   } else {

@@ -90,7 +90,7 @@ No dependency cycles were reported. The highest remaining concentration is in:
   - Update users in `graph-builder`, `indexer/build-index`, impact modules, SQL modules, review, and agent explain.
   - Keep `tests/map-limit.test.ts`, and add rejection/concurrency-order coverage if missing.
 
-- [ ] Reduce internal dependence on broad barrels.
+- [x] Reduce internal dependence on broad barrels.
   - Finding: many implementation modules import from `../util.js`, `../graphs.js`, and `../indexer.js`, increasing fan-in on broad facade files and making public/internal boundaries blurry.
   - Target: implementation modules import direct leaf modules unless they are intentionally using a stable domain facade.
   - Add or extend package metadata/source-structure tests to prevent imports through the root public API and to limit broad internal barrel usage where practical.

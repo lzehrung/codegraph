@@ -1,14 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import {
-  collectGraph,
-  findDetailedCycles,
-  getHotspots,
-  getUnresolvedImports,
-  sortDetailedCycles,
-  type GraphBuildOptions,
-} from "../graphs.js";
-import { buildProjectIndexIncremental, type BuildReport } from "../indexer.js";
+import { collectGraph } from "../graph-builder.js";
+import { findDetailedCycles, getUnresolvedImports, sortDetailedCycles } from "../graphs/queries.js";
+import { getHotspots } from "../graphs/hotspots.js";
+import { type GraphBuildOptions } from "../graphs/types.js";
+import { buildProjectIndexIncremental } from "../indexer/build-index.js";
+import { type BuildReport } from "../indexer/types.js";
 import {
   getNativeTreeSitterLoadError,
   getNativeTreeSitterSupportedLanguageIds,
@@ -17,7 +14,7 @@ import {
 } from "../native/treeSitterNative.js";
 import type { Graph } from "../types.js";
 import { supportForFile } from "../languages.js";
-import type { ProjectFileDiscoveryOptions } from "../util.js";
+import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { parseCacheModeOption, parsePositiveIntegerOption } from "./options.js";
 
 type CacheMode = "off" | "memory" | "disk";

@@ -11,7 +11,7 @@ import type {
   NativeBackendFallbackReason,
   NativeBackendLanguageReport,
 } from "../indexer/types.js";
-import { stringifyUnknown } from "../util.js";
+import { stringifyUnknown } from "../util/ast.js";
 
 export type NativeBackendOutcome = {
   usedNative: boolean;

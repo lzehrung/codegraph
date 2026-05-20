@@ -3,7 +3,7 @@
  * Allows incremental results to be emitted as they're discovered
  */
 
-import type { ProjectIndex } from "../indexer.js";
+import { type ProjectIndex } from "../indexer/types.js";
 import {
   IMPACT_SCHEMA_VERSION,
   type ImpactOptions,
@@ -14,7 +14,7 @@ import {
 } from "./types.js";
 import { getDiff } from "./providers/base.js";
 import { analyzeImpact } from "./analyzer.js";
-import { discoverProjectFiles, type ProjectFileInfo } from "../util.js";
+import { discoverProjectFiles, type ProjectFileInfo } from "../util/projectFiles.js";
 import { buildImpactReport, newFileRangeForHunk } from "./report.js";
 import {
   applyChangedFileSymbolMapping,

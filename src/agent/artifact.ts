@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { getHotspots, type SymbolNode } from "../graphs.js";
+import { getHotspots } from "../graphs/hotspots.js";
+import { type SymbolNode } from "../graphs/symbol-graph.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
 import { queryGraphSqliteRaw, writeGraphSqlite } from "../sqlite.js";
-import { isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util.js";
+import { isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util/paths.js";
 import { formatAgentSqlHandle, formatAgentSymbolHandle } from "./handles.js";
 import { normalizeAgentFilePath } from "./normalize.js";
 import { createAgentSession } from "./session.js";
@@ -188,7 +189,9 @@ function normalizeArtifactSelection(request: CodegraphArtifactBuildRequest): {
 async function validateOutputDirectory(outDir: string, force: boolean): Promise<void> {
   const entries = await readDirectoryIfPresent(outDir);
   if (entries.length && !force) {
-    throw new Error(`Refusing to write into non-empty output directory: ${outDir}. Pass --force to overwrite artifacts.`);
+    throw new Error(
+      `Refusing to write into non-empty output directory: ${outDir}. Pass --force to overwrite artifacts.`,
+    );
   }
 }
 
@@ -486,9 +489,12 @@ function buildPortableSymbolIdMap(snapshot: AgentProjectSnapshot): Map<string, s
 }
 
 function uniqueGraphSymbolId(seen: Set<string>, relFile: string, node: SymbolNode): string {
-  const base = ["graph-symbol", encodeURIComponent(relFile), encodeURIComponent(node.kind), encodeURIComponent(node.name)].join(
-    ":",
-  );
+  const base = [
+    "graph-symbol",
+    encodeURIComponent(relFile),
+    encodeURIComponent(node.kind),
+    encodeURIComponent(node.name),
+  ].join(":");
   let candidate = base;
   let suffix = 2;
   while (seen.has(candidate)) {
@@ -519,9 +525,7 @@ async function filterSnapshotForOutputDirectory(
       return edge.to.type !== "file" || !isOutputFile(edge.to.path);
     }),
   };
-  const symbols = new Map(
-    [...snapshot.symbolGraph.nodes.entries()].filter(([, node]) => !isOutputFile(node.file)),
-  );
+  const symbols = new Map([...snapshot.symbolGraph.nodes.entries()].filter(([, node]) => !isOutputFile(node.file)));
   const symbolGraph = {
     nodes: symbols,
     edges: snapshot.symbolGraph.edges.filter((edge) => symbols.has(edge.from) && symbols.has(edge.to)),
@@ -680,7 +684,9 @@ function collectExportedSymbols(
   });
 }
 
-function collectSqlObjects(snapshot: AgentProjectSnapshot): Array<{ name: string; kind: string; file: string; handle: string }> {
+function collectSqlObjects(
+  snapshot: AgentProjectSnapshot,
+): Array<{ name: string; kind: string; file: string; handle: string }> {
   return [...snapshot.symbolGraph.nodes.values()]
     .filter((node) => node.kind === "table" || node.kind === "view" || node.kind === "index" || node.kind === "routine")
     .map((node) => {

@@ -1,7 +1,7 @@
 import type { LanguageSupport } from "../../languages.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import type { SymbolDef } from "../../indexer/types.js";
-import { sliceText } from "../../util.js";
+import { sliceText } from "../../util/ast.js";
 import {
   collectMemberAccessChain,
   memberAccessTraversalTypes,

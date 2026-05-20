@@ -1,4 +1,4 @@
-import { buildProjectIndex } from "../indexer.js";
+import { buildProjectIndex } from "../indexer/build-index.js";
 import type { BuildOptions } from "../indexer/types.js";
 import {
   analyzeImpactFromDiff,
@@ -8,15 +8,12 @@ import {
   type ImpactOptions,
   type ImpactReport,
 } from "../impact/index.js";
-import {
-  graphToMermaidSymbolsWithFiles,
-  type GraphBuildOptions,
-  type SymbolGraph,
-  type SymbolNodeKind,
-} from "../graphs.js";
+import { graphToMermaidSymbolsWithFiles } from "../graphs/symbol-render.js";
+import { type GraphBuildOptions } from "../graphs/types.js";
+import { type SymbolGraph, type SymbolNodeKind } from "../graphs/symbol-graph.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { Graph } from "../types.js";
-import type { ProjectFileDiscoveryOptions } from "../util.js";
+import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import {
   parseCacheModeOption,
   parseOptionalNonNegativeIntegerOption,

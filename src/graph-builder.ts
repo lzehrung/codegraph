@@ -2,7 +2,8 @@ import path from "node:path";
 
 import { isUnsupportedParserInputError } from "./languages/filePrep.js";
 import type { Edge, Graph } from "./types.js";
-import { loadWorkspaceConfig, normalizeResolutionHints } from "./util.js";
+import { loadWorkspaceConfig } from "./util/workspace.js";
+import { normalizeResolutionHints } from "./util/paths.js";
 import { mapLimit } from "./util/concurrency.js";
 import { logWithLevel, type LogLevel } from "./logging.js";
 import { isNativeRequiredUnavailableError, type NativeRuntimeMode } from "./native/treeSitterNative.js";

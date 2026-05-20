@@ -6,7 +6,7 @@ import {
   parsePhpImportStatement,
   parseRustImportStatement,
 } from "../../languages/importStatementParsers.js";
-import { getPhpComposerImplicitFiles } from "../../util.js";
+import { getPhpComposerImplicitFiles } from "../../util/resolution.js";
 import type { ImportBinding } from "../types.js";
 import type { ImportBindingSink, ImportResolver, ResolvedImportTarget } from "./context.js";
 
@@ -469,7 +469,8 @@ export function appendImplicitImportBinding(
     } else {
       const parts = from.split(".");
       const imported = parts[parts.length - 1];
-      if (imported) context.pushBinding({ kind: "named", local: alias ?? imported, imported, from, resolved, typeOnly });
+      if (imported)
+        context.pushBinding({ kind: "named", local: alias ?? imported, imported, from, resolved, typeOnly });
     }
   } else if (context.languageId === "swift") {
     const parts = from.split(".");

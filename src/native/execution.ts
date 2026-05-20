@@ -1,5 +1,5 @@
 import type { LanguageSupport } from "../languages.js";
-import { stringifyUnknown } from "../util.js";
+import { stringifyUnknown } from "../util/ast.js";
 import type {
   CompactImportsExecution,
   NativeBindingState,

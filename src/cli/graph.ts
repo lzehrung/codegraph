@@ -2,24 +2,24 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { buildSymbolGraph, type SymbolGraph } from "../graphs/symbol-graph.js";
+import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
+import { collectGraph } from "../graph-builder.js";
+import { graphToDOT, graphToMermaid } from "../graphs/render.js";
 import {
-  buildSymbolGraph,
-  buildSymbolGraphDetailed,
-  collectGraph,
-  graphToDOT,
   graphToDOTSymbols,
   graphToDOTSymbolsWithFiles,
-  graphToMermaid,
   graphToMermaidSymbols,
   graphToMermaidSymbolsWithFiles,
-  type SymbolGraph,
-} from "../graphs.js";
-import { buildProjectIndexFromFiles, buildProjectIndexIncremental, type BuildReport } from "../indexer.js";
+} from "../graphs/symbol-render.js";
+import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../indexer/build-index.js";
+import { type BuildReport } from "../indexer/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { updateGraphSqlite, writeGraphSqlite } from "../sqlite.js";
 import { buildSqlArtifactGraphFromFiles } from "../sql/index.js";
 import type { Graph } from "../types.js";
-import { normalizePath, resolveFilePathFromRoot, type ProjectFileDiscoveryOptions } from "../util.js";
+import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
+import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import {
   parseCacheModeOption,
   parseNonNegativeIntegerOption,

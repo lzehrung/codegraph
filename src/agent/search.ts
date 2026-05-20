@@ -6,8 +6,8 @@ import { chunkFile } from "../chunking/chunkFile.js";
 import type { SymbolDef } from "../indexer/types.js";
 import type { Range } from "../types.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
-import type { SymbolNode } from "../graphs.js";
-import { normalizePath } from "../util.js";
+import { type SymbolNode } from "../graphs/symbol-graph.js";
+import { normalizePath } from "../util/paths.js";
 import { boundAgentList, defaultAgentLimit } from "./bounds.js";
 import {
   formatAgentChunkHandle,
@@ -90,7 +90,10 @@ export type AgentSearchResponse = {
   results: AgentSearchResult[];
 };
 
-type MutableSearchResult = Omit<AgentSearchResult, "rankReasons" | "evidence" | "neighbors" | "followUps" | "omittedCounts"> & {
+type MutableSearchResult = Omit<
+  AgentSearchResult,
+  "rankReasons" | "evidence" | "neighbors" | "followUps" | "omittedCounts"
+> & {
   rankReasons: Set<string>;
   evidence: AgentSearchEvidence[];
   neighbors: Map<string, { relation: string; target: string; file?: string }>;
@@ -159,14 +162,19 @@ export function formatAgentSearchResponse(response: AgentSearchResponse): string
   }
   return response.results
     .map((result, index) => {
-      const location = result.range ? `${result.file}:${result.range.start.line}:${result.range.start.column}` : result.file;
+      const location = result.range
+        ? `${result.file}:${result.range.start.line}:${result.range.start.column}`
+        : result.file;
       const reasons = result.rankReasons.slice(0, 3).join("; ");
       return `${index + 1}. ${result.label} [${result.kind}] ${location} score=${result.score}\n   ${reasons}`;
     })
     .join("\n");
 }
 
-async function searchSnapshot(snapshot: AgentProjectSnapshot, request: AgentSearchRequest): Promise<AgentSearchResponse> {
+async function searchSnapshot(
+  snapshot: AgentProjectSnapshot,
+  request: AgentSearchRequest,
+): Promise<AgentSearchResponse> {
   const mode = request.mode ?? "hybrid";
   const tokens = tokenizeQuery(request.query);
   const resultMap = new Map<string, MutableSearchResult>();
@@ -191,12 +199,17 @@ async function searchSnapshot(snapshot: AgentProjectSnapshot, request: AgentSear
   }
 
   if (request.from !== undefined && (mode === "hybrid" || mode === "graph")) {
-    applyGraphNeighborhood(snapshot, resultMap, getFileNeighborIndex(), tokens, request.from, normalizeDepth(request.depth));
+    applyGraphNeighborhood(
+      snapshot,
+      resultMap,
+      getFileNeighborIndex(),
+      tokens,
+      request.from,
+      normalizeDepth(request.depth),
+    );
   }
 
-  const candidates = [...resultMap.values()]
-    .filter((result) => result.score > 0)
-    .sort(compareResults);
+  const candidates = [...resultMap.values()].filter((result) => result.score > 0).sort(compareResults);
   const boundedResults = boundAgentList(candidates, limit);
   const results = boundedResults.items.map(finalizeResult);
 
@@ -240,9 +253,7 @@ function normalizeSearchText(input: string): string {
 }
 
 function splitCamelCase(input: string): string {
-  return input
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+  return input.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
 }
 
 function matchTokenScore(text: string, tokens: string[]): { score: number; matched: string[] } {
@@ -516,7 +527,9 @@ function resolveAnchorFiles(snapshot: AgentProjectSnapshot, from: string): Set<s
 
 function resolveFileCandidate(snapshot: AgentProjectSnapshot, candidate: string): string | null {
   const normalizedFiles = new Map(snapshot.files.map((file) => [normalizePath(file), normalizePath(file)]));
-  const absoluteCandidate = path.isAbsolute(candidate) ? normalizePath(candidate) : normalizePath(path.resolve(snapshot.root, candidate));
+  const absoluteCandidate = path.isAbsolute(candidate)
+    ? normalizePath(candidate)
+    : normalizePath(path.resolve(snapshot.root, candidate));
   return normalizedFiles.get(absoluteCandidate) ?? null;
 }
 
@@ -561,9 +574,12 @@ async function readSearchableFile(file: string): Promise<string | null> {
   }
 }
 
-function buildTextChunks(file: string, text: string): Array<{ name?: string; text: string; startLine: number; endLine: number }> {
+function buildTextChunks(
+  file: string,
+  text: string,
+): Array<{ name?: string; text: string; startLine: number; endLine: number }> {
   const support = supportForFile(file);
-  const languageId = support ? CHUNK_LANGUAGE_ALIASES[support.id] ?? support.id : undefined;
+  const languageId = support ? (CHUNK_LANGUAGE_ALIASES[support.id] ?? support.id) : undefined;
   const language = languageId ? LANG_CONFIGS[languageId] : undefined;
   if (language) {
     try {
@@ -598,13 +614,13 @@ function makeSnippet(text: string, tokens: string[]): string {
   const lines = text.split(/\r?\n/);
   const matchIndex = lines.findIndex((line) => matchTokenScore(line, tokens).score > 0);
   const index = matchIndex >= 0 ? matchIndex : 0;
-  return lines.slice(Math.max(0, index - 1), Math.min(lines.length, index + 2)).join("\n").trim();
+  return lines
+    .slice(Math.max(0, index - 1), Math.min(lines.length, index + 2))
+    .join("\n")
+    .trim();
 }
 
-function upsertResult(
-  resultMap: Map<string, MutableSearchResult>,
-  base: SearchResultBase,
-): MutableSearchResult {
+function upsertResult(resultMap: Map<string, MutableSearchResult>, base: SearchResultBase): MutableSearchResult {
   const existing = resultMap.get(base.handle);
   if (existing) return existing;
   const result: MutableSearchResult = {

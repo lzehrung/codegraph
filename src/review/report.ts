@@ -1,9 +1,10 @@
 import path from "node:path";
 import type { CandidateTestFile } from "../impact/context.js";
-import type { ProjectIndex } from "../indexer.js";
+import { type ProjectIndex } from "../indexer/types.js";
 import { collectSqlReviewContext, type SqlReviewContext } from "../sql/review.js";
 import type { Edge, FileId } from "../types.js";
-import { normalizePath, type ProjectFileInfo } from "../util.js";
+import { normalizePath } from "../util/paths.js";
+import { type ProjectFileInfo } from "../util/projectFiles.js";
 import type { ReviewDiagnostics, ReviewOptions, ReviewReport } from "../review.js";
 import {
   collectDeletedImporterEdges,

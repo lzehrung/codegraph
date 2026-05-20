@@ -8,7 +8,7 @@ import {
 } from "../native/treeSitterNative.js";
 import type { NativeFallbackReason } from "../native/contracts.js";
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
-import { stringifyUnknown } from "../util.js";
+import { stringifyUnknown } from "../util/ast.js";
 import type { LanguageSupport } from "../languages.js";
 import type { JsLanguage, SyntaxTreeLike } from "../languages/types.js";
 

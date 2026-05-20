@@ -2,9 +2,9 @@ import { performance } from "node:perf_hooks";
 import { buildReviewReport, type ReviewBuildReport, type ReviewDepth } from "../review.js";
 import type { CandidateTestFile } from "../impact/context.js";
 import type { BuildReport } from "../indexer/types.js";
-import type { GraphBuildOptions } from "../graphs.js";
+import { type GraphBuildOptions } from "../graphs/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
-import type { ProjectFileDiscoveryOptions } from "../util.js";
+import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption } from "./options.js";
 
 type CommandTimingReport = {

@@ -1,5 +1,5 @@
 import type { FileId, Edge } from "../types.js";
-import type { ProjectIndex, Reference } from "../indexer.js";
+import { type ProjectIndex, type Reference } from "../indexer/types.js";
 import type { ChangedSymbol, ImpactReason, SeverityWeights } from "./types.js";
 import { DEFAULT_SEVERITY_WEIGHTS } from "./types.js";
 

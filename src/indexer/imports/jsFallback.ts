@@ -1,4 +1,4 @@
-import { stripJsLikeComments } from "../../util.js";
+import { stripJsLikeComments } from "../../util/comments.js";
 import type { ImportBindingSink, ImportResolver } from "./context.js";
 
 export type JsTextImportExtractionContext = ImportBindingSink & {

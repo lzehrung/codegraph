@@ -1,5 +1,5 @@
 import type { FileId, Edge } from "../types.js";
-import type { ProjectIndex } from "../indexer.js";
+import { type ProjectIndex } from "../indexer/types.js";
 import { compileTestPatterns, createIndexTestFileMatcher } from "./testPatterns.js";
 import type { FileChange, ImpactItem, ImpactOptions, ImpactReason } from "./types.js";
 import { createImpactIgnoreMatcher } from "./path.js";

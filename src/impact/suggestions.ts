@@ -1,9 +1,10 @@
 import type { FileId, Range } from "../types.js";
-import type { ExportEntry, ImportBinding, ModuleIndex, ProjectIndex } from "../indexer.js";
-import { goToDefinition, ensureParsedContext } from "../indexer.js";
+import { type ExportEntry, type ImportBinding, type ModuleIndex, type ProjectIndex } from "../indexer/types.js";
+import { goToDefinition } from "../indexer/navigation.js";
+import { ensureParsedContext } from "../indexer/parse-context.js";
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import { normalizePath, resolveFilePathFromRoot, toProjectRelativePath } from "../util.js";
+import { normalizePath, resolveFilePathFromRoot, toProjectRelativePath } from "../util/paths.js";
 import { collectChangedLines } from "./hunks.js";
 import type { FileChange, ImpactOptions, ImpactSuggestion, ImpactSuggestionConfidence } from "./types.js";
 

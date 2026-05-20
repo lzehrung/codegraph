@@ -1,7 +1,7 @@
 import type { ModuleIndex, ProjectIndex, SymbolDef } from "../../indexer/types.js";
 import type { LanguageSupport } from "../../languages.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
-import { sliceText } from "../../util.js";
+import { sliceText } from "../../util/ast.js";
 import { getMemberAccessParts } from "../../util/memberAccess.js";
 import { defNodeId, nodeForDef, type SymbolGraph } from "../symbol-graph.js";
 import type { DetailedClassNode, DetailedFunctionNode } from "./ast.js";

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { normalizePath, toProjectRelativePath } from "../util.js";
+import { normalizePath, toProjectRelativePath } from "../util/paths.js";
 import { quoteShellArg } from "./shell.js";
 
 export function normalizeAgentFilePath(root: string, file: string): string {

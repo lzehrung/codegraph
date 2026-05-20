@@ -1,7 +1,7 @@
 import { shouldAvoidJsFallbackForLanguage } from "../../native/treeSitterNative.js";
 import type { FallbackImportExtractionEvent } from "../../graphs/specifiers.js";
 import { logWithLevel, type LogLevel } from "../../logging.js";
-import { stringifyUnknown } from "../../util.js";
+import { stringifyUnknown } from "../../util/ast.js";
 import type {
   BuildFileReport,
   BuildOptions,

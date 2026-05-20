@@ -8,13 +8,12 @@ import { logWithLevel, type LogLevel } from "../../logging.js";
 import type { Edge } from "../../types.js";
 import {
   DEFAULT_PROJECT_MANIFESTS,
-  assertFilePathWithinRoot,
-  getGitBlobHashes,
-  isFilePathWithinRoot,
   listProjectFiles,
-  stringifyUnknown,
   type ProjectFileDiscoveryOptions,
-} from "../../util.js";
+} from "../../util/projectFiles.js";
+import { assertFilePathWithinRoot, isFilePathWithinRoot } from "../../util/paths.js";
+import { getGitBlobHashes } from "../../util/git.js";
+import { stringifyUnknown } from "../../util/ast.js";
 import type { BuildOptions } from "../types.js";
 import { cacheRoot, fileSignature } from "./module-cache.js";
 import type { ManifestBuildOptions } from "./options.js";

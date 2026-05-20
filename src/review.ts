@@ -1,15 +1,12 @@
 import { performance } from "node:perf_hooks";
 import type { Edge, FileId } from "./types.js";
-import {
-  buildProjectIndexIncremental,
-  type BuildReport,
-  type IncrementalBuildOptions,
-  type ProjectIndex,
-} from "./indexer.js";
+import { buildProjectIndexIncremental } from "./indexer/build-index.js";
+import { type BuildReport, type IncrementalBuildOptions, type ProjectIndex } from "./indexer/types.js";
 import type { GraphBuildOptions } from "./graphs/types.js";
 import type { FileChange, Hunk } from "./impact/types.js";
 import type { CandidateTestFile } from "./impact/context.js";
-import { fileExists, discoverProjectFiles, type ProjectFileInfo } from "./util.js";
+import { fileExists } from "./util/workspace.js";
+import { discoverProjectFiles, type ProjectFileInfo } from "./util/projectFiles.js";
 import type { SqlReviewContext } from "./sql/review.js";
 import { collectReviewCandidateTests } from "./review/candidates.js";
 import { collectReviewChanges } from "./review/changes.js";

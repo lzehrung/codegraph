@@ -1,5 +1,5 @@
 import type { Graph } from "./types.js";
-import type { SymbolGraph, SymbolNode, SymbolNodeKind } from "./graphs.js";
+import { type SymbolGraph, type SymbolNode, type SymbolNodeKind } from "./graphs/symbol-graph.js";
 
 export type TripleNode =
   | {

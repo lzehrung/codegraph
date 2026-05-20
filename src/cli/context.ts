@@ -5,7 +5,8 @@ import path from "node:path";
 import picomatch from "picomatch";
 import type { BuildReport } from "../indexer/types.js";
 import type { ReviewBuildReport } from "../review.js";
-import { normalizePath, resolveFilePathFromRoot, type ProjectFileDiscoveryOptions } from "../util.js";
+import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
+import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { isRelativePathInside } from "../util/projectFiles.js";
 import { isCliValueOption } from "./options.js";
 

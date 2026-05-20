@@ -1,4 +1,4 @@
-import type { SymbolGraph, SymbolNode, SymbolEdge } from "../graphs.js";
+import { type SymbolGraph, type SymbolNode, type SymbolEdge } from "../graphs/symbol-graph.js";
 import type { SymbolQuery } from "./parser.js";
 
 const includesFolded = (value: string | undefined, needle: string): boolean => {

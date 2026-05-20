@@ -1,8 +1,9 @@
 import { performance } from "node:perf_hooks";
-import { buildProjectIndex, buildProjectIndexFromFiles, type BuildOptions, type BuildReport } from "../indexer.js";
-import type { GraphBuildOptions } from "../graphs.js";
+import { buildProjectIndex, buildProjectIndexFromFiles } from "../indexer/build-index.js";
+import { type BuildOptions, type BuildReport } from "../indexer/types.js";
+import { type GraphBuildOptions } from "../graphs/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
-import type { ProjectFileDiscoveryOptions } from "../util.js";
+import type { ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { parseCacheModeOption, parseNonNegativeIntegerOption } from "./options.js";
 
 type CommandTimingReport = {
