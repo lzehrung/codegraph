@@ -45,7 +45,7 @@ No dependency cycles were reported. The highest remaining concentration is in:
   - Add shared helpers in `src/cli/options.ts` for positive integers, non-negative integers, optional integers, and bounded integers.
   - Cover invalid and boundary values in `tests/cli-regressions.test.ts`, `tests/cli-command-modules.test.ts`, and command-specific tests.
 
-- [ ] Add regression coverage for scoped cache behavior in `inspect` and `hotspots`.
+- [x] Add regression coverage for scoped cache behavior in `inspect` and `hotspots`.
   - Finding: `buildScopedReportGraph` combines disk cache reuse with include-root restriction. The flow is subtle and easy to regress.
   - Add tests proving file counts, hotspots, cycles, and unresolved summaries are scoped when include roots are passed, both with cold builds and warm disk cache.
 

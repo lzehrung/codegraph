@@ -757,6 +757,33 @@ describe("CLI regressions", () => {
       "utf8",
     );
 
+    const coldResult = await runCliCommandDetailed([
+      "hotspots",
+      "--root",
+      tmpDir,
+      srcDir,
+      "--limit",
+      "1",
+      "--json",
+      "--cache",
+      "off",
+    ]);
+    const coldHotspots = JSON.parse(coldResult.stdout) as Array<{
+      file: string;
+      fanIn: number;
+      fanOut: number;
+      score: number;
+    }>;
+    expect(coldHotspots).toEqual([
+      {
+        file: normalize(path.join(srcDir, "b.ts")),
+        fanIn: 1,
+        fanOut: 0,
+        score: 2,
+      },
+    ]);
+    expect(coldResult.stderr).not.toContain("Index cache: manifest=");
+
     await runCliCommand(["index", "--root", tmpDir]);
     const result = await runCliCommandDetailed(["hotspots", "--root", tmpDir, srcDir, "--limit", "1", "--json"]);
 
@@ -766,14 +793,7 @@ describe("CLI regressions", () => {
       fanOut: number;
       score: number;
     }>;
-    expect(hotspots).toEqual([
-      {
-        file: normalize(path.join(srcDir, "b.ts")),
-        fanIn: 1,
-        fanOut: 0,
-        score: 2,
-      },
-    ]);
+    expect(hotspots).toEqual(coldHotspots);
     expect(result.stderr).toContain("Index cache: manifest=");
     expect(result.stderr).toContain("lastCommit=");
   });
@@ -883,6 +903,73 @@ describe("CLI regressions", () => {
     expect(report.recommendedCommands).toContain(
       `codegraph cycles --root "${normalize(tmpDir)}" "${normalize(srcDir)}" --sort priority --json`,
     );
+  });
+
+  it("inspect keeps scoped summaries with cold builds and warm disk cache", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-inspect-cache-scope-"));
+    const srcDir = path.join(tmpDir, "src");
+    const testDir = path.join(tmpDir, "tests");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.mkdir(testDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(srcDir, "a.ts"),
+      "import { b } from './b';\nimport { missing } from './missing';\nexport const a = b + missing;\n",
+      "utf8",
+    );
+    await fsp.writeFile(path.join(srcDir, "b.ts"), "import { a } from './a';\nexport const b = a;\n", "utf8");
+    await fsp.writeFile(
+      path.join(testDir, "spec.ts"),
+      "import { a } from '../src/a';\nexport const spec = a;\n",
+      "utf8",
+    );
+
+    const readReport = (stdout: string) =>
+      JSON.parse(stdout) as {
+        files: { total: number; byLanguage: Record<string, number> };
+        hotspots: Array<{ file: string; fanIn: number; fanOut: number; score: number }>;
+        unresolved: { total: number; top: Array<{ name: string; importerCount: number }> };
+        cycles: { total: number; top: Array<{ files: string[]; size: number }> };
+        indexCache?: { manifestPath: string };
+      };
+    const expectScopedReport = (report: ReturnType<typeof readReport>) => {
+      expect(report.files.total).toBe(2);
+      expect(report.files.byLanguage.ts).toBe(2);
+      expect(report.hotspots).toEqual([
+        {
+          file: normalize(path.join(srcDir, "a.ts")),
+          fanIn: 1,
+          fanOut: 2,
+          score: 4,
+        },
+        {
+          file: normalize(path.join(srcDir, "b.ts")),
+          fanIn: 1,
+          fanOut: 1,
+          score: 3,
+        },
+      ]);
+      expect(report.unresolved).toEqual({ total: 1, top: [{ name: "./missing", importerCount: 1 }] });
+      expect(report.cycles.total).toBe(1);
+      expect(report.cycles.top[0]?.files.sort()).toEqual(
+        [path.join(srcDir, "a.ts"), path.join(srcDir, "b.ts")].map(normalize).sort(),
+      );
+      expect(report.cycles.top[0]?.size).toBe(2);
+    };
+
+    const coldResult = await runCliCommandDetailed(["inspect", "--root", tmpDir, srcDir, "--limit", "5"]);
+    const coldReport = readReport(coldResult.stdout);
+    expectScopedReport(coldReport);
+    expect(coldReport.indexCache).toBeUndefined();
+    expect(coldResult.stderr).not.toContain("Index cache: manifest=");
+
+    await runCliCommand(["index", "--root", tmpDir]);
+    const warmResult = await runCliCommandDetailed(["inspect", "--root", tmpDir, srcDir, "--limit", "5"]);
+    const warmReport = readReport(warmResult.stdout);
+    expectScopedReport(warmReport);
+    expect(warmReport.indexCache?.manifestPath).toBe(
+      normalize(path.join(tmpDir, ".codegraph-cache", "index-v1", "manifest.json")),
+    );
+    expect(warmResult.stderr).toContain("Index cache: manifest=");
   });
 
   it("unresolved filters declared dependencies for scoped roots", async () => {
