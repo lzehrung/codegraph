@@ -8,6 +8,7 @@ import {
 import { type LanguageSupport } from "../languages.js";
 import {
   parseCsharpUsingDirective,
+  parseKotlinImportStatement,
   parsePhpImportStatement,
   parseRustImportStatement,
 } from "../languages/importStatementParsers.js";
@@ -58,12 +59,6 @@ const HTML_LIKE_LANGUAGE_IDS = new Set(["html", "vue", "svelte"]);
 function isHtmlLikeLanguage(languageId: string, filePath?: string): boolean {
   if (HTML_LIKE_LANGUAGE_IDS.has(languageId)) return true;
   return !!filePath && filePath.toLowerCase().endsWith(".astro");
-}
-
-function extractKotlinImportSpecifier(statementText: string): string | null {
-  const match = statementText.match(/^\s*import\s+([A-Za-z_][\w.]*(?:\.\*)?)(?:\s+as\s+[A-Za-z_][\w]*)?\s*$/m);
-  if (!match?.[1]) return null;
-  return match[1].endsWith(".*") ? match[1].slice(0, -2) : match[1];
 }
 
 function extractPhpQualifiedSpecifiersFromTree(source: string, tree: SyntaxTreeLike): ModuleSpecifier[] {
@@ -318,8 +313,8 @@ export function collectModuleSpecifiersFromSource(
           (support.id === "ts" || support.id === "tsx") &&
           (/\b(import|export)\s+type\b/.test(stmtText) || /^\s*declare\s+module\s+["']/.test(stmtText));
         if (support.id === "kotlin") {
-          const spec = extractKotlinImportSpecifier(stmtText);
-          if (spec) out.push({ spec, typeOnly: false });
+          const parsed = parseKotlinImportStatement(stmtText);
+          if (parsed) out.push({ spec: parsed.from, typeOnly: false });
           continue;
         }
         if (support.id === "rust") {
@@ -405,8 +400,8 @@ export function collectModuleSpecifiersFromSource(
         (support.id === "ts" || support.id === "tsx") &&
         (/\b(import|export)\s+type\b/.test(stmtText) || /^\s*declare\s+module\s+["']/.test(stmtText));
       if (support.id === "kotlin") {
-        const spec = extractKotlinImportSpecifier(stmtText);
-        if (spec) out.push({ spec, typeOnly: false });
+        const parsed = parseKotlinImportStatement(stmtText);
+        if (parsed) out.push({ spec: parsed.from, typeOnly: false });
         continue;
       }
       if (support.id === "rust") {

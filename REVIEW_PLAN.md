@@ -14,12 +14,12 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Suggested fix: pass parsed context, or a tree/source/sup tuple, into namespace member collection.
   - Tests: namespace reference lookup with `keepParsed` enabled and disabled.
 
-- [ ] Consolidate native and JS fallback import-binding conversion.
+- [x] Consolidate native and JS fallback import-binding conversion.
   - `src/indexer/imports.ts` duplicates capture-to-`ImportBinding` conversion and per-language heuristics across native and JS fallback branches.
   - Suggested fix: introduce a shared helper that accepts normalized captures and emits bindings.
   - Tests: parity coverage for Java, C#, Go, Rust, Kotlin, Swift, Zig, C, and C++ import binding extraction.
 
-- [ ] Share module specifier parsing between graph and index extraction.
+- [x] Share module specifier parsing between graph and index extraction.
   - `src/graphs/specifiers.ts` has its own parser path for Python, PHP, Kotlin, Rust, C#, JS/TS fallback, HTML-like, and stylesheet specifiers.
   - Suggested fix: factor common statement/specifier parsing below both graph specifiers and index import binding extraction.
   - Tests: graph/index parity tests for extracted raw specifiers and type-only behavior.
