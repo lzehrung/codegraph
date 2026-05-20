@@ -142,7 +142,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
 
 ## Fourth-Pass Complexity Findings
 
-- [ ] Split native runtime orchestration from native query execution helpers.
+- [x] Split native runtime orchestration from native query execution helpers.
   - `src/native/treeSitterNative.ts` is a high fan-in hotspot and now owns binding loading, runtime-mode enforcement, normalized query caching, compact/full query execution, single-query execution, JS fallback bridging, and syntax-tree parsing.
   - Suggested fix: extract native binding state/runtime-mode helpers, normalized query metadata, query execution wrappers, and JS fallback bridging into focused modules under `src/native/`. Keep the public runtime facade small and preserve existing exported entry points.
   - Correctness opportunity: compact imports, full language queries, ad-hoc queries, and syntax-tree parsing repeat fallback reason/error shaping; one result-normalization helper would keep native-required failures and unsupported-language behavior consistent.
