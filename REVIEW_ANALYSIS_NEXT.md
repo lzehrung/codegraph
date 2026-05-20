@@ -102,7 +102,7 @@ No dependency cycles were reported. The highest remaining concentration is in:
 
 ### Duplication And Shared Helpers
 
-- [ ] Unify agent file/path/follow-up helpers.
+- [x] Unify agent file/path/follow-up helpers.
   - Finding: `relativeFile` wrappers remain in `src/agent/search.ts`, `src/agent/explain.ts`, and `src/agent/artifact.ts`; search/explain also duplicate symbol/file target resolution patterns.
   - Target: expand `src/agent/normalize.ts` or add `src/agent/targets.ts` for file resolution, SQL-object detection, handle resolution, and common follow-up construction.
   - Verify with `tests/agent-search.test.ts`, `tests/agent-explain.test.ts`, and `tests/artifact-build.test.ts`.

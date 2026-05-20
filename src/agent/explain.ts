@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { findReferences } from "../indexer/navigation.js";
 import type { Reference, SymbolDef } from "../indexer/types.js";
 import { getDependencies, getReverseDependencies } from "../graphs/queries.js";
@@ -26,7 +25,10 @@ import {
 import {
   collectDefinitionFollowUps,
   collectFileFollowUps as collectCommonFileFollowUps,
+  isAgentSqlFile,
+  isAgentSqlObjectNode,
   normalizeAgentFilePath,
+  resolveAgentSnapshotFile,
 } from "./normalize.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
@@ -208,7 +210,7 @@ function resolveTarget(snapshot: AgentProjectSnapshot, lookup: SymbolLookup, tar
   const chunkHandle = parseAgentChunkHandle(target);
   const graphHandle = parseAgentGraphHandle(target);
   const fileTarget = fileHandle?.file ?? chunkHandle?.file ?? graphHandle?.file ?? target;
-  const file = resolveFileCandidate(snapshot, fileTarget);
+  const file = resolveAgentSnapshotFile(snapshot, fileTarget);
   if (file) return { kind: "file", file };
 
   if (target.startsWith("symbol:")) {
@@ -237,10 +239,10 @@ function resolveSymbolHandle(
 ): Extract<ResolvedExplainTarget, { kind: "symbol" }> | null {
   const parsed = parseAgentSymbolHandle(handle);
   if (parsed) {
-    const file = resolveFileCandidate(snapshot, parsed.file);
+    const file = resolveAgentSnapshotFile(snapshot, parsed.file);
     if (!file) return null;
     for (const def of lookup.defById.values()) {
-      if (isSqlFile(def.file)) continue;
+      if (isAgentSqlFile(def.file)) continue;
       if (normalizePath(def.file) !== file) continue;
       if (def.localName !== parsed.name) continue;
       if (def.range.start.line !== parsed.line || def.range.start.column !== parsed.column) continue;
@@ -248,7 +250,7 @@ function resolveSymbolHandle(
     }
     for (const node of snapshot.symbolGraph.nodes.values()) {
       const def = lookup.defById.get(node.id);
-      if (!def || isSqlObjectNode(node)) continue;
+      if (!def || isAgentSqlObjectNode(node)) continue;
       if (normalizePath(node.file) !== file) continue;
       if (node.name !== parsed.name) continue;
       if (def.range.start.line !== parsed.line || def.range.start.column !== parsed.column) continue;
@@ -262,14 +264,6 @@ function resolveSymbolHandle(
   return def ? symbolTarget(def, snapshot.symbolGraph.nodes.get(id)) : null;
 }
 
-function resolveFileCandidate(snapshot: AgentProjectSnapshot, candidate: string): string | null {
-  const normalizedFiles = new Map(snapshot.files.map((file) => [normalizePath(file), normalizePath(file)]));
-  const absoluteCandidate = path.isAbsolute(candidate)
-    ? normalizePath(candidate)
-    : normalizePath(path.resolve(snapshot.root, candidate));
-  return normalizedFiles.get(absoluteCandidate) ?? null;
-}
-
 function resolveSqlHandle(
   snapshot: AgentProjectSnapshot,
   lookup: SymbolLookup,
@@ -280,10 +274,10 @@ function resolveSqlHandle(
 
   for (const node of snapshot.symbolGraph.nodes.values()) {
     const def = lookup.defById.get(node.id);
-    if (!def || !isSqlObjectNode(node)) continue;
+    if (!def || !isAgentSqlObjectNode(node)) continue;
     if (
       node.name === parsed.name &&
-      relativeFile(snapshot.root, node.file) === parsed.file &&
+      normalizeAgentFilePath(snapshot.root, node.file) === parsed.file &&
       def.range.start.line === parsed.line
     ) {
       return { kind: "sql_object", def, node };
@@ -298,7 +292,7 @@ function findSymbolByName(
   name: string,
 ): Extract<ResolvedExplainTarget, { kind: "symbol" }> | null {
   const matches = [...snapshot.symbolGraph.nodes.values()]
-    .filter((node) => !isSqlObjectNode(node) && node.name === name)
+    .filter((node) => !isAgentSqlObjectNode(node) && node.name === name)
     .sort(compareSymbolNodes);
   const node = matches[0];
   if (node) {
@@ -307,7 +301,7 @@ function findSymbolByName(
   }
 
   const defMatches = [...lookup.defById.values()]
-    .filter((def) => !isSqlFile(def.file) && def.localName === name)
+    .filter((def) => !isAgentSqlFile(def.file) && def.localName === name)
     .sort(compareSymbolDefs);
   const def = defMatches[0];
   return def ? symbolTarget(def, snapshot.symbolGraph.nodes.get(defNodeId(def))) : null;
@@ -319,7 +313,7 @@ function findSqlObjectByName(
   name: string,
 ): Extract<ResolvedExplainTarget, { kind: "sql_object" }> | null {
   const exactMatches = [...snapshot.symbolGraph.nodes.values()]
-    .filter((node) => isSqlObjectNode(node) && node.name === name)
+    .filter((node) => isAgentSqlObjectNode(node) && node.name === name)
     .sort(compareSymbolNodes);
   const exactNode = exactMatches[0];
   if (exactNode) {
@@ -330,7 +324,7 @@ function findSqlObjectByName(
   if (name.includes(".")) return null;
 
   const matches = [...snapshot.symbolGraph.nodes.values()]
-    .filter((node) => isSqlObjectNode(node) && basename(node.name) === name)
+    .filter((node) => isAgentSqlObjectNode(node) && basename(node.name) === name)
     .sort(compareSymbolNodes);
   if (matches.length !== 1) return null;
   const node = matches[0];
@@ -397,7 +391,7 @@ async function buildExplanation(
   }
 
   const file = resolved.kind === "file" ? resolved.file : normalizePath(resolved.def.file);
-  const relFile = relativeFile(snapshot.root, file);
+  const relFile = normalizeAgentFilePath(snapshot.root, file);
   const allSymbols = collectFileSymbols(snapshot, lookup, file);
   const boundedSymbols = boundAgentList(allSymbols, maxSymbols);
   const dependencies = collectDependencies(snapshot, file, maxDependencies, "forward");
@@ -558,7 +552,7 @@ function collectDependencies(
       : getReverseDependencies(snapshot.fileGraph, startFile, { depth: 1 });
   const sortedDependencies = dependencies
     .map((dependency) => ({
-      file: relativeFile(snapshot.root, dependency.file),
+      file: normalizeAgentFilePath(snapshot.root, dependency.file),
       depth: dependency.depth,
     }))
     .sort(compareDependencies);
@@ -579,7 +573,7 @@ function collectTargetHotspots(
   return getHotspots(snapshot.fileGraph, { limit: snapshot.files.length })
     .filter((hotspot) => normalizePath(hotspot.file) === normalizedFile)
     .map((hotspot) => ({
-      file: relativeFile(snapshot.root, hotspot.file),
+      file: normalizeAgentFilePath(snapshot.root, hotspot.file),
       fanIn: hotspot.fanIn,
       fanOut: hotspot.fanOut,
       score: hotspot.score,
@@ -598,7 +592,7 @@ async function collectReferenceContext(
 
   const references = result.references
     .map((reference) => ({
-      file: relativeFile(snapshot.root, reference.file),
+      file: normalizeAgentFilePath(snapshot.root, reference.file),
       range: reference.range,
     }))
     .sort((left, right) => {
@@ -626,7 +620,7 @@ async function collectReferenceContext(
 
 function snippetFromReference(snapshot: AgentProjectSnapshot, reference: Reference): AgentExplanationSnippet {
   return {
-    file: relativeFile(snapshot.root, reference.file),
+    file: normalizeAgentFilePath(snapshot.root, reference.file),
     line: reference.range.start.line,
     text: reference.context ?? "",
   };
@@ -639,7 +633,7 @@ async function collectRelatedSqlObjects(
   file: string,
   limit: number,
 ): Promise<BoundedAgentList<AgentExplanationSqlObject>> {
-  if (resolved.kind !== "sql_object" && !isSqlFile(file)) return emptyAgentBoundedList();
+  if (resolved.kind !== "sql_object" && !isAgentSqlFile(file)) return emptyAgentBoundedList();
 
   const sqlObjects = collectSqlObjectNodes(snapshot, lookup);
   const targetName = resolved.kind === "sql_object" ? (resolved.node?.name ?? resolved.def.localName) : undefined;
@@ -648,7 +642,7 @@ async function collectRelatedSqlObjects(
     const entry: AgentExplanationSqlObject = {
       name: object.name,
       kind: object.kind,
-      file: relativeFile(snapshot.root, object.file),
+      file: normalizeAgentFilePath(snapshot.root, object.file),
       relation,
       ...(object.def ? { range: object.def.range } : {}),
     };
@@ -689,7 +683,7 @@ type SqlObjectNodeInfo = {
 
 function collectSqlObjectNodes(snapshot: AgentProjectSnapshot, lookup: SymbolLookup): SqlObjectNodeInfo[] {
   return [...snapshot.symbolGraph.nodes.values()]
-    .filter((node) => isSqlObjectNode(node))
+    .filter((node) => isAgentSqlObjectNode(node))
     .map((node) => {
       const base = {
         id: node.id,
@@ -774,7 +768,7 @@ async function addRelatedSqlObjectsFromFacts(
 }
 
 async function collectSqlFacts(snapshot: AgentProjectSnapshot): Promise<Map<string, SqlStatementFact[]>> {
-  const sqlFiles = snapshot.files.filter(isSqlFile).sort((left, right) => left.localeCompare(right));
+  const sqlFiles = snapshot.files.filter(isAgentSqlFile).sort((left, right) => left.localeCompare(right));
   const entries = await mapLimit(sqlFiles, SQL_FACT_READ_CONCURRENCY, async (file) => {
     const facts = extractSqlFactsFromSource(file, await fs.readFile(file, "utf8"));
     return [file, facts] as const;
@@ -855,7 +849,7 @@ function collectFollowUps(
     );
   }
 
-  if (isSqlFile(path.resolve(snapshot.root, relFile))) {
+  if (isAgentSqlFile(relFile)) {
     followUps.add(`codegraph search ${quoteShellArg(relFile)} --mode sql --json`);
   }
 
@@ -919,16 +913,4 @@ async function collectChangedContext(request: AgentExplainTarget): Promise<Agent
       reason: candidate.reason,
     })),
   };
-}
-
-function isSqlObjectNode(node: SymbolNode): boolean {
-  return node.kind === "table" || node.kind === "view" || node.kind === "index" || node.kind === "routine";
-}
-
-function isSqlFile(file: string): boolean {
-  return file.toLowerCase().endsWith(".sql");
-}
-
-function relativeFile(root: string, file: string): string {
-  return normalizeAgentFilePath(root, file);
 }

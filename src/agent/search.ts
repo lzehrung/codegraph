@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { LANG_CONFIGS } from "../bootstrap/treeSitterLanguages.js";
 import { supportForFile } from "../languages.js";
 import { chunkFile } from "../chunking/chunkFile.js";
@@ -24,7 +23,9 @@ import {
 import {
   collectDefinitionFollowUps,
   collectFileFollowUps as collectCommonFileFollowUps,
+  isAgentSqlObjectNode,
   normalizeAgentFilePath,
+  resolveAgentSnapshotFile,
 } from "./normalize.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
@@ -314,19 +315,19 @@ function addSymbolResults(
   mode: AgentSearchMode,
 ): void {
   for (const node of snapshot.symbolGraph.nodes.values()) {
-    const sqlObject = isSqlObjectNode(node);
+    const sqlObject = isAgentSqlObjectNode(node);
     if (mode === "sql" && !sqlObject) continue;
     if (mode === "symbol" && sqlObject) continue;
 
     const nameMatch = matchTokenScore(node.name, tokens);
-    const fileMatch = matchTokenScore(relativeFile(snapshot.root, node.file), tokens);
+    const fileMatch = matchTokenScore(normalizeAgentFilePath(snapshot.root, node.file), tokens);
     const docMatch = node.docstring ? matchTokenScore(node.docstring, tokens) : { score: 0, matched: [] };
     const score = nameMatch.score * 4 + fileMatch.score + docMatch.score;
     if (score <= 0) continue;
 
     const def = lookup.defById.get(node.id);
     if (!def) continue;
-    const relFile = relativeFile(snapshot.root, node.file);
+    const relFile = normalizeAgentFilePath(snapshot.root, node.file);
     const handle = sqlObject
       ? formatAgentSqlHandle({ name: node.name, file: relFile, line: def.range.start.line })
       : formatAgentSymbolHandle({
@@ -363,10 +364,6 @@ function addSymbolResults(
   }
 }
 
-function isSqlObjectNode(node: SymbolNode): boolean {
-  return node.kind === "table" || node.kind === "view" || node.kind === "index" || node.kind === "routine";
-}
-
 function addPathResults(
   snapshot: AgentProjectSnapshot,
   resultMap: Map<string, MutableSearchResult>,
@@ -374,7 +371,7 @@ function addPathResults(
   tokens: string[],
 ): void {
   for (const file of snapshot.files) {
-    const relFile = relativeFile(snapshot.root, file);
+    const relFile = normalizeAgentFilePath(snapshot.root, file);
     const pathMatch = matchTokenScore(relFile, tokens);
     if (pathMatch.score <= 0) continue;
 
@@ -407,7 +404,7 @@ async function addTextResults(
       const match = matchTokenScore([chunk.name, chunk.text].filter(Boolean).join(" "), tokens);
       if (match.score <= 0) continue;
 
-      const relFile = relativeFile(snapshot.root, file);
+      const relFile = normalizeAgentFilePath(snapshot.root, file);
       const handle = formatAgentChunkHandle({ file: relFile, line: chunk.startLine });
       const result = upsertResult(resultMap, {
         handle,
@@ -451,7 +448,7 @@ function applyGraphNeighborhood(
 
   const reachable = collectReachableFiles(fileNeighborIndex, anchorFiles, depth);
   for (const entry of reachable.values()) {
-    const relFile = relativeFile(snapshot.root, entry.file);
+    const relFile = normalizeAgentFilePath(snapshot.root, entry.file);
     const existingResults = [...resultMap.values()].filter((result) => result.file === relFile);
     const fileMatch = matchTokenScore(relFile, tokens);
     if (fileMatch.score > 0) {
@@ -488,18 +485,18 @@ function graphBoost(distance: number): number {
 
 function resolveAnchorFiles(snapshot: AgentProjectSnapshot, from: string): Set<string> {
   const anchor = new Set<string>();
-  const directFile = resolveFileCandidate(snapshot, from);
+  const directFile = resolveAgentSnapshotFile(snapshot, from);
   if (directFile) anchor.add(directFile);
 
   const fileLikeHandle = parseAgentFileHandle(from) ?? parseAgentChunkHandle(from) ?? parseAgentGraphHandle(from);
   if (fileLikeHandle) {
-    const handleFile = resolveFileCandidate(snapshot, fileLikeHandle.file);
+    const handleFile = resolveAgentSnapshotFile(snapshot, fileLikeHandle.file);
     if (handleFile) anchor.add(handleFile);
   }
 
   if (from.startsWith("symbol:")) {
     const symbolHandle = parseAgentSymbolHandle(from);
-    const symbolFile = symbolHandle ? resolveFileCandidate(snapshot, symbolHandle.file) : null;
+    const symbolFile = symbolHandle ? resolveAgentSnapshotFile(snapshot, symbolHandle.file) : null;
     if (symbolFile) {
       anchor.add(symbolFile);
     } else {
@@ -511,7 +508,7 @@ function resolveAnchorFiles(snapshot: AgentProjectSnapshot, from: string): Set<s
   if (from.startsWith("sql:")) {
     const sqlHandle = parseAgentSqlHandle(from);
     if (sqlHandle) {
-      const file = resolveFileCandidate(snapshot, sqlHandle.file);
+      const file = resolveAgentSnapshotFile(snapshot, sqlHandle.file);
       if (file) anchor.add(file);
     }
   }
@@ -523,14 +520,6 @@ function resolveAnchorFiles(snapshot: AgentProjectSnapshot, from: string): Set<s
   }
 
   return anchor;
-}
-
-function resolveFileCandidate(snapshot: AgentProjectSnapshot, candidate: string): string | null {
-  const normalizedFiles = new Map(snapshot.files.map((file) => [normalizePath(file), normalizePath(file)]));
-  const absoluteCandidate = path.isAbsolute(candidate)
-    ? normalizePath(candidate)
-    : normalizePath(path.resolve(snapshot.root, candidate));
-  return normalizedFiles.get(absoluteCandidate) ?? null;
 }
 
 function collectReachableFiles(
@@ -713,7 +702,7 @@ function addSymbolNeighbors(
   neighbors: readonly SymbolNeighbor[],
 ): void {
   for (const neighbor of neighbors) {
-    const relFile = relativeFile(snapshot.root, neighbor.target.file);
+    const relFile = normalizeAgentFilePath(snapshot.root, neighbor.target.file);
     const key = `${neighbor.key}:${neighbor.target.id}`;
     result.neighbors.set(key, {
       relation: neighbor.relation,
@@ -729,7 +718,7 @@ function addFileNeighbors(
   neighbors: readonly FileNeighbor[],
 ): void {
   for (const neighbor of neighbors) {
-    const relFile = relativeFile(snapshot.root, neighbor.file);
+    const relFile = normalizeAgentFilePath(snapshot.root, neighbor.file);
     result.neighbors.set(`${neighbor.relation}:${relFile}`, {
       relation: neighbor.relation,
       target: relFile,
@@ -798,8 +787,4 @@ function finalizeResult(result: MutableSearchResult): AgentSearchResult {
       followUps: boundedFollowUps.omitted,
     },
   };
-}
-
-function relativeFile(root: string, file: string): string {
-  return normalizeAgentFilePath(root, file);
 }
