@@ -51,7 +51,14 @@ import { handleGraphQueryCommand } from "./cli/graphQueries.js";
 import { CLI_HELP_TEXT, helpTextForCommand, isKnownCliCommand } from "./cli/help.js";
 import { handleImpactCommand } from "./cli/impact.js";
 import { handleMcpServeCommand } from "./cli/mcp.js";
-import { isCliValueOption, parseCacheModeOption, parsePositiveIntegerOption } from "./cli/options.js";
+import {
+  isCliValueOption,
+  parseCacheModeOption,
+  parseNonNegativeIntegerOption,
+  parseOptionalNonNegativeIntegerOption,
+  parseOptionalPositiveIntegerOption,
+  parsePositiveIntegerOption,
+} from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
 import { handleReviewCommand } from "./cli/review.js";
 import { handleSearchCommand } from "./cli/search.js";
@@ -1173,7 +1180,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 
     const wantSymbols = hasExplicitSymbolFlag;
     const detailedSymbols = hasFlag("--symbols-detailed");
-    const threads = Number(getOpt("--threads") ?? 0);
+    const threads = parseNonNegativeIntegerOption(getOpt("--threads"), "--threads", 0);
     const cache = parseCacheModeOption(getOpt("--cache"));
     const cacheStrict = hasFlag("--cache-strict");
     const stable = hasFlag("--stable");
@@ -1263,7 +1270,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       const detailedSymbols = hasFlag("--symbols-detailed");
       const scope = getOpt("--symbols-detailed-scope") as "all" | "imported" | undefined;
       const maxEdgesRaw = getOpt("--symbols-detailed-max-edges");
-      const maxEdges = maxEdgesRaw !== undefined ? Number(maxEdgesRaw) : undefined;
+      const maxEdges = parseOptionalNonNegativeIntegerOption(maxEdgesRaw, "--symbols-detailed-max-edges");
       const membersOnly = hasFlag("--symbols-detailed-members-only");
       const sgraph = detailedSymbols
         ? await buildSymbolGraphDetailed(index, {
@@ -1315,7 +1322,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       if (detailedSymbols) {
         const scope = getOpt("--symbols-detailed-scope") as "all" | "imported" | undefined;
         const maxEdgesRaw = getOpt("--symbols-detailed-max-edges");
-        const maxEdges = maxEdgesRaw !== undefined ? Number(maxEdgesRaw) : undefined;
+        const maxEdges = parseOptionalNonNegativeIntegerOption(maxEdgesRaw, "--symbols-detailed-max-edges");
         const membersOnly = hasFlag("--symbols-detailed-members-only");
         sgraph = await buildSymbolGraphDetailed(index, {
           ...(scope !== undefined ? { scope } : {}),
@@ -1408,7 +1415,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     if (commandReport) {
       commandReport.timings.resolveFilesMs = Math.round(performance.now() - resolveStart);
     }
-    const threads = Number(getOpt("--threads") ?? 0);
+    const threads = parseNonNegativeIntegerOption(getOpt("--threads"), "--threads", 0);
     const cache = parseCacheModeOption(getOpt("--cache"));
     const cacheStrict = hasFlag("--cache-strict");
     const full = hasFlag("--json") || hasFlag("--full");
@@ -1541,8 +1548,8 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       return;
     }
     const file = resolvedFile.file;
-    const line = Number(lineArg);
-    const column = Number(colArg);
+    const line = parsePositiveIntegerOption(lineArg, "line", 1);
+    const column = parsePositiveIntegerOption(colArg, "column", 1);
     const index = await buildProjectIndex(projectRootFs, {
       onProgress: progressHandler,
       discovery: discoveryOptions,
@@ -1562,8 +1569,8 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       writeStderrLine("Usage: refs --file <file> --line <line> --col <column>");
       exitCli(2);
     }
-    const line = Number(lineArg);
-    const column = Number(colArg);
+    const line = parsePositiveIntegerOption(lineArg, "--line", 1);
+    const column = parsePositiveIntegerOption(colArg, "--col", 1);
     const pretty = hasFlag("--pretty");
     const resolvedFile = resolveCliProjectFile(projectRootFs, fileArg, "File");
     if (resolvedFile.status === "error") {
@@ -1615,7 +1622,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 
     const ignoreCase = hasFlag("--ignore-case") || hasFlag("-i");
     const maxHitsRaw = getOpt("--max-hits");
-    const maxHits = maxHitsRaw !== undefined ? Number(maxHitsRaw) : undefined;
+    const maxHits = parseOptionalPositiveIntegerOption(maxHitsRaw, "--max-hits");
     const hits = await textGrep(projectRootFs, patternSource!, patterns, {
       ignoreCase,
       ...(maxHits !== undefined ? { maxHits } : {}),

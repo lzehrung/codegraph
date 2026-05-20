@@ -5,6 +5,7 @@ import { chunkFile } from "../chunking/chunkFile.js";
 import { chunkSFCFile } from "../chunking/chunkSFC.js";
 import { chunkTextFile } from "../chunking/chunkTextFile.js";
 import { supportForFile } from "../languages.js";
+import { parsePositiveIntegerOption } from "./options.js";
 
 const chunkLanguageAliases: Record<string, string> = {
   js: "javascript",
@@ -63,8 +64,13 @@ export async function handleChunkCommand(context: ChunkCommandContext): Promise<
     const forceText = context.hasFlag("--text");
     const minTokensRaw = context.getOpt("--min-tokens");
     const maxTokensRaw = context.getOpt("--max-tokens");
-    const minTokens = minTokensRaw !== undefined ? Number(minTokensRaw) : 150;
-    const maxTokens = maxTokensRaw !== undefined ? Number(maxTokensRaw) : 400;
+    const minTokens = parsePositiveIntegerOption(minTokensRaw, "--min-tokens", 150);
+    const maxTokens = parsePositiveIntegerOption(maxTokensRaw, "--max-tokens", 400);
+    if (maxTokens < minTokens) {
+      throw new Error(
+        `Invalid --max-tokens value "${maxTokens}". Expected a value greater than or equal to --min-tokens.`,
+      );
+    }
 
     const isSFC = languageId === "vue" || languageId === "svelte";
     if (forceText || (!isSFC && !LANG_CONFIGS[languageId])) {

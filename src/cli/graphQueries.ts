@@ -18,6 +18,7 @@ import {
 } from "../graphs.js";
 import type { Graph } from "../types.js";
 import { assertFilePathWithinRoot } from "../util.js";
+import { parseOptionalNonNegativeIntegerOption } from "./options.js";
 
 export type GraphQueryCommand = "deps" | "rdeps" | "path" | "cycles" | "unresolved" | "apisurface";
 
@@ -77,7 +78,11 @@ function writeCliProjectFileError(
 
 async function loadGraph(context: GraphQueryCommandContext): Promise<LoadedGraph> {
   if (context.collectGraph) {
-    const graph = await context.collectGraph(context.projectRootFs, await context.listProjectFilesForScan(), context.graphOptions);
+    const graph = await context.collectGraph(
+      context.projectRootFs,
+      await context.listProjectFilesForScan(),
+      context.graphOptions,
+    );
     return { graph };
   }
   const buildProjectIndex = context.buildProjectIndex ?? defaultBuildProjectIndex;
@@ -95,8 +100,10 @@ async function handleDepsCommand(context: GraphQueryCommandContext): Promise<voi
     context.exit(2);
   }
   const depthRaw = context.getOpt("--depth");
-  const depth = depthRaw !== undefined ? Number(depthRaw) : undefined;
-  if (depth !== undefined && (!Number.isInteger(depth) || depth < 0)) {
+  let depth: number | undefined;
+  try {
+    depth = parseOptionalNonNegativeIntegerOption(depthRaw, "--depth");
+  } catch {
     context.writeStderrLine(`Invalid --depth value "${depthRaw}". Expected a non-negative integer.`);
     context.exit(2);
   }
@@ -190,7 +197,9 @@ async function handleCyclesCommand(context: GraphQueryCommandContext): Promise<v
   for (let i = 0; i < cycleDetails.length; i++) {
     const cycle = cycleDetails[i]!;
     context.writeStdoutLine(`Cycle ${i + 1} (priority=${cycle.priorityScore}):`);
-    context.writeStdoutLine(`  ${cycle.files.map((entry) => path.relative(context.projectRootFs, entry)).join(" -> ")} -> ...`);
+    context.writeStdoutLine(
+      `  ${cycle.files.map((entry) => path.relative(context.projectRootFs, entry)).join(" -> ")} -> ...`,
+    );
     if (cycle.entryEdges.length) {
       context.writeStdoutLine("  Incoming edges:");
       for (const edge of cycle.entryEdges) {

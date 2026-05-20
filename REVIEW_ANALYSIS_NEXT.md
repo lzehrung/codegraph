@@ -39,7 +39,7 @@ No dependency cycles were reported. The highest remaining concentration is in:
   - Also check recommended commands from `inspect`: `unresolved` and `cycles` recommendations currently omit the include-root target suffix, which can expand a scoped inspect into whole-repo follow-ups.
   - Add tests in `tests/cli-regressions.test.ts` for `inspect --root . ./src`, include-root recommendations, and config `ignoreGlobs` with include roots.
 
-- [ ] Standardize CLI numeric option parsing and validation.
+- [x] Standardize CLI numeric option parsing and validation.
   - Finding: several commands still use raw `Number(...)` for user input: `--threads`, `--symbols-detailed-max-edges`, `--max-hits`, `--max-callsites`, `--max-tests`, chunk token bounds, graph query depth, and impact options.
   - Risk: invalid values can silently become `NaN`, `0`, or undefined depending on downstream code.
   - Add shared helpers in `src/cli/options.ts` for positive integers, non-negative integers, optional integers, and bounded integers.

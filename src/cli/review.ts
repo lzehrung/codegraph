@@ -5,7 +5,7 @@ import type { BuildReport } from "../indexer/types.js";
 import type { GraphBuildOptions } from "../graphs.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { ProjectFileDiscoveryOptions } from "../util.js";
-import { parseCacheModeOption } from "./options.js";
+import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption } from "./options.js";
 
 type CommandTimingReport = {
   totalMs?: number;
@@ -159,16 +159,16 @@ export async function handleReviewCommand(context: ReviewCommandContext): Promis
     context.exit(2);
   }
   const threadsRaw = context.getOpt("--threads");
-  const threads = threadsRaw !== undefined ? Number(threadsRaw) : undefined;
+  const threads = parseOptionalNonNegativeIntegerOption(threadsRaw, "--threads");
   const cache = parseCacheModeOption(context.getOpt("--cache"));
   const cacheStrict = context.hasFlag("--cache-strict");
   const cacheVerify = context.hasFlag("--cache-verify");
   const incrementalStrict = context.hasFlag("--incremental-strict");
   const includeSymbolDetails = context.hasFlag("--include-symbol-details");
   const maxCallsitesRaw = context.getOpt("--max-callsites");
-  const maxCallsites = maxCallsitesRaw !== undefined ? Number(maxCallsitesRaw) : undefined;
+  const maxCallsites = parseOptionalNonNegativeIntegerOption(maxCallsitesRaw, "--max-callsites");
   const maxTestsRaw = context.getOpt("--max-tests");
-  const maxTests = maxTestsRaw !== undefined ? Number(maxTestsRaw) : undefined;
+  const maxTests = parseOptionalNonNegativeIntegerOption(maxTestsRaw, "--max-tests");
   const reviewOpts: Parameters<typeof buildReviewReport>[1] = {};
   reviewOpts.discovery = context.discoveryOptions;
   if (reviewDepth) reviewOpts.reviewDepth = reviewDepth;

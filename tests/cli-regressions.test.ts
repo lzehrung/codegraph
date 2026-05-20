@@ -916,6 +916,12 @@ describe("CLI regressions", () => {
     );
   });
 
+  it("graph rejects invalid integer options", async () => {
+    await expect(runCliCommand(["graph", "--stdout", "--root", tsRoot, "--threads", "1.5"])).rejects.toThrow(
+      /Invalid --threads value "1.5"/i,
+    );
+  });
+
   it("inspect rejects invalid --cache values", async () => {
     await expect(runCliCommand(["inspect", "--root", tsRoot, "--cache", "banana"])).rejects.toThrow(
       /Invalid --cache value "banana"/i,
@@ -1165,6 +1171,12 @@ describe("CLI regressions", () => {
     expect(hits.length).toBeGreaterThan(0);
     expect(hits.some((h) => h.file === "utils.ts")).toBe(true);
     expect(hits.every((h) => typeof h.line === "number" && typeof h.column === "number")).toBe(true);
+  });
+
+  it("grep rejects invalid --max-hits values", async () => {
+    await expect(
+      runCliCommand(["grep", "--root", tsRoot, "--pattern", "helperFunction", "--max-hits", "0"]),
+    ).rejects.toThrow(/Invalid --max-hits value "0"/i);
   });
 
   it("grep honors .gitignore and additive scan globs", async () => {
@@ -1635,6 +1647,20 @@ index 1111111..2222222 100644
 
     expect(greet).toBeDefined();
     expect(greet?.callsites).toBeUndefined();
+  });
+
+  it("review CLI rejects invalid numeric limits", async () => {
+    const root = await mkTmpDir("dg-review-cli-invalid-number-");
+    initGitRepo(root);
+    await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 1; }\n", "utf8");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "initial"]);
+
+    await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 2; }\n", "utf8");
+
+    await expect(
+      runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE", "--max-tests", "nope"]),
+    ).rejects.toThrow(/Invalid --max-tests value "nope"/i);
   });
 
   it("review summary groups candidate tests by confidence without listing low-confidence fallbacks", async () => {

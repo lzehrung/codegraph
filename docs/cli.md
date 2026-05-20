@@ -8,6 +8,8 @@ If the CLI is not installed yet, use the install paths in [docs/installation.md]
 
 Bare `codegraph graph` writes `codegraph.json` and `codegraph.err` in the current directory. Use `--stdout`, `--output <path>`, or an explicit format flag such as `--json` when scripting.
 
+Numeric options such as `--limit`, `--threads`, `--depth`, `--max-refs`, and token bounds must be integers in their documented ranges; invalid numeric values fail instead of being silently clamped or ignored.
+
 ## Runtime selection
 
 The CLI defaults to `--native auto`, which uses the native Tree-sitter path when a compatible native artifact is available and falls back automatically otherwise.
