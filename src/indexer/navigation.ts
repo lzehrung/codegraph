@@ -1,6 +1,6 @@
 import { type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
-import { ensureParsedContext } from "./parse-context.js";
+import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { resolveMemberAccessDefinition } from "./navigation-goto.js";
 import {
   findClosestBinding,
@@ -271,10 +271,17 @@ export async function findReferences(
     if (!module) continue;
 
     let scopeIndex: ScopeIndex | null = null;
+    let candidateParsedContext: ParsedFileContext | null = null;
+    const ensureCandidateParsed = async (): Promise<ParsedFileContext> => {
+      if (!candidateParsedContext) {
+        const parsedEntry = index.parsed?.get(fileId);
+        candidateParsedContext = await ensureParsedContext(fileId, parsedEntry);
+      }
+      return candidateParsedContext;
+    };
     const ensureScope = async (): Promise<ScopeIndex> => {
       if (!scopeIndex) {
-        const parsedEntry = index.parsed?.get(fileId);
-        const parsed = await ensureParsedContext(fileId, parsedEntry);
+        const parsed = await ensureCandidateParsed();
         scopeIndex = getCachedScope(index, fileId, module, parsed);
       }
       return scopeIndex;
@@ -291,8 +298,8 @@ export async function findReferences(
           const hit = resolveExport(index, targetFile, exportedName);
           const matchesDef = hit?.kind === "resolved" ? sameDef(hit.def, def) : targetFile === definitionFile;
           if (!matchesDef) continue;
-          await ensureScope();
-          const ranges = await collectNamespaceMemberRefs(fileId, imp.localNS, exportedName);
+          const parsed = await ensureCandidateParsed();
+          const ranges = await collectNamespaceMemberRefs(fileId, imp.localNS, exportedName, parsed);
           for (const range of ranges) {
             if (hasReachedMaxReferences()) break;
             pushRef({
@@ -406,8 +413,13 @@ export async function findReferences(
   };
 }
 
-export async function collectNamespaceMemberRefs(file: string, ns: string, member: string): Promise<Range[]> {
-  const parsed = await ensureParsedContext(file, undefined);
+export async function collectNamespaceMemberRefs(
+  file: string,
+  ns: string,
+  member: string,
+  parsedContext?: ParsedFileContext,
+): Promise<Range[]> {
+  const parsed = parsedContext ?? (await ensureParsedContext(file, undefined));
   const sup = parsed.sup;
   const source = parsed.source;
   const tree = parsed.tree;

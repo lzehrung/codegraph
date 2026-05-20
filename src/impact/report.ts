@@ -23,19 +23,9 @@ import type {
 import { IMPACT_SCHEMA_VERSION } from "./types.js";
 import { buildSymbolGraphDetailed, findDetailedCycles } from "../graphs.js";
 import { discoverProjectFiles, normalizePath, resolveFilePathFromRoot } from "../util.js";
+import { newFileRangeForHunk } from "./hunks.js";
 import { createGraphFileResolver, normalizeImpactFileChange, toImpactReportFilePath } from "./path.js";
-
-export function newFileRangeForHunk(hunk: FileChange["hunks"][number]): { start: number; end: number } {
-  let newLine = hunk.newStart;
-  let lastNewLine = newLine - 1;
-  for (const line of hunk.lines) {
-    if (line.startsWith(" ") || line.startsWith("+")) {
-      lastNewLine = newLine;
-      newLine += 1;
-    }
-  }
-  return { start: hunk.newStart, end: Math.max(hunk.newStart, lastNewLine) };
-}
+export { newFileRangeForHunk } from "./hunks.js";
 
 export async function buildImpactReport(
   projectRoot: string,

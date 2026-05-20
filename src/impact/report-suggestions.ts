@@ -3,76 +3,29 @@ import path from "node:path";
 import { SymbolKind, type ProjectIndex, findReferences } from "../indexer.js";
 import { mapLimit, resolveFilePathFromRoot } from "../util.js";
 import { listCandidateTestFiles } from "./context.js";
+import { collectHunkLineText, collectRemovedLines } from "./hunks.js";
 import { normalizeImpactFilePath } from "./path.js";
 import { collectImpactSuggestions } from "./suggestions.js";
 import { compileTestPatterns, createIndexTestFileMatcher } from "./testPatterns.js";
 import type { ChangedSymbol, FileChange, ImpactOptions, ImpactSuggestion } from "./types.js";
 const CONFIG_FILE_RE =
   /(^|\/)(?:tsconfig(?:\.[^./]+)?\.json|jsconfig\.json|vite\.config\.[cm]?[jt]s|webpack\.config\.[cm]?[jt]s|rollup\.config\.[cm]?[jt]s|esbuild\.config\.[cm]?[jt]s|babel\.config\.[cm]?[jt]s|\.eslintrc(?:\.[^./]+)?|prettier\.config\.[cm]?[jt]s|package\.json|pnpm-workspace\.ya?ml|lerna\.json|turbo\.json|nx\.json|\.env(?:\.[^/]*)?)$/i;
-
-function collectRemovedLines(change: FileChange): Set<number> {
-  const removed = new Set<number>();
-  for (const hunk of change.hunks) {
-    let oldLine = hunk.oldStart;
-    let newLine = hunk.newStart;
-    let deletionStreak = 0;
-    for (const line of hunk.lines) {
-      if (line.startsWith(" ")) {
-        oldLine += 1;
-        newLine += 1;
-        deletionStreak = 0;
-        continue;
-      }
-      if (line.startsWith("-")) {
-        const mapped = newLine > 0 ? newLine + deletionStreak : oldLine;
-        removed.add(mapped);
-        oldLine += 1;
-        deletionStreak += 1;
-        continue;
-      }
-      if (line.startsWith("+")) {
-        newLine += 1;
-        deletionStreak = 0;
-      }
-    }
-  }
-  return removed;
-}
+const UNTESTED_CHANGE_REFERENCE_SCAN_LIMIT = 500;
 
 function matchesConfigSemantics(filePath: string): boolean {
   return CONFIG_FILE_RE.test(filePath);
 }
 
 function collectAddedLines(change: FileChange): string[] {
-  const added: string[] = [];
-  for (const hunk of change.hunks) {
-    for (const line of hunk.lines) {
-      if (line.startsWith("+")) added.push(line.slice(1));
-    }
-  }
-  return added;
+  return collectHunkLineText(change).added;
 }
 
 function collectRemovedLinesText(change: FileChange): string[] {
-  const removed: string[] = [];
-  for (const hunk of change.hunks) {
-    for (const line of hunk.lines) {
-      if (line.startsWith("-")) removed.push(line.slice(1));
-    }
-  }
-  return removed;
+  return collectHunkLineText(change).removed;
 }
 
 function collectRemovedAndAddedLines(change: FileChange): string[] {
-  const lines: string[] = [];
-  for (const hunk of change.hunks) {
-    for (const line of hunk.lines) {
-      if (line.startsWith("+") || line.startsWith("-")) {
-        lines.push(line.slice(1));
-      }
-    }
-  }
-  return lines;
+  return collectHunkLineText(change).changed;
 }
 
 function collectTsconfigPathAliases(change: FileChange): string[] {
@@ -457,6 +410,8 @@ async function collectUntestedChangeSuggestions(
         kind: symbol.kind,
         range: symbol.range,
       },
+    }, {
+      maxReferences: UNTESTED_CHANGE_REFERENCE_SCAN_LIMIT,
     });
     if (refs.status !== "ok") return undefined;
 

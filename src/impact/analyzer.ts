@@ -57,6 +57,10 @@ const severityWeightKeys: ReadonlyArray<keyof SeverityWeights> = [
   "depthDecay",
 ];
 
+function referenceScanLimitForKeptRefs(maxRefs: number): number {
+  return Math.max(maxRefs + 50, maxRefs * 4);
+}
+
 function normalizeSeverityWeights(weights: SeverityWeights): SeverityWeights {
   const normalized: SeverityWeights = { ...DEFAULT_SEVERITY_WEIGHTS };
   const invalidEntries: string[] = [];
@@ -205,8 +209,9 @@ export async function analyzeImpact(
                 ...(refBlockMaxLines !== undefined && {
                   blockMaxLines: refBlockMaxLines,
                 }),
+                maxReferences: referenceScanLimitForKeptRefs(maxRefs),
               }
-            : undefined,
+            : { maxReferences: referenceScanLimitForKeptRefs(maxRefs) },
         );
 
         if (refs.status === "ok") {

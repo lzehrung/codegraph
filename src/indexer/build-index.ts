@@ -475,6 +475,11 @@ function ensureJsonModule(modules: Map<FileId, ModuleIndex>, filePath: string): 
   });
 }
 
+function graphEdgeKey(edge: Edge): string {
+  const target = edge.to.type === "file" ? edge.to.path : edge.to.name;
+  return `${edge.from}::${target}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`;
+}
+
 function expandStarImports(modules: Map<FileId, ModuleIndex>): void {
   const importAlreadyPresent = (imports: ImportBinding[], candidate: ImportBinding): boolean =>
     imports.some((existing) => {
@@ -773,28 +778,20 @@ async function buildIndexFromFileListShared(
     });
     if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
     const graphStart = performance.now();
-    const appendUniqueGraphEdges = (edges: Edge[]) => {
+    const seenGraphEdges = new Set<string>();
+    const appendUniqueGraphEdges = (edges: readonly Edge[]) => {
       if (!edges.length) return;
-      const seen = new Set(
-        graph.edges.map(
-          (edge) =>
-            `${edge.from}::${edge.to.type === "file" ? edge.to.path : edge.to.name}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`,
-        ),
-      );
       for (const edge of edges) {
-        const key = `${edge.from}::${edge.to.type === "file" ? edge.to.path : edge.to.name}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
+        const key = graphEdgeKey(edge);
+        if (seenGraphEdges.has(key)) continue;
+        seenGraphEdges.add(key);
         graph.edges.push(edge);
         if (edge.to.type === "file") graph.nodes.add(edge.to.path);
       }
     };
     for (const [file, mod, edges] of fileResults) {
       modules.set(file, mod);
-      for (const edge of edges) {
-        graph.edges.push(edge);
-        if (edge.to.type === "file") graph.nodes.add(edge.to.path);
-      }
+      appendUniqueGraphEdges(edges);
     }
     const workspaceManifestEdges = await collectWorkspaceManifestDependencyEdges(
       projectRoot,

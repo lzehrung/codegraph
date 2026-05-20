@@ -2,6 +2,7 @@ import type { FileId } from "../types.js";
 import type { ProjectIndex } from "../indexer.js";
 import { buildSymbolGraphDetailed } from "../graphs.js";
 import type { SymbolEdge } from "../graphs.js";
+import { buildGraphAdjacency, getForwardNeighbors, getReverseNeighbors } from "../graphs/adjacency.js";
 import { createGraphFileResolver } from "./path.js";
 import { compileTestPatterns, createIndexTestFileMatcher } from "./testPatterns.js";
 
@@ -67,6 +68,8 @@ function collectFileSubgraph(
   const edges: Array<{ from: FileId; to: FileId; typeOnly?: boolean }> = [];
   const visited = new Set<FileId>();
   const queue: Array<{ file: FileId; depth: number }> = [];
+  const adjacency = index.graphAdjacency ?? buildGraphAdjacency(index.graph);
+  const typeOnlyByEdge = new Map<string, boolean | undefined>();
 
   // Initialize with impacted files
   for (const file of impactedFiles) {
@@ -75,21 +78,9 @@ function collectFileSubgraph(
     queue.push({ file, depth: 0 });
   }
 
-  // Build forward and reverse dependency maps for efficient traversal
-  const forwardDeps = new Map<FileId, FileId[]>(); // file -> files it depends on
-  const reverseDeps = new Map<FileId, FileId[]>(); // file -> files that depend on it
-
   for (const edge of index.graph.edges) {
     if (edge.to.type === "file") {
-      // Forward: A -> B means A depends on B
-      const deps = forwardDeps.get(edge.from) || [];
-      deps.push(edge.to.path);
-      forwardDeps.set(edge.from, deps);
-
-      // Reverse: A -> B means B is depended on by A
-      const revDeps = reverseDeps.get(edge.to.path) || [];
-      revDeps.push(edge.from);
-      reverseDeps.set(edge.to.path, revDeps);
+      typeOnlyByEdge.set(`${edge.from}\0${edge.to.path}`, edge.typeOnly);
     }
   }
 
@@ -100,29 +91,38 @@ function collectFileSubgraph(
     if (depth >= hops) continue;
 
     // Add forward dependencies (files this file depends on)
-    const deps = forwardDeps.get(file) || [];
+    const deps = getForwardNeighbors(adjacency, file);
     for (const dep of deps) {
       if (!visited.has(dep)) {
         visited.add(dep);
         nodes.add(dep);
         queue.push({ file: dep, depth: depth + 1 });
       }
-      edges.push({ from: file, to: dep });
+      edges.push(edgeFor(file, dep, typeOnlyByEdge));
     }
 
     // Add reverse dependencies (files that depend on this file)
-    const revDeps = reverseDeps.get(file) || [];
+    const revDeps = getReverseNeighbors(adjacency, file);
     for (const revDep of revDeps) {
       if (!visited.has(revDep)) {
         visited.add(revDep);
         nodes.add(revDep);
         queue.push({ file: revDep, depth: depth + 1 });
       }
-      edges.push({ from: revDep, to: file });
+      edges.push(edgeFor(revDep, file, typeOnlyByEdge));
     }
   }
 
   return { nodes, edges };
+}
+
+function edgeFor(
+  from: FileId,
+  to: FileId,
+  typeOnlyByEdge: ReadonlyMap<string, boolean | undefined>,
+): { from: FileId; to: FileId; typeOnly?: boolean } {
+  const typeOnly = typeOnlyByEdge.get(`${from}\0${to}`);
+  return typeOnly !== undefined ? { from, to, typeOnly } : { from, to };
 }
 
 async function collectSymbolNeighbors(
@@ -251,19 +251,10 @@ export function listCandidateTestFiles(
   const candidates = new Map<FileId, CandidateTestFile>();
   const resolveGraphFile = createGraphFileResolver(index.graph.nodes);
   const resolvedChangedFiles = changedFiles.map((file) => resolveGraphFile(file));
+  const adjacency = index.graphAdjacency ?? buildGraphAdjacency(index.graph);
   // Default test patterns (can be extended by caller)
   const allPatterns = compileTestPatterns(testPatterns);
   const isIndexTestFile = createIndexTestFileMatcher(index, allPatterns, projectRoot, resolvedChangedFiles);
-
-  // Build reverse dependency map: file -> files that depend on it
-  const reverseDeps = new Map<FileId, FileId[]>();
-  for (const edge of index.graph.edges) {
-    if (edge.to.type === "file") {
-      const deps = reverseDeps.get(edge.to.path) || [];
-      deps.push(edge.from);
-      reverseDeps.set(edge.to.path, deps);
-    }
-  }
 
   // Find test files that import changed symbols directly
   const symbolFiles = new Set<FileId>();
@@ -274,7 +265,7 @@ export function listCandidateTestFiles(
   }
 
   for (const file of symbolFiles) {
-    const dependents = reverseDeps.get(file) || [];
+    const dependents = getReverseNeighbors(adjacency, file);
     for (const dependent of dependents) {
       if (isIndexTestFile(dependent)) {
         candidates.set(dependent, {
@@ -288,7 +279,7 @@ export function listCandidateTestFiles(
 
   // Find test files that depend on changed files (lower confidence)
   for (const changedFile of resolvedChangedFiles) {
-    const dependents = reverseDeps.get(changedFile) || [];
+    const dependents = getReverseNeighbors(adjacency, changedFile);
     for (const dependent of dependents) {
       if (isIndexTestFile(dependent) && !candidates.has(dependent)) {
         candidates.set(dependent, {
