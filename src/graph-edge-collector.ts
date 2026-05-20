@@ -2,16 +2,10 @@ import path from "node:path";
 import { type JsLanguage } from "./jsFallback.js";
 import { prepareSourceInput } from "./languages/filePrep.js";
 import { type LanguageSupport } from "./languages.js";
-import type { EdgeTo, Edge } from "./types.js";
+import type { Edge } from "./types.js";
 import {
   loadNearestTsconfigFor,
-  getGraphOnlyResolutionExtensions,
   type WorkspaceConfig,
-  resolveSpecifier,
-  resolveImportSpecifier,
-  resolvePythonModule,
-  resolveJvmPackageImportPaths,
-  getPhpComposerImplicitFiles,
   extractJsTsDynamicSpecifiers,
 } from "./util.js";
 import { logWithLevel, type LogLevel } from "./logging.js";
@@ -28,6 +22,7 @@ import {
 } from "./native/treeSitterNative.js";
 import { recordNativeExecutionOutcome } from "./native/nativeBackendReport.js";
 import { collectModuleSpecifiersFromSource, type FallbackImportExtractionEvent } from "./graphs/specifiers.js";
+import { collectPhpComposerImplicitEdges, resolveModuleSpecifierEdges } from "./graphs/edgeResolution.js";
 import type { GraphCacheEntry } from "./graphs/types.js";
 import type { BuildReport } from "./indexer/types.js";
 import type { SyntaxTreeLike } from "./languages/types.js";
@@ -153,7 +148,6 @@ export async function collectEdgesForFile(
     }
   }
 
-  const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
   const graphOnlyAliasLanguage = graphOnlyLanguageSupportsImportAliases(sup.id);
   const needsGraphOnlyResolutionConfig =
     graphOnlyAliasLanguage && specs.some(({ spec }) => graphOnlySpecifierNeedsResolutionConfig(spec));
@@ -163,104 +157,15 @@ export async function collectEdgesForFile(
       : { matchPath: undefined };
   const edges: Edge[] = [];
   const edgeResolutionTasks = specs.map(async (entry) => {
-    const { spec, raw, typeOnly, phpImportType, resolved, confidence, resolutionKind, dropIfUnresolved } = entry;
-    let to: EdgeTo;
-    const resolutionExtensions = graphOnlyLanguage
-      ? getGraphOnlyResolutionExtensions(sup.id, resolutionKind ?? "document")
-      : undefined;
-    if (sup.id === "python") {
-      const relDotsMatch = spec.startsWith(".") ? spec.match(/^\.+/) : null;
-      const relDots = relDotsMatch ? relDotsMatch[0].length : 0;
-      const isDotsOnly = /^\.+$/.test(spec);
-      const res = await resolvePythonModule(projectRoot, file, isDotsOnly ? null : spec, relDots);
-      to =
-        typeof res === "string"
-          ? { type: "file", path: res.replace(/\\/g, "/") }
-          : { type: "external", name: res.external };
-    } else if (sup.id === "go") {
-      const res = await resolveImportSpecifier(projectRoot, file, spec, sup.id, {
-        ...(matchPath ? { matchPath } : {}),
-        ...(workspaceConfig ? { workspaceConfig } : {}),
-        resolveNodeModules: !!opts.resolveNodeModules,
-        ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
-      });
-      to =
-        typeof res === "string"
-          ? { type: "file", path: res.replace(/\\/g, "/") }
-          : { type: "external", name: res.external };
-    } else if (sup.id === "java" || sup.id === "kotlin") {
-      const packageTargets = await resolveJvmPackageImportPaths(projectRoot, spec, sup.id);
-      if (packageTargets.length) {
-        return packageTargets.map((targetPath) => ({
-          to: { type: "file", path: targetPath.replace(/\\/g, "/") } as EdgeTo,
-          spec,
-          ...(raw !== undefined && { raw }),
-          ...(typeOnly !== undefined && { typeOnly }),
-          ...(resolved !== undefined && { resolved }),
-          ...(confidence !== undefined && { confidence }),
-        }));
-      }
-      const res = await resolveImportSpecifier(projectRoot, file, spec, sup.id, {
-        ...(matchPath ? { matchPath } : {}),
-        ...(workspaceConfig ? { workspaceConfig } : {}),
-        resolveNodeModules: !!opts.resolveNodeModules,
-        ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
-      });
-      to =
-        typeof res === "string"
-          ? { type: "file", path: res.replace(/\\/g, "/") }
-          : { type: "external", name: raw ?? res.external };
-    } else if (["csharp", "ruby", "rust", "php"].includes(sup.id)) {
-      const { resolvePathLikeModule } = await import("./util.js");
-      const res =
-        sup.id === "php"
-          ? await resolveImportSpecifier(projectRoot, file, spec, sup.id, {
-              ...(matchPath ? { matchPath } : {}),
-              ...(workspaceConfig ? { workspaceConfig } : {}),
-              resolveNodeModules: !!opts.resolveNodeModules,
-              ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
-              ...(phpImportType ? { phpImportType } : {}),
-            })
-          : await resolvePathLikeModule(projectRoot, spec);
-      if (res && typeof res === "string") {
-        to = { type: "file", path: res.replace(/\\/g, "/") };
-      } else {
-        // Fallback to resolveSpecifier for relative paths like ./foo
-        const res2 = await resolveSpecifier(file, spec, projectRoot, matchPath, workspaceConfig, {
-          resolveNodeModules: !!opts.resolveNodeModules,
-          ...(resolutionExtensions ? { resolutionExtensions } : {}),
-          ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
-        });
-        to =
-          typeof res2 === "string"
-            ? { type: "file", path: res2.replace(/\\/g, "/") }
-            : { type: "external", name: raw ?? res2.external };
-      }
-    } else {
-      const res = await resolveSpecifier(file, spec, projectRoot, matchPath, workspaceConfig, {
-        resolveNodeModules: !!opts.resolveNodeModules,
-        ...(resolutionExtensions ? { resolutionExtensions } : {}),
-        ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
-        ...(sup.id === "scss" && resolutionKind !== "document" ? { allowScssPartialResolution: true } : {}),
-      });
-      to =
-        typeof res === "string"
-          ? { type: "file", path: res.replace(/\\/g, "/") }
-          : { type: "external", name: raw ?? res.external };
-    }
-    if (to.type === "external" && dropIfUnresolved) {
-      return null;
-    }
-    return [
-      {
-        to,
-        spec,
-        ...(raw !== undefined && { raw }),
-        ...(typeOnly !== undefined && { typeOnly }),
-        ...(resolved !== undefined && { resolved }),
-        ...(confidence !== undefined && { confidence }),
-      },
-    ];
+    return await resolveModuleSpecifierEdges(entry, {
+      support: sup,
+      file,
+      projectRoot,
+      workspaceConfig,
+      matchPath,
+      resolveNodeModules: !!opts.resolveNodeModules,
+      ...(opts.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+    });
   });
 
   for (const resolvedEdge of await Promise.all(edgeResolutionTasks)) {
@@ -279,26 +184,7 @@ export async function collectEdgesForFile(
   }
 
   if (sup.id === "php") {
-    const implicitFiles = await getPhpComposerImplicitFiles(projectRoot, file);
-    const seenFileTargets = new Set(
-      edges
-        .map((edge) => (edge.to.type === "file" ? edge.to.path : null))
-        .filter((target): target is string => !!target),
-    );
-    for (const implicitFile of implicitFiles) {
-      const normalizedTarget = implicitFile.replace(/\\/g, "/");
-      if (normalizedTarget === normalizedFile || seenFileTargets.has(normalizedTarget)) {
-        continue;
-      }
-
-      const relativeRaw = path.relative(path.dirname(file), implicitFile).replace(/\\/g, "/");
-      edges.push({
-        from: normalizedFile,
-        to: { type: "file", path: normalizedTarget },
-        raw: relativeRaw.startsWith(".") || relativeRaw.startsWith("/") ? relativeRaw : `./${relativeRaw}`,
-      });
-      seenFileTargets.add(normalizedTarget);
-    }
+    edges.push(...(await collectPhpComposerImplicitEdges({ projectRoot, file, normalizedFile, existingEdges: edges })));
   }
   emitCacheEntry(edges);
   return edges;

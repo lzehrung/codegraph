@@ -98,7 +98,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Correctness opportunity: this would keep language additions from updating locals but not scope, or scope but not impact symbol mapping.
   - Tests: scope-quality, changed-line mapping, and cross-language local/export extraction for TypeScript, Python, Go, Rust, Kotlin, Swift, C/C++, PHP, and Ruby.
 
-- [ ] Split module specifier extraction from edge resolution and reuse fallback/query handling.
+- [x] Split module specifier extraction from edge resolution and reuse fallback/query handling.
   - `src/graphs/specifiers.ts` has a 330-line `collectModuleSpecifiersFromSource()` and `src/graph-edge-collector.ts` has a 109-complexity `collectEdgesForFile()`. Both contain language routing, fallback reporting, graph-only handling, HTML/style extras, and per-language resolution decisions.
   - Suggested fix: make specifier extraction return normalized `ModuleSpecifier` values plus diagnostics only, then move edge target resolution into a table of language-specific resolver functions. Share helper code for native query execution, JS fallback recovery, HTML/style appended specifiers, and graph-only resolution config.
   - Performance opportunity: the edge collector currently resolves all specifiers via `Promise.all`, which can burst filesystem work for large files; a bounded resolver queue would make graph builds smoother without changing results.
