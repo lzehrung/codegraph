@@ -1,126 +1,16 @@
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { sliceText } from "../util.js";
+import {
+  getMemberAccessParts,
+  getNavigationExpressionProperty,
+  isMemberAccessNode,
+  memberAccessTraversalTypes,
+} from "../util/memberAccess.js";
 import { ensureParsedContext } from "./parse-context.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
 import type { GoToResult, ModuleIndex, ProjectIndex, ResolvedExport, SymbolDef } from "./types.js";
-
-type MemberAccessTarget = {
-  obj: SyntaxNodeLike | null;
-  prop: SyntaxNodeLike | null;
-};
-
-function getMemberAccessTarget(supId: string, memberNode: SyntaxNodeLike): MemberAccessTarget {
-  if (supId === "python") {
-    return {
-      obj: memberNode.childForFieldName("object") ?? memberNode.child(0),
-      prop: memberNode.childForFieldName("attribute") ?? memberNode.child(2),
-    };
-  }
-  if (supId === "csharp") {
-    return {
-      obj: memberNode.child(0),
-      prop: memberNode.child(2),
-    };
-  }
-  if (supId === "java") {
-    if (memberNode.type === "method_invocation") {
-      return {
-        obj: memberNode.childForFieldName("object") ?? memberNode.child(0),
-        prop: memberNode.childForFieldName("name") ?? memberNode.child(2),
-      };
-    }
-    if (memberNode.type === "scoped_identifier" || memberNode.type === "scoped_type_identifier") {
-      return {
-        obj: memberNode.childForFieldName("scope") ?? memberNode.child(0),
-        prop: memberNode.childForFieldName("name") ?? memberNode.child(2),
-      };
-    }
-  }
-  if (supId === "ruby") {
-    if (memberNode.type === "scope_resolution") {
-      return {
-        obj: memberNode.childForFieldName("scope") ?? memberNode.child(0),
-        prop: memberNode.childForFieldName("name") ?? memberNode.child(2),
-      };
-    }
-    return {
-      obj: memberNode.childForFieldName("receiver") ?? memberNode.child(0),
-      prop: memberNode.childForFieldName("method") ?? memberNode.child(2),
-    };
-  }
-  if (supId === "rust") {
-    if (memberNode.type === "scoped_identifier") {
-      return {
-        obj: memberNode.childForFieldName("path") ?? memberNode.child(0),
-        prop: memberNode.childForFieldName("name") ?? memberNode.child(2),
-      };
-    }
-  }
-  if (supId === "go") {
-    if (memberNode.type === "qualified_type") {
-      return {
-        obj: memberNode.namedChildren[0] ?? memberNode.child(0),
-        prop: memberNode.namedChildren[1] ?? memberNode.child(1),
-      };
-    }
-  }
-  if (supId === "kotlin" || supId === "swift") {
-    if (memberNode.type === "navigation_expression") {
-      const obj = memberNode.namedChildren[0] ?? memberNode.child(0);
-      const suffix =
-        memberNode.namedChildren.find((child) => child.type === "navigation_suffix") ?? memberNode.child(1);
-      if (suffix) {
-        return {
-          obj,
-          prop:
-            suffix.childForFieldName("suffix") ??
-            suffix.childForFieldName("name") ??
-            suffix.namedChildren[0] ??
-            suffix.child(0),
-        };
-      }
-      return { obj, prop: null };
-    }
-  }
-  return {
-    obj: memberNode.child(0),
-    prop: memberNode.child(2),
-  };
-}
-
-function getNavigationSubProperty(expr: SyntaxNodeLike): SyntaxNodeLike | null {
-  const suffix = expr.namedChildren.find((child) => child.type === "navigation_suffix") ?? expr.child(1);
-  if (!suffix) return null;
-  return (
-    suffix.childForFieldName?.("suffix") ??
-    suffix.childForFieldName?.("name") ??
-    suffix.namedChildren[0] ??
-    suffix.child(0)
-  );
-}
-
-function isMemberAccessNode(
-  sup: { id: string; nodeTypes: { memberExpression?: string } },
-  node: SyntaxNodeLike,
-): boolean {
-  const memberExpressionType = sup.nodeTypes.memberExpression ?? "member_expression";
-  return (
-    node.type === memberExpressionType ||
-    (sup.id === "go" && node.type === "qualified_type") ||
-    node.type === "member_access_expression" ||
-    node.type === "qualified_name" ||
-    node.type === "field_access" ||
-    node.type === "method_invocation" ||
-    node.type === "scoped_identifier" ||
-    node.type === "scoped_type_identifier" ||
-    node.type === "call" ||
-    node.type === "scope_resolution" ||
-    node.type === "field_expression" ||
-    node.type === "attribute"
-  );
-}
 
 export async function resolveMemberAccessDefinition(params: {
   index: ProjectIndex;
@@ -136,16 +26,8 @@ export async function resolveMemberAccessDefinition(params: {
   }
 
   const memberNode = parent;
-  const { obj, prop } = getMemberAccessTarget(sup.id, memberNode);
-  const memberExpressionType = sup.nodeTypes.memberExpression ?? "member_expression";
-  const optionalMemberTypes = new Set<string>([
-    memberExpressionType,
-    sup.id === "go" ? "qualified_type" : "",
-    "optional_member_expression",
-    "subscript_expression",
-    "optional_chain",
-    sup.id === "python" ? "attribute" : "",
-  ]);
+  const { object: obj, property: prop } = getMemberAccessParts(sup, memberNode);
+  const optionalMemberTypes = memberAccessTraversalTypes(sup);
 
   const resolveExpression = async (expr: SyntaxNodeLike): Promise<ResolvedExport | null> => {
     const exprName = sliceText(expr, source);
@@ -189,13 +71,11 @@ export async function resolveMemberAccessDefinition(params: {
     }
 
     if (optionalMemberTypes.has(expr.type)) {
-      const subObj = expr.child(0);
-      let subProp =
-        expr.type === "qualified_type"
-          ? (expr.namedChildren[1] ?? expr.child(1))
-          : (expr.childForFieldName?.("property") ?? expr.child(2) ?? expr.childForFieldName?.("attribute"));
+      const parts = getMemberAccessParts(sup, expr);
+      const subObj = parts.object;
+      let subProp = parts.property;
       if (!subProp && expr.type === "navigation_expression") {
-        subProp = getNavigationSubProperty(expr);
+        subProp = getNavigationExpressionProperty(expr);
       }
       if (subObj && subProp) {
         const base = await resolveExpression(subObj);

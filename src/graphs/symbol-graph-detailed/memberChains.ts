@@ -1,7 +1,13 @@
 import type { LanguageSupport } from "../../languages.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import type { SymbolDef } from "../../indexer/types.js";
-import { sliceText, unquote } from "../../util.js";
+import { sliceText } from "../../util.js";
+import {
+  collectMemberAccessChain,
+  memberAccessTraversalTypes,
+  memberExpressionTypeFor,
+  memberPropertyIdentifierTypes,
+} from "../../util/memberAccess.js";
 import { isIdentifierType } from "./ast.js";
 
 export type MemberChainResolver = {
@@ -18,60 +24,22 @@ export function createMemberChainResolver(args: {
   aliasToTargetModule: Map<string, string>;
   resolveMemberPathFromModule: (startFile: string, names: string[]) => SymbolDef | null;
 }): MemberChainResolver {
-  const memberExpressionType = args.sup.nodeTypes.memberExpression ?? "member_expression";
-  const propertyIdentifierTypes: string[] = args.sup.nodeTypes.propertyIdentifier ?? ["property_identifier"];
-  const optionalMemberTypes = new Set<string>([
-    memberExpressionType,
-    "optional_member_expression",
-    "subscript_expression",
-    "optional_chain",
-    args.sup.id === "python" ? "attribute" : "",
-  ]);
+  const memberExpressionType = memberExpressionTypeFor(args.sup);
+  const propertyIdentifierTypes = memberPropertyIdentifierTypes(args.sup);
+  const optionalMemberTypes = memberAccessTraversalTypes(args.sup);
 
   const resolveMemberChainTarget = (chainNode: SyntaxNodeLike): SymbolDef | null => {
-    const names: string[] = [];
-    let current: SyntaxNodeLike | null = chainNode;
-    let base: SyntaxNodeLike | null = null;
-    const pushProp = (propNode: SyntaxNodeLike | null): void => {
-      if (!propNode) return;
-      if (propertyIdentifierTypes.includes(propNode.type)) {
-        names.push(sliceText(propNode, args.source));
-      } else if (propNode.type === "string") {
-        names.push(unquote(sliceText(propNode, args.source)));
-      } else if (propNode.type === "identifier") {
-        const keyName = sliceText(propNode, args.source);
-        const value = args.constStringOf.get(keyName);
-        if (typeof value === "string") names.push(value);
-      }
-    };
-
-    while (current && optionalMemberTypes.has(current.type)) {
-      if (current.type === "subscript_expression") {
-        base = current.child(0) ?? base;
-        const indexNode = current.child(2);
-        pushProp(indexNode);
-        current = base;
-      } else if (
-        current.type === memberExpressionType ||
-        current.type === "optional_member_expression" ||
-        current.type === "attribute"
-      ) {
-        base = current.child(0) ?? base;
-        const propNode =
-          current.childForFieldName?.("property") ?? current.child(2) ?? current.childForFieldName?.("attribute");
-        pushProp(propNode);
-        current = base;
-      } else if (current.type === "optional_chain") {
-        current = current.child(0);
-      } else {
-        break;
-      }
-    }
-    if (!current || !isIdentifierType(args.sup, current.type)) return null;
-    const alias = sliceText(current, args.source);
+    const chain = collectMemberAccessChain({
+      sup: args.sup,
+      source: args.source,
+      chainNode,
+      constStringOf: args.constStringOf,
+    });
+    if (!chain || !isIdentifierType(args.sup, chain.base.type)) return null;
+    const alias = sliceText(chain.base, args.source);
     const targetFile = args.aliasToTargetModule.get(alias);
-    if (!targetFile || !names.length) return null;
-    return args.resolveMemberPathFromModule(targetFile, names);
+    if (!targetFile) return null;
+    return args.resolveMemberPathFromModule(targetFile, chain.names);
   };
 
   return {

@@ -2,6 +2,11 @@ import type { LanguageSupport } from "../../languages.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import type { SymbolDef } from "../../indexer/types.js";
 import { sliceText, unquote } from "../../util.js";
+import {
+  getMemberAccessParts,
+  memberExpressionTypeFor,
+  memberPropertyIdentifierTypes,
+} from "../../util/memberAccess.js";
 
 export type DetailedFunctionNode = {
   name: string;
@@ -33,8 +38,8 @@ export function collectDetailedDeclarations(
   const functionNodes: DetailedFunctionNode[] = [];
   const classNodes: DetailedClassNode[] = [];
   const constStringOf = new Map<string, string>();
-  const memberExpressionType = sup.nodeTypes.memberExpression ?? "member_expression";
-  const propertyIdentifierTypes: string[] = sup.nodeTypes.propertyIdentifier ?? ["property_identifier"];
+  const memberExpressionType = memberExpressionTypeFor(sup);
+  const propertyIdentifierTypes = memberPropertyIdentifierTypes(sup);
 
   const walk = (node: SyntaxNodeLike): void => {
     if (
@@ -83,7 +88,7 @@ export function collectDetailedDeclarations(
         if (/arrow_function|function/.test(valueType)) {
           let name: string | null = null;
           if (left.type === memberExpressionType) {
-            const prop = left.child(2);
+            const { property: prop } = getMemberAccessParts(sup, left);
             if (prop && propertyIdentifierTypes.includes(prop.type)) name = sliceText(prop, source);
           } else if (left.type === "identifier") {
             name = sliceText(left, source);
@@ -103,12 +108,7 @@ export function collectDetailedDeclarations(
   return { functionNodes, classNodes, constStringOf };
 }
 
-export function collectIdentifiers(
-  node: SyntaxNodeLike,
-  sup: LanguageSupport,
-  source: string,
-  out: string[],
-): void {
+export function collectIdentifiers(node: SyntaxNodeLike, sup: LanguageSupport, source: string, out: string[]): void {
   if (isIdentifierType(sup, node.type) || node.type === "type_identifier") {
     out.push(sliceText(node, source));
   }

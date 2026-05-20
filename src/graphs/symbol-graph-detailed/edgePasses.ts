@@ -2,6 +2,7 @@ import type { ModuleIndex, ProjectIndex, SymbolDef } from "../../indexer/types.j
 import type { LanguageSupport } from "../../languages.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import { sliceText } from "../../util.js";
+import { getMemberAccessParts } from "../../util/memberAccess.js";
 import { defNodeId, nodeForDef, type SymbolGraph } from "../symbol-graph.js";
 import type { DetailedClassNode, DetailedFunctionNode } from "./ast.js";
 import { collectIdentifiers, collectNodesByType, findFirstNodeByType, isIdentifierType } from "./ast.js";
@@ -35,12 +36,7 @@ function recordDefEdge(context: EdgePassContext, fromId: string, target: SymbolD
   return context.recordEdge(fromId, toId, label);
 }
 
-function tryResolveChain(
-  context: EdgePassContext,
-  node: SyntaxNodeLike,
-  fromId?: string,
-  label = "uses",
-): boolean {
+function tryResolveChain(context: EdgePassContext, node: SyntaxNodeLike, fromId?: string, label = "uses"): boolean {
   const targetDef = context.resolveMemberChainTarget(node);
   if (targetDef && fromId) {
     recordDefEdge(context, fromId, targetDef, label);
@@ -102,9 +98,7 @@ export function emitPythonDecoratorEdges(context: EdgePassContext, rootNode: Syn
         if (!def) continue;
         const fromId = ensureNode(context, def);
         const expr =
-          decoratorChild.childForFieldName?.("name") ??
-          decoratorChild.namedChildren?.[0] ??
-          decoratorChild.child(1);
+          decoratorChild.childForFieldName?.("name") ?? decoratorChild.namedChildren?.[0] ?? decoratorChild.child(1);
         if (expr) tryResolveNode(context, expr, fromId, "decorates");
       }
     } else if (node.type === "function_definition") {
@@ -166,8 +160,11 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
         if (modFile) {
           let exportedName: string | null = null;
           const parent = node.parent;
-          if (parent && (parent.type === context.memberExpressionType || parent.type === "optional_member_expression")) {
-            const prop = parent.childForFieldName?.("property") ?? parent.child(2);
+          if (
+            parent &&
+            (parent.type === context.memberExpressionType || parent.type === "optional_member_expression")
+          ) {
+            const { property: prop } = getMemberAccessParts(context.sup, parent);
             if (prop && context.propertyIdentifierTypes.includes(prop.type)) {
               exportedName = sliceText(prop, context.source);
             }

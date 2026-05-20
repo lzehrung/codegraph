@@ -104,7 +104,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Performance opportunity: the edge collector currently resolves all specifiers via `Promise.all`, which can burst filesystem work for large files; a bounded resolver queue would make graph builds smoother without changing results.
   - Tests: fallback import extraction diagnostics, graph-only document links, CSS/SCSS/Less URL imports, HTML/Vue/Svelte/Astro imports, PHP qualified references, JVM package fan-out, and dynamic import heuristics.
 
-- [ ] Unify member-access parsing for goto, references, and detailed symbol graph.
+- [x] Unify member-access parsing for goto, references, and detailed symbol graph.
   - Member/object/property extraction appears in `src/indexer/navigation-goto.ts`, `src/indexer/navigation.ts` (`collectNamespaceMemberRefs()`), and `src/graphs/symbol-graph-detailed.ts`. Each handles Python/Ruby/Go/Java/C#/Kotlin/Swift member shapes with local variations.
   - Suggested fix: create a `memberAccess.ts` helper that normalizes member nodes into `{ object, property, chain }` and supports language-specific node shapes. Use it in goto, namespace reference collection, and detailed symbol graph member/call collectors.
   - Correctness opportunity: optional chaining, Kotlin/Swift navigation expressions, Ruby scope resolution, and Go qualified types should resolve consistently across goto, refs, and symbol graph edges.
