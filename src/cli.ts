@@ -6,58 +6,42 @@ import fsp from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import picomatch from "picomatch";
-import {
-  buildProjectIndex,
-  buildProjectIndexFromFiles,
-  buildProjectIndexIncremental,
-  goToDefinition,
-  findReferences,
-} from "./indexer.js";
+import { buildProjectIndex, buildProjectIndexFromFiles, buildProjectIndexIncremental } from "./indexer.js";
 import type { BuildOptions, BuildReport } from "./indexer/types.js";
 import type { ReviewBuildReport } from "./review.js";
 import {
   collectGraph,
   graphToMermaid,
   graphToDOT,
-  astGrep,
-  textGrep,
   buildSymbolGraph,
   buildSymbolGraphDetailed,
   graphToMermaidSymbols,
   graphToDOTSymbols,
   graphToMermaidSymbolsWithFiles,
   graphToDOTSymbolsWithFiles,
-  findDetailedCycles,
-  sortDetailedCycles,
-  getUnresolvedImports,
-  getHotspots,
   type GraphBuildOptions,
   type SymbolGraph,
 } from "./graphs.js";
 import { writeGraphSqlite, updateGraphSqlite } from "./sqlite.js";
-import {
-  isNativeTreeSitterAvailable,
-  getNativeTreeSitterLoadError,
-  getNativeTreeSitterSupportedLanguageIds,
-  type NativeRuntimeMode,
-} from "./native/treeSitterNative.js";
-import { supportForFile } from "./languages.js";
+import { type NativeRuntimeMode } from "./native/treeSitterNative.js";
 import { handleChunkCommand } from "./cli/chunk.js";
 import { handleArtifactCommand } from "./cli/artifact.js";
 import { buildDoctorReport } from "./cli/doctor.js";
 import { handleExplainCommand } from "./cli/explain.js";
 import { handleGraphDeltaCommand } from "./cli/graphDelta.js";
 import { handleGraphQueryCommand } from "./cli/graphQueries.js";
+import { handleGrepCommand } from "./cli/grep.js";
 import { CLI_HELP_TEXT, helpTextForCommand, isKnownCliCommand } from "./cli/help.js";
 import { handleImpactCommand } from "./cli/impact.js";
+import { handleIndexCommand } from "./cli/index.js";
+import { handleHotspotsCommand, handleInspectCommand } from "./cli/inspect.js";
 import { handleMcpServeCommand } from "./cli/mcp.js";
+import { handleDumpmodCommand, handleGotoCommand, handleRefsCommand } from "./cli/navigation.js";
 import {
   isCliValueOption,
   parseCacheModeOption,
   parseNonNegativeIntegerOption,
   parseOptionalNonNegativeIntegerOption,
-  parseOptionalPositiveIntegerOption,
-  parsePositiveIntegerOption,
 } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
 import { handleReviewCommand } from "./cli/review.js";
@@ -68,7 +52,6 @@ import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from 
 import { buildSqlArtifactGraphFromFiles } from "./sql/index.js";
 import type { Graph } from "./types.js";
 import {
-  assertFilePathWithinRoot,
   listChangedFiles,
   listProjectFiles,
   normalizePath,
@@ -301,278 +284,6 @@ type ParsedCliArgs = {
   flags: Set<string>;
   options: Map<string, string[]>;
 };
-
-type IndexCacheMetadata = {
-  manifestPath: string;
-  updatedAt?: number;
-  lastCommit?: string;
-};
-
-type InspectReport = {
-  root: string;
-  includeRoots: string[];
-  indexCache?: IndexCacheMetadata;
-  backend: {
-    native: {
-      available: boolean;
-      loadError?: string;
-      supportedLanguageIds: string[];
-    };
-  };
-  files: {
-    total: number;
-    byLanguage: Record<string, number>;
-  };
-  hotspots: Array<{
-    file: string;
-    fanIn: number;
-    fanOut: number;
-    score: number;
-  }>;
-  unresolved: {
-    total: number;
-    top: Array<{ name: string; importerCount: number }>;
-  };
-  cycles: {
-    total: number;
-    top: Array<{
-      files: string[];
-      priorityScore: number;
-      size: number;
-    }>;
-  };
-  recommendedCommands: string[];
-};
-
-function normalizePathForDisplay(filePath: string): string {
-  return filePath.replace(/\\/g, "/");
-}
-
-type CliProjectFileInput =
-  | { status: "ok"; file: string }
-  | { status: "error"; reason: "outside_project_root"; error: string };
-
-function resolveCliProjectFile(projectRoot: string, fileArg: string, label: string): CliProjectFileInput {
-  try {
-    return {
-      status: "ok",
-      file: assertFilePathWithinRoot(projectRoot, fileArg, label),
-    };
-  } catch (error) {
-    return {
-      status: "error",
-      reason: "outside_project_root",
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
-function writeCliProjectFileError(
-  result: Extract<CliProjectFileInput, { status: "error" }>,
-  output: "json" | "text" = "json",
-): void {
-  if (output === "json") {
-    writeJSONLine(result);
-    return;
-  }
-  writeStdoutLine(`error: ${result.reason}: ${result.error}`);
-}
-
-function defaultCacheIndexPath(projectRoot: string): string {
-  return path.join(projectRoot, ".codegraph-cache", "index-v1");
-}
-
-function defaultCacheManifestPath(projectRoot: string): string {
-  return path.join(defaultCacheIndexPath(projectRoot), "manifest.json");
-}
-
-function readIndexCacheMetadata(projectRoot: string): IndexCacheMetadata | null {
-  const manifestPath = defaultCacheManifestPath(projectRoot);
-  try {
-    const raw = fs.readFileSync(manifestPath, "utf8");
-    const parsed = JSON.parse(raw) as {
-      updatedAt?: number;
-      lastCommit?: string;
-    };
-    return {
-      manifestPath: normalizePathForDisplay(manifestPath),
-      ...(typeof parsed.updatedAt === "number" ? { updatedAt: parsed.updatedAt } : {}),
-      ...(typeof parsed.lastCommit === "string" && parsed.lastCommit ? { lastCommit: parsed.lastCommit } : {}),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function formatIndexCacheMetadata(metadata: IndexCacheMetadata): string {
-  const updatedAt = metadata.updatedAt !== undefined ? new Date(metadata.updatedAt).toISOString() : "unknown";
-  const lastCommit = metadata.lastCommit ?? "unknown";
-  return `Index cache: manifest=${metadata.manifestPath} updatedAt=${updatedAt} lastCommit=${lastCommit}`;
-}
-
-async function buildScopedReportGraph(
-  projectRoot: string,
-  includeRoots: string[],
-  files: string[],
-  opts: {
-    cache?: "off" | "memory" | "disk";
-    discovery?: ProjectFileDiscoveryOptions;
-    graphOptions?: GraphBuildOptions;
-    nativeMode?: NativeRuntimeMode;
-    workerOpts?: { useNativeWorkers: true } | Record<string, never>;
-    progressHandler?: ((update: { current: number; total: number }) => void) | undefined;
-    report?: BuildReport;
-  },
-): Promise<{ graph: Graph; indexCache?: IndexCacheMetadata }> {
-  const useDiskCache = opts.cache === "disk" || opts.cache === undefined;
-  const indexCache = useDiskCache ? readIndexCacheMetadata(projectRoot) : null;
-  if (indexCache) {
-    writeStderrLine(formatIndexCacheMetadata(indexCache));
-    const index = await buildProjectIndexIncremental(projectRoot, {
-      files,
-      cache: "disk",
-      ...(opts.discovery ? { discovery: opts.discovery } : {}),
-      ...(opts.progressHandler ? { onProgress: opts.progressHandler } : {}),
-      ...(opts.nativeMode && opts.nativeMode !== "auto" ? { native: opts.nativeMode } : {}),
-      ...(opts.workerOpts ?? {}),
-      ...(opts.graphOptions ? { graph: opts.graphOptions } : {}),
-      ...(opts.report ? { report: opts.report } : {}),
-    });
-    return {
-      graph: restrictGraphToIncludeRoots(index.graph, includeRoots),
-      indexCache,
-    };
-  }
-
-  const sourceGraph = await collectGraph(projectRoot, files, {
-    ...(opts.graphOptions ?? {}),
-    ...(opts.report ? { report: opts.report } : {}),
-  });
-  return {
-    graph: restrictGraphToIncludeRoots(sourceGraph, includeRoots),
-  };
-}
-
-function countFilesByLanguage(files: Iterable<string>): Record<string, number> {
-  const byLanguage: Record<string, number> = {};
-  for (const file of files) {
-    const languageId = supportForFile(file)?.id ?? "other";
-    byLanguage[languageId] = (byLanguage[languageId] ?? 0) + 1;
-  }
-  return byLanguage;
-}
-
-function buildRecommendedInspectCommands(
-  projectRoot: string,
-  includeRoots: string[],
-  hasCycles: boolean,
-  hasUnresolvedImports: boolean,
-): string[] {
-  const rootFlag = `--root "${normalizePathForDisplay(projectRoot)}"`;
-  const targetSuffix = includeRoots.length
-    ? ` ${includeRoots.map((root) => `"${normalizePathForDisplay(root)}"`).join(" ")}`
-    : "";
-  const commands = [
-    `codegraph hotspots ${rootFlag}${targetSuffix} --limit 20 --json`,
-    `codegraph graph ${rootFlag}${targetSuffix} --json --symbols-detailed --compact-json`,
-  ];
-  if (hasUnresolvedImports) {
-    commands.push(`codegraph unresolved ${rootFlag}${targetSuffix} --json`);
-  }
-  if (hasCycles) {
-    commands.push(`codegraph cycles ${rootFlag}${targetSuffix} --sort priority --json`);
-  }
-  commands.push(`codegraph doctor "${normalizePathForDisplay(defaultCacheIndexPath(projectRoot))}"`);
-  return commands;
-}
-
-function restrictGraphToIncludeRoots(graph: Graph, includeRoots: string[]): Graph {
-  if (!includeRoots.length) {
-    return graph;
-  }
-  const normalizedRoots = includeRoots.map(normalizePathForDisplay);
-  const nodes = new Set<string>();
-  for (const file of graph.nodes) {
-    const normalizedFile = normalizePathForDisplay(file);
-    if (normalizedRoots.some((root) => normalizedFile === root || normalizedFile.startsWith(`${root}/`))) {
-      nodes.add(normalizedFile);
-    }
-  }
-  const edges = graph.edges.filter((edge) => {
-    if (!nodes.has(normalizePathForDisplay(edge.from))) {
-      return false;
-    }
-    return edge.to.type === "external" || nodes.has(normalizePathForDisplay(edge.to.path));
-  });
-  return {
-    nodes,
-    edges,
-  };
-}
-
-async function buildInspectReport(
-  projectRoot: string,
-  includeRoots: string[],
-  files: string[],
-  discovery: ProjectFileDiscoveryOptions,
-  graphOptions: GraphBuildOptions | undefined,
-  cache: "off" | "memory" | "disk" | undefined,
-  nativeMode: NativeRuntimeMode,
-  workerOpts: { useNativeWorkers: true } | Record<string, never>,
-  progressHandler: ((update: { current: number; total: number }) => void) | undefined,
-  limit: number,
-): Promise<InspectReport> {
-  const { graph, indexCache } = await buildScopedReportGraph(projectRoot, includeRoots, files, {
-    ...(cache ? { cache } : {}),
-    discovery,
-    ...(graphOptions ? { graphOptions } : {}),
-    nativeMode,
-    workerOpts,
-    ...(progressHandler ? { progressHandler } : {}),
-  });
-  const hotspots = getHotspots(graph, { limit });
-  const unresolved = getUnresolvedImports(graph, { projectRoot });
-  const cycles = sortDetailedCycles(findDetailedCycles(graph), "priority");
-  const loadError = getNativeTreeSitterLoadError(nativeMode);
-  return {
-    root: normalizePathForDisplay(projectRoot),
-    includeRoots: includeRoots.map(normalizePathForDisplay),
-    ...(indexCache ? { indexCache } : {}),
-    backend: {
-      native: {
-        available: isNativeTreeSitterAvailable(nativeMode),
-        ...(loadError ? { loadError: String(loadError) } : {}),
-        supportedLanguageIds: getNativeTreeSitterSupportedLanguageIds(nativeMode),
-      },
-    },
-    files: {
-      total: files.length,
-      byLanguage: countFilesByLanguage(files),
-    },
-    hotspots,
-    unresolved: {
-      total: unresolved.length,
-      top: unresolved.slice(0, limit).map((entry) => ({
-        name: entry.name,
-        importerCount: entry.importers.length,
-      })),
-    },
-    cycles: {
-      total: cycles.length,
-      top: cycles.slice(0, limit).map((cycle) => ({
-        files: cycle.files.map(normalizePathForDisplay),
-        priorityScore: cycle.priorityScore,
-        size: cycle.files.length,
-      })),
-    },
-    recommendedCommands: buildRecommendedInspectCommands(
-      projectRoot,
-      includeRoots,
-      !!cycles.length,
-      !!unresolved.length,
-    ),
-  };
-}
 
 function parseCliArgs(command: string, tokens: string[]): ParsedCliArgs {
   const positionals: string[] = [];
@@ -1407,228 +1118,95 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "index") {
-    const verbose = hasFlag("--verbose");
-    const commandReport: CommandReport | undefined = reportEnabled ? { command: "index", timings: {} } : undefined;
-    const commandStart = performance.now();
-    const resolveStart = performance.now();
-    const files = await resolveFiles();
-    if (commandReport) {
-      commandReport.timings.resolveFilesMs = Math.round(performance.now() - resolveStart);
-    }
-    const threads = parseNonNegativeIntegerOption(getOpt("--threads"), "--threads", 0);
-    const cache = parseCacheModeOption(getOpt("--cache"));
-    const cacheStrict = hasFlag("--cache-strict");
-    const full = hasFlag("--json") || hasFlag("--full");
-    const cacheVerify = hasFlag("--cache-verify");
-    const shouldWriteManifest = !includeRootsAbs.length && !gitBase && !changedSince;
-    const graphOptions = hasGraphOverrides ? buildGraphOptions() : undefined;
-    const indexReport: BuildReport | undefined = reportEnabled || verbose ? { timings: {} } : undefined;
-    if (commandReport && indexReport) {
-      commandReport.index = indexReport;
-    }
-    const baseIndexOptions: BuildOptions = {
-      onProgress: progressHandler,
-      threads,
-      discovery: discoveryOptions,
-      ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
-      ...workerOpts,
-      ...(cache !== undefined ? { cache } : {}),
-      cacheStrict,
-      cacheVerify,
-      ...(graphOptions ? { graph: graphOptions } : {}),
-      ...(indexReport ? { report: indexReport } : {}),
-    };
-    const index = shouldWriteManifest
-      ? await buildProjectIndex(projectRootFs, baseIndexOptions)
-      : await buildProjectIndexFromFiles(projectRootFs, files, baseIndexOptions);
-    maybeWriteNativeBackendStatus(indexReport, showProgress);
-    if (full) {
-      const modules = [...index.byFile.values()].map((m) => ({
-        file: m.file,
-        locals: m.locals.map((l) => ({
-          name: l.localName,
-          kind: l.kind,
-          start: l.range.start,
-        })),
-        exports: m.exports,
-        imports: m.imports,
-      }));
-      writeJSONLine({
-        files: modules.length,
-        edges: index.graph.edges.length,
-        modules,
-      });
-    } else {
-      writeJSONLine({
-        files: [...index.byFile.keys()].length,
-        edges: index.graph.edges.length,
-      });
-    }
-    if (verbose && indexReport) {
-      const cache = indexReport.cache;
-      const fileStats = indexReport.files;
-      if (cache) {
-        writeStderrLine(`Cache (${cache.mode}): ${cache.hits} hits, ${cache.misses} misses`);
-      }
-      if (fileStats) {
-        writeStderrLine(
-          `Files: ${fileStats.parsed ?? 0} parsed, ${fileStats.cached ?? 0} cached, ${fileStats.total} total`,
-        );
-      }
-    }
-    if (commandReport) {
-      commandReport.timings.commandMs = Math.round(performance.now() - commandStart);
-      commandReport.timings.totalMs = commandReport.timings.commandMs;
-      await writeCommandReport(commandReport, reportFile);
-    }
+    await handleIndexCommand({
+      projectRootFs,
+      includeRootsAbs,
+      gitBase,
+      changedSince,
+      discoveryOptions,
+      nativeMode,
+      workerOpts,
+      progressHandler,
+      graphOptions: hasGraphOverrides ? buildGraphOptions() : undefined,
+      reportEnabled,
+      reportFile,
+      getOpt,
+      hasFlag,
+      resolveFiles,
+      writeJSONLine,
+      writeStderrLine,
+      writeCommandReport,
+      maybeWriteNativeBackendStatus,
+      showProgress,
+    });
     return;
   }
 
   if (cmd === "dumpmod") {
-    const [fileArg] = parsed.positionals;
-    if (!fileArg) {
-      writeStderrLine("Usage: dumpmod <file>");
-      exitCli(2);
-    }
-    const resolvedFile = resolveCliProjectFile(projectRootFs, fileArg, "File");
-    if (resolvedFile.status === "error") {
-      writeCliProjectFileError(resolvedFile);
-      return;
-    }
-    const file = resolvedFile.file;
-    const index = await buildProjectIndex(projectRootFs, {
-      onProgress: progressHandler,
-      discovery: discoveryOptions,
-      ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
-      ...workerOpts,
-    });
-    const mod = index.byFile.get(file);
-    if (!mod) {
-      writeJSONLine({
-        status: "not_found",
-        reason: "Module not indexed",
-        file,
-      });
-      return;
-    }
-    writeJSONLine({
-      file,
-      locals: mod.locals.map((l) => ({
-        name: l.localName,
-        kind: l.kind,
-        start: l.range.start,
-      })),
-      exports: mod.exports.map((e) =>
-        e.type === "local"
-          ? {
-              type: e.type,
-              exportedAs: e.exportedAs,
-              def: {
-                name: e.target.localName,
-                kind: e.target.kind,
-                start: e.target.range.start,
-              },
-            }
-          : e,
-      ),
-      imports: mod.imports,
+    await handleDumpmodCommand({
+      projectRootFs,
+      discoveryOptions,
+      positionals: parsed.positionals,
+      getOpt,
+      hasFlag,
+      nativeMode,
+      workerOpts,
+      progressHandler,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
     });
     return;
   }
 
   if (cmd === "goto") {
-    const [fileArg, lineArg, colArg] = parsed.positionals;
-    if (!fileArg || !lineArg || !colArg) {
-      writeStderrLine("Usage: goto <file> <line> <column>");
-      exitCli(2);
-    }
-    const resolvedFile = resolveCliProjectFile(projectRootFs, fileArg, "File");
-    if (resolvedFile.status === "error") {
-      writeCliProjectFileError(resolvedFile);
-      return;
-    }
-    const file = resolvedFile.file;
-    const line = parsePositiveIntegerOption(lineArg, "line", 1);
-    const column = parsePositiveIntegerOption(colArg, "column", 1);
-    const index = await buildProjectIndex(projectRootFs, {
-      onProgress: progressHandler,
-      discovery: discoveryOptions,
-      ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
-      ...workerOpts,
+    await handleGotoCommand({
+      projectRootFs,
+      discoveryOptions,
+      positionals: parsed.positionals,
+      getOpt,
+      hasFlag,
+      nativeMode,
+      workerOpts,
+      progressHandler,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
     });
-    const res = await goToDefinition(index, { file, line, column });
-    writeJSONLine(res);
     return;
   }
 
   if (cmd === "refs") {
-    const fileArg = getOpt("--file");
-    const lineArg = getOpt("--line");
-    const colArg = getOpt("--col") ?? getOpt("--column");
-    if (!fileArg || !lineArg || !colArg) {
-      writeStderrLine("Usage: refs --file <file> --line <line> --col <column>");
-      exitCli(2);
-    }
-    const line = parsePositiveIntegerOption(lineArg, "--line", 1);
-    const column = parsePositiveIntegerOption(colArg, "--col", 1);
-    const pretty = hasFlag("--pretty");
-    const resolvedFile = resolveCliProjectFile(projectRootFs, fileArg, "File");
-    if (resolvedFile.status === "error") {
-      writeCliProjectFileError(resolvedFile, pretty ? "text" : "json");
-      return;
-    }
-    const file = resolvedFile.file;
-    const index = await buildProjectIndex(projectRootFs, {
-      onProgress: progressHandler,
-      discovery: discoveryOptions,
-      ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
-      ...workerOpts,
+    await handleRefsCommand({
+      projectRootFs,
+      discoveryOptions,
+      positionals: parsed.positionals,
+      getOpt,
+      hasFlag,
+      nativeMode,
+      workerOpts,
+      progressHandler,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
     });
-    const res = await findReferences(index, { file, line, column });
-    if (!pretty) {
-      writeJSONLine(res);
-      return;
-    }
-    if (res.status === "ok") {
-      for (const r of res.references) {
-        const rel = path.relative(projectRootFs, r.file);
-        const { line, column } = r.range.start;
-        writeStdoutLine(`${rel}:${line}:${column}`);
-      }
-    } else {
-      writeStdoutLine(`not_found: ${res.reason}`);
-    }
     return;
   }
 
   if (cmd === "grep") {
-    const querySource = getOpt("--query");
-    const patternSource = getOpt("--pattern") ?? getOpt("--regex");
-    const globs = parsed.options.get("--glob") ?? [];
-    const patterns = globs.length ? globs : undefined;
-
-    if ((querySource ? 1 : 0) + (patternSource ? 1 : 0) !== 1) {
-      writeStderrLine(
-        "Usage: grep [--root <dir>] (--query '<treesitter query>' | --pattern '<regex>') [--glob '<glob>'] [--ignore-case] [--max-hits N]",
-      );
-      exitCli(2);
-    }
-
-    if (querySource) {
-      const hits = await astGrep(projectRootFs, querySource, patterns, discoveryOptions);
-      writeJSONLine(hits);
-      return;
-    }
-
-    const ignoreCase = hasFlag("--ignore-case") || hasFlag("-i");
-    const maxHitsRaw = getOpt("--max-hits");
-    const maxHits = parseOptionalPositiveIntegerOption(maxHitsRaw, "--max-hits");
-    const hits = await textGrep(projectRootFs, patternSource!, patterns, {
-      ignoreCase,
-      ...(maxHits !== undefined ? { maxHits } : {}),
-      ...discoveryOptions,
+    await handleGrepCommand({
+      projectRootFs,
+      discoveryOptions,
+      parsedOptions: parsed.options,
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStderrLine,
+      exit: exitCli,
     });
-    writeJSONLine(hits);
     return;
   }
 
@@ -1737,50 +1315,40 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "inspect") {
-    const cache = parseCacheModeOption(getOpt("--cache"));
-    const limit = parsePositiveIntegerOption(getOpt("--limit"), "--limit", 20);
-    const files = await resolveFilesFromRoots();
-    const report = await buildInspectReport(
+    await handleInspectCommand({
       projectRootFs,
       includeRootsAbs,
-      files,
       discoveryOptions,
-      hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined,
-      cache,
+      graphOptions: hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined,
       nativeMode,
       workerOpts,
       progressHandler,
-      limit,
-    );
-    writeJSONLine(report);
+      getOpt,
+      hasFlag,
+      resolveFilesFromRoots,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+    });
     return;
   }
 
   if (cmd === "hotspots") {
-    const json = hasFlag("--json");
-    const cache = parseCacheModeOption(getOpt("--cache"));
-    const limit = parsePositiveIntegerOption(getOpt("--limit"), "--limit", 20);
-    const files = await resolveFilesFromRoots();
-    const { graph } = await buildScopedReportGraph(projectRootFs, includeRootsAbs, files, {
-      ...(cache ? { cache } : {}),
-      discovery: discoveryOptions,
-      ...(hasGraphOverrides || nativeMode !== "auto" ? { graphOptions: buildGraphOptions() } : {}),
+    await handleHotspotsCommand({
+      projectRootFs,
+      includeRootsAbs,
+      discoveryOptions,
+      graphOptions: hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined,
       nativeMode,
       workerOpts,
-      ...(progressHandler ? { progressHandler } : {}),
+      progressHandler,
+      getOpt,
+      hasFlag,
+      resolveFilesFromRoots,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
     });
-    const hotspots = getHotspots(graph, { limit });
-
-    if (json) {
-      writeJSONLine(hotspots);
-    } else {
-      writeStdoutLine("Top hotspots (files with high fan-in/out):");
-      for (const item of hotspots) {
-        writeStdoutLine(
-          `- ${path.relative(projectRootFs, item.file)} (fan-in: ${item.fanIn}, fan-out: ${item.fanOut}, score: ${item.score.toFixed(1)})`,
-        );
-      }
-    }
     return;
   }
 
