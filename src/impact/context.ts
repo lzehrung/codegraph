@@ -69,7 +69,7 @@ function collectFileSubgraph(
   const visited = new Set<FileId>();
   const queue: Array<{ file: FileId; depth: number }> = [];
   const adjacency = index.graphAdjacency ?? buildGraphAdjacency(index.graph);
-  const typeOnlyByEdge = new Map<string, boolean | undefined>();
+  const typeOnlyByPair = new Map<string, { allTypeOnly: boolean; hasTypeOnlyMetadata: boolean }>();
 
   // Initialize with impacted files
   for (const file of impactedFiles) {
@@ -80,7 +80,11 @@ function collectFileSubgraph(
 
   for (const edge of index.graph.edges) {
     if (edge.to.type === "file") {
-      typeOnlyByEdge.set(`${edge.from}\0${edge.to.path}`, edge.typeOnly);
+      const key = `${edge.from}\0${edge.to.path}`;
+      const current = typeOnlyByPair.get(key) ?? { allTypeOnly: true, hasTypeOnlyMetadata: false };
+      current.allTypeOnly = current.allTypeOnly && edge.typeOnly === true;
+      current.hasTypeOnlyMetadata = current.hasTypeOnlyMetadata || edge.typeOnly !== undefined;
+      typeOnlyByPair.set(key, current);
     }
   }
 
@@ -98,7 +102,7 @@ function collectFileSubgraph(
         nodes.add(dep);
         queue.push({ file: dep, depth: depth + 1 });
       }
-      edges.push(edgeFor(file, dep, typeOnlyByEdge));
+      edges.push(edgeFor(file, dep, typeOnlyByPair));
     }
 
     // Add reverse dependencies (files that depend on this file)
@@ -109,7 +113,7 @@ function collectFileSubgraph(
         nodes.add(revDep);
         queue.push({ file: revDep, depth: depth + 1 });
       }
-      edges.push(edgeFor(revDep, file, typeOnlyByEdge));
+      edges.push(edgeFor(revDep, file, typeOnlyByPair));
     }
   }
 
@@ -119,10 +123,12 @@ function collectFileSubgraph(
 function edgeFor(
   from: FileId,
   to: FileId,
-  typeOnlyByEdge: ReadonlyMap<string, boolean | undefined>,
+  typeOnlyByPair: ReadonlyMap<string, { allTypeOnly: boolean; hasTypeOnlyMetadata: boolean }>,
 ): { from: FileId; to: FileId; typeOnly?: boolean } {
-  const typeOnly = typeOnlyByEdge.get(`${from}\0${to}`);
-  return typeOnly !== undefined ? { from, to, typeOnly } : { from, to };
+  const typeOnly = typeOnlyByPair.get(`${from}\0${to}`);
+  if (!typeOnly) return { from, to };
+  if (typeOnly.allTypeOnly) return { from, to, typeOnly: true };
+  return typeOnly.hasTypeOnlyMetadata ? { from, to, typeOnly: false } : { from, to };
 }
 
 async function collectSymbolNeighbors(

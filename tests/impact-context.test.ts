@@ -6,6 +6,8 @@ import { collectImpactContext, listCandidateTestFiles } from "../src/impact/inde
 import { createTestIndex } from "./test-utils.js";
 import { buildProjectIndex, buildProjectIndexFromFiles } from "../src/index.js";
 import { normalizePath } from "../src/util.js";
+import type { ProjectIndex } from "../src/indexer.js";
+import type { Edge } from "../src/types.js";
 
 describe("Impact Context Collection", () => {
   describe("collectImpactContext", () => {
@@ -66,6 +68,30 @@ describe("Impact Context Collection", () => {
       expect(context.fileSubgraph.edges.length).toBe(0);
       expect(context.symbolNeighbors.length).toBe(0);
       expect(context.neighborFiles.size).toBe(0);
+    });
+
+    it("marks a file-pair edge as type-only only when all matching graph edges are type-only", async () => {
+      const sourceFile = "/repo/src/source.ts";
+      const targetFile = "/repo/src/types.ts";
+      const edges: Edge[] = [
+        { from: sourceFile, to: { type: "file", path: targetFile }, raw: "./types", typeOnly: true },
+        { from: sourceFile, to: { type: "file", path: targetFile }, raw: "./types-runtime", typeOnly: false },
+      ];
+      const index: ProjectIndex = {
+        graph: {
+          nodes: new Set([sourceFile, targetFile]),
+          edges,
+        },
+        modules: new Map(),
+        byFile: new Map(),
+        exportCache: new Map(),
+        scopeCache: new Map(),
+      };
+
+      const context = await collectImpactContext(index, [sourceFile], [], 1);
+      const edge = context.fileSubgraph.edges.find((entry) => entry.from === sourceFile && entry.to === targetFile);
+
+      expect(edge?.typeOnly).toBe(false);
     });
 
     it("should collect symbol neighbors with correct relationships", async () => {

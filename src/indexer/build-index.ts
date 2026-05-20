@@ -476,7 +476,7 @@ function ensureJsonModule(modules: Map<FileId, ModuleIndex>, filePath: string): 
 }
 
 function graphEdgeKey(edge: Edge): string {
-  const target = edge.to.type === "file" ? edge.to.path : edge.to.name;
+  const target = edge.to.type === "file" ? `file:${edge.to.path}` : `external:${edge.to.name}`;
   return `${edge.from}::${target}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`;
 }
 
