@@ -214,5 +214,11 @@ function unavailableSyntaxTreeExecution(
 }
 
 function nativeError(state: Extract<NativeBindingState, { loaded: false }>): { error?: string } {
-  return state.error ? { error: state.error instanceof Error ? state.error.message : stringifyUnknown(state.error) } : {};
+  if (!state.error) {
+    return {};
+  }
+  if (state.error instanceof Error) {
+    return { error: state.error.message };
+  }
+  return { error: stringifyUnknown(state.error) };
 }
