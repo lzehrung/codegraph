@@ -184,7 +184,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Correctness opportunity: manifest parsing overlaps with project-file discovery but uses separate parsing rules; extracting parser units makes it easier to align dependency detection with discovery fixtures and language parity claims.
   - Tests: unresolved import classification for Node, Python, Ruby, Go, Rust, Zig, Java/Kotlin, .NET, C/C++, Swift, Composer, nested manifests, VCS boundaries, and cache reset/stats.
 
-- [ ] Separate graph query parsing and traversal execution from SQLite query dispatch.
+- [x] Separate graph query parsing and traversal execution from SQLite query dispatch.
   - `src/query.ts`, `src/graphs/queries.ts`, `src/cli/graphQueries.ts`, and `src/sqlite.ts` each participate in graph-query parsing, graph traversal, result bounding, cycle detail construction, and canned SQL-backed query dispatch.
   - Suggested fix: introduce a typed query AST/parser module and execution modules for in-memory graph queries and SQLite-backed canned queries. Reuse traversal helpers for neighbors, shortest paths, reverse dependencies, cycles, and unresolved imports.
   - Performance opportunity: `querySymbolNeighbors()` builds incoming/outgoing maps per call and then scans all edges again to materialize results; reusable adjacency indexes would help interactive agents and CLI graph queries on large symbol graphs.
