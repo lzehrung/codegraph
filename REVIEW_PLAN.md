@@ -166,7 +166,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Correctness opportunity: include-test and ignore-glob policy is rebuilt across direct and transitive phases; one context would keep filtering and diagnostics consistent as new impact reasons are added.
   - Tests: direct refs with `maxRefs`, ignored/test refs, file-level changes, transitive depth/type-only edges, diagnostics counters, streaming partial items, and severity weight overrides.
 
-- [ ] Centralize build-cache option normalization, manifest comparison, and reports.
+- [x] Centralize build-cache option normalization, manifest comparison, and reports.
   - `src/indexer/build-cache.ts` is 807 lines and mixes workspace manifest edges, memory/disk module cache, file signatures, fallback extraction reports, manifest IO, build-option summaries, diffing, and graph-option equality.
   - Suggested fix: split cache option normalization/equality into `indexer/build-cache/options.ts`, manifest IO/verification into `manifest.ts`, module cache read/write into `module-cache.ts`, and report shaping into `reports.ts`.
   - Correctness opportunity: the same normalized option shapes drive manifest writes, manifest diffs, and graph-option equality; a single typed comparer would reduce false rebuilds and missed rebuilds when discovery or graph options change.
