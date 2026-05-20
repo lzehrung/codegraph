@@ -34,6 +34,37 @@ const index = await buildProjectIndex(root, {
 });
 ```
 
+## Public API Boundary
+
+The npm package exposes one supported entry point: `@lzehrung/codegraph`.
+Do not import from generated paths such as `@lzehrung/codegraph/dist/...` or
+repo-internal source paths. Those modules are implementation details and can
+move during refactors.
+
+The root entry point is intentionally broad today for compatibility. Treat it
+as three groups:
+
+- Public-stable APIs are the documented integration surface: indexing and
+  navigation (`buildProjectIndex`, `buildProjectIndexIncremental`,
+  `goToDefinition`, `findReferences`, symbol handles, graph builders and
+  renderers), impact and review reports, sessions, agent search/explain/artifact
+  helpers, MCP handlers, SQLite helpers, SQL artifact APIs, chunking, config,
+  language metadata, and native runtime capability checks.
+- Public-legacy APIs remain exported for existing callers but are lower-level
+  building blocks. This includes parser-facing helpers such as `parseFile`,
+  `collectImportsForFile`, `collectLocalsAndExportsFromSource`,
+  `buildScopeIndexFromSource`, selected shared utilities, lazy symbol wrappers,
+  symbol hashing helpers, and partial-result helpers. New integrations should
+  prefer the documented higher-level APIs unless they specifically need these
+  shapes.
+- Internal-only modules are anything outside the root package export. They are
+  not covered by semver, even when their generated declaration files exist in
+  `dist/`.
+
+Future API narrowing should happen by first documenting replacements, then
+adding explicit subpath exports or deprecation notes before removing root
+compatibility exports.
+
 ## Agent search
 
 `searchCodegraph()` builds a project snapshot and returns deterministic, agent-ready anchors across files, symbols, chunks, SQL objects, and optional graph neighborhoods. Handles are project-relative and explainable; large result packets include `resultCount`, `totalCandidates`, `limits`, and `omittedCounts`.

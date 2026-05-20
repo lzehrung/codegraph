@@ -469,6 +469,23 @@ describe("package metadata", () => {
     }
   });
 
+  it("keeps the public API boundary documented around the root package export", () => {
+    const rootPackage = readJson("package.json");
+    const rootExports = rootPackage.exports;
+    expect(rootExports).toBeDefined();
+    expect(Object.keys(rootExports as Record<string, unknown>).sort()).toEqual(["."]);
+
+    const libraryApi = readText("docs/library-api.md");
+    expect(libraryApi).toContain("## Public API Boundary");
+    expect(libraryApi).toContain("Public-stable APIs");
+    expect(libraryApi).toContain("Public-legacy APIs");
+    expect(libraryApi).toContain("Internal-only modules");
+    expect(libraryApi).toContain("@lzehrung/codegraph/dist/...");
+
+    const readme = readText("README.md");
+    expect(readme).toContain("./docs/library-api.md#public-api-boundary");
+  });
+
   it("scopes streaming summary mode to the streaming API type", () => {
     const impactTypes = readText("src/impact/types.ts");
     const streamingSource = readText("src/impact/streaming.ts");

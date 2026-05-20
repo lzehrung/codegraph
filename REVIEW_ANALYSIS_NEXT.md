@@ -95,7 +95,7 @@ No dependency cycles were reported. The highest remaining concentration is in:
   - Target: implementation modules import direct leaf modules unless they are intentionally using a stable domain facade.
   - Add or extend package metadata/source-structure tests to prevent imports through the root public API and to limit broad internal barrel usage where practical.
 
-- [ ] Audit the public root API in `src/index.ts`.
+- [x] Audit the public root API in `src/index.ts`.
   - Finding: package exports only `"."`, while `src/index.ts` reexports a very broad surface of build, graph, impact, session, agent, MCP, SQLite, chunking, language, and utility APIs.
   - Target: classify exports as public-stable, public-legacy, or internal-only. Deprecate or move internal-only exports behind narrower subpath exports in a planned major/minor-compatible way.
   - Update `docs/library-api.md`, `README.md`, and package metadata tests when the public contract changes.
@@ -145,7 +145,7 @@ No dependency cycles were reported. The highest remaining concentration is in:
   - Explain `--root`, positional include roots, config `ignoreGlobs`, `--include-glob`, `--ignore-glob`, gitignore handling, and cache reuse.
   - Update `docs/cli.md` and `codegraph-skill/codegraph/SKILL.md` if command behavior or examples change.
 
-- [ ] Document public API boundaries before shrinking exports.
+- [x] Document public API boundaries before shrinking exports.
   - Add a short public/internal API section to `docs/library-api.md`.
   - Note which barrels are stable entry points and which modules are implementation details.
 
