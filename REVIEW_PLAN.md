@@ -178,7 +178,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Correctness opportunity: document specifier normalization should match graph-only edge extraction, chunking, and source-style imports for mixed formats like MDX/Astro/SFC files.
   - Tests: Markdown reference/inline links, MDX/Astro/Handlebars imports, RST toctrees/targets, AsciiDoc xref/include/link forms, HTML `srcset`/inline scripts, CSS-style URLs, and chunk splitting/merge behavior.
 
-- [ ] Split external dependency classification into manifest parsers, stdlib tables, and context lookup.
+- [x] Split external dependency classification into manifest parsers, stdlib tables, and context lookup.
   - `src/graphs/external-classifier.ts` is 743 lines and contains large stdlib tables, manifest parsers for many ecosystems, ancestor-boundary search, package-name matching, caches, and final external classification.
   - Suggested fix: move ecosystem manifest readers into `graphs/external/manifests.ts`, stdlib/module tables into `stdlib.ts`, context/ancestor lookup into `context.ts`, and leave `classifyExternalSpecifier()` as a small coordinator.
   - Correctness opportunity: manifest parsing overlaps with project-file discovery but uses separate parsing rules; extracting parser units makes it easier to align dependency detection with discovery fixtures and language parity claims.
