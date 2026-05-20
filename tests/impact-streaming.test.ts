@@ -9,6 +9,7 @@ import {
   type ImpactStreamChunk,
   type ImpactStreamSummaryReport,
 } from "../src/impact/index.js";
+import { impactItemEmissionKey } from "../src/impact/streaming.js";
 import { buildProjectIndex } from "../src/index.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -39,6 +40,36 @@ async function firstStreamError(stream: AsyncGenerator<ImpactStreamChunk>): Prom
 }
 
 describe("Impact streaming", () => {
+  it("keeps type-only status in impact item emission dedupe keys", () => {
+    const baseItem = {
+      file: "src/consumer.ts",
+      symbols: ["helper"],
+      reasons: ["transitive" as const],
+      severity: 0.3,
+      depth: 1,
+      confidence: 0.5,
+    };
+
+    const runtimeKey = impactItemEmissionKey(
+      {
+        ...baseItem,
+        typeOnly: false,
+        explain: { reason: "transitive", depth: 1, typeOnly: false },
+      },
+      true,
+    );
+    const typeOnlyKey = impactItemEmissionKey(
+      {
+        ...baseItem,
+        typeOnly: true,
+        explain: { reason: "transitive", depth: 1, typeOnly: true },
+      },
+      true,
+    );
+
+    expect(typeOnlyKey).not.toBe(runtimeKey);
+  });
+
   it("matches analyzeImpactFromDiff results", async () => {
     const root = path.resolve(process.cwd(), "tests", "samples", "typescript");
     const index = await buildProjectIndex(root);

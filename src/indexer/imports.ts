@@ -49,6 +49,8 @@ import type { LanguageSupport } from "../languages.js";
 import type { JsLanguage } from "../languages/types.js";
 import type { ImportBinding } from "./types.js";
 
+type ResolvedImportTarget = Exclude<ImportBinding["resolved"], undefined>;
+
 function parseObjectPatternBindings(patternText: string): Array<{ imported: string; local: string }> {
   const trimmed = patternText.trim();
   if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return [];
@@ -587,17 +589,105 @@ export async function collectImportsForFile(
       ? await loadNearestTsconfigFor(file, opts?.logLevel)
       : undefined;
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
+  const resolvedImportCache = new Map<string, Promise<ResolvedImportTarget>>();
 
-  const resolveFrom = async (from: string, phpImportType?: "class" | "function" | "const") => {
+  const resolveFrom = async (
+    from: string,
+    phpImportType?: "class" | "function" | "const",
+  ): Promise<ResolvedImportTarget> => {
+    const cacheKey = `${from}\0${phpImportType ?? ""}`;
+    const cached = resolvedImportCache.get(cacheKey);
+    if (cached) return await cached;
     const resolutionHints = opts?.graphOptions?.resolutionHints;
-    const resolved = await resolveImportSpecifier(projectRoot, file, from, resolvedSup.id, {
-      ...(tsCfg?.matchPath ? { matchPath: tsCfg.matchPath } : {}),
-      ...(workspaceConfig ? { workspaceConfig } : {}),
-      resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
-      ...(resolutionHints ? { resolutionHints } : {}),
-      ...(phpImportType ? { phpImportType } : {}),
-    });
-    return typeof resolved === "string" ? resolved.replace(/\\/g, "/") : resolved;
+    const resolved = (async (): Promise<ResolvedImportTarget> => {
+      const result = await resolveImportSpecifier(projectRoot, file, from, resolvedSup.id, {
+        ...(tsCfg?.matchPath ? { matchPath: tsCfg.matchPath } : {}),
+        ...(workspaceConfig ? { workspaceConfig } : {}),
+        resolveNodeModules: !!opts?.graphOptions?.resolveNodeModules,
+        ...(resolutionHints ? { resolutionHints } : {}),
+        ...(phpImportType ? { phpImportType } : {}),
+      });
+      return typeof result === "string" ? result.replace(/\\/g, "/") : result;
+    })();
+    resolvedImportCache.set(cacheKey, resolved);
+    return await resolved;
+  };
+  const appendImplicitImportBinding = (args: {
+    from: string;
+    resolved: ResolvedImportTarget;
+    typeOnly: boolean;
+    stmtText: string;
+    alias?: string;
+    wildcard?: boolean;
+  }): void => {
+    const { from, resolved, typeOnly, stmtText, alias, wildcard } = args;
+    if (resolvedSup.id === "java") {
+      const parts = from.split(".");
+      const last = parts[parts.length - 1];
+      if (last === "*") {
+        imports.push({ kind: "star", from, resolved, typeOnly });
+      } else if (last && /^[A-Z]/.test(last)) {
+        imports.push({ kind: "named", local: last, imported: last, from, resolved, typeOnly });
+      }
+    } else if (resolvedSup.id === "csharp") {
+      if (alias) {
+        const fromParts = from.split(".");
+        const imported = fromParts[fromParts.length - 1] ?? alias;
+        imports.push({ kind: "named", local: alias, imported, from, resolved, typeOnly });
+      } else {
+        imports.push({ kind: "star", from, resolved, typeOnly });
+      }
+    } else if (resolvedSup.id === "ruby") {
+      imports.push({ kind: "star", from, resolved });
+    } else if (resolvedSup.id === "go") {
+      if (alias) {
+        if (alias === "_") return;
+        if (alias === ".") {
+          imports.push({ kind: "star", from, resolved });
+          return;
+        }
+        imports.push({ kind: "namespace", localNS: alias, from, resolved });
+      } else {
+        const parts = from.replace(/"/g, "").split("/");
+        const last = parts[parts.length - 1];
+        if (last) imports.push({ kind: "namespace", localNS: last, from, resolved });
+      }
+    } else if (resolvedSup.id === "rust") {
+      if (stmtText.startsWith("mod ")) {
+        imports.push({ kind: "namespace", localNS: from, from, resolved });
+      } else {
+        const parts = from.split("::");
+        const last = parts[parts.length - 1];
+        if (!last) return;
+        if (last === "*") {
+          imports.push({ kind: "star", from, resolved });
+        } else {
+          imports.push({ kind: "named", local: last, imported: last, from, resolved });
+        }
+      }
+    } else if (resolvedSup.id === "kotlin") {
+      if (wildcard || from.endsWith(".*")) {
+        imports.push({ kind: "star", from, resolved, typeOnly });
+      } else {
+        const parts = from.split(".");
+        const imported = parts[parts.length - 1];
+        if (imported) imports.push({ kind: "named", local: alias ?? imported, imported, from, resolved, typeOnly });
+      }
+    } else if (resolvedSup.id === "swift") {
+      const parts = from.split(".");
+      const last = parts[parts.length - 1];
+      if (!last) return;
+      if (parts.length === 1) {
+        imports.push({ kind: "namespace", localNS: last, from, resolved, typeOnly });
+        imports.push({ kind: "star", from, resolved, typeOnly });
+      } else {
+        imports.push({ kind: "named", local: last, imported: last, from, resolved, typeOnly });
+      }
+    } else if (resolvedSup.id === "zig") {
+      if (alias) imports.push({ kind: "namespace", localNS: alias, from, resolved, typeOnly });
+    } else if (resolvedSup.id === "c" || resolvedSup.id === "cpp") {
+      imports.push({ kind: "star", from, resolved, typeOnly });
+    }
   };
 
   const runFallback = async () => {
@@ -807,149 +897,14 @@ export async function collectImportsForFile(
         }
 
         if (!caps["def"] && !caps["ns"] && !inames.length && !patterns.length) {
-          if (resolvedSup.id === "java") {
-            const parts = from.split(".");
-            const last = parts[parts.length - 1];
-            if (last === "*") {
-              imports.push({ kind: "star", from, resolved, typeOnly });
-            } else if (last && /^[A-Z]/.test(last)) {
-              imports.push({
-                kind: "named",
-                local: last,
-                imported: last,
-                from,
-                resolved,
-                typeOnly,
-              });
-            }
-          } else if (resolvedSup.id === "csharp") {
-            if (caps["alias"]) {
-              const alias = caps["alias"].text;
-              const fromParts = from.split(".");
-              const imported = fromParts[fromParts.length - 1] ?? alias;
-              imports.push({
-                kind: "named",
-                local: alias,
-                imported,
-                from,
-                resolved,
-                typeOnly,
-              });
-            } else {
-              imports.push({ kind: "star", from, resolved, typeOnly });
-            }
-          } else if (resolvedSup.id === "ruby") {
-            imports.push({ kind: "star", from, resolved });
-          } else if (resolvedSup.id === "go") {
-            if (caps["alias"]) {
-              const alias = caps["alias"].text;
-              if (alias === ".") {
-                imports.push({
-                  kind: "star",
-                  from,
-                  resolved,
-                });
-                continue;
-              }
-              if (alias === "_") {
-                continue;
-              }
-              imports.push({
-                kind: "namespace",
-                localNS: alias,
-                from,
-                resolved,
-              });
-            } else {
-              const parts = from.replace(/"/g, "").split("/");
-              const last = parts[parts.length - 1];
-              if (last) {
-                imports.push({
-                  kind: "namespace",
-                  localNS: last,
-                  from,
-                  resolved,
-                });
-              }
-            }
-          } else if (resolvedSup.id === "rust") {
-            if (stmtText.startsWith("mod ")) {
-              imports.push({
-                kind: "namespace",
-                localNS: from,
-                from,
-                resolved,
-              });
-            } else {
-              const parts = from.split("::");
-              const last = parts[parts.length - 1];
-              if (!last) continue;
-              if (last === "*") {
-                imports.push({ kind: "star", from, resolved });
-              } else {
-                imports.push({
-                  kind: "named",
-                  local: last,
-                  imported: last,
-                  from,
-                  resolved,
-                });
-              }
-            }
-          } else if (resolvedSup.id === "kotlin") {
-            const wildcard = !!caps["wild"] || from.endsWith(".*");
-            if (wildcard) {
-              imports.push({ kind: "star", from, resolved, typeOnly });
-            } else {
-              const parts = from.split(".");
-              const imported = parts[parts.length - 1];
-              if (!imported) continue;
-              imports.push({
-                kind: "named",
-                local: caps["alias"]?.text ?? imported,
-                imported,
-                from,
-                resolved,
-                typeOnly,
-              });
-            }
-          } else if (resolvedSup.id === "swift") {
-            const parts = from.split(".");
-            const last = parts[parts.length - 1];
-            if (!last) continue;
-            if (parts.length === 1) {
-              imports.push({
-                kind: "namespace",
-                localNS: last,
-                from,
-                resolved,
-                typeOnly,
-              });
-              imports.push({ kind: "star", from, resolved, typeOnly });
-            } else {
-              imports.push({
-                kind: "named",
-                local: last,
-                imported: last,
-                from,
-                resolved,
-                typeOnly,
-              });
-            }
-          } else if (resolvedSup.id === "zig") {
-            const alias = caps["alias"]?.text;
-            if (alias) {
-              imports.push({
-                kind: "namespace",
-                localNS: alias,
-                from,
-                resolved,
-                typeOnly,
-              });
-            }
-          } else if (resolvedSup.id === "c" || resolvedSup.id === "cpp") {
-            imports.push({ kind: "star", from, resolved, typeOnly });
-          }
+          appendImplicitImportBinding({
+            from,
+            resolved,
+            typeOnly,
+            stmtText,
+            ...(caps["alias"]?.text ? { alias: caps["alias"].text } : {}),
+            ...(caps["wild"] ? { wildcard: true } : {}),
+          });
         }
       }
       await finalizeLanguageSpecificImports();
@@ -1105,191 +1060,14 @@ export async function collectImportsForFile(
 
         // Heuristics for languages where we captured @from but no explicit bindings
         if (fromValue && !caps["def"] && !caps["ns"] && !inames.length && !patterns.length) {
-          if (resolvedSup.id === "java") {
-            // import java.util.List; -> local "List"
-            const parts = fromValue.split(".");
-            const last = parts[parts.length - 1];
-            if (last === "*") {
-              imports.push({
-                kind: "star",
-                from: fromValue,
-                resolved,
-                typeOnly,
-              });
-            } else if (last && /^[A-Z]/.test(last)) {
-              imports.push({
-                kind: "named",
-                local: last,
-                imported: last,
-                from: fromValue,
-                resolved,
-                typeOnly,
-              });
-            }
-          } else if (resolvedSup.id === "csharp") {
-            const aliasNode = caps["alias"];
-            if (aliasNode) {
-              const alias = aliasNode.text;
-              // For "using Alias = Type.Path;", try to grab the last part as the imported name
-              let imported = alias;
-              const fromParts = fromValue.split(".");
-              if (fromParts.length) {
-                const candidate = fromParts[fromParts.length - 1];
-                if (candidate) imported = candidate;
-              }
-
-              imports.push({
-                kind: "named",
-                local: alias,
-                imported,
-                from: fromValue,
-                resolved,
-                typeOnly,
-              });
-            } else {
-              // implicit namespace import - treated as star to bring members into scope
-              imports.push({
-                kind: "star",
-                from: fromValue,
-                resolved,
-                typeOnly,
-              });
-            }
-          } else if (resolvedSup.id === "ruby") {
-            // require 'foo' -> star import to bring constants into scope
-            imports.push({ kind: "star", from: fromValue, resolved });
-          } else if (resolvedSup.id === "go") {
-            // import "fmt" -> local "fmt"
-            // import "github.com/pkg/foo" -> local "foo"
-            const aliasNode = caps["alias"];
-            if (aliasNode) {
-              const alias = aliasNode.text;
-              if (alias === ".") {
-                imports.push({
-                  kind: "star",
-                  from: fromValue,
-                  resolved,
-                });
-                continue;
-              }
-              if (alias === "_") {
-                continue;
-              }
-              imports.push({
-                kind: "namespace",
-                localNS: alias,
-                from: fromValue,
-                resolved,
-              });
-            } else {
-              const parts = fromValue.replace(/"/g, "").split("/");
-              const last = parts[parts.length - 1];
-              if (!last) continue;
-              imports.push({
-                kind: "namespace",
-                localNS: last,
-                from: fromValue,
-                resolved,
-              });
-            }
-          } else if (resolvedSup.id === "rust") {
-            // mod utils; -> namespace (from="utils")
-            // use foo::bar; -> named (from="foo::bar")
-            if (stmtText.startsWith("mod ")) {
-              // treat 'mod name;' as namespace import pointing to name.rs / name/mod.rs
-              imports.push({
-                kind: "namespace",
-                localNS: fromValue,
-                from: fromValue,
-                resolved,
-              });
-            } else {
-              const parts = fromValue.split("::");
-              const last = parts[parts.length - 1];
-              if (!last) continue;
-              if (last === "*") {
-                imports.push({ kind: "star", from: fromValue, resolved });
-              } else {
-                imports.push({
-                  kind: "named",
-                  local: last,
-                  imported: last,
-                  from: fromValue,
-                  resolved,
-                });
-              }
-            }
-          } else if (resolvedSup.id === "kotlin") {
-            const aliasNode = caps["alias"];
-            const wildcard = !!caps["wild"] || fromValue.endsWith(".*");
-            if (wildcard) {
-              imports.push({
-                kind: "star",
-                from: fromValue,
-                resolved,
-                typeOnly,
-              });
-            } else {
-              const parts = fromValue.split(".");
-              const imported = parts[parts.length - 1];
-              if (!imported) continue;
-              const local = aliasNode ? aliasNode.text : imported;
-              imports.push({
-                kind: "named",
-                local,
-                imported,
-                from: fromValue,
-                resolved,
-                typeOnly,
-              });
-            }
-          } else if (resolvedSup.id === "swift") {
-            const parts = fromValue.split(".");
-            const last = parts[parts.length - 1];
-            if (!last) continue;
-            if (parts.length === 1) {
-              imports.push({
-                kind: "namespace",
-                localNS: last,
-                from: fromValue,
-                resolved,
-                typeOnly,
-              });
-              imports.push({
-                kind: "star",
-                from: fromValue,
-                resolved,
-                typeOnly,
-              });
-            } else {
-              imports.push({
-                kind: "named",
-                local: last,
-                imported: last,
-                from: fromValue,
-                resolved,
-                typeOnly,
-              });
-            }
-          } else if (resolvedSup.id === "zig") {
-            const alias = caps["alias"]?.text;
-            if (alias) {
-              imports.push({
-                kind: "namespace",
-                localNS: alias,
-                from: fromValue,
-                resolved,
-                typeOnly,
-              });
-            }
-          } else if (resolvedSup.id === "c" || resolvedSup.id === "cpp") {
-            imports.push({
-              kind: "star",
-              from: fromValue,
-              resolved,
-              typeOnly,
-            });
-          }
+          appendImplicitImportBinding({
+            from: fromValue,
+            resolved,
+            typeOnly,
+            stmtText,
+            ...(caps["alias"]?.text ? { alias: caps["alias"].text } : {}),
+            ...(caps["wild"] ? { wildcard: true } : {}),
+          });
         }
       }
     } catch (error) {

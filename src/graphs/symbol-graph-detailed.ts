@@ -286,6 +286,48 @@ export async function buildSymbolGraphDetailed(
         "optional_chain",
         sup.id === "python" ? "attribute" : "",
       ]);
+      const resolveMemberChainTarget = (chainNode: SyntaxNodeLike): SymbolDef | null => {
+        const names: string[] = [];
+        let current: SyntaxNodeLike | null = chainNode;
+        let base: SyntaxNodeLike | null = null;
+        const pushProp = (propNode: SyntaxNodeLike | null) => {
+          if (!propNode) return;
+          if (propertyIdentifierTypes.includes(propNode.type)) names.push(sliceText(propNode, src));
+          else if (propNode.type === "string") names.push(unquote(sliceText(propNode, src)));
+          else if (propNode.type === "identifier") {
+            const keyName = sliceText(propNode, src);
+            const value = constStringOf.get(keyName);
+            if (typeof value === "string") names.push(value);
+          }
+        };
+        while (current && optionalMemberTypes.has(current.type)) {
+          if (current.type === "subscript_expression") {
+            base = current.child(0) ?? base;
+            const indexNode = current.child(2);
+            pushProp(indexNode);
+            current = base;
+          } else if (
+            current.type === memberExpressionType ||
+            current.type === "optional_member_expression" ||
+            current.type === "attribute"
+          ) {
+            base = current.child(0) ?? base;
+            const propNode =
+              current.childForFieldName?.("property") ?? current.child(2) ?? current.childForFieldName?.("attribute");
+            pushProp(propNode);
+            current = base;
+          } else if (current.type === "optional_chain") {
+            current = current.child(0);
+          } else {
+            break;
+          }
+        }
+        if (!current || !isIdentifierType(sup, current.type)) return null;
+        const alias = sliceText(current, src);
+        const targetFile = aliasToTargetModule.get(alias);
+        if (!targetFile || !names.length) return null;
+        return resolveMemberPathFromModule(targetFile, names);
+      };
       const walkCollect = (node: SyntaxNodeLike) => {
         if (
           node.type === "function_declaration" ||
@@ -403,46 +445,7 @@ export async function buildSymbolGraphDetailed(
         node.child(0);
 
       const tryResolveChain = (node: SyntaxNodeLike, fromId?: string, label = "uses") => {
-        const names: string[] = [];
-        let current: SyntaxNodeLike | null = node;
-        let base: SyntaxNodeLike | null = null;
-        const pushProp = (propNode: SyntaxNodeLike | null) => {
-          if (!propNode) return;
-          if (propertyIdentifierTypes.includes(propNode.type)) names.push(sliceText(propNode, src));
-          else if (propNode.type === "string") names.push(unquote(sliceText(propNode, src)));
-          else if (propNode.type === "identifier") {
-            const keyName = sliceText(propNode, src);
-            const value = constStringOf.get(keyName);
-            if (typeof value === "string") names.push(value);
-          }
-        };
-        while (current && optionalMemberTypes.has(current.type)) {
-          if (current.type === "subscript_expression") {
-            base = current.child(0) ?? base;
-            const indexNode = current.child(2);
-            pushProp(indexNode);
-            current = base;
-          } else if (
-            current.type === memberExpressionType ||
-            current.type === "optional_member_expression" ||
-            current.type === "attribute"
-          ) {
-            base = current.child(0) ?? base;
-            const propNode =
-              current.childForFieldName?.("property") ?? current.child(2) ?? current.childForFieldName?.("attribute");
-            pushProp(propNode);
-            current = base;
-          } else if (current.type === "optional_chain") {
-            current = current.child(0);
-          } else {
-            break;
-          }
-        }
-        if (!current || !isIdentifierType(sup, current.type)) return false;
-        const alias = sliceText(current, src);
-        const targetFile = aliasToTargetModule.get(alias);
-        if (!targetFile || !names.length) return false;
-        const targetDef = resolveMemberPathFromModule(targetFile, names);
+        const targetDef = resolveMemberChainTarget(node);
         if (targetDef && fromId) {
           const toId = defNodeId(targetDef);
           if (!nodes.has(toId)) nodes.set(toId, nodeForDef(targetDef));
@@ -544,48 +547,7 @@ export async function buildSymbolGraphDetailed(
 
         const walkForMembers = (node: SyntaxNodeLike) => {
           const tryResolveChainLocal = (chainNode: SyntaxNodeLike) => {
-            const names: string[] = [];
-            let current: SyntaxNodeLike | null = chainNode;
-            let base: SyntaxNodeLike | null = null;
-            const pushProp = (propNode: SyntaxNodeLike | null) => {
-              if (!propNode) return;
-              if (propertyIdentifierTypes.includes(propNode.type)) names.push(sliceText(propNode, src));
-              else if (propNode.type === "string") names.push(unquote(sliceText(propNode, src)));
-              else if (propNode.type === "identifier") {
-                const keyName = sliceText(propNode, src);
-                const value = constStringOf.get(keyName);
-                if (typeof value === "string") names.push(value);
-              }
-            };
-            while (current && optionalMemberTypes.has(current.type)) {
-              if (current.type === "subscript_expression") {
-                base = current.child(0) ?? base;
-                const indexNode = current.child(2);
-                pushProp(indexNode);
-                current = base;
-              } else if (
-                current.type === memberExpressionType ||
-                current.type === "optional_member_expression" ||
-                current.type === "attribute"
-              ) {
-                base = current.child(0) ?? base;
-                const propNode =
-                  current.childForFieldName?.("property") ??
-                  current.child(2) ??
-                  current.childForFieldName?.("attribute");
-                pushProp(propNode);
-                current = base;
-              } else if (current.type === "optional_chain") {
-                current = current.child(0);
-              } else {
-                break;
-              }
-            }
-            if (!current || !isIdentifierType(sup, current.type)) return;
-            const alias = sliceText(current, src);
-            const targetFile = aliasToTargetModule.get(alias);
-            if (!targetFile || !names.length) return;
-            const targetDef = resolveMemberPathFromModule(targetFile, names);
+            const targetDef = resolveMemberChainTarget(chainNode);
             if (targetDef) {
               const toId = defNodeId(targetDef);
               if (!nodes.has(toId)) nodes.set(toId, nodeForDef(targetDef));
