@@ -63,7 +63,7 @@ No dependency cycles were reported. The highest remaining concentration is in:
   - Keep `src/cli.ts` as a thin dispatcher.
   - Verify with `tests/cli-regressions.test.ts`, `tests/cli-command-modules.test.ts`, and focused command tests.
 
-- [ ] Split `src/review.ts` into phase modules.
+- [x] Split `src/review.ts` into phase modules.
   - Current shape: review options, deleted-file reconstruction, graph delta, SQL context, candidate tests, symbol summaries, risk scoring, and final assembly live in one file.
   - Target split:
     - `src/review/changes.ts` for changed file and diff collection.
