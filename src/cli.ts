@@ -470,10 +470,10 @@ function buildRecommendedInspectCommands(
     `codegraph graph ${rootFlag}${targetSuffix} --json --symbols-detailed --compact-json`,
   ];
   if (hasUnresolvedImports) {
-    commands.push(`codegraph unresolved ${rootFlag} --json`);
+    commands.push(`codegraph unresolved ${rootFlag}${targetSuffix} --json`);
   }
   if (hasCycles) {
-    commands.push(`codegraph cycles ${rootFlag} --sort priority --json`);
+    commands.push(`codegraph cycles ${rootFlag}${targetSuffix} --sort priority --json`);
   }
   commands.push(`codegraph doctor "${normalizePathForDisplay(defaultCacheIndexPath(projectRoot))}"`);
   return commands;

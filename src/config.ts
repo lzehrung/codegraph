@@ -31,7 +31,7 @@ function uniq(values: readonly string[]): string[] {
 }
 
 function normalizeDiscoveryRoot(root: string | undefined): string | undefined {
-  const normalized = root?.trim();
+  const normalized = root?.trim().replace(/\\/g, "/");
   return normalized ? normalized : undefined;
 }
 

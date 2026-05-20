@@ -33,7 +33,7 @@ No dependency cycles were reported. The highest remaining concentration is in:
 
 ### Correctness And Behavior
 
-- [ ] Fix include-root discovery handling for `inspect --root . ./src`.
+- [x] Fix include-root discovery handling for `inspect --root . ./src`.
   - Finding: `npx tsx src/cli.ts inspect --root . ./src --limit 5` currently fails with a malformed gitignore root path containing mixed POSIX and Windows separators.
   - Likely area: `src/cli.ts` include-root discovery setup and `src/config.ts` discovery root normalization.
   - Also check recommended commands from `inspect`: `unresolved` and `cycles` recommendations currently omit the include-root target suffix, which can expand a scoped inspect into whole-repo follow-ups.

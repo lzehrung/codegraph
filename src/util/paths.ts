@@ -8,6 +8,11 @@ function normalizeWindowsComparablePath(filePath: string): string {
   return normalizePath(filePath).replace(/^([A-Za-z]):/, (_, driveLetter: string) => `${driveLetter.toUpperCase()}:`);
 }
 
+function isWindowsQualifiedAbsolutePath(filePath: string): boolean {
+  const normalizedPath = normalizePath(filePath);
+  return /^[A-Za-z]:\//.test(normalizedPath) || normalizedPath.startsWith("//");
+}
+
 export function isAbsoluteFilePath(filePath: string): boolean {
   return path.posix.isAbsolute(filePath) || path.win32.isAbsolute(filePath);
 }
@@ -16,7 +21,7 @@ export function resolveFilePathFromRoot(projectRoot: string, filePath: string): 
   if (isAbsoluteFilePath(filePath)) {
     return filePath;
   }
-  if (path.win32.isAbsolute(projectRoot)) {
+  if (isWindowsQualifiedAbsolutePath(projectRoot)) {
     return path.win32.resolve(projectRoot, filePath);
   }
   return path.resolve(projectRoot, filePath);
@@ -30,14 +35,12 @@ function resolveComparableProjectRoot(projectRoot: string): string {
 }
 
 function isRelativeToRoot(normalizedRoot: string, normalizedFile: string): boolean {
-  const comparableRoot = path.win32.isAbsolute(normalizedRoot)
-    ? normalizeWindowsComparablePath(normalizedRoot)
-    : normalizedRoot;
-  const comparableFile = path.win32.isAbsolute(normalizedFile)
-    ? normalizeWindowsComparablePath(normalizedFile)
-    : normalizedFile;
+  const rootIsWindowsPath = isWindowsQualifiedAbsolutePath(normalizedRoot);
+  const fileIsWindowsPath = isWindowsQualifiedAbsolutePath(normalizedFile);
+  const comparableRoot = rootIsWindowsPath ? normalizeWindowsComparablePath(normalizedRoot) : normalizedRoot;
+  const comparableFile = fileIsWindowsPath ? normalizeWindowsComparablePath(normalizedFile) : normalizedFile;
 
-  if (path.win32.isAbsolute(comparableRoot) && path.win32.isAbsolute(comparableFile)) {
+  if (rootIsWindowsPath && fileIsWindowsPath) {
     if (comparableFile === comparableRoot) {
       return true;
     }
@@ -73,7 +76,7 @@ export function toProjectRelativePath(projectRoot: string, filePath: string): st
   if (!isFilePathWithinRoot(normalizedRoot, normalizedFile)) {
     return null;
   }
-  if (path.win32.isAbsolute(normalizedRoot) && path.win32.isAbsolute(normalizedFile)) {
+  if (isWindowsQualifiedAbsolutePath(normalizedRoot) && isWindowsQualifiedAbsolutePath(normalizedFile)) {
     const comparableRoot = normalizeWindowsComparablePath(normalizedRoot);
     const comparableFile = normalizeWindowsComparablePath(normalizedFile);
     return normalizePath(path.win32.relative(comparableRoot, comparableFile));

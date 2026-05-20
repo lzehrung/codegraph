@@ -21,6 +21,13 @@ describe("cross-platform path normalization", () => {
     expect(resolveFilePathFromRoot("/workspace/codegraph", windowsBackslashPath)).toBe(windowsBackslashPath);
   });
 
+  it("resolves relative paths against POSIX absolute roots on any host OS", () => {
+    const root = "/mnt/e/git repos/codegraph";
+
+    expect(resolveFilePathFromRoot(root, ".")).toBe(root);
+    expect(resolveFilePathFromRoot(root, "./src")).toBe("/mnt/e/git repos/codegraph/src");
+  });
+
   it("normalizes impact paths without re-rooting Windows-style absolute inputs", () => {
     expect(normalizeImpactFilePath("/workspace/codegraph", "C:/repo/src/main.ts")).toBe("C:/repo/src/main.ts");
     expect(normalizeImpactFilePath("/workspace/codegraph", String.raw`C:\repo\src\main.ts`)).toBe(
@@ -61,9 +68,7 @@ describe("cross-platform path normalization", () => {
     const root = "C:/workspace/codegraph";
 
     expect(assertFilePathWithinRoot(root, "src/main.ts", "Input")).toBe("C:/workspace/codegraph/src/main.ts");
-    expect(() => assertFilePathWithinRoot(root, "../outside.ts", "Input")).toThrow(
-      "Input is outside project root",
-    );
+    expect(() => assertFilePathWithinRoot(root, "../outside.ts", "Input")).toThrow("Input is outside project root");
   });
 
   it("normalizes resolution hints by trimming, slash-normalizing, and deduping", () => {
