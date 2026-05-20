@@ -72,7 +72,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Performance opportunity: current function-body processing walks the same subtree separately for alias uses, member uses, and calls; a merged visitor should reduce repeated AST traversal on large functions.
   - Tests: detailed symbol graph edge cases for namespace members, `membersOnly`, decorator edges, Java/C# inheritance, Rust impls, optional chaining, and max-edge pruning.
 
-- [ ] Split review report generation into staged pipeline helpers.
+- [x] Split review report generation into staged pipeline helpers.
   - `src/review.ts` has a 485-line `buildReviewReport()` that handles change discovery, diff normalization, deleted snapshots, incremental indexing, changed-symbol mapping, reference lookups, file summaries, graph delta, candidate tests, SQL context, risk summary, and final report assembly.
   - Suggested fix: extract `collectReviewChanges()`, `buildReviewIndex()`, `summarizeChangedFiles()`, `collectReviewGraphDelta()`, and `assembleReviewReport()` so each stage has explicit inputs/outputs and can be tested directly.
   - Correctness opportunity: make deleted/missing/ignored file status transitions explicit in one data structure instead of spreading them across changed-file sets, diff maps, and final summary branches.
