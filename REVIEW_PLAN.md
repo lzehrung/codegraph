@@ -110,7 +110,7 @@ Scope: `src/graphs`, `src/impact`, and `src/indexer`.
   - Correctness opportunity: optional chaining, Kotlin/Swift navigation expressions, Ruby scope resolution, and Go qualified types should resolve consistently across goto, refs, and symbol graph edges.
   - Tests: `goto`, `references`, and detailed-symbol edge cases for namespace members, optional/member chains, Ruby `::`, Go qualified types, Java static members, C# nested members, Kotlin aliases, and Swift static factories.
 
-- [ ] Extract shared SQL lexical helpers and reuse them across facts, navigation, and MCP query checks.
+- [x] Extract shared SQL lexical helpers and reuse them across facts, navigation, and MCP query checks.
   - `splitTopLevelCommaSeparated()` is duplicated in `src/sql/extractFacts.ts` and `src/sql/navigation.ts`; paren-depth logic is also duplicated. `src/mcp/server.ts` has its own SQL comment/literal stripper for resource checks.
   - Suggested fix: create `src/sql/lex.ts` for top-level splitting, paren depth, comment/string masking, and bounded identifier scanning. Reuse it in fact extraction, SQL navigation, and MCP SQLite query validation.
   - Correctness opportunity: SQL parsing edge cases such as quoted strings, comments, nested expressions, and CTE clauses should not diverge between review facts and navigation.

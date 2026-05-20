@@ -1,11 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import {
-  createServer,
-  type IncomingMessage,
-  type Server as HttpServer,
-  type ServerResponse,
-} from "node:http";
+import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -30,6 +25,7 @@ import type { AgentSearchMode, AgentSearchResponse } from "../agent/search.js";
 import { getDependencies, getReverseDependencies, getShortestPath } from "../graphs.js";
 import { findReferences, goToDefinition } from "../indexer.js";
 import { buildReviewReport, type ReviewDepth, type ReviewReport } from "../review.js";
+import { maskSqlStringsAndComments } from "../sql/lex.js";
 import { queryGraphSqliteRaw, type RawSqlResult } from "../sqlite.js";
 import { assertFilePathWithinRoot, isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util.js";
 import { createAgentSession } from "../agent/session.js";
@@ -221,12 +217,10 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
         snapshot.fileGraph,
         await resolveProjectFile(await realRoot, root, request.file),
         queryOptions,
-      ).map(
-        (dependency) => ({
-          file: relative(dependency.file),
-          depth: dependency.depth,
-        }),
-      );
+      ).map((dependency) => ({
+        file: relative(dependency.file),
+        depth: dependency.depth,
+      }));
       return { dependencies };
     },
 
@@ -277,11 +271,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
       if (!sqlitePath) {
         throw new Error("No SQLite artifact is available. Run artifact_build first or pass artifactPath.");
       }
-      const realSqlitePath = await assertRealPathCandidateWithinRoot(
-        await realRoot,
-        sqlitePath,
-        "SQLite artifact",
-      );
+      const realSqlitePath = await assertRealPathCandidateWithinRoot(await realRoot, sqlitePath, "SQLite artifact");
       assertMcpSqliteQueryResourceBounded(request.query);
       const result = await queryGraphSqliteRaw(realSqlitePath, request.query, request.params ?? [], {
         maxRows: normalizeSqliteRowLimit(request.limit),
@@ -322,12 +312,15 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
 }
 
 function createCodegraphMcpProtocolServer(handlers: CodegraphMcpHandlers): McpServer {
-  const server = new McpServer({
-    name: "codegraph",
-    version: "1.0.0",
-  }, {
-    capabilities: { tools: {} },
-  });
+  const server = new McpServer(
+    {
+      name: "codegraph",
+      version: "1.0.0",
+    },
+    {
+      capabilities: { tools: {} },
+    },
+  );
 
   server.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: MCP_TOOLS }));
   server.server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
@@ -530,10 +523,7 @@ function getRequestPath(request: IncomingMessage): string {
   return new URL(rawUrl, "http://127.0.0.1").pathname;
 }
 
-type ParsedJsonBody =
-  | { status: "ok"; body: unknown }
-  | { status: "too_large" }
-  | { status: "invalid_json" };
+type ParsedJsonBody = { status: "ok"; body: unknown } | { status: "too_large" } | { status: "invalid_json" };
 
 type AllowedHostHeaderRules = {
   exact: Set<string>;
@@ -655,12 +645,7 @@ function formatHostHeader(host: string, port: number): string {
   return `${formatHostForUrl(host)}:${port}`;
 }
 
-function writeJsonRpcError(
-  response: ServerResponse,
-  statusCode: number,
-  message: string,
-  code = -32000,
-): void {
+function writeJsonRpcError(response: ServerResponse, statusCode: number, message: string, code = -32000): void {
   writeJsonResponse(response, statusCode, {
     jsonrpc: "2.0",
     error: { code, message },
@@ -1039,7 +1024,7 @@ function normalizeSqliteRowLimit(limit: number | undefined): number {
 }
 
 function assertMcpSqliteQueryResourceBounded(sql: string): void {
-  const searchableSql = stripSqlCommentsAndLiterals(sql).toLowerCase();
+  const searchableSql = maskSqlStringsAndComments(sql).toLowerCase();
   if (/\bwith\s+recursive\b/.test(searchableSql)) {
     throw new Error("MCP query_sqlite does not support recursive SQLite queries.");
   }
@@ -1057,53 +1042,6 @@ function assertMcpSqliteQueryResourceBounded(sql: string): void {
       throw new Error(`MCP query_sqlite rejected unsupported SQLite function ${functionName}.`);
     }
   }
-}
-
-function stripSqlCommentsAndLiterals(sql: string): string {
-  let output = "";
-  let index = 0;
-  while (index < sql.length) {
-    const char = sql[index];
-    const next = sql[index + 1];
-    if (char === "-" && next === "-") {
-      index += 2;
-      while (index < sql.length && sql[index] !== "\n") {
-        output += " ";
-        index += 1;
-      }
-      continue;
-    }
-    if (char === "/" && next === "*") {
-      index += 2;
-      while (index < sql.length && !(sql[index] === "*" && sql[index + 1] === "/")) {
-        output += " ";
-        index += 1;
-      }
-      index = Math.min(sql.length, index + 2);
-      continue;
-    }
-    if (char === "'") {
-      output += " ";
-      index += 1;
-      while (index < sql.length) {
-        if (sql[index] === "'") {
-          if (sql[index + 1] === "'") {
-            output += "  ";
-            index += 2;
-            continue;
-          }
-          index += 1;
-          break;
-        }
-        output += " ";
-        index += 1;
-      }
-      continue;
-    }
-    output += char;
-    index += 1;
-  }
-  return output;
 }
 
 function boundRawSqlResult(result: RawSqlResult, byteLimit: number): RawSqlResult {
@@ -1227,11 +1165,7 @@ function expectedUtf8ContinuationBytes(byte: number): number | null {
   return null;
 }
 
-async function assertRealPathCandidateWithinRoot(
-  realRoot: string,
-  filePath: string,
-  label: string,
-): Promise<string> {
+async function assertRealPathCandidateWithinRoot(realRoot: string, filePath: string, label: string): Promise<string> {
   const existingPath = await nearestExistingPath(filePath);
   const realExistingPath = await fs.realpath(existingPath);
   const relativeSuffix = path.relative(existingPath, filePath);
