@@ -153,7 +153,7 @@ function buildLightStreamSummaryReport(
   };
 }
 
-function impactItemEmissionKey(item: ImpactItem, partial: boolean): string {
+export function impactItemEmissionKey(item: ImpactItem, partial: boolean): string {
   const symbols = item.symbols.slice().sort().join(",");
   const reasons = item.reasons.slice().sort().join(",");
   const refCount = item.refs?.length ?? 0;
@@ -166,6 +166,8 @@ function impactItemEmissionKey(item: ImpactItem, partial: boolean): string {
     item.severity.toFixed(6),
     String(item.depth ?? 0),
     String(item.confidence ?? 0),
+    String(item.typeOnly ?? ""),
+    String(item.explain?.typeOnly ?? ""),
     String(refCount),
     String(hintCount),
   ].join("|");
