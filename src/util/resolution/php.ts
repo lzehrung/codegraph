@@ -8,7 +8,6 @@ import {
   clearPhpComposerResolutionCaches,
   findPhpComposerPath,
   getPhpComposerAutoloadFiles,
-  isPhpComposerClassmapExcluded,
   loadPhpComposerConfig,
   resolvePhpPsr0MappedPath,
   resolvePhpPsr4MappedPath,
@@ -567,7 +566,7 @@ export async function resolvePhpImportPath(
         preferredKind,
         autoloadFiles,
       );
-      if (symbolResolved && !isPhpComposerClassmapExcluded(symbolResolved, composerConfig)) {
+      if (symbolResolved) {
         phpImportResolutionCache.set(cacheKey, symbolResolved);
         return symbolResolved;
       }

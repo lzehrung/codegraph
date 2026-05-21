@@ -82,12 +82,20 @@ const definition: LanguageTestDefinition = {
         to: { type: "file", path: "dev-classmap/DevSpecific.php" },
       },
       {
+        from: "composer-excluded-psr4-consumer.php",
+        to: { type: "file", path: "classmap/Excluded/PsrMapped.php" },
+      },
+      {
         from: "composer-files-consumer.php",
         to: { type: "file", path: "autoload/global_helper.php" },
       },
       {
         from: "composer-files-consumer.php",
         to: { type: "file", path: "autoload/dev_helper.php" },
+      },
+      {
+        from: "composer-excluded-files-consumer.php",
+        to: { type: "file", path: "classmap/Excluded/excluded_helper.php" },
       },
       {
         from: "function-import-consumer.php",
@@ -158,12 +166,20 @@ const definition: LanguageTestDefinition = {
         includes: [{ name: "DevSpecific" }],
       },
       {
+        file: "classmap/Excluded/PsrMapped.php",
+        includes: [{ name: "PsrMapped" }],
+      },
+      {
         file: "autoload/global_helper.php",
         includes: [{ name: "global_helper" }],
       },
       {
         file: "autoload/dev_helper.php",
         includes: [{ name: "dev_helper" }],
+      },
+      {
+        file: "classmap/Excluded/excluded_helper.php",
+        includes: [{ name: "excluded_helper" }],
       },
       {
         file: "multi-namespace/Library.php",
@@ -284,6 +300,13 @@ const definition: LanguageTestDefinition = {
         expectedStatus: "not_found",
       },
       {
+        name: "go to definition resolves PSR-4 classes inside Composer excluded classmap paths",
+        file: "composer-excluded-psr4-consumer.php",
+        line: 5,
+        column: 6,
+        expectedDefinition: { file: "classmap/Excluded/PsrMapped.php", line: 5 },
+      },
+      {
         name: "go to definition resolves Composer files autoload functions",
         file: "composer-files-consumer.php",
         line: 3,
@@ -296,6 +319,13 @@ const definition: LanguageTestDefinition = {
         line: 4,
         column: 3,
         expectedDefinition: { file: "autoload/dev_helper.php", line: 3 },
+      },
+      {
+        name: "go to definition resolves Composer files inside excluded classmap paths",
+        file: "composer-excluded-files-consumer.php",
+        line: 3,
+        column: 3,
+        expectedDefinition: { file: "classmap/Excluded/excluded_helper.php", line: 3 },
       },
       {
         name: "go to definition respects PHP function import kind",
@@ -391,6 +421,13 @@ const definition: LanguageTestDefinition = {
         minimumCount: 2,
       },
       {
+        name: "find references for PSR-4 classes inside Composer excluded classmap paths",
+        file: "classmap/Excluded/PsrMapped.php",
+        line: 5,
+        column: 7,
+        minimumCount: 2,
+      },
+      {
         name: "find references for Composer files autoload functions",
         file: "autoload/global_helper.php",
         line: 3,
@@ -400,6 +437,13 @@ const definition: LanguageTestDefinition = {
       {
         name: "find references for Composer autoload-dev files functions",
         file: "autoload/dev_helper.php",
+        line: 3,
+        column: 10,
+        minimumCount: 2,
+      },
+      {
+        name: "find references for Composer files inside excluded classmap paths",
+        file: "classmap/Excluded/excluded_helper.php",
         line: 3,
         column: 10,
         minimumCount: 2,

@@ -1,4 +1,5 @@
 import type { FileId, Graph } from "../types.js";
+import { GRAPH_ONLY_DOCUMENT_EXTENSIONS } from "../util/graphOnlyExtensions.js";
 
 export type CycleInternalEdge = {
   from: FileId;
@@ -20,7 +21,7 @@ export type DetailedCycle = {
 
 export type CycleSortMode = "priority" | "size" | "fanin";
 
-const DOCUMENT_ONLY_CYCLE_EXTENSIONS = new Set([".md", ".mdx", ".rst", ".adoc", ".asciidoc"]);
+const DOCUMENT_ONLY_CYCLE_EXTENSIONS = new Set(GRAPH_ONLY_DOCUMENT_EXTENSIONS);
 
 function isDocumentOnlyCycleFile(file: string): boolean {
   const normalized = file.toLowerCase().split(/[?#]/, 1)[0] ?? "";

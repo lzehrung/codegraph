@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { GRAPH_ONLY_RESOLUTION_EXTENSIONS } from "./graphOnlyExtensions.js";
 import { normalizePath, normalizeResolutionHints } from "./paths.js";
 import { DEFAULT_RESOLUTION_EXTENSIONS, listResolutionCandidates } from "./resolutionCandidates.js";
 import {
@@ -30,16 +31,12 @@ export { listResolutionCandidates } from "./resolutionCandidates.js";
 const resolveSpecifierCache = new Map<string, FileId | { external: string }>();
 export type FileId = string;
 
-export const GRAPH_ONLY_RESOLUTION_EXTENSIONS = [
-  ".md",
-  ".mdx",
-  ".astro",
-  ".hbs",
-  ".handlebars",
-  ".rst",
-  ".adoc",
-  ".asciidoc",
-] as const;
+export {
+  GRAPH_ONLY_DOCUMENT_EXTENSIONS,
+  GRAPH_ONLY_RESOLUTION_EXTENSIONS,
+  type GraphOnlyDocumentExtension,
+  type GraphOnlyResolutionExtension,
+} from "./graphOnlyExtensions.js";
 
 const GRAPH_ONLY_LANGUAGE_DOCUMENT_RESOLUTION_EXTENSIONS: Record<string, readonly string[]> = {
   markdown: [".md", ".mdx"],

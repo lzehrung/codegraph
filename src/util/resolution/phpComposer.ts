@@ -17,6 +17,11 @@ export type PhpComposerConfig = {
 const phpComposerConfigCache = new Map<string, Promise<PhpComposerConfig | null>>();
 const phpComposerAutoloadFileCache = new Map<string, Promise<Set<string>>>();
 
+type PhpComposerAutoloadRoot = {
+  path: string;
+  applyClassmapExcludes: boolean;
+};
+
 async function findFirstExistingResolutionCandidate(
   base: string,
   resolutionExtensions?: readonly string[],
@@ -207,29 +212,45 @@ export async function getPhpComposerAutoloadFiles(
 
   const pending = (async () => {
     const candidates = new Set<string>();
-    const roots = new Set<string>([
-      ...composerConfig.classmap,
-      ...composerConfig.files,
-      ...Array.from(composerConfig.psr4.values()).flat(),
-      ...Array.from(composerConfig.psr0.values()).flat(),
-    ]);
+    const roots: PhpComposerAutoloadRoot[] = [];
+    const seenRoots = new Set<string>();
+    const addRoot = (rootPath: string, applyClassmapExcludes: boolean): void => {
+      const resolvedRoot = path.resolve(rootPath);
+      const cacheKey = `${resolvedRoot}\0${applyClassmapExcludes ? "classmap" : "autoload"}`;
+      if (seenRoots.has(cacheKey)) return;
+      seenRoots.add(cacheKey);
+      roots.push({ path: resolvedRoot, applyClassmapExcludes });
+    };
+
+    for (const root of composerConfig.classmap) {
+      addRoot(root, true);
+    }
+    for (const root of composerConfig.files) {
+      addRoot(root, false);
+    }
+    for (const root of Array.from(composerConfig.psr4.values()).flat()) {
+      addRoot(root, true);
+    }
+    for (const root of Array.from(composerConfig.psr0.values()).flat()) {
+      addRoot(root, true);
+    }
 
     for (const root of roots) {
       try {
-        const stat = await fsp.stat(root);
+        const stat = await fsp.stat(root.path);
         if (stat.isDirectory()) {
-          const files = await listProjectFiles(root, ["**/*.php"]);
+          const files = await listProjectFiles(root.path, ["**/*.php"]);
           for (const filePath of files) {
-            if (isPhpComposerClassmapExcluded(filePath, composerConfig)) {
+            if (root.applyClassmapExcludes && isPhpComposerClassmapExcluded(filePath, composerConfig)) {
               continue;
             }
             candidates.add(path.resolve(filePath));
           }
           continue;
         }
-        if (stat.isFile() && root.toLowerCase().endsWith(".php")) {
-          if (isPhpComposerClassmapExcluded(root, composerConfig)) continue;
-          candidates.add(path.resolve(root));
+        if (stat.isFile() && root.path.toLowerCase().endsWith(".php")) {
+          if (root.applyClassmapExcludes && isPhpComposerClassmapExcluded(root.path, composerConfig)) continue;
+          candidates.add(path.resolve(root.path));
         }
       } catch {
         // Ignore missing Composer autoload roots.
