@@ -10,6 +10,7 @@ import {
   resolveSpecifier,
   resolveWorkspacePackage,
 } from "../src/util.js";
+import { loadPhpComposerConfig } from "../src/util/resolution/phpComposer.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -1600,12 +1601,14 @@ describe("Import Resolution", () => {
     );
 
     const index = await buildProjectIndex(root);
+    const composerConfig = await loadPhpComposerConfig(path.join(root, "composer.json"));
     const result = await goToDefinition(index, {
       file: consumerFile.replace(/\\/g, "/"),
       line: 5,
       column: 16,
     });
 
+    expect(composerConfig?.classmapExcludePrefixes).toContain(path.join(root, "src", "Excluded").replace(/\\/g, "/"));
     expect(result.status).toBe("not_found");
   });
 

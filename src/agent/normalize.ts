@@ -5,6 +5,7 @@ import { quoteShellArg } from "./shell.js";
 export type AgentFileSnapshot = {
   root: string;
   files: readonly string[];
+  fileLookup?: ReadonlyMap<string, string>;
 };
 
 export type AgentSqlObjectKind = "table" | "view" | "index" | "routine";
@@ -17,8 +18,12 @@ export function normalizeAgentOutputPath(root: string, file: string): string {
   return toProjectDisplayPath(root, file);
 }
 
+export function createAgentFileLookup(files: readonly string[]): Map<string, string> {
+  return new Map(files.map((file) => [normalizePath(file), normalizePath(file)]));
+}
+
 export function resolveAgentSnapshotFile(snapshot: AgentFileSnapshot, candidate: string): string | null {
-  const normalizedFiles = new Map(snapshot.files.map((file) => [normalizePath(file), normalizePath(file)]));
+  const normalizedFiles = snapshot.fileLookup ?? createAgentFileLookup(snapshot.files);
   const absoluteCandidate = path.isAbsolute(candidate)
     ? normalizePath(candidate)
     : normalizePath(path.resolve(snapshot.root, candidate));

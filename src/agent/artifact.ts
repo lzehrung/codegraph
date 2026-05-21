@@ -6,7 +6,7 @@ import { defNodeId } from "../graphs/symbol-graph.js";
 import { queryGraphSqliteRaw, writeGraphSqlite } from "../sqlite.js";
 import { isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util/paths.js";
 import { formatAgentSqlHandle, formatAgentSymbolHandle } from "./handles.js";
-import { normalizeAgentFilePath } from "./normalize.js";
+import { createAgentFileLookup, normalizeAgentFilePath } from "./normalize.js";
 import { createAgentSession } from "./session.js";
 import type { AgentProjectSnapshot, AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
@@ -542,6 +542,7 @@ async function filterSnapshotForOutputDirectory(
   return {
     ...snapshot,
     files,
+    fileLookup: createAgentFileLookup(files),
     index,
     fileGraph,
     symbolGraph,

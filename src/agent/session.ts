@@ -5,10 +5,12 @@ import { type SymbolGraph } from "../graphs/symbol-graph.js";
 import type { Graph } from "../types.js";
 import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "../config.js";
+import { createAgentFileLookup } from "./normalize.js";
 
 export type AgentProjectSnapshot = {
   root: string;
   files: string[];
+  fileLookup?: ReadonlyMap<string, string>;
   index: ProjectIndex;
   fileGraph: Graph;
   symbolGraph: SymbolGraph;
@@ -49,6 +51,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
       return {
         root: options.root,
         files,
+        fileLookup: createAgentFileLookup(files),
         index,
         fileGraph,
         symbolGraph,

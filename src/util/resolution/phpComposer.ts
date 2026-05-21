@@ -11,6 +11,7 @@ export type PhpComposerConfig = {
   psr0: Map<string, string[]>;
   classmap: string[];
   excludeFromClassmap: string[];
+  classmapExcludePrefixes: string[];
   files: string[];
 };
 
@@ -81,6 +82,10 @@ function readComposerStringList(value: unknown, composerDir: string): string[] {
     .map((entry) => resolveComposerPath(entry, composerDir));
 }
 
+function normalizeComposerClassmapExcludePrefix(entry: string): string {
+  return normalizePath(path.resolve(entry)).replace(/\/+$/, "");
+}
+
 export async function loadPhpComposerConfig(composerPath: string): Promise<PhpComposerConfig | null> {
   const cached = phpComposerConfigCache.get(composerPath);
   if (cached) return await cached;
@@ -113,12 +118,13 @@ export async function loadPhpComposerConfig(composerPath: string): Promise<PhpCo
         ...readComposerStringList(autoload["exclude-from-classmap"], composerDir),
         ...readComposerStringList(autoloadDev["exclude-from-classmap"], composerDir),
       ];
+      const classmapExcludePrefixes = excludeFromClassmap.map(normalizeComposerClassmapExcludePrefix);
       const files = [
         ...readComposerStringList(autoload["files"], composerDir),
         ...readComposerStringList(autoloadDev["files"], composerDir),
       ];
 
-      return { psr4, psr0, classmap, excludeFromClassmap, files };
+      return { psr4, psr0, classmap, excludeFromClassmap, classmapExcludePrefixes, files };
     } catch {
       return null;
     }
@@ -310,9 +316,8 @@ async function phpFileMatchesNamespacePrefixes(filePath: string, namespacePrefix
 
 export function isPhpComposerClassmapExcluded(filePath: string, composerConfig: PhpComposerConfig): boolean {
   const normalizedFile = normalizePath(path.resolve(filePath));
-  return composerConfig.excludeFromClassmap.some((entry) => {
-    const normalizedEntry = normalizePath(path.resolve(entry)).replace(/\/+$/, "");
-    return normalizedFile === normalizedEntry || normalizedFile.startsWith(`${normalizedEntry}/`);
+  return composerConfig.classmapExcludePrefixes.some((prefix) => {
+    return normalizedFile === prefix || normalizedFile.startsWith(`${prefix}/`);
   });
 }
 

@@ -76,9 +76,9 @@ export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) =>
       Promise.resolve()
         .then(() => fn(item))
         .then((result) => {
+          activeCount--;
           if (aborted) return;
           results[index] = result;
-          activeCount--;
           if (nextIndex < items.length) {
             startNext();
           } else if (activeCount === 0 && resolveAll) {
@@ -86,9 +86,9 @@ export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) =>
           }
         })
         .catch((err) => {
+          activeCount--;
           if (aborted) return;
           aborted = true;
-          activeCount--;
           if (rejectAll) rejectAll(err);
         });
     }
