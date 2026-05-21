@@ -62,6 +62,9 @@ export type DuplicateDetectionOmittedCounts = {
   oversizedBuckets: number;
   belowThresholdUnits: number;
   overlappingPairs: number;
+};
+
+export type DuplicateDetectionStats = {
   comparedPairs: number;
   candidatePairs: number;
 };
@@ -71,6 +74,7 @@ export type DuplicateDetectionResult = {
   units: number;
   suggestions: DuplicateSuggestion[];
   omittedCounts: DuplicateDetectionOmittedCounts;
+  stats: DuplicateDetectionStats;
 };
 
 type DuplicateInternalUnit = DuplicateUnitRef & {
@@ -503,7 +507,6 @@ function addBucketPairs(
       if (existing) {
         if (evidenceKind === "signature") {
           existing.signatureMatches++;
-          existing.signature = existing.signatureMatches >= 2;
         } else {
           existing[evidenceKind] = true;
         }
@@ -852,6 +855,8 @@ export async function findDuplicates(
       oversizedBuckets,
       belowThresholdUnits,
       overlappingPairs,
+    },
+    stats: {
       comparedPairs,
       candidatePairs: pairs.size,
     },

@@ -218,7 +218,7 @@ The integration examples demonstrate semantic chunking with type-based filtering
 `findDuplicates()` scans a built `ProjectIndex` for exact, renamed, near, and weak clone candidates.
 
 - It uses indexed symbols, semantic chunks, and text chunks.
-- Results include confidence, score, clone type, metrics, and omission counts.
+- Results include confidence, score, clone type, metrics, omission counts, and pair stats.
 - Paths are project-relative when the index has a project root.
 
 ```ts

@@ -169,7 +169,7 @@ codegraph grep --pattern 'eval\(' --ignore-case
 `duplicates` always reports scored exact, renamed, near, and weak clone candidates as JSON.
 
 - It combines indexed symbols, semantic chunks, and text chunks.
-- It reports project-relative paths, confidence, clone type, metrics, and omission counts.
+- It reports project-relative paths, confidence, clone type, metrics, omission counts, and pair stats.
 - A single positional directory becomes the project root unless `--root` is set.
 - Use `--root . ./src` for scoped scans with repository-relative paths.
 - Use `--include-small` for tiny helpers.

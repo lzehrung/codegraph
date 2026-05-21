@@ -108,6 +108,8 @@ export function summarizePayments(rows: Array<{ amount: number; fee: number }>) 
 
     expect(result.suggestions).toHaveLength(1);
     expect(result.omittedCounts.suggestions).toBeGreaterThan(0);
+    expect(result.stats.candidatePairs).toBeGreaterThan(0);
+    expect(result.stats.comparedPairs).toBeGreaterThan(0);
   });
 
   test("reports renamed near duplicates through normalized tokens", async () => {
@@ -418,12 +420,18 @@ export function sameRows(rows: number[]) {
     await writeProjectFile(root, "src/b.ts", source);
 
     const result = await captureCli(["duplicates", "--root", ".", "src", "--limit", "0", "--include-small"], root);
-    const parsed = JSON.parse(result.stdout) as { suggestions?: unknown[]; omittedCounts?: { suggestions?: number } };
+    const parsed = JSON.parse(result.stdout) as {
+      suggestions?: unknown[];
+      omittedCounts?: { suggestions?: number; candidatePairs?: number };
+      stats?: { candidatePairs?: number };
+    };
 
     expect(result.exitCode).toBeUndefined();
     expect(result.stderr).toBe("");
     expect(parsed.suggestions).toHaveLength(0);
     expect(parsed.omittedCounts?.suggestions).toBeGreaterThan(0);
+    expect(parsed.omittedCounts?.candidatePairs).toBeUndefined();
+    expect(parsed.stats?.candidatePairs).toBeGreaterThan(0);
   });
 
   test("counts only considered fingerprints when oversized buckets are skipped", async () => {

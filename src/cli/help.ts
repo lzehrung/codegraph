@@ -215,7 +215,7 @@ Options:
   --max-bucket-size Skip candidate buckets larger than this value. Defaults to 200.
 
 Output:
-  Always emits JSON with scored suggestions, confidence, clone type, metrics, and omission counts.
+  Always emits JSON with scored suggestions, confidence, clone type, metrics, omission counts, and pair stats.
 `;
 
 export function helpTextForCommand(command: string, positionals: readonly string[]): string | undefined {
