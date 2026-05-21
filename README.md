@@ -185,6 +185,8 @@ const wrapped = await tool_impactJSON(root, { provider: "git", base: "HEAD", hea
 
 Good downstream packs preserve structured fields such as symbol handles, ranges, diff snippets, callsites, graph edges, candidate-test confidence, impact reasons, diagnostics, and `schemaVersion`/`format`. Streaming callers that only need incremental chunks can set `streamSummary: "light"` to skip terminal suggestions, export summaries, re-export chains, ranked top impacts, graph metadata, cycles, clusters, and surface-area work. Use [docs/library-api.md](./docs/library-api.md) for the full API reference and [docs/agent-workflows.md](./docs/agent-workflows.md) for session and streaming recipes.
 
+The supported package import surface is the root export, `@lzehrung/codegraph`. The public API boundary and compatibility-export guidance live in [docs/library-api.md](./docs/library-api.md#public-api-boundary).
+
 ## Common workflows
 
 - Repo triage: run `codegraph inspect ./src --limit 20`, then follow with `codegraph hotspots ./src --limit 20` or `codegraph unresolved` to focus the next pass.

@@ -2,7 +2,8 @@ import fsp from "node:fs/promises";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
 import { extractAngularJsReferences, extractAngularJsRegistrations } from "../frameworks/angularjs.js";
 import type { Edge } from "../types.js";
-import { resolveSpecifier, type WorkspaceConfig } from "../util.js";
+import { resolveSpecifier } from "../util/resolution.js";
+import { type WorkspaceConfig } from "../util/workspace.js";
 
 type AngularJsFileContext = {
   file: string;

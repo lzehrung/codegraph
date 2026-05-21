@@ -1,4 +1,4 @@
-import type { SymbolNodeKind } from "../graphs.js";
+import { type SymbolNodeKind } from "../graphs/symbol-graph.js";
 
 export type SymbolQuery = {
   text?: string;

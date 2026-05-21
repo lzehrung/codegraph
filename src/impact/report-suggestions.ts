@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { SymbolKind, type ProjectIndex, findReferences } from "../indexer.js";
-import { mapLimit, resolveFilePathFromRoot } from "../util.js";
+import { SymbolKind, type ProjectIndex } from "../indexer/types.js";
+import { findReferences } from "../indexer/navigation.js";
+import { resolveFilePathFromRoot, toProjectDisplayPath } from "../util/paths.js";
+import { mapLimit } from "../util/concurrency.js";
 import { listCandidateTestFiles } from "./context.js";
 import { collectHunkLineText, collectRemovedLines } from "./hunks.js";
 import { normalizeImpactFilePath } from "./path.js";
@@ -113,15 +115,12 @@ function classifyConfigImpact(
     const aliases = collectTsconfigPathAliases(change);
     const blastRadius = collectTsconfigBlastRadius(index, aliases);
     if (blastRadius.aliases.length) {
-      const relImporters = blastRadius.importers
-        .slice(0, 5)
-        .map((file) => path.relative(projectRoot, file).replace(/\\/g, "/"));
-      const importerSummary =
-        blastRadius.importers.length
-          ? `Likely impacted importer files: ${relImporters.join(", ")}${
-              blastRadius.importers.length > relImporters.length ? ", ..." : ""
-            }.`
-          : "No existing imports currently match these aliases.";
+      const relImporters = blastRadius.importers.slice(0, 5).map((file) => toProjectDisplayPath(projectRoot, file));
+      const importerSummary = blastRadius.importers.length
+        ? `Likely impacted importer files: ${relImporters.join(", ")}${
+            blastRadius.importers.length > relImporters.length ? ", ..." : ""
+          }.`
+        : "No existing imports currently match these aliases.";
       return {
         details: `TypeScript/JavaScript path aliases changed (${blastRadius.aliases.join(", ")}). ${importerSummary}`,
         confidence: "high",
@@ -165,10 +164,9 @@ function classifyConfigImpact(
       lineSignals.includes("dependson") ||
       lineSignals.includes("cache") ||
       lineSignals.includes("outputs");
-    const scopeSummary =
-      workspaceManifests.length
-        ? `${workspaceManifests.length} workspace package manifest(s) discovered.`
-        : "Workspace package manifests were not discovered.";
+    const scopeSummary = workspaceManifests.length
+      ? `${workspaceManifests.length} workspace package manifest(s) discovered.`
+      : "Workspace package manifests were not discovered.";
     return {
       details: affectsTasks
         ? `Monorepo task orchestration config changed (${path.basename(change.path)}); task dependency graph, caching, or outputs may shift across packages. ${scopeSummary}`
@@ -403,16 +401,20 @@ async function collectUntestedChangeSuggestions(
   };
 
   const suggestionEntries = await mapLimit(changedSymbols, 8, async (symbol) => {
-    const refs = await findReferences(index, {
-      def: {
-        file: symbol.file,
-        localName: symbol.name,
-        kind: symbol.kind,
-        range: symbol.range,
+    const refs = await findReferences(
+      index,
+      {
+        def: {
+          file: symbol.file,
+          localName: symbol.name,
+          kind: symbol.kind,
+          range: symbol.range,
+        },
       },
-    }, {
-      maxReferences: UNTESTED_CHANGE_REFERENCE_SCAN_LIMIT,
-    });
+      {
+        maxReferences: UNTESTED_CHANGE_REFERENCE_SCAN_LIMIT,
+      },
+    );
     if (refs.status !== "ok") return undefined;
 
     const hasTestRef = refs.references.some((entry) => testFiles.has(entry.file));
@@ -442,10 +444,9 @@ async function collectUntestedChangeSuggestions(
     });
     const suggestedCommand = inferTestCommand(candidateNames);
 
-    const details =
-      candidateNames.length
-        ? `Changed symbol has no discovered references in test files. ${coverageSummary} Candidate tests: ${candidateNames.join(", ")}. Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`
-        : `Changed symbol has no discovered references in test files. ${coverageSummary} Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`;
+    const details = candidateNames.length
+      ? `Changed symbol has no discovered references in test files. ${coverageSummary} Candidate tests: ${candidateNames.join(", ")}. Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`
+      : `Changed symbol has no discovered references in test files. ${coverageSummary} Fan-in for this file is ${fanIn}. Suggested command: ${suggestedCommand}`;
 
     return {
       file: symbol.file,

@@ -8,6 +8,7 @@
 - In boolean condition contexts, use the shortest syntactically equivalent expression. Prefer `items.length` over `items.length > 0`, `!items.length` over `items.length === 0`, and `items?.length` over `items && items.length > 0`.
 - Always consider the impact of a change on tests or when more test cases are needed. Never make tests pass for the sake of passing; always exercise real behavior.
 - Always keep documentation updated and accurate while being minimal and concise.
+- Keep paragraphs to no more than 3 concise sentences. Prefer bullets for dense details.
 - Keep `README.md` as the landing page and docs index. Do not turn it back into the only canonical reference for every example and workflow.
 - When public-facing install, runtime, CLI, library API, agent workflow, or release guidance changes, update the relevant canonical docs in the same change: `README.md`, `docs/installation.md`, `docs/cli.md`, `docs/library-api.md`, `docs/agent-workflows.md`, `docs/how-it-works.md`, and `PUBLISHING.md` as applicable.
 - Within any claimed cross-language capability, behavior should stay consistent across all supported languages for that capability. Avoid language-subset branches; if a limitation is intentional, document it in the parity docs and cover it with explicit tests in the same change.

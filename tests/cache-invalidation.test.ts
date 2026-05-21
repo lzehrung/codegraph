@@ -521,15 +521,23 @@ describe("Cache invalidation and strict hashing", () => {
     const aEntryBefore = manifestBefore.files[normalize(aPath)];
 
     const prepSpy = vi.spyOn(filePrep, "prepareSourceInput");
+    const report: BuildReport = { timings: {} };
     const incremental = await buildProjectIndexIncremental(root, {
       threads: 2,
       cache: "disk",
+      report,
     });
     expect(prepSpy).not.toHaveBeenCalled();
     prepSpy.mockRestore();
 
     const aEdges = incremental.graph.edges.filter((edge) => edge.from === normalize(aPath));
     expect(aEdges).toEqual(aEntryBefore.edges);
+    expect(report.files?.total).toBe(2);
+    expect(report.files?.cached).toBe(2);
+    expect(report.timings?.manifestMs).toEqual(expect.any(Number));
+    expect(report.timings?.graphMs).toEqual(expect.any(Number));
+    expect(report.timings?.writeManifestMs).toEqual(expect.any(Number));
+    expect(report.timings?.totalMs).toEqual(expect.any(Number));
   });
 
   it("drops manifest edges for deleted files during incremental builds", async () => {

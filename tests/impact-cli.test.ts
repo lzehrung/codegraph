@@ -102,6 +102,12 @@ describe("impact CLI output", () => {
     expect(Array.isArray(report.files)).toBe(true);
   }, slowCliTimeoutMs);
 
+  it("rejects invalid numeric analysis options", async () => {
+    await expect(runImpactCli(["impact", sampleRoot, "--provider", "raw", "--max-refs", "NaN"])).rejects.toThrow(
+      /Invalid --max-refs value "NaN"/i,
+    );
+  }, slowCliTimeoutMs);
+
   it("renders Mermaid output and honors graph/cache flags", async () => {
     const stdout = await runImpactCli([
       "impact",

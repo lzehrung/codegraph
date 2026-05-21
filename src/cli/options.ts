@@ -77,6 +77,22 @@ export function parseCacheModeOption(rawValue: string | undefined): CacheModeOpt
   throw new Error(`Invalid --cache value "${rawValue}". Expected one of: off, memory, disk.`);
 }
 
+function parseIntegerOptionValue(
+  rawValue: string,
+  optionName: string,
+  expectedDescription: string,
+  minValue: number,
+  maxValue?: number,
+): number {
+  const parsedValue = Number(rawValue);
+  const isAboveMinimum = parsedValue >= minValue;
+  const isBelowMaximum = maxValue === undefined || parsedValue <= maxValue;
+  if (!Number.isInteger(parsedValue) || !isAboveMinimum || !isBelowMaximum) {
+    throw new Error(`Invalid ${optionName} value "${rawValue}". Expected ${expectedDescription}.`);
+  }
+  return parsedValue;
+}
+
 export function parsePositiveIntegerOption(
   rawValue: string | undefined,
   optionName: string,
@@ -85,9 +101,73 @@ export function parsePositiveIntegerOption(
   if (rawValue === undefined) {
     return defaultValue;
   }
-  const parsedValue = Number(rawValue);
-  if (!Number.isInteger(parsedValue) || parsedValue < 1) {
-    throw new Error(`Invalid ${optionName} value "${rawValue}". Expected a positive integer.`);
+  return parseIntegerOptionValue(rawValue, optionName, "a positive integer", 1);
+}
+
+export function parseOptionalPositiveIntegerOption(
+  rawValue: string | undefined,
+  optionName: string,
+): number | undefined {
+  if (rawValue === undefined) {
+    return undefined;
   }
-  return parsedValue;
+  return parseIntegerOptionValue(rawValue, optionName, "a positive integer", 1);
+}
+
+export function parseNonNegativeIntegerOption(
+  rawValue: string | undefined,
+  optionName: string,
+  defaultValue: number,
+): number {
+  if (rawValue === undefined) {
+    return defaultValue;
+  }
+  return parseIntegerOptionValue(rawValue, optionName, "a non-negative integer", 0);
+}
+
+export function parseOptionalNonNegativeIntegerOption(
+  rawValue: string | undefined,
+  optionName: string,
+): number | undefined {
+  if (rawValue === undefined) {
+    return undefined;
+  }
+  return parseIntegerOptionValue(rawValue, optionName, "a non-negative integer", 0);
+}
+
+export function parseBoundedIntegerOption(
+  rawValue: string | undefined,
+  optionName: string,
+  defaultValue: number,
+  minValue: number,
+  maxValue: number,
+): number {
+  if (rawValue === undefined) {
+    return defaultValue;
+  }
+  return parseIntegerOptionValue(
+    rawValue,
+    optionName,
+    `an integer from ${minValue} to ${maxValue}`,
+    minValue,
+    maxValue,
+  );
+}
+
+export function parseOptionalBoundedIntegerOption(
+  rawValue: string | undefined,
+  optionName: string,
+  minValue: number,
+  maxValue: number,
+): number | undefined {
+  if (rawValue === undefined) {
+    return undefined;
+  }
+  return parseIntegerOptionValue(
+    rawValue,
+    optionName,
+    `an integer from ${minValue} to ${maxValue}`,
+    minValue,
+    maxValue,
+  );
 }

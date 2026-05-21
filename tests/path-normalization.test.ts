@@ -6,6 +6,7 @@ import {
   isFilePathWithinRoot,
   normalizePath,
   normalizeResolutionHints,
+  toProjectDisplayPath,
   toProjectRelativePath,
 } from "../src/util.js";
 import { normalizeImpactFilePath } from "../src/impact/path.js";
@@ -19,6 +20,13 @@ describe("cross-platform path normalization", () => {
     expect(isAbsoluteFilePath(windowsBackslashPath)).toBe(true);
     expect(resolveFilePathFromRoot("/workspace/codegraph", windowsDrivePath)).toBe(windowsDrivePath);
     expect(resolveFilePathFromRoot("/workspace/codegraph", windowsBackslashPath)).toBe(windowsBackslashPath);
+  });
+
+  it("resolves relative paths against POSIX absolute roots on any host OS", () => {
+    const root = "/mnt/e/git repos/codegraph";
+
+    expect(resolveFilePathFromRoot(root, ".")).toBe(root);
+    expect(resolveFilePathFromRoot(root, "./src")).toBe("/mnt/e/git repos/codegraph/src");
   });
 
   it("normalizes impact paths without re-rooting Windows-style absolute inputs", () => {
@@ -57,13 +65,26 @@ describe("cross-platform path normalization", () => {
     expect(normalizePath("src/feature/main.ts")).toBe("src/feature/main.ts");
   });
 
+  it("formats project display paths as relative slash-normalized paths when possible", () => {
+    expect(toProjectDisplayPath("/workspace/codegraph", "/workspace/codegraph/src/main.ts")).toBe("src/main.ts");
+    expect(toProjectDisplayPath("/workspace/codegraph", "C:/repo/src/main.ts")).toBe("C:/repo/src/main.ts");
+    expect(toProjectDisplayPath(undefined, String.raw`src\main.ts`)).toBe("src/main.ts");
+  });
+
+  it("relativizes POSIX absolute paths with POSIX semantics on any host OS", () => {
+    const root = "/mnt/e/git repos/codegraph";
+
+    expect(isFilePathWithinRoot(root, "/mnt/e/git repos/codegraph/src/main.ts")).toBe(true);
+    expect(toProjectRelativePath(root, "/mnt/e/git repos/codegraph/src/main.ts")).toBe("src/main.ts");
+    expect(isFilePathWithinRoot(root, "/mnt/e/git repos/codegraph-tools/src/main.ts")).toBe(false);
+    expect(toProjectRelativePath(root, "/mnt/e/git repos/codegraph-tools/src/main.ts")).toBeNull();
+  });
+
   it("asserts project-root containment with label-specific errors", () => {
     const root = "C:/workspace/codegraph";
 
     expect(assertFilePathWithinRoot(root, "src/main.ts", "Input")).toBe("C:/workspace/codegraph/src/main.ts");
-    expect(() => assertFilePathWithinRoot(root, "../outside.ts", "Input")).toThrow(
-      "Input is outside project root",
-    );
+    expect(() => assertFilePathWithinRoot(root, "../outside.ts", "Input")).toThrow("Input is outside project root");
   });
 
   it("normalizes resolution hints by trimming, slash-normalizing, and deduping", () => {

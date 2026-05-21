@@ -8,7 +8,7 @@
  * - production: Maximum accuracy for production analysis
  */
 
-import type { BuildOptions } from "./indexer.js";
+import { type BuildOptions } from "./indexer/types.js";
 import type { ImpactOptions } from "./impact/types.js";
 
 export type PresetName = "code-review" | "ci-fast" | "development" | "production";

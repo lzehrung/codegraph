@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util.js";
+import { isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util/paths.js";
 
 export function resolveArtifactSqlitePathCandidate(root: string, artifactPath: string): string {
   const resolved = path.isAbsolute(artifactPath) ? artifactPath : path.resolve(root, artifactPath);

@@ -2,10 +2,36 @@
   "name": "vendor/php-sample",
   "autoload": {
     "psr-4": {
-      "App\\": "src/"
+      "App\\": "src/",
+      "IncludedExcluded\\": "classmap/Excluded/"
+    },
+    "psr-0": {
+      "Legacy\\": "legacy/"
     },
     "classmap": [
-      "multi-namespace/"
+      "multi-namespace/",
+      "classmap/"
+    ],
+    "exclude-from-classmap": [
+      "classmap/Excluded/"
+    ],
+    "files": [
+      "autoload/global_helper.php",
+      "classmap/Excluded/excluded_helper.php"
+    ]
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Dev\\": "dev-src/"
+    },
+    "psr-0": {
+      "DevLegacy\\": "dev-legacy/"
+    },
+    "classmap": [
+      "dev-classmap/"
+    ],
+    "files": [
+      "autoload/dev_helper.php"
     ]
   }
 }

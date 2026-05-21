@@ -2,7 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { listProjectFiles } from "../util/projectFiles.js";
 import { normalizePath } from "../util/paths.js";
-import { mapLimit } from "../util/resolution.js";
+import { mapLimit } from "../util/concurrency.js";
 import { extractSqlFactsFromSource, sqlObjectBaseName } from "./extractFacts.js";
 import type { SqlBridgeReason, SqlStatementFact } from "./types.js";
 
@@ -79,14 +79,10 @@ async function collectSqlFacts(
     if (isSqlFile(normalized)) allSqlFiles.add(normalized);
   }
 
-  const factGroups = await mapLimit(
-    Array.from(allSqlFiles),
-    SQL_FACT_READ_CONCURRENCY,
-    async (filePath) => {
-      const source = await readExistingFile(filePath);
-      return source === null ? [] : extractSqlFactsFromSource(filePath, source);
-    },
-  );
+  const factGroups = await mapLimit(Array.from(allSqlFiles), SQL_FACT_READ_CONCURRENCY, async (filePath) => {
+    const source = await readExistingFile(filePath);
+    return source === null ? [] : extractSqlFactsFromSource(filePath, source);
+  });
   return factGroups.flat();
 }
 
@@ -155,7 +151,12 @@ export async function collectSqlReviewContext(
   const changedSqlLiteralSources = await collectChangedSqlLiteralSources(changedFiles);
   if (changedSqlFiles.size === 0 && !changedSqlLiteralSources.length) return undefined;
 
-  const facts = await collectSqlFacts(projectRoot, changedFiles, !!changedSqlLiteralSources.length, options.projectFiles);
+  const facts = await collectSqlFacts(
+    projectRoot,
+    changedFiles,
+    !!changedSqlLiteralSources.length,
+    options.projectFiles,
+  );
   if (!facts.length) return undefined;
 
   const literalObjects = collectChangedSqlLiteralObjects(changedSqlLiteralSources, facts);

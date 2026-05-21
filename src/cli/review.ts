@@ -2,10 +2,16 @@ import { performance } from "node:perf_hooks";
 import { buildReviewReport, type ReviewBuildReport, type ReviewDepth } from "../review.js";
 import type { CandidateTestFile } from "../impact/context.js";
 import type { BuildReport } from "../indexer/types.js";
-import type { GraphBuildOptions } from "../graphs.js";
+import { type GraphBuildOptions } from "../graphs/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
-import type { ProjectFileDiscoveryOptions } from "../util.js";
-import { parseCacheModeOption } from "./options.js";
+import {
+  REVIEW_SUMMARY_CANDIDATES_PER_CONFIDENCE_LIMIT,
+  REVIEW_SUMMARY_CHANGED_FILE_LIMIT,
+  REVIEW_SUMMARY_SYMBOLS_PER_FILE_LIMIT,
+  REVIEW_SUMMARY_TASK_LIMIT,
+} from "../presentation/bounds.js";
+import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
+import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption } from "./options.js";
 
 type CommandTimingReport = {
   totalMs?: number;
@@ -67,10 +73,10 @@ function appendCandidateTestGroup(
   const matches = candidates.filter((candidate) => candidate.confidence === confidence);
   if (!matches.length) return 0;
   lines.push(title);
-  for (const candidate of matches.slice(0, 8)) {
+  for (const candidate of matches.slice(0, REVIEW_SUMMARY_CANDIDATES_PER_CONFIDENCE_LIMIT)) {
     lines.push(`- ${candidate.file}: ${candidate.reason}`);
   }
-  const remaining = matches.length - 8;
+  const remaining = matches.length - REVIEW_SUMMARY_CANDIDATES_PER_CONFIDENCE_LIMIT;
   if (remaining > 0) {
     lines.push(`- ... and ${remaining} more`);
   }
@@ -102,12 +108,12 @@ function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport
   if (!report.changedFiles.length) {
     lines.push("- none");
   } else {
-    for (const file of report.changedFiles.slice(0, 20)) {
-      const symbolNames = file.symbols.slice(0, 5).map((symbol) => symbol.name);
+    for (const file of report.changedFiles.slice(0, REVIEW_SUMMARY_CHANGED_FILE_LIMIT)) {
+      const symbolNames = file.symbols.slice(0, REVIEW_SUMMARY_SYMBOLS_PER_FILE_LIMIT).map((symbol) => symbol.name);
       const symbolSummary = symbolNames.length ? ` (${symbolNames.join(", ")})` : "";
       lines.push(`- ${file.file}: ${file.status}${symbolSummary}`);
     }
-    const remainingFiles = report.changedFiles.length - 20;
+    const remainingFiles = report.changedFiles.length - REVIEW_SUMMARY_CHANGED_FILE_LIMIT;
     if (remainingFiles > 0) {
       lines.push(`- ... and ${remainingFiles} more`);
     }
@@ -130,10 +136,10 @@ function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport
   if (!report.reviewTasks.length) {
     lines.push("- none");
   } else {
-    for (const task of report.reviewTasks.slice(0, 8)) {
+    for (const task of report.reviewTasks.slice(0, REVIEW_SUMMARY_TASK_LIMIT)) {
       lines.push(`- ${task.id}: ${task.priority} - ${task.title} (${task.reason})`);
     }
-    const remainingTasks = report.reviewTasks.length - 8;
+    const remainingTasks = report.reviewTasks.length - REVIEW_SUMMARY_TASK_LIMIT;
     if (remainingTasks > 0) {
       lines.push(`- ... and ${remainingTasks} more`);
     }
@@ -159,16 +165,16 @@ export async function handleReviewCommand(context: ReviewCommandContext): Promis
     context.exit(2);
   }
   const threadsRaw = context.getOpt("--threads");
-  const threads = threadsRaw !== undefined ? Number(threadsRaw) : undefined;
+  const threads = parseOptionalNonNegativeIntegerOption(threadsRaw, "--threads");
   const cache = parseCacheModeOption(context.getOpt("--cache"));
   const cacheStrict = context.hasFlag("--cache-strict");
   const cacheVerify = context.hasFlag("--cache-verify");
   const incrementalStrict = context.hasFlag("--incremental-strict");
   const includeSymbolDetails = context.hasFlag("--include-symbol-details");
   const maxCallsitesRaw = context.getOpt("--max-callsites");
-  const maxCallsites = maxCallsitesRaw !== undefined ? Number(maxCallsitesRaw) : undefined;
+  const maxCallsites = parseOptionalNonNegativeIntegerOption(maxCallsitesRaw, "--max-callsites");
   const maxTestsRaw = context.getOpt("--max-tests");
-  const maxTests = maxTestsRaw !== undefined ? Number(maxTestsRaw) : undefined;
+  const maxTests = parseOptionalNonNegativeIntegerOption(maxTestsRaw, "--max-tests");
   const reviewOpts: Parameters<typeof buildReviewReport>[1] = {};
   reviewOpts.discovery = context.discoveryOptions;
   if (reviewDepth) reviewOpts.reviewDepth = reviewDepth;

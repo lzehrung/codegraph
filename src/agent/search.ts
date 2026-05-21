@@ -1,13 +1,20 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { LANG_CONFIGS } from "../bootstrap/treeSitterLanguages.js";
 import { supportForFile } from "../languages.js";
 import { chunkFile } from "../chunking/chunkFile.js";
 import type { SymbolDef } from "../indexer/types.js";
 import type { Range } from "../types.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
-import type { SymbolNode } from "../graphs.js";
-import { normalizePath } from "../util.js";
+import { type SymbolNode } from "../graphs/symbol-graph.js";
+import {
+  AGENT_SEARCH_EVIDENCE_PER_RESULT_LIMIT,
+  AGENT_SEARCH_FOLLOWUPS_PER_RESULT_LIMIT,
+  AGENT_SEARCH_FORMAT_REASON_LIMIT,
+  AGENT_SEARCH_NEIGHBORS_PER_RESULT_LIMIT,
+  AGENT_SEARCH_RANK_REASONS_PER_RESULT_LIMIT,
+  AGENT_SEARCH_RESULT_LIMIT,
+} from "../presentation/bounds.js";
+import { normalizePath } from "../util/paths.js";
 import { boundAgentList, defaultAgentLimit } from "./bounds.js";
 import {
   formatAgentChunkHandle,
@@ -24,7 +31,9 @@ import {
 import {
   collectDefinitionFollowUps,
   collectFileFollowUps as collectCommonFileFollowUps,
+  isAgentSqlObjectNode,
   normalizeAgentFilePath,
+  resolveAgentSnapshotFile,
 } from "./normalize.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
@@ -90,7 +99,10 @@ export type AgentSearchResponse = {
   results: AgentSearchResult[];
 };
 
-type MutableSearchResult = Omit<AgentSearchResult, "rankReasons" | "evidence" | "neighbors" | "followUps" | "omittedCounts"> & {
+type MutableSearchResult = Omit<
+  AgentSearchResult,
+  "rankReasons" | "evidence" | "neighbors" | "followUps" | "omittedCounts"
+> & {
   rankReasons: Set<string>;
   evidence: AgentSearchEvidence[];
   neighbors: Map<string, { relation: string; target: string; file?: string }>;
@@ -128,13 +140,8 @@ type ReachableFile = {
 };
 
 const DEFAULT_LIMIT = 20;
-const MAX_RESULTS = 100;
 const MAX_TEXT_BYTES = 300_000;
 const MAX_GRAPH_DEPTH = 5;
-const MAX_RANK_REASONS_PER_RESULT = 6;
-const MAX_EVIDENCE_PER_RESULT = 5;
-const MAX_NEIGHBORS_PER_RESULT = 12;
-const MAX_FOLLOWUPS_PER_RESULT = 8;
 const CHUNK_LANGUAGE_ALIASES: Record<string, string> = {
   js: "javascript",
   ts: "typescript",
@@ -159,18 +166,23 @@ export function formatAgentSearchResponse(response: AgentSearchResponse): string
   }
   return response.results
     .map((result, index) => {
-      const location = result.range ? `${result.file}:${result.range.start.line}:${result.range.start.column}` : result.file;
-      const reasons = result.rankReasons.slice(0, 3).join("; ");
+      const location = result.range
+        ? `${result.file}:${result.range.start.line}:${result.range.start.column}`
+        : result.file;
+      const reasons = result.rankReasons.slice(0, AGENT_SEARCH_FORMAT_REASON_LIMIT).join("; ");
       return `${index + 1}. ${result.label} [${result.kind}] ${location} score=${result.score}\n   ${reasons}`;
     })
     .join("\n");
 }
 
-async function searchSnapshot(snapshot: AgentProjectSnapshot, request: AgentSearchRequest): Promise<AgentSearchResponse> {
+async function searchSnapshot(
+  snapshot: AgentProjectSnapshot,
+  request: AgentSearchRequest,
+): Promise<AgentSearchResponse> {
   const mode = request.mode ?? "hybrid";
   const tokens = tokenizeQuery(request.query);
   const resultMap = new Map<string, MutableSearchResult>();
-  const limit = defaultAgentLimit(request.limit, DEFAULT_LIMIT, MAX_RESULTS);
+  const limit = defaultAgentLimit(request.limit, DEFAULT_LIMIT, AGENT_SEARCH_RESULT_LIMIT);
   let fileNeighborIndex: Map<string, FileNeighbor[]> | undefined;
   const getFileNeighborIndex = (): Map<string, FileNeighbor[]> => {
     fileNeighborIndex ??= buildFileNeighborIndex(snapshot);
@@ -191,12 +203,17 @@ async function searchSnapshot(snapshot: AgentProjectSnapshot, request: AgentSear
   }
 
   if (request.from !== undefined && (mode === "hybrid" || mode === "graph")) {
-    applyGraphNeighborhood(snapshot, resultMap, getFileNeighborIndex(), tokens, request.from, normalizeDepth(request.depth));
+    applyGraphNeighborhood(
+      snapshot,
+      resultMap,
+      getFileNeighborIndex(),
+      tokens,
+      request.from,
+      normalizeDepth(request.depth),
+    );
   }
 
-  const candidates = [...resultMap.values()]
-    .filter((result) => result.score > 0)
-    .sort(compareResults);
+  const candidates = [...resultMap.values()].filter((result) => result.score > 0).sort(compareResults);
   const boundedResults = boundAgentList(candidates, limit);
   const results = boundedResults.items.map(finalizeResult);
 
@@ -207,10 +224,10 @@ async function searchSnapshot(snapshot: AgentProjectSnapshot, request: AgentSear
     root: snapshot.root,
     limits: {
       results: limit,
-      rankReasonsPerResult: MAX_RANK_REASONS_PER_RESULT,
-      evidencePerResult: MAX_EVIDENCE_PER_RESULT,
-      neighborsPerResult: MAX_NEIGHBORS_PER_RESULT,
-      followUpsPerResult: MAX_FOLLOWUPS_PER_RESULT,
+      rankReasonsPerResult: AGENT_SEARCH_RANK_REASONS_PER_RESULT_LIMIT,
+      evidencePerResult: AGENT_SEARCH_EVIDENCE_PER_RESULT_LIMIT,
+      neighborsPerResult: AGENT_SEARCH_NEIGHBORS_PER_RESULT_LIMIT,
+      followUpsPerResult: AGENT_SEARCH_FOLLOWUPS_PER_RESULT_LIMIT,
     },
     resultCount: results.length,
     totalCandidates: candidates.length,
@@ -240,9 +257,7 @@ function normalizeSearchText(input: string): string {
 }
 
 function splitCamelCase(input: string): string {
-  return input
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+  return input.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
 }
 
 function matchTokenScore(text: string, tokens: string[]): { score: number; matched: string[] } {
@@ -303,19 +318,19 @@ function addSymbolResults(
   mode: AgentSearchMode,
 ): void {
   for (const node of snapshot.symbolGraph.nodes.values()) {
-    const sqlObject = isSqlObjectNode(node);
+    const sqlObject = isAgentSqlObjectNode(node);
     if (mode === "sql" && !sqlObject) continue;
     if (mode === "symbol" && sqlObject) continue;
 
     const nameMatch = matchTokenScore(node.name, tokens);
-    const fileMatch = matchTokenScore(relativeFile(snapshot.root, node.file), tokens);
+    const fileMatch = matchTokenScore(normalizeAgentFilePath(snapshot.root, node.file), tokens);
     const docMatch = node.docstring ? matchTokenScore(node.docstring, tokens) : { score: 0, matched: [] };
     const score = nameMatch.score * 4 + fileMatch.score + docMatch.score;
     if (score <= 0) continue;
 
     const def = lookup.defById.get(node.id);
     if (!def) continue;
-    const relFile = relativeFile(snapshot.root, node.file);
+    const relFile = normalizeAgentFilePath(snapshot.root, node.file);
     const handle = sqlObject
       ? formatAgentSqlHandle({ name: node.name, file: relFile, line: def.range.start.line })
       : formatAgentSymbolHandle({
@@ -352,10 +367,6 @@ function addSymbolResults(
   }
 }
 
-function isSqlObjectNode(node: SymbolNode): boolean {
-  return node.kind === "table" || node.kind === "view" || node.kind === "index" || node.kind === "routine";
-}
-
 function addPathResults(
   snapshot: AgentProjectSnapshot,
   resultMap: Map<string, MutableSearchResult>,
@@ -363,7 +374,7 @@ function addPathResults(
   tokens: string[],
 ): void {
   for (const file of snapshot.files) {
-    const relFile = relativeFile(snapshot.root, file);
+    const relFile = normalizeAgentFilePath(snapshot.root, file);
     const pathMatch = matchTokenScore(relFile, tokens);
     if (pathMatch.score <= 0) continue;
 
@@ -396,7 +407,7 @@ async function addTextResults(
       const match = matchTokenScore([chunk.name, chunk.text].filter(Boolean).join(" "), tokens);
       if (match.score <= 0) continue;
 
-      const relFile = relativeFile(snapshot.root, file);
+      const relFile = normalizeAgentFilePath(snapshot.root, file);
       const handle = formatAgentChunkHandle({ file: relFile, line: chunk.startLine });
       const result = upsertResult(resultMap, {
         handle,
@@ -440,7 +451,7 @@ function applyGraphNeighborhood(
 
   const reachable = collectReachableFiles(fileNeighborIndex, anchorFiles, depth);
   for (const entry of reachable.values()) {
-    const relFile = relativeFile(snapshot.root, entry.file);
+    const relFile = normalizeAgentFilePath(snapshot.root, entry.file);
     const existingResults = [...resultMap.values()].filter((result) => result.file === relFile);
     const fileMatch = matchTokenScore(relFile, tokens);
     if (fileMatch.score > 0) {
@@ -477,18 +488,18 @@ function graphBoost(distance: number): number {
 
 function resolveAnchorFiles(snapshot: AgentProjectSnapshot, from: string): Set<string> {
   const anchor = new Set<string>();
-  const directFile = resolveFileCandidate(snapshot, from);
+  const directFile = resolveAgentSnapshotFile(snapshot, from);
   if (directFile) anchor.add(directFile);
 
   const fileLikeHandle = parseAgentFileHandle(from) ?? parseAgentChunkHandle(from) ?? parseAgentGraphHandle(from);
   if (fileLikeHandle) {
-    const handleFile = resolveFileCandidate(snapshot, fileLikeHandle.file);
+    const handleFile = resolveAgentSnapshotFile(snapshot, fileLikeHandle.file);
     if (handleFile) anchor.add(handleFile);
   }
 
   if (from.startsWith("symbol:")) {
     const symbolHandle = parseAgentSymbolHandle(from);
-    const symbolFile = symbolHandle ? resolveFileCandidate(snapshot, symbolHandle.file) : null;
+    const symbolFile = symbolHandle ? resolveAgentSnapshotFile(snapshot, symbolHandle.file) : null;
     if (symbolFile) {
       anchor.add(symbolFile);
     } else {
@@ -500,7 +511,7 @@ function resolveAnchorFiles(snapshot: AgentProjectSnapshot, from: string): Set<s
   if (from.startsWith("sql:")) {
     const sqlHandle = parseAgentSqlHandle(from);
     if (sqlHandle) {
-      const file = resolveFileCandidate(snapshot, sqlHandle.file);
+      const file = resolveAgentSnapshotFile(snapshot, sqlHandle.file);
       if (file) anchor.add(file);
     }
   }
@@ -512,12 +523,6 @@ function resolveAnchorFiles(snapshot: AgentProjectSnapshot, from: string): Set<s
   }
 
   return anchor;
-}
-
-function resolveFileCandidate(snapshot: AgentProjectSnapshot, candidate: string): string | null {
-  const normalizedFiles = new Map(snapshot.files.map((file) => [normalizePath(file), normalizePath(file)]));
-  const absoluteCandidate = path.isAbsolute(candidate) ? normalizePath(candidate) : normalizePath(path.resolve(snapshot.root, candidate));
-  return normalizedFiles.get(absoluteCandidate) ?? null;
 }
 
 function collectReachableFiles(
@@ -561,9 +566,12 @@ async function readSearchableFile(file: string): Promise<string | null> {
   }
 }
 
-function buildTextChunks(file: string, text: string): Array<{ name?: string; text: string; startLine: number; endLine: number }> {
+function buildTextChunks(
+  file: string,
+  text: string,
+): Array<{ name?: string; text: string; startLine: number; endLine: number }> {
   const support = supportForFile(file);
-  const languageId = support ? CHUNK_LANGUAGE_ALIASES[support.id] ?? support.id : undefined;
+  const languageId = support ? (CHUNK_LANGUAGE_ALIASES[support.id] ?? support.id) : undefined;
   const language = languageId ? LANG_CONFIGS[languageId] : undefined;
   if (language) {
     try {
@@ -598,13 +606,13 @@ function makeSnippet(text: string, tokens: string[]): string {
   const lines = text.split(/\r?\n/);
   const matchIndex = lines.findIndex((line) => matchTokenScore(line, tokens).score > 0);
   const index = matchIndex >= 0 ? matchIndex : 0;
-  return lines.slice(Math.max(0, index - 1), Math.min(lines.length, index + 2)).join("\n").trim();
+  return lines
+    .slice(Math.max(0, index - 1), Math.min(lines.length, index + 2))
+    .join("\n")
+    .trim();
 }
 
-function upsertResult(
-  resultMap: Map<string, MutableSearchResult>,
-  base: SearchResultBase,
-): MutableSearchResult {
+function upsertResult(resultMap: Map<string, MutableSearchResult>, base: SearchResultBase): MutableSearchResult {
   const existing = resultMap.get(base.handle);
   if (existing) return existing;
   const result: MutableSearchResult = {
@@ -697,7 +705,7 @@ function addSymbolNeighbors(
   neighbors: readonly SymbolNeighbor[],
 ): void {
   for (const neighbor of neighbors) {
-    const relFile = relativeFile(snapshot.root, neighbor.target.file);
+    const relFile = normalizeAgentFilePath(snapshot.root, neighbor.target.file);
     const key = `${neighbor.key}:${neighbor.target.id}`;
     result.neighbors.set(key, {
       relation: neighbor.relation,
@@ -713,7 +721,7 @@ function addFileNeighbors(
   neighbors: readonly FileNeighbor[],
 ): void {
   for (const neighbor of neighbors) {
-    const relFile = relativeFile(snapshot.root, neighbor.file);
+    const relFile = normalizeAgentFilePath(snapshot.root, neighbor.file);
     result.neighbors.set(`${neighbor.relation}:${relFile}`, {
       relation: neighbor.relation,
       target: relFile,
@@ -759,10 +767,10 @@ function finalizeResult(result: MutableSearchResult): AgentSearchResult {
     return left.target.localeCompare(right.target);
   });
   const followUps = [...result.followUps].sort();
-  const boundedRankReasons = boundAgentList(rankReasons, MAX_RANK_REASONS_PER_RESULT);
-  const boundedEvidence = boundAgentList(evidence, MAX_EVIDENCE_PER_RESULT);
-  const boundedNeighbors = boundAgentList(neighbors, MAX_NEIGHBORS_PER_RESULT);
-  const boundedFollowUps = boundAgentList(followUps, MAX_FOLLOWUPS_PER_RESULT);
+  const boundedRankReasons = boundAgentList(rankReasons, AGENT_SEARCH_RANK_REASONS_PER_RESULT_LIMIT);
+  const boundedEvidence = boundAgentList(evidence, AGENT_SEARCH_EVIDENCE_PER_RESULT_LIMIT);
+  const boundedNeighbors = boundAgentList(neighbors, AGENT_SEARCH_NEIGHBORS_PER_RESULT_LIMIT);
+  const boundedFollowUps = boundAgentList(followUps, AGENT_SEARCH_FOLLOWUPS_PER_RESULT_LIMIT);
 
   return {
     handle: result.handle,
@@ -782,8 +790,4 @@ function finalizeResult(result: MutableSearchResult): AgentSearchResult {
       followUps: boundedFollowUps.omitted,
     },
   };
-}
-
-function relativeFile(root: string, file: string): string {
-  return normalizeAgentFilePath(root, file);
 }

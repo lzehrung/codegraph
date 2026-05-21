@@ -1,6 +1,6 @@
 import type { FileId, Range } from "../types.js";
-import type { SymbolHandle, SymbolDef } from "../indexer.js";
-import type { ProjectFileInfo } from "../util.js";
+import { type SymbolHandle, type SymbolDef } from "../indexer/types.js";
+import { type ProjectFileInfo } from "../util/projectFiles.js";
 
 // Diff parsing types
 export type Hunk = {

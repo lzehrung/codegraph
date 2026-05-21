@@ -1,3 +1,10 @@
+/**
+ * Public package entrypoint.
+ *
+ * The npm package currently exposes only `@lzehrung/codegraph`; implementation
+ * modules below `dist/` are not a stable import surface for consumers.
+ */
+
 /** Language registry helpers and support metadata. */
 export * from "./languages.js";
 

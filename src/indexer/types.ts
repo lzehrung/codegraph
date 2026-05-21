@@ -6,7 +6,7 @@ import type { NativeFallbackReason, NativeRuntimeMode } from "../native/contract
 import type { ScopeIndex } from "./scope-types.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import type { Edge, FileId, Graph, Range } from "../types.js";
-import type { ProjectFileDiscoveryOptions, ProjectFileInfo } from "../util.js";
+import { type ProjectFileDiscoveryOptions, type ProjectFileInfo } from "../util/projectFiles.js";
 import type { ImportBinding } from "./import-types.js";
 
 export type { ImportBinding } from "./import-types.js";

@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import type { ProjectFileDiscoveryOptions } from "./util.js";
+import { type ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
 
 export const CODEGRAPH_CONFIG_FILE = "codegraph.config.json";
 
@@ -31,7 +31,7 @@ function uniq(values: readonly string[]): string[] {
 }
 
 function normalizeDiscoveryRoot(root: string | undefined): string | undefined {
-  const normalized = root?.trim();
+  const normalized = root?.trim().replace(/\\/g, "/");
   return normalized ? normalized : undefined;
 }
 

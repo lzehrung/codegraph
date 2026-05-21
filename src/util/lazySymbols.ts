@@ -8,9 +8,9 @@
 
 import picomatch from "picomatch";
 import { supportForFile } from "../languages.js";
-import type { ImportBinding, ModuleIndex, SymbolDef } from "../indexer.js";
+import { type ImportBinding, type ModuleIndex, type SymbolDef } from "../indexer/types.js";
 import type { FileId } from "../types.js";
-import { collectLocalsAndExportsFromSource } from "../indexer.js";
+import { collectLocalsAndExportsFromSource } from "../indexer/locals-and-exports.js";
 import { parsePreparedFileContext } from "../indexer/parse-context.js";
 
 /**
@@ -204,10 +204,7 @@ export class LazyProjectIndex {
         ? Math.max(0, Math.floor(options.maxCached))
         : 100;
     this.preloadStrategy = options?.preloadStrategy ?? "none";
-    this.preloadMatcher =
-      options?.preloadPatterns?.length
-        ? picomatch(options.preloadPatterns, { dot: true })
-        : null;
+    this.preloadMatcher = options?.preloadPatterns?.length ? picomatch(options.preloadPatterns, { dot: true }) : null;
   }
 
   /**

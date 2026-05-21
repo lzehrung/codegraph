@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { getHotspots, type SymbolNode } from "../graphs.js";
+import { getHotspots } from "../graphs/hotspots.js";
+import { type SymbolNode } from "../graphs/symbol-graph.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
 import { queryGraphSqliteRaw, writeGraphSqlite } from "../sqlite.js";
-import { isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util.js";
+import { isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util/paths.js";
 import { formatAgentSqlHandle, formatAgentSymbolHandle } from "./handles.js";
-import { normalizeAgentFilePath } from "./normalize.js";
+import { createAgentFileLookup, normalizeAgentFilePath } from "./normalize.js";
 import { createAgentSession } from "./session.js";
 import type { AgentProjectSnapshot, AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
@@ -188,7 +189,9 @@ function normalizeArtifactSelection(request: CodegraphArtifactBuildRequest): {
 async function validateOutputDirectory(outDir: string, force: boolean): Promise<void> {
   const entries = await readDirectoryIfPresent(outDir);
   if (entries.length && !force) {
-    throw new Error(`Refusing to write into non-empty output directory: ${outDir}. Pass --force to overwrite artifacts.`);
+    throw new Error(
+      `Refusing to write into non-empty output directory: ${outDir}. Pass --force to overwrite artifacts.`,
+    );
   }
 }
 
@@ -402,14 +405,14 @@ function buildGraphJson(snapshot: AgentProjectSnapshot): {
   const symbolIds = buildPortableSymbolIdMap(snapshot);
   const portableSymbolId = (id: string): string => symbolIds.get(id) ?? id;
   const graph: PortableGraphBody = {
-    files: [...snapshot.fileGraph.nodes].map((file) => relativeFile(snapshot.root, file)).sort(),
+    files: [...snapshot.fileGraph.nodes].map((file) => normalizeAgentFilePath(snapshot.root, file)).sort(),
     fileEdges: [...snapshot.fileGraph.edges]
       .map((edge) => ({
         ...edge,
-        from: relativeFile(snapshot.root, edge.from),
+        from: normalizeAgentFilePath(snapshot.root, edge.from),
         to:
           edge.to.type === "file"
-            ? { type: "file" as const, path: relativeFile(snapshot.root, edge.to.path) }
+            ? { type: "file" as const, path: normalizeAgentFilePath(snapshot.root, edge.to.path) }
             : { type: "external" as const, name: edge.to.name },
       }))
       .sort((left, right) => {
@@ -423,7 +426,7 @@ function buildGraphJson(snapshot: AgentProjectSnapshot): {
       .map((node) => ({
         ...node,
         id: portableSymbolId(node.id),
-        file: relativeFile(snapshot.root, node.file),
+        file: normalizeAgentFilePath(snapshot.root, node.file),
       }))
       .sort((left, right) => {
         const fileDelta = left.file.localeCompare(right.file);
@@ -460,7 +463,7 @@ function buildPortableSymbolIdMap(snapshot: AgentProjectSnapshot): Map<string, s
   const graphNodeIds = new Set<string>();
   for (const moduleIndex of snapshot.index.byFile.values()) {
     for (const local of moduleIndex.locals) {
-      const relFile = relativeFile(snapshot.root, local.file);
+      const relFile = normalizeAgentFilePath(snapshot.root, local.file);
       const id = defNodeId(local);
       const isSqlObject = local.file.toLowerCase().endsWith(".sql");
       byId.set(
@@ -479,16 +482,19 @@ function buildPortableSymbolIdMap(snapshot: AgentProjectSnapshot): Map<string, s
 
   for (const node of snapshot.symbolGraph.nodes.values()) {
     if (byId.has(node.id)) continue;
-    const relFile = relativeFile(snapshot.root, node.file);
+    const relFile = normalizeAgentFilePath(snapshot.root, node.file);
     byId.set(node.id, uniqueGraphSymbolId(graphNodeIds, relFile, node));
   }
   return byId;
 }
 
 function uniqueGraphSymbolId(seen: Set<string>, relFile: string, node: SymbolNode): string {
-  const base = ["graph-symbol", encodeURIComponent(relFile), encodeURIComponent(node.kind), encodeURIComponent(node.name)].join(
-    ":",
-  );
+  const base = [
+    "graph-symbol",
+    encodeURIComponent(relFile),
+    encodeURIComponent(node.kind),
+    encodeURIComponent(node.name),
+  ].join(":");
   let candidate = base;
   let suffix = 2;
   while (seen.has(candidate)) {
@@ -519,9 +525,7 @@ async function filterSnapshotForOutputDirectory(
       return edge.to.type !== "file" || !isOutputFile(edge.to.path);
     }),
   };
-  const symbols = new Map(
-    [...snapshot.symbolGraph.nodes.entries()].filter(([, node]) => !isOutputFile(node.file)),
-  );
+  const symbols = new Map([...snapshot.symbolGraph.nodes.entries()].filter(([, node]) => !isOutputFile(node.file)));
   const symbolGraph = {
     nodes: symbols,
     edges: snapshot.symbolGraph.edges.filter((edge) => symbols.has(edge.from) && symbols.has(edge.to)),
@@ -538,6 +542,7 @@ async function filterSnapshotForOutputDirectory(
   return {
     ...snapshot,
     files,
+    fileLookup: createAgentFileLookup(files),
     index,
     fileGraph,
     symbolGraph,
@@ -607,7 +612,7 @@ function formatHotspots(
   if (!hotspots.length) return ["- None"];
   return hotspots.map(
     (hotspot) =>
-      `- ${relativeFile(snapshot.root, hotspot.file)} (fan-in ${hotspot.fanIn}, fan-out ${hotspot.fanOut}, score ${hotspot.score})`,
+      `- ${normalizeAgentFilePath(snapshot.root, hotspot.file)} (fan-in ${hotspot.fanIn}, fan-out ${hotspot.fanOut}, score ${hotspot.score})`,
   );
 }
 
@@ -615,7 +620,7 @@ function buildQuestions(snapshot: AgentProjectSnapshot): ArtifactQuestion[] {
   const questions: ArtifactQuestion[] = [];
   const hotspots = getHotspots(snapshot.fileGraph, { limit: 3 });
   for (const hotspot of hotspots) {
-    const file = relativeFile(snapshot.root, hotspot.file);
+    const file = normalizeAgentFilePath(snapshot.root, hotspot.file);
     questions.push({
       id: `rdeps:${file}`,
       question: `Which files depend on ${file}?`,
@@ -657,7 +662,7 @@ function collectExportedSymbols(
   for (const moduleIndex of snapshot.index.byFile.values()) {
     for (const exportEntry of moduleIndex.exports) {
       if (exportEntry.type !== "local") continue;
-      const file = relativeFile(snapshot.root, exportEntry.target.file);
+      const file = normalizeAgentFilePath(snapshot.root, exportEntry.target.file);
       exported.push({
         name: exportEntry.exportedAs,
         localName: exportEntry.target.localName,
@@ -680,11 +685,13 @@ function collectExportedSymbols(
   });
 }
 
-function collectSqlObjects(snapshot: AgentProjectSnapshot): Array<{ name: string; kind: string; file: string; handle: string }> {
+function collectSqlObjects(
+  snapshot: AgentProjectSnapshot,
+): Array<{ name: string; kind: string; file: string; handle: string }> {
   return [...snapshot.symbolGraph.nodes.values()]
     .filter((node) => node.kind === "table" || node.kind === "view" || node.kind === "index" || node.kind === "routine")
     .map((node) => {
-      const file = relativeFile(snapshot.root, node.file);
+      const file = normalizeAgentFilePath(snapshot.root, node.file);
       const def = snapshot.index.byFile.get(node.file)?.locals.find((local) => defNodeId(local) === node.id);
       return {
         name: node.name,
@@ -702,8 +709,4 @@ function collectSqlObjects(snapshot: AgentProjectSnapshot): Array<{ name: string
 
 async function writeJson(filePath: string, value: unknown): Promise<void> {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-function relativeFile(root: string, file: string): string {
-  return normalizeAgentFilePath(root, file);
 }

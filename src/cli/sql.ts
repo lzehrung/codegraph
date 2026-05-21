@@ -1,6 +1,6 @@
 import path from "node:path";
 import { queryGraphSqliteRaw } from "../sqlite.js";
-import { normalizePath, resolveFilePathFromRoot } from "../util.js";
+import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 
 export type SqlCommandContext = {
   getOpt: (name: string) => string | undefined;

@@ -7,7 +7,7 @@
  */
 
 import crypto from "node:crypto";
-import type { ExportEntry, SymbolDef } from "../indexer.js";
+import { type ExportEntry, type SymbolDef } from "../indexer/types.js";
 import type { Edge } from "../types.js";
 
 /**

@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { normalizePath } from "../util.js";
+import { normalizePath } from "../util/paths.js";
 import type { Edge } from "../types.js";
 
 export const DEFAULT_REF_CONTEXT_LINES = 5;

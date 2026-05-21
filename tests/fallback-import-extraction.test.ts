@@ -68,6 +68,8 @@ describe("Import extraction fallback reporting", () => {
       "const req = require('./req')",
       "const { pick } = require('./pick')",
       "const dyn = import('./dyn')",
+      "import legacy = require('./legacy')",
+      'declare module "typed-ambient" {}',
     ].join("\n");
 
     const specs = extractJsTsSpecifiers(source);
@@ -79,8 +81,11 @@ describe("Import extraction fallback reporting", () => {
       "./req",
       "./pick",
       "./dyn",
+      "./legacy",
+      "typed-ambient",
     ]);
     expect(specs[0]?.typeOnly).toBe(true);
+    expect(specs.at(-1)?.typeOnly).toBe(true);
   });
 
   it("ignores import and require examples inside string literals", () => {

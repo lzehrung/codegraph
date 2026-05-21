@@ -574,6 +574,91 @@ describe("Find References", () => {
       }
     });
 
+    it("should find references for Composer PSR-0, autoload-dev, classmap, and files entries", async () => {
+      const index = await createTestIndex("php");
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "php");
+      const cases = [
+        {
+          definitionFile: path.join(samplePath, "legacy", "Tools", "Box.php").replace(/\\/g, "/"),
+          definitionLine: 5,
+          definitionColumn: 7,
+          referenceFile: path.join(samplePath, "composer-psr0-consumer.php").replace(/\\/g, "/"),
+          referenceLine: 5,
+        },
+        {
+          definitionFile: path.join(samplePath, "dev-src", "Tool.php").replace(/\\/g, "/"),
+          definitionLine: 5,
+          definitionColumn: 7,
+          referenceFile: path.join(samplePath, "composer-dev-psr4-consumer.php").replace(/\\/g, "/"),
+          referenceLine: 5,
+        },
+        {
+          definitionFile: path.join(samplePath, "dev-legacy", "Tools", "Box.php").replace(/\\/g, "/"),
+          definitionLine: 5,
+          definitionColumn: 7,
+          referenceFile: path.join(samplePath, "composer-dev-psr0-consumer.php").replace(/\\/g, "/"),
+          referenceLine: 5,
+        },
+        {
+          definitionFile: path.join(samplePath, "classmap", "Specific.php").replace(/\\/g, "/"),
+          definitionLine: 5,
+          definitionColumn: 7,
+          referenceFile: path.join(samplePath, "composer-classmap-consumer.php").replace(/\\/g, "/"),
+          referenceLine: 5,
+        },
+        {
+          definitionFile: path.join(samplePath, "dev-classmap", "DevSpecific.php").replace(/\\/g, "/"),
+          definitionLine: 5,
+          definitionColumn: 7,
+          referenceFile: path.join(samplePath, "composer-dev-classmap-consumer.php").replace(/\\/g, "/"),
+          referenceLine: 5,
+        },
+        {
+          definitionFile: path.join(samplePath, "classmap", "Excluded", "PsrMapped.php").replace(/\\/g, "/"),
+          definitionLine: 5,
+          definitionColumn: 7,
+          referenceFile: path.join(samplePath, "composer-excluded-psr4-consumer.php").replace(/\\/g, "/"),
+          referenceLine: 6,
+        },
+        {
+          definitionFile: path.join(samplePath, "classmap", "Excluded", "psr_helper.php").replace(/\\/g, "/"),
+          definitionLine: 5,
+          definitionColumn: 10,
+          referenceFile: path.join(samplePath, "composer-excluded-psr4-consumer.php").replace(/\\/g, "/"),
+          referenceLine: 7,
+        },
+        {
+          definitionFile: path.join(samplePath, "autoload", "global_helper.php").replace(/\\/g, "/"),
+          definitionLine: 3,
+          definitionColumn: 10,
+          referenceFile: path.join(samplePath, "composer-files-consumer.php").replace(/\\/g, "/"),
+          referenceLine: 3,
+        },
+        {
+          definitionFile: path.join(samplePath, "classmap", "Excluded", "excluded_helper.php").replace(/\\/g, "/"),
+          definitionLine: 3,
+          definitionColumn: 10,
+          referenceFile: path.join(samplePath, "composer-excluded-files-consumer.php").replace(/\\/g, "/"),
+          referenceLine: 3,
+        },
+      ];
+
+      for (const testCase of cases) {
+        const result = await testFindReferences(
+          index,
+          testCase.definitionFile,
+          testCase.definitionLine,
+          testCase.definitionColumn,
+          2,
+        );
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expectReferenceAt(result, testCase.definitionFile, testCase.definitionLine);
+          expectReferenceAt(result, testCase.referenceFile, testCase.referenceLine);
+        }
+      }
+    });
+
     it("should find references for function imports when class names collide", async () => {
       const index = await createTestIndex("php");
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "php");

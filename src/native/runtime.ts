@@ -1,7 +1,7 @@
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { stringifyUnknown } from "../util.js";
+import { stringifyUnknown } from "../util/ast.js";
 import { loadNativeBinding } from "./bindingLoader.js";
 import type { NativeBinding, NativeBindingState, NativeRuntimeMode } from "./contracts.js";
 

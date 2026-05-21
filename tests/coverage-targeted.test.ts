@@ -6,12 +6,7 @@ import {
   symbolIdentifier,
   type SymbolHash,
 } from "../src/util/symbolHash.js";
-import {
-  getIOSemaphore,
-  mapLimitSemaphore,
-  resetIOSemaphore,
-  Semaphore,
-} from "../src/util/semaphore.js";
+import { getIOSemaphore, mapLimitSemaphore, resetIOSemaphore, Semaphore } from "../src/util/concurrency.js";
 import { sliceText, stringifyUnknown, toRange, unquote } from "../src/util/ast.js";
 import { graphToTriples, type SymbolGraph, type SymbolNode } from "../src/index.js";
 import { SymbolKind, type ExportEntry, type SymbolDef } from "../src/indexer.js";
@@ -183,11 +178,19 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
       importBindings: [
         {
           patternIndex: 0,
-          captures: [capture("stmt", 'import alpha from "pkg-alpha";'), capture("def", "alpha"), capture("from", '"pkg-alpha"')],
+          captures: [
+            capture("stmt", 'import alpha from "pkg-alpha";'),
+            capture("def", "alpha"),
+            capture("from", '"pkg-alpha"'),
+          ],
         },
         {
           patternIndex: 1,
-          captures: [capture("stmt", 'import * as beta from "pkg-beta";'), capture("ns", "beta"), capture("from", '"pkg-beta"')],
+          captures: [
+            capture("stmt", 'import * as beta from "pkg-beta";'),
+            capture("ns", "beta"),
+            capture("from", '"pkg-beta"'),
+          ],
         },
         {
           patternIndex: 2,

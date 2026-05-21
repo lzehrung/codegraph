@@ -1,7 +1,7 @@
 import path from "node:path";
-import type { ProjectIndex } from "../indexer.js";
+import { type ProjectIndex } from "../indexer/types.js";
 import type { FileId } from "../types.js";
-import { normalizePath, toProjectRelativePath } from "../util.js";
+import { normalizePath, toProjectRelativePath } from "../util/paths.js";
 
 const DEFAULT_TEST_PATTERNS: readonly RegExp[] = [
   /(^|\/)__tests__(\/|$)/i,

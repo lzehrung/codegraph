@@ -1,5 +1,5 @@
 import type { FileId } from "../types.js";
-import type { ProjectIndex } from "../indexer.js";
+import { type ProjectIndex } from "../indexer/types.js";
 import { IMPACT_SCHEMA_VERSION } from "./types.js";
 import type {
   ChangedSymbol,
@@ -148,10 +148,7 @@ function buildFullTopImpacts(
   };
 }
 
-function buildFullCycles(
-  cycles: ImpactCycle[],
-  displayFile: (file: FileId) => FileId,
-): Pick<ImpactReport, "cycles"> {
+function buildFullCycles(cycles: ImpactCycle[], displayFile: (file: FileId) => FileId): Pick<ImpactReport, "cycles"> {
   if (!cycles.length) return {};
   return {
     cycles: cycles.map((cycle) => ({

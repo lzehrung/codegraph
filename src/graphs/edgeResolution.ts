@@ -9,9 +9,9 @@ import {
   resolvePythonModule,
   resolveSpecifier,
   type MatchPathFn,
-  type ModuleSpecifier,
-  type WorkspaceConfig,
-} from "../util.js";
+} from "../util/resolution.js";
+import { type ModuleSpecifier } from "../util/specifiers.js";
+import { type WorkspaceConfig } from "../util/workspace.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
 
 type ResolvedSpecifierEdge = {
@@ -79,6 +79,18 @@ async function resolveImportSpecifierEdge(
   entry: ModuleSpecifier,
   context: ModuleSpecifierResolutionContext,
 ): Promise<EdgeTo> {
+  if (context.support.id === "rust" && entry.raw && entry.raw !== entry.spec) {
+    const rawResolved = await resolveImportSpecifier(context.projectRoot, context.file, entry.raw, context.support.id, {
+      ...(context.matchPath ? { matchPath: context.matchPath } : {}),
+      ...(context.workspaceConfig ? { workspaceConfig: context.workspaceConfig } : {}),
+      resolveNodeModules: !!context.resolveNodeModules,
+      ...(context.resolutionHints ? { resolutionHints: context.resolutionHints } : {}),
+    });
+    if (typeof rawResolved === "string") {
+      return edgeToResolvedFile(rawResolved);
+    }
+  }
+
   const res = await resolveImportSpecifier(context.projectRoot, context.file, entry.spec, context.support.id, {
     ...(context.matchPath ? { matchPath: context.matchPath } : {}),
     ...(context.workspaceConfig ? { workspaceConfig: context.workspaceConfig } : {}),
@@ -111,10 +123,10 @@ export async function resolveModuleSpecifierEdges(
       return packageTargets.map((targetPath) => withSpecifierMetadata(entry, edgeToResolvedFile(targetPath)));
     }
     to = await resolveImportSpecifierEdge(entry, context);
-  } else if (context.support.id === "go" || context.support.id === "php") {
+  } else if (context.support.id === "go" || context.support.id === "php" || context.support.id === "rust") {
     to = await resolveImportSpecifierEdge(entry, context);
-  } else if (["csharp", "ruby", "rust"].includes(context.support.id)) {
-    const { resolvePathLikeModule } = await import("../util.js");
+  } else if (["csharp", "ruby"].includes(context.support.id)) {
+    const { resolvePathLikeModule } = await import("../util/resolution.js");
     const pathLike = await resolvePathLikeModule(context.projectRoot, entry.spec);
     to = pathLike ? edgeToResolvedFile(pathLike) : await resolveGenericSpecifier(entry, context, resolutionExtensions);
   } else {

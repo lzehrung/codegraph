@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolvePythonModule, stripPythonCommentsAndStrings } from "../../util.js";
+import { resolvePythonModule } from "../../util/resolution.js";
+import { stripPythonCommentsAndStrings } from "../../util/comments.js";
 import type { ImportBindingSink, ResolvedImportTarget } from "./context.js";
 
 export type PythonImportExtractionContext = ImportBindingSink & {
@@ -88,11 +89,7 @@ async function pushNamedImport(
   });
 }
 
-async function pushDefaultImport(
-  context: PythonImportExtractionContext,
-  dotted: string,
-  local: string,
-): Promise<void> {
+async function pushDefaultImport(context: PythonImportExtractionContext, dotted: string, local: string): Promise<void> {
   const resolved = await resolvePythonModule(context.projectRoot, context.file, dotted, 0);
   context.pushBinding({
     kind: "namespace",

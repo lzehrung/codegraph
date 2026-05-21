@@ -1,4 +1,4 @@
-import { extractJsTsSpecifiers, type ModuleSpecifier } from "../util.js";
+import { extractJsTsSpecifiers, type ModuleSpecifier } from "../util/specifiers.js";
 import { dedupeModuleSpecifiers, markResolutionKind, normalizeLinkSpecifier } from "./shared.js";
 
 const DEFAULT_HTML_TAG_ATTRS: Record<string, string[]> = {

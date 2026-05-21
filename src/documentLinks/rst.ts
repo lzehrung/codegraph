@@ -1,9 +1,5 @@
-import type { ModuleSpecifier } from "../util.js";
-import {
-  dedupeModuleSpecifiers,
-  normalizeLinkSpecifier,
-  normalizeReferenceLabel,
-} from "./shared.js";
+import { type ModuleSpecifier } from "../util/specifiers.js";
+import { dedupeModuleSpecifiers, normalizeLinkSpecifier, normalizeReferenceLabel } from "./shared.js";
 
 export function extractRstModuleSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];

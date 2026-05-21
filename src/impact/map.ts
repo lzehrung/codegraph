@@ -1,6 +1,6 @@
 import type { FileId } from "../types.js";
-import type { ProjectIndex, SymbolDef, SymbolHandle } from "../indexer.js";
-import { ensureParsedContext } from "../indexer.js";
+import { type ProjectIndex, type SymbolDef, type SymbolHandle } from "../indexer/types.js";
+import { ensureParsedContext } from "../indexer/parse-context.js";
 import {
   buildTrackedSymbolPositions,
   findLocalByStartPosition,

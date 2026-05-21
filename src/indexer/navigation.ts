@@ -26,7 +26,8 @@ import { extractEnclosingBlock, extractLineContext, rangeContains, sameDef } fro
 import { DEFAULT_REF_CONTEXT_LINES } from "./shared.js";
 import { type ScopeIndex } from "./scope.js";
 import { type FileId, type Range } from "../types.js";
-import { resolveImportSpecifier, sliceText, toRange } from "../util.js";
+import { resolveImportSpecifier } from "../util/resolution.js";
+import { sliceText, toRange } from "../util/ast.js";
 import {
   getMemberAccessParts,
   isMemberAccessNode,

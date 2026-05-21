@@ -2,7 +2,9 @@ import path from "node:path";
 
 import { isUnsupportedParserInputError } from "./languages/filePrep.js";
 import type { Edge, Graph } from "./types.js";
-import { loadWorkspaceConfig, normalizeResolutionHints, mapLimit } from "./util.js";
+import { loadWorkspaceConfig } from "./util/workspace.js";
+import { normalizeResolutionHints } from "./util/paths.js";
+import { mapLimit } from "./util/concurrency.js";
 import { logWithLevel, type LogLevel } from "./logging.js";
 import { isNativeRequiredUnavailableError, type NativeRuntimeMode } from "./native/treeSitterNative.js";
 import { initNativeBackendReport } from "./native/nativeBackendReport.js";
@@ -159,7 +161,12 @@ export async function collectGraph(
 
   const allEdges = filePromises;
   const newEdges = allEdges.flat();
-  const angularJsEdges = await collectAngularJsFrameworkEdges(projectRoot, filesToCollect, workspaceConfig, opts?.parsed);
+  const angularJsEdges = await collectAngularJsFrameworkEdges(
+    projectRoot,
+    filesToCollect,
+    workspaceConfig,
+    opts?.parsed,
+  );
   addEdgeTargetsToGraph(angularJsEdges);
   graph.edges = mergeUniqueEdges(graph.edges, newEdges, angularJsEdges);
   return graph;
