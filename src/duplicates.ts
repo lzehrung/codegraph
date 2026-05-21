@@ -223,6 +223,10 @@ function tokenizeSource(text: string): string[] {
   );
 }
 
+function countDuplicateTokens(text: string): number {
+  return tokenizeSource(text).length;
+}
+
 /** Replaces names and literals while preserving syntax and keywords. */
 function normalizeToken(token: string): string {
   if (/^["'`]/.test(token)) return "<literal>";
@@ -301,8 +305,7 @@ function cloneTypeForPair(evidence: PairEvidence, metrics: DuplicateMetrics): Du
   return "weak";
 }
 
-function sourceSliceForLines(source: string, startLine: number, endLine: number): string {
-  const lines = source.split(/\r?\n/);
+function sourceSliceForLineRange(lines: readonly string[], startLine: number, endLine: number): string {
   const startIndex = Math.max(0, startLine - 1);
   const endIndex = Math.max(startIndex, endLine);
   return lines.slice(startIndex, endIndex).join("\n");
@@ -356,7 +359,6 @@ function buildInternalUnit(
     text,
     rawHash,
     normalizedHash: hashText(normalizedTokens.join(" ")),
-    tokenCount: normalizedTokens.length,
     normalizedTokens,
     tokenSet: new Set(normalizedTokens),
     signatures,
@@ -366,7 +368,7 @@ function buildInternalUnit(
 function makeSymbolUnit(
   symbol: SymbolDef,
   languageId: string,
-  source: string,
+  sourceLines: readonly string[],
   projectRoot: string | undefined,
   shingleSize: number,
   windowSize: number,
@@ -374,15 +376,14 @@ function makeSymbolUnit(
   if (!symbolUnitKinds.has(symbol.kind)) return undefined;
   const startLine = Math.max(1, symbol.range.start.line);
   const endLine = Math.max(startLine, symbol.range.end.line);
-  const text = sourceSliceForLines(source, startLine, endLine);
-  const normalizedTokens = tokenizeSource(text).map(normalizeToken);
+  const text = sourceSliceForLineRange(sourceLines, startLine, endLine);
   const unit: DuplicateUnitRef = {
     file: displayPath(projectRoot, symbol.file),
     startLine,
     endLine,
     languageId,
     kind: "symbol",
-    tokenCount: normalizedTokens.length,
+    tokenCount: countDuplicateTokens(text),
     name: symbol.localName,
     symbolKind: symbol.kind,
     ...(symbol.complexity !== undefined ? { complexity: symbol.complexity } : {}),
@@ -404,8 +405,8 @@ function makeChunkUnits(
 ): DuplicateInternalUnit[] {
   const langConfig = LANG_CONFIGS[languageId];
   const chunks = langConfig && !textOnly
-    ? chunkFile({ language: langConfig, source, filePath, minTokens, maxTokens })
-    : chunkTextFile({ source, filePath, languageId, minTokens, maxTokens });
+    ? chunkFile({ language: langConfig, source, filePath, minTokens, maxTokens, tokenizer: countDuplicateTokens })
+    : chunkTextFile({ source, filePath, languageId, minTokens, maxTokens, tokenizer: countDuplicateTokens });
 
   return chunks.map((chunk) => {
     const unit: DuplicateUnitRef = {
@@ -570,9 +571,10 @@ async function collectDuplicateUnits(
       continue;
     }
 
+    const sourceLines = source.split(/\r?\n/);
     const symbolUnits = (moduleIndex?.locals ?? [])
       .map((symbol) =>
-        makeSymbolUnit(symbol, language.id, source, options.projectRoot, options.shingleSize, options.windowSize),
+        makeSymbolUnit(symbol, language.id, sourceLines, options.projectRoot, options.shingleSize, options.windowSize),
       )
       .filter((unit): unit is DuplicateInternalUnit => unit !== undefined);
     const chunkUnits = makeChunkUnits(
