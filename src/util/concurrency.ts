@@ -73,7 +73,8 @@ export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) =>
       const item = items[index]!;
       activeCount++;
 
-      fn(item)
+      Promise.resolve()
+        .then(() => fn(item))
         .then((result) => {
           if (aborted) return;
           results[index] = result;

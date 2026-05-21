@@ -39,4 +39,17 @@ describe("mapLimit", () => {
 
     expect(started).toEqual([1, 2]);
   });
+
+  it("converts synchronous worker throws into promise rejections", async () => {
+    const started: number[] = [];
+    await expect(
+      mapLimit([1, 2, 3], 1, (value) => {
+        started.push(value);
+        if (value === 2) throw new Error("sync boom");
+        return Promise.resolve(value);
+      }),
+    ).rejects.toThrow("sync boom");
+
+    expect(started).toEqual([1, 2]);
+  });
 });
