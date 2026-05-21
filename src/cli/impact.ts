@@ -347,6 +347,7 @@ function buildIndexOptions(context: ImpactCommandContext, options: ImpactOptions
     threads: options.threads ?? 0,
     discovery: context.discoveryOptions,
     onProgress: context.progressHandler,
+    keepParsed: true,
     ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
     ...context.workerOpts,
     ...(cacheMode !== undefined ? { cache: cacheMode } : {}),
