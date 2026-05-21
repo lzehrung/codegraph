@@ -1,7 +1,7 @@
 import { buildProjectIndexFromFiles } from "../indexer/build-index.js";
 import { findDuplicates, type DuplicateConfidence, type DuplicateDetectionOptions } from "../duplicates.js";
 import type { BuildOptions } from "../indexer/types.js";
-import { parsePositiveIntegerOption } from "./options.js";
+import { parseNonNegativeIntegerOption, parsePositiveIntegerOption } from "./options.js";
 
 export type DuplicatesCommandContext = {
   projectRootFs: string;
@@ -26,7 +26,7 @@ function parseDuplicateDetectionOptions(context: DuplicatesCommandContext): Dupl
     projectRoot: context.projectRootFs,
     files: context.files,
     ...(minConfidence !== undefined ? { minConfidence } : {}),
-    limit: parsePositiveIntegerOption(context.getOpt("--limit"), "--limit", 50),
+    limit: parseNonNegativeIntegerOption(context.getOpt("--limit"), "--limit", 50),
     minTokens: parsePositiveIntegerOption(context.getOpt("--min-tokens"), "--min-tokens", 40),
     maxTokens: parsePositiveIntegerOption(context.getOpt("--max-tokens"), "--max-tokens", 800),
     maxBucketSize: parsePositiveIntegerOption(context.getOpt("--max-bucket-size"), "--max-bucket-size", 200),

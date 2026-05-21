@@ -402,6 +402,30 @@ export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
     expect(parsed.suggestions?.[0]?.score).toBeGreaterThan(90);
   });
 
+  test("duplicates CLI accepts a zero suggestion limit", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function sameRows(rows: number[]) {
+  const output: number[] = [];
+  for (const row of rows) {
+    output.push(row * 2 + 1);
+  }
+  return output.join(",");
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+
+    const result = await captureCli(["duplicates", "--root", ".", "src", "--limit", "0", "--include-small"], root);
+    const parsed = JSON.parse(result.stdout) as { suggestions?: unknown[]; omittedCounts?: { suggestions?: number } };
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(parsed.suggestions).toHaveLength(0);
+    expect(parsed.omittedCounts?.suggestions).toBeGreaterThan(0);
+  });
+
   test("counts only considered fingerprints when oversized buckets are skipped", async () => {
     const root = await makeTempProject();
     const punctuationBlock = (characters: string, lines: number): string =>
