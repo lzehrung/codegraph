@@ -25,6 +25,7 @@ import {
 } from "./cli/context.js";
 import { handleArtifactCommand } from "./cli/artifact.js";
 import { buildDoctorReport } from "./cli/doctor.js";
+import { handleDuplicatesCommand } from "./cli/duplicates.js";
 import { handleExplainCommand } from "./cli/explain.js";
 import { handleGraphCommand } from "./cli/graph.js";
 import { handleGraphDeltaCommand } from "./cli/graphDelta.js";
@@ -151,6 +152,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       cmd === "grep" ||
       cmd === "hotspots" ||
       cmd === "inspect" ||
+      cmd === "duplicates" ||
       cmd === "impact") &&
     !rootOpt &&
     parsed.positionals.length === 1 &&
@@ -236,7 +238,8 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     ? { ...configDiscoveryOptions, globRoot: projectRootFs }
     : {};
 
-  const supportsIncludeRoots = cmd === "graph" || cmd === "index" || cmd === "hotspots" || cmd === "inspect";
+  const supportsIncludeRoots =
+    cmd === "graph" || cmd === "index" || cmd === "hotspots" || cmd === "inspect" || cmd === "duplicates";
   let includeRoots: string[] = [];
   if (supportsIncludeRoots) {
     if (rootOpt) {
@@ -453,6 +456,27 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       writeCommandReport,
       maybeWriteNativeBackendStatus,
       showProgress,
+    });
+    return;
+  }
+
+  if (cmd === "duplicates") {
+    const files = await resolveFiles();
+    await handleDuplicatesCommand({
+      projectRootFs,
+      files,
+      getOpt,
+      hasFlag,
+      indexOptions: {
+        onProgress: progressHandler,
+        discovery: discoveryOptions,
+        ...(hasGraphOverrides ? { graph: buildGraphOptions() } : {}),
+        ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+        ...workerOpts,
+      },
+      writeJSONLine,
+      writeStderrLine,
+      exit: exitCli,
     });
     return;
   }

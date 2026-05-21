@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
+import { runCli } from "../src/cli.js";
 import { buildProjectIndex, findDuplicates } from "../src/index.js";
 
 const tempRoots: string[] = [];
@@ -17,6 +18,34 @@ async function writeProjectFile(root: string, relativePath: string, source: stri
   await fsp.mkdir(path.dirname(filePath), { recursive: true });
   await fsp.writeFile(filePath, source);
   return filePath;
+}
+
+async function captureCli(
+  args: string[],
+  cwd: string,
+): Promise<{ stdout: string; stderr: string; exitCode: number | undefined }> {
+  let stdout = "";
+  let stderr = "";
+  let exitCode: number | undefined;
+
+  await runCli(args, {
+    cwd: () => cwd,
+    stdout: (chunk) => {
+      stdout += chunk;
+    },
+    stderr: (chunk) => {
+      stderr += chunk;
+    },
+    exit: (code) => {
+      exitCode = code;
+      throw new Error(`cli exit ${code}`);
+    },
+  }).catch((error: unknown) => {
+    if (error instanceof Error && exitCode !== undefined && error.message === `cli exit ${exitCode}`) return;
+    throw error;
+  });
+
+  return { stdout, stderr, exitCode };
 }
 
 afterEach(async () => {
@@ -162,5 +191,32 @@ export function secondClone(rows: number[]) {
     expect(sameFileResult.suggestions.length).toBeGreaterThan(0);
     expect(sameFileResult.suggestions[0]?.left.file).toBe("src/local.ts");
     expect(sameFileResult.suggestions[0]?.right.file).toBe("src/local.ts");
+  });
+
+  test("duplicates CLI emits bounded JSON suggestions", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
+  const output: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    output.push(label + ":" + rounded.toFixed(2));
+  }
+  return output.filter((value) => value.includes(":")).join(",");
+}
+`;
+
+    await writeProjectFile(root, "src/orders-a.ts", source);
+    await writeProjectFile(root, "src/orders-b.ts", source);
+
+    const result = await captureCli(["duplicates", "src", "--min-confidence", "high", "--limit", "1"], root);
+    const parsed = JSON.parse(result.stdout) as { suggestions?: Array<{ score?: number }> };
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(parsed.suggestions).toHaveLength(1);
+    expect(parsed.suggestions?.[0]?.score).toBeGreaterThan(90);
   });
 });

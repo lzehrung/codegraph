@@ -19,6 +19,7 @@ Commands:
   path          Find the shortest dependency path between files
   cycles        Detect dependency cycles (use --sort priority|size|fanin)
   hotspots      Find high-complexity files
+  duplicates    Detect duplicate and near-duplicate code units
   unresolved    List unresolved project imports
   apisurface    Summarize exported API symbols
   grep          Run Tree-sitter query or text regex search
@@ -65,6 +66,7 @@ Examples:
   codegraph version
   codegraph doctor
   codegraph inspect ./src --limit 20
+  codegraph duplicates ./src --min-confidence medium --json
   codegraph search "auth user" --json
   codegraph explain src/auth.ts --json
   codegraph artifact build --root . --out codegraph-out --json
@@ -90,6 +92,7 @@ const knownCliCommands = new Set([
   "cycles",
   "deps",
   "doctor",
+  "duplicates",
   "dumpmod",
   "explain",
   "goto",
@@ -194,9 +197,27 @@ Defaults:
   Tools are read-only unless --allow-build is passed.
 `;
 
+export const DUPLICATES_HELP_TEXT = `codegraph duplicates - Detect duplicate and near-duplicate code units
+
+Usage: codegraph duplicates [path ...] [--root <path>] [--min-confidence high|medium|low] [--limit <n>] [--include-same-file] [--include-small] [--json]
+
+Options:
+  --min-confidence  Minimum confidence to report. Defaults to medium.
+  --limit           Maximum suggestions to return. Defaults to 50.
+  --include-same-file Report non-overlapping clones in the same file.
+  --include-small   Include units below the default token floor.
+  --min-tokens      Minimum unit tokens. Defaults to 40.
+  --max-tokens      Maximum fallback chunk tokens. Defaults to 800.
+  --max-bucket-size Skip candidate buckets larger than this value. Defaults to 200.
+
+Output:
+  JSON includes scored suggestions, confidence, clone type, metrics, and omission counts.
+`;
+
 export function helpTextForCommand(command: string, positionals: readonly string[]): string | undefined {
   if (command === "search") return SEARCH_HELP_TEXT;
   if (command === "explain") return EXPLAIN_HELP_TEXT;
+  if (command === "duplicates") return DUPLICATES_HELP_TEXT;
   if (command === "artifact") return ARTIFACT_HELP_TEXT;
   if (command === "mcp") {
     return positionals[0] === "serve" ? MCP_SERVE_HELP_TEXT : MCP_HELP_TEXT;
