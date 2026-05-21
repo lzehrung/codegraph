@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { collectGraph, getUnresolvedImports, getHotspots, getApiSurface, SymbolKind } from "../src/index.js";
 import { getExternalClassifierCacheStats, resetExternalClassifierCaches } from "../src/graphs/external-classifier.js";
+import { resolveRustImportPath } from "../src/util/resolution.js";
 
 describe("graph reports", () => {
   const tempRoots: string[] = [];
@@ -573,6 +574,25 @@ describe("graph reports", () => {
         (edge) => edge.from.endsWith("tests.rs") && edge.to.type === "file" && edge.to.path.endsWith("query.rs"),
       ),
     ).toBeTruthy();
+  });
+
+  it("resolves Rust super imports from mod.rs files against the parent module directory", async () => {
+    const projectRoot = makeTempRoot("cg-rust-super-mod-");
+    const sourceRoot = path.join(projectRoot, "src");
+    const nestedRoot = path.join(sourceRoot, "a");
+    fs.mkdirSync(nestedRoot, { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, "Cargo.toml"), '[package]\nname = "sample"\nversion = "0.1.0"\n', "utf8");
+    fs.writeFileSync(path.join(sourceRoot, "lib.rs"), "mod a;\nmod b;\n", "utf8");
+    fs.writeFileSync(path.join(sourceRoot, "b.rs"), "pub fn root_b() {}\n", "utf8");
+    fs.writeFileSync(path.join(nestedRoot, "mod.rs"), "mod b;\nuse super::b;\n", "utf8");
+    fs.writeFileSync(path.join(nestedRoot, "b.rs"), "pub fn nested_b() {}\n", "utf8");
+
+    const nestedModule = path.join(nestedRoot, "mod.rs");
+    const resolvedSuperModule = await resolveRustImportPath(projectRoot, nestedModule, "super::b");
+    const resolvedSelfModule = await resolveRustImportPath(projectRoot, nestedModule, "self::b");
+
+    expect(resolvedSuperModule?.replace(/\\/g, "/")).toMatch(/\/src\/b\.rs$/);
+    expect(resolvedSelfModule?.replace(/\\/g, "/")).toMatch(/\/src\/a\/b\.rs$/);
   });
 
   it("should get hotspots", () => {

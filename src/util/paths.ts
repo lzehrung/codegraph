@@ -13,6 +13,11 @@ function isWindowsQualifiedAbsolutePath(filePath: string): boolean {
   return /^[A-Za-z]:\//.test(normalizedPath) || normalizedPath.startsWith("//");
 }
 
+function isPosixQualifiedAbsolutePath(filePath: string): boolean {
+  const normalizedPath = normalizePath(filePath);
+  return path.posix.isAbsolute(normalizedPath) && !isWindowsQualifiedAbsolutePath(normalizedPath);
+}
+
 export function isAbsoluteFilePath(filePath: string): boolean {
   return path.posix.isAbsolute(filePath) || path.win32.isAbsolute(filePath);
 }
@@ -23,6 +28,9 @@ export function resolveFilePathFromRoot(projectRoot: string, filePath: string): 
   }
   if (isWindowsQualifiedAbsolutePath(projectRoot)) {
     return path.win32.resolve(projectRoot, filePath);
+  }
+  if (isPosixQualifiedAbsolutePath(projectRoot)) {
+    return path.posix.resolve(normalizePath(projectRoot), normalizePath(filePath));
   }
   return path.resolve(projectRoot, filePath);
 }
@@ -37,6 +45,8 @@ function resolveComparableProjectRoot(projectRoot: string): string {
 function isRelativeToRoot(normalizedRoot: string, normalizedFile: string): boolean {
   const rootIsWindowsPath = isWindowsQualifiedAbsolutePath(normalizedRoot);
   const fileIsWindowsPath = isWindowsQualifiedAbsolutePath(normalizedFile);
+  const rootIsPosixPath = isPosixQualifiedAbsolutePath(normalizedRoot);
+  const fileIsPosixPath = isPosixQualifiedAbsolutePath(normalizedFile);
   const comparableRoot = rootIsWindowsPath ? normalizeWindowsComparablePath(normalizedRoot) : normalizedRoot;
   const comparableFile = fileIsWindowsPath ? normalizeWindowsComparablePath(normalizedFile) : normalizedFile;
 
@@ -46,6 +56,22 @@ function isRelativeToRoot(normalizedRoot: string, normalizedFile: string): boole
     }
     const relativePath = normalizePath(path.win32.relative(comparableRoot, comparableFile));
     return !!relativePath.length && !relativePath.startsWith("..") && !path.win32.isAbsolute(relativePath);
+  }
+
+  if (rootIsWindowsPath || fileIsWindowsPath) {
+    return false;
+  }
+
+  if (rootIsPosixPath && fileIsPosixPath) {
+    if (comparableFile === comparableRoot) {
+      return true;
+    }
+    const relativePath = path.posix.relative(comparableRoot, comparableFile);
+    return !!relativePath.length && !relativePath.startsWith("..") && !path.posix.isAbsolute(relativePath);
+  }
+
+  if (rootIsPosixPath || fileIsPosixPath) {
+    return false;
   }
 
   if (comparableFile === comparableRoot) {
@@ -80,6 +106,9 @@ export function toProjectRelativePath(projectRoot: string, filePath: string): st
     const comparableRoot = normalizeWindowsComparablePath(normalizedRoot);
     const comparableFile = normalizeWindowsComparablePath(normalizedFile);
     return normalizePath(path.win32.relative(comparableRoot, comparableFile));
+  }
+  if (isPosixQualifiedAbsolutePath(normalizedRoot) && isPosixQualifiedAbsolutePath(normalizedFile)) {
+    return path.posix.relative(normalizedRoot, normalizedFile);
   }
   return normalizePath(path.relative(normalizedRoot, normalizedFile));
 }

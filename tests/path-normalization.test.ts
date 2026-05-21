@@ -71,6 +71,15 @@ describe("cross-platform path normalization", () => {
     expect(toProjectDisplayPath(undefined, String.raw`src\main.ts`)).toBe("src/main.ts");
   });
 
+  it("relativizes POSIX absolute paths with POSIX semantics on any host OS", () => {
+    const root = "/mnt/e/git repos/codegraph";
+
+    expect(isFilePathWithinRoot(root, "/mnt/e/git repos/codegraph/src/main.ts")).toBe(true);
+    expect(toProjectRelativePath(root, "/mnt/e/git repos/codegraph/src/main.ts")).toBe("src/main.ts");
+    expect(isFilePathWithinRoot(root, "/mnt/e/git repos/codegraph-tools/src/main.ts")).toBe(false);
+    expect(toProjectRelativePath(root, "/mnt/e/git repos/codegraph-tools/src/main.ts")).toBeNull();
+  });
+
   it("asserts project-root containment with label-specific errors", () => {
     const root = "C:/workspace/codegraph";
 

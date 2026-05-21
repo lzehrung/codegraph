@@ -49,6 +49,13 @@ function crateSourceRoot(cargoRoot: string | null, projectRoot: string): string 
   return path.join(root, "src");
 }
 
+function parentRustModuleDir(fromFile: string, currentDir: string): string {
+  if (path.basename(fromFile) === "mod.rs") {
+    return path.dirname(currentDir);
+  }
+  return currentDir;
+}
+
 async function resolveRustModuleParts(baseDir: string, parts: readonly string[]): Promise<string | null> {
   return firstExistingFile(rustModuleCandidates(baseDir, parts));
 }
@@ -77,15 +84,12 @@ export async function resolveRustImportPath(
     return resolveRustModuleParts(currentDir, tail);
   }
   if (head === "super") {
-    const parentModuleFile = await resolveRustModuleParts(currentDir, []);
+    const parentModuleDir = parentRustModuleDir(fromFile, currentDir);
+    const parentModuleFile = await resolveRustModuleParts(parentModuleDir, []);
     if (!tail.length && parentModuleFile) {
       return parentModuleFile;
     }
-    const siblingModule = await resolveRustModuleParts(currentDir, tail);
-    if (siblingModule) {
-      return siblingModule;
-    }
-    return resolveRustModuleParts(path.dirname(currentDir), tail);
+    return resolveRustModuleParts(parentModuleDir, tail);
   }
 
   const siblingModule = await resolveRustModuleParts(currentDir, parts);
