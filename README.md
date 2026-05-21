@@ -57,6 +57,7 @@ Use Codegraph when you need fast structural answers about a repo without relying
 - Cross-file go-to-definition and find-references support across the shared source-language pipeline.
 - Deterministic agent search, bounded explanation packets, portable artifact bundles, and MCP tools across files, symbols, chunks, SQL objects, and graph neighborhoods with stable follow-up handles.
 - Semantic chunking for code and text files, including Vue and Svelte single-file component block splitting.
+- Duplicate and near-duplicate detection over indexed symbols, semantic chunks, and text chunks.
 - AST grep, public API summaries, unresolved import reports, hotspot analysis, cycle detection, and shortest dependency paths.
 - PR impact analysis and review bundles that map diffs to changed symbols, impacted code, likely tests, and graph deltas.
 - SQL language support for `.sql` files, including statement chunks, object symbols, SQL-to-SQL graph edges, SQL navigation, and statement facts.
@@ -111,6 +112,9 @@ node ./dist/cli.js graph --root . ./src --compact-json --output codegraph.json
 
 # inspect public API surface
 node ./dist/cli.js apisurface
+
+# find duplicate and near-duplicate code
+node ./dist/cli.js duplicates ./src --min-confidence medium --limit 20
 ```
 
 If you install the published CLI instead of using a source checkout, replace `node ./dist/cli.js` with `codegraph`.
@@ -190,6 +194,7 @@ The supported package import surface is the root export, `@lzehrung/codegraph`. 
 ## Common workflows
 
 - Repo triage: run `codegraph inspect ./src --limit 20`, then follow with `codegraph hotspots ./src --limit 20` or `codegraph unresolved` to focus the next pass.
+- Duplicate cleanup: run `codegraph duplicates ./src --min-confidence medium` before refactors to find shared extraction candidates.
 - Symbol navigation: use `codegraph goto <file> <line> <column>` and `codegraph refs --file <file> --line <line> --col <column> --pretty` when a question is about definitions or semantic usages rather than matching strings.
 - PR review: run `codegraph impact --base origin/main --head HEAD --pretty` for a ranked map, `codegraph review --base origin/main --head HEAD --summary` for a compact reviewer handoff with actionable candidate tests, or redirect plain `review` output when a downstream tool needs the full JSON bundle.
 - Worktree review: run `codegraph impact --base HEAD --head WORKTREE --pretty` for current staged and unstaged tracked-file changes, then `codegraph review --base HEAD --head WORKTREE --summary` for a compact handoff. Use `--head STAGED` to compare `HEAD` against the current index.

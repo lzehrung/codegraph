@@ -40,6 +40,8 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--language",
   "--min-tokens",
   "--max-tokens",
+  "--max-bucket-size",
+  "--min-confidence",
   "--max-hits",
   "--resolution-hint",
   "--review-depth",

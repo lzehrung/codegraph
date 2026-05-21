@@ -2,17 +2,20 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { handleChunkCommand, type ChunkCommandContext } from "../src/cli/chunk.js";
 import { buildDoctorReport } from "../src/cli/doctor.js";
 import { handleGraphDeltaCommand } from "../src/cli/graphDelta.js";
 import { handleGraphQueryCommand, type GraphQueryCommandContext } from "../src/cli/graphQueries.js";
 import { CLI_HELP_TEXT, MCP_SERVE_HELP_TEXT } from "../src/cli/help.js";
+import { handleImpactCommand, type ImpactCommandContext } from "../src/cli/impact.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/cli/packageInfo.js";
 import { handleSkillCommand, type SkillCommandContext } from "../src/cli/skill.js";
 import { handleSqlCommand } from "../src/cli/sql.js";
 import { runCli } from "../src/cli.js";
+import * as indexerBuild from "../src/indexer/build-index.js";
 import type { ProjectIndex } from "../src/indexer.js";
+import type { BuildOptions } from "../src/indexer/types.js";
 import type { Graph } from "../src/types.js";
 
 function readJsonRecord(value: unknown): Record<string, unknown> {
@@ -91,6 +94,35 @@ function createSkillContext(overrides: Partial<SkillCommandContext>): SkillComma
     },
     exit: (code) => {
       throw new Error(`skill exit ${code}`);
+    },
+    ...overrides,
+  };
+}
+
+function createImpactContext(overrides: Partial<ImpactCommandContext>): ImpactCommandContext {
+  const projectRoot = path.join(os.tmpdir(), "codegraph-impact-context").replace(/\\/g, "/");
+  return {
+    projectRootFs: projectRoot,
+    discoveryOptions: {},
+    getOpt: (name) => (name === "--provider" ? "raw" : undefined),
+    hasFlag: () => false,
+    parsedOptions: new Map(),
+    nativeMode: "auto",
+    workerOpts: {},
+    graphOptions: undefined,
+    progressHandler: undefined,
+    readStdin: async () => "",
+    writeJSONLine: () => {
+      throw new Error("unexpected json output");
+    },
+    writeStdoutLine: () => {
+      throw new Error("unexpected stdout");
+    },
+    writeStderrLine: () => {
+      throw new Error("unexpected stderr");
+    },
+    exit: (code) => {
+      throw new Error(`impact exit ${code}`);
     },
     ...overrides,
   };
@@ -479,6 +511,56 @@ describe("CLI command modules", () => {
         },
       }),
     ).rejects.toThrow('Invalid --cache value "banana". Expected one of: off, memory, disk.');
+  });
+
+  test("impact command retains parsed cache only when reference context is requested", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-impact-module-"));
+    const sourcePath = path.join(tempDir, "feature.ts");
+    const diffText = [
+      "diff --git a/feature.ts b/feature.ts",
+      "index 1111111..2222222 100644",
+      "--- a/feature.ts",
+      "+++ b/feature.ts",
+      "@@ -1,3 +1,3 @@",
+      " export function feature() {",
+      "-  return 1;",
+      "+  return 2;",
+      " }",
+      "",
+    ].join("\n");
+    const capturedIndexOptions: BuildOptions[] = [];
+    const originalBuildProjectIndex = indexerBuild.buildProjectIndex;
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndex").mockImplementation(async (projectRoot, opts) => {
+      if (opts) capturedIndexOptions.push(opts);
+      return await originalBuildProjectIndex(projectRoot, opts);
+    });
+
+    try {
+      await fsp.writeFile(sourcePath, "export function feature() {\n  return 2;\n}\n", "utf8");
+      const baseContext = {
+        projectRootFs: tempDir,
+        readStdin: async () => diffText,
+        writeJSONLine: () => undefined,
+      } satisfies Partial<ImpactCommandContext>;
+
+      await handleImpactCommand(createImpactContext(baseContext));
+      await handleImpactCommand(
+        createImpactContext({
+          ...baseContext,
+          getOpt: (name) => {
+            if (name === "--provider") return "raw";
+            if (name === "--ref-context") return "line";
+            return undefined;
+          },
+        }),
+      );
+
+      expect(capturedIndexOptions[0]?.keepParsed).toBeUndefined();
+      expect(capturedIndexOptions[1]?.keepParsed).toBe(true);
+    } finally {
+      buildSpy.mockRestore();
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   test("chunks files through the extracted chunk command handler", async () => {
