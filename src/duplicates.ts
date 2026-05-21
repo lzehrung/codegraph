@@ -294,6 +294,11 @@ function displayPath(projectRoot: string | undefined, filePath: string): string 
   return toProjectDisplayPath(projectRoot, filePath) || normalizePath(filePath);
 }
 
+function normalizeDetectionFile(filePath: string, projectRoot: string | undefined): string {
+  if (path.isAbsolute(filePath) || !projectRoot) return normalizePath(filePath);
+  return normalizePath(path.resolve(projectRoot, filePath));
+}
+
 function internalUnitId(unit: DuplicateUnitRef, absoluteFile: string): string {
   return `${normalizePath(absoluteFile)}:${unit.startLine}:${unit.endLine}:${unit.kind}:${unit.name ?? ""}`;
 }
@@ -501,7 +506,7 @@ async function collectDuplicateUnits(
   > & { projectRoot: string | undefined; files: readonly string[] | undefined },
 ): Promise<{ units: DuplicateInternalUnit[]; belowThresholdUnits: number }> {
   const files = options.files ?? Array.from(index.byFile.keys());
-  const normalizedFiles = Array.from(new Set(files.map((file) => normalizePath(file)))).sort();
+  const normalizedFiles = Array.from(new Set(files.map((file) => normalizeDetectionFile(file, options.projectRoot)))).sort();
   const units: DuplicateInternalUnit[] = [];
   let belowThresholdUnits = 0;
 
@@ -684,17 +689,5 @@ export async function findDuplicates(
       comparedPairs,
       candidatePairs: pairs.size,
     },
-  };
-}
-
-export function duplicateOptionsFromFileList(
-  projectRoot: string,
-  files: readonly string[],
-  options: DuplicateDetectionOptions = {},
-): DuplicateDetectionOptions {
-  return {
-    ...options,
-    projectRoot: normalizePath(projectRoot),
-    files: files.map((file) => normalizePath(path.resolve(projectRoot, file))),
   };
 }

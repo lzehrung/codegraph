@@ -318,7 +318,6 @@ export { chunkSFCFile, type ChunkSFCOptions } from "./chunking/chunkSFC.js";
 
 /** In-memory duplicate and near-duplicate code detection. */
 export {
-  duplicateOptionsFromFileList,
   findDuplicates,
   type DuplicateCloneType,
   type DuplicateConfidence,

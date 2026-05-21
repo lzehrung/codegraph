@@ -153,6 +153,25 @@ export function scoreAccounts(accounts: Array<{ enabled: boolean; credits: numbe
     expect(includedResult.suggestions.length).toBeGreaterThan(0);
   });
 
+  test("accepts project-relative file filters", async () => {
+    const root = await makeTempProject();
+    const source = `export function sameTiny(value: number) { return value + 1; }\n`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, {
+      projectRoot: root,
+      files: ["src/a.ts", "src/b.ts"],
+      includeSmall: true,
+      minConfidence: "high",
+    });
+
+    expect(result.suggestions.length).toBeGreaterThan(0);
+    expect(result.suggestions[0]?.left.file).toBe("src/a.ts");
+  });
+
   test("includes same-file non-overlapping clones only when requested", async () => {
     const root = await makeTempProject();
     const source = `
