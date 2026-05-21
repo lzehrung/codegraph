@@ -316,6 +316,21 @@ export { chunkFile, type Chunk, type ChunkFileOptions } from "./chunking/chunkFi
 export { chunkTextFile, type TextChunkOptions } from "./chunking/chunkTextFile.js";
 export { chunkSFCFile, type ChunkSFCOptions } from "./chunking/chunkSFC.js";
 
+/** In-memory duplicate and near-duplicate code detection. */
+export {
+  duplicateOptionsFromFileList,
+  findDuplicates,
+  type DuplicateCloneType,
+  type DuplicateConfidence,
+  type DuplicateDetectionOmittedCounts,
+  type DuplicateDetectionOptions,
+  type DuplicateDetectionResult,
+  type DuplicateMetrics,
+  type DuplicateSuggestion,
+  type DuplicateUnitKind,
+  type DuplicateUnitRef,
+} from "./duplicates.js";
+
 /** Tree-sitter language configuration registry. */
 export { LANG_CONFIGS, type LanguageConfig } from "./bootstrap/treeSitterLanguages.js";
 

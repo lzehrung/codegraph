@@ -1,0 +1,166 @@
+import fsp from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, test } from "vitest";
+import { buildProjectIndex, findDuplicates } from "../src/index.js";
+
+const tempRoots: string[] = [];
+
+async function makeTempProject(): Promise<string> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-duplicates-"));
+  tempRoots.push(root);
+  return root.replace(/\\/g, "/");
+}
+
+async function writeProjectFile(root: string, relativePath: string, source: string): Promise<string> {
+  const filePath = path.join(root, relativePath).replace(/\\/g, "/");
+  await fsp.mkdir(path.dirname(filePath), { recursive: true });
+  await fsp.writeFile(filePath, source);
+  return filePath;
+}
+
+afterEach(async () => {
+  await Promise.all(tempRoots.splice(0).map(async (root) => await fsp.rm(root, { recursive: true, force: true })));
+});
+
+describe("duplicate detection", () => {
+  test("reports exact duplicate functions across files", async () => {
+    const root = await makeTempProject();
+    const duplicateSource = `
+export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  const labels: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    labels.push(label);
+    totals.push(rounded);
+  }
+  const encoded = totals.map((value, index) => labels[index] + ":" + value.toFixed(2));
+  return encoded.filter((value) => value.includes(":")).join(",");
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", duplicateSource);
+    await writeProjectFile(root, "src/b.ts", duplicateSource);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { minConfidence: "high", limit: 5 });
+
+    expect(result.suggestions.length).toBeGreaterThan(0);
+    expect(result.suggestions[0]?.cloneType).toBe("exact");
+    expect(result.suggestions[0]?.confidence).toBe("high");
+    expect(result.suggestions[0]?.left.file).toBe("src/a.ts");
+    expect(result.suggestions[0]?.right.file).toBe("src/b.ts");
+  });
+
+  test("reports renamed near duplicates through normalized tokens", async () => {
+    const root = await makeTempProject();
+
+    await writeProjectFile(
+      root,
+      "src/users.ts",
+      `
+export function scoreUsers(users: Array<{ active: boolean; points: number }>) {
+  const scored: number[] = [];
+  const labels: string[] = [];
+  for (const user of users) {
+    const base = user.active ? user.points : 0;
+    const bonus = base > 50 ? 10 : 2;
+    const label = bonus > 5 ? "priority" : "standard";
+    labels.push(label);
+    scored.push(base + bonus);
+  }
+  const total = scored.reduce((currentTotal, value) => currentTotal + value, 0);
+  return total + labels.filter((label) => label.length > 0).length;
+}
+`,
+    );
+    await writeProjectFile(
+      root,
+      "src/accounts.ts",
+      `
+export function scoreAccounts(accounts: Array<{ enabled: boolean; credits: number }>) {
+  const values: number[] = [];
+  const tags: string[] = [];
+  for (const account of accounts) {
+    const baseValue = account.enabled ? account.credits : 0;
+    const extra = baseValue > 50 ? 10 : 2;
+    const tag = extra > 5 ? "priority" : "standard";
+    tags.push(tag);
+    values.push(baseValue + extra);
+  }
+  const sum = values.reduce((accumulator, current) => accumulator + current, 0);
+  return sum + tags.filter((tag) => tag.length > 0).length;
+}
+`,
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { minConfidence: "medium", limit: 5 });
+    const match = result.suggestions.find(
+      (suggestion) => suggestion.left.file === "src/accounts.ts" || suggestion.right.file === "src/accounts.ts",
+    );
+
+    expect(match).toBeDefined();
+    expect(match?.cloneType === "renamed" || match?.cloneType === "near").toBeTruthy();
+    expect(match?.metrics.tokenJaccard).toBeGreaterThan(0.6);
+  });
+
+  test("filters small helpers unless explicitly included", async () => {
+    const root = await makeTempProject();
+    const source = `export function sameTiny(value: number) { return value + 1; }\n`;
+
+    await writeProjectFile(root, "a.ts", source);
+    await writeProjectFile(root, "b.ts", source);
+
+    const index = await buildProjectIndex(root);
+    const defaultResult = await findDuplicates(index, { minConfidence: "low" });
+    const includedResult = await findDuplicates(index, { includeSmall: true, minConfidence: "high" });
+
+    expect(defaultResult.suggestions).toHaveLength(0);
+    expect(defaultResult.omittedCounts.belowThresholdUnits).toBeGreaterThan(0);
+    expect(includedResult.suggestions.length).toBeGreaterThan(0);
+  });
+
+  test("includes same-file non-overlapping clones only when requested", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function firstClone(rows: number[]) {
+  const output: number[] = [];
+  for (const row of rows) {
+    const doubled = row * 2;
+    const adjusted = doubled + 3;
+    output.push(adjusted);
+  }
+  return output.filter((value) => value > 10).join(",");
+}
+
+export function secondClone(rows: number[]) {
+  const output: number[] = [];
+  for (const row of rows) {
+    const doubled = row * 2;
+    const adjusted = doubled + 3;
+    output.push(adjusted);
+  }
+  return output.filter((value) => value > 10).join(",");
+}
+`;
+
+    await writeProjectFile(root, "src/local.ts", source);
+
+    const index = await buildProjectIndex(root);
+    const defaultResult = await findDuplicates(index, { includeSmall: true, minConfidence: "medium" });
+    const sameFileResult = await findDuplicates(index, {
+      includeSmall: true,
+      includeSameFile: true,
+      minConfidence: "medium",
+    });
+
+    expect(defaultResult.suggestions).toHaveLength(0);
+    expect(sameFileResult.suggestions.length).toBeGreaterThan(0);
+    expect(sameFileResult.suggestions[0]?.left.file).toBe("src/local.ts");
+    expect(sameFileResult.suggestions[0]?.right.file).toBe("src/local.ts");
+  });
+});
