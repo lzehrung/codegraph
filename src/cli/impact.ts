@@ -343,10 +343,12 @@ function applyAnalysisOptions(context: ImpactCommandContext, options: ImpactOpti
 function buildIndexOptions(context: ImpactCommandContext, options: ImpactOptionsBuilder): BuildOptions {
   const cacheMode =
     options.cache === "off" || options.cache === "memory" || options.cache === "disk" ? options.cache : undefined;
+  const keepParsed = options.refContext !== undefined;
   const indexOpts: BuildOptions = {
     threads: options.threads ?? 0,
     discovery: context.discoveryOptions,
     onProgress: context.progressHandler,
+    ...(keepParsed ? { keepParsed } : {}),
     ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
     ...context.workerOpts,
     ...(cacheMode !== undefined ? { cache: cacheMode } : {}),

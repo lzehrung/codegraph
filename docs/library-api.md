@@ -213,6 +213,38 @@ See the test suites for concrete examples:
 
 The integration examples demonstrate semantic chunking with type-based filtering, text-file chunking for configuration processing, intelligent splitting of large blocks, and metadata useful for embeddings or retrieval pipelines.
 
+## Duplicate detection
+
+`findDuplicates()` scans a built `ProjectIndex` for exact, renamed, near, and weak clone candidates.
+
+- It uses indexed symbols, semantic chunks, and text chunks.
+- Results include confidence, score, clone type, metrics, omission counts, and pair stats.
+- Paths are project-relative when the index has a project root.
+
+```ts
+import { buildProjectIndex, findDuplicates } from "@lzehrung/codegraph";
+
+const root = process.cwd();
+const index = await buildProjectIndex(root);
+const duplicates = await findDuplicates(index, {
+  minConfidence: "medium",
+  limit: 20,
+});
+
+console.log(duplicates.suggestions);
+```
+
+Useful options:
+
+- `minConfidence`: `high`, `medium`, or `low`; default `medium`.
+- `includeSameFile`: report non-overlapping clones in the same file.
+- `includeSmall`: include units below the default token floor.
+- `minTokens` and `maxTokens`: tune unit and fallback chunk bounds.
+
+Tests:
+
+- `tests/duplicates.test.ts`
+
 ## Basic index building
 
 Build a full project index and use go-to-definition:

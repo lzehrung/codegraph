@@ -25,6 +25,7 @@ import {
 } from "./cli/context.js";
 import { handleArtifactCommand } from "./cli/artifact.js";
 import { buildDoctorReport } from "./cli/doctor.js";
+import { handleDuplicatesCommand } from "./cli/duplicates.js";
 import { handleExplainCommand } from "./cli/explain.js";
 import { handleGraphCommand } from "./cli/graph.js";
 import { handleGraphDeltaCommand } from "./cli/graphDelta.js";
@@ -43,10 +44,15 @@ import { handleSkillCommand } from "./cli/skill.js";
 import { handleSqlCommand } from "./cli/sql.js";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "./config.js";
 import { listChangedFiles } from "./util/git.js";
-import { listProjectFiles, type ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
+import { DEFAULT_PROJECT_PATTERNS, listProjectFiles, type ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
 import { normalizePath, resolveFilePathFromRoot, toProjectDisplayPath } from "./util/paths.js";
 
 export { isCliDiscoveryRelativePathInside } from "./cli/context.js";
+
+const DUPLICATE_PROJECT_PATTERNS = [
+  ...DEFAULT_PROJECT_PATTERNS,
+  "**/*.{json,jsonc,toml,txt,yaml,yml}",
+];
 
 function normalizeEntrypointPath(filePath: string): string {
   const resolvedPath = path.resolve(filePath);
@@ -151,6 +157,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       cmd === "grep" ||
       cmd === "hotspots" ||
       cmd === "inspect" ||
+      cmd === "duplicates" ||
       cmd === "impact") &&
     !rootOpt &&
     parsed.positionals.length === 1 &&
@@ -236,7 +243,8 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     ? { ...configDiscoveryOptions, globRoot: projectRootFs }
     : {};
 
-  const supportsIncludeRoots = cmd === "graph" || cmd === "index" || cmd === "hotspots" || cmd === "inspect";
+  const supportsIncludeRoots =
+    cmd === "graph" || cmd === "index" || cmd === "hotspots" || cmd === "inspect" || cmd === "duplicates";
   let includeRoots: string[] = [];
   if (supportsIncludeRoots) {
     if (rootOpt) {
@@ -256,11 +264,12 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   };
 
   const resolveFilesFromRoots = async (): Promise<string[]> => {
-    if (!includeRootsAbs.length) return await listProjectFiles(projectRootFs, undefined, discoveryOptions);
+    const patterns = cmd === "duplicates" ? DUPLICATE_PROJECT_PATTERNS : undefined;
+    if (!includeRootsAbs.length) return await listProjectFiles(projectRootFs, patterns, discoveryOptions);
     const normalizedRoots = includeRootsAbs;
     const all: string[][] = await Promise.all(
       normalizedRoots.map(async (r) => {
-        const files = await listProjectFiles(r, undefined, {
+        const files = await listProjectFiles(r, patterns, {
           ...includeRootDiscoveryOptions,
           gitignoreRoot: projectRootFs,
         });
@@ -453,6 +462,27 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       writeCommandReport,
       maybeWriteNativeBackendStatus,
       showProgress,
+    });
+    return;
+  }
+
+  if (cmd === "duplicates") {
+    const files = await resolveFiles();
+    await handleDuplicatesCommand({
+      projectRootFs,
+      files,
+      getOpt,
+      hasFlag,
+      indexOptions: {
+        onProgress: progressHandler,
+        discovery: discoveryOptions,
+        ...(hasGraphOverrides ? { graph: buildGraphOptions() } : {}),
+        ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+        ...workerOpts,
+      },
+      writeJSONLine,
+      writeStderrLine,
+      exit: exitCli,
     });
     return;
   }
