@@ -57,7 +57,7 @@ Use Codegraph when you need fast structural answers about a repo without relying
 - Cross-file go-to-definition and find-references support across the shared source-language pipeline.
 - Deterministic agent search, bounded explanation packets, portable artifact bundles, and MCP tools across files, symbols, chunks, SQL objects, and graph neighborhoods with stable follow-up handles.
 - Semantic chunking for code and text files, including Vue and Svelte single-file component block splitting.
-- Duplicate and near-duplicate detection over indexed symbols and semantic chunks.
+- Duplicate and near-duplicate detection over indexed symbols, semantic chunks, and text chunks.
 - AST grep, public API summaries, unresolved import reports, hotspot analysis, cycle detection, and shortest dependency paths.
 - PR impact analysis and review bundles that map diffs to changed symbols, impacted code, likely tests, and graph deltas.
 - SQL language support for `.sql` files, including statement chunks, object symbols, SQL-to-SQL graph edges, SQL navigation, and statement facts.

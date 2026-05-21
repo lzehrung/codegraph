@@ -168,7 +168,7 @@ codegraph grep --pattern 'eval\(' --ignore-case
 
 `duplicates` reports scored exact, renamed, near, and weak clone candidates as JSON.
 
-- It combines indexed symbols with semantic chunks.
+- It combines indexed symbols, semantic chunks, and text chunks.
 - It reports project-relative paths, confidence, clone type, metrics, and omission counts.
 - Use `--include-small` for tiny helpers.
 - Use `--include-same-file` for non-overlapping clones inside one file.

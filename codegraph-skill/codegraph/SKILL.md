@@ -213,6 +213,7 @@ For git-provider impact and git-scoped review/index/graph commands, `WORKTREE` c
   `codegraph apisurface`
 - Duplicate and near-duplicate code:
   `codegraph duplicates ./src --min-confidence medium --json`
+  Covers indexed symbols, semantic chunks, and text chunks.
   Use `--include-small` for tiny helpers.
   Use `--include-same-file` for local clone cleanup.
 - Unresolved project imports:

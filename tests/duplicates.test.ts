@@ -214,6 +214,39 @@ export function sharedClone(rows) {
     expect(result.suggestions).toHaveLength(0);
   });
 
+  test("duplicates CLI detects duplicate JSON text files", async () => {
+    const root = await makeTempProject();
+    const source = JSON.stringify({
+      workflows: [
+        { name: "build", command: "npm run build", retries: 2 },
+        { name: "test", command: "npm run test:ci", retries: 1 },
+        { name: "lint", command: "npm run lint", retries: 1 },
+      ],
+      env: {
+        CI: true,
+        NODE_OPTIONS: "--max-old-space-size=4096",
+      },
+    });
+
+    await writeProjectFile(root, "configs/a.json", source);
+    await writeProjectFile(root, "configs/b.json", source);
+
+    const result = await captureCli(
+      ["duplicates", "--root", ".", "configs", "--min-confidence", "high", "--limit", "1"],
+      root,
+    );
+    const parsed = JSON.parse(result.stdout) as {
+      suggestions?: Array<{ left?: { file?: string; tokenCount?: number }; right?: { file?: string } }>;
+    };
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(parsed.suggestions).toHaveLength(1);
+    expect(parsed.suggestions?.[0]?.left?.file).toBe("configs/a.json");
+    expect(parsed.suggestions?.[0]?.right?.file).toBe("configs/b.json");
+    expect(parsed.suggestions?.[0]?.left?.tokenCount).toBeGreaterThan(40);
+  });
+
   test("accepts project-relative file filters", async () => {
     const root = await makeTempProject();
     const source = `export function sameTiny(value: number) { return value + 1; }\n`;

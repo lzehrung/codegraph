@@ -93,12 +93,28 @@ type PairEvidence = {
   signatureMatches: number;
 };
 
+type LanguageForFileResult = {
+  id: string;
+  textOnly: boolean;
+};
+
 const DEFAULT_MIN_TOKENS = 40;
 const DEFAULT_MAX_TOKENS = 800;
 const DEFAULT_LIMIT = 50;
 const DEFAULT_MAX_BUCKET_SIZE = 200;
 const DEFAULT_SHINGLE_SIZE = 5;
 const DEFAULT_WINDOW_SIZE = 4;
+const DEFAULT_MAX_FINGERPRINTS = 128;
+
+const textLanguageByExtension: Record<string, string> = {
+  ".json": "json",
+  ".jsonc": "jsonc",
+  ".lock": "text",
+  ".toml": "toml",
+  ".txt": "text",
+  ".yaml": "yaml",
+  ".yml": "yaml",
+};
 
 const confidenceRank: Record<DuplicateConfidence, number> = {
   low: 1,
@@ -191,12 +207,12 @@ function hashText(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
-function clampScore(score: number): number {
-  return Math.max(0, Math.min(100, Math.round(score)));
+function shortHashText(value: string): string {
+  return hashText(value).slice(0, 16);
 }
 
-function normalizeSourceText(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
+function clampScore(score: number): number {
+  return Math.max(0, Math.min(100, Math.round(score)));
 }
 
 /** Splits source into names, literals, operators, and punctuation. */
@@ -224,15 +240,15 @@ function makeShingles(tokens: readonly string[], size: number): string[] {
   if (tokens.length < size) return [];
   const shingles: string[] = [];
   for (let i = 0; i <= tokens.length - size; i++) {
-    shingles.push(hashText(tokens.slice(i, i + size).join("\u0000")));
+    shingles.push(shortHashText(tokens.slice(i, i + size).join("\u0000")));
   }
   return shingles;
 }
 
 /** Keeps stable representative fingerprints from nearby shingle windows. */
-function winnowShingles(shingles: readonly string[], windowSize: number): Set<string> {
+function winnowShingles(shingles: readonly string[], windowSize: number, maxFingerprints: number): Set<string> {
   if (!shingles.length) return new Set();
-  if (shingles.length <= windowSize) return new Set(shingles);
+  if (shingles.length <= windowSize) return new Set(shingles.slice(0, maxFingerprints));
 
   const fingerprints = new Set<string>();
   for (let i = 0; i <= shingles.length - windowSize; i++) {
@@ -242,6 +258,7 @@ function winnowShingles(shingles: readonly string[], windowSize: number): Set<st
       if (candidate < minimum) minimum = candidate;
     }
     fingerprints.add(minimum);
+    if (fingerprints.size >= maxFingerprints) break;
   }
   return fingerprints;
 }
@@ -291,8 +308,16 @@ function sourceSliceForLines(source: string, startLine: number, endLine: number)
   return lines.slice(startIndex, endIndex).join("\n");
 }
 
-function languageIdForFile(filePath: string): string | undefined {
-  return supportForFile(filePath)?.id;
+function languageForFile(filePath: string): LanguageForFileResult | undefined {
+  const support = supportForFile(filePath);
+  if (support) {
+    return { id: support.id, textOnly: false };
+  }
+  const languageId = textLanguageByExtension[path.extname(filePath).toLowerCase()];
+  if (languageId) {
+    return { id: languageId, textOnly: true };
+  }
+  return undefined;
 }
 
 function displayPath(projectRoot: string | undefined, filePath: string): string {
@@ -318,9 +343,12 @@ function buildInternalUnit(
   windowSize: number,
 ): DuplicateInternalUnit {
   const rawHash = hashText(text);
-  const normalizedText = normalizeSourceText(text);
   const normalizedTokens = tokenizeSource(text).map(normalizeToken);
-  const signatures = winnowShingles(makeShingles(normalizedTokens, shingleSize), windowSize);
+  const signatures = winnowShingles(
+    makeShingles(normalizedTokens, shingleSize),
+    windowSize,
+    DEFAULT_MAX_FINGERPRINTS,
+  );
   return {
     ...unit,
     id: internalUnitId(unit, absoluteFile),
@@ -328,6 +356,7 @@ function buildInternalUnit(
     text,
     rawHash,
     normalizedHash: hashText(normalizedTokens.join(" ")),
+    tokenCount: normalizedTokens.length,
     normalizedTokens,
     tokenSet: new Set(normalizedTokens),
     signatures,
@@ -365,6 +394,7 @@ function makeSymbolUnit(
 function makeChunkUnits(
   filePath: string,
   languageId: string,
+  textOnly: boolean,
   source: string,
   projectRoot: string | undefined,
   minTokens: number,
@@ -373,7 +403,7 @@ function makeChunkUnits(
   windowSize: number,
 ): DuplicateInternalUnit[] {
   const langConfig = LANG_CONFIGS[languageId];
-  const chunks = langConfig
+  const chunks = langConfig && !textOnly
     ? chunkFile({ language: langConfig, source, filePath, minTokens, maxTokens })
     : chunkTextFile({ source, filePath, languageId, minTokens, maxTokens });
 
@@ -530,8 +560,8 @@ async function collectDuplicateUnits(
 
   for (const file of normalizedFiles) {
     const moduleIndex = index.byFile.get(file);
-    const languageId = languageIdForFile(file);
-    if (!languageId) continue;
+    const language = languageForFile(file);
+    if (!language) continue;
 
     let source: string;
     try {
@@ -542,12 +572,13 @@ async function collectDuplicateUnits(
 
     const symbolUnits = (moduleIndex?.locals ?? [])
       .map((symbol) =>
-        makeSymbolUnit(symbol, languageId, source, options.projectRoot, options.shingleSize, options.windowSize),
+        makeSymbolUnit(symbol, language.id, source, options.projectRoot, options.shingleSize, options.windowSize),
       )
       .filter((unit): unit is DuplicateInternalUnit => unit !== undefined);
     const chunkUnits = makeChunkUnits(
       file,
-      languageId,
+      language.id,
+      language.textOnly,
       source,
       options.projectRoot,
       options.minTokens,
