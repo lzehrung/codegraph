@@ -48,7 +48,7 @@ Then choose the narrowest follow-up command:
 - Review handoff: `codegraph review --base HEAD --head WORKTREE --summary`
 - Full review JSON: `codegraph review --base origin/main --head HEAD`
 - Public API: `codegraph apisurface`
-- Duplicate cleanup: `codegraph duplicates ./src --min-confidence medium --json`
+- Duplicate cleanup: `codegraph duplicates ./src --min-confidence medium`
 - Chunks: `codegraph chunk <file>`
 - Artifact bundle: `codegraph artifact build --root . --out codegraph-out --json`
 - MCP server: `codegraph mcp serve --root . --stdio` or `codegraph mcp serve --root . --port 7331`
@@ -212,7 +212,7 @@ For git-provider impact and git-scoped review/index/graph commands, `WORKTREE` c
 - Public API surface:
   `codegraph apisurface`
 - Duplicate and near-duplicate code:
-  `codegraph duplicates ./src --min-confidence medium --json`
+  `codegraph duplicates ./src --min-confidence medium`
   Covers indexed symbols, semantic chunks, and text chunks.
   Use `--include-small` for tiny helpers.
   Use `--include-same-file` for local clone cleanup.

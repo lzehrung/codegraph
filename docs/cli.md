@@ -148,8 +148,8 @@ codegraph chunk package.json --text --max-tokens 200
 codegraph chunk config.yaml --language yaml --min-tokens 100 --max-tokens 300
 
 # Detect duplicate and near-duplicate code units
-codegraph duplicates ./src --min-confidence medium --limit 20 --json
-codegraph duplicates --root . ./src ./packages/app --include-same-file --json
+codegraph duplicates ./src --min-confidence medium --limit 20
+codegraph duplicates --root . ./src ./packages/app --include-same-file
 codegraph duplicates --help
 
 # Go to definition
@@ -166,7 +166,7 @@ codegraph grep --query '(function_declaration name: (identifier) @name)'
 codegraph grep --pattern 'eval\(' --ignore-case
 ```
 
-`duplicates` reports scored exact, renamed, near, and weak clone candidates as JSON.
+`duplicates` always reports scored exact, renamed, near, and weak clone candidates as JSON.
 
 - It combines indexed symbols, semantic chunks, and text chunks.
 - It reports project-relative paths, confidence, clone type, metrics, and omission counts.

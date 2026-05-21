@@ -163,6 +163,43 @@ export function scoreAccounts(accounts: Array<{ enabled: boolean; credits: numbe
     expect(match?.metrics.tokenJaccard).toBeGreaterThan(0.6);
   });
 
+  test("does not report matching signatures as high-confidence symbol clones", async () => {
+    const root = await makeTempProject();
+
+    await writeProjectFile(
+      root,
+      "src/a.ts",
+      `
+export function sharedName(input: string): string {
+  const reversed = input.split("").reverse();
+  const upper = reversed.join("").toUpperCase();
+  return upper.slice(0, 12);
+}
+`,
+    );
+    await writeProjectFile(
+      root,
+      "src/b.ts",
+      `
+export function sharedName(input: string): string {
+  const parsed = JSON.parse(input) as { name?: string };
+  if (typeof parsed.name === "string") {
+    return parsed.name.trim().toLowerCase();
+  }
+  return "missing";
+}
+`,
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, {
+      includeSmall: true,
+      minConfidence: "high",
+    });
+
+    expect(result.suggestions).toHaveLength(0);
+  });
+
   test("filters small helpers unless explicitly included", async () => {
     const root = await makeTempProject();
     const source = `export function sameTiny(value: number) { return value + 1; }\n`;

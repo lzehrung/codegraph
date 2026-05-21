@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { LANG_CONFIGS } from "./bootstrap/treeSitterLanguages.js";
-import { chunkFile } from "./chunking/chunkFile.js";
+import { chunkFile, type Chunk } from "./chunking/chunkFile.js";
 import { chunkTextFile } from "./chunking/chunkTextFile.js";
 import { supportForFile } from "./languages.js";
 import { SymbolKind, type ProjectIndex, type SymbolDef } from "./indexer/types.js";
@@ -116,6 +116,11 @@ const textLanguageByExtension: Record<string, string> = {
   ".txt": "text",
   ".yaml": "yaml",
   ".yml": "yaml",
+};
+
+const chunkLanguageAliases: Record<string, string> = {
+  js: "javascript",
+  ts: "typescript",
 };
 
 const confidenceRank: Record<DuplicateConfidence, number> = {
@@ -307,12 +312,6 @@ function cloneTypeForPair(evidence: PairEvidence, metrics: DuplicateMetrics): Du
   return "weak";
 }
 
-function sourceSliceForLineRange(lines: readonly string[], startLine: number, endLine: number): string {
-  const startIndex = Math.max(0, startLine - 1);
-  const endIndex = Math.max(startIndex, endLine);
-  return lines.slice(startIndex, endIndex).join("\n");
-}
-
 function languageForFile(filePath: string): LanguageForFileResult | undefined {
   const support = supportForFile(filePath);
   if (support) {
@@ -371,46 +370,72 @@ function buildInternalUnit(
 
 function makeSymbolUnit(
   symbol: SymbolDef,
-  languageId: string,
-  sourceLines: readonly string[],
+  chunk: Chunk,
   projectRoot: string | undefined,
   shingleSize: number,
   windowSize: number,
 ): DuplicateInternalUnit | undefined {
   if (!symbolUnitKinds.has(symbol.kind)) return undefined;
-  const startLine = Math.max(1, symbol.range.start.line);
-  const endLine = Math.max(startLine, symbol.range.end.line);
-  const text = sourceSliceForLineRange(sourceLines, startLine, endLine);
   const unit: DuplicateUnitDraft = {
     file: displayPath(projectRoot, symbol.file),
-    startLine,
-    endLine,
-    languageId,
+    startLine: chunk.startLine,
+    endLine: chunk.endLine,
+    languageId: chunk.languageId,
     kind: "symbol",
     name: symbol.localName,
     symbolKind: symbol.kind,
     ...(symbol.complexity !== undefined ? { complexity: symbol.complexity } : {}),
   };
-  return buildInternalUnit(unit, symbol.file, text, shingleSize, windowSize);
+  return buildInternalUnit(unit, symbol.file, chunk.text, shingleSize, windowSize);
+}
+
+function makeDuplicateChunks(
+  filePath: string,
+  languageId: string,
+  textOnly: boolean,
+  source: string,
+  minTokens: number,
+  maxTokens: number,
+): Chunk[] {
+  const langConfig = LANG_CONFIGS[chunkLanguageAliases[languageId] ?? languageId];
+  if (langConfig && !textOnly) {
+    return chunkFile({ language: langConfig, source, filePath, minTokens, maxTokens, tokenizer: countDuplicateTokens });
+  }
+  return chunkTextFile({ source, filePath, languageId, minTokens, maxTokens, tokenizer: countDuplicateTokens });
+}
+
+function makeSymbolSourceChunks(
+  filePath: string,
+  languageId: string,
+  textOnly: boolean,
+  source: string,
+  maxTokens: number,
+): Chunk[] {
+  if (textOnly) return [];
+  return makeDuplicateChunks(filePath, languageId, false, source, 1, maxTokens);
+}
+
+function findChunkForSymbol(symbol: SymbolDef, chunks: readonly Chunk[]): Chunk | undefined {
+  const symbolLine = Math.max(1, symbol.range.start.line);
+  const candidates = chunks.filter(
+    (chunk) =>
+      chunk.name === symbol.localName &&
+      chunk.startLine <= symbolLine &&
+      symbolLine <= chunk.endLine &&
+      chunk.endLine > chunk.startLine,
+  );
+  candidates.sort((left, right) => lineSpan(left) - lineSpan(right));
+  return candidates[0];
 }
 
 /** Falls back to semantic chunks so body-level clones are still visible. */
 function makeChunkUnits(
   filePath: string,
-  languageId: string,
-  textOnly: boolean,
-  source: string,
+  chunks: readonly Chunk[],
   projectRoot: string | undefined,
-  minTokens: number,
-  maxTokens: number,
   shingleSize: number,
   windowSize: number,
 ): DuplicateInternalUnit[] {
-  const langConfig = LANG_CONFIGS[languageId];
-  const chunks = langConfig && !textOnly
-    ? chunkFile({ language: langConfig, source, filePath, minTokens, maxTokens, tokenizer: countDuplicateTokens })
-    : chunkTextFile({ source, filePath, languageId, minTokens, maxTokens, tokenizer: countDuplicateTokens });
-
   return chunks.map((chunk) => {
     const unit: DuplicateUnitDraft = {
       file: displayPath(projectRoot, filePath),
@@ -573,20 +598,26 @@ async function collectDuplicateUnits(
       continue;
     }
 
-    const sourceLines = source.split(/\r?\n/);
-    const symbolUnits = (moduleIndex?.locals ?? [])
-      .map((symbol) =>
-        makeSymbolUnit(symbol, language.id, sourceLines, options.projectRoot, options.shingleSize, options.windowSize),
-      )
-      .filter((unit): unit is DuplicateInternalUnit => unit !== undefined);
-    const chunkUnits = makeChunkUnits(
+    const chunks = makeDuplicateChunks(
       file,
       language.id,
       language.textOnly,
       source,
-      options.projectRoot,
       options.minTokens,
       options.maxTokens,
+    );
+    const symbolChunks = makeSymbolSourceChunks(file, language.id, language.textOnly, source, options.maxTokens);
+    const symbolUnits = (moduleIndex?.locals ?? [])
+      .map((symbol) => {
+        const chunk = findChunkForSymbol(symbol, symbolChunks);
+        if (!chunk) return undefined;
+        return makeSymbolUnit(symbol, chunk, options.projectRoot, options.shingleSize, options.windowSize);
+      })
+      .filter((unit): unit is DuplicateInternalUnit => unit !== undefined);
+    const chunkUnits = makeChunkUnits(
+      file,
+      chunks,
+      options.projectRoot,
       options.shingleSize,
       options.windowSize,
     );

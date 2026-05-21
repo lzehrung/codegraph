@@ -66,7 +66,7 @@ Examples:
   codegraph version
   codegraph doctor
   codegraph inspect ./src --limit 20
-  codegraph duplicates ./src --min-confidence medium --json
+  codegraph duplicates ./src --min-confidence medium
   codegraph search "auth user" --json
   codegraph explain src/auth.ts --json
   codegraph artifact build --root . --out codegraph-out --json
@@ -199,7 +199,7 @@ Defaults:
 
 export const DUPLICATES_HELP_TEXT = `codegraph duplicates - Detect duplicate and near-duplicate code units
 
-Usage: codegraph duplicates [path ...] [--root <path>] [--min-confidence high|medium|low] [--limit <n>] [--include-same-file] [--include-small] [--json]
+Usage: codegraph duplicates [path ...] [--root <path>] [--min-confidence high|medium|low] [--limit <n>] [--include-same-file] [--include-small]
 
 Options:
   --min-confidence  Minimum confidence to report. Defaults to medium.
@@ -211,7 +211,7 @@ Options:
   --max-bucket-size Skip candidate buckets larger than this value. Defaults to 200.
 
 Output:
-  JSON includes scored suggestions, confidence, clone type, metrics, and omission counts.
+  Always emits JSON with scored suggestions, confidence, clone type, metrics, and omission counts.
 `;
 
 export function helpTextForCommand(command: string, positionals: readonly string[]): string | undefined {
