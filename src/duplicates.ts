@@ -84,6 +84,8 @@ type DuplicateInternalUnit = DuplicateUnitRef & {
   signatures: Set<string>;
 };
 
+type DuplicateUnitDraft = Omit<DuplicateUnitRef, "tokenCount">;
+
 type PairEvidence = {
   left: DuplicateInternalUnit;
   right: DuplicateInternalUnit;
@@ -333,20 +335,21 @@ function normalizeDetectionFile(filePath: string, projectRoot: string | undefine
   return normalizePath(path.resolve(projectRoot, filePath));
 }
 
-function internalUnitId(unit: DuplicateUnitRef, absoluteFile: string): string {
+function internalUnitId(unit: DuplicateUnitDraft, absoluteFile: string): string {
   return `${normalizePath(absoluteFile)}:${unit.startLine}:${unit.endLine}:${unit.kind}:${unit.name ?? ""}`;
 }
 
 /** Adds hashes, normalized tokens, and fingerprints to a reportable unit. */
 function buildInternalUnit(
-  unit: DuplicateUnitRef,
+  unit: DuplicateUnitDraft,
   absoluteFile: string,
   text: string,
   shingleSize: number,
   windowSize: number,
 ): DuplicateInternalUnit {
   const rawHash = hashText(text);
-  const normalizedTokens = tokenizeSource(text).map(normalizeToken);
+  const sourceTokens = tokenizeSource(text);
+  const normalizedTokens = sourceTokens.map(normalizeToken);
   const signatures = winnowShingles(
     makeShingles(normalizedTokens, shingleSize),
     windowSize,
@@ -359,6 +362,7 @@ function buildInternalUnit(
     text,
     rawHash,
     normalizedHash: hashText(normalizedTokens.join(" ")),
+    tokenCount: sourceTokens.length,
     normalizedTokens,
     tokenSet: new Set(normalizedTokens),
     signatures,
@@ -377,13 +381,12 @@ function makeSymbolUnit(
   const startLine = Math.max(1, symbol.range.start.line);
   const endLine = Math.max(startLine, symbol.range.end.line);
   const text = sourceSliceForLineRange(sourceLines, startLine, endLine);
-  const unit: DuplicateUnitRef = {
+  const unit: DuplicateUnitDraft = {
     file: displayPath(projectRoot, symbol.file),
     startLine,
     endLine,
     languageId,
     kind: "symbol",
-    tokenCount: countDuplicateTokens(text),
     name: symbol.localName,
     symbolKind: symbol.kind,
     ...(symbol.complexity !== undefined ? { complexity: symbol.complexity } : {}),
@@ -409,13 +412,12 @@ function makeChunkUnits(
     : chunkTextFile({ source, filePath, languageId, minTokens, maxTokens, tokenizer: countDuplicateTokens });
 
   return chunks.map((chunk) => {
-    const unit: DuplicateUnitRef = {
+    const unit: DuplicateUnitDraft = {
       file: displayPath(projectRoot, filePath),
       startLine: chunk.startLine,
       endLine: chunk.endLine,
       languageId: chunk.languageId,
       kind: "chunk",
-      tokenCount: chunk.tokenCount,
       ...(chunk.name !== undefined ? { name: chunk.name } : {}),
     };
     return buildInternalUnit(unit, filePath, chunk.text, shingleSize, windowSize);
