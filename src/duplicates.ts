@@ -199,6 +199,7 @@ function normalizeSourceText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+/** Splits source into names, literals, operators, and punctuation. */
 function tokenizeSource(text: string): string[] {
   return (
     text.match(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b[A-Za-z_$][\w$]*\b|\d+(?:\.\d+)?|[^\s]/g) ??
@@ -206,6 +207,7 @@ function tokenizeSource(text: string): string[] {
   );
 }
 
+/** Replaces names and literals while preserving syntax and keywords. */
 function normalizeToken(token: string): string {
   if (/^["'`]/.test(token)) return "<literal>";
   if (/^\d/.test(token)) return "<literal>";
@@ -217,6 +219,7 @@ function normalizeToken(token: string): string {
   return token;
 }
 
+/** Builds hashed token windows used as local structural fingerprints. */
 function makeShingles(tokens: readonly string[], size: number): string[] {
   if (tokens.length < size) return [];
   const shingles: string[] = [];
@@ -226,6 +229,7 @@ function makeShingles(tokens: readonly string[], size: number): string[] {
   return shingles;
 }
 
+/** Keeps stable representative fingerprints from nearby shingle windows. */
 function winnowShingles(shingles: readonly string[], windowSize: number): Set<string> {
   if (!shingles.length) return new Set();
   if (shingles.length <= windowSize) return new Set(shingles);
@@ -251,6 +255,7 @@ function ratio(left: number, right: number): number {
   return Math.min(left, right) / Math.max(left, right);
 }
 
+/** Measures set similarity as intersection divided by union. */
 function jaccard(left: Set<string>, right: Set<string>): number {
   if (!left.size && !right.size) return 1;
   let intersection = 0;
@@ -304,6 +309,7 @@ function internalUnitId(unit: DuplicateUnitRef, absoluteFile: string): string {
   return `${normalizePath(absoluteFile)}:${unit.startLine}:${unit.endLine}:${unit.kind}:${unit.name ?? ""}`;
 }
 
+/** Adds hashes, normalized tokens, and fingerprints to a reportable unit. */
 function buildInternalUnit(
   unit: DuplicateUnitRef,
   absoluteFile: string,
@@ -355,6 +361,7 @@ function makeSymbolUnit(
   return buildInternalUnit(unit, symbol.file, text, shingleSize, windowSize);
 }
 
+/** Falls back to semantic chunks so body-level clones are still visible. */
 function makeChunkUnits(
   filePath: string,
   languageId: string,
@@ -406,6 +413,7 @@ function hasLineOverlap(left: DuplicateInternalUnit, right: DuplicateInternalUni
   return left.startLine <= right.endLine && right.startLine <= left.endLine;
 }
 
+/** Adds every unique pair from one shared-evidence bucket. */
 function addBucketPairs(
   bucket: readonly DuplicateInternalUnit[],
   pairs: Map<string, PairEvidence>,
@@ -437,6 +445,7 @@ function addBucketPairs(
   }
 }
 
+/** Adds bounded buckets and counts skipped high-fanout buckets. */
 function addBucketsToPairs(
   buckets: Map<string, DuplicateInternalUnit[]>,
   pairs: Map<string, PairEvidence>,
@@ -455,6 +464,7 @@ function addBucketsToPairs(
   return oversizedBuckets;
 }
 
+/** Combines exact, normalized, fingerprint, size, and complexity signals. */
 function scorePair(evidence: PairEvidence, metrics: DuplicateMetrics): { score: number; reasons: string[] } {
   let score = 0;
   const reasons: string[] = [];
@@ -506,6 +516,7 @@ function metricsForPair(evidence: PairEvidence): DuplicateMetrics {
   return metrics;
 }
 
+/** Reads files and creates comparable symbol and chunk units. */
 async function collectDuplicateUnits(
   index: ProjectIndex,
   options: Required<
@@ -574,6 +585,7 @@ function addToBucket(buckets: Map<string, DuplicateInternalUnit[]>, key: string,
   buckets.set(key, [unit]);
 }
 
+/** Groups units by cheap fingerprints before expensive pair scoring. */
 function buildCandidatePairs(
   units: readonly DuplicateInternalUnit[],
   maxBucketSize: number,
@@ -608,6 +620,7 @@ function buildCandidatePairs(
   return { pairs, oversizedBuckets };
 }
 
+/** Requires enough shared fingerprints to avoid incidental syntax matches. */
 function hasEnoughSharedFingerprints(evidence: PairEvidence): boolean {
   if (!evidence.signatureMatches) return false;
   const smallerSignatureCount = Math.min(evidence.left.signatures.size, evidence.right.signatures.size);
@@ -643,6 +656,7 @@ function unitRef(unit: DuplicateInternalUnit): DuplicateUnitRef {
   };
 }
 
+/** Finds scored duplicate candidates from an already-built project index. */
 export async function findDuplicates(
   index: ProjectIndex,
   options: DuplicateDetectionOptions = {},

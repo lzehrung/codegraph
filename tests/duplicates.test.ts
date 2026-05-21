@@ -84,6 +84,32 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     expect(result.suggestions[0]?.right.file).toBe("src/b.ts");
   });
 
+  test("returns bounded suggestions with omission counts", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function summarizePayments(rows: Array<{ amount: number; fee: number }>) {
+  const output: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.fee;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    output.push(label + ":" + rounded.toFixed(2));
+  }
+  return output.filter((value) => value.includes(":")).join(",");
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+    await writeProjectFile(root, "src/c.ts", source);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { minConfidence: "high", limit: 1 });
+
+    expect(result.suggestions).toHaveLength(1);
+    expect(result.omittedCounts.suggestions).toBeGreaterThan(0);
+  });
+
   test("reports renamed near duplicates through normalized tokens", async () => {
     const root = await makeTempProject();
 
@@ -151,6 +177,41 @@ export function scoreAccounts(accounts: Array<{ enabled: boolean; credits: numbe
     expect(defaultResult.suggestions).toHaveLength(0);
     expect(defaultResult.omittedCounts.belowThresholdUnits).toBeGreaterThan(0);
     expect(includedResult.suggestions.length).toBeGreaterThan(0);
+  });
+
+  test("rejects invalid token bounds", async () => {
+    const root = await makeTempProject();
+
+    await writeProjectFile(root, "src/a.ts", `export function a() { return 1; }\n`);
+
+    const index = await buildProjectIndex(root);
+    await expect(findDuplicates(index, { minTokens: 20, maxTokens: 10 })).rejects.toThrow(
+      "Expected a value greater than or equal to minTokens",
+    );
+  });
+
+  test("keeps cross-language exact text in separate candidate buckets", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function sharedClone(rows) {
+  const output = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.fee;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    output.push(label + ":" + rounded.toFixed(2));
+  }
+  return output.filter((value) => value.includes(":")).join(",");
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.js", source);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { includeSmall: true, minConfidence: "high" });
+
+    expect(result.suggestions).toHaveLength(0);
   });
 
   test("accepts project-relative file filters", async () => {
@@ -237,5 +298,35 @@ export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
     expect(result.stderr).toBe("");
     expect(parsed.suggestions).toHaveLength(1);
     expect(parsed.suggestions?.[0]?.score).toBeGreaterThan(90);
+  });
+
+  test("skips oversized candidate buckets", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function sharedOversizedClone(rows) {
+  const output = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.fee;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    output.push(label + ":" + rounded.toFixed(2));
+  }
+  return output.filter((value) => value.includes(":")).join(",");
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+    await writeProjectFile(root, "src/c.ts", source);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, {
+      includeSmall: true,
+      maxBucketSize: 2,
+      minConfidence: "high",
+    });
+
+    expect(result.suggestions).toHaveLength(0);
+    expect(result.omittedCounts.oversizedBuckets).toBeGreaterThan(0);
   });
 });
